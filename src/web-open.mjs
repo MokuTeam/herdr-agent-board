@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { raiseWindow } from './actions.mjs'
 import { loadConfig } from './config.mjs'
-import { t } from './lang.mjs'
+import { t } from './core/lang.ts'
 import { ROOT } from './paths.mjs'
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))

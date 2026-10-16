@@ -3,7 +3,7 @@
 // transcript, where Claude keeps the session's ai-title and the user's last prompt.
 import { closeSync, openSync, readSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { onLanguage, t } from './lang.mjs'
+import { onLanguage, t } from './core/lang.ts'
 import { CLAUDE_DIR } from './paths.mjs'
 import { questionsOf } from './questions.mjs'
 

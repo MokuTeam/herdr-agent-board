@@ -1,6 +1,6 @@
 // What a Claude session is told about the board (see hook.mjs).
 import { categoryFor } from './config.mjs'
-import { languageName } from './lang.mjs'
+import { languageName } from './core/lang.ts'
 
 // Bump when the brief says something new: every running session gets it again on its next prompt.
 export const BRIEF_VERSION = 3

@@ -5,8 +5,8 @@
 // itself. Agents may use ids that are not listed: they get a lane too.
 import { existsSync, mkdirSync, readFileSync, renameSync, watch, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { LANGUAGES } from '../web/i18n.js'
-import { t, useLanguage } from './lang.mjs'
+import { LANGUAGES } from './core/i18n/translator.ts'
+import { t, useLanguage } from './core/lang.ts'
 import { CONFIG_DIR } from './paths.mjs'
 import { allCards, writeCard } from './store.mjs'
 

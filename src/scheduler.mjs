@@ -12,7 +12,7 @@
 // restart that overlaps, a test copy) never sends the same run twice.
 import { mkdirSync, watch } from 'node:fs'
 import { send, wake } from './actions.mjs'
-import { t } from './lang.mjs'
+import { t } from './core/lang.ts'
 import { collect, forgetSleepers } from './model.mjs'
 import { getEntry, listEntries, logRun, removeEntry, SCHEDULE_DIR, updateEntry } from './schedule.mjs'
 import { countRuns, nextRun } from './when.mjs'

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { countRuns, nextRun, parseCron, parseDuration, parseWhen, shortestGap } from '../src/when.mjs'
-import { translator } from '../web/i18n.js'
+import { translator } from '../src/core/i18n/translator.ts'
 import { capital, dayLabel, shortWhen, span } from '../web/when.js'
 
 // Local time throughout: Thursday 15 October 2026, 14:00.

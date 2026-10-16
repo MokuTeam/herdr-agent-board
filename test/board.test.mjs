@@ -6,9 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cleanPrompt, conversation, toolDetail, toolLabel, trailingQuestion, transcriptInfo } from '../src/claude.mjs'
 import { categoryFor, categoryInfo, laneRank } from '../src/config.mjs'
-import { t, useLanguage } from '../src/lang.mjs'
+import { t, useLanguage } from '../src/core/lang.ts'
 import { attentionOf, columnOf, COLUMNS, noteOf } from '../src/model.mjs'
-import { LANGUAGES, missingKeys, resolveLanguage, translator } from '../web/i18n.js'
 import { markdown } from '../web/markdown.js'
 
 // The board's texts follow the system language by default: the tests pin English.
@@ -173,21 +172,6 @@ test('markdown: blocks and inline markup, nothing executable gets through', () =
   assert.ok(!/<img|href="javascript/i.test(evil))
   assert.match(evil, /<a class="ext" href="https:\/\/ok\.example\/p" target="_blank" rel="noopener noreferrer">b<\/a>/)
   assert.equal(markdown('snake_case_name and the path C:\a_b\c_d.txt'), '<p>snake_case_name and the path C:\a_b\c_d.txt</p>')
-})
-
-test('languages: every one has every text, plural forms, English as the fallback', () => {
-  for (const lang of Object.keys(LANGUAGES)) assert.deepEqual(missingKeys(lang), [], `missing in ${lang}`)
-  const en = translator('en')
-  const ru = translator('ru')
-  assert.equal(en('cat.sessions', { n: 1 }), '1 session')
-  assert.equal(en('cat.sessions', { n: 5 }), '5 sessions')
-  assert.deepEqual([1, 2, 5, 11, 21, 22, 25].map(n => ru('cat.sessions', { n })), ['1 сессия', '2 сессии', '5 сессий', '11 сессий', '21 сессия', '22 сессии', '25 сессий'])
-  assert.equal(ru('sent.to', { name: 'X' }), 'Отправлено в X')
-  assert.equal(translator('xx')('col.me'), 'Needs me')
-  assert.equal(en('no.such.key'), 'no.such.key')
-  assert.equal(resolveLanguage('auto', 'ru-RU'), 'ru')
-  assert.equal(resolveLanguage('auto', 'de-DE'), 'en')
-  assert.equal(resolveLanguage('ru', 'en-US'), 'ru')
 })
 
 test('the board switches language in place: columns, notes and the brief follow', () => {

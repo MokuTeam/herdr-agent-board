@@ -8,7 +8,7 @@ import { mkdirSync, readFileSync, unlinkSync, watch, writeFileSync } from 'node:
 import { join } from 'node:path'
 import { categoryInfo, laneRank, liveConfig } from './config.mjs'
 import * as actions from './actions.mjs'
-import { t } from './lang.mjs'
+import { t } from './core/lang.ts'
 import { COLUMNS, collect, forgetSleepers, noteOf, statusText } from './model.mjs'
 import { goBack } from './nav.mjs'
 import { startServer } from './server.mjs'

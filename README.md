@@ -328,7 +328,7 @@ English when there is no dictionary for it). A switch reaches at once the web bo
 terminal board, error messages, and the agents' next brief, which tells them the language to
 write their cards in. Titles you give lanes and whatever agents write stay as written.
 
-All texts live in `web/i18n.js`, shared by the browser and Node. Another language is one more
+All texts live in `src/core/i18n/`, shared by the browser and Node. Another language is one more
 dictionary there plus its plural rule; a test checks that every dictionary has every text.
 
 ## Everything updates live

@@ -5,7 +5,7 @@ import { liveSessions, transcriptInfo, transcriptPath } from './claude.mjs'
 import { snapshot } from './herdr.mjs'
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { t } from './lang.mjs'
+import { t } from './core/lang.ts'
 import { CONTEXT_DIR } from './paths.mjs'
 import { allCards, writeCard } from './store.mjs'
 

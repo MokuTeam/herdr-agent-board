@@ -1,7 +1,9 @@
 // Texts of new sessions, the context menus and renaming, merged into the board's dictionaries
-// by i18n.js (same rules: {name} placeholders, arrays are plural forms).
+// by strings.ts (same rules: {name} placeholders, arrays are plural forms).
 
-export const LAUNCH_STRINGS = {
+import type { Lang } from '../types.ts'
+
+export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
   en: {
     // entry points
     'launch.toolbar': 'New session',
@@ -54,7 +56,8 @@ export const LAUNCH_STRINGS = {
     'launch.step.trust': 'Claude asks to trust this folder',
     'launch.step.trusting': 'Trusting the folder…',
     'launch.trust.title': 'Claude asks to trust this folder',
-    'launch.trust.hint': 'It can then read, edit and run files there. Trust it if you know what is in it; else close the tab.',
+    'launch.trust.hint':
+      'It can then read, edit and run files there. Trust it if you know what is in it; else close the tab.',
     'launch.trust.go': 'Trust and continue',
     'launch.trust.close': 'Close the tab',
     'launch.trust.closed': 'Tab closed',
@@ -66,9 +69,12 @@ export const LAUNCH_STRINGS = {
     'launch.dismiss': 'Dismiss',
     'launch.forget': 'Stop following it here',
     'launch.copyError': 'Copy the error',
-    'launch.hint.dialog': 'Claude asks something before it starts, usually whether to trust this folder. Go to herdr and answer it; the board goes on by itself.',
-    'launch.hint.dialogFailed': 'Claude asks something before it starts, usually whether to trust this folder. Answer it in herdr; then name the session and send the first message there, or dismiss this and retry.',
-    'launch.hint.timeout': 'It took too long. Look at its tab in herdr: it may still be loading, or wait for an answer.',
+    'launch.hint.dialog':
+      'Claude asks something before it starts, usually whether to trust this folder. Go to herdr and answer it; the board goes on by itself.',
+    'launch.hint.dialogFailed':
+      'Claude asks something before it starts, usually whether to trust this folder. Answer it in herdr; then name the session and send the first message there, or dismiss this and retry.',
+    'launch.hint.timeout':
+      'It took too long. Look at its tab in herdr: it may still be loading, or wait for an answer.',
     'launch.hint.folder': 'Pick a folder that exists, then retry.',
     'launch.hint.launcher': 'The launcher in config.json (launch.command) could not run. Check its path.',
     'launch.hint.worktree': 'The worktree was not made. Pick another branch name, or start without one.',
@@ -102,7 +108,8 @@ export const LAUNCH_STRINGS = {
     'launch.err.placeholder': 'launch.command has an unknown placeholder {name}',
     'launch.err.command': 'launch.command in config.json must be a list: the program, then its arguments',
     'launch.err.commandValue': 'launch.command: the program itself takes no {placeholders}',
-    'launch.err.commandShell': 'launch.command: cmd, .bat and .cmd are not run as launchers (cmd.exe would read the values as commands); use a program, or a script run by one such as pwsh -File',
+    'launch.err.commandShell':
+      'launch.command: cmd, .bat and .cmd are not run as launchers (cmd.exe would read the values as commands); use a program, or a script run by one such as pwsh -File',
     'launch.err.category': 'The board has no lane {id}',
     'launch.err.gone': 'That start is no longer on the board',
 
@@ -201,7 +208,8 @@ export const LAUNCH_STRINGS = {
     'launch.step.trust': 'Claude спрашивает, доверять ли этой папке',
     'launch.step.trusting': 'Доверяю папке…',
     'launch.trust.title': 'Claude спрашивает, доверять ли этой папке',
-    'launch.trust.hint': 'Тогда он сможет читать, менять и запускать файлы в ней. Доверяй, если знаешь, что там; иначе закрой вкладку.',
+    'launch.trust.hint':
+      'Тогда он сможет читать, менять и запускать файлы в ней. Доверяй, если знаешь, что там; иначе закрой вкладку.',
     'launch.trust.go': 'Доверять и продолжить',
     'launch.trust.close': 'Закрыть вкладку',
     'launch.trust.closed': 'Вкладка закрыта',
@@ -213,8 +221,10 @@ export const LAUNCH_STRINGS = {
     'launch.dismiss': 'Убрать',
     'launch.forget': 'Не следить здесь',
     'launch.copyError': 'Скопировать ошибку',
-    'launch.hint.dialog': 'Claude о чём-то спрашивает перед стартом, обычно доверять ли этой папке. Перейди в herdr и ответь, дальше доска продолжит сама.',
-    'launch.hint.dialogFailed': 'Claude о чём-то спрашивает перед стартом, обычно доверять ли этой папке. Ответь в herdr, потом дай сессии имя и отправь первое сообщение там, или убери это и повтори.',
+    'launch.hint.dialog':
+      'Claude о чём-то спрашивает перед стартом, обычно доверять ли этой папке. Перейди в herdr и ответь, дальше доска продолжит сама.',
+    'launch.hint.dialogFailed':
+      'Claude о чём-то спрашивает перед стартом, обычно доверять ли этой папке. Ответь в herdr, потом дай сессии имя и отправь первое сообщение там, или убери это и повтори.',
     'launch.hint.timeout': 'Слишком долго. Посмотри её вкладку в herdr: она может ещё грузиться или ждать ответа.',
     'launch.hint.folder': 'Выбери существующую папку и повтори.',
     'launch.hint.launcher': 'Запускатель из config.json (launch.command) не запустился. Проверь путь к нему.',
@@ -248,7 +258,8 @@ export const LAUNCH_STRINGS = {
     'launch.err.placeholder': 'В launch.command неизвестная подстановка {name}',
     'launch.err.command': 'launch.command в config.json должен быть списком: программа, потом её аргументы',
     'launch.err.commandValue': 'launch.command: в самой программе подстановок {…} быть не может',
-    'launch.err.commandShell': 'launch.command: cmd, .bat и .cmd запускателями не бывают (cmd.exe прочтёт значения как команды); нужна программа или скрипт, который она запускает, например pwsh -File',
+    'launch.err.commandShell':
+      'launch.command: cmd, .bat и .cmd запускателями не бывают (cmd.exe прочтёт значения как команды); нужна программа или скрипт, который она запускает, например pwsh -File',
     'launch.err.category': 'На доске нет дорожки {id}',
     'launch.err.gone': 'Этого запуска на доске уже нет',
 
@@ -292,7 +303,8 @@ export const LAUNCH_STRINGS = {
     'rename.err.notClaude': '{name}: не сессия Claude',
     'rename.err.busy': '{name} работает: переименовать в Claude можно, когда освободится',
     'rename.err.claude': 'Не переименована: {why}',
-    'rename.err.screen': '{name}: поля ввода сейчас не видно (диалог или выбор), переименуй, когда она будет ждать тебя',
+    'rename.err.screen':
+      '{name}: поля ввода сейчас не видно (диалог или выбор), переименуй, когда она будет ждать тебя',
     'rename.unconfirmed': 'На доске переименована; /rename ушёл в Claude, но он не подтвердил: {name}',
   },
 }

@@ -1,26 +1,16 @@
 // Every text the board shows, in English and Russian: one file for the terminal board, the web
-// board, the server and the agents' brief. The language is the config's `language`: "en", "ru",
-// or "auto" (the system's language when there is a dictionary for it, else English).
+// board, the server and the agents' brief.
 //
 // A value is a string with {name} placeholders, or an array of plural forms picked by `n`
 // (English: one, other; Russian: one, few, many). A key missing in a language falls back to English.
 
-import { LAUNCH_STRINGS } from './i18n-launch.js'
+import type { Lang } from '../types.ts'
+import { LAUNCH_STRINGS } from './launch-strings.ts'
 
-export const LANGUAGES = { en: 'English', ru: 'Русский' }
-/** The language's name in English, for the agents' brief. */
-export const LANGUAGE_NAMES = { en: 'English', ru: 'Russian' }
+export type Entry = string | string[]
+export type Dictionary = Record<string, Entry>
 
-const PLURAL = {
-  en: n => (n === 1 ? 0 : 1),
-  ru: n => {
-    const m10 = n % 10
-    const m100 = n % 100
-    return m10 === 1 && m100 !== 11 ? 0 : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? 1 : 2
-  },
-}
-
-const STRINGS = {
+export const STRINGS: Record<Lang, Dictionary> = {
   en: {
     'sheet.properties': 'Card details',
     'sheet.more': 'More actions',
@@ -47,7 +37,8 @@ const STRINGS = {
     'history.hint': 'Search the past Claude sessions of this project',
     'history.title': 'Project history',
     'history.placeholder': 'Search past sessions of this project…',
-    'history.prompt': 'Type two characters or more and press Enter. Only this project’s sessions on this computer are searched.',
+    'history.prompt':
+      'Type two characters or more and press Enter. Only this project’s sessions on this computer are searched.',
     'history.unavailable': 'This project has no Claude history here',
     'history.empty': 'Nothing found',
     'history.results': ['{n} match', '{n} matches'],
@@ -61,7 +52,8 @@ const STRINGS = {
     'limits.5h': '5h',
     'limits.7d': '7d',
     'limits.hint': 'Claude usage of this account, {time}, as Claude Code reported it to the status line.',
-    'limits.hintUsagebar': 'Claude usage, {time}. From the usagebar cache of the default profile; the board does not check it is the account of these sessions.',
+    'limits.hintUsagebar':
+      'Claude usage, {time}. From the usagebar cache of the default profile; the board does not check it is the account of these sessions.',
     'limits.stale': 'Claude usage, {time}: an old reading, the windows may have reset since.',
 
     'mobile.readOnly': 'No fresh data from herdr: sending and going to sessions wait until it is back',
@@ -185,13 +177,17 @@ const STRINGS = {
     'err.qa.answered': 'This question is no longer open in {name}: it was answered or closed',
     'err.qa.unknown': '{name} asks in a form the board cannot read: answer it in herdr',
     'err.qa.invalid': 'Pick an answer for every question',
-    'err.qa.changed': 'The terminal of {name} shows another dialog than the board does, so nothing was pressed. Look at it in herdr',
-    'err.qa.stuck': 'The terminal of {name} did not respond as expected at {step}, so the board stopped there. The dialog may be partly filled in: finish it in herdr',
-    'err.qa.review': 'The summary in the terminal of {name} lists other answers than yours, so nothing was submitted. Check it in herdr',
+    'err.qa.changed':
+      'The terminal of {name} shows another dialog than the board does, so nothing was pressed. Look at it in herdr',
+    'err.qa.stuck':
+      'The terminal of {name} did not respond as expected at {step}, so the board stopped there. The dialog may be partly filled in: finish it in herdr',
+    'err.qa.review':
+      'The summary in the terminal of {name} lists other answers than yours, so nothing was submitted. Check it in herdr',
     'err.qa.herdr': 'herdr did not answer: {why}',
     'err.qa.busy': 'An answer to {name} is already being typed',
     'err.qa.notClaude': '{name} is not a Claude session: answer it in herdr',
-    'err.qa.herdrMidway': 'herdr failed midway ({why}). The dialog of {name} may be partly filled in: finish it in herdr',
+    'err.qa.herdrMidway':
+      'herdr failed midway ({why}). The dialog of {name} may be partly filled in: finish it in herdr',
     'err.qa.unconfirmed': 'The keys went to {name}, but its screen never showed the dialog closing. Check it in herdr',
     'qa.stopped': 'Stopped midway',
     'qa.perm.more': ['{n} more line: see the terminal screen', '{n} more lines: see the terminal screen'],
@@ -349,7 +345,8 @@ const STRINGS = {
 
     // web board: categories
     'cats.title': 'Categories',
-    'cats.about': 'Lanes of the board. A session goes to the lane its agent picks, and by folder until it picks one. Drag the handle to reorder.',
+    'cats.about':
+      'Lanes of the board. A session goes to the lane its agent picks, and by folder until it picks one. Drag the handle to reorder.',
     'cats.new': 'New category',
     'cat.handle': 'Drag to reorder',
     'cat.order': 'Order',
@@ -376,7 +373,8 @@ const STRINGS = {
     'tb.sched': 'Schedule',
     'tb.schedTitle': 'Reminders and repeating pings the agents set',
     'sched.title': 'Schedule',
-    'sched.about': 'When an entry is due, the board wakes the session if it sleeps and types the text into it, on time even mid-turn, or once the session is free.',
+    'sched.about':
+      'When an entry is due, the board wakes the session if it sleeps and types the text into it, on time even mid-turn, or once the session is free.',
     'sched.empty': 'Nothing scheduled',
     'sched.emptyHint': 'Agents add entries with <code>board remind</code> and <code>board every</code>',
     'sched.row': 'Schedule',
@@ -390,7 +388,8 @@ const STRINGS = {
     'sched.dialog': 'Waits: a dialog is open in the session',
     'sched.mode.onTime': 'On time',
     'sched.mode.idle': 'When free',
-    'sched.mode.onTimeHint': 'Arrives on time, also while the session works (queued into its turn); never over a dialog or unsent text. Click: wait until it is free',
+    'sched.mode.onTimeHint':
+      'Arrives on time, also while the session works (queued into its turn); never over a dialog or unsent text. Click: wait until it is free',
     'sched.mode.idleHint': 'Waits until the session is free. Click: arrive on time, also mid-turn',
     'sched.mode.set': 'Delivery: {mode}',
     'sched.gone': 'The session is not on the board',
@@ -414,7 +413,10 @@ const STRINGS = {
     'sched.prompt.cleared': 'set by {name} before /clear',
     'sched.prompt.clearedFor': 'set for {name} before /clear',
     'sched.dropped': 'Removed',
-    'sched.why.dropped': ['removed: its session was gone {n} run in a row', 'removed: its session was gone {n} runs in a row'],
+    'sched.why.dropped': [
+      'removed: its session was gone {n} run in a row',
+      'removed: its session was gone {n} runs in a row',
+    ],
     'sched.by': 'set by {name}',
     'sched.prompt.runs': ['{n} run since {since}, sent once', '{n} runs since {since}, sent once'],
     'when.today': 'today',
@@ -479,7 +481,8 @@ const STRINGS = {
     'history.hint': 'Поиск по прошлым сессиям Claude этого проекта',
     'history.title': 'История проекта',
     'history.placeholder': 'Поиск по прошлым сессиям проекта…',
-    'history.prompt': 'Введите от двух символов и нажмите Enter. Ищутся только сессии этого проекта на этом компьютере.',
+    'history.prompt':
+      'Введите от двух символов и нажмите Enter. Ищутся только сессии этого проекта на этом компьютере.',
     'history.unavailable': 'У этого проекта здесь нет истории Claude',
     'history.empty': 'Ничего не нашлось',
     'history.results': ['{n} совпадение', '{n} совпадения', '{n} совпадений'],
@@ -493,13 +496,15 @@ const STRINGS = {
     'limits.5h': '5ч',
     'limits.7d': '7д',
     'limits.hint': 'Расход Claude по этому аккаунту, {time}, как Claude Code сообщил в строку состояния.',
-    'limits.hintUsagebar': 'Расход Claude, {time}. Из кэша usagebar профиля по умолчанию; доска не проверяет, что это аккаунт этих сессий.',
+    'limits.hintUsagebar':
+      'Расход Claude, {time}. Из кэша usagebar профиля по умолчанию; доска не проверяет, что это аккаунт этих сессий.',
     'limits.stale': 'Расход Claude, {time}: старые данные, окна могли уже обнулиться.',
 
     'mobile.readOnly': 'Нет свежих данных от herdr: отправка и переход к сессиям подождут, пока они вернутся',
     'attention.unseen': 'Не просмотрено',
     'attention.next': 'Дальше',
-    'attention.nextHint': 'Открыть следующую карточку, которой нужно внимание (N). Открыть не значит принять результат.',
+    'attention.nextHint':
+      'Открыть следующую карточку, которой нужно внимание (N). Открыть не значит принять результат.',
     'attention.waitAge': 'Ожидает: {age}',
     'attention.activityAge': 'Последняя активность: {age}',
     'draft.cancel': 'Удалить черновик',
@@ -612,16 +617,25 @@ const STRINGS = {
     'err.qa.answered': 'Этот вопрос в {name} уже не открыт: на него ответили или его закрыли',
     'err.qa.unknown': '{name} спрашивает в форме, которую доска не может прочитать: ответь в herdr',
     'err.qa.invalid': 'Выбери ответ на каждый вопрос',
-    'err.qa.changed': 'В терминале {name} другой диалог, не тот, что на доске, поэтому ничего не нажато. Посмотри в herdr',
-    'err.qa.stuck': 'Терминал {name} повёл себя не так, как ожидалось ({step}), и доска остановилась. Диалог может быть заполнен частично: доделай его в herdr',
-    'err.qa.review': 'Сводка в терминале {name} показывает другие ответы, поэтому ничего не отправлено. Проверь в herdr',
+    'err.qa.changed':
+      'В терминале {name} другой диалог, не тот, что на доске, поэтому ничего не нажато. Посмотри в herdr',
+    'err.qa.stuck':
+      'Терминал {name} повёл себя не так, как ожидалось ({step}), и доска остановилась. Диалог может быть заполнен частично: доделай его в herdr',
+    'err.qa.review':
+      'Сводка в терминале {name} показывает другие ответы, поэтому ничего не отправлено. Проверь в herdr',
     'err.qa.herdr': 'herdr не ответил: {why}',
     'err.qa.busy': 'Ответ для {name} уже набирается',
     'err.qa.notClaude': '{name}: не сессия Claude, ответь в herdr',
-    'err.qa.herdrMidway': 'herdr сломался на полпути ({why}). Диалог {name} может быть заполнен частично: доделай его в herdr',
-    'err.qa.unconfirmed': 'Клавиши ушли в {name}, но на экране так и не было видно, что диалог закрылся. Проверь в herdr',
+    'err.qa.herdrMidway':
+      'herdr сломался на полпути ({why}). Диалог {name} может быть заполнен частично: доделай его в herdr',
+    'err.qa.unconfirmed':
+      'Клавиши ушли в {name}, но на экране так и не было видно, что диалог закрылся. Проверь в herdr',
     'qa.stopped': 'Остановлено на полпути',
-    'qa.perm.more': ['Ещё {n} строка: смотри экран терминала', 'Ещё {n} строки: смотри экран терминала', 'Ещё {n} строк: смотри экран терминала'],
+    'qa.perm.more': [
+      'Ещё {n} строка: смотри экран терминала',
+      'Ещё {n} строки: смотри экран терминала',
+      'Ещё {n} строк: смотри экран терминала',
+    ],
     'qa.step.start': 'начало',
     'qa.step.back': 'возврат к первому вопросу',
     'qa.step.question': 'открытие вопроса',
@@ -771,7 +785,8 @@ const STRINGS = {
     'size.mb': '{n} МБ',
 
     'cats.title': 'Категории',
-    'cats.about': 'Дорожки доски. Сессия попадает в дорожку по выбору агента, а пока он не выбрал, по папке. Потяни за ручку, чтобы поменять порядок.',
+    'cats.about':
+      'Дорожки доски. Сессия попадает в дорожку по выбору агента, а пока он не выбрал, по папке. Потяни за ручку, чтобы поменять порядок.',
     'cats.new': 'Новая категория',
     'cat.handle': 'Потяни, чтобы поменять порядок',
     'cat.order': 'Порядок',
@@ -792,12 +807,17 @@ const STRINGS = {
     'cat.created': 'Категория {title} создана',
     'cat.deleted': 'Категория {title} удалена',
     'cat.confirm': 'Удалить?',
-    'cat.confirmN': ['Удалить? {n} сессия уйдёт по папкам', 'Удалить? {n} сессии уйдут по папкам', 'Удалить? {n} сессий уйдут по папкам'],
+    'cat.confirmN': [
+      'Удалить? {n} сессия уйдёт по папкам',
+      'Удалить? {n} сессии уйдут по папкам',
+      'Удалить? {n} сессий уйдут по папкам',
+    ],
 
     'tb.sched': 'Расписание',
     'tb.schedTitle': 'Напоминания и повторы, которые поставили агенты',
     'sched.title': 'Расписание',
-    'sched.about': 'В назначенное время доска будит сессию, если она спит, и вписывает ей текст: вовремя, даже посреди работы, или когда сессия освободится.',
+    'sched.about':
+      'В назначенное время доска будит сессию, если она спит, и вписывает ей текст: вовремя, даже посреди работы, или когда сессия освободится.',
     'sched.empty': 'Ничего не запланировано',
     'sched.emptyHint': 'Агенты добавляют записи командами <code>board remind</code> и <code>board every</code>',
     'sched.row': 'Расписание',
@@ -811,7 +831,8 @@ const STRINGS = {
     'sched.dialog': 'Ждёт: в сессии открыт диалог',
     'sched.mode.onTime': 'Вовремя',
     'sched.mode.idle': 'Когда свободна',
-    'sched.mode.onTimeHint': 'Приходит вовремя, даже пока сессия работает (в очередь её хода); никогда поверх диалога или недописанного текста. Нажми: ждать, пока освободится',
+    'sched.mode.onTimeHint':
+      'Приходит вовремя, даже пока сессия работает (в очередь её хода); никогда поверх диалога или недописанного текста. Нажми: ждать, пока освободится',
     'sched.mode.idleHint': 'Ждёт, пока сессия освободится. Нажми: приходить вовремя, даже посреди работы',
     'sched.mode.set': 'Доставка: {mode}',
     'sched.gone': 'Сессии нет на доске',
@@ -828,16 +849,28 @@ const STRINGS = {
     'sched.runs': ['{n} запуск', '{n} запуска', '{n} запусков'],
     'sched.missedN': ['{n} пропуск', '{n} пропуска', '{n} пропусков'],
     'sched.more': ['ещё {n}', 'ещё {n}', 'ещё {n}'],
-    'sched.badge': ['В расписании на {when}: {text}', '{n} в расписании, ближайшее {when}: {text}', '{n} в расписании, ближайшее {when}: {text}'],
+    'sched.badge': [
+      'В расписании на {when}: {text}',
+      '{n} в расписании, ближайшее {when}: {text}',
+      '{n} в расписании, ближайшее {when}: {text}',
+    ],
     'sched.open': 'Открыть сессию',
     'sched.err.gone': 'Этой записи уже нет',
     'sched.prompt.late': 'опоздание {late}, срок был {due}',
     'sched.prompt.cleared': 'поставлено сессией {name} до /clear',
     'sched.prompt.clearedFor': 'поставлено для {name} до /clear',
     'sched.dropped': 'Удалено',
-    'sched.why.dropped': ['удалено: сессии не было {n} запуск подряд', 'удалено: сессии не было {n} запуска подряд', 'удалено: сессии не было {n} запусков подряд'],
+    'sched.why.dropped': [
+      'удалено: сессии не было {n} запуск подряд',
+      'удалено: сессии не было {n} запуска подряд',
+      'удалено: сессии не было {n} запусков подряд',
+    ],
     'sched.by': 'поставила {name}',
-    'sched.prompt.runs': ['{n} запуск с {since}, одним сообщением', '{n} запуска с {since}, одним сообщением', '{n} запусков с {since}, одним сообщением'],
+    'sched.prompt.runs': [
+      '{n} запуск с {since}, одним сообщением',
+      '{n} запуска с {since}, одним сообщением',
+      '{n} запусков с {since}, одним сообщением',
+    ],
     'when.today': 'сегодня',
     'when.tomorrow': 'завтра',
     'when.yesterday': 'вчера',
@@ -875,36 +908,4 @@ const STRINGS = {
 }
 
 // New sessions, the context menus and renaming keep their texts in a file of their own.
-for (const [code, dict] of Object.entries(LAUNCH_STRINGS)) Object.assign(STRINGS[code], dict)
-
-/** "auto" or anything without a dictionary: the system's language when there is one for it, else English. */
-export function resolveLanguage(pref, locale) {
-  if (STRINGS[pref]) return pref
-  let sys = locale
-  if (!sys) {
-    try {
-      sys = Intl.DateTimeFormat().resolvedOptions().locale
-    } catch {}
-  }
-  const code = String(sys ?? '').slice(0, 2).toLowerCase()
-  return STRINGS[code] ? code : 'en'
-}
-
-/** `t(key, vars)` for one language; `t.lang` is its code. */
-export function translator(lang) {
-  const code = STRINGS[lang] ? lang : 'en'
-  const t = (key, vars = {}) => {
-    const own = STRINGS[code][key]
-    const from = own !== undefined ? code : 'en'
-    let s = own ?? STRINGS.en[key] ?? key
-    if (Array.isArray(s)) s = s[PLURAL[from](Number(vars.n) || 0)] ?? s.at(-1)
-    return s.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m))
-  }
-  t.lang = code
-  return t
-}
-
-/** Keys that exist in English but not in `lang` (for the tests). */
-export function missingKeys(lang) {
-  return Object.keys(STRINGS.en).filter(k => !(k in (STRINGS[lang] ?? {})) && k !== 'status.unknown')
-}
+for (const code of Object.keys(LAUNCH_STRINGS) as Lang[]) Object.assign(STRINGS[code], LAUNCH_STRINGS[code])

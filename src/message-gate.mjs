@@ -1,6 +1,6 @@
 // One in-flight message per session. Successful request IDs suppress HTTP replays
 // within this server process; this does not make Herdr get/prompt atomic.
-import { t } from './lang.mjs'
+import { t } from './core/lang.ts'
 
 export function messageGate() {
   const pending = new Map()

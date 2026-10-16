@@ -1,4 +1,4 @@
-// Scheduled times in words, in the board's language (`t` from i18n.js): the clock on a card, the
+// Scheduled times in words, in the board's language (`t` from src/core/i18n/translator.ts): the clock on a card, the
 // day headers of the schedule panel, "2 h 10 min" late. Shared by the web board, the terminal
 // board and the scheduler's prompts.
 

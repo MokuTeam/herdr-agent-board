@@ -41,7 +41,7 @@ if (mode === 'open') {
 } else if (mode === 'answer') {
   // answer.mjs against the fake herdr: a question form, a permission prompt, or one own answer typed.
   const { answerPermission, answerQuestions, paneIO } = await import('../../src/answer.mjs')
-  const { useLanguage } = await import('../../src/lang.mjs')
+  const { useLanguage } = await import('../../src/core/lang.ts')
   // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
   useLanguage('en')
   const { kind, item, body, text } = input()
@@ -54,7 +54,7 @@ if (mode === 'open') {
   const { startServer } = await import('../../src/server.mjs')
   const cfg = input<{ language?: string }>()
   // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
-  if (cfg.language) (await import('../../src/lang.mjs')).useLanguage(cfg.language)
+  if (cfg.language) (await import('../../src/core/lang.ts')).useLanguage(cfg.language)
   const server = await startServer({ cfg, log: (...args: unknown[]) => send({ log: args[0] }) } as Parameters<
     typeof startServer
   >[0])
@@ -72,7 +72,7 @@ if (mode === 'open') {
   process.argv = [process.argv[0] ?? '', fileURLToPath(new URL('../../src/cli.mjs', import.meta.url)), ...args]
   await import('../../src/cli.mjs')
 } else if (mode === 'scheduler') {
-  const { useLanguage } = await import('../../src/lang.mjs')
+  const { useLanguage } = await import('../../src/core/lang.ts')
   const { startScheduler } = await import('../../src/scheduler.mjs')
   // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
   useLanguage('en')

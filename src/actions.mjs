@@ -3,7 +3,7 @@
 import { execFile } from 'node:child_process'
 import { hostname } from 'node:os'
 import { herdr, herdrText } from './herdr.mjs'
-import { t } from './lang.mjs'
+import { t } from './core/lang.ts'
 import { inputDraft } from './screen.mjs'
 
 /** Wake a session herdr-wake put to sleep (takes 10 to 30 s). */

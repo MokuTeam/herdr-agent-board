@@ -4,7 +4,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { sandbox, until } from './support/sandbox.ts'
-import { translator } from '../web/i18n.js'
+import { translator } from '../src/core/i18n/translator.ts'
 import { updateLive } from '../web/live.js'
 
 async function unusedPort() {

@@ -6,7 +6,7 @@
 // stops it and the user is told where it stopped.
 import { herdr, herdrText } from './herdr.mjs'
 import { transcriptInfo } from './claude.mjs'
-import { t } from './lang.mjs'
+import { t } from './core/lang.ts'
 import { inputDraft } from './screen.mjs'
 import {
   answerText,

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { translator } from '../web/i18n.js'
+import { translator } from '../src/core/i18n/translator.ts'
 import { boardMenu, cardMenu, chipMenu, firstIndex, laneMenu, lastIndex, launchMenu, nextIndex, placeMenu, placeSubmenu, shareReasons, tidy, typeahead, wantsNativeMenu } from '../web/menu-model.js'
 
 const t = translator('en')

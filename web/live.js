@@ -1,6 +1,6 @@
 // The dot in the toolbar. An open connection alone does not mean fresh herdr data: green only
 // after a successful refresh; orange while waiting for the first one or after a failed one,
-// with the time of the last good data. `t` is the page's translator (i18n.js).
+// with the time of the last good data. `t` is the page's translator (src/core/i18n/translator.ts).
 export function updateLive(element, data, t) {
   const fresh = data.stale === false && data.lastSuccessfulRefreshAt != null
   element.classList.toggle('on', fresh)

@@ -8,7 +8,7 @@ import { attentionTime, nextAttention, recordView, resultToken, unseenResult } f
 import { initBoardMenus } from './board-menus.js'
 import { draftBook } from './drafts.js'
 import { initFiles } from './files.js'
-import { LANGUAGES, translator } from './i18n.js'
+import { LANGUAGES, translator } from '../src/core/i18n/translator.ts'
 import { initLaunch } from './launch.js'
 import { updateLive } from './live.js'
 import { limitInfo } from './limits-model.js'
