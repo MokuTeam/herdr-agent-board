@@ -7,30 +7,30 @@ platforms = ["windows", "linux", "macos"]
 
 # After a herdr start: the board workspace comes up in the background, so the key is instant.
 [[startup]]
-command = ["node", "src/open.mjs", "--background"]
+command = ["bun", "src/open.mjs", "--background"]
 
 # Toggle: opens the board, focuses it when it is open elsewhere, goes back when it is focused.
 [[actions]]
 id = "open"
 title = "Agent board"
 contexts = ["workspace", "pane"]
-command = ["node", "src/open.mjs"]
+command = ["bun", "src/open.mjs"]
 
 [[actions]]
 id = "web"
 title = "Agent board (web)"
 contexts = ["workspace", "pane"]
-command = ["node", "src/web-open.mjs"]
+command = ["bun", "src/web-open.mjs"]
 
 [[actions]]
 id = "install"
 title = "Agent board: install the board command and the Claude Code hooks"
 contexts = ["workspace"]
-command = ["node", "src/install.mjs"]
+command = ["bun", "src/install.mjs"]
 
 [[panes]]
 id = "board"
 title = "Agent board"
 placement = "overlay"
 # run.mjs restarts the board when the plugin's code changes.
-command = ["node", "src/run.mjs"]
+command = ["bun", "src/run.mjs"]

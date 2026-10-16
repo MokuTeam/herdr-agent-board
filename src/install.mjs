@@ -16,8 +16,8 @@ const statusline = join(ROOT, 'src', 'statusline.mjs')
 // --- board command
 mkdirSync(binDir, { recursive: true })
 const shims = {
-  board: `#!/bin/sh\n# agent-board\nexec node "${cli.replace(/\\/g, '/')}" "$@"\n`,
-  'board.cmd': `@rem agent-board\r\n@node "${cli}" %*\r\n`,
+  board: `#!/bin/sh\n# agent-board\nexec bun "${cli.replace(/\\/g, '/')}" "$@"\n`,
+  'board.cmd': `@rem agent-board\r\n@bun "${cli}" %*\r\n`,
 }
 for (const [name, body] of Object.entries(shims)) {
   const file = join(binDir, name)
@@ -37,7 +37,7 @@ function put(event) {
   const list = (settings.hooks[event] ??= [])
   for (const entry of list) entry.hooks = (entry.hooks ?? []).filter(h => !ours(h.command))
   settings.hooks[event] = list.filter(entry => entry.hooks.length)
-  settings.hooks[event].push({ hooks: [{ type: 'command', command: `node "${hook}"`, timeout: 10 }] })
+  settings.hooks[event].push({ hooks: [{ type: 'command', command: `bun "${hook}"`, timeout: 10 }] })
 }
 put('SessionStart')
 put('UserPromptSubmit')
@@ -46,7 +46,7 @@ put('UserPromptSubmit')
 // line someone else set stays; the board then reads the usagebar cache, if there is one.
 const ourLine = command => /agent-board.*statusline\.mjs/.test(command ?? '')
 if (!settings.statusLine || ourLine(settings.statusLine.command)) {
-  settings.statusLine = { type: 'command', command: `node "${statusline.replace(/\\/g, '/')}"` }
+  settings.statusLine = { type: 'command', command: `bun "${statusline.replace(/\\/g, '/')}"` }
   console.log(`status line: ${statusline}`)
 } else console.log('status line: left as it was (not ours)')
 writeFileSync(settingsFile, `${JSON.stringify(settings, null, 2)}\n`)
