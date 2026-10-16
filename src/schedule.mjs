@@ -12,6 +12,7 @@
 import { randomBytes } from 'node:crypto'
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { cleanName, cleanText, MAX_PER_SESSION } from './core/schedule-rules.ts'
 import { SCHEDULE_DIR } from './paths.mjs'
 import { readJson, updateJson } from './store.mjs'
 
@@ -19,9 +20,6 @@ export { SCHEDULE_DIR }
 const LOG_FILE = join(SCHEDULE_DIR, 'log.jsonl')
 const ID = /^[0-9a-f]{6}$/
 const fileOf = id => join(SCHEDULE_DIR, `${id}.json`)
-// Enough for any real use; an agent stuck in a loop cannot fill the disk.
-export const MAX_PER_SESSION = 30
-export const MAX_TEXT = 2000
 
 /** Every entry, soonest first. */
 export function listEntries() {
@@ -43,12 +41,6 @@ export function listEntries() {
 export function getEntry(id) {
   return ID.test(String(id)) ? readJson(fileOf(id)) : null
 }
-
-// The text is typed into a terminal: no control characters (an escape could drive the pane).
-const CONTROL = /[\x00-\x08\x0b-\x1f\x7f]/g
-export const cleanText = s => String(s ?? '').replace(CONTROL, '').slice(0, MAX_TEXT)
-// A name goes into the prompt's tag: no brackets either.
-export const cleanName = s => String(s ?? '').replace(CONTROL, '').replace(/[[\]]/g, '').trim().slice(0, 60)
 
 /** Save a new entry under a fresh id and return it. */
 export function addEntry(fields) {

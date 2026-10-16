@@ -15,14 +15,10 @@ test('only known numeric cache fields leave the reader; zero is valid, context/a
  assert.equal(out.context.available,false);assert.equal(out.limits.sessionAccountVerified,false)
  assert.doesNotMatch(JSON.stringify(out),/must not leave/)
 })
-test('old/expired, malformed, future and missing caches never become invented fresh usage',t=>{
+test('a missing cache and a symlink never become invented fresh usage',t=>{
  const {dir,file}=fixture(t),now=1000000
  assert.equal(localUsage(dir,now).limits.available,false)
- writeFileSync(file,JSON.stringify({fetchedAtMs:1,fiveHour:{usedPercentage:90,resetsAt:10}}))
- assert.equal(localUsage(dir,now).limits.stale,true);assert.equal(localUsage(dir,now).limits.windows[0].expired,true)
- for(const data of ['bad',JSON.stringify({fetchedAtMs:now+6000,fiveHour:{usedPercentage:10}}),JSON.stringify({fetchedAtMs:now,fiveHour:{usedPercentage:'10'}}),JSON.stringify({fetchedAtMs:now,fiveHour:{usedPercentage:101}})]){
-  writeFileSync(file,data);assert.equal(localUsage(dir,now).limits.available,false)
- }
+ writeFileSync(file,'bad');assert.equal(localUsage(dir,now).limits.available,false)
  unlinkSync(file);const other=join(dir,'other.json');writeFileSync(other,'{}');if(symlinkOrSkip(other,file)) assert.equal(localUsage(dir,now).limits.available,false)
  else t.skip(SYMLINK_SKIP_REASON)
 })

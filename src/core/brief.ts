@@ -1,16 +1,23 @@
 // What a Claude session is told about the board (see hook.mjs).
-import { categoryFor } from './core/categories.ts'
-import { languageName } from './core/lang.ts'
+import { categoryFor } from './categories.ts'
+import { languageName } from './lang.ts'
+import type { Card, Config } from './types.ts'
 
 // Bump when the brief says something new: every running session gets it again on its next prompt.
 export const BRIEF_VERSION = 3
 
-export function brief(cfg, card, cwd) {
+export function brief(cfg: Pick<Config, 'categories'>, card: Card | null | undefined, cwd: string): string {
   const cat = card?.category
   const guess = categoryFor(cfg, cwd)
   const now = cat ? `${cat}` : guess ? `${guess} (guessed from the folder, set it if wrong)` : 'not set, set it now'
   const known = cfg.categories.map(c => `${c.id} (${c.title})`).join(', ')
-  const state = [card?.doing && `doing "${card.doing}"`, card?.wait && `waiting "${card.wait}"`, card?.ask && `asks the user "${card.ask}"`].filter(Boolean).join(', ')
+  const state = [
+    card?.doing && `doing "${card.doing}"`,
+    card?.wait && `waiting "${card.wait}"`,
+    card?.ask && `asks the user "${card.ask}"`,
+  ]
+    .filter(Boolean)
+    .join(', ')
   return [
     '[agent-board] The user watches every Claude session on a kanban board in herdr: lanes by category; columns working, needs the user, waiting on someone else, done, idle.',
     "Working, done and terminal dialogs are detected automatically. Keep the rest of this session's card current with the `board` shell command (Bash or PowerShell; it prints one line; no need to tell the user):",
@@ -25,6 +32,6 @@ export function brief(cfg, card, cwd) {
   ].join('\n')
 }
 
-export function waitReminder(card) {
+export function waitReminder(card: Pick<Card, 'wait'>): string {
   return `[agent-board] This session's card says it waits for: "${card.wait}". If this prompt resolves that, update the card (board doing / done / wait).`
 }

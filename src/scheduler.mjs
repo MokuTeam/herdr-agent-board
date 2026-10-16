@@ -12,52 +12,18 @@
 // restart that overlaps, a test copy) never sends the same run twice.
 import { mkdirSync, watch } from 'node:fs'
 import { send, wake } from './actions.mjs'
-import { t } from './core/lang.ts'
 import { collect, forgetSleepers } from './model.mjs'
 import { getEntry, listEntries, logRun, removeEntry, SCHEDULE_DIR, updateEntry } from './schedule.mjs'
-import { countRuns, nextRun } from './core/when.ts'
-import { longWhen, span } from './core/when-format.ts'
+import { promptOf, targetOf } from './core/schedule-rules.ts'
+import { nextRun } from './core/when.ts'
 
 // A run on its way (waking a session takes up to three minutes) holds its claim this long.
 const CLAIM_MS = 5 * 60_000
-// Later than this, the prompt says by how much.
-const LATE_MS = 2 * 60_000
 // Sessions woken at once, so a board back after a night does not start every sleeper together.
 const MAX_WAKING = 2
 // A cron entry whose session is gone for this many runs in a row is dropped: it would wait and
 // miss forever.
 const GONE_RUNS = 3
-
-/** What the session gets: "[board reminder] text", with a note when it is late or stands for several runs. */
-export function promptOf(entry, now) {
-  const notes = []
-  if (entry.cron) {
-    const runs = countRuns(entry.cron, entry.next, now)
-    if (runs > 1) notes.push(t('sched.prompt.runs', { n: runs, since: longWhen(entry.next, t, now) }))
-  } else if (now - entry.next > LATE_MS) {
-    notes.push(t('sched.prompt.late', { late: span(now - entry.next, t), due: longWhen(entry.next, t, now) }))
-  }
-  // Set by another session, or for the one this pane held before /clear: the receiver judges it.
-  const before = entry.movedFrom
-  const setter = entry.from && entry.from.key !== (before?.key ?? entry.key) ? entry.from.name || entry.from.key.slice(0, 8) : ''
-  if (before) notes.push(t(setter ? 'sched.prompt.clearedFor' : 'sched.prompt.cleared', { name: before.name || before.key.slice(0, 8) }))
-  // The tag stays in English: the hook knows a board prompt by it (hook.mjs).
-  const from = setter ? ` from ${setter}` : ''
-  const tag = entry.cron ? `board schedule ${entry.id}${from}: ${entry.cron}` : `board reminder${from}`
-  return `[${tag}${notes.length ? `; ${notes.join('; ')}` : ''}] ${entry.text}`
-}
-
-const folder = p => String(p ?? '').replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase()
-
-/**
- * The session an entry is for: by its id, else the Claude session now in its pane and folder.
- * /clear gives a session a new id in the same pane; the reminder follows it there.
- */
-export function targetOf(entry, items) {
-  const own = items.find(i => i.key === entry.key)
-  if (own || !entry.pane || !entry.cwd) return own
-  return items.find(i => i.pane === entry.pane && i.session && !i.sleeping && folder(i.cwd) === folder(entry.cwd))
-}
 
 const positive = (v, fallback) => (Number(v) > 0 ? Number(v) : fallback)
 

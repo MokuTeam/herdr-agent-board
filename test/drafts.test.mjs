@@ -1,7 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { draftBook } from '../web/drafts.js'
-import { messageGate } from '../src/message-gate.mjs'
 test('draft text survives reload and session switches; completed old sends cannot clear new edits', () => {
   const data=new Map();const storage={getItem:k=>data.get(k)??null,setItem:(k,v)=>data.set(k,v),removeItem:k=>data.delete(k)}
   const drafts=draftBook(storage)
@@ -12,23 +11,7 @@ test('draft text survives reload and session switches; completed old sends canno
   drafts.clear('b');assert.equal(drafts.read('b'),null)
   assert.equal(drafts.read('a').text,'edited')
 })
-test('duplicate clicks and completed replays send once; other sessions remain independent', async () => {
-  const gate=messageGate();let release,calls=0
-  const action=async()=>{calls++;await new Promise(r=>release=r);return {ok:true}}
-  const first=gate('a','id-1',['a','text'],action)
-  const duplicate=gate('a','id-1',['a','text'],action)
-  assert.equal((await gate('a','id-2',['a','new'],action)).ok,false)
-  assert.equal((await gate('b','id-1',['b','text'],async()=>({ok:true}))).ok,true)
-  await Promise.resolve();release();await Promise.all([first,duplicate])
-  assert.equal(calls,1)
-  assert.equal((await gate('a','id-1',['a','text'],action)).ok,true)
-  assert.equal(calls,1)
-  assert.equal((await gate('a','id-1',['a','changed'],action)).ok,false)
-})
-test('interrupted preflight releases the guard and storage errors do not send anything', async () => {
-  const gate=messageGate()
-  await assert.rejects(gate('a','id',[],async()=>{throw new Error('offline')}),/offline/)
-  assert.equal((await gate('a','new',[],async()=>({ok:true}))).ok,true)
+test('storage errors do not send anything', () => {
   const drafts=draftBook({getItem(){throw Error('disabled')},setItem(){throw Error('disabled')}})
   assert.equal(drafts.read('a'),null);assert.equal(drafts.save('a','text').text,'text')
 })

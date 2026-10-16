@@ -8,44 +8,10 @@
 import { mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { digest, statusText } from './core/statusline.ts'
 import { CONTEXT_DIR, USAGE_FILE } from './paths.mjs'
 
-const num = v => typeof v === 'number' && Number.isFinite(v)
-const pct = v => num(v) && v >= 0 && v <= 100
 const safe = key => String(key).replace(/[^A-Za-z0-9_-]/g, '_')
-
-/** What the board keeps from one status line input: { usage, context, session }; pure. */
-export function digest(input, now = Date.now()) {
-  const usage = { fetchedAtMs: now }
-  for (const [from, to] of [['five_hour', 'fiveHour'], ['seven_day', 'sevenDay']]) {
-    const w = input?.rate_limits?.[from]
-    if (w && pct(w.used_percentage)) usage[to] = { usedPercentage: w.used_percentage, resetsAt: num(w.resets_at) ? w.resets_at : null }
-  }
-  const c = input?.context_window
-  const u = c?.current_usage
-  const tokens = u ? (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) : null
-  const context =
-    c && (pct(c.used_percentage) || tokens)
-      ? { usedPercentage: pct(c.used_percentage) ? c.used_percentage : null, size: num(c.context_window_size) ? c.context_window_size : null, tokens, at: now }
-      : null
-  return {
-    usage: usage.fiveHour || usage.sevenDay ? usage : null,
-    context,
-    session: typeof input?.session_id === 'string' && input.session_id ? input.session_id : null,
-  }
-}
-
-/** The line under the prompt: dim labels, the numbers yellow from 70% and red from 90%. */
-export function statusText(d) {
-  const tone = p => (p >= 90 ? '\x1b[31m' : p >= 70 ? '\x1b[33m' : '\x1b[0m')
-  const part = (label, p) => `\x1b[2m${label}\x1b[0m ${tone(p)}${Math.round(p)}%\x1b[0m`
-  const parts = []
-  if (d.context?.usedPercentage != null) parts.push(part('ctx', d.context.usedPercentage))
-  else if (d.context?.tokens) parts.push(`\x1b[2mctx\x1b[0m ${Math.round(d.context.tokens / 1000)}k`)
-  if (d.usage?.fiveHour) parts.push(part('5h', d.usage.fiveHour.usedPercentage))
-  if (d.usage?.sevenDay) parts.push(part('7d', d.usage.sevenDay.usedPercentage))
-  return parts.join('\x1b[2m · \x1b[0m')
-}
 
 function save(file, data) {
   mkdirSync(dirname(file), { recursive: true })
