@@ -18,11 +18,13 @@
 //   board unschedule <id|all>    removes an entry (all: every entry of this session)
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync } from 'node:fs'
-import { categoryFor, categoryInfo, CONFIG_FILE, editCategories, laneRank, loadConfig } from './config.mjs'
+import { CONFIG_FILE, editCategories, loadConfig } from './config.mjs'
+import { COLUMNS, noteOf, statusText } from './core/board.ts'
+import { categoryFor, categoryInfo, laneRank } from './core/categories.ts'
 import { liveSessions } from './claude.mjs'
 import { snapshot } from './herdr.mjs'
 import { t } from './core/lang.ts'
-import { COLUMNS, collect, noteOf, statusText } from './model.mjs'
+import { collect } from './model.mjs'
 import { BOARD_FILE } from './paths.mjs'
 import { addEntry, listEntries, removeEntry } from './schedule.mjs'
 import { readCard, writeCard } from './store.mjs'

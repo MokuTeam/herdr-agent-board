@@ -6,43 +6,12 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, watch, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { LANGUAGES } from './core/i18n/translator.ts'
+import { builtinTitle, DEFAULT_CONFIG, normalizeConfig, validColor } from './core/categories.ts'
 import { t, useLanguage } from './core/lang.ts'
 import { CONFIG_DIR } from './paths.mjs'
 import { allCards, writeCard } from './store.mjs'
 
 export const CONFIG_FILE = join(CONFIG_DIR, 'config.json')
-
-// Apple's system colors; a category's color is one of these names or a #hex.
-export const PALETTE = {
-  blue: '#007AFF', cyan: '#32ADE6', teal: '#30B0C7', mint: '#00C7BE', green: '#34C759', yellow: '#FFCC00',
-  orange: '#FF9500', red: '#FF3B30', pink: '#FF2D55', magenta: '#FF2D55', purple: '#AF52DE', indigo: '#5856D6',
-  brown: '#A2845E', gray: '#8E8E93', white: '#8E8E93',
-}
-const validColor = c => !!PALETTE[c] || /^#[0-9a-f]{3,8}$/i.test(String(c))
-export const colorHex = c => PALETTE[c] ?? (validColor(c) ? c : PALETTE.gray)
-
-const DEFAULTS = {
-  // "auto" (the system's language), "en" or "ru": the board's texts and the language agents
-  // write their cards in.
-  language: 'auto',
-  // A start; lanes for clients come from the agents (`board cat <id> "<Title>"`) or the web
-  // board's category editor, which also sets the folders that guess a session's lane. These
-  // three have no title of their own: they read in the board's language until one is given.
-  categories: [
-    { id: 'work', color: 'cyan', paths: [] },
-    { id: 'personal', color: 'green', paths: [] },
-    { id: 'other', color: 'gray', paths: [] },
-  ],
-  // workspace: a workspace of its own that stays open (default); tab: a tab in the current
-  // workspace; overlay: over the current pane, closed when you leave it
-  placement: 'workspace',
-  workspace: 'Board',
-  refreshSec: 2,
-  // herdr-wake router, for sleeping sessions; the board works without it
-  wakeUrl: 'http://127.0.0.1:12421',
-  // A reminder due while its session works or waits on a dialog is tried this long, then missed.
-  scheduleWaitMin: 240,
-}
 
 function readRaw() {
   try {
@@ -63,25 +32,16 @@ export function loadConfig() {
   const raw = readRaw()
   if (!raw && !existsSync(CONFIG_FILE)) {
     try {
-      writeRaw(DEFAULTS)
+      writeRaw(DEFAULT_CONFIG)
     } catch {}
   }
-  const cfg = raw ?? {}
-  useLanguage(cfg.language ?? DEFAULTS.language)
-  const cats = cfg.categories?.length ? cfg.categories : structuredClone(DEFAULTS.categories)
-  return { ...DEFAULTS, ...cfg, categories: cats.map(c => (c.title ? c : { ...c, title: builtinTitle(c.id) })) }
-}
-
-/** Title of a lane that has none: the built-in ones in the board's language, else the id. */
-function builtinTitle(id) {
-  const key = `lane.${id}`
-  const title = t(key)
-  return title === key ? id : title
+  useLanguage(raw?.language ?? DEFAULT_CONFIG.language)
+  return normalizeConfig(raw)
 }
 
 /** Change settings in config.json from the web board: { language }. */
 export function editSettings(body) {
-  const raw = readRaw() ?? structuredClone(DEFAULTS)
+  const raw = readRaw() ?? structuredClone(DEFAULT_CONFIG)
   if (body?.language !== undefined) {
     const l = String(body.language)
     if (l !== 'auto' && !LANGUAGES[l]) return { ok: false, error: t('err.language', { lang: l }) }
@@ -133,8 +93,8 @@ function cleanPaths(paths) {
  * named it, so those sessions fall back to the folder guess. "other" is the fallback lane and stays.
  */
 export function editCategories(body) {
-  const raw = readRaw() ?? structuredClone(DEFAULTS)
-  const cats = raw.categories?.length ? raw.categories : structuredClone(DEFAULTS.categories)
+  const raw = readRaw() ?? structuredClone(DEFAULT_CONFIG)
+  const cats = raw.categories?.length ? raw.categories : structuredClone(DEFAULT_CONFIG.categories)
   const find = id => cats.find(c => c.id === id)
   const title = t => String(t ?? '').trim().slice(0, 40)
   switch (body?.op) {
@@ -178,37 +138,4 @@ export function editCategories(body) {
   raw.categories = cats
   writeRaw(raw)
   return { ok: true }
-}
-
-const norm = p => String(p ?? '').replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase()
-
-/** The category id configured for a folder, or null. */
-export function categoryFor(cfg, cwd) {
-  const dir = norm(cwd)
-  let best = null
-  let bestLen = -1
-  for (const c of cfg.categories) {
-    for (const p of c.paths ?? []) {
-      const n = norm(p)
-      if (n && (dir === n || dir.startsWith(`${n}/`)) && n.length > bestLen) {
-        best = c.id
-        bestLen = n.length
-      }
-    }
-  }
-  return best
-}
-
-/** Sort key of a lane: config order, with lanes agents made up just before "other". */
-export function laneRank(cfg, id) {
-  const order = cfg.categories.map(c => c.id)
-  const i = order.indexOf(id)
-  if (i >= 0) return i
-  const other = order.indexOf('other')
-  return other >= 0 ? other - 0.5 : order.length
-}
-
-/** Category record for an id, including ids agents made up. */
-export function categoryInfo(cfg, id) {
-  return cfg.categories.find(c => c.id === id) ?? { id, title: builtinTitle(id), color: 'gray', paths: [] }
 }

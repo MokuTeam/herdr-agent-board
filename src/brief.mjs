@@ -1,5 +1,5 @@
 // What a Claude session is told about the board (see hook.mjs).
-import { categoryFor } from './config.mjs'
+import { categoryFor } from './core/categories.ts'
 import { languageName } from './core/lang.ts'
 
 // Bump when the brief says something new: every running session gets it again on its next prompt.

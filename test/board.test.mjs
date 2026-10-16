@@ -5,9 +5,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cleanPrompt, conversation, toolDetail, toolLabel, trailingQuestion, transcriptInfo } from '../src/claude.mjs'
-import { categoryFor, categoryInfo, laneRank } from '../src/config.mjs'
 import { t, useLanguage } from '../src/core/lang.ts'
-import { attentionOf, columnOf, COLUMNS, noteOf } from '../src/model.mjs'
 import { markdown } from '../web/markdown.js'
 
 // The board's texts follow the system language by default: the tests pin English.
@@ -22,55 +20,6 @@ const cfg = {
     { id: 'other', title: 'Other', paths: [] },
   ],
 }
-
-test('category from the folder: longest match wins, case and slashes do not matter', () => {
-  assert.equal(categoryFor(cfg, 'C:\\Clients\\Globex'), 'globex')
-  assert.equal(categoryFor(cfg, 'c:/clients/globex/sub'), 'globex')
-  assert.equal(categoryFor(cfg, 'C:\\Clients\\Initech'), 'acme')
-  assert.equal(categoryFor(cfg, 'C:\\ClientsX'), null)
-  assert.equal(categoryFor(cfg, 'C:\\'), null)
-})
-
-test('lanes agents made up sort before "other" and get their id as title', () => {
-  assert.ok(laneRank(cfg, 'newclient') > laneRank(cfg, 'personal'))
-  assert.ok(laneRank(cfg, 'newclient') < laneRank(cfg, 'other'))
-  assert.equal(categoryInfo(cfg, 'newclient').title, 'newclient')
-})
-
-test('columns: herdr state first, then the wait note', () => {
-  assert.equal(columnOf('working', { wait: 'x' }), 'work')
-  assert.equal(columnOf('blocked', { wait: 'x' }), 'me')
-  assert.equal(columnOf('done', { wait: 'x' }), 'ext')
-  assert.equal(columnOf('sleeping', { wait: 'x' }), 'ext')
-  assert.equal(columnOf('done', {}), 'done')
-  assert.equal(columnOf('idle', null), 'idle')
-  assert.equal(columnOf('sleeping', {}), 'idle')
-})
-
-test('a column the user dragged the card to wins, except while a turn is on', () => {
-  const asked = { question: 'Send it?', replied: false }
-  assert.equal(columnOf('done', { pin: 'me' }), 'me')
-  assert.equal(attentionOf('done', { pin: 'me' }), 'later')
-  assert.equal(attentionOf('done', { pin: 'me' }, asked), 'question') // its own question says more
-  assert.equal(columnOf('idle', { pin: 'done' }, asked), 'done')
-  assert.equal(attentionOf('idle', { pin: 'done' }, asked), '')
-  assert.equal(columnOf('done', { pin: 'idle', wait: 'x' }), 'idle')
-  assert.equal(columnOf('sleeping', { pin: 'ext' }), 'ext')
-  assert.equal(columnOf('working', { pin: 'me' }), 'work')
-  assert.equal(columnOf('blocked', { pin: 'done' }), 'me')
-  assert.equal(columnOf('done', { pin: 'work' }), 'done') // not a column the user can pin
-  assert.equal(noteOf({ name: 'A', column: 'me', attention: 'later', title: 'Import' }), 'parked by you · Import')
-  assert.equal(noteOf({ name: 'A', column: 'ext', wait: '' }), 'parked by you')
-})
-
-test('card note: wait text, then what the agent said, then the ai title, then the last prompt', () => {
-  const base = { name: 'Acme-Billing', title: 'Receipt import', prompt: 'go on' }
-  assert.equal(noteOf({ ...base, column: 'ext', wait: 'client reply' }), 'client reply')
-  assert.equal(noteOf({ ...base, column: 'work', doing: 'fixing the import' }), 'fixing the import')
-  assert.equal(noteOf({ ...base, column: 'work' }), 'Receipt import')
-  assert.equal(noteOf({ ...base, title: 'Acme-Billing', column: 'work' }), 'go on')
-  assert.equal(noteOf({ ...base, column: 'done', result: 'uploaded' }), 'uploaded')
-})
 
 test('prompts are cleaned for one line', () => {
   assert.equal(cleanPrompt('[telegram message_id=5 ts=1] hi\nhow is it going'), 'hi how is it going')
@@ -145,22 +94,6 @@ test('a message ending in a question: its last sentence or two, markup ignored',
   assert.equal(trailingQuestion('Готово. Отправлять?'), 'Готово. Отправлять?') // any script
 })
 
-test('"needs me": dialogs, the agent\'s ask, then an unanswered last question', () => {
-  const q = { question: 'Send it?', replied: false }
-  assert.equal(attentionOf('working', { ask: 'x' }, q), '')
-  assert.equal(attentionOf('blocked', {}, {}), 'decision')
-  assert.equal(attentionOf('done', { ask: 'OK?' }, {}), 'ask')
-  assert.equal(attentionOf('idle', {}, q), 'question')
-  assert.equal(attentionOf('sleeping', {}, q), 'question')
-  assert.equal(attentionOf('idle', {}, { ...q, replied: true }), '')
-  assert.equal(attentionOf('idle', { wait: 'client' }, q), '')
-  assert.equal(attentionOf('idle', { dismissed: 'Send it?' }, q), '')
-  assert.equal(attentionOf('idle', { dismissed: 'another' }, q), 'question')
-  assert.equal(columnOf('done', { ask: 'OK?' }, {}), 'me')
-  assert.equal(columnOf('done', { ask: 'OK?', wait: 'x' }, {}), 'me')
-  assert.equal(columnOf('idle', {}, q), 'me')
-})
-
 test('markdown: blocks and inline markup, nothing executable gets through', () => {
   const html = markdown('## Summary\n\n**Done**, see `x`.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- one\n  - two\n\n```\n<b>x</b>\n```')
   assert.match(html, /<h4>Summary<\/h4>/)
@@ -174,15 +107,12 @@ test('markdown: blocks and inline markup, nothing executable gets through', () =
   assert.equal(markdown('snake_case_name and the path C:\a_b\c_d.txt'), '<p>snake_case_name and the path C:\a_b\c_d.txt</p>')
 })
 
-test('the board switches language in place: columns, notes and the brief follow', () => {
+test('the board switches language in place: the brief follows', () => {
   try {
     useLanguage('ru')
-    assert.equal(COLUMNS.find(c => c.id === 'me').title, 'Ждёт меня')
-    assert.equal(noteOf({ name: 'A', column: 'ext', wait: '' }), 'отложено тобой')
     assert.match(brief(cfg, null, 'C:\\X'), /Card texts in Russian/)
     assert.equal(t('lane.other'), 'Прочее')
   } finally {
     useLanguage('en')
   }
-  assert.equal(COLUMNS.find(c => c.id === 'me').title, 'Needs me')
 })

@@ -1,6 +1,7 @@
 // The board's data: every agent pane in herdr plus the sessions herdr-wake put to sleep, each
 // merged with its card and with what Claude recorded about it, and sorted into a column.
-import { categoryFor } from './config.mjs'
+import { attentionOf, busy, columnOf, PINS } from './core/board.ts'
+import { categoryFor } from './core/categories.ts'
 import { liveSessions, transcriptInfo, transcriptPath } from './claude.mjs'
 import { snapshot } from './herdr.mjs'
 import { readFileSync, statSync } from 'node:fs'
@@ -8,23 +9,6 @@ import { join } from 'node:path'
 import { t } from './core/lang.ts'
 import { CONTEXT_DIR } from './paths.mjs'
 import { allCards, writeCard } from './store.mjs'
-
-// Titles read in the board's language at the moment they are used.
-const column = (id, icon, color) => ({ id, icon, color, get title() { return t(`col.${id}`) } })
-export const COLUMNS = [
-  column('work', '▶', 'green'),
-  column('me', '!', 'red'),
-  column('ext', '◷', 'yellow'),
-  column('done', '✓', 'cyan'),
-  column('idle', '·', 'gray'),
-]
-
-/** herdr's agent status in words: "working", "asleep". */
-export function statusText(status) {
-  const key = `status.${status}`
-  const text = t(key)
-  return text === key ? status : text
-}
 
 let sleepCache = { at: 0, list: [] }
 
@@ -44,37 +28,6 @@ async function sleepers(url) {
 /** After the board put a session to sleep or woke it: read herdr-wake again on the next refresh. */
 export function forgetSleepers() {
   sleepCache.at = 0
-}
-
-/** Columns the user can drag a card to. "Working" is herdr's to say. */
-export const PINS = new Set(['me', 'ext', 'done', 'idle'])
-/** A turn is on: the session works, or a dialog in it waits in the middle of the work. */
-export const busy = status => status === 'working' || status === 'blocked'
-
-/**
- * Why a session needs the user, or '':
- *   decision  a dialog in the terminal holds it (permission, a question form): herdr says blocked
- *   ask       the agent said so with `board ask` (cleared when the user replies)
- *   question  it ended its turn with a question nobody answered yet (unless the user waved that
- *             exact question off on the board: card.dismissed)
- *   later     the user dragged it to "Needs me" to look at it later (card.pin)
- * A card the user dragged elsewhere (card.pin) shows no question until the pin goes.
- */
-export function attentionOf(status, card, info) {
-  if (status === 'working') return ''
-  if (status === 'blocked') return 'decision'
-  const own = card?.ask ? 'ask' : !card?.wait && info?.question && !info.replied && card?.dismissed !== info.question ? 'question' : ''
-  if (PINS.has(card?.pin)) return card.pin === 'me' ? own || 'later' : ''
-  return own
-}
-
-export function columnOf(status, card, info) {
-  if (status === 'working') return 'work'
-  if (attentionOf(status, card, info)) return 'me'
-  if (PINS.has(card?.pin)) return card.pin
-  if (card?.wait) return 'ext'
-  if (status === 'done') return 'done'
-  return 'idle'
 }
 
 /**
@@ -222,16 +175,4 @@ export async function collect(cfg) {
 
   items.sort((a, b) => b.activity - a.activity)
   return items
-}
-
-/** The one line a card shows under the name. */
-export function noteOf(item) {
-  if (item.column === 'ext') return item.wait || t('note.parked')
-  // Claude's own title of the session beats the last prompt, which is often just "ok" or "go on".
-  const title = item.title && item.title !== item.name ? item.title : ''
-  const auto = title || item.prompt
-  if (item.attention === 'later') return t('note.parkedWith', { what: item.doing || auto || t('note.look') })
-  if (item.column === 'me') return item.question || item.doing || auto || t('note.decision')
-  if (item.column === 'done' || item.column === 'idle') return item.result || item.doing || auto
-  return item.doing || auto
 }
