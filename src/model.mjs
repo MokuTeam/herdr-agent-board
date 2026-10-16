@@ -9,26 +9,10 @@ import { join } from 'node:path'
 import { t } from './core/lang.ts'
 import { contextDir } from './adapters/paths.ts'
 import { allCards, writeCard } from './adapters/cards.ts'
-
-let sleepCache = { at: 0, list: [] }
-
-/** Sessions herdr-wake put to sleep; empty when the router is not running. Cached for 5 s. */
-async function sleepers(url) {
-  if (!url) return []
-  if (Date.now() - sleepCache.at < 5000) return sleepCache.list
-  let list = []
-  try {
-    const res = await fetch(`${url}/sleeping`, { signal: AbortSignal.timeout(2000) })
-    if (res.ok) list = await res.json()
-  } catch {}
-  sleepCache = { at: Date.now(), list: Array.isArray(list) ? list : [] }
-  return sleepCache.list
-}
+import { forgetSharedHerdrWake, sharedHerdrWake } from './integrations/herdr-wake.ts'
 
 /** After the board put a session to sleep or woke it: read herdr-wake again on the next refresh. */
-export function forgetSleepers() {
-  sleepCache.at = 0
-}
+export const forgetSleepers = forgetSharedHerdrWake
 
 /**
  * The column the user dragged the card to, or ''. It holds until the session works again (the
@@ -89,7 +73,7 @@ function contextOf(session, info) {
 
 /** All board items, newest activity first. */
 export async function collect(cfg) {
-  const [snap, asleep] = await Promise.all([snapshot(), sleepers(cfg.wakeUrl)])
+  const [snap, asleep] = await Promise.all([snapshot(), sharedHerdrWake(cfg.wakeUrl).sleepers()])
   const claude = defaultClaudeHome()
   const live = claude.liveSessions()
   const cards = allCards()
