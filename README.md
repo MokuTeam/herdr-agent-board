@@ -368,7 +368,7 @@ every POST. `GET /api/fs/raw` serves images, PDF, video and audio, with ranges, 
 board payload, new on every start, which only the board's own page can read. Text never comes
 raw, and raw responses carry a CSP that runs no script.
 
-New sessions (`src/launch.mjs`, `web/launch.js`): `GET /api/launch/options` (herdr's workspaces,
+New sessions (`src/services/launch/`, `web/launch.js`): `GET /api/launch/options` (herdr's workspaces,
 recent folders, the launcher), `POST /api/fs/dirs` (the subfolders of a folder, or the drives),
 `POST /api/launch` (starts one in the background; its progress is `launches` in the board
 payload), `POST /api/launch/<id>/dismiss` and `/focus`. `POST /api/launch` also needs the page's

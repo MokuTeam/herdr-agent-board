@@ -18,6 +18,8 @@ export const cardsDir = (): string => join(stateDir(), 'cards')
 export const scheduleDir = (): string => join(stateDir(), 'schedule')
 export const boardFile = (): string => join(stateDir(), 'board.json')
 export const uploadsDir = (): string => join(stateDir(), 'uploads')
+// First messages for a launcher's {messageFile}, there only while the launcher runs.
+export const launchDir = (): string => join(stateDir(), 'launch')
 // From Claude Code's status line (statusline.mjs): the account's usage windows, each session's context.
 export const usageFile = (): string => join(stateDir(), 'claude-limits-latest.json')
 export const contextDir = (): string => join(stateDir(), 'context')

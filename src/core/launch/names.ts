@@ -1,6 +1,6 @@
 // New sessions from the board, the logic without a page: what a name may be, herdr's name for
 // it, folders as typed, and what the "new session" window offers by default in each context.
-// Shared by the browser (launch.js) and the server (src/launch.mjs), so both check the same way.
+// Shared by the browser (launch.js) and the server (services/launch), so both check the same way.
 
 import type { Category } from '../types.ts'
 

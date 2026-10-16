@@ -1,5 +1,5 @@
 // The `launch.command` launcher, the logic without the process: the command from config with its
-// values filled in, and what a launcher printed when it worked or failed. src/launch.mjs runs it.
+// values filled in, and what a launcher printed when it worked or failed. services/launch/launcher.ts runs it.
 import { t } from '../lang.ts'
 
 export const PLACEHOLDERS = [

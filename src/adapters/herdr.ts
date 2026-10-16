@@ -104,17 +104,78 @@ export interface HerdrAgent {
   status: AgentStatus
   /** The Claude session id the pane hosts, if herdr knows one. */
   session: string | null
+  /** herdr's name for the agent, if it has one. */
+  name: string | null
 }
 
+/** `value[key]` when it is a string, else null. */
+const stringAt = (value: unknown, key: string): string | null =>
+  isRecord(value) && typeof value[key] === 'string' ? value[key] : null
+
 /** The agent in a pane, or null when the pane has none. */
-export async function agentGet(pane: string): Promise<HerdrAgent | null> {
-  const answer = await herdr(['agent', 'get', pane])
+export async function agentGet(pane: string, timeoutMs = 30_000): Promise<HerdrAgent | null> {
+  const answer = await herdr(['agent', 'get', pane], timeoutMs)
   const agent = isRecord(answer) ? answer.agent : null
   if (!isRecord(agent)) return null
-  const token = agent.agent_session
   return {
-    kind: typeof agent.agent === 'string' ? agent.agent : null,
+    kind: stringAt(agent, 'agent'),
     status: isAgentStatus(agent.agent_status) ? agent.agent_status : 'unknown',
-    session: isRecord(token) && typeof token.value === 'string' ? token.value : null,
+    session: stringAt(agent.agent_session, 'value'),
+    name: stringAt(agent, 'name'),
   }
+}
+
+/** The names herdr's agents go by. */
+export async function agentNames(): Promise<Set<string>> {
+  const answer = await herdr(['agent', 'list'])
+  const agents = isRecord(answer) && Array.isArray(answer.agents) ? answer.agents : []
+  return new Set(agents.map(a => stringAt(a, 'name')).filter((name): name is string => !!name))
+}
+
+/** A new workspace: its id, and the tab and pane it comes with. */
+export async function workspaceCreate(
+  cwd: string,
+  label: string,
+): Promise<{ id: string; tab: string | null; pane: string | null }> {
+  const args = ['workspace', 'create', '--cwd', cwd, '--label', label, '--no-focus']
+  const answer = await herdr(args)
+  const id = isRecord(answer) ? stringAt(answer.workspace, 'workspace_id') : null
+  if (!isRecord(answer) || !id) throw new HerdrError(args, undefined, 'no workspace in its answer')
+  return { id, tab: stringAt(answer.tab, 'tab_id'), pane: stringAt(answer.root_pane, 'pane_id') }
+}
+
+/** A new tab in a workspace; returns the pane it comes with. */
+export async function tabCreate(workspace: string, cwd: string, label: string): Promise<string> {
+  const args = ['tab', 'create', '--workspace', workspace, '--cwd', cwd, '--label', label, '--no-focus']
+  const answer = await herdr(args)
+  const pane = isRecord(answer) ? stringAt(answer.root_pane, 'pane_id') : null
+  if (!pane) throw new HerdrError(args, undefined, 'no pane in its answer')
+  return pane
+}
+
+/** The tab a pane is in, or null when herdr does not say. */
+export async function paneTab(pane: string): Promise<string | null> {
+  const answer = await herdr(['pane', 'get', pane])
+  return isRecord(answer) ? stringAt(answer.pane, 'tab_id') : null
+}
+
+/** A workspace's panes: the tab each is in and the agent it runs (null for a shell). */
+export async function workspacePanes(
+  workspace: string,
+): Promise<{ pane: string | null; tab: string | null; agent: string | null }[]> {
+  const answer = await herdr(['pane', 'list', '--workspace', workspace])
+  const panes = isRecord(answer) && Array.isArray(answer.panes) ? answer.panes : []
+  return panes.map(p => ({ pane: stringAt(p, 'pane_id'), tab: stringAt(p, 'tab_id'), agent: stringAt(p, 'agent') }))
+}
+
+/** herdr's workspaces: id, label, and whether it has the focus. */
+export async function workspaceList(
+  timeoutMs?: number,
+): Promise<{ id: string; label: string | undefined; focused: boolean }[]> {
+  const answer = await herdr(['workspace', 'list'], timeoutMs)
+  const list = isRecord(answer) && Array.isArray(answer.workspaces) ? answer.workspaces : []
+  return list.flatMap(w => {
+    const id = stringAt(w, 'workspace_id')
+    return id ? [{ id, label: stringAt(w, 'label') ?? undefined, focused: isRecord(w) && !!w.focused }] : []
+  })
 }

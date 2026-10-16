@@ -25,7 +25,8 @@ import { lang, t } from './core/lang.ts'
 import { LANGUAGES } from './core/i18n/translator.ts'
 import { herdrText } from './adapters/herdr.ts'
 import { listDirs } from './adapters/folders.ts'
-import { createLaunches, renameSession } from './launch.mjs'
+import { createLaunches } from './services/launch/launches.ts'
+import { renameSession } from './services/launch/rename.ts'
 import { checkName } from './core/launch/names.ts'
 import { messageGate } from './core/message-gate.ts'
 import { collect } from './services/board.ts'
@@ -132,8 +133,8 @@ export async function startServer({ cfg, log = () => {} } = {}) {
   const bundle = await createWebBundle({ root: ROOT, entry: join(WEB, 'app.js'), log, watch: false })
   let version = bundle.version()
   const clients = new Set()
-  // Sessions started from the board (launch.mjs): their progress goes out with the board.
-  const launches = createLaunches({ cfg, log, onChange: () => publish() })
+  // Sessions started from the board (services/launch): their progress goes out with the board.
+  const launches = createLaunches({ deps, onChange: () => publish() })
 
   /** The board as clients see it, without the time of the last successful refresh. */
   function board() {
@@ -325,7 +326,7 @@ export async function startServer({ cfg, log = () => {} } = {}) {
       if (req.method === 'POST' && path.startsWith('/api/fs/')) {
         if (req.headers['x-board'] !== '1') return json(403, { error: 'header' })
         const body = await readBody(req)
-        // Folders only, for the new-session window's folder picker (launch.mjs).
+        // Folders only, for the new-session window's folder picker (adapters/folders.ts).
         if (path === '/api/fs/dirs') return json(200, await listDirs(body.path, { git: !!body.git }))
         if (path === '/api/fs/stat') {
           const raws = Array.isArray(body.paths) ? body.paths.slice(0, 300).map(String) : []

@@ -49,6 +49,22 @@ export interface LaunchSpec {
   timeoutSec?: number
 }
 
+/** Where a launch from the board is: waiting for a dialog answered in herdr, or at the folder-trust one. */
+export type LaunchState = 'starting' | 'waiting' | 'trust' | 'done' | 'failed'
+/** The step a launch is at, shown on its card (`launch.step.<step>`). */
+export type LaunchStep =
+  | 'prepare'
+  | 'worktree'
+  | 'workspace'
+  | 'tab'
+  | 'agent'
+  | 'dialog'
+  | 'rename'
+  | 'message'
+  | 'command'
+  | 'trust'
+  | 'trusting'
+
 export interface Config {
   language: string
   categories: Category[]

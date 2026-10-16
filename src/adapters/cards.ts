@@ -2,7 +2,7 @@
 // see: its category, what it works on, what it waits for. One small JSON file per session, so
 // sessions writing at the same time never clobber each other. Keyed by the Claude session id,
 // which survives sleep and resume; agents without one are keyed by their pane.
-import { mkdirSync, readdirSync } from 'node:fs'
+import { mkdirSync, readdirSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Card } from '../core/types.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
@@ -29,6 +29,13 @@ export function writeCard(key: string, patch: Partial<Card>): Card {
     },
     isCard,
   )
+}
+
+/** Remove a card; one that is not there is no error. */
+export function removeCard(key: string): void {
+  try {
+    unlinkSync(file(key))
+  } catch {}
 }
 
 /** Every card by key. */
