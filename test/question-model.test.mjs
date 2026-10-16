@@ -3,8 +3,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { conversation, transcriptInfo } from '../src/claude.mjs'
+import { defaultClaudeHome } from '../src/adapters/claude-home.ts'
 import { answered, choose, chooseOther, currentQuestion, digitTarget, emptyPicks, instant, payload, pendingQuestions, permissionTone, remaining, typeOther } from '../web/question-model.js'
+
+const { conversation, transcriptInfo } = defaultClaudeHome()
 
 const QS = [
   { question: 'Which size?', header: 'Size', multiSelect: false, preview: false, options: [{ label: 'Small' }, { label: 'Large' }] },

@@ -14,9 +14,7 @@ import { randomUUID } from 'node:crypto'
 import { focus, send, sleepSession, wake } from './actions.mjs'
 import { answerPermission, answerQuestions } from './answer.mjs'
 import { checkoutChanges, isCheckout } from './adapters/git.ts'
-import { searchHistory } from './history.mjs'
-import { localUsage } from './usage.mjs'
-import { conversation } from './claude.mjs'
+import { defaultClaudeHome, readUsageCache } from './adapters/claude-home.ts'
 import { createWebBundle } from './server/web-bundle.ts'
 import { describe, FILE_TOKEN, MEDIA_TYPES, openWith, preview, resolvePath } from './adapters/files.ts'
 import { editCategories, editSettings, liveConfig } from './adapters/config-file.ts'
@@ -152,12 +150,12 @@ export async function startServer({ cfg, log = () => {} } = {}) {
   }
 
   /**
-   * Claude's usage windows (usage.mjs): from the board's own status line when Claude Code runs it,
+   * Claude's usage windows (claude-home.ts): from the board's own status line when Claude Code runs it,
    * else from the usagebar cache, else null. Windows past their reset are left out: Claude starts
    * them over. No age in it, so data that does not change does not make the board go out again.
    */
   function claudeLimits() {
-    for (const [source, l] of [['statusline', localUsage(stateDir()).limits], ['usagebar', localUsage().limits]]) {
+    for (const [source, l] of [['statusline', readUsageCache(stateDir()).limits], ['usagebar', defaultClaudeHome().localUsage().limits]]) {
       const windows = l.available ? l.windows.filter(w => !w.expired) : []
       if (windows.length) return { source, observedAt: l.observedAt, stale: Date.now() - l.observedAt > 30 * 60_000, windows }
     }
@@ -207,7 +205,7 @@ export async function startServer({ cfg, log = () => {} } = {}) {
 
   async function detail(item) {
     // checkout: whether its folder is in git, for the sheet's Changes button.
-    const out = { item: { ...item, transcript: undefined }, conversation: conversation(item.transcript, 60), screen: '', dialog: null, checkout: await isCheckout(item.cwd) }
+    const out = { item: { ...item, transcript: undefined }, conversation: defaultClaudeHome().conversation(item.transcript, 60), screen: '', dialog: null, checkout: await isCheckout(item.cwd) }
     if (item.status === 'blocked' && item.pane) {
       try {
         const text = await herdrText(['agent', 'read', item.pane, '--source', 'visible'], 5000)
@@ -466,7 +464,7 @@ export async function startServer({ cfg, log = () => {} } = {}) {
         const item = find(m[1])
         if (!item) return json(404, { error: t('err.gone') })
         if (req.method === 'GET' && m[2] === 'changes') return json(200, await checkoutChanges(item.cwd))
-        if (req.method === 'GET' && m[2] === 'history') return json(200, await searchHistory(item.cwd, url.searchParams.get('q'), undefined, item.session))
+        if (req.method === 'GET' && m[2] === 'history') return json(200, await defaultClaudeHome().searchHistory(item.cwd, url.searchParams.get('q'), item.session))
         if (req.method === 'GET' && !m[2]) return json(200, await detail(item))
         if (req.method === 'POST' && m[2]) {
           if (req.headers['x-board'] !== '1') return json(403, { error: 'header' })

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { localUsage } from '../src/usage.mjs'
+import { readUsageCache } from '../src/adapters/claude-home.ts'
 
 const plain = s => s.replace(new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g'), '')
 const input = {
@@ -30,7 +30,7 @@ test('as the command Claude runs: files for the board, the line on stdout, old w
   assert.equal(JSON.parse(readFileSync(join(state, 'claude-limits-latest.json'), 'utf8')).fiveHour.usedPercentage, 23.5)
   assert.equal(run('not json').stdout, '') // a bad input leaves the line blank, no error
   // The board reads it with the usagebar reader: resets in seconds become milliseconds.
-  const read = localUsage(state, usage.fetchedAtMs + 1000).limits
+  const read = readUsageCache(state, usage.fetchedAtMs + 1000).limits
   assert.equal(read.available, true)
   assert.deepEqual(read.windows.map(w => [w.minutes, w.usedPercentage, w.resetsAt]), [[300, 23.5, 1738425600000], [10080, 41.2, 1738857600000]])
 })

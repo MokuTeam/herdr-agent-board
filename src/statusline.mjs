@@ -1,7 +1,7 @@
 // Claude Code's status line (settings.json statusLine; the install action sets it when there is
 // none). Claude runs it after every reply with the session's state on stdin. The board keeps:
 //   the account's usage windows (rate_limits: 5 hours, 7 days) in usageFile(), the same shape as
-//   the usagebar cache, so one reader serves both (usage.mjs)
+//   the usagebar cache, so one reader serves both (claude-home.ts)
 //   each session's context fill (context_window) in contextDir()/<session id>.json
 // and it prints one short line under the prompt, e.g. "ctx 34% · 5h 23% · 7d 41%".
 // It never fails loudly: a bad input leaves the line blank and the files as they were.

@@ -21,5 +21,3 @@ export const uploadsDir = (): string => join(stateDir(), 'uploads')
 // From Claude Code's status line (statusline.mjs): the account's usage windows, each session's context.
 export const usageFile = (): string => join(stateDir(), 'claude-limits-latest.json')
 export const contextDir = (): string => join(stateDir(), 'context')
-// Until Task 13 replaces it with ClaudeHome.
-export const claudeDir = (): string => join(homedir(), '.claude')

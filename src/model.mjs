@@ -2,7 +2,7 @@
 // merged with its card and with what Claude recorded about it, and sorted into a column.
 import { attentionOf, busy, columnOf, PINS } from './core/board.ts'
 import { categoryFor } from './core/categories.ts'
-import { liveSessions, transcriptInfo, transcriptPath } from './claude.mjs'
+import { defaultClaudeHome } from './adapters/claude-home.ts'
 import { snapshot } from './adapters/herdr.ts'
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
@@ -90,7 +90,8 @@ function contextOf(session, info) {
 /** All board items, newest activity first. */
 export async function collect(cfg) {
   const [snap, asleep] = await Promise.all([snapshot(), sleepers(cfg.wakeUrl)])
-  const live = liveSessions()
+  const claude = defaultClaudeHome()
+  const live = claude.liveSessions()
   const cards = allCards()
   const labels = new Map(snap.workspaces.map(w => [w.workspace_id, w.label]))
   const items = []
@@ -100,8 +101,8 @@ export async function collect(cfg) {
     const saved = cards.get(base.key) ?? {}
     const pin = pinOf(base.key, base.status, saved)
     const card = { ...saved, pin }
-    const path = base.session ? transcriptPath(base.session, base.cwd) : null
-    const info = transcriptInfo(path) ?? {}
+    const path = base.session ? claude.transcriptPath(base.session, base.cwd) : null
+    const info = claude.transcriptInfo(path) ?? {}
     const guess = categoryFor(cfg, base.cwd)
     const tool = info.tool ?? null
     const attention = attentionOf(base.status, card, info)

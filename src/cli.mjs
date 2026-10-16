@@ -21,7 +21,7 @@ import { readFileSync } from 'node:fs'
 import { configFile, editCategories, loadConfig } from './adapters/config-file.ts'
 import { COLUMNS, noteOf, statusText } from './core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from './core/categories.ts'
-import { liveSessions } from './claude.mjs'
+import { defaultClaudeHome } from './adapters/claude-home.ts'
 import { snapshot } from './adapters/herdr.ts'
 import { t } from './core/lang.ts'
 import { collect } from './model.mjs'
@@ -64,7 +64,7 @@ async function resolveSession() {
     return { key: item.key, cwd: item.cwd, name: item.name, pane: item.pane }
   }
   const own = process.env.CLAUDE_CODE_SESSION_ID
-  if (own) return { key: own, cwd: process.cwd(), name: liveSessions().get(own)?.name, pane: process.env.HERDR_PANE_ID }
+  if (own) return { key: own, cwd: process.cwd(), name: defaultClaudeHome().liveSessions().get(own)?.name, pane: process.env.HERDR_PANE_ID }
   const pane = process.env.HERDR_PANE_ID
   if (pane) {
     const p = (await snapshot()).panes.find(x => x.pane_id === pane)
@@ -82,7 +82,7 @@ async function ownSession() {
     if (pane) p = (await snapshot()).panes.find(x => x.pane_id === pane)
   } catch {}
   const key = own || (p?.agent ? (p.agent_session?.value ?? `pane-${pane}`) : null)
-  return key ? { key, name: (own && liveSessions().get(own)?.name) || p?.terminal_title_stripped || key.slice(0, 8) } : null
+  return key ? { key, name: (own && defaultClaudeHome().liveSessions().get(own)?.name) || p?.terminal_title_stripped || key.slice(0, 8) } : null
 }
 
 /**
@@ -96,7 +96,7 @@ async function entryFor(s) {
   try {
     if (s.pane) cwd = (await snapshot()).panes.find(x => x.pane_id === s.pane)?.cwd ?? ''
   } catch {}
-  cwd ||= liveSessions().get(s.key)?.cwd || s.cwd || ''
+  cwd ||= defaultClaudeHome().liveSessions().get(s.key)?.cwd || s.cwd || ''
   const setter = target ? await ownSession() : null
   return {
     key: s.key,

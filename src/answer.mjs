@@ -5,7 +5,7 @@
 // shows another session, another dialog, or a question already answered; anything unexpected
 // stops it and the user is told where it stopped.
 import { herdr, herdrText } from './adapters/herdr.ts'
-import { transcriptInfo } from './claude.mjs'
+import { defaultClaudeHome } from './adapters/claude-home.ts'
 import { t } from './core/lang.ts'
 import { inputDraft } from './core/dialogs/input-box.ts'
 import {
@@ -303,14 +303,14 @@ function failure(item, r) {
 export async function answerQuestions(item, body, io = paneIO(item?.pane)) {
   const bad = await checkPane(item)
   if (bad) return bad
-  const tool = transcriptInfo(item.transcript)?.tool
+  const tool = defaultClaudeHome().transcriptInfo(item.transcript)?.tool
   if (tool?.name !== 'AskUserQuestion' || !tool.pending || tool.id !== body?.toolUseId) return { ok: false, gone: true, error: t('err.qa.answered', { name: item.name }) }
   if (!tool.questions) return { ok: false, error: t('err.qa.unknown', { name: item.name }) }
   const { picks, error } = resolveAnswers(tool.questions, body.answers)
   if (error) return { ok: false, error: t(error) }
   // The transcript holds the answer once Claude Code took it: proof the form is done.
   const answered = () => {
-    const now = transcriptInfo(item.transcript)?.tool
+    const now = defaultClaudeHome().transcriptInfo(item.transcript)?.tool
     return !!now && (now.id !== tool.id || !now.pending)
   }
   const r = await driveQuestions({ questions: tool.questions, picks, io: { ...io, answered } })

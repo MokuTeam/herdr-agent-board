@@ -11,10 +11,8 @@
 // board gets its id up front (--session-id), so even its first brief knows the lane.
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
-import { open, readdir, stat } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
-import { checkBranch, checkName, normDir, sameDir, slugName, uniqueSlug, UNSAFE_CHARS, worktreePath } from './core/launch/names.ts'
+import { checkBranch, checkName, sameDir, slugName, uniqueSlug, UNSAFE_CHARS, worktreePath } from './core/launch/names.ts'
 import { commandArgs, failureKind, launcherError, launcherLabel, parseLauncherOutput, usesPlaceholder } from './core/launch/launcher-command.ts'
 import { resolvePath } from './adapters/files.ts'
 import { SLOW, statOf } from './adapters/folders.ts'
@@ -24,57 +22,13 @@ import { run, runTree } from './adapters/process.ts'
 import { raiseTerminal } from './actions.mjs'
 import { inputDraft } from './core/dialogs/input-box.ts'
 import { t } from './core/lang.ts'
-import { cardsDir, claudeDir, stateDir } from './adapters/paths.ts'
+import { defaultClaudeHome } from './adapters/claude-home.ts'
+import { cardsDir, stateDir } from './adapters/paths.ts'
 import { readCard, writeCard } from './adapters/cards.ts'
 import { keyTowardYes, sameFolder, trustDialog } from './core/dialogs/trust.ts'
 
 const LAUNCH_DIR = join(stateDir(), 'launch') // first messages for {messageFile}, while a launcher runs
 const MESSAGE_MAX = 20_000
-
-let recentCache = { at: 0, list: [] }
-/**
- * Folders recent Claude sessions on this machine ran in, newest first: the cwd in the newest
- * transcript of each project. Read from the head of the file only, cached for a minute.
- */
-export async function recentFolders(projects = join(claudeDir(), 'projects'), limit = 12) {
-  if (Date.now() - recentCache.at < 60_000) return recentCache.list
-  const found = []
-  try {
-    const mtime = async p => (await stat(p).catch(() => null))?.mtimeMs ?? 0
-    const all = (await readdir(projects, { withFileTypes: true })).filter(d => d.isDirectory())
-    const dirs = (await Promise.all(all.map(async d => ({ dir: join(projects, d.name), m: await mtime(join(projects, d.name)) })))).sort((a, b) => b.m - a.m).slice(0, 40)
-    const temp = normDir(tmpdir())
-    const cwds = await Promise.all(
-      dirs.map(async ({ dir }) => {
-        const files = (await readdir(dir).catch(() => [])).filter(f => f.endsWith('.jsonl'))
-        const newest = (await Promise.all(files.map(async f => ({ f, m: await mtime(join(dir, f)) })))).sort((a, b) => b.m - a.m)[0]
-        return newest ? cwdOf(join(dir, newest.f)) : null
-      }),
-    )
-    for (const cwd of cwds) {
-      if (!cwd || normDir(cwd).startsWith(temp) || found.some(f => sameDir(f, cwd))) continue
-      if ((await statOf(cwd, 500))?.isDirectory?.()) found.push(cwd)
-      if (found.length >= limit) break
-    }
-  } catch {}
-  recentCache = { at: Date.now(), list: found }
-  return found
-}
-
-async function cwdOf(file) {
-  let fh
-  try {
-    fh = await open(file, 'r')
-    const buf = Buffer.alloc(32 << 10)
-    const { bytesRead } = await fh.read(buf, 0, buf.length, 0)
-    const m = /"cwd":("(?:[^"\\]|\\.)*")/.exec(buf.subarray(0, bytesRead).toString('utf8'))
-    return m ? JSON.parse(m[1]) : null
-  } catch {
-    return null
-  } finally {
-    await fh?.close()
-  }
-}
 
 // ------------------------------------------------------------------ typing into a live agent
 
@@ -628,7 +582,7 @@ export function createLaunches({ cfg, log = () => {}, onChange = () => {} }) {
       workspaces,
       focused,
       board: (cfg.placement ?? 'workspace') === 'workspace' ? (cfg.workspace ?? 'Board') : '',
-      recent: await recentFolders(),
+      recent: await defaultClaudeHome().recentFolders(),
       error,
     }
   }
