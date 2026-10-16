@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createClaudeHome, defaultClaudeHome, readUsageCache } from '../../src/adapters/claude-home.ts'
-import { SYMLINK_SKIP_REASON, symlinkOrSkip } from '../support/fs.ts'
+import { canSymlink, SYMLINK_SKIP_REASON } from '../support/fs.ts'
 
 const made: string[] = []
 afterEach(() => {
@@ -219,22 +219,30 @@ describe('searchHistory', () => {
     assert.equal(out.results?.length, 1)
   })
 
-  test('limits results and bytes, rejects invalid queries and symlink escape', async () => {
-    const { base, cwd, dir, home } = fixture()
+  test('limits results and bytes, and rejects invalid queries', async () => {
+    const { cwd, dir, home } = fixture()
     writeFileSync(join(dir, 'many.jsonl'), Array.from({ length: 50 }, () => row(cwd, 'needle')).join('\n'))
     const out = await home.searchHistory(cwd, 'needle')
     assert.equal(out.results?.length, 30)
     assert.equal(out.truncated, true)
     assert.equal((await home.searchHistory(cwd, 'x')).invalid, true)
     assert.equal((await home.searchHistory(cwd, null)).invalid, true)
-    if (symlinkOrSkip(tmpdir(), join(base, '-escape')))
-      assert.equal((await home.searchHistory('/escape', 'needle')).unavailable, true)
-    else console.warn(SYMLINK_SKIP_REASON)
     writeFileSync(join(dir, 'tail.jsonl'), `${'x'.repeat(2 << 20)}\n${row(cwd, 'tail needle')}`)
     const tail = await home.searchHistory(cwd, 'tail needle')
     assert.equal(tail.results?.length, 1)
     assert.ok((tail.bytesRead ?? 0) <= 8 << 20)
   })
+})
+
+describe('searchHistory symlinks', () => {
+  test.skipIf(!canSymlink)(
+    `a symlinked project folder cannot escape the projects folder (${SYMLINK_SKIP_REASON})`,
+    async () => {
+      const root = newRoot()
+      symlinkSync(tmpdir(), join(root, 'projects', '-escape'))
+      assert.equal((await createClaudeHome(root).searchHistory('/escape', 'needle')).unavailable, true)
+    },
+  )
 })
 
 describe('localUsage', () => {
@@ -267,18 +275,21 @@ describe('localUsage', () => {
     assert.doesNotMatch(JSON.stringify(out), /must not leave/)
   })
 
-  test('a missing cache and a symlink never become invented fresh usage', () => {
+  test('a missing or bad cache never becomes invented fresh usage', () => {
     const { root, file } = cache()
     const home = createClaudeHome(root)
     const now = 1000000
     assert.equal(home.localUsage(now).limits.available, false)
     writeFileSync(file, 'bad')
     assert.equal(home.localUsage(now).limits.available, false)
-    unlinkSync(file)
+  })
+
+  test.skipIf(!canSymlink)(`a symlinked cache is refused (${SYMLINK_SKIP_REASON})`, () => {
+    const { root, file } = cache()
     const other = join(cacheDir(root), 'other.json')
-    writeFileSync(other, '{}')
-    if (symlinkOrSkip(other, file)) assert.equal(home.localUsage(now).limits.available, false)
-    else console.warn(SYMLINK_SKIP_REASON)
+    writeFileSync(other, JSON.stringify({ fetchedAtMs: 999000, fiveHour: { usedPercentage: 10 } }))
+    symlinkSync(other, file)
+    assert.equal(createClaudeHome(root).localUsage(1000000).limits.available, false)
   })
 
   test('readUsageCache reads any folder (the board own status line cache)', () => {
@@ -292,22 +303,29 @@ describe('localUsage', () => {
 })
 
 describe('recentFolders', () => {
-  test('the cwd in the newest transcript of each project, newest first, existing folders only', async () => {
+  test('the cwd in the newest transcript of each project, newest first, once each, existing folders only', async () => {
     const root = newRoot()
-    const real = process.cwd() // a real folder outside the temp folder (temp folders are skipped)
+    // Real folders outside the temp folder (temp folders are skipped on purpose).
+    const older = process.cwd()
+    const newer = join(process.cwd(), 'src')
+    const missing = join(process.cwd(), `no-such-folder-${process.pid}`)
     const mk = (folder: string, cwd: string, age: number) => {
       const dir = join(root, 'projects', folder)
       mkdirSync(dir)
       const file = join(dir, 's.jsonl')
-      writeFileSync(file, `${JSON.stringify({ type: 'user', cwd })}\n`)
+      writeFileSync(
+        file,
+        `${JSON.stringify({ type: 'user', cwd })}
+`,
+      )
       const at = new Date(Date.now() - age * 1000)
       utimesSync(file, at, at)
       utimesSync(dir, at, at)
     }
-    mk('a', real, 10)
-    mk('b', join(root, 'gone'), 5)
-    mk('c', real, 1) // same folder twice
-    const list = await createClaudeHome(root).recentFolders()
-    assert.deepEqual(list, [real])
+    mk('a', older, 20)
+    mk('b', missing, 10)
+    mk('c', newer, 5)
+    mk('d', newer, 30) // same folder again, older
+    assert.deepEqual(await createClaudeHome(root).recentFolders(), [newer, older])
   })
 })
