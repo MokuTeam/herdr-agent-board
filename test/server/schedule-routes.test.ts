@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { serveBoard } from '../support/board-server.ts'
 import { type Sandbox, sandbox } from '../support/sandbox.ts'
 
-// The web board's side of the schedule (the CLI side: test/scheduler.test.mjs).
+// The web board's side of the schedule (the CLI side: test/entrypoints/cli.test.ts).
 const HOUR = 3600e3
 const dirOf = (box: Sandbox) => join(box.env.LOCALAPPDATA as string, 'herdr/plugins/agent-board/schedule')
 

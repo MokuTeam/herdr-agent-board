@@ -32,25 +32,34 @@ describe('planSettings', () => {
       },
       statusLine: { type: 'command', command: mainStatusLine },
     }
-    const { settings, replaced } = planSettings(before, paths)
+    const { settings, replaced, statusLineSet } = planSettings(before, paths)
     assert.deepEqual(settings, {
       model: 'opus',
       hooks: { SessionStart: [ourHook], UserPromptSubmit: [ourHook] },
       statusLine: ourStatusLine,
     })
     assert.deepEqual(replaced, [mainHook, mainHook, mainStatusLine])
+    assert.equal(statusLineSet, true)
   })
 
   test("the user's own hook and status line stay untouched; ours are added next to them", () => {
     const own = { matcher: 'startup', hooks: [{ type: 'command', command: 'bash ~/.claude/hooks/hello.sh' }] }
     const ownLine = { type: 'command', command: 'npx ccusage statusline', padding: 0 }
     const before = { hooks: { SessionStart: [own], Stop: [own] }, statusLine: ownLine }
-    const { settings, replaced } = planSettings(structuredClone(before), paths)
+    const { settings, replaced, statusLineSet } = planSettings(structuredClone(before), paths)
     assert.deepEqual(settings, {
       hooks: { SessionStart: [own, ourHook], Stop: [own], UserPromptSubmit: [ourHook] },
       statusLine: ownLine,
     })
     assert.deepEqual(replaced, [])
+    assert.equal(statusLineSet, false)
+  })
+
+  test("a status line that runs our hook's file is still someone else's status line", () => {
+    const odd = { type: 'command', command: 'node "C:/x/agent-board/src/hook.mjs"' }
+    const { settings, statusLineSet } = planSettings({ statusLine: odd }, paths)
+    assert.deepEqual(settings.statusLine, odd)
+    assert.equal(statusLineSet, false)
   })
 
   test("one of our hooks next to the user's in the same entry: only ours goes", () => {
@@ -74,12 +83,13 @@ describe('planSettings', () => {
   })
 
   test('no settings.json yet: hooks and status line from nothing', () => {
-    const { settings, replaced } = planSettings(undefined, paths)
+    const { settings, replaced, statusLineSet } = planSettings(undefined, paths)
     assert.deepEqual(settings, {
       hooks: { SessionStart: [ourHook], UserPromptSubmit: [ourHook] },
       statusLine: ourStatusLine,
     })
     assert.deepEqual(replaced, [])
+    assert.equal(statusLineSet, true)
   })
 
   test('running it twice gives the same settings: no duplicates', () => {
@@ -88,6 +98,7 @@ describe('planSettings', () => {
     const second = planSettings(first, paths)
     assert.deepEqual(second.settings, first)
     assert.deepEqual(second.replaced, [hookCommand, hookCommand, statusCommand])
+    assert.equal(second.statusLineSet, true)
   })
 
   test('the settings handed in are not changed', () => {
@@ -122,8 +133,18 @@ describe('planShims', () => {
     assert.deepEqual(planShims(paths), {
       board:
         '#!/bin/sh\n# agent-board\nexec "C:/Program Files/Bun/bun.exe" "C:/Users/Имя/AppData/Roaming/herdr/plugins/agent-board/src/entrypoints/cli.ts" "$@"\n',
-      'board.cmd':
-        '@rem agent-board\r\n@"C:\\Program Files\\Bun\\bun.exe" "C:\\Users\\Имя\\AppData\\Roaming\\herdr\\plugins\\agent-board\\src\\entrypoints\\cli.ts" %*\r\n',
+      // UTF-8 around the call (the paths may not be ASCII), then the code page and exit code as they were.
+      'board.cmd': [
+        '@rem agent-board',
+        '@setlocal',
+        '@for /f "tokens=2 delims=:." %%c in (\'chcp\') do @set "AB_CP=%%c"',
+        '@chcp 65001 >nul',
+        '@"C:\\Program Files\\Bun\\bun.exe" "C:\\Users\\Имя\\AppData\\Roaming\\herdr\\plugins\\agent-board\\src\\entrypoints\\cli.ts" %*',
+        '@set "AB_RC=%errorlevel%"',
+        '@chcp %AB_CP% >nul',
+        '@exit /b %AB_RC%',
+        '',
+      ].join('\r\n'),
     })
   })
 
@@ -176,6 +197,9 @@ describe('isOurCommand', () => {
       'bun "/home/me/other-plugin/src/entrypoints/hook.ts"',
       'bun "/home/me/agent-board/scripts/hook.ts"',
       'bun "/home/me/agent-board/src/entrypoints/cli.ts"',
+      'node "C:\\Users\\me\\agent-board-notes\\prehook.mjs"',
+      'node /home/me/agent-board/tools/prestatusline.mjs',
+      'bun "/home/me/agent-board/src/myentrypoints/hook.ts"',
       'npx ccusage statusline',
       '',
     ])

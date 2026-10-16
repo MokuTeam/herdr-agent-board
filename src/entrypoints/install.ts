@@ -8,7 +8,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { defaultClaudeHome } from '../adapters/claude-home.ts'
 import { ROOT } from '../adapters/paths.ts'
-import { type InstallPaths, isOurCommand, planSettings, planShims } from '../core/install-plan.ts'
+import { type InstallPaths, planSettings, planShims } from '../core/install-plan.ts'
 
 const settingsFile = join(defaultClaudeHome().root, 'settings.json')
 const entrypoint = (name: string): string => join(ROOT, 'src', 'entrypoints', name)
@@ -28,19 +28,18 @@ function installShims(): void {
       console.log(`skipped ${file}: exists and is not ours`)
       continue
     }
+    // A string is written as UTF-8 without a BOM, which board.cmd needs (see planShims).
     writeFileSync(file, body, { mode: 0o755 })
   }
 }
 
 function installSettings(): void {
   const exists = existsSync(settingsFile)
-  const { settings } = planSettings(exists ? JSON.parse(readFileSync(settingsFile, 'utf8')) : undefined, paths)
+  const plan = planSettings(exists ? JSON.parse(readFileSync(settingsFile, 'utf8')) : undefined, paths)
   if (exists) copyFileSync(settingsFile, `${settingsFile}.bak-agent-board`)
-  const line = settings.statusLine
-  const ours = !!line && typeof line === 'object' && 'command' in line && isOurCommand(String(line.command))
-  console.log(ours ? `status line: ${paths.statusline}` : 'status line: left as it was (not ours)')
+  console.log(plan.statusLineSet ? `status line: ${paths.statusline}` : 'status line: left as it was (not ours)')
   mkdirSync(defaultClaudeHome().root, { recursive: true })
-  writeFileSync(settingsFile, `${JSON.stringify(settings, null, 2)}\n`)
+  writeFileSync(settingsFile, `${JSON.stringify(plan.settings, null, 2)}\n`)
 }
 
 try {

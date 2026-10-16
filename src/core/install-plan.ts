@@ -13,9 +13,10 @@ export interface InstallPaths {
 type Settings = Record<string, unknown>
 
 // Ours, from any version: main wrote `node "…agent-board…\src\hook.mjs"` (this branch, until the
-// entrypoints moved, `bun "…"`); now `"<bun>" "…agent-board…/src/entrypoints/hook.ts"`.
-const OUR_HOOK = /agent-board.*(hook\.mjs|entrypoints[\\/]hook\.ts)/
-const OUR_STATUS_LINE = /agent-board.*(statusline\.mjs|entrypoints[\\/]statusline\.ts)/
+// entrypoints moved, `bun "…"`); now `"<bun>" "…agent-board…/src/entrypoints/hook.ts"`. The file
+// name comes right after a separator, so `…/prehook.mjs` is someone else's.
+const OUR_HOOK = /agent-board.*[\\/](hook\.mjs|entrypoints[\\/]hook\.ts)/
+const OUR_STATUS_LINE = /agent-board.*[\\/](statusline\.mjs|entrypoints[\\/]statusline\.ts)/
 const EVENTS = ['SessionStart', 'UserPromptSubmit'] as const
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -56,12 +57,19 @@ function withOurHook(list: unknown, command: string, replaced: string[]): unknow
   return kept
 }
 
+/** What install writes into settings.json; `statusLineSet`: the status line is ours now. */
+export interface SettingsPlan {
+  settings: Settings
+  replaced: string[]
+  statusLineSet: boolean
+}
+
 /**
  * settings.json (parsed; undefined when there is none) with our hooks and status line in place
  * of any earlier ones of ours. A status line someone else set stays. `replaced` lists the
  * commands of ours that went. The input is not changed.
  */
-export function planSettings(settings: unknown, paths: InstallPaths): { settings: Settings; replaced: string[] } {
+export function planSettings(settings: unknown, paths: InstallPaths): SettingsPlan {
   if (settings !== undefined && !isRecord(settings))
     throw new Error('settings.json is not a JSON object; left as it was')
   const next: Settings = structuredClone(settings ?? {})
@@ -73,17 +81,37 @@ export function planSettings(settings: unknown, paths: InstallPaths): { settings
   // Claude Code's own numbers for the board (usage windows, context fill). A status line someone
   // else set stays; the board then reads the usagebar cache, if there is one.
   const line = commandOf(next.statusLine)
-  if (!next.statusLine || OUR_STATUS_LINE.test(line)) {
+  const statusLineSet = !next.statusLine || OUR_STATUS_LINE.test(line)
+  if (statusLineSet) {
     if (next.statusLine) replaced.push(line)
     next.statusLine = { type: 'command', command: bunCommand(paths.bun, paths.statusline) }
   }
-  return { settings: next, replaced }
+  return { settings: next, replaced, statusLineSet }
 }
 
-/** The `board` command for ~/.local/bin: a sh script for Git Bash, macOS and Linux, a .cmd for PowerShell. */
-export function planShims(paths: InstallPaths): Record<string, string> {
+/**
+ * The .cmd shim. cmd.exe reads a batch file in the console's code page (866, 437, ...), so a path
+ * that is not ASCII (a Windows user name in Cyrillic, under which Bun itself lives) only resolves
+ * under UTF-8: the script switches to 65001 around the call, then puts the code page back and
+ * passes Bun's exit code on. Written as UTF-8 without a BOM, with CRLF line ends.
+ */
+const cmdShim = (bun: string, cli: string): string =>
+  [
+    '@rem agent-board',
+    '@setlocal',
+    `@for /f "tokens=2 delims=:." %%c in ('chcp') do @set "AB_CP=%%c"`,
+    '@chcp 65001 >nul',
+    `@"${bun}" "${cli}" %*`,
+    '@set "AB_RC=%errorlevel%"',
+    '@chcp %AB_CP% >nul',
+    '@exit /b %AB_RC%',
+    '',
+  ].join('\r\n')
+
+/** The `board` command for ~/.local/bin: a sh script for Git Bash, macOS and Linux, a .cmd for PowerShell and cmd. */
+export function planShims(paths: InstallPaths): { board: string; 'board.cmd': string } {
   return {
     board: `#!/bin/sh\n# agent-board\nexec ${bunCommand(paths.bun, paths.cli)} "$@"\n`,
-    'board.cmd': `@rem agent-board\r\n@"${paths.bun}" "${paths.cli}" %*\r\n`,
+    'board.cmd': cmdShim(paths.bun, paths.cli),
   }
 }
