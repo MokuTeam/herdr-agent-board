@@ -4,36 +4,16 @@ import http from 'node:http'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { root, sandbox, until } from './support/sandbox.ts'
+import { root, sandbox } from './support/sandbox.ts'
 
-// The CLI, hook and web-board side of the schedule (the scheduler itself: test/services/scheduler.test.ts).
+// The CLI and hook side of the schedule (the scheduler itself: test/services/scheduler.test.ts;
+// the web board's: test/server/schedule-routes.test.ts).
 // Child processes run against a fake herdr: entries are files in the sandbox's
 // schedule folder, the session's prompt is a logged `herdr agent prompt` call.
-const HOUR = 3600e3
 const dirOf = box => join(box.env.LOCALAPPDATA, 'herdr/plugins/agent-board/schedule')
 const cardsOf = box => join(box.env.LOCALAPPDATA, 'herdr/plugins/agent-board/cards')
 
-function put(box, entry) {
-  mkdirSync(dirOf(box), { recursive: true })
-  writeFileSync(join(dirOf(box), `${entry.id}.json`), JSON.stringify({ key: 's1', name: 'Test', created: Date.now(), ...entry }))
-}
 const read = (box, id) => (existsSync(join(dirOf(box), `${id}.json`)) ? JSON.parse(readFileSync(join(dirOf(box), `${id}.json`), 'utf8')) : null)
-
-/** Claude's input box as `herdr agent read --ansi` shows it; a suggestion is drawn dim. */
-const RULE = '─'.repeat(40)
-const screen = (typed = '', dim = '') => ['● done', RULE, `❯ ${typed}${dim ? `\x1b[2m${dim}\x1b[0m` : ''}`, RULE, '  ⏵⏵ bypass permissions on'].join('\n')
-
-/** herdr with one Claude session s1 in pane p1. */
-function herdrWith(box, status, extra = {}) {
-  const snapshot = { panes: [{ pane_id: 'p1', agent: 'claude', agent_session: { value: 's1' }, agent_status: status, cwd: box.dir }], tabs: [], workspaces: [] }
-  box.state({
-    'api snapshot': { result: { snapshot } },
-    'agent get': { result: { agent: { agent: 'claude', agent_status: status, agent_session: { value: 's1' } } } },
-    'agent read': { text: screen('', 'try: run the tests') },
-    'agent prompt': { result: {} },
-    ...extra,
-  })
-}
 
 /** The sandbox's board config; port 9 answers nothing, so the CLI never reaches the live board. */
 function config(box, extra = {}) {
@@ -155,35 +135,4 @@ test('a board reminder does not count as the user answering the session', { time
   assert.equal(card().pin, undefined)
   await hook('yes, send it')
   assert.equal(card().ask, undefined)
-})
-
-test('the web board lists the schedule without the bookkeeping and cancels an entry', { timeout: 15_000 }, async t => {
-  const box = await sandbox(t)
-  herdrWith(box, 'idle')
-  put(box, { id: 'abcdef', text: 'later', at: Date.now() + HOUR, next: Date.now() + HOUR, claim: { pid: 1, at: 1 }, tried: 1 })
-  const probe = http.createServer()
-  await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve))
-  const port = probe.address().port
-  await new Promise(resolve => probe.close(resolve))
-  const proc = box.run('server', { port, categories: [{ id: 'other', title: 'Other', color: 'gray' }], wakeUrl: null, refreshSec: 3600 })
-  await until(() => proc.messages.some(m => m.ready))
-  const url = `http://127.0.0.1:${port}`
-  const board = await (await fetch(`${url}/api/board`)).json()
-  assert.equal(board.schedules.length, 1)
-  assert.equal(board.schedules[0].text, 'later')
-  assert.equal('claim' in board.schedules[0] || 'tried' in board.schedules[0], false)
-  assert.deepEqual(board.scheduleLog, [])
-  const post = (body, headers = { 'x-board': '1' }) => fetch(`${url}/api/schedule`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) })
-  // The mode: when the session is free, then on time again.
-  assert.equal((await post({ op: 'mode', id: 'abcdef', idle: true }, {})).status, 403)
-  assert.equal((await post({ op: 'mode', id: 'abcdef', idle: true })).status, 200)
-  assert.equal(read(box, 'abcdef').idle, true)
-  assert.equal((await post({ op: 'mode', id: 'abcdef', idle: false })).status, 200)
-  assert.equal('idle' in read(box, 'abcdef'), false)
-  assert.equal((await post({ op: 'snooze', id: 'abcdef' })).status, 400)
-  const cancel = headers => post({ op: 'cancel', id: 'abcdef' }, headers)
-  assert.equal((await cancel({})).status, 403)
-  assert.equal((await cancel({ 'x-board': '1' })).status, 200)
-  assert.equal(read(box, 'abcdef'), null)
-  assert.equal((await cancel({ 'x-board': '1' })).status, 404)
 })

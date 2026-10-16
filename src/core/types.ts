@@ -28,7 +28,8 @@ export interface Card {
   askSince?: number
   pin?: Pin | ''
   pinAt?: number | ''
-  pinBusy?: boolean | ''
+  /** Dragged during a turn (the web board writes 1). */
+  pinBusy?: boolean | 1 | ''
   dismissed?: string
   name?: string
   updatedAt?: number

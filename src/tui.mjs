@@ -14,7 +14,7 @@ import { defaultDeps } from './services/deps.ts'
 import { t } from './core/lang.ts'
 import { collect } from './services/board.ts'
 import { goBack } from './services/nav.ts'
-import { startServer } from './server.mjs'
+import { startServer } from './server/app.ts'
 import { openWeb } from './web-open.mjs'
 import { boardFile, cardsDir, stateDir } from './adapters/paths.ts'
 import { listEntries } from './adapters/schedule-store.ts'
@@ -626,7 +626,7 @@ const webLog = msg => {
 // Right after a restart the previous process may still hold the port for a moment: retry a few times.
 async function serve(tries = 8) {
   try {
-    web = await startServer({ cfg, log: webLog })
+    web = await startServer({ deps: defaultDeps(cfg, webLog) })
     webLog(`serving ${web.url}`)
   } catch (err) {
     if (err.code === 'EADDRINUSE' && tries > 1) return setTimeout(() => serve(tries - 1), 500)

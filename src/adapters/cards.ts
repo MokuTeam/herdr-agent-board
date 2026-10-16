@@ -17,13 +17,17 @@ export function readCard(key: string): Card | null {
   return readJson(file(key), isCard)
 }
 
+/** A change to a card: any field, or '' to clear it. */
+export type CardPatch = { [K in keyof Card]?: Card[K] | '' }
+
 /** Merge `patch` into the card and save it. Empty strings clear a field. */
-export function writeCard(key: string, patch: Partial<Card>): Card {
+export function writeCard(key: string, patch: CardPatch): Card {
   mkdirSync(cardsDir(), { recursive: true })
   return updateJson(
     file(key),
     (saved: Card | null): Card => {
-      const card: Card = { ...(saved ?? { key }), ...patch, updatedAt: Date.now() }
+      // The same order as { ...saved, ...patch, updatedAt }; '' values go just below.
+      const card: Card = Object.assign({ ...(saved ?? { key }) }, patch, { updatedAt: Date.now() })
       for (const [k, v] of Object.entries(card)) if (v === '' || v === null) delete card[k]
       return card
     },

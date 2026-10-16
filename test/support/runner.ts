@@ -56,13 +56,12 @@ if (mode === 'open') {
         : await answerQuestions({ claude: defaultClaudeHome() }, item, body)
   console.log(JSON.stringify(out ?? null))
 } else if (mode === 'server') {
-  const { startServer } = await import('../../src/server.mjs')
-  const cfg = input<{ language?: string }>()
+  const { startServer } = await import('../../src/server/app.ts')
+  const { defaultDeps } = await import('../../src/services/deps.ts')
+  const cfg = input<Config>()
   // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
   if (cfg.language) (await import('../../src/core/lang.ts')).useLanguage(cfg.language)
-  const server = await startServer({ cfg, log: (...args: unknown[]) => send({ log: args[0] }) } as Parameters<
-    typeof startServer
-  >[0])
+  const server = await startServer({ deps: defaultDeps(cfg, text => send({ log: text })) })
   send({ ready: true })
   process.on('message', async message => {
     if (message === 'refresh') {

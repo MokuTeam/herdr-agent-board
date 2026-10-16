@@ -1,10 +1,6 @@
 import assert from 'node:assert/strict'
-import http from 'node:http'
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { test } from 'node:test'
 import { inline, looksLikePath, markdown } from '../web/markdown.js'
-import { sandbox, until } from './support/sandbox.ts'
 
 test('paths in the chat: links, code and running text become candidates; the rest stays text', () => {
   assert.match(inline('[notes](herdr-reveal:C:/Work/My%20Notes/a.md)'), /^<a class="fs" data-path="herdr-reveal:C:\/Work\/My%20Notes\/a\.md">notes<\/a>$/)
@@ -24,52 +20,4 @@ test('paths in the chat: links, code and running text become candidates; the res
   assert.equal(markdown('one\ntwo'), '<p>one<br>two</p>')
   assert.equal(markdown('one\ntwo\n\n- a\n  b', { soft: true }), '<p>one two</p><ul><li>a b</li></ul>')
   assert.ok(looksLikePath('\\\\server\\share\\x.txt') && looksLikePath('file:///C:/x.txt') && !looksLikePath('https://x.dev/a'))
-})
-
-async function unusedPort() {
-  const server = http.createServer()
-  await new Promise(r => server.listen(0, '127.0.0.1', r))
-  const port = server.address().port
-  await new Promise(r => server.close(r))
-  return port
-}
-
-test('file API: stat, preview, raw bytes behind the token with ranges, and refusals', { timeout: 20_000 }, async t => {
-  const box = await sandbox(t)
-  box.state({ 'api snapshot': { error: 'offline' } })
-  const files = join(box.dir, 'files')
-  mkdirSync(files)
-  writeFileSync(join(files, 'pic.png'), Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'))
-  writeFileSync(join(files, 'note.txt'), 'hello')
-  const port = await unusedPort()
-  const proc = box.run('server', { port, categories: [{ id: 'other', title: 'Other', color: 'gray' }], wakeUrl: null, refreshSec: 3600 })
-  await until(() => proc.messages.some(m => m.ready))
-  const url = `http://127.0.0.1:${port}`
-  const post = (path, body, headers = { 'x-board': '1' }) => fetch(`${url}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) })
-
-  const stat = await (await post('/api/fs/stat', { cwd: files, paths: ['note.txt:3', 'pic.png', 'missing.md', files] })).json()
-  assert.deepEqual(stat.items.map(i => [i.exists, i.dir ?? null, i.kind ?? null, i.line]), [[true, false, 'text', 3], [true, false, 'image', null], [false, null, null, null], [true, true, 'dir', null]])
-  assert.equal((await post('/api/fs/stat', { paths: [] }, {})).status, 403)
-
-  const note = await (await post('/api/fs/preview', { path: join(files, 'note.txt') })).json()
-  assert.equal(note.text, 'hello')
-
-  const board = await (await fetch(`${url}/api/board`)).json()
-  assert.ok(board.fsToken)
-  const raw = token => fetch(`${url}/api/fs/raw?path=${encodeURIComponent(join(files, 'pic.png'))}&t=${token}`)
-  assert.equal((await raw('wrong')).status, 403)
-  const ok = await raw(board.fsToken)
-  assert.equal(ok.status, 200)
-  assert.equal(ok.headers.get('content-type'), 'image/png')
-  assert.match(ok.headers.get('content-security-policy'), /sandbox/)
-  assert.equal(Buffer.from(await ok.arrayBuffer()).length, 16)
-  const part = await fetch(`${url}/api/fs/raw?path=${encodeURIComponent(join(files, 'pic.png'))}&t=${board.fsToken}`, { headers: { range: 'bytes=4-7' } })
-  assert.equal(part.status, 206)
-  assert.equal(part.headers.get('content-range'), 'bytes 4-7/16')
-  assert.deepEqual([...Buffer.from(await part.arrayBuffer())], [0x0d, 0x0a, 0x1a, 0x0a])
-  // Text files never come raw: no page of theirs runs on this origin.
-  assert.equal((await fetch(`${url}/api/fs/raw?path=${encodeURIComponent(join(files, 'note.txt'))}&t=${board.fsToken}`)).status, 404)
-
-  assert.equal((await post('/api/open-url', { url: 'javascript:alert(1)' })).status, 400)
-  assert.equal((await post('/api/fs/open', { path: join(files, 'nope.txt') })).status, 404)
 })

@@ -1,0 +1,231 @@
+// One session: its detail and changes, its history, and the actions on it (services/actions.ts,
+// services/answer.ts, its card). A session that is gone is a 404 whatever is asked of it, before
+// any guard; what else no route here answers goes on to the page's files and the 405 (main's chain).
+import { randomUUID } from 'node:crypto'
+import { type CardPatch, writeCard } from '../../adapters/cards.ts'
+import { checkoutChanges, isCheckout } from '../../adapters/git.ts'
+import { herdrText } from '../../adapters/herdr.ts'
+import { uploadsDir } from '../../adapters/paths.ts'
+import { busy, PINS } from '../../core/board.ts'
+import { type PublicDialog, parseDialog, publicDialog } from '../../core/dialogs/questions.ts'
+import { t } from '../../core/lang.ts'
+import { checkName } from '../../core/launch/names.ts'
+import type { MessageGate } from '../../core/message-gate.ts'
+import type { Item, Pin } from '../../core/types.ts'
+import { focus, send, sleepSession, wake } from '../../services/actions.ts'
+import { answerPermission, answerQuestions } from '../../services/answer.ts'
+import { collect } from '../../services/board.ts'
+import type { Deps } from '../../services/deps.ts'
+import { renameSession } from '../../services/launch/rename.ts'
+import { type Body, type Handler, json, type Route } from '../http.ts'
+
+type Result = { ok: boolean; error?: string; [extra: string]: unknown }
+
+export interface SessionApp {
+  deps: Deps
+  find(key: string): Item | undefined
+  refresh(): void
+  /** One message in flight per session (core/message-gate.ts). */
+  gate: MessageGate
+  /** Sessions with an answer being typed into their dialog. */
+  answering: Set<string>
+}
+
+const changed = (item: Item): Result => ({ ok: false, error: t('err.sessionChanged', { name: item.name }) })
+const PIN_NAMES: ReadonlySet<string> = PINS
+const isPin = (column: string): column is Pin => PIN_NAMES.has(column)
+
+async function detail(deps: Deps, item: Item) {
+  const conversation = deps.claude.conversation(item.transcript ?? '', 60)
+  // checkout: whether its folder is in git, for the sheet's Changes button.
+  const checkout = await isCheckout(item.cwd)
+  let screen = ''
+  let dialog: PublicDialog | null = null
+  if (item.status === 'blocked' && item.pane) {
+    try {
+      const text = await herdrText(['agent', 'read', item.pane, '--source', 'visible'], 5000)
+      screen = text
+        .split('\n')
+        .map(l => l.trimEnd())
+        .join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+        .split('\n')
+        .slice(-30)
+        .join('\n')
+      // The dialog on it, for the sheet to answer: a permission prompt goes by its fingerprint.
+      dialog = publicDialog(parseDialog(text))
+    } catch {}
+  }
+  return { item: { ...item, transcript: undefined }, conversation, screen, dialog, checkout }
+}
+
+function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
+  const { deps } = app
+  // Attached files go as their paths: Claude reads them, and picks up image paths as images.
+  const files = (Array.isArray(body.files) ? body.files : []).filter(
+    (p): p is string => typeof p === 'string' && p.startsWith(uploadsDir()),
+  )
+  const list = files.length ? `${t('msg.files', { n: files.length })}:\n${files.join('\n')}` : ''
+  // The card is for one session: a pane that holds another one now gets nothing. Panes with
+  // no Claude session id (other agents) are matched by the card alone.
+  if ((body.session ?? null) !== (item.session ?? null)) return Promise.resolve(changed(item))
+  return app.gate(item.key, body.requestId ?? randomUUID(), [body.session ?? null, body.text, files], async () => {
+    // Always collect a new snapshot before accepting a message, even if SSE is connected: a
+    // board that cannot reach herdr fails here rather than send on old data.
+    const fresh = (await collect(deps)).find(next => next.key === item.key)
+    if (!fresh || fresh.session !== item.session || fresh.pane !== item.pane) return changed(item)
+    return send(deps, fresh, [String(body.text ?? '').trim(), list].filter(Boolean).join('\n\n'))
+  })
+}
+
+// A question form or a permission prompt, answered with keys in the pane (services/answer.ts).
+async function answer(app: SessionApp, item: Item, action: 'answer' | 'permit', body: Body): Promise<Result> {
+  const { deps, answering } = app
+  if ((body.session ?? null) !== (item.session ?? null)) return changed(item)
+  if (answering.has(item.key)) return { ok: false, error: t('err.qa.busy', { name: item.name }) }
+  answering.add(item.key)
+  try {
+    // A new snapshot first, as for a message: the board must not answer on old data.
+    let fresh: Item | undefined
+    try {
+      fresh = (await collect(deps)).find(next => next.key === item.key)
+    } catch (err) {
+      return { ok: false, error: t('err.qa.herdr', { why: err instanceof Error ? err.message : String(err) }) }
+    }
+    if (!fresh || fresh.session !== item.session || fresh.pane !== item.pane) return changed(item)
+    const r = action === 'answer' ? await answerQuestions(deps, fresh, body) : await answerPermission(fresh, body)
+    deps.log(`${action} ${item.name}: ${r.ok ? 'ok' : r.error}`)
+    return r
+  } finally {
+    answering.delete(item.key)
+  }
+}
+
+async function rename(item: Item, body: Body): Promise<Result> {
+  // The board's own name for it, kept on the card; empty gives the automatic one back.
+  const name = String(body.name ?? '').trim()
+  const bad = name && checkName(name)
+  if (bad) return { ok: false, error: t(bad) }
+  // Claude and herdr only when the user asked for it: /rename is typed into the session.
+  // The board keeps the name only once that went through, so a refusal changes nothing.
+  const claude = body.claude && name ? await renameSession(item, name) : { ok: true }
+  if (claude.ok) writeCard(item.key, { name })
+  return claude
+}
+
+function card(item: Item, body: Body): Result {
+  const patch: CardPatch = {}
+  if (typeof body.category === 'string') patch.category = body.category.toLowerCase().replace(/[^a-z0-9_-]/g, '')
+  if (typeof body.wait === 'string')
+    Object.assign(
+      patch,
+      body.wait.trim() ? { wait: body.wait.trim(), waitSince: Date.now() } : { wait: '', waitSince: '' },
+      { by: 'user' },
+    )
+  if (typeof body.doing === 'string') patch.doing = body.doing.trim()
+  // A card dragged to another column stays there until the session works again; dropped
+  // back where the board would put it by itself, it is unpinned.
+  if (typeof body.column === 'string') {
+    if (body.column === item.auto) Object.assign(patch, { pin: '', pinAt: '', pinBusy: '' })
+    else if (isPin(body.column))
+      Object.assign(patch, { pin: body.column, pinAt: Date.now(), pinBusy: busy(item.status) ? 1 : '' })
+    else return { ok: false, error: t('err.pinWork', { col: t('q', { s: t('col.work') }) }) }
+  }
+  const unpin = { pin: '', pinAt: '', pinBusy: '' }
+  if (body.clear) Object.assign(patch, { doing: '', wait: '', waitSince: '', ask: '', askSince: '', result: '' }, unpin)
+  // "No reply needed": drop the agent's ask, and stop reading its last question as one.
+  if (body.dismiss)
+    Object.assign(
+      patch,
+      { ask: '', askSince: '', dismissed: item.attention === 'question' ? item.question : '' },
+      unpin,
+    )
+  writeCard(item.key, patch)
+  return { ok: true }
+}
+
+async function act(app: SessionApp, item: Item, action: string, body: Body): Promise<Result> {
+  const { deps } = app
+  switch (action) {
+    case 'focus':
+      return focus(deps, item, { raise: deps.cfg.raiseTerminal !== false })
+    case 'wake':
+      return item.sleeping ? wake(deps, item).finally(() => deps.wake.forget()) : { ok: true }
+    case 'sleep':
+      return sleepSession(deps, item).finally(() => deps.wake.forget())
+    case 'message':
+      return message(app, item, body)
+    case 'answer':
+    case 'permit':
+      return answer(app, item, action, body)
+    case 'rename':
+      return rename(item, body)
+    case 'card':
+      return card(item, body)
+    default:
+      return { ok: false, error: `unknown action ${action}` }
+  }
+}
+
+const gone = () => json(404, { error: t('err.gone') })
+
+export function sessionRoutes(app: SessionApp): Route[] {
+  /** The handler with the session its path names; gone by now answers as gone before. */
+  const withItem =
+    (handle: (item: Item, ...rest: Parameters<Handler>) => Promise<Response>): Handler =>
+    (req, ctx) => {
+      const item = app.find(ctx.params[0] ?? '')
+      return item ? handle(item, req, ctx) : gone()
+    }
+  const action = withItem(async (item, _req, ctx) => {
+    const what = ctx.params[1] ?? ''
+    const body = await ctx.body()
+    if (what === 'rename' && body.claude) {
+      const refused = ctx.refuse('fresh-data')
+      if (refused) return refused
+    }
+    const r = await act(app, item, what, body)
+    app.refresh()
+    return json(r.ok ? 200 : 409, r)
+  })
+  return [
+    {
+      method: 'ANY',
+      path: /^\/api\/session\/([^/]+)(?:\/(\w+))?$/,
+      handle: (_req, ctx) => (app.find(ctx.params[0] ?? '') ? undefined : gone()),
+    },
+    {
+      method: 'GET',
+      path: /^\/api\/session\/([^/]+)\/changes$/,
+      handle: withItem(async item => json(200, await checkoutChanges(item.cwd))),
+    },
+    {
+      method: 'GET',
+      path: /^\/api\/session\/([^/]+)\/history$/,
+      handle: withItem(async (item, _req, ctx) =>
+        json(200, await app.deps.claude.searchHistory(item.cwd, ctx.url.searchParams.get('q'), item.session)),
+      ),
+    },
+    {
+      method: 'GET',
+      path: /^\/api\/session\/([^/]+)$/,
+      handle: withItem(async item => json(200, await detail(app.deps, item))),
+    },
+    // Answering a dialog presses keys in a session: like a launch, only from this page.
+    {
+      method: 'POST',
+      path: /^\/api\/session\/([^/]+)\/(answer|permit)$/,
+      guard: ['board-header', 'origin', 'fresh-data'],
+      handle: action,
+    },
+    // Actions that go through herdr wait for a board that can reach it; card edits and the rest do not.
+    {
+      method: 'POST',
+      path: /^\/api\/session\/([^/]+)\/(focus|wake|sleep|message)$/,
+      guard: ['board-header', 'fresh-data'],
+      handle: action,
+    },
+    { method: 'POST', path: /^\/api\/session\/([^/]+)\/(\w+)$/, guard: ['board-header'], handle: action },
+  ]
+}
