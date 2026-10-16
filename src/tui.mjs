@@ -9,10 +9,11 @@ import { join } from 'node:path'
 import { liveConfig } from './adapters/config-file.ts'
 import { COLUMNS, noteOf, statusText } from './core/board.ts'
 import { categoryInfo, laneRank } from './core/categories.ts'
-import * as actions from './actions.mjs'
+import * as actions from './services/actions.ts'
+import { defaultDeps } from './services/deps.ts'
 import { t } from './core/lang.ts'
-import { collect, forgetSleepers } from './model.mjs'
-import { goBack } from './nav.mjs'
+import { collect } from './services/board.ts'
+import { goBack } from './services/nav.ts'
 import { startServer } from './server.mjs'
 import { openWeb } from './web-open.mjs'
 import { boardFile, cardsDir, stateDir } from './adapters/paths.ts'
@@ -26,6 +27,7 @@ const cfg = liveConfig(() => {
   refresh()
   web?.refresh()
 })
+const deps = defaultDeps(cfg)
 let web = null // the web board's server, once it listens
 const out = process.stdout
 const PANE = process.env.HERDR_PANE_ID ?? null
@@ -161,7 +163,7 @@ async function refresh() {
   }
   refreshing = true
   try {
-    items = await collect(cfg)
+    items = await collect(deps)
     const entries = listEntries()
     alarms = new Map()
     for (const e of entries) if (!alarms.has(e.key)) alarms.set(e.key, e)
@@ -191,7 +193,7 @@ function setBusy(key, text) {
 async function jump(it) {
   if (!it?.pane) return
   setBusy(it.key, t(it.sleeping ? 'tui.waking' : 'tui.going'))
-  const r = await actions.focus(cfg, it)
+  const r = await actions.focus(deps, it)
   setBusy(it.key, null)
   if (!r.ok) return say(r.error, true)
   if (OVERLAY) quit()
@@ -200,7 +202,7 @@ async function jump(it) {
 
 async function send(it, text) {
   setBusy(it.key, t(it.sleeping ? 'tui.waking' : 'tui.sending'))
-  const r = await actions.send(cfg, it, text)
+  const r = await actions.send(deps, it, text)
   setBusy(it.key, null)
   say(r.ok ? t('sent.to', { name: it.name }) : r.error, !r.ok)
   refresh()
@@ -243,10 +245,10 @@ function onAction(name) {
     case 'sleep':
       if (!it || it.sleeping) return
       setBusy(it.key, t('tui.sleeping'))
-      return actions.sleepSession(cfg, it).then(r => {
+      return actions.sleepSession(deps, it).then(r => {
         setBusy(it.key, null)
         say(r.ok ? t('asleep', { name: it.name }) : r.error, !r.ok)
-        forgetSleepers()
+        deps.wake.forget()
         refresh()
       })
     case 'category':
@@ -633,4 +635,4 @@ async function serve(tries = 8) {
 }
 if (cfg.web !== false) serve()
 // The web board's server runs the schedule; without it, this board does.
-else startScheduler({ cfg, log: webLog, onChange: refresh })
+else startScheduler({ cfg, log: webLog, onChange: refresh, deps })

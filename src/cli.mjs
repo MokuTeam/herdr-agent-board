@@ -24,7 +24,8 @@ import { categoryFor, categoryInfo, laneRank } from './core/categories.ts'
 import { defaultClaudeHome } from './adapters/claude-home.ts'
 import { snapshot } from './adapters/herdr.ts'
 import { t } from './core/lang.ts'
-import { collect } from './model.mjs'
+import { collect } from './services/board.ts'
+import { defaultDeps } from './services/deps.ts'
 import { boardFile } from './adapters/paths.ts'
 import { addEntry, listEntries, removeEntry } from './adapters/schedule-store.ts'
 import { readCard, writeCard } from './adapters/cards.ts'
@@ -51,6 +52,7 @@ const modeText = () => (idle ? ', when the session is free' : '')
 const [cmd = 'show', ...rest] = args
 const text = rest.join(' ').replace(/\s+/g, ' ').trim()
 const cfg = loadConfig()
+const deps = defaultDeps(cfg)
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -59,7 +61,7 @@ async function resolveSession() {
   if (target) {
     if (UUID.test(target)) return { key: target, cwd: '' }
     const t = target.toLowerCase()
-    const item = (await collect(cfg)).find(i => [i.name, i.autoName, i.pane, i.session].some(v => v && v.toLowerCase() === t))
+    const item = (await collect(deps)).find(i => [i.name, i.autoName, i.pane, i.session].some(v => v && v.toLowerCase() === t))
     if (!item) throw new Error(`no session "${target}" on the board`)
     return { key: item.key, cwd: item.cwd, name: item.name, pane: item.pane }
   }
@@ -166,7 +168,7 @@ async function main() {
   }
 
   if (cmd === 'list') {
-    const items = await collect(cfg)
+    const items = await collect(deps)
     const order = new Map(COLUMNS.map((c, i) => [c.id, i]))
     items.sort((a, b) => laneRank(cfg, a.category) - laneRank(cfg, b.category) || a.category.localeCompare(b.category) || order.get(a.column) - order.get(b.column))
     const soonest = new Map()

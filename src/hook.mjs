@@ -22,7 +22,7 @@ async function main() {
   const card = readCard(sid)
   // The user wrote to the session: whatever it asked them is answered. A reminder from the board's
   // scheduler is not the user, so its ask stays. A column the user dragged the card to has done
-  // its job either way: the session works again, which drops the pin anyway (model.mjs pinOf).
+  // its job either way: the session works again, which drops the pin anyway (services/board.ts pinOf).
   const fromBoard = /^\s*\[board (reminder|schedule)\b/.test(input.prompt ?? '')
   if (event === 'UserPromptSubmit' && (card?.pin || (card?.ask && !fromBoard))) {
     writeCard(sid, { ...(!fromBoard && { ask: '', askSince: '' }), pin: '', pinAt: '', pinBusy: '' })

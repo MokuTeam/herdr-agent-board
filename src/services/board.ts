@@ -1,18 +1,29 @@
 // The board's data: every agent pane in herdr plus the sessions herdr-wake put to sleep, each
 // merged with its card and with what Claude recorded about it, and sorted into a column.
-import { attentionOf, busy, columnOf, PINS } from './core/board.ts'
-import { categoryFor } from './core/categories.ts'
-import { defaultClaudeHome } from './adapters/claude-home.ts'
-import { snapshot } from './adapters/herdr.ts'
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { t } from './core/lang.ts'
-import { contextDir } from './adapters/paths.ts'
-import { allCards, writeCard } from './adapters/cards.ts'
-import { forgetSharedHerdrWake, sharedHerdrWake } from './integrations/herdr-wake.ts'
+import { allCards, writeCard } from '../adapters/cards.ts'
+import { snapshot } from '../adapters/herdr.ts'
+import { contextDir } from '../adapters/paths.ts'
+import { attentionOf, busy, columnOf, PINS } from '../core/board.ts'
+import { categoryFor } from '../core/categories.ts'
+import { t } from '../core/lang.ts'
+import type { AgentStatus, Attention, Card, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
+import type { Deps } from './deps.ts'
 
-/** After the board put a session to sleep or woke it: read herdr-wake again on the next refresh. */
-export const forgetSleepers = forgetSharedHerdrWake
+const STATUSES: ReadonlySet<string> = new Set<AgentStatus>([
+  'idle',
+  'working',
+  'blocked',
+  'done',
+  'unknown',
+  'sleeping',
+])
+const statusOf = (value: unknown): AgentStatus =>
+  typeof value === 'string' && STATUSES.has(value) ? (value as AgentStatus) : 'unknown'
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
+const numberOf = (value: unknown): number | undefined => (typeof value === 'number' ? value : undefined)
 
 /**
  * The column the user dragged the card to, or ''. It holds until the session works again (the
@@ -20,9 +31,10 @@ export const forgetSleepers = forgetSharedHerdrWake
  * once that turn is over. Spent pins are taken off the card file here; a write that fails (its
  * card is locked) is tried again on the next refresh instead of failing this one.
  */
-function pinOf(key, status, card) {
-  if (!PINS.has(card.pin)) return ''
-  const save = patch => {
+function pinOf(key: string, status: AgentStatus, card: Card): Pin | '' {
+  const pin = card.pin
+  if (!pin || !PINS.has(pin)) return ''
+  const save = (patch: Partial<Card>): void => {
     try {
       writeCard(key, patch)
     } catch {}
@@ -33,33 +45,52 @@ function pinOf(key, status, card) {
     save({ pin: '', pinAt: '', pinBusy: '' })
     return ''
   }
-  return card.pin
+  return pin
 }
 
 /** What the user is asked, for the card. */
-function askedText(attention, card, info, tool) {
-  if (attention === 'ask') return card.ask
-  if (attention === 'question') return info.question
+function askedText(attention: Attention, card: Card, info: TranscriptInfo, tool: ToolCall | null): string {
+  if (attention === 'ask') return card.ask ?? ''
+  if (attention === 'question') return info.question ?? ''
   if (attention !== 'decision' || !tool?.pending) return ''
-  return tool.name === 'AskUserQuestion' ? tool.detail : t('note.permission', { what: `${tool.label}${tool.detail ? ` · ${tool.detail}` : ''}` })
+  return tool.name === 'AskUserQuestion'
+    ? (tool.detail ?? '')
+    : t('note.permission', { what: `${tool.label}${tool.detail ? ` · ${tool.detail}` : ''}` })
 }
 
-const contextCache = new Map() // session -> { mtimeMs, data }
+interface ContextFile {
+  at: number | undefined
+  tokens: number | undefined
+  usedPercentage: number | undefined
+  size: number | undefined
+}
+
+const contextCache = new Map<string, { mtimeMs: number; data: ContextFile }>() // session -> file
+
+function asContextFile(value: unknown): ContextFile {
+  const d = isRecord(value) ? value : {}
+  return {
+    at: numberOf(d.at),
+    tokens: numberOf(d.tokens),
+    usedPercentage: numberOf(d.usedPercentage),
+    size: numberOf(d.size),
+  }
+}
 
 /**
  * How full a session's context is. The status line (statusline.mjs) says it best, percentage and
  * window size included; without it, the tokens of the last request from the transcript.
  */
-function contextOf(session, info) {
-  const own = { context: info.context ?? null, contextPct: null, contextSize: null }
+function contextOf(session: string | null, info: TranscriptInfo) {
+  const own = { context: info.context ?? null, contextPct: null as number | null, contextSize: null as number | null }
   if (!session) return own
-  const file = join(contextDir(), `${String(session).replace(/[^A-Za-z0-9_-]/g, '_')}.json`)
+  const file = join(contextDir(), `${session.replace(/[^A-Za-z0-9_-]/g, '_')}.json`)
   const st = statSync(file, { throwIfNoEntry: false })
   if (!st) return own
   let hit = contextCache.get(session)
   if (!hit || hit.mtimeMs !== st.mtimeMs) {
     try {
-      hit = { mtimeMs: st.mtimeMs, data: JSON.parse(readFileSync(file, 'utf8')) }
+      hit = { mtimeMs: st.mtimeMs, data: asContextFile(JSON.parse(readFileSync(file, 'utf8'))) }
       contextCache.set(session, hit)
     } catch {
       return own
@@ -67,24 +98,34 @@ function contextOf(session, info) {
   }
   const d = hit.data
   // The transcript can be newer (a reply the status line has not run for yet): its tokens win then.
-  const fresh = !info.activity || d.at >= info.activity - 5000
-  return { context: (fresh && d.tokens) || own.context, contextPct: fresh ? (d.usedPercentage ?? null) : null, contextSize: d.size ?? null }
+  const fresh = !info.activity || (d.at !== undefined && d.at >= info.activity - 5000)
+  return {
+    context: (fresh && d.tokens) || own.context,
+    contextPct: fresh ? (d.usedPercentage ?? null) : null,
+    contextSize: d.size ?? null,
+  }
 }
 
+/** What a pane or a sleeper tells before the card and the transcript are merged in. */
+type Base = Pick<
+  Item,
+  'key' | 'session' | 'pane' | 'workspace' | 'agent' | 'name' | 'cwd' | 'status' | 'sleeping' | 'focused' | 'activity'
+>
+
 /** All board items, newest activity first. */
-export async function collect(cfg) {
-  const [snap, asleep] = await Promise.all([snapshot(), sharedHerdrWake(cfg.wakeUrl).sleepers()])
-  const claude = defaultClaudeHome()
+export async function collect(deps: Deps): Promise<Item[]> {
+  const { cfg, claude } = deps
+  const [snap, asleep] = await Promise.all([snapshot(), deps.wake.sleepers()])
   const live = claude.liveSessions()
   const cards = allCards()
   const labels = new Map(snap.workspaces.map(w => [w.workspace_id, w.label]))
-  const items = []
-  const seen = new Set()
+  const items: Item[] = []
+  const seen = new Set<string>()
 
-  const add = base => {
+  const add = (base: Base): void => {
     const saved = cards.get(base.key) ?? {}
     const pin = pinOf(base.key, base.status, saved)
-    const card = { ...saved, pin }
+    const card: Card = { ...saved, pin }
     const path = base.session ? claude.transcriptPath(base.session, base.cwd) : null
     const info = claude.transcriptInfo(path) ?? {}
     const guess = categoryFor(cfg, base.cwd)
@@ -128,14 +169,14 @@ export async function collect(cfg) {
       key,
       session,
       pane: p.pane_id,
-      workspace: labels.get(p.workspace_id) ?? '',
+      workspace: labels.get(p.workspace_id ?? '') ?? '',
       agent: p.agent,
       name: reg?.name || p.terminal_title_stripped || p.label || p.pane_id,
       cwd: p.cwd ?? reg?.cwd ?? '',
-      status: p.agent_status ?? 'unknown',
+      status: statusOf(p.agent_status),
       sleeping: false,
       focused: p.pane_id === snap.focused_pane_id,
-      activity: reg?.statusUpdatedAt ?? 0,
+      activity: numberOf(reg?.statusUpdatedAt) ?? 0,
     })
   }
 
@@ -146,18 +187,18 @@ export async function collect(cfg) {
     add({
       key: s.session,
       session: s.session,
-      pane: s.pane,
+      pane: s.pane ?? null,
       workspace: s.workspace ?? '',
       agent: 'claude',
       name: s.name || s.session.slice(0, 8),
-      cwd: panes.get(s.pane)?.cwd ?? '',
+      cwd: panes.get(s.pane ?? '')?.cwd ?? '',
       status: 'sleeping',
       sleeping: true,
       focused: false,
-      activity: Date.parse(s.slept_at) || 0,
+      activity: Date.parse(s.slept_at ?? '') || 0,
     })
   }
 
-  items.sort((a, b) => b.activity - a.activity)
+  items.sort((a, b) => (b.activity ?? 0) - (a.activity ?? 0))
   return items
 }

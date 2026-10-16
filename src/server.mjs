@@ -11,7 +11,8 @@ import http from 'node:http'
 import { extname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { focus, send, sleepSession, wake } from './actions.mjs'
+import { focus, send, sleepSession, wake } from './services/actions.ts'
+import { defaultDeps } from './services/deps.ts'
 import { answerPermission, answerQuestions } from './answer.mjs'
 import { checkoutChanges, isCheckout } from './adapters/git.ts'
 import { defaultClaudeHome, readUsageCache } from './adapters/claude-home.ts'
@@ -27,7 +28,7 @@ import { listDirs } from './adapters/folders.ts'
 import { createLaunches, renameSession } from './launch.mjs'
 import { checkName } from './core/launch/names.ts'
 import { messageGate } from './core/message-gate.ts'
-import { collect, forgetSleepers } from './model.mjs'
+import { collect } from './services/board.ts'
 import { parseDialog, publicDialog } from './core/dialogs/questions.ts'
 import { cardsDir, ROOT, scheduleDir, stateDir, uploadsDir } from './adapters/paths.ts'
 import { listEntries, readLog, removeEntry, updateEntry } from './adapters/schedule-store.ts'
@@ -120,6 +121,7 @@ const SWATCHES = Object.entries(PALETTE)
  */
 export async function startServer({ cfg, log = () => {} } = {}) {
   cfg ??= liveConfig(() => refresh())
+  const deps = defaultDeps(cfg, log)
   const port = cfg.port ?? 12422
   pruneUploads(cfg.keepUploadsDays ?? 14)
   let items = []
@@ -181,7 +183,7 @@ export async function startServer({ cfg, log = () => {} } = {}) {
     if (refreshing) return void (again = true)
     refreshing = true
     try {
-      items = await collect(cfg)
+      items = await collect(deps)
       launches.observe(items)
       stale = false
       lastSuccessfulRefreshAt = Date.now()
@@ -220,11 +222,11 @@ export async function startServer({ cfg, log = () => {} } = {}) {
   async function act(item, action, body) {
     switch (action) {
       case 'focus':
-        return focus(cfg, item, { raise: cfg.raiseTerminal !== false })
+        return focus(deps, item, { raise: cfg.raiseTerminal !== false })
       case 'wake':
-        return item.sleeping ? wake(cfg, item).finally(forgetSleepers) : { ok: true }
+        return item.sleeping ? wake(deps, item).finally(() => deps.wake.forget()) : { ok: true }
       case 'sleep':
-        return sleepSession(cfg, item).finally(forgetSleepers)
+        return sleepSession(deps, item).finally(() => deps.wake.forget())
       case 'message': {
         // Attached files go as their paths: Claude reads them, and picks up image paths as images.
         const files = (Array.isArray(body.files) ? body.files : []).filter(p => typeof p === 'string' && p.startsWith(uploadsDir()))
@@ -235,9 +237,9 @@ export async function startServer({ cfg, log = () => {} } = {}) {
         return guardedMessage(item.key, body.requestId ?? randomUUID(), [body.session ?? null, body.text, files], async () => {
           // Always collect a new snapshot before accepting a message, even if SSE is connected: a
           // board that cannot reach herdr fails here rather than send on old data.
-          const fresh = (await collect(cfg)).find(next => next.key === item.key)
+          const fresh = (await collect(deps)).find(next => next.key === item.key)
           if (!fresh || fresh.session !== item.session || fresh.pane !== item.pane) return { ok: false, error: t('err.sessionChanged', { name: item.name }) }
-          return send(cfg, fresh, [String(body.text ?? '').trim(), list].filter(Boolean).join('\n\n'))
+          return send(deps, fresh, [String(body.text ?? '').trim(), list].filter(Boolean).join('\n\n'))
         })
       }
       case 'answer':
@@ -250,7 +252,7 @@ export async function startServer({ cfg, log = () => {} } = {}) {
           // A new snapshot first, as for a message: the board must not answer on old data.
           let fresh
           try {
-            fresh = (await collect(cfg)).find(next => next.key === item.key)
+            fresh = (await collect(deps)).find(next => next.key === item.key)
           } catch (err) {
             return { ok: false, error: t('err.qa.herdr', { why: err.message }) }
           }
@@ -545,7 +547,7 @@ export async function startServer({ cfg, log = () => {} } = {}) {
     server.listen(port, '127.0.0.1', () => {
       refresh()
       // The port makes it one board per machine, so one scheduler; claims cover an overlap.
-      const scheduler = startScheduler({ cfg, log, onChange: refresh })
+      const scheduler = startScheduler({ cfg, log, onChange: refresh, deps })
       resolve({ port, url: `http://127.0.0.1:${port}/`, refresh, scheduler })
     })
   })

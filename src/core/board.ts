@@ -1,5 +1,5 @@
 // The rules that sort a session into a column and write the line a card shows. Pure: the board's
-// data (src/model.mjs) feeds them herdr's status, the session's card and what Claude recorded.
+// data (src/services/board.ts) feeds them herdr's status, the session's card and what Claude recorded.
 import { t } from './lang.ts'
 import type { AgentStatus, Attention, Card, ColumnId, Item, Pin, TranscriptInfo } from './types.ts'
 

@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs'
 import { loadConfig } from './adapters/config-file.ts'
 import { herdr, snapshot } from './adapters/herdr.ts'
-import { goBack, rememberReturn } from './nav.mjs'
+import { goBack, rememberReturn } from './services/nav.ts'
 import { boardFile, PLUGIN_ID, ROOT } from './adapters/paths.ts'
 
 const cfg = loadConfig()

@@ -2,12 +2,25 @@
 // the board (q, or the board key again) goes back there.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { herdr } from './adapters/herdr.ts'
-import { stateDir } from './adapters/paths.ts'
+import { type HerdrSnapshot, herdr } from '../adapters/herdr.ts'
+import { stateDir } from '../adapters/paths.ts'
 
 const RETURN_FILE = join(stateDir(), 'return.json')
 
-export function rememberReturn(snap, boardPane) {
+interface ReturnTarget {
+  pane: string
+  tab: string | undefined
+  agent: boolean
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
+
+function asReturnTarget(value: unknown): ReturnTarget | null {
+  if (!isRecord(value) || typeof value.pane !== 'string') return null
+  return { pane: value.pane, tab: typeof value.tab === 'string' ? value.tab : undefined, agent: !!value.agent }
+}
+
+export function rememberReturn(snap: HerdrSnapshot, boardPane: string | null): void {
   const pane = snap.panes.find(p => p.pane_id === snap.focused_pane_id)
   if (!pane || pane.pane_id === boardPane) return
   try {
@@ -16,19 +29,21 @@ export function rememberReturn(snap, boardPane) {
 }
 
 /** Focus the pane the user came from. False when there is nowhere to go back to. */
-export async function goBack() {
-  let ret = null
+export async function goBack(): Promise<boolean> {
+  let ret: ReturnTarget | null = null
   try {
-    ret = JSON.parse(readFileSync(RETURN_FILE, 'utf8'))
+    ret = asReturnTarget(JSON.parse(readFileSync(RETURN_FILE, 'utf8')))
   } catch {
     return false
   }
+  if (!ret) return false
   if (ret.agent) {
     try {
       await herdr(['agent', 'focus', ret.pane])
       return true
     } catch {}
   }
+  if (ret.tab === undefined) return false
   try {
     await herdr(['tab', 'focus', ret.tab])
     return true

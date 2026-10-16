@@ -11,8 +11,9 @@
 // against the wait. An entry is claimed in its file before it is sent, so a second board (a
 // restart that overlaps, a test copy) never sends the same run twice.
 import { mkdirSync, watch } from 'node:fs'
-import { send, wake } from './actions.mjs'
-import { collect, forgetSleepers } from './model.mjs'
+import { defaultDeps } from './services/deps.ts'
+import { send, wake } from './services/actions.ts'
+import { collect } from './services/board.ts'
 import { getEntry, listEntries, logRun, removeEntry, updateEntry } from './adapters/schedule-store.ts'
 import { scheduleDir } from './adapters/paths.ts'
 import { promptOf, targetOf } from './core/schedule-rules.ts'
@@ -32,7 +33,7 @@ const positive = (v, fallback) => (Number(v) > 0 ? Number(v) : fallback)
  * Start sending due entries. `cfg` is the live config: scheduleTickSec (15), scheduleWaitMin
  * (240). Returns { tick, stop }.
  */
-export function startScheduler({ cfg, log = () => {}, onChange = () => {} }) {
+export function startScheduler({ cfg, log = () => {}, onChange = () => {}, deps = defaultDeps(cfg, log) }) {
   // Five minutes at most: setTimeout takes no more than 24 days, and a larger value runs at once.
   const tickMs = () => Math.min(300, Math.max(0.1, positive(cfg.scheduleTickSec, 15))) * 1000
   const patience = () => positive(cfg.scheduleWaitMin, 240) * 60_000
@@ -54,7 +55,7 @@ export function startScheduler({ cfg, log = () => {}, onChange = () => {} }) {
       const due = listEntries().filter(e => e.next <= now && !flying.has(e.key) && !(e.tried > now - tickMs() * 0.9))
       if (!due.length) return
       // Fresh: whether a session sleeps or works decides what happens now.
-      const items = await collect(cfg)
+      const items = await collect(deps)
       for (const entry of due) {
         if (delivered.get(entry.id) === entry.next) {
           finish(entry)
@@ -97,14 +98,14 @@ export function startScheduler({ cfg, log = () => {}, onChange = () => {} }) {
       let r = { ok: true }
       if (item.sleeping) {
         waking++
-        r = await wake(cfg, item).finally(() => {
+        r = await wake(deps, item).finally(() => {
           waking--
-          forgetSleepers()
+          deps.wake.forget()
         })
         // Cancelled while the session woke up: nothing to send.
         if (r.ok && !getEntry(entry.id)) return
       }
-      if (r.ok) r = await send(cfg, { ...item, sleeping: false }, promptOf(entry, Date.now()), { free: !!entry.idle, draft: true })
+      if (r.ok) r = await send(deps, { ...item, sleeping: false }, promptOf(entry, Date.now()), { free: !!entry.idle, draft: true })
       if (r.ok) return sent(entry)
       why = r.draft ? 'draft' : r.dialog ? 'dialog' : r.busy ? 'busy' : r.error
     }

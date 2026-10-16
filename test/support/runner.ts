@@ -2,14 +2,15 @@
 // (HERDR_BIN_PATH, set by the sandbox).
 import { appendFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import type { Config, Item } from '../../src/core/types.ts'
 
 export type RunnerMode = 'open' | 'send' | 'answer' | 'server' | 'cli' | 'scheduler' | 'write'
 
 // The input a test handed over: each mode reads the fields its test wrote.
 type RunnerInput = {
   kind: string
-  item: { pane: string }
-  cfg: { language?: string }
+  item: Item & { pane: string }
+  cfg: Config
   text: string
   body: unknown
   args: string[]
@@ -35,9 +36,10 @@ const mode = process.argv[2]
 if (mode === 'open') {
   await import('../../src/open.mjs')
 } else if (mode === 'send') {
-  const { send: sendText } = await import('../../src/actions.mjs')
+  const { send: sendText } = await import('../../src/services/actions.ts')
+  const { defaultDeps } = await import('../../src/services/deps.ts')
   const { item, cfg, text } = input()
-  console.log(JSON.stringify(await sendText(cfg, item, text)))
+  console.log(JSON.stringify(await sendText(defaultDeps(cfg), item, text)))
 } else if (mode === 'answer') {
   // answer.mjs against the fake herdr: a question form, a permission prompt, or one own answer typed.
   const { answerPermission, answerQuestions, paneIO } = await import('../../src/answer.mjs')
