@@ -9,17 +9,19 @@
 //                    becomes a command; it should print `pane=<id>` when the session is up.
 // The card gets the chosen category as soon as the session has an id; a Claude started by the
 // board gets its id up front (--session-id), so even its first brief knows the lane.
-import { execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { open, readdir, stat } from 'node:fs/promises'
-import { homedir, tmpdir } from 'node:os'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { tmpdir } from 'node:os'
+import { join, relative } from 'node:path'
 import { checkBranch, checkName, normDir, sameDir, slugName, uniqueSlug, UNSAFE_CHARS, worktreePath } from './core/launch/names.ts'
 import { commandArgs, failureKind, launcherError, launcherLabel, parseLauncherOutput, usesPlaceholder } from './core/launch/launcher-command.ts'
-import { resolvePath } from './files.mjs'
+import { resolvePath } from './adapters/files.ts'
+import { SLOW, statOf } from './adapters/folders.ts'
+import { gitInfo } from './adapters/git.ts'
+import { herdr, herdrText } from './adapters/herdr.ts'
+import { run, runTree } from './adapters/process.ts'
 import { raiseTerminal } from './actions.mjs'
-import { herdr, herdrText } from './herdr.mjs'
 import { inputDraft } from './core/dialogs/input-box.ts'
 import { t } from './core/lang.ts'
 import { cardsDir, claudeDir, stateDir } from './adapters/paths.ts'
@@ -28,138 +30,6 @@ import { keyTowardYes, sameFolder, trustDialog } from './core/dialogs/trust.ts'
 
 const LAUNCH_DIR = join(stateDir(), 'launch') // first messages for {messageFile}, while a launcher runs
 const MESSAGE_MAX = 20_000
-
-// ------------------------------------------------------------------ folders for the picker
-
-// A path someone typed can be a share that is offline: no file-system call on it may hold the
-// board up. Each one gives up after `ms` and says so (SLOW).
-const SLOW = Symbol('slow')
-const within = (promise, ms) => Promise.race([promise, new Promise(r => setTimeout(r, ms, SLOW).unref?.())])
-const statOf = (path, ms = 2000) => within(stat(path).catch(() => null), ms)
-
-let rootsCache = { at: 0, list: [] }
-/** Where browsing starts: home, and every drive on Windows. */
-async function roots() {
-  if (Date.now() - rootsCache.at < 30_000) return rootsCache.list
-  const drives = process.platform === 'win32' ? [...'CDEFGHIJKLMNOPQRSTUVWXYZ'] : []
-  const found = await Promise.all(drives.map(async l => ((await statOf(`${l}:\\`, 400))?.isDirectory?.() ? { name: `${l}:`, path: `${l}:\\` } : null)))
-  const list = [{ name: '~', path: homedir() }, ...(process.platform === 'win32' ? found.filter(Boolean) : [{ name: '/', path: '/' }])]
-  rootsCache = { at: Date.now(), list }
-  return list
-}
-
-const SYSTEM_DIRS = new Set(['$recycle.bin', 'system volume information', '$windows.~bt', '$windows.~ws', 'config.msi', 'recovery'])
-
-/**
- * The subfolders of a folder (only folders), for the picker's columns and completion; '' lists
- * the roots. `git` also tells the checkout the folder is in, for the worktree option. `slow`:
- * the folder did not answer in time (an offline share), which is not the same as missing.
- */
-export async function listDirs(raw, { git = false } = {}) {
-  if (!String(raw ?? '').trim()) return { path: '', exists: true, dir: true, roots: await roots(), entries: [] }
-  const { path } = resolvePath(raw)
-  if (!path) return { path: String(raw), exists: false }
-  const st = await statOf(path)
-  if (st === SLOW) return { path, exists: false, slow: true }
-  if (!st) return { path, exists: false }
-  if (!st.isDirectory()) return { path, exists: true, dir: false }
-  let entries = []
-  let error = null
-  try {
-    const dirents = await within(readdir(path, { withFileTypes: true }), 4000)
-    if (dirents === SLOW) throw Object.assign(new Error('slow'), { code: 'SLOW' })
-    const linked = await Promise.all(dirents.map(async d => d.isDirectory() || (d.isSymbolicLink() && (await statOf(join(path, d.name), 1000))?.isDirectory?.())))
-    entries = dirents
-      .filter((d, i) => linked[i] === true)
-      .map(d => d.name)
-      .filter(n => !SYSTEM_DIRS.has(n.toLowerCase()))
-      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
-  } catch (err) {
-    error = err.code === 'EPERM' || err.code === 'EACCES' ? 'denied' : err.code === 'SLOW' ? 'slow' : err.message
-  }
-  const up = dirname(path)
-  const out = { path, exists: true, dir: true, entries: entries.slice(0, 2000), truncated: entries.length > 2000, parent: up !== path ? up : '', sep, error }
-  if (git) out.git = await gitInfo(path)
-  return out
-}
-
-/**
- * Run a launcher: like `run`, but a timeout ends the whole process tree (on Windows a kill
- * reaches only the direct child, and a script's descendants would go on and open a tab after
- * "timed out"). It settles when the launcher exits, not when every pipe closed, so a descendant
- * that kept stdout open cannot hold the launch at "starting".
- */
-export function runTree(file, args, { timeout, env, cwd } = {}) {
-  return new Promise(res => {
-    let stdout = ''
-    let stderr = ''
-    let killed = false
-    let error = null
-    let settled = false
-    let child
-    try {
-      child = spawn(file, args, { env, cwd, windowsHide: true, detached: process.platform !== 'win32' })
-    } catch (err) {
-      return res({ code: err.code ?? 1, killed, error: err, stdout, stderr })
-    }
-    child.stdout.setEncoding('utf8').on('data', d => stdout.length < 4 << 20 && (stdout += d))
-    child.stderr.setEncoding('utf8').on('data', d => stderr.length < 4 << 20 && (stderr += d))
-    let code = 0
-    const finish = () => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      res({ code: error ? (error.code ?? 1) : code, killed, error, stdout, stderr })
-    }
-    const timer = setTimeout(() => {
-      killed = true
-      killTree(child)
-      // Whatever the kill managed, the card does not wait for it long.
-      setTimeout(finish, 5000).unref?.()
-    }, timeout)
-    child.on('error', err => {
-      error = err
-      finish()
-    })
-    child.on('exit', (c, signal) => {
-      code = c ?? (signal ? 1 : 0)
-      clearTimeout(timer)
-      // What it printed last may still be on its way; the pipes may also stay open for good.
-      setTimeout(finish, 300)
-    })
-    child.on('close', finish)
-  })
-}
-
-function killTree(child) {
-  if (process.platform === 'win32') {
-    // By its full path: the board's PATH need not have System32 on it.
-    const taskkill = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe')
-    execFile(taskkill, ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true }, err => err && child.kill())
-  } else {
-    try {
-      process.kill(-child.pid, 'SIGKILL')
-    } catch {
-      child.kill('SIGKILL')
-    }
-  }
-}
-
-function run(file, args, { timeout = 15_000, env, cwd } = {}) {
-  return new Promise(res => {
-    execFile(file, args, { encoding: 'utf8', timeout, windowsHide: true, maxBuffer: 4 << 20, env, cwd }, (err, stdout, stderr) =>
-      res({ code: err ? (err.code ?? 1) : 0, killed: !!err?.killed, error: err, stdout: stdout ?? '', stderr: stderr ?? '' }),
-    )
-  })
-}
-
-/** The git checkout a folder is in: { root, branch }, or null. */
-export async function gitInfo(dir) {
-  const r = await run('git', ['-C', dir, 'rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD'], { timeout: 5000 })
-  if (r.code !== 0) return null
-  const [root, branch] = r.stdout.trim().split(/\r?\n/)
-  return root ? { root: resolve(root), branch: branch ?? '' } : null
-}
 
 let recentCache = { at: 0, list: [] }
 /**

@@ -22,7 +22,7 @@ import { configFile, editCategories, loadConfig } from './adapters/config-file.t
 import { COLUMNS, noteOf, statusText } from './core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from './core/categories.ts'
 import { liveSessions } from './claude.mjs'
-import { snapshot } from './herdr.mjs'
+import { snapshot } from './adapters/herdr.ts'
 import { t } from './core/lang.ts'
 import { collect } from './model.mjs'
 import { boardFile } from './adapters/paths.ts'

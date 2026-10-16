@@ -13,19 +13,20 @@ import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { focus, send, sleepSession, wake } from './actions.mjs'
 import { answerPermission, answerQuestions } from './answer.mjs'
-import { checkoutChanges, isCheckout } from './changes.mjs'
+import { checkoutChanges, isCheckout } from './adapters/git.ts'
 import { searchHistory } from './history.mjs'
 import { localUsage } from './usage.mjs'
 import { conversation } from './claude.mjs'
 import { createWebBundle } from './server/web-bundle.ts'
-import { describe, FILE_TOKEN, MEDIA_TYPES, openWith, preview, resolvePath } from './files.mjs'
+import { describe, FILE_TOKEN, MEDIA_TYPES, openWith, preview, resolvePath } from './adapters/files.ts'
 import { editCategories, editSettings, liveConfig } from './adapters/config-file.ts'
 import { busy, COLUMNS, PINS } from './core/board.ts'
 import { categoryInfo, colorHex, laneRank, PALETTE } from './core/categories.ts'
 import { lang, t } from './core/lang.ts'
 import { LANGUAGES } from './core/i18n/translator.ts'
-import { herdrText } from './herdr.mjs'
-import { createLaunches, listDirs, renameSession } from './launch.mjs'
+import { herdrText } from './adapters/herdr.ts'
+import { listDirs } from './adapters/folders.ts'
+import { createLaunches, renameSession } from './launch.mjs'
 import { checkName } from './core/launch/names.ts'
 import { messageGate } from './core/message-gate.ts'
 import { collect, forgetSleepers } from './model.mjs'
@@ -320,7 +321,7 @@ export async function startServer({ cfg, log = () => {} } = {}) {
         req.on('close', () => clients.delete(res))
         return
       }
-      // Files and folders the chat mentions: what they are, a preview, opening them (files.mjs).
+      // Files and folders the chat mentions: what they are, a preview, opening them (adapters/files.ts).
       if (req.method === 'POST' && path.startsWith('/api/fs/')) {
         if (req.headers['x-board'] !== '1') return json(403, { error: 'header' })
         const body = await readBody(req)

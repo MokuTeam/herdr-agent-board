@@ -4,7 +4,7 @@
 // have done (core/dialogs/questions.ts says how the dialog behaves). Nothing is pressed into a pane that
 // shows another session, another dialog, or a question already answered; anything unexpected
 // stops it and the user is told where it stopped.
-import { herdr, herdrText } from './herdr.mjs'
+import { herdr, herdrText } from './adapters/herdr.ts'
 import { transcriptInfo } from './claude.mjs'
 import { t } from './core/lang.ts'
 import { inputDraft } from './core/dialogs/input-box.ts'

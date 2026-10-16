@@ -6,7 +6,7 @@
 // --background (the startup hook): make sure the workspace board runs, without focusing it.
 import { readFileSync } from 'node:fs'
 import { loadConfig } from './adapters/config-file.ts'
-import { herdr, snapshot } from './herdr.mjs'
+import { herdr, snapshot } from './adapters/herdr.ts'
 import { goBack, rememberReturn } from './nav.mjs'
 import { boardFile, PLUGIN_ID, ROOT } from './adapters/paths.ts'
 

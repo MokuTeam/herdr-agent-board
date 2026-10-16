@@ -5,7 +5,7 @@
 // (for <img>, <video>, the PDF viewer) need FILE_TOKEN, which only that page can read.
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { closeSync, openSync, readdirSync, readSync, statSync } from 'node:fs'
+import { closeSync, type Dirent, openSync, readdirSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, resolve } from 'node:path'
 
@@ -24,25 +24,74 @@ const EXT = {
   markdown: 'md markdown mdx',
   json: 'json jsonc webmanifest',
   csv: 'csv tsv',
-  text:
-    'txt log text ini cfg conf toml yaml yml xml html htm css scss less js mjs cjs jsx ts tsx mts cts vue svelte py rb go rs java kt kts swift c h cc cpp hpp cs fs vb php pl lua r sql sh bash zsh fish ps1 psm1 psd1 bat cmd gradle properties env gitignore gitattributes editorconfig dockerfile makefile lock jsonl ndjson diff patch srt vtt rst tex bib graphql proto',
+  text: 'txt log text ini cfg conf toml yaml yml xml html htm css scss less js mjs cjs jsx ts tsx mts cts vue svelte py rb go rs java kt kts swift c h cc cpp hpp cs fs vb php pl lua r sql sh bash zsh fish ps1 psm1 psd1 bat cmd gradle properties env gitignore gitattributes editorconfig dockerfile makefile lock jsonl ndjson diff patch srt vtt rst tex bib graphql proto',
 }
-const KIND_OF = new Map(Object.entries(EXT).flatMap(([kind, list]) => list.split(' ').map(e => [e, kind])))
+const KIND_OF = new Map<string, string>(
+  Object.entries(EXT).flatMap(([kind, list]) => list.split(' ').map((e): [string, string] => [e, kind])),
+)
 const NAMED = new Set(['dockerfile', 'makefile', 'license', 'readme', 'changelog', 'procfile', 'gemfile', 'rakefile'])
 
-export const MEDIA_TYPES = {
-  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
-  ico: 'image/x-icon', svg: 'image/svg+xml', avif: 'image/avif', pdf: 'application/pdf',
-  mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', ogv: 'video/ogg',
-  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg', m4a: 'audio/mp4', flac: 'audio/flac', aac: 'audio/aac', opus: 'audio/ogg',
+export const MEDIA_TYPES: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  ico: 'image/x-icon',
+  svg: 'image/svg+xml',
+  avif: 'image/avif',
+  pdf: 'application/pdf',
+  mp4: 'video/mp4',
+  m4v: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
+  ogv: 'video/ogg',
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  oga: 'audio/ogg',
+  m4a: 'audio/mp4',
+  flac: 'audio/flac',
+  aac: 'audio/aac',
+  opus: 'audio/ogg',
 }
 
-const ext = p => extname(p).slice(1).toLowerCase()
+export interface FileInfo {
+  path: string
+  name: string
+  exists: boolean
+  dir?: boolean
+  size?: number | null
+  mtime?: number | null
+  kind?: string
+}
+
+export interface FileEntry {
+  name: string
+  dir: boolean
+  size: number | null
+  mtime: number | null
+  kind: string
+}
+
+export interface Preview extends FileInfo {
+  error?: string
+  entries?: FileEntry[]
+  total?: number
+  text?: string
+  truncated?: boolean
+  lines?: number
+  rows?: string[][]
+}
+
+const ext = (p: string): string => extname(p).slice(1).toLowerCase()
 
 /** What a file is by its name: image, pdf, video, audio, markdown, json, csv, text, or file (unknown). */
-export function kindOf(path) {
+export function kindOf(path: string): string {
   const e = ext(path)
-  if (KIND_OF.has(e)) return KIND_OF.get(e)
+  const known = KIND_OF.get(e)
+  if (known) return known
   return NAMED.has(basename(path).toLowerCase()) ? 'text' : 'file'
 }
 
@@ -50,8 +99,10 @@ export function kindOf(path) {
  * A path as an agent wrote it to { path, line }, absolute: herdr-reveal: / file: prefixes and
  * %-escapes off, ~ expanded, relative ones resolved against the session's folder, :line(:col) split off.
  */
-export function resolvePath(raw, cwd = '') {
-  let p = String(raw ?? '').trim().replace(/^["'`]|["'`]$/g, '')
+export function resolvePath(raw: unknown, cwd = ''): { path: string; line: number | null } {
+  let p = String(raw ?? '')
+    .trim()
+    .replace(/^["'`]|["'`]$/g, '')
   if (/^herdr-reveal:/i.test(p) || /^file:/i.test(p)) {
     // file:///work/x keeps its root slash; file:///C:/x loses it below.
     p = p.replace(/^herdr-reveal:/i, '').replace(/^file:(\/\/)?/i, '')
@@ -60,11 +111,12 @@ export function resolvePath(raw, cwd = '') {
     } catch {}
     if (/^\/[A-Za-z]:[\\/]/.test(p)) p = p.slice(1) // file:///C:/x
   }
-  let line = null
+  let line: number | null = null
   const m = /^(.*?[^:]):(\d+)(?::\d+)?$/.exec(p)
-  if (m && !/^[A-Za-z]$/.test(m[1])) {
-    p = m[1]
-    line = Number(m[2])
+  const [, prefix = '', lineText = ''] = m ?? []
+  if (m && !/^[A-Za-z]$/.test(prefix)) {
+    p = prefix
+    line = Number(lineText)
   }
   if (/^~(?=$|[\\/])/.test(p)) p = homedir() + p.slice(1)
   if (!p) return { path: '', line }
@@ -76,16 +128,24 @@ export function resolvePath(raw, cwd = '') {
 }
 
 /** What is at `path`: { path, name, exists, dir, size, mtime, kind }. */
-export function describe(path) {
+export function describe(path: string): FileInfo {
   const name = basename(path) || path
   const st = path ? statSync(path, { throwIfNoEntry: false }) : null
   if (!st) return { path, name, exists: false }
   const dir = st.isDirectory()
-  return { path, name, exists: true, dir, size: dir ? null : st.size, mtime: st.mtimeMs, kind: dir ? 'dir' : kindOf(path) }
+  return {
+    path,
+    name,
+    exists: true,
+    dir,
+    size: dir ? null : st.size,
+    mtime: st.mtimeMs,
+    kind: dir ? 'dir' : kindOf(path),
+  }
 }
 
 /** The first `limit` bytes of a file and whether there was more. */
-function head(path, size, limit) {
+function head(path: string, size: number, limit: number): { buf: Buffer; cut: boolean } {
   const n = Math.min(size, limit)
   const buf = Buffer.alloc(n)
   const fd = openSync(path, 'r')
@@ -103,7 +163,7 @@ function head(path, size, limit) {
 }
 
 /** Bytes to text, or null for binary: BOMs honored, NUL bytes mean binary. */
-function decode(buf) {
+function decode(buf: Buffer): string | null {
   if (buf[0] === 0xff && buf[1] === 0xfe) return new TextDecoder('utf-16le').decode(buf.subarray(2))
   if (buf[0] === 0xfe && buf[1] === 0xff) return new TextDecoder('utf-16be').decode(buf.subarray(2))
   const sample = buf.subarray(0, 8192)
@@ -112,13 +172,13 @@ function decode(buf) {
 }
 
 /** Simple CSV/TSV: quoted fields with "" escapes and line breaks inside quotes. */
-export function parseCsv(text, sep = ',', maxRows = CSV_ROWS) {
-  const rows = []
-  let row = []
+export function parseCsv(text: string, sep = ',', maxRows = CSV_ROWS): string[][] {
+  const rows: string[][] = []
+  let row: string[] = []
   let field = ''
   let quoted = false
   for (let i = 0; i < text.length && rows.length < maxRows; i++) {
-    const c = text[i]
+    const c = text[i] as string
     if (quoted) {
       if (c === '"' && text[i + 1] === '"') {
         field += '"'
@@ -148,34 +208,47 @@ export function parseCsv(text, sep = ',', maxRows = CSV_ROWS) {
  *   image, pdf, video, audio: metadata; the bytes come from /api/fs/raw
  *   file: metadata only (binary or unknown)
  */
-export function preview(path) {
+export function preview(path: string): Preview {
   const info = describe(path)
   if (!info.exists) return { ...info, error: 'missing' }
   if (info.dir) {
-    let dirents = []
+    let dirents: Dirent[] = []
     try {
       dirents = readdirSync(path, { withFileTypes: true })
     } catch (err) {
-      return { ...info, error: err.code === 'EPERM' || err.code === 'EACCES' ? 'denied' : err.message }
+      const e = err as NodeJS.ErrnoException
+      return { ...info, error: e.code === 'EPERM' || e.code === 'EACCES' ? 'denied' : e.message }
     }
-    dirents.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }))
+    dirents.sort(
+      (a, b) =>
+        Number(b.isDirectory()) - Number(a.isDirectory()) ||
+        a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }),
+    )
     const entries = dirents.slice(0, DIR_LIMIT).map(d => {
       const full = resolve(path, d.name)
       const st = statSync(full, { throwIfNoEntry: false })
       const dir = st ? st.isDirectory() : d.isDirectory()
-      return { name: d.name, dir, size: dir || !st ? null : st.size, mtime: st?.mtimeMs ?? null, kind: dir ? 'dir' : kindOf(d.name) }
+      return {
+        name: d.name,
+        dir,
+        size: dir || !st ? null : st.size,
+        mtime: st?.mtimeMs ?? null,
+        kind: dir ? 'dir' : kindOf(d.name),
+      }
     })
     return { ...info, entries, total: dirents.length }
   }
-  if (['image', 'pdf', 'video', 'audio'].includes(info.kind)) return info
-  let read
+  const infoKind = info.kind ?? 'file'
+  if (['image', 'pdf', 'video', 'audio'].includes(infoKind)) return info
+  let read: { buf: Buffer; cut: boolean }
   try {
-    read = head(path, info.size, TEXT_LIMIT)
+    read = head(path, info.size ?? 0, TEXT_LIMIT)
   } catch (err) {
-    return { ...info, error: err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EBUSY' ? 'denied' : err.message }
+    const e = err as NodeJS.ErrnoException
+    return { ...info, error: e.code === 'EPERM' || e.code === 'EACCES' || e.code === 'EBUSY' ? 'denied' : e.message }
   }
   let text = decode(read.buf)
-  if (text === null) return { ...info, kind: info.kind === 'file' ? 'file' : 'binary' }
+  if (text === null) return { ...info, kind: infoKind === 'file' ? 'file' : 'binary' }
   let cut = read.cut
   const lines = text.split('\n')
   if (lines.length > 1 && lines.at(-1) === '') lines.pop() // a final line break ends the last line, it starts none
@@ -183,8 +256,8 @@ export function preview(path) {
     text = lines.slice(0, LINE_LIMIT).join('\n')
     cut = true
   }
-  const kind = info.kind === 'file' ? 'text' : info.kind
-  const out = { ...info, kind, text, truncated: cut, lines: Math.min(lines.length, LINE_LIMIT) }
+  const kind = infoKind === 'file' ? 'text' : infoKind
+  const out: Preview = { ...info, kind, text, truncated: cut, lines: Math.min(lines.length, LINE_LIMIT) }
   if (kind === 'json' && !cut) {
     try {
       out.text = JSON.stringify(JSON.parse(text), null, 2)
@@ -195,14 +268,19 @@ export function preview(path) {
 }
 
 /** The system command that opens a file or folder (how: open) or shows it in its folder (reveal), or opens a URL. */
-export function openCommand(target, how = 'open', platform = process.platform) {
-  if (platform === 'win32') return how === 'reveal' ? ['explorer.exe', [`/select,${target}`]] : ['explorer.exe', [target]]
+export function openCommand(
+  target: string,
+  how: 'open' | 'reveal' = 'open',
+  platform: string = process.platform,
+): [string, string[]] {
+  if (platform === 'win32')
+    return how === 'reveal' ? ['explorer.exe', [`/select,${target}`]] : ['explorer.exe', [target]]
   if (platform === 'darwin') return how === 'reveal' ? ['open', ['-R', target]] : ['open', [target]]
   return ['xdg-open', [how === 'reveal' ? dirname(target) : target]]
 }
 
 /** Run openCommand; resolves when it started. explorer.exe exits 1 even when it worked, so its code is ignored. */
-export function openWith(target, how = 'open') {
+export function openWith(target: string, how: 'open' | 'reveal' = 'open'): Promise<{ ok: boolean; error?: string }> {
   const [cmd, args] = openCommand(target, how)
   return new Promise(res => {
     const child = execFile(cmd, args, { windowsHide: false }, () => {})

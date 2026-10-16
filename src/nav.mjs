@@ -2,7 +2,7 @@
 // the board (q, or the board key again) goes back there.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { herdr } from './herdr.mjs'
+import { herdr } from './adapters/herdr.ts'
 import { stateDir } from './adapters/paths.ts'
 
 const RETURN_FILE = join(stateDir(), 'return.json')

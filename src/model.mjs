@@ -3,7 +3,7 @@
 import { attentionOf, busy, columnOf, PINS } from './core/board.ts'
 import { categoryFor } from './core/categories.ts'
 import { liveSessions, transcriptInfo, transcriptPath } from './claude.mjs'
-import { snapshot } from './herdr.mjs'
+import { snapshot } from './adapters/herdr.ts'
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { t } from './core/lang.ts'

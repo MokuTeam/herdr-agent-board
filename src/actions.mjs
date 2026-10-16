@@ -2,7 +2,7 @@
 // returns { ok: true } or { ok: false, error } with a message for the user.
 import { execFile } from 'node:child_process'
 import { hostname } from 'node:os'
-import { herdr, herdrText } from './herdr.mjs'
+import { herdr, herdrText } from './adapters/herdr.ts'
 import { t } from './core/lang.ts'
 import { inputDraft } from './core/dialogs/input-box.ts'
 
