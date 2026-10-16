@@ -4,5 +4,5 @@
     "formatter": { "quoteStyle": "single", "semicolons": "asNeeded", "arrowParentheses": "asNeeded" }
   },
   "linter": { "enabled": true, "rules": { "recommended": true } },
-  "files": { "includes": ["**/*.ts", "**/*.tsx"] }
+  "files": { "includes": ["**/*.ts", "**/*.tsx", "!**/node_modules", "!.superpowers"] }
 }
