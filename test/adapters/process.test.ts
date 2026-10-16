@@ -26,7 +26,7 @@ test('a timeout ends the launcher and everything it started', async () => {
       script,
       [
         "import { spawn } from 'node:child_process'",
-        "const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })",
+        "const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore', detached: process.platform === 'win32' })",
         'console.log("grandchild=" + child.pid)',
         "child.on('exit', () => process.exit(0))",
         'setTimeout(() => {}, 60000)',

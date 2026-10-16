@@ -14,7 +14,7 @@ export class HerdrError extends Error {
 
 /** A herdr token value, e.g. `agent_session: { value: '<claude session id>' }`. */
 export interface HerdrToken {
-  value?: string
+  value?: string | null
   [key: string]: unknown
 }
 
