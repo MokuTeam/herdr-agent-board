@@ -212,6 +212,25 @@ export function dropLit(target: DropTarget | null, place: DropPlace): DropLit | 
   return target.cat ? { lane: place.lane, column: null } : null
 }
 
+export interface DragAfterDraw {
+  /** The session is still on the board. */
+  known: boolean
+  /** The dragged card's element is still in the page. */
+  connected: boolean
+  /** The page has a card for it again (React drew it anew, in another column). */
+  redrawn: boolean
+}
+
+/**
+ * What becomes of a drag when the board is drawn while it goes on: the session left the board →
+ * it ends, ghost and all; its card was drawn anew elsewhere → it goes on with that element.
+ */
+export function dragAfterDraw({ known, connected, redrawn }: DragAfterDraw): 'keep' | 'follow' | 'cancel' {
+  if (!known) return 'cancel'
+  if (connected) return 'keep'
+  return redrawn ? 'follow' : 'cancel'
+}
+
 /** px to scroll the page by for a pointer at `y`: up near the top, down above the bottom (and a panel there). */
 export function edgeScroll(y: number, viewportHeight: number, roomBelow: number): number {
   if (y < DRAG.edgeTop) return -DRAG.scrollStep

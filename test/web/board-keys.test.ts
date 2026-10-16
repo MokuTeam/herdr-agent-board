@@ -1,7 +1,8 @@
 // The board's keys, pinned from the old keydown handler (web/app.js:1965-1996): which action a
 // key press takes, given what is open and focused.
 import { describe, expect, test } from 'bun:test'
-import { boardKey, type KeyPress, type KeyScene } from '../../web/src/models/board-keys.ts'
+import { boardKey, type KeyPress, type KeyScene, stopsNativeClear } from '../../web/src/models/board-keys.ts'
+import { boardUi, initialUi } from '../../web/src/state/board-ui.ts'
 
 const press = (key: string, mods: Partial<Omit<KeyPress, 'key'>> = {}): KeyPress => ({
   key,
@@ -13,6 +14,7 @@ const press = (key: string, mods: Partial<Omit<KeyPress, 'key'>> = {}): KeyPress
 })
 const scene = (fields: Partial<KeyScene> = {}): KeyScene => ({
   typing: false,
+  inSearch: false,
   panelOpen: false,
   query: '',
   quickLook: false,
@@ -26,6 +28,31 @@ describe('Escape', () => {
     expect(boardKey(press('Escape'), scene({ panelOpen: true, query: 'x' }))).toBe('closePanel')
     expect(boardKey(press('Escape'), scene({ query: 'x' }))).toBe('clearQuery')
     expect(boardKey(press('Escape'), scene())).toBeNull()
+  })
+
+  test('in the search: the first leaves the box with the filter kept, the second clears it', () => {
+    let ui = boardUi(
+      initialUi((_key, fallback) => fallback),
+      { type: 'query', text: 'gam' },
+    )
+    // First Escape, typing in the search: leave the box; the browser must not clear it by itself.
+    const typed = scene({ typing: true, inSearch: true, query: ui.query })
+    const first = boardKey(press('Escape'), typed)
+    expect(first).toBe('blur')
+    expect(stopsNativeClear(first, typed)).toBe(true)
+    expect(ui.query).toBe('gam') // a blur leaves the page state as it is: still filtered (N walks the matches)
+    // Second Escape, the box left: the search clears.
+    const second = boardKey(press('Escape'), scene({ query: ui.query }))
+    expect(second).toBe('clearQuery')
+    ui = boardUi(ui, { type: 'query', text: '' })
+    expect(ui.query).toBe('')
+    expect(boardKey(press('Escape'), scene({ query: ui.query }))).toBeNull()
+  })
+
+  test('other fields (the message box) are only left; nothing else stops the browser', () => {
+    expect(stopsNativeClear('blur', scene({ typing: true }))).toBe(false)
+    expect(stopsNativeClear('clearQuery', scene({ inSearch: true }))).toBe(false)
+    expect(stopsNativeClear(null, scene({ typing: true, inSearch: true }))).toBe(false)
   })
 })
 

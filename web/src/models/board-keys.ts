@@ -12,6 +12,8 @@ export interface KeyPress {
 export interface KeyScene {
   /** A text field has the focus. */
   typing: boolean
+  /** That field is a search field (`type=search`, the toolbar's). */
+  inSearch: boolean
   /** A side panel is open. */
   panelOpen: boolean
   query: string
@@ -51,3 +53,9 @@ export function boardKey(e: KeyPress, s: KeyScene): BoardKey {
   if (e.key === '/' && !s.typing) return 'search'
   return null
 }
+
+/**
+ * The first Escape in the search leaves the box and keeps the filter; the second clears it. A
+ * browser clears a search field on Escape by itself, so the first one stops that.
+ */
+export const stopsNativeClear = (action: BoardKey, s: KeyScene): boolean => action === 'blur' && s.inSearch

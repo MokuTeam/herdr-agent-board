@@ -4,7 +4,7 @@
 // the quick look, the menus, the launch window and rename come with later tasks: until they
 // give their part, it does nothing.
 import { useEffect } from 'react'
-import { boardKey } from '../models/board-keys.ts'
+import { boardKey, type KeyScene, stopsNativeClear } from '../models/board-keys.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { useLatest } from './useLatest.ts'
 import { laneContext, type OpenLaunch } from './useNewSession.ts'
@@ -46,15 +46,19 @@ export function useBoardKeys(opts: BoardKeysOptions): void {
         !!open &&
         !!o.sessionPanelOpen?.() &&
         (sheetFocus || active?.closest('.card')?.getAttribute('data-key') === open)
-      const scene = {
+      const scene: KeyScene = {
         typing,
+        inSearch: active instanceof HTMLInputElement && active.type === 'search',
         panelOpen: o.panelOpen?.() ?? false,
         query: b.ui.query,
         quickLook: o.quickLookOpen?.() ?? false,
         digits,
       }
-      switch (boardKey(e, scene)) {
+      const action = boardKey(e, scene)
+      switch (action) {
         case 'blur':
+          // Leave the field, keep the filter: the second Escape clears the search.
+          if (stopsNativeClear(action, scene)) e.preventDefault()
           if (active instanceof HTMLElement) active.blur()
           return
         case 'closePanel':

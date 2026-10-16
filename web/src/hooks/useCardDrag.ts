@@ -1,12 +1,21 @@
 // Drag a card to another lane or column. A press becomes a drag after 6 px; a ghost of the card
 // then follows the pointer 1:1 (lifted a little), the drop place lights up, the page scrolls at
 // its edges, and on release the ghost lands where the card lives with the pointer's velocity.
-import { type PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import {
   DRAG,
   type DropLit,
   type DropPlace,
   type DropTarget,
+  dragAfterDraw,
   dragStarted,
   dropLit,
   edgeScroll,
@@ -56,6 +65,8 @@ interface Drag {
   ghost: Ghost | null
   target: DropTarget | null
   lit: DropLit | null
+  /** Listens on `card` (the pointer is captured there) and makes it the drag's card. */
+  attach(card: HTMLElement): void
   release(): void
 }
 
@@ -67,6 +78,12 @@ function placeAt(el: Element | null): DropPlace {
 }
 
 const sameLit = (a: DropLit | null, b: DropLit | null) => a?.lane === b?.lane && a?.column === b?.column
+
+/** The card of `key` in the page (not a ghost), when there is one. */
+const cardElement = (key: string): HTMLElement | undefined =>
+  [...document.querySelectorAll<HTMLElement>('.card[data-key]')].find(
+    el => el.dataset.key === key && !el.classList.contains('ghost'),
+  )
 
 /** The ghost: a copy of the card on top of everything, springs for its place and its lift. */
 function lift(d: Drag): Ghost | null {
@@ -96,12 +113,28 @@ export function useCardDrag(opts: DragOptions): DragHandlers {
   const current = useRef<Drag | null>(null)
   const dragged = useRef<{ key: string; at: number } | null>(null)
 
+  /** The drag ends without a drop: no listener, ghost, light or faded card stays behind. */
+  const cancel = useCallback((d: Drag) => {
+    if (current.current === d) current.current = null
+    d.release()
+    if (d.ghost) {
+      for (const spring of [d.ghost.x, d.ghost.y, d.ghost.s]) spring.stop()
+      d.ghost.el.remove()
+    }
+    d.card.classList.remove('placeholder')
+    document.body.classList.remove('dragging')
+    setLit(null)
+    setPlaceholder(key => (key === d.key ? null : key))
+  }, [])
+
   const onPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLElement>, key: string) => {
       const onControl = e.target instanceof Element && !!e.target.closest('[data-act], [data-launch]')
       const { canEdit, known } = options.current
       const start = { canEdit: canEdit(), pointerType: e.pointerType, button: e.button, onControl, known: known(key) }
       if (!mayDrag(start)) return
+      // A drag that never saw its release (a pointer lost elsewhere) ends here, without a drop.
+      if (current.current) cancel(current.current)
       const card = e.currentTarget
       const rect = card.getBoundingClientRect()
       const d: Drag = {
@@ -115,6 +148,7 @@ export function useCardDrag(opts: DragOptions): DragHandlers {
         ghost: null,
         target: null,
         lit: null,
+        attach: () => {},
         release: () => {},
       }
 
@@ -177,31 +211,59 @@ export function useCardDrag(opts: DragOptions): DragHandlers {
         }
       }
 
-      d.release = () => {
-        card.removeEventListener('pointermove', move)
-        card.removeEventListener('pointerup', end)
-        card.removeEventListener('pointercancel', end)
+      // The pointer taken away from the card (not by its release, nor taken back after a draw):
+      // the drag ends, no drop.
+      const lost = () => {
+        if (current.current === d && !d.card.hasPointerCapture(d.id)) cancel(d)
       }
-      current.current?.release()
+
+      d.attach = (el: HTMLElement) => {
+        d.release()
+        d.card = el
+        el.addEventListener('pointermove', move)
+        el.addEventListener('pointerup', end)
+        el.addEventListener('pointercancel', end)
+        el.addEventListener('lostpointercapture', lost)
+        d.release = () => {
+          el.removeEventListener('pointermove', move)
+          el.removeEventListener('pointerup', end)
+          el.removeEventListener('pointercancel', end)
+          el.removeEventListener('lostpointercapture', lost)
+        }
+      }
       current.current = d
       card.setPointerCapture(e.pointerId)
-      card.addEventListener('pointermove', move)
-      card.addEventListener('pointerup', end)
-      card.addEventListener('pointercancel', end)
+      d.attach(card)
     },
-    [options],
+    [options, cancel],
   )
+
+  // After every draw of the board: a session that left mid-drag ends the drag; a card React drew
+  // anew (another column) takes the drag over. Moving or replacing the card's node drops the
+  // pointer capture (the old page lost its drag then): it is taken back before the next event.
+  useLayoutEffect(() => {
+    const d = current.current
+    if (!d) return
+    const next = d.card.isConnected ? d.card : cardElement(d.key)
+    const fate = dragAfterDraw({ known: options.current.known(d.key), connected: d.card.isConnected, redrawn: !!next })
+    if (fate === 'cancel' || !next) {
+      cancel(d)
+      return
+    }
+    if (fate === 'follow') d.attach(next)
+    try {
+      if (!next.hasPointerCapture(d.id)) next.setPointerCapture(d.id)
+    } catch {
+      cancel(d) // the pointer is up already: its release went to a card that is gone
+    }
+  })
 
   // The board going away mid-drag: no listener or ghost stays behind.
   useEffect(
     () => () => {
-      const d = current.current
-      if (!d) return
-      d.release()
-      d.ghost?.el.remove()
-      document.body.classList.remove('dragging')
+      if (current.current) cancel(current.current)
     },
-    [],
+    [cancel],
   )
 
   const justDragged = useCallback(

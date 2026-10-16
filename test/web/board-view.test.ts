@@ -12,6 +12,7 @@ import {
   catOf,
   colOf,
   DRAG,
+  dragAfterDraw,
   dragStarted,
   dropLit,
   dropTarget,
@@ -238,6 +239,14 @@ describe('dragging a card', () => {
       lane: 'other',
       column: 'me',
     })
+  })
+
+  test('a board drawn mid-drag: the session gone ends the drag; its card drawn anew carries it on', () => {
+    expect(dragAfterDraw({ known: true, connected: true, redrawn: true })).toBe('keep')
+    expect(dragAfterDraw({ known: true, connected: false, redrawn: true })).toBe('follow')
+    expect(dragAfterDraw({ known: true, connected: false, redrawn: false })).toBe('cancel')
+    expect(dragAfterDraw({ known: false, connected: true, redrawn: true })).toBe('cancel')
+    expect(dragAfterDraw({ known: false, connected: false, redrawn: false })).toBe('cancel')
   })
 
   test('near the top or above a bottom panel the page scrolls 14 px per move', () => {
