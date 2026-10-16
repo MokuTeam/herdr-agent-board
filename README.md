@@ -337,7 +337,7 @@ dictionary there plus its plural rule; a test checks that every dictionary has e
 - herdr state, transcripts, sleeping sessions: every `refreshSec` (2 s).
 - config.json, edited by hand or from the web board: the running board reloads it, the web
   board and the terminal board redraw, and the agents' next brief lists the new categories.
-- Plugin code: the pane runs `src/run.mjs`, which restarts the board when a file in `src/`
+- Plugin code: the pane runs `src/entrypoints/run.ts`, which restarts the board when a file in `src/`
   changes (by its time and size: on Windows a plain read fires the watcher too); open web pages
   reload themselves when a file in `web/` changes.
 
@@ -351,7 +351,7 @@ Herdr data can be collected again. Opening the SSE connection alone does not mar
 SSE sends the board again only when it changed (stale included); GET always has the latest
 `lastSuccessfulRefreshAt`.
 
-Claude usage (`src/statusline.mjs`, `src/usage.mjs`): the install action sets Claude Code's status line
+Claude usage (`src/entrypoints/statusline.ts`, `src/adapters/claude-home.ts`): the install action sets Claude Code's status line
 to the board's own command when there is none (a status line someone else set stays). Claude runs it
 after every reply with the session's state; it keeps the account's 5h and 7d usage windows
 (`claude-limits-latest.json` in the state folder, the usagebar shape) and each session's context fill

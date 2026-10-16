@@ -1,3 +1,7 @@
+// @ts-nocheck
+// biome-ignore-all lint: the JavaScript of tui.mjs, only moved; typed and checked once split into src/tui/
+// biome-ignore-all format: the JavaScript of tui.mjs, only moved; formatted once split into src/tui/
+// biome-ignore-all assist: the JavaScript of tui.mjs, only moved
 // The board: a full-screen terminal UI in a herdr plugin pane. No model in the loop: it polls
 // herdr, the Claude registry, transcript tails and the card files, and redraws.
 //   lanes = categories, columns = Working / Needs me / Waiting on others / Done / Idle
@@ -6,21 +10,21 @@
 //   q / Esc: back to where you were (an overlay board closes instead); Ctrl+C: close the board.
 import { mkdirSync, readFileSync, unlinkSync, watch, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { liveConfig } from './adapters/config-file.ts'
-import { COLUMNS, noteOf, statusText } from './core/board.ts'
-import { categoryInfo, laneRank } from './core/categories.ts'
-import * as actions from './services/actions.ts'
-import { defaultDeps } from './services/deps.ts'
-import { t } from './core/lang.ts'
-import { collect } from './services/board.ts'
-import { goBack } from './services/nav.ts'
-import { startServer } from './server/app.ts'
-import { openWeb } from './web-open.mjs'
-import { boardFile, cardsDir, stateDir } from './adapters/paths.ts'
-import { listEntries } from './adapters/schedule-store.ts'
-import { startScheduler } from './services/scheduler.ts'
-import { writeCard } from './adapters/cards.ts'
-import { shortWhen } from './core/when-format.ts'
+import { liveConfig } from '../adapters/config-file.ts'
+import { COLUMNS, noteOf, statusText } from '../core/board.ts'
+import { categoryInfo, laneRank } from '../core/categories.ts'
+import * as actions from '../services/actions.ts'
+import { defaultDeps } from '../services/deps.ts'
+import { t } from '../core/lang.ts'
+import { collect } from '../services/board.ts'
+import { goBack } from '../services/nav.ts'
+import { startServer } from '../server/app.ts'
+import { openWeb } from './web-open.ts'
+import { boardFile, cardsDir, stateDir } from '../adapters/paths.ts'
+import { listEntries } from '../adapters/schedule-store.ts'
+import { startScheduler } from '../services/scheduler.ts'
+import { writeCard } from '../adapters/cards.ts'
+import { shortWhen } from '../core/when-format.ts'
 
 // Updated in place when config.json changes (by hand or from the web board).
 const cfg = liveConfig(() => {
@@ -592,7 +596,7 @@ writeFileSync(boardFile(), JSON.stringify({ pane: PANE, pid: process.pid, overla
 process.on('SIGINT', () => quit())
 process.on('SIGTERM', () => quit())
 process.on('SIGHUP', () => quit())
-// run.mjs asks for a restart when the plugin's code changed: put the terminal back, then go.
+// run.ts asks for a restart when the plugin's code changed: put the terminal back, then go.
 process.on('message', m => m === 'restart' && quit(75))
 process.on('uncaughtException', err => {
   cleanup()

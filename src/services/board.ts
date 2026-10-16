@@ -67,7 +67,7 @@ function asContextFile(value: unknown): ContextFile {
 }
 
 /**
- * How full a session's context is. The status line (statusline.mjs) says it best, percentage and
+ * How full a session's context is. The status line (entrypoints/statusline.ts) says it best, percentage and
  * window size included; without it, the tokens of the last request from the transcript.
  */
 interface ContextFill {

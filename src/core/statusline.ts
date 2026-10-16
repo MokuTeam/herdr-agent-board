@@ -1,5 +1,5 @@
 // What the board keeps from Claude Code's status line input, and the line it prints back.
-// The files and the process around it live in src/statusline.mjs.
+// The files and the process around it live in src/entrypoints/statusline.ts.
 
 export type UsageWindow = { usedPercentage: number; resetsAt: number | null }
 export type UsageSnapshot = { fetchedAtMs: number; fiveHour?: UsageWindow; sevenDay?: UsageWindow }

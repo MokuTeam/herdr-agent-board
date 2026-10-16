@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // `board`: how agents keep their card current. Prints one line, so a call costs next to nothing.
 //   board                    show this session's card
 //   board cat <id> [title]   set the category (lane); a new id with a title is added to the config
@@ -18,26 +17,28 @@
 //   board unschedule <id|all>    removes an entry (all: every entry of this session)
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync } from 'node:fs'
-import { configFile, editCategories, loadConfig } from './adapters/config-file.ts'
-import { COLUMNS, noteOf, statusText } from './core/board.ts'
-import { categoryFor, categoryInfo, laneRank } from './core/categories.ts'
-import { defaultClaudeHome } from './adapters/claude-home.ts'
-import { snapshot } from './adapters/herdr.ts'
-import { t } from './core/lang.ts'
-import { collect } from './services/board.ts'
-import { defaultDeps } from './services/deps.ts'
-import { boardFile } from './adapters/paths.ts'
-import { addEntry, listEntries, removeEntry } from './adapters/schedule-store.ts'
-import { readCard, writeCard } from './adapters/cards.ts'
-import { nextRun, parseCron, parseWhen, shortestGap } from './core/when.ts'
-import { shortWhen } from './core/when-format.ts'
+import { readCard, writeCard } from '../adapters/cards.ts'
+import { defaultClaudeHome } from '../adapters/claude-home.ts'
+import { configFile, editCategories, loadConfig } from '../adapters/config-file.ts'
+import { type HerdrPane, snapshot } from '../adapters/herdr.ts'
+import { isRecord } from '../adapters/json-store.ts'
+import { boardFile } from '../adapters/paths.ts'
+import { addEntry, listEntries, removeEntry } from '../adapters/schedule-store.ts'
+import { COLUMNS, noteOf, statusText } from '../core/board.ts'
+import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
+import { t } from '../core/lang.ts'
+import type { ScheduleEntry, SessionRef } from '../core/schedule-rules.ts'
+import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
+import { shortWhen } from '../core/when-format.ts'
+import { collect } from '../services/board.ts'
+import { defaultDeps } from '../services/deps.ts'
 
 const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | schedule [--all] | unschedule <id|all>] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
 const args = process.argv.slice(2)
-let target = null
+let target: string | undefined
 const si = args.indexOf('--session')
 if (si >= 0) {
   target = args[si + 1]
@@ -47,8 +48,8 @@ if (si >= 0) {
 const ii = args.indexOf('--idle')
 const idle = ii >= 0
 if (idle) args.splice(ii, 1)
-const mode = () => (idle ? { idle: true } : {})
-const modeText = () => (idle ? ', when the session is free' : '')
+const mode = (): { idle?: true } => (idle ? { idle: true } : {})
+const modeText = (): string => (idle ? ', when the session is free' : '')
 const [cmd = 'show', ...rest] = args
 const text = rest.join(' ').replace(/\s+/g, ' ').trim()
 const cfg = loadConfig()
@@ -56,35 +57,59 @@ const deps = defaultDeps(cfg)
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/** The session a command is about. */
+interface Session {
+  key: string
+  cwd: string
+  name?: string | undefined
+  pane?: string | null | undefined
+}
+
+const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+const paneOf = async (pane: string): Promise<HerdrPane | undefined> =>
+  (await snapshot()).panes.find(x => x.pane_id === pane)
+
 /** { key, cwd } of the session the command is about. */
-async function resolveSession() {
+async function resolveSession(): Promise<Session> {
   if (target) {
     if (UUID.test(target)) return { key: target, cwd: '' }
     const t = target.toLowerCase()
-    const item = (await collect(deps)).find(i => [i.name, i.autoName, i.pane, i.session].some(v => v && v.toLowerCase() === t))
+    const item = (await collect(deps)).find(i =>
+      [i.name, i.autoName, i.pane, i.session].some(v => v && v.toLowerCase() === t),
+    )
     if (!item) throw new Error(`no session "${target}" on the board`)
     return { key: item.key, cwd: item.cwd, name: item.name, pane: item.pane }
   }
   const own = process.env.CLAUDE_CODE_SESSION_ID
-  if (own) return { key: own, cwd: process.cwd(), name: defaultClaudeHome().liveSessions().get(own)?.name, pane: process.env.HERDR_PANE_ID }
+  if (own) {
+    return {
+      key: own,
+      cwd: process.cwd(),
+      name: defaultClaudeHome().liveSessions().get(own)?.name,
+      pane: process.env.HERDR_PANE_ID,
+    }
+  }
   const pane = process.env.HERDR_PANE_ID
   if (pane) {
-    const p = (await snapshot()).panes.find(x => x.pane_id === pane)
+    const p = await paneOf(pane)
     if (p?.agent) return { key: p.agent_session?.value ?? `pane-${pane}`, cwd: p.cwd ?? '', pane }
   }
   throw new Error('cannot tell which session this is: run it from a Claude session, or pass --session')
 }
 
 /** The session running this command, { key, name }, or null outside one. */
-async function ownSession() {
+async function ownSession(): Promise<SessionRef | null> {
   const own = process.env.CLAUDE_CODE_SESSION_ID
   const pane = process.env.HERDR_PANE_ID
-  let p = null
+  let p: HerdrPane | undefined
   try {
-    if (pane) p = (await snapshot()).panes.find(x => x.pane_id === pane)
+    if (pane) p = await paneOf(pane)
   } catch {}
   const key = own || (p?.agent ? (p.agent_session?.value ?? `pane-${pane}`) : null)
-  return key ? { key, name: (own && defaultClaudeHome().liveSessions().get(own)?.name) || p?.terminal_title_stripped || key.slice(0, 8) } : null
+  if (!key) return null
+  const name =
+    (own && defaultClaudeHome().liveSessions().get(own)?.name) || p?.terminal_title_stripped || key.slice(0, 8)
+  return { key, name }
 }
 
 /**
@@ -93,10 +118,10 @@ async function ownSession() {
  * with), not this shell's, which a `cd` may have moved; `from` is who set it, when that is
  * another session.
  */
-async function entryFor(s) {
+async function entryFor(s: Session) {
   let cwd = ''
   try {
-    if (s.pane) cwd = (await snapshot()).panes.find(x => x.pane_id === s.pane)?.cwd ?? ''
+    if (s.pane) cwd = (await paneOf(s.pane))?.cwd ?? ''
   } catch {}
   cwd ||= defaultClaudeHome().liveSessions().get(s.key)?.cwd || s.cwd || ''
   const setter = target ? await ownSession() : null
@@ -109,28 +134,39 @@ async function entryFor(s) {
   }
 }
 
-/** A note for the agent when no board with the scheduler runs to send it. */
-async function schedulerNote() {
+/** Whether a board that runs the schedule answers now. */
+async function schedulerRuns(): Promise<boolean> {
   try {
     if (cfg.web === false) {
-      // The terminal board runs the schedule itself then (tui.mjs).
-      process.kill(JSON.parse(readFileSync(boardFile(), 'utf8')).pid, 0)
-      return ''
+      // The terminal board runs the schedule itself then (entrypoints/tui.ts).
+      const board: unknown = JSON.parse(readFileSync(boardFile(), 'utf8'))
+      const pid = isRecord(board) ? board.pid : undefined
+      if (typeof pid !== 'number') return false
+      process.kill(pid, 0)
+      return true
     }
     const res = await fetch(`http://127.0.0.1:${cfg.port ?? 12422}/api/board`, { signal: AbortSignal.timeout(1500) })
-    if ('schedules' in (await res.json())) return ''
-  } catch {}
+    const body: unknown = await res.json()
+    return isRecord(body) && 'schedules' in body
+  } catch {
+    return false
+  }
+}
+
+/** A note for the agent when no board with the scheduler runs to send it. */
+async function schedulerNote(): Promise<string> {
+  if (await schedulerRuns()) return ''
   return ' · note: no board with the scheduler is running now; this goes out once one runs (late, with a note)'
 }
 
 // Times for agents: unambiguous, in local time.
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const pad = n => String(n).padStart(2, '0')
-function stamp(ms) {
+const pad = (n: number): string => String(n).padStart(2, '0')
+function stamp(ms: number): string {
   const d = new Date(ms)
   return `${WEEKDAYS[d.getDay()]} ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
-function fromNow(ms, now) {
+function fromNow(ms: number, now: number): string {
   const min = Math.round(Math.abs(ms - now) / 60_000)
   const d = Math.floor(min / 1440)
   const h = Math.floor((min % 1440) / 60)
@@ -138,17 +174,22 @@ function fromNow(ms, now) {
   const span = parts.filter(Boolean).join(' ')
   return ms >= now ? `in ${span}` : `${span} ago`
 }
-const clip = (s, n = 60) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
+const clip = (s: string, n = 60): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 
-function entryLine(e, now, withSession) {
-  const parts = [e.id, `${stamp(e.next)} (${fromNow(e.next, now)})`, e.cron ? `every "${e.cron}"` : 'once', e.idle ? 'when free' : 'on time']
+function entryLine(e: ScheduleEntry, now: number, withSession: boolean): string {
+  const parts = [
+    e.id,
+    `${stamp(e.next)} (${fromNow(e.next, now)})`,
+    e.cron ? `every "${e.cron}"` : 'once',
+    e.idle ? 'when free' : 'on time',
+  ]
   if (withSession) parts.push(e.name || e.key)
-  if (e.pendingSince) parts.push(`due, waits for the session since ${stamp(e.pendingSince)}`)
+  if (e.pendingSince) parts.push(`due, waits for the session since ${stamp(Number(e.pendingSince))}`)
   parts.push(clip(e.text, 80))
   return parts.join(' · ')
 }
 
-function line(key, cwd) {
+function line(key: string, cwd: string): string {
   const card = readCard(key) ?? {}
   const cat = card.category || categoryFor(cfg, cwd)
   const parts = [cat ? `${cat}${card.category ? '' : ' (guessed)'}` : 'category: not set']
@@ -159,7 +200,7 @@ function line(key, cwd) {
   return parts.join(' · ')
 }
 
-async function main() {
+async function main(): Promise<void> {
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') return console.log(USAGE)
 
   if (cmd === 'cats') {
@@ -170,14 +211,22 @@ async function main() {
   if (cmd === 'list') {
     const items = await collect(deps)
     const order = new Map(COLUMNS.map((c, i) => [c.id, i]))
-    items.sort((a, b) => laneRank(cfg, a.category) - laneRank(cfg, b.category) || a.category.localeCompare(b.category) || order.get(a.column) - order.get(b.column))
-    const soonest = new Map()
+    items.sort(
+      (a, b) =>
+        laneRank(cfg, a.category) - laneRank(cfg, b.category) ||
+        a.category.localeCompare(b.category) ||
+        (order.get(a.column) ?? 0) - (order.get(b.column) ?? 0),
+    )
+    const soonest = new Map<string, number>()
     for (const e of listEntries()) if (!soonest.has(e.key)) soonest.set(e.key, e.next)
     for (const i of items) {
-      const col = COLUMNS.find(c => c.id === i.column).title
+      const col = COLUMNS.find(c => c.id === i.column)?.title
       const note = noteOf(i)
-      const alarm = soonest.has(i.key) ? ` ⏰ ${shortWhen(soonest.get(i.key), t)}` : ''
-      console.log(`${i.name} [${i.category}] ${col}${i.sleeping ? ` (${statusText('sleeping')})` : ''}${alarm}${note ? `: ${note.slice(0, 80)}` : ''}`)
+      const next = soonest.get(i.key)
+      const alarm = next !== undefined ? ` ⏰ ${shortWhen(next, t)}` : ''
+      console.log(
+        `${i.name} [${i.category}] ${col}${i.sleeping ? ` (${statusText('sleeping')})` : ''}${alarm}${note ? `: ${note.slice(0, 80)}` : ''}`,
+      )
     }
     return
   }
@@ -192,7 +241,9 @@ async function main() {
   if (cmd === 'unschedule' && rest[0] && rest[0].toLowerCase() !== 'all') {
     const e = removeEntry(rest[0].toLowerCase())
     if (!e) throw new Error(`no entry "${rest[0]}"; see board schedule`)
-    return console.log(`ok · removed ${e.id} (${e.cron ? `every "${e.cron}"` : stamp(e.next)}${e.name ? `, ${e.name}` : ''}): ${clip(e.text)}`)
+    return console.log(
+      `ok · removed ${e.id} (${e.cron ? `every "${e.cron}"` : stamp(e.next)}${e.name ? `, ${e.name}` : ''}): ${clip(e.text)}`,
+    )
   }
 
   const s = await resolveSession()
@@ -208,7 +259,8 @@ async function main() {
       if (title && !cfg.categories.some(c => c.id === id)) {
         const r = editCategories({ op: 'create', id, title })
         if (!r.ok) throw new Error(r.error)
-        cfg.categories.push({ id, title })
+        // As editCategories saved it: no color given is blue, no folders.
+        cfg.categories.push({ id, title, color: 'blue', paths: [] })
       }
       writeCard(s.key, { category: id })
       break
@@ -223,7 +275,7 @@ async function main() {
       writeCard(s.key, { wait: text, waitSince: now, by: 'agent' })
       break
     case 'ask':
-      // Needs the user: the card goes to "Needs me" until the user's next prompt (hook.mjs clears it).
+      // Needs the user: the card goes to "Needs me" until the user's next prompt (entrypoints/hook.ts clears it).
       if (!text) throw new Error('usage: board ask <question>')
       writeCard(s.key, { ask: text, askSince: now, by: 'agent' })
       break
@@ -235,7 +287,7 @@ async function main() {
       break
     case 'remind': {
       // The time is the first one to five words that read as one; the rest is the text.
-      let at = null
+      let at: number | null = null
       let words = 0
       for (let k = Math.min(5, rest.length - 1); k >= 1 && at === null; k--) {
         at = parseWhen(rest.slice(0, k).join(' '), now)
@@ -246,7 +298,9 @@ async function main() {
       if (at <= now) throw new Error(`${stamp(at)} is in the past`)
       if (at > now + 5 * 366 * 86_400_000) throw new Error(`${stamp(at)} is more than five years ahead`)
       const e = addEntry({ ...(await entryFor(s)), ...mode(), text: msg, at, next: at, by: 'agent' })
-      return console.log(`ok · reminder ${e.id} ${stamp(at)} (${fromNow(at, now)}${modeText()}): ${clip(msg)} · cancel: board unschedule ${e.id}${await schedulerNote()}`)
+      return console.log(
+        `ok · reminder ${e.id} ${stamp(at)} (${fromNow(at, now)}${modeText()}): ${clip(msg)} · cancel: board unschedule ${e.id}${await schedulerNote()}`,
+      )
     }
     case 'every': {
       // The cron in one quoted word, or its five fields as they are (PowerShell leaves * alone).
@@ -256,20 +310,27 @@ async function main() {
         expr = rest.slice(0, 5).join(' ')
         words = 5
       }
-      let cron
+      let cron: Cron
       try {
         cron = parseCron(expr)
       } catch (err) {
-        throw new Error(`${err.message}. usage: board every "<minute hour day month weekday>" "<text>", e.g. board every "0 9 * * 1-5" "check the inbox"; quote the schedule`)
+        throw new Error(
+          `${messageOf(err)}. usage: board every "<minute hour day month weekday>" "<text>", e.g. board every "0 9 * * 1-5" "check the inbox"; quote the schedule`,
+        )
       }
       const msg = rest.slice(words).join(' ').replace(/\s+/g, ' ').trim()
       if (!msg) throw new Error('usage: board every "<cron>" "<text>"')
       const next = nextRun(cron, now)
       if (next === null) throw new Error(`"${cron.expr}" never runs`)
       // Every run is a turn of the session, waking it if need be.
-      if (shortestGap(cron, now) < MIN_REPEAT_MS) throw new Error(`"${cron.expr}" runs more often than every ${MIN_REPEAT_MS / 60_000} minutes; for a one-off wait use board remind`)
+      if (shortestGap(cron, now) < MIN_REPEAT_MS)
+        throw new Error(
+          `"${cron.expr}" runs more often than every ${MIN_REPEAT_MS / 60_000} minutes; for a one-off wait use board remind`,
+        )
       const e = addEntry({ ...(await entryFor(s)), ...mode(), text: msg, cron: cron.expr, next, by: 'agent' })
-      return console.log(`ok · every ${e.id} "${cron.expr}", next ${stamp(next)} (${fromNow(next, now)}${modeText()}): ${clip(msg)} · cancel: board unschedule ${e.id}${await schedulerNote()}`)
+      return console.log(
+        `ok · every ${e.id} "${cron.expr}", next ${stamp(next)} (${fromNow(next, now)}${modeText()}): ${clip(msg)} · cancel: board unschedule ${e.id}${await schedulerNote()}`,
+      )
     }
     case 'schedule': {
       const list = listEntries().filter(e => e.key === s.key)
@@ -292,7 +353,7 @@ async function main() {
   console.log(`ok · ${line(s.key, s.cwd)}${extra}`)
 }
 
-main().catch(err => {
-  console.error(`board: ${err.message}`)
+main().catch((err: unknown) => {
+  console.error(`board: ${messageOf(err)}`)
   process.exit(1)
 })

@@ -7,13 +7,13 @@
 // It never fails loudly: a bad input leaves the line blank and the files as they were.
 import { mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { digest, statusText } from './core/statusline.ts'
-import { contextDir, usageFile } from './adapters/paths.ts'
+import { contextDir, usageFile } from '../adapters/paths.ts'
+import { readStdin } from '../adapters/stdin.ts'
+import { digest, statusText } from '../core/statusline.ts'
 
-const safe = key => String(key).replace(/[^A-Za-z0-9_-]/g, '_')
+const safe = (key: string): string => String(key).replace(/[^A-Za-z0-9_-]/g, '_')
 
-function save(file, data) {
+function save(file: string, data: unknown): void {
   mkdirSync(dirname(file), { recursive: true })
   const tmp = `${file}.${process.pid}.tmp`
   writeFileSync(tmp, JSON.stringify(data))
@@ -21,7 +21,7 @@ function save(file, data) {
 }
 
 /** Context files of sessions gone a week: dropped now and then. */
-function prune(now) {
+function prune(now: number): void {
   for (const name of readdirSync(contextDir())) {
     const file = join(contextDir(), name)
     try {
@@ -30,9 +30,8 @@ function prune(now) {
   }
 }
 
-async function main() {
-  let raw = ''
-  for await (const chunk of process.stdin) raw += chunk
+async function main(): Promise<void> {
+  const raw = await readStdin()
   const now = Date.now()
   const d = digest(JSON.parse(raw || '{}'), now)
   // An input without windows (before the first reply, other plans) keeps the last good ones.
@@ -44,4 +43,4 @@ async function main() {
   process.stdout.write(statusText(d))
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch(() => {})
+main().catch(() => {})

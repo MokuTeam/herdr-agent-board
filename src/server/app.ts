@@ -1,17 +1,16 @@
 // The web board: a small HTTP server (Bun.serve) on 127.0.0.1 that serves web/, the board's data
 // and live updates (Server-Sent Events), and takes the same actions as the terminal board.
-// Runs inside the terminal board's process (tui.mjs); `bun src/server/app.ts` runs it alone.
+// Runs inside the terminal board's process (entrypoints/tui.ts); `bun src/entrypoints/server.ts` runs it alone.
 //
 // Only loopback, only the Host it was asked for, and every POST needs an X-Board header: a page
 // on another site cannot send that without a CORS preflight, which this server never grants, so
 // it cannot type into a session.
 import { type FSWatcher, mkdirSync, watch } from 'node:fs'
 import { join } from 'node:path'
-import { liveConfig } from '../adapters/config-file.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
 import { messageGate } from '../core/message-gate.ts'
-import { type Deps, defaultDeps } from '../services/deps.ts'
+import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { startScheduler } from '../services/scheduler.ts'
 import { createBoardState } from './board-state.ts'
@@ -109,9 +108,18 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
   // No idle timeout: answers that drive a session can take longer than Bun's default 10 s, and the
   // event stream is quiet between pings (main's node:http had none either). Not development: a
   // throw that got past answer() must never serve Bun's error page with the source and the cwd.
+  // No port reuse: without development Bun reuses the port by default, and a second board on it
+  // would start too (two schedulers) instead of failing with EADDRINUSE as on main.
   let server: ReturnType<typeof Bun.serve>
   try {
-    server = Bun.serve({ port, hostname: '127.0.0.1', idleTimeout: 0, development: false, fetch: answer })
+    server = Bun.serve({
+      port,
+      hostname: '127.0.0.1',
+      idleTimeout: 0,
+      development: false,
+      reusePort: false,
+      fetch: answer,
+    })
   } catch (err) {
     // The port is taken (EADDRINUSE, which the terminal board retries): nothing may keep running.
     events.close()
@@ -142,21 +150,4 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
       await server.stop(true)
     },
   }
-}
-
-if (import.meta.main) {
-  let server: BoardServer | undefined
-  const cfg = liveConfig(() => void server?.refresh())
-  startServer({ deps: defaultDeps(cfg, msg => console.error(msg)) })
-    .then(s => {
-      server = s
-      console.log(`agent board: ${s.url}`)
-    })
-    .catch((err: unknown) => {
-      const code = err && typeof err === 'object' && 'code' in err ? err.code : undefined
-      console.error(
-        code === 'EADDRINUSE' ? 'agent board: the port is taken, another board already serves it' : messageOf(err),
-      )
-      process.exit(1)
-    })
 }

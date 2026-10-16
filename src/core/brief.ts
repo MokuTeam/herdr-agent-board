@@ -1,4 +1,4 @@
-// What a Claude session is told about the board (see hook.mjs).
+// What a Claude session is told about the board (see entrypoints/hook.ts).
 import { categoryFor } from './categories.ts'
 import { languageName } from './lang.ts'
 import type { Card, Config } from './types.ts'

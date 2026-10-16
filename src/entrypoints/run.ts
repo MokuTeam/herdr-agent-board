@@ -1,33 +1,40 @@
-// What the board pane runs: keeps the terminal board (tui.mjs) going and restarts it when the
+// What the board pane runs: keeps the terminal board (tui.ts) going and restarts it when the
 // plugin's code changes, so an update reaches the open board (and the web board it serves)
 // without anyone touching herdr. Quitting the board (Ctrl+C) ends the pane as before; a crash
 // leaves its error on screen and waits for the next code change.
-import { spawn } from 'node:child_process'
+import { type ChildProcess, spawn } from 'node:child_process'
 import { readdirSync, statSync, watch } from 'node:fs'
 import { join } from 'node:path'
-import { ROOT } from './adapters/paths.ts'
+import { ROOT } from '../adapters/paths.ts'
 
 const RESTART = 75
-let child = null
+const SRC = join(ROOT, 'src')
+let child: ChildProcess | null = null
 let wanted = false // a restart was asked for, so the exit that follows is not a quit
 
-function start() {
+function start(): void {
   wanted = false
-  child = spawn(process.execPath, [join(ROOT, 'src', 'tui.mjs')], { stdio: ['inherit', 'inherit', 'inherit', 'ipc'], env: process.env })
+  child = spawn(process.execPath, [join(SRC, 'entrypoints', 'tui.ts')], {
+    stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
+    env: process.env,
+  })
   child.on('exit', code => {
-    if (code === RESTART || wanted) return setTimeout(start, 150)
+    if (code === RESTART || wanted) return void setTimeout(start, 150)
     if (code === 0) process.exit(0)
     console.error(`\nagent-board stopped (exit ${code}). It starts again on the next code change.`)
     child = null
   })
 }
 
+// The plugin's code: every .ts file under src/, its folders included.
+const isCode = (name: string): boolean => name.endsWith('.ts')
+
 // On Windows a plain read fires the watcher too (it updates the access time), and the hooks read
 // these files on every prompt of every session: restart only when a file really changed.
-const SRC = join(ROOT, 'src')
-const stamp = () =>
-  readdirSync(SRC)
-    .filter(n => n.endsWith('.mjs'))
+const stamp = (): string =>
+  readdirSync(SRC, { recursive: true, encoding: 'utf8' })
+    .filter(isCode)
+    .sort()
     .map(n => {
       const s = statSync(join(SRC, n), { throwIfNoEntry: false })
       return `${n}:${s?.mtimeMs}:${s?.size}`
@@ -35,9 +42,9 @@ const stamp = () =>
     .join('|')
 let code = stamp()
 
-let timer = null
-watch(SRC, (_, name) => {
-  if (name && !name.endsWith('.mjs')) return
+let timer: ReturnType<typeof setTimeout> | undefined
+watch(SRC, { recursive: true }, (_, name) => {
+  if (name && !isCode(name)) return
   clearTimeout(timer)
   timer = setTimeout(() => {
     const now = stamp()

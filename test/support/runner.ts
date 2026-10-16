@@ -34,7 +34,7 @@ const signal = (message: unknown): void => {
 
 const mode = process.argv[2]
 if (mode === 'open') {
-  await import('../../src/open.mjs')
+  await import('../../src/entrypoints/open.ts')
 } else if (mode === 'send') {
   const { send: sendText } = await import('../../src/services/actions.ts')
   const { defaultDeps } = await import('../../src/services/deps.ts')
@@ -73,8 +73,12 @@ if (mode === 'open') {
   // The board command as an agent runs it: its session's env, herdr answered by the fake.
   const { args, env } = input()
   Object.assign(process.env, env)
-  process.argv = [process.argv[0] ?? '', fileURLToPath(new URL('../../src/cli.mjs', import.meta.url)), ...args]
-  await import('../../src/cli.mjs')
+  process.argv = [
+    process.argv[0] ?? '',
+    fileURLToPath(new URL('../../src/entrypoints/cli.ts', import.meta.url)),
+    ...args,
+  ]
+  await import('../../src/entrypoints/cli.ts')
 } else if (mode === 'scheduler') {
   const { useLanguage } = await import('../../src/core/lang.ts')
   const { startScheduler } = await import('../../src/services/scheduler.ts')

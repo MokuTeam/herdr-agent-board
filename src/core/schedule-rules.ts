@@ -68,7 +68,7 @@ export function promptOf(entry: ScheduleEntry, now: number): string {
     notes.push(
       t(setter ? 'sched.prompt.clearedFor' : 'sched.prompt.cleared', { name: before.name || before.key.slice(0, 8) }),
     )
-  // The tag stays in English: the hook knows a board prompt by it (hook.mjs).
+  // The tag stays in English: the hook knows a board prompt by it (entrypoints/hook.ts).
   const from = setter ? ` from ${setter}` : ''
   const tag = entry.cron ? `board schedule ${entry.id}${from}: ${entry.cron}` : `board reminder${from}`
   return `[${tag}${notes.length ? `; ${notes.join('; ')}` : ''}] ${entry.text}`

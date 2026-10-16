@@ -4,33 +4,33 @@
 //   is a board reminder (services/scheduler.ts); the brief once for sessions that were running before the
 //   install; after that a one-line reminder only while the card says it waits for something.
 // Only sessions in a herdr pane are briefed: `claude -p` runs and other terminals are not on the board.
-import { brief, BRIEF_VERSION, waitReminder } from './core/brief.ts'
-import { loadConfig } from './adapters/config-file.ts'
-import { readCard, writeCard } from './adapters/cards.ts'
+// Claude Code waits for it: an empty or broken input ends it at once, silently, with exit code 0.
+import { readCard, writeCard } from '../adapters/cards.ts'
+import { loadConfig } from '../adapters/config-file.ts'
+import { isRecord } from '../adapters/json-store.ts'
+import { readStdin } from '../adapters/stdin.ts'
+import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
 
-async function readStdin() {
-  let data = ''
-  for await (const chunk of process.stdin) data += chunk
-  return JSON.parse(data || '{}')
-}
+const text = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
 
-async function main() {
-  const input = await readStdin()
-  const event = input.hook_event_name
+async function main(): Promise<void> {
+  const input: unknown = JSON.parse((await readStdin()) || '{}')
+  if (!isRecord(input)) return
+  const event = text(input.hook_event_name)
   const sid = input.session_id
-  if (!sid || !process.env.HERDR_PANE_ID) return
+  if (!sid || typeof sid !== 'string' || !process.env.HERDR_PANE_ID) return
   const card = readCard(sid)
   // The user wrote to the session: whatever it asked them is answered. A reminder from the board's
   // scheduler is not the user, so its ask stays. A column the user dragged the card to has done
   // its job either way: the session works again, which drops the pin anyway (services/board.ts pinOf).
-  const fromBoard = /^\s*\[board (reminder|schedule)\b/.test(input.prompt ?? '')
+  const fromBoard = /^\s*\[board (reminder|schedule)\b/.test(text(input.prompt) ?? '')
   if (event === 'UserPromptSubmit' && (card?.pin || (card?.ask && !fromBoard))) {
     writeCard(sid, { ...(!fromBoard && { ask: '', askSince: '' }), pin: '', pinAt: '', pinBusy: '' })
   }
-  let context = null
+  let context: string | null = null
   const briefed = card?.briefV ?? (card?.briefedAt ? 1 : 0)
-  if (event === 'SessionStart' || (event === 'UserPromptSubmit' && briefed < BRIEF_VERSION)) {
-    context = brief(loadConfig(), card, input.cwd)
+  if (event === 'SessionStart' || (event === 'UserPromptSubmit' && Number(briefed) < BRIEF_VERSION)) {
+    context = brief(loadConfig(), card, text(input.cwd) ?? '')
     writeCard(sid, { briefedAt: Date.now(), briefV: BRIEF_VERSION })
   } else if (event === 'UserPromptSubmit' && card?.wait) {
     context = waitReminder(card)
