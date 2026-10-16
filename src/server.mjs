@@ -13,7 +13,7 @@ import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { focus, send, sleepSession, wake } from './services/actions.ts'
 import { defaultDeps } from './services/deps.ts'
-import { answerPermission, answerQuestions } from './answer.mjs'
+import { answerPermission, answerQuestions } from './services/answer.ts'
 import { checkoutChanges, isCheckout } from './adapters/git.ts'
 import { defaultClaudeHome, readUsageCache } from './adapters/claude-home.ts'
 import { createWebBundle } from './server/web-bundle.ts'
@@ -244,7 +244,7 @@ export async function startServer({ cfg, log = () => {} } = {}) {
       }
       case 'answer':
       case 'permit': {
-        // A question form or a permission prompt, answered with keys in the pane (answer.mjs).
+        // A question form or a permission prompt, answered with keys in the pane (services/answer.ts).
         if ((body.session ?? null) !== (item.session ?? null)) return { ok: false, error: t('err.sessionChanged', { name: item.name }) }
         if (answering.has(item.key)) return { ok: false, error: t('err.qa.busy', { name: item.name }) }
         answering.add(item.key)
@@ -257,7 +257,7 @@ export async function startServer({ cfg, log = () => {} } = {}) {
             return { ok: false, error: t('err.qa.herdr', { why: err.message }) }
           }
           if (!fresh || fresh.session !== item.session || fresh.pane !== item.pane) return { ok: false, error: t('err.sessionChanged', { name: item.name }) }
-          const r = action === 'answer' ? await answerQuestions(fresh, body) : await answerPermission(fresh, body)
+          const r = action === 'answer' ? await answerQuestions(deps, fresh, body) : await answerPermission(fresh, body)
           log(`${action} ${item.name}: ${r.ok ? 'ok' : r.error}`)
           return r
         } finally {

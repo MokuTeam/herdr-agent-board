@@ -1,5 +1,5 @@
 // Claude Code's dialogs in a terminal, read from a pane's screen (`herdr agent read --source
-// visible`), and the keys that answer them. Pure functions; answer.mjs reads and types.
+// visible`), and the keys that answer them. Pure functions; services/answer.ts reads and types.
 //
 // The question dialog (AskUserQuestion), as Claude Code 2.1 draws and drives it:
 // - One question: a header line (" ☐ Color"), the question, numbered options with their
@@ -391,7 +391,7 @@ export function publicDialog(d: Dialog | null | undefined): PublicDialog | null 
 }
 
 /** The screen shows question `q` of the dialog: its text and its options in order. */
-export function onQuestion(d: Dialog | null | undefined, q: FormQuestion): boolean {
+export function onQuestion(d: Dialog | null | undefined, q: FormQuestion): d is QuestionDialog {
   if (d?.kind !== 'question' || flat(d.question) !== flat(q.question)) return false
   if (d.options.length !== q.options.length + (q.preview ? 0 : 1)) return false
   return q.options.every((o, j) => flat(d.options[j]?.text).startsWith(flat(o.label)))

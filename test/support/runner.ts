@@ -41,8 +41,9 @@ if (mode === 'open') {
   const { item, cfg, text } = input()
   console.log(JSON.stringify(await sendText(defaultDeps(cfg), item, text)))
 } else if (mode === 'answer') {
-  // answer.mjs against the fake herdr: a question form, a permission prompt, or one own answer typed.
-  const { answerPermission, answerQuestions, paneIO } = await import('../../src/answer.mjs')
+  // services/answer.ts against the fake herdr: a question form, a permission prompt, or one own answer typed.
+  const { answerPermission, answerQuestions, paneIO } = await import('../../src/services/answer.ts')
+  const { defaultClaudeHome } = await import('../../src/adapters/claude-home.ts')
   const { useLanguage } = await import('../../src/core/lang.ts')
   // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
   useLanguage('en')
@@ -50,7 +51,9 @@ if (mode === 'open') {
   const out =
     kind === 'text'
       ? await paneIO(item.pane).text(text)
-      : await (kind === 'permit' ? answerPermission : answerQuestions)(item, body)
+      : kind === 'permit'
+        ? await answerPermission(item, body)
+        : await answerQuestions({ claude: defaultClaudeHome() }, item, body)
   console.log(JSON.stringify(out ?? null))
 } else if (mode === 'server') {
   const { startServer } = await import('../../src/server.mjs')

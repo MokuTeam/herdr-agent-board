@@ -1,5 +1,7 @@
 // Types shared across the board. Grows with each ported module.
 
+import type { FormQuestion } from './dialogs/question-form.ts'
+
 export type Lang = 'en' | 'ru'
 export type Vars = Record<string, string | number>
 export interface Translator {
@@ -66,7 +68,8 @@ export interface ToolCall {
   label?: string
   detail?: string
   pending?: boolean
-  questions?: unknown
+  /** An AskUserQuestion call's questions as questionsOf read them (null: the board cannot answer it). */
+  questions?: FormQuestion[] | null
 }
 
 export interface TranscriptInfo {

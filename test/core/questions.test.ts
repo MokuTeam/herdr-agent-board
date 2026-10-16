@@ -1,7 +1,6 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { drivePermission, driveQuestions } from '../../src/answer.mjs'
 import type { FormQuestion } from '../../src/core/dialogs/question-form.ts'
 import {
   type AnswerPick,
@@ -21,6 +20,7 @@ import {
   screenIndex,
   typedOther,
 } from '../../src/core/dialogs/questions.ts'
+import { drivePermission, driveQuestions } from '../../src/services/answer.ts'
 import { FakeDialog } from '../support/fake-dialog.ts'
 
 // A checkout with core.autocrlf turns the screens into CRLF; herdr gives LF.
@@ -175,7 +175,7 @@ test('an own answer: one line, no control or direction characters', () => {
   assert.equal(other(' two\r\nlines\there '), 'two lines here')
   assert.equal(other('a\x1b[31mb\x85c\x9bd'), 'a [31mb c d')
   assert.equal(other('pay‮txt.exe⁦x⁩'), 'pay txt.exe x')
-  assert.equal(other('-1 day'), '-1 day') // the dash is herdr's business (answer.mjs paneIO)
+  assert.equal(other('-1 day'), '-1 day') // the dash is herdr's business (services/answer.ts paneIO)
   assert.equal(other('x'.repeat(1500))?.length, 1000)
 })
 
@@ -546,7 +546,8 @@ test('another question on the screen: nothing is pressed', async () => {
     io: fake.io(),
     timing: fast,
   })
-  assert.equal(r.ok, false)
+  assert.ok(!r.ok)
+  assert.ok(!r.ok)
   assert.equal(r.reason, 'changed')
   assert.deepEqual(fake.keysLog, [])
 })
@@ -555,8 +556,9 @@ test('a terminal that does not respond: it stops after the first key', async () 
   const fake = new FakeDialog(ORDER, { ignore: true })
   const picks = picksOf(ORDER, [{ options: ['Large'] }, { options: ['Cheese'] }, { options: ['Now'] }])
   const r = await driveQuestions({ questions: ORDER, picks, io: fake.io(), timing: fast })
+  assert.ok(!r.ok)
   assert.equal(r.reason, 'stuck')
-  assert.deepEqual((r as { step?: unknown }).step, { q: 1, what: 'option', n: 2 })
+  assert.deepEqual(r.step, { q: 1, what: 'option', n: 2 })
   assert.deepEqual(fake.keysLog, ['2'])
   assert.match(r.screen, /Which size\?/)
 })
@@ -568,6 +570,7 @@ test('a review that lists other answers is not submitted', async () => {
   io.read = async () => (await read()).replace('→ Large', '→ Small')
   const picks = picksOf(ORDER, [{ options: ['Large'] }, { options: ['Cheese'] }, { options: ['Now'] }])
   const r = await driveQuestions({ questions: ORDER, picks, io, timing: fast })
+  assert.ok(!r.ok)
   assert.equal(r.reason, 'review')
   assert.equal(fake.submitted, null)
   assert.equal(fake.tab, ORDER.length) // left on the review screen
@@ -605,10 +608,13 @@ test('a permission prompt is answered only while the screen shows the prompt the
   shown = screen('permission-write')
   keys.length = 0
   const r = await drivePermission({ fingerprint, n: 1, io, timing: fast })
+  assert.ok(!r.ok)
   assert.equal(r.reason, 'changed')
   assert.deepEqual(keys, [])
   shown = bash
-  assert.equal((await drivePermission({ fingerprint, n: 7, io, timing: fast })).reason, 'changed')
+  const wrongOption = await drivePermission({ fingerprint, n: 7, io, timing: fast })
+  assert.ok(!wrongOption.ok)
+  assert.equal(wrongOption.reason, 'changed')
   assert.deepEqual(keys, [])
 })
 
@@ -624,6 +630,7 @@ test('done needs proof: a blank or half-drawn screen after the last key is not t
       io,
       timing: fast,
     })
+    assert.ok(!r.ok)
     assert.equal(r.reason, 'unconfirmed', JSON.stringify(after))
     assert.equal(r.sent, 1)
   }
@@ -647,7 +654,9 @@ test('done needs proof: a blank or half-drawn screen after the last key is not t
     },
     text: async () => {},
   }
-  assert.equal((await drivePermission({ fingerprint, n: 1, io, timing: fast })).reason, 'unconfirmed')
+  const silent = await drivePermission({ fingerprint, n: 1, io, timing: fast })
+  assert.ok(!silent.ok)
+  assert.equal(silent.reason, 'unconfirmed')
 })
 
 test('the review is submitted only under its own "Submit answers"', async () => {
@@ -657,6 +666,7 @@ test('the review is submitted only under its own "Submit answers"', async () => 
   io.read = async () => (await read()).replace('1. Submit answers', '1. Send everything')
   const picks = picksOf(ORDER, [{ options: ['Large'] }, { options: ['Cheese'] }, { options: ['Now'] }])
   const r = await driveQuestions({ questions: ORDER, picks, io, timing: fast })
+  assert.ok(!r.ok)
   assert.equal(r.reason, 'review')
   assert.equal(fake.submitted, null)
 })
@@ -672,8 +682,9 @@ test('herdr failing midway says how much went in', async () => {
   }
   const picks = picksOf(ORDER, [{ options: ['Large'] }, { options: ['Cheese', 'Basil'] }, { options: ['Now'] }])
   const r = await driveQuestions({ questions: ORDER, picks, io, timing: fast })
+  assert.ok(!r.ok)
   assert.equal(r.reason, 'herdr')
-  assert.equal((r as { why?: unknown }).why, 'pipe closed')
+  assert.equal(r.why, 'pipe closed')
   assert.equal(r.sent, 3)
   assert.match(r.screen, /Which toppings\?/)
   const io2 = new FakeDialog(COLOR).io()
@@ -686,6 +697,7 @@ test('herdr failing midway says how much went in', async () => {
     io: io2,
     timing: fast,
   })
+  assert.ok(!r2.ok)
   assert.equal(r2.reason, 'herdr')
   assert.equal(r2.sent, 0)
 })

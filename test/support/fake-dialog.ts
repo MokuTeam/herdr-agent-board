@@ -1,4 +1,4 @@
-// A stand-in for Claude Code's question dialog in a terminal, for answer.mjs: it draws the screen
+// A stand-in for Claude Code's question dialog in a terminal, for services/answer.ts: it draws the screen
 // as Claude Code 2.1 does (the files in screens/ were read from it) and takes keys the way that
 // dialog was seen to take them, traps included: a digit on an own-answer row that holds text
 // submits that text. `lag` keeps the old screen for that many reads after each key, as a slow

@@ -2,7 +2,7 @@
 // (AskUserQuestion) shows its questions, headers, options with their descriptions and an own
 // answer; a permission prompt shows what the tool will do and the terminal's own choices. The
 // answer goes to the server, which types it into the pane and checks the screen after every key
-// (src/answer.mjs); here it is picked, sent once, and its outcome shown in place.
+// (src/services/answer.ts); here it is picked, sent once, and its outcome shown in place.
 import {
   chooseOther,
   choose,
