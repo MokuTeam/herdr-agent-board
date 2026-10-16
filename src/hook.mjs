@@ -5,8 +5,8 @@
 //   install; after that a one-line reminder only while the card says it waits for something.
 // Only sessions in a herdr pane are briefed: `claude -p` runs and other terminals are not on the board.
 import { brief, BRIEF_VERSION, waitReminder } from './core/brief.ts'
-import { loadConfig } from './config.mjs'
-import { readCard, writeCard } from './store.mjs'
+import { loadConfig } from './adapters/config-file.ts'
+import { readCard, writeCard } from './adapters/cards.ts'
 
 async function readStdin() {
   let data = ''

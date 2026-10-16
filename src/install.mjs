@@ -5,7 +5,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { ROOT } from './paths.mjs'
+import { ROOT } from './adapters/paths.ts'
 
 const settingsFile = join(homedir(), '.claude', 'settings.json')
 const binDir = join(homedir(), '.local', 'bin')

@@ -145,7 +145,7 @@ export function completions(names: string[], prefix: unknown, limit = 8): string
   return [...starts, ...has].slice(0, limit)
 }
 
-/** The category a folder falls in by the lanes' folders, longest match first (config.mjs categoryFor). */
+/** The category a folder falls in by the lanes' folders, longest match first (categories.ts categoryFor). */
 export function categoryForDir(
   categories: Pick<Category, 'id' | 'paths'>[] | null | undefined,
   dir: unknown,

@@ -80,7 +80,7 @@ if (mode === 'open') {
   send({ ready: true })
 } else if (mode === 'write') {
   const { existsSync } = await import('node:fs')
-  const { writeCard } = await import('../../src/store.mjs')
+  const { writeCard } = await import('../../src/adapters/cards.ts')
   const { key, patch, release, failPatch } = input()
   if (release) {
     Object.defineProperty(patch, 'held', {

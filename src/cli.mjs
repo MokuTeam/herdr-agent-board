@@ -18,16 +18,16 @@
 //   board unschedule <id|all>    removes an entry (all: every entry of this session)
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync } from 'node:fs'
-import { CONFIG_FILE, editCategories, loadConfig } from './config.mjs'
+import { configFile, editCategories, loadConfig } from './adapters/config-file.ts'
 import { COLUMNS, noteOf, statusText } from './core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from './core/categories.ts'
 import { liveSessions } from './claude.mjs'
 import { snapshot } from './herdr.mjs'
 import { t } from './core/lang.ts'
 import { collect } from './model.mjs'
-import { BOARD_FILE } from './paths.mjs'
-import { addEntry, listEntries, removeEntry } from './schedule.mjs'
-import { readCard, writeCard } from './store.mjs'
+import { boardFile } from './adapters/paths.ts'
+import { addEntry, listEntries, removeEntry } from './adapters/schedule-store.ts'
+import { readCard, writeCard } from './adapters/cards.ts'
 import { nextRun, parseCron, parseWhen, shortestGap } from './core/when.ts'
 import { shortWhen } from './core/when-format.ts'
 
@@ -112,7 +112,7 @@ async function schedulerNote() {
   try {
     if (cfg.web === false) {
       // The terminal board runs the schedule itself then (tui.mjs).
-      process.kill(JSON.parse(readFileSync(BOARD_FILE, 'utf8')).pid, 0)
+      process.kill(JSON.parse(readFileSync(boardFile(), 'utf8')).pid, 0)
       return ''
     }
     const res = await fetch(`http://127.0.0.1:${cfg.port ?? 12422}/api/board`, { signal: AbortSignal.timeout(1500) })
@@ -162,7 +162,7 @@ async function main() {
 
   if (cmd === 'cats') {
     const known = cfg.categories.map(c => `${c.id} (${categoryInfo(cfg, c.id).title})`).join(', ')
-    return console.log(`${known}. A new id makes a new lane. Config: ${CONFIG_FILE}`)
+    return console.log(`${known}. A new id makes a new lane. Config: ${configFile()}`)
   }
 
   if (cmd === 'list') {

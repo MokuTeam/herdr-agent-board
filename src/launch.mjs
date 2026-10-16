@@ -22,11 +22,11 @@ import { raiseTerminal } from './actions.mjs'
 import { herdr, herdrText } from './herdr.mjs'
 import { inputDraft } from './core/dialogs/input-box.ts'
 import { t } from './core/lang.ts'
-import { CARDS_DIR, CLAUDE_DIR, STATE_DIR } from './paths.mjs'
-import { readCard, writeCard } from './store.mjs'
+import { cardsDir, claudeDir, stateDir } from './adapters/paths.ts'
+import { readCard, writeCard } from './adapters/cards.ts'
 import { keyTowardYes, sameFolder, trustDialog } from './core/dialogs/trust.ts'
 
-const LAUNCH_DIR = join(STATE_DIR, 'launch') // first messages for {messageFile}, while a launcher runs
+const LAUNCH_DIR = join(stateDir(), 'launch') // first messages for {messageFile}, while a launcher runs
 const MESSAGE_MAX = 20_000
 
 // ------------------------------------------------------------------ folders for the picker
@@ -166,7 +166,7 @@ let recentCache = { at: 0, list: [] }
  * Folders recent Claude sessions on this machine ran in, newest first: the cwd in the newest
  * transcript of each project. Read from the head of the file only, cached for a minute.
  */
-export async function recentFolders(projects = join(CLAUDE_DIR, 'projects'), limit = 12) {
+export async function recentFolders(projects = join(claudeDir(), 'projects'), limit = 12) {
   if (Date.now() - recentCache.at < 60_000) return recentCache.list
   const found = []
   try {
@@ -646,7 +646,7 @@ export function createLaunches({ cfg, log = () => {}, onChange = () => {} }) {
     l.closed = true
     if (l.sessionId && Object.keys(readCard(l.sessionId) ?? {}).every(k => ['key', 'category', 'updatedAt'].includes(k))) {
       try {
-        unlinkSync(join(CARDS_DIR, `${l.sessionId}.json`))
+        unlinkSync(join(cardsDir(), `${l.sessionId}.json`))
       } catch {}
     }
     launches.delete(id)

@@ -5,16 +5,16 @@
 // tab of the current workspace; "overlay" lays it over the current pane and closes it on leave.
 // --background (the startup hook): make sure the workspace board runs, without focusing it.
 import { readFileSync } from 'node:fs'
-import { loadConfig } from './config.mjs'
+import { loadConfig } from './adapters/config-file.ts'
 import { herdr, snapshot } from './herdr.mjs'
 import { goBack, rememberReturn } from './nav.mjs'
-import { BOARD_FILE, PLUGIN_ID, ROOT } from './paths.mjs'
+import { boardFile, PLUGIN_ID, ROOT } from './adapters/paths.ts'
 
 const cfg = loadConfig()
 const background = process.argv.includes('--background')
 let board = null
 try {
-  board = JSON.parse(readFileSync(BOARD_FILE, 'utf8')).pane
+  board = JSON.parse(readFileSync(boardFile(), 'utf8')).pane
 } catch {}
 
 const snap = await snapshot()

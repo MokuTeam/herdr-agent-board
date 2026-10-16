@@ -1,4 +1,4 @@
-// Runs the schedule (schedule.mjs) in the board's process: when an entry is due, its text goes
+// Runs the schedule (schedule-store.ts) in the board's process: when an entry is due, its text goes
 // into the session's prompt as "[board reminder] <text>", waking the session first when
 // herdr-wake put it to sleep. On time by default: a working session gets it queued into its turn.
 // A session that waits on a dialog or has the user's unsent text in its input box (and, for an
@@ -13,7 +13,8 @@
 import { mkdirSync, watch } from 'node:fs'
 import { send, wake } from './actions.mjs'
 import { collect, forgetSleepers } from './model.mjs'
-import { getEntry, listEntries, logRun, removeEntry, SCHEDULE_DIR, updateEntry } from './schedule.mjs'
+import { getEntry, listEntries, logRun, removeEntry, updateEntry } from './adapters/schedule-store.ts'
+import { scheduleDir } from './adapters/paths.ts'
 import { promptOf, targetOf } from './core/schedule-rules.ts'
 import { nextRun } from './core/when.ts'
 
@@ -181,8 +182,8 @@ export function startScheduler({ cfg, log = () => {}, onChange = () => {} }) {
   let watcher = null
   let watchTimer = null
   try {
-    mkdirSync(SCHEDULE_DIR, { recursive: true })
-    watcher = watch(SCHEDULE_DIR, () => {
+    mkdirSync(scheduleDir(), { recursive: true })
+    watcher = watch(scheduleDir(), () => {
       clearTimeout(watchTimer)
       watchTimer = setTimeout(() => plan(0), 300)
     })

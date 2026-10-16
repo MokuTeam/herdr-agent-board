@@ -5,7 +5,7 @@ import { closeSync, openSync, readSync, readdirSync, readFileSync, statSync } fr
 import { join } from 'node:path'
 import { onLanguage } from './core/lang.ts'
 import { parseConversation, parseTranscriptTail, tailComplete } from './core/transcript.ts'
-import { CLAUDE_DIR } from './paths.mjs'
+import { claudeDir } from './adapters/paths.ts'
 
 function alive(pid) {
   try {
@@ -17,7 +17,7 @@ function alive(pid) {
 }
 
 /** Running interactive sessions by session id. */
-export function liveSessions(dir = join(CLAUDE_DIR, 'sessions')) {
+export function liveSessions(dir = join(claudeDir(), 'sessions')) {
   const byId = new Map()
   let files = []
   try {
@@ -39,7 +39,7 @@ const pathCache = new Map() // session id -> transcript path
 const missCache = new Map() // session id -> when a full search found nothing (retried after a minute)
 
 /** The transcript of a session: projects/<cwd with non-alphanumerics as dashes>/<id>.jsonl. */
-export function transcriptPath(sessionId, cwd, projects = join(CLAUDE_DIR, 'projects')) {
+export function transcriptPath(sessionId, cwd, projects = join(claudeDir(), 'projects')) {
   const cached = pathCache.get(sessionId)
   if (cached && statSync(cached, { throwIfNoEntry: false })) return cached
   let found = null

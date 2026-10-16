@@ -19,7 +19,7 @@ import { localUsage } from './usage.mjs'
 import { conversation } from './claude.mjs'
 import { createWebBundle } from './server/web-bundle.ts'
 import { describe, FILE_TOKEN, MEDIA_TYPES, openWith, preview, resolvePath } from './files.mjs'
-import { editCategories, editSettings, liveConfig } from './config.mjs'
+import { editCategories, editSettings, liveConfig } from './adapters/config-file.ts'
 import { busy, COLUMNS, PINS } from './core/board.ts'
 import { categoryInfo, colorHex, laneRank, PALETTE } from './core/categories.ts'
 import { lang, t } from './core/lang.ts'
@@ -30,14 +30,13 @@ import { checkName } from './core/launch/names.ts'
 import { messageGate } from './core/message-gate.ts'
 import { collect, forgetSleepers } from './model.mjs'
 import { parseDialog, publicDialog } from './core/dialogs/questions.ts'
-import { CARDS_DIR, ROOT, STATE_DIR } from './paths.mjs'
-import { listEntries, readLog, removeEntry, SCHEDULE_DIR, updateEntry } from './schedule.mjs'
+import { cardsDir, ROOT, scheduleDir, stateDir, uploadsDir } from './adapters/paths.ts'
+import { listEntries, readLog, removeEntry, updateEntry } from './adapters/schedule-store.ts'
 import { startScheduler } from './scheduler.mjs'
-import { writeCard } from './store.mjs'
+import { writeCard } from './adapters/cards.ts'
 
 const WEB = join(ROOT, 'web')
 // Files and screenshots sent to sessions from the board; the message carries their paths.
-export const UPLOADS_DIR = join(STATE_DIR, 'uploads')
 const MAX_UPLOAD = 30 << 20
 const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }
 // The page's scripts and styles come from here only (inline style attributes are used for colors).
@@ -62,11 +61,11 @@ function pruneUploads(days) {
   const cutoff = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10)
   let dirs = []
   try {
-    dirs = readdirSync(UPLOADS_DIR)
+    dirs = readdirSync(uploadsDir())
   } catch {
     return
   }
-  for (const d of dirs) if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d < cutoff) rmSync(join(UPLOADS_DIR, d), { recursive: true, force: true })
+  for (const d of dirs) if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d < cutoff) rmSync(join(uploadsDir(), d), { recursive: true, force: true })
 }
 
 function receiveUpload(req, name) {
@@ -74,7 +73,7 @@ function receiveUpload(req, name) {
     const now = new Date()
     const day = now.toISOString().slice(0, 10)
     const stamp = now.toTimeString().slice(0, 8).replace(/:/g, '')
-    const dir = join(UPLOADS_DIR, day)
+    const dir = join(uploadsDir(), day)
     mkdirSync(dir, { recursive: true })
     const file = `${stamp}-${safeName(name)}`
     const path = join(dir, file)
@@ -157,7 +156,7 @@ export async function startServer({ cfg, log = () => {} } = {}) {
    * them over. No age in it, so data that does not change does not make the board go out again.
    */
   function claudeLimits() {
-    for (const [source, l] of [['statusline', localUsage(STATE_DIR).limits], ['usagebar', localUsage().limits]]) {
+    for (const [source, l] of [['statusline', localUsage(stateDir()).limits], ['usagebar', localUsage().limits]]) {
       const windows = l.available ? l.windows.filter(w => !w.expired) : []
       if (windows.length) return { source, observedAt: l.observedAt, stale: Date.now() - l.observedAt > 30 * 60_000, windows }
     }
@@ -229,7 +228,7 @@ export async function startServer({ cfg, log = () => {} } = {}) {
         return sleepSession(cfg, item).finally(forgetSleepers)
       case 'message': {
         // Attached files go as their paths: Claude reads them, and picks up image paths as images.
-        const files = (Array.isArray(body.files) ? body.files : []).filter(p => typeof p === 'string' && p.startsWith(UPLOADS_DIR))
+        const files = (Array.isArray(body.files) ? body.files : []).filter(p => typeof p === 'string' && p.startsWith(uploadsDir()))
         const list = files.length ? `${t('msg.files', { n: files.length })}:\n${files.join('\n')}` : ''
         // The card is for one session: a pane that holds another one now gets nothing. Panes with
         // no Claude session id (other agents) are matched by the card alone.
@@ -398,7 +397,7 @@ export async function startServer({ cfg, log = () => {} } = {}) {
       if (req.method === 'GET' && up) {
         // Raster images show inline; anything else only downloads, so no uploaded page can run here.
         if (safeName(up[2]) !== up[2]) return json(404, { error: 'not found' })
-        const body = await readFile(join(UPLOADS_DIR, up[1], up[2])).catch(() => null)
+        const body = await readFile(join(uploadsDir(), up[1], up[2])).catch(() => null)
         if (!body) return json(404, { error: 'not found' })
         const type = IMAGE_TYPES[extname(up[2]).toLowerCase()]
         res.writeHead(200, {
@@ -509,8 +508,8 @@ export async function startServer({ cfg, log = () => {} } = {}) {
   const poll = setInterval(refresh, Math.max(1, cfg.refreshSec ?? 2) * 1000)
   let timer = null
   try {
-    mkdirSync(CARDS_DIR, { recursive: true })
-    watch(CARDS_DIR, () => {
+    mkdirSync(cardsDir(), { recursive: true })
+    watch(cardsDir(), () => {
       clearTimeout(timer)
       timer = setTimeout(refresh, 150)
     })
@@ -518,8 +517,8 @@ export async function startServer({ cfg, log = () => {} } = {}) {
   // Entries added or cancelled by agents (`board remind`), and runs the scheduler made.
   let scheduleTimer = null
   try {
-    mkdirSync(SCHEDULE_DIR, { recursive: true })
-    const watcher = watch(SCHEDULE_DIR, () => {
+    mkdirSync(scheduleDir(), { recursive: true })
+    const watcher = watch(scheduleDir(), () => {
       clearTimeout(scheduleTimer)
       scheduleTimer = setTimeout(refresh, 150)
     })

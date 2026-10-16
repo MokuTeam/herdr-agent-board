@@ -2,9 +2,9 @@
 import { readdir, lstat, realpath, open } from 'node:fs/promises'
 import { join, relative, isAbsolute } from 'node:path'
 import { transcriptInfo } from './claude.mjs'
-import { CLAUDE_DIR } from './paths.mjs'
+import { claudeDir } from './adapters/paths.ts'
 const norm = s => /^[a-z]:/i.test(s) ? s.replace(/\\/g,'/').replace(/\/+$/,'').toLowerCase() : s.replace(/\/+$/,'')
-export async function searchHistory(cwd, query, projects = join(CLAUDE_DIR,'projects'), excludeSession = null) {
+export async function searchHistory(cwd, query, projects = join(claudeDir(),'projects'), excludeSession = null) {
   query=String(query??'').trim()
   if (!cwd || query.length<2 || query.length>100) return {results:[],invalid:true}
   const encoded=cwd.replace(/[\\/]+$/,'').replace(/[^a-zA-Z0-9]/g,'-')

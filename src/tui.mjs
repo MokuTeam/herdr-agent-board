@@ -6,7 +6,7 @@
 //   q / Esc: back to where you were (an overlay board closes instead); Ctrl+C: close the board.
 import { mkdirSync, readFileSync, unlinkSync, watch, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { liveConfig } from './config.mjs'
+import { liveConfig } from './adapters/config-file.ts'
 import { COLUMNS, noteOf, statusText } from './core/board.ts'
 import { categoryInfo, laneRank } from './core/categories.ts'
 import * as actions from './actions.mjs'
@@ -15,10 +15,10 @@ import { collect, forgetSleepers } from './model.mjs'
 import { goBack } from './nav.mjs'
 import { startServer } from './server.mjs'
 import { openWeb } from './web-open.mjs'
-import { BOARD_FILE, CARDS_DIR, STATE_DIR } from './paths.mjs'
-import { listEntries } from './schedule.mjs'
+import { boardFile, cardsDir, stateDir } from './adapters/paths.ts'
+import { listEntries } from './adapters/schedule-store.ts'
 import { startScheduler } from './scheduler.mjs'
-import { writeCard } from './store.mjs'
+import { writeCard } from './adapters/cards.ts'
 import { shortWhen } from './core/when-format.ts'
 
 // Updated in place when config.json changes (by hand or from the web board).
@@ -576,7 +576,7 @@ function render() {
 function cleanup() {
   out.write('\x1b[?1004l\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[?25h\x1b[?1049l')
   try {
-    if (JSON.parse(readFileSync(BOARD_FILE, 'utf8')).pid === process.pid) unlinkSync(BOARD_FILE)
+    if (JSON.parse(readFileSync(boardFile(), 'utf8')).pid === process.pid) unlinkSync(boardFile())
   } catch {}
 }
 function quit(code = 0) {
@@ -584,9 +584,9 @@ function quit(code = 0) {
   process.exit(code)
 }
 
-mkdirSync(CARDS_DIR, { recursive: true })
-mkdirSync(STATE_DIR, { recursive: true })
-writeFileSync(BOARD_FILE, JSON.stringify({ pane: PANE, pid: process.pid, overlay: OVERLAY }))
+mkdirSync(cardsDir(), { recursive: true })
+mkdirSync(stateDir(), { recursive: true })
+writeFileSync(boardFile(), JSON.stringify({ pane: PANE, pid: process.pid, overlay: OVERLAY }))
 process.on('SIGINT', () => quit())
 process.on('SIGTERM', () => quit())
 process.on('SIGHUP', () => quit())
@@ -606,7 +606,7 @@ process.stdin.on('data', onData)
 
 let watchTimer = null
 try {
-  watch(CARDS_DIR, () => {
+  watch(cardsDir(), () => {
     clearTimeout(watchTimer)
     watchTimer = setTimeout(refresh, 150)
   })
@@ -618,7 +618,7 @@ refresh()
 // The web board's server runs here, alongside; another board already serving the port is fine.
 const webLog = msg => {
   try {
-    writeFileSync(join(STATE_DIR, 'web.log'), `${new Date().toISOString()} ${msg}\n`, { flag: 'a' })
+    writeFileSync(join(stateDir(), 'web.log'), `${new Date().toISOString()} ${msg}\n`, { flag: 'a' })
   } catch {}
 }
 // Right after a restart the previous process may still hold the port for a moment: retry a few times.

@@ -3,9 +3,9 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { herdr } from './herdr.mjs'
-import { STATE_DIR } from './paths.mjs'
+import { stateDir } from './adapters/paths.ts'
 
-const RETURN_FILE = join(STATE_DIR, 'return.json')
+const RETURN_FILE = join(stateDir(), 'return.json')
 
 export function rememberReturn(snap, boardPane) {
   const pane = snap.panes.find(p => p.pane_id === snap.focused_pane_id)

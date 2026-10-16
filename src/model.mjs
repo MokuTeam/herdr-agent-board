@@ -7,8 +7,8 @@ import { snapshot } from './herdr.mjs'
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { t } from './core/lang.ts'
-import { CONTEXT_DIR } from './paths.mjs'
-import { allCards, writeCard } from './store.mjs'
+import { contextDir } from './adapters/paths.ts'
+import { allCards, writeCard } from './adapters/cards.ts'
 
 let sleepCache = { at: 0, list: [] }
 
@@ -69,7 +69,7 @@ const contextCache = new Map() // session -> { mtimeMs, data }
 function contextOf(session, info) {
   const own = { context: info.context ?? null, contextPct: null, contextSize: null }
   if (!session) return own
-  const file = join(CONTEXT_DIR, `${String(session).replace(/[^A-Za-z0-9_-]/g, '_')}.json`)
+  const file = join(contextDir(), `${String(session).replace(/[^A-Za-z0-9_-]/g, '_')}.json`)
   const st = statSync(file, { throwIfNoEntry: false })
   if (!st) return own
   let hit = contextCache.get(session)

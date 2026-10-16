@@ -6,9 +6,9 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { raiseWindow } from './actions.mjs'
-import { loadConfig } from './config.mjs'
+import { loadConfig } from './adapters/config-file.ts'
 import { t } from './core/lang.ts'
-import { ROOT } from './paths.mjs'
+import { ROOT } from './adapters/paths.ts'
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 

@@ -5,7 +5,7 @@
 import { spawn } from 'node:child_process'
 import { readdirSync, statSync, watch } from 'node:fs'
 import { join } from 'node:path'
-import { ROOT } from './paths.mjs'
+import { ROOT } from './adapters/paths.ts'
 
 const RESTART = 75
 let child = null

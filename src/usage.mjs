@@ -3,8 +3,8 @@
 import { lstatSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseLimits } from './core/limits.ts'
-import { CLAUDE_DIR } from './paths.mjs'
-export function localUsage(directory = join(CLAUDE_DIR, 'herdr-usagebar'), now = Date.now()) {
+import { claudeDir } from './adapters/paths.ts'
+export function localUsage(directory = join(claudeDir(), 'herdr-usagebar'), now = Date.now()) {
   const context = { available: false, observedAt: null, source: null }
   try {
     const path = join(directory, 'claude-limits-latest.json')

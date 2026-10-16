@@ -1,18 +1,24 @@
+import { setDefaultTimeout, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { test } from 'node:test'
-import { sandbox, until } from './support/sandbox.ts'
+import { allCards, readCard, writeCard } from '../../src/adapters/cards.ts'
+import { cardsDir } from '../../src/adapters/paths.ts'
+import { isolatedHome } from '../support/env.ts'
+import { type Child, sandbox, until } from '../support/sandbox.ts'
 
-const message = (proc, key) => proc.messages.find(m => m[key])
-async function done(proc) {
+setDefaultTimeout(15_000) // child processes contending for a lock
+
+type Message = Record<string, unknown>
+const message = (proc: Child, key: string) => (proc.messages as Message[]).find(m => m[key])
+async function done(proc: Child) {
   const out = await proc.exited
   assert.equal(out.code, 0, out.stderr)
   assert.ok(message(proc, 'done'), JSON.stringify(proc.messages))
 }
 
-test('separate processes merge the same card under contention; another card is independent', { timeout: 15_000 }, async t => {
-  const box = await sandbox(t)
+test('separate processes merge the same card under contention; another card is independent', async () => {
+  const box = await sandbox()
   const release = join(box.dir, 'release-writer')
   const first = box.run('write', { key: 'shared', patch: { doing: 'first' }, release })
   await until(() => message(first, 'held'))
@@ -32,20 +38,20 @@ test('separate processes merge the same card under contention; another card is i
   assert.ok(readdirSync(box.cards).every(name => name.endsWith('.json')))
 })
 
-test('an occupied card lock times out without deleting another writer lock or changing data', { timeout: 10_000 }, async t => {
-  const box = await sandbox(t)
+test('an occupied card lock times out without deleting another writer lock or changing data', async () => {
+  const box = await sandbox()
   mkdirSync(join(box.cards, 'shared.json.lock'), { recursive: true })
   writeFileSync(join(box.cards, 'shared.json'), '{"key":"shared","doing":"original"}')
   const proc = box.run('write', { key: 'shared', patch: { doing: 'changed' } })
   const out = await proc.exited
   assert.equal(out.code, 0, out.stderr)
-  assert.match(message(proc, 'error')?.error ?? '', /Timed out waiting for lock/)
+  assert.match(String(message(proc, 'error')?.error ?? ''), /Timed out waiting for lock/)
   assert.equal(JSON.parse(readFileSync(join(box.cards, 'shared.json'), 'utf8')).doing, 'original')
   assert.ok(existsSync(join(box.cards, 'shared.json.lock')))
 })
 
-test('a lock left by a writer that died long ago is taken over', { timeout: 10_000 }, async t => {
-  const box = await sandbox(t)
+test('a lock left by a writer that died long ago is taken over', async () => {
+  const box = await sandbox()
   const lock = join(box.cards, 'shared.json.lock')
   mkdirSync(lock, { recursive: true })
   const old = new Date(Date.now() - 60_000)
@@ -57,8 +63,8 @@ test('a lock left by a writer that died long ago is taken over', { timeout: 10_0
 })
 
 for (const failure of ['patch', 'rename']) {
-  test(`write releases its lock and temporary file after ${failure} failure`, { timeout: 10_000 }, async t => {
-    const box = await sandbox(t)
+  test(`write releases its lock and temporary file after ${failure} failure`, async () => {
+    const box = await sandbox()
     if (failure === 'rename') mkdirSync(join(box.cards, 'broken.json'), { recursive: true })
     const proc = box.run('write', { key: 'broken', patch: {}, failPatch: failure === 'patch' })
     const out = await proc.exited
@@ -70,8 +76,8 @@ for (const failure of ['patch', 'rename']) {
   })
 }
 
-test('successive processes preserve merge and field clearing semantics', async t => {
-  const box = await sandbox(t)
+test('successive processes preserve merge and field clearing semantics', async () => {
+  const box = await sandbox()
   await done(box.run('write', { key: 's', patch: { doing: 'x', wait: 'y', category: 'work' } }))
   await done(box.run('write', { key: 's', patch: { doing: '', wait: null, result: 'done' } }))
   const card = JSON.parse(readFileSync(join(box.cards, 's.json'), 'utf8'))
@@ -81,4 +87,25 @@ test('successive processes preserve merge and field clearing semantics', async t
   assert.equal(typeof card.updatedAt, 'number')
   assert.equal('doing' in card, false)
   assert.equal('wait' in card, false)
+})
+
+test('writeCard keeps fields it does not know', () => {
+  isolatedHome()
+  mkdirSync(cardsDir(), { recursive: true })
+  writeFileSync(join(cardsDir(), 'k.json'), '{"futureField":7}')
+  const card = writeCard('k', { doing: 'x' })
+  assert.equal(card.futureField, 7)
+  const saved = JSON.parse(readFileSync(join(cardsDir(), 'k.json'), 'utf8'))
+  assert.equal(saved.futureField, 7)
+  assert.equal(saved.doing, 'x')
+})
+
+test('allCards lists the cards by key and skips files that are not cards', () => {
+  isolatedHome()
+  writeCard('a', { doing: '1' })
+  writeFileSync(join(cardsDir(), 'junk.json'), '[1,2]')
+  writeFileSync(join(cardsDir(), 'broken.json'), '{')
+  assert.deepEqual([...allCards().keys()], ['a'])
+  assert.equal(readCard('a')?.doing, '1')
+  assert.equal(readCard('nope'), null)
 })
