@@ -1,8 +1,9 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtempSync,mkdirSync,writeFileSync,rmSync,symlinkSync} from 'node:fs'
+import {mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
+import {symlinkOrSkip,SYMLINK_SKIP_REASON} from './support/fs.ts'
 import {searchHistory} from '../src/history.mjs'
 function fixture(t) {
  const base=mkdtempSync(join(tmpdir(),'board-history-'));t.after(()=>rmSync(base,{recursive:true,force:true}))
@@ -29,8 +30,8 @@ test('limits results and bytes, rejects invalid queries and symlink escape',asyn
  writeFileSync(join(dir,'many.jsonl'),Array.from({length:50},()=>row(cwd,'needle')).join('\n'))
  const out=await searchHistory(cwd,'needle',base);assert.equal(out.results.length,30);assert.equal(out.truncated,true)
  assert.equal((await searchHistory(cwd,'x',base)).invalid,true)
- symlinkSync('/tmp',join(base,'-escape'))
- assert.equal((await searchHistory('/escape','needle',base)).unavailable,true)
+ if(symlinkOrSkip('/tmp',join(base,'-escape'))) assert.equal((await searchHistory('/escape','needle',base)).unavailable,true)
+ else t.skip(SYMLINK_SKIP_REASON)
  writeFileSync(join(dir,'tail.jsonl'),'x'.repeat(2<<20)+'\n'+row(cwd,'tail needle'))
  const tail=await searchHistory(cwd,'tail needle',base);assert.equal(tail.results.length,1);assert.ok(tail.bytesRead<=(8<<20))
 })

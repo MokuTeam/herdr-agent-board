@@ -5,26 +5,55 @@
 // redraw would.
 const RULE = '─'.repeat(60)
 
+export type Option = { label: string; description?: string }
+export type Question = { header: string; question: string; options: Option[]; multiSelect?: boolean; preview?: boolean }
+export type DialogOptions = { lag?: number; ignore?: boolean }
+type QuestionState = {
+  cursor: number
+  checked: Set<number>
+  other: string
+  answer: string | null
+  caret?: number | null
+}
+
 export class FakeDialog {
-  constructor(questions, { lag = 0, ignore = false } = {}) {
+  questions: Question[]
+  lag: number
+  ignore: boolean // a terminal that takes no keys at all
+  tab = 0
+  state: QuestionState[]
+  submitted: (string | null)[] | null = null
+  keysLog: string[] = []
+  texts: string[] = []
+  stale = 0
+  shown: string
+
+  constructor(questions: Question[], { lag = 0, ignore = false }: DialogOptions = {}) {
     this.questions = questions
     this.lag = lag
-    this.ignore = ignore // a terminal that takes no keys at all
-    this.tab = 0
-    this.state = questions.map(() => ({ cursor: 1, checked: new Set(), other: '', answer: null }))
-    this.submitted = null
-    this.keysLog = []
-    this.texts = []
-    this.stale = 0
+    this.ignore = ignore
+    this.state = questions.map(() => ({ cursor: 1, checked: new Set<number>(), other: '', answer: null }))
     this.shown = this.render()
   }
 
-  get total() { return this.questions.length }
-  get tabbed() { return this.total > 1 || this.questions[0].multiSelect }
-  get q() { return this.questions[this.tab] }
-  get s() { return this.state[this.tab] }
-  rows(q = this.q) { return q.options.length + (q.preview ? 0 : 1) + (q.multiSelect ? 1 : 0) }
-  editing() { return this.tab < this.total && !this.q.preview && this.s.cursor === this.q.options.length + 1 }
+  get total() {
+    return this.questions.length
+  }
+  get tabbed() {
+    return this.total > 1 || !!this.questions[0]?.multiSelect
+  }
+  get q(): Question {
+    return this.questions[this.tab] as Question
+  }
+  get s(): QuestionState {
+    return this.state[this.tab] as QuestionState
+  }
+  rows(q: Question = this.q) {
+    return q.options.length + (q.preview ? 0 : 1) + (q.multiSelect ? 1 : 0)
+  }
+  editing() {
+    return this.tab < this.total && !this.q.preview && this.s.cursor === this.q.options.length + 1
+  }
 
   io() {
     return {
@@ -36,14 +65,14 @@ export class FakeDialog {
         this.shown = this.render()
         return this.shown
       },
-      keys: async (...keys) => {
+      keys: async (...keys: string[]) => {
         for (const k of keys) {
           this.keysLog.push(k)
           if (!this.ignore && !this.submitted) this.key(k)
         }
         this.stale = this.lag
       },
-      text: async text => {
+      text: async (text: string) => {
         this.texts.push(text)
         if (!this.ignore && !this.submitted && this.editing()) {
           this.insert(text)
@@ -54,17 +83,25 @@ export class FakeDialog {
     }
   }
 
+  label(q: Question, n: number): string {
+    return q.options[n - 1]?.label ?? ''
+  }
+
   advance() {
     const s = this.s
     const q = this.q
-    if (!q.multiSelect) s.answer = s.cursor <= q.options.length ? q.options[s.cursor - 1].label : s.other
-    else s.answer = [...s.checked].sort((a, b) => a - b).map(n => (n <= q.options.length ? q.options[n - 1].label : s.other)).join(', ')
+    if (!q.multiSelect) s.answer = s.cursor <= q.options.length ? this.label(q, s.cursor) : s.other
+    else
+      s.answer = [...s.checked]
+        .sort((a, b) => a - b)
+        .map(n => (n <= q.options.length ? this.label(q, n) : s.other))
+        .join(', ')
     if (!this.tabbed) return this.submit()
     this.tab++
   }
 
   /** Text at the caret of the own answer's field (its end unless moved). */
-  insert(text) {
+  insert(text: string) {
     const s = this.s
     const at = s.caret ?? s.other.length
     s.other = s.other.slice(0, at) + text + s.other.slice(at)
@@ -75,7 +112,7 @@ export class FakeDialog {
     this.submitted = this.state.map(s => s.answer)
   }
 
-  key(k) {
+  key(k: string) {
     if (this.tab === this.total) {
       // The review: 1 submits, 2 cancels, left goes back.
       if (k === '1') return this.submit()
@@ -118,9 +155,11 @@ export class FakeDialog {
         this.tab = Math.max(0, this.tab - 1)
         return
       case 'right':
-        if (this.editing()) return void (s.caret = Math.min(s.other.length, (s.caret ?? s.other.length) + 1))
-      // falls through
       case 'tab':
+        if (k === 'right' && this.editing()) {
+          s.caret = Math.min(s.other.length, (s.caret ?? s.other.length) + 1)
+          return
+        }
         if (this.editing() || !this.tabbed) return
         this.tab = Math.min(this.total, this.tab + 1)
         return
@@ -150,14 +189,15 @@ export class FakeDialog {
 
   render() {
     const top = ['❯ an earlier prompt that mentions 1. Red and Review your answers', '', '● Sure.', '']
-    if (this.submitted) return [...top, '● User answered Claude\'s questions:', RULE, '❯ ', RULE, '  ⏵⏵ bypass permissions on'].join('\n')
+    if (this.submitted)
+      return [...top, "● User answered Claude's questions:", RULE, '❯ ', RULE, '  ⏵⏵ bypass permissions on'].join('\n')
     const bar = this.tabbed
-      ? `←  ${this.questions.map((q, i) => `${this.state[i].answer !== null ? '☒' : '☐'} ${q.header}`).join('  ')}  ✔ Submit  →`
-      : ` ☐ ${this.questions[0].header}`
+      ? `←  ${this.questions.map((q, i) => `${this.state[i]?.answer !== null ? '☒' : '☐'} ${q.header}`).join('  ')}  ✔ Submit  →`
+      : ` ☐ ${this.questions[0]?.header}`
     const out = [...top, RULE, bar, '']
     if (this.tab === this.total) {
       out.push('Review your answers', '')
-      for (const [i, q] of this.questions.entries()) out.push(` ● ${q.question}`, `   → ${this.state[i].answer ?? ''}`)
+      for (const [i, q] of this.questions.entries()) out.push(` ● ${q.question}`, `   → ${this.state[i]?.answer ?? ''}`)
       out.push('', 'Ready to submit your answers?', '', '❯ 1. Submit answers', '  2. Cancel')
       return out.join('\n')
     }
@@ -165,15 +205,19 @@ export class FakeDialog {
     const s = this.s
     out.push(q.question, '')
     const n = q.options.length
-    const mark = i => (q.multiSelect ? `[${s.checked.has(i) ? '✔' : ' '}] ` : '')
+    const mark = (i: number) => (q.multiSelect ? `[${s.checked.has(i) ? '✔' : ' '}] ` : '')
     const pad = q.multiSelect ? '         ' : '     '
     for (const [j, o] of q.options.entries()) {
       const row = `${s.cursor === j + 1 ? '❯' : ' '} ${j + 1}. ${mark(j + 1)}${o.label}`
       out.push(q.preview ? `${row.padEnd(34)}│ preview │` : row)
       if (o.description && !q.preview) out.push(pad + o.description)
     }
-    if (!q.preview) out.push(`${s.cursor === n + 1 ? '❯' : ' '} ${n + 1}. ${mark(n + 1)}${s.other || (q.multiSelect ? 'Type something' : 'Type something.')}`)
-    if (q.multiSelect) out.push(`${s.cursor === n + 2 ? '❯' : ' '}    ${this.tabbed && this.total > 1 ? 'Next' : 'Submit'}`)
+    if (!q.preview)
+      out.push(
+        `${s.cursor === n + 1 ? '❯' : ' '} ${n + 1}. ${mark(n + 1)}${s.other || (q.multiSelect ? 'Type something' : 'Type something.')}`,
+      )
+    if (q.multiSelect)
+      out.push(`${s.cursor === n + 2 ? '❯' : ' '}    ${this.tabbed && this.total > 1 ? 'Next' : 'Submit'}`)
     out.push(RULE, `  ${q.preview ? '' : `${n + 2}. `}Chat about this`, '')
     out.push(`Enter to select · ↑/↓ to navigate${this.editing() ? ' · ctrl+g to edit in Notepad' : ''} · Esc to cancel`)
     return out.join('\n')

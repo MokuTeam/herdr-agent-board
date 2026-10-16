@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url'
 import { useLanguage } from '../src/lang.mjs'
 import { checkRequest, commandArgs, failureKind, launcherError, launcherLabel, parseLauncherOutput, usesPlaceholder } from '../src/launch.mjs'
 import { baseName, categoryForDir, checkBranch, checkName, completions, defaultWorkspace, folderSuggestions, isAbsolutePath, sameDir, slugName, splitPathInput, suggestName, uniqueSlug, worktreePath } from '../web/launch-model.js'
-import { sandbox, until } from './fixtures/sandbox.mjs'
-import { trustScreen } from './fixtures/trust-screen.mjs'
+import { sandbox, until } from './support/sandbox.ts'
+import { trustScreen } from './support/trust-screen.ts'
 
 useLanguage('en')
 
@@ -119,7 +119,7 @@ test('what a launcher said: its pane when it worked, the reason when it did not'
 })
 
 test('a launch request is checked before anything runs', async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   const dir = join(box.dir, 'Acme project')
   mkdirSync(dir)
   writeFileSync(join(box.dir, 'file.txt'), 'x')
@@ -181,7 +181,7 @@ const HERDR = {
 }
 
 async function boardServer(t, cfg = {}, env = {}) {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   box.state(HERDR)
   const port = await unusedPort()
   const proc = box.run('server', { port, categories: [{ id: 'acme', title: 'Acme', color: 'blue', paths: [] }, { id: 'other', title: 'Other', color: 'gray' }], wakeUrl: null, refreshSec: 3600, ...cfg }, env)
@@ -240,8 +240,8 @@ test('a new session through herdr: a tab in the chosen workspace, Claude with it
 })
 
 test('a new session through the configured launcher: a new workspace, the values as arguments, its pane, and a failure with its reason', { timeout: 30_000 }, async t => {
-  const launcher = fileURLToPath(new URL('./fixtures/fake-launcher.mjs', import.meta.url))
-  const box0 = sandbox(t)
+  const launcher = fileURLToPath(new URL('./support/fake-launcher.ts', import.meta.url))
+  const box0 = await sandbox(t)
   const record = join(box0.dir, 'launcher.json')
   const { box, post, launched } = await boardServer(t, { launch: { command: [process.execPath, launcher, record, '-Name', '{name}', '-Cwd', '{cwd}', '-Workspace', '{workspace}', ['-BriefFile', '{messageFile}'], ['-Session', '{sessionId}']] } })
   const dir = join(box.dir, 'Beta')
@@ -357,8 +357,8 @@ test('a retry starts in the worktree and the workspace the failed launch made, n
 })
 
 test('a launcher that runs too long is ended with everything it started', { timeout: 30_000 }, async t => {
-  const launcher = fileURLToPath(new URL('./fixtures/fake-launcher.mjs', import.meta.url))
-  const box0 = sandbox(t)
+  const launcher = fileURLToPath(new URL('./support/fake-launcher.ts', import.meta.url))
+  const box0 = await sandbox(t)
   const record = join(box0.dir, 'launcher.json')
   const { box, post, launched } = await boardServer(t, { launch: { command: [process.execPath, launcher, record, '-Name', '{name}'], timeoutSec: 1 } })
   const started = Date.now()
@@ -476,8 +476,8 @@ test('"Close the tab" closes it and drops the launch; "Trust" refuses a screen w
 })
 
 test('a launcher that gives up at the trust dialog: the launch is kept, and once trusted the board does what the launcher did not', { timeout: 40_000 }, async t => {
-  const launcher = fileURLToPath(new URL('./fixtures/fake-launcher.mjs', import.meta.url))
-  const box0 = sandbox(t)
+  const launcher = fileURLToPath(new URL('./support/fake-launcher.ts', import.meta.url))
+  const box0 = await sandbox(t)
   const record = join(box0.dir, 'launcher.json')
   const { box, post, board, launched } = await boardServer(t, { launch: { command: [process.execPath, launcher, record, '-Name', '{name}', '-Cwd', '{cwd}', '-Workspace', '{workspace}'] } })
   const dir = join(box.dir, 'Will fail here')

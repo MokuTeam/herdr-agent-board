@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import { test } from 'node:test'
-import { sandbox } from './fixtures/sandbox.mjs'
+import { sandbox } from './support/sandbox.ts'
 
 for (const sleeping of [false, true]) {
   for (const identity of ['same', 'different', 'missing', 'no-agent', 'blocked']) {
     test(`send: sleeping=${sleeping}, identity=${identity}`, { timeout: 10_000 }, async t => {
-      const box = sandbox(t)
+      const box = await sandbox(t)
       const reply = { 'agent get': { result: { agent: identity === 'no-agent' ? null : {
         agent_status: identity === 'blocked' ? 'blocked' : 'idle',
         ...(identity === 'missing' ? {} : { agent_session: { value: identity === 'different' ? 'replacement' : 'expected' } }),
@@ -36,7 +36,7 @@ for (const sleeping of [false, true]) {
 }
 
 test('send refuses when a previously unknown identity becomes a different known session', async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   box.state({ 'agent get': { result: { agent: { agent_session: { value: 'new-session' }, agent_status: 'idle' } } } })
   const out = await box.run('send', { cfg: {}, item: { pane: 'p', session: null, name: 'Test' }, text: 'hello' }).exited
   assert.equal(out.code, 0, out.stderr)

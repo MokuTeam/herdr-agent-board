@@ -2,13 +2,13 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { sandbox } from './fixtures/sandbox.mjs'
+import { sandbox } from './support/sandbox.ts'
 
 for (const background of [false, true]) {
   for (const existing of [false, true]) {
     for (const result of ['ok', 'error', 'missing-pane']) {
       test(`open: existing=${existing}, background=${background}, result=${result}`, { timeout: 10_000 }, async t => {
-        const box = sandbox(t)
+        const box = await sandbox(t)
         const stateDir = join(box.env.LOCALAPPDATA, 'herdr/plugins/agent-board')
         mkdirSync(stateDir, { recursive: true })
         writeFileSync(join(stateDir, 'board.json'), JSON.stringify({ pane: 'gone' }))

@@ -4,7 +4,7 @@ import http from 'node:http'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { root, sandbox, until } from './fixtures/sandbox.mjs'
+import { root, sandbox, until } from './support/sandbox.ts'
 
 // The scheduler runs in a child process against a fake herdr: entries are files in the sandbox's
 // schedule folder, the session's prompt is a logged `herdr agent prompt` call.
@@ -67,7 +67,7 @@ function cli(box, args) {
 }
 
 test('board remind / every / schedule / unschedule keep entries for the session', { timeout: 15_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   const s = ['--session', '11111111-2222-3333-4444-555555555555']
   const one = await cli(box, ['remind', ...s, 'in', '30m', 'check the CI run'])
   assert.equal(one.code, 0, one.out)
@@ -103,7 +103,7 @@ test('board remind / every / schedule / unschedule keep entries for the session'
 })
 
 test('a due reminder goes into an idle session, then it is gone and logged', { timeout: 15_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   herdrWith(box, 'idle')
   put(box, { id: 'aaaaa1', text: 'check the CI run', at: Date.now() - 1000, next: Date.now() - 1000 })
   await scheduler(box)
@@ -114,7 +114,7 @@ test('a due reminder goes into an idle session, then it is gone and logged', { t
 })
 
 test('after the board was off: a one-off says how late, a cron entry runs once for all it missed', { timeout: 15_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   herdrWith(box, 'idle')
   const top = new Date()
   top.setMinutes(0, 0, 0)
@@ -140,20 +140,20 @@ test('after the board was off: a one-off says how late, a cron entry runs once f
 })
 
 test('on time, a working session gets it queued into its turn; a dialog and a draft still hold it', { timeout: 15_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   herdrWith(box, 'working')
   put(box, { id: 'cdcd01', text: 'mid-turn', at: Date.now() - 1000, next: Date.now() - 1000 })
   await scheduler(box)
   await until(() => prompts(box).length === 1)
   assert.deepEqual(prompts(box), ['[board reminder] mid-turn'])
 
-  const dialog = sandbox(t)
+  const dialog = await sandbox(t)
   herdrWith(dialog, 'blocked')
   put(dialog, { id: 'cdcd02', text: 'not into a dialog', at: Date.now() - 1000, next: Date.now() - 1000 })
   await scheduler(dialog)
   await until(() => read(dialog, 'cdcd02')?.why === 'dialog')
 
-  const draft = sandbox(t)
+  const draft = await sandbox(t)
   herdrWith(draft, 'working', { 'agent read': { text: screen('the user types') } })
   put(draft, { id: 'cdcd03', text: 'not over a draft', at: Date.now() - 1000, next: Date.now() - 1000 })
   await scheduler(draft)
@@ -163,7 +163,7 @@ test('on time, a working session gets it queued into its turn; a dialog and a dr
 })
 
 test('--idle: a working session gets it once it is free; one that stays busy has it logged as missed', { timeout: 15_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   herdrWith(box, 'working')
   put(box, { id: 'ccccc1', idle: true, text: 'when free', at: Date.now() - 1000, next: Date.now() - 1000 })
   await scheduler(box, { scheduleWaitMin: 1 })
@@ -175,7 +175,7 @@ test('--idle: a working session gets it once it is free; one that stays busy has
   await until(() => prompts(box).length === 1)
   assert.deepEqual(prompts(box), ['[board reminder] when free'])
 
-  const busy = sandbox(t)
+  const busy = await sandbox(t)
   herdrWith(busy, 'blocked')
   put(busy, { id: 'ccccc2', idle: true, text: 'never free', at: Date.now() - 1000, next: Date.now() - 1000 })
   put(busy, { id: 'ccccc3', key: 's1', text: 'cron never free', cron: '* * * * *', next: Date.now() - 1000 })
@@ -191,7 +191,7 @@ test('--idle: a working session gets it once it is free; one that stays busy has
 })
 
 test('text the user left in the input box holds the reminder back until it is gone', { timeout: 15_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   herdrWith(box, 'idle', { 'agent read': { text: screen('half a thought') } })
   put(box, { id: 'ddddd2', text: 'not over your draft', at: Date.now() - 1000, next: Date.now() - 1000 })
   await scheduler(box)
@@ -203,7 +203,7 @@ test('text the user left in the input box holds the reminder back until it is go
 })
 
 test('after /clear the reminder goes to the new session in the same pane and folder', { timeout: 15_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   herdrWith(box, 'idle')
   // Set by session s0, which /clear replaced with s1 in pane p1.
   put(box, { id: 'ddddd3', key: 's0', pane: 'p1', cwd: box.dir, text: 'still yours', at: Date.now() - 1000, next: Date.now() - 1000 })
@@ -217,7 +217,7 @@ test('after /clear the reminder goes to the new session in the same pane and fol
 })
 
 test('a reminder set for another session says who set it', { timeout: 15_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   herdrWith(box, 'idle')
   const past = Date.now() - 1000
   put(box, { id: 'abab01', text: 'review my PR', at: past, next: past, from: { key: 's7', name: 'lead-session' } })
@@ -235,7 +235,7 @@ test('a reminder set for another session says who set it', { timeout: 15_000 }, 
 })
 
 test('board remind records who set it, the pane and the pane folder, and no control characters', { timeout: 15_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   config(box)
   const project = join(box.dir, 'project')
   const snapshot = {
@@ -267,7 +267,7 @@ test('board remind records who set it, the pane and the pane folder, and no cont
 })
 
 test('board remind says nothing about the board when one with the scheduler answers', { timeout: 15_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   const board = http.createServer((req, res) => res.end(JSON.stringify({ items: [], schedules: [] })))
   await new Promise(resolve => board.listen(0, '127.0.0.1', resolve))
   t.after(() => new Promise(resolve => board.close(resolve)))
@@ -278,7 +278,7 @@ test('board remind says nothing about the board when one with the scheduler answ
 })
 
 test('a cron entry whose session stays gone is dropped after three runs in a row', { timeout: 15_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   herdrWith(box, 'idle')
   const past = Date.now() - 1000
   put(box, { id: 'acac01', key: 's-gone', text: 'orphan', cron: '0 * * * *', next: past, gone: 2, missed: 2 })
@@ -297,7 +297,7 @@ test('a cron entry whose session stays gone is dropped after three runs in a row
 })
 
 test('a sleeping session is woken through herdr-wake before it gets the text', { timeout: 15_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   box.state({ 'api snapshot': { result: { snapshot: { panes: [], tabs: [], workspaces: [] } } } })
   let wakes = 0
   const wake = http.createServer((req, res) => {
@@ -318,7 +318,7 @@ test('a sleeping session is woken through herdr-wake before it gets the text', {
 })
 
 test('a run another board claimed is left alone until its claim runs out', { timeout: 15_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   herdrWith(box, 'idle')
   put(box, { id: 'eeeee1', text: 'claimed', at: Date.now() - 1000, next: Date.now() - 1000, claim: { pid: process.pid, at: Date.now() } })
   put(box, { id: 'eeeee2', key: 's9', text: 'stale claim', at: Date.now() - 1000, next: Date.now() - 1000, claim: { pid: process.pid, at: Date.now() - 600_000 } })
@@ -337,7 +337,7 @@ test('a run another board claimed is left alone until its claim runs out', { tim
 })
 
 test('an entry cancelled while its run is on the way stays cancelled', { timeout: 15_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   const gate = join(box.dir, 'prompt-gate')
   herdrWith(box, 'idle', { 'agent prompt': { result: {}, waitFor: gate } })
   put(box, { id: 'fffff1', text: 'every minute', cron: '* * * * *', next: Date.now() - 1000 })
@@ -351,7 +351,7 @@ test('an entry cancelled while its run is on the way stays cancelled', { timeout
 })
 
 test('a board reminder does not count as the user answering the session', { timeout: 15_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   mkdirSync(cardsOf(box), { recursive: true })
   const card = () => JSON.parse(readFileSync(join(cardsOf(box), 's1.json'), 'utf8'))
   writeFileSync(join(cardsOf(box), 's1.json'), JSON.stringify({ key: 's1', ask: 'Send it?', askSince: 1, pin: 'me', pinAt: 1, briefV: 99 }))
@@ -370,7 +370,7 @@ test('a board reminder does not count as the user answering the session', { time
 })
 
 test('the web board lists the schedule without the bookkeeping and cancels an entry', { timeout: 15_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   herdrWith(box, 'idle')
   put(box, { id: 'abcdef', text: 'later', at: Date.now() + HOUR, next: Date.now() + HOUR, claim: { pid: 1, at: 1 }, tried: 1 })
   const probe = http.createServer()

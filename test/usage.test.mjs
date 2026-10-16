@@ -1,8 +1,9 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtempSync,writeFileSync,rmSync,symlinkSync,unlinkSync} from 'node:fs'
+import {mkdtempSync,writeFileSync,rmSync,unlinkSync} from 'node:fs'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
+import {symlinkOrSkip,SYMLINK_SKIP_REASON} from './support/fs.ts'
 import {localUsage} from '../src/usage.mjs'
 function fixture(t){const dir=mkdtempSync(join(tmpdir(),'board-usage-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));return {dir,file:join(dir,'claude-limits-latest.json')}}
 test('only known numeric cache fields leave the reader; zero is valid, context/account stay unknown',t=>{
@@ -22,6 +23,6 @@ test('old/expired, malformed, future and missing caches never become invented fr
  for(const data of ['bad',JSON.stringify({fetchedAtMs:now+6000,fiveHour:{usedPercentage:10}}),JSON.stringify({fetchedAtMs:now,fiveHour:{usedPercentage:'10'}}),JSON.stringify({fetchedAtMs:now,fiveHour:{usedPercentage:101}})]){
   writeFileSync(file,data);assert.equal(localUsage(dir,now).limits.available,false)
  }
- unlinkSync(file);const other=join(dir,'other.json');writeFileSync(other,'{}');symlinkSync(other,file)
- assert.equal(localUsage(dir,now).limits.available,false)
+ unlinkSync(file);const other=join(dir,'other.json');writeFileSync(other,'{}');if(symlinkOrSkip(other,file)) assert.equal(localUsage(dir,now).limits.available,false)
+ else t.skip(SYMLINK_SKIP_REASON)
 })

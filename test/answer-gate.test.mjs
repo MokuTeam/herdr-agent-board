@@ -6,9 +6,9 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { parseDialog } from '../src/questions.mjs'
-import { sandbox, until } from './fixtures/sandbox.mjs'
+import { sandbox, until } from './support/sandbox.ts'
 
-const screen = name => readFileSync(new URL(`./fixtures/screens/${name}.txt`, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+const screen = name => readFileSync(new URL(`./support/screens/${name}.txt`, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const BASH = screen('permission-bash')
 const FINGERPRINT = parseDialog(BASH).fingerprint
 // Claude's input box and no dialog: what the pane shows once a dialog is answered.
@@ -34,7 +34,7 @@ async function run(box, input) {
 }
 
 test('refusals come before any key: not Claude, another session, not waiting, no fresh question', { timeout: 30_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   transcript(join(box.dir, 's1.jsonl'), 'toolu_1')
   box.state({ 'agent get': agent(), 'agent read': { text: screen('question-single') } })
   const notClaude = await run(box, { kind: 'permit', item: item(box, { agent: 'codex' }), body: { fingerprint: FINGERPRINT, option: 1 } })
@@ -67,7 +67,7 @@ test('refusals come before any key: not Claude, another session, not waiting, no
 })
 
 test('an answer goes in, and counts as done once the transcript has it', { timeout: 30_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   const path = join(box.dir, 's1.jsonl')
   transcript(path, 'toolu_1')
   box.state({ 'agent get': agent(), 'agent read': { text: screen('question-single') }, 'agent send-keys': { result: null } })
@@ -82,7 +82,7 @@ test('an answer goes in, and counts as done once the transcript has it', { timeo
 })
 
 test('a permission prompt: one key, done when the input box is back twice; a blank screen proves nothing', { timeout: 30_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   box.state({ 'agent get': agent(), 'agent read': { text: BASH }, 'agent send-keys': { result: null } })
   const running = box.run('answer', { kind: 'permit', item: item(box), body: { fingerprint: FINGERPRINT, option: 1 } })
   await until(() => keysSent(box).length > 0, 10_000)
@@ -92,7 +92,7 @@ test('a permission prompt: one key, done when the input box is back twice; a bla
   assert.deepEqual(keysSent(box), [['agent', 'send-keys', 'p1', '1']])
 
   // Blank after the key: not taken for done.
-  const blank = sandbox(t)
+  const blank = await sandbox(t)
   blank.state({ 'agent get': agent(), 'agent read': { text: BASH }, 'agent send-keys': { result: null } })
   const second = blank.run('answer', { kind: 'permit', item: item(blank), body: { fingerprint: FINGERPRINT, option: 4 } })
   await until(() => keysSent(blank).length > 0, 10_000)
@@ -104,7 +104,7 @@ test('a permission prompt: one key, done when the input box is back twice; a bla
 })
 
 test('herdr failing: before any key it says so; after keys it says the dialog may be partly filled in', { timeout: 30_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   box.state({ 'agent get': agent(), 'agent read': { error: 'pipe closed' } })
   const before = await run(box, { kind: 'permit', item: item(box), body: { fingerprint: FINGERPRINT, option: 1 } })
   assert.match(before.error, /herdr did not answer: .*pipe closed/)
@@ -117,7 +117,7 @@ test('herdr failing: before any key it says so; after keys it says the dialog ma
 })
 
 test('an own answer that starts with a dash gets a space before it', { timeout: 10_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   box.state({ 'pane send-text': { result: null } })
   await run(box, { kind: 'text', item: { pane: 'p1' }, text: '-1 day' })
   await run(box, { kind: 'text', item: { pane: 'p1' }, text: 'plain' })
@@ -137,7 +137,7 @@ async function unusedPort() {
 const SNAPSHOT = { result: { snapshot: { panes: [{ pane_id: 'p1', agent: 'claude', agent_session: { value: 's1' }, agent_status: 'blocked', cwd: '' }], tabs: [], workspaces: [] } } }
 
 async function board(t, state) {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   mkdirSync(join(box.env.HOME, '.claude', 'projects', 'p'), { recursive: true })
   box.state(state)
   const port = await unusedPort()
@@ -149,7 +149,7 @@ async function board(t, state) {
 }
 
 test('the route: stale data, another page, another session, one answer at a time', { timeout: 40_000 }, async t => {
-  const gate = sandbox(t).dir
+  const gate = (await sandbox(t)).dir
   const { box, proc, port, post } = await board(t, { 'api snapshot': SNAPSHOT, 'agent get': { ...agent(), waitFor: join(gate, 'go') }, 'agent read': { text: BASH }, 'agent send-keys': { result: null } })
   await until(() => box.calls().some(a => a[1] === 'snapshot'))
   proc.send('refresh')

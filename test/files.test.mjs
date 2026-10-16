@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { describe, kindOf, openCommand, parseCsv, preview, resolvePath } from '../src/files.mjs'
 import { inline, looksLikePath, markdown } from '../web/markdown.js'
-import { sandbox, until } from './fixtures/sandbox.mjs'
+import { sandbox, until } from './support/sandbox.ts'
 
 test('paths in the chat: links, code and running text become candidates; the rest stays text', () => {
   assert.match(inline('[notes](herdr-reveal:C:/Work/My%20Notes/a.md)'), /^<a class="fs" data-path="herdr-reveal:C:\/Work\/My%20Notes\/a\.md">notes<\/a>$/)
@@ -92,7 +92,7 @@ async function unusedPort() {
 }
 
 test('file API: stat, preview, raw bytes behind the token with ranges, and refusals', { timeout: 20_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   box.state({ 'api snapshot': { error: 'offline' } })
   const files = join(box.dir, 'files')
   mkdirSync(files)

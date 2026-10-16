@@ -3,7 +3,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { keyTowardYes, sameFolder, trustDialog } from '../src/trust.mjs'
-import { trustScreen } from './fixtures/trust-screen.mjs'
+import { trustScreen } from './support/trust-screen.ts'
 
 const FOLDER = 'C:\\Users\\me\\AppData\\Local\\Temp\\work\\a-new-project-with-a-long-name'
 

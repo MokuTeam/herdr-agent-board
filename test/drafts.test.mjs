@@ -37,8 +37,8 @@ test('HTTP messages recheck a fresh snapshot and reject replaced sessions/offlin
   const http=await import('node:http')
   const {writeFileSync}=await import('node:fs')
   const {join}=await import('node:path')
-  const {sandbox,until}=await import('./fixtures/sandbox.mjs')
-  const box=sandbox(t)
+  const {sandbox,until}=await import('./support/sandbox.ts')
+  const box=await sandbox(t)
   const reserve=http.createServer();await new Promise(r=>reserve.listen(0,'127.0.0.1',r))
   const port=reserve.address().port;await new Promise(r=>reserve.close(r))
   const snapshot=session=>({panes:[{pane_id:'p',agent:'claude',agent_session:{value:session},agent_status:'idle'}],tabs:[],workspaces:[]})
@@ -77,8 +77,8 @@ test('HTTP messages recheck a fresh snapshot and reject replaced sessions/offlin
 
 test('a pane with no Claude session id still takes messages, also without a request id', { timeout: 15000 }, async t => {
   const http = await import('node:http')
-  const { sandbox, until } = await import('./fixtures/sandbox.mjs')
-  const box = sandbox(t)
+  const { sandbox, until } = await import('./support/sandbox.ts')
+  const box = await sandbox(t)
   const reserve = http.createServer()
   await new Promise(r => reserve.listen(0, '127.0.0.1', r))
   const port = reserve.address().port

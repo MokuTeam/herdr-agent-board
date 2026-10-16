@@ -3,7 +3,7 @@ import http from 'node:http'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { sandbox, until } from './fixtures/sandbox.mjs'
+import { sandbox, until } from './support/sandbox.ts'
 import { translator } from '../web/i18n.js'
 import { updateLive } from '../web/live.js'
 
@@ -16,7 +16,7 @@ async function unusedPort() {
 }
 
 test('GET and SSE expose initial, failed, successful, stale and recovered snapshots', { timeout: 20_000 }, async t => {
-  const box = sandbox(t)
+  const box = await sandbox(t)
   const gate = join(box.dir, 'first-refresh')
   box.state({ 'api snapshot': { error: 'offline', waitFor: gate } })
   const port = await unusedPort()

@@ -3,15 +3,15 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { drivePermission, driveQuestions } from '../src/answer.mjs'
 import { answerText, arrows, onQuestion, parseDialog, publicDialog, questionsOf, resolveAnswers, reviewMatches, sameText, screenIndex, typedOther } from '../src/questions.mjs'
-import { FakeDialog } from './fixtures/fake-dialog.mjs'
+import { FakeDialog } from './support/fake-dialog.ts'
 
 // A checkout with core.autocrlf turns the screens into CRLF; herdr gives LF.
-const screen = name => readFileSync(new URL(`./fixtures/screens/${name}.txt`, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+const screen = name => readFileSync(new URL(`./support/screens/${name}.txt`, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const fast = { timeout: 200, every: 1 }
 // Claude's input box and no dialog: the screen once a dialog is answered.
 const IDLE = ['● Done.', '', '─'.repeat(60), '❯ ', '─'.repeat(60), '  ⏵⏵ manual mode on'].join('\n')
 
-// The questions the screens in fixtures/screens were taken from.
+// The questions the screens in support/screens were taken from.
 const COLOR = questionsOf({ questions: [{ question: 'Which color should the test widget use?', header: 'Color', multiSelect: false, options: [
   { label: 'Red', description: 'A warm red, good for alerts' }, { label: 'Green', description: 'Calm green for success states' }, { label: 'Blue', description: 'Neutral blue, the default' }] }] })
 const ORDER = questionsOf({ questions: [

@@ -32,7 +32,7 @@ test('wide desktop does not add dialog history entries',()=>{
 
 test('stale herdr data: herdr actions wait, the board’s own edits and previews go on', {timeout:15000}, async t=>{
  const http=await import('node:http');const {writeFileSync}=await import('node:fs');const {join}=await import('node:path')
- const {sandbox,until}=await import('./fixtures/sandbox.mjs');const box=sandbox(t)
+ const {sandbox,until}=await import('./support/sandbox.ts');const box=await sandbox(t)
  const reserve=http.createServer();await new Promise(r=>reserve.listen(0,'127.0.0.1',r));const port=reserve.address().port;await new Promise(r=>reserve.close(r))
  box.state({'api snapshot':{result:{snapshot:{panes:[{pane_id:'p',agent:'claude',agent_session:{value:'a'},agent_status:'idle'}],tabs:[],workspaces:[]}}}})
  const proc=box.run('server',{port,categories:[{id:'other',title:'Other',color:'gray'}],wakeUrl:null,refreshSec:3600})
