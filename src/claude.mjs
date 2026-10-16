@@ -3,9 +3,9 @@
 // transcript, where Claude keeps the session's ai-title and the user's last prompt.
 import { closeSync, openSync, readSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { onLanguage, t } from './core/lang.ts'
+import { onLanguage } from './core/lang.ts'
+import { parseConversation, parseTranscriptTail, tailComplete } from './core/transcript.ts'
 import { CLAUDE_DIR } from './paths.mjs'
-import { questionsOf } from './questions.mjs'
 
 function alive(pid) {
   try {
@@ -77,95 +77,12 @@ function readTail(path, size, bytes) {
   return start ? text.slice(text.indexOf('\n') + 1) : text
 }
 
-/** Clean a prompt for one line on a card: no tags, no Telegram envelope, no line breaks. */
-export function cleanPrompt(text) {
-  return String(text ?? '')
-    .replace(/^\[telegram[^\]]*\]\s*/i, '')
-    .replace(/^[❯>]\s*/, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-
-const firstLine = s => String(s ?? '').split('\n').find(l => l.trim())?.trim() ?? ''
-const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
-
-/** "Bash", "slack · read_channel", "Gmail · search_threads" for a tool name. */
-export function toolLabel(name) {
-  const m = /^mcp__(.+?)__(.+)$/.exec(name ?? '')
-  if (!m) return name ?? ''
-  const server = m[1].replace(/^plugin_[^_]+_/, '').replace(/^claude_ai_/, '')
-  const tool = m[2].toLowerCase().startsWith(`${server.toLowerCase()}_`) ? m[2].slice(server.length + 1) : m[2]
-  return `${server} · ${tool}`
-}
-
-/** The few words that say what a tool call is about: a Bash description, a file name, a query. */
-/** The file a tool call worked on, in full, for the thread to open; '' for other tools. */
-export function toolPath(name, input) {
-  if (!input || typeof input !== 'object') return ''
-  return ['Read', 'Edit', 'Write', 'NotebookEdit'].includes(name) ? String(input.file_path || input.notebook_path || '') : ''
-}
-
-export function toolDetail(name, input) {
-  if (!input || typeof input !== 'object') return ''
-  const base = p => String(p ?? '').split(/[\\/]/).pop()
-  switch (name) {
-    case 'Bash':
-    case 'PowerShell':
-      return clip(input.description || firstLine(input.command), 160)
-    case 'Read':
-    case 'Edit':
-    case 'Write':
-    case 'NotebookEdit':
-      return base(input.file_path || input.notebook_path)
-    case 'Grep':
-    case 'Glob':
-      return clip(String(input.pattern ?? ''), 120)
-    case 'WebFetch':
-      try {
-        return new URL(input.url).host
-      } catch {
-        return ''
-      }
-    case 'Agent':
-    case 'Task':
-      return input.description ?? ''
-    case 'AskUserQuestion':
-      return input.questions?.[0]?.question ?? ''
-    case 'SendMessage':
-      return !input.to ? '' : /^uds:|pipe/i.test(input.to) ? t('tool.peer') : `→ ${input.to}`
-    case 'Skill':
-      return input.skill ?? ''
-  }
-  for (const k of ['description', 'query', 'question', 'subject', 'text', 'title', 'url', 'name', 'path']) {
-    if (typeof input[k] === 'string' && input[k].trim()) return clip(firstLine(input[k]), 160)
-  }
-  const any = Object.values(input).find(v => typeof v === 'string' && v.trim() && v.length < 300)
-  return any ? clip(firstLine(any), 160) : ''
-}
-
-/** Text the user typed, without the envelopes Claude Code and the hooks wrap around it. */
-function userText(content) {
-  const raw = typeof content === 'string' ? content : Array.isArray(content) ? content.filter(b => b.type === 'text').map(b => b.text).join('\n') : ''
-  return raw
-    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
-    .replace(/<(local-command-stdout|local-command-stderr|command-message|command-args)>[\s\S]*?<\/\1>/g, '')
-    .replace(/<command-name>([\s\S]*?)<\/command-name>/g, '$1')
-    .replace(/^\[telegram[^\]]*\]\s*/i, '')
-    .trim()
-}
-
 const tailCache = new Map() // path -> { mtimeMs, size, info }
 onLanguage(() => tailCache.clear()) // tool details are in the board's language
 
 /**
- * What the end of a transcript says, cached until the file changes:
- *   title     Claude's own title of the session (ai-title)
- *   prompt    the user's last prompt
- *   lastText  the agent's last words to the user
- *   tool      the last tool call: { id, name, label, detail, pending, questions }; pending = no
- *             result yet, questions = an AskUserQuestion call's questions (questions.mjs)
+ * What the end of a transcript says (title, prompt, lastText, tool: see parseTranscriptTail),
+ * cached until the file changes.
  */
 export function transcriptInfo(path) {
   if (!path) return null
@@ -173,157 +90,26 @@ export function transcriptInfo(path) {
   if (!st) return null
   const cached = tailCache.get(path)
   if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached.info
-  // question: the agent's last words end in a question; replied: the user wrote after them.
-  const info = { title: '', prompt: '', lastText: '', question: '', replied: false, tool: null, activity: st.mtimeMs }
-  const done = () => info.title && info.prompt && info.lastText && info.tool
+  let info
   // Big tool results can push everything far back: widen the window once.
   for (const bytes of [256 << 10, 2 << 20]) {
-    const lines = readTail(path, st.size, bytes).split('\n')
-    const results = new Set() // tool_use ids that already have a result (seen later in the file)
-    for (let i = lines.length - 1; i >= 0 && !done(); i--) {
-      const line = lines[i]
-      if (!line) continue
-      if (line.includes('"type":"ai-title"')) {
-        if (!info.title) info.title = parse(line)?.aiTitle ?? ''
-        continue
-      }
-      if (line.includes('"type":"last-prompt"')) {
-        if (!info.prompt) info.prompt = cleanPrompt(parse(line)?.lastPrompt)
-        continue
-      }
-      if (!line.includes('"type":"user"') && !line.includes('"type":"assistant"')) continue
-      const o = parse(line)
-      const content = o?.message?.content
-      if (!o || o.isSidechain) continue
-      if (o.type === 'user') {
-        if (Array.isArray(content)) for (const b of content) if (b.type === 'tool_result') results.add(b.tool_use_id)
-        // A reminder the board typed in (scheduler.mjs) is not the user answering.
-        if (!info.lastText && !o.isMeta && userText(content) && !/^\[board (reminder|schedule)\b/.test(userText(content))) info.replied = true
-        continue
-      }
-      if (o.type !== 'assistant' || !Array.isArray(content)) continue
-      // How full the context is: what the last real request carried, cached parts included.
-      const u = o.message?.usage
-      if (info.context == null && u && o.message.model !== '<synthetic>') {
-        const tokens = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0)
-        if (tokens) info.context = tokens
-      }
-      for (let j = content.length - 1; j >= 0; j--) {
-        const b = content[j]
-        if (b.type === 'tool_use' && !info.tool) {
-          info.tool = { id: b.id, name: b.name, label: toolLabel(b.name), detail: toolDetail(b.name, b.input), pending: !results.has(b.id) }
-          // The form only while it waits for an answer: every board refresh carries it to the page.
-          if (b.name === 'AskUserQuestion' && info.tool.pending) info.tool.questions = questionsOf(b.input)
-        } else if (b.type === 'text' && !info.lastText && b.text?.trim()) {
-          info.lastText = clip(b.text.trim(), 700)
-          info.question = trailingQuestion(b.text)
-        }
-      }
-    }
-    if (done() || bytes >= st.size) break
+    info = parseTranscriptTail(readTail(path, st.size, bytes).split('\n'))
+    if (tailComplete(info) || bytes >= st.size) break
   }
+  info.activity = st.mtimeMs
   tailCache.set(path, { mtimeMs: st.mtimeMs, size: st.size, info })
   return info
 }
 
-/**
- * The question a message ends with, or '' when it does not end with one: its last sentence or
- * two, without markdown. Code blocks and trailing markup ( **, `, quotes, brackets) are ignored.
- */
-export function trailingQuestion(text) {
-  const t = String(text ?? '')
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/[\s*_`)\]»"'”]+$/u, '')
-  if (!t.endsWith('?')) return ''
-  const para = t.split(/\n\s*\n/).pop()
-  const sentences = para
-    .replace(/[*_`#>]+/g, '')
-    .split(/(?<=[.!?…:])\s+/)
-    .map(s => s.replace(/^\s*(?:[-•]|\d+\.)\s+/, '').trim())
-    .filter(Boolean)
-  let q = sentences.pop() ?? ''
-  const before = sentences.pop()
-  if (before && before.length + q.length < 200) q = `${before} ${q}`
-  return clip(q.replace(/\s+/g, ' ').trim(), 300)
-}
-
-function parse(line) {
-  try {
-    return JSON.parse(line)
-  } catch {
-    return null
-  }
-}
-
-/**
- * The last `limit` turns of a session for the detail view: the user's prompts, the agent's
- * texts and its tool calls in a line each (done = the call has a result). A question form
- * (AskUserQuestion) carries its questions and, once done, the answers: { ask, answers }, answers
- * null when it was closed without one.
- */
+/** The last `limit` turns of a session for the detail view (see parseConversation). */
 export function conversation(path, limit = 40) {
   const st = path && statSync(path, { throwIfNoEntry: false })
   if (!st) return []
   // Screenshots and big tool results can fill megabytes: read further back when the window held few turns.
   let items = []
   for (const bytes of [2 << 20, 8 << 20]) {
-    items = turns(readTail(path, st.size, bytes))
+    items = parseConversation(readTail(path, st.size, bytes).split('\n'), Infinity)
     if (items.filter(i => i.role !== 'tool').length >= limit / 3 || bytes >= st.size) break
   }
   return items.slice(-limit)
-}
-
-/** The answers Claude Code recorded for a question form, in the order of its questions. */
-function askAnswers(ask, result) {
-  const answers = result?.answers
-  if (!answers || typeof answers !== 'object') return null
-  // Keyed by the full question text, which questionsOf keeps whole.
-  return ask.map(q => (typeof answers[q.question] === 'string' ? clip(answers[q.question], 2000) : ''))
-}
-
-function turns(text) {
-  const items = []
-  const tools = new Map() // tool_use id -> item
-  for (const line of text.split('\n')) {
-    if (!line || !(line.includes('"type":"user"') || line.includes('"type":"assistant"') || line.includes('"type":"queued_command"'))) continue
-    const o = parse(line)
-    if (!o || o.isSidechain || o.isMeta || o.isCompactSummary) continue
-    const content = o.message?.content
-    const at = Date.parse(o.timestamp) || 0
-    // A prompt sent while the session worked goes into the running turn, and the transcript
-    // keeps it as a queued command, not a user line. Other sessions' messages and task
-    // notifications arrive the same way; only what a person typed is shown.
-    if (o.type === 'attachment') {
-      const a = o.attachment
-      const text = a?.type === 'queued_command' && a.commandMode === 'prompt' && a.origin?.kind !== 'peer' ? userText(a.prompt) : ''
-      const prev = items.at(-1)
-      if (text && !(prev?.role === 'user' && prev.text === clip(text, 3000))) items.push({ role: 'user', text: clip(text, 3000), at: Date.parse(a.timestamp) || at })
-      continue
-    }
-    if (o.type === 'user') {
-      if (Array.isArray(content)) {
-        for (const b of content) {
-          if (b.type !== 'tool_result' || !tools.has(b.tool_use_id)) continue
-          const tool = tools.get(b.tool_use_id)
-          tool.done = true
-          if (tool.ask) tool.answers = askAnswers(tool.ask, o.toolUseResult)
-        }
-        if (content.every(b => b.type === 'tool_result')) continue
-      }
-      const text = userText(content)
-      if (text) items.push({ role: 'user', text: clip(text, 3000), at })
-    } else if (Array.isArray(content)) {
-      for (const b of content) {
-        if (b.type === 'text' && b.text?.trim()) items.push({ role: 'assistant', text: clip(b.text.trim(), 4000), at })
-        else if (b.type === 'tool_use') {
-          const t = { role: 'tool', label: toolLabel(b.name), detail: toolDetail(b.name, b.input), path: toolPath(b.name, b.input), done: false, at }
-          const ask = b.name === 'AskUserQuestion' ? questionsOf(b.input) : null
-          if (ask) Object.assign(t, { id: b.id, ask: ask.map(({ question, header, multiSelect }) => ({ question, header, multiSelect })), answers: null })
-          tools.set(b.id, t)
-          items.push(t)
-        }
-      }
-    }
-  }
-  return items
 }

@@ -22,7 +22,10 @@
 // dashed rules, "Do you want to ...?" and numbered options; a digit picks one at once.
 
 import { createHash } from 'node:crypto'
+import { LIMITS, questionsOf } from './core/question-form.ts'
 import { stripAnsi } from './screen.mjs'
+
+export { LIMITS, questionsOf }
 
 const RULE = /^\s*─{8,}\s*$/
 const DASHED = /^\s*╌{8,}\s*$/
@@ -34,7 +37,6 @@ const BOX = /\s{2,}[┌│└].*$/
 const PLACEHOLDER = /^Type something\.?$/
 export const OTHER_LIMIT = 1000
 
-const str = v => (typeof v === 'string' ? v : '')
 const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 /** Text as it reads on a screen: no markdown marks, one space between words. */
 export const norm = s =>
@@ -52,41 +54,6 @@ export const norm = s =>
 const flat = s => norm(s).replace(/\s+/g, '')
 /** The text of a row and the line wrapped under it, as one, for reading and for flat(). */
 const wrapJoin = (text, line) => norm(`${text} ${line}`)
-
-// The most a form the board answers may hold. Beyond that it is left to the terminal: a question
-// or a label cut short would differ from what the screen shows.
-export const LIMITS = { questions: 4, options: 8, question: 2000, header: 100, label: 500, description: 2000, preview: 8000 }
-
-/**
- * The questions of an AskUserQuestion call: { question, header, multiSelect, preview, options:
- * [{ label, description, preview? }] }. null when the board cannot answer it for sure: no
- * questions, one without text or options, more or longer than LIMITS, two questions with the
- * same text (the answers are keyed by it) or two options with the same label.
- */
-export function questionsOf(input) {
-  const list = Array.isArray(input?.questions) ? input.questions : []
-  if (!list.length || list.length > LIMITS.questions) return null
-  const out = []
-  for (const q of list) {
-    const raw = Array.isArray(q?.options) ? q.options : []
-    if (!raw.length || raw.length > LIMITS.options) return null
-    const options = raw.map(o => ({
-      label: str(o?.label).trim(),
-      description: str(o?.description).trim(),
-      ...(str(o?.preview).trim() ? { preview: str(o.preview) } : {}),
-    }))
-    const question = { question: str(q?.question).trim(), header: str(q?.header).trim(), multiSelect: q?.multiSelect === true, preview: options.some(o => o.preview), options }
-    const fits =
-      question.question &&
-      question.question.length <= LIMITS.question &&
-      question.header.length <= LIMITS.header &&
-      options.every(o => o.label && o.label.length <= LIMITS.label && o.description.length <= LIMITS.description && (o.preview ?? '').length <= LIMITS.preview) &&
-      new Set(options.map(o => o.label)).size === options.length
-    if (!fits) return null
-    out.push(question)
-  }
-  return new Set(out.map(q => q.question)).size === out.length ? out : null
-}
 
 /**
  * An own answer as the terminal's one-line field takes it: no control characters (C0, C1), no
