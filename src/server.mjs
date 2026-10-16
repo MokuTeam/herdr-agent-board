@@ -17,6 +17,7 @@ import { checkoutChanges, isCheckout } from './changes.mjs'
 import { searchHistory } from './history.mjs'
 import { localUsage } from './usage.mjs'
 import { conversation } from './claude.mjs'
+import { createWebBundle } from './server/web-bundle.ts'
 import { describe, FILE_TOKEN, MEDIA_TYPES, openWith, preview, resolvePath } from './files.mjs'
 import { categoryInfo, colorHex, editCategories, editSettings, laneRank, liveConfig, PALETTE } from './config.mjs'
 import { lang, t } from './lang.mjs'
@@ -113,20 +114,11 @@ const SWATCHES = Object.entries(PALETTE)
   .filter(([name]) => !['magenta', 'white'].includes(name))
   .map(([name, hex]) => ({ name, hex }))
 
-/** Changes whenever a file of the page changes, so open pages know to reload themselves. */
-function assetsVersion() {
-  let v = 0
-  try {
-    for (const name of readdirSync(WEB)) v = Math.max(v, statSync(join(WEB, name)).mtimeMs)
-  } catch {}
-  return String(Math.round(v))
-}
-
 /**
  * `cfg` is the live config object (liveConfig); pass it when the process already watches it and
  * call the returned `refresh` from its onChange. Without one the server watches config itself.
  */
-export function startServer({ cfg, log = () => {} } = {}) {
+export async function startServer({ cfg, log = () => {} } = {}) {
   cfg ??= liveConfig(() => refresh())
   const port = cfg.port ?? 12422
   pruneUploads(cfg.keepUploadsDays ?? 14)
@@ -134,7 +126,9 @@ export function startServer({ cfg, log = () => {} } = {}) {
   let stale = true
   let lastSuccessfulRefreshAt = null
   let payload
-  let version = assetsVersion()
+  // web/app.js is bundled in memory (Bun.build); its version, with the css and html, tells open pages to reload.
+  const bundle = await createWebBundle({ root: ROOT, entry: join(WEB, 'app.js'), log, watch: false })
+  let version = bundle.version()
   const clients = new Set()
   // Sessions started from the board (launch.mjs): their progress goes out with the board.
   const launches = createLaunches({ cfg, log, onChange: () => publish() })
@@ -489,7 +483,7 @@ export function startServer({ cfg, log = () => {} } = {}) {
       if (req.method === 'GET') {
         const name = path === '/' ? 'index.html' : path.slice(1)
         if (!/^[\w.-]+$/.test(name) || !TYPES[extname(name)]) return json(404, { error: 'not found' })
-        const body = await readFile(join(WEB, name)).catch(() => null)
+        const body = name === 'app.js' ? bundle.js() : await readFile(join(WEB, name)).catch(() => null)
         if (!body) return json(404, { error: 'not found' })
         res.writeHead(200, {
           'content-type': TYPES[extname(name)],
@@ -532,10 +526,11 @@ export function startServer({ cfg, log = () => {} } = {}) {
   } catch {}
   let webTimer = null
   try {
-    watch(WEB, () => {
+    watch(WEB, { recursive: true }, () => {
       clearTimeout(webTimer)
-      webTimer = setTimeout(() => {
-        version = assetsVersion()
+      webTimer = setTimeout(async () => {
+        await bundle.rebuild()
+        version = bundle.version()
         refresh()
       }, 200)
     })
