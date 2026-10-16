@@ -1,6 +1,7 @@
 // Types shared across the board. Grows with each ported module.
 
 import type { FormQuestion } from './dialogs/question-form.ts'
+import type { FailureKind } from './launch/launcher-command.ts'
 
 export type Lang = 'en' | 'ru'
 export type Vars = Record<string, string | number>
@@ -65,6 +66,31 @@ export type LaunchStep =
   | 'command'
   | 'trust'
   | 'trusting'
+
+/** What kind of failure a launch had, for the hint on its card; 'message': only its first message did not go. */
+export type LaunchFailure = FailureKind | 'message'
+
+/** A launch as the board payload shows it. */
+export interface LaunchView {
+  id: string
+  name: string
+  cwd: string
+  category: string
+  workspace: string
+  workspaceId: string | null
+  state: LaunchState
+  step: LaunchStep
+  error: string
+  kind: LaunchFailure | ''
+  pane: string | null
+  key: string | null
+  startedAt: number
+  doneAt: number | null
+  message: string
+  /** What a retry starts from: null once this launch made its worktree. */
+  worktree: { branch: string } | null
+  newWorkspace: boolean
+}
 
 export interface Config {
   language: string

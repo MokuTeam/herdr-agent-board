@@ -1,11 +1,20 @@
+import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
-import { translator } from '../src/core/i18n/translator.ts'
-import { updateLive } from '../web/live.js'
+import { translator } from '../../src/core/i18n/translator.ts'
+import { type LiveElement, updateLive } from '../../web/src/models/live.ts'
 
 test('live indicator distinguishes waiting, fresh and stale data and recovers with identical items', () => {
-  const classes = new Set()
-  const element = { classList: { toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name) } }, title: '' }
+  const classes = new Set<string>()
+  const element: LiveElement = {
+    classList: {
+      toggle(name, enabled) {
+        if (enabled) classes.add(name)
+        else classes.delete(name)
+        return !!enabled
+      },
+    },
+    title: '',
+  }
   const t = translator('en')
   updateLive(element, { stale: true, lastSuccessfulRefreshAt: null }, t)
   assert.equal(classes.has('on'), false)

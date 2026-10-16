@@ -1,7 +1,9 @@
-import { test } from 'node:test'
+import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { unseenResult, recordView, nextAttention, attentionTime } from '../web/attention.js'
+import { attentionTime, nextAttention, recordView, unseenResult } from '../../web/src/models/attention.ts'
+
 const done = { key: 'a', session: 'a', column: 'done', status: 'done', pin: 'done', activity: 100, lastText: 'Result' }
+
 test('view receipts survive reload, differ between sessions and reset for a new result', () => {
   const seen = JSON.parse(JSON.stringify(recordView({}, done)))
   assert.equal(unseenResult(done, seen), false)
@@ -13,6 +15,7 @@ test('view receipts survive reload, differ between sessions and reset for a new 
   assert.equal(done.pin, 'done')
   assert.equal(done.status, 'done')
 })
+
 test('next attention wraps, respects caller filtering and keeps unanswered questions after viewing', () => {
   const waiting = { key: 'b', column: 'me', askSince: 5, activity: 10 }
   const items = [done, waiting, { key: 'c', column: 'idle' }]
@@ -25,6 +28,7 @@ test('next attention wraps, respects caller filtering and keeps unanswered quest
   assert.equal(attentionTime({ ...waiting, askSince: null }), 10)
   assert.equal(attentionTime({ ...waiting, activity: 0, askSince: null }), null)
 })
+
 test('view receipts stay bounded', () => {
   let seen = {}
   for (let i = 0; i < 510; i++) seen = recordView(seen, { ...done, key: `s${i}` })

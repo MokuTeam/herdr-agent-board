@@ -9,34 +9,12 @@ import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
 import { failureKind } from '../../core/launch/launcher-command.ts'
 import { sameDir } from '../../core/launch/names.ts'
-import type { Item, LaunchState, LaunchStep } from '../../core/types.ts'
+import type { Item, LaunchView } from '../../core/types.ts'
 import { raiseTerminal } from '../../integrations/terminal-window.ts'
 import type { Deps } from '../deps.ts'
-import { LaunchError, type LauncherInfo, type LaunchFailure, launcherFor, removeLeftoverMessages } from './launcher.ts'
+import { LaunchError, type LauncherInfo, launcherFor, removeLeftoverMessages } from './launcher.ts'
 import { checkRequest } from './request.ts'
 import { type Launch, launchRunner, newLaunch } from './run.ts'
-
-/** A launch as the board payload shows it. */
-export interface LaunchView {
-  id: string
-  name: string
-  cwd: string
-  category: string
-  workspace: string
-  workspaceId: string | null
-  state: LaunchState
-  step: LaunchStep
-  error: string
-  kind: LaunchFailure | ''
-  pane: string | null
-  key: string | null
-  startedAt: number
-  doneAt: number | null
-  message: string
-  /** What a retry starts from: null once this launch made its worktree. */
-  worktree: { branch: string } | null
-  newWorkspace: boolean
-}
 
 export interface LaunchOptions {
   launcher: LauncherInfo

@@ -8,6 +8,7 @@ import { COLUMNS } from '../core/board.ts'
 import { categoryInfo, colorHex, laneRank, PALETTE } from '../core/categories.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { lang } from '../core/lang.ts'
+import type { BoardLimits, BoardPayload } from '../core/payload.ts'
 import type { Item } from '../core/types.ts'
 import { collect } from '../services/board.ts'
 import type { Deps } from '../services/deps.ts'
@@ -45,7 +46,7 @@ const SWATCHES = Object.entries(PALETTE)
  * else from the usagebar cache, else null. Windows past their reset are left out: Claude starts
  * them over. No age in it, so data that does not change does not make the board go out again.
  */
-function claudeLimits(deps: Deps) {
+function claudeLimits(deps: Deps): BoardLimits | null {
   const sources = [
     ['statusline', readUsageCache(stateDir()).limits],
     ['usagebar', deps.claude.localUsage().limits],
@@ -66,7 +67,7 @@ export function createBoardState({ deps, launches, version, push }: Options): Bo
   let payload = ''
 
   /** The board as clients see it, without the time of the last successful refresh. */
-  function board() {
+  function board(): Omit<BoardPayload, 'lastSuccessfulRefreshAt'> {
     const ids = [...new Set([...cfg.categories.map(c => c.id), ...items.map(i => i.category)])]
     const categories = ids
       .sort((a, b) => laneRank(cfg, a) - laneRank(cfg, b) || a.localeCompare(b))

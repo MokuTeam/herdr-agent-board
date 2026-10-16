@@ -18,7 +18,6 @@ import { runTree } from '../../adapters/process.ts'
 import { t } from '../../core/lang.ts'
 import {
   commandArgs,
-  type FailureKind,
   failureKind,
   launcherError,
   launcherLabel,
@@ -26,11 +25,8 @@ import {
   usesPlaceholder,
 } from '../../core/launch/launcher-command.ts'
 import { slugName, uniqueSlug } from '../../core/launch/names.ts'
-import type { LaunchSpec, LaunchStep } from '../../core/types.ts'
+import type { LaunchFailure, LaunchSpec, LaunchStep } from '../../core/types.ts'
 import { takenNames } from './prompt.ts'
-
-/** What kind of failure a launch had, for the hint on its card; 'message': only its first message did not go. */
-export type LaunchFailure = FailureKind | 'message'
 
 export class LaunchError extends Error {
   readonly kind: LaunchFailure

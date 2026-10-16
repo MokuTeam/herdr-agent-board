@@ -13,9 +13,9 @@ import { keyTowardYes, sameFolder, type TrustDialog, trustDialog } from '../../c
 import { t } from '../../core/lang.ts'
 import { launcherError } from '../../core/launch/launcher-command.ts'
 import { slugName, uniqueSlug, worktreePath } from '../../core/launch/names.ts'
-import type { Item, LaunchState, LaunchStep } from '../../core/types.ts'
+import type { Item, LaunchFailure, LaunchState, LaunchStep } from '../../core/types.ts'
 import type { Deps } from '../deps.ts'
-import { LaunchError, type LaunchEvents, type LaunchFailure, launcherFor } from './launcher.ts'
+import { LaunchError, type LaunchEvents, launcherFor } from './launcher.ts'
 import { claudeRename, inputEmpty, takenNames, typeLine } from './prompt.ts'
 import type { LaunchRequest } from './request.ts'
 
