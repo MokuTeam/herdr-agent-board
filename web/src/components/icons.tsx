@@ -1,4 +1,4 @@
-// The toolbar's line icons (20 × 20, stroked by the stylesheet).
+// The board's line icons (20 × 20, stroked by the stylesheet).
 import type { ReactNode } from 'react'
 
 function Icon({ children }: { children: ReactNode }) {
@@ -49,10 +49,78 @@ export const ArrowIcon = () => (
   </Icon>
 )
 
-/** The "new session" plus; unlike the others it is not hidden from screen readers (as before). */
+/**
+ * The icons the old page drew from its ICON strings (the "new session" plus, the cards' icons):
+ * unlike the toolbar's they are not hidden from screen readers, as before.
+ */
+function Glyph({ className, children }: { className?: string; children: ReactNode }) {
+  return (
+    // biome-ignore lint/a11y/noSvgWithoutTitle: the page's markup as it was; the button's title or the card's text names it
+    <svg className={className} viewBox="0 0 20 20">
+      {children}
+    </svg>
+  )
+}
+
 export const PlusIcon = () => (
-  // biome-ignore lint/a11y/noSvgWithoutTitle: the page's markup as it was; the button's text names it
-  <svg viewBox="0 0 20 20">
+  <Glyph>
     <path d="M10 4.5v11M4.5 10h11" />
-  </svg>
+  </Glyph>
+)
+
+export const FocusGlyph = () => (
+  <Glyph>
+    <path d="M7 4.5h8.5V13M15 5 5 15" />
+  </Glyph>
+)
+
+export const WriteGlyph = () => (
+  <Glyph>
+    <path d="M12.5 4.5l3 3L8 15H5v-3l7.5-7.5Z" />
+  </Glyph>
+)
+
+export const MoonGlyph = () => (
+  <Glyph className="moon">
+    <path d="M15.5 12.2A6.5 6.5 0 0 1 7.8 4.5a6.5 6.5 0 1 0 7.7 7.7Z" />
+  </Glyph>
+)
+
+export const ClockGlyph = () => (
+  <Glyph>
+    <circle cx="10" cy="10" r="7" />
+    <path d="M10 6v4l2.5 2" />
+  </Glyph>
+)
+
+export const SpinGlyph = () => (
+  <Glyph className="spin">
+    <path d="M10 3a7 7 0 1 1-7 7" />
+  </Glyph>
+)
+
+export const CheckGlyph = () => (
+  <Glyph>
+    <path d="m4.5 10.5 3.5 3.5 7.5-8" />
+  </Glyph>
+)
+
+export const PinGlyph = () => (
+  <Glyph>
+    <circle cx="10" cy="7" r="3.5" />
+    <path d="M10 10.5V17" />
+  </Glyph>
+)
+
+export const AlarmGlyph = () => (
+  <Glyph>
+    <circle cx="10" cy="11" r="6" />
+    <path d="M10 8v3.2l2 1.3M3.6 5.4 6 3.3M16.4 5.4 14 3.3" />
+  </Glyph>
+)
+
+export const RepeatGlyph = () => (
+  <Glyph>
+    <path d="M4 9.5V8a3 3 0 0 1 3-3h8.5m-2.5-2.5L15.5 5 13 7.5M16 10.5V12a3 3 0 0 1-3 3H4.5M7 12.5 4.5 15 7 17.5" />
+  </Glyph>
 )

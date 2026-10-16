@@ -3,7 +3,7 @@
 // the automatic one back. Under it, for a Claude session, the choice to rename it in Claude
 // and herdr too: that types /rename into the session, so it is never done without asking.
 import { NAME_MAX } from '../src/core/launch/names.ts'
-import { reducedMotion, Spring } from './spring.js'
+import { reducedMotion, Spring } from './src/models/spring.ts'
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 

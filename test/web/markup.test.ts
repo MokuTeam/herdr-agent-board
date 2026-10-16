@@ -25,6 +25,19 @@ test('tags, attributes, values and text do', () => {
   differ('<div><span></span><b></b></div>', '<div><b></b><span></span></div>')
 })
 
+test('texts split by react-dom/server read as one, also between elements', () => {
+  same('<p><b>Ask:</b> <!-- -->Deploy?</p>', '<p><b>Ask:</b> Deploy?</p>')
+  differ('<p><b>Ask:</b><!-- -->Deploy?</p>', '<p><b>Ask:</b> Deploy?</p>')
+})
+
+test('with `spaces`, a space between two elements counts; without, it is indentation', () => {
+  const spaced = (a: string, b: string) => [a, b].map(html => canonical(parseHtml(html), { spaces: true }))
+  const [tagged, glued] = spaced('<p><b>Ask:</b> <span>H</span>Q</p>', '<p><b>Ask:</b><span>H</span>Q</p>')
+  expect(tagged).not.toBe(glued)
+  expect(tagged).toBe(['<p>', '  <b>Ask:</b>', "  ' '", '  <span>H</span>', '  Q', '</p>'].join('\n'))
+  same('<p><b>Ask:</b> <span>H</span>Q</p>', '<p><b>Ask:</b><span>H</span>Q</p>')
+})
+
 test('void elements close themselves; a whole page parses', () => {
   const nodes = parseHtml(
     '<!doctype html><html><head><meta charset="utf-8"><link rel="icon"></head><body><input id="a"><p>x</p></body></html>',

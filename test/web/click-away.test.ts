@@ -1,11 +1,17 @@
+import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import test from 'node:test'
-import { outsidePanelPress, panelPress } from '../web/click-away.js'
+import { outsidePanelPress, panelPress } from '../../web/src/models/click-away.ts'
 
-const event = (target, path, x = 10, y = 20) => ({ button: 0, target, composedPath: () => path, clientX: x, clientY: y })
+const event = (target: unknown, path: unknown[], x = 10, y = 20) => ({
+  button: 0,
+  target,
+  composedPath: () => path,
+  clientX: x,
+  clientY: y,
+})
 test('an inside press stays inside after a handler replaces and detaches its DOM', () => {
-  const root = { matches: selector => selector === '.ql' }
-  const chip = { closest: () => root }
+  const root = { matches: (selector: string) => selector === '.ql' }
+  const chip: { closest: () => unknown } = { closest: () => root }
   const press = panelPress(event(chip, [chip, root]), '.ql')
   chip.closest = () => null // opening the file replaced the history results
   assert.equal(outsidePanelPress(press, event(chip, [chip]), '.ql'), false)

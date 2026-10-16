@@ -1,6 +1,8 @@
 // The page's own state across the board (the live data is in api/useBoard.ts): what is on show,
-// which session is open, the usage popover and the toasts.
+// which session is open, the usage popover, the toasts, cards the user moved and sessions busy.
+import type { ColumnId, Item } from '../../../src/core/types.ts'
 import type { Seen } from '../models/attention.ts'
+import { NO_MOVES, type PendingMoves, settleMoves, withMove, withoutMove } from '../models/board-view.ts'
 
 export interface Toast {
   id: number
@@ -21,6 +23,10 @@ export interface BoardUi {
   limitsOpen: boolean
   toasts: Toast[]
   lastToast: number
+  /** Cards the user dropped in another lane or column, until the server agrees. */
+  moves: PendingMoves
+  /** key -> what is happening to the session ("Waking…"). */
+  busy: ReadonlyMap<string, string>
 }
 
 export type BoardAction =
@@ -31,6 +37,10 @@ export type BoardAction =
   | { type: 'limits'; open: boolean }
   | { type: 'toast'; text: string; error: boolean }
   | { type: 'toastGone'; id: number }
+  | { type: 'move'; key: string; cat: string | null; column: ColumnId | null; at: number }
+  | { type: 'unmove'; key: string }
+  | { type: 'settle'; items: Item[]; now: number }
+  | { type: 'busy'; key: string; label: string | null }
 
 /** board.viewed as stored; anything else in it is dropped. */
 export function parseSeen(text: string): Seen {
@@ -53,7 +63,16 @@ export function initialUi(read: (key: string, fallback: string) => string): Boar
     limitsOpen: false,
     toasts: [],
     lastToast: 0,
+    moves: NO_MOVES,
+    busy: new Map(),
   }
+}
+
+function withBusy(busy: ReadonlyMap<string, string>, key: string, label: string | null): ReadonlyMap<string, string> {
+  const next = new Map(busy)
+  if (label) next.set(key, label)
+  else next.delete(key)
+  return next
 }
 
 export function boardUi(state: BoardUi, action: BoardAction): BoardUi {
@@ -74,5 +93,15 @@ export function boardUi(state: BoardUi, action: BoardAction): BoardUi {
     }
     case 'toastGone':
       return { ...state, toasts: state.toasts.filter(toast => toast.id !== action.id) }
+    case 'move':
+      return { ...state, moves: withMove(state.moves, action.key, action) }
+    case 'unmove':
+      return { ...state, moves: withoutMove(state.moves, action.key) }
+    case 'settle': {
+      const moves = settleMoves(state.moves, action.items, action.now)
+      return moves === state.moves ? state : { ...state, moves }
+    }
+    case 'busy':
+      return { ...state, busy: withBusy(state.busy, action.key, action.label) }
   }
 }

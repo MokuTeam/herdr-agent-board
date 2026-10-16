@@ -1,5 +1,5 @@
 import { boardConnection, dialogHistory } from './src/models/lifecycle.ts'
-import { outsidePanelPress, panelPress } from './click-away.js'
+import { outsidePanelPress, panelPress } from './src/models/click-away.ts'
 import { detailResource } from './detail-resource.js'
 // Agent board, web. Live data over Server-Sent Events; every change of place animates with a
 // spring from where the card is on screen (FLIP), drags stay glued to the pointer and land
@@ -17,7 +17,7 @@ import { initMenu } from './menu.js'
 import { initQuestions } from './questions.js'
 import { keepInSight, menuOpen, Panel, panels, roomBelow } from './panel.js'
 import { renameInPlace } from './rename.js'
-import { reducedMotion, rubberband, Spring, velocityOf } from './spring.js'
+import { reducedMotion, rubberband, Spring, velocityOf } from './src/models/spring.ts'
 import { capital, dayLabel, longWhen, shortWhen, span, timeOf } from '../src/core/when-format.ts'
 
 const $ = sel => document.querySelector(sel)

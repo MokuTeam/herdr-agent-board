@@ -121,24 +121,47 @@ function attrValue(name: string, value: string): string {
   return value
 }
 
-const visible = (nodes: Node[]): Node[] => nodes.filter(n => n.kind === 'element' || n.text.trim() !== '')
+export interface CanonicalOptions {
+  /**
+   * Keep whitespace-only text between elements (as one space, printed `' '`), for inline markup
+   * where a space shows: a card's `<b>Asks:</b> <span class="qa-tag">…`. Off, such text is
+   * dropped, as indentation in web/index.html must be.
+   */
+  spaces?: boolean
+}
+
+/** Adjacent texts as one (react-dom/server splits them with `<!-- -->`, which the parser drops). */
+function joinTexts(nodes: Node[]): Node[] {
+  const joined: Node[] = []
+  for (const node of nodes) {
+    const last = joined[joined.length - 1]
+    if (node.kind === 'text' && last?.kind === 'text')
+      joined[joined.length - 1] = { kind: 'text', text: last.text + node.text }
+    else joined.push(node)
+  }
+  return joined
+}
+
+const visible = (nodes: Node[], spaces = false): Node[] =>
+  joinTexts(nodes).filter(n => n.kind === 'element' || spaces || n.text.trim() !== '')
 const collapse = (text: string) => text.replace(/\s+/g, ' ')
+const textLine = (text: string) => (text.trim() === '' ? "' '" : escapeText(collapse(text)))
 
 /** The tree as text, one element per line, in a form both sides agree on when they mean the same. */
-export function canonical(nodes: Node[], depth = 0): string {
+export function canonical(nodes: Node[], options: CanonicalOptions = {}, depth = 0): string {
   const pad = '  '.repeat(depth)
-  return visible(nodes)
+  return visible(nodes, options.spaces)
     .map(node => {
-      if (node.kind === 'text') return pad + escapeText(collapse(node.text))
+      if (node.kind === 'text') return pad + textLine(node.text)
       const attrs = [...node.attrs]
         .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
         .map(([name, value]) => ` ${name}="${escapeAttr(attrValue(name, value))}"`)
         .join('')
-      const children = visible(node.children)
+      const children = visible(node.children, options.spaces)
       if (VOID.has(node.tag)) return `${pad}<${node.tag}${attrs}>`
       if (children.every(c => c.kind === 'text'))
         return `${pad}<${node.tag}${attrs}>${children.map(c => (c.kind === 'text' ? escapeText(collapse(c.text)) : '')).join('')}</${node.tag}>`
-      return `${pad}<${node.tag}${attrs}>\n${canonical(children, depth + 1)}\n${pad}</${node.tag}>`
+      return `${pad}<${node.tag}${attrs}>\n${canonical(children, options, depth + 1)}\n${pad}</${node.tag}>`
     })
     .join('\n')
 }

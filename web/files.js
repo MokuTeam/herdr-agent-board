@@ -8,7 +8,7 @@
 // that can be caught midway; it dims the board, Esc closes it, Backspace walks back.
 import { changedFiles } from './diff.js'
 import { markdown } from './markdown.js'
-import { reducedMotion, Spring } from './spring.js'
+import { reducedMotion, Spring } from './src/models/spring.ts'
 import { modalFocus } from './modal-focus.js'
 
 const $ = (root, sel) => root.querySelector(sel)

@@ -35,7 +35,7 @@ import {
   snap,
   soft,
 } from './panel-layout.js'
-import { reducedMotion, rubberband, Spring, velocityOf } from './spring.js'
+import { reducedMotion, rubberband, Spring, velocityOf } from './src/models/spring.ts'
 
 const html = document.documentElement
 const phone = matchMedia('(max-width: 760px)')

@@ -21,6 +21,7 @@ export function item(fields: Partial<Item> & Pick<Item, 'key'>): Item {
     categorySet: true,
     column: 'idle',
     attention: '',
+    sleeping: false, // the server always says (services/board.ts)
     ...fields,
   }
 }
@@ -61,6 +62,7 @@ export function board(fields: Partial<Omit<Board, 'ui'>> & { ui?: Partial<BoardU
     resume() {},
     dispatch() {},
     toast() {},
+    now: Date.now(),
     ...rest,
     ui: { ...initialUi((_key, fallback) => fallback), ...ui },
   }

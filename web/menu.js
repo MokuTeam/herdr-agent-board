@@ -3,7 +3,7 @@
 // keyboard: arrows, Enter or Space, Esc, Home and End, and typing a label's first letters.
 // Gray items say why. A click outside only closes it; it does not also act on what is there.
 import { firstIndex, lastIndex, nextIndex, placeMenu, placeSubmenu, shareReasons, typeahead } from './menu-model.js'
-import { reducedMotion, Spring } from './spring.js'
+import { reducedMotion, Spring } from './src/models/spring.ts'
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 const CHECK = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m4.5 10.5 3.5 3.5 7.5-8"/></svg>'

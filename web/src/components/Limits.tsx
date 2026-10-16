@@ -23,8 +23,9 @@ export function Limits({ anchor }: { anchor: RefObject<HTMLButtonElement | null>
       onClick={() => dispatch({ type: 'limits', open: !ui.limitsOpen })}
     >
       {lim.windows.length
-        ? lim.windows.map(w => (
-            <span key={w.minutes} className={heat(w.usedPercentage) || undefined}>
+        ? lim.windows.map((w, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: two windows may share a length; the list is redrawn whole per reading
+            <span key={i} className={heat(w.usedPercentage) || undefined}>
               {windowLabel(w, t)} <b>{Math.round(w.usedPercentage)}%</b>
             </span>
           ))

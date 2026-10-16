@@ -1,6 +1,6 @@
 // One toast: it springs up, stays (errors longer) and fades away.
 import { useEffect, useRef } from 'react'
-import { Spring } from '../../spring.js'
+import { Spring } from '../models/spring.ts'
 import type { Toast as ToastItem } from '../state/board-ui.ts'
 
 const SHOWN_MS = 2600

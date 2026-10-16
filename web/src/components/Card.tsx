@@ -1,0 +1,216 @@
+// A session's card: its name, age and alarm, what it works on, said or asks, and its buttons. A
+// session asleep in the idle column is one line. Motion and dragging are the board's
+// (hooks/useFlip.ts, hooks/useCardDrag.ts); the card only says what it is.
+import type { KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from 'react'
+import type { FormQuestion } from '../../../src/core/dialogs/question-form.ts'
+import type { Item, LaunchView, ToolCall } from '../../../src/core/types.ts'
+// Moves to models/question-model.ts with the sheet's question forms (Task 25).
+import { pendingQuestions } from '../../question-model.js'
+import { useT } from '../i18n/I18nProvider.tsx'
+import { unseenResult } from '../models/attention.ts'
+import { askLine, cardAge, cardWords, compact, dismissable, inTurn, launchOf, questionLine } from '../models/card.ts'
+import { COLUMN_COLORS } from '../models/toolbar.ts'
+import { useBoardContext } from '../state/BoardProvider.tsx'
+import { AlarmBadge } from './AlarmBadge.tsx'
+import { classNames } from './class-names.ts'
+import { CheckGlyph, ClockGlyph, FocusGlyph, MoonGlyph, PinGlyph, SpinGlyph, WriteGlyph } from './icons.tsx'
+
+/** What a session on its way shows on the board (the launch window's, Task 27). */
+export interface LaunchSlots {
+  /** The card of a launch that is not a session on the board yet. */
+  card(item: Item): ReactNode
+  /** How a session the board started goes, or why it failed, under its card. */
+  note(launch: LaunchView): ReactNode
+  /** A click on one of those lines' buttons; true when it was one. */
+  onAction(e: MouseEvent<HTMLElement>): boolean
+}
+
+export interface CardProps {
+  item: Item
+  selected: boolean
+  /** What is happening to it ("Waking…"), shown over the card. */
+  busy: string | undefined
+  /** Faded in its place while it is dragged and its ghost lands. */
+  placeholder: boolean
+  launch: LaunchSlots | undefined
+  onPointerDown(e: PointerEvent<HTMLElement>): void
+  onClick(e: MouseEvent<HTMLElement>): void
+  onKeyDown(e: KeyboardEvent<HTMLElement>): void
+}
+
+export function Card({ item, selected, busy, placeholder, launch, onPointerDown, onClick, onKeyDown }: CardProps) {
+  const { ui } = useBoardContext()
+  const launchOnly = !!item.launchOnly
+  const className = classNames(
+    'card',
+    launchOnly && 'launch-card',
+    compact(item) && 'compact',
+    unseenResult(item, ui.viewed) && 'unseen',
+    selected && 'selected',
+    busy && 'busy',
+    placeholder && 'placeholder',
+  )
+  return (
+    <article
+      className={className}
+      data-key={item.key}
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: a card is focusable and opens with Enter, as before
+      tabIndex={0}
+      data-col={item.column}
+      data-busy={busy}
+      onPointerDown={onPointerDown}
+      onClick={onClick}
+      onKeyDown={onKeyDown}
+    >
+      {launchOnly ? launch?.card(item) : <CardContent item={item} launch={launch} />}
+    </article>
+  )
+}
+
+function CardContent({ item, launch }: { item: Item; launch: LaunchSlots | undefined }) {
+  return (
+    <>
+      <CardTop item={item} />
+      {!compact(item) && <CardBody item={item} launch={launch} />}
+      <CardActions item={item} />
+    </>
+  )
+}
+
+function CardTop({ item }: { item: Item }) {
+  const t = useT()
+  const { ui, now } = useBoardContext()
+  const age = cardAge(item, now, t)
+  const renamed = item.name !== item.autoName && !!item.autoName
+  return (
+    <div className="card-top">
+      {item.sleeping ? (
+        <MoonGlyph />
+      ) : (
+        <span className={`dot ${item.column}`} style={{ '--c': COLUMN_COLORS[item.column] }} />
+      )}
+      <span className="name" title={renamed ? t('rename.was', { name: item.autoName }) : undefined}>
+        {item.name}
+      </span>
+      {/* A result you have not opened yet: a dot by the name. */}
+      {unseenResult(item, ui.viewed) && <span className="unseen-dot" title={t('attention.unseen')} />}
+      {item.pin && item.pin === item.column && (
+        <span className="pinned" title={t('card.pinned')}>
+          <PinGlyph />
+        </span>
+      )}
+      <AlarmBadge item={item} />
+      <span className="age" title={age.title || undefined}>
+        {age.text}
+      </span>
+    </div>
+  )
+}
+
+function CardBody({ item, launch }: { item: Item; launch: LaunchSlots | undefined }) {
+  const t = useT()
+  const words = cardWords(item)
+  const started = launchOf(item)
+  return (
+    <>
+      {words.own ? (
+        <div className="what">{words.own}</div>
+      ) : words.asked ? (
+        <div className="what">
+          <span className="you">{t('card.you')}</span> {words.asked}
+        </div>
+      ) : null}
+      {/* A launch held at the trust dialog says what it asks itself (its note), with its buttons. */}
+      {item.column === 'me' && started?.state !== 'trust' && <CardAsk item={item} />}
+      {item.column === 'ext' && (
+        <div className="chip">
+          <ClockGlyph />
+          <span>{item.wait || t('note.parked')}</span>
+        </div>
+      )}
+      {words.said && <div className="said">{words.said}</div>}
+      {item.column === 'work' && <Now tool={item.tool} />}
+      {/* Started from the board and not done starting: how it goes, or why it failed. */}
+      {started && launch?.note(started)}
+    </>
+  )
+}
+
+/** Under "Needs me": a question form's first question and options, else the question or the kind of stop. */
+function CardAsk({ item }: { item: Item }) {
+  const t = useT()
+  const questions: FormQuestion[] | null = pendingQuestions(item)
+  if (questions) {
+    const line = questionLine(questions, t)
+    return (
+      <div className="ask qa-card">
+        <div className="qa-card-q">
+          <b>{t('att.ask')}:</b> {line.header && <span className="qa-tag">{line.header}</span>}
+          {line.question}
+        </div>
+        <div className="qa-card-opts">
+          {line.options}
+          {line.more && <span className="qa-more">{line.more}</span>}
+        </div>
+      </div>
+    )
+  }
+  const ask = askLine(item, t)
+  return (
+    <div className="ask">
+      <b>{ask.label}:</b> {ask.text}
+    </div>
+  )
+}
+
+/** Under "Working": the tool it runs, else that it thinks (after which tool). */
+function Now({ tool }: { tool: ToolCall | null | undefined }) {
+  const t = useT()
+  if (tool?.pending)
+    return (
+      <div className="now">
+        <SpinGlyph />
+        <span className="tool">{tool.label}</span>
+        <span className="detail">{tool.detail}</span>
+      </div>
+    )
+  return (
+    <div className="now idle">
+      <SpinGlyph />
+      <span className="tool">{t('card.thinking')}</span>
+      {/* String(): a tool without a label read "undefined" before too. */}
+      <span className="detail">{tool ? t('card.after', { tool: String(tool.label) }) : ''}</span>
+    </div>
+  )
+}
+
+function CardActions({ item }: { item: Item }) {
+  const t = useT()
+  const { canMutate, canEdit } = useBoardContext()
+  const q = (s: string) => t('q', { s })
+  return (
+    <div className="card-actions">
+      {dismissable(item) && (
+        <button
+          type="button"
+          data-act="dismiss"
+          title={item.attention === 'later' ? t('card.seen', { col: q(t('col.me')) }) : t('card.noReply')}
+          disabled={!canEdit}
+        >
+          <CheckGlyph />
+        </button>
+      )}
+      {!item.sleeping && !!item.session && !inTurn(item) && (
+        <button type="button" data-act="sleep" title={t('card.sleep')} disabled={!canMutate}>
+          <MoonGlyph />
+        </button>
+      )}
+      <button type="button" data-act="write" title={t('card.write')}>
+        <WriteGlyph />
+      </button>
+      <button type="button" data-act="focus" title={t('card.focus')} disabled={!canMutate}>
+        <FocusGlyph />
+      </button>
+    </div>
+  )
+}

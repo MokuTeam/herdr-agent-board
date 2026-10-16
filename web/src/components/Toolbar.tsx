@@ -25,10 +25,10 @@ export interface ToolbarProps {
 
 export function Toolbar({ limitsAnchor, onNewSession, onCategories, onSchedule }: ToolbarProps) {
   const t = useT()
-  const { data, ui, dispatch, canMutate, canEdit } = useBoardContext()
+  const { data, ui, dispatch, canMutate, canEdit, now } = useBoardContext()
   const { visible, categoryOf } = useBoardView()
   const scrolled = useScrolled()
-  const badge = scheduleBadge(data?.schedules ?? [], Date.now())
+  const badge = scheduleBadge(data?.schedules ?? [], now)
 
   useEffect(() => {
     if (data) document.title = documentTitle(data.items)
