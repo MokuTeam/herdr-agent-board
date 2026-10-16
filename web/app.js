@@ -18,7 +18,7 @@ import { initQuestions } from './questions.js'
 import { keepInSight, menuOpen, Panel, panels, roomBelow } from './panel.js'
 import { renameInPlace } from './rename.js'
 import { reducedMotion, rubberband, Spring, velocityOf } from './spring.js'
-import { capital, dayLabel, longWhen, shortWhen, span, timeOf } from './when.js'
+import { capital, dayLabel, longWhen, shortWhen, span, timeOf } from '../src/core/when-format.ts'
 
 const $ = sel => document.querySelector(sel)
 

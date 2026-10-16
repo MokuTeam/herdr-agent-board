@@ -26,8 +26,8 @@ import { COLUMNS, collect, noteOf, statusText } from './model.mjs'
 import { BOARD_FILE } from './paths.mjs'
 import { addEntry, listEntries, removeEntry } from './schedule.mjs'
 import { readCard, writeCard } from './store.mjs'
-import { nextRun, parseCron, parseWhen, shortestGap } from './when.mjs'
-import { shortWhen } from '../web/when.js'
+import { nextRun, parseCron, parseWhen, shortestGap } from './core/when.ts'
+import { shortWhen } from './core/when-format.ts'
 
 const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | schedule [--all] | unschedule <id|all>] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000

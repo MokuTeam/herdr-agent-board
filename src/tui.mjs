@@ -17,7 +17,7 @@ import { BOARD_FILE, CARDS_DIR, STATE_DIR } from './paths.mjs'
 import { listEntries } from './schedule.mjs'
 import { startScheduler } from './scheduler.mjs'
 import { writeCard } from './store.mjs'
-import { shortWhen } from '../web/when.js'
+import { shortWhen } from './core/when-format.ts'
 
 // Updated in place when config.json changes (by hand or from the web board).
 const cfg = liveConfig(() => {

@@ -15,8 +15,8 @@ import { send, wake } from './actions.mjs'
 import { t } from './core/lang.ts'
 import { collect, forgetSleepers } from './model.mjs'
 import { getEntry, listEntries, logRun, removeEntry, SCHEDULE_DIR, updateEntry } from './schedule.mjs'
-import { countRuns, nextRun } from './when.mjs'
-import { longWhen, span } from '../web/when.js'
+import { countRuns, nextRun } from './core/when.ts'
+import { longWhen, span } from './core/when-format.ts'
 
 // A run on its way (waking a session takes up to three minutes) holds its claim this long.
 const CLAIM_MS = 5 * 60_000

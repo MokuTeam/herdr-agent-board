@@ -2,8 +2,11 @@
 // "at 15:30", "tomorrow 9:00", "fri 17:00", "2026-10-20 14:00") and when a cron schedule
 // (5 fields, or @daily and the like) runs next.
 
-const UNIT_MS = { s: 1e3, m: 60e3, h: 3600e3, d: 86400e3, w: 604800e3 }
-const UNIT_WORDS = [
+type Unit = 's' | 'm' | 'h' | 'd' | 'w'
+type Clock = { h: number; min: number }
+
+const UNIT_MS: Record<Unit, number> = { s: 1e3, m: 60e3, h: 3600e3, d: 86400e3, w: 604800e3 }
+const UNIT_WORDS: [RegExp, Unit][] = [
   [/^(s|secs?|seconds?)$/, 's'],
   [/^(m|mins?|minutes?)$/, 'm'],
   [/^(h|hrs?|hours?)$/, 'h'],
@@ -13,18 +16,18 @@ const UNIT_WORDS = [
 const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
 const MONTH_NAMES = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 // A date without a time of day: the morning, so "tomorrow" does not ring at midnight.
-const MORNING = { h: 9, min: 0 }
+const MORNING: Clock = { h: 9, min: 0 }
 
 /** "1h30m", "90 min", "2 hours", "1.5h" in milliseconds, or null. */
-export function parseDuration(text) {
+export function parseDuration(text: string): number | null {
   let rest = String(text ?? '').trim()
   let ms = 0
   let any = false
   while (rest) {
     const m = /^(\d+(?:[.,]\d+)?)\s*([a-z]+)\s*(?:and\s+|,\s*)?/.exec(rest)
-    const unit = m && UNIT_WORDS.find(([re]) => re.test(m[2]))?.[1]
-    if (!unit) return null
-    ms += Number(m[1].replace(',', '.')) * UNIT_MS[unit]
+    const unit = m && UNIT_WORDS.find(([re]) => re.test(m[2] ?? ''))?.[1]
+    if (!m || !unit) return null
+    ms += Number((m[1] ?? '').replace(',', '.')) * UNIT_MS[unit]
     any = true
     rest = rest.slice(m[0].length)
   }
@@ -32,7 +35,7 @@ export function parseDuration(text) {
 }
 
 /** "15:30", "9.05", "3pm", "3:30pm"; a bare hour ("9") only when `bare` (it followed "at"). */
-function clockOf(word, bare) {
+function clockOf(word: string, bare: boolean): Clock | null {
   const m = /^(\d{1,2})(?:[:.h](\d{2})(?::(\d{2}))?)?(am|pm)?$/.exec(word)
   if (!m || (m[2] === undefined && !m[4] && !bare)) return null
   let h = Number(m[1])
@@ -45,22 +48,27 @@ function clockOf(word, bare) {
 }
 
 /** today = 0, tomorrow = 1, a weekday = { dow }, else null. */
-function dayOf(word) {
+type Day = number | { dow: number }
+
+function dayOf(word: string): Day | null {
   if (word === 'today' || word === 'tonight') return 0
   if (word === 'tomorrow' || word === 'tmrw') return 1
   const dow = DAY_NAMES.indexOf(word.slice(0, 3))
-  return dow >= 0 && /^[a-z]{3,9}$/.test(word) && (word.length === 3 || DAY_FULL[dow].startsWith(word)) ? { dow } : null
+  return dow >= 0 && /^[a-z]{3,9}$/.test(word) && (word.length === 3 || DAY_FULL[dow]?.startsWith(word))
+    ? { dow }
+    : null
 }
 const DAY_FULL = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
 
-const at = (base, dayOffset, { h, min }) => new Date(base.getFullYear(), base.getMonth(), base.getDate() + dayOffset, h, min).getTime()
+const at = (base: Date, dayOffset: number, { h, min }: Clock): number =>
+  new Date(base.getFullYear(), base.getMonth(), base.getDate() + dayOffset, h, min).getTime()
 
 /**
  * When a reminder is due, in ms, or null when `text` is not a time. A time of day alone is its
  * next occurrence (tomorrow when it has passed today); everything else is taken as written, so
  * the caller checks that it is in the future.
  */
-export function parseWhen(text, now = Date.now()) {
+export function parseWhen(text: string, now = Date.now()): number | null {
   const s = String(text ?? '')
     .toLowerCase()
     .replace(/\s+/g, ' ')
@@ -69,7 +77,7 @@ export function parseWhen(text, now = Date.now()) {
   if (!s) return null
   let m = /^(?:in|\+) ?(.+)$/.exec(s)
   if (m) {
-    const ms = parseDuration(m[1])
+    const ms = parseDuration(m[1] ?? '')
     // Past what Date can hold ("in 99999999999d") is not a time.
     return ms === null || !(now + ms < 8.64e15) ? null : now + ms
   }
@@ -86,16 +94,16 @@ export function parseWhen(text, now = Date.now()) {
     // 2026-02-30 rolls over in Date: not a date.
     return d.getMonth() === Number(m[2]) - 1 && d.getDate() === Number(m[3]) ? d.getTime() : null
   }
-  let day = null
-  let clock = null
+  let day: Day | null = null
+  let clock: Clock | null = null
   let prev = ''
   for (const word of s.split(' ')) {
     if (['at', 'on', 'next', 'this'].includes(word)) {
       prev = word
       continue
     }
-    const d = day === null ? dayOf(word) : null
-    const c = d === null && !clock ? clockOf(word, prev === 'at') : null
+    const d: Day | null = day === null ? dayOf(word) : null
+    const c: Clock | null = d === null && !clock ? clockOf(word, prev === 'at') : null
     if (d !== null) day = d
     else if (c) clock = c
     else return null
@@ -116,7 +124,7 @@ export function parseWhen(text, now = Date.now()) {
 
 // ---------------------------------------------------------------- cron
 
-const MACROS = {
+const MACROS: Record<string, string> = {
   '@yearly': '0 0 1 1 *',
   '@annually': '0 0 1 1 *',
   '@monthly': '0 0 1 * *',
@@ -125,7 +133,19 @@ const MACROS = {
   '@midnight': '0 0 * * *',
   '@hourly': '0 * * * *',
 }
-const FIELDS = [
+type Field = { name: string; min: number; max: number; names?: string[]; base?: number }
+export type Cron = {
+  expr: string
+  minute: Set<number>
+  hour: Set<number>
+  dom: Set<number>
+  month: Set<number>
+  dow: Set<number>
+  anyDom: boolean
+  anyDow: boolean
+}
+
+const FIELDS: Field[] = [
   { name: 'minute', min: 0, max: 59 },
   { name: 'hour', min: 0, max: 23 },
   { name: 'day of month', min: 1, max: 31 },
@@ -133,7 +153,7 @@ const FIELDS = [
   { name: 'day of week', min: 0, max: 7, names: DAY_NAMES, base: 0 },
 ]
 
-function fieldValue(token, f) {
+function fieldValue(token: string, f: Field): number {
   if (/^\d+$/.test(token)) {
     const v = Number(token)
     if (v < f.min || v > f.max) throw new Error(`${f.name} ${v} is out of range ${f.min}-${f.max}`)
@@ -141,19 +161,20 @@ function fieldValue(token, f) {
   }
   const i = f.names?.indexOf(token.slice(0, 3)) ?? -1
   if (i < 0 || token.length < 3) throw new Error(`bad ${f.name} "${token}"`)
-  return i + f.base
+  return i + (f.base ?? 0)
 }
 
-function fieldSet(text, f) {
-  const set = new Set()
+function fieldSet(text: string, f: Field): Set<number> {
+  const set = new Set<number>()
   for (const item of text.split(',')) {
     const m = /^(\*|[a-z0-9]+(?:-[a-z0-9]+)?)(?:\/(\d+))?$/.exec(item)
     if (!m) throw new Error(`bad ${f.name} "${item}"`)
     // "*" for the day of week is 0-6: 7 is Sunday again.
     let lo = f.min
     let hi = f.name === 'day of week' ? 6 : f.max
-    if (m[1] !== '*') {
-      const [a, b] = m[1].split('-')
+    const range = m[1]
+    if (range !== undefined && range !== '*') {
+      const [a = '', b] = range.split('-')
       lo = fieldValue(a, f)
       // "5/15": from 5 to the end, every 15.
       hi = b !== undefined ? fieldValue(b, f) : m[2] ? f.max : lo
@@ -167,19 +188,39 @@ function fieldSet(text, f) {
 }
 
 /** A cron schedule: 5 fields (minute hour day-of-month month day-of-week) or a macro. Throws on a bad one. */
-export function parseCron(text) {
-  const expr = String(text ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
+export function parseCron(text: string): Cron {
+  const expr = String(text ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
   const parts = (MACROS[expr] ?? expr).split(' ')
   if (parts.length !== 5 || !parts[0]) {
-    throw new Error(`a cron schedule has 5 fields (minute hour day-of-month month day-of-week), "${expr}" has ${parts[0] ? parts.length : 0}`)
+    throw new Error(
+      `a cron schedule has 5 fields (minute hour day-of-month month day-of-week), "${expr}" has ${parts[0] ? parts.length : 0}`,
+    )
   }
-  const [minute, hour, dom, month, dow] = parts.map((p, i) => fieldSet(p, FIELDS[i]))
-  return { expr, minute, hour, dom, month, dow, anyDom: parts[2].startsWith('*'), anyDow: parts[4].startsWith('*') }
+  const [minute, hour, dom, month, dow] = parts.map((p, i) => fieldSet(p, FIELDS[i] as Field)) as [
+    Set<number>,
+    Set<number>,
+    Set<number>,
+    Set<number>,
+    Set<number>,
+  ]
+  return {
+    expr,
+    minute,
+    hour,
+    dom,
+    month,
+    dow,
+    anyDom: (parts[2] ?? '').startsWith('*'),
+    anyDow: (parts[4] ?? '').startsWith('*'),
+  }
 }
 
 // As in Vixie cron: a day field that starts with "*" (so "*/2" too) narrows the other one;
 // two restricted day fields are either-or.
-function dayMatches(c, d) {
+function dayMatches(c: Cron, d: Date): boolean {
   const dom = c.dom.has(d.getDate())
   const dow = c.dow.has(d.getDay())
   return c.anyDom || c.anyDow ? dom && dow : dom || dow
@@ -188,7 +229,8 @@ function dayMatches(c, d) {
 const HORIZON_MS = 8 * 366 * 86400e3
 
 /** The first run strictly after `after` (ms), or null when it never runs (Feb 30). */
-export function nextRun(cron, after) {
+/** `cron` may be the text of a schedule too (as stored with a scheduled entry). */
+export function nextRun(cron: Cron | string, after: number): number | null {
   const c = typeof cron === 'string' ? parseCron(cron) : cron
   const d = new Date(after)
   d.setSeconds(0, 0)
@@ -215,10 +257,10 @@ export function nextRun(cron, after) {
 }
 
 /** The shortest gap between its next `runs` runs after `after`, in ms (Infinity when it runs once or never). */
-export function shortestGap(cron, after, runs = 50) {
+export function shortestGap(cron: Cron | string, after: number, runs = 50): number {
   const c = typeof cron === 'string' ? parseCron(cron) : cron
   let gap = Infinity
-  let at = nextRun(c, after)
+  let at: number | null = nextRun(c, after)
   for (let i = 1; i < runs && at !== null; i++) {
     const next = nextRun(c, at)
     if (next !== null) gap = Math.min(gap, next - at)
@@ -228,7 +270,7 @@ export function shortestGap(cron, after, runs = 50) {
 }
 
 /** How many runs fall in [from, to], counting at most `cap`. */
-export function countRuns(cron, from, to, cap = 9999) {
+export function countRuns(cron: Cron | string, from: number, to: number, cap = 9999): number {
   const c = typeof cron === 'string' ? parseCron(cron) : cron
   let n = 0
   for (let at = nextRun(c, from - 1); at !== null && at <= to && n < cap; at = nextRun(c, at)) n++

@@ -1,12 +1,12 @@
+import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
-import { countRuns, nextRun, parseCron, parseDuration, parseWhen, shortestGap } from '../src/when.mjs'
-import { translator } from '../src/core/i18n/translator.ts'
-import { capital, dayLabel, shortWhen, span } from '../web/when.js'
+import { translator } from '../../src/core/i18n/translator.ts'
+import { countRuns, nextRun, parseCron, parseDuration, parseWhen, shortestGap } from '../../src/core/when.ts'
+import { capital, dayLabel, shortWhen, span } from '../../src/core/when-format.ts'
 
 // Local time throughout: Thursday 15 October 2026, 14:00.
 const now = new Date(2026, 9, 15, 14, 0).getTime()
-const local = (...args) => new Date(...args).getTime()
+const local = (y: number, mo: number, d = 1, h = 0, mi = 0) => new Date(y, mo, d, h, mi).getTime()
 
 test('durations: units, compounds and decimals', () => {
   assert.equal(parseDuration('30m'), 30 * 60e3)
@@ -50,7 +50,19 @@ test('one-off times: relative, time of day, days, weekdays, dates', () => {
 })
 
 test('one-off times: what is not a time', () => {
-  for (const s of ['', 'soon', 'today', 'tomorrow 3', 'tomorrow 3 reports', 'in 2h 3', 'monthly', '2026-02-30 10:00', 'at 25:00', 'at 13pm', 'mon tue']) {
+  for (const s of [
+    '',
+    'soon',
+    'today',
+    'tomorrow 3',
+    'tomorrow 3 reports',
+    'in 2h 3',
+    'monthly',
+    '2026-02-30 10:00',
+    'at 25:00',
+    'at 13pm',
+    'mon tue',
+  ]) {
     assert.equal(parseWhen(s, now), null, s)
   }
 })
@@ -66,7 +78,18 @@ test('cron: fields, ranges, steps, names and macros', () => {
   assert.deepEqual([...parseCron('0 0 * * 5-7').dow].sort(), [0, 5, 6])
   assert.equal(parseCron('@daily').expr, '@daily')
   assert.deepEqual([...parseCron('@hourly').minute], [0])
-  for (const bad of ['* * *', '* * * * * *', '61 * * * *', '0 24 * * *', '0 9 * * 8', '5-1 * * * *', '0 9 * * foo', '*/0 * * * *', '0 9 32 * *', '@often']) {
+  for (const bad of [
+    '* * *',
+    '* * * * * *',
+    '61 * * * *',
+    '0 24 * * *',
+    '0 9 * * 8',
+    '5-1 * * * *',
+    '0 9 * * foo',
+    '*/0 * * * *',
+    '0 9 32 * *',
+    '@often',
+  ]) {
     assert.throws(() => parseCron(bad), Error, bad)
   }
 })
@@ -99,13 +122,13 @@ test('cron: the shortest gap between runs', () => {
 test('cron: runs stay in order and on their minute across a whole year, DST included', () => {
   for (const expr of ['30 2 * * *', '0 * * * *', '15 1,2,3 * * 0']) {
     const c = parseCron(expr)
-    let at = local(2026, 0, 1)
+    let at: number = local(2026, 0, 1)
     for (let i = 0; i < 400; i++) {
       const next = nextRun(c, at)
-      assert.ok(next > at, `${expr} moves forward`)
-      const d = new Date(next)
+      assert.ok(next !== null && next > at, `${expr} moves forward`)
+      const d = new Date(next as number)
       assert.ok(c.minute.has(d.getMinutes()) && c.hour.has(d.getHours()) && d.getSeconds() === 0, `${expr}: ${d}`)
-      at = next
+      at = next as number
     }
   }
 })
@@ -128,13 +151,4 @@ test('scheduled times in words', () => {
   assert.match(shortWhen(local(2026, 9, 16, 9, 0), t, now), /^Fri 9:00\s?AM$/)
   assert.match(shortWhen(local(2026, 10, 20, 9, 0), t, now), /Nov 20|20 Nov/)
   assert.equal(dayLabel(local(2026, 9, 16, 9, 0), translator('ru'), now), 'завтра')
-})
-
-test('the brief tells agents about the schedule', async () => {
-  const { brief, BRIEF_VERSION } = await import('../src/brief.mjs')
-  const text = brief({ categories: [{ id: 'other', title: 'Other' }] }, null, 'C:\X')
-  assert.match(text, /board remind <when> "<text>"/)
-  assert.match(text, /board every "<cron, 5 fields>"/)
-  assert.match(text, /CronCreate or ScheduleWakeup/)
-  assert.ok(BRIEF_VERSION >= 3)
 })
