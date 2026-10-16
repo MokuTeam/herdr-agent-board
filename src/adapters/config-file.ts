@@ -93,7 +93,7 @@ function cleanPaths(paths: unknown): string[] | null {
         .map(p =>
           String(p ?? '')
             .trim()
-            .replace(/[/]+$/, ''),
+            .replace(/[\\/]+$/, ''),
         )
         .filter(Boolean),
     ),

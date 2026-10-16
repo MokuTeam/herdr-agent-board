@@ -66,6 +66,16 @@ test('editCategories creates, updates, orders and deletes; unknown fields surviv
   assert.equal(editCategories({ op: 'nope' }).ok, false)
 })
 
+test('category folders lose trailing slashes and backslashes and are de-duplicated', () => {
+  isolatedHome()
+  seed({ language: 'en', categories: [{ id: 'other', color: 'gray', paths: [] }] })
+  assert.deepEqual(editCategories({ op: 'create', id: 'work', paths: ['C:\\work\\', 'C:\\work', '/home/x/'] }), {
+    ok: true,
+  })
+  const cats = saved().categories as { id: string; paths: string[] }[]
+  assert.deepEqual(cats.find(c => c.id === 'work')?.paths, ['C:\\work', '/home/x'])
+})
+
 test('deleting a category clears it from the cards that named it', () => {
   isolatedHome()
   seed({
