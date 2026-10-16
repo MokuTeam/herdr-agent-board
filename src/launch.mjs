@@ -19,11 +19,11 @@ import { checkBranch, checkName, normDir, sameDir, slugName, uniqueSlug, UNSAFE_
 import { resolvePath } from './files.mjs'
 import { raiseTerminal } from './actions.mjs'
 import { herdr, herdrText } from './herdr.mjs'
-import { inputDraft } from './screen.mjs'
+import { inputDraft } from './core/dialogs/input-box.ts'
 import { t } from './core/lang.ts'
 import { CARDS_DIR, CLAUDE_DIR, STATE_DIR } from './paths.mjs'
 import { readCard, writeCard } from './store.mjs'
-import { keyTowardYes, sameFolder, trustDialog } from './trust.mjs'
+import { keyTowardYes, sameFolder, trustDialog } from './core/dialogs/trust.ts'
 
 const LAUNCH_DIR = join(STATE_DIR, 'launch') // first messages for {messageFile}, while a launcher runs
 export const PLACEHOLDERS = ['name', 'label', 'cwd', 'workspace', 'workspaceLabel', 'category', 'message', 'messageFile', 'sessionId']

@@ -1,6 +1,6 @@
 // What the user picks in a question form on the board before it goes to the terminal, and the
 // small rules around it. No DOM; questions.js draws the form. A question is the shape
-// src/questions.mjs gives the page: { question, header, multiSelect, preview, options: [{ label,
+// src/core/dialogs/questions.ts gives the page: { question, header, multiSelect, preview, options: [{ label,
 // description, preview? }] }.
 
 /** The questions a session waits on in its terminal, or null. */

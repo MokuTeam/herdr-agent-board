@@ -1,6 +1,6 @@
 // Claude Code's folder-trust dialog as herdr reads it from a pane (`agent read --ansi`), laid out
 // as Claude draws it: the folder wrapped at the pane's width, the ❯ on the picked answer.
-export type TrustOptions = { selected?: 'no' | 'yes'; width?: number; ansi?: boolean }
+export type TrustOptions = { selected?: 'no' | 'yes' | null; width?: number; ansi?: boolean }
 
 export function trustScreen(folder: string, { selected = 'no', width = 48, ansi = true }: TrustOptions = {}): string {
   const b = (s: string) => (ansi ? `\x1b[0m\x1b[1m${s}\x1b[0m` : s)

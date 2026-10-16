@@ -5,7 +5,7 @@ import http from 'node:http'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { parseDialog } from '../src/questions.mjs'
+import { parseDialog } from '../src/core/dialogs/questions.ts'
 import { sandbox, until } from './support/sandbox.ts'
 
 const screen = name => readFileSync(new URL(`./support/screens/${name}.txt`, import.meta.url), 'utf8').replace(/\r\n/g, '\n')

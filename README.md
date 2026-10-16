@@ -210,7 +210,7 @@ dialog). `send-text` types its text literally (backslashes and a leading dash in
 0.9); an own answer that starts with a dash still goes with a space before it, as the board's
 other calls do, and the board then takes that space out of the field (Ctrl+A, right, Backspace)
 and checks it is gone, since Claude Code would keep it in the answer. How the form takes keys,
-as found on a live session (Claude Code 2.1, `src/questions.mjs`):
+as found on a live session (Claude Code 2.1, `src/core/dialogs/questions.ts`):
 
 - The cursor starts on option 1. In a single-choice question a digit picks that option and moves
   on at once; a lone question is then submitted. With previews a digit only moves the cursor and
@@ -253,7 +253,7 @@ What keeps it from pressing keys in the wrong place:
 `POST /api/session/<key>/answer` with `{ session, toolUseId, answers: [{ options: [labels],
 other }] }` and `POST /api/session/<key>/permit` with `{ session, fingerprint, option }` (the
 fingerprint comes with the sheet's data); both need the `X-Board` header. Code:
-`src/questions.mjs` (the questions, the screen, the keys), `src/answer.mjs` (the steps through
+`src/core/dialogs/questions.ts` (the questions, the screen, the keys), `src/answer.mjs` (the steps through
 herdr), `web/questions.js` and `web/question-model.js` (the form).
 
 ## Moving a card by hand

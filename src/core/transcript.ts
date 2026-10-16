@@ -1,8 +1,9 @@
 // Reading what Claude Code wrote into a transcript (JSONL lines): the end of it for a card, the
 // last turns for the detail view. Pure: the file reading lives with the adapter.
+
+import { type FormQuestion, questionsOf } from './dialogs/question-form.ts'
 import { t } from './lang.ts'
 import { DEFAULT_PROMPT_FILTERS, type PromptFilter } from './prompt-filters.ts'
-import { type FormQuestion, questionsOf } from './question-form.ts'
 import type { ToolCall, TranscriptInfo } from './types.ts'
 
 type Rec = Record<string, unknown>

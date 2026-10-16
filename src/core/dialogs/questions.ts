@@ -22,10 +22,74 @@
 // dashed rules, "Do you want to ...?" and numbered options; a digit picks one at once.
 
 import { createHash } from 'node:crypto'
-import { LIMITS, questionsOf } from './core/question-form.ts'
-import { stripAnsi } from './screen.mjs'
+import { stripAnsi } from './input-box.ts'
+import { type FormQuestion, LIMITS, questionsOf } from './question-form.ts'
 
 export { LIMITS, questionsOf }
+
+/** A row of a dialog. text has the wrapped lines under the first; checked is null outside multiSelect. */
+export interface DialogOption {
+  n: number
+  label: string
+  text: string
+  checked: boolean | null
+  cursor: boolean
+  /** The row's text starts with a space of its own (one typed before a leading dash). */
+  spaced?: boolean
+  /** The option as drawn (its lines, without the cursor), for the fingerprint. */
+  raw?: string[]
+}
+export interface Tab {
+  header: string
+  answered: boolean
+}
+export interface QuestionDialog {
+  kind: 'question'
+  tabs: Tab[]
+  question: string
+  options: DialogOption[]
+  next: { label: string; cursor: boolean } | null
+  cursor: number | 'next' | null
+  editing: boolean
+  preview: boolean
+}
+export interface ReviewDialog {
+  kind: 'review'
+  tabs: Tab[]
+  answers: { question: string; answer: string }[]
+  options: DialogOption[]
+  cursor: number | null
+}
+export interface PermissionDialog {
+  kind: 'permission'
+  title: string
+  body: string[]
+  prompt: string
+  options: DialogOption[]
+  cursor: number | null
+  fingerprint: string
+}
+export type Dialog = QuestionDialog | ReviewDialog | PermissionDialog
+
+/** What a user picked for one question: option numbers (from 1) and an own answer. */
+export interface AnswerPick {
+  choose: number[]
+  other: string
+}
+
+/** What the page gets of a dialog. */
+export type PublicDialog =
+  | {
+      kind: 'permission'
+      title: string
+      body: string[]
+      more: number
+      prompt: string
+      options: { n: number; label: string }[]
+      fingerprint: string
+    }
+  | { kind: 'review' }
+  | { kind: 'question'; question: string }
 
 const RULE = /^\s*─{8,}\s*$/
 const DASHED = /^\s*╌{8,}\s*$/
@@ -37,9 +101,9 @@ const BOX = /\s{2,}[┌│└].*$/
 const PLACEHOLDER = /^Type something\.?$/
 export const OTHER_LIMIT = 1000
 
-const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
+const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 /** Text as it reads on a screen: no markdown marks, one space between words. */
-export const norm = s =>
+export const norm = (s: unknown): string =>
   String(s ?? '')
     .replace(/[*_`]+/g, '')
     .replace(/\s+/g, ' ')
@@ -51,18 +115,21 @@ export const norm = s =>
  * two apart (a line broken at a space can fill the whole width too). Read without spaces, a
  * wrapped label is the label either way.
  */
-const flat = s => norm(s).replace(/\s+/g, '')
+const flat = (s: unknown): string => norm(s).replace(/\s+/g, '')
 /** The text of a row and the line wrapped under it, as one, for reading and for flat(). */
-const wrapJoin = (text, line) => norm(`${text} ${line}`)
+const wrapJoin = (text: string, line: string): string => norm(`${text} ${line}`)
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
+const UNSAFE_CHARS = /[\x00-\x1f\x7f-\x9f‪-‮⁦-⁩]+/g
 
 /**
  * An own answer as the terminal's one-line field takes it: no control characters (C0, C1), no
  * bidirectional overrides that make it read otherwise than it is, one space between words.
  */
-export const cleanOther = text =>
+export const cleanOther = (text: unknown): string =>
   clip(
     String(text ?? '')
-      .replace(/[\x00-\x1f\x7f-\x9f‪-‮⁦-⁩]+/g, ' ')
+      .replace(UNSAFE_CHARS, ' ')
       .replace(/\s+/g, ' ')
       .trim(),
     OTHER_LIMIT,
@@ -73,13 +140,17 @@ export const cleanOther = text =>
  * numbers, from 1], other: '' }. `answers` is one { options: [labels], other } per question.
  * Returns { picks } or { error } (a dictionary key).
  */
-export function resolveAnswers(questions, answers) {
-  if (!Array.isArray(questions) || !Array.isArray(answers) || answers.length !== questions.length) return { error: 'err.qa.invalid' }
-  const picks = []
+export function resolveAnswers(
+  questions: FormQuestion[],
+  answers: unknown,
+): { picks: AnswerPick[] } | { error: string } {
+  if (!Array.isArray(questions) || !Array.isArray(answers) || answers.length !== questions.length)
+    return { error: 'err.qa.invalid' }
+  const picks: AnswerPick[] = []
   for (const [i, q] of questions.entries()) {
-    const a = answers[i] ?? {}
-    const labels = Array.isArray(a.options) ? a.options.map(String) : []
-    const choose = []
+    const a: { options?: unknown; other?: unknown } = answers[i] ?? {}
+    const labels: string[] = Array.isArray(a.options) ? a.options.map(String) : []
+    const choose: number[] = []
     for (const label of labels) {
       const n = q.options.findIndex(o => o.label === label) + 1
       if (!n || choose.includes(n)) return { error: 'err.qa.invalid' }
@@ -88,15 +159,16 @@ export function resolveAnswers(questions, answers) {
     choose.sort((x, y) => x - y)
     const other = cleanOther(a.other)
     if (other && q.preview) return { error: 'err.qa.invalid' } // no own-answer row beside previews
-    if (q.multiSelect ? !choose.length && !other : choose.length + (other ? 1 : 0) !== 1) return { error: 'err.qa.invalid' }
+    if (q.multiSelect ? !choose.length && !other : choose.length + (other ? 1 : 0) !== 1)
+      return { error: 'err.qa.invalid' }
     picks.push({ choose, other })
   }
   return { picks }
 }
 
 /** The answer as the terminal's review screen and the transcript write it. */
-export function answerText(question, pick) {
-  return [...pick.choose.map(n => question.options[n - 1].label), ...(pick.other ? [pick.other] : [])].join(', ')
+export function answerText(question: FormQuestion, pick: AnswerPick): string {
+  return [...pick.choose.map(n => question.options[n - 1]?.label ?? ''), ...(pick.other ? [pick.other] : [])].join(', ')
 }
 
 /**
@@ -107,7 +179,7 @@ export function answerText(question, pick) {
  * options: [{ n, label, text, checked, cursor }]; text has the wrapped lines under the first;
  * checked is null outside multiSelect. cursor: the option number, 'next', or null.
  */
-export function parseDialog(screen) {
+export function parseDialog(screen: unknown): Dialog | null {
   const lines = stripAnsi(String(screen ?? ''))
     .replace(/\r/g, '')
     .split('\n')
@@ -115,21 +187,24 @@ export function parseDialog(screen) {
   return questionDialog(lines) ?? permissionDialog(lines)
 }
 
-function questionDialog(lines) {
+function questionDialog(lines: string[]): QuestionDialog | ReviewDialog | null {
   let bar = -1
   for (let i = lines.length - 1; i > 0; i--) {
-    if (TABS.test(lines[i]) && RULE.test(lines[i - 1])) {
+    if (TABS.test(lines[i] ?? '') && RULE.test(lines[i - 1] ?? '')) {
       bar = i
       break
     }
   }
   if (bar < 0) return null
-  const tabs = [...lines[bar].matchAll(/([☐☒])\s(.+?)(?=\s{2,}|\s*[✔→]|$)/g)].map(m => ({ header: m[2].trim(), answered: m[1] === '☒' }))
+  const tabs: Tab[] = [...(lines[bar] ?? '').matchAll(/([☐☒])\s(.+?)(?=\s{2,}|\s*[✔→]|$)/g)].map(m => ({
+    header: (m[2] ?? '').trim(),
+    answered: m[1] === '☒',
+  }))
   let i = bar + 1
-  while (i < lines.length && !lines[i].trim()) i++
+  while (i < lines.length && !(lines[i] ?? '').trim()) i++
   if (lines[i]?.trim() === 'Review your answers') return review(lines, i + 1, tabs)
-  const text = []
-  for (; i < lines.length && lines[i].trim() && !OPTION.test(lines[i]); i++) text.push(lines[i])
+  const text: string[] = []
+  for (; i < lines.length && (lines[i] ?? '').trim() && !OPTION.test(lines[i] ?? ''); i++) text.push(lines[i] ?? '')
   if (!text.length) return null
   const block = optionBlock(lines, i)
   if (!block.options.length) return null
@@ -147,64 +222,81 @@ function questionDialog(lines) {
 }
 
 /** Numbered rows from `start`, each with the lines indented under it, until a rule or the footer. */
-function optionBlock(lines, start) {
-  const options = []
-  let next = null
+function optionBlock(
+  lines: string[],
+  start: number,
+): { options: DialogOption[]; next: { label: string; cursor: boolean } | null; preview: boolean; end: number } {
+  const options: DialogOption[] = []
+  let next: { label: string; cursor: boolean } | null = null
   let preview = false
   let i = start
   for (; i < lines.length; i++) {
-    const line = lines[i]
+    const line = lines[i] ?? ''
     if (RULE.test(line) || /Esc to cancel/.test(line) || /^\s*Ready to submit/.test(line)) break
     const m = OPTION.exec(line)
     if (m && Number(m[2]) === options.length + 1) {
-      if (BOX.test(m[4])) preview = true
-      const label = m[4].replace(BOX, '').trim()
+      const rest = m[4] ?? ''
+      if (BOX.test(rest)) preview = true
+      const label = rest.replace(BOX, '').trim()
       // spaced: the row's text starts with a space of its own (one typed before a leading dash).
-      options.push({ n: Number(m[2]), label, text: norm(label), spaced: /^\s/.test(m[4]), checked: m[3] === undefined ? null : m[3] === '✔', cursor: m[1] === '❯' })
+      options.push({
+        n: Number(m[2]),
+        label,
+        text: norm(label),
+        spaced: /^\s/.test(rest),
+        checked: m[3] === undefined ? null : m[3] === '✔',
+        cursor: m[1] === '❯',
+      })
       continue
     }
     const nx = NEXT.exec(line)
     if (nx && options.length) {
-      next = { label: nx[2], cursor: nx[1] === '❯' }
+      next = { label: nx[2] ?? '', cursor: nx[1] === '❯' }
       continue
     }
     // Under an option: its description or the rest of a long label. Beside previews: the mockup.
-    if (line.trim() && options.length && !preview && !next && /^\s{3,}/.test(line)) {
-      const last = options.at(-1)
+    const last = options.at(-1)
+    if (last && line.trim() && !preview && !next && /^\s{3,}/.test(line)) {
       last.text = wrapJoin(last.text, line)
     }
   }
   return { options, next, preview, end: i }
 }
 
-function review(lines, start, tabs) {
-  const answers = []
+function review(lines: string[], start: number, tabs: Tab[]): ReviewDialog | null {
+  const answers: { question: string; answer: string | null }[] = []
   let i = start
   for (; i < lines.length; i++) {
-    const line = lines[i]
+    const line = lines[i] ?? ''
     if (/^\s*Ready to submit/.test(line) || OPTION.test(line)) break
     const q = /^\s*●\s+(.*)$/.exec(line)
     const a = /^\s*→\s+(.*)$/.exec(line)
-    if (q) answers.push({ question: q[1].trim(), answer: null })
-    else if (a && answers.length) answers.at(-1).answer = a[1].trim()
-    else if (line.trim() && answers.length) {
-      const last = answers.at(-1)
+    const last = answers.at(-1)
+    if (q) answers.push({ question: (q[1] ?? '').trim(), answer: null })
+    else if (a && last) last.answer = (a[1] ?? '').trim()
+    else if (line.trim() && last) {
       if (last.answer === null) last.question = wrapJoin(last.question, line)
       else last.answer = wrapJoin(last.answer, line)
     }
   }
-  while (i < lines.length && !OPTION.test(lines[i])) i++
+  while (i < lines.length && !OPTION.test(lines[i] ?? '')) i++
   const { options } = optionBlock(lines, i)
   if (!options.length) return null
-  return { kind: 'review', tabs, answers: answers.map(a => ({ question: norm(a.question), answer: norm(a.answer ?? '') })), options, cursor: options.find(o => o.cursor)?.n ?? null }
+  return {
+    kind: 'review',
+    tabs,
+    answers: answers.map(a => ({ question: norm(a.question), answer: norm(a.answer ?? '') })),
+    options,
+    cursor: options.find(o => o.cursor)?.n ?? null,
+  }
 }
 
 const PERM_OPTION = /^\s{0,3}(?:(❯)\s+)?(\d+)\.\s+(.*)$/
 
-function permissionDialog(lines) {
+function permissionDialog(lines: string[]): PermissionDialog | null {
   let foot = -1
   for (let i = lines.length - 1; i >= 0; i--) {
-    if (/^\s*Esc to cancel/.test(lines[i])) {
+    if (/^\s*Esc to cancel/.test(lines[i] ?? '')) {
       foot = i
       break
     }
@@ -213,7 +305,7 @@ function permissionDialog(lines) {
   // The options are the numbered rows right above the footer; the prompt is the line above them.
   let first = -1
   for (let i = foot - 1; i >= 0 && foot - i < 40; i--) {
-    const m = PERM_OPTION.exec(lines[i])
+    const m = PERM_OPTION.exec(lines[i] ?? '')
     if (m && m[2] === '1') {
       first = i
       break
@@ -223,27 +315,37 @@ function permissionDialog(lines) {
   // raw: the option as drawn (its lines, without the cursor), for the fingerprint. text: for
   // reading, its lines as the terminal broke them: a path broken in the middle shows as it is
   // rather than with a space that is not in it.
-  const options = []
+  const options: DialogOption[] = []
   for (let i = first; i < foot; i++) {
-    const m = PERM_OPTION.exec(lines[i])
-    if (m && Number(m[2]) === options.length + 1) options.push({ n: options.length + 1, label: m[3].trim(), text: m[3].trim(), raw: [m[3]], checked: null, cursor: !!m[1] })
-    else if (lines[i].trim() && options.length) {
-      const o = options.at(-1)
-      o.raw.push(lines[i])
-      o.text += `\n${lines[i].trim()}`
+    const line = lines[i] ?? ''
+    const m = PERM_OPTION.exec(line)
+    const o = options.at(-1)
+    if (m && Number(m[2]) === options.length + 1) {
+      const text = m[3] ?? ''
+      options.push({
+        n: options.length + 1,
+        label: text.trim(),
+        text: text.trim(),
+        raw: [text],
+        checked: null,
+        cursor: !!m[1],
+      })
+    } else if (o && line.trim()) {
+      o.raw?.push(line)
+      o.text += `\n${line.trim()}`
     }
   }
   let p = first - 1
-  while (p > 0 && !lines[p].trim()) p--
-  const prompt = lines[p].trim()
+  while (p > 0 && !(lines[p] ?? '').trim()) p--
+  const prompt = (lines[p] ?? '').trim()
   if (options.length < 2 || !prompt.endsWith('?') || !options.some(o => o.cursor)) return null
   let top = p - 1
-  while (top > 0 && !RULE.test(lines[top]) && p - top < 120) top--
-  const rest = lines.slice(RULE.test(lines[top]) ? top + 1 : top, p).filter(l => !DASHED.test(l))
-  while (rest.length && !rest[0].trim()) rest.shift()
+  while (top > 0 && !RULE.test(lines[top] ?? '') && p - top < 120) top--
+  const rest = lines.slice(RULE.test(lines[top] ?? '') ? top + 1 : top, p).filter(l => !DASHED.test(l))
+  while (rest.length && !(rest[0] ?? '').trim()) rest.shift()
   const title = (rest.shift() ?? '').trim()
   const body = rest.filter(l => !/^\s*Tip:/.test(l))
-  while (body.length && !body.at(-1).trim()) body.pop()
+  while (body.length && !(body.at(-1) ?? '').trim()) body.pop()
   // The dialog's own one-space margin off, the tool's indentation kept.
   const shown = body.every(l => !l.trim() || l.startsWith(' ')) ? body.map(l => l.slice(1)) : body
   // Everything as drawn, every character and space: `rm -rf build_*` and `rm -rf build` must
@@ -252,7 +354,15 @@ function permissionDialog(lines) {
     .update(JSON.stringify([title, shown, prompt, options.map(o => o.raw)]))
     .digest('hex')
     .slice(0, 24)
-  return { kind: 'permission', title, body: shown, prompt, options, cursor: options.find(o => o.cursor)?.n ?? null, fingerprint }
+  return {
+    kind: 'permission',
+    title,
+    body: shown,
+    prompt,
+    options,
+    cursor: options.find(o => o.cursor)?.n ?? null,
+    fingerprint,
+  }
 }
 
 const BODY_LINES = 80
@@ -263,7 +373,7 @@ const LINE = 600
  * comes as drawn; what does not fit is cut with a mark ("…", `more` lines) and never silently,
  * and the fingerprint is always of the whole.
  */
-export function publicDialog(d) {
+export function publicDialog(d: Dialog | null | undefined): PublicDialog | null {
   if (!d) return null
   if (d.kind === 'permission') {
     return {
@@ -281,27 +391,27 @@ export function publicDialog(d) {
 }
 
 /** The screen shows question `q` of the dialog: its text and its options in order. */
-export function onQuestion(d, q) {
+export function onQuestion(d: Dialog | null | undefined, q: FormQuestion): boolean {
   if (d?.kind !== 'question' || flat(d.question) !== flat(q.question)) return false
   if (d.options.length !== q.options.length + (q.preview ? 0 : 1)) return false
-  return q.options.every((o, j) => flat(d.options[j].text).startsWith(flat(o.label)))
+  return q.options.every((o, j) => flat(d.options[j]?.text).startsWith(flat(o.label)))
 }
 
 /** Which of `questions` the screen shows: its index, questions.length for the review, -1 for neither. */
-export function screenIndex(d, questions) {
+export function screenIndex(d: Dialog | null | undefined, questions: FormQuestion[]): number {
   if (d?.kind === 'review') return questions.length
   return questions.findIndex(q => onQuestion(d, q))
 }
 
 /** The own answer the screen's last row holds ('' for the placeholder). */
-export function typedOther(d) {
-  const row = d?.options?.at(-1)
+export function typedOther(d: Dialog | null | undefined): string {
+  const row = d?.options.at(-1)
   if (!row) return ''
   return PLACEHOLDER.test(row.text) ? '' : row.text
 }
 
 /** Text on the screen is the text wanted (read flat). A long own answer may be cut short with an ellipsis; the start must agree. */
-export function sameText(shown, wanted) {
+export function sameText(shown: unknown, wanted: unknown): boolean {
   const a = flat(shown)
   const b = flat(wanted)
   if (a === b) return true
@@ -310,16 +420,21 @@ export function sameText(shown, wanted) {
 }
 
 /** The review screen lists exactly these answers. */
-export function reviewMatches(d, questions, picks) {
+export function reviewMatches(d: Dialog | null | undefined, questions: FormQuestion[], picks: AnswerPick[]): boolean {
   if (d?.kind !== 'review' || d.answers.length !== questions.length) return false
-  return questions.every((q, i) => flat(d.answers[i].question) === flat(q.question) && sameText(d.answers[i].answer, answerText(q, picks[i])))
+  return questions.every((q, i) => {
+    const shown = d.answers[i]
+    const pick = picks[i]
+    return !!shown && !!pick && flat(shown.question) === flat(q.question) && sameText(shown.answer, answerText(q, pick))
+  })
 }
 
 /** The arrow keys from one row to another (the "Next" row counts as the one after the last option). */
-export function arrows(from, to) {
+export function arrows(from: number, to: number): ('up' | 'down')[] {
   const n = to - from
   return Array(Math.abs(n)).fill(n > 0 ? 'down' : 'up')
 }
 
 /** Row number of the cursor, with "Next" after the options. */
-export const cursorRow = d => (d.cursor === 'next' ? d.options.length + 1 : d.cursor)
+export const cursorRow = (d: Pick<QuestionDialog, 'cursor' | 'options'>): number | null =>
+  d.cursor === 'next' ? d.options.length + 1 : d.cursor

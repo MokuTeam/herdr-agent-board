@@ -3,8 +3,15 @@
 // folder"); the board shows it on the launch's card and, when asked, moves the cursor to "Yes"
 // and confirms. Nothing is assumed: the folder and where the cursor is come from the screen.
 import { homedir } from 'node:os'
+import { stripAnsi } from './input-box.ts'
 
-const ESCAPES = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b./g
+export type TrustAnswer = 'yes' | 'no'
+export interface TrustDialog {
+  folder: string
+  options: TrustAnswer[]
+  selected: TrustAnswer | null
+}
+
 const OPTION = /^\s*(❯\s*)?(?:\d+\.\s*)?(.*\S)\s*$/
 
 /**
@@ -13,21 +20,31 @@ const OPTION = /^\s*(❯\s*)?(?:\d+\.\s*)?(.*\S)\s*$/
  * selected: which one the ❯ is on, or null. The folder is the one the dialog names, its lines
  * (Claude wraps a long path) joined.
  */
-export function trustDialog(screen) {
-  const lines = String(screen ?? '').replace(ESCAPES, '').split(/\r?\n/).map(l => l.replace(/\s+$/, ''))
+export function trustDialog(screen: unknown): TrustDialog | null {
+  const lines = stripAnsi(String(screen ?? ''))
+    .split(/\r?\n/)
+    .map(l => l.replace(/\s+$/, ''))
   const head = lines.findLastIndex(l => /^\s*Accessing workspace:\s*$/i.test(l))
   if (head < 0) return null
   const rest = lines.slice(head + 1)
   const ask = rest.findIndex(l => /quick safety check|do you trust|trust the files/i.test(l))
   if (ask <= 0) return null
-  const folder = rest.slice(0, ask).map(l => l.trim()).join('')
-  const options = []
-  let selected = null
+  const folder = rest
+    .slice(0, ask)
+    .map(l => l.trim())
+    .join('')
+  const options: TrustAnswer[] = []
+  let selected: TrustAnswer | null = null
   let last = -1
   rest.slice(ask + 1).forEach((line, i) => {
     const m = OPTION.exec(line)
-    if (!m) return
-    const which = /^yes\b.*\b(trust|proceed)\b/i.test(m[2]) ? 'yes' : /^no\b.*\bexit\b/i.test(m[2]) ? 'no' : null
+    const text = m?.[2]
+    if (!m || text === undefined) return
+    const which: TrustAnswer | null = /^yes\b.*\b(trust|proceed)\b/i.test(text)
+      ? 'yes'
+      : /^no\b.*\bexit\b/i.test(text)
+        ? 'no'
+        : null
     if (!which) return
     options.push(which)
     last = ask + 1 + i
@@ -44,8 +61,8 @@ export function trustDialog(screen) {
  * Whether the folder a dialog names is `cwd`. Claude may break a path where it had a space, and
  * shows home as ~ on some systems: both are compared without spaces, slashes one way, case folded.
  */
-export function sameFolder(onScreen, cwd) {
-  const norm = p =>
+export function sameFolder(onScreen: unknown, cwd: unknown): boolean {
+  const norm = (p: unknown): string =>
     String(p ?? '')
       .replace(/^~(?=$|[\\/])/, homedir())
       .replace(/\s+/g, '')
@@ -56,7 +73,9 @@ export function sameFolder(onScreen, cwd) {
 }
 
 /** The key that moves the cursor one step toward "Yes", '' when it is there, null when unknown. */
-export function keyTowardYes(dialog) {
+export function keyTowardYes(
+  dialog: Pick<TrustDialog, 'options' | 'selected'> | null | undefined,
+): 'up' | 'down' | '' | null {
   if (!dialog?.selected) return null
   const at = dialog.options.indexOf(dialog.selected)
   const yes = dialog.options.indexOf('yes')

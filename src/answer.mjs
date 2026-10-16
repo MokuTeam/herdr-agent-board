@@ -1,13 +1,13 @@
 // Answers a dialog that holds a session in its terminal, from the board: a question form
 // (AskUserQuestion) or a permission prompt. The choice becomes key presses in the pane through
 // herdr, one step at a time, and every step waits until the screen shows what that key should
-// have done (questions.mjs says how the dialog behaves). Nothing is pressed into a pane that
+// have done (core/dialogs/questions.ts says how the dialog behaves). Nothing is pressed into a pane that
 // shows another session, another dialog, or a question already answered; anything unexpected
 // stops it and the user is told where it stopped.
 import { herdr, herdrText } from './herdr.mjs'
 import { transcriptInfo } from './claude.mjs'
 import { t } from './core/lang.ts'
-import { inputDraft } from './screen.mjs'
+import { inputDraft } from './core/dialogs/input-box.ts'
 import {
   answerText,
   arrows,
@@ -19,7 +19,7 @@ import {
   sameText,
   screenIndex,
   typedOther,
-} from './questions.mjs'
+} from './core/dialogs/questions.ts'
 
 /** A step that did not end as expected: why, the step ({ q, what, n }), and the screen it ended on. */
 class Stop extends Error {
