@@ -1,14 +1,15 @@
 // Settings and categories, written to config.json; the config watcher reloads it, switches the
 // language and pushes the new board.
 import { type EditResult, editCategories, editSettings } from '../../adapters/config-file.ts'
-import { type Body, json, type Route } from '../http.ts'
+import { json, type Route } from '../http.ts'
 
-const edit = (path: string, change: (body: Body) => EditResult): Route => ({
+// The edits take any body (main's read it with ?.), a null one included.
+const edit = (path: string, change: (body: unknown) => EditResult): Route => ({
   method: 'POST',
   path,
   guard: ['board-header'],
   async handle(_req, ctx) {
-    const r = change(await ctx.body())
+    const r = change(await ctx.rawBody())
     return json(r.ok ? 200 : 409, r)
   },
 })

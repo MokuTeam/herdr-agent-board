@@ -8,12 +8,10 @@ import { serveBoard, sharedSandbox } from '../support/board-server.ts'
 const PAGE_CSP =
   "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'"
 
-/** A request with a Host header of our choosing (fetch sets its own); the status line and body. */
-function rawGet(port: string, path: string, host: string): Promise<string> {
+/** A request written by hand (fetch always sends its own Host); the whole answer as text. */
+function rawRequest(port: string, request: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const socket = connect(Number(port), '127.0.0.1', () =>
-      socket.write(`GET ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`),
-    )
+    const socket = connect(Number(port), '127.0.0.1', () => socket.write(request))
     let text = ''
     socket.on('data', chunk => {
       text += chunk.toString('utf8')
@@ -21,6 +19,13 @@ function rawGet(port: string, path: string, host: string): Promise<string> {
     socket.on('end', () => resolve(text))
     socket.on('error', reject)
   })
+}
+const rawGet = (port: string, path: string, host: string) =>
+  rawRequest(port, `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`)
+/** The status line's code and the body of a raw answer (chunked or not). */
+const statusAndBody = (text: string) => {
+  const [head = '', body = ''] = text.split('\r\n\r\n')
+  return [head.split(' ')[1], body.includes('{') ? body.slice(body.indexOf('{'), body.lastIndexOf('}') + 1) : body]
 }
 
 describe('routes', () => {
@@ -58,6 +63,17 @@ describe('routes', () => {
     expect(await rawGet(port, '/api/board', `evil.example:${port}`)).toMatch(/^HTTP\/1\.1 403[\s\S]*\{"error":"host"\}/)
     expect(await rawGet(port, '/api/board', '127.0.0.1:1')).toMatch(/^HTTP\/1\.1 403/)
     expect(await rawGet(port, '/api/board', `localhost:${port}`)).toMatch(/^HTTP\/1\.1 200/)
+  })
+
+  test('an empty or invalid Host, or none at all, is refused like any other', async () => {
+    const port = new URL(url).port
+    const host = ['403', '{"error":"host"}']
+    expect(statusAndBody(await rawGet(port, '/api/board', ''))).toEqual(host)
+    expect(statusAndBody(await rawGet(port, '/api/board', 'a b'))).toEqual(host)
+    expect(statusAndBody(await rawRequest(port, 'GET /api/board HTTP/1.0\r\n\r\n'))).toEqual(host)
+    expect(statusAndBody(await rawRequest(port, 'GET / HTTP/1.0\r\n\r\n'))).toEqual(host)
+    // The board goes on answering its own page.
+    expect(await rawGet(port, '/', `127.0.0.1:${port}`)).toMatch(/^HTTP\/1\.1 200/)
   })
 
   test('JSON answers: their content type and no caching', async () => {
@@ -98,6 +114,25 @@ describe('routes', () => {
   test('a JSON body that does not parse, or is over 64 KB, is a 500', async () => {
     expect(await answer(post('/api/settings', '{nope'))).toEqual([500, { error: 'bad json' }])
     expect(await answer(post('/api/settings', { pad: 'x'.repeat(70_000) }))).toEqual([500, { error: 'body too large' }])
+  })
+
+  test('a body of null fails only where main read a field off it', async () => {
+    // Read and left alone, or read with ?. (settings, categories, a launch's request).
+    expect((await answer(post('/api/launch/nope/dismiss', 'null')))[0]).toBe(404)
+    expect(await answer(post('/api/launcher', 'null'))).toEqual([404, { error: 'not found' }])
+    expect(await answer(post('/api/session/s1/wake', 'null'))).toEqual([200, { ok: true }])
+    expect(await answer(post('/api/session/s1/bogus', 'null'))).toEqual([
+      409,
+      { ok: false, error: 'unknown action bogus' },
+    ])
+    expect(await answer(post('/api/settings', 'null'))).toEqual([200, { ok: true }])
+    expect(await answer(post('/api/categories', 'null'))).toEqual(await answer(post('/api/categories', {})))
+    expect(await answer(post('/api/launch', 'null'))).toEqual(await answer(post('/api/launch', {})))
+    // Read field by field: main's TypeError, a 500.
+    for (const path of ['/api/fs/stat', '/api/fs/preview', '/api/open-url', '/api/schedule', '/api/session/s1/card']) {
+      const [status, body] = await answer(post(path, 'null'))
+      expect([path, status, (body as { error: string }).error]).toEqual([path, 500, expect.stringMatching(/null/)])
+    }
   })
 
   test('prefix routes: everything under /api/fs/ and /api/launch takes their guards', async () => {

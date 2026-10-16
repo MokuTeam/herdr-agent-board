@@ -145,7 +145,8 @@ function card(item: Item, body: Body): Result {
   return { ok: true }
 }
 
-async function act(app: SessionApp, item: Item, action: string, body: Body): Promise<Result> {
+/** `body`: its fields, taken only by the actions that read them (as main's did, so a null body fails only there). */
+async function act(app: SessionApp, item: Item, action: string, body: () => Promise<Body>): Promise<Result> {
   const { deps } = app
   switch (action) {
     case 'focus':
@@ -155,14 +156,14 @@ async function act(app: SessionApp, item: Item, action: string, body: Body): Pro
     case 'sleep':
       return sleepSession(deps, item).finally(() => deps.wake.forget())
     case 'message':
-      return message(app, item, body)
+      return message(app, item, await body())
     case 'answer':
     case 'permit':
-      return answer(app, item, action, body)
+      return answer(app, item, action, await body())
     case 'rename':
-      return rename(item, body)
+      return rename(item, await body())
     case 'card':
-      return card(item, body)
+      return card(item, await body())
     default:
       return { ok: false, error: `unknown action ${action}` }
   }
@@ -180,12 +181,13 @@ export function sessionRoutes(app: SessionApp): Route[] {
     }
   const action = withItem(async (item, _req, ctx) => {
     const what = ctx.params[1] ?? ''
-    const body = await ctx.body()
-    if (what === 'rename' && body.claude) {
+    // Read for every action (too large or not JSON is a 500), its fields only where they are used.
+    await ctx.rawBody()
+    if (what === 'rename' && (await ctx.body()).claude) {
       const refused = ctx.refuse('fresh-data')
       if (refused) return refused
     }
-    const r = await act(app, item, what, body)
+    const r = await act(app, item, what, ctx.body)
     app.refresh()
     return json(r.ok ? 200 : 409, r)
   })

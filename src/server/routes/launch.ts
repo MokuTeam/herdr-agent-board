@@ -1,6 +1,7 @@
 // New sessions: what the window offers, starting one, and its tab, folder trust and failure.
 // They start programs: a browser must also say the request comes from this page (origin). main
 // read the body before it looked at the data's age, so those routes check fresh-data after it.
+// Only the request reads it (with ?.); the others read it for its errors alone.
 import type { Item } from '../../core/types.ts'
 import type { Launches } from '../../services/launch/launches.ts'
 import { json, type Route } from '../http.ts'
@@ -14,7 +15,7 @@ export function launchRoutes(launches: Launches, items: () => Item[]): Route[] {
       path: '/api/launch',
       guard,
       async handle(_req, ctx) {
-        const body = await ctx.body()
+        const body = await ctx.rawBody()
         const refused = ctx.refuse('fresh-data')
         if (refused) return refused
         const r = await launches.start(body, items())
@@ -26,7 +27,7 @@ export function launchRoutes(launches: Launches, items: () => Item[]): Route[] {
       path: /^\/api\/launch\/([\w-]+)\/dismiss$/,
       guard,
       async handle(_req, ctx) {
-        await ctx.body()
+        await ctx.rawBody()
         const r = launches.dismiss(ctx.params[0] ?? '')
         return json(r.ok ? 200 : 404, r)
       },
@@ -37,7 +38,7 @@ export function launchRoutes(launches: Launches, items: () => Item[]): Route[] {
       path: /^\/api\/launch\/([\w-]+)\/(focus|trust|close)$/,
       guard,
       async handle(_req, ctx) {
-        await ctx.body()
+        await ctx.rawBody()
         const refused = ctx.refuse('fresh-data')
         if (refused) return refused
         const [id = '', what] = ctx.params
@@ -55,7 +56,7 @@ export function launchRoutes(launches: Launches, items: () => Item[]): Route[] {
       path: /^\/api\/launch/,
       guard,
       async handle(_req, ctx) {
-        await ctx.body()
+        await ctx.rawBody()
         return json(404, { error: 'not found' })
       },
     },

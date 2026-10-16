@@ -18,7 +18,9 @@ export interface RouteContext {
   path: string
   /** The groups of a RegExp path ('' for one that did not take part). */
   params: string[]
-  /** The JSON body ({} when empty), read once. */
+  /** The JSON body as it parsed ({} when empty), read once: for code that takes any value. */
+  rawBody(): Promise<unknown>
+  /** The body's fields. main read them off the body, so null fails here (a 500); other non-objects have none. */
   body(): Promise<Body>
   /** A guard's refusal, or null: for the routes that check one after reading the body, as main did. */
   refuse(guard: Guard): Response | null
@@ -60,7 +62,7 @@ export function jsonText(text: string): Response {
 const MAX_BODY = 65_536
 
 /** The request's JSON body: {} when empty; over 64 KB or not JSON is an error (a 500). */
-export async function readBody(req: Request): Promise<Body> {
+export async function readBody(req: Request): Promise<unknown> {
   let data = ''
   if (req.body) {
     const decoder = new TextDecoder()
@@ -71,14 +73,16 @@ export async function readBody(req: Request): Promise<Body> {
     data += decoder.decode()
   }
   if (!data) return {}
-  let value: unknown
   try {
-    value = JSON.parse(data)
+    return JSON.parse(data)
   } catch {
     throw new Error('bad json')
   }
-  // main read fields off whatever parsed: null failed (a 500), other non-objects had none.
-  if (value === null) throw new Error('bad json')
+}
+
+/** The fields of a parsed body, as main read them: off null that threw, off other non-objects there were none. */
+function fieldsOf(value: unknown): Body {
+  if (value === null) throw new TypeError('Cannot read properties of null')
   return isRecord(value) ? value : {}
 }
 
@@ -106,7 +110,11 @@ function matches(route: Route, method: string, path: string): RegExpExecArray | 
 
 /** The first route that answers; 405 when none does. */
 export async function dispatch(routes: Route[], req: Request, url: URL, path: string, state: GuardState) {
-  let body: Promise<Body> | undefined
+  let parsed: Promise<unknown> | undefined
+  const rawBody = (): Promise<unknown> => {
+    parsed ??= readBody(req)
+    return parsed
+  }
   for (const route of routes) {
     const match = matches(route, req.method, path)
     if (!match) continue
@@ -114,10 +122,8 @@ export async function dispatch(routes: Route[], req: Request, url: URL, path: st
       url,
       path,
       params: match.slice(1).map(group => group ?? ''),
-      body: () => {
-        body ??= readBody(req)
-        return body
-      },
+      rawBody,
+      body: async () => fieldsOf(await rawBody()),
       refuse: guard => check(guard, req, url, state),
     }
     for (const guard of route.guard ?? []) {

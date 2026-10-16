@@ -94,21 +94,24 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
   const host = new RegExp(`^(127\\.0\\.0\\.1|localhost):${port}$`)
 
   async function answer(req: Request): Promise<Response> {
-    const url = new URL(req.url)
+    // The header first: with an empty, invalid or missing Host, Bun's req.url is a bare path.
+    if (!host.test(req.headers.get('host') ?? '')) return json(403, { error: 'host' })
+    let url: URL | undefined
     try {
-      if (!host.test(req.headers.get('host') ?? '')) return json(403, { error: 'host' })
+      url = new URL(req.url)
       return await dispatch(routes, req, url, decodeURIComponent(url.pathname), guards)
     } catch (err) {
-      log(`${req.method} ${url.pathname}${url.search}: ${messageOf(err)}`)
+      log(`${req.method} ${url ? url.pathname + url.search : req.url}: ${messageOf(err)}`)
       return json(500, { error: messageOf(err) })
     }
   }
 
   // No idle timeout: answers that drive a session can take longer than Bun's default 10 s, and the
-  // event stream is quiet between pings (main's node:http had none either).
+  // event stream is quiet between pings (main's node:http had none either). Not development: a
+  // throw that got past answer() must never serve Bun's error page with the source and the cwd.
   let server: ReturnType<typeof Bun.serve>
   try {
-    server = Bun.serve({ port, hostname: '127.0.0.1', idleTimeout: 0, fetch: answer })
+    server = Bun.serve({ port, hostname: '127.0.0.1', idleTimeout: 0, development: false, fetch: answer })
   } catch (err) {
     // The port is taken (EADDRINUSE, which the terminal board retries): nothing may keep running.
     events.close()
