@@ -3,14 +3,14 @@
 // running board (liveConfig). Categories are the board's lanes, in this order; `paths` guess the
 // category of a session from its folder (the longest match wins) until the agent sets one
 // itself. Agents may use ids that are not listed: they get a lane too.
-import { existsSync, mkdirSync, renameSync, watch, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, watch, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { builtinTitle, DEFAULT_CONFIG, normalizeConfig, validColor } from '../core/categories.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
 import type { Category, Config } from '../core/types.ts'
 import { allCards, writeCard } from './cards.ts'
-import { isRecord, readJson } from './json-store.ts'
+import { isRecord, readJson, renameWithRetry } from './json-store.ts'
 import { configDir } from './paths.ts'
 
 type Raw = Record<string, unknown>
@@ -25,7 +25,7 @@ function writeRaw(raw: Raw): void {
   mkdirSync(configDir(), { recursive: true })
   const tmp = `${configFile()}.${process.pid}.tmp`
   writeFileSync(tmp, `${JSON.stringify(raw, null, 2)}\n`)
-  renameSync(tmp, configFile())
+  renameWithRetry(tmp, configFile())
 }
 
 export function loadConfig(): Config {

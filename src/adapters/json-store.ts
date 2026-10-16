@@ -59,6 +59,28 @@ function lockFile(path: string): () => void {
   }
 }
 
+const RENAME_TRIES = 10
+const RENAME_RETRY_MS = 20
+
+/**
+ * Rename over an existing file. On Windows that can fail for a moment with EPERM/EBUSY/EACCES
+ * while a virus scanner, the indexer or a reader still has the target or the fresh temp file
+ * open, so those are retried briefly (about 200 ms at most) before the error is passed on.
+ */
+export function renameWithRetry(from: string, to: string, rename: (a: string, b: string) => void = renameSync): void {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      rename(from, to)
+      return
+    } catch (err) {
+      const code = errorCode(err)
+      const transient = code === 'EPERM' || code === 'EBUSY' || code === 'EACCES'
+      if (!transient || attempt >= RENAME_TRIES) throw err
+      Atomics.wait(pause, 0, 0, RENAME_RETRY_MS)
+    }
+  }
+}
+
 function unlinkIfThere(path: string): void {
   try {
     unlinkSync(path)
@@ -92,7 +114,7 @@ export function updateJson<T>(
       unlinkIfThere(path)
     } else if (next !== undefined) {
       writeFileSync(tmp, JSON.stringify(next))
-      renameSync(tmp, path)
+      renameWithRetry(tmp, path)
     }
     return next
   } finally {

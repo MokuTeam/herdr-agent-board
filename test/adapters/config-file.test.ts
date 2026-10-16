@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { readCard, writeCard } from '../../src/adapters/cards.ts'
 import { configFile, editCategories, editSettings, loadConfig } from '../../src/adapters/config-file.ts'
+import { renameWithRetry } from '../../src/adapters/json-store.ts'
 import { configDir } from '../../src/adapters/paths.ts'
 import { isolatedHome } from '../support/env.ts'
 
@@ -11,6 +12,32 @@ const seed = (obj: unknown) => {
   mkdirSync(configDir(), { recursive: true })
   writeFileSync(configFile(), JSON.stringify(obj))
 }
+
+test('renameWithRetry rides out a brief Windows file lock but not a real error', () => {
+  const lock = (code: string) => Object.assign(new Error(code), { code })
+  let calls = 0
+  renameWithRetry('a', 'b', () => {
+    if (++calls < 3) throw lock('EPERM')
+  })
+  assert.equal(calls, 3)
+  assert.throws(
+    () =>
+      renameWithRetry('a', 'b', () => {
+        throw lock('ENOENT')
+      }),
+    /ENOENT/,
+  )
+  calls = 0
+  assert.throws(
+    () =>
+      renameWithRetry('a', 'b', () => {
+        calls++
+        throw lock('EBUSY')
+      }),
+    /EBUSY/,
+  )
+  assert.equal(calls, 10)
+})
 
 test('loadConfig writes the defaults on first use', () => {
   isolatedHome()
