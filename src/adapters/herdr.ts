@@ -1,6 +1,9 @@
 // Thin async wrapper over the herdr CLI. HERDR_BIN_PATH hides the socket transport
 // (Unix socket or Windows named pipe), so plugins should call herdr through it.
 import { execFile } from 'node:child_process'
+import { isAgentStatus } from '../core/board.ts'
+import type { AgentStatus } from '../core/types.ts'
+import { isRecord } from './json-store.ts'
 
 const BIN = process.env.HERDR_BIN_PATH || 'herdr'
 
@@ -91,4 +94,27 @@ export function herdrText(args: string[], timeoutMs = 30_000): Promise<string> {
 /** Workspaces, tabs, panes and agents in one call. */
 export async function snapshot(): Promise<HerdrSnapshot> {
   return (await herdr<{ snapshot: HerdrSnapshot }>(['api', 'snapshot'])).snapshot
+}
+
+/** What `herdr agent get` says about a pane's agent. */
+export interface HerdrAgent {
+  /** The agent kind ('claude', ...). */
+  kind: string | null
+  /** herdr's status; anything it does not know is 'unknown'. */
+  status: AgentStatus
+  /** The Claude session id the pane hosts, if herdr knows one. */
+  session: string | null
+}
+
+/** The agent in a pane, or null when the pane has none. */
+export async function agentGet(pane: string): Promise<HerdrAgent | null> {
+  const answer = await herdr(['agent', 'get', pane])
+  const agent = isRecord(answer) ? answer.agent : null
+  if (!isRecord(agent)) return null
+  const token = agent.agent_session
+  return {
+    kind: typeof agent.agent === 'string' ? agent.agent : null,
+    status: isAgentStatus(agent.agent_status) ? agent.agent_status : 'unknown',
+    session: isRecord(token) && typeof token.value === 'string' ? token.value : null,
+  }
 }

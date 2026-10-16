@@ -75,3 +75,13 @@ export function noteOf(item: Item): string {
   if (item.column === 'done' || item.column === 'idle') return item.result || item.doing || auto
   return item.doing || auto
 }
+
+const AGENT_STATUSES: ReadonlySet<unknown> = new Set<AgentStatus>([
+  'idle',
+  'working',
+  'blocked',
+  'done',
+  'unknown',
+  'sleeping',
+])
+export const isAgentStatus = (v: unknown): v is AgentStatus => AGENT_STATUSES.has(v)

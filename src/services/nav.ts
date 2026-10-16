@@ -3,6 +3,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type HerdrSnapshot, herdr } from '../adapters/herdr.ts'
+import { isRecord } from '../adapters/json-store.ts'
 import { stateDir } from '../adapters/paths.ts'
 
 const RETURN_FILE = join(stateDir(), 'return.json')
@@ -12,8 +13,6 @@ interface ReturnTarget {
   tab: string | undefined
   agent: boolean
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
 
 function asReturnTarget(value: unknown): ReturnTarget | null {
   if (!isRecord(value) || typeof value.pane !== 'string') return null

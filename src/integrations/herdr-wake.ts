@@ -113,8 +113,3 @@ export function sharedHerdrWake(url: string | null): SleepProvider {
   shared.set(url, created)
   return created
 }
-
-/** Invalidate every shared provider's sleepers cache. */
-export function forgetSharedHerdrWake(): void {
-  for (const p of shared.values()) p.forget()
-}

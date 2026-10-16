@@ -4,25 +4,14 @@ import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { allCards, writeCard } from '../adapters/cards.ts'
 import { snapshot } from '../adapters/herdr.ts'
+import { isRecord } from '../adapters/json-store.ts'
 import { contextDir } from '../adapters/paths.ts'
-import { attentionOf, busy, columnOf, PINS } from '../core/board.ts'
+import { attentionOf, busy, columnOf, isAgentStatus, PINS } from '../core/board.ts'
 import { categoryFor } from '../core/categories.ts'
 import { t } from '../core/lang.ts'
 import type { AgentStatus, Attention, Card, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
 import type { Deps } from './deps.ts'
 
-const STATUSES: ReadonlySet<string> = new Set<AgentStatus>([
-  'idle',
-  'working',
-  'blocked',
-  'done',
-  'unknown',
-  'sleeping',
-])
-const statusOf = (value: unknown): AgentStatus =>
-  typeof value === 'string' && STATUSES.has(value) ? (value as AgentStatus) : 'unknown'
-
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
 const numberOf = (value: unknown): number | undefined => (typeof value === 'number' ? value : undefined)
 
 /**
@@ -81,8 +70,14 @@ function asContextFile(value: unknown): ContextFile {
  * How full a session's context is. The status line (statusline.mjs) says it best, percentage and
  * window size included; without it, the tokens of the last request from the transcript.
  */
-function contextOf(session: string | null, info: TranscriptInfo) {
-  const own = { context: info.context ?? null, contextPct: null as number | null, contextSize: null as number | null }
+interface ContextFill {
+  context: number | null
+  contextPct: number | null
+  contextSize: number | null
+}
+
+function contextOf(session: string | null, info: TranscriptInfo): ContextFill {
+  const own: ContextFill = { context: info.context ?? null, contextPct: null, contextSize: null }
   if (!session) return own
   const file = join(contextDir(), `${session.replace(/[^A-Za-z0-9_-]/g, '_')}.json`)
   const st = statSync(file, { throwIfNoEntry: false })
@@ -173,7 +168,7 @@ export async function collect(deps: Deps): Promise<Item[]> {
       agent: p.agent,
       name: reg?.name || p.terminal_title_stripped || p.label || p.pane_id,
       cwd: p.cwd ?? reg?.cwd ?? '',
-      status: statusOf(p.agent_status),
+      status: isAgentStatus(p.agent_status) ? p.agent_status : 'unknown',
       sleeping: false,
       focused: p.pane_id === snap.focused_pane_id,
       activity: numberOf(reg?.statusUpdatedAt) ?? 0,

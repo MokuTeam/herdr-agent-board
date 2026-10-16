@@ -1,6 +1,6 @@
 // What the board can do to a session, shared by the terminal board and the web board. Each
 // returns { ok: true } or { ok: false, error } with a message for the user.
-import { herdr, herdrText } from '../adapters/herdr.ts'
+import { agentGet, herdr, herdrText } from '../adapters/herdr.ts'
 import { inputDraft } from '../core/dialogs/input-box.ts'
 import { t } from '../core/lang.ts'
 import type { Item } from '../core/types.ts'
@@ -13,16 +13,6 @@ export type ActionResult =
   | { ok: false; error: string; busy?: boolean; dialog?: boolean; draft?: boolean }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
-
-/** What `herdr agent get` says about the pane's agent; null when it has none. */
-function agentOf(answer: unknown): { kind: unknown; status: unknown; session: string | null } | null {
-  const agent = isRecord(answer) ? answer.agent : null
-  if (!isRecord(agent)) return null
-  const token = agent.agent_session
-  const session = isRecord(token) && typeof token.value === 'string' ? token.value : null
-  return { kind: agent.agent, status: agent.agent_status, session }
-}
 
 /** Wake a session herdr-wake put to sleep (takes 10 to 30 s). */
 export function wake(deps: Deps, item: Item): Promise<ActionResult> {
@@ -87,7 +77,7 @@ export async function send(
     if (!r.ok) return r
   }
   try {
-    const agent = agentOf(await herdr(['agent', 'get', item.pane]))
+    const agent = await agentGet(item.pane)
     // Recheck after wake too: the pane may now host a different session.
     if (!agent || agent.session !== expectedSession) {
       return { ok: false, error: t('err.sessionChanged', { name: item.name }) }
