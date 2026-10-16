@@ -10,14 +10,15 @@
 // missed runs of a cron entry go as one, saying how many. Time the board was off does not count
 // against the wait. An entry is claimed in its file before it is sent, so a second board (a
 // restart that overlaps, a test copy) never sends the same run twice.
-import { mkdirSync, watch } from 'node:fs'
-import { defaultDeps } from './services/deps.ts'
-import { send, wake } from './services/actions.ts'
-import { collect } from './services/board.ts'
-import { getEntry, listEntries, logRun, removeEntry, updateEntry } from './adapters/schedule-store.ts'
-import { scheduleDir } from './adapters/paths.ts'
-import { promptOf, targetOf } from './core/schedule-rules.ts'
-import { nextRun } from './core/when.ts'
+import { type FSWatcher, mkdirSync, watch } from 'node:fs'
+import { scheduleDir } from '../adapters/paths.ts'
+import { getEntry, listEntries, logRun, removeEntry, updateEntry } from '../adapters/schedule-store.ts'
+import { promptOf, type ScheduleEntry, targetOf } from '../core/schedule-rules.ts'
+import type { Item } from '../core/types.ts'
+import { nextRun } from '../core/when.ts'
+import { send, wake } from './actions.ts'
+import { collect } from './board.ts'
+import type { Deps } from './deps.ts'
 
 // A run on its way (waking a session takes up to three minutes) holds its claim this long.
 const CLAIM_MS = 5 * 60_000
@@ -27,32 +28,37 @@ const MAX_WAKING = 2
 // miss forever.
 const GONE_RUNS = 3
 
-const positive = (v, fallback) => (Number(v) > 0 ? Number(v) : fallback)
+const positive = (v: unknown, fallback: number): number => (Number(v) > 0 ? Number(v) : fallback)
+const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 /**
- * Start sending due entries. `cfg` is the live config: scheduleTickSec (15), scheduleWaitMin
- * (240). Returns { tick, stop }.
+ * Start sending due entries. `deps.cfg` is the live config: scheduleTickSec (15), scheduleWaitMin
+ * (240). `onChange` is called after each run, so the board redraws.
  */
-export function startScheduler({ cfg, log = () => {}, onChange = () => {}, deps = defaultDeps(cfg, log) }) {
+export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onChange?: () => void }): {
+  stop(): void
+} {
+  const { cfg, log } = deps
   // Five minutes at most: setTimeout takes no more than 24 days, and a larger value runs at once.
-  const tickMs = () => Math.min(300, Math.max(0.1, positive(cfg.scheduleTickSec, 15))) * 1000
-  const patience = () => positive(cfg.scheduleWaitMin, 240) * 60_000
-  const flying = new Set() // sessions with a run on its way: one at a time per session
+  const tickMs = (): number => Math.min(300, Math.max(0.1, positive(cfg.scheduleTickSec, 15))) * 1000
+  const patience = (): number => positive(cfg.scheduleWaitMin, 240) * 60_000
+  const flying = new Set<string>() // sessions with a run on its way: one at a time per session
   // Runs that went out but whose entry could not be updated (its lock was taken): the next
   // tick finishes the entry instead of sending it again.
-  const delivered = new Map() // id -> next
+  const delivered = new Map<string, number>() // id -> next
   let waking = 0
-  let timer = null
+  let timer: ReturnType<typeof setTimeout> | undefined
   let ticking = false
   let stopped = false
 
-  async function tick() {
+  async function tick(): Promise<void> {
     if (ticking || stopped) return
     ticking = true
     try {
       const now = Date.now()
       // A run that waits for its session is tried again once a tick, not on every file change.
-      const due = listEntries().filter(e => e.next <= now && !flying.has(e.key) && !(e.tried > now - tickMs() * 0.9))
+      const tried = (e: ScheduleEntry): boolean => typeof e.tried === 'number' && e.tried > now - tickMs() * 0.9
+      const due = listEntries().filter(e => e.next <= now && !flying.has(e.key) && !tried(e))
       if (!due.length) return
       // Fresh: whether a session sleeps or works decides what happens now.
       const items = await collect(deps)
@@ -62,40 +68,41 @@ export function startScheduler({ cfg, log = () => {}, onChange = () => {}, deps 
           continue
         }
         const item = targetOf(entry, items)
-        if (flying.has(entry.key) || (item && flying.has(item.key)) || (item?.sleeping && waking >= MAX_WAKING)) continue
-        const keys = [entry.key, item?.key].filter(Boolean)
+        if (flying.has(entry.key) || (item && flying.has(item.key)) || (item?.sleeping && waking >= MAX_WAKING))
+          continue
+        const keys = [entry.key, item?.key].filter((k): k is string => !!k)
         for (const k of keys) flying.add(k)
         run(entry, item)
-          .catch(err => log(`schedule ${entry.id}: ${err.message}`))
+          .catch(err => log(`schedule ${entry.id}: ${messageOf(err)}`))
           .finally(() => {
             for (const k of keys) flying.delete(k)
             onChange()
           })
       }
     } catch (err) {
-      log(`schedule: ${err.message}`)
+      log(`schedule: ${messageOf(err)}`)
     } finally {
       ticking = false
     }
   }
 
-  async function run(entry, item) {
+  async function run(entry: ScheduleEntry, item: Item | undefined): Promise<void> {
     const now = Date.now()
     // On time (the default) goes into a working session too, queued into its turn as the user's
     // own mid-turn messages are; `idle` entries wait until it is free. A dialog always waits:
     // typing would answer it.
     const held = item && !item.sleeping && (item.status === 'blocked' || (entry.idle && item.status === 'working'))
     let why = !item ? 'gone' : held ? (item.status === 'blocked' ? 'dialog' : 'busy') : ''
-    if (!why) {
+    if (item && !why) {
       if (!claim(entry.id, now)) return
       if (item.key !== entry.key) {
         // Followed into the session that took its pane: the card and the log say the new one, the
         // prompt the one it was set for.
-        const movedFrom = entry.movedFrom ?? { key: entry.key, name: entry.name }
+        const movedFrom = entry.movedFrom ?? { key: entry.key, name: entry.name ?? '' }
         entry = { ...entry, key: item.key, name: item.name, movedFrom }
         updateEntry(entry.id, e => ({ ...e, key: item.key, name: item.name, movedFrom: e.movedFrom ?? movedFrom }))
       }
-      let r = { ok: true }
+      let r: Awaited<ReturnType<typeof send>> = { ok: true }
       if (item.sleeping) {
         waking++
         r = await wake(deps, item).finally(() => {
@@ -105,7 +112,12 @@ export function startScheduler({ cfg, log = () => {}, onChange = () => {}, deps 
         // Cancelled while the session woke up: nothing to send.
         if (r.ok && !getEntry(entry.id)) return
       }
-      if (r.ok) r = await send(deps, { ...item, sleeping: false }, promptOf(entry, Date.now()), { free: !!entry.idle, draft: true })
+      if (r.ok) {
+        r = await send(deps, { ...item, sleeping: false }, promptOf(entry, Date.now()), {
+          free: !!entry.idle,
+          draft: true,
+        })
+      }
       if (r.ok) return sent(entry)
       why = r.draft ? 'draft' : r.dialog ? 'dialog' : r.busy ? 'busy' : r.error
     }
@@ -117,15 +129,16 @@ export function startScheduler({ cfg, log = () => {}, onChange = () => {}, deps 
    * Delivery is at least once: a board that dies between typing the text and finish() leaves
    * its claim, and the run goes out again once that claim expires (CLAIM_MS).
    */
-  function claim(id, now) {
+  function claim(id: string, now: number): boolean {
     return !!updateEntry(id, e => {
       if (e.next > now) return undefined
-      if (e.claim && e.claim.pid !== process.pid && now - e.claim.at < CLAIM_MS) return undefined
+      const held = e.claim as { pid: number; at: number } | undefined
+      if (held && held.pid !== process.pid && now - held.at < CLAIM_MS) return undefined
       return { ...e, claim: { pid: process.pid, at: now } }
     })
   }
 
-  function sent(entry) {
+  function sent(entry: ScheduleEntry): void {
     const now = Date.now()
     delivered.set(entry.id, entry.next)
     finish(entry, now)
@@ -133,55 +146,77 @@ export function startScheduler({ cfg, log = () => {}, onChange = () => {}, deps 
   }
 
   /** After a run went out: a one-off goes, a cron entry moves on. */
-  function finish(entry, now = Date.now()) {
+  function finish(entry: ScheduleEntry, now = Date.now()): void {
     try {
-      if (entry.cron) updateEntry(entry.id, e => settle(e, now, { lastRun: now, runs: (e.runs ?? 0) + 1 }))
+      if (entry.cron) updateEntry(entry.id, e => settle(e, now, { lastRun: now, runs: (Number(e.runs) || 0) + 1 }))
       else removeEntry(entry.id)
       delivered.delete(entry.id)
     } catch (err) {
-      log(`schedule ${entry.id}: ${err.message}`)
+      log(`schedule ${entry.id}: ${messageOf(err)}`)
     }
   }
 
-  const record = (entry, at, result, why) => ({ id: entry.id, key: entry.key, name: entry.name, text: entry.text, cron: entry.cron, due: entry.next, at, result, why })
+  const record = (entry: ScheduleEntry, at: number, result: string, why?: string): Record<string, unknown> => ({
+    id: entry.id,
+    key: entry.key,
+    name: entry.name,
+    text: entry.text,
+    cron: entry.cron,
+    due: entry.next,
+    at,
+    result,
+    why,
+  })
 
   /** Not sent this time: try again on the next tick, or log it as missed once the wait is over. */
-  function wait(entry, now, why) {
+  function wait(entry: ScheduleEntry, now: number, why: string): void {
     // Only time spent trying counts: a gap (the board was off) is not waiting.
-    const step = entry.tried ? Math.min(now - entry.tried, 2 * tickMs() + 5000) : 0
-    const waited = (entry.waited ?? 0) + step
+    const tried = typeof entry.tried === 'number' ? entry.tried : 0
+    const step = tried ? Math.min(now - tried, 2 * tickMs() + 5000) : 0
+    const waited = (Number(entry.waited) || 0) + step
     if (waited < patience()) {
-      updateEntry(entry.id, e => ({ ...e, pendingSince: e.pendingSince ?? now, tried: now, waited, why, claim: undefined }))
+      updateEntry(entry.id, e => ({
+        ...e,
+        pendingSince: e.pendingSince ?? now,
+        tried: now,
+        waited,
+        why,
+        claim: undefined,
+      }))
       return
     }
-    const gone = why === 'gone' ? (entry.gone ?? 0) + 1 : 0
+    const gone = why === 'gone' ? (Number(entry.gone) || 0) + 1 : 0
     const drop = !entry.cron || gone >= GONE_RUNS
     if (drop) removeEntry(entry.id)
-    else updateEntry(entry.id, e => settle(e, now, { missed: (e.missed ?? 0) + 1, ...(gone && { gone }) }))
-    logRun({ ...record(entry, now, entry.cron && drop ? 'dropped' : 'missed', why), ...(entry.cron && drop && { n: gone }) })
+    else updateEntry(entry.id, e => settle(e, now, { missed: (Number(e.missed) || 0) + 1, ...(gone && { gone }) }))
+    logRun({
+      ...record(entry, now, entry.cron && drop ? 'dropped' : 'missed', why),
+      ...(entry.cron && drop && { n: gone }),
+    })
   }
 
   /** A cron entry after a run: its next time, the waiting fields cleared. */
-  function settle(e, now, counts) {
+  function settle(e: ScheduleEntry, now: number, counts: Record<string, unknown>): ScheduleEntry | undefined {
     const { pendingSince, tried, waited, why, claim, gone, ...rest } = e
-    const next = nextRun(e.cron, now)
-    return next === null ? null : { ...rest, ...counts, next }
+    const next = e.cron ? nextRun(e.cron, now) : null
+    // null deletes the file; the store's type only names the "no change" case.
+    return (next === null ? null : { ...rest, ...counts, next }) as ScheduleEntry | undefined
   }
 
   // The next tick comes at the soonest due time, or after tickMs at the latest.
-  function plan(ms) {
+  function plan(ms: number): void {
     clearTimeout(timer)
     if (!stopped) timer = setTimeout(loop, Math.max(50, ms))
   }
-  async function loop() {
+  async function loop(): Promise<void> {
     await tick()
     const now = Date.now()
-    const soonest = Math.min(...listEntries().map(e => (e.next <= now ? Infinity : e.next)))
+    const soonest = Math.min(...listEntries().map(e => (e.next <= now ? Number.POSITIVE_INFINITY : e.next)))
     plan(Math.min(tickMs(), soonest - now + 50))
   }
   // A new entry may be due sooner than the next tick.
-  let watcher = null
-  let watchTimer = null
+  let watcher: FSWatcher | null = null
+  let watchTimer: ReturnType<typeof setTimeout> | undefined
   try {
     mkdirSync(scheduleDir(), { recursive: true })
     watcher = watch(scheduleDir(), () => {
@@ -191,14 +226,13 @@ export function startScheduler({ cfg, log = () => {}, onChange = () => {}, deps 
     // On Windows a watched folder that is deleted errors (EPERM); unhandled, that ends the
     // board. The ticks go on without it.
     watcher.on('error', () => {
-      watcher.close()
+      watcher?.close()
       watcher = null
     })
   } catch {}
   plan(1000)
 
   return {
-    tick,
     stop() {
       stopped = true
       clearTimeout(timer)

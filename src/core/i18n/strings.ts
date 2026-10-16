@@ -369,7 +369,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'cat.confirm': 'Delete?',
     'cat.confirmN': ['Delete? {n} session goes by folder', 'Delete? {n} sessions go by folder'],
 
-    // schedule: reminders and repeating pings (scheduler.mjs, the schedule panel)
+    // schedule: reminders and repeating pings (services/scheduler.ts, the schedule panel)
     'tb.sched': 'Schedule',
     'tb.schedTitle': 'Reminders and repeating pings the agents set',
     'sched.title': 'Schedule',

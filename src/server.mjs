@@ -33,7 +33,7 @@ import { collect } from './services/board.ts'
 import { parseDialog, publicDialog } from './core/dialogs/questions.ts'
 import { cardsDir, ROOT, scheduleDir, stateDir, uploadsDir } from './adapters/paths.ts'
 import { listEntries, readLog, removeEntry, updateEntry } from './adapters/schedule-store.ts'
-import { startScheduler } from './scheduler.mjs'
+import { startScheduler } from './services/scheduler.ts'
 import { writeCard } from './adapters/cards.ts'
 
 const WEB = join(ROOT, 'web')
@@ -548,7 +548,7 @@ export async function startServer({ cfg, log = () => {} } = {}) {
     server.listen(port, '127.0.0.1', () => {
       refresh()
       // The port makes it one board per machine, so one scheduler; claims cover an overlap.
-      const scheduler = startScheduler({ cfg, log, onChange: refresh, deps })
+      const scheduler = startScheduler({ deps, onChange: refresh })
       resolve({ port, url: `http://127.0.0.1:${port}/`, refresh, scheduler })
     })
   })

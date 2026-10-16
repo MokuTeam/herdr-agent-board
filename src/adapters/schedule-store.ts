@@ -1,5 +1,5 @@
 // The schedule: reminders (one-off) and repeating pings (cron) that agents, or the user, set for
-// a session; scheduler.mjs sends them. One small JSON file per entry, written like the cards
+// a session; services/scheduler.ts sends them. One small JSON file per entry, written like the cards
 // (json-store.ts): a lock around read, change, rename, so the scheduler marking a run and an agent
 // cancelling the entry at the same moment cannot bring a cancelled entry back. log.jsonl keeps
 // what was sent and what was missed, for the web board.

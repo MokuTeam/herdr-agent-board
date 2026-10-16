@@ -78,10 +78,11 @@ if (mode === 'open') {
   await import('../../src/cli.mjs')
 } else if (mode === 'scheduler') {
   const { useLanguage } = await import('../../src/core/lang.ts')
-  const { startScheduler } = await import('../../src/scheduler.mjs')
+  const { startScheduler } = await import('../../src/services/scheduler.ts')
+  const { defaultDeps } = await import('../../src/services/deps.ts')
   // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
   useLanguage('en')
-  startScheduler({ cfg: input(), log: (...args: unknown[]) => send({ log: args[0] }) })
+  startScheduler({ deps: defaultDeps(input(), (text: string) => send({ log: text })) })
   send({ ready: true })
 } else if (mode === 'write') {
   const { existsSync } = await import('node:fs')

@@ -178,7 +178,7 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
           if (block?.type === 'tool_result') results.add(str(block.tool_use_id))
         }
       }
-      // A reminder the board typed in (scheduler.mjs) is not the user answering.
+      // A reminder the board typed in (services/scheduler.ts) is not the user answering.
       if (!info.lastText && !o.isMeta && userText(content) && !/^\[board (reminder|schedule)\b/.test(userText(content)))
         info.replied = true
       continue

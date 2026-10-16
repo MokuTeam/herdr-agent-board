@@ -1,6 +1,6 @@
 // The rules of the schedule that need no files: what an entry may hold, what the session is told
 // when one is due, and which session an entry is for. Storage is src/adapters/schedule-store.ts, sending is
-// src/scheduler.mjs.
+// src/services/scheduler.ts.
 import { t } from './lang.ts'
 import type { Item } from './types.ts'
 import { countRuns } from './when.ts'

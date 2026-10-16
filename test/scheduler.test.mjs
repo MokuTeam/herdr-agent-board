@@ -6,7 +6,8 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { root, sandbox, until } from './support/sandbox.ts'
 
-// The scheduler runs in a child process against a fake herdr: entries are files in the sandbox's
+// The CLI, hook and web-board side of the schedule (the scheduler itself: test/services/scheduler.test.ts).
+// Child processes run against a fake herdr: entries are files in the sandbox's
 // schedule folder, the session's prompt is a logged `herdr agent prompt` call.
 const HOUR = 3600e3
 const dirOf = box => join(box.env.LOCALAPPDATA, 'herdr/plugins/agent-board/schedule')
@@ -17,8 +18,6 @@ function put(box, entry) {
   writeFileSync(join(dirOf(box), `${entry.id}.json`), JSON.stringify({ key: 's1', name: 'Test', created: Date.now(), ...entry }))
 }
 const read = (box, id) => (existsSync(join(dirOf(box), `${id}.json`)) ? JSON.parse(readFileSync(join(dirOf(box), `${id}.json`), 'utf8')) : null)
-const runs = box => (existsSync(join(dirOf(box), 'log.jsonl')) ? readFileSync(join(dirOf(box), 'log.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : [])
-const prompts = box => box.calls().filter(a => a[1] === 'prompt').map(a => a[3])
 
 /** Claude's input box as `herdr agent read --ansi` shows it; a suggestion is drawn dim. */
 const RULE = '─'.repeat(40)
@@ -34,12 +33,6 @@ function herdrWith(box, status, extra = {}) {
     'agent prompt': { result: {} },
     ...extra,
   })
-}
-
-async function scheduler(box, cfg = {}) {
-  const proc = box.run('scheduler', { categories: [{ id: 'other', title: 'Other', color: 'gray' }], wakeUrl: null, scheduleTickSec: 0.2, ...cfg })
-  await until(() => proc.messages.some(m => m.ready))
-  return proc
 }
 
 /** The sandbox's board config; port 9 answers nothing, so the CLI never reaches the live board. */
@@ -102,138 +95,6 @@ test('board remind / every / schedule / unschedule keep entries for the session'
   assert.deepEqual(readdirSync(dirOf(box)).filter(n => n.endsWith('.json')), [])
 })
 
-test('a due reminder goes into an idle session, then it is gone and logged', { timeout: 15_000 }, async t => {
-  const box = await sandbox(t)
-  herdrWith(box, 'idle')
-  put(box, { id: 'aaaaa1', text: 'check the CI run', at: Date.now() - 1000, next: Date.now() - 1000 })
-  await scheduler(box)
-  await until(() => prompts(box).length === 1 && runs(box).length === 1)
-  assert.deepEqual(prompts(box), ['[board reminder] check the CI run'])
-  assert.equal(read(box, 'aaaaa1'), null)
-  assert.equal(runs(box)[0].result, 'sent')
-})
-
-test('after the board was off: a one-off says how late, a cron entry runs once for all it missed', { timeout: 15_000 }, async t => {
-  const box = await sandbox(t)
-  herdrWith(box, 'idle')
-  const top = new Date()
-  top.setMinutes(0, 0, 0)
-  put(box, { id: 'bbbbb1', text: 'late one', at: Date.now() - 3 * HOUR, next: Date.now() - 3 * HOUR })
-  put(box, { id: 'bbbbb2', key: 's2', text: 'hourly', cron: '0 * * * *', next: top.getTime() - 3 * HOUR })
-  const snapshot = { panes: ['s1', 's2'].map((s, i) => ({ pane_id: `p${i + 1}`, agent: 'claude', agent_session: { value: s }, agent_status: 'idle' })), tabs: [], workspaces: [] }
-  box.state({
-    'api snapshot': { result: { snapshot } },
-    'agent get p1': { result: { agent: { agent_status: 'idle', agent_session: { value: 's1' } } } },
-    'agent get p2': { result: { agent: { agent_status: 'idle', agent_session: { value: 's2' } } } },
-    'agent prompt': { result: {} },
-  })
-  await scheduler(box)
-  await until(() => prompts(box).length === 2 && runs(box).length === 2)
-  const [late] = prompts(box).filter(p => p.endsWith('late one'))
-  assert.match(late, /^\[board reminder; 3 h late, due .+\] late one$/)
-  const [hourly] = prompts(box).filter(p => p.endsWith('hourly'))
-  assert.match(hourly, /^\[board schedule bbbbb2: 0 \* \* \* \*; 4 runs since .+, sent once\] hourly$/)
-  const cron = read(box, 'bbbbb2')
-  assert.ok(cron.next > Date.now())
-  assert.equal(cron.runs, 1)
-  assert.equal(cron.claim, undefined)
-})
-
-test('on time, a working session gets it queued into its turn; a dialog and a draft still hold it', { timeout: 15_000 }, async t => {
-  const box = await sandbox(t)
-  herdrWith(box, 'working')
-  put(box, { id: 'cdcd01', text: 'mid-turn', at: Date.now() - 1000, next: Date.now() - 1000 })
-  await scheduler(box)
-  await until(() => prompts(box).length === 1)
-  assert.deepEqual(prompts(box), ['[board reminder] mid-turn'])
-
-  const dialog = await sandbox(t)
-  herdrWith(dialog, 'blocked')
-  put(dialog, { id: 'cdcd02', text: 'not into a dialog', at: Date.now() - 1000, next: Date.now() - 1000 })
-  await scheduler(dialog)
-  await until(() => read(dialog, 'cdcd02')?.why === 'dialog')
-
-  const draft = await sandbox(t)
-  herdrWith(draft, 'working', { 'agent read': { text: screen('the user types') } })
-  put(draft, { id: 'cdcd03', text: 'not over a draft', at: Date.now() - 1000, next: Date.now() - 1000 })
-  await scheduler(draft)
-  await until(() => read(draft, 'cdcd03')?.why === 'draft')
-  await new Promise(resolve => setTimeout(resolve, 400))
-  assert.deepEqual([...prompts(dialog), ...prompts(draft)], [])
-})
-
-test('--idle: a working session gets it once it is free; one that stays busy has it logged as missed', { timeout: 15_000 }, async t => {
-  const box = await sandbox(t)
-  herdrWith(box, 'working')
-  put(box, { id: 'ccccc1', idle: true, text: 'when free', at: Date.now() - 1000, next: Date.now() - 1000 })
-  await scheduler(box, { scheduleWaitMin: 1 })
-  await until(() => read(box, 'ccccc1')?.pendingSince)
-  await new Promise(resolve => setTimeout(resolve, 600))
-  assert.deepEqual(prompts(box), [])
-  assert.equal(read(box, 'ccccc1').why, 'busy')
-  herdrWith(box, 'idle')
-  await until(() => prompts(box).length === 1)
-  assert.deepEqual(prompts(box), ['[board reminder] when free'])
-
-  const busy = await sandbox(t)
-  herdrWith(busy, 'blocked')
-  put(busy, { id: 'ccccc2', idle: true, text: 'never free', at: Date.now() - 1000, next: Date.now() - 1000 })
-  put(busy, { id: 'ccccc3', key: 's1', text: 'cron never free', cron: '* * * * *', next: Date.now() - 1000 })
-  await scheduler(busy, { scheduleWaitMin: 0.01 })
-  await until(() => runs(busy).length >= 2, 8000)
-  assert.deepEqual(prompts(busy), [])
-  assert.ok(runs(busy).every(r => r.result === 'missed' && r.why === 'dialog'))
-  assert.equal(read(busy, 'ccccc2'), null)
-  const cron = read(busy, 'ccccc3')
-  assert.equal(cron.missed, 1)
-  assert.ok(cron.next > Date.now() - 1000)
-  assert.equal(cron.pendingSince, undefined)
-})
-
-test('text the user left in the input box holds the reminder back until it is gone', { timeout: 15_000 }, async t => {
-  const box = await sandbox(t)
-  herdrWith(box, 'idle', { 'agent read': { text: screen('half a thought') } })
-  put(box, { id: 'ddddd2', text: 'not over your draft', at: Date.now() - 1000, next: Date.now() - 1000 })
-  await scheduler(box)
-  await until(() => read(box, 'ddddd2')?.why === 'draft')
-  assert.deepEqual(prompts(box), [])
-  herdrWith(box, 'idle')
-  await until(() => prompts(box).length === 1)
-  assert.deepEqual(prompts(box), ['[board reminder] not over your draft'])
-})
-
-test('after /clear the reminder goes to the new session in the same pane and folder', { timeout: 15_000 }, async t => {
-  const box = await sandbox(t)
-  herdrWith(box, 'idle')
-  // Set by session s0, which /clear replaced with s1 in pane p1.
-  put(box, { id: 'ddddd3', key: 's0', pane: 'p1', cwd: box.dir, text: 'still yours', at: Date.now() - 1000, next: Date.now() - 1000 })
-  put(box, { id: 'ddddd4', key: 's8', pane: 'p1', cwd: join(box.dir, 'elsewhere'), text: 'another folder', at: Date.now() - 1000, next: Date.now() - 1000 })
-  await scheduler(box)
-  await until(() => prompts(box).length === 1 && runs(box).length === 1)
-  // The receiver hears it was set before /clear, so it can judge whether it still applies.
-  assert.deepEqual(prompts(box), ['[board reminder; set by Test before /clear] still yours'])
-  assert.equal(runs(box)[0].key, 's1')
-  await until(() => read(box, 'ddddd4')?.why === 'gone')
-})
-
-test('a reminder set for another session says who set it', { timeout: 15_000 }, async t => {
-  const box = await sandbox(t)
-  herdrWith(box, 'idle')
-  const past = Date.now() - 1000
-  put(box, { id: 'abab01', text: 'review my PR', at: past, next: past, from: { key: 's7', name: 'lead-session' } })
-  await scheduler(box)
-  await until(() => prompts(box).length === 1)
-  assert.deepEqual(prompts(box), ['[board reminder from lead-session] review my PR'])
-  // Set by s7 for s0, which /clear turned into s1: both are said.
-  put(box, { id: 'abab02', key: 's0', name: 'old', pane: 'p1', cwd: box.dir, text: 'cron', cron: '0 * * * *', next: past, from: { key: 's7', name: 'lead-session' } })
-  await until(() => prompts(box).length === 2)
-  assert.equal(prompts(box)[1], '[board schedule abab02 from lead-session: 0 * * * *; set for old before /clear] cron')
-  // Its own reminder has no "from", also after /clear.
-  put(box, { id: 'abab03', key: 's0', name: 'old', pane: 'p1', cwd: box.dir, text: 'mine', at: past, next: past, from: { key: 's0', name: 'old' } })
-  await until(() => prompts(box).length === 3)
-  assert.equal(prompts(box)[2], '[board reminder; set by old before /clear] mine')
-})
-
 test('board remind records who set it, the pane and the pane folder, and no control characters', { timeout: 15_000 }, async t => {
   const box = await sandbox(t)
   config(box)
@@ -275,79 +136,6 @@ test('board remind says nothing about the board when one with the scheduler answ
   const out = await agentCli(box, ['remind', '--session', '11111111-2222-3333-4444-555555555555', 'in', '1h', 'x'])
   assert.equal(out.code, 0, out.out)
   assert.doesNotMatch(out.out, /no board/)
-})
-
-test('a cron entry whose session stays gone is dropped after three runs in a row', { timeout: 15_000 }, async t => {
-  const box = await sandbox(t)
-  herdrWith(box, 'idle')
-  const past = Date.now() - 1000
-  put(box, { id: 'acac01', key: 's-gone', text: 'orphan', cron: '0 * * * *', next: past, gone: 2, missed: 2 })
-  put(box, { id: 'acac02', key: 's-gone2', text: 'first miss', cron: '0 * * * *', next: past })
-  await scheduler(box, { scheduleWaitMin: 0.01 })
-  await until(() => runs(box).length === 2, 8000)
-  assert.equal(read(box, 'acac01'), null)
-  const dropped = runs(box).find(r => r.id === 'acac01')
-  assert.equal(dropped.result, 'dropped')
-  assert.equal(dropped.n, 3)
-  const kept = read(box, 'acac02')
-  assert.equal(kept.gone, 1)
-  assert.equal(kept.missed, 1)
-  assert.equal(runs(box).find(r => r.id === 'acac02').result, 'missed')
-  assert.deepEqual(prompts(box), [])
-})
-
-test('a sleeping session is woken through herdr-wake before it gets the text', { timeout: 15_000 }, async t => {
-  const box = await sandbox(t)
-  box.state({ 'api snapshot': { result: { snapshot: { panes: [], tabs: [], workspaces: [] } } } })
-  let wakes = 0
-  const wake = http.createServer((req, res) => {
-    res.setHeader('content-type', 'application/json')
-    if (req.url === '/sleeping') return res.end(JSON.stringify(wakes ? [] : [{ session: 's1', pane: 'p1', name: 'Sleepy', slept_at: new Date().toISOString() }]))
-    assert.equal(req.url, '/wake')
-    wakes++
-    herdrWith(box, 'idle')
-    res.end('{"ok":true}')
-  })
-  await new Promise(resolve => wake.listen(0, '127.0.0.1', resolve))
-  t.after(() => new Promise(resolve => wake.close(resolve)))
-  put(box, { id: 'ddddd1', text: 'wake up', at: Date.now() - 1000, next: Date.now() - 1000 })
-  await scheduler(box, { wakeUrl: `http://127.0.0.1:${wake.address().port}` })
-  await until(() => prompts(box).length === 1)
-  assert.equal(wakes, 1)
-  assert.deepEqual(prompts(box), ['[board reminder] wake up'])
-})
-
-test('a run another board claimed is left alone until its claim runs out', { timeout: 15_000 }, async t => {
-  const box = await sandbox(t)
-  herdrWith(box, 'idle')
-  put(box, { id: 'eeeee1', text: 'claimed', at: Date.now() - 1000, next: Date.now() - 1000, claim: { pid: process.pid, at: Date.now() } })
-  put(box, { id: 'eeeee2', key: 's9', text: 'stale claim', at: Date.now() - 1000, next: Date.now() - 1000, claim: { pid: process.pid, at: Date.now() - 600_000 } })
-  const snapshot = { panes: ['s1', 's9'].map((s, i) => ({ pane_id: `p${i + 1}`, agent: 'claude', agent_session: { value: s }, agent_status: 'idle' })), tabs: [], workspaces: [] }
-  box.state({
-    'api snapshot': { result: { snapshot } },
-    'agent get p1': { result: { agent: { agent_status: 'idle', agent_session: { value: 's1' } } } },
-    'agent get p2': { result: { agent: { agent_status: 'idle', agent_session: { value: 's9' } } } },
-    'agent prompt': { result: {} },
-  })
-  await scheduler(box)
-  await until(() => prompts(box).length === 1)
-  await new Promise(resolve => setTimeout(resolve, 800))
-  assert.deepEqual(prompts(box), ['[board reminder] stale claim'])
-  assert.ok(read(box, 'eeeee1'))
-})
-
-test('an entry cancelled while its run is on the way stays cancelled', { timeout: 15_000 }, async t => {
-  const box = await sandbox(t)
-  const gate = join(box.dir, 'prompt-gate')
-  herdrWith(box, 'idle', { 'agent prompt': { result: {}, waitFor: gate } })
-  put(box, { id: 'fffff1', text: 'every minute', cron: '* * * * *', next: Date.now() - 1000 })
-  await scheduler(box)
-  await until(() => prompts(box).length === 1)
-  assert.match((await cli(box, ['unschedule', 'fffff1'])).out, /removed fffff1/)
-  writeFileSync(gate, '')
-  await until(() => runs(box).length === 1)
-  await new Promise(resolve => setTimeout(resolve, 300))
-  assert.equal(read(box, 'fffff1'), null)
 })
 
 test('a board reminder does not count as the user answering the session', { timeout: 15_000 }, async t => {

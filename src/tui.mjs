@@ -18,7 +18,7 @@ import { startServer } from './server.mjs'
 import { openWeb } from './web-open.mjs'
 import { boardFile, cardsDir, stateDir } from './adapters/paths.ts'
 import { listEntries } from './adapters/schedule-store.ts'
-import { startScheduler } from './scheduler.mjs'
+import { startScheduler } from './services/scheduler.ts'
 import { writeCard } from './adapters/cards.ts'
 import { shortWhen } from './core/when-format.ts'
 
@@ -635,4 +635,4 @@ async function serve(tries = 8) {
 }
 if (cfg.web !== false) serve()
 // The web board's server runs the schedule; without it, this board does.
-else startScheduler({ cfg, log: webLog, onChange: refresh, deps })
+else startScheduler({ deps: defaultDeps(cfg, webLog), onChange: refresh })
