@@ -15,7 +15,8 @@ import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { open, readdir, stat } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
-import { checkBranch, checkName, normDir, sameDir, slugName, uniqueSlug, UNSAFE_CHARS, worktreePath } from '../web/launch-model.js'
+import { checkBranch, checkName, normDir, sameDir, slugName, uniqueSlug, UNSAFE_CHARS, worktreePath } from './core/launch/names.ts'
+import { commandArgs, failureKind, launcherError, launcherLabel, parseLauncherOutput, usesPlaceholder } from './core/launch/launcher-command.ts'
 import { resolvePath } from './files.mjs'
 import { raiseTerminal } from './actions.mjs'
 import { herdr, herdrText } from './herdr.mjs'
@@ -26,90 +27,7 @@ import { readCard, writeCard } from './store.mjs'
 import { keyTowardYes, sameFolder, trustDialog } from './core/dialogs/trust.ts'
 
 const LAUNCH_DIR = join(STATE_DIR, 'launch') // first messages for {messageFile}, while a launcher runs
-export const PLACEHOLDERS = ['name', 'label', 'cwd', 'workspace', 'workspaceLabel', 'category', 'message', 'messageFile', 'sessionId']
 const MESSAGE_MAX = 20_000
-
-// ------------------------------------------------------------------ the command from config
-
-const fill = (s, vars) => String(s).replace(/\{(\w+)\}/g, (m, k) => {
-  if (!PLACEHOLDERS.includes(k)) throw new Error(t('launch.err.placeholder', { name: m }))
-  return String(vars[k] ?? '')
-})
-const used = s => [...String(s).matchAll(/\{(\w+)\}/g)].map(m => m[1])
-
-/** Whether the template uses {key} anywhere. */
-export const usesPlaceholder = (template, key) => (template ?? []).flat().some(s => used(s).includes(key))
-
-/**
- * `launch.command` with the values filled in: { file, args }. Each element is one argument, a
- * value never splits or joins arguments. A nested array is an optional group, left out when
- * any value it uses is empty: ["-BriefFile", "{messageFile}"]. The executable takes no values.
- */
-export function commandArgs(template, vars) {
-  if (!Array.isArray(template) || typeof template[0] !== 'string' || !template[0].trim()) throw new Error(t('launch.err.command'))
-  if (used(template[0]).length) throw new Error(t('launch.err.commandValue'))
-  // cmd.exe parses its own command line, so values would meet a shell after all (and Node before
-  // 20.12.2 runs .bat and .cmd files through it): a launcher is a program, or a script run by one.
-  if (/(^|[\\/])cmd(\.exe)?$|\.(bat|cmd)$/i.test(template[0].trim())) throw new Error(t('launch.err.commandShell'))
-  const args = []
-  for (const part of template.slice(1)) {
-    if (Array.isArray(part)) {
-      if (!part.every(s => typeof s === 'string')) throw new Error(t('launch.err.command'))
-      if (part.flatMap(used).every(k => String(vars[k] ?? '') !== '')) args.push(...part.map(s => fill(s, vars)))
-    } else if (typeof part === 'string') args.push(fill(part, vars))
-    else throw new Error(t('launch.err.command'))
-  }
-  return { file: template[0], args }
-}
-
-/** What a launcher printed when it worked: `pane=<id> name=<name> agent=<herdr name>`, each optional. */
-export function parseLauncherOutput(stdout) {
-  const out = {}
-  for (const m of String(stdout ?? '').matchAll(/\b(pane|agent|session)=(\S+)/g)) out[m[1]] = m[2]
-  return out
-}
-
-const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/g
-
-/**
- * Why a launcher failed, from what it printed: PowerShell's error view puts the message on the
- * last "| " line, other tools on their last line. The pane, when the text names one.
- */
-export function launcherError(stdout, stderr) {
-  const lines = `${stderr ?? ''}\n${stdout ?? ''}`.replace(ANSI, '').split(/\r?\n/).map(l => l.trimEnd())
-  const err = String(stderr ?? '').replace(ANSI, '').split(/\r?\n/).map(l => l.trim()).filter(Boolean)
-  // PowerShell 7: the message follows the ~~~ line under the code, wrapped over "| " lines.
-  const marker = err.findLastIndex(l => /^\|\s*~+$/.test(l))
-  const barred = marker >= 0 ? err.slice(marker + 1).map(l => /^\|\s?(.*)$/.exec(l)?.[1]?.trim()).filter(Boolean).join(' ') : ''
-  // Windows PowerShell: the message first, cut at the console's width, then "At …", "+ …" and
-  // CategoryInfo lines.
-  const raw = String(stderr ?? '').replace(ANSI, '').split(/\r?\n/).filter(l => l.trim())
-  const at = raw.findIndex(l => /^At \S/.test(l))
-  const legacy = at > 0 && raw.some(l => /^\s*\+ CategoryInfo/.test(l)) ? raw.slice(0, at).reduce((s, l, i, all) => s + (i && all[i - 1].length < 110 ? ' ' : '') + l, '').trim() : ''
-  const plain = err.filter(l => !/^(At |Line \||\+ |\| |CategoryInfo|FullyQualifiedErrorId|~)/.test(l)).at(-1)
-  const message = (barred || legacy || plain || lines.filter(Boolean).at(-1) || '').replace(/^\S+\.ps1\s*:\s*/i, '').replace(/^(Exception|Error|Write-Error):\s*/i, '').trim()
-  const pane = /\b(w[A-Za-z0-9]+:p[A-Za-z0-9]+)\b/.exec(lines.join('\n'))?.[1] ?? null
-  return { message, pane }
-}
-
-/** What kind of failure it was, for the hint the page shows next to it. */
-export function failureKind(message, code) {
-  const m = String(message ?? '')
-  if (code === 'ENOENT' || code === 'EINVAL') return 'launcher'
-  if (/trust|dialog|agent_not_ready|blocked/i.test(m)) return 'dialog'
-  if (/did not get ready|timed? ?out|ETIMEDOUT|timeout/i.test(m)) return 'timeout'
-  if (/no such folder|not a folder|cannot find path/i.test(m)) return 'folder'
-  if (/worktree|branch/i.test(m)) return 'worktree'
-  return 'other'
-}
-
-/** A short name for the launcher in the window: its script's name, else the program's. */
-export function launcherLabel(command) {
-  if (!Array.isArray(command) || !command.length) return ''
-  const script = command.flat().find(s => /\.(ps1|sh|cmd|bat|mjs|cjs|js|py)$/i.test(String(s)) && !/\{/.test(s))
-  // Either separator: a config written for Windows still reads right on macOS (path.basename there splits on / only).
-  return String(script ?? command[0]).split(/[\\/]/).pop().replace(/\.(ps1|sh|cmd|bat|mjs|cjs|js|py|exe)$/i, '')
-}
 
 // ------------------------------------------------------------------ folders for the picker
 

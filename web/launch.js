@@ -6,7 +6,7 @@
 // says whether a path exists), suggestions from the context (the card's folder, the lane's
 // folders, folders of sessions on the board and of recent Claude sessions), and a column view
 // to browse, Finder style. The browser offers no picker that gives an absolute path, so this is ours.
-import { baseName, categoryForDir, checkBranch, checkName, completions, defaultWorkspace, folderSuggestions, NAME_MAX, slugName, splitPathInput, suggestName, worktreePath } from './launch-model.js'
+import { baseName, categoryForDir, checkBranch, checkName, completions, defaultWorkspace, folderSuggestions, NAME_MAX, slugName, splitPathInput, suggestName, worktreePath } from '../src/core/launch/names.ts'
 import { reducedMotion, Spring } from './spring.js'
 import { launchContext, launchDraftBook } from './launch-drafts.js'
 import { modalFocus } from './modal-focus.js'
