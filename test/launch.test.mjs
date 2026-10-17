@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import http from 'node:http'
-import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -345,7 +345,7 @@ test('a retry starts in the worktree and the workspace the failed launch made, n
   const failed = await launched(first.id)
   assert.equal(failed.state, 'failed')
   assert.equal(failed.worktree, null)
-  assert.ok(sameDir(failed.cwd, join(box.dir, 'repo-feature-x', 'src')), failed.cwd)
+  assert.ok(sameDir(failed.cwd, realpathSync(join(box.dir, 'repo-feature-x', 'src'))), failed.cwd)
   box.state(HERDR)
   const again = await (await post('/api/launch', { name: failed.name, cwd: failed.cwd, category: failed.category, workspace: { id: 'wA' }, worktree: failed.worktree })).json()
   assert.equal((await launched(again.id)).state, 'done')
@@ -373,7 +373,7 @@ test('a launch through a symlink preserves the selected subfolder in its new wor
   const first = await (await post('/api/launch', { name: 'Alias job', cwd: join(alias, 'src'), category: 'acme', workspace: { id: 'wA' }, worktree: { branch: 'via-alias' } })).json()
   const failed = await launched(first.id)
   assert.equal(failed.state, 'failed')
-  assert.ok(sameDir(failed.cwd, join(box.dir, 'real-repo-via-alias', 'src')), failed.cwd)
+  assert.ok(sameDir(failed.cwd, realpathSync(join(box.dir, 'real-repo-via-alias', 'src'))), failed.cwd)
 })
 
 test('a launcher that runs too long is ended with everything it started', { timeout: 30_000 }, async t => {
