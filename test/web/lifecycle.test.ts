@@ -1,6 +1,13 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { type BoardStream, boardConnection, dialogHistory, type HistoryLike } from '../../web/src/models/lifecycle.ts'
+import {
+  anyLayerOpen,
+  type BoardStream,
+  boardConnection,
+  dialogHistory,
+  type HistoryLike,
+  topLayer,
+} from '../../web/src/models/lifecycle.ts'
 
 type FakeStream = BoardStream & { closed: boolean }
 
@@ -169,4 +176,15 @@ test('reload consumes an abandoned dialog sentinel without closing a newly opene
   assert.equal(closed, 0)
   assert.equal(open, true)
   assert.equal(pushes, 1)
+})
+
+test('Back closes the topmost open layer of those the page lists, topmost first', () => {
+  const closed: string[] = []
+  const layer = (name: string, open: boolean) => ({ open, close: () => closed.push(name) })
+  const layers = [layer('menu', false), layer('limits', true), layer('panel', true)]
+  assert.equal(anyLayerOpen(layers), true)
+  topLayer(layers)?.close()
+  assert.deepEqual(closed, ['limits'])
+  assert.equal(anyLayerOpen([layer('menu', false)]), false)
+  assert.equal(topLayer([layer('menu', false)]), undefined)
 })

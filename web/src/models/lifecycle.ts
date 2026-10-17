@@ -138,3 +138,13 @@ export function dialogHistory({ history, mobile, isOpen, closeTop }: DialogHisto
   }
   return { sync, pop }
 }
+
+/** A layer above the board that Back can close: a menu, the launch window, the quick look, the usage popover, a panel. */
+export interface DialogLayer {
+  open: boolean
+  close(): void
+}
+
+/** The page lists its layers topmost first. */
+export const anyLayerOpen = (layers: readonly DialogLayer[]): boolean => layers.some(layer => layer.open)
+export const topLayer = (layers: readonly DialogLayer[]): DialogLayer | undefined => layers.find(layer => layer.open)

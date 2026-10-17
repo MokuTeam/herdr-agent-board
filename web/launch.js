@@ -9,7 +9,7 @@
 import { baseName, categoryForDir, checkBranch, checkName, completions, defaultWorkspace, folderSuggestions, NAME_MAX, slugName, splitPathInput, suggestName, worktreePath } from '../src/core/launch/names.ts'
 import { reducedMotion, Spring } from './src/models/spring.ts'
 import { launchContext, launchDraftBook } from './launch-drafts.js'
-import { modalFocus } from './modal-focus.js'
+import { modalFocus } from './src/models/modal-focus.ts'
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 const svg = body => `<svg viewBox="0 0 20 20" aria-hidden="true">${body}</svg>`

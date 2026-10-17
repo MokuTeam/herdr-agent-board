@@ -34,7 +34,7 @@ import {
   sizeLimits,
   snap,
   soft,
-} from './panel-layout.js'
+} from './src/models/panel-layout.ts'
 import { reducedMotion, rubberband, Spring, velocityOf } from './src/models/spring.ts'
 
 const html = document.documentElement

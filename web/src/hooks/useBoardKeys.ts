@@ -1,8 +1,8 @@
 // The board's keys (models/board-keys.ts says which action a key takes): N opens the next card
 // that needs you, Shift+N starts a session, F2 renames, / goes to the search, Escape leaves a
-// field, closes the panel or clears the search, digits answer the open question. The panels,
-// the quick look, the menus, the launch window and rename come with later tasks: until they
-// give their part, it does nothing.
+// field, closes the panel or clears the search, digits answer the open question. The quick
+// look, the menus, the launch window and rename come with later tasks: until they give their
+// part, it does nothing.
 import { useEffect } from 'react'
 import { boardKey, type KeyScene, stopsNativeClear } from '../models/board-keys.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'

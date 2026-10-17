@@ -9,7 +9,7 @@
 import { changedFiles } from './diff.js'
 import { markdown } from './markdown.js'
 import { reducedMotion, Spring } from './src/models/spring.ts'
-import { modalFocus } from './modal-focus.js'
+import { modalFocus } from './src/models/modal-focus.ts'
 
 const $ = (root, sel) => root.querySelector(sel)
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])

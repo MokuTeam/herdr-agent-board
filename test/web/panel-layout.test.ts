@@ -1,4 +1,4 @@
-import { test } from 'node:test'
+import { test } from 'bun:test'
 import assert from 'node:assert/strict'
 import {
   clampFloat,
@@ -13,6 +13,7 @@ import {
   MARGIN,
   MIN,
   offRect,
+  type PanelLayout,
   rectFor,
   resizeFloat,
   restoreLayout,
@@ -21,10 +22,10 @@ import {
   sizeLimits,
   snap,
   soft,
-} from '../web/panel-layout.js'
+} from '../../web/src/models/panel-layout.ts'
 
 const vp = { w: 1600, h: 1000 }
-const fresh = { dock: 'right', side: null, bottom: null, float: null }
+const fresh: PanelLayout = { dock: 'right', side: null, bottom: null, float: null }
 
 test('the panel lands on whole device pixels, so its text stays sharp', () => {
   assert.equal(snap(813.8), 814)
@@ -38,7 +39,7 @@ test('size limits leave the board its room and never invert in a small window', 
   assert.deepEqual(sizeLimits('left', { w: 1000, h: 800 }), { min: 360, max: 1000 - 2 * MARGIN - 320 })
   assert.deepEqual(sizeLimits('bottom', vp), { min: 320, max: 1000 - 2 * MARGIN - 180 })
   const tiny = { w: 700, h: 400 }
-  for (const dock of ['right', 'bottom']) {
+  for (const dock of ['right', 'bottom'] as const) {
     const { min, max } = sizeLimits(dock, tiny)
     assert.ok(min <= max, dock)
   }
@@ -84,7 +85,12 @@ test('floating panels stay whole inside the window', () => {
   assert.deepEqual(r, { x: 12, y: 12, w: 1576, h: MIN.h })
   const d = defaultFloat(vp)
   assert.ok(d.x >= MARGIN && d.x + d.w <= vp.w - MARGIN && d.y >= MARGIN && d.y + d.h <= vp.h - MARGIN)
-  assert.deepEqual(rectFor({ ...fresh, dock: 'float', float: { x: 2000, y: 2000, w: 500, h: 600 } }, vp), { x: 1600 - 12 - 500, y: 1000 - 12 - 600, w: 500, h: 600 })
+  assert.deepEqual(rectFor({ ...fresh, dock: 'float', float: { x: 2000, y: 2000, w: 500, h: 600 } }, vp), {
+    x: 1600 - 12 - 500,
+    y: 1000 - 12 - 600,
+    w: 500,
+    h: 600,
+  })
 })
 
 test('soft limits: inside 1:1, past them less and less', () => {
@@ -152,16 +158,24 @@ test('keyboard resizing grows towards the board and stops at the limits', () => 
   assert.equal(keySize('right', 560, 'End', false, lim), 1200)
   assert.equal(keySize('right', 560, 'Home', false, lim), 360)
   assert.equal(keySize('right', 560, 'ArrowUp', false, lim), null)
-  assert.deepEqual(keyFloat({ x: 100, y: 100, w: 480, h: 600 }, 'ArrowRight', false, vp), { x: 100, y: 100, w: 496, h: 600 })
+  assert.deepEqual(keyFloat({ x: 100, y: 100, w: 480, h: 600 }, 'ArrowRight', false, vp), {
+    x: 100,
+    y: 100,
+    w: 496,
+    h: 600,
+  })
   assert.equal(keyFloat({ x: 100, y: 100, w: 480, h: 600 }, 'a', false, vp), null)
 })
 
 test('the layout survives storage, and garbage falls back field by field', () => {
-  const mine = { dock: 'float', side: 720, bottom: 380, float: { x: 300, y: 140, w: 520, h: 640 } }
+  const mine: PanelLayout = { dock: 'float', side: 720, bottom: 380, float: { x: 300, y: 140, w: 520, h: 640 } }
   assert.deepEqual(restoreLayout(serializeLayout(mine)), mine)
   assert.deepEqual(restoreLayout(null), fresh)
   assert.deepEqual(restoreLayout('{oops'), fresh)
   assert.deepEqual(restoreLayout('42'), fresh)
-  assert.deepEqual(restoreLayout(JSON.stringify({ dock: 'top', side: -5, bottom: '300', float: { x: 1, y: 2, w: 'w', h: 4 } })), fresh)
+  assert.deepEqual(
+    restoreLayout(JSON.stringify({ dock: 'top', side: -5, bottom: '300', float: { x: 1, y: 2, w: 'w', h: 4 } })),
+    fresh,
+  )
   assert.deepEqual(restoreLayout(JSON.stringify({ dock: 'left', side: 611.6 })), { ...fresh, dock: 'left', side: 612 })
 })

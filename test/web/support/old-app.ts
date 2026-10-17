@@ -8,7 +8,8 @@ import { join } from 'node:path'
 const ROOT = join(import.meta.dir, '..', '..', '..')
 const BASELINE = '94fdde6'
 
-function source(file: string): string {
+/** A file of the old page as it is now, or from the parity baseline once it is gone. */
+export function oldSource(file: string): string {
   const path = join(ROOT, ...file.split('/'))
   if (existsSync(path)) return readFileSync(path, 'utf8')
   const git = Bun.spawnSync(['git', 'show', `${BASELINE}:${file}`], { cwd: ROOT })
@@ -49,7 +50,7 @@ export type OldFunction = (...args: unknown[]) => unknown
 
 /** The declarations `wanted` of `file`, run with `deps` in scope; returns them by name, functions callable. */
 export function oldCode(file: string, wanted: Wanted[], deps: Record<string, unknown>): Map<string, unknown> {
-  const lines = source(file).split(/\r?\n/)
+  const lines = oldSource(file).split(/\r?\n/)
   const body = `${wanted.map(w => declaration(lines, file, w)).join('\n')}\nreturn [${names(wanted).join(', ')}]`
   const run = new Function(...Object.keys(deps), body)
   const values: unknown = run(...Object.values(deps))
