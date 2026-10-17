@@ -231,6 +231,18 @@ export const CheckGlyph = () => (
   </Glyph>
 )
 
+export const CrossGlyph = () => (
+  <Glyph>
+    <path d="m6 6 8 8M14 6l-8 8" />
+  </Glyph>
+)
+
+export const StopGlyph = () => (
+  <Glyph>
+    <rect x="6" y="6" width="8" height="8" rx="1.5" />
+  </Glyph>
+)
+
 export const PinGlyph = () => (
   <Glyph>
     <circle cx="10" cy="7" r="3.5" />

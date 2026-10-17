@@ -1,15 +1,19 @@
 // The conversation: messages as bubbles (Markdown, with previews of the images sent from the
-// board), runs of tool calls folded into one line that opens to show them, and the question forms
-// the session asked with their answers. Paths in it are candidates the file chips take up
-// (data-path; components/sheet/Sheet.tsx hands them over after every draw).
-import type { ConversationTurn } from '../../../../src/core/transcript.ts'
+// board), runs of tool calls folded into one line that opens to show them, the question forms
+// the session asked with their answers, and background tasks reporting back and board reminders
+// as quiet lines. Paths in it are candidates the file chips take up (data-path;
+// components/sheet/Sheet.tsx hands them over after every draw).
+import type { ReactNode } from 'react'
+import { isReminder } from '../../../../src/core/notices.ts'
+import type { ConversationTurn, NoticeTurn } from '../../../../src/core/transcript.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { markdown } from '../../models/markdown.ts'
+import { noticeLine } from '../../models/notice.ts'
 import { clockText } from '../../models/sheet.ts'
 import { type AskTurn, askState, type ThreadPart, threadParts, uploadThumbs } from '../../models/thread.ts'
 import { classNames } from '../class-names.ts'
-import { ChevGlyph, SpinGlyph } from '../icons.tsx'
+import { AlarmGlyph, BoltGlyph, CheckGlyph, ChevGlyph, CrossGlyph, SpinGlyph, StopGlyph } from '../icons.tsx'
 
 export interface ThreadProps {
   conversation: readonly ConversationTurn[]
@@ -19,15 +23,33 @@ export interface ThreadProps {
 export function Thread({ conversation, item }: ThreadProps) {
   const t = useT()
   const parts = threadParts(conversation, item, t)
-  return parts.map((part, n) => <ThreadTurn key={keyOf(part, n)} part={part} />)
+  const used = new Set<string>()
+  return parts.map((part, n) => {
+    // A task can report twice at one time under one id: the second keeps its own key.
+    const wanted = keyOf(part, n)
+    const key = used.has(wanted) ? `${wanted}-${n}` : wanted
+    used.add(key)
+    return <ThreadTurn key={key} part={part} />
+  })
 }
 
-/** A fold keeps its place among the folds (a redraw leaves the one open that was); the rest go by order. */
-const keyOf = (part: ThreadPart, n: number) => (part.kind === 'tools' ? `tools-${part.i}` : `${part.kind}-${n}`)
+/**
+ * A fold keeps its place among the folds, a notice that opens its task and time (a redraw leaves
+ * the one open that was); the rest go by order.
+ */
+function keyOf(part: ThreadPart, n: number): string {
+  if (part.kind === 'tools') return `tools-${part.i}`
+  if (part.kind === 'notice') return noticeId(part.turn) ?? `notice-${n}`
+  return `${part.kind}-${n}`
+}
+
+/** The key a notice with something to open is kept open by: a task can report several times under one id. */
+const noticeId = (m: NoticeTurn): string | null => (!isReminder(m) && m.detail ? `notice-${m.id}-${m.at}` : null)
 
 function ThreadTurn({ part }: { part: ThreadPart }) {
   const t = useT()
   if (part.kind === 'ask') return <AskedTurn turn={part.turn} live={part.live} />
+  if (part.kind === 'notice') return <Notice turn={part.turn} />
   if (part.kind === 'message') {
     const { role, text, at } = part.turn
     const thumbs = uploadThumbs(text)
@@ -89,5 +111,60 @@ function AskedTurn({ turn, live }: { turn: AskTurn; live: boolean }) {
       {state && <div className="qa-wait">{t(state === 'waiting' ? 'qa.thread.waiting' : 'qa.thread.closed')}</div>}
       <span className="when">{clockText(turn.at, t)}</span>
     </div>
+  )
+}
+
+const MARKS = { ok: CheckGlyph, fail: CrossGlyph, stop: StopGlyph } as const
+
+/**
+ * A background task reporting back or a board reminder: a quiet line in the thread, not the
+ * user's bubble. An agent's report or a monitor's lines open from it; a command's output file is
+ * a click away.
+ */
+function Notice({ turn: m }: { turn: NoticeTurn }) {
+  const t = useT()
+  const { text, sub, tone } = noticeLine(m, t)
+  const reminder = isReminder(m)
+  const Mark = tone === 'info' ? (reminder ? AlarmGlyph : BoltGlyph) : MARKS[tone]
+  const task = reminder ? null : m
+  const line: ReactNode = (
+    <>
+      <span className="notice-mark">
+        <Mark />
+      </span>
+      <span className="notice-text" title={task?.summary || undefined}>
+        {text}
+        {sub && (
+          <>
+            {' '}
+            <small>{sub}</small>
+          </>
+        )}
+      </span>
+      {task?.file && !task.detail && (
+        <span className="notice-file fs-inline" data-path={task.file}>
+          {t('notice.output')}
+        </span>
+      )}
+      <span className="when">{clockText(m.at, t)}</span>
+    </>
+  )
+  if (!task?.detail) return <div className={`notice ${tone}`}>{line}</div>
+  return (
+    <details className={`notice ${tone}`} data-i={noticeId(m) ?? undefined}>
+      <summary>
+        {line}
+        <ChevGlyph />
+      </summary>
+      <div className="notice-body">
+        {/* An agent's report is markdown; a monitor's lines and a tool's result are kept as they came. */}
+        {task.kind === 'agent' || task.kind === 'workflow' ? (
+          // biome-ignore lint/security/noDangerouslySetInnerHtml: markdown() escapes every piece of text itself and makes only known tags
+          <div className="md" dangerouslySetInnerHTML={{ __html: markdown(task.detail) }} />
+        ) : (
+          <pre>{task.detail}</pre>
+        )}
+      </div>
+    </details>
   )
 }

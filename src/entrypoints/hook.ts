@@ -1,7 +1,7 @@
 // Claude Code hooks (installed by the "install" action) that tell each session about the board.
 //   SessionStart (new, resume, clear, compact): the full brief, since the context is fresh.
 //   UserPromptSubmit: clears the card's `pin`, and its `ask` (the user answered) unless the prompt
-//   is a board reminder (services/scheduler.ts); the brief once for sessions that were running before the
+//   is a board reminder or a task notification (core/notices.ts); the brief once for sessions that were running before the
 //   install; after that a one-line reminder only while the card says it waits for something.
 // Only sessions in a herdr pane are briefed: `claude -p` runs and other terminals are not on the board.
 // Claude Code waits for it: an empty or broken input ends it at once, silently, with exit code 0.
@@ -10,6 +10,7 @@ import { loadConfig } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
+import { isNotice } from '../core/notices.ts'
 
 const text = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
 
@@ -21,9 +22,10 @@ async function main(): Promise<void> {
   if (!sid || typeof sid !== 'string' || !process.env.HERDR_PANE_ID) return
   const card = readCard(sid)
   // The user wrote to the session: whatever it asked them is answered. A reminder from the board's
-  // scheduler is not the user, so its ask stays. A column the user dragged the card to has done
-  // its job either way: the session works again, which drops the pin anyway (services/board.ts pinOf).
-  const fromBoard = /^\s*\[board (reminder|schedule)\b/.test(text(input.prompt) ?? '')
+  // scheduler or a background task reporting back is not the user, so its ask stays. A column the
+  // user dragged the card to has done its job either way: the session works again, which drops
+  // the pin anyway (services/board.ts pinOf).
+  const fromBoard = isNotice(input.prompt)
   if (event === 'UserPromptSubmit' && (card?.pin || (card?.ask && !fromBoard))) {
     writeCard(sid, { ...(!fromBoard && { ask: '', askSince: '' }), pin: '', pinAt: '', pinBusy: '' })
   }

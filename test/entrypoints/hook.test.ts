@@ -6,6 +6,7 @@ import { BRIEF_VERSION, brief, waitReminder } from '../../src/core/brief.ts'
 import { normalizeConfig } from '../../src/core/categories.ts'
 import { useLanguage } from '../../src/core/lang.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
+import { notification } from '../support/task-notification.ts'
 
 setDefaultTimeout(15_000)
 
@@ -85,4 +86,12 @@ test('a board reminder does not count as the user answering the session', async 
   assert.equal(cardOf(box, 's1')?.pin, undefined)
   await hook('yes, send it')
   assert.equal(cardOf(box, 's1')?.ask, undefined)
+})
+
+test('a task reporting back does not count as the user answering the session (hook)', async () => {
+  const box = await sandbox()
+  putCard(box, { key: 's1', ask: 'Send it?', askSince: 1, briefV: 99 })
+  const prompt = notification('Agent "Review" finished')
+  await runHook(box, { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: box.dir, prompt })
+  assert.equal(cardOf(box, 's1')?.ask, 'Send it?')
 })

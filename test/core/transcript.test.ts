@@ -137,7 +137,7 @@ test('transcript tail: title, last prompt, last words, pending tool; sidechains 
   assert.equal(ask?.role === 'tool' && ask.done, false)
   assert.equal(queued?.role === 'user' && queued.text, 'also the 10/24 file')
   assert.equal(queued?.at, Date.parse('2026-10-15T21:50:13.839Z'))
-  assert.ok(!conv.some(c => c.role !== 'tool' && c.text === 'subagent noise'))
+  assert.ok(!conv.some(c => (c.role === 'user' || c.role === 'assistant') && c.text === 'subagent noise'))
   assert.equal(parseConversation(lines, 2).length, 2)
 })
 

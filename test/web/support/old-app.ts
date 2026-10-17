@@ -2,7 +2,8 @@
 // (and the modules it uses) picked by name and run with the dependencies a test hands them, so
 // the React markup is compared with what the old functions themselves build, not with a copy.
 // The old page is gone from the working tree (the server serves the React board since Task 27):
-// every file is read from the parity baseline in git, web/index.html too.
+// every file is read from the parity baseline in git, web/index.html too. A change upstream made
+// after the baseline is compared with its own commit: the `ref` parameters name it.
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,14 +14,14 @@ const BASELINE = '94fdde6'
 
 const fromGit = new Map<string, string>()
 
-/** A file of the old page as it was at the parity baseline. */
-export function oldSource(file: string): string {
-  const known = fromGit.get(file)
+/** A file of the old page as it was at the parity baseline (or at `ref`). */
+export function oldSource(file: string, ref = BASELINE): string {
+  const known = fromGit.get(`${ref}:${file}`)
   if (known !== undefined) return known
-  const git = Bun.spawnSync(['git', 'show', `${BASELINE}:${file}`], { cwd: ROOT })
-  if (git.exitCode !== 0) throw new Error(`git show ${BASELINE}:${file} failed`)
+  const git = Bun.spawnSync(['git', 'show', `${ref}:${file}`], { cwd: ROOT })
+  if (git.exitCode !== 0) throw new Error(`git show ${ref}:${file} failed`)
   const text = git.stdout.toString()
-  fromGit.set(file, text)
+  fromGit.set(`${ref}:${file}`, text)
   return text
 }
 
@@ -73,11 +74,16 @@ const names = (wanted: Wanted[]) =>
 export type OldFunction = (...args: unknown[]) => unknown
 
 /**
- * The declarations `wanted` of `file` (as it was at the parity baseline), run with `deps` in
- * scope; returns them by name, functions callable.
+ * The declarations `wanted` of `file` (as it was at the parity baseline, or at `ref`), run with
+ * `deps` in scope; returns them by name, functions callable.
  */
-export function oldCode(file: string, wanted: Wanted[], deps: Record<string, unknown>): Map<string, unknown> {
-  const lines = oldSource(file).split(/\r?\n/)
+export function oldCode(
+  file: string,
+  wanted: Wanted[],
+  deps: Record<string, unknown>,
+  ref = BASELINE,
+): Map<string, unknown> {
+  const lines = oldSource(file, ref).split(/\r?\n/)
   const body = `${wanted.map(w => declaration(lines, file, w)).join('\n')}\nreturn [${names(wanted).join(', ')}]`
   const run = new Function(...Object.keys(deps), body)
   const values: unknown = run(...Object.values(deps))
@@ -94,11 +100,12 @@ export function oldFunction(code: Map<string, unknown>, name: string): OldFuncti
 
 /**
  * A module of the old page that imports nothing (markdown.js, when.js, live.js…), loaded as it
- * was at the parity baseline: its exports by name (`oldFunction` calls one). For the old side's
- * own imports, so that side runs the baseline's code and not the ported module the React side runs.
+ * was at the parity baseline (or at `ref`): its exports by name (`oldFunction` calls one). For the
+ * old side's own imports, so that side runs the baseline's code and not the ported module the
+ * React side runs.
  */
-export async function oldModule(file: string): Promise<Map<string, unknown>> {
-  const source = oldSource(file)
+export async function oldModule(file: string, ref = BASELINE): Promise<Map<string, unknown>> {
+  const source = oldSource(file, ref)
   if (/^import /m.test(source)) throw new Error(`${file} imports other modules`)
   const dir = mkdtempSync(join(tmpdir(), 'agent-board-old-'))
   try {

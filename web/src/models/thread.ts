@@ -1,7 +1,8 @@
 // The session's conversation as the sheet shows it: messages as bubbles, runs of tool calls
-// folded into one line that opens to show them, and the question forms it asked with their
-// answers; under a message, previews of the images sent from the board.
-import type { AssistantTurn, ConversationTurn, ToolTurn, UserTurn } from '../../../src/core/transcript.ts'
+// folded into one line that opens to show them, the question forms it asked with their answers,
+// and background tasks reporting back and board reminders as quiet lines of their own; under a
+// message, previews of the images sent from the board.
+import type { AssistantTurn, ConversationTurn, NoticeTurn, ToolTurn, UserTurn } from '../../../src/core/transcript.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
 
 export type AskTurn = ToolTurn & { ask: NonNullable<ToolTurn['ask']> }
@@ -12,6 +13,8 @@ export type ThreadPart =
   /** `live`: the session is held at a dialog, so an unanswered form still waits. */
   | { kind: 'ask'; turn: AskTurn; live: boolean }
   | { kind: 'message'; turn: UserTurn | AssistantTurn }
+  /** A background task reporting back or a board reminder: a quiet line, not the user's bubble. */
+  | { kind: 'notice'; turn: NoticeTurn }
 
 const isAsk = (turn: ToolTurn): turn is AskTurn => !!turn.ask
 
@@ -42,7 +45,7 @@ export function threadParts(
       continue
     }
     flush()
-    parts.push({ kind: 'message', turn })
+    parts.push(turn.role === 'notice' ? { kind: 'notice', turn } : { kind: 'message', turn })
   }
   flush()
   return parts

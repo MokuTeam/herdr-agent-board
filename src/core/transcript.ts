@@ -3,6 +3,7 @@
 
 import { type FormQuestion, questionsOf } from './dialogs/question-form.ts'
 import { t } from './lang.ts'
+import { isNotice, isReminder, type Notice, reminderNotice, taskNotice } from './notices.ts'
 import { DEFAULT_PROMPT_FILTERS, type PromptFilter } from './prompt-filters.ts'
 import type { ToolCall, TranscriptInfo } from './types.ts'
 
@@ -178,8 +179,14 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
           if (block?.type === 'tool_result') results.add(str(block.tool_use_id))
         }
       }
-      // A reminder the board typed in (services/scheduler.ts) is not the user answering.
-      if (!info.lastText && !o.isMeta && userText(content) && !/^\[board (reminder|schedule)\b/.test(userText(content)))
+      // A reminder the board typed in (services/scheduler.ts) or a background task reporting back is not the user answering.
+      if (
+        !info.lastText &&
+        !o.isMeta &&
+        rec(o.origin)?.kind !== 'task-notification' &&
+        userText(content) &&
+        !isNotice(userText(content))
+      )
         info.replied = true
       continue
     }
@@ -236,7 +243,15 @@ export interface ToolTurn {
   ask?: Pick<FormQuestion, 'question' | 'header' | 'multiSelect'>[]
   answers?: string[] | null
 }
-export type ConversationTurn = UserTurn | AssistantTurn | ToolTurn
+/** A background task reporting back or a board reminder (core/notices.ts), at its time. */
+export type NoticeTurn = Notice & { role: 'notice'; at: number }
+export type ConversationTurn = UserTurn | AssistantTurn | ToolTurn | NoticeTurn
+
+/** What tells one notice from another: the copy a queued notice leaves when it is sent again matches. */
+function noticeKey(n: Notice): string {
+  if (isReminder(n)) return JSON.stringify([n.kind, null, n.status, n.name, null, null, n.from, n.note])
+  return JSON.stringify([n.kind, n.id, n.status, n.name, n.summary, n.detail, null, n.note])
+}
 
 /** The answers Claude Code recorded for a question form, in the order of its questions. */
 function askAnswers(ask: readonly { question: string }[], result: unknown): string[] | null {
@@ -253,11 +268,28 @@ function askAnswers(ask: readonly { question: string }[], result: unknown): stri
  * The last `limit` turns of a session for the detail view: the user's prompts, the agent's
  * texts and its tool calls in a line each (done = the call has a result). A question form
  * (AskUserQuestion) carries its questions and, once done, the answers: { ask, answers }, answers
- * null when it was closed without one.
+ * null when it was closed without one. Background tasks reporting back and board reminders come
+ * as { role: 'notice', ...taskNotice() or reminderNotice() } (core/notices.ts).
  */
 export function parseConversation(lines: string[], limit = 40): ConversationTurn[] {
   const items: ConversationTurn[] = []
   const tools = new Map<string, ToolTurn>() // tool_use id -> item
+  // A background task reporting back or a board reminder: a line of its own (core/notices.ts). One
+  // can be queued into a running turn and then sent again as a turn of its own: shown once. A
+  // task id alone is not enough, a monitor or a resumed agent reports again under the same one.
+  const shown = new Set<string>()
+  const keys = new WeakMap<ConversationTurn, string>() // notice item -> its key
+  const notice = (n: Notice, at: number) => {
+    const key = noticeKey(n)
+    const last = items.at(-1)
+    // With an id the copy can come later in the turn; a reminder (no id) only right after itself,
+    // since the same reminder text can come every hour.
+    if ('id' in n && n.id ? shown.has(key) : !!last && keys.get(last) === key) return
+    shown.add(key)
+    const item: NoticeTurn = { role: 'notice', ...n, at }
+    keys.set(item, key)
+    items.push(item)
+  }
   for (const line of lines) {
     if (
       !line ||
@@ -274,16 +306,19 @@ export function parseConversation(lines: string[], limit = 40): ConversationTurn
     const at = Date.parse(str(o.timestamp)) || 0
     // A prompt sent while the session worked goes into the running turn, and the transcript
     // keeps it as a queued command, not a user line. Other sessions' messages and task
-    // notifications arrive the same way; only what a person typed is shown.
+    // notifications arrive the same way; other sessions' messages are not shown.
     if (o.type === 'attachment') {
       const a = rec(o.attachment)
-      const text =
-        a?.type === 'queued_command' && a.commandMode === 'prompt' && rec(a.origin)?.kind !== 'peer'
-          ? userText(a.prompt)
-          : ''
+      if (a?.type !== 'queued_command') continue
+      const when = Date.parse(str(a.timestamp)) || at
+      const task = a.commandMode === 'task-notification' ? taskNotice(a.prompt) : null
+      if (task) notice(task, when)
+      const text = a.commandMode === 'prompt' && rec(a.origin)?.kind !== 'peer' ? userText(a.prompt) : ''
+      const reminder = reminderNotice(text)
       const prev = items.at(-1)
-      if (text && !(prev?.role === 'user' && prev.text === clip(text, 3000)))
-        items.push({ role: 'user', text: clip(text, 3000), at: Date.parse(str(a?.timestamp)) || at })
+      if (reminder) notice(reminder, when)
+      else if (text && !(prev?.role === 'user' && prev.text === clip(text, 3000)))
+        items.push({ role: 'user', text: clip(text, 3000), at: when })
       continue
     }
     if (o.type === 'user') {
@@ -298,7 +333,9 @@ export function parseConversation(lines: string[], limit = 40): ConversationTurn
         if (content.every(b => rec(b)?.type === 'tool_result')) continue
       }
       const text = userText(content)
-      if (text) items.push({ role: 'user', text: clip(text, 3000), at })
+      const n = taskNotice(text) ?? reminderNotice(text)
+      if (n) notice(n, at)
+      else if (text) items.push({ role: 'user', text: clip(text, 3000), at })
     } else if (Array.isArray(content)) {
       for (const raw of content) {
         const b = rec(raw)
