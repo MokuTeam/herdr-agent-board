@@ -1,7 +1,7 @@
 /* Agent board. Apple's system look on the web: system font with size-specific tracking, grouped
    surfaces on a soft background, translucent chrome over scrolling content, color only where it
-   carries meaning (status), springs for motion (app.js), gentle fallbacks for reduced motion,
-   transparency and higher contrast. */
+   carries meaning (status), springs for motion (web/src/models/spring.ts), gentle fallbacks for
+   reduced motion, transparency and higher contrast. */
 
 :root {
   color-scheme: light dark;
@@ -81,8 +81,9 @@ svg .fill { fill: currentColor; stroke: none; opacity: 0.32; }
 [hidden] { display: none !important; }
 
 /* ---------------------------------------------------------------- page */
-/* The toolbar and the board. A docked panel takes its room from the page's margins (panel.js
-   moves --room-* on springs), and the page lays itself out for the width that is left. */
+/* The toolbar and the board. A docked panel takes its room from the page's margins
+   (web/src/components/panel/place.ts moves --room-* on springs), and the page lays itself out
+   for the width that is left. */
 .page {
   container: page / inline-size;
   margin: 0 var(--room-right, 0px) 0 var(--room-left, 0px);
@@ -305,7 +306,7 @@ body.dragging { cursor: grabbing; }
 @keyframes pulse { from { transform: scale(1); opacity: 0.55; } to { transform: scale(2.6); opacity: 0; } }
 .dot.idle { background: none; box-shadow: inset 0 0 0 1.5px var(--gray); }
 .moon { width: 13px; height: 13px; color: var(--label-3); }
-/* A result not opened yet: a dot by the name, the name a touch heavier (attention.js). */
+/* A result not opened yet: a dot by the name, the name a touch heavier (web/src/models/attention.ts). */
 .unseen-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
 .card.unseen .name { font-weight: 700; }
 /* The user dragged the card to this column; it goes back by itself once the session works again. */
@@ -374,8 +375,8 @@ body.dragging { cursor: grabbing; }
 }
 
 /* ---------------------------------------------------------------- sheet */
-/* Where it is and how big comes from panel.js (left/top 0, width, height, transform); on a phone
-   it is the full-height sheet below, and only slides. */
+/* Where it is and how big comes from web/src/components/panel/ (left/top 0, width, height,
+   transform); on a phone it is the full-height sheet below, and only slides. */
 .sheet {
   position: fixed;
   top: 0;
@@ -437,7 +438,7 @@ body.panel-grabbing, body.panel-resizing { user-select: none; -webkit-user-selec
 body.panel-grabbing, body.panel-grabbing * { cursor: grabbing !important; }
 body.panel-resizing, body.panel-resizing * { cursor: var(--grab-cursor) !important; }
 
-/* Where a panel let go now would dock: grown out of the panel, on springs (panel.js). */
+/* Where a panel let go now would dock: grown out of the panel, on springs (web/src/components/panel/dock-preview.ts). */
 .dock-preview {
   position: fixed;
   top: 0;

@@ -1,8 +1,8 @@
 // Which menu opens for a card, the open session's head, a lane, the board, a starting session and
 // a file chip, and where the browser keeps its own (models/board-menus.ts, hooks/useContextMenus.ts),
-// against the old page's board-menus.js at the parity baseline and as it is now: the same right
-// clicks, menu keys and long presses on the same page (support/board-menu-sides.ts) must open the
-// same menus at the same places, and their picks must ask the board for the same things.
+// against the old page's board-menus.js at the parity baseline: the same right clicks, menu keys
+// and long presses on the same page (support/board-menu-sides.ts) must open the same menus at the
+// same places, and their picks must ask the board for the same things.
 import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { LaunchView } from '../../src/core/types.ts'
@@ -36,12 +36,10 @@ async function run(make: () => MenuSide, steps: Step[]): Promise<string[]> {
   }
 }
 
-/** The three sides note the same; returns the baseline's notes. */
+/** Both sides note the same; returns the baseline's notes. */
 async function compare(s: BoardScene, steps: Step[]): Promise<string[]> {
-  const baseline = await run(() => oldBoardMenus(s, true), steps)
-  const now = await run(() => oldBoardMenus(s, false), steps)
+  const baseline = await run(() => oldBoardMenus(s), steps)
   const react = await run(() => reactBoardMenus(s), steps)
-  expect(now.join('\n')).toBe(baseline.join('\n'))
   expect(react.join('\n')).toBe(baseline.join('\n'))
   return baseline
 }

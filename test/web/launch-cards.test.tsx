@@ -1,9 +1,9 @@
-// The cards of sessions on their way against the old page's: launch.js's cardHTML and note (at the
-// parity baseline and as the old page has them now) beside <LaunchCard> and <LaunchNote> as the
-// board draws them (hooks/useLaunch.ts launchSlots); the card around them as web/app.js updateCard
-// drew it beside <Card> (the `compact` decision); which launches get a card (launch.js pending and
-// placeholders beside models/launch.ts and the page's own launches in board-ui.ts); and what their
-// buttons do (launch.js onCardAction, trust, closeTab, dismiss beside useLaunch.ts launchCards).
+// The cards of sessions on their way against the old page's (at the parity baseline): launch.js's
+// cardHTML and note beside <LaunchCard> and <LaunchNote> as the board draws them
+// (hooks/useLaunch.ts launchSlots); the card around them as web/app.js updateCard drew it beside
+// <Card> (the `compact` decision); which launches get a card (launch.js pending and placeholders
+// beside models/launch.ts and the page's own launches in board-ui.ts); and what their buttons do
+// (launch.js onCardAction, trust, closeTab, dismiss beside useLaunch.ts launchCards).
 import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { LaunchView, Translator } from '../../src/core/types.ts'
@@ -19,7 +19,7 @@ import {
   takeoversOf,
 } from '../../web/src/hooks/useLaunch.ts'
 import * as launchModel from '../../web/src/models/launch.ts'
-import { keepsLocal, pendingLaunches, placeholderOf } from '../../web/src/models/launch.ts'
+import { pendingLaunches, placeholderOf } from '../../web/src/models/launch.ts'
 import { boardUi, initialUi } from '../../web/src/state/board-ui.ts'
 import { board, item, renderInBoard } from './support/board.tsx'
 import { type FakeElement, FakeWorld } from './support/fake-dom.ts'
@@ -77,13 +77,13 @@ const scene = (t: Translator, fields: Partial<LaunchScene> = {}): LaunchScene =>
 })
 
 /** The old page's launch.js in a world, with the options of a command launcher (for its step's name). */
-async function oldPage(t: Translator, baseline: boolean, fields: Partial<LaunchScene> = {}) {
+async function oldPage(t: Translator, fields: Partial<LaunchScene> = {}) {
   const world = launchWorld()
   const log: string[] = []
   const server = new FakeServer(log)
   server.options = { ...OPTIONS, launcher: { kind: 'command', name: 'my-cli' } }
   const s = scene(t, fields)
-  const call = oldLaunch(world, s, server, log, baseline)
+  const call = oldLaunch(world, s, server, log)
   // The options come with the window: open it once, then put it away.
   void call('open', {}, null)
   for (let i = 0; i < 6; i++) await world.flush()
@@ -109,20 +109,16 @@ describe('the markup of a launch on the board', () => {
   for (const lang of ['en', 'ru'])
     test(`its card and its lines on a session's card, every state (${lang})`, async () => {
       const t = translator(lang)
-      for (const baseline of [true, false]) {
-        const page = await oldPage(t, baseline)
-        try {
-          const slots = launchSlots(look(t), () => false)
-          for (const l of LAUNCHES) {
-            const placeholder = placeholderOf(l)
-            expect(canonical(reactMarkup(slots.card(placeholder)))).toBe(
-              oldMarkup(page.call('cardHTML', { launch: l })),
-            )
-            expect(canonical(reactMarkup(slots.note(l)))).toBe(oldMarkup(page.call('note', l)))
-          }
-        } finally {
-          page.world.uninstall()
+      const page = await oldPage(t)
+      try {
+        const slots = launchSlots(look(t), () => false)
+        for (const l of LAUNCHES) {
+          const placeholder = placeholderOf(l)
+          expect(canonical(reactMarkup(slots.card(placeholder)))).toBe(oldMarkup(page.call('cardHTML', { launch: l })))
+          expect(canonical(reactMarkup(slots.note(l)))).toBe(oldMarkup(page.call('note', l)))
         }
+      } finally {
+        page.world.uninstall()
       }
     })
 })
@@ -138,17 +134,12 @@ describe('the card around it', () => {
     world.install()
     try {
       const updateCard = oldFunction(
-        oldCode(
-          'web/app.js',
-          ['compact', 'updateCard'],
-          {
-            cardHTML: () => '<div class="card-top"></div>',
-            unseenResult: () => false,
-            viewed: {},
-            state: { open: null, busy: new Map() },
-          },
-          { baseline: true },
-        ),
+        oldCode('web/app.js', ['compact', 'updateCard'], {
+          cardHTML: () => '<div class="card-top"></div>',
+          unseenResult: () => false,
+          viewed: {},
+          state: { open: null, busy: new Map() },
+        }),
         'updateCard',
       )
       const card = world.document.createElement('article')
@@ -211,33 +202,30 @@ describe('which launches get a card', () => {
   const OLD_FIELDS = ['key', 'launchOnly', 'launch', 'name', 'category', 'column', 'cwd', 'workspace', 'activity']
   const pick = (it: Record<string, unknown>) => Object.fromEntries(OLD_FIELDS.map(k => [k, it[k]]))
 
-  for (const baseline of [true, false])
-    test(`the server's and the page's own, as launch.js pending and placeholders (${baseline ? 'baseline' : 'now'})`, () => {
-      const local = new Map(LOCAL.map(l => [l.id, l]))
-      const imports = baseline ? {} : { keepsLocal, pendingLaunches, launchColumn: launchModel.launchColumn }
-      const code = oldCode(
-        'web/launch.js',
-        [
-          { name: 'pending', indent: '  ' },
-          { name: 'placeholders', indent: '  ' },
-        ],
-        { ...imports, d: () => ({ launches: SERVER, items: ITEMS }), local, Date: { now: () => NOW } },
-        { baseline },
-      )
-      const old = oldFunction(code, 'placeholders')()
-      const mine = pendingLaunches(SERVER, LOCAL, ITEMS, NOW).map(placeholderOf)
-      expect(Array.isArray(old) ? old.map(it => pick(it)) : old).toEqual(mine.map(it => pick(it)))
-      expect(mine.map(it => it.key)).toEqual(['launch:S1', 'launch:S2', 'launch:P1'])
-      // The old page forgot its own once the server had them or they waited too long; so does board-ui.
-      const ui = boardUi(
-        LOCAL.reduce(
-          (u, l) => boardUi(u, { type: 'launched', launch: l }),
-          initialUi((_k, f) => f),
-        ),
-        { type: 'settle', items: ITEMS, launches: SERVER, now: NOW },
-      )
-      expect(ui.launched.map(l => l.id)).toEqual([...local.keys()])
-    })
+  test("the server's and the page's own, as launch.js pending and placeholders", () => {
+    const local = new Map(LOCAL.map(l => [l.id, l]))
+    const code = oldCode(
+      'web/launch.js',
+      [
+        { name: 'pending', indent: '  ' },
+        { name: 'placeholders', indent: '  ' },
+      ],
+      { d: () => ({ launches: SERVER, items: ITEMS }), local, Date: { now: () => NOW } },
+    )
+    const old = oldFunction(code, 'placeholders')()
+    const mine = pendingLaunches(SERVER, LOCAL, ITEMS, NOW).map(placeholderOf)
+    expect(Array.isArray(old) ? old.map(it => pick(it)) : old).toEqual(mine.map(it => pick(it)))
+    expect(mine.map(it => it.key)).toEqual(['launch:S1', 'launch:S2', 'launch:P1'])
+    // The old page forgot its own once the server had them or they waited too long; so does board-ui.
+    const ui = boardUi(
+      LOCAL.reduce(
+        (u, l) => boardUi(u, { type: 'launched', launch: l }),
+        initialUi((_k, f) => f),
+      ),
+      { type: 'settle', items: ITEMS, launches: SERVER, now: NOW },
+    )
+    expect(ui.launched.map(l => l.id)).toEqual([...local.keys()])
+  })
 
   test('the page forgets its own when one is dismissed; a board without launches keeps them', () => {
     let ui = initialUi((_k, f) => f)
@@ -275,7 +263,7 @@ const buttonOf = (el: FakeElement, what: string) =>
   what === '.card-top' ? el.querySelector('.card-top') : el.querySelector(`[data-launch="${what}"]`)
 
 async function oldCardSide(l: LaunchView, fields: Partial<LaunchScene>, acts: FakeServer['acts']): Promise<CardSide> {
-  const page = await oldPage(translator('en'), true, { launches: [l], ...fields })
+  const page = await oldPage(translator('en'), { launches: [l], ...fields })
   page.server.acts = acts
   const [card] = parseHtml(
     `<article class="card launch-card" data-key="launch:${l.id}">${page.call('cardHTML', { launch: l })}</article>`,
@@ -413,7 +401,7 @@ describe('what the buttons of a launch do', () => {
   })
 
   test('retry: the window opens for it, grown out of the button', async () => {
-    const page = await oldPage(translator('en'), true, { launches: [FAILED] })
+    const page = await oldPage(translator('en'), { launches: [FAILED] })
     try {
       const [card] = parseHtml(`<article class="card">${page.call('cardHTML', { launch: FAILED })}</article>`)
       if (card?.kind !== 'element') throw new Error('no card')

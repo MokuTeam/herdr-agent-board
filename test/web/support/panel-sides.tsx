@@ -1,5 +1,6 @@
 // The side panels run two ways in a fake DOM (support/fake-dom.ts), for parity: the old
-// web/panel.js on today's asides from web/index.html (then app.js's applyTexts), and the React
+// web/panel.js on the asides of web/index.html (then app.js's applyTexts), all three as they were
+// at the parity baseline, and the React
 // panel's engine (components/panel) on the asides React renders, drawn again after every event
 // and frame the way React would (only the attributes whose rendered value changed are written).
 // Both sides take the same steps; `snapshot()` prints what a viewer could tell apart.
@@ -173,7 +174,10 @@ function snapshotOf(side: Omit<PanelSide, 'snapshot' | 'dispose'>, ids: string[]
 
 // ---------------------------------------------------------------- the old page
 
-/** A fresh copy of web/panel.js (its module state is per page), importing the moved models. */
+/**
+ * A fresh copy of web/panel.js as it was at the parity baseline (its module state is per page),
+ * importing the moved models in place of its panel-layout.js and spring.js.
+ */
 async function importOldPanel(): Promise<Record<string, unknown>> {
   const models = join(ROOT, 'web', 'src', 'models')
   const moved: Record<string, string> = {
@@ -181,7 +185,8 @@ async function importOldPanel(): Promise<Record<string, unknown>> {
     './spring.js': join(models, 'spring.ts'),
   }
   const source = oldSource('web/panel.js').replace(/from '(\.\/[^']+)'/g, (_, rel: string) => {
-    const path = moved[rel] ?? join(ROOT, 'web', ...rel.split('/'))
+    const path = moved[rel]
+    if (!path) throw new Error(`web/panel.js imports from ${rel}`)
     return `from '${pathToFileURL(path).href}'`
   })
   const dir = mkdtempSync(join(tmpdir(), 'agent-board-panel-'))

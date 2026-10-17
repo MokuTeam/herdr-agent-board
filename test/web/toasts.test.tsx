@@ -1,5 +1,6 @@
-// The toasts against today's: the #toasts block of web/index.html with the elements toast() appended
-// (their opacity and offset are set by the spring once they are on the page, on both pages).
+// The toasts against the old page's (at the parity baseline): the #toasts block of web/index.html
+// with the elements toast() appended (their opacity and offset are set by the spring once they are
+// on the page, on both pages).
 import { expect, test } from 'bun:test'
 import { Toasts } from '../../web/src/components/Toasts.tsx'
 import { boardUi, initialUi } from '../../web/src/state/board-ui.ts'

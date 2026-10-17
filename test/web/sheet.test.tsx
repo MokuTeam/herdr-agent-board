@@ -1,8 +1,9 @@
-// The React session sheet against today's: each scene drawn by web/app.js's own sheet code on the
-// #sheet of web/index.html (support/old-sheet.ts) and by <SheetHead> and <SheetView> for the same
-// state (support/sheet-scene.tsx) — the head's title, then everything under the head. Whitespace
-// between elements is dropped by the comparison; where text runs inline, a second comparison keeps
-// it (canonical `spaces`). Then the mounted sheet, as the page draws it before any effect ran.
+// The React session sheet against the old page's (at the parity baseline): each scene drawn by
+// web/app.js's own sheet code on the #sheet of web/index.html (support/old-sheet.ts) and by
+// <SheetHead> and <SheetView> for the same state (support/sheet-scene.tsx) — the head's title, then
+// everything under the head. Whitespace between elements is dropped by the comparison; where text
+// runs inline, a second comparison keeps it (canonical `spaces`). Then the mounted sheet, as the
+// page draws it before any effect ran.
 import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { ScheduleEntry } from '../../src/core/schedule-rules.ts'

@@ -1,7 +1,8 @@
-// The React side-panel shell against today's: the three asides of web/index.html after web/panel.js
-// made them panels (the edges, the place button's glyph, data-dock) and app.js filled the texts —
-// run by the old code itself in a fake DOM (support/panel-sides.tsx) — and what <Panel>,
-// <SidePanels> and <App> render with react-dom/server, in English and Russian.
+// The React side-panel shell against the old page's (at the parity baseline): the three asides of
+// web/index.html after web/panel.js made them panels (the edges, the place button's glyph,
+// data-dock) and app.js filled the texts — run by the old code itself in a fake DOM
+// (support/panel-sides.tsx) — and what <Panel>, <SidePanels> and <App> render with
+// react-dom/server, in English and Russian.
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -44,7 +45,7 @@ function shell(aside: Element): string {
   return canonical([copy])
 }
 
-/** Today's asides as the page starts: panel.js's Panel on each, then applyTexts. */
+/** The old page's asides as it started: panel.js's Panel on each, then applyTexts. */
 async function oldAsides(lang: string): Promise<Map<string, Node[]>> {
   const side = await oldSide({ viewport: VP, ids: IDS, lang })
   try {
@@ -126,7 +127,7 @@ describe.each(['en', 'ru'])('the shell in %s', lang => {
   })
 })
 
-test('<App> puts the panels after the page and before the usage popover, as web/index.html does', () => {
+test('<App> puts the panels after the page and before the usage popover, as the old page’s web/index.html had them', () => {
   const react = inPanels(<App />)
   const top = react
     .filter((n): n is Element => n.kind === 'element')
@@ -135,7 +136,7 @@ test('<App> puts the panels after the page and before the usage popover, as web/
 })
 
 test('a wide, low panel reads side by side by the stylesheet alone: the aside is its size container, .sheet-inner the grid', () => {
-  const css = readFileSync(join(import.meta.dir, '..', '..', 'web', 'app.css'), 'utf8')
+  const css = readFileSync(join(import.meta.dir, '..', '..', 'web', 'styles', 'app.css'), 'utf8')
   expect(css).toMatch(/\n\.sheet \{[^}]*container: sheet \/ size;/)
   const wide = css.slice(css.indexOf('@container sheet (min-width: 680px) and (min-aspect-ratio: 5 / 4) {'))
   expect(wide).toMatch(

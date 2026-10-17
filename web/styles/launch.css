@@ -1,6 +1,7 @@
-/* New sessions (launch.js): the window over the dimmed board, grown out of what opened it; the
-   folder field with its completion and Finder-like columns; the cards of sessions on their
-   way. Renaming in place (rename.js). The rows and chips are the session sheet's own. */
+/* New sessions (web/src/components/launch/): the window over the dimmed board, grown out of what
+   opened it; the folder field with its completion and Finder-like columns; the cards of sessions
+   on their way. Renaming in place (web/src/components/RenameField.tsx). The rows and chips are the
+   session sheet's own. */
 
 /* ---------------------------------------------------------------- entry points */
 .pill-toggle.new-session { color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, transparent); }

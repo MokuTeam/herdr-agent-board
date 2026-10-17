@@ -219,17 +219,12 @@ const call = (fn: unknown, args: unknown[]) => {
 
 async function oldSide(net: Net, what: Run, args: unknown[], allowed = { canEdit: true, canMutate: true }) {
   return through(net, async ({ toast }) => {
-    const code = oldCode(
-      'web/app.js',
-      ['focusLaunch', 'copyText', 'openPath'],
-      {
-        toast,
-        t,
-        canEdit: () => allowed.canEdit,
-        canMutate: () => allowed.canMutate,
-      },
-      { baseline: true },
-    )
+    const code = oldCode('web/app.js', ['focusLaunch', 'copyText', 'openPath'], {
+      toast,
+      t,
+      canEdit: () => allowed.canEdit,
+      canMutate: () => allowed.canMutate,
+    })
     await call(oldFunction(code, what === 'copy' ? 'copyText' : what), args)
   })
 }
@@ -290,35 +285,29 @@ function oldMore(
 ): { click(button: FakeElement, detail: number): void; opened: () => MoreOpened | null } {
   let opened: MoreOpened | null = null
   let handler: ((e: unknown) => void) | null = null
-  oldCode(
-    'web/app.js',
-    [{ statement: "$('#sheet-more').addEventListener('click'" }],
-    {
-      $: () => ({
-        addEventListener: (_type: string, fn: (e: unknown) => void) => {
-          handler = fn
-        },
-      }),
-      menu: {
-        open: (items: MenuEntry[], options: MoreOpened['options']) => {
-          opened = { items, options }
-        },
+  oldCode('web/app.js', [{ statement: "$('#sheet-more').addEventListener('click'" }], {
+    $: () => ({
+      addEventListener: (_type: string, fn: (e: unknown) => void) => {
+        handler = fn
       },
-      canMutate: () => canMutate,
-      t,
-      matchMedia: () => ({ matches: coarse }),
-      document: world.document,
-      state: { open: 's1' },
-      itemOf: (key: string) => (key === 's1' ? session : undefined),
-      files: {
-        lookHistory: (key: string, cwd: string, el: FakeElement) =>
-          void log.push(`lookHistory ${key} ${cwd} #${el.id}`),
-        lookChanges: (key: string, el: FakeElement) => void log.push(`lookChanges ${key} #${el.id}`),
+    }),
+    menu: {
+      open: (items: MenuEntry[], options: MoreOpened['options']) => {
+        opened = { items, options }
       },
-      newSession: (ctx: { item?: Item }, el: FakeElement) => void log.push(`newSession ${ctx.item?.key} #${el.id}`),
     },
-    { baseline: true },
-  )
+    canMutate: () => canMutate,
+    t,
+    matchMedia: () => ({ matches: coarse }),
+    document: world.document,
+    state: { open: 's1' },
+    itemOf: (key: string) => (key === 's1' ? session : undefined),
+    files: {
+      lookHistory: (key: string, cwd: string, el: FakeElement) => void log.push(`lookHistory ${key} ${cwd} #${el.id}`),
+      lookChanges: (key: string, el: FakeElement) => void log.push(`lookChanges ${key} #${el.id}`),
+    },
+    newSession: (ctx: { item?: Item }, el: FakeElement) => void log.push(`newSession ${ctx.item?.key} #${el.id}`),
+  })
   return {
     click: (button, detail) => handler?.({ currentTarget: button, detail }),
     opened: () => opened,

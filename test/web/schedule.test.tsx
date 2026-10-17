@@ -1,6 +1,7 @@
-// The schedule panel against today's: #sched-body as web/app.js's own renderSchedule draws it for a
-// board (support/old-schedule.ts) and what <ScheduleBody> renders for the same board, clock and
-// armed button, in English and Russian; then the panel's rules (models/schedule.ts) on their own.
+// The schedule panel against the old page's (at the parity baseline): #sched-body as web/app.js's
+// own renderSchedule draws it for a board (support/old-schedule.ts) and what <ScheduleBody> renders
+// for the same board, clock and armed button, in English and Russian; then the panel's rules
+// (models/schedule.ts) on their own.
 import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { BoardCategory } from '../../src/core/payload.ts'

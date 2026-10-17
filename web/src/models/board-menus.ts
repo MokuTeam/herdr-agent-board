@@ -3,7 +3,7 @@
 // file chips get the board's own menu; fields, selected text and links keep the browser's, and
 // Shift+right click always gives the browser's (copy, paste, the inspector).
 //
-// The pure part of the old page's board-menus.js (which imports it): what is under the pointer
+// The pure part of the old page's board-menus.js: what is under the pointer
 // or the focus and the menu for it, with the board handed in. The listeners that open it are the
 // page's (hooks/useContextMenus.ts).
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'

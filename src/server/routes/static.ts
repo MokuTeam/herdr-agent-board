@@ -1,5 +1,5 @@
-// The page: top-level files of web/ by name, app.js from the in-memory bundle (web-bundle.ts).
-// Last in the table: any GET no other route took.
+// The page: top-level files of web/ and its styles/ by name, app.js from the in-memory bundle of
+// the React page (web-bundle.ts). Last in the table: any GET no other route took.
 import { readFile } from 'node:fs/promises'
 import { extname, join } from 'node:path'
 import { json, type Route } from '../http.ts'
@@ -23,7 +23,8 @@ export function staticRoute(web: string, bundle: { js(): string }): Route {
     async handle(_req, { path }) {
       const name = path === '/' ? 'index.html' : path.slice(1)
       const type = TYPES[extname(name)]
-      if (!/^[\w.-]+$/.test(name) || !type) return json(404, { error: 'not found' })
+      // One folder deep at most, and only styles/: nothing else under web/ (web/src) is served.
+      if (!/^(styles\/)?[\w.-]+$/.test(name) || !type) return json(404, { error: 'not found' })
       const body = name === 'app.js' ? bundle.js() : await readFile(join(web, name)).catch(() => null)
       if (!body) return json(404, { error: 'not found' })
       return new Response(body, {

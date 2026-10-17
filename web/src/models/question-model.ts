@@ -1,7 +1,7 @@
 // What the user picks in a question form on the board before it goes to the terminal, and the
-// small rules around it. No DOM; components/questions/QuestionForm.tsx (and the old page's
-// questions.js) draw the form. A question is the shape src/core/dialogs/questions.ts gives the
-// page: { question, header, multiSelect, preview, options: [{ label, description, preview? }] }.
+// small rules around it. No DOM; components/questions/QuestionForm.tsx draws the form. A question
+// is the shape src/core/dialogs/questions.ts gives the page: { question, header, multiSelect,
+// preview, options: [{ label, description, preview? }] }.
 import type { FormQuestion } from '../../../src/core/dialogs/question-form.ts'
 
 /** What these rules read of a question (a FormQuestion has it all). */

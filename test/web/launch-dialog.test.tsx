@@ -1,6 +1,6 @@
 // The React "new session" window (components/launch) against the old page's launch.js, step by
-// step: the old initLaunch as it was at the parity baseline and as it is now, and the React
-// engine on the window <LaunchDialogView> draws, with React's own handlers, all in a fake DOM
+// step: the old initLaunch as it was at the parity baseline, and the React engine on the window
+// <LaunchDialogView> draws, with React's own handlers, both in a fake DOM
 // (support/launch-sides.tsx). After every step the window (markup, the inline style its spring
 // wrote, the fields), the focus, what was selected or scrolled into view, what went inert, the
 // page's new cards, localStorage and every request and toast must be the same.
@@ -45,19 +45,12 @@ async function run(make: () => LaunchSide, steps: Step[]): Promise<string[]> {
   }
 }
 
-/** The three sides the same after every step; returns the baseline's snapshots. */
+/** Both sides the same after every step; returns the baseline's snapshots. */
 async function compare(steps: Step[], scene: () => LaunchScene = board): Promise<string[]> {
-  const baseline = await run(() => oldLaunchSide(scene(), true), steps)
-  const now = await run(() => oldLaunchSide(scene(), false), steps)
+  const baseline = await run(() => oldLaunchSide(scene()), steps)
   const react = await run(() => reactLaunchSide(scene()), steps)
-  for (const [name, shots] of [
-    ['old page now', now],
-    ['react', react],
-  ] as const) {
-    expect(shots.length).toBe(baseline.length)
-    for (const [i, shot] of baseline.entries())
-      expect(`${name} step ${i}\n${shots[i]}`).toBe(`${name} step ${i}\n${shot}`)
-  }
+  expect(react.length).toBe(baseline.length)
+  for (const [i, shot] of baseline.entries()) expect(`react step ${i}\n${react[i]}`).toBe(`react step ${i}\n${shot}`)
   return baseline
 }
 

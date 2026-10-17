@@ -1,10 +1,9 @@
 // The chat's files without the DOM: the icons, what a file is by its name, the raw-bytes URL,
 // paths taken apart and put together with either separator, sizes and dates, the quick look's
 // footer and actions, history excerpts, and how long what the server said about a path holds.
-// The chips and the quick look draw from here (components/files/), as the old page's files.js does.
+// The chips and the quick look draw from here (components/files/), as the old page's files.js did.
 import type { Translator } from '../../../src/core/types.ts'
 
-const svg = (body: string) => `<svg viewBox="0 0 20 20" aria-hidden="true">${body}</svg>`
 const DOC = '<path d="M5.5 2.5h6l3.5 3.5v11.5h-9.5Z"/><path d="M11.5 2.5V6H15"/>'
 
 /** The inside of each icon (20 × 20, stroked by the stylesheet). */
@@ -37,17 +36,10 @@ export const ICON_PATHS = {
 
 export type IconName = keyof typeof ICON_PATHS
 
-const NAMES = Object.keys(ICON_PATHS) as IconName[]
-
-/** The icons as markup, for the old page (web/files.js). */
-export const ICONS = Object.fromEntries(NAMES.map(name => [name, svg(ICON_PATHS[name])])) as Record<IconName, string>
-
 const isIconName = (kind: unknown): kind is IconName => typeof kind === 'string' && Object.hasOwn(ICON_PATHS, kind)
 
 /** The icon a kind of file shows: its own, else a plain file for binary, else text. */
 export const iconName = (kind: unknown): IconName => (isIconName(kind) ? kind : kind === 'binary' ? 'file' : 'text')
-
-export const iconOf = (kind: unknown): string => ICONS[iconName(kind)]
 
 const KIND_BY_EXTENSION = new Map(
   Object.entries({

@@ -1,19 +1,17 @@
 // What web/app.js draws in the session panel (#sheet of web/index.html) for one scene, for the
-// expected side of the sheet's markup parity. The drawing is the old code's own — renderSheetHead,
-// renderSheetBody (renderSheetCard, scheduleRow, modeButton, cancelButton, thread, thumbs, clock),
-// renderDetailState, renderAttachments, syncComposer and syncSheetProperties picked out of
-// web/app.js (support/old-app.ts), questions.js's threadHTML — run against a small `$` over the
-// parsed page. By hand: the "New here" button app.js appends at start (app.js:2020-2027), the
-// Changes button's rule in the detail's `changed` (app.js:903) and syncAvailability's part for the
-// sheet (app.js:175-195).
+// expected side of the sheet's markup parity. The drawing is the old code's own, as it was at the
+// parity baseline — renderSheetHead, renderSheetBody (renderSheetCard, scheduleRow, modeButton,
+// cancelButton, thread, thumbs, clock), renderDetailState, renderAttachments, syncComposer and
+// syncSheetProperties picked out of web/app.js (support/old-app.ts) with its own markdown.js and
+// when.js, questions.js's threadHTML — run against a small `$` over the parsed page. By hand: the
+// "New here" button app.js appends at start (app.js:2020-2027), the Changes button's rule in the
+// detail's `changed` (app.js:903) and syncAvailability's part for the sheet (app.js:175-195).
 import { translator } from '../../../src/core/i18n/translator.ts'
 import type { BoardPayload } from '../../../src/core/payload.ts'
 import type { ColumnId, Item, Translator } from '../../../src/core/types.ts'
-import { capital, longWhen } from '../../../src/core/when-format.ts'
 import type { SessionDetail } from '../../../web/src/api/client.ts'
 import type { Attachment } from '../../../web/src/models/composer.ts'
 import type { DetailValue } from '../../../web/src/models/detail-resource.ts'
-import { markdown } from '../../../web/src/models/markdown.ts'
 import {
   addButtonTypes,
   append,
@@ -32,7 +30,7 @@ import {
   toggleAttr,
   toggleClass,
 } from './markup.ts'
-import { oldCode, oldFunction } from './old-app.ts'
+import { OLD_MARKDOWN, OLD_WHEN, oldCode, oldFunction } from './old-app.ts'
 
 /** The old page's state for one scene (app.js `state`, the composer's and the sheet's own). */
 export interface OldSheetScene {
@@ -216,9 +214,9 @@ export function oldSheet(scene: OldSheetScene): Element {
     message: { style: {}, scrollHeight: 0, value: scene.message ?? '' },
     sendBtn: $('#composer .send'),
     armed: scene.armed ? { id: scene.armed } : null,
-    markdown,
-    capital,
-    longWhen,
+    markdown: OLD_MARKDOWN.get('markdown'),
+    capital: OLD_WHEN.get('capital'),
+    longWhen: OLD_WHEN.get('longWhen'),
   })
   const call: Call = (name, ...args) => oldFunction(code, name)(...args)
 

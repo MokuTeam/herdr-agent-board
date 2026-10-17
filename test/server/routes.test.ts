@@ -93,15 +93,39 @@ describe('routes', () => {
     expect(page.headers.get('content-security-policy')).toBe(PAGE_CSP)
     expect(page.headers.get('x-content-type-options')).toBe('nosniff')
     expect(page.headers.get('cache-control')).toBe('no-cache')
-    expect(await page.text()).toContain('<!doctype html>')
+    const html = await page.text()
+    expect(html).toContain('<!doctype html>')
+    expect(html).toContain('<div id="root"></div>')
+    // The React page: every file it links to is served.
+    const links = [...html.matchAll(/(?:href|src)="([^"]+)"/g)].map(m => m[1])
+    expect(links).toEqual([
+      'icon.svg',
+      'styles/app.css',
+      'styles/menu.css',
+      'styles/launch.css',
+      'styles/questions.css',
+      'app.js',
+    ])
+    for (const link of links) expect([link, (await fetch(`${url}/${link}`)).status]).toEqual([link, 200])
     const script = await fetch(`${url}/app.js`)
     expect(script.headers.get('content-type')).toBe('text/javascript; charset=utf-8')
     expect(script.headers.get('content-security-policy')).toBe(null)
     expect((await script.text()).length).toBeGreaterThan(1000)
-    expect((await fetch(`${url}/app.css`)).headers.get('content-type')).toBe('text/css; charset=utf-8')
+    for (const sheet of ['app', 'menu', 'launch', 'questions'])
+      expect((await fetch(`${url}/styles/${sheet}.css`)).headers.get('content-type')).toBe('text/css; charset=utf-8')
     expect((await fetch(`${url}/icon.svg`)).headers.get('content-type')).toBe('image/svg+xml')
-    // Only top-level files of the types it knows.
-    for (const path of ['/notes.txt', '/missing.css', '/src/main.tsx', '/api/nothing'])
+    // Only top-level files and styles/ of the types it knows: nothing else under web/ (the page's source).
+    for (const path of [
+      '/notes.txt',
+      '/missing.css',
+      '/app.css',
+      '/src/main.tsx',
+      '/src/App.tsx',
+      '/styles/missing.css',
+      '/styles%2F..%2Fsrc%2Fmain.tsx',
+      '/styles/..%2F..%2Fpackage.json',
+      '/api/nothing',
+    ])
       expect([path, ...(await answer(fetch(url + path)))]).toEqual([path, 404, { error: 'not found' }])
   })
 

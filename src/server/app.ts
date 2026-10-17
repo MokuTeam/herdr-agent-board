@@ -68,8 +68,9 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
   const { cfg, log } = deps
   const port = asked ?? Number(cfg.port ?? 12422)
   pruneUploads(Number(cfg.keepUploadsDays ?? 14))
-  // web/app.js is bundled in memory (Bun.build); its version, with the page's other files, tells open pages to reload.
-  const bundle = await createWebBundle({ root: ROOT, entry: join(WEB, 'app.js'), log })
+  // The React page (web/src/main.tsx) is bundled in memory (Bun.build) and served as /app.js; its
+  // version, with the page's other files, tells open pages to reload.
+  const bundle = await createWebBundle({ root: ROOT, entry: join(WEB, 'src', 'main.tsx'), log })
   // Sessions started from the board (services/launch): their progress goes out with the board.
   const launches = createLaunches({ deps, onChange: () => board.publish() })
   const events = createBroadcaster(() => board.payload())

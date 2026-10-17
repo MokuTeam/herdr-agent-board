@@ -131,7 +131,7 @@ export function modalFocusManager(doc: FocusDocument): (layer: FocusElement, win
 }
 
 let manager: ((layer: FocusElement, win: FocusElement) => FocusScope) | undefined
-/** A dialog's scope in the one stack of this document (the old page's dialogs and React's share it). */
+/** A dialog's scope in the one stack of this document (every dialog of the page shares it). */
 export function modalFocus(layer: FocusElement, win: FocusElement): FocusScope {
   manager ??= modalFocusManager(document)
   return manager(layer, win)

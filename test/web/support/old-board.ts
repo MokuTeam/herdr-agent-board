@@ -1,12 +1,12 @@
 // What web/app.js draws in #board for a board, for the expected side of the board's markup parity.
-// The cards come from the old code itself (cardHTML, updateCard, alarmBadge, ago, plain, the
-// question card of questions.js, visibleItems, catOf/colOf: support/old-app.ts); the lane and
-// column markup is laneOf's template and render()'s updates (app.js:429-449,535-598), and the
-// buttons' availability syncAvailability's part for cards and lanes (app.js:175-188), by hand.
+// The cards come from the old code itself, as it was at the parity baseline (cardHTML, updateCard,
+// alarmBadge, ago, plain, the question card of questions.js, visibleItems, catOf/colOf, with its
+// own attention.js and when.js: support/old-app.ts); the lane and column markup is laneOf's
+// template and render()'s updates (app.js:429-449,535-598), and the buttons' availability
+// syncAvailability's part for cards and lanes (app.js:175-188), by hand.
 import type { BoardPayload } from '../../../src/core/payload.ts'
 import type { ColumnId, Translator } from '../../../src/core/types.ts'
-import { longWhen, shortWhen } from '../../../src/core/when-format.ts'
-import { attentionTime, type Seen, unseenResult } from '../../../web/src/models/attention.ts'
+import type { Seen } from '../../../web/src/models/attention.ts'
 import {
   addButtonTypes,
   byId,
@@ -19,7 +19,7 @@ import {
   setHtml,
   toggleAttr,
 } from './markup.ts'
-import { oldCode, oldFunction } from './old-app.ts'
+import { OLD_ATTENTION, OLD_WHEN, oldCode, oldFunction } from './old-app.ts'
 
 /** The old page's state for one board (app.js `state`, `viewed`) and what it could do. */
 export interface OldScene {
@@ -128,10 +128,10 @@ export function oldBoard(s: OldScene): Node[] {
     viewed: s.viewed,
     launchUI,
     questionsUI: questionsUI(s.t),
-    attentionTime,
-    unseenResult,
-    longWhen,
-    shortWhen,
+    attentionTime: OLD_ATTENTION.get('attentionTime'),
+    unseenResult: OLD_ATTENTION.get('unseenResult'),
+    longWhen: OLD_WHEN.get('longWhen'),
+    shortWhen: OLD_WHEN.get('shortWhen'),
   })
   const call = (name: string, ...args: unknown[]) => oldFunction(code, name)(...args)
   const esc = (v: unknown) => String(call('esc', v))

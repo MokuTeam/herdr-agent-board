@@ -1,15 +1,13 @@
 // Renaming in place both ways in a fake DOM (support/fake-dom.ts), for parity: the old page's
-// app.js startRename (at the parity baseline) with web/rename.js's renameInPlace — as it was at the
-// baseline and as it is now (its pure parts from models/rename.ts) — and the React port: the
-// renamer of hooks/useRenameInPlace.ts, its field drawn by <RenameFieldView> and given its
-// behaviour (attach) the way the layout effect gives it. Every side renames the same sessions
-// through the same steps; what went to the server, the toasts and snapshot() must be the same.
+// app.js startRename with web/rename.js's renameInPlace, as they were at the parity baseline, and
+// the React port: the renamer of hooks/useRenameInPlace.ts, its field drawn by <RenameFieldView>
+// and given its behaviour (attach) the way the layout effect gives it. Both sides rename the same
+// sessions through the same steps; what went to the server, the toasts and snapshot() must be the same.
 import { NAME_MAX } from '../../../src/core/launch/names.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
 import { RenameFieldView } from '../../../web/src/components/RenameField.tsx'
 import { renamer } from '../../../web/src/hooks/useRenameInPlace.ts'
 import type { ActResult } from '../../../web/src/hooks/useSessionActions.ts'
-import { renameBox, renameChanges } from '../../../web/src/models/rename.ts'
 import { reducedMotion, Spring } from '../../../web/src/models/spring.ts'
 import { box, type FakeElement, FakeWorld, type RectBox } from './fake-dom.ts'
 import { canonical, type Element, parseHtml, reactMarkup } from './markup.ts'
@@ -121,40 +119,28 @@ class Server {
 
 // ---------------------------------------------------------------- the old page
 
-export function oldRenameSide(board: RenameBoard, baseline: boolean): RenameSide {
+export function oldRenameSide(board: RenameBoard): RenameSide {
   const log: string[] = []
   const world = newWorld(log)
   const server = new Server(log)
   const page = pageOf(world)
-  const rename = oldCode(
-    'web/rename.js',
-    ['esc', 'renameInPlace'],
-    {
-      NAME_MAX,
-      reducedMotion,
-      Spring,
-      ...(baseline ? {} : { renameBox, renameChanges }),
-      current: null, // the module's `let current`
-      innerWidth: VIEWPORT.w,
-    },
-    { baseline },
-  )
+  const rename = oldCode('web/rename.js', ['esc', 'renameInPlace'], {
+    NAME_MAX,
+    reducedMotion,
+    Spring,
+    current: null, // the module's `let current`
+    innerWidth: VIEWPORT.w,
+  })
   const start = oldFunction(
-    oldCode(
-      'web/app.js',
-      ['startRename'],
-      {
-        itemOf: (key: string) => board.items.find(i => i.key === key),
-        canEdit: () => board.canEdit,
-        canMutate: () => board.canMutate,
-        toast: (text: string, error = false) => log.push(`toast ${error ? 'error ' : ''}${text}`),
-        t: board.t,
-        inTurn: (it: Item) => it.status === 'working' || it.status === 'blocked',
-        act: server.act,
-        renameInPlace: oldFunction(rename, 'renameInPlace'),
-      },
-      { baseline: true },
-    ),
+    oldCode('web/app.js', ['inTurn', 'startRename'], {
+      itemOf: (key: string) => board.items.find(i => i.key === key),
+      canEdit: () => board.canEdit,
+      canMutate: () => board.canMutate,
+      toast: (text: string, error = false) => log.push(`toast ${error ? 'error ' : ''}${text}`),
+      t: board.t,
+      act: server.act,
+      renameInPlace: oldFunction(rename, 'renameInPlace'),
+    }),
     'startRename',
   )
   return {

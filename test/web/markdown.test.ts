@@ -1,11 +1,7 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { inline, looksLikePath, markdown } from '../../web/src/models/markdown.ts'
-import { oldSource } from './support/old-app.ts'
+import { OLD_MARKDOWN, oldFunction } from './support/old-app.ts'
 
 test('paths in the chat: links, code and running text become candidates; the rest stays text', () => {
   assert.match(
@@ -74,24 +70,13 @@ type Renderer = {
   looksLikePath: (text: unknown) => boolean
 }
 
-const isFunction = (value: unknown): value is (...args: never[]) => unknown => typeof value === 'function'
-
-/** web/markdown.js as the parity baseline has it (git show 94fdde6:web/markdown.js once it is gone). */
+/** web/markdown.js as the parity baseline has it (support/old-app.ts). */
 async function oldRenderer(): Promise<Renderer> {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-board-markdown-'))
-  try {
-    const file = join(dir, 'markdown.js')
-    writeFileSync(file, oldSource('web/markdown.js'))
-    const mod: Record<string, unknown> = await import(pathToFileURL(file).href)
-    const { markdown, inline, looksLikePath } = mod
-    if (!isFunction(markdown) || !isFunction(inline) || !isFunction(looksLikePath)) throw new Error('no renderer')
-    return {
-      markdown: (src, opts) => String(Reflect.apply(markdown, undefined, [src, opts])),
-      inline: text => String(Reflect.apply(inline, undefined, [text])),
-      looksLikePath: text => Reflect.apply(looksLikePath, undefined, [text]) === true,
-    }
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
+  const call = (name: string) => oldFunction(OLD_MARKDOWN, name)
+  return {
+    markdown: (src, opts) => String(call('markdown')(src, opts)),
+    inline: text => String(call('inline')(text)),
+    looksLikePath: text => call('looksLikePath')(text) === true,
   }
 }
 

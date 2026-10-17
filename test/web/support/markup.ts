@@ -1,13 +1,13 @@
-// Markup parity for the web board: today's page (web/index.html plus what web/app.js fills in)
-// against what the React components render with react-dom/server. A small HTML parser builds a
-// tree both sides go through; `canonical` prints it with attributes and class names sorted,
-// style declarations tidied, whitespace-only text dropped and other whitespace collapsed, so
-// only real differences show. The DOM-like helpers rebuild what the old imperative code did.
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+// Markup parity for the web board: the old page (web/index.html plus what web/app.js filled in, as
+// they were at the parity baseline) against what the React components render with react-dom/server.
+// A small HTML parser builds a tree both sides go through; `canonical` prints it with attributes
+// and class names sorted, style declarations tidied, whitespace-only text dropped and other
+// whitespace collapsed, so only real differences show. The DOM-like helpers rebuild what the old
+// imperative code did.
 import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Translator } from '../../../src/core/types.ts'
+import { oldSource } from './old-app.ts'
 
 export interface Element {
   kind: 'element'
@@ -168,9 +168,9 @@ export function canonical(nodes: Node[], options: CanonicalOptions = {}, depth =
 
 // ---------------------------------------------------------------- the two sides
 
-/** web/index.html, parsed. */
+/** The old page's web/index.html (at the parity baseline: today's holds only the React root), parsed. */
 export function pageMarkup(): Node[] {
-  return parseHtml(readFileSync(join(import.meta.dir, '..', '..', '..', 'web', 'index.html'), 'utf8'))
+  return parseHtml(oldSource('web/index.html'))
 }
 
 /** A tree back to markup (`innerHTML`). */
@@ -286,7 +286,7 @@ export function stripAttrs(nodes: Node[], names: string[]): void {
 }
 
 /**
- * React buttons say `type="button"` (Biome a11y/useButtonType); today's buttons without a type sit
+ * React buttons say `type="button"` (Biome a11y/useButtonType); the old page's buttons without a type sit
  * outside any form, where the two behave the same and no stylesheet tells them apart.
  */
 export function addButtonTypes(nodes: Node[]): void {

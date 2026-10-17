@@ -18,16 +18,3 @@ export function liveView(data: LiveData, t: Translator): LiveView {
       : t('live.stale', { time: new Date(data.lastSuccessfulRefreshAt).toLocaleTimeString(t.lang) })
   return { fresh, title }
 }
-
-/** What `updateLive` needs of the dot's element. */
-export interface LiveElement {
-  classList: { toggle(name: string, force?: boolean): boolean }
-  title: string
-}
-
-export function updateLive(element: LiveElement, data: LiveData, t: Translator): void {
-  const { fresh, title } = liveView(data, t)
-  element.classList.toggle('on', fresh)
-  element.classList.toggle('stale', !fresh)
-  element.title = title
-}

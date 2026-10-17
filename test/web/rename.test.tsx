@@ -1,8 +1,8 @@
 // Renaming in place in React (hooks/useRenameInPlace.ts, components/RenameField.tsx) against the
-// old page — app.js startRename with rename.js, at the parity baseline and as rename.js is now —
-// step by step in a fake DOM (support/rename-sides.tsx): the field over the name (its markup,
-// place, type and max length, the "auto" name, the Claude option), Enter, Esc, leaving the field,
-// the checkbox, a refused rename, the toasts and what went to the server.
+// old page — app.js startRename with rename.js, at the parity baseline — step by step in a fake DOM
+// (support/rename-sides.tsx): the field over the name (its markup, place, type and max length, the
+// "auto" name, the Claude option), Enter, Esc, leaving the field, the checkbox, a refused rename,
+// the toasts and what went to the server.
 import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { Item } from '../../src/core/types.ts'
@@ -29,19 +29,12 @@ async function run(make: () => RenameSide, steps: Step[]): Promise<string[]> {
   }
 }
 
-/** The three sides the same after every step; returns the baseline's snapshots. */
+/** Both sides the same after every step; returns the baseline's snapshots. */
 async function compare(board: RenameBoard, steps: Step[]): Promise<string[]> {
-  const baseline = await run(() => oldRenameSide(board, true), steps)
-  const now = await run(() => oldRenameSide(board, false), steps)
+  const baseline = await run(() => oldRenameSide(board), steps)
   const react = await run(() => reactRenameSide(board), steps)
-  for (const [name, shots] of [
-    ['old page now', now],
-    ['react', react],
-  ] as const) {
-    expect(shots.length).toBe(baseline.length)
-    for (const [i, shot] of baseline.entries())
-      expect(`${name} step ${i}\n${shots[i]}`).toBe(`${name} step ${i}\n${shot}`)
-  }
+  expect(react.length).toBe(baseline.length)
+  for (const [i, shot] of baseline.entries()) expect(`react step ${i}\n${react[i]}`).toBe(`react step ${i}\n${shot}`)
   return baseline
 }
 

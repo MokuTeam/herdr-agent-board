@@ -1,5 +1,5 @@
 // The React panel's motion against the old web/panel.js, step by step: both run in a fake DOM
-// (support/panel-sides.tsx) from today's page and take the same events and frames; after every
+// (support/panel-sides.tsx) from the old page and take the same events and frames; after every
 // step the panels, the place menu, the dock preview, the board's room, the saved layout, focus,
 // pointer capture and every spring (value and target) must be the same.
 import { describe, expect, test } from 'bun:test'

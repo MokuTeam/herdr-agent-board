@@ -1,6 +1,6 @@
 // The React context menu (components/menu) against the old page's menu.js, step by step: the old
-// initMenu as it was at the parity baseline and as it is now, and the React engine on the levels
-// <MenuLayer> draws, all in a fake DOM (support/menu-sides.tsx). After every step the menus in
+// initMenu as it was at the parity baseline, and the React engine on the levels <MenuLayer> draws,
+// both in a fake DOM (support/menu-sides.tsx). After every step the menus in
 // <body> (markup and the inline style the springs and placement wrote), the focus, what was
 // scrolled into view, what was picked and every open and close must be the same.
 import { describe, expect, test } from 'bun:test'
@@ -28,19 +28,12 @@ async function run(make: () => MenuSide, steps: Step[]): Promise<string[]> {
   }
 }
 
-/** The three sides the same after every step; returns the baseline's snapshots. */
+/** Both sides the same after every step; returns the baseline's snapshots. */
 async function compare(steps: Step[]): Promise<string[]> {
-  const baseline = await run(() => oldMenuSide(true), steps)
-  const now = await run(() => oldMenuSide(false), steps)
+  const baseline = await run(oldMenuSide, steps)
   const react = await run(reactMenuSide, steps)
-  for (const [name, shots] of [
-    ['old page now', now],
-    ['react', react],
-  ] as const) {
-    expect(shots.length).toBe(baseline.length)
-    for (const [i, shot] of baseline.entries())
-      expect(`${name} step ${i}\n${shots[i]}`).toBe(`${name} step ${i}\n${shot}`)
-  }
+  expect(react.length).toBe(baseline.length)
+  for (const [i, shot] of baseline.entries()) expect(`react step ${i}\n${react[i]}`).toBe(`react step ${i}\n${shot}`)
   return baseline
 }
 

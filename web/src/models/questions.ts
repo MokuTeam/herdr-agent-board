@@ -1,7 +1,6 @@
 // Questions a session asks in its terminal, answered from the board: the rules of what the sheet
 // shows — which form or permission prompt, a form's state, its send button, its hint and its
-// preview — without the DOM. The page's desk (models/question-desk.ts) and the old page's
-// questions.js read them from here.
+// preview — without the DOM. The page's desk (models/question-desk.ts) reads them from here.
 import type { FormQuestion } from '../../../src/core/dialogs/question-form.ts'
 import type { PublicDialog } from '../../../src/core/dialogs/questions.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'

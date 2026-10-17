@@ -1,20 +1,20 @@
 // The old page's own code, for the expected side of markup parity: declarations of web/app.js
 // (and the modules it uses) picked by name and run with the dependencies a test hands them, so
 // the React markup is compared with what the old functions themselves build, not with a copy.
-// Once a file is gone (web/app.js goes in Task 27) it is read from the parity baseline in git;
-// a file that now borrows its pure parts from the new models is read from there too (`baseline`).
-import { existsSync, readFileSync } from 'node:fs'
+// The old page is gone from the working tree (the server serves the React board since Task 27):
+// every file is read from the parity baseline in git, web/index.html too.
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const ROOT = join(import.meta.dir, '..', '..', '..')
 const BASELINE = '94fdde6'
 
 const fromGit = new Map<string, string>()
 
-/** A file of the old page as it is now, or from the parity baseline once it is gone (or when asked). */
-export function oldSource(file: string, baseline = false): string {
-  const path = join(ROOT, ...file.split('/'))
-  if (!baseline && existsSync(path)) return readFileSync(path, 'utf8')
+/** A file of the old page as it was at the parity baseline. */
+export function oldSource(file: string): string {
   const known = fromGit.get(file)
   if (known !== undefined) return known
   const git = Bun.spawnSync(['git', 'show', `${BASELINE}:${file}`], { cwd: ROOT })
@@ -73,16 +73,11 @@ const names = (wanted: Wanted[]) =>
 export type OldFunction = (...args: unknown[]) => unknown
 
 /**
- * The declarations `wanted` of `file`, run with `deps` in scope; returns them by name, functions
- * callable. `baseline`: the file as it was at the parity baseline.
+ * The declarations `wanted` of `file` (as it was at the parity baseline), run with `deps` in
+ * scope; returns them by name, functions callable.
  */
-export function oldCode(
-  file: string,
-  wanted: Wanted[],
-  deps: Record<string, unknown>,
-  { baseline = false } = {},
-): Map<string, unknown> {
-  const lines = oldSource(file, baseline).split(/\r?\n/)
+export function oldCode(file: string, wanted: Wanted[], deps: Record<string, unknown>): Map<string, unknown> {
+  const lines = oldSource(file).split(/\r?\n/)
   const body = `${wanted.map(w => declaration(lines, file, w)).join('\n')}\nreturn [${names(wanted).join(', ')}]`
   const run = new Function(...Object.keys(deps), body)
   const values: unknown = run(...Object.values(deps))
@@ -96,3 +91,29 @@ export function oldFunction(code: Map<string, unknown>, name: string): OldFuncti
   if (typeof fn !== 'function') throw new Error(`${name} is not a function`)
   return (...args) => Reflect.apply(fn, undefined, args)
 }
+
+/**
+ * A module of the old page that imports nothing (markdown.js, when.js, live.js…), loaded as it
+ * was at the parity baseline: its exports by name (`oldFunction` calls one). For the old side's
+ * own imports, so that side runs the baseline's code and not the ported module the React side runs.
+ */
+export async function oldModule(file: string): Promise<Map<string, unknown>> {
+  const source = oldSource(file)
+  if (/^import /m.test(source)) throw new Error(`${file} imports other modules`)
+  const dir = mkdtempSync(join(tmpdir(), 'agent-board-old-'))
+  try {
+    const path = join(dir, file.split('/').pop() ?? 'module.js')
+    writeFileSync(path, source)
+    const mod: unknown = await import(pathToFileURL(path).href)
+    if (typeof mod !== 'object' || mod === null) throw new Error(`${file} did not load`)
+    return new Map(Object.entries(mod))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+/** The baseline's when.js, attention.js, markdown.js and live.js: what app.js imported from them. */
+export const OLD_WHEN = await oldModule('web/when.js')
+export const OLD_ATTENTION = await oldModule('web/attention.js')
+export const OLD_MARKDOWN = await oldModule('web/markdown.js')
+export const OLD_LIVE = await oldModule('web/live.js')

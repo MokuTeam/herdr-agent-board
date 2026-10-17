@@ -119,7 +119,6 @@ async function oldDraws(steps: Step[]): Promise<Drawn[]> {
         shortWhen: (ms: number, tr: Translator) => shortWhen(ms, tr, now()),
         longWhen: (ms: number, tr: Translator) => longWhen(ms, tr, now()),
       },
-      { baseline: true },
     )
     const call = (name: string, ...args: unknown[]) => oldFunction(code, name)(...args)
     draw = () => {

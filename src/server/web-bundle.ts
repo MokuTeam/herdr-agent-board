@@ -56,6 +56,9 @@ export async function createWebBundle(opts: Options): Promise<WebBundle> {
         format: 'esm',
         minify: false,
         sourcemap: 'inline',
+        // React's production build: without it the page gets the development one (slower, larger,
+        // and with its warnings in the console).
+        define: { 'process.env.NODE_ENV': '"production"' },
       })
       const output = result.outputs.find(o => o.kind === 'entry-point') ?? result.outputs[0]
       if (!result.success || !output) {

@@ -1,5 +1,5 @@
-// Where the side panel sits and how big it is: plain geometry, shared by the page (panel.js and
-// the React panel) and the tests. A panel docks right, left or at the bottom, where the board makes
+// Where the side panel sits and how big it is: plain geometry, shared by the page (the React
+// panel, components/panel) and the tests. A panel docks right, left or at the bottom, where the board makes
 // room for it, or floats over the board. Rectangles are { x, y, w, h } in CSS pixels of the window
 // `vp` ({ w, h }).
 import { project, rubberband } from './spring.ts'

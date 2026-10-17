@@ -1,15 +1,14 @@
 // Which menu opens where, both ways in a fake DOM (support/fake-dom.ts), for parity: the old page's
-// board-menus.js (initBoardMenus — as it was at the parity baseline with its own menu-model.js, and
-// as it is now with models/board-menus.ts) and the React board's listeners (hooks/useContextMenus.ts
-// boardMenuListeners with models/board-menus.ts menuFor). Each side gets the same page, the same
+// board-menus.js (initBoardMenus as it was at the parity baseline, with its own menu-model.js) and
+// the React board's listeners (hooks/useContextMenus.ts boardMenuListeners with
+// models/board-menus.ts menuFor). Each side gets the same page, the same
 // board (what the page knows and its actions, which note what they were asked to do) and a menu
 // that notes what it was asked to open; picks go through the onPick the menu was handed.
 import { translator } from '../../../src/core/i18n/translator.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
 import type { MenuOpen } from '../../../web/src/components/menu/menu-engine.ts'
 import { boardMenuListeners } from '../../../web/src/hooks/useContextMenus.ts'
-import type { BoardMenuDeps } from '../../../web/src/models/board-menus.ts'
-import * as boardMenus from '../../../web/src/models/board-menus.ts'
+import { type BoardMenuDeps, menuFor } from '../../../web/src/models/board-menus.ts'
 import type { MenuEntry } from '../../../web/src/models/menu-model.ts'
 import { box, type EventFields, type FakeElement, FakeWorld, type RectBox } from './fake-dom.ts'
 import { parseHtml } from './markup.ts'
@@ -246,33 +245,18 @@ function baselineModel(): Record<string, unknown> {
     'chipMenu',
     'wantsNativeMenu',
   ]
-  return Object.fromEntries(oldCode('web/menu-model.js', names, {}, { baseline: true }))
+  return Object.fromEntries(oldCode('web/menu-model.js', names, {}))
 }
 
-/** initBoardMenus of web/board-menus.js: at the baseline (`baseline`), or as the old page has it now. */
-export function oldBoardMenus(s: BoardScene, baseline: boolean): MenuSide {
+/** initBoardMenus of web/board-menus.js as it was at the baseline. */
+export function oldBoardMenus(s: BoardScene): MenuSide {
   const world = newWorld()
   const log: string[] = []
   const { recorder, menu } = recordingMenu(log)
-  const names = baseline ? ['LONG_PRESS_MS', 'SLOP', 'initBoardMenus'] : ['initBoardMenus']
-  const imported = baseline
-    ? baselineModel()
-    : {
-        isMenuKey: boardMenus.isMenuKey,
-        keepsNativeMenu: boardMenus.keepsNativeMenu,
-        keyPoint: boardMenus.keyPoint,
-        LONG_PRESS_MS: boardMenus.LONG_PRESS_MS,
-        boardMenuFor: boardMenus.menuFor,
-        pressOpensMenu: boardMenus.pressOpensMenu,
-        SLOP: boardMenus.SLOP,
-        typingIn: boardMenus.typingIn,
-      }
-  const code = oldCode(
-    'web/board-menus.js',
-    names,
-    { ...imported, performance: { now: () => world.now } },
-    { baseline },
-  )
+  const code = oldCode('web/board-menus.js', ['LONG_PRESS_MS', 'SLOP', 'initBoardMenus'], {
+    ...baselineModel(),
+    performance: { now: () => world.now },
+  })
   oldFunction(code, 'initBoardMenus')(boardOf(s, log, menu))
   return side(world, log, recorder)
 }
@@ -285,7 +269,7 @@ export function reactBoardMenus(s: BoardScene): MenuSide {
   const board = boardOf(s, log, menu)
   boardMenuListeners({
     menu,
-    menuFor: (target, at) => boardMenus.menuFor(target, at, board),
+    menuFor: (target, at) => menuFor(target, at, board),
     now: () => world.now,
   })
   return side(world, log, recorder)

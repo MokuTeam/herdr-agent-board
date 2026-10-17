@@ -2,24 +2,14 @@
 // the parity baseline (initQuestions, with question-model.js), run on a fake #sheet-question
 // (support/fake-dom.ts), and the React port — models/question-desk.ts's desk drawn by <QuestionForm>
 // or <PermissionPrompt> — driven through the same steps: the same clicks, typing and digits, the
-// same server answers. Each side keeps what it posted and toasted. A third side runs questions.js
-// as it is now (its pure parts from the new models), which the old page serves until Task 27.
+// same server answers. Each side keeps what it posted and toasted.
 import type { ReactNode } from 'react'
 import { translator } from '../../../src/core/i18n/translator.ts'
 import type { Item } from '../../../src/core/types.ts'
 import { PermissionPrompt } from '../../../web/src/components/questions/PermissionPrompt.tsx'
 import { QuestionForm } from '../../../web/src/components/questions/QuestionForm.tsx'
 import { type AnswerResult, digitFocus, type FormClick, questionDesk } from '../../../web/src/models/question-desk.ts'
-import * as questionModel from '../../../web/src/models/question-model.ts'
-import {
-  type DialogDetail,
-  dialogFor,
-  formHint,
-  formLocked,
-  optionOn,
-  previewText,
-  sendButton,
-} from '../../../web/src/models/questions.ts'
+import type { DialogDetail } from '../../../web/src/models/questions.ts'
 import { board, renderInBoard } from './board.tsx'
 import { type FakeElement, FakeWorld } from './fake-dom.ts'
 import { canonical, type Node, parseHtml } from './markup.ts'
@@ -36,9 +26,6 @@ export interface QaOptions {
   canMutate?: boolean
   pointerFine?: boolean
 }
-
-/** What questions.js imports now, from the new models. */
-const IMPORTED_NOW = { ...questionModel, dialogFor, formHint, formLocked, optionOn, previewText, sendButton }
 
 const MODEL = [
   'pendingQuestions',
@@ -92,28 +79,19 @@ export class OldQuestions extends Side {
   private item: Item | null = null
   private readonly ui: Record<string, (...args: unknown[]) => unknown>
 
-  /** `now`: questions.js as it is now, else as it was at the parity baseline. */
-  constructor(options: QaOptions = {}, now = false) {
+  constructor(options: QaOptions = {}) {
     super(options)
     const [node] = parseHtml('<div class="sheet-question" id="sheet-question"></div>')
     if (node?.kind !== 'element') throw new Error('no box')
     this.box = this.world.mount(node)
-    const imported = now
-      ? IMPORTED_NOW
-      : Object.fromEntries(oldCode('web/question-model.js', MODEL, {}, { baseline: true }))
-    const code = oldCode(
-      'web/questions.js',
-      ['esc', 'SPIN', 'CHECK', 'FOCUS', 'initQuestions'],
-      {
-        ...imported,
-        document: this.world.document,
-        performance: { now: () => this.clock },
-        Date: { now: () => this.now },
-        CSS: { escape: (s: string) => s },
-        matchMedia: () => ({ matches: !!options.pointerFine }),
-      },
-      { baseline: !now },
-    )
+    const code = oldCode('web/questions.js', ['esc', 'SPIN', 'CHECK', 'FOCUS', 'initQuestions'], {
+      ...Object.fromEntries(oldCode('web/question-model.js', MODEL, {})),
+      document: this.world.document,
+      performance: { now: () => this.clock },
+      Date: { now: () => this.now },
+      CSS: { escape: (s: string) => s },
+      matchMedia: () => ({ matches: !!options.pointerFine }),
+    })
     const init = code.get('initQuestions')
     if (typeof init !== 'function') throw new Error('no initQuestions')
     this.ui = init({
@@ -271,88 +249,71 @@ export function clickOf(el: FakeElement, inner: FakeElement = el): FormClick {
   return { kind: 'option', q, n: Number(el.dataset.n) }
 }
 
-/** The sides, stepped together: the baseline's (`old`), today's old page (`now`) and the React port. */
+/** Both sides, stepped together: the baseline's (`old`) and the React port. */
 export class BothQuestions {
   readonly old: OldQuestions
-  readonly now: OldQuestions
   readonly react: NewQuestions
   constructor(options: QaOptions = {}) {
     this.old = new OldQuestions(options)
-    this.now = new OldQuestions(options, true)
     this.react = new NewQuestions(options)
   }
-  private olds(): OldQuestions[] {
-    return [this.old, this.now]
-  }
   mount(it: Item, detail: DialogDetail | null = null): [boolean, boolean] {
-    const [old, now] = this.olds().map(side => side.mount(it, detail))
-    if (old !== now) throw new Error('questions.js now mounts otherwise than it did')
-    return [!!old, this.react.mount(it, detail)]
+    return [this.old.mount(it, detail), this.react.mount(it, detail)]
   }
   /** A click on the old form's element at `selector` (`inner`: on that child of it), and the same on the desk. */
   async click(selector: string, inner?: string): Promise<void> {
-    let target: FormClick | null = null
-    for (const side of this.olds()) {
-      const el = side.find(selector)
-      const at = inner ? (el.querySelector(inner) ?? el) : el
-      target ??= clickOf(el, at)
-      await side.world.fire(at, 'click')
-    }
-    if (target) await this.react.click(target)
+    const el = this.old.find(selector)
+    const at = inner ? (el.querySelector(inner) ?? el) : el
+    const target = clickOf(el, at)
+    await this.old.world.fire(at, 'click')
+    await this.react.click(target)
   }
   async type(q: number, text: string): Promise<void> {
-    for (const side of this.olds()) await side.type(q, text)
+    await this.old.type(q, text)
     this.react.desk.type(q, text)
   }
   async enter(q: number): Promise<void> {
-    for (const side of this.olds()) await side.enter(q)
+    await this.old.enter(q)
     this.react.desk.enter()
     await flush()
   }
   async over(selector: string): Promise<void> {
     const el = this.old.find(selector)
-    for (const side of this.olds()) await side.over(selector)
+    await this.old.over(selector)
     this.react.desk.peekAt(
       el.matches('button.qa-opt[data-q]') ? { q: Number(el.dataset.q), n: Number(el.dataset.n) } : null,
     )
   }
   async leave(): Promise<void> {
-    for (const side of this.olds()) await side.leave()
+    await this.old.leave()
     this.react.desk.unpeek()
   }
   async key(digit: string, focus: string | null = null, repeat = false): Promise<[boolean, boolean]> {
     const el = focus ? this.old.find(focus) : null
     const q = el?.closest('[data-q]')?.dataset.q ?? null
     const old = await this.old.key(digit, focus, repeat)
-    if ((await this.now.key(digit, focus, repeat)) !== old) throw new Error('questions.js now takes keys otherwise')
     const react = await this.react.key(digit, el ? { tag: el.tagName, q } : null, repeat)
     return [old, react]
   }
   async answer(r: AnswerResult): Promise<void> {
-    for (const side of this.olds()) side.answer(r)
+    this.old.answer(r)
     this.react.answer(r)
     await flush()
   }
-  /** Time goes by on every clock. */
+  /** Time goes by on both clocks. */
   later(ms: number): void {
-    for (const side of [this.old, this.now, this.react]) {
+    for (const side of [this.old, this.react]) {
       side.clock += ms
       side.now += ms
     }
   }
   set canMutate(on: boolean) {
-    for (const side of this.olds()) {
-      side.canMutate = on
-      side.sync()
-    }
+    this.old.canMutate = on
+    this.old.sync()
     this.react.canMutate = on
   }
   /** The forms as canonical text. */
-  forms(): { old: string; now: string; react: string } {
-    return {
-      old: canonical(this.old.markup()),
-      now: canonical(this.now.markup()),
-      react: canonical(this.react.markup()),
-    }
+  forms(): { old: string; react: string } {
+    return { old: canonical(this.old.markup()), react: canonical(this.react.markup()) }
   }
 }

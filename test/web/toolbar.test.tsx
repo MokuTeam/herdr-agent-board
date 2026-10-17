@@ -1,7 +1,7 @@
-// The React toolbar against today's: the toolbar block of web/index.html after web/app.js filled
-// it for the same board (applyTexts, the "new session" button, renderToolbar, renderLimits,
-// updateLive, syncAvailability, renderScheduleCount). The thumb's inline position is set after
-// layout on both pages, so neither side has it here.
+// The React toolbar against the old page's (at the parity baseline): the toolbar block of
+// web/index.html after web/app.js filled it for the same board (applyTexts, the "new session"
+// button, renderToolbar, renderLimits, updateLive, syncAvailability, renderScheduleCount). The
+// thumb's inline position is set after layout on both pages, so neither side has it here.
 import { describe, expect, test } from 'bun:test'
 import { createRef } from 'react'
 import { translator } from '../../src/core/i18n/translator.ts'

@@ -1,12 +1,10 @@
 // The "new session" window both ways in a fake DOM (support/fake-dom.ts), for parity: the old
-// page's launch.js — initLaunch as it was at the parity baseline (with its own launch-model.js and
-// launch-drafts.js) and as it is now (its pure parts from models/launch.ts, launch-form.ts and
-// launch-drafts.ts) — and the React port: components/launch/launch-window.ts on the window
+// page's launch.js — initLaunch as it was at the parity baseline, with its own launch-model.js and
+// launch-drafts.js — and the React port: components/launch/launch-window.ts on the window
 // <LaunchDialogView> draws, drawn again after every event and frame the way React would
-// (support/react-commit.ts), its handlers React's own (support/react-events.ts). Every side takes
+// (support/react-commit.ts), its handlers React's own (support/react-events.ts). Both sides take
 // the same steps against the same fake server; snapshot() prints what a viewer could tell apart.
 import { createRef } from 'react'
-import * as names from '../../../src/core/launch/names.ts'
 import type { BoardCategory } from '../../../src/core/payload.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
 import { launchApi } from '../../../web/src/api/launch.ts'
@@ -15,15 +13,12 @@ import { launchWindow } from '../../../web/src/components/launch/launch-window.t
 import { localStore, windowKeys } from '../../../web/src/hooks/useLaunch.ts'
 import { scopeOfElements } from '../../../web/src/hooks/useModalFocus.ts'
 import { type MenuOrigin, type PointRect, pointRect } from '../../../web/src/models/board-menus.ts'
-import * as launchModel from '../../../web/src/models/launch.ts'
-import * as drafts from '../../../web/src/models/launch-drafts.ts'
 import type { LaunchContext } from '../../../web/src/models/launch-form.ts'
-import * as form from '../../../web/src/models/launch-form.ts'
 import { modalFocusManager } from '../../../web/src/models/modal-focus.ts'
 import { reducedMotion, Spring } from '../../../web/src/models/spring.ts'
 import { box, type FakeElement, FakeWorld, type RectBox } from './fake-dom.ts'
 import { canonical, type Element, parseHtml, reactMarkup } from './markup.ts'
-import { oldCode, oldFunction, oldSource } from './old-app.ts'
+import { oldCode, oldFunction } from './old-app.ts'
 import { asDom, clone, commit, first } from './react-commit.ts'
 import { type Host, hostElements, listenLikeReact } from './react-events.ts'
 
@@ -329,69 +324,28 @@ const NAMES = [
   'defaultWorkspace',
 ]
 
-/** The modules web/launch.js imports from now (modalFocus is the world's own manager, given apart). */
-const MODULES: Record<string, Record<string, unknown>> = {
-  '../src/core/launch/names.ts': names,
-  './src/models/spring.ts': { reducedMotion, Spring },
-  './src/models/launch-drafts.ts': drafts,
-  './src/models/launch-form.ts': form,
-  './src/models/launch.ts': launchModel,
-  './src/models/modal-focus.ts': { modalFocus: null },
-}
-
-/**
- * Exactly what web/launch.js imports now, from the modules its import lines name: a name the
- * file uses without importing it fails here as it does on the page.
- */
-function importsNow(): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const [, list = '', from = ''] of oldSource('web/launch.js').matchAll(/^import \{([^}]+)\} from '([^']+)'/gm)) {
-    const mod = MODULES[from]
-    if (!mod) throw new Error(`web/launch.js imports from ${from}`)
-    for (const name of list.split(',').map(s => s.trim())) {
-      if (!(name in mod)) throw new Error(`${from} has no ${name}`)
-      if (name !== 'modalFocus') out[name] = mod[name]
-    }
-  }
-  return out
-}
-
-/** What the old launch.js imports: as it was at the baseline, or the ported modules it imports now. */
-function oldImports(baseline: boolean, clock: { now: () => number }): Record<string, unknown> {
-  if (!baseline) return importsNow()
+/** What the old launch.js imported from its own launch-model.js and launch-drafts.js. */
+function oldImports(clock: { now: () => number }): Record<string, unknown> {
   return {
-    ...Object.fromEntries(oldCode('web/launch-model.js', NAMES, {}, { baseline: true })),
-    ...Object.fromEntries(
-      oldCode('web/launch-drafts.js', ['launchContext', 'launchDraftBook'], { Date: clock }, { baseline: true }),
-    ),
+    ...Object.fromEntries(oldCode('web/launch-model.js', NAMES, {})),
+    ...Object.fromEntries(oldCode('web/launch-drafts.js', ['launchContext', 'launchDraftBook'], { Date: clock })),
   }
 }
 
 /** The old page's initLaunch in `world` (installed), its API called by name. */
 export type OldLaunch = (name: string, ...args: unknown[]) => unknown
 
-export function oldLaunch(
-  world: FakeWorld,
-  scene: LaunchScene,
-  server: FakeServer,
-  log: string[],
-  baseline: boolean,
-): OldLaunch {
+export function oldLaunch(world: FakeWorld, scene: LaunchScene, server: FakeServer, log: string[]): OldLaunch {
   const clock = { now: () => world.now }
-  const code = oldCode(
-    'web/launch.js',
-    ['esc', 'svg', 'ICON', 'initLaunch'],
-    {
-      ...oldImports(baseline, clock),
-      reducedMotion,
-      Spring,
-      modalFocus: modalFocusManager(world.document),
-      fetch: server.fetch,
-      innerHeight: VIEWPORT.h,
-      Date: clock,
-    },
-    { baseline },
-  )
+  const code = oldCode('web/launch.js', ['esc', 'svg', 'ICON', 'initLaunch'], {
+    ...oldImports(clock),
+    reducedMotion,
+    Spring,
+    modalFocus: modalFocusManager(world.document),
+    fetch: server.fetch,
+    innerHeight: VIEWPORT.h,
+    Date: clock,
+  })
   const page = pageDeps(world, log)
   const ui: unknown = oldFunction(
     code,
@@ -409,12 +363,12 @@ export function oldLaunch(
     onStarted: page.onStarted,
     // app.js's own, at the baseline.
     focusLaunch: oldFunction(
-      oldCode(
-        'web/app.js',
-        ['focusLaunch'],
-        { canMutate: () => scene.canMutate, toast: page.toast, t: scene.t, fetch: server.fetch },
-        { baseline: true },
-      ),
+      oldCode('web/app.js', ['focusLaunch'], {
+        canMutate: () => scene.canMutate,
+        toast: page.toast,
+        t: scene.t,
+        fetch: server.fetch,
+      }),
       'focusLaunch',
     ),
   })
@@ -428,11 +382,11 @@ export function oldLaunch(
 /** A world for the window: the page it opens from installed, nothing else yet. */
 export const launchWorld = newWorld
 
-export function oldLaunchSide(scene: LaunchScene, baseline: boolean): LaunchSide {
+export function oldLaunchSide(scene: LaunchScene): LaunchSide {
   const world = newWorld()
   const log: string[] = []
   const server = new FakeServer(log)
-  const call = oldLaunch(world, scene, server, log, baseline)
+  const call = oldLaunch(world, scene, server, log)
   return {
     world,
     server,

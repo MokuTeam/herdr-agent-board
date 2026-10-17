@@ -43,12 +43,13 @@ test('keeps the last good bundle when a file breaks', async () => {
   }
 })
 
-test('version changes when css changes', async () => {
+test('version changes when css changes, in web/styles as the page has it', async () => {
   const root = site({ 'app.js': 'console.log(1)\n', 'index.html': '<html></html>' })
   try {
+    mkdirSync(join(root, 'web', 'styles'))
     const bundle = await createWebBundle({ root, entry: join(root, 'web', 'app.js'), log: () => {} })
     const v = bundle.version()
-    writeFileSync(join(root, 'web', 'app.css'), 'body { color: red }')
+    writeFileSync(join(root, 'web', 'styles', 'app.css'), 'body { color: red }')
     await bundle.rebuild()
     expect(bundle.version()).not.toBe(v)
   } finally {

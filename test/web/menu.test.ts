@@ -240,7 +240,7 @@ test('the model gives what the old page’s menu-model.js gave, case by case', (
     'chipMenu',
     'wantsNativeMenu',
   ]
-  const old = oldCode('web/menu-model.js', names, {}, { baseline: true })
+  const old = oldCode('web/menu-model.js', names, {})
   const was = (name: string, ...args: unknown[]) => oldFunction(old, name)(...args)
   const ru = translator('ru')
   for (const tr of [t, ru])

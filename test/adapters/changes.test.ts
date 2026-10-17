@@ -14,10 +14,14 @@ afterEach(() => {
 function repo() {
   const dir = mkdtempSync(join(tmpdir(), 'board-git-'))
   cleanups.push(dir)
+  // The fixture's files as written (LF), whatever the machine's core.autocrlf: git says nothing
+  // about line endings on add.
   const git = (args: string[]) =>
-    execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-C', dir, ...args], {
-      encoding: 'utf8',
-    })
+    execFileSync(
+      'git',
+      ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', '-C', dir, ...args],
+      { encoding: 'utf8' },
+    )
   git(['init', '--quiet'])
   writeFileSync(join(dir, 'tracked.txt'), 'before\n')
   git(['add', 'tracked.txt'])

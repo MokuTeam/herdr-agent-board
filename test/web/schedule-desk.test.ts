@@ -61,7 +61,6 @@ async function oldTrace(steps: Step[], { lang = 'en', canEdit = true } = {}): Pr
         setTimeout: w.clock.set,
         clearTimeout: w.clock.clear,
       },
-      { baseline: true },
     )
     const cancelButton = oldFunction(code, 'cancelButton')
     const armedNow = () => state.data.schedules.find(e => String(cancelButton(e)).includes('data-confirm'))?.id ?? null
@@ -264,10 +263,7 @@ describe('collapse: a row folds away, its height, paddings and opacity springing
 
   test('frame by frame as the old page’s collapse', async () => {
     const reducedMotion = { matches: false }
-    const old = oldFunction(
-      oldCode('web/app.js', ['collapse'], { Spring, reducedMotion }, { baseline: true }),
-      'collapse',
-    )
+    const old = oldFunction(oldCode('web/app.js', ['collapse'], { Spring, reducedMotion }), 'collapse')
     const before = await frames(el => Promise.resolve(old(el)))
     const after = await frames(el => collapse(el as HTMLElement))
     expect(after).toEqual(before)

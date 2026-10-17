@@ -1,6 +1,7 @@
-/* Questions a session asks in its terminal (questions.js): the form in the sheet, the line on a
-   card, the turn in the conversation. The orange of "Needs me" frames it; inside, the options are
-   one grouped list on the surface, picked with a radio or a checkbox mark like a settings list. */
+/* Questions a session asks in its terminal (web/src/components/questions/): the form in the
+   sheet, the line on a card, the turn in the conversation. The orange of "Needs me" frames it;
+   inside, the options are one grouped list on the surface, picked with a radio or a checkbox mark
+   like a settings list. */
 
 /* ---------------------------------------------------------------- in the sheet */
 .sheet-question:has(.qa) { flex-shrink: 0; max-height: min(62vh, 680px); } /* the card's fields give way first */

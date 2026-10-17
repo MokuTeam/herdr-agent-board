@@ -94,32 +94,27 @@ export class OldCategories {
     this.list = list
     this.state = { data: structuredClone(scene.data), moved: scene.moved ?? new Map() }
     const document = this.world.document
-    this.code = oldCode(
-      'web/app.js',
-      PICKED,
-      {
-        t,
-        state: this.state,
-        document,
-        $: (selector: string) => document.querySelector(selector),
-        catsPanel: { isOpen: true },
-        catsList: list,
-        catRows: new Map(),
-        catDraft: null,
-        catDrag: null,
-        editCats: async (body: unknown) => {
-          this.posts.push(body)
-          return true
-        },
-        toast: (text: string, error = false) => void this.toasts.push([text, error]),
-        openCats: (id: string) => void this.opened.push(id),
-        render: () => void this.renders++,
-        Spring,
-        rubberband,
-        velocityOf,
+    this.code = oldCode('web/app.js', PICKED, {
+      t,
+      state: this.state,
+      document,
+      $: (selector: string) => document.querySelector(selector),
+      catsPanel: { isOpen: true },
+      catsList: list,
+      catRows: new Map(),
+      catDraft: null,
+      catDrag: null,
+      editCats: async (body: unknown) => {
+        this.posts.push(body)
+        return true
       },
-      { baseline: true },
-    )
+      toast: (text: string, error = false) => void this.toasts.push([text, error]),
+      openCats: (id: string) => void this.opened.push(id),
+      render: () => void this.renders++,
+      Spring,
+      rubberband,
+      velocityOf,
+    })
   }
 
   /** renderCats() and renderDraft(), as render() and opening the panel draw them. */

@@ -1,13 +1,11 @@
 // The context menu both ways in a fake DOM (support/fake-dom.ts), for parity: the old page's
-// menu.js — initMenu as it was at the parity baseline (with its own menu-model.js) and as it is
-// now (with models/menu-model.ts) — and the React port: components/menu/menu-engine.ts on the
-// levels <MenuLayer> draws, drawn again after every event and frame the way React would
-// (support/react-commit.ts). Every side takes the same steps; snapshot() prints what a viewer, or
-// a screen reader, could tell apart.
+// menu.js — initMenu as it was at the parity baseline, with its own menu-model.js — and the React
+// port: components/menu/menu-engine.ts on the levels <MenuLayer> draws, drawn again after every
+// event and frame the way React would (support/react-commit.ts). Both sides take the same steps;
+// snapshot() prints what a viewer, or a screen reader, could tell apart.
 import { MenuLayer } from '../../../web/src/components/menu/ContextMenu.tsx'
 import { MenuEngine, type MenuSource } from '../../../web/src/components/menu/menu-engine.ts'
 import type { MenuEntry } from '../../../web/src/models/menu-model.ts'
-import * as menuModel from '../../../web/src/models/menu-model.ts'
 import { reducedMotion, Spring } from '../../../web/src/models/spring.ts'
 import { box, type FakeElement, FakeWorld, type RectBox } from './fake-dom.ts'
 import { canonical, type Element, parseHtml, reactMarkup } from './markup.ts'
@@ -118,32 +116,27 @@ function baselineModel(): Record<string, unknown> {
     'typeahead',
     'shareReasons',
   ]
-  return Object.fromEntries(oldCode('web/menu-model.js', names, {}, { baseline: true }))
+  return Object.fromEntries(oldCode('web/menu-model.js', names, {}))
 }
 
-/** initMenu of web/menu.js: as it was at the baseline (`baseline`), or as the old page has it now. */
-export function oldMenuSide(baseline: boolean): MenuSide {
+/** initMenu of web/menu.js as it was at the baseline. */
+export function oldMenuSide(): MenuSide {
   const world = newWorld()
   const log: string[] = []
-  const model = baseline ? baselineModel() : menuModel
-  const code = oldCode(
-    'web/menu.js',
-    ['esc', 'CHECK', 'CHEV', 'initMenu'],
-    {
-      firstIndex: model.firstIndex,
-      lastIndex: model.lastIndex,
-      nextIndex: model.nextIndex,
-      placeMenu: model.placeMenu,
-      placeSubmenu: model.placeSubmenu,
-      shareReasons: model.shareReasons,
-      typeahead: model.typeahead,
-      reducedMotion,
-      Spring,
-      performance: { now: () => world.now },
-      innerHeight: VIEWPORT.h,
-    },
-    { baseline },
-  )
+  const model = baselineModel()
+  const code = oldCode('web/menu.js', ['esc', 'CHECK', 'CHEV', 'initMenu'], {
+    firstIndex: model.firstIndex,
+    lastIndex: model.lastIndex,
+    nextIndex: model.nextIndex,
+    placeMenu: model.placeMenu,
+    placeSubmenu: model.placeSubmenu,
+    shareReasons: model.shareReasons,
+    typeahead: model.typeahead,
+    reducedMotion,
+    Spring,
+    performance: { now: () => world.now },
+    innerHeight: VIEWPORT.h,
+  })
   const menu: unknown = oldFunction(code, 'initMenu')({ onChange: () => log.push('changed') })
   const call = (name: string, ...args: unknown[]): unknown => {
     if (typeof menu !== 'object' || menu === null || !(name in menu)) throw new Error(`no ${name}`)

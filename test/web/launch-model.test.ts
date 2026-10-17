@@ -55,7 +55,7 @@ describe('the folder columns', () => {
   ]
 
   test('the chain down to a folder, either separator, drive letters and UNC, as the old page made it', () => {
-    const old = oldFunction(oldCode('web/launch.js', [nested('chainOf')], {}, { baseline: true }), 'chainOf')
+    const old = oldFunction(oldCode('web/launch.js', [nested('chainOf')], {}), 'chainOf')
     for (const path of PATHS)
       for (const sep of ['\\', '/']) expect(chainOf(path, sep)).toEqual(old(path, sep) as string[])
     expect(chainOf('C:\\Work\\acme', '\\')).toEqual(['C:\\', 'C:\\Work', 'C:\\Work\\acme'])
@@ -63,7 +63,7 @@ describe('the folder columns', () => {
   })
 
   test('the same folder but for the case and a trailing separator, as before', () => {
-    const old = oldFunction(oldCode('web/launch.js', [nested('sameish')], {}, { baseline: true }), 'sameish')
+    const old = oldFunction(oldCode('web/launch.js', [nested('sameish')], {}), 'sameish')
     for (const a of PATHS) for (const b of PATHS) expect(sameish(a, b)).toBe(old(a, b) as boolean)
     expect(sameish('C:\\Work\\', 'c:\\work')).toBe(true)
     expect(sameish('C:\\Work', 'C:/Work')).toBe(false)
@@ -138,10 +138,7 @@ describe('the motion', () => {
   test('where the window grows from, as the old measure() said', () => {
     const style = { transform: 'scale(0.5)' }
     const win = { style, getBoundingClientRect: () => WIN }
-    const measure = oldFunction(
-      oldCode('web/launch.js', [nested('measure')], { win, innerHeight: 700 }, { baseline: true }),
-      'measure',
-    )
+    const measure = oldFunction(oldCode('web/launch.js', [nested('measure')], { win, innerHeight: 700 }), 'measure')
     for (const rect of RECTS) expect(growFrom(rect, WIN, 700)).toEqual(measure(rect) as never)
     expect(style.transform).toBe('scale(0.5)')
     expect(growFrom(null, WIN, 700)).toEqual(FROM_BELOW)
@@ -156,12 +153,7 @@ describe('the motion', () => {
       for (const from of [FROM_BELOW, { dx: 300, dy: -200, s: 0.2 }])
         for (const p of [-0.1, 0, 0.25, 0.5, 0.9, 1, 1.02]) {
           oldFunction(
-            oldCode(
-              'web/launch.js',
-              [nested('paint')],
-              { win, scrim, from, reducedMotion: { matches: reduced } },
-              { baseline: true },
-            ),
+            oldCode('web/launch.js', [nested('paint')], { win, scrim, from, reducedMotion: { matches: reduced } }),
             'paint',
           )(p)
           expect(windowPaint(p, from, reduced)).toEqual({

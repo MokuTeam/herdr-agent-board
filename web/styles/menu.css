@@ -1,7 +1,7 @@
-/* Context menus (menu.js), in the manner of macOS: a light translucent material, items that
-   light in the accent color, a check column only when some item has a check, hints and
-   submenu chevrons on the right, gray items with the reason under them. Bigger rows for
-   fingers. Grows from the point it opened at (the spring is in menu.js). */
+/* Context menus (web/src/components/menu/), in the manner of macOS: a light translucent
+   material, items that light in the accent color, a check column only when some item has a
+   check, hints and submenu chevrons on the right, gray items with the reason under them. Bigger
+   rows for fingers. Grows from the point it opened at (the spring is in menu-engine.ts). */
 
 :root {
   --menu-bg: rgba(246, 246, 248, 0.8);

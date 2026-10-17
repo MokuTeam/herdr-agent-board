@@ -1,5 +1,5 @@
-// The usage popover against today's: the #limits-pop block of web/index.html after applyTexts()
-// and renderLimits() filled #limits-content for the same reading.
+// The usage popover against the old page's (at the parity baseline): the #limits-pop block of
+// web/index.html after applyTexts() and renderLimits() filled #limits-content for the same reading.
 import { describe, expect, test } from 'bun:test'
 import { createRef } from 'react'
 import { translator } from '../../src/core/i18n/translator.ts'

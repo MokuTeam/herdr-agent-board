@@ -1,8 +1,8 @@
-// The React question forms against today's: every scene is stepped through on both sides — the
-// old page's questions.js on a fake #sheet-question and the desk drawn by <QuestionForm> or
-// <PermissionPrompt> (support/old-questions.tsx) — with the same clicks, typing, digits and server
-// answers; after each step the two forms must read the same, and so must what each posted and
-// toasted. Then the form in its place in the sheet.
+// The React question forms against the old page's: every scene is stepped through on both sides —
+// the old page's questions.js (at the parity baseline) on a fake #sheet-question and the desk drawn
+// by <QuestionForm> or <PermissionPrompt> (support/old-questions.tsx) — with the same clicks,
+// typing, digits and server answers; after each step the two forms must read the same, and so must
+// what each posted and toasted. Then the form in its place in the sheet.
 import { describe, expect, test } from 'bun:test'
 import type { FormQuestion } from '../../src/core/dialogs/question-form.ts'
 import type { PublicDialog } from '../../src/core/dialogs/questions.ts'
@@ -79,15 +79,12 @@ const PERMISSION: PublicDialog = {
 const held = item({ key: 'k2', name: 'Build', status: 'blocked', column: 'me' })
 const onScreen = (dialog: PublicDialog | null, it: Item = held) => ({ item: { key: it.key }, dialog })
 
-/** The forms read the same, and every side posted and toasted the same. */
+/** The forms read the same, and both sides posted and toasted the same. */
 function same(b: BothQuestions) {
-  const { old, now, react } = b.forms()
+  const { old, react } = b.forms()
   expect(react).toBe(old)
-  expect(now).toBe(old)
-  for (const side of [b.now, b.react]) {
-    expect(side.posted).toEqual(b.old.posted)
-    expect(side.toasts).toEqual(b.old.toasts)
-  }
+  expect(b.react.posted).toEqual(b.old.posted)
+  expect(b.react.toasts).toEqual(b.old.toasts)
 }
 
 const QS = '.qa-opt[data-q="0"]'

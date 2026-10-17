@@ -38,7 +38,7 @@ describe('slug: a latin id agents can type', () => {
   })
 
   test('the same as web/app.js slug over a corpus (Cyrillic, ё/ъ/ь, digits, symbols, long titles)', () => {
-    const old = oldFunction(oldCode('web/app.js', ['TRANSLIT', 'slug'], {}, { baseline: true }), 'slug')
+    const old = oldFunction(oldCode('web/app.js', ['TRANSLIT', 'slug'], {}), 'slug')
     const corpus = [
       'Ромашка',
       'Новый клиент',

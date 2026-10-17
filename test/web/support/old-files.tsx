@@ -3,17 +3,13 @@
 // head, render and the parts they draw) and a chip's apply — run on a fake DOM
 // (support/fake-dom.ts) with the server's answers handed in; and the React port — the quick look's
 // steps (models/quick-look.ts) drawn by <QuickLookView>, a chip marked by markChip and drawn by
-// <FileChip> — given the same answers. A third side runs files.js as it is now (its pure parts
-// from the new models), which the old page serves until Task 27.
+// <FileChip> — given the same answers.
 import type { Translator } from '../../../src/core/types.ts'
 import { changesOf, historyOf, previewOf } from '../../../web/src/api/files.ts'
 import { FileChip } from '../../../web/src/components/files/FileChip.tsx'
 import { QuickLookView } from '../../../web/src/components/files/QuickLook.tsx'
 import { markChip } from '../../../web/src/hooks/useFileChips.ts'
-import { changedFiles } from '../../../web/src/models/diff.ts'
 import type { PathInfo } from '../../../web/src/models/files.ts'
-import * as filesModel from '../../../web/src/models/files.ts'
-import { markdown } from '../../../web/src/models/markdown.ts'
 import { type LookTarget, type QuickLookNav, quickLookNav } from '../../../web/src/models/quick-look.ts'
 import { board, renderInBoard } from './board.tsx'
 import { type FakeElement, FakeWorld } from './fake-dom.ts'
@@ -27,7 +23,7 @@ import {
   parseHtml,
   reactMarkup,
 } from './markup.ts'
-import { oldCode, oldSource } from './old-app.ts'
+import { OLD_MARKDOWN, oldCode, oldSource } from './old-app.ts'
 import { withoutPreloads } from './sheet-scene.tsx'
 
 /** What the server answers: a preview by path, a session's changes, its history by query. */
@@ -81,62 +77,40 @@ export class OldLook {
   private readonly code: Map<string, unknown>
   canEdit = true
 
-  /** `now`: files.js as it is now, else as it was at the parity baseline. */
   constructor(
     readonly t: Translator,
     server: FilesServer,
     token = 'tok',
-    now = false,
   ) {
-    const source = oldSource('web/files.js', !now)
-    const template = /root\.innerHTML = `([\s\S]*?)`\r?\n/.exec(source)?.[1] ?? ''
-    const diff = oldCode(
-      'web/diff.js',
-      ['STATUS', 'parseStatus', 'unquote', 'parseDiff', 'changedFiles'],
-      {},
-      {
-        baseline: true,
-      },
-    )
-    const top = oldCode('web/files.js', ['$', 'esc', 'svg', 'DOC', 'ICONS', 'iconOf'], {}, { baseline: true })
+    const template = /root\.innerHTML = `([\s\S]*?)`\r?\n/.exec(oldSource('web/files.js'))?.[1] ?? ''
+    const diff = oldCode('web/diff.js', ['STATUS', 'parseStatus', 'unquote', 'parseDiff', 'changedFiles'], {})
+    const top = oldCode('web/files.js', ['$', 'esc', 'svg', 'DOC', 'ICONS', 'iconOf'], {})
     const html = new Function('ICONS', `return \`${template}\``)(top.get('ICONS'))
     const [node] = parseHtml(`<div class="ql" hidden>${html}</div>`)
     if (node?.kind !== 'element') throw new Error('no root')
     this.root = this.world.mount(node)
     const body = this.root.querySelector('.ql-body')
     const reply = (value: unknown) => Promise.resolve({ ok: true, json: async () => value })
-    // Now the icons, the kinds and the path and size helpers come from models/files.ts.
-    const picked = now
-      ? ['$', 'esc', ...NESTED.filter(n => n.name !== 'kindOfName')]
-      : ['$', 'esc', 'svg', 'DOC', 'ICONS', 'iconOf', ...NESTED]
-    const { rawUrl: rawUrlOf, ...model } = filesModel
-    const imported = now ? { ...model, rawUrlOf, changedFiles } : {}
-    this.code = oldCode(
-      'web/files.js',
-      picked,
-      {
-        ...imported,
-        t: () => this.t,
-        token: () => token,
-        canMutate: () => this.canEdit,
-        root: this.root,
-        body,
-        ql: this.ql,
-        markdown,
-        upgrade() {},
-        changedFiles: now ? changedFiles : diff.get('changedFiles'),
-        requestAnimationFrame() {},
-        post: async (_url: string, b: { path: string }) => (server.preview ? server.preview(b.path) : never()),
-        fetch: (url: string) => {
-          const [, key = '', what, query = ''] =
-            /^\/api\/session\/([^/]+)\/(changes|history)(?:\?q=(.*))?$/.exec(url) ?? []
-          const k = decodeURIComponent(key)
-          if (what === 'changes') return server.changes ? reply(server.changes(k)) : never()
-          return server.history ? reply(server.history(k, decodeURIComponent(query))) : never()
-        },
+    this.code = oldCode('web/files.js', ['$', 'esc', 'svg', 'DOC', 'ICONS', 'iconOf', ...NESTED], {
+      t: () => this.t,
+      token: () => token,
+      canMutate: () => this.canEdit,
+      root: this.root,
+      body,
+      ql: this.ql,
+      markdown: OLD_MARKDOWN.get('markdown'),
+      upgrade() {},
+      changedFiles: diff.get('changedFiles'),
+      requestAnimationFrame() {},
+      post: async (_url: string, b: { path: string }) => (server.preview ? server.preview(b.path) : never()),
+      fetch: (url: string) => {
+        const [, key = '', what, query = ''] =
+          /^\/api\/session\/([^/]+)\/(changes|history)(?:\?q=(.*))?$/.exec(url) ?? []
+        const k = decodeURIComponent(key)
+        if (what === 'changes') return server.changes ? reply(server.changes(k)) : never()
+        return server.history ? reply(server.history(k, decodeURIComponent(query))) : never()
       },
-      { baseline: !now },
-    )
+    })
   }
 
   private call(name: string, ...args: unknown[]): unknown {
@@ -286,18 +260,16 @@ function hiddenModeQuiet(nodes: Node[]): Node[] {
   return nodes
 }
 
-/** The quick looks, stepped together: the baseline's (`old`), today's old page (`now`), the React port. */
+/** The quick looks, stepped together: the baseline's (`old`) and the React port. */
 export class BothLooks {
   readonly old: OldLook
-  readonly now: OldLook
   readonly react: NewLook
   constructor(t: Translator, server: FilesServer) {
     this.old = new OldLook(t, server)
-    this.now = new OldLook(t, server, 'tok', true)
     this.react = new NewLook(t, server)
   }
   private sides(): (OldLook | NewLook)[] {
-    return [this.old, this.now, this.react]
+    return [this.old, this.react]
   }
   async open(target: LookTarget): Promise<void> {
     for (const side of this.sides()) await side.open(target)
@@ -320,17 +292,14 @@ export class BothLooks {
   set canEdit(on: boolean) {
     for (const side of this.sides()) side.canEdit = on
     this.old.relabel()
-    this.now.relabel()
   }
   language(t: Translator): void {
     this.old.relabel(t)
-    this.now.relabel(t)
     this.react.t = t
   }
-  looks(): { old: string; now: string; react: string } {
+  looks(): { old: string; react: string } {
     return {
       old: canonical(hiddenModeQuiet(this.old.markup())),
-      now: canonical(hiddenModeQuiet(this.now.markup())),
       react: canonical(hiddenModeQuiet(this.react.markup())),
     }
   }

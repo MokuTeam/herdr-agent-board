@@ -1,14 +1,19 @@
-// The React quick look and file chips against today's: every scene is stepped through on both sides
-// — the old page's files.js on a fake <body> and the React steps drawn by <QuickLookView>
-// (support/old-files.tsx) — with the same server answers; after each step the two must read the
-// same. Then the chips, one candidate at a time, and how the chips are looked up.
+// The React quick look and file chips against the old page's: every scene is stepped through on
+// both sides — the old page's files.js (at the parity baseline) on a fake <body> and the React
+// steps drawn by <QuickLookView> (support/old-files.tsx) — with the same server answers; after each
+// step the two must read the same. Then the chips, one candidate at a time, and how the chips are
+// looked up.
 import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
+import { FileIcon } from '../../web/src/components/files/FileChip.tsx'
 import { fileChips } from '../../web/src/hooks/useFileChips.ts'
-import { ICONS, type PathInfo, type Preview } from '../../web/src/models/files.ts'
+import { ICON_PATHS, type IconName, type PathInfo, type Preview } from '../../web/src/models/files.ts'
 import { type HistoryReply, quickLookNav } from '../../web/src/models/quick-look.ts'
 import { FakeWorld } from './support/fake-dom.ts'
-import { canonical, parseHtml } from './support/markup.ts'
+import { canonical, parseHtml, reactMarkup } from './support/markup.ts'
+
+const isIconName = (name: string): name is IconName => Object.hasOwn(ICON_PATHS, name)
+
 import { oldCode } from './support/old-app.ts'
 import { BothLooks, type FilesServer, NewLook, OldLook } from './support/old-files.tsx'
 
@@ -161,9 +166,8 @@ const server = (fields: FilesServer = {}): FilesServer => ({
 })
 
 function same(b: BothLooks) {
-  const { old, now, react } = b.looks()
+  const { old, react } = b.looks()
   expect(react).toBe(old)
-  expect(now).toBe(old)
 }
 
 const at = (path: string, line: number | null = null) => ({ kind: 'file' as const, path, line })
@@ -277,11 +281,11 @@ describe('the changes of a checkout', () => {
     same(b)
     await b.back()
     same(b)
-    // Back from the file they were not read again (once by each of the three sides); refresh reads them.
-    expect(reads).toBe(3)
+    // Back from the file they were not read again (once by each side); refresh reads them.
+    expect(reads).toBe(2)
     await b.refresh()
     same(b)
-    expect(reads).toBe(6)
+    expect(reads).toBe(4)
   })
 
   test('clean; not a checkout; no answer', async () => {
@@ -344,8 +348,12 @@ describe('around what it shows', () => {
   })
 
   test('the icons are the old page’s', () => {
-    const old = oldCode('web/files.js', ['svg', 'DOC', 'ICONS'], {}, { baseline: true }).get('ICONS')
-    expect(ICONS).toEqual(old as typeof ICONS)
+    const old = oldCode('web/files.js', ['svg', 'DOC', 'ICONS'], {}).get('ICONS')
+    const icons = typeof old === 'object' && old !== null ? Object.entries(old) : []
+    expect(Object.keys(ICON_PATHS)).toEqual(icons.map(([name]) => name))
+    for (const [name, markup] of icons)
+      if (isIconName(name))
+        expect(canonical(reactMarkup(<FileIcon name={name} />))).toBe(canonical(parseHtml(String(markup))))
   })
 })
 
@@ -415,14 +423,10 @@ const CANDIDATES: [string, PathInfo][] = [
 describe('file chips', () => {
   test('code, text and links become chips with their kind’s icon; thumbnails and tool lines keep their look', () => {
     const old = new OldLook(en, server())
-    const now = new OldLook(en, server(), 'tok', true)
     const react = new NewLook(en, server())
     const world = new FakeWorld({ viewport: { w: 800, h: 600 } })
-    for (const [html, path] of CANDIDATES) {
-      const expected = canonical(old.chip(html, path))
-      expect(canonical(react.chip(world, html, path))).toBe(expected)
-      expect(canonical(now.chip(html, path))).toBe(expected)
-    }
+    for (const [html, path] of CANDIDATES)
+      expect(canonical(react.chip(world, html, path))).toBe(canonical(old.chip(html, path)))
   })
 
   test('the server is asked once per path; what it said holds a while; chips drawn anew are dropped', async () => {

@@ -11,9 +11,7 @@ import {
   excerptOf,
   FRESH_MS,
   fileName,
-  ICONS,
   iconName,
-  iconOf,
   inCheckout,
   inFolder,
   kindOfName,
@@ -29,12 +27,11 @@ import {
 const en = translator('en')
 
 describe('icons', () => {
-  test('every icon is a 20 × 20 svg; a kind without its own shows a file (binary) or a text', () => {
-    for (const icon of Object.values(ICONS)) expect(icon).toStartWith('<svg viewBox="0 0 20 20" aria-hidden="true">')
-    expect(iconOf('image')).toBe(ICONS.image)
-    expect(iconOf('binary')).toBe(ICONS.file)
-    expect(iconOf('weird')).toBe(ICONS.text)
-    expect(iconOf(undefined)).toBe(ICONS.text)
+  test('a kind shows its own icon; one without its own shows a file (binary) or a text', () => {
+    expect(iconName('image')).toBe('image')
+    expect(iconName('binary')).toBe('file')
+    expect(iconName('weird')).toBe('text')
+    expect(iconName(undefined)).toBe('text')
     expect(iconName('toString')).toBe('text')
   })
 

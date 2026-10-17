@@ -1,6 +1,6 @@
 // Renaming a session where its name is, without a page: where the field goes over the name, whether
 // a rename does anything, and whether it can go to Claude and herdr too. The field itself is
-// components/menu/RenameField.tsx (the old page's rename.js, which imports these).
+// components/RenameField.tsx (the old page's rename.js).
 import type { Item, Translator } from '../../../src/core/types.ts'
 import { inTurn } from './card.ts'
 

@@ -1,9 +1,10 @@
-// The categories panel against today's: #cats-sheet as web/app.js's own categories code draws and
-// runs it in a fake DOM (support/old-categories.ts) and what <CategoriesPanel> and its rows render
-// for the same board — at rest, with the swatches open, delete asking, a swatch picked and the
-// "new category" form being filled in. What the old handlers send is held against the rules the
-// React rows send by (models/categories.ts). Then the reorder: the old drag on the old rows and the
-// React engine (hooks/useRowReorder.ts) on the rows React renders, frame by frame.
+// The categories panel against the old page's (at the parity baseline): #cats-sheet as web/app.js's
+// own categories code draws and runs it in a fake DOM (support/old-categories.ts) and what
+// <CategoriesPanel> and its rows render for the same board — at rest, with the swatches open,
+// delete asking, a swatch picked and the "new category" form being filled in. What the old handlers
+// send is held against the rules the React rows send by (models/categories.ts). Then the reorder:
+// the old drag on the old rows and the React engine (hooks/useRowReorder.ts) on the rows React
+// renders, frame by frame.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { BoardCategory, Swatch } from '../../src/core/payload.ts'

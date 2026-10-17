@@ -55,6 +55,35 @@ test('return/reconnect closes old streams and ignores delayed GET/events from ol
   assert.deepEqual(received, ['new', 'returned'])
 })
 
+test('a page left mid-request: the aborted snapshot and a failed one are no unhandled rejection', async () => {
+  const unhandled: unknown[] = []
+  const onUnhandled = (reason: unknown) => void unhandled.push(reason)
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    let fail = false
+    const states: boolean[] = []
+    const connection = boardConnection({
+      source: stream,
+      snapshot: signal =>
+        new Promise((_, reject) => {
+          if (fail) return reject(new TypeError('Failed to fetch'))
+          signal.addEventListener('abort', () => reject(new DOMException('The user aborted a request.', 'AbortError')))
+        }),
+      data: () => {},
+      connected: v => states.push(v),
+    })
+    connection.resume()
+    connection.suspend() // hidden, offline or leaving: the request is aborted
+    fail = true
+    connection.resume() // and one that fails on its own
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.deepEqual(unhandled, [])
+    assert.equal(states.at(-1), false)
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+  }
+})
+
 type FakeHistory = HistoryLike & { state: Record<string, unknown> | null }
 
 test('Back closes top dialog only; manual close consumes its entry and rapid reopening is preserved', () => {
