@@ -1,11 +1,15 @@
-// Starting the agent of a new session: the one step that differs between the two ways the board
-// starts one. Everything around it (worktree, workspace, the folder-trust dialog, naming and the
-// first message when the launcher does not, the card's lane) is launches.ts.
-//   herdr (default)  the agent started by `herdr agent start` in a tab of its own (or the first
-//                    one of a new workspace); the board names it and types the first message.
+// Starting the agent of a new session: the one step that differs between the three ways the
+// board starts one. Everything around it (worktree, workspace, the folder-trust dialog, naming and
+// the first message when the launcher does not, the card's lane) is launches.ts.
+//   spawn-agent (default)  the board's own launcher, entrypoints/spawn-agent.ts, run as
+//                    `launch.command` would be: a tab, `launch.claude` typed into it, the names,
+//                    the first message.
 //   command          `launch.command` in config.json: an executable and its arguments, with
 //                    {placeholders} filled in per argument. No shell, nothing from the request
 //                    becomes a command; it should print `pane=<id>` when the session is up.
+//   herdr            `launch.agent` set: the agent started by `herdr agent start --kind <agent>`
+//                    in a tab of its own (or the first one of a new workspace); the board names
+//                    it and types the first message.
 // A Claude started by the board gets its id up front (--session-id, {sessionId}), so even its
 // first brief knows the lane.
 import { randomUUID } from 'node:crypto'
@@ -13,7 +17,7 @@ import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { herdr, tabCreate } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
-import { launchDir } from '../../adapters/paths.ts'
+import { launchDir, ROOT } from '../../adapters/paths.ts'
 import { runTree } from '../../adapters/process.ts'
 import { t } from '../../core/lang.ts'
 import {
@@ -25,6 +29,7 @@ import {
   usesPlaceholder,
 } from '../../core/launch/launcher-command.ts'
 import { slugName, uniqueSlug } from '../../core/launch/names.ts'
+import { choosesSession, claudeCommand } from '../../core/launch/spawn-args.ts'
 import type { LaunchFailure, LaunchSpec, LaunchStep } from '../../core/types.ts'
 import { takenNames } from './prompt.ts'
 
@@ -76,7 +81,10 @@ export interface LaunchResult {
   failure: LaunchError | null
   /** herdr knows the agent by the session's name (herdr's launcher starts it under one). */
   named: boolean
-  /** The launcher named the session and typed its first message itself (a launcher command, given {name} and {message}). */
+  /**
+   * The launcher named the session and typed its first message itself (a launcher command, given
+   * {name} and {message}; the board's spawn-agent unless a dialog stopped it first).
+   */
   typed: boolean
 }
 
@@ -84,7 +92,7 @@ export interface LaunchResult {
 export type LauncherInfo = { kind: 'herdr'; agent: string } | { kind: 'command'; name: string }
 
 export interface Launcher {
-  readonly kind: 'herdr' | 'command'
+  readonly kind: 'herdr' | 'command' | 'builtin'
   describe(): LauncherInfo
   start(l: LaunchContext, on: LaunchEvents): Promise<LaunchResult>
 }
@@ -93,9 +101,11 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 const codeOf = (err: unknown): string | undefined =>
   isRecord(err) && typeof err.code === 'string' ? err.code : undefined
 
-/** The launcher the config asks for: `launch.command` when there is one, else herdr's. */
+/** The launcher the config asks for: `launch.command`, else herdr's for `launch.agent`, else the board's spawn-agent. */
 export function launcherFor(spec: LaunchSpec | undefined): Launcher {
-  return spec?.command ? commandLauncher(spec) : herdrLauncher(spec ?? {})
+  if (spec?.command) return commandLauncher(spec)
+  if (spec?.agent) return herdrLauncher(spec)
+  return spawnAgentLauncher(spec ?? {})
 }
 
 /** `herdr agent start <name> --kind <agent> … -- --session-id <id>` in a tab of its own. */
@@ -182,54 +192,135 @@ export function commandLauncher(spec: LaunchSpec): Launcher {
         on.session(sessionId)
         vars.sessionId = sessionId
       }
-      let file: string | null = null
-      let pane: string | null = null
-      let failure: LaunchError | null = null
-      if (l.message && usesPlaceholder(template, 'messageFile')) {
-        // Only this user may read it; a new file every time, never one someone put there.
-        mkdirSync(launchDir(), { recursive: true, mode: 0o700 })
-        file = join(launchDir(), `${l.id}.txt`)
-        writeFileSync(file, l.message, { mode: 0o600, flag: 'wx' })
-        vars.messageFile = file
-      }
-      try {
-        const { file: exe, args } = commandArgs(template, vars)
-        on.step('command')
-        // The board runs in a pane of its own workspace: the launcher must not take that for "here".
-        const env: Record<string, string | undefined> = { ...process.env, HERDR_WORKSPACE_ID: l.workspaceId }
-        delete env.HERDR_PANE_ID
-        delete env.HERDR_TAB_ID
-        const timeout = Math.max(1, Number(spec.timeoutSec) || 180) * 1000
-        const r = await runTree(exe, args, { timeout, env, cwd: l.cwd })
-        const out = parseLauncherOutput(r.stdout)
-        if (out.pane) {
-          pane = out.pane
-          on.pane(pane)
-        }
-        if (r.code !== 0) {
-          if (r.error?.code === 'ENOENT')
-            throw new LaunchError(t('launch.err.launcherMissing', { file: exe }), 'launcher')
-          if (r.killed) throw new LaunchError(t('launch.err.launcherTimeout', { s: timeout / 1000 }), 'timeout')
-          const e = launcherError(r.stdout, r.stderr)
-          // The pane its error names, unless the board knows one already.
-          if (!l.pane && e.pane) {
-            pane = e.pane
-            on.pane(pane)
-          }
-          const kind = failureKind(e.message, codeOf(r.error))
-          const error = new LaunchError(e.message || r.error?.message || t('err.status', { code: r.code }), kind)
-          // A launcher gives up where Claude asks to trust the folder; the session may be there, waiting.
-          if (kind !== 'dialog') throw error
-          failure = error
-        }
-      } finally {
-        if (file)
-          try {
-            unlinkSync(file)
-          } catch {}
-      }
-      return { pane, sessionId, agent: 'claude', dialog: failure !== null, failure, named: false, typed: true }
+      return runLauncher(l, on, {
+        command: messageFile => commandArgs(template, { ...vars, messageFile }),
+        messageFile: usesPlaceholder(template, 'messageFile'),
+        step: 'command',
+        timeout: Math.max(1, Number(spec.timeoutSec) || 180) * 1000,
+        sessionId,
+        builtin: false,
+      })
     },
+  }
+}
+
+const SPAWN_AGENT = join(ROOT, 'src', 'entrypoints', 'spawn-agent.ts')
+
+/**
+ * The board's own spawn-agent (entrypoints/spawn-agent.ts) as the launcher, run as a
+ * `launch.command` would be: a tab, `launch.claude` typed into it, the names, the first message.
+ * A new workspace's first pane is used as it is (--pane), as herdr's path does, rather than a
+ * second tab beside it. The new-session window words it as before the board had its own launcher.
+ */
+export function spawnAgentLauncher(spec: LaunchSpec): Launcher {
+  // How long spawn-agent waits for Claude to be ready.
+  const readySec = Math.max(10, Number(spec.timeoutSec) || 120)
+  return {
+    kind: 'builtin',
+    describe: () => ({ kind: 'herdr', agent: 'claude' }),
+    async start(l, on) {
+      // A launch.claude that picks its own session (--resume) gets no id from the board.
+      let sessionId: string | null = null
+      if (!choosesSession(claudeCommand(spec.claude, spec.args))) {
+        sessionId = randomUUID()
+        on.session(sessionId)
+      }
+      const where = l.rootPane ? ['--pane', l.rootPane] : ['--workspace', l.workspaceId]
+      const args = [SPAWN_AGENT, '--name', l.name, '--cwd', l.cwd, '--label', l.label]
+      args.push('--timeout-sec', String(readySec), ...where)
+      return runLauncher(l, on, {
+        command: messageFile => ({
+          file: process.execPath,
+          args: [
+            ...args,
+            ...(messageFile ? ['--brief-file', messageFile] : []),
+            ...(sessionId ? ['--session-id', sessionId] : []),
+          ],
+        }),
+        messageFile: true,
+        step: 'agent',
+        timeout: (readySec + 60) * 1000,
+        sessionId,
+        builtin: true,
+      })
+    },
+  }
+}
+
+interface RunSpec {
+  /** The program and its arguments, given the first message's file ('' when there is none). */
+  command(messageFile: string): { file: string; args: string[] }
+  /** Whether the first message goes to the launcher in a file. */
+  messageFile: boolean
+  step: LaunchStep
+  timeout: number
+  sessionId: string | null
+  /** The board's own spawn-agent: it stops at any dialog before the names and the first message. */
+  builtin: boolean
+}
+
+/** Run a launcher without a shell, the first message in a file only this launch reads, gone after. */
+async function runLauncher(l: LaunchContext, on: LaunchEvents, run: RunSpec): Promise<LaunchResult> {
+  let file: string | null = null
+  let pane: string | null = null
+  if (l.message && run.messageFile) {
+    // Only this user may read it; a new file every time, never one someone put there.
+    mkdirSync(launchDir(), { recursive: true, mode: 0o700 })
+    file = join(launchDir(), `${l.id}.txt`)
+    writeFileSync(file, l.message, { mode: 0o600, flag: 'wx' })
+  }
+  try {
+    const { file: exe, args } = run.command(file ?? '')
+    on.step(run.step)
+    // The board runs in a pane of its own workspace: the launcher must not take that for "here".
+    const env: Record<string, string | undefined> = { ...process.env, HERDR_WORKSPACE_ID: l.workspaceId }
+    delete env.HERDR_PANE_ID
+    delete env.HERDR_TAB_ID
+    const r = await runTree(exe, args, { timeout: run.timeout, env, cwd: l.cwd })
+    const out = parseLauncherOutput(r.stdout)
+    if (out.pane) {
+      pane = out.pane
+      on.pane(pane)
+    }
+    if (r.code === 0)
+      return {
+        pane,
+        sessionId: run.sessionId,
+        agent: 'claude',
+        dialog: false,
+        failure: null,
+        named: false,
+        typed: true,
+      }
+    if (r.error?.code === 'ENOENT') throw new LaunchError(t('launch.err.launcherMissing', { file: exe }), 'launcher')
+    if (r.killed) throw new LaunchError(t('launch.err.launcherTimeout', { s: run.timeout / 1000 }), 'timeout')
+    const e = launcherError(r.stdout, r.stderr)
+    // The pane its error names, unless the board knows one already.
+    if (!l.pane && e.pane) {
+      pane = e.pane
+      on.pane(pane)
+    }
+    const kind = failureKind(e.message, codeOf(r.error))
+    const error = new LaunchError(e.message || r.error?.message || t('err.status', { code: r.code }), kind)
+    if (kind !== 'dialog') throw error
+    // A launcher gives up where Claude asks to trust the folder; the session may be there, waiting.
+    // Another dialog (a project's MCP servers, say) stopped the board's own launcher before the
+    // names and the message: in a pane it said, the board waits for it to be answered in herdr.
+    const waits = run.builtin && !!(pane ?? l.pane)
+    return {
+      pane,
+      sessionId: run.sessionId,
+      agent: 'claude',
+      dialog: true,
+      failure: waits ? null : error,
+      named: false,
+      typed: !run.builtin,
+    }
+  } finally {
+    if (file)
+      try {
+        unlinkSync(file)
+      } catch {}
   }
 }
 

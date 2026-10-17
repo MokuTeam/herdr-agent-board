@@ -7,7 +7,7 @@ import type { PanelPlace } from '../components/panel/place.ts'
 import { outsidePanelPress, type Press, panelPress } from '../models/click-away.ts'
 
 const KEEPS =
-  '.sheet, .ql, .launch, .limits-pop, .menu, .rename, .card, .lane-head, .layout-menu, button, input, textarea, select, label, a, [data-act]'
+  '.sheet, .ql, .launch, .limits-pop, .setup-pop, .menu, .rename, .card, .lane-head, .layout-menu, button, input, textarea, select, label, a, [data-act]'
 
 /** Listens on the window for presses beside the open panel; returns the way to stop. */
 export function listenClickAway(place: PanelPlace): () => void {

@@ -132,10 +132,15 @@ export function launchRunner({
         await untilReady(l, 15 * 60_000)
         l.state = 'starting'
       }
-      if (!r.typed) await nameAndBrief(l, r.agent)
+      // What the launcher did not get to: herdr's own start named the agent, so /rename and the
+      // first message; the board's spawn-agent stopped at a dialog before any of the names.
+      if (!r.typed) {
+        if (r.named) await nameAndBrief(l, r.agent)
+        else await finishStart(l, { kind: r.agent, nameAgent: true })
+      }
     }
     // A new workspace starts with a tab of shells; a launcher command opened its own tab beside it.
-    if (launcher.kind === 'command' && l.rootTab && l.pane && l.pane !== l.rootPane)
+    if (launcher.kind !== 'herdr' && l.rootTab && l.pane && l.pane !== l.rootPane)
       await tidy(l.workspaceId, l.rootTab, l.pane)
   }
 

@@ -2,6 +2,7 @@
 // builds it; the web board reads it). One type for both sides, so they cannot drift apart.
 import type { LimitWindow } from './limits.ts'
 import type { ScheduleEntry } from './schedule-rules.ts'
+import type { SetupSummary } from './setup.ts'
 import type { ColumnId, Item, Lang, LaunchView } from './types.ts'
 
 /** A lane as the page shows it: the configured category or one a session picked. */
@@ -52,4 +53,6 @@ export interface BoardPayload {
   terminal?: boolean
   /** The sessions the board has a shell open for (services/terminals.ts). */
   shells?: string[]
+  /** What of the board is not set up on this computer (core/setup.ts); null before the first check. */
+  setup?: SetupSummary | null
 }

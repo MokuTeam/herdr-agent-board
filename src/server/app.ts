@@ -13,6 +13,7 @@ import { messageGate } from '../core/message-gate.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { startScheduler } from '../services/scheduler.ts'
+import { createSetupChecks } from '../services/setup-check.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
 import { createBoardState } from './board-state.ts'
 import { dispatch, json, type Route } from './http.ts'
@@ -23,6 +24,7 @@ import { revealRoute, revealState } from './routes/reveal.ts'
 import { scheduleRoute } from './routes/schedule.ts'
 import { sessionRoutes } from './routes/session.ts'
 import { categoriesRoute, settingsRoute } from './routes/settings.ts'
+import { setupRoute } from './routes/setup.ts'
 import { staticRoute } from './routes/static.ts'
 import { terminalRoute } from './routes/terminal.ts'
 import { createBroadcaster } from './sse.ts'
@@ -78,6 +80,8 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
   const launches = createLaunches({ deps, onChange: () => board.publish() })
   // The terminal (services/terminals.ts): shells the board opened in sessions' folders, and live panes.
   const terminals = createTerminals({ onChange: () => board.publish() })
+  // What of the board is not set up on this computer, for the page's quiet note.
+  const setup = createSetupChecks({ deps, onChange: () => board.publish() })
   // A notification click asks for a session: pages that connect right after are told it too.
   const reveals = revealState()
   const events = createBroadcaster(() => board.payload(), { greet: reveals.greet })
@@ -87,12 +91,14 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
     terminals,
     version: bundle.version,
     push: payload => events.send(payload),
+    setup: setup.summary,
   })
   board.publish()
   const refresh = (): void => void board.refresh()
 
   // The order of main's `if` chain: the first route that answers wins.
   const routes: Route[] = [
+    setupRoute(setup),
     ...boardRoutes(board, events),
     ...fsRoutes(),
     ...uploadRoutes(),
@@ -163,6 +169,7 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
   const scheduler = startScheduler({ deps, onChange: refresh })
   // Shells a board before this one opened and that are gone by now are forgotten.
   if (terminalOn(cfg)) void terminals.prune()
+  setup.start()
 
   return {
     port,
@@ -173,6 +180,7 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
       for (const watcher of watchers) watcher.close()
       scheduler.stop()
       terminals.stopAll()
+      setup.stop()
       events.close()
       await server.stop(true)
     },

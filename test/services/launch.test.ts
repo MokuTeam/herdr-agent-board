@@ -1,7 +1,7 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
@@ -150,6 +150,9 @@ const HERDR = {
   'pane send-keys': { result: null },
 }
 
+// herdr's own `agent start`: the board's path when launch.agent is set.
+const VIA_HERDR = { launch: { agent: 'claude' } }
+
 async function boardServer(cfg: Record<string, unknown> = {}, env: Record<string, string> = {}) {
   const box = await sandbox()
   box.state(HERDR)
@@ -200,8 +203,8 @@ const cardOf = (cards: string, key: string | undefined) =>
   JSON.parse(readFileSync(join(cards, `${key}.json`), 'utf8')) as { category?: string }
 const launcher = fileURLToPath(new URL('../support/fake-launcher.ts', import.meta.url))
 
-test('a new session through herdr: a tab in the chosen workspace, Claude with its id, named, briefed, in its lane', async () => {
-  const { box, post, launched, board, url } = await boardServer()
+test('a new session through herdr (launch.agent): a tab in the chosen workspace, Claude with its id, named, briefed, in its lane', async () => {
+  const { box, post, launched, board, url } = await boardServer(VIA_HERDR)
   const dir = join(box.dir, 'Alpha project')
   mkdirSync(dir)
   // The guards every change has, plus the page's own origin for this one.
@@ -380,7 +383,7 @@ test('renaming: the board’s name on the card, back to the automatic one, and C
 }, 30_000)
 
 test('a retry starts in the worktree and the workspace the failed launch made, not new ones', async () => {
-  const { box, started, launched } = await boardServer({}, { PATH: process.env.PATH ?? '' })
+  const { box, started, launched } = await boardServer(VIA_HERDR, { PATH: process.env.PATH ?? '' })
   const repo = join(box.dir, 'repo')
   mkdirSync(join(repo, 'src'), { recursive: true })
   writeFileSync(join(repo, 'src', 'a.txt'), 'a')
@@ -440,7 +443,7 @@ test('a launcher that runs too long is ended with everything it started', async 
 }, 30_000)
 
 test('dismissing a running launch takes it off the board; it goes on and its session keeps its lane', async () => {
-  const { box, post, board, started } = await boardServer()
+  const { box, post, board, started } = await boardServer(VIA_HERDR)
   const gate = join(box.dir, 'agent-start-gate')
   box.state({ ...HERDR, 'agent start': { result: { type: 'ok' }, waitFor: gate } })
   const id = await started({
@@ -507,7 +510,7 @@ async function launchState(
 }
 
 test('Claude asks to trust a new folder: the launch waits on its card, and on request moves the cursor it sees to "Yes", then names and briefs it', async () => {
-  const { box, post, board, launched, started } = await boardServer()
+  const { box, post, board, launched, started } = await boardServer(VIA_HERDR)
   const dir = join(box.dir, 'a fresh project') // a space: Claude may break the line there
   mkdirSync(dir)
   const dialog = (selected: 'no' | 'yes') => ({ text: trustScreen(dir, { selected, width: 30 }) })
@@ -542,7 +545,7 @@ test('Claude asks to trust a new folder: the launch waits on its card, and on re
 }, 40_000)
 
 test('"Close the tab" closes it and drops the launch; "Trust" refuses a screen without the dialog for that folder', async () => {
-  const { box, post, board, started } = await boardServer()
+  const { box, post, board, started } = await boardServer(VIA_HERDR)
   const dir = join(box.dir, 'unsure')
   mkdirSync(dir)
   const state = {
@@ -619,4 +622,100 @@ test('a launcher that gives up at the trust dialog: the launch is kept, and once
   assert.equal(l.state, 'done', l.error)
   assert.deepEqual(promptsSent(box), ['wT:p9 /rename Will fail', 'wT:p9 First task.'])
   assert.ok(box.calls().some(a => a.join(' ') === 'agent rename wT:p9 will-fail'))
+}, 40_000)
+
+// ---------------------------------------------------------------- the board's own spawn-agent (no launch set)
+const PANE_READY = {
+  result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: 'claude', agent_status: 'idle' } },
+}
+
+test('with no launcher set, the board starts sessions with its own spawn-agent: Claude with its id, named, briefed, in its lane', async () => {
+  const { box, started, launched } = await boardServer()
+  box.state({ ...HERDR, 'pane get': PANE_READY, 'pane run': { result: null } })
+  const dir = join(box.dir, 'Gamma')
+  mkdirSync(dir)
+  const id = await started({
+    name: 'Gamma job',
+    cwd: dir,
+    category: 'acme',
+    workspace: { id: 'wA', label: 'Alpha' },
+    message: 'First line\nsecond line',
+  })
+  const l = await launched(id)
+  assert.equal(l.state, 'done', l.error)
+  assert.equal(l.pane, 'wA:p9')
+  const calls = box.calls()
+  assert.deepEqual(
+    calls.find(a => a[0] === 'tab' && a[1] === 'create'),
+    ['tab', 'create', '--workspace', 'wA', '--cwd', dir, '--label', 'Gamma job', '--no-focus'],
+  )
+  const run = calls.find(a => a[0] === 'pane' && a[1] === 'run') ?? []
+  const sid = /^claude --session-id ([0-9a-f-]{36})$/.exec(run[3] ?? '')?.[1]
+  assert.ok(sid, String(run[3]))
+  assert.deepEqual(promptsSent(box), ['wA:p9 /rename Gamma job', 'wA:p9 First line\nsecond line'])
+  assert.ok(calls.some(a => a.join(' ') === 'agent rename wA:p9 gamma-job'))
+  assert.equal(
+    calls.some(a => a[0] === 'agent' && a[1] === 'start'),
+    false,
+  )
+  assert.equal(cardOf(box.cards, sid).category, 'acme')
+  // The first message went through a file only this launch read, gone once it was done.
+  assert.deepEqual(readdirSync(join(box.env.LOCALAPPDATA as string, 'herdr/plugins/agent-board/launch')), [])
+}, 40_000)
+
+test('the board’s spawn-agent in a new workspace uses its first pane; a dialog that is not about trust is waited for, then the names and the message', async () => {
+  const { box, board, started, launched } = await boardServer()
+  const dir = join(box.dir, 'Delta')
+  mkdirSync(dir)
+  const rootPane = {
+    seq: [
+      { result: { pane: { pane_id: 'wN:p1', tab_id: 'wN:t1', agent: null } } },
+      { result: { pane: { pane_id: 'wN:p1', tab_id: 'wN:t1', agent: 'claude', agent_status: 'blocked' } } },
+    ],
+  }
+  const state = {
+    ...HERDR,
+    'pane get': rootPane,
+    'pane run': { result: null },
+    'agent get': blocked,
+    'agent list': { result: { agents: [] } },
+    'pane read': { text: 'Found 2 new MCP servers in .mcp.json\n❯ 1. Use these servers' },
+  }
+  box.state(state)
+  const id = await started({
+    name: 'Delta job',
+    cwd: dir,
+    category: 'acme',
+    workspace: { create: 'Delta space' },
+    message: 'Go.',
+  })
+  const waiting = await launchState(
+    board,
+    id,
+    l => l?.state === 'waiting' || l?.state === 'failed',
+    'neither waited nor failed',
+  )
+  assert.equal(waiting.state, 'waiting', waiting.error)
+  assert.equal(waiting.pane, 'wN:p1')
+  assert.deepEqual(promptsSent(box), []) // nothing typed while the dialog is up
+  box.state({
+    ...state,
+    'agent get': idle,
+    'pane read': { text: 'Session renamed to: Delta job' },
+    'agent read': { text: SCREEN('') },
+  })
+  const l = await launched(id)
+  assert.equal(l.state, 'done', l.error)
+  assert.deepEqual(promptsSent(box), ['wN:p1 /rename Delta job', 'wN:p1 Go.'])
+  const calls = box.calls().map(a => a.join(' '))
+  assert.equal(
+    calls.some(c => c.startsWith('tab create')),
+    false,
+  )
+  assert.ok(calls.includes('tab rename wN:t1 Delta job'))
+  assert.ok(calls.includes('agent rename wN:p1 delta-job'))
+  assert.equal(
+    calls.some(c => c.startsWith('tab close')),
+    false,
+  ) // the session is in that tab
 }, 40_000)

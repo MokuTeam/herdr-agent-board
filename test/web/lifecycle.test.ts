@@ -224,8 +224,8 @@ test('Back closes the topmost open layer of those the page lists, topmost first'
 })
 
 test("the page's layers close in upstream's order: the terminal window before the helpers window", () => {
-  // dialogBack's closeTop in web/app.js at the merge of #40, the newest change that added a layer.
-  const closeTop = oldSource('web/app.js', '0d33639')
+  // dialogBack's closeTop in web/app.js at the merge of #41, the newest change that added a layer.
+  const closeTop = oldSource('web/app.js', 'a496257')
     .split('\n')
     .find(line => line.startsWith('  closeTop:'))
   const OLD: Record<string, PageLayer> = {
@@ -235,6 +235,7 @@ test("the page's layers close in upstream's order: the terminal window before th
     termUI: 'terminal',
     helpersUI: 'helpers',
     limitsOpen: 'limits',
+    setupNote: 'setup',
     panels: 'panels',
   }
   const upstream = [...(closeTop ?? '').matchAll(/(\w+)(?:\??\.isOpen\(\)|\(\)) \?|(panels)\.find/g)].map(
@@ -259,6 +260,7 @@ test("the page's layers close in upstream's order: the terminal window before th
       terminal: layer('terminal'),
       helpers: layer('helpers'),
       limits: layer('limits'),
+      setup: layer('setup'),
       panels: layer('panels'),
     })
   topLayer(layers())?.close()

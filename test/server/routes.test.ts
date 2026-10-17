@@ -101,6 +101,7 @@ describe('routes', () => {
     expect(links).toEqual([
       'icon.svg',
       'styles/app.css',
+      'styles/setup.css',
       'styles/menu.css',
       'styles/launch.css',
       'styles/questions.css',

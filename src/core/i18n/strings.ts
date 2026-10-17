@@ -7,6 +7,7 @@
 import type { Lang } from '../types.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
+import { SETUP_STRINGS } from './setup-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
 
 export type Entry = string | string[]
@@ -947,3 +948,5 @@ for (const code of Object.keys(LAUNCH_STRINGS) as Lang[]) Object.assign(STRINGS[
 for (const code of Object.keys(TERMINAL_STRINGS) as Lang[]) Object.assign(STRINGS[code], TERMINAL_STRINGS[code])
 // A session's helpers and the sessions it works with, likewise.
 for (const code of Object.keys(HELPER_STRINGS) as Lang[]) Object.assign(STRINGS[code], HELPER_STRINGS[code])
+// So does the setup check.
+for (const code of Object.keys(SETUP_STRINGS) as Lang[]) Object.assign(STRINGS[code], SETUP_STRINGS[code])

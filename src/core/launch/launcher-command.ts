@@ -15,7 +15,8 @@ export const PLACEHOLDERS = [
 ] as const
 export type Placeholder = (typeof PLACEHOLDERS)[number]
 
-export type FailureKind = 'launcher' | 'dialog' | 'timeout' | 'folder' | 'worktree' | 'other'
+// 'message': the session runs and only its first message is missing.
+export type FailureKind = 'launcher' | 'dialog' | 'timeout' | 'folder' | 'worktree' | 'message' | 'other'
 
 type Vars = Partial<Record<string, string | number | null>>
 
@@ -111,7 +112,7 @@ export function launcherError(stdout: unknown, stderr: unknown): { message: stri
   const plain = err.filter(l => !/^(At |Line \||\+ |\| |CategoryInfo|FullyQualifiedErrorId|~)/.test(l)).at(-1)
   const message = (barred || legacy || plain || lines.filter(Boolean).at(-1) || '')
     .replace(/^\S+\.ps1\s*:\s*/i, '')
-    .replace(/^(Exception|Error|Write-Error):\s*/i, '')
+    .replace(/^(Exception|Error|Write-Error|spawn-agent):\s*/i, '')
     .trim()
   const pane = /\b(w[A-Za-z0-9]+:p[A-Za-z0-9]+)\b/.exec(lines.join('\n'))?.[1] ?? null
   return { message, pane }
@@ -121,6 +122,8 @@ export function launcherError(stdout: unknown, stderr: unknown): { message: stri
 export function failureKind(message: unknown, code?: string): FailureKind {
   const m = String(message ?? '')
   if (code === 'ENOENT' || code === 'EINVAL') return 'launcher'
+  // The session runs and only its first message is missing: a retry would start a second one.
+  if (/brief did not reach/i.test(m)) return 'message'
   if (/trust|dialog|agent_not_ready|blocked/i.test(m)) return 'dialog'
   if (/did not get ready|timed? ?out|ETIMEDOUT|timeout/i.test(m)) return 'timeout'
   if (/no such folder|not a folder|cannot find path/i.test(m)) return 'folder'

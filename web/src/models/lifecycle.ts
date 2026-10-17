@@ -141,7 +141,7 @@ export function dialogHistory({ history, mobile, isOpen, closeTop }: DialogHisto
 
 /**
  * A layer above the board that Back can close: a menu, the launch window, the quick look, the
- * terminal window, the helpers window, the usage popover, a panel.
+ * terminal window, the helpers window, the usage popover, the setup list, a panel.
  */
 export interface DialogLayer {
   open: boolean
@@ -153,7 +153,7 @@ export const anyLayerOpen = (layers: readonly DialogLayer[]): boolean => layers.
 export const topLayer = (layers: readonly DialogLayer[]): DialogLayer | undefined => layers.find(layer => layer.open)
 
 /** The page's layers, topmost first: the order Back closes them in (the old page's dialogBack). */
-export const PAGE_LAYERS = ['menu', 'launch', 'files', 'terminal', 'helpers', 'limits', 'panels'] as const
+export const PAGE_LAYERS = ['menu', 'launch', 'files', 'terminal', 'helpers', 'limits', 'setup', 'panels'] as const
 export type PageLayer = (typeof PAGE_LAYERS)[number]
 
 /** The page's layers in that order. */

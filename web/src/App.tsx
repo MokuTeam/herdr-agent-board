@@ -12,6 +12,7 @@ import { LaunchDialog } from './components/launch/LaunchDialog.tsx'
 import { ContextMenu } from './components/menu/ContextMenu.tsx'
 import { SheetQuestion } from './components/questions/SheetQuestion.tsx'
 import { RenameField } from './components/RenameField.tsx'
+import { SetupPop } from './components/SetupPop.tsx'
 import { SidePanels } from './components/SidePanels.tsx'
 import { Toasts } from './components/Toasts.tsx'
 import { Toolbar } from './components/Toolbar.tsx'
@@ -31,6 +32,7 @@ import { useQuickLook } from './hooks/useQuickLook.ts'
 import { useRenameInPlace } from './hooks/useRenameInPlace.ts'
 import { useReveal } from './hooks/useReveal.ts'
 import { useSchedule } from './hooks/useSchedule.ts'
+import { useSetupNote } from './hooks/useSetupNote.ts'
 import { useTerminal } from './hooks/useTerminal.ts'
 import { pageLayers } from './models/lifecycle.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
@@ -70,6 +72,8 @@ export function App() {
   const questions = useQuestions()
   // A session a notification was about: its sheet and its card in view.
   useReveal()
+  // "Setup incomplete" in the toolbar, and the list it opens.
+  const setup = useSetupNote()
   // A session renamed where its name is; the menus of cards, lanes, the board and chips. The
   // menu's keys come after the quick look's, as the old page had them.
   const rename = useRenameInPlace()
@@ -110,6 +114,7 @@ export function App() {
           limitsAnchor.current?.focus({ preventScroll: true })
         },
       },
+      setup: { open: setup.open, close: () => setup.close(true) },
       panels: { open: panels.open, close: panels.closeOpen },
     }),
   )
@@ -125,6 +130,7 @@ export function App() {
           onNewSession={from => newSession(laneContext(ui.filter), from)}
           onCategories={() => (categories ? setCategories(false) : openCategories())}
           onSchedule={() => (schedule ? setSchedule(false) : openSchedule())}
+          setup={setup}
         />
         <Board
           onNewSession={newSession}
@@ -158,6 +164,7 @@ export function App() {
         }}
       />
       <LimitsPop anchor={limitsAnchor} />
+      <SetupPop setup={setup} />
       <FileChips chips={chips} />
       <QuickLook engine={quickLook.engine} />
       <Terminal engine={terminal.engine} />

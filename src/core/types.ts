@@ -51,6 +51,8 @@ export interface LaunchSpec {
   agent?: string
   args?: string[]
   timeoutSec?: number
+  /** What the board's own spawn-agent types into a new tab: a program, or the program and its arguments. */
+  claude?: string | string[]
 }
 
 /** Where a launch from the board is: waiting for a dialog answered in herdr, or at the folder-trust one. */

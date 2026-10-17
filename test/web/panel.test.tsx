@@ -133,7 +133,8 @@ test('<App> puts the panels after the page and before the usage popover, as the 
   const top = react
     .filter((n): n is Element => n.kind === 'element')
     .map(el => el.attrs.get('id') ?? el.attrs.get('class'))
-  expect(top).toEqual(['page', 'sheet', 'cats-sheet', 'sched-sheet', 'limits-pop', 'toasts'])
+  // The setup list follows the usage popover, as web/index.html has it since upstream's setup check (#41).
+  expect(top).toEqual(['page', 'sheet', 'cats-sheet', 'sched-sheet', 'limits-pop', 'setup-pop', 'toasts'])
 })
 
 test('a wide, low panel reads side by side by the stylesheet alone: the aside is its size container, .sheet-inner the grid', () => {

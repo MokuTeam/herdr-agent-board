@@ -10,6 +10,7 @@ import { categoryInfo, colorHex, laneRank, PALETTE } from '../core/categories.ts
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { lang } from '../core/lang.ts'
 import type { BoardLimits, BoardPayload } from '../core/payload.ts'
+import type { SetupSummary } from '../core/setup.ts'
 import type { Item } from '../core/types.ts'
 import { collect } from '../services/board.ts'
 import type { Deps } from '../services/deps.ts'
@@ -38,6 +39,8 @@ interface Options {
   version: () => string
   /** Pushes a payload to the live clients. */
   push: (payload: string) => void
+  /** The setup check's summary (services/setup-check.ts). */
+  setup?: () => SetupSummary | null
 }
 
 // The colors the category editor offers (aliases left out).
@@ -63,7 +66,7 @@ function claudeLimits(deps: Deps): BoardLimits | null {
   return null
 }
 
-export function createBoardState({ deps, launches, terminals, version, push }: Options): BoardState {
+export function createBoardState({ deps, launches, terminals, version, push, setup }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
   let stale = true
@@ -110,6 +113,7 @@ export function createBoardState({ deps, launches, terminals, version, push }: O
       // terminal: whether the board offers one (config `terminal`); shells: sessions it opened one for.
       terminal: terminalOn(cfg),
       shells: terminalOn(cfg) ? (terminals?.keys() ?? []) : [],
+      setup: setup?.() ?? null,
     }
   }
 

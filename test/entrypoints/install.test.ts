@@ -16,9 +16,26 @@ function homeOf(box: Sandbox): string {
   return box.env.USERPROFILE as string
 }
 
-async function install(box: Sandbox, bun = process.execPath) {
+/**
+ * The board's config in the sandbox, unless the test wrote one: no herdr-wake, so the check that
+ * ends the install asks no port on this computer.
+ */
+function boardConfig(box: Sandbox, cfg: Record<string, unknown> = { language: 'en', wakeUrl: '' }): void {
+  const dir = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board')
+  if (existsSync(join(dir, 'config.json'))) return
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'config.json'), JSON.stringify(cfg))
+}
+
+async function install(box: Sandbox, bun = process.execPath, ...args: string[]) {
   homeOf(box)
-  const proc = Bun.spawn([bun, entry('install.ts')], { cwd: root, env: box.env, stdout: 'pipe', stderr: 'pipe' })
+  boardConfig(box)
+  const proc = Bun.spawn([bun, entry('install.ts'), ...args], {
+    cwd: root,
+    env: box.env,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
   const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
   return { code: await proc.exited, stdout, stderr }
 }
@@ -85,6 +102,51 @@ test('install: a settings.json that is not an object is left as it was', async (
   assert.ok(!existsSync(join(claude, 'settings.json.bak-agent-board')))
 })
 
+test('install in a sandbox: the commands, the hooks once, a backup, and notifications only when asked', async () => {
+  const box = await sandbox()
+  const home = homeOf(box)
+  const settingsFile = join(home, '.claude', 'settings.json')
+  const run = async (...args: string[]) => {
+    const r = await install(box, process.execPath, ...args)
+    return { code: r.code, out: r.stdout + r.stderr }
+  }
+  mkdirSync(join(home, '.claude'), { recursive: true })
+  writeFileSync(
+    settingsFile,
+    JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'theirs' }] }] } }),
+  )
+  const first = await run()
+  assert.equal(first.code, 0, first.out)
+  for (const name of ['board', 'board.cmd', 'spawn-agent', 'spawn-agent.cmd'])
+    assert.ok(existsSync(join(home, '.local', 'bin', name)), name)
+  assert.ok(existsSync(`${settingsFile}.bak-agent-board`))
+  const after = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  assert.equal(after.hooks.SessionStart.length, 1)
+  assert.deepEqual(after.hooks.Stop, [{ hooks: [{ type: 'command', command: 'theirs' }] }])
+  assert.match(first.out, /commands: board, spawn-agent/)
+  assert.match(first.out, /herdr-wake is off/) // and what that costs, from the check
+  assert.match(first.out, /things? need/)
+  const second = await run(windows ? '--toast' : '--no-toast')
+  assert.equal(second.code, 0, second.out)
+  const again = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  assert.equal(again.hooks.SessionStart.length, 1)
+  assert.equal(again.hooks.Stop.length, windows ? 2 : 1)
+  // Someone else's command of that name is left alone.
+  writeFileSync(join(home, '.local', 'bin', 'spawn-agent'), '#!/bin/sh\necho mine\n')
+  assert.match((await run()).out, /skipped .*spawn-agent: exists and is not ours/)
+  assert.equal(readFileSync(join(home, '.local', 'bin', 'spawn-agent'), 'utf8'), '#!/bin/sh\necho mine\n')
+  // Windows PowerShell 5.1 writes UTF-8 with a BOM: still read.
+  writeFileSync(settingsFile, `\uFEFF${JSON.stringify({ model: 'opus' })}`)
+  assert.equal((await run()).code, 0)
+  assert.equal(JSON.parse(readFileSync(settingsFile, 'utf8')).model, 'opus')
+  // A settings.json that does not parse: nothing is touched, it says so.
+  writeFileSync(settingsFile, '{ "hooks": ')
+  const broken = await run()
+  assert.equal(broken.code, 1)
+  assert.match(broken.out, /not valid JSON/)
+  assert.equal(readFileSync(settingsFile, 'utf8'), '{ "hooks": ')
+}, 30_000)
+
 // board.cmd under a Windows user name that is not ASCII: Bun itself lives under it (%USERPROFILE%\.bun).
 const windows = process.platform === 'win32'
 const cmdExe = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe')
@@ -122,7 +184,10 @@ test.skipIf(!windows)(
     writeFileSync(cli, 'console.log(JSON.stringify(process.argv.slice(2)))\nprocess.exit(3)\n')
     const shim = join(box.dir, 'Имя пользователя', 'board.cmd')
     // As install writes it: a string, so UTF-8 without a BOM.
-    writeFileSync(shim, planShims({ bun, cli, hook: '', statusline: '', binDir: dirname(shim) })['board.cmd'])
+    writeFileSync(
+      shim,
+      planShims({ bun, cli, hook: '', statusline: '', spawn: '', toast: '', binDir: dirname(shim) })['board.cmd'],
+    )
     for (const cp of ['866', '437', '65001']) {
       const run = underCodePage(box, cp, `"${shim}" one "two words" Жук`)
       assert.equal(run.code, 3, `${cp}: ${run.stdout}${run.stderr}`)
@@ -145,7 +210,15 @@ test.skipIf(!windows)(
     const shim = join(homeOf(box), '.local', 'bin', 'board.cmd')
     const bytes = readFileSync(shim)
     assert.deepEqual([...bytes.subarray(0, 4)], [...Buffer.from('@rem')], 'no BOM')
-    const expected = planShims({ bun, cli: entry('cli.ts'), hook: '', statusline: '', binDir: '' })['board.cmd']
+    const expected = planShims({
+      bun,
+      cli: entry('cli.ts'),
+      hook: '',
+      statusline: '',
+      spawn: '',
+      toast: '',
+      binDir: '',
+    })['board.cmd']
     assert.deepEqual(bytes, Buffer.from(expected, 'utf8'))
     const help = underCodePage(box, '866', `"${shim}" help`)
     assert.equal(help.code, 0, help.stdout + help.stderr)

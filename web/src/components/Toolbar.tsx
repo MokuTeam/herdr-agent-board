@@ -3,6 +3,7 @@
 import { type RefObject, useEffect } from 'react'
 import { useBoardView } from '../hooks/useBoardView.ts'
 import { useScrolled } from '../hooks/useScrolled.ts'
+import type { SetupNoteState } from '../hooks/useSetupNote.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { columnHeads, documentTitle, laneOptions, scheduleBadge, summaryParts } from '../models/toolbar.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
@@ -13,6 +14,7 @@ import { LanguageButton } from './LanguageButton.tsx'
 import { Limits } from './Limits.tsx'
 import { LiveDot } from './LiveDot.tsx'
 import { NextAttention } from './NextAttention.tsx'
+import { SetupNote } from './SetupNote.tsx'
 import { Summary } from './Summary.tsx'
 
 export interface ToolbarProps {
@@ -21,9 +23,11 @@ export interface ToolbarProps {
   onNewSession?: (from: HTMLElement) => void
   onCategories?: () => void
   onSchedule?: () => void
+  /** The quiet "Setup incomplete" note (hooks/useSetupNote.ts). */
+  setup?: SetupNoteState
 }
 
-export function Toolbar({ limitsAnchor, onNewSession, onCategories, onSchedule }: ToolbarProps) {
+export function Toolbar({ limitsAnchor, onNewSession, onCategories, onSchedule, setup }: ToolbarProps) {
   const t = useT()
   const { data, ui, dispatch, canMutate, canEdit, now } = useBoardContext()
   const { visible, categoryOf } = useBoardView()
@@ -107,6 +111,7 @@ export function Toolbar({ limitsAnchor, onNewSession, onCategories, onSchedule }
           </button>
           <LanguageButton />
           <NextAttention />
+          {setup && <SetupNote setup={setup} />}
           <Limits anchor={limitsAnchor} />
           <LiveDot />
         </div>

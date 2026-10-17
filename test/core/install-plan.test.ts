@@ -9,6 +9,8 @@ const paths: InstallPaths = {
   hook: `${plugin}\\src\\entrypoints\\hook.ts`,
   statusline: `${plugin}\\src\\entrypoints\\statusline.ts`,
   cli: `${plugin}\\src\\entrypoints\\cli.ts`,
+  spawn: `${plugin}\\src\\entrypoints\\spawn-agent.ts`,
+  toast: `${plugin}\\src\\integrations\\toast.ps1`,
   binDir: 'C:\\Users\\Имя\\.local\\bin',
 }
 const hookCommand =
@@ -129,22 +131,27 @@ describe('planSettings', () => {
 })
 
 describe('planShims', () => {
-  test('the sh and the cmd shim quote Bun and the board command', () => {
-    assert.deepEqual(planShims(paths), {
-      board:
-        '#!/bin/sh\n# agent-board\nexec "C:/Program Files/Bun/bun.exe" "C:/Users/Имя/AppData/Roaming/herdr/plugins/agent-board/src/entrypoints/cli.ts" "$@"\n',
-      // UTF-8 around the call (the paths may not be ASCII), then the code page and exit code as they were.
-      'board.cmd': [
+  test('the sh and the cmd shims quote Bun and the board command, and spawn-agent the same way', () => {
+    // UTF-8 around the call (the paths may not be ASCII), then the code page and exit code as they were.
+    const cmd = (script: string) =>
+      [
         '@rem agent-board',
         '@setlocal',
         '@for /f "tokens=2 delims=:." %%c in (\'chcp\') do @set "AB_CP=%%c"',
         '@chcp 65001 >nul',
-        '@"C:\\Program Files\\Bun\\bun.exe" "C:\\Users\\Имя\\AppData\\Roaming\\herdr\\plugins\\agent-board\\src\\entrypoints\\cli.ts" %*',
+        `@"C:\\Program Files\\Bun\\bun.exe" "C:\\Users\\Имя\\AppData\\Roaming\\herdr\\plugins\\agent-board\\src\\entrypoints\\${script}" %*`,
         '@set "AB_RC=%errorlevel%"',
         '@chcp %AB_CP% >nul',
         '@exit /b %AB_RC%',
         '',
-      ].join('\r\n'),
+      ].join('\r\n')
+    const sh = (script: string) =>
+      `#!/bin/sh\n# agent-board\nexec "C:/Program Files/Bun/bun.exe" "C:/Users/Имя/AppData/Roaming/herdr/plugins/agent-board/src/entrypoints/${script}" "$@"\n`
+    assert.deepEqual(planShims(paths), {
+      board: sh('cli.ts'),
+      'board.cmd': cmd('cli.ts'),
+      'spawn-agent': sh('spawn-agent.ts'),
+      'spawn-agent.cmd': cmd('spawn-agent.ts'),
     })
   })
 
@@ -154,6 +161,8 @@ describe('planShims', () => {
       cli: '/Users/me/My Plugins/agent-board/src/entrypoints/cli.ts',
       hook: '',
       statusline: '',
+      spawn: '',
+      toast: '',
       binDir: '/Users/me/.local/bin',
     })
     assert.equal(

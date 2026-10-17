@@ -28,9 +28,22 @@ command = ["bun", "src/entrypoints/web-open.ts"]
 
 [[actions]]
 id = "install"
-title = "Agent board: install the board command and the Claude Code hooks"
+title = "Agent board: install the board and spawn-agent commands and the Claude Code hooks"
 contexts = ["workspace"]
 command = ["bun", "src/entrypoints/install.ts"]
+
+# Windows: notifications with the agent's words; a click opens the session on the board.
+[[actions]]
+id = "notifications"
+title = "Agent board: desktop notifications (Windows)"
+contexts = ["workspace"]
+command = ["bun", "src/entrypoints/install.ts", "--toast"]
+
+[[actions]]
+id = "doctor"
+title = "Agent board: check the setup"
+contexts = ["workspace"]
+command = ["bun", "src/entrypoints/cli.ts", "doctor"]
 
 [[panes]]
 id = "board"

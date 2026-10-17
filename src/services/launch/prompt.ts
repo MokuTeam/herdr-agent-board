@@ -3,6 +3,7 @@
 import { agentNames, herdr, herdrText } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { inputDraft } from '../../core/dialogs/input-box.ts'
+import { stillTyped } from '../../core/launch/spawn-args.ts'
 
 const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 const stalled = (err: unknown): boolean => isRecord(err) && /agent_prompt_stalled/.test(`${err.code} ${err.message}`)
@@ -24,7 +25,7 @@ export async function typeLine(pane: string, text: string, tries = 3): Promise<b
       if (!stalled(err)) throw err
       const screen = await visible(pane)
       // Its first line (the screen breaks the rest) still in the prompt: it only needs its Enter.
-      if (screen.includes((text.split('\n')[0] ?? '').slice(0, 30)) || /Pasted text/.test(screen)) {
+      if (stillTyped(screen, text)) {
         await herdr(['pane', 'send-keys', pane, 'enter']).catch(() => {})
         return true
       }

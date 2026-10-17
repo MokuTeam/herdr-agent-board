@@ -15,6 +15,7 @@
 //                            queued into a running turn
 //   board schedule [--all]   this session's entries (every session's)
 //   board unschedule <id|all>    removes an entry (all: every entry of this session)
+//   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync } from 'node:fs'
 import { readCard, writeCard } from '../adapters/cards.ts'
@@ -33,7 +34,7 @@ import { shortWhen } from '../core/when-format.ts'
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | schedule [--all] | unschedule <id|all>] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | schedule [--all] | unschedule <id|all> | doctor] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -229,6 +230,12 @@ async function main(): Promise<void> {
       )
     }
     return
+  }
+
+  if (cmd === 'doctor') {
+    const { gatherFacts } = await import('../adapters/setup-facts.ts')
+    const { checkSetup, report } = await import('../core/setup.ts')
+    return console.log(report(checkSetup(await gatherFacts(cfg), t), t))
   }
 
   // Neither needs to know which session asks.
