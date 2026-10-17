@@ -54,6 +54,18 @@ export function userText(content: unknown, filters: readonly PromptFilter[] = DE
   return filters.reduce((s, filter) => filter(s), stripped).trim()
 }
 
+/**
+ * What a block of the session's message says to the user, as its terminal shows it: the text,
+ * and the short updates Claude Code keeps in thinking blocks when the entry has thinkingDisplay
+ * "updates" (since 2.1.296), printed in the terminal like any message. Other thinking stays hidden.
+ */
+export function saidIn(entry: unknown, block: unknown): string {
+  const b = rec(block)
+  if (b?.type === 'text') return str(b.text).trim()
+  if (b?.type === 'thinking' && rec(entry)?.thinkingDisplay === 'updates') return str(b.thinking).trim()
+  return ''
+}
+
 /** "Bash", "slack · read_channel", "Gmail · search_threads" for a tool name. */
 export function toolLabel(name: string): string {
   const m = /^mcp__(.+?)__(.+)$/.exec(name ?? '')
@@ -213,9 +225,9 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
         // The form only while it waits for an answer: every board refresh carries it to the page.
         if (name === 'AskUserQuestion' && tool.pending) tool.questions = questionsOf(b.input)
         info.tool = tool
-      } else if (b.type === 'text' && !info.lastText && str(b.text).trim()) {
-        info.lastText = clip(str(b.text).trim(), 700)
-        info.question = trailingQuestion(b.text)
+      } else if (!info.lastText && saidIn(o, b)) {
+        info.lastText = clip(saidIn(o, b), 700)
+        info.question = trailingQuestion(saidIn(o, b))
       }
     }
   }
@@ -340,8 +352,8 @@ export function parseConversation(lines: string[], limit = 40): ConversationTurn
       for (const raw of content) {
         const b = rec(raw)
         if (!b) continue
-        if (b.type === 'text' && str(b.text).trim())
-          items.push({ role: 'assistant', text: clip(str(b.text).trim(), 4000), at })
+        const said = saidIn(o, b)
+        if (said) items.push({ role: 'assistant', text: clip(said, 4000), at })
         else if (b.type === 'tool_use') {
           const name = str(b.name)
           const turn: ToolTurn = {

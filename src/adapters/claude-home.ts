@@ -11,7 +11,13 @@ import { isAbsolute, join, relative } from 'node:path'
 import { onLanguage } from '../core/lang.ts'
 import { normDir, sameDir } from '../core/launch/names.ts'
 import { type Limits, parseLimits } from '../core/limits.ts'
-import { type ConversationTurn, parseConversation, parseTranscriptTail, tailComplete } from '../core/transcript.ts'
+import {
+  type ConversationTurn,
+  parseConversation,
+  parseTranscriptTail,
+  saidIn,
+  tailComplete,
+} from '../core/transcript.ts'
 import type { TranscriptInfo } from '../core/types.ts'
 import { SLOW, statOf } from './folders.ts'
 
@@ -284,8 +290,8 @@ export function createClaudeHome(root: string): ClaudeHome {
                 ? content
                 : Array.isArray(content)
                   ? content
-                      .filter(b => isRecord(b) && b.type === 'text')
-                      .map(b => (b as Record<string, unknown>).text)
+                      .map(b => saidIn(row, b))
+                      .filter(Boolean)
                       .join('\n')
                   : ''
             const at = text.toLowerCase().indexOf(query.toLowerCase())

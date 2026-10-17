@@ -211,6 +211,25 @@ describe('searchHistory', () => {
     assert.equal((await home.searchHistory(cwd, 'project note', 'session-a')).results?.length, 0)
   })
 
+  test('finds the updates kept as thinking (thinkingDisplay "updates"), not other thinking', async () => {
+    const { cwd, dir, home } = fixture()
+    const thinking = (text: string) => ({
+      message: { content: [{ type: 'thinking', thinking: text, signature: 'x' }] },
+    })
+    writeFileSync(
+      join(dir, 's.jsonl'),
+      [
+        row(cwd, '', { thinkingDisplay: 'updates', ...thinking('needle: the sandbox is free') }),
+        row(cwd, '', thinking('needle: private reasoning')),
+      ].join('\n'),
+    )
+    const out = await home.searchHistory(cwd, 'needle')
+    assert.deepEqual(
+      out.results?.map(r => r.text),
+      ['needle: the sandbox is free'],
+    )
+  })
+
   test('a Windows cwd finds its folder and matches rows written with either slash or case', async () => {
     const { base, home } = fixture()
     mkdirSync(join(base, 'C--Work-app'))
