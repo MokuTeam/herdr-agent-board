@@ -6,7 +6,7 @@
   "description": "herdr plugin: kanban of Claude sessions with categories set by the agents themselves",
   "scripts": {
     "board": "node src/tui.mjs",
-    "test": "node --test \"test/*.test.mjs\""
+    "test": "node scripts/run-tests.mjs"
   },
   "engines": {
     "node": ">=20"
