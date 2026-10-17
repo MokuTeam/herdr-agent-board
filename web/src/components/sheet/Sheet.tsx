@@ -28,6 +28,7 @@ import {
   threadPlaceholder,
 } from '../../models/sheet.ts'
 import { reducedMotion } from '../../models/spring.ts'
+import { termButton } from '../../models/terminal.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { CheckGlyph } from '../icons.tsx'
@@ -61,6 +62,8 @@ export interface SheetSlots {
   onRename?: ((key: string, name: HTMLElement) => void) | undefined
   /** "New here": the launch window, from the button (without fresh data, the toast that says why). */
   onNewSession?: OpenLaunch | undefined
+  /** "Terminal": the terminal window of the session, from the button (hooks/useTerminal.ts). */
+  onTerminal?: ((key: string, button: HTMLElement) => void) | undefined
 }
 
 /** The board's card of `key` (a drag's ghost is outside the board). */
@@ -81,7 +84,7 @@ function useShown(open: string | null, item: Item | undefined): { key: string | 
 }
 
 export function Sheet(slots: SheetSlots) {
-  const { question, upgradeFiles, onChanges, onHistory, onMore, onRename, onNewSession } = slots
+  const { question, upgradeFiles, onChanges, onHistory, onMore, onRename, onNewSession, onTerminal } = slots
   const t = useT()
   const { data, ui, dispatch } = useBoardContext()
   const actions = useSessionActions()
@@ -130,6 +133,7 @@ export function Sheet(slots: SheetSlots) {
   const item = itemOf(open)
   const buttons: SessionButtons = {
     focus: at(actions.focusSession),
+    terminal: button => open && onTerminal?.(open, button),
     wake: at(actions.wakeSession),
     sleep: at(actions.sleepSession),
     changes: button => open && onChanges?.(open, button),
@@ -274,6 +278,7 @@ export function SheetView(props: SheetViewProps) {
         composer={composer}
         availability={availability}
         buttons={item ? headButtons(item, t) : NO_HEAD_BUTTONS}
+        term={item ? termButton(item, data, t) : undefined}
         changesHidden={!detail.data?.checkout}
         present={!!openItem && detail.status !== 'missing'}
         canMutate={canMutate}

@@ -49,6 +49,9 @@ export const DEFAULT_CONFIG: Config = {
   wakeUrl: 'http://127.0.0.1:12421',
   // A reminder due while its session works or waits on a dialog is tried this long, then missed.
   scheduleWaitMin: 240,
+  // The web board's terminal (a shell in a session's folder, the session's own pane): false
+  // turns it off, say for a board opened from elsewhere through a tunnel.
+  terminal: true,
 }
 
 /** Title of a lane that has none: the built-in ones in the board's language, else the id. */

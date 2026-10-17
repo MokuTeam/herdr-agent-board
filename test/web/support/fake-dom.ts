@@ -63,6 +63,8 @@ export interface EventFields {
   keyCode?: number
   /** focusout's: where the focus goes. */
   relatedTarget?: unknown
+  /** Fields of other events, set on the event as they are (a key's `code`, beforeinput's `inputType`). */
+  extra?: Record<string, unknown>
 }
 
 export class FakeEvent {
@@ -106,6 +108,7 @@ export class FakeEvent {
     this.isComposing = fields.isComposing ?? false
     this.keyCode = fields.keyCode ?? 0
     this.relatedTarget = fields.relatedTarget ?? null
+    if (fields.extra) Object.assign(this, fields.extra)
   }
 
   preventDefault(): void {

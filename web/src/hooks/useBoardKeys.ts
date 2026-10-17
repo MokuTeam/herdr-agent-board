@@ -1,8 +1,8 @@
 // The board's keys (models/board-keys.ts says which action a key takes): N opens the next card
 // that needs you, Shift+N starts a session, F2 renames, / goes to the search, Escape leaves a
 // field, closes the panel or clears the search, digits answer the open question; while the quick
-// look is open, N, F2 and the digits do nothing. An open menu or the launch window
-// takes the keys first.
+// look is open, N, F2 and the digits do nothing; Ctrl+` opens the terminal of the session in the
+// sheet. An open menu, the launch window or the terminal window takes the keys first.
 import { useEffect } from 'react'
 import { boardKey, type KeyScene, stopsNativeClear } from '../models/board-keys.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
@@ -12,7 +12,7 @@ import { laneContext, type OpenLaunch } from './useNewSession.ts'
 export interface BoardKeysOptions {
   openNextAttention(): void
   newSession: OpenLaunch
-  /** A menu or the launch window is open: it takes its keys first. */
+  /** A menu, the launch window or the terminal window is open: it takes its keys first. */
   layerOpen?: () => boolean
   /** The quick look is open. */
   quickLookOpen?: () => boolean
@@ -26,6 +26,8 @@ export interface BoardKeysOptions {
   sessionPanelOpen?: () => boolean
   /** A digit picks an option of the question the open session waits on; true when it did. */
   pickOption?: (e: KeyboardEvent) => boolean
+  /** The terminal window of a session, grown from `from` (hooks/useTerminal.ts). */
+  openTerminal?: (key: string, from: Element | null) => void
 }
 
 const cardOf = (el: Element | null): HTMLElement | null => el?.closest<HTMLElement>('.card[data-key]') ?? null
@@ -53,6 +55,7 @@ export function useBoardKeys(opts: BoardKeysOptions): void {
         query: b.ui.query,
         quickLook: o.quickLookOpen?.() ?? false,
         digits,
+        sessionOpen: !!open && !!o.sessionPanelOpen?.(),
       }
       const action = boardKey(e, scene)
       switch (action) {
@@ -94,6 +97,11 @@ export function useBoardKeys(opts: BoardKeysOptions): void {
         case 'search':
           e.preventDefault()
           document.getElementById('search')?.focus()
+          return
+        case 'terminal':
+          if (!open) return
+          e.preventDefault()
+          o.openTerminal?.(open, document.getElementById('sheet-term'))
           return
       }
     }

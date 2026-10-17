@@ -1,7 +1,7 @@
 // Clicks on the chat's files and links, anywhere on the page (the old page's files.js document
 // listeners): a chip (or Enter or Space on it) opens its quick look; a web link opens in the
-// default browser through the board, else in a new tab.
-import { useEffect } from 'react'
+// default browser through the board, else in a new tab (the terminal's links too: it gets openUrl).
+import { useEffect, useState } from 'react'
 import { filesApi } from '../api/files.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { useBoardContext } from '../state/BoardProvider.tsx'
@@ -13,14 +13,14 @@ const CHIP = '[data-fs="file"], [data-fs="dir"]'
 /** What a chip opens: its full path, at its line. */
 const targetOf = (chip: HTMLElement) => ({ path: chip.dataset.abs ?? '', line: Number(chip.dataset.line) || null })
 
-export function useFileLinks(look: QuickLook['look']): void {
+/** Returns how a web link opens: in the default browser through the board, else in a new tab. */
+export function useFileLinks(look: QuickLook['look']): (href: string) => Promise<void> {
   const t = useT()
   const board = useBoardContext()
   const latest = useLatest({ t, board, look })
-
-  useEffect(() => {
+  const [openUrl] = useState(() => {
     const api = filesApi(() => latest.current.t)
-    async function openUrl(href: string): Promise<void> {
+    return async (href: string): Promise<void> => {
       const { board, t } = latest.current
       if (!board.canEdit) return board.toast(t('mobile.readOnly'), true)
       const refused = await api.openUrl(href)
@@ -29,6 +29,9 @@ export function useFileLinks(look: QuickLook['look']): void {
       if (refused.httpStatus !== 409 && latest.current.board.canEdit) window.open(href, '_blank', 'noopener')
       else latest.current.board.toast(refused.error, true)
     }
+  })
+
+  useEffect(() => {
     const onClick = (e: MouseEvent) => {
       const target = e.target instanceof Element ? e.target : null
       const chip = target?.closest<HTMLElement>(CHIP)
@@ -54,5 +57,6 @@ export function useFileLinks(look: QuickLook['look']): void {
       document.removeEventListener('click', onClick)
       document.removeEventListener('keydown', onKey)
     }
-  }, [latest])
+  }, [latest, openUrl])
+  return openUrl
 }

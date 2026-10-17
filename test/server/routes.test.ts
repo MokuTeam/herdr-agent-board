@@ -104,6 +104,7 @@ describe('routes', () => {
       'styles/menu.css',
       'styles/launch.css',
       'styles/questions.css',
+      'styles/terminal.css',
       'app.js',
     ])
     for (const link of links) expect([link, (await fetch(`${url}/${link}`)).status]).toEqual([link, 200])
@@ -111,7 +112,7 @@ describe('routes', () => {
     expect(script.headers.get('content-type')).toBe('text/javascript; charset=utf-8')
     expect(script.headers.get('content-security-policy')).toBe(null)
     expect((await script.text()).length).toBeGreaterThan(1000)
-    for (const sheet of ['app', 'menu', 'launch', 'questions'])
+    for (const sheet of ['app', 'menu', 'launch', 'questions', 'terminal'])
       expect((await fetch(`${url}/styles/${sheet}.css`)).headers.get('content-type')).toBe('text/css; charset=utf-8')
     expect((await fetch(`${url}/icon.svg`)).headers.get('content-type')).toBe('image/svg+xml')
     // Only top-level files and styles/ of the types it knows: nothing else under web/ (the page's source).
@@ -135,9 +136,17 @@ describe('routes', () => {
     expect(await answer(post('/api/nothing', {}))).toEqual([405, { error: 'method' }])
   })
 
-  test('a JSON body that does not parse, or is over 64 KB, is a 500', async () => {
+  test('a JSON body that does not parse, or is over 192 KB, is a 500', async () => {
     expect(await answer(post('/api/settings', '{nope'))).toEqual([500, { error: 'bad json' }])
-    expect(await answer(post('/api/settings', { pad: 'x'.repeat(70_000) }))).toEqual([500, { error: 'body too large' }])
+    expect(await answer(post('/api/settings', { pad: 'x'.repeat(200_000) }))).toEqual([
+      500,
+      { error: 'body too large' },
+    ])
+    // The bytes count: 70 000 characters of three bytes each are over it too.
+    expect(await answer(post('/api/settings', { pad: '漢'.repeat(70_000) }))).toEqual([
+      500,
+      { error: 'body too large' },
+    ])
   })
 
   test('a body of null fails only where main read a field off it', async () => {

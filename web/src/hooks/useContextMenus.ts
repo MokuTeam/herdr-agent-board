@@ -184,6 +184,8 @@ export interface ActionDeps {
   openCategories(id?: string): void
   /** Rename where the name is (hooks/useRenameInPlace.ts). */
   rename(key: string, el: Element | null): void
+  /** The terminal window of a session, grown from `el` (hooks/useTerminal.ts). */
+  terminal?: ((key: string, el: Element | null) => void) | undefined
 }
 
 const COLUMNS = ['work', 'me', 'ext', 'done', 'idle'] as const
@@ -223,6 +225,7 @@ export function boardActions(deps: ActionDeps): BoardMenuActions {
     },
     changes: (key, from) => deps.quickLook.lookChanges(key, elementFrom(from)),
     history: (key, from) => deps.quickLook.lookHistory(key, deps.item(key)?.cwd ?? '', elementFrom(from)),
+    terminal: (key, from) => deps.terminal?.(key, elementFrom(from)),
     newSession: (ctx, from) => deps.newSession(ctx, from),
     cats: id => deps.openCategories(id),
     filter: id => dispatch({ type: 'filter', id }),
@@ -248,6 +251,8 @@ export interface SheetMoreDeps {
   item(key: string): Item | undefined
   quickLook: Pick<QuickLook, 'lookChanges' | 'lookHistory'>
   newSession: OpenLaunch
+  /** The terminal window of the open session, out of the button. */
+  terminal?: ((key: string, el: Element | null) => void) | undefined
   /** The pointer is a finger. */
   coarse(): boolean
 }
@@ -275,6 +280,7 @@ export function sheetMoreMenuFrom(deps: SheetMoreDeps): (button: HTMLElement, ke
         if (id === 'sheet-history')
           return void (open && deps.quickLook.lookHistory(open, deps.item(open)?.cwd ?? '', button))
         if (id === 'sheet-changes') return void (open && deps.quickLook.lookChanges(open, button))
+        if (id === 'sheet-term') return void (open && deps.terminal?.(open, button))
         if (id === 'sheet-new') {
           const it = open ? deps.item(open) : undefined
           return void (open && deps.newSession(it ? { item: it } : {}, button))
@@ -292,6 +298,8 @@ export interface ContextMenusOptions {
   rename(key: string, el: Element | null): void
   /** Sessions on their way and what their menu does that is the launch window's (hooks/useLaunch.ts). */
   launch?: LaunchMenus | null
+  /** The terminal window of a session (hooks/useTerminal.ts). */
+  terminal?: ((key: string, el: Element | null) => void) | undefined
 }
 
 export interface ContextMenus {
@@ -331,7 +339,12 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
       category: it => catOf(page().board.ui.moves, it),
       state: () => {
         const { ui, data } = page().board
-        return { open: ui.open, filter: ui.filter, sleepers: ui.sleepers, data: { categories: data?.categories ?? [] } }
+        return {
+          open: ui.open,
+          filter: ui.filter,
+          sleepers: ui.sleepers,
+          data: { categories: data?.categories ?? [], terminal: data?.terminal },
+        }
       },
       get launch() {
         return page().options.launch
@@ -354,6 +367,7 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
         newSession: (ctx, from) => page().options.newSession(ctx, from),
         openCategories: id => page().options.openCategories(id),
         rename: (key, el) => page().options.rename(key, el),
+        terminal: (key, el) => page().options.terminal?.(key, el),
       }),
     }
     return boardMenuListeners({ menu, menuFor: (target, at) => menuFor(target, at, deps) })
@@ -371,6 +385,7 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
         lookHistory: (key, cwd, el) => latest.current.options.quickLook.lookHistory(key, cwd, el),
       },
       newSession: (ctx, from) => latest.current.options.newSession(ctx, from),
+      terminal: (key, el) => latest.current.options.terminal?.(key, el),
       coarse: () => matchMedia('(pointer: coarse)').matches,
     }),
   )

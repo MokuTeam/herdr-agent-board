@@ -6,6 +6,7 @@
 
 import type { Lang } from '../types.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
+import { TERMINAL_STRINGS } from './terminal-strings.ts'
 
 export type Entry = string | string[]
 export type Dictionary = Record<string, Entry>
@@ -941,3 +942,5 @@ export const STRINGS: Record<Lang, Dictionary> = {
 
 // New sessions, the context menus and renaming keep their texts in a file of their own.
 for (const code of Object.keys(LAUNCH_STRINGS) as Lang[]) Object.assign(STRINGS[code], LAUNCH_STRINGS[code])
+// So do the web board's terminal's.
+for (const code of Object.keys(TERMINAL_STRINGS) as Lang[]) Object.assign(STRINGS[code], TERMINAL_STRINGS[code])

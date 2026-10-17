@@ -235,6 +235,8 @@ export interface CardMenuContext extends MenuContext {
   column: string
   /** The lane the card is in now. */
   category: string
+  /** The board offers its terminal (config `terminal`). */
+  terminal?: boolean | undefined
 }
 
 /** What a card's menu reads of the board item. */
@@ -282,6 +284,8 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
   return tidy<MenuEntry>([
     { id: 'open', label: t('menu.open'), hint: 'Enter' },
     { id: 'focus', label: t(it.sleeping ? 'menu.wakeFocus' : 'menu.focus'), ...herdr() },
+    // Looking needs no fresh data; typing and opening a shell wait for it in the window itself.
+    ctx.terminal && (it.cwd || it.pane) && { id: 'terminal', label: t('term.open'), hint: 'Ctrl+`' },
     { id: 'write', label: t('menu.write'), ...(it.pane ? {} : { disabled: true, reason: t('err.noPane') }) },
     it.sleeping
       ? { id: 'wake', label: t('sheet.wake'), ...herdr() }

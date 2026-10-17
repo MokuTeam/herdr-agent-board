@@ -161,6 +161,17 @@ describe('session sheet markup parity', () => {
     same({ items: [other], open: 'd', detail: ready(detailOf(other)) })
   })
 
+  test('the Terminal button: a dot while the board has a shell open; none where it offers no terminal, or nothing to open one in', () => {
+    const open = bothSheets({ items: [working], open: 'a', detail: ready(detailOf(working)), shells: ['a'] })
+    expect(open.react).toBe(open.old)
+    expect(open.react).toContain('class="button has-shell" id="sheet-term"')
+    same({ items: [working], open: 'a', detail: ready(detailOf(working)), shells: ['b'], terminal: true })
+    same({ items: [working], open: 'a', detail: ready(detailOf(working)), terminal: false })
+    const nowhere = item({ key: 'e', name: 'Epsilon', cwd: '', pane: null })
+    same({ items: [nowhere], open: 'e', detail: ready(detailOf(nowhere)) })
+    same({ items: [working], open: 'a', detail: ready(detailOf(working)), shells: ['a'], lang: 'ru' })
+  })
+
   test('a session gone from the board: the pill and the note say so, every session action stops', () => {
     const detail = ready(detailOf(working, { conversation: CONVERSATION.slice(0, 1), checkout: true }), {
       status: 'missing',

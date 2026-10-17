@@ -13,6 +13,7 @@ import { messageGate } from '../core/message-gate.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { startScheduler } from '../services/scheduler.ts'
+import { createTerminals, terminalOn } from '../services/terminals.ts'
 import { createBoardState } from './board-state.ts'
 import { dispatch, json, type Route } from './http.ts'
 import { boardRoutes } from './routes/board.ts'
@@ -23,6 +24,7 @@ import { scheduleRoute } from './routes/schedule.ts'
 import { sessionRoutes } from './routes/session.ts'
 import { categoriesRoute, settingsRoute } from './routes/settings.ts'
 import { staticRoute } from './routes/static.ts'
+import { terminalRoute } from './routes/terminal.ts'
 import { createBroadcaster } from './sse.ts'
 import { pruneUploads, uploadRoutes } from './uploads.ts'
 import { createWebBundle } from './web-bundle.ts'
@@ -74,10 +76,18 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
   const bundle = await createWebBundle({ root: ROOT, entry: join(WEB, 'src', 'main.tsx'), log })
   // Sessions started from the board (services/launch): their progress goes out with the board.
   const launches = createLaunches({ deps, onChange: () => board.publish() })
+  // The terminal (services/terminals.ts): shells the board opened in sessions' folders, and live panes.
+  const terminals = createTerminals({ onChange: () => board.publish() })
   // A notification click asks for a session: pages that connect right after are told it too.
   const reveals = revealState()
   const events = createBroadcaster(() => board.payload(), { greet: reveals.greet })
-  const board = createBoardState({ deps, launches, version: bundle.version, push: payload => events.send(payload) })
+  const board = createBoardState({
+    deps,
+    launches,
+    terminals,
+    version: bundle.version,
+    push: payload => events.send(payload),
+  })
   board.publish()
   const refresh = (): void => void board.refresh()
 
@@ -91,6 +101,7 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
     scheduleRoute(refresh),
     categoriesRoute(),
     ...launchRoutes(launches, board.items),
+    terminalRoute({ cfg, terminals, find: board.find, publish: board.publish }),
     ...sessionRoutes({ deps, find: board.find, refresh, gate: messageGate(), answering: new Set() }),
     staticRoute(WEB, bundle),
   ]
@@ -105,7 +116,8 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
       url = new URL(req.url)
       return await dispatch(routes, req, url, decodeURIComponent(url.pathname), guards)
     } catch (err) {
-      log(`${req.method} ${url ? url.pathname + url.search : req.url}: ${messageOf(err)}`)
+      // The path only: a query can carry the page's token.
+      log(`${req.method} ${url ? url.pathname : req.url.split('?')[0]}: ${messageOf(err)}`)
       return json(500, { error: messageOf(err) })
     }
   }
@@ -142,6 +154,8 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
   refresh()
   // The port makes it one board per machine, so one scheduler; claims cover an overlap.
   const scheduler = startScheduler({ deps, onChange: refresh })
+  // Shells a board before this one opened and that are gone by now are forgotten.
+  if (terminalOn(cfg)) void terminals.prune()
 
   return {
     port,
@@ -151,6 +165,7 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
       clearInterval(poll)
       for (const watcher of watchers) watcher.close()
       scheduler.stop()
+      terminals.stopAll()
       events.close()
       await server.stop(true)
     },

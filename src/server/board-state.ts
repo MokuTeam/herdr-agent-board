@@ -13,6 +13,7 @@ import type { Item } from '../core/types.ts'
 import { collect } from '../services/board.ts'
 import type { Deps } from '../services/deps.ts'
 import type { Launches } from '../services/launch/launches.ts'
+import { type Terminals, terminalOn } from '../services/terminals.ts'
 
 export interface BoardState {
   /** The latest payload, as JSON text. */
@@ -30,6 +31,8 @@ export interface BoardState {
 interface Options {
   deps: Deps
   launches: Launches
+  /** The terminal's shells (services/terminals.ts): the sessions the board opened one for. */
+  terminals?: Pick<Terminals, 'keys' | 'stopAll'>
   /** The page's version (web-bundle.ts): open pages reload when it changes. */
   version: () => string
   /** Pushes a payload to the live clients. */
@@ -59,7 +62,7 @@ function claudeLimits(deps: Deps): BoardLimits | null {
   return null
 }
 
-export function createBoardState({ deps, launches, version, push }: Options): BoardState {
+export function createBoardState({ deps, launches, terminals, version, push }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
   let stale = true
@@ -102,6 +105,9 @@ export function createBoardState({ deps, launches, version, push }: Options): Bo
       columns: COLUMNS.map(({ id, title }) => ({ id, title })),
       schedules,
       scheduleLog: readLog(20),
+      // terminal: whether the board offers one (config `terminal`); shells: sessions it opened one for.
+      terminal: terminalOn(cfg),
+      shells: terminalOn(cfg) ? (terminals?.keys() ?? []) : [],
     }
   }
 
@@ -109,6 +115,8 @@ export function createBoardState({ deps, launches, version, push }: Options): Bo
   // changed (stale included): a refresh time that moves every few seconds alone is no news.
   let sent = ''
   function publish(): void {
+    // Turned off in config.json: no pane stays on show.
+    if (!terminalOn(cfg)) terminals?.stopAll()
     const next = board()
     const key = JSON.stringify(next)
     payload = JSON.stringify({ ...next, lastSuccessfulRefreshAt })

@@ -60,6 +60,12 @@ export function modalFocusManager(doc: FocusDocument): (layer: FocusElement, win
     'closest' in node &&
     typeof node.closest === 'function' &&
     !!node.closest('.menu, .rename, .toasts')
+  const ownKeys = (node: unknown) =>
+    typeof node === 'object' &&
+    node !== null &&
+    'closest' in node &&
+    typeof node.closest === 'function' &&
+    !!node.closest('[data-own-keys]')
   const visible = (el: FocusElement) => !!el.getClientRects().length && (el.checkVisibility?.() ?? true)
   const controls = (scope: Scope): FocusElement[] =>
     [...scope.win.querySelectorAll('button, input, textarea, select, a[href], [tabindex], summary')]
@@ -89,7 +95,8 @@ export function modalFocusManager(doc: FocusDocument): (layer: FocusElement, win
     'keydown',
     e => {
       const scope = top()
-      if (!scope || e.key !== 'Tab' || auxiliary(e.target)) return
+      // A field that takes its own keys (the terminal's) keeps Tab: it goes to the terminal.
+      if (!scope || e.key !== 'Tab' || auxiliary(e.target) || ownKeys(e.target)) return
       const all = controls(scope)
       const active = doc.activeElement
       const at = isElement(active) ? all.indexOf(active) : -1

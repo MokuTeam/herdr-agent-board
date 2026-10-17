@@ -1,6 +1,7 @@
 // Which menu opens for a card, the open session's head, a lane, the board, a starting session and
 // a file chip, and where the browser keeps its own (models/board-menus.ts, hooks/useContextMenus.ts),
-// against the old page's board-menus.js at the parity baseline: the same right clicks, menu keys
+// against the old page's board-menus.js at the parity baseline (with upstream's Terminal item,
+// support/board-menu-sides.ts): the same right clicks, menu keys
 // and long presses on the same page (support/board-menu-sides.ts) must open the same menus at the
 // same places, and their picks must ask the board for the same things.
 import { describe, expect, test } from 'bun:test'
@@ -112,6 +113,7 @@ describe('which menu opens', () => {
     for (const id of [
       'open',
       'focus',
+      'terminal',
       'write',
       'sleep',
       'rename',
@@ -133,6 +135,11 @@ describe('which menu opens', () => {
     expect(log).toContain('do.openPath("C:\\\\Acme", "open")')
     expect(log).toContain('do.copy("w1:p1", "Copied")')
     expect(log).toContain('do.newSession({}+item s1, #card)')
+    expect(log).toContain('do.terminal("s1", #card)')
+    expect(log[0]).toContain('"open","focus","terminal","write"')
+    // Where the board offers no terminal (config `terminal: false`), no such item.
+    const off = await compare({ ...BOARD, terminal: false }, [right('card-name')])
+    expect(off[0]).toContain('"open","focus","write"')
   })
 
   test('the open session’s head: its card’s menu; none without one open, nor in the rest of a panel', async () => {
@@ -405,6 +412,7 @@ describe('without the launch window', () => {
           clear: none,
           changes: none,
           history: none,
+          terminal: none,
           rename: none,
           move: none,
           newSession: none,

@@ -168,9 +168,9 @@ export function canonical(nodes: Node[], options: CanonicalOptions = {}, depth =
 
 // ---------------------------------------------------------------- the two sides
 
-/** The old page's web/index.html (at the parity baseline: today's holds only the React root), parsed. */
-export function pageMarkup(): Node[] {
-  return parseHtml(oldSource('web/index.html'))
+/** The old page's web/index.html (at the parity baseline, or at `ref`: today's holds only the React root), parsed. */
+export function pageMarkup(ref?: string): Node[] {
+  return parseHtml(ref === undefined ? oldSource('web/index.html') : oldSource('web/index.html', ref))
 }
 
 /** A tree back to markup (`innerHTML`). */

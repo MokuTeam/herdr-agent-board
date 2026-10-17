@@ -21,7 +21,10 @@ export const isBoardPayload: Guard<BoardPayload> = (value): value is BoardPayloa
   isReply(value) &&
   ARRAYS.every(key => Array.isArray(value[key])) &&
   typeof value.version === 'string' &&
-  typeof value.stale === 'boolean'
+  typeof value.stale === 'boolean' &&
+  // The terminal's (a board before it sent neither): whether it is on, the sessions with a shell.
+  (value.terminal === undefined || typeof value.terminal === 'boolean') &&
+  (value.shells === undefined || (Array.isArray(value.shells) && value.shells.every(s => typeof s === 'string')))
 
 /** One session as GET /api/session/<key> answers it (src/server/routes/session.ts). */
 export interface SessionDetail {

@@ -3,9 +3,11 @@
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { project, reducedMotion, rubberband, Spring, velocityOf } from '../../web/src/models/spring.ts'
 
-// Bun has no animation frames: `to()` only queues one; the tests step the springs themselves.
+// Bun has no animation frames: `to()` only asks for one; the tests step the springs themselves.
+// The id it gets back is 0, so the shared frame loop never waits on a frame that will not come
+// (test files after this one run their springs on a fake world's frames).
 beforeAll(() => {
-  globalThis.requestAnimationFrame = () => 1
+  globalThis.requestAnimationFrame = () => 0
 })
 
 /** Steps a spring at 60 fps until it rests; every value it went through. */

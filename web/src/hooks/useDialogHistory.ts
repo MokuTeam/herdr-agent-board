@@ -1,6 +1,6 @@
 // The Back button on a phone closes the layer on top, one at a time (models/lifecycle.ts
 // dialogHistory). The page lists its layers topmost first: a menu, the launch window, the quick
-// look, the usage popover, a side panel.
+// look, the terminal window, the usage popover, a side panel.
 import { useEffect, useRef } from 'react'
 import { anyLayerOpen, type DialogLayer, dialogHistory, topLayer } from '../models/lifecycle.ts'
 import { PHONE_QUERY } from '../models/panel-motion.ts'

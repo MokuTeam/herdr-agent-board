@@ -1,6 +1,6 @@
 // The board page: the toolbar over the board, the side panels, the usage popover, the quick look
 // and the toasts, the keys and the Back button; the chat's files and links, the question forms, the
-// context menus, renaming in place and the "new session" window.
+// context menus, renaming in place, the "new session" window and the terminal window.
 import { useEffect, useRef, useState } from 'react'
 import { Board } from './components/Board.tsx'
 import { FileChips } from './components/files/FileChip.tsx'
@@ -13,6 +13,7 @@ import { RenameField } from './components/RenameField.tsx'
 import { SidePanels } from './components/SidePanels.tsx'
 import { Toasts } from './components/Toasts.tsx'
 import { Toolbar } from './components/Toolbar.tsx'
+import { Terminal } from './components/terminal/Terminal.tsx'
 import { useBoardKeys } from './hooks/useBoardKeys.ts'
 import { useContextMenus } from './hooks/useContextMenus.ts'
 import { useDialogHistory } from './hooks/useDialogHistory.ts'
@@ -27,6 +28,7 @@ import { useQuickLook } from './hooks/useQuickLook.ts'
 import { useRenameInPlace } from './hooks/useRenameInPlace.ts'
 import { useReveal } from './hooks/useReveal.ts'
 import { useSchedule } from './hooks/useSchedule.ts'
+import { useTerminal } from './hooks/useTerminal.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
 
 export function App() {
@@ -55,24 +57,35 @@ export function App() {
   // Paths in the chat become chips; a chip, the sheet's Changes and History open the quick look.
   const chips = useFileChips()
   const quickLook = useQuickLook(chips.upgrade)
-  useFileLinks(quickLook.look)
+  const openUrl = useFileLinks(quickLook.look)
+  // A shell in the session's folder, or the session's own terminal, live in a window.
+  const terminal = useTerminal(href => void openUrl(href))
   const questions = useQuestions()
   // A session a notification was about: its sheet and its card in view.
   useReveal()
   // A session renamed where its name is; the menus of cards, lanes, the board and chips. The
   // menu's keys come after the quick look's, as the old page had them.
   const rename = useRenameInPlace()
-  const menus = useContextMenus({ quickLook, newSession, openCategories, rename: rename.start, launch: launch.menus })
+  const menus = useContextMenus({
+    quickLook,
+    newSession,
+    openCategories,
+    rename: rename.start,
+    launch: launch.menus,
+    terminal: terminal.openTerminal,
+  })
   useBoardKeys({
     openNextAttention,
     newSession,
-    layerOpen: () => menus.menu.isOpen() || launch.isOpen(),
+    // They take their keys first; the terminal window too, even while its screen has not the keys.
+    layerOpen: () => menus.menu.isOpen() || launch.isOpen() || terminal.isOpen(),
     quickLookOpen: quickLook.isOpen,
     panelOpen: () => !!panels.place.openPanel(),
     closePanel: panels.closeOpen,
     rename: rename.start,
     sessionPanelOpen: () => !!panels.place.openPanel(),
     pickOption: questions.pickOption,
+    openTerminal: terminal.openTerminal,
   })
   // Layers above the board, topmost first: Back on a phone closes them one at a time (the quick
   // look a step at a time).
@@ -80,6 +93,7 @@ export function App() {
     { open: menus.open, close: () => menus.menu.close() },
     { open: launch.shown, close: launch.close },
     { open: quickLook.open, close: quickLook.back },
+    { open: terminal.open, close: terminal.close },
     {
       open: ui.limitsOpen,
       close: () => {
@@ -129,11 +143,13 @@ export function App() {
           onMore: menus.sheetMore,
           moreOpen: menus.moreOpen,
           onRename: rename.start,
+          onTerminal: terminal.openTerminal,
         }}
       />
       <LimitsPop anchor={limitsAnchor} />
       <FileChips chips={chips} />
       <QuickLook engine={quickLook.engine} />
+      <Terminal engine={terminal.engine} />
       <LaunchDialog launch={launch.dialog} refs={launch.refs} />
       <ContextMenu engine={menus.menu} />
       <RenameField rename={rename} />

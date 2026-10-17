@@ -10,6 +10,8 @@ interface FakeNode {
   disabled: boolean
   hidden: boolean
   inert: boolean
+  /** A field that takes its own keys (data-own-keys). */
+  ownKeys: boolean
   isConnected: boolean
   children: FakeNode[]
   contains(child: unknown): boolean
@@ -24,6 +26,7 @@ interface NodeOptions {
   disabled?: boolean
   hidden?: boolean
   inert?: boolean
+  ownKeys?: boolean
 }
 
 function fixture() {
@@ -37,7 +40,7 @@ function fixture() {
     },
   }
   function node(id: string, parent: FakeNode | null, options: NodeOptions = {}): FakeNode {
-    const { tabIndex = -1, disabled = false, hidden = false, inert = false } = options
+    const { tabIndex = -1, disabled = false, hidden = false, inert = false, ownKeys = false } = options
     const el: FakeNode = {
       id,
       parent,
@@ -45,6 +48,7 @@ function fixture() {
       disabled,
       hidden,
       inert,
+      ownKeys,
       isConnected: true,
       children: [],
       contains(child) {
@@ -53,6 +57,7 @@ function fixture() {
       closest(selector) {
         for (let x: FakeNode | null = this; x; x = x.parent) {
           if ((selector.includes('[inert]') && x.inert) || (selector.includes('[hidden]') && x.hidden)) return x
+          if (selector.includes('[data-own-keys]') && x.ownKeys) return x
         }
         return null
       },
@@ -117,6 +122,18 @@ test('modal Tab wraps over visible enabled controls; background focus is brought
   scope.close()
   assert.equal(page.inert, false)
   assert.equal(f.doc.activeElement, origin)
+})
+
+test('a field that takes its own keys keeps Tab: it goes to the terminal, not round the window', () => {
+  const f = fixture()
+  const layer = f.node('dialog', null)
+  const win = f.node('window', layer)
+  f.node('first', win, { tabIndex: 0 })
+  const field = f.node('field', win, { tabIndex: 0, ownKeys: true })
+  f.make(layer, win).open()
+  field.focus()
+  assert.equal(f.key(), false)
+  assert.equal(f.doc.activeElement, field)
 })
 
 test('nested dialogs restore the lower scope and preserve pre-existing inert state', () => {

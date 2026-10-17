@@ -7,6 +7,8 @@ import type { ComposerControls } from '../../hooks/useComposer.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { composerView, sendsOnKey } from '../../models/composer.ts'
 import type { HeadButtons, SheetAvailability } from '../../models/sheet.ts'
+import type { termButton } from '../../models/terminal.ts'
+import { classNames } from '../class-names.ts'
 import {
   BranchIcon,
   ClipIcon,
@@ -18,11 +20,14 @@ import {
   SendIcon,
   SunIcon,
 } from '../icons.tsx'
+import { TermIcon } from '../terminal/Terminal.tsx'
 import { Attachments } from './Attachments.tsx'
 
 /** What the session's buttons do; each gets the button it was pressed on, for what opens from it. */
 export interface SessionButtons {
   focus?: () => void
+  /** The terminal window: a shell in the session's folder, or its own terminal (hooks/useTerminal.ts). */
+  terminal?: (button: HTMLElement) => void
   wake?: () => void
   sleep?: () => void
   /** The quick look of the checkout's changes (25c). */
@@ -39,6 +44,8 @@ export interface ComposerProps {
   composer: ComposerControls
   availability: SheetAvailability
   buttons: HeadButtons
+  /** The Terminal button: where the board offers one, with a dot while a shell is open. */
+  term?: ReturnType<typeof termButton> | undefined
   /** Until the detail says the folder is in git. */
   changesHidden: boolean
   /** The open session is on the board and its detail does not say it is gone. */
@@ -56,6 +63,7 @@ export function Composer({
   composer,
   availability: av,
   buttons,
+  term = { hidden: false, hasShell: false, title: '' },
   changesHidden,
   present,
   canMutate,
@@ -107,6 +115,17 @@ export function Composer({
         <button type="button" className="button" id="sheet-focus" disabled={av.focus} onClick={() => on.focus?.()}>
           <FocusIcon />
           <span>{t('sheet.focus')}</span>
+        </button>
+        <button
+          type="button"
+          className={classNames('button', term.hasShell && 'has-shell')}
+          id="sheet-term"
+          hidden={term.hidden}
+          title={term.title || t('term.hint')}
+          onClick={e => on.terminal?.(e.currentTarget)}
+        >
+          <TermIcon />
+          <span>{t('term.open')}</span>
         </button>
         <button
           type="button"

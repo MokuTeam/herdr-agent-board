@@ -65,6 +65,8 @@ export interface BoardMenuActions {
   clear(key: string, from: MenuOrigin): unknown
   changes(key: string, from: MenuOrigin): unknown
   history(key: string, from: MenuOrigin): unknown
+  /** The terminal window of the session (hooks/useTerminal.ts). */
+  terminal(key: string, from: MenuOrigin): unknown
   /** Rename where the name is (`name`: the card's name or the sheet's head). */
   rename(key: string, name: Element | null): unknown
   move(key: string, to: { cat?: string; column?: string }): unknown
@@ -99,7 +101,12 @@ export interface BoardMenuDeps {
   column(it: Item): string
   /** The lane a card is in now (with the user's move). */
   category(it: Item): string
-  state(): { open: string | null; filter: string; sleepers: boolean; data: { categories: readonly MenuCategory[] } }
+  state(): {
+    open: string | null
+    filter: string
+    sleepers: boolean
+    data: { categories: readonly MenuCategory[]; terminal?: boolean | undefined }
+  }
   /** Sessions on their way (the launch window); none: their cards get no menu. */
   launch?: LaunchMenus | null | undefined
   do: BoardMenuActions
@@ -173,7 +180,18 @@ export function menuFor(target: unknown, at: Point, board: BoardMenuDeps): Board
 }
 
 /** What a picked card item does by itself: the rest are `board.do` actions of the same name. */
-const CARD_ACTIONS = ['open', 'focus', 'write', 'wake', 'sleep', 'dismiss', 'clear', 'changes', 'history'] as const
+const CARD_ACTIONS = [
+  'open',
+  'focus',
+  'write',
+  'wake',
+  'sleep',
+  'dismiss',
+  'clear',
+  'changes',
+  'history',
+  'terminal',
+] as const
 type CardAction = (typeof CARD_ACTIONS)[number]
 const isCardAction = (id: string): id is CardAction => CARD_ACTIONS.some(a => a === id)
 
@@ -185,6 +203,7 @@ function forCard(board: BoardMenuDeps, key: string, it: Item, el: Element, at: P
     label: it.name,
     items: cardMenu(it, {
       ...ctxOf(board),
+      terminal: state.data.terminal !== false,
       categories: state.data.categories,
       column: board.column(it),
       category: board.category(it),
@@ -288,7 +307,14 @@ export function keyPoint(r: { left: number; top: number; width: number; height: 
 }
 
 /** The sheet's buttons that "More actions" lists on a phone, in their order. */
-export const SHEET_MORE = ['sheet-wake', 'sheet-sleep', 'sheet-changes', 'sheet-history', 'sheet-new'] as const
+export const SHEET_MORE = [
+  'sheet-term',
+  'sheet-wake',
+  'sheet-sleep',
+  'sheet-changes',
+  'sheet-history',
+  'sheet-new',
+] as const
 
 /** What the "More actions" menu reads of a sheet button. */
 export interface SheetButton {

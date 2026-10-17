@@ -59,16 +59,23 @@ export function jsonText(text: string): Response {
   return new Response(text, { status: 200, headers: JSON_HEADERS })
 }
 
-const MAX_BODY = 65_536
+// The terminal's input: 16 K characters of text, each up to three bytes, and JSON's escapes.
+const MAX_BODY = 192 << 10
 
-/** The request's JSON body: {} when empty; over 64 KB or not JSON is an error (a 500). */
+/**
+ * The request's JSON body: {} when empty; over 192 KB or not JSON is an error (a 500). The bytes
+ * are counted, and decoded as one stream: a character split between two chunks stays whole (the
+ * terminal types what it gets).
+ */
 export async function readBody(req: Request): Promise<unknown> {
   let data = ''
   if (req.body) {
     const decoder = new TextDecoder()
+    let size = 0
     for await (const chunk of req.body) {
+      size += chunk.length
+      if (size > MAX_BODY) throw new Error('body too large')
       data += decoder.decode(chunk, { stream: true })
-      if (data.length > MAX_BODY) throw new Error('body too large')
     }
     data += decoder.decode()
   }

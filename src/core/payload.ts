@@ -48,4 +48,8 @@ export interface BoardPayload {
   schedules: ScheduleEntry[]
   /** The newest runs, newest first: the scheduler's log lines as parsed, not checked. */
   scheduleLog: unknown[]
+  /** Whether the board offers its terminal (config `terminal`); the server always says, the page reads a missing one as on. */
+  terminal?: boolean
+  /** The sessions the board has a shell open for (services/terminals.ts). */
+  shells?: string[]
 }

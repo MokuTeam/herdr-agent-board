@@ -278,14 +278,17 @@ interface MoreOpened {
   options: Record<string, unknown> & { onPick?: ((id: string, item: MenuItem) => void) | undefined }
 }
 
+/** The handler as it was at the parity baseline, or at `ref` (the terminal's merge adds its button). */
 function oldMore(
   canMutate: boolean,
   coarse: boolean,
   log: string[],
+  ref?: string,
 ): { click(button: FakeElement, detail: number): void; opened: () => MoreOpened | null } {
   let opened: MoreOpened | null = null
   let handler: ((e: unknown) => void) | null = null
-  oldCode('web/app.js', [{ statement: "$('#sheet-more').addEventListener('click'" }], {
+  const statement = [{ statement: "$('#sheet-more').addEventListener('click'" }]
+  const deps = {
     $: () => ({
       addEventListener: (_type: string, fn: (e: unknown) => void) => {
         handler = fn
@@ -307,7 +310,10 @@ function oldMore(
       lookChanges: (key: string, el: FakeElement) => void log.push(`lookChanges ${key} #${el.id}`),
     },
     newSession: (ctx: { item?: Item }, el: FakeElement) => void log.push(`newSession ${ctx.item?.key} #${el.id}`),
-  })
+    openTerminal: (key: string, el: FakeElement) => void log.push(`terminal ${key} #${el.id}`),
+  }
+  if (ref) oldCode('web/app.js', statement, deps, ref)
+  else oldCode('web/app.js', statement, deps)
   return {
     click: (button, detail) => handler?.({ currentTarget: button, detail }),
     opened: () => opened,
@@ -332,6 +338,7 @@ function newMore(canMutate: boolean, coarse: boolean, log: string[]) {
       lookChanges: (key, el) => void log.push(`lookChanges ${key} ${nameOf(el)}`),
     },
     newSession: (ctx, from) => void log.push(`newSession ${ctx.item?.key} ${nameOf(from)}`),
+    terminal: (key, el) => void log.push(`terminal ${key} ${nameOf(el)}`),
     coarse: () => coarse,
   })
   return {
@@ -403,5 +410,34 @@ describe('“More actions” on a phone', () => {
       'newSession s1 #sheet-more',
     ])
     expect(clicked).toEqual(['sleep', 'sleep'])
+  })
+
+  test('the Terminal button first, as upstream’s at the terminal’s merge; picked, it opens out of “More actions”', async () => {
+    const term = world.document.createElement('button')
+    term.id = 'sheet-term'
+    term.title = t('term.hint')
+    term.textContent = ` ${t('term.open')} `
+    page('sheet-focus').after(term)
+    const clicked: string[] = []
+    term.addEventListener('click', () => clicked.push('terminal'))
+    for (const canMutate of [true, false]) {
+      const [oldLog, newLog]: [string[], string[]] = [[], []]
+      const [a, b] = [oldMore(canMutate, false, oldLog, '1a1b270'), newMore(canMutate, false, newLog)]
+      a.click(page('sheet-more'), 1)
+      b.click(page('sheet-more'), 1)
+      expect(shown(b.opened())).toEqual(shown(a.opened()))
+      expect(b.opened()?.items[0]).toMatchObject({ id: 'sheet-term', label: 'Terminal', disabled: false })
+      pickIn(a.opened(), 'sheet-term')
+      pickIn(b.opened(), 'sheet-term')
+      await world.flush()
+      expect(newLog).toEqual(oldLog)
+      expect(oldLog).toEqual(['terminal s1 #sheet-more'])
+    }
+    // Hidden (no terminal on this board), it is not in the menu.
+    term.hidden = true
+    const b = newMore(true, false, [])
+    b.click(page('sheet-more'), 1)
+    expect(b.opened()?.items.some(it => !it.separator && it.id === 'sheet-term')).toBe(false)
+    expect(clicked).toEqual([])
   })
 })

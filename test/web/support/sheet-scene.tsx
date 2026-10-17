@@ -42,6 +42,9 @@ export interface SheetScene {
   message?: string
   attachments?: Attachment[]
   sending?: string[]
+  /** The payload's terminal fields: whether the board offers one, the sessions with a shell. */
+  terminal?: boolean
+  shells?: string[]
 }
 
 export function composerOf(scene: Pick<SheetScene, 'message' | 'attachments' | 'sending' | 'open'>): ComposerControls {
@@ -65,6 +68,8 @@ function dataOf(scene: SheetScene): BoardPayload {
     categories: scene.categories ?? CATEGORIES,
     schedules: scene.schedules ?? [],
     stale: !!scene.stale,
+    ...(scene.terminal !== undefined && { terminal: scene.terminal }),
+    ...(scene.shells && { shells: scene.shells }),
   })
 }
 

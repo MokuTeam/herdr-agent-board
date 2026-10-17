@@ -7,6 +7,8 @@ export interface KeyPress {
   metaKey: boolean
   ctrlKey: boolean
   altKey: boolean
+  /** The key's place (Ctrl+` goes by it). */
+  code?: string | undefined
 }
 
 export interface KeyScene {
@@ -21,6 +23,8 @@ export interface KeyScene {
   quickLook: boolean
   /** A session's question is on show in the sheet, and the sheet or its card has the focus. */
   digits: boolean
+  /** The sheet shows a session: Ctrl+` opens its terminal. */
+  sessionOpen?: boolean | undefined
 }
 
 export type BoardKey =
@@ -32,6 +36,7 @@ export type BoardKey =
   | 'next'
   | 'digit'
   | 'search'
+  | 'terminal'
   | null
 
 // N on a Russian layout is Т.
@@ -51,6 +56,8 @@ export function boardKey(e: KeyPress, s: KeyScene): BoardKey {
   // Digits pick an option of the question the session waits on, as in the terminal.
   if (/^[1-9]$/.test(e.key) && s.digits && !s.quickLook) return 'digit'
   if (e.key === '/' && !s.typing) return 'search'
+  // Ctrl+`: the terminal of the session in the sheet (its window closes with it again).
+  if (e.code === 'Backquote' && e.ctrlKey && !e.altKey && !e.metaKey && s.sessionOpen && !s.quickLook) return 'terminal'
   return null
 }
 

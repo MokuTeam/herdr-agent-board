@@ -32,6 +32,10 @@ test('a board payload has its lists, version and staleness', () => {
   expect(isBoardPayload({ ...payload(), items: null })).toBe(false)
   expect(isBoardPayload({ ...payload(), stale: 'no' })).toBe(false)
   expect(isBoardPayload([])).toBe(false)
+  // The terminal's fields: missing (a board before it), or as the server sends them.
+  expect(isBoardPayload({ ...payload(), terminal: true, shells: ['s1'] })).toBe(true)
+  expect(isBoardPayload({ ...payload(), terminal: 'yes' })).toBe(false)
+  expect(isBoardPayload({ ...payload(), shells: [1] })).toBe(false)
   expect(isBoardPayload(null)).toBe(false)
 })
 
