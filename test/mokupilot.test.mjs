@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import http from 'node:http'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -187,7 +187,7 @@ test('the board starts a MokuPilot call with a fork of a Claude session, only fr
   await until(() => existsSync(record) && readFileSync(record, 'utf8').length > 0, 10_000)
   const seen = JSON.parse(readFileSync(record, 'utf8'))
   assert.deepEqual(seen.args, ['call', '--claude-session', ID, '--cwd', project])
-  assert.equal(seen.cwd, project)
+  assert.equal(seen.cwd, realpathSync(project))
   assert.equal(seen.pane, null)
 
   for (const key of ['1c9d0f3a-2b4e-4d6f-8a1b-2c3d4e5f6a7b', 'pane-p3']) {
