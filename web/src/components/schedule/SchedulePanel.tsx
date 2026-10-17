@@ -2,12 +2,11 @@
 // day, soonest first, after the due ones waiting for their session; then what was sent or missed
 // lately. Entries that come in while it is open materialize; opened at a session, its first entry
 // scrolls into view and lights up. While a cancelled entry folds away the panel keeps what it
-// shows, and draws again once it is gone.
+// showed when the fold began (schedule.held), and draws again once it is gone.
 import { Fragment, useLayoutEffect, useRef } from 'react'
 import type { BoardPayload } from '../../../../src/core/payload.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import { appear } from '../../hooks/useFlip.ts'
-import { useHeld } from '../../hooks/useHeld.ts'
 import type { Schedule } from '../../hooks/useSchedule.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { categoryInfo, catOf, type PendingMoves } from '../../models/board-view.ts'
@@ -31,13 +30,8 @@ export function SchedulePanel({ open, focus, onClose, schedule }: SchedulePanelP
   const t = useT()
   const { data, now, ui, canEdit, dispatch } = useBoardContext()
   const body = useRef<HTMLDivElement>(null)
-  const hold = schedule.collapsing > 0
-  const shown = {
-    data: useHeld(data, hold),
-    now: useHeld(now, hold),
-    moves: useHeld(ui.moves, hold),
-    armed: useHeld(schedule.armed, hold),
-  }
+  const { held } = schedule
+  const shown = held ? { ...held.view, armed: held.armed } : { data, now, moves: ui.moves, armed: schedule.armed }
 
   // New entries materialize; on opening the panel its own slide is motion enough.
   const seen = useRef<ReadonlySet<string> | null>(null)

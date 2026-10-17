@@ -75,7 +75,7 @@ function inPanels(node: ReactNode, lang = 'en') {
 
 const asideOf = (nodes: Node[], id: string): Element => byId(nodes, id)
 
-const RESTING: Schedule = { armed: null, collapsing: 0, cancel() {}, mode() {}, disarm() {} }
+const RESTING: Schedule = { armed: null, held: null, cancel() {}, mode() {}, disarm() {} }
 /** The categories and schedule panels asked open or not, at nothing in particular. */
 const panelsOf = (open: boolean): SidePanelsProps => ({
   categories: { open, focus: null, onClose() {}, onOpen() {} },

@@ -92,6 +92,7 @@ export function App() {
           onNewSession: newSession,
           schedule: {
             armed: reminders.armed,
+            held: reminders.held,
             onCancel: reminders.cancel,
             onMode: reminders.mode,
             onMore: () => openSchedule(ui.open),

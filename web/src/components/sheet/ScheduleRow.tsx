@@ -4,8 +4,10 @@
 // schedule panel: they come in as props.
 import type { ScheduleEntry } from '../../../../src/core/schedule-rules.ts'
 import { capital, longWhen } from '../../../../src/core/when-format.ts'
+import type { ScheduleShown } from '../../hooks/useSchedule.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { overdue } from '../../models/schedule.ts'
+import type { Held } from '../../models/schedule-desk.ts'
 import { classNames } from '../class-names.ts'
 import { AlarmGlyph, RepeatGlyph } from '../icons.tsx'
 import { CancelButton, ModeButton } from '../schedule/ScheduleButtons.tsx'
@@ -13,13 +15,15 @@ import { CancelButton, ModeButton } from '../schedule/ScheduleButtons.tsx'
 export interface ScheduleActions {
   /** The entry whose cancel button asks "Cancel?" (a second click within four seconds removes it). */
   armed?: string | null | undefined
+  /** While a cancelled entry's rows fold away: what the row keeps showing until they are gone. */
+  held?: Held<ScheduleShown> | null | undefined
   onCancel?: ((id: string) => void) | undefined
   onMode?: ((id: string) => void) | undefined
   /** "+2 more": the schedule panel, at this session's entries. */
   onMore?: (() => void) | undefined
 }
 
-export interface ScheduleRowProps extends ScheduleActions {
+export interface ScheduleRowProps extends Omit<ScheduleActions, 'held'> {
   /** The session's entries, soonest first (the server sorts them). */
   entries: ScheduleEntry[]
   now: number

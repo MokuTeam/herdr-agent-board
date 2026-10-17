@@ -21,7 +21,7 @@ export interface SheetCardProps {
 
 export function SheetCard({ item, disabled, schedule }: SheetCardProps) {
   const t = useT()
-  const { data, ui, now } = useBoardContext()
+  const { data, ui } = useBoardContext()
   const actions = useSessionActions()
   const q = (s: string) => t('q', { s })
   const cat = catOf(ui.moves, item)
@@ -90,13 +90,24 @@ export function SheetCard({ item, disabled, schedule }: SheetCardProps) {
         <span className="row-label">{t('row.wait')}</span>
         <CardField item={item} field="wait" placeholder={t('row.waitNone')} disabled={disabled} />
       </div>
-      <ScheduleRow
-        entries={(data?.schedules ?? []).filter(e => e.key === item.key)}
-        now={now}
-        disabled={disabled}
-        {...schedule}
-      />
+      <Reminders item={item} disabled={disabled} schedule={schedule} />
     </div>
+  )
+}
+
+/** The session's reminders: while a cancelled one folds away, as they were when the fold began. */
+function Reminders({ item, disabled, schedule = {} }: Pick<SheetCardProps, 'item' | 'disabled' | 'schedule'>) {
+  const { data, now } = useBoardContext()
+  const { held, armed, ...actions } = schedule
+  const shown = held ? { ...held.view, armed: held.armed } : { data, now, armed }
+  return (
+    <ScheduleRow
+      entries={(shown.data?.schedules ?? []).filter(e => e.key === item.key)}
+      now={shown.now}
+      disabled={disabled}
+      armed={shown.armed}
+      {...actions}
+    />
   )
 }
 

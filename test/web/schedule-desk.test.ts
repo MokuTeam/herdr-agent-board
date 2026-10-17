@@ -1,10 +1,11 @@
 // The reminders' buttons both ways, step by step: the old page's own cancelSchedule, toggleMode,
 // disarm and postSchedule (web/app.js as it was at the parity baseline, its buttons drawn by its
 // cancelButton) and the React page's desk (models/schedule-desk.ts with hooks/useSchedule.ts's
-// postSchedule), given the same clicks, clock and server answers through the same fetch. Each side
-// keeps what it posted, toasted, folded away and unfolded. Then the fold itself (collapse), frame
-// by frame in a fake DOM.
-import { describe, expect, spyOn, test } from 'bun:test'
+// postSchedule), given the same clicks, clock and server answers through the same fetch
+// (support/schedule-world.ts). Each side keeps what it posted, toasted, folded away and unfolded.
+// Then what the desk holds while rows fold away, and the fold itself (collapse), frame by frame in
+// a fake DOM.
+import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { ScheduleEntry } from '../../src/core/schedule-rules.ts'
 import { collapse, postSchedule } from '../../web/src/hooks/useSchedule.ts'
@@ -15,6 +16,7 @@ import { payload } from './support/board.tsx'
 import { box, type FakeElement, FakeWorld } from './support/fake-dom.ts'
 import { parseHtml } from './support/markup.ts'
 import { oldCode, oldFunction } from './support/old-app.ts'
+import { type Row, selectorIds, World, type WorldStep } from './support/schedule-world.ts'
 
 const ENTRIES: ScheduleEntry[] = [
   { id: 's1', key: 'a', text: 'Check the **deploy** at [the dashboard](https://x)', next: 1 },
@@ -22,10 +24,8 @@ const ENTRIES: ScheduleEntry[] = [
   { id: 's3', key: 'b', text: 'Ping', next: 3 },
 ]
 
-type Reply = { status: number; body: unknown } | 'offline'
-
 /** One click, a moment, a server answer or the folding rows done. */
-type Step = { cancel: string } | { mode: string } | { wait: number } | { reply: Reply } | 'folded'
+type Step = { cancel: string } | { mode: string } | WorldStep
 
 interface Trace {
   armed: string | null
@@ -35,83 +35,6 @@ interface Trace {
   folded: string[]
   unfolded: string[]
 }
-
-/** A row on the page, as far as the buttons touch it. */
-type Row = { name: string; removeAttribute(attr: string): void }
-
-/** Timers on a clock the steps move. */
-class Clock {
-  now = 0
-  private next = 1
-  private timers = new Map<number, { at: number; fn: () => void }>()
-  set = (fn: () => void, ms: number): number => {
-    const id = this.next++
-    this.timers.set(id, { at: this.now + ms, fn })
-    return id
-  }
-  clear = (id: number): void => void this.timers.delete(id)
-  advance(ms: number): void {
-    this.now += ms
-    for (const [id, timer] of [...this.timers].sort((a, b) => a[1].at - b[1].at)) {
-      if (timer.at > this.now) continue
-      this.timers.delete(id)
-      timer.fn()
-    }
-  }
-}
-
-/** What both sides share: the server's answers waiting to be given, the rows, what went out. */
-class World {
-  readonly clock = new Clock()
-  readonly posts: string[] = []
-  readonly toasts: [string, boolean][] = []
-  readonly folded: string[] = []
-  readonly unfolded: string[] = []
-  private replies: ((reply: Reply) => void)[] = []
-  private folds: (() => void)[] = []
-  private readonly spy
-
-  constructor() {
-    const fake = (url: string | URL | Request, init?: RequestInit) => {
-      const headers = JSON.stringify(init?.headers)
-      this.posts.push(`${init?.method} ${String(url)} ${headers} ${String(init?.body)}`)
-      return new Promise<Response>((resolve, reject) =>
-        this.replies.push(reply =>
-          reply === 'offline'
-            ? reject(new TypeError('Failed to fetch'))
-            : resolve(new Response(JSON.stringify(reply.body), { status: reply.status })),
-        ),
-      )
-    }
-    this.spy = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(fake, { preconnect: fetch.preconnect }))
-  }
-
-  /** The entry's two rows: in the schedule panel and in the sheet. */
-  rows = (id: string): Row[] =>
-    ['sched-entry', 'sched-mini'].map(kind => ({
-      name: `${kind} ${id}`,
-      removeAttribute: (attr: string) => void this.unfolded.push(`${kind} ${id} ${attr}`),
-    }))
-  collapse = (row: Row): Promise<void> => {
-    this.folded.push(row.name)
-    return new Promise(resolve => this.folds.push(resolve))
-  }
-  toast = (text: string, error = false) => void this.toasts.push([text, error])
-
-  async step(step: Step, act: (step: Step) => unknown): Promise<void> {
-    if (typeof step === 'object' && 'wait' in step) this.clock.advance(step.wait)
-    else if (typeof step === 'object' && 'reply' in step) for (const r of this.replies.splice(0)) r(step.reply)
-    else if (step === 'folded') for (const f of this.folds.splice(0)) f()
-    else void act(step)
-    for (let i = 0; i < 30; i++) await Promise.resolve()
-  }
-
-  dispose(): void {
-    this.spy.mockRestore()
-  }
-}
-
-const selectorIds = (selector: string) => [...selector.matchAll(/data-id="([^"]+)"/g)].map(m => m[1] ?? '')
 
 const shownOf = (list: ScheduleEntry[]) => list.map(e => `${e.id}${e.idle ? ' idle' : ''}`)
 
@@ -144,13 +67,13 @@ async function oldTrace(steps: Step[], { lang = 'en', canEdit = true } = {}): Pr
     const armedNow = () => state.data.schedules.find(e => String(cancelButton(e)).includes('data-confirm'))?.id ?? null
     const traces: Trace[] = []
     for (const step of steps) {
-      await w.step(step, s => {
+      await w.step<Step>(step, s => {
         if (typeof s === 'object' && 'cancel' in s)
           return oldFunction(code, 'cancelSchedule')({ dataset: { schedCancel: s.cancel } })
         if (typeof s === 'object' && 'mode' in s)
           return oldFunction(code, 'toggleMode')({ dataset: { schedMode: s.mode } })
       })
-      traces.push({ armed: armedNow(), shown: shownOf(state.data.schedules), ...sent(w) })
+      traces.push({ armed: armedNow(), shown: shownOf(state.data.schedules), ...w.sent() })
     }
     return traces
   } finally {
@@ -158,50 +81,77 @@ async function oldTrace(steps: Step[], { lang = 'en', canEdit = true } = {}): Pr
   }
 }
 
-/** What went out so far. */
-const sent = (w: World) => ({
-  posts: [...w.posts],
-  toasts: [...w.toasts],
-  folded: [...w.folded],
-  unfolded: [...w.unfolded],
-})
-
-async function newTrace(steps: Step[], { lang = 'en', canEdit = true } = {}): Promise<Trace[]> {
+function newDesk(w: World, { lang = 'en', canEdit = true } = {}) {
   const t = translator(lang)
+  const data = payload({ schedules: structuredClone(ENTRIES) })
+  let edits = NO_EDITS
+  const shown = () => withEdits(data, edits).schedules
+  // What the page shows: here the entries, and a draw counted for each change.
+  let draws = 0
+  const desk = scheduleDesk<Row, string[]>({
+    t: () => t,
+    canEdit: () => canEdit,
+    entries: shown,
+    post: body => postSchedule(body, t),
+    rows: w.rows,
+    collapse: w.collapse,
+    restore: row => row.removeAttribute('style'),
+    edit: edit => {
+      edits = withEdit(edits, edit)
+    },
+    toast: w.toast,
+    setTimeout: w.clock.set,
+    clearTimeout: w.clock.clear,
+    view: () => shownOf(shown()),
+    changed() {
+      draws++
+    },
+  })
+  return { desk, shown, draws: () => draws }
+}
+
+async function newTrace(steps: Step[], options: { lang?: string; canEdit?: boolean } = {}): Promise<Trace[]> {
   const w = new World()
   try {
-    const data = payload({ schedules: structuredClone(ENTRIES) })
-    let edits = NO_EDITS
-    const shown = () => withEdits(data, edits).schedules
-    const desk = scheduleDesk({
-      t: () => t,
-      canEdit: () => canEdit,
-      entries: shown,
-      post: body => postSchedule(body, t),
-      rows: w.rows,
-      collapse: w.collapse,
-      restore: row => row.removeAttribute('style'),
-      edit: edit => {
-        edits = withEdit(edits, edit)
-      },
-      toast: w.toast,
-      setTimeout: w.clock.set,
-      clearTimeout: w.clock.clear,
-      changed() {},
-    })
+    const { desk, shown } = newDesk(w, options)
     const traces: Trace[] = []
     for (const step of steps) {
-      await w.step(step, s => {
+      await w.step<Step>(step, s => {
         if (typeof s === 'object' && 'cancel' in s) return desk.cancel(s.cancel)
         if (typeof s === 'object' && 'mode' in s) return desk.mode(s.mode)
       })
-      traces.push({ armed: desk.armed(), shown: shownOf(shown()), ...sent(w) })
+      traces.push({ armed: desk.armed(), shown: shownOf(shown()), ...w.sent() })
     }
     return traces
   } finally {
     w.dispose()
   }
 }
+
+test('while rows fold away the desk holds what was shown, "Cancel?" and all, and says so at once', async () => {
+  const w = new World()
+  try {
+    const { desk, draws } = newDesk(w)
+    await w.step<Step>({ cancel: 's1' }, s => 'cancel' in s && desk.cancel(s.cancel))
+    expect(desk.held()).toBe(null)
+    const before = draws()
+    await w.step<Step>({ cancel: 's1' }, s => 'cancel' in s && desk.cancel(s.cancel))
+    // Drawn at once with what was on show when the fold began; the button no longer asks.
+    expect(draws()).toBe(before + 1)
+    expect(desk.held()).toEqual({ view: ['s1', 's2 idle', 's3'], armed: 's1' })
+    expect(desk.armed()).toBe(null)
+    // Another entry's cancel while it folds: the page keeps what it holds (the old page drew nothing then).
+    await w.step<Step>({ cancel: 's2' }, s => 'cancel' in s && desk.cancel(s.cancel))
+    expect(desk.held()).toEqual({ view: ['s1', 's2 idle', 's3'], armed: 's1' })
+    await w.step({ reply: { status: 200, body: { ok: true } } }, () => {})
+    expect(desk.held()).not.toBe(null)
+    await w.step('folded', () => {})
+    expect(desk.held()).toBe(null)
+    expect(desk.armed()).toBe('s2')
+  } finally {
+    w.dispose()
+  }
+})
 
 async function same(steps: Step[], options: { lang?: string; canEdit?: boolean } = {}): Promise<Trace[]> {
   const old = await oldTrace(steps, options)

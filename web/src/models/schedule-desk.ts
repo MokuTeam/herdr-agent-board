@@ -3,6 +3,8 @@
 // first arms the button ("Cancel?") for four seconds, the second folds the entry's rows away while
 // the server removes it. The delivery switch (on time / when the session is free) shows at once and
 // goes back if the server says no. Both reach the board through `edit` until its next board.
+// While rows fold away, the panel's and the sheet's reminders keep what they showed when the fold
+// began (the old page's render() drew neither while it was `collapsing`): `held`.
 import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import type { BoardEdit } from './board-edits.ts'
@@ -10,7 +12,7 @@ import { plain } from './card.ts'
 
 export type ScheduleResult = { ok: true } | { ok: false; error: string }
 
-export interface ScheduleDeskDeps<Row> {
+export interface ScheduleDeskDeps<Row, View> {
   t(): Translator
   /** The board can edit (it is connected). */
   canEdit(): boolean
@@ -28,15 +30,23 @@ export interface ScheduleDeskDeps<Row> {
   toast(text: string, error?: boolean): void
   setTimeout(fn: () => void, ms: number): number
   clearTimeout(timer: number): void
+  /** What the page shows of the schedule now (the board and its clock), to keep while rows fold away. */
+  view(): View
   /** What the buttons show changed: draw again. */
   changed(): void
 }
 
-export interface ScheduleDesk {
+/** What the reminders keep showing while rows fold away: the page as it was, its button asking "Cancel?". */
+export interface Held<View> {
+  view: View
+  armed: string | null
+}
+
+export interface ScheduleDesk<View> {
   /** The entry whose cancel button asks "Cancel?". */
   armed(): string | null
-  /** Rows on their way out: the schedule panel draws again once they are gone. */
-  collapsing(): number
+  /** While rows are on their way out: what the reminders keep showing until they are gone; else null. */
+  held(): Held<View> | null
   cancel(id: string): Promise<void>
   mode(id: string): Promise<void>
   /** The button asking "Cancel?" asks no more (the schedule panel closed). */
@@ -46,9 +56,10 @@ export interface ScheduleDesk {
 /** How long a cancel button asks "Cancel?". */
 export const ARMED_MS = 4000
 
-export function scheduleDesk<Row>(deps: ScheduleDeskDeps<Row>): ScheduleDesk {
+export function scheduleDesk<Row, View>(deps: ScheduleDeskDeps<Row, View>): ScheduleDesk<View> {
   let armed: { id: string; timer: number } | null = null
   let collapsing = 0
+  let held: Held<View> | null = null
 
   function disarm(redraw = true): void {
     if (!armed) return
@@ -68,16 +79,20 @@ export function scheduleDesk<Row>(deps: ScheduleDeskDeps<Row>): ScheduleDesk {
       armed = { id, timer: deps.setTimeout(() => disarm(), ARMED_MS) }
       return deps.changed()
     }
-    // Disarmed without a draw: the rows fold away as they are, "Cancel?" and all.
+    // The rows fold away as they are, "Cancel?" and all; a fold already on keeps what it holds.
+    const before: Held<View> = held ?? { view: deps.view(), armed: id }
     disarm(false)
     const entry = deps.entries().find(e => e.id === id)
     const rows = deps.rows(id)
     collapsing++
+    held = before
+    deps.changed()
     let r: ScheduleResult
     try {
       ;[r] = await Promise.all([postSchedule({ op: 'cancel', id }), ...rows.map(row => deps.collapse(row))])
     } finally {
       collapsing--
+      if (!collapsing) held = null
     }
     const t = deps.t()
     if (r.ok) {
@@ -106,5 +121,5 @@ export function scheduleDesk<Row>(deps: ScheduleDeskDeps<Row>): ScheduleDesk {
     deps.toast(t('sched.mode.set', { mode: t(idle ? 'sched.mode.idle' : 'sched.mode.onTime') }))
   }
 
-  return { armed: () => armed?.id ?? null, collapsing: () => collapsing, cancel, mode, disarm: () => disarm() }
+  return { armed: () => armed?.id ?? null, held: () => held, cancel, mode, disarm: () => disarm() }
 }

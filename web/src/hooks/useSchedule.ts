@@ -1,11 +1,14 @@
 // The reminders' buttons for the whole page (models/schedule-desk.ts): one desk, so the schedule
 // panel and the session's sheet share the button that asks "Cancel?". A cancelled entry's rows,
-// in both, fold away with a spring (collapse) while POST /api/schedule removes it.
+// in both, fold away with a spring (collapse) while POST /api/schedule removes it; until they are
+// gone, both keep showing what they showed when the fold began (`held`).
 import { useState } from 'react'
+import type { BoardPayload } from '../../../src/core/payload.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import { api, errorText } from '../api/client.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
-import { type ScheduleDesk, type ScheduleResult, scheduleDesk } from '../models/schedule-desk.ts'
+import type { PendingMoves } from '../models/board-view.ts'
+import { type Held, type ScheduleDesk, type ScheduleResult, scheduleDesk } from '../models/schedule-desk.ts'
 import { reducedMotion, Spring } from '../models/spring.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { Store, useStore } from '../state/store.ts'
@@ -54,11 +57,18 @@ const rowsOf = (id: string): HTMLElement[] => [
   ),
 ]
 
+/** What the reminders are drawn from: the board, its clock and the cards the user moved. */
+export interface ScheduleShown {
+  data: BoardPayload | null
+  now: number
+  moves: PendingMoves
+}
+
 export interface Schedule {
   /** The entry whose cancel button asks "Cancel?". */
   armed: string | null
-  /** Rows on their way out: the schedule panel keeps what it shows until they are gone. */
-  collapsing: number
+  /** Rows on their way out: what the panel and the sheet keep showing until they are gone; else null. */
+  held: Held<ScheduleShown> | null
   cancel(id: string): void
   mode(id: string): void
   disarm(): void
@@ -69,8 +79,8 @@ export function useSchedule(): Schedule {
   const board = useBoardContext()
   const latest = useLatest({ t, board })
   const [version] = useState(() => new Store(0))
-  const [desk] = useState<ScheduleDesk>(() =>
-    scheduleDesk<HTMLElement>({
+  const [desk] = useState<ScheduleDesk<ScheduleShown>>(() =>
+    scheduleDesk<HTMLElement, ScheduleShown>({
       t: () => latest.current.t,
       canEdit: () => latest.current.board.canEdit,
       entries: () => latest.current.board.data?.schedules ?? [],
@@ -82,6 +92,11 @@ export function useSchedule(): Schedule {
       toast: (text, error) => latest.current.board.toast(text, error),
       setTimeout: (fn, ms) => window.setTimeout(fn, ms),
       clearTimeout: timer => window.clearTimeout(timer),
+      // As last drawn.
+      view: () => {
+        const { data, now, ui } = latest.current.board
+        return { data, now, moves: ui.moves }
+      },
       changed: () => version.set(version.get() + 1),
     }),
   )
@@ -91,5 +106,5 @@ export function useSchedule(): Schedule {
     mode: (id: string) => void desk.mode(id),
     disarm: () => desk.disarm(),
   }))
-  return { armed: desk.armed(), collapsing: desk.collapsing(), ...controls }
+  return { armed: desk.armed(), held: desk.held(), ...controls }
 }
