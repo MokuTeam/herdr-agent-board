@@ -6,39 +6,29 @@
 //
 // The quick look grows out of the chip it was opened from and shrinks back into it, on a spring
 // that can be caught midway; it dims the board, Esc closes it, Backspace walks back.
-import { changedFiles } from './diff.js'
+import { changedFiles } from './src/models/diff.ts'
+import {
+  actionsOff,
+  codeLines,
+  crumbs,
+  fileName,
+  ICONS,
+  iconOf,
+  inCheckout,
+  inFolder,
+  kindOfName,
+  markParts,
+  parentOf,
+  rawUrl as rawUrlOf,
+  sizeText,
+  statBook,
+} from './src/models/files.ts'
 import { markdown } from './src/models/markdown.ts'
 import { reducedMotion, Spring } from './src/models/spring.ts'
 import { modalFocus } from './src/models/modal-focus.ts'
 
 const $ = (root, sel) => root.querySelector(sel)
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
-const svg = body => `<svg viewBox="0 0 20 20" aria-hidden="true">${body}</svg>`
-const DOC = '<path d="M5.5 2.5h6l3.5 3.5v11.5h-9.5Z"/><path d="M11.5 2.5V6H15"/>'
-export const ICONS = {
-  dir: svg('<path d="M2.5 6a1.5 1.5 0 0 1 1.5-1.5h3.6l1.7 1.8H16A1.5 1.5 0 0 1 17.5 7.8v7.7A1.5 1.5 0 0 1 16 17H4a1.5 1.5 0 0 1-1.5-1.5Z"/>'),
-  file: svg(DOC),
-  text: svg(`${DOC}<path d="M8 10h4.5M8 12.5h4.5M8 15h3"/>`),
-  markdown: svg(`${DOC}<path d="M7.6 15v-3.6l1.3 1.6 1.3-1.6V15m2-1.4 1 1.2 1-1.2m-1 1.2v-3.4"/>`),
-  json: svg(`${DOC}<path d="m8.6 10.2-1.6 1.6 1.6 1.6m2.8-3.2 1.6 1.6-1.6 1.6"/>`),
-  csv: svg('<rect x="3" y="4" width="14" height="12" rx="1.6"/><path d="M3 8h14M3 12h14M8 4v12"/>'),
-  image: svg('<rect x="3" y="4" width="14" height="12" rx="2"/><circle cx="7.5" cy="8.5" r="1.3"/><path d="m4 15 4.5-4.5 3 3 2-2 3.5 3.5"/>'),
-  pdf: svg(`${DOC}<path d="M7.5 11h5M7.5 13.5h5M7.5 16h3"/>`),
-  video: svg('<rect x="2.5" y="5" width="11" height="10" rx="2"/><path d="m13.5 9 4-2.5v7l-4-2.5"/>'),
-  audio: svg('<path d="M8 14.5V5l8-1.5V13"/><circle cx="6" cy="14.5" r="2"/><circle cx="14" cy="13" r="2"/>'),
-  missing: svg(`${DOC}<path d="m8 10.5 4 4m0-4-4 4"/>`),
-  link: svg('<path d="M7 4.5h8.5V13M15 5 5 15"/>'),
-  reveal: svg('<path d="M2.5 6a1.5 1.5 0 0 1 1.5-1.5h3.6l1.7 1.8H16A1.5 1.5 0 0 1 17.5 7.8v7.7A1.5 1.5 0 0 1 16 17H4a1.5 1.5 0 0 1-1.5-1.5Z"/><path d="M10 9v5m-2.2-2.2L10 14l2.2-2.2"/>'),
-  copy: svg('<rect x="7" y="7" width="9.5" height="9.5" rx="2"/><path d="M13 7V5a1.5 1.5 0 0 0-1.5-1.5h-6A1.5 1.5 0 0 0 4 5v6a1.5 1.5 0 0 0 1.5 1.5H7"/>'),
-  back: svg('<path d="m12 4.5-5.5 5.5 5.5 5.5"/>'),
-  close: svg('<path d="m5.5 5.5 9 9m0-9-9 9"/>'),
-  changes: svg('<circle cx="6" cy="4.8" r="1.8"/><circle cx="6" cy="15.2" r="1.8"/><circle cx="14" cy="7.6" r="1.8"/><path d="M6 6.6v6.8M14 9.4c0 3-2.6 3.6-6.4 4.6"/>'),
-  clean: svg('<circle cx="10" cy="10" r="7"/><path d="m6.8 10.2 2.2 2.2 4.2-4.6"/>'),
-  refresh: svg('<path d="M15.6 10a5.6 5.6 0 1 1-1.7-4M15.6 3.8V7h-3.2"/>'),
-  history: svg('<path d="M3.6 10a6.4 6.4 0 1 0 1.9-4.5M3.5 3.5v3h3"/><path d="M10 6.5V10l2.4 1.6"/>'),
-  search: svg('<circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/>'),
-}
-const iconOf = kind => ICONS[kind] ?? (kind === 'binary' ? ICONS.file : ICONS.text)
 
 /**
  * The chat's files: `t` is a getter for the page's translator, `token` for the raw-bytes token,
@@ -57,7 +47,7 @@ export function initFiles({ t, token, toast, canMutate = () => true, onDialogCha
       return { error: tr('err.offline', { why: err.message }) }
     }
   }
-  const rawUrl = path => `/api/fs/raw?path=${encodeURIComponent(path)}&t=${encodeURIComponent(token() ?? '')}`
+  const rawUrl = path => rawUrlOf(path, token())
 
   async function openUrl(href) {
     if (!canMutate()) return toast(tr('mobile.readOnly'), true)
@@ -84,14 +74,8 @@ export function initFiles({ t, token, toast, canMutate = () => true, onDialogCha
   // ------------------------------------------------------------ chips
   // What the server said about a path, by the session folder it was written in. Paths that were
   // not there are asked again after a while: the agent may create them a moment later.
-  const known = new Map()
-  const key = (cwd, raw) => `${cwd}\n${raw}`
-  function cached(cwd, raw) {
-    const hit = known.get(key(cwd, raw))
-    if (!hit) return null
-    const age = Date.now() - hit.at
-    return age > (hit.info.exists ? 300_000 : 15_000) ? null : hit.info
-  }
+  const known = statBook()
+  const cached = (cwd, raw) => known.get(cwd, raw, Date.now())
 
   /** Turn the path candidates under `root` into chips; `cwd` resolves relative ones. */
   async function upgrade(root, cwd = '') {
@@ -105,7 +89,7 @@ export function initFiles({ t, token, toast, canMutate = () => true, onDialogCha
     const paths = [...new Set(ask.map(el => el.dataset.path))]
     if (!paths.length) return
     const r = await post('/api/fs/stat', { cwd, paths })
-    for (const info of r.items ?? []) known.set(key(cwd, info.raw), { at: Date.now(), info })
+    for (const info of r.items ?? []) known.put(cwd, info, Date.now())
     for (const el of ask) {
       const info = el.isConnected && cached(cwd, el.dataset.path)
       if (info) apply(el, info)
@@ -269,7 +253,7 @@ export function initFiles({ t, token, toast, canMutate = () => true, onDialogCha
     $(root, '.ql-refresh').hidden = !target.changes
     if (target.changes) return showChanges(target, seq, fresh)
     if (target.history) return showHistory(target)
-    head({ path: target.path, name: target.path.split(/[\\/]/).filter(Boolean).pop() ?? target.path, kind: 'file' })
+    head({ path: target.path, name: fileName(target.path), kind: 'file' })
     body.className = 'ql-body loading'
     body.innerHTML = `<div class="ql-wait">${esc(tr('loading'))}</div>`
     $(root, '.ql-foot').textContent = ''
@@ -311,21 +295,17 @@ export function initFiles({ t, token, toast, canMutate = () => true, onDialogCha
     $(root, '.ql-icon').innerHTML = iconOf(d.error === 'missing' ? 'missing' : d.dir ? 'dir' : d.kind)
     $(root, '#ql-name').textContent = d.name ?? ''
     // The folders above it, each one a step to walk to (for changes, up to the checkout itself).
-    const parts = String(d.path ?? '').split(/[\\/]/).filter((p, i) => p || i === 0)
-    const sep = d.path?.includes('\\') ? '\\' : '/'
-    const crumbs = parts.slice(0, d.kind === 'changes' || d.kind === 'history' ? parts.length : -1).map((name, i) => ({ name: name || sep, path: parts.slice(0, i + 1).join(sep) + (i === 0 ? sep : '') }))
     const nav = $(root, '.ql-path')
-    nav.innerHTML = crumbs.map(c => `<button data-go="${esc(c.path)}">${esc(c.name)}</button>`).join('<span>›</span>')
+    nav.innerHTML = crumbs(d.path, d.kind).map(c => `<button data-go="${esc(c.path)}">${esc(c.name)}</button>`).join('<span>›</span>')
     nav.scrollLeft = nav.scrollWidth
     syncActions()
   }
 
   function syncActions() {
-    const d = ql.data ?? {}
-    const exists = (!d.error || d.error === 'denied') && !!d.path
-    for (const sel of ['.ql-open', '.ql-reveal', '.ql-copy']) {
-      $(root, sel).disabled = !exists || (sel !== '.ql-copy' && !canMutate())
-    }
+    const off = actionsOff(ql.data, canMutate())
+    $(root, '.ql-open').disabled = off.open
+    $(root, '.ql-reveal').disabled = off.reveal
+    $(root, '.ql-copy').disabled = off.copy
   }
 
   function render() {
@@ -354,7 +334,7 @@ export function initFiles({ t, token, toast, canMutate = () => true, onDialogCha
       else if (typeof d.text === 'string') {
         if (d.kind === 'markdown' && ql.mode === 'view') {
           body.innerHTML = `<article class="md ql-md">${markdown(d.text, { soft: true })}</article>`
-          upgrade(body, d.path.replace(/[\\/][^\\/]*$/, ''))
+          upgrade(body, parentOf(d.path))
         } else if (d.kind === 'csv' && d.rows?.length) body.innerHTML = table(d.rows)
         else body.innerHTML = code(d.text, d.line)
         foot.push(d.kind === 'csv' && d.rows?.length ? tr('ql.rows', { n: d.rows.length - 1 }) : tr('ql.lines', { n: d.lines }))
@@ -383,8 +363,7 @@ export function initFiles({ t, token, toast, canMutate = () => true, onDialogCha
       foot.push(tr('changes.read', { time: new Date(d.collectedAt).toLocaleTimeString(t().lang, { hour: '2-digit', minute: '2-digit' }) }))
       return
     }
-    const sep = d.root.includes('\\') ? '\\' : '/'
-    const abs = p => d.root.replace(/[\\/]$/, '') + sep + p.split('/').join(sep)
+    const abs = p => inCheckout(d.root, p)
     const code = f => (f.code === '??' ? 'N' : f.code)
     const badge = f => `<span class="st st-${code(f)}" title="${esc(tr(`changes.st.${code(f)}`))}">${code(f)}</span>`
     const count = f => (f.diff && !f.diff.binary ? `<span class="cnt">${f.diff.added ? `<i class="a">+${f.diff.added}</i>` : ''}${f.diff.removed ? `<i class="r">−${f.diff.removed}</i>` : ''}</span>` : '')
@@ -449,17 +428,7 @@ export function initFiles({ t, token, toast, canMutate = () => true, onDialogCha
   }
 
   /** The text, escaped, with every place the query matches marked. */
-  function mark(text, query) {
-    const low = text.toLowerCase()
-    const q = String(query ?? '').toLowerCase()
-    let out = ''
-    let i = 0
-    for (let at = q ? low.indexOf(q) : -1; at >= 0; at = low.indexOf(q, i)) {
-      out += `${esc(text.slice(i, at))}<mark>${esc(text.slice(at, at + q.length))}</mark>`
-      i = at + q.length
-    }
-    return out + esc(text.slice(i))
-  }
+  const mark = (text, query) => markParts(text, query).map(p => (p.hit ? `<mark>${esc(p.text)}</mark>` : esc(p.text))).join('')
 
   async function search(target, query) {
     target.query = query
@@ -476,21 +445,13 @@ export function initFiles({ t, token, toast, canMutate = () => true, onDialogCha
     hits(target)
   }
 
-  // The kind of a file by its name, for the icon only (the server decides the rest).
-  const kindOfName = p => ({ md: 'markdown', markdown: 'markdown', json: 'json', csv: 'csv', tsv: 'csv', png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', svg: 'image', pdf: 'pdf' })[p.split('.').pop().toLowerCase()] ?? 'text'
-
   const date = ms => new Date(ms).toLocaleString(t().lang, { dateStyle: 'medium', timeStyle: 'short' })
-  function size(n) {
-    if (n == null) return ''
-    return n < 1024 ? tr('size.b', { n }) : n < 1 << 20 ? tr('size.kb', { n: Math.round(n / 1024) }) : tr('size.mb', { n: (n / (1 << 20)).toFixed(1) })
-  }
+  const size = n => sizeText(n, t())
   function empty(kind, text, open = false) {
     return `<div class="ql-empty">${iconOf(kind)}<p>${esc(text)}</p>${open ? `<button class="button primary" data-ql="open">${esc(tr('ql.open'))}</button>` : ''}</div>`
   }
   function code(text, line) {
-    const lines = text.split('\n')
-    if (lines.length > 1 && lines.at(-1) === '') lines.pop()
-    return `<div class="ql-code">${lines.map((l, i) => `<div class="ql-ln${i + 1 === line ? ' hit' : ''}" data-n="${i + 1}">${esc(l) || '​'}</div>`).join('')}</div>`
+    return `<div class="ql-code">${codeLines(text).map((l, i) => `<div class="ql-ln${i + 1 === line ? ' hit' : ''}" data-n="${i + 1}">${esc(l) || '​'}</div>`).join('')}</div>`
   }
   function table(rows) {
     const [first, ...rest] = rows
@@ -499,10 +460,9 @@ export function initFiles({ t, token, toast, canMutate = () => true, onDialogCha
   }
   function folder(d) {
     if (!d.entries.length) return empty('dir', tr('ql.emptyFolder'))
-    const sep = d.path.includes('\\') ? '\\' : '/'
     return `<div class="ql-list" role="list">${d.entries
       .map(
-        e => `<button class="ql-row${e.dir ? ' dir' : ''}" role="listitem" data-go="${esc(d.path.replace(/[\\/]$/, '') + sep + e.name)}">
+        e => `<button class="ql-row${e.dir ? ' dir' : ''}" role="listitem" data-go="${esc(inFolder(d.path, e.name))}">
           ${iconOf(e.dir ? 'dir' : e.kind)}<span class="n">${esc(e.name)}</span><span class="m">${e.mtime ? esc(date(e.mtime)) : ''}</span><span class="s">${e.dir ? '' : esc(size(e.size))}</span>
         </button>`,
       )

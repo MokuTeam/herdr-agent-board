@@ -1,6 +1,10 @@
 // A dialog's share of the page's one focus stack (models/modal-focus.ts, shared with the old
 // page's dialogs): open() takes the focus into `win` and keeps Tab inside the layer, with the rest
 // of the page inert; close() gives the focus back to where it came from.
+//
+// The layer must be a direct child of <body>: every other child of <body> goes inert while it is
+// on top, so a layer drawn inside #root would make #root inert, and itself with it. Draw it with
+// createPortal(…, document.body), as the quick look does (components/files/QuickLook.tsx).
 import { type RefObject, useEffect, useMemo } from 'react'
 import { type FocusElement, type FocusScope, modalFocus } from '../models/modal-focus.ts'
 
@@ -30,6 +34,7 @@ export function scopeOfElements(
   }
 }
 
+/** `layer`: a direct child of <body> (a portal), never an element inside #root. */
 export function useModalFocus(
   layer: RefObject<HTMLElement | null>,
   win: RefObject<HTMLElement | null> = layer,

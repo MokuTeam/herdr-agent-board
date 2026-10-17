@@ -1,9 +1,17 @@
+import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
-import { changedFiles, parseDiff, parseStatus } from '../web/diff.js'
+import { changedFiles, parseDiff, parseStatus } from '../../web/src/models/diff.ts'
 
 test('git status: codes, renames, untracked and quoted paths', () => {
-  const status = [' M src/app.js', 'A  new.txt', ' D gone.md', 'R  old name.txt -> new name.txt', '?? draft/', 'UU both.js', '?? "caf\\303\\251.txt"'].join('\n')
+  const status = [
+    ' M src/app.js',
+    'A  new.txt',
+    ' D gone.md',
+    'R  old name.txt -> new name.txt',
+    '?? draft/',
+    'UU both.js',
+    '?? "caf\\303\\251.txt"',
+  ].join('\n')
   assert.deepEqual(parseStatus(status), [
     { path: 'src/app.js', from: null, code: 'M' },
     { path: 'new.txt', from: null, code: 'A' },
@@ -36,19 +44,40 @@ test('git diff: files, both line numbers through hunks, counts, binary files', (
     'Binary files a/logo.png and b/logo.png differ',
   ].join('\n')
   const [app, logo] = parseDiff(diff)
+  assert.ok(app && logo)
   assert.equal(app.path, 'src/app.js')
   assert.equal(app.added, 3)
   assert.equal(app.removed, 2)
-  assert.deepEqual(app.lines.map(l => [l.kind, l.old, l.new]), [
-    ['hunk', null, null], ['ctx', 10, 10], ['del', 11, null], ['add', null, 11], ['add', null, 12], ['ctx', 12, 13],
-    ['hunk', null, null], ['del', 40, null], ['add', null, 41], ['note', null, null],
-  ])
+  assert.deepEqual(
+    app.lines.map(l => [l.kind, l.old, l.new]),
+    [
+      ['hunk', null, null],
+      ['ctx', 10, 10],
+      ['del', 11, null],
+      ['add', null, 11],
+      ['add', null, 12],
+      ['ctx', 12, 13],
+      ['hunk', null, null],
+      ['del', 40, null],
+      ['add', null, 41],
+      ['note', null, null],
+    ],
+  )
   assert.equal(logo.binary, true)
   assert.equal(logo.lines.length, 0)
 })
 
 test('status and diff together: every file once, untracked ones without a diff', () => {
-  const files = changedFiles(' M a.js\n?? b.txt\n', 'diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\n@@ -1 +1 @@\n-x\n+y\n')
-  assert.deepEqual(files.map(f => [f.path, f.code, !!f.diff]), [['a.js', 'M', true], ['b.txt', '??', false]])
+  const files = changedFiles(
+    ' M a.js\n?? b.txt\n',
+    'diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\n@@ -1 +1 @@\n-x\n+y\n',
+  )
+  assert.deepEqual(
+    files.map(f => [f.path, f.code, !!f.diff]),
+    [
+      ['a.js', 'M', true],
+      ['b.txt', '??', false],
+    ],
+  )
   assert.equal(changedFiles('', '').length, 0)
 })

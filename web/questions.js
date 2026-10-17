@@ -9,14 +9,14 @@ import {
   currentQuestion,
   digitTarget,
   emptyPicks,
-  formKey,
   instant,
   payload,
   pendingQuestions,
   permissionTone,
   remaining,
   typeOther,
-} from './question-model.js'
+} from './src/models/question-model.ts'
+import { dialogFor, formHint, formLocked, optionOn, previewText, sendButton } from './src/models/questions.ts'
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 const SPIN = '<svg class="spin" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3a7 7 0 1 1-7 7"/></svg>'
@@ -77,22 +77,15 @@ export function initQuestions({ box, t, item, act, toast, canMutate, focusSessio
   /** What the sheet should show for this session: a question form, a permission prompt, or null. */
   function wants(it, detail) {
     if (!it) return null
-    const qs = pendingQuestions(it)
-    if (qs) return { kind: 'question', key: formKey(it), it, questions: qs }
-    const dialog = detail?.item?.key === it.key ? detail.dialog : null
-    // Answered: the transcript knows at once, herdr's status follows a refresh later. Until then
-    // the form stays, saying it went through, rather than "answer in the terminal"; a new
-    // permission prompt on the screen takes over.
-    if (answered?.shown.it.key === it.key) {
-      // Moved on, or still blocked long after: the finished form goes, so the same prompt asked
-      // again is a new one to answer.
-      if (it.status !== 'blocked' || Date.now() - answered.at > 10_000) {
-        if (forms.get(answered.shown.key)?.status === 'sent') forms.delete(answered.shown.key)
-        answered = null
-      } else if (!(dialog?.kind === 'permission' && dialog.fingerprint !== answered.shown.dialog?.fingerprint)) return { ...answered.shown, it }
+    // Answered: the form stays, saying it went through, until herdr sees the session move on
+    // (src/models/questions.ts dialogFor); once over, the finished form goes, so the same prompt
+    // asked again is a new one to answer.
+    const next = dialogFor(it, detail, answered, Date.now())
+    if (next.expired) {
+      if (forms.get(answered.shown.key)?.status === 'sent') forms.delete(answered.shown.key)
+      answered = null
     }
-    if (it.status === 'blocked' && dialog?.kind === 'permission') return { kind: 'permission', key: `${it.key}|${dialog.fingerprint}`, it, dialog }
-    return null
+    return next.shown
   }
 
   /** Draws the form into the box when the session has one; false leaves the box to the caller. */
@@ -181,7 +174,7 @@ export function initQuestions({ box, t, item, act, toast, canMutate, focusSessio
     const tr = t()
     const f = forms.get(shown.key)
     if (!f) return
-    const locked = !canMutate() || f.status === 'sending' || f.status === 'sent'
+    const locked = formLocked(f, canMutate())
     for (const el of box.querySelectorAll('button.qa-opt, .qa-input')) el.disabled = locked
     box.firstElementChild?.classList.toggle('read-only', !canMutate())
     for (const el of box.querySelectorAll('[data-qa-focus]')) el.disabled = !canMutate()
@@ -189,31 +182,24 @@ export function initQuestions({ box, t, item, act, toast, canMutate, focusSessio
     const qs = shown.questions
     for (const el of box.querySelectorAll('.qa-opt[data-q]')) {
       const i = Number(el.dataset.q)
-      const p = f.picks[i]
-      const on = el.dataset.n === 'other' ? p.otherOn : p.options.includes(qs[i].options[Number(el.dataset.n) - 1]?.label)
+      const on = optionOn(qs[i], f.picks[i], el.dataset.n === 'other' ? 'other' : Number(el.dataset.n))
       el.classList.toggle('on', on)
       if (el.tagName === 'BUTTON') el.setAttribute('aria-checked', String(on))
     }
     for (const pre of box.querySelectorAll('.qa-preview')) {
-      // The option under the pointer or the focus, as the terminal shows the one under its cursor;
-      // else the one picked, else the first.
       const i = Number(pre.dataset.q)
-      const label = f.picks[i].options[0]
-      const o = (peek?.q === i ? qs[i].options[peek.n - 1] : null) ?? qs[i].options.find(x => x.label === label) ?? qs[i].options[0]
-      pre.textContent = o?.preview ?? ''
-      pre.hidden = !o?.preview
+      const text = previewText(qs[i], f.picks[i], i, peek)
+      pre.textContent = text
+      pre.hidden = !text
     }
-    const left = remaining(qs, f.picks)
     const send = box.querySelector('[data-qa-send]')
-    send.lastChild.textContent = f.status === 'error' ? tr('qa.retry') : tr('qa.send', { n: qs.length })
-    send.disabled = locked || left > 0
-    send.title = !canMutate() ? tr('mobile.readOnly') : left ? tr('qa.left', { n: left }) : ''
-    // One question picked with a click needs no button, unless it is an own answer.
-    send.hidden = instant(qs) && !f.picks[0].otherOn && f.status !== 'error'
+    const button = sendButton(qs, f, canMutate(), tr)
+    send.lastChild.textContent = button.label
+    send.disabled = button.disabled
+    send.title = button.title
+    send.hidden = button.hidden
     const hint = box.querySelector('.qa-hint')
-    // The keys only where there is a keyboard to press them on.
-    const keys = matchMedia('(pointer: fine)').matches ? tr('qa.keys', { n: Math.min(9, Math.max(...qs.map(q => q.options.length + (q.preview ? 0 : 1)))) }) : ''
-    const text = !canMutate() ? tr('mobile.readOnly') : left && qs.length > 1 ? tr('qa.left', { n: left }) : keys
+    const text = formHint(qs, f.picks, canMutate(), matchMedia('(pointer: fine)').matches, tr)
     if (hint.textContent !== text) hint.textContent = text
   }
 

@@ -2,13 +2,11 @@
 // session asleep in the idle column is one line. Motion and dragging are the board's
 // (hooks/useFlip.ts, hooks/useCardDrag.ts); the card only says what it is.
 import type { KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from 'react'
-import type { FormQuestion } from '../../../src/core/dialogs/question-form.ts'
 import type { Item, LaunchView, ToolCall } from '../../../src/core/types.ts'
-// Moves to models/question-model.ts with the sheet's question forms (Task 25).
-import { pendingQuestions } from '../../question-model.js'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { unseenResult } from '../models/attention.ts'
 import { askLine, cardAge, cardWords, compact, dismissable, inTurn, launchOf, questionLine } from '../models/card.ts'
+import { pendingQuestions } from '../models/question-model.ts'
 import { COLUMN_COLORS } from '../models/toolbar.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { AlarmBadge } from './AlarmBadge.tsx'
@@ -139,7 +137,7 @@ function CardBody({ item, launch }: { item: Item; launch: LaunchSlots | undefine
 /** Under "Needs me": a question form's first question and options, else the question or the kind of stop. */
 function CardAsk({ item }: { item: Item }) {
   const t = useT()
-  const questions: FormQuestion[] | null = pendingQuestions(item)
+  const questions = pendingQuestions(item)
   if (questions) {
     const line = questionLine(questions, t)
     return (

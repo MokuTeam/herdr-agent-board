@@ -33,8 +33,10 @@ export interface SheetScene {
   stale?: boolean
   moves?: { key: string; cat: string | null; column: ColumnId | null }[]
   armed?: string | null
-  /** The form the session waits on (25c's), as both pages would draw it in #sheet-question. */
+  /** The form the session waits on, as both pages would draw it in #sheet-question (a stand-in)… */
   formHtml?: string
+  /** …or the old page's own form (`formHtml`) beside the React one. */
+  formNode?: ReactNode
   narrow?: boolean
   propertiesOpen?: boolean
   message?: string
@@ -87,7 +89,10 @@ export function drawSheet(scene: SheetScene): SheetSides {
   const connected = scene.connected ?? true
   const moves = scene.moves ?? []
   const now = Date.now()
-  const formHtml = scene.formHtml === undefined ? undefined : `<div class="qa-stand-in">${scene.formHtml}</div>`
+  const formHtml =
+    scene.formHtml === undefined || scene.formNode !== undefined
+      ? scene.formHtml
+      : `<div class="qa-stand-in">${scene.formHtml}</div>`
   // Opening a session resets its detail (openSheet: detail.reset, state.detailState).
   const detail = scene.detail ?? emptyDetail(scene.open)
   const old = sheetParts(
@@ -131,7 +136,7 @@ export function drawSheet(scene: SheetScene): SheetSides {
       open={scene.open}
       item={shown}
       detail={detail}
-      form={formNode(scene.formHtml)}
+      form={scene.formNode ?? formNode(scene.formHtml)}
       narrow={!!scene.narrow}
       propertiesOpen={!!scene.propertiesOpen}
       composer={composerOf(scene)}

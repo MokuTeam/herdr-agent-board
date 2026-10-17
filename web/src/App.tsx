@@ -1,16 +1,23 @@
-// The board page: the toolbar over the board, the side panels, the usage popover and the toasts,
-// the keys and the Back button.
+// The board page: the toolbar over the board, the side panels, the usage popover, the quick look
+// and the toasts, the keys and the Back button; the chat's files and links, and the question forms.
 import { useEffect, useRef, useState } from 'react'
 import { Board } from './components/Board.tsx'
+import { FileChips } from './components/files/FileChip.tsx'
+import { QuickLook } from './components/files/QuickLook.tsx'
 import { LimitsPop } from './components/LimitsPop.tsx'
+import { SheetQuestion } from './components/questions/SheetQuestion.tsx'
 import { SidePanels } from './components/SidePanels.tsx'
 import { Toasts } from './components/Toasts.tsx'
 import { Toolbar } from './components/Toolbar.tsx'
 import { useBoardKeys } from './hooks/useBoardKeys.ts'
 import { useDialogHistory } from './hooks/useDialogHistory.ts'
+import { useFileChips } from './hooks/useFileChips.ts'
+import { useFileLinks } from './hooks/useFileLinks.ts'
 import { laneContext, useNewSession } from './hooks/useNewSession.ts'
 import { useNextAttention } from './hooks/useNextAttention.ts'
 import { usePanelLayout } from './hooks/usePanelLayout.ts'
+import { useQuestions } from './hooks/useQuestions.ts'
+import { useQuickLook } from './hooks/useQuickLook.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
 
 export function App() {
@@ -22,14 +29,24 @@ export function App() {
   // The launch window (Task 27) opens from here; until then only the "no fresh data" toast.
   const newSession = useNewSession()
   const openNextAttention = useNextAttention()
+  // Paths in the chat become chips; a chip, the sheet's Changes and History open the quick look.
+  const chips = useFileChips()
+  const quickLook = useQuickLook(chips.upgrade)
+  useFileLinks(quickLook.look)
+  const questions = useQuestions()
   useBoardKeys({
     openNextAttention,
     newSession,
+    quickLookOpen: quickLook.isOpen,
     panelOpen: () => !!panels.place.openPanel(),
     closePanel: panels.closeOpen,
+    sessionPanelOpen: () => !!panels.place.openPanel(),
+    pickOption: questions.pickOption,
   })
-  // Layers above the board, topmost first: Back on a phone closes them one at a time.
+  // Layers above the board, topmost first: Back on a phone closes them one at a time (the quick
+  // look a step at a time).
   useDialogHistory([
+    { open: quickLook.open, close: quickLook.back },
     {
       open: ui.limitsOpen,
       close: () => {
@@ -59,9 +76,18 @@ export function App() {
         schedule={schedule}
         onCategoriesClose={() => setCategories(false)}
         onScheduleClose={() => setSchedule(false)}
-        sheet={{ onNewSession: newSession, schedule: { onMore: () => setSchedule(true) } }}
+        sheet={{
+          onNewSession: newSession,
+          schedule: { onMore: () => setSchedule(true) },
+          question: (item, detail) => questions.mount(item, detail) && <SheetQuestion questions={questions} />,
+          upgradeFiles: chips.upgrade,
+          onChanges: quickLook.lookChanges,
+          onHistory: quickLook.lookHistory,
+        }}
       />
       <LimitsPop anchor={limitsAnchor} />
+      <FileChips chips={chips} />
+      <QuickLook engine={quickLook.engine} />
       <Toasts />
     </>
   )

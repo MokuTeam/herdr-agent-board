@@ -4,7 +4,7 @@
 // that code left it), events with capture and bubbling, pointer capture, focus, and a clock that
 // drives requestAnimationFrame and timers frame by frame. A world installs its globals while it
 // runs and puts the old ones back after.
-import { type Element as MElement, type Node as MNode, parseHtml } from './markup.ts'
+import { type Element as MElement, type Node as MNode, parseHtml, serializeNodes } from './markup.ts'
 
 type Handler = (event: FakeEvent) => void
 interface Listener {
@@ -109,21 +109,23 @@ export class FakeEvent {
   }
 }
 
-// ---------------------------------------------------------------- selectors (simple ones, no combinators)
+// ---------------------------------------------------------------- selectors (simple ones, `:not(simple)`, descendants)
 
 interface Simple {
   tag: string | null
   id: string | null
   classes: string[]
   attrs: { name: string; value: string | null }[]
+  not: Simple[]
 }
 
-const SIMPLE = /([#.]?[\w-]+|\[[\w-]+(?:="[^"]*")?\])/g
+const SIMPLE = /(:not\([^)]*\)|[#.]?[\w-]+|\[[\w-]+(?:="[^"]*")?\])/g
 
 function parseSimple(text: string): Simple {
-  const simple: Simple = { tag: null, id: null, classes: [], attrs: [] }
+  const simple: Simple = { tag: null, id: null, classes: [], attrs: [], not: [] }
   for (const [part] of text.trim().matchAll(SIMPLE)) {
-    if (part.startsWith('#')) simple.id = part.slice(1)
+    if (part.startsWith(':not(')) simple.not.push(parseSimple(part.slice(5, -1)))
+    else if (part.startsWith('#')) simple.id = part.slice(1)
     else if (part.startsWith('.')) simple.classes.push(part.slice(1))
     else if (part.startsWith('[')) {
       const [name = '', value] = part.slice(1, -1).split('=')
@@ -133,17 +135,46 @@ function parseSimple(text: string): Simple {
   return simple
 }
 
-function matchesSelector(node: MElement, selector: string): boolean {
+function matchesSimple(node: MElement, s: Simple): boolean {
+  const classes = (node.attrs.get('class') ?? '').split(/\s+/)
+  return (
+    (s.tag === null || node.tag === s.tag) &&
+    (s.id === null || node.attrs.get('id') === s.id) &&
+    s.classes.every(c => classes.includes(c)) &&
+    s.attrs.every(a => node.attrs.has(a.name) && (a.value === null || node.attrs.get(a.name) === a.value)) &&
+    s.not.every(n => !matchesSimple(node, n))
+  )
+}
+
+type ParentOf = (node: MElement) => MElement | undefined
+
+/** `a b`: the last part on the node, each one before it on an ancestor further up. */
+function matchesSelector(node: MElement, selector: string, parentOf: ParentOf): boolean {
   return selector.split(',').some(text => {
-    const s = parseSimple(text)
-    const classes = (node.attrs.get('class') ?? '').split(/\s+/)
-    return (
-      (s.tag === null || node.tag === s.tag) &&
-      (s.id === null || node.attrs.get('id') === s.id) &&
-      s.classes.every(c => classes.includes(c)) &&
-      s.attrs.every(a => node.attrs.has(a.name) && (a.value === null || node.attrs.get(a.name) === a.value))
-    )
+    const parts = text.trim().split(/\s+/).map(parseSimple)
+    const last = parts.pop()
+    if (!last || !matchesSimple(node, last)) return false
+    let at = parentOf(node)
+    for (const part of parts.reverse()) {
+      while (at && !matchesSimple(at, part)) at = parentOf(at)
+      if (!at) return false
+      at = parentOf(at)
+    }
+    return true
   })
+}
+
+const textOf = (nodes: MNode[]): string => nodes.map(n => (n.kind === 'text' ? n.text : textOf(n.children))).join('')
+
+/** A text node, for `lastChild` and the like. */
+export class FakeText {
+  constructor(readonly node: { kind: 'text'; text: string }) {}
+  get textContent(): string {
+    return this.node.text
+  }
+  set textContent(text: string) {
+    this.node.text = text
+  }
 }
 
 // ---------------------------------------------------------------- elements
@@ -292,10 +323,52 @@ export class FakeElement extends FakeTarget {
   hasAttribute(name: string): boolean {
     return this.node.attrs.has(name)
   }
+  get innerHTML(): string {
+    return serializeNodes(this.node.children)
+  }
   set innerHTML(html: string) {
     this.node.children = parseHtml(html)
     this.world.index(this.node)
   }
+  get textContent(): string {
+    return textOf(this.node.children)
+  }
+  set textContent(text: string) {
+    this.node.children = text ? [{ kind: 'text', text }] : []
+  }
+  replaceChildren(): void {
+    this.node.children = []
+  }
+  get firstElementChild(): FakeElement | null {
+    const first = this.node.children.find(n => n.kind === 'element')
+    return first?.kind === 'element' ? this.world.wrap(first) : null
+  }
+  get lastChild(): FakeElement | FakeText | null {
+    const last = this.node.children.at(-1)
+    if (!last) return null
+    return last.kind === 'element' ? this.world.wrap(last) : new FakeText(last)
+  }
+  get title(): string {
+    return this.node.attrs.get('title') ?? ''
+  }
+  set title(value: string) {
+    this.node.attrs.set('title', value)
+  }
+  get disabled(): boolean {
+    return this.node.attrs.has('disabled')
+  }
+  set disabled(on: boolean) {
+    if (on) this.node.attrs.set('disabled', '')
+    else this.node.attrs.delete('disabled')
+  }
+  /** A field's value, kept as its attribute (where React's server markup has it). */
+  get value(): string {
+    return this.node.attrs.get('value') ?? ''
+  }
+  set value(text: string) {
+    this.node.attrs.set('value', String(text))
+  }
+  readonly isContentEditable = false
   append(...children: FakeElement[]): void {
     for (const child of children) {
       this.node.children.push(child.node)
@@ -306,13 +379,18 @@ export class FakeElement extends FakeTarget {
     const parent = this.world.parents.get(this.node)
     return parent ? this.world.wrap(parent) : null
   }
+  /** In the page: each one up is still among its parent's children (innerHTML drops the old ones). */
   get isConnected(): boolean {
     let node: MElement | undefined = this.node
-    while (node && node !== this.world.html) node = this.world.parents.get(node)
+    while (node && node !== this.world.html) {
+      const parent: MElement | undefined = this.world.parents.get(node)
+      if (!parent?.children.includes(node)) return false
+      node = parent
+    }
     return node === this.world.html
   }
   matches(selector: string): boolean {
-    return matchesSelector(this.node, selector)
+    return matchesSelector(this.node, selector, n => this.world.parents.get(n))
   }
   closest(selector: string): FakeElement | null {
     for (let el: FakeElement | null = this; el; el = el.parentElement) if (el.matches(selector)) return el
@@ -323,7 +401,7 @@ export class FakeElement extends FakeTarget {
     const walk = (nodes: MNode[]) => {
       for (const n of nodes) {
         if (n.kind !== 'element') continue
-        if (matchesSelector(n, selector)) found.push(this.world.wrap(n))
+        if (matchesSelector(n, selector, p => this.world.parents.get(p))) found.push(this.world.wrap(n))
         walk(n.children)
       }
     }

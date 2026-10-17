@@ -173,6 +173,17 @@ export function pageMarkup(): Node[] {
   return parseHtml(readFileSync(join(import.meta.dir, '..', '..', '..', 'web', 'index.html'), 'utf8'))
 }
 
+/** A tree back to markup (`innerHTML`). */
+export function serializeNodes(nodes: Node[]): string {
+  return nodes
+    .map(n => {
+      if (n.kind === 'text') return escapeText(n.text)
+      const attrs = [...n.attrs].map(([k, v]) => ` ${k}="${escapeAttr(v)}"`).join('')
+      return VOID.has(n.tag) ? `<${n.tag}${attrs}>` : `<${n.tag}${attrs}>${serializeNodes(n.children)}</${n.tag}>`
+    })
+    .join('')
+}
+
 /** What a React tree renders on the server, parsed. */
 export function reactMarkup(node: ReactNode): Node[] {
   return parseHtml(renderToStaticMarkup(node))
