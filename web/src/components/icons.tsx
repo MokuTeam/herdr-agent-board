@@ -49,6 +49,55 @@ export const ArrowIcon = () => (
   </Icon>
 )
 
+// The session sheet's buttons.
+
+export const FocusIcon = () => (
+  <Icon>
+    <path d="M7 4.5h8.5V13M15 5 5 15" />
+  </Icon>
+)
+
+export const SunIcon = () => (
+  <Icon>
+    <circle cx="10" cy="10" r="3.5" />
+    <path d="M10 2.5v2m0 11v2m7.5-7.5h-2m-11 0h-2m12.8-5.3-1.4 1.4M6.1 13.9l-1.4 1.4m0-10.6 1.4 1.4m7.8 7.8 1.4 1.4" />
+  </Icon>
+)
+
+export const BranchIcon = () => (
+  <Icon>
+    <circle cx="6" cy="4.8" r="1.8" />
+    <circle cx="6" cy="15.2" r="1.8" />
+    <circle cx="14" cy="7.6" r="1.8" />
+    <path d="M6 6.6v6.8M14 9.4c0 3-2.6 3.6-6.4 4.6" />
+  </Icon>
+)
+
+export const HistoryIcon = () => (
+  <Icon>
+    <path d="M3.6 10a6.4 6.4 0 1 0 1.9-4.5M3.5 3.5v3h3" />
+    <path d="M10 6.5V10l2.4 1.6" />
+  </Icon>
+)
+
+export const ClipIcon = () => (
+  <Icon>
+    <path d="m15.5 9.5-5.6 5.6a3.5 3.5 0 0 1-5-5l6-6a2.3 2.3 0 0 1 3.3 3.3l-6 6a1.2 1.2 0 0 1-1.7-1.7L12 6.2" />
+  </Icon>
+)
+
+export const CrossIcon = () => (
+  <Icon>
+    <path d="m6.5 6.5 7 7m0-7-7 7" />
+  </Icon>
+)
+
+export const SendIcon = () => (
+  <Icon>
+    <path d="M10 16V4m-5 5 5-5 5 5" />
+  </Icon>
+)
+
 /**
  * The icons the old page drew from its ICON strings (the "new session" plus, the cards' icons):
  * unlike the toolbar's they are not hidden from screen readers, as before.
@@ -122,5 +171,37 @@ export const AlarmGlyph = () => (
 export const RepeatGlyph = () => (
   <Glyph>
     <path d="M4 9.5V8a3 3 0 0 1 3-3h8.5m-2.5-2.5L15.5 5 13 7.5M16 10.5V12a3 3 0 0 1-3 3H4.5M7 12.5 4.5 15 7 17.5" />
+  </Glyph>
+)
+
+export const ChevGlyph = () => (
+  <Glyph className="chev">
+    <path d="m8 5 5 5-5 5" />
+  </Glyph>
+)
+
+export const TrashGlyph = () => (
+  <Glyph>
+    <path d="M4.5 6h11M8 6V4.5h4V6m-6 0 .7 9.5h6.6L14 6" />
+  </Glyph>
+)
+
+export const BoltGlyph = () => (
+  <Glyph>
+    <path d="M11 2.5 4.5 11H10l-1 6.5L15.5 9H10Z" />
+  </Glyph>
+)
+
+export const HourglassGlyph = () => (
+  <Glyph>
+    <path d="M6 3h8M6 17h8M7 3v2.6c0 1.2.6 2.1 1.6 2.8L10 9.4l1.4-1c1-.7 1.6-1.6 1.6-2.8V3M7 17v-2.6c0-1.2.6-2.1 1.6-2.8l1.4-1 1.4 1c1 .7 1.6 1.6 1.6 2.8V17" />
+  </Glyph>
+)
+
+/** A file in the message box that is not a picture. */
+export const FileGlyph = () => (
+  <Glyph>
+    <path d="M5.5 2.5h6l3.5 3.5v11.5h-9.5Z" />
+    <path d="M11.5 2.5V6H15" />
   </Glyph>
 )

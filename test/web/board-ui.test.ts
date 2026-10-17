@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { resultToken } from '../../web/src/models/attention.ts'
 import { catOf, colOf, NO_MOVES } from '../../web/src/models/board-view.ts'
 import { type BoardUi, boardUi, initialUi, parseSeen } from '../../web/src/state/board-ui.ts'
 import { item } from './support/board.tsx'
@@ -12,6 +13,8 @@ test('the page state starts from localStorage: lane, sleepers and view receipts,
     sleepers: true,
     viewed: {},
     open: null,
+    opened: 0,
+    compose: false,
     limitsOpen: false,
     toasts: [],
     lastToast: 0,
@@ -71,4 +74,22 @@ test('busy: what is happening to a session ("Waking…") until it is over', () =
   ])
   ui = boardUi(ui, { type: 'busy', key: 'a', label: null })
   expect([...ui.busy]).toEqual([['b', 'Going to sleep…']])
+})
+
+test('opening: each one counts (the same session again starts its sheet over), "Write" asks for the message box', () => {
+  let ui: BoardUi = initialUi(stored({}))
+  ui = boardUi(ui, { type: 'open', key: 'a' })
+  expect([ui.open, ui.opened, ui.compose]).toEqual(['a', 1, false])
+  ui = boardUi(ui, { type: 'open', key: 'a', compose: true })
+  expect([ui.open, ui.opened, ui.compose]).toEqual(['a', 2, true])
+  ui = boardUi(ui, { type: 'open', key: null })
+  expect([ui.open, ui.opened, ui.compose]).toEqual([null, 2, true])
+  ui = boardUi(ui, { type: 'open', key: 'b' })
+  expect([ui.open, ui.opened, ui.compose]).toEqual(['b', 3, false])
+})
+
+test('a result read in the sheet is recorded as viewed', () => {
+  const done = item({ key: 'a', column: 'done', result: 'Fixed', activity: 5 })
+  const ui = boardUi(initialUi(stored({})), { type: 'viewed', item: done })
+  expect(ui.viewed).toEqual({ a: resultToken(done) })
 })

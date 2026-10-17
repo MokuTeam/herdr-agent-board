@@ -1,7 +1,7 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
-import { ApiError, api, errorText, isBoardPayload } from '../../web/src/api/client.ts'
-import { payload } from './support/board.tsx'
+import { ApiError, api, errorText, isBoardPayload, isSessionDetail } from '../../web/src/api/client.ts'
+import { item, payload } from './support/board.tsx'
 
 const t = translator('en')
 type Call = { url: string; init: RequestInit | undefined }
@@ -73,4 +73,55 @@ test('GET checks the answer with the guard; the board snapshot is uncached', asy
   answer(200, '[1,2]')
   const isList = (v: unknown): v is number[] => Array.isArray(v)
   expect(await api.get('/api/list', isList)).toEqual([1, 2])
+})
+
+const detail = {
+  item: item({ key: 'a' }),
+  conversation: [
+    { role: 'user', text: 'hi', at: 1 },
+    { role: 'tool', label: 'Read', detail: 'x', path: '', done: true, at: 2 },
+  ],
+  screen: '',
+  dialog: null,
+  checkout: true,
+}
+
+test('a session detail has its item, turns, screen, dialog and checkout', () => {
+  expect(isSessionDetail(detail)).toBe(true)
+  expect(isSessionDetail({ ...detail, dialog: { kind: 'review' } })).toBe(true)
+  expect(isSessionDetail({ ...detail, conversation: [{ text: 'no role' }] })).toBe(false)
+  expect(isSessionDetail({ ...detail, item: { name: 'no key' } })).toBe(false)
+  expect(isSessionDetail({ ...detail, checkout: 'yes' })).toBe(false)
+  expect(isSessionDetail({ ...detail, screen: undefined })).toBe(false)
+})
+
+test('a session is read uncached by its key, with the signal; a 404 keeps its status', async () => {
+  const calls = answer(200, JSON.stringify(detail))
+  const signal = new AbortController().signal
+  expect((await api.session('a/b c', signal)).checkout).toBe(true)
+  expect(calls[0]?.url).toBe('/api/session/a%2Fb%20c')
+  expect(calls[0]?.init?.cache).toBe('no-store')
+  expect(calls[0]?.init?.signal).toBe(signal)
+  answer(404, '{"error":"Session not found"}')
+  const gone = await api.session('a', signal).catch((err: unknown) => err)
+  expect(gone).toBeInstanceOf(ApiError)
+  expect(gone instanceof ApiError && [gone.status, gone.message]).toEqual([404, 'Session not found'])
+})
+
+test('an upload posts the file itself with X-Board, its name and type; it answers where it went', async () => {
+  const calls = answer(200, JSON.stringify({ ok: true, path: 'C:\\u\\2026-10-17\\a b.png' }))
+  const file = new File(['png'], 'a b.png', { type: 'image/png' })
+  expect(await api.upload('a b.png', file)).toBe('C:\\u\\2026-10-17\\a b.png')
+  expect(calls[0]?.url).toBe('/api/upload')
+  expect(calls[0]?.init?.method).toBe('POST')
+  expect(calls[0]?.init?.headers).toEqual({ 'x-board': '1', 'x-filename': 'a%20b.png', 'content-type': 'image/png' })
+  expect(calls[0]?.init?.body).toBe(file)
+  const untyped = answer(200, '{"ok":true,"path":"/u/x"}')
+  await api.upload('x', new Blob(['x']))
+  expect(untyped[0]?.init?.headers).toMatchObject({ 'content-type': 'application/octet-stream' })
+  answer(413, '{"error":"File larger than 30 MB"}')
+  const big = await api.upload('x', new Blob(['x'])).catch((err: unknown) => err)
+  expect(errorText(big, t)).toBe('File larger than 30 MB')
+  answer(200, '{"ok":false}')
+  expect(errorText(await api.upload('x', new Blob(['x'])).catch((err: unknown) => err), t)).toBe('Error 200')
 })

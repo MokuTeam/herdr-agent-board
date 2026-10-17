@@ -59,6 +59,7 @@ export function App() {
         schedule={schedule}
         onCategoriesClose={() => setCategories(false)}
         onScheduleClose={() => setSchedule(false)}
+        sheet={{ onNewSession: newSession, schedule: { onMore: () => setSchedule(true) } }}
       />
       <LimitsPop anchor={limitsAnchor} />
       <Toasts />

@@ -3,10 +3,12 @@
 // moves and the one-open-at-a-time rule are the shared place's (components/panel/place.ts and
 // motion.ts); `open` asks for it, `onClose` hears when it closed itself or gave way to another.
 import type { ReactNode, Ref } from 'react'
+import type { DropHandlers } from '../../hooks/useFileDrop.ts'
 import { usePanel } from '../../hooks/usePanel.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import type { Edge } from '../../models/panel-layout.ts'
 import { EDGES, edgeChrome, type PanelChrome } from '../../models/panel-motion.ts'
+import { classNames } from '../class-names.ts'
 import { PanelHead } from './PanelHead.tsx'
 
 export type PanelKind = 'session' | 'categories' | 'schedule'
@@ -25,6 +27,10 @@ interface ShellProps {
   title: ReactNode
   /** Buttons of the panel's own in the head, before the place button. */
   tools?: ReactNode
+  /** A class of the panel's own on the aside (the session sheet's `dropping`). */
+  className?: string | undefined
+  /** Files dragged onto the panel (the session sheet takes them anywhere on it). */
+  drop?: DropHandlers | undefined
   children?: ReactNode
 }
 
@@ -62,17 +68,19 @@ export interface PanelViewProps extends ShellProps {
 
 /** The panel as drawn for a state of its motion. */
 export function PanelView(props: PanelViewProps) {
-  const { id, kind, title, tools, children, shown, chrome, menuOpen, asideRef, onPlace, onClose } = props
+  const { id, kind, title, tools, className, drop, children, shown, chrome, menuOpen, asideRef, onPlace, onClose } =
+    props
   const t = useT()
   const { label, closeId } = KINDS[kind]
   return (
     <aside
-      className={shown ? 'sheet open' : 'sheet'}
+      className={classNames('sheet', shown && 'open', className)}
       id={id}
       aria-hidden={!shown}
       aria-label={t(label)}
       data-dock={chrome.mode}
       ref={asideRef}
+      {...drop}
     >
       <div className="sheet-grip" aria-hidden="true" />
       <div className="sheet-inner">

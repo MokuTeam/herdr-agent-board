@@ -7,7 +7,7 @@
 // The quick look grows out of the chip it was opened from and shrinks back into it, on a spring
 // that can be caught midway; it dims the board, Esc closes it, Backspace walks back.
 import { changedFiles } from './diff.js'
-import { markdown } from './markdown.js'
+import { markdown } from './src/models/markdown.ts'
 import { reducedMotion, Spring } from './src/models/spring.ts'
 import { modalFocus } from './src/models/modal-focus.ts'
 

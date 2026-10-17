@@ -1,18 +1,18 @@
 import { boardConnection, dialogHistory } from './src/models/lifecycle.ts'
 import { outsidePanelPress, panelPress } from './src/models/click-away.ts'
-import { detailResource } from './detail-resource.js'
+import { detailResource } from './src/models/detail-resource.ts'
 // Agent board, web. Live data over Server-Sent Events; every change of place animates with a
 // spring from where the card is on screen (FLIP), drags stay glued to the pointer and land
 // with the pointer's velocity, and the session sheet can be flicked away.
 import { attentionTime, nextAttention, recordView, resultToken, unseenResult } from './src/models/attention.ts'
 import { initBoardMenus } from './board-menus.js'
-import { draftBook } from './drafts.js'
+import { draftBook } from './src/models/drafts.ts'
 import { initFiles } from './files.js'
 import { LANGUAGES, translator } from '../src/core/i18n/translator.ts'
 import { initLaunch } from './launch.js'
 import { updateLive } from './src/models/live.ts'
 import { limitInfo } from './src/models/limits.ts'
-import { markdown } from './markdown.js'
+import { markdown } from './src/models/markdown.ts'
 import { initMenu } from './menu.js'
 import { initQuestions } from './questions.js'
 import { keepInSight, menuOpen, Panel, panels, roomBelow } from './panel.js'

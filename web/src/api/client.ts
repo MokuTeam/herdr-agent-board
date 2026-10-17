@@ -1,7 +1,9 @@
 // The board's HTTP API as the page uses it. POSTs carry the X-Board header the server asks for;
 // every answer is checked by a narrowing function before the page uses it.
+import type { PublicDialog } from '../../../src/core/dialogs/questions.ts'
 import type { BoardPayload } from '../../../src/core/payload.ts'
-import type { Translator } from '../../../src/core/types.ts'
+import type { ConversationTurn } from '../../../src/core/transcript.ts'
+import type { Item, Translator } from '../../../src/core/types.ts'
 
 export type { BoardCategory, BoardLimits, BoardPayload, Swatch } from '../../../src/core/payload.ts'
 
@@ -20,6 +22,31 @@ export const isBoardPayload: Guard<BoardPayload> = (value): value is BoardPayloa
   ARRAYS.every(key => Array.isArray(value[key])) &&
   typeof value.version === 'string' &&
   typeof value.stale === 'boolean'
+
+/** One session as GET /api/session/<key> answers it (src/server/routes/session.ts). */
+export interface SessionDetail {
+  item: Item
+  /** Its latest turns, oldest first. */
+  conversation: ConversationTurn[]
+  /** The terminal's screen while a dialog holds the session. */
+  screen: string
+  dialog: PublicDialog | null
+  /** Its folder is in a git checkout: the sheet offers its changes. */
+  checkout: boolean
+}
+
+const ROLES: ReadonlySet<unknown> = new Set(['user', 'assistant', 'tool'])
+const isTurn = (value: unknown): value is ConversationTurn => isReply(value) && ROLES.has(value.role)
+
+export const isSessionDetail: Guard<SessionDetail> = (value): value is SessionDetail =>
+  isReply(value) &&
+  isReply(value.item) &&
+  typeof value.item.key === 'string' &&
+  Array.isArray(value.conversation) &&
+  value.conversation.every(isTurn) &&
+  typeof value.screen === 'string' &&
+  (value.dialog === null || isReply(value.dialog)) &&
+  typeof value.checkout === 'boolean'
 
 /** The server said no (status, or `ok: false`); `message` is its `error` when it gave one. */
 export class ApiError extends Error {
@@ -72,4 +99,26 @@ function board(signal?: AbortSignal): Promise<BoardPayload> {
   return get('/api/board', isBoardPayload, { cache: 'no-store', ...(signal && { signal }) })
 }
 
-export const api = { board, get, post }
+/** One session's detail, uncached; a 404 says the session is gone. */
+function session(key: string, signal: AbortSignal): Promise<SessionDetail> {
+  return get(`/api/session/${encodeURIComponent(key)}`, isSessionDetail, { signal, cache: 'no-store' })
+}
+
+/** A file into the board's uploads folder, under its own name; resolves where it was saved. */
+async function upload(name: string, file: Blob): Promise<string> {
+  const res = await fetch('/api/upload', {
+    method: 'POST',
+    headers: {
+      'x-board': '1',
+      'x-filename': encodeURIComponent(name),
+      'content-type': file.type || 'application/octet-stream',
+    },
+    body: file,
+  })
+  const value = await replyOf(res)
+  const reply = isReply(value) ? value : {}
+  if (!res.ok || !reply.ok) throw new ApiError(res.status, reply)
+  return typeof reply.path === 'string' ? reply.path : ''
+}
+
+export const api = { board, get, post, session, upload }

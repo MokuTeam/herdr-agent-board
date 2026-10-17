@@ -14,7 +14,7 @@ import { Card, type LaunchSlots } from './Card.tsx'
 import { Lane, type NewSessionContext } from './Lane.tsx'
 
 export interface BoardProps {
-  /** Opens the session in the sheet (Task 25); `compose`: with the message box ready. */
+  /** Opens a session when not in the sheet as by default; `compose`: with the message box ready. */
   onOpen?: (key: string, opts: { compose: boolean }) => void
   onNewSession?: (ctx: NewSessionContext, from: HTMLElement) => void
   /** Sessions on their way (Task 27). */
@@ -52,7 +52,7 @@ export function Board({ onOpen, onNewSession, launch, takeovers, roomBelow }: Bo
 
   function open(key: string, compose = false): void {
     if (onOpen) onOpen(key, { compose })
-    else dispatch({ type: 'open', key })
+    else dispatch({ type: 'open', key, compose })
   }
 
   function onCardClick(e: MouseEvent<HTMLElement>, key: string): void {

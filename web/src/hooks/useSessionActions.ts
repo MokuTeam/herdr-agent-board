@@ -1,5 +1,5 @@
-// What the board does to a session through the server: move its card, go to it in herdr, put it
-// to sleep, dismiss its question. Each says how it went in a toast.
+// What the board does to a session through the server: move its card, go to it in herdr, wake it,
+// put it to sleep, dismiss its question. Each says how it went in a toast.
 import { useMemo } from 'react'
 import type { Item } from '../../../src/core/types.ts'
 import { ApiError, api, errorText, type Reply } from '../api/client.ts'
@@ -21,6 +21,8 @@ export interface SessionActions {
    */
   moveCard(key: string, to: DropTarget): Promise<void>
   focusSession(key: string): Promise<void>
+  /** "Wake": the sleeping session comes back in its pane. */
+  wakeSession(key: string): Promise<void>
   /** Claude exits through herdr-wake; the pane stays as 💤 and wakes on a message or "Wake". */
   sleepSession(key: string): Promise<void>
   /** A question that does not need an answer: off the "Needs me" column until the next one. */
@@ -82,6 +84,13 @@ export function useSessionActions(): SessionActions {
       toast(r.ok ? latest.current.t('toast.focused', { name: it.name }) : r.error, !r.ok)
     }
 
+    async function wakeSession(key: string): Promise<void> {
+      busy(key, latest.current.t('busy.waking'))
+      const r = await act(key, 'wake')
+      busy(key, null)
+      toast(r.ok ? latest.current.t('toast.woke') : r.error, !r.ok)
+    }
+
     async function sleepSession(key: string): Promise<void> {
       const it = itemOf(key)
       if (!it || it.sleeping) return
@@ -103,6 +112,6 @@ export function useSessionActions(): SessionActions {
       toast(r.ok ? done : r.error, !r.ok)
     }
 
-    return { act, moveCard, focusSession, sleepSession, dismissAsk }
+    return { act, moveCard, focusSession, wakeSession, sleepSession, dismissAsk }
   }, [latest, dispatch, toast])
 }

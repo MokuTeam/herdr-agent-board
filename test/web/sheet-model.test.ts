@@ -1,0 +1,252 @@
+// The session sheet's rules (web/app.js renderSheetHead, syncAvailability, renderDetailState,
+// renderSheetBody's question box, onData's detail stamp), as pure functions.
+import { describe, expect, test } from 'bun:test'
+import { translator } from '../../src/core/i18n/translator.ts'
+import type { DetailValue } from '../../web/src/models/detail-resource.ts'
+import {
+  askedView,
+  clockText,
+  contextText,
+  detailNotice,
+  detailOnBoard,
+  detailStamp,
+  draftKey,
+  headButtons,
+  NO_HEAD_BUTTONS,
+  sessionMissing,
+  sheetAvailability,
+  sheetHead,
+  threadPlaceholder,
+  typedText,
+  typing,
+} from '../../web/src/models/sheet.ts'
+import { item } from './support/board.tsx'
+
+const t = translator('en')
+const NOW = Date.UTC(2026, 9, 17, 12, 0)
+
+test('a session is missing only while one is open: off the board, or its detail says so', () => {
+  expect(sessionMissing(null, false, 'missing')).toBe(false)
+  expect(sessionMissing('a', true, 'ready')).toBe(false)
+  expect(sessionMissing('a', false, 'ready')).toBe(true)
+  expect(sessionMissing('a', true, 'missing')).toBe(true)
+  expect(sessionMissing('a', true, undefined)).toBe(false)
+})
+
+test('drafts go by the Claude session, else by the card', () => {
+  expect(draftKey(item({ key: 'k', session: 's' }))).toBe('s')
+  expect(draftKey(item({ key: 'k', session: null }))).toBe('k')
+  expect(draftKey(null)).toBe(null)
+})
+
+test('the detail is read again when what the card says changes', () => {
+  const a = item({ key: 'a', activity: 5, status: 'working', column: 'work', doing: 'x' })
+  expect(detailStamp(a)).toBe('5|working|work|undefined|x|other')
+  expect(detailStamp({ ...a, wait: 'review' })).not.toBe(detailStamp(a))
+  expect(detailStamp({ ...a, name: 'renamed' })).toBe(detailStamp(a))
+})
+
+describe('a new board and the open session’s detail', () => {
+  const a = item({ key: 'a', activity: 5, status: 'working', column: 'work' })
+  const fresh = { stale: false, items: [a] }
+  const turn = { before: { stale: false }, board: fresh, key: 'a', stamp: detailStamp(a), status: 'ready' as const }
+  test('nothing new on its card: nothing to read', () => {
+    expect(detailOnBoard(turn)).toBe(null)
+  })
+  test('its card says something new, or the sheet just opened it: read again, at that stamp', () => {
+    const moved = { ...a, column: 'done' as const, status: 'done' as const }
+    expect(detailOnBoard({ ...turn, board: { stale: false, items: [moved] } })).toEqual({
+      kind: 'load',
+      stamp: detailStamp(moved),
+    })
+    expect(detailOnBoard({ ...turn, stamp: '' })).toEqual({ kind: 'load', stamp: detailStamp(a) })
+  })
+  test('fresh again after out-of-date data (the page starts so), or back after it was gone: read again', () => {
+    expect(detailOnBoard({ ...turn, before: { stale: true } })?.kind).toBe('load')
+    expect(detailOnBoard({ ...turn, before: null })?.kind).toBe('load')
+    expect(detailOnBoard({ ...turn, status: 'missing' })?.kind).toBe('load')
+    expect(detailOnBoard({ ...turn, before: { stale: true }, board: { stale: true, items: [a] } })).toBe(null)
+  })
+  test('off a fresh board it is gone; off an out-of-date one it may only be late', () => {
+    expect(detailOnBoard({ ...turn, board: { stale: false, items: [] } })).toEqual({ kind: 'missing' })
+    expect(detailOnBoard({ ...turn, board: { stale: true, items: [] } })).toBe(null)
+  })
+})
+
+describe('the head', () => {
+  test('context: percent and rounded thousands, raw tokens, nothing; unknown size reads as before', () => {
+    expect(contextText({ context: 85_400, contextPct: 42.4 }, t)).toBe('context 42% · 85k')
+    expect(contextText({ context: 640 }, t)).toBe('context 640')
+    expect(contextText({ context: null }, t)).toBe('')
+    expect(contextText({ contextPct: 10 }, t)).toBe('context 10% · undefined')
+  })
+  test('pill, name and the line under it', () => {
+    const a = item({ key: 'a', name: 'Alpha', workspace: 'web', activity: NOW - 5 * 60_000, context: 2000 })
+    expect(sheetHead(a, { missing: false, categoryTitle: 'Project', now: NOW, t })).toEqual({
+      pill: { kind: 'column' },
+      name: 'Alpha',
+      meta: 'Project · workspace web · active 5 min ago · context 2k',
+      metaTitle: 'Tokens its last request carried',
+    })
+    const now = sheetHead(
+      { ...a, activity: NOW - 10_000, workspace: null, context: null },
+      {
+        missing: false,
+        categoryTitle: 'Project',
+        now: NOW,
+        t,
+      },
+    )
+    expect([now.meta, now.metaTitle]).toEqual(['Project · active now', ''])
+    expect(sheetHead({ ...a, sleeping: true }, { missing: false, categoryTitle: '', now: NOW, t }).pill.kind).toBe(
+      'asleep',
+    )
+    expect(sheetHead({ ...a, sleeping: true }, { missing: true, categoryTitle: '', now: NOW, t }).pill.kind).toBe(
+      'missing',
+    )
+  })
+  test('History needs a Claude project, Wake a sleeper, sleep an awake Claude session; the hint says when it cannot', () => {
+    const a = item({ key: 'a', status: 'working' })
+    expect(headButtons(a, t)).toEqual({
+      historyHidden: false,
+      wakeHidden: true,
+      sleepHidden: false,
+      sleepTitle: t('sheet.sleepBusy'),
+    })
+    expect(headButtons({ ...a, status: 'idle', session: null }, t)).toEqual({
+      historyHidden: true,
+      wakeHidden: true,
+      sleepHidden: true,
+      sleepTitle: t('sheet.sleepHint'),
+    })
+    expect(headButtons({ ...a, sleeping: true }, t).wakeHidden).toBe(false)
+    expect(headButtons({ ...a, sleeping: true }, t).sleepHidden).toBe(true)
+    expect(NO_HEAD_BUTTONS).toEqual({
+      historyHidden: false,
+      wakeHidden: true,
+      sleepHidden: false,
+      sleepTitle: undefined,
+    })
+  })
+})
+
+describe('what works now', () => {
+  const scene = { canMutate: true, canEdit: true, missing: false, turn: false }
+  test('fresh and present: everything; in a turn, no sleep', () => {
+    expect(sheetAvailability(scene, t)).toEqual({
+      blocked: false,
+      banner: t('mobile.readOnly'),
+      focus: false,
+      wake: false,
+      sleep: false,
+      edit: false,
+      dismiss: false,
+      newHere: false,
+      newHereTitle: t('launch.hereHint'),
+      files: false,
+    })
+    expect(sheetAvailability({ ...scene, turn: true }, t).sleep).toBe(true)
+  })
+  test('without fresh herdr data the herdr actions stop; without the board the edits too', () => {
+    const stale = sheetAvailability({ ...scene, canMutate: false }, t)
+    expect([stale.blocked, stale.focus, stale.wake, stale.sleep, stale.newHere, stale.edit, stale.files]).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+    ])
+    expect(stale.newHereTitle).toBe(t('mobile.readOnly'))
+    const off = sheetAvailability({ ...scene, canMutate: false, canEdit: false }, t)
+    expect([off.banner, off.edit, off.dismiss]).toEqual([t('live.off'), true, true])
+  })
+  test('a session that is gone takes every session action with it', () => {
+    const gone = sheetAvailability({ ...scene, missing: true }, t)
+    expect([gone.focus, gone.wake, gone.sleep, gone.edit, gone.dismiss, gone.newHere, gone.files]).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+    ])
+    expect([gone.blocked, gone.newHereTitle]).toEqual([false, t('launch.hereHint')])
+  })
+})
+
+describe('over the conversation', () => {
+  const value = (fields: Partial<DetailValue<object>>): DetailValue<object> => ({
+    key: 'a',
+    data: null,
+    status: 'idle',
+    error: '',
+    at: null,
+    ...fields,
+  })
+  const scene = { missing: false, onBoard: true, outdated: false, canEdit: true }
+  test('missing, an error, out of date, refreshing — or nothing', () => {
+    expect(detailNotice(value({}), { ...scene, missing: true }, t).text).toBe(t('detail.missing'))
+    expect(detailNotice(value({ status: 'error', error: 'offline' }), scene, t).text).toBe(
+      'Could not read the conversation: offline',
+    )
+    expect(detailNotice(value({ status: 'ready', data: {} }), { ...scene, outdated: true }, t).text).toBe(
+      t('detail.stale'),
+    )
+    expect(detailNotice(value({ status: 'ready' }), { ...scene, outdated: true }, t).text).toBe('')
+    expect(detailNotice(value({ status: 'loading', data: {} }), scene, t).text).toBe(t('detail.refreshing'))
+    expect(detailNotice(value({ status: 'loading' }), scene, t).text).toBe('')
+  })
+  test('when it was read, and Retry only when it can be asked again', () => {
+    const at = Date.UTC(2026, 9, 17, 9, 5)
+    const read = detailNotice(value({ status: 'ready', data: {}, at }), scene, t)
+    expect(read.stamp).toBe(`Last read at ${clockText(at, t)}`)
+    expect(read.retryDisabled).toBe(false)
+    expect(detailNotice(value({ status: 'loading' }), scene, t).retryDisabled).toBe(true)
+    expect(detailNotice(value({}), { ...scene, canEdit: false }, t).retryDisabled).toBe(true)
+    expect(detailNotice(value({}), { ...scene, onBoard: false }, t).retryDisabled).toBe(true)
+    expect(clockText(0, t)).toBe('')
+  })
+  test('no conversation yet: loading, or why it could not load; an empty one says so', () => {
+    expect(threadPlaceholder(null, 'idle', t)).toBe(t('loading'))
+    expect(threadPlaceholder(undefined, 'error', t)).toBe(t('detail.noTranscript'))
+    expect(threadPlaceholder(null, 'missing', t)).toBe(t('detail.noTranscript'))
+    expect(threadPlaceholder([], 'ready', t)).toBe(t('thread.empty'))
+    expect(threadPlaceholder([{}], 'ready', t)).toBe(null)
+  })
+})
+
+test('what it asks under "Needs me": why, the question, and whether it can be waved off', () => {
+  expect(askedView(item({ key: 'a', column: 'me', attention: 'ask', question: 'Proceed?' }), t)).toEqual({
+    why: 'ASKS',
+    text: 'Proceed?',
+    dismiss: 'No reply needed',
+  })
+  expect(askedView(item({ key: 'a', column: 'me', attention: 'later', question: 'x' }), t)).toEqual({
+    why: 'PARKED BY YOU',
+    text: t('asked.later'),
+    dismiss: 'Seen',
+  })
+  expect(askedView(item({ key: 'a', column: 'me', attention: 'decision' }), t)).toEqual({
+    why: 'NEEDS A DECISION IN THE TERMINAL',
+    text: t('asked.terminal'),
+    dismiss: null,
+  })
+  expect(askedView(item({ key: 'a', column: 'me', attention: '' }), t).why).toBe('WAITS FOR YOU')
+})
+
+test('a card field keeps what is typed while focused, then until the card moves on; Escape is the caller’s', () => {
+  let edit = typing(null, true, 'old', 'new')
+  expect(edit).toEqual({ text: 'new', from: 'old' })
+  expect(typedText(edit, true, 'server changed it')).toBe('new')
+  expect(typedText(edit, false, 'old')).toBe('new')
+  expect(typedText(edit, false, 'server changed it')).toBe(null)
+  // Still typing while the card moved on: the typing goes on from where it began, and goes once left.
+  expect(typing(edit, true, 'server changed it', 'newer')).toEqual({ text: 'newer', from: 'old' })
+  // Typing again after that starts from the card's new value.
+  edit = typing(edit, false, 'server changed it', 'again')
+  expect(edit).toEqual({ text: 'again', from: 'server changed it' })
+  expect(typedText(null, true, 'x')).toBe(null)
+})

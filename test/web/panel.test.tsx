@@ -21,6 +21,7 @@ import {
   hasClass,
   type Node,
   OLD_PAGE_ONLY,
+  setAttr,
   stripAttrs,
 } from './support/markup.ts'
 import { KINDS, oldSide, titleOf } from './support/panel-sides.tsx'
@@ -28,7 +29,7 @@ import { KINDS, oldSide, titleOf } from './support/panel-sides.tsx'
 const VP = { w: 1600, h: 1000 }
 const IDS = ['sheet', 'cats-sheet', 'sched-sheet']
 
-/** The aside with only the head kept in .sheet-inner (the bodies are 25b's and Task 26's). */
+/** The aside with only the head kept in .sheet-inner (the bodies are the panels' own: sheet.test.tsx, Task 26). */
 function shell(aside: Element): string {
   const copy: Element = {
     ...aside,
@@ -87,6 +88,8 @@ describe.each(['en', 'ru'])('the shell in %s', lang => {
   })
   test('<SidePanels> mounts the three in the page’s order, each with its body container', async () => {
     const old = await oldAsides(lang)
+    // At start app.js makes the session's name focusable (it is renamed where it is).
+    setAttr(byId(old.get('sheet') ?? [], 'sheet-name'), 'tabindex', '0')
     const react = inPanels(
       <SidePanels categories={false} schedule={false} onCategoriesClose={() => {}} onScheduleClose={() => {}} />,
       lang,
@@ -95,7 +98,15 @@ describe.each(['en', 'ru'])('the shell in %s', lang => {
     expect(asides.map(a => a.attrs.get('id'))).toEqual(IDS)
     for (const id of IDS) expect(shell(asideOf(react, id))).toBe(shell(asideOf(old.get(id) ?? [], id)))
     const inner = (id: string) => find([asideOf(react, id)], el => hasClass(el, 'sheet-inner')).children
-    expect(canonical(inner('sheet').slice(1))).toBe('<div class="sheet-body" id="sheet-body"></div>')
+    // The session sheet's own parts (their markup: sheet.test.tsx).
+    expect(inner('sheet').map(n => (n.kind === 'element' ? (n.attrs.get('id') ?? n.attrs.get('class')) : ''))).toEqual([
+      'sheet-head',
+      'sheet-properties-toggle',
+      'sheet-card',
+      'sheet-question',
+      'sheet-body',
+      'composer',
+    ])
     expect(canonical(inner('cats-sheet').slice(1))).toBe(
       [
         '<div class="cats-body sheet-body">',

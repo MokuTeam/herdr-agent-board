@@ -9,7 +9,8 @@ import { COLUMN_COLORS } from '../models/toolbar.ts'
 import { classNames } from './class-names.ts'
 import { PlusIcon } from './icons.tsx'
 
-export type NewSessionContext = { category?: string }
+/** Where a new session starts: in a lane, or by a session (its lane and folder: the sheet's "New here"). */
+export type NewSessionContext = { category?: string; item?: Item }
 
 export interface LaneProps {
   lane: LaneView
