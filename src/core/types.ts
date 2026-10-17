@@ -101,6 +101,10 @@ export interface Config {
   wakeUrl: string | null
   scheduleWaitMin: number
   launch?: LaunchSpec
+  /** The web board's port (12422 when not set), as config.json has it. */
+  port?: unknown
+  /** The app window's browser (a path), as config.json has it. */
+  browser?: unknown
   [extra: string]: unknown
 }
 

@@ -7,6 +7,7 @@ import { loadConfig } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { ROOT } from '../adapters/paths.ts'
 import { t } from '../core/lang.ts'
+import type { Config } from '../core/types.ts'
 import { type BoardWindow, edgeWindow } from '../integrations/edge-window.ts'
 
 export type WebOpenResult = { ok: true; url: string; key?: string } | { ok: false; error: string; missing?: boolean }
@@ -48,11 +49,7 @@ async function reveal(url: string, pane: string): Promise<Revealed> {
 }
 
 /** What of the config it reads (config.json's `port` and `browser`). */
-export interface WebConfig {
-  port?: unknown
-  browser?: unknown
-  [extra: string]: unknown
-}
+export type WebConfig = Pick<Config, 'port' | 'browser'>
 
 export interface WebOpenOptions {
   /** The session in that herdr pane, its sheet open (a notification clicked). */

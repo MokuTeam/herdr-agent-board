@@ -78,15 +78,16 @@ test('a notification clicked: open pages are told the session in that pane; no s
     // it comes; one that comes later on its own does not.
     const raised = await listen(url)
     pages.push(raised)
-    assert.equal(reveals(raised), 1)
+    await until(() => reveals(raised))
     assert.ok(raised.heard.includes(`event: reveal\ndata: ${JSON.stringify({ key })}\n\n`))
     const later = await listen(url)
     pages.push(later)
-    assert.equal(reveals(later), 0)
 
-    // By its key too.
+    // By its key too. A stream keeps its order, so once every page has heard this one, what each
+    // was told before it has come too: `raised` was told once as it connected, `later` never.
     assert.equal((await post({ key })).status, 200)
-    await until(() => reveals(page) === 2)
+    await until(() => reveals(page) >= 2 && reveals(raised) >= 2 && reveals(later) >= 1)
+    assert.deepEqual([reveals(page), reveals(raised), reveals(later)], [2, 2, 1])
 
     // A pane the board has no session in: the caller goes to herdr instead.
     const missing = await post({ pane: 'w1:p2' })
@@ -95,7 +96,10 @@ test('a notification clicked: open pages are told the session in that pane; no s
       [404, { ok: false, error: 'The session is no longer on the board' }],
     )
     assert.equal((await post({})).status, 404)
-    assert.equal(reveals(page), 2)
+    // Nothing went out for those: the next reveal is the page's third.
+    assert.equal((await post({ key })).status, 200)
+    await until(() => reveals(page) >= 3)
+    assert.equal(reveals(page), 3)
   } finally {
     for (const p of pages) p.close()
   }

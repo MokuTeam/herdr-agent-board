@@ -2,7 +2,7 @@
 // while the page is hidden or offline and resumed when it is back.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { boardConnection } from '../models/lifecycle.ts'
-import { revealedKey } from '../models/reveal.ts'
+import { listenForReveals, type Reveal } from '../models/reveal.ts'
 import { api, type BoardPayload, isBoardPayload } from './client.ts'
 
 export interface LiveBoard {
@@ -23,11 +23,6 @@ export interface LiveBoard {
   reveal: Reveal | null
 }
 
-export interface Reveal {
-  key: string
-  n: number
-}
-
 const pageAway = () => document.hidden || navigator.onLine === false
 
 export function useBoard(): LiveBoard {
@@ -46,10 +41,7 @@ export function useBoard(): LiveBoard {
       source: () => {
         const stream = new EventSource('/api/events')
         // A notification clicked while this page is open (entrypoints/web-open.ts through /api/reveal).
-        stream.addEventListener('reveal', event => {
-          const key = revealedKey(event.data)
-          if (key && latest?.items.some(i => i.key === key)) setReveal(r => ({ key, n: (r?.n ?? 0) + 1 }))
-        })
+        listenForReveals(stream, () => latest, setReveal)
         return stream
       },
       snapshot: signal => api.board(signal),

@@ -1,6 +1,8 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
+import { parseConversation } from '../../src/core/transcript.ts'
 import { ApiError, api, errorText, isBoardPayload, isSessionDetail } from '../../web/src/api/client.ts'
+import { notification } from '../support/task-notification.ts'
 import { item, payload } from './support/board.tsx'
 
 const t = translator('en')
@@ -93,6 +95,46 @@ test('a session detail has its item, turns, screen, dialog and checkout', () => 
   expect(isSessionDetail({ ...detail, item: { name: 'no key' } })).toBe(false)
   expect(isSessionDetail({ ...detail, checkout: 'yes' })).toBe(false)
   expect(isSessionDetail({ ...detail, screen: undefined })).toBe(false)
+})
+
+test('a session detail holds its turns as the server reads them: task and reminder notices, updates kept as thinking', () => {
+  const line = (o: unknown) => JSON.stringify(o)
+  const conversation = parseConversation([
+    line({ type: 'user', message: { content: 'watch the job' } }),
+    line({
+      type: 'assistant',
+      thinkingDisplay: 'updates',
+      message: { content: [{ type: 'thinking', thinking: 'Watching the job.' }] },
+    }),
+    line({
+      type: 'attachment',
+      attachment: {
+        type: 'queued_command',
+        prompt: notification('Background command "Wait for the job" completed (exit code 0)', { id: 'bq1' }),
+        commandMode: 'task-notification',
+      },
+    }),
+    line({
+      type: 'user',
+      origin: { kind: 'task-notification' },
+      message: {
+        content: notification('Agent "Check the job" finished', { id: 'a2', tail: '<result>Done.</result>' }),
+      },
+    }),
+    line({ type: 'user', message: { content: '[board reminder from Master] check the job again' } }),
+  ])
+  expect(conversation.map(c => [c.role, c.role === 'notice' ? c.kind : ''])).toEqual([
+    ['user', ''],
+    ['assistant', ''],
+    ['notice', 'command'],
+    ['notice', 'agent'],
+    ['notice', 'reminder'],
+  ])
+  // As the page gets it: through JSON.
+  expect(isSessionDetail(JSON.parse(JSON.stringify({ ...detail, conversation })))).toBe(true)
+  expect(isSessionDetail({ ...detail, conversation: [...conversation, { role: 'system', text: 'x', at: 3 }] })).toBe(
+    false,
+  )
 })
 
 test('a session is read uncached by its key, with the signal; a 404 keeps its status', async () => {

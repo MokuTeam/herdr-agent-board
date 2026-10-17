@@ -18,6 +18,35 @@ export function revealedKey(data: unknown): string | null {
 }
 
 /**
+ * The last session the board was asked to show, one the board had; `n` tells two asks for the
+ * same session apart.
+ */
+export interface Reveal {
+  key: string
+  n: number
+}
+
+/** What listening for `reveal` takes of the board's event stream (an EventSource). */
+export interface RevealSource {
+  addEventListener(type: 'reveal', listener: (event: MessageEvent) => void): void
+}
+
+/**
+ * Listens for the stream's `reveal` event: a session the board as it came last (`board()`) has
+ * becomes the reveal, counted on from the one before. Any other changes nothing.
+ */
+export function listenForReveals(
+  stream: RevealSource,
+  board: () => { items: readonly { key: string }[] } | null,
+  set: (next: (prev: Reveal | null) => Reveal) => void,
+): void {
+  stream.addEventListener('reveal', event => {
+    const key = revealedKey(event.data)
+    if (key && board()?.items.some(i => i.key === key)) set(prev => ({ key, n: (prev?.n ?? 0) + 1 }))
+  })
+}
+
+/**
  * What showing `key` takes: null when the board has no such session; else its card is brought in
  * view, and its sheet opens unless it is the one open.
  */
