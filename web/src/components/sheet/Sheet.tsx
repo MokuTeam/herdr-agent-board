@@ -11,6 +11,8 @@ import type { Item } from '../../../../src/core/types.ts'
 import type { SessionDetail } from '../../api/client.ts'
 import { type ComposerControls, useComposer } from '../../hooks/useComposer.ts'
 import { useFileDrop } from '../../hooks/useFileDrop.ts'
+import { useGoToSession } from '../../hooks/useGoToSession.ts'
+import type { Helpers } from '../../hooks/useHelpers.ts'
 import { useMediaQuery } from '../../hooks/useMediaQuery.ts'
 import { type OpenLaunch, useNewSession } from '../../hooks/useNewSession.ts'
 import { useSessionActions } from '../../hooks/useSessionActions.ts'
@@ -31,6 +33,7 @@ import { reducedMotion } from '../../models/spring.ts'
 import { termButton } from '../../models/terminal.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
+import { HelpersStrip } from '../helpers/HelpersStrip.tsx'
 import { CheckGlyph } from '../icons.tsx'
 import { Panel } from '../panel/Panel.tsx'
 import { Composer, type SessionButtons } from './Composer.tsx'
@@ -38,6 +41,7 @@ import type { ScheduleActions } from './ScheduleRow.tsx'
 import { SheetCard } from './SheetCard.tsx'
 import { SheetHead } from './SheetHead.tsx'
 import { Thread } from './Thread.tsx'
+import type { ThreadLinks } from './ThreadLinks.tsx'
 
 /** What later tasks hand the sheet. */
 export interface SheetSlots {
@@ -64,6 +68,8 @@ export interface SheetSlots {
   onNewSession?: OpenLaunch | undefined
   /** "Terminal": the terminal window of the session, from the button (hooks/useTerminal.ts). */
   onTerminal?: ((key: string, button: HTMLElement) => void) | undefined
+  /** The session's helpers in their window (hooks/useHelpers.ts): it reads the sheet's detail. */
+  helpers?: Helpers | undefined
 }
 
 /** The board's card of `key` (a drag's ghost is outside the board). */
@@ -84,7 +90,7 @@ function useShown(open: string | null, item: Item | undefined): { key: string | 
 }
 
 export function Sheet(slots: SheetSlots) {
-  const { question, upgradeFiles, onChanges, onHistory, onMore, onRename, onNewSession, onTerminal } = slots
+  const { question, upgradeFiles, onChanges, onHistory, onMore, onRename, onNewSession, onTerminal, helpers } = slots
   const t = useT()
   const { data, ui, dispatch } = useBoardContext()
   const actions = useSessionActions()
@@ -121,6 +127,15 @@ export function Sheet(slots: SheetSlots) {
     const el = body.current
     if (el && stick.current) el.scrollTop = el.scrollHeight
   })
+  // The helpers window lists what the open session's detail says.
+  const fed = open !== null && detail.value.key === open ? detail.value.data : null
+  useLayoutEffect(() => helpers?.engine.feed({ key: open, data: fed }), [helpers, open, fed])
+  const goToSession = useGoToSession()
+  const links: SheetLinks = {
+    onHelper: (id, el) => helpers?.show({ id }, el),
+    onList: (run, el) => helpers?.show({ list: true, run }, el),
+    onSession: goToSession,
+  }
   const cwd = shown.item?.cwd ?? ''
   const drawn = shown.item !== null
   // The conversation drawn anew (a new detail, the session shown, the language): its paths are new.
@@ -177,9 +192,18 @@ export function Sheet(slots: SheetSlots) {
         buttons={buttons}
         schedule={slots.schedule}
         moreOpen={slots.moreOpen ?? false}
+        links={links}
       />
     </Panel>
   )
+}
+
+/** Where the sheet's helpers and links lead: the helpers window, another session. */
+export interface SheetLinks {
+  onHelper(id: string, el: HTMLElement): void
+  /** The list, at a workflow run's agents (`run`) or from the top. */
+  onList(run: string | null, el: HTMLElement): void
+  onSession(key: string): void
 }
 
 export interface SheetViewProps {
@@ -202,6 +226,7 @@ export interface SheetViewProps {
   schedule?: ScheduleActions | undefined
   /** The "More actions" menu is open. */
   moreOpen?: boolean
+  links?: SheetLinks | undefined
 }
 
 /** The sheet under its head, as drawn for one state. */
@@ -236,13 +261,27 @@ export function SheetView(props: SheetViewProps) {
       </button>
       <div className="sheet-card" id="sheet-card" hidden={narrow && !propertiesOpen}>
         {/* Each session's card fields start afresh: nothing typed for one shows in another's. */}
-        {item && <SheetCard key={item.key} item={item} disabled={availability.edit} schedule={schedule} />}
+        {item && (
+          <SheetCard
+            key={item.key}
+            item={item}
+            disabled={availability.edit}
+            schedule={schedule}
+            onSession={key => props.links?.onSession(key)}
+          />
+        )}
       </div>
       <div className="sheet-question" id="sheet-question" hidden={!hasForm && !asking}>
         {hasForm
           ? form
           : asking && item && <Asked item={item} disabled={availability.dismiss} onDismiss={props.onDismiss} />}
       </div>
+      <HelpersStrip
+        helpers={(item && detail.data?.helpers) || []}
+        workflows={(item && detail.data?.workflows) || []}
+        onHelper={(id, el) => props.links?.onHelper(id, el)}
+        onList={(run, el) => props.links?.onList(run, el)}
+      />
       <div
         className={classNames('sheet-body', !!notice.text && 'has-detail-state')}
         id="sheet-body"
@@ -269,7 +308,7 @@ export function SheetView(props: SheetViewProps) {
             <Screen screen={detail.data?.screen ?? ''} form={hasForm} asking={asking} />
             <div className="section-title">{t('thread.title')}</div>
             <div className="thread">
-              <Conversation detail={detail} item={item} />
+              <Conversation detail={detail} item={item} links={props.links} />
             </div>
           </>
         )}
@@ -303,12 +342,28 @@ function Screen({ screen, form, asking }: { screen: string; form: boolean; askin
   return asking ? <pre className="screen">{screen}</pre> : null
 }
 
-function Conversation({ detail, item }: { detail: DetailSnapshot; item: Item }) {
+interface ConversationProps {
+  detail: DetailSnapshot
+  item: Item
+  links?: SheetLinks | undefined
+}
+
+function Conversation({ detail, item, links }: ConversationProps) {
   const t = useT()
+  const { data } = useBoardContext()
   const conversation = detail.data?.conversation
   const placeholder = threadPlaceholder(conversation, detail.status, t)
   if (placeholder !== null || !conversation) return <p className="row-value muted">{placeholder}</p>
-  return <Thread conversation={conversation} item={item} />
+  // The thread's links: a helper's conversation, a workflow's agents, another session.
+  const thread: ThreadLinks = {
+    helpers: detail.data?.helpers ?? [],
+    workflows: detail.data?.workflows ?? [],
+    items: data?.items ?? [],
+    onHelper: (id, el) => links?.onHelper(id, el),
+    onRun: (id, el) => links?.onList(id, el),
+    onSession: key => links?.onSession(key),
+  }
+  return <Thread conversation={conversation} item={item} links={thread} />
 }
 
 /** Under "Needs me" with no form to answer: why it stopped, what it asks, and the button that waves it off. */

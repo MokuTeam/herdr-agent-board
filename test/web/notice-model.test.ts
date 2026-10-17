@@ -8,8 +8,8 @@ import { noticeLine } from '../../web/src/models/notice.ts'
 import { type NotificationParts, notification } from '../support/task-notification.ts'
 import { oldSource } from './support/old-app.ts'
 
-/** The merge of upstream's task-events PR (#35). */
-const TASK_EVENTS = '26d64ea'
+/** The merge of upstream's subagents PR (#40), the newest that added a notice text ("Conversation"). */
+const SUBAGENTS = '0d33639'
 
 function task(summary: string, more?: NotificationParts): Notice {
   const n = taskNotice(notification(summary, more))
@@ -60,9 +60,9 @@ test("a notice line: its words and the tone of its mark, in the board's language
 
 test('the notice texts are upstream’s, in English and Russian', () => {
   // web/i18n.js at the merge: the English block first, then the Russian one.
-  const upstream = [...oldSource('web/i18n.js', TASK_EVENTS).matchAll(/^\s+'(notice\.[^']+)': '([^']*)',$/gm)]
+  const upstream = [...oldSource('web/i18n.js', SUBAGENTS).matchAll(/^\s+'(notice\.[^']+)': '([^']*)',$/gm)]
   const half = upstream.length / 2
-  expect(half).toBe(16)
+  expect(half).toBe(17)
   const ours = (lang: 'en' | 'ru') => Object.entries(STRINGS[lang]).filter(([key]) => key.startsWith('notice.'))
   expect(ours('en')).toEqual(upstream.slice(0, half).map(m => [m[1] ?? '', m[2] ?? '']))
   expect(ours('ru')).toEqual(upstream.slice(half).map(m => [m[1] ?? '', m[2] ?? '']))

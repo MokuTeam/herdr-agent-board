@@ -105,6 +105,7 @@ describe('routes', () => {
       'styles/launch.css',
       'styles/questions.css',
       'styles/terminal.css',
+      'styles/helpers.css',
       'app.js',
     ])
     for (const link of links) expect([link, (await fetch(`${url}/${link}`)).status]).toEqual([link, 200])
@@ -112,7 +113,7 @@ describe('routes', () => {
     expect(script.headers.get('content-type')).toBe('text/javascript; charset=utf-8')
     expect(script.headers.get('content-security-policy')).toBe(null)
     expect((await script.text()).length).toBeGreaterThan(1000)
-    for (const sheet of ['app', 'menu', 'launch', 'questions', 'terminal'])
+    for (const sheet of ['app', 'menu', 'launch', 'questions', 'terminal', 'helpers'])
       expect((await fetch(`${url}/styles/${sheet}.css`)).headers.get('content-type')).toBe('text/css; charset=utf-8')
     expect((await fetch(`${url}/icon.svg`)).headers.get('content-type')).toBe('image/svg+xml')
     // Only top-level files and styles/ of the types it knows: nothing else under web/ (the page's source).
@@ -206,7 +207,7 @@ describe('routes', () => {
     const detail = await fetch(`${url}/api/session/s1`)
     expect(detail.status).toBe(200)
     const body = (await detail.json()) as { item: { key: string; transcript?: unknown } }
-    expect(Object.keys(body)).toEqual(['item', 'conversation', 'screen', 'dialog', 'checkout'])
+    expect(Object.keys(body)).toEqual(['item', 'conversation', 'helpers', 'workflows', 'screen', 'dialog', 'checkout'])
     expect(body.item.key).toBe('s1')
     expect('transcript' in body.item).toBe(false)
     expect(await answer(fetch(`${url}/api/session/s1/other`))).toEqual([404, { error: 'not found' }])

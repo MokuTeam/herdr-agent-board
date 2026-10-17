@@ -1,7 +1,7 @@
-// A session's card: its name, age and alarm, what it works on, said or asks, and its buttons. A
-// session asleep in the idle column is one line. Motion and dragging are the board's
+// A session's card: its name, age and alarm, what it works on, said or asks, its helpers at work
+// and the sessions it works with, and its buttons. A session asleep in the idle column is one line. Motion and dragging are the board's
 // (hooks/useFlip.ts, hooks/useCardDrag.ts); the card only says what it is.
-import type { KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from 'react'
+import type { FocusEvent, KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from 'react'
 import type { Item, LaunchView, ToolCall } from '../../../src/core/types.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { unseenResult } from '../models/attention.ts'
@@ -11,6 +11,7 @@ import { COLUMN_COLORS } from '../models/toolbar.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { AlarmBadge } from './AlarmBadge.tsx'
 import { classNames } from './class-names.ts'
+import { HelpersChip, Relations } from './helpers/CardHelpers.tsx'
 import { CheckGlyph, ClockGlyph, FocusGlyph, MoonGlyph, PinGlyph, SpinGlyph, WriteGlyph } from './icons.tsx'
 
 /** What a session on its way shows on the board (hooks/useLaunch.ts). */
@@ -34,9 +35,14 @@ export interface CardProps {
   onPointerDown(e: PointerEvent<HTMLElement>): void
   onClick(e: MouseEvent<HTMLElement>): void
   onKeyDown(e: KeyboardEvent<HTMLElement>): void
+  /** A session the card being pointed at works with. */
+  related?: boolean
+  /** Pointing at the card, or tabbing to it, marks the sessions it works with (null: none). */
+  onRelated?: ((key: string | null) => void) | undefined
 }
 
-export function Card({ item, selected, busy, placeholder, launch, onPointerDown, onClick, onKeyDown }: CardProps) {
+export function Card(props: CardProps) {
+  const { item, selected, busy, placeholder, launch, onPointerDown, onClick, onKeyDown, onRelated } = props
   const { ui } = useBoardContext()
   const launchOnly = !!item.launchOnly
   const className = classNames(
@@ -47,6 +53,7 @@ export function Card({ item, selected, busy, placeholder, launch, onPointerDown,
     selected && 'selected',
     busy && 'busy',
     placeholder && 'placeholder',
+    props.related && 'related',
   )
   return (
     <article
@@ -59,6 +66,12 @@ export function Card({ item, selected, busy, placeholder, launch, onPointerDown,
       onPointerDown={onPointerDown}
       onClick={onClick}
       onKeyDown={onKeyDown}
+      onPointerEnter={(e: PointerEvent<HTMLElement>) => e.pointerType === 'mouse' && onRelated?.(item.key)}
+      onPointerLeave={() => onRelated?.(null)}
+      onFocus={() => onRelated?.(item.key)}
+      onBlur={(e: FocusEvent<HTMLElement>) =>
+        !(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) && onRelated?.(null)
+      }
     >
       {launchOnly ? launch?.card(item) : <CardContent item={item} launch={launch} />}
     </article>
@@ -128,6 +141,8 @@ function CardBody({ item, launch }: { item: Item; launch: LaunchSlots | undefine
       )}
       {words.said && <div className="said">{words.said}</div>}
       {item.column === 'work' && <Now tool={item.tool} />}
+      <HelpersChip item={item} />
+      <Relations item={item} />
       {/* Started from the board and not done starting: how it goes, or why it failed. */}
       {started && launch?.note(started)}
     </>

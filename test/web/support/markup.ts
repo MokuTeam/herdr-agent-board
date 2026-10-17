@@ -168,9 +168,37 @@ export function canonical(nodes: Node[], options: CanonicalOptions = {}, depth =
 
 // ---------------------------------------------------------------- the two sides
 
-/** The old page's web/index.html (at the parity baseline, or at `ref`: today's holds only the React root), parsed. */
+/**
+ * Elements upstream's web/index.html gained after the parity baseline, in changes ported since:
+ * [the change's merge commit, the element's id, the id of the element it follows there].
+ */
+const LATER_ELEMENTS: [string, string, string][] = [
+  ['0d33639', 'sheet-helpers', 'sheet-question'], // #40: a session's helpers above its conversation
+]
+
+/** `el` put right after the element with id `after`, wherever that is in `nodes`. */
+function insertAfter(nodes: Node[], after: string, el: Element): boolean {
+  const at = nodes.findIndex(n => n.kind === 'element' && n.attrs.get('id') === after)
+  if (at >= 0) {
+    nodes.splice(at + 1, 0, el)
+    return true
+  }
+  return nodes.some(n => n.kind === 'element' && insertAfter(n.children, after, el))
+}
+
+/**
+ * The old page's web/index.html (at the parity baseline, or at `ref`: today's holds only the React
+ * root), parsed, with the elements later ported changes added to it (those it lacks), taken from
+ * the page as each change left it.
+ */
 export function pageMarkup(ref?: string): Node[] {
-  return parseHtml(ref === undefined ? oldSource('web/index.html') : oldSource('web/index.html', ref))
+  const nodes = parseHtml(ref === undefined ? oldSource('web/index.html') : oldSource('web/index.html', ref))
+  for (const [later, id, after] of LATER_ELEMENTS) {
+    if (findAll(nodes, el => el.attrs.get('id') === id).length) continue
+    const el = byId(parseHtml(oldSource('web/index.html', later)), id)
+    if (!insertAfter(nodes, after, el)) throw new Error(`no #${after} for #${id}`)
+  }
+  return nodes
 }
 
 /** A tree back to markup (`innerHTML`). */

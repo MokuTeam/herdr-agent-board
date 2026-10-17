@@ -1,6 +1,7 @@
 // The board's HTTP API as the page uses it. POSTs carry the X-Board header the server asks for;
 // every answer is checked by a narrowing function before the page uses it.
 import type { PublicDialog } from '../../../src/core/dialogs/questions.ts'
+import type { PublicHelper, WorkflowRun } from '../../../src/core/helpers.ts'
 import type { BoardPayload } from '../../../src/core/payload.ts'
 import type { ConversationTurn } from '../../../src/core/transcript.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
@@ -36,11 +37,27 @@ export interface SessionDetail {
   dialog: PublicDialog | null
   /** Its folder is in a git checkout: the sheet offers its changes. */
   checkout: boolean
+  /** Its subagents, forks, workflow agents and teammates, newest first, and its workflow runs. */
+  helpers?: PublicHelper[]
+  workflows?: WorkflowRun[]
 }
 
-// A notice: a background task reporting back, or a board reminder (core/notices.ts).
-const ROLES: ReadonlySet<unknown> = new Set(['user', 'assistant', 'tool', 'notice'])
-const isTurn = (value: unknown): value is ConversationTurn => isReply(value) && ROLES.has(value.role)
+// A notice: a background task reporting back, or a board reminder (core/notices.ts). A peer: a
+// message from a session or teammate this one works with.
+const ROLES: ReadonlySet<unknown> = new Set(['user', 'assistant', 'tool', 'notice', 'peer'])
+export const isTurn = (value: unknown): value is ConversationTurn => isReply(value) && ROLES.has(value.role)
+
+/** A list of what `each` accepts, or none at all (a reply from before helpers were read). */
+const isListOf = <T>(value: unknown, each: Guard<T>): boolean =>
+  value === undefined || (Array.isArray(value) && value.every(each))
+
+/** A helper as the server lists it (src/core/helpers.ts PublicHelper). */
+export const isHelper: Guard<PublicHelper> = (value): value is PublicHelper =>
+  isReply(value) && typeof value.id === 'string' && typeof value.kind === 'string' && typeof value.status === 'string'
+
+/** A workflow run of the session (src/core/helpers.ts WorkflowRun). */
+export const isWorkflowRun: Guard<WorkflowRun> = (value): value is WorkflowRun =>
+  isReply(value) && typeof value.id === 'string' && typeof value.status === 'string'
 
 export const isSessionDetail: Guard<SessionDetail> = (value): value is SessionDetail =>
   isReply(value) &&
@@ -50,7 +67,9 @@ export const isSessionDetail: Guard<SessionDetail> = (value): value is SessionDe
   value.conversation.every(isTurn) &&
   typeof value.screen === 'string' &&
   (value.dialog === null || isReply(value.dialog)) &&
-  typeof value.checkout === 'boolean'
+  typeof value.checkout === 'boolean' &&
+  isListOf(value.helpers, isHelper) &&
+  isListOf(value.workflows, isWorkflowRun)
 
 /** The server said no (status, or `ok: false`); `message` is its `error` when it gave one. */
 export class ApiError extends Error {

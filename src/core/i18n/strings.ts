@@ -5,6 +5,7 @@
 // (English: one, other; Russian: one, few, many). A key missing in a language falls back to English.
 
 import type { Lang } from '../types.ts'
+import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
 
@@ -944,3 +945,5 @@ export const STRINGS: Record<Lang, Dictionary> = {
 for (const code of Object.keys(LAUNCH_STRINGS) as Lang[]) Object.assign(STRINGS[code], LAUNCH_STRINGS[code])
 // So do the web board's terminal's.
 for (const code of Object.keys(TERMINAL_STRINGS) as Lang[]) Object.assign(STRINGS[code], TERMINAL_STRINGS[code])
+// A session's helpers and the sessions it works with, likewise.
+for (const code of Object.keys(HELPER_STRINGS) as Lang[]) Object.assign(STRINGS[code], HELPER_STRINGS[code])

@@ -12,6 +12,7 @@ import { onLanguage } from '../core/lang.ts'
 import { normDir, sameDir } from '../core/launch/names.ts'
 import { type Limits, parseLimits } from '../core/limits.ts'
 import {
+  type ConversationOptions,
   type ConversationTurn,
   parseConversation,
   parseTranscriptTail,
@@ -62,7 +63,7 @@ export interface ClaudeHome {
   liveSessions(): Map<string, LiveSession>
   transcriptPath(sessionId: string, cwd: string): string | null
   transcriptInfo(path: string | null): TranscriptInfo | null
-  conversation(path: string, limit?: number): ConversationTurn[]
+  conversation(path: string, limit?: number, opts?: ConversationOptions): ConversationTurn[]
   searchHistory(cwd: string, query: string | null, excludeSession?: string | null): Promise<HistoryResult>
   recentFolders(limit?: number): Promise<string[]>
   localUsage(now?: number): LocalUsage
@@ -115,6 +116,22 @@ export function readUsageCache(directory: string, now = Date.now()): LocalUsage 
   } catch {
     return { context, limits: parseLimits(null, now) }
   }
+}
+
+/**
+ * The last `limit` turns of a transcript for the detail view (see parseConversation); `sidechain`
+ * for a helper's own (adapters/helpers.ts).
+ */
+export function readConversation(path: string, limit = 40, opts: ConversationOptions = {}): ConversationTurn[] {
+  const st = path && statSync(path, { throwIfNoEntry: false })
+  if (!st) return []
+  // Screenshots and big tool results can fill megabytes: read further back when the window held few turns.
+  let items: ConversationTurn[] = []
+  for (const bytes of [2 << 20, 8 << 20]) {
+    items = parseConversation(readTail(path, st.size, bytes).split('\n'), Number.POSITIVE_INFINITY, opts)
+    if (items.filter(i => i.role !== 'tool').length >= limit / 3 || bytes >= st.size) break
+  }
+  return items.slice(-limit)
 }
 
 /** Folder name Claude gives a project: the cwd without trailing slashes, non-alphanumerics as dashes. */
@@ -212,19 +229,6 @@ export function createClaudeHome(root: string): ClaudeHome {
     info.activity = st.mtimeMs
     tailCache.set(path, { mtimeMs: st.mtimeMs, size: st.size, info })
     return info
-  }
-
-  /** The last `limit` turns of a session for the detail view (see parseConversation). */
-  function conversation(path: string, limit = 40): ConversationTurn[] {
-    const st = path && statSync(path, { throwIfNoEntry: false })
-    if (!st) return []
-    // Screenshots and big tool results can fill megabytes: read further back when the window held few turns.
-    let items: ConversationTurn[] = []
-    for (const bytes of [2 << 20, 8 << 20]) {
-      items = parseConversation(readTail(path, st.size, bytes).split('\n'), Number.POSITIVE_INFINITY)
-      if (items.filter(i => i.role !== 'tool').length >= limit / 3 || bytes >= st.size) break
-    }
-    return items.slice(-limit)
   }
 
   /** Explicit local search in a single Claude project. Never scans sibling projects. */
@@ -367,7 +371,7 @@ export function createClaudeHome(root: string): ClaudeHome {
     liveSessions,
     transcriptPath,
     transcriptInfo,
-    conversation,
+    conversation: readConversation,
     searchHistory,
     recentFolders,
     localUsage: (now = Date.now()) => readUsageCache(join(root, 'herdr-usagebar'), now),

@@ -29,9 +29,20 @@ export function visibleItems(items: Item[], { query, sleepers, categories, categ
     if (!sleepers && it.sleeping && it.column === 'idle') return false
     if (!q) return true
     const title = categoryInfo(categories, categoryOf(it)).title
-    return [it.name, it.autoName, it.doing, it.wait, it.title, it.lastText, it.prompt, it.workspace, title].some(
-      v => v && String(v).toLowerCase().includes(q),
-    )
+    // What its helpers at work do counts too.
+    const helping = (it.helpers?.live ?? []).map(h => h.label)
+    return [
+      it.name,
+      it.autoName,
+      it.doing,
+      it.wait,
+      it.title,
+      it.lastText,
+      it.prompt,
+      it.workspace,
+      title,
+      ...helping,
+    ].some(v => v && String(v).toLowerCase().includes(q))
   })
 }
 

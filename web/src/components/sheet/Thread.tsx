@@ -1,8 +1,10 @@
 // The conversation: messages as bubbles (Markdown, with previews of the images sent from the
 // board), runs of tool calls folded into one line that opens to show them, the question forms
 // the session asked with their answers, and background tasks reporting back and board reminders
-// as quiet lines. Paths in it are candidates the file chips take up (data-path;
-// components/sheet/Sheet.tsx hands them over after every draw).
+// as quiet lines. A call that works with others is a line of its own, and another session's or a
+// teammate's message a bubble with their name (ThreadLinks.tsx). Paths in it are candidates the
+// file chips take up (data-path; components/sheet/Sheet.tsx hands them over after every draw).
+// The helpers window draws a helper's own conversation with it too.
 import type { ReactNode } from 'react'
 import { isReminder } from '../../../../src/core/notices.ts'
 import type { ConversationTurn, NoticeTurn } from '../../../../src/core/transcript.ts'
@@ -14,41 +16,56 @@ import { clockText } from '../../models/sheet.ts'
 import { type AskTurn, askState, type ThreadPart, threadParts, uploadThumbs } from '../../models/thread.ts'
 import { classNames } from '../class-names.ts'
 import { AlarmGlyph, BoltGlyph, CheckGlyph, ChevGlyph, CrossGlyph, SpinGlyph, StopGlyph } from '../icons.tsx'
+import { LinkLine, NO_LINKS, PeerBubble, type ThreadHelper, type ThreadItem, type ThreadLinks } from './ThreadLinks.tsx'
 
 export interface ThreadProps {
   conversation: readonly ConversationTurn[]
-  item: Pick<Item, 'column' | 'status'>
+  item: Partial<Pick<Item, 'column' | 'status'>> & ThreadItem
+  /** The session's helpers and the board, for the lines that work with others. */
+  links?: ThreadLinks | undefined
+  /** A helper's own conversation (the helpers window): what the session asked it is the other side. */
+  helper?: ThreadHelper
 }
 
-export function Thread({ conversation, item }: ThreadProps) {
+export function Thread({ conversation, item, links = NO_LINKS, helper = null }: ThreadProps) {
   const t = useT()
-  const parts = threadParts(conversation, item, t)
+  const parts = threadParts(conversation, item, t, { helper })
   const used = new Set<string>()
   return parts.map((part, n) => {
     // A task can report twice at one time under one id: the second keeps its own key.
     const wanted = keyOf(part, n)
     const key = used.has(wanted) ? `${wanted}-${n}` : wanted
     used.add(key)
-    return <ThreadTurn key={key} part={part} />
+    return <ThreadTurn key={key} part={part} item={item} links={links} helper={helper} />
   })
 }
 
 /**
  * A fold keeps its place among the folds, a notice that opens its task and time (a redraw leaves
- * the one open that was); the rest go by order.
+ * the one open that was), a line that works with others its call; the rest go by order.
  */
 function keyOf(part: ThreadPart, n: number): string {
   if (part.kind === 'tools') return `tools-${part.i}`
   if (part.kind === 'notice') return noticeId(part.turn) ?? `notice-${n}`
+  if (part.kind === 'link') return `link-${part.turn.id ?? n}`
   return `${part.kind}-${n}`
 }
 
 /** The key a notice with something to open is kept open by: a task can report several times under one id. */
 const noticeId = (m: NoticeTurn): string | null => (!isReminder(m) && m.detail ? `notice-${m.id}-${m.at}` : null)
 
-function ThreadTurn({ part }: { part: ThreadPart }) {
+interface TurnProps {
+  part: ThreadPart
+  item: ThreadItem
+  links: ThreadLinks
+  helper: ThreadHelper
+}
+
+function ThreadTurn({ part, item, links, helper }: TurnProps) {
   const t = useT()
   if (part.kind === 'ask') return <AskedTurn turn={part.turn} live={part.live} />
+  if (part.kind === 'link') return <LinkLine turn={part.turn} item={item} helper={helper} links={links} />
+  if (part.kind === 'peer') return <PeerBubble turn={part.turn} item={item} helper={helper} links={links} />
   if (part.kind === 'notice') return <Notice turn={part.turn} />
   if (part.kind === 'message') {
     const { role, text, at } = part.turn

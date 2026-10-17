@@ -111,6 +111,7 @@ describe.each(['en', 'ru'])('the shell in %s', lang => {
       'sheet-properties-toggle',
       'sheet-card',
       'sheet-question',
+      'sheet-helpers',
       'sheet-body',
       'composer',
     ])

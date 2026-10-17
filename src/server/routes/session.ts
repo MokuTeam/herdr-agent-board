@@ -4,10 +4,12 @@
 import { randomUUID } from 'node:crypto'
 import { type CardPatch, writeCard } from '../../adapters/cards.ts'
 import { checkoutChanges, isCheckout } from '../../adapters/git.ts'
+import { helpersOf } from '../../adapters/helpers.ts'
 import { herdrText } from '../../adapters/herdr.ts'
 import { uploadsDir } from '../../adapters/paths.ts'
 import { busy, PINS } from '../../core/board.ts'
 import { type PublicDialog, parseDialog, publicDialog } from '../../core/dialogs/questions.ts'
+import { publicHelper } from '../../core/helpers.ts'
 import { t } from '../../core/lang.ts'
 import { checkName } from '../../core/launch/names.ts'
 import type { MessageGate } from '../../core/message-gate.ts'
@@ -18,12 +20,15 @@ import { collect } from '../../services/board.ts'
 import type { Deps } from '../../services/deps.ts'
 import { renameSession } from '../../services/launch/rename.ts'
 import { type Body, type Handler, json, type Route } from '../http.ts'
+import { helperRoute, withSessions } from './helpers.ts'
 
 type Result = { ok: boolean; error?: string; [extra: string]: unknown }
 
 export interface SessionApp {
   deps: Deps
   find(key: string): Item | undefined
+  /** The board's items, for the sessions on the other end of a message. */
+  items(): Item[]
   refresh(): void
   /** One message in flight per session (core/message-gate.ts). */
   gate: MessageGate
@@ -35,8 +40,11 @@ const changed = (item: Item): Result => ({ ok: false, error: t('err.sessionChang
 const PIN_NAMES: ReadonlySet<string> = PINS
 const isPin = (column: string): column is Pin => PIN_NAMES.has(column)
 
-async function detail(deps: Deps, item: Item) {
-  const conversation = deps.claude.conversation(item.transcript ?? '', 60)
+async function detail(app: SessionApp, item: Item) {
+  const { transcript, alive, since, pipe, ...shown } = item
+  const conversation = withSessions(app.items(), app.deps.claude.conversation(transcript ?? '', 60))
+  // helpers: every subagent, fork, workflow agent and teammate, newest first (adapters/helpers.ts).
+  const own = helpersOf(transcript, { alive: !!alive, since: since ?? null })
   // checkout: whether its folder is in git, for the sheet's Changes button.
   const checkout = await isCheckout(item.cwd)
   let screen = ''
@@ -57,7 +65,8 @@ async function detail(deps: Deps, item: Item) {
       dialog = publicDialog(parseDialog(text))
     } catch {}
   }
-  return { item: { ...item, transcript: undefined }, conversation, screen, dialog, checkout }
+  const helpers = own.helpers.map(publicHelper)
+  return { item: shown, conversation, helpers, workflows: own.workflows, screen, dialog, checkout }
 }
 
 function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
@@ -212,8 +221,9 @@ export function sessionRoutes(app: SessionApp): Route[] {
     {
       method: 'GET',
       path: /^\/api\/session\/([^/]+)$/,
-      handle: withItem(async item => json(200, await detail(app.deps, item))),
+      handle: withItem(async item => json(200, await detail(app, item))),
     },
+    helperRoute(app),
     // Answering a dialog presses keys in a session: like a launch, only from this page.
     {
       method: 'POST',

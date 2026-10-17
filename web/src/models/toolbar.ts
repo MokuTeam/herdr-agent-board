@@ -5,6 +5,7 @@ import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { ColumnId, Item, Translator } from '../../../src/core/types.ts'
 import { type Seen, unseenResult } from './attention.ts'
 import { laneShown } from './board-view.ts'
+import { liveCount } from './helper-model.ts'
 
 type CategoryOf = (item: Item) => string
 
@@ -26,6 +27,8 @@ export function summaryParts(items: Item[], t: Translator): SummaryPart[] {
     const n = items.filter(i => i.column === column).length
     if (n) parts.push({ id: column, n, text: t(key, { n }), strong: true })
   }
+  const helping = items.reduce((n, i) => n + liveCount(i), 0)
+  if (helping) parts.push({ id: 'helpers', n: helping, text: t('sum.helpers', { n: helping }), strong: true })
   const asleep = items.filter(i => i.sleeping).length
   if (asleep) parts.push({ id: 'asleep', n: asleep, text: t('sum.asleep', { n: asleep }), strong: false })
   return parts

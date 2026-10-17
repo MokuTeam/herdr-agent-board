@@ -2,6 +2,7 @@
 // GET /api/board answers with and the event stream pushes.
 import { readUsageCache } from '../adapters/claude-home.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
+import { createLinks } from '../adapters/links.ts'
 import { stateDir } from '../adapters/paths.ts'
 import { listEntries, readLog } from '../adapters/schedule-store.ts'
 import { COLUMNS } from '../core/board.ts'
@@ -87,7 +88,8 @@ export function createBoardState({ deps, launches, terminals, version, push }: O
           fallback: id === 'other',
         }
       })
-    const list = items.map(({ transcript, ...rest }) => launches.decorate(rest))
+    // What the page has no use for stays here: file paths, the Claude process and its pipe.
+    const list = items.map(({ transcript, alive, since, pipe, ...rest }) => launches.decorate(rest))
     // The schedule without the scheduler's bookkeeping; the log is what was sent or missed lately.
     const schedules = listEntries().map(({ claim, tried, waited, ...entry }) => entry)
     return {
@@ -125,6 +127,10 @@ export function createBoardState({ deps, launches, terminals, version, push }: O
     push(payload)
   }
 
+  // Who started whom and who wrote to whom, read from the transcripts in the background
+  // (adapters/links.ts); a read that found something new refreshes the board.
+  const links = createLinks({ onChange: () => void refresh() })
+
   let refreshing = false
   let again = false
   async function refresh(): Promise<void> {
@@ -134,7 +140,7 @@ export function createBoardState({ deps, launches, terminals, version, push }: O
     }
     refreshing = true
     try {
-      items = await collect(deps)
+      items = await collect(deps, { helpers: true, links })
       launches.observe(items)
       stale = false
       lastSuccessfulRefreshAt = Date.now()

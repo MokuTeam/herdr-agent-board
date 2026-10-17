@@ -20,9 +20,12 @@ export const sessionMissing = (open: string | null, onBoard: boolean, status: De
 export const draftKey = (it: Pick<Item, 'session' | 'key'> | null | undefined): string | null =>
   it?.session || it?.key || null
 
-/** What the card says that warrants reading its detail again (web/app.js onData). */
+/**
+ * What the card says that warrants reading its detail again (web/app.js onData). A helper at work
+ * changes the sheet too, while the session itself may wait for it.
+ */
 export const detailStamp = (it: Item): string =>
-  `${it.activity}|${it.status}|${it.column}|${it.wait}|${it.doing}|${it.category}`
+  `${it.activity}|${it.status}|${it.column}|${it.wait}|${it.doing}|${it.category}|${it.helpers?.at ?? ''}|${it.helpers?.running ?? ''}`
 
 export interface BoardTurn {
   /** The board before this one (none yet: the page starts out of date). */

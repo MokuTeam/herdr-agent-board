@@ -102,7 +102,14 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
     categoriesRoute(),
     ...launchRoutes(launches, board.items),
     terminalRoute({ cfg, terminals, find: board.find, publish: board.publish }),
-    ...sessionRoutes({ deps, find: board.find, refresh, gate: messageGate(), answering: new Set() }),
+    ...sessionRoutes({
+      deps,
+      find: board.find,
+      items: board.items,
+      refresh,
+      gate: messageGate(),
+      answering: new Set(),
+    }),
     staticRoute(WEB, bundle),
   ]
   const guards = { port, token: FILE_TOKEN, stale: board.stale }

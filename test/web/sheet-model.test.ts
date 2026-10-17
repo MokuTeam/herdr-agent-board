@@ -41,9 +41,13 @@ test('drafts go by the Claude session, else by the card', () => {
 
 test('the detail is read again when what the card says changes', () => {
   const a = item({ key: 'a', activity: 5, status: 'working', column: 'work', doing: 'x' })
-  expect(detailStamp(a)).toBe('5|working|work|undefined|x|other')
+  expect(detailStamp(a)).toBe('5|working|work|undefined|x|other||')
   expect(detailStamp({ ...a, wait: 'review' })).not.toBe(detailStamp(a))
   expect(detailStamp({ ...a, name: 'renamed' })).toBe(detailStamp(a))
+  // A helper at work changes the sheet too, while the session itself may wait for it.
+  const helping = { ...a, helpers: { running: 1, total: 1, workflows: 0, live: [], at: 9 } }
+  expect(detailStamp(helping)).toBe('5|working|work|undefined|x|other|9|1')
+  expect(detailStamp({ ...helping, helpers: { ...helping.helpers, at: 10 } })).not.toBe(detailStamp(helping))
 })
 
 describe('a new board and the open session’s detail', () => {

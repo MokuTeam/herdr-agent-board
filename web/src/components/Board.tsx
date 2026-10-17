@@ -1,14 +1,17 @@
 // The board: one lane per category, its cards in the columns. Every change of place animates
 // with a spring from where the card was (useFlip), and a card can be dragged to another lane or
-// column (useCardDrag); a click opens it, its buttons act on the session.
-import { type KeyboardEvent, type MouseEvent, useRef } from 'react'
+// column (useCardDrag); a click opens it, its buttons act on the session. Pointing at a card marks
+// the sessions it works with.
+import { type KeyboardEvent, type MouseEvent, useEffect, useRef, useState } from 'react'
 import type { Item } from '../../../src/core/types.ts'
 import { useBoardView } from '../hooks/useBoardView.ts'
 import { useCardDrag } from '../hooks/useCardDrag.ts'
 import { useFlip } from '../hooks/useFlip.ts'
+import { useGoToSession } from '../hooks/useGoToSession.ts'
 import { useSessionActions } from '../hooks/useSessionActions.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { anyShown, dropTarget, lanesOf } from '../models/board-view.ts'
+import { relatedKeys } from '../models/helper-model.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { Card, type LaunchSlots } from './Card.tsx'
 import { Lane, type NewSessionContext } from './Lane.tsx'
@@ -27,17 +30,25 @@ export interface BoardProps {
   roomBelow?: () => number
 }
 
-const actionOf = (e: MouseEvent<HTMLElement>): string | undefined =>
-  e.target instanceof Element ? e.target.closest<HTMLElement>('[data-act]')?.dataset.act : undefined
+const buttonOf = (e: MouseEvent<HTMLElement>): HTMLElement | null | undefined =>
+  e.target instanceof Element ? e.target.closest<HTMLElement>('[data-act]') : undefined
 
 export function Board({ onOpen, onNewSession, onLaneHead, launch, takeovers, roomBelow }: BoardProps) {
   const t = useT()
   const { data, ui, canMutate, canEdit, dispatch } = useBoardContext()
   const { visible } = useBoardView()
   const actions = useSessionActions()
+  const goToSession = useGoToSession()
   const root = useRef<HTMLElement>(null)
   const lanes = data ? lanesOf(data, visible, ui.filter, ui.moves) : []
   const itemOf = (key: string): Item | undefined => data?.items.find(i => i.key === key)
+  // The card whose sessions are marked; a card no longer on show marks none.
+  const [relatedTo, setRelatedTo] = useState<string | null>(null)
+  const onShow = relatedTo !== null && lanes.some(lane => lane.items.some(it => it.key === relatedTo))
+  useEffect(() => {
+    if (relatedTo !== null && !onShow) setRelatedTo(null)
+  }, [relatedTo, onShow])
+  const related = onShow && relatedTo !== null ? relatedKeys(itemOf(relatedTo)) : new Set<string>()
 
   useFlip(
     root,
@@ -62,11 +73,13 @@ export function Board({ onOpen, onNewSession, onLaneHead, launch, takeovers, roo
     if (drag.justDragged(key)) return
     // A starting session's own buttons; its card opens nothing.
     if (launch?.onAction(e) || !itemOf(key)) return
-    const act = actionOf(e)
+    const button = buttonOf(e)
+    const act = button?.dataset.act
     if (act === 'focus') void actions.focusSession(key)
     else if (act === 'write') open(key, true)
     else if (act === 'dismiss') void actions.dismissAsk(key)
     else if (act === 'sleep') void actions.sleepSession(key)
+    else if (act === 'rel') goToSession(button?.dataset.key ?? '')
     else open(key)
   }
 
@@ -85,6 +98,8 @@ export function Board({ onOpen, onNewSession, onLaneHead, launch, takeovers, roo
       onPointerDown={e => drag.onPointerDown(e, it.key)}
       onClick={e => onCardClick(e, it.key)}
       onKeyDown={e => onCardKey(e, it.key)}
+      related={related.has(it.key)}
+      onRelated={setRelatedTo}
     />
   )
 

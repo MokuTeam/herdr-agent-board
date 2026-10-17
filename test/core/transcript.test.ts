@@ -12,6 +12,7 @@ import {
   trailingQuestion,
   userText,
 } from '../../src/core/transcript.ts'
+import { line as entry, jsonl, type Line, T0 } from '../support/helper-fixtures.ts'
 
 test('prompts are cleaned for one line', () => {
   assert.equal(cleanPrompt('[telegram message_id=5 ts=1] hi\nhow is it going'), 'hi how is it going')
@@ -129,16 +130,18 @@ test('transcript tail: title, last prompt, last words, pending tool; sidechains 
   })
 
   const conv = parseConversation(lines)
+  // Another session's message is its own line, with who sent it, not the user's bubble.
   assert.deepEqual(
     conv.map(c => c.role),
-    ['user', 'assistant', 'tool', 'assistant', 'tool', 'user'],
+    ['user', 'assistant', 'tool', 'assistant', 'tool', 'user', 'peer'],
   )
-  const [, , read, , ask, queued] = conv
+  const [, , read, , ask, queued, peer] = conv
   assert.equal(read?.role === 'tool' && read.done, true)
   assert.equal(ask?.role === 'tool' && ask.done, false)
   assert.equal(queued?.role === 'user' && queued.text, 'also the 10/24 file')
   assert.equal(queued?.at, Date.parse('2026-10-15T21:50:13.839Z'))
-  assert.ok(!conv.some(c => (c.role === 'user' || c.role === 'assistant') && c.text === 'subagent noise'))
+  assert.equal(peer?.role === 'peer' && peer.text, 'hi')
+  assert.ok(!conv.some(c => 'text' in c && c.text === 'subagent noise'))
   assert.equal(parseConversation(lines, 2).length, 2)
 })
 
@@ -195,4 +198,117 @@ test('a message ending in a question: its last sentence or two, markup ignored',
   assert.equal(trailingQuestion('Code:\n```js\nif (a?) b\n```\nThat is all.'), '')
   assert.equal(trailingQuestion('Options:\n1. A\n2. B\n\nWhich one?'), 'Which one?')
   assert.equal(trailingQuestion('Готово. Отправлять?'), 'Готово. Отправлять?') // any script
+})
+
+test('the session thread: a call that works with others is a line of its own', () => {
+  const main = (o: Line, sc = false): Line => ({ ...o, isSidechain: sc })
+  const peerFrom = { kind: 'peer', from: 'uds:\\\\.\\pipe\\x1', name: 'Billing-master', msg_id: 'm1', body: 'Thanks.' }
+  const lines = [
+    main(entry.user(0, 'Go.')),
+    main(
+      entry.call(1, 'ag', 'Agent', {
+        description: 'Review the diff',
+        subagent_type: 'code-reviewer',
+        run_in_background: true,
+      }),
+    ),
+    main(
+      entry.result(
+        2,
+        'ag',
+        'Async agent launched successfully.\nagentId: a7f3 (internal ID - do not mention to user.)',
+        {
+          toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'a7f3' },
+        },
+      ),
+    ),
+    main(entry.call(3, 'fk', 'Agent', { description: 'Audit a', subagent_type: 'fork', name: 'audit-a' })),
+    main(
+      entry.call(4, 'wf', 'Workflow', {
+        script: "export const meta = {\n  name: 'polish-audit',\n  description: 'x' }",
+      }),
+    ),
+    main(entry.result(5, 'wf', 'Workflow launched in background.', { toolUseResult: { runId: 'wf_9', taskId: 'w9' } })),
+    main(
+      entry.call(6, 'sm', 'SendMessage', {
+        to: 'Billing-master [3fa9c1]',
+        summary: 'Hours for today',
+        message: 'All in.',
+      }),
+    ),
+    main(entry.call(7, 'sp', 'Bash', { command: "spawn-agent -Name 'case-42' -Cwd C:\\work\\x -Brief 'go'" })),
+    main(entry.result(8, 'sp', 'pane=wP:p3D name=case-42 agent=case-42')),
+    main(entry.call(9, 'sp2', 'PowerShell', { command: 'spawn-agent -Name broken -Cwd nowhere' })),
+    main(
+      entry.result(10, 'sp2', 'No such folder: nowhere', {
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'sp2', content: 'No such folder', is_error: true }],
+        },
+      }),
+    ),
+    // Another session's message: a meta line with the sender in its origin; then a reply to its pipe.
+    main(
+      entry.user(
+        11,
+        'Another Claude session sent a message:\n<cross-session-message from="uds:\\\\.\\pipe\\x1" from-name="Billing-master">Thanks.</cross-session-message>',
+        { isMeta: true, origin: peerFrom },
+      ),
+    ),
+    main({
+      type: 'attachment',
+      timestamp: new Date(T0 + 12000).toISOString(),
+      attachment: { type: 'queued_command', commandMode: 'prompt', prompt: 'dup', origin: peerFrom },
+    }),
+    main(
+      entry.call(13, 'rp', 'SendMessage', { to: 'uds:\\\\.\\pipe\\x1', summary: 'Reply', message: 'You are welcome.' }),
+    ),
+    main(entry.user(14, '<teammate-message teammate_id="design-check" summary="Done">It is sound.</teammate-message>')),
+    // The user asking about the tag is the user, not a teammate.
+    main(entry.user(14.5, 'Why does <teammate-message teammate_id="x">hi</teammate-message> render as a bubble?')),
+    main(entry.said(15, 'subagent noise'), true),
+  ]
+  const conv = parseConversation(jsonl(lines).split('\n'))
+  const tool = (id: string) => {
+    const m = conv.find(c => c.role === 'tool' && c.id === id)
+    if (m?.role !== 'tool') throw new Error(`no call ${id}`)
+    return m
+  }
+  assert.deepEqual(tool('ag').helper, { kind: 'agent', type: 'code-reviewer', name: '', background: true, id: 'a7f3' })
+  assert.deepEqual(tool('fk').helper, { kind: 'fork', type: '', name: 'audit-a', background: false, id: '' })
+  assert.deepEqual(tool('wf').workflow, { name: 'polish-audit', run: 'wf_9' })
+  assert.deepEqual(tool('sm').send, { to: 'Billing-master', summary: 'Hours for today', text: 'All in.' })
+  assert.deepEqual(tool('sp').spawn, { name: 'case-42', pane: 'wP:p3D' })
+  assert.equal(tool('sp2').spawn?.failed, true)
+  const peers = conv.filter(m => m.role === 'peer')
+  assert.deepEqual(
+    peers.map(p => [p.from, p.text]),
+    [
+      ['Billing-master', 'Thanks.'],
+      ['design-check', 'It is sound.'],
+    ],
+  ) // once, not twice
+  assert.equal(peers[0]?.pipe, 'uds:\\\\.\\pipe\\x1') // the server turns it into the session's key
+  assert.equal(peers[1]?.team, true)
+  assert.equal(tool('rp').send?.name, 'Billing-master') // a reply to a pipe: whoever wrote from it
+  assert.ok(conv.some(m => m.role === 'user' && m.text.startsWith('Why does <teammate-message')))
+  assert.ok(!conv.some(m => 'text' in m && m.text === 'subagent noise'))
+})
+
+test("a helper's own transcript: its lines are sidechain lines, a fork's work begins with its directive", () => {
+  const lines = [
+    entry.call(10, 'toolu_b', 'Agent', { subagent_type: 'fork', description: "the parent's call" }),
+    entry.user(11, [
+      { type: 'tool_result', tool_use_id: 'toolu_b', content: 'Fork started' },
+      { type: 'text', text: '<fork-boilerplate>x</fork-boilerplate>\nYour directive: Count.' },
+    ]),
+    entry.call(12, 'g1', 'Glob', { pattern: '*' }),
+    entry.user(13, '[Workflow harness — user request] The harness relays...:\n  polish it'),
+  ]
+  const conv = parseConversation(jsonl(lines).split('\n'), 40, { sidechain: true })
+  assert.deepEqual(
+    conv.map(m => (m.role === 'user' ? m.text : m.role)),
+    ['Count.', 'tool'],
+  )
+  assert.deepEqual(parseConversation(jsonl(lines).split('\n')), [])
 })

@@ -5,6 +5,15 @@ import { type FormQuestion, questionsOf } from './dialogs/question-form.ts'
 import { t } from './lang.ts'
 import { isNotice, isReminder, type Notice, reminderNotice, taskNotice } from './notices.ts'
 import { DEFAULT_PROMPT_FILTERS, type PromptFilter } from './prompt-filters.ts'
+import {
+  type CallLinks,
+  linkOf,
+  linkResult,
+  type Peer,
+  peerOf,
+  promptOf,
+  teammateMessages,
+} from './transcript-links.ts'
 import type { ToolCall, TranscriptInfo } from './types.ts'
 
 type Rec = Record<string, unknown>
@@ -244,7 +253,8 @@ export interface AssistantTurn {
   text: string
   at: number
 }
-export interface ToolTurn {
+/** A tool call; one that works with others carries what it is about (core/transcript-links.ts). */
+export interface ToolTurn extends CallLinks {
   role: 'tool'
   label: string
   detail: string
@@ -257,7 +267,14 @@ export interface ToolTurn {
 }
 /** A background task reporting back or a board reminder (core/notices.ts), at its time. */
 export type NoticeTurn = Notice & { role: 'notice'; at: number }
-export type ConversationTurn = UserTurn | AssistantTurn | ToolTurn | NoticeTurn
+/** Another session's or a teammate's message. */
+export type PeerTurn = Peer & { role: 'peer'; at: number }
+export type ConversationTurn = UserTurn | AssistantTurn | ToolTurn | NoticeTurn | PeerTurn
+
+export interface ConversationOptions {
+  /** A helper's own transcript (adapters/helpers.ts), whose lines are all sidechain lines. */
+  sidechain?: boolean
+}
 
 /** What tells one notice from another: the copy a queued notice leaves when it is sent again matches. */
 function noticeKey(n: Notice): string {
@@ -281,11 +298,31 @@ function askAnswers(ask: readonly { question: string }[], result: unknown): stri
  * texts and its tool calls in a line each (done = the call has a result). A question form
  * (AskUserQuestion) carries its questions and, once done, the answers: { ask, answers }, answers
  * null when it was closed without one. Background tasks reporting back and board reminders come
- * as { role: 'notice', ...taskNotice() or reminderNotice() } (core/notices.ts).
+ * as { role: 'notice', ...taskNotice() or reminderNotice() } (core/notices.ts). A call that works
+ * with others carries what it is about, for a line of its own: `helper` (Agent: a subagent or a
+ * fork, `id` once it started), `workflow`, `send` (SendMessage), `spawn` (spawn-agent started a
+ * session). Another session's or a teammate's message is { role: 'peer', from, text }.
+ * `sidechain` reads a helper's own transcript (adapters/helpers.ts), whose lines are all
+ * sidechain lines.
  */
-export function parseConversation(lines: string[], limit = 40): ConversationTurn[] {
+export function parseConversation(
+  lines: string[],
+  limit = 40,
+  { sidechain = false }: ConversationOptions = {},
+): ConversationTurn[] {
   const items: ConversationTurn[] = []
   const tools = new Map<string, ToolTurn>() // tool_use id -> item
+  // Another session's message can be queued into a turn and come again as a line of its own.
+  const peers = new Set<string>()
+  const pipes = new Map<string, string>() // a sender's message pipe -> its name: a reply goes to the pipe
+  const peer = (p: Peer, at: number) => {
+    // Without an id, the same words twice are two messages unless they come at the same moment.
+    const key = p.id || JSON.stringify([p.from, p.text, at])
+    if (peers.has(key)) return
+    peers.add(key)
+    if (p.pipe && p.from) pipes.set(p.pipe, p.from)
+    items.push({ role: 'peer', ...p, at })
+  }
   // A background task reporting back or a board reminder: a line of its own (core/notices.ts). One
   // can be queued into a running turn and then sent again as a turn of its own: shown once. A
   // task id alone is not enough, a monitor or a resumed agent reports again under the same one.
@@ -313,16 +350,30 @@ export function parseConversation(lines: string[], limit = 40): ConversationTurn
     )
       continue
     const o = parse(line)
-    if (!o || o.isSidechain || o.isMeta || o.isCompactSummary) continue
+    // Claude Code keeps another session's message, and in a helper's transcript a task reporting
+    // back, as a meta line: they are shown all the same.
+    const kind = rec(o?.origin)?.kind
+    if (
+      !o ||
+      (o.isSidechain && !sidechain) ||
+      (o.isMeta && kind !== 'peer' && kind !== 'task-notification') ||
+      o.isCompactSummary
+    )
+      continue
     const content = rec(o.message)?.content
     const at = Date.parse(str(o.timestamp)) || 0
     // A prompt sent while the session worked goes into the running turn, and the transcript
     // keeps it as a queued command, not a user line. Other sessions' messages and task
-    // notifications arrive the same way; other sessions' messages are not shown.
+    // notifications arrive the same way.
     if (o.type === 'attachment') {
       const a = rec(o.attachment)
       if (a?.type !== 'queued_command') continue
       const when = Date.parse(str(a.timestamp)) || at
+      if (rec(a.origin)?.kind === 'peer') {
+        const p = peerOf(a.origin, a.prompt)
+        if (p) peer(p, when)
+        continue
+      }
       const task = a.commandMode === 'task-notification' ? taskNotice(a.prompt) : null
       if (task) notice(task, when)
       const text = a.commandMode === 'prompt' && rec(a.origin)?.kind !== 'peer' ? userText(a.prompt) : ''
@@ -341,10 +392,32 @@ export function parseConversation(lines: string[], limit = 40): ConversationTurn
           if (!b || !tool) continue
           tool.done = true
           if (tool.ask) tool.answers = askAnswers(tool.ask, o.toolUseResult)
+          linkResult(tool, b, o.toolUseResult)
         }
         if (content.every(b => rec(b)?.type === 'tool_result')) continue
       }
-      const text = userText(content)
+      if (kind === 'peer') {
+        const p = peerOf(o.origin, userText(content))
+        if (p) peer(p, at)
+        continue
+      }
+      let text = userText(content)
+      // A task reporting back can come after a banner that says it is not the user.
+      if (kind === 'task-notification' && text.indexOf('<task-notification>') > 0)
+        text = text.slice(text.indexOf('<task-notification>'))
+      const mates = teammateMessages(text)
+      if (mates.length) {
+        for (const m of mates) peer(m, at)
+        continue
+      }
+      if (sidechain) {
+        // A fork's transcript starts with its parent's call that made it: its own work begins
+        // with its directive.
+        if (text.trimStart().startsWith('<fork-boilerplate>')) items.length = 0
+        const p = promptOf(text)
+        if (!p) continue
+        text = p.prompt
+      }
       const n = taskNotice(text) ?? reminderNotice(text)
       if (n) notice(n, at)
       else if (text) items.push({ role: 'user', text: clip(text, 3000), at })
@@ -371,6 +444,10 @@ export function parseConversation(lines: string[], limit = 40): ConversationTurn
               ask: ask.map(({ question, header, multiSelect }) => ({ question, header, multiSelect })),
               answers: null,
             })
+          const link = linkOf(name, b.input)
+          if (link) Object.assign(turn, { id: str(b.id) }, link)
+          // A reply to the pipe a message came from goes to whoever sent that message.
+          if (link?.send?.to.startsWith('uds:')) link.send.name = pipes.get(link.send.to) ?? ''
           tools.set(str(b.id), turn)
           items.push(turn)
         }

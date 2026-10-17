@@ -1,6 +1,7 @@
 // The card's own fields, pinned under the sheet's head: its lane and column as chips ("Auto" takes
 // a pin off), what it does and what it waits for — Enter saves a field, Escape puts it back — and
-// its reminders. A field being edited keeps what is typed while the board moves on.
+// its reminders, and the sessions it works with. A field being edited keeps what is typed while
+// the board moves on.
 import { type KeyboardEvent, useState } from 'react'
 import type { Item } from '../../../../src/core/types.ts'
 import { useSessionActions } from '../../hooks/useSessionActions.ts'
@@ -10,6 +11,7 @@ import { plain } from '../../models/card.ts'
 import { type FieldEdit, type FieldScene, liveEdit, typing } from '../../models/sheet.ts'
 import { COLUMN_COLORS } from '../../models/toolbar.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
+import { RelationsRow } from '../helpers/RelationsRow.tsx'
 import { type ScheduleActions, ScheduleRow } from './ScheduleRow.tsx'
 
 export interface SheetCardProps {
@@ -17,9 +19,11 @@ export interface SheetCardProps {
   /** The chips, fields and reminder buttons do nothing now. */
   disabled: boolean
   schedule?: ScheduleActions | undefined
+  /** A linked session's name: that session (they work whatever the board can do). */
+  onSession?: ((key: string) => void) | undefined
 }
 
-export function SheetCard({ item, disabled, schedule }: SheetCardProps) {
+export function SheetCard({ item, disabled, schedule, onSession }: SheetCardProps) {
   const t = useT()
   const { data, ui } = useBoardContext()
   const actions = useSessionActions()
@@ -91,6 +95,7 @@ export function SheetCard({ item, disabled, schedule }: SheetCardProps) {
         <CardField item={item} field="wait" placeholder={t('row.waitNone')} disabled={disabled} />
       </div>
       <Reminders item={item} disabled={disabled} schedule={schedule} />
+      <RelationsRow item={item} onSession={key => onSession?.(key)} />
     </div>
   )
 }

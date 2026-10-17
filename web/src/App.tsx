@@ -1,10 +1,12 @@
 // The board page: the toolbar over the board, the side panels, the usage popover, the quick look
 // and the toasts, the keys and the Back button; the chat's files and links, the question forms, the
-// context menus, renaming in place, the "new session" window and the terminal window.
+// context menus, renaming in place, the "new session" window and the terminal window; the
+// session's helpers in their window.
 import { useEffect, useRef, useState } from 'react'
 import { Board } from './components/Board.tsx'
 import { FileChips } from './components/files/FileChip.tsx'
 import { QuickLook } from './components/files/QuickLook.tsx'
+import { HelpersWindow } from './components/helpers/HelpersWindow.tsx'
 import { LimitsPop } from './components/LimitsPop.tsx'
 import { LaunchDialog } from './components/launch/LaunchDialog.tsx'
 import { ContextMenu } from './components/menu/ContextMenu.tsx'
@@ -19,6 +21,7 @@ import { useContextMenus } from './hooks/useContextMenus.ts'
 import { useDialogHistory } from './hooks/useDialogHistory.ts'
 import { useFileChips } from './hooks/useFileChips.ts'
 import { useFileLinks } from './hooks/useFileLinks.ts'
+import { useHelpers } from './hooks/useHelpers.ts'
 import { useLaunch } from './hooks/useLaunch.ts'
 import { laneContext, useNewSession } from './hooks/useNewSession.ts'
 import { useNextAttention } from './hooks/useNextAttention.ts'
@@ -60,6 +63,9 @@ export function App() {
   const openUrl = useFileLinks(quickLook.look)
   // A shell in the session's folder, or the session's own terminal, live in a window.
   const terminal = useTerminal(href => void openUrl(href))
+  // Subagents, forks, workflow agents and teammates of the session in the sheet: the list, and one
+  // helper's conversation drawn as the session's is.
+  const helpers = useHelpers()
   const questions = useQuestions()
   // A session a notification was about: its sheet and its card in view.
   useReveal()
@@ -78,7 +84,7 @@ export function App() {
     openNextAttention,
     newSession,
     // They take their keys first; the terminal window too, even while its screen has not the keys.
-    layerOpen: () => menus.menu.isOpen() || launch.isOpen() || terminal.isOpen(),
+    layerOpen: () => menus.menu.isOpen() || launch.isOpen() || terminal.isOpen() || helpers.isOpen(),
     quickLookOpen: quickLook.isOpen,
     panelOpen: () => !!panels.place.openPanel(),
     closePanel: panels.closeOpen,
@@ -94,6 +100,7 @@ export function App() {
     { open: launch.shown, close: launch.close },
     { open: quickLook.open, close: quickLook.back },
     { open: terminal.open, close: terminal.close },
+    { open: helpers.open, close: helpers.back },
     {
       open: ui.limitsOpen,
       close: () => {
@@ -144,12 +151,14 @@ export function App() {
           moreOpen: menus.moreOpen,
           onRename: rename.start,
           onTerminal: terminal.openTerminal,
+          helpers,
         }}
       />
       <LimitsPop anchor={limitsAnchor} />
       <FileChips chips={chips} />
       <QuickLook engine={quickLook.engine} />
       <Terminal engine={terminal.engine} />
+      <HelpersWindow engine={helpers.engine} upgrade={chips.upgrade} />
       <LaunchDialog launch={launch.dialog} refs={launch.refs} />
       <ContextMenu engine={menus.menu} />
       <RenameField rename={rename} />

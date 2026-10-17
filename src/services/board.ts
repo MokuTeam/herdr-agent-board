@@ -3,12 +3,16 @@
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { allCards, writeCard } from '../adapters/cards.ts'
+import { helpersOf } from '../adapters/helpers.ts'
 import { snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
+import type { LinksIndex } from '../adapters/links.ts'
 import { contextDir } from '../adapters/paths.ts'
 import { attentionOf, busy, columnOf, isAgentStatus, PINS } from '../core/board.ts'
 import { categoryFor } from '../core/categories.ts'
+import { type HelperSummary, summarize } from '../core/helpers.ts'
 import { t } from '../core/lang.ts'
+import { relate } from '../core/links.ts'
 import type { AgentStatus, Attention, Card, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
 import type { Deps } from './deps.ts'
 
@@ -104,11 +108,34 @@ function contextOf(session: string | null, info: TranscriptInfo): ContextFill {
 /** What a pane or a sleeper tells before the card and the transcript are merged in. */
 type Base = Pick<
   Item,
-  'key' | 'session' | 'pane' | 'workspace' | 'agent' | 'name' | 'cwd' | 'status' | 'sleeping' | 'focused' | 'activity'
+  | 'key'
+  | 'session'
+  | 'pane'
+  | 'workspace'
+  | 'agent'
+  | 'name'
+  | 'cwd'
+  | 'status'
+  | 'sleeping'
+  | 'focused'
+  | 'activity'
+  | 'alive'
+  | 'since'
+  | 'pipe'
 >
 
-/** All board items, newest activity first. */
-export async function collect(deps: Deps): Promise<Item[]> {
+export interface CollectOptions {
+  /** Each session's helpers (adapters/helpers.ts), for the web board. */
+  helpers?: boolean
+  /** How sessions work with each other: a links index (adapters/links.ts), for the web board. */
+  links?: LinksIndex | null
+}
+
+/**
+ * All board items, newest activity first. The web board also asks for each session's helpers
+ * (`helpers`: adapters/helpers.ts) and how sessions work with each other (`links`: an index).
+ */
+export async function collect(deps: Deps, { helpers = false, links = null }: CollectOptions = {}): Promise<Item[]> {
   const { cfg, claude } = deps
   const [snap, asleep] = await Promise.all([snapshot(), deps.wake.sleepers()])
   const live = claude.liveSessions()
@@ -126,6 +153,12 @@ export async function collect(deps: Deps): Promise<Item[]> {
     const guess = categoryFor(cfg, base.cwd)
     const tool = info.tool ?? null
     const attention = attentionOf(base.status, card, info)
+    let own: HelperSummary | null = null
+    if (helpers && path) {
+      try {
+        own = summarize(helpersOf(path, { alive: !!base.alive, since: base.since ?? null }))
+      } catch {} // helpers that cannot be read leave the session's card as it was
+    }
     items.push({
       ...base,
       // A name given on the board beats the one herdr and Claude know it by; autoName is theirs.
@@ -149,6 +182,7 @@ export async function collect(deps: Deps): Promise<Item[]> {
       column: columnOf(base.status, card, info),
       pin, // the column the user dragged it to, or ''
       auto: columnOf(base.status, { ...card, pin: '' }, info), // where it would be without the pin
+      helpers: own, // its subagents, forks, workflow agents and teammates in short, or null
       transcript: path,
     })
   }
@@ -172,6 +206,10 @@ export async function collect(deps: Deps): Promise<Item[]> {
       sleeping: false,
       focused: p.pane_id === snap.focused_pane_id,
       activity: numberOf(reg?.statusUpdatedAt) ?? 0,
+      // Its Claude process: whether it runs, since when, and the pipe other sessions write to.
+      alive: !!reg,
+      since: numberOf(reg?.startedAt) ?? null,
+      pipe: typeof reg?.messagingSocketPath === 'string' ? reg.messagingSocketPath : '',
     })
   }
 
@@ -195,5 +233,13 @@ export async function collect(deps: Deps): Promise<Item[]> {
   }
 
   items.sort((a, b) => (b.activity ?? 0) - (a.activity ?? 0))
+  if (links) {
+    links.update(items.map(i => i.transcript))
+    const rel = relate(items, it => links.events(it.transcript))
+    for (const it of items) {
+      const l = rel.get(it.key)
+      it.links = l && (l.from || l.started.length || l.talks.length) ? l : null
+    }
+  }
   return items
 }

@@ -90,7 +90,7 @@ interface From {
 }
 
 /** Where the window starts from: the chip's centre and width, or a small drop when it is gone. */
-function measureFrom(win: HTMLElement, el: Element | null): From {
+export function measureFrom(win: HTMLElement, el: Element | null): From {
   const saved = win.style.transform
   win.style.transform = 'none'
   const w = win.getBoundingClientRect()

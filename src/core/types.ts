@@ -1,7 +1,9 @@
 // Types shared across the board. Grows with each ported module.
 
 import type { FormQuestion } from './dialogs/question-form.ts'
+import type { HelperSummary } from './helpers.ts'
 import type { FailureKind } from './launch/launcher-command.ts'
+import type { ItemLinks } from './links.ts'
 
 export type Lang = 'en' | 'ru'
 export type Vars = Record<string, string | number>
@@ -165,6 +167,14 @@ export interface Item {
   activity?: number
   pin?: Pin | ''
   auto?: ColumnId
+  /** Its subagents, forks, workflow agents and teammates in short (core/helpers.ts), or null. */
+  helpers?: HelperSummary | null
+  /** How it works with the board's other sessions (core/links.ts), or null. */
+  links?: ItemLinks | null
+  /** Its Claude process: whether it runs, since when, the pipe other sessions write to (server only). */
+  alive?: boolean
+  since?: number | null
+  pipe?: string
   transcript?: string | null
   [extra: string]: unknown
 }
