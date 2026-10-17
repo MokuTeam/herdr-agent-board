@@ -25,6 +25,7 @@ import { usePanelLayout } from './hooks/usePanelLayout.ts'
 import { useQuestions } from './hooks/useQuestions.ts'
 import { useQuickLook } from './hooks/useQuickLook.ts'
 import { useRenameInPlace } from './hooks/useRenameInPlace.ts'
+import { useReveal } from './hooks/useReveal.ts'
 import { useSchedule } from './hooks/useSchedule.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
 
@@ -56,6 +57,8 @@ export function App() {
   const quickLook = useQuickLook(chips.upgrade)
   useFileLinks(quickLook.look)
   const questions = useQuestions()
+  // A session a notification was about: its sheet and its card in view.
+  useReveal()
   // A session renamed where its name is; the menus of cards, lanes, the board and chips. The
   // menu's keys come after the quick look's, as the old page had them.
   const rename = useRenameInPlace()

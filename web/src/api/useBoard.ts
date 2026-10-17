@@ -2,6 +2,7 @@
 // while the page is hidden or offline and resumed when it is back.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { boardConnection } from '../models/lifecycle.ts'
+import { revealedKey } from '../models/reveal.ts'
 import { api, type BoardPayload, isBoardPayload } from './client.ts'
 
 export interface LiveBoard {
@@ -15,6 +16,16 @@ export interface LiveBoard {
   canEdit: boolean
   /** Opens a new stream and snapshot, unless the page is hidden or offline. */
   resume(): void
+  /**
+   * The last session the board was asked to show (a notification clicked: the stream's `reveal`
+   * event), one the board had; `n` tells two asks for the same session apart.
+   */
+  reveal: Reveal | null
+}
+
+export interface Reveal {
+  key: string
+  n: number
 }
 
 const pageAway = () => document.hidden || navigator.onLine === false
@@ -23,19 +34,31 @@ export function useBoard(): LiveBoard {
   const [data, setData] = useState<BoardPayload | null>(null)
   const [connected, setConnected] = useState(false)
   const [dropped, setDropped] = useState(false)
+  const [reveal, setReveal] = useState<Reveal | null>(null)
   const resumeRef = useRef<() => void>(() => {})
 
   useEffect(() => {
     let version: string | null = null
     let started = false
+    // The board as it came last, before React draws it: a `reveal` right after it goes by it.
+    let latest: BoardPayload | null = null
     const connection = boardConnection({
-      source: () => new EventSource('/api/events'),
+      source: () => {
+        const stream = new EventSource('/api/events')
+        // A notification clicked while this page is open (entrypoints/web-open.ts through /api/reveal).
+        stream.addEventListener('reveal', event => {
+          const key = revealedKey(event.data)
+          if (key && latest?.items.some(i => i.key === key)) setReveal(r => ({ key, n: (r?.n ?? 0) + 1 }))
+        })
+        return stream
+      },
       snapshot: signal => api.board(signal),
       data(value) {
         if (!isBoardPayload(value)) return
         // The page's own files changed (the plugin was updated): load the new page.
         if (version && value.version && value.version !== version) return location.reload()
         version = value.version
+        latest = value
         setData(value)
       },
       connected(value) {
@@ -69,7 +92,7 @@ export function useBoard(): LiveBoard {
   const resume = useCallback(() => resumeRef.current(), [])
   const canMutate = connected && data?.stale === false && data.lastSuccessfulRefreshAt != null
   return useMemo(
-    () => ({ data, connected, dropped, canMutate, canEdit: connected, resume }),
-    [data, connected, dropped, canMutate, resume],
+    () => ({ data, connected, dropped, canMutate, canEdit: connected, resume, reveal }),
+    [data, connected, dropped, canMutate, resume, reveal],
   )
 }

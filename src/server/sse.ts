@@ -6,10 +6,15 @@ export interface Broadcaster {
   response(req: Request): Response
   /** A string is JSON already and goes as it is; anything else is serialised. */
   send(payload: unknown): void
+  /** A named event (`event: <name>`) with its data serialised, to every client. */
+  event(name: string, data: unknown): void
   size(): number
 }
 
 const HEADERS = { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' }
+
+/** One named event as the stream carries it. */
+export const namedEvent = (name: string, data: unknown): string => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`
 
 /** `current`: the payload a new client starts with. Call close() to stop the pings and end every stream. */
 export function createBroadcaster(
@@ -51,6 +56,9 @@ export function createBroadcaster(
     },
     send(payload) {
       all(`data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`)
+    },
+    event(name, data) {
+      all(namedEvent(name, data))
     },
     size: () => clients.size,
     close() {

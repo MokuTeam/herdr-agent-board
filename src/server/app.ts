@@ -18,6 +18,7 @@ import { dispatch, json, type Route } from './http.ts'
 import { boardRoutes } from './routes/board.ts'
 import { fsRoutes } from './routes/fs.ts'
 import { launchRoutes } from './routes/launch.ts'
+import { revealRoute } from './routes/reveal.ts'
 import { scheduleRoute } from './routes/schedule.ts'
 import { sessionRoutes } from './routes/session.ts'
 import { categoriesRoute, settingsRoute } from './routes/settings.ts'
@@ -83,6 +84,7 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
     ...boardRoutes(board, events),
     ...fsRoutes(),
     ...uploadRoutes(),
+    revealRoute(board, events),
     settingsRoute(),
     scheduleRoute(refresh),
     categoriesRoute(),

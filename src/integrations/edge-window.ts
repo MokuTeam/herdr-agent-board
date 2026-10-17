@@ -6,6 +6,10 @@ import { raiseWindow } from './terminal-window.ts'
 export interface BoardWindow {
   /** Show the board at `url`: raise its window when open, else open one. */
   open(url: string): Promise<void>
+  /** Bring the board's window to the front; false when there is none. */
+  raise(): Promise<boolean>
+  /** Open a new window on `url`. */
+  launch(url: string): void
 }
 
 const BROWSERS = [
@@ -31,14 +35,20 @@ export function edgeCommand(
 
 /** `browser`: the config's browser program; else the first known browser that is installed. */
 export function edgeWindow(browser?: string | null): BoardWindow {
+  const raise = () => raiseWindow('*Agent board*')
+  function launch(url: string): void {
+    const program = browser || BROWSERS.find(p => existsSync(p))
+    const cmd = edgeCommand(url, process.platform, program)
+    if (!cmd) return
+    // A browser window stays visible; the system openers must not flash a console.
+    spawn(cmd.file, cmd.args, { detached: true, stdio: 'ignore', windowsHide: !program }).unref()
+  }
   return {
     async open(url) {
-      if (await raiseWindow('*Agent board*')) return
-      const program = browser || BROWSERS.find(p => existsSync(p))
-      const cmd = edgeCommand(url, process.platform, program)
-      if (!cmd) return
-      // A browser window stays visible; the system openers must not flash a console.
-      spawn(cmd.file, cmd.args, { detached: true, stdio: 'ignore', windowsHide: !program }).unref()
+      if (await raise()) return
+      launch(url)
     },
+    raise,
+    launch,
   }
 }

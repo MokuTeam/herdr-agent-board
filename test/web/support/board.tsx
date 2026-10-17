@@ -60,6 +60,7 @@ export function board(fields: Partial<Omit<Board, 'ui'>> & { ui?: Partial<BoardU
     canMutate: fresh,
     canEdit: connected,
     resume() {},
+    reveal: null,
     dispatch() {},
     toast() {},
     now: Date.now(),
