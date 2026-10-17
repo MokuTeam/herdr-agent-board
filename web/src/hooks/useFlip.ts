@@ -67,8 +67,8 @@ function flip(cards: Map<string, HTMLElement>, first: Map<string, DOMRect>, moti
   }
 }
 
-/** A new card materializes: a little scale and fade, critically damped. */
-function appear(el: HTMLElement): void {
+/** A new card (or schedule entry) materializes: a little scale and fade, critically damped. */
+export function appear(el: HTMLElement): void {
   if (reducedMotion.matches) return
   const s = new Spring({
     value: 0,

@@ -24,14 +24,30 @@ export function oldSource(file: string, baseline = false): string {
   return text
 }
 
-/** A declaration to pick: its name, and its indentation when it is nested (inside an init function). */
-export type Wanted = string | { name: string; indent: string }
+/**
+ * A declaration to pick: its name, and its indentation when it is nested (inside an init function);
+ * or a top-level statement by how its first line starts (`catsList.addEventListener('click'`),
+ * through its line `})` — it registers listeners and gives nothing back.
+ */
+export type Wanted = string | { name: string; indent: string } | { statement: string }
 
 const STARTS = ['function ', 'async function ', 'export function ', 'const ', 'export const ']
 const balanced = (line: string) => line.split('{').length === line.split('}').length
 
+/** One top-level statement: its line, or (when its brackets stay open) through the line `})`. */
+function statement(lines: string[], file: string, starts: string): string {
+  const start = lines.findIndex(line => line.startsWith(starts))
+  const first = lines[start]
+  if (first === undefined) throw new Error(`no ${starts} in ${file}`)
+  let end = start
+  if (!balanced(first) || first.split('(').length !== first.split(')').length)
+    while (end < lines.length - 1 && lines[end] !== '})') end++
+  return lines.slice(start, end + 1).join('\n')
+}
+
 /** One declaration: a function to its closing brace, a const while its lines go on deeper. */
 function declaration(lines: string[], file: string, wanted: Wanted): string {
+  if (typeof wanted !== 'string' && 'statement' in wanted) return statement(lines, file, wanted.statement)
   const { name, indent } = typeof wanted === 'string' ? { name: wanted, indent: '' } : wanted
   const start = lines.findIndex(line =>
     STARTS.some(s => line.startsWith(`${indent}${s}${name}(`) || line.startsWith(`${indent}${s}${name} =`)),
@@ -51,7 +67,8 @@ function declaration(lines: string[], file: string, wanted: Wanted): string {
     .join('\n')
 }
 
-const names = (wanted: Wanted[]) => wanted.map(w => (typeof w === 'string' ? w : w.name))
+const names = (wanted: Wanted[]) =>
+  wanted.flatMap(w => (typeof w === 'string' ? [w] : 'statement' in w ? [] : [w.name]))
 
 export type OldFunction = (...args: unknown[]) => unknown
 

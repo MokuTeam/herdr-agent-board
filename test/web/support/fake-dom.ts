@@ -368,12 +368,50 @@ export class FakeElement extends FakeTarget {
   set value(text: string) {
     this.node.attrs.set('value', String(text))
   }
+  get readOnly(): boolean {
+    return this.node.attrs.has('readonly')
+  }
+  set readOnly(on: boolean) {
+    if (on) this.node.attrs.set('readonly', '')
+    else this.node.attrs.delete('readonly')
+  }
   readonly isContentEditable = false
-  append(...children: FakeElement[]): void {
-    for (const child of children) {
-      this.node.children.push(child.node)
+  /** Takes the element out of where it is (as the DOM's append, prepend and after do before they insert). */
+  private take(child: FakeElement): void {
+    const parent = this.world.parents.get(child.node)
+    if (parent) parent.children = parent.children.filter(n => n !== child.node)
+  }
+  private insert(at: number, children: FakeElement[]): void {
+    for (const [i, child] of children.entries()) {
+      this.take(child)
+      this.node.children.splice(Math.min(at + i, this.node.children.length), 0, child.node)
       this.world.parents.set(child.node, this.node)
     }
+  }
+  append(...children: FakeElement[]): void {
+    for (const child of children) this.insert(Number.MAX_SAFE_INTEGER, [child])
+  }
+  prepend(...children: FakeElement[]): void {
+    this.insert(0, children)
+  }
+  after(...nodes: FakeElement[]): void {
+    const parent = this.parentElement
+    if (!parent) return
+    for (const node of nodes) this.take(node)
+    parent.insert(parent.node.children.indexOf(this.node) + 1, nodes)
+  }
+  remove(): void {
+    this.take(this)
+  }
+  get children(): FakeElement[] {
+    return this.node.children.filter((n): n is MElement => n.kind === 'element').map(n => this.world.wrap(n))
+  }
+  get nextElementSibling(): FakeElement | null {
+    const parent = this.world.parents.get(this.node)
+    if (!parent) return null
+    const siblings = parent.children.filter((n): n is MElement => n.kind === 'element')
+    const next = siblings[siblings.indexOf(this.node) + 1]
+    return next ? this.world.wrap(next) : null
   }
   get parentElement(): FakeElement | null {
     const parent = this.world.parents.get(this.node)
@@ -433,6 +471,12 @@ export class FakeElement extends FakeTarget {
   get offsetWidth(): number {
     return this.getBoundingClientRect().width
   }
+  get offsetHeight(): number {
+    return this.getBoundingClientRect().height
+  }
+  scrollIntoView(options?: unknown): void {
+    this.world.intoView.push({ el: this, options })
+  }
   /** <html>'s is the window without its scrollbar. */
   get clientWidth(): number {
     return this.node === this.world.html ? this.world.viewport.w : this.getBoundingClientRect().width
@@ -484,6 +528,8 @@ export interface WorldOptions {
   dpr?: number
   /** Element rectangles (the panel's own come from its inline style). */
   rects?: (el: FakeElement) => RectBox | null
+  /** getComputedStyle(el): the stylesheet's values the code reads (paddings); none by default. */
+  computed?: (el: FakeElement) => Record<string, string>
 }
 
 const GLOBALS = [
@@ -504,6 +550,8 @@ const GLOBALS = [
   'devicePixelRatio',
   'getSelection',
   'scrollBy',
+  'getComputedStyle',
+  'CSS',
 ] as const
 
 export class FakeWorld {
@@ -516,6 +564,7 @@ export class FakeWorld {
   readonly captures = new Map<number, FakeElement>()
   readonly animations: { el: FakeElement; keyframes: unknown; options: unknown }[] = []
   readonly scrolls: [number, number][] = []
+  readonly intoView: { el: FakeElement; options: unknown }[] = []
   readonly storage = new Map<string, string>()
   readonly phone: FakeMediaQuery
   viewport: { w: number; h: number }
@@ -610,6 +659,13 @@ export class FakeWorld {
       devicePixelRatio: this.options.dpr ?? 1,
       getSelection: () => ({ removeAllRanges() {} }),
       scrollBy: (x: number, y: number) => this.scrolls.push([x, y]),
+      getComputedStyle: (el: FakeElement) => ({
+        paddingTop: '0px',
+        paddingBottom: '0px',
+        ...this.options.computed?.(el),
+      }),
+      // Selectors here quote what they escape: only quotes and backslashes need it.
+      CSS: { escape: (s: string) => String(s).replace(/["\\]/g, c => `\\${c}`) },
     }
   }
 

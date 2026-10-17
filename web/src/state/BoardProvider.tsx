@@ -14,6 +14,7 @@ import {
 } from 'react'
 import { type LiveBoard, useBoard } from '../api/useBoard.ts'
 import { useLanguage } from '../i18n/I18nProvider.tsx'
+import { withEdits } from '../models/board-edits.ts'
 import { type BoardAction, type BoardUi, boardUi, initialUi } from './board-ui.ts'
 import { storage } from './storage.ts'
 import { usePersisted } from './usePersisted.ts'
@@ -69,7 +70,9 @@ export function BoardProvider({ children }: { children: ReactNode }) {
   // render() read the clock.
   // biome-ignore lint/correctness/useExhaustiveDependencies: these are when to read the clock, not what it reads
   const now = useMemo(() => Date.now(), [tick, live, ui])
-  const value = useMemo<Board>(() => ({ ...live, ui, dispatch, toast, now }), [live, ui, toast, now])
+  // The board as the page shows it: with its own edits (lanes reordered, reminders cancelled or switched).
+  const data = useMemo(() => live.data && withEdits(live.data, ui.edits), [live.data, ui.edits])
+  const value = useMemo<Board>(() => ({ ...live, data, ui, dispatch, toast, now }), [live, data, ui, toast, now])
   return <BoardContext.Provider value={value}>{children}</BoardContext.Provider>
 }
 

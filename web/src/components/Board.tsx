@@ -17,6 +17,8 @@ export interface BoardProps {
   /** Opens a session when not in the sheet as by default; `compose`: with the message box ready. */
   onOpen?: (key: string, opts: { compose: boolean }) => void
   onNewSession?: (ctx: NewSessionContext, from: HTMLElement) => void
+  /** A lane's head: the categories panel, at that lane. */
+  onLaneHead?: (id: string) => void
   /** Sessions on their way (Task 27). */
   launch?: LaunchSlots
   /** A card's key -> the launch card it takes over on screen (Task 27). */
@@ -28,7 +30,7 @@ export interface BoardProps {
 const actionOf = (e: MouseEvent<HTMLElement>): string | undefined =>
   e.target instanceof Element ? e.target.closest<HTMLElement>('[data-act]')?.dataset.act : undefined
 
-export function Board({ onOpen, onNewSession, launch, takeovers, roomBelow }: BoardProps) {
+export function Board({ onOpen, onNewSession, onLaneHead, launch, takeovers, roomBelow }: BoardProps) {
   const t = useT()
   const { data, ui, canMutate, canEdit, dispatch } = useBoardContext()
   const { visible } = useBoardView()
@@ -96,6 +98,7 @@ export function Board({ onOpen, onNewSession, launch, takeovers, roomBelow }: Bo
           lit={drag.lit}
           canMutate={canMutate}
           onNewSession={(ctx, from) => onNewSession?.(ctx, from)}
+          onHead={() => onLaneHead?.(lane.id)}
           renderCard={renderCard}
         />
       ))}

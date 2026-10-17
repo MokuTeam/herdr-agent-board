@@ -19,6 +19,7 @@ import { keepInSight, menuOpen, Panel, panels, roomBelow } from './panel.js'
 import { renameInPlace } from './rename.js'
 import { reducedMotion, rubberband, Spring, velocityOf } from './src/models/spring.ts'
 import { capital, dayLabel, longWhen, shortWhen, span, timeOf } from '../src/core/when-format.ts'
+import { slug } from './src/models/categories.ts'
 
 const $ = sel => document.querySelector(sel)
 
@@ -1380,15 +1381,6 @@ const catRows = new Map() // category id -> row
 let catDraft = null // { touched } while a new category is being made
 let catDrag = null
 
-// A category titled in Cyrillic gets a latin id agents can type: "Ромашка" -> "romashka".
-const TRANSLIT = { а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'c', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya' }
-const slug = s =>
-  [...String(s).toLowerCase()]
-    .map(c => TRANSLIT[c] ?? c)
-    .join('')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 32)
 const GRIP = '<svg viewBox="0 0 20 20"><path d="M7.5 5h0M12.5 5h0M7.5 10h0M12.5 10h0M7.5 15h0M12.5 15h0" stroke-width="2.6"/></svg>'
 const TRASH = '<svg viewBox="0 0 20 20"><path d="M4.5 6h11M8 6V4.5h4V6m-6 0 .7 9.5h6.6L14 6"/></svg>'
 

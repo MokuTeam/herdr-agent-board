@@ -19,10 +19,12 @@ export interface LaneProps {
   /** New sessions go through herdr: they wait for fresh data like going to a session does. */
   canMutate: boolean
   onNewSession(ctx: NewSessionContext, from: HTMLElement): void
+  /** A click on its head (the categories panel opens at the lane). */
+  onHead?: () => void
   renderCard(item: Item): ReactNode
 }
 
-export function Lane({ lane, lit, canMutate, onNewSession, renderCard }: LaneProps) {
+export function Lane({ lane, lit, canMutate, onNewSession, onHead, renderCard }: LaneProps) {
   const t = useT()
   const litHere = lit?.lane === lane.id ? lit : null
   return (
@@ -37,7 +39,8 @@ export function Lane({ lane, lit, canMutate, onNewSession, renderCard }: LanePro
       style={{ '--lane': lane.color }}
     >
       <div className="lane-bar">
-        <header className="lane-head">
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: a shortcut by mouse, as before; the toolbar's Categories is the way by keys */}
+        <header className="lane-head" onClick={() => onHead?.()}>
           <span className="lane-tag">{lane.title}</span>
           <span className="lane-count">{lane.items.length || ''}</span>
         </header>

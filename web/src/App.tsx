@@ -18,14 +18,28 @@ import { useNextAttention } from './hooks/useNextAttention.ts'
 import { usePanelLayout } from './hooks/usePanelLayout.ts'
 import { useQuestions } from './hooks/useQuestions.ts'
 import { useQuickLook } from './hooks/useQuickLook.ts'
+import { useSchedule } from './hooks/useSchedule.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
 
 export function App() {
   const limitsAnchor = useRef<HTMLButtonElement>(null)
   const { ui, dispatch } = useBoardContext()
   const panels = usePanelLayout()
+  // The categories and schedule panels, each opened at a lane or a session when asked.
   const [categories, setCategories] = useState(false)
+  const [lane, setLane] = useState<{ id: string } | null>(null)
+  const openCategories = (id?: string) => {
+    setCategories(true)
+    setLane(id ? { id } : null)
+  }
   const [schedule, setSchedule] = useState(false)
+  const [session, setSession] = useState<{ key: string } | null>(null)
+  const openSchedule = (key?: string | null) => {
+    setSchedule(true)
+    setSession(key ? { key } : null)
+  }
+  // The reminders' buttons, shared by the schedule panel and the sheet.
+  const reminders = useSchedule()
   // The launch window (Task 27) opens from here; until then only the "no fresh data" toast.
   const newSession = useNewSession()
   const openNextAttention = useNextAttention()
@@ -66,19 +80,22 @@ export function App() {
         <Toolbar
           limitsAnchor={limitsAnchor}
           onNewSession={from => newSession(laneContext(ui.filter), from)}
-          onCategories={() => setCategories(open => !open)}
-          onSchedule={() => setSchedule(open => !open)}
+          onCategories={() => (categories ? setCategories(false) : openCategories())}
+          onSchedule={() => (schedule ? setSchedule(false) : openSchedule())}
         />
-        <Board onNewSession={newSession} roomBelow={panels.roomBelow} />
+        <Board onNewSession={newSession} onLaneHead={openCategories} roomBelow={panels.roomBelow} />
       </div>
       <SidePanels
-        categories={categories}
-        schedule={schedule}
-        onCategoriesClose={() => setCategories(false)}
-        onScheduleClose={() => setSchedule(false)}
+        categories={{ open: categories, focus: lane, onClose: () => setCategories(false), onOpen: openCategories }}
+        schedule={{ open: schedule, focus: session, onClose: () => setSchedule(false), schedule: reminders }}
         sheet={{
           onNewSession: newSession,
-          schedule: { onMore: () => setSchedule(true) },
+          schedule: {
+            armed: reminders.armed,
+            onCancel: reminders.cancel,
+            onMode: reminders.mode,
+            onMore: () => openSchedule(ui.open),
+          },
           question: (item, detail) => questions.mount(item, detail) && <SheetQuestion questions={questions} />,
           upgradeFiles: chips.upgrade,
           onChanges: quickLook.lookChanges,

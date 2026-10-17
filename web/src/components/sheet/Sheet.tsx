@@ -3,9 +3,9 @@
 // message box ready); a click on another card switches it to that session, and while it slides
 // out it keeps showing the last one. Files dropped anywhere on the panel go with the message.
 //
-// Parts that come with later tasks plug in here: the question form or permission prompt and the
-// file chips and quick looks (25c), the schedule buttons (Task 26), the phone's "More actions"
-// menu, renaming and the launch window (Task 27).
+// Parts the page hands in plug in here: the question form or permission prompt, the file chips and
+// quick looks, the reminders' buttons (the page's schedule desk, shared with the schedule panel);
+// the phone's "More actions" menu, renaming and the launch window come with Task 27.
 import { type ReactNode, type Ref, useLayoutEffect, useRef, useState } from 'react'
 import type { Item } from '../../../../src/core/types.ts'
 import type { SessionDetail } from '../../api/client.ts'
@@ -51,7 +51,7 @@ export interface SheetSlots {
   onChanges?: ((key: string, button: HTMLElement) => void) | undefined
   /** The quick look of the project's past sessions, opened from `button` (25c). */
   onHistory?: ((key: string, cwd: string, button: HTMLElement) => void) | undefined
-  /** The reminders' buttons (Task 26). */
+  /** The reminders' buttons: cancel, delivery, "+2 more" (hooks/useSchedule.ts). */
   schedule?: ScheduleActions | undefined
   /** The phone's menu of the session's buttons, from "More actions" (Task 27). */
   onMore?: ((button: HTMLElement) => void) | undefined

@@ -9,9 +9,10 @@ import type { ReactNode } from 'react'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { App } from '../../web/src/App.tsx'
 import { Panel } from '../../web/src/components/panel/Panel.tsx'
-import { SidePanels } from '../../web/src/components/SidePanels.tsx'
+import { SidePanels, type SidePanelsProps } from '../../web/src/components/SidePanels.tsx'
+import type { Schedule } from '../../web/src/hooks/useSchedule.ts'
 import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
-import { board, renderInBoard } from './support/board.tsx'
+import { board, payload, renderInBoard } from './support/board.tsx'
 import {
   addButtonTypes,
   byId,
@@ -24,12 +25,13 @@ import {
   setAttr,
   stripAttrs,
 } from './support/markup.ts'
+import { oldScheduleBody } from './support/old-schedule.ts'
 import { KINDS, oldSide, titleOf } from './support/panel-sides.tsx'
 
 const VP = { w: 1600, h: 1000 }
 const IDS = ['sheet', 'cats-sheet', 'sched-sheet']
 
-/** The aside with only the head kept in .sheet-inner (the bodies are the panels' own: sheet.test.tsx, Task 26). */
+/** The aside with only the head kept in .sheet-inner (the bodies are the panels' own: sheet, categories-panel and schedule tests). */
 function shell(aside: Element): string {
   const copy: Element = {
     ...aside,
@@ -73,6 +75,13 @@ function inPanels(node: ReactNode, lang = 'en') {
 
 const asideOf = (nodes: Node[], id: string): Element => byId(nodes, id)
 
+const RESTING: Schedule = { armed: null, collapsing: 0, cancel() {}, mode() {}, disarm() {} }
+/** The categories and schedule panels asked open or not, at nothing in particular. */
+const panelsOf = (open: boolean): SidePanelsProps => ({
+  categories: { open, focus: null, onClose() {}, onOpen() {} },
+  schedule: { open, focus: null, onClose() {}, schedule: RESTING },
+})
+
 describe.each(['en', 'ru'])('the shell in %s', lang => {
   const t = translator(lang)
   test('<Panel> draws each aside as panel.js made it: grip, head with the place and close buttons, the edges', async () => {
@@ -90,10 +99,7 @@ describe.each(['en', 'ru'])('the shell in %s', lang => {
     const old = await oldAsides(lang)
     // At start app.js makes the session's name focusable (it is renamed where it is).
     setAttr(byId(old.get('sheet') ?? [], 'sheet-name'), 'tabindex', '0')
-    const react = inPanels(
-      <SidePanels categories={false} schedule={false} onCategoriesClose={() => {}} onScheduleClose={() => {}} />,
-      lang,
-    )
+    const react = inPanels(<SidePanels {...panelsOf(false)} />, lang)
     const asides = react.filter((n): n is Element => n.kind === 'element')
     expect(asides.map(a => a.attrs.get('id'))).toEqual(IDS)
     for (const id of IDS) expect(shell(asideOf(react, id))).toBe(shell(asideOf(old.get(id) ?? [], id)))
@@ -107,15 +113,16 @@ describe.each(['en', 'ru'])('the shell in %s', lang => {
       'sheet-body',
       'composer',
     ])
-    expect(canonical(inner('cats-sheet').slice(1))).toBe(
-      [
-        '<div class="cats-body sheet-body">',
-        '  <div class="cats-list" id="cats-list"></div>',
-        '  <div id="cat-draft"></div>',
-        '</div>',
-      ].join('\n'),
-    )
-    expect(canonical(inner('sched-sheet').slice(1))).toBe('<div class="sched-body sheet-body" id="sched-body"></div>')
+    // The categories (no lanes yet): the list, the form's place and "New category", as web/index.html has them.
+    const oldInner = (id: string) =>
+      find([asideOf(old.get(id) ?? [], id)], el => hasClass(el, 'sheet-inner')).children.filter(
+        n => n.kind === 'element' && n.tag !== 'header',
+      )
+    expect(canonical(inner('cats-sheet').slice(1))).toBe(canonical(oldInner('cats-sheet')))
+    // The schedule draws what it has from the start; the old page drew it when opened: nothing scheduled.
+    const sched = find([asideOf(react, 'sched-sheet')], el => el.attrs.get('id') === 'sched-body')
+    const data = payload({ lang: lang === 'ru' ? 'ru' : 'en' })
+    expect(canonical(sched.children)).toBe(canonical(oldScheduleBody({ lang, data, now: Date.now() })))
   })
 })
 
@@ -135,10 +142,7 @@ test('a wide, low panel reads side by side by the stylesheet alone: the aside is
     /^@container sheet [^{]*\{\s*\.sheet-inner \{ display: grid;[^}]*\}\s*\.sheet-head \{ grid-column: 1 \/ -1;/,
   )
   for (const id of IDS) {
-    const aside = asideOf(
-      inPanels(<SidePanels categories schedule onCategoriesClose={() => {}} onScheduleClose={() => {}} />),
-      id,
-    )
+    const aside = asideOf(inPanels(<SidePanels {...panelsOf(true)} />), id)
     expect(hasClass(aside, 'sheet')).toBe(true)
     const inner = aside.children.find((c): c is Element => c.kind === 'element' && hasClass(c, 'sheet-inner'))
     const head = inner?.children.find((c): c is Element => c.kind === 'element')

@@ -98,6 +98,13 @@ export const SendIcon = () => (
   </Icon>
 )
 
+/** The categories panel's "New category". */
+export const NewIcon = () => (
+  <Icon>
+    <path d="M10 4.5v11M4.5 10h11" />
+  </Icon>
+)
+
 /**
  * The icons the old page drew from its ICON strings (the "new session" plus, the cards' icons):
  * unlike the toolbar's they are not hidden from screen readers, as before.
@@ -195,6 +202,21 @@ export const BoltGlyph = () => (
 export const HourglassGlyph = () => (
   <Glyph>
     <path d="M6 3h8M6 17h8M7 3v2.6c0 1.2.6 2.1 1.6 2.8L10 9.4l1.4-1c1-.7 1.6-1.6 1.6-2.8V3M7 17v-2.6c0-1.2.6-2.1 1.6-2.8l1.4-1 1.4 1c1 .7 1.6 1.6 1.6 2.8V17" />
+  </Glyph>
+)
+
+// The categories editor's.
+
+/** A row's handle: six dots. */
+export const GripGlyph = () => (
+  <Glyph>
+    <path d="M7.5 5h0M12.5 5h0M7.5 10h0M12.5 10h0M7.5 15h0M12.5 15h0" strokeWidth="2.6" />
+  </Glyph>
+)
+
+export const CloseGlyph = () => (
+  <Glyph>
+    <path d="m5.5 5.5 9 9m0-9-9 9" />
   </Glyph>
 )
 
