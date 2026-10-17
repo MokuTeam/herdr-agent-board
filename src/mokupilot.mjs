@@ -108,8 +108,9 @@ const isDir = dir => {
 
 /**
  * Start a MokuPilot call with a fork of the session `item` (a board item with its transcript):
- * { ok } once MokuPilot's launcher started, { ok: false, error } when it could not. It runs on
- * its own, past the board's lifetime; the folder is the one the session started in.
+ * { ok, state: 'launched' } once MokuPilot's launcher started, { ok: false, error } when it could not. It runs on
+ * its own, past the board's lifetime. This is NOT an application-ready, call-started or
+ * recording-started acknowledgement: an IPC handshake is required for those. The folder is the one the session started in.
  */
 export async function startCall(cfg, item, { platform = process.platform, env = process.env, run = spawn } = {}) {
   if (item?.agent !== 'claude' || !UUID.test(String(item?.session ?? ''))) return { ok: false, error: t('mokupilot.err.notClaude') }
@@ -139,7 +140,7 @@ export async function startCall(cfg, item, { platform = process.platform, env = 
     child.once('error', err => res({ ok: false, error: t('mokupilot.err.start', { why: err.code === 'ENOENT' ? t('mokupilot.err.notFound', { file: cmd.file }) : err.code || err.message }) }))
     child.once('spawn', () => {
       child.unref()
-      res({ ok: true, file: cmd.file })
+      res({ ok: true, state: 'launched', file: cmd.file })
     })
   })
 }

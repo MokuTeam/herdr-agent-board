@@ -78,7 +78,7 @@ test('a call starts MokuPilot on its own, in the folder the session started in, 
   assert.match(missing.error, /MokuPilot not found \(\/opt\/mp\/MokuPilot\)/)
 
   const real = { mokupilot: { command: [process.execPath] } }
-  assert.deepEqual(await startCall(real, item, opts), { ok: true, file: process.execPath })
+  assert.deepEqual(await startCall(real, item, opts), { ok: true, state: 'launched', file: process.execPath })
   const r = runs.at(-1)
   assert.deepEqual(r.args, ['call', '--claude-session', ID, '--cwd', project])
   assert.equal(r.opts.cwd, project)
@@ -111,6 +111,21 @@ test('a call starts MokuPilot on its own, in the folder the session started in, 
     return child
   }
   assert.match((await startCall(real, item, { ...opts, run: failing })).error, /did not start: .* not found/)
+})
+
+test('launcher spawn acknowledges only launched, including an immediate application failure', async t => {
+  const run = () => {
+    const child = new EventEmitter()
+    child.unref = () => {}
+    queueMicrotask(() => { child.emit('spawn'); child.emit('exit', 2, null) })
+    return child
+  }
+  const result = await startCall({ mokupilot: { command: [process.execPath] } },
+    { session: ID, agent: 'claude' }, { run })
+  assert.equal(result.ok, true)
+  assert.equal(result.state, 'launched')
+  assert.notEqual(result.state, 'ready')
+  assert.notEqual(result.state, 'recording')
 })
 
 // ---------------------------------------------------------------- through the server
