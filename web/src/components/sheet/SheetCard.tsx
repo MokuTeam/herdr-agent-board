@@ -7,7 +7,7 @@ import { useSessionActions } from '../../hooks/useSessionActions.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { catOf, colOf } from '../../models/board-view.ts'
 import { plain } from '../../models/card.ts'
-import { type FieldEdit, typedText, typing } from '../../models/sheet.ts'
+import { type FieldEdit, type FieldScene, liveEdit, typing } from '../../models/sheet.ts'
 import { COLUMN_COLORS } from '../../models/toolbar.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { type ScheduleActions, ScheduleRow } from './ScheduleRow.tsx'
@@ -112,10 +112,12 @@ function CardField({ item, field, placeholder, disabled }: CardFieldProps) {
   const t = useT()
   const { toast } = useBoardContext()
   const actions = useSessionActions()
-  const saved = item[field] ?? ''
   const [edit, setEdit] = useState<FieldEdit | null>(null)
   const [focused, setFocused] = useState(false)
-  const typed = typedText(edit, focused, saved)
+  const scene: FieldScene = { focused, saved: item[field] ?? '', session: item.key }
+  // An edit that is over is dropped, so a value coming back later cannot bring it back.
+  const live = liveEdit(edit, scene)
+  if (live !== edit) setEdit(live)
 
   async function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     const input = e.currentTarget
@@ -138,10 +140,10 @@ function CardField({ item, field, placeholder, disabled }: CardFieldProps) {
     <input
       className="row-value"
       id={field}
-      value={typed ?? saved}
+      value={live?.text ?? scene.saved}
       placeholder={placeholder}
       disabled={disabled}
-      onChange={e => setEdit(typing(edit, focused, saved, e.target.value))}
+      onChange={e => setEdit(typing(edit, scene, e.target.value))}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       onKeyDown={e => void onKeyDown(e)}

@@ -118,21 +118,30 @@ export function headButtons(it: Item, t: Translator): HeadButtons {
 
 // ---------------------------------------------------------------- the card's own fields
 
-/** A card field being edited: what is typed, over the card's value when the typing began. */
-export type FieldEdit = { text: string; from: string }
+/** A card field being edited: what is typed, in which session, over the card's value when the typing began. */
+export type FieldEdit = { text: string; from: string; session: string }
+
+/** The field as the page has it now: whether it has the focus, the card's value, the session it is for. */
+export interface FieldScene {
+  focused: boolean
+  saved: string
+  session: string
+}
 
 /**
- * What is typed in a card field, or null when it shows the card's value: the typing stays while
- * the field is focused, and after that until the card's own value moves on (the board redraws
- * the field then, as before).
+ * The edit still in force, or null once it is over: the typing stays while the field is focused,
+ * and after that until the card's own value moves on (a save that went through, another value
+ * from the board: the old page drew the field again then). Once over it stays over, and it never
+ * goes with the field to another session.
  */
-export const typedText = (edit: FieldEdit | null, focused: boolean, saved: string): string | null =>
-  edit && (focused || edit.from === saved) ? edit.text : null
+export const liveEdit = (edit: FieldEdit | null, { focused, saved, session }: FieldScene): FieldEdit | null =>
+  edit && edit.session === session && (focused || edit.from === saved) ? edit : null
 
 /** The edit after a keystroke. */
-export const typing = (edit: FieldEdit | null, focused: boolean, saved: string, text: string): FieldEdit => ({
+export const typing = (edit: FieldEdit | null, scene: FieldScene, text: string): FieldEdit => ({
   text,
-  from: edit && typedText(edit, focused, saved) !== null ? edit.from : saved,
+  from: liveEdit(edit, scene)?.from ?? scene.saved,
+  session: scene.session,
 })
 
 // ---------------------------------------------------------------- what works now

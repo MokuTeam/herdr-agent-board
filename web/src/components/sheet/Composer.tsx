@@ -64,13 +64,13 @@ export function Composer({
   const { text, attachments, sending, messageRef } = composer
   const view = composerView({ present, sending, canMutate, text, attachments }, t)
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new text (or placeholder language) is when the box's height changes
+  // On every draw, as syncComposer ran on every one: the text, the language or the panel's width may have moved.
   useLayoutEffect(() => {
     const box = messageRef.current
     if (!box) return
     box.style.height = 'auto'
     box.style.height = `${Math.min(MAX_HEIGHT, box.scrollHeight)}px`
-  }, [text, t, messageRef])
+  })
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (!sendsOnKey({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing })) return

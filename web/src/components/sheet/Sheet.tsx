@@ -80,6 +80,7 @@ function useShown(open: string | null, item: Item | undefined): { key: string | 
 
 export function Sheet(slots: SheetSlots) {
   const { question, upgradeFiles, onChanges, onHistory, onMore, onRename, onNewSession } = slots
+  const t = useT()
   const { data, ui, dispatch } = useBoardContext()
   const actions = useSessionActions()
   const fallbackNewSession = useNewSession()
@@ -116,10 +117,12 @@ export function Sheet(slots: SheetSlots) {
     if (el && stick.current) el.scrollTop = el.scrollHeight
   })
   const cwd = shown.item?.cwd ?? ''
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new conversation is when its paths are new
+  const drawn = shown.item !== null
+  // The conversation drawn anew (a new detail, the session shown, the language): its paths are new.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: these are when to look, not what it reads
   useLayoutEffect(() => {
-    if (body.current && shown.item) upgradeFiles?.(body.current, cwd)
-  }, [detail.value.data, cwd, upgradeFiles])
+    if (body.current && drawn) upgradeFiles?.(body.current, cwd)
+  }, [detail.value.data, drawn, shown.key, cwd, t, upgradeFiles])
 
   const at = (act: (key: string) => unknown) => () => void (open && act(open))
   const item = itemOf(open)
@@ -223,7 +226,8 @@ export function SheetView(props: SheetViewProps) {
         {t('sheet.properties')}
       </button>
       <div className="sheet-card" id="sheet-card" hidden={narrow && !propertiesOpen}>
-        {item && <SheetCard item={item} disabled={availability.edit} schedule={schedule} />}
+        {/* Each session's card fields start afresh: nothing typed for one shows in another's. */}
+        {item && <SheetCard key={item.key} item={item} disabled={availability.edit} schedule={schedule} />}
       </div>
       <div className="sheet-question" id="sheet-question" hidden={!hasForm && !asking}>
         {hasForm

@@ -12,12 +12,12 @@ import {
   detailStamp,
   draftKey,
   headButtons,
+  liveEdit,
   NO_HEAD_BUTTONS,
   sessionMissing,
   sheetAvailability,
   sheetHead,
   threadPlaceholder,
-  typedText,
   typing,
 } from '../../web/src/models/sheet.ts'
 import { item } from './support/board.tsx'
@@ -237,16 +237,38 @@ test('what it asks under "Needs me": why, the question, and whether it can be wa
   expect(askedView(item({ key: 'a', column: 'me', attention: '' }), t).why).toBe('WAITS FOR YOU')
 })
 
-test('a card field keeps what is typed while focused, then until the card moves on; Escape is the caller’s', () => {
-  let edit = typing(null, true, 'old', 'new')
-  expect(edit).toEqual({ text: 'new', from: 'old' })
-  expect(typedText(edit, true, 'server changed it')).toBe('new')
-  expect(typedText(edit, false, 'old')).toBe('new')
-  expect(typedText(edit, false, 'server changed it')).toBe(null)
-  // Still typing while the card moved on: the typing goes on from where it began, and goes once left.
-  expect(typing(edit, true, 'server changed it', 'newer')).toEqual({ text: 'newer', from: 'old' })
-  // Typing again after that starts from the card's new value.
-  edit = typing(edit, false, 'server changed it', 'again')
-  expect(edit).toEqual({ text: 'again', from: 'server changed it' })
-  expect(typedText(null, true, 'x')).toBe(null)
+describe('a card field being edited', () => {
+  const at = (focused: boolean, saved: string, session = 'a') => ({ focused, saved, session })
+
+  test('keeps what is typed while focused, then until the card moves on; Escape is the caller’s', () => {
+    let edit = typing(null, at(true, 'old'), 'new')
+    expect(edit).toEqual({ text: 'new', from: 'old', session: 'a' })
+    expect(liveEdit(edit, at(true, 'server changed it'))?.text).toBe('new')
+    expect(liveEdit(edit, at(false, 'old'))?.text).toBe('new')
+    expect(liveEdit(edit, at(false, 'server changed it'))).toBe(null)
+    // Still typing while the card moved on: the typing goes on from where it began, and goes once left.
+    expect(typing(edit, at(true, 'server changed it'), 'newer')).toEqual({ text: 'newer', from: 'old', session: 'a' })
+    // Typing again after that starts from the card's new value.
+    edit = typing(edit, at(false, 'server changed it'), 'again')
+    expect(edit).toEqual({ text: 'again', from: 'server changed it', session: 'a' })
+    expect(liveEdit(null, at(true, 'x'))).toBe(null)
+  })
+
+  test('saved, then the value goes back: the field shows the card’s value, not the old typing', () => {
+    // Waits for '' → "review", Enter: the field is left, the board then shows the saved value.
+    const edit = typing(null, at(true, ''), 'review')
+    const saved = liveEdit(edit, at(false, 'review'))
+    expect(saved).toBe(null)
+    // The edit was dropped then (the field keeps what liveEdit leaves), so clearing the note later shows ''.
+    expect(liveEdit(saved, at(false, ''))).toBe(null)
+    // A save that did not go through keeps the typing until the card's value moves on.
+    expect(liveEdit(edit, at(false, ''))?.text).toBe('review')
+  })
+
+  test('another session with the same value: nothing typed for one shows in the other', () => {
+    const edit = typing(null, at(true, '', 'a'), 'for A only')
+    expect(liveEdit(edit, at(false, '', 'b'))).toBe(null)
+    expect(liveEdit(edit, at(true, '', 'b'))).toBe(null)
+    expect(typing(edit, at(true, '', 'b'), 'x')).toEqual({ text: 'x', from: '', session: 'b' })
+  })
 })
