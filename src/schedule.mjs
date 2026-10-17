@@ -10,6 +10,7 @@
 // scheduler's own fields: runs, missed, lastRun, gone (runs missed in a row with the session gone),
 // movedFrom (the session it was for before /clear), and while it waits for a busy session
 // pendingSince, waited, tried, why; claim while a run is on its way.
+import { settleReport } from './call-receipts.mjs'
 import { randomBytes } from 'node:crypto'
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -67,7 +68,7 @@ export function addEntry(fields) {
   }
   for (;;) {
     const id = randomBytes(3).toString('hex')
-    const entry = updateJson(fileOf(id), taken => (taken ? undefined : { id, ...clean, created: Date.now() }))
+    const entry = updateJson(fileOf(id), taken => (taken ? undefined : { id, ...clean, created: Date.now() }), clean.receipt ? { mode: 0o600 } : undefined)
     if (entry) return entry
   }
 }
@@ -76,14 +77,16 @@ export function addEntry(fields) {
 export function updateEntry(id, change) {
   if (!ID.test(String(id))) return undefined
   mkdirSync(SCHEDULE_DIR, { recursive: true }) // the lock lives next to the file
-  return updateJson(fileOf(id), entry => (entry ? change(entry) : undefined))
+  return updateJson(fileOf(id), entry => (entry ? change(entry) : undefined), getEntry(id)?.receipt ? { mode: 0o600 } : undefined)
 }
 
 /** Delete an entry; returns it, or null when there was none. */
-export function removeEntry(id) {
+export function removeEntry(id, receiptState = 'cancelled') {
   let removed = null
   if (!ID.test(String(id))) return null
   mkdirSync(SCHEDULE_DIR, { recursive: true })
+  const existing = getEntry(id)
+  if (existing?.receipt) settleReport(existing, receiptState)
   updateJson(fileOf(id), entry => {
     removed = entry
     return entry ? null : undefined

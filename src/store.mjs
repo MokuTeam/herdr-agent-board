@@ -38,7 +38,7 @@ function lockAge(lock) {
   }
 }
 
-function lockFile(path) {
+function lockFile(path, recoverStale = true) {
   const lock = `${path}.lock`
   const deadline = performance.now() + LOCK_TIMEOUT_MS
   for (;;) {
@@ -47,7 +47,7 @@ function lockFile(path) {
       return () => rmdirSync(lock)
     } catch (err) {
       if (err.code !== 'EEXIST') throw err
-      if (lockAge(lock) > LOCK_STALE_MS) {
+      if (recoverStale && lockAge(lock) > LOCK_STALE_MS) {
         try {
           rmdirSync(lock)
         } catch {}
@@ -67,15 +67,15 @@ function lockFile(path) {
  * returns the new contents, null to delete the file, or undefined to leave it as it is.
  * Returns what `change` returned.
  */
-export function updateJson(path, change) {
-  const unlock = lockFile(path)
+export function updateJson(path, change, { mode, recoverStale = true } = {}) {
+  const unlock = lockFile(path, recoverStale)
   const tmp = `${path}.${process.pid}.tmp`
   try {
     const next = change(readJson(path))
     if (next === null) {
       try { unlinkSync(path) } catch (err) { if (err.code !== 'ENOENT') throw err }
     } else if (next !== undefined) {
-      writeFileSync(tmp, JSON.stringify(next))
+      writeFileSync(tmp, JSON.stringify(next), mode === undefined ? undefined : { mode })
       renameSync(tmp, path)
     }
     return next

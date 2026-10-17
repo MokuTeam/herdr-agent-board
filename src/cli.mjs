@@ -16,13 +16,14 @@
 //                            queued into a running turn
 //   board schedule [--all]   this session's entries (every session's)
 //   board unschedule <id|all>    removes an entry (all: every entry of this session)
-//   board call-report --session <id> --file <report.md>
+//   board call-report --session <id> --file <report.md> [--report-id <stable-id>]
 //                            a MokuPilot call's results (mokupilot.mjs) for the session it was a
 //                            fork of: the board types them in once the session is free, for its
 //                            information, waking it if it sleeps
 //   board doctor             what is set up on this computer, and what is missing (setup.mjs)
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
-import { readFileSync } from 'node:fs'
+import { enqueueReport, getReceipt, MAX_REPORT_BYTES, reportHash, reportIdentity } from './call-receipts.mjs'
+import { closeSync, openSync, readFileSync, readSync } from 'node:fs'
 import { categoryFor, categoryInfo, CONFIG_FILE, editCategories, laneRank, loadConfig } from './config.mjs'
 import { liveSessions } from './claude.mjs'
 import { snapshot } from './herdr.mjs'
@@ -34,7 +35,7 @@ import { readCard, writeCard } from './store.mjs'
 import { nextRun, parseCron, parseWhen, shortestGap } from './when.mjs'
 import { shortWhen } from '../web/when.js'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> | doctor] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | doctor] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -309,17 +310,37 @@ async function main() {
 async function callReport() {
   const usage = 'usage: board call-report --session <Claude session id> --file <report.md>'
   if (!target || !UUID.test(target)) throw new Error(`${usage}; the session id is a UUID`)
+  const ri = rest.indexOf('--report-id')
+  const reportId = ri >= 0 ? rest[ri + 1] : null
+  if (ri >= 0 && (!reportId || reportId.startsWith('--'))) throw new Error('missing report-id')
+  if (reportId) reportIdentity(target, reportId)
+  if (rest.includes('--status')) {
+    if (!reportId) throw new Error('--status requires --report-id')
+    const receipt = getReceipt(target, reportId)
+    if (!receipt) throw new Error('no receipt for this session and report-id')
+    return printReceipt(receipt)
+  }
   const fi = rest.indexOf('--file')
   const file = fi >= 0 ? rest[fi + 1] : ''
   if (!file) throw new Error(usage)
   let report
   try {
-    report = readFileSync(file, 'utf8')
+    if (reportId) {
+      const fd = openSync(file, 'r')
+      try {
+        const buffer = Buffer.alloc(MAX_REPORT_BYTES + 1)
+        let size = 0, count
+        do { count = readSync(fd, buffer, size, buffer.length - size); size += count } while (count && size < buffer.length)
+        if (size > MAX_REPORT_BYTES) throw new Error(`report exceeds ${MAX_REPORT_BYTES} bytes`)
+        report = buffer.subarray(0, size).toString('utf8')
+      } finally { closeSync(fd) }
+    } else report = readFileSync(file, 'utf8')
   } catch (err) {
     throw new Error(`cannot read the report ${file}: ${err.code || err.message}`)
   }
   report = report.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim()
   if (!report) throw new Error(`the report ${file} is empty`)
+  const contentHash = reportHash(report)
   if (report.length > MAX_REPORT) {
     const note = `\n\n[the report goes on; all of it: ${file}]`
     report = `${report.slice(0, MAX_REPORT - note.length).trimEnd()}${note}`
@@ -332,8 +353,8 @@ async function callReport() {
   } catch {}
   const name = item?.name ?? liveSessions().get(target)?.name ?? ''
   const now = Date.now()
-  const e = addEntry({
-    key: item?.key ?? target,
+  const fields = {
+    key: reportId ? target.toLowerCase() : item?.key ?? target,
     name,
     ...(item?.pane && { pane: item.pane }),
     ...(item?.cwd && { cwd: item.cwd }),
@@ -343,8 +364,22 @@ async function callReport() {
     at: now,
     next: now,
     by: 'mokupilot',
-  })
+  }
+  if (reportId) {
+    const identity = reportIdentity(target, reportId, contentHash)
+    const receipt = enqueueReport(identity, {
+      findEntry: key => listEntries().find(e => e.receipt?.key === key),
+      createEntry: receipt => addEntry({ ...fields, receipt }),
+    })
+    return printReceipt(receipt)
+  }
+  const e = addEntry(fields)
   return console.log(`ok · call report ${e.id} for ${name || target.slice(0, 8)}, typed in once the session is free · cancel: board unschedule ${e.id}${await schedulerNote()}`)
+}
+
+function printReceipt(receipt) {
+  console.log(JSON.stringify({ reportId: receipt.reportId, session: receipt.session, entryId: receipt.entryId, state: receipt.state, reused: !!receipt.reused }))
+  if (receipt.state === 'delivery-unknown' || receipt.state === 'dispatching') process.exitCode = 2
 }
 
 main().catch(err => {
