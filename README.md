@@ -18,8 +18,19 @@ herdr plugin install MokuTeam/herdr-agent-board   # or clone it and: herdr plugi
 herdr plugin action invoke agent-board.install      # board command in ~/.local/bin; hooks and status line in ~/.claude/settings.json
 ```
 
-Node 20 or newer, no dependencies. Then set up the lanes: "Categories" on the web board (titles,
-colors, the folders that sort sessions into each lane), or let the agents add them.
+[Bun](https://bun.com/docs/installation) 1.4.3 or newer. `herdr plugin install` runs
+`bun install --production` (react and react-dom, its only dependencies); after `herdr plugin link`, run
+`bun install` in the folder yourself. The board command, the hooks and the status line run the
+Bun that ran the install action: run it again after moving the plugin or Bun. Then set up the
+lanes: "Categories" on the web board (titles, colors, the folders that sort sessions into each
+lane), or let the agents add them.
+
+Back to `main` (the Node version): its install action does not know this one's entries and
+would leave them beside its own. First take them out of `~/.claude/settings.json`: the
+`SessionStart` and `UserPromptSubmit` hooks that run `src/entrypoints/hook.ts`, and the
+`statusLine` that runs `src/entrypoints/statusline.ts`. Then put `main` in the plugin's folder
+and run its install action again, which writes its own `node "…/src/hook.mjs"` hooks, status
+line and board command.
 
 Key, in herdr's `config.toml`:
 
@@ -253,8 +264,9 @@ What keeps it from pressing keys in the wrong place:
 `POST /api/session/<key>/answer` with `{ session, toolUseId, answers: [{ options: [labels],
 other }] }` and `POST /api/session/<key>/permit` with `{ session, fingerprint, option }` (the
 fingerprint comes with the sheet's data); both need the `X-Board` header. Code:
-`src/core/dialogs/questions.ts` (the questions, the screen, the keys), `src/answer.mjs` (the steps through
-herdr), `web/questions.js` and `web/question-model.js` (the form).
+`src/core/dialogs/questions.ts` (the questions, the screen, the keys), `src/services/answer.ts` (the
+steps through herdr), `web/src/components/questions/` and `web/src/models/question-model.ts` (the
+form).
 
 ## Moving a card by hand
 
@@ -314,7 +326,7 @@ are files, and the board keeps running.
   scheduler marks its run never brings it back. Before sending, the scheduler claims the entry
   in its file: a second board running at the same time (a restart that overlaps) never sends a
   run twice. `log.jsonl` there keeps the last 200 runs.
-- The scheduler runs in the web board's server (`src/scheduler.mjs`), one per machine since
+- The scheduler runs in the web board's server (`src/services/scheduler.ts`), one per machine since
   only one board holds the port; with `web: false` the terminal board runs it.
 - At most 30 entries per session.
 - The terminal board shows `⏰` (`⏳` for one that waits until the session is free) and the soonest
@@ -328,7 +340,7 @@ English when there is no dictionary for it). A switch reaches at once the web bo
 terminal board, error messages, and the agents' next brief, which tells them the language to
 write their cards in. Titles you give lanes and whatever agents write stay as written.
 
-All texts live in `src/core/i18n/`, shared by the browser and Node. Another language is one more
+All texts live in `src/core/i18n/`, shared by the browser and Bun. Another language is one more
 dictionary there plus its plural rule; a test checks that every dictionary has every text.
 
 ## Everything updates live
@@ -341,8 +353,10 @@ dictionary there plus its plural rule; a test checks that every dictionary has e
   changes (by its time and size: on Windows a plain read fires the watcher too); open web pages
   reload themselves when a file in `web/` changes.
 
-Code: `src/server.mjs`, `web/` (no build step, no dependencies; springs in `web/spring.js`, the
-sheet's place in `web/panel.js` with its geometry in `web/panel-layout.js`).
+Code: `src/server/`, `web/src/` (React; no build step: the server bundles `web/src/main.tsx` in
+memory with Bun; springs in `web/src/models/spring.ts`, the sheet's place in
+`web/src/components/panel/` with its geometry in `web/src/models/panel-layout.ts`), styles in
+`web/styles/`.
 
 The web API (`GET /api/board` and SSE `/api/events`) includes `stale` and
 `lastSuccessfulRefreshAt` (Unix milliseconds, or `null` before the first successful refresh).
@@ -360,7 +374,7 @@ The board shows the windows as a pill by the live dot (windows past their reset 
 context fill in the sheet; without the status line it falls back to the usagebar cache and to the
 tokens of the last request in the transcript.
 
-Files (`src/files.mjs`, `web/files.js`): `POST /api/fs/stat` (which of these paths exist),
+Files (`src/adapters/files.ts`, `src/server/routes/fs.ts`, `web/src/components/files/`): `POST /api/fs/stat` (which of these paths exist),
 `POST /api/fs/preview`, `POST /api/fs/open` (`open` or `reveal`, through explorer.exe, `open`
 or `xdg-open`, no shell) and `POST /api/open-url` (http(s) only) need the `X-Board` header like
 every POST. `GET /api/fs/raw` serves images, PDF, video and audio, with ranges, to the page's
@@ -368,7 +382,7 @@ every POST. `GET /api/fs/raw` serves images, PDF, video and audio, with ranges, 
 board payload, new on every start, which only the board's own page can read. Text never comes
 raw, and raw responses carry a CSP that runs no script.
 
-New sessions (`src/services/launch/`, `web/launch.js`): `GET /api/launch/options` (herdr's workspaces,
+New sessions (`src/services/launch/`, `web/src/components/launch/`): `GET /api/launch/options` (herdr's workspaces,
 recent folders, the launcher), `POST /api/fs/dirs` (the subfolders of a folder, or the drives),
 `POST /api/launch` (starts one in the background; its progress is `launches` in the board
 payload), `POST /api/launch/<id>/dismiss` and `/focus`. `POST /api/launch` also needs the page's
