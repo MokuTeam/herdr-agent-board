@@ -1,11 +1,12 @@
 // The board page: the toolbar over the board, the side panels, the usage popover, the quick look
 // and the toasts, the keys and the Back button; the chat's files and links, the question forms, the
-// context menus and renaming in place.
+// context menus, renaming in place and the "new session" window.
 import { useEffect, useRef, useState } from 'react'
 import { Board } from './components/Board.tsx'
 import { FileChips } from './components/files/FileChip.tsx'
 import { QuickLook } from './components/files/QuickLook.tsx'
 import { LimitsPop } from './components/LimitsPop.tsx'
+import { LaunchDialog } from './components/launch/LaunchDialog.tsx'
 import { ContextMenu } from './components/menu/ContextMenu.tsx'
 import { SheetQuestion } from './components/questions/SheetQuestion.tsx'
 import { RenameField } from './components/RenameField.tsx'
@@ -17,6 +18,7 @@ import { useContextMenus } from './hooks/useContextMenus.ts'
 import { useDialogHistory } from './hooks/useDialogHistory.ts'
 import { useFileChips } from './hooks/useFileChips.ts'
 import { useFileLinks } from './hooks/useFileLinks.ts'
+import { useLaunch } from './hooks/useLaunch.ts'
 import { laneContext, useNewSession } from './hooks/useNewSession.ts'
 import { useNextAttention } from './hooks/useNextAttention.ts'
 import { usePanelLayout } from './hooks/usePanelLayout.ts'
@@ -45,8 +47,9 @@ export function App() {
   }
   // The reminders' buttons, shared by the schedule panel and the sheet.
   const reminders = useSchedule()
-  // The launch window (Task 27b) opens from here; until then only the "no fresh data" toast.
-  const newSession = useNewSession()
+  // The launch window, and the cards of sessions on their way; without fresh data the board says why.
+  const launch = useLaunch()
+  const newSession = useNewSession(launch.open)
   const openNextAttention = useNextAttention()
   // Paths in the chat become chips; a chip, the sheet's Changes and History open the quick look.
   const chips = useFileChips()
@@ -56,11 +59,11 @@ export function App() {
   // A session renamed where its name is; the menus of cards, lanes, the board and chips. The
   // menu's keys come after the quick look's, as the old page had them.
   const rename = useRenameInPlace()
-  const menus = useContextMenus({ quickLook, newSession, openCategories, rename: rename.start })
+  const menus = useContextMenus({ quickLook, newSession, openCategories, rename: rename.start, launch: launch.menus })
   useBoardKeys({
     openNextAttention,
     newSession,
-    layerOpen: () => menus.menu.isOpen(),
+    layerOpen: () => menus.menu.isOpen() || launch.isOpen(),
     quickLookOpen: quickLook.isOpen,
     panelOpen: () => !!panels.place.openPanel(),
     closePanel: panels.closeOpen,
@@ -69,9 +72,10 @@ export function App() {
     pickOption: questions.pickOption,
   })
   // Layers above the board, topmost first: Back on a phone closes them one at a time (the quick
-  // look a step at a time). The launch window goes after the menu (Task 27b).
+  // look a step at a time).
   useDialogHistory([
     { open: menus.open, close: () => menus.menu.close() },
+    { open: launch.shown, close: launch.close },
     { open: quickLook.open, close: quickLook.back },
     {
       open: ui.limitsOpen,
@@ -95,7 +99,13 @@ export function App() {
           onCategories={() => (categories ? setCategories(false) : openCategories())}
           onSchedule={() => (schedule ? setSchedule(false) : openSchedule())}
         />
-        <Board onNewSession={newSession} onLaneHead={openCategories} roomBelow={panels.roomBelow} />
+        <Board
+          onNewSession={newSession}
+          onLaneHead={openCategories}
+          roomBelow={panels.roomBelow}
+          launch={launch.slots}
+          takeovers={launch.takeovers}
+        />
       </div>
       <SidePanels
         categories={{ open: categories, focus: lane, onClose: () => setCategories(false), onOpen: openCategories }}
@@ -121,6 +131,7 @@ export function App() {
       <LimitsPop anchor={limitsAnchor} />
       <FileChips chips={chips} />
       <QuickLook engine={quickLook.engine} />
+      <LaunchDialog launch={launch.dialog} refs={launch.refs} />
       <ContextMenu engine={menus.menu} />
       <RenameField rename={rename} />
       <Toasts />

@@ -9,7 +9,7 @@ import { useBoardContext } from '../state/BoardProvider.tsx'
 /** `from`: the element the launch window grows out of, or where a menu was opened (a lane, the board). */
 export type OpenLaunch = (ctx: NewSessionContext, from: MenuOrigin | null) => void
 
-/** `open`: the launch window, which grows out of `from` (Task 27b). */
+/** `open`: the launch window (hooks/useLaunch.ts), which grows out of `from`. */
 export function useNewSession(open?: OpenLaunch): OpenLaunch {
   const t = useT()
   const { canMutate, canEdit, toast } = useBoardContext()

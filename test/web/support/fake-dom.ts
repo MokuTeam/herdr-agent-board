@@ -142,8 +142,10 @@ function parseSimple(text: string): Simple {
     else if (part.startsWith('#')) simple.id = part.slice(1)
     else if (part.startsWith('.')) simple.classes.push(part.slice(1))
     else if (part.startsWith('[')) {
-      const [name = '', value] = part.slice(1, -1).split('=')
-      simple.attrs.push({ name, value: value === undefined ? null : value.slice(1, -1) })
+      const [name = '', ...rest] = part.slice(1, -1).split('=')
+      const value = rest.length ? rest.join('=') : undefined
+      // A quoted value as CSS.escape wrote it: its backslashes escape the character after them.
+      simple.attrs.push({ name, value: value === undefined ? null : value.slice(1, -1).replace(/\\(.)/g, '$1') })
     } else simple.tag = part.toLowerCase()
   }
   return simple
@@ -375,12 +377,46 @@ export class FakeElement extends FakeTarget {
     if (on) this.node.attrs.set('disabled', '')
     else this.node.attrs.delete('disabled')
   }
-  /** A field's value, kept as its attribute (where React's server markup has it). */
+  /**
+   * A field's value, kept where React's server markup has it: an input's as its attribute, a
+   * textarea's as its text; a select's is its selected option's (else its first one's).
+   */
   get value(): string {
+    if (this.node.tag === 'textarea') return this.textContent
+    if (this.node.tag === 'select') {
+      const option = this.selectedOptions[0]
+      return option ? (option.getAttribute('value') ?? option.textContent) : ''
+    }
     return this.node.attrs.get('value') ?? ''
   }
   set value(text: string) {
-    this.node.attrs.set('value', String(text))
+    if (this.node.tag === 'textarea') this.textContent = String(text)
+    else if (this.node.tag === 'select')
+      for (const option of this.querySelectorAll('option')) option.selected = option.getAttribute('value') === text
+    else this.node.attrs.set('value', String(text))
+  }
+  /** A select's chosen option: the one marked selected, else the first. */
+  get selectedOptions(): FakeElement[] {
+    const options = this.querySelectorAll('option')
+    const chosen = options.find(o => o.selected) ?? options[0]
+    return chosen ? [chosen] : []
+  }
+  get selected(): boolean {
+    return this.node.attrs.has('selected')
+  }
+  set selected(on: boolean) {
+    if (on) this.node.attrs.set('selected', '')
+    else this.node.attrs.delete('selected')
+  }
+  get placeholder(): string {
+    return this.node.attrs.get('placeholder') ?? ''
+  }
+  set placeholder(text: string) {
+    this.node.attrs.set('placeholder', String(text))
+  }
+  /** A form's controls by name. */
+  get elements(): Record<string, FakeElement> {
+    return Object.fromEntries(this.querySelectorAll('[name]').map(el => [el.getAttribute('name') ?? '', el] as const))
   }
   /** A checkbox's state, kept as its attribute. */
   get checked(): boolean {
@@ -438,6 +474,13 @@ export class FakeElement extends FakeTarget {
     const siblings = parent.children.filter((n): n is MElement => n.kind === 'element')
     const next = siblings[siblings.indexOf(this.node) + 1]
     return next ? this.world.wrap(next) : null
+  }
+  get previousElementSibling(): FakeElement | null {
+    const parent = this.world.parents.get(this.node)
+    if (!parent) return null
+    const siblings = parent.children.filter((n): n is MElement => n.kind === 'element')
+    const before = siblings[siblings.indexOf(this.node) - 1]
+    return before ? this.world.wrap(before) : null
   }
   get parentElement(): FakeElement | null {
     const parent = this.world.parents.get(this.node)

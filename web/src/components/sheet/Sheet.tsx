@@ -5,7 +5,7 @@
 //
 // Parts the page hands in plug in here: the question form or permission prompt, the file chips and
 // quick looks, the reminders' buttons (the page's schedule desk, shared with the schedule panel);
-// the phone's "More actions" menu and renaming; the launch window comes with Task 27b.
+// the phone's "More actions" menu and renaming; "New here" opens the launch window.
 import { type ReactNode, type Ref, useLayoutEffect, useRef, useState } from 'react'
 import type { Item } from '../../../../src/core/types.ts'
 import type { SessionDetail } from '../../api/client.ts'
@@ -59,7 +59,7 @@ export interface SheetSlots {
   moreOpen?: boolean | undefined
   /** Rename where the name is, in the head (hooks/useRenameInPlace.ts). */
   onRename?: ((key: string, name: HTMLElement) => void) | undefined
-  /** "New here": the launch window, from the button (the toast that says why not, until Task 27). */
+  /** "New here": the launch window, from the button (without fresh data, the toast that says why). */
   onNewSession?: OpenLaunch | undefined
 }
 

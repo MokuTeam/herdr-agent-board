@@ -29,7 +29,7 @@ export interface SessionButtons {
   changes?: (button: HTMLElement) => void
   /** The quick look of the project's past sessions (25c). */
   history?: (button: HTMLElement) => void
-  /** A new session in this one's lane and folder (the launch window, Task 27). */
+  /** A new session in this one's lane and folder (the launch window). */
   newHere?: (button: HTMLElement) => void
   /** The menu of these buttons on a phone (`keyboard`: pressed by keys, it lights its first item). */
   more?: (button: HTMLElement, keyboard: boolean) => void

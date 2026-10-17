@@ -6,9 +6,11 @@
 // says whether a path exists), suggestions from the context (the card's folder, the lane's
 // folders, folders of sessions on the board and of recent Claude sessions), and a column view
 // to browse, Finder style. The browser offers no picker that gives an absolute path, so this is ours.
-import { baseName, categoryForDir, checkBranch, checkName, completions, defaultWorkspace, folderSuggestions, NAME_MAX, slugName, splitPathInput, suggestName, worktreePath } from '../src/core/launch/names.ts'
+import { baseName, categoryForDir, folderSuggestions, NAME_MAX, slugName, splitPathInput, suggestName } from '../src/core/launch/names.ts'
 import { reducedMotion, Spring } from './src/models/spring.ts'
-import { launchContext, launchDraftBook } from './launch-drafts.js'
+import { launchContext, launchDraftBook } from './src/models/launch-drafts.ts'
+import { draftOf, fieldOf, formProblems, formStart, goButton, startBody, startedLaunch, workspaceChoice, workspaceName, worktreeNote } from './src/models/launch-form.ts'
+import { completionItems, failureHint, folderColumn, chainOf, growFrom, keepsLocal, launchColumn, launcherLine, launchWhere, needsYou, pendingLaunches, retries, rootItems, stepText, suggestionItems, windowPaint } from './src/models/launch.ts'
 import { modalFocus } from './src/models/modal-focus.ts'
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
@@ -138,8 +140,7 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
     $('.launch-cancel').textContent = tr('cancel')
     $('.launch-go').textContent = tr('launch.start')
     $('.launch-keys').textContent = tr('launch.keys')
-    const l = options.launcher
-    $('.launch-sub').textContent = l.kind === 'command' ? tr('launch.viaCommand', { name: l.name }) : tr('launch.viaHerdr', { agent: l.agent === 'claude' ? 'Claude' : l.agent })
+    $('.launch-sub').textContent = launcherLine(options.launcher, tr)
   }
 
   // ------------------------------------------------------------ motion: out of the origin and back
@@ -152,20 +153,13 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
     win.style.transform = 'none'
     const w = win.getBoundingClientRect()
     win.style.transform = saved
-    if (!rect || !rect.width || rect.bottom < 0 || rect.top > innerHeight) return { dx: 0, dy: 24, s: 0.94 }
-    return { dx: rect.left + rect.width / 2 - (w.left + w.width / 2), dy: rect.top + rect.height / 2 - (w.top + w.height / 2), s: Math.max(0.08, Math.min(0.6, rect.width / w.width)) }
+    return growFrom(rect, w, innerHeight)
   }
   function paint(p) {
-    const q = Math.max(0, p)
-    if (reducedMotion.matches) {
-      win.style.transform = ''
-      win.style.opacity = String(Math.min(1, q))
-    } else {
-      const k = from.s + (1 - from.s) * q
-      win.style.transform = `translate(${from.dx * (1 - q)}px, ${from.dy * (1 - q)}px) scale(${k})`
-      win.style.opacity = String(Math.min(1, q * 1.8))
-    }
-    scrim.style.opacity = String(Math.min(1, q))
+    const look = windowPaint(p, from, reducedMotion.matches)
+    win.style.transform = look.transform
+    win.style.opacity = look.opacity
+    scrim.style.opacity = look.scrim
   }
   const rectOf = o => (o instanceof Element ? (o.isConnected ? o.getBoundingClientRect() : null) : o ?? null)
 
@@ -220,36 +214,26 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
   const d = () => data()
   const catTitle = id => d().categories.find(c => c.id === id)?.title ?? id
 
-  function draftForm() {
-    return { name: f.name.value, cwd: f.cwd.value, category: s.category, message: f.message.value,
-      workspace: f.workspace.value ? f.workspace.selectedOptions[0]?.textContent ?? '' : f.newWorkspace.value,
-      newWorkspace: !f.workspace.value, worktree: f.wt.checked ? { branch: f.branch.value } : null }
-  }
+  const fields = () => ({ name: f.name.value, cwd: f.cwd.value, workspace: f.workspace.value, newWorkspace: f.newWorkspace.value, wt: f.wt.checked, branch: f.branch.value, message: f.message.value })
+  const workspaceLabel = () => (f.workspace.value ? f.workspace.selectedOptions[0]?.textContent ?? '' : '')
+  const draftForm = () => draftOf(fields(), s.category, workspaceLabel())
 
   function fill(ctx) {
-    const r = ctx.retry ?? drafts.read(s.draftKey)
-    const items = d().items ?? []
-    const card = ctx.item
-    s.category = r?.category ?? card?.category ?? ctx.category ?? (d().filter && d().filter !== 'all' ? d().filter : null)
-    s.set.category = !!s.category
-    if (!s.category) s.category = 'other'
-    const cwd = r?.cwd ?? card?.cwd ?? ctx.cwd ?? ''
-    f.cwd.value = cwd
+    const start = formStart(ctx, ctx.retry ? null : drafts.read(s.draftKey), { items: d().items ?? [], filter: d().filter })
+    s.category = start.category
+    s.set = start.set
+    s.workspace = start.workspace
+    f.cwd.value = start.cwd
     showEnd()
-    s.set.cwd = !!cwd
-    f.name.value = r?.name ?? (cwd ? suggestName(cwd, items) : '')
-    s.set.name = !!r
-    f.message.value = r?.message ?? ''
-    f.wt.checked = !!r?.worktree
-    f.branch.value = r?.worktree?.branch ?? ''
-    s.set.branch = !!r?.worktree
-    s.workspace = r ? (r.workspaceId ? { id: r.workspaceId } : r.newWorkspace ? { create: r.workspace } : { label: r.workspace }) : ctx.newWorkspace ? { create: '' } : card?.workspace ? { label: card.workspace } : null
-    s.set.workspace = !!s.workspace
+    f.name.value = start.name
+    f.message.value = start.message
+    f.wt.checked = start.wt
+    f.branch.value = start.branch
     for (const el of root.querySelectorAll('.field-note, .launch-error')) el.hidden = true
     renderCats()
     renderWorkspaces()
     renderWorktree()
-    if (cwd) checkFolder()
+    if (start.cwd) checkFolder()
     else setState('')
   }
 
@@ -263,21 +247,14 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
   /** Workspaces herdr has, the board's own left out; the last choice is a new one. */
   function renderWorkspaces() {
     if (!s) return
-    const list = options.workspaces.filter(w => w.label !== options.board)
-    let want = s.workspace
-    if (!s.set.workspace) {
-      const id = defaultWorkspace({ category: s.category, title: catTitle(s.category), items: d().items ?? [], workspaces: list, board: options.board, fallback: store.get('board.launch.workspace') ?? options.focused })
-      want = id ? { id } : { create: '' }
-    }
-    const selected = want?.id ?? (want?.label ? list.find(w => w.label === want.label)?.id : null)
-    const create = !selected
+    const choice = workspaceChoice({ workspaces: options.workspaces, board: options.board, want: s.workspace, wanted: s.set.workspace, category: s.category, title: catTitle(s.category), items: d().items ?? [], fallback: store.get('board.launch.workspace') ?? options.focused })
     f.workspace.innerHTML =
-      list.map(w => `<option value="${esc(w.id)}"${w.id === selected ? ' selected' : ''}>${esc(w.label)}</option>`).join('') +
-      `<option value=""${create ? ' selected' : ''}>${esc(tr('launch.newWorkspace'))}</option>`
-    f.newWorkspace.hidden = !create
-    if (create && !f.newWorkspace.value) f.newWorkspace.value = want?.create || want?.label || defaultWorkspaceName()
+      choice.list.map(w => `<option value="${esc(w.id)}"${w.id === choice.value ? ' selected' : ''}>${esc(w.label)}</option>`).join('') +
+      `<option value=""${choice.create ? ' selected' : ''}>${esc(tr('launch.newWorkspace'))}</option>`
+    f.newWorkspace.hidden = !choice.create
+    if (choice.create && !f.newWorkspace.value) f.newWorkspace.value = choice.seed || defaultWorkspaceName()
   }
-  const defaultWorkspaceName = () => (s.category && s.category !== 'other' ? catTitle(s.category) : baseName(f.cwd.value) || tr('launch.workspaceDefault'))
+  const defaultWorkspaceName = () => workspaceName(s.category, catTitle(s.category), f.cwd.value, tr)
 
   // ------------------------------------------------------------ folder: state, completion, browsing
   let checkTimer = 0
@@ -362,22 +339,13 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
   async function showPop(typed) {
     const seq = ++popSeq
     let items
-    if (!typed) {
-      items = suggestions().map(x => ({ path: x.path, label: baseName(x.path), detail: x.path, why: tr(`launch.why.${x.why}`) }))
-    } else {
+    if (!typed) items = suggestionItems(suggestions(), tr)
+    else {
+      // Nothing but "C:" or "~" yet (no folder in it): the drives and home.
       const { dir, prefix } = splitPathInput(f.cwd.value)
-      if (!dir) {
-        // Nothing but "C:" or "~" yet: the drives and home.
-        const r = await dirs('')
-        if (seq !== popSeq || !s) return
-        const p = prefix.toLowerCase()
-        items = (r?.roots ?? []).filter(x => x.name.toLowerCase().startsWith(p) || x.path.toLowerCase().startsWith(p)).map(x => ({ path: x.path, label: x.name === '~' ? tr('launch.home') : x.name, detail: x.path }))
-      } else {
-        const r = await dirs(dir)
-        if (seq !== popSeq || !s) return
-        const base = r?.path ? r.path.replace(/[\\/]?$/, r.sep ?? '\\') : dir
-        items = r?.dir ? completions(r.entries ?? [], prefix).map(n => ({ path: base + n, label: n, detail: base + n, complete: true })) : []
-      }
+      const r = await dirs(dir)
+      if (seq !== popSeq || !s) return
+      items = dir ? completionItems(r, dir, prefix) : rootItems(r, prefix, tr)
     }
     if (seq !== popSeq || !s) return
     pop = { items, active: -1, open: items.length > 0 }
@@ -462,17 +430,6 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
   const cols = $('.folder-cols')
   let browse = { open: false, chain: [], focus: null }
 
-  function chainOf(path, sep) {
-    const parts = String(path).split(/[\\/]+/).filter(Boolean)
-    const out = []
-    let acc = /^[\\/]/.test(path) ? sep : ''
-    parts.forEach((p, i) => {
-      acc = i === 0 ? (/^[A-Za-z]:$/.test(p) ? `${p}${sep}` : `${acc}${p}`) : `${acc.replace(/[\\/]$/, '')}${sep}${p}`
-      out.push(acc)
-    })
-    return out
-  }
-
   async function openBrowse() {
     browse.open = true
     cols.hidden = false
@@ -494,19 +451,15 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
     if (!s || browse.chain !== chain) return
     cols.innerHTML = lists
       .map((r, i) => {
-        const next = chain[i + 1]
-        const rows = r?.roots
-          ? r.roots.map(x => ({ path: x.path, name: x.name === '~' ? tr('launch.home') : x.name, icon: x.name === '~' ? ICON.home : ICON.drive }))
-          : (r?.entries ?? []).filter(n => !n.startsWith('.')).map(n => ({ path: r.path.replace(/[\\/]?$/, r.sep ?? '\\') + n, name: n, icon: ICON.folder }))
-        const body = rows.length
-          ? rows.map(x => `<button type="button" class="col-row${next && sameish(next, x.path) ? ' on' : ''}" data-path="${esc(x.path)}" data-col="${i}" title="${esc(x.path)}">${x.icon}<span>${esc(x.name)}</span>${r?.roots ? '' : ICON.chev}</button>`).join('')
-          : `<p class="col-empty">${esc(tr(r?.error === 'denied' ? 'ql.denied' : 'launch.noFolders'))}</p>`
-        return `<div class="col-list" role="listbox" aria-label="${esc(r?.path || tr('launch.computer'))}">${body}</div>`
+        const col = folderColumn(r, chain[i + 1], tr)
+        const body = col.rows.length
+          ? col.rows.map(x => `<button type="button" class="col-row${x.on ? ' on' : ''}" data-path="${esc(x.path)}" data-col="${i}" title="${esc(x.path)}">${ICON[x.icon]}<span>${esc(x.name)}</span>${x.chev ? ICON.chev : ''}</button>`).join('')
+          : `<p class="col-empty">${esc(col.empty)}</p>`
+        return `<div class="col-list" role="listbox" aria-label="${esc(col.label)}">${body}</div>`
       })
       .join('')
     cols.scrollLeft = cols.scrollWidth
   }
-  const sameish = (a, b) => a.replace(/[\\/]+$/, '').toLowerCase() === b.replace(/[\\/]+$/, '').toLowerCase()
 
   cols.addEventListener('click', e => {
     const row = e.target.closest('.col-row')
@@ -591,26 +544,18 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
     }
     f.branch.hidden = !f.wt.checked
     if (!s.set.branch) f.branch.value = slugName(f.name.value || baseName(f.cwd.value))
-    const why = f.wt.checked ? checkBranch(f.branch.value) : ''
-    noteFor('worktree', f.wt.checked ? (why ? tr(why) : tr('launch.worktreeAt', { path: worktreePath(git.root, f.branch.value.trim()), branch: git.branch })) : '', !!why)
+    const note = worktreeNote(git, f.wt.checked, f.branch.value, tr)
+    noteFor('worktree', note.text, note.error)
     syncGo()
   }
 
-  function problems() {
-    const out = {}
-    const bad = checkName(f.name.value)
-    if (bad) out.name = tr(bad, { max: NAME_MAX })
-    if (!f.cwd.value.trim()) out.cwd = tr('launch.err.cwdEmpty')
-    else if (s.check && (!s.check.exists || !s.check.dir) && s.check.path) out.cwd = tr(s.check.slow ? 'launch.err.cwdSlow' : s.check.exists ? 'launch.err.cwdFile' : 'launch.err.cwdMissing', { path: s.check.path })
-    if (!f.workspace.value && !f.newWorkspace.value.trim()) out.workspace = tr('launch.err.workspaceName')
-    if (s.git && f.wt.checked && checkBranch(f.branch.value)) out.worktree = tr(checkBranch(f.branch.value))
-    return out
-  }
+  const problems = () => formProblems(fields(), s.check, s.git, tr)
   function syncGo() {
     if (!s) return
     const go = $('.launch-go')
-    go.disabled = !canMutate() || Object.keys(problems()).length > 0 || $('.folder-state').dataset.state === 'wait' || !!s.sending
-    go.title = !canMutate() ? tr('mobile.readOnly') : Object.values(problems())[0] ?? ''
+    const look = goButton({ canMutate: canMutate(), problems: problems(), checking: $('.folder-state').dataset.state === 'wait', sending: !!s.sending }, tr)
+    go.disabled = look.disabled
+    go.title = look.title
   }
 
   async function submit() {
@@ -624,19 +569,12 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
     const bad = problems()
     if (Object.keys(bad).length) {
       for (const [k, v] of Object.entries(bad)) noteFor(k, v)
-      root.querySelector(`[name="${Object.keys(bad)[0] === 'worktree' ? 'branch' : Object.keys(bad)[0]}"]`)?.focus()
+      root.querySelector(`[name="${fieldOf(Object.keys(bad)[0])}"]`)?.focus()
       return
     }
     if (!canMutate()) return toast(tr('mobile.readOnly'), true)
-    const ws = f.workspace.value ? { id: f.workspace.value, label: f.workspace.selectedOptions[0]?.textContent ?? '' } : { create: f.newWorkspace.value.trim() }
-    const body = {
-      name: f.name.value.trim(),
-      cwd: (s.check?.exists && s.check.input === cwd && s.check.path) || cwd,
-      category: s.category,
-      workspace: ws,
-      message: f.message.value.trim(),
-      ...(s.git && f.wt.checked ? { worktree: { branch: f.branch.value.trim() } } : {}),
-    }
+    const body = startBody(fields(), { check: s.check, git: s.git, category: s.category, label: workspaceLabel() })
+    const ws = body.workspace
     const st = s
     const draftVersion = drafts.write(st.draftKey, draftForm())
     st.sending = true
@@ -650,7 +588,7 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
       syncGo()
       if (r.field) {
         noteFor(r.field, r.error)
-        root.querySelector(`[name="${r.field === 'worktree' ? 'branch' : r.field}"]`)?.focus()
+        root.querySelector(`[name="${fieldOf(r.field)}"]`)?.focus()
       } else {
         $('.launch-error').hidden = false
         $('.launch-error').textContent = r.error
@@ -660,7 +598,7 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
     if (ws.id) store.set('board.launch.workspace', ws.id)
     if (st.retry) post(`/api/launch/${encodeURIComponent(st.retry.id)}/dismiss`, {})
     drafts.clear(st.draftKey, draftVersion)
-    const launch = { id: r.id, name: body.name, cwd: body.cwd, category: body.category, workspace: ws.label ?? ws.create, newWorkspace: !ws.id, message: body.message, worktree: body.worktree ?? null, state: 'starting', step: 'prepare', startedAt: Date.now(), pane: null, key: null }
+    const launch = startedLaunch(r.id, body, Date.now())
     local.set(r.id, launch)
     onStarted(launch)
     // The window folds into the new card, where the session will be.
@@ -709,10 +647,9 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
   /** Launches of the board to draw as cards of their own: not yet a session on the board. */
   function pending() {
     const server = d().launches ?? []
-    for (const id of local.keys()) if (server.some(l => l.id === id) || Date.now() - local.get(id).startedAt > 15_000) local.delete(id)
-    const keys = new Set((d().items ?? []).map(i => i.key))
-    // A launcher can finish before herdr shows the session: its card waits a little for it.
-    return [...server, ...local.values()].filter(l => !(l.key && keys.has(l.key)) && (l.state !== 'done' || Date.now() - (l.doneAt ?? 0) < 30_000))
+    const now = Date.now()
+    for (const [id, l] of local) if (!keepsLocal(l, server, now)) local.delete(id)
+    return pendingLaunches(server, [...local.values()], d().items ?? [], now)
   }
 
   /** Board items for them, in their lane: "Working" while they start, "Needs me" once they failed or wait for a dialog. */
@@ -723,7 +660,7 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
       launch: l,
       name: l.name,
       category: l.category,
-      column: l.state === 'failed' || l.state === 'waiting' || l.state === 'trust' ? 'me' : 'work',
+      column: launchColumn(l),
       cwd: l.cwd,
       workspace: l.workspace,
       activity: l.startedAt,
@@ -731,16 +668,14 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
     }))
   }
 
-  const stepText = l => (l.state === 'waiting' ? tr('launch.step.dialog') : l.state === 'done' ? tr('launch.step.done') : tr(`launch.step.${l.step}`, { name: options.launcher.name ?? '' }))
-
   /** The lines a launch adds to a card: how it goes, or why it failed and what to do. */
   function note(l) {
     if (!l) return ''
     const go = l.pane ? `<button class="button" data-launch="focus" data-id="${esc(l.id)}">${esc(tr('card.focus'))}</button>` : ''
     if (l.state === 'failed') {
       // Failed only at its first message, the session runs: a retry would start a second one.
-      const retry = l.kind === 'message' ? '' : `<button class="button" data-launch="retry" data-id="${esc(l.id)}">${esc(tr('launch.retry'))}</button>`
-      return `<div class="launch-note failed"><div class="ln-why">${ICON.warn}<span>${esc(l.error || tr('launch.failed'))}</span></div><div class="ln-hint">${esc(tr(`launch.hint.${l.kind === 'dialog' ? 'dialogFailed' : l.kind || 'other'}`))}</div><div class="ln-actions">${retry}${go}<button class="button plain" data-launch="dismiss" data-id="${esc(l.id)}">${esc(tr('launch.dismiss'))}</button></div></div>`
+      const retry = !retries(l) ? '' : `<button class="button" data-launch="retry" data-id="${esc(l.id)}">${esc(tr('launch.retry'))}</button>`
+      return `<div class="launch-note failed"><div class="ln-why">${ICON.warn}<span>${esc(l.error || tr('launch.failed'))}</span></div><div class="ln-hint">${esc(tr(failureHint(l)))}</div><div class="ln-actions">${retry}${go}<button class="button plain" data-launch="dismiss" data-id="${esc(l.id)}">${esc(tr('launch.dismiss'))}</button></div></div>`
     }
     if (l.state === 'trust') {
       // Claude stopped at "Do you trust this folder?": the folder, and the two ways on.
@@ -750,14 +685,14 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
     if (l.state === 'waiting') {
       return `<div class="launch-note waiting"><div class="ln-why">${ICON.warn}<span>${esc(tr('launch.step.dialog'))}</span></div><div class="ln-hint">${esc(tr('launch.hint.dialog'))}</div><div class="ln-actions">${go}</div></div>`
     }
-    return `<div class="launch-note"><span class="ln-spin">${ICON.spin}</span><span>${esc(stepText(l))}</span></div>`
+    return `<div class="launch-note"><span class="ln-spin">${ICON.spin}</span><span>${esc(stepText(l, tr, options.launcher.name ?? ''))}</span></div>`
   }
 
   /** The card of a session on its way that is not on the board yet. */
   function cardHTML(it) {
     const l = it.launch
-    const icon = l.state === 'failed' || l.state === 'waiting' || l.state === 'trust' ? `<span class="dot" style="--c:var(--orange)"></span>` : `<span class="dot work launching" style="--c:var(--green)"></span>`
-    const where = [baseName(l.cwd), l.workspace && tr('meta.workspace', { name: l.workspace })].filter(Boolean).join(' · ')
+    const icon = needsYou(l) ? `<span class="dot" style="--c:var(--orange)"></span>` : `<span class="dot work launching" style="--c:var(--green)"></span>`
+    const where = launchWhere(l, tr)
     return `<div class="card-top">${icon}<span class="name">${esc(l.name)}</span><span class="age">${esc(tr('launch.new'))}</span></div><div class="said" title="${esc(l.cwd)}">${esc(where)}</div>${note(l)}`
   }
 

@@ -112,10 +112,66 @@ export const CheckIcon = () => (
   </Icon>
 )
 
-/** A menu item that opens a submenu. */
+/** A menu item that opens a submenu; a folder that opens a next column. */
 export const ChevIcon = () => (
   <Icon>
     <path d="m8 5 5 5-5 5" />
+  </Icon>
+)
+
+// The new-session window's and the cards of sessions on their way.
+
+export const FolderIcon = () => (
+  <Icon>
+    <path d="M2.5 6a1.5 1.5 0 0 1 1.5-1.5h3.6l1.7 1.8H16A1.5 1.5 0 0 1 17.5 7.8v7.7A1.5 1.5 0 0 1 16 17H4a1.5 1.5 0 0 1-1.5-1.5Z" />
+  </Icon>
+)
+
+export const DriveIcon = () => (
+  <Icon>
+    <rect x="3" y="6" width="14" height="8" rx="2" />
+    <path d="M13.5 10h.01" />
+  </Icon>
+)
+
+export const HomeIcon = () => (
+  <Icon>
+    <path d="M3.5 9.5 10 4l6.5 5.5M5.5 8v8h9V8" />
+  </Icon>
+)
+
+/** The folder is there. */
+export const OkIcon = () => (
+  <Icon>
+    <path d="m5 10.5 3.2 3.2L15 7" />
+  </Icon>
+)
+
+/** The folder is not there, or not a folder. */
+export const BadIcon = () => (
+  <Icon>
+    <circle cx="10" cy="10" r="7" />
+    <path d="M10 6.5v4.2M10 13.4h.01" />
+  </Icon>
+)
+
+/** Being checked, or starting. */
+export const WaitIcon = () => (
+  <Icon>
+    <path className="spin-path" d="M10 3a7 7 0 1 1-7 7" />
+  </Icon>
+)
+
+export const CloseIcon = () => (
+  <Icon>
+    <path d="m5.5 5.5 9 9m0-9-9 9" />
+  </Icon>
+)
+
+export const WarnIcon = () => (
+  <Icon>
+    <path d="M10 3.5 17.5 16h-15Z" />
+    <path d="M10 8.5v3.2M10 13.8h.01" />
   </Icon>
 )
 

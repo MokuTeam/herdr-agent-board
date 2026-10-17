@@ -52,7 +52,7 @@ export function BoardProvider({ children }: { children: ReactNode }) {
   const [settled, setSettled] = useState(live.data)
   if (settled !== live.data) {
     setSettled(live.data)
-    if (live.data) dispatch({ type: 'settle', items: live.data.items, now: Date.now() })
+    if (live.data) dispatch({ type: 'settle', items: live.data.items, launches: live.data.launches, now: Date.now() })
   }
 
   // Before the paint, so a board in another language does not flash in the old one.

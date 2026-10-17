@@ -5,8 +5,8 @@
 // do, is models/board-menus.ts; one menu is open at a time (components/menu/menu-engine.ts).
 import { useEffect, useState } from 'react'
 import type { Item, Translator } from '../../../src/core/types.ts'
-import { api, errorText } from '../api/client.ts'
 import { filesApi } from '../api/files.ts'
+import { focusLaunch } from '../api/launch.ts'
 import { isFocusable, MenuEngine, type MenuSource } from '../components/menu/menu-engine.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import {
@@ -235,15 +235,7 @@ export function boardActions(deps: ActionDeps): BoardMenuActions {
       if (error) toast(error, true)
     },
     look: (target, el) => deps.quickLook.look(target, el),
-    focusLaunch: async id => {
-      const t = deps.t()
-      if (!deps.canMutate()) return toast(t('mobile.readOnly'), true)
-      try {
-        await api.post(`/api/launch/${encodeURIComponent(id)}/focus`, {})
-      } catch (err) {
-        toast(errorText(err, t), true)
-      }
-    },
+    focusLaunch: id => focusLaunch(id, { t: deps.t(), canMutate: deps.canMutate(), toast }),
   }
 }
 
@@ -298,7 +290,7 @@ export interface ContextMenusOptions {
   newSession: OpenLaunch
   openCategories(id?: string): void
   rename(key: string, el: Element | null): void
-  /** Sessions on their way and what their menu does that is the launch window's (Task 27b). */
+  /** Sessions on their way and what their menu does that is the launch window's (hooks/useLaunch.ts). */
   launch?: LaunchMenus | null
 }
 

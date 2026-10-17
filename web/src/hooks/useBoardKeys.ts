@@ -1,7 +1,7 @@
 // The board's keys (models/board-keys.ts says which action a key takes): N opens the next card
 // that needs you, Shift+N starts a session, F2 renames, / goes to the search, Escape leaves a
 // field, closes the panel or clears the search, digits answer the open question; while the quick
-// look is open, N, F2 and the digits do nothing. An open menu (and the launch window, Task 27b)
+// look is open, N, F2 and the digits do nothing. An open menu or the launch window
 // takes the keys first.
 import { useEffect } from 'react'
 import { boardKey, type KeyScene, stopsNativeClear } from '../models/board-keys.ts'

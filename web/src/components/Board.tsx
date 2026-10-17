@@ -19,9 +19,9 @@ export interface BoardProps {
   onNewSession?: (ctx: NewSessionContext, from: HTMLElement) => void
   /** A lane's head: the categories panel, at that lane. */
   onLaneHead?: (id: string) => void
-  /** Sessions on their way (Task 27). */
+  /** Sessions on their way (hooks/useLaunch.ts). */
   launch?: LaunchSlots
-  /** A card's key -> the launch card it takes over on screen (Task 27). */
+  /** A card's key -> the launch card it takes over on screen. */
   takeovers?: ReadonlyMap<string, string>
   /** The height of a panel docked at the bottom, which a drag scrolls above (Task 25). */
   roomBelow?: () => number

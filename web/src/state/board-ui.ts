@@ -1,10 +1,11 @@
 // The page's own state across the board (the live data is in api/useBoard.ts): what is on show,
 // which session is open, the usage popover, the toasts, cards the user moved, sessions busy and
 // the page's edits to the board until the next one comes in.
-import type { ColumnId, Item } from '../../../src/core/types.ts'
+import type { ColumnId, Item, LaunchView } from '../../../src/core/types.ts'
 import { type AttentionItem, recordView, type Seen } from '../models/attention.ts'
 import { type BoardEdit, type BoardEdits, NO_EDITS, withEdit } from '../models/board-edits.ts'
 import { NO_MOVES, type PendingMoves, settleMoves, withMove, withoutMove } from '../models/board-view.ts'
+import { keepsLocal } from '../models/launch.ts'
 
 export interface Toast {
   id: number
@@ -35,6 +36,8 @@ export interface BoardUi {
   busy: ReadonlyMap<string, string>
   /** Lanes reordered, reminders cancelled or switched: on the board shown until the next board. */
   edits: BoardEdits
+  /** Sessions this page started, until the server's board shows them (15 s at most). */
+  launched: readonly LaunchView[]
 }
 
 export type BoardAction =
@@ -48,9 +51,11 @@ export type BoardAction =
   | { type: 'toastGone'; id: number }
   | { type: 'move'; key: string; cat: string | null; column: ColumnId | null; at: number }
   | { type: 'unmove'; key: string }
-  | { type: 'settle'; items: Item[]; now: number }
+  | { type: 'settle'; items: Item[]; launches?: LaunchView[]; now: number }
   | { type: 'busy'; key: string; label: string | null }
   | { type: 'edit'; edit: BoardEdit }
+  | { type: 'launched'; launch: LaunchView }
+  | { type: 'launchGone'; id: string }
 
 /** board.viewed as stored; anything else in it is dropped. */
 export function parseSeen(text: string): Seen {
@@ -78,6 +83,7 @@ export function initialUi(read: (key: string, fallback: string) => string): Boar
     moves: NO_MOVES,
     busy: new Map(),
     edits: NO_EDITS,
+    launched: [],
   }
 }
 
@@ -114,13 +120,33 @@ export function boardUi(state: BoardUi, action: BoardAction): BoardUi {
     case 'unmove':
       return { ...state, moves: withoutMove(state.moves, action.key) }
     case 'settle': {
-      // A new board is the server's word: the page's own edits of the last one are let go.
+      // A new board is the server's word: the page's own edits of the last one are let go, and
+      // its own launches once the board has them (or they waited too long for it).
       const moves = settleMoves(state.moves, action.items, action.now)
-      return moves === state.moves && state.edits === NO_EDITS ? state : { ...state, moves, edits: NO_EDITS }
+      const launched = settledLaunches(state.launched, action.launches, action.now)
+      return moves === state.moves && state.edits === NO_EDITS && launched === state.launched
+        ? state
+        : { ...state, moves, edits: NO_EDITS, launched }
     }
     case 'busy':
       return { ...state, busy: withBusy(state.busy, action.key, action.label) }
     case 'edit':
       return { ...state, edits: withEdit(state.edits, action.edit) }
+    case 'launched':
+      return { ...state, launched: [...state.launched.filter(l => l.id !== action.launch.id), action.launch] }
+    case 'launchGone':
+      return state.launched.some(l => l.id === action.id)
+        ? { ...state, launched: state.launched.filter(l => l.id !== action.id) }
+        : state
   }
+}
+
+function settledLaunches(
+  launched: readonly LaunchView[],
+  server: LaunchView[] | undefined,
+  now: number,
+): readonly LaunchView[] {
+  if (!server || !launched.length) return launched
+  const kept = launched.filter(l => keepsLocal(l, server, now))
+  return kept.length === launched.length ? launched : kept
 }

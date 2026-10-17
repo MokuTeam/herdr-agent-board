@@ -13,7 +13,7 @@ import { AlarmBadge } from './AlarmBadge.tsx'
 import { classNames } from './class-names.ts'
 import { CheckGlyph, ClockGlyph, FocusGlyph, MoonGlyph, PinGlyph, SpinGlyph, WriteGlyph } from './icons.tsx'
 
-/** What a session on its way shows on the board (the launch window's, Task 27). */
+/** What a session on its way shows on the board (hooks/useLaunch.ts). */
 export interface LaunchSlots {
   /** The card of a launch that is not a session on the board yet. */
   card(item: Item): ReactNode
