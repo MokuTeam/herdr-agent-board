@@ -1,13 +1,15 @@
-// "New session" from the toolbar, a lane's +, Shift+N (and later the sheet and the menus). New
-// sessions go through herdr: without fresh data the board says why instead.
+// "New session" from the toolbar, a lane's +, Shift+N, the sheet and the menus. New sessions go
+// through herdr: without fresh data the board says why instead.
 import { useCallback } from 'react'
 import type { NewSessionContext } from '../components/Lane.tsx'
 import { useT } from '../i18n/I18nProvider.tsx'
+import type { MenuOrigin } from '../models/board-menus.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 
-export type OpenLaunch = (ctx: NewSessionContext, from: HTMLElement | null) => void
+/** `from`: the element the launch window grows out of, or where a menu was opened (a lane, the board). */
+export type OpenLaunch = (ctx: NewSessionContext, from: MenuOrigin | null) => void
 
-/** `open`: the launch window, which grows out of `from` (Task 27). */
+/** `open`: the launch window, which grows out of `from` (Task 27b). */
 export function useNewSession(open?: OpenLaunch): OpenLaunch {
   const t = useT()
   const { canMutate, canEdit, toast } = useBoardContext()

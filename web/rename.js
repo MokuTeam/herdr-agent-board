@@ -3,6 +3,7 @@
 // the automatic one back. Under it, for a Claude session, the choice to rename it in Claude
 // and herdr too: that types /rename into the session, so it is never done without asking.
 import { NAME_MAX } from '../src/core/launch/names.ts'
+import { renameBox, renameChanges } from './src/models/rename.ts'
 import { reducedMotion, Spring } from './src/models/spring.ts'
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
@@ -30,12 +31,12 @@ export function renameInPlace(target, { value, auto, claude = null, t, onCommit,
   const check = box.querySelector('.rename-claude input')
   // The field sits on the name: same place, same type, so nothing jumps.
   Object.assign(field.style, { font: cs.font, letterSpacing: cs.letterSpacing, color: cs.color })
-  const width = Math.max(r.width + 24, 200)
   // The options under the field are wider than a short name: keep both on screen.
-  box.style.left = `${Math.max(8, Math.min(r.left - 5, innerWidth - Math.max(width + 10, 290) - 8))}px`
-  box.style.top = `${r.top - 3}px`
-  box.style.width = `${width + 10}px`
-  field.style.height = `${r.height + 6}px`
+  const place = renameBox(r, innerWidth)
+  box.style.left = `${place.left}px`
+  box.style.top = `${place.top}px`
+  box.style.width = `${place.width}px`
+  field.style.height = `${place.fieldHeight}px`
   field.value = value
   document.body.append(box)
   const more = box.querySelector('.rename-more')
@@ -63,7 +64,7 @@ export function renameInPlace(target, { value, auto, claude = null, t, onCommit,
     if (done || saving) return
     const name = field.value.trim()
     const claudeToo = !!check?.checked
-    if (name === value && !claudeToo) return finish()
+    if (!renameChanges(name, value, claudeToo)) return finish()
     saving = true
     field.disabled = true
     const r = await onCommit(name, { claude: claudeToo })

@@ -31,6 +31,7 @@ import {
   stripAttrs,
 } from './markup.ts'
 import { oldSource } from './old-app.ts'
+import { asDom, clone, commit, first } from './react-commit.ts'
 
 const ROOT = join(import.meta.dir, '..', '..', '..')
 
@@ -262,51 +263,6 @@ export async function oldSide(options: SideOptions): Promise<PanelSide> {
 }
 
 // ---------------------------------------------------------------- the React panel
-
-/** A deep copy of rendered markup, to be the live DOM. */
-function clone<T extends Node>(node: T): T {
-  if (node.kind === 'text') return { ...node }
-  return { ...node, attrs: new Map(node.attrs), children: node.children.map(clone) }
-}
-
-/** What React would write to `live` going from rendering `prev` to rendering `next`. */
-function commit(world: FakeWorld, live: Element, prev: Element, next: Element): void {
-  for (const name of new Set([...prev.attrs.keys(), ...next.attrs.keys()])) {
-    const value = next.attrs.get(name)
-    if (prev.attrs.get(name) === value) continue
-    if (value === undefined) live.attrs.delete(name)
-    else live.attrs.set(name, value)
-  }
-  const same =
-    prev.children.length === next.children.length &&
-    prev.children.every((c, i) => {
-      const n = next.children[i]
-      return c.kind === n?.kind && (c.kind === 'text' || (n.kind === 'element' && c.tag === n.tag))
-    })
-  if (!same) {
-    live.children = next.children.map(clone)
-    world.index(live)
-    return
-  }
-  next.children.forEach((n, i) => {
-    const p = prev.children[i]
-    const l = live.children[i]
-    if (n.kind === 'text') {
-      if (p?.kind === 'text' && p.text !== n.text) live.children[i] = { ...n }
-    } else if (p?.kind === 'element' && l?.kind === 'element') commit(world, l, p, n)
-  })
-}
-
-const asDom = (el: FakeElement): HTMLElement => {
-  if (el instanceof HTMLElement) return el
-  throw new Error('the world is not installed')
-}
-
-function first(nodes: Node[]): Element {
-  const el = nodes.find((n): n is Element => n.kind === 'element')
-  if (!el) throw new Error('nothing rendered')
-  return el
-}
 
 /** The React side, with the shared place its panels are in. */
 export interface ReactSide extends PanelSide {

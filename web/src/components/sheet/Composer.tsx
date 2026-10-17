@@ -31,8 +31,8 @@ export interface SessionButtons {
   history?: (button: HTMLElement) => void
   /** A new session in this one's lane and folder (the launch window, Task 27). */
   newHere?: (button: HTMLElement) => void
-  /** The menu of these buttons on a phone (Task 27). */
-  more?: (button: HTMLElement) => void
+  /** The menu of these buttons on a phone (`keyboard`: pressed by keys, it lights its first item). */
+  more?: (button: HTMLElement, keyboard: boolean) => void
 }
 
 export interface ComposerProps {
@@ -45,6 +45,8 @@ export interface ComposerProps {
   present: boolean
   canMutate: boolean
   on?: SessionButtons | undefined
+  /** The menu of the buttons is open. */
+  moreOpen?: boolean
 }
 
 /** The box grows with the text, up to 180 px. */
@@ -58,6 +60,7 @@ export function Composer({
   present,
   canMutate,
   on = {},
+  moreOpen = false,
 }: ComposerProps) {
   const t = useT()
   const fileInput = useRef<HTMLInputElement>(null)
@@ -96,8 +99,8 @@ export function Composer({
           className="button sheet-more"
           id="sheet-more"
           aria-haspopup="menu"
-          aria-expanded="false"
-          onClick={e => on.more?.(e.currentTarget)}
+          aria-expanded={moreOpen}
+          onClick={e => on.more?.(e.currentTarget, e.detail === 0)}
         >
           {t('sheet.more')}
         </button>

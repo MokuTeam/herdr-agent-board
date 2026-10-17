@@ -13,7 +13,7 @@ import { MoonGlyph } from '../icons.tsx'
 export interface SheetHeadProps {
   item: Item | null
   missing: boolean
-  /** Rename where the name is (Task 27). */
+  /** Rename where the name is (hooks/useRenameInPlace.ts). */
   onRename?: ((name: HTMLElement) => void) | undefined
 }
 

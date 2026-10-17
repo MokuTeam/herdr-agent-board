@@ -57,6 +57,12 @@ export interface EventFields {
   altKey?: boolean
   ctrlKey?: boolean
   metaKey?: boolean
+  isPrimary?: boolean
+  /** An input method is composing (its own Enter and Esc). */
+  isComposing?: boolean
+  keyCode?: number
+  /** focusout's: where the focus goes. */
+  relatedTarget?: unknown
 }
 
 export class FakeEvent {
@@ -74,6 +80,10 @@ export class FakeEvent {
   readonly altKey: boolean
   readonly ctrlKey: boolean
   readonly metaKey: boolean
+  readonly isPrimary: boolean
+  readonly isComposing: boolean
+  readonly keyCode: number
+  readonly relatedTarget: unknown
 
   constructor(
     readonly type: string,
@@ -92,6 +102,10 @@ export class FakeEvent {
     this.altKey = fields.altKey ?? false
     this.ctrlKey = fields.ctrlKey ?? false
     this.metaKey = fields.metaKey ?? false
+    this.isPrimary = fields.isPrimary ?? true
+    this.isComposing = fields.isComposing ?? false
+    this.keyCode = fields.keyCode ?? 0
+    this.relatedTarget = fields.relatedTarget ?? null
   }
 
   preventDefault(): void {
@@ -368,6 +382,18 @@ export class FakeElement extends FakeTarget {
   set value(text: string) {
     this.node.attrs.set('value', String(text))
   }
+  /** A checkbox's state, kept as its attribute. */
+  get checked(): boolean {
+    return this.node.attrs.has('checked')
+  }
+  set checked(on: boolean) {
+    if (on) this.node.attrs.set('checked', '')
+    else this.node.attrs.delete('checked')
+  }
+  /** A field's text selected. */
+  select(): void {
+    this.world.selected.push(this)
+  }
   get readOnly(): boolean {
     return this.node.attrs.has('readonly')
   }
@@ -484,6 +510,10 @@ export class FakeElement extends FakeTarget {
   get clientHeight(): number {
     return this.node === this.world.html ? this.world.viewport.h : this.getBoundingClientRect().height
   }
+  /** A click by code (`button.click()`): the event goes through the page at once. */
+  click(): void {
+    void this.world.fire(this, 'click')
+  }
   focus(): void {
     this.world.document.activeElement = this
   }
@@ -512,6 +542,9 @@ export class FakeDocument extends FakeTarget {
   querySelector(selector: string): FakeElement | null {
     return this.documentElement.querySelector(selector)
   }
+  getElementById(id: string): FakeElement | null {
+    return this.documentElement.querySelectorAll('*').find(el => el.id === id) ?? null
+  }
 }
 
 class FakeMediaQuery extends FakeTarget {
@@ -521,6 +554,13 @@ class FakeMediaQuery extends FakeTarget {
 }
 
 // ---------------------------------------------------------------- the world
+
+export interface FakeSelection {
+  isCollapsed: boolean
+  rangeCount: number
+  getRangeAt(index: number): { intersectsNode(node: unknown): boolean }
+  removeAllRanges(): void
+}
 
 export interface WorldOptions {
   viewport: { w: number; h: number }
@@ -565,6 +605,15 @@ export class FakeWorld {
   readonly animations: { el: FakeElement; keyframes: unknown; options: unknown }[] = []
   readonly scrolls: [number, number][] = []
   readonly intoView: { el: FakeElement; options: unknown }[] = []
+  /** Fields whose text was selected (select()), in order. */
+  readonly selected: FakeElement[] = []
+  /** What getSelection() gives: nothing selected unless a test says. */
+  selection: FakeSelection = {
+    isCollapsed: true,
+    rangeCount: 0,
+    getRangeAt: () => ({ intersectsNode: () => false }),
+    removeAllRanges() {},
+  }
   readonly storage = new Map<string, string>()
   readonly phone: FakeMediaQuery
   viewport: { w: number; h: number }
@@ -657,7 +706,7 @@ export class FakeWorld {
         removeItem: (key: string) => this.storage.delete(key),
       },
       devicePixelRatio: this.options.dpr ?? 1,
-      getSelection: () => ({ removeAllRanges() {} }),
+      getSelection: () => this.selection,
       scrollBy: (x: number, y: number) => this.scrolls.push([x, y]),
       getComputedStyle: (el: FakeElement) => ({
         paddingTop: '0px',
@@ -693,11 +742,15 @@ export class FakeWorld {
   /** `ms` later: timers due, then one animation frame. */
   async tick(ms = 16): Promise<void> {
     this.now += ms
+    let fired = false
     for (const [id, timer] of [...this.timers].sort((a, b) => a[1].at - b[1].at)) {
       if (timer.at > this.now) continue
       this.timers.delete(id)
       timer.fn()
+      fired = true
     }
+    // A timer's microtasks run before the frame, as in the browser (React draws what it changed).
+    if (fired) await this.flush()
     const frames = [...this.frames.values()]
     this.frames.clear()
     for (const fn of frames) fn(this.now)

@@ -1,15 +1,19 @@
 // The board page: the toolbar over the board, the side panels, the usage popover, the quick look
-// and the toasts, the keys and the Back button; the chat's files and links, and the question forms.
+// and the toasts, the keys and the Back button; the chat's files and links, the question forms, the
+// context menus and renaming in place.
 import { useEffect, useRef, useState } from 'react'
 import { Board } from './components/Board.tsx'
 import { FileChips } from './components/files/FileChip.tsx'
 import { QuickLook } from './components/files/QuickLook.tsx'
 import { LimitsPop } from './components/LimitsPop.tsx'
+import { ContextMenu } from './components/menu/ContextMenu.tsx'
 import { SheetQuestion } from './components/questions/SheetQuestion.tsx'
+import { RenameField } from './components/RenameField.tsx'
 import { SidePanels } from './components/SidePanels.tsx'
 import { Toasts } from './components/Toasts.tsx'
 import { Toolbar } from './components/Toolbar.tsx'
 import { useBoardKeys } from './hooks/useBoardKeys.ts'
+import { useContextMenus } from './hooks/useContextMenus.ts'
 import { useDialogHistory } from './hooks/useDialogHistory.ts'
 import { useFileChips } from './hooks/useFileChips.ts'
 import { useFileLinks } from './hooks/useFileLinks.ts'
@@ -18,6 +22,7 @@ import { useNextAttention } from './hooks/useNextAttention.ts'
 import { usePanelLayout } from './hooks/usePanelLayout.ts'
 import { useQuestions } from './hooks/useQuestions.ts'
 import { useQuickLook } from './hooks/useQuickLook.ts'
+import { useRenameInPlace } from './hooks/useRenameInPlace.ts'
 import { useSchedule } from './hooks/useSchedule.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
 
@@ -40,7 +45,7 @@ export function App() {
   }
   // The reminders' buttons, shared by the schedule panel and the sheet.
   const reminders = useSchedule()
-  // The launch window (Task 27) opens from here; until then only the "no fresh data" toast.
+  // The launch window (Task 27b) opens from here; until then only the "no fresh data" toast.
   const newSession = useNewSession()
   const openNextAttention = useNextAttention()
   // Paths in the chat become chips; a chip, the sheet's Changes and History open the quick look.
@@ -48,18 +53,25 @@ export function App() {
   const quickLook = useQuickLook(chips.upgrade)
   useFileLinks(quickLook.look)
   const questions = useQuestions()
+  // A session renamed where its name is; the menus of cards, lanes, the board and chips. The
+  // menu's keys come after the quick look's, as the old page had them.
+  const rename = useRenameInPlace()
+  const menus = useContextMenus({ quickLook, newSession, openCategories, rename: rename.start })
   useBoardKeys({
     openNextAttention,
     newSession,
+    layerOpen: () => menus.menu.isOpen(),
     quickLookOpen: quickLook.isOpen,
     panelOpen: () => !!panels.place.openPanel(),
     closePanel: panels.closeOpen,
+    rename: rename.start,
     sessionPanelOpen: () => !!panels.place.openPanel(),
     pickOption: questions.pickOption,
   })
   // Layers above the board, topmost first: Back on a phone closes them one at a time (the quick
-  // look a step at a time).
+  // look a step at a time). The launch window goes after the menu (Task 27b).
   useDialogHistory([
+    { open: menus.open, close: () => menus.menu.close() },
     { open: quickLook.open, close: quickLook.back },
     {
       open: ui.limitsOpen,
@@ -101,11 +113,16 @@ export function App() {
           upgradeFiles: chips.upgrade,
           onChanges: quickLook.lookChanges,
           onHistory: quickLook.lookHistory,
+          onMore: menus.sheetMore,
+          moreOpen: menus.moreOpen,
+          onRename: rename.start,
         }}
       />
       <LimitsPop anchor={limitsAnchor} />
       <FileChips chips={chips} />
       <QuickLook engine={quickLook.engine} />
+      <ContextMenu engine={menus.menu} />
+      <RenameField rename={rename} />
       <Toasts />
     </>
   )

@@ -1,8 +1,8 @@
 // The board's context menu, in the manner of macOS: it grows out of the point it opened at,
-// keeps on screen (menu-model.js places it), nests submenus beside their item, and answers the
+// keeps on screen (src/models/menu-model.ts places it), nests submenus beside their item, and answers the
 // keyboard: arrows, Enter or Space, Esc, Home and End, and typing a label's first letters.
 // Gray items say why. A click outside only closes it; it does not also act on what is there.
-import { firstIndex, lastIndex, nextIndex, placeMenu, placeSubmenu, shareReasons, typeahead } from './menu-model.js'
+import { firstIndex, lastIndex, nextIndex, placeMenu, placeSubmenu, shareReasons, typeahead } from './src/models/menu-model.ts'
 import { reducedMotion, Spring } from './src/models/spring.ts'
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])

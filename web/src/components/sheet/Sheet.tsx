@@ -5,7 +5,7 @@
 //
 // Parts the page hands in plug in here: the question form or permission prompt, the file chips and
 // quick looks, the reminders' buttons (the page's schedule desk, shared with the schedule panel);
-// the phone's "More actions" menu, renaming and the launch window come with Task 27.
+// the phone's "More actions" menu and renaming; the launch window comes with Task 27b.
 import { type ReactNode, type Ref, useLayoutEffect, useRef, useState } from 'react'
 import type { Item } from '../../../../src/core/types.ts'
 import type { SessionDetail } from '../../api/client.ts'
@@ -53,9 +53,11 @@ export interface SheetSlots {
   onHistory?: ((key: string, cwd: string, button: HTMLElement) => void) | undefined
   /** The reminders' buttons: cancel, delivery, "+2 more" (hooks/useSchedule.ts). */
   schedule?: ScheduleActions | undefined
-  /** The phone's menu of the session's buttons, from "More actions" (Task 27). */
-  onMore?: ((button: HTMLElement) => void) | undefined
-  /** Rename where the name is, in the head (Task 27). */
+  /** The phone's menu of the session's buttons, from "More actions" (`keyboard`: pressed by keys). */
+  onMore?: ((button: HTMLElement, keyboard: boolean) => void) | undefined
+  /** That menu is the one open ("More actions" says it is expanded). */
+  moreOpen?: boolean | undefined
+  /** Rename where the name is, in the head (hooks/useRenameInPlace.ts). */
   onRename?: ((key: string, name: HTMLElement) => void) | undefined
   /** "New here": the launch window, from the button (the toast that says why not, until Task 27). */
   onNewSession?: OpenLaunch | undefined
@@ -133,7 +135,7 @@ export function Sheet(slots: SheetSlots) {
     changes: button => open && onChanges?.(open, button),
     history: button => open && onHistory?.(open, item?.cwd ?? '', button),
     newHere: button => open && newSession(item ? { item } : {}, button),
-    more: button => onMore?.(button),
+    more: (button, keyboard) => onMore?.(button, keyboard),
   }
   return (
     <Panel
@@ -170,6 +172,7 @@ export function Sheet(slots: SheetSlots) {
         onDismiss={at(actions.dismissAsk)}
         buttons={buttons}
         schedule={slots.schedule}
+        moreOpen={slots.moreOpen ?? false}
       />
     </Panel>
   )
@@ -193,6 +196,8 @@ export interface SheetViewProps {
   onDismiss?: () => void
   buttons?: SessionButtons
   schedule?: ScheduleActions | undefined
+  /** The "More actions" menu is open. */
+  moreOpen?: boolean
 }
 
 /** The sheet under its head, as drawn for one state. */
@@ -273,6 +278,7 @@ export function SheetView(props: SheetViewProps) {
         present={!!openItem && detail.status !== 'missing'}
         canMutate={canMutate}
         on={buttons}
+        moreOpen={props.moreOpen ?? false}
       />
     </>
   )

@@ -105,6 +105,20 @@ export const NewIcon = () => (
   </Icon>
 )
 
+/** A menu item's check. */
+export const CheckIcon = () => (
+  <Icon>
+    <path d="m4.5 10.5 3.5 3.5 7.5-8" />
+  </Icon>
+)
+
+/** A menu item that opens a submenu. */
+export const ChevIcon = () => (
+  <Icon>
+    <path d="m8 5 5 5-5 5" />
+  </Icon>
+)
+
 /**
  * The icons the old page drew from its ICON strings (the "new session" plus, the cards' icons):
  * unlike the toolbar's they are not hidden from screen readers, as before.

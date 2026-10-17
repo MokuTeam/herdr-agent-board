@@ -1,8 +1,8 @@
 // The board's keys (models/board-keys.ts says which action a key takes): N opens the next card
 // that needs you, Shift+N starts a session, F2 renames, / goes to the search, Escape leaves a
 // field, closes the panel or clears the search, digits answer the open question; while the quick
-// look is open, N, F2 and the digits do nothing. The menus, the launch window and rename come with
-// Task 27: until they give their part, it does nothing.
+// look is open, N, F2 and the digits do nothing. An open menu (and the launch window, Task 27b)
+// takes the keys first.
 import { useEffect } from 'react'
 import { boardKey, type KeyScene, stopsNativeClear } from '../models/board-keys.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
@@ -12,7 +12,7 @@ import { laneContext, type OpenLaunch } from './useNewSession.ts'
 export interface BoardKeysOptions {
   openNextAttention(): void
   newSession: OpenLaunch
-  /** A menu or the launch window is open: it takes its keys first (Task 27). */
+  /** A menu or the launch window is open: it takes its keys first. */
   layerOpen?: () => boolean
   /** The quick look is open. */
   quickLookOpen?: () => boolean
@@ -20,7 +20,7 @@ export interface BoardKeysOptions {
   panelOpen?: () => boolean
   /** …and Escape closes it. */
   closePanel?: () => void
-  /** Rename where the name is: the card's (`where`), else the sheet's head (Task 27). */
+  /** Rename where the name is: the card's (`where`), else the sheet's head (hooks/useRenameInPlace.ts). */
   rename?: (key: string, where: HTMLElement | null) => void
   /** The session panel is open. */
   sessionPanelOpen?: () => boolean
