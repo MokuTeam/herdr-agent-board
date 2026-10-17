@@ -16,10 +16,16 @@ const HEADERS = { 'content-type': 'text/event-stream', 'cache-control': 'no-stor
 /** One named event as the stream carries it. */
 export const namedEvent = (name: string, data: unknown): string => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`
 
+export interface BroadcasterOptions {
+  pingMs?: number
+  /** What a new client is told right after the payload it starts with ('' for nothing). */
+  greet?: () => string
+}
+
 /** `current`: the payload a new client starts with. Call close() to stop the pings and end every stream. */
 export function createBroadcaster(
   current: () => string,
-  { pingMs = 20_000 }: { pingMs?: number } = {},
+  { pingMs = 20_000, greet }: BroadcasterOptions = {},
 ): Broadcaster & { close(): void } {
   const clients = new Set<Client>()
   const encoder = new TextEncoder()
@@ -48,6 +54,8 @@ export function createBroadcaster(
           client = controller
           clients.add(controller)
           write(controller, `retry: 2000\ndata: ${current()}\n\n`)
+          const more = greet?.()
+          if (more) write(controller, more)
         },
         cancel: leave,
       })

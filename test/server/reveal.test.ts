@@ -1,9 +1,10 @@
 // POST /api/reveal (a notification clicked, entrypoints/web-open.ts): open pages are told, over
-// their event stream, the session in a herdr pane.
-import { test } from 'bun:test'
+// their event stream, the session in a herdr pane; so is a page that connects right after.
+import { expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { REVEAL_MS, revealState } from '../../src/server/routes/reveal.ts'
 import { serveBoard } from '../support/board-server.ts'
 import { sandbox, until } from '../support/sandbox.ts'
 
@@ -62,7 +63,9 @@ test('a notification clicked: open pages are told the session in that pane; no s
     return { status: r.status, body: (await r.json()) as Record<string, unknown> }
   }
 
-  const page = await listen(url)
+  const pages = [await listen(url)]
+  const [page] = pages
+  if (!page) throw new Error('no page')
   try {
     assert.equal((await post({ pane: 'w1:p1' }, {})).status, 403)
     const r = await post({ pane: 'w1:p1' })
@@ -70,6 +73,17 @@ test('a notification clicked: open pages are told the session in that pane; no s
     assert.deepEqual([r.body.ok, r.body.key, r.body.pages], [true, key, 1])
     await until(() => reveals(page))
     assert.ok(page.heard.includes(`event: reveal\ndata: ${JSON.stringify({ key })}\n\n`))
+
+    // A page that connects right after (its window was minimized, and is raised now) hears it as
+    // it comes; one that comes later on its own does not.
+    const raised = await listen(url)
+    pages.push(raised)
+    assert.equal(reveals(raised), 1)
+    assert.ok(raised.heard.includes(`event: reveal\ndata: ${JSON.stringify({ key })}\n\n`))
+    const later = await listen(url)
+    pages.push(later)
+    assert.equal(reveals(later), 0)
+
     // By its key too.
     assert.equal((await post({ key })).status, 200)
     await until(() => reveals(page) === 2)
@@ -83,6 +97,19 @@ test('a notification clicked: open pages are told the session in that pane; no s
     assert.equal((await post({})).status, 404)
     assert.equal(reveals(page), 2)
   } finally {
-    page.close()
+    for (const p of pages) p.close()
   }
 }, 15_000)
+
+test('a page connecting is told the session asked for in the last 15 s, once', () => {
+  let now = 1_000_000
+  const state = revealState(() => now)
+  expect(state.greet()).toBe('')
+  state.asked('s1')
+  now += REVEAL_MS - 1
+  expect(state.greet()).toBe('event: reveal\ndata: {"key":"s1"}\n\n')
+  expect(state.greet()).toBe('')
+  state.asked('s2')
+  now += REVEAL_MS
+  expect(state.greet()).toBe('')
+})

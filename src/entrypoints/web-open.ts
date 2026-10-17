@@ -21,7 +21,7 @@ async function up(url: string): Promise<boolean> {
   }
 }
 
-type Revealed = { ok: true; key: string; pages: number } | { ok: false; error: string }
+type Revealed = { ok: true; key: string } | { ok: false; error: string }
 
 /** What the board said to /api/reveal, read as main read it: no answer at all is not ok. */
 function revealedOf(value: unknown): Revealed {
@@ -29,7 +29,7 @@ function revealedOf(value: unknown): Revealed {
     const error = isRecord(value) && typeof value.error === 'string' ? value.error : ''
     return { ok: false, error }
   }
-  return { ok: true, key: String(value.key), pages: Number(value.pages) || 0 }
+  return { ok: true, key: String(value.key) }
 }
 
 /** Ask the running board to show the session in a herdr pane. */
@@ -72,8 +72,9 @@ export async function openWeb(cfg: WebConfig = loadConfig(), options: WebOpenOpt
   if (options.pane) {
     const r = await reveal(url, options.pane)
     if (!r.ok) return { ok: false, missing: true, error: r.error || t('err.notRunning') }
-    // Open pages show the session now: their window only has to come up.
-    if (r.pages && (await win.raise())) return { ok: true, url, key: r.key }
+    // The board's window comes up and shows the session: a page in a minimized or covered
+    // window has no stream, so it may be told only as it connects again (server/routes/reveal.ts).
+    if (await win.raise()) return { ok: true, url, key: r.key }
     win.launch(`${url}#session=${encodeURIComponent(r.key)}`)
     return { ok: true, url }
   }

@@ -47,32 +47,27 @@ afterEach(() => {
   for (const stop of stops.splice(0)) stop()
 })
 
-test('open pages show the session: the window only comes up', async () => {
-  const board = standIn(200, { ok: true, key: 's1', pages: 1 })
-  stops.push(board.stop)
-  const { win, did } = fakeWindow(true)
-  const url = `http://127.0.0.1:${board.cfg.port}/`
-  expect(await openWeb(board.cfg, { pane: 'w1:p1', window: win })).toEqual({ ok: true, url, key: 's1' })
-  expect(did).toEqual(['raise'])
-  expect(board.asked).toHaveLength(1)
-  expect(board.asked[0]?.body).toEqual({ pane: 'w1:p1' })
-  expect(board.asked[0]?.headers['x-board']).toBe('1')
+test('the board’s window comes up and shows the session, a page in it open or asleep', async () => {
+  for (const pages of [1, 0]) {
+    const board = standIn(200, { ok: true, key: 's1', pages })
+    stops.push(board.stop)
+    const { win, did } = fakeWindow(true)
+    const url = `http://127.0.0.1:${board.cfg.port}/`
+    expect(await openWeb(board.cfg, { pane: 'w1:p1', window: win })).toEqual({ ok: true, url, key: 's1' })
+    expect(did).toEqual(['raise'])
+    expect(board.asked).toHaveLength(1)
+    expect(board.asked[0]?.body).toEqual({ pane: 'w1:p1' })
+    expect(board.asked[0]?.headers['x-board']).toBe('1')
+  }
 })
 
-test('no open page, or no window to raise: a new window opens on the session', async () => {
-  const none = standIn(200, { ok: true, key: 'a b', pages: 0 })
-  stops.push(none.stop)
-  const first = fakeWindow(true)
-  const url = `http://127.0.0.1:${none.cfg.port}/`
-  expect(await openWeb(none.cfg, { pane: 'p', window: first.win })).toEqual({ ok: true, url })
-  expect(first.did).toEqual([`launch ${url}#session=a%20b`])
-
-  const hidden = standIn(200, { ok: true, key: 's1', pages: 2 })
-  stops.push(hidden.stop)
-  const second = fakeWindow(false)
-  const at = `http://127.0.0.1:${hidden.cfg.port}/`
-  expect(await openWeb(hidden.cfg, { pane: 'p', window: second.win })).toEqual({ ok: true, url: at })
-  expect(second.did).toEqual(['raise', `launch ${at}#session=s1`])
+test('no board window to raise: a new window opens on the session', async () => {
+  const board = standIn(200, { ok: true, key: 'a b', pages: 0 })
+  stops.push(board.stop)
+  const { win, did } = fakeWindow(false)
+  const url = `http://127.0.0.1:${board.cfg.port}/`
+  expect(await openWeb(board.cfg, { pane: 'p', window: win })).toEqual({ ok: true, url })
+  expect(did).toEqual(['raise', `launch ${url}#session=a%20b`])
 })
 
 test('no session in that pane, or no board: nothing opens, and the caller is told (missing)', async () => {
