@@ -2,14 +2,13 @@
 // what they showed when the fold began — a new board from the server (its cancel route refreshes
 // before it answers) and the clock's redraw included — and draw again once the rows are gone.
 // Both ways, step by step: the old page's own cancelSchedule with its draws (render() drew
-// renderSchedule and the sheet's scheduleRow only while not `collapsing`; web/app.js at the parity
-// baseline) and the React page's desk drawn by <SchedulePanel> and <SheetCard>.
+// renderSchedule and the sheet's scheduleRow only while not `collapsing`; web/app.js with its own
+// when.js at the parity baseline) and the React page's desk drawn by <SchedulePanel> and <SheetCard>.
 import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { BoardPayload } from '../../src/core/payload.ts'
 import type { ScheduleEntry } from '../../src/core/schedule-rules.ts'
 import type { Translator } from '../../src/core/types.ts'
-import { capital, dayLabel, longWhen, shortWhen, span, timeOf } from '../../src/core/when-format.ts'
 import { SchedulePanel } from '../../web/src/components/schedule/SchedulePanel.tsx'
 import { SheetCard } from '../../web/src/components/sheet/SheetCard.tsx'
 import { postSchedule, type ScheduleShown } from '../../web/src/hooks/useSchedule.ts'
@@ -19,10 +18,12 @@ import { type Held, scheduleDesk } from '../../web/src/models/schedule-desk.ts'
 import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
 import { board, item, payload, renderInBoard } from './support/board.tsx'
 import { addButtonTypes, canonical, findAll, hasClass, type Node, parseHtml } from './support/markup.ts'
-import { oldCode, oldFunction } from './support/old-app.ts'
+import { OLD_WHEN, oldCode, oldFunction } from './support/old-app.ts'
 import { type Row, selectorIds, World, type WorldStep } from './support/schedule-world.ts'
 
 const MIN = 60_000
+/** A function of the baseline's when.js (the old side's own date texts). */
+const when = (name: string) => oldFunction(OLD_WHEN, name)
 // A Saturday morning on the local clock.
 const START = new Date(2026, 9, 17, 10, 0).getTime()
 const ITEMS = [item({ key: 'a', name: 'Alpha' }), item({ key: 'b', name: 'Beta' })]
@@ -112,12 +113,12 @@ async function oldDraws(steps: Step[]): Promise<Drawn[]> {
         schedBody: probe,
         appear() {},
         Date: Clock,
-        capital,
-        timeOf,
-        span,
-        dayLabel: (ms: number, tr: Translator) => dayLabel(ms, tr, now()),
-        shortWhen: (ms: number, tr: Translator) => shortWhen(ms, tr, now()),
-        longWhen: (ms: number, tr: Translator) => longWhen(ms, tr, now()),
+        capital: OLD_WHEN.get('capital'),
+        timeOf: OLD_WHEN.get('timeOf'),
+        span: OLD_WHEN.get('span'),
+        dayLabel: (ms: number, tr: Translator) => when('dayLabel')(ms, tr, now()),
+        shortWhen: (ms: number, tr: Translator) => when('shortWhen')(ms, tr, now()),
+        longWhen: (ms: number, tr: Translator) => when('longWhen')(ms, tr, now()),
       },
     )
     const call = (name: string, ...args: unknown[]) => oldFunction(code, name)(...args)

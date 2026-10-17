@@ -11,11 +11,10 @@ import { ICON_PATHS, type IconName, type PathInfo, type Preview } from '../../we
 import { type HistoryReply, quickLookNav } from '../../web/src/models/quick-look.ts'
 import { FakeWorld } from './support/fake-dom.ts'
 import { canonical, parseHtml, reactMarkup } from './support/markup.ts'
-
-const isIconName = (name: string): name is IconName => Object.hasOwn(ICON_PATHS, name)
-
 import { oldCode } from './support/old-app.ts'
 import { BothLooks, type FilesServer, NewLook, OldLook } from './support/old-files.tsx'
+
+const isIconName = (name: string): name is IconName => Object.hasOwn(ICON_PATHS, name)
 
 const en = translator('en')
 const ru = translator('ru')

@@ -1,7 +1,7 @@
 // The "new session" window both ways in a fake DOM (support/fake-dom.ts), for parity: the old
-// page's launch.js — initLaunch as it was at the parity baseline, with its own launch-model.js and
-// launch-drafts.js — and the React port: components/launch/launch-window.ts on the window
-// <LaunchDialogView> draws, drawn again after every event and frame the way React would
+// page's launch.js — initLaunch as it was at the parity baseline, with its own launch-model.js,
+// launch-drafts.js and modal-focus.js — and the React port: components/launch/launch-window.ts on
+// the window <LaunchDialogView> draws, drawn again after every event and frame the way React would
 // (support/react-commit.ts), its handlers React's own (support/react-events.ts). Both sides take
 // the same steps against the same fake server; snapshot() prints what a viewer could tell apart.
 import { createRef } from 'react'
@@ -18,7 +18,7 @@ import { modalFocusManager } from '../../../web/src/models/modal-focus.ts'
 import { reducedMotion, Spring } from '../../../web/src/models/spring.ts'
 import { box, type FakeElement, FakeWorld, type RectBox } from './fake-dom.ts'
 import { canonical, type Element, parseHtml, reactMarkup } from './markup.ts'
-import { oldCode, oldFunction } from './old-app.ts'
+import { oldCode, oldFunction, oldModule } from './old-app.ts'
 import { asDom, clone, commit, first } from './react-commit.ts'
 import { type Host, hostElements, listenLikeReact } from './react-events.ts'
 
@@ -324,6 +324,9 @@ const NAMES = [
   'defaultWorkspace',
 ]
 
+/** The baseline's modal-focus.js, which the old page made its dialogs' focus manager from. */
+const OLD_MODAL_FOCUS = await oldModule('web/modal-focus.js')
+
 /** What the old launch.js imported from its own launch-model.js and launch-drafts.js. */
 function oldImports(clock: { now: () => number }): Record<string, unknown> {
   return {
@@ -341,7 +344,7 @@ export function oldLaunch(world: FakeWorld, scene: LaunchScene, server: FakeServ
     ...oldImports(clock),
     reducedMotion,
     Spring,
-    modalFocus: modalFocusManager(world.document),
+    modalFocus: oldFunction(OLD_MODAL_FOCUS, 'modalFocusManager')(world.document),
     fetch: server.fetch,
     innerHeight: VIEWPORT.h,
     Date: clock,
