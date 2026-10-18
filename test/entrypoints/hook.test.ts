@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { BRIEF_VERSION, brief, waitReminder } from '../../src/core/brief.ts'
 import { normalizeConfig } from '../../src/core/categories.ts'
 import { useLanguage } from '../../src/core/lang.ts'
+import { promptOf } from '../../src/core/schedule-rules.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 import { notification } from '../support/task-notification.ts'
 
@@ -94,4 +95,14 @@ test('a task reporting back does not count as the user answering the session (ho
   const prompt = notification('Agent "Review" finished')
   await runHook(box, { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: box.dir, prompt })
   assert.equal(cardOf(box, 's1')?.ask, 'Send it?')
+})
+
+test("a call's results do not count as the user answering the session (hook)", async () => {
+  const box = await sandbox()
+  putCard(box, { key: 's1', ask: 'Deploy now?', askSince: 1, briefV: 99 })
+  const report =
+    '# Release 2.4 call · Oct 17 · 32 min\n\n- Decided: ship on Monday\n\nFull protocol: /tmp/meeting_1.summary.md'
+  const prompt = promptOf({ id: 'c1', key: 's1', kind: 'call', text: report, next: Date.now() }, Date.now())
+  await runHook(box, { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: box.dir, prompt })
+  assert.equal(cardOf(box, 's1')?.ask, 'Deploy now?')
 })

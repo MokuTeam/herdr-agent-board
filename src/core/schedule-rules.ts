@@ -2,6 +2,7 @@
 // when one is due, and which session an entry is for. Storage is src/adapters/schedule-store.ts, sending is
 // src/services/scheduler.ts.
 import { t } from './lang.ts'
+import { CALL_NOTE } from './notices.ts'
 import type { Item } from './types.ts'
 import { countRuns } from './when.ts'
 import { longWhen, span } from './when-format.ts'
@@ -9,6 +10,8 @@ import { longWhen, span } from './when-format.ts'
 // Enough for any real use; an agent stuck in a loop cannot fill the disk.
 export const MAX_PER_SESSION = 30
 export const MAX_TEXT = 2000
+// A call's results (kind 'call') are a short report, not a one-line reminder.
+export const MAX_REPORT = 16_000
 // Later than this, the prompt says by how much.
 const LATE_MS = 2 * 60_000
 
@@ -33,16 +36,18 @@ export type ScheduleEntry = {
   by?: string
   from?: SessionRef
   movedFrom?: SessionRef
+  /** 'call': a MokuPilot call's results (`board call-report`); a reminder without one. */
+  kind?: string
   [extra: string]: unknown
 }
 
 // The text is typed into a terminal: no control characters (an escape could drive the pane).
 // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it removes
 const CONTROL = /[\x00-\x08\x0b-\x1f\x7f]/g
-export const cleanText = (s: unknown): string =>
+export const cleanText = (s: unknown, max = MAX_TEXT): string =>
   String(s ?? '')
     .replace(CONTROL, '')
-    .slice(0, MAX_TEXT)
+    .slice(0, max)
 // A name goes into the prompt's tag: no brackets either.
 export const cleanName = (s: unknown): string =>
   String(s ?? '')
@@ -51,7 +56,11 @@ export const cleanName = (s: unknown): string =>
     .trim()
     .slice(0, 60)
 
-/** What the session gets: "[board reminder] text", with a note when it is late or stands for several runs. */
+/**
+ * What the session gets: "[board reminder] text", with a note when it is late or stands for
+ * several runs. A MokuPilot call's results (kind 'call') come as "[mokupilot call report]", the
+ * report on lines of its own, and a closing note that they are for its information.
+ */
 export function promptOf(entry: ScheduleEntry, now: number): string {
   const notes: string[] = []
   if (entry.cron) {
@@ -70,6 +79,8 @@ export function promptOf(entry: ScheduleEntry, now: number): string {
     )
   // The tag stays in English: the hook knows a board prompt by it (entrypoints/hook.ts).
   const from = setter ? ` from ${setter}` : ''
+  if (entry.kind === 'call')
+    return `[mokupilot call report${notes.length ? `; ${notes.join('; ')}` : ''}]\n${entry.text}\n\n${CALL_NOTE}`
   const tag = entry.cron ? `board schedule ${entry.id}${from}: ${entry.cron}` : `board reminder${from}`
   return `[${tag}${notes.length ? `; ${notes.join('; ')}` : ''}] ${entry.text}`
 }

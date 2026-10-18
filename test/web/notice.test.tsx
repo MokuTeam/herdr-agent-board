@@ -3,7 +3,8 @@
 // notice-model.js and the baseline's markdown.js, for the same turns.
 import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
-import { type Notice, reminderNotice, taskNotice } from '../../src/core/notices.ts'
+import { callNotice, type Notice, reminderNotice, taskNotice } from '../../src/core/notices.ts'
+import { promptOf } from '../../src/core/schedule-rules.ts'
 import type { ConversationTurn, NoticeTurn } from '../../src/core/transcript.ts'
 import type { Item } from '../../src/core/types.ts'
 import { Thread } from '../../web/src/components/sheet/Thread.tsx'
@@ -103,6 +104,43 @@ describe('notices in the conversation, markup parity with upstream', () => {
       // The space before a line's quieter part shows.
       expect(canonical(react, { spaces: true })).toBe(canonical(old, { spaces: true }))
     })
+
+  test('a MokuPilot call’s results: the phone mark, the title, the report as Markdown under it; late, the note', async () => {
+    const CALL_REPORT = 'bde9cfd'
+    const model = await oldModule('web/notice-model.js', CALL_REPORT)
+    const report =
+      '# Release 2.4 call · Oct 17 · 32 min\n\n- Decided: **ship** on Monday\n\nFull protocol: `/tmp/meeting_1.summary.md`'
+    const fresh = noticeTurn(
+      callNotice(promptOf({ id: 'c1', key: 's1', kind: 'call', text: report, next: AT }, AT)),
+      AT,
+    )
+    const late = noticeTurn(
+      callNotice(promptOf({ id: 'c2', key: 's1', kind: 'call', text: report, next: AT - 3 * 3600_000 }, AT)),
+      AT,
+    )
+    const bare = noticeTurn(callNotice('[mokupilot call report]'), AT)
+    for (const lang of ['en', 'ru'])
+      for (const m of [fresh, late, bare]) {
+        const t = translator(lang)
+        const code = oldCode(
+          'web/app.js',
+          ['ICON', 'esc', 'clock', 'notice'],
+          {
+            t,
+            markdown: OLD_MARKDOWN.get('markdown'),
+            noticeLine: model.get('noticeLine'),
+            findHelper: () => null,
+            state: { detail: null },
+          },
+          CALL_REPORT,
+        )
+        const old = parseHtml(`<div class="thread">${String(oldFunction(code, 'notice')(m, []))}</div>`)
+        const react = reactThread([m], lang)
+        expect(canonical(react)).toBe(canonical(old))
+        expect(canonical(react, { spaces: true })).toBe(canonical(old, { spaces: true }))
+      }
+    expect(canonical(reactThread([fresh], 'en'))).toContain('MokuPilot call results: Release 2.4 call')
+  })
 
   test('a task reporting twice at one time keeps both lines', () => {
     const twice = [

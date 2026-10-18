@@ -1,7 +1,7 @@
 // Turns that reach a session as a prompt but were not typed by a person: Claude Code's
 // <task-notification> when a background command, agent, monitor or workflow reports back, and
-// the board's own reminders (core/schedule-rules.ts promptOf). The detail view shows them as a
-// line of their own, and they never count as the user answering.
+// the board's own reminders and MokuPilot call results (core/schedule-rules.ts promptOf). The
+// detail view shows them as a line of their own, and they never count as the user answering.
 
 const DETAIL_LIMIT = 4000
 
@@ -64,10 +64,27 @@ export interface ReminderNotice {
   note: string
 }
 
-export type Notice = TaskNotice | ReminderNotice
+/** A MokuPilot call's results the board typed in (see callNotice). */
+export interface CallNotice {
+  kind: 'call'
+  status: 'event'
+  /** The report's title (its first line). */
+  name: string
+  note: string
+  /** The report, without the closing note. */
+  detail: string
+}
+
+export type Notice = TaskNotice | ReminderNotice | CallNotice
 
 /** A board reminder, not a background task. */
 export const isReminder = (n: Notice): n is ReminderNotice => n.kind === 'reminder' || n.kind === 'schedule'
+
+/** A MokuPilot call's results. */
+export const isCall = (n: Notice): n is CallNotice => n.kind === 'call'
+
+/** A background task reporting back: neither the board's reminder nor a call's results. */
+export const isTask = (n: Notice): n is TaskNotice => !isReminder(n) && !isCall(n)
 
 /**
  * A task notification as { kind, status, name, exit, summary, note, detail, file, id }, or null
@@ -144,5 +161,51 @@ export function reminderNotice(text: unknown): ReminderNotice | null {
   }
 }
 
-/** True for a prompt the user did not type: a task notification or a board reminder. */
-export const isNotice = (text: unknown): boolean => !!(taskNotice(text) || reminderNotice(text))
+/** A MokuPilot call's results by their title: the report's first line, without markdown's marks. */
+export const callTitle = (report: unknown): string =>
+  (
+    String(report ?? '')
+      .split('\n')
+      .find(l => l.trim()) ?? ''
+  )
+    .replace(/^[#>*\s-]+/, '')
+    .replace(/[*_`]+/g, '')
+    .trim()
+
+/**
+ * What follows a MokuPilot call's results in the session's prompt (core/schedule-rules.ts
+ * promptOf): they are for the agent's information, not an order. In English, like the tags: the
+ * agent reads it.
+ */
+export const CALL_NOTE =
+  'This is for your information: the results of a MokuPilot call the user held with a fork of this session. Take the decisions into account; do not start work on them unless the user asks.'
+// The report's own body is shown whole when the line opens; a cut copy only guards the page.
+const CALL_LIMIT = 20_000
+
+/**
+ * A MokuPilot call's results the board typed in (`board call-report`, core/schedule-rules.ts
+ * promptOf), "[mokupilot call report; notes]\n<report>\n\n<CALL_NOTE>", as { kind: 'call', status:
+ * 'event', name: the report's title (its first line), note, detail: the report without the note }.
+ * Null for anything else.
+ */
+export function callNotice(text: unknown): CallNotice | null {
+  const m = /^\[mokupilot call report\b((?:[^[\]]|\[[^\]]*\])*)\]\s*([\s\S]*)$/.exec(String(text ?? '').trim())
+  if (!m) return null
+  let body = (m[2] ?? '').trim()
+  if (body.endsWith(CALL_NOTE)) body = body.slice(0, -CALL_NOTE.length).trim()
+  const title = callTitle(body)
+  return {
+    kind: 'call',
+    status: 'event',
+    name: clip(title, 200),
+    note: clip((m[1] ?? '').replace(/^\s*;/, '').trim(), 300),
+    detail: clip(body, CALL_LIMIT),
+  }
+}
+
+/** A prompt the board typed in: a reminder or a call's results. */
+export const boardNotice = (text: unknown): ReminderNotice | CallNotice | null =>
+  reminderNotice(text) ?? callNotice(text)
+
+/** True for a prompt the user did not type: a task notification, a board reminder or a call's results. */
+export const isNotice = (text: unknown): boolean => !!(taskNotice(text) || boardNotice(text))

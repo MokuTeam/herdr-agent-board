@@ -1,7 +1,7 @@
 // Claude Code hooks (installed by the "install" action) that tell each session about the board.
 //   SessionStart (new, resume, clear, compact): the full brief, since the context is fresh.
 //   UserPromptSubmit: clears the card's `pin`, and its `ask` (the user answered) unless the prompt
-//   is a board reminder or a task notification (core/notices.ts); the brief once for sessions that were running before the
+//   is a board reminder, a MokuPilot call's results or a task notification (core/notices.ts); the brief once for sessions that were running before the
 //   install; after that a one-line reminder only while the card says it waits for something.
 // Only sessions in a herdr pane are briefed: `claude -p` runs and other terminals are not on the board.
 // Claude Code waits for it: an empty or broken input ends it at once, silently, with exit code 0.

@@ -12,7 +12,15 @@
 import { randomBytes } from 'node:crypto'
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { cleanName, cleanText, MAX_PER_SESSION, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
+import {
+  cleanName,
+  cleanText,
+  MAX_PER_SESSION,
+  MAX_REPORT,
+  MAX_TEXT,
+  type ScheduleEntry,
+  type SessionRef,
+} from '../core/schedule-rules.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
 import { scheduleDir } from './paths.ts'
 
@@ -72,7 +80,7 @@ export function addEntry(fields: NewEntry): ScheduleEntry {
   }
   const clean = {
     ...fields,
-    text: cleanText(fields.text),
+    text: cleanText(fields.text, fields.kind === 'call' ? MAX_REPORT : MAX_TEXT),
     name: cleanName(fields.name),
     ...(fields.from ? { from: { key: String(fields.from.key), name: cleanName(fields.from.name) } } : {}),
   }

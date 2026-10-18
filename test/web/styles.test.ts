@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { oldSource } from './support/old-app.ts'
 
 /** The newest upstream merge whose stylesheets are ported. */
-const STYLES_REF = '75e9c61'
+const STYLES_REF = 'bde9cfd'
 const SHEETS = ['app.css', 'menu.css', 'launch.css', 'questions.css', 'terminal.css', 'helpers.css']
 const ROOT = join(import.meta.dir, '..', '..')
 

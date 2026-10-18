@@ -2,7 +2,7 @@
 // the text, and why it was late, missed or dropped.
 import type { Item } from '../../../../src/core/types.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { type LogRecord, logView } from '../../models/schedule.ts'
+import { entryText, type LogRecord, logView } from '../../models/schedule.ts'
 import { CheckGlyph } from '../icons.tsx'
 
 export interface ScheduleLogProps {
@@ -23,7 +23,7 @@ export function ScheduleLog({ records, itemOf, now }: ScheduleLogProps) {
         </span>
         <span className="log-when">{view.when}</span>
         <span className="log-what">
-          <b>{view.name}</b> {r.text}
+          <b>{view.name}</b> {entryText(r, t)}
         </span>
         {view.note && <span className="log-note">{view.note}</span>}
       </div>

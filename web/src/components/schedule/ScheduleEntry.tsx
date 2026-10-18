@@ -4,7 +4,7 @@
 import { Fragment, type ReactNode } from 'react'
 import type { ScheduleEntry as Entry } from '../../../../src/core/schedule-rules.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import type { EntryView } from '../../models/schedule.ts'
+import { type EntryView, entryText } from '../../models/schedule.ts'
 import { classNames } from '../class-names.ts'
 import { RepeatGlyph } from '../icons.tsx'
 import { CancelButton, ModeButton } from './ScheduleButtons.tsx'
@@ -56,7 +56,7 @@ export function ScheduleEntry({ entry, view, time, ask, disabled, onCancel, onMo
         >
           {view.who.name}
         </button>
-        <div className="sched-text">{entry.text}</div>
+        <div className="sched-text">{entryText(entry, t)}</div>
         <div className="sched-stats">
           <ModeButton entry={entry} disabled={disabled} onMode={onMode} />
           {parts.length > 0 && (

@@ -1,6 +1,7 @@
 // The line a notice gets in the conversation (src/core/notices.ts): a background task reporting
-// back or a board reminder, shown small and apart from what the user typed.
-import { isReminder, type Notice } from '../../../src/core/notices.ts'
+// back, a board reminder or a MokuPilot call's results, shown small and apart from what the user
+// typed.
+import { isCall, isReminder, type Notice } from '../../../src/core/notices.ts'
 import type { Translator } from '../../../src/core/types.ts'
 
 export type NoticeTone = 'ok' | 'fail' | 'stop' | 'info'
@@ -19,6 +20,9 @@ export interface NoticeLine {
  * mark's color: ok | fail | stop | info.
  */
 export function noticeLine(n: Notice, t: Translator): NoticeLine {
+  // A MokuPilot call's results: its title; the report opens from the line.
+  if (isCall(n))
+    return { text: n.name ? `${t('notice.call')}: ${n.name}` : t('notice.call'), sub: n.note || '', tone: 'info' }
   if (isReminder(n)) {
     const sub = [n.from && t('notice.from', { name: n.from }), n.cron, n.note].filter(Boolean).join(' · ')
     return { text: `${t(`notice.${n.kind}`)}: ${n.name}`, sub, tone: 'info' }

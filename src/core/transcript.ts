@@ -3,7 +3,7 @@
 
 import { type FormQuestion, questionsOf } from './dialogs/question-form.ts'
 import { t } from './lang.ts'
-import { isNotice, isReminder, type Notice, reminderNotice, taskNotice } from './notices.ts'
+import { boardNotice, isNotice, type Notice, taskNotice } from './notices.ts'
 import { DEFAULT_PROMPT_FILTERS, type PromptFilter } from './prompt-filters.ts'
 import {
   type CallLinks,
@@ -278,8 +278,17 @@ export interface ConversationOptions {
 
 /** What tells one notice from another: the copy a queued notice leaves when it is sent again matches. */
 function noticeKey(n: Notice): string {
-  if (isReminder(n)) return JSON.stringify([n.kind, null, n.status, n.name, null, null, n.from, n.note])
-  return JSON.stringify([n.kind, n.id, n.status, n.name, n.summary, n.detail, null, n.note])
+  const field = (name: string): unknown => (name in n ? Reflect.get(n, name) : null)
+  return JSON.stringify([
+    n.kind,
+    field('id'),
+    n.status,
+    n.name,
+    field('summary'),
+    field('detail'),
+    field('from'),
+    n.note,
+  ])
 }
 
 /** The answers Claude Code recorded for a question form, in the order of its questions. */
@@ -297,8 +306,9 @@ function askAnswers(ask: readonly { question: string }[], result: unknown): stri
  * The last `limit` turns of a session for the detail view: the user's prompts, the agent's
  * texts and its tool calls in a line each (done = the call has a result). A question form
  * (AskUserQuestion) carries its questions and, once done, the answers: { ask, answers }, answers
- * null when it was closed without one. Background tasks reporting back and board reminders come
- * as { role: 'notice', ...taskNotice() or reminderNotice() } (core/notices.ts). A call that works
+ * null when it was closed without one. Background tasks reporting back, board reminders and
+ * MokuPilot call results come as { role: 'notice', ...taskNotice() or boardNotice() }
+ * (core/notices.ts). A call that works
  * with others carries what it is about, for a line of its own: `helper` (Agent: a subagent or a
  * fork, `id` once it started), `workflow`, `send` (SendMessage), `spawn` (spawn-agent started a
  * session). Another session's or a teammate's message is { role: 'peer', from, text }.
@@ -377,7 +387,7 @@ export function parseConversation(
       const task = a.commandMode === 'task-notification' ? taskNotice(a.prompt) : null
       if (task) notice(task, when)
       const text = a.commandMode === 'prompt' && rec(a.origin)?.kind !== 'peer' ? userText(a.prompt) : ''
-      const reminder = reminderNotice(text)
+      const reminder = boardNotice(text)
       const prev = items.at(-1)
       if (reminder) notice(reminder, when)
       else if (text && !(prev?.role === 'user' && prev.text === clip(text, 3000)))
@@ -418,7 +428,7 @@ export function parseConversation(
         if (!p) continue
         text = p.prompt
       }
-      const n = taskNotice(text) ?? reminderNotice(text)
+      const n = taskNotice(text) ?? boardNotice(text)
       if (n) notice(n, at)
       else if (text) items.push({ role: 'user', text: clip(text, 3000), at })
     } else if (Array.isArray(content)) {

@@ -356,3 +356,19 @@ describe('startScheduler', () => {
     assert.equal(read(box, 'fffff1'), null)
   })
 })
+
+test('a call report waits for a working session, then goes in as information; the log keeps its title', async () => {
+  const box = await sandbox()
+  herdrWith(box, 'working')
+  const text = '# Release 2.4 call\n\n- Decided: ship on Monday'
+  put(box, { id: 'dddd01', kind: 'call', idle: true, text, at: Date.now() - 1000, next: Date.now() - 1000 })
+  await scheduler(box)
+  await until(() => read(box, 'dddd01')?.pendingSince)
+  assert.deepEqual(prompts(box), [])
+  herdrWith(box, 'idle')
+  await until(() => prompts(box).length === 1 && runs(box).length === 1)
+  const [prompt = ''] = prompts(box)
+  assert.ok(prompt.startsWith(`[mokupilot call report]\n${text}\n\nThis is for your information`), prompt)
+  assert.deepEqual([runs(box)[0]?.result, runs(box)[0]?.kind, runs(box)[0]?.text], ['sent', 'call', 'Release 2.4 call'])
+  assert.equal(read(box, 'dddd01'), null)
+})

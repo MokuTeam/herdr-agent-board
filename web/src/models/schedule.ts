@@ -2,6 +2,7 @@
 // entries due and waiting for their session first, then by day, soonest first (the server sorts
 // them); each one's time, session, text, counts and why it waits; then what was sent or missed
 // lately. Times are against the board's clock `now`.
+import { callTitle } from '../../../src/core/notices.ts'
 import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
 import { capital, dayLabel, longWhen, shortWhen, span, timeOf } from '../../../src/core/when-format.ts'
@@ -100,6 +101,10 @@ export function entryView(
   }
 }
 
+/** What a schedule entry (or a line of the log) says, in a line: a MokuPilot call's results by their title. */
+export const entryText = (e: { kind?: unknown; text: string }, t: Translator): string =>
+  e.kind === 'call' ? `${t('notice.call')}: ${callTitle(e.text)}` : e.text
+
 // ---------------------------------------------------------------- the log of recent runs
 
 /** One line of the scheduler's log (src/services/scheduler.ts record), as the panel reads it. */
@@ -107,6 +112,8 @@ export interface LogRecord {
   key: string
   name: string
   text: string
+  /** 'call': a MokuPilot call's results (logged by their title); '' for a reminder. */
+  kind: string
   due: number
   at: number
   /** 'sent', 'missed' or 'dropped'. */
@@ -126,6 +133,7 @@ export function logRecords(log: unknown[]): LogRecord[] {
             key: text(r.key),
             name: text(r.name),
             text: text(r.text),
+            kind: text(r.kind),
             due: typeof r.due === 'number' ? r.due : Number.NaN,
             at: r.at,
             result: text(r.result),

@@ -3,13 +3,14 @@
 import { expect, test } from 'bun:test'
 import { STRINGS } from '../../src/core/i18n/strings.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
-import { type Notice, reminderNotice, taskNotice } from '../../src/core/notices.ts'
+import { callNotice, type Notice, reminderNotice, taskNotice } from '../../src/core/notices.ts'
+import { promptOf } from '../../src/core/schedule-rules.ts'
 import { noticeLine } from '../../web/src/models/notice.ts'
 import { type NotificationParts, notification } from '../support/task-notification.ts'
 import { oldSource } from './support/old-app.ts'
 
-/** The merge of upstream's subagents PR (#40), the newest that added a notice text ("Conversation"). */
-const SUBAGENTS = '0d33639'
+/** The merge of upstream's call-report PR (#45), the newest that added a notice text ("MokuPilot call results"). */
+const CALL_REPORT = 'bde9cfd'
 
 function task(summary: string, more?: NotificationParts): Notice {
   const n = taskNotice(notification(summary, more))
@@ -60,10 +61,30 @@ test("a notice line: its words and the tone of its mark, in the board's language
 
 test('the notice texts are upstream’s, in English and Russian', () => {
   // web/i18n.js at the merge: the English block first, then the Russian one.
-  const upstream = [...oldSource('web/i18n.js', SUBAGENTS).matchAll(/^\s+'(notice\.[^']+)': '([^']*)',$/gm)]
+  const upstream = [...oldSource('web/i18n.js', CALL_REPORT).matchAll(/^\s+'(notice\.[^']+)': '([^']*)',$/gm)]
   const half = upstream.length / 2
-  expect(half).toBe(17)
+  expect(half).toBe(18)
   const ours = (lang: 'en' | 'ru') => Object.entries(STRINGS[lang]).filter(([key]) => key.startsWith('notice.'))
   expect(ours('en')).toEqual(upstream.slice(0, half).map(m => [m[1] ?? '', m[2] ?? '']))
   expect(ours('ru')).toEqual(upstream.slice(half).map(m => [m[1] ?? '', m[2] ?? '']))
+})
+
+test("a MokuPilot call's results: their title, in the board's language; late, the note quietly", () => {
+  const report =
+    '# Release 2.4 call · Oct 17 · 32 min\n\n- Decided: ship on Monday\n\nFull protocol: /tmp/meeting_1.summary.md'
+  const n = callNotice(promptOf({ id: 'c1', key: 's1', kind: 'call', text: report, next: Date.now() }, Date.now()))
+  if (!n) throw new Error('not a call notice')
+  const en = translator('en')
+  const ru = translator('ru')
+  expect(noticeLine(n, en)).toEqual({
+    text: 'MokuPilot call results: Release 2.4 call · Oct 17 · 32 min',
+    sub: '',
+    tone: 'info',
+  })
+  expect(noticeLine(n, ru).text).toBe('Итоги звонка в MokuPilot: Release 2.4 call · Oct 17 · 32 min')
+  expect(noticeLine({ ...n, name: '', note: 'late' }, en)).toEqual({
+    text: 'MokuPilot call results',
+    sub: 'late',
+    tone: 'info',
+  })
 })

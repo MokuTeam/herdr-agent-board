@@ -3,7 +3,16 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { useLanguage } from '../../src/core/lang.ts'
-import { isNotice, reminderNotice, type TaskNotice, taskNotice } from '../../src/core/notices.ts'
+import {
+  boardNotice,
+  CALL_NOTE,
+  callNotice,
+  callTitle,
+  isNotice,
+  reminderNotice,
+  type TaskNotice,
+  taskNotice,
+} from '../../src/core/notices.ts'
 import { promptOf, type ScheduleEntry } from '../../src/core/schedule-rules.ts'
 import { type NoticeTurn, parseConversation, parseTranscriptTail } from '../../src/core/transcript.ts'
 import { notification } from '../support/task-notification.ts'
@@ -235,4 +244,54 @@ test('a task that reports again under the same id shows every report; an hourly 
     notices(parseConversation(lines)).map(n => ('detail' in n && n.detail) || n.name),
     ['line one', 'line two', 'LOGIN failure', 'LOGIN ok', 'check the queue', 'check the queue'],
   )
+})
+
+// A MokuPilot call's results (`board call-report`): the board's own prompt, a line that opens to the report.
+const REPORT =
+  '# Release 2.4 call · Oct 17 · 32 min\n\n- Decided: ship on Monday\n\nFull protocol: /tmp/meeting_1.summary.md'
+
+test("a call's results reach the session as information and show as their own line", () => {
+  const entry: ScheduleEntry = { id: 'c1', key: 's1', kind: 'call', idle: true, text: REPORT, next: Date.now() }
+  const prompt = promptOf(entry, Date.now())
+  assert.equal(prompt, `[mokupilot call report]\n${REPORT}\n\n${CALL_NOTE}`)
+  assert.match(CALL_NOTE, /for your information/)
+  assert.match(CALL_NOTE, /do not start work on them unless the user asks/)
+  const n = callNotice(prompt)
+  assert.deepEqual(n, {
+    kind: 'call',
+    status: 'event',
+    name: 'Release 2.4 call · Oct 17 · 32 min',
+    note: '',
+    detail: REPORT,
+  })
+  assert.ok(isNotice(prompt))
+  assert.deepEqual(boardNotice(prompt), n)
+  assert.equal(reminderNotice(prompt), null)
+  assert.equal(callNotice('[board reminder] x'), null)
+  assert.equal(callNotice('the [mokupilot call report] went out'), null)
+  // Late (the board was off): the tag says so, the line shows it quietly.
+  const late = callNotice(promptOf({ ...entry, next: Date.now() - 3 * 3600_000 }, Date.now()))
+  assert.match(late?.note ?? '', /3 h late/)
+  assert.equal(late?.detail, REPORT)
+  assert.equal(callTitle('\n\n**Звонок** _про_ `релиз`\nтекст'), 'Звонок про релиз')
+})
+
+test("in the conversation a call's results are a notice, not the user answering", () => {
+  const prompt = promptOf({ id: 'c1', key: 's1', kind: 'call', text: REPORT, next: Date.now() }, Date.now())
+  const lines = [
+    line({ type: 'user', message: { content: 'deploy it' }, timestamp: '2026-10-17T10:00:00Z' }),
+    line({ type: 'assistant', message: { content: [{ type: 'text', text: 'Shall I deploy now?' }] } }),
+    line({ type: 'user', message: { content: prompt }, timestamp: '2026-10-17T11:00:00Z' }),
+  ]
+  const conv = parseConversation(lines)
+  assert.deepEqual(
+    conv.map(c => c.role),
+    ['user', 'assistant', 'notice'],
+  )
+  const [call] = notices(conv)
+  assert.deepEqual(
+    [call?.kind, call?.name, call && 'detail' in call ? call.detail : ''],
+    ['call', 'Release 2.4 call · Oct 17 · 32 min', REPORT],
+  )
+  assert.equal(parseTranscriptTail(lines).replied, false)
 })

@@ -4,6 +4,7 @@ import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
 import { longWhen, shortWhen } from '../../../src/core/when-format.ts'
 import { attentionTime } from './attention.ts'
+import { entryText } from './schedule.ts'
 
 /** Markdown down to plain text, for one-glance card lines. */
 export const plain = (s: unknown): string =>
@@ -106,6 +107,10 @@ export function alarmOf(schedules: ScheduleEntry[], key: string, now: number, t:
   const list = schedules.filter(e => e.key === key)
   const first = list[0]
   if (!first) return null
-  const title = t('sched.badge', { n: list.length, when: longWhen(first.next, t, now), text: plain(first.text) })
+  const title = t('sched.badge', {
+    n: list.length,
+    when: longWhen(first.next, t, now),
+    text: plain(entryText(first, t)),
+  })
   return { due: first.next <= now, repeat: !!first.cron, when: shortWhen(first.next, t, now), title }
 }

@@ -107,3 +107,8 @@ test('target: the session by key, else the session now in its pane and folder', 
     undefined,
   )
 })
+
+test('entries from before kinds existed are reminders as ever', () => {
+  const at = Date.now()
+  assert.equal(promptOf({ id: 'eeee01', key: 's1', text: 'old one', next: at }, at), '[board reminder] old one')
+})

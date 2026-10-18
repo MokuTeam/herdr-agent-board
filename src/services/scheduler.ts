@@ -13,6 +13,7 @@
 import { type FSWatcher, mkdirSync, watch } from 'node:fs'
 import { scheduleDir } from '../adapters/paths.ts'
 import { getEntry, listEntries, logRun, removeEntry, updateEntry } from '../adapters/schedule-store.ts'
+import { callTitle } from '../core/notices.ts'
 import { promptOf, type ScheduleEntry, targetOf } from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
 import { nextRun } from '../core/when.ts'
@@ -156,11 +157,13 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
     }
   }
 
+  // A call's results go into the log by their title: the report itself is the session's now.
   const record = (entry: ScheduleEntry, at: number, result: string, why?: string): Record<string, unknown> => ({
     id: entry.id,
     key: entry.key,
     name: entry.name,
-    text: entry.text,
+    text: entry.kind === 'call' ? callTitle(entry.text) : entry.text,
+    ...(entry.kind && { kind: entry.kind }),
     cron: entry.cron,
     due: entry.next,
     at,

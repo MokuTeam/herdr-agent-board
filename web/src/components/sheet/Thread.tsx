@@ -6,7 +6,7 @@
 // file chips take up (data-path; components/sheet/Sheet.tsx hands them over after every draw).
 // The helpers window draws a helper's own conversation with it too.
 import type { ReactNode } from 'react'
-import { isReminder } from '../../../../src/core/notices.ts'
+import { isCall, isReminder, isTask } from '../../../../src/core/notices.ts'
 import type { ConversationTurn, NoticeTurn } from '../../../../src/core/transcript.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
@@ -15,7 +15,16 @@ import { noticeLine } from '../../models/notice.ts'
 import { clockText } from '../../models/sheet.ts'
 import { type AskTurn, askState, type ThreadPart, threadParts, uploadThumbs } from '../../models/thread.ts'
 import { classNames } from '../class-names.ts'
-import { AlarmGlyph, BoltGlyph, CheckGlyph, ChevGlyph, CrossGlyph, SpinGlyph, StopGlyph } from '../icons.tsx'
+import {
+  AlarmGlyph,
+  BoltGlyph,
+  CheckGlyph,
+  ChevGlyph,
+  CrossGlyph,
+  PhoneGlyph,
+  SpinGlyph,
+  StopGlyph,
+} from '../icons.tsx'
 import {
   LinkLine,
   NO_LINKS,
@@ -60,7 +69,8 @@ function keyOf(part: ThreadPart, n: number): string {
 }
 
 /** The key a notice with something to open is kept open by: a task can report several times under one id. */
-const noticeId = (m: NoticeTurn): string | null => (!isReminder(m) && m.detail ? `notice-${m.id}-${m.at}` : null)
+const noticeId = (m: NoticeTurn): string | null =>
+  !isReminder(m) && m.detail ? `notice-${isTask(m) ? m.id : undefined}-${m.at}` : null
 
 interface TurnProps {
   part: ThreadPart
@@ -150,8 +160,11 @@ function Notice({ turn: m, links }: { turn: NoticeTurn; links: ThreadLinks }) {
   const t = useT()
   const { text, sub, tone } = noticeLine(m, t)
   const reminder = isReminder(m)
-  const Mark = tone === 'info' ? (reminder ? AlarmGlyph : BoltGlyph) : MARKS[tone]
-  const task = reminder ? null : m
+  const call = isCall(m) ? m : null
+  const Mark = tone === 'info' ? (call ? PhoneGlyph : reminder ? AlarmGlyph : BoltGlyph) : MARKS[tone]
+  const task = isTask(m) ? m : null
+  // What opens from the line: an agent's report, a monitor's lines, a call's results.
+  const detail = task?.detail || call?.detail || ''
   const line: ReactNode = (
     <>
       <span className="notice-mark">
@@ -175,7 +188,7 @@ function Notice({ turn: m, links }: { turn: NoticeTurn; links: ThreadLinks }) {
       <span className="when">{clockText(m.at, t)}</span>
     </>
   )
-  if (!task?.detail) return <div className={`notice ${tone}`}>{line}</div>
+  if (!detail) return <div className={`notice ${tone}`}>{line}</div>
   return (
     <details className={`notice ${tone}`} data-i={noticeId(m) ?? undefined}>
       <summary>
@@ -183,12 +196,13 @@ function Notice({ turn: m, links }: { turn: NoticeTurn; links: ThreadLinks }) {
         <ChevGlyph />
       </summary>
       <div className="notice-body">
-        {/* An agent's report is markdown; a monitor's lines and a tool's result are kept as they came. */}
-        {task.kind === 'agent' || task.kind === 'workflow' ? (
+        {/* An agent's report and a call's results are markdown (its paths become file chips); a
+            monitor's lines and a tool's result are kept as they came. */}
+        {call || task?.kind === 'agent' || task?.kind === 'workflow' ? (
           // biome-ignore lint/security/noDangerouslySetInnerHtml: markdown() escapes every piece of text itself and makes only known tags
-          <div className="md" dangerouslySetInnerHTML={{ __html: markdown(task.detail) }} />
+          <div className="md" dangerouslySetInnerHTML={{ __html: markdown(detail) }} />
         ) : (
-          <pre>{task.detail}</pre>
+          <pre>{detail}</pre>
         )}
       </div>
     </details>

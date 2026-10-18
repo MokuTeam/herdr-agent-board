@@ -8,7 +8,8 @@
 // detail's `changed` (app.js:903) and syncAvailability's part for the sheet (app.js:175-195).
 // The page and renderSheetHead are those of MokuPilot's merge (upstream PR #44): the baseline's
 // with the sheet's Terminal button (#36), the facts under its name one span each and Wake's
-// tooltip (#43), and "Call in MokuPilot" (#44), nothing else.
+// tooltip (#43), and "Call in MokuPilot" (#44), nothing else. The reminders' row (scheduleRow) is
+// that of the call-report merge (#45): a call's results by their title.
 import { translator } from '../../../src/core/i18n/translator.ts'
 import type { BoardPayload } from '../../../src/core/payload.ts'
 import type { ColumnId, Item, Translator } from '../../../src/core/types.ts'
@@ -33,7 +34,7 @@ import {
   toggleAttr,
   toggleClass,
 } from './markup.ts'
-import { OLD_MARKDOWN, OLD_WHEN, oldCode, oldFunction } from './old-app.ts'
+import { OLD_MARKDOWN, OLD_WHEN, oldCode, oldFunction, oldModule } from './old-app.ts'
 
 /** The old page's state for one scene (app.js `state`, the composer's and the sheet's own). */
 export interface OldSheetScene {
@@ -66,6 +67,9 @@ type StyleRule = [string, string]
 
 /** Upstream's merge of MokuPilot calls (PR #44), which has the terminal's (#36) and the compact toolbar's (#43) in it. */
 const SHEET_MERGE = '75e9c61'
+/** Upstream's merge of MokuPilot call results (PR #45): the reminders' row says a call's by its title. */
+const CALL_REPORT = 'bde9cfd'
+const OLD_CALL = await oldModule('web/notice-model.js', CALL_REPORT)
 
 /** Just enough of an element for the old code's writes, onto a parsed node. */
 class FakeElement {
@@ -134,7 +138,6 @@ const pickedFromApp = [
   'syncSheetProperties',
   'renderDetailState',
   'renderSheetCard',
-  'scheduleRow',
   'renderSheetBody',
   'thread',
   'syncComposer',
@@ -223,7 +226,19 @@ export function oldSheet(scene: OldSheetScene): Element {
     capital: OLD_WHEN.get('capital'),
     longWhen: OLD_WHEN.get('longWhen'),
   }
+  // renderSheetBody's scheduleRow, #45's, over the baseline's helpers: bound once both are there.
+  let scheduleRow: (...args: unknown[]) => unknown = () => ''
+  deps.scheduleRow = (...args: unknown[]) => scheduleRow(...args)
   const baseline = oldCode('web/app.js', pickedFromApp, deps)
+  scheduleRow = oldFunction(
+    oldCode(
+      'web/app.js',
+      ['entryText', 'scheduleRow'],
+      { ...deps, ...Object.fromEntries(baseline), callTitle: OLD_CALL.get('callTitle') },
+      CALL_REPORT,
+    ),
+    'scheduleRow',
+  )
   // The head with the Terminal button's rule and the facts as spans, over the baseline's helpers.
   const head = oldCode('web/app.js', ['renderSheetHead'], { ...deps, ...Object.fromEntries(baseline) }, SHEET_MERGE)
   const code = new Map([...baseline, ...head])

@@ -17,6 +17,7 @@ import {
   questionLine,
 } from '../../web/src/models/card.ts'
 import { item } from './support/board.tsx'
+import { OLD_WHEN, oldCode, oldFunction, oldModule } from './support/old-app.ts'
 
 const t = translator('en')
 const NOW = 1_800_000_000_000
@@ -177,5 +178,38 @@ describe('alarmOf', () => {
     })
     expect(alarmOf([entry({ id: '1', key: 'a', next: NOW })], 'a', NOW, t)).toMatchObject({ due: true, repeat: false })
     expect(alarmOf([entry({ id: '1', key: 'a', next: NOW + 1 })], 'a', NOW, t)?.due).toBe(false)
+  })
+
+  test('a MokuPilot call’s results first: the title says them by their title, as upstream’s alarmBadge at #45', async () => {
+    const CALL_REPORT = 'bde9cfd'
+    const model = await oldModule('web/notice-model.js', CALL_REPORT)
+    const now = Date.now()
+    const schedules = [
+      entry({ id: 'c1', key: 'a', next: now + 5 * MIN, kind: 'call', text: '# Release **2.4** call\n\n- ship' }),
+      entry({ id: '2', key: 'a', next: now + 900 * MIN }),
+    ]
+    for (const lang of ['en', 'ru']) {
+      const tr = translator(lang)
+      const code = oldCode(
+        'web/app.js',
+        ['ICON', 'esc', 'plain', 'schedulesOf', 'overdue', 'entryText', 'alarmBadge'],
+        {
+          t: tr,
+          state: { data: { schedules } },
+          longWhen: OLD_WHEN.get('longWhen'),
+          shortWhen: OLD_WHEN.get('shortWhen'),
+          callTitle: model.get('callTitle'),
+        },
+        CALL_REPORT,
+      )
+      const badge = String(oldFunction(code, 'alarmBadge')({ key: 'a' }))
+      const title = /title="([^"]*)"/
+        .exec(badge)?.[1]
+        ?.replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&amp;/g, '&')
+      expect(alarmOf(schedules, 'a', now, tr)?.title).toBe(title)
+    }
+    expect(alarmOf(schedules, 'a', now, t)?.title).toContain('MokuPilot call results: Release 2.4 call')
   })
 })

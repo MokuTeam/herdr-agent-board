@@ -245,6 +245,19 @@ describe('session sheet markup parity', () => {
     same({ items: [working], open: 'a', schedules, armed: 's2' })
     same({ lang: 'ru', items: [working], open: 'a', schedules: schedules.slice(1, 3) })
     same({ items: [working], open: 'a', schedules, connected: false })
+    // A MokuPilot call's results on their way to the session: by their title.
+    const call: ScheduleEntry = {
+      id: 'c1',
+      key: 'a',
+      kind: 'call',
+      idle: true,
+      text: '# Release **call**\n\n- ship',
+      next: now,
+    }
+    const withCall = bothSheets({ items: [working], open: 'a', schedules: [call, ...schedules.slice(0, 2)] })
+    expect(withCall.react).toBe(withCall.old)
+    expect(withCall.react).toContain('MokuPilot call results: Release call')
+    same({ lang: 'ru', items: [working], open: 'a', schedules: [call] })
   })
 
   test('the message box: the draft, files uploading, uploaded and failed; a message on its way', () => {

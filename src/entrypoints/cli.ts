@@ -15,6 +15,10 @@
 //                            queued into a running turn
 //   board schedule [--all]   this session's entries (every session's)
 //   board unschedule <id|all>    removes an entry (all: every entry of this session)
+//   board call-report --session <id> --file <report.md>
+//                            a MokuPilot call's results (integrations/mokupilot.ts) for the
+//                            session it was a fork of: the board types them in once the session
+//                            is free, for its information, waking it if it sleeps
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync } from 'node:fs'
@@ -28,13 +32,14 @@ import { addEntry, listEntries, removeEntry } from '../adapters/schedule-store.t
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
 import { t } from '../core/lang.ts'
-import type { ScheduleEntry, SessionRef } from '../core/schedule-rules.ts'
+import { MAX_REPORT, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
+import type { Item } from '../core/types.ts'
 import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
 import { shortWhen } from '../core/when-format.ts'
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | schedule [--all] | unschedule <id|all> | doctor] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> | doctor] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -252,6 +257,7 @@ async function main(): Promise<void> {
       `ok · removed ${e.id} (${e.cron ? `every "${e.cron}"` : stamp(e.next)}${e.name ? `, ${e.name}` : ''}): ${clip(e.text)}`,
     )
   }
+  if (cmd === 'call-report') return callReport()
 
   const s = await resolveSession()
   const now = Date.now()
@@ -358,6 +364,61 @@ async function main(): Promise<void> {
   const cat = readCard(s.key)?.category
   const extra = cat && !cfg.categories.some(c => c.id === cat) ? ` (new lane "${categoryInfo(cfg, cat).title}")` : ''
   console.log(`ok · ${line(s.key, s.cwd)}${extra}`)
+}
+
+/**
+ * A MokuPilot call's results for the session it was a fork of (MokuPilot runs this once its
+ * protocol is ready, from outside any pane): queued as a schedule entry of kind 'call', due now
+ * and sent once the session is free, so it never cuts into a turn; a sleeping session is woken,
+ * and with no board running it goes out once one runs. The scheduler frames it as information
+ * (core/schedule-rules.ts promptOf), not as work to start.
+ */
+async function callReport(): Promise<void> {
+  const usage = 'usage: board call-report --session <Claude session id> --file <report.md>'
+  if (!target || !UUID.test(target)) throw new Error(`${usage}; the session id is a UUID`)
+  const session = target
+  const fi = rest.indexOf('--file')
+  const file = fi >= 0 ? (rest[fi + 1] ?? '') : ''
+  if (!file) throw new Error(usage)
+  let report: string
+  try {
+    report = readFileSync(file, 'utf8')
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException
+    throw new Error(`cannot read the report ${file}: ${e.code || e.message}`)
+  }
+  report = report
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n?/g, '\n')
+    .trim()
+  if (!report) throw new Error(`the report ${file} is empty`)
+  if (report.length > MAX_REPORT) {
+    const note = `\n\n[the report goes on; all of it: ${file}]`
+    report = `${report.slice(0, MAX_REPORT - note.length).trimEnd()}${note}`
+  }
+  // The board's own idea of the session, when herdr answers: its name for the schedule, and its
+  // pane and folder, which find it again after /clear.
+  let item: Item | null = null
+  try {
+    item = (await collect(deps)).find(i => i.key === session || i.session === session) ?? null
+  } catch {}
+  const name = item?.name ?? defaultClaudeHome().liveSessions().get(session)?.name ?? ''
+  const now = Date.now()
+  const e = addEntry({
+    key: item?.key ?? session,
+    name,
+    ...(item?.pane && { pane: item.pane }),
+    ...(item?.cwd && { cwd: item.cwd }),
+    kind: 'call',
+    idle: true,
+    text: report,
+    at: now,
+    next: now,
+    by: 'mokupilot',
+  })
+  console.log(
+    `ok · call report ${e.id} for ${name || session.slice(0, 8)}, typed in once the session is free · cancel: board unschedule ${e.id}${await schedulerNote()}`,
+  )
 }
 
 main().catch((err: unknown) => {

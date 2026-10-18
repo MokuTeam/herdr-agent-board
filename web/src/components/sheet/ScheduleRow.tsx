@@ -6,7 +6,7 @@ import type { ScheduleEntry } from '../../../../src/core/schedule-rules.ts'
 import { capital, longWhen } from '../../../../src/core/when-format.ts'
 import type { ScheduleShown } from '../../hooks/useSchedule.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { overdue } from '../../models/schedule.ts'
+import { entryText, overdue } from '../../models/schedule.ts'
 import type { Held } from '../../models/schedule-desk.ts'
 import { classNames } from '../class-names.ts'
 import { AlarmGlyph, RepeatGlyph } from '../icons.tsx'
@@ -48,8 +48,8 @@ export function ScheduleRow({ entries, now, disabled, armed, onCancel, onMode, o
               {e.cron ? <RepeatGlyph /> : <AlarmGlyph />}
               {capital(longWhen(e.next, t, now), t)}
             </span>
-            <span className="text" title={e.text}>
-              {e.text}
+            <span className="text" title={entryText(e, t)}>
+              {entryText(e, t)}
             </span>
             <ModeButton entry={e} short disabled={disabled} onMode={onMode} />
             <CancelButton entry={e} ask={armed === e.id} disabled={disabled} onCancel={onCancel} />

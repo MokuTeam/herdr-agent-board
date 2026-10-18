@@ -1,13 +1,18 @@
 // What web/app.js draws in #sched-body for one board, for the expected side of the schedule panel's
 // markup parity: renderSchedule with entryHTML, logHTML, pendingText, modeButton and cancelButton
-// picked out of web/app.js as it was at the parity baseline (support/old-app.ts), with its own
-// when.js, against a fixed clock. By hand: syncAvailability's part for the panel's buttons
+// picked out of web/app.js as it was at upstream's call-report merge (#45: the parity baseline's,
+// a call's results by their title; support/old-app.ts), with the baseline's when.js and #45's
+// notice-model.js, against a fixed clock. By hand: syncAvailability's part for the panel's buttons
 // (app.js:183).
 import { translator } from '../../../src/core/i18n/translator.ts'
 import type { BoardPayload } from '../../../src/core/payload.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import { addButtonTypes, findAll, hasClass, type Node, parseHtml, toggleAttr } from './markup.ts'
-import { OLD_WHEN, oldCode, oldFunction } from './old-app.ts'
+import { OLD_WHEN, oldCode, oldFunction, oldModule } from './old-app.ts'
+
+/** Upstream's merge of MokuPilot call results (PR #45). */
+const CALL_REPORT = 'bde9cfd'
+const OLD_CALL = await oldModule('web/notice-model.js', CALL_REPORT)
 
 /** A function of the baseline's when.js. */
 const when = (name: string) => oldFunction(OLD_WHEN, name)
@@ -31,6 +36,7 @@ const PICKED = [
   'catOf',
   'catInfo',
   'overdue',
+  'entryText',
   'cancelButton',
   'pendingText',
   'entryHTML',
@@ -49,22 +55,28 @@ export function oldScheduleBody(scene: OldScheduleScene): Node[] {
       return now
     }
   }
-  const code = oldCode('web/app.js', PICKED, {
-    t,
-    state: { data: scene.data, moved: scene.moved ?? new Map() },
-    schedPanel: { isOpen: true },
-    collapsing: 0,
-    schedBody: body,
-    armed: scene.armed ? { id: scene.armed } : null,
-    appear() {},
-    Date: Clock,
-    capital: OLD_WHEN.get('capital'),
-    timeOf: OLD_WHEN.get('timeOf'),
-    span: OLD_WHEN.get('span'),
-    dayLabel: (ms: number, tr: Translator) => when('dayLabel')(ms, tr, now),
-    shortWhen: (ms: number, tr: Translator) => when('shortWhen')(ms, tr, now),
-    longWhen: (ms: number, tr: Translator) => when('longWhen')(ms, tr, now),
-  })
+  const code = oldCode(
+    'web/app.js',
+    PICKED,
+    {
+      t,
+      callTitle: OLD_CALL.get('callTitle'),
+      state: { data: scene.data, moved: scene.moved ?? new Map() },
+      schedPanel: { isOpen: true },
+      collapsing: 0,
+      schedBody: body,
+      armed: scene.armed ? { id: scene.armed } : null,
+      appear() {},
+      Date: Clock,
+      capital: OLD_WHEN.get('capital'),
+      timeOf: OLD_WHEN.get('timeOf'),
+      span: OLD_WHEN.get('span'),
+      dayLabel: (ms: number, tr: Translator) => when('dayLabel')(ms, tr, now),
+      shortWhen: (ms: number, tr: Translator) => when('shortWhen')(ms, tr, now),
+      longWhen: (ms: number, tr: Translator) => when('longWhen')(ms, tr, now),
+    },
+    CALL_REPORT,
+  )
   oldFunction(code, 'renderSchedule')()
   const nodes = parseHtml(body.innerHTML)
   if (scene.canEdit === false)

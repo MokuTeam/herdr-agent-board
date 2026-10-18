@@ -158,3 +158,82 @@ test('board remind says nothing about the board when one with the scheduler answ
     await new Promise(resolve => board.close(resolve))
   }
 })
+
+// `board call-report`: MokuPilot hands a call's results back to the session it was a fork of.
+const SID = '0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e'
+
+test('board call-report queues the results for the session: now, once it is free, of kind call', async () => {
+  const box = await sandbox()
+  const file = join(box.dir, 'report.md')
+  const report =
+    '# Release 2.4 call · Oct 17 · 32 min\n\n- Decided: ship on Monday\n\nFull protocol: /tmp/meeting_1.summary.md'
+  writeFileSync(file, `\uFEFF${report.replace(/\n/g, '\r\n')}\r\n`)
+  // The board knows the session: its name, pane and folder go into the entry.
+  box.state({
+    'api snapshot': {
+      result: {
+        snapshot: {
+          panes: [
+            {
+              pane_id: 'p7',
+              agent: 'claude',
+              agent_session: { value: SID },
+              agent_status: 'idle',
+              cwd: box.dir,
+              terminal_title_stripped: 'Release',
+            },
+          ],
+          tabs: [],
+          workspaces: [],
+        },
+      },
+    },
+  })
+  const before = Date.now()
+  config(box)
+  // Run as MokuPilot runs it: outside any pane, herdr answered by the fake.
+  const r = await agentCli(box, ['call-report', '--session', SID, '--file', file])
+  assert.equal(r.code, 0, r.out)
+  assert.match(
+    r.out,
+    /^ok · call report ([0-9a-f]{6}) for Release, typed in once the session is free · cancel: board unschedule \1/,
+  )
+  const e = read(box, /call report ([0-9a-f]{6})/.exec(r.out)?.[1] ?? '')
+  assert.ok(e)
+  assert.deepEqual(
+    [e.key, e.kind, e.idle, e.by, e.pane, e.cwd, e.name, e.text],
+    [SID, 'call', true, 'mokupilot', 'p7', box.dir, 'Release', report],
+  )
+  assert.ok(e.next >= before && e.next <= Date.now())
+
+  // Without herdr (or the session gone from it) the entry is still kept, by the session's id.
+  const lone = await sandbox()
+  const f2 = join(lone.dir, 'r.md')
+  writeFileSync(f2, 'x'.repeat(20_000))
+  const long = await cli(lone, ['call-report', '--session', SID, '--file', f2])
+  assert.equal(long.code, 0, long.out)
+  const cut = read(lone, /call report ([0-9a-f]{6})/.exec(long.out)?.[1] ?? '')
+  assert.ok(cut)
+  assert.equal(cut.key, SID)
+  assert.ok(cut.text.length <= 16_000)
+  assert.ok(cut.text.endsWith(`[the report goes on; all of it: ${f2}]`))
+})
+
+test('board call-report refuses a bad session id and a missing or empty report', async () => {
+  const box = await sandbox()
+  const empty = join(box.dir, 'empty.md')
+  writeFileSync(empty, ' \n')
+  const fails: [string[], RegExp][] = [
+    [['call-report', '--file', empty], /usage: board call-report --session/],
+    [['call-report', '--session', 'Release', '--file', empty], /UUID/],
+    [['call-report', '--session', SID], /usage: board call-report/],
+    [['call-report', '--session', SID, '--file', join(box.dir, 'none.md')], /cannot read the report .*ENOENT/],
+    [['call-report', '--session', SID, '--file', empty], /is empty/],
+  ]
+  for (const [args, re] of fails) {
+    const r = await cli(box, args)
+    assert.equal(r.code, 1, r.out)
+    assert.match(r.out, re)
+  }
+  assert.equal(existsSync(dirOf(box)) ? readdirSync(dirOf(box)).filter(n => n.endsWith('.json')).length : 0, 0)
+})

@@ -132,6 +132,33 @@ describe('schedule panel markup parity', () => {
     same({ lang: 'ru' })
   })
 
+  test('a MokuPilot call’s results waiting for the session, and sent: by their title', () => {
+    const report = '# Release 2.4 **call** · Oct 17\n\n- Decided: ship on Monday'
+    const schedules: ScheduleEntry[] = [
+      { id: 'c1', key: 'a', kind: 'call', idle: true, text: report, next: NOW - MIN, pendingSince: NOW, why: 'busy' },
+      ...ENTRIES.slice(0, 2),
+    ]
+    // The scheduler logs a call by its title (services/scheduler.ts record).
+    const log = [
+      {
+        id: 'c0',
+        key: 'a',
+        name: 'Alpha',
+        text: 'Release 2.3 call',
+        kind: 'call',
+        due: NOW - HOUR,
+        at: NOW - HOUR,
+        result: 'sent',
+      },
+      ...LOG.slice(0, 2),
+    ]
+    same({ schedules, log })
+    same({ schedules, log, lang: 'ru' })
+    const { react } = sides({ schedules, log })
+    expect(canonical(react)).toContain('MokuPilot call results: Release 2.4 call · Oct 17')
+    expect(canonical(react)).toContain('MokuPilot call results: Release 2.3 call')
+  })
+
   test('one asking "Cancel?"; without the board the buttons do nothing', () => {
     same({ armed: 't2' })
     same({ armed: 'w4', canEdit: false })
@@ -180,7 +207,7 @@ describe('schedule rules', () => {
   test('log lines: the newest 15, those that are records of a run', () => {
     const lines = [null, 'text', [], { at: 'soon' }, { at: 5, result: 'sent', text: 7 }]
     expect(logRecords(lines)).toEqual([
-      { key: '', name: '', text: '', due: Number.NaN, at: 5, result: 'sent', why: '', n: undefined },
+      { key: '', name: '', text: '', kind: '', due: Number.NaN, at: 5, result: 'sent', why: '', n: undefined },
     ])
     const many = Array.from({ length: 20 }, (_, i) => ({ at: i, result: 'sent' }))
     expect(logRecords(many).map(r => r.at)).toEqual([...Array(15).keys()])
