@@ -37,6 +37,7 @@ import { useBoardContext } from '../state/BoardProvider.tsx'
 import { Store, useStore } from '../state/store.ts'
 import { useLatest } from './useLatest.ts'
 import { useModalFocus } from './useModalFocus.ts'
+import { measureFrom } from './useQuickLook.ts'
 import { useSessionActions } from './useSessionActions.ts'
 
 export interface TermRefs {
@@ -132,12 +133,6 @@ export interface TerminalEngine {
   stop(): void
 }
 
-interface From {
-  dx: number
-  dy: number
-  s: number
-}
-
 interface Closest {
   closest(selector: string): unknown
 }
@@ -152,21 +147,6 @@ function frameOf(m: Record<string, unknown>): LineDiff & { cols: number | null }
     keep: typeof m.keep === 'number' ? m.keep : 0,
     lines: Array.isArray(m.lines) ? m.lines.map(String) : [],
     cols: typeof m.cols === 'number' ? m.cols : null,
-  }
-}
-
-/** Where the window starts from: the button's centre and width, or a small drop when it is gone. */
-function measureFrom(win: HTMLElement, el: Element | null): From {
-  const saved = win.style.transform
-  win.style.transform = 'none'
-  const w = win.getBoundingClientRect()
-  win.style.transform = saved
-  const r = el?.isConnected ? el.getBoundingClientRect() : null
-  if (!r?.width || r.bottom < 0 || r.top > innerHeight) return { dx: 0, dy: 24, s: 0.94 }
-  return {
-    dx: r.left + r.width / 2 - (w.left + w.width / 2),
-    dy: r.top + r.height / 2 - (w.top + w.height / 2),
-    s: Math.max(0.06, Math.min(0.5, r.width / w.width)),
   }
 }
 
@@ -234,7 +214,8 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
     onUpdate: v => paint(v),
     onRest: v => v === 0 && finishClose(),
   })
-  let from: From = { dx: 0, dy: 24, s: 0.94 }
+  // Where it grows from: the button's centre and width, or a small drop when it is gone.
+  let from = { dx: 0, dy: 24, s: 0.94 }
   let origin: Element | null = null
   let openedAt = 0
   function paint(p: number): void {

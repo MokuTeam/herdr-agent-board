@@ -14,7 +14,14 @@ import { cardMenu } from '../../web/src/models/menu-model.ts'
 import { batchSize, footStatus, lineHtml, pasteOf, statePanel, termButton } from '../../web/src/models/terminal.ts'
 import { item } from './support/board.tsx'
 import { oldCode, oldFunction, oldModule, oldSource } from './support/old-app.ts'
-import { newTerminal, oldTerminal, TERMINAL_MERGE, type TermScene, type TermSide } from './support/terminal-sides.tsx'
+import {
+  newTerminal,
+  oldTerminal,
+  SCROLL_HEIGHT,
+  TERMINAL_MERGE,
+  type TermScene,
+  type TermSide,
+} from './support/terminal-sides.tsx'
 
 const ESC = '\x1b'
 const t = translator('en')
@@ -51,6 +58,7 @@ async function both(start: TermScene, steps: Step[], { phone = false } = {}): Pr
             `streams: ${JSON.stringify(side.server.streams.map(s => `${s.url}${s.closed ? ' (closed)' : ''}`))}`,
             `toasts: ${JSON.stringify(side.toasts)}`,
             `log: ${JSON.stringify(side.log)}`,
+            `outside: ${side.outside()}`,
           ].join('\n'),
         )
       }
@@ -101,10 +109,19 @@ describe('the terminal window, step by step, as upstream’s', () => {
       ['Enter', s => s.key({ key: 'Enter' })],
       ['typed text', s => s.input('insertText', 'ls -la')],
       ['Backspace by the field', s => s.input('deleteContentBackward')],
+      ['a word from an IME: the draft is not typed, the word is', s => s.compose('日本', 'にほん')],
       ['the screen moves on', s => s.message(frame(['a.txt', 'PS C:\\work\\probe> '], { drop: 1, keep: 1 }))],
+      ['the scroll the screen made, at the bottom', s => s.scroll(SCROLL_HEIGHT)],
+      ['scrolled up', s => s.scroll(400)],
+      ['more output: the view stays where it was', s => s.message(frame(['b.txt'], { drop: 0, keep: 3 }))],
+      ['scrolled back down', s => s.scroll(SCROLL_HEIGHT - 3)],
+      ['more output: the view follows it again', s => s.message(frame(['c.txt'], { drop: 0, keep: 4 }))],
       settled,
       ['a link in the output', s => s.click('link')],
       ['Ctrl+] gives the keys back', s => s.key({ key: ']', code: 'BracketRight', ctrlKey: true })],
+      ['some of the screen selected', s => s.select('a.txt')],
+      ['the click that selected it takes no keys', s => s.click('screen')],
+      ['nothing selected', s => s.select('')],
       ['a click on the screen takes them again', s => s.click('screen')],
       ['herdr does not answer', s => s.message({ t: 'error', why: 'timed out' })],
       ['it answers again', s => s.message(frame(['b.txt'], { drop: 0, keep: 3 }))],
@@ -126,13 +143,26 @@ describe('the terminal window, step by step, as upstream’s', () => {
       ['a click on the screen', s => s.click('screen')],
       ['Esc goes to Claude', s => s.key({ key: 'Escape' })],
       ['Ctrl+C with nothing selected', s => s.key({ key: 'c', code: 'KeyC', ctrlKey: true })],
+      ['Claude’s answer selected', s => s.select('Ready')],
+      ['Ctrl+C copies it: nothing goes to Claude', s => s.key({ key: 'c', code: 'KeyC', ctrlKey: true })],
+      [
+        'the clipboard says no',
+        s => {
+          s.browser.clipboardError = 'Write permission denied.'
+          return s.key({ key: 'c', code: 'KeyC', ctrlKey: true })
+        },
+      ],
+      ['nothing selected again', s => s.select('')],
       ['Shift+Tab', s => s.key({ key: 'Tab', shiftKey: true })],
       ['Ctrl+] leaves', s => s.key({ key: ']', code: 'BracketRight', ctrlKey: true })],
       ['Open in herdr: the session itself', s => s.click('herdr')],
       ['Esc now closes the window', s => s.windowKey({ key: 'Escape' })],
       ['folded away', s => s.wait(800)],
+      ['the page out of sight with the window closed: nothing', s => s.pageHidden(true)],
+      ['back in sight: still nothing', s => s.pageHidden(false)],
     ])
     expect(out.at(1)).toContain('Click the screen to type')
+    expect(out.find(step => step.startsWith('## Ctrl+C copies it'))).toContain('"clipboard Ready"')
     expect(out.at(-1)).toContain('open: false')
   }, 30_000)
 
@@ -151,12 +181,19 @@ describe('the terminal window, step by step, as upstream’s', () => {
     await both(scene({ canMutate: false }), [
       ['opened on the shell', s => s.open('s1')],
       settled,
+      ['out of sight with nothing to read', s => s.pageHidden(true)],
+      ['back in sight: still nothing to read', s => s.pageHidden(false)],
       ['to the agent', s => s.click('target-agent')],
       ['its screen', s => s.message(frame(CLAUDE))],
       ['a click on the screen takes no keys', s => s.click('screen')],
       ['back to the shell', s => s.click('target-shell')],
       ['the board can again', s => s.board({ canMutate: true })],
       ['Open a shell', s => s.click('state')],
+      [
+        'Ctrl+` closes the window, the keys elsewhere',
+        s => s.windowKey({ key: '`', code: 'Backquote', ctrlKey: true }),
+      ],
+      ['folded away', s => s.wait(800)],
     ])
   }, 30_000)
 
@@ -170,8 +207,11 @@ describe('the terminal window, step by step, as upstream’s', () => {
       ['two lines, Esc says no', s => s.paste('a\nb')],
       ['no', s => s.key({ key: 'Escape' })],
       ['too much', s => s.paste('x'.repeat(16_385))],
+      ['Ctrl+` in the field closes the window', s => s.key({ key: '`', code: 'Backquote', ctrlKey: true })],
+      ['folded away', s => s.wait(800)],
     ])
     expect(out.at(2)).toContain('Paste 4 lines? Each runs as if typed.')
+    expect(out.at(-1)).toContain('open: false')
   }, 30_000)
 
   test('keys that do not reach the terminal, a slow herdr, a stream that drops and one the server ends', async () => {
@@ -233,6 +273,9 @@ describe('the terminal window, step by step, as upstream’s', () => {
       ['gone from the board', s => s.board({ items: [] })],
       ['back', s => s.board({ items: [probe] })],
       ['live again', s => s.message(frame(PROMPT))],
+      ['the page out of sight: the stream goes', s => s.pageHidden(true)],
+      ['back in sight: it connects again', s => s.pageHidden(false)],
+      ['live once more', s => s.message(frame(PROMPT))],
     ])
   }, 30_000)
 
@@ -242,6 +285,8 @@ describe('the terminal window, step by step, as upstream’s', () => {
       [
         ['opened', s => s.open('s1')],
         ['live', s => s.message(frame(['PS> ']))],
+        ['the keyboard comes up: the window keeps above it', s => s.viewport(520)],
+        ['a keyboard that only fills the field', s => s.typeInto('pwd')],
         ['Esc from the row', s => s.click('key:esc')],
         ['⌃C from the row', s => s.click('key:ctrl+c')],
         ['without fresh data', s => s.board({ canMutate: false })],

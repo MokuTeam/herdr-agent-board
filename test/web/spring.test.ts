@@ -1,13 +1,21 @@
 // The springs and gesture helpers every motion of the board uses. The values are pinned from the
 // old web/spring.js (same constructor defaults, same integration steps).
-import { beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { project, reducedMotion, rubberband, Spring, velocityOf } from '../../web/src/models/spring.ts'
 
 // Bun has no animation frames: `to()` only asks for one; the tests step the springs themselves.
 // The id it gets back is 0, so the shared frame loop never waits on a frame that will not come
-// (test files after this one run their springs on a fake world's frames).
+// (test files after this one run their springs on a fake world's frames). The springs left
+// moving here are stopped, so none is stepped by those frames.
+const RAF = Object.getOwnPropertyDescriptor(globalThis, 'requestAnimationFrame')
+const left: Spring[] = []
 beforeAll(() => {
   globalThis.requestAnimationFrame = () => 0
+})
+afterAll(() => {
+  for (const spring of left) spring.stop()
+  if (RAF) Object.defineProperty(globalThis, 'requestAnimationFrame', RAF)
+  else Reflect.deleteProperty(globalThis, 'requestAnimationFrame')
 })
 
 /** Steps a spring at 60 fps until it rests; every value it went through. */
@@ -36,6 +44,7 @@ describe('Spring', () => {
 
   test('the same integration as before: stiffness, friction and the first frames', () => {
     const spring = new Spring({ value: 0, damping: 1, response: 0.35 })
+    left.push(spring)
     expect(spring.stiffness).toBeCloseTo(322.27279677026473, 10)
     expect(spring.friction).toBeCloseTo(35.90391604102621, 10)
     spring.to(10)
@@ -50,6 +59,7 @@ describe('Spring', () => {
 
   test('below 1 it bounces past the target', () => {
     const spring = new Spring({ value: 0, damping: 0.5, response: 0.35 })
+    left.push(spring)
     spring.to(100)
     expect(Math.max(...run(spring, 60))).toBeCloseTo(115.548063661892, 8)
   })

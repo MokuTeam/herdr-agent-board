@@ -9,7 +9,8 @@ export interface MarkdownOptions {
 }
 
 const ENTITIES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
-const esc = (s: unknown): string => String(s ?? '').replace(/[&<>"']/g, c => ENTITIES[c] ?? c)
+/** Text as markup that shows it as it is (the terminal's rows use it too). */
+export const esc = (s: unknown): string => String(s ?? '').replace(/[&<>"']/g, c => ENTITIES[c] ?? c)
 const ITEM = /^(\s*)([-*+•]|\d+[.)])\s+(.*)$/
 const FENCE = /^\s*(`{3,}|~{3,})\s*([\w+#.-]*)\s*$/
 const RULE = /^\s*([-*_])(?:\s*\1){2,}\s*$/

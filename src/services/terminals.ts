@@ -68,7 +68,7 @@ export function paneCols(layout: unknown, pane: string): number | null {
 export function tabLabel(name: unknown): string {
   const clean = String(name ?? '')
     // biome-ignore lint/suspicious/noControlCharactersInRegex: control and direction characters are what it removes
-    .replace(/[\x00-\x1f\x7f-\x9f‎‏‪-‮⁦-⁩]/g, '')
+    .replace(/[\x00-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
     .replace(/^[\s-]+/, '')
     .trim()
   return [...clean].slice(0, 40).join('') || 'shell'
@@ -309,10 +309,12 @@ export function createTerminals({
     )
     const root = isRecord(r) && isRecord(r.root_pane) ? r.root_pane : null
     if (!root || typeof root.pane_id !== 'string') throw new Error('herdr tab create: no pane in its answer')
-    const tabOf = isRecord(r) && isRecord(r.tab) ? r.tab.tab_id : undefined
+    const tab = (isRecord(r) && isRecord(r.tab) ? r.tab.tab_id : undefined) ?? root.tab_id
+    // Without its tab the board could neither tell the shell is still its own nor close the tab.
+    if (typeof tab !== 'string' || !tab) throw new Error('herdr tab create: no tab in its answer')
     const rec: ShellRecord = {
       pane: root.pane_id,
-      tab: String(tabOf ?? root.tab_id),
+      tab,
       terminal: root.terminal_id ?? null,
       workspace,
       cwd,

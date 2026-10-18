@@ -120,7 +120,7 @@ const flat = (s: unknown): string => norm(s).replace(/\s+/g, '')
 const wrapJoin = (text: string, line: string): string => norm(`${text} ${line}`)
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
-const UNSAFE_CHARS = /[\x00-\x1f\x7f-\x9f‪-‮⁦-⁩]+/g
+const UNSAFE_CHARS = /[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]+/g
 
 /**
  * An own answer as the terminal's one-line field takes it: no control characters (C0, C1), no

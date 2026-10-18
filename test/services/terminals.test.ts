@@ -1,6 +1,6 @@
 import { afterEach, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -208,7 +208,7 @@ test('a shell is not opened where there is no folder, and its label cannot pass 
   const r = await make().openShell({ ...item, cwd: join(item.cwd, 'missing') }, 'x')
   assert.deepEqual([r.ok, r.ok ? '' : r.error], [false, 'term.err.cwd'])
   assert.equal(tabLabel('--help me'), 'help me')
-  assert.equal(tabLabel('a\x1b[31mb‮'), 'a[31mb')
+  assert.equal(tabLabel('a\x1b[31mb\u202e'), 'a[31mb')
   assert.equal(tabLabel('  '), 'shell')
   assert.equal([...tabLabel('я'.repeat(80))].length, 40)
 })
@@ -509,4 +509,17 @@ test('fields of a shell the board does not know are kept when it writes the file
   await again.closeShell('nobody')
   await again.openShell({ ...item, key: 's2' }, 'y')
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).s1.futureField, 7)
+})
+
+test('a tab herdr gives no id for is not kept as a shell of the board’s', async () => {
+  const { h, file, item } = setup()
+  const herdr: Herdr = async (args, ms) => {
+    const r = await h.herdr(args, ms)
+    if (args[0] !== 'tab' || args[1] !== 'create') return r
+    return { root_pane: { pane_id: 'w1:p11', terminal_id: 'term-1' } }
+  }
+  const terms = createTerminals({ herdr, herdrText: h.herdrText, file, sleep: async () => {} })
+  await assert.rejects(terms.openShell(item, 'x'), /no tab in its answer/)
+  assert.deepEqual(terms.keys(), [])
+  assert.ok(!existsSync(file))
 })

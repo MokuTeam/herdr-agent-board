@@ -17,7 +17,7 @@ import { type TerminalEngine, type TermRefs, terminalEngine } from '../../../web
 import { I18nProvider } from '../../../web/src/i18n/I18nProvider.tsx'
 import { type FocusDocument, type FocusElement, modalFocusManager } from '../../../web/src/models/modal-focus.ts'
 import type { TermTarget } from '../../../web/src/models/terminal.ts'
-import { type EventFields, type FakeElement, FakeWorld } from './fake-dom.ts'
+import { type EventFields, type FakeElement, FakeTarget, FakeWorld } from './fake-dom.ts'
 import {
   addButtonTypes,
   canonical,
@@ -34,6 +34,19 @@ import { oldSource } from './old-app.ts'
 /** Upstream's merge of the terminal (PR #36). */
 export const TERMINAL_MERGE = '1a1b270'
 const OLD_FILES = ['terminal.js', 'modal-focus.js', 'spring.js', 'term-keys.js', 'term-model.js']
+/** How tall the screen's content is, in px (its own height reads as 0 here). */
+export const SCROLL_HEIGHT = 1000
+
+/** The browser's parts the window uses besides the DOM: the clipboard, and what it says to a write. */
+interface Browser {
+  /** The clipboard refuses a write with this message; '' takes it. */
+  clipboardError: string
+}
+
+/** The visual viewport: a phone's keyboard makes it shorter. */
+class FakeViewport extends FakeTarget {
+  height = 860
+}
 
 /** What the board knows: its sessions, the shells it opened, whether herdr's data is fresh. */
 export interface TermScene {
@@ -148,11 +161,26 @@ export interface TermSide {
   windowKey(fields: EventFields & { code?: string }): Promise<void>
   /** beforeinput on the field. */
   input(inputType: string, data?: string): Promise<void>
+  /** An IME's word: composed in the field (`draft` there meanwhile), then given as `data`. */
+  compose(data: string, draft?: string): Promise<void>
+  /** Text a phone keyboard put straight into the field, with no beforeinput to take it from. */
+  typeInto(value: string): Promise<void>
   paste(text: string): Promise<void>
+  /** `text` of the screen selected (its first row); '' selects nothing. */
+  select(text: string): Promise<void>
+  /** The page goes out of sight, or comes back. */
+  pageHidden(hidden: boolean): Promise<void>
+  /** The screen scrolled to `top` (of SCROLL_HEIGHT). */
+  scroll(top: number): Promise<void>
+  /** A phone's keyboard came up or went: the visual viewport is `height` tall. */
+  viewport(height: number): Promise<void>
+  browser: Browser
   /** Time goes by (timers, the spring). */
   wait(ms: number): Promise<void>
   /** The window as it reads now, its rows apart. */
   snapshot(): string
+  /** What the window set outside its markup: the screen's scroll, the layer's --term-vh, the field's text. */
+  outside(): string
   isOpen(): boolean
   dispose(): Promise<void>
 }
@@ -189,8 +217,15 @@ const settle = async (world: FakeWorld) => {
   }
 }
 
-/** The world's globals, and the browser's own the terminal uses: EventSource, fetch, the clock. */
-function install(world: FakeWorld, server: TermServer): () => void {
+/**
+ * The world's globals, and the browser's own the terminal uses: EventSource, fetch, the clock,
+ * the clipboard (what it took goes to `log`), the visual viewport.
+ */
+function install(
+  world: FakeWorld,
+  server: TermServer,
+  page: { log: string[]; browser: Browser; viewport: FakeViewport },
+): () => void {
   world.install()
   const saved = new Map<string, PropertyDescriptor | undefined>()
   const set = (name: string, value: unknown) => {
@@ -208,6 +243,15 @@ function install(world: FakeWorld, server: TermServer): () => void {
   )
   set('fetch', (url: unknown, init?: { body?: unknown }) => server.fetch(String(url), init))
   set('performance', { now: () => world.now })
+  const clipboard = {
+    async writeText(text: string) {
+      const { clipboardError } = page.browser
+      if (clipboardError) throw new DOMException(clipboardError, 'NotAllowedError')
+      page.log.push(`clipboard ${text}`)
+    },
+  }
+  set('navigator', { clipboard })
+  set('visualViewport', page.viewport)
   return () => {
     for (const [name, descriptor] of saved) {
       if (descriptor) Object.defineProperty(globalThis, name, descriptor)
@@ -220,13 +264,15 @@ function install(world: FakeWorld, server: TermServer): () => void {
 function baseSide(scene: TermScene, phone: boolean) {
   const world = new FakeWorld({ viewport: { w: 1280, h: 860 }, phone })
   const server = new TermServer()
-  const uninstall = install(world, server)
   const toasts: string[] = []
   const log: string[] = []
+  const browser: Browser = { clipboardError: '' }
+  const viewport = new FakeViewport()
+  const uninstall = install(world, server, { log, browser, viewport })
   const t: Translator = translator(scene.lang)
   const toast = (text: string, error = false) => void toasts.push(`${error ? '!' : ''}${text}`)
   const item = (key: string) => scene.items.find(i => i.key === key)
-  return { world, server, uninstall, toasts, log, t, toast, item }
+  return { world, server, uninstall, toasts, log, browser, viewport, t, toast, item }
 }
 
 /** Upstream's terminal.js at the terminal's merge, loaded fresh (its modules hold the world's globals). */
@@ -275,8 +321,13 @@ export async function oldTerminal(scene: TermScene, { phone = false } = {}): Pro
     scene,
     toasts,
     log,
+    browser: base.browser,
+    viewport: base.viewport,
     uninstall: base.uninstall,
     input,
+    layer: world.wrap(root),
+    scroller: el(e => hasClass(e, 'term-scroll')),
+    lines: el(e => hasClass(e, 'term-lines')),
     open: (key, target) => fnOf(api, 'open')(key, null, target),
     sync: () => fnOf(api, 'sync')(),
     isOpen: () => !!fnOf(api, 'isOpen')(),
@@ -371,12 +422,17 @@ export async function newTerminal(scene: TermScene, { phone = false } = {}): Pro
     scene,
     toasts,
     log,
+    browser: base.browser,
+    viewport: base.viewport,
     uninstall: () => {
       unmount()
       made.stop()
       base.uninstall()
     },
     input: el(e => hasClass(e, 'term-input')),
+    layer: el(e => hasClass(e, 'term')),
+    scroller: el(e => hasClass(e, 'term-scroll')),
+    lines,
     open: (key, target) => made.open(key, null, target),
     sync: () => made.boardChanged(),
     isOpen: made.isOpen,
@@ -455,8 +511,14 @@ interface SideParts {
   scene: TermScene
   toasts: string[]
   log: string[]
+  browser: Browser
+  viewport: FakeViewport
   uninstall(): void
   input: FakeElement
+  /** The window's layer, its scrolling screen and its rows: where the engine set what is not markup. */
+  layer: FakeElement
+  scroller: FakeElement
+  lines: FakeElement
   open(key: string, target?: TermTarget): void
   sync(): void
   isOpen(): boolean
@@ -468,7 +530,10 @@ interface SideParts {
 
 /** The steps, the same for both sides; the browser's focus and blur events where it would send them. */
 function sideOf(p: SideParts): TermSide {
-  const { world, server, input } = p
+  const { world, server, input, scroller } = p
+  // The screen's content has a height; its scroll starts at the top.
+  Object.defineProperty(scroller, 'scrollHeight', { value: SCROLL_HEIGHT, configurable: true })
+  Object.assign(scroller, { scrollTop: 0 })
   let focused = false
   const step = async () => {
     p.after()
@@ -531,15 +596,72 @@ function sideOf(p: SideParts): TermSide {
       await world.fire(input, 'beforeinput', { extra: { inputType, data: data ?? null } })
       await step()
     },
+    async compose(data, draft = data) {
+      // As a browser sends them: the draft lands in the field while composing, then the word.
+      await world.fire(input, 'compositionstart', { extra: { data: '' } })
+      input.value = draft
+      await world.fire(input, 'beforeinput', {
+        isComposing: true,
+        extra: { inputType: 'insertCompositionText', data: draft },
+      })
+      await world.fire(input, 'input', { isComposing: true })
+      await world.fire(input, 'compositionend', { extra: { data } })
+      await step()
+    },
+    async typeInto(value) {
+      input.value = value
+      await world.fire(input, 'input')
+      await step()
+    },
     async paste(text) {
       await world.fire(input, 'paste', { extra: { clipboardData: { getData: () => text } } })
       await step()
     },
+    async select(text) {
+      const none = {
+        isCollapsed: true,
+        rangeCount: 0,
+        getRangeAt: () => ({ intersectsNode: () => false }),
+        removeAllRanges() {},
+      }
+      const some = {
+        isCollapsed: false,
+        rangeCount: 1,
+        getRangeAt: () => ({ intersectsNode: () => true }),
+        removeAllRanges() {},
+        anchorNode: p.lines.querySelector('.tl') ?? p.lines,
+        toString: () => text,
+      }
+      world.selection = text ? some : none
+      await step()
+    },
+    async pageHidden(hidden) {
+      Object.assign(world.document, { hidden })
+      await world.fire(world.document, 'visibilitychange')
+      await step()
+    },
+    async scroll(top) {
+      Object.assign(scroller, { scrollTop: top })
+      await world.fire(scroller, 'scroll')
+      await step()
+    },
+    async viewport(height) {
+      p.viewport.height = height
+      await world.fire(p.viewport, 'resize')
+      await step()
+    },
+    browser: p.browser,
     async wait(ms) {
       for (let at = 0; at < ms; at += 16) await world.tick(16)
       await step()
     },
     snapshot: p.read,
+    outside: () =>
+      JSON.stringify({
+        scrollTop: Reflect.get(scroller, 'scrollTop'),
+        vh: p.layer.style['--term-vh'],
+        field: input.value,
+      }),
     isOpen: p.isOpen,
     async dispose() {
       // The springs share one frame loop: none may be left waiting on this world's frames.

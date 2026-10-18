@@ -6,6 +6,7 @@ import type { TermStep } from '../../../src/core/terminal/term-keys.ts'
 import { MAX_STEPS, MAX_TEXT } from '../../../src/core/terminal/term-keys.ts'
 import { parseLine, type TermRun, withLinks } from '../../../src/core/terminal/term-model.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
+import { esc } from './markdown.ts'
 
 export type TermTarget = 'agent' | 'shell'
 /** idle (never opened), connecting, starting (a shell being opened), live, none (no shell yet), gone, asleep, error. */
@@ -29,9 +30,6 @@ export const KEY_ROW: readonly { key: string; label: string; aria?: string }[] =
 ]
 /** Where the last used terminal is remembered (agent or shell). */
 export const TARGET_KEY = 'board.termTarget'
-
-const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
-const esc = (s: unknown): string => String(s ?? '').replace(/[&<>"']/g, c => HTML_ESCAPES[c] ?? c)
 
 /** One run of a line as markup: its colors as palette classes or inline colors, its attributes, its link. */
 export function runHtml(r: TermRun): string {

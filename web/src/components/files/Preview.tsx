@@ -94,7 +94,7 @@ function Code({ text, line }: { text: string; line: number | null }) {
       {codeLines(text).map((l, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: a file's lines in their order
         <div key={i} className={classNames('ql-ln', i + 1 === line && 'hit')} data-n={i + 1}>
-          {l || '​'}
+          {l || '\u200b'}
         </div>
       ))}
     </div>
