@@ -35,6 +35,13 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
    the check below. `~/.local/bin` must be on PATH. Run it again after the plugin moved or was
    updated, or Bun moved: the hooks and the commands point at the plugin's folder and run the Bun
    that ran the install action.
+
+   With more than one Claude profile (`CLAUDE_CONFIG_DIR` folders such as `~/.claude-work`) it
+   does the same in the `settings.json` of every profile the board shows, each with its own
+   backup; a hidden profile is left alone, and a shown one whose folder is gone is skipped, saying
+   so. One `settings.json` that does not parse stops it before anything is written. It never
+   touches credentials, `.claude.json` or anything else in a profile folder. A profile shown later
+   gets its hooks from the install action again, or from Install in the Profiles panel.
 2. **A key** (recommended), in herdr's `config.toml` (`%APPDATA%\herdr\config.toml` on Windows,
    `~/.config/herdr/config.toml` elsewhere), then `herdr server reload-config`. Without it the
    board opens with `herdr plugin action invoke agent-board.open`.
@@ -67,7 +74,8 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
 `board doctor` (or `herdr plugin action invoke agent-board.doctor`) says what is set up and what
 is not, what each missing piece costs and how to fix it: the commands (and whether PowerShell or
 Git Bash finds someone else's of that name first), the hooks and the status line (and whether they
-run this copy of the plugin), the key, herdr-wake, how new sessions start, MokuPilot, the notifications. The
+run this copy of the plugin; with more than one profile shown, in each, by its name), the key,
+herdr-wake, how new sessions start, MokuPilot, the notifications. The
 web board says it too, quietly: "Setup incomplete" in its toolbar while something the board needs
 does not work (see [Web board](#web-board)).
 

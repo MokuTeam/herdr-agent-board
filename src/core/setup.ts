@@ -91,6 +91,18 @@ export type LauncherFacts =
   | { kind: 'herdr'; agent: string }
   | { kind: 'builtin'; claude: string[] | null; error: string; program: ProgramFound | null }
 
+/** A shown Claude profile's settings.json (core/profiles.ts): its folder, and whether it is there. */
+export interface ProfileSettings {
+  id: string
+  title: string
+  dir: string
+  exists: boolean
+  settingsFile: string
+  /** settings.json parsed; null when there is none or it does not parse. */
+  settings: unknown
+  settingsError: string
+}
+
 /** Everything the checks look at (adapters/setup-facts.ts gatherFacts). */
 export interface SetupFacts {
   platform: string
@@ -101,10 +113,13 @@ export interface SetupFacts {
   path: string
   files: BoardFiles
   commands: { board?: CommandFinds; 'spawn-agent'?: CommandFinds }
+  /** The first shown profile's settings.json (~/.claude's with one profile). */
   settingsFile: string
   /** settings.json parsed; null when there is none or it does not parse. */
   settings: unknown
   settingsError: string
+  /** Every shown profile's settings.json, the first one's as above; with more than one, the hooks and the status line are checked in each. */
+  profiles?: ProfileSettings[]
   herdrConfigFile: string
   herdrConfig: string | null
   wakeUrl: string | null
@@ -210,34 +225,43 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
   }
   command('board', f.cli, 'error', t('setup.board.without'))
 
-  // Claude Code hooks: how sessions learn about the board.
+  // Claude Code hooks: how sessions learn about the board. With more than one profile shown, in
+  // each, by its name (ids hooks:<id>, statusline:<id>); with one, as before.
   const ours = ourCommands(f)
-  if (facts.settingsError) {
-    add(
-      'hooks',
-      'error',
-      t('setup.hooks.unreadable'),
-      `${facts.settingsFile}: ${facts.settingsError}`,
-      t('setup.hooks.unreadableFix'),
-    )
-  } else {
+  const settingsChecks = (
+    s: Pick<SetupFacts, 'settingsFile' | 'settings' | 'settingsError'>,
+    id: (check: string) => string = check => check,
+    named: (title: string) => string = title => title,
+  ): void => {
+    const own = (check: string, level: SetupLevel, title: string, detail = '', fix = '', code = ''): void =>
+      add(id(check), level, named(title), detail, fix, code)
+    if (s.settingsError) {
+      own(
+        'hooks',
+        'error',
+        t('setup.hooks.unreadable'),
+        `${s.settingsFile}: ${s.settingsError}`,
+        t('setup.hooks.unreadableFix'),
+      )
+      return
+    }
     const per = BOARD_EVENTS.map(event => {
-      const hooks = commandsOf(facts.settings, event).filter(c => ours.hook(c.command))
+      const hooks = commandsOf(s.settings, event).filter(c => ours.hook(c.command))
       const here = (c: { command: string }): boolean => normPath(c.command).includes(normPath(f.hook))
       return { event, here: hooks.some(here), other: hooks.find(c => !here(c))?.command }
     })
     const missing = per.filter(p => !p.here)
     if (!missing.length)
-      add(
+      own(
         'hooks',
         'ok',
         t('setup.hooks.ok'),
-        t('setup.hooks.okDetail', { events: BOARD_EVENTS.join(', '), file: facts.settingsFile }),
+        t('setup.hooks.okDetail', { events: BOARD_EVENTS.join(', '), file: s.settingsFile }),
       )
     else if (missing.every(p => p.other))
-      add('hooks', 'warn', t('setup.hooks.stale'), missing[0]?.other ?? '', t('setup.runInstall'), INSTALL)
+      own('hooks', 'warn', t('setup.hooks.stale'), missing[0]?.other ?? '', t('setup.runInstall'), INSTALL)
     else
-      add(
+      own(
         'hooks',
         'error',
         t('setup.hooks.missing', { events: missing.map(p => p.event).join(', ') }),
@@ -246,14 +270,26 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
         INSTALL,
       )
 
-    const line = statusLineCommand(facts.settings)
+    const line = statusLineCommand(s.settings)
     if (line && ours.line(line)) {
       if (normPath(line).includes(normPath(f.statusline)))
-        add('statusline', 'ok', t('setup.line.ok'), t('setup.line.okDetail'))
-      else add('statusline', 'warn', t('setup.line.stale'), line, t('setup.runInstall'), INSTALL)
-    } else if (line) add('statusline', 'ok', t('setup.line.own'), t('setup.line.ownDetail'))
-    else add('statusline', 'warn', t('setup.line.none'), t('setup.line.noneDetail'), t('setup.runInstall'), INSTALL)
+        own('statusline', 'ok', t('setup.line.ok'), t('setup.line.okDetail'))
+      else own('statusline', 'warn', t('setup.line.stale'), line, t('setup.runInstall'), INSTALL)
+    } else if (line) own('statusline', 'ok', t('setup.line.own'), t('setup.line.ownDetail'))
+    else own('statusline', 'warn', t('setup.line.none'), t('setup.line.noneDetail'), t('setup.runInstall'), INSTALL)
   }
+  const profiles = facts.profiles ?? []
+  if (profiles.length <= 1) settingsChecks(facts)
+  else
+    for (const p of profiles) {
+      if (!p.exists) add(`profile:${p.id}`, 'warn', t('setup.profile.missing', { profile: p.title, dir: p.dir }))
+      else
+        settingsChecks(
+          p,
+          check => `${check}:${p.id}`,
+          check => t('setup.inProfile', { profile: p.title, check }),
+        )
+    }
 
   command('spawn-agent', f.spawn, 'warn', t('setup.spawn.without'))
 

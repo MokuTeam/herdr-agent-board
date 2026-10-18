@@ -1,4 +1,4 @@
-import { describe, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -100,6 +100,59 @@ describe('gatherFacts', () => {
         program: { file: join(dir, 'pwsh.exe'), found: false },
         script: { file: script, found: false },
       })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('each shown profile’s settings.json, the first one’s at the top as before', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'board-setup-'))
+    try {
+      const home = join(dir, 'home')
+      const env = { PATH: join(dir, 'bin') }
+      const options = { root: ROOT_A, env, platform: 'win32', home }
+      const at = (name: string): string => join(home, name)
+      mkdirSync(at('.claude'), { recursive: true })
+      writeFileSync(join(at('.claude'), 'settings.json'), '{ "model": "x" }')
+      for (const name of ['.claude-work', '.claude-gamedev']) {
+        mkdirSync(at(name))
+        writeFileSync(join(at(name), 'settings.json'), '{ "hooks": ')
+      }
+      // One profile (the others found are hidden): what it was, one entry.
+      const one = await gatherFacts({ wakeUrl: null }, options)
+      expect(one.settingsFile).toBe(join(at('.claude'), 'settings.json'))
+      expect(one.settings).toEqual({ model: 'x' })
+      expect(one.profiles?.map(p => p.id)).toEqual(['default'])
+      // config.json shows work: its settings.json too; hidden gamedev is left out; a folder not there says so.
+      const profiles = [
+        { id: 'work', title: 'Work', dir: at('.claude-work'), hidden: false },
+        { id: 'gamedev', dir: at('.claude-gamedev'), hidden: true },
+        { id: 'old', dir: at('.claude-old') },
+      ]
+      const two = await gatherFacts({ wakeUrl: null, profiles }, options)
+      expect(two.profiles?.map(p => [p.id, p.title, p.exists, p.settingsError.replace(/ \(.*/, '')])).toEqual([
+        ['work', 'Work', true, 'not valid JSON'],
+        ['old', 'Old', false, ''],
+        ['default', 'Default', true, ''],
+      ])
+      expect(two.profiles?.[0]?.settingsFile).toBe(join(at('.claude-work'), 'settings.json'))
+      // The top-level fields are the first profile's.
+      expect(two.settingsFile).toBe(join(at('.claude-work'), 'settings.json'))
+      expect(two.settingsError).toMatch(/^not valid JSON/)
+      // Handed in: those, as they are.
+      const mine = { id: 'default', title: 'Private', dir: at('.claude'), color: 'indigo', hidden: false }
+      const given = await gatherFacts({ wakeUrl: null, profiles }, { ...options, profiles: [mine] })
+      expect(given.profiles).toEqual([
+        {
+          id: 'default',
+          title: 'Private',
+          dir: at('.claude'),
+          exists: true,
+          settingsFile: join(at('.claude'), 'settings.json'),
+          settings: { model: 'x' },
+          settingsError: '',
+        },
+      ])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

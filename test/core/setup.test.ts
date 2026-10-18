@@ -1,4 +1,4 @@
-import { describe, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { translator } from '../../src/core/i18n/translator.ts'
 import {
@@ -14,6 +14,7 @@ import {
   boardFiles,
   boardKey,
   checkSetup,
+  type ProfileSettings,
   report,
   type SetupCheck,
   type SetupFacts,
@@ -352,5 +353,83 @@ describe('doctor', () => {
     assert.equal(todo(ru).length, summary.todo)
     assert.notEqual(setupSummary(ru).sig, summary.sig)
     assert.deepEqual(setupSummary(checkSetup(facts({ settings: {} }))), summary)
+  })
+})
+
+describe('the checks per profile', () => {
+  const FACTS = facts()
+  const profile = (id: string, title: string, settings: unknown, exists = true): ProfileSettings => {
+    const dir = id === 'default' ? 'C:\\Users\\u\\.claude' : `C:\\Users\\u\\.claude-${id}`
+    return { id, title, dir, exists, settingsFile: `${dir}\\settings.json`, settings, settingsError: '' }
+  }
+  const one = profile('default', 'Default', FACTS.settings)
+  const privateOk = profile('default', 'Private', FACTS.settings)
+  const workWithoutHooks = profile('work', 'Work', {})
+
+  test('one profile: the same checks as before; two: hooks and status line per profile, by name', () => {
+    expect(checkSetup({ ...FACTS, profiles: [one] })).toEqual(checkSetup(FACTS))
+    expect(checkSetup({ ...FACTS, profiles: [] })).toEqual(checkSetup(FACTS))
+    const checks = checkSetup({ ...FACTS, profiles: [privateOk, workWithoutHooks] })
+    expect(checks.find(c => c.id === 'hooks:work')).toMatchObject({
+      level: 'error',
+      title: expect.stringMatching(/^Work: /),
+    })
+    expect(checks.find(c => c.id === 'hooks:default')?.level).toBe('ok')
+    // In today's place, profile after profile; the rest as before.
+    expect(checks.map(c => c.id)).toEqual([
+      'board',
+      'hooks:default',
+      'statusline:default',
+      'hooks:work',
+      'statusline:work',
+      'spawn-agent',
+      'key',
+      'wake',
+      'launch',
+      'mokupilot',
+      'toast',
+    ])
+    expect(checks.find(c => c.id === 'hooks:work')).toMatchObject({
+      title: 'Work: Claude Code hooks are missing: SessionStart, UserPromptSubmit',
+      code: 'herdr plugin action invoke agent-board.install',
+    })
+    expect(checks.find(c => c.id === 'hooks:default')).toMatchObject({
+      title: 'Private: Claude Code hooks',
+      detail: 'SessionStart, UserPromptSubmit in C:\\Users\\u\\.claude\\settings.json',
+    })
+    expect(checks.find(c => c.id === 'statusline:work')).toMatchObject({ level: 'warn', title: 'Work: No status line' })
+    expect(checks.find(c => c.id === 'statusline:default')).toMatchObject({
+      level: 'ok',
+      title: 'Private: Status line',
+    })
+    expect(setupSummary(checkSetup({ ...FACTS, profiles: [privateOk, workWithoutHooks] })).sig).toContain(
+      'hooks:work:error:Work: Claude Code hooks are missing',
+    )
+    // One that does not parse is said with its own file.
+    const broken = { ...workWithoutHooks, settings: null, settingsError: 'not valid JSON (position 1)' }
+    expect(checkSetup({ ...FACTS, profiles: [privateOk, broken] }).find(c => c.id === 'hooks:work')).toMatchObject({
+      level: 'error',
+      title: 'Work: Claude Code settings cannot be read',
+      detail: 'C:\\Users\\u\\.claude-work\\settings.json: not valid JSON (position 1)',
+    })
+    // In Russian: the profile's name, then the check.
+    const ru = checkSetup({ ...FACTS, profiles: [privateOk, workWithoutHooks] }, translator('ru'))
+    expect(ru.find(c => c.id === 'hooks:work')?.title).toBe(
+      'Work: Нет хуков Claude Code: SessionStart, UserPromptSubmit',
+    )
+  })
+
+  test('a shown profile whose folder is not there: a warning naming it, no hooks to look for', () => {
+    const gone = profile('work', 'Work', null, false)
+    const checks = checkSetup({ ...FACTS, profiles: [privateOk, gone] })
+    expect(checks.find(c => c.id === 'profile:work')).toMatchObject({
+      level: 'warn',
+      title: 'Work: its folder C:\\Users\\u\\.claude-work is not there',
+    })
+    expect(checks.some(c => c.id === 'hooks:work' || c.id === 'statusline:work')).toBe(false)
+    expect(todo(checks).map(c => c.id)).toEqual(['profile:work'])
+    expect(translator('ru')('setup.profile.missing', { profile: 'Work', dir: 'D:\\w' })).not.toBe(
+      'Work: its folder D:\\w is not there',
+    )
   })
 })

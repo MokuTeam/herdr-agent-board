@@ -16,6 +16,7 @@ import type { SetupFacts } from '../core/setup.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
+import { installProfile } from '../services/profiles.ts'
 import { startScheduler } from '../services/scheduler.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
@@ -134,7 +135,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     settingsRoute(),
     scheduleRoute(refresh),
     categoriesRoute(),
-    profilesRoute(),
+    profilesRoute(id => installProfile(deps, id)),
     ...launchRoutes(launches, board.items),
     terminalRoute({ cfg, terminals, find: board.find, publish: board.publish }),
     ...sessionRoutes({

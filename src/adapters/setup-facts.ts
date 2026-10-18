@@ -1,6 +1,6 @@
 // What the setup checks (core/setup.ts) look at, read from this computer: the commands on PATH,
-// Claude Code's settings.json, herdr's config.toml, herdr-wake, how new sessions start, and how
-// the board would start MokuPilot (core/mokupilot.ts).
+// Claude Code's settings.json in each shown profile, herdr's config.toml, herdr-wake, how new
+// sessions start, and how the board would start MokuPilot (core/mokupilot.ts).
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, posix, resolve, win32 } from 'node:path'
@@ -9,16 +9,20 @@ import { t } from '../core/lang.ts'
 import { isRefusedProgram, launcherLabel } from '../core/launch/launcher-command.ts'
 import { claudeCommand, shellLine } from '../core/launch/spawn-args.ts'
 import { type CommandPart, type MokupilotLauncher, placeholdersIn } from '../core/mokupilot.ts'
+import { defaultProfileDir, mergeProfiles, type Profile, shownProfiles } from '../core/profiles.ts'
 import {
   boardFiles,
   type CommandFinds,
   type CommandHit,
   type LauncherFacts,
+  type ProfileSettings,
   type ProgramFound,
   type SetupFacts,
 } from '../core/setup.ts'
 import type { Config } from '../core/types.ts'
+import { readSettings } from './hook-settings.ts'
 import { ROOT } from './paths.ts'
+import { findProfileDirs, inheritedProfileDir } from './profiles.ts'
 
 type Env = Record<string, string | undefined>
 
@@ -240,26 +244,39 @@ export interface GatherOptions {
   home?: string
   /** How long herdr-wake's /status may take before it counts as down. */
   probeMs?: number
+  /** The profiles whose settings.json is checked; by default the shown ones (config.json's, with the folders found). */
+  profiles?: Profile[]
 }
 
 /** Everything the checks look at, read from this computer. */
 export async function gatherFacts(
   cfg: Partial<Config> | null | undefined,
-  { root = ROOT, env = process.env, platform = process.platform, home = homedir(), probeMs }: GatherOptions = {},
+  {
+    root = ROOT,
+    env = process.env,
+    platform = process.platform,
+    home = homedir(),
+    probeMs,
+    profiles: given,
+  }: GatherOptions = {},
 ): Promise<SetupFacts> {
-  const settingsFile = join(home, '.claude', 'settings.json')
-  const settingsText = readText(settingsFile)
-  let settings: unknown = null
-  let settingsError = ''
-  if (settingsText !== null) {
-    try {
-      settings = JSON.parse(settingsText)
-    } catch (err) {
-      // Only where it broke: the parser's message may quote the file around it, and this goes to the page.
-      const at = /position \d+/.exec(err instanceof Error ? err.message : '')
-      settingsError = `not valid JSON${at ? ` (${at[0]})` : ''}`
-    }
+  const shown =
+    given ??
+    shownProfiles(mergeProfiles(cfg?.profiles, findProfileDirs(home), home, inheritedProfileDir(env, home)).list)
+  const settingsIn = (dir: string): Pick<ProfileSettings, 'settingsFile' | 'settings' | 'settingsError'> => {
+    const read = readSettings(dir)
+    return { settingsFile: read.file, settings: read.settings, settingsError: read.error }
   }
+  const profiles: ProfileSettings[] = shown.map(p => ({
+    id: p.id,
+    title: p.title,
+    dir: p.dir,
+    exists: isFolder(p.dir),
+    ...settingsIn(p.dir),
+  }))
+  // The first one's at the top, where the checks with one profile and the notification check read
+  // it (none shown, in a hand-edited config.json: ~/.claude's, as before).
+  const first = profiles[0] ?? settingsIn(defaultProfileDir(home))
   const configFile = herdrConfigFile(env, home)
   const wakeUrl = typeof cfg?.wakeUrl === 'string' && cfg.wakeUrl ? cfg.wakeUrl : null
   return {
@@ -273,9 +290,10 @@ export async function gatherFacts(
       board: findCommand('board', { env, platform }),
       'spawn-agent': findCommand('spawn-agent', { env, platform }),
     },
-    settingsFile,
-    settings,
-    settingsError,
+    settingsFile: first.settingsFile,
+    settings: first.settings,
+    settingsError: first.settingsError,
+    profiles,
     herdrConfigFile: configFile,
     herdrConfig: readText(configFile),
     wakeUrl,

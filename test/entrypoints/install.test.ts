@@ -1,6 +1,6 @@
-import { test } from 'bun:test'
+import { expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, sep } from 'node:path'
 import { planShims, quote } from '../../src/core/install-plan.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
@@ -162,6 +162,95 @@ test('install in a sandbox: the commands, the hooks once, a backup, and notifica
   assert.equal(broken.code, 1)
   assert.match(broken.out, /not valid JSON/)
   assert.equal(readFileSync(settingsFile, 'utf8'), '{ "hooks": ')
+}, 30_000)
+
+// ------------------------------------------------------------------ Claude profiles
+
+const read = (...parts: string[]): string => readFileSync(join(...parts), 'utf8')
+/** `text` as a regular expression that matches it as it is. */
+const literal = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const ours = (): unknown => ({
+  hooks: [{ type: 'command', command: `${quote(process.execPath)} ${quote(entry('hook.ts'))}`, timeout: 10 }],
+})
+
+/** The home's profile folders, each with this settings.json; config.json lists them as given (the rest shown). */
+function profilesIn(box: Sandbox, folders: Record<string, string | null>, hidden: string[] = []): string {
+  const home = homeOf(box)
+  const profiles = Object.entries(folders).map(([name, settings], i) => {
+    const dir = join(home, name)
+    if (settings !== null) {
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'settings.json'), settings)
+    }
+    const id = name === '.claude' ? 'default' : name.replace(/^\.claude-/, '')
+    const title = id === 'default' ? 'Private' : id.charAt(0).toUpperCase() + id.slice(1)
+    return { id, title, dir, color: ['indigo', 'teal', 'pink'][i], hidden: hidden.includes(id) }
+  })
+  boardConfig(box, { language: 'en', wakeUrl: '', profiles })
+  return home
+}
+
+test('install writes into every shown profile and touches no hidden one', async () => {
+  const box = await sandbox()
+  const before = `${JSON.stringify({ model: 'x' }, null, 2)}\n`
+  const home = profilesIn(box, { '.claude': before, '.claude-work': before, '.claude-gamedev': before }, ['gamedev'])
+  const { code, stdout, stderr } = await install(box)
+  expect(code).toBe(0)
+  expect(stderr).toBe('')
+  for (const p of ['.claude', '.claude-work']) {
+    expect(JSON.parse(read(home, p, 'settings.json')).hooks.SessionStart.at(-1)).toEqual(ours())
+    expect(read(home, p, 'settings.json.bak-agent-board')).toBe(before)
+    expect(stdout).toContain(
+      `hooks: SessionStart, UserPromptSubmit -> ${entry('hook.ts')} in ${join(home, p, 'settings.json')}\nstatus line: ${entry('statusline.ts')}\n`,
+    )
+  }
+  expect(read(home, '.claude-gamedev', 'settings.json')).toBe(before)
+  expect(readdirSync(join(home, '.claude-gamedev'))).toEqual(['settings.json'])
+  expect(readdirSync(join(home, '.claude-work')).sort()).toEqual(['settings.json', 'settings.json.bak-agent-board'])
+  // The commands once; the check after it per shown profile, by name, and not the hidden one.
+  expect(stdout.match(/^commands: /gm)).toHaveLength(1)
+  expect(stdout).toMatch(/^ok Private: Claude Code hooks · /m)
+  expect(stdout).toMatch(/^ok Work: Claude Code hooks · /m)
+  expect(stdout).toMatch(/^ok Work: Status line · /m)
+  expect(stdout).not.toContain('gamedev')
+  expect(stdout).not.toContain('Gamedev')
+}, 30_000)
+
+test('one shown profile’s settings.json that does not parse: nothing is written anywhere', async () => {
+  const box = await sandbox()
+  const before = `${JSON.stringify({ model: 'x' })}\n`
+  const home = profilesIn(box, { '.claude': before, '.claude-work': '{' })
+  const broken = await install(box)
+  expect(broken.code).toBe(1)
+  expect(broken.stdout).toContain(
+    `${join(home, '.claude-work', 'settings.json')} is not valid JSON: fix it, then run the install again. Nothing was changed.`,
+  )
+  const untouched = (): void => {
+    expect(read(home, '.claude', 'settings.json')).toBe(before)
+    expect(readdirSync(join(home, '.claude'))).toEqual(['settings.json'])
+    expect(readdirSync(join(home, '.claude-work'))).toEqual(['settings.json'])
+    expect(existsSync(join(home, '.local'))).toBe(false) // no commands either
+  }
+  untouched()
+  // One that is no JSON object: the same, the file named.
+  writeFileSync(join(home, '.claude-work', 'settings.json'), '[]')
+  const list = await install(box)
+  expect(list.code).toBe(1)
+  expect(list.stderr).toContain(`${join(home, '.claude-work', 'settings.json')}: settings.json is not a JSON object`)
+  expect(read(home, '.claude-work', 'settings.json')).toBe('[]')
+  untouched()
+}, 30_000)
+
+test('a shown profile whose folder is gone is skipped, saying so', async () => {
+  const box = await sandbox()
+  const home = profilesIn(box, { '.claude': '{}', '.claude-work': null })
+  const { code, stdout, stderr } = await install(box)
+  expect(code).toBe(0)
+  expect(stderr).toBe('')
+  expect(stdout).toContain(`skipped ${join(home, '.claude-work')}: the folder is not there\n`)
+  expect(existsSync(join(home, '.claude-work'))).toBe(false)
+  expect(JSON.parse(read(home, '.claude', 'settings.json')).hooks.SessionStart).toEqual([ours()])
+  expect(stdout).toMatch(new RegExp(`^!  Work: its folder ${literal(join(home, '.claude-work'))} is not there$`, 'm'))
 }, 30_000)
 
 // board.cmd under a Windows user name that is not ASCII: Bun itself lives under it (%USERPROFILE%\.bun).

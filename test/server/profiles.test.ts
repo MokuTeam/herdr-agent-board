@@ -1,10 +1,11 @@
 // The Claude profiles on the web board's server: the folders found at its start, the Profiles
 // panel's edits, and each session's records read from its own profile.
 import { expect, test } from 'bun:test'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { quote } from '../../src/core/install-plan.ts'
 import { serveBoard } from '../support/board-server.ts'
-import { type Sandbox, sandbox, until } from '../support/sandbox.ts'
+import { root, type Sandbox, sandbox, until } from '../support/sandbox.ts'
 
 /** The sandbox's config.json, where the board keeps its settings. */
 const configOf = (box: Sandbox): string =>
@@ -163,3 +164,63 @@ test('items carry their profile; records come from that profile; hidden ones kee
   const hidden = (await board(Date.now())).items
   expect(byKey(hidden, 's1')).toMatchObject({ profile: 'work', name: 'Work one', title: 'Invoices' })
 }, 30_000)
+
+test('Install from the board writes a shown profile’s hooks and refuses a hidden one', async () => {
+  const box = await boardWith({
+    '.claude': 'settings.json',
+    '.claude-work': 'settings.json',
+    '.claude-gamedev': 'settings.json',
+  })
+  const home = join(box.dir, 'home')
+  const dir = (name: string): string => join(home, name)
+  const profiles = [
+    { id: 'default', title: 'Private', dir: dir('.claude'), color: 'indigo', hidden: false },
+    { id: 'work', title: 'Work', dir: dir('.claude-work'), color: 'teal', hidden: false },
+    { id: 'gamedev', title: 'Gamedev', dir: dir('.claude-gamedev'), color: 'pink', hidden: true },
+    { id: 'old', title: 'Old', dir: dir('.claude-old'), color: 'brown', hidden: false },
+  ]
+  const { url } = await serveBoard(box, { language: 'en', profiles })
+  const post = (body: unknown, headers: Record<string, string> = { 'x-board': '1' }) =>
+    fetch(`${url}/api/profiles`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    })
+  const ours = {
+    hooks: [
+      {
+        type: 'command',
+        command: `${quote(process.execPath)} ${quote(join(root, 'src', 'entrypoints', 'hook.ts'))}`,
+        timeout: 10,
+      },
+    ],
+  }
+
+  const installed = await post({ op: 'install', id: 'work' })
+  expect(installed.status).toBe(200)
+  expect(await installed.json()).toEqual({ ok: true })
+  const work = JSON.parse(readFileSync(join(dir('.claude-work'), 'settings.json'), 'utf8'))
+  expect(work.hooks.SessionStart.at(-1)).toEqual(ours)
+  expect(work.hooks.UserPromptSubmit).toEqual([ours])
+  expect(readFileSync(join(dir('.claude-work'), 'settings.json.bak-agent-board'), 'utf8')).toBe('{}')
+  // Only that profile's folder.
+  expect(readdirSync(dir('.claude'))).toEqual(['settings.json'])
+
+  const hidden = await post({ op: 'install', id: 'gamedev' })
+  expect(hidden.status).toBe(409)
+  expect(await hidden.json()).toEqual({
+    ok: false,
+    error: 'Show Gamedev first: the board installs only into shown profiles',
+  })
+  expect(readdirSync(dir('.claude-gamedev'))).toEqual(['settings.json'])
+  expect(readFileSync(join(dir('.claude-gamedev'), 'settings.json'), 'utf8')).toBe('{}')
+
+  const gone = await post({ op: 'install', id: 'old' })
+  expect(gone.status).toBe(409)
+  expect(await gone.json()).toEqual({ ok: false, error: `There is no folder ${dir('.claude-old')}` })
+  expect(existsSync(dir('.claude-old'))).toBe(false)
+  const unknown = await post({ op: 'install', id: 'nope' })
+  expect(await unknown.json()).toEqual({ ok: false, error: 'No profile “nope”' })
+  expect((await post({ op: 'install', id: 'default' }, {})).status).toBe(403)
+  expect(readdirSync(dir('.claude'))).toEqual(['settings.json'])
+}, 20_000)

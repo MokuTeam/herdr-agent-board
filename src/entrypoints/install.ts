@@ -1,8 +1,10 @@
 // The "install" action: puts the `board` and `spawn-agent` commands on PATH (~/.local/bin, a sh
 // script for Git Bash, Linux and macOS and a .cmd for PowerShell), registers the SessionStart /
-// UserPromptSubmit hooks and the status line in ~/.claude/settings.json, then says what else is
-// set up and what is not (core/setup.ts). Idempotent; replaces its own earlier entries and keeps
-// a backup of settings.json next to it. Run it again after moving or updating the plugin or Bun:
+// UserPromptSubmit hooks and the status line in the settings.json of every shown Claude profile
+// (~/.claude, and each CLAUDE_CONFIG_DIR folder the board shows; a hidden one is left alone), then
+// says what else is set up and what is not (core/setup.ts). Idempotent; replaces its own earlier
+// entries and keeps a backup of each settings.json next to it. A settings.json that does not parse
+// stops it before anything is written. Run it again after moving or updating the plugin or Bun:
 // the hooks, the status line and the shims run the Bun that ran this (an absolute path, no PATH
 // lookup).
 //
@@ -10,15 +12,17 @@
 //   bun src/entrypoints/install.ts --toast      also Windows notifications with the agent's words
 //                                               (the "notifications" action)
 //   bun src/entrypoints/install.ts --no-toast   and without them
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { defaultClaudeHome } from '../adapters/claude-home.ts'
 import { loadConfig } from '../adapters/config-file.ts'
+import { installInto, readSettings } from '../adapters/hook-settings.ts'
 import { ROOT } from '../adapters/paths.ts'
+import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { gatherFacts, herdrConfigFile, readText } from '../adapters/setup-facts.ts'
 import { type InstallPaths, planSettings, planShims } from '../core/install-plan.ts'
 import { t } from '../core/lang.ts'
+import { DEFAULT_PROFILE, shownProfiles } from '../core/profiles.ts'
 import { boardFiles, checkSetup, report, tomlValue } from '../core/setup.ts'
 
 const args = process.argv.slice(2)
@@ -32,10 +36,17 @@ if (toast && process.platform !== 'win32') {
   toast = undefined
 }
 
-const claudeDir = defaultClaudeHome().root
-const settingsFile = join(claudeDir, 'settings.json')
 const paths: InstallPaths = { bun: process.execPath, ...boardFiles(ROOT), binDir: join(homedir(), '.local', 'bin') }
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+const isFolder = (path: string): boolean => {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+// The shown profiles: config.json's with the folders found, the one this env points to shown too.
+const profiles = shownProfiles(loadProfiles({ shownDir: inheritedProfileDir() }))
 
 function installShims(): void {
   mkdirSync(paths.binDir, { recursive: true })
@@ -51,33 +62,47 @@ function installShims(): void {
   console.log(`commands: board, spawn-agent in ${paths.binDir} (+ .cmd for PowerShell)`)
 }
 
-// A settings.json that does not parse, or is not an object, is left alone, and so is everything else.
-const text = readText(settingsFile)
-let before: unknown
-try {
-  if (text !== null) before = JSON.parse(text)
-} catch {
-  console.log(`${settingsFile} is not valid JSON: fix it, then run the install again. Nothing was changed.`)
-  process.exit(1)
+// Every profile's settings.json first: one that does not parse, or is not an object, stops the
+// install before anything is written anywhere; that file and everything else stay as they were.
+for (const profile of profiles) {
+  const read = readSettings(profile.dir)
+  if (read.error) {
+    console.log(`${read.file} is not valid JSON: fix it, then run the install again. Nothing was changed.`)
+    process.exit(1)
+  }
+  try {
+    planSettings(read.text === null ? undefined : read.settings, paths, { toast })
+  } catch (err) {
+    console.error(`agent-board install: ${profiles.length > 1 ? `${read.file}: ` : ''}${messageOf(err)}`)
+    process.exit(1)
+  }
 }
 
 try {
-  const plan = planSettings(before, paths, { toast })
   installShims()
-  // --- hooks, status line, notifications
-  if (text !== null) copyFileSync(settingsFile, `${settingsFile}.bak-agent-board`)
-  mkdirSync(claudeDir, { recursive: true })
-  writeFileSync(settingsFile, `${JSON.stringify(plan.settings, null, 2)}\n`)
-  console.log(`hooks: SessionStart, UserPromptSubmit -> ${paths.hook} in ${settingsFile}`)
-  console.log(plan.statusLineSet ? `status line: ${paths.statusline}` : 'status line: left as it was (not ours)')
+  // --- hooks, status line, notifications: per profile; the default folder is made when it is not there
+  let toastOn = false
+  for (const profile of profiles) {
+    const create = profile.id === DEFAULT_PROFILE
+    if (!create && !isFolder(profile.dir)) {
+      console.log(`skipped ${profile.dir}: the folder is not there`)
+      continue
+    }
+    const out = installInto(profile.dir, paths, { toast, create })
+    if (!out.ok) throw new Error(out.error)
+    console.log(`hooks: SessionStart, UserPromptSubmit -> ${paths.hook} in ${out.file}`)
+    console.log(out.statusLineSet ? `status line: ${paths.statusline}` : 'status line: left as it was (not ours)')
+    if (process.platform === 'win32')
+      console.log(
+        out.toast
+          ? `desktop notifications: on (Stop, Notification, PreToolUse AskUserQuestion -> ${paths.toast})`
+          : 'desktop notifications: off',
+      )
+    toastOn ||= out.toast
+  }
   if (process.platform === 'win32') {
-    console.log(
-      plan.toast
-        ? `desktop notifications: on (Stop, Notification, PreToolUse AskUserQuestion -> ${paths.toast})`
-        : 'desktop notifications: off',
-    )
     const delivery = tomlValue(readText(herdrConfigFile()), 'ui.toast', 'delivery') ?? 'off'
-    if (plan.toast && delivery !== 'off')
+    if (toastOn && delivery !== 'off')
       console.log(
         `  herdr shows its own too: set [ui.toast] delivery = "off" in ${herdrConfigFile()}, then herdr server reload-config`,
       )
