@@ -36,6 +36,12 @@ export interface Card {
   dismissed?: string
   name?: string
   updatedAt?: number
+  /** The id of the profile its hooks reported (absent when the folder is no known profile). */
+  profile?: string
+  /** Its Claude config folder as the hooks resolved it. */
+  profileDir?: string
+  /** The profile a start asked for (the board's launch or spawn-agent). */
+  profileWant?: string
   [extra: string]: unknown
 }
 
@@ -44,6 +50,8 @@ export interface Category {
   title?: string
   color: string
   paths: string[]
+  /** The lane's usual profile. */
+  profile?: string
 }
 
 export interface LaunchSpec {
@@ -178,5 +186,13 @@ export interface Item {
   since?: number | null
   pipe?: string
   transcript?: string | null
+  /** Its known profile's id (core/profiles.ts sessionProfile); null when not known. */
+  profile?: string | null
+  /** The folder it reported when no profile has it ("unknown profile"). */
+  profileFolder?: string
+  /** The id a start asked for, when it reports another ("wrong profile"). */
+  profileWanted?: string
+  /** The Claude folder its records were read from (server only). */
+  claudeRoot?: string | null
   [extra: string]: unknown
 }
