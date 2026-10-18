@@ -2,7 +2,7 @@
 // ran for it, as their own files say (adapters/helpers.ts reads them). Pure: the start and the end
 // of a helper's transcript, how it stands, what it is, what a card shows of them.
 
-import { toolDetail, toolLabel } from './transcript.ts'
+import { saidIn, toolDetail, toolLabel } from './transcript.ts'
 import { promptOf } from './transcript-links.ts'
 
 type Rec = Record<string, unknown>
@@ -29,17 +29,6 @@ function textOf(content: unknown): string {
         .map(b => rec(b)?.text)
         .join('\n')
     : ''
-}
-
-/**
- * What a block of a message says, as the terminal shows it: the text, and the short updates
- * Claude Code keeps in thinking blocks when the entry has thinkingDisplay "updates". The same rule
- * as the session's own (upstream claude.mjs saidIn, from the thinking-updates change).
- */
-function saidIn(entry: Rec, block: Rec): string {
-  if (block.type === 'text') return str(block.text).trim()
-  if (block.type === 'thinking' && entry.thinkingDisplay === 'updates') return str(block.thinking).trim()
-  return ''
 }
 
 export type HelperKind = 'agent' | 'fork' | 'workflow' | 'teammate'

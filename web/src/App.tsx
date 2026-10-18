@@ -32,6 +32,7 @@ import { useRenameInPlace } from './hooks/useRenameInPlace.ts'
 import { useReveal } from './hooks/useReveal.ts'
 import { useSchedule } from './hooks/useSchedule.ts'
 import { useTerminal } from './hooks/useTerminal.ts'
+import { pageLayers } from './models/lifecycle.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
 
 export function App() {
@@ -93,23 +94,25 @@ export function App() {
     pickOption: questions.pickOption,
     openTerminal: terminal.openTerminal,
   })
-  // Layers above the board, topmost first: Back on a phone closes them one at a time (the quick
-  // look a step at a time).
-  useDialogHistory([
-    { open: menus.open, close: () => menus.menu.close() },
-    { open: launch.shown, close: launch.close },
-    { open: quickLook.open, close: quickLook.back },
-    { open: terminal.open, close: terminal.close },
-    { open: helpers.open, close: helpers.back },
-    {
-      open: ui.limitsOpen,
-      close: () => {
-        dispatch({ type: 'limits', open: false })
-        limitsAnchor.current?.focus({ preventScroll: true })
+  // Layers above the board, topmost first (models/lifecycle.ts PAGE_LAYERS): Back on a phone
+  // closes them one at a time (the quick look and the helpers window a step at a time).
+  useDialogHistory(
+    pageLayers({
+      menu: { open: menus.open, close: () => menus.menu.close() },
+      launch: { open: launch.shown, close: launch.close },
+      files: { open: quickLook.open, close: quickLook.back },
+      terminal: { open: terminal.open, close: terminal.close },
+      helpers: { open: helpers.open, close: helpers.back },
+      limits: {
+        open: ui.limitsOpen,
+        close: () => {
+          dispatch({ type: 'limits', open: false })
+          limitsAnchor.current?.focus({ preventScroll: true })
+        },
       },
-    },
-    { open: panels.open, close: panels.closeOpen },
-  ])
+      panels: { open: panels.open, close: panels.closeOpen },
+    }),
+  )
   // A card kept in sight while the board makes room for a panel stays below the toolbar.
   useEffect(() => {
     panels.place.boardTop = () => document.querySelector('.toolbar')?.getBoundingClientRect().bottom ?? 0

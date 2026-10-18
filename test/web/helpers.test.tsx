@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, setSystemTime, test } from 'bun:
 import type { ReactNode } from 'react'
 import type { PublicHelper, WorkflowRun } from '../../src/core/helpers.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
+import { taskNotice } from '../../src/core/notices.ts'
 import type { ConversationTurn } from '../../src/core/transcript.ts'
 import type { Item } from '../../src/core/types.ts'
 import { isSessionDetail } from '../../web/src/api/client.ts'
@@ -19,8 +20,9 @@ import { Thread } from '../../web/src/components/sheet/Thread.tsx'
 import type { HelperRef, HelpersView } from '../../web/src/hooks/useHelpers.ts'
 import { visibleItems } from '../../web/src/models/board-view.ts'
 import { summaryParts } from '../../web/src/models/toolbar.ts'
+import { type NotificationParts, notification } from '../support/task-notification.ts'
 import { board, item, payload, renderInBoard } from './support/board.tsx'
-import { addButtonTypes, canonical, type Node, parseHtml } from './support/markup.ts'
+import { addButtonTypes, canonical, findAll, hasClass, type Node, parseHtml } from './support/markup.ts'
 import { oldApp, oldWindow, tickClocks } from './support/old-helpers.ts'
 
 // A whole second: the running clocks on both sides read the same.
@@ -97,7 +99,7 @@ const HELPERS: PublicHelper[] = [
 ]
 const RUNS: WorkflowRun[] = [
   run('wf_1', { status: 'running', name: 'probe-parallel', agents: 1, startedAt: NOW - 120 * S }),
-  run('wf_0', { status: 'done', tokens: 52000, summary: 'Audit of every screen', agents: 2 }),
+  run('wf_0', { status: 'done', tokens: 52000, summary: 'Audit of every screen', agents: 2, taskId: 'tw0' }),
   run('wf_x', { status: 'stopped', name: '' }),
 ]
 
@@ -273,10 +275,18 @@ const peer = (more: Partial<Extract<ConversationTurn, { role: 'peer' }>>): Conve
   ...more,
 })
 
+/** A background task reporting back (core/notices.ts), as the thread gets it. */
+const notice = (summary: string, at: number, more: NotificationParts): ConversationTurn => {
+  const n = taskNotice(notification(summary, more))
+  if (!n) throw new Error(`not a task notice: ${summary}`)
+  return { role: 'notice', ...n, at }
+}
+
 describe('the thread', () => {
   const session = item({ key: 'k', name: 'Here', column: 'work', status: 'working', pane: 'w:p9' })
   const items = [...ITEMS, session, item({ key: 'spawned', name: 'case-43', autoName: 'case-43', pane: 'wP:p3' })]
-  const thread = (conversation: ConversationTurn[], ctx: { helper?: PublicHelper; key?: string } = {}) => {
+  /** Both sides of the thread, the same; the React side's markup. */
+  const drawn = (conversation: ConversationTurn[], ctx: { helper?: PublicHelper; key?: string } = {}) => {
     const app = oldApp({ items, detail: { helpers: HELPERS, workflows: RUNS } })
     const old = oldNodes(String(app.thread(conversation, session, ctx)))
     const react = inBoard(
@@ -289,6 +299,10 @@ describe('the thread', () => {
       items,
     )
     same(old, react, true)
+    return react
+  }
+  const thread = (conversation: ConversationTurn[], ctx: { helper?: PublicHelper; key?: string } = {}) => {
+    drawn(conversation, ctx)
   }
 
   test('a helper it started: its status and clock when known, else what the call says', () =>
@@ -337,6 +351,24 @@ describe('the thread', () => {
       peer({ from: '' }),
       { role: 'assistant', text: 'Ok.', at: NOW - 50 * S },
     ]))
+
+  test('an agent or a workflow that reported back: "Conversation" opens it; other notices have none', () => {
+    const react = drawn([
+      notice('Agent "Check the logs" finished', NOW - 90 * S, { id: 'a1', tail: '<result>All **fine**.</result>' }),
+      notice('Agent "Find the owner" completed', NOW - 80 * S, { id: 'd1' }),
+      notice('Agent "Gone" finished', NOW - 70 * S, { id: 'zz', tail: '<result>x</result>' }),
+      notice('Dynamic workflow "polish" completed', NOW - 60 * S, { id: 'tw0', tail: '<result>- one</result>' }),
+      notice('Dynamic workflow "other" completed', NOW - 50 * S, { id: 'tw9' }),
+      notice('Background command "Run tests" completed (exit code 0)', NOW - 40 * S, { id: 'a1' }),
+      { role: 'assistant', text: 'Both are in.', at: NOW - 30 * S },
+    ])
+    const open = findAll(react, el => hasClass(el, 'notice-open'))
+    expect(open.map(el => el.attrs.get('data-helper') ?? `run ${el.attrs.get('data-run-open')}`)).toEqual([
+      'a1',
+      'd1',
+      'run wf_0',
+    ])
+  })
 
   test("a helper's own conversation: what its session asked, its calls live while it works", () => {
     const own = HELPERS[0] as PublicHelper

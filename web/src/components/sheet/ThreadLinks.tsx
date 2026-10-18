@@ -2,9 +2,11 @@
 // a subagent, fork or workflow a call started (it opens the helper, with its status and clock),
 // a message sent to another session or a teammate (it opens to the whole text), a session started
 // with spawn-agent; and another session's or a teammate's message, a bubble with their name. In a
-// helper's own conversation (the helpers window) what its session asked is the other side.
+// helper's own conversation (the helpers window) what its session asked is the other side. An
+// agent's or a workflow's report has "Conversation" beside it.
 import type { MouseEvent, ReactNode } from 'react'
 import type { PublicHelper, WorkflowRun } from '../../../../src/core/helpers.ts'
+import type { TaskNotice } from '../../../../src/core/notices.ts'
 import type { PeerTurn, ToolTurn, UserTurn } from '../../../../src/core/transcript.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
@@ -258,6 +260,41 @@ export function LinkLine({ turn: m, item, helper, links }: LinkLineProps) {
       </div>
     </details>
   )
+}
+
+/**
+ * "Conversation" on a background task's notice: an agent that reported back opens its helper, a
+ * workflow its run (it reports under its task id, which its run file keeps). Nothing for others.
+ */
+export function NoticeOpen({ notice: m, links }: { notice: TaskNotice; links: ThreadLinks }) {
+  const t = useT()
+  const agent = m.kind === 'agent' && m.id ? findHelper(links.helpers, { id: m.id }) : null
+  const run = m.kind === 'workflow' && m.id ? links.workflows.find(w => w.taskId === m.id) : null
+  if (agent)
+    return (
+      <button
+        type="button"
+        className="notice-open"
+        data-helper={agent.id}
+        title={t('helpers.open')}
+        onClick={go(el => links.onHelper?.(agent.id, el))}
+      >
+        {t('notice.open')}
+      </button>
+    )
+  if (run)
+    return (
+      <button
+        type="button"
+        className="notice-open"
+        data-run-open={run.id}
+        title={t('helpers.open')}
+        onClick={go(el => links.onRun?.(run.id, el))}
+      >
+        {t('notice.open')}
+      </button>
+    )
+  return null
 }
 
 export interface PeerBubbleProps {

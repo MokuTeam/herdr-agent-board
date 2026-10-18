@@ -16,7 +16,15 @@ import { clockText } from '../../models/sheet.ts'
 import { type AskTurn, askState, type ThreadPart, threadParts, uploadThumbs } from '../../models/thread.ts'
 import { classNames } from '../class-names.ts'
 import { AlarmGlyph, BoltGlyph, CheckGlyph, ChevGlyph, CrossGlyph, SpinGlyph, StopGlyph } from '../icons.tsx'
-import { LinkLine, NO_LINKS, PeerBubble, type ThreadHelper, type ThreadItem, type ThreadLinks } from './ThreadLinks.tsx'
+import {
+  LinkLine,
+  NO_LINKS,
+  NoticeOpen,
+  PeerBubble,
+  type ThreadHelper,
+  type ThreadItem,
+  type ThreadLinks,
+} from './ThreadLinks.tsx'
 
 export interface ThreadProps {
   conversation: readonly ConversationTurn[]
@@ -66,7 +74,7 @@ function ThreadTurn({ part, item, links, helper }: TurnProps) {
   if (part.kind === 'ask') return <AskedTurn turn={part.turn} live={part.live} />
   if (part.kind === 'link') return <LinkLine turn={part.turn} item={item} helper={helper} links={links} />
   if (part.kind === 'peer') return <PeerBubble turn={part.turn} item={item} helper={helper} links={links} />
-  if (part.kind === 'notice') return <Notice turn={part.turn} />
+  if (part.kind === 'notice') return <Notice turn={part.turn} links={links} />
   if (part.kind === 'message') {
     const { role, text, at } = part.turn
     const thumbs = uploadThumbs(text)
@@ -136,9 +144,9 @@ const MARKS = { ok: CheckGlyph, fail: CrossGlyph, stop: StopGlyph } as const
 /**
  * A background task reporting back or a board reminder: a quiet line in the thread, not the
  * user's bubble. An agent's report or a monitor's lines open from it; a command's output file is
- * a click away.
+ * a click away, and so is an agent's or a workflow's whole conversation.
  */
-function Notice({ turn: m }: { turn: NoticeTurn }) {
+function Notice({ turn: m, links }: { turn: NoticeTurn; links: ThreadLinks }) {
   const t = useT()
   const { text, sub, tone } = noticeLine(m, t)
   const reminder = isReminder(m)
@@ -163,6 +171,7 @@ function Notice({ turn: m }: { turn: NoticeTurn }) {
           {t('notice.output')}
         </span>
       )}
+      {task && <NoticeOpen notice={task} links={links} />}
       <span className="when">{clockText(m.at, t)}</span>
     </>
   )

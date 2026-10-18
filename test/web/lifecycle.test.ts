@@ -4,10 +4,15 @@ import {
   anyLayerOpen,
   type BoardStream,
   boardConnection,
+  type DialogLayer,
   dialogHistory,
   type HistoryLike,
+  PAGE_LAYERS,
+  type PageLayer,
+  pageLayers,
   topLayer,
 } from '../../web/src/models/lifecycle.ts'
+import { oldSource } from './support/old-app.ts'
 
 type FakeStream = BoardStream & { closed: boolean }
 
@@ -216,4 +221,47 @@ test('Back closes the topmost open layer of those the page lists, topmost first'
   assert.deepEqual(closed, ['limits'])
   assert.equal(anyLayerOpen([layer('menu', false)]), false)
   assert.equal(topLayer([layer('menu', false)]), undefined)
+})
+
+test("the page's layers close in upstream's order: the terminal window before the helpers window", () => {
+  // dialogBack's closeTop in web/app.js at the merge of #40, the newest change that added a layer.
+  const closeTop = oldSource('web/app.js', '0d33639')
+    .split('\n')
+    .find(line => line.startsWith('  closeTop:'))
+  const OLD: Record<string, PageLayer> = {
+    menu: 'menu',
+    launchUI: 'launch',
+    files: 'files',
+    termUI: 'terminal',
+    helpersUI: 'helpers',
+    limitsOpen: 'limits',
+    panels: 'panels',
+  }
+  const upstream = [...(closeTop ?? '').matchAll(/(\w+)(?:\??\.isOpen\(\)|\(\)) \?|(panels)\.find/g)].map(
+    m => OLD[m[1] ?? m[2] ?? ''],
+  )
+  assert.deepEqual(PAGE_LAYERS, upstream)
+  // Both windows open: Back closes the terminal first, then the helpers window.
+  const closed: string[] = []
+  const shown = new Set<PageLayer>(['terminal', 'helpers', 'panels'])
+  const layer = (name: PageLayer): DialogLayer => ({
+    open: shown.has(name),
+    close: () => {
+      closed.push(name)
+      shown.delete(name)
+    },
+  })
+  const layers = () =>
+    pageLayers({
+      menu: layer('menu'),
+      launch: layer('launch'),
+      files: layer('files'),
+      terminal: layer('terminal'),
+      helpers: layer('helpers'),
+      limits: layer('limits'),
+      panels: layer('panels'),
+    })
+  topLayer(layers())?.close()
+  topLayer(layers())?.close()
+  assert.deepEqual(closed, ['terminal', 'helpers'])
 })

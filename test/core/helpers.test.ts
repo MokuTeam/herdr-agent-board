@@ -2,6 +2,7 @@ import { beforeAll, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { backgroundTasks, describe, headInfo, helperStatus, type TailEnd, tailInfo } from '../../src/core/helpers.ts'
 import { useLanguage } from '../../src/core/lang.ts'
+import { parseConversation } from '../../src/core/transcript.ts'
 import { jsonl, line, T0 } from '../support/helper-fixtures.ts'
 
 beforeAll(() => useLanguage('en'))
@@ -104,6 +105,14 @@ test('a helper whose turn ended with a background command still out is not done'
   )
   const woke = text + jsonl([banner, line.said(5, 'ok')])
   assert.deepEqual([backgroundTasks(woke), tailInfo(woke).last], [0, 'end'])
+  // ...and the helper's conversation shows it as a notice.
+  const own = jsonl([line.user(0, 'Wait.')]) + woke
+  assert.deepEqual(
+    parseConversation(own.trim().split('\n'), 40, { sidechain: true }).flatMap(m =>
+      m.role === 'notice' ? [[m.kind, 'id' in m ? m.id : '']] : [],
+    ),
+    [['command', 'bg42']],
+  )
   // Its notification came back: done once it has said its last word.
   const back =
     text +

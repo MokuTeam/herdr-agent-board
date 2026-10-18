@@ -9,6 +9,9 @@ import { OLD_MARKDOWN, type OldFunction, oldCode, oldFunction, oldModule, oldSou
 
 export const PR40 = '0d33639'
 
+/** notice-model.js as #40 left it (as #35 made it), for the thread's notices. */
+const OLD_NOTICE_MODEL = await oldModule('web/notice-model.js', PR40)
+
 /** helper-model.js as #40 left it. */
 export const OLD_HELPER_MODEL = await oldModule('web/helper-model.js', PR40)
 const model = (name: string) => oldFunction(OLD_HELPER_MODEL, name)
@@ -126,6 +129,7 @@ export function oldApp(scene: OldScene) {
       'whoHTML',
       'linkLine',
       'peerBubble',
+      'notice',
       'thread',
     ],
     {
@@ -140,7 +144,7 @@ export function oldApp(scene: OldScene) {
       took: MODEL.took,
       ...rows,
       markdown,
-      notice: noOther,
+      noticeLine: oldFunction(OLD_NOTICE_MODEL, 'noticeLine'),
       questionsUI: { threadHTML: noOther },
       sheetHelpers: new FakeElement(strip),
       redraw: (el: FakeElement, html: string) => {
