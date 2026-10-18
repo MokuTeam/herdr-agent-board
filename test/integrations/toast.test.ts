@@ -54,20 +54,109 @@ test('toast.ps1: its link handler takes a pane id only, and a click goes to this
 // A click runs the script again as `open claude-pane:<pane id>`. Its lines up to herdr's turn run
 // here, from a copy of the board in a sandbox, with `exit 9` where herdr would be asked: herdr,
 // the registry and the terminal window are never reached. The copy's web-open.ts is a fake that
-// logs its arguments and exits with CLICK_EXIT, or hands them to the real one (REAL_WEB_OPEN).
+// notes its pid, logs its arguments and exits with CLICK_EXIT, or hands them to the real one
+// (REAL_WEB_OPEN).
 const HERDR_NEXT = '        if ($LASTEXITCODE -eq 0) { exit 0 }\n    }\n'
 const FAKE_WEB_OPEN = `import { appendFileSync } from 'node:fs'
+appendFileSync(process.env.CLICK_PIDS ?? '', process.pid + '\\n')
 appendFileSync(process.env.CLICK_LOG ?? '', JSON.stringify(process.argv.slice(2)) + '\\n')
 const real = process.env.REAL_WEB_OPEN
 if (real) process.exit(Bun.spawnSync([process.execPath, real, ...process.argv.slice(2)]).exitCode ?? 1)
 process.exit(Number(process.env.CLICK_EXIT ?? '0'))
 `
 
+// What toast.ps1 does to herdr, the registry, windows and notifications. A click's cut runs none
+// of it; its functions may hold it, as the cut only defines them. The registry key's name
+// ($ProtocolKey) is just a string until an -Item command reads or writes it.
+const BEYOND_THE_CUT = [
+  'Invoke-Herdr',
+  'Get-HerdrSnapshot',
+  'HERDR_BIN_PATH',
+  'Diagnostics.Process',
+  '-Item', // New-Item, Get-ItemProperty, Set-ItemProperty, New-ItemProperty
+  'Import-Native',
+  'Add-Type',
+  'Native]::',
+  'Test-TerminalForeground',
+  'Register-Handlers',
+  'Show-Toast',
+  'Windows.UI.Notifications',
+]
+
+/**
+ * The lines of a PowerShell script that run: all but its functions' bodies, which it only defines.
+ * toast.ps1's functions open with `function Name … {` and close with `}` alone at the start of a
+ * line. Any other line at the start (outside a here-string) ends a function too, so a layout this
+ * misreads shows more as running, never less.
+ */
+function outsideFunctions(script: string): string {
+  const runs: string[] = []
+  let inFunction = false
+  let hereEnd = '' // what starts the line that closes the here-string we are in: '@ or "@
+  for (const line of script.split('\n')) {
+    if (hereEnd) {
+      if (line.startsWith(hereEnd)) hereEnd = ''
+      if (!inFunction) runs.push(line)
+      continue
+    }
+    if (/(^|[\s=(])@['"]$/.test(line)) hereEnd = `${line.at(-1)}@`
+    if (inFunction && line === '}') inFunction = false
+    else if (!inFunction || (line !== '' && !/^\s/.test(line))) {
+      inFunction = /^function [\w-]+.*\{$/.test(line)
+      if (!inFunction) runs.push(line)
+    }
+  }
+  return runs.join('\n')
+}
+
+/** The words of BEYOND_THE_CUT in the lines of `script` that run. */
+function unsafeIn(script: string): string[] {
+  const runs = outsideFunctions(script)
+  return BEYOND_THE_CUT.filter(word => runs.includes(word))
+}
+
 function clickPart(): string {
   const text = readFileSync(script, 'utf8').replace(/\r\n/g, '\n')
   const at = text.indexOf(HERDR_NEXT)
   assert.ok(at > text.indexOf('if ($Action -eq "open") {'), 'the web board comes before herdr')
-  return `${text.slice(0, at + HERDR_NEXT.length)}    exit 9\n}\n`
+  const cut = `${text.slice(0, at + HERDR_NEXT.length)}    exit 9\n}\n`
+  // Before anything runs: an edit that moves herdr's turn above the cut stops here.
+  assert.deepEqual(unsafeIn(cut), [], 'a click’s cut runs nothing of herdr, the registry, windows or notifications')
+  return cut
+}
+
+test('toast.ps1: a click’s cut runs nothing of herdr, the registry, windows or notifications', () => {
+  const text = readFileSync(script, 'utf8').replace(/\r\n/g, '\n')
+  // The guard's words are the script's own, so a rename cannot leave it looking for nothing.
+  const unknown = BEYOND_THE_CUT.filter(word => !text.includes(word))
+  assert.deepEqual(unknown, [])
+  // Below the cut the script runs them: herdr's turn reads the registry, focuses the pane and
+  // raises the terminal; a hook shows the toast.
+  const below = unsafeIn(text)
+  const unseen = ['-Item', 'Invoke-Herdr', 'Native]::', 'Show-Toast'].filter(word => !below.includes(word))
+  assert.deepEqual(unseen, [])
+  // The cut runs none of them, and does run the board call.
+  const cut = clickPart()
+  assert.deepEqual(unsafeIn(cut), [])
+  assert.ok(outsideFunctions(cut).includes('& $bun $boardOpen --pane $paneId'))
+})
+
+// What a test leaves running (its stand-ins, a click) ends after it, before its sandbox goes.
+const stops: (() => void)[] = []
+afterEach(() => {
+  for (const stop of stops.splice(0)) stop()
+})
+
+// A click that has not ended by then is ended, with all it started.
+const CLICK_TIMEOUT = 15_000
+const taskkill = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe')
+
+/** Ends process `pid`, if it still is `image`, and every process under it. */
+function killTree(pid: number, image: string): void {
+  Bun.spawnSync([taskkill, '/T', '/F', '/FI', `IMAGENAME eq ${image}`, '/PID', String(pid)], {
+    stdout: 'ignore',
+    stderr: 'ignore',
+  })
 }
 
 async function click(box: Sandbox, uri: string, env: Record<string, string> = {}) {
@@ -78,17 +167,39 @@ async function click(box: Sandbox, uri: string, env: Record<string, string> = {}
   writeFileSync(copy, clickPart())
   writeFileSync(join(board, 'src', 'entrypoints', 'web-open.ts'), FAKE_WEB_OPEN)
   const log = join(box.dir, 'clicks.jsonl')
+  const pids = join(box.dir, 'click-pids')
   writeFileSync(log, '')
+  writeFileSync(pids, '')
   // PATHEXT, which a click's own environment has: without it PowerShell takes bun.exe for a document.
   const pathext = process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD'
   const proc = Bun.spawn([powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', copy, 'open', uri], {
-    env: { ...box.env, PATHEXT: pathext, CLICK_LOG: log, ...env },
+    env: { ...box.env, PATHEXT: pathext, CLICK_LOG: log, CLICK_PIDS: pids, ...env },
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
   })
+  // Ends a click still running: PowerShell, and the web-open.ts it runs with the real one under it.
+  // A test that times out has PowerShell ended by Bun, which leaves its tree; the fake's pid finds it.
+  let ended = false
+  const end = (): void => {
+    if (ended) return
+    killTree(proc.pid, 'powershell.exe')
+    for (const pid of readFileSync(pids, 'utf8').split('\n').filter(Boolean)) killTree(Number(pid), 'bun.exe')
+  }
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    end()
+  }, CLICK_TIMEOUT)
+  stops.push(() => {
+    clearTimeout(timer)
+    end()
+  })
   const [, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
   const code = await proc.exited
+  ended = true
+  clearTimeout(timer)
+  assert.ok(!timedOut, `the click had not ended after ${CLICK_TIMEOUT / 1000} s`)
   const calls = readFileSync(log, 'utf8')
     .split('\n')
     .filter(Boolean)
@@ -111,11 +222,6 @@ function standIn(status: number, body: unknown) {
   stops.push(() => server.stop(true))
   return { port: server.port, asked }
 }
-
-const stops: (() => void)[] = []
-afterEach(() => {
-  for (const stop of stops.splice(0)) stop()
-})
 
 function boardConfig(box: Sandbox, cfg: unknown): void {
   const dir = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board')

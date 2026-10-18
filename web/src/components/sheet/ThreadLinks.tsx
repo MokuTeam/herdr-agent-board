@@ -266,34 +266,36 @@ export function LinkLine({ turn: m, item, helper, links }: LinkLineProps) {
  * "Conversation" on a background task's notice: an agent that reported back opens its helper, a
  * workflow its run (it reports under its task id, which its run file keeps). Nothing for others.
  */
-export function NoticeOpen({ notice: m, links }: { notice: TaskNotice; links: ThreadLinks }) {
+export function NoticeOpen({ notice, links }: { notice: TaskNotice; links: ThreadLinks }) {
   const t = useT()
+  const to = noticeTarget(notice, links)
+  if (!to) return null
+  const data = { [to.attr]: to.id }
+  return (
+    <button
+      type="button"
+      className="notice-open"
+      {...data}
+      title={t('helpers.open')}
+      onClick={go(el => to.open?.(to.id, el))}
+    >
+      {t('notice.open')}
+    </button>
+  )
+}
+
+/** Where a notice's "Conversation" leads: the attribute that names it, its id, and what opens it. */
+interface NoticeTarget {
+  attr: 'data-helper' | 'data-run-open'
+  id: string
+  open: ThreadLinks['onHelper']
+}
+
+function noticeTarget(m: TaskNotice, links: ThreadLinks): NoticeTarget | null {
   const agent = m.kind === 'agent' && m.id ? findHelper(links.helpers, { id: m.id }) : null
+  if (agent) return { attr: 'data-helper', id: agent.id, open: links.onHelper }
   const run = m.kind === 'workflow' && m.id ? links.workflows.find(w => w.taskId === m.id) : null
-  if (agent)
-    return (
-      <button
-        type="button"
-        className="notice-open"
-        data-helper={agent.id}
-        title={t('helpers.open')}
-        onClick={go(el => links.onHelper?.(agent.id, el))}
-      >
-        {t('notice.open')}
-      </button>
-    )
-  if (run)
-    return (
-      <button
-        type="button"
-        className="notice-open"
-        data-run-open={run.id}
-        title={t('helpers.open')}
-        onClick={go(el => links.onRun?.(run.id, el))}
-      >
-        {t('notice.open')}
-      </button>
-    )
+  if (run) return { attr: 'data-run-open', id: run.id, open: links.onRun }
   return null
 }
 
