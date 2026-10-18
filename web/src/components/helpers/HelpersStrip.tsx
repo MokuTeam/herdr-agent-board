@@ -1,9 +1,11 @@
 // The session's helpers above its conversation in the sheet (the old page's app.js
 // renderHelpersStrip): the ones at work with what each does now and a running clock, else the
 // newest one in a line. A row opens the helper's conversation, "All" the whole list (the helpers
-// window, hooks/useHelpers.ts).
+// window, hooks/useHelpers.ts). A redraw keeps the focus on what opens the same thing
+// (hooks/useKeepFocus.ts).
 import type { MouseEvent, ReactNode } from 'react'
 import type { PublicHelper, WorkflowRun } from '../../../../src/core/helpers.ts'
+import { useKeepFocus } from '../../hooks/useKeepFocus.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { ago } from '../../models/card.ts'
 import { helperTitle } from '../../models/helper-model.ts'
@@ -22,9 +24,16 @@ export interface HelpersStripProps {
 
 export function HelpersStrip({ helpers: list, workflows: runs, onHelper, onList }: HelpersStripProps) {
   const t = useT()
+  const keepFocus = useKeepFocus()
   const shown = list.length > 0 || runs.length > 0
   return (
-    <section className="sheet-helpers" id="sheet-helpers" aria-labelledby="sheet-helpers-title" hidden={!shown}>
+    <section
+      className="sheet-helpers"
+      id="sheet-helpers"
+      aria-labelledby="sheet-helpers-title"
+      hidden={!shown}
+      {...keepFocus}
+    >
       {shown && <Strip helpers={list} workflows={runs} onHelper={onHelper} onList={onList} t={t} />}
     </section>
   )

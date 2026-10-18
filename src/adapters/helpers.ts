@@ -30,23 +30,27 @@ import {
   type WorkflowRun,
 } from '../core/helpers.ts'
 import type { ConversationTurn } from '../core/transcript.ts'
-import { readConversation } from './claude-home.ts'
+import { readConversation, readTail } from './claude-home.ts'
+import { isRecord } from './json-store.ts'
 
 type Rec = Record<string, unknown>
-const isRecord = (v: unknown): v is Rec => !!v && typeof v === 'object' && !Array.isArray(v)
 const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 // A helper's id as Claude Code names its files: agent-<id>.jsonl, the id letters, digits and dashes.
 const AGENT_FILE = /^agent-([A-Za-z0-9-]{1,120})\.jsonl$/
 const RUN_DIR = /^wf_[A-Za-z0-9-]{1,80}$/
 
-function parseRecord(text: string): Rec {
+/** A JSON object, else null (a line half written, or not one). */
+function parseLine(text: string): Rec | null {
   try {
     const value: unknown = JSON.parse(text)
-    return isRecord(value) ? value : {}
+    return isRecord(value) ? value : null
   } catch {
-    return {}
+    return null
   }
 }
+
+/** A JSON object, else an empty one. */
+const parseRecord = (text: string): Rec => parseLine(text) ?? {}
 
 function readSlice(path: string, start: number, length: number): string {
   const buf = Buffer.alloc(length)
@@ -57,13 +61,6 @@ function readSlice(path: string, start: number, length: number): string {
     closeSync(fd)
   }
   return buf.toString('utf8')
-}
-
-/** The last `bytes` of a file, from the first whole line on. */
-function readTail(path: string, size: number, bytes: number): string {
-  const start = Math.max(0, size - bytes)
-  const text = readSlice(path, start, size - start)
-  return start ? text.slice(text.indexOf('\n') + 1) : text
 }
 
 /** The first `bytes` of a file, up to its last whole line. */
@@ -183,15 +180,6 @@ export function countTools(path: string, skip: string | null = null): Promise<nu
     })
     .catch(() => {})
   return next
-}
-
-function parseLine(text: string): Rec | null {
-  try {
-    const value: unknown = JSON.parse(text)
-    return isRecord(value) ? value : null
-  } catch {
-    return null
-  }
 }
 
 async function count(path: string, skip: string | null): Promise<number> {

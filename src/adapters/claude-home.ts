@@ -88,7 +88,8 @@ function asLiveSession(value: unknown): LiveSession | null {
   return value as LiveSession
 }
 
-function readTail(path: string, size: number, bytes: number): string {
+/** The last `bytes` of a file of `size` bytes, from the first whole line on. */
+export function readTail(path: string, size: number, bytes: number): string {
   const start = Math.max(0, size - bytes)
   const buf = Buffer.alloc(size - start)
   const fd = openSync(path, 'r')

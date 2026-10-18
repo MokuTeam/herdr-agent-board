@@ -12,7 +12,8 @@ import type { SessionDetail } from '../../api/client.ts'
 import { type ComposerControls, useComposer } from '../../hooks/useComposer.ts'
 import { useFileDrop } from '../../hooks/useFileDrop.ts'
 import { useGoToSession } from '../../hooks/useGoToSession.ts'
-import type { Helpers } from '../../hooks/useHelpers.ts'
+import type { HelpersUi } from '../../hooks/useHelpers.ts'
+import { useKeepFocus } from '../../hooks/useKeepFocus.ts'
 import { useMediaQuery } from '../../hooks/useMediaQuery.ts'
 import { type OpenLaunch, useNewSession } from '../../hooks/useNewSession.ts'
 import { useSessionActions } from '../../hooks/useSessionActions.ts'
@@ -69,7 +70,7 @@ export interface SheetSlots {
   /** "Terminal": the terminal window of the session, from the button (hooks/useTerminal.ts). */
   onTerminal?: ((key: string, button: HTMLElement) => void) | undefined
   /** The session's helpers in their window (hooks/useHelpers.ts): it reads the sheet's detail. */
-  helpers?: Helpers | undefined
+  helpers?: HelpersUi | undefined
 }
 
 /** The board's card of `key` (a drag's ghost is outside the board). */
@@ -234,6 +235,8 @@ export function SheetView(props: SheetViewProps) {
   const { open, item, detail, form, narrow, propertiesOpen, onProperties, composer, buttons, schedule } = props
   const t = useT()
   const { data, connected, canMutate, canEdit } = useBoardContext()
+  // A redraw of the conversation keeps the focus on what opens the same thing (a helper's line).
+  const keepFocus = useKeepFocus()
   const onBoard = (key: string | null) => !!key && !!data?.items.some(i => i.key === key)
   // The rules go by the open session (none once closed); what is shown goes by the one shown.
   const missing = sessionMissing(open, onBoard(open), detail.status)
@@ -287,6 +290,7 @@ export function SheetView(props: SheetViewProps) {
         id="sheet-body"
         ref={props.bodyRef}
         onScroll={props.onBodyScroll}
+        {...keepFocus}
       >
         {item && (
           <>

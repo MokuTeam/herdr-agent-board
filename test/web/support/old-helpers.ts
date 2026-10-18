@@ -178,6 +178,13 @@ export function oldApp(scene: OldScene) {
   }
 }
 
+/** helpers.js's esc, for what the window's driver writes itself as upstream's load() did. */
+const esc = (v: unknown) =>
+  String(v ?? '').replace(
+    /[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c,
+  )
+
 /** The window's markup as initHelpers builds its root, hidden until opened. */
 function windowRoot(icons: unknown): Element {
   const source = oldSource('web/helpers.js', PR40)
@@ -237,11 +244,7 @@ export function oldWindow(scene: OldWindowScene): Element {
     {
       ...MODEL,
       ...app.rows,
-      esc: (v: unknown) =>
-        String(v ?? '').replace(
-          /[&<>"']/g,
-          c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c,
-        ),
+      esc,
       tr: (key: string, vars?: Record<string, string | number>) => tr(key, vars),
       t: () => tr,
       $,
@@ -272,11 +275,11 @@ export function oldWindow(scene: OldWindowScene): Element {
     const known = (scene.detail?.helpers ?? []).find(h => (h as { id?: string }).id === top.id)
     call('head')(known ?? { id: top.id, kind: 'agent', status: '' })
     body.className = 'ql-body helper-body'
-    call('setBody')(`<div class="ql-wait">${tr('loading')}</div>`)
+    call('setBody')(`<div class="ql-wait">${esc(tr('loading'))}</div>`)
     call('setFoot')('')
     // A read that failed before anything was read (load()).
     const icons = app.rows.HELPER_ICONS as Record<string, string>
-    if (scene.error) call('setBody')(`<div class="ql-empty">${icons.stack}<p>${scene.error}</p></div>`)
+    if (scene.error) call('setBody')(`<div class="ql-empty">${icons.stack}<p>${esc(scene.error)}</p></div>`)
     if (s.data) call('render')(true)
   }
   tickClocks([root])

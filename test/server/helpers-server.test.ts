@@ -144,5 +144,8 @@ test('the board shows helpers and links; a helper is served only from its own se
   // Whatever its files hold, what comes back names no path on this computer.
   writeFileSync(join(project, 's1', 'subagents', 'agent-arun1.jsonl'), '')
   const empty = await get('/api/session/s1/helper/arun1')
-  assert.ok(!JSON.stringify(empty.body).includes(box.env.HOME ?? '~'))
+  const said = JSON.stringify(empty.body)
+  // JSON doubles a Windows path's backslashes: look for the home folder as JSON writes it, too.
+  const home = box.env.HOME ?? '~'
+  for (const path of [home, JSON.stringify(home).slice(1, -1)]) assert.ok(!said.includes(path), path)
 }, 20_000)

@@ -104,7 +104,7 @@ export function groupHelpers(
 }
 
 /** What a line of the thread knows of the helper it is about. */
-export interface HelperRef {
+export interface HelperLookup {
   id?: string
   /** The call that made it. */
   tool?: string | undefined
@@ -115,7 +115,7 @@ export interface HelperRef {
  * The helper a line of the thread is about: by its id, the call that made it, or its name (a
  * teammate's first, else the newest helper of that name).
  */
-export function findHelper<H extends PublicHelper>(helpers: readonly H[] = [], ref: HelperRef = {}): H | null {
+export function findHelper<H extends PublicHelper>(helpers: readonly H[] = [], ref: HelperLookup = {}): H | null {
   if (ref.id) {
     const h = helpers.find(x => x.id === ref.id)
     if (h) return h

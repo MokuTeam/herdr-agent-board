@@ -2,12 +2,14 @@
 // or a helper's kind, title, what it is and how it stands), the list of the session's helpers or
 // one helper's conversation drawn as the session's is, and a footer of counts and times. It lives
 // in <body> beside the page (hooks/useModalFocus.ts); its motion, reads, focus and keys are
-// hooks/useHelpers.ts's.
-import { type ReactNode, useLayoutEffect } from 'react'
+// hooks/useHelpers.ts's. A redraw of the body keeps the focus on what opens the same thing
+// (hooks/useKeepFocus.ts).
+import { type ReactNode, useLayoutEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import type { PublicHelper, WorkflowRun } from '../../../../src/core/helpers.ts'
 import type { Item, Translator } from '../../../../src/core/types.ts'
 import type { HelperRef, HelpersEngine, HelpersRefs, HelpersView, SheetSide } from '../../hooks/useHelpers.ts'
+import { useKeepFocus } from '../../hooks/useKeepFocus.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { clock, groupHelpers, helperTitle, tokens, toneOf, took } from '../../models/helper-model.ts'
 import { reducedMotion } from '../../models/spring.ts'
@@ -70,6 +72,7 @@ function subOf(h: HeadHelper, t: Translator): string {
 
 export function HelpersWindowView({ view, sheet, item, items, refs = {}, on = {} }: HelpersWindowViewProps) {
   const t = useT()
+  const keepFocus = useKeepFocus()
   const top = view.stack.at(-1)
   const detail = sheet.key === view.key ? sheet.data : null
   const label = (key: string) => ({ title: t(key), 'aria-label': t(key) })
@@ -131,6 +134,7 @@ export function HelpersWindowView({ view, sheet, item, items, refs = {}, on = {}
           className={isList(top) ? 'ql-body helper-body k-list' : 'ql-body helper-body'}
           ref={refs.body}
           onScroll={() => on.scrolled?.()}
+          {...keepFocus}
         >
           {view.hidden || !top ? null : isList(top) ? (
             <HelperList detail={detail} on={on} />
@@ -298,12 +302,18 @@ export function HelpersWindow({
   const top = view.stack.at(-1)
   // Just opened: drawn now, it grows out of where it came from.
   useLayoutEffect(() => engine.grow())
-  // A helper's conversation read again: at its end it stays at its end; its paths become chips.
+  // A helper's conversation read again: at its end it stays at its end. Its paths become chips when
+  // it is drawn anew: on show, and when it changed (a read while it works often brings the same).
+  const upgraded = useRef('')
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new answer is when to look, not what it reads
   useLayoutEffect(() => {
     const body = refs.body.current
     if (!body || !view.data) return
     if (view.first || engine.pinned()) body.scrollTop = body.scrollHeight
+    // What the drawn thread depends on: its turns, and its status (whether its last call is live).
+    const drawn = JSON.stringify([view.data.helper.status, view.data.conversation])
+    if (!view.first && drawn === upgraded.current) return
+    upgraded.current = drawn
     upgrade?.(body, item?.cwd ?? '')
   }, [view.data])
   // The list opened at a workflow run: scrolled to it once, with a glint; a later draw keeps the reader's place.

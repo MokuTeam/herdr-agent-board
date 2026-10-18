@@ -1,6 +1,7 @@
 // A session's card: its name, age and alarm, what it works on, said or asks, its helpers at work
-// and the sessions it works with, and its buttons. A session asleep in the idle column is one line. Motion and dragging are the board's
-// (hooks/useFlip.ts, hooks/useCardDrag.ts); the card only says what it is.
+// and the sessions it works with, and its buttons. A session asleep in the idle column is one line.
+// Motion and dragging are the board's (hooks/useFlip.ts, hooks/useCardDrag.ts); the card only says
+// what it is.
 import type { FocusEvent, KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from 'react'
 import type { Item, LaunchView, ToolCall } from '../../../src/core/types.ts'
 import { useT } from '../i18n/I18nProvider.tsx'

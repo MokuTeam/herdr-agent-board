@@ -310,7 +310,7 @@ export function helpersEngine(deps: EngineDeps): HelpersEngine {
   }
 }
 
-export interface Helpers {
+export interface HelpersUi {
   /** It is open (not shrinking away): for the Back button's layers. */
   open: boolean
   isOpen(): boolean
@@ -322,7 +322,7 @@ export interface Helpers {
 }
 
 /** The page's helpers window, for the session open in the sheet. */
-export function useHelpers(): Helpers {
+export function useHelpers(): HelpersUi {
   const t = useT()
   const board = useBoardContext()
   const openSession = useGoToSession()

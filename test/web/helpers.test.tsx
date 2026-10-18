@@ -436,7 +436,10 @@ describe('the helpers window', () => {
     win([{ list: true, run: null }, { id: 'm1' }])
     win([{ id: 'nope' }])
   })
-  test('a helper that could not be read', () => win([{ id: 'a1' }], { error: 'This session has no such helper' }))
+  test('a helper that could not be read', () => {
+    win([{ id: 'a1' }], { error: 'This session has no such helper' })
+    win([{ id: 'a1' }], { error: 'Offline: <fetch> failed & "retry"' })
+  })
 
   const read = (h: PublicHelper, conversation: ConversationTurn[], tools = 3) => ({
     helper: { ...h, tools },
