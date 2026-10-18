@@ -199,6 +199,36 @@ export function previewFoot(d: Preview, t: Translator): string[] {
   return foot.filter(Boolean)
 }
 
+/** What the zoom bar shows of a zoom (models/zoom.ts ZoomState): the scale, and the button in to 100% or back to fit. */
+export interface ZoomBarText {
+  level: string
+  label: string
+  hint: string
+}
+
+const percents = new Map<string, Intl.NumberFormat>()
+function percent(s: number, lang: string): string {
+  let format = percents.get(lang)
+  if (!format) {
+    format = new Intl.NumberFormat(lang, { style: 'percent', maximumFractionDigits: 0 })
+    percents.set(lang, format)
+  }
+  return format.format(s)
+}
+
+/**
+ * What the zoom bar shows now; a zoom calls on every frame, so it is drawn again only when this
+ * changes (a whole percent, or where the button goes).
+ */
+export const zoomShown = (z: { s: number; fit: boolean; to: number } | null): string =>
+  z ? `${Math.round(z.s * 100)}|${z.fit ? Math.round(z.to * 100) : 'fit'}` : ''
+
+/** The zoom bar's texts: the scale, and the button in to the scale a zoom from fit goes to, or back to fit. */
+export function zoomBar(z: { s: number; fit: boolean; to: number }, t: Translator): ZoomBarText {
+  const label = z.fit ? percent(z.to, t.lang) : t('ql.fit')
+  return { level: percent(z.s, t.lang), label, hint: z.fit ? t('ql.zoomTo', { pct: label }) : t('ql.fitHint') }
+}
+
 /** Text in numbered lines: a final line break ends the last line, it starts none. */
 export function codeLines(text: string): string[] {
   const lines = text.split('\n')

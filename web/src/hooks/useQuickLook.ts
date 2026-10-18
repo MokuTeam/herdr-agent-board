@@ -1,15 +1,26 @@
 // The quick look over the board (the old page's files.js look, close, back and its keys): it
 // grows out of the chip or button it was opened from and shrinks back into it, on a spring that
 // can be caught midway; it dims the board and takes the focus (hooks/useModalFocus.ts), Esc
-// closes it, Backspace or Alt+← walks back. What it shows step by step is models/quick-look.ts;
-// components/files/QuickLook.tsx draws it.
+// closes it, Backspace or Alt+← walks back; an image on show zooms (components/files/zoom.ts), by
+// its keys too. What it shows step by step is models/quick-look.ts; components/files/QuickLook.tsx
+// draws it.
 import { createRef, type RefObject, useEffect, useState } from 'react'
 import type { Translator } from '../../../src/core/types.ts'
 import { type FilesApi, filesApi } from '../api/files.ts'
+import { type ImageZoom, zoomImage } from '../components/files/zoom.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
+import { zoomShown } from '../models/files.ts'
 import type { FocusScope } from '../models/modal-focus.ts'
-import { type LookMode, type LookTarget, type LookView, type QuickLookNav, quickLookNav } from '../models/quick-look.ts'
+import {
+  type FileLook,
+  type LookMode,
+  type LookTarget,
+  type LookView,
+  type QuickLookNav,
+  quickLookNav,
+} from '../models/quick-look.ts'
 import { reducedMotion, Spring } from '../models/spring.ts'
+import type { ZoomState } from '../models/zoom.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { Store, useStore } from '../state/store.ts'
 import { useLatest } from './useLatest.ts'
@@ -41,7 +52,18 @@ export interface QuickLookEngine {
   act(how: 'open' | 'reveal' | 'copy'): void
   /** Paths in what it shows become chips (hooks/useFileChips.ts). */
   upgrade(root: HTMLElement, cwd: string): void
-  /** A key, before the page's own: Esc closes it, Backspace or Alt+← walks back. */
+  /** The zoom of the image on show, for the footer: drawn again only when what it shows changes. */
+  zoom: Store<ZoomState | null>
+  /**
+   * The image of `data` loaded: it zooms (when it has a size); its own size, for the footer, when
+   * it has one.
+   */
+  imageLoaded(img: HTMLImageElement, data: FileLook): { width: number; height: number } | null
+  /** The image is no longer drawn: its zoom goes. */
+  imageGone(img: HTMLImageElement): void
+  /** The footer's button: in to 100% from fit, else back to fit. */
+  toggleZoom(): void
+  /** A key, before the page's own: Esc closes it, Backspace or Alt+← walks back, + − 0 and the arrows zoom. */
   keydown(e: LookKey): void
   /** The spring stops (the page goes). */
   stop(): void
@@ -51,6 +73,9 @@ export interface QuickLookEngine {
 export interface LookKey {
   key: string
   altKey: boolean
+  ctrlKey: boolean
+  metaKey: boolean
+  shiftKey: boolean
   preventDefault(): void
   stopImmediatePropagation(): void
 }
@@ -122,6 +147,24 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
   let growing = false
   let from: From = { dx: 0, dy: 0, s: 0.2 }
 
+  // An image zooms (components/files/zoom.ts); the footer shows the scale and a button in to 100%
+  // or back to fit. A step, another look and the close drop it, as each opening starts fitted.
+  let zoom: { img: HTMLImageElement; control: ImageZoom } | null = null
+  const zoomNow = new Store<ZoomState | null>(null)
+  let shownZoom = ''
+  function zoomBar(z: ZoomState | null): void {
+    // Called on every frame of a zoom: the bar is only drawn again when a whole percent changes.
+    const shown = zoomShown(z)
+    if (shown === shownZoom) return
+    shownZoom = shown
+    zoomNow.set(z)
+  }
+  function dropZoom(): void {
+    zoom?.control.destroy()
+    zoom = null
+    zoomBar(null)
+  }
+
   function paint(p: number): void {
     const win = refs.win.current
     const scrim = refs.scrim.current
@@ -148,6 +191,7 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
     onUpdate: v => paint(v),
     onRest: v => {
       if (v !== 0) return
+      dropZoom()
       nav.closed()
       deps.focus().close()
     },
@@ -156,6 +200,7 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
   const isOpen = () => openNow.get()
 
   function lookAt(target: LookTarget, el: Element | null | undefined): void {
+    dropZoom()
     if (isOpen()) {
       nav.push(target)
       return
@@ -177,7 +222,9 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
   }
 
   const back = () => {
-    if (!nav.back()) close()
+    if (nav.view().depth < 2) return close()
+    dropZoom()
+    nav.back()
   }
 
   async function system(path: string | undefined, how: 'open' | 'reveal'): Promise<void> {
@@ -212,8 +259,14 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
     },
     back,
     close,
-    go: path => nav.push({ kind: 'file', path, line: null }),
-    setMode: mode => nav.setMode(mode),
+    go(path) {
+      dropZoom()
+      nav.push({ kind: 'file', path, line: null })
+    },
+    setMode(mode) {
+      dropZoom()
+      nav.setMode(mode)
+    },
     act(how) {
       const { data, top } = nav.view()
       const path = data ? data.path : top?.kind === 'file' ? top.path : undefined
@@ -222,6 +275,28 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
       void copy(line ? `${path}:${line}` : String(path))
     },
     upgrade: (root, cwd) => deps.upgrade(root, cwd),
+    zoom: zoomNow,
+    imageLoaded(img, data) {
+      // Walked away before it loaded: the footer is someone else's by now.
+      if (!img.isConnected) return null
+      const own = img.naturalWidth ? { width: img.naturalWidth, height: img.naturalHeight } : null
+      // An SVG without a size of its own zooms from the size it was fitted at.
+      const size =
+        img.naturalWidth && img.naturalHeight
+          ? { w: img.naturalWidth, h: img.naturalHeight }
+          : { w: img.offsetWidth, h: img.offsetHeight }
+      const stage = img.parentElement
+      if (data.kind === 'image' && size.w && size.h && stage) {
+        dropZoom()
+        const vector = /\.svg$/i.test(data.path ?? '')
+        zoom = { img, control: zoomImage(stage, img, { size, vector, onChange: zoomBar }) }
+      }
+      return own
+    },
+    imageGone(img) {
+      if (zoom?.img === img) dropZoom()
+    },
+    toggleZoom: () => zoom?.control.toggle(),
     keydown(e) {
       // Taken before the page's own keys: Esc here must not close the session sheet as well.
       if (!isOpen() || !deps.focus().isTop()) return
@@ -234,6 +309,10 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
         e.preventDefault()
         e.stopImmediatePropagation()
         back()
+      } else if (zoom && !typing && zoom.control.key(e)) {
+        // + − 0 with or without Ctrl: the image zooms, not the page.
+        e.preventDefault()
+        e.stopImmediatePropagation()
       }
     },
     stop: () => void motion.stop(),

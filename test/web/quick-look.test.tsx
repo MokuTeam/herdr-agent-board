@@ -213,6 +213,37 @@ describe('the quick look of a file', () => {
     expect(b.looks().react).toContain('/api/fs/raw?path=%2Fmedia%2Fsong.mp3&amp;t=tok')
   })
 
+  test('an image zooms: the footer shows its scale and a button in to 100% or back to fit', async () => {
+    const b = new BothLooks(en, server())
+    await b.open(at('/pics/a b.png'))
+    same(b)
+    // Fitted at 52%: the button goes in to 100%.
+    b.zoomBar({ s: 0.5178, fit: true, to: 1 })
+    same(b)
+    expect(b.looks().react).toContain('title="Zoom to 100%"')
+    // Zoomed in: back to fit.
+    b.zoomBar({ s: 1, fit: false, to: 1 })
+    same(b)
+    b.zoomBar({ s: 2.345, fit: false, to: 1 })
+    same(b)
+    expect(b.looks().react).toContain('>235%<')
+    // A small image fits at 100%: in from there goes to twice that.
+    b.zoomBar({ s: 1, fit: true, to: 2 })
+    same(b)
+    // No zoom any more (a step, a close): the bar hides.
+    b.zoomBar(null)
+    const hidden = /<span class="ql-zoom" hidden="">/
+    expect(b.looks().old).toMatch(hidden)
+    expect(b.looks().react).toMatch(hidden)
+    const ru = new BothLooks(translator('ru'), server())
+    await ru.open(at('/pics/a b.png'))
+    ru.zoomBar({ s: 0.52, fit: true, to: 1 })
+    same(ru)
+    ru.zoomBar({ s: 3, fit: false, to: 1 })
+    same(ru)
+    expect(ru.looks().react).toContain('Вписать в окно (0)')
+  })
+
   test('a binary or unknown file: no preview, and a button that opens it', async () => {
     const b = new BothLooks(en, server())
     for (const path of ['/bin/tool.exe', '/bin/blob']) {

@@ -1,15 +1,26 @@
 // The quick look over the board (the old page's files.js root): its head with the kind's icon,
 // the name, the folders above to walk to and the tools (preview or source for Markdown, open with
 // the system, read the changes again, show in its folder, copy the path), what it shows, and a
-// footer of what it is. It lives in <body> itself, beside the page (hooks/useModalFocus.ts); its
-// motion, focus and keys are hooks/useQuickLook.ts's.
+// footer of what it is, with an image's scale and a button in to 100% or back to fit. It lives in
+// <body> itself, beside the page (hooks/useModalFocus.ts); its motion, focus, keys and zoom are
+// hooks/useQuickLook.ts's.
 import { Fragment, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Translator } from '../../../../src/core/types.ts'
 import type { LookRefs, QuickLookEngine } from '../../hooks/useQuickLook.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { actionsOff, bodyClass, crumbs, type LookHead, lookIcon, parentOf, previewFoot } from '../../models/files.ts'
 import {
+  actionsOff,
+  bodyClass,
+  crumbs,
+  type LookHead,
+  lookIcon,
+  parentOf,
+  previewFoot,
+  zoomBar,
+} from '../../models/files.ts'
+import {
+  type FileLook,
   idOf,
   isChangesLook,
   isFileLook,
@@ -18,6 +29,7 @@ import {
   type LookTarget,
   type LookView,
 } from '../../models/quick-look.ts'
+import type { ZoomState } from '../../models/zoom.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { useStore } from '../../state/store.ts'
 import { Changes, changesFoot } from '../sheet/Changes.tsx'
@@ -34,6 +46,8 @@ export interface LookHandlers {
   go(path: string): void
   search(query: string): void
   upgrade(root: HTMLElement, cwd: string): void
+  /** The zoom bar's button. */
+  zoom(): void
 }
 
 /** An image's own size, for the one it was read from. */
@@ -50,7 +64,11 @@ export interface QuickLookViewProps {
   /** The run's token for the raw bytes (the board's fsToken). */
   token: string | null
   image?: ImageSize | null
-  onImage?: (size: ImageSize) => void
+  /** An image loaded (it zooms), and gone. */
+  onImage?: (img: HTMLImageElement, data: FileLook) => void
+  onImageGone?: (img: HTMLImageElement) => void
+  /** The zoom of the image on show, for the footer. */
+  zoom?: ZoomState | null
   refs?: Partial<LookRefs>
   on?: Partial<LookHandlers>
 }
@@ -78,7 +96,17 @@ export function footOf(view: LookView, t: Translator, image: ImageSize | null = 
   return (own ? [`${image.width} × ${image.height}`, ...foot] : foot).join(' · ')
 }
 
-export function QuickLookView({ view, canEdit, token, image = null, onImage, refs = {}, on = {} }: QuickLookViewProps) {
+export function QuickLookView({
+  view,
+  canEdit,
+  token,
+  image = null,
+  onImage,
+  onImageGone,
+  zoom = null,
+  refs = {},
+  on = {},
+}: QuickLookViewProps) {
   const t = useT()
   // The past sessions say so in the page's language as it is now (the old page's relabel drew them again).
   const head = view.top?.kind === 'history' && !view.hidden ? { ...view.head, name: t('history.title') } : view.head
@@ -169,11 +197,36 @@ export function QuickLookView({ view, canEdit, token, image = null, onImage, ref
           </button>
         </header>
         <div className={bodyClassOf(view)} ref={refs.body}>
-          <LookBody view={view} token={token} onImage={onImage} on={on} />
+          <LookBody view={view} token={token} onImage={onImage} onImageGone={onImageGone} on={on} />
         </div>
-        <footer className="ql-foot">{footOf(view, t, image)}</footer>
+        <LookFoot text={footOf(view, t, image)} zoom={zoom} onZoom={on.zoom} />
       </section>
     </div>
+  )
+}
+
+/** What it is, and for a zoomable image its scale and the button in to 100% or back to fit. */
+function LookFoot({ text, zoom, onZoom }: { text: string; zoom: ZoomState | null; onZoom?: (() => void) | undefined }) {
+  const t = useT()
+  const bar = zoom ? zoomBar(zoom, t) : null
+  return (
+    <footer className="ql-foot look-foot">
+      <span className="look-foot-text" title={text}>
+        {text}
+      </span>
+      <span className="ql-zoom" hidden={!bar}>
+        <span className="ql-zoom-level">{bar?.level}</span>
+        <button
+          type="button"
+          className="ql-zoom-button"
+          title={bar?.hint}
+          aria-label={bar?.hint}
+          onClick={() => onZoom?.()}
+        >
+          {bar?.label}
+        </button>
+      </span>
+    </footer>
   )
 }
 
@@ -201,11 +254,12 @@ function Crumbs({ head, onGo }: { head: LookHead; onGo?: ((path: string) => void
 interface LookBodyProps {
   view: LookView
   token: string | null
-  onImage?: ((size: ImageSize) => void) | undefined
+  onImage?: ((img: HTMLImageElement, data: FileLook) => void) | undefined
+  onImageGone?: ((img: HTMLImageElement) => void) | undefined
   on: Partial<LookHandlers>
 }
 
-function LookBody({ view, token, onImage, on }: LookBodyProps) {
+function LookBody({ view, token, onImage, onImageGone, on }: LookBodyProps) {
   const t = useT()
   const top: LookTarget | null = view.top
   if (view.hidden || !top) return null
@@ -216,12 +270,14 @@ function LookBody({ view, token, onImage, on }: LookBodyProps) {
   if (!isFileLook(d)) return null
   return (
     <Preview
+      key={idOf(d)}
       data={d}
       mode={view.mode}
       token={token}
       onGo={on.go}
       onOpen={() => on.act?.('open')}
-      onImage={(width, height) => onImage?.({ data: d, width, height })}
+      onImage={img => onImage?.(img, d)}
+      onImageGone={onImageGone}
     />
   )
 }
@@ -229,6 +285,7 @@ function LookBody({ view, token, onImage, on }: LookBodyProps) {
 /** The page's quick look, in <body> beside the page. */
 export function QuickLook({ engine }: { engine: QuickLookEngine }) {
   const view = useStore(engine.view)
+  const zoom = useStore(engine.zoom)
   const { canEdit, data } = useBoardContext()
   const [image, setImage] = useState<ImageSize | null>(null)
   const { refs } = engine
@@ -255,7 +312,12 @@ export function QuickLook({ engine }: { engine: QuickLookEngine }) {
       canEdit={canEdit}
       token={data?.fsToken ?? null}
       image={image}
-      onImage={setImage}
+      onImage={(img, d) => {
+        const own = engine.imageLoaded(img, d)
+        if (own) setImage({ data: d, ...own })
+      }}
+      onImageGone={engine.imageGone}
+      zoom={zoom}
       refs={refs}
       on={{
         back: engine.back,
@@ -266,6 +328,7 @@ export function QuickLook({ engine }: { engine: QuickLookEngine }) {
         go: engine.go,
         search: query => engine.nav.search(query),
         upgrade: engine.upgrade,
+        zoom: engine.toggleZoom,
       }}
     />,
     document.body,

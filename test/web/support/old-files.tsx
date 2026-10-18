@@ -1,6 +1,7 @@
-// The chat's files both ways, for parity: the old page's files.js as it was at the parity baseline
-// — its quick look (the root it builds, then labels, show, showChanges, showHistory, search,
-// head, render and the parts they draw) and a chip's apply — run on a fake DOM
+// The chat's files both ways, for parity: the old page's files.js as it was at the zoom's merge
+// (upstream #42; the rest of it is the parity baseline's) — its quick look (the root it builds,
+// then labels, show, showChanges, showHistory, search, head, render, the zoom bar and the parts
+// they draw) and a chip's apply — run on a fake DOM
 // (support/fake-dom.ts) with the server's answers handed in; and the React port — the quick look's
 // steps (models/quick-look.ts) drawn by <QuickLookView>, a chip marked by markChip and drawn by
 // <FileChip> — given the same answers.
@@ -11,6 +12,7 @@ import { QuickLookView } from '../../../web/src/components/files/QuickLook.tsx'
 import { markChip } from '../../../web/src/hooks/useFileChips.ts'
 import type { PathInfo } from '../../../web/src/models/files.ts'
 import { type LookTarget, type QuickLookNav, quickLookNav } from '../../../web/src/models/quick-look.ts'
+import type { ZoomState } from '../../../web/src/models/zoom.ts'
 import { board, renderInBoard } from './board.tsx'
 import { type FakeElement, FakeWorld } from './fake-dom.ts'
 import {
@@ -33,8 +35,16 @@ export interface FilesServer {
   history?: (key: string, query: string) => unknown
 }
 
+/** Upstream's merge of the quick look's zoom (#42): files.js as it was there. */
+export const ZOOM_MERGE = '72151c3'
+
 const NESTED = [
   'tr',
+  'setFoot',
+  'zoomBox',
+  'percent',
+  'zoomBar',
+  'dropZoom',
   'rawUrl',
   'apply',
   'labels',
@@ -82,35 +92,52 @@ export class OldLook {
     server: FilesServer,
     token = 'tok',
   ) {
-    const template = /root\.innerHTML = `([\s\S]*?)`\r?\n/.exec(oldSource('web/files.js'))?.[1] ?? ''
+    const template = /root\.innerHTML = `([\s\S]*?)`\r?\n/.exec(oldSource('web/files.js', ZOOM_MERGE))?.[1] ?? ''
     const diff = oldCode('web/diff.js', ['STATUS', 'parseStatus', 'unquote', 'parseDiff', 'changedFiles'], {})
-    const top = oldCode('web/files.js', ['$', 'esc', 'svg', 'DOC', 'ICONS', 'iconOf'], {})
+    const top = oldCode('web/files.js', ['$', 'esc', 'svg', 'DOC', 'ICONS', 'iconOf'], {}, ZOOM_MERGE)
     const html = new Function('ICONS', `return \`${template}\``)(top.get('ICONS'))
     const [node] = parseHtml(`<div class="ql" hidden>${html}</div>`)
     if (node?.kind !== 'element') throw new Error('no root')
     this.root = this.world.mount(node)
     const body = this.root.querySelector('.ql-body')
     const reply = (value: unknown) => Promise.resolve({ ok: true, json: async () => value })
-    this.code = oldCode('web/files.js', ['$', 'esc', 'svg', 'DOC', 'ICONS', 'iconOf', ...NESTED], {
-      t: () => this.t,
-      token: () => token,
-      canMutate: () => this.canEdit,
-      root: this.root,
-      body,
-      ql: this.ql,
-      markdown: OLD_MARKDOWN.get('markdown'),
-      upgrade() {},
-      changedFiles: diff.get('changedFiles'),
-      requestAnimationFrame() {},
-      post: async (_url: string, b: { path: string }) => (server.preview ? server.preview(b.path) : never()),
-      fetch: (url: string) => {
-        const [, key = '', what, query = ''] =
-          /^\/api\/session\/([^/]+)\/(changes|history)(?:\?q=(.*))?$/.exec(url) ?? []
-        const k = decodeURIComponent(key)
-        if (what === 'changes') return server.changes ? reply(server.changes(k)) : never()
-        return server.history ? reply(server.history(k, decodeURIComponent(query))) : never()
+    this.code = oldCode(
+      'web/files.js',
+      ['$', 'esc', 'svg', 'DOC', 'ICONS', 'iconOf', ...NESTED],
+      {
+        t: () => this.t,
+        token: () => token,
+        canMutate: () => this.canEdit,
+        root: this.root,
+        body,
+        ql: this.ql,
+        // The zoom's own state (the old init's lets). No image loads in a fake DOM: none starts.
+        zoom: null,
+        zoomShown: '',
+        percentIn: null,
+        zoomImage() {
+          throw new Error('no image loads here')
+        },
+        markdown: OLD_MARKDOWN.get('markdown'),
+        upgrade() {},
+        changedFiles: diff.get('changedFiles'),
+        requestAnimationFrame() {},
+        post: async (_url: string, b: { path: string }) => (server.preview ? server.preview(b.path) : never()),
+        fetch: (url: string) => {
+          const [, key = '', what, query = ''] =
+            /^\/api\/session\/([^/]+)\/(changes|history)(?:\?q=(.*))?$/.exec(url) ?? []
+          const k = decodeURIComponent(key)
+          if (what === 'changes') return server.changes ? reply(server.changes(k)) : never()
+          return server.history ? reply(server.history(k, decodeURIComponent(query))) : never()
+        },
       },
-    })
+      ZOOM_MERGE,
+    )
+  }
+
+  /** What a zoom tells the footer on a change (its onChange), or that there is none: the old zoomBar. */
+  zoomBar(z: ZoomState | null): void {
+    this.call('zoomBar', z)
   }
 
   private call(name: string, ...args: unknown[]): unknown {
@@ -190,6 +217,8 @@ export class OldLook {
 export class NewLook {
   readonly nav: QuickLookNav
   canEdit = true
+  /** What the engine's zoom store holds (hooks/useQuickLook.ts): the bar draws from it. */
+  zoom: ZoomState | null = null
 
   constructor(
     public t: Translator,
@@ -232,7 +261,7 @@ export class NewLook {
   markup(): Node[] {
     const value = { ...board(), canEdit: this.canEdit }
     const nodes = renderInBoard(
-      <QuickLookView view={this.nav.view()} canEdit={this.canEdit} token={this.token} />,
+      <QuickLookView view={this.nav.view()} canEdit={this.canEdit} token={this.token} zoom={this.zoom} />,
       value,
       this.t.lang,
     )
@@ -296,6 +325,11 @@ export class BothLooks {
   language(t: Translator): void {
     this.old.relabel(t)
     this.react.t = t
+  }
+  /** A zoom's change, as the footer hears it. */
+  zoomBar(z: ZoomState | null): void {
+    this.old.zoomBar(z)
+    this.react.zoom = z
   }
   looks(): { old: string; react: string } {
     return {

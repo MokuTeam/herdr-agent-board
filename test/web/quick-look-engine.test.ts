@@ -1,7 +1,7 @@
 // The quick look's motion, focus and keys (hooks/useQuickLook.ts quickLookEngine) in a fake DOM
 // (support/fake-dom.ts): it grows out of the chip it was opened from, takes the focus, steps in
 // and back, shrinks away on Esc or Back from its first step, and gives the focus back; open, reveal
-// and copy act on what it shows. Springs share one frame loop: every world settles before it goes.
+// and copy act on what it shows; an image on show zooms, by its keys too, until the next step. Springs share one frame loop: every world settles before it goes.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { FilesApi } from '../../web/src/api/files.ts'
@@ -48,6 +48,8 @@ function setup({ canEdit = true } = {}) {
   const previews: Record<string, Preview> = {
     '/a.md': { path: '/a.md', name: 'a.md', kind: 'markdown', text: '# A', lines: 1 },
     '/b.txt': { path: '/b.txt', name: 'b.txt', kind: 'text', text: 'b', lines: 1 },
+    '/shot.png': { path: '/shot.png', name: 'shot.png', kind: 'image', size: 9000 },
+    '/logo.SVG': { path: '/logo.SVG', name: 'logo.SVG', kind: 'image', size: 300 },
   }
   const api = {
     preview: async (path: string) => previews[path] ?? { path, error: 'missing' },
@@ -75,10 +77,13 @@ function setup({ canEdit = true } = {}) {
   return { look, win, scrim, chip, focus, opened, toasts }
 }
 
-const press = (key: string, altKey = false) => {
+const press = (key: string, altKey = false, { ctrlKey = false, metaKey = false, shiftKey = false } = {}) => {
   const e = {
     key,
     altKey,
+    ctrlKey,
+    metaKey,
+    shiftKey,
     prevented: false,
     preventDefault() {
       e.prevented = true
@@ -188,5 +193,109 @@ describe('what it shows', () => {
     await world.flush()
     expect(opened).toEqual([])
     expect(toasts).toEqual([[en('mobile.readOnly'), true]])
+  })
+})
+
+/** An image as drawn on its stage, `natural` its own size once loaded (none: an SVG without one). */
+function image(natural: { w: number; h: number } | null, shown = { w: 400, h: 300 }) {
+  const stage = mount('<div class="ql-media ql-stage" style="width: 1000px; height: 700px"><img class="checker"></div>')
+  const img = stage.querySelector<HTMLImageElement>('img')
+  if (!img) throw new Error('no image')
+  img.style.width = `${shown.w}px`
+  img.style.height = `${shown.h}px`
+  Object.defineProperty(img, 'naturalWidth', { value: natural?.w ?? 0 })
+  Object.defineProperty(img, 'naturalHeight', { value: natural?.h ?? 0 })
+  return { stage, img }
+}
+
+/** What the quick look shows now, as a file. */
+function shown(look: ReturnType<typeof setup>['look']) {
+  const data = look.engine.view.get().data
+  if (!data || !('line' in data)) throw new Error('no file on show')
+  return data
+}
+
+describe('an image on show zooms', () => {
+  test('loaded, it zooms and gives the footer its size; + − 0 are its own, not while typing; a step drops it', async () => {
+    const { look, chip } = setup()
+    look.look({ path: '/shot.png' }, chip)
+    look.engine.grow()
+    await world.settle()
+    const { stage, img } = image({ w: 1900, h: 993 })
+    expect(look.engine.imageLoaded(img, shown(look))).toEqual({ width: 1900, height: 993 })
+    expect(stage.dataset.zoom).toBe('fit')
+    expect(look.engine.zoom.get()).toMatchObject({ fit: true, to: 1 })
+    const plus = press('+')
+    look.engine.keydown(plus)
+    expect(plus.prevented).toBe(true)
+    await world.settle()
+    expect(look.engine.zoom.get()).toMatchObject({ fit: false })
+    // Typing in a field: the key is the field's.
+    const field = mount('<input>')
+    field.focus()
+    const typed = press('0')
+    look.engine.keydown(typed)
+    expect(typed.prevented).toBe(false)
+    field.blur()
+    // Not a zoom key: the page's.
+    const other = press('a')
+    look.engine.keydown(other)
+    expect(other.prevented).toBe(false)
+    // The footer's button: back to fit, and in again.
+    look.engine.toggleZoom()
+    await world.settle()
+    expect(look.engine.zoom.get()).toMatchObject({ fit: true })
+    // Another image gone is not this one's zoom.
+    look.engine.imageGone(image({ w: 10, h: 10 }).img)
+    expect(look.engine.zoom.get()).not.toBeNull()
+    // A step: the zoom goes, and its keys with it.
+    look.look({ path: '/b.txt' }, chip)
+    expect(look.engine.zoom.get()).toBeNull()
+    const after = press('+')
+    look.engine.keydown(after)
+    expect(after.prevented).toBe(false)
+  })
+
+  test('an SVG without a size zooms from the size it was fitted at, smooth; walked away, nothing; not an image, no zoom', async () => {
+    const { look, chip } = setup()
+    look.look({ path: '/logo.SVG' }, chip)
+    look.engine.grow()
+    await world.settle()
+    const svg = image(null, { w: 500, h: 250 })
+    expect(look.engine.imageLoaded(svg.img, shown(look))).toBeNull()
+    expect(look.engine.zoom.get()).toMatchObject({ fit: true })
+    for (let i = 0; i < 6; i++) look.engine.keydown(press('+'))
+    await world.settle()
+    expect(svg.img.classList.contains('pixelated')).toBe(false)
+    // Six steps up from 100% (it fits at its own size): the largest zoom, eight times.
+    expect(Number.parseFloat(String(svg.img.style.width))).toBeCloseTo(500 * 8, 3)
+    // Gone from the page before it loaded: the footer and the zoom are someone else's.
+    const gone = image({ w: 64, h: 64 })
+    gone.stage.remove()
+    expect(look.engine.imageLoaded(gone.img, shown(look))).toBeNull()
+    expect(gone.stage.classList.contains('zoomable')).toBe(false)
+    // Not an image (a text file's picture, say): its size, no zoom.
+    look.look({ path: '/b.txt' }, chip)
+    await world.flush()
+    const text = image({ w: 30, h: 20 })
+    expect(look.engine.imageLoaded(text.img, shown(look))).toEqual({ width: 30, height: 20 })
+    expect(look.engine.zoom.get()).toBeNull()
+  })
+
+  test('drawn no more, or the quick look closed: the zoom goes', async () => {
+    const { look, chip } = setup()
+    look.look({ path: '/shot.png' }, chip)
+    look.engine.grow()
+    await world.settle()
+    const first = image({ w: 1900, h: 993 })
+    look.engine.imageLoaded(first.img, shown(look))
+    look.engine.imageGone(first.img)
+    expect(look.engine.zoom.get()).toBeNull()
+    const second = image({ w: 1900, h: 993 })
+    look.engine.imageLoaded(second.img, shown(look))
+    expect(look.engine.zoom.get()).not.toBeNull()
+    look.engine.keydown(press('Escape'))
+    await world.settle()
+    expect(look.engine.zoom.get()).toBeNull()
   })
 })

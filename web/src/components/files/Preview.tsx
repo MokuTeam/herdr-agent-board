@@ -1,8 +1,9 @@
 // What the quick look shows of a file or folder (the old page's files.js render, folder, code,
-// table, empty): images, PDF, video and audio from the raw bytes; Markdown rendered or as source;
-// CSV as a table; code and text in numbered lines (the line it was opened at lit); folders as a
-// list to walk through; and why there is nothing to show.
-import type { ReactNode } from 'react'
+// table, empty): images (they zoom, zoom.ts), PDF, video and audio from the raw bytes; Markdown
+// rendered or as source; CSV as a table; code and text in numbered lines (the line it was opened
+// at lit); folders as a list to walk through; and why there is nothing to show.
+import { type ReactNode, useEffect, useRef } from 'react'
+import { useLatest } from '../../hooks/useLatest.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import {
   codeLines,
@@ -44,22 +45,19 @@ export interface PreviewProps {
   onGo?: ((path: string) => void) | undefined
   /** Open it with the system. */
   onOpen?: (() => void) | undefined
-  /** An image loaded: its own size goes in the footer. */
-  onImage?: ((width: number, height: number) => void) | undefined
+  /** An image loaded: its own size goes in the footer, and it zooms. */
+  onImage?: ((img: HTMLImageElement) => void) | undefined
+  /** The image is no longer drawn: its zoom goes. */
+  onImageGone?: ((img: HTMLImageElement) => void) | undefined
 }
 
-export function Preview({ data: d, mode, token, onGo, onOpen, onImage }: PreviewProps): ReactNode {
+export function Preview({ data: d, mode, token, onGo, onOpen, onImage, onImageGone }: PreviewProps): ReactNode {
   const t = useT()
   if (d.error === 'missing') return <LookEmpty icon="missing" text={t('ql.missing', { path: d.path ?? '' })} />
   if (d.error) return <LookEmpty icon="file" text={d.error === 'denied' ? t('ql.denied') : d.error} />
   if (d.dir) return <Folder path={d.path ?? ''} entries={d.entries ?? []} onGo={onGo} />
   const src = rawUrl(d.path ?? '', token)
-  if (d.kind === 'image')
-    return (
-      <div className="ql-media checker">
-        <img src={src} alt="" onLoad={e => onImage?.(e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)} />
-      </div>
-    )
+  if (d.kind === 'image') return <LookImage src={src} alt={d.name ?? ''} onLoad={onImage} onGone={onImageGone} />
   if (d.kind === 'pdf') return <iframe className="ql-frame" src={src} title={d.name ?? ''} />
   if (d.kind === 'video')
     return (
@@ -86,6 +84,33 @@ export function Preview({ data: d, mode, token, onGo, onOpen, onImage }: Preview
     return <Code text={d.text} line={d.line} />
   }
   return <LookEmpty icon={iconName(d.kind === 'binary' ? 'file' : d.kind)} text={t('ql.noPreview')} onOpen={onOpen} />
+}
+
+/** An image on its stage, which zoom.ts sizes and moves it in once it loaded. */
+function LookImage({
+  src,
+  alt,
+  onLoad,
+  onGone,
+}: {
+  src: string
+  alt: string
+  onLoad?: ((img: HTMLImageElement) => void) | undefined
+  onGone?: ((img: HTMLImageElement) => void) | undefined
+}) {
+  const ref = useRef<HTMLImageElement>(null)
+  const gone = useLatest(onGone)
+  useEffect(() => {
+    const img = ref.current
+    return () => {
+      if (img) gone.current?.(img)
+    }
+  }, [gone])
+  return (
+    <div className="ql-media ql-stage">
+      <img ref={ref} className="checker" src={src} alt={alt} onLoad={e => onLoad?.(e.currentTarget)} />
+    </div>
+  )
 }
 
 function Code({ text, line }: { text: string; line: number | null }) {
