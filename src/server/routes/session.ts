@@ -42,7 +42,7 @@ const PIN_NAMES: ReadonlySet<string> = PINS
 const isPin = (column: string): column is Pin => PIN_NAMES.has(column)
 
 async function detail(app: SessionApp, item: Item) {
-  const { transcript, alive, since, pipe, ...shown } = item
+  const { transcript, claudeRoot, alive, since, pipe, ...shown } = item
   const conversation = withSessions(app.items(), app.deps.claude.conversation(transcript ?? '', 60))
   // helpers: every subagent, fork, workflow agent and teammate, newest first (adapters/helpers.ts).
   const own = helpersOf(transcript, { alive: !!alive, since: since ?? null })
@@ -218,9 +218,11 @@ export function sessionRoutes(app: SessionApp): Route[] {
     {
       method: 'GET',
       path: /^\/api\/session\/([^/]+)\/history$/,
-      handle: withItem(async (item, _req, ctx) =>
-        json(200, await app.deps.claude.searchHistory(item.cwd, ctx.url.searchParams.get('q'), item.session)),
-      ),
+      // In the session's own profile: the folder its records were read from.
+      handle: withItem(async (item, _req, ctx) => {
+        const home = app.deps.homes.forDir(item.claudeRoot ?? app.deps.claude.root)
+        return json(200, await home.searchHistory(item.cwd, ctx.url.searchParams.get('q'), item.session))
+      }),
     },
     {
       method: 'GET',

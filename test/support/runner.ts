@@ -58,14 +58,29 @@ if (mode === 'open') {
 } else if (mode === 'server') {
   const { startServer } = await import('../../src/server/app.ts')
   const { defaultDeps } = await import('../../src/services/deps.ts')
-  const cfg = input<Config>()
+  const given = input<Config>()
+  // TEST_LIVE_CONFIG: the config.json the test wrote, read again as it changes (as
+  // entrypoints/server.ts has it); each reload is signalled. The port is still the one handed in.
+  const live = !!process.env.TEST_LIVE_CONFIG
+  let refresh = (): void => {}
+  const cfg = live
+    ? (await import('../../src/adapters/config-file.ts')).liveConfig(() => {
+        send({ reloaded: true })
+        refresh()
+      })
+    : given
   // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
   if (cfg.language) (await import('../../src/core/lang.ts')).useLanguage(cfg.language)
   // TEST_PROBE_MS: herdr-wake's /status may take that long in the setup check (1.5 s by default).
   const probeMs = Number(process.env.TEST_PROBE_MS) || undefined
   const { gatherFacts } = await import('../../src/adapters/setup-facts.ts')
   const deps = defaultDeps(cfg, text => send({ log: text }))
-  const server = await startServer({ deps, ...(probeMs && { gather: () => gatherFacts(deps.cfg, { probeMs }) }) })
+  const server = await startServer({
+    deps,
+    ...(live && { port: Number(given.port) }),
+    ...(probeMs && { gather: () => gatherFacts(deps.cfg, { probeMs }) }),
+  })
+  refresh = () => void server.refresh()
   send({ ready: true })
   process.on('message', async message => {
     if (message === 'refresh') {

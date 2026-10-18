@@ -93,8 +93,9 @@ export function createBoardState({ deps, launches, terminals, version, push, set
           fallback: id === 'other',
         }
       })
-    // What the page has no use for stays here: file paths, the Claude process and its pipe.
-    const list = items.map(({ transcript, alive, since, pipe, ...rest }) => launches.decorate(rest))
+    // What the page has no use for stays here: file paths (the Claude folder included), the Claude
+    // process and its pipe.
+    const list = items.map(({ transcript, claudeRoot, alive, since, pipe, ...rest }) => launches.decorate(rest))
     // The schedule without the scheduler's bookkeeping; the log is what was sent or missed lately.
     const schedules = listEntries().map(({ claim, tried, waited, ...entry }) => entry)
     return {

@@ -23,7 +23,6 @@
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync } from 'node:fs'
 import { readCard, writeCard } from '../adapters/cards.ts'
-import { defaultClaudeHome } from '../adapters/claude-home.ts'
 import { configFile, editCategories, loadConfig } from '../adapters/config-file.ts'
 import { type HerdrPane, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
@@ -91,7 +90,7 @@ async function resolveSession(): Promise<Session> {
     return {
       key: own,
       cwd: process.cwd(),
-      name: defaultClaudeHome().liveSessions().get(own)?.name,
+      name: deps.claude.liveSessions().get(own)?.name,
       pane: process.env.HERDR_PANE_ID,
     }
   }
@@ -113,8 +112,7 @@ async function ownSession(): Promise<SessionRef | null> {
   } catch {}
   const key = own || (p?.agent ? (p.agent_session?.value ?? `pane-${pane}`) : null)
   if (!key) return null
-  const name =
-    (own && defaultClaudeHome().liveSessions().get(own)?.name) || p?.terminal_title_stripped || key.slice(0, 8)
+  const name = (own && deps.claude.liveSessions().get(own)?.name) || p?.terminal_title_stripped || key.slice(0, 8)
   return { key, name }
 }
 
@@ -129,7 +127,7 @@ async function entryFor(s: Session) {
   try {
     if (s.pane) cwd = (await paneOf(s.pane))?.cwd ?? ''
   } catch {}
-  cwd ||= defaultClaudeHome().liveSessions().get(s.key)?.cwd || s.cwd || ''
+  cwd ||= deps.claude.liveSessions().get(s.key)?.cwd || s.cwd || ''
   const setter = target ? await ownSession() : null
   return {
     key: s.key,
@@ -402,7 +400,10 @@ async function callReport(): Promise<void> {
   try {
     item = (await collect(deps)).find(i => i.key === session || i.session === session) ?? null
   } catch {}
-  const name = item?.name ?? defaultClaudeHome().liveSessions().get(session)?.name ?? ''
+  // Else its name in Claude's registry. MokuPilot runs this from its own env, so not only this
+  // env's profile: the session may run in any profile listed, a hidden one too.
+  const name =
+    item?.name ?? deps.homes.liveSessions(deps.profiles().list.map(p => p.dir)).get(session)?.session.name ?? ''
   const now = Date.now()
   const e = addEntry({
     key: item?.key ?? session,

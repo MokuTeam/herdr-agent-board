@@ -9,6 +9,7 @@ import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
 import { failureKind } from '../../core/launch/launcher-command.ts'
 import { sameDir } from '../../core/launch/names.ts'
+import { shownProfiles } from '../../core/profiles.ts'
 import type { Item, LaunchView } from '../../core/types.ts'
 import { raiseTerminal } from '../../integrations/terminal-window.ts'
 import type { Deps } from '../deps.ts'
@@ -240,7 +241,8 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
       workspaces,
       focused,
       board: (cfg.placement ?? 'workspace') === 'workspace' ? (cfg.workspace ?? 'Board') : '',
-      recent: await deps.claude.recentFolders(),
+      // Of the profiles the owner shows: a hidden one's folders are not offered.
+      recent: await deps.homes.recentFolders(shownProfiles(deps.profiles().list).map(p => p.dir)),
       error,
     }
   }

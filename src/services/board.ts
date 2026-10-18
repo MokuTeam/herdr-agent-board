@@ -1,18 +1,22 @@
 // The board's data: every agent pane in herdr plus the sessions herdr-wake put to sleep, each
-// merged with its card and with what Claude recorded about it, and sorted into a column.
+// merged with its card and with what Claude recorded about it in its own profile's folder, and
+// sorted into a column.
 import { readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { allCards, writeCard } from '../adapters/cards.ts'
+import type { ClaudeHome } from '../adapters/claude-home.ts'
 import { helpersOf } from '../adapters/helpers.ts'
 import { snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import type { LinksIndex } from '../adapters/links.ts'
 import { contextDir } from '../adapters/paths.ts'
+import type { LiveHit } from '../adapters/profile-homes.ts'
 import { attentionOf, busy, columnOf, isAgentStatus, PINS } from '../core/board.ts'
 import { categoryFor } from '../core/categories.ts'
 import { type HelperSummary, summarize } from '../core/helpers.ts'
 import { t } from '../core/lang.ts'
 import { relate } from '../core/links.ts'
+import { sessionProfile } from '../core/profiles.ts'
 import type { AgentStatus, Attention, Card, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
 import type { Deps } from './deps.ts'
 
@@ -105,6 +109,31 @@ function contextOf(session: string | null, info: TranscriptInfo): ContextFill {
   }
 }
 
+/**
+ * The Claude home a session's records (transcript, title, helpers) are read from, with its
+ * transcript: the folder its card reports it runs in, else the one whose registry has it running,
+ * else the first of `searched` that has its transcript; null when none has.
+ */
+function recordsOf(
+  deps: Deps,
+  card: Card,
+  session: string | null,
+  cwd: string,
+  hit: LiveHit | undefined,
+  searched: readonly ClaudeHome[],
+): { home: ClaudeHome | null; path: string | null } {
+  // A folder named relative to wherever its session ran is no folder the board can find.
+  const reported = typeof card.profileDir === 'string' && isAbsolute(card.profileDir) ? card.profileDir : ''
+  const home = reported ? deps.homes.forDir(reported) : hit?.home
+  if (home) return { home, path: session ? home.transcriptPath(session, cwd) : null }
+  if (session)
+    for (const h of searched) {
+      const path = h.transcriptPath(session, cwd)
+      if (path) return { home: h, path }
+    }
+  return { home: null, path: null }
+}
+
 /** What a pane or a sleeper tells before the card and the transcript are merged in. */
 type Base = Pick<
   Item,
@@ -136,9 +165,14 @@ export interface CollectOptions {
  * (`helpers`: adapters/helpers.ts) and how sessions work with each other (`links`: an index).
  */
 export async function collect(deps: Deps, { helpers = false, links = null }: CollectOptions = {}): Promise<Item[]> {
-  const { cfg, claude } = deps
+  const { cfg } = deps
   const [snap, asleep] = await Promise.all([snapshot(), deps.wake.sleepers()])
-  const live = claude.liveSessions()
+  // The registries of every profile, hidden ones too (their running sessions keep their names and
+  // titles), and of the folder the board's own env points to.
+  const profiles = deps.profiles()
+  const dirs = [profiles.inheritedDir, ...profiles.list.map(p => p.dir)]
+  const searched = [...new Set(dirs.map(dir => deps.homes.forDir(dir)))]
+  const live = deps.homes.liveSessions(dirs)
   const cards = allCards()
   const labels = new Map(snap.workspaces.map(w => [w.workspace_id, w.label]))
   const items: Item[] = []
@@ -148,8 +182,9 @@ export async function collect(deps: Deps, { helpers = false, links = null }: Col
     const saved = cards.get(base.key) ?? {}
     const pin = pinOf(base.key, base.status, saved)
     const card: Card = { ...saved, pin }
-    const path = base.session ? claude.transcriptPath(base.session, base.cwd) : null
-    const info = claude.transcriptInfo(path) ?? {}
+    const hit = base.session ? live.get(base.session) : undefined
+    const { home, path } = recordsOf(deps, card, base.session, base.cwd, hit, searched)
+    const info = home?.transcriptInfo(path) ?? {}
     const guess = categoryFor(cfg, base.cwd)
     const tool = info.tool ?? null
     const attention = attentionOf(base.status, card, info)
@@ -184,6 +219,8 @@ export async function collect(deps: Deps, { helpers = false, links = null }: Col
       auto: columnOf(base.status, { ...card, pin: '' }, info), // where it would be without the pin
       helpers: own, // its subagents, forks, workflow agents and teammates in short, or null
       transcript: path,
+      ...sessionProfile(card, profiles.list), // its profile, as its hooks reported it
+      claudeRoot: home?.root ?? null, // the folder its records were read from
     })
   }
 
@@ -193,7 +230,7 @@ export async function collect(deps: Deps, { helpers = false, links = null }: Col
     const key = session ?? `pane-${p.pane_id}`
     if (seen.has(key)) continue
     seen.add(key)
-    const reg = session ? live.get(session) : null
+    const reg = session ? live.get(session)?.session : null
     add({
       key,
       session,

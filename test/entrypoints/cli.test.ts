@@ -237,3 +237,49 @@ test('board call-report refuses a bad session id and a missing or empty report',
   }
   assert.equal(existsSync(dirOf(box)) ? readdirSync(dirOf(box)).filter(n => n.endsWith('.json')).length : 0, 0)
 })
+
+/** A profile folder in the sandbox's home whose registry has `name` running as `session`. */
+function profileWith(box: Sandbox, folder: string, session: string, name: string): string {
+  const dir = join(box.env.HOME as string, folder)
+  mkdirSync(join(dir, 'sessions'), { recursive: true })
+  writeFileSync(join(dir, 'settings.json'), '{}')
+  writeFileSync(
+    join(dir, 'sessions', '1.json'),
+    JSON.stringify({ sessionId: session, kind: 'interactive', pid: process.pid, name }),
+  )
+  return dir
+}
+
+test('board remind in a work session names it from the work registry', async () => {
+  const box = await sandbox()
+  config(box)
+  const work = profileWith(box, '.claude-work', 's1', 'Work one')
+  // The default profile has a session of that id too: never what a work session is named after.
+  profileWith(box, '.claude', 's1', 'Private one')
+  const r = await agentCli(box, ['remind', 'in', '1h', 'check the invoices'], {
+    CLAUDE_CODE_SESSION_ID: 's1',
+    CLAUDE_CONFIG_DIR: work,
+  })
+  assert.equal(r.code, 0, r.out)
+  assert.match(
+    r.out,
+    /^ok · reminder ([0-9a-f]{6}) (Sun|Mon|Tue|Wed|Thu|Fri|Sat) \d{4}-\d\d-\d\d \d\d:\d\d \(in 1 h\): check the invoices · cancel: board unschedule \1 · note: no board with the scheduler is running now; this goes out once one runs \(late, with a note\)$/,
+  )
+  const e = read(box, idIn(r.out, 'reminder'))
+  assert.ok(e)
+  assert.deepEqual([e.key, e.name, e.text], ['s1', 'Work one', 'check the invoices'])
+})
+
+test('board call-report names the session from whichever profile it runs in, a hidden one too', async () => {
+  const box = await sandbox()
+  config(box)
+  // ~/.claude-work is found but not shown: its registry is read all the same.
+  profileWith(box, '.claude-work', SID, 'Work one')
+  box.state({ 'api snapshot': { result: { snapshot: { panes: [], tabs: [], workspaces: [] } } } })
+  const file = join(box.dir, 'report.md')
+  writeFileSync(file, '# Call\n\n- Decided: ship')
+  const r = await agentCli(box, ['call-report', '--session', SID, '--file', file])
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /^ok · call report ([0-9a-f]{6}) for Work one, typed in once the session is free/)
+  assert.equal(read(box, /call report ([0-9a-f]{6})/.exec(r.out)?.[1] ?? '')?.name, 'Work one')
+})
