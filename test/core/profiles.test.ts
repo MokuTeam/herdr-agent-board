@@ -6,6 +6,7 @@ import {
   mergeProfiles,
   type Profile,
   profileIdOf,
+  profileReport,
   profileSet,
   profileTitleOf,
   resolveProfileDir,
@@ -128,6 +129,32 @@ test('a session’s profile from its card', () => {
   })
   expect(sessionProfile({ profileWant: 'work' }, two)).toEqual({ profile: null })
   expect(sessionProfile({ profileDir: WORK.dir, profileWant: 'work' }, two)).toEqual({ profile: 'work' })
+})
+
+test('what a card is told about its profile: only what changed', () => {
+  const ODD = 'C:\\Users\\me\\odd'
+  // A new card: the folder and its profile.
+  expect(profileReport(null, WORK.dir, LIST)).toEqual({ profileDir: WORK.dir, profile: 'work' })
+  // Another folder: both change.
+  expect(profileReport({ profile: 'default', profileDir: DEFAULT.dir }, WORK.dir, LIST)).toEqual({
+    profileDir: WORK.dir,
+    profile: 'work',
+  })
+  // The same folder, its id not on the card yet (or another one): only the id.
+  expect(profileReport({ profileDir: WORK.dir }, WORK.dir, LIST)).toEqual({ profile: 'work' })
+  expect(profileReport({ profile: 'old', profileDir: WORK.dir }, WORK.dir, LIST)).toEqual({ profile: 'work' })
+  // Unchanged, the folder spelled another way included: nothing to write.
+  expect(profileReport({ profile: 'work', profileDir: WORK.dir }, WORK.dir, LIST)).toEqual({})
+  expect(profileReport({ profile: 'work', profileDir: 'c:/users/me/.claude-work/' }, WORK.dir, LIST)).toEqual({})
+  // A folder no profile has: the folder kept, the id cleared ('' removes it), never another's.
+  expect(profileReport({ profile: 'default', profileDir: DEFAULT.dir }, ODD, LIST)).toEqual({
+    profileDir: ODD,
+    profile: '',
+  })
+  expect(profileReport(undefined, ODD, LIST)).toEqual({ profileDir: ODD })
+  expect(profileReport({ profileDir: ODD }, ODD, LIST)).toEqual({})
+  // Another unknown folder: only the folder changes.
+  expect(profileReport({ profileDir: ODD }, 'D:\\other', LIST)).toEqual({ profileDir: 'D:\\other' })
 })
 
 test('hidden profiles are left out of the shown ones; the inherited one is the default', () => {

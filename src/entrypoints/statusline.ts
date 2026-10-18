@@ -15,7 +15,7 @@ import { contextDir, usageFileFor } from '../adapters/paths.ts'
 import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { sameDir } from '../core/launch/names.ts'
-import { DEFAULT_PROFILE, defaultProfileDir, type Profile, profileForDir } from '../core/profiles.ts'
+import { DEFAULT_PROFILE, defaultProfileDir, type Profile, profileForDir, profileReport } from '../core/profiles.ts'
 import { digest, statusText } from '../core/statusline.ts'
 
 const safe = (key: string): string => String(key).replace(/[^A-Za-z0-9_-]/g, '_')
@@ -33,17 +33,6 @@ function prune(now: number): void {
       if (now - statSync(file).mtimeMs > 7 * 86_400_000) unlinkSync(file)
     } catch {}
   }
-}
-
-/** The card's profile (hook.ts): the session's folder and the id of the profile that has it, written when they changed. */
-function reportProfile(session: string, dir: string, list: Profile[]): void {
-  const card = readCard(session)
-  const id = profileForDir(list, dir)?.id ?? ''
-  const patch = {
-    ...(!sameDir(card?.profileDir, dir) && { profileDir: dir }),
-    ...((card?.profile ?? '') !== id && { profile: id }),
-  }
-  if (Object.keys(patch).length) writeCard(session, patch)
 }
 
 async function main(): Promise<void> {
@@ -65,9 +54,11 @@ async function main(): Promise<void> {
     save(join(contextDir(), `${safe(d.session)}.json`), d.context)
     if (Math.random() < 0.02) prune(now)
   }
+  // The card's profile, as the hooks write it: only what changed.
   if (d.session && process.env.HERDR_PANE_ID) {
     try {
-      reportProfile(d.session, dir, list())
+      const patch = profileReport(readCard(d.session), dir, list())
+      if (Object.keys(patch).length) writeCard(d.session, patch)
     } catch {}
   }
   process.stdout.write(statusText(d))

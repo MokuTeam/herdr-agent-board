@@ -22,9 +22,18 @@ export const uploadsDir = (): string => join(stateDir(), 'uploads')
 export const launchDir = (): string => join(stateDir(), 'launch')
 // From Claude Code's status line (entrypoints/statusline.ts): the account's usage windows, each session's context.
 export const usageFile = (): string => join(stateDir(), 'claude-limits-latest.json')
-// The usage windows per Claude profile: the default profile's in usageFile(), as before; another's in its own file.
+// A profile id as part of a file name: lower-case letters, digits, `_` and `-` as they are, every
+// other character (upper-case letters too) as %XX, or %uXXXX past FF. Two ids never share a file,
+// on a file system blind to case as well.
+const fileId = (id: string): string =>
+  id.replace(/[^a-z0-9_-]/g, c => {
+    const hex = c.charCodeAt(0).toString(16).toUpperCase()
+    return hex.length > 2 ? `%u${hex.padStart(4, '0')}` : `%${hex.padStart(2, '0')}`
+  })
+// The usage windows per Claude profile: the default profile's in usageFile(), as before; another's
+// in its own file, named apart from it (a profile with the id `latest` included).
 export const usageFileFor = (id: string): string =>
-  id === 'default' ? usageFile() : join(stateDir(), `claude-limits-${id.replace(/[^A-Za-z0-9_-]/g, '_')}.json`)
+  id === 'default' ? usageFile() : join(stateDir(), `claude-limits-profile-${fileId(id)}.json`)
 export const contextDir = (): string => join(stateDir(), 'context')
 // The shells the board opened (services/terminals.ts), so a board that restarts finds them again.
 export const terminalsFile = (): string => join(stateDir(), 'terminals.json')

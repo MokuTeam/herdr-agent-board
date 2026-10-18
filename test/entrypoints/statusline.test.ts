@@ -2,8 +2,9 @@ import { expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { readUsageCache } from '../../src/adapters/claude-home.ts'
+import { usageFileFor } from '../../src/adapters/paths.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 
 const plain = (s: string): string => s.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '')
@@ -87,7 +88,7 @@ test('usage goes to its profile: default as before, work in its own file, an unk
   out = runIn(box, { CLAUDE_CONFIG_DIR: work })
   expect(out.status).toBe(0)
   expect(out.stdout).toBe(line)
-  expect(readJson(join(state, 'claude-limits-work.json')).fiveHour.usedPercentage).toBe(23.5)
+  expect(readJson(join(state, 'claude-limits-profile-work.json')).fiveHour.usedPercentage).toBe(23.5)
   expect(readFileSync(latest, 'utf8')).toBe(saved) // the default profile's usage is not touched
   expect(readJson(join(box.cards, 'abc-123.json'))).toMatchObject({ profile: 'work', profileDir: work })
   expect(existsSync(configOf(box))).toBe(false)
@@ -104,4 +105,31 @@ test('usage goes to its profile: default as before, work in its own file, an unk
   expect(card.profile).toBeUndefined()
   expect(card.profileDir).toBe(odd)
   expect(existsSync(configOf(fresh))).toBe(false)
+})
+
+test('each profile keeps its usage apart: one named latest leaves the default one alone, ids that read alike never share a file', async () => {
+  const box = await sandbox()
+  const home = box.env.USERPROFILE as string
+  const named = join(home, '.claude-latest')
+  mkdirSync(named, { recursive: true })
+  writeFileSync(join(named, 'settings.json'), '{}')
+  const state = stateOf(box)
+  const latest = join(state, 'claude-limits-latest.json')
+
+  expect(runIn(box).status).toBe(0)
+  const saved = readFileSync(latest, 'utf8')
+  expect(runIn(box, { CLAUDE_CONFIG_DIR: named }).status).toBe(0)
+  expect(readJson(join(box.cards, 'abc-123.json'))).toMatchObject({ profile: 'latest', profileDir: named })
+  expect(readFileSync(latest, 'utf8')).toBe(saved) // the default profile's usage is not overwritten
+  expect(readJson(join(state, 'claude-limits-profile-latest.json')).fiveHour.usedPercentage).toBe(23.5)
+
+  const name = (id: string): string => basename(usageFileFor(id))
+  expect(name('default')).toBe('claude-limits-latest.json')
+  expect(name('latest')).toBe('claude-limits-profile-latest.json')
+  expect(name('a.b')).toBe('claude-limits-profile-a%2Eb.json')
+  // Ids that used to fold into one file, and ones that differ only in case (one file on Windows).
+  const ids = ['a.b', 'a_b', 'a-b', 'a b', 'a/b', 'a\\b', 'a%2Eb', 'a%2eb', 'Work', 'work', 'ü', '%FC', '😀', 'Default']
+  const names = ids.map(id => name(id).toLowerCase())
+  expect(new Set(names).size).toBe(ids.length)
+  for (const n of names) expect(n).toMatch(/^claude-limits-profile-[a-z0-9_%-]+\.json$/)
 })

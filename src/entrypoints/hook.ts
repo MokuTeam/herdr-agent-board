@@ -13,22 +13,10 @@ import { isRecord } from '../adapters/json-store.ts'
 import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
-import { sameDir } from '../core/launch/names.ts'
 import { isNotice } from '../core/notices.ts'
-import { profileForDir } from '../core/profiles.ts'
-import type { Card } from '../core/types.ts'
+import { profileReport } from '../core/profiles.ts'
 
 const text = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
-
-/** The session's folder and the id of the profile that has it ('' when none does), where the card says otherwise. */
-function profileChange(card: Card | null): CardPatch {
-  const dir = inheritedProfileDir()
-  const id = profileForDir(loadProfiles(), dir)?.id ?? ''
-  return {
-    ...(!sameDir(card?.profileDir, dir) && { profileDir: dir }),
-    ...((card?.profile ?? '') !== id && { profile: id }),
-  }
-}
 
 async function main(): Promise<void> {
   const input: unknown = JSON.parse((await readStdin()) || '{}')
@@ -37,8 +25,9 @@ async function main(): Promise<void> {
   const sid = input.session_id
   if (!sid || typeof sid !== 'string' || !process.env.HERDR_PANE_ID) return
   const card = readCard(sid)
-  // What changes on the card, written at once.
-  const patch = profileChange(card)
+  // What changes on the card, written at once. First the session's folder and its profile, where
+  // the card says otherwise.
+  const patch: CardPatch = profileReport(card, inheritedProfileDir(), loadProfiles())
   // The user wrote to the session: whatever it asked them is answered. A reminder from the board's
   // scheduler or a background task reporting back is not the user, so its ask stays. A column the
   // user dragged the card to has done its job either way: the session works again, which drops

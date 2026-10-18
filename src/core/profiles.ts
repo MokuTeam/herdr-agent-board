@@ -2,7 +2,7 @@
 // is known by its folder; its id comes from the folder's name (`.claude` → default, `.claude-work`
 // → work) and never changes, its title and color are the owner's. Here: how a folder as typed or
 // inherited reads, the listed profiles merged with the folders found on this computer, the folder
-// a start sets, and the profile a session's card reports.
+// a start sets, what a session's card is told about its profile, and the profile it reports.
 //
 // Pure: the adapters find the folders and read the env and the config, and hand them in.
 import { posix, win32 } from 'node:path'
@@ -195,6 +195,24 @@ export function shownProfiles(list: readonly Profile[]): Profile[] {
  */
 export function configDirFor(target: Pick<Profile, 'dir'>, inheritedDir: string): string | null {
   return sameDir(target.dir, inheritedDir) ? null : target.dir
+}
+
+/**
+ * What a session's card is told about its profile when the session runs in `dir`: the folder, and
+ * the id of the profile that has it ('' removes it: no profile has the folder, and it is never
+ * folded into another). Only what the card does not say already; {} when nothing changed. The
+ * hooks and the status line both write it, so they never undo each other.
+ */
+export function profileReport(
+  card: Pick<Card, 'profile' | 'profileDir'> | null | undefined,
+  dir: string,
+  list: readonly Profile[],
+): Partial<Pick<Card, 'profile' | 'profileDir'>> {
+  const id = profileForDir(list, dir)?.id ?? ''
+  return {
+    ...(!sameDir(card?.profileDir, dir) && { profileDir: dir }),
+    ...((card?.profile ?? '') !== id && { profile: id }),
+  }
 }
 
 const text = (v: unknown): string => (typeof v === 'string' ? v : '')
