@@ -3,14 +3,14 @@
 // running board (liveConfig). Categories are the board's lanes, in this order; `paths` guess the
 // category of a session from its folder (the longest match wins) until the agent sets one
 // itself. Agents may use ids that are not listed: they get a lane too.
-import { existsSync, mkdirSync, watch, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, watch } from 'node:fs'
 import { join } from 'node:path'
 import { builtinTitle, DEFAULT_CONFIG, normalizeConfig, validColor } from '../core/categories.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
 import type { Category, Config } from '../core/types.ts'
 import { allCards, writeCard } from './cards.ts'
-import { isRecord, readJson, renameWithRetry } from './json-store.ts'
+import { isRecord, readJson, replaceFile } from './json-store.ts'
 import { configDir } from './paths.ts'
 
 type Raw = Record<string, unknown>
@@ -23,9 +23,7 @@ const readRaw = (): Raw | null => readJson(configFile(), isRecord)
 
 function writeRaw(raw: Raw): void {
   mkdirSync(configDir(), { recursive: true })
-  const tmp = `${configFile()}.${process.pid}.tmp`
-  writeFileSync(tmp, `${JSON.stringify(raw, null, 2)}\n`)
-  renameWithRetry(tmp, configFile())
+  replaceFile(configFile(), `${JSON.stringify(raw, null, 2)}\n`)
 }
 
 export function loadConfig(): Config {
@@ -105,16 +103,25 @@ const cleanTitle = (title: unknown): string =>
     .trim()
     .slice(0, 40)
 
-/** The categories in a raw config file, as the editor works on them (unknown fields kept). */
-function categoriesOf(raw: Raw): Category[] {
+/**
+ * The categories in a raw config file, as the editor works on them: every entry as it is, a
+ * hand-edited one the board cannot read too (it stays in its place, untouched).
+ */
+function categoriesOf(raw: Raw): unknown[] {
   if (!Array.isArray(raw.categories) || !raw.categories.length) return structuredClone(DEFAULT_CONFIG.categories)
-  return raw.categories
-    .filter((c): c is Raw & { id: string } => isRecord(c) && typeof c.id === 'string')
-    .map(c => ({
-      ...c,
-      color: typeof c.color === 'string' ? c.color : 'gray',
-      paths: Array.isArray(c.paths) ? c.paths.map(String) : [],
-    }))
+  return [...raw.categories]
+}
+
+/** An entry the editor can change: an object with an id. */
+const editable = (c: unknown): c is Raw & { id: string } => isRecord(c) && typeof c.id === 'string'
+
+/** `cats` with its editable entries in the order `ids` gives (the others after, as they were); the rest stay put. */
+function ordered(cats: unknown[], ids: unknown[]): unknown[] {
+  const listed = cats.filter(editable)
+  const rank = (id: string) => (ids.includes(id) ? ids.indexOf(id) : ids.length + listed.findIndex(c => c.id === id))
+  const sorted = [...listed].sort((a, c) => rank(a.id) - rank(c.id))
+  let next = 0
+  return cats.map(c => (editable(c) ? (sorted[next++] ?? c) : c))
 }
 
 /**
@@ -124,8 +131,8 @@ function categoriesOf(raw: Raw): Category[] {
  */
 export function editCategories(body: unknown): EditResult {
   const raw = readRaw() ?? structuredClone<Raw>(DEFAULT_CONFIG)
-  const cats = categoriesOf(raw)
-  const find = (id: unknown) => cats.find(c => c.id === id)
+  let cats = categoriesOf(raw)
+  const find = (id: unknown) => cats.filter(editable).find(c => c.id === id)
   const b: Raw = isRecord(body) ? body : {}
   switch (b.op) {
     case 'create': {
@@ -140,7 +147,7 @@ export function editCategories(body: unknown): EditResult {
         color: validColor(b.color) ? String(b.color) : 'blue',
         paths: cleanPaths(b.paths) ?? [],
       }
-      const other = cats.findIndex(c => c.id === 'other')
+      const other = cats.findIndex(c => editable(c) && c.id === 'other')
       cats.splice(other >= 0 ? other : cats.length, 0, cat)
       break
     }
@@ -159,10 +166,10 @@ export function editCategories(body: unknown): EditResult {
       if (b.id === 'other') {
         return {
           ok: false,
-          error: t('err.cat.other', { title: t('q', { s: find('other')?.title || builtinTitle('other') }) }),
+          error: t('err.cat.other', { title: t('q', { s: String(find('other')?.title || builtinTitle('other')) }) }),
         }
       }
-      const i = cats.findIndex(c => c.id === b.id)
+      const i = cats.findIndex(c => editable(c) && c.id === b.id)
       if (i < 0) return { ok: false, error: t('err.cat.missing', { id: String(b.id) }) }
       cats.splice(i, 1)
       for (const card of allCards().values())
@@ -170,9 +177,7 @@ export function editCategories(body: unknown): EditResult {
       break
     }
     case 'order': {
-      const ids = Array.isArray(b.ids) ? b.ids : []
-      const rank = (id: string) => (ids.includes(id) ? ids.indexOf(id) : ids.length + cats.findIndex(c => c.id === id))
-      cats.sort((a, c) => rank(a.id) - rank(c.id))
+      cats = ordered(cats, Array.isArray(b.ids) ? b.ids : [])
       break
     }
     default:

@@ -142,7 +142,7 @@ function launcherFacts(launch: Config['launch'], env: Env, platform: string): La
   let error = ''
   try {
     claude = claudeCommand(launch?.claude, launch?.args)
-    shellLine(claude)
+    shellLine(claude, platform === 'win32')
   } catch (err) {
     error = err instanceof Error ? err.message : String(err)
   }
@@ -238,12 +238,14 @@ export interface GatherOptions {
   env?: Env
   platform?: string
   home?: string
+  /** How long herdr-wake's /status may take before it counts as down. */
+  probeMs?: number
 }
 
 /** Everything the checks look at, read from this computer. */
 export async function gatherFacts(
   cfg: Partial<Config> | null | undefined,
-  { root = ROOT, env = process.env, platform = process.platform, home = homedir() }: GatherOptions = {},
+  { root = ROOT, env = process.env, platform = process.platform, home = homedir(), probeMs }: GatherOptions = {},
 ): Promise<SetupFacts> {
   const settingsFile = join(home, '.claude', 'settings.json')
   const settingsText = readText(settingsFile)
@@ -277,7 +279,7 @@ export async function gatherFacts(
     herdrConfigFile: configFile,
     herdrConfig: readText(configFile),
     wakeUrl,
-    wake: wakeUrl ? await probe(`${wakeUrl.replace(/\/+$/, '')}/status`) : null,
+    wake: wakeUrl ? await probe(`${wakeUrl.replace(/\/+$/, '')}/status`, probeMs) : null,
     launcher: launcherFacts(cfg?.launch, env, platform),
     // MokuPilot for calls with a fork of a session: how the board would start it.
     mokupilot: mokupilotCommand(cfg, { platform, env }),

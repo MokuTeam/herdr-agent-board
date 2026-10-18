@@ -779,3 +779,25 @@ read/merge/rename. Contention waits at most two seconds, then reports an error w
 the card. Locks are released on ordinary errors. A writer killed mid-write leaves its lock
 behind; a write holds it for milliseconds, so one older than 30 seconds is taken over by the
 next writer. A card write the board itself fails at is retried on its next refresh.
+
+## Development
+
+[Bun](https://bun.com/docs/installation) 1.4.3 or newer and git on PATH, in a clone with the
+repository's full history:
+
+```sh
+bun install     # react and react-dom, and the dev tools: TypeScript, Biome, the types
+bun test        # the whole suite (a couple of minutes); two symlink tests skip without symlink rights
+bun run check   # type check (tsc) and lint (Biome)
+```
+
+The parity tests compare the board with the old page and with upstream's code as git has them
+(`git show <commit>:<file>`; the commits are named in `test/web/support/old-app.ts` and the
+tests): a shallow clone (`--depth`), a tarball or a fork without that history fails them with
+"git show … failed". Biome wants LF line endings: on Windows, clone with
+`git clone -c core.autocrlf=input …` (or turn `core.autocrlf` off) so `bun run check` passes.
+
+The code is in layers: `src/core` (pure rules, no I/O), `src/adapters` and `src/integrations`
+(files, processes, herdr, Claude's files, herdr-wake), `src/services` (what the board does with
+them), `src/server`, `src/tui` and `src/entrypoints` (the web server, the terminal board, the
+commands), `web/src` (the React page). Tests mirror them under `test/`.

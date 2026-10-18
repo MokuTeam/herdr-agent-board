@@ -14,6 +14,7 @@ import type { LaunchMenus, MenuOrigin } from '../models/board-menus.ts'
 import { launchOf } from '../models/card.ts'
 import { launcherName } from '../models/launch.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
+import { storage } from '../state/storage.ts'
 import { useStore } from '../state/store.ts'
 import { launchesOnTheirWay } from './useBoardView.ts'
 import { useLatest } from './useLatest.ts'
@@ -158,21 +159,8 @@ export function windowKeys(dialog: Pick<LaunchWindow, 'keydown'>): () => void {
   return () => removeEventListener('keydown', onKey, true)
 }
 
-/** localStorage, which may be missing or refuse (a private window). */
-export const localStore = {
-  get(key: string): string | null {
-    try {
-      return localStorage.getItem(key)
-    } catch {
-      return null
-    }
-  },
-  set(key: string, value: string): void {
-    try {
-      localStorage.setItem(key, value)
-    } catch {}
-  },
-}
+/** localStorage, which may be missing or refuse (a private window; state/storage.ts). */
+export const localStore = { get: storage.read, set: storage.set }
 
 export function useLaunch(): Launch {
   const t = useT()

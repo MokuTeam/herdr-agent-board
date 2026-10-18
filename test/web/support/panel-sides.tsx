@@ -18,6 +18,7 @@ import { type PanelKind, PanelView } from '../../../web/src/components/panel/Pan
 import { PanelPlace } from '../../../web/src/components/panel/place.ts'
 import { I18nProvider } from '../../../web/src/i18n/I18nProvider.tsx'
 import { isDock } from '../../../web/src/models/panel-layout.ts'
+import { reducedMotion } from '../../../web/src/models/spring.ts'
 import { type FakeElement, FakeWorld, type WorldOptions } from './fake-dom.ts'
 import {
   addButtonTypes,
@@ -35,7 +36,6 @@ import {
 import { oldSource } from './old-app.ts'
 import { asDom, clone, commit, first } from './react-commit.ts'
 
-const ROOT = join(import.meta.dir, '..', '..', '..')
 /** Upstream's merge of the sidebar-style panels, docked flush and lying over a narrow board (#43). */
 export const PANEL_MERGE = '8c4b987'
 
@@ -181,28 +181,36 @@ function snapshotOf(side: Omit<PanelSide, 'snapshot' | 'dispose'>, ids: string[]
 
 // ---------------------------------------------------------------- the old page
 
+/** The modules web/panel.js runs on, all as they were at #43's merge. */
+const OLD_PANEL_FILES = ['panel.js', 'panel-layout.js', 'spring.js']
+
+/** A module's exports by name. */
+async function importFile(file: string): Promise<Record<string, unknown>> {
+  const mod: unknown = await import(pathToFileURL(file).href)
+  if (typeof mod !== 'object' || mod === null) throw new Error(`${file} did not load`)
+  return Object.fromEntries(Object.entries(mod))
+}
+
 /**
- * A fresh copy of web/panel.js as it was at #43's merge (its module state is per page), importing
- * the moved models in place of its panel-layout.js and spring.js.
+ * A fresh copy of web/panel.js as it was at #43's merge, with its own panel-layout.js and
+ * spring.js of that merge beside it (their module state is per page). The old spring.js reads
+ * reduced motion from the window once: its flag follows the ported one's (models/spring.ts), so a
+ * test that turns reduced motion on turns it on for both pages, as the browser's setting would.
  */
 async function importOldPanel(): Promise<Record<string, unknown>> {
-  const models = join(ROOT, 'web', 'src', 'models')
-  const moved: Record<string, string> = {
-    './panel-layout.js': join(models, 'panel-layout.ts'),
-    './spring.js': join(models, 'spring.ts'),
-  }
-  const source = oldSource('web/panel.js', PANEL_MERGE).replace(/from '(\.\/[^']+)'/g, (_, rel: string) => {
-    const path = moved[rel]
-    if (!path) throw new Error(`web/panel.js imports from ${rel}`)
-    return `from '${pathToFileURL(path).href}'`
-  })
   const dir = mkdtempSync(join(tmpdir(), 'agent-board-panel-'))
   try {
-    const file = join(dir, 'panel.js')
-    writeFileSync(file, source)
-    const mod: unknown = await import(pathToFileURL(file).href)
-    if (typeof mod !== 'object' || mod === null) throw new Error('panel.js did not load')
-    return Object.fromEntries(Object.entries(mod))
+    for (const name of OLD_PANEL_FILES) {
+      const source = oldSource(`web/${name}`, PANEL_MERGE)
+      for (const [, rel] of source.matchAll(/from '(\.\/[^']+)'/g))
+        if (!OLD_PANEL_FILES.includes(rel?.slice(2) ?? '')) throw new Error(`web/${name} imports from ${rel}`)
+      writeFileSync(join(dir, name), source)
+    }
+    const spring = await importFile(join(dir, 'spring.js'))
+    const motion = spring.reducedMotion
+    if (typeof motion !== 'object' || motion === null) throw new Error('spring.js has no reducedMotion')
+    Object.defineProperty(motion, 'matches', { get: () => reducedMotion.matches, configurable: true })
+    return await importFile(join(dir, 'panel.js'))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

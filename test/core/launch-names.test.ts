@@ -29,7 +29,7 @@ test('session names: what a name may be, and herdr’s name for it', () => {
   assert.equal(checkName('x'.repeat(61)), 'launch.err.nameLong')
   assert.equal(checkName('two\nlines'), 'launch.err.nameChars')
   // C1 controls, line separators, and bidi overrides that make a name read as something else.
-  for (const c of ['\u0085', '\u009b', ' ', ' ', '‮', '⁦', '⁩'])
+  for (const c of ['\u0085', '\u009b', '\u2028', '\u2029', '\u202e', '\u2066', '\u2069'])
     assert.equal(checkName(`a${c}b`), 'launch.err.nameChars', String(c.codePointAt(0)?.toString(16)))
   assert.equal(checkName('-Workspace w1'), 'launch.err.nameStart') // would read as an option
   assert.equal(checkName('/clear'), 'launch.err.nameStart') // would read as a Claude command

@@ -15,7 +15,7 @@
 //                       meet.cmd does: Bun runs no .cmd without a shell), its `meet` elsewhere
 //   unset               found on this computer: MokuPilot.exe where its installer puts it
 //                       (Windows), else `meet` on PATH, meet.cmd standing for its checkout
-// Finding it is adapters/setup-facts.ts mokupilotCommand; starting it, integrations/mokupilot.ts.
+// Finding it is adapters/setup-facts.ts mokupilotCommand; starting it, services/mokupilot.ts.
 import { t } from './lang.ts'
 import type { Item } from './types.ts'
 

@@ -90,6 +90,21 @@ function unlinkIfThere(path: string): void {
 }
 
 /**
+ * Write `text` to a temp file beside `path`, then rename it over `path` (renameWithRetry), so a
+ * reader never sees half a file. When that fails, the temp file goes too and the error is passed on.
+ */
+export function replaceFile(path: string, text: string, rename: (a: string, b: string) => void = renameSync): void {
+  const tmp = `${path}.${process.pid}.tmp`
+  try {
+    writeFileSync(tmp, text)
+    renameWithRetry(tmp, path, rename)
+  } catch (err) {
+    unlinkIfThere(tmp)
+    throw err
+  }
+}
+
+/**
  * Read, change and save a JSON file under its lock, so writers in other processes never lose
  * each other's fields. `change(current)` gets the contents (null when there is no file or it
  * is not what `guard` accepts) and returns the new contents, null to delete the file, or

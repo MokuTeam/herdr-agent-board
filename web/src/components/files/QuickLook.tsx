@@ -237,12 +237,16 @@ function LookFoot({ text, zoom, onZoom }: { text: string; zoom: Store<ZoomFoot>;
   )
 }
 
-/** The folders above, each a step to walk to; scrolled to the end, where the name is. */
+/**
+ * The folders above, each a step to walk to; scrolled to the end, where the name is, when they are
+ * drawn anew (upstream's head()), not on every render: a scroll would close a menu opened over it.
+ */
 function Crumbs({ head, onGo }: { head: LookHead; onGo?: ((path: string) => void) | undefined }) {
   const nav = useRef<HTMLElement>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the folders drawn anew are when to scroll
   useLayoutEffect(() => {
     if (nav.current) nav.current.scrollLeft = nav.current.scrollWidth
-  })
+  }, [head.path, head.kind])
   return (
     <nav className="ql-path" ref={nav}>
       {crumbs(head.path, head.kind).map((c, i) => (

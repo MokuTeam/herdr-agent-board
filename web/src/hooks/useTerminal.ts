@@ -18,6 +18,7 @@ import { applyDiff, caretSpot, fitFont, type LineDiff } from '../../../src/core/
 import type { Item, Translator, Vars } from '../../../src/core/types.ts'
 import { STREAM_CLOSED, type TerminalApi, type TermStream, terminalApi } from '../api/terminal.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
+import { paintWindow } from '../models/grow.ts'
 import type { FocusScope } from '../models/modal-focus.ts'
 import { reducedMotion, Spring } from '../models/spring.ts'
 import {
@@ -34,6 +35,7 @@ import {
   targetFor,
 } from '../models/terminal.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
+import { storage } from '../state/storage.ts'
 import { Store, useStore } from '../state/store.ts'
 import { useLatest } from './useLatest.ts'
 import { useModalFocus } from './useModalFocus.ts'
@@ -221,17 +223,7 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
   function paint(p: number): void {
     const win = refs.win.current
     const scrim = refs.scrim.current
-    if (!win || !scrim) return
-    const q = Math.max(0, p)
-    if (reducedMotion.matches) {
-      win.style.transform = ''
-      win.style.opacity = String(Math.min(1, q))
-    } else {
-      const sc = from.s + (1 - from.s) * q
-      win.style.transform = `translate(${from.dx * (1 - q)}px, ${from.dy * (1 - q)}px) scale(${sc})`
-      win.style.opacity = String(Math.min(1, q * 1.8))
-    }
-    scrim.style.opacity = String(Math.min(1, q))
+    if (win && scrim) paintWindow(win, scrim, p, from)
   }
 
   const isOpen = () => !hidden && (growing || motion.target === 1)
@@ -861,21 +853,6 @@ export interface TerminalUI {
   engine: TerminalEngine
 }
 
-const localStore = {
-  get(key: string, fallback: string): string {
-    try {
-      return localStorage.getItem(key) ?? fallback
-    } catch {
-      return fallback
-    }
-  },
-  set(key: string, value: string): void {
-    try {
-      localStorage.setItem(key, value)
-    } catch {}
-  },
-}
-
 /** The page's terminal window; `openUrl` opens a web link of the output in the default browser. */
 export function useTerminal(openUrl: (href: string) => void): TerminalUI {
   const t = useT()
@@ -916,7 +893,7 @@ export function useTerminal(openUrl: (href: string) => void): TerminalUI {
       },
       focusAgent: key => void page().actions.focusSession(key),
       openUrl: href => page().openUrl(href),
-      storage: localStore,
+      storage,
       coarse: () => matchMedia('(pointer: coarse)').matches,
     })
   })

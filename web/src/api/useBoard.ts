@@ -45,6 +45,7 @@ export function useBoard(): LiveBoard {
         return stream
       },
       snapshot: signal => api.board(signal),
+      readable: isBoardPayload,
       data(value) {
         if (!isBoardPayload(value)) return
         // The page's own files changed (the plugin was updated): load the new page.

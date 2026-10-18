@@ -9,6 +9,7 @@ import type { Item, Translator } from '../../../src/core/types.ts'
 import type { SessionDetail } from '../api/client.ts'
 import { type HelperRead, type HelperReply, readHelper } from '../api/helpers.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
+import { paintWindow } from '../models/grow.ts'
 import type { FocusScope } from '../models/modal-focus.ts'
 import { reducedMotion, Spring } from '../models/spring.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
@@ -134,17 +135,7 @@ export function helpersEngine(deps: EngineDeps): HelpersEngine {
   function paint(p: number): void {
     const win = refs.win.current
     const scrim = refs.scrim.current
-    if (!win || !scrim) return
-    const q = Math.max(0, p)
-    if (reducedMotion.matches) {
-      win.style.transform = ''
-      win.style.opacity = String(Math.min(1, q))
-    } else {
-      const sc = from.s + (1 - from.s) * q
-      win.style.transform = `translate(${from.dx * (1 - q)}px, ${from.dy * (1 - q)}px) scale(${sc})`
-      win.style.opacity = String(Math.min(1, q * 1.8))
-    }
-    scrim.style.opacity = String(Math.min(1, q))
+    if (win && scrim) paintWindow(win, scrim, p, from)
   }
 
   // 0 = folded into what it came from, 1 = open; a close while opening turns around.

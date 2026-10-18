@@ -175,6 +175,41 @@ test('late GET after an SSE failure stays read-only until the stream reconnects'
   assert.equal(states.at(-1), true)
 })
 
+test('a board the page cannot read is not taken, and the page is not connected until one it can read comes', async () => {
+  let current: FakeStream | undefined
+  let resolveSnapshot: ((value: unknown) => void) | undefined
+  const received: unknown[] = []
+  const states: boolean[] = []
+  const connection = boardConnection({
+    source() {
+      current = stream()
+      return current
+    },
+    snapshot: () =>
+      new Promise(resolve => {
+        resolveSnapshot = resolve
+      }),
+    readable: value => value.ok === true,
+    data: d => received.push(d.tag),
+    connected: value => states.push(value),
+  })
+  connection.resume()
+  current?.onopen?.(event('open'))
+  resolveSnapshot?.({ items: [], tag: 'unreadable snapshot' })
+  await Promise.resolve()
+  assert.deepEqual(received, [])
+  assert.equal(states.at(-1), false)
+  current?.onmessage?.(message({ items: [], ok: true, tag: 'good' }))
+  assert.equal(states.at(-1), true)
+  // The page shows the board it read last, and says it no longer follows the board.
+  current?.onmessage?.(message({ items: [], tag: 'unreadable event' }))
+  assert.deepEqual(received, ['good'])
+  assert.equal(states.at(-1), false)
+  current?.onmessage?.(message({ items: [], ok: true, tag: 'good again' }))
+  assert.deepEqual(received, ['good', 'good again'])
+  assert.equal(states.at(-1), true)
+})
+
 test('reload consumes an abandoned dialog sentinel without closing a newly opened panel', () => {
   let backs = 0
   let pushes = 0

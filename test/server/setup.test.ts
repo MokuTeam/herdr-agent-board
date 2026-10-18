@@ -12,7 +12,7 @@ const boardOf = async (url: string): Promise<Board> => (await (await fetch(`${ur
 
 test('before its first check ends the board goes out with setup: null, which the page takes for no note', async () => {
   // A herdr-wake in this test that holds its /status answer: the first check cannot end before
-  // the test lets it (or the probe gives up, 1.5 s on).
+  // the test lets it (its probe waits a minute here, not 1.5 s, so a slow board answer is no race).
   let asked = false
   let answer: (res: Response) => void = () => {}
   const wake = Bun.serve({
@@ -29,7 +29,11 @@ test('before its first check ends the board goes out with setup: null, which the
   try {
     const box = await sandbox()
     box.state({ 'api snapshot': { result: { snapshot: { panes: [], tabs: [], workspaces: [] } } } })
-    const { url } = await serveBoard(box, { language: 'en', wakeUrl: `http://127.0.0.1:${wake.port}` })
+    const { url } = await serveBoard(
+      box,
+      { language: 'en', wakeUrl: `http://127.0.0.1:${wake.port}` },
+      { TEST_PROBE_MS: '60000' },
+    )
     await until(() => asked)
     const before = await boardOf(url)
     assert.ok('setup' in before)

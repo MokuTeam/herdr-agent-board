@@ -10,9 +10,10 @@ import { join } from 'node:path'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
 import { messageGate } from '../core/message-gate.ts'
-import { mokupilotCheck } from '../integrations/mokupilot.ts'
+import type { SetupFacts } from '../core/setup.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
+import { mokupilotCheck } from '../services/mokupilot.ts'
 import { startScheduler } from '../services/scheduler.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
@@ -69,8 +70,15 @@ function watchFolder(dir: string, ms: number, onChange: () => void, log: Deps['l
   }
 }
 
+export interface ServerOptions {
+  deps: Deps
+  port?: number
+  /** What the setup check reads of this computer (services/setup-check.ts; tests hand in their own). */
+  gather?: () => Promise<SetupFacts>
+}
+
 /** `deps.cfg` is the live config (liveConfig): call the returned refresh from its onChange. */
-export async function startServer({ deps, port: asked }: { deps: Deps; port?: number }): Promise<BoardServer> {
+export async function startServer({ deps, port: asked, gather }: ServerOptions): Promise<BoardServer> {
   const { cfg, log } = deps
   const port = asked ?? Number(cfg.port ?? 12422)
   pruneUploads(Number(cfg.keepUploadsDays ?? 14))
@@ -88,7 +96,7 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
   // The terminal (services/terminals.ts): shells the board opened in sessions' folders, and live panes.
   const terminals = createTerminals({ onChange: () => board.publish() })
   // What of the board is not set up on this computer, for the page's quiet note.
-  const setup = createSetupChecks({ deps, onChange: () => board.publish() })
+  const setup = createSetupChecks({ deps, onChange: () => board.publish(), ...(gather && { gather }) })
   // Whether MokuPilot is here for calls with a fork of a session: looked up again when its
   // setting changes, and once a minute for one installed or removed meanwhile.
   const mokupilot = mokupilotCheck(cfg)

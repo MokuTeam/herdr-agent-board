@@ -5,7 +5,7 @@
 import type { Translator } from '../../../src/core/types.ts'
 import type { FolderEntry, PathInfo, Preview } from '../models/files.ts'
 import type { Changes, HistoryHit, HistoryReply } from '../models/quick-look.ts'
-import { isReply, type Reply } from './client.ts'
+import { isReply, postJson, type Reply, replyOf } from './client.ts'
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
 const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined)
@@ -19,15 +19,8 @@ export type Refused = Reply & { error: string; httpStatus?: number }
 /** POST with the board's header; the answer whatever it says, a refusal with its `error`. */
 export async function filesPost(path: string, body: unknown, t: Translator): Promise<Reply> {
   try {
-    const res = await fetch(path, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-board': '1' },
-      body: JSON.stringify(body),
-    })
-    let value: unknown = {}
-    try {
-      value = await res.json()
-    } catch {}
+    const res = await postJson(path, body)
+    const value = await replyOf(res)
     const r = isReply(value) ? value : {}
     if (res.ok) return r
     const refused: Refused = {

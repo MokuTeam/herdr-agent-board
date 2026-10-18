@@ -228,8 +228,10 @@ function dayMatches(c: Cron, d: Date): boolean {
 
 const HORIZON_MS = 8 * 366 * 86400e3
 
-/** The first run strictly after `after` (ms), or null when it never runs (Feb 30). */
-/** `cron` may be the text of a schedule too (as stored with a scheduled entry). */
+/**
+ * The first run strictly after `after` (ms), or null when it never runs (Feb 30). `cron` may be
+ * the text of a schedule too (as stored with a scheduled entry).
+ */
 export function nextRun(cron: Cron | string, after: number): number | null {
   const c = typeof cron === 'string' ? parseCron(cron) : cron
   const d = new Date(after)

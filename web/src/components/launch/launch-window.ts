@@ -14,16 +14,8 @@ import type { BoardCategory } from '../../../../src/core/payload.ts'
 import type { Item, LaunchView, Translator } from '../../../../src/core/types.ts'
 import { type LaunchApi, type LaunchOptions, NO_OPTIONS } from '../../api/launch.ts'
 import type { MenuOrigin } from '../../models/board-menus.ts'
-import {
-  type Box,
-  FROM_BELOW,
-  type GrowFrom,
-  growFrom,
-  LAUNCH_MOTION,
-  type LauncherInfo,
-  suggestionItems,
-  windowPaint,
-} from '../../models/launch.ts'
+import { FROM_BELOW, type GrowFrom, paintWindow } from '../../models/grow.ts'
+import { type Box, growFrom, LAUNCH_MOTION, type LauncherInfo, suggestionItems } from '../../models/launch.ts'
 import { launchContext, launchDraftBook } from '../../models/launch-drafts.ts'
 import {
   draftOf,
@@ -205,16 +197,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
   // Drawn first, then it grows (afterDraw): the focus it takes, and what it grows from.
   let growing: { focus: unknown } | null = null
 
-  function paint(p: number): void {
-    const win = deps.win()
-    const scrim = $('.launch-scrim')
-    const look = windowPaint(p, from, reducedMotion.matches)
-    if (win) {
-      win.style.transform = look.transform
-      win.style.opacity = look.opacity
-    }
-    if (scrim) scrim.style.opacity = look.scrim
-  }
+  const paint = (p: number) => paintWindow(deps.win(), $('.launch-scrim'), p, from)
   const motion: Spring = new Spring({
     value: 0,
     damping: LAUNCH_MOTION.open.damping,

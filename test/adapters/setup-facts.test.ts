@@ -105,6 +105,30 @@ describe('gatherFacts', () => {
     }
   })
 
+  test('a herdr-wake that answers: up; one that holds its answer: down once the probe gives up', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'board-setup-'))
+    let hold = false
+    const wake = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch: () => (hold ? new Promise<Response>(() => {}) : Response.json({ ok: true })),
+    })
+    try {
+      const options = { root: ROOT_A, env: { PATH: join(dir, 'bin') }, platform: 'win32', home: join(dir, 'home') }
+      const wakeUrl = `http://127.0.0.1:${wake.port}/`
+      assert.deepEqual((await gatherFacts({ wakeUrl }, options)).wake, { ok: true, status: 200 })
+      hold = true
+      const started = performance.now()
+      const down = await gatherFacts({ wakeUrl }, { ...options, probeMs: 50 })
+      assert.equal(down.wake?.ok, false)
+      assert.equal(down.wake?.error, 'TimeoutError')
+      assert.ok(performance.now() - started < 1000)
+    } finally {
+      await wake.stop(true)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test('herdr’s config.toml under %APPDATA%, else ~/.config; a text file without its BOM', () => {
     assert.equal(
       herdrConfigFile({ APPDATA: 'C:\\Users\\u\\AppData\\Roaming' }, 'C:\\Users\\u'),

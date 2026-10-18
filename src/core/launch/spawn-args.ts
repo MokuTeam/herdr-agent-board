@@ -129,9 +129,9 @@ const UNTYPABLE = /['\u2018-\u201b\u0000-\u001f\u007f-\u009f\u2028\u2029]/
  * before a quote or another backslash). Refused: a single quote, the typographic ones PowerShell
  * also ends a string at, and control characters. The program cannot be quoted (PowerShell would
  * read a quoted word as a string, not a command), so it must be a plain word: a name on PATH, or
- * a path without spaces (with backslashes only on Windows, where the tab runs PowerShell).
+ * a path without spaces (with backslashes only on Windows, `win`, where the tab runs PowerShell).
  */
-export function shellLine(argv: readonly string[], win = process.platform === 'win32'): string {
+export function shellLine(argv: readonly string[], win: boolean): string {
   const plain = /^[\w=:./~+-]+$/
   return argv
     .map((arg, i) => {

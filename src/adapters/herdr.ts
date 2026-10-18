@@ -91,9 +91,59 @@ export function herdrText(args: string[], timeoutMs = 30_000): Promise<string> {
   return run(args, timeoutMs)
 }
 
+/** `record` (a copy of herdr's) without those of `keys` whose value is not a string. */
+function stringsOnly<T extends Record<string, unknown>>(record: T, keys: readonly string[]): T {
+  for (const key of keys) if (key in record && typeof record[key] !== 'string') Reflect.deleteProperty(record, key)
+  return record
+}
+
+const PANE_STRINGS = ['tab_id', 'workspace_id', 'agent', 'agent_status', 'cwd', 'label', 'terminal_title_stripped']
+
+function asPane(v: unknown): HerdrPane | null {
+  if (!isRecord(v) || typeof v.pane_id !== 'string') return null
+  const pane: HerdrPane = stringsOnly({ ...v, pane_id: v.pane_id }, PANE_STRINGS)
+  const session = pane.agent_session
+  if (isRecord(session))
+    pane.agent_session = { ...session, value: typeof session.value === 'string' ? session.value : null }
+  else delete pane.agent_session
+  if (!isRecord(pane.tokens)) delete pane.tokens
+  return pane
+}
+
+function asWorkspace(v: unknown): HerdrWorkspace | null {
+  if (!isRecord(v) || typeof v.workspace_id !== 'string') return null
+  return stringsOnly({ ...v, workspace_id: v.workspace_id }, ['label'])
+}
+
+function asTab(v: unknown): HerdrTab | null {
+  if (!isRecord(v) || typeof v.tab_id !== 'string' || typeof v.workspace_id !== 'string') return null
+  return { ...v, tab_id: v.tab_id, workspace_id: v.workspace_id }
+}
+
+const listOf = <T>(v: unknown, as: (item: unknown) => T | null): T[] =>
+  Array.isArray(v) ? v.map(as).filter((item): item is T => item !== null) : []
+
+/**
+ * herdr's `api snapshot` answer as the board reads it: its workspaces, tabs and panes that have
+ * an id, each field of the type the board takes (others dropped); unknown fields kept.
+ */
+export function asSnapshot(result: unknown): HerdrSnapshot {
+  const snap = isRecord(result) ? result.snapshot : null
+  if (!isRecord(snap)) throw new Error('herdr api snapshot: no snapshot in its answer')
+  return stringsOnly(
+    {
+      ...snap,
+      workspaces: listOf(snap.workspaces, asWorkspace),
+      tabs: listOf(snap.tabs, asTab),
+      panes: listOf(snap.panes, asPane),
+    },
+    ['focused_pane_id'],
+  )
+}
+
 /** Workspaces, tabs, panes and agents in one call. */
 export async function snapshot(): Promise<HerdrSnapshot> {
-  return (await herdr<{ snapshot: HerdrSnapshot }>(['api', 'snapshot'])).snapshot
+  return asSnapshot(await herdr(['api', 'snapshot']))
 }
 
 /** What `herdr agent get` says about a pane's agent. */
@@ -112,9 +162,8 @@ export interface HerdrAgent {
 const stringAt = (value: unknown, key: string): string | null =>
   isRecord(value) && typeof value[key] === 'string' ? value[key] : null
 
-/** The agent in a pane, or null when the pane has none. */
-export async function agentGet(pane: string, timeoutMs = 30_000): Promise<HerdrAgent | null> {
-  const answer = await herdr(['agent', 'get', pane], timeoutMs)
+/** herdr's `agent get` answer as the board reads it; null when the pane has no agent. */
+export function asAgent(answer: unknown): HerdrAgent | null {
   const agent = isRecord(answer) ? answer.agent : null
   if (!isRecord(agent)) return null
   return {
@@ -123,6 +172,11 @@ export async function agentGet(pane: string, timeoutMs = 30_000): Promise<HerdrA
     session: stringAt(agent.agent_session, 'value'),
     name: stringAt(agent, 'name'),
   }
+}
+
+/** The agent in a pane, or null when the pane has none. */
+export async function agentGet(pane: string, timeoutMs = 30_000): Promise<HerdrAgent | null> {
+  return asAgent(await herdr(['agent', 'get', pane], timeoutMs))
 }
 
 /** The names herdr's agents go by. */

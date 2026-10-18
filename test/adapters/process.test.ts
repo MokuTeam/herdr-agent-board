@@ -19,25 +19,29 @@ const alive = (pid: number): boolean => {
 
 test('a timeout ends the launcher and everything it started', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'board-proc-'))
+  let pid = 0
   try {
     const script = join(dir, 'parent.ts')
-    // The launcher starts a grandchild that sleeps 60 s, prints its pid and waits for it.
+    // The launcher starts a grandchild that sleeps 10 s, prints its pid and waits for it: long
+    // enough for the check below, and a test run cut off before the kill leaves it no longer.
     writeFileSync(
       script,
       [
         "import { spawn } from 'node:child_process'",
-        "const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore', detached: process.platform === 'win32' })",
+        "const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], { stdio: 'ignore', detached: process.platform === 'win32' })",
         'console.log("grandchild=" + child.pid)',
         "child.on('exit', () => process.exit(0))",
-        'setTimeout(() => {}, 60000)',
+        'setTimeout(() => {}, 10000)',
       ].join('\n'),
     )
     const result = await runTree(process.execPath, [script], { timeout: 1500 })
     expect(result.killed).toBe(true)
-    const pid = Number(/grandchild=(\d+)/.exec(result.stdout)?.[1])
+    pid = Number(/grandchild=(\d+)/.exec(result.stdout)?.[1])
     assert.ok(pid > 0, `no grandchild pid in ${JSON.stringify(result.stdout)}`)
     await until(() => !alive(pid), 2000)
   } finally {
+    // A failed check leaves no grandchild behind either.
+    if (pid > 0 && alive(pid)) process.kill(pid)
     rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 })

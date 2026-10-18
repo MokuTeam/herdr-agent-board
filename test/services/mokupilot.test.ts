@@ -1,4 +1,4 @@
-// Starting a MokuPilot call (integrations/mokupilot.ts startCall): upstream's test/mokupilot.test.mjs
+// Starting a MokuPilot call (services/mokupilot.ts startCall): upstream's test/mokupilot.test.mjs
 // (#44), its third test, with a stand-in for spawn; then whether the page offers calls at all,
 // looked up again when the setting changes and once a minute.
 import { beforeEach, test } from 'bun:test'
@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { useLanguage } from '../../src/core/lang.ts'
 import type { Config } from '../../src/core/types.ts'
-import { type CallChild, type CallOptions, mokupilotCheck, startCall } from '../../src/integrations/mokupilot.ts'
+import { type CallChild, type CallOptions, mokupilotCheck, startCall } from '../../src/services/mokupilot.ts'
 
 beforeEach(() => {
   useLanguage('en')

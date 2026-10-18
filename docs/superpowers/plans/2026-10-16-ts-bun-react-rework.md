@@ -1,7 +1,5 @@
 # agent-board TypeScript + Bun + React Rework — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Port agent-board from Node/JavaScript to Bun/TypeScript with a React web board, restructured into small single-purpose modules, with behaviour identical to `main` @ `94fdde6`.
 
 **Architecture:** Strangler-style port, one module at a time, suite green at every commit. Bun runs `.mjs` and `.ts` side by side, so unported `.mjs` files import ported `.ts` files during the migration. Layers: `src/core` (pure), `src/adapters` (I/O), `src/integrations` (herdr-wake, Edge window, terminal raise), `src/services` (use-cases), `src/server`, `src/tui`, `src/entrypoints`, `web/src` (React). The web board is bundled in memory by `Bun.build` from Task 3 on, which is what lets browser code import shared TS from `src/core`.
@@ -22,7 +20,7 @@
 - No `any` in new code (use `unknown` + narrowing). JSON read from disk or network is validated by a narrowing function before use.
 - Windows first-class: no shell when spawning, tree-kill via `taskkill /T /F`, `cmd`/`.bat`/`.cmd` refused as launcher program.
 - Each commit: `bun test` green (the 2 symlink tests may report *skip* on machines without symlink permission) and `bun run check` clean for TS files.
-- Commit messages: plain capitalised sentence like the repo's history (e.g. "Port the board rules to TypeScript"). No AI attribution, no `Co-Authored-By`. Local commits only — never push.
+- Commit messages: plain capitalised sentence like the repo's history (e.g. "Port the board rules to TypeScript"). No attribution lines, no `Co-Authored-By`. Local commits only — never push.
 - Shell: run Bun as `bun` with `~/.bun/bin` first on PATH (`export PATH="$HOME/.bun/bin:$PATH"` in Git Bash if the session predates the install).
 
 ## Review Focus

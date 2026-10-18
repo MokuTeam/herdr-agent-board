@@ -15,6 +15,11 @@ export type BoardMessage = { items: unknown[]; [key: string]: unknown }
 export interface ConnectionOptions {
   source: () => BoardStream
   snapshot: (signal: AbortSignal) => Promise<unknown>
+  /**
+   * Whether the page can read this board (api/client.ts isBoardPayload); every board by default.
+   * One it cannot read is not taken, and the page is not connected until a board it can read comes.
+   */
+  readable?: (value: BoardMessage) => boolean
   data: (value: BoardMessage) => void
   connected: (value: boolean) => void
 }
@@ -24,7 +29,7 @@ const isBoard = (value: unknown): value is BoardMessage =>
 
 // Resume always opens a new transport and fetches an uncached snapshot. Epochs
 // and the first SSE event keep delayed replies from restoring an older board.
-export function boardConnection({ source, snapshot, data, connected }: ConnectionOptions) {
+export function boardConnection({ source, snapshot, readable = () => true, data, connected }: ConnectionOptions) {
   let epoch = 0
   let stream: BoardStream | null = null
   let controller: AbortController | null = null
@@ -59,6 +64,7 @@ export function boardConnection({ source, snapshot, data, connected }: Connectio
       try {
         const value: unknown = JSON.parse(event.data)
         if (!isBoard(value)) return
+        if (!readable(value)) return connected(false)
         eventReceived = true
         hasSnapshot = true
         transportReady = true
@@ -69,6 +75,7 @@ export function boardConnection({ source, snapshot, data, connected }: Connectio
     snapshot(controller.signal)
       .then(value => {
         if (current !== epoch || eventReceived || !isBoard(value)) return
+        if (!readable(value)) return connected(false)
         hasSnapshot = true
         data(value)
         connected(transportReady)

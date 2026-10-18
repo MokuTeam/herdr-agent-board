@@ -4,7 +4,7 @@
 import type { Translator } from '../../../src/core/types.ts'
 import type { DirListing, LauncherInfo } from '../models/launch.ts'
 import type { StartBody, WorkspaceOption } from '../models/launch-form.ts'
-import { ApiError, api, errorText, isReply } from './client.ts'
+import { ApiError, api, errorText, isReply, postJson } from './client.ts'
 
 /** What the window offers (GET /api/launch/options). */
 export interface LaunchOptions {
@@ -94,11 +94,7 @@ export const launchApi = {
       .catch(() => null),
   /** The folders in `path` ('' the roots); `git`: also the checkout it is in. null when there is no answer. */
   dirs: (path: string, git: boolean): Promise<DirListing | null> =>
-    fetch('/api/fs/dirs', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-board': '1' },
-      body: JSON.stringify({ path, git }),
-    })
+    postJson('/api/fs/dirs', { path, git })
       .then(r => r.json())
       .then(asListing)
       .catch(() => null),

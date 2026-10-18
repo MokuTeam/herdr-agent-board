@@ -18,8 +18,20 @@ const fromGit = new Map<string, string>()
 export function oldSource(file: string, ref = BASELINE): string {
   const known = fromGit.get(`${ref}:${file}`)
   if (known !== undefined) return known
-  const git = Bun.spawnSync(['git', 'show', `${ref}:${file}`], { cwd: ROOT })
-  if (git.exitCode !== 0) throw new Error(`git show ${ref}:${file} failed`)
+  // The parity tests need git on PATH and the repository's history (README, Development).
+  const failed = (why: string) =>
+    new Error(
+      `git show ${ref}:${file} failed (${why}): parity tests need git and the full history, not a shallow clone`,
+    )
+  const show = () => {
+    try {
+      return Bun.spawnSync(['git', 'show', `${ref}:${file}`], { cwd: ROOT })
+    } catch (err) {
+      throw failed(err instanceof Error ? err.message : String(err))
+    }
+  }
+  const git = show()
+  if (git.exitCode !== 0) throw failed(git.stderr.toString().trim() || `exit ${git.exitCode}`)
   const text = git.stdout.toString()
   fromGit.set(`${ref}:${file}`, text)
   return text

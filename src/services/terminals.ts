@@ -10,10 +10,10 @@
 // terminals.json, checked to be still that pane, in its tab, with the terminal it was opened
 // with), or the session's own pane once herdr says the same session still runs there, as for a
 // message. Nothing it reads or types is logged.
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { herdr as realHerdr, herdrText as realHerdrText } from '../adapters/herdr.ts'
-import { isRecord } from '../adapters/json-store.ts'
+import { isRecord, replaceFile } from '../adapters/json-store.ts'
 import { terminalsFile } from '../adapters/paths.ts'
 import { herdrCalls } from '../core/terminal/term-keys.ts'
 import { applyDiff, diffLines, type LineDiff } from '../core/terminal/term-model.ts'
@@ -190,9 +190,7 @@ export function createTerminals({
   function save(): void {
     try {
       mkdirSync(dirname(file), { recursive: true })
-      const tmp = `${file}.${process.pid}.tmp`
-      writeFileSync(tmp, `${JSON.stringify(shells, null, 2)}\n`)
-      renameSync(tmp, file)
+      replaceFile(file, `${JSON.stringify(shells, null, 2)}\n`)
     } catch {}
   }
 

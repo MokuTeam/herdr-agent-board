@@ -10,6 +10,7 @@ import { type FilesApi, filesApi } from '../api/files.ts'
 import { type ImageZoom, zoomImage } from '../components/files/zoom.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { NO_ZOOM, type ZoomFoot, zoomFootAfter, zoomShown } from '../models/files.ts'
+import { paintWindow } from '../models/grow.ts'
 import type { FocusScope } from '../models/modal-focus.ts'
 import {
   type FileLook,
@@ -171,17 +172,7 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
   function paint(p: number): void {
     const win = refs.win.current
     const scrim = refs.scrim.current
-    if (!win || !scrim) return
-    const q = Math.max(0, p)
-    if (reducedMotion.matches) {
-      win.style.transform = ''
-      win.style.opacity = String(Math.min(1, q))
-    } else {
-      const s = from.s + (1 - from.s) * q
-      win.style.transform = `translate(${from.dx * (1 - q)}px, ${from.dy * (1 - q)}px) scale(${s})`
-      win.style.opacity = String(Math.min(1, q * 1.8))
-    }
-    scrim.style.opacity = String(Math.min(1, q))
+    if (win && scrim) paintWindow(win, scrim, p, from)
   }
 
   // p: 0 = folded into what it came from, 1 = open. Interruptible: a close while opening turns

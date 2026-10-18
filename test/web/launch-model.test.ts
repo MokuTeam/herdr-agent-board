@@ -5,10 +5,10 @@ import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { LaunchView } from '../../src/core/types.ts'
 import { asListing, asOptions } from '../../web/src/api/launch.ts'
+import { FROM_BELOW, windowPaint } from '../../web/src/models/grow.ts'
 import {
   chainOf,
   completionItems,
-  FROM_BELOW,
   failureHint,
   folderColumn,
   growFrom,
@@ -20,7 +20,6 @@ import {
   sameish,
   stepText,
   suggestionItems,
-  windowPaint,
 } from '../../web/src/models/launch.ts'
 import {
   draftOf,

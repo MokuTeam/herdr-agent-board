@@ -61,7 +61,11 @@ if (mode === 'open') {
   const cfg = input<Config>()
   // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
   if (cfg.language) (await import('../../src/core/lang.ts')).useLanguage(cfg.language)
-  const server = await startServer({ deps: defaultDeps(cfg, text => send({ log: text })) })
+  // TEST_PROBE_MS: herdr-wake's /status may take that long in the setup check (1.5 s by default).
+  const probeMs = Number(process.env.TEST_PROBE_MS) || undefined
+  const { gatherFacts } = await import('../../src/adapters/setup-facts.ts')
+  const deps = defaultDeps(cfg, text => send({ log: text }))
+  const server = await startServer({ deps, ...(probeMs && { gather: () => gatherFacts(deps.cfg, { probeMs }) }) })
   send({ ready: true })
   process.on('message', async message => {
     if (message === 'refresh') {

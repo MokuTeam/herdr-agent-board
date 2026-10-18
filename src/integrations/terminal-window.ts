@@ -1,6 +1,6 @@
 // Bringing a window to the front. Windows only: on macOS and Linux nothing is raised.
+import { execFile } from 'node:child_process'
 import { hostname } from 'node:os'
-import { run } from '../adapters/process.ts'
 import type { Config } from '../core/types.ts'
 
 // Finds a visible top-level window by title (-like pattern) and brings it to the front. Every
@@ -45,11 +45,14 @@ if ([BoardWin]::IsIconic($h)) { [BoardWin]::ShowWindow($h, 9) | Out-Null }
  */
 export async function raiseWindow(pattern: string): Promise<boolean> {
   if (process.platform !== 'win32') return false
-  const r = await run('powershell', ['-NoProfile', '-NonInteractive', '-Command', RAISE_PS], {
-    timeout: 15_000,
-    env: { ...process.env, BOARD_TITLE: pattern },
-  })
-  return !r.error && r.stdout.trim().endsWith('ok')
+  return new Promise(res =>
+    execFile(
+      'powershell',
+      ['-NoProfile', '-NonInteractive', '-Command', RAISE_PS],
+      { encoding: 'utf8', timeout: 15_000, windowsHide: true, env: { ...process.env, BOARD_TITLE: pattern } },
+      (err, stdout) => res(!err && String(stdout).trim().endsWith('ok')),
+    ),
+  )
 }
 
 /** Bring the terminal window herdr runs in to the front (its title starts with the machine name). */

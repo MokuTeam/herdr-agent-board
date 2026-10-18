@@ -69,7 +69,7 @@ Phase 1 builds none of 2–5, but it must leave clean seams for them (see "Seams
 - **HTTP surface unchanged**: port 12422, loopback only, every route, payload, header check
   (`X-Board`, `Origin`, `fsToken`), SSE event shapes, CSP on raw responses.
 - **Languages**: English and Russian texts kept, same keys.
-- **Commits**: local only; no AI attribution of any kind in commit messages or files.
+- **Commits**: local only; no attribution lines of any kind in commit messages or files.
 
 ## Decided by the owner
 

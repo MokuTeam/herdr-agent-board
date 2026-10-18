@@ -19,16 +19,11 @@ import {
   parseHtml,
   stripAttrs,
 } from './markup.ts'
+import { oldSource } from './old-app.ts'
 
 /** Upstream's merge of the setup check (PR #41). */
 export const SETUP_MERGE = 'a496257'
-const ROOT = join(import.meta.dir, '..', '..', '..')
-
-function upstream(file: string): string {
-  const git = Bun.spawnSync(['git', 'show', `${SETUP_MERGE}:${file}`], { cwd: ROOT })
-  if (git.exitCode !== 0) throw new Error(`git show ${SETUP_MERGE}:${file} failed`)
-  return git.stdout.toString()
-}
+const upstream = (file: string): string => oldSource(file, SETUP_MERGE)
 
 const esc = (s: unknown): string =>
   String(s ?? '').replace(

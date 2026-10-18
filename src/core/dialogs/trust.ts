@@ -2,7 +2,6 @@
 // not seen stops there ("Accessing workspace: <folder>", "❯ No, exit", "Yes, I trust this
 // folder"); the board shows it on the launch's card and, when asked, moves the cursor to "Yes"
 // and confirms. Nothing is assumed: the folder and where the cursor is come from the screen.
-import { homedir } from 'node:os'
 import { stripAnsi } from './input-box.ts'
 
 export type TrustAnswer = 'yes' | 'no'
@@ -59,12 +58,12 @@ export function trustDialog(screen: unknown): TrustDialog | null {
 
 /**
  * Whether the folder a dialog names is `cwd`. Claude may break a path where it had a space, and
- * shows home as ~ on some systems: both are compared without spaces, slashes one way, case folded.
+ * shows `home` as ~ on some systems: both are compared without spaces, slashes one way, case folded.
  */
-export function sameFolder(onScreen: unknown, cwd: unknown): boolean {
+export function sameFolder(onScreen: unknown, cwd: unknown, home: string): boolean {
   const norm = (p: unknown): string =>
     String(p ?? '')
-      .replace(/^~(?=$|[\\/])/, homedir())
+      .replace(/^~(?=$|[\\/])/, home)
       .replace(/\s+/g, '')
       .replace(/[\\/]+/g, '/')
       .replace(/\/$/, '')

@@ -28,12 +28,18 @@ test('only a dialog Claude shows now, with both answers', () => {
 })
 
 test('the folder on screen is compared without the breaks Claude puts in it', () => {
-  assert.ok(sameFolder(FOLDER, FOLDER.toLowerCase()))
-  assert.ok(sameFolder('C:\\Work\\MyFolder', 'C:\\Work\\My Folder')) // broken where it had a space
-  assert.ok(sameFolder('C:/Work/x/', 'C:\\Work\\x'))
-  assert.ok(sameFolder('~/code/app', join(homedir(), 'code', 'app')))
-  assert.ok(!sameFolder('C:\\Work\\x', 'C:\\Work\\y'))
-  assert.ok(!sameFolder('', 'C:\\Work\\x'))
+  const home = homedir()
+  assert.ok(sameFolder(FOLDER, FOLDER.toLowerCase(), home))
+  assert.ok(sameFolder('C:\\Work\\MyFolder', 'C:\\Work\\My Folder', home)) // broken where it had a space
+  assert.ok(sameFolder('C:/Work/x/', 'C:\\Work\\x', home))
+  assert.ok(sameFolder('~/code/app', join(home, 'code', 'app'), home))
+  // Home as ~, whichever system's home it is.
+  assert.ok(sameFolder('~\\code\\app', 'C:\\Users\\u\\code\\app', 'C:\\Users\\u'))
+  assert.ok(sameFolder('~/code/app', '/home/u/code/app', '/home/u'))
+  assert.ok(sameFolder('~', '/home/u', '/home/u'))
+  assert.ok(!sameFolder('~x/app', '/home/u/x/app', '/home/u'))
+  assert.ok(!sameFolder('C:\\Work\\x', 'C:\\Work\\y', home))
+  assert.ok(!sameFolder('', 'C:\\Work\\x', home))
 })
 
 test('the key toward "Yes" follows the cursor on screen', () => {

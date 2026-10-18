@@ -3,7 +3,7 @@
 // and back, shrinks away on Esc or Back from its first step, and gives the focus back; open, reveal
 // and copy act on what it shows; an image on show zooms, by its keys too, until the next step.
 // Springs share one frame loop: every world settles before it goes.
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, onTestFinished, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { FilesApi } from '../../web/src/api/files.ts'
 import { type LookKey, type LookRefs, quickLookEngine } from '../../web/src/hooks/useQuickLook.ts'
@@ -167,6 +167,12 @@ describe('what it shows', () => {
   test('opens with the system, shows in its folder, copies the path at its line', async () => {
     const { look, chip, opened, toasts } = setup()
     const copied: string[] = []
+    // The clipboard for this test only: later files get the runtime's navigator back.
+    const saved = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+    onTestFinished(() => {
+      if (saved) Object.defineProperty(globalThis, 'navigator', saved)
+      else Reflect.deleteProperty(globalThis, 'navigator')
+    })
     Object.defineProperty(globalThis, 'navigator', {
       value: { clipboard: { writeText: async (text: string) => void copied.push(text) } },
       configurable: true,

@@ -1,8 +1,9 @@
 // New sessions from the board, without a page (the pure parts of web/launch.js): where the window
-// grows out of and how its spring draws it, the folder field's list and columns, and the cards of
+// grows out of (models/grow.ts draws it), the folder field's list and columns, and the cards of
 // sessions on their way. What the form starts with and lacks is models/launch-form.ts.
 import { baseName, completions, type folderSuggestions } from '../../../src/core/launch/names.ts'
 import type { ColumnId, Item, LaunchView, Translator } from '../../../src/core/types.ts'
+import { FROM_BELOW, type GrowFrom } from './grow.ts'
 
 // ---------------------------------------------------------------- the window's motion
 
@@ -14,16 +15,6 @@ export interface Box {
   height: number
   bottom: number
 }
-
-/** Where the window grows out of, against its own place: offset of the centre and scale. */
-export interface GrowFrom {
-  dx: number
-  dy: number
-  s: number
-}
-
-/** A little drop from below: for nothing to grow out of, or something off screen. */
-export const FROM_BELOW: GrowFrom = { dx: 0, dy: 24, s: 0.94 }
 
 /** The window's spring: it opens on `open`, folds away on `close`. */
 export const LAUNCH_MOTION = {
@@ -39,25 +30,6 @@ export function growFrom(rect: Box | null | undefined, win: Box, viewportHeight:
     dx: rect.left + rect.width / 2 - (win.left + win.width / 2),
     dy: rect.top + rect.height / 2 - (win.top + win.height / 2),
     s: Math.max(0.08, Math.min(0.6, rect.width / win.width)),
-  }
-}
-
-/** The window's and the scrim's inline style at spring value `p` (0 folded, 1 open). */
-export interface WindowPaint {
-  transform: string
-  opacity: string
-  scrim: string
-}
-
-export function windowPaint(p: number, from: GrowFrom, reduced: boolean): WindowPaint {
-  const q = Math.max(0, p)
-  const scrim = String(Math.min(1, q))
-  if (reduced) return { transform: '', opacity: String(Math.min(1, q)), scrim }
-  const k = from.s + (1 - from.s) * q
-  return {
-    transform: `translate(${from.dx * (1 - q)}px, ${from.dy * (1 - q)}px) scale(${k})`,
-    opacity: String(Math.min(1, q * 1.8)),
-    scrim,
   }
 }
 

@@ -324,19 +324,16 @@ describe('localUsage', () => {
 describe('recentFolders', () => {
   test('the cwd in the newest transcript of each project, newest first, once each, existing folders only', async () => {
     const root = newRoot()
-    // Real folders outside the temp folder (temp folders are skipped on purpose).
-    const older = process.cwd()
-    const newer = join(process.cwd(), 'src')
-    const missing = join(process.cwd(), `no-such-folder-${process.pid}`)
+    // Real folders outside the temp folder (temp folders are skipped on purpose): this checkout's,
+    // wherever the tests run from.
+    const older = join(import.meta.dir, '..', '..')
+    const newer = join(older, 'src')
+    const missing = join(older, `no-such-folder-${process.pid}`)
     const mk = (folder: string, cwd: string, age: number) => {
       const dir = join(root, 'projects', folder)
       mkdirSync(dir)
       const file = join(dir, 's.jsonl')
-      writeFileSync(
-        file,
-        `${JSON.stringify({ type: 'user', cwd })}
-`,
-      )
+      writeFileSync(file, `${JSON.stringify({ type: 'user', cwd })}\n`)
       const at = new Date(Date.now() - age * 1000)
       utimesSync(file, at, at)
       utimesSync(dir, at, at)

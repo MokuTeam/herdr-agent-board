@@ -41,7 +41,7 @@ interface Options {
   push: (payload: string) => void
   /** The setup check's summary (services/setup-check.ts). */
   setup?: () => SetupSummary | null
-  /** Whether MokuPilot is here for calls with a fork of a session (integrations/mokupilot.ts). */
+  /** Whether MokuPilot is here for calls with a fork of a session (services/mokupilot.ts). */
   mokupilot?: () => boolean
 }
 

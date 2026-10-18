@@ -1,12 +1,16 @@
 // The page's own settings in localStorage, which may be missing or refuse (a private window):
 // a read falls back, a write is dropped.
 export const storage = {
-  get(key: string, fallback: string): string {
+  /** The value saved under `key`, else null. */
+  read(key: string): string | null {
     try {
-      return localStorage.getItem(key) ?? fallback
+      return localStorage.getItem(key)
     } catch {
-      return fallback
+      return null
     }
+  },
+  get(key: string, fallback: string): string {
+    return storage.read(key) ?? fallback
   },
   set(key: string, value: string): void {
     try {

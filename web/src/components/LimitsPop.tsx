@@ -1,24 +1,27 @@
 // The usage popover under the pill. A press outside, Escape or a resize closes it; Escape and the
 // close button give the focus back to the pill.
-import { type RefObject, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { type Dispatch, type RefObject, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { limitInfo, popoverPosition } from '../models/limits.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
+import type { BoardAction } from '../state/board-ui.ts'
 import { LimitsReport } from './LimitsReport.tsx'
 
-export function LimitsPop({ anchor }: { anchor: RefObject<HTMLButtonElement | null> }) {
+type Pill = RefObject<HTMLButtonElement | null>
+
+/** Closes the popover; `refocus` gives the focus back to the pill (Escape, Back, its close button). */
+export function closeLimits(dispatch: Dispatch<BoardAction>, pill: Pill, refocus: boolean): void {
+  dispatch({ type: 'limits', open: false })
+  if (refocus) pill.current?.focus({ preventScroll: true })
+}
+
+export function LimitsPop({ anchor }: { anchor: Pill }) {
   const t = useT()
   const { data, connected, ui, dispatch } = useBoardContext()
   const pop = useRef<HTMLDivElement>(null)
   const open = ui.limitsOpen
 
-  const close = useCallback(
-    (refocus: boolean) => {
-      dispatch({ type: 'limits', open: false })
-      if (refocus) anchor.current?.focus({ preventScroll: true })
-    },
-    [dispatch, anchor],
-  )
+  const close = useCallback((refocus: boolean) => closeLimits(dispatch, anchor, refocus), [dispatch, anchor])
 
   // Placed again whenever its text changes while it is open.
   useLayoutEffect(() => {

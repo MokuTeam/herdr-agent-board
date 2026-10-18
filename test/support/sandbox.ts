@@ -99,7 +99,12 @@ export async function sandbox(t?: Registrar): Promise<Sandbox> {
     let read = 0
     const drain = (): void => {
       if (!existsSync(signals)) return
-      const lines = readFileSync(signals, 'utf8').split('\n').filter(Boolean)
+      // A line the child is still writing has no newline yet: it is read on a later drain.
+      const text = readFileSync(signals, 'utf8')
+      const lines = text
+        .slice(0, text.lastIndexOf('\n') + 1)
+        .split('\n')
+        .filter(Boolean)
       for (; read < lines.length; read++) messages.push(JSON.parse(lines[read] as string))
     }
     const poll = setInterval(drain, 5)

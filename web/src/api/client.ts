@@ -90,13 +90,26 @@ export function errorText(err: unknown, t: Translator): string {
   return t('err.offline', { why: err instanceof Error ? err.message : String(err) })
 }
 
-async function replyOf(res: Response): Promise<unknown> {
+/** An answer's JSON, {} when it has none. */
+export async function replyOf(res: Response): Promise<unknown> {
   try {
     return await res.json()
   } catch {
     return {}
   }
 }
+
+/** The header the server asks of every POST (a page of another site cannot send it). */
+const BOARD_HEADER = { 'x-board': '1' }
+
+/** POST `body` as JSON, with the board's header. */
+export const postJson = (path: string, body: unknown, init: RequestInit = {}): Promise<Response> =>
+  fetch(path, {
+    ...init,
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...BOARD_HEADER },
+    body: JSON.stringify(body),
+  })
 
 async function get<T>(path: string, accept: Guard<T>, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, init)
@@ -108,11 +121,7 @@ async function get<T>(path: string, accept: Guard<T>, init: RequestInit = {}): P
 function post(path: string, body?: unknown): Promise<Reply>
 function post<T>(path: string, body: unknown, accept: Guard<T>): Promise<T>
 async function post(path: string, body: unknown = {}, accept: Guard<unknown> = isReply): Promise<unknown> {
-  const res = await fetch(path, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-board': '1' },
-    body: JSON.stringify(body),
-  })
+  const res = await postJson(path, body)
   const value = await replyOf(res)
   const reply = isReply(value) ? value : {}
   if (!res.ok || reply.ok === false || !accept(value)) throw new ApiError(res.status, reply)
@@ -134,7 +143,7 @@ async function upload(name: string, file: Blob): Promise<string> {
   const res = await fetch('/api/upload', {
     method: 'POST',
     headers: {
-      'x-board': '1',
+      ...BOARD_HEADER,
       'x-filename': encodeURIComponent(name),
       'content-type': file.type || 'application/octet-stream',
     },

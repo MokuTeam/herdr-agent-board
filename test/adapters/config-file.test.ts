@@ -1,9 +1,10 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { readCard, writeCard } from '../../src/adapters/cards.ts'
 import { configFile, editCategories, editSettings, loadConfig } from '../../src/adapters/config-file.ts'
-import { renameWithRetry } from '../../src/adapters/json-store.ts'
+import { renameWithRetry, replaceFile } from '../../src/adapters/json-store.ts'
 import { configDir } from '../../src/adapters/paths.ts'
 import { isolatedHome } from '../support/env.ts'
 
@@ -37,6 +38,30 @@ test('renameWithRetry rides out a brief Windows file lock but not a real error',
     /EBUSY/,
   )
   assert.equal(calls, 10)
+})
+
+test('replaceFile puts the whole text in place, or leaves the file and no temp file behind', () => {
+  const dir = isolatedHome()
+  const file = join(dir, 'usage.json')
+  replaceFile(file, '{"a":1}')
+  assert.equal(readFileSync(file, 'utf8'), '{"a":1}')
+  // A brief lock is ridden out; a lock that stays (or a real error) keeps the old file.
+  const lock = Object.assign(new Error('EPERM'), { code: 'EPERM' })
+  let calls = 0
+  replaceFile(file, '{"a":2}', (from, to) => {
+    if (++calls < 2) throw lock
+    renameSync(from, to)
+  })
+  assert.equal(readFileSync(file, 'utf8'), '{"a":2}')
+  assert.throws(
+    () =>
+      replaceFile(file, '{"a":3}', () => {
+        throw lock
+      }),
+    /EPERM/,
+  )
+  assert.equal(readFileSync(file, 'utf8'), '{"a":2}')
+  assert.deepEqual(readdirSync(dir).sort(), ['usage.json'])
 })
 
 test('loadConfig writes the defaults on first use', () => {
@@ -91,6 +116,47 @@ test('editCategories creates, updates, orders and deletes; unknown fields surviv
   assert.equal(editCategories({ op: 'create', id: 'home' }).ok, false)
   assert.equal(editCategories({ op: 'delete', id: 'other' }).ok, false)
   assert.equal(editCategories({ op: 'nope' }).ok, false)
+})
+
+test('editCategories keeps hand-edited entries it cannot read in their place, and adds no fields to the others', () => {
+  isolatedHome()
+  seed({
+    language: 'en',
+    categories: [{ id: 'work' }, null, { id: 'home', title: 'Home' }, 'lane', { title: 'No id' }, { id: 'other' }],
+  })
+  assert.deepEqual(editCategories({ op: 'update', id: 'home', color: 'red' }), { ok: true })
+  assert.deepEqual(saved().categories, [
+    { id: 'work' },
+    null,
+    { id: 'home', title: 'Home', color: 'red' },
+    'lane',
+    { title: 'No id' },
+    { id: 'other' },
+  ])
+  assert.deepEqual(editCategories({ op: 'order', ids: ['other', 'home'] }), { ok: true })
+  assert.deepEqual(saved().categories, [
+    { id: 'other' },
+    null,
+    { id: 'home', title: 'Home', color: 'red' },
+    'lane',
+    { title: 'No id' },
+    { id: 'work' },
+  ])
+  assert.deepEqual(editCategories({ op: 'create', id: 'acme', title: 'Acme' }), { ok: true })
+  assert.deepEqual(editCategories({ op: 'delete', id: 'work' }), { ok: true })
+  assert.deepEqual(saved().categories, [
+    { id: 'acme', title: 'Acme', color: 'blue', paths: [] },
+    { id: 'other' },
+    null,
+    { id: 'home', title: 'Home', color: 'red' },
+    'lane',
+    { title: 'No id' },
+  ])
+  // The board reads only the lanes among them.
+  assert.deepEqual(
+    loadConfig().categories.map(c => c.id),
+    ['acme', 'other', 'home'],
+  )
 })
 
 test('category folders lose trailing slashes and backslashes and are de-duplicated', () => {

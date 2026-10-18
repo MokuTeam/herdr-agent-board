@@ -28,7 +28,7 @@ export interface SessionActions {
   sleepSession(key: string): Promise<void>
   /** A question that does not need an answer: off the "Needs me" column until the next one. */
   dismissAsk(key: string): Promise<void>
-  /** A MokuPilot call whose agent is a fork of the session (integrations/mokupilot.ts): the session goes on as it was. */
+  /** A MokuPilot call whose agent is a fork of the session (services/mokupilot.ts): the session goes on as it was. */
   callMokuPilot(key: string): Promise<void>
 }
 
@@ -39,7 +39,7 @@ export interface CallDeps {
   toast(text: string, error?: boolean): void
 }
 
-/** A MokuPilot call whose agent is a fork of the session (integrations/mokupilot.ts): the session goes on as it was. */
+/** A MokuPilot call whose agent is a fork of the session (services/mokupilot.ts): the session goes on as it was. */
 export async function callMokuPilot(key: string, { t, itemOf, act, toast }: CallDeps): Promise<void> {
   const it = itemOf(key)
   if (!it) return

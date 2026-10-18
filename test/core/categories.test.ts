@@ -49,3 +49,15 @@ test('normalizeConfig fills defaults, titles built-in lanes, keeps unknown field
     'X',
   )
 })
+
+test('normalizeConfig takes only the lanes of a hand-edited list, the defaults when none is left', () => {
+  const c = normalizeConfig({ categories: [null, 'x', 7, ['y'], { title: 'No id' }, { id: 'acme', title: 'Acme' }] })
+  assert.deepEqual(
+    c.categories.map(x => x.id),
+    ['acme'],
+  )
+  assert.deepEqual(
+    normalizeConfig({ categories: [null, { id: 3 }] }).categories.map(x => x.id),
+    ['work', 'personal', 'other'],
+  )
+})

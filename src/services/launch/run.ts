@@ -3,6 +3,7 @@
 // the card until it is answered, another dialog waited out, and the name and first message the
 // launcher did not type. The card gets the chosen lane as soon as the session has an id.
 import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
 import { join, relative } from 'node:path'
 import { writeCard } from '../../adapters/cards.ts'
 import { SLOW, statOf } from '../../adapters/folders.ts'
@@ -218,7 +219,7 @@ export function launchRunner({
       if (i) await sleep(700)
       const screen = await herdrText(['pane', 'read', l.pane, '--source', 'visible'], 5000).catch(() => '')
       const d = trustDialog(screen)
-      if (d && sameFolder(d.folder, l.cwd)) return d
+      if (d && sameFolder(d.folder, l.cwd, homedir())) return d
     }
     return null
   }

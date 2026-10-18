@@ -20,6 +20,7 @@ import { useSessionActions } from '../../hooks/useSessionActions.ts'
 import { type DetailSnapshot, useSessionDetail } from '../../hooks/useSessionDetail.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { inTurn } from '../../models/card.ts'
+import { ConversationScroll } from '../../models/conversation-scroll.ts'
 import { PHONE_QUERY } from '../../models/panel-motion.ts'
 import {
   askedView,
@@ -118,16 +119,9 @@ export function Sheet(slots: SheetSlots) {
     if (previous !== null && previous !== open && !reducedMotion.matches)
       body.current?.animate([{ opacity: 0.3 }, { opacity: 1 }], { duration: 180, easing: 'ease-out' })
   }, [open])
-  const stick = useRef(true)
+  const [scroll] = useState(() => new ConversationScroll())
   // biome-ignore lint/correctness/useExhaustiveDependencies: an opening is when to go to the bottom
-  useLayoutEffect(() => {
-    stick.current = true
-  }, [open, ui.opened])
-  // After every draw: at the bottom it stays at the bottom.
-  useLayoutEffect(() => {
-    const el = body.current
-    if (el && stick.current) el.scrollTop = el.scrollHeight
-  })
+  useLayoutEffect(() => scroll.opened(), [scroll, open, ui.opened])
   // The helpers window lists what the open session's detail says.
   const fed = open !== null && detail.value.key === open ? detail.value.data : null
   useLayoutEffect(() => helpers?.engine.feed({ key: open, data: fed }), [helpers, open, fed])
@@ -144,6 +138,13 @@ export function Sheet(slots: SheetSlots) {
   useLayoutEffect(() => {
     if (body.current && drawn) upgradeFiles?.(body.current, cwd)
   }, [detail.value.data, drawn, shown.key, cwd, t, upgradeFiles])
+  const form = shown.item ? question?.(shown.item, detail.value.data) : null
+  const hasForm = form !== null && form !== undefined && form !== false
+  // Once its paths are chips: a conversation drawn anew (what upstream's renderSheetBody draws it
+  // from) stays at the bottom if it was there; any other render leaves its scroll alone.
+  useLayoutEffect(() =>
+    scroll.rendered(body.current, [detail.value, shown.key, ui.opened, t, hasForm, shown.item?.column]),
+  )
 
   const at = (act: (key: string) => unknown) => () => void (open && act(open))
   const item = itemOf(open)
@@ -179,16 +180,13 @@ export function Sheet(slots: SheetSlots) {
         open={open}
         item={shown.item}
         detail={detail.value}
-        form={shown.item ? question?.(shown.item, detail.value.data) : null}
+        form={form}
         narrow={narrow}
         propertiesOpen={propertiesOpen}
         onProperties={() => setPropertiesOpen(was => !was)}
         composer={composer}
         bodyRef={body}
-        onBodyScroll={() => {
-          const el = body.current
-          if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
-        }}
+        onBodyScroll={() => body.current && scroll.scrolled(body.current)}
         onRetry={() => open && detail.load(open)}
         onDismiss={at(actions.dismissAsk)}
         buttons={buttons}

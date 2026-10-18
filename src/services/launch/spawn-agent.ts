@@ -80,7 +80,8 @@ export async function spawnAgent(
           .replace(/^\uFEFF/, '')
           .trim()
       : (o.brief ?? '').trim()
-  const command = shellLine(o.sessionId && !choosesSession(claude) ? [...claude, '--session-id', o.sessionId] : claude)
+  const argv = o.sessionId && !choosesSession(claude) ? [...claude, '--session-id', o.sessionId] : claude
+  const command = shellLine(argv, process.platform === 'win32')
 
   // The tab is labelled before Claude runs: a launcher may name things after it (a Telegram topic).
   let pane = o.pane

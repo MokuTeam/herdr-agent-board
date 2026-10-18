@@ -5,8 +5,9 @@
 //   each session's context fill (context_window) in contextDir()/<session id>.json
 // and it prints one short line under the prompt, e.g. "ctx 34% · 5h 23% · 7d 41%".
 // It never fails loudly: a bad input leaves the line blank and the files as they were.
-import { mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { replaceFile } from '../adapters/json-store.ts'
 import { contextDir, usageFile } from '../adapters/paths.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { digest, statusText } from '../core/statusline.ts'
@@ -15,9 +16,7 @@ const safe = (key: string): string => String(key).replace(/[^A-Za-z0-9_-]/g, '_'
 
 function save(file: string, data: unknown): void {
   mkdirSync(dirname(file), { recursive: true })
-  const tmp = `${file}.${process.pid}.tmp`
-  writeFileSync(tmp, JSON.stringify(data))
-  renameSync(tmp, file)
+  replaceFile(file, JSON.stringify(data))
 }
 
 /** Context files of sessions gone a week: dropped now and then. */

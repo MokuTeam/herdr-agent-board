@@ -7,7 +7,7 @@ import { Board } from './components/Board.tsx'
 import { FileChips } from './components/files/FileChip.tsx'
 import { QuickLook } from './components/files/QuickLook.tsx'
 import { HelpersWindow } from './components/helpers/HelpersWindow.tsx'
-import { LimitsPop } from './components/LimitsPop.tsx'
+import { closeLimits, LimitsPop } from './components/LimitsPop.tsx'
 import { LaunchDialog } from './components/launch/LaunchDialog.tsx'
 import { ContextMenu } from './components/menu/ContextMenu.tsx'
 import { SheetQuestion } from './components/questions/SheetQuestion.tsx'
@@ -110,13 +110,7 @@ export function App() {
       files: { open: quickLook.open, close: quickLook.back },
       terminal: { open: terminal.open, close: terminal.close },
       helpers: { open: helpers.open, close: helpers.back },
-      limits: {
-        open: ui.limitsOpen,
-        close: () => {
-          dispatch({ type: 'limits', open: false })
-          limitsAnchor.current?.focus({ preventScroll: true })
-        },
-      },
+      limits: { open: ui.limitsOpen, close: () => closeLimits(dispatch, limitsAnchor, true) },
       setup: { open: setup.open, close: () => setup.close(true) },
       panels: { open: panels.open, close: panels.closeOpen },
     }),

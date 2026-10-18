@@ -96,32 +96,29 @@ describe('what spawn-agent types into the tab’s shell', () => {
   })
 
   test('plain words as they are, anything else in single quotes; quotes and controls refused', () => {
+    const host = process.platform === 'win32'
     const sid = '0f8fad5b-d9cb-469f-a165-70867728950e'
     assert.equal(
-      shellLine(['claude', '--dangerously-skip-permissions', '--session-id', sid]),
+      shellLine(['claude', '--dangerously-skip-permissions', '--session-id', sid], host),
       `claude --dangerously-skip-permissions --session-id ${sid}`,
     )
     // Anything but a plain word goes in single quotes, which PowerShell, bash, zsh and fish all take literally.
     assert.equal(
-      shellLine([
-        'claude',
-        '--append-system-prompt',
-        'Be brief; no $HOME & no `x`',
-        '--allowedTools',
-        'Read,Write',
-        '',
-      ]),
+      shellLine(
+        ['claude', '--append-system-prompt', 'Be brief; no $HOME & no `x`', '--allowedTools', 'Read,Write', ''],
+        host,
+      ),
       "claude --append-system-prompt 'Be brief; no $HOME & no `x`' --allowedTools 'Read,Write' ''",
     )
     assert.equal(shellLine(['C:\\tools\\start-claude.ps1'], true), 'C:\\tools\\start-claude.ps1')
     assert.throws(() => shellLine(['C:\\tools\\start-claude.ps1'], false), /program must be a name on PATH/) // a backslash means something to sh
     assert.throws(() => shellLine(['C:\\Program Files\\claude.exe'], true), /program must be a name on PATH/)
-    assert.throws(() => shellLine(['-x']), /starts with a dash/)
-    assert.throws(() => shellLine(['claude', "it's"]), /a quote/)
+    assert.throws(() => shellLine(['-x'], host), /starts with a dash/)
+    assert.throws(() => shellLine(['claude', "it's"], host), /a quote/)
     assert.throws(() => shellLine(['claude', 'Don’t stop'], true), /a quote/) // PowerShell ends a string at it too
-    assert.throws(() => shellLine(['claude', 'a\u2028b']), /control character/) // a line separator
-    assert.throws(() => shellLine(['claude', 'a\tb']), /control character/)
-    assert.throws(() => shellLine(['claude', 'a\nb']), /control character/)
+    assert.throws(() => shellLine(['claude', 'a\u2028b'], host), /control character/) // a line separator
+    assert.throws(() => shellLine(['claude', 'a\tb'], host), /control character/)
+    assert.throws(() => shellLine(['claude', 'a\nb'], host), /control character/)
     // A backslash means something to sh: quoted in an argument, on Windows too (a Git Bash tab).
     assert.equal(shellLine(['claude', '--mcp-config', 'C:\\a\\b.json'], true), "claude --mcp-config 'C:\\a\\b.json'")
   })

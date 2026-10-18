@@ -174,7 +174,7 @@ test('an own answer: one line, no control or direction characters', () => {
   const other = (text: string) => picksOf([q], [{ other: text }])[0]?.other
   assert.equal(other(' two\r\nlines\there '), 'two lines here')
   assert.equal(other('a\x1b[31mb\x85c\x9bd'), 'a [31mb c d')
-  assert.equal(other('pay‮txt.exe⁦x⁩'), 'pay txt.exe x')
+  assert.equal(other('pay\u202etxt.exe\u2066x\u2069'), 'pay txt.exe x')
   assert.equal(other('-1 day'), '-1 day') // the dash is herdr's business (services/answer.ts paneIO)
   assert.equal(other('x'.repeat(1500))?.length, 1000)
 })
@@ -546,7 +546,6 @@ test('another question on the screen: nothing is pressed', async () => {
     io: fake.io(),
     timing: fast,
   })
-  assert.ok(!r.ok)
   assert.ok(!r.ok)
   assert.equal(r.reason, 'changed')
   assert.deepEqual(fake.keysLog, [])

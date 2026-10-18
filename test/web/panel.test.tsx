@@ -28,6 +28,7 @@ import {
 } from './support/markup.ts'
 import { oldScheduleBody } from './support/old-schedule.ts'
 import { KINDS, oldSide, titleOf } from './support/panel-sides.tsx'
+import { clone } from './support/react-commit.ts'
 
 const VP = { w: 1600, h: 1000 }
 const IDS = ['sheet', 'cats-sheet', 'sched-sheet']
@@ -51,7 +52,7 @@ async function oldAsides(lang: string): Promise<Map<string, Node[]>> {
   try {
     return new Map(
       IDS.map(id => {
-        const nodes: Node[] = [structuredCloneNode(side.aside(id).node)]
+        const nodes: Node[] = [clone(side.aside(id).node)]
         stripAttrs(nodes, OLD_PAGE_ONLY)
         addButtonTypes(nodes)
         return [id, nodes]
@@ -59,14 +60,6 @@ async function oldAsides(lang: string): Promise<Map<string, Node[]>> {
     )
   } finally {
     side.dispose()
-  }
-}
-
-function structuredCloneNode(node: Element): Element {
-  return {
-    ...node,
-    attrs: new Map(node.attrs),
-    children: node.children.map(c => (c.kind === 'element' ? structuredCloneNode(c) : { ...c })),
   }
 }
 

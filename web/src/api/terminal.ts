@@ -2,7 +2,7 @@
 // Server-Sent Events (EventSource sends no headers: the board's per-run token rides in the query),
 // and the POSTs that open, close, focus and type, with the X-Board header.
 import type { Translator } from '../../../src/core/types.ts'
-import { isReply } from './client.ts'
+import { isReply, postJson, replyOf } from './client.ts'
 
 /** How a POST went: the server's answer with `ok`, or why not (`timeout`: the page gave up waiting). */
 export interface TermReply {
@@ -51,13 +51,12 @@ export function terminalApi(t: () => Translator): TerminalApi {
     },
     async post(key, target, op, body, timeout = 0) {
       try {
-        const res = await fetch(termPath(key, target, op), {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', 'x-board': '1' },
-          body: JSON.stringify(body),
-          ...(timeout ? { signal: AbortSignal.timeout(timeout) } : {}),
-        })
-        const value: unknown = await res.json().catch(() => ({}))
+        const res = await postJson(
+          termPath(key, target, op),
+          body,
+          timeout ? { signal: AbortSignal.timeout(timeout) } : {},
+        )
+        const value = await replyOf(res)
         const r = isReply(value) ? value : {}
         return res.ok && r.ok !== false
           ? { ...r, ok: true }

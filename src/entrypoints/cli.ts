@@ -16,7 +16,7 @@
 //   board schedule [--all]   this session's entries (every session's)
 //   board unschedule <id|all>    removes an entry (all: every entry of this session)
 //   board call-report --session <id> --file <report.md>
-//                            a MokuPilot call's results (integrations/mokupilot.ts) for the
+//                            a MokuPilot call's results (services/mokupilot.ts) for the
 //                            session it was a fork of: the board types them in once the session
 //                            is free, for its information, waking it if it sleeps
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
