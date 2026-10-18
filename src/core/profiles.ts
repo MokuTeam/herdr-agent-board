@@ -38,6 +38,7 @@ export const DEFAULT_PROFILE = 'default'
 export const PROFILE_COLORS: readonly string[] = ['indigo', 'teal', 'pink', 'brown', 'mint', 'cyan', 'yellow']
 
 const pathFor = (platform: string) => (platform === 'win32' ? win32 : posix)
+const filled = (v: unknown): v is string => typeof v === 'string' && v.trim() !== ''
 
 /** The folder Claude uses when CLAUDE_CONFIG_DIR is not set: <home>/.claude. */
 export function defaultProfileDir(home: string, platform: string = process.platform): string {
@@ -72,6 +73,17 @@ export function resolveProfileDir(
 }
 
 /**
+ * The folder a profile written down (`value`) is in, read as resolveProfileDir reads it; null when
+ * nothing is written or it is not absolute. A folder named relative to wherever a process runs is
+ * another folder for each start, so it is never a profile's.
+ */
+export function absoluteProfileDir(value: unknown, home: string, platform: string = process.platform): string | null {
+  if (!filled(value)) return null
+  const dir = resolveProfileDir(value, home, platform)
+  return pathFor(platform).isAbsolute(dir) ? dir : null
+}
+
+/**
  * The id of a profile in `dir`: `default` for the default folder, `<name>` for `.claude-<name>`,
  * else the folder's name; lower-case letters, digits, `_` and `-`, at most 32, unique in `taken`.
  */
@@ -102,24 +114,29 @@ export function profileForDir(list: readonly Profile[], dir: string | null | und
 }
 
 const isEntry = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
-const filled = (v: unknown): v is string => typeof v === 'string' && v.trim() !== ''
 
 /**
  * The profiles config.json lists (`listed`, as read), each with every field it has, followed by
- * every folder in `found` that none of them has. The default folder and the board's own
- * (`shownDir`) count as found even when they are not there. A found folder is added shown only
- * when it is one of those two; `added` holds the ones added.
+ * every folder in `found` that none of them has. A listed one's `dir` is its folder resolved
+ * (absoluteProfileDir: `~`, Git Bash's `/c/…`, no trailing separator); an entry whose folder is not
+ * absolute is no profile. The default folder and the board's own (`shownDir`, when absolute) count
+ * as found even when they are not there. A found folder is added shown only when it is one of
+ * those two; `added` holds the ones added.
  */
 export function mergeProfiles(
   listed: unknown,
   found: readonly string[],
   home: string,
   shownDir?: string | null,
+  platform: string = process.platform,
 ): { list: Profile[]; added: Profile[] } {
-  const entries = (Array.isArray(listed) ? listed : []).filter(
-    (e): e is Record<string, unknown> => isEntry(e) && filled(e.id) && filled(e.dir),
-  )
-  const used = new Set<unknown>(entries.map(e => e.color).filter(validColor))
+  const entries = (Array.isArray(listed) ? listed : [])
+    .filter((e): e is Record<string, unknown> => isEntry(e) && filled(e.id))
+    .flatMap(e => {
+      const dir = absoluteProfileDir(e.dir, home, platform)
+      return dir ? [{ e, dir }] : []
+    })
+  const used = new Set<unknown>(entries.map(({ e }) => e.color).filter(validColor))
   let spare = 0
   const nextColor = (): string => {
     const color = PROFILE_COLORS.find(c => !used.has(c)) ?? PROFILE_COLORS[spare++ % PROFILE_COLORS.length] ?? 'indigo'
@@ -127,13 +144,13 @@ export function mergeProfiles(
     return color
   }
 
-  const list = entries.map((e): Profile => {
+  const list = entries.map(({ e, dir }): Profile => {
     const id = String(e.id)
     const profile: Profile = {
       ...e,
       id,
       title: filled(e.title) ? e.title : profileTitleOf(id),
-      dir: String(e.dir),
+      dir,
       color: validColor(e.color) ? String(e.color) : nextColor(),
       hidden: e.hidden === true,
     }
@@ -145,15 +162,16 @@ export function mergeProfiles(
   })
 
   // The default folder first, as found spelled it; the board's own last when found has not got it.
-  const defaultDir = defaultProfileDir(home)
+  const defaultDir = defaultProfileDir(home, platform)
+  const ownDir = absoluteProfileDir(shownDir, home, platform)
   const dirs = [found.find(f => sameDir(f, defaultDir)) ?? defaultDir, ...found.filter(f => !sameDir(f, defaultDir))]
-  if (shownDir && !dirs.some(d => sameDir(d, shownDir))) dirs.push(shownDir)
+  if (ownDir && !dirs.some(d => sameDir(d, ownDir))) dirs.push(ownDir)
 
   const added: Profile[] = []
   for (const dir of dirs) {
     if (profileForDir(list, dir)) continue
     const id = profileIdOf(dir, home, new Set(list.map(p => p.id)))
-    const shown = sameDir(dir, defaultDir) || sameDir(dir, shownDir)
+    const shown = sameDir(dir, defaultDir) || sameDir(dir, ownDir)
     const profile: Profile = { id, title: profileTitleOf(id), dir, color: nextColor(), hidden: !shown }
     list.push(profile)
     added.push(profile)

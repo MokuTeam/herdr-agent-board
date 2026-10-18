@@ -11,6 +11,7 @@ import { builtinTitle, DEFAULT_CONFIG, normalizeConfig, validColor } from '../co
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
 import {
+  absoluteProfileDir,
   mergeProfiles,
   PROFILE_COLORS,
   type Profile,
@@ -213,20 +214,21 @@ export function editCategories(body: unknown): EditResult {
 
 /**
  * The profiles config.json lists merged with the folders found in `home` (core/profiles.ts
- * mergeProfiles), and how they go back into the file. A listed one stays the file's own object:
- * only the fields an edit sets change, and those the board shows it with that it lacks (title,
- * color, hidden) are filled in. The folders added follow in full, then every entry that is no
- * profile, as it was.
+ * mergeProfiles), and how they go back into the file. A listed one stays the file's own object,
+ * its `dir` as typed (`~/.claude-work` stays so): only the fields an edit sets change, and those
+ * the board shows it with that it lacks (title, color, hidden) are filled in. The folders added
+ * follow in full, then every entry that is no profile (a relative folder, say), as it was.
  */
 function profilesIn(raw: Raw, home: string, shownDir?: string | null) {
   const listed: unknown[] = Array.isArray(raw.profiles) ? raw.profiles : []
   const { list, added } = mergeProfiles(listed, findProfileDirs(home), home, shownDir)
-  // mergeProfiles takes the listed ones in the file's order, with their id and dir as written.
+  // mergeProfiles takes the listed ones in the file's order, with their id as written and their
+  // folder resolved (absoluteProfileDir), so each is found again by both.
   const rest = [...listed]
   const own = new Map<Profile, Raw>()
   for (const p of list) {
     if (added.includes(p)) continue
-    const i = rest.findIndex(e => isRecord(e) && e.id === p.id && e.dir === p.dir)
+    const i = rest.findIndex(e => isRecord(e) && e.id === p.id && absoluteProfileDir(e.dir, home) === p.dir)
     const entry = rest[i]
     if (!isRecord(entry)) continue
     own.set(p, entry)

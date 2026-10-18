@@ -73,9 +73,11 @@ test('found folders join the list: default shown, the others hidden, colors in o
     ['work', 'Work', true, 'pink'],
   ])
   expect(added.length).toBe(3)
-  expect(mergeProfiles(undefined, found, H, `${H}\\.claude-work`).list.find(p => p.id === 'work')?.hidden).toBe(false)
+  expect(
+    mergeProfiles(undefined, found, H, `${H}\\.claude-work`, 'win32').list.find(p => p.id === 'work')?.hidden,
+  ).toBe(false)
   expect(mergeProfiles(undefined, [], H).list.map(p => p.id)).toEqual(['default'])
-  expect(mergeProfiles(undefined, [], H, 'D:\\claude').list.map(p => [p.id, p.hidden])).toEqual([
+  expect(mergeProfiles(undefined, [], H, 'D:\\claude', 'win32').list.map(p => [p.id, p.hidden])).toEqual([
     ['default', false],
     ['claude', false],
   ])
@@ -87,10 +89,12 @@ test('a listed profile keeps its id, folder, title and unknown fields; only new 
     'junk',
     { id: 'work', title: 'Work', dir: 'c:/USERS/me/.claude-work/', color: 'nope', hidden: 'yes' },
   ]
-  const { list, added } = mergeProfiles(listed, [`${H}\\.claude`, `${H}\\.claude-gamedev`, `${H}\\.claude-work`], H)
+  const found = [`${H}\\.claude`, `${H}\\.claude-gamedev`, `${H}\\.claude-work`]
+  const { list, added } = mergeProfiles(listed, found, H, null, 'win32')
   expect(list.map(p => p.id)).toEqual(['default', 'work', 'gamedev'])
   expect(list[0]).toMatchObject({ title: 'Private', note: 'mine' })
-  expect(list[1]).toMatchObject({ dir: 'c:/USERS/me/.claude-work/', color: 'teal', hidden: false })
+  // The folder as resolveProfileDir reads it (no trailing separator), not as typed.
+  expect(list[1]).toMatchObject({ dir: 'c:/USERS/me/.claude-work', color: 'teal', hidden: false })
   expect(added.map(p => [p.id, p.hidden, p.color])).toEqual([['gamedev', true, 'pink']])
 })
 
@@ -149,6 +153,8 @@ test('listed fields of the wrong kind read safely', () => {
     ],
     [],
     H,
+    null,
+    'win32',
   )
   expect(list.map(p => [p.id, p.title, p.args])).toEqual([
     ['default', 'Default', ['--model', 'sonnet']],
@@ -163,6 +169,52 @@ test('the default folder is added first and shown; a stray one named like it sta
     ['default', false],
     ['gamedev', true],
   ])
-  const { added } = mergeProfiles([{ ...DEFAULT, id: 'private' }], [`${H}\\.claude`, `${H}\\.claude-default`], H)
+  const { added } = mergeProfiles(
+    [{ ...DEFAULT, id: 'private' }],
+    [`${H}\\.claude`, `${H}\\.claude-default`],
+    H,
+    null,
+    'win32',
+  )
   expect(added.map(p => [p.id, p.hidden])).toEqual([['default', true]])
+})
+
+test('a listed folder written by hand is the folder it names: ~, Git Bash /c/…, a trailing separator', () => {
+  const found = [`${H}\\.claude`, `${H}\\.claude-work`]
+  for (const dir of ['~/.claude-work', '~\\.claude-work', '/c/Users/me/.claude-work', `${H}\\.claude-work\\`]) {
+    const { list, added } = mergeProfiles([{ id: 'work', dir }], found, H, null, 'win32')
+    expect(list.map(p => p.id)).toEqual(['work', 'default'])
+    expect(added.map(p => p.id)).toEqual(['default'])
+    const work = list[0]?.dir ?? ''
+    expect(sameDir(work, `${H}\\.claude-work`)).toBe(true)
+    expect(work.startsWith('~') || work.startsWith('/') || /[\\/]$/.test(work)).toBe(false)
+  }
+  const linux = mergeProfiles([{ id: 'work', dir: '~/.claude-work' }], [], '/home/me', null, 'linux')
+  expect(linux.list[0]?.dir).toBe('/home/me/.claude-work')
+})
+
+test('a relative folder is never a profile: neither a listed one nor the board’s own', () => {
+  const found = [`${H}\\.claude`, `${H}\\.claude-work`]
+  const listed = [
+    { id: 'acme', dir: 'acme' },
+    { id: 'here', dir: '.\\.claude-work' },
+    { id: 'drive', dir: 'C:x' },
+  ]
+  const { list, added } = mergeProfiles(listed, found, H, null, 'win32')
+  expect(list.map(p => [p.id, p.dir])).toEqual([
+    ['default', `${H}\\.claude`],
+    ['work', `${H}\\.claude-work`],
+  ])
+  expect(added.length).toBe(2)
+  // The board's own folder named relative: nothing is added for it, nothing shown.
+  for (const own of ['work', '.claude-work', 'D:x'])
+    expect(mergeProfiles(undefined, found, H, own, 'win32').list.map(p => [p.id, p.dir, p.hidden])).toEqual([
+      ['default', `${H}\\.claude`, false],
+      ['work', `${H}\\.claude-work`, true],
+    ])
+  expect(mergeProfiles(undefined, [], '/home/me', 'work', 'linux').list.map(p => p.dir)).toEqual(['/home/me/.claude'])
+  // A Windows folder is no absolute one elsewhere.
+  expect(mergeProfiles([{ id: 'w', dir: 'C:\\w' }], [], '/home/me', null, 'linux').list.map(p => p.id)).toEqual([
+    'default',
+  ])
 })

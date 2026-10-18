@@ -14,6 +14,7 @@ import {
 } from '../../src/adapters/config-file.ts'
 import { isRecord, renameWithRetry, replaceFile } from '../../src/adapters/json-store.ts'
 import { configDir } from '../../src/adapters/paths.ts'
+import { loadProfiles } from '../../src/adapters/profiles.ts'
 import { useLanguage } from '../../src/core/lang.ts'
 import { sameDir } from '../../src/core/launch/names.ts'
 import { isolatedHome } from '../support/env.ts'
@@ -290,6 +291,50 @@ test('saveFoundProfiles adds the folders once, the inherited one shown, keeping 
   const before = readFileSync(configFile(), 'utf8')
   expect(saveFoundProfiles(join(home, '.claude-work'), home)).toBe(false)
   expect(readFileSync(configFile(), 'utf8')).toBe(before)
+})
+
+test('a profile listed with ~ is the folder found there: no second one added, the file keeps ~', () => {
+  const home = profileHome()
+  const work = { id: 'work', title: 'BluBanyan', dir: '~/.claude-work', color: 'teal', hidden: false }
+  seed({ language: 'en', profiles: [work] })
+  expect(saveFoundProfiles(join(home, '.claude-work'), home)).toBe(true)
+  expect(savedIds()).toEqual(['work', 'default', 'gamedev'])
+  expect(savedProfile('work')).toEqual(work)
+  // What the board goes by is the folder itself, never a literal ~.
+  const listed = loadProfiles({ home }).find(p => p.id === 'work')
+  expect(listed?.dir).toBe(join(home, '.claude-work'))
+  // Nothing more to add on the next start; an edit keeps the folder as typed.
+  expect(saveFoundProfiles(join(home, '.claude-work'), home)).toBe(false)
+  ok(editProfiles({ op: 'update', id: 'work', title: 'Work' }, { home }))
+  expect(savedProfile('work')).toEqual({ ...work, title: 'Work' })
+  expect(savedIds()).toEqual(['work', 'default', 'gamedev'])
+})
+
+test('a relative folder is never a profile: a listed one stays in the file as it is, the board’s own is not saved', () => {
+  const home = profileHome()
+  const relative = { id: 'acme', title: 'Acme', dir: 'acme', color: 'teal', hidden: false }
+  seed({ language: 'en', profiles: [relative] })
+  // The board's env names a relative folder: the folders found are saved, that one is not, nor shown.
+  expect(saveFoundProfiles('work', home)).toBe(true)
+  expect(savedProfiles()).toEqual([
+    { id: 'default', title: 'Default', dir: join(home, '.claude'), color: 'indigo', hidden: false },
+    { id: 'gamedev', title: 'Gamedev', dir: join(home, '.claude-gamedev'), color: 'teal', hidden: true },
+    { id: 'work', title: 'Work', dir: join(home, '.claude-work'), color: 'pink', hidden: true },
+    relative,
+  ])
+  expect(saveFoundProfiles('work', home)).toBe(false)
+  expect(loadProfiles({ home, shownDir: 'work' }).map(p => [p.id, p.dir, p.hidden])).toEqual([
+    ['default', join(home, '.claude'), false],
+    ['gamedev', join(home, '.claude-gamedev'), true],
+    ['work', join(home, '.claude-work'), true],
+  ])
+  useLanguage('en')
+  expect(editProfiles({ op: 'update', id: 'acme', title: 'x' }, { home })).toEqual({
+    ok: false,
+    error: 'No profile “acme”',
+  })
+  ok(editProfiles({ op: 'update', id: 'gamedev', title: 'Games' }, { home }))
+  expect(savedProfiles().at(-1)).toEqual(relative)
 })
 
 test('editProfiles renames, recolors, shows and hides by id, never changing id or folder', () => {
