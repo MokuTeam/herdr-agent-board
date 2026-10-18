@@ -90,11 +90,10 @@ const bunCommand = (bun: string, script: string): string => `${quote(bun)} ${quo
 /**
  * The event's hook list without our earlier hooks (`isOurs`), then `entry` when there is one. An
  * entry left with no hooks goes (as main did); anything not shaped like a hook entry is someone
- * else's and stays.
+ * else's and stays. An event that is not a list is taken for an empty one (as upstream's install).
  */
 function withOurHook(list: unknown, entry: unknown, isOurs: CommandTest, replaced: string[]): unknown[] {
-  const entries = list ?? []
-  if (!Array.isArray(entries)) throw new Error('settings.json: a hook event is not a list; left as it was')
+  const entries = Array.isArray(list) ? list : []
   const kept: unknown[] = []
   for (const e of entries) {
     const hooks: unknown = isRecord(e) ? (e.hooks ?? []) : undefined
@@ -129,6 +128,8 @@ export interface SettingsPlan {
  * of any earlier ones of ours. A status line someone else set stays. The notification hooks go
  * in when `toast` is true and out when it is false; left as they are (pointed at this copy) when
  * it is undefined. `replaced` lists the commands of ours that went. The input is not changed.
+ * `hooks` that is not an object, or an event in it that is not a list, is replaced (as upstream's
+ * install): the board's events get its entries, the notification events its entries or nothing.
  */
 export function planSettings(
   settings: unknown,
@@ -138,8 +139,7 @@ export function planSettings(
   if (settings !== undefined && !isRecord(settings))
     throw new Error('settings.json is not a JSON object; left as it was')
   const next: Settings = structuredClone(settings ?? {})
-  const hooks = next.hooks ?? {}
-  if (!isRecord(hooks)) throw new Error('settings.json: "hooks" is not an object; left as it was')
+  const hooks = isRecord(next.hooks) ? next.hooks : {}
   next.hooks = hooks
   const ours = ourCommands(paths)
   const replaced: string[] = []
@@ -150,8 +150,6 @@ export function planSettings(
   const withToast = toast ?? had
   const notify = { type: 'command', command: toastCommand(paths.toast), timeout: 30, async: true }
   for (const [event, matcher] of TOAST_EVENTS) {
-    // Nothing of ours can be in what is not a list, and nothing is added: it stays as it is.
-    if (!withToast && !Array.isArray(hooks[event])) continue
     const entry = withToast && { ...(matcher && { matcher }), hooks: [notify] }
     const list = withOurHook(hooks[event], entry, ours.toast, replaced)
     if (list.length) hooks[event] = list

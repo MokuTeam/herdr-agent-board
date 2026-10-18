@@ -112,7 +112,7 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.toast.twiceFix': 'Set delivery = "off" under [ui.toast] there, then run herdr server reload-config.',
     'setup.toast.theirs': 'Another hook shows them too: {command}',
     'setup.toast.theirsFix':
-      'Remove that hook from {file}, or turn the board’s off with node src/install.mjs --no-toast in the plugin’s folder.',
+      'Remove that hook from {file}, or turn the board’s off with bun src/entrypoints/install.ts --no-toast in the plugin’s folder.',
     'setup.toast.own': 'Desktop notifications from a hook of your own',
     'setup.toast.ok': 'Desktop notifications',
     'setup.toast.okDetail': 'when a session finishes, asks or needs a permission, except in the pane you look at',
@@ -223,7 +223,7 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.toast.twiceFix': 'Поставь там delivery = "off" в [ui.toast], потом выполни herdr server reload-config.',
     'setup.toast.theirs': 'Их показывает и другой хук: {command}',
     'setup.toast.theirsFix':
-      'Убери этот хук из {file} или выключи уведомления доски: node src/install.mjs --no-toast в папке плагина.',
+      'Убери этот хук из {file} или выключи уведомления доски: bun src/entrypoints/install.ts --no-toast в папке плагина.',
     'setup.toast.own': 'Уведомления на рабочем столе от твоего хука',
     'setup.toast.ok': 'Уведомления на рабочем столе',
     'setup.toast.okDetail':

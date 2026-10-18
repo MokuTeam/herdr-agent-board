@@ -1,5 +1,6 @@
 import { describe, test } from 'bun:test'
 import assert from 'node:assert/strict'
+import { translator } from '../../src/core/i18n/translator.ts'
 import {
   type InstallPaths,
   planSettings,
@@ -78,9 +79,11 @@ describe('install: the settings it writes', () => {
     })
     const other = { statusLine: { command: `node "${boardFiles(ROOT_B).statusline}"` } }
     assert.equal(planSettings(other, pathsOf(ROOT_A)).statusLineSet, true)
-    // Not an object where hooks should be: upstream replaces it; this branch refuses and leaves
-    // settings.json as it was (core/install-plan.ts, kept from the port of main's install).
-    assert.throws(() => planSettings({ hooks: [] }, pathsOf(ROOT_A)), /"hooks" is not an object/)
+    // Not an object where hooks should be: replaced rather than crashed on.
+    assert.deepEqual(Object.keys((planSettings({ hooks: [] }, pathsOf(ROOT_A)).settings as Settings).hooks), [
+      'SessionStart',
+      'UserPromptSubmit',
+    ])
   })
 
   test('a board in a folder of another name: its own entries known by the files they run', () => {
@@ -92,14 +95,26 @@ describe('install: the settings it writes', () => {
     assert.deepEqual(commands(again.settings, 'SessionStart'), [hookCommand(boardFiles(root))])
   })
 
-  test('a hook list that is not a list: refused when notifications go in, left alone when they stay off', () => {
-    const odd = { hooks: { Stop: { not: 'a list' } } }
-    assert.deepEqual(planSettings(odd, pathsOf(ROOT_A)).settings.hooks, {
-      SessionStart: [{ hooks: [{ type: 'command', command: hookCommand(files), timeout: 10 }] }],
-      UserPromptSubmit: [{ hooks: [{ type: 'command', command: hookCommand(files), timeout: 10 }] }],
-      Stop: { not: 'a list' },
+  test('a hook event that is not a list is taken for an empty one, as upstream does', () => {
+    const ourHook = { hooks: [{ type: 'command', command: hookCommand(files), timeout: 10 }] }
+    const notify = { type: 'command', command: toastCommand(files.toast), timeout: 30, async: true }
+    const odd = { hooks: { SessionStart: 'text', Stop: { not: 'a list' }, PreToolUse: 5 } }
+    // The board's events get its entry; a notification event with nothing to add goes.
+    for (const toast of [undefined, false])
+      assert.deepEqual(planSettings(odd, pathsOf(ROOT_A), { toast }).settings.hooks, {
+        SessionStart: [ourHook],
+        UserPromptSubmit: [ourHook],
+      })
+    // Notifications going in: the board's entry in its place.
+    const on = planSettings(odd, pathsOf(ROOT_A), { toast: true })
+    assert.equal(on.toast, true)
+    assert.deepEqual(on.settings.hooks, {
+      SessionStart: [ourHook],
+      Stop: [{ hooks: [notify] }],
+      PreToolUse: [{ matcher: 'AskUserQuestion', hooks: [notify] }],
+      UserPromptSubmit: [ourHook],
+      Notification: [{ matcher: 'permission_prompt|elicitation_dialog', hooks: [notify] }],
     })
-    assert.throws(() => planSettings(odd, pathsOf(ROOT_A), { toast: true }), /not a list/)
   })
 })
 
@@ -303,5 +318,16 @@ describe('doctor', () => {
     assert.equal(summary.todo, todo(checks).length)
     assert.match(summary.sig, /^hooks:error:Claude Code hooks are missing: SessionStart, UserPromptSubmit\|/)
     assert.match(report(checks), /things need a look\.$/)
+    // The list in Russian: its own titles, the same problems; the English summary stays as it was
+    // (a sig made from the Russian list would differ, so a language switch would look like news).
+    const ru = checkSetup(facts({ settings: {} }), translator('ru'))
+    assert.deepEqual(
+      ru.map(c => [c.id, c.level]),
+      checks.map(c => [c.id, c.level]),
+    )
+    assert.notEqual(ru.find(c => c.id === 'hooks')?.title, checks.find(c => c.id === 'hooks')?.title)
+    assert.equal(todo(ru).length, summary.todo)
+    assert.notEqual(setupSummary(ru).sig, summary.sig)
+    assert.deepEqual(setupSummary(checkSetup(facts({ settings: {} }))), summary)
   })
 })

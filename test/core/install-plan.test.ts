@@ -112,8 +112,18 @@ describe('planSettings', () => {
 
   test('settings.json that is not an object is refused rather than overwritten', () => {
     for (const bad of [null, [], 'text', 5]) assert.throws(() => planSettings(bad, paths), /not a JSON object/)
-    assert.throws(() => planSettings({ hooks: [] }, paths), /"hooks" is not an object/)
-    assert.throws(() => planSettings({ hooks: { SessionStart: {} } }, paths), /not a list/)
+  })
+
+  test('"hooks" that is not an object, or an event that is not a list, is replaced (as upstream)', () => {
+    for (const hooks of [[], 'text', null])
+      assert.deepEqual(planSettings({ hooks }, paths).settings.hooks, {
+        SessionStart: [ourHook],
+        UserPromptSubmit: [ourHook],
+      })
+    assert.deepEqual(planSettings({ hooks: { SessionStart: {} } }, paths).settings.hooks, {
+      SessionStart: [ourHook],
+      UserPromptSubmit: [ourHook],
+    })
   })
 
   test('entries not shaped like hook entries are left alone; ones with no hooks go, as on main', () => {

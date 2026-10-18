@@ -14,6 +14,7 @@ export interface SetupChecks {
   now(): Promise<SetupCheck[]>
   /** The first check now, then one every 10 minutes. */
   start(): void
+  /** No more checks on the clock; one still running publishes nothing when it ends. */
   stop(): void
 }
 
@@ -26,7 +27,7 @@ export function createSetupChecks({
   onChange,
   gather = () => gatherFacts(deps.cfg),
 }: {
-  deps: Deps
+  deps: Pick<Deps, 'cfg' | 'log'>
   onChange: () => void
   gather?: () => Promise<SetupFacts>
 }): SetupChecks {
@@ -35,6 +36,7 @@ export function createSetupChecks({
   let at = 0
   let running: Promise<SetupCheck[]> | null = null
   let timer: ReturnType<typeof setInterval> | undefined
+  let stopped = false
 
   function now(): Promise<SetupCheck[]> {
     if (running) return running
@@ -44,7 +46,7 @@ export function createSetupChecks({
       facts = next
       at = Date.now()
       summary = setupSummary(checkSetup(next))
-      onChange()
+      if (!stopped) onChange()
       return checkSetup(next, t)
     })().finally(() => {
       running = null
@@ -62,6 +64,7 @@ export function createSetupChecks({
       timer.unref?.()
     },
     stop() {
+      stopped = true
       clearInterval(timer)
     },
   }

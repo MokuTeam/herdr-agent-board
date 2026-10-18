@@ -102,6 +102,23 @@ test('install: a settings.json that is not an object is left as it was', async (
   assert.ok(!existsSync(join(claude, 'settings.json.bak-agent-board')))
 })
 
+test('install: "hooks" that is not an object is replaced with the board’s, as upstream', async () => {
+  const box = await sandbox()
+  const claude = join(homeOf(box), '.claude')
+  mkdirSync(claude, { recursive: true })
+  const original = `${JSON.stringify({ model: 'opus', hooks: [] })}\n`
+  writeFileSync(join(claude, 'settings.json'), original)
+  const { code, stderr } = await install(box)
+  assert.equal(code, 0, stderr)
+  const ours = {
+    hooks: [{ type: 'command', command: `${quote(process.execPath)} ${quote(entry('hook.ts'))}`, timeout: 10 }],
+  }
+  const after = JSON.parse(readFileSync(join(claude, 'settings.json'), 'utf8'))
+  assert.equal(after.model, 'opus')
+  assert.deepEqual(after.hooks, { SessionStart: [ours], UserPromptSubmit: [ours] })
+  assert.equal(readFileSync(join(claude, 'settings.json.bak-agent-board'), 'utf8'), original)
+})
+
 test('install in a sandbox: the commands, the hooks once, a backup, and notifications only when asked', async () => {
   const box = await sandbox()
   const home = homeOf(box)
