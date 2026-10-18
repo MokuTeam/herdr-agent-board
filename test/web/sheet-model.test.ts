@@ -89,7 +89,7 @@ describe('the head', () => {
     expect(sheetHead(a, { missing: false, categoryTitle: 'Project', now: NOW, t })).toEqual({
       pill: { kind: 'column' },
       name: 'Alpha',
-      meta: 'Project · workspace web · active 5 min ago · context 2k',
+      meta: ['Project', 'workspace web', 'active 5 min ago', 'context 2k'],
       metaTitle: 'Tokens its last request carried',
     })
     const now = sheetHead(
@@ -101,7 +101,7 @@ describe('the head', () => {
         t,
       },
     )
-    expect([now.meta, now.metaTitle]).toEqual(['Project · active now', ''])
+    expect([now.meta, now.metaTitle]).toEqual([['Project', 'active now'], ''])
     expect(sheetHead({ ...a, sleeping: true }, { missing: false, categoryTitle: '', now: NOW, t }).pill.kind).toBe(
       'asleep',
     )

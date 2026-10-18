@@ -1,16 +1,20 @@
-// The toolbar: title and summary, the lanes control, search, the toggles and panels, the usage
-// pill and the live dot, the read-only banner and the column heads.
+// The toolbar, one compact row: the title with the board's summary under it while the row has
+// room (else in the title's tooltip), the lanes control, search, categories and the schedule as
+// small buttons named by their tooltips, Settings (the gear), the usage pill and the live dot; the
+// read-only banner and the column heads under it. A narrower window takes two rows, a phone three
+// (the stylesheet).
 import { type RefObject, useEffect } from 'react'
 import { useBoardView } from '../hooks/useBoardView.ts'
+import { useColumnWidths } from '../hooks/useColumnWidths.ts'
 import { useScrolled } from '../hooks/useScrolled.ts'
+import type { SettingsMenu } from '../hooks/useSettingsMenu.ts'
 import type { SetupNoteState } from '../hooks/useSetupNote.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
-import { columnHeads, documentTitle, laneOptions, scheduleBadge, summaryParts } from '../models/toolbar.ts'
+import { columnHeads, documentTitle, laneOptions, scheduleBadge, summaryParts, summaryText } from '../models/toolbar.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { ColumnsHead } from './ColumnsHead.tsx'
-import { AlarmIcon, MoonIcon, PlusIcon, SearchIcon, TagIcon } from './icons.tsx'
+import { AlarmIcon, GearIcon, PlusIcon, SearchIcon, TagIcon } from './icons.tsx'
 import { Lanes } from './Lanes.tsx'
-import { LanguageButton } from './LanguageButton.tsx'
 import { Limits } from './Limits.tsx'
 import { LiveDot } from './LiveDot.tsx'
 import { NextAttention } from './NextAttention.tsx'
@@ -25,14 +29,19 @@ export interface ToolbarProps {
   onSchedule?: () => void
   /** The quiet "Setup incomplete" note (hooks/useSetupNote.ts). */
   setup?: SetupNoteState
+  /** Settings, the gear's menu (hooks/useSettingsMenu.ts). */
+  settings?: SettingsMenu
 }
 
-export function Toolbar({ limitsAnchor, onNewSession, onCategories, onSchedule, setup }: ToolbarProps) {
+export function Toolbar({ limitsAnchor, onNewSession, onCategories, onSchedule, setup, settings }: ToolbarProps) {
   const t = useT()
   const { data, ui, dispatch, canMutate, canEdit, now } = useBoardContext()
   const { visible, categoryOf } = useBoardView()
   const scrolled = useScrolled()
   const badge = scheduleBadge(data?.schedules ?? [], now)
+  const parts = data && summaryParts(data.items, t)
+  const heads = data ? columnHeads(data.columns, visible, ui.filter, categoryOf, t, ui.moves) : []
+  useColumnWidths(heads)
 
   useEffect(() => {
     if (data) document.title = documentTitle(data.items)
@@ -40,86 +49,90 @@ export function Toolbar({ limitsAnchor, onNewSession, onCategories, onSchedule, 
 
   return (
     <header className={scrolled ? 'toolbar scrolled' : 'toolbar'}>
-      <div className="toolbar-row">
-        <div className="titles">
-          <h1>{t('tb.title')}</h1>
-          <Summary parts={data && summaryParts(data.items, t)} />
-        </div>
-        <div className="controls">
-          {/* New sessions go through herdr: they wait for fresh data like going to a session does. */}
-          <button
-            type="button"
-            className="pill-toggle new-session"
-            id="new-session"
-            disabled={!canMutate}
-            title={t(canMutate ? 'launch.toolbarHint' : 'mobile.readOnly')}
-            onClick={e => onNewSession?.(e.currentTarget)}
-          >
-            <PlusIcon />
-            <span>{t('launch.toolbar')}</span>
-          </button>
-          <Lanes
-            options={data && laneOptions(data.categories, visible, ui.filter, categoryOf, t)}
-            picked={ui.filter}
-            onPick={id => dispatch({ type: 'filter', id })}
-          />
-          <label className="search">
-            <SearchIcon />
-            <input
-              id="search"
-              type="search"
-              placeholder={t('tb.search')}
-              autoComplete="off"
-              spellCheck={false}
-              value={ui.query}
-              onChange={e => dispatch({ type: 'query', text: e.currentTarget.value })}
+      {/* The row's own width: the page's, less a side panel lying over the board (--over-*). */}
+      <div className="toolbar-fit">
+        <div className="toolbar-row">
+          {/* The summary hides in a narrower toolbar: its words are the title's tooltip too. */}
+          <div className="titles" title={parts ? summaryText(parts) : undefined}>
+            <h1>{t('tb.title')}</h1>
+            <Summary parts={parts} />
+          </div>
+          <div className="controls">
+            {/* New sessions go through herdr: they wait for fresh data like going to a session does. */}
+            <button
+              type="button"
+              className="pill-toggle icon-only new-session"
+              id="new-session"
+              disabled={!canMutate}
+              title={t(canMutate ? 'launch.toolbarHint' : 'mobile.readOnly')}
+              onClick={e => onNewSession?.(e.currentTarget)}
+            >
+              <PlusIcon />
+              <span>{t('launch.toolbar')}</span>
+            </button>
+            <Lanes
+              options={data && laneOptions(data.categories, visible, ui.filter, categoryOf, t)}
+              picked={ui.filter}
+              onPick={id => dispatch({ type: 'filter', id })}
             />
-          </label>
-          <button
-            type="button"
-            className="pill-toggle"
-            id="sleepers"
-            aria-pressed={ui.sleepers}
-            title={t('tb.sleepersTitle')}
-            onClick={() => dispatch({ type: 'toggleSleepers' })}
-          >
-            <MoonIcon />
-            <span>{t('tb.sleepers')}</span>
-          </button>
-          <button
-            type="button"
-            className="pill-toggle"
-            id="cats-open"
-            title={t('tb.catsTitle')}
-            onClick={() => onCategories?.()}
-          >
-            <TagIcon />
-            <span>{t('tb.cats')}</span>
-          </button>
-          <button
-            type="button"
-            className={badge.due ? 'pill-toggle due' : 'pill-toggle'}
-            id="sched-open"
-            title={t('tb.schedTitle')}
-            onClick={() => onSchedule?.()}
-          >
-            <AlarmIcon />
-            <span>{t('tb.sched')}</span>
-            <span className="n" id="sched-count">
-              {badge.count || ''}
-            </span>
-          </button>
-          <LanguageButton />
-          <NextAttention />
-          {setup && <SetupNote setup={setup} />}
-          <Limits anchor={limitsAnchor} />
-          <LiveDot />
+            <label className="search">
+              <SearchIcon />
+              <input
+                id="search"
+                type="search"
+                placeholder={t('tb.search')}
+                autoComplete="off"
+                spellCheck={false}
+                value={ui.query}
+                onChange={e => dispatch({ type: 'query', text: e.currentTarget.value })}
+              />
+            </label>
+            <button
+              type="button"
+              className="pill-toggle icon-only"
+              id="cats-open"
+              title={t('tb.catsTitle')}
+              onClick={() => onCategories?.()}
+            >
+              <TagIcon />
+              <span>{t('tb.cats')}</span>
+            </button>
+            <button
+              type="button"
+              className={badge.due ? 'pill-toggle icon-only due' : 'pill-toggle icon-only'}
+              id="sched-open"
+              title={t('tb.schedTitle')}
+              onClick={() => onSchedule?.()}
+            >
+              <AlarmIcon />
+              <span>{t('tb.sched')}</span>
+              <span className="n" id="sched-count">
+                {badge.count || ''}
+              </span>
+            </button>
+            <button
+              type="button"
+              className="pill-toggle icon-only"
+              id="settings"
+              aria-haspopup="menu"
+              aria-expanded={settings?.expanded ?? false}
+              title={t('set.hint')}
+              onClick={e => settings?.open(e.currentTarget, e.detail === 0)}
+            >
+              <GearIcon />
+              <span>{t('set.title')}</span>
+            </button>
+            <NextAttention />
+            {setup && <SetupNote setup={setup} />}
+            <Limits anchor={limitsAnchor} />
+            <LiveDot />
+          </div>
         </div>
       </div>
       <p id="connection-state" role="status" hidden={canMutate}>
         {t(canEdit ? 'mobile.readOnly' : 'live.off')}
       </p>
-      <ColumnsHead heads={data ? columnHeads(data.columns, visible, ui.filter, categoryOf, t) : []} />
+      <ColumnsHead heads={heads} />
     </header>
   )
 }

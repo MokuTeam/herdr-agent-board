@@ -2,7 +2,7 @@
 // Claude Code's settings.json, herdr's config.toml, herdr-wake, how new sessions start.
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { delimiter, isAbsolute, join, resolve } from 'node:path'
+import { isAbsolute, join, posix, resolve, win32 } from 'node:path'
 import { shimTarget } from '../core/install-plan.ts'
 import { launcherLabel } from '../core/launch/launcher-command.ts'
 import { claudeCommand, shellLine } from '../core/launch/spawn-args.ts'
@@ -72,8 +72,10 @@ export function findCommand(
     size = sizeOf,
   }: FindOptions = {},
 ): CommandFinds {
+  // Paths as `platform` writes them, which need not be the system this runs on (the tests).
+  const paths = platform === 'win32' ? win32 : posix
   const dirs = String(env.PATH ?? env.Path ?? '')
-    .split(platform === 'win32' ? ';' : delimiter)
+    .split(paths.delimiter)
     .filter(Boolean)
   const exts = [
     '.ps1',
@@ -85,7 +87,7 @@ export function findCommand(
   const hit = (list: string[]): CommandHit | null => {
     for (const dir of dirs) {
       for (const n of list) {
-        const file = join(dir, n)
+        const file = paths.join(dir, n)
         if (!exists(file) || isFolder(file)) continue
         const target = size(file) <= SHIM_MAX ? shimTarget(read(file)) : null
         return { file, target, ...(target && !exists(target) && { gone: true as const }) }

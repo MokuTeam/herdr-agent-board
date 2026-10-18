@@ -62,7 +62,19 @@ export async function sandbox(t?: Registrar): Promise<Sandbox> {
   const cleanup = async (): Promise<void> => {
     for (const { proc } of children) if (proc.exitCode === null && proc.signalCode === null) proc.kill()
     await Promise.all(children.map(({ child }) => child.exited))
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    // A herdr call the server started just before it was stopped outlives it by a moment and can
+    // write its log here again while the folder goes (ENOTEMPTY): remove the whole tree again
+    // until that call is done. (rmSync's own maxRetries only retries the last rmdir.)
+    for (let tries = 1; ; tries++) {
+      try {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        break
+      } catch (err) {
+        const code = typeof err === 'object' && err !== null && 'code' in err ? err.code : null
+        if (code !== 'ENOTEMPTY' || tries >= 40) throw err
+        await new Promise(resolve => setTimeout(resolve, 25))
+      }
+    }
   }
   if (t) t.after(cleanup)
   else onTestFinished(cleanup)

@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
-import { extname, join } from 'node:path'
+import { basename, extname, join } from 'node:path'
 
 export interface WebBundle {
   /** Last good bundle of the web entry. */
   js(): string
+  /** Last good bundle of the script the page runs before it paints (`early`), empty without one. */
+  early(): string
   /** Hash of the bundle and every other file under web/ the page loads: changes whenever the page does. */
   version(): string
   /** Builds again; calls run one after another, so the newest files make the bundle that stays. */
@@ -14,8 +16,12 @@ export interface WebBundle {
 interface Options {
   root: string
   entry: string
+  /** A classic script the page loads before its styles (the viewer's light or dark), built beside the entry. */
+  early?: string
   log: (text: string) => void
 }
+
+const stem = (file: string): string => basename(file, extname(file))
 
 // What the page loads besides the bundle (the static route serves these types).
 const ASSETS = new Set(['.html', '.css', '.svg', '.png', '.webmanifest'])
@@ -46,12 +52,13 @@ function hashOf(js: string, webDir: string): string {
 export async function createWebBundle(opts: Options): Promise<WebBundle> {
   const webDir = join(opts.root, 'web')
   let js = ''
+  let early = ''
   let version = ''
 
   async function build(): Promise<void> {
     try {
       const result = await Bun.build({
-        entrypoints: [opts.entry],
+        entrypoints: [opts.entry, ...(opts.early ? [opts.early] : [])],
         target: 'browser',
         format: 'esm',
         minify: false,
@@ -60,26 +67,29 @@ export async function createWebBundle(opts: Options): Promise<WebBundle> {
         // and with its warnings in the console).
         define: { 'process.env.NODE_ENV': '"production"' },
       })
-      const output = result.outputs.find(o => o.kind === 'entry-point') ?? result.outputs[0]
-      if (!result.success || !output) {
+      const entries = result.outputs.filter(o => o.kind === 'entry-point')
+      const output = entries.find(o => stem(o.path) === stem(opts.entry)) ?? entries[0] ?? result.outputs[0]
+      const before = opts.early ? entries.find(o => stem(o.path) === stem(opts.early ?? '')) : undefined
+      if (!result.success || !output || (opts.early && !before)) {
         opts.log(`web bundle: ${result.logs[0]?.message ?? 'build failed'}`)
         return
       }
       js = await output.text()
+      early = before ? await before.text() : ''
     } catch (err) {
       // Bun.build throws an AggregateError of the build messages when it fails.
       const first = err instanceof AggregateError ? err.errors[0] : err
       opts.log(`web bundle: ${first instanceof Error ? first.message : String(first)}`)
       return
     }
-    version = hashOf(js, webDir)
+    version = hashOf(js + early, webDir)
   }
 
   // Style, page and icon changes also move the version even when the script did not build.
   async function buildAndHash(): Promise<void> {
     const before = js
     await build()
-    if (js === before) version = hashOf(js, webDir)
+    if (js === before) version = hashOf(js + early, webDir)
   }
 
   await build()
@@ -88,6 +98,7 @@ export async function createWebBundle(opts: Options): Promise<WebBundle> {
   let queue = Promise.resolve()
   return {
     js: () => js,
+    early: () => early,
     version: () => version,
     rebuild() {
       queue = queue.then(buildAndHash)

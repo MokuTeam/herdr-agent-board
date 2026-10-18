@@ -100,6 +100,7 @@ describe('routes', () => {
     const links = [...html.matchAll(/(?:href|src)="([^"]+)"/g)].map(m => m[1])
     expect(links).toEqual([
       'icon.svg',
+      'theme.js',
       'styles/app.css',
       'styles/setup.css',
       'styles/menu.css',
@@ -114,6 +115,12 @@ describe('routes', () => {
     expect(script.headers.get('content-type')).toBe('text/javascript; charset=utf-8')
     expect(script.headers.get('content-security-policy')).toBe(null)
     expect((await script.text()).length).toBeGreaterThan(1000)
+    // Before the page paints, the viewer's light or dark: a classic script (no import or export of its own).
+    const theme = await fetch(`${url}/theme.js`)
+    expect(theme.headers.get('content-type')).toBe('text/javascript; charset=utf-8')
+    const early = await theme.text()
+    expect(early).toContain('board.theme')
+    expect(early).not.toMatch(/^\s*(import|export)\b/m)
     for (const sheet of ['app', 'menu', 'launch', 'questions', 'terminal', 'helpers'])
       expect((await fetch(`${url}/styles/${sheet}.css`)).headers.get('content-type')).toBe('text/css; charset=utf-8')
     expect((await fetch(`${url}/icon.svg`)).headers.get('content-type')).toBe('image/svg+xml')

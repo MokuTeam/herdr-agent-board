@@ -1,7 +1,7 @@
 // The session sheet's title: a pill with where the session is (or that it sleeps, or is gone), its
 // name — a click, Enter or F2 renames it there — and a line with its lane, workspace, last
 // activity and context. Before a session was ever open, the empty places of the page.
-import type { KeyboardEvent, MouseEvent } from 'react'
+import { Fragment, type KeyboardEvent, type MouseEvent } from 'react'
 import type { Item } from '../../../../src/core/types.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { categoryInfo, catOf } from '../../models/board-view.ts'
@@ -62,7 +62,14 @@ export function SheetHead({ item, missing, onRename }: SheetHeadProps) {
         {head.name}
       </h2>
       <p className="sheet-meta" id="sheet-meta" title={head.metaTitle}>
-        {head.meta}
+        {/* Each fact whole on its line: the line breaks between them, after a separator, never inside one. */}
+        {head.meta.map((part, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: the facts in their order
+          <Fragment key={i}>
+            {i > 0 && ' · '}
+            <span>{part}</span>
+          </Fragment>
+        ))}
       </p>
     </>
   )

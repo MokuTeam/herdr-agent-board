@@ -479,7 +479,7 @@ describe('the window’s parts', () => {
 
   test('the stylesheet is upstream’s, its comments pointing at the React files', () => {
     const ours = readFileSync(join(import.meta.dir, '..', '..', 'web', 'styles', 'terminal.css'), 'utf8')
-    const theirs = oldSource('web/terminal.css', TERMINAL_MERGE)
+    const theirs = oldSource('web/terminal.css', '8c4b987') // #43's light or dark picked in Settings
     const normal = (css: string) =>
       css
         .replace(/\r\n/g, '\n')

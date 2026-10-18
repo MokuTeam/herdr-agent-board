@@ -1,11 +1,5 @@
 import { expect, test } from 'bun:test'
-import { ASKED_MS, nextLanguage, serverLanguage } from '../../web/src/models/language.ts'
-
-test('the language button goes round the board languages', () => {
-  expect(nextLanguage(['en', 'ru'], 'en')).toBe('ru')
-  expect(nextLanguage(['en', 'ru'], 'ru')).toBe('en')
-  expect(nextLanguage(['en', 'ru'], 'de')).toBe('en')
-})
+import { ASKED_MS, serverLanguage } from '../../web/src/models/language.ts'
 
 test('a board from the server switches the language, except one sent before the user just picked another', () => {
   expect(serverLanguage('ru', 'en', null, 0)).toBe('ru')

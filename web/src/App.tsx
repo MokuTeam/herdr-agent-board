@@ -32,6 +32,7 @@ import { useQuickLook } from './hooks/useQuickLook.ts'
 import { useRenameInPlace } from './hooks/useRenameInPlace.ts'
 import { useReveal } from './hooks/useReveal.ts'
 import { useSchedule } from './hooks/useSchedule.ts'
+import { useSettingsMenu } from './hooks/useSettingsMenu.ts'
 import { useSetupNote } from './hooks/useSetupNote.ts'
 import { useTerminal } from './hooks/useTerminal.ts'
 import { pageLayers } from './models/lifecycle.ts'
@@ -85,6 +86,8 @@ export function App() {
     launch: launch.menus,
     terminal: terminal.openTerminal,
   })
+  // Settings (the gear): light or dark, the language, where the panels sit, sleeping sessions.
+  const settings = useSettingsMenu(menus.menu)
   useBoardKeys({
     openNextAttention,
     newSession,
@@ -131,6 +134,7 @@ export function App() {
           onCategories={() => (categories ? setCategories(false) : openCategories())}
           onSchedule={() => (schedule ? setSchedule(false) : openSchedule())}
           setup={setup}
+          settings={settings}
         />
         <Board
           onNewSession={newSession}

@@ -16,6 +16,7 @@ import {
   menuPlacement,
   menuStep,
   outOffset,
+  overWanted,
   panelChrome,
   panelStyle,
   primaryEdge,
@@ -116,9 +117,9 @@ test('let go loose: docks where thrown, else floats where it glides to', () => {
 })
 
 describe('where a panel rests and where it comes from', () => {
-  test('docked: its rectangle, coming in from past its edge', () => {
-    expect(restPlace('right', fresh, vp, false, 0, { w: 0, h: 0 })).toEqual({ x: 1028, y: 12, w: 560, h: 976, p: 1 })
-    expect(restPlace('right', fresh, vp, true, 0, { w: 0, h: 0 })).toEqual({ x: 1620, y: 12, w: 560, h: 976, p: 1 })
+  test('docked: its rectangle, flush with the window, coming in from past its edge', () => {
+    expect(restPlace('right', fresh, vp, false, 0, { w: 0, h: 0 })).toEqual({ x: 1040, y: 0, w: 560, h: 1000, p: 1 })
+    expect(restPlace('right', fresh, vp, true, 0, { w: 0, h: 0 })).toEqual({ x: 1632, y: 0, w: 560, h: 1000, p: 1 })
   })
   test('floating: in place, faded out', () => {
     const float = { ...fresh, dock: 'float' as const, float: { x: 300, y: 200, w: 500, h: 600 } }
@@ -177,7 +178,7 @@ describe('the handles and the place button', () => {
     expect(panelChrome('bottom', fresh, { w: 1000, h: 801 }).separator).toEqual({
       orientation: 'horizontal',
       min: 320,
-      max: 597,
+      max: 621,
       now: 336,
     })
   })
@@ -221,10 +222,21 @@ describe('the place menu', () => {
 
 describe('the board makes room', () => {
   test('for an open docked panel; none on a phone, when closed or floating', () => {
-    expect(roomWanted(true, false, fresh, { w: 1800, h: 1000 })).toEqual({ left: 0, right: 572, bottom: 0 })
+    expect(roomWanted(true, false, fresh, { w: 1800, h: 1000 })).toEqual({ left: 0, right: 560, bottom: 0 })
     expect(roomWanted(false, false, fresh, { w: 1800, h: 1000 })).toEqual({ left: 0, right: 0, bottom: 0 })
     expect(roomWanted(true, true, fresh, { w: 1800, h: 1000 })).toEqual({ left: 0, right: 0, bottom: 0 })
     expect(roomValue(571.66)).toBe('571.7px')
+  })
+  test('a side panel the window has no room for lies over the board: the toolbar keeps clear of it', () => {
+    const laptop = { w: 1440, h: 900 }
+    expect(overWanted(true, false, fresh, laptop)).toEqual({ left: 0, right: 572 })
+    expect(overWanted(true, false, { ...fresh, dock: 'left' }, laptop)).toEqual({ left: 572, right: 0 })
+    // With room beside it, on a phone, closed, at the bottom or floating: nothing to keep clear.
+    expect(overWanted(true, false, fresh, { w: 1800, h: 1000 })).toEqual({ left: 0, right: 0 })
+    expect(overWanted(true, true, fresh, laptop)).toEqual({ left: 0, right: 0 })
+    expect(overWanted(false, false, fresh, laptop)).toEqual({ left: 0, right: 0 })
+    expect(overWanted(true, false, { ...fresh, dock: 'bottom' }, laptop)).toEqual({ left: 0, right: 0 })
+    expect(overWanted(true, false, { ...fresh, dock: 'float' }, laptop)).toEqual({ left: 0, right: 0 })
   })
   test('the card in the panel keeps its place on screen, clear of a panel at the bottom', () => {
     const card = { top: 300, bottom: 400, height: 100 }

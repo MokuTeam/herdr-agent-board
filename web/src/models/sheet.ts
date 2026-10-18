@@ -61,7 +61,8 @@ export interface SheetHeadView {
   pill: StatusPill
   name: string
   /** Its lane, workspace, last activity and context, in one line. */
-  meta: string
+  /** The facts under the name, each kept whole on its line (the line breaks between them, after a separator). */
+  meta: string[]
   /** Says what the context number is, when there is one. */
   metaTitle: string
 }
@@ -87,9 +88,7 @@ export function sheetHead(
     it.workspace && t('meta.workspace', { name: it.workspace }),
     active && (active === t('ago.now') ? t('meta.activeNow') : t('meta.active', { ago: active })),
     context,
-  ]
-    .filter(Boolean)
-    .join(' · ')
+  ].filter((s): s is string => !!s)
   return { pill, name: it.name, meta, metaTitle: context ? t('meta.contextHint') : '' }
 }
 

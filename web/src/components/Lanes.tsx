@@ -1,5 +1,7 @@
-// The lanes control: "All" and the categories with sessions on show, a thumb under the picked one.
+// The lanes control: "All" and the categories with sessions on show, a thumb under the picked one;
+// it fades out at an edge with more lanes past it.
 import { useRef } from 'react'
+import { useLaneFades } from '../hooks/useLaneFades.ts'
 import { useSegmentThumb } from '../hooks/useSegmentThumb.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import type { LaneOption } from '../models/toolbar.ts'
@@ -16,6 +18,7 @@ export function Lanes({ options, picked, onPick }: Props) {
   const control = useRef<HTMLDivElement>(null)
   const thumb = useRef<HTMLSpanElement>(null)
   useSegmentThumb(control, thumb, picked, options?.map(o => `${o.id}:${o.title}:${o.n}`).join('|') ?? '')
+  useLaneFades(control)
   return (
     <div className="segmented" id="lanes" role="tablist" aria-label={t('tb.lanes')} ref={control}>
       {options && <span className="thumb" ref={thumb} />}

@@ -7,13 +7,15 @@
 //   it there (the pointer's projected rest decides, a preview shows where);
 // - a menu in its head picks the place, for keys and for those who would rather not throw.
 // Phones (760 px and narrower) keep the full-height sheet: it flicks right, no resizing, no docks.
-// React draws the panel (Panel.tsx) with what this reports: shown or not, and its handles.
+// React draws the panel (Panel.tsx) with what this reports: shown or not, its handles, and whether
+// it lies over the board.
 
 import {
   clampFloat,
   DOCKS,
   type Dock,
   defaultFloat,
+  dockAt,
   dockFromThrow,
   dockRect,
   dockSize,
@@ -25,11 +27,13 @@ import {
   MARGIN,
   type Mode,
   outward,
+  overlays,
   type PanelLayout,
   type Point,
   type Rect,
   rectFor,
   resizeFloat,
+  type Side,
   sizeLimits,
   soft,
 } from '../../models/panel-layout.ts'
@@ -68,6 +72,8 @@ export interface PanelState {
   /** In the page (`open` class, not aria-hidden) from opening until it has left. */
   shown: boolean
   chrome: PanelChrome
+  /** Docked at a side, it lies over the board (the window has no room beside it): the `over` class. */
+  over: boolean
 }
 
 interface Gesture {
@@ -93,6 +99,8 @@ interface HeadGesture extends Gesture {
   ox: Spring | null
   oy: Spring | null
   idle: ReturnType<typeof setTimeout> | undefined
+  /** The dock the preview shows: where it lands when let go. */
+  target: Side | null
 }
 
 interface ResizeGesture extends Gesture {
@@ -166,6 +174,7 @@ export class PanelMotion implements PlacedPanel {
     this.state = new Store<PanelState>({
       shown: false,
       chrome: panelChrome(this.mode, place.layout, place.viewport()),
+      over: false,
     })
   }
 
@@ -291,6 +300,11 @@ export class PanelMotion implements PlacedPanel {
     if (!sameChrome(chrome, now.chrome)) this.state.set({ ...now, chrome })
   }
 
+  setOver(on: boolean): void {
+    const now = this.state.get()
+    if (now.over !== on) this.state.set({ ...now, over: on })
+  }
+
   /** Returns false when it was open already. */
   open(): boolean {
     if (this.isOpen) return false
@@ -395,6 +409,7 @@ export class PanelMotion implements PlacedPanel {
       ox: null,
       oy: null,
       idle: undefined,
+      target: null,
     }
     this.el?.setPointerCapture(e.pointerId)
   }
@@ -468,16 +483,17 @@ export class PanelMotion implements PlacedPanel {
     this.place.syncRoom({ response: 0.34, about: this.about })
   }
 
-  /** While a loose panel moves: the dock it would land in now, shown as a preview. */
+  /** While a loose panel moves: the dock it would land in now, shown as a preview; where it lands when let go. */
   private aim(g: HeadGesture): void {
     clearTimeout(g.idle)
-    const v = velocityOf(g.samples)
-    const preview = this.place.preview
-    preview.show(dockFromThrow({ x: g.px, y: g.py }, v, this.place.viewport()), this.at())
+    const target = (v: Point) => {
+      g.target = dockAt({ x: g.px, y: g.py }, v, this.place.viewport(), g.target)
+      this.place.preview.show(g.target, this.at())
+    }
+    target(velocityOf(g.samples))
     // Held still, the throw is over: aim again without the speed it had.
     g.idle = setTimeout(() => {
-      if (this.g === g)
-        preview.show(dockFromThrow({ x: g.px, y: g.py }, { x: 0, y: 0 }, this.place.viewport()), this.at())
+      if (this.g === g) target({ x: 0, y: 0 })
     }, AIM_IDLE)
   }
 
@@ -512,7 +528,7 @@ export class PanelMotion implements PlacedPanel {
     g.ox?.stop()
     g.oy?.stop()
     const vp = this.place.viewport()
-    const dock = dockFromThrow({ x: g.px, y: g.py }, v, vp)
+    const dock = dockFromThrow({ x: g.px, y: g.py }, v, vp, g.target)
     const w = this.w.target
     const h = this.h.target
     this.place.setLayout(
@@ -562,8 +578,13 @@ export class PanelMotion implements PlacedPanel {
     if (mode === 'mobile') return
     g.raw = draggedSize(mode, g.at, dx, dy)
     const size = soft(g.raw, sizeLimits(mode, vp))
+    // The board follows the edge 1:1, unless at this size the panel lies over it.
+    const sized = { ...this.place.layout, dock: mode, [sizeField(mode)]: size }
+    const lies = overlays(sized, vp)
     this.jump({ ...dockRect(mode, size, vp), p: 1 })
-    this.place.room[mode].set(size + MARGIN)
+    this.setOver(lies)
+    this.place.room[mode].set(lies ? 0 : size)
+    if (mode !== 'bottom') this.place.over[mode].set(lies ? size + MARGIN : 0)
   }
 
   private resizeEnd(g: ResizeGesture, v: Point): void {

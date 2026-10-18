@@ -1,10 +1,5 @@
-// Which language the page shows: the toolbar's button goes round the board's languages, and a
-// board from the server switches the page to the config's language.
-
-/** The language after `current` in `codes`, round again after the last. */
-export function nextLanguage(codes: string[], current: string): string {
-  return codes[(codes.indexOf(current) + 1) % codes.length] ?? current
-}
+// Which language the page shows: the one picked in Settings, and a board from the server switches
+// the page to the config's language.
 
 /** The user's pick on this page and when: a board sent before it may still come in. */
 export type Asked = { lang: string; at: number } | null

@@ -235,6 +235,58 @@ describe('the head', () => {
     expect(last(shots, 'saved')).toContain('"dock":"left"')
     expect(last(shots, 'cats-sheet')).toStartWith('open true mode left')
   })
+  test('the preview holds its dock at the zone’s line, and a slow drop lands where it showed', async () => {
+    const shots = await compare(desktop, [
+      open(),
+      settle,
+      pointer('pointerdown', head, 1100, 40),
+      // Loose, then into the right edge's zone (from 1440), slowly back out a little (still held
+      // within DOCK_HOLD), and let go there: it docks right, as the preview showed.
+      ...line([1100, 40], [900, 300], 6).flatMap(([x, y]) => [...ticks(1, 40), pointer('pointermove', head, x, y)]),
+      ...line([900, 300], [1470, 320], 10).flatMap(([x, y]) => [...ticks(1, 60), pointer('pointermove', head, x, y)]),
+      ...ticks(9),
+      ...line([1470, 320], [1420, 320], 10).flatMap(([x, y]) => [...ticks(1, 100), pointer('pointermove', head, x, y)]),
+      ...ticks(9),
+      pointer('pointerup', head, 1420, 320),
+      ...ticks(6),
+      settle,
+      // Again, now out past the hold: the preview goes, and it floats.
+      pointer('pointerdown', head, 1300, 30),
+      ...line([1300, 30], [900, 300], 6).flatMap(([x, y]) => [...ticks(1, 40), pointer('pointermove', head, x, y)]),
+      ...line([900, 300], [1470, 320], 10).flatMap(([x, y]) => [...ticks(1, 60), pointer('pointermove', head, x, y)]),
+      ...ticks(9),
+      ...line([1470, 320], [1380, 320], 18).flatMap(([x, y]) => [...ticks(1, 100), pointer('pointermove', head, x, y)]),
+      ...ticks(9),
+      pointer('pointerup', head, 1380, 320),
+      ...ticks(6),
+      settle,
+    ])
+    expect(ever(shots, 'saved', '"dock":"right"')).toBe(true)
+    expect(last(shots, 'saved')).toContain('"dock":"float"')
+  })
+  test('a side panel the window has no room for lies over the board; narrowed by its edge, the board makes room again', async () => {
+    const shots = await compare({ ...desktop, viewport: { w: 1500, h: 900 } }, [
+      open(),
+      ...ticks(3),
+      settle,
+      ...drag(edge('w'), [940, 500], line([940, 500], [1010, 500], 6)),
+      ...ticks(4),
+      settle,
+      ...drag(edge('w'), [1010, 500], line([1010, 500], [880, 500], 6)),
+      ...ticks(4),
+      settle,
+    ])
+    // 1500 wide, 560 of it the panel's: no room beside it; the toolbar keeps clear of it.
+    expect(ever(shots, 'html', '--room-right: 0px; --room-bottom: 0px; --over-left: 0px; --over-right: 572px')).toBe(
+      true,
+    )
+    expect(shots.some(shot => /<aside[^>]* class="open over sheet"/.test(shot))).toBe(true)
+    // 490 wide: the board makes room for it again, and it stops lying over the cards.
+    expect(ever(shots, 'html', '--room-right: 490px; --room-bottom: 0px; --over-left: 0px; --over-right: 0px')).toBe(
+      true,
+    )
+    expect(last(shots, 'saved')).toContain('"side":620')
+  })
   test('let go gently it floats where it glides to; a floating one moves by its head', async () => {
     const shots = await compare(desktop, [
       open(),
@@ -247,7 +299,7 @@ describe('the head', () => {
       settle,
     ])
     // Saved where it landed, unrounded, as before (restoreLayout rounds it on the next visit).
-    expect(ever(shots, 'saved', '"float":{"x":564.952380952381,"y":308')).toBe(true)
+    expect(ever(shots, 'saved', '"float":{"x":575.2380952380952,"y":308')).toBe(true)
     expect(last(shots, 'saved')).toMatch(/"dock":"float".*"float":\{"x":[\d.]+/)
     expect(last(shots, 'cats-sheet')).toStartWith('open true mode float')
   })
@@ -275,20 +327,20 @@ describe('the edges', () => {
     const shots = await compare(desktop, [
       open(),
       settle,
-      ...drag(edge('w'), [1028, 500], line([1028, 500], [900, 500], 6)),
+      ...drag(edge('w'), [1040, 500], line([1040, 500], [900, 500], 6)),
       ...ticks(4),
       settle,
       ...drag(edge('w'), [900, 500], line([900, 500], [100, 500], 8), {}, 40),
       settle,
     ])
-    expect(ever(shots, 'saved', '"side":688')).toBe(true)
+    expect(ever(shots, 'saved', '"side":700')).toBe(true)
     expect(last(shots, 'saved')).toContain('"side":1200')
   })
   test('flung narrower than half the smallest size it folds away', async () => {
     const shots = await compare(desktop, [
       open(),
       settle,
-      ...drag(edge('w'), [1028, 500], line([1028, 500], [1500, 500], 5)),
+      ...drag(edge('w'), [1040, 500], line([1040, 500], [1500, 500], 5)),
       ...ticks(5),
       settle,
     ])
@@ -324,7 +376,7 @@ describe('the edges', () => {
     const shots = await compare(desktop, [
       open(),
       settle,
-      pointer('pointerdown', edge('w'), 1028, 500),
+      pointer('pointerdown', edge('w'), 1040, 500),
       ...ticks(1),
       pointer('pointermove', edge('w'), 900, 500),
       key('Escape', body),
@@ -339,7 +391,7 @@ describe('the edges', () => {
     ])
     expect(ever(shots, 'cats-sheet', 'mode float')).toBe(true)
     expect(last(shots, 'saved')).toBe('')
-    expect(last(shots, 'cats-sheet')).toStartWith('open true mode right 1028/1028 12/12 560/560')
+    expect(last(shots, 'cats-sheet')).toStartWith('open true mode right 1040/1040 0/0 560/560')
   })
 })
 
@@ -462,8 +514,13 @@ describe('the window around it', () => {
       resize(1500, 900),
       settle,
     ])
-    expect(ever(shots, 'html', '--room-right: 572px')).toBe(true) // 1800 wide: room beside it
-    expect(ever(shots, 'cats-sheet', '628/628 12/12 560/560 876/876')).toBe(true) // 1200 × 900
+    expect(ever(shots, 'html', '--room-right: 560px')).toBe(true) // 1800 wide: room beside it
+    // 1200 wide: no room beside it, so it lies over the board, flush with the edge, the toolbar kept clear of it.
+    expect(ever(shots, 'html', '--room-right: 0px; --room-bottom: 0px; --over-left: 0px; --over-right: 572px')).toBe(
+      true,
+    )
+    expect(ever(shots, 'cats-sheet', '640/640 0/0 560/560 900/900')).toBe(true) // 1200 × 900
+    expect(shots.some(shot => /<aside[^>]* class="open over sheet"/.test(shot))).toBe(true)
     expect(last(shots, 'html')).toStartWith('--room-left: 0px; --room-right: 0px; --room-bottom: 0px')
   })
   test('a phone keeps the full-height sheet: it slides, flicks right, does not resize', async () => {
@@ -472,7 +529,7 @@ describe('the window around it', () => {
       settle,
       phone(true),
       settle,
-      ...drag(edge('w'), [1028, 500], line([1028, 500], [900, 500], 3)),
+      ...drag(edge('w'), [1040, 500], line([1040, 500], [900, 500], 3)),
       placeButton(),
       settle,
       key('Escape', onFocus),
@@ -520,9 +577,9 @@ describe('the window around it', () => {
 describe('the viewer’s layout', () => {
   test('a saved place and size is where it opens; garbage falls back', async () => {
     const left = await compare({ ...desktop, saved: JSON.stringify({ dock: 'left', side: 700 }) }, [open(), settle])
-    expect(last(left, 'cats-sheet')).toStartWith('open true mode left 12/12 12/12 700/700')
+    expect(last(left, 'cats-sheet')).toStartWith('open true mode left 0/0 0/0 700/700')
     const garbage = await compare({ ...desktop, saved: '{oops' }, [open(), settle])
-    expect(last(garbage, 'cats-sheet')).toStartWith('open true mode right 1028/1028')
+    expect(last(garbage, 'cats-sheet')).toStartWith('open true mode right 1040/1040')
     await compare({ ...desktop, saved: JSON.stringify({ dock: 'bottom', bottom: 380 }) }, [
       open(),
       ...ticks(3),
@@ -530,6 +587,43 @@ describe('the viewer’s layout', () => {
       closeButton(),
       settle,
     ])
+  })
+  test('Settings picks the place: the open panel goes there, or the next one opens there; and its default size', async () => {
+    const place =
+      (dock: string): Step =>
+      async s => {
+        s.placePanels(dock)
+        await s.world.flush()
+      }
+    const defaultSize: Step = async s => {
+      s.resetPanelSize()
+      await s.world.flush()
+    }
+    const shots = await compare({ ...desktop, saved: JSON.stringify({ dock: 'right', side: 700 }) }, [
+      open(),
+      settle,
+      place('left'),
+      ...ticks(4),
+      settle,
+      defaultSize,
+      ...ticks(3),
+      settle,
+      place('left'),
+      place('nowhere'),
+      closeButton(),
+      settle,
+      // None open: the place is kept for the next one, which opens there.
+      place('float'),
+      defaultSize,
+      settle,
+      open(),
+      ...ticks(3),
+      settle,
+    ])
+    expect(ever(shots, 'cats-sheet', 'mode left 0/0 0/0 700/700')).toBe(true)
+    expect(ever(shots, 'saved', '"dock":"left","side":null')).toBe(true)
+    expect(last(shots, 'saved')).toContain('"dock":"float"')
+    expect(last(shots, 'cats-sheet')).toStartWith('open true mode float')
   })
   test('on whole device pixels at 125 %', async () => {
     await compare({ ...desktop, dpr: 1.25 }, [

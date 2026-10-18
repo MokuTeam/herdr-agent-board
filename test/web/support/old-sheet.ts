@@ -6,8 +6,9 @@
 // when.js, questions.js's threadHTML — run against a small `$` over the parsed page. By hand: the
 // "New here" button app.js appends at start (app.js:2020-2027), the Changes button's rule in the
 // detail's `changed` (app.js:903) and syncAvailability's part for the sheet (app.js:175-195).
-// The page and renderSheetHead are those of the terminal's merge (upstream PR #36): the baseline's
-// with the sheet's Terminal button, nothing else.
+// The page and renderSheetHead are those of the compact toolbar's merge (upstream PR #43): the
+// baseline's with the sheet's Terminal button (#36), the facts under its name one span each and
+// Wake's tooltip (#43), nothing else.
 import { translator } from '../../../src/core/i18n/translator.ts'
 import type { BoardPayload } from '../../../src/core/payload.ts'
 import type { ColumnId, Item, Translator } from '../../../src/core/types.ts'
@@ -63,8 +64,8 @@ export interface OldSheetScene {
 
 type StyleRule = [string, string]
 
-/** Upstream's merge of the terminal (PR #36). */
-const TERMINAL_MERGE = '1a1b270'
+/** Upstream's merge of the compact toolbar (PR #43), which has the terminal's (PR #36) in it. */
+const SHEET_MERGE = '8c4b987'
 
 /** Just enough of an element for the old code's writes, onto a parsed node. */
 class FakeElement {
@@ -181,7 +182,7 @@ type Call = (name: string, ...args: unknown[]) => unknown
 /** #sheet of web/index.html as web/app.js leaves it for the scene; buttons typed as React types them. */
 export function oldSheet(scene: OldSheetScene): Element {
   const t = translator(scene.lang ?? 'en')
-  const aside = byId(pageMarkup(TERMINAL_MERGE), 'sheet')
+  const aside = byId(pageMarkup(SHEET_MERGE), 'sheet')
   const nodes: Node[] = [aside]
   const fake = (id: string) => new FakeElement(byId(nodes, id))
   const $ = (selector: string) => {
@@ -223,8 +224,8 @@ export function oldSheet(scene: OldSheetScene): Element {
     longWhen: OLD_WHEN.get('longWhen'),
   }
   const baseline = oldCode('web/app.js', pickedFromApp, deps)
-  // The head with the Terminal button's rule, over the baseline's helpers.
-  const head = oldCode('web/app.js', ['renderSheetHead'], { ...deps, ...Object.fromEntries(baseline) }, TERMINAL_MERGE)
+  // The head with the Terminal button's rule and the facts as spans, over the baseline's helpers.
+  const head = oldCode('web/app.js', ['renderSheetHead'], { ...deps, ...Object.fromEntries(baseline) }, SHEET_MERGE)
   const code = new Map([...baseline, ...head])
   const call: Call = (name, ...args) => oldFunction(code, name)(...args)
 

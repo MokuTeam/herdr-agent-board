@@ -7,8 +7,10 @@ import {
   type Edge,
   floatLanding,
   type Mode,
+  type Over,
   offRect,
   outward,
+  overFor,
   type PanelLayout,
   type Point,
   type Rect,
@@ -244,7 +246,15 @@ export function roomWanted(open: boolean, phone: boolean, layout: PanelLayout, v
   return open && !phone ? roomFor(layout, vp) : { left: 0, right: 0, bottom: 0 }
 }
 
-/** A room margin as written to the page's --room-* property. */
+/** The sides a panel lying over the board keeps the toolbar clear of. */
+export const OVER_SIDES = ['left', 'right'] as const
+
+/** What the open side panel lying over the board takes of the toolbar (none on a phone, or with no panel open). */
+export function overWanted(open: boolean, phone: boolean, layout: PanelLayout, vp: Viewport): Over {
+  return open && !phone ? overFor(layout, vp) : { left: 0, right: 0 }
+}
+
+/** A room margin as written to the page's --room-* (and --over-*) property. */
 export const roomValue = (v: number): string => `${Math.round(v * 10) / 10}px`
 
 type Box = Pick<RectLike, 'top' | 'bottom' | 'height'>

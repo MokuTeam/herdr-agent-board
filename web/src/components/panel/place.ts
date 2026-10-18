@@ -3,18 +3,31 @@
 // the place menu, and the window around them. One panel is open at a time, in this place.
 //
 // The board's margins (--room-left/right/bottom on <html>) are springs. While they move, the card
-// the panel is about keeps its place on screen, and stays clear of a panel at the bottom.
+// the panel is about keeps its place on screen, and stays clear of a panel at the bottom. A side
+// panel that lies over the board (no room for it) still keeps the toolbar's controls clear of it:
+// --over-left/right, on springs as well.
 
 import {
   type Dock,
   type Mode,
+  type Over,
+  overlays,
   type PanelLayout,
   restoreLayout,
   type Side,
   serializeLayout,
   type Viewport,
 } from '../../models/panel-layout.ts'
-import { anchorScroll, keepsAnchor, PHONE_QUERY, roomValue, roomWanted, SIDES } from '../../models/panel-motion.ts'
+import {
+  anchorScroll,
+  keepsAnchor,
+  OVER_SIDES,
+  overWanted,
+  PHONE_QUERY,
+  roomValue,
+  roomWanted,
+  SIDES,
+} from '../../models/panel-motion.ts'
 import { Spring } from '../../models/spring.ts'
 import { storage } from '../../state/storage.ts'
 import { Store } from '../../state/store.ts'
@@ -36,6 +49,8 @@ export interface PlacedPanel {
   cancel(): void
   setDock(dock: Dock): void
   resetSize(): void
+  /** It lies over the board (a deeper shadow, a drawer over the cards rather than beside them). */
+  setOver(on: boolean): void
 }
 
 /** The element a panel is about (the session's card), kept in its place on screen while the board makes room. */
@@ -70,6 +85,7 @@ export class PanelPlace {
   layout: PanelLayout
   readonly panels: PlacedPanel[] = []
   readonly room: Record<Side, Spring>
+  readonly over: Record<keyof Over, Spring>
   readonly preview: DockPreviewMotion
   readonly menu: LayoutMenuMotion
   /** A gesture sets the room 1:1. */
@@ -94,6 +110,8 @@ export class PanelPlace {
         onRest: () => this.queueRoom(),
       })
     this.room = { left: spring(), right: spring(), bottom: spring() }
+    const overSpring = () => new Spring({ damping: 1, response: 0.4, precision: 0.3, onUpdate: () => this.queueRoom() })
+    this.over = { left: overSpring(), right: overSpring() }
     this.preview = new DockPreviewMotion(
       () => this.layout,
       () => this.viewport(),
@@ -136,6 +154,16 @@ export class PanelPlace {
     return this.panels.find(p => p.isOpen)
   }
 
+  /** Settings picked a place: the open panel moves there, and the others open there next. */
+  placePanels(dock: Dock): void {
+    ;(this.openPanel() ?? this.panels[0])?.setDock(dock)
+  }
+
+  /** Settings asked for the default size of the panels' place. */
+  resetPanelSize(): void {
+    ;(this.openPanel() ?? this.panels[0])?.resetSize()
+  }
+
   /** The room a panel at the bottom takes now: where the board's visible part ends. */
   roomBelow(): number {
     return this.room.bottom.value
@@ -152,6 +180,7 @@ export class PanelPlace {
   private applyRoom(): void {
     this.queued = false
     for (const side of SIDES) html().style.setProperty(`--room-${side}`, roomValue(this.room[side].value))
+    for (const side of OVER_SIDES) html().style.setProperty(`--over-${side}`, roomValue(this.over[side].value))
     if (this.anchor?.el.isConnected) {
       const r = this.anchor.el.getBoundingClientRect()
       const by = anchorScroll(this.anchor.y, r, this.boardTop(), this.viewport().h, this.room.bottom.value)
@@ -178,8 +207,15 @@ export class PanelPlace {
 
   /** The board's room for the open panel (none on a phone, or for a floating one). */
   syncRoom({ jump = false, velocity = {}, response = 0.4, about = nothing }: RoomOptions = {}): void {
-    const want = roomWanted(!!this.openPanel(), this.isPhone(), this.layout, this.viewport())
+    const open = this.openPanel()
+    const vp = this.viewport()
+    const phone = this.isPhone()
+    const want = roomWanted(!!open, phone, this.layout, vp)
+    const wantOver = overWanted(!!open, phone, this.layout, vp)
+    // Over the board it casts a deeper shadow, a drawer over the cards rather than beside them.
+    open?.setOver(!phone && overlays(this.layout, vp))
     if (jump) {
+      for (const side of OVER_SIDES) this.over[side].set(wantOver[side])
       for (const side of SIDES) this.room[side].set(want[side])
       return
     }
@@ -187,6 +223,8 @@ export class PanelPlace {
     for (const side of SIDES)
       if (this.room[side].target !== want[side] || velocity[side])
         this.room[side].to(want[side], { velocity: velocity[side], response })
+    for (const side of OVER_SIDES)
+      if (this.over[side].target !== wantOver[side]) this.over[side].to(wantOver[side], { response })
     this.queueRoom()
   }
 
@@ -228,6 +266,7 @@ export class PanelPlace {
       phone?.removeEventListener('change', phoneChange)
       removeEventListener('keydown', escapeDrag, true)
       for (const side of SIDES) this.room[side].stop()
+      for (const side of OVER_SIDES) this.over[side].stop()
     }
   }
 }

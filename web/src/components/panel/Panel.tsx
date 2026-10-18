@@ -48,6 +48,7 @@ export function Panel({ open, onClose, about, ...shell }: PanelProps) {
       {...shell}
       shown={panel.shown}
       chrome={panel.chrome}
+      over={panel.over}
       menuOpen={panel.menuOpen}
       asideRef={panel.ref}
       onPlace={panel.togglePlaceMenu}
@@ -60,6 +61,8 @@ export interface PanelViewProps extends ShellProps {
   /** In the page: from opening until it has left. */
   shown: boolean
   chrome: PanelChrome
+  /** Docked at a side, it lies over the board: a deeper shadow, a drawer over the cards. */
+  over?: boolean
   menuOpen: boolean
   asideRef?: Ref<HTMLElement>
   onPlace?: (button: HTMLElement) => void
@@ -68,13 +71,27 @@ export interface PanelViewProps extends ShellProps {
 
 /** The panel as drawn for a state of its motion. */
 export function PanelView(props: PanelViewProps) {
-  const { id, kind, title, tools, className, drop, children, shown, chrome, menuOpen, asideRef, onPlace, onClose } =
-    props
+  const {
+    id,
+    kind,
+    title,
+    tools,
+    className,
+    drop,
+    children,
+    shown,
+    chrome,
+    over = false,
+    menuOpen,
+    asideRef,
+    onPlace,
+    onClose,
+  } = props
   const t = useT()
   const { label, closeId } = KINDS[kind]
   return (
     <aside
-      className={classNames('sheet', shown && 'open', className)}
+      className={classNames('sheet', shown && 'open', over && 'over', className)}
       id={id}
       aria-hidden={!shown}
       aria-label={t(label)}

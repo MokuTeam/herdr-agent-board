@@ -20,6 +20,8 @@ export interface PanelControls {
   ref: RefObject<HTMLElement | null>
   shown: boolean
   chrome: PanelChrome
+  /** Docked at a side, it lies over the board. */
+  over: boolean
   /** The place menu is up from this panel's button. */
   menuOpen: boolean
   togglePlaceMenu(button: HTMLElement): void
@@ -36,7 +38,7 @@ export function usePanel({ open, onClose, about }: PanelOptions): PanelControls 
     m.about = () => latest.current.about?.() ?? null
     return m
   })
-  const { shown, chrome } = useStore(motion.state)
+  const { shown, chrome, over } = useStore(motion.state)
   const { menu } = useStore(place.state)
   const ref = useRef<HTMLElement>(null)
 
@@ -51,5 +53,5 @@ export function usePanel({ open, onClose, about }: PanelOptions): PanelControls 
     togglePlaceMenu: (button: HTMLElement) => place.menu.toggle(motion, button),
     close: () => motion.close(),
   }))
-  return { ref, shown, chrome, menuOpen: menu.expanded === motion, ...controls }
+  return { ref, shown, chrome, over, menuOpen: menu.expanded === motion, ...controls }
 }

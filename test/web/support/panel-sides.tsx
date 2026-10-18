@@ -1,6 +1,6 @@
 // The side panels run two ways in a fake DOM (support/fake-dom.ts), for parity: the old
-// web/panel.js on the asides of web/index.html (then app.js's applyTexts), all three as they were
-// at the parity baseline, and the React
+// web/panel.js as it was at upstream's sidebar-style panels (#43) on the asides of web/index.html
+// (then app.js's applyTexts), those two as they were at the parity baseline, and the React
 // panel's engine (components/panel) on the asides React renders, drawn again after every event
 // and frame the way React would (only the attributes whose rendered value changed are written).
 // Both sides take the same steps; `snapshot()` prints what a viewer could tell apart.
@@ -17,6 +17,7 @@ import { PanelMotion } from '../../../web/src/components/panel/motion.ts'
 import { type PanelKind, PanelView } from '../../../web/src/components/panel/Panel.tsx'
 import { PanelPlace } from '../../../web/src/components/panel/place.ts'
 import { I18nProvider } from '../../../web/src/i18n/I18nProvider.tsx'
+import { isDock } from '../../../web/src/models/panel-layout.ts'
 import { type FakeElement, FakeWorld, type WorldOptions } from './fake-dom.ts'
 import {
   addButtonTypes,
@@ -35,6 +36,8 @@ import { oldSource } from './old-app.ts'
 import { asDom, clone, commit, first } from './react-commit.ts'
 
 const ROOT = join(import.meta.dir, '..', '..', '..')
+/** Upstream's merge of the sidebar-style panels, docked flush and lying over a narrow board (#43). */
+export const PANEL_MERGE = '8c4b987'
 
 export const KINDS: Record<string, PanelKind> = {
   sheet: 'session',
@@ -111,6 +114,10 @@ export interface PanelSide {
   keepInSight(keep: KeepTarget): void
   roomBelow(): number
   menuOpen(): boolean
+  /** Settings picked a place, or the default size (#43). */
+  placePanels(dock: string): void
+  resetPanelSize(): void
+  panelDock(): string
   snapshot(): string
   /** Puts the world's globals back. */
   dispose(): void
@@ -175,8 +182,8 @@ function snapshotOf(side: Omit<PanelSide, 'snapshot' | 'dispose'>, ids: string[]
 // ---------------------------------------------------------------- the old page
 
 /**
- * A fresh copy of web/panel.js as it was at the parity baseline (its module state is per page),
- * importing the moved models in place of its panel-layout.js and spring.js.
+ * A fresh copy of web/panel.js as it was at #43's merge (its module state is per page), importing
+ * the moved models in place of its panel-layout.js and spring.js.
  */
 async function importOldPanel(): Promise<Record<string, unknown>> {
   const models = join(ROOT, 'web', 'src', 'models')
@@ -184,7 +191,7 @@ async function importOldPanel(): Promise<Record<string, unknown>> {
     './panel-layout.js': join(models, 'panel-layout.ts'),
     './spring.js': join(models, 'spring.ts'),
   }
-  const source = oldSource('web/panel.js').replace(/from '(\.\/[^']+)'/g, (_, rel: string) => {
+  const source = oldSource('web/panel.js', PANEL_MERGE).replace(/from '(\.\/[^']+)'/g, (_, rel: string) => {
     const path = moved[rel]
     if (!path) throw new Error(`web/panel.js imports from ${rel}`)
     return `from '${pathToFileURL(path).href}'`
@@ -263,6 +270,9 @@ export async function oldSide(options: SideOptions): Promise<PanelSide> {
     keepInSight: (keep: KeepTarget) => void call(mod.keepInSight, keep),
     roomBelow: () => Number(call(mod.roomBelow)),
     menuOpen: () => !!call(mod.menuOpen),
+    placePanels: (dock: string) => void call(mod.placePanels, dock),
+    resetPanelSize: () => void call(mod.resetPanelSize),
+    panelDock: () => String(call(mod.panelDock)),
   }
   return { ...side, snapshot: () => snapshotOf(side, options.ids, true), dispose: () => world.uninstall() }
 }
@@ -288,10 +298,18 @@ export async function newSide(options: SideOptions): Promise<ReactSide> {
     const motion = new PanelMotion(place)
     motion.onClose = () => closes.push(id)
     const draw = () => {
-      const { shown, chrome } = motion.state.get()
+      const { shown, chrome, over } = motion.state.get()
       const menuOpen = place.state.get().menu.expanded === motion
       return inI18n(
-        <PanelView id={id} kind={kind} title={titleOf(kind, t)} shown={shown} chrome={chrome} menuOpen={menuOpen} />,
+        <PanelView
+          id={id}
+          kind={kind}
+          title={titleOf(kind, t)}
+          shown={shown}
+          chrome={chrome}
+          over={over}
+          menuOpen={menuOpen}
+        />,
       )
     }
     const drawn = draw()
@@ -356,6 +374,11 @@ export async function newSide(options: SideOptions): Promise<ReactSide> {
     },
     roomBelow: () => place.roomBelow(),
     menuOpen: () => place.menu.isOpen(),
+    placePanels(dock: string) {
+      if (isDock(dock)) place.placePanels(dock)
+    },
+    resetPanelSize: () => place.resetPanelSize(),
+    panelDock: () => place.layout.dock,
   }
   return {
     ...side,

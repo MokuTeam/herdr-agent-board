@@ -131,6 +131,7 @@ export function Composer({
           type="button"
           className="button"
           id="sheet-wake"
+          title={t('sheet.wake')}
           hidden={buttons.wakeHidden}
           disabled={av.wake}
           onClick={() => on.wake?.()}

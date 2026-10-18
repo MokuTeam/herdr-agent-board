@@ -1,7 +1,9 @@
-// The React toolbar against the old page's (at the parity baseline): the toolbar block of
-// web/index.html after web/app.js filled it for the same board (applyTexts, the "new session"
-// button, renderToolbar, renderLimits, updateLive, syncAvailability, renderScheduleCount). The
-// thumb's inline position is set after layout on both pages, so neither side has it here.
+// The React toolbar against the old page's, at upstream's compact toolbar (#43): the toolbar
+// block of web/index.html after web/app.js filled it for the same board (applyTexts, the "new
+// session" button, renderToolbar, renderLimits, updateLive, syncAvailability,
+// renderScheduleCount). The thumb's inline position and the lanes' fading edges are set after
+// layout on both pages, so neither side has them here; the setup note is its own test's
+// (setup-note.test.tsx).
 import { describe, expect, test } from 'bun:test'
 import { createRef } from 'react'
 import { translator } from '../../src/core/i18n/translator.ts'
@@ -18,6 +20,7 @@ import {
   byId,
   canonical,
   find,
+  findAll,
   hasClass,
   type Node,
   OLD_PAGE_ONLY,
@@ -32,6 +35,8 @@ import {
   toggleClass,
 } from './support/markup.ts'
 
+/** Upstream's merge of the compact toolbar and Settings (#43). */
+const TOOLBAR_MERGE = '8c4b987'
 const NOW = Date.now()
 const done = item({ key: 'c', name: 'Gamma', column: 'done', status: 'done', result: 'Fixed', activity: 100 })
 const ITEMS = [
@@ -74,15 +79,18 @@ function renderToolbar(value: ReturnType<typeof board>, lang: string): Node[] {
 
 /** The toolbar of web/index.html as web/app.js starts it: the "new session" button in, the texts filled. */
 function oldToolbar(t: Translator): Node[] {
-  const toolbar = [find(pageMarkup(), el => el.tag === 'header' && hasClass(el, 'toolbar'))]
+  const toolbar = [find(pageMarkup(TOOLBAR_MERGE), el => el.tag === 'header' && hasClass(el, 'toolbar'))]
+  // The setup note is drawn and tested on its own (setup-note.test.tsx).
+  for (const parent of findAll(toolbar, el =>
+    el.children.some(c => c.kind === 'element' && c.attrs.get('id') === 'setup-note'),
+  ))
+    parent.children = parent.children.filter(c => c.kind !== 'element' || c.attrs.get('id') !== 'setup-note')
   // app.js "new sessions, renaming, menus": the button with ICON.plus, prepended, then applyTexts().
   prepend(
     byClass(toolbar, 'controls'),
-    '<button class="pill-toggle new-session" id="new-session" data-hint="launch.toolbarHint"><svg viewBox="0 0 20 20"><path d="M10 4.5v11M4.5 10h11"/></svg><span data-i18n="launch.toolbar"></span></button>',
+    '<button class="pill-toggle icon-only new-session" id="new-session" data-hint="launch.toolbarHint"><svg viewBox="0 0 20 20"><path d="M10 4.5v11M4.5 10h11"/></svg><span data-i18n="launch.toolbar"></span></button>',
   )
   applyTexts(toolbar, t)
-  setText(byId(toolbar, 'lang-code'), t.lang.toUpperCase())
-  setAttr(byId(toolbar, 'lang'), 'title', t('tb.lang', { name: t.lang === 'ru' ? 'Русский' : 'English' }))
   return toolbar
 }
 
@@ -91,7 +99,6 @@ function syncAvailability(toolbar: Node[], t: Translator, canMutate: boolean, ca
   const banner = byId(toolbar, 'connection-state')
   toggleAttr(banner, 'hidden', canMutate)
   setText(banner, t(canEdit ? 'mobile.readOnly' : 'live.off'))
-  toggleAttr(byId(toolbar, 'lang'), 'disabled', !canEdit)
   const add = byId(toolbar, 'new-session')
   toggleAttr(add, 'disabled', !canMutate)
   setAttr(add, 'title', t(canMutate ? 'launch.toolbarHint' : 'mobile.readOnly'))
@@ -131,12 +138,13 @@ describe('toolbar markup parity', () => {
     )
     setHtml(
       byId(old, 'columns-head'),
-      '<div class="col-head"><span class="dot" style="--c:var(--green)"></span>Working<span class="n">1</span></div>' +
-        '<div class="col-head"><span class="dot" style="--c:var(--orange)"></span>Needs me<span class="n">1</span></div>' +
-        '<div class="col-head"><span class="dot" style="--c:var(--purple)"></span>Waiting on others<span class="n">1</span></div>' +
-        '<div class="col-head"><span class="dot" style="--c:var(--blue)"></span>Done<span class="n">1</span></div>' +
-        '<div class="col-head"><span class="dot" style="--c:var(--gray)"></span>Idle<span class="n">1</span></div>',
+      '<div class="col-head"><span class="dot" style="--c:var(--green)"></span><span class="t">Working</span><span class="n">1</span></div>' +
+        '<div class="col-head"><span class="dot" style="--c:var(--orange)"></span><span class="t">Needs me</span><span class="n">1</span></div>' +
+        '<div class="col-head"><span class="dot" style="--c:var(--purple)"></span><span class="t">Waiting on others</span><span class="n">1</span></div>' +
+        '<div class="col-head"><span class="dot" style="--c:var(--blue)"></span><span class="t">Done</span><span class="n">1</span></div>' +
+        '<div class="col-head"><span class="dot" style="--c:var(--gray)"></span><span class="t">Idle</span><span class="n">1</span></div>',
     )
+    setAttr(byClass(old, 'titles'), 'title', '5 sessions · 1 working · 1 needs you · 1 waits on others · 1 asleep')
     const limits = byId(old, 'limits')
     removeAttr(limits, 'hidden')
     setAttr(limits, 'aria-label', 'Claude usage')
@@ -183,14 +191,16 @@ describe('toolbar markup parity', () => {
       byId(page, 'lanes'),
       '<span class="thumb"></span><button role="tab" data-id="all" aria-selected="false">Все<span class="n">4</span></button><button role="tab" data-id="proj" aria-selected="false">Project<span class="n">3</span></button><button role="tab" data-id="other" aria-selected="true">Other<span class="n">1</span></button>',
     )
+    // Only Done has a card on show: the other columns narrow to their heads.
     setHtml(
       byId(page, 'columns-head'),
-      '<div class="col-head"><span class="dot" style="--c:var(--green)"></span>Работает<span class="n">0</span></div>' +
-        '<div class="col-head"><span class="dot" style="--c:var(--orange)"></span>Ждёт меня<span class="n">0</span></div>' +
-        '<div class="col-head"><span class="dot" style="--c:var(--purple)"></span>Ждёт внешнего<span class="n">0</span></div>' +
-        '<div class="col-head"><span class="dot" style="--c:var(--blue)"></span>Готово<span class="n">1</span></div>' +
-        '<div class="col-head"><span class="dot" style="--c:var(--gray)"></span>Простой<span class="n">0</span></div>',
+      '<div class="col-head vacant"><span class="dot" style="--c:var(--green)"></span><span class="t">Работает</span><span class="n">0</span></div>' +
+        '<div class="col-head vacant"><span class="dot" style="--c:var(--orange)"></span><span class="t">Ждёт меня</span><span class="n">0</span></div>' +
+        '<div class="col-head vacant"><span class="dot" style="--c:var(--purple)"></span><span class="t">Ждёт внешнего</span><span class="n">0</span></div>' +
+        '<div class="col-head"><span class="dot" style="--c:var(--blue)"></span><span class="t">Готово</span><span class="n">1</span></div>' +
+        '<div class="col-head vacant"><span class="dot" style="--c:var(--gray)"></span><span class="t">Простой</span><span class="n">0</span></div>',
     )
+    setAttr(byClass(page, 'titles'), 'title', '5 сессий · 1 работает · 1 ждёт тебя · 1 ждёт ответа извне · 1 спит')
     const limits = byId(page, 'limits')
     removeAttr(limits, 'hidden')
     setAttr(limits, 'aria-label', 'Расход Claude')
@@ -201,7 +211,6 @@ describe('toolbar markup parity', () => {
     toggleClass(live, 'stale', true)
     setAttr(live, 'title', t('live.stale', { time: new Date(NOW - 120_000).toLocaleTimeString('ru') }))
     syncAvailability(page, t, false, true)
-    setAttr(byId(page, 'sleepers'), 'aria-pressed', 'false')
 
     expect(canonical(actual)).toBe(asReactRendersIt(page))
   })

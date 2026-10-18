@@ -7,7 +7,10 @@ import { STRINGS } from '../../src/core/i18n/strings.ts'
 import { oldSource } from '../web/support/old-app.ts'
 
 /** The merges ported since #41, oldest first. */
-const MERGES = [{ merge: '72151c3', pr: '#42 zoom' }]
+const MERGES = [
+  { merge: '72151c3', pr: '#42 zoom' },
+  { merge: '8c4b987', pr: '#43 compact toolbar and settings' },
+]
 
 type Dictionaries = Record<string, Record<string, unknown>>
 const isDictionaries = (v: unknown): v is Dictionaries => typeof v === 'object' && v !== null
