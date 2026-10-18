@@ -128,9 +128,13 @@ async function post(path: string, body: unknown = {}, accept: Guard<unknown> = i
   return value
 }
 
-/** The latest board, uncached (a page coming back must not see an old one). */
-function board(signal?: AbortSignal): Promise<BoardPayload> {
-  return get('/api/board', isBoardPayload, { cache: 'no-store', ...(signal && { signal }) })
+/**
+ * The latest board, uncached (a page coming back must not see an old one), as it came: the live
+ * connection checks it (models/lifecycle.ts), so one this page cannot read still says by its
+ * version that the plugin was updated.
+ */
+function board(signal?: AbortSignal): Promise<Reply> {
+  return get('/api/board', isReply, { cache: 'no-store', ...(signal && { signal }) })
 }
 
 /** One session's detail, uncached; a 404 says the session is gone. */

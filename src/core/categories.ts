@@ -62,16 +62,17 @@ export function builtinTitle(id: string): string {
 }
 
 /**
- * A category entry a lane can be made of: an object with an id (a hand-edited file may hold
- * others). Its other fields go on as they are, as upstream's do.
+ * A category entry a lane is made of: an object (a hand-edited file may hold others: null, a
+ * string, a number, a list, which upstream crashed on or spread into a lane of garbage).
  */
-const isCategory = (c: unknown): c is Category =>
-  typeof c === 'object' && c !== null && !Array.isArray(c) && 'id' in c && typeof c.id === 'string'
+const isEntry = (c: unknown): c is object => typeof c === 'object' && c !== null && !Array.isArray(c)
 
 /** Raw settings (as read from config.json, or nothing) merged over the defaults. */
 export function normalizeConfig(raw: unknown): Config {
   const file = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
-  const listed = Array.isArray(file.categories) ? file.categories.filter(isCategory) : []
+  // Every object is a lane with its fields as they are, as upstream's are: a hand-edited one
+  // without a string id too (a number still routes its folders; one with no id is a lane at the end).
+  const listed = (Array.isArray(file.categories) ? file.categories.filter(isEntry) : []) as Category[]
   const cats = listed.length ? listed : structuredClone(DEFAULT_CONFIG.categories)
   return {
     ...DEFAULT_CONFIG,

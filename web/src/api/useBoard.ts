@@ -33,7 +33,6 @@ export function useBoard(): LiveBoard {
   const resumeRef = useRef<() => void>(() => {})
 
   useEffect(() => {
-    let version: string | null = null
     let started = false
     // The board as it came last, before React draws it: a `reveal` right after it goes by it.
     let latest: BoardPayload | null = null
@@ -46,11 +45,10 @@ export function useBoard(): LiveBoard {
       },
       snapshot: signal => api.board(signal),
       readable: isBoardPayload,
+      // The page's own files changed (the plugin was updated): load the new page.
+      reload: () => location.reload(),
       data(value) {
         if (!isBoardPayload(value)) return
-        // The page's own files changed (the plugin was updated): load the new page.
-        if (version && value.version && value.version !== version) return location.reload()
-        version = value.version
         latest = value
         setData(value)
       },

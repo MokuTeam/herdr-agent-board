@@ -50,14 +50,35 @@ test('normalizeConfig fills defaults, titles built-in lanes, keeps unknown field
   )
 })
 
-test('normalizeConfig takes only the lanes of a hand-edited list, the defaults when none is left', () => {
-  const c = normalizeConfig({ categories: [null, 'x', 7, ['y'], { title: 'No id' }, { id: 'acme', title: 'Acme' }] })
+test('normalizeConfig keeps every object of a hand-edited list as upstream, skips the rest, the defaults when none is left', () => {
+  const c = normalizeConfig({
+    categories: [
+      null,
+      'x',
+      7,
+      ['y'],
+      { title: 'No id' },
+      { id: 7, paths: ['C:\\Seven'] },
+      { id: 'acme', title: 'Acme' },
+    ],
+  })
+  // Upstream's lanes: a numeric id is titled by itself, an id-less one keeps its title.
   assert.deepEqual(
-    c.categories.map(x => x.id),
-    ['acme'],
+    c.categories.map(x => [x.id, x.title]),
+    [
+      [undefined, 'No id'],
+      [7, 7],
+      ['acme', 'Acme'],
+    ],
   )
+  // A numeric id still routes the sessions in its folders, as upstream's does.
+  assert.equal(categoryFor(c, 'C:\\Seven\\app'), 7)
   assert.deepEqual(
     normalizeConfig({ categories: [null, { id: 3 }] }).categories.map(x => x.id),
+    [3],
+  )
+  assert.deepEqual(
+    normalizeConfig({ categories: [null, 'x', 7, []] }).categories.map(x => x.id),
     ['work', 'personal', 'other'],
   )
 })

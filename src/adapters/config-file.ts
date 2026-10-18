@@ -104,21 +104,27 @@ const cleanTitle = (title: unknown): string =>
     .slice(0, 40)
 
 /**
- * The categories in a raw config file, as the editor works on them: every entry as it is, a
- * hand-edited one the board cannot read too (it stays in its place, untouched).
+ * An entry the editor can change: an object, the lane the board makes of it (core/categories.ts
+ * normalizeConfig), its id as it is, as upstream's editor took them.
+ */
+const editable = isRecord
+
+/**
+ * The categories in a raw config file, as the editor works on them: every entry as it is; one
+ * that is not an object stays in its place, untouched. With no object among them the board shows
+ * the default lanes: the editor works on those then, the other entries kept after them, as
+ * upstream's did on a file without lanes.
  */
 function categoriesOf(raw: Raw): unknown[] {
-  if (!Array.isArray(raw.categories) || !raw.categories.length) return structuredClone(DEFAULT_CONFIG.categories)
-  return [...raw.categories]
+  const listed = Array.isArray(raw.categories) ? raw.categories : []
+  if (listed.some(editable)) return [...listed]
+  return [...structuredClone(DEFAULT_CONFIG.categories), ...listed]
 }
-
-/** An entry the editor can change: an object with an id. */
-const editable = (c: unknown): c is Raw & { id: string } => isRecord(c) && typeof c.id === 'string'
 
 /** `cats` with its editable entries in the order `ids` gives (the others after, as they were); the rest stay put. */
 function ordered(cats: unknown[], ids: unknown[]): unknown[] {
   const listed = cats.filter(editable)
-  const rank = (id: string) => (ids.includes(id) ? ids.indexOf(id) : ids.length + listed.findIndex(c => c.id === id))
+  const rank = (id: unknown) => (ids.includes(id) ? ids.indexOf(id) : ids.length + listed.findIndex(c => c.id === id))
   const sorted = [...listed].sort((a, c) => rank(a.id) - rank(c.id))
   let next = 0
   return cats.map(c => (editable(c) ? (sorted[next++] ?? c) : c))

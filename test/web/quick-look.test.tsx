@@ -382,6 +382,41 @@ describe('around what it shows', () => {
     same(b)
   })
 
+  test('the folders scroll to the end each time the head is drawn, as the old page’s did: the same file opened again too', async () => {
+    const b = new BothLooks(en, server())
+    // The old page's head() scrolls its folders each time it draws them; the React head's draws
+    // are when its folders scroll (components/files/QuickLook.tsx Crumbs).
+    let scrolls = 0
+    const crumbs = b.old.root.querySelector('.ql-path')
+    if (!crumbs) throw new Error('no folders')
+    Object.defineProperty(crumbs, 'scrollLeft', { get: () => 0, set: () => void scrolls++ })
+    const drawn = () => b.react.nav.view().drawn
+    const step = async (what: () => Promise<void> | void): Promise<number> => {
+      const [old, react] = [scrolls, drawn()]
+      await what()
+      expect(drawn() - react).toBe(scrolls - old)
+      return scrolls - old
+    }
+    // A file of no kind it knows: its head reads the same before and after it loads.
+    expect(await step(() => b.open(at('/bin/blob')))).toBe(2)
+    expect(await step(() => b.close())).toBe(0)
+    expect(await step(() => b.open(at('/bin/blob')))).toBe(2)
+    same(b)
+    const history = { kind: 'history', key: 'k1', cwd: '/work/app' } as const
+    expect(await step(() => b.push(history))).toBe(1)
+    expect(await step(() => b.back())).toBe(2)
+    b.close()
+    expect(await step(() => b.open(history))).toBe(1)
+    b.close()
+    expect(await step(() => b.open(history))).toBe(1)
+    expect(await step(() => b.push({ kind: 'changes', key: 'k1' }))).toBe(2)
+    expect(await step(() => b.refresh())).toBe(2)
+    expect(await step(() => b.push(at('C:\\work\\app\\src\\app.ts')))).toBe(2)
+    expect(await step(() => b.back())).toBe(1)
+    expect(await step(() => b.mode('source'))).toBe(0)
+    same(b)
+  })
+
   test('the icons are the old page’s', () => {
     const old = oldCode('web/files.js', ['svg', 'DOC', 'ICONS'], {}).get('ICONS')
     const icons = typeof old === 'object' && old !== null ? Object.entries(old) : []

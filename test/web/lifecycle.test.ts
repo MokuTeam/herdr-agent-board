@@ -210,6 +210,61 @@ test('a board the page cannot read is not taken, and the page is not connected u
   assert.equal(states.at(-1), true)
 })
 
+test('a board of another version reloads the page, one the page cannot read too (the plugin was updated)', async () => {
+  let current: FakeStream | undefined
+  const snapshots: ((value: unknown) => void)[] = []
+  const received: unknown[] = []
+  const states: boolean[] = []
+  let reloads = 0
+  const connection = boardConnection({
+    source() {
+      current = stream()
+      return current
+    },
+    snapshot: () => new Promise(resolve => snapshots.push(resolve)),
+    readable: value => value.ok === true,
+    reload: () => reloads++,
+    data: d => received.push(d.tag),
+    connected: value => states.push(value),
+  })
+  connection.resume()
+  current?.onopen?.(event('open'))
+  // The first board sets the version; the same one again, even unreadable, is no update.
+  current?.onmessage?.(message({ items: [], ok: true, version: 'a', tag: 'first' }))
+  current?.onmessage?.(message({ items: [], version: 'a', tag: 'unreadable, same version' }))
+  assert.equal(reloads, 0)
+  assert.equal(states.at(-1), false)
+  current?.onmessage?.(message({ items: [], version: 'b', tag: 'unreadable, new version' }))
+  assert.equal(reloads, 1)
+  assert.deepEqual(received, ['first'])
+
+  // The version is kept through a resume; the snapshot's board is checked as the stream's is.
+  let second = 0
+  const taken: unknown[] = []
+  const again = boardConnection({
+    source: stream,
+    snapshot: () => new Promise(resolve => snapshots.push(resolve)),
+    readable: value => value.ok === true,
+    reload: () => second++,
+    data: d => taken.push(d.tag),
+    connected() {},
+  })
+  again.resume()
+  snapshots.at(-1)?.({ items: [], ok: true, version: 'a', tag: 'snapshot' })
+  await Promise.resolve()
+  again.suspend()
+  again.resume()
+  snapshots.at(-1)?.({ items: [], version: 'b', tag: 'unreadable snapshot, new version' })
+  await Promise.resolve()
+  assert.equal(second, 1)
+  // A board the page reads, of a new version, reloads it too and is not taken.
+  again.resume()
+  snapshots.at(-1)?.({ items: [], ok: true, version: 'c', tag: 'readable, new version' })
+  await Promise.resolve()
+  assert.equal(second, 2)
+  assert.deepEqual(taken, ['snapshot'])
+})
+
 test('reload consumes an abandoned dialog sentinel without closing a newly opened panel', () => {
   let backs = 0
   let pushes = 0

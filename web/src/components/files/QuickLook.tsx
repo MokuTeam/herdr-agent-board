@@ -143,7 +143,7 @@ export function QuickLookView({
           </span>
           <div className="ql-titles">
             <h3 id="ql-name">{head.name ?? ''}</h3>
-            <Crumbs head={head} onGo={on.go} />
+            <Crumbs head={head} drawn={view.drawn} onGo={on.go} />
           </div>
           <div className="ql-tools">
             <div className="ql-mode" hidden={!showsMarkdown(view)}>
@@ -237,16 +237,24 @@ function LookFoot({ text, zoom, onZoom }: { text: string; zoom: Store<ZoomFoot>;
   )
 }
 
+interface CrumbsProps {
+  head: LookHead
+  /** The head's draws so far (LookView.drawn). */
+  drawn: number
+  onGo?: ((path: string) => void) | undefined
+}
+
 /**
- * The folders above, each a step to walk to; scrolled to the end, where the name is, when they are
- * drawn anew (upstream's head()), not on every render: a scroll would close a menu opened over it.
+ * The folders above, each a step to walk to; scrolled to the end, where the name is, each time the
+ * head is drawn (upstream's head(): every step shown, the same file opened again too), not on every
+ * render: a scroll would close a menu opened over it.
  */
-function Crumbs({ head, onGo }: { head: LookHead; onGo?: ((path: string) => void) | undefined }) {
+function Crumbs({ head, drawn, onGo }: CrumbsProps) {
   const nav = useRef<HTMLElement>(null)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the folders drawn anew are when to scroll
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new draw of the head is when to scroll
   useLayoutEffect(() => {
     if (nav.current) nav.current.scrollLeft = nav.current.scrollWidth
-  }, [head.path, head.kind])
+  }, [drawn])
   return (
     <nav className="ql-path" ref={nav}>
       {crumbs(head.path, head.kind).map((c, i) => (

@@ -118,7 +118,7 @@ test('editCategories creates, updates, orders and deletes; unknown fields surviv
   assert.equal(editCategories({ op: 'nope' }).ok, false)
 })
 
-test('editCategories keeps hand-edited entries it cannot read in their place, and adds no fields to the others', () => {
+test('editCategories keeps hand-edited entries that are not objects in their place, and adds no fields to the others', () => {
   isolatedHome()
   seed({
     language: 'en',
@@ -133,14 +133,15 @@ test('editCategories keeps hand-edited entries it cannot read in their place, an
     { title: 'No id' },
     { id: 'other' },
   ])
+  // Every object is a lane and sorts as upstream's do (one without an id after those named).
   assert.deepEqual(editCategories({ op: 'order', ids: ['other', 'home'] }), { ok: true })
   assert.deepEqual(saved().categories, [
     { id: 'other' },
     null,
     { id: 'home', title: 'Home', color: 'red' },
     'lane',
-    { title: 'No id' },
     { id: 'work' },
+    { title: 'No id' },
   ])
   assert.deepEqual(editCategories({ op: 'create', id: 'acme', title: 'Acme' }), { ok: true })
   assert.deepEqual(editCategories({ op: 'delete', id: 'work' }), { ok: true })
@@ -152,10 +153,63 @@ test('editCategories keeps hand-edited entries it cannot read in their place, an
     'lane',
     { title: 'No id' },
   ])
-  // The board reads only the lanes among them.
+  // The board's lanes are the objects among them.
+  assert.deepEqual(
+    loadConfig().categories.map(c => c.title),
+    ['Acme', 'Other', 'Home', 'No id'],
+  )
+})
+
+test('editCategories edits a hand-edited lane whose id is no string as upstream does', () => {
+  isolatedHome()
+  seed({ language: 'en', categories: [{ id: 7, title: 'Seven', paths: ['C:\\seven'] }, { id: 'other' }] })
+  // The page sends the lane's id as the board gave it.
+  assert.deepEqual(editCategories({ op: 'update', id: 7, title: 'Sieben' }), { ok: true })
+  assert.deepEqual(editCategories({ op: 'order', ids: ['other', 7] }), { ok: true })
+  assert.deepEqual(saved().categories, [{ id: 'other' }, { id: 7, title: 'Sieben', paths: ['C:\\seven'] }])
+  assert.equal(editCategories({ op: 'update', id: '7', title: 'x' }).ok, false)
+  assert.deepEqual(editCategories({ op: 'delete', id: 7 }), { ok: true })
+  assert.deepEqual(saved().categories, [{ id: 'other' }])
+})
+
+test('with no lane in the file the editor works on the default lanes the board shows, as upstream', () => {
+  // Upstream: a file without lanes shows the defaults, and an edit writes them with the change.
+  isolatedHome()
+  seed({ language: 'en' })
+  assert.deepEqual(editCategories({ op: 'update', id: 'work', title: 'Job' }), { ok: true })
+  assert.deepEqual(saved().categories, [
+    { id: 'work', color: 'cyan', paths: [], title: 'Job' },
+    { id: 'personal', color: 'green', paths: [] },
+    { id: 'other', color: 'gray', paths: [] },
+  ])
+})
+
+test('with only entries the board cannot make a lane of, the editor works on the defaults it shows, those kept after', () => {
+  isolatedHome()
+  seed({ language: 'en', categories: [null, 'lane'] })
   assert.deepEqual(
     loadConfig().categories.map(c => c.id),
-    ['acme', 'other', 'home'],
+    ['work', 'personal', 'other'],
+  )
+  assert.deepEqual(editCategories({ op: 'update', id: 'work', title: 'Job' }), { ok: true })
+  assert.deepEqual(editCategories({ op: 'create', id: 'acme', title: 'Acme' }), { ok: true })
+  assert.deepEqual(saved().categories, [
+    { id: 'work', color: 'cyan', paths: [], title: 'Job' },
+    { id: 'personal', color: 'green', paths: [] },
+    { id: 'acme', title: 'Acme', color: 'blue', paths: [] },
+    { id: 'other', color: 'gray', paths: [] },
+    null,
+    'lane',
+  ])
+  // The lanes on screen stay; the new one is among them.
+  assert.deepEqual(
+    loadConfig().categories.map(c => [c.id, c.title]),
+    [
+      ['work', 'Job'],
+      ['personal', 'Personal'],
+      ['acme', 'Acme'],
+      ['other', 'Other'],
+    ],
   )
 })
 

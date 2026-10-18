@@ -9,7 +9,7 @@ export interface BoardStream {
   close(): void
 }
 
-/** A board as it came over the wire: only `items` is checked here. */
+/** A board as it came over the wire: only `items` is checked here (and `version` read, for `reload`). */
 export type BoardMessage = { items: unknown[]; [key: string]: unknown }
 
 export interface ConnectionOptions {
@@ -20,6 +20,12 @@ export interface ConnectionOptions {
    * One it cannot read is not taken, and the page is not connected until a board it can read comes.
    */
   readable?: (value: BoardMessage) => boolean
+  /**
+   * The page's own files changed (the plugin was updated): a board of another `version` than the
+   * one before came. Loads the new page; that board is not taken. One the page cannot read counts
+   * too: right after an update, that is how a new board most likely looks to the old page.
+   */
+  reload?: () => void
   data: (value: BoardMessage) => void
   connected: (value: boolean) => void
 }
@@ -29,10 +35,27 @@ const isBoard = (value: unknown): value is BoardMessage =>
 
 // Resume always opens a new transport and fetches an uncached snapshot. Epochs
 // and the first SSE event keep delayed replies from restoring an older board.
-export function boardConnection({ source, snapshot, readable = () => true, data, connected }: ConnectionOptions) {
+export function boardConnection({
+  source,
+  snapshot,
+  readable = () => true,
+  reload,
+  data,
+  connected,
+}: ConnectionOptions) {
   let epoch = 0
   let stream: BoardStream | null = null
   let controller: AbortController | null = null
+  // The version of the board before, through every resume (the old page's state.version).
+  let version: string | null = null
+  /** Whether `value` is of another version than the board before it: then the page reloads. */
+  function updated(value: BoardMessage): boolean {
+    if (!reload) return false
+    const next = typeof value.version === 'string' ? value.version : null
+    if (version && next && next !== version) return true
+    version = next
+    return false
+  }
   function suspend(): void {
     ++epoch
     stream?.close()
@@ -64,6 +87,7 @@ export function boardConnection({ source, snapshot, readable = () => true, data,
       try {
         const value: unknown = JSON.parse(event.data)
         if (!isBoard(value)) return
+        if (updated(value)) return reload?.()
         if (!readable(value)) return connected(false)
         eventReceived = true
         hasSnapshot = true
@@ -75,6 +99,7 @@ export function boardConnection({ source, snapshot, readable = () => true, data,
     snapshot(controller.signal)
       .then(value => {
         if (current !== epoch || eventReceived || !isBoard(value)) return
+        if (updated(value)) return reload?.()
         if (!readable(value)) return connected(false)
         hasSnapshot = true
         data(value)

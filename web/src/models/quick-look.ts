@@ -87,6 +87,8 @@ export interface LookView {
   depth: number
   top: LookTarget | null
   head: LookHead
+  /** How many times the head was drawn (the old page's head()): its folders scroll to the end each time. */
+  drawn: number
   /** What was loaded last (it stays while the next step loads, as the old page's did). */
   data: LookData | null
   /** The step on show is being loaded. */
@@ -127,6 +129,7 @@ export function quickLookNav(deps: QuickLookDeps): QuickLookNav {
   let closing = false
   let stack: LookTarget[] = []
   let head: LookHead = {}
+  let drawn = 0
   let data: LookData | null = null
   let loading = false
   let mode: LookMode = 'view'
@@ -138,15 +141,20 @@ export function quickLookNav(deps: QuickLookDeps): QuickLookNav {
     depth: stack.length,
     top: stack.at(-1) ?? null,
     head,
+    drawn,
     data,
     loading,
     mode,
   })
   const changed = () => deps.changed(view())
+  function drawHead(next: LookHead): void {
+    head = next
+    drawn++
+  }
 
   function shown(next: LookData): void {
     data = next
-    head = next
+    drawHead(next)
     loading = false
     changed()
   }
@@ -157,7 +165,7 @@ export function quickLookNav(deps: QuickLookDeps): QuickLookNav {
     const at = ++seq
     if (target.kind === 'changes') return showChanges(target, at, fresh)
     if (target.kind === 'history') return shown({ kind: 'history', name: deps.t()('history.title'), path: target.cwd })
-    head = { path: target.path, name: fileName(target.path), kind: 'file' }
+    drawHead({ path: target.path, name: fileName(target.path), kind: 'file' })
     loading = true
     changed()
     const d = await deps.preview(target.path)
@@ -169,7 +177,7 @@ export function quickLookNav(deps: QuickLookDeps): QuickLookNav {
   async function showChanges(target: Extract<LookTarget, { kind: 'changes' }>, at: number, fresh: boolean) {
     if (target.cache && !fresh) return shown(target.cache)
     const t = deps.t()
-    head = { kind: 'changes', name: t('changes.title'), path: target.cache?.path ?? '' }
+    drawHead({ kind: 'changes', name: t('changes.title'), path: target.cache?.path ?? '' })
     loading = true
     changed()
     let d: Changes = { available: false }

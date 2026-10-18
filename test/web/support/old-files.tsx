@@ -173,6 +173,14 @@ export class OldLook {
     await flush()
   }
 
+  /** close() run to its end (finishClose): hidden, what it showed dropped; the head stays as drawn. */
+  close(): void {
+    this.root.hidden = true
+    const body = this.root.querySelector('.ql-body')
+    if (body) body.innerHTML = ''
+    this.ql.data = null
+  }
+
   mode(mode: 'view' | 'source'): void {
     this.ql.mode = mode
     this.call('render')
@@ -251,6 +259,11 @@ export class NewLook {
     this.nav.refresh()
     await flush()
   }
+  /** It shrank away and is gone (the engine's close, its spring at rest). */
+  close(): void {
+    this.nav.closing()
+    this.nav.closed()
+  }
   mode(mode: 'view' | 'source'): void {
     this.nav.setMode(mode)
   }
@@ -312,6 +325,9 @@ export class BothLooks {
   }
   async refresh(): Promise<void> {
     for (const side of this.sides()) await side.refresh()
+  }
+  close(): void {
+    for (const side of this.sides()) side.close()
   }
   mode(mode: 'view' | 'source'): void {
     for (const side of this.sides()) side.mode(mode)

@@ -73,13 +73,14 @@ test('a refusal or ok:false is an ApiError worded as the board words it; so is a
   expect(errorText(new TypeError('Failed to fetch'), t)).toBe('No connection to the board: Failed to fetch')
 })
 
-test('GET checks the answer with the guard; the board snapshot is uncached', async () => {
+test('GET checks the answer with the guard; the board snapshot is uncached and comes as it is, for the connection to check', async () => {
   const calls = answer(200, JSON.stringify(payload()))
   expect((await api.board()).version).toBe('v1')
   expect(calls[0]?.init?.cache).toBe('no-store')
-  answer(200, '{"items":[]}')
-  expect(await api.board().catch((err: unknown) => err)).toBeInstanceOf(ApiError)
+  answer(200, '{"items":[],"version":"v2"}')
+  expect(await api.board()).toEqual({ items: [], version: 'v2' })
   answer(200, '[1,2]')
+  expect(await api.board().catch((err: unknown) => err)).toBeInstanceOf(ApiError)
   const isList = (v: unknown): v is number[] => Array.isArray(v)
   expect(await api.get('/api/list', isList)).toEqual([1, 2])
 })
