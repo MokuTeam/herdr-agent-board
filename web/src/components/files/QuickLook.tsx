@@ -15,8 +15,10 @@ import {
   crumbs,
   type LookHead,
   lookIcon,
+  NO_ZOOM,
   parentOf,
   previewFoot,
+  type ZoomFoot,
   zoomBar,
 } from '../../models/files.ts'
 import {
@@ -29,9 +31,8 @@ import {
   type LookTarget,
   type LookView,
 } from '../../models/quick-look.ts'
-import type { ZoomState } from '../../models/zoom.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
-import { useStore } from '../../state/store.ts'
+import { Store, useStore } from '../../state/store.ts'
 import { Changes, changesFoot } from '../sheet/Changes.tsx'
 import { FileIcon } from './FileChip.tsx'
 import { History, historyFoot } from './History.tsx'
@@ -67,11 +68,13 @@ export interface QuickLookViewProps {
   /** An image loaded (it zooms), and gone. */
   onImage?: (img: HTMLImageElement, data: FileLook) => void
   onImageGone?: (img: HTMLImageElement) => void
-  /** The zoom of the image on show, for the footer. */
-  zoom?: ZoomState | null
+  /** The zoom of the image on show, for the footer: only the footer draws again as it changes. */
+  zoom?: Store<ZoomFoot>
   refs?: Partial<LookRefs>
   on?: Partial<LookHandlers>
 }
+
+const NOTHING_ZOOMED = new Store(NO_ZOOM)
 
 const showsMarkdown = (view: LookView): boolean =>
   !view.hidden && !view.loading && view.top?.kind !== 'history' && view.data?.kind === 'markdown'
@@ -103,7 +106,7 @@ export function QuickLookView({
   image = null,
   onImage,
   onImageGone,
-  zoom = null,
+  zoom = NOTHING_ZOOMED,
   refs = {},
   on = {},
 }: QuickLookViewProps) {
@@ -205,16 +208,20 @@ export function QuickLookView({
   )
 }
 
-/** What it is, and for a zoomable image its scale and the button in to 100% or back to fit. */
-function LookFoot({ text, zoom, onZoom }: { text: string; zoom: ZoomState | null; onZoom?: (() => void) | undefined }) {
+/**
+ * What it is, and for a zoomable image its scale and the button in to 100% or back to fit; with no
+ * zoom any more the bar hides, keeping what it showed last.
+ */
+function LookFoot({ text, zoom, onZoom }: { text: string; zoom: Store<ZoomFoot>; onZoom?: (() => void) | undefined }) {
   const t = useT()
-  const bar = zoom ? zoomBar(zoom, t) : null
+  const { now, last } = useStore(zoom)
+  const bar = last ? zoomBar(last, t) : null
   return (
     <footer className="ql-foot look-foot">
       <span className="look-foot-text" title={text}>
         {text}
       </span>
-      <span className="ql-zoom" hidden={!bar}>
+      <span className="ql-zoom" hidden={!now}>
         <span className="ql-zoom-level">{bar?.level}</span>
         <button
           type="button"
@@ -285,7 +292,6 @@ function LookBody({ view, token, onImage, onImageGone, on }: LookBodyProps) {
 /** The page's quick look, in <body> beside the page. */
 export function QuickLook({ engine }: { engine: QuickLookEngine }) {
   const view = useStore(engine.view)
-  const zoom = useStore(engine.zoom)
   const { canEdit, data } = useBoardContext()
   const [image, setImage] = useState<ImageSize | null>(null)
   const { refs } = engine
@@ -317,7 +323,7 @@ export function QuickLook({ engine }: { engine: QuickLookEngine }) {
         if (own) setImage({ data: d, ...own })
       }}
       onImageGone={engine.imageGone}
-      zoom={zoom}
+      zoom={engine.zoom}
       refs={refs}
       on={{
         back: engine.back,

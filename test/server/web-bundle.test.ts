@@ -2,6 +2,7 @@ import { expect, spyOn, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createContext, runInContext } from 'node:vm'
 import { createWebBundle } from '../../src/server/web-bundle.ts'
 
 function site(files: Record<string, string>) {
@@ -129,6 +130,12 @@ test('the board’s own: theme.js puts only a kept light or dark on <html>, and 
     undefined,
     undefined,
   ])
+  // A classic script on the page: its names stay its own, as upstream's theme.js declared none.
+  const dataset: Record<string, string> = {}
+  const page = createContext({ localStorage: { getItem: () => 'dark' }, document: { documentElement: { dataset } } })
+  runInContext(bundle.early(), page)
+  expect(dataset.theme).toBe('dark')
+  expect(Object.keys(page).sort()).toEqual(['document', 'localStorage'])
 })
 
 test('rebuilds run one at a time, so the newest bundle is the one kept', async () => {

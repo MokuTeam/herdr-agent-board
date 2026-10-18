@@ -4,7 +4,7 @@
 // panel's place is this browser's too (components/panel/place.ts).
 import type { Translator } from '../../../src/core/types.ts'
 import type { MenuEntry } from './menu-model.ts'
-import type { Dock } from './panel-layout.ts'
+import { DOCKS, type Dock } from './panel-layout.ts'
 import { THEMES } from './theme.ts'
 
 /** What the menu shows checked and what it can do now. */
@@ -19,8 +19,6 @@ export interface SettingsNow {
   dock: Dock
   sleepers: boolean
 }
-
-const PLACES: readonly Dock[] = ['right', 'left', 'bottom', 'float']
 
 export function settingsMenu(now: SettingsNow): MenuEntry[] {
   const { t } = now
@@ -45,7 +43,7 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
       id: 'panel',
       label: t('set.panel'),
       submenu: [
-        ...PLACES.map(id => ({ id: `dock:${id}`, label: t(`panel.${id}`), checked: now.dock === id })),
+        ...DOCKS.map(id => ({ id: `dock:${id}`, label: t(`panel.${id}`), checked: now.dock === id })),
         { separator: true },
         { id: 'dock:reset', label: t('panel.reset') },
       ],

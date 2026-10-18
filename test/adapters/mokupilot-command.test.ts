@@ -147,3 +147,30 @@ test('MokuPilot on macOS and Linux: `meet` on PATH or in the configured checkout
   )
   assert.match(notList.state === 'missing' ? (notList.error ?? '') : '', /a list/)
 })
+
+test('a .cmd or .bat found on PATH is not started either: a command by its name is refused plainly, a Python shim passed over', () => {
+  const win = (cfg: Parameters<typeof mokupilotCommand>[0], exists: (f: string) => boolean, PATH: string) =>
+    mokupilotCommand(cfg, { platform: 'win32', env: { PATH, PATHEXT: '.EXE;.BAT;.CMD' }, exists })
+  // ["meet"] is meet.cmd on PATH: the same words as for one written so, not Windows' EINVAL at the start.
+  const meet = 'C:\\src\\MokuPilot\\meet.cmd'
+  assert.deepEqual(win({ mokupilot: { command: ['meet'] } }, has(meet), 'C:\\src\\MokuPilot'), {
+    state: 'missing',
+    configured: true,
+    file: meet,
+    error: 'mokupilot.command in config.json: a program, not cmd or a .cmd or .bat file',
+  })
+  // A program by its name on PATH still is one.
+  const exe = 'D:\\mp\\MokuPilot.exe'
+  assert.equal(found(win({ mokupilot: { command: ['MokuPilot'] } }, has(exe), 'D:\\mp')).file, exe)
+  // A checkout without its .venv runs the Python on PATH, but not pyenv's python.bat shim.
+  const repo = { mokupilot: { dir: 'D:\\MokuPilot' } }
+  const run = 'D:\\MokuPilot\\run.py'
+  const shims = 'C:\\pyenv\\shims'
+  assert.deepEqual(win(repo, has(run, `${shims}\\pythonw.bat`, `${shims}\\python.bat`), shims), {
+    state: 'missing',
+    configured: true,
+    file: 'D:\\MokuPilot\\.venv\\Scripts\\pythonw.exe',
+  })
+  const python = 'C:\\Python\\python.exe'
+  assert.equal(found(win(repo, has(run, `${shims}\\pythonw.bat`, python), `${shims};C:\\Python`)).file, python)
+})

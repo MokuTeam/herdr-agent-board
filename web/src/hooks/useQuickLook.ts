@@ -9,7 +9,7 @@ import type { Translator } from '../../../src/core/types.ts'
 import { type FilesApi, filesApi } from '../api/files.ts'
 import { type ImageZoom, zoomImage } from '../components/files/zoom.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
-import { zoomShown } from '../models/files.ts'
+import { NO_ZOOM, type ZoomFoot, zoomFootAfter, zoomShown } from '../models/files.ts'
 import type { FocusScope } from '../models/modal-focus.ts'
 import {
   type FileLook,
@@ -52,8 +52,11 @@ export interface QuickLookEngine {
   act(how: 'open' | 'reveal' | 'copy'): void
   /** Paths in what it shows become chips (hooks/useFileChips.ts). */
   upgrade(root: HTMLElement, cwd: string): void
-  /** The zoom of the image on show, for the footer: drawn again only when what it shows changes. */
-  zoom: Store<ZoomState | null>
+  /**
+   * The zoom of the image on show, for the footer, and the one it showed last: drawn again only
+   * when what the bar shows changes.
+   */
+  zoom: Store<ZoomFoot>
   /**
    * The image of `data` loaded: it zooms (when it has a size); its own size, for the footer, when
    * it has one.
@@ -150,14 +153,14 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
   // An image zooms (components/files/zoom.ts); the footer shows the scale and a button in to 100%
   // or back to fit. A step, another look and the close drop it, as each opening starts fitted.
   let zoom: { img: HTMLImageElement; control: ImageZoom } | null = null
-  const zoomNow = new Store<ZoomState | null>(null)
+  const zoomNow = new Store<ZoomFoot>(NO_ZOOM)
   let shownZoom = ''
   function zoomBar(z: ZoomState | null): void {
     // Called on every frame of a zoom: the bar is only drawn again when a whole percent changes.
     const shown = zoomShown(z)
     if (shown === shownZoom) return
     shownZoom = shown
-    zoomNow.set(z)
+    zoomNow.set(zoomFootAfter(zoomNow.get(), z))
   }
   function dropZoom(): void {
     zoom?.control.destroy()

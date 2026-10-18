@@ -2,7 +2,8 @@
 // room (else in the title's tooltip), the lanes control, search, categories and the schedule as
 // small buttons named by their tooltips, Settings (the gear), the usage pill and the live dot; the
 // read-only banner and the column heads under it. A narrower window takes two rows, a phone three
-// (the stylesheet).
+// (the stylesheet). The icon-only buttons' labels carry their text keys (`data-i18n`, as upstream's
+// page wrote them): the stylesheet hides a label beside its icon by that, leaving it the button's name.
 import { type RefObject, useEffect } from 'react'
 import { useBoardView } from '../hooks/useBoardView.ts'
 import { useColumnWidths } from '../hooks/useColumnWidths.ts'
@@ -68,7 +69,7 @@ export function Toolbar({ limitsAnchor, onNewSession, onCategories, onSchedule, 
               onClick={e => onNewSession?.(e.currentTarget)}
             >
               <PlusIcon />
-              <span>{t('launch.toolbar')}</span>
+              <span data-i18n="launch.toolbar">{t('launch.toolbar')}</span>
             </button>
             <Lanes
               options={data && laneOptions(data.categories, visible, ui.filter, categoryOf, t)}
@@ -95,7 +96,7 @@ export function Toolbar({ limitsAnchor, onNewSession, onCategories, onSchedule, 
               onClick={() => onCategories?.()}
             >
               <TagIcon />
-              <span>{t('tb.cats')}</span>
+              <span data-i18n="tb.cats">{t('tb.cats')}</span>
             </button>
             <button
               type="button"
@@ -105,7 +106,7 @@ export function Toolbar({ limitsAnchor, onNewSession, onCategories, onSchedule, 
               onClick={() => onSchedule?.()}
             >
               <AlarmIcon />
-              <span>{t('tb.sched')}</span>
+              <span data-i18n="tb.sched">{t('tb.sched')}</span>
               <span className="n" id="sched-count">
                 {badge.count || ''}
               </span>
@@ -120,7 +121,7 @@ export function Toolbar({ limitsAnchor, onNewSession, onCategories, onSchedule, 
               onClick={e => settings?.open(e.currentTarget, e.detail === 0)}
             >
               <GearIcon />
-              <span>{t('set.title')}</span>
+              <span data-i18n="set.title">{t('set.title')}</span>
             </button>
             <NextAttention />
             {setup && <SetupNote setup={setup} />}

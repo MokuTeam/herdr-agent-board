@@ -44,8 +44,8 @@ export interface SessionDetail {
   workflows?: WorkflowRun[]
 }
 
-// A notice: a background task reporting back, or a board reminder (core/notices.ts). A peer: a
-// message from a session or teammate this one works with.
+// A notice: a background task reporting back, a board reminder, or a MokuPilot call's results
+// (core/notices.ts). A peer: a message from a session or teammate this one works with.
 const ROLES: ReadonlySet<unknown> = new Set(['user', 'assistant', 'tool', 'notice', 'peer'])
 export const isTurn = (value: unknown): value is ConversationTurn => isReply(value) && ROLES.has(value.role)
 

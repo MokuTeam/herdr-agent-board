@@ -10,19 +10,22 @@ export function fadeLanes(seg: HTMLElement): void {
   seg.classList.toggle('fade-end', end)
 }
 
+/** The fades kept up as the strip scrolls and as the window resizes, until the function it gives back is called. */
+export function followLaneFades(seg: HTMLElement): () => void {
+  const fade = () => fadeLanes(seg)
+  seg.addEventListener('scroll', fade, { passive: true })
+  addEventListener('resize', fade)
+  return () => {
+    seg.removeEventListener('scroll', fade)
+    removeEventListener('resize', fade)
+  }
+}
+
 export function useLaneFades(control: RefObject<HTMLElement | null>): void {
   useLayoutEffect(() => {
     if (control.current) fadeLanes(control.current)
   })
   useEffect(() => {
-    const seg = control.current
-    if (!seg) return
-    const fade = () => fadeLanes(seg)
-    seg.addEventListener('scroll', fade, { passive: true })
-    addEventListener('resize', fade)
-    return () => {
-      seg.removeEventListener('scroll', fade)
-      removeEventListener('resize', fade)
-    }
+    if (control.current) return followLaneFades(control.current)
   }, [control])
 }

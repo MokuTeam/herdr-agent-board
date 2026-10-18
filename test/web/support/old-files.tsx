@@ -10,9 +10,10 @@ import { changesOf, historyOf, previewOf } from '../../../web/src/api/files.ts'
 import { FileChip } from '../../../web/src/components/files/FileChip.tsx'
 import { QuickLookView } from '../../../web/src/components/files/QuickLook.tsx'
 import { markChip } from '../../../web/src/hooks/useFileChips.ts'
-import type { PathInfo } from '../../../web/src/models/files.ts'
+import { NO_ZOOM, type PathInfo, type ZoomFoot, zoomFootAfter } from '../../../web/src/models/files.ts'
 import { type LookTarget, type QuickLookNav, quickLookNav } from '../../../web/src/models/quick-look.ts'
 import type { ZoomState } from '../../../web/src/models/zoom.ts'
+import { Store } from '../../../web/src/state/store.ts'
 import { board, renderInBoard } from './board.tsx'
 import { type FakeElement, FakeWorld } from './fake-dom.ts'
 import {
@@ -217,8 +218,8 @@ export class OldLook {
 export class NewLook {
   readonly nav: QuickLookNav
   canEdit = true
-  /** What the engine's zoom store holds (hooks/useQuickLook.ts): the bar draws from it. */
-  zoom: ZoomState | null = null
+  /** The engine's zoom store (hooks/useQuickLook.ts): the bar draws from it. */
+  readonly zoom = new Store<ZoomFoot>(NO_ZOOM)
 
   constructor(
     public t: Translator,
@@ -329,7 +330,7 @@ export class BothLooks {
   /** A zoom's change, as the footer hears it. */
   zoomBar(z: ZoomState | null): void {
     this.old.zoomBar(z)
-    this.react.zoom = z
+    this.react.zoom.set(zoomFootAfter(this.react.zoom.get(), z))
   }
   looks(): { old: string; react: string } {
     return {

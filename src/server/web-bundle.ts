@@ -16,7 +16,7 @@ export interface WebBundle {
 interface Options {
   root: string
   entry: string
-  /** A classic script the page loads before its styles (the viewer's light or dark), built beside the entry. */
+  /** A classic script the page loads before its styles (the viewer's light or dark), built apart from the entry. */
   early?: string
   log: (text: string) => void
 }
@@ -48,6 +48,30 @@ function hashOf(js: string, webDir: string): string {
   return hash.digest('hex').slice(0, 12)
 }
 
+/**
+ * One entry bundled in memory: a module for the page's own script, or (`iife`) a classic script
+ * whose names stay inside it, nothing put on `window`. Null when it did not build (logged).
+ */
+async function bundle(entry: string, format: 'esm' | 'iife', log: (text: string) => void): Promise<string | null> {
+  const result = await Bun.build({
+    entrypoints: [entry],
+    target: 'browser',
+    format,
+    minify: false,
+    sourcemap: 'inline',
+    // React's production build: without it the page gets the development one (slower, larger,
+    // and with its warnings in the console).
+    define: { 'process.env.NODE_ENV': '"production"' },
+  })
+  const entries = result.outputs.filter(o => o.kind === 'entry-point')
+  const output = entries.find(o => stem(o.path) === stem(entry)) ?? entries[0] ?? result.outputs[0]
+  if (!result.success || !output) {
+    log(`web bundle: ${result.logs[0]?.message ?? 'build failed'}`)
+    return null
+  }
+  return output.text()
+}
+
 /** Bundles the web entry in memory with Bun.build; a failed build keeps the previous bundle. */
 export async function createWebBundle(opts: Options): Promise<WebBundle> {
   const webDir = join(opts.root, 'web')
@@ -57,25 +81,12 @@ export async function createWebBundle(opts: Options): Promise<WebBundle> {
 
   async function build(): Promise<void> {
     try {
-      const result = await Bun.build({
-        entrypoints: [opts.entry, ...(opts.early ? [opts.early] : [])],
-        target: 'browser',
-        format: 'esm',
-        minify: false,
-        sourcemap: 'inline',
-        // React's production build: without it the page gets the development one (slower, larger,
-        // and with its warnings in the console).
-        define: { 'process.env.NODE_ENV': '"production"' },
-      })
-      const entries = result.outputs.filter(o => o.kind === 'entry-point')
-      const output = entries.find(o => stem(o.path) === stem(opts.entry)) ?? entries[0] ?? result.outputs[0]
-      const before = opts.early ? entries.find(o => stem(o.path) === stem(opts.early ?? '')) : undefined
-      if (!result.success || !output || (opts.early && !before)) {
-        opts.log(`web bundle: ${result.logs[0]?.message ?? 'build failed'}`)
-        return
-      }
-      js = await output.text()
-      early = before ? await before.text() : ''
+      const main = await bundle(opts.entry, 'esm', opts.log)
+      if (main === null) return
+      const before = opts.early ? await bundle(opts.early, 'iife', opts.log) : ''
+      if (before === null) return
+      js = main
+      early = before
     } catch (err) {
       // Bun.build throws an AggregateError of the build messages when it fails.
       const first = err instanceof AggregateError ? err.errors[0] : err

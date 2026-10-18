@@ -119,8 +119,8 @@ function baselineModel(): Record<string, unknown> {
   return Object.fromEntries(oldCode('web/menu-model.js', names, {}))
 }
 
-/** initMenu of web/menu.js as it was at the baseline. */
-export function oldMenuSide(): MenuSide {
+/** initMenu of web/menu.js as it was at the baseline; `onChange` hears what the page's would (app.js). */
+export function oldMenuSide(onChange: () => void = () => {}): MenuSide {
   const world = newWorld()
   const log: string[] = []
   const model = baselineModel()
@@ -137,7 +137,15 @@ export function oldMenuSide(): MenuSide {
     performance: { now: () => world.now },
     innerHeight: VIEWPORT.h,
   })
-  const menu: unknown = oldFunction(code, 'initMenu')({ onChange: () => log.push('changed') })
+  const menu: unknown = oldFunction(
+    code,
+    'initMenu',
+  )({
+    onChange: () => {
+      log.push('changed')
+      onChange()
+    },
+  })
   const call = (name: string, ...args: unknown[]): unknown => {
     if (typeof menu !== 'object' || menu === null || !(name in menu)) throw new Error(`no ${name}`)
     const fn: unknown = Reflect.get(menu, name)
@@ -183,7 +191,7 @@ export function oldMenuSide(): MenuSide {
 
 // ---------------------------------------------------------------- the React port
 
-export function reactMenuSide(): MenuSide {
+export function reactMenuSide(): MenuSide & { engine: MenuEngine } {
   const world = newWorld()
   const log: string[] = []
   const engine = new MenuEngine({
@@ -235,6 +243,7 @@ export function reactMenuSide(): MenuSide {
     return el
   }
   return {
+    engine,
     world,
     log,
     page,

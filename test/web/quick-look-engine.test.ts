@@ -1,7 +1,8 @@
 // The quick look's motion, focus and keys (hooks/useQuickLook.ts quickLookEngine) in a fake DOM
 // (support/fake-dom.ts): it grows out of the chip it was opened from, takes the focus, steps in
 // and back, shrinks away on Esc or Back from its first step, and gives the focus back; open, reveal
-// and copy act on what it shows; an image on show zooms, by its keys too, until the next step. Springs share one frame loop: every world settles before it goes.
+// and copy act on what it shows; an image on show zooms, by its keys too, until the next step.
+// Springs share one frame loop: every world settles before it goes.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { FilesApi } from '../../web/src/api/files.ts'
@@ -224,12 +225,12 @@ describe('an image on show zooms', () => {
     const { stage, img } = image({ w: 1900, h: 993 })
     expect(look.engine.imageLoaded(img, shown(look))).toEqual({ width: 1900, height: 993 })
     expect(stage.dataset.zoom).toBe('fit')
-    expect(look.engine.zoom.get()).toMatchObject({ fit: true, to: 1 })
+    expect(look.engine.zoom.get().now).toMatchObject({ fit: true, to: 1 })
     const plus = press('+')
     look.engine.keydown(plus)
     expect(plus.prevented).toBe(true)
     await world.settle()
-    expect(look.engine.zoom.get()).toMatchObject({ fit: false })
+    expect(look.engine.zoom.get().now).toMatchObject({ fit: false })
     // Typing in a field: the key is the field's.
     const field = mount('<input>')
     field.focus()
@@ -244,13 +245,15 @@ describe('an image on show zooms', () => {
     // The footer's button: back to fit, and in again.
     look.engine.toggleZoom()
     await world.settle()
-    expect(look.engine.zoom.get()).toMatchObject({ fit: true })
+    expect(look.engine.zoom.get().now).toMatchObject({ fit: true })
     // Another image gone is not this one's zoom.
     look.engine.imageGone(image({ w: 10, h: 10 }).img)
-    expect(look.engine.zoom.get()).not.toBeNull()
+    expect(look.engine.zoom.get().now).not.toBeNull()
     // A step: the zoom goes, and its keys with it.
     look.look({ path: '/b.txt' }, chip)
-    expect(look.engine.zoom.get()).toBeNull()
+    expect(look.engine.zoom.get().now).toBeNull()
+    // The bar hides, keeping what it showed last (the old bar kept its texts).
+    expect(look.engine.zoom.get().last).toMatchObject({ fit: true })
     const after = press('+')
     look.engine.keydown(after)
     expect(after.prevented).toBe(false)
@@ -263,7 +266,7 @@ describe('an image on show zooms', () => {
     await world.settle()
     const svg = image(null, { w: 500, h: 250 })
     expect(look.engine.imageLoaded(svg.img, shown(look))).toBeNull()
-    expect(look.engine.zoom.get()).toMatchObject({ fit: true })
+    expect(look.engine.zoom.get().now).toMatchObject({ fit: true })
     for (let i = 0; i < 6; i++) look.engine.keydown(press('+'))
     await world.settle()
     expect(svg.img.classList.contains('pixelated')).toBe(false)
@@ -279,7 +282,7 @@ describe('an image on show zooms', () => {
     await world.flush()
     const text = image({ w: 30, h: 20 })
     expect(look.engine.imageLoaded(text.img, shown(look))).toEqual({ width: 30, height: 20 })
-    expect(look.engine.zoom.get()).toBeNull()
+    expect(look.engine.zoom.get().now).toBeNull()
   })
 
   test('drawn no more, or the quick look closed: the zoom goes', async () => {
@@ -290,12 +293,12 @@ describe('an image on show zooms', () => {
     const first = image({ w: 1900, h: 993 })
     look.engine.imageLoaded(first.img, shown(look))
     look.engine.imageGone(first.img)
-    expect(look.engine.zoom.get()).toBeNull()
+    expect(look.engine.zoom.get().now).toBeNull()
     const second = image({ w: 1900, h: 993 })
     look.engine.imageLoaded(second.img, shown(look))
-    expect(look.engine.zoom.get()).not.toBeNull()
+    expect(look.engine.zoom.get().now).not.toBeNull()
     look.engine.keydown(press('Escape'))
     await world.settle()
-    expect(look.engine.zoom.get()).toBeNull()
+    expect(look.engine.zoom.get().now).toBeNull()
   })
 })

@@ -3,6 +3,7 @@
 // footer and actions, history excerpts, and how long what the server said about a path holds.
 // The chips and the quick look draw from here (components/files/), as the old page's files.js did.
 import type { Translator } from '../../../src/core/types.ts'
+import type { ZoomState } from './zoom.ts'
 
 const DOC = '<path d="M5.5 2.5h6l3.5 3.5v11.5h-9.5Z"/><path d="M11.5 2.5V6H15"/>'
 
@@ -222,6 +223,19 @@ function percent(s: number, lang: string): string {
  */
 export const zoomShown = (z: { s: number; fit: boolean; to: number } | null): string =>
   z ? `${Math.round(z.s * 100)}|${z.fit ? Math.round(z.to * 100) : 'fit'}` : ''
+
+/**
+ * What the zoom bar draws from: the zoom on show (`now`, null when there is none, and the bar
+ * hidden) and the one it showed last, whose texts it keeps while hidden, as the old bar did.
+ */
+export interface ZoomFoot {
+  now: ZoomState | null
+  last: ZoomState | null
+}
+
+export const NO_ZOOM: ZoomFoot = { now: null, last: null }
+
+export const zoomFootAfter = (foot: ZoomFoot, z: ZoomState | null): ZoomFoot => ({ now: z, last: z ?? foot.last })
 
 /** The zoom bar's texts: the scale, and the button in to the scale a zoom from fit goes to, or back to fit. */
 export function zoomBar(z: { s: number; fit: boolean; to: number }, t: Translator): ZoomBarText {

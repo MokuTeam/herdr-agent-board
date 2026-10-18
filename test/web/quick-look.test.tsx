@@ -230,11 +230,16 @@ describe('the quick look of a file', () => {
     // A small image fits at 100%: in from there goes to twice that.
     b.zoomBar({ s: 1, fit: true, to: 2 })
     same(b)
-    // No zoom any more (a step, a close): the bar hides.
+    // No zoom any more (a step, a close): the bar hides, keeping what it showed last. (Hidden, React
+    // would say it in a new language after a switch; the old bar kept the old texts. Nobody sees it.)
     b.zoomBar(null)
+    same(b)
     const hidden = /<span class="ql-zoom" hidden="">/
-    expect(b.looks().old).toMatch(hidden)
     expect(b.looks().react).toMatch(hidden)
+    expect(b.looks().react).toContain('title="Zoom to 200%"')
+    // Another image zooms: the bar shows again, with its own scale.
+    b.zoomBar({ s: 0.75, fit: true, to: 1 })
+    same(b)
     const ru = new BothLooks(translator('ru'), server())
     await ru.open(at('/pics/a b.png'))
     ru.zoomBar({ s: 0.52, fit: true, to: 1 })

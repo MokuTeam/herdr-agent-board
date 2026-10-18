@@ -8,6 +8,7 @@ import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Translator } from '../../../src/core/types.ts'
 import { oldSource } from './old-app.ts'
+import { styledBy, Tree } from './stylesheets.ts'
 
 export interface Element {
   kind: 'element'
@@ -296,9 +297,10 @@ export function applyTexts(nodes: Node[], t: Translator): void {
 }
 
 /**
- * Attributes only the old imperative code needed: the i18n keys `applyTexts()` read (React renders
- * the texts themselves), the key of a title set later (`data-hint`) and a re-render cache
- * (`data-sig`). No stylesheet or other module reads them.
+ * Attributes the old imperative code needed: the i18n keys `applyTexts()` read (React renders the
+ * texts themselves), the key of a title set later (`data-hint`) and a re-render cache (`data-sig`).
+ * A stylesheet reads one of them in places: the icon-only toolbar buttons hide their labels by
+ * `span[data-i18n]` (upstream #43). `stripAttrs` keeps those, so React must render them there.
  */
 export const OLD_PAGE_ONLY = [
   'data-i18n',
@@ -309,8 +311,15 @@ export const OLD_PAGE_ONLY = [
   'data-sig',
 ]
 
+/**
+ * The attributes dropped from a tree, except where a rule of the page's stylesheets selects by one
+ * (support/stylesheets.ts): there the attribute is part of how the page looks, and both sides must
+ * have it.
+ */
 export function stripAttrs(nodes: Node[], names: string[]): void {
-  for (const el of findAll(nodes, () => true)) for (const name of names) el.attrs.delete(name)
+  const tree = new Tree(nodes)
+  for (const el of findAll(nodes, () => true))
+    for (const name of names) if (el.attrs.has(name) && !styledBy(el, name, tree)) el.attrs.delete(name)
 }
 
 /**

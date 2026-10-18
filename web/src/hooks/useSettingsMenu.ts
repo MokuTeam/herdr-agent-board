@@ -97,6 +97,35 @@ export interface SettingsMenu {
   expanded: boolean
 }
 
+export interface SettingsGear {
+  /** The gear pressed: it says its menu is up, then opens it. */
+  open(button: HTMLElement, keyboard: boolean): void
+  /** Keeps what the gear says with the menu, until the function it gives back is called. */
+  watch(): () => void
+}
+
+/**
+ * The gear's aria-expanded kept with the menu, as the old page's #settings and its menu's onChange
+ * kept it: true as it opens its menu; false whenever a menu goes and none is up, which another
+ * menu opening in its place does too (the one before closes first).
+ */
+export function settingsGear(
+  menu: Pick<MenuEngine, 'openNow' | 'isOpen'>,
+  openMenu: (button: HTMLElement, keyboard: boolean) => void,
+  expanded: (on: boolean) => void,
+): SettingsGear {
+  return {
+    open(button, keyboard) {
+      expanded(true)
+      openMenu(button, keyboard)
+    },
+    watch: () =>
+      menu.openNow.subscribe(() => {
+        if (!menu.isOpen()) expanded(false)
+      }),
+  }
+}
+
 /** Settings for the page: `menu` is the board's one menu (hooks/useContextMenus.ts). */
 export function useSettingsMenu(menu: MenuEngine): SettingsMenu {
   const { t, choose } = useLanguage()
@@ -104,11 +133,8 @@ export function useSettingsMenu(menu: MenuEngine): SettingsMenu {
   const place = usePanelPlace()
   const latest = useLatest({ t, choose, board })
   const [expanded, setExpanded] = useState(false)
-  // The menu gone (not one opened in its place): the gear says it is closed.
-  useEffect(() => menu.openNow.subscribe(() => !menu.isOpen() && setExpanded(false)), [menu])
-
-  const [open] = useState(() =>
-    settingsMenuFrom({
+  const [gear] = useState(() => {
+    const open = settingsMenuFrom({
       menu,
       t: () => latest.current.t,
       canEdit: () => latest.current.board.canEdit,
@@ -140,14 +166,9 @@ export function useSettingsMenu(menu: MenuEngine): SettingsMenu {
       placePanels: dock => isDock(dock) && place.placePanels(dock),
       resetPanelSize: () => place.resetPanelSize(),
       toggleSleepers: () => latest.current.board.dispatch({ type: 'toggleSleepers' }),
-    }),
-  )
-
-  return {
-    open(button, keyboard) {
-      open(button, keyboard)
-      setExpanded(true)
-    },
-    expanded,
-  }
+    })
+    return settingsGear(menu, open, setExpanded)
+  })
+  useEffect(() => gear.watch(), [gear])
+  return { open: gear.open, expanded }
 }

@@ -6,7 +6,7 @@ import { homedir } from 'node:os'
 import { isAbsolute, join, posix, resolve, win32 } from 'node:path'
 import { shimTarget } from '../core/install-plan.ts'
 import { t } from '../core/lang.ts'
-import { launcherLabel } from '../core/launch/launcher-command.ts'
+import { isRefusedProgram, launcherLabel } from '../core/launch/launcher-command.ts'
 import { claudeCommand, shellLine } from '../core/launch/spawn-args.ts'
 import { type CommandPart, type MokupilotLauncher, placeholdersIn } from '../core/mokupilot.ts'
 import {
@@ -176,6 +176,8 @@ export function mokupilotCommand(
   }
   // A program by its path, or by its name on PATH.
   const program = (file: string): string | null => (/[\\/]/.test(file) ? (exists(file) ? file : null) : onPath(file))
+  // Found on PATH, a .cmd or .bat (a pyenv shim, say) runs only through a shell: not one to start.
+  const runnable = (file: string | null): string | null => (file && !isRefusedProgram(file) ? file : null)
   // A checkout: the Python of its .venv (pythonw: no console window), as meet.cmd falls back to
   // the one on PATH; elsewhere its own `meet`.
   const checkout = (dir: string): { file: string; args: string[] } | { missing: string } => {
@@ -187,8 +189,8 @@ export function mokupilotCommand(
     const scripts = path.join(dir, '.venv', 'Scripts')
     const python =
       [path.join(scripts, 'pythonw.exe'), path.join(scripts, 'python.exe')].find(f => exists(f)) ??
-      onPath('pythonw') ??
-      onPath('python')
+      runnable(onPath('pythonw')) ??
+      runnable(onPath('python'))
     return exists(run) && python
       ? { file: python, args: [run] }
       : { missing: exists(run) ? path.join(scripts, 'pythonw.exe') : run }
@@ -199,9 +201,12 @@ export function mokupilotCommand(
     const first = Array.isArray(cmd) ? cmd[0] : undefined
     if (!Array.isArray(cmd) || typeof first !== 'string' || !first.trim())
       return { state: 'missing', configured: true, file: '', error: t('mokupilot.err.command') }
-    if (/(^|[\\/])cmd(\.exe)?$|\.(bat|cmd)$/i.test(first.trim()))
+    if (isRefusedProgram(first))
       return { state: 'missing', configured: true, file: first, error: t('mokupilot.err.commandShell') }
     const file = program(first)
+    // A name PATH gives as a .cmd or .bat (["meet"] as meet.cmd): said as plainly as one written so.
+    if (file && isRefusedProgram(file))
+      return { state: 'missing', configured: true, file, error: t('mokupilot.err.commandShell') }
     const rest: CommandPart[] = cmd.slice(1).map(part => (Array.isArray(part) ? part.map(String) : String(part)))
     const template = cmd.flat().some(s => placeholdersIn(s).length) ? rest : null
     return file
