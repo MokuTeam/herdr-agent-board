@@ -27,19 +27,27 @@ export async function unusedPort(): Promise<number> {
 
 export type BoardMessage = { ready?: boolean; refreshed?: boolean; log?: string }
 
-/** Starts the server with one 'other' lane and no polling (refreshSec 3600); resolves once it listens. */
+/**
+ * Starts the server with one 'other' lane and no polling (refreshSec 3600); resolves once it
+ * listens. `extra`: environment of its own (the board in a herdr pane, say).
+ */
 export async function serveBoard(
   box: Sandbox,
   cfg: Record<string, unknown> = {},
+  extra: Record<string, string> = {},
 ): Promise<{ url: string; proc: Child }> {
   const port = await unusedPort()
-  const proc = box.run('server', {
-    port,
-    categories: [{ id: 'other', title: 'Other', color: 'gray' }],
-    wakeUrl: null,
-    refreshSec: 3600,
-    ...cfg,
-  })
+  const proc = box.run(
+    'server',
+    {
+      port,
+      categories: [{ id: 'other', title: 'Other', color: 'gray' }],
+      wakeUrl: null,
+      refreshSec: 3600,
+      ...cfg,
+    },
+    extra,
+  )
   await until(() => proc.messages.some(m => (m as BoardMessage).ready))
   return { url: `http://127.0.0.1:${port}`, proc }
 }

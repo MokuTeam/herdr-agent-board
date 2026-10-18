@@ -25,7 +25,9 @@ export const isBoardPayload: Guard<BoardPayload> = (value): value is BoardPayloa
   typeof value.stale === 'boolean' &&
   // The terminal's (a board before it sent neither): whether it is on, the sessions with a shell.
   (value.terminal === undefined || typeof value.terminal === 'boolean') &&
-  (value.shells === undefined || (Array.isArray(value.shells) && value.shells.every(s => typeof s === 'string')))
+  (value.shells === undefined || (Array.isArray(value.shells) && value.shells.every(s => typeof s === 'string'))) &&
+  // Whether MokuPilot is here for calls (a board before it did not say).
+  (value.mokupilot === undefined || typeof value.mokupilot === 'boolean')
 
 /** One session as GET /api/session/<key> answers it (src/server/routes/session.ts). */
 export interface SessionDetail {

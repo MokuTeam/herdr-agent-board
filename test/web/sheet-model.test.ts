@@ -116,13 +116,20 @@ describe('the head', () => {
       wakeHidden: true,
       sleepHidden: false,
       sleepTitle: t('sheet.sleepBusy'),
+      mokupilotHidden: true,
     })
     expect(headButtons({ ...a, status: 'idle', session: null }, t)).toEqual({
       historyHidden: true,
       wakeHidden: true,
       sleepHidden: true,
       sleepTitle: t('sheet.sleepHint'),
+      mokupilotHidden: true,
     })
+    // A MokuPilot call: with MokuPilot here, for a Claude session with an id.
+    expect(headButtons({ ...a, agent: 'claude' }, t, true).mokupilotHidden).toBe(false)
+    expect(headButtons({ ...a, agent: 'codex' }, t, true).mokupilotHidden).toBe(true)
+    expect(headButtons({ ...a, agent: 'claude', session: null }, t, true).mokupilotHidden).toBe(true)
+    expect(headButtons({ ...a, agent: 'claude' }, t, false).mokupilotHidden).toBe(true)
     expect(headButtons({ ...a, sleeping: true }, t).wakeHidden).toBe(false)
     expect(headButtons({ ...a, sleeping: true }, t).sleepHidden).toBe(true)
     expect(NO_HEAD_BUTTONS).toEqual({
@@ -130,6 +137,7 @@ describe('the head', () => {
       wakeHidden: true,
       sleepHidden: false,
       sleepTitle: undefined,
+      mokupilotHidden: true,
     })
   })
 })

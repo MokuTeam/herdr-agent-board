@@ -138,8 +138,8 @@ export function readConversation(path: string, limit = 40, opts: ConversationOpt
 /** Folder name Claude gives a project: the cwd without trailing slashes, non-alphanumerics as dashes. */
 const projectFolder = (cwd: string): string => cwd.replace(/[\\/]+$/, '').replace(/[^a-zA-Z0-9]/g, '-')
 
-/** The first "cwd" in the head of a transcript. */
-async function cwdOf(file: string): Promise<string | null> {
+/** The folder a Claude session started in, from its transcript (its first "cwd"); null when it cannot be read. */
+export async function cwdOf(file: string): Promise<string | null> {
   let fh: Awaited<ReturnType<typeof open>> | undefined
   try {
     fh = await open(file, 'r')

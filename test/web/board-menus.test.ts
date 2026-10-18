@@ -142,6 +142,20 @@ describe('which menu opens', () => {
     expect(off[0]).toContain('"open","focus","write"')
   })
 
+  test('with MokuPilot here a Claude session’s card calls it in; it needs the board, not fresh herdr data', async () => {
+    const on = await compare({ ...BOARD, mokupilot: true }, [right('card-name'), pick('mokupilot')])
+    expect(on[0]).toContain('"open","focus","terminal","mokupilot","write"')
+    expect(on).toContain('do.mokupilot("s1", #card)')
+    const stale = await compare({ ...BOARD, mokupilot: true, canMutate: false }, [right('card-name')])
+    expect(stale[0]).toContain('"mokupilot","write')
+    const away = await compare({ ...BOARD, mokupilot: true, canMutate: false, canEdit: false }, [right('card-name')])
+    expect(away[0]).toContain('"mokupilot (gray)"')
+    const codex = await compare({ ...BOARD, mokupilot: true, items: [{ ...session, agent: 'codex' }] }, [
+      right('card-name'),
+    ])
+    expect(codex[0]).not.toContain('mokupilot')
+  })
+
   test('the open session’s head: its card’s menu; none without one open, nor in the rest of a panel', async () => {
     const log = await compare(BOARD, [
       right('sheet-meta'),
@@ -413,6 +427,7 @@ describe('without the launch window', () => {
           changes: none,
           history: none,
           terminal: none,
+          mokupilot: none,
           rename: none,
           move: none,
           newSession: none,

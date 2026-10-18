@@ -1,7 +1,8 @@
 // What the board does to a session through the server: move its card, go to it in herdr, wake it,
-// put it to sleep, dismiss its question. Each says how it went in a toast.
+// put it to sleep, dismiss its question, call in MokuPilot with a fork of it. Each says how it
+// went in a toast.
 import { useMemo } from 'react'
-import type { Item } from '../../../src/core/types.ts'
+import type { Item, Translator } from '../../../src/core/types.ts'
 import { ApiError, api, errorText, type Reply } from '../api/client.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { categoryInfo, type DropTarget } from '../models/board-view.ts'
@@ -27,6 +28,23 @@ export interface SessionActions {
   sleepSession(key: string): Promise<void>
   /** A question that does not need an answer: off the "Needs me" column until the next one. */
   dismissAsk(key: string): Promise<void>
+  /** A MokuPilot call whose agent is a fork of the session (integrations/mokupilot.ts): the session goes on as it was. */
+  callMokuPilot(key: string): Promise<void>
+}
+
+export interface CallDeps {
+  t: Translator
+  itemOf(key: string): Item | undefined
+  act(key: string, action: string): Promise<ActResult>
+  toast(text: string, error?: boolean): void
+}
+
+/** A MokuPilot call whose agent is a fork of the session (integrations/mokupilot.ts): the session goes on as it was. */
+export async function callMokuPilot(key: string, { t, itemOf, act, toast }: CallDeps): Promise<void> {
+  const it = itemOf(key)
+  if (!it) return
+  const r = await act(key, 'mokupilot')
+  toast(r.ok ? t('mokupilot.started', { name: it.name }) : r.error, !r.ok)
 }
 
 // What goes through herdr also needs fresh herdr data, or it would act on a session that may have moved on.
@@ -112,6 +130,14 @@ export function useSessionActions(): SessionActions {
       toast(r.ok ? done : r.error, !r.ok)
     }
 
-    return { act, moveCard, focusSession, wakeSession, sleepSession, dismissAsk }
+    return {
+      act,
+      moveCard,
+      focusSession,
+      wakeSession,
+      sleepSession,
+      dismissAsk,
+      callMokuPilot: key => callMokuPilot(key, { t: latest.current.t, itemOf, act, toast }),
+    }
   }, [latest, dispatch, toast])
 }

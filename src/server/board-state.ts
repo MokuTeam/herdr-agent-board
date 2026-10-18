@@ -41,6 +41,8 @@ interface Options {
   push: (payload: string) => void
   /** The setup check's summary (services/setup-check.ts). */
   setup?: () => SetupSummary | null
+  /** Whether MokuPilot is here for calls with a fork of a session (integrations/mokupilot.ts). */
+  mokupilot?: () => boolean
 }
 
 // The colors the category editor offers (aliases left out).
@@ -66,7 +68,7 @@ function claudeLimits(deps: Deps): BoardLimits | null {
   return null
 }
 
-export function createBoardState({ deps, launches, terminals, version, push, setup }: Options): BoardState {
+export function createBoardState({ deps, launches, terminals, version, push, setup, mokupilot }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
   let stale = true
@@ -113,6 +115,8 @@ export function createBoardState({ deps, launches, terminals, version, push, set
       // terminal: whether the board offers one (config `terminal`); shells: sessions it opened one for.
       terminal: terminalOn(cfg),
       shells: terminalOn(cfg) ? (terminals?.keys() ?? []) : [],
+      // mokupilot: whether a session's sheet offers a MokuPilot call with a fork of it.
+      mokupilot: mokupilot?.() ?? false,
       setup: setup?.() ?? null,
     }
   }

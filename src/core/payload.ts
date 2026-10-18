@@ -53,6 +53,8 @@ export interface BoardPayload {
   terminal?: boolean
   /** The sessions the board has a shell open for (services/terminals.ts). */
   shells?: string[]
+  /** Whether a session's sheet offers a MokuPilot call with a fork of it (integrations/mokupilot.ts). */
+  mokupilot?: boolean
   /** What of the board is not set up on this computer (core/setup.ts); null before the first check. */
   setup?: SetupSummary | null
 }

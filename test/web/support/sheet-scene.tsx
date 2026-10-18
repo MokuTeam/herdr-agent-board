@@ -45,6 +45,8 @@ export interface SheetScene {
   /** The payload's terminal fields: whether the board offers one, the sessions with a shell. */
   terminal?: boolean
   shells?: string[]
+  /** The payload's `mokupilot`: MokuPilot is here for calls with a fork of a session. */
+  mokupilot?: boolean
 }
 
 export function composerOf(scene: Pick<SheetScene, 'message' | 'attachments' | 'sending' | 'open'>): ComposerControls {
@@ -70,6 +72,7 @@ function dataOf(scene: SheetScene): BoardPayload {
     stale: !!scene.stale,
     ...(scene.terminal !== undefined && { terminal: scene.terminal }),
     ...(scene.shells && { shells: scene.shells }),
+    ...(scene.mokupilot !== undefined && { mokupilot: scene.mokupilot }),
   })
 }
 

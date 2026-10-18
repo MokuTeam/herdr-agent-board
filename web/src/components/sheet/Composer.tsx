@@ -1,5 +1,6 @@
 // The sheet's foot: why the session's actions wait (no fresh data), the session's buttons — go to
-// it in herdr, wake it, put it to sleep, its changes and history, a new session here — the files
+// it in herdr, its terminal, a MokuPilot call with a fork of it, wake it, put it to sleep, its
+// changes and history, a new session here — the files
 // that go with the next message, and the message box: Enter sends, Shift+Enter breaks the line,
 // the box grows with the text; files come in through the clip or Ctrl+V (a screenshot).
 import { type ClipboardEvent, type KeyboardEvent, useLayoutEffect, useRef } from 'react'
@@ -16,6 +17,7 @@ import {
   FocusIcon,
   HistoryIcon,
   MoonIcon,
+  PhoneIcon,
   PlusIcon,
   SendIcon,
   SunIcon,
@@ -28,6 +30,8 @@ export interface SessionButtons {
   focus?: () => void
   /** The terminal window: a shell in the session's folder, or its own terminal (hooks/useTerminal.ts). */
   terminal?: (button: HTMLElement) => void
+  /** A MokuPilot call whose agent is a fork of the session. */
+  mokupilot?: () => void
   wake?: () => void
   sleep?: () => void
   /** The quick look of the checkout's changes (25c). */
@@ -126,6 +130,18 @@ export function Composer({
         >
           <TermIcon />
           <span>{t('term.open')}</span>
+        </button>
+        <button
+          type="button"
+          className="button"
+          id="sheet-mokupilot"
+          hidden={buttons.mokupilotHidden}
+          title={t('mokupilot.hint')}
+          disabled={av.edit}
+          onClick={() => on.mokupilot?.()}
+        >
+          <PhoneIcon />
+          <span>{t('mokupilot.call')}</span>
         </button>
         <button
           type="button"

@@ -172,6 +172,12 @@ function facts(over: Partial<SetupFacts> = {}): SetupFacts {
     wakeUrl: 'http://127.0.0.1:12421',
     wake: { ok: true, status: 200 },
     launcher: { kind: 'builtin', claude: ['claude'], error: '', program: { file: 'C:\\bin\\claude.exe', found: true } },
+    mokupilot: {
+      state: 'ok',
+      configured: false,
+      file: 'C:\\Users\\u\\AppData\\Local\\Programs\\MokuPilot\\MokuPilot.exe',
+      args: [],
+    },
     ...over,
   }
 }
@@ -195,12 +201,29 @@ describe('doctor', () => {
         ['key', 'ok'],
         ['wake', 'ok'],
         ['launch', 'ok'],
+        ['mokupilot', 'ok'],
         ['toast', 'ok'],
       ],
     )
     assert.deepEqual(todo(checks), [])
     assert.match(report(checks), /Everything the board needs is set up\.$/)
     assert.deepEqual(setupSummary(checks), { todo: 0, sig: '' })
+  })
+
+  test('MokuPilot is optional; only one config.json names and is not there gets a mark', () => {
+    const none = checkSetup(
+      facts({ mokupilot: { state: 'missing', configured: false, file: 'MokuPilot.exe, meet.cmd' } }),
+    )
+    assert.equal(level(none, 'mokupilot'), 'off')
+    assert.match(check(none, 'mokupilot').code, /"mokupilot": \{ "dir": /)
+    assert.equal(level(checkSetup(facts({ mokupilot: { state: 'off', configured: true } })), 'mokupilot'), 'off')
+    const gone = checkSetup(facts({ mokupilot: { state: 'missing', configured: true, file: 'D:\\MokuPilot\\run.py' } }))
+    assert.equal(level(gone, 'mokupilot'), 'warn')
+    assert.match(check(gone, 'mokupilot').title, /MokuPilot not found: D:\\MokuPilot\\run\.py/)
+    assert.deepEqual(
+      todo(gone).map(c => c.id),
+      ['mokupilot'],
+    )
   })
 
   test('each missing piece, what it costs and how to fix it', () => {

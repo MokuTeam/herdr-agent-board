@@ -172,6 +172,19 @@ describe('session sheet markup parity', () => {
     same({ items: [working], open: 'a', detail: ready(detailOf(working)), shells: ['a'], lang: 'ru' })
   })
 
+  test('Call in MokuPilot: with MokuPilot here, for a Claude session; it waits for the board, not for herdr', () => {
+    const claude = { ...working, agent: 'claude', session: '0b3f8c2e-5d1a-4c6b-9e7f-1a2b3c4d5e6f' }
+    const on = bothSheets({ items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: true })
+    expect(on.react).toBe(on.old)
+    expect(on.react).toContain('id="sheet-mokupilot" title="Start a MokuPilot call')
+    same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: true, stale: true })
+    same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: true, connected: false })
+    same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: true, lang: 'ru' })
+    same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: false })
+    same({ items: [{ ...claude, agent: 'codex' }], open: 'a', detail: ready(detailOf(claude)), mokupilot: true })
+    same({ items: [], open: 'a', selected: claude, detail: ready(detailOf(claude)), mokupilot: true })
+  })
+
   test('a session gone from the board: the pill and the note say so, every session action stops', () => {
     const detail = ready(detailOf(working, { conversation: CONVERSATION.slice(0, 1), checkout: true }), {
       status: 'missing',

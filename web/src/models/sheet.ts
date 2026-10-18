@@ -99,6 +99,8 @@ export interface HeadButtons {
   sleepHidden: boolean
   /** Why it cannot sleep now, or what sleeping does; none before a session was ever open. */
   sleepTitle: string | undefined
+  /** "Call in MokuPilot": with MokuPilot here, for a Claude session with an id. */
+  mokupilotHidden: boolean
 }
 
 /** Before a session was ever open, the buttons as the page starts. */
@@ -107,14 +109,17 @@ export const NO_HEAD_BUTTONS: HeadButtons = {
   wakeHidden: true,
   sleepHidden: false,
   sleepTitle: undefined,
+  mokupilotHidden: true,
 }
 
-export function headButtons(it: Item, t: Translator): HeadButtons {
+/** `mokupilot`: the board says MokuPilot is here for calls with a fork of a session. */
+export function headButtons(it: Item, t: Translator, mokupilot = false): HeadButtons {
   return {
     historyHidden: !it.session,
     wakeHidden: !it.sleeping,
     sleepHidden: !!it.sleeping || !it.session,
     sleepTitle: t(inTurn(it) ? 'sheet.sleepBusy' : 'sheet.sleepHint'),
+    mokupilotHidden: !(mokupilot && it.session && it.agent === 'claude'),
   }
 }
 

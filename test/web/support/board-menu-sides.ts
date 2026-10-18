@@ -1,6 +1,6 @@
 // Which menu opens where, both ways in a fake DOM (support/fake-dom.ts), for parity: the old page's
-// board-menus.js (initBoardMenus as it was at the terminal's merge — the parity baseline and
-// upstream PR #36's terminal item, nothing else — with its own menu-model.js) and
+// board-menus.js (initBoardMenus as it was at MokuPilot's merge — the parity baseline, upstream PR
+// #36's terminal item and #44's MokuPilot call, nothing else — with its own menu-model.js) and
 // the React board's listeners (hooks/useContextMenus.ts boardMenuListeners with
 // models/board-menus.ts menuFor). Each side gets the same page, the same
 // board (what the page knows and its actions, which note what they were asked to do) and a menu
@@ -58,8 +58,8 @@ function rects(el: FakeElement): RectBox | null {
 
 // ---------------------------------------------------------------- the board
 
-/** Upstream's merge of the terminal (PR #36): board-menus.js and menu-model.js are the baseline's and its item. */
-const TERMINAL_MERGE = '1a1b270'
+/** Upstream's merge of MokuPilot calls (PR #44): board-menus.js and menu-model.js are the baseline's, the terminal's item and its own. */
+const MOKUPILOT_MERGE = '75e9c61'
 
 const categories = [
   { id: 'acme', title: 'Acme', color: '#007AFF' },
@@ -79,6 +79,8 @@ export interface BoardScene {
   columns: Record<string, string>
   /** The payload's `terminal` (config `terminal`); missing, the board offers one. */
   terminal?: boolean
+  /** The payload's `mokupilot`: MokuPilot is here for calls. */
+  mokupilot?: boolean
 }
 
 export function scene(fields: Partial<BoardScene> = {}): BoardScene {
@@ -126,6 +128,7 @@ function boardOf(s: BoardScene, log: string[], menu: unknown): BoardMenuDeps & {
     changes: note('do.changes'),
     history: note('do.history'),
     terminal: note('do.terminal'),
+    mokupilot: note('do.mokupilot'),
     rename: note('do.rename'),
     move: note('do.move'),
     newSession: note('do.newSession'),
@@ -150,7 +153,11 @@ function boardOf(s: BoardScene, log: string[], menu: unknown): BoardMenuDeps & {
       open: s.open,
       filter: s.filter,
       sleepers: s.sleepers,
-      data: { categories, ...(s.terminal !== undefined && { terminal: s.terminal }) },
+      data: {
+        categories,
+        ...(s.terminal !== undefined && { terminal: s.terminal }),
+        ...(s.mokupilot !== undefined && { mokupilot: s.mokupilot }),
+      },
     }),
     launch: {
       placeholders: () => s.launches.map(launch => ({ launch })),
@@ -242,7 +249,7 @@ function recordingMenu(log: string[]) {
   return { recorder, menu }
 }
 
-/** web/menu-model.js at the terminal's merge: what board-menus.js imported from it. */
+/** web/menu-model.js at MokuPilot's merge: what board-menus.js imported from it. */
 function baselineModel(): Record<string, unknown> {
   const names = [
     'usable',
@@ -257,10 +264,10 @@ function baselineModel(): Record<string, unknown> {
     'chipMenu',
     'wantsNativeMenu',
   ]
-  return Object.fromEntries(oldCode('web/menu-model.js', names, {}, TERMINAL_MERGE))
+  return Object.fromEntries(oldCode('web/menu-model.js', names, {}, MOKUPILOT_MERGE))
 }
 
-/** initBoardMenus of web/board-menus.js as it was at the terminal's merge. */
+/** initBoardMenus of web/board-menus.js as it was at MokuPilot's merge. */
 export function oldBoardMenus(s: BoardScene): MenuSide {
   const world = newWorld()
   const log: string[] = []
@@ -269,7 +276,7 @@ export function oldBoardMenus(s: BoardScene): MenuSide {
     'web/board-menus.js',
     ['LONG_PRESS_MS', 'SLOP', 'initBoardMenus'],
     { ...baselineModel(), performance: { now: () => world.now } },
-    TERMINAL_MERGE,
+    MOKUPILOT_MERGE,
   )
   oldFunction(code, 'initBoardMenus')(boardOf(s, log, menu))
   return side(world, log, recorder)

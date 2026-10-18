@@ -10,6 +10,7 @@ import { oldSource } from '../web/support/old-app.ts'
 const MERGES = [
   { merge: '72151c3', pr: '#42 zoom' },
   { merge: '8c4b987', pr: '#43 compact toolbar and settings' },
+  { merge: '75e9c61', pr: '#44 call in MokuPilot' },
 ]
 
 type Dictionaries = Record<string, Record<string, unknown>>

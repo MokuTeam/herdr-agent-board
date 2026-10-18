@@ -36,6 +36,9 @@ test('a board payload has its lists, version and staleness', () => {
   expect(isBoardPayload({ ...payload(), terminal: true, shells: ['s1'] })).toBe(true)
   expect(isBoardPayload({ ...payload(), terminal: 'yes' })).toBe(false)
   expect(isBoardPayload({ ...payload(), shells: [1] })).toBe(false)
+  // Whether MokuPilot is here for calls: missing (a board before it), or a yes or no.
+  expect(isBoardPayload({ ...payload(), mokupilot: false })).toBe(true)
+  expect(isBoardPayload({ ...payload(), mokupilot: 'yes' })).toBe(false)
   expect(isBoardPayload(null)).toBe(false)
 })
 

@@ -14,6 +14,7 @@ import { t } from '../../core/lang.ts'
 import { checkName } from '../../core/launch/names.ts'
 import type { MessageGate } from '../../core/message-gate.ts'
 import type { Item, Pin } from '../../core/types.ts'
+import { startCall } from '../../integrations/mokupilot.ts'
 import { focus, send, sleepSession, wake } from '../../services/actions.ts'
 import { answerPermission, answerQuestions } from '../../services/answer.ts'
 import { collect } from '../../services/board.ts'
@@ -173,6 +174,9 @@ async function act(app: SessionApp, item: Item, action: string, body: () => Prom
       return rename(item, await body())
     case 'card':
       return card(item, await body())
+    // A MokuPilot call whose agent is a fork of this session; no herdr in it.
+    case 'mokupilot':
+      return startCall(deps.cfg, item)
     default:
       return { ok: false, error: `unknown action ${action}` }
   }
@@ -229,6 +233,13 @@ export function sessionRoutes(app: SessionApp): Route[] {
       method: 'POST',
       path: /^\/api\/session\/([^/]+)\/(answer|permit)$/,
       guard: ['board-header', 'origin', 'fresh-data'],
+      handle: action,
+    },
+    // A call starts a program: like a launch, only from this page; it needs no herdr.
+    {
+      method: 'POST',
+      path: /^\/api\/session\/([^/]+)\/(mokupilot)$/,
+      guard: ['board-header', 'origin'],
       handle: action,
     },
     // Actions that go through herdr wait for a board that can reach it; card edits and the rest do not.

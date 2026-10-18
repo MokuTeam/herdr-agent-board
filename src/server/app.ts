@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
 import { messageGate } from '../core/message-gate.ts'
+import { mokupilotCheck } from '../integrations/mokupilot.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { startScheduler } from '../services/scheduler.ts'
@@ -88,6 +89,9 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
   const terminals = createTerminals({ onChange: () => board.publish() })
   // What of the board is not set up on this computer, for the page's quiet note.
   const setup = createSetupChecks({ deps, onChange: () => board.publish() })
+  // Whether MokuPilot is here for calls with a fork of a session: looked up again when its
+  // setting changes, and once a minute for one installed or removed meanwhile.
+  const mokupilot = mokupilotCheck(cfg)
   // A notification click asks for a session: pages that connect right after are told it too.
   const reveals = revealState()
   const events = createBroadcaster(() => board.payload(), { greet: reveals.greet })
@@ -98,6 +102,7 @@ export async function startServer({ deps, port: asked }: { deps: Deps; port?: nu
     version: bundle.version,
     push: payload => events.send(payload),
     setup: setup.summary,
+    mokupilot,
   })
   board.publish()
   const refresh = (): void => void board.refresh()

@@ -152,6 +152,7 @@ export function Sheet(slots: SheetSlots) {
     terminal: button => open && onTerminal?.(open, button),
     wake: at(actions.wakeSession),
     sleep: at(actions.sleepSession),
+    mokupilot: at(actions.callMokuPilot),
     changes: button => open && onChanges?.(open, button),
     history: button => open && onHistory?.(open, item?.cwd ?? '', button),
     newHere: button => open && newSession(item ? { item } : {}, button),
@@ -320,7 +321,7 @@ export function SheetView(props: SheetViewProps) {
       <Composer
         composer={composer}
         availability={availability}
-        buttons={item ? headButtons(item, t) : NO_HEAD_BUTTONS}
+        buttons={item ? headButtons(item, t, !!data?.mokupilot) : NO_HEAD_BUTTONS}
         term={item ? termButton(item, data, t) : undefined}
         changesHidden={!detail.data?.checkout}
         present={!!openItem && detail.status !== 'missing'}

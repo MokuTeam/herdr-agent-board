@@ -1,11 +1,14 @@
 // What the setup checks (core/setup.ts) look at, read from this computer: the commands on PATH,
-// Claude Code's settings.json, herdr's config.toml, herdr-wake, how new sessions start.
+// Claude Code's settings.json, herdr's config.toml, herdr-wake, how new sessions start, and how
+// the board would start MokuPilot (core/mokupilot.ts).
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, posix, resolve, win32 } from 'node:path'
 import { shimTarget } from '../core/install-plan.ts'
+import { t } from '../core/lang.ts'
 import { launcherLabel } from '../core/launch/launcher-command.ts'
 import { claudeCommand, shellLine } from '../core/launch/spawn-args.ts'
+import { type CommandPart, type MokupilotLauncher, placeholdersIn } from '../core/mokupilot.ts'
 import {
   boardFiles,
   type CommandFinds,
@@ -146,6 +149,85 @@ function launcherFacts(launch: Config['launch'], env: Env, platform: string): La
   return { kind: 'builtin', claude, error, program: claude ? program(claude[0] ?? '', env, platform) : null }
 }
 
+export interface MokupilotOptions {
+  platform?: string
+  env?: Env
+  exists?: (file: string) => boolean
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null
+
+/**
+ * How to start MokuPilot here (core/mokupilot.ts says what config.json's `mokupilot` may be): a
+ * program and the arguments before the board's own, what was looked for and is not there, or off.
+ */
+export function mokupilotCommand(
+  cfg: Partial<Config> | null | undefined,
+  { platform = process.platform, env = process.env, exists = existsSync }: MokupilotOptions = {},
+): MokupilotLauncher {
+  const set = cfg?.mokupilot
+  if (set === false) return { state: 'off', configured: true }
+  const own = isRecord(set) ? set : {}
+  const win = platform === 'win32'
+  const path = win ? win32 : posix
+  const onPath = (name: string): string | null => {
+    const f = findCommand(name, { env, platform, exists, read: () => null, size: () => 0 })
+    return (f.ps ?? f.sh)?.file ?? null
+  }
+  // A program by its path, or by its name on PATH.
+  const program = (file: string): string | null => (/[\\/]/.test(file) ? (exists(file) ? file : null) : onPath(file))
+  // A checkout: the Python of its .venv (pythonw: no console window), as meet.cmd falls back to
+  // the one on PATH; elsewhere its own `meet`.
+  const checkout = (dir: string): { file: string; args: string[] } | { missing: string } => {
+    if (!win) {
+      const meet = path.join(dir, 'meet')
+      return exists(meet) ? { file: meet, args: [] } : { missing: meet }
+    }
+    const run = path.join(dir, 'run.py')
+    const scripts = path.join(dir, '.venv', 'Scripts')
+    const python =
+      [path.join(scripts, 'pythonw.exe'), path.join(scripts, 'python.exe')].find(f => exists(f)) ??
+      onPath('pythonw') ??
+      onPath('python')
+    return exists(run) && python
+      ? { file: python, args: [run] }
+      : { missing: exists(run) ? path.join(scripts, 'pythonw.exe') : run }
+  }
+
+  if (own.command !== undefined) {
+    const cmd = own.command
+    const first = Array.isArray(cmd) ? cmd[0] : undefined
+    if (!Array.isArray(cmd) || typeof first !== 'string' || !first.trim())
+      return { state: 'missing', configured: true, file: '', error: t('mokupilot.err.command') }
+    if (/(^|[\\/])cmd(\.exe)?$|\.(bat|cmd)$/i.test(first.trim()))
+      return { state: 'missing', configured: true, file: first, error: t('mokupilot.err.commandShell') }
+    const file = program(first)
+    const rest: CommandPart[] = cmd.slice(1).map(part => (Array.isArray(part) ? part.map(String) : String(part)))
+    const template = cmd.flat().some(s => placeholdersIn(s).length) ? rest : null
+    return file
+      ? { state: 'ok', configured: true, file, args: template ? [] : cmd.slice(1).flat().map(String), template }
+      : { state: 'missing', configured: true, file: first }
+  }
+  if (own.dir) {
+    const c = checkout(String(own.dir))
+    return 'file' in c
+      ? { state: 'ok', configured: true, ...c }
+      : { state: 'missing', configured: true, file: c.missing }
+  }
+  if (win) {
+    const local = env.LOCALAPPDATA || (env.USERPROFILE ? path.join(env.USERPROFILE, 'AppData', 'Local') : '')
+    const exe = local ? path.join(local, 'Programs', 'MokuPilot', 'MokuPilot.exe') : ''
+    if (exe && exists(exe)) return { state: 'ok', configured: false, file: exe, args: [] }
+  }
+  const meet = onPath('meet')
+  if (!meet) return { state: 'missing', configured: false, file: win ? 'MokuPilot.exe, meet.cmd' : 'meet' }
+  if (!win) return { state: 'ok', configured: false, file: meet, args: [] }
+  const c = checkout(path.dirname(meet))
+  return 'file' in c
+    ? { state: 'ok', configured: false, ...c }
+    : { state: 'missing', configured: false, file: c.missing }
+}
+
 export interface GatherOptions {
   root?: string
   env?: Env
@@ -192,5 +274,7 @@ export async function gatherFacts(
     wakeUrl,
     wake: wakeUrl ? await probe(`${wakeUrl.replace(/\/+$/, '')}/status`) : null,
     launcher: launcherFacts(cfg?.launch, env, platform),
+    // MokuPilot for calls with a fork of a session: how the board would start it.
+    mokupilot: mokupilotCommand(cfg, { platform, env }),
   }
 }

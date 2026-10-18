@@ -67,6 +67,8 @@ export interface BoardMenuActions {
   history(key: string, from: MenuOrigin): unknown
   /** The terminal window of the session (hooks/useTerminal.ts). */
   terminal(key: string, from: MenuOrigin): unknown
+  /** A MokuPilot call whose agent is a fork of the session. */
+  mokupilot(key: string, from: MenuOrigin): unknown
   /** Rename where the name is (`name`: the card's name or the sheet's head). */
   rename(key: string, name: Element | null): unknown
   move(key: string, to: { cat?: string; column?: string }): unknown
@@ -105,7 +107,7 @@ export interface BoardMenuDeps {
     open: string | null
     filter: string
     sleepers: boolean
-    data: { categories: readonly MenuCategory[]; terminal?: boolean | undefined }
+    data: { categories: readonly MenuCategory[]; terminal?: boolean | undefined; mokupilot?: boolean | undefined }
   }
   /** Sessions on their way (the launch window); none: their cards get no menu. */
   launch?: LaunchMenus | null | undefined
@@ -191,6 +193,7 @@ const CARD_ACTIONS = [
   'changes',
   'history',
   'terminal',
+  'mokupilot',
 ] as const
 type CardAction = (typeof CARD_ACTIONS)[number]
 const isCardAction = (id: string): id is CardAction => CARD_ACTIONS.some(a => a === id)
@@ -204,6 +207,7 @@ function forCard(board: BoardMenuDeps, key: string, it: Item, el: Element, at: P
     items: cardMenu(it, {
       ...ctxOf(board),
       terminal: state.data.terminal !== false,
+      mokupilot: !!state.data.mokupilot,
       categories: state.data.categories,
       column: board.column(it),
       category: board.category(it),
@@ -309,6 +313,7 @@ export function keyPoint(r: { left: number; top: number; width: number; height: 
 /** The sheet's buttons that "More actions" lists on a phone, in their order. */
 export const SHEET_MORE = [
   'sheet-term',
+  'sheet-mokupilot',
   'sheet-wake',
   'sheet-sleep',
   'sheet-changes',

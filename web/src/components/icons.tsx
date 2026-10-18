@@ -43,6 +43,12 @@ export const GearIcon = () => (
   </Icon>
 )
 
+export const PhoneIcon = () => (
+  <Icon>
+    <path d="M6.6 3.5H4.8A1.8 1.8 0 0 0 3 5.4c.3 6 5.6 11.3 11.6 11.6a1.8 1.8 0 0 0 1.9-1.8v-1.8a1 1 0 0 0-.8-1l-2.6-.6a1 1 0 0 0-1 .3l-1 1.2a10 10 0 0 1-4.8-4.8l1.2-1a1 1 0 0 0 .3-1l-.6-2.6a1 1 0 0 0-1-.8Z" />
+  </Icon>
+)
+
 export const ArrowIcon = () => (
   <Icon>
     <path d="M4 10h11.5m-4.5-4.5 4.5 4.5-4.5 4.5" />

@@ -226,6 +226,7 @@ export function boardActions(deps: ActionDeps): BoardMenuActions {
     changes: (key, from) => deps.quickLook.lookChanges(key, elementFrom(from)),
     history: (key, from) => deps.quickLook.lookHistory(key, deps.item(key)?.cwd ?? '', elementFrom(from)),
     terminal: (key, from) => deps.terminal?.(key, elementFrom(from)),
+    mokupilot: key => actions().callMokuPilot(key),
     newSession: (ctx, from) => deps.newSession(ctx, from),
     cats: id => deps.openCategories(id),
     filter: id => dispatch({ type: 'filter', id }),
@@ -343,7 +344,7 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
           open: ui.open,
           filter: ui.filter,
           sleepers: ui.sleepers,
-          data: { categories: data?.categories ?? [], terminal: data?.terminal },
+          data: { categories: data?.categories ?? [], terminal: data?.terminal, mokupilot: data?.mokupilot },
         }
       },
       get launch() {

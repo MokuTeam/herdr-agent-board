@@ -6,9 +6,9 @@
 // when.js, questions.js's threadHTML — run against a small `$` over the parsed page. By hand: the
 // "New here" button app.js appends at start (app.js:2020-2027), the Changes button's rule in the
 // detail's `changed` (app.js:903) and syncAvailability's part for the sheet (app.js:175-195).
-// The page and renderSheetHead are those of the compact toolbar's merge (upstream PR #43): the
-// baseline's with the sheet's Terminal button (#36), the facts under its name one span each and
-// Wake's tooltip (#43), nothing else.
+// The page and renderSheetHead are those of MokuPilot's merge (upstream PR #44): the baseline's
+// with the sheet's Terminal button (#36), the facts under its name one span each and Wake's
+// tooltip (#43), and "Call in MokuPilot" (#44), nothing else.
 import { translator } from '../../../src/core/i18n/translator.ts'
 import type { BoardPayload } from '../../../src/core/payload.ts'
 import type { ColumnId, Item, Translator } from '../../../src/core/types.ts'
@@ -64,8 +64,8 @@ export interface OldSheetScene {
 
 type StyleRule = [string, string]
 
-/** Upstream's merge of the compact toolbar (PR #43), which has the terminal's (PR #36) in it. */
-const SHEET_MERGE = '8c4b987'
+/** Upstream's merge of MokuPilot calls (PR #44), which has the terminal's (#36) and the compact toolbar's (#43) in it. */
+const SHEET_MERGE = '75e9c61'
 
 /** Just enough of an element for the old code's writes, onto a parsed node. */
 class FakeElement {
@@ -165,7 +165,7 @@ function syncAvailability(nodes: Node[], s: OldSheetScene, call: Call): void {
   for (const id of ['sheet-focus', 'sheet-sleep', 'sheet-wake'])
     toggleAttr(el(id), 'disabled', blocked || missing || (id === 'sheet-sleep' && turn))
   const card = el('sheet-card')
-  const edits = [el('attach'), ...findAll([card], e => e.tag === 'button' || e.tag === 'input')]
+  const edits = [el('attach'), el('sheet-mokupilot'), ...findAll([card], e => e.tag === 'button' || e.tag === 'input')]
   for (const e of edits) toggleAttr(e, 'disabled', !canEdit)
   const acts = findAll(nodes, e => e.attrs.has('data-act'))
   for (const e of acts) if (e.attrs.get('data-act') === 'dismiss') toggleAttr(e, 'disabled', !canEdit)

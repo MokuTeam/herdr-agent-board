@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { Item } from '../../src/core/types.ts'
 import { type ActionDeps, boardActions, sheetMoreMenuFrom } from '../../web/src/hooks/useContextMenus.ts'
-import type { ActResult, SessionActions } from '../../web/src/hooks/useSessionActions.ts'
+import { type ActResult, callMokuPilot, type SessionActions } from '../../web/src/hooks/useSessionActions.ts'
 import { pointRect } from '../../web/src/models/board-menus.ts'
 import type { MenuEntry, MenuItem } from '../../web/src/models/menu-model.ts'
 import type { BoardAction } from '../../web/src/state/board-ui.ts'
@@ -66,6 +66,7 @@ function actionsWorld(fields: Partial<{ canEdit: boolean; canMutate: boolean; ac
     wakeSession: note('wakeSession'),
     sleepSession: note('sleepSession'),
     dismissAsk: note('dismissAsk'),
+    callMokuPilot: note('callMokuPilot'),
   }
   const deps: ActionDeps = {
     t: () => t,
@@ -112,6 +113,7 @@ describe('the menus’ actions', () => {
     act.history('s1', rect)
     act.newSession({ item: session }, rect)
     act.look({ path: '/srv/a.ts', line: 3 }, card)
+    act.mokupilot('s1', card)
     await world.flush()
     expect(calls).toEqual([
       'dispatch {"type":"open","key":"s1"}',
@@ -128,6 +130,7 @@ describe('the menus’ actions', () => {
       'lookHistory s1 /srv/acme none',
       `newSession {"item":${JSON.stringify(session)}} {"left":-2,"top":8,"right":22,"bottom":32,"width":24,"height":24}`,
       'look {"path":"/srv/a.ts","line":3} #card',
+      'callMokuPilot "s1"',
     ])
   })
 
@@ -439,5 +442,56 @@ describe('“More actions” on a phone', () => {
     b.click(page('sheet-more'), 1)
     expect(b.opened()?.items.some(it => !it.separator && it.id === 'sheet-term')).toBe(false)
     expect(clicked).toEqual([])
+  })
+
+  test('a MokuPilot call says it started, or why not, as upstream’s callMokuPilot', async () => {
+    for (const reply of [{ ok: true }, { ok: false, error: 'MokuPilot not found (meet)' }] as ActResult[])
+      for (const key of ['s1', 'gone']) {
+        const said: { old: unknown[]; react: unknown[] } = { old: [], react: [] }
+        const asked: { old: unknown[]; react: unknown[] } = { old: [], react: [] }
+        const deps = (side: 'old' | 'react') => ({
+          t,
+          itemOf: (k: string) => (k === 's1' ? session : undefined),
+          act: async (k: string, action: string) => {
+            asked[side].push([k, action])
+            return reply
+          },
+          toast: (text: string, error = false) => void said[side].push([text, error]),
+        })
+        const code = oldCode('web/app.js', ['callMokuPilot'], deps('old'), '75e9c61')
+        await oldFunction(code, 'callMokuPilot')(key)
+        await callMokuPilot(key, deps('react'))
+        expect(said.react).toEqual(said.old)
+        expect(asked.react).toEqual(asked.old)
+      }
+  })
+
+  test('“Call in MokuPilot” after the Terminal, as upstream’s at MokuPilot’s merge; gray without the board, picked it is the button’s own click', async () => {
+    const term = world.document.createElement('button')
+    term.id = 'sheet-term'
+    term.textContent = ` ${t('term.open')} `
+    const call = world.document.createElement('button')
+    call.id = 'sheet-mokupilot'
+    call.title = t('mokupilot.hint')
+    call.textContent = ` ${t('mokupilot.call')} `
+    page('sheet-focus').after(term)
+    term.after(call)
+    const clicked: string[] = []
+    call.addEventListener('click', () => clicked.push('mokupilot'))
+    for (const disabled of [false, true]) {
+      call.disabled = disabled
+      const [oldLog, newLog]: [string[], string[]] = [[], []]
+      const [a, b] = [oldMore(false, false, oldLog, '75e9c61'), newMore(false, false, newLog)]
+      a.click(page('sheet-more'), 1)
+      b.click(page('sheet-more'), 1)
+      expect(shown(b.opened())).toEqual(shown(a.opened()))
+      expect(b.opened()?.items[1]).toMatchObject({ id: 'sheet-mokupilot', label: 'Call in MokuPilot', disabled })
+      pickIn(a.opened(), 'sheet-mokupilot')
+      pickIn(b.opened(), 'sheet-mokupilot')
+      await world.flush()
+      expect(newLog).toEqual(oldLog)
+    }
+    // Picked while it could: the button's own click, on each side.
+    expect(clicked).toEqual(['mokupilot', 'mokupilot'])
   })
 })

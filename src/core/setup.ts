@@ -7,6 +7,7 @@
 import { join } from 'node:path'
 import { translator } from './i18n/translator.ts'
 import { BOARD_EVENTS, commandsOf, normPath, ourCommands, TOAST_EVENTS } from './install-plan.ts'
+import type { MokupilotLauncher } from './mokupilot.ts'
 import type { Translator } from './types.ts'
 
 export const WAKE_REPO = 'https://github.com/Eithery-rc/tg-mcp/tree/main/herdr-wake'
@@ -109,6 +110,8 @@ export interface SetupFacts {
   wakeUrl: string | null
   wake: { ok: boolean; status?: number; error?: string } | null
   launcher: LauncherFacts | null
+  /** How the board would start MokuPilot (adapters/setup-facts.ts mokupilotCommand); none: not looked for. */
+  mokupilot?: MokupilotLauncher | null
 }
 
 export type SetupLevel = 'ok' | 'error' | 'warn' | 'off' | 'na'
@@ -323,6 +326,33 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
         'ok',
         t('setup.launch.builtin', { claude: program }),
         l.claude?.length === 1 && program === 'claude' ? t('setup.launch.builtinDetail') : '',
+      )
+  }
+
+  // MokuPilot: calls with a fork of a session. Optional: a mark only when config.json names one that is not there.
+  const mp = facts.mokupilot
+  if (mp) {
+    const snippet = `"mokupilot": { "dir": "${win ? 'C:\\Users\\you\\MokuPilot' : '~/MokuPilot'}" }`
+    if (mp.state === 'ok') add('mokupilot', 'ok', t('setup.mokupilot.ok'), [mp.file, ...(mp.args ?? [])].join(' '))
+    else if (mp.state === 'off')
+      add('mokupilot', 'off', t('setup.mokupilot.disabled'), t('setup.mokupilot.disabledDetail'))
+    else if (mp.configured)
+      add(
+        'mokupilot',
+        'warn',
+        t('setup.mokupilot.missing', { file: mp.file || '?' }),
+        both(mp.error ?? '', t('setup.mokupilot.missingDetail')),
+        t('setup.mokupilot.missingFix'),
+        snippet,
+      )
+    else
+      add(
+        'mokupilot',
+        'off',
+        t('setup.mokupilot.off'),
+        t('setup.mokupilot.offDetail'),
+        t('setup.mokupilot.offFix'),
+        snippet,
       )
   }
 
