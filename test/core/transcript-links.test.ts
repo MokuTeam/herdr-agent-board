@@ -40,3 +40,14 @@ test('spawn-agent calls and what they print', () => {
   })
   assert.equal(spawnResult('Claude did not get ready'), null)
 })
+
+test('the board links a session to the one that started it with spawn-agent, either spelling', () => {
+  assert.deepEqual(spawnOf('Bash', { command: 'spawn-agent --name "Case 7" --cwd C:/w --brief-file b.txt' }), {
+    name: 'Case 7',
+  })
+  assert.deepEqual(spawnOf('Bash', { command: "spawn-agent --name='Case 8' --cwd ." }), { name: 'Case 8' })
+  assert.deepEqual(spawnOf('PowerShell', { command: 'spawn-agent.cmd -Name x -Cwd .' }), { name: 'x' })
+  assert.deepEqual(spawnOf('PowerShell', { command: 'Spawn-Agent -name Mixed -cwd .' }), { name: 'Mixed' })
+  assert.equal(spawnOf('Bash', { command: 'spawn-agent --named x' }), null)
+  assert.deepEqual(spawnResult('pane=wP:p3 name=Case 7 agent=case-7'), { pane: 'wP:p3', name: 'Case 7' })
+})
