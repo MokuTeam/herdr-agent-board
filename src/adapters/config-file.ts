@@ -2,16 +2,29 @@
 // the defaults on first use; edited by hand or from the web board, and picked up live by the
 // running board (liveConfig). Categories are the board's lanes, in this order; `paths` guess the
 // category of a session from its folder (the longest match wins) until the agent sets one
-// itself. Agents may use ids that are not listed: they get a lane too.
-import { existsSync, mkdirSync, watch } from 'node:fs'
-import { join } from 'node:path'
+// itself. Agents may use ids that are not listed: they get a lane too. `profiles` are the Claude
+// config folders sessions run in (core/profiles.ts), the ones found on this computer added.
+import { existsSync, mkdirSync, statSync, watch } from 'node:fs'
+import { homedir } from 'node:os'
+import { isAbsolute, join } from 'node:path'
 import { builtinTitle, DEFAULT_CONFIG, normalizeConfig, validColor } from '../core/categories.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
+import {
+  mergeProfiles,
+  PROFILE_COLORS,
+  type Profile,
+  profileForDir,
+  profileIdOf,
+  profileTitleOf,
+  resolveProfileDir,
+  shownProfiles,
+} from '../core/profiles.ts'
 import type { Category, Config } from '../core/types.ts'
 import { allCards, writeCard } from './cards.ts'
 import { isRecord, readJson, replaceFile } from './json-store.ts'
 import { configDir } from './paths.ts'
+import { findProfileDirs } from './profiles.ts'
 
 type Raw = Record<string, unknown>
 /** What an edit answers the web board and the CLI with. */
@@ -19,7 +32,8 @@ export type EditResult = { ok: true } | { ok: false; error: string }
 
 export const configFile = (): string => join(configDir(), 'config.json')
 
-const readRaw = (): Raw | null => readJson(configFile(), isRecord)
+/** config.json as it is on disk, or null when it is missing or no JSON object (half-written, say). */
+export const readConfigFile = (): Raw | null => readJson(configFile(), isRecord)
 
 function writeRaw(raw: Raw): void {
   mkdirSync(configDir(), { recursive: true })
@@ -27,7 +41,7 @@ function writeRaw(raw: Raw): void {
 }
 
 export function loadConfig(): Config {
-  const raw = readRaw()
+  const raw = readConfigFile()
   if (!raw && !existsSync(configFile())) {
     try {
       writeRaw(DEFAULT_CONFIG)
@@ -40,7 +54,7 @@ export function loadConfig(): Config {
 
 /** Change settings in config.json from the web board: { language }. */
 export function editSettings(body: unknown): EditResult {
-  const raw = readRaw() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
   const language = isRecord(body) ? body.language : undefined
   if (language !== undefined) {
     const l = String(language)
@@ -67,7 +81,7 @@ export function liveConfig(onChange: (cfg: Config) => void = () => {}): Config {
       clearTimeout(timer)
       timer = setTimeout(() => {
         // A half-written file by an editor reads as invalid: keep the last good config then.
-        if (!readRaw()) return
+        if (!readConfigFile()) return
         const next = loadConfig()
         const text = JSON.stringify(next)
         if (text === last) return
@@ -136,7 +150,7 @@ function ordered(cats: unknown[], ids: unknown[]): unknown[] {
  * named it, so those sessions fall back to the folder guess. "other" is the fallback lane and stays.
  */
 export function editCategories(body: unknown): EditResult {
-  const raw = readRaw() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
   let cats = categoriesOf(raw)
   const find = (id: unknown) => cats.filter(editable).find(c => c.id === id)
   const b: Raw = isRecord(body) ? body : {}
@@ -166,6 +180,9 @@ export function editCategories(body: unknown): EditResult {
       }
       if (b.color !== undefined && validColor(b.color)) cat.color = String(b.color)
       if (b.paths !== undefined) cat.paths = cleanPaths(b.paths) ?? cat.paths
+      // The lane's usual profile: '' clears it; one that is no id is ignored.
+      if (b.profile === '') delete cat.profile
+      else if (typeof b.profile === 'string' && ID.test(b.profile)) cat.profile = b.profile
       break
     }
     case 'delete': {
@@ -192,4 +209,115 @@ export function editCategories(body: unknown): EditResult {
   raw.categories = cats
   writeRaw(raw)
   return { ok: true }
+}
+
+/**
+ * The profiles config.json lists merged with the folders found in `home` (core/profiles.ts
+ * mergeProfiles), and how they go back into the file. A listed one stays the file's own object:
+ * only the fields an edit sets change, and those the board shows it with that it lacks (title,
+ * color, hidden) are filled in. The folders added follow in full, then every entry that is no
+ * profile, as it was.
+ */
+function profilesIn(raw: Raw, home: string, shownDir?: string | null) {
+  const listed: unknown[] = Array.isArray(raw.profiles) ? raw.profiles : []
+  const { list, added } = mergeProfiles(listed, findProfileDirs(home), home, shownDir)
+  // mergeProfiles takes the listed ones in the file's order, with their id and dir as written.
+  const rest = [...listed]
+  const own = new Map<Profile, Raw>()
+  for (const p of list) {
+    if (added.includes(p)) continue
+    const i = rest.findIndex(e => isRecord(e) && e.id === p.id && e.dir === p.dir)
+    const entry = rest[i]
+    if (!isRecord(entry)) continue
+    own.set(p, entry)
+    rest.splice(i, 1)
+  }
+  return {
+    list,
+    added,
+    /** The object the file keeps `p` in: its own entry, or `p` itself when it is new. */
+    entryOf: (p: Profile): Raw => own.get(p) ?? p,
+    /** Puts the profiles, changed, back into `raw`. */
+    save(): void {
+      const entries = list.map(p => {
+        const entry = own.get(p)
+        if (!entry) return p
+        for (const key of ['title', 'color', 'hidden'] as const) if (!(key in entry)) entry[key] = p[key]
+        return entry
+      })
+      raw.profiles = [...entries, ...rest]
+    },
+  }
+}
+
+/** A folder (not a file) that is there. */
+function isFolder(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/** The first profile color no profile has; with every one taken, round again. */
+const freeColor = (list: readonly Profile[]): string =>
+  PROFILE_COLORS.find(c => !list.some(p => p.color === c)) ??
+  PROFILE_COLORS[list.length % PROFILE_COLORS.length] ??
+  'indigo'
+
+/**
+ * Change the profiles in config.json from the Profiles panel: { op: 'update', id, title?, color?,
+ * hidden? } renames, recolors, shows or hides one, never changing its id or folder, and one stays
+ * shown; { op: 'add', dir } adds a folder somewhere else ("~" is the home folder), shown.
+ */
+export function editProfiles(body: unknown, { home = homedir() }: { home?: string } = {}): EditResult {
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  const profiles = profilesIn(raw, home)
+  const { list } = profiles
+  const b: Raw = isRecord(body) ? body : {}
+  switch (b.op) {
+    case 'update': {
+      const p = list.find(x => x.id === b.id)
+      if (!p) return { ok: false, error: t('err.profile.missing', { id: String(b.id) }) }
+      const entry = profiles.entryOf(p)
+      if (b.title !== undefined) {
+        if (!cleanTitle(b.title)) return { ok: false, error: t('err.profile.title') }
+        entry.title = cleanTitle(b.title)
+      }
+      if (b.color !== undefined && validColor(b.color)) entry.color = String(b.color)
+      if (typeof b.hidden === 'boolean') {
+        if (b.hidden && !p.hidden && !shownProfiles(list).some(x => x !== p))
+          return { ok: false, error: t('err.profile.lastShown') }
+        entry.hidden = b.hidden
+      }
+      break
+    }
+    case 'add': {
+      // A folder named relative to wherever the board runs would be another one for each start.
+      const dir = resolveProfileDir(typeof b.dir === 'string' ? b.dir : '', home)
+      if (!isAbsolute(dir) || !isFolder(dir)) return { ok: false, error: t('err.profile.noFolder', { path: dir }) }
+      const known = profileForDir(list, dir)
+      if (known) return { ok: false, error: t('err.profile.exists', { path: dir, title: known.title }) }
+      const id = profileIdOf(dir, home, new Set(list.map(p => p.id)))
+      list.push({ id, title: profileTitleOf(id), dir, color: freeColor(list), hidden: false })
+      break
+    }
+    default:
+      return { ok: false, error: `unknown op ${String(b.op)}` }
+  }
+  profiles.save()
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/** Adds the found folders config.json does not list (shownDir: shown too); true when it wrote. */
+export function saveFoundProfiles(inheritedDir: string, home: string = homedir()): boolean {
+  // Only into a file that is there: the board's loadConfig makes it, with its defaults, on first use.
+  const raw = readConfigFile()
+  if (!raw) return false
+  const profiles = profilesIn(raw, home, inheritedDir)
+  if (!profiles.added.length) return false
+  profiles.save()
+  writeRaw(raw)
+  return true
 }

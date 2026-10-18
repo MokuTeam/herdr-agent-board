@@ -1,11 +1,21 @@
-import { test } from 'bun:test'
+import { expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { readCard, writeCard } from '../../src/adapters/cards.ts'
-import { configFile, editCategories, editSettings, loadConfig } from '../../src/adapters/config-file.ts'
-import { renameWithRetry, replaceFile } from '../../src/adapters/json-store.ts'
+import {
+  configFile,
+  type EditResult,
+  editCategories,
+  editProfiles,
+  editSettings,
+  loadConfig,
+  saveFoundProfiles,
+} from '../../src/adapters/config-file.ts'
+import { isRecord, renameWithRetry, replaceFile } from '../../src/adapters/json-store.ts'
 import { configDir } from '../../src/adapters/paths.ts'
+import { useLanguage } from '../../src/core/lang.ts'
+import { sameDir } from '../../src/core/launch/names.ts'
 import { isolatedHome } from '../support/env.ts'
 
 const saved = (): Record<string, unknown> => JSON.parse(readFileSync(configFile(), 'utf8'))
@@ -41,7 +51,8 @@ test('renameWithRetry rides out a brief Windows file lock but not a real error',
 })
 
 test('replaceFile puts the whole text in place, or leaves the file and no temp file behind', () => {
-  const dir = isolatedHome()
+  const dir = join(isolatedHome(), 'files')
+  mkdirSync(dir)
   const file = join(dir, 'usage.json')
   replaceFile(file, '{"a":1}')
   assert.equal(readFileSync(file, 'utf8'), '{"a":1}')
@@ -236,4 +247,139 @@ test('deleting a category clears it from the cards that named it', () => {
   assert.deepEqual(editCategories({ op: 'delete', id: 'work' }), { ok: true })
   assert.equal(readCard('c1')?.category, undefined)
   assert.equal(readCard('c1')?.doing, 'x')
+})
+
+/** A temp home with the default profile folder and two others (isolatedHome's, so no real one). */
+function profileHome(): string {
+  const home = join(isolatedHome(), 'home')
+  for (const name of ['.claude', '.claude-gamedev']) {
+    mkdirSync(join(home, name), { recursive: true })
+    writeFileSync(join(home, name, 'settings.json'), '{}')
+  }
+  mkdirSync(join(home, '.claude-work', 'projects'), { recursive: true })
+  return home
+}
+type SavedProfile = Record<string, unknown> & { id: string }
+const savedProfiles = (): unknown[] => (Array.isArray(saved().profiles) ? (saved().profiles as unknown[]) : [])
+const savedProfile = (id: string): SavedProfile | undefined =>
+  savedProfiles().find((p): p is SavedProfile => isRecord(p) && p.id === id)
+const savedIds = (): unknown[] => savedProfiles().map(p => (isRecord(p) ? p.id : p))
+const ok = (r: EditResult) => expect(r).toEqual({ ok: true })
+
+test('saveFoundProfiles adds the folders once, the inherited one shown, keeping the rest of the file', () => {
+  const home = profileHome()
+  // No config.json yet: the board's loadConfig makes it, this does not.
+  expect(saveFoundProfiles(join(home, '.claude-work'), home)).toBe(false)
+  expect(readdirSync(join(home, '..'))).not.toContain('config')
+  const own = {
+    id: 'default',
+    title: 'Private',
+    dir: join(home, '.claude'),
+    color: 'indigo',
+    hidden: false,
+    mine: true,
+  }
+  seed({ language: 'ru', keep: 1, profiles: [own, 7] })
+  expect(saveFoundProfiles(join(home, '.claude-work'), home)).toBe(true)
+  expect(saved().language).toBe('ru')
+  expect(saved().keep).toBe(1)
+  expect(savedIds()).toEqual(['default', 'gamedev', 'work', 7])
+  expect(savedProfile('default')).toEqual(own)
+  expect(savedProfile('work')).toMatchObject({ title: 'Work', dir: join(home, '.claude-work'), hidden: false })
+  expect(savedProfile('gamedev')).toMatchObject({ title: 'Gamedev', dir: join(home, '.claude-gamedev'), hidden: true })
+  const before = readFileSync(configFile(), 'utf8')
+  expect(saveFoundProfiles(join(home, '.claude-work'), home)).toBe(false)
+  expect(readFileSync(configFile(), 'utf8')).toBe(before)
+})
+
+test('editProfiles renames, recolors, shows and hides by id, never changing id or folder', () => {
+  const home = profileHome()
+  useLanguage('en')
+  seed({ language: 'en', futureKey: 1 })
+  ok(editProfiles({ op: 'update', id: 'default', title: ' Private ', color: 'teal' }, { home }))
+  expect(savedProfile('default')).toMatchObject({ id: 'default', title: 'Private', color: 'teal', hidden: false })
+  expect(sameDir(String(savedProfile('default')?.dir), join(home, '.claude'))).toBe(true)
+  expect(saved().futureKey).toBe(1)
+  ok(editProfiles({ op: 'update', id: 'default', color: 'nope' }, { home }))
+  expect(savedProfile('default')?.color).toBe('teal')
+  expect(editProfiles({ op: 'update', id: 'default', hidden: true }, { home })).toEqual({
+    ok: false,
+    error: 'At least one profile stays shown',
+  })
+  expect(editProfiles({ op: 'update', id: 'nope', title: 'x' }, { home })).toEqual({
+    ok: false,
+    error: 'No profile “nope”',
+  })
+  expect(editProfiles({ op: 'update', id: 'default', title: '  ' }, { home })).toEqual({
+    ok: false,
+    error: 'A profile needs a name',
+  })
+  expect(savedProfile('default')?.title).toBe('Private')
+  // Work shown, then the default hidden; a folder sent along changes nothing, nor a hidden that is no boolean.
+  ok(editProfiles({ op: 'update', id: 'work', hidden: false, dir: join(home, 'x'), title: 'BluBanyan' }, { home }))
+  ok(editProfiles({ op: 'update', id: 'default', hidden: true }, { home }))
+  ok(editProfiles({ op: 'update', id: 'work', hidden: 'yes' }, { home }))
+  expect(savedProfile('work')).toMatchObject({ id: 'work', title: 'BluBanyan', hidden: false })
+  expect(sameDir(String(savedProfile('work')?.dir), join(home, '.claude-work'))).toBe(true)
+  expect(savedProfile('default')?.hidden).toBe(true)
+  expect(savedIds()).toEqual(['default', 'gamedev', 'work'])
+  expect(editProfiles({ op: 'nope' }, { home }).ok).toBe(false)
+})
+
+test('editProfiles adds a folder somewhere else, ~ included; not twice, not one that is not there', () => {
+  const home = profileHome()
+  useLanguage('en')
+  mkdirSync(join(home, 'elsewhere', 'acme'), { recursive: true })
+  seed({ language: 'en' })
+  ok(editProfiles({ op: 'add', dir: '~/elsewhere/acme' }, { home }))
+  expect(savedProfile('acme')).toMatchObject({ id: 'acme', title: 'Acme', color: 'brown', hidden: false })
+  expect(sameDir(String(savedProfile('acme')?.dir), join(home, 'elsewhere', 'acme'))).toBe(true)
+  expect(editProfiles({ op: 'add', dir: join(home, 'elsewhere', 'acme') + sep }, { home })).toEqual({
+    ok: false,
+    error: `${join(home, 'elsewhere', 'acme')} is the profile Acme already`,
+  })
+  expect(editProfiles({ op: 'add', dir: join(home, 'gone') }, { home })).toEqual({
+    ok: false,
+    error: `There is no folder ${join(home, 'gone')}`,
+  })
+  // A file is no folder; nor is a folder named relative to wherever the board runs.
+  const file = join(home, '.claude', 'settings.json')
+  expect(editProfiles({ op: 'add', dir: file }, { home })).toEqual({ ok: false, error: `There is no folder ${file}` })
+  expect(editProfiles({ op: 'add', dir: 'acme' }, { home })).toEqual({ ok: false, error: 'There is no folder acme' })
+  expect(savedIds()).toEqual(['default', 'gamedev', 'work', 'acme'])
+})
+
+test('a profile edit writes back the file’s own entries: what it does not set stays as typed, and what is no profile stays', () => {
+  const home = profileHome()
+  const work = { id: 'work', dir: join(home, '.claude-work'), args: '--model sonnet', color: 'nope', note: 'mine' }
+  const noProfiles = [{ title: 'No id', dir: join(home, 'x') }, null, { id: 'old' }, 'stray']
+  seed({ language: 'en', profiles: [noProfiles[0], work, ...noProfiles.slice(1)] })
+  ok(editProfiles({ op: 'update', id: 'work', hidden: false }, { home }))
+  // The listed one keeps every field as typed (its args a string, its color unknown) and gets the
+  // ones it had not (title) and the edit's own; the folders found come after it, then the rest as it was.
+  expect(savedProfiles()).toEqual([
+    { ...work, title: 'Work', hidden: false },
+    { id: 'default', title: 'Default', dir: join(home, '.claude'), color: 'teal', hidden: false },
+    { id: 'gamedev', title: 'Gamedev', dir: join(home, '.claude-gamedev'), color: 'pink', hidden: true },
+    ...noProfiles,
+  ])
+  // A later write keeps them so.
+  ok(editProfiles({ op: 'update', id: 'gamedev', title: 'Games' }, { home }))
+  expect(savedProfile('work')).toEqual({ ...work, title: 'Work', hidden: false })
+  expect(savedProfiles().slice(3)).toEqual(noProfiles)
+  expect(savedProfile('gamedev')?.title).toBe('Games')
+})
+
+test('a lane’s usual profile: set, cleared, a bad id ignored', () => {
+  isolatedHome()
+  seed({ language: 'en', categories: [{ id: 'acme', color: 'blue', paths: [] }, { id: 'other' }] })
+  const acme = () => (saved().categories as Record<string, unknown>[]).find(c => c.id === 'acme')
+  ok(editCategories({ op: 'update', id: 'acme', profile: 'work' }))
+  expect(acme()?.profile).toBe('work')
+  expect(loadConfig().categories.find(c => c.id === 'acme')?.profile).toBe('work')
+  ok(editCategories({ op: 'update', id: 'acme', profile: 'Bad Id' }))
+  ok(editCategories({ op: 'update', id: 'acme', profile: 7 }))
+  expect(acme()?.profile).toBe('work')
+  ok(editCategories({ op: 'update', id: 'acme', profile: '' }))
+  expect(acme()).toEqual({ id: 'acme', color: 'blue', paths: [] })
 })

@@ -7,6 +7,7 @@
 import type { Lang } from '../types.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
+import { PROFILE_STRINGS } from './profile-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
 
@@ -996,3 +997,5 @@ for (const code of Object.keys(TERMINAL_STRINGS) as Lang[]) Object.assign(STRING
 for (const code of Object.keys(HELPER_STRINGS) as Lang[]) Object.assign(STRINGS[code], HELPER_STRINGS[code])
 // So does the setup check.
 for (const code of Object.keys(SETUP_STRINGS) as Lang[]) Object.assign(STRINGS[code], SETUP_STRINGS[code])
+// And the Claude profiles.
+for (const code of Object.keys(PROFILE_STRINGS) as Lang[]) Object.assign(STRINGS[code], PROFILE_STRINGS[code])

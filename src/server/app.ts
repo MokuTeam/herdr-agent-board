@@ -7,8 +7,10 @@
 // it cannot type into a session.
 import { type FSWatcher, mkdirSync, watch } from 'node:fs'
 import { join } from 'node:path'
+import { saveFoundProfiles } from '../adapters/config-file.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
+import { inheritedProfileDir } from '../adapters/profiles.ts'
 import { messageGate } from '../core/message-gate.ts'
 import type { SetupFacts } from '../core/setup.ts'
 import type { Deps } from '../services/deps.ts'
@@ -25,7 +27,7 @@ import { launchRoutes } from './routes/launch.ts'
 import { revealRoute, revealState } from './routes/reveal.ts'
 import { scheduleRoute } from './routes/schedule.ts'
 import { sessionRoutes } from './routes/session.ts'
-import { categoriesRoute, settingsRoute } from './routes/settings.ts'
+import { categoriesRoute, profilesRoute, settingsRoute } from './routes/settings.ts'
 import { setupRoute } from './routes/setup.ts'
 import { staticRoute } from './routes/static.ts'
 import { terminalRoute } from './routes/terminal.ts'
@@ -82,6 +84,13 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
   const { cfg, log } = deps
   const port = asked ?? Number(cfg.port ?? 12422)
   pruneUploads(Number(cfg.keepUploadsDays ?? 14))
+  // The profile folders found on this computer that config.json does not list yet go into it,
+  // hidden, but for the default one and the one this board's own env points to.
+  try {
+    saveFoundProfiles(inheritedProfileDir())
+  } catch (err) {
+    log(`profiles: ${messageOf(err)}`)
+  }
   // The React page (web/src/main.tsx) is bundled in memory (Bun.build) and served as /app.js, with
   // what it runs before it paints (web/src/theme.ts) as /theme.js; their version, with the page's
   // other files, tells open pages to reload.
@@ -125,6 +134,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     settingsRoute(),
     scheduleRoute(refresh),
     categoriesRoute(),
+    profilesRoute(),
     ...launchRoutes(launches, board.items),
     terminalRoute({ cfg, terminals, find: board.find, publish: board.publish }),
     ...sessionRoutes({
