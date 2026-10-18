@@ -1,10 +1,11 @@
-import { setDefaultTimeout, test } from 'bun:test'
+import { expect, setDefaultTimeout, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { BRIEF_VERSION, brief, waitReminder } from '../../src/core/brief.ts'
 import { normalizeConfig } from '../../src/core/categories.ts'
 import { useLanguage } from '../../src/core/lang.ts'
+import { sameDir } from '../../src/core/launch/names.ts'
 import { promptOf } from '../../src/core/schedule-rules.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 import { notification } from '../support/task-notification.ts'
@@ -19,17 +20,33 @@ function putCard(box: Sandbox, card: Card & { key: string }): void {
   mkdirSync(box.cards, { recursive: true })
   writeFileSync(join(box.cards, `${card.key}.json`), JSON.stringify(card))
 }
+const configFile = (box: Sandbox): string =>
+  join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
 function englishConfig(box: Sandbox): void {
-  const dir = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board')
-  mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, 'config.json'), JSON.stringify({ language: 'en' }))
+  mkdirSync(join(configFile(box), '..'), { recursive: true })
+  writeFileSync(configFile(box), JSON.stringify({ language: 'en' }))
 }
+/** A Claude profile folder in the sandbox's home: one with settings.json is found. */
+function profileFolder(box: Sandbox, name: string): string {
+  const dir = join(box.env.USERPROFILE as string, name)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'settings.json'), '{}')
+  return dir
+}
+/** `C:\x` as `c:\x` and back: the same folder on Windows. */
+const flipDriveCase = (p: string): string =>
+  p.replace(/^[A-Za-z]/, c => (c === c.toUpperCase() ? c.toLowerCase() : c.toUpperCase()))
 
-/** The hook as Claude Code runs it: the event on stdin; what it printed. */
-async function runHook(box: Sandbox, input: unknown, pane: string | null = 'p1'): Promise<string> {
+/** The hook as Claude Code runs it: the event on stdin, `env` on top of the sandbox's; what it printed. */
+async function runHook(
+  box: Sandbox,
+  input: unknown,
+  pane: string | null = 'p1',
+  env: Record<string, string> = {},
+): Promise<string> {
   const proc = Bun.spawn([process.execPath, join(root, 'src', 'entrypoints', 'hook.ts')], {
     cwd: root,
-    env: { ...box.env, ...(pane ? { HERDR_PANE_ID: pane } : {}) },
+    env: { ...box.env, ...(pane ? { HERDR_PANE_ID: pane } : {}), ...env },
     stdin: new TextEncoder().encode(JSON.stringify(input)),
     stdout: 'pipe',
     stderr: 'pipe',
@@ -41,6 +58,7 @@ async function runHook(box: Sandbox, input: unknown, pane: string | null = 'p1')
 }
 const context = (event: string, text: string): string =>
   `${JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: text } })}\n`
+const sessionStart = (box: Sandbox, sid: string) => ({ hook_event_name: 'SessionStart', session_id: sid, cwd: box.dir })
 
 test('SessionStart in a herdr pane: the full brief, and the card remembers it was briefed', async () => {
   const box = await sandbox()
@@ -105,4 +123,64 @@ test("a call's results do not count as the user answering the session (hook)", a
   const prompt = promptOf({ id: 'c1', key: 's1', kind: 'call', text: report, next: Date.now() }, Date.now())
   await runHook(box, { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: box.dir, prompt })
   assert.equal(cardOf(box, 's1')?.ask, 'Deploy now?')
+})
+
+// The profile a session runs in: the hook runs in the session's own env, so its CLAUDE_CONFIG_DIR
+// (unset: ~/.claude) is the session's folder, and the profile that has that folder its id.
+test('every spelling of the default folder reports default, and the brief is as before', async () => {
+  const box = await sandbox()
+  const home = box.env.USERPROFILE as string
+  englishConfig(box)
+  useLanguage('en')
+  putCard(box, { key: 's1', category: 'acme', doing: 'fix the CI' })
+  const variants = [
+    undefined,
+    join(home, '.claude'),
+    `${join(home, '.claude')}${sep}`,
+    `${home}/.claude/`,
+    `${join(home, '.claude').replaceAll('\\', '/')}/`,
+    '~/.claude',
+    ...(process.platform === 'win32' ? [flipDriveCase(join(home, '.claude'))] : []),
+  ]
+  for (const v of variants) {
+    const out = await runHook(box, sessionStart(box, 's1'), 'p1', v === undefined ? {} : { CLAUDE_CONFIG_DIR: v })
+    expect(out).toBe(context('SessionStart', brief(normalizeConfig({ language: 'en' }), cardOf(box, 's1'), box.dir)))
+    expect(cardOf(box, 's1')?.profile).toBe('default')
+    expect(sameDir(String(cardOf(box, 's1')?.profileDir), join(home, '.claude'))).toBe(true)
+  }
+})
+
+test('a work session reports work; a folder no profile has keeps the folder and no id', async () => {
+  const box = await sandbox()
+  const home = box.env.USERPROFILE as string
+  const work = profileFolder(box, '.claude-work')
+  await runHook(box, sessionStart(box, 's2'), 'p1', { CLAUDE_CONFIG_DIR: work })
+  expect(cardOf(box, 's2')).toMatchObject({ profile: 'work', profileDir: work })
+  // `~` is the home folder, never a folder named so.
+  await runHook(box, sessionStart(box, 's4'), 'p1', { CLAUDE_CONFIG_DIR: '~/.claude-work' })
+  expect(cardOf(box, 's4')?.profile).toBe('work')
+  expect(sameDir(String(cardOf(box, 's4')?.profileDir), join(home, '.claude-work'))).toBe(true)
+  // A profile the card named before goes: it is never kept for a folder that is not its own.
+  putCard(box, { key: 's3', profile: 'default', profileDir: join(home, '.claude') })
+  await runHook(box, sessionStart(box, 's3'), 'p1', { CLAUDE_CONFIG_DIR: join(box.dir, 'odd') })
+  expect(cardOf(box, 's3')?.profile).toBeUndefined()
+  expect(cardOf(box, 's3')?.profileDir).toBe(join(box.dir, 'odd'))
+})
+
+test('outside a herdr pane nothing is written; an unchanged profile is not written again', async () => {
+  const box = await sandbox()
+  const work = { CLAUDE_CONFIG_DIR: profileFolder(box, '.claude-work') }
+  expect(await runHook(box, sessionStart(box, 's1'), null, work)).toBe('')
+  expect(cardOf(box, 's1')).toBeNull()
+  putCard(box, { key: 's1', briefV: BRIEF_VERSION })
+  const prompt = { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: box.dir, prompt: 'go on' }
+  expect(await runHook(box, prompt, 'p1', work)).toBe('')
+  const first = cardOf(box, 's1')
+  expect(first).toMatchObject({ profile: 'work', profileDir: work.CLAUDE_CONFIG_DIR })
+  expect(typeof first?.updatedAt).toBe('number')
+  await Bun.sleep(5)
+  expect(await runHook(box, prompt, 'p1', work)).toBe('')
+  expect(cardOf(box, 's1')).toEqual(first)
+  // The profiles are only read: config.json is written where it was before (a first brief), not here.
+  expect(existsSync(configFile(box))).toBe(false)
 })

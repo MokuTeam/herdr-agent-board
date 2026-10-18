@@ -22,6 +22,9 @@ export const uploadsDir = (): string => join(stateDir(), 'uploads')
 export const launchDir = (): string => join(stateDir(), 'launch')
 // From Claude Code's status line (entrypoints/statusline.ts): the account's usage windows, each session's context.
 export const usageFile = (): string => join(stateDir(), 'claude-limits-latest.json')
+// The usage windows per Claude profile: the default profile's in usageFile(), as before; another's in its own file.
+export const usageFileFor = (id: string): string =>
+  id === 'default' ? usageFile() : join(stateDir(), `claude-limits-${id.replace(/[^A-Za-z0-9_-]/g, '_')}.json`)
 export const contextDir = (): string => join(stateDir(), 'context')
 // The shells the board opened (services/terminals.ts), so a board that restarts finds them again.
 export const terminalsFile = (): string => join(stateDir(), 'terminals.json')
