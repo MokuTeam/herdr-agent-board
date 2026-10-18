@@ -37,3 +37,5 @@ export const usageFileFor = (id: string): string =>
 export const contextDir = (): string => join(stateDir(), 'context')
 // The shells the board opened (services/terminals.ts), so a board that restarts finds them again.
 export const terminalsFile = (): string => join(stateDir(), 'terminals.json')
+// The panes opened with a profile's CLAUDE_CONFIG_DIR (adapters/profile-panes.ts).
+export const profilePanesFile = (): string => join(stateDir(), 'profile-panes.json')

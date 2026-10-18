@@ -3,6 +3,7 @@ import { sameDir } from '../../src/core/launch/names.ts'
 import {
   configDirFor,
   defaultProfileDir,
+  envRejected,
   mergeProfiles,
   type Profile,
   profileIdOf,
@@ -12,6 +13,7 @@ import {
   resolveProfileDir,
   sessionProfile,
   shownProfiles,
+  spawnEnv,
 } from '../../src/core/profiles.ts'
 
 const H = 'C:\\Users\\me'
@@ -244,4 +246,46 @@ test('a relative folder is never a profile: neither a listed one nor the boardâ€
   expect(mergeProfiles([{ id: 'w', dir: 'C:\\w' }], [], '/home/me', null, 'linux').list.map(p => p.id)).toEqual([
     'default',
   ])
+})
+
+test('spawn-agent starts in the folder of the agent that runs it, or the profile it names', () => {
+  // An agent's own start: herdr's env is taken to be the default profile's, so that needs no --env.
+  expect(spawnEnv({}, undefined, L, H, 'win32')).toEqual({ ok: true, configDir: null, profile: DEFAULT })
+  expect(spawnEnv({}, 'c:/users/me/.claude/', L, H, 'win32')).toEqual({ ok: true, configDir: null, profile: DEFAULT })
+  expect(spawnEnv({}, '~/.claude-work', L, H, 'win32')).toEqual({ ok: true, configDir: WORK.dir, profile: WORK })
+  // A hidden parent profile is kept.
+  expect(spawnEnv({}, GAMEDEV.dir, L, H, 'win32')).toMatchObject({ ok: true, configDir: GAMEDEV.dir })
+  expect(spawnEnv({}, 'D:\\odd', L, H, 'win32')).toEqual({ ok: false, error: 'unknown', detail: 'D:\\odd' })
+  // A folder named relative to wherever the agent runs is never a profile.
+  expect(spawnEnv({}, '.claude-work', L, H, 'win32')).toEqual({ ok: false, error: 'unknown', detail: '.claude-work' })
+  // --profile overrides the parent's: a listed, shown one.
+  expect(spawnEnv({ profile: 'work' }, undefined, L, H, 'win32')).toEqual({
+    ok: true,
+    configDir: WORK.dir,
+    profile: WORK,
+  })
+  expect(spawnEnv({ profile: 'gamedev' }, undefined, L, H, 'win32')).toMatchObject({ ok: false, error: 'hidden' })
+  expect(spawnEnv({ profile: 'nope' }, undefined, L, H, 'win32')).toMatchObject({ ok: false, error: 'missing' })
+  // The board's own starts: the env as it is, or the folder it checked.
+  expect(spawnEnv({ keepEnv: true }, WORK.dir, L, H, 'win32')).toEqual({ ok: true, configDir: null, profile: WORK })
+  expect(spawnEnv({ keepEnv: true }, 'D:\\odd', L, H, 'win32')).toEqual({ ok: true, configDir: null, profile: null })
+  expect(spawnEnv({ configDir: 'C:\\x' }, undefined, L, H, 'win32')).toEqual({
+    ok: true,
+    configDir: 'C:\\x',
+    profile: null,
+  })
+  expect(spawnEnv({ configDir: WORK.dir }, undefined, L, H, 'win32')).toEqual({
+    ok: true,
+    configDir: WORK.dir,
+    profile: WORK,
+  })
+})
+
+test('herdr that does not take --env says so', () => {
+  expect(envRejected("error: unexpected argument '--env' found")).toBe(true)
+  expect(envRejected(new Error("herdr tab create: error: unexpected argument '--env' found"))).toBe(true)
+  expect(envRejected("error: unrecognized option '--env'")).toBe(true)
+  expect(envRejected('unknown flag: --env')).toBe(true)
+  expect(envRejected('no such pane')).toBe(false)
+  expect(envRejected(undefined)).toBe(false)
 })

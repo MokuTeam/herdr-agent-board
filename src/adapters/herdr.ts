@@ -186,21 +186,42 @@ export async function agentNames(): Promise<Set<string>> {
   return new Set(agents.map(a => stringAt(a, 'name')).filter((name): name is string => !!name))
 }
 
-/** A new workspace: its id, and the tab and pane it comes with. */
+/** `--env KEY=VALUE` for each entry (herdr 0.9.5 and newer); nothing without any. */
+const envArgs = (env: Readonly<Record<string, string>> | undefined): string[] =>
+  Object.entries(env ?? {}).flatMap(([key, value]) => ['--env', `${key}=${value}`])
+
+/** A new workspace: its id, and the tab and pane it comes with; `env` is added to its shell's. */
 export async function workspaceCreate(
   cwd: string,
   label: string,
+  env?: Readonly<Record<string, string>>,
 ): Promise<{ id: string; tab: string | null; pane: string | null }> {
-  const args = ['workspace', 'create', '--cwd', cwd, '--label', label, '--no-focus']
+  const args = ['workspace', 'create', '--cwd', cwd, '--label', label, ...envArgs(env), '--no-focus']
   const answer = await herdr(args)
   const id = isRecord(answer) ? stringAt(answer.workspace, 'workspace_id') : null
   if (!isRecord(answer) || !id) throw new HerdrError(args, undefined, 'no workspace in its answer')
   return { id, tab: stringAt(answer.tab, 'tab_id'), pane: stringAt(answer.root_pane, 'pane_id') }
 }
 
-/** A new tab in a workspace; returns the pane it comes with. */
-export async function tabCreate(workspace: string, cwd: string, label: string): Promise<string> {
-  const args = ['tab', 'create', '--workspace', workspace, '--cwd', cwd, '--label', label, '--no-focus']
+/** A new tab in a workspace, `env` added to its shell's; returns the pane it comes with. */
+export async function tabCreate(
+  workspace: string,
+  cwd: string,
+  label: string,
+  env?: Readonly<Record<string, string>>,
+): Promise<string> {
+  const args = [
+    'tab',
+    'create',
+    '--workspace',
+    workspace,
+    '--cwd',
+    cwd,
+    '--label',
+    label,
+    ...envArgs(env),
+    '--no-focus',
+  ]
   const answer = await herdr(args)
   const pane = isRecord(answer) ? stringAt(answer.root_pane, 'pane_id') : null
   if (!pane) throw new HerdrError(args, undefined, 'no pane in its answer')

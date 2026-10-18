@@ -122,6 +122,8 @@ export function launcherError(stdout: unknown, stderr: unknown): { message: stri
 export function failureKind(message: unknown, code?: string): FailureKind {
   const m = String(message ?? '')
   if (code === 'ENOENT' || code === 'EINVAL') return 'launcher'
+  // herdr cannot set the profile's folder for the tab: nothing was started, and a retry would not do better.
+  if (/CLAUDE_CONFIG_DIR/.test(m)) return 'launcher'
   // The session runs and only its first message is missing: a retry would start a second one.
   if (/brief did not reach/i.test(m)) return 'message'
   if (/trust|dialog|agent_not_ready|blocked/i.test(m)) return 'dialog'

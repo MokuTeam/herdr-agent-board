@@ -288,11 +288,11 @@ puts it on PATH; it is `bun src/entrypoints/spawn-agent.ts`):
 ```
 spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
             [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
-            [--timeout-sec 120] [--session-id <uuid>] [--pane <herdr pane id>]
+            [--timeout-sec 120] [--session-id <uuid>] [--pane <herdr pane id>] [--profile <id>]
 ```
 
 PowerShell's spelling works too: `-Name`, `-Cwd`, `-Label`, `-BriefFile`, `-Brief`, `-Workspace`,
-`-TimeoutSec`. It opens a tab in the workspace (inside herdr the current one, from
+`-TimeoutSec`, `-Profile`. It opens a tab in the workspace (inside herdr the current one, from
 `HERDR_WORKSPACE_ID`), labelled with `--label` or the name, and types `launch.claude` into it
 (with `--session-id` when given). Once herdr sees Claude ready, it gives the agent a herdr name to
 address it by (the name in `[a-z0-9_-]`, Cyrillic spelled in Latin, `-2` when taken), types
@@ -308,6 +308,28 @@ folder trust): answer it in that tab, then name and brief the session there. A b
 not get through fails it too, saying so: the session runs, send the brief by hand rather than
 start another. A `/rename` that does not take is only a warning. `--pane` starts Claude in that
 pane instead of a new tab; it must be at a shell prompt, not running an agent.
+
+With more than one Claude profile (`CLAUDE_CONFIG_DIR` folders such as `~/.claude-work`), a
+session an agent starts keeps that agent's profile, the one its own `CLAUDE_CONFIG_DIR` points to,
+even when the profile is hidden on the board: a helper of a work session runs in work.
+`--profile <id>` starts it in another profile instead, one the board lists and shows. The
+profile's `args` go after `launch.claude`, before `--session-id`. For an agent's own profile other
+than the default one (`~/.claude`, which herdr's own env is taken to be), and for any profile
+`--profile` names, the new tab gets `herdr tab create --env CLAUDE_CONFIG_DIR=<folder>`, which
+needs herdr 0.9.5 or newer. spawn-agent then records the pane as opened in that profile and, with
+`--session-id`, the card as meant to run in it, so a session that reports another profile shows
+the "wrong profile" warning. spawn-agent never falls back to another profile: it refuses, before
+herdr is asked anything, when
+
+- the agent's own folder is not a profile the board knows (or is named relative to where it
+  runs): pass `--profile <id>`;
+- `--profile` names a profile the board does not list, or one that is hidden (show it first);
+- the profile's folder is not there;
+- `--pane` names a pane not opened in that profile (leave `--pane` out to get a new tab).
+
+herdr that does not take `--env` fails the start too, saying so: nothing was started. The board's
+own launches pass `--config-dir <folder>` (a folder it checked) or `--keep-env` (the env as herdr
+makes it) instead of `--profile`; only one of the three goes at a time.
 
 Details it takes care of: `/rename` runs without a turn, so herdr calls it stalled, and the
 screen is read for "Session renamed" instead. Right after it Claude can drop typed text, and a

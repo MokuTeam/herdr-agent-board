@@ -1,4 +1,4 @@
-import { describe, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { failureKind, launcherError } from '../../src/core/launch/launcher-command.ts'
 import {
@@ -8,6 +8,7 @@ import {
   type SpawnArgs,
   shellLine,
   stillTyped,
+  USAGE,
 } from '../../src/core/launch/spawn-args.ts'
 
 const optionsOf = (r: SpawnArgs) => {
@@ -81,6 +82,30 @@ describe('spawn-agent options', () => {
     assert.throws(() => parseArgs(['--name', 'x', '--cwd', '.', '--constructor', '1']), /unknown option --constructor/)
     assert.throws(() => parseArgs(['--name', 'x', '--cwd', '.', '--toString', '1']), /unknown option --toString/)
   })
+
+  test('the profile: --profile <id>, or the board’s --config-dir <folder> or --keep-env, one of them', () => {
+    expect(parseArgs(['--name', 'A', '--cwd', 'x', '--profile', 'work'])).toMatchObject({ profile: 'work' })
+    expect(parseArgs(['-Name', 'A', '-Cwd', 'x', '-KeepEnv'])).toMatchObject({ keepEnv: true })
+    expect(parseArgs(['--name', 'A', '--cwd', 'x', '--keep-env'])).toMatchObject({ keepEnv: true })
+    expect(parseArgs(['--name', 'A', '--cwd', 'x', '--config-dir', 'C:\\w'])).toMatchObject({ configDir: 'C:\\w' })
+    expect(parseArgs(['-Name', 'A', '-Cwd', 'x', '-ConfigDir', 'C:\\w'])).toMatchObject({ configDir: 'C:\\w' })
+    // None of them: the options are as before.
+    expect(parseArgs(['--name', 'A', '--cwd', 'x'])).toEqual({ name: 'A', cwd: 'x', timeoutSec: 120 })
+    expect(() => parseArgs(['--name', 'A', '--cwd', 'x', '--profile', 'w', '--keep-env'])).toThrow(
+      'give one of --profile, --config-dir and --keep-env',
+    )
+    expect(() => parseArgs(['--name', 'A', '--cwd', 'x', '--profile', 'w', '--config-dir', 'C:\\w'])).toThrow(
+      'give one of --profile, --config-dir and --keep-env',
+    )
+    expect(() => parseArgs(['--name', 'A', '--cwd', 'x', '--config-dir', 'C:\\w', '-KeepEnv'])).toThrow(
+      'give one of --profile, --config-dir and --keep-env',
+    )
+    // A flag: it takes no value, and the next word is not one.
+    expect(() => parseArgs(['--name', 'A', '--cwd', 'x', '--keep-env=no'])).toThrow('--keep-env takes no value')
+    expect(() => parseArgs(['--name', 'A', '--keep-env', '--cwd', 'x'])).not.toThrow()
+    expect(() => parseArgs(['--name', 'A', '--cwd', 'x', '--profile'])).toThrow('--profile needs a value')
+    expect(USAGE).toContain('[--profile <id>]')
+  })
 })
 
 describe('what spawn-agent types into the tab’s shell', () => {
@@ -152,5 +177,12 @@ describe('what the board reads of spawn-agent’s failures', () => {
     assert.equal(failureKind('spawn-agent: The brief did not reach Claude in wA:p9: agent_busy'), 'message')
     // A brief that did not reach because the agent is blocked is still only the brief.
     assert.equal(failureKind('The brief did not reach Claude in wA:p9: blocked'), 'message')
+    // herdr that cannot set the profile's folder for the tab: the launcher's to fix.
+    assert.equal(
+      failureKind(
+        'herdr cannot set CLAUDE_CONFIG_DIR for the new tab (--env needs herdr 0.9.5 or newer): nothing was started',
+      ),
+      'launcher',
+    )
   })
 })

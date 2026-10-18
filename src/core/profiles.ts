@@ -8,6 +8,7 @@
 import { posix, win32 } from 'node:path'
 import { validColor } from './categories.ts'
 import { baseName, sameDir, uniqueSlug } from './launch/names.ts'
+import type { SpawnOptions } from './launch/spawn-args.ts'
 import type { Card, Item } from './types.ts'
 
 /** A profile as config.json lists it. Unknown fields survive. */
@@ -195,6 +196,55 @@ export function shownProfiles(list: readonly Profile[]): Profile[] {
  */
 export function configDirFor(target: Pick<Profile, 'dir'>, inheritedDir: string): string | null {
   return sameDir(target.dir, inheritedDir) ? null : target.dir
+}
+
+/**
+ * Where spawn-agent starts: `configDir`, CLAUDE_CONFIG_DIR for the new tab (null: the env as herdr
+ * makes it), and the profile the session is meant to run in (null when no listed one has the
+ * folder). Refused (`detail`: the id asked for, or the folder): a profile not listed (`missing`)
+ * or hidden, or the agent's own folder no listed profile has (`unknown`).
+ */
+export type SpawnEnv =
+  | { ok: true; configDir: string | null; profile: Profile | null }
+  | { ok: false; error: 'missing' | 'hidden' | 'unknown'; detail: string }
+
+/**
+ * The profile a spawn-agent start is in. The board's own starts say it: `keepEnv` leaves the env
+ * (the profile is the one of the folder spawn-agent's own env points to, `own`), `configDir` sets
+ * the folder as given (the board checked it). `profile` names a listed, shown profile. Without
+ * any, an agent starts its helper in its own folder, hidden profile or not: a folder no listed
+ * profile has, or one named relative to wherever the agent runs, is refused, never folded into
+ * another. herdr's env is taken to be the default profile's, as on every computer before
+ * profiles, so a start in the default folder leaves it alone.
+ */
+export function spawnEnv(
+  o: Pick<SpawnOptions, 'profile' | 'configDir' | 'keepEnv'>,
+  own: string | undefined,
+  list: readonly Profile[],
+  home: string,
+  platform: string = process.platform,
+): SpawnEnv {
+  const defaultDir = defaultProfileDir(home, platform)
+  const ownDir = filled(own) ? absoluteProfileDir(own, home, platform) : defaultDir
+  if (o.keepEnv) return { ok: true, configDir: null, profile: profileForDir(list, ownDir) }
+  if (o.configDir !== undefined) return { ok: true, configDir: o.configDir, profile: profileForDir(list, o.configDir) }
+  if (o.profile !== undefined) {
+    const asked = list.find(p => p.id === o.profile)
+    if (!asked) return { ok: false, error: 'missing', detail: o.profile }
+    if (asked.hidden) return { ok: false, error: 'hidden', detail: o.profile }
+    return { ok: true, configDir: asked.dir, profile: asked }
+  }
+  const mine = profileForDir(list, ownDir)
+  if (!ownDir || !mine) return { ok: false, error: 'unknown', detail: ownDir ?? resolveProfileDir(own, home, platform) }
+  return { ok: true, configDir: sameDir(ownDir, defaultDir) ? null : mine.dir, profile: mine }
+}
+
+/** herdr said it does not take --env (older than 0.9.5). */
+export function envRejected(message: unknown): boolean {
+  const text = message instanceof Error ? message.message : String(message ?? '')
+  return /unexpected argument '--env'|unrecognized (option|argument) '?--env|unknown (option|flag|argument).*--env/i.test(
+    text,
+  )
 }
 
 /**

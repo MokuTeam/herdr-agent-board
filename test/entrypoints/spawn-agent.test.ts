@@ -1,6 +1,6 @@
-import { test } from 'bun:test'
+import { expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { failureKind } from '../../src/core/launch/launcher-command.ts'
 import { absoluteDir } from '../../src/services/launch/spawn-agent.ts'
@@ -36,6 +36,48 @@ function boardConfig(box: Sandbox, cfg: unknown) {
   const dir = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'config.json'), JSON.stringify(cfg))
+}
+
+const SID = '0f8fad5b-d9cb-469f-a165-70867728950e'
+const panesFile = (box: Sandbox) =>
+  join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board', 'profile-panes.json')
+const cardOf = (box: Sandbox, key: string): Record<string, unknown> | null => {
+  const file = join(box.cards, `${key}.json`)
+  return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null
+}
+
+/**
+ * A sandbox whose home has the profile folders .claude, .claude-work and .claude-gamedev, listed in
+ * the board's config: default and work shown (work with its own Claude arguments), gamedev hidden.
+ */
+async function profileBox(launch: unknown = {}, extra: (home: string) => unknown[] = () => []) {
+  const box = await sandbox()
+  box.state(STATE)
+  const home = box.env.HOME as string
+  const dirs = {
+    default: join(home, '.claude'),
+    work: join(home, '.claude-work'),
+    gamedev: join(home, '.claude-gamedev'),
+  }
+  for (const dir of Object.values(dirs)) mkdirSync(dir, { recursive: true })
+  boardConfig(box, {
+    launch,
+    profiles: [
+      { id: 'default', title: 'Private', dir: dirs.default, color: 'indigo', hidden: false },
+      { id: 'work', title: 'Work', dir: dirs.work, color: 'teal', hidden: false, args: ['--model', 'sonnet'] },
+      { id: 'gamedev', title: 'Gamedev', dir: dirs.gamedev, color: 'pink', hidden: true },
+      ...extra(home),
+    ],
+  })
+  const dir = join(box.dir, 'Acme project')
+  mkdirSync(dir)
+  return { box, home, dir, ...dirs }
+}
+
+/** The calls in a row, a run of `pane get` (the wait for Claude) as one. */
+const callList = (box: Sandbox) => {
+  const calls = box.calls().map(a => (a.slice(0, 2).join(' ') === 'pane get' ? 'pane get' : a.join(' ')))
+  return calls.filter((c, i) => c !== 'pane get' || calls[i - 1] !== 'pane get')
 }
 
 test('a folder as given: ~ is the home folder', () => {
@@ -172,4 +214,232 @@ test('spawn-agent with launch.args and no launch.claude: claude with those argum
   const help = await runSpawn(box, ['--help'])
   assert.equal(help.code, 0)
   assert.match(help.stdout, /^spawn-agent --name <Name> --cwd <folder>/)
+}, 30_000)
+
+test('unset, ~/.claude, a trailing slash and another drive case start the child as before, without --env', async () => {
+  // Another case of the drive letter, where there is one.
+  const otherCase = (path: string) =>
+    path.replace(/^[A-Za-z]:/, d => (d === d.toUpperCase() ? d.toLowerCase() : d.toUpperCase()))
+  const variants: ((home: string) => string | undefined)[] = [
+    () => undefined,
+    () => '~/.claude',
+    home => `${join(home, '.claude')}/`,
+    home => otherCase(join(home, '.claude')),
+  ]
+  await Promise.all(
+    variants.map(async variant => {
+      const { box, home, dir } = await profileBox({ claude: ['claude-tg', '--model', 'opus 4'] })
+      const brief = join(box.dir, 'brief.txt')
+      writeFileSync(brief, '﻿-Check the invoices.\nThen report.\n')
+      const own = variant(home)
+      const r = await runSpawn(
+        box,
+        ['-Name', 'Acme invoices', '-Cwd', dir, '-Workspace', 'wA', '-BriefFile', brief, '--session-id', SID],
+        own === undefined ? {} : { CLAUDE_CONFIG_DIR: own },
+      )
+      assert.equal(r.code, 0, `${own}: ${r.stderr}`)
+      assert.equal(r.stdout.trim(), 'pane=wA:p9 name=Acme invoices agent=acme-invoices-2')
+      // Exactly the calls of the first test above.
+      assert.deepEqual(
+        callList(box),
+        [
+          `tab create --workspace wA --cwd ${dir} --label Acme invoices --no-focus`,
+          `pane run wA:p9 claude-tg --model 'opus 4' --session-id ${SID}`,
+          'pane get',
+          'agent list',
+          'agent rename wA:p9 acme-invoices-2',
+          'agent prompt wA:p9 /rename Acme invoices',
+          'pane read wA:p9 --source visible',
+          'agent prompt wA:p9  -Check the invoices.\nThen report.',
+        ],
+        String(own),
+      )
+      assert.equal(existsSync(panesFile(box)), false, String(own))
+      // A start that keeps the env writes no card.
+      assert.equal(cardOf(box, SID), null, String(own))
+    }),
+  )
+}, 60_000)
+
+test('an agent in a work session starts its helper in work: --env on the tab, the pane recorded, work’s args, the card wants work', async () => {
+  const { box, dir, work } = await profileBox()
+  const r = await runSpawn(box, ['-Name', 'Acme invoices', '-Cwd', dir, '-Workspace', 'wA', '--session-id', SID], {
+    CLAUDE_CONFIG_DIR: work,
+  })
+  assert.equal(r.code, 0, r.stderr)
+  assert.deepEqual(box.calls()[0], [
+    'tab',
+    'create',
+    '--workspace',
+    'wA',
+    '--cwd',
+    dir,
+    '--label',
+    'Acme invoices',
+    '--env',
+    `CLAUDE_CONFIG_DIR=${work}`,
+    '--no-focus',
+  ])
+  const calls = callList(box)
+  assert.equal(calls[1], `pane run wA:p9 claude --model sonnet --session-id ${SID}`)
+  expect(JSON.parse(readFileSync(panesFile(box), 'utf8'))).toMatchObject({ 'wA:p9': { profile: 'work' } })
+  expect(cardOf(box, SID)).toMatchObject({ profileWant: 'work' })
+}, 30_000)
+
+test('a hidden parent profile is kept: gamedev gets its --env', async () => {
+  const { box, dir, gamedev } = await profileBox()
+  // Written with ~, as a shell alias would.
+  const r = await runSpawn(box, ['--name', 'Level', '--cwd', dir, '--workspace', 'wA', '--session-id', SID], {
+    CLAUDE_CONFIG_DIR: '~/.claude-gamedev',
+  })
+  assert.equal(r.code, 0, r.stderr)
+  const calls = callList(box)
+  assert.equal(
+    calls[0],
+    `tab create --workspace wA --cwd ${dir} --label Level --env CLAUDE_CONFIG_DIR=${gamedev} --no-focus`,
+  )
+  assert.equal(calls[1], `pane run wA:p9 claude --session-id ${SID}`)
+  expect(JSON.parse(readFileSync(panesFile(box), 'utf8'))).toMatchObject({ 'wA:p9': { profile: 'gamedev' } })
+  expect(cardOf(box, SID)).toMatchObject({ profileWant: 'gamedev' })
+}, 30_000)
+
+test('refused before herdr is asked: a folder the board does not know, --profile nope, --profile gamedev, a profile folder that is gone', async () => {
+  const { box, home, dir } = await profileBox({}, home => [
+    { id: 'gone', title: 'Gone', dir: join(home, '.claude-gone'), color: 'brown', hidden: false },
+  ])
+  const odd = join(box.dir, 'odd')
+  mkdirSync(odd)
+  const gone = join(home, '.claude-gone')
+  const cases: [string[], Record<string, string>, string][] = [
+    [
+      [],
+      { CLAUDE_CONFIG_DIR: odd },
+      `this session's Claude folder ${odd} is not a profile the board knows: pass --profile <id>`,
+    ],
+    // Named relative to wherever the agent runs: never a profile.
+    [
+      [],
+      { CLAUDE_CONFIG_DIR: '.claude-work' },
+      "this session's Claude folder .claude-work is not a profile the board knows: pass --profile <id>",
+    ],
+    [['--profile', 'nope'], {}, 'no profile "nope": see the board\'s Settings → Profiles'],
+    [['--profile', 'gamedev'], {}, 'the profile "gamedev" is hidden: show it on the board first'],
+    [['--profile', 'gone'], {}, `the profile folder ${gone} is not there`],
+    [[], { CLAUDE_CONFIG_DIR: gone }, `the profile folder ${gone} is not there`],
+    [
+      ['--config-dir', join(home, '.claude-elsewhere')],
+      {},
+      `the profile folder ${join(home, '.claude-elsewhere')} is not there`,
+    ],
+    // A folder named relative to the tab would be another folder there.
+    [['--config-dir', '.claude-work'], {}, 'the profile folder .claude-work is not there'],
+  ]
+  for (const [args, env, message] of cases) {
+    const r = await runSpawn(box, ['--name', 'Helper', '--cwd', dir, '--workspace', 'wA', ...args], env)
+    assert.equal(r.code, 1, `${args} ${JSON.stringify(env)}`)
+    assert.equal(r.stderr.trim(), `spawn-agent: ${message}`)
+    assert.deepEqual(box.calls(), [], message)
+  }
+  assert.equal(existsSync(panesFile(box)), false)
+}, 60_000)
+
+test('herdr that refuses --env: nothing was started', async () => {
+  const { box, dir, work } = await profileBox()
+  box.state({ ...STATE, 'tab create': { error: "unexpected argument '--env' found" } })
+  const r = await runSpawn(box, ['--name', 'Helper', '--cwd', dir, '--workspace', 'wA', '--session-id', SID], {
+    CLAUDE_CONFIG_DIR: work,
+  })
+  assert.equal(r.code, 1)
+  const last = r.stderr.trim().split('\n').at(-1) ?? ''
+  assert.equal(
+    last,
+    'spawn-agent: herdr cannot set CLAUDE_CONFIG_DIR for the new tab (--env needs herdr 0.9.5 or newer): nothing was started',
+  )
+  assert.equal(failureKind(last), 'launcher')
+  assert.deepEqual(
+    box.calls().map(a => a.slice(0, 2).join(' ')),
+    ['tab create'],
+  )
+  assert.equal(existsSync(panesFile(box)), false)
+  assert.equal(cardOf(box, SID), null)
+}, 30_000)
+
+test('--keep-env leaves the tab as herdr makes it, even from a work env; --config-dir sets it as given', async () => {
+  const kept = await profileBox()
+  const r = await runSpawn(
+    kept.box,
+    ['--name', 'Keep', '--cwd', kept.dir, '--workspace', 'wA', '--session-id', SID, '--keep-env'],
+    { CLAUDE_CONFIG_DIR: kept.work },
+  )
+  assert.equal(r.code, 0, r.stderr)
+  const calls = callList(kept.box)
+  assert.equal(calls[0], `tab create --workspace wA --cwd ${kept.dir} --label Keep --no-focus`)
+  // The profile of the env it runs in gives its arguments.
+  assert.equal(calls[1], `pane run wA:p9 claude --model sonnet --session-id ${SID}`)
+  assert.equal(existsSync(panesFile(kept.box)), false)
+  assert.equal(cardOf(kept.box, SID), null)
+
+  // The board's start in a profile its own env does not point to.
+  const set = await profileBox()
+  const s = await runSpawn(set.box, [
+    '--name',
+    'Set',
+    '--cwd',
+    set.dir,
+    '--workspace',
+    'wA',
+    '--session-id',
+    SID,
+    '--config-dir',
+    set.work,
+  ])
+  assert.equal(s.code, 0, s.stderr)
+  const setCalls = callList(set.box)
+  assert.equal(
+    setCalls[0],
+    `tab create --workspace wA --cwd ${set.dir} --label Set --env CLAUDE_CONFIG_DIR=${set.work} --no-focus`,
+  )
+  assert.equal(setCalls[1], `pane run wA:p9 claude --model sonnet --session-id ${SID}`)
+  expect(JSON.parse(readFileSync(panesFile(set.box), 'utf8'))).toMatchObject({ 'wA:p9': { profile: 'work' } })
+  expect(cardOf(set.box, SID)).toMatchObject({ profileWant: 'work' })
+}, 30_000)
+
+test('--pane with a profile takes only a pane recorded in it', async () => {
+  const { box, dir, work } = await profileBox()
+  box.state({
+    ...STATE,
+    'pane get': { seq: [{ result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: null } } }, READY] },
+  })
+  const refusal = 'spawn-agent: --pane wA:p9 was not opened in profile work: leave out --pane to get a new tab'
+  const run = () => runSpawn(box, ['--name', 'Here', '--cwd', dir, '--pane', 'wA:p9'], { CLAUDE_CONFIG_DIR: work })
+  // Not recorded at all, then recorded in another profile.
+  const none = await run()
+  assert.equal(none.code, 1)
+  assert.equal(none.stderr.trim(), refusal)
+  mkdirSync(join(panesFile(box), '..'), { recursive: true })
+  writeFileSync(panesFile(box), JSON.stringify({ 'wA:p9': { profile: 'gamedev', at: 1 } }))
+  const other = await run()
+  assert.equal(other.code, 1)
+  assert.equal(other.stderr.trim(), refusal)
+  assert.deepEqual(box.calls(), [])
+
+  writeFileSync(panesFile(box), JSON.stringify({ 'wA:p9': { profile: 'work', at: 1 } }))
+  // A start that leaves the env alone never takes a pane opened in another profile: Claude would run in that one.
+  const fromDefault = await runSpawn(box, ['--name', 'Here', '--cwd', dir, '--pane', 'wA:p9'])
+  assert.equal(fromDefault.code, 1)
+  assert.equal(
+    fromDefault.stderr.trim(),
+    'spawn-agent: --pane wA:p9 was not opened in profile default: leave out --pane to get a new tab',
+  )
+  assert.deepEqual(box.calls(), [])
+
+  const r = await run()
+  assert.equal(r.code, 0, r.stderr)
+  const calls = box.calls().map(a => a.join(' '))
+  assert.equal(
+    calls.some(c => c.startsWith('tab create')),
+    false,
+  )
+  assert.ok(calls.includes('tab rename wA:t9 Here'))
+  assert.ok(calls.includes('pane run wA:p9 claude --model sonnet'))
 }, 30_000)

@@ -4,7 +4,7 @@
 import { checkName } from './names.ts'
 
 export const USAGE =
-  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid>] [--pane <pane id>]'
+  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid>] [--pane <pane id>] [--profile <id>]'
 
 /** What spawn-agent was asked to start. */
 export interface SpawnOptions {
@@ -17,6 +17,12 @@ export interface SpawnOptions {
   timeoutSec: number
   sessionId?: string
   pane?: string
+  /** The Claude profile to start in, not the one of the agent that runs spawn-agent. */
+  profile?: string
+  /** The board's start: CLAUDE_CONFIG_DIR for the tab, a folder the board checked. */
+  configDir?: string
+  /** The board's start: the tab's env as herdr makes it. */
+  keepEnv?: boolean
   help?: never
 }
 
@@ -35,6 +41,9 @@ const OPTIONS: Record<string, Key> = {
   timeoutsec: 'timeoutSec',
   sessionid: 'sessionId',
   pane: 'pane',
+  profile: 'profile',
+  configdir: 'configDir',
+  keepenv: 'keepEnv',
   help: 'help',
   h: 'help',
 }
@@ -50,6 +59,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 export function parseArgs(argv: readonly string[]): SpawnArgs {
   const out: Partial<Record<Key, string>> = {}
   let help = false
+  let keepEnv = false
   for (let i = 0; i < argv.length; i++) {
     const arg = String(argv[i])
     const m = /^--?([A-Za-z][A-Za-z-]*)(?:[=:]([\s\S]*))?$/.exec(arg)
@@ -59,6 +69,12 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     if (!key) throw new Error(`unknown option ${arg.replace(/[=:][\s\S]*$/, '')}. ${USAGE}`)
     if (key === 'help') {
       help = true
+      continue
+    }
+    if (key === 'keepEnv') {
+      // A flag: a value given with it (--keep-env=no) would read as one it does not take.
+      if (m[2] !== undefined) throw new Error(`${arg.replace(/[=:][\s\S]*$/, '')} takes no value`)
+      keepEnv = true
       continue
     }
     let value = m[2]
@@ -80,7 +96,9 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     throw new Error(`--timeout-sec must be a number of seconds, not "${out.timeoutSec}"`)
   if (out.sessionId !== undefined && !UUID.test(out.sessionId))
     throw new Error(`--session-id must be a UUID, not "${out.sessionId}"`)
-  const { label, briefFile, brief, workspace, sessionId, pane } = out
+  const { label, briefFile, brief, workspace, sessionId, pane, profile, configDir } = out
+  if ([profile !== undefined, configDir !== undefined, keepEnv].filter(Boolean).length > 1)
+    throw new Error('give one of --profile, --config-dir and --keep-env')
   return {
     name,
     cwd: out.cwd,
@@ -91,6 +109,9 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     ...(workspace !== undefined && { workspace }),
     ...(sessionId !== undefined && { sessionId }),
     ...(pane !== undefined && { pane }),
+    ...(profile !== undefined && { profile }),
+    ...(configDir !== undefined && { configDir }),
+    ...(keepEnv && { keepEnv }),
   }
 }
 
