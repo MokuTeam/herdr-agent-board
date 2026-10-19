@@ -85,6 +85,8 @@ export type LaunchFailure = FailureKind | 'message'
 /** A launch as the board payload shows it. */
 export interface LaunchView {
   id: string
+  /** The id of the session it resumes (Return, from the archive), null for a new one; a board before the archive sent none. */
+  resume?: string | null
   name: string
   cwd: string
   category: string
@@ -121,6 +123,11 @@ export interface Config {
   port?: unknown
   /** The app window's browser (a path), as config.json has it. */
   browser?: unknown
+  /**
+   * How long a session put in the archive keeps its pane, for Return in the page's toast, in
+   * seconds, as config.json has it (a number from 0 up counts; else 8).
+   */
+  archiveUndoSec?: unknown
   [extra: string]: unknown
 }
 

@@ -5,6 +5,7 @@
 // (English: one, other; Russian: one, few, many). A key missing in a language falls back to English.
 
 import type { Lang } from '../types.ts'
+import { ARCHIVE_STRINGS } from './archive-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
 import { PROFILE_STRINGS } from './profile-strings.ts'
@@ -1073,3 +1074,5 @@ for (const code of Object.keys(HELPER_STRINGS) as Lang[]) Object.assign(STRINGS[
 for (const code of Object.keys(SETUP_STRINGS) as Lang[]) Object.assign(STRINGS[code], SETUP_STRINGS[code])
 // And the Claude profiles.
 for (const code of Object.keys(PROFILE_STRINGS) as Lang[]) Object.assign(STRINGS[code], PROFILE_STRINGS[code])
+// The archive's too.
+for (const code of Object.keys(ARCHIVE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ARCHIVE_STRINGS[code])
