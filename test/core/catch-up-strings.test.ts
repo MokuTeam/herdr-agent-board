@@ -13,6 +13,7 @@ const MERGES = [
   { merge: '75e9c61', pr: '#44 call in MokuPilot' },
   { merge: 'bde9cfd', pr: '#45 MokuPilot call results back to the session' },
   { merge: '2d5c703', pr: '#50 the herdr-agents skill' },
+  { merge: '6a7fcb6', pr: '#47 the MokuPilot launcher started, readiness not confirmed' },
 ]
 
 type Dictionaries = Record<string, Record<string, unknown>>
@@ -43,26 +44,35 @@ const FILES = [
   { file: 'web/i18n-setup.js', opening: 'export const SETUP_STRINGS = {' },
 ]
 
-for (const { merge, pr } of MERGES)
+type Change = { lang: 'en' | 'ru'; key: string; value: unknown }
+
+/** The texts `merge` added or changed (with their value then) and dropped (value undefined). */
+function changes(merge: string): Change[] {
+  const out: Change[] = []
+  for (const { file, opening } of FILES) {
+    const before = upstream(file, `${merge}^1`, opening)
+    const after = upstream(file, merge, opening)
+    for (const lang of ['en', 'ru'] as const) {
+      const was = before[lang] ?? {}
+      const now = after[lang] ?? {}
+      for (const [key, value] of Object.entries(now))
+        if (!(key in was) || JSON.stringify(was[key]) !== JSON.stringify(value)) out.push({ lang, key, value })
+      for (const key of Object.keys(was)) if (!(key in now)) out.push({ lang, key, value: undefined })
+    }
+  }
+  return out
+}
+
+for (const [i, { merge, pr }] of MERGES.entries())
   test(`the texts ${pr} added, changed or dropped, as upstream wrote them`, () => {
+    // A text a later merge changed again is checked there, as that one wrote it.
+    const later = new Set(MERGES.slice(i + 1).flatMap(m => changes(m.merge).map(c => `${c.lang} ${c.key}`)))
     let checked = 0
-    for (const { file, opening } of FILES) {
-      const before = upstream(file, `${merge}^1`, opening)
-      const after = upstream(file, merge, opening)
-      for (const lang of ['en', 'ru'] as const) {
-        const was = before[lang] ?? {}
-        const now = after[lang] ?? {}
-        for (const [key, value] of Object.entries(now))
-          if (!(key in was) || JSON.stringify(was[key]) !== JSON.stringify(value)) {
-            assert.deepEqual(STRINGS[lang][key], value, `${lang} ${key}`)
-            checked++
-          }
-        for (const key of Object.keys(was))
-          if (!(key in now)) {
-            assert.equal(STRINGS[lang][key], undefined, `${lang} ${key}`)
-            checked++
-          }
-      }
+    for (const { lang, key, value } of changes(merge)) {
+      if (later.has(`${lang} ${key}`)) continue
+      if (value === undefined) assert.equal(STRINGS[lang][key], undefined, `${lang} ${key}`)
+      else assert.deepEqual(STRINGS[lang][key], value, `${lang} ${key}`)
+      checked++
     }
     assert.ok(checked > 0, 'the merge changed no text')
   })

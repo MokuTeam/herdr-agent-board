@@ -28,7 +28,8 @@ export interface CallOptions {
   profiles?: ProfileSet
 }
 
-export type CallResult = { ok: true; file: string } | { ok: false; error: string }
+/** `launched`: MokuPilot's launcher started, and no more (startCall). */
+export type CallResult = { ok: true; state: 'launched'; file: string } | { ok: false; error: string }
 
 const isDir = (dir: string): boolean => {
   try {
@@ -45,10 +46,12 @@ const reason = (err: unknown): string => {
 
 /**
  * Start a MokuPilot call with a fork of the session `item` (a board item with its transcript):
- * { ok } once MokuPilot's launcher started, { ok: false, error } when it could not. It runs on
- * its own, past the board's lifetime; the folder is the one the session started in. A running
- * MokuPilot takes the call over in its own env, so with `profiles` a session in another profile
- * than the board's own is refused before anything starts.
+ * { ok, state: 'launched' } once MokuPilot's launcher started, { ok: false, error } when it could
+ * not. It runs on its own, past the board's lifetime. This is NOT an application-ready,
+ * call-started or recording-started acknowledgement: an IPC handshake is required for those. The
+ * folder is the one the session started in. A running MokuPilot takes the call over in its own
+ * env, so with `profiles` a session in another profile than the board's own is refused before
+ * anything starts.
  */
 export async function startCall(
   cfg: Partial<Config>,
@@ -100,7 +103,7 @@ export async function startCall(
     )
     child.once('spawn', () => {
       child.unref()
-      res({ ok: true, file: cmd.file })
+      res({ ok: true, state: 'launched', file: cmd.file })
     })
   })
 }

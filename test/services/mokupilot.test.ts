@@ -49,7 +49,7 @@ test('a call starts MokuPilot on its own, in the folder the session started in, 
     assert.match(missing.ok ? '' : missing.error, /MokuPilot not found \(\/opt\/mp\/MokuPilot\)/)
 
     const real = { mokupilot: { command: [process.execPath] } }
-    assert.deepEqual(await startCall(real, item, opts), { ok: true, file: process.execPath })
+    assert.deepEqual(await startCall(real, item, opts), { ok: true, state: 'launched', file: process.execPath })
     const r = runs.at(-1)
     assert.ok(r)
     assert.deepEqual(r.args, ['call', '--claude-session', ID, '--cwd', project])
@@ -100,6 +100,27 @@ test('a call starts MokuPilot on its own, in the folder the session started in, 
   }
 })
 
+test('launcher spawn acknowledges only launched, including an immediate application failure', async () => {
+  const run: Run = () => {
+    const child = new EventEmitter()
+    queueMicrotask(() => {
+      child.emit('spawn')
+      child.emit('exit', 2, null)
+    })
+    return Object.assign(child, { unref() {} }) as unknown as CallChild
+  }
+  const result = await startCall(
+    { mokupilot: { command: [process.execPath] } },
+    { session: ID, agent: 'claude', cwd: '' },
+    { run },
+  )
+  assert.equal(result.ok, true)
+  const state = result.ok ? result.state : null
+  assert.equal(state, 'launched')
+  assert.notEqual(state, 'ready')
+  assert.notEqual(state, 'recording')
+})
+
 test('a call from a session in another profile than the board’s is refused before anything starts', async () => {
   const DEFAULT = { id: 'default', title: 'Default', dir: '/home/u/.claude', color: 'indigo', hidden: false }
   const WORK = { id: 'work', title: 'Work', dir: '/home/u/.claude-work', color: 'teal', hidden: false }
@@ -128,7 +149,11 @@ test('a call from a session in another profile than the board’s is refused bef
   assert.match(unknown.ok ? '' : unknown.error, /a call from unknown profile would/)
   assert.equal(started.length, 0)
 
-  assert.deepEqual(await startCall(cfg, { ...call, profile: 'default' }, opts), { ok: true, file: process.execPath })
+  assert.deepEqual(await startCall(cfg, { ...call, profile: 'default' }, opts), {
+    ok: true,
+    state: 'launched',
+    file: process.execPath,
+  })
   assert.equal(started.length, 1)
   // One profile listed: a session that names none is in it.
   const one = { ...opts, profiles: profileSet([DEFAULT], DEFAULT.dir) }
@@ -139,7 +164,11 @@ test('a call from a session in another profile than the board’s is refused bef
   const shown = profileSet([DEFAULT, { ...WORK, hidden: true }], DEFAULT.dir)
   const cardless = { ...call, ...sessionProfile(null, shown.list) }
   assert.equal(cardless.profile, null)
-  assert.deepEqual(await startCall(cfg, cardless, { ...opts, profiles: shown }), { ok: true, file: process.execPath })
+  assert.deepEqual(await startCall(cfg, cardless, { ...opts, profiles: shown }), {
+    ok: true,
+    state: 'launched',
+    file: process.execPath,
+  })
   assert.equal(started.length, 3)
   const stray = await startCall(
     cfg,

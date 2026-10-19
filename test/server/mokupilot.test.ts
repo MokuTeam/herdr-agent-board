@@ -3,7 +3,7 @@
 // stand-in (support/fake-launcher.ts) that writes down how it was started.
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isBoardPayload } from '../../web/src/api/client.ts'
@@ -19,6 +19,7 @@ async function boardServer(box: Sandbox, cfg: Record<string, unknown>, panes: Pa
   box.state({
     'api snapshot': { result: { snapshot: { panes, tabs: [], workspaces: [{ workspace_id: 'wA', label: 'Alpha' }] } } },
   })
+  // English whatever the system language: the tests read the board's texts.
   const { url, proc } = await serveBoard(box, { language: 'en', ...cfg }, { HERDR_PANE_ID: 'wB:p1' })
   const board = async (): Promise<Record<string, unknown>> => (await fetch(`${url}/api/board`)).json()
   for (let i = 0; i < 50; i++) {
@@ -88,7 +89,7 @@ test('the board starts a MokuPilot call with a fork of a Claude session, only fr
   await until(() => existsSync(record) && readFileSync(record, 'utf8').length > 0, 10_000)
   const seen = JSON.parse(readFileSync(record, 'utf8'))
   assert.deepEqual(seen.args, ['call', '--claude-session', ID, '--cwd', project])
-  assert.equal(seen.cwd, project)
+  assert.equal(seen.cwd, realpathSync(project))
   assert.equal(seen.pane, null)
 
   for (const key of ['1c9d0f3a-2b4e-4d6f-8a1b-2c3d4e5f6a7b', 'pane-p3']) {

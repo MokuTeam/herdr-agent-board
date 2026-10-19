@@ -301,7 +301,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'mokupilot.call': 'Call in MokuPilot',
     'mokupilot.hint':
       'Start a MokuPilot call whose agent is a fork of this session: it knows what the session knows, and the session itself stays as it was',
-    'mokupilot.started': 'MokuPilot: a call with a fork of “{name}”',
+    'mokupilot.started': 'MokuPilot launcher started for “{name}”. Call readiness is not confirmed.',
     'mokupilot.err.notClaude': 'Only a Claude Code session with an id can join a call',
     'mokupilot.err.off': 'MokuPilot is turned off in config.json ("mokupilot": false)',
     'mokupilot.err.missing':
@@ -782,7 +782,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'mokupilot.call': 'Звонок в MokuPilot',
     'mokupilot.hint':
       'Начать звонок в MokuPilot, где агент: форк этой сессии. Он знает всё, что знает сессия, а сама сессия остаётся как была',
-    'mokupilot.started': 'MokuPilot: звонок с форком «{name}»',
+    'mokupilot.started': 'Запущен MokuPilot для «{name}». Готовность звонка ещё не подтверждена.',
     'mokupilot.err.notClaude': 'В звонок можно взять только сессию Claude Code с id',
     'mokupilot.err.off': 'MokuPilot выключен в config.json ("mokupilot": false)',
     'mokupilot.err.missing':
