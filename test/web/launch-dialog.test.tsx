@@ -3,10 +3,11 @@
 // <LaunchDialogView> draws, with React's own handlers, both in a fake DOM
 // (support/launch-sides.tsx). After every step the window (markup, the inline style its spring
 // wrote, the fields), the focus, what was selected or scrolled into view, what went inert, the
-// page's new cards, localStorage and every request and toast must be the same.
+// page's new cards, localStorage and every request and toast must be the same. The profile choice
+// is new (the old page had no profiles): its tests run the React window alone.
 import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
-import type { BoardCategory } from '../../src/core/payload.ts'
+import type { BoardCategory, BoardProfile } from '../../src/core/payload.ts'
 import type { LaunchView } from '../../src/core/types.ts'
 import type { LaunchContext } from '../../web/src/models/launch-form.ts'
 import { reducedMotion } from '../../web/src/models/spring.ts'
@@ -607,6 +608,177 @@ describe('closing', () => {
 
   test('opened again while it folds away: it turns around from where it is', async () => {
     await compare([...openAndSettle(), key('Escape'), tick(), tick(), open({ category: 'web' }, 'lane-new'), settle])
+  })
+})
+
+// ---------------------------------------------------------------- the profile (the old page had none)
+
+const boardProfile = (id: string, title: string, color: string, hidden = false): BoardProfile => ({
+  id,
+  title,
+  color,
+  colorName: 'indigo',
+  dir: id === 'default' ? 'C:\\Users\\me\\.claude' : `C:\\Users\\me\\.claude-${id}`,
+  hidden,
+  inherited: id === 'default',
+  exists: true,
+  hooks: hidden ? null : true,
+  sessions: 1,
+  limits: null,
+})
+const PRIVATE = boardProfile('default', 'Private', '#5856D6')
+const WORK = boardProfile('work', 'Work', '#30B0C7')
+const PAYROLL = item({
+  key: 's3',
+  name: 'payroll',
+  cwd: 'C:\\Work\\acme',
+  category: 'acme',
+  workspace: 'Acme',
+  activity: 30,
+  profile: 'work',
+})
+/** Private and Work shown; the sessions say which they run in. */
+const twoShown = (fields: Partial<LaunchScene> = {}): LaunchScene =>
+  board({
+    profiles: [PRIVATE, WORK],
+    items: [...ITEMS.map(i => ({ ...i, profile: 'default' })), PAYROLL],
+    ...fields,
+  })
+
+/** The React window alone, for `scene`. */
+const react = (steps: Step[], scene: () => LaunchScene = twoShown) => run(() => reactLaunchSide(scene()), steps)
+const goLine = (shot: string | undefined) => shot?.match(/<button class="button launch-go primary"[^>]*>/)?.[0] ?? ''
+/** The profile beside Start, as the canonical markup prints it (classes sorted, a line each). */
+const beside = (title: string, color: string) =>
+  `<span class="launch-profile" style="--c:${color}">${title}</span>\n      <button class="button launch-go primary"`
+const PROFILE_ROW = '<div class="profile-row row">\n          <span class="row-label">Profile</span>'
+const startBodyOf = (shot: string | undefined) =>
+  logLine(shot)
+    .split(' | ')
+    .find(line => line.startsWith('POST /api/launch {'))
+    ?.slice('POST /api/launch '.length) ?? ''
+
+describe('the profile', () => {
+  test('two shown: Start waits for a profile; a pick enables it, shows it beside Start, and goes in the body', async () => {
+    const shots = await react([
+      ...openAndSettle({ category: 'acme' }, 'lane-new'),
+      key('Enter', { ctrlKey: true }),
+      click(inWindow('[data-profile="work"]')),
+      key('Enter', { ctrlKey: true }),
+      tick(),
+      settle,
+    ])
+    const waiting = shots[3]
+    expect(waiting).toContain(PROFILE_ROW)
+    expect(waiting).toContain('aria-pressed="false" data-profile="default"')
+    expect(waiting).toContain('aria-pressed="false" data-profile="work"')
+    expect(goLine(waiting)).toContain('disabled="" title="Choose a profile"')
+    expect(waiting).not.toContain('class="launch-profile"')
+    // Ctrl+Enter: nothing goes; the row says why and has the focus.
+    expect(logLine(shots[4])).not.toContain('POST /api/launch ')
+    expect(shots[4]).toContain('data-for="profile">Choose a profile</p>')
+    expect(focusLine(shots[4])).toBe('focus: button[name=profile]')
+    // Work picked: pressed, beside Start, Start on.
+    expect(shots[5]).toContain('aria-pressed="true" data-profile="work"')
+    expect(shots[5]).toContain(beside('Work', '#30B0C7'))
+    expect(goLine(shots[5])).not.toContain('disabled')
+    expect(startBodyOf(shots.at(-1))).toBe(
+      '{"name":"acme 2","cwd":"C:\\\\Work\\\\acme","category":"acme","workspace":{"id":"w2","label":"Acme"},"message":"","profile":"work"}',
+    )
+    expect(shots.at(-1)).toContain('["board.launch.profiles","{\\"c:/work/acme\\":\\"work\\"}"]')
+  })
+
+  test('New here from a Work card: no row, Work beside Start, the body has profile and parent', async () => {
+    const shots = await react([...openAndSettle({ item: PAYROLL }, 'card'), key('Enter', { ctrlKey: true }), settle])
+    const shown = shots[3]
+    expect(shown).not.toContain('profile-row')
+    expect(shown).toContain(beside('Work', '#30B0C7'))
+    expect(goLine(shown)).not.toContain('disabled')
+    expect(startBodyOf(shots.at(-1))).toContain('"profile":"work","parent":"s3"}')
+  })
+
+  test('the folder’s last profile is picked next time', async () => {
+    const shots = await react([
+      ...openAndSettle({ category: 'acme' }, 'lane-new'),
+      click(inWindow('[data-profile="work"]')),
+      key('Enter', { ctrlKey: true }),
+      tick(),
+      settle,
+      ...openAndSettle({ category: 'acme' }, 'lane-new'),
+      key('Escape'),
+      settle,
+      ...openAndSettle({ category: 'web' }, 'lane-new'),
+    ])
+    const again = shots[11]
+    expect(again).toContain('aria-pressed="true" data-profile="work"')
+    expect(again).toContain(beside('Work', '#30B0C7'))
+    expect(goLine(again)).not.toContain('disabled')
+    // Another folder: nothing picked.
+    expect(shots.at(-1)).not.toContain('aria-pressed="true" data-profile=')
+    expect(goLine(shots.at(-1))).toContain('title="Choose a profile"')
+  })
+
+  test('a card whose profile is unknown, or a refusal about the profile: the choice, nothing picked or sent unasked', async () => {
+    const refuse: Step = async side => {
+      side.server.start = {
+        status: 400,
+        body: { ok: false, field: 'profile', error: 'The profile of acme is not one the board knows: choose one' },
+      }
+    }
+    const accept: Step = async side => {
+      side.server.start = { status: 200, body: { ok: true, id: 'L7' } }
+    }
+    // A folder no profile has: nothing picked; the pick goes with the card, for the server to check.
+    const elsewhere = item({ ...PAYROLL, profile: null, profileFolder: 'D:\\elsewhere' })
+    const unknown = await react(
+      [
+        ...openAndSettle({ item: elsewhere }, 'card'),
+        click(inWindow('[data-profile="default"]')),
+        key('Enter', { ctrlKey: true }),
+        settle,
+      ],
+      () => twoShown({ items: [elsewhere] }),
+    )
+    expect(unknown[3]).toContain(PROFILE_ROW)
+    expect(unknown[3]).not.toContain('aria-pressed="true" data-profile=')
+    expect(goLine(unknown[3])).toContain('disabled=""')
+    expect(startBodyOf(unknown.at(-1))).toContain('"profile":"default","parent":"s3"}')
+
+    // One shown (Work hidden), a card with no report: as before profiles, until the server asks.
+    const teammate = () =>
+      board({ profiles: [PRIVATE, { ...WORK, hidden: true }], items: ITEMS.map(i => ({ ...i, profile: null })) })
+    const card = ITEMS[0]
+    if (!card) throw new Error('no card')
+    const shots = await react(
+      [
+        ...openAndSettle({ item: { ...card, profile: null } }, 'card'),
+        refuse,
+        key('Enter', { ctrlKey: true }),
+        key('Enter', { ctrlKey: true }),
+        accept,
+        click(inWindow('[data-profile="default"]')),
+        key('Enter', { ctrlKey: true }),
+        settle,
+      ],
+      teammate,
+    )
+    expect(shots[3]).not.toContain('profile-row')
+    expect(shots[3]).not.toContain('launch-profile')
+    // Refused: the choice shows, its one profile not picked, the server's words under it.
+    expect(shots[5]).toContain(PROFILE_ROW)
+    expect(shots[5]).toContain('aria-pressed="false" data-profile="default"')
+    expect(shots[5]).not.toContain('data-profile="work"')
+    expect(shots[5]).toContain('The profile of acme is not one the board knows: choose one')
+    expect(goLine(shots[5])).toContain('disabled="" title="Choose a profile"')
+    // Sent twice: as before profiles, then with the profile picked and the card it came from;
+    // Ctrl+Enter before the pick sent nothing.
+    const sent = logLine(shots.at(-1))
+      .split(' | ')
+      .filter(line => line.startsWith('POST /api/launch {'))
+    expect(sent).toHaveLength(2)
+    expect(sent[0]).not.toContain('"profile"')
+    expect(sent[0]).not.toContain('"parent"')
+    expect(sent[1]).toContain('"profile":"default","parent":"s1"}')
   })
 })
 

@@ -2,7 +2,8 @@
 // the session is started, folds into the new card in its lane; Esc or Cancel folds it back where
 // it came from. The form keeps the values the user set apart from those that follow the folder;
 // a closed form stays as a draft of the place it was opened for. What it draws is a
-// LaunchWindowView (LaunchDialog.tsx); the folder field is folder-field.ts.
+// LaunchWindowView (LaunchDialog.tsx); the folder field is folder-field.ts, the Claude profile it
+// starts in models/launch-profile.ts.
 import {
   baseName,
   categoryForDir,
@@ -10,7 +11,7 @@ import {
   slugName,
   suggestName,
 } from '../../../../src/core/launch/names.ts'
-import type { BoardCategory } from '../../../../src/core/payload.ts'
+import type { BoardCategory, BoardProfile } from '../../../../src/core/payload.ts'
 import type { Item, LaunchView, Translator } from '../../../../src/core/types.ts'
 import { type LaunchApi, type LaunchOptions, NO_OPTIONS } from '../../api/launch.ts'
 import type { MenuOrigin } from '../../models/board-menus.ts'
@@ -35,6 +36,16 @@ import {
   workspaceName,
   worktreeNote,
 } from '../../models/launch-form.ts'
+import {
+  LAUNCH_PROFILES,
+  type ProfilePick,
+  type ProfileRow,
+  profileBody,
+  profileRow,
+  profileStart,
+  rememberedProfiles,
+  rememberProfile,
+} from '../../models/launch-profile.ts'
 import type { FocusScope } from '../../models/modal-focus.ts'
 import { reducedMotion, Spring } from '../../models/spring.ts'
 import { Store } from '../../state/store.ts'
@@ -59,6 +70,8 @@ export interface LaunchWindowView {
   workspaces: WorkspaceOption[]
   newWorkspaceHidden: boolean
   cats: CategoryChip[]
+  /** The profile choice (only when offered) and the profile beside Start. */
+  profile: ProfileRow
   /** The worktree row shows: the folder is in a git checkout. */
   worktree: boolean
   branchHidden: boolean
@@ -80,9 +93,10 @@ export const CLOSED_VIEW: LaunchWindowView = {
   workspaces: [],
   newWorkspaceHidden: true,
   cats: [],
+  profile: { offered: false, options: [], chosen: null },
   worktree: false,
   branchHidden: true,
-  notes: { name: HIDDEN, cwd: HIDDEN, workspace: HIDDEN, worktree: HIDDEN },
+  notes: { name: HIDDEN, cwd: HIDDEN, profile: HIDDEN, workspace: HIDDEN, worktree: HIDDEN },
   error: { text: '', hidden: true },
   go: null,
   seq: 0,
@@ -93,6 +107,8 @@ export interface LaunchBoard {
   categories: BoardCategory[]
   items: Item[]
   filter: string
+  /** The Claude profiles (none from a board before them). */
+  profiles: BoardProfile[]
 }
 
 export interface LaunchWindowDeps {
@@ -123,6 +139,9 @@ interface Opening {
   category: string
   workspace: WorkspaceWant | null
   sending: boolean
+  /** The profile it starts in; `profileSet`: the user picked one, or the server asked for one. */
+  profile: ProfilePick
+  profileSet: boolean
 }
 
 /** The key the last workspace started in is kept under. */
@@ -174,13 +193,15 @@ export function launchWindow(deps: LaunchWindowDeps) {
     checked: r => {
       renderWorktree()
       // The folder decides the category until the user picks one.
-      if (!s || !r?.exists || !r.dir || s.set.category) return
-      const cat = categoryForDir(d().categories, r.path)
-      if (cat && cat !== s.category) {
-        s.category = cat
-        renderCats()
-        renderWorkspaces()
+      if (s && r?.exists && r.dir && !s.set.category) {
+        const cat = categoryForDir(d().categories, r.path)
+        if (cat && cat !== s.category) {
+          s.category = cat
+          renderCats()
+          renderWorkspaces()
+        }
       }
+      followProfile()
     },
     note: text => noteFor('cwd', text),
     sync: () => syncGo(),
@@ -235,6 +256,8 @@ export function launchWindow(deps: LaunchWindowDeps) {
       category: 'other',
       workspace: null,
       sending: false,
+      profile: { picked: null, locked: false, offered: false },
+      profileSet: false,
     }
     folder.reset()
     growing = { focus: fromEl instanceof Element ? fromEl : document.activeElement }
@@ -290,11 +313,14 @@ export function launchWindow(deps: LaunchWindowDeps) {
     s.workspace = start.workspace
     folder.setText(start.cwd)
     setFields({ name: start.name, message: start.message, wt: start.wt, branch: start.branch })
+    s.profile = startingProfile(s)
+    patch({ profile: profileRow(s.profile, d().profiles) })
     const notes = view.get().notes
     patch({
       notes: {
         name: { ...notes.name, hidden: true },
         cwd: { ...notes.cwd, hidden: true },
+        profile: { ...notes.profile, hidden: true },
         workspace: { ...notes.workspace, hidden: true },
         worktree: { ...notes.worktree, hidden: true },
       },
@@ -332,8 +358,52 @@ export function launchWindow(deps: LaunchWindowDeps) {
   }
   const defaultWorkspaceName = () => workspaceName(s?.category ?? '', catTitle(s?.category ?? ''), cwd(), t())
 
+  // ---------------------------------------------------------------- the profile
+  /** The folder a profile is remembered for: as the server resolved it once checked, else as typed. */
+  function profileCwd(): string {
+    const c = folder.check()
+    return c?.exists && c.dir && c.path && c.input === cwd().trim() ? c.path : cwd()
+  }
+
+  const startingProfile = (o: Opening): ProfilePick =>
+    profileStart(o.ctx, {
+      profiles: d().profiles,
+      categories: d().categories,
+      category: o.category,
+      cwd: profileCwd(),
+      remembered: rememberedProfiles(deps.store.get(LAUNCH_PROFILES)),
+    })
+
+  function renderProfile(): void {
+    if (!s) return
+    patch({ profile: profileRow(s.profile, d().profiles) })
+    syncGo()
+  }
+
+  /** Until the user picks one (or the server asks for one), the profile follows the lane and the folder. */
+  function followProfile(): void {
+    if (!s || s.profileSet) return
+    const next = startingProfile(s)
+    const now = s.profile
+    if (next.picked === now.picked && next.locked === now.locked && next.offered === now.offered) return
+    s.profile = next
+    renderProfile()
+  }
+
+  /** The server would not start it in the profile sent, or without one: the user picks, from nothing. */
+  function askProfile(): void {
+    if (!s) return
+    s.profile = { picked: null, locked: false, offered: true }
+    s.profileSet = true
+    renderProfile()
+  }
+
+  /** The card a start comes from, whose profile the server holds it to. */
+  const parentOf = (ctx: LaunchContext): string | null => ctx.item?.key ?? ctx.retry?.parent ?? null
+
   function noteFor(field: string, text: string, error = true): void {
-    if (field !== 'name' && field !== 'cwd' && field !== 'workspace' && field !== 'worktree') return
+    if (field !== 'name' && field !== 'cwd' && field !== 'profile' && field !== 'workspace' && field !== 'worktree')
+      return
     patch({ notes: { ...view.get().notes, [field]: { text, hidden: !text, error: !!text && error } } })
   }
 
@@ -375,7 +445,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
     syncGo()
   }
 
-  const problems = () => formProblems(fields(), folder.check(), folder.git(), t())
+  const problems = () => formProblems(fields(), folder.check(), folder.git(), t(), s?.profile)
 
   function syncGo(): void {
     if (!s) return
@@ -414,6 +484,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
       git: folder.git(),
       category: st.category,
       label: labelOf(view.get().fields.workspace),
+      ...profileBody(st.profile, d().profiles, parentOf(st.ctx)),
     })
     const draftVersion = drafts.write(st.draftKey, draftForm())
     st.sending = true
@@ -425,13 +496,23 @@ export function launchWindow(deps: LaunchWindowDeps) {
     if (!r.ok) {
       if (!here) return deps.toast(r.error, true)
       syncGo()
-      if (r.field) {
-        noteFor(r.field, r.error)
-        $(`[name="${fieldOf(r.field)}"]`)?.focus()
+      const field = r.field
+      if (field === 'profile') {
+        // Asked for a profile: the choice shows (with one shown too), then takes the focus.
+        askProfile()
+        noteFor(field, r.error)
+        later(() => $('[name="profile"]')?.focus())
+      } else if (field) {
+        noteFor(field, r.error)
+        $(`[name="${fieldOf(field)}"]`)?.focus()
       } else patch({ error: { text: r.error, hidden: false } })
       return
     }
     if ('id' in body.workspace) deps.store.set(LAST_WORKSPACE, body.workspace.id)
+    if (body.profile) {
+      const book = rememberProfile(rememberedProfiles(deps.store.get(LAUNCH_PROFILES)), body.cwd, body.profile)
+      deps.store.set(LAUNCH_PROFILES, JSON.stringify(book))
+    }
     if (st.retry) void deps.api.dismiss(st.retry.id, t())
     drafts.clear(st.draftKey, draftVersion)
     deps.onStarted(startedLaunch(r.id, body, deps.now()))
@@ -473,6 +554,15 @@ export function launchWindow(deps: LaunchWindowDeps) {
       s.set.category = true
       renderCats()
       if (!s.set.workspace) renderWorkspaces()
+      followProfile()
+    },
+    /** A profile picked (the choice is offered): it stops following the lane and the folder. */
+    pickProfile(id: string): void {
+      if (!s || s.profile.locked) return
+      s.profile = { picked: id, locked: false, offered: true }
+      s.profileSet = true
+      noteFor('profile', '')
+      renderProfile()
     },
     name(value: string): void {
       if (!s) return

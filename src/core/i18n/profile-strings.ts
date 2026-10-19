@@ -46,6 +46,8 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     // a lane's usual profile in the categories panel (web/src/components/categories/CategoryRow.tsx)
     'cat.profile': 'Usual profile',
     'cat.profileNone': 'None',
+    // the profile choice in the new-session window (web/src/components/launch/LaunchDialog.tsx)
+    'launch.profile': 'Profile',
   },
   ru: {
     // the Profiles panel's edits (adapters/config-file.ts editProfiles)
@@ -90,5 +92,7 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     // a lane's usual profile in the categories panel (web/src/components/categories/CategoryRow.tsx)
     'cat.profile': 'Обычный профиль',
     'cat.profileNone': 'Нет',
+    // the profile choice in the new-session window (web/src/components/launch/LaunchDialog.tsx)
+    'launch.profile': 'Профиль',
   },
 }

@@ -2,7 +2,9 @@
    LimitsPop.tsx, categories/CategoryRow.tsx): the switch beside the lanes control, the tag on a
    card and the usage per profile, each in its profile's color (--c, from the board), and a lane's
    usual profile in the categories panel. Red says a session runs in another profile than its
-   start asked for. With one profile shown the page has none of it, as before profiles. Every rule
+   start asked for. The new-session window (components/launch/LaunchDialog.tsx) offers the shown
+   profiles as chips, as its lanes (.chips, by --lane), and names the profile it starts in beside
+   Start. With one profile shown the page has none of it, as before profiles. Every rule
    here selects by class: the other sheets are upstream's, rule for rule. */
 
 /* The switch is a lanes control (.segmented); each profile's count is in its color. */
@@ -62,3 +64,20 @@
 }
 .cat-profile select:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
 .cat-profile select:disabled { opacity: 0.5; }
+
+/* The new-session window: the profile it starts in, right before Start, as a card's tag says it. */
+.launch-profile {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 160px;
+  padding: 3px 9px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--c) 15%, transparent);
+  color: color-mix(in srgb, var(--c) 75%, var(--label));
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

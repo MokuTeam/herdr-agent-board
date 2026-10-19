@@ -12,6 +12,7 @@ import {
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
 import type { DirListing } from './launch.ts'
 import type { LaunchDraft } from './launch-drafts.ts'
+import type { ProfilePick } from './launch-profile.ts'
 
 /**
  * Where a new session starts: in a lane, by a session (its lane and folder), in a new workspace,
@@ -180,11 +181,21 @@ export function worktreeNote(
 /** The server's answer about the folder field, with what was typed when it was asked. */
 export type FolderCheck = DirListing & { input: string }
 
-export type ProblemField = 'name' | 'cwd' | 'workspace' | 'worktree'
+export type ProblemField = 'name' | 'cwd' | 'profile' | 'workspace' | 'worktree'
 export type Problems = Partial<Record<ProblemField, string>>
 
-/** What keeps the form from starting, field by field (in the form's order). */
-export function formProblems(f: LaunchFields, check: FolderCheck | null, git: GitInfo | null, t: Translator): Problems {
+/**
+ * What keeps the form from starting, field by field (in the form's order); `profile`: the
+ * window's profile (models/launch-profile.ts), which lacks one while it offers the choice and
+ * none is picked.
+ */
+export function formProblems(
+  f: LaunchFields,
+  check: FolderCheck | null,
+  git: GitInfo | null,
+  t: Translator,
+  profile?: ProfilePick,
+): Problems {
   const out: Problems = {}
   const bad = checkName(f.name)
   if (bad) out.name = t(bad, { max: NAME_MAX })
@@ -193,13 +204,17 @@ export function formProblems(f: LaunchFields, check: FolderCheck | null, git: Gi
     out.cwd = t(check.slow ? 'launch.err.cwdSlow' : check.exists ? 'launch.err.cwdFile' : 'launch.err.cwdMissing', {
       path: check.path,
     })
+  if (profile?.offered && !profile.picked) out.profile = t('launch.err.profileChoose')
   if (!f.workspace && !f.newWorkspace.trim()) out.workspace = t('launch.err.workspaceName')
   const branch = git && f.wt ? checkBranch(f.branch) : ''
   if (branch) out.worktree = t(branch)
   return out
 }
 
-/** The Start button: off without fresh data, with a problem, while the folder is checked or the form is on its way. */
+/**
+ * The Start button: off without fresh data, with a problem (a profile to choose among them), while
+ * the folder is checked or the form is on its way.
+ */
 export function goButton(
   s: { canMutate: boolean; problems: Problems; checking: boolean; sending: boolean },
   t: Translator,
@@ -227,7 +242,11 @@ export const draftOf = (f: LaunchFields, category: string, label: string): Launc
 /** The workspace a start goes to: the picked one (by id, with its label), or a new one. */
 export type StartWorkspace = { id: string; label: string } | { create: string }
 
-/** POST /api/launch's body. */
+/**
+ * POST /api/launch's body. `profile`: the Claude profile it starts in, `parent`: the key of the
+ * card it was started from, whose profile the server holds it to (models/launch-profile.ts
+ * profileBody says when they go).
+ */
 export interface StartBody {
   name: string
   cwd: string
@@ -235,15 +254,25 @@ export interface StartBody {
   workspace: StartWorkspace
   message: string
   worktree?: { branch: string }
+  profile?: string
+  parent?: string
 }
 
 /**
  * What a start sends: the folder as the server resolved it when that answer is about what is
- * typed now; a worktree only for a folder in a checkout.
+ * typed now; a worktree only for a folder in a checkout; the profile and the card it came from
+ * when given.
  */
 export function startBody(
   f: LaunchFields,
-  s: { check: FolderCheck | null; git: GitInfo | null; category: string; label: string },
+  s: {
+    check: FolderCheck | null
+    git: GitInfo | null
+    category: string
+    label: string
+    profile?: string
+    parent?: string
+  },
 ): StartBody {
   const cwd = f.cwd.trim()
   const workspace: StartWorkspace = f.workspace
@@ -256,6 +285,8 @@ export function startBody(
     workspace,
     message: f.message.trim(),
     ...(s.git && f.wt ? { worktree: { branch: f.branch.trim() } } : {}),
+    ...(s.profile === undefined ? {} : { profile: s.profile }),
+    ...(s.parent === undefined ? {} : { parent: s.parent }),
   }
 }
 
@@ -280,5 +311,7 @@ export function startedLaunch(id: string, body: StartBody, now: number): LaunchV
     doneAt: null,
     pane: null,
     key: null,
+    ...(body.profile === undefined ? {} : { profile: body.profile }),
+    ...(body.parent === undefined ? {} : { parent: body.parent }),
   }
 }

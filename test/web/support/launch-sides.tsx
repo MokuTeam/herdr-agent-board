@@ -5,7 +5,7 @@
 // (support/react-commit.ts), its handlers React's own (support/react-events.ts). Both sides take
 // the same steps against the same fake server; snapshot() prints what a viewer could tell apart.
 import { createRef } from 'react'
-import type { BoardCategory } from '../../../src/core/payload.ts'
+import type { BoardCategory, BoardProfile } from '../../../src/core/payload.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
 import { launchApi } from '../../../web/src/api/launch.ts'
 import { LaunchDialogView, type LaunchRefs, launchHandlers } from '../../../web/src/components/launch/LaunchDialog.tsx'
@@ -32,6 +32,8 @@ export interface LaunchScene {
   launches: LaunchView[]
   filter: string
   canMutate: boolean
+  /** The Claude profiles (the old page had none; a board before them sends none). */
+  profiles?: BoardProfile[]
 }
 
 // ---------------------------------------------------------------- the server
@@ -440,7 +442,12 @@ export function reactLaunchSide(scene: LaunchScene): LaunchSide {
   const dialog = launchWindow({
     t: () => scene.t,
     canMutate: () => scene.canMutate,
-    data: () => ({ categories: scene.categories, items: scene.items, filter: scene.filter }),
+    data: () => ({
+      categories: scene.categories,
+      items: scene.items,
+      filter: scene.filter,
+      profiles: scene.profiles ?? [],
+    }),
     toast: page.toast,
     api: launchApi,
     layer: () => refs.layer.current,

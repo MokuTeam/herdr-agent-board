@@ -177,7 +177,12 @@ export function useLaunch(): Launch {
       canMutate: () => latest.current.board.canMutate,
       data: () => {
         const { data, ui } = latest.current.board
-        return { categories: data?.categories ?? [], items: data?.items ?? [], filter: ui.filter }
+        return {
+          categories: data?.categories ?? [],
+          items: data?.items ?? [],
+          filter: ui.filter,
+          profiles: data?.profiles ?? [],
+        }
       },
       toast: (text, error) => latest.current.board.toast(text, error),
       api: launchApi,

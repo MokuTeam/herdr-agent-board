@@ -4,15 +4,20 @@
 // those parity tests, so this pins the one-profile page to it. Later surfaces join here.
 import { expect, test } from 'bun:test'
 import { createRef } from 'react'
+import { translator } from '../../src/core/i18n/translator.ts'
 import type { BoardCategory, BoardLimits, BoardPayload, BoardProfile } from '../../src/core/payload.ts'
+import type { Item } from '../../src/core/types.ts'
 import { Board } from '../../web/src/components/Board.tsx'
 import { CategoriesPanel } from '../../web/src/components/categories/CategoriesPanel.tsx'
 import { Limits } from '../../web/src/components/Limits.tsx'
 import { LimitsPop } from '../../web/src/components/LimitsPop.tsx'
 import { Toolbar } from '../../web/src/components/Toolbar.tsx'
+import type { LaunchContext } from '../../web/src/models/launch-form.ts'
+import { LAUNCH_PROFILES } from '../../web/src/models/launch-profile.ts'
 import type { BoardUi } from '../../web/src/state/board-ui.ts'
 import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
 import { board as boardContext, item, payload, renderInBoard } from './support/board.tsx'
+import { type LaunchScene, type LaunchSide, reactLaunchSide } from './support/launch-sides.tsx'
 import { canonical } from './support/markup.ts'
 
 const MIN = 60_000
@@ -224,5 +229,124 @@ test('one profile shown: the usage pill and popover are phase 1’s, whatever it
   ]) {
     expect(usagePill(data)).toBe(usagePill(none))
     expect(usagePop(data)).toBe(usagePop(none))
+  }
+})
+
+// ---------------------------------------------------------------- the new-session window
+// Its lanes and sessions in the folders of the window's fake machine (support/launch-sides.tsx),
+// drawn as launch-dialog.test.tsx draws it.
+
+const lane = (id: string, title: string, paths: string[], fallback = false): BoardCategory => ({
+  id,
+  title,
+  color: '#007AFF',
+  colorName: 'blue',
+  paths,
+  configured: true,
+  fallback,
+})
+const LANES = [
+  lane('acme', 'Acme', ['C:\\Work\\acme']),
+  lane('web', 'Web', ['/srv/web']),
+  lane('other', 'Other', [], true),
+]
+const SESSIONS = [
+  item({ key: 's1', name: 'acme', cwd: 'C:\\Work\\acme', category: 'acme', workspace: 'Acme', activity: 50 }),
+  item({ key: 's2', name: 'site', cwd: '/srv/web', category: 'web', workspace: 'Ops', activity: 40 }),
+]
+
+/** The window's board: its profiles (none before them), what its sessions report, Acme's usual profile. */
+function windowBoard(profiles: BoardProfile[] | undefined, report?: string | null, usual?: string): LaunchScene {
+  const items: Item[] = SESSIONS.map(i => (report === undefined ? i : { ...i, profile: report }))
+  return {
+    t: translator('en'),
+    categories: LANES.map(c => (usual !== undefined && c.id === 'acme' ? { ...c, profile: usual } : c)),
+    items,
+    launches: [],
+    filter: 'all',
+    canMutate: true,
+    ...(profiles === undefined ? {} : { profiles }),
+  }
+}
+
+type Step = (side: LaunchSide) => Promise<unknown>
+
+/** The window after each step, as launch-dialog.test.tsx takes it. */
+async function windowShots(scene: LaunchScene): Promise<string[]> {
+  const side = reactLaunchSide(scene)
+  const key =
+    (k: string, ctrlKey = false): Step =>
+    async s => {
+      const el = s.world.document.activeElement
+      if (!el) throw new Error('nothing has the focus')
+      await s.world.fire(el, 'keydown', { key: k, ctrlKey })
+    }
+  const openAt = (ctx: (s: LaunchSide) => LaunchContext, from: string): Step[] => [
+    s => s.open(ctx(s), from),
+    s => s.world.tick(30),
+    s => s.world.tick(160),
+    s => s.world.settle(),
+  ]
+  const steps: Step[] = [
+    // A profile remembered for each folder: Work (hidden, or not there) and the one shown.
+    async s => {
+      s.world.storage.set(LAUNCH_PROFILES, JSON.stringify({ 'c:/work/acme': 'work', '/srv/web': 'default' }))
+    },
+    ...openAt(() => ({}), 'new-session'),
+    key('Escape'),
+    s => s.world.settle(),
+    ...openAt(() => ({ category: 'acme' }), 'lane-new'),
+    key('Enter', true),
+    s => s.world.tick(16),
+    s => s.world.settle(),
+    ...openAt(s => {
+      const card = s.scene.items[0]
+      if (!card) throw new Error('no card')
+      return { item: card }
+    }, 'card'),
+    key('Enter', true),
+    s => s.world.tick(16),
+    s => s.world.settle(),
+  ]
+  try {
+    const shots: string[] = []
+    for (const step of steps) {
+      await step(side)
+      for (let i = 0; i < 6; i++) await side.world.flush()
+      shots.push(side.snapshot())
+    }
+    await side.world.settle()
+    shots.push(side.snapshot())
+    return shots
+  } finally {
+    await side.dispose()
+  }
+}
+
+test('one profile shown: the new-session window is phase 1’s, from the toolbar, a lane’s + and a card; the body has no profile or parent', async () => {
+  const phase1 = await windowShots(windowBoard(undefined))
+  const sent =
+    phase1
+      .at(-1)
+      ?.split('\n')
+      .find(line => line.startsWith('log:')) ?? ''
+  expect(sent.split('POST /api/launch {').length).toBe(3)
+  expect(sent).not.toContain('"profile"')
+  expect(sent).not.toContain('"parent"')
+  const work = FOLDERS.profiles?.[1]
+  if (!work) throw new Error('FOLDERS has Work')
+  const boards: [string, LaunchScene][] = [
+    ['one profile', windowBoard([DEFAULT], 'default')],
+    ['one profile, Acme usually in it', windowBoard([DEFAULT], 'default', 'default')],
+    ['a hidden folder found', windowBoard([DEFAULT, work], 'default')],
+    ['a hidden folder found, cards with no report', windowBoard([DEFAULT, work], null)],
+    ['a hidden folder found, cards from before profiles', windowBoard([DEFAULT, work])],
+    ['a hidden folder found, Acme usually in it', windowBoard([DEFAULT, work], null, 'work')],
+  ]
+  for (const [name, scene] of boards) {
+    const shots = await windowShots(scene)
+    expect(shots.length).toBe(phase1.length)
+    for (const [i, shot] of phase1.entries())
+      expect(`${name}, step ${i}\n${shots[i]}`).toBe(`${name}, step ${i}\n${shot}`)
   }
 })

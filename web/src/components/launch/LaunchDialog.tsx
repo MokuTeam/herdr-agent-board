@@ -1,5 +1,6 @@
 // The "new session" window as drawn: over the dimmed board, its title and how sessions start, the
-// form (name, folder, category, where it opens, a worktree, the first message) and its buttons.
+// form (name, folder, category, the Claude profile when there is a choice, where it opens, a
+// worktree, the first message) and its buttons, the profile it starts in beside Start.
 // It lives in <body> itself, beside the page (hooks/useModalFocus.ts); its motion, focus, keys
 // and what the form does are launch-window.ts's (and folder-field.ts's for the folder).
 import { type RefObject, useLayoutEffect, useMemo } from 'react'
@@ -33,6 +34,7 @@ export type LaunchHandlers = Pick<
   | 'branch'
   | 'message'
   | 'pickCategory'
+  | 'pickProfile'
 > & { folder: FolderHandlers }
 
 export const launchHandlers = (w: LaunchWindow): LaunchHandlers => ({
@@ -46,6 +48,7 @@ export const launchHandlers = (w: LaunchWindow): LaunchHandlers => ({
   branch: w.branch,
   message: w.message,
   pickCategory: w.pickCategory,
+  pickProfile: w.pickProfile,
   folder: w.folder,
 })
 
@@ -145,6 +148,29 @@ export function LaunchDialogView({ view, folder, launcher, t, on, refs }: Launch
                 ))}
               </div>
             </div>
+            {view.profile.offered && (
+              <>
+                <div className="row profile-row">
+                  <span className="row-label">{t('launch.profile')}</span>
+                  <div className="row-value chips launch-profiles">
+                    {view.profile.options.map(p => (
+                      <button
+                        type="button"
+                        key={p.id}
+                        name="profile"
+                        data-profile={p.id}
+                        style={{ '--lane': p.color }}
+                        aria-pressed={p.pressed}
+                        onClick={() => on.pickProfile(p.id)}
+                      >
+                        {p.title}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <Note field="profile" note={view.notes.profile} />
+              </>
+            )}
             <div className="row where-row">
               <span className="row-label">{t('launch.where')}</span>
               <div className="row-value where">
@@ -213,6 +239,11 @@ export function LaunchDialogView({ view, folder, launcher, t, on, refs }: Launch
           <button type="button" className="button launch-cancel" onClick={() => on.close()}>
             {t('cancel')}
           </button>
+          {view.profile.chosen && (
+            <span className="launch-profile" style={{ '--c': view.profile.chosen.color }}>
+              {view.profile.chosen.title}
+            </span>
+          )}
           <button
             type="button"
             className="button primary launch-go"
