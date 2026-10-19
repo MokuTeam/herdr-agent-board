@@ -9,6 +9,12 @@ if (!/\.m?js$/.test(process.argv[1] ?? '')) {
   const key = state[args.slice(0, 3).join(' ')] ? args.slice(0, 3).join(' ') : args.slice(0, 2).join(' ')
   let reply = state[key]
   if (!reply) throw new Error(`Unexpected fake command: ${args.join(' ')}`)
+  // { until: ['tab close', ...], then: <reply> }: this reply until one of those commands was
+  // called, the other one after (a pane that a close took away).
+  if (reply.until) {
+    const calls = readFileSync(process.env.FAKE_HERDR_LOG, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l).slice(0, 2).join(' '))
+    if (reply.until.some(c => calls.includes(c))) reply = reply.then
+  }
   // { seq: [...] }: one reply per call in turn, the last one from then on (a screen that changes).
   if (reply.seq) {
     const counter = `${process.env.FAKE_HERDR_STATE}.${key.replace(/[^\w-]+/g, '_')}.n`

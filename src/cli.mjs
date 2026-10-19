@@ -24,11 +24,14 @@
 //                            a MokuPilot call's results (mokupilot.mjs) for the session it was a
 //                            fork of: the board types them in once the session is free, for its
 //                            information, waking it if it sleeps
+//   board archive --session <id|name|pane>   takes a finished session off the board: its pane
+//                            closes, the user can bring it back from the board's archive (archive.mjs)
 //   board doctor             what is set up on this computer, and what is missing (setup.mjs)
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { enqueueReport, getReceipt, MAX_REPORT_BYTES, reportHash, reportIdentity } from './call-receipts.mjs'
 import { closeSync, openSync, readFileSync, readSync } from 'node:fs'
 import { wakeAnswers } from './actions.mjs'
+import { askArchive, closeDue, getArchived, readArchiveLog } from './archive.mjs'
 import { categoryFor, categoryInfo, CONFIG_FILE, editCategories, laneRank, loadConfig } from './config.mjs'
 import { liveSessions } from './claude.mjs'
 import { snapshot } from './herdr.mjs'
@@ -40,8 +43,9 @@ import { promptOf } from './scheduler.mjs'
 import { readCard, writeCard } from './store.mjs'
 import { nextRun, parseCron, parseWhen, shortestGap } from './when.mjs'
 import { shortWhen } from '../web/when.js'
+import { translator } from '../web/i18n.js'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | doctor] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | doctor] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -218,6 +222,7 @@ async function main() {
     return console.log(`ok · removed ${e.id} (${e.cron ? `every "${e.cron}"` : stamp(e.next)}${e.name ? `, ${e.name}` : ''}): ${clip(e.text)}`)
   }
   if (cmd === 'call-report') return callReport()
+  if (cmd === 'archive') return archive()
 
   const s = await resolveSession()
   const now = Date.now()
@@ -342,6 +347,45 @@ async function restart(s) {
   const turn = own ? 'once this turn is over and the session is free' : 'once the session is free'
   const stops = own ? ' · end your turn now. It waits for background commands and Monitor to end (10 min at most, then tells you it did not happen); CronCreate and ScheduleWakeup jobs die with it' : ''
   return console.log(`${head}: ${turn}, Claude exits and resumes in the same pane (MCP servers, settings, hooks, skills and CLAUDE.md load anew, the conversation stays), then gets "${prompt}"${stops} · cancel: board unschedule ${entry.id}${await schedulerNote()}`)
+}
+
+/**
+ * `board archive --session <id|name|pane>`: another session off the board, by the same rules as
+ * the web board's "Archive" (free: no turn, no dialog, no text in its input box, no background
+ * command), its pane closed right away rather than after the page's undo time. The user brings it
+ * back from the board's archive.
+ */
+async function archive() {
+  if (!target) throw new Error('usage: board archive --session <id|name|pane>: the session to take off the board (one you started, or one the user asked you to)')
+  // Its helpers too: one with helpers at work stays, as on the web board.
+  const items = await collect(cfg, { helpers: true })
+  const want = target.toLowerCase()
+  const is = (i, fields) => fields.some(f => i[f] && String(i[f]).toLowerCase() === want)
+  // An id or a pane says which one exactly; a name may fit several, and then none is taken.
+  let found = items.filter(i => is(i, ['key', 'session', 'pane']))
+  if (!found.length) found = items.filter(i => is(i, ['name', 'autoName']))
+  if (found.length > 1) throw new Error(`"${target}" fits ${found.length} sessions on the board (${found.map(i => `${i.name} in ${i.pane}`).join(', ')}); give its session id or pane`)
+  const item = found[0]
+  if (!item) throw new Error(`no session "${target}" on the board`)
+  const from = await ownSession()
+  if (from?.key === item.key) throw new Error('a session cannot archive itself: its turn is on while it asks. Tell the user it is done, or let the session that started it archive it')
+  const r = await askArchive({ ...item, note: noteOf(item) }, { by: 'agent', from, grace: 0 })
+  if (!r.ok) {
+    const why = translator('en')(r.why, { name: item.name, why: r.detail ?? '' })
+    throw new Error(`${item.name} stays on the board: ${why[0].toLowerCase()}${why.slice(1)}`)
+  }
+  // Closed here and now; a board's scheduler that gets to it first does the same.
+  const { closed } = await closeDue({ keys: [item.key] })
+  const record = getArchived(item.key)
+  if (!record) {
+    // Called off at the last moment: the session got to work, or herdr would not close it.
+    const kept = readArchiveLog(20).find(e => e.key === item.key && e.result === 'kept')
+    const why = kept ? translator('en')(kept.why, { why: kept.detail ?? '' }) : 'it is not in the archive'
+    throw new Error(`${item.name} stays on the board: ${why[0].toLowerCase()}${why.slice(1)}`)
+  }
+  const held = r.held ? ` · ${r.held} schedule ${r.held === 1 ? 'entry waits' : 'entries wait'} with it` : ''
+  const state = closed ? 'its pane is closed' : 'its pane closes in a moment'
+  return console.log(`ok · archived ${item.name}: ${state}; the user can bring it back from the board's archive (Archive on the toolbar)${held}`)
 }
 
 /**

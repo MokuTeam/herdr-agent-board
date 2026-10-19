@@ -12,6 +12,8 @@ export const STATE_DIR = join(process.env.LOCALAPPDATA || join(homedir(), '.loca
 export const CARDS_DIR = join(STATE_DIR, 'cards')
 // Reminders and repeating pings for sessions (schedule.mjs), one file per entry.
 export const SCHEDULE_DIR = join(STATE_DIR, 'schedule')
+// Sessions taken off the board, one file per session (archive.mjs).
+export const ARCHIVE_DIR = join(STATE_DIR, 'archive')
 export const BOARD_FILE = join(STATE_DIR, 'board.json')
 export const CLAUDE_DIR = join(homedir(), '.claude')
 // From Claude Code's status line (statusline.mjs): the account's usage windows, each session's context.

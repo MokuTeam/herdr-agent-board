@@ -5,6 +5,7 @@
 // A value is a string with {name} placeholders, or an array of plural forms picked by `n`
 // (English: one, other; Russian: one, few, many). A key missing in a language falls back to English.
 
+import { ARCHIVE_STRINGS } from './i18n-archive.js'
 import { LAUNCH_STRINGS } from './i18n-launch.js'
 import { SETUP_STRINGS } from './i18n-setup.js'
 
@@ -1246,7 +1247,7 @@ const STRINGS = {
 
 // New sessions, the context menus and renaming keep their texts in a file of their own; so does
 // the setup check.
-for (const strings of [LAUNCH_STRINGS, SETUP_STRINGS]) for (const [code, dict] of Object.entries(strings)) Object.assign(STRINGS[code], dict)
+for (const strings of [LAUNCH_STRINGS, SETUP_STRINGS, ARCHIVE_STRINGS]) for (const [code, dict] of Object.entries(strings)) Object.assign(STRINGS[code], dict)
 
 /** "auto" or anything without a dictionary: the system's language when there is one for it, else English. */
 export function resolveLanguage(pref, locale) {

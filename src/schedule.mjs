@@ -78,6 +78,27 @@ export function addEntry(fields) {
 }
 
 /**
+ * Put back an entry that waited with an archived session (archive.mjs): under its own id when
+ * that is free, so `board unschedule <id>` still finds it, else under a new one. One there under
+ * its id already, for the same session with the same text (left by a board that stopped between
+ * copying and removing it), is not doubled. Returns the entry.
+ */
+export function restoreEntry(entry) {
+  mkdirSync(SCHEDULE_DIR, { recursive: true })
+  const { id, created, ...fields } = entry
+  if (ID.test(String(id))) {
+    let there = null
+    const back = updateJson(fileOf(id), taken => {
+      there = taken
+      return taken ? undefined : { id, ...fields, created: created ?? Date.now() }
+    })
+    if (back) return back
+    if (there?.key === fields.key && there?.text === fields.text) return there
+  }
+  return addEntry(fields)
+}
+
+/**
  * A restart of the session `fields.key`, once it is free: the one already asked for (its note
  * replaced by a new one, when given), else a new entry, due now. One that gave up and still has to
  * say so is dropped: the new restart is the news. An agent asking for one the user asked for takes

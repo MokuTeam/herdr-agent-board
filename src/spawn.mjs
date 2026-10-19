@@ -5,8 +5,11 @@
 //
 //   spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
 //               [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
-//               [--timeout-sec 120] [--session-id <uuid>] [--pane <herdr pane id>]
+//               [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--pane <herdr pane id>]
 //   PowerShell-style names work too: -Name, -Cwd, -Label, -BriefFile, -Brief, -Workspace, -TimeoutSec.
+//
+// --resume brings back a session that ended (the board's archive, archive.mjs): Claude resumes it
+// by its id, in the folder it ran in, and it keeps the name it had, so no /rename is typed.
 //
 // What it types into the tab is `launch.claude` in the board's config.json (default: claude),
 // so a launcher of your own (one that sets up Telegram topics, say) goes there. --pane starts
@@ -22,10 +25,10 @@ import { checkName, slugName, uniqueSlug } from '../web/launch-model.js'
 import { loadConfig } from './config.mjs'
 import { herdr, herdrText } from './herdr.mjs'
 
-export const USAGE = 'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid>] [--pane <pane id>]'
+export const USAGE = 'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--pane <pane id>]'
 
 // Option names without dashes and case: --brief-file, -BriefFile and -brieffile are one.
-const OPTIONS = { name: 'name', cwd: 'cwd', label: 'label', brieffile: 'briefFile', brief: 'brief', workspace: 'workspace', timeoutsec: 'timeoutSec', sessionid: 'sessionId', pane: 'pane', help: 'help', h: 'help' }
+const OPTIONS = { name: 'name', cwd: 'cwd', label: 'label', brieffile: 'briefFile', brief: 'brief', workspace: 'workspace', timeoutsec: 'timeoutSec', sessionid: 'sessionId', resume: 'resume', pane: 'pane', help: 'help', h: 'help' }
 const NAME_ERRORS = {
   'launch.err.nameEmpty': '--name is empty',
   'launch.err.nameLong': '--name is longer than 60 characters',
@@ -34,7 +37,7 @@ const NAME_ERRORS = {
 }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-/** The command line as options: { name, cwd, label, briefFile, brief, workspace, timeoutSec, sessionId, pane, help }. */
+/** The command line as options: { name, cwd, label, briefFile, brief, workspace, timeoutSec, sessionId, resume, pane, help }. */
 export function parseArgs(argv) {
   const out = {}
   for (let i = 0; i < argv.length; i++) {
@@ -66,6 +69,8 @@ export function parseArgs(argv) {
   if (!Number.isFinite(timeout) || timeout <= 0) throw new Error(`--timeout-sec must be a number of seconds, not "${out.timeoutSec}"`)
   out.timeoutSec = timeout
   if (out.sessionId !== undefined && !UUID.test(out.sessionId)) throw new Error(`--session-id must be a UUID, not "${out.sessionId}"`)
+  if (out.resume !== undefined && !UUID.test(out.resume)) throw new Error(`--resume must be a session id (a UUID), not "${out.resume}"`)
+  if (out.resume !== undefined && out.sessionId !== undefined) throw new Error('give --session-id or --resume, not both')
   return out
 }
 
@@ -145,7 +150,9 @@ export async function spawnAgent(o, { claude = ['claude'], log = () => {} } = {}
   if (!o.pane && !workspace) throw new Error('No herdr workspace: run it inside herdr or pass --workspace')
   const label = o.label?.trim() || o.name
   const text = o.briefFile !== undefined ? readFileSync(o.briefFile, 'utf8').replace(/^\uFEFF/, '').trim() : (o.brief ?? '').trim()
-  const command = shellLine(o.sessionId && !choosesSession(claude) ? [...claude, '--session-id', o.sessionId] : claude)
+  // A launch.claude that picks its own session (--resume, --continue) cannot resume another one.
+  if (o.resume && choosesSession(claude)) throw new Error(`launch.claude picks its own session (${claude.join(' ')}), so it cannot resume ${o.resume}`)
+  const command = shellLine(o.resume ? [...claude, '--resume', o.resume] : o.sessionId && !choosesSession(claude) ? [...claude, '--session-id', o.sessionId] : claude)
 
   // The tab is labelled before Claude runs: a launcher may name things after it (a Telegram topic).
   let pane = o.pane
@@ -193,14 +200,17 @@ export async function spawnAgent(o, { claude = ['claude'], log = () => {} } = {}
 
   // /rename runs locally, no turn: herdr never sees it working and calls the prompt stalled. The
   // name is cosmetic and Claude runs by now: no failure for it, or a retry would start a second one.
-  try {
-    await prompt(pane, `/rename ${o.name}`)
-  } catch (err) {
-    if (!stalled(err)) log(`/rename in ${pane}: ${err.message}`)
-  }
-  for (let i = 0; i < 10; i++) {
-    await sleep(500)
-    if (/Session renamed/i.test(await screen(pane))) break
+  // A resumed session keeps the name it had.
+  if (!o.resume) {
+    try {
+      await prompt(pane, `/rename ${o.name}`)
+    } catch (err) {
+      if (!stalled(err)) log(`/rename in ${pane}: ${err.message}`)
+    }
+    for (let i = 0; i < 10; i++) {
+      await sleep(500)
+      if (/Session renamed/i.test(await screen(pane))) break
+    }
   }
 
   // Right after a slash command Claude can drop typed text, and a short turn can end before herdr

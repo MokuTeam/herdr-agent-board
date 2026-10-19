@@ -1,5 +1,7 @@
 // The board's data: every agent pane in herdr plus the sessions herdr-wake put to sleep, each
-// merged with its card and with what Claude recorded about it, and sorted into a column.
+// merged with its card and with what Claude recorded about it, and sorted into a column. Sessions
+// in the archive are left out (archive.mjs).
+import { archivedFiles, getArchived, hides, isArchived, settleReturned } from './archive.mjs'
 import { categoryFor } from './config.mjs'
 import { liveSessions, transcriptInfo, transcriptPath } from './claude.mjs'
 import { helpersOf, summarize } from './helpers.mjs'
@@ -147,8 +149,19 @@ export async function collect(cfg, { helpers = false, links = null } = {}) {
   const labels = new Map(snap.workspaces.map(w => [w.workspace_id, w.label]))
   const items = []
   const seen = new Set()
+  const archived = archivedFiles()
 
   const add = base => {
+    if (isArchived(archived, base.key)) {
+      const record = getArchived(base.key)
+      if (hides(record, base)) return
+      // In another pane than the one it was archived in: it is back (Return, or resumed by hand).
+      if (record) {
+        try {
+          settleReturned(base)
+        } catch {} // its record is locked: the next refresh settles it
+      }
+    }
     const saved = cards.get(base.key) ?? {}
     const pin = pinOf(base.key, base.status, saved)
     const card = { ...saved, pin }
