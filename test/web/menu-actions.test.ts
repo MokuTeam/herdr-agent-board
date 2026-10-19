@@ -6,7 +6,12 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { Item } from '../../src/core/types.ts'
 import { type ActionDeps, boardActions, sheetMoreMenuFrom } from '../../web/src/hooks/useContextMenus.ts'
-import { type ActResult, callMokuPilot, type SessionActions } from '../../web/src/hooks/useSessionActions.ts'
+import {
+  type ActResult,
+  callMokuPilot,
+  restartSession,
+  type SessionActions,
+} from '../../web/src/hooks/useSessionActions.ts'
 import { pointRect } from '../../web/src/models/board-menus.ts'
 import type { MenuEntry, MenuItem } from '../../web/src/models/menu-model.ts'
 import type { BoardAction } from '../../web/src/state/board-ui.ts'
@@ -65,6 +70,7 @@ function actionsWorld(fields: Partial<{ canEdit: boolean; canMutate: boolean; ac
     focusSession: note('focusSession'),
     wakeSession: note('wakeSession'),
     sleepSession: note('sleepSession'),
+    restartSession: note('restartSession'),
     dismissAsk: note('dismissAsk'),
     callMokuPilot: note('callMokuPilot'),
   }
@@ -442,6 +448,65 @@ describe('“More actions” on a phone', () => {
     b.click(page('sheet-more'), 1)
     expect(b.opened()?.items.some(it => !it.separator && it.id === 'sheet-term')).toBe(false)
     expect(clicked).toEqual([])
+  })
+
+  test('“Restart” after Put to sleep, as upstream’s at the restart’s merge: without fresh data it waits for herdr, else its own why; picked it is the button’s own click', async () => {
+    const restart = world.document.createElement('button')
+    restart.id = 'sheet-restart'
+    restart.textContent = ` ${t('sheet.restart')} `
+    page('sheet-sleep').after(restart)
+    let clicks = 0
+    restart.addEventListener('click', () => void clicks++)
+    for (const canMutate of [true, false])
+      for (const disabled of [false, true]) {
+        restart.disabled = disabled
+        restart.title = disabled ? `${t('sheet.restartPending')}. ${t('restart.title.wait')}` : t('sheet.restartHint')
+        const [oldLog, newLog]: [string[], string[]] = [[], []]
+        const [a, b] = [oldMore(canMutate, false, oldLog, '513e441'), newMore(canMutate, false, newLog)]
+        a.click(page('sheet-more'), 1)
+        b.click(page('sheet-more'), 1)
+        expect(shown(b.opened())).toEqual(shown(a.opened()))
+        const item = b.opened()?.items.find(it => !it.separator && it.id === 'sheet-restart')
+        expect(item).toMatchObject({
+          label: 'Restart',
+          disabled,
+          reason: !disabled ? '' : canMutate ? restart.title : t('mobile.readOnly'),
+        })
+        pickIn(a.opened(), 'sheet-restart')
+        pickIn(b.opened(), 'sheet-restart')
+        await world.flush()
+        expect(newLog).toEqual(oldLog)
+      }
+    // Picked while it could: the button's own click, on each side, both times.
+    expect(clicks).toBe(4)
+  })
+
+  test('Restart from the sheet or a card’s menu says it is asked for, on its way already, or why not, as upstream’s restartSession', async () => {
+    const asleep = { ...session, sleeping: true }
+    const replies: ActResult[] = [
+      { ok: true },
+      { ok: true, again: true },
+      { ok: false, error: 'A restart needs herdr-wake' },
+    ]
+    for (const reply of replies)
+      for (const key of ['s1', 'z1', 'gone']) {
+        const said: { old: unknown[]; react: unknown[] } = { old: [], react: [] }
+        const asked: { old: unknown[]; react: unknown[] } = { old: [], react: [] }
+        const deps = (side: 'old' | 'react') => ({
+          t,
+          itemOf: (k: string) => (k === 's1' ? session : k === 'z1' ? asleep : undefined),
+          act: async (k: string, action: string) => {
+            asked[side].push([k, action])
+            return reply
+          },
+          toast: (text: string, error = false) => void said[side].push([text, error]),
+        })
+        const code = oldCode('web/app.js', ['restartSession'], deps('old'), '513e441')
+        await oldFunction(code, 'restartSession')(key)
+        await restartSession(key, deps('react'))
+        expect(said.react).toEqual(said.old)
+        expect(asked.react).toEqual(asked.old)
+      }
   })
 
   test('a MokuPilot call says it started, or why not, as upstream’s callMokuPilot', async () => {

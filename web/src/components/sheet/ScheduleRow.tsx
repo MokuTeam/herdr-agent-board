@@ -6,10 +6,11 @@ import type { ScheduleEntry } from '../../../../src/core/schedule-rules.ts'
 import { capital, longWhen } from '../../../../src/core/when-format.ts'
 import type { ScheduleShown } from '../../hooks/useSchedule.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import { restartView } from '../../models/restart.ts'
 import { entryText, overdue } from '../../models/schedule.ts'
 import type { Held } from '../../models/schedule-desk.ts'
 import { classNames } from '../class-names.ts'
-import { AlarmGlyph, RepeatGlyph } from '../icons.tsx'
+import { AlarmGlyph, RepeatGlyph, RestartGlyph } from '../icons.tsx'
 import { CancelButton, ModeButton } from '../schedule/ScheduleButtons.tsx'
 
 export interface ScheduleActions {
@@ -39,22 +40,26 @@ export function ScheduleRow({ entries, now, disabled, armed, onCancel, onMode, o
     <div className="row sched-row">
       <span className="row-label">{t('sched.row')}</span>
       <div className="row-value">
-        {entries.slice(0, SHOWN).map(e => (
-          <div className="sched-mini" data-id={e.id} key={e.id}>
-            <span
-              className={classNames('when', overdue(e, now) && 'due')}
-              title={e.cron ? `${t('sched.repeat')}: ${e.cron}` : t('sched.once')}
-            >
-              {e.cron ? <RepeatGlyph /> : <AlarmGlyph />}
-              {capital(longWhen(e.next, t, now), t)}
-            </span>
-            <span className="text" title={entryText(e, t)}>
-              {entryText(e, t)}
-            </span>
-            <ModeButton entry={e} short disabled={disabled} onMode={onMode} />
-            <CancelButton entry={e} ask={armed === e.id} disabled={disabled} onCancel={onCancel} />
-          </div>
-        ))}
+        {entries.slice(0, SHOWN).map(e =>
+          e.kind === 'restart' ? (
+            <RestartRow key={e.id} entry={e} disabled={disabled} ask={armed === e.id} onCancel={onCancel} />
+          ) : (
+            <div className="sched-mini" data-id={e.id} key={e.id}>
+              <span
+                className={classNames('when', overdue(e, now) && 'due')}
+                title={e.cron ? `${t('sched.repeat')}: ${e.cron}` : t('sched.once')}
+              >
+                {e.cron ? <RepeatGlyph /> : <AlarmGlyph />}
+                {capital(longWhen(e.next, t, now), t)}
+              </span>
+              <span className="text" title={entryText(e, t)}>
+                {entryText(e, t)}
+              </span>
+              <ModeButton entry={e} short disabled={disabled} onMode={onMode} />
+              <CancelButton entry={e} ask={armed === e.id} disabled={disabled} onCancel={onCancel} />
+            </div>
+          ),
+        )}
         {entries.length > SHOWN && (
           <button
             type="button"
@@ -67,6 +72,34 @@ export function ScheduleRow({ entries, now, disabled, armed, onCancel, onMode, o
           </button>
         )}
       </div>
+    </div>
+  )
+}
+
+/** A restart has no time of its own: it goes once the session is free, and says how it stands. */
+function RestartRow({
+  entry,
+  disabled,
+  ask,
+  onCancel,
+}: {
+  entry: ScheduleEntry
+  disabled: boolean
+  ask: boolean
+  onCancel?: ((id: string) => void) | undefined
+}) {
+  const t = useT()
+  const view = restartView(entry, t)
+  return (
+    <div className="sched-mini restart" data-id={entry.id}>
+      <span className={classNames('when', view.on && 'on')} title={view.title}>
+        <RestartGlyph />
+        {view.badge}
+      </span>
+      <span className="text" title={view.title}>
+        {entry.text || view.title}
+      </span>
+      <CancelButton entry={entry} ask={ask} disabled={disabled} onCancel={onCancel} />
     </div>
   )
 }

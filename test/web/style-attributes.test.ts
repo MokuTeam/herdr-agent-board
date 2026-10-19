@@ -32,7 +32,7 @@ import { oldSource } from './support/old-app.ts'
 import { type AttributeRead, attributeReads, pageStyleRules } from './support/stylesheets.ts'
 
 /** The newest upstream merge ported (the stylesheets are its: styles.test.ts). */
-const UPSTREAM_REF = 'bde9cfd'
+const UPSTREAM_REF = '513e441'
 const ROOT = join(import.meta.dir, '..', '..')
 
 /**

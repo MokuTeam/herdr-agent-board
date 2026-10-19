@@ -116,6 +116,8 @@ describe('the head', () => {
       wakeHidden: true,
       sleepHidden: false,
       sleepTitle: t('sheet.sleepBusy'),
+      restartHidden: true,
+      restartTitle: t('sheet.restartHint'),
       mokupilotHidden: true,
     })
     expect(headButtons({ ...a, status: 'idle', session: null }, t)).toEqual({
@@ -123,6 +125,8 @@ describe('the head', () => {
       wakeHidden: true,
       sleepHidden: true,
       sleepTitle: t('sheet.sleepHint'),
+      restartHidden: true,
+      restartTitle: t('sheet.restartHint'),
       mokupilotHidden: true,
     })
     // A MokuPilot call: with MokuPilot here, for a Claude session with an id.
@@ -137,8 +141,26 @@ describe('the head', () => {
       wakeHidden: true,
       sleepHidden: false,
       sleepTitle: undefined,
+      restartHidden: true,
+      restartTitle: undefined,
       mokupilotHidden: true,
     })
+  })
+
+  test('Restart for a Claude session in herdr that is awake, also mid-turn; one on its way says so and how it stands', () => {
+    const a = item({ key: 'a', status: 'working', agent: 'claude' })
+    expect(headButtons(a, t)).toMatchObject({ restartHidden: false, restartTitle: t('sheet.restartHint') })
+    expect(headButtons({ ...a, sleeping: true }, t).restartHidden).toBe(true)
+    expect(headButtons({ ...a, agent: 'codex' }, t).restartHidden).toBe(true)
+    expect(headButtons({ ...a, session: null }, t).restartHidden).toBe(true)
+    const restart = { id: 'r1', key: 'a', kind: 'restart', text: '', next: NOW, why: 'tasks' }
+    expect(headButtons(a, t, false, [restart]).restartTitle).toBe(
+      `${t('sheet.restartPending')}. ${t('restart.title.wait')}. ${t('sched.tasks')}`,
+    )
+    // One that gave up does not stop another being asked for.
+    expect(headButtons(a, t, false, [{ ...restart, failed: 'herdr-wake is down' }]).restartTitle).toBe(
+      t('sheet.restartHint'),
+    )
   })
 })
 
@@ -156,8 +178,14 @@ describe('what works now', () => {
       newHere: false,
       newHereTitle: t('launch.hereHint'),
       files: false,
+      restart: false,
     })
     expect(sheetAvailability({ ...scene, turn: true }, t).sleep).toBe(true)
+    // A turn does not gray Restart (it waits for the turn by itself); a restart on its way does.
+    expect(sheetAvailability({ ...scene, turn: true }, t).restart).toBe(false)
+    expect(sheetAvailability({ ...scene, restarting: true }, t).restart).toBe(true)
+    expect(sheetAvailability({ ...scene, canMutate: false }, t).restart).toBe(true)
+    expect(sheetAvailability({ ...scene, missing: true }, t).restart).toBe(true)
   })
   test('without fresh herdr data the herdr actions stop; without the board the edits too', () => {
     const stale = sheetAvailability({ ...scene, canMutate: false }, t)

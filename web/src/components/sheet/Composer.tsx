@@ -1,6 +1,6 @@
 // The sheet's foot: why the session's actions wait (no fresh data), the session's buttons — go to
-// it in herdr, its terminal, a MokuPilot call with a fork of it, wake it, put it to sleep, its
-// changes and history, a new session here — the files
+// it in herdr, its terminal, a MokuPilot call with a fork of it, wake it, put it to sleep, restart
+// it, its changes and history, a new session here — the files
 // that go with the next message, and the message box: Enter sends, Shift+Enter breaks the line,
 // the box grows with the text; files come in through the clip or Ctrl+V (a screenshot).
 import { type ClipboardEvent, type KeyboardEvent, useLayoutEffect, useRef } from 'react'
@@ -19,6 +19,7 @@ import {
   MoonIcon,
   PhoneIcon,
   PlusIcon,
+  RestartIcon,
   SendIcon,
   SunIcon,
 } from '../icons.tsx'
@@ -34,6 +35,8 @@ export interface SessionButtons {
   mokupilot?: () => void
   wake?: () => void
   sleep?: () => void
+  /** Claude exits and resumes in its pane once the session is free. */
+  restart?: () => void
   /** The quick look of the checkout's changes (25c). */
   changes?: (button: HTMLElement) => void
   /** The quick look of the project's past sessions (25c). */
@@ -166,6 +169,18 @@ export function Composer({
         >
           <MoonIcon />
           <span>{t('sheet.sleep')}</span>
+        </button>
+        <button
+          type="button"
+          className="button"
+          id="sheet-restart"
+          hidden={buttons.restartHidden}
+          disabled={av.restart}
+          title={buttons.restartTitle}
+          onClick={() => on.restart?.()}
+        >
+          <RestartIcon />
+          <span>{t('sheet.restart')}</span>
         </button>
         <button
           type="button"

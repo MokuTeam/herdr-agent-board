@@ -63,6 +63,14 @@ export const FocusIcon = () => (
   </Icon>
 )
 
+/** The sheet's Restart: two arrows going round. */
+export const RestartIcon = () => (
+  <Icon>
+    <path d="M4.6 8.6a5.6 5.6 0 0 1 10.3-1.4M15.4 11.4a5.6 5.6 0 0 1-10.3 1.4" />
+    <path d="M15.4 3.7v3.6h-3.6M4.6 16.3v-3.6h3.6" />
+  </Icon>
+)
+
 export const SunIcon = () => (
   <Icon>
     <circle cx="10" cy="10" r="3.5" />
@@ -290,6 +298,14 @@ export const BoltGlyph = () => (
 export const PhoneGlyph = () => (
   <Glyph>
     <path d="M6.6 3.5H4.8A1.8 1.8 0 0 0 3 5.4c.3 6 5.6 11.3 11.6 11.6a1.8 1.8 0 0 0 1.9-1.8v-1.8a1 1 0 0 0-.8-1l-2.6-.6a1 1 0 0 0-1 .3l-1 1.2a10 10 0 0 1-4.8-4.8l1.2-1a1 1 0 0 0 .3-1l-.6-2.6a1 1 0 0 0-1-.8Z" />
+  </Glyph>
+)
+
+/** A restart on its way (a card's line, the sheet's and the schedule's rows). */
+export const RestartGlyph = () => (
+  <Glyph>
+    <path d="M4.6 8.6a5.6 5.6 0 0 1 10.3-1.4M15.4 11.4a5.6 5.6 0 0 1-10.3 1.4" />
+    <path d="M15.4 3.7v3.6h-3.6M4.6 16.3v-3.6h3.6" />
   </Glyph>
 )
 

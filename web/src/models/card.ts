@@ -4,6 +4,7 @@ import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
 import { longWhen, shortWhen } from '../../../src/core/when-format.ts'
 import { attentionTime } from './attention.ts'
+import { restartOf } from './restart.ts'
 import { entryText } from './schedule.ts'
 
 /** Markdown down to plain text, for one-glance card lines. */
@@ -29,8 +30,14 @@ export function ago(ms: number | null | undefined, now: number, t: Translator): 
 /** A turn is on: it works, or a dialog stopped it midway. */
 export const inTurn = (it: Pick<Item, 'status'>): boolean => it.status === 'working' || it.status === 'blocked'
 
-/** Asleep in the idle column: a one-line card. */
-export const compact = (it: Pick<Item, 'sleeping' | 'column'>): boolean => !!it.sleeping && it.column === 'idle'
+/**
+ * Asleep in the idle column: a one-line card. A restart on its way keeps the card whole: it says
+ * so, and does not fold up while Claude is out (`schedules`: the board's).
+ */
+export const compact = (
+  it: Pick<Item, 'key' | 'sleeping' | 'column'>,
+  schedules: readonly ScheduleEntry[] = [],
+): boolean => !!it.sleeping && it.column === 'idle' && !restartOf(schedules, it.key)
 
 // The server builds it (launches.decorate): its id and state are enough to tell it from nothing.
 const isLaunch = (value: unknown): value is LaunchView =>
@@ -102,9 +109,12 @@ export interface AlarmView {
   title: string
 }
 
-/** The session's schedule entries (the server sorts them, soonest first) as the clock by its name. */
+/**
+ * The session's schedule entries (the server sorts them, soonest first) as the clock by its name;
+ * a restart has a line of its own on the card, not a time.
+ */
 export function alarmOf(schedules: ScheduleEntry[], key: string, now: number, t: Translator): AlarmView | null {
-  const list = schedules.filter(e => e.key === key)
+  const list = schedules.filter(e => e.key === key && e.kind !== 'restart')
   const first = list[0]
   if (!first) return null
   const title = t('sched.badge', {

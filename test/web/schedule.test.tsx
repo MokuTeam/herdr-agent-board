@@ -8,9 +8,10 @@ import type { BoardCategory } from '../../src/core/payload.ts'
 import type { ScheduleEntry } from '../../src/core/schedule-rules.ts'
 import { ScheduleBody } from '../../web/src/components/schedule/SchedulePanel.tsx'
 import { NO_MOVES, withMove } from '../../web/src/models/board-view.ts'
-import { logRecords, newEntries, pendingText, scheduleGroups } from '../../web/src/models/schedule.ts'
+import { logRecords, newEntries, pendingText, restartNotes, scheduleGroups } from '../../web/src/models/schedule.ts'
 import { board, item, payload, renderInBoard } from './support/board.tsx'
 import { canonical, findAll, hasClass, type Node } from './support/markup.ts'
+import { oldCode, oldFunction } from './support/old-app.ts'
 import { oldScheduleBody } from './support/old-schedule.ts'
 
 const MIN = 60_000
@@ -159,6 +160,99 @@ describe('schedule panel markup parity', () => {
     expect(canonical(react)).toContain('MokuPilot call results: Release 2.3 call')
   })
 
+  test('restarts (#51): how each stands, no mode pill, who asked; the log’s restarts, and those that did not happen', () => {
+    const restart = (id: string, fields: Partial<ScheduleEntry> = {}): ScheduleEntry => ({
+      id,
+      key: 'a',
+      kind: 'restart',
+      idle: true,
+      by: 'agent',
+      text: '',
+      next: NOW - MIN,
+      ...fields,
+    })
+    const schedules: ScheduleEntry[] = [
+      restart('r1', { text: 'go on with the <review>' }),
+      restart('r2', { key: 'b', by: 'user' }),
+      restart('r3', { key: 'c', why: 'tasks', pendingSince: NOW - MIN, tasksSince: NOW - MIN }),
+      restart('r4', { key: 'gone', name: 'Old one', why: 'gone', pendingSince: NOW }),
+      restart('r5', { key: 'c', why: 'Could not put Gamma to sleep: it is busy', attempts: 2, retryAt: NOW }),
+      restart('r6', { why: 'busy', attempts: 1 }),
+      restart('r7', { step: 'sleep' }),
+      restart('r8', { key: 'b', step: 'wake', by: 'user' }),
+      restart('r9', { step: 'note', text: 'after' }),
+      restart('ra', { failed: 'herdr-wake is down', text: 'the note' }),
+      restart('rb', { key: 'b', why: 'draft' }),
+      restart('rc', { key: 'b', why: 'dialog' }),
+      ...ENTRIES.slice(0, 2),
+    ]
+    const log = [
+      {
+        id: 'r0',
+        key: 'a',
+        name: 'Alpha',
+        text: 'note',
+        kind: 'restart',
+        by: 'agent',
+        due: NOW - HOUR,
+        at: NOW - 50 * MIN,
+        result: 'sent',
+      },
+      {
+        id: 'q0',
+        key: 'b',
+        name: 'Beta',
+        text: '',
+        kind: 'restart',
+        by: 'user',
+        due: NOW - 3 * HOUR,
+        at: NOW - HOUR,
+        result: 'sent',
+      },
+      {
+        id: 'q1',
+        key: 'b',
+        text: '',
+        kind: 'restart',
+        by: 'user',
+        due: 0,
+        at: NOW - HOUR,
+        result: 'failed',
+        why: 'Its pane was opened in profile Work, so waking could resume it in the wrong account',
+      },
+      {
+        id: 'q2',
+        key: 'a',
+        text: 'x',
+        kind: 'restart',
+        by: 'agent',
+        due: 0,
+        at: NOW - HOUR,
+        result: 'failed',
+        why: 'tasks',
+      },
+      {
+        id: 'q3',
+        key: 'a',
+        text: '',
+        kind: 'restart',
+        by: 'agent',
+        due: 0,
+        at: NOW - HOUR,
+        result: 'missed',
+        why: 'busy',
+      },
+      ...LOG.slice(0, 3),
+    ]
+    same({ schedules, log })
+    same({ schedules, log, lang: 'ru' })
+    same({ schedules, log, armed: 'r1' })
+    same({ schedules, log, canEdit: false })
+    const { react } = sides({ schedules, log })
+    expect(canonical(react)).not.toContain('data-sched-mode="r1"')
+    expect(canonical(react)).toContain('Did not happen')
+  })
+
   test('one asking "Cancel?"; without the board the buttons do nothing', () => {
     same({ armed: 't2' })
     same({ armed: 'w4', canEdit: false })
@@ -207,7 +301,7 @@ describe('schedule rules', () => {
   test('log lines: the newest 15, those that are records of a run', () => {
     const lines = [null, 'text', [], { at: 'soon' }, { at: 5, result: 'sent', text: 7 }]
     expect(logRecords(lines)).toEqual([
-      { key: '', name: '', text: '', kind: '', due: Number.NaN, at: 5, result: 'sent', why: '', n: undefined },
+      { key: '', name: '', text: '', kind: '', by: '', due: Number.NaN, at: 5, result: 'sent', why: '', n: undefined },
     ])
     const many = Array.from({ length: 20 }, (_, i) => ({ at: i, result: 'sent' }))
     expect(logRecords(many).map(r => r.at)).toEqual([...Array(15).keys()])
@@ -216,5 +310,65 @@ describe('schedule rules', () => {
   test('entries that came in while the panel is open materialize; none on its first draw', () => {
     expect(newEntries(['a', 'b'], null)).toEqual([])
     expect(newEntries(['a', 'b', 'c'], new Set(['b']))).toEqual(['a', 'c'])
+  })
+})
+
+describe('how the restarts asked for on the page went', () => {
+  test('a toast once each, as upstream’s noteRestarts at #51: what was in the log at the start is old news', () => {
+    const rec = (id: string, fields: Record<string, unknown>) => ({
+      id,
+      key: 'a',
+      name: 'Alpha',
+      text: '',
+      kind: 'restart',
+      by: 'user',
+      due: NOW,
+      at: NOW,
+      result: 'sent',
+      ...fields,
+    })
+    const logs: unknown[][] = [
+      [rec('o1', {}), rec('o2', { result: 'failed', why: 'gone' })],
+      [rec('n1', { at: NOW + 1 }), rec('o1', {}), rec('o2', { result: 'failed', why: 'gone' })],
+      [
+        rec('n2', { at: NOW + 2, result: 'failed', why: 'tasks', key: 'gone', name: '' }),
+        rec('n3', { at: NOW + 3, result: 'failed', why: 'herdr-wake is down', key: 'b', name: 'Old Beta' }),
+        rec('n4', { at: NOW + 4, by: 'agent' }),
+        rec('n5', { at: NOW + 5, kind: '' }),
+        rec('n6', { at: NOW + 6, result: 'missed', why: 'busy' }),
+        rec('n1', { at: NOW + 1 }),
+        // The server's log has only records (adapters/schedule-store.ts readLog drops lines that are not JSON).
+        'text',
+      ],
+      // The same run again (a board restart re-reads the log): no second toast; another run of the same id is news.
+      [rec('n1', { at: NOW + 1 }), rec('n1', { at: NOW + 7 })],
+    ]
+    for (const lang of ['en', 'ru']) {
+      const tr = translator(lang)
+      const items = ITEMS.map(i => (i.key === 'b' ? { ...i, name: 'Beta now' } : i))
+      const oldToasts: unknown[] = []
+      const code = oldCode(
+        'web/app.js',
+        ['logWhy', 'noteRestarts'],
+        {
+          t: tr,
+          restartsSeen: null,
+          itemOf: (key: string) => items.find(i => i.key === key),
+          toast: (text: string, error = false) => void oldToasts.push([text, error]),
+        },
+        '513e441',
+      )
+      const noteRestarts = oldFunction(code, 'noteRestarts')
+      const newToasts: unknown[] = []
+      let seen: Set<string> | null = null
+      for (const log of logs) {
+        noteRestarts(log)
+        const r = restartNotes(log, seen, key => items.find(i => i.key === key)?.name, tr)
+        seen = r.seen
+        for (const note of r.toasts) newToasts.push([note.text, note.error])
+      }
+      expect(newToasts).toEqual(oldToasts)
+      expect(newToasts.length).toBe(5)
+    }
   })
 })

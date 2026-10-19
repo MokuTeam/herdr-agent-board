@@ -6,10 +6,10 @@
 // when.js, questions.js's threadHTML — run against a small `$` over the parsed page. By hand: the
 // "New here" button app.js appends at start (app.js:2020-2027), the Changes button's rule in the
 // detail's `changed` (app.js:903) and syncAvailability's part for the sheet (app.js:175-195).
-// The page and renderSheetHead are those of MokuPilot's merge (upstream PR #44): the baseline's
+// The page and renderSheetHead are those of the restart's merge (upstream PR #51): the baseline's
 // with the sheet's Terminal button (#36), the facts under its name one span each and Wake's
-// tooltip (#43), and "Call in MokuPilot" (#44), nothing else. The reminders' row (scheduleRow) is
-// that of the call-report merge (#45): a call's results by their title.
+// tooltip (#43), "Call in MokuPilot" (#44) and Restart (#51), nothing else. The reminders' row
+// (scheduleRow) is #51's too: a call's results by their title (#45), a restart with how it stands.
 import { translator } from '../../../src/core/i18n/translator.ts'
 import type { BoardPayload } from '../../../src/core/payload.ts'
 import type { ColumnId, Item, Translator } from '../../../src/core/types.ts'
@@ -65,11 +65,12 @@ export interface OldSheetScene {
 
 type StyleRule = [string, string]
 
-/** Upstream's merge of MokuPilot calls (PR #44), which has the terminal's (#36) and the compact toolbar's (#43) in it. */
-const SHEET_MERGE = '75e9c61'
-/** Upstream's merge of MokuPilot call results (PR #45): the reminders' row says a call's by its title. */
-const CALL_REPORT = 'bde9cfd'
-const OLD_CALL = await oldModule('web/notice-model.js', CALL_REPORT)
+/**
+ * Upstream's merge of the restart (PR #51), which has the terminal's (#36), the compact toolbar's
+ * (#43), MokuPilot's call (#44) and its results (#45) in it.
+ */
+const SHEET_MERGE = '513e441'
+const OLD_CALL = await oldModule('web/notice-model.js', SHEET_MERGE)
 
 /** Just enough of an element for the old code's writes, onto a parsed node. */
 class FakeElement {
@@ -153,7 +154,7 @@ function threadHTML(t: Translator) {
   return oldFunction(code, 'threadHTML')
 }
 
-/** syncAvailability(), the sheet's part. */
+/** syncAvailability(), the sheet's part (#51's: a restart on its way grays Restart). */
 function syncAvailability(nodes: Node[], s: OldSheetScene, call: Call): void {
   const t = translator(s.lang ?? 'en')
   const blocked = !call('canMutate')
@@ -165,8 +166,13 @@ function syncAvailability(nodes: Node[], s: OldSheetScene, call: Call): void {
   toggleAttr(banner, 'hidden', !blocked)
   setText(banner, t(canEdit ? 'mobile.readOnly' : 'live.off'))
   const turn = !!call('inTurn', (s.open && call('itemOf', s.open)) ?? {})
-  for (const id of ['sheet-focus', 'sheet-sleep', 'sheet-wake'])
-    toggleAttr(el(id), 'disabled', blocked || missing || (id === 'sheet-sleep' && turn))
+  const restarting = !!call('restartPending', s.open)
+  for (const id of ['sheet-focus', 'sheet-sleep', 'sheet-restart', 'sheet-wake'])
+    toggleAttr(
+      el(id),
+      'disabled',
+      blocked || missing || (id === 'sheet-sleep' && turn) || (id === 'sheet-restart' && restarting),
+    )
   const card = el('sheet-card')
   const edits = [el('attach'), el('sheet-mokupilot'), ...findAll([card], e => e.tag === 'button' || e.tag === 'input')]
   for (const e of edits) toggleAttr(e, 'disabled', !canEdit)
@@ -226,22 +232,32 @@ export function oldSheet(scene: OldSheetScene): Element {
     capital: OLD_WHEN.get('capital'),
     longWhen: OLD_WHEN.get('longWhen'),
   }
-  // renderSheetBody's scheduleRow, #45's, over the baseline's helpers: bound once both are there.
+  // renderSheetBody's scheduleRow, #51's, over the baseline's helpers: bound once both are there.
   let scheduleRow: (...args: unknown[]) => unknown = () => ''
   deps.scheduleRow = (...args: unknown[]) => scheduleRow(...args)
   const baseline = oldCode('web/app.js', pickedFromApp, deps)
+  // A restart on its way, as #51 reads it, for the head's Restart and the reminders' row.
+  const restart = oldCode(
+    'web/app.js',
+    ['restartOf', 'restartPending', 'restartOn', 'restartText'],
+    { ...deps, ...Object.fromEntries(baseline) },
+    SHEET_MERGE,
+  )
+  // #51's own ICON (it has the restart's arrows) and modeButton (none for a restart) in place of the baseline's.
+  const picked = ['ICON', 'entryText', 'modeButton', 'scheduleRow']
+  const helpers = Object.fromEntries([...baseline, ...restart].filter(([name]) => !picked.includes(name)))
   scheduleRow = oldFunction(
-    oldCode(
-      'web/app.js',
-      ['entryText', 'scheduleRow'],
-      { ...deps, ...Object.fromEntries(baseline), callTitle: OLD_CALL.get('callTitle') },
-      CALL_REPORT,
-    ),
+    oldCode('web/app.js', picked, { ...deps, ...helpers, callTitle: OLD_CALL.get('callTitle') }, SHEET_MERGE),
     'scheduleRow',
   )
-  // The head with the Terminal button's rule and the facts as spans, over the baseline's helpers.
-  const head = oldCode('web/app.js', ['renderSheetHead'], { ...deps, ...Object.fromEntries(baseline) }, SHEET_MERGE)
-  const code = new Map([...baseline, ...head])
+  // The head with the Terminal button's rule, the facts as spans and Restart, over the baseline's helpers.
+  const head = oldCode(
+    'web/app.js',
+    ['renderSheetHead'],
+    { ...deps, ...Object.fromEntries(baseline), ...Object.fromEntries(restart) },
+    SHEET_MERGE,
+  )
+  const code = new Map([...baseline, ...restart, ...head])
   const call: Call = (name, ...args) => oldFunction(code, name)(...args)
 
   // At start: the "new session here" button, the name focusable, the texts in the language.

@@ -239,6 +239,8 @@ export interface CardMenuContext extends MenuContext {
   terminal?: boolean | undefined
   /** MokuPilot is here for calls with a fork of a session. */
   mokupilot?: boolean | undefined
+  /** A restart of it is on its way. */
+  restarting?: boolean | undefined
 }
 
 /** What a card's menu reads of the board item. */
@@ -256,8 +258,9 @@ export interface MenuSession {
 
 /**
  * A card's menu. `it` is the board item; ctx: { t, canMutate, canEdit, categories, column (where
- * it shows now), category (its lane now) }. Items gray out with the reason when herdr data is
- * stale (going to, waking, sleeping, renaming in Claude) or the board is offline (card edits).
+ * it shows now), category (its lane now), restarting (a restart of it is on its way) }. Items
+ * gray out with the reason when herdr data is stale (going to, waking, sleeping, restarting,
+ * renaming in Claude) or the board is offline (card edits).
  */
 export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
   const { t } = ctx
@@ -298,6 +301,14 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
           label: t('card.sleep'),
           ...herdr(turn ? { disabled: true, reason: t('sheet.sleepBusy') } : {}),
         },
+    // Waits until the session is free by itself, so a turn does not gray it; one asked for already does.
+    !it.sleeping &&
+      claude &&
+      it.agent === 'claude' && {
+        id: 'restart',
+        label: t('sheet.restart'),
+        ...herdr(ctx.restarting ? { disabled: true, reason: t('sheet.restartPending') } : {}),
+      },
     { id: 'rename', label: t('menu.rename'), hint: 'F2', ...edit() },
     SEP,
     {

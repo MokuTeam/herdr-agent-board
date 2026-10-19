@@ -1,5 +1,6 @@
-// What the scheduler sent, missed or dropped lately, newest first: a mark, when, the session and
-// the text, and why it was late, missed or dropped.
+// What the scheduler sent, missed or dropped lately, and the restarts that did not happen, newest
+// first: a mark, when, the session and the text, and why it was late, missed, dropped or did not
+// happen.
 import type { Item } from '../../../../src/core/types.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { entryText, type LogRecord, logView } from '../../models/schedule.ts'

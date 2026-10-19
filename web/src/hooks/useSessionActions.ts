@@ -1,6 +1,6 @@
 // What the board does to a session through the server: move its card, go to it in herdr, wake it,
-// put it to sleep, dismiss its question, call in MokuPilot with a fork of it. Each says how it
-// went in a toast.
+// put it to sleep, restart it, dismiss its question, call in MokuPilot with a fork of it. Each says
+// how it went in a toast.
 import { useMemo } from 'react'
 import type { Item, Translator } from '../../../src/core/types.ts'
 import { ApiError, api, errorText, type Reply } from '../api/client.ts'
@@ -26,6 +26,13 @@ export interface SessionActions {
   wakeSession(key: string): Promise<void>
   /** Claude exits through herdr-wake; the pane stays as 💤 and wakes on a message or "Wake". */
   sleepSession(key: string): Promise<void>
+  /**
+   * Claude exits and resumes in its pane once the session is free, through herdr-wake: MCP
+   * servers, settings, hooks and skills load anew, the conversation stays. The scheduler does it
+   * (a schedule entry of kind 'restart'), so the card says how it goes and a board restart in the
+   * middle loses nothing.
+   */
+  restartSession(key: string): Promise<void>
   /** A question that does not need an answer: off the "Needs me" column until the next one. */
   dismissAsk(key: string): Promise<void>
   /** A MokuPilot call whose agent is a fork of the session (services/mokupilot.ts): the session goes on as it was. */
@@ -47,8 +54,19 @@ export async function callMokuPilot(key: string, { t, itemOf, act, toast }: Call
   toast(r.ok ? t('mokupilot.started', { name: it.name }) : r.error, !r.ok)
 }
 
+/**
+ * Claude exits and resumes in its pane once the session is free (a schedule entry the server
+ * keeps): asked for, or on its way already, or why not. Asleep, waking it is the restart.
+ */
+export async function restartSession(key: string, { t, itemOf, act, toast }: CallDeps): Promise<void> {
+  const it = itemOf(key)
+  if (!it || it.sleeping) return
+  const r = await act(key, 'restart')
+  toast(r.ok ? t(r.again ? 'restart.again' : 'restart.asked', { name: it.name }) : r.error, !r.ok)
+}
+
 // What goes through herdr also needs fresh herdr data, or it would act on a session that may have moved on.
-const HERDR_ACTIONS = ['focus', 'wake', 'sleep', 'message', 'answer', 'permit']
+const HERDR_ACTIONS = ['focus', 'wake', 'sleep', 'restart', 'message', 'answer', 'permit']
 
 export function useSessionActions(): SessionActions {
   const t = useT()
@@ -136,6 +154,7 @@ export function useSessionActions(): SessionActions {
       focusSession,
       wakeSession,
       sleepSession,
+      restartSession: key => restartSession(key, { t: latest.current.t, itemOf, act, toast }),
       dismissAsk,
       callMokuPilot: key => callMokuPilot(key, { t: latest.current.t, itemOf, act, toast }),
     }

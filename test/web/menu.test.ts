@@ -195,6 +195,45 @@ test('a card’s menu follows its state', () => {
   assert.ok(!find(find(other, 'copy')?.submenu, 'copy:session'))
 })
 
+test('Restart sits by Put to sleep for a Claude session: also mid-turn, gray while one is on its way or herdr data is stale', () => {
+  const claude = { ...idle, agent: 'claude' }
+  assert.deepEqual(ids(cardMenu(claude, fresh)).slice(2, 5), ['write', 'sleep', 'restart'])
+  // It waits for the turn to end by itself.
+  assert.equal(find(cardMenu({ ...claude, status: 'working', column: 'work' }, fresh), 'restart')?.disabled, undefined)
+  const pending = find(cardMenu(claude, { ...fresh, restarting: true }), 'restart')
+  assert.equal(pending?.disabled, true)
+  assert.match(pending?.reason ?? '', /on its way/)
+  assert.equal(find(cardMenu(claude, { ...fresh, canMutate: false }), 'restart')?.disabled, true)
+  // Asleep, waking it is the restart; another agent, or a pane without a Claude session, has none.
+  assert.equal(find(cardMenu({ ...claude, sleeping: true, status: 'sleeping' }, fresh), 'restart'), undefined)
+  assert.equal(find(cardMenu({ ...claude, agent: 'codex' }, fresh), 'restart'), undefined)
+  assert.equal(find(cardMenu({ ...claude, session: null }, fresh), 'restart'), undefined)
+})
+
+test('a card’s menu is upstream’s cardMenu at #51 (Restart), case by case', () => {
+  const was = oldFunction(
+    oldCode('web/menu-model.js', ['SEP', 'PIN_COLUMNS', 'COLUMN_COLOR', 'tidy', 'cardMenu'], {}, '513e441'),
+    'cardMenu',
+  )
+  for (const tr of [t, translator('ru')])
+    for (const canMutate of [true, false])
+      for (const canEdit of [true, false])
+        for (const fields of [
+          { agent: 'claude' },
+          { agent: 'claude', status: 'working', column: 'work' },
+          { agent: 'claude', status: 'blocked', column: 'me' },
+          { agent: 'claude', sleeping: true, status: 'sleeping' },
+          { agent: 'claude', session: null },
+          { agent: 'codex' },
+          {},
+        ])
+          for (const extra of [{}, { restarting: true }, { restarting: false, mokupilot: true, terminal: true }]) {
+            const it = { ...idle, ...fields }
+            const c = { ...fresh, ...extra, t: tr, canMutate, canEdit }
+            assert.deepEqual(cardMenu(it, c), was(it, c))
+          }
+})
+
 test('stale herdr data grays what goes through herdr, with the reason once; offline grays card edits too', () => {
   const stale = cardMenu(idle, { ...fresh, canMutate: false })
   for (const id of ['focus', 'sleep', 'newHere']) assert.equal(find(stale, id)?.disabled, true, id)

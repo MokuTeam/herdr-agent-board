@@ -1,11 +1,13 @@
 // Which menu opens where, both ways in a fake DOM (support/fake-dom.ts), for parity: the old page's
-// board-menus.js (initBoardMenus as it was at MokuPilot's merge — the parity baseline, upstream PR
-// #36's terminal item and #44's MokuPilot call, nothing else — with its own menu-model.js) and
+// board-menus.js (initBoardMenus as it was at the restart's merge — the parity baseline, upstream PR
+// #36's terminal item, #44's MokuPilot call and #51's Restart, nothing else — with its own
+// menu-model.js) and
 // the React board's listeners (hooks/useContextMenus.ts boardMenuListeners with
 // models/board-menus.ts menuFor). Each side gets the same page, the same
 // board (what the page knows and its actions, which note what they were asked to do) and a menu
 // that notes what it was asked to open; picks go through the onPick the menu was handed.
 import { translator } from '../../../src/core/i18n/translator.ts'
+import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
 import type { MenuOpen } from '../../../web/src/components/menu/menu-engine.ts'
 import { boardMenuListeners } from '../../../web/src/hooks/useContextMenus.ts'
@@ -58,8 +60,11 @@ function rects(el: FakeElement): RectBox | null {
 
 // ---------------------------------------------------------------- the board
 
-/** Upstream's merge of MokuPilot calls (PR #44): board-menus.js and menu-model.js are the baseline's, the terminal's item and its own. */
-const MOKUPILOT_MERGE = '75e9c61'
+/**
+ * Upstream's merge of the restart (PR #51): board-menus.js and menu-model.js are the baseline's,
+ * the terminal's item, MokuPilot's call (#44) and its Restart.
+ */
+const RESTART_MERGE = '513e441'
 
 const categories = [
   { id: 'acme', title: 'Acme', color: '#007AFF' },
@@ -81,6 +86,8 @@ export interface BoardScene {
   terminal?: boolean
   /** The payload's `mokupilot`: MokuPilot is here for calls. */
   mokupilot?: boolean
+  /** The payload's `schedules`: a restart on its way grays a card's Restart. */
+  schedules?: ScheduleEntry[]
 }
 
 export function scene(fields: Partial<BoardScene> = {}): BoardScene {
@@ -123,6 +130,7 @@ function boardOf(s: BoardScene, log: string[], menu: unknown): BoardMenuDeps & {
     write: note('do.write'),
     wake: note('do.wake'),
     sleep: note('do.sleep'),
+    restart: note('do.restart'),
     dismiss: note('do.dismiss'),
     clear: note('do.clear'),
     changes: note('do.changes'),
@@ -157,6 +165,7 @@ function boardOf(s: BoardScene, log: string[], menu: unknown): BoardMenuDeps & {
         categories,
         ...(s.terminal !== undefined && { terminal: s.terminal }),
         ...(s.mokupilot !== undefined && { mokupilot: s.mokupilot }),
+        ...(s.schedules !== undefined && { schedules: s.schedules }),
       },
     }),
     launch: {
@@ -249,7 +258,7 @@ function recordingMenu(log: string[]) {
   return { recorder, menu }
 }
 
-/** web/menu-model.js at MokuPilot's merge: what board-menus.js imported from it. */
+/** web/menu-model.js at the restart's merge: what board-menus.js imported from it. */
 function baselineModel(): Record<string, unknown> {
   const names = [
     'usable',
@@ -264,10 +273,10 @@ function baselineModel(): Record<string, unknown> {
     'chipMenu',
     'wantsNativeMenu',
   ]
-  return Object.fromEntries(oldCode('web/menu-model.js', names, {}, MOKUPILOT_MERGE))
+  return Object.fromEntries(oldCode('web/menu-model.js', names, {}, RESTART_MERGE))
 }
 
-/** initBoardMenus of web/board-menus.js as it was at MokuPilot's merge. */
+/** initBoardMenus of web/board-menus.js as it was at the restart's merge. */
 export function oldBoardMenus(s: BoardScene): MenuSide {
   const world = newWorld()
   const log: string[] = []
@@ -276,7 +285,7 @@ export function oldBoardMenus(s: BoardScene): MenuSide {
     'web/board-menus.js',
     ['LONG_PRESS_MS', 'SLOP', 'initBoardMenus'],
     { ...baselineModel(), performance: { now: () => world.now } },
-    MOKUPILOT_MERGE,
+    RESTART_MERGE,
   )
   oldFunction(code, 'initBoardMenus')(boardOf(s, log, menu))
   return side(world, log, recorder)

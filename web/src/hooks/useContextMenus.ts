@@ -211,6 +211,7 @@ export function boardActions(deps: ActionDeps): BoardMenuActions {
     write: key => dispatch({ type: 'open', key, compose: true }),
     wake: key => actions().wakeSession(key),
     sleep: key => actions().sleepSession(key),
+    restart: key => actions().restartSession(key),
     // A card's name that is gone (the board drew it anew): rename it in the sheet's head.
     rename: (key, el) => {
       if (el?.isConnected) return deps.rename(key, el)
@@ -344,7 +345,12 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
           open: ui.open,
           filter: ui.filter,
           sleepers: ui.sleepers,
-          data: { categories: data?.categories ?? [], terminal: data?.terminal, mokupilot: data?.mokupilot },
+          data: {
+            categories: data?.categories ?? [],
+            terminal: data?.terminal,
+            mokupilot: data?.mokupilot,
+            schedules: data?.schedules,
+          },
         }
       },
       get launch() {

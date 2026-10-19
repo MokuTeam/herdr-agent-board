@@ -19,6 +19,8 @@ export interface ModeButtonProps extends EntryButton {
 
 export function ModeButton({ entry, disabled, short = false, onMode }: ModeButtonProps) {
   const t = useT()
+  // A restart always waits until the session is free.
+  if (entry.kind === 'restart') return null
   const idle = !!entry.idle
   const label = t(idle ? 'sched.mode.idle' : 'sched.mode.onTime')
   return (

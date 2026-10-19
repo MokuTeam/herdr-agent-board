@@ -185,6 +185,41 @@ describe('session sheet markup parity', () => {
     same({ items: [], open: 'a', selected: claude, detail: ready(detailOf(claude)), mokupilot: true })
   })
 
+  test('Restart (#51): for an awake Claude session in herdr, also mid-turn; gray while one is on its way, its title how it stands; and its row', () => {
+    const claude = { ...working, agent: 'claude', session: '0b3f8c2e-5d1a-4c6b-9e7f-1a2b3c4d5e6f' }
+    const at = (fields: Partial<ScheduleEntry> = {}): ScheduleEntry[] => [
+      { id: 'r1', key: 'a', kind: 'restart', idle: true, by: 'agent', text: '', next: Date.now() - MIN, ...fields },
+    ]
+    const shown = bothSheets({ items: [claude], open: 'a', detail: ready(detailOf(claude)) })
+    expect(shown.react).toBe(shown.old)
+    expect(shown.react).toContain('id="sheet-restart" title="Once the session is free')
+    for (const schedules of [
+      at(),
+      at({ why: 'tasks', pendingSince: Date.now() }),
+      at({ why: 'draft' }),
+      at({ why: 'gone' }),
+      at({ why: 'Could not put Alpha to sleep: it is busy', attempts: 1 }),
+      at({ step: 'sleep' }),
+      at({ step: 'wake', text: 'go on with the review' }),
+      at({ step: 'note' }),
+      at({ failed: 'herdr-wake is down', text: 'the note' }),
+      [...at({ text: 'my <note>' }), { id: 's1', key: 'a', text: 'later', next: Date.now() + 60 * MIN }],
+    ]) {
+      same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), schedules })
+      same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), schedules, lang: 'ru' })
+    }
+    same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), schedules: at(), armed: 'r1' })
+    same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), stale: true })
+    same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), connected: false, schedules: at() })
+    same({
+      items: [{ ...claude, status: 'idle', column: 'idle', sleeping: true }],
+      open: 'a',
+      detail: ready(detailOf(claude)),
+    })
+    same({ items: [{ ...claude, agent: 'codex' }], open: 'a', detail: ready(detailOf(claude)) })
+    same({ items: [], open: 'a', selected: claude, detail: ready(detailOf(claude)), schedules: at() })
+  })
+
   test('a session gone from the board: the pill and the note say so, every session action stops', () => {
     const detail = ready(detailOf(working, { conversation: CONVERSATION.slice(0, 1), checkout: true }), {
       status: 'missing',

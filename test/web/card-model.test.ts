@@ -58,6 +58,11 @@ describe('card states', () => {
     expect(compact(item({ key: 'a', sleeping: true, column: 'idle' }))).toBe(true)
     expect(compact(item({ key: 'a', sleeping: true, column: 'done' }))).toBe(false)
     expect(compact(item({ key: 'a', column: 'idle' }))).toBe(false)
+    // A restart on its way keeps the card whole while Claude is out; another session's does not.
+    const restart = { id: 'r1', key: 'a', kind: 'restart', text: '', next: NOW }
+    expect(compact(item({ key: 'a', sleeping: true, column: 'idle' }), [restart])).toBe(false)
+    expect(compact(item({ key: 'a', sleeping: true, column: 'idle' }), [{ ...restart, key: 'b' }])).toBe(true)
+    expect(compact(item({ key: 'a', sleeping: true, column: 'idle' }), [{ ...restart, kind: 'call' }])).toBe(true)
   })
 
   test('a question that needs no answer can be dismissed', () => {

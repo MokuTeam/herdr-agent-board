@@ -22,6 +22,7 @@ import { useT } from '../../i18n/I18nProvider.tsx'
 import { inTurn } from '../../models/card.ts'
 import { ConversationScroll } from '../../models/conversation-scroll.ts'
 import { PHONE_QUERY } from '../../models/panel-motion.ts'
+import { restartPending } from '../../models/restart.ts'
 import {
   askedView,
   detailNotice,
@@ -153,6 +154,7 @@ export function Sheet(slots: SheetSlots) {
     terminal: button => open && onTerminal?.(open, button),
     wake: at(actions.wakeSession),
     sleep: at(actions.sleepSession),
+    restart: at(actions.restartSession),
     mokupilot: at(actions.callMokuPilot),
     changes: button => open && onChanges?.(open, button),
     history: button => open && onHistory?.(open, item?.cwd ?? '', button),
@@ -241,7 +243,17 @@ export function SheetView(props: SheetViewProps) {
   const missing = sessionMissing(open, onBoard(open), detail.status)
   const shownMissing = sessionMissing(detail.key, onBoard(detail.key), detail.status)
   const openItem = open ? data?.items.find(i => i.key === open) : undefined
-  const availability = sheetAvailability({ canMutate, canEdit, missing, turn: !!openItem && inTurn(openItem) }, t)
+  const schedules = data?.schedules ?? []
+  const availability = sheetAvailability(
+    {
+      canMutate,
+      canEdit,
+      missing,
+      turn: !!openItem && inTurn(openItem),
+      restarting: !!open && restartPending(schedules, open),
+    },
+    t,
+  )
   const notice = detailNotice(
     detail,
     { missing: shownMissing, onBoard: onBoard(detail.key), outdated: !connected || !!data?.stale, canEdit },
@@ -319,7 +331,7 @@ export function SheetView(props: SheetViewProps) {
       <Composer
         composer={composer}
         availability={availability}
-        buttons={item ? headButtons(item, t, !!data?.mokupilot) : NO_HEAD_BUTTONS}
+        buttons={item ? headButtons(item, t, !!data?.mokupilot, schedules) : NO_HEAD_BUTTONS}
         term={item ? termButton(item, data, t) : undefined}
         changesHidden={!detail.data?.checkout}
         present={!!openItem && detail.status !== 'missing'}

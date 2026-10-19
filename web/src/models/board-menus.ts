@@ -6,6 +6,7 @@
 // The pure part of the old page's board-menus.js: what is under the pointer
 // or the focus and the menu for it, with the board handed in. The listeners that open it are the
 // page's (hooks/useContextMenus.ts).
+import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
 import {
   boardMenu,
@@ -61,6 +62,8 @@ export interface BoardMenuActions {
   write(key: string, from: MenuOrigin): unknown
   wake(key: string, from: MenuOrigin): unknown
   sleep(key: string, from: MenuOrigin): unknown
+  /** Claude exits and resumes in its pane once the session is free (a schedule entry, the server's). */
+  restart(key: string, from: MenuOrigin): unknown
   dismiss(key: string, from: MenuOrigin): unknown
   clear(key: string, from: MenuOrigin): unknown
   changes(key: string, from: MenuOrigin): unknown
@@ -107,7 +110,13 @@ export interface BoardMenuDeps {
     open: string | null
     filter: string
     sleepers: boolean
-    data: { categories: readonly MenuCategory[]; terminal?: boolean | undefined; mokupilot?: boolean | undefined }
+    data: {
+      categories: readonly MenuCategory[]
+      terminal?: boolean | undefined
+      mokupilot?: boolean | undefined
+      /** The schedule: a restart of a session on its way grays its Restart. */
+      schedules?: readonly ScheduleEntry[] | undefined
+    }
   }
   /** Sessions on their way (the launch window); none: their cards get no menu. */
   launch?: LaunchMenus | null | undefined
@@ -188,6 +197,7 @@ const CARD_ACTIONS = [
   'write',
   'wake',
   'sleep',
+  'restart',
   'dismiss',
   'clear',
   'changes',
@@ -211,6 +221,7 @@ function forCard(board: BoardMenuDeps, key: string, it: Item, el: Element, at: P
       categories: state.data.categories,
       column: board.column(it),
       category: board.category(it),
+      restarting: (state.data.schedules ?? []).some(e => e.kind === 'restart' && e.key === key && !e.failed),
     }),
     pick: id => {
       const [what, arg = ''] = id.split(/:(.*)/s)
@@ -316,6 +327,7 @@ export const SHEET_MORE = [
   'sheet-mokupilot',
   'sheet-wake',
   'sheet-sleep',
+  'sheet-restart',
   'sheet-changes',
   'sheet-history',
   'sheet-new',
@@ -331,7 +343,7 @@ export interface SheetButton {
 }
 
 /** Those that go through herdr: gray without fresh herdr data, whatever their own title says. */
-const HERDR_BUTTONS: readonly string[] = ['sheet-wake', 'sheet-sleep', 'sheet-new']
+const HERDR_BUTTONS: readonly string[] = ['sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-new']
 
 /** The sheet's buttons on show as a menu, gray with why when they are. */
 export function sheetMoreMenu(buttons: readonly SheetButton[], canMutate: boolean, t: Translator): MenuItem[] {

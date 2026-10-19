@@ -175,3 +175,68 @@ describe('card markup parity', () => {
     for (const key of ['b', 'e', 'w']) same({ lang: 'ru', items: [b, e, w] }, key)
   })
 })
+
+describe('card markup parity at the restart’s merge (#51): the card as upstream’s own cardHTML there draws it', () => {
+  const RESTART = '513e441'
+  const restart = (fields: Partial<ScheduleEntry> = {}): ScheduleEntry => ({
+    id: 'r1',
+    key: 'a',
+    kind: 'restart',
+    idle: true,
+    by: 'agent',
+    text: '',
+    next: Date.now() - 5 * MIN,
+    ...fields,
+  })
+  const a = item({
+    key: 'a',
+    name: 'Alpha',
+    status: 'idle',
+    column: 'idle',
+    session: 'sess-a',
+    agent: 'claude',
+    result: 'Done the **thing**',
+    activity: ago(3),
+  })
+
+  test('cards without a restart draw as there too', () => {
+    const w = item({ key: 'w', status: 'working', column: 'work', doing: 'x', activity: ago(1), tool: null })
+    const d = item({ key: 'd', status: 'sleeping', column: 'idle', sleeping: true, activity: ago(200) })
+    const schedules: ScheduleEntry[] = [{ id: 's1', key: 'w', text: 'ping', next: Date.now() + 90 * MIN }]
+    for (const key of ['a', 'w', 'd']) same({ items: [a, w, d], schedules, ref: RESTART }, key)
+  })
+
+  test('a restart on its way: a line of its own, waiting (on what), under way (arrows turning), given up; the clock without it', () => {
+    for (const fields of [
+      {},
+      { why: 'tasks', pendingSince: Date.now() },
+      { why: 'draft' },
+      { why: 'dialog' },
+      { why: 'gone' },
+      { why: 'busy', attempts: 1 },
+      { why: 'Could not put Alpha to sleep: it is busy', attempts: 2 },
+      { step: 'sleep' },
+      { step: 'wake', text: 'go on' },
+      { step: 'note' },
+      { failed: 'herdr-wake is down <now>' },
+    ]) {
+      same({ items: [a], schedules: [restart(fields)], ref: RESTART }, 'a')
+      same({ items: [a], schedules: [restart(fields)], ref: RESTART, lang: 'ru' }, 'a')
+    }
+    // With a reminder too: the clock shows the reminder alone.
+    const schedules = [restart(), { id: 's1', key: 'a', text: 'ping', next: Date.now() + 90 * MIN }]
+    same({ items: [a], schedules, ref: RESTART }, 'a')
+    const { react } = bothCards({ items: [a], schedules, ref: RESTART }, 'a')
+    expect(react).toContain('class="now restart"')
+    expect(react).toContain('class="alarm"')
+  })
+
+  test('asleep in the idle column while it restarts: the card stays whole; one for another session folds it as before', () => {
+    const asleep = { ...a, status: 'sleeping' as const, sleeping: true }
+    same({ items: [asleep], schedules: [restart({ step: 'wake' })], ref: RESTART }, 'a')
+    same({ items: [asleep], schedules: [restart({ key: 'b' })], ref: RESTART }, 'a')
+    const { react } = bothCards({ items: [asleep], schedules: [restart({ step: 'wake' })], ref: RESTART }, 'a')
+    expect(react).not.toContain('compact')
+    expect(react).toContain('class="now on restart"')
+  })
+})

@@ -348,6 +348,10 @@ body.dragging { cursor: grabbing; }
 .now .tool { color: var(--green); font-weight: 600; white-space: nowrap; }
 .now .detail { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .now.idle .tool { color: var(--label-3); font-weight: 500; }
+.now.restart svg { flex: none; width: 12px; height: 12px; stroke-width: 1.7; color: var(--label-3); }
+.now.restart .tool { color: var(--label-2); }
+.now.restart.on svg, .now.restart.on .tool { color: var(--accent); }
+.now.restart.on svg { animation: spin 1.6s linear infinite; }
 .ask {
   margin-top: 7px;
   padding: 7px 9px;
@@ -1011,6 +1015,8 @@ button.swatch:active { transform: scale(0.88); }
 .alarm.due { background: color-mix(in srgb, var(--orange) 15%, transparent); color: var(--orange); }
 .card:hover .alarm { opacity: 0; }
 .card.compact .alarm { height: 17px; background: none; padding: 0; }
+/* A restart on its way, in a session's sheet: tinted, its arrows turning, while Claude exits and comes back. */
+.sched-mini .when.on svg { animation: spin 1.6s linear infinite; }
 
 .pill-toggle .n { display: inline-grid; place-items: center; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px; background: var(--fill); color: var(--label-2); font-size: 11px; font-variant-numeric: tabular-nums; }
 .pill-toggle .n:empty { display: none; }
@@ -1046,6 +1052,7 @@ button.swatch:active { transform: scale(0.88); }
 .sched-mini .when { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .sched-mini .when svg { width: 13px; height: 13px; color: var(--label-3); }
 .sched-mini .when.due, .sched-mini .when.due svg { color: var(--orange); }
+.sched-mini .when.on, .sched-mini .when.on svg { color: var(--accent); }
 .sched-mini .text { flex: 1; min-width: 0; overflow: hidden; color: var(--label-2); font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
 .sched-more { align-self: flex-start; margin-top: 2px; padding: 2px 0; border: 0; background: none; color: var(--accent); font-size: 12.5px; font-weight: 500; }
 .sched-more:hover { text-decoration: underline; }
@@ -1123,12 +1130,12 @@ button.swatch:active { transform: scale(0.88); }
 .log-icon { display: grid; place-items: center; align-self: center; width: 18px; height: 18px; border-radius: 50%; font: 700 11px/1 var(--font); }
 .log-icon svg { width: 12px; height: 12px; stroke-width: 2.2; }
 .log-row.sent .log-icon { background: color-mix(in srgb, var(--green) 16%, transparent); color: var(--green); }
-.log-row.missed .log-icon { background: color-mix(in srgb, var(--orange) 18%, transparent); color: var(--orange); }
+.log-row.missed .log-icon, .log-row.failed .log-icon { background: color-mix(in srgb, var(--orange) 18%, transparent); color: var(--orange); }
 .log-when { color: var(--label-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .log-what { min-width: 0; overflow: hidden; color: var(--label-2); white-space: nowrap; text-overflow: ellipsis; }
 .log-what b { color: var(--label); font-weight: 600; }
 .log-note { color: var(--label-3); white-space: nowrap; }
-.log-row.missed .log-note { color: var(--orange); }
+.log-row.missed .log-note, .log-row.failed .log-note { color: var(--orange); }
 .log-row.dropped .log-icon { background: var(--fill); color: var(--label-2); font-size: 13px; }
 
 /* ---------------------------------------------------------------- toasts */
@@ -1461,7 +1468,7 @@ button.swatch:active { transform: scale(0.88); }
 
 /* ---------------------------------------------------------------- accessibility */
 @media (prefers-reduced-motion: reduce) {
-  .dot.work::after, .spin { animation: none; }
+  .dot.work::after, .spin, .now.restart.on svg, .sched-mini .when.on svg { animation: none; }
   .card, .card-actions, .toolbar, .alarm, .sched-x, .sched-mode, .tools summary .chev, .notice > summary .chev { transition: none; }
 }
 @media (prefers-reduced-transparency: reduce) {

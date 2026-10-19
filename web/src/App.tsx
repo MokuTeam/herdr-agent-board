@@ -30,6 +30,7 @@ import { usePanelLayout } from './hooks/usePanelLayout.ts'
 import { useQuestions } from './hooks/useQuestions.ts'
 import { useQuickLook } from './hooks/useQuickLook.ts'
 import { useRenameInPlace } from './hooks/useRenameInPlace.ts'
+import { useRestartNotes } from './hooks/useRestartNotes.ts'
 import { useReveal } from './hooks/useReveal.ts'
 import { useSchedule } from './hooks/useSchedule.ts'
 import { useSettingsMenu } from './hooks/useSettingsMenu.ts'
@@ -75,6 +76,8 @@ export function App() {
   const questions = useQuestions()
   // A session a notification was about: its sheet and its card in view.
   useReveal()
+  // How the restarts asked for here went: a toast each.
+  useRestartNotes()
   // "Setup incomplete" in the toolbar, and the list it opens.
   const setup = useSetupNote()
   // A session renamed where its name is; the menus of cards, lanes, the board and chips. The

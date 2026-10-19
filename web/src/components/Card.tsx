@@ -8,12 +8,22 @@ import { useT } from '../i18n/I18nProvider.tsx'
 import { unseenResult } from '../models/attention.ts'
 import { askLine, cardAge, cardWords, compact, dismissable, inTurn, launchOf, questionLine } from '../models/card.ts'
 import { pendingQuestions } from '../models/question-model.ts'
+import { restartOf, restartView } from '../models/restart.ts'
 import { COLUMN_COLORS } from '../models/toolbar.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { AlarmBadge } from './AlarmBadge.tsx'
 import { classNames } from './class-names.ts'
 import { HelpersChip, Relations } from './helpers/CardHelpers.tsx'
-import { CheckGlyph, ClockGlyph, FocusGlyph, MoonGlyph, PinGlyph, SpinGlyph, WriteGlyph } from './icons.tsx'
+import {
+  CheckGlyph,
+  ClockGlyph,
+  FocusGlyph,
+  MoonGlyph,
+  PinGlyph,
+  RestartGlyph,
+  SpinGlyph,
+  WriteGlyph,
+} from './icons.tsx'
 import { ProfileTag } from './ProfileTag.tsx'
 
 /** What a session on its way shows on the board (hooks/useLaunch.ts). */
@@ -45,12 +55,12 @@ export interface CardProps {
 
 export function Card(props: CardProps) {
   const { item, selected, busy, placeholder, launch, onPointerDown, onClick, onKeyDown, onRelated } = props
-  const { ui } = useBoardContext()
+  const { ui, data } = useBoardContext()
   const launchOnly = !!item.launchOnly
   const className = classNames(
     'card',
     launchOnly && 'launch-card',
-    compact(item) && 'compact',
+    compact(item, data?.schedules) && 'compact',
     unseenResult(item, ui.viewed) && 'unseen',
     selected && 'selected',
     busy && 'busy',
@@ -81,10 +91,11 @@ export function Card(props: CardProps) {
 }
 
 function CardContent({ item, launch }: { item: Item; launch: LaunchSlots | undefined }) {
+  const { data } = useBoardContext()
   return (
     <>
       <CardTop item={item} />
-      {!compact(item) && <CardBody item={item} launch={launch} />}
+      {!compact(item, data?.schedules) && <CardBody item={item} launch={launch} />}
       <CardActions item={item} />
     </>
   )
@@ -145,6 +156,7 @@ function CardBody({ item, launch }: { item: Item; launch: LaunchSlots | undefine
       )}
       {words.said && <div className="said">{words.said}</div>}
       {item.column === 'work' && <Now tool={item.tool} />}
+      <RestartLine item={item} />
       <HelpersChip item={item} />
       <Relations item={item} />
       {/* Started from the board and not done starting: how it goes, or why it failed. */}
@@ -197,6 +209,26 @@ function Now({ tool }: { tool: ToolCall | null | undefined }) {
       <span className="tool">{t('card.thinking')}</span>
       {/* String(): a tool without a label read "undefined" before too. */}
       <span className="detail">{tool ? t('card.after', { tool: String(tool.label) }) : ''}</span>
+    </div>
+  )
+}
+
+/**
+ * A restart on its way, on a card: a line like the one for the tool at work, quiet while it waits
+ * for the session (and says on what), tinted with turning arrows while Claude exits and comes back.
+ * The card stays whole meanwhile, also while the session is asleep for a moment (compact).
+ */
+function RestartLine({ item }: { item: Item }) {
+  const t = useT()
+  const { data } = useBoardContext()
+  const e = restartOf(data?.schedules ?? [], item.key)
+  if (!e) return null
+  const view = restartView(e, t)
+  return (
+    <div className={classNames('now restart', view.on && 'on')}>
+      <RestartGlyph />
+      <span className="tool">{view.badge}</span>
+      <span className="detail">{view.title}</span>
     </div>
   )
 }

@@ -3,7 +3,10 @@
 // alarmBadge, ago, plain, the question card of questions.js, visibleItems, catOf/colOf, with its
 // own attention.js and when.js: support/old-app.ts); the lane and column markup is laneOf's
 // template and render()'s updates (app.js:429-449,535-598), and the buttons' availability
-// syncAvailability's part for cards and lanes (app.js:175-188), by hand.
+// syncAvailability's part for cards and lanes (app.js:175-188), by hand. A scene with a `ref` (the
+// restart's merge, #51) draws the cards with that merge's own code: its restart line, a card that
+// stays whole while a restart is on its way, the clock without the restart; with that merge's
+// helpers chip and linked sessions' line, which the scenes have none of.
 import type { BoardPayload } from '../../../src/core/payload.ts'
 import type { ColumnId, Translator } from '../../../src/core/types.ts'
 import type { Seen } from '../../../web/src/models/attention.ts'
@@ -19,7 +22,7 @@ import {
   setHtml,
   toggleAttr,
 } from './markup.ts'
-import { OLD_ATTENTION, OLD_WHEN, oldCode, oldFunction } from './old-app.ts'
+import { OLD_ATTENTION, OLD_WHEN, oldCode, oldFunction, oldModule } from './old-app.ts'
 
 /** The old page's state for one board (app.js `state`, `viewed`) and what it could do. */
 export interface OldScene {
@@ -35,6 +38,8 @@ export interface OldScene {
   movedCol: Map<string, { col: ColumnId; at: number }>
   canMutate: boolean
   canEdit: boolean
+  /** A later merge whose cards to draw (its app.js's), in place of the baseline's. */
+  ref?: string | undefined
 }
 
 const pendingQuestions = oldFunction(oldCode('web/question-model.js', ['pendingQuestions'], {}), 'pendingQuestions')
@@ -73,6 +78,26 @@ const APP_CODE = [
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
 const prop = (value: unknown, key: string): string => (isRecord(value) ? String(value[key]) : '')
+
+/** What #51's cards draw on top of the baseline's: the restart's line, and the lines that came before it. */
+const LATER_CODE = [
+  'itemOf',
+  'entryText',
+  'restartOf',
+  'restartOn',
+  'restartText',
+  'restartLine',
+  'helpersChip',
+  'relationsLine',
+]
+
+/** The modules a later merge's cards import from: notice-model.js (callTitle), helper-model.js (liveCount). */
+async function laterModules(ref: string): Promise<Record<string, unknown>> {
+  const notice = await oldModule('web/notice-model.js', ref)
+  const helpers = await oldModule('web/helper-model.js', ref)
+  return { callTitle: notice.get('callTitle'), liveCount: helpers.get('liveCount') }
+}
+const LATER = new Map<string, Record<string, unknown>>([['513e441', await laterModules('513e441')]])
 
 /** One card as cardOf() makes it (class, data-key, tabindex) and updateCard() fills it. */
 function oldCard(update: (...args: unknown[]) => unknown, esc: (s: unknown) => string, it: unknown): string {
@@ -122,7 +147,7 @@ export function oldBoard(s: OldScene): Node[] {
     moved: s.moved,
     movedCol: s.movedCol,
   }
-  const code = oldCode('web/app.js', APP_CODE, {
+  const deps = {
     t: s.t,
     state,
     viewed: s.viewed,
@@ -132,7 +157,13 @@ export function oldBoard(s: OldScene): Node[] {
     unseenResult: OLD_ATTENTION.get('unseenResult'),
     longWhen: OLD_WHEN.get('longWhen'),
     shortWhen: OLD_WHEN.get('shortWhen'),
-  })
+  }
+  const later = s.ref ? LATER.get(s.ref) : undefined
+  if (s.ref && !later) throw new Error(`no modules for ${s.ref}`)
+  const code =
+    s.ref && later
+      ? oldCode('web/app.js', [...APP_CODE, ...LATER_CODE], { ...deps, ...later }, s.ref)
+      : oldCode('web/app.js', APP_CODE, deps)
   const call = (name: string, ...args: unknown[]) => oldFunction(code, name)(...args)
   const esc = (v: unknown) => String(call('esc', v))
   const update = oldFunction(code, 'updateCard')

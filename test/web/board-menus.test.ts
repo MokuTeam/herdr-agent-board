@@ -156,6 +156,25 @@ describe('which menu opens', () => {
     expect(codex[0]).not.toContain('mokupilot')
   })
 
+  test('a Claude session’s card restarts it (#51); gray while one is on its way, not for one that gave up, nor with stale data', async () => {
+    const on = await compare(BOARD, [right('card-name'), pick('restart')])
+    expect(on[0]).toContain('"sleep","restart","rename"')
+    expect(on).toContain('do.restart("s1", #card)')
+    const restart = { id: 'r1', key: 's1', kind: 'restart', text: '', next: 1 }
+    const pending = await compare({ ...BOARD, schedules: [restart] }, [right('card-name')])
+    expect(pending[0]).toContain('"restart (gray)"')
+    const failed = await compare({ ...BOARD, schedules: [{ ...restart, failed: 'herdr-wake is down' }] }, [
+      right('card-name'),
+    ])
+    expect(failed[0]).toContain('"sleep","restart","rename"')
+    const other = await compare({ ...BOARD, schedules: [{ ...restart, key: 's2' }] }, [right('card-name')])
+    expect(other[0]).toContain('"sleep","restart","rename"')
+    const stale = await compare({ ...BOARD, canMutate: false }, [right('card-name')])
+    expect(stale[0]).toContain('"restart (gray)"')
+    const codex = await compare({ ...BOARD, items: [{ ...session, agent: 'codex' }] }, [right('card-name')])
+    expect(codex[0]).not.toContain('restart')
+  })
+
   test('the open session’s head: its card’s menu; none without one open, nor in the rest of a panel', async () => {
     const log = await compare(BOARD, [
       right('sheet-meta'),
@@ -422,6 +441,7 @@ describe('without the launch window', () => {
           write: none,
           wake: none,
           sleep: none,
+          restart: none,
           dismiss: none,
           clear: none,
           changes: none,

@@ -1,9 +1,11 @@
 // What the session sheet shows around the conversation: its head (status, name, the line under
 // it, which buttons show), which of its controls work now, the note over the conversation while
 // the detail loads, fails or is out of date, and what the session asks under "Needs me".
+import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
 import { ago, dismissable, inTurn } from './card.ts'
 import type { DetailStatus, DetailValue } from './detail-resource.ts'
+import { restartOf, restartPending, restartText } from './restart.ts'
 
 /** The time of a turn, or of the last read: hours and minutes in the board's language. */
 export const clockText = (ms: number | null | undefined, t: Translator): string =>
@@ -99,6 +101,10 @@ export interface HeadButtons {
   sleepHidden: boolean
   /** Why it cannot sleep now, or what sleeping does; none before a session was ever open. */
   sleepTitle: string | undefined
+  /** "Restart": for a Claude session with an id in herdr that is not asleep (waking it is the restart). */
+  restartHidden: boolean
+  /** What a restart does, or the one on its way and how it stands; none before a session was ever open. */
+  restartTitle: string | undefined
   /** "Call in MokuPilot": with MokuPilot here, for a Claude session with an id. */
   mokupilotHidden: boolean
 }
@@ -109,16 +115,29 @@ export const NO_HEAD_BUTTONS: HeadButtons = {
   wakeHidden: true,
   sleepHidden: false,
   sleepTitle: undefined,
+  restartHidden: true,
+  restartTitle: undefined,
   mokupilotHidden: true,
 }
 
-/** `mokupilot`: the board says MokuPilot is here for calls with a fork of a session. */
-export function headButtons(it: Item, t: Translator, mokupilot = false): HeadButtons {
+/**
+ * `mokupilot`: the board says MokuPilot is here for calls with a fork of a session; `schedules`:
+ * the board's (a restart of it on its way says so on Restart).
+ */
+export function headButtons(
+  it: Item,
+  t: Translator,
+  mokupilot = false,
+  schedules: readonly ScheduleEntry[] = [],
+): HeadButtons {
+  const pending = restartPending(schedules, it.key) ? restartOf(schedules, it.key) : undefined
   return {
     historyHidden: !it.session,
     wakeHidden: !it.sleeping,
     sleepHidden: !!it.sleeping || !it.session,
     sleepTitle: t(inTurn(it) ? 'sheet.sleepBusy' : 'sheet.sleepHint'),
+    restartHidden: !!it.sleeping || !it.session || it.agent !== 'claude',
+    restartTitle: pending ? `${t('sheet.restartPending')}. ${restartText(pending, t)}` : t('sheet.restartHint'),
     mokupilotHidden: !(mokupilot && it.session && it.agent === 'claude'),
   }
 }
@@ -161,6 +180,8 @@ export interface SheetAvailability {
   focus: boolean
   wake: boolean
   sleep: boolean
+  /** It waits until the session is free by itself: a turn does not gray it, a restart on its way does. */
+  restart: boolean
   /** The card's chips, fields and schedule buttons, and the clip. */
   edit: boolean
   /** "No reply needed" / "Seen" under the question. */
@@ -178,6 +199,8 @@ export interface AvailabilityScene {
   missing: boolean
   /** The open session is in a turn (it cannot sleep now). */
   turn: boolean
+  /** A restart of the open session is on its way. */
+  restarting?: boolean
 }
 
 /**
@@ -186,7 +209,7 @@ export interface AvailabilityScene {
  * syncAvailability).
  */
 export function sheetAvailability(
-  { canMutate, canEdit, missing, turn }: AvailabilityScene,
+  { canMutate, canEdit, missing, turn, restarting = false }: AvailabilityScene,
   t: Translator,
 ): SheetAvailability {
   const blocked = !canMutate
@@ -197,6 +220,7 @@ export function sheetAvailability(
     focus: herdr,
     wake: herdr,
     sleep: herdr || turn,
+    restart: herdr || restarting,
     edit: !canEdit || missing,
     dismiss: !canEdit || missing,
     newHere: herdr,

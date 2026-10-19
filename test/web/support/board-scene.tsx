@@ -39,6 +39,8 @@ export interface Scene {
   moves?: { key: string; cat: string | null; column: ColumnId | null }[]
   canMutate?: boolean
   canEdit?: boolean
+  /** The cards as a later upstream merge draws them (support/old-board.ts), in place of the baseline's. */
+  ref?: string
 }
 
 export function drawBoth(scene: Scene): { old: Node[]; react: Node[] } {
@@ -74,6 +76,7 @@ export function drawBoth(scene: Scene): { old: Node[]; react: Node[] } {
     ),
     canMutate,
     canEdit,
+    ref: scene.ref,
   })
   const pending = moves.reduce((all, m) => withMove(all, m.key, { ...m, at: now }), NO_MOVES)
   const value = board({ data, connected: canEdit, canMutate, canEdit, now, ui: { ...ui, moves: pending } })
