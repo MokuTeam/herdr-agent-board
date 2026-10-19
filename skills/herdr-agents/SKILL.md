@@ -1,6 +1,6 @@
 ---
 name: herdr-agents
-description: "How a Claude session that runs inside herdr (HERDR_PANE_ID is set) works with the rest of the setup: start another session, message or wake one, schedule work for later instead of CronCreate or ScheduleWakeup, run a server or an interactive login in a pane of its own, find its own pane, keep its board card current, and what to do when one of its MCP servers dropped. For the raw herdr CLI reference run `herdr --skill`."
+description: "How a Claude session that runs inside herdr (HERDR_PANE_ID is set) works with the rest of the setup: start another session, message or wake one, schedule work for later instead of CronCreate or ScheduleWakeup, restart itself (an MCP server dropped, settings, hooks, skills or MCP config changed, the session acts up), run a server or an interactive login in a pane of its own, find its own pane, keep its board card current. For the raw herdr CLI reference run `herdr --skill`."
 ---
 
 <!-- agent-board: installed by the agent-board plugin's install action; it replaces this file on updates. -->
@@ -71,13 +71,35 @@ herdr pane read <pane> --source recent-unwrapped --lines 120
 
 Split right when your pane is wide, down when it is narrow. For a login, tell the user which pane waits for them; on the web board they can also open "Terminal" on your card. Close only the panes you created.
 
+## Restart yourself
+
+```bash
+board restart "MCP slack dropped; I was drafting the reply to the release thread, next: post it"
+```
+
+Then end your turn. Once it is over and the session is free (no dialog, nothing the user started typing, no background command), the board has herdr-wake put this session to sleep (`/exit`) and wake it in the same pane (`claude --resume`: the same session, the same conversation). Claude Code then starts every MCP server again and reads settings.json, hooks, skills and CLAUDE.md anew. The board types `[board reminder; restarted as you asked] <your note>` into it, so you carry on by yourself. Write the note as an instruction to yourself: what you were doing, why you restarted, what comes next. Without one you get "Carry on."
+
+When it helps:
+
+- An MCP server dropped (below).
+- You changed settings.json, a hook, a skill, CLAUDE.md or an MCP server's config, and this session needs it: Claude Code reads them only when it starts.
+- The session acts up: tools hang or time out, a hook misfires, the terminal looks broken.
+
+What it ends: everything that lives in this Claude process. Background agents and workflows, teammates, `CronCreate` and `ScheduleWakeup` jobs die with it; a background Bash command or a `Monitor` holds it instead (the board waits for them, 10 minutes at most). Finish or stop them (`TaskStop`) before you ask, and put anything due later into `board remind`. The conversation, your card and the board's schedule stay.
+
+- When it does not happen (herdr-wake refused three times, background tasks ran for 10 minutes), the board types `[board reminder] restart did not happen: <why>. Your note for after it: <note>` once you are free.
+- `board restart` says at once when herdr-wake is not there or does not answer, and schedules nothing. Then ask the user to restart you by hand: `/exit`, then `claude --resume <session id>` in the same pane.
+- `board schedule` shows it while it is on its way, `board unschedule <id>` cancels it. Asked again before it happens, it is still one restart, with the newer note.
+- `--session <name>` restarts another session, once that one is free; its prompt says who asked.
+
 ## An MCP server dropped
 
 Symptoms: a server listed as failed or disconnected, its tools gone, or calls failing with a connection error.
 
-- You cannot reconnect it from inside your turn: reconnecting is `/mcp` in your own terminal, and your terminal is busy with you.
-- Ask the user to run `/mcp` in your session, pick the server, then Reconnect. On the web board: your card, "Terminal", then "Claude".
-- Meanwhile carry on with what does not need that server, and say what waits for it (`board wait "MCP <server> reconnect"`).
+- Restart yourself: `board restart "MCP <server> dropped; I was <doing what>, next: <what>"`, then end your turn. On start Claude Code connects every MCP server again; that is the reliable way back.
+- After the restart, check that its tools are there (`ToolSearch` with the server's name). One that is still connecting can take a few seconds more; one that fails again is broken on its side, not in this session: say so to the user.
+- Do not try to drive the `/mcp` menu yourself: your terminal is busy with you, and keys typed into a menu land in the wrong place easily.
+- Without herdr-wake (`board restart` says so): ask the user to run `/mcp` in your session and Reconnect the server (on the web board: your card, "Terminal", then "Claude"). Meanwhile carry on with what does not need it, and `board wait "MCP <server> reconnect"`.
 
 ## Do not
 

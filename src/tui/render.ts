@@ -31,9 +31,10 @@ export interface Body {
 /** Wide enough for the five-column grid. */
 export const isWide = (columns: number): boolean => columns >= 100
 
-/** "⏰15:30 " when the session has something scheduled; ⏳ when it waits until the session is free. */
+/** "⏰15:30 " when the session has something scheduled; ⏳ when it waits until the session is free; ↻ a restart on its way. */
 function alarm(state: TuiState, it: Item): string {
   const e = state.alarms.get(it.key)
+  if (e?.kind === 'restart') return '↻ '
   return e ? `${e.idle ? '⏳' : '⏰'}${shortWhen(e.next, t, state.now)} ` : ''
 }
 

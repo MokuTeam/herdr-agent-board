@@ -101,7 +101,7 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.wake.offDetail': 'wakeUrl in the board’s config.json is empty.',
     'setup.wake.down': 'herdr-wake does not answer at {url}',
     'setup.wake.without':
-      'Without it there is no “Put to sleep” or “Wake”, no sleeping sessions on the board, and reminders cannot wake a session that sleeps.',
+      'Without it there is no “Put to sleep”, “Wake” or “Restart”, agents cannot restart themselves (board restart, the way to get a dropped MCP server back), no sleeping sessions show on the board, and reminders cannot wake a session that sleeps.',
     'setup.wake.fix': 'Install and start it, then set wakeUrl if it runs elsewhere:',
 
     'setup.launch.command': 'New sessions: your launch.command ({name})',
@@ -233,7 +233,7 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.wake.offDetail': 'wakeUrl в config.json доски пустой.',
     'setup.wake.down': 'herdr-wake не отвечает на {url}',
     'setup.wake.without':
-      'Без него нет «Усыпить» и «Разбудить», спящих сессий на доске, и напоминания не будят спящую сессию.',
+      'Без него нет «Усыпить», «Разбудить» и «Перезапустить», агенты не могут перезапустить себя (board restart, способ вернуть отвалившийся MCP-сервер), спящих сессий на доске не видно, и напоминания не будят спящую сессию.',
     'setup.wake.fix': 'Поставь и запусти его, потом задай wakeUrl, если он работает не по умолчанию:',
 
     'setup.launch.command': 'Новые сессии: твой launch.command ({name})',

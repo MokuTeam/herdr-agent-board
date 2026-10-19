@@ -187,3 +187,13 @@ test('render does not touch stdout', () => {
   }
   expect(wrote).toBe(false)
 })
+
+test('a restart on its way shows ↻ by the card, in place of the clock (upstream’s alarm at #51)', () => {
+  const state = fixedState()
+  state.alarms = new Map([['k1', { id: 'a1b2c3', key: 'k1', kind: 'restart', idle: true, text: '', next: NOW - MIN }]])
+  for (const size of [BIG, { columns: 80, rows: 30 }]) {
+    const line = plainRows(render(state, size)).find(row => row.includes('api-server'))
+    expect(line).toContain('↻ ')
+    expect(line).not.toMatch(/[⏳⏰]/)
+  }
+})

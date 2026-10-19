@@ -1,5 +1,6 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
+import { translator } from '../../src/core/i18n/translator.ts'
 import { useLanguage } from '../../src/core/lang.ts'
 import {
   cleanName,
@@ -11,6 +12,7 @@ import {
   targetOf,
 } from '../../src/core/schedule-rules.ts'
 import type { Item } from '../../src/core/types.ts'
+import { oldCode, oldFunction } from '../web/support/old-app.ts'
 
 // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
 useLanguage('en')
@@ -153,4 +155,45 @@ test('target: a retry-safe call report stays with its own session, never the one
 test('entries from before kinds existed are reminders as ever', () => {
   const at = Date.now()
   assert.equal(promptOf({ id: 'eeee01', key: 's1', text: 'old one', next: at }, at), '[board reminder] old one')
+})
+
+test('target: a restart is for the session that asked, never the one /clear left in its pane', () => {
+  const items = [item({ key: 's1', session: 's1', pane: 'p1', cwd: 'C:Proj' })]
+  const same = (): string => 'default'
+  // A reminder follows /clear into s1; a restart does not.
+  assert.deepEqual(targetOf(entry({ key: 's0', pane: 'p1', cwd: 'C:Proj' }), items, same), { item: items[0] })
+  assert.deepEqual(targetOf(entry({ key: 's0', pane: 'p1', cwd: 'C:Proj', kind: 'restart' }), items, same), {})
+  assert.deepEqual(targetOf(entry({ key: 's1', kind: 'restart' }), items, same), { item: items[0] })
+})
+
+test('prompt: a restart says how it went as upstream’s promptOf at #51 does, in English and Russian', () => {
+  const theirs = (lang: string) => {
+    const tr = translator(lang)
+    const code = oldCode('src/scheduler.mjs', ['promptOf', 'restartPrompt'], { t: tr }, '513e441')
+    return oldFunction(code, 'promptOf')
+  }
+  const base = entry({ key: 's1', kind: 'restart', text: '', next: now - 3 * HOUR })
+  const cases: ScheduleEntry[] = [
+    { ...base, by: 'agent' },
+    { ...base, by: 'agent', text: 'finish the PR review' },
+    { ...base, by: 'agent', from: { key: 's7', name: 'lead' } },
+    { ...base, by: 'agent', from: { key: 's7abcdef99', name: '' }, text: 'go on' },
+    { ...base, by: 'agent', from: { key: 's1', name: 'self' } },
+    { ...base, by: 'user' },
+    { ...base, by: 'user', text: 'the MCP server is back' },
+    { ...base, by: 'agent', failed: 'herdr-wake is down', text: 'finish it' },
+    { ...base, by: 'user', failed: 'herdr-wake is down' },
+    { ...base, by: 'agent', failed: 'it stayed up', from: { key: 's7', name: 'lead' }, text: 'x' },
+  ]
+  for (const lang of ['en', 'ru']) {
+    // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
+    useLanguage(lang)
+    try {
+      const was = theirs(lang)
+      for (const e of cases) assert.equal(promptOf(e, now), was(e, now), `${lang} ${JSON.stringify(e)}`)
+    } finally {
+      // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
+      useLanguage('en')
+    }
+  }
 })

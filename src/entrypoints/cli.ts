@@ -13,6 +13,10 @@
 //   board every <cron> <text>    the same on a cron schedule (5 fields, quoted)
 //   --idle (remind, every)   wait until the session is free; by default it arrives on time,
 //                            queued into a running turn
+//   board restart [text]     once this turn is over and the session is free, the board has
+//                            herdr-wake put it to sleep and wake it again (MCP servers, settings,
+//                            hooks and skills load anew, the conversation stays), then types
+//                            "[board reminder; restarted as you asked] <text>" into it
 //   board schedule [--all]   this session's entries (every session's)
 //   board unschedule <id|all>    removes an entry (all: every entry of this session)
 //   board call-report --session <id> --file <report.md> [--report-id <stable-id>]
@@ -35,18 +39,20 @@ import { configFile, editCategories, loadConfig } from '../adapters/config-file.
 import { type HerdrPane, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { boardFile } from '../adapters/paths.ts'
-import { addEntry, listEntries, type NewEntry, removeEntry } from '../adapters/schedule-store.ts'
+import { addEntry, askRestart, listEntries, type NewEntry, removeEntry } from '../adapters/schedule-store.ts'
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
 import { t } from '../core/lang.ts'
-import { MAX_REPORT, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
+import { type ProfileSet, profileSet, sessionProfile } from '../core/profiles.ts'
+import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
 import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
 import { shortWhen } from '../core/when-format.ts'
+import { checkWake, wakeAnswers } from '../services/actions.ts'
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | doctor] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | doctor] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -146,6 +152,21 @@ async function entryFor(s: Session) {
   }
 }
 
+/** The web board's payload when it answers now (asked once), else null. */
+let webBoard: Promise<Record<string, unknown> | null> | undefined
+function boardAnswer(): Promise<Record<string, unknown> | null> {
+  webBoard ??= (async () => {
+    try {
+      const res = await fetch(`http://127.0.0.1:${cfg.port ?? 12422}/api/board`, { signal: AbortSignal.timeout(1500) })
+      const body: unknown = await res.json()
+      return isRecord(body) ? body : null
+    } catch {
+      return null
+    }
+  })()
+  return webBoard
+}
+
 /** Whether a board that runs the schedule answers now. */
 async function schedulerRuns(): Promise<boolean> {
   try {
@@ -157,12 +178,24 @@ async function schedulerRuns(): Promise<boolean> {
       process.kill(pid, 0)
       return true
     }
-    const res = await fetch(`http://127.0.0.1:${cfg.port ?? 12422}/api/board`, { signal: AbortSignal.timeout(1500) })
-    const body: unknown = await res.json()
-    return isRecord(body) && 'schedules' in body
+    const body = await boardAnswer()
+    return !!body && 'schedules' in body
   } catch {
     return false
   }
+}
+
+/**
+ * The profiles with the board's own: the folder the running web board says its env points to
+ * (its payload's `inherited` profile). This command runs in a session's env, which may be another
+ * profile's than the board's (and herdr's); with no board answering, it is the best there is.
+ */
+async function boardProfiles(): Promise<ProfileSet> {
+  const set = deps.profiles()
+  const body = cfg.web === false ? null : await boardAnswer()
+  const listed = Array.isArray(body?.profiles) ? body.profiles : []
+  const own = listed.find(p => isRecord(p) && p.inherited === true)
+  return isRecord(own) && typeof own.dir === 'string' ? profileSet(set.list, own.dir) : set
 }
 
 /** A note for the agent when no board with the scheduler runs to send it. */
@@ -188,16 +221,37 @@ function fromNow(ms: number, now: number): string {
 }
 const clip = (s: string, n = 60): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 
+/** How far a restart got, for its line. */
+function restartState(e: ScheduleEntry): string {
+  if (e.failed) return `did not happen (${String(e.failed)}), tells the session once it is free`
+  if (e.step === 'note') return 'restarted, the note goes in once the session is free'
+  if (e.step) return 'under way'
+  const HELD: Record<string, string> = {
+    tasks: 'background tasks run',
+    draft: 'unsent text in its input box',
+    dialog: 'a dialog is open',
+    gone: 'the session is not on the board',
+  }
+  const why = typeof e.why === 'string' ? e.why : ''
+  const held = Object.hasOwn(HELD, why) ? HELD[why] : undefined
+  const refused = e.attempts && why && why !== 'busy' ? ` (herdr-wake refused, tries again: ${why})` : ''
+  return `once the session is free${held ? ` (waits: ${held})` : refused}`
+}
+
 function entryLine(e: ScheduleEntry, now: number, withSession: boolean): string {
-  const parts = [
-    e.id,
-    `${stamp(e.next)} (${fromNow(e.next, now)})`,
-    e.cron ? `every "${e.cron}"` : 'once',
-    e.idle ? 'when free' : 'on time',
-  ]
+  const parts =
+    e.kind === 'restart'
+      ? [e.id, `restart, asked ${stamp(e.created ?? e.next)}`, restartState(e)]
+      : [
+          e.id,
+          `${stamp(e.next)} (${fromNow(e.next, now)})`,
+          e.cron ? `every "${e.cron}"` : 'once',
+          e.idle ? 'when free' : 'on time',
+        ]
   if (withSession) parts.push(e.name || e.key)
-  if (e.pendingSince) parts.push(`due, waits for the session since ${stamp(Number(e.pendingSince))}`)
-  parts.push(clip(e.text, 80))
+  if (e.pendingSince && e.kind !== 'restart')
+    parts.push(`due, waits for the session since ${stamp(Number(e.pendingSince))}`)
+  if (e.text) parts.push(clip(e.text, 80))
   return parts.join(' · ')
 }
 
@@ -351,6 +405,8 @@ async function main(): Promise<void> {
         `ok · every ${e.id} "${cron.expr}", next ${stamp(next)} (${fromNow(next, now)}${modeText()}): ${clip(msg)} · cancel: board unschedule ${e.id}${await schedulerNote()}`,
       )
     }
+    case 'restart':
+      return restart(s)
     case 'schedule': {
       const list = listEntries().filter(e => e.key === s.key)
       if (!list.length) return console.log('nothing scheduled for this session')
@@ -370,6 +426,62 @@ async function main(): Promise<void> {
   const cat = readCard(s.key)?.category
   const extra = cat && !cfg.categories.some(c => c.id === cat) ? ` (new lane "${categoryInfo(cfg, cat).title}")` : ''
   console.log(`ok · ${line(s.key, s.cwd)}${extra}`)
+}
+
+/**
+ * `board restart [note]`: the session restarted once it is free, a schedule entry of kind
+ * 'restart' (services/scheduler.ts). Refused at once without herdr-wake, which does the restart,
+ * outside herdr, and when the board would not wake the session again (its profile guard,
+ * services/actions.ts checkWake: herdr-wake resumes it in its pane's env); asked again, the
+ * restart already on its way takes the new note.
+ */
+async function restart(s: Session): Promise<void> {
+  // The board's own idea of the sessions, asked once: herdr not answering is none.
+  let known: Item[] | undefined
+  const items = async (): Promise<Item[]> => (known ??= await collect(deps).catch((): Item[] => []))
+  const find = async (key: string) => (await items()).find(i => i.key === key || i.session === key)
+  // A session given by its id: its pane, from the board's own idea of it.
+  if (!s.pane && target) {
+    const item = await find(s.key)
+    if (item) s = { ...s, pane: item.pane, cwd: item.cwd, name: item.name }
+  }
+  if (!s.pane)
+    throw new Error(
+      `board restart works for a session in a herdr pane, and ${target ? `herdr has none for "${target}"` : 'this one runs outside herdr'}; nothing was scheduled`,
+    )
+  const up = await wakeAnswers(deps)
+  if (!up.ok) {
+    const what = up.why
+      ? `herdr-wake, which does not answer at ${cfg.wakeUrl} (${up.why})`
+      : "herdr-wake, and wakeUrl in the board's config.json is empty"
+    throw new Error(
+      `a restart needs ${what}; nothing was scheduled. Ask the user to restart this session by hand: /exit in it, then claude --resume ${s.key} in the same pane`,
+    )
+  }
+  // The restart ends in a wake: one the board would refuse (another profile than herdr-wake would
+  // resume it in, or one not known) is refused now, before anything is scheduled. The session as
+  // the board shows it, else as its card says.
+  const set = await boardProfiles()
+  const shown = await find(s.key)
+  const guard = await checkWake(
+    deps,
+    shown ?? { name: s.name || s.key.slice(0, 8), pane: s.pane, ...sessionProfile(readCard(s.key), set.list) },
+    set,
+  )
+  if (!guard.ok) throw new Error(`${guard.error}; nothing was scheduled`)
+  const { entry, again } = askRestart({ ...(await entryFor(s)), text, by: 'agent' })
+  const own = !entry.from
+  const prompt = clip(promptOf(entry, Date.now()), 160)
+  const head = again
+    ? `ok · restart ${entry.id} is on its way already${text ? ', with this note' : ''}`
+    : `ok · restart ${entry.id}`
+  const turn = own ? 'once this turn is over and the session is free' : 'once the session is free'
+  const stops = own
+    ? ' · end your turn now. It waits for background commands and Monitor to end (10 min at most, then tells you it did not happen); CronCreate and ScheduleWakeup jobs die with it'
+    : ''
+  console.log(
+    `${head}: ${turn}, Claude exits and resumes in the same pane (MCP servers, settings, hooks, skills and CLAUDE.md load anew, the conversation stays), then gets "${prompt}"${stops} · cancel: board unschedule ${entry.id}${await schedulerNote()}`,
+  )
 }
 
 /**

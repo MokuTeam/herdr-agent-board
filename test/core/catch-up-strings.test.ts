@@ -14,6 +14,7 @@ const MERGES = [
   { merge: 'bde9cfd', pr: '#45 MokuPilot call results back to the session' },
   { merge: '2d5c703', pr: '#50 the herdr-agents skill' },
   { merge: '6a7fcb6', pr: '#47 the MokuPilot launcher started, readiness not confirmed' },
+  { merge: '513e441', pr: '#51 agents restart themselves: board restart, and Restart on the web board' },
 ]
 
 type Dictionaries = Record<string, Record<string, unknown>>

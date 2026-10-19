@@ -7,6 +7,7 @@ import { checkoutChanges, isCheckout } from '../../adapters/git.ts'
 import { helpersOf } from '../../adapters/helpers.ts'
 import { herdrText } from '../../adapters/herdr.ts'
 import { uploadsDir } from '../../adapters/paths.ts'
+import { askRestart } from '../../adapters/schedule-store.ts'
 import { busy, PINS } from '../../core/board.ts'
 import { type PublicDialog, parseDialog, publicDialog } from '../../core/dialogs/questions.ts'
 import { publicHelper } from '../../core/helpers.ts'
@@ -14,7 +15,7 @@ import { t } from '../../core/lang.ts'
 import { checkName } from '../../core/launch/names.ts'
 import type { MessageGate } from '../../core/message-gate.ts'
 import type { Item, Pin } from '../../core/types.ts'
-import { focus, send, sleepSession, wake } from '../../services/actions.ts'
+import { checkWake, focus, send, sleepSession, wake, wakeAnswers } from '../../services/actions.ts'
 import { answerPermission, answerQuestions } from '../../services/answer.ts'
 import { collect } from '../../services/board.ts'
 import type { Deps } from '../../services/deps.ts'
@@ -155,6 +156,31 @@ function card(item: Item, body: Body): Result {
   return { ok: true }
 }
 
+/**
+ * A restart the user asked for: the scheduler does it once the session is free (a schedule entry
+ * of kind 'restart'): herdr-wake puts it to sleep and wakes it again. Asleep, waking it is the
+ * restart. One the board would not wake again (its profile guard) is refused here, before
+ * anything is scheduled.
+ */
+async function restart(deps: SessionApp['deps'], item: Item): Promise<Result> {
+  if (!item.session || !item.pane || item.agent !== 'claude')
+    return { ok: false, error: t('err.restart.notClaude', { name: item.name }) }
+  if (item.sleeping) return { ok: false, error: t('err.restart.asleep', { name: item.name }) }
+  const up = await wakeAnswers(deps)
+  if (!up.ok) return up
+  const guard = await checkWake(deps, item)
+  if (!guard.ok) return { ok: false, error: guard.error }
+  const { entry, again } = askRestart({
+    key: item.key,
+    name: item.name,
+    pane: item.pane,
+    ...(item.cwd && { cwd: item.cwd }),
+    by: 'user',
+  })
+  deps.log(`restart ${item.name}: ${again ? 'on its way already' : `asked, ${entry.id}`}`)
+  return { ok: true, id: entry.id, again }
+}
+
 /** `body`: its fields, taken only by the actions that read them (as main's did, so a null body fails only there). */
 async function act(app: SessionApp, item: Item, action: string, body: () => Promise<Body>): Promise<Result> {
   const { deps } = app
@@ -165,6 +191,8 @@ async function act(app: SessionApp, item: Item, action: string, body: () => Prom
       return item.sleeping ? wake(deps, item).finally(() => deps.wake.forget()) : { ok: true }
     case 'sleep':
       return sleepSession(deps, item).finally(() => deps.wake.forget())
+    case 'restart':
+      return restart(deps, item)
     case 'message':
       return message(app, item, await body())
     case 'answer':
@@ -247,7 +275,7 @@ export function sessionRoutes(app: SessionApp): Route[] {
     // Actions that go through herdr wait for a board that can reach it; card edits and the rest do not.
     {
       method: 'POST',
-      path: /^\/api\/session\/([^/]+)\/(focus|wake|sleep|message)$/,
+      path: /^\/api\/session\/([^/]+)\/(focus|wake|sleep|restart|message)$/,
       guard: ['board-header', 'fresh-data'],
       handle: action,
     },

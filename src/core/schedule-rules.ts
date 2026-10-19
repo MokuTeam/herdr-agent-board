@@ -36,7 +36,13 @@ export type ScheduleEntry = {
   by?: string
   from?: SessionRef
   movedFrom?: SessionRef
-  /** 'call': a MokuPilot call's results (`board call-report`); a reminder without one. */
+  /**
+   * 'call': a MokuPilot call's results (`board call-report`); 'restart': the session restarted
+   * once it is free (`board restart` or the web board), the text its note for after; a reminder
+   * without one. A restart also keeps step ('sleep', 'wake', 'note': how far it got), attempts and
+   * retryAt (herdr-wake refused or failed), tasksSince (background tasks hold it) and failed (it
+   * gave up, why: only that note is left to type), among the extra fields.
+   */
   kind?: string
   /**
    * A retry-safe call report's identity ({ key, session, reportId, hash }: `board call-report
@@ -67,6 +73,7 @@ export const cleanName = (s: unknown): string =>
  * report on lines of its own, and a closing note that they are for its information.
  */
 export function promptOf(entry: ScheduleEntry, now: number): string {
+  if (entry.kind === 'restart') return restartPrompt(entry)
   const notes: string[] = []
   if (entry.cron) {
     const runs = countRuns(entry.cron, entry.next, now)
@@ -90,6 +97,22 @@ export function promptOf(entry: ScheduleEntry, now: number): string {
   return `[${tag}${notes.length ? `; ${notes.join('; ')}` : ''}] ${entry.text}`
 }
 
+/**
+ * After a restart, "[board reminder; restarted ...] <its note>": who asked (the session itself,
+ * another one, the user), and the note for after it. One that did not happen says why. Late
+ * means nothing here, and a restart never moves to another session (targetOf).
+ */
+function restartPrompt(entry: ScheduleEntry): string {
+  const setter = entry.from && entry.from.key !== entry.key ? entry.from.name || entry.from.key.slice(0, 8) : ''
+  // The tag stays in English: the hook knows a board prompt by it (entrypoints/hook.ts).
+  const from = setter ? ` from ${setter}` : ''
+  const failed = typeof entry.failed === 'string' ? entry.failed : ''
+  if (failed)
+    return `[board reminder${from}] ${t('sched.prompt.restartFailed', { why: failed })}${entry.text ? ` ${t('sched.prompt.restartNote', { text: entry.text })}` : ''}`
+  const by = entry.by === 'user' ? 'User' : setter ? 'Other' : ''
+  return `[board reminder${from}; ${t(`sched.prompt.restarted${by}`)}] ${entry.text || t(`sched.prompt.restartText${by === 'User' ? 'User' : ''}`)}`
+}
+
 const folder = (p: unknown): string =>
   String(p ?? '')
     .replace(/[\\/]+/g, '/')
@@ -104,7 +127,8 @@ const folder = (p: unknown): string =>
  * in another profile, or one where either profile is not known, is never followed into (it would
  * be reminded in the wrong account): it comes back as `other`, so the entry waits saying why.
  * Neither when there is none (as before the port). A retry-safe call report (`receipt`) never
- * follows: it is for its own session only.
+ * follows: it is for its own session only. A restart does not either: the session after /clear,
+ * or another one started in that pane, did not ask for it.
  */
 export function targetOf(
   entry: ScheduleEntry,
@@ -113,7 +137,7 @@ export function targetOf(
 ): { item?: Item; other?: Item } {
   const own = items.find(i => i.key === entry.key)
   if (own) return { item: own }
-  if (entry.receipt || !entry.pane || !entry.cwd) return {}
+  if (entry.receipt || entry.kind === 'restart' || !entry.pane || !entry.cwd) return {}
   const next = items.find(i => i.pane === entry.pane && i.session && !i.sleeping && folder(i.cwd) === folder(entry.cwd))
   if (!next) return {}
   const was = profileOf(entry.key)

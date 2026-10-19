@@ -4,7 +4,7 @@ import { languageName } from './lang.ts'
 import type { Card, Config } from './types.ts'
 
 // Bump when the brief says something new: every running session gets it again on its next prompt.
-export const BRIEF_VERSION = 4
+export const BRIEF_VERSION = 5
 
 type Env = Record<string, string | undefined>
 
@@ -20,7 +20,7 @@ export function herdrLine(env: Env = process.env): string {
   ]
     .filter(Boolean)
     .join(', ')
-  return `This session runs in herdr, in pane ${env.HERDR_PANE_ID}${where ? ` (${where})` : ''}. Starting or messaging other sessions, doing something later, a pane for a server or a login, a dropped MCP server: see the herdr-agents skill.`
+  return `This session runs in herdr, in pane ${env.HERDR_PANE_ID}${where ? ` (${where})` : ''}. Starting or messaging other sessions, doing something later, restarting itself (a dropped MCP server, changed settings, hooks or skills), a pane for a server or a login: see the herdr-agents skill.`
 }
 
 export function brief(

@@ -1,8 +1,9 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { BRIEF_VERSION, brief, waitReminder } from '../../src/core/brief.ts'
+import { BRIEF_VERSION, brief, herdrLine, waitReminder } from '../../src/core/brief.ts'
 import { t, useLanguage } from '../../src/core/lang.ts'
 import type { Config } from '../../src/core/types.ts'
+import { oldCode, oldFunction } from '../web/support/old-app.ts'
 
 // The board's texts follow the system language by default: the tests pin English.
 // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
@@ -36,6 +37,10 @@ test('brief: a session in herdr hears its pane and the skill; one outside herdr 
     HERDR_WORKSPACE_ID: 'w1',
   })
   assert.match(inside, /runs in herdr, in pane w1:p3 \(tab w1:t2, workspace w1\)\..*herdr-agents skill/)
+  assert.match(
+    inside,
+    /restarting itself \(a dropped MCP server, changed settings, hooks or skills\), a pane for a server or a login: see the herdr-agents skill\./,
+  )
   assert.equal(
     inside.split('\n').at(-1),
     inside.split('\n').find(l => l.includes('herdr-agents')),
@@ -44,6 +49,18 @@ test('brief: a session in herdr hears its pane and the skill; one outside herdr 
   assert.doesNotMatch(outside, /herdr-agents|runs in herdr/)
   // A pane id alone (a variable left over from a parent shell) is not herdr.
   assert.doesNotMatch(brief(cfg, null, 'C:\\X', { HERDR_PANE_ID: 'w1:p3' }), /runs in herdr/)
+})
+
+test('the line about herdr is upstream’s at #51, word for word', () => {
+  const theirs = oldFunction(oldCode('src/brief.mjs', ['herdrLine'], {}, '513e441'), 'herdrLine')
+  for (const env of [
+    { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p3', HERDR_TAB_ID: 'w1:t2', HERDR_WORKSPACE_ID: 'w1' },
+    { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p3' },
+    { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p3', HERDR_WORKSPACE_ID: 'w1' },
+    { HERDR_PANE_ID: 'w1:p3' },
+    {},
+  ])
+    assert.equal(herdrLine(env), theirs(env), JSON.stringify(env))
 })
 
 test('the board switches language in place: the brief follows', () => {
@@ -66,5 +83,6 @@ test('the brief tells agents about the schedule', () => {
   assert.match(text, /board remind <when> "<text>"/)
   assert.match(text, /board every "<cron, 5 fields>"/)
   assert.match(text, /CronCreate or ScheduleWakeup/)
-  assert.ok(BRIEF_VERSION >= 4)
+  // #51 told sessions in herdr they can restart themselves: every running one hears it again.
+  assert.ok(BRIEF_VERSION >= 5)
 })

@@ -10,6 +10,16 @@
 // missed runs of a cron entry go as one, saying how many. Time the board was off does not count
 // against the wait. An entry is claimed in its file before it is sent, so a second board (a
 // restart that overlaps, a test copy) never sends the same run twice.
+//
+// A restart (kind 'restart') waits until the session is free (no turn, no dialog, no draft, no
+// background command), has herdr-wake put it to sleep (/exit) and wake it again (resumed in its
+// pane: the same conversation, MCP servers, settings, hooks and skills loaded anew), then types
+// "[board reminder; restarted ...] <its note>". How far it got is kept in the entry (step), so a
+// board that restarts meanwhile goes on from there. When herdr-wake refuses or fails a few times,
+// or background tasks hold the session too long, the session gets "[board reminder] restart did
+// not happen: <why>" instead, once it is free. The wake goes through the board's profile guard
+// (actions.ts checkWake): one the board would refuse is refused before the session is put to
+// sleep, so a restart never leaves a session asleep for want of a safe wake.
 import { type FSWatcher, mkdirSync, watch } from 'node:fs'
 import { beginReport, deferReport, settleReport, verifyReport } from '../adapters/call-receipts.ts'
 import { readCard } from '../adapters/cards.ts'
@@ -19,10 +29,10 @@ import { itemProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
 import { callTitle } from '../core/notices.ts'
 import { profileLabel, sessionProfile } from '../core/profiles.ts'
-import { promptOf, type ScheduleEntry, targetOf } from '../core/schedule-rules.ts'
+import { cleanText, promptOf, type ScheduleEntry, targetOf } from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
 import { nextRun } from '../core/when.ts'
-import { send, wake } from './actions.ts'
+import { checkWake, readyToSleep, send, sleepSession, wake } from './actions.ts'
 import { collect } from './board.ts'
 import type { Deps } from './deps.ts'
 
@@ -33,13 +43,22 @@ const MAX_WAKING = 2
 // A cron entry whose session is gone for this many runs in a row is dropped: it would wait and
 // miss forever.
 const GONE_RUNS = 3
+// A restart herdr-wake refused or failed (to put the session to sleep, or to wake it) is tried
+// again two ticks later (30 s), RESTART_TRIES times in all; background tasks hold one for
+// TASKS_WAIT_MS at most. A woken session gets its note `restartSettleSec` (8) later, so the MCP
+// servers it starts have a moment to connect before its turn.
+const RESTART_TRIES = 3
+const TASKS_WAIT_MS = 10 * 60_000
 
 const positive = (v: unknown, fallback: number): number => (Number(v) > 0 ? Number(v) : fallback)
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
+/** A number an entry keeps (the scheduler's own fields), else undefined. */
+const numberOf = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined)
+
 /**
  * Start sending due entries. `deps.cfg` is the live config: scheduleTickSec (15), scheduleWaitMin
- * (240). `onChange` is called after each run, so the board redraws.
+ * (240), restartSettleSec (8). `onChange` is called after each run, so the board redraws.
  */
 export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onChange?: () => void }): {
   stop(): void
@@ -48,6 +67,7 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
   // Five minutes at most: setTimeout takes no more than 24 days, and a larger value runs at once.
   const tickMs = (): number => Math.min(300, Math.max(0.1, positive(cfg.scheduleTickSec, 15))) * 1000
   const patience = (): number => positive(cfg.scheduleWaitMin, 240) * 60_000
+  const settleMs = (): number => Math.min(60, Number(cfg.restartSettleSec ?? 8) || 0) * 1000
   const flying = new Set<string>() // sessions with a run on its way: one at a time per session
   // Runs that went out but whose entry could not be updated (its lock was taken): the next
   // tick finishes the entry instead of sending it again.
@@ -62,9 +82,11 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
     ticking = true
     try {
       const now = Date.now()
-      // A run that waits for its session is tried again once a tick, not on every file change.
+      // A run that waits for its session is tried again once a tick, not on every file change; a
+      // restart herdr-wake refused, not before its retry time.
       const tried = (e: ScheduleEntry): boolean => typeof e.tried === 'number' && e.tried > now - tickMs() * 0.9
-      const due = listEntries().filter(e => e.next <= now && !flying.has(e.key) && !tried(e))
+      const later = (e: ScheduleEntry): boolean => typeof e.retryAt === 'number' && e.retryAt > now
+      const due = listEntries().filter(e => e.next <= now && !flying.has(e.key) && !tried(e) && !later(e))
       if (!due.length) return
       // Fresh: whether a session sleeps or works decides what happens now.
       const items = await collect(deps)
@@ -106,6 +128,7 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
 
   /** `other`: why it does not go to the session now in its pane (another profile's), '' for none. */
   async function run(entry: ScheduleEntry, item: Item | undefined, other: string): Promise<void> {
+    if (entry.kind === 'restart') return restart(entry, item)
     const receipt = entry.receipt ? verifyReport(entry) : null // Before even waking a session.
     if (receipt && receipt.state !== 'queued' && receipt.state !== 'dispatching') {
       removeEntry(entry.id)
@@ -167,32 +190,156 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
         }
       }
       if (r.ok) return sent(entry)
-      why = r.draft ? 'draft' : r.dialog ? 'dialog' : r.busy ? 'busy' : r.error
+      why = whyNot(r)
     }
     wait(entry, now, why, !item)
+  }
+
+  const whyNot = (r: { draft?: boolean; dialog?: boolean; busy?: boolean; error: string }): string =>
+    r.draft ? 'draft' : r.dialog ? 'dialog' : r.busy ? 'busy' : r.error
+
+  /**
+   * A restart, as far as it can go now (see the top of the file). Each step is written to the
+   * entry before it starts: a board that stops halfway leaves the session asleep at worst, and
+   * the next one wakes it.
+   */
+  async function restart(entry: ScheduleEntry, item: Item | undefined): Promise<void> {
+    const now = Date.now()
+    // Only the session that asked: targetOf does not follow a restart to another one in its pane.
+    if (!item) return wait(entry, now, 'gone', true)
+    // Put to sleep by this restart already: what is left is waking it, if it still sleeps, and the note.
+    const slept = entry.step === 'wake' || entry.step === 'note'
+    if (!entry.failed && !item.sleeping && !slept) {
+      if (!item.session) return giveUp(entry, t('err.notClaude', { name: item.name }))
+      if (!cfg.wakeUrl) return giveUp(entry, t('err.restart.noWake'))
+      // Before anything is put to sleep: the wake that ends the restart must be one the board
+      // makes (its profile guard). One it refuses is refused now; herdr not answering waits.
+      const guard = await checkWake(deps, item)
+      if (!guard.ok) return guard.refused ? giveUp(entry, guard.error) : wait(entry, now, guard.error, false)
+      const ready = await readyToSleep(deps, item)
+      // Background tasks hold it TASKS_WAIT_MS at most, counted from when they began to: a hold
+      // for any other reason starts that count over.
+      if (!ready.ok && ready.why === 'tasks') {
+        const since = numberOf(entry.tasksSince) ?? now
+        return now - since >= TASKS_WAIT_MS
+          ? giveUp(entry, t('err.restart.tasks'))
+          : wait(entry, now, 'tasks', false, { tasksSince: since })
+      }
+      if (!ready.ok) return wait(entry, now, ready.why, false, { tasksSince: undefined })
+      if (!claim(entry.id, now, { step: 'sleep', tasksSince: undefined })) return
+      // herdr's status as just read, not the tick's: a turn that ended meanwhile is not "working".
+      const asleep = await sleepSession(deps, { ...item, status: ready.status }).finally(() => deps.wake.forget())
+      if (!asleep.ok) return retry(entry, asleep.error)
+      entry =
+        updateEntry(entry.id, e => ({
+          ...e,
+          step: 'wake',
+          attempts: undefined,
+          claim: { pid: process.pid, at: Date.now() },
+        })) ?? entry
+      item = { ...item, sleeping: true }
+    } else if (!claim(entry.id, now)) return
+    if (item.sleeping) {
+      // Asleep: put to sleep just now, or before (by a board that stopped halfway, the reaper, by
+      // hand). Waking it is what restarts it, so a restart that had given up is one after all.
+      // One this restart just put to sleep is woken whatever MAX_WAKING says: it is the board's doing.
+      waking++
+      const woke = await wake(deps, item).finally(() => {
+        waking--
+        deps.wake.forget()
+      })
+      if (!woke.ok) return retry(entry, woke.error, true)
+      const noted = updateEntry(entry.id, e => ({
+        ...e,
+        step: 'note',
+        failed: undefined,
+        attempts: undefined,
+        claim: { pid: process.pid, at: Date.now() },
+      }))
+      // Cancelled meanwhile: it is up again, with nothing to type.
+      if (!noted) return
+      entry = noted
+      item = { ...item, sleeping: false }
+      await new Promise(resolve => setTimeout(resolve, settleMs()))
+      if (stopped || !getEntry(entry.id)) return
+    }
+    const r = await send(deps, item, promptOf(entry, Date.now()), { free: true, draft: true })
+    if (!r.ok) return wait(entry, now, whyNot(r), false)
+    const failed = typeof entry.failed === 'string' ? entry.failed : ''
+    return failed ? sent(entry, 'failed', failed) : sent(entry)
+  }
+
+  /**
+   * herdr-wake refused or failed: tried again in a while, RESTART_TRIES times in all. Then the
+   * session hears why; one that could not be woken sleeps on (a message wakes it), and only the
+   * log says so. The time is taken now: a sleep or a wake can take minutes to fail.
+   */
+  function retry(entry: ScheduleEntry, why: string, asleep = false): void {
+    const now = Date.now()
+    const attempts = (numberOf(entry.attempts) ?? 0) + 1
+    if (attempts < RESTART_TRIES) {
+      updateEntry(entry.id, e => ({
+        ...e,
+        attempts,
+        retryAt: now + 2 * tickMs(),
+        step: asleep ? e.step : undefined,
+        pendingSince: e.pendingSince ?? now,
+        tried: now,
+        why,
+        claim: undefined,
+      }))
+      return
+    }
+    if (!asleep) {
+      giveUp(entry, why)
+      return
+    }
+    removeEntry(entry.id)
+    logRun(record(entry, now, 'failed', why))
+  }
+
+  /**
+   * A restart that will not happen: the entry stays only to tell the session why, once it is
+   * free. One the user asked for on the board is the user's to hear about (the log, a toast on
+   * the page): the session did not ask, so nothing is typed into it. The reason comes from
+   * herdr-wake too, and goes into a terminal: no control characters.
+   */
+  function giveUp(entry: ScheduleEntry, reason: string): void {
+    const why = cleanText(reason, 300)
+    if (entry.by === 'user') {
+      removeEntry(entry.id)
+      logRun(record(entry, Date.now(), 'failed', why))
+      return
+    }
+    updateEntry(entry.id, e => {
+      const { step, attempts, retryAt, tasksSince, claim, tried, ...rest } = e
+      return { ...rest, failed: why }
+    })
   }
 
   /**
    * Taken for this process, unless another board holds a fresh claim or it was handled already.
    * Legacy delivery is at least once; receipt-backed exports refuse replay after dispatch starts.
    * A legacy board that dies between typing the text and finish() leaves
-   * its claim, and the run goes out again once that claim expires (CLAIM_MS).
+   * its claim, and the run goes out again once that claim expires (CLAIM_MS). `extra` goes into
+   * the entry with the claim (a restart's step).
    */
-  function claim(id: string, now: number): boolean {
+  function claim(id: string, now: number, extra: Record<string, unknown> = {}): boolean {
     return !!updateEntry(id, e => {
       if (e.next > now) return undefined
       const held = e.claim as { pid: number; at: number } | undefined
       if (held && held.pid !== process.pid && now - held.at < CLAIM_MS) return undefined
-      return { ...e, claim: { pid: process.pid, at: now } }
+      return { ...e, ...extra, claim: { pid: process.pid, at: now } }
     })
   }
 
-  function sent(entry: ScheduleEntry): void {
+  /** Gone out; `result` 'failed' for the note that a restart did not happen, `why` its reason. */
+  function sent(entry: ScheduleEntry, result = 'sent', why?: string): void {
     const now = Date.now()
     if (entry.receipt) settleReport(entry, 'sent')
     delivered.set(entry.id, entry.next)
     finish(entry, now)
-    logRun(record(entry, now, 'sent'))
+    logRun(record(entry, now, result, why))
   }
 
   /** After a run went out: a one-off goes, a cron entry moves on. */
@@ -207,12 +354,14 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
   }
 
   // A call's results go into the log by their title: the report itself is the session's now.
+  // A restart says who asked for it: the page tells the user how one of theirs went.
   const record = (entry: ScheduleEntry, at: number, result: string, why?: string): Record<string, unknown> => ({
     id: entry.id,
     key: entry.key,
     name: entry.name,
     text: entry.kind === 'call' ? callTitle(entry.text) : entry.text,
     ...(entry.kind && { kind: entry.kind }),
+    ...(entry.kind === 'restart' && { by: entry.by }),
     cron: entry.cron,
     due: entry.next,
     at,
@@ -223,8 +372,15 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
   /**
    * Not sent this time: try again on the next tick, or log it as missed once the wait is over.
    * `gone`: its session is not on the board (none in its pane, or one in another profile).
+   * `extra` goes into the entry (when background tasks began to hold a restart).
    */
-  function wait(entry: ScheduleEntry, now: number, why: string, gone: boolean): void {
+  function wait(
+    entry: ScheduleEntry,
+    now: number,
+    why: string,
+    gone: boolean,
+    extra: Record<string, unknown> = {},
+  ): void {
     // Only time spent trying counts: a gap (the board was off) is not waiting.
     const tried = typeof entry.tried === 'number' ? entry.tried : 0
     const step = tried ? Math.min(now - tried, 2 * tickMs() + 5000) : 0
@@ -232,6 +388,7 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
     if (waited < patience()) {
       updateEntry(entry.id, e => ({
         ...e,
+        ...extra,
         pendingSince: e.pendingSince ?? now,
         tried: now,
         waited,

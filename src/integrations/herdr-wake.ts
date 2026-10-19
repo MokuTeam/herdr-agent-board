@@ -102,6 +102,30 @@ export function createHerdrWake(
   }
 }
 
+const ANSWER_TIMEOUT_MS = 5000
+
+/**
+ * Whether herdr-wake answers at `url` now (GET /sleeping, 5 s at most), not cached: { ok }, or
+ * { ok: false, why } with the reason as it came (an HTTP status, the connection's error code, the
+ * error's message).
+ */
+export async function herdrWakeAnswers(
+  url: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<{ ok: true } | { ok: false; why: string }> {
+  try {
+    const res = await fetchFn(`${url.replace(/\/+$/, '')}/sleeping`, { signal: AbortSignal.timeout(ANSWER_TIMEOUT_MS) })
+    return res.ok ? { ok: true } : { ok: false, why: `HTTP ${res.status}` }
+  } catch (err) {
+    const cause = err instanceof Error && isObject(err.cause) ? err.cause.code : undefined
+    const code = isObject(err) ? err.code : undefined
+    return {
+      ok: false,
+      why: String((typeof cause === 'string' && cause) || (typeof code === 'string' && code) || messageOf(err)),
+    }
+  }
+}
+
 // One provider per url for the whole process, so the 5 s cache the model reads is the one the
 // server and scheduler invalidate after a wake or sleep.
 const shared = new Map<string | null, SleepProvider>()

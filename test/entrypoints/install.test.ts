@@ -255,8 +255,8 @@ test('the agents’ skill per shown profile: someone else’s in one is left alo
 }, 30_000)
 
 test('the skill install copies is upstream’s, word for word', () => {
-  // Pinned to the merge that brought it (#50); a later upstream change moves the pin.
-  expect(read(root, 'skills', 'herdr-agents', 'SKILL.md')).toBe(oldSource('skills/herdr-agents/SKILL.md', '2d5c703'))
+  // Pinned to the newest merge that changed it (#51, after #50 brought it); a later upstream change moves the pin.
+  expect(read(root, 'skills', 'herdr-agents', 'SKILL.md')).toBe(oldSource('skills/herdr-agents/SKILL.md', '513e441'))
 })
 
 test('one shown profile’s settings.json that does not parse: nothing is written anywhere', async () => {
