@@ -21,12 +21,17 @@ const ARRAYS = ['items', 'launches', 'categories', 'swatches', 'columns', 'sched
 const isListOf = <T>(value: unknown, each: Guard<T>): boolean =>
   value === undefined || (Array.isArray(value) && value.every(each))
 
-/** A Claude profile as the board sends it (src/core/payload.ts BoardProfile), as far as the page relies on it. */
+/**
+ * A Claude profile as the board sends it (src/core/payload.ts BoardProfile), as far as the page
+ * relies on it: the profile switch and the cards' tags read its id, title, color, folder and
+ * whether it is hidden.
+ */
 export const isBoardProfile: Guard<BoardProfile> = (value): value is BoardProfile =>
   isReply(value) &&
   typeof value.id === 'string' &&
   typeof value.title === 'string' &&
   typeof value.color === 'string' &&
+  typeof value.dir === 'string' &&
   typeof value.hidden === 'boolean'
 
 /** The board payload's shape, as far as the page relies on it (src/core/payload.ts). */

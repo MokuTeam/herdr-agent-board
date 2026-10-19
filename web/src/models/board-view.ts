@@ -3,6 +3,7 @@
 // pure parts of dragging a card and of cards appearing.
 import type { BoardCategory } from '../../../src/core/payload.ts'
 import type { ColumnId, Item } from '../../../src/core/types.ts'
+import { profileShown } from './profiles.ts'
 
 /** Whether the lanes control (`filter`: a category id or 'all') shows lane `category`. */
 export const laneShown = (filter: string, category: string): boolean => filter === 'all' || filter === category
@@ -20,13 +21,22 @@ export interface ViewOptions {
   sleepers: boolean
   categories: BoardCategory[]
   categoryOf: (item: Item) => string
+  /** The profile switch's pick ('all' when not given), as it reads (models/profiles.ts pickedProfile). */
+  profile?: string
 }
 
-/** The items on the board: sleeping idle ones only when asked for, and those the search matches. */
-export function visibleItems(items: Item[], { query, sleepers, categories, categoryOf }: ViewOptions): Item[] {
+/**
+ * The items on the board: sleeping idle ones only when asked for, those of the profile the switch
+ * shows, and those the search matches.
+ */
+export function visibleItems(
+  items: Item[],
+  { query, sleepers, categories, categoryOf, profile = 'all' }: ViewOptions,
+): Item[] {
   const q = query.trim().toLowerCase()
   return items.filter(it => {
     if (!sleepers && it.sleeping && it.column === 'idle') return false
+    if (!profileShown(profile, it)) return false
     if (!q) return true
     const title = categoryInfo(categories, categoryOf(it)).title
     // What its helpers at work do counts too.

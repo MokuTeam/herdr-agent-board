@@ -37,6 +37,10 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     // herdr's notification of a session whose hooks report another profile than its start asked for (server/board-state.ts)
     'profile.wrongTitle': 'Wrong profile: {name}',
     'profile.wrongBody': '{name} was started in {want} but runs in {got}',
+    // the profile switch beside the lanes control, and the tag on a card (web/src/components/ProfileSwitch.tsx, ProfileTag.tsx)
+    'tb.profiles': 'Profiles',
+    'profile.all': 'All profiles',
+    'profile.wrong': 'Wrong profile: started for {want}',
   },
   ru: {
     // the Profiles panel's edits (adapters/config-file.ts editProfiles)
@@ -72,5 +76,9 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     // herdr's notification of a session whose hooks report another profile than its start asked for (server/board-state.ts)
     'profile.wrongTitle': 'Не тот профиль: {name}',
     'profile.wrongBody': '{name}: запущена в профиле {want}, а работает в {got}',
+    // the profile switch beside the lanes control, and the tag on a card (web/src/components/ProfileSwitch.tsx, ProfileTag.tsx)
+    'tb.profiles': 'Профили',
+    'profile.all': 'Все профили',
+    'profile.wrong': 'Не тот профиль: запущена для {want}',
   },
 }

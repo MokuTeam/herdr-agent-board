@@ -70,6 +70,28 @@ test('a board payload has its profiles, or none (a board before them)', () => {
   expect(isBoardProfile({ ...PROFILE, hidden: undefined })).toBe(false)
 })
 
+test('a profile has what the switch and the tags read: id, title, color, folder, shown or hidden', () => {
+  expect(isBoardProfile(PROFILE)).toBe(true)
+  // A hidden one: its hooks not read, no usage.
+  expect(isBoardProfile({ ...PROFILE, hidden: true, hooks: null, limits: null })).toBe(true)
+  // Fields the page does not read yet may come as they will.
+  expect(isBoardProfile({ ...PROFILE, extra: 1 })).toBe(true)
+  for (const bad of [
+    { ...PROFILE, dir: undefined },
+    { ...PROFILE, dir: 1 },
+    { ...PROFILE, dir: null },
+    { ...PROFILE, id: undefined },
+    { ...PROFILE, title: 2 },
+    { ...PROFILE, color: null },
+    { ...PROFILE, hidden: 'false' },
+    [PROFILE],
+    'default',
+    null,
+  ])
+    expect([bad, isBoardProfile(bad)]).toEqual([bad, false])
+  expect(isBoardPayload({ ...payload(), profiles: [PROFILE, { ...PROFILE, dir: 3 }] })).toBe(false)
+})
+
 test('POST sends JSON with the X-Board header and answers the reply', async () => {
   const calls = answer(200, '{"ok":true,"id":"x"}')
   expect(await api.post('/api/settings', { language: 'ru' })).toEqual({ ok: true, id: 'x' })

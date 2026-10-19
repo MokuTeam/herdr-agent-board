@@ -3,7 +3,8 @@
 // → work) and never changes, its title and color are the owner's. Here: how a folder as typed or
 // inherited reads, the listed profiles merged with the folders found on this computer, the folder
 // a start sets, the profile a launch from the board starts in, what a session's card is told about
-// its profile, the profile it reports, and whether the board may wake it or call MokuPilot from it.
+// its profile, the profile it reports, whether the board may wake it or call MokuPilot from it, and
+// the tag its card shows (profile-tag.ts).
 //
 // Pure: the adapters find the folders and read the env and the config, and hand them in.
 import { posix, win32 } from 'node:path'
@@ -12,6 +13,9 @@ import { t } from './lang.ts'
 import { baseName, sameDir, uniqueSlug } from './launch/names.ts'
 import type { SpawnOptions } from './launch/spawn-args.ts'
 import type { Card, Item } from './types.ts'
+
+// The tag on a session's card: in a module of its own, which the web page bundles (no node:path).
+export { type ProfileTag, profileTag } from './profile-tag.ts'
 
 /** A profile as config.json lists it. Unknown fields survive. */
 export interface Profile {

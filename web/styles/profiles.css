@@ -1,0 +1,34 @@
+/* Claude profiles (web/src/components/ProfileSwitch.tsx, ProfileTag.tsx): the switch beside the
+   lanes control and the tag on a card, each in its profile's color (--c, from the board). Red
+   says a session runs in another profile than its start asked for. With one profile shown the
+   page has neither, as before profiles. Every rule here selects by class: the other sheets are
+   upstream's, rule for rule. */
+
+/* The switch is a lanes control (.segmented); each profile's count is in its color. */
+.segmented.profiles .n { color: var(--c, var(--label-3)); font-weight: 600; }
+
+/* The tag, right after the card's name: the profile's name on a tint of its color. */
+.profile-tag {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--c) 15%, transparent);
+  color: color-mix(in srgb, var(--c) 75%, var(--label));
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A folder no profile has: quiet and outlined; the folder is its tooltip. */
+.profile-tag.unknown {
+  background: none;
+  color: var(--label-2);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 55%, transparent);
+}
+/* Started for one profile, running in another: a warning that is not missed. */
+.profile-tag.wrong { max-width: 60%; background: var(--c); color: #fff; }

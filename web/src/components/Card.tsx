@@ -14,6 +14,7 @@ import { AlarmBadge } from './AlarmBadge.tsx'
 import { classNames } from './class-names.ts'
 import { HelpersChip, Relations } from './helpers/CardHelpers.tsx'
 import { CheckGlyph, ClockGlyph, FocusGlyph, MoonGlyph, PinGlyph, SpinGlyph, WriteGlyph } from './icons.tsx'
+import { ProfileTag } from './ProfileTag.tsx'
 
 /** What a session on its way shows on the board (hooks/useLaunch.ts). */
 export interface LaunchSlots {
@@ -104,6 +105,8 @@ function CardTop({ item }: { item: Item }) {
       <span className="name" title={renamed ? t('rename.was', { name: item.autoName }) : undefined}>
         {item.name}
       </span>
+      {/* Its profile, while the board shows more than one, or one hidden or not known. */}
+      <ProfileTag item={item} />
       {/* A result you have not opened yet: a dot by the name. */}
       {unseenResult(item, ui.viewed) && <span className="unseen-dot" title={t('attention.unseen')} />}
       {item.pin && item.pin === item.column && (

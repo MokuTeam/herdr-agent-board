@@ -93,21 +93,21 @@ const FOLDERS: BoardPayload = {
 const ui = (fields: Partial<BoardUi>) => fields
 
 /** The lanes and their cards, as board.test.tsx draws them (support/board-scene.tsx). */
-const board = (data: BoardPayload): string =>
+const board = (data: BoardPayload, more: Partial<BoardUi> = {}): string =>
   canonical(
     renderInBoard(
       <Board />,
-      boardContext({ data, now: NOW, ui: ui({ filter: 'all', query: '', sleepers: true, open: null }) }),
+      boardContext({ data, now: NOW, ui: ui({ filter: 'all', query: '', sleepers: true, open: null, ...more }) }),
     ),
     { spaces: true },
   )
 
 /** The toolbar, as toolbar.test.tsx draws it. */
-const toolbar = (data: BoardPayload): string =>
+const toolbar = (data: BoardPayload, more: Partial<BoardUi> = {}): string =>
   canonical(
     renderInBoard(
       <Toolbar limitsAnchor={createRef<HTMLButtonElement>()} />,
-      boardContext({ data, now: NOW, ui: ui({ filter: 'all', sleepers: true }) }),
+      boardContext({ data, now: NOW, ui: ui({ filter: 'all', sleepers: true, ...more }) }),
     ),
   )
 
@@ -154,4 +154,18 @@ test('one profile: the categories panel is phase 1’s', () => {
 test('several folders, one shown: the board and toolbar are still phase 1’s', () => {
   expect(board(FOLDERS)).toBe(board(PHASE1))
   expect(toolbar(FOLDERS)).toBe(toolbar(PHASE1))
+})
+
+test('one profile shown, a profile picked before: the board and toolbar are still phase 1’s', () => {
+  // Work picked while it was shown, hidden since; or the one shown picked.
+  for (const profile of ['work', 'default', 'gone']) {
+    expect(board(FOLDERS, { profile })).toBe(board(PHASE1))
+    expect(toolbar(FOLDERS, { profile })).toBe(toolbar(PHASE1))
+    expect(board(ONE, { profile })).toBe(board(PHASE1))
+    expect(toolbar(ONE, { profile })).toBe(toolbar(PHASE1))
+  }
+  // Sessions that report no profile (no card yet, or from before profiles) still show.
+  const unreported: BoardPayload = { ...FOLDERS, items: PHASE1.items }
+  expect(board(unreported, { profile: 'default' })).toBe(board(PHASE1))
+  expect(toolbar(unreported, { profile: 'default' })).toBe(toolbar(PHASE1))
 })

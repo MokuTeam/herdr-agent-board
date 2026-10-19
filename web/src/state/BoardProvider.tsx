@@ -60,6 +60,7 @@ export function BoardProvider({ children }: { children: ReactNode }) {
     if (live.data) follow(live.data.lang)
   }, [live.data, follow])
   usePersisted('board.filter', ui.filter)
+  usePersisted('board.profile', ui.profile)
   usePersisted('board.sleepers', ui.sleepers ? '1' : '0')
   usePersisted('board.viewed', JSON.stringify(ui.viewed))
 

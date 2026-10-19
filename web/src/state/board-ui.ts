@@ -16,6 +16,11 @@ export interface Toast {
 export interface BoardUi {
   /** The lane on show, or 'all' (kept in localStorage as board.filter). */
   filter: string
+  /**
+   * The profile switch's pick: 'all' or a profile's id (kept in localStorage as board.profile).
+   * One hidden or gone since reads as 'all' (models/profiles.ts pickedProfile).
+   */
+  profile: string
   query: string
   /** Show sessions asleep in the idle column (board.sleepers). */
   sleepers: boolean
@@ -42,6 +47,7 @@ export interface BoardUi {
 
 export type BoardAction =
   | { type: 'filter'; id: string }
+  | { type: 'profile'; id: string }
   | { type: 'query'; text: string }
   | { type: 'toggleSleepers' }
   | { type: 'open'; key: string | null; compose?: boolean }
@@ -71,6 +77,7 @@ export function parseSeen(text: string): Seen {
 export function initialUi(read: (key: string, fallback: string) => string): BoardUi {
   return {
     filter: read('board.filter', 'all'),
+    profile: read('board.profile', 'all'),
     query: '',
     sleepers: read('board.sleepers', '1') === '1',
     viewed: parseSeen(read('board.viewed', '{}')),
@@ -98,6 +105,8 @@ export function boardUi(state: BoardUi, action: BoardAction): BoardUi {
   switch (action.type) {
     case 'filter':
       return { ...state, filter: action.id }
+    case 'profile':
+      return { ...state, profile: action.id }
     case 'query':
       return { ...state, query: action.text }
     case 'toggleSleepers':

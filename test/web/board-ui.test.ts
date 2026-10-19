@@ -10,6 +10,7 @@ const stored = (values: Record<string, string>) => (key: string, fallback: strin
 test('the page state starts from localStorage: lane, sleepers and view receipts, with defaults', () => {
   expect(initialUi(stored({}))).toEqual({
     filter: 'all',
+    profile: 'all',
     query: '',
     sleepers: true,
     viewed: {},

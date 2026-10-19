@@ -13,6 +13,7 @@ import {
   profileIdOf,
   profileReport,
   profileSet,
+  profileTag,
   profileTitleOf,
   resolveProfileDir,
   sessionProfile,
@@ -491,4 +492,46 @@ test('a pane the board opened in another profile is never woken into, the boardâ
     ok: false,
     profile: 'unknown profile',
   })
+})
+
+test('the profile tag: a known profile while the switch shows them all, a hidden one, a folder, a wrong start', () => {
+  expect(profileTag({ profile: 'work' }, L)).toEqual({ kind: 'profile', profile: WORK })
+  expect(profileTag({ profile: 'work' }, L, 'all')).toEqual({ kind: 'profile', profile: WORK })
+  // The switch shows one profile: its cards need no tag.
+  expect(profileTag({ profile: 'work' }, L, 'work')).toBeNull()
+  // No report (no card yet), or a profile the list lacks: none.
+  expect(profileTag({ profile: null }, L)).toBeNull()
+  expect(profileTag({}, L)).toBeNull()
+  expect(profileTag({ profile: 'gone' }, L)).toBeNull()
+  expect(profileTag({ profile: 'work' }, [])).toBeNull()
+  // A folder no profile has is named, never folded into one.
+  expect(profileTag({ profile: null, profileFolder: 'D:\\x' }, L)).toEqual({ kind: 'unknown', folder: 'D:\\x' })
+  expect(profileTag({ profile: null, profileFolder: 'D:\\x' }, L, 'work')).toEqual({ kind: 'unknown', folder: 'D:\\x' })
+  // Started for one profile, running in another: always said, whatever the switch shows.
+  expect(profileTag({ profile: 'default', profileWanted: 'work' }, L)).toEqual({
+    kind: 'wrong',
+    wantId: 'work',
+    want: WORK,
+  })
+  expect(profileTag({ profile: 'default', profileWanted: 'work' }, L, 'default')).toEqual({
+    kind: 'wrong',
+    wantId: 'work',
+    want: WORK,
+  })
+  expect(profileTag({ profile: null, profileFolder: 'D:\\x', profileWanted: 'gone' }, L)).toEqual({
+    kind: 'wrong',
+    wantId: 'gone',
+    want: null,
+  })
+  // A hidden profile's session is named under any pick.
+  expect(profileTag({ profile: 'gamedev' }, L)).toEqual({ kind: 'profile', profile: GAMEDEV })
+  expect(profileTag({ profile: 'gamedev' }, L, 'work')).toEqual({ kind: 'profile', profile: GAMEDEV })
+  // One shown: its sessions untagged, as before profiles; a hidden one's tagged.
+  expect(profileTag({ profile: 'default' }, ONE_SHOWN.list)).toBeNull()
+  expect(profileTag({ profile: 'default' }, ONE_SHOWN.list, 'default')).toBeNull()
+  expect(profileTag({ profile: 'work' }, ONE_SHOWN.list)).toEqual({
+    kind: 'profile',
+    profile: { ...WORK, hidden: true },
+  })
+  expect(profileTag({ profile: 'default' }, LIST1_SET.list)).toBeNull()
 })
