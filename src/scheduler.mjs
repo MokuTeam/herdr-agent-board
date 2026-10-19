@@ -18,6 +18,10 @@
 // board that restarts meanwhile goes on from there. When herdr-wake refuses or fails a few times,
 // or background tasks hold the session too long, the session gets "[board reminder] restart did
 // not happen: <why>" instead, once it is free.
+//
+// It also closes the panes of sessions put in the archive once their time to come back from the
+// page's toast is over (archive.mjs closeDue): a board that restarts meanwhile does it on start.
+import { ARCHIVE_DIR, closeDue, listArchive } from './archive.mjs'
 import { beginReport, deferReport, settleReport, verifyReport } from './call-receipts.mjs'
 import { mkdirSync, watch } from 'node:fs'
 import { readyToSleep, send, sleepSession, wake } from './actions.mjs'
@@ -120,6 +124,8 @@ export function startScheduler({ cfg, log = () => {}, onChange = () => {} }) {
     if (ticking || stopped) return
     ticking = true
     try {
+      const archived = await closeDue({ log }).catch(err => log(`archive: ${err.message}`))
+      if (archived?.closed || archived?.kept) onChange()
       const now = Date.now()
       // A run that waits for its session is tried again once a tick, not on every file change; a
       // restart herdr-wake refused, not before its retry time.
@@ -376,25 +382,27 @@ export function startScheduler({ cfg, log = () => {}, onChange = () => {} }) {
   async function loop() {
     await tick()
     const now = Date.now()
-    const soonest = Math.min(...listEntries().map(e => (e.next <= now ? Infinity : e.next)))
+    // An archived session whose pane is to close counts as an entry.
+    const closing = listArchive().filter(r => r.state === 'closing').map(r => r.closeAt)
+    const soonest = Math.min(...[...listEntries().map(e => e.next), ...closing].filter(at => at > now))
     plan(Math.min(tickMs(), soonest - now + 50))
   }
-  // A new entry may be due sooner than the next tick.
-  let watcher = null
+  // A new entry, or a session put in the archive, may be due sooner than the next tick.
+  const watchers = []
   let watchTimer = null
-  try {
-    mkdirSync(SCHEDULE_DIR, { recursive: true })
-    watcher = watch(SCHEDULE_DIR, () => {
-      clearTimeout(watchTimer)
-      watchTimer = setTimeout(() => plan(0), 300)
-    })
-    // On Windows a watched folder that is deleted errors (EPERM); unhandled, that ends the
-    // board. The ticks go on without it.
-    watcher.on('error', () => {
-      watcher.close()
-      watcher = null
-    })
-  } catch {}
+  for (const dir of [SCHEDULE_DIR, ARCHIVE_DIR]) {
+    try {
+      mkdirSync(dir, { recursive: true })
+      const watcher = watch(dir, () => {
+        clearTimeout(watchTimer)
+        watchTimer = setTimeout(() => plan(0), 300)
+      })
+      // On Windows a watched folder that is deleted errors (EPERM); unhandled, that ends the
+      // board. The ticks go on without it.
+      watcher.on('error', () => watcher.close())
+      watchers.push(watcher)
+    } catch {}
+  }
   plan(1000)
 
   return {
@@ -403,7 +411,7 @@ export function startScheduler({ cfg, log = () => {}, onChange = () => {} }) {
       stopped = true
       clearTimeout(timer)
       clearTimeout(watchTimer)
-      watcher?.close()
+      for (const w of watchers) w.close()
     },
   }
 }

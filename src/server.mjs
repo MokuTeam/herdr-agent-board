@@ -12,11 +12,12 @@ import { extname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { focus, raiseTerminal, send, sleepSession, wake, wakeAnswers } from './actions.mjs'
+import { ARCHIVE_DIR, askArchive, forgetArchived, listArchive, markReturning, publicRecord, readArchiveLog, takeBack, UNDO_MS } from './archive.mjs'
 import { answerPermission, answerQuestions } from './answer.mjs'
 import { checkoutChanges, isCheckout } from './changes.mjs'
 import { searchHistory } from './history.mjs'
 import { localUsage } from './usage.mjs'
-import { liveSessions, sessionThread } from './claude.mjs'
+import { liveSessions, sessionThread, transcriptPath } from './claude.mjs'
 import { helperDetail, helpersOf, publicHelper } from './helpers.mjs'
 import { createLinks } from './links.mjs'
 import { describe, FILE_TOKEN, MEDIA_TYPES, openWith, preview, resolvePath } from './files.mjs'
@@ -24,11 +25,11 @@ import { categoryInfo, colorHex, editCategories, editSettings, laneRank, liveCon
 import { lang, t } from './lang.mjs'
 import { LANGUAGES } from '../web/i18n.js'
 import { herdr, herdrText } from './herdr.mjs'
-import { createLaunches, listDirs, renameSession } from './launch.mjs'
-import { checkName } from '../web/launch-model.js'
+import { createLaunches, cwdOf, listDirs, renameSession } from './launch.mjs'
+import { checkName, defaultWorkspace, UNSAFE_CHARS } from '../web/launch-model.js'
 import { messageGate } from './message-gate.mjs'
 import { mokupilotCommand, startCall } from './mokupilot.mjs'
-import { busy, COLUMNS, collect, forgetSleepers, PINS } from './model.mjs'
+import { busy, COLUMNS, collect, forgetSleepers, noteOf, PINS } from './model.mjs'
 import { parseDialog, publicDialog } from './questions.mjs'
 import { CARDS_DIR, ROOT, STATE_DIR } from './paths.mjs'
 import { askRestart, getEntry, listEntries, readLog, removeEntry, SCHEDULE_DIR, updateEntry } from './schedule.mjs'
@@ -147,6 +148,8 @@ export function startServer({ cfg, log = () => {} } = {}) {
   const terminals = createTerminals({ onChange: () => publish() })
   // On unless config.json says otherwise: only a missing setting or true turns it on.
   const terminalOn = () => cfg.terminal === undefined || cfg.terminal === true
+  // How long a session put in the archive keeps its pane, for Return in the page's toast (archive.mjs).
+  const undoMs = () => (typeof cfg.archiveUndoSec === 'number' && cfg.archiveUndoSec >= 0 ? cfg.archiveUndoSec * 1000 : UNDO_MS)
   // Whether MokuPilot is here for calls with a fork of a session (mokupilot.mjs): looked up again
   // when its setting changes, and once a minute for one installed or removed meanwhile.
   let mokupilot = { key: null, at: 0, on: false }
@@ -194,7 +197,8 @@ export function startServer({ cfg, log = () => {} } = {}) {
     const schedules = listEntries().map(({ claim, tried, waited, ...entry }) => entry)
     // terminal: whether the board offers one (config `terminal`); shells: sessions it opened one for.
     // mokupilot: whether a session's sheet offers a MokuPilot call with a fork of it.
-    return { version, lang: lang(), language: cfg.language ?? 'auto', languages: LANGUAGES, fsToken: FILE_TOKEN, stale, limits: claudeLimits(), items: list, launches: launches.list(), categories, swatches: SWATCHES, columns: COLUMNS.map(({ id, title }) => ({ id, title })), schedules, scheduleLog: readLog(20), terminal: terminalOn(), shells: terminalOn() ? terminals.keys() : [], mokupilot: mokupilotOn(), setup }
+    // archive: what became of the latest sessions put in it (the page's toasts).
+    return { archive: { log: readArchiveLog(8) }, version, lang: lang(), language: cfg.language ?? 'auto', languages: LANGUAGES, fsToken: FILE_TOKEN, stale, limits: claudeLimits(), items: list, launches: launches.list(), categories, swatches: SWATCHES, columns: COLUMNS.map(({ id, title }) => ({ id, title })), schedules, scheduleLog: readLog(20), terminal: terminalOn(), shells: terminalOn() ? terminals.keys() : [], mokupilot: mokupilotOn(), setup }
   }
 
   /**
@@ -321,6 +325,13 @@ export function startServer({ cfg, log = () => {} } = {}) {
         log(`restart ${item.name}: ${again ? 'on its way already' : `asked, ${entry.id}`}`)
         return { ok: true, id: entry.id, again }
       }
+      // Off the board: hidden at once, its pane closed a few seconds later by the scheduler (archive.mjs).
+      case 'archive': {
+        const r = await askArchive({ ...item, note: noteOf(item) }, { by: 'user', grace: undoMs() })
+        if (!r.ok) return { ok: false, why: r.why, error: t(r.why, { name: item.name, why: r.detail ?? '' }) }
+        log(`archive ${item.name}: asked, its pane closes in ${undoMs() / 1000} s${r.held ? `, ${r.held} schedule entries held` : ''}`)
+        return { ok: true, held: r.held, dropped: r.dropped, closeAt: r.record.closeAt }
+      }
       // A MokuPilot call whose agent is a fork of this session; no herdr in it.
       case 'mokupilot':
         return startCall(cfg, item)
@@ -394,6 +405,56 @@ export function startServer({ cfg, log = () => {} } = {}) {
       default:
         return { ok: false, error: `unknown action ${action}` }
     }
+  }
+
+  /** Whether a launch is on its way (not failed, not waved off). */
+  const launchOn = id => launches.list().some(l => l.id === id && l.state !== 'failed')
+  // A Return on its way: its launch runs, or (no launch yet) it is being started right now.
+  const returningOn = ret => (ret.launch ? launchOn(ret.launch) : Date.now() - ret.at < 60_000)
+
+  /**
+   * Bring a session back from the archive: Return before its pane closed puts the card back as it
+   * was; after that, the session is resumed in a new tab (launch.mjs, `--resume <id>`) in the
+   * folder it ran in, in its workspace while herdr has it, else its lane's, with its name and lane.
+   */
+  async function bringBack(key) {
+    // A resume that failed or was waved off does not stand in the way of another; one on its way does.
+    const back = () => takeBack(key, { busy: returningOn })
+    let r = back()
+    // Its pane is being closed right now: Return comes once that is done.
+    for (const end = Date.now() + 20_000; r.wait && Date.now() < end; r = back()) await new Promise(res => setTimeout(res, 300))
+    if (r.wait) return { ok: false, error: t('archive.err.busy') }
+    if (r.gone) return { ok: false, error: t('archive.err.gone') }
+    if (!r.resume) return { ok: true, back: !!r.back, again: !!r.again, name: r.name }
+    const rec = r.resume
+    // The record says a Return is on its way from now on; one that does not get started says so.
+    const fail = error => {
+      markReturning(key, null)
+      return { ok: false, error }
+    }
+    const path = transcriptPath(rec.session, rec.cwd)
+    if (!path) return fail(t('archive.err.noTranscript', { name: rec.name }))
+    // Claude finds a session by the folder it ran in.
+    const cwd = (await cwdOf(path)) || rec.cwd
+    let workspaces
+    try {
+      workspaces = ((await herdr(['workspace', 'list'], 8000))?.workspaces ?? []).map(w => ({ id: w.workspace_id, label: w.label }))
+    } catch (err) {
+      return fail(t('archive.err.herdr', { why: err.message }))
+    }
+    const board = (cfg.placement ?? 'workspace') === 'workspace' ? (cfg.workspace ?? 'Board') : ''
+    const known = new Set([...cfg.categories.map(c => c.id), ...items.map(i => i.category)])
+    const category = known.has(rec.category) ? rec.category : 'other'
+    const own = workspaces.find(w => w.id === rec.workspaceId && w.label === rec.workspace) ?? workspaces.find(w => rec.workspace && w.label === rec.workspace && w.label !== board)
+    const lane = own ? '' : defaultWorkspace({ category: rec.category, title: categoryInfo(cfg, rec.category).title, items, workspaces, board })
+    const id = own?.id || lane
+    const workspace = id ? { id, label: workspaces.find(w => w.id === id)?.label ?? '' } : { create: (rec.workspace || categoryInfo(cfg, rec.category).title || 'Sessions').slice(0, 40) }
+    const name = String(rec.name ?? '').replace(new RegExp(UNSAFE_CHARS.source, 'g'), '').replace(/^[\s/-]+/, '').trim().slice(0, 60) || rec.session.slice(0, 8)
+    const started = await launches.start({ name, cwd, category, workspace }, items, { resume: rec.session })
+    if (!started.ok) return fail(started.error)
+    markReturning(key, started.id)
+    log(`archive ${rec.name}: resuming ${rec.session} in ${cwd}`)
+    return { ok: true, resume: true, launch: started.id, name: rec.name }
   }
 
   /**
@@ -607,6 +668,46 @@ export function startServer({ cfg, log = () => {} } = {}) {
         refresh()
         return json(done ? 200 : 404, done ? { ok: true } : { ok: false, error: t('sched.err.gone') })
       }
+      // The archive: its list, and archiving, bringing back or removing sessions, one or many.
+      if (req.method === 'GET' && path === '/api/archive') {
+        return json(200, { records: listArchive().map(r => publicRecord(r, { returning: !!r.returning && returningOn(r.returning) })), undoMs: undoMs() })
+      }
+      if (req.method === 'POST' && path === '/api/archive') {
+        if (req.headers['x-board'] !== '1') return json(403, { error: 'header' })
+        // It closes panes and starts sessions: like a launch, only from this page.
+        const origin = req.headers.origin
+        if (origin && origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`) return json(403, { error: 'origin' })
+        const body = await readBody(req)
+        const keys = [...new Set((Array.isArray(body.keys) ? body.keys : []).map(String))].slice(0, 200)
+        if (!['archive', 'return', 'remove'].includes(body.op)) return json(400, { error: `unknown op ${body.op}` })
+        // Archiving and bringing back go through herdr: fresh data first, as for a message.
+        if (body.op !== 'remove' && refuseStale()) return json(409, { ok: false, error: t('mobile.readOnly') })
+        const done = []
+        const failed = []
+        for (const key of keys) {
+          if (body.op === 'archive') {
+            const item = find(key)
+            if (!item) {
+              failed.push({ key, error: t('err.gone') })
+              continue
+            }
+            const r = await askArchive({ ...item, note: noteOf(item) }, { by: 'user', grace: undoMs() })
+            if (r.ok) done.push({ key, name: item.name, held: r.held, closeAt: r.record.closeAt })
+            else failed.push({ key, name: item.name, why: r.why, error: t(r.why, { name: item.name, why: r.detail ?? '' }) })
+          } else if (body.op === 'return') {
+            const r = await bringBack(key)
+            if (r.ok) done.push({ key, ...r })
+            else failed.push({ key, error: r.error })
+          } else {
+            const r = forgetArchived(key)
+            if (r.ok) done.push({ key, name: r.record.name })
+            else failed.push({ key, error: t(r.closing ? 'archive.err.closing' : 'archive.err.gone') })
+          }
+        }
+        if (body.op === 'archive' && done.length) log(`archive: ${done.length} asked, their panes close in ${undoMs() / 1000} s`)
+        refresh()
+        return json(done.length || !failed.length ? 200 : 409, { ok: !failed.length, done, failed, ...(failed.length && { error: failed[0].error }) })
+      }
       if (req.method === 'POST' && path === '/api/categories') {
         if (req.headers['x-board'] !== '1') return json(403, { error: 'header' })
         // Written to config.json; the config watcher reloads it and pushes the new board.
@@ -681,11 +782,12 @@ export function startServer({ cfg, log = () => {} } = {}) {
         if (req.method === 'GET' && !m[2]) return json(200, await detail(item))
         if (req.method === 'POST' && m[2]) {
           if (req.headers['x-board'] !== '1') return json(403, { error: 'header' })
-          // Answering a dialog presses keys in a session, a call starts a program: like a launch, only from this page.
+          // Answering a dialog presses keys in a session, a call starts a program, an archive closes a
+          // pane: like a launch, only from this page.
           const origin = req.headers.origin
-          if (['answer', 'permit', 'mokupilot'].includes(m[2]) && origin && origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`) return json(403, { error: 'origin' })
+          if (['answer', 'permit', 'mokupilot', 'archive'].includes(m[2]) && origin && origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`) return json(403, { error: 'origin' })
           // Actions that go through herdr wait for a board that can reach it; card edits and the rest do not.
-          if (['focus', 'wake', 'sleep', 'restart', 'message', 'answer', 'permit'].includes(m[2]) && refuseStale()) return json(409, { ok: false, error: t('mobile.readOnly') })
+          if (['focus', 'wake', 'sleep', 'restart', 'archive', 'message', 'answer', 'permit'].includes(m[2]) && refuseStale()) return json(409, { ok: false, error: t('mobile.readOnly') })
           const body = await readBody(req)
           if (m[2] === 'rename' && body.claude && refuseStale()) return json(409, { ok: false, error: t('mobile.readOnly') })
           const r = await act(item, m[2], body)
@@ -727,17 +829,20 @@ export function startServer({ cfg, log = () => {} } = {}) {
       timer = setTimeout(refresh, 150)
     })
   } catch {}
-  // Entries added or cancelled by agents (`board remind`), and runs the scheduler made.
+  // Entries added or cancelled by agents (`board remind`), and runs the scheduler made; sessions an
+  // agent put in the archive (`board archive`), whose cards go at once.
   let scheduleTimer = null
-  try {
-    mkdirSync(SCHEDULE_DIR, { recursive: true })
-    const watcher = watch(SCHEDULE_DIR, () => {
-      clearTimeout(scheduleTimer)
-      scheduleTimer = setTimeout(refresh, 150)
-    })
-    // A deleted folder errors on Windows (EPERM), which unhandled ends the board; the poll goes on.
-    watcher.on('error', () => watcher.close())
-  } catch {}
+  for (const dir of [SCHEDULE_DIR, ARCHIVE_DIR]) {
+    try {
+      mkdirSync(dir, { recursive: true })
+      const watcher = watch(dir, () => {
+        clearTimeout(scheduleTimer)
+        scheduleTimer = setTimeout(refresh, 150)
+      })
+      // A deleted folder errors on Windows (EPERM), which unhandled ends the board; the poll goes on.
+      watcher.on('error', () => watcher.close())
+    } catch {}
+  }
   let webTimer = null
   try {
     watch(WEB, () => {

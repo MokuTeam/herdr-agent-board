@@ -31,7 +31,7 @@ const ICON = {
  * the mobile Back stack, onStarted(launch) once a session is on its way (the page shows its
  * lane and draws the card), focusLaunch(id) to go to a launch's pane in herdr.
  */
-export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {}, onStarted = () => {}, focusLaunch = () => {} }) {
+export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {}, onStarted = () => {}, focusLaunch = () => {}, onResume = () => {} }) {
   const tr = (k, v) => t()(k, v)
   const store = {
     get: k => { try { return localStorage.getItem(k) } catch { return null } },
@@ -731,7 +731,8 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
     }))
   }
 
-  const stepText = l => (l.state === 'waiting' ? tr('launch.step.dialog') : l.state === 'done' ? tr('launch.step.done') : tr(`launch.step.${l.step}`, { name: options.launcher.name ?? '' }))
+  // A session back from the archive is resumed, not started anew.
+  const stepText = l => (l.state === 'waiting' ? tr('launch.step.dialog') : l.state === 'done' ? tr('launch.step.done') : l.resume && l.step === 'agent' ? tr('archive.step') : tr(`launch.step.${l.step}`, { name: options.launcher.name ?? '' }))
 
   /** The lines a launch adds to a card: how it goes, or why it failed and what to do. */
   function note(l) {
@@ -758,7 +759,7 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
     const l = it.launch
     const icon = l.state === 'failed' || l.state === 'waiting' || l.state === 'trust' ? `<span class="dot" style="--c:var(--orange)"></span>` : `<span class="dot work launching" style="--c:var(--green)"></span>`
     const where = [baseName(l.cwd), l.workspace && tr('meta.workspace', { name: l.workspace })].filter(Boolean).join(' · ')
-    return `<div class="card-top">${icon}<span class="name">${esc(l.name)}</span><span class="age">${esc(tr('launch.new'))}</span></div><div class="said" title="${esc(l.cwd)}">${esc(where)}</div>${note(l)}`
+    return `<div class="card-top">${icon}<span class="name">${esc(l.name)}</span><span class="age">${esc(tr(l.resume ? 'archive.returnLabel' : 'launch.new'))}</span></div><div class="said" title="${esc(l.cwd)}">${esc(where)}</div>${note(l)}`
   }
 
   /** What the buttons in those lines do. Returns true when the click was one of them. */
@@ -768,11 +769,18 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
     const id = b.dataset.id
     const l = (d().launches ?? []).find(x => x.id === id) ?? local.get(id)
     if (b.dataset.launch === 'dismiss') dismiss(id)
-    else if (b.dataset.launch === 'retry' && l) open({ retry: l }, b)
+    else if (b.dataset.launch === 'retry' && l) retry(l, b)
     else if (b.dataset.launch === 'focus') focusLaunch(id)
     else if (b.dataset.launch === 'trust') trust(id, b)
     else if (b.dataset.launch === 'closeTab') closeTab(id, b)
     return true
+  }
+
+  /** Start a failed one again: the window with its values, or, for a session back from the archive, its Return once more. */
+  function retry(l, from) {
+    if (!l.resume) return open({ retry: l }, from)
+    dismiss(l.id)
+    onResume(l)
   }
 
   /** The folder-trust dialog, answered from the card: the server checks the screen before any key. */
@@ -813,7 +821,7 @@ export function initLaunch({ t, toast, canMutate, data, onDialogChange = () => {
     dismiss,
     trust,
     closeTab,
-    retry: (l, el) => open({ retry: l }, el),
+    retry,
     syncAvailability: () => syncGo(),
   }
 }

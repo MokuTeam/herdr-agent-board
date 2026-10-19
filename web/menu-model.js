@@ -4,6 +4,7 @@
 //
 // An item: { id, label, hint?, checked?, disabled?, reason?, danger?, submenu?, color? }, or
 // { separator: true }. `reason` says why a disabled item is gray.
+import { TIDY_DAYS } from './archive-model.js'
 
 /**
  * Where a menu of `size` opens for a click at `point`: down and to the right of it, flipped
@@ -124,7 +125,8 @@ const COLUMN_COLOR = { me: 'var(--orange)', ext: 'var(--purple)', done: 'var(--b
 
 /**
  * A card's menu. `it` is the board item; ctx: { t, canMutate, canEdit, categories, column (where
- * it shows now), category (its lane now), restarting (a restart of it is on its way) }. Items
+ * it shows now), category (its lane now), restarting (a restart of it is on its way), archiveWhy
+ * (why it cannot go to the archive now, a text key, or '') }. Items
  * gray out with the reason when herdr data is stale (going to, waking, sleeping, restarting,
  * renaming in Claude) or the board is offline (card edits).
  */
@@ -176,11 +178,39 @@ export function cardMenu(it, ctx) {
       ].filter(Boolean),
     },
     SEP,
+    // Off the board until Return: its tab closes, Claude keeps the conversation.
+    claude && it.agent === 'claude' && { id: 'archive', label: t('archive.menu'), ...herdr(ctx.archiveWhy ? { disabled: true, reason: t(ctx.archiveWhy) } : {}) },
     { id: 'clear', label: t('menu.clear'), danger: true, ...edit() },
   ])
 }
 
-/** A lane's menu: new sessions there, its category, the filter. */
+/**
+ * "Archive the sleeping ones" with a submenu by how long they have slept, each with its count.
+ * ctx: { t, canMutate, canEdit, tidyCount(days) }. Null when no session sleeps there at all.
+ */
+function tidyItem(ctx) {
+  const { t } = ctx
+  const all = ctx.tidyCount(0)
+  if (!all) return { id: 'tidy', label: t('archive.tidy.menu'), disabled: true, reason: t('archive.tidy.none') }
+  if (!ctx.canMutate) return { id: 'tidy', label: t('archive.tidy.menu'), disabled: true, reason: ctx.canEdit ? t('mobile.readOnly') : t('live.off') }
+  const label = d => (d === 0 ? t('archive.tidy.all') : d === 7 ? t('archive.tidy.week') : t('archive.tidy.days', { n: d }))
+  return {
+    id: 'tidy',
+    label: t('archive.tidy.menu'),
+    submenu: TIDY_DAYS.map(d => {
+      const n = ctx.tidyCount(d)
+      return { id: `tidy:${d}`, label: label(d), hint: String(n), ...(n ? {} : { disabled: true }) }
+    }),
+  }
+}
+
+/** A column head's menu: only "Idle" has one, for taking its sleeping sessions to the archive. */
+export function columnMenu(col, ctx) {
+  if (col !== 'idle') return null
+  return tidy([tidyItem(ctx), SEP, { id: 'archiveOpen', label: ctx.t('archive.menuOpen') }])
+}
+
+/** A lane's menu: new sessions there, its category, the filter, its sleeping sessions to the archive. */
 export function laneMenu(cat, ctx) {
   const { t } = ctx
   const herdr = ctx.canMutate ? {} : { disabled: true, reason: ctx.canEdit ? t('mobile.readOnly') : t('live.off') }
@@ -191,6 +221,8 @@ export function laneMenu(cat, ctx) {
     SEP,
     { id: 'editCat', label: t('menu.editCat', { lane: cat.title }), ...(ctx.canEdit ? {} : { disabled: true, reason: t('live.off') }) },
     only ? { id: 'showAll', label: t('menu.showAll') } : { id: 'showOnly', label: t('menu.showOnly', { lane: cat.title }) },
+    ctx.tidyCount && SEP,
+    ctx.tidyCount && tidyItem(ctx),
   ])
 }
 
@@ -203,6 +235,7 @@ export function boardMenu(ctx) {
     { id: 'newWorkspace', label: t('menu.newWorkspace'), ...herdr },
     SEP,
     { id: 'cats', label: t('menu.cats') },
+    { id: 'archiveOpen', label: t('archive.menuOpen') },
     { id: 'sleepers', label: t('tb.sleepersTitle'), checked: ctx.sleepers },
     ctx.filter !== 'all' && { id: 'showAll', label: t('menu.showAll') },
     { id: 'search', label: t('menu.search'), hint: '/' },
