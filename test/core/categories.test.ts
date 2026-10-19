@@ -1,0 +1,84 @@
+import { beforeEach, test } from 'bun:test'
+import assert from 'node:assert/strict'
+import { categoryFor, categoryInfo, DEFAULT_CONFIG, laneRank, normalizeConfig } from '../../src/core/categories.ts'
+import { useLanguage } from '../../src/core/lang.ts'
+import type { Config } from '../../src/core/types.ts'
+
+beforeEach(() => {
+  useLanguage('en')
+})
+
+const cfg: Config = {
+  ...DEFAULT_CONFIG,
+  categories: [
+    { id: 'acme', title: 'Acme', color: 'blue', paths: ['C:\\Clients'] },
+    { id: 'beta', title: 'Beta', color: 'blue', paths: ['C:\\Beta'] },
+    { id: 'globex', title: 'Globex', color: 'blue', paths: ['C:\\Clients\\Globex'] },
+    { id: 'personal', title: 'Personal', color: 'blue', paths: ['C:\\Home'] },
+    { id: 'other', title: 'Other', color: 'gray', paths: [] },
+  ],
+}
+
+test('category from the folder: longest match wins, case and slashes do not matter', () => {
+  assert.equal(categoryFor(cfg, 'C:\\Clients\\Globex'), 'globex')
+  assert.equal(categoryFor(cfg, 'c:/clients/globex/sub'), 'globex')
+  assert.equal(categoryFor(cfg, 'C:\\Clients\\Initech'), 'acme')
+  assert.equal(categoryFor(cfg, 'C:\\ClientsX'), null)
+  assert.equal(categoryFor(cfg, 'C:\\'), null)
+})
+
+test('lanes agents made up sort before "other" and get their id as title', () => {
+  assert.ok(laneRank(cfg, 'newclient') > laneRank(cfg, 'personal'))
+  assert.ok(laneRank(cfg, 'newclient') < laneRank(cfg, 'other'))
+  assert.equal(categoryInfo(cfg, 'newclient').title, 'newclient')
+})
+
+test('normalizeConfig fills defaults, titles built-in lanes, keeps unknown fields', () => {
+  const c = normalizeConfig({ language: 'ru', futureKey: 1 })
+  assert.equal(c.futureKey, 1)
+  assert.equal(c.language, 'ru')
+  assert.equal(c.refreshSec, 2)
+  assert.deepEqual(
+    c.categories.map(x => x.id),
+    ['work', 'personal', 'other'],
+  )
+  assert.ok(c.categories.every(x => x.title))
+  assert.equal(normalizeConfig(null).language, 'auto')
+  assert.equal(
+    normalizeConfig({ categories: [{ id: 'x', title: 'X', color: 'red', paths: [] }] }).categories[0]?.title,
+    'X',
+  )
+})
+
+test('normalizeConfig keeps every object of a hand-edited list as upstream, skips the rest, the defaults when none is left', () => {
+  const c = normalizeConfig({
+    categories: [
+      null,
+      'x',
+      7,
+      ['y'],
+      { title: 'No id' },
+      { id: 7, paths: ['C:\\Seven'] },
+      { id: 'acme', title: 'Acme' },
+    ],
+  })
+  // Upstream's lanes: a numeric id is titled by itself, an id-less one keeps its title.
+  assert.deepEqual(
+    c.categories.map(x => [x.id, x.title]),
+    [
+      [undefined, 'No id'],
+      [7, 7],
+      ['acme', 'Acme'],
+    ],
+  )
+  // A numeric id still routes the sessions in its folders, as upstream's does.
+  assert.equal(categoryFor(c, 'C:\\Seven\\app'), 7)
+  assert.deepEqual(
+    normalizeConfig({ categories: [null, { id: 3 }] }).categories.map(x => x.id),
+    [3],
+  )
+  assert.deepEqual(
+    normalizeConfig({ categories: [null, 'x', 7, []] }).categories.map(x => x.id),
+    ['work', 'personal', 'other'],
+  )
+})

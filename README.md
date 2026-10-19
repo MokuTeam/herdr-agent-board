@@ -13,8 +13,10 @@ current with the `board` command; a SessionStart / UserPromptSubmit hook tells e
 
 ## Setup
 
-Node 20 or newer, no dependencies. Windows, Linux and macOS (desktop notifications: Windows only).
-Steps 1 and 2 are what the board needs; the rest adds to it.
+[Bun](https://bun.com/docs/installation) 1.4.3 or newer. `herdr plugin install` runs
+`bun install --production` (react and react-dom, its only dependencies); after `herdr plugin link`, run
+`bun install` in the folder yourself. Windows, Linux and macOS (desktop notifications: Windows
+only). Steps 1 and 2 are what the board needs; the rest adds to it.
 
 1. **The plugin and its install** (required).
 
@@ -32,13 +34,26 @@ Steps 1 and 2 are what the board needs; the rest adds to it.
    replaces only its own entries in `~/.claude/settings.json`, keeps a copy of the file before
    (`settings.json.bak-agent-board`), leaves a command of someone else's name alone, and ends with
    the check below. `~/.local/bin` must be on PATH. Run it again after the plugin moved or was
-   updated: the hooks and the commands point at the plugin's folder.
+   updated, or Bun moved: the hooks and the commands point at the plugin's folder and run the Bun
+   that ran the install action.
 
-   Claude profiles: with more than one Claude config folder (`CLAUDE_CONFIG_DIR`, or folders
-   such as `~/.claude-work` beside `~/.claude` that Claude ran in), the board shows the sessions
-   of all of them, and the install puts the hooks and the skill into each (run it again after
-   adding a profile). A session brought back from the archive, or forked into MokuPilot, runs
-   with its own profile again. With `~/.claude` alone nothing changes.
+   With more than one Claude profile (`CLAUDE_CONFIG_DIR` folders such as `~/.claude-work`) it
+   does the same in the `settings.json` of every profile the board shows, each with its own
+   backup, and puts the skill into each one's `skills` folder; a hidden profile is left alone,
+   and a shown one whose folder is gone is skipped, saying so. One `settings.json` that does not
+   parse stops it before anything is written. It never touches credentials, `.claude.json` or
+   anything else in a profile folder beyond `settings.json`, its backup and
+   `skills/herdr-agents`. A profile shown later gets its hooks and the skill from the install
+   action again, or from Install in the Profiles panel.
+
+   A session brought back from the archive runs in its own profile again, hidden or not, never in
+   another: the one its card reports (or, on a card from before profiles, the only profile
+   shown), its conversation looked for in that profile's folder only. It stays in the archive,
+   saying why, when the board cannot be sure: that profile is no longer listed, the card does not
+   say its profile while more than one is shown, the session ran in another profile than its
+   start asked for, or its conversation is in another profile's folder. A MokuPilot call is still
+   refused outside the board's own profile ([Web board](#web-board)). With `~/.claude` alone
+   nothing changes.
 2. **A key** (recommended), in herdr's `config.toml` (`%APPDATA%\herdr\config.toml` on Windows,
    `~/.config/herdr/config.toml` elsewhere), then `herdr server reload-config`. Without it the
    board opens with `herdr plugin action invoke agent-board.open`.
@@ -72,9 +87,17 @@ Steps 1 and 2 are what the board needs; the rest adds to it.
 `board doctor` (or `herdr plugin action invoke agent-board.doctor`) says what is set up and what
 is not, what each missing piece costs and how to fix it: the commands (and whether PowerShell or
 Git Bash finds someone else's of that name first), the hooks and the status line (and whether they
-run this copy of the plugin), the key, herdr-wake, how new sessions start, MokuPilot, the notifications. The
+run this copy of the plugin; with more than one profile shown, in each, by its name), the key,
+herdr-wake, how new sessions start, MokuPilot, the notifications. The
 web board says it too, quietly: "Setup incomplete" in its toolbar while something the board needs
 does not work (see [Web board](#web-board)).
+
+Back to `main` (the Node version): its install action does not know this one's entries and
+would leave them beside its own. First take them out of `~/.claude/settings.json`: the
+`SessionStart` and `UserPromptSubmit` hooks that run `src/entrypoints/hook.ts`, the
+`statusLine` that runs `src/entrypoints/statusline.ts`, and the notification hooks that run
+`src/integrations/toast.ps1`. Then put `main` in the plugin's folder and run its install action
+again, which writes its own `node "…/src/hook.mjs"` hooks, status line and commands.
 
 ## Web board
 
@@ -84,12 +107,12 @@ terminal board or `herdr plugin action invoke agent-board.web`: an Edge app wind
 raised when it is already open.
 
 To land on one session, from a desktop notification's click handler (the board's own
-[notifications](#notifications) do this) say: `node src/web-open.mjs --pane <herdr pane id>`. The board's window comes up and opens that session's sheet (a page in
-a minimized or covered window is told as it connects again, within 15 s); with no board window,
-a new one opens on it (`#session=<key>` in its address). It does not start the
-board: exit code 3 means the board does not run or has no session in that pane, so the handler
-can go to the pane in herdr instead. The same goes to the board as `POST /api/reveal` with
-`{ "pane": "<id>" }` or `{ "key": "<session>" }`.
+[notifications](#notifications) do this) say: `bun src/entrypoints/web-open.ts --pane <herdr pane id>`.
+The board's window comes up and opens that session's sheet (a page in a minimized or covered window
+is told as it connects again, within 15 s); with no board window, a new one opens on it
+(`#session=<key>` in its address). It does not start the board: exit code 3 means the board does not
+run or has no session in that pane, so the handler can go to the pane in herdr instead. The same
+goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "<session>" }`.
 
 - Lanes by category, columns by state, live over Server-Sent Events. A column with no card on
   show narrows to its head (name and count) and the others share its room, gliding as it fills
@@ -128,7 +151,10 @@ can go to the pane in herdr instead. The same goes to the board as `POST /api/re
   is free (woken if it sleeps), for its information, as `[mokupilot call report]`, the report, and
   a note not to start work on it unless you ask; its conversation shows "MokuPilot call results"
   as a quiet line that opens to the report, its paths (the full protocol, the transcript) as file
-  chips.
+  chips. With more than one Claude profile, a call goes only from a session in the board's own
+  profile (the one its `CLAUDE_CONFIG_DIR` points to): a running MokuPilot takes the call over in
+  its own env, so a fork of a session in another profile would run in the wrong account. The board
+  refuses that call before anything starts, saying so.
 - The sheet's place and size are the viewer's own (kept in this browser): docked right, left or
   at the bottom, flush with that edge like a sidebar, where the board makes room for it (a window
   too narrow for that keeps the board's columns and lays the sheet over them), or floating over
@@ -208,6 +234,148 @@ can go to the pane in herdr instead. The same goes to the board as `POST /api/re
   gives its herdr agent the same name, so other sessions and herdr-wake see it: only when ticked,
   and only while the session is idle (not working, not asleep).
 
+## Claude profiles
+
+Claude Code keeps its account, settings and sessions in a config folder: `~/.claude`, or the one
+`CLAUDE_CONFIG_DIR` names. With one folder per account (`~/.claude-work` for work, say), the board
+shows the sessions of all of them, each with its profile, and starts a session in the profile you
+choose. It never guesses: when it cannot be sure of the profile, it refuses and says why.
+
+**What it finds.** `~/.claude`, the folder the board's own `CLAUDE_CONFIG_DIR` points to, and
+every `~/.claude-<name>` folder with a `settings.json`, a `projects/` or a `sessions/` in it
+(Claude ran in it; a `<name>` with a dot, such as `work.bak`, is none). It keeps them in config.json
+as `profiles`, each with an `id` from its folder (`~/.claude` is `default`, `~/.claude-work` is
+`work`), a `title` ("Default", "Work"), its folder (`dir`), a `color`, `hidden`, and, if you like,
+`command` (its start command, below) and `args` (more Claude arguments for the sessions the board
+starts in it). `~/.claude` and the board's own folder come in shown (`~/.claude` only while it has
+a `settings.json` or a `projects/`, when the board's own is elsewhere: a teammate whose
+`CLAUDE_CONFIG_DIR` names another folder keeps one profile), any other folder hidden, so a backup
+or a test folder changes nothing on the board. Renaming a profile, or giving it another color,
+never changes its id or its folder.
+
+**One profile shown** (a teammate's board, and yours until you show a second): no profile switch,
+no profile choice for a new session, no `--env` on a start, and no tag on a card but the three
+below that warn: the board is as it was before profiles, unless you give its profile a start
+command. Settings has "Profiles…" once the board finds more than one profile folder.
+
+**The Profiles panel** (Settings → Profiles…), built like Categories: a row per profile with its
+color, its name (Enter or leaving the field keeps it, Esc puts it back), its folder, its sessions
+now, Shown or Hidden (one stays shown), and its "Start command" (Enter or leaving the field keeps
+it, Esc puts it back, empty clears it; its placeholder is what is typed without one, `claude` or
+`launch.claude`'s program). Under the rows, a hint on what a start command does; below it,
+"Add <folder>" for a folder a session runs in that no profile has, "Add a folder somewhere else"
+(`~` is the home folder; the folder must be there), and, for a shown profile whose `settings.json`
+lacks the board's hooks, a note with Install, which writes the hooks, the status line and the
+agents' skill there as the [install](#setup) does and checks the setup again at once. Hiding a
+profile takes it out of the switch, out of the profiles a session can be started in, and out of
+Install. Its running sessions still show, with their tag, and their agents can still start helpers
+in it.
+
+**A start command per profile.** A profile's `command` is what the board types at the new tab's
+shell prompt instead of `launch.claude`, for every start that types one: the board's, with the
+default launcher (the new-session window, "New here"), and an agent's own `spawn-agent` (its
+helpers); in the board's own profile too. It is a program, alias or function the tab's shell
+knows, with arguments if you like: a string, split on spaces, or a list, typed by `launch.claude`'s
+rules (see [spawn-agent](#spawn-agent)). It may not set environment variables
+(`CLAUDE_CONFIG_DIR=~/.claude-work claude`, `env FOO=1 claude`): in bash that would override the
+folder the board sets for the profile, so such settings go in the alias. The board adds the
+profile's `args` after it (not `launch.args`), then `--session-id` (none when the command picks its
+session itself, with `--resume` say). `launch.agent` and `launch.command` do not use it, and the env
+rule does not change: a start that sets `CLAUDE_CONFIG_DIR` through `--env` without a command still
+does with one. With these in Git Bash, say:
+
+```bash
+alias cld='CLAUDE_CONFIG_DIR=$HOME/.claude command claude --allow-dangerously-skip-permissions'
+alias cld-work='CLAUDE_CONFIG_DIR=$HOME/.claude-work command claude --allow-dangerously-skip-permissions'
+```
+
+and `"command": "cld"` on Default, `"command": "cld-work"` on Work (or their "Start command" in the
+panel), a Work session from the board types `cld-work --session-id <id>`, so a flag added to the
+alias reaches it without touching the board. An alias that names another profile's folder runs its
+session there. The card's red "Wrong profile" tag and herdr's notification say so when the board
+knows which session the start made: by the session id the board passes, or `--session-id` to
+`spawn-agent`. A helper an agent starts without `--session-id` gets no tag, nor does a helper whose
+command picks its own session (`--resume`, `--continue`). A board start with such a command gets
+one only if herdr reports the new tab's session within two minutes of the start. A command that
+breaks the rules is refused with the reason: on save in the panel, and at a start that types it,
+before anything runs.
+
+**Which profile a session is in.** The hooks and the status line run in the session's env: they
+read its `CLAUDE_CONFIG_DIR` (unset is `~/.claude`) and write the profile on its card. A folder is
+the same however it is spelled (`C:\Users\me\.claude-work\`, `c:/users/me/.claude-work`,
+`~/.claude-work`). The board reads a session's name, title, conversation and helpers from its
+profile's folder, a hidden one's too. A session no hook has reported on yet shows as a bare herdr
+pane does, without a tag.
+
+**Tags.** With two or more profiles shown, under "All profiles", a card names its profile: the
+profile's name in its color (its folder in the tooltip). Three tags show however many are shown:
+a session in a hidden profile names it; one in a folder no profile has says "unknown profile" in
+gray (the folder in the tooltip; the Profiles panel offers to add it, and it is never taken for
+another profile); one whose hooks report another profile than its start asked for says "Wrong
+profile: started for …" in red, and herdr notifies you. That session is not stopped. The terminal
+board tags a session's line the same way, before its age ("wrong profile" in red there); it has no
+switch, so it tags as "All profiles" does.
+
+**On the web board**, with two or more profiles shown:
+
+- The profile switch in the toolbar, by the lanes: "All profiles" or one profile, each with the
+  sessions its pick shows. It filters the cards, those of sessions on their way included, as the
+  lanes do; a session in the wrong profile or in a folder no profile has shows under every pick,
+  so you always see it. This browser keeps the pick.
+- Usage per profile: the pill shows each profile with a reading of the last half hour, the popover
+  every shown profile's windows (5h, 7d) or "No session lately". The status line keeps each
+  profile's windows apart in the state folder (`claude-limits-latest.json` for `default`, as
+  before; `claude-limits-profile-<id>.json` for another), and without it the board reads the
+  usagebar cache in the profile's own folder (`herdr-usagebar/`). With one profile shown the pill
+  is as before: the board's own profile's windows.
+- A lane's usual profile: "Usual profile" on its row in Categories. A new session in that lane
+  (its **+**, say) starts with it picked.
+
+**Starting a session in a profile.** The new-session window has a segment per shown profile.
+Picked to start with, the first that fits: from a card, that session's profile, with no other to
+choose; the lane's usual profile; the profile last used in that folder (this browser keeps it);
+else none, and Start waits until you pick one. The pick shows in its color next to Start. A start
+in the board's own profile (the one its `CLAUDE_CONFIG_DIR` points to) leaves the env as the board
+got it; any other profile gets `CLAUDE_CONFIG_DIR=<its folder>` through herdr's `--env`
+(`tab create`, or `workspace create` for a new workspace; with `launch.command`, in its process
+env, and a new workspace for it is still made with `workspace create --env`, its first pane
+recorded). herdr's `--env` needs herdr 0.9.5 or newer. The plugin itself still
+runs on herdr 0.9.2; there only a start that needs herdr's `--env` fails, saying so, and no Claude
+is started. What the board refuses and the "wrong profile" check: [New sessions](#new-sessions).
+
+**Helpers and forks keep their parent's profile.** "New here" from a card starts in that card's
+profile and no other (from a card in the wrong profile, you choose). `spawn-agent`, run by an
+agent, starts the new session in the agent's own profile, hidden or not; `--profile <id>` names
+another, shown one. See [spawn-agent](#spawn-agent). A MokuPilot call is the exception: it goes
+only from a session in the board's own profile, since a running MokuPilot takes the call over in
+its own env and a fork from another profile would run in its account. The board refuses the call
+from any other profile before anything starts (see [Web board](#web-board)).
+
+**Waking stays in the profile.** herdr-wake resumes a sleeping session in its pane, with the env of
+that pane's shell. So the board wakes (the Wake button, Enter on the terminal board, a message, a
+reminder) only a session in its own profile, or one in a pane the board opened with that session's
+profile; any other it refuses, saying why. The rules are under [Schedule](#schedule). herdr-wake
+also wakes sessions by itself (after its idle hour put one to sleep, or for a Telegram message),
+which the board cannot stop. So start a work session where its pane carries the profile:
+
+- From the board: the new-session window or "New here" on a work card, with the default launcher
+  or `launch.agent`, or `spawn-agent` (a work agent's helpers too). The new tab has
+  `CLAUDE_CONFIG_DIR`, so every wake resumes in work, and the board, which records the pane, wakes
+  it too (while herdr shows the pane still holds the terminal it opened). The panes a
+  `launch.command` opens itself are not recorded (only the first pane of a new workspace, which the
+  board makes with `--env`, is), so the board does not wake a session there, and herdr-wake
+  resumes in work only if your command puts the variable in the pane's shell.
+- Or in a pane whose shell has the variable exported (`export CLAUDE_CONFIG_DIR=~/.claude-work`,
+  then `claude`): herdr-wake's own wakes resume there in work. The board cannot see a shell's env,
+  so it does not wake such a session itself: wake it in herdr.
+
+An alias like `cld-work` (`CLAUDE_CONFIG_DIR=$HOME/.claude-work claude …`) sets the variable for
+that one Claude, not for the pane's shell, so a resume in that pane would start in `~/.claude`. The
+board refuses to wake those sessions. herdr-wake resuming one by itself is expected to fail, as
+Claude finds no such session in `~/.claude`; wake it in its pane yourself with `cld-work --resume`.
+A session the board starts with `"command": "cld-work"` still opens its tab with work's
+`CLAUDE_CONFIG_DIR`, so waking it stays in work.
+
 ## New sessions
 
 The window asks for a name, a folder, the lane, where to open it (one of herdr's workspaces or a
@@ -241,9 +409,10 @@ How it starts, by `launch` in config.json:
 
 - Nothing set (the default): the board's own [spawn-agent](#spawn-agent), run as a launcher (see
   `launch.command` below), with a session id the board picked, so the card has its lane before
-  Claude starts. A new workspace's first tab is used for the session. `launch.claude` (`"claude"`)
-  is what it types into the tab: a program, or a list of the program and its arguments, such as
-  `["claude", "--dangerously-skip-permissions"]` or `["claude-tg"]`. Without it, `launch.args`
+  Claude starts. A new workspace's first tab is used for the session. `launch.claude` (`"claude"`),
+  or the profile's start command ([Claude profiles](#claude-profiles)), is what it types into the
+  tab: a program, or a list of the program and its arguments, such as
+  `["claude", "--dangerously-skip-permissions"]` or `["claude-tg"]`. Without either, `launch.args`
   (from before the board had its own launcher) are `claude`'s arguments. `launch.timeoutSec`
   (120) is how long it waits for Claude to be ready. When Claude stops at a dialog before that, the card
   says so: the folder trust as below, any other in herdr; the board then names the session and
@@ -257,9 +426,9 @@ How it starts, by `launch` in config.json:
 - `launch.command`: your own launcher, run without a shell. The first element is the program,
   each other element one argument, with `{name}`, `{label}`, `{cwd}`, `{workspace}` (herdr
   workspace id), `{workspaceLabel}`, `{category}`, `{message}`, `{messageFile}` (the first message
-  in a UTF-8 file), `{sessionId}` or `{resume}` (the id of a session coming back from the
-  [archive](#archive), empty for a new one) filled in; a nested list is left out when a value in it is
-  empty. Nothing from the request becomes a program or an option: values only fill those
+  in a UTF-8 file), `{sessionId}`, `{resume}` (the id of a session coming back from the
+  [archive](#archive), empty for a new one), `{profile}` (the Claude profile's id) or `{profileDir}` (its
+  folder) filled in; a nested list is left out when a value in it is empty. Nothing from the request becomes a program or an option: values only fill those
   places. It runs with `HERDR_WORKSPACE_ID` set to the chosen workspace (the board itself lives
   in a workspace of its own) and should print `pane=<pane id>` when the session is up; it fails
   with a non-zero exit, its last error line is the reason shown. A new workspace's first tab is
@@ -283,23 +452,48 @@ How it starts, by `launch` in config.json:
 }
 ```
 
+With more than one Claude profile shown (`CLAUDE_CONFIG_DIR` folders such as `~/.claude-work`),
+the session starts in the profile chosen in the window; with one shown, in that one, as before. A
+session started from another one ("New here") starts in that session's profile, hidden or not,
+and in no other; when the board does not know that session's profile, or the session runs in
+another profile than its start asked for, choose one. The board's own
+profile, the one its own `CLAUDE_CONFIG_DIR` points to (unset is `~/.claude`, however the folder is
+spelled), keeps the env exactly as the board inherited it: no `--env`, nothing changes for a
+teammate. Any other profile gets `CLAUDE_CONFIG_DIR=<its folder>`: on the tab with
+`herdr tab create --env` (`herdr workspace create --env` for a new workspace) for spawn-agent and
+`launch.agent`, which needs herdr 0.9.5 or newer, or in the process env of a `launch.command`. The
+board records the panes it opened with a profile's env, so it knows they run in that profile (a
+launcher command's own panes are not recorded). The profile's `args` go to Claude after its other
+arguments, before `--session-id` (spawn-agent and `launch.agent`'s `claude`). The board never
+falls back to another profile: it refuses the start before anything runs when
+
+- more than one profile is shown and none is chosen;
+- the profile chosen is hidden (show it in Settings → Profiles), or not listed;
+- another profile is chosen than the one of the session it was started from;
+- the board does not know the profile of that session, and none is chosen;
+- the profile's folder is not there.
+
+herdr that does not take `--env` fails the start, saying so: no Claude was started. The card of a
+session the board started says the profile it was meant to run in, so a session whose hooks report
+another one shows the "wrong profile" warning; it is not stopped.
+
 ### spawn-agent
 
 The command the board starts sessions with, and agents start other sessions with (the install
-puts it on PATH; it is `node src/spawn.mjs`):
+puts it on PATH; it is `bun src/entrypoints/spawn-agent.ts`):
 
 ```
 spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
             [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
-            [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--pane <herdr pane id>]
+            [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--pane <herdr pane id>] [--profile <id>]
 ```
 
 PowerShell's spelling works too: `-Name`, `-Cwd`, `-Label`, `-BriefFile`, `-Brief`, `-Workspace`,
-`-TimeoutSec`. It opens a tab in the workspace (inside herdr the current one, from
-`HERDR_WORKSPACE_ID`), labelled with `--label` or the name, and types `launch.claude` into it
-(with `--session-id` when given). Once herdr sees Claude ready, it gives the agent a herdr name to
-address it by (the name in `[a-z0-9_-]`, Cyrillic spelled in Latin, `-2` when taken), types
-`/rename <Name>`, then the brief. It prints
+`-TimeoutSec`, `-Profile`. It opens a tab in the workspace (inside herdr the current one, from
+`HERDR_WORKSPACE_ID`), labelled with `--label` or the name, and types the profile's `command`, or
+`launch.claude`, into it (with `--session-id` when given). Once herdr sees Claude ready, it gives
+the agent a herdr name to address it by (the name in `[a-z0-9_-]`, Cyrillic spelled in Latin, `-2`
+when taken), types `/rename <Name>`, then the brief. It prints
 
 ```
 pane=<pane id> name=<Name> agent=<herdr name>
@@ -313,6 +507,38 @@ start another. A `/rename` that does not take is only a warning. `--pane` starts
 pane instead of a new tab; it must be at a shell prompt, not running an agent. `--resume` brings
 back a session that ended (`launch.claude` with `--resume <uuid>`, run in the folder the session
 ran in): it keeps its name, so no `/rename` is typed; the board's [archive](#archive) uses it.
+
+With more than one Claude profile (`CLAUDE_CONFIG_DIR` folders such as `~/.claude-work`), a
+session an agent starts keeps that agent's profile, the one its own `CLAUDE_CONFIG_DIR` points to,
+even when the profile is hidden on the board: a helper of a work session runs in work.
+`--profile <id>` starts it in another profile instead, one the board lists and shows. The
+profile's `args` go after the profile's `command`, or `launch.claude`, before `--session-id`. The
+default profile (`~/.claude`) is the one herdr's own env is taken to be: a start in it, the agent's
+own or `--profile default`, leaves the new tab's env as herdr makes it, as before profiles. For any
+other profile, the agent's own or the one `--profile` names, the new tab gets
+`herdr tab create --env CLAUDE_CONFIG_DIR=<folder>`, which needs herdr 0.9.5 or newer. spawn-agent
+then records the pane as opened in that profile, with the terminal herdr opened it with. With
+`--session-id`, every start, one that leaves the env alone included, writes the card as meant to
+run in its profile, so a session that reports another profile (herdr's own env pointing to another
+one, or an alias, say) shows the "wrong profile" warning. Without `--session-id` it writes no such
+card, and with a command that picks its own session (`--resume`, `--continue`) the card is not that
+session's: neither start shows the warning. spawn-agent never falls back to another profile: it
+refuses, before herdr opens, renames or types anything, when
+
+- the agent's own folder is not a profile the board knows (or is named relative to where it
+  runs): pass `--profile <id>`;
+- `--profile` names a profile the board does not list, or one that is hidden (show it first);
+- the profile's folder is not there;
+- `--pane` names a pane not opened in that profile, or, for a start in the default profile, one
+  that may have been opened in another (leave `--pane` out to get a new tab). herdr is asked
+  first which terminal the pane holds: after herdr starts over it gives a pane's id out again.
+  A start in a profile takes the pane only when herdr shows it holds the terminal it was
+  recorded with; a start in the default profile is refused unless herdr shows it holds another.
+
+herdr that does not take `--env` fails the start too, saying so: nothing was started. The board's
+own launches pass `--config-dir <folder>` (the folder of a profile it lists, which it checked; any
+other folder is refused) or `--keep-env` (the env as herdr makes it) instead of `--profile`; only
+one of the three goes at a time.
 
 Details it takes care of: `/rename` runs without a turn, so herdr calls it stalled, and the
 screen is read for "Session renamed" instead. Right after it Claude can drop typed text, and a
@@ -376,7 +602,7 @@ dialog). `send-text` types its text literally (backslashes and a leading dash in
 0.9); an own answer that starts with a dash still goes with a space before it, as the board's
 other calls do, and the board then takes that space out of the field (Ctrl+A, right, Backspace)
 and checks it is gone, since Claude Code would keep it in the answer. How the form takes keys,
-as found on a live session (Claude Code 2.1, `src/questions.mjs`):
+as found on a live session (Claude Code 2.1, `src/core/dialogs/questions.ts`):
 
 - The cursor starts on option 1. In a single-choice question a digit picks that option and moves
   on at once; a lone question is then submitted. With previews a digit only moves the cursor and
@@ -419,8 +645,9 @@ What keeps it from pressing keys in the wrong place:
 `POST /api/session/<key>/answer` with `{ session, toolUseId, answers: [{ options: [labels],
 other }] }` and `POST /api/session/<key>/permit` with `{ session, fingerprint, option }` (the
 fingerprint comes with the sheet's data); both need the `X-Board` header. Code:
-`src/questions.mjs` (the questions, the screen, the keys), `src/answer.mjs` (the steps through
-herdr), `web/questions.js` and `web/question-model.js` (the form).
+`src/core/dialogs/questions.ts` (the questions, the screen, the keys), `src/services/answer.ts` (the
+steps through herdr), `web/src/components/questions/` and `web/src/models/question-model.ts` (the
+form).
 
 ## Terminal
 
@@ -485,8 +712,10 @@ It runs commands on this computer, so:
 `GET /api/term/<key>/<agent|shell>/stream?t=<fsToken>` (the screen, then line diffs),
 `POST /api/term/<key>/shell/open`, `/shell/close`, `/shell/focus`, and
 `POST /api/term/<key>/<agent|shell>/input` with `{ session, steps: [{ text } | { key }] }`.
-Code: `src/terminal.mjs` (the shell, the reads, the input), `web/terminal.js` (the window),
-`web/term-model.js` (ANSI, line diffs, links, the caret), `web/term-keys.js` (keys, both ends).
+Code: `src/services/terminals.ts` (the shell, the reads, the input), `src/server/routes/terminal.ts`
+(the routes), `web/src/hooks/useTerminal.ts` and `web/src/components/terminal/Terminal.tsx` (the
+window), `src/core/terminal/term-model.ts` (ANSI, line diffs, links, the caret),
+`src/core/terminal/term-keys.ts` (keys, both ends).
 
 ## Helpers and linked sessions
 
@@ -553,7 +782,11 @@ its window is open.
 `GET /api/session/<key>` carries `helpers` and `workflows`; `GET /api/session/<key>/helper/<id>`
 one helper with its conversation, where the id only picks among that session's own helpers. The
 board payload has each item's `helpers` (counts and the newest at work) and `links`. Code:
-`src/helpers.mjs`, `src/links.mjs`, `web/helpers.js` (the window), `web/helper-model.js`.
+`src/core/helpers.ts` and `src/adapters/helpers.ts` (what the files say, and reading them),
+`src/core/links.ts` and `src/adapters/links.ts` (who works with whom), `src/core/transcript-links.ts`
+(the calls and messages in a transcript), `src/server/routes/helpers.ts`, `web/src/components/helpers/`
+(the window, the rows, the card's and the sheet's parts), `web/src/hooks/useHelpers.ts`,
+`web/src/models/helper-model.ts`.
 
 ## Moving a card by hand
 
@@ -603,6 +836,19 @@ are files, and the board keeps running.
 - With no board running the scheduler, `board remind` says so; the entry goes out once one runs.
 - At most two sleeping sessions are woken at once. An entry cancelled while its session wakes
   up is not sent.
+- With more than one Claude profile, a sleeping session is woken only where it resumes in its own
+  profile: herdr-wake restarts Claude in the session's pane, with that pane's env. So the board
+  wakes a session of its own profile (the one its `CLAUDE_CONFIG_DIR` points to), or one in a pane
+  the board opened with that session's profile, while herdr shows the pane still holds the
+  terminal it opened. A session started outside the board in another profile is not woken: a
+  reminder for it is held, its reason "Started outside the board in profile …, so waking could
+  resume it in the wrong account; wake it in herdr where you started it", and tried again every
+  tick like any held one. Nor is a session in a pane the board opened with another profile's env,
+  the board's own profile included, unless herdr shows the pane now holds another terminal: its
+  reason "Its pane was opened in profile …". A session whose card names no profile yet is in the
+  one profile shown, when one is. The Wake button, "Go to herdr" and a message refuse alike.
+  The board forgets a pane it opened once herdr no longer has it, or gave its id to another
+  terminal.
 - Runs that came due while the board was off: a one-off is sent once, saying how late it is; a
   cron entry sends one prompt for all the runs it missed, saying how many. Time the board was
   off does not count against the wait.
@@ -615,7 +861,7 @@ are files, and the board keeps running.
   scheduler marks its run never brings it back. Before sending, the scheduler claims the entry
   in its file: a second board running at the same time (a restart that overlaps) never sends a
   run twice. `log.jsonl` there keeps the last 200 runs.
-- The scheduler runs in the web board's server (`src/scheduler.mjs`), one per machine since
+- The scheduler runs in the web board's server (`src/services/scheduler.ts`), one per machine since
   only one board holds the port; with `web: false` the terminal board runs it.
 - At most 30 entries per session.
 - The terminal board shows `⏰` (`⏳` for one that waits until the session is free) and the soonest
@@ -640,13 +886,14 @@ agent cannot reconnect from inside its own turn (`/mcp` is a menu in its own ter
   `board schedule` and the web board's schedule list it, `board unschedule <id>` or the trash
   can cancel it. Asked again before it happens, it stays one restart (a newer note replaces the
   old one).
-- The scheduler waits until the session is free: its turn over (for herdr and in Claude's own
-  session registry), no dialog, no text you started typing, no background command or Monitor
-  running (that for 10 minutes at most). Then herdr-wake puts it to sleep (`POST /sleep`, which
-  types `/exit`) and wakes it (`POST /wake`). 8 seconds later, so that its MCP servers have a
-  moment to connect, the board types `[board reminder; restarted as you asked] <note>` into it
-  (`Carry on.` without a note). After a restart you asked for, the prompt says you did, and that
-  its MCP servers, settings, hooks, skills and CLAUDE.md are loaded anew.
+- The scheduler (`src/services/scheduler.ts`) waits until the session is free: its turn over
+  (for herdr and in Claude's own session registry), no dialog, no text you started typing, no
+  background command or Monitor running (that for 10 minutes at most). Then herdr-wake puts it
+  to sleep (`POST /sleep`, which types `/exit`) and wakes it (`POST /wake`). 8 seconds later, so
+  that its MCP servers have a moment to connect, the board types
+  `[board reminder; restarted as you asked] <note>` into it (`Carry on.` without a note). After
+  a restart you asked for, the prompt says you did, and that its MCP servers, settings, hooks,
+  skills and CLAUDE.md are loaded anew.
 - How far it got is kept in the entry (`step`): a board that stops halfway leaves the session
   asleep at worst, and the next one wakes it and types the note.
 - herdr-wake refusing or failing is tried again, three times in all. Then an agent hears
@@ -668,6 +915,16 @@ agent cannot reconnect from inside its own turn (`/mcp` is a menu in its own ter
   finish or stop them first and to put what is due later into `board remind`.
 - A restart is for the session that asked: after `/clear` (a new session id in that pane), or
   with another Claude started there, it waits as for a session that is gone, unlike a reminder.
+- With more than one Claude profile, a restart ends in a wake, so it follows the wake rule
+  ([Schedule](#schedule)): a session the board could not wake again in its own profile (started
+  outside the board in another profile than the board's, or in a pane the board opened with
+  another profile's env) is refused before anything is put to sleep, with that rule's reason.
+  `board restart` and the web board's "Restart" refuse it at once and schedule nothing
+  (`board restart` asks the running board which profile is its own, as its own env may be the
+  session's); one asked for before is given up by the scheduler, without a sleep, and the
+  session (or, for one you asked for, the log and a toast) hears why. "Is a background command
+  running" is read in the session's own profile's registry (`<profile folder>/sessions`). With
+  one profile it is all as above.
 
 ## Archive
 
@@ -723,15 +980,21 @@ it); Claude keeps the conversation on disk, so it can come back.
   skill allows it for a one-off session the agent started, or when the user asks.
 - herdr-wake takes a closed pane for a session that is over; Return starts it again in a new pane,
   which herdr-wake then treats like any other.
+- With more than one Claude profile, a session goes to the archive with its profile, and Return
+  resumes it in that profile or not at all: one whose profile the board cannot be sure of is not
+  archived, and Return refuses one it cannot place, with the reason (resume it yourself in its
+  profile). Its transcript is looked for in that profile's folder only. A row in the list carries
+  its profile's tag, as its card did. With one profile it is all as above.
 
 One file per session in `%LOCALAPPDATA%\herdr\plugins\agent-board\archive\<session id>.json`, written
 under the same per-file lock as the cards; `log.jsonl` there keeps what became of the latest
 (closed, kept on the board, returned, removed). The scheduler closes the due ones
-(`src/archive.mjs`, `web/archive-model.js`).
+(`src/core/archive.ts`, `src/adapters/archive-store.ts`, `src/services/archive.ts`,
+`web/src/hooks/useArchive.ts`, `web/src/components/archive/ArchivePanel.tsx`).
 
 ## Notifications
 
-On Windows, `herdr plugin action invoke agent-board.notifications` (`node src/install.mjs
+On Windows, `herdr plugin action invoke agent-board.notifications` (`bun src/entrypoints/install.ts
 --toast`) adds Claude Code hooks that show a Windows notification in the agent's own words:
 
 - a session finished its turn: its last reply;
@@ -743,7 +1006,8 @@ The title is `<workspace> · <session>`. None comes for the pane you are looking
 herdr, with the terminal in front), for a subagent, or for a `claude -p` run inside a session. A
 newer one replaces the pane's last one in the notification center. They make no sound (herdr
 plays its own). A click opens that session on the web board when the board runs and has it (as
-`src/web-open.mjs --pane` does); else herdr goes to the pane and the terminal comes to the front.
+`src/entrypoints/web-open.ts --pane` does); else herdr goes to the pane and the terminal comes to
+the front.
 
 The click goes through a `claude-pane:<pane id>` link, a URL protocol the script registers for
 the current user (`HKCU\Software\Classes\claude-pane`, and the app id `Herdr.ClaudeAgent` that
@@ -752,13 +1016,15 @@ but a pane id (`w1:p2`) and only shows or focuses that pane.
 
 Keep herdr's own notifications off (`[ui.toast] delivery = "off"`, herdr's default), or each
 comes twice; `board doctor` says when they are on, and when another hook with "toast" in its
-command shows them too (a script of your own from before: take it out of settings.json). `node src/install.mjs --no-toast` takes the
-hooks out again (the protocol entry stays; it only ever opens a pane). The hooks run
-`powershell -File src\toast.ps1` from the plugin's folder, in the background, so Claude does not
-wait for them. To see one, from a herdr pane (`force` shows it for the pane you are in):
+command shows them too (a script of your own from before: take it out of settings.json). `bun
+src/entrypoints/install.ts --no-toast` takes the hooks out again (the protocol entry stays; it
+only ever opens a pane). The hooks run `powershell -File src\integrations\toast.ps1` from the
+plugin's folder, in the background, so Claude does not wait for them; a click finds Bun on PATH
+(else `~\.bun\bin\bun.exe`). To see one, from a herdr pane (`force` shows it for the pane you are
+in):
 
 ```powershell
-'{"hook_event_name":"Stop","last_assistant_message":"Hello"}' | powershell -NoProfile -File src\toast.ps1 force
+'{"hook_event_name":"Stop","last_assistant_message":"Hello"}' | powershell -NoProfile -File src\integrations\toast.ps1 force
 ```
 
 On Linux and macOS the board shows none; herdr's own (`delivery = "system"`) say that a session
@@ -772,7 +1038,7 @@ English when there is no dictionary for it). A switch reaches at once the web bo
 terminal board, error messages, and the agents' next brief, which tells them the language to
 write their cards in. Titles you give lanes and whatever agents write stay as written.
 
-All texts live in `web/i18n.js`, shared by the browser and Node. Another language is one more
+All texts live in `src/core/i18n/`, shared by the browser and Bun. Another language is one more
 dictionary there plus its plural rule; a test checks that every dictionary has every text.
 
 ## Everything updates live
@@ -781,14 +1047,16 @@ dictionary there plus its plural rule; a test checks that every dictionary has e
 - herdr state, transcripts, sleeping sessions: every `refreshSec` (2 s).
 - config.json, edited by hand or from the web board: the running board reloads it, the web
   board and the terminal board redraw, and the agents' next brief lists the new categories.
-- Plugin code: the pane runs `src/run.mjs`, which restarts the board when a file in `src/`
+- Plugin code: the pane runs `src/entrypoints/run.ts`, which restarts the board when a file in `src/`
   changes (by its time and size: on Windows a plain read fires the watcher too); open web pages
   reload themselves when a file in `web/` changes. A board that crashes starts again by itself
   (after 2 s, then 10 s, then 30 s; after five crashes in ten minutes it waits for the next code
   change), and `web.log` in the state folder keeps the error.
 
-Code: `src/server.mjs`, `web/` (no build step, no dependencies; springs in `web/spring.js`, the
-sheet's place in `web/panel.js` with its geometry in `web/panel-layout.js`).
+Code: `src/server/`, `web/src/` (React; no build step: the server bundles `web/src/main.tsx` in
+memory with Bun; springs in `web/src/models/spring.ts`, the sheet's place in
+`web/src/components/panel/` with its geometry in `web/src/models/panel-layout.ts`), styles in
+`web/styles/`.
 
 The web API (`GET /api/board` and SSE `/api/events`) includes `stale` and
 `lastSuccessfulRefreshAt` (Unix milliseconds, or `null` before the first successful refresh).
@@ -797,7 +1065,7 @@ Herdr data can be collected again. Opening the SSE connection alone does not mar
 SSE sends the board again only when it changed (stale included); GET always has the latest
 `lastSuccessfulRefreshAt`.
 
-Claude usage (`src/statusline.mjs`, `src/usage.mjs`): the install action sets Claude Code's status line
+Claude usage (`src/entrypoints/statusline.ts`, `src/adapters/claude-home.ts`): the install action sets Claude Code's status line
 to the board's own command when there is none (a status line someone else set stays). Claude runs it
 after every reply with the session's state; it keeps the account's 5h and 7d usage windows
 (`claude-limits-latest.json` in the state folder, the usagebar shape) and each session's context fill
@@ -806,7 +1074,7 @@ The board shows the windows as a pill by the live dot (windows past their reset 
 context fill in the sheet; without the status line it falls back to the usagebar cache and to the
 tokens of the last request in the transcript.
 
-Files (`src/files.mjs`, `web/files.js`): `POST /api/fs/stat` (which of these paths exist),
+Files (`src/adapters/files.ts`, `src/server/routes/fs.ts`, `web/src/components/files/`): `POST /api/fs/stat` (which of these paths exist),
 `POST /api/fs/preview`, `POST /api/fs/open` (`open` or `reveal`, through explorer.exe, `open`
 or `xdg-open`, no shell) and `POST /api/open-url` (http(s) only) need the `X-Board` header like
 every POST. `GET /api/fs/raw` serves images, PDF, video and audio, with ranges, to the page's
@@ -814,7 +1082,7 @@ every POST. `GET /api/fs/raw` serves images, PDF, video and audio, with ranges, 
 board payload, new on every start, which only the board's own page can read. Text never comes
 raw, and raw responses carry a CSP that runs no script.
 
-New sessions (`src/launch.mjs`, `web/launch.js`): `GET /api/launch/options` (herdr's workspaces,
+New sessions (`src/services/launch/`, `web/src/components/launch/`): `GET /api/launch/options` (herdr's workspaces,
 recent folders, the launcher), `POST /api/fs/dirs` (the subfolders of a folder, or the drives),
 `POST /api/launch` (starts one in the background; its progress is `launches` in the board
 payload), `POST /api/launch/<id>/dismiss` and `/focus`. `POST /api/launch` also needs the page's
@@ -826,7 +1094,8 @@ records), `POST /api/archive` with `{ op: "archive" | "return" | "remove", keys 
 the board payload has `archive: { log }`. Archiving and Return need fresh herdr data and the
 page's own `Origin`, as a launch does.
 
-Setup (`src/setup.mjs`, `web/setup.js`): `GET /api/setup` runs the checks again and answers
+Setup (`src/core/setup.ts`, `src/adapters/setup-facts.ts`, `src/services/setup-check.ts`,
+`web/src/components/SetupPop.tsx`): `GET /api/setup` runs the checks again and answers
 `{ checks, todo, sig }`; the board payload has `setup: { todo, sig }` from the last check.
 
 ## Board keys
@@ -879,16 +1148,18 @@ spawn-agent --name <Name> --cwd <folder> [--brief-file <file>]   a new session i
 ```
 
 Agents in herdr also get a skill, [`herdr-agents`](skills/herdr-agents/SKILL.md), which the
-install puts into `~/.claude/skills`. Claude Code keeps only its one-line description in a
-session's context and reads the rest when it is needed: how to start another session, message or
-wake one, do something later (`board remind` rather than CronCreate, which dies when the session
-sleeps), restart itself when an MCP server dropped or its settings, hooks or skills changed
+install puts into `~/.claude/skills` (with more than one profile, into the `skills` folder of
+each one the board shows). Claude Code keeps only its one-line description in a session's
+context and reads the rest when it is needed: how to start another session, message or wake one,
+do something later (`board remind` rather than CronCreate, which dies when the session sleeps),
+restart itself when an MCP server dropped or its settings, hooks or skills changed
 (`board restart`), and run a server or an interactive login in a pane of its own. herdr puts the
 pane's ids into its environment (`HERDR_ENV=1`, `HERDR_PANE_ID`, `HERDR_TAB_ID`,
-`HERDR_WORKSPACE_ID`); when they are there, the board's brief tells the session its pane and
-points it to the skill, and outside herdr it says nothing of it. For herdr's own
-command reference, `herdr --skill`. A skill of that name that is not the board's is left alone,
-and `board doctor` says so.
+`HERDR_WORKSPACE_ID`); when they are there, the board's brief
+([`src/core/brief.ts`](src/core/brief.ts)) tells the session its pane and points it to the skill,
+and outside herdr it says nothing of it. For herdr's own command reference, `herdr --skill`. A
+skill of that name that is not the board's is left alone, and `board doctor` says so (per
+profile, with more than one).
 
 ### Retry-safe call exports (opt-in)
 
@@ -941,10 +1212,16 @@ exactly-once agent consumption. Existing callers without `--report-id` keep thei
 queue behavior, and legacy at-least-once delivery. MokuPilot must retain and supply stable IDs before
 it benefits; this board change alone does not alter MokuPilot.
 
+With more than one Claude profile there is still one journal: a receipt is keyed by the session's
+UUID, whichever profile the session runs in, and waking it for a report goes through the same
+profile guard as any other wake. The code: [`src/adapters/call-receipts.ts`](src/adapters/call-receipts.ts).
+
 ## Settings
 
 `%APPDATA%\herdr\plugins\config\agent-board\config.json`: `language` (`auto`, `en`, `ru`),
-categories (id, title, color, folders that guess the category), `placement` (`workspace`
+categories (id, title, color, folders that guess the category, the usual Claude profile),
+`profiles` (the Claude profiles: id, title, folder, color, hidden, args; see
+[Claude profiles](#claude-profiles)), `placement` (`workspace`
 default: the board lives in a workspace of its own and stays open; `tab`; `overlay`),
 `refreshSec`, `wakeUrl` (herdr-wake router), `scheduleWaitMin` (how long a due entry waits for a
 busy session, 240), `port` (web board, 12422), `web` (false turns the
@@ -965,3 +1242,25 @@ read/merge/rename. Contention waits at most two seconds, then reports an error w
 the card. Locks are released on ordinary errors. A writer killed mid-write leaves its lock
 behind; a write holds it for milliseconds, so one older than 30 seconds is taken over by the
 next writer. A card write the board itself fails at is retried on its next refresh.
+
+## Development
+
+[Bun](https://bun.com/docs/installation) 1.4.3 or newer and git on PATH, in a clone with the
+repository's full history:
+
+```sh
+bun install     # react and react-dom, and the dev tools: TypeScript, Biome, the types
+bun test        # the whole suite (a couple of minutes); two symlink tests skip without symlink rights
+bun run check   # type check (tsc) and lint (Biome)
+```
+
+The parity tests compare the board with the old page and with upstream's code as git has them
+(`git show <commit>:<file>`; the commits are named in `test/web/support/old-app.ts` and the
+tests): a shallow clone (`--depth`), a tarball or a fork without that history fails them with
+"git show … failed". Biome wants LF line endings: on Windows, clone with
+`git clone -c core.autocrlf=input …` (or turn `core.autocrlf` off) so `bun run check` passes.
+
+The code is in layers: `src/core` (pure rules, no I/O), `src/adapters` and `src/integrations`
+(files, processes, herdr, Claude's files, herdr-wake), `src/services` (what the board does with
+them), `src/server`, `src/tui` and `src/entrypoints` (the web server, the terminal board, the
+commands), `web/src` (the React page). Tests mirror them under `test/`.

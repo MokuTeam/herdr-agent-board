@@ -1,0 +1,155 @@
+// Springs in Apple's two designer parameters: damping ratio (1 = no overshoot, < 1 bounces)
+// and response (seconds to get there; not a duration). A spring always starts from where the
+// value is now and keeps its velocity when retargeted, so any motion can be grabbed and
+// reversed mid-flight without a jump. One shared requestAnimationFrame loop drives them all.
+
+export interface MotionPreference {
+  readonly matches: boolean
+}
+
+// Bun (the tests) has no matchMedia: there the springs and helpers still load.
+export const reducedMotion: MotionPreference = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)') ?? {
+  matches: false,
+}
+
+export interface SpringOptions {
+  value?: number
+  damping?: number
+  response?: number
+  precision?: number
+  onUpdate?: (value: number) => void
+  onRest?: (value: number) => void
+}
+
+export interface SpringShape {
+  damping?: number | undefined
+  response?: number | undefined
+}
+
+export interface Retarget extends SpringShape {
+  /** Units per second: hands over a gesture's speed. */
+  velocity?: number | undefined
+}
+
+const active = new Set<Spring>()
+let frame = 0
+let last = 0
+
+function loop(now: number): void {
+  const dt = Math.min(0.064, (now - (last || now)) / 1000)
+  last = now
+  for (const s of [...active]) s.step(dt)
+  frame = active.size ? requestAnimationFrame(loop) : 0
+  if (!frame) last = 0
+}
+
+export class Spring {
+  value: number
+  target: number
+  velocity = 0
+  precision: number
+  onUpdate: (value: number) => void
+  onRest: (value: number) => void
+  damping = 1
+  response = 0.35
+  stiffness = 0
+  friction = 0
+
+  constructor({
+    value = 0,
+    damping = 1,
+    response = 0.35,
+    precision = 0.01,
+    onUpdate = () => {},
+    onRest = () => {},
+  }: SpringOptions = {}) {
+    this.value = value
+    this.target = value
+    this.precision = precision
+    this.onUpdate = onUpdate
+    this.onRest = onRest
+    this.configure({ damping, response })
+  }
+
+  configure({ damping = this.damping, response = this.response }: SpringShape): this {
+    this.damping = damping
+    this.response = response
+    this.stiffness = ((2 * Math.PI) / response) ** 2
+    this.friction = (4 * Math.PI * damping) / response
+    return this
+  }
+
+  /** Head for `target` from the current value; `velocity` (units/s) hands over a gesture's speed. */
+  to(target: number, { velocity, damping, response }: Retarget = {}): this {
+    if (damping !== undefined || response !== undefined) this.configure({ damping, response })
+    if (velocity !== undefined) this.velocity = velocity
+    this.target = target
+    if (reducedMotion.matches) return this.set(target)
+    active.add(this)
+    if (!frame) frame = requestAnimationFrame(loop)
+    return this
+  }
+
+  /** Jump there, no motion (a 1:1 drag, or reduced motion). */
+  set(value: number): this {
+    active.delete(this)
+    this.value = this.target = value
+    this.velocity = 0
+    this.onUpdate(value)
+    this.onRest(value)
+    return this
+  }
+
+  stop(): this {
+    active.delete(this)
+    return this
+  }
+
+  get moving(): boolean {
+    return active.has(this)
+  }
+
+  step(dt: number): void {
+    // Semi-implicit Euler in small fixed steps: stable for stiff, quick springs.
+    for (let left = dt; left > 0; left -= 1 / 240) {
+      const h = Math.min(left, 1 / 240)
+      const force = -this.stiffness * (this.value - this.target) - this.friction * this.velocity
+      this.velocity += force * h
+      this.value += this.velocity * h
+    }
+    if (Math.abs(this.velocity) < this.precision * 10 && Math.abs(this.value - this.target) < this.precision) {
+      active.delete(this)
+      this.value = this.target
+      this.velocity = 0
+      this.onUpdate(this.value)
+      this.onRest(this.value)
+      return
+    }
+    this.onUpdate(this.value)
+  }
+}
+
+/** Where a flick would come to rest (Apple's projection, the scroll-view deceleration curve). */
+export function project(velocity: number, decelerationRate = 0.998): number {
+  return ((velocity / 1000) * decelerationRate) / (1 - decelerationRate)
+}
+
+/** Soft limit: the further past the edge, the less the element follows. */
+export function rubberband(overshoot: number, dimension: number, constant = 0.55): number {
+  return (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot))
+}
+
+export interface PointerSample {
+  x: number
+  y: number
+  t: number
+}
+
+/** Velocity (px/s) from the last ~100 ms of pointer samples [{ x, y, t }]. */
+export function velocityOf(samples: PointerSample[]): { x: number; y: number } {
+  const lastSample = samples.at(-1)
+  if (!lastSample) return { x: 0, y: 0 }
+  const first = samples.find(s => lastSample.t - s.t <= 100) ?? lastSample
+  const dt = (lastSample.t - first.t) / 1000
+  return dt > 0 ? { x: (lastSample.x - first.x) / dt, y: (lastSample.y - first.y) / dt } : { x: 0, y: 0 }
+}

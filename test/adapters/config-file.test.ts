@@ -1,0 +1,477 @@
+import { expect, test } from 'bun:test'
+import assert from 'node:assert/strict'
+import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { join, sep } from 'node:path'
+import { readCard, writeCard } from '../../src/adapters/cards.ts'
+import {
+  configFile,
+  type EditResult,
+  editCategories,
+  editProfiles,
+  editSettings,
+  loadConfig,
+  saveFoundProfiles,
+} from '../../src/adapters/config-file.ts'
+import { isRecord, renameWithRetry, replaceFile } from '../../src/adapters/json-store.ts'
+import { configDir } from '../../src/adapters/paths.ts'
+import { loadProfiles } from '../../src/adapters/profiles.ts'
+import { useLanguage } from '../../src/core/lang.ts'
+import { sameDir } from '../../src/core/launch/names.ts'
+import { isolatedHome } from '../support/env.ts'
+
+const saved = (): Record<string, unknown> => JSON.parse(readFileSync(configFile(), 'utf8'))
+const seed = (obj: unknown) => {
+  mkdirSync(configDir(), { recursive: true })
+  writeFileSync(configFile(), JSON.stringify(obj))
+}
+
+test('renameWithRetry rides out a brief Windows file lock but not a real error', () => {
+  const lock = (code: string) => Object.assign(new Error(code), { code })
+  let calls = 0
+  renameWithRetry('a', 'b', () => {
+    if (++calls < 3) throw lock('EPERM')
+  })
+  assert.equal(calls, 3)
+  assert.throws(
+    () =>
+      renameWithRetry('a', 'b', () => {
+        throw lock('ENOENT')
+      }),
+    /ENOENT/,
+  )
+  calls = 0
+  assert.throws(
+    () =>
+      renameWithRetry('a', 'b', () => {
+        calls++
+        throw lock('EBUSY')
+      }),
+    /EBUSY/,
+  )
+  assert.equal(calls, 10)
+})
+
+test('replaceFile puts the whole text in place, or leaves the file and no temp file behind', () => {
+  const dir = join(isolatedHome(), 'files')
+  mkdirSync(dir)
+  const file = join(dir, 'usage.json')
+  replaceFile(file, '{"a":1}')
+  assert.equal(readFileSync(file, 'utf8'), '{"a":1}')
+  // A brief lock is ridden out; a lock that stays (or a real error) keeps the old file.
+  const lock = Object.assign(new Error('EPERM'), { code: 'EPERM' })
+  let calls = 0
+  replaceFile(file, '{"a":2}', (from, to) => {
+    if (++calls < 2) throw lock
+    renameSync(from, to)
+  })
+  assert.equal(readFileSync(file, 'utf8'), '{"a":2}')
+  assert.throws(
+    () =>
+      replaceFile(file, '{"a":3}', () => {
+        throw lock
+      }),
+    /EPERM/,
+  )
+  assert.equal(readFileSync(file, 'utf8'), '{"a":2}')
+  assert.deepEqual(readdirSync(dir).sort(), ['usage.json'])
+})
+
+test('loadConfig writes the defaults on first use', () => {
+  isolatedHome()
+  const cfg = loadConfig()
+  assert.ok(cfg.categories.length > 0)
+  assert.equal(saved().language, cfg.language)
+})
+
+test('editSettings keeps keys it does not know', () => {
+  isolatedHome()
+  seed({ language: 'en', futureKey: 1 })
+  assert.deepEqual(editSettings({ language: 'ru' }), { ok: true })
+  assert.equal(saved().futureKey, 1)
+  assert.equal(saved().language, 'ru')
+  assert.equal(loadConfig().language, 'ru')
+})
+
+test('editSettings refuses an unknown language', () => {
+  isolatedHome()
+  seed({ language: 'en' })
+  assert.equal(editSettings({ language: 'xx' }).ok, false)
+  assert.equal(saved().language, 'en')
+})
+
+test('editCategories creates, updates, orders and deletes; unknown fields survive', () => {
+  isolatedHome()
+  seed({
+    language: 'en',
+    futureKey: 1,
+    categories: [
+      { id: 'work', color: 'blue', paths: [], extra: 'x' },
+      { id: 'other', color: 'gray', paths: [] },
+    ],
+  })
+  assert.deepEqual(editCategories({ op: 'create', id: 'home', title: 'Home' }), { ok: true })
+  assert.deepEqual(editCategories({ op: 'update', id: 'work', title: 'Job' }), { ok: true })
+  type Cat = { id: string; extra?: string; title?: string }
+  assert.deepEqual(
+    (saved().categories as Cat[]).map(c => c.id),
+    ['work', 'home', 'other'],
+  )
+  assert.deepEqual(editCategories({ op: 'order', ids: ['other', 'home', 'work'] }), { ok: true })
+  const cats = saved().categories as Cat[]
+  assert.deepEqual(
+    cats.map(c => c.id),
+    ['other', 'home', 'work'],
+  )
+  assert.equal(cats.find(c => c.id === 'work')?.extra, 'x')
+  assert.equal(cats.find(c => c.id === 'work')?.title, 'Job')
+  assert.equal(saved().futureKey, 1)
+  assert.equal(editCategories({ op: 'create', id: 'home' }).ok, false)
+  assert.equal(editCategories({ op: 'delete', id: 'other' }).ok, false)
+  assert.equal(editCategories({ op: 'nope' }).ok, false)
+})
+
+test('editCategories keeps hand-edited entries that are not objects in their place, and adds no fields to the others', () => {
+  isolatedHome()
+  seed({
+    language: 'en',
+    categories: [{ id: 'work' }, null, { id: 'home', title: 'Home' }, 'lane', { title: 'No id' }, { id: 'other' }],
+  })
+  assert.deepEqual(editCategories({ op: 'update', id: 'home', color: 'red' }), { ok: true })
+  assert.deepEqual(saved().categories, [
+    { id: 'work' },
+    null,
+    { id: 'home', title: 'Home', color: 'red' },
+    'lane',
+    { title: 'No id' },
+    { id: 'other' },
+  ])
+  // Every object is a lane and sorts as upstream's do (one without an id after those named).
+  assert.deepEqual(editCategories({ op: 'order', ids: ['other', 'home'] }), { ok: true })
+  assert.deepEqual(saved().categories, [
+    { id: 'other' },
+    null,
+    { id: 'home', title: 'Home', color: 'red' },
+    'lane',
+    { id: 'work' },
+    { title: 'No id' },
+  ])
+  assert.deepEqual(editCategories({ op: 'create', id: 'acme', title: 'Acme' }), { ok: true })
+  assert.deepEqual(editCategories({ op: 'delete', id: 'work' }), { ok: true })
+  assert.deepEqual(saved().categories, [
+    { id: 'acme', title: 'Acme', color: 'blue', paths: [] },
+    { id: 'other' },
+    null,
+    { id: 'home', title: 'Home', color: 'red' },
+    'lane',
+    { title: 'No id' },
+  ])
+  // The board's lanes are the objects among them.
+  assert.deepEqual(
+    loadConfig().categories.map(c => c.title),
+    ['Acme', 'Other', 'Home', 'No id'],
+  )
+})
+
+test('editCategories edits a hand-edited lane whose id is no string as upstream does', () => {
+  isolatedHome()
+  seed({ language: 'en', categories: [{ id: 7, title: 'Seven', paths: ['C:\\seven'] }, { id: 'other' }] })
+  // The page sends the lane's id as the board gave it.
+  assert.deepEqual(editCategories({ op: 'update', id: 7, title: 'Sieben' }), { ok: true })
+  assert.deepEqual(editCategories({ op: 'order', ids: ['other', 7] }), { ok: true })
+  assert.deepEqual(saved().categories, [{ id: 'other' }, { id: 7, title: 'Sieben', paths: ['C:\\seven'] }])
+  assert.equal(editCategories({ op: 'update', id: '7', title: 'x' }).ok, false)
+  assert.deepEqual(editCategories({ op: 'delete', id: 7 }), { ok: true })
+  assert.deepEqual(saved().categories, [{ id: 'other' }])
+})
+
+test('with no lane in the file the editor works on the default lanes the board shows, as upstream', () => {
+  // Upstream: a file without lanes shows the defaults, and an edit writes them with the change.
+  isolatedHome()
+  seed({ language: 'en' })
+  assert.deepEqual(editCategories({ op: 'update', id: 'work', title: 'Job' }), { ok: true })
+  assert.deepEqual(saved().categories, [
+    { id: 'work', color: 'cyan', paths: [], title: 'Job' },
+    { id: 'personal', color: 'green', paths: [] },
+    { id: 'other', color: 'gray', paths: [] },
+  ])
+})
+
+test('with only entries the board cannot make a lane of, the editor works on the defaults it shows, those kept after', () => {
+  isolatedHome()
+  seed({ language: 'en', categories: [null, 'lane'] })
+  assert.deepEqual(
+    loadConfig().categories.map(c => c.id),
+    ['work', 'personal', 'other'],
+  )
+  assert.deepEqual(editCategories({ op: 'update', id: 'work', title: 'Job' }), { ok: true })
+  assert.deepEqual(editCategories({ op: 'create', id: 'acme', title: 'Acme' }), { ok: true })
+  assert.deepEqual(saved().categories, [
+    { id: 'work', color: 'cyan', paths: [], title: 'Job' },
+    { id: 'personal', color: 'green', paths: [] },
+    { id: 'acme', title: 'Acme', color: 'blue', paths: [] },
+    { id: 'other', color: 'gray', paths: [] },
+    null,
+    'lane',
+  ])
+  // The lanes on screen stay; the new one is among them.
+  assert.deepEqual(
+    loadConfig().categories.map(c => [c.id, c.title]),
+    [
+      ['work', 'Job'],
+      ['personal', 'Personal'],
+      ['acme', 'Acme'],
+      ['other', 'Other'],
+    ],
+  )
+})
+
+test('category folders lose trailing slashes and backslashes and are de-duplicated', () => {
+  isolatedHome()
+  seed({ language: 'en', categories: [{ id: 'other', color: 'gray', paths: [] }] })
+  assert.deepEqual(editCategories({ op: 'create', id: 'work', paths: ['C:\\work\\', 'C:\\work', '/home/x/'] }), {
+    ok: true,
+  })
+  const cats = saved().categories as { id: string; paths: string[] }[]
+  assert.deepEqual(cats.find(c => c.id === 'work')?.paths, ['C:\\work', '/home/x'])
+})
+
+test('deleting a category clears it from the cards that named it', () => {
+  isolatedHome()
+  seed({
+    language: 'en',
+    categories: [
+      { id: 'work', color: 'blue', paths: [] },
+      { id: 'other', color: 'gray', paths: [] },
+    ],
+  })
+  writeCard('c1', { category: 'work', doing: 'x' })
+  assert.deepEqual(editCategories({ op: 'delete', id: 'work' }), { ok: true })
+  assert.equal(readCard('c1')?.category, undefined)
+  assert.equal(readCard('c1')?.doing, 'x')
+})
+
+/** A temp home with the default profile folder and two others (isolatedHome's, so no real one). */
+function profileHome(): string {
+  const home = join(isolatedHome(), 'home')
+  for (const name of ['.claude', '.claude-gamedev']) {
+    mkdirSync(join(home, name), { recursive: true })
+    writeFileSync(join(home, name, 'settings.json'), '{}')
+  }
+  mkdirSync(join(home, '.claude-work', 'projects'), { recursive: true })
+  return home
+}
+type SavedProfile = Record<string, unknown> & { id: string }
+const savedProfiles = (): unknown[] => (Array.isArray(saved().profiles) ? (saved().profiles as unknown[]) : [])
+const savedProfile = (id: string): SavedProfile | undefined =>
+  savedProfiles().find((p): p is SavedProfile => isRecord(p) && p.id === id)
+const savedIds = (): unknown[] => savedProfiles().map(p => (isRecord(p) ? p.id : p))
+const ok = (r: EditResult) => expect(r).toEqual({ ok: true })
+
+test('saveFoundProfiles adds the folders once, the inherited one shown, keeping the rest of the file', () => {
+  const home = profileHome()
+  // No config.json yet: the board's loadConfig makes it, this does not.
+  expect(saveFoundProfiles(join(home, '.claude-work'), home)).toBe(false)
+  expect(readdirSync(join(home, '..'))).not.toContain('config')
+  const own = {
+    id: 'default',
+    title: 'Private',
+    dir: join(home, '.claude'),
+    color: 'indigo',
+    hidden: false,
+    mine: true,
+  }
+  seed({ language: 'ru', keep: 1, profiles: [own, 7] })
+  expect(saveFoundProfiles(join(home, '.claude-work'), home)).toBe(true)
+  expect(saved().language).toBe('ru')
+  expect(saved().keep).toBe(1)
+  expect(savedIds()).toEqual(['default', 'gamedev', 'work', 7])
+  expect(savedProfile('default')).toEqual(own)
+  expect(savedProfile('work')).toMatchObject({ title: 'Work', dir: join(home, '.claude-work'), hidden: false })
+  expect(savedProfile('gamedev')).toMatchObject({ title: 'Gamedev', dir: join(home, '.claude-gamedev'), hidden: true })
+  const before = readFileSync(configFile(), 'utf8')
+  expect(saveFoundProfiles(join(home, '.claude-work'), home)).toBe(false)
+  expect(readFileSync(configFile(), 'utf8')).toBe(before)
+})
+
+test('a profile listed with ~ is the folder found there: no second one added, the file keeps ~', () => {
+  const home = profileHome()
+  const work = { id: 'work', title: 'BluBanyan', dir: '~/.claude-work', color: 'teal', hidden: false }
+  seed({ language: 'en', profiles: [work] })
+  expect(saveFoundProfiles(join(home, '.claude-work'), home)).toBe(true)
+  expect(savedIds()).toEqual(['work', 'default', 'gamedev'])
+  expect(savedProfile('work')).toEqual(work)
+  // What the board goes by is the folder itself, never a literal ~.
+  const listed = loadProfiles({ home }).find(p => p.id === 'work')
+  expect(listed?.dir).toBe(join(home, '.claude-work'))
+  // Nothing more to add on the next start; an edit keeps the folder as typed.
+  expect(saveFoundProfiles(join(home, '.claude-work'), home)).toBe(false)
+  ok(editProfiles({ op: 'update', id: 'work', title: 'Work' }, { home }))
+  expect(savedProfile('work')).toEqual({ ...work, title: 'Work' })
+  expect(savedIds()).toEqual(['work', 'default', 'gamedev'])
+})
+
+test('a relative folder is never a profile: a listed one stays in the file as it is, the board’s own is not saved', () => {
+  const home = profileHome()
+  const relative = { id: 'acme', title: 'Acme', dir: 'acme', color: 'teal', hidden: false }
+  seed({ language: 'en', profiles: [relative] })
+  // The board's env names a relative folder: the folders found are saved, that one is not, nor shown.
+  expect(saveFoundProfiles('work', home)).toBe(true)
+  expect(savedProfiles()).toEqual([
+    { id: 'default', title: 'Default', dir: join(home, '.claude'), color: 'indigo', hidden: false },
+    { id: 'gamedev', title: 'Gamedev', dir: join(home, '.claude-gamedev'), color: 'teal', hidden: true },
+    { id: 'work', title: 'Work', dir: join(home, '.claude-work'), color: 'pink', hidden: true },
+    relative,
+  ])
+  expect(saveFoundProfiles('work', home)).toBe(false)
+  expect(loadProfiles({ home, shownDir: 'work' }).map(p => [p.id, p.dir, p.hidden])).toEqual([
+    ['default', join(home, '.claude'), false],
+    ['gamedev', join(home, '.claude-gamedev'), true],
+    ['work', join(home, '.claude-work'), true],
+  ])
+  useLanguage('en')
+  expect(editProfiles({ op: 'update', id: 'acme', title: 'x' }, { home })).toEqual({
+    ok: false,
+    error: 'No profile “acme”',
+  })
+  ok(editProfiles({ op: 'update', id: 'gamedev', title: 'Games' }, { home }))
+  expect(savedProfiles().at(-1)).toEqual(relative)
+})
+
+test('editProfiles renames, recolors, shows and hides by id, never changing id or folder', () => {
+  const home = profileHome()
+  useLanguage('en')
+  seed({ language: 'en', futureKey: 1 })
+  ok(editProfiles({ op: 'update', id: 'default', title: ' Private ', color: 'teal' }, { home }))
+  expect(savedProfile('default')).toMatchObject({ id: 'default', title: 'Private', color: 'teal', hidden: false })
+  expect(sameDir(String(savedProfile('default')?.dir), join(home, '.claude'))).toBe(true)
+  expect(saved().futureKey).toBe(1)
+  ok(editProfiles({ op: 'update', id: 'default', color: 'nope' }, { home }))
+  expect(savedProfile('default')?.color).toBe('teal')
+  expect(editProfiles({ op: 'update', id: 'default', hidden: true }, { home })).toEqual({
+    ok: false,
+    error: 'At least one profile stays shown',
+  })
+  expect(editProfiles({ op: 'update', id: 'nope', title: 'x' }, { home })).toEqual({
+    ok: false,
+    error: 'No profile “nope”',
+  })
+  expect(editProfiles({ op: 'update', id: 'default', title: '  ' }, { home })).toEqual({
+    ok: false,
+    error: 'A profile needs a name',
+  })
+  expect(savedProfile('default')?.title).toBe('Private')
+  // Work shown, then the default hidden; a folder sent along changes nothing, nor a hidden that is no boolean.
+  ok(editProfiles({ op: 'update', id: 'work', hidden: false, dir: join(home, 'x'), title: 'BluBanyan' }, { home }))
+  ok(editProfiles({ op: 'update', id: 'default', hidden: true }, { home }))
+  ok(editProfiles({ op: 'update', id: 'work', hidden: 'yes' }, { home }))
+  expect(savedProfile('work')).toMatchObject({ id: 'work', title: 'BluBanyan', hidden: false })
+  expect(sameDir(String(savedProfile('work')?.dir), join(home, '.claude-work'))).toBe(true)
+  expect(savedProfile('default')?.hidden).toBe(true)
+  expect(savedIds()).toEqual(['default', 'gamedev', 'work'])
+  expect(editProfiles({ op: 'nope' }, { home }).ok).toBe(false)
+})
+
+test('editProfiles adds a folder somewhere else, ~ included; not twice, not one that is not there', () => {
+  const home = profileHome()
+  useLanguage('en')
+  mkdirSync(join(home, 'elsewhere', 'acme'), { recursive: true })
+  seed({ language: 'en' })
+  ok(editProfiles({ op: 'add', dir: '~/elsewhere/acme' }, { home }))
+  expect(savedProfile('acme')).toMatchObject({ id: 'acme', title: 'Acme', color: 'brown', hidden: false })
+  expect(sameDir(String(savedProfile('acme')?.dir), join(home, 'elsewhere', 'acme'))).toBe(true)
+  expect(editProfiles({ op: 'add', dir: join(home, 'elsewhere', 'acme') + sep }, { home })).toEqual({
+    ok: false,
+    error: `${join(home, 'elsewhere', 'acme')} is the profile Acme already`,
+  })
+  expect(editProfiles({ op: 'add', dir: join(home, 'gone') }, { home })).toEqual({
+    ok: false,
+    error: `There is no folder ${join(home, 'gone')}`,
+  })
+  // A file is no folder; nor is a folder named relative to wherever the board runs.
+  const file = join(home, '.claude', 'settings.json')
+  expect(editProfiles({ op: 'add', dir: file }, { home })).toEqual({ ok: false, error: `There is no folder ${file}` })
+  expect(editProfiles({ op: 'add', dir: 'acme' }, { home })).toEqual({ ok: false, error: 'There is no folder acme' })
+  expect(savedIds()).toEqual(['default', 'gamedev', 'work', 'acme'])
+})
+
+test('a profile edit writes back the file’s own entries: what it does not set stays as typed, and what is no profile stays', () => {
+  const home = profileHome()
+  const work = { id: 'work', dir: join(home, '.claude-work'), args: '--model sonnet', color: 'nope', note: 'mine' }
+  const noProfiles = [{ title: 'No id', dir: join(home, 'x') }, null, { id: 'old' }, 'stray']
+  seed({ language: 'en', profiles: [noProfiles[0], work, ...noProfiles.slice(1)] })
+  ok(editProfiles({ op: 'update', id: 'work', hidden: false }, { home }))
+  // The listed one keeps every field as typed (its args a string, its color unknown) and gets the
+  // ones it had not (title) and the edit's own; the folders found come after it, then the rest as it was.
+  expect(savedProfiles()).toEqual([
+    { ...work, title: 'Work', hidden: false },
+    { id: 'default', title: 'Default', dir: join(home, '.claude'), color: 'teal', hidden: false },
+    { id: 'gamedev', title: 'Gamedev', dir: join(home, '.claude-gamedev'), color: 'pink', hidden: true },
+    ...noProfiles,
+  ])
+  // A later write keeps them so.
+  ok(editProfiles({ op: 'update', id: 'gamedev', title: 'Games' }, { home }))
+  expect(savedProfile('work')).toEqual({ ...work, title: 'Work', hidden: false })
+  expect(savedProfiles().slice(3)).toEqual(noProfiles)
+  expect(savedProfile('gamedev')?.title).toBe('Games')
+})
+
+test('editProfiles sets a profile’s start command, clears it with "", and refuses a bad one, writing nothing', () => {
+  const home = profileHome()
+  useLanguage('en')
+  seed({
+    language: 'en',
+    profiles: [{ id: 'work', dir: join(home, '.claude-work'), args: ['--model', 'sonnet'], note: 'mine' }],
+  })
+  ok(editProfiles({ op: 'update', id: 'work', command: ' cld-work ' }, { home }))
+  expect(savedProfile('work')).toMatchObject({ command: 'cld-work', args: ['--model', 'sonnet'], note: 'mine' })
+  ok(editProfiles({ op: 'update', id: 'work', command: ['cld-work', '--verbose'] }, { home }))
+  expect(savedProfile('work')?.command).toEqual(['cld-work', '--verbose'])
+  ok(editProfiles({ op: 'update', id: 'work', title: 'Job' }, { home }))
+  expect(savedProfile('work')?.command).toEqual(['cld-work', '--verbose'])
+  const before = readFileSync(configFile(), 'utf8')
+  expect(editProfiles({ op: 'update', id: 'work', command: '-cld' }, { home })).toEqual({
+    ok: false,
+    error: 'A start command begins with a program, not “-cld”, which starts with a dash',
+  })
+  expect(editProfiles({ op: 'update', id: 'work', title: 'Other', command: "cld-work 'x'" }, { home })).toEqual({
+    ok: false,
+    error:
+      'The start command’s argument "\'x\'" has a quote or a control character in it, which cannot be typed into a shell',
+  })
+  expect(editProfiles({ op: 'update', id: 'work', command: 'CLAUDE_CONFIG_DIR=~/.claude claude' }, { home })).toEqual({
+    ok: false,
+    error:
+      'A start command can’t set environment variables (“CLAUDE_CONFIG_DIR=~/.claude”): the board sets CLAUDE_CONFIG_DIR for the profile itself. Put them in your alias',
+  })
+  expect(editProfiles({ op: 'update', id: 'work', command: 42 }, { home })).toEqual({
+    ok: false,
+    error:
+      'A start command is a program, or a list of the program and its arguments: "cld-work" or ["cld-work", "--model", "opus"]',
+  })
+  useLanguage('ru')
+  expect(editProfiles({ op: 'update', id: 'work', command: '-cld' }, { home })).toEqual({
+    ok: false,
+    error: 'Команда запуска начинается с программы, а не с «-cld»: здесь в начале дефис',
+  })
+  useLanguage('en')
+  expect(readFileSync(configFile(), 'utf8')).toBe(before)
+  for (const none of ['', '   ']) {
+    ok(editProfiles({ op: 'update', id: 'work', command: none }, { home }))
+    expect('command' in (savedProfile('work') ?? {})).toBe(false)
+  }
+  expect(savedProfile('work')).toMatchObject({ title: 'Job', args: ['--model', 'sonnet'], note: 'mine' })
+})
+
+test('a lane’s usual profile: set, cleared, a bad id ignored', () => {
+  isolatedHome()
+  seed({ language: 'en', categories: [{ id: 'acme', color: 'blue', paths: [] }, { id: 'other' }] })
+  const acme = () => (saved().categories as Record<string, unknown>[]).find(c => c.id === 'acme')
+  ok(editCategories({ op: 'update', id: 'acme', profile: 'work' }))
+  expect(acme()?.profile).toBe('work')
+  expect(loadConfig().categories.find(c => c.id === 'acme')?.profile).toBe('work')
+  ok(editCategories({ op: 'update', id: 'acme', profile: 'Bad Id' }))
+  ok(editCategories({ op: 'update', id: 'acme', profile: 7 }))
+  expect(acme()?.profile).toBe('work')
+  ok(editCategories({ op: 'update', id: 'acme', profile: '' }))
+  expect(acme()).toEqual({ id: 'acme', color: 'blue', paths: [] })
+})

@@ -1,0 +1,143 @@
+/* Claude profiles (web/src/components/ProfileSwitch.tsx, ProfileTag.tsx, Limits.tsx,
+   LimitsPop.tsx, categories/CategoryRow.tsx): the switch beside the lanes control, the tag on a
+   card and the usage per profile, each in its profile's color (--c, from the board), and a lane's
+   usual profile in the categories panel. Red says a session runs in another profile than its
+   start asked for. The new-session window (components/launch/LaunchDialog.tsx) offers the shown
+   profiles as chips, as its lanes (.chips, by --lane), and names the profile it starts in beside
+   Start. The Profiles panel (components/profiles) comes last. With one profile shown the page has
+   none of it, as before profiles. Every rule here selects by class: the other sheets are
+   upstream's, rule for rule. */
+
+/* The switch is a lanes control (.segmented); each profile's count is in its color. */
+.segmented.profiles .n { color: var(--c, var(--label-3)); font-weight: 600; }
+
+/* The tag, right after the card's name: the profile's name on a tint of its color. */
+.profile-tag {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--c) 15%, transparent);
+  color: color-mix(in srgb, var(--c) 75%, var(--label));
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A folder no profile has: quiet and outlined; the folder is its tooltip. */
+.profile-tag.unknown {
+  background: none;
+  color: var(--label-2);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 55%, transparent);
+}
+/* Started for one profile, running in another: a warning that is not missed. */
+.profile-tag.wrong { max-width: 60%; background: var(--c); color: #fff; }
+
+/* The usage pill: each profile with recent usage, its name in its color before its windows. */
+.limits-profile { color: color-mix(in srgb, var(--c) 75%, var(--label)); font-weight: 600; }
+.limits-profile ~ .limits-profile { margin-left: 4px; }
+
+/* The usage popover: a part per shown profile, headed by its name in its color. */
+.limits-for { margin-top: 14px; }
+.limits-for h4 { margin: 0; color: color-mix(in srgb, var(--c) 75%, var(--label)); font-size: 13px; font-weight: 600; }
+.limits-for p { margin-top: 6px; }
+.limits-none { color: var(--label-2); }
+
+/* A lane's usual profile: at the end of the line of its folders, a quiet select as the
+   new-session window's folder one (launch.css .where select), in the line's smaller size. */
+.cat-profile { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--label-3); white-space: nowrap; }
+.cat-profile select {
+  max-width: 160px;
+  height: 22px;
+  padding: 0 22px 0 8px;
+  border: 0;
+  border-radius: 6px;
+  outline: 0;
+  appearance: none;
+  background: var(--fill-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='m6.5 8 3.5 3.5L13.5 8' fill='none' stroke='%238e8e93' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 4px center / 13px;
+  color: var(--label);
+  font: 500 12px var(--font);
+  text-overflow: ellipsis;
+}
+.cat-profile select:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
+.cat-profile select:disabled { opacity: 0.5; }
+
+/* The new-session window: the profile it starts in, right before Start, as a card's tag says it. */
+.launch-profile {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 160px;
+  padding: 3px 9px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--c) 15%, transparent);
+  color: color-mix(in srgb, var(--c) 75%, var(--label));
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The Profiles panel (Settings → Profiles…, with more than one profile folder): its rows are drawn
+   as the categories panel's lanes (.cat-row, the dot in --lane), with no handle, so the line of
+   the folder starts under the name. */
+.prof-row .cat-sub { padding-left: 36px; }
+.prof-row.hidden-profile .cat-title { color: var(--label-2); }
+.profile-dir {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--label-2);
+  font: 11.5px var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-missing { color: var(--orange); font-weight: 600; white-space: nowrap; }
+/* Its start command: a line under the folder, indented as it is, labelled quietly as the folder
+   typed in under the rows (.profile-add); the hint under the rows says what it does. */
+.profile-command { display: flex; align-items: center; gap: 8px; padding: 4px 0 0 36px; color: var(--label-2); font-size: 12px; }
+.profile-command > span { flex: none; font-weight: 600; }
+.profile-command-hint { margin: 10px 0 0; color: var(--label-2); font-size: 12px; line-height: 1.4; }
+
+/* Shown or Hidden: two small segments in a well, the pressed one raised. */
+.profile-shown { display: inline-flex; flex: none; padding: 2px; border-radius: 8px; background: var(--fill-2); }
+.profile-shown button {
+  height: 22px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--label-2);
+  font: 600 12px var(--font);
+  transition: background 150ms ease, color 150ms ease;
+}
+.profile-shown [aria-pressed="true"] { background: var(--surface); color: var(--label); box-shadow: var(--shadow-card); }
+.profile-shown button:disabled { opacity: 0.5; }
+
+/* Under the rows: a folder a session reported, one typed in (as a lane's "+ folder"), and Install
+   for a shown profile without the board's hooks, on a tint of its color. */
+.profiles-more { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; max-width: 760px; margin-top: 14px; }
+.profile-unknown { max-width: 100%; }
+.profile-unknown > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-unknown:disabled { opacity: 0.5; }
+.profile-add { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; align-self: stretch; padding: 4px 6px; color: var(--label-2); font-size: 12px; }
+.profile-add > span { flex: none; font-weight: 600; }
+.profile-note {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  align-self: stretch;
+  padding: 10px 10px 10px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--lane) 10%, var(--surface));
+  box-shadow: var(--shadow-card);
+  font-size: 12.5px;
+}
+.profile-note p { flex: 1; min-width: 0; margin: 0; line-height: 1.4; }
+.profile-note .button { flex: none; }
+.profile-note .button:disabled { opacity: 0.5; }
