@@ -257,8 +257,10 @@ switch, so it tags as "All profiles" does.
 
 **On the web board**, with two or more profiles shown:
 
-- The profile switch in the toolbar, by the lanes: "All profiles" or one profile, each with its
-  sessions on show. It filters the cards as the lanes do, and this browser keeps the pick.
+- The profile switch in the toolbar, by the lanes: "All profiles" or one profile, each with the
+  sessions its pick shows. It filters the cards, those of sessions on their way included, as the
+  lanes do; a session in the wrong profile or in a folder no profile has shows under every pick,
+  so you always see it. This browser keeps the pick.
 - Usage per profile: the pill shows each profile with a reading of the last half hour, the popover
   every shown profile's windows (5h, 7d) or "No session lately". The status line keeps each
   profile's windows apart in the state folder (`claude-limits-latest.json` for `default`, as

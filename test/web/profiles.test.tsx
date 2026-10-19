@@ -6,9 +6,11 @@ import { expect, test } from 'bun:test'
 import { createRef } from 'react'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { BoardCategory, BoardPayload, BoardProfile } from '../../src/core/payload.ts'
+import type { LaunchView } from '../../src/core/types.ts'
 import { Board } from '../../web/src/components/Board.tsx'
 import { Toolbar } from '../../web/src/components/Toolbar.tsx'
-import { pickedProfile, profileOptions, profileShown, tagView } from '../../web/src/models/profiles.ts'
+import { placeholderOf } from '../../web/src/models/launch.ts'
+import { pickedProfile, pickShowing, profileOptions, profileShown, tagView } from '../../web/src/models/profiles.ts'
 import { type BoardUi, boardUi, initialUi } from '../../web/src/state/board-ui.ts'
 import { board as boardContext, item, payload, renderInBoard } from './support/board.tsx'
 import { byClass, byId, type Element, find, findAll, hasClass, type Node } from './support/markup.ts'
@@ -129,12 +131,13 @@ test('two shown profiles: the switch after the lanes, All profiles first, each w
   expect(row[row.findIndex(el => el.attrs.get('id') === 'lanes') + 1]).toBe(control)
   expect(elementsIn(control).filter(el => hasClass(el, 'thumb')).length).toBe(1)
   const buttons = tabs(control)
-  expect(buttons.map(textOf)).toEqual(['All profiles5', 'Private2', 'Work1'])
+  // Each with what its pick shows: its own, and the sessions in the wrong or an unknown profile (d, e).
+  expect(buttons.map(textOf)).toEqual(['All profiles5', 'Private3', 'Work3'])
   expect(buttons.map(b => b.attrs.get('data-id'))).toEqual(['all', 'default', 'work'])
   expect(buttons.map(b => b.attrs.get('role'))).toEqual(['tab', 'tab', 'tab'])
   expect(buttons.map(b => b.attrs.get('aria-selected'))).toEqual(['true', 'false', 'false'])
   expect(buttons.map(b => b.attrs.get('style'))).toEqual([undefined, '--c:#5856D6', '--c:#30B0C7'])
-  expect(buttons.map(b => findAll(b.children, el => hasClass(el, 'n')).map(textOf))).toEqual([['5'], ['2'], ['1']])
+  expect(buttons.map(b => findAll(b.children, el => hasClass(el, 'n')).map(textOf))).toEqual([['5'], ['3'], ['3']])
   // It counts what is on show, as the lanes control does.
   expect(tabs(byId(toolbar(DATA, { query: 'beta' }), 'profiles')).map(textOf)).toEqual([
     'All profiles1',
@@ -170,22 +173,29 @@ test('one shown profile: no switch', () => {
   expect(profileOptions(undefined, ITEMS, t)).toBeNull()
 })
 
-test('Work picked: only its cards and lanes, no tags; kept as board.profile; a hidden pick reads as All profiles', () => {
+test('Work picked: its cards and lanes, and every session in the wrong or an unknown profile, tagged; kept as board.profile; a hidden pick reads as All profiles', () => {
   const nodes = boardOf(DATA, { profile: 'work' })
-  expect(cardKeys(nodes)).toEqual(['b'])
-  expect(lanesWithCards(nodes)).toEqual(['client'])
-  expect(findAll(nodes, el => hasClass(el, 'profile-tag'))).toEqual([])
+  // b is work's; d (a folder no profile has) and e (started for work, runs in default) show
+  // under every pick, so they are always seen; their tags say why.
+  expect(cardKeys(nodes)).toEqual(['b', 'd', 'e'])
+  expect(lanesWithCards(nodes)).toEqual(['proj', 'client', 'other'])
+  expect(tagOf(nodes, 'b')).toBeNull()
+  expect(tagOf(nodes, 'd')?.[0]).toBe('profile-tag unknown')
+  expect(tagOf(nodes, 'e')?.[0]).toBe('profile-tag wrong')
   const bar = toolbar(DATA, { profile: 'work' })
   expect(picked(bar)).toBe('work')
-  expect(tabs(byId(bar, 'lanes')).map(b => b.attrs.get('data-id'))).toEqual(['all', 'client'])
-  expect(tabs(byId(bar, 'lanes')).map(textOf)).toEqual(['All1', 'Client1'])
+  expect(tabs(byId(bar, 'lanes')).map(b => b.attrs.get('data-id'))).toEqual(['all', 'proj', 'client', 'other'])
+  expect(tabs(byId(bar, 'lanes')).map(textOf)).toEqual(['All3', 'Project1', 'Client1', 'Other1'])
   // The switch still counts every profile's.
-  expect(tabs(byId(bar, 'profiles')).map(textOf)).toEqual(['All profiles5', 'Private2', 'Work1'])
-  // Private picked: a session started for work that runs here is in it, still in red.
+  expect(tabs(byId(bar, 'profiles')).map(textOf)).toEqual(['All profiles5', 'Private3', 'Work3'])
+  // Private picked: its own, and the same two in red and gray.
   const own = boardOf(DATA, { profile: 'default' })
-  expect(cardKeys(own)).toEqual(['a', 'e'])
+  expect(cardKeys(own)).toEqual(['a', 'd', 'e'])
   expect(tagOf(own, 'a')).toBeNull()
+  expect(tagOf(own, 'd')?.[0]).toBe('profile-tag unknown')
   expect(tagOf(own, 'e')?.[0]).toBe('profile-tag wrong')
+  // c reported no profile: not known, so under All profiles only.
+  expect(cardKeys(own)).not.toContain('c')
 
   // Kept in this browser, as the lane pick is.
   expect(initialUi(stored({})).profile).toBe('all')
@@ -209,6 +219,54 @@ test('Work picked: only its cards and lanes, no tags; kept as board.profile; a h
   expect(profileShown('work', { profile: 'default' })).toBe(false)
   expect(profileShown('work', { profile: null })).toBe(false)
   expect(profileShown('work', {})).toBe(false)
+  expect(profileShown('work', { profile: 'default', profileWanted: 'work' })).toBe(true)
+  expect(profileShown('default', { profile: 'default', profileWanted: 'work' })).toBe(true)
+  expect(profileShown('work', { profile: null, profileFolder: FOLDER })).toBe(true)
+})
+
+test('sessions on their way: each in its launch’s profile, shown by the pick as cards are; a start brings its profile into sight', () => {
+  const launch = (id: string, profile?: string): LaunchView => ({
+    id,
+    name: `start ${id}`,
+    cwd: 'C:\\Work\\acme',
+    category: 'proj',
+    workspace: 'Acme',
+    workspaceId: 'w2',
+    state: 'starting',
+    step: 'prepare',
+    error: '',
+    kind: '',
+    pane: null,
+    key: null,
+    startedAt: Date.now(),
+    doneAt: null,
+    message: '',
+    worktree: null,
+    newWorkspace: false,
+    ...(profile ? { profile } : {}),
+  })
+  const launches = [launch('LW', 'work'), launch('LP', 'default')]
+  expect(placeholderOf(launches[0] as LaunchView)).toMatchObject({ key: 'launch:LW', profile: 'work' })
+  expect('profile' in placeholderOf(launch('LN'))).toBe(false)
+  const data = { ...DATA, launches }
+  const keys = (profile: string) => cardKeys(boardOf(data, { profile })).filter(k => k.startsWith('launch:'))
+  expect(keys('all')).toEqual(['launch:LP', 'launch:LW'])
+  expect(keys('work')).toEqual(['launch:LW'])
+  expect(keys('default')).toEqual(['launch:LP'])
+  // Counted with their profile.
+  expect(tabs(byId(toolbar(data), 'profiles')).map(textOf)).toEqual(['All profiles7', 'Private4', 'Work4'])
+  // One shown: no pick, every one shows, as before profiles.
+  expect(
+    cardKeys(boardOf({ ...data, profiles: ONE_SHOWN }, { profile: 'work' })).filter(k => k.startsWith('launch:')),
+  ).toEqual(['launch:LP', 'launch:LW'])
+  // A start the pick would not show switches the pick: to its profile when shown, else to All profiles.
+  expect(pickShowing('work', PROFILES, 'default')).toBe('default')
+  expect(pickShowing('work', PROFILES, 'gamedev')).toBe('all')
+  expect(pickShowing('work', PROFILES, undefined)).toBe('all')
+  expect(pickShowing('work', PROFILES, 'work')).toBeNull()
+  expect(pickShowing('all', PROFILES, 'default')).toBeNull()
+  expect(pickShowing('gone', PROFILES, 'default')).toBeNull()
+  expect(pickShowing('default', ONE_SHOWN, 'work')).toBeNull()
 })
 
 test('tags on All profiles: each known profile, none without a report, unknown names the folder, wrong profile in red', () => {

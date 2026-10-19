@@ -13,6 +13,7 @@ import { useT } from '../i18n/I18nProvider.tsx'
 import type { LaunchMenus, MenuOrigin } from '../models/board-menus.ts'
 import { launchOf } from '../models/card.ts'
 import { launcherName } from '../models/launch.ts'
+import { pickShowing } from '../models/profiles.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { storage } from '../state/storage.ts'
 import { useStore } from '../state/store.ts'
@@ -191,10 +192,13 @@ export function useLaunch(): Launch {
       focus: () => focusRef.current,
       store: localStore,
       onStarted: l => {
-        // The new card must be in sight: its lane shown, then drawn at once (the window folds into it).
-        const { ui, dispatch } = latest.current.board
+        // The new card must be in sight: its lane and its profile shown, then drawn at once (the
+        // window folds into it).
+        const { data, ui, dispatch } = latest.current.board
+        const pick = pickShowing(ui.profile, data?.profiles, l.profile)
         flushSync(() => {
           if (ui.filter !== 'all' && ui.filter !== l.category) dispatch({ type: 'filter', id: l.category })
+          if (pick !== null) dispatch({ type: 'profile', id: pick })
           dispatch({ type: 'launched', launch: l })
         })
       },

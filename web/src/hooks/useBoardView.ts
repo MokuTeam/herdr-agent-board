@@ -1,12 +1,12 @@
 // The items on show and the lane each is in, from the live data, the page's filters and the
-// cards the user moved (until the server agrees); sessions on their way show whatever the search
-// and the profile switch.
+// cards the user moved (until the server agrees); sessions on their way show whatever the search,
+// and those of the profile the switch shows.
 import { useMemo } from 'react'
 import type { Item, LaunchView } from '../../../src/core/types.ts'
 import type { BoardPayload } from '../api/client.ts'
 import { catOf, visibleItems } from '../models/board-view.ts'
 import { pendingLaunches, placeholderOf } from '../models/launch.ts'
-import { pickedProfile } from '../models/profiles.ts'
+import { pickedProfile, profileShown } from '../models/profiles.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 
 export interface BoardView {
@@ -34,7 +34,9 @@ export function useBoardView(): BoardView {
     const onTheirWay = launchesOnTheirWay(data, launched, now).map(placeholderOf)
     const anyProfile = visibleItems(data.items, options).concat(onTheirWay)
     const visible =
-      profile === 'all' ? anyProfile : visibleItems(data.items, { ...options, profile }).concat(onTheirWay)
+      profile === 'all'
+        ? anyProfile
+        : visibleItems(data.items, { ...options, profile }).concat(onTheirWay.filter(l => profileShown(profile, l)))
     return { visible, categoryOf, anyProfile }
   }, [data, query, sleepers, profile, moves, launched, now])
 }

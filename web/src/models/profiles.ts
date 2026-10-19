@@ -16,7 +16,8 @@ const shownOf = (profiles: readonly BoardProfile[] | undefined): BoardProfile[] 
 
 /**
  * The switch: "All profiles" with every session on show (`visible`, whatever the switch picks),
- * then each shown profile with its own, in the list's order. Null with fewer than two shown.
+ * then each shown profile with the sessions its pick shows, in the list's order. Null with fewer
+ * than two shown.
  */
 export function profileOptions(
   profiles: BoardProfile[] | undefined,
@@ -31,7 +32,7 @@ export function profileOptions(
       id: p.id,
       title: p.title,
       color: p.color,
-      n: visible.filter(i => i.profile === p.id).length,
+      n: visible.filter(i => profileShown(p.id, i)).length,
     })),
   ]
 }
@@ -46,9 +47,29 @@ export function pickedProfile(picked: string, profiles: BoardProfile[] | undefin
   return shown.length >= 2 && shown.some(p => p.id === picked) ? picked : 'all'
 }
 
-/** Whether the switch (`picked`: 'all' or a profile id) shows a session. */
-export const profileShown = (picked: string, item: Pick<Item, 'profile'>): boolean =>
-  picked === 'all' || item.profile === picked
+/**
+ * Whether the switch (`picked`: 'all' or a profile id) shows a session, or a session on its way
+ * (its launch's profile). One in another profile than its start asked for (`profileWanted`), or in a
+ * folder no profile has (`profileFolder`), shows whatever the pick: the owner must see it.
+ */
+export const profileShown = (
+  picked: string,
+  item: Pick<Item, 'profile' | 'profileWanted' | 'profileFolder'>,
+): boolean => picked === 'all' || item.profile === picked || !!item.profileWanted || !!item.profileFolder
+
+/**
+ * The pick that shows a session just started in `profile` (the launch's): the one picked when it
+ * does already, else that profile when it is a shown one, else 'all'. Null: no change.
+ */
+export function pickShowing(
+  picked: string,
+  profiles: BoardProfile[] | undefined,
+  profile: string | undefined,
+): string | null {
+  const now = pickedProfile(picked, profiles)
+  if (now === 'all' || now === profile) return null
+  return profile && shownOf(profiles).some(p => p.id === profile) ? profile : 'all'
+}
 
 /** A tag's class (`kind`), text, tooltip and color. */
 export interface TagView {

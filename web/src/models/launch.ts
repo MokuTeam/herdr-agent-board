@@ -185,8 +185,9 @@ export const needsYou = (l: Pick<LaunchView, 'state'>): boolean =>
 export const launchColumn = (l: Pick<LaunchView, 'state'>): ColumnId => (needsYou(l) ? 'me' : 'work')
 
 /**
- * A launch's board item, in its lane. The fields a session has and a launch has not are empty;
- * nothing reads them for a launch's card.
+ * A launch's board item, in its lane, and in the profile it starts in (the profile switch shows it
+ * as it shows a session). The fields a session has and a launch has not are empty; nothing reads
+ * them for a launch's card.
  */
 export function placeholderOf(l: LaunchView): Item {
   return {
@@ -205,6 +206,7 @@ export function placeholderOf(l: LaunchView): Item {
     autoName: '',
     categorySet: false,
     attention: '',
+    ...(l.profile ? { profile: l.profile } : {}),
   }
 }
 
