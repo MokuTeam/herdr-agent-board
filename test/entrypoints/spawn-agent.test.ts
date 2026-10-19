@@ -50,6 +50,9 @@ const cardOf = (box: Sandbox, key: string): Record<string, unknown> | null => {
  * A sandbox whose home has the profile folders .claude, .claude-work and .claude-gamedev, listed in
  * the board's config: default and work shown (work with its own Claude arguments), gamedev hidden.
  */
+const notListed = (dir: string) =>
+  `--config-dir ${dir} is not the folder of a profile the board knows: see the board's Settings → Profiles`
+
 async function profileBox(launch: unknown = {}, extra: (home: string) => unknown[] = () => []) {
   const box = await sandbox()
   box.state(STATE)
@@ -306,7 +309,7 @@ test('a hidden parent profile is kept: gamedev gets its --env', async () => {
   expect(cardOf(box, SID)).toMatchObject({ profileWant: 'gamedev' })
 }, 30_000)
 
-test('refused before herdr is asked: a folder the board does not know, --profile nope, --profile gamedev, a profile folder that is gone', async () => {
+test('refused before herdr is asked: a folder the board does not know, --profile nope, --profile gamedev, a profile folder that is gone, a --config-dir no profile has', async () => {
   const { box, home, dir } = await profileBox({}, home => [
     { id: 'gone', title: 'Gone', dir: join(home, '.claude-gone'), color: 'brown', hidden: false },
   ])
@@ -329,13 +332,13 @@ test('refused before herdr is asked: a folder the board does not know, --profile
     [['--profile', 'gamedev'], {}, 'the profile "gamedev" is hidden: show it on the board first'],
     [['--profile', 'gone'], {}, `the profile folder ${gone} is not there`],
     [[], { CLAUDE_CONFIG_DIR: gone }, `the profile folder ${gone} is not there`],
-    [
-      ['--config-dir', join(home, '.claude-elsewhere')],
-      {},
-      `the profile folder ${join(home, '.claude-elsewhere')} is not there`,
-    ],
-    // A folder named relative to the tab would be another folder there.
-    [['--config-dir', '.claude-work'], {}, 'the profile folder .claude-work is not there'],
+    // The board's own start in a listed profile whose folder is gone.
+    [['--config-dir', gone], {}, `the profile folder ${gone} is not there`],
+    // A folder no listed profile has, there or not: nothing could say which profile its session is in.
+    [['--config-dir', odd], {}, notListed(odd)],
+    [['--config-dir', join(home, '.claude-elsewhere')], {}, notListed(join(home, '.claude-elsewhere'))],
+    // Named relative to the tab, it would be another folder there: no listed profile's.
+    [['--config-dir', '.claude-work'], {}, notListed('.claude-work')],
   ]
   for (const [args, env, message] of cases) {
     const r = await runSpawn(box, ['--name', 'Helper', '--cwd', dir, '--workspace', 'wA', ...args], env)
@@ -438,16 +441,12 @@ test('--profile default starts the child as before, without --env, even from a w
 
 /**
  * A profileBox whose pane wA:p9 waits at a shell prompt in tab wA:t9, holding the terminal
- * `terminal`; `record` is written as profile-panes.json.
+ * `terminal` (null: herdr does not say); `record` is written as profile-panes.json.
  */
-async function paneBox(terminal: string, record?: Record<string, unknown>) {
+async function paneBox(terminal: string | null, record?: Record<string, unknown>) {
   const b = await profileBox()
-  b.box.state({
-    ...STATE,
-    'pane get': {
-      seq: [{ result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', terminal_id: terminal, agent: null } } }, READY],
-    },
-  })
+  const shell = { pane_id: 'wA:p9', tab_id: 'wA:t9', ...(terminal ? { terminal_id: terminal } : {}), agent: null }
+  b.box.state({ ...STATE, 'pane get': { seq: [{ result: { pane: shell } }, READY] } })
   if (record) writePanes(b.box, record)
   return b
 }
@@ -501,6 +500,32 @@ test('a start that leaves the env alone never takes a pane opened in another pro
     assert.deepEqual(asked(b.box), ['pane get wA:p9'])
   }
 }, 60_000)
+
+test('a terminal herdr does not prove: a pane recorded in work is refused to a start that leaves the env alone, and to one in work', async () => {
+  const cases: [string, string | null, Record<string, unknown>][] = [
+    // The record names no terminal (herdr's tab create did not say one).
+    ['no terminal recorded', 'term-9', { profile: 'work', at: 1 }],
+    // herdr's pane get does not say which terminal the pane holds.
+    ['no terminal from herdr', null, { profile: 'work', terminal: 'term-9', at: 1 }],
+  ]
+  for (const [why, terminal, entry] of cases) {
+    const record = { 'wA:p9': entry }
+    // From the default env: the pane could still be work's, where Claude would run in work.
+    const plain = await paneBox(terminal, record)
+    const r = await runSpawn(plain.box, [...HERE, '--cwd', plain.dir])
+    assert.equal(r.code, 1, why)
+    assert.equal(r.stderr.trim(), notOpenedIn('default'), why)
+    assert.deepEqual(asked(plain.box), ['pane get wA:p9'], why)
+    // The record stays to block the next start too.
+    expect(JSON.parse(readFileSync(panesFile(plain.box), 'utf8'))).toEqual(record)
+    // In work: nothing proves the pane is the one opened in work.
+    const work = await paneBox(terminal, record)
+    const w = await runSpawn(work.box, [...HERE, '--cwd', work.dir], { CLAUDE_CONFIG_DIR: work.work })
+    assert.equal(w.code, 1, why)
+    assert.equal(w.stderr.trim(), notOpenedIn('work'), why)
+    assert.deepEqual(asked(work.box), ['pane get wA:p9'], why)
+  }
+}, 90_000)
 
 test('a pane id herdr gave out again is not the pane it recorded: refused for work, a plain shell for default', async () => {
   // wA:p9 was opened in work; herdr started over and wA:p9 is now another terminal's, with herdr's env.

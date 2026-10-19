@@ -345,20 +345,22 @@ profile, the agent's own or the one `--profile` names, the new tab gets
 then records the pane as opened in that profile, with the terminal herdr opened it with, and, with
 `--session-id`, the card as meant to run in it, so a session that reports another profile shows
 the "wrong profile" warning. spawn-agent never falls back to another profile: it refuses, before
-herdr is asked anything, when
+herdr opens, renames or types anything, when
 
 - the agent's own folder is not a profile the board knows (or is named relative to where it
   runs): pass `--profile <id>`;
 - `--profile` names a profile the board does not list, or one that is hidden (show it first);
 - the profile's folder is not there;
 - `--pane` names a pane not opened in that profile, or, for a start in the default profile, one
-  opened in another (leave `--pane` out to get a new tab). herdr is asked first which terminal
-  the pane holds: after herdr starts over it gives a pane's id out again, and a record counts only
-  for the terminal the pane was opened with.
+  that may have been opened in another (leave `--pane` out to get a new tab). herdr is asked
+  first which terminal the pane holds: after herdr starts over it gives a pane's id out again.
+  A start in a profile takes the pane only when herdr shows it holds the terminal it was
+  recorded with; a start in the default profile is refused unless herdr shows it holds another.
 
 herdr that does not take `--env` fails the start too, saying so: nothing was started. The board's
-own launches pass `--config-dir <folder>` (a folder it checked) or `--keep-env` (the env as herdr
-makes it) instead of `--profile`; only one of the three goes at a time.
+own launches pass `--config-dir <folder>` (the folder of a profile it lists, which it checked; any
+other folder is refused) or `--keep-env` (the env as herdr makes it) instead of `--profile`; only
+one of the three goes at a time.
 
 Details it takes care of: `/rename` runs without a turn, so herdr calls it stalled, and the
 screen is read for "Session renamed" instead. Right after it Claude can drop typed text, and a

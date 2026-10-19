@@ -244,18 +244,21 @@ export function launchTarget(
 
 /**
  * Where spawn-agent starts: `configDir`, CLAUDE_CONFIG_DIR for the new tab (null: the env as herdr
- * makes it), and the profile the session is meant to run in (null when no listed one has the
- * folder). Refused (`detail`: the id asked for, or the folder): a profile not listed (`missing`)
- * or hidden, or the agent's own folder no listed profile has (`unknown`).
+ * makes it), and the profile the session is meant to run in (null only when the env is kept and
+ * no listed one has its folder). Refused (`detail`: the id asked for, or the folder): a profile
+ * not listed (`missing`) or hidden, the agent's own folder no listed profile has (`unknown`), or a
+ * folder to set that no listed profile has (`unlisted`).
  */
 export type SpawnEnv =
   | { ok: true; configDir: string | null; profile: Profile | null }
-  | { ok: false; error: 'missing' | 'hidden' | 'unknown'; detail: string }
+  | { ok: false; error: 'missing' | 'hidden' | 'unknown' | 'unlisted'; detail: string }
 
 /**
  * The profile a spawn-agent start is in. The board's own starts say it: `keepEnv` leaves the env
  * (the profile is the one of the folder spawn-agent's own env points to, `own`), `configDir` sets
- * the folder as given (the board checked it). `profile` names a listed, shown profile. Without
+ * the folder as given (the board checked it), the folder of a listed profile, hidden or not: the
+ * pane and the card are recorded in it, and a folder no listed profile has is refused, as nothing
+ * could say which profile its session is in. `profile` names a listed, shown profile. Without
  * any, an agent starts its helper in its own folder, hidden profile or not: a folder no listed
  * profile has, or one named relative to wherever the agent runs, is refused, never folded into
  * another. herdr's env is taken to be the default profile's, as on every computer before
@@ -277,7 +280,12 @@ export function spawnEnv(
     profile,
   })
   if (o.keepEnv) return { ok: true, configDir: null, profile: profileForDir(list, ownDir) }
-  if (o.configDir !== undefined) return { ok: true, configDir: o.configDir, profile: profileForDir(list, o.configDir) }
+  if (o.configDir !== undefined) {
+    const listed = profileForDir(list, o.configDir)
+    return listed
+      ? { ok: true, configDir: o.configDir, profile: listed }
+      : { ok: false, error: 'unlisted', detail: o.configDir }
+  }
   if (o.profile !== undefined) {
     const asked = list.find(p => p.id === o.profile)
     if (!asked) return { ok: false, error: 'missing', detail: o.profile }

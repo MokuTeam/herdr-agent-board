@@ -10,7 +10,12 @@ import { isAbsolute, resolve } from 'node:path'
 import { writeCard } from '../../adapters/cards.ts'
 import { herdr, herdrText, tabCreateRoot } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
-import { forgetProfilePane, profilePanes, recordProfilePane } from '../../adapters/profile-panes.ts'
+import {
+  forgetProfilePane,
+  possibleProfilePanes,
+  provenProfilePanes,
+  recordProfilePane,
+} from '../../adapters/profile-panes.ts'
 import { type Env, inheritedProfileDir, loadProfiles } from '../../adapters/profiles.ts'
 import { slugName, uniqueSlug } from '../../core/launch/names.ts'
 import { choosesSession, type SpawnOptions, shellLine, stillTyped } from '../../core/launch/spawn-args.ts'
@@ -73,6 +78,8 @@ async function nameInHerdr(pane: string, name: string): Promise<string> {
 function refusal(target: Extract<SpawnEnv, { ok: false }>): string {
   if (target.error === 'missing') return `no profile "${target.detail}": see the board's Settings → Profiles`
   if (target.error === 'hidden') return `the profile "${target.detail}" is hidden: show it on the board first`
+  if (target.error === 'unlisted')
+    return `--config-dir ${target.detail} is not the folder of a profile the board knows: see the board's Settings → Profiles`
   return `this session's Claude folder ${target.detail} is not a profile the board knows: pass --profile <id>`
 }
 
@@ -94,16 +101,18 @@ function startProfile(
   const { configDir } = start
   if (configDir !== null && (!isAbsolute(configDir) || !isFolder(configDir)))
     throw new Error(`the profile folder ${configDir} is not there`)
-  // A record not of this profile fits no better once herdr says which terminal the pane holds.
-  if (o.pane && configDir !== null) paneCheck(o.pane, profilePanes().get(o.pane), start)
+  // A pane that could not even be in this profile is not proven in it once herdr says its terminal.
+  if (o.pane && configDir !== null)
+    paneCheck(o.pane, possibleProfilePanes(new Map([[o.pane, null]])).get(o.pane), start)
   return start
 }
 
 /**
- * A pane given with --pane keeps the env it was opened with (`opened`: the profile it is recorded
- * in, undefined when it is not). A start that sets the folder takes only a pane opened in that
- * profile; one that leaves the env alone never takes a pane opened in another profile, where
- * Claude would run in that one. Throws with the reason.
+ * A pane given with --pane keeps the env it was opened with (`opened`: the profile its record
+ * gives, undefined when none does). A start that sets the folder takes only a pane opened in that
+ * profile (`opened` from provenProfilePanes); one that leaves the env alone never takes a pane
+ * that could have been opened in another profile (from possibleProfilePanes), where Claude would
+ * run in that one. Throws with the reason.
  */
 function paneCheck(pane: string, opened: string | undefined, { configDir, profile }: Start): void {
   const setsFolder = configDir !== null
@@ -167,9 +176,12 @@ export async function spawnAgent(
     const p = await paneInfo(pane)
     // Typed into a running agent, the command would go to it as a prompt.
     if (p.agent) throw new Error(`${pane} already runs ${p.agent}: --pane takes a pane at a shell prompt`)
-    // herdr gives a pane's id out again after it starts over: only a record of the terminal the
-    // pane holds now tells the env it was opened with.
-    paneCheck(pane, profilePanes(new Map([[pane, p.terminal]])).get(pane), start)
+    // herdr gives a pane's id out again after it starts over. Setting the folder takes the pane
+    // only when herdr proves it holds the terminal it was recorded with; leaving the env alone
+    // refuses it unless herdr proves it holds another one.
+    const live = new Map([[pane, p.terminal]])
+    const opened = configDir !== null ? provenProfilePanes(live) : possibleProfilePanes(live)
+    paneCheck(pane, opened.get(pane), start)
     if (p.tab) await herdr(['tab', 'rename', p.tab, label]).catch(() => {})
   } else {
     let opened: Awaited<ReturnType<typeof tabCreateRoot>>

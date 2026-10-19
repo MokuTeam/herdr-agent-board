@@ -287,15 +287,32 @@ test('spawn-agent starts in the folder of the agent that runs it, or the profile
   // The board's own starts: the env as it is, or the folder it checked.
   expect(spawnEnv({ keepEnv: true }, WORK.dir, L, H, 'win32')).toEqual({ ok: true, configDir: null, profile: WORK })
   expect(spawnEnv({ keepEnv: true }, 'D:\\odd', L, H, 'win32')).toEqual({ ok: true, configDir: null, profile: null })
-  expect(spawnEnv({ configDir: 'C:\\x' }, undefined, L, H, 'win32')).toEqual({
-    ok: true,
-    configDir: 'C:\\x',
-    profile: null,
-  })
   expect(spawnEnv({ configDir: WORK.dir }, undefined, L, H, 'win32')).toEqual({
     ok: true,
     configDir: WORK.dir,
     profile: WORK,
+  })
+  // The folder as given, of the listed profile it is (another spelling; a hidden one: a parent's).
+  expect(spawnEnv({ configDir: 'c:/users/me/.claude-work/' }, undefined, L, H, 'win32')).toEqual({
+    ok: true,
+    configDir: 'c:/users/me/.claude-work/',
+    profile: WORK,
+  })
+  expect(spawnEnv({ configDir: GAMEDEV.dir }, undefined, L, H, 'win32')).toEqual({
+    ok: true,
+    configDir: GAMEDEV.dir,
+    profile: GAMEDEV,
+  })
+  // A folder no listed profile has: nothing could say which profile its session is in.
+  expect(spawnEnv({ configDir: 'C:\\x' }, undefined, L, H, 'win32')).toEqual({
+    ok: false,
+    error: 'unlisted',
+    detail: 'C:\\x',
+  })
+  expect(spawnEnv({ configDir: '.claude-work' }, WORK.dir, L, H, 'win32')).toEqual({
+    ok: false,
+    error: 'unlisted',
+    detail: '.claude-work',
   })
 })
 
