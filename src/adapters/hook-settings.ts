@@ -44,7 +44,7 @@ export function readSettings(dir: string): SettingsRead {
   const file = join(dir, 'settings.json')
   let text: string | null = null
   try {
-    text = readFileSync(file, 'utf8').replace(/^﻿/, '')
+    text = readFileSync(file, 'utf8').replace(/^\uFEFF/, '')
   } catch {
     return { file, text, settings: null, error: '' }
   }
