@@ -45,6 +45,14 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
    anything else in a profile folder beyond `settings.json`, its backup and
    `skills/herdr-agents`. A profile shown later gets its hooks and the skill from the install
    action again, or from Install in the Profiles panel.
+
+   A session brought back from the archive runs in its own profile again, hidden or not, never in
+   another: the one its card reports, whose folder holds its conversation (or, on a card from
+   before profiles, the one profile whose folder holds it). It stays in the archive, saying why,
+   when the board cannot be sure: that profile is no longer listed, the session ran in another
+   profile than its start asked for, its conversation is in another profile's folder, or more
+   than one profile holds it. A MokuPilot call is still refused outside the board's own profile
+   ([Web board](#web-board)). With `~/.claude` alone nothing changes.
 2. **A key** (recommended), in herdr's `config.toml` (`%APPDATA%\herdr\config.toml` on Windows,
    `~/.config/herdr/config.toml` elsewhere), then `herdr server reload-config`. Without it the
    board opens with `herdr plugin action invoke agent-board.open`.
@@ -221,8 +229,9 @@ Claude Code keeps its account, settings and sessions in a config folder: `~/.cla
 shows the sessions of all of them, each with its profile, and starts a session in the profile you
 choose. It never guesses: when it cannot be sure of the profile, it refuses and says why.
 
-**What it finds.** `~/.claude`, every `~/.claude-*` folder with a `settings.json` or a `projects/`
-in it, and the folder the board's own `CLAUDE_CONFIG_DIR` points to. It keeps them in config.json
+**What it finds.** `~/.claude`, the folder the board's own `CLAUDE_CONFIG_DIR` points to, and
+every `~/.claude-<name>` folder with a `settings.json`, a `projects/` or a `sessions/` in it
+(Claude ran in it; a `<name>` with a dot, such as `work.bak`, is none). It keeps them in config.json
 as `profiles`, each with an `id` from its folder (`~/.claude` is `default`, `~/.claude-work` is
 `work`), a `title` ("Default", "Work"), its folder (`dir`), a `color`, `hidden`, and, if you like,
 `command` (its start command, below) and `args` (more Claude arguments for the sessions the board

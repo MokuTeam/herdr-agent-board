@@ -42,6 +42,19 @@ test('found: the default folder first, then ~/.claude-* folders, each with setti
   expect(findProfileDirs(join(home, 'gone'))).toEqual([])
 })
 
+test('found, as upstream: a ~/.claude-<name> folder Claude ran in (sessions/ or projects/), no dot in <name>', () => {
+  const home = join(isolatedHome(), 'home')
+  for (const d of ['.claude-work/sessions', '.claude-moku/projects', '.claude-empty', '.claude.json.bak-x'])
+    mkdirSync(join(home, d), { recursive: true })
+  writeFileSync(join(home, '.claude-file'), '')
+  // A backup beside a profile is no profile, though it holds projects/.
+  mkdirSync(join(home, '.claude-x.bak', 'projects'), { recursive: true })
+  expect(findProfileDirs(home)).toEqual([join(home, '.claude-moku'), join(home, '.claude-work')])
+  // The default folder's rule is as it was: sessions/ alone does not make it found.
+  mkdirSync(join(home, '.claude', 'sessions'), { recursive: true })
+  expect(findProfileDirs(home)).toEqual([join(home, '.claude-moku'), join(home, '.claude-work')])
+})
+
 test('loadProfiles: a board whose CLAUDE_CONFIG_DIR is a folder elsewhere keeps one profile shown', () => {
   const home = join(isolatedHome(), 'home')
   const own = join(home, 'elsewhere', 'claude')

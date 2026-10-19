@@ -25,9 +25,11 @@ const isFile = (path: string): boolean => {
 }
 
 /**
- * The Claude folders in use here: the default one first, then every ~/.claude-* folder by name,
- * each when it holds settings.json or projects/. mergeProfiles lists the default one even when it
- * is not found, and shows it then only when it is the board's own.
+ * The Claude folders in use here: the default one first, when it holds settings.json or projects/,
+ * then every ~/.claude-<name> folder by name, when it holds settings.json, projects/ or sessions/
+ * (Claude ran in it); a <name> with a dot in it (a backup such as ~/.claude-work.bak) is none.
+ * mergeProfiles lists the default one even when it is not found, and shows it then only when it
+ * is the board's own.
  */
 export function findProfileDirs(home: string = homedir()): string[] {
   let names: string[] = []
@@ -37,10 +39,11 @@ export function findProfileDirs(home: string = homedir()): string[] {
   const used = (dir: string): boolean =>
     isFolder(dir) && (isFile(join(dir, 'settings.json')) || isFolder(join(dir, 'projects')))
   const found = names
-    .filter(name => /^\.claude-./i.test(name))
+    .filter(name => /^\.claude-[^.]+$/i.test(name))
     .sort()
     .map(name => join(home, name))
-  return [defaultProfileDir(home), ...found].filter(used)
+    .filter(dir => used(dir) || isFolder(join(dir, 'sessions')))
+  return [defaultProfileDir(home)].filter(used).concat(found)
 }
 
 /** The profile folder this process's environment points to (unset: ~/.claude). */
