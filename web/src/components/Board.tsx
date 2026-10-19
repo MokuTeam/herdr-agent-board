@@ -4,17 +4,19 @@
 // the sessions it works with. A card back from the archive comes out of the Archive button.
 import { type KeyboardEvent, type MouseEvent, useEffect, useRef, useState } from 'react'
 import type { Item } from '../../../src/core/types.ts'
-import { flyFromArchive } from '../hooks/useArchive.ts'
+import { type Archive, flyFromArchive } from '../hooks/useArchive.ts'
 import { useBoardView } from '../hooks/useBoardView.ts'
 import { useCardDrag } from '../hooks/useCardDrag.ts'
 import { useFlip } from '../hooks/useFlip.ts'
 import { useGoToSession } from '../hooks/useGoToSession.ts'
 import { useSessionActions } from '../hooks/useSessionActions.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
+import { dropWhy } from '../models/archive-drop.ts'
 import { anyShown, dropTarget, lanesOf } from '../models/board-view.ts'
 import { relatedKeys } from '../models/helper-model.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { Card, type LaunchSlots } from './Card.tsx'
+import { DropArchive } from './DropArchive.tsx'
 import { Lane, type NewSessionContext } from './Lane.tsx'
 
 export interface BoardProps {
@@ -29,18 +31,21 @@ export interface BoardProps {
   takeovers?: ReadonlyMap<string, string>
   /** The height of a panel docked at the bottom, which a drag scrolls above (Task 25). */
   roomBelow?: () => number
+  /** The archive: a card dragged onto its place, which comes up with the drag, goes there. */
+  archive?: Pick<Archive, 'archiveSession'>
 }
 
 const buttonOf = (e: MouseEvent<HTMLElement>): HTMLElement | null | undefined =>
   e.target instanceof Element ? e.target.closest<HTMLElement>('[data-act]') : undefined
 
-export function Board({ onOpen, onNewSession, onLaneHead, launch, takeovers, roomBelow }: BoardProps) {
+export function Board({ onOpen, onNewSession, onLaneHead, launch, takeovers, roomBelow, archive }: BoardProps) {
   const t = useT()
-  const { data, ui, canMutate, canEdit, dispatch } = useBoardContext()
+  const { data, ui, canMutate, canEdit, dispatch, toast } = useBoardContext()
   const { visible } = useBoardView()
   const actions = useSessionActions()
   const goToSession = useGoToSession()
   const root = useRef<HTMLElement>(null)
+  const dropPlace = useRef<HTMLDivElement>(null)
   const lanes = data ? lanesOf(data, visible, ui.filter, ui.moves) : []
   const itemOf = (key: string): Item | undefined => data?.items.find(i => i.key === key)
   // The card whose sessions are marked; a card no longer on show marks none.
@@ -68,6 +73,13 @@ export function Board({ onOpen, onNewSession, onLaneHead, launch, takeovers, roo
     targetAt: (key, place) => dropTarget(itemOf(key), ui.moves, place),
     onDrop: (key, target) => void actions.moveCard(key, target),
     roomBelow,
+    // Into the archive as "Archive" in the card's menu takes it; the card went into the place on its own.
+    archive: archive && {
+      place: () => dropPlace.current,
+      why: key => dropWhy(itemOf(key), data?.schedules ?? [], canMutate, canEdit),
+      onDrop: key => void archive.archiveSession(key, { fly: false }),
+      onRefused: why => toast(t(why), true),
+    },
   })
 
   function open(key: string, compose = false): void {
@@ -124,6 +136,7 @@ export function Board({ onOpen, onNewSession, onLaneHead, launch, takeovers, roo
           renderCard={renderCard}
         />
       ))}
+      {archive && <DropArchive view={drag.archive} placeRef={dropPlace} />}
     </main>
   )
 }

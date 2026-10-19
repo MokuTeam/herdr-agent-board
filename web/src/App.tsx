@@ -148,6 +148,7 @@ export function App() {
           roomBelow={panels.roomBelow}
           launch={launch.slots}
           takeovers={launch.takeovers}
+          archive={archive}
         />
       </div>
       <SidePanels
