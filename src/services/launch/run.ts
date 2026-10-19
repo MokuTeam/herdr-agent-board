@@ -3,6 +3,11 @@
 // the card until it is answered, another dialog waited out, and the name and first message the
 // launcher did not type. The card gets the chosen lane as soon as the session has an id, and the
 // profile it is meant to run in, for the board to check against the one its hooks report.
+//
+// A session coming back from the archive (services/archive.ts) starts the same way, resumed by its
+// id (`--resume <id>` instead of --session-id; `{resume}` for a launch.command, which without it
+// leaves the resume to the board's own spawn-agent), with no /rename and no first message: it
+// keeps its name, its card and its conversation.
 import { randomUUID } from 'node:crypto'
 import { realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -25,6 +30,8 @@ import type { LaunchRequest } from './request.ts'
 /** A launch as the board keeps it while it runs. */
 export interface Launch extends LaunchRequest {
   id: string
+  /** The id of the session it resumes (Return, from the archive), null for a new one. */
+  resume: string | null
   state: LaunchState
   step: LaunchStep
   startedAt: number
@@ -46,11 +53,12 @@ export interface Launch extends LaunchRequest {
   trusting: boolean
 }
 
-/** A new launch for a checked request; `items`: the board as it is now. */
-export function newLaunch(request: LaunchRequest, items: Item[]): Launch {
+/** A new launch for a checked request; `items`: the board as it is now; `resume`: the session it resumes. */
+export function newLaunch(request: LaunchRequest, items: Item[], resume: string | null = null): Launch {
   return {
     ...request,
     id: randomUUID().slice(0, 8),
+    resume,
     state: 'starting',
     step: 'prepare',
     startedAt: Date.now(),
@@ -134,6 +142,13 @@ export function launchRunner({
   })
 
   async function runLaunch(l: Launch): Promise<void> {
+    // A resumed one has its id and its card already; the card is told the profile it is meant to
+    // run in, as for any start.
+    if (l.resume) {
+      l.sessionId = l.resume
+      writeCard(l.resume, { profileWant: l.profile })
+      l.carded = l.resume
+    }
     if (l.worktree) await makeWorktree(l, l.worktree.branch)
     if (l.newWorkspace) {
       step(l, 'workspace')
@@ -144,7 +159,7 @@ export function launchRunner({
       l.rootTab = ws.tab
       if (ws.pane) notePane(l, ws.pane, ws.terminal)
     }
-    const launcher = launcherFor(deps.cfg.launch)
+    const launcher = launcherFor(deps.cfg.launch, { resume: !!l.resume })
     const r = await launcher.start(l, events(l))
     if (r.dialog && (await trustShown(l, 3))) {
       // Claude asks to trust the folder: the card asks the user, and the board goes on once it is.
@@ -196,7 +211,8 @@ export function launchRunner({
   /** Claude's /rename and the first message, once the agent herdr started waits for input. */
   async function nameAndBrief(l: Launch, kind: string): Promise<void> {
     const pane = paneOf(l)
-    if (kind === 'claude') {
+    // A resumed session keeps the name it had.
+    if (kind === 'claude' && !l.resume) {
       step(l, 'rename')
       // The name is cosmetic and Claude runs by now: a herdr error here must not mark the launch
       // failed, or a retry would start a second session.
@@ -283,7 +299,13 @@ export function launchRunner({
    */
   async function finishStart(l: Launch, { kind, nameAgent }: { kind: string; nameAgent: boolean }): Promise<void> {
     const pane = paneOf(l)
-    if (kind === 'claude') {
+    // A resumed session has its name; its herdr name is given when the launcher did not.
+    if (kind === 'claude' && l.resume) {
+      if (nameAgent)
+        await takenNames()
+          .then(taken => herdr(['agent', 'rename', pane, uniqueSlug(slugName(l.name), taken)]))
+          .catch(err => deps.log(`launch ${l.name}: naming: ${messageOf(err)}`))
+    } else if (kind === 'claude') {
       step(l, 'rename')
       try {
         if ((await inputEmpty(pane)) && (await claudeRename(pane, l.name)) && nameAgent) {

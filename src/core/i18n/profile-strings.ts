@@ -82,6 +82,17 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'prof.add': 'Add a folder somewhere else',
     'prof.noHooks': 'The board’s hooks are not in {title}’s settings.json: its sessions show no status or title',
     'prof.install': 'Install',
+    // the archive (services/archive.ts): a session whose profile the board cannot tell is not
+    // archived, and one in the archive comes back only in its own profile
+    'archive.why.profile':
+      'Its Claude profile is not known ({why}): it could not come back from the archive in the right account',
+    'archive.err.profile':
+      '“{name}” stays in the archive: the board cannot be sure which Claude profile it ran in ({profile}), and it never resumes a session in a guessed one. Resume it yourself in its profile: claude --resume {session}',
+    // spawn-agent --resume (services/launch/spawn-agent.ts): the profile whose folder holds the conversation
+    'spawn.err.resumeProfile':
+      'The conversation of {session} is not in the profile {profile}: a session is resumed only in the profile it ran in',
+    'spawn.err.resumeMany':
+      'The conversation of {session} is in more than one profile ({profiles}): pass --profile <id> to say which',
   },
   ru: {
     // the Profiles panel's edits (adapters/config-file.ts editProfiles)
@@ -162,5 +173,15 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'prof.add': 'Добавить папку из другого места',
     'prof.noHooks': 'Хуков доски нет в settings.json профиля {title}: его сессии не показывают ни статус, ни заголовок',
     'prof.install': 'Установить',
+    // the archive (services/archive.ts): a session whose profile the board cannot tell is not
+    // archived, and one in the archive comes back only in its own profile
+    'archive.why.profile': 'Её профиль Claude неизвестен ({why}): из архива её не вернуть в нужном аккаунте',
+    'archive.err.profile':
+      '«{name}» остаётся в архиве: доска не уверена, в каком профиле Claude она работала ({profile}), а угадывать профиль она не станет. Продолжи её сам в её профиле: claude --resume {session}',
+    // spawn-agent --resume (services/launch/spawn-agent.ts): the profile whose folder holds the conversation
+    'spawn.err.resumeProfile':
+      'Разговора {session} нет в профиле {profile}: сессию продолжают только в том профиле, где она шла',
+    'spawn.err.resumeMany':
+      'Разговор {session} есть в нескольких профилях ({profiles}): укажи нужный через --profile <id>',
   },
 }

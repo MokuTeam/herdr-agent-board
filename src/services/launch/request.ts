@@ -47,11 +47,16 @@ export interface LaunchRequest {
 
 export type CheckResult = { ok: true; launch: LaunchRequest } | { ok: false; field: string; error: string }
 
+/** A card a start keeps the profile of, as the server hands it in: its key, its name and what tells its profile. */
+export type ParentFacts = { key: string } & Pick<Item, 'name' | 'profile' | 'profileFolder' | 'profileWanted'>
+
 /**
  * Check a launch request: { ok, launch }, or { ok: false, field, error } for the field at fault.
  * `profiles`: the board's; `items`: the board now, for the session a "New here" names;
  * `typesCommand`: the launcher types a command into the tab (the board's own spawn-agent), so the
- * profile's start command is read and checked; other launchers never read it.
+ * profile's start command is read and checked; other launchers never read it. `parent`: the card
+ * the start keeps the profile of, given by the server in place of the body's (a session coming
+ * back from the archive, which is not among the board's items).
  */
 export async function checkRequest(
   body: unknown,
@@ -60,7 +65,14 @@ export async function checkRequest(
     profiles,
     items = [],
     typesCommand = false,
-  }: { categories?: Set<string> | null; profiles: ProfileSet; items?: Item[]; typesCommand?: boolean },
+    parent: heldTo,
+  }: {
+    categories?: Set<string> | null
+    profiles: ProfileSet
+    items?: Item[]
+    typesCommand?: boolean
+    parent?: ParentFacts
+  },
 ): Promise<CheckResult> {
   const fail = (field: string, key: string, vars?: Vars): CheckResult => ({ ok: false, field, error: t(key, vars) })
   const b = isRecord(body) ? body : {}
@@ -99,9 +111,9 @@ export async function checkRequest(
     worktree = { branch }
   }
   // The profile: the one chosen, or the parent's. A parent the board does not have now is one
-  // whose profile it does not know.
-  const parent = given(b.parent) ?? null
-  const from = parent === null ? undefined : items.find(i => i.key === parent)
+  // whose profile it does not know, unless the server hands it in.
+  const parent = heldTo?.key ?? given(b.parent) ?? null
+  const from = heldTo ?? (parent === null ? undefined : items.find(i => i.key === parent))
   const parentName = from?.name || parent || ''
   const target = launchTarget(
     given(b.profile),

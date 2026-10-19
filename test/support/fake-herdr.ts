@@ -3,6 +3,8 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 
 type Reply = {
+  until?: string[]
+  then?: Reply
   seq?: Reply[]
   waitFor?: string
   text?: string
@@ -20,6 +22,18 @@ const three = args.slice(0, 3).join(' ')
 const key = state[three] ? three : args.slice(0, 2).join(' ')
 let reply = state[key]
 if (!reply) throw new Error(`Unexpected fake command: ${args.join(' ')}`)
+// { until: ['tab close', ...], then: <reply> }: this reply until one of those commands was
+// called, the other one after (a pane that a close took away).
+if (reply.until) {
+  const called = readFileSync(logPath, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map(line => (JSON.parse(line) as string[]).slice(0, 2).join(' '))
+  if (reply.until.some(c => called.includes(c))) {
+    if (!reply.then) throw new Error(`No "then" reply: ${key}`)
+    reply = reply.then
+  }
+}
 // { seq: [...] }: one reply per call in turn, the last one from then on (a screen that changes).
 if (reply.seq) {
   const counter = `${statePath}.${key.replace(/[^\w-]+/g, '_')}.n`

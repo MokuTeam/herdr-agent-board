@@ -119,3 +119,36 @@ test('programs a launcher may not be: cmd, .bat and .cmd, by any spelling', () =
   for (const program of ['pwsh', 'node', 'bun.exe', 'cmdlet-runner', 'C:\\bin\\spawn-agent.ps1'])
     assert.ok(!isRefusedProgram(program), program)
 })
+
+test('a launch.command resumes through {resume}, left out for a new session', () => {
+  // A session coming back from the archive (services/archive.ts) is resumed by its id.
+  const S = '0f8fad5b-d9cb-469f-a165-70867728950e'
+  const OTHER = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
+  const template = [
+    'pwsh',
+    '-File',
+    'start.ps1',
+    '-Cwd',
+    '{cwd}',
+    ['-Resume', '{resume}'],
+    ['-SessionId', '{sessionId}'],
+  ]
+  assert.deepEqual(commandArgs(template, { cwd: 'C:/x', resume: S, sessionId: '' }).args, [
+    '-File',
+    'start.ps1',
+    '-Cwd',
+    'C:/x',
+    '-Resume',
+    S,
+  ])
+  assert.deepEqual(commandArgs(template, { cwd: 'C:/x', resume: '', sessionId: OTHER }).args, [
+    '-File',
+    'start.ps1',
+    '-Cwd',
+    'C:/x',
+    '-SessionId',
+    OTHER,
+  ])
+  assert.ok(usesPlaceholder(template, 'resume'))
+  assert.ok(!usesPlaceholder(['pwsh', '-File', 'start.ps1', '{cwd}'], 'resume'))
+})

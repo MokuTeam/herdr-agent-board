@@ -103,6 +103,31 @@ export function addEntry(fields: NewEntry): ScheduleEntry {
   }
 }
 
+/**
+ * Put back an entry that waited with an archived session (services/archive.ts): under its own id
+ * when that is free, so `board unschedule <id>` still finds it, else under a new one. One there
+ * under its id already, for the same session with the same text (left by a board that stopped
+ * between copying and removing it), is not doubled. Returns the entry.
+ */
+export function restoreEntry(entry: ScheduleEntry): ScheduleEntry {
+  mkdirSync(scheduleDir(), { recursive: true })
+  const { id, created, ...fields } = entry
+  if (ID.test(String(id))) {
+    const seen: { there: ScheduleEntry | null } = { there: null }
+    const back = updateJson(
+      fileOf(id),
+      (taken: ScheduleEntry | null) => {
+        seen.there = taken
+        return taken ? undefined : { id, ...fields, created: created ?? Date.now() }
+      },
+      isEntry,
+    )
+    if (back) return back
+    if (seen.there?.key === fields.key && seen.there?.text === fields.text) return seen.there
+  }
+  return addEntry(fields)
+}
+
 /** Who asks for a restart of which session (`by`: 'agent' or 'user'), and the note for after it. */
 export type RestartAsk = {
   key: string

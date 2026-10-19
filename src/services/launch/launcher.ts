@@ -11,7 +11,9 @@
 //                    in a tab of its own (or the first one of a new workspace); the board names
 //                    it and types the first message.
 // A Claude started by the board gets its id up front (--session-id, {sessionId}), so even its
-// first brief knows the lane.
+// first brief knows the lane. One coming back from the archive is resumed by its id instead
+// (--resume, {resume}): a launch.command without {resume} leaves that to the board's own
+// spawn-agent, and launch.agent whose arguments pick a session cannot do it.
 // It starts in the Claude profile the launch was checked for (request.ts): in the board's own one
 // with the env exactly as inherited; in any other with CLAUDE_CONFIG_DIR set, by herdr's --env on
 // the tab (spawn-agent's --config-dir; herdr's launcher), or in a launcher command's process env.
@@ -74,6 +76,8 @@ export interface LaunchContext {
   readonly rootTab: string | null
   /** As far as the board knows: it may match a pane to a launch whose launcher has not said one yet. */
   readonly sessionId: string | null
+  /** The id of the session it resumes (Return, from the archive), null for a new one. */
+  readonly resume: string | null
   readonly pane: string | null
 }
 
@@ -151,11 +155,33 @@ export function notePane(l: Pick<LaunchContext, 'configDir' | 'profile'>, pane: 
   else forgetProfilePane(pane)
 }
 
-/** The launcher the config asks for: `launch.command`, else herdr's for `launch.agent`, else the board's spawn-agent. */
-export function launcherFor(spec: LaunchSpec | undefined): Launcher {
-  if (spec?.command) return commandLauncher(spec)
+/**
+ * The launcher the config asks for: `launch.command`, else herdr's for `launch.agent`, else the
+ * board's spawn-agent. A launcher of one's own resumes a session (`resume`) only when it takes
+ * {resume}; else the next one does.
+ */
+export function launcherFor(spec: LaunchSpec | undefined, { resume = false }: { resume?: boolean } = {}): Launcher {
+  if (spec?.command && (!resume || usesPlaceholder(spec.command, 'resume'))) return commandLauncher(spec)
   if (spec?.agent) return herdrLauncher(spec)
   return spawnAgentLauncher(spec ?? {})
+}
+
+/** The agent herdr's launcher starts, with its arguments (the profile's own for Claude). */
+function herdrAgent(spec: LaunchSpec, profileArgs: readonly string[]): { kind: string; args: string[] } {
+  const kind = String(spec.agent ?? 'claude')
+  const args = (Array.isArray(spec.args) ? spec.args : []).map(String)
+  // The profile's own arguments are Claude's.
+  if (kind === 'claude') args.push(...profileArgs)
+  return { kind, args }
+}
+
+const picksSession = (args: readonly string[]): boolean =>
+  args.some(a => /^(--session-id|-r|--resume|-c|--continue)$/.test(a))
+
+/** Whether herdr's launcher (launch.agent) cannot resume a session by its id: another agent, or arguments that pick one. */
+export function herdrCannotResume(spec: LaunchSpec, profileArgs: readonly string[]): boolean {
+  const { kind, args } = herdrAgent(spec, profileArgs)
+  return kind !== 'claude' || picksSession(args)
 }
 
 /** `herdr agent start <name> --kind <agent> … -- --session-id <id>` in a tab of its own. */
@@ -165,6 +191,12 @@ export function herdrLauncher(spec: LaunchSpec): Launcher {
     kind: 'herdr',
     describe: () => ({ kind: 'herdr', agent: kind }),
     async start(l, on) {
+      const { args } = herdrAgent(spec, l.profileArgs)
+      const chooses = picksSession(args)
+      // A session is resumed by its id: not by another agent, nor by arguments that pick one
+      // (launches.ts refuses it before the launch; said here too before a tab is opened).
+      if (l.resume && herdrCannotResume(spec, l.profileArgs))
+        throw new LaunchError(t('archive.err.cannotResume'), 'launcher')
       on.step('tab')
       let pane: string
       if (l.rootPane) {
@@ -176,11 +208,11 @@ export function herdrLauncher(spec: LaunchSpec): Launcher {
         notePane(l, pane, opened.terminal)
       }
       on.pane(pane)
-      const args = (Array.isArray(spec.args) ? spec.args : []).map(String)
-      // The profile's own arguments are Claude's.
-      if (kind === 'claude') args.push(...l.profileArgs)
       let sessionId: string | null = null
-      if (kind === 'claude' && !args.some(a => /^(--session-id|-r|--resume|-c|--continue)$/.test(a))) {
+      if (l.resume) {
+        sessionId = l.resume
+        args.push('--resume', l.resume)
+      } else if (kind === 'claude' && !chooses) {
         sessionId = randomUUID()
         on.session(sessionId)
         args.push('--session-id', sessionId)
@@ -239,11 +271,13 @@ export function commandLauncher(spec: LaunchSpec): Launcher {
         message: l.message,
         messageFile: '',
         sessionId: '',
+        resume: l.resume ?? '',
         profile: l.profile,
         profileDir: l.profileDir,
       }
-      let sessionId: string | null = null
-      if (usesPlaceholder(template, 'sessionId')) {
+      // A resumed session has its own id.
+      let sessionId: string | null = l.resume
+      if (!l.resume && usesPlaceholder(template, 'sessionId')) {
         sessionId = randomUUID()
         on.session(sessionId)
         vars.sessionId = sessionId
@@ -280,9 +314,12 @@ export function spawnAgentLauncher(spec: LaunchSpec): Launcher {
     describe: () => ({ kind: 'herdr', agent: 'claude' }),
     async start(l, on) {
       // A line that picks its own session (--resume, in the profile's start command, launch.claude
-      // or the profile's arguments) gets no id from the board.
-      let sessionId: string | null = null
-      if (!choosesSession([...(l.profileCommand ?? claudeCommand(spec.claude, spec.args)), ...l.profileArgs])) {
+      // or the profile's arguments) gets no id from the board; a resumed session has its own.
+      let sessionId: string | null = l.resume
+      if (
+        !l.resume &&
+        !choosesSession([...(l.profileCommand ?? claudeCommand(spec.claude, spec.args)), ...l.profileArgs])
+      ) {
         sessionId = randomUUID()
         on.session(sessionId)
       }
@@ -297,7 +334,7 @@ export function spawnAgentLauncher(spec: LaunchSpec): Launcher {
           args: [
             ...args,
             ...(messageFile ? ['--brief-file', messageFile] : []),
-            ...(sessionId ? ['--session-id', sessionId] : []),
+            ...(l.resume ? ['--resume', l.resume] : sessionId ? ['--session-id', sessionId] : []),
           ],
         }),
         messageFile: true,

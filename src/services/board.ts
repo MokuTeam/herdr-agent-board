@@ -1,6 +1,6 @@
 // The board's data: every agent pane in herdr plus the sessions herdr-wake put to sleep, each
 // merged with its card and with what Claude recorded about it in its own profile's folder, and
-// sorted into a column.
+// sorted into a column. Sessions in the archive are left out (services/archive.ts).
 import { readFileSync, statSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { allCards, writeCard } from '../adapters/cards.ts'
@@ -18,6 +18,7 @@ import { t } from '../core/lang.ts'
 import { relate } from '../core/links.ts'
 import { sessionProfile } from '../core/profiles.ts'
 import type { AgentStatus, Attention, Card, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
+import { archivedFiles, getArchived, hides, isArchived, settleReturned } from './archive.ts'
 import type { Deps } from './deps.ts'
 
 const numberOf = (value: unknown): number | undefined => (typeof value === 'number' ? value : undefined)
@@ -183,8 +184,19 @@ export async function collect(
   const labels = new Map(snap.workspaces.map(w => [w.workspace_id, w.label]))
   const items: Item[] = []
   const seen = new Set<string>()
+  const archived = archivedFiles()
 
   const add = (base: Base): void => {
+    if (isArchived(archived, base.key)) {
+      const record = getArchived(base.key)
+      if (hides(record, base)) return
+      // In another pane than the one it was archived in: it is back (Return, or resumed by hand).
+      if (record) {
+        try {
+          settleReturned(base)
+        } catch {} // its record is locked: the next refresh settles it
+      }
+    }
     const saved = cards.get(base.key) ?? {}
     const pin = pinOf(base.key, base.status, saved)
     const card: Card = { ...saved, pin }

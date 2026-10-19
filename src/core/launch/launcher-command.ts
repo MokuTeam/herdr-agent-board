@@ -12,6 +12,8 @@ export const PLACEHOLDERS = [
   'message',
   'messageFile',
   'sessionId',
+  // The id of a session coming back from the archive, resumed by it; empty for a new one.
+  'resume',
   // The Claude profile the session starts in: its id, and its folder (set or inherited).
   'profile',
   'profileDir',

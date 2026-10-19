@@ -84,15 +84,16 @@ export async function wakeAnswers(
  * turn is over but a background command or a Monitor still runs: Claude's own registry says
  * `shell`, and herdr-wake keeps such a session up), or herdr's error. The registry is the one of
  * the session's own profile (its Claude home, deps.homes), the folder it reported when no profile
- * has it; a session whose profile is not known at all is not put to sleep (checkWake refuses it).
+ * has it; a session whose profile is not known at all is not put to sleep (checkWake refuses it),
+ * which `profile` says (the archive tells that refusal apart, services/archive.ts).
  */
 export async function readyToSleep(
   deps: Deps,
-  item: Item,
-): Promise<{ ok: true; status: AgentStatus } | { ok: false; why: string }> {
+  item: Pick<Item, 'pane' | 'session' | 'profile' | 'profileFolder'>,
+): Promise<{ ok: true; status: AgentStatus } | { ok: false; why: string; profile?: true }> {
   const set = deps.profiles()
   const dir = itemProfile(item, set.list)?.dir ?? item.profileFolder
-  if (!dir) return { ok: false, why: t('err.wakeProfile', { profile: profileLabel(item, set) }) }
+  if (!dir) return { ok: false, why: t('err.wakeProfile', { profile: profileLabel(item, set) }), profile: true }
   try {
     const agent = item.pane ? await agentGet(item.pane) : null
     if (!agent || agent.session !== (item.session ?? null)) return { ok: false, why: 'gone' }

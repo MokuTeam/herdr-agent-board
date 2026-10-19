@@ -17,6 +17,7 @@ import type { MessageGate } from '../../core/message-gate.ts'
 import type { Item, Pin } from '../../core/types.ts'
 import { checkWake, focus, send, sleepSession, wake, wakeAnswers } from '../../services/actions.ts'
 import { answerPermission, answerQuestions } from '../../services/answer.ts'
+import { askArchive, undoMs } from '../../services/archive.ts'
 import { collect } from '../../services/board.ts'
 import type { Deps } from '../../services/deps.ts'
 import { renameSession } from '../../services/launch/rename.ts'
@@ -214,6 +215,16 @@ async function act(app: SessionApp, item: Item, action: string, body: () => Prom
       return rename(item, await body())
     case 'card':
       return card(item, await body())
+    // Off the board: hidden at once, its pane closed a few seconds later by the scheduler (services/archive.ts).
+    case 'archive': {
+      const grace = undoMs(deps.cfg)
+      const r = await askArchive(deps, item, { by: 'user', grace })
+      if (!r.ok) return { ok: false, why: r.why, error: t(r.why, { name: item.name, why: r.detail ?? '' }) }
+      deps.log(
+        `archive ${item.name}: asked, its pane closes in ${grace / 1000} s${r.held ? `, ${r.held} schedule entries held` : ''}`,
+      )
+      return { ok: true, held: r.held, dropped: r.dropped, closeAt: r.record.closeAt }
+    }
     // A MokuPilot call whose agent is a fork of this session, only in the board's own profile; no herdr in it.
     case 'mokupilot':
       return startCall(deps.cfg, item, { profiles: deps.profiles() })
@@ -270,10 +281,10 @@ export function sessionRoutes(app: SessionApp): Route[] {
       handle: withItem(async item => json(200, await detail(app, item))),
     },
     helperRoute(app),
-    // Answering a dialog presses keys in a session: like a launch, only from this page.
+    // Answering a dialog presses keys in a session, an archive closes a pane: like a launch, only from this page.
     {
       method: 'POST',
-      path: /^\/api\/session\/([^/]+)\/(answer|permit)$/,
+      path: /^\/api\/session\/([^/]+)\/(answer|permit|archive)$/,
       guard: ['board-header', 'origin', 'fresh-data'],
       handle: action,
     },

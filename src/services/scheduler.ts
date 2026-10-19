@@ -22,10 +22,13 @@
 // sleep. A wake refused after the sleep (the pane's evidence changed, or herdr failed) leaves the
 // session asleep, the safe outcome, never resumed in another account; it is tried again and
 // reported after RESTART_TRIES (3) tries.
+//
+// It also closes the panes of sessions put in the archive once their time to come back from the
+// page's toast is over (archive.ts closeDue): a board that restarts meanwhile does it on start.
 import { type FSWatcher, mkdirSync, watch } from 'node:fs'
 import { beginReport, deferReport, settleReport, verifyReport } from '../adapters/call-receipts.ts'
 import { readCard } from '../adapters/cards.ts'
-import { scheduleDir } from '../adapters/paths.ts'
+import { archiveDir, scheduleDir } from '../adapters/paths.ts'
 import { getEntry, listEntries, logRun, removeEntry, updateEntry } from '../adapters/schedule-store.ts'
 import { itemProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
@@ -35,6 +38,7 @@ import { cleanText, promptOf, type ScheduleEntry, targetOf } from '../core/sched
 import type { Item } from '../core/types.ts'
 import { nextRun } from '../core/when.ts'
 import { checkWake, readyToSleep, send, sleepSession, wake } from './actions.ts'
+import { closeDue, listArchive } from './archive.ts'
 import { collect } from './board.ts'
 import type { Deps } from './deps.ts'
 
@@ -83,6 +87,11 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
     if (ticking || stopped) return
     ticking = true
     try {
+      const archived = await closeDue(deps, { log }).catch((err: unknown) => {
+        log(`archive: ${messageOf(err)}`)
+        return null
+      })
+      if (archived?.closed || archived?.kept) onChange()
       const now = Date.now()
       // A run that waits for its session is tried again once a tick, not on every file change; a
       // restart herdr-wake refused, not before its retry time.
@@ -428,25 +437,29 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
   async function loop(): Promise<void> {
     await tick()
     const now = Date.now()
-    const soonest = Math.min(...listEntries().map(e => (e.next <= now ? Number.POSITIVE_INFINITY : e.next)))
+    // An archived session whose pane is to close counts as an entry.
+    const closing = listArchive()
+      .filter(r => r.state === 'closing')
+      .map(r => r.closeAt)
+    const soonest = Math.min(...[...listEntries().map(e => e.next), ...closing].filter(at => at > now))
     plan(Math.min(tickMs(), soonest - now + 50))
   }
-  // A new entry may be due sooner than the next tick.
-  let watcher: FSWatcher | null = null
+  // A new entry, or a session put in the archive, may be due sooner than the next tick.
+  const watchers: FSWatcher[] = []
   let watchTimer: ReturnType<typeof setTimeout> | undefined
-  try {
-    mkdirSync(scheduleDir(), { recursive: true })
-    watcher = watch(scheduleDir(), () => {
-      clearTimeout(watchTimer)
-      watchTimer = setTimeout(() => plan(0), 300)
-    })
-    // On Windows a watched folder that is deleted errors (EPERM); unhandled, that ends the
-    // board. The ticks go on without it.
-    watcher.on('error', () => {
-      watcher?.close()
-      watcher = null
-    })
-  } catch {}
+  for (const dir of [scheduleDir(), archiveDir()]) {
+    try {
+      mkdirSync(dir, { recursive: true })
+      const watcher = watch(dir, () => {
+        clearTimeout(watchTimer)
+        watchTimer = setTimeout(() => plan(0), 300)
+      })
+      // On Windows a watched folder that is deleted errors (EPERM); unhandled, that ends the
+      // board. The ticks go on without it.
+      watcher.on('error', () => watcher.close())
+      watchers.push(watcher)
+    } catch {}
+  }
   plan(1000)
 
   return {
@@ -454,7 +467,7 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
       stopped = true
       clearTimeout(timer)
       clearTimeout(watchTimer)
-      watcher?.close()
+      for (const w of watchers) w.close()
     },
   }
 }

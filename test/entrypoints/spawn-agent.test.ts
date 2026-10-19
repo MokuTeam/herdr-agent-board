@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { failureKind } from '../../src/core/launch/launcher-command.ts'
+import { parseArgs } from '../../src/core/launch/spawn-args.ts'
 import { profileReport, profileTag, sessionProfile } from '../../src/core/profiles.ts'
 import { absoluteDir } from '../../src/services/launch/spawn-agent.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
@@ -697,3 +698,160 @@ test('a new tab opened without --env drops the record of a pane of that id; othe
   })
   expect(cardOf(box, SID)).toMatchObject({ profileWant: 'default' })
 }, 30_000)
+
+// ---------------------------------------------------------------- --resume (the board's archive)
+
+/** Claude's conversation of `session`, run in `cwd`, in the profile folder `claudeDir`. */
+function transcript(claudeDir: string, cwd: string, session = SID): void {
+  const project = join(claudeDir, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
+  mkdirSync(project, { recursive: true })
+  writeFileSync(join(project, `${session}.jsonl`), `${JSON.stringify({ type: 'user', cwd, sessionId: session })}\n`)
+}
+
+test('spawn-agent --resume brings a session back by its id: no /rename, no brief, its herdr name', async () => {
+  assert.equal((parseArgs(['--name', 'x', '--cwd', '.', '--resume', SID]) as { resume?: string }).resume, SID)
+  assert.throws(() => parseArgs(['--name', 'x', '--cwd', '.', '--resume', 'abc']), /--resume must be a session id/)
+  assert.throws(() => parseArgs(['--name', 'x', '--cwd', '.', '--resume', SID, '--session-id', SID]), /not both/)
+  const box = await sandbox()
+  box.state(STATE)
+  boardConfig(box, { launch: { claude: ['claude-tg', '--dangerously-skip-permissions'] } })
+  // Its conversation, in the one profile there is (an agent's resume runs where it ran).
+  transcript(join(box.env.HOME as string, '.claude'), box.dir)
+  const r = await runSpawn(box, ['--name', 'Acme invoices', '--cwd', box.dir, '--workspace', 'wA', '--resume', SID])
+  assert.equal(r.code, 0, r.stderr)
+  assert.equal(r.stdout.trim(), 'pane=wA:p9 name=Acme invoices agent=acme-invoices-2')
+  const calls = box.calls().map(a => a.join(' '))
+  assert.ok(calls.includes(`pane run wA:p9 claude-tg --dangerously-skip-permissions --resume ${SID}`), calls.join('\n'))
+  assert.ok(calls.includes('agent rename wA:p9 acme-invoices-2'))
+  assert.equal(
+    calls.some(c => c.startsWith('agent prompt')),
+    false,
+  )
+  // The default profile leaves herdr's env alone, as for any start in it.
+  assert.equal(
+    calls.some(c => c.includes('--env')),
+    false,
+  )
+  // A launch.claude that picks its own session cannot resume another one.
+  const box2 = await sandbox()
+  box2.state(STATE)
+  boardConfig(box2, { launch: { claude: ['claude', '--continue'] } })
+  transcript(join(box2.env.HOME as string, '.claude'), box2.dir)
+  const no = await runSpawn(box2, ['--name', 'x', '--cwd', box2.dir, '--workspace', 'wA', '--resume', SID])
+  assert.equal(no.code, 1)
+  assert.match(no.stderr, /picks its own session/)
+  assert.deepEqual(box2.calls(), [])
+}, 30_000)
+
+test('an agent resumes a session in the profile whose folder holds its conversation: a work one gets --env work, the pane recorded, the card wants work', async () => {
+  const { box, dir, work } = await profileBox()
+  transcript(work, dir)
+  // Whatever the agent's own profile is: the session's conversation decides.
+  const r = await runSpawn(box, ['--name', 'Acme invoices', '--cwd', dir, '--workspace', 'wA', '--resume', SID])
+  assert.equal(r.code, 0, r.stderr)
+  const calls = callList(box)
+  assert.equal(
+    calls[0],
+    `tab create --workspace wA --cwd ${dir} --label Acme invoices --env CLAUDE_CONFIG_DIR=${work} --no-focus`,
+  )
+  assert.equal(calls[1], `pane run wA:p9 claude --model sonnet --resume ${SID}`)
+  assert.equal(
+    calls.some(c => c.startsWith('agent prompt')),
+    false,
+  )
+  expect(JSON.parse(readFileSync(panesFile(box), 'utf8'))).toMatchObject({ 'wA:p9': { profile: 'work' } })
+  expect(cardOf(box, SID)).toMatchObject({ profileWant: 'work' })
+  // A default conversation from a work agent: default, without --env, never the agent's own folder.
+  const second = await profileBox()
+  transcript(second.default, second.dir)
+  const own = await runSpawn(
+    second.box,
+    ['--name', 'Acme invoices', '--cwd', second.dir, '--workspace', 'wA', '--resume', SID],
+    { CLAUDE_CONFIG_DIR: second.work },
+  )
+  assert.equal(own.code, 0, own.stderr)
+  assert.equal(
+    callList(second.box)[0],
+    `tab create --workspace wA --cwd ${second.dir} --label Acme invoices --no-focus`,
+  )
+  expect(cardOf(second.box, SID)).toMatchObject({ profileWant: 'default' })
+  // A hidden profile's conversation is its own: gamedev's resumes in gamedev.
+  const third = await profileBox()
+  transcript(third.gamedev, third.dir)
+  const hidden = await runSpawn(third.box, [
+    '--name',
+    'Level',
+    '--cwd',
+    third.dir,
+    '--workspace',
+    'wA',
+    '--resume',
+    SID,
+  ])
+  assert.equal(hidden.code, 0, hidden.stderr)
+  assert.equal(
+    callList(third.box)[0],
+    `tab create --workspace wA --cwd ${third.dir} --label Level --env CLAUDE_CONFIG_DIR=${third.gamedev} --no-focus`,
+  )
+}, 60_000)
+
+test('an agent’s resume is refused before herdr is asked: --profile default for a work conversation, one not found, one in two profiles', async () => {
+  const { box, dir, work } = await profileBox()
+  transcript(work, dir)
+  const named = await runSpawn(box, [
+    '--name',
+    'Acme invoices',
+    '--cwd',
+    dir,
+    '--workspace',
+    'wA',
+    '--resume',
+    SID,
+    '--profile',
+    'default',
+  ])
+  assert.equal(named.code, 1)
+  assert.equal(
+    named.stderr.trim(),
+    `spawn-agent: The conversation of ${SID} is not in the profile default: a session is resumed only in the profile it ran in`,
+  )
+  assert.deepEqual(box.calls(), [])
+  // The profile that holds it is taken when named.
+  const inWork = await runSpawn(box, [
+    '--name',
+    'x',
+    '--cwd',
+    dir,
+    '--workspace',
+    'wA',
+    '--resume',
+    SID,
+    '--profile',
+    'work',
+  ])
+  assert.equal(inWork.code, 0, inWork.stderr)
+  assert.match(callList(box)[0] ?? '', /--env CLAUDE_CONFIG_DIR=/)
+
+  const other = await profileBox()
+  const none = await runSpawn(
+    other.box,
+    ['--name', 'Acme invoices', '--cwd', other.dir, '--workspace', 'wA', '--resume', SID],
+    { CLAUDE_CONFIG_DIR: other.work },
+  )
+  assert.equal(none.code, 1)
+  assert.equal(
+    none.stderr.trim(),
+    'spawn-agent: “Acme invoices” cannot come back: its conversation is not on this computer any more',
+  )
+  transcript(other.default, other.dir)
+  transcript(other.work, other.dir)
+  const both = await runSpawn(other.box, ['--name', 'x', '--cwd', other.dir, '--workspace', 'wA', '--resume', SID])
+  assert.equal(both.code, 1)
+  assert.equal(
+    both.stderr.trim(),
+    `spawn-agent: The conversation of ${SID} is in more than one profile (default, work): pass --profile <id> to say which`,
+  )
+  // Nothing was asked of herdr, no card written.
+  assert.deepEqual(other.box.calls(), [])
+  assert.equal(cardOf(other.box, SID), null)
+}, 60_000)
