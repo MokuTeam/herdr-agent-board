@@ -1673,9 +1673,9 @@ $('#sheet-wake').addEventListener('click', async () => {
 $('#sheet-sleep').addEventListener('click', () => state.open && sleepSession(state.open))
 $('#sheet-restart').addEventListener('click', () => state.open && restartSession(state.open))
 // More holds what the row does not show (app.css decides; the buttons stay in the row, hidden,
-// and keep their state), in groups: the tools, starting something from this session, then the
+// and keep their state), in groups: the call and the tools, a new session here, then the
 // session's own life.
-const MORE = [['sheet-term', 'sheet-changes', 'sheet-history'], ['sheet-mokupilot', 'sheet-new'], ['sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-archive']]
+const MORE = [['sheet-mokupilot', 'sheet-term', 'sheet-changes', 'sheet-history'], ['sheet-new'], ['sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-archive']]
 const HERDR_MORE = ['sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-new', 'sheet-archive']
 $('#sheet-more').addEventListener('click', e => {
   const button = e.currentTarget, rect = button.getBoundingClientRect()
