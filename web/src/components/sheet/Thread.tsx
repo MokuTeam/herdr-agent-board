@@ -4,15 +4,19 @@
 // as quiet lines. A call that works with others is a line of its own, and another session's or a
 // teammate's message a bubble with their name (ThreadLinks.tsx). Paths in it are candidates the
 // file chips take up (data-path; components/sheet/Sheet.tsx hands them over after every draw).
-// The helpers window draws a helper's own conversation with it too.
-import type { ReactNode } from 'react'
+// The helpers window draws a helper's own conversation with it too. At its foot (Waiting): the
+// user's messages Claude has not taken in yet, and the board's own on their way or not sent.
+import { type ReactNode, useLayoutEffect, useRef } from 'react'
 import { isCall, isReminder, isTask } from '../../../../src/core/notices.ts'
+import type { QueuedPrompt } from '../../../../src/core/queue.ts'
 import type { ConversationTurn, NoticeTurn } from '../../../../src/core/transcript.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import type { OutboxEntry } from '../../models/composer-session.ts'
 import { markdown } from '../../models/markdown.ts'
 import { noticeLine } from '../../models/notice.ts'
 import { clockText } from '../../models/sheet.ts'
+import { reducedMotion } from '../../models/spring.ts'
 import { type AskTurn, askState, type ThreadPart, threadParts, uploadThumbs } from '../../models/thread.ts'
 import { classNames } from '../class-names.ts'
 import {
@@ -20,6 +24,7 @@ import {
   BoltGlyph,
   CheckGlyph,
   ChevGlyph,
+  ClockGlyph,
   CrossGlyph,
   PhoneGlyph,
   SpinGlyph,
@@ -87,21 +92,11 @@ function ThreadTurn({ part, item, links, helper }: TurnProps) {
   if (part.kind === 'notice') return <Notice turn={part.turn} links={links} />
   if (part.kind === 'message') {
     const { role, text, at } = part.turn
-    const thumbs = uploadThumbs(text)
     return (
       <div className={`msg ${role}`}>
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: markdown() escapes every piece of text itself and makes only known tags */}
         <div className="md" dangerouslySetInnerHTML={{ __html: markdown(text) }} />
-        {thumbs.length > 0 && (
-          <div className="thumbs">
-            {thumbs.map((s, n) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: the same picture can be named twice; their order is theirs
-              <a key={n} className="fs-inline" data-path={s.path} href={s.url} target="_blank" rel="noopener">
-                <img src={s.url} alt="" loading="lazy" />
-              </a>
-            ))}
-          </div>
-        )}
+        <Thumbs text={text} />
         <span className="when">{clockText(at, t)}</span>
       </div>
     )
@@ -122,6 +117,108 @@ function ThreadTurn({ part, item, links, helper }: TurnProps) {
         </div>
       ))}
     </details>
+  )
+}
+
+/** Previews of the images a message names from the board's uploads. */
+function Thumbs({ text }: { text: string }) {
+  const thumbs = uploadThumbs(text)
+  if (!thumbs.length) return null
+  return (
+    <div className="thumbs">
+      {thumbs.map((s, n) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: the same picture can be named twice; their order is theirs
+        <a key={n} className="fs-inline" data-path={s.path} href={s.url} target="_blank" rel="noopener">
+          <img src={s.url} alt="" loading="lazy" />
+        </a>
+      ))}
+    </div>
+  )
+}
+
+export interface WaitingProps {
+  /** The session's queue: what Claude has not taken in yet (SessionDetail.queued). */
+  queued: readonly QueuedPrompt[]
+  /** The board's own messages on their way, not in the transcript yet, or not sent (useComposer). */
+  own: readonly OutboxEntry[]
+  onRetry?: ((id: string) => void) | undefined
+  onEdit?: ((id: string) => void) | undefined
+}
+
+/**
+ * The foot of the thread: the user's messages waiting in the session's queue, which Claude has
+ * not taken in yet (typed in its terminal or sent from here), then the board's own on their way
+ * or not sent. Quiet bubbles; once Claude has one, it is an ordinary bubble in the same place.
+ */
+export function Waiting({ queued, own, onRetry, onEdit }: WaitingProps) {
+  const t = useT()
+  return (
+    <>
+      {queued.map((m, n) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: a queued message has no id; the queue keeps its order
+        <div key={n} className="msg user waiting" title={t('queue.hint')}>
+          {/* biome-ignore lint/security/noDangerouslySetInnerHtml: markdown() escapes every piece of text itself and makes only known tags */}
+          <div className="md" dangerouslySetInnerHTML={{ __html: markdown(m.text) }} />
+          <Thumbs text={m.text} />
+          <span className="when">
+            <ClockGlyph />
+            {t('queue.queued')}
+          </span>
+        </div>
+      ))}
+      {own.map(e => (
+        <OwnBubble key={e.id} entry={e} onRetry={onRetry} onEdit={onEdit} />
+      ))}
+    </>
+  )
+}
+
+// A message just sent rises into the thread out of the box it was written in, once (for the page).
+const arrived = new Set<string>()
+
+/** One of the board's own messages: "Sending…", or "Not sent" with why, Retry and Edit. */
+function OwnBubble({ entry: e, onRetry, onEdit }: { entry: OutboxEntry } & Omit<WaitingProps, 'queued' | 'own'>) {
+  const t = useT()
+  const bubble = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = bubble.current
+    if (!el || arrived.has(e.id)) return
+    arrived.add(e.id)
+    el.animate(
+      reducedMotion.matches
+        ? [{ opacity: 0 }, { opacity: 1 }]
+        : [
+            { opacity: 0, transform: 'translateY(14px) scale(0.98)' },
+            { opacity: 1, transform: 'none' },
+          ],
+      { duration: reducedMotion.matches ? 160 : 300, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
+    )
+  }, [e.id])
+  const failed = e.state === 'failed'
+  return (
+    <div ref={bubble} className={classNames('msg user waiting', failed && 'failed')} data-out={e.id}>
+      {/* biome-ignore lint/security/noDangerouslySetInnerHtml: markdown() escapes every piece of text itself and makes only known tags */}
+      <div className="md" dangerouslySetInnerHTML={{ __html: markdown(e.full) }} />
+      <Thumbs text={e.full} />
+      {failed ? (
+        <>
+          <span className="when">
+            <b>{t('queue.failed')}</b>
+            {e.error ? ` · ${e.error}` : ''}
+          </span>
+          <span className="out-actions">
+            <button type="button" data-out-retry={e.id} onClick={() => onRetry?.(e.id)}>
+              {t('detail.retry')}
+            </button>
+            <button type="button" data-out-edit={e.id} onClick={() => onEdit?.(e.id)}>
+              {t('queue.edit')}
+            </button>
+          </span>
+        </>
+      ) : (
+        <span className="when">{t('queue.sending')}</span>
+      )}
+    </div>
   )
 }
 

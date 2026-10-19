@@ -43,8 +43,19 @@ const PIN_NAMES: ReadonlySet<string> = PINS
 const isPin = (column: string): column is Pin => PIN_NAMES.has(column)
 
 async function detail(app: SessionApp, item: Item) {
+  const { deps } = app
   const { transcript, claudeRoot, alive, since, pipe, ...shown } = item
-  const conversation = withSessions(app.items(), app.deps.claude.conversation(transcript ?? '', 60))
+  // queued: the user's messages Claude has not taken in yet. Only a running Claude has a queue,
+  // and once it said its turn was over (its registry: idle, or a background shell) it had none.
+  // The registry is the one of the session's own profile.
+  const home = deps.homes.forDir(claudeRoot ?? deps.claude.root)
+  const reg = alive && item.session ? home.liveSessions().get(item.session) : null
+  const idleSince =
+    reg && ['idle', 'shell'].includes(reg.status ?? '') && typeof reg.statusUpdatedAt === 'number'
+      ? reg.statusUpdatedAt
+      : 0
+  const thread = deps.claude.sessionThread(transcript ?? '', 60, { since: since ?? 0, idleSince })
+  const conversation = withSessions(app.items(), thread.conversation)
   // helpers: every subagent, fork, workflow agent and teammate, newest first (adapters/helpers.ts).
   const own = helpersOf(transcript, { alive: !!alive, since: since ?? null })
   // checkout: whether its folder is in git, for the sheet's Changes button.
@@ -68,7 +79,8 @@ async function detail(app: SessionApp, item: Item) {
     } catch {}
   }
   const helpers = own.helpers.map(publicHelper)
-  return { item: shown, conversation, helpers, workflows: own.workflows, screen, dialog, checkout }
+  const queued = alive ? thread.queued : []
+  return { item: shown, conversation, queued, helpers, workflows: own.workflows, screen, dialog, checkout }
 }
 
 function message(app: SessionApp, item: Item, body: Body): Promise<Result> {

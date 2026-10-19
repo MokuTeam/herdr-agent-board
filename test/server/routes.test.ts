@@ -216,7 +216,16 @@ describe('routes', () => {
     const detail = await fetch(`${url}/api/session/s1`)
     expect(detail.status).toBe(200)
     const body = (await detail.json()) as { item: { key: string; transcript?: unknown } }
-    expect(Object.keys(body)).toEqual(['item', 'conversation', 'helpers', 'workflows', 'screen', 'dialog', 'checkout'])
+    expect(Object.keys(body)).toEqual([
+      'item',
+      'conversation',
+      'queued',
+      'helpers',
+      'workflows',
+      'screen',
+      'dialog',
+      'checkout',
+    ])
     expect(body.item.key).toBe('s1')
     expect('transcript' in body.item).toBe(false)
     expect(await answer(fetch(`${url}/api/session/s1/other`))).toEqual([404, { error: 'not found' }])

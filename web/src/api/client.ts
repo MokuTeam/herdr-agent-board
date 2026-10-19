@@ -3,6 +3,7 @@
 import type { PublicDialog } from '../../../src/core/dialogs/questions.ts'
 import type { PublicHelper, WorkflowRun } from '../../../src/core/helpers.ts'
 import type { BoardPayload, BoardProfile } from '../../../src/core/payload.ts'
+import type { QueuedPrompt } from '../../../src/core/queue.ts'
 import type { ConversationTurn } from '../../../src/core/transcript.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
 
@@ -69,6 +70,8 @@ export interface SessionDetail {
   item: Item
   /** Its latest turns, oldest first. */
   conversation: ConversationTurn[]
+  /** The user's messages Claude has not taken in yet, oldest first (only while its Claude runs). */
+  queued?: QueuedPrompt[]
   /** The terminal's screen while a dialog holds the session. */
   screen: string
   dialog: PublicDialog | null
@@ -84,6 +87,10 @@ export interface SessionDetail {
 const ROLES: ReadonlySet<unknown> = new Set(['user', 'assistant', 'tool', 'notice', 'peer'])
 export const isTurn = (value: unknown): value is ConversationTurn => isReply(value) && ROLES.has(value.role)
 
+/** A message in the session's queue (src/core/queue.ts QueuedPrompt). */
+export const isQueued: Guard<QueuedPrompt> = (value): value is QueuedPrompt =>
+  isReply(value) && typeof value.text === 'string' && typeof value.at === 'number'
+
 /** A helper as the server lists it (src/core/helpers.ts PublicHelper). */
 export const isHelper: Guard<PublicHelper> = (value): value is PublicHelper =>
   isReply(value) && typeof value.id === 'string' && typeof value.kind === 'string' && typeof value.status === 'string'
@@ -98,6 +105,8 @@ export const isSessionDetail: Guard<SessionDetail> = (value): value is SessionDe
   typeof value.item.key === 'string' &&
   Array.isArray(value.conversation) &&
   value.conversation.every(isTurn) &&
+  // The session's queue (a board before it sent none).
+  isListOf(value.queued, isQueued) &&
   typeof value.screen === 'string' &&
   (value.dialog === null || isReply(value.dialog)) &&
   typeof value.checkout === 'boolean' &&
