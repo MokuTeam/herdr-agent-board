@@ -1,7 +1,7 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { parseConversation } from '../../src/core/transcript.ts'
-import { ApiError, api, errorText, isBoardPayload, isSessionDetail } from '../../web/src/api/client.ts'
+import { ApiError, api, errorText, isBoardPayload, isBoardProfile, isSessionDetail } from '../../web/src/api/client.ts'
 import { notification } from '../support/task-notification.ts'
 import { item, payload } from './support/board.tsx'
 
@@ -40,6 +40,34 @@ test('a board payload has its lists, version and staleness', () => {
   expect(isBoardPayload({ ...payload(), mokupilot: false })).toBe(true)
   expect(isBoardPayload({ ...payload(), mokupilot: 'yes' })).toBe(false)
   expect(isBoardPayload(null)).toBe(false)
+})
+
+const PROFILE = {
+  id: 'default',
+  title: 'Private',
+  color: '#5856D6',
+  colorName: 'indigo',
+  dir: 'C:\\Users\\me\\.claude',
+  hidden: false,
+  inherited: true,
+  exists: true,
+  hooks: true,
+  sessions: 2,
+  limits: null,
+}
+
+test('a board payload has its profiles, or none (a board before them)', () => {
+  expect(isBoardPayload({ ...payload(), profiles: [PROFILE] })).toBe(true)
+  expect(isBoardPayload({ ...payload(), profiles: [] })).toBe(true)
+  expect(isBoardPayload({ ...payload(), profiles: undefined })).toBe(true)
+  expect(isBoardPayload({ ...payload(), profiles: [{ ...PROFILE, hidden: 'no' }] })).toBe(false)
+  expect(isBoardPayload({ ...payload(), profiles: [{ ...PROFILE, id: 1 }] })).toBe(false)
+  expect(isBoardPayload({ ...payload(), profiles: [{ ...PROFILE, title: null }] })).toBe(false)
+  expect(isBoardPayload({ ...payload(), profiles: [{ ...PROFILE, color: undefined }] })).toBe(false)
+  expect(isBoardPayload({ ...payload(), profiles: [null] })).toBe(false)
+  expect(isBoardPayload({ ...payload(), profiles: 'x' })).toBe(false)
+  expect(isBoardProfile(PROFILE)).toBe(true)
+  expect(isBoardProfile({ ...PROFILE, hidden: undefined })).toBe(false)
 })
 
 test('POST sends JSON with the X-Board header and answers the reply', async () => {

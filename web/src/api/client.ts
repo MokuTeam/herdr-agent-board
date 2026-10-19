@@ -2,11 +2,11 @@
 // every answer is checked by a narrowing function before the page uses it.
 import type { PublicDialog } from '../../../src/core/dialogs/questions.ts'
 import type { PublicHelper, WorkflowRun } from '../../../src/core/helpers.ts'
-import type { BoardPayload } from '../../../src/core/payload.ts'
+import type { BoardPayload, BoardProfile } from '../../../src/core/payload.ts'
 import type { ConversationTurn } from '../../../src/core/transcript.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
 
-export type { BoardCategory, BoardLimits, BoardPayload, Swatch } from '../../../src/core/payload.ts'
+export type { BoardCategory, BoardLimits, BoardPayload, BoardProfile, Swatch } from '../../../src/core/payload.ts'
 
 export type Guard<T> = (value: unknown) => value is T
 /** A JSON object the server answered with. */
@@ -16,6 +16,18 @@ export const isReply: Guard<Reply> = (value): value is Reply =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
 const ARRAYS = ['items', 'launches', 'categories', 'swatches', 'columns', 'schedules', 'scheduleLog'] as const
+
+/** A list of what `each` accepts, or none at all (a reply from a board before it sent the list). */
+const isListOf = <T>(value: unknown, each: Guard<T>): boolean =>
+  value === undefined || (Array.isArray(value) && value.every(each))
+
+/** A Claude profile as the board sends it (src/core/payload.ts BoardProfile), as far as the page relies on it. */
+export const isBoardProfile: Guard<BoardProfile> = (value): value is BoardProfile =>
+  isReply(value) &&
+  typeof value.id === 'string' &&
+  typeof value.title === 'string' &&
+  typeof value.color === 'string' &&
+  typeof value.hidden === 'boolean'
 
 /** The board payload's shape, as far as the page relies on it (src/core/payload.ts). */
 export const isBoardPayload: Guard<BoardPayload> = (value): value is BoardPayload =>
@@ -27,7 +39,9 @@ export const isBoardPayload: Guard<BoardPayload> = (value): value is BoardPayloa
   (value.terminal === undefined || typeof value.terminal === 'boolean') &&
   (value.shells === undefined || (Array.isArray(value.shells) && value.shells.every(s => typeof s === 'string'))) &&
   // Whether MokuPilot is here for calls (a board before it did not say).
-  (value.mokupilot === undefined || typeof value.mokupilot === 'boolean')
+  (value.mokupilot === undefined || typeof value.mokupilot === 'boolean') &&
+  // The Claude profiles (a board before them sent none).
+  isListOf(value.profiles, isBoardProfile)
 
 /** One session as GET /api/session/<key> answers it (src/server/routes/session.ts). */
 export interface SessionDetail {
@@ -48,10 +62,6 @@ export interface SessionDetail {
 // (core/notices.ts). A peer: a message from a session or teammate this one works with.
 const ROLES: ReadonlySet<unknown> = new Set(['user', 'assistant', 'tool', 'notice', 'peer'])
 export const isTurn = (value: unknown): value is ConversationTurn => isReply(value) && ROLES.has(value.role)
-
-/** A list of what `each` accepts, or none at all (a reply from before helpers were read). */
-const isListOf = <T>(value: unknown, each: Guard<T>): boolean =>
-  value === undefined || (Array.isArray(value) && value.every(each))
 
 /** A helper as the server lists it (src/core/helpers.ts PublicHelper). */
 export const isHelper: Guard<PublicHelper> = (value): value is PublicHelper =>

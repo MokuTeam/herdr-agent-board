@@ -31,6 +31,9 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     // a MokuPilot call from a session in another profile than the board's (services/mokupilot.ts)
     'mokupilot.err.profile':
       'MokuPilot takes the profile of its running copy, {board}: a call from {profile} would run in the wrong account',
+    // herdr's notification of a session whose hooks report another profile than its start asked for (server/board-state.ts)
+    'profile.wrongTitle': 'Wrong profile: {name}',
+    'profile.wrongBody': '{name} was started in {want} but runs in {got}',
   },
   ru: {
     // the Profiles panel's edits (adapters/config-file.ts editProfiles)
@@ -60,5 +63,8 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     // a MokuPilot call from a session in another profile than the board's (services/mokupilot.ts)
     'mokupilot.err.profile':
       'MokuPilot берёт профиль своей запущенной копии, {board}: звонок из {profile} пошёл бы не в том аккаунте',
+    // herdr's notification of a session whose hooks report another profile than its start asked for (server/board-state.ts)
+    'profile.wrongTitle': 'Не тот профиль: {name}',
+    'profile.wrongBody': '{name}: запущена в профиле {want}, а работает в {got}',
   },
 }

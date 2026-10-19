@@ -1,17 +1,22 @@
 // The board as the web page sees it: the latest items, whether they are fresh, and the payload
 // GET /api/board answers with and the event stream pushes.
-import { readUsageCache } from '../adapters/claude-home.ts'
+import { statSync } from 'node:fs'
+import { readUsageFile } from '../adapters/claude-home.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
+import { notify } from '../adapters/herdr.ts'
+import { hooksInstalled } from '../adapters/hook-settings.ts'
 import { createLinks } from '../adapters/links.ts'
-import { stateDir } from '../adapters/paths.ts'
+import { ROOT, usageFileFor } from '../adapters/paths.ts'
 import { forgetProfilePanes } from '../adapters/profile-panes.ts'
 import { listEntries, readLog } from '../adapters/schedule-store.ts'
 import { COLUMNS } from '../core/board.ts'
 import { categoryInfo, colorHex, laneRank, PALETTE } from '../core/categories.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
-import { lang } from '../core/lang.ts'
-import type { BoardLimits, BoardPayload } from '../core/payload.ts'
-import type { SetupSummary } from '../core/setup.ts'
+import { lang, t } from '../core/lang.ts'
+import type { Limits } from '../core/limits.ts'
+import type { BoardLimits, BoardPayload, BoardProfile } from '../core/payload.ts'
+import { DEFAULT_PROFILE, type Profile, profileLabel } from '../core/profiles.ts'
+import { boardFiles, type SetupSummary } from '../core/setup.ts'
 import type { Item } from '../core/types.ts'
 import { collect } from '../services/board.ts'
 import type { Deps } from '../services/deps.ts'
@@ -51,22 +56,53 @@ const SWATCHES = Object.entries(PALETTE)
   .filter(([name]) => !['magenta', 'white'].includes(name))
   .map(([name, hex]) => ({ name, hex }))
 
+// The files of this copy of the board: a profile's settings.json has its hooks when they run these.
+const FILES = boardFiles(ROOT)
+
+const isFolder = (path: string): boolean => {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 /**
- * Claude's usage windows (claude-home.ts): from the board's own status line when Claude Code runs it,
- * else from the usagebar cache, else null. Windows past their reset are left out: Claude starts
- * them over. No age in it, so data that does not change does not make the board go out again.
+ * A profile's Claude usage windows (claude-home.ts): from the board's own status line when Claude
+ * Code runs it in the profile's sessions (usageFileFor), else from the profile's usagebar cache,
+ * else null. Windows past their reset are left out: Claude starts them over. No age in it, so data
+ * that does not change does not make the board go out again.
  */
-function claudeLimits(deps: Deps): BoardLimits | null {
-  const sources = [
-    ['statusline', readUsageCache(stateDir()).limits],
-    ['usagebar', deps.claude.localUsage().limits],
-  ] as const
+function profileLimits(deps: Deps, profile: Profile): BoardLimits | null {
+  const sources: [BoardLimits['source'], Limits][] = [
+    ['statusline', readUsageFile(usageFileFor(profile.id)).limits],
+    ['usagebar', deps.homes.forDir(profile.dir).localUsage().limits],
+  ]
   for (const [source, l] of sources) {
     const windows = l.available ? (l.windows ?? []).filter(w => !w.expired) : []
     if (windows.length)
       return { source, observedAt: l.observedAt, stale: Date.now() - (l.observedAt ?? 0) > 30 * 60_000, windows }
   }
   return null
+}
+
+/** Every profile, shown and hidden, as the page shows it: `items` are the sessions on the board. */
+function boardProfiles(deps: Deps, items: readonly Item[]): BoardProfile[] {
+  const set = deps.profiles()
+  return set.list.map(p => ({
+    id: p.id,
+    title: p.title,
+    color: colorHex(p.color),
+    colorName: p.color,
+    dir: p.dir,
+    hidden: p.hidden,
+    inherited: p.id === set.inherited?.id,
+    exists: isFolder(p.dir),
+    // A hidden profile's settings.json is not read: Install leaves it alone.
+    hooks: p.hidden ? null : hooksInstalled(p.dir, FILES),
+    sessions: items.filter(i => i.profile === p.id).length,
+    limits: profileLimits(deps, p),
+  }))
 }
 
 export function createBoardState({ deps, launches, terminals, version, push, setup, mokupilot }: Options): BoardState {
@@ -92,6 +128,8 @@ export function createBoardState({ deps, launches, terminals, version, push, set
           paths: c.paths ?? [],
           configured,
           fallback: id === 'other',
+          // The lane's usual profile, when the config gives it one.
+          ...(typeof c.profile === 'string' && c.profile !== '' ? { profile: c.profile } : {}),
         }
       })
     // What the page has no use for stays here: file paths (the Claude folder included), the Claude
@@ -99,6 +137,10 @@ export function createBoardState({ deps, launches, terminals, version, push, set
     const list = items.map(({ transcript, claudeRoot, alive, since, pipe, ...rest }) => launches.decorate(rest))
     // The schedule without the scheduler's bookkeeping; the log is what was sent or missed lately.
     const schedules = listEntries().map(({ claim, tried, waited, ...entry }) => entry)
+    // The usage the pill shows: the board's own profile's (the default one's when its env points to
+    // none), as before profiles.
+    const profiles = boardProfiles(deps, items)
+    const own = profiles.find(p => p.inherited) ?? profiles.find(p => p.id === DEFAULT_PROFILE)
     return {
       version: version(),
       lang: lang(),
@@ -106,7 +148,7 @@ export function createBoardState({ deps, launches, terminals, version, push, set
       languages: LANGUAGES,
       fsToken: FILE_TOKEN,
       stale,
-      limits: claudeLimits(deps),
+      limits: own?.limits ?? null,
       items: list,
       launches: launches.list(),
       categories,
@@ -120,6 +162,7 @@ export function createBoardState({ deps, launches, terminals, version, push, set
       // mokupilot: whether a session's sheet offers a MokuPilot call with a fork of it.
       mokupilot: mokupilot?.() ?? false,
       setup: setup?.() ?? null,
+      profiles,
     }
   }
 
@@ -140,6 +183,35 @@ export function createBoardState({ deps, launches, terminals, version, push, set
   // Who started whom and who wrote to whom, read from the transcripts in the background
   // (adapters/links.ts); a read that found something new refreshes the board.
   const links = createLinks({ onChange: () => void refresh() })
+
+  // A session whose hooks report another profile than its start asked for gets a herdr notification,
+  // once in this process; its card's red tag stays. A notification that fails is logged.
+  const warned = new Set<string>()
+  async function warnWrongProfiles(): Promise<void> {
+    const wrong = items.filter(i => i.profileWanted && !warned.has(i.key))
+    if (!wrong.length) return
+    try {
+      const set = deps.profiles()
+      await Promise.all(
+        wrong.map(async item => {
+          warned.add(item.key)
+          const want = item.profileWanted ?? ''
+          const vars = {
+            name: item.name,
+            want: set.list.find(p => p.id === want)?.title || want,
+            got: profileLabel(item, set),
+          }
+          try {
+            await notify(t('profile.wrongTitle', vars), t('profile.wrongBody', vars))
+          } catch (err) {
+            log(`wrong profile notification: ${err instanceof Error ? err.message : String(err)}`)
+          }
+        }),
+      )
+    } catch (err) {
+      log(`wrong profile notification: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
 
   let refreshing = false
   let again = false
@@ -165,6 +237,7 @@ export function createBoardState({ deps, launches, terminals, version, push, set
       stale = false
       lastSuccessfulRefreshAt = Date.now()
       publish()
+      await warnWrongProfiles()
     } catch (err) {
       stale = true
       publish()

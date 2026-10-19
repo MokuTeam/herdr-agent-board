@@ -6,8 +6,10 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { quote } from '../../src/core/install-plan.ts'
+import type { BoardPayload } from '../../src/core/payload.ts'
+import { isBoardPayload } from '../../web/src/api/client.ts'
 import { serveBoard } from '../support/board-server.ts'
-import { root, type Sandbox, sandbox, until } from '../support/sandbox.ts'
+import { type Child, root, type Sandbox, sandbox, until } from '../support/sandbox.ts'
 
 /** The sandbox's config.json, where the board keeps its settings. */
 const configOf = (box: Sandbox): string =>
@@ -321,4 +323,162 @@ test('the Wake button and Go to herdr refuse a work session started outside the 
   } finally {
     await new Promise(resolve => wake.close(resolve))
   }
+}, 20_000)
+
+/** A usage reading as the status line and the usagebar write it: the 5-hour window `used` % full. */
+const reading = (used: number): string =>
+  JSON.stringify({
+    fetchedAtMs: Date.now() - 60_000,
+    fiveHour: { usedPercentage: used },
+    sevenDay: { usedPercentage: 10 },
+  })
+
+/** The board once a refresh after `after` (ms) collected `n` sessions, checked as the page checks it. */
+async function boardOf(url: string, proc: Child, n: number, after = 0): Promise<BoardPayload> {
+  for (let i = 0; i < 100; i++) {
+    const body: unknown = await (await fetch(`${url}/api/board`)).json()
+    if (!isBoardPayload(body)) throw new Error('the page would not take the board')
+    if (!body.stale && body.items.length === n && (body.lastSuccessfulRefreshAt ?? 0) > after) return body
+    proc.send('refresh')
+    await Bun.sleep(50)
+  }
+  throw new Error('the board did not refresh')
+}
+
+test('the board sends every profile with its usage, sessions, hooks and folder, and the page’s check takes it', async () => {
+  const box = await boardWith({ '.claude': 'settings.json', '.claude-work': 'settings.json' })
+  const home = join(box.dir, 'home')
+  const own = join(home, '.claude')
+  const work = join(home, '.claude-work')
+  // The board's hooks are in work's settings.json, not in default's.
+  const ours = {
+    hooks: [
+      { type: 'command', command: `${quote(process.execPath)} ${quote(join(root, 'src', 'entrypoints', 'hook.ts'))}` },
+    ],
+  }
+  writeFileSync(
+    join(work, 'settings.json'),
+    JSON.stringify({ hooks: { SessionStart: [ours], UserPromptSubmit: [ours] } }),
+  )
+  // The status line's readings, each profile's in its own file; work's usagebar cache too, which its
+  // status line's reading beats.
+  const state = join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board')
+  mkdirSync(state, { recursive: true })
+  writeFileSync(join(state, 'claude-limits-latest.json'), reading(20))
+  writeFileSync(join(state, 'claude-limits-profile-work.json'), reading(60))
+  mkdirSync(join(work, 'herdr-usagebar'))
+  writeFileSync(join(work, 'herdr-usagebar', 'claude-limits-latest.json'), reading(99))
+  // Three sessions whose hooks reported default, default and work.
+  mkdirSync(box.cards, { recursive: true })
+  const dirs = [own, own, work]
+  for (const [i, dir] of dirs.entries())
+    writeFileSync(join(box.cards, `s${i + 1}.json`), JSON.stringify({ key: `s${i + 1}`, profileDir: dir }))
+  const panes = dirs.map((_, i) => ({
+    pane_id: `p${i + 1}`,
+    agent: 'claude',
+    agent_session: { value: `s${i + 1}` },
+    agent_status: 'idle',
+    cwd: box.dir,
+  }))
+  box.state({ 'api snapshot': { result: { snapshot: { panes, tabs: [], workspaces: [] } } } })
+  const { url, proc } = await serveBoard(box, {
+    language: 'en',
+    profiles: [
+      { id: 'default', title: 'Private', dir: own, color: 'indigo', hidden: false },
+      { id: 'work', title: 'Work', dir: work, color: 'teal', hidden: false },
+    ],
+  })
+
+  const body = await boardOf(url, proc, 3)
+  const profiles = body.profiles ?? []
+  expect(profiles.map(p => [p.id, p.hidden, p.inherited, p.exists, p.sessions])).toEqual([
+    ['default', false, true, true, 2],
+    ['work', false, false, true, 1],
+  ])
+  expect(profiles.map(p => [p.title, p.color, p.colorName, p.dir, p.hooks])).toEqual([
+    ['Private', '#5856D6', 'indigo', own, false],
+    ['Work', '#30B0C7', 'teal', work, true],
+  ])
+  expect(profiles.map(p => [p.limits?.source, p.limits?.windows.map(w => w.usedPercentage)])).toEqual([
+    ['statusline', [20, 10]],
+    ['statusline', [60, 10]],
+  ])
+  // The pill's usage is the board's own profile's, as before profiles.
+  expect(body.limits).toEqual(profiles[0]?.limits ?? null)
+}, 20_000)
+
+test('a profile without a status-line reading has its usagebar’s; a hidden one’s hooks are not read; a lane keeps its usual profile', async () => {
+  const box = await boardWith({ '.claude': 'settings.json' })
+  const home = join(box.dir, 'home')
+  mkdirSync(join(home, '.claude', 'herdr-usagebar'))
+  writeFileSync(join(home, '.claude', 'herdr-usagebar', 'claude-limits-latest.json'), reading(30))
+  const { url, proc } = await serveBoard(box, {
+    language: 'en',
+    categories: [
+      { id: 'acme', title: 'Acme', color: 'blue', paths: [], profile: 'default' },
+      { id: 'other', title: 'Other', color: 'gray', paths: [] },
+    ],
+    profiles: [
+      { id: 'default', title: 'Default', dir: join(home, '.claude'), color: 'indigo', hidden: false },
+      // Listed, hidden, and its folder gone.
+      { id: 'old', title: 'Old', dir: join(home, '.claude-old'), color: 'teal', hidden: true },
+    ],
+  })
+
+  const body = await boardOf(url, proc, 0)
+  const profiles = body.profiles ?? []
+  expect(
+    profiles.map(p => [p.id, p.hidden, p.inherited, p.exists, p.hooks, p.sessions, p.limits?.source ?? null]),
+  ).toEqual([
+    ['default', false, true, true, false, 0, 'usagebar'],
+    ['old', true, false, false, null, 0, null],
+  ])
+  expect(body.limits).toEqual(profiles[0]?.limits ?? null)
+  expect(body.limits?.windows.map(w => w.usedPercentage)).toEqual([30, 10])
+  // A lane's usual profile goes with it; a lane without one has no such field.
+  expect(body.categories.map(c => [c.id, 'profile' in c ? c.profile : '-'])).toEqual([
+    ['acme', 'default'],
+    ['other', '-'],
+  ])
+}, 20_000)
+
+test('a session in the wrong profile: one herdr notification, not one per refresh', async () => {
+  const box = await boardWith({ '.claude': 'settings.json', '.claude-work': 'settings.json' })
+  const home = join(box.dir, 'home')
+  // Started for work, but its hooks report the default folder.
+  mkdirSync(box.cards, { recursive: true })
+  writeFileSync(
+    join(box.cards, 's1.json'),
+    JSON.stringify({ key: 's1', name: 'Invoices', profileDir: join(home, '.claude'), profileWant: 'work' }),
+  )
+  const pane = { pane_id: 'p1', agent: 'claude', agent_session: { value: 's1' }, agent_status: 'idle', cwd: box.dir }
+  box.state({
+    'api snapshot': { result: { snapshot: { panes: [pane], tabs: [], workspaces: [] } } },
+    'notification show': { result: null },
+  })
+  const { url, proc } = await serveBoard(box, {
+    language: 'en',
+    profiles: [
+      { id: 'default', title: 'Private', dir: join(home, '.claude'), color: 'indigo', hidden: false },
+      { id: 'work', title: 'Work', dir: join(home, '.claude-work'), color: 'teal', hidden: false },
+    ],
+  })
+  const shown = (): string[][] => box.calls().filter(c => c[0] === 'notification' && c[1] === 'show')
+
+  let body = await boardOf(url, proc, 1)
+  expect(body.items[0]).toMatchObject({ key: 's1', profile: 'default', profileWanted: 'work' })
+  await until(() => shown().length > 0)
+  // Three refreshes more: the first two ran to their end (the next one starts only after).
+  for (let i = 0; i < 3; i++) body = await boardOf(url, proc, 1, body.lastSuccessfulRefreshAt ?? 0)
+  expect(shown()).toEqual([
+    [
+      'notification',
+      'show',
+      'Wrong profile: Invoices',
+      '--body',
+      'Invoices was started in Work but runs in Private',
+      '--sound',
+      'request',
+    ],
+  ])
 }, 20_000)

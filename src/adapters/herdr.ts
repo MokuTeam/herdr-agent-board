@@ -263,6 +263,11 @@ export async function tabCreateRoot(
   return { pane, terminal: stringAt(answer.root_pane, 'terminal_id') }
 }
 
+/** A herdr notification with its "request" sound; what herdr prints is not read. */
+export async function notify(title: string, body: string): Promise<void> {
+  await run(['notification', 'show', title, '--body', body, '--sound', 'request'], 10_000)
+}
+
 /** The tab a pane is in, or null when herdr does not say. */
 export async function paneTab(pane: string): Promise<string | null> {
   const answer = await herdr(['pane', 'get', pane])

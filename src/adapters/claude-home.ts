@@ -103,20 +103,24 @@ export function readTail(path: string, size: number, bytes: number): string {
 }
 
 /**
- * The usagebar cache (claude-limits-latest.json) in a folder. Never reads auth, settings,
- * ~/.claude.json, keychains or provider APIs, and never writes a cache. Also reads the board's own
- * status-line copy of it, which has the same shape.
+ * A usage file: the usagebar cache, or the board's own status-line copy of it per profile, which
+ * has the same shape. Never reads auth, settings, ~/.claude.json, keychains or provider APIs, and
+ * never writes a cache.
  */
-export function readUsageCache(directory: string, now = Date.now()): LocalUsage {
+export function readUsageFile(file: string, now = Date.now()): LocalUsage {
   const context = { available: false, observedAt: null, source: null }
   try {
-    const path = join(directory, 'claude-limits-latest.json')
-    const st = lstatSync(path)
+    const st = lstatSync(file)
     if (!st.isFile() || st.isSymbolicLink() || st.size > 65536) return { context, limits: parseLimits(null, now) }
-    return { context, limits: parseLimits(JSON.parse(readFileSync(path, 'utf8')), now) }
+    return { context, limits: parseLimits(JSON.parse(readFileSync(file, 'utf8')), now) }
   } catch {
     return { context, limits: parseLimits(null, now) }
   }
+}
+
+/** The usagebar cache (claude-limits-latest.json) in a folder (readUsageFile). */
+export function readUsageCache(directory: string, now = Date.now()): LocalUsage {
+  return readUsageFile(join(directory, 'claude-limits-latest.json'), now)
 }
 
 /**
