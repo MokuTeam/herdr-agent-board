@@ -20,6 +20,7 @@ import { existsSync, statSync } from 'node:fs'
 import { posix, win32 } from 'node:path'
 import { cwdOf } from './launch.mjs'
 import { t } from './lang.mjs'
+import { configDirOf, profileEnv } from './paths.mjs'
 import { findCommand } from './setup.mjs'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -127,7 +128,8 @@ export async function startCall(cfg, item, { platform = process.platform, env = 
     return { ok: false, error: err.message }
   }
   // Not one of the board's own panes: herdr's variables stay with the board.
-  const childEnv = { ...env }
+  // The fork runs with the session's own config folder (profile), where --resume finds it.
+  const childEnv = { ...env, ...profileEnv(configDirOf(item.transcript)) }
   delete childEnv.HERDR_PANE_ID
   delete childEnv.HERDR_TAB_ID
   return new Promise(res => {

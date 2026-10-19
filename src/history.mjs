@@ -1,13 +1,17 @@
 // Explicit local search in a single Claude project. Never scans sibling projects.
+import { existsSync } from 'node:fs'
 import { readdir, lstat, realpath, open } from 'node:fs/promises'
 import { join, relative, isAbsolute } from 'node:path'
 import { saidIn, transcriptInfo } from './claude.mjs'
-import { CLAUDE_DIR } from './paths.mjs'
+import { CLAUDE_DIRS } from './paths.mjs'
 const norm = s => /^[a-z]:/i.test(s) ? s.replace(/\\/g,'/').replace(/\/+$/,'').toLowerCase() : s.replace(/\/+$/,'')
-export async function searchHistory(cwd, query, projects = join(CLAUDE_DIR,'projects'), excludeSession = null) {
+// With several config folders: the session's own (the one with its transcript), else the first that has the project.
+const projectsOf = (roots, encoded, session) => roots.find(r => session && existsSync(join(r,encoded,`${session}.jsonl`))) ?? roots.find(r => existsSync(join(r,encoded))) ?? roots[0]
+export async function searchHistory(cwd, query, projects = CLAUDE_DIRS.map(d => join(d,'projects')), excludeSession = null) {
   query=String(query??'').trim()
   if (!cwd || query.length<2 || query.length>100) return {results:[],invalid:true}
   const encoded=cwd.replace(/[\\/]+$/,'').replace(/[^a-zA-Z0-9]/g,'-')
+  projects=projectsOf([projects].flat(),encoded,excludeSession)
   const results=[]
   let truncated=false,bytesRead=0,scanned=0
   try {

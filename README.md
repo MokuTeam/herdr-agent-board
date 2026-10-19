@@ -33,6 +33,12 @@ Steps 1 and 2 are what the board needs; the rest adds to it.
    (`settings.json.bak-agent-board`), leaves a command of someone else's name alone, and ends with
    the check below. `~/.local/bin` must be on PATH. Run it again after the plugin moved or was
    updated: the hooks and the commands point at the plugin's folder.
+
+   Claude profiles: with more than one Claude config folder (`CLAUDE_CONFIG_DIR`, or folders
+   such as `~/.claude-work` beside `~/.claude` that Claude ran in), the board shows the sessions
+   of all of them, and the install puts the hooks and the skill into each (run it again after
+   adding a profile). A session brought back from the archive, or forked into MokuPilot, runs
+   with its own profile again. With `~/.claude` alone nothing changes.
 2. **A key** (recommended), in herdr's `config.toml` (`%APPDATA%\herdr\config.toml` on Windows,
    `~/.config/herdr/config.toml` elsewhere), then `herdr server reload-config`. Without it the
    board opens with `herdr plugin action invoke agent-board.open`.

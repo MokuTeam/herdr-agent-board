@@ -23,7 +23,9 @@ import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { checkName, slugName, uniqueSlug } from '../web/launch-model.js'
 import { loadConfig } from './config.mjs'
+import { transcriptPath } from './claude.mjs'
 import { herdr, herdrText } from './herdr.mjs'
+import { configDirOf, envArgs, profileEnv } from './paths.mjs'
 
 export const USAGE = 'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--pane <pane id>]'
 
@@ -162,7 +164,9 @@ export async function spawnAgent(o, { claude = ['claude'], log = () => {} } = {}
     if (p?.agent) throw new Error(`${pane} already runs ${p.agent}: --pane takes a pane at a shell prompt`)
     if (p?.tab_id) await herdr(['tab', 'rename', p.tab_id, label]).catch(() => {})
   } else {
-    pane = (await herdr(['tab', 'create', '--workspace', workspace, '--cwd', cwd, '--label', label, '--no-focus'])).root_pane.pane_id
+    // The new tab runs Claude with the config folder of the session it resumes, else this one's.
+    const env = profileEnv((o.resume && configDirOf(transcriptPath(o.resume, cwd))) || process.env.CLAUDE_CONFIG_DIR)
+    pane = (await herdr(['tab', 'create', '--workspace', workspace, '--cwd', cwd, '--label', label, '--no-focus', ...envArgs(env)])).root_pane.pane_id
   }
   await herdr(['pane', 'run', pane, command])
 

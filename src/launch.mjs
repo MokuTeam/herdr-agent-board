@@ -25,10 +25,11 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { checkBranch, checkName, normDir, sameDir, slugName, uniqueSlug, UNSAFE_CHARS, worktreePath } from '../web/launch-model.js'
 import { resolvePath } from './files.mjs'
 import { raiseTerminal } from './actions.mjs'
+import { transcriptPath } from './claude.mjs'
 import { herdr, herdrText } from './herdr.mjs'
 import { inputDraft } from './screen.mjs'
 import { t } from './lang.mjs'
-import { CARDS_DIR, CLAUDE_DIR, ROOT, STATE_DIR } from './paths.mjs'
+import { CARDS_DIR, CLAUDE_DIRS, configDirOf, envArgs, profileEnv, ROOT, STATE_DIR } from './paths.mjs'
 import { choosesSession, claudeCommand, stillTyped } from './spawn.mjs'
 import { readCard, writeCard } from './store.mjs'
 import { keyTowardYes, sameFolder, trustDialog } from './trust.mjs'
@@ -268,13 +269,13 @@ let recentCache = { at: 0, list: [] }
  * Folders recent Claude sessions on this machine ran in, newest first: the cwd in the newest
  * transcript of each project. Read from the head of the file only, cached for a minute.
  */
-export async function recentFolders(projects = join(CLAUDE_DIR, 'projects'), limit = 12) {
+export async function recentFolders(projects = CLAUDE_DIRS.map(d => join(d, 'projects')), limit = 12) {
   if (Date.now() - recentCache.at < 60_000) return recentCache.list
   const found = []
   try {
     const mtime = async p => (await stat(p).catch(() => null))?.mtimeMs ?? 0
-    const all = (await readdir(projects, { withFileTypes: true })).filter(d => d.isDirectory())
-    const dirs = (await Promise.all(all.map(async d => ({ dir: join(projects, d.name), m: await mtime(join(projects, d.name)) })))).sort((a, b) => b.m - a.m).slice(0, 40)
+    const all = (await Promise.all([projects].flat().map(async root => (await readdir(root, { withFileTypes: true }).catch(() => [])).filter(d => d.isDirectory()).map(d => join(root, d.name))))).flat()
+    const dirs = (await Promise.all(all.map(async dir => ({ dir, m: await mtime(dir) })))).sort((a, b) => b.m - a.m).slice(0, 40)
     const temp = normDir(tmpdir())
     const cwds = await Promise.all(
       dirs.map(async ({ dir }) => {
@@ -461,6 +462,8 @@ export function createLaunches({ cfg, log = () => {}, onChange = () => {} }) {
     const r = await checkRequest(body, { categories: new Set([...cfg.categories.map(c => c.id), ...items.map(i => i.category)]) })
     if (!r.ok) return r
     const l = { ...r.launch, id: randomUUID().slice(0, 8), state: 'starting', step: 'prepare', startedAt: Date.now(), knownPanes: new Set(items.map(i => i.pane)), pane: null, key: null, error: '', kind: '', resume, ...(resume && { message: '' }) }
+    // A resumed session runs again with the config folder (profile) its transcript is in.
+    l.env = resume ? profileEnv(configDirOf(transcriptPath(resume, l.cwd))) : {}
     launches.set(l.id, l)
     runLaunch(l)
       .then(() => {
@@ -503,7 +506,7 @@ export function createLaunches({ cfg, log = () => {}, onChange = () => {} }) {
     }
     if (l.newWorkspace) {
       step(l, 'workspace')
-      const r = await herdr(['workspace', 'create', '--cwd', l.cwd, '--label', l.workspaceLabel, '--no-focus'])
+      const r = await herdr(['workspace', 'create', '--cwd', l.cwd, '--label', l.workspaceLabel, '--no-focus', ...envArgs(l.env)])
       l.workspaceId = r.workspace.workspace_id
       l.rootPane = r.root_pane?.pane_id ?? null
       l.rootTab = r.tab?.tab_id ?? null
@@ -533,7 +536,7 @@ export function createLaunches({ cfg, log = () => {}, onChange = () => {} }) {
       pane = l.rootPane
       if (l.rootTab) await herdr(['tab', 'rename', l.rootTab, l.label]).catch(() => {})
     } else {
-      pane = (await herdr(['tab', 'create', '--workspace', l.workspaceId, '--cwd', l.cwd, '--label', l.label, '--no-focus'])).root_pane.pane_id
+      pane = (await herdr(['tab', 'create', '--workspace', l.workspaceId, '--cwd', l.cwd, '--label', l.label, '--no-focus', ...envArgs(l.env)])).root_pane.pane_id
     }
     l.pane = pane
     const kind = String(spec().agent ?? 'claude')
@@ -635,7 +638,7 @@ export function createLaunches({ cfg, log = () => {}, onChange = () => {} }) {
       const { file: exe, args } = builtin ? builtinArgs(l, vars) : commandArgs(template, vars)
       step(l, builtin ? 'agent' : 'command')
       // The board runs in a pane of its own workspace: the launcher must not take that for "here".
-      const env = { ...process.env, HERDR_WORKSPACE_ID: l.workspaceId }
+      const env = { ...process.env, ...l.env, HERDR_WORKSPACE_ID: l.workspaceId }
       delete env.HERDR_PANE_ID
       delete env.HERDR_TAB_ID
       const timeout = (builtin ? readySec() + 60 : Math.max(1, Number(spec().timeoutSec) || 180)) * 1000
