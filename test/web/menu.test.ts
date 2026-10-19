@@ -214,9 +214,9 @@ test('Restart sits by Put to sleep for a Claude session: also mid-turn, gray whi
   assert.equal(find(cardMenu({ ...claude, session: null }, fresh), 'restart'), undefined)
 })
 
-test('a card’s menu is upstream’s cardMenu at #51 (Restart), case by case', () => {
+test('a card’s menu is upstream’s cardMenu at #56 (Restart, Archive), case by case', () => {
   const was = oldFunction(
-    oldCode('web/menu-model.js', ['SEP', 'PIN_COLUMNS', 'COLUMN_COLOR', 'tidy', 'cardMenu'], {}, '513e441'),
+    oldCode('web/menu-model.js', ['SEP', 'PIN_COLUMNS', 'COLUMN_COLOR', 'tidy', 'cardMenu'], {}, '2b9e6b7'),
     'cardMenu',
   )
   for (const tr of [t, translator('ru')])
@@ -231,7 +231,13 @@ test('a card’s menu is upstream’s cardMenu at #51 (Restart), case by case', 
           { agent: 'codex' },
           {},
         ])
-          for (const extra of [{}, { restarting: true }, { restarting: false, mokupilot: true, terminal: true }]) {
+          for (const extra of [
+            {},
+            { restarting: true },
+            { restarting: false, mokupilot: true, terminal: true },
+            { archiveWhy: 'archive.why.working' },
+            { archiveWhy: '' },
+          ]) {
             const it = { ...idle, ...fields }
             const c = { ...fresh, ...extra, t: tr, canMutate, canEdit }
             assert.deepEqual(cardMenu(it, c), was(it, c))
@@ -265,6 +271,7 @@ test('lanes, the board, starting sessions and file chips have menus of their own
     'new',
     'newWorkspace',
     'cats',
+    'archiveOpen',
     'sleepers',
     'search',
   ])
@@ -309,6 +316,8 @@ test('the model gives what the old page’s menu-model.js gave, case by case', (
   ]
   const old = oldCode('web/menu-model.js', names, {})
   const was = (name: string, ...args: unknown[]) => oldFunction(old, name)(...args)
+  // The board's own menu opens the archive (#56).
+  const boardAt56 = oldFunction(oldCode('web/menu-model.js', ['SEP', 'tidy', 'boardMenu'], {}, '2b9e6b7'), 'boardMenu')
   // placeMenu's `up` and margin as an option: the session panel's row (#54).
   const placeAt54 = oldFunction(oldCode('web/menu-model.js', ['placeMenu'], {}, '3105958'), 'placeMenu')
   const ru = translator('ru')
@@ -336,7 +345,7 @@ test('the model gives what the old page’s menu-model.js gave, case by case', (
           for (const sleepers of [true, false]) {
             const c = { ...base, filter, sleepers }
             for (const cat of categories) assert.deepEqual(laneMenu(cat, c), was('laneMenu', cat, c))
-            assert.deepEqual(boardMenu(c), was('boardMenu', c))
+            assert.deepEqual(boardMenu(c), boardAt56(c))
           }
         for (const state of ['starting', 'waiting', 'trust', 'done', 'failed'])
           for (const l of [

@@ -66,7 +66,7 @@ export async function restartSession(key: string, { t, itemOf, act, toast }: Cal
 }
 
 // What goes through herdr also needs fresh herdr data, or it would act on a session that may have moved on.
-const HERDR_ACTIONS = ['focus', 'wake', 'sleep', 'restart', 'message', 'answer', 'permit']
+const HERDR_ACTIONS = ['focus', 'wake', 'sleep', 'restart', 'archive', 'message', 'answer', 'permit']
 
 export function useSessionActions(): SessionActions {
   const t = useT()

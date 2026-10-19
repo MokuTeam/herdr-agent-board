@@ -2,7 +2,7 @@
 // that needs you, Shift+N starts a session, F2 renames, / goes to the search, Escape leaves a
 // field, closes the panel or clears the search, digits answer the open question; while the quick
 // look is open, N, F2 and the digits do nothing; Ctrl+` opens the terminal of the session in the
-// sheet. An open menu, the launch window or the terminal window takes the keys first.
+// sheet; Ctrl+Z brings back what went to the archive while its toast shows. An open menu, the launch window or the terminal window takes the keys first.
 import { useEffect } from 'react'
 import { boardKey, type KeyScene, stopsNativeClear } from '../models/board-keys.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
@@ -28,6 +28,8 @@ export interface BoardKeysOptions {
   pickOption?: (e: KeyboardEvent) => boolean
   /** The terminal window of a session, grown from `from` (hooks/useTerminal.ts). */
   openTerminal?: (key: string, from: Element | null) => void
+  /** What went to the archive last, while its toast offers Return (hooks/useArchive.ts). */
+  archive?: { canUndo(): boolean; undo(): void }
 }
 
 const cardOf = (el: Element | null): HTMLElement | null => el?.closest<HTMLElement>('.card[data-key]') ?? null
@@ -56,6 +58,7 @@ export function useBoardKeys(opts: BoardKeysOptions): void {
         quickLook: o.quickLookOpen?.() ?? false,
         digits,
         sessionOpen: !!open && !!o.sessionPanelOpen?.(),
+        undo: o.archive?.canUndo() ?? false,
       }
       const action = boardKey(e, scene)
       switch (action) {
@@ -93,6 +96,10 @@ export function useBoardKeys(opts: BoardKeysOptions): void {
           return
         case 'digit':
           if (o.pickOption?.(e)) e.preventDefault()
+          return
+        case 'undoArchive':
+          e.preventDefault()
+          o.archive?.undo()
           return
         case 'search':
           e.preventDefault()

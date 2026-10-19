@@ -1,5 +1,6 @@
 // The "new session" window both ways in a fake DOM (support/fake-dom.ts), for parity: the old
-// page's launch.js — initLaunch as it was at the parity baseline, with its own launch-model.js,
+// page's launch.js — initLaunch as it was at the archive's merge (#56: the baseline's, with a
+// session back from the archive's card and its Retry, LAUNCH_MERGE), with its own launch-model.js,
 // launch-drafts.js and modal-focus.js — and the React port: components/launch/launch-window.ts on
 // the window <LaunchDialogView> draws, drawn again after every event and frame the way React would
 // (support/react-commit.ts), its handlers React's own (support/react-events.ts). Both sides take
@@ -23,6 +24,9 @@ import { asDom, clone, commit, first } from './react-commit.ts'
 import { type Host, hostElements, listenLikeReact } from './react-events.ts'
 
 export const VIEWPORT = { w: 1000, h: 700 }
+
+/** Upstream's merge of the archive (#56), the only change to launch.js since the baseline. */
+export const LAUNCH_MERGE = '2b9e6b7'
 
 /** What the page knows when the window opens; tests change it between steps (fresh data going stale). */
 export interface LaunchScene {
@@ -342,15 +346,20 @@ export type OldLaunch = (name: string, ...args: unknown[]) => unknown
 
 export function oldLaunch(world: FakeWorld, scene: LaunchScene, server: FakeServer, log: string[]): OldLaunch {
   const clock = { now: () => world.now }
-  const code = oldCode('web/launch.js', ['esc', 'svg', 'ICON', 'initLaunch'], {
-    ...oldImports(clock),
-    reducedMotion,
-    Spring,
-    modalFocus: oldFunction(OLD_MODAL_FOCUS, 'modalFocusManager')(world.document),
-    fetch: server.fetch,
-    innerHeight: VIEWPORT.h,
-    Date: clock,
-  })
+  const code = oldCode(
+    'web/launch.js',
+    ['esc', 'svg', 'ICON', 'initLaunch'],
+    {
+      ...oldImports(clock),
+      reducedMotion,
+      Spring,
+      modalFocus: oldFunction(OLD_MODAL_FOCUS, 'modalFocusManager')(world.document),
+      fetch: server.fetch,
+      innerHeight: VIEWPORT.h,
+      Date: clock,
+    },
+    LAUNCH_MERGE,
+  )
   const page = pageDeps(world, log)
   const ui: unknown = oldFunction(
     code,
@@ -366,6 +375,9 @@ export function oldLaunch(world: FakeWorld, scene: LaunchScene, server: FakeServ
       filter: scene.filter,
     }),
     onStarted: page.onStarted,
+    // A Retry on a session back from the archive: app.js's returnSessions([l.resume]).
+    onResume: (l: unknown) =>
+      void log.push(`onResume(${typeof l === 'object' && l !== null ? String(Reflect.get(l, 'resume')) : ''})`),
     // app.js's own, at the baseline.
     focusLaunch: oldFunction(
       oldCode('web/app.js', ['focusLaunch'], {

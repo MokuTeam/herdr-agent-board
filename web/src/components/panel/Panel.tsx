@@ -1,4 +1,4 @@
-// The side-panel shell the session sheet, the categories, the schedule and the profiles share: an
+// The side-panel shell the session sheet, the categories, the schedule, the archive and the profiles share: an
 // aside with a grip, the head and the panel's content, and the edges that resize it. Where it sits,
 // how it moves and the one-open-at-a-time rule are the shared place's (components/panel/place.ts
 // and motion.ts); `open` asks for it, `onClose` hears when it closed itself or gave way to another.
@@ -11,13 +11,14 @@ import { EDGES, edgeChrome, type PanelChrome } from '../../models/panel-motion.t
 import { classNames } from '../class-names.ts'
 import { PanelHead } from './PanelHead.tsx'
 
-export type PanelKind = 'session' | 'categories' | 'schedule' | 'profiles'
+export type PanelKind = 'session' | 'categories' | 'schedule' | 'archive' | 'profiles'
 
 /** Each panel's name for screen readers, and the session sheet's close button id. */
 const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
   session: { label: 'sheet.label', closeId: 'sheet-close' },
   categories: { label: 'cats.title' },
   schedule: { label: 'sched.title' },
+  archive: { label: 'archive.title' },
   profiles: { label: 'prof.title' },
 }
 

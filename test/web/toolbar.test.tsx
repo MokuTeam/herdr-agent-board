@@ -1,4 +1,4 @@
-// The React toolbar against the old page's, at upstream's compact toolbar (#43): the toolbar
+// The React toolbar against the old page's, at upstream's archive (#56; its compact toolbar is #43's): the toolbar
 // block of web/index.html after web/app.js filled it for the same board (applyTexts, the "new
 // session" button, renderToolbar, renderLimits, updateLive, syncAvailability,
 // renderScheduleCount). The thumb's inline position and the lanes' fading edges are set after
@@ -35,8 +35,11 @@ import {
   toggleClass,
 } from './support/markup.ts'
 
-/** Upstream's merge of the compact toolbar and Settings (#43). */
-const TOOLBAR_MERGE = '8c4b987'
+/**
+ * Upstream's merge of the archive (#56): the compact toolbar and Settings (#43), with the Archive
+ * button and the column heads named by their column (data-col).
+ */
+const TOOLBAR_MERGE = '2b9e6b7'
 const NOW = Date.now()
 const done = item({ key: 'c', name: 'Gamma', column: 'done', status: 'done', result: 'Fixed', activity: 100 })
 const ITEMS = [
@@ -138,11 +141,11 @@ describe('toolbar markup parity', () => {
     )
     setHtml(
       byId(old, 'columns-head'),
-      '<div class="col-head"><span class="dot" style="--c:var(--green)"></span><span class="t">Working</span><span class="n">1</span></div>' +
-        '<div class="col-head"><span class="dot" style="--c:var(--orange)"></span><span class="t">Needs me</span><span class="n">1</span></div>' +
-        '<div class="col-head"><span class="dot" style="--c:var(--purple)"></span><span class="t">Waiting on others</span><span class="n">1</span></div>' +
-        '<div class="col-head"><span class="dot" style="--c:var(--blue)"></span><span class="t">Done</span><span class="n">1</span></div>' +
-        '<div class="col-head"><span class="dot" style="--c:var(--gray)"></span><span class="t">Idle</span><span class="n">1</span></div>',
+      '<div class="col-head" data-col="work"><span class="dot" style="--c:var(--green)"></span><span class="t">Working</span><span class="n">1</span></div>' +
+        '<div class="col-head" data-col="me"><span class="dot" style="--c:var(--orange)"></span><span class="t">Needs me</span><span class="n">1</span></div>' +
+        '<div class="col-head" data-col="ext"><span class="dot" style="--c:var(--purple)"></span><span class="t">Waiting on others</span><span class="n">1</span></div>' +
+        '<div class="col-head" data-col="done"><span class="dot" style="--c:var(--blue)"></span><span class="t">Done</span><span class="n">1</span></div>' +
+        '<div class="col-head" data-col="idle"><span class="dot" style="--c:var(--gray)"></span><span class="t">Idle</span><span class="n">1</span></div>',
     )
     setAttr(byClass(old, 'titles'), 'title', '5 sessions · 1 working · 1 needs you · 1 waits on others · 1 asleep')
     const limits = byId(old, 'limits')
@@ -194,11 +197,11 @@ describe('toolbar markup parity', () => {
     // Only Done has a card on show: the other columns narrow to their heads.
     setHtml(
       byId(page, 'columns-head'),
-      '<div class="col-head vacant"><span class="dot" style="--c:var(--green)"></span><span class="t">Работает</span><span class="n">0</span></div>' +
-        '<div class="col-head vacant"><span class="dot" style="--c:var(--orange)"></span><span class="t">Ждёт меня</span><span class="n">0</span></div>' +
-        '<div class="col-head vacant"><span class="dot" style="--c:var(--purple)"></span><span class="t">Ждёт внешнего</span><span class="n">0</span></div>' +
-        '<div class="col-head"><span class="dot" style="--c:var(--blue)"></span><span class="t">Готово</span><span class="n">1</span></div>' +
-        '<div class="col-head vacant"><span class="dot" style="--c:var(--gray)"></span><span class="t">Простой</span><span class="n">0</span></div>',
+      '<div class="col-head vacant" data-col="work"><span class="dot" style="--c:var(--green)"></span><span class="t">Работает</span><span class="n">0</span></div>' +
+        '<div class="col-head vacant" data-col="me"><span class="dot" style="--c:var(--orange)"></span><span class="t">Ждёт меня</span><span class="n">0</span></div>' +
+        '<div class="col-head vacant" data-col="ext"><span class="dot" style="--c:var(--purple)"></span><span class="t">Ждёт внешнего</span><span class="n">0</span></div>' +
+        '<div class="col-head" data-col="done"><span class="dot" style="--c:var(--blue)"></span><span class="t">Готово</span><span class="n">1</span></div>' +
+        '<div class="col-head vacant" data-col="idle"><span class="dot" style="--c:var(--gray)"></span><span class="t">Простой</span><span class="n">0</span></div>',
     )
     setAttr(byClass(page, 'titles'), 'title', '5 сессий · 1 работает · 1 ждёт тебя · 1 ждёт ответа извне · 1 спит')
     const limits = byId(page, 'limits')

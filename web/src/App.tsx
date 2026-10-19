@@ -1,7 +1,8 @@
 // The board page: the toolbar over the board, the side panels, the usage popover, the quick look
 // and the toasts, the keys and the Back button; the chat's files and links, the question forms, the
 // context menus, renaming in place, the "new session" window and the terminal window; the
-// session's helpers in their window; the Claude profiles' panel from Settings.
+// session's helpers in their window; the Claude profiles' panel from Settings; the archive (its
+// panel, sessions off the board and back, Ctrl+Z).
 import { useEffect, useRef, useState } from 'react'
 import { Board } from './components/Board.tsx'
 import { FileChips } from './components/files/FileChip.tsx'
@@ -17,6 +18,7 @@ import { SidePanels } from './components/SidePanels.tsx'
 import { Toasts } from './components/Toasts.tsx'
 import { Toolbar } from './components/Toolbar.tsx'
 import { Terminal } from './components/terminal/Terminal.tsx'
+import { useArchive } from './hooks/useArchive.ts'
 import { useBoardKeys } from './hooks/useBoardKeys.ts'
 import { useContextMenus } from './hooks/useContextMenus.ts'
 import { useDialogHistory } from './hooks/useDialogHistory.ts'
@@ -60,8 +62,10 @@ export function App() {
   const [profiles, setProfiles] = useState(false)
   // The reminders' buttons, shared by the schedule panel and the sheet.
   const reminders = useSchedule()
+  // Sessions off the board and back, the archive's panel; Retry on a session back from it is its Return again.
+  const archive = useArchive()
   // The launch window, and the cards of sessions on their way; without fresh data the board says why.
-  const launch = useLaunch()
+  const launch = useLaunch({ onResume: l => void archive.returnSessions([l.resume]) })
   const newSession = useNewSession(launch.open)
   const openNextAttention = useNextAttention()
   // Paths in the chat become chips; a chip, the sheet's Changes and History open the quick look.
@@ -90,6 +94,7 @@ export function App() {
     rename: rename.start,
     launch: launch.menus,
     terminal: terminal.openTerminal,
+    archive,
   })
   // Settings (the gear): light or dark, the language, where the panels sit, sleeping sessions, the profiles.
   const settings = useSettingsMenu(menus.menu, () => setProfiles(true))
@@ -105,6 +110,7 @@ export function App() {
     sessionPanelOpen: () => !!panels.place.openPanel(),
     pickOption: questions.pickOption,
     openTerminal: terminal.openTerminal,
+    archive,
   })
   // Layers above the board, topmost first (models/lifecycle.ts PAGE_LAYERS): Back on a phone
   // closes them one at a time (the quick look and the helpers window a step at a time).
@@ -132,6 +138,7 @@ export function App() {
           onNewSession={from => newSession(laneContext(ui.filter), from)}
           onCategories={() => (categories ? setCategories(false) : openCategories())}
           onSchedule={() => (schedule ? setSchedule(false) : openSchedule())}
+          onArchive={archive.togglePanel}
           setup={setup}
           settings={settings}
         />
@@ -147,6 +154,7 @@ export function App() {
         categories={{ open: categories, focus: lane, onClose: () => setCategories(false), onOpen: openCategories }}
         schedule={{ open: schedule, focus: session, onClose: () => setSchedule(false), schedule: reminders }}
         profiles={{ open: profiles, onClose: () => setProfiles(false) }}
+        archive={archive}
         sheet={{
           onNewSession: newSession,
           schedule: {
@@ -165,6 +173,7 @@ export function App() {
           onRename: rename.start,
           onTerminal: terminal.openTerminal,
           helpers,
+          onArchive: key => void archive.archiveSession(key),
         }}
       />
       <LimitsPop anchor={limitsAnchor} />

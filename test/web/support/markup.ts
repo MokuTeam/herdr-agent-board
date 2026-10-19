@@ -175,6 +175,7 @@ export function canonical(nodes: Node[], options: CanonicalOptions = {}, depth =
  */
 const LATER_ELEMENTS: [string, string, string][] = [
   ['0d33639', 'sheet-helpers', 'sheet-question'], // #40: a session's helpers above its conversation
+  ['2b9e6b7', 'archive-sheet', 'sched-sheet'], // #56: the archive's panel after the schedule's
 ]
 
 /** `el` put right after the element with id `after`, wherever that is in `nodes`. */

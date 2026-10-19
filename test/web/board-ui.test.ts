@@ -24,6 +24,8 @@ test('the page state starts from localStorage: lane, sleepers and view receipts,
     busy: new Map(),
     edits: NO_EDITS,
     launched: [],
+    archiving: new Map(),
+    flyBack: new Map(),
   })
   const ui = initialUi(
     stored({ 'board.filter': 'proj', 'board.sleepers': '0', 'board.viewed': '{"a":"[1,\\"\\",\\"x\\"]","b":5}' }),

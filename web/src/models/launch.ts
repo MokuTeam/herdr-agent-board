@@ -210,10 +210,11 @@ export function placeholderOf(l: LaunchView): Item {
   }
 }
 
-/** How it goes, for the line on its card. */
+/** How it goes, for the line on its card; a session back from the archive is resumed, not started anew. */
 export function stepText(l: LaunchView, t: Translator, launcher: string): string {
   if (l.state === 'waiting') return t('launch.step.dialog')
   if (l.state === 'done') return t('launch.step.done')
+  if (l.resume && l.step === 'agent') return t('archive.step')
   return t(`launch.step.${l.step}`, { name: launcher })
 }
 

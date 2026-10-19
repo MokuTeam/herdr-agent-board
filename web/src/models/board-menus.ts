@@ -6,12 +6,14 @@
 // The pure part of the old page's board-menus.js: what is under the pointer
 // or the focus and the menu for it, with the board handed in. The listeners that open it are the
 // page's (hooks/useContextMenus.ts).
+import { archiveBlock } from '../../../src/core/archive.ts'
 import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
 import {
   boardMenu,
   cardMenu,
   chipMenu,
+  columnMenu,
   laneMenu,
   launchMenu,
   type MenuCategory,
@@ -72,6 +74,12 @@ export interface BoardMenuActions {
   terminal(key: string, from: MenuOrigin): unknown
   /** A MokuPilot call whose agent is a fork of the session. */
   mokupilot(key: string, from: MenuOrigin): unknown
+  /** Off the board until Return: its tab closes, Claude keeps the conversation (hooks/useArchive.ts). */
+  archive(key: string, from: MenuOrigin): unknown
+  /** The sleeping sessions in "Idle" asleep `days` days or more to the archive: in lane `lane`, or in the lanes on show. */
+  tidy(days: number, lane: string | null): unknown
+  /** The archive's panel. */
+  archiveOpen(): unknown
   /** Rename where the name is (`name`: the card's name or the sheet's head). */
   rename(key: string, name: Element | null): unknown
   move(key: string, to: { cat?: string; column?: string }): unknown
@@ -120,6 +128,8 @@ export interface BoardMenuDeps {
   }
   /** Sessions on their way (the launch window); none: their cards get no menu. */
   launch?: LaunchMenus | null | undefined
+  /** Sleeping sessions in "Idle" a tidy-up of `days` takes, in `lane` or the lanes on show (src/core/archive.ts tidyList). */
+  tidyCount(days: number, lane: string | null): number
   do: BoardMenuActions
 }
 
@@ -182,6 +192,13 @@ export function menuFor(target: unknown, at: Point, board: BoardMenuDeps): Board
     const it = board.item(key)
     return it ? forCard(board, key, it, card, at) : null
   }
+  // A column's head (the toolbar's, or a lane's own in a narrow window): "Idle" has a menu.
+  const colHead = el.closest<HTMLElement>('.col-head[data-col], .col-label')
+  if (colHead) {
+    const col = colHead.dataset.col ?? colHead.closest<HTMLElement>('.col')?.dataset.col
+    const m = forColumn(board, col, colHead.closest<HTMLElement>('.lane[data-cat]')?.dataset.cat ?? null)
+    if (m) return m
+  }
   const lane = el.closest<HTMLElement>('.lane[data-cat]')
   if (lane) {
     const cat = board.state().data.categories.find(c => c.id === lane.dataset.cat)
@@ -204,6 +221,7 @@ const CARD_ACTIONS = [
   'history',
   'terminal',
   'mokupilot',
+  'archive',
 ] as const
 type CardAction = (typeof CARD_ACTIONS)[number]
 const isCardAction = (id: string): id is CardAction => CARD_ACTIONS.some(a => a === id)
@@ -222,6 +240,7 @@ function forCard(board: BoardMenuDeps, key: string, it: Item, el: Element, at: P
       column: board.column(it),
       category: board.category(it),
       restarting: (state.data.schedules ?? []).some(e => e.kind === 'restart' && e.key === key && !e.failed),
+      archiveWhy: archiveBlock(it, state.data.schedules ?? []),
     }),
     pick: id => {
       const [what, arg = ''] = id.split(/:(.*)/s)
@@ -265,13 +284,28 @@ function forLaunch(board: BoardMenuDeps, id: string, el: Element): BoardMenu | n
   }
 }
 
+/** "Idle": its sleeping sessions to the archive, all lanes on show or one lane's. */
+function forColumn(board: BoardMenuDeps, col: string | undefined, lane: string | null): BoardMenu | null {
+  const items = columnMenu(col, { ...ctxOf(board), tidyCount: days => board.tidyCount(days, lane) })
+  if (!items) return null
+  return {
+    label: board.t()(`col.${col}`),
+    items,
+    pick: id => {
+      if (id.startsWith('tidy:')) board.do.tidy(Number(id.slice(5)), lane)
+      else if (id === 'archiveOpen') board.do.archiveOpen()
+    },
+  }
+}
+
 function forLane(board: BoardMenuDeps, cat: MenuCategory, at: Point): BoardMenu {
   const state = board.state()
   return {
     label: cat.title,
-    items: laneMenu(cat, { ...ctxOf(board), filter: state.filter }),
+    items: laneMenu(cat, { ...ctxOf(board), filter: state.filter, tidyCount: days => board.tidyCount(days, cat.id) }),
     pick: id => {
       const from = pointRect(at.x, at.y)
+      if (id.startsWith('tidy:')) return void board.do.tidy(Number(id.slice(5)), cat.id)
       if (id === 'new') board.do.newSession({ category: cat.id }, from)
       else if (id === 'newWorkspace') board.do.newSession({ category: cat.id, newWorkspace: true }, from)
       else if (id === 'editCat') board.do.cats(cat.id)
@@ -290,6 +324,7 @@ function forBoard(board: BoardMenuDeps, at: Point): BoardMenu {
       if (id === 'new') board.do.newSession({}, from)
       else if (id === 'newWorkspace') board.do.newSession({ newWorkspace: true }, from)
       else if (id === 'cats') board.do.cats()
+      else if (id === 'archiveOpen') board.do.archiveOpen()
       else if (id === 'sleepers') board.do.sleepers()
       else if (id === 'showAll') board.do.filter('all')
       else if (id === 'search') board.do.search()

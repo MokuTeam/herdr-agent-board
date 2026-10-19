@@ -40,6 +40,8 @@ export interface OldScene {
   canEdit: boolean
   /** A later merge whose cards to draw (its app.js's), in place of the baseline's. */
   ref?: string | undefined
+  /** Sessions on their way to the archive (#56's state.archiving): off the board at once. */
+  archiving?: Map<string, number> | undefined
 }
 
 const pendingQuestions = oldFunction(oldCode('web/question-model.js', ['pendingQuestions'], {}), 'pendingQuestions')
@@ -97,7 +99,11 @@ async function laterModules(ref: string): Promise<Record<string, unknown>> {
   const helpers = await oldModule('web/helper-model.js', ref)
   return { callTitle: notice.get('callTitle'), liveCount: helpers.get('liveCount') }
 }
-const LATER = new Map<string, Record<string, unknown>>([['513e441', await laterModules('513e441')]])
+const LATER = new Map<string, Record<string, unknown>>([
+  ['513e441', await laterModules('513e441')],
+  // The archive's merge (#56): its visibleItems leaves out the cards on their way to the archive.
+  ['2b9e6b7', await laterModules('2b9e6b7')],
+])
 
 /** One card as cardOf() makes it (class, data-key, tabindex) and updateCard() fills it. */
 function oldCard(update: (...args: unknown[]) => unknown, esc: (s: unknown) => string, it: unknown): string {
@@ -146,6 +152,7 @@ export function oldBoard(s: OldScene): Node[] {
     busy: s.busy,
     moved: s.moved,
     movedCol: s.movedCol,
+    archiving: s.archiving ?? new Map(),
   }
   const deps = {
     t: s.t,

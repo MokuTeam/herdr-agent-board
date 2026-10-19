@@ -119,6 +119,8 @@ describe('the head', () => {
       restartHidden: true,
       restartTitle: t('sheet.restartHint'),
       mokupilotHidden: true,
+      archiveHidden: true,
+      archiveTitle: t('archive.why.notClaude'),
     })
     expect(headButtons({ ...a, status: 'idle', session: null }, t)).toEqual({
       historyHidden: true,
@@ -128,6 +130,8 @@ describe('the head', () => {
       restartHidden: true,
       restartTitle: t('sheet.restartHint'),
       mokupilotHidden: true,
+      archiveHidden: true,
+      archiveTitle: t('archive.why.notClaude'),
     })
     // A MokuPilot call: with MokuPilot here, for a Claude session with an id.
     expect(headButtons({ ...a, agent: 'claude' }, t, true).mokupilotHidden).toBe(false)
@@ -144,6 +148,8 @@ describe('the head', () => {
       restartHidden: true,
       restartTitle: undefined,
       mokupilotHidden: true,
+      archiveHidden: true,
+      archiveTitle: undefined,
     })
   })
 
@@ -179,6 +185,7 @@ describe('what works now', () => {
       newHereTitle: t('launch.hereHint'),
       files: false,
       restart: false,
+      archive: false,
     })
     expect(sheetAvailability({ ...scene, turn: true }, t).sleep).toBe(true)
     // A turn does not gray Restart (it waits for the turn by itself); a restart on its way does.

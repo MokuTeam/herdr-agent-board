@@ -23,18 +23,21 @@ export interface ViewOptions {
   categoryOf: (item: Item) => string
   /** The profile switch's pick ('all' when not given), as it reads (models/profiles.ts pickedProfile). */
   profile?: string
+  /** Sessions on their way to the archive: off the board at once (hooks/useArchive.ts). */
+  archiving?: ReadonlyMap<string, number>
 }
 
 /**
- * The items on the board: sleeping idle ones only when asked for, those of the profile the switch
- * shows, and those the search matches.
+ * The items on the board: none on its way to the archive, sleeping idle ones only when asked for,
+ * those of the profile the switch shows, and those the search matches.
  */
 export function visibleItems(
   items: Item[],
-  { query, sleepers, categories, categoryOf, profile = 'all' }: ViewOptions,
+  { query, sleepers, categories, categoryOf, profile = 'all', archiving }: ViewOptions,
 ): Item[] {
   const q = query.trim().toLowerCase()
   return items.filter(it => {
+    if (archiving?.has(it.key)) return false
     if (!sleepers && it.sleeping && it.column === 'idle') return false
     if (!profileShown(profile, it)) return false
     if (!q) return true

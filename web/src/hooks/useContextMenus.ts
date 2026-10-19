@@ -186,6 +186,16 @@ export interface ActionDeps {
   rename(key: string, el: Element | null): void
   /** The terminal window of a session, grown from `el` (hooks/useTerminal.ts). */
   terminal?: ((key: string, el: Element | null) => void) | undefined
+  /** The archive (hooks/useArchive.ts): a session off the board, a tidy-up, its panel. */
+  archive?: ArchiveMenus | undefined
+}
+
+/** What the menus do with the archive (hooks/useArchive.ts). */
+export interface ArchiveMenus {
+  archiveSession(key: string): unknown
+  archiveMany(keys: readonly string[]): unknown
+  tidyItems(days: number, lane?: string | null): readonly { key: string }[]
+  openPanel(): void
 }
 
 const COLUMNS = ['work', 'me', 'ext', 'done', 'idle'] as const
@@ -228,6 +238,9 @@ export function boardActions(deps: ActionDeps): BoardMenuActions {
     history: (key, from) => deps.quickLook.lookHistory(key, deps.item(key)?.cwd ?? '', elementFrom(from)),
     terminal: (key, from) => deps.terminal?.(key, elementFrom(from)),
     mokupilot: key => actions().callMokuPilot(key),
+    archive: key => deps.archive?.archiveSession(key),
+    tidy: (days, lane) => deps.archive?.archiveMany((deps.archive?.tidyItems(days, lane) ?? []).map(i => i.key)),
+    archiveOpen: () => deps.archive?.openPanel(),
     newSession: (ctx, from) => deps.newSession(ctx, from),
     cats: id => deps.openCategories(id),
     filter: id => dispatch({ type: 'filter', id }),
@@ -311,6 +324,8 @@ export interface ContextMenusOptions {
   launch?: LaunchMenus | null
   /** The terminal window of a session (hooks/useTerminal.ts). */
   terminal?: ((key: string, el: Element | null) => void) | undefined
+  /** The archive: a card's Archive, the tidy-ups, the panel (hooks/useArchive.ts). */
+  archive?: ArchiveMenus | undefined
 }
 
 export interface ContextMenus {
@@ -365,6 +380,7 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
       get launch() {
         return page().options.launch
       },
+      tidyCount: (days, lane) => page().options.archive?.tidyItems(days, lane).length ?? 0,
       do: boardActions({
         t: () => page().t,
         canEdit: () => page().board.canEdit,
@@ -384,6 +400,9 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
         openCategories: id => page().options.openCategories(id),
         rename: (key, el) => page().options.rename(key, el),
         terminal: (key, el) => page().options.terminal?.(key, el),
+        get archive() {
+          return page().options.archive
+        },
       }),
     }
     return boardMenuListeners({ menu, menuFor: (target, at) => menuFor(target, at, deps) })

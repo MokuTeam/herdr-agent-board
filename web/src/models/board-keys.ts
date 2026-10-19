@@ -25,6 +25,8 @@ export interface KeyScene {
   digits: boolean
   /** The sheet shows a session: Ctrl+` opens its terminal. */
   sessionOpen?: boolean | undefined
+  /** An archive's toast still offers Return: Ctrl+Z brings it back (hooks/useArchive.ts). */
+  undo?: boolean | undefined
 }
 
 export type BoardKey =
@@ -37,6 +39,7 @@ export type BoardKey =
   | 'digit'
   | 'search'
   | 'terminal'
+  | 'undoArchive'
   | null
 
 // N on a Russian layout is Т.
@@ -55,6 +58,9 @@ export function boardKey(e: KeyPress, s: KeyScene): BoardKey {
   if (isN(e.key) && plainKey) return 'next'
   // Digits pick an option of the question the session waits on, as in the terminal.
   if (/^[1-9]$/.test(e.key) && s.digits && !s.quickLook) return 'digit'
+  // Undo the archive whose toast still shows, as its Return does.
+  if (e.key?.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && !s.typing && s.undo)
+    return 'undoArchive'
   if (e.key === '/' && !s.typing) return 'search'
   // Ctrl+`: the terminal of the session in the sheet (its window closes with it again).
   if (e.code === 'Backquote' && e.ctrlKey && !e.altKey && !e.metaKey && s.sessionOpen && !s.quickLook) return 'terminal'

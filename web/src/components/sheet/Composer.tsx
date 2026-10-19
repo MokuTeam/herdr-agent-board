@@ -1,6 +1,6 @@
 // The sheet's foot: why the session's actions wait (no fresh data), the session's buttons — go to
 // it in herdr, a MokuPilot call with a fork of it, its terminal, wake it, put it to sleep, restart
-// it, its changes and history, a new session here, and More at the row's end, with what the row
+// it, its changes, take it off the board to the archive, its history, a new session here, and More at the row's end, with what the row
 // hides (the stylesheet decides) — the files
 // that go with the next message, and the message box: Enter sends, Shift+Enter breaks the line,
 // the box grows with the text; files come in through the clip or Ctrl+V (a screenshot).
@@ -12,6 +12,7 @@ import type { HeadButtons, SheetAvailability } from '../../models/sheet.ts'
 import type { termButton } from '../../models/terminal.ts'
 import { classNames } from '../class-names.ts'
 import {
+  ArchiveIcon,
   BranchIcon,
   ClipIcon,
   CrossIcon,
@@ -41,6 +42,8 @@ export interface SessionButtons {
   restart?: () => void
   /** The quick look of the checkout's changes (25c). */
   changes?: (button: HTMLElement) => void
+  /** Off the board until Return: its tab closes, Claude keeps the conversation. */
+  archive?: () => void
   /** The quick look of the project's past sessions (25c). */
   history?: (button: HTMLElement) => void
   /** A new session in this one's lane and folder (the launch window). */
@@ -185,6 +188,18 @@ export function Composer({
         >
           <BranchIcon />
           <span>{t('changes.open')}</span>
+        </button>
+        <button
+          type="button"
+          className="button"
+          id="sheet-archive"
+          hidden={buttons.archiveHidden}
+          disabled={av.archive}
+          title={buttons.archiveTitle}
+          onClick={() => on.archive?.()}
+        >
+          <ArchiveIcon />
+          <span>{t('archive.menu')}</span>
         </button>
         <button
           type="button"

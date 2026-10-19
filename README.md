@@ -194,6 +194,10 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
 - "Terminal" in the sheet (a card's menu, Ctrl+` with the sheet open): a live shell in the
   session's folder, or the session's own terminal, to type into from the board. See
   [Terminal](#terminal).
+- "Archive" (a card's menu, the sheet; "More actions" on a phone) takes a session off the board:
+  its tab in herdr closes, Claude keeps the conversation, and Return brings it back. The menu of
+  the "Idle" column (or a lane's) takes the sleeping ones at once. "Archive" on the toolbar lists
+  them, with a search. See [Archive](#archive).
 - Helpers and sessions working together: a card says when subagents, forks, workflow agents or
   teammates of its session are at work, and which session started it; the sheet lists the
   helpers, and each one's own conversation opens live. See
@@ -201,9 +205,10 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
 - Right click (or a long press on a touch screen, or the menu key / Shift+F10 on a focused card)
   opens the board's own menu: on a card (open, go to herdr, message, wake or sleep, rename, move
   to a category, status, "No reply needed", open its folder, Changes, History, a new session in
-  its folder, copy its name, folder, session or pane id, clear the card), on a lane (a new
-  session or workspace there, edit the category, show only it), on the board, on the sheet's
-  head, on a starting session and on file chips. It opens where you clicked, stays on screen,
+  its folder, copy its name, folder, session or pane id, archive it, clear the card), on a lane
+  (a new session or workspace there, edit the category, show only it, archive its sleeping
+  sessions), on the "Idle" column's head (archive the sleeping sessions), on the board, on the
+  sheet's head, on a starting session and on file chips. It opens where you clicked, stays on screen,
   takes arrows, Enter, Esc and the first letters of an item. Gray items say why (no fresh data
   from herdr, the session works). Fields, selected text and links keep the browser's own menu;
   Shift+right click always gives it.
@@ -405,7 +410,8 @@ How it starts, by `launch` in config.json:
 - `launch.command`: your own launcher, run without a shell. The first element is the program,
   each other element one argument, with `{name}`, `{label}`, `{cwd}`, `{workspace}` (herdr
   workspace id), `{workspaceLabel}`, `{category}`, `{message}`, `{messageFile}` (the first message
-  in a UTF-8 file), `{sessionId}`, `{profile}` (the Claude profile's id) or `{profileDir}` (its
+  in a UTF-8 file), `{sessionId}`, `{resume}` (the id of a session coming back from the
+  [archive](#archive), empty for a new one), `{profile}` (the Claude profile's id) or `{profileDir}` (its
   folder) filled in; a nested list is left out when a value in it is empty. Nothing from the request becomes a program or an option: values only fill those
   places. It runs with `HERDR_WORKSPACE_ID` set to the chosen workspace (the board itself lives
   in a workspace of its own) and should print `pane=<pane id>` when the session is up; it fails
@@ -463,7 +469,7 @@ puts it on PATH; it is `bun src/entrypoints/spawn-agent.ts`):
 ```
 spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
             [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
-            [--timeout-sec 120] [--session-id <uuid>] [--pane <herdr pane id>] [--profile <id>]
+            [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--pane <herdr pane id>] [--profile <id>]
 ```
 
 PowerShell's spelling works too: `-Name`, `-Cwd`, `-Label`, `-BriefFile`, `-Brief`, `-Workspace`,
@@ -482,7 +488,9 @@ the folder is not there, Claude is not ready in time, or Claude waits for a dial
 folder trust): answer it in that tab, then name and brief the session there. A brief that does
 not get through fails it too, saying so: the session runs, send the brief by hand rather than
 start another. A `/rename` that does not take is only a warning. `--pane` starts Claude in that
-pane instead of a new tab; it must be at a shell prompt, not running an agent.
+pane instead of a new tab; it must be at a shell prompt, not running an agent. `--resume` brings
+back a session that ended (`launch.claude` with `--resume <uuid>`, run in the folder the session
+ran in): it keeps its name, so no `/rename` is typed; the board's [archive](#archive) uses it.
 
 With more than one Claude profile (`CLAUDE_CONFIG_DIR` folders such as `~/.claude-work`), a
 session an agent starts keeps that agent's profile, the one its own `CLAUDE_CONFIG_DIR` points to,
@@ -902,6 +910,68 @@ agent cannot reconnect from inside its own turn (`/mcp` is a menu in its own ter
   running" is read in the session's own profile's registry (`<profile folder>/sessions`). With
   one profile it is all as above.
 
+## Archive
+
+Sessions pile up: one-off jobs that are done, sessions asleep for days. "Archive" takes one off
+the board. The board mirrors herdr, so the session's pane closes (its tab, when nothing else is in
+it); Claude keeps the conversation on disk, so it can come back.
+
+- No confirmation, forgiveness instead: the card flies into the Archive button on the toolbar
+  and a toast says "<name> archived · Return" for a few seconds. Its pane closes 8 seconds after
+  the click (`archiveUndoSec` in config.json), so Return (or Ctrl+Z) in that time puts the card back as it was, nothing closed.
+  That wait is kept in the archive's record on disk: a reload of the page or a restart of the
+  board in between changes nothing (a board that starts closes the ones that are due).
+- Only a session that is free goes: a Claude session (Return resumes it by its id), its turn
+  over, no dialog in its terminal, no helpers at work, no restart under way. The menu item is
+  gray with the reason. What only herdr can tell is checked when you click (text you started
+  typing in its input box, a background command or Monitor) and again right before the pane
+  closes: a session that got to work meanwhile (a Telegram message, another session) stays on the
+  board, and a toast says why. A sleeping session goes as it is: its pane with the 💤 closes. A
+  shell with no Claude in it is closed only as herdr-wake left it, marked 💤 with nothing running
+  in it but the shell; a Claude that exited by itself, or a program started there, keeps the pane.
+- Its reminders and repeating pings wait in the record and come back with it: under their old
+  ids, a repeating one from its next run, a one-off that came due meanwhile late (the prompt says
+  by how much). A restart on its way is dropped: a resume is one. A MokuPilot report with a
+  receipt keeps the session on the board until it is delivered.
+- The card file stays as it was (name, lane, notes), so the session comes back with them, also
+  when you resume it by hand elsewhere.
+- Many at once: the menu of the "Idle" column (its head, or a lane's "Idle" in a narrow window)
+  and a lane's menu offer "Archive the sleeping ones": asleep for over a day, 3 days, a week, or
+  all of them, each with its count. Only sleeping sessions in "Idle": those that wait on you or
+  on someone else stay. One toast, one Return for all.
+- "Archive" on the toolbar opens the list, by the day each went, newest first, with a search over
+  the name, lane, folder, what the card said last and the day. While sleeping sessions have sat
+  in "Idle" for over 3 days, it offers to take them along. Each row has Return and, two clicks,
+  "Remove from the archive": the record, the card and the held reminders go; Claude's
+  transcript is never touched.
+- Return from the list (or a toast whose time is up) resumes the session in a new herdr tab the way new sessions start (see
+  [New sessions](#new-sessions)): `launch.claude --resume <id>` through the board's spawn-agent,
+  `{resume}` for your own `launch.command` (without it the board's spawn-agent does it),
+  `--resume <id>` after `launch.args` for `launch.agent`. It runs in the folder the session ran
+  in (Claude finds a session by its folder), in its old workspace while herdr has it, else the
+  workspace of its lane, else a new one of its old name. Its card shows in its lane as "back"
+  while Claude starts, and becomes the session's own once herdr shows it; one that fails says why
+  and offers Return again. A session whose transcript is gone cannot come back, and Return says so. Two Returns at once
+  (two windows, say) start it once.
+- Agents: `board archive --session <id|name|pane>` takes another session off the board by the same
+  rules, its pane closed at once (no undo time: there is no toast to offer it). A session id or a
+  pane names one exactly; a name two sessions go by takes neither, and says so. A session cannot
+  archive itself: its turn is on while it asks. The [`herdr-agents`](skills/herdr-agents/SKILL.md)
+  skill allows it for a one-off session the agent started, or when the user asks.
+- herdr-wake takes a closed pane for a session that is over; Return starts it again in a new pane,
+  which herdr-wake then treats like any other.
+- With more than one Claude profile, a session goes to the archive with its profile, and Return
+  resumes it in that profile or not at all: one whose profile the board cannot be sure of is not
+  archived, and Return refuses one it cannot place, with the reason (resume it yourself in its
+  profile). Its transcript is looked for in that profile's folder only. A row in the list carries
+  its profile's tag, as its card did. With one profile it is all as above.
+
+One file per session in `%LOCALAPPDATA%\herdr\plugins\agent-board\archive\<session id>.json`, written
+under the same per-file lock as the cards; `log.jsonl` there keeps what became of the latest
+(closed, kept on the board, returned, removed). The scheduler closes the due ones
+(`src/core/archive.ts`, `src/adapters/archive-store.ts`, `src/services/archive.ts`,
+`web/src/hooks/useArchive.ts`, `web/src/components/archive/ArchivePanel.tsx`).
+
 ## Notifications
 
 On Windows, `herdr plugin action invoke agent-board.notifications` (`bun src/entrypoints/install.ts
@@ -997,6 +1067,10 @@ payload), `POST /api/launch/<id>/dismiss` and `/focus`. `POST /api/launch` also 
 own `Origin` when the browser sends one, and fresh herdr data like every action through herdr.
 Renaming: `POST /api/session/<key>/rename` with `{ name, claude }`. Restarting:
 `POST /api/session/<key>/restart` (a schedule entry, see [Restart](#restart); `{ id, again }`).
+Archive: `POST /api/session/<key>/archive` (`{ held, dropped, closeAt }`), `GET /api/archive` (its
+records), `POST /api/archive` with `{ op: "archive" | "return" | "remove", keys }` (`{ done, failed }`);
+the board payload has `archive: { log }`. Archiving and Return need fresh herdr data and the
+page's own `Origin`, as a launch does.
 
 Setup (`src/core/setup.ts`, `src/adapters/setup-facts.ts`, `src/services/setup-check.ts`,
 `web/src/components/SetupPop.tsx`): `GET /api/setup` runs the checks again and answers
@@ -1042,6 +1116,10 @@ board unschedule <id|all> remove an entry (all: every entry of this session)
 board call-report --session <id> --file <report.md>
                           a MokuPilot call's results for the session (MokuPilot runs it):
                           typed in once the session is free, for its information
+board archive --session <id|name|pane>
+                          another session off the board, its pane closed (a one-off one you
+                          started, or one the user asked you to); the user brings it back from
+                          the board's archive; see Archive
 --session <id|name|pane>  for another session's card
 board doctor              what is set up on this computer, and what is missing
 spawn-agent --name <Name> --cwd <folder> [--brief-file <file>]   a new session in a herdr tab
@@ -1134,7 +1212,8 @@ with a fork of a session: `false` turns them off; `{ "dir": "<MokuPilot checkout
 and its first arguments, one per element, no shell, the board adding `call --claude-session <id>
 --cwd <folder>`, or the whole line when it has `{session}` or `{cwd}` in it).
 
-Cards: `%LOCALAPPDATA%\herdr\plugins\agent-board\cards\<session id>.json`.
+Cards: `%LOCALAPPDATA%\herdr\plugins\agent-board\cards\<session id>.json`. Sessions in the archive:
+`archive\<session id>.json` beside them (see [Archive](#archive)).
 
 Writes to the same card use a per-card directory lock (`<session id>.json.lock`) around the
 read/merge/rename. Contention waits at most two seconds, then reports an error without replacing

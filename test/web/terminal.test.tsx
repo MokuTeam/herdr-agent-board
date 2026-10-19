@@ -456,9 +456,9 @@ describe('the window’s parts', () => {
     expect(gray && !gray.separator && gray.disabled).toBe(undefined)
     expect(ids(cardMenu({ ...probe, cwd: '', pane: null }, { ...fresh, terminal: true }))).not.toContain('terminal')
     // The same item as upstream's menu-model.js, for every state of the card: the newest merge that
-    // changed the card's menu (#51's Restart, by Put to sleep), the terminal's item as its merge left it.
+    // changed the card's menu (#56's Archive, by Clear), the terminal's item as its merge left it.
     const names = ['usable', 'tidy', 'SEP', 'PIN_COLUMNS', 'COLUMN_COLOR', 'cardMenu']
-    const was = oldFunction(oldCode('web/menu-model.js', names, {}, '513e441'), 'cardMenu')
+    const was = oldFunction(oldCode('web/menu-model.js', names, {}, '2b9e6b7'), 'cardMenu')
     for (const terminal of [true, false, undefined])
       for (const fields of [{}, { sleeping: true }, { cwd: '' }, { pane: null }, { cwd: '', pane: null }]) {
         const it = { ...probe, ...fields }

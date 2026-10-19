@@ -435,6 +435,7 @@ describe('without the launch window', () => {
         category: () => 'acme',
         state: () => ({ open: null, filter: 'all', sleepers: true, data: { categories: [] } }),
         launch: null,
+        tidyCount: () => 0,
         do: {
           open: none,
           focus: none,
@@ -448,6 +449,9 @@ describe('without the launch window', () => {
           history: none,
           terminal: none,
           mokupilot: none,
+          archive: none,
+          tidy: none,
+          archiveOpen: none,
           rename: none,
           move: none,
           newSession: none,
