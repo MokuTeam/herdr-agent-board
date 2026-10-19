@@ -443,3 +443,14 @@ test('a launch.command resumes through {resume}, left out for a new session', ()
   assert.deepEqual(commandArgs(template, { cwd: 'C:/x', resume: S, sessionId: '' }).args, ['-File', 'start.ps1', '-Cwd', 'C:/x', '-Resume', S])
   assert.deepEqual(commandArgs(template, { cwd: 'C:/x', resume: '', sessionId: OTHER }).args, ['-File', 'start.ps1', '-Cwd', 'C:/x', '-SessionId', OTHER])
 })
+
+test('a card dragged onto the archive place: over it (with some slop), or flicked at it from close by', async () => {
+  const { dropsOn } = await import('../web/archive-model.js')
+  const r = { left: 600, right: 820, top: 900, bottom: 956 }
+  assert.equal(dropsOn(r, { x: 700, y: 930 }), true)
+  assert.equal(dropsOn(r, { x: 590, y: 890 }), true) // the slop around it
+  assert.equal(dropsOn(r, { x: 700, y: 800 }), false) // held still above it
+  assert.equal(dropsOn(r, { x: 700, y: 800 }, { x: 0, y: 1500 }), true) // flicked down at it
+  assert.equal(dropsOn(r, { x: 700, y: 800 }, { x: 0, y: -1500 }), false) // flicked away
+  assert.equal(dropsOn(r, { x: 700, y: 500 }, { x: 0, y: 9000 }), false) // too far for a flick to count
+})
