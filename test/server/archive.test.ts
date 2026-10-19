@@ -196,16 +196,22 @@ async function board(box: Sandbox, cfg: Record<string, unknown> = {}) {
   await until(() => proc.messages.some(m => (m as { ready?: boolean }).ready), 10_000)
   const url = `http://127.0.0.1:${port}`
   const payload = async () => (await (await fetch(`${url}/api/board`)).json()) as Record<string, unknown>
-  // A refresh asked for while another runs is folded into it: wait for one that starts after now.
-  const refresh = async () => {
-    const before = Date.now()
+  /** Asks for a refresh and waits for one that ended after `since`. */
+  const refreshedAfter = async (since: number) => {
     proc.send('refresh')
     for (const end = Date.now() + 10_000; ; ) {
       const p = await payload()
-      if (Number(p.lastSuccessfulRefreshAt) >= before) return
+      if (Number(p.lastSuccessfulRefreshAt) > since) return
       if (Date.now() > end) throw new Error(`no refresh: ${JSON.stringify(proc.messages)}`)
       await new Promise(resolve => setTimeout(resolve, 50))
     }
+  }
+  // A refresh asked for while another runs is folded into it, and that one may have read herdr
+  // before the test changed it (every session action starts one). The first refresh to end after
+  // now may be that one; the next one to end began after it ended, so after now.
+  const refresh = async () => {
+    await refreshedAfter(Date.now())
+    await refreshedAfter(Date.now())
   }
   await refresh()
   const post = (path: string, body: unknown): Promise<Answer> =>
