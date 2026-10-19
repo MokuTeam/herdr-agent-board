@@ -923,6 +923,37 @@ test('board archive reads the target’s registry in its own profile, not in the
   assert.equal(record(box), null)
 }, 30_000)
 
+test('board archive says why a profile refuses it in English, whatever language the board speaks', async () => {
+  const box = await sandbox()
+  twoProfiles(box, { language: 'ru', port: 9, wakeUrl: null, categories: CATEGORIES })
+  const cli = async () => {
+    const out = await box.run('cli', { args: ['archive', '--session', S], env: { CLAUDE_CODE_SESSION_ID: OTHER } })
+      .exited
+    return { code: out.code, out: `${out.stdout}${out.stderr}`.trim() }
+  }
+  // No profile named and two shown: the board cannot tell which one it runs in.
+  const dir = project(box)
+  herdrWith(box, dir)
+  const unknown = await cli()
+  assert.equal(unknown.code, 1)
+  assert.match(
+    unknown.out,
+    /Probe card stays on the board: its Claude profile is not known \(unknown profile\): it could not come back from the archive in the right account/,
+  )
+  assert.doesNotMatch(unknown.out, /[а-яё]/i)
+  // Started for Private, running in Work.
+  project(box, { profileDir: join(box.env.HOME as string, '.claude-work'), profileWant: 'default' }, '')
+  const wrong = await cli()
+  assert.equal(wrong.code, 1)
+  assert.match(
+    wrong.out,
+    /Probe card stays on the board: its Claude profile is not known \(Wrong profile: started for Private\)/,
+  )
+  assert.doesNotMatch(wrong.out, /[а-яё]/i)
+  assert.equal(record(box), null)
+  startedNothing(box)
+}, 30_000)
+
 test('the page’s own calls (web/src/api/client.ts) against these routes: archive, its list, the board’s log, Return, Remove', async () => {
   const box = await sandbox()
   const dir = project(box)

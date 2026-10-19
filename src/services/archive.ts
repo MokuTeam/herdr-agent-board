@@ -47,7 +47,7 @@ import { t } from '../core/lang.ts'
 import { defaultWorkspace, sameDir, UNSAFE_CHARS } from '../core/launch/names.ts'
 import { launchTarget, type ProfileSet, sessionProfile } from '../core/profiles.ts'
 import type { ScheduleEntry, SessionRef } from '../core/schedule-rules.ts'
-import type { Config, Item } from '../core/types.ts'
+import type { Config, Item, Translator } from '../core/types.ts'
 import { nextRun } from '../core/when.ts'
 import { readyToSleep } from './actions.ts'
 import type { Deps } from './deps.ts'
@@ -99,15 +99,16 @@ type ProfileFacts = Pick<Item, 'profile' | 'profileFolder' | 'profileWanted'>
 /**
  * Why the board cannot tell a session's profile, for a message (the folder it reported, a profile
  * no longer listed, or the one its start asked for when it runs in another); null when it can
- * (core/item-profile.ts parentProfile: the one a start from it keeps, hidden or not).
+ * (core/item-profile.ts parentProfile: the one a start from it keeps, hidden or not). In `tr`'s
+ * language: the board's, or English for `board archive`.
  */
-export function profileDoubt(facts: ProfileFacts, set: ProfileSet): string | null {
+export function profileDoubt(facts: ProfileFacts, set: ProfileSet, tr: Translator = t): string | null {
   if (parentProfile(facts, set.list)) return null
   if (facts.profileWanted) {
     const want = set.list.find(p => p.id === facts.profileWanted)?.title || facts.profileWanted
-    return t('profile.wrong', { want })
+    return tr('profile.wrong', { want })
   }
-  return facts.profileFolder || facts.profile || t('profile.unknown')
+  return facts.profileFolder || facts.profile || tr('profile.unknown')
 }
 
 /** A record's profile: as its session's item said when it was archived, else as its card says now. */
@@ -165,10 +166,11 @@ export type FreeToClose = { ok: true; pane: PaneFacts | null } | { ok: false; wh
  * free: no turn, no dialog, no text in its input box, no background command or Monitor (actions.ts
  * readyToSleep, in its own profile's registry). A shell with no Claude in it goes only as
  * herdr-wake left a sleeping one: marked 💤, nothing running in it but the shell; a Claude that
- * exited by itself, or a program started in its place, keeps the pane.
+ * exited by itself, or a program started in its place, keeps the pane. The profile's detail is in
+ * `tr`'s language (profileDoubt).
  */
-export async function freeToClose(deps: Deps, item: ArchiveSubject): Promise<FreeToClose> {
-  const doubt = profileDoubt(item, deps.profiles())
+export async function freeToClose(deps: Deps, item: ArchiveSubject, tr: Translator = t): Promise<FreeToClose> {
+  const doubt = profileDoubt(item, deps.profiles(), tr)
   if (doubt !== null) return { ok: false, why: 'archive.why.profile', detail: doubt }
   const target = item.pane ?? ''
   let pane: PaneFacts | null
@@ -194,7 +196,8 @@ export async function freeToClose(deps: Deps, item: ArchiveSubject): Promise<Fre
   if (pane.agent !== 'claude' || pane.session !== (item.session ?? null)) return { ok: false, why: 'archive.why.gone' }
   const ready = await readyToSleep(deps, item)
   if (ready.ok) return { ok: true, pane }
-  if (ready.profile) return { ok: false, why: 'archive.why.profile', detail: profileDoubt(item, deps.profiles()) ?? '' }
+  if (ready.profile)
+    return { ok: false, why: 'archive.why.profile', detail: profileDoubt(item, deps.profiles(), tr) ?? '' }
   const why = Object.hasOwn(WHY, ready.why) ? WHY[ready.why] : undefined
   return why ? { ok: false, why } : { ok: false, why: 'archive.why.herdr', detail: ready.why }
 }
@@ -209,8 +212,9 @@ export type AskArchive =
  * Take a board item off the board: the record now, the pane `grace` ms later (closeDue). Refused
  * with { ok: false, why, detail } when the session may not go (core/archive.ts archiveBlock,
  * freeToClose). The record keeps what its card says last (core/board.ts noteOf) and the profile it
- * runs in. by: 'user' or 'agent'; from: the session that asked, when another one did. Returns {
- * ok, record, held, dropped }: how many entries wait with it, how many (a restart) were dropped.
+ * runs in. by: 'user' or 'agent'; from: the session that asked, when another one did; tr: the
+ * language of a refusal's detail (freeToClose). Returns { ok, record, held, dropped }: how many
+ * entries wait with it, how many (a restart) were dropped.
  */
 export async function askArchive(
   deps: Deps,
@@ -220,11 +224,12 @@ export async function askArchive(
     from = null,
     grace = UNDO_MS,
     now = Date.now(),
-  }: { by?: 'user' | 'agent'; from?: SessionRef | null; grace?: number; now?: number } = {},
+    tr = t,
+  }: { by?: 'user' | 'agent'; from?: SessionRef | null; grace?: number; now?: number; tr?: Translator } = {},
 ): Promise<AskArchive> {
   const block = archiveBlock(item, listEntries())
   if (block) return { ok: false, why: block }
-  const free = await freeToClose(deps, item)
+  const free = await freeToClose(deps, item, tr)
   if (!free.ok) return free
   const record: ArchiveRecord = {
     key: item.key,

@@ -54,7 +54,7 @@ import type { Item } from '../core/types.ts'
 import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
 import { shortWhen } from '../core/when-format.ts'
 import { checkWake, wakeAnswers } from '../services/actions.ts'
-import { askArchive, closeDue, getArchived } from '../services/archive.ts'
+import { askArchive, closeDue, getArchived, profileDoubt } from '../services/archive.ts'
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
 
@@ -535,7 +535,7 @@ async function archive(): Promise<void> {
     )
   const en = translator('en')
   const lower = (s: string): string => `${s.charAt(0).toLowerCase()}${s.slice(1)}`
-  const r = await askArchive(deps, item, { by: 'agent', from, grace: 0 })
+  const r = await askArchive(deps, item, { by: 'agent', from, grace: 0, tr: en })
   if (!r.ok)
     throw new Error(`${item.name} stays on the board: ${lower(en(r.why, { name: item.name, why: r.detail ?? '' }))}`)
   // Closed here and now; a board's scheduler that gets to it first does the same.
@@ -543,7 +543,12 @@ async function archive(): Promise<void> {
   if (!getArchived(item.key)) {
     // Called off at the last moment: the session got to work, or herdr would not close it.
     const kept = readArchiveLog(20).find(e => e.key === item.key && e.result === 'kept')
-    const why = kept ? en(kept.why ?? '', { why: kept.detail ?? '' }) : 'it is not in the archive'
+    // The log says a profile's doubt in the board's language (the page reads it): told anew here.
+    const detail =
+      kept?.why === 'archive.why.profile'
+        ? (profileDoubt(item, deps.profiles(), en) ?? kept.detail ?? '')
+        : (kept?.detail ?? '')
+    const why = kept ? en(kept.why ?? '', { why: detail }) : 'it is not in the archive'
     throw new Error(`${item.name} stays on the board: ${lower(why)}`)
   }
   const held = r.held ? ` · ${r.held} schedule ${r.held === 1 ? 'entry waits' : 'entries wait'} with it` : ''
