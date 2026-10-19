@@ -1,4 +1,4 @@
-// The React toolbar against the old page's, at upstream's archive (#56; its compact toolbar is #43's): the toolbar
+// The React toolbar against the old page's, at upstream's b2c5afa (its Archive is #56's, its compact toolbar #43's): the toolbar
 // block of web/index.html after web/app.js filled it for the same board (applyTexts, the "new
 // session" button, renderToolbar, renderLimits, updateLive, syncAvailability,
 // renderScheduleCount). The thumb's inline position and the lanes' fading edges are set after
@@ -36,10 +36,10 @@ import {
 } from './support/markup.ts'
 
 /**
- * Upstream's merge of the archive (#56): the compact toolbar and Settings (#43), with the Archive
- * button and the column heads named by their column (data-col).
+ * The newest web merge ported (b2c5afa): the compact toolbar and Settings (#43), with the Archive
+ * button (#56) and the column heads named by their column (data-col).
  */
-const TOOLBAR_MERGE = '2b9e6b7'
+const TOOLBAR_MERGE = 'b2c5afa'
 const NOW = Date.now()
 const done = item({ key: 'c', name: 'Gamma', column: 'done', status: 'done', result: 'Fixed', activity: 100 })
 const ITEMS = [

@@ -1,6 +1,6 @@
 // The "new session" window both ways in a fake DOM (support/fake-dom.ts), for parity: the old
-// page's launch.js — initLaunch as it was at the archive's merge (#56: the baseline's, with a
-// session back from the archive's card and its Retry, LAUNCH_MERGE), with its own launch-model.js,
+// page's launch.js — initLaunch as it was at LAUNCH_MERGE (the baseline's, with #56's card of a
+// session back from the archive and its Retry), with its own launch-model.js,
 // launch-drafts.js and modal-focus.js — and the React port: components/launch/launch-window.ts on
 // the window <LaunchDialogView> draws, drawn again after every event and frame the way React would
 // (support/react-commit.ts), its handlers React's own (support/react-events.ts). Both sides take
@@ -25,8 +25,8 @@ import { type Host, hostElements, listenLikeReact } from './react-events.ts'
 
 export const VIEWPORT = { w: 1000, h: 700 }
 
-/** Upstream's merge of the archive (#56), the only change to launch.js since the baseline. */
-export const LAUNCH_MERGE = '2b9e6b7'
+/** The newest web merge ported (b2c5afa); the archive (#56) made the only change to launch.js since the baseline. */
+export const LAUNCH_MERGE = 'b2c5afa'
 
 /** What the page knows when the window opens; tests change it between steps (fresh data going stale). */
 export interface LaunchScene {

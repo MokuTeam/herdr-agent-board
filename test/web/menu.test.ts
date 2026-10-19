@@ -316,10 +316,10 @@ test('the model gives what the old page’s menu-model.js gave, case by case', (
   ]
   const old = oldCode('web/menu-model.js', names, {})
   const was = (name: string, ...args: unknown[]) => oldFunction(old, name)(...args)
-  // The board's own menu opens the archive (#56).
-  const boardAt56 = oldFunction(oldCode('web/menu-model.js', ['SEP', 'tidy', 'boardMenu'], {}, '2b9e6b7'), 'boardMenu')
-  // placeMenu's `up` and margin as an option: the session panel's row (#54).
-  const placeAt54 = oldFunction(oldCode('web/menu-model.js', ['placeMenu'], {}, '3105958'), 'placeMenu')
+  // The board's own menu opens the archive (#56); as at b2c5afa, the newest web merge ported.
+  const boardNow = oldFunction(oldCode('web/menu-model.js', ['SEP', 'tidy', 'boardMenu'], {}, 'b2c5afa'), 'boardMenu')
+  // placeMenu's `up` and margin as an option: the session panel's row (#54); as at b2c5afa.
+  const placeNow = oldFunction(oldCode('web/menu-model.js', ['placeMenu'], {}, 'b2c5afa'), 'placeMenu')
   const ru = translator('ru')
   for (const tr of [t, ru])
     for (const canMutate of [true, false])
@@ -345,7 +345,7 @@ test('the model gives what the old page’s menu-model.js gave, case by case', (
           for (const sleepers of [true, false]) {
             const c = { ...base, filter, sleepers }
             for (const cat of categories) assert.deepEqual(laneMenu(cat, c), was('laneMenu', cat, c))
-            assert.deepEqual(boardMenu(c), boardAt56(c))
+            assert.deepEqual(boardMenu(c), boardNow(c))
           }
         for (const state of ['starting', 'waiting', 'trust', 'done', 'failed'])
           for (const l of [
@@ -367,7 +367,7 @@ test('the model gives what the old page’s menu-model.js gave, case by case', (
         ]) {
           assert.deepEqual(placeMenu({ x, y }, size, viewport), was('placeMenu', { x, y }, size, viewport))
           for (const options of [{}, { up: true }, { up: false }, { up: true, margin: 4 }, { margin: 12 }])
-            assert.deepEqual(placeMenu({ x, y }, size, viewport, options), placeAt54({ x, y }, size, viewport, options))
+            assert.deepEqual(placeMenu({ x, y }, size, viewport, options), placeNow({ x, y }, size, viewport, options))
           const item = { top: y, bottom: y + 24 }
           const parent = { left: x, right: x + 220, top: 0, bottom: 400 }
           assert.deepEqual(

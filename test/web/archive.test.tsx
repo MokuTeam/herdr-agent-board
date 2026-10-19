@@ -1,5 +1,5 @@
 // The archive on the web board (upstream's #56, 2b9e6b7): the panel's markup against upstream's
-// own archiveRowHTML and renderArchive (web/app.js at the merge, run with its own helpers), in
+// own archiveRowHTML and renderArchive (web/app.js at MERGE, run with its own helpers), in
 // English and Russian; its aside's shell against web/index.html there; the profile tag a row
 // carries with more than one profile shown; the board without the cards on their way to the
 // archive (upstream's visibleItems); the launch card of a Return and its Retry (upstream's
@@ -40,7 +40,7 @@ import {
 import { OLD_WHEN, oldCode, oldFunction, oldModule } from './support/old-app.ts'
 import { oldSide } from './support/panel-sides.tsx'
 
-const MERGE = '2b9e6b7'
+const MERGE = 'b2c5afa'
 const DAY = 86_400_000
 const HOUR = 3_600_000
 const OLD_ARCHIVE = await oldModule('web/archive-model.js', MERGE)

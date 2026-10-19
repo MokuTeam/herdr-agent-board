@@ -20,8 +20,8 @@ import { byClass, canonical, type Element, findAll, hasClass, type Node, parseHt
 import { OLD_MARKDOWN, oldCode, oldFunction, oldModule } from './support/old-app.ts'
 import { composerOf } from './support/sheet-scene.tsx'
 
-/** Upstream's merge of the queue (#53): this file's own pin. */
-const QUEUE_MERGE = 'b5a96b8'
+/** The newest web merge ported (b2c5afa; the queue is #53's): this file's own pin. */
+const QUEUE_MERGE = 'b2c5afa'
 const OLD_OUTBOX = await oldModule('web/outbox.js', QUEUE_MERGE)
 
 const MIN = 60_000
@@ -139,7 +139,7 @@ function detailOf(scene: Scene): DetailValue<SessionDetail> {
 
 const openOf = (scene: Scene) => (scene.closed ? null : 'a')
 
-/** upstream's renderSheetBody at the merge, its thread part: the `.thread` it drew. */
+/** upstream's renderSheetBody at QUEUE_MERGE, its thread part: the `.thread` it drew. */
 function oldThread(scene: Scene): Element {
   const t = translator(scene.lang ?? 'en')
   const detail = detailOf(scene)

@@ -101,8 +101,9 @@ async function laterModules(ref: string): Promise<Record<string, unknown>> {
 }
 const LATER = new Map<string, Record<string, unknown>>([
   ['513e441', await laterModules('513e441')],
-  // The archive's merge (#56): its visibleItems leaves out the cards on their way to the archive.
-  ['2b9e6b7', await laterModules('2b9e6b7')],
+  // The archive (#56), as at b2c5afa, the newest web merge ported: its visibleItems leaves out
+  // the cards on their way to the archive.
+  ['b2c5afa', await laterModules('b2c5afa')],
 ])
 
 /** One card as cardOf() makes it (class, data-key, tabindex) and updateCard() fills it. */

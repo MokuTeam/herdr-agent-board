@@ -108,10 +108,10 @@ function snapshotOf(world: FakeWorld, log: string[], open: boolean): string {
 // ---------------------------------------------------------------- the old page
 
 /**
- * Upstream's merge of the session panel's row (PR #54): menu.js and the functions it takes of
- * menu-model.js are the baseline's, with placeMenu's `up`.
+ * The newest web merge ported (b2c5afa): menu.js and the functions it takes of menu-model.js are
+ * the baseline's, with placeMenu's `up` (the session panel's row, PR #54).
  */
-const MENU_MERGE = '3105958'
+const MENU_MERGE = 'b2c5afa'
 
 /** web/menu-model.js at MENU_MERGE, its functions by name. */
 function oldModel(): Record<string, unknown> {

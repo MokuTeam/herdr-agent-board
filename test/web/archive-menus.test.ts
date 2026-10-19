@@ -3,7 +3,7 @@
 // sleeping ones, with a count for each age; the board's opens the archive. Then the same items
 // as upstream's own menu-model.js gave them, case by case, and which menu opens where (the
 // column heads, a lane's own column label) with what its picks do, against upstream's
-// board-menus.js at the same merge (support/board-menu-sides.ts).
+// board-menus.js at MERGE (support/board-menu-sides.ts).
 import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { cardMenu, columnMenu, laneMenu, type MenuEntry, type MenuItem } from '../../web/src/models/menu-model.ts'
@@ -11,7 +11,7 @@ import { item } from './support/board.tsx'
 import { type BoardScene, type MenuSide, oldBoardMenus, reactBoardMenus, scene } from './support/board-menu-sides.ts'
 import { oldCode, oldFunction } from './support/old-app.ts'
 
-const MERGE = '2b9e6b7'
+const MERGE = 'b2c5afa'
 const t = translator('en')
 const S = '0f8fad5b-d9cb-469f-a165-70867728950e'
 
@@ -134,7 +134,7 @@ const right =
   (side: MenuSide) =>
     side.fire(side.page(id), 'contextmenu', { button: 2, clientX: x, clientY: y })
 
-describe('which menu opens, against upstream’s board-menus.js at #56', () => {
+describe('which menu opens, against upstream’s board-menus.js at b2c5afa', () => {
   test('a card’s Archive, gray with the reason while it cannot go; its pick archives it', async () => {
     const log = await compare(scene({ items: [session], tidy: TIDY }), [right('card'), s => s.pick('archive')])
     expect(log.join('\n')).toMatch(/do\.archive\("s1"/)

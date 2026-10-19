@@ -1,6 +1,6 @@
 // A card dragged onto the archive (upstream's #57, 98e1f7a): where a card let go lands on the
 // archive's place (models/archive-drop.ts dropsOn), upstream's own test and the same answers as
-// upstream's web/archive-model.js at the merge; and the place itself (components/DropArchive.tsx)
+// upstream's web/archive-model.js at MERGE; and the place itself (components/DropArchive.tsx)
 // against what upstream's app.js makes of it there (its dropPlace, showDropPlace and the spring
 // that brings it up and takes it away), run on a stand-in element, in English and Russian.
 import { describe, expect, test } from 'bun:test'
@@ -15,7 +15,7 @@ import { board, item, renderInBoard } from './support/board.tsx'
 import { canonical, parseHtml } from './support/markup.ts'
 import { oldCode, oldFunction, oldModule } from './support/old-app.ts'
 
-const MERGE = '98e1f7a'
+const MERGE = 'b2c5afa'
 const OLD_ARCHIVE = await oldModule('web/archive-model.js', MERGE)
 const oldDropsOn = oldFunction(OLD_ARCHIVE, 'dropsOn')
 const oldArchiveBlock = oldFunction(OLD_ARCHIVE, 'archiveBlock')
@@ -105,7 +105,7 @@ interface OldPlace {
   show(it: Item): string
 }
 
-/** Upstream's place at the merge (app.js), made on a stand-in element, its spring a recorder. */
+/** Upstream's place at MERGE (app.js), made on a stand-in element, its spring a recorder. */
 function oldPlace(lang: string, schedules: ArchiveEntryFacts[], canMutate: boolean, canEdit: boolean): OldPlace {
   const place = new StandIn()
   const made: OldPlace['spring'][] = []
