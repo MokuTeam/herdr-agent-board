@@ -22,6 +22,7 @@ import {
   paletteAfter,
   profileChoices,
   renamed,
+  usualOptions,
   withoutPath,
   withPath,
 } from '../../web/src/models/categories.ts'
@@ -579,6 +580,42 @@ describe('a lane’s usual profile', () => {
     work.select.value = ''
     await work.world.fire(work.select, 'change')
     expect(work.posts).toEqual([{ op: 'update', id: 'proj', profile: '' }])
+  })
+
+  test('a usual profile hidden since, or no longer listed, shows as itself: its id, off, never None', async () => {
+    const options = [
+      ['', 'None'],
+      ['default', 'Private'],
+      ['work', 'Work'],
+    ]
+    for (const { usual, stays } of [
+      { usual: 'gamedev', stays: 'hidden' },
+      { usual: 'gone', stays: 'not listed' },
+    ]) {
+      const categories = CATEGORIES.map(c => (c.id === 'proj' ? { ...proj, profile: usual } : c))
+      const nodes = reactBody({ categories, profiles: PROFILES })
+      expect([stays, usualOf(nodes, 'proj')]).toEqual([
+        stays,
+        { label: 'Usual profile', options: [...options, [usual, usual]], selected: [usual], disabled: false },
+      ])
+      const off = findAll([rowOf(nodes, 'proj')], el => el.tag === 'option' && el.attrs.has('disabled'))
+      expect(off.map(o => o.attrs.get('value'))).toEqual([usual])
+      // The other lanes offer only the shown ones.
+      expect(usualOf(nodes, 'ops')?.options).toEqual(options)
+    }
+    expect(usualOptions(profileChoices(PROFILES) ?? [], 'gamedev')).toEqual([
+      { id: 'default', title: 'Private', off: false },
+      { id: 'work', title: 'Work', off: false },
+      { id: 'gamedev', title: 'gamedev', off: true },
+    ])
+    expect(usualOptions(profileChoices(PROFILES) ?? [], 'work').map(o => o.off)).toEqual([false, false])
+    expect(usualOptions(profileChoices(PROFILES) ?? [], undefined).length).toBe(2)
+    // None clears it.
+    const row = liveRow({ ...proj, profile: 'gamedev' }, profileChoices(PROFILES))
+    expect(row.select.value).toBe('gamedev')
+    row.select.value = ''
+    await row.world.fire(row.select, 'change')
+    expect(row.posts).toEqual([{ op: 'update', id: 'proj', profile: '' }])
   })
 
   test('an agent’s lane has no usual profile; one shown profile: no field at all', () => {

@@ -119,3 +119,16 @@ export function profileChoices(profiles: BoardProfile[] | undefined): { id: stri
   const shown = (profiles ?? []).filter(p => !p.hidden)
   return shown.length < 2 ? null : shown.map(p => ({ id: p.id, title: p.title }))
 }
+
+/**
+ * The options of a lane's usual profile (besides none): the profiles it can be (`choices`), then
+ * the one it has (`usual`) when that is none of them, hidden or no longer listed: as itself, by its
+ * id, and off (`off`), so the field shows what is set and it can be cleared, but not picked again.
+ */
+export function usualOptions(
+  choices: readonly { id: string; title: string }[],
+  usual: string | undefined,
+): { id: string; title: string; off: boolean }[] {
+  const options = choices.map(p => ({ id: p.id, title: p.title, off: false }))
+  return usual && !choices.some(p => p.id === usual) ? [...options, { id: usual, title: usual, off: true }] : options
+}

@@ -6,7 +6,15 @@
 import { type FocusEvent, type KeyboardEvent, useRef, useState } from 'react'
 import type { BoardCategory, Swatch } from '../../../../src/core/payload.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { confirmText, renamed, rowText, swatchPressed, withoutPath, withPath } from '../../models/categories.ts'
+import {
+  confirmText,
+  renamed,
+  rowText,
+  swatchPressed,
+  usualOptions,
+  withoutPath,
+  withPath,
+} from '../../models/categories.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { GripGlyph, TrashGlyph } from '../icons.tsx'
@@ -267,8 +275,8 @@ export function CategoryRowView(props: CategoryRowViewProps) {
             <span>{t('cat.profile')}</span>
             <select value={c.profile ?? ''} disabled={disabled} onChange={e => on?.profile(e.currentTarget.value)}>
               <option value="">{t('cat.profileNone')}</option>
-              {profiles.map(p => (
-                <option key={p.id} value={p.id}>
+              {usualOptions(profiles, c.profile).map(p => (
+                <option key={p.id} value={p.id} disabled={p.off}>
                   {p.title}
                 </option>
               ))}
