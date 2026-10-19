@@ -6,8 +6,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { oldSource } from './support/old-app.ts'
 
-/** The newest upstream merge whose stylesheets are ported (#51 changed app.css; the others are #45's still). */
-const STYLES_REF = '513e441'
+/** The newest upstream merge whose stylesheets are ported (#53-#58 changed app.css; the others are #45's still). */
+const STYLES_REF = 'b2c5afa'
 const SHEETS = ['app.css', 'menu.css', 'launch.css', 'questions.css', 'terminal.css', 'helpers.css']
 const ROOT = join(import.meta.dir, '..', '..')
 
