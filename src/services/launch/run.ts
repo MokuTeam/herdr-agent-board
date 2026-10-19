@@ -1,7 +1,8 @@
 // One launch, from a checked request to a session that waits for input: a worktree and a
 // workspace first when asked, the launcher (launcher.ts), Claude's folder-trust dialog held on
 // the card until it is answered, another dialog waited out, and the name and first message the
-// launcher did not type. The card gets the chosen lane as soon as the session has an id.
+// launcher did not type. The card gets the chosen lane as soon as the session has an id, and the
+// profile it is meant to run in, for the board to check against the one its hooks report.
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, relative } from 'node:path'
@@ -16,7 +17,7 @@ import { launcherError } from '../../core/launch/launcher-command.ts'
 import { slugName, uniqueSlug, worktreePath } from '../../core/launch/names.ts'
 import type { Item, LaunchFailure, LaunchState, LaunchStep } from '../../core/types.ts'
 import type { Deps } from '../deps.ts'
-import { LaunchError, type LaunchEvents, launcherFor } from './launcher.ts'
+import { LaunchError, type LaunchEvents, launcherFor, notePane, openInProfile } from './launcher.ts'
 import { claudeRename, inputEmpty, takenNames, typeLine } from './prompt.ts'
 import type { LaunchRequest } from './request.ts'
 
@@ -103,7 +104,7 @@ export function launchRunner({
     },
     session: id => {
       l.sessionId = id
-      writeCard(id, { category: l.category })
+      writeCard(id, { category: l.category, profileWant: l.profile })
       l.carded = id
     },
   })
@@ -112,10 +113,12 @@ export function launchRunner({
     if (l.worktree) await makeWorktree(l, l.worktree.branch)
     if (l.newWorkspace) {
       step(l, 'workspace')
-      const ws = await workspaceCreate(l.cwd, l.workspaceLabel)
+      // In the profile's env: what starts in its first tab runs in that profile.
+      const ws = await openInProfile(l, env => workspaceCreate(l.cwd, l.workspaceLabel, env))
       l.workspaceId = ws.id
       l.rootPane = ws.pane
       l.rootTab = ws.tab
+      if (ws.pane) notePane(l, ws.pane, ws.terminal)
     }
     const launcher = launcherFor(deps.cfg.launch)
     const r = await launcher.start(l, events(l))

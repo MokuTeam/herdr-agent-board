@@ -20,6 +20,7 @@ if (args[0] === '--late') {
       cwd: process.cwd(),
       workspace: process.env.HERDR_WORKSPACE_ID ?? null,
       pane: process.env.HERDR_PANE_ID ?? null,
+      configDir: process.env.CLAUDE_CONFIG_DIR ?? null,
     }),
   )
   if (args.some(a => /\bfail\b/i.test(a))) {

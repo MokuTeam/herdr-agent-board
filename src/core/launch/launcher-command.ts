@@ -12,6 +12,9 @@ export const PLACEHOLDERS = [
   'message',
   'messageFile',
   'sessionId',
+  // The Claude profile the session starts in: its id, and its folder (set or inherited).
+  'profile',
+  'profileDir',
 ] as const
 export type Placeholder = (typeof PLACEHOLDERS)[number]
 

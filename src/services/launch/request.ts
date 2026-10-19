@@ -1,11 +1,13 @@
 // A launch request from the new-session window, checked before anything runs: the name, a folder
-// that is there, a lane the board has, a workspace herdr takes, the first message, a branch.
+// that is there, a lane the board has, a workspace herdr takes, the first message, a branch, and
+// the Claude profile it starts in, refused when the board cannot be sure of it.
 import { resolvePath } from '../../adapters/files.ts'
 import { SLOW, statOf } from '../../adapters/folders.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
 import { checkBranch, checkName, NAME_MAX, UNSAFE_CHARS } from '../../core/launch/names.ts'
-import type { Vars } from '../../core/types.ts'
+import { type LaunchTarget, launchTarget, type ProfileSet } from '../../core/profiles.ts'
+import type { Item, Vars } from '../../core/types.ts'
 
 const MESSAGE_MAX = 20_000
 const WORKSPACE_ID = /^[A-Za-z0-9][\w:-]{0,39}$/
@@ -14,6 +16,9 @@ const CATEGORY_ID = /^[a-z0-9][a-z0-9_-]{0,31}$/
 /** A workspace name herdr takes as a value: no control characters, no leading dash. */
 const workspaceName = (s: string, max: number): boolean =>
   !!s && s.length <= max && !UNSAFE_CHARS.test(s) && !s.startsWith('-')
+
+/** A value the request gives: undefined when it is left out or empty. */
+const given = (v: unknown): string | undefined => (v === undefined || v === null || v === '' ? undefined : String(v))
 
 /** What a checked request asks for. `newWorkspace`: make the workspace `workspaceLabel` first. */
 export interface LaunchRequest {
@@ -26,14 +31,30 @@ export interface LaunchRequest {
   newWorkspace: boolean
   message: string
   worktree: { branch: string } | null
+  /** The id of the Claude profile it starts in, and that profile's folder. */
+  profile: string
+  profileDir: string
+  /** CLAUDE_CONFIG_DIR for the start; null leaves the env as the board inherited it (its own profile). */
+  configDir: string | null
+  /** The key of the card it was started from ("New here"), whose profile it keeps; null for none. */
+  parent: string | null
+  /** The profile's own Claude arguments. */
+  profileArgs: string[]
 }
 
 export type CheckResult = { ok: true; launch: LaunchRequest } | { ok: false; field: string; error: string }
 
-/** Check a launch request: { ok, launch }, or { ok: false, field, error } for the field at fault. */
+/**
+ * Check a launch request: { ok, launch }, or { ok: false, field, error } for the field at fault.
+ * `profiles`: the board's; `items`: the board now, for the session a "New here" names.
+ */
 export async function checkRequest(
   body: unknown,
-  { categories = null }: { categories?: Set<string> | null } = {},
+  {
+    categories = null,
+    profiles,
+    items = [],
+  }: { categories?: Set<string> | null; profiles: ProfileSet; items?: Item[] },
 ): Promise<CheckResult> {
   const fail = (field: string, key: string, vars?: Vars): CheckResult => ({ ok: false, field, error: t(key, vars) })
   const b = isRecord(body) ? body : {}
@@ -71,6 +92,24 @@ export async function checkRequest(
     if (why) return fail('worktree', why)
     worktree = { branch }
   }
+  // The profile: the one chosen, or the parent's. A parent the board does not have now is one
+  // whose profile it does not know.
+  const parent = given(b.parent) ?? null
+  const from = parent === null ? undefined : items.find(i => i.key === parent)
+  const parentName = from?.name || parent || ''
+  const target = launchTarget(
+    given(b.profile),
+    parent === null ? null : (from ?? { name: parentName, profile: null }),
+    profiles,
+  )
+  if (!target.ok) return fail('profile', ...refusal(target, parentName, profiles))
+  const { profile, configDir } = target
+  // A folder to set must be there: Claude would make a new, empty profile of it.
+  if (configDir !== null) {
+    const st = await statOf(configDir, 3000)
+    if (!st || st === SLOW || !st.isDirectory())
+      return fail('profile', 'launch.err.profileFolder', { title: profile.title, path: configDir })
+  }
   return {
     ok: true,
     launch: {
@@ -83,6 +122,28 @@ export async function checkRequest(
       newWorkspace: !workspaceId,
       message,
       worktree,
+      profile: profile.id,
+      profileDir: profile.dir,
+      configDir,
+      parent,
+      profileArgs: (profile.args ?? []).filter((a): a is string => typeof a === 'string'),
     },
+  }
+}
+
+/** The text and its values for a profile a launch is refused. */
+function refusal(target: Extract<LaunchTarget, { ok: false }>, name: string, profiles: ProfileSet): [string, Vars] {
+  const title = profiles.list.find(p => p.id === target.id)?.title ?? target.id
+  switch (target.error) {
+    case 'choose':
+      return ['launch.err.profileChoose', {}]
+    case 'hidden':
+      return ['launch.err.profileHidden', { title }]
+    case 'missing':
+      return ['err.profile.missing', { id: target.id }]
+    case 'parent':
+      return ['launch.err.profileParent', { name, title }]
+    case 'unknownParent':
+      return ['launch.err.profileUnknown', { name }]
   }
 }

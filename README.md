@@ -255,8 +255,8 @@ How it starts, by `launch` in config.json:
 - `launch.command`: your own launcher, run without a shell. The first element is the program,
   each other element one argument, with `{name}`, `{label}`, `{cwd}`, `{workspace}` (herdr
   workspace id), `{workspaceLabel}`, `{category}`, `{message}`, `{messageFile}` (the first message
-  in a UTF-8 file) or `{sessionId}` filled in; a nested list is left out when a value in it is
-  empty. Nothing from the request becomes a program or an option: values only fill those
+  in a UTF-8 file), `{sessionId}`, `{profile}` (the Claude profile's id) or `{profileDir}` (its
+  folder) filled in; a nested list is left out when a value in it is empty. Nothing from the request becomes a program or an option: values only fill those
   places. It runs with `HERDR_WORKSPACE_ID` set to the chosen workspace (the board itself lives
   in a workspace of its own) and should print `pane=<pane id>` when the session is up; it fails
   with a non-zero exit, its last error line is the reason shown. A new workspace's first tab is
@@ -279,6 +279,30 @@ How it starts, by `launch` in config.json:
   "timeoutSec": 180
 }
 ```
+
+With more than one Claude profile shown (`CLAUDE_CONFIG_DIR` folders such as `~/.claude-work`),
+the session starts in the profile chosen in the window; with one shown, in that one, as before. A
+session started from another one ("New here") starts in that session's profile, hidden or not,
+and in no other; when the board does not know that session's profile, choose one. The board's own
+profile, the one its own `CLAUDE_CONFIG_DIR` points to (unset is `~/.claude`, however the folder is
+spelled), keeps the env exactly as the board inherited it: no `--env`, nothing changes for a
+teammate. Any other profile gets `CLAUDE_CONFIG_DIR=<its folder>`: on the tab with
+`herdr tab create --env` (`herdr workspace create --env` for a new workspace) for spawn-agent and
+`launch.agent`, which needs herdr 0.9.5 or newer, or in the process env of a `launch.command`. The
+board records the panes it opened with a profile's env, so it knows they run in that profile (a
+launcher command's own panes are not recorded). The profile's `args` go to Claude after its other
+arguments, before `--session-id` (spawn-agent and `launch.agent`'s `claude`). The board never
+falls back to another profile: it refuses the start before anything runs when
+
+- more than one profile is shown and none is chosen;
+- the profile chosen is hidden (show it in Settings → Profiles), or not listed;
+- another profile is chosen than the one of the session it was started from;
+- the board does not know the profile of that session, and none is chosen;
+- the profile's folder is not there.
+
+herdr that does not take `--env` fails the start, saying so: no Claude was started. The card of a
+session the board started says the profile it was meant to run in, so a session whose hooks report
+another one shows the "wrong profile" warning; it is not stopped.
 
 ### spawn-agent
 

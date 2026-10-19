@@ -102,6 +102,10 @@ export interface LaunchView {
   /** What a retry starts from: null once this launch made its worktree. */
   worktree: { branch: string } | null
   newWorkspace: boolean
+  /** The id of the Claude profile it starts in. */
+  profile?: string
+  /** The key of the card it was started from ("New here"): it runs in that session's profile. */
+  parent?: string | null
 }
 
 export interface Config {

@@ -12,13 +12,17 @@
 //                    it and types the first message.
 // A Claude started by the board gets its id up front (--session-id, {sessionId}), so even its
 // first brief knows the lane.
+// It starts in the Claude profile the launch was checked for (request.ts): in the board's own one
+// with the env exactly as inherited; in any other with CLAUDE_CONFIG_DIR set, by herdr's --env on
+// the tab (spawn-agent's --config-dir; herdr's launcher), or in a launcher command's process env.
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { herdr, tabCreate } from '../../adapters/herdr.ts'
+import { herdr, tabCreateRoot } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { launchDir, ROOT } from '../../adapters/paths.ts'
 import { runTree } from '../../adapters/process.ts'
+import { forgetProfilePane, recordProfilePane } from '../../adapters/profile-panes.ts'
 import { t } from '../../core/lang.ts'
 import {
   commandArgs,
@@ -30,6 +34,7 @@ import {
 } from '../../core/launch/launcher-command.ts'
 import { slugName, uniqueSlug } from '../../core/launch/names.ts'
 import { choosesSession, claudeCommand } from '../../core/launch/spawn-args.ts'
+import { envRejected } from '../../core/profiles.ts'
 import type { LaunchFailure, LaunchSpec, LaunchStep } from '../../core/types.ts'
 import { takenNames } from './prompt.ts'
 
@@ -52,6 +57,13 @@ export interface LaunchContext {
   readonly workspaceLabel: string
   readonly category: string
   readonly message: string
+  /** The id of the Claude profile it starts in, and its folder (set or inherited). */
+  readonly profile: string
+  readonly profileDir: string
+  /** CLAUDE_CONFIG_DIR for the start; null: the env as the board inherited it. */
+  readonly configDir: string | null
+  /** The profile's own Claude arguments. */
+  readonly profileArgs: readonly string[]
   /** A new workspace's first pane and tab: herdr's launcher starts the agent there, not in a new tab. */
   readonly rootPane: string | null
   readonly rootTab: string | null
@@ -101,6 +113,39 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 const codeOf = (err: unknown): string | undefined =>
   isRecord(err) && typeof err.code === 'string' ? err.code : undefined
 
+type Env = Readonly<Record<string, string>>
+
+/** CLAUDE_CONFIG_DIR for what the board opens or runs for a launch: none when it keeps the env it inherited. */
+const profileEnv = (l: Pick<LaunchContext, 'configDir'>): Env | undefined =>
+  l.configDir === null ? undefined : { CLAUDE_CONFIG_DIR: l.configDir }
+
+/**
+ * Open a tab or a workspace for a launch, with its profile's env when it sets one. herdr that does
+ * not take --env (older than 0.9.5) fails the launch saying so, before any Claude runs.
+ */
+export async function openInProfile<T>(
+  l: Pick<LaunchContext, 'configDir'>,
+  open: (env: Env | undefined) => Promise<T>,
+): Promise<T> {
+  try {
+    return await open(profileEnv(l))
+  } catch (err) {
+    if (l.configDir !== null && envRejected(err))
+      throw new LaunchError(t('launch.err.env', { dir: l.configDir }), 'launcher')
+    throw err
+  }
+}
+
+/**
+ * A pane the board opened for a launch, before Claude runs in it: recorded as opened in the
+ * profile when the env was set (it may be woken there, spawn-agent --pane takes it), else a record
+ * of an earlier pane of that id dropped (herdr gives pane ids out again after it starts over).
+ */
+export function notePane(l: Pick<LaunchContext, 'configDir' | 'profile'>, pane: string, terminal: string | null): void {
+  if (l.configDir !== null) recordProfilePane(pane, l.profile, terminal)
+  else forgetProfilePane(pane)
+}
+
 /** The launcher the config asks for: `launch.command`, else herdr's for `launch.agent`, else the board's spawn-agent. */
 export function launcherFor(spec: LaunchSpec | undefined): Launcher {
   if (spec?.command) return commandLauncher(spec)
@@ -121,10 +166,14 @@ export function herdrLauncher(spec: LaunchSpec): Launcher {
         pane = l.rootPane
         if (l.rootTab) await herdr(['tab', 'rename', l.rootTab, l.label]).catch(() => {})
       } else {
-        pane = await tabCreate(l.workspaceId, l.cwd, l.label)
+        const opened = await openInProfile(l, env => tabCreateRoot(l.workspaceId, l.cwd, l.label, env))
+        pane = opened.pane
+        notePane(l, pane, opened.terminal)
       }
       on.pane(pane)
       const args = (Array.isArray(spec.args) ? spec.args : []).map(String)
+      // The profile's own arguments are Claude's.
+      if (kind === 'claude') args.push(...l.profileArgs)
       let sessionId: string | null = null
       if (kind === 'claude' && !args.some(a => /^(--session-id|-r|--resume|-c|--continue)$/.test(a))) {
         sessionId = randomUUID()
@@ -185,6 +234,8 @@ export function commandLauncher(spec: LaunchSpec): Launcher {
         message: l.message,
         messageFile: '',
         sessionId: '',
+        profile: l.profile,
+        profileDir: l.profileDir,
       }
       let sessionId: string | null = null
       if (usesPlaceholder(template, 'sessionId')) {
@@ -199,6 +250,9 @@ export function commandLauncher(spec: LaunchSpec): Launcher {
         timeout: Math.max(1, Number(spec.timeoutSec) || 180) * 1000,
         sessionId,
         builtin: false,
+        // The launcher starts the session in the profile through its own env; the board never
+        // records the panes it opens.
+        env: profileEnv(l),
       })
     },
   }
@@ -228,6 +282,8 @@ export function spawnAgentLauncher(spec: LaunchSpec): Launcher {
       const where = l.rootPane ? ['--pane', l.rootPane] : ['--workspace', l.workspaceId]
       const args = [SPAWN_AGENT, '--name', l.name, '--cwd', l.cwd, '--label', l.label]
       args.push('--timeout-sec', String(readySec), ...where)
+      // The profile: the env as herdr makes it, or the folder the board checked.
+      args.push(...(l.configDir === null ? ['--keep-env'] : ['--config-dir', l.configDir]))
       return runLauncher(l, on, {
         command: messageFile => ({
           file: process.execPath,
@@ -242,6 +298,7 @@ export function spawnAgentLauncher(spec: LaunchSpec): Launcher {
         timeout: (readySec + 60) * 1000,
         sessionId,
         builtin: true,
+        env: undefined,
       })
     },
   }
@@ -257,6 +314,8 @@ interface RunSpec {
   sessionId: string | null
   /** The board's own spawn-agent: it stops at any dialog before the names and the first message. */
   builtin: boolean
+  /** Added to the launcher's env (CLAUDE_CONFIG_DIR for a profile other than the board's own). */
+  env: Env | undefined
 }
 
 /** Run a launcher without a shell, the first message in a file only this launch reads, gone after. */
@@ -273,7 +332,7 @@ async function runLauncher(l: LaunchContext, on: LaunchEvents, run: RunSpec): Pr
     const { file: exe, args } = run.command(file ?? '')
     on.step(run.step)
     // The board runs in a pane of its own workspace: the launcher must not take that for "here".
-    const env: Record<string, string | undefined> = { ...process.env, HERDR_WORKSPACE_ID: l.workspaceId }
+    const env: Record<string, string | undefined> = { ...process.env, ...run.env, HERDR_WORKSPACE_ID: l.workspaceId }
     delete env.HERDR_PANE_ID
     delete env.HERDR_TAB_ID
     const r = await runTree(exe, args, { timeout: run.timeout, env, cwd: l.cwd })

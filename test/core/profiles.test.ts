@@ -4,6 +4,7 @@ import {
   configDirFor,
   defaultProfileDir,
   envRejected,
+  launchTarget,
   mergeProfiles,
   type Profile,
   profileIdOf,
@@ -305,4 +306,57 @@ test('herdr that does not take --env says so', () => {
   expect(envRejected('unknown flag: --env')).toBe(true)
   expect(envRejected('no such pane')).toBe(false)
   expect(envRejected(undefined)).toBe(false)
+})
+
+test('the profile a board launch starts in: the one chosen, the parent’s, or the only one shown', () => {
+  // No parent: a listed, shown profile, or the only one shown; never a guess between two.
+  expect(launchTarget(undefined, null, SET)).toEqual({ ok: false, error: 'choose', id: '' })
+  expect(launchTarget('work', null, SET)).toEqual({ ok: true, profile: WORK, configDir: WORK.dir })
+  expect(launchTarget('default', null, SET)).toMatchObject({ ok: true, configDir: null })
+  expect(launchTarget('gamedev', null, SET)).toMatchObject({ ok: false, error: 'hidden' })
+  expect(launchTarget('nope', null, SET)).toMatchObject({ ok: false, error: 'missing' })
+  // Started from a session: its profile, hidden or not; another one asked for is refused.
+  expect(launchTarget(undefined, { name: 'G', profile: 'gamedev' }, SET)).toEqual({
+    ok: true,
+    profile: GAMEDEV,
+    configDir: GAMEDEV.dir,
+  })
+  expect(launchTarget('gamedev', { name: 'G', profile: 'gamedev' }, SET)).toMatchObject({ ok: true, profile: GAMEDEV })
+  expect(launchTarget('work', { name: 'G', profile: 'gamedev' }, SET)).toMatchObject({
+    ok: false,
+    error: 'parent',
+    id: 'gamedev',
+  })
+  // A parent whose profile the board does not know: the owner chooses, and the choice is checked.
+  expect(launchTarget(undefined, { name: 'X', profile: null }, SET)).toMatchObject({
+    ok: false,
+    error: 'unknownParent',
+  })
+  expect(launchTarget(undefined, { name: 'X', profile: 'gone' }, SET)).toMatchObject({
+    ok: false,
+    error: 'unknownParent',
+  })
+  expect(launchTarget('work', { name: 'X', profile: null }, SET)).toMatchObject({ ok: true, profile: WORK })
+  expect(launchTarget('gamedev', { name: 'X', profile: null }, SET)).toMatchObject({ ok: false, error: 'hidden' })
+  // With one profile listed, a parent's is that one, unless it reported a folder no profile has.
+  expect(launchTarget(undefined, { name: 'X', profile: null }, profileSet([DEFAULT], DEFAULT.dir))).toEqual({
+    ok: true,
+    profile: DEFAULT,
+    configDir: null,
+  })
+  const elsewhere = { name: 'X', profile: null, profileFolder: 'D:\\elsewhere' }
+  expect(launchTarget(undefined, elsewhere, profileSet([DEFAULT], DEFAULT.dir))).toMatchObject({
+    ok: false,
+    error: 'unknownParent',
+  })
+  expect(launchTarget('default', elsewhere, profileSet([DEFAULT], DEFAULT.dir))).toMatchObject({ ok: true })
+  // One shown: that one, with the env left alone however the board's env spells its folder.
+  expect(launchTarget(undefined, null, ONE_SHOWN)).toEqual({ ok: true, profile: DEFAULT, configDir: null })
+  expect(launchTarget('default', null, profileSet(LIST, 'c:/users/me/.claude/'))).toMatchObject({
+    ok: true,
+    configDir: null,
+  })
+  // The board in work: work leaves the env alone, default sets its folder.
+  expect(launchTarget('work', null, profileSet(LIST, WORK.dir))).toMatchObject({ ok: true, configDir: null })
+  expect(launchTarget('default', null, profileSet(LIST, WORK.dir))).toMatchObject({ ok: true, configDir: DEFAULT.dir })
 })

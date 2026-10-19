@@ -2,7 +2,8 @@
 // is known by its folder; its id comes from the folder's name (`.claude` → default, `.claude-work`
 // → work) and never changes, its title and color are the owner's. Here: how a folder as typed or
 // inherited reads, the listed profiles merged with the folders found on this computer, the folder
-// a start sets, what a session's card is told about its profile, and the profile it reports.
+// a start sets, the profile a launch from the board starts in, what a session's card is told about
+// its profile, and the profile it reports.
 //
 // Pure: the adapters find the folders and read the env and the config, and hand them in.
 import { posix, win32 } from 'node:path'
@@ -196,6 +197,49 @@ export function shownProfiles(list: readonly Profile[]): Profile[] {
  */
 export function configDirFor(target: Pick<Profile, 'dir'>, inheritedDir: string): string | null {
   return sameDir(target.dir, inheritedDir) ? null : target.dir
+}
+
+/**
+ * Where a launch from the board starts: the profile, and CLAUDE_CONFIG_DIR for it (null: the env
+ * as the board inherited it). Refused (`id`: the profile asked for, or the parent's for `parent`):
+ * none chosen while more than one is shown (`choose`), one hidden or not listed (`missing`),
+ * another than the parent's (`parent`), or none chosen for a parent whose profile is not known.
+ */
+export type LaunchTarget =
+  | { ok: true; profile: Profile; configDir: string | null }
+  | { ok: false; error: 'choose' | 'hidden' | 'missing' | 'parent' | 'unknownParent'; id: string }
+
+/**
+ * The profile a launch from the board starts in. Started from a session (`parent`, "New here"):
+ * that session's profile (the only one listed when the card does not say, but never for a folder
+ * no profile has, `profileFolder`), hidden or not, and no other. A parent whose profile is not
+ * known, or none: the profile `asked` names, listed and shown; none asked is the only shown one,
+ * else the owner chooses. Never a guess.
+ */
+export function launchTarget(
+  asked: string | undefined,
+  parent: Pick<Item, 'name' | 'profile' | 'profileFolder'> | null,
+  set: ProfileSet,
+): LaunchTarget {
+  const target = (profile: Profile): LaunchTarget => ({
+    ok: true,
+    profile,
+    configDir: configDirFor(profile, set.inheritedDir),
+  })
+  if (parent) {
+    const only = set.list.length === 1 && !parent.profileFolder ? set.list[0] : undefined
+    const own = parent.profile ? set.list.find(p => p.id === parent.profile) : only
+    if (own) return asked === undefined || asked === own.id ? target(own) : { ok: false, error: 'parent', id: own.id }
+    if (asked === undefined) return { ok: false, error: 'unknownParent', id: '' }
+  }
+  if (asked === undefined) {
+    const shown = shownProfiles(set.list)
+    return shown.length === 1 && shown[0] ? target(shown[0]) : { ok: false, error: 'choose', id: '' }
+  }
+  const profile = set.list.find(p => p.id === asked)
+  if (!profile) return { ok: false, error: 'missing', id: asked }
+  if (profile.hidden) return { ok: false, error: 'hidden', id: asked }
+  return target(profile)
 }
 
 /**

@@ -66,6 +66,11 @@ test('launch.command: one argument per element, optional groups, no values in th
   for (const program of ['cmd', 'CMD.EXE', 'C:\\Windows\\System32\\cmd.exe', 'C:/tools/start.bat', 'launch.CMD'])
     assert.throws(() => commandArgs([program, '/c', '{name}'], vars), /cmd/, program)
   assert.doesNotThrow(() => commandArgs(['cmdlet-runner', '{name}'], vars))
+  // The profile the session starts in: its id and its folder.
+  assert.deepEqual(commandArgs(['x', '{profile}', '{profileDir}'], { profile: 'work', profileDir: 'C:\\w' }).args, [
+    'work',
+    'C:\\w',
+  ])
   assert.ok(usesPlaceholder(tpl, 'messageFile'))
   assert.ok(!usesPlaceholder(tpl, 'sessionId'))
   assert.equal(launcherLabel(tpl), 'spawn-agent')

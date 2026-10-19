@@ -50,6 +50,10 @@ const errorText = (err: unknown): string =>
 const codeOf = (err: unknown): string | undefined =>
   isRecord(err) && typeof err.code === 'string' ? err.code : undefined
 
+// A card with nothing else on it was only the launch's: the board wrote the lane and the profile
+// it is meant to run in, the hooks the profile it reports.
+const LANE_ONLY = ['key', 'category', 'updatedAt', 'profileWant', 'profile', 'profileDir']
+
 // What a retry starts from: a worktree or a workspace this launch made already is used, not
 // made again (git would refuse the branch; herdr would get a second, empty workspace).
 const view = (l: Launch): LaunchView => ({
@@ -70,6 +74,8 @@ const view = (l: Launch): LaunchView => ({
   message: l.message,
   worktree: l.worktreeMade ? null : l.worktree,
   newWorkspace: l.newWorkspace && !l.workspaceId,
+  profile: l.profile,
+  parent: l.parent,
 })
 
 /** The launches of this board process; `onChange` publishes the board again. */
@@ -87,7 +93,7 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
 
   async function start(body: unknown, items: Item[] = []): Promise<StartResult> {
     const categories = new Set([...deps.cfg.categories.map(c => c.id), ...items.map(i => i.category)])
-    const r = await checkRequest(body, { categories })
+    const r = await checkRequest(body, { categories, profiles: deps.profiles(), items })
     if (!r.ok) return r
     const l = newLaunch(r.launch, items)
     launches.set(l.id, l)
@@ -120,7 +126,10 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
     return runner.answerTrust(l)
   }
 
-  /** "Close the tab": the launch's tab goes, and the launch with it (and a card nothing but the lane was written to). */
+  /**
+   * "Close the tab": the launch's tab goes, and the launch with it (and a card nothing but the lane
+   * was written to: the board's own fields, and the profile the hooks reported).
+   */
   async function closeTab(id: string): Promise<LaunchActionResult> {
     const l = launches.get(id)
     if (!l?.pane || (l.state !== 'trust' && l.state !== 'waiting')) return { ok: false, error: t('launch.err.gone') }
@@ -131,8 +140,7 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
       return { ok: false, error: t('err.focus', { name: l.name, why: messageOf(err) }) }
     }
     l.closed = true
-    const laneOnly = (key: string): boolean =>
-      Object.keys(readCard(key) ?? {}).every(k => ['key', 'category', 'updatedAt'].includes(k))
+    const laneOnly = (key: string): boolean => Object.keys(readCard(key) ?? {}).every(k => LANE_ONLY.includes(k))
     if (l.sessionId && laneOnly(l.sessionId)) removeCard(l.sessionId)
     launches.delete(id)
     changed()
@@ -167,7 +175,7 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
       // in a moment, so only other agents get a card by their pane.
       if (l.carded !== it.key && (it.session || it.agent !== 'claude')) {
         try {
-          writeCard(it.key, { category: l.category })
+          writeCard(it.key, { category: l.category, profileWant: l.profile })
           l.carded = it.key
         } catch {}
       }

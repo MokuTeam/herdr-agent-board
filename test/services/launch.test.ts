@@ -1,15 +1,17 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { useLanguage } from '../../src/core/lang.ts'
 import { sameDir } from '../../src/core/launch/names.ts'
+import { defaultProfileDir, mergeProfiles, profileSet } from '../../src/core/profiles.ts'
+import type { Item } from '../../src/core/types.ts'
 import { checkRequest } from '../../src/services/launch/request.ts'
-import { sandbox, until } from '../support/sandbox.ts'
+import { type Sandbox, sandbox, until } from '../support/sandbox.ts'
 import { trustScreen } from '../support/trust-screen.ts'
 
 // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
@@ -20,13 +22,17 @@ test('a launch request is checked before anything runs', async () => {
   const dir = join(box.dir, 'Acme project')
   mkdirSync(dir)
   writeFileSync(join(box.dir, 'file.txt'), 'x')
+  // One profile, as on every teammate's computer: the default folder of a home folder of its own.
+  const home = join(box.dir, 'home folder')
+  const own = defaultProfileDir(home)
+  const profiles = profileSet(mergeProfiles([], [], home).list, own)
   const launchOf = async (body: unknown, opts?: { categories?: Set<string> }) => {
-    const r = await checkRequest(body, opts)
+    const r = await checkRequest(body, { profiles, ...opts })
     assert.ok(r.ok, JSON.stringify(r))
     return r.launch
   }
   const fieldOf = async (body: unknown, opts?: { categories?: Set<string> }) => {
-    const r = await checkRequest(body, opts)
+    const r = await checkRequest(body, { profiles, ...opts })
     assert.ok(!r.ok, JSON.stringify(body).slice(0, 80))
     return r.field
   }
@@ -43,6 +49,11 @@ test('a launch request is checked before anything runs', async () => {
       newWorkspace: false,
       message: 'hi',
       worktree: null,
+      profile: 'default',
+      profileDir: own,
+      configDir: null,
+      parent: null,
+      profileArgs: [],
     },
   )
   assert.equal((await launchOf({ name: 'A', cwd: dir, workspace: { create: 'Fresh' } })).newWorkspace, true)
@@ -70,6 +81,36 @@ test('a launch request is checked before anything runs', async () => {
     [{ name: 'A', cwd: dir, workspace: { id: 'w2' }, message: 'x'.repeat(20_001) }, 'message'],
   ]
   for (const [body, field] of fails) assert.equal(await fieldOf(body), field, JSON.stringify(body).slice(0, 80))
+
+  // Another profile than the board's own: its folder is set, its arguments (strings only) go with it.
+  const workDir = join(home, '.claude-work')
+  mkdirSync(workDir, { recursive: true })
+  const work = { id: 'work', title: 'Work', dir: workDir, color: 'teal', hidden: false, args: ['--model', 'sonnet'] }
+  const two = profileSet([...profiles.list, work], own)
+  const r = await checkRequest({ name: 'A', cwd: dir, workspace: { id: 'w2' }, profile: 'work' }, { profiles: two })
+  assert.ok(r.ok, JSON.stringify(r))
+  assert.deepEqual(
+    [r.launch.profile, r.launch.profileDir, r.launch.configDir, r.launch.parent, r.launch.profileArgs],
+    ['work', workDir, workDir, null, ['--model', 'sonnet']],
+  )
+  // Two shown and none chosen: the board does not guess.
+  const none = await checkRequest({ name: 'A', cwd: dir, workspace: { id: 'w2' } }, { profiles: two })
+  assert.deepEqual(none, { ok: false, field: 'profile', error: 'Choose a profile' })
+  // "New here" from a card on the board: its profile, by the card's name when another is asked.
+  const items = [{ key: 's1', name: 'Work one', profile: 'work' }] as unknown as Item[]
+  const here = await checkRequest(
+    { name: 'A', cwd: dir, workspace: { id: 'w2' }, parent: 's1' },
+    { profiles: two, items },
+  )
+  assert.ok(here.ok, JSON.stringify(here))
+  assert.deepEqual([here.launch.profile, here.launch.parent], ['work', 's1'])
+  assert.deepEqual(
+    await checkRequest(
+      { name: 'A', cwd: dir, workspace: { id: 'w2' }, parent: 's1', profile: 'default' },
+      { profiles: two, items },
+    ),
+    { ok: false, field: 'profile', error: 'A session started from Work one runs in its profile, Work' },
+  )
 })
 
 // ---------------------------------------------------------------- through the server
@@ -95,8 +136,14 @@ type LaunchView = {
   pane: string | null
   worktree: { branch: string } | null
   newWorkspace: boolean
+  profile?: string
+  parent?: string | null
 }
-type BoardPayload = { stale: boolean; launches: LaunchView[]; items: { name: string; autoName: string }[] }
+type BoardPayload = {
+  stale: boolean
+  launches: LaunchView[]
+  items: { key: string; name: string; autoName: string; profile?: string | null }[]
+}
 
 // Claude's input box as herdr reads it: a rule, the ❯ line with what is typed, a rule.
 const RULE = '─'.repeat(30)
@@ -153,9 +200,29 @@ const HERDR = {
 // herdr's own `agent start`: the board's path when launch.agent is set.
 const VIA_HERDR = { launch: { agent: 'claude' } }
 
-async function boardServer(cfg: Record<string, unknown> = {}, env: Record<string, string> = {}) {
+// The Claude profiles of the sandbox's home folder as config.json lists them: default and work
+// shown (work with arguments of its own), gamedev hidden.
+const homeOf = (box: Sandbox) => box.env.HOME ?? ''
+const workDirOf = (box: Sandbox) => join(homeOf(box), '.claude-work')
+const PROFILES = (box: Sandbox) => ({
+  profiles: [
+    { id: 'default', title: 'Default', dir: join(homeOf(box), '.claude'), color: 'indigo', hidden: false },
+    { id: 'work', title: 'Work', dir: workDirOf(box), color: 'teal', hidden: false, args: ['--model', 'sonnet'] },
+    { id: 'gamedev', title: 'Gamedev', dir: join(homeOf(box), '.claude-gamedev'), color: 'pink', hidden: true },
+  ],
+})
+
+/** A server's config or extra env, as is or made from its sandbox (its home folder). */
+type Of<T> = T | ((box: Sandbox) => T)
+
+async function boardServer(cfg: Of<Record<string, unknown>> = {}, env: Of<Record<string, string>> = {}) {
   const box = await sandbox()
   box.state(HERDR)
+  // Claude's folders in its home folder: the default one, and a work one found beside it (listed
+  // hidden unless the config shows it).
+  mkdirSync(join(homeOf(box), '.claude'), { recursive: true })
+  mkdirSync(workDirOf(box), { recursive: true })
+  writeFileSync(join(workDirOf(box), 'settings.json'), '{}')
   const port = await unusedPort()
   const proc = box.run(
     'server',
@@ -167,9 +234,9 @@ async function boardServer(cfg: Record<string, unknown> = {}, env: Record<string
       ],
       wakeUrl: null,
       refreshSec: 3600,
-      ...cfg,
+      ...(typeof cfg === 'function' ? cfg(box) : cfg),
     },
-    env,
+    typeof env === 'function' ? env(box) : env,
   )
   await until(() => proc.messages.some(m => (m as { ready?: boolean }).ready))
   const url = `http://127.0.0.1:${port}`
@@ -200,7 +267,19 @@ async function boardServer(cfg: Record<string, unknown> = {}, env: Record<string
 }
 
 const cardOf = (cards: string, key: string | undefined) =>
-  JSON.parse(readFileSync(join(cards, `${key}.json`), 'utf8')) as { category?: string }
+  JSON.parse(readFileSync(join(cards, `${key}.json`), 'utf8')) as { category?: string; profileWant?: string }
+/** No herdr call set an env: a launch in the board's own profile is as before profiles. */
+const noEnv = (box: Sandbox) =>
+  assert.deepEqual(
+    box.calls().filter(a => a.some(x => x === '--env' || x.startsWith('--env='))),
+    [],
+  )
+/** The panes recorded as opened in a profile (profile-panes.json), or null when there is no such file. */
+const panesFile = (box: Sandbox) => join(box.env.LOCALAPPDATA ?? '', 'herdr/plugins/agent-board/profile-panes.json')
+const recordedPanes = (box: Sandbox) =>
+  existsSync(panesFile(box))
+    ? (JSON.parse(readFileSync(panesFile(box), 'utf8')) as Record<string, { profile?: string; terminal?: string }>)
+    : null
 const launcher = fileURLToPath(new URL('../support/fake-launcher.ts', import.meta.url))
 
 test('a new session through herdr (launch.agent): a tab in the chosen workspace, Claude with its id, named, briefed, in its lane', async () => {
@@ -252,6 +331,7 @@ test('a new session through herdr (launch.agent): a tab in the chosen workspace,
   // The card existed before Claude did, so its first brief already names the lane.
   assert.equal(cardOf(box.cards, sid).category, 'acme')
   assert.equal((await board()).launches.length, 1)
+  noEnv(box)
 }, 30_000)
 
 test('a new session through the configured launcher: a new workspace, the values as arguments, its pane, and a failure with its reason', async () => {
@@ -311,6 +391,7 @@ test('a new session through the configured launcher: a new workspace, the values
   assert.equal(f.kind, 'dialog')
   assert.equal(f.pane, 'wT:p9')
   assert.equal((await post(`/api/launch/${f.id}/dismiss`, {})).status, 200)
+  noEnv(box)
 }, 30_000)
 
 test('renaming: the board’s name on the card, back to the automatic one, and Claude only when asked', async () => {
@@ -424,6 +505,7 @@ test('a retry starts in the worktree and the workspace the failed launch made, n
   )
   assert.equal(ws.state, 'failed')
   assert.deepEqual([ws.workspaceId, ws.newWorkspace], ['wN', false])
+  noEnv(box)
 }, 40_000)
 
 test('a launcher that runs too long is ended with everything it started', async () => {
@@ -440,6 +522,7 @@ test('a launcher that runs too long is ended with everything it started', async 
   // What it started would have opened a tab 2.5 s in: it is gone with the launcher.
   await new Promise(r => setTimeout(r, 3500))
   assert.equal(existsSync(`${record}.late`), false)
+  noEnv(box)
 }, 30_000)
 
 test('dismissing a running launch takes it off the board; it goes on and its session keeps its lane', async () => {
@@ -477,6 +560,7 @@ test('dismissing a running launch takes it off the board; it goes on and its ses
     .find(a => a[0] === 'agent' && a[1] === 'start')
     ?.at(-1)
   assert.equal(cardOf(box.cards, sid).category, 'acme')
+  noEnv(box)
 }, 30_000)
 
 // ---------------------------------------------------------------- Claude's folder-trust dialog
@@ -542,6 +626,7 @@ test('Claude asks to trust a new folder: the launch waits on its card, and on re
   const l = await launched(id)
   assert.equal(l.state, 'done', l.error)
   assert.deepEqual(promptsSent(box), ['wA:p9 /rename Fresh one', 'wA:p9 Say hello.'])
+  noEnv(box)
 }, 40_000)
 
 test('"Close the tab" closes it and drops the launch; "Trust" refuses a screen without the dialog for that folder', async () => {
@@ -579,6 +664,7 @@ test('"Close the tab" closes it and drops the launch; "Trust" refuses a screen w
   )
   // The card the board made for it held nothing but the lane: it goes with the tab.
   assert.equal(existsSync(join(box.cards, `${sid}.json`)), false)
+  noEnv(box)
 }, 30_000)
 
 test('a launcher that gives up at the trust dialog: the launch is kept, and once trusted the board does what the launcher did not', async () => {
@@ -622,6 +708,7 @@ test('a launcher that gives up at the trust dialog: the launch is kept, and once
   assert.equal(l.state, 'done', l.error)
   assert.deepEqual(promptsSent(box), ['wT:p9 /rename Will fail', 'wT:p9 First task.'])
   assert.ok(box.calls().some(a => a.join(' ') === 'agent rename wT:p9 will-fail'))
+  noEnv(box)
 }, 40_000)
 
 // ---------------------------------------------------------------- the board's own spawn-agent (no launch set)
@@ -661,6 +748,7 @@ test('with no launcher set, the board starts sessions with its own spawn-agent: 
   assert.equal(cardOf(box.cards, sid).category, 'acme')
   // The first message went through a file only this launch read, gone once it was done.
   assert.deepEqual(readdirSync(join(box.env.LOCALAPPDATA as string, 'herdr/plugins/agent-board/launch')), [])
+  noEnv(box)
 }, 40_000)
 
 test('the board’s spawn-agent in a new workspace uses its first pane; a dialog that is not about trust is waited for, then the names and the message', async () => {
@@ -718,4 +806,374 @@ test('the board’s spawn-agent in a new workspace uses its first pane; a dialog
     calls.some(c => c.startsWith('tab close')),
     false,
   ) // the session is in that tab
+  noEnv(box)
+}, 40_000)
+
+// ---------------------------------------------------------------- Claude profiles
+const callOf = (box: Sandbox, ...head: string[]) => box.calls().find(a => head.every((h, i) => a[i] === h)) ?? []
+const anyCall = (box: Sandbox, ...head: string[]) => box.calls().some(a => head.every((h, i) => a[i] === h))
+/** profile-panes.json as an earlier herdr run left it: records of pane ids herdr may give out again. */
+const oldPanes = (box: Sandbox, panes: Record<string, { profile: string; terminal: string }>) => {
+  mkdirSync(join(panesFile(box), '..'), { recursive: true })
+  writeFileSync(panesFile(box), JSON.stringify(panes))
+}
+const OLD = { 'wA:p9': { profile: 'work', terminal: 't-old' }, 'wN:p1': { profile: 'work', terminal: 't-old' } }
+const KEPT = { 'wZ:p1': { profile: 'work', terminal: 't-z' } }
+// herdr's answers with the terminal each new pane holds.
+const OPENED = {
+  'tab create': { result: { tab: { tab_id: 'wA:t9' }, root_pane: { pane_id: 'wA:p9', terminal_id: 'term-9' } } },
+  'workspace create': {
+    result: {
+      workspace: { workspace_id: 'wN' },
+      tab: { tab_id: 'wN:t1' },
+      root_pane: { pane_id: 'wN:p1', terminal_id: 'term-1' },
+    },
+  },
+}
+
+test('a launch into the board’s own profile is as before however the board’s env spells it: no --env anywhere', async () => {
+  const flipped = (p: string) =>
+    p.replace(/^[A-Za-z]/, c => (c === c.toUpperCase() ? c.toLowerCase() : c.toUpperCase()))
+  const spellings: ((box: Sandbox) => Record<string, string>)[] = [
+    () => ({}),
+    box => ({ CLAUDE_CONFIG_DIR: `${homeOf(box)}/.claude/` }),
+    ...(process.platform === 'win32'
+      ? [
+          (box: Sandbox) => ({ CLAUDE_CONFIG_DIR: `${homeOf(box)}\\.claude\\` }),
+          (box: Sandbox) => ({ CLAUDE_CONFIG_DIR: flipped(join(homeOf(box), '.claude')) }),
+        ]
+      : []),
+  ]
+  // One profile shown (work is found, not shown), no profile in the request: today's calls.
+  for (const env of spellings) {
+    const { box, started, launched } = await boardServer(VIA_HERDR, env)
+    box.state({ ...HERDR, ...OPENED })
+    oldPanes(box, { ...OLD, ...KEPT })
+    const dir = join(box.dir, 'Alpha project')
+    mkdirSync(dir)
+    const l = await launched(await started({ name: 'Alpha job', cwd: dir, category: 'acme', workspace: { id: 'wA' } }))
+    assert.equal(l.state, 'done', l.error)
+    assert.deepEqual([l.profile, l.parent], ['default', null])
+    assert.deepEqual(callOf(box, 'tab', 'create'), [
+      'tab',
+      'create',
+      '--workspace',
+      'wA',
+      '--cwd',
+      dir,
+      '--label',
+      'Alpha job',
+      '--no-focus',
+    ])
+    const start = callOf(box, 'agent', 'start')
+    assert.deepEqual(start.slice(7, -1), ['--timeout', '120000', '--', '--session-id'])
+    assert.equal(cardOf(box.cards, start.at(-1)).profileWant, 'default')
+    // A new workspace, the same: no env, and no record of an earlier pane of its first pane's id.
+    const ws = await launched(
+      await started({ name: 'Fresh job', cwd: dir, category: 'acme', workspace: { create: 'Fresh' } }),
+    )
+    assert.equal(ws.state, 'done', ws.error)
+    assert.deepEqual(callOf(box, 'workspace', 'create'), [
+      'workspace',
+      'create',
+      '--cwd',
+      dir,
+      '--label',
+      'Fresh',
+      '--no-focus',
+    ])
+    noEnv(box)
+    // herdr opened those panes with its own env: an older record of their ids is not theirs.
+    assert.deepEqual(recordedPanes(box), KEPT)
+  }
+  // Two shown and the board's own chosen: the same, through herdr and through spawn-agent.
+  const spelled = (box: Sandbox) => ({ CLAUDE_CONFIG_DIR: `${homeOf(box)}/.claude/` })
+  for (const viaHerdr of [true, false]) {
+    const cfg = (box: Sandbox) => ({ ...(viaHerdr ? VIA_HERDR : {}), ...PROFILES(box) })
+    const { box, started, launched } = await boardServer(cfg, spelled)
+    box.state({ ...HERDR, ...OPENED, 'pane get': PANE_READY, 'pane run': { result: null } })
+    const l = await launched(
+      await started({ name: 'Alpha job', cwd: box.dir, category: 'acme', workspace: { id: 'wA' }, profile: 'default' }),
+    )
+    assert.equal(l.state, 'done', l.error)
+    assert.deepEqual(callOf(box, 'tab', 'create').slice(-3), ['--label', 'Alpha job', '--no-focus'])
+    if (viaHerdr) assert.deepEqual(callOf(box, 'agent', 'start').slice(-3, -1), ['--', '--session-id'])
+    else assert.match(callOf(box, 'pane', 'run')[3] ?? '', /^claude --session-id [0-9a-f-]{36}$/)
+    noEnv(box)
+    assert.equal(recordedPanes(box)?.['wA:p9'], undefined)
+  }
+}, 120_000)
+
+test('through herdr into work: --env on the tab, the pane recorded, work’s args, the card wants work', async () => {
+  const { box, started, launched } = await boardServer(box => ({ ...VIA_HERDR, ...PROFILES(box) }))
+  box.state({ ...HERDR, ...OPENED })
+  const dir = join(box.dir, 'Alpha project')
+  mkdirSync(dir)
+  const l = await launched(
+    await started({ name: 'Alpha job', cwd: dir, category: 'acme', workspace: { id: 'wA' }, profile: 'work' }),
+  )
+  assert.equal(l.state, 'done', l.error)
+  assert.deepEqual([l.profile, l.parent], ['work', null])
+  assert.deepEqual(callOf(box, 'tab', 'create'), [
+    'tab',
+    'create',
+    '--workspace',
+    'wA',
+    '--cwd',
+    dir,
+    '--label',
+    'Alpha job',
+    '--env',
+    `CLAUDE_CONFIG_DIR=${workDirOf(box)}`,
+    '--no-focus',
+  ])
+  const start = callOf(box, 'agent', 'start')
+  const sid = start.at(-1) ?? ''
+  assert.deepEqual(start.slice(-5, -1), ['--', '--model', 'sonnet', '--session-id'])
+  assert.match(sid, /^[0-9a-f-]{36}$/)
+  const card = cardOf(box.cards, sid)
+  assert.deepEqual([card.category, card.profileWant], ['acme', 'work'])
+  // Recorded with the terminal herdr opened the pane with.
+  const rec = recordedPanes(box)?.['wA:p9']
+  assert.deepEqual([rec?.profile, rec?.terminal], ['work', 'term-9'])
+}, 30_000)
+
+test('a new workspace for work is made with the env, and the board’s spawn-agent gets --config-dir and uses its first pane', async () => {
+  const { box, started, launched } = await boardServer(PROFILES)
+  // spawn-agent reads the profiles (and work's args) from config.json.
+  const configFile = join(box.env.APPDATA ?? '', 'herdr/plugins/config/agent-board/config.json')
+  mkdirSync(join(configFile, '..'), { recursive: true })
+  writeFileSync(configFile, JSON.stringify(PROFILES(box)))
+  const dir = join(box.dir, 'Delta')
+  mkdirSync(dir)
+  const root = { pane_id: 'wN:p1', tab_id: 'wN:t1', terminal_id: 'term-1' }
+  box.state({
+    ...HERDR,
+    ...OPENED,
+    'pane get': {
+      seq: [
+        { result: { pane: { ...root, agent: null } } },
+        { result: { pane: { ...root, agent: 'claude', agent_status: 'idle' } } },
+      ],
+    },
+    'pane run': { result: null },
+    'agent list': { result: { agents: [] } },
+    'pane read': { text: 'Session renamed to: Delta job' },
+  })
+  const l = await launched(
+    await started({
+      name: 'Delta job',
+      cwd: dir,
+      category: 'acme',
+      workspace: { create: 'Delta space' },
+      message: 'Go.',
+      profile: 'work',
+    }),
+  )
+  assert.equal(l.state, 'done', l.error)
+  assert.equal(l.pane, 'wN:p1')
+  assert.deepEqual(callOf(box, 'workspace', 'create'), [
+    'workspace',
+    'create',
+    '--cwd',
+    dir,
+    '--label',
+    'Delta space',
+    '--env',
+    `CLAUDE_CONFIG_DIR=${workDirOf(box)}`,
+    '--no-focus',
+  ])
+  // spawn-agent took the pane the board opened in work (it refuses one not recorded so).
+  const run = callOf(box, 'pane', 'run')
+  assert.equal(run[2], 'wN:p1')
+  const sid = /^claude --model sonnet --session-id ([0-9a-f-]{36})$/.exec(run[3] ?? '')?.[1]
+  assert.ok(sid, String(run[3]))
+  assert.equal(anyCall(box, 'tab', 'create'), false)
+  assert.deepEqual(promptsSent(box), ['wN:p1 /rename Delta job', 'wN:p1 Go.'])
+  const rec = recordedPanes(box)?.['wN:p1']
+  assert.deepEqual([rec?.profile, rec?.terminal], ['work', 'term-1'])
+  assert.equal(cardOf(box.cards, sid).profileWant, 'work')
+}, 40_000)
+
+test('launch.command gets {profile}, {profileDir} and CLAUDE_CONFIG_DIR for work, and the inherited env for default', async () => {
+  const box0 = await sandbox()
+  const record = join(box0.dir, 'launcher.json')
+  const command = [
+    process.execPath,
+    launcher,
+    record,
+    '-Name',
+    '{name}',
+    '-Profile',
+    '{profile}',
+    '-Dir',
+    '{profileDir}',
+  ]
+  // The board's env names its own folder its own way: a launch in it keeps that env as it is.
+  const { box, started, launched } = await boardServer(
+    box => ({ launch: { command }, ...PROFILES(box) }),
+    box => ({ CLAUDE_CONFIG_DIR: `${homeOf(box)}/.claude/` }),
+  )
+  const seen = () => JSON.parse(readFileSync(record, 'utf8')) as { args: string[]; configDir: string | null }
+  const work = await launched(
+    await started({ name: 'Work job', cwd: box.dir, workspace: { id: 'wA' }, profile: 'work' }),
+  )
+  assert.equal(work.state, 'done', work.error)
+  assert.deepEqual(seen().args.slice(2), ['-Profile', 'work', '-Dir', workDirOf(box)])
+  assert.equal(seen().configDir, workDirOf(box))
+  const own = await launched(
+    await started({ name: 'Own job', cwd: box.dir, workspace: { id: 'wA' }, profile: 'default' }),
+  )
+  assert.equal(own.state, 'done', own.error)
+  assert.deepEqual(seen().args.slice(2), ['-Profile', 'default', '-Dir', join(homeOf(box), '.claude')])
+  assert.equal(seen().configDir, `${homeOf(box)}/.claude/`)
+  noEnv(box)
+  // The panes a launcher opens are its own: the board records none of them.
+  assert.equal(recordedPanes(box), null)
+}, 30_000)
+
+test('refused before anything runs: two shown and none chosen, hidden, unknown, a folder that is gone', async () => {
+  const { box, post, board } = await boardServer(box => ({ ...VIA_HERDR, ...PROFILES(box) }))
+  const refused = async (extra: Record<string, unknown>, error: string) => {
+    const r = await post('/api/launch', {
+      name: 'Nope',
+      cwd: box.dir,
+      category: 'acme',
+      workspace: { id: 'wA' },
+      ...extra,
+    })
+    assert.equal(r.status, 400, JSON.stringify(extra))
+    assert.deepEqual(await r.json(), { ok: false, field: 'profile', error })
+  }
+  await refused({}, 'Choose a profile')
+  await refused({ profile: 'gamedev' }, 'The profile Gamedev is hidden: show it in Settings → Profiles')
+  await refused({ profile: 'nope' }, 'No profile “nope”')
+  // s1 has no card yet: the board does not know its profile, so "New here" asks.
+  await refused({ parent: 's1' }, 'The profile of work-10 is not one the board knows: choose one')
+  await refused({ parent: 'gone' }, 'The profile of gone is not one the board knows: choose one')
+  // Listed, then its folder deleted.
+  rmSync(workDirOf(box), { recursive: true, force: true })
+  const gone = `The folder of the profile Work is not there: ${workDirOf(box)}`
+  await refused({ profile: 'work' }, gone)
+  await refused({ profile: 'work', workspace: { create: 'Fresh' } }, gone)
+  assert.equal(
+    box.calls().some(a => a[0] === 'tab' || a[0] === 'workspace' || (a[0] === 'agent' && a[1] === 'start')),
+    false,
+  )
+  assert.deepEqual((await board()).launches, [])
+}, 30_000)
+
+test('herdr that refuses --env: the launch fails saying so, and no Claude was started', async () => {
+  const refusal = { error: "error: unexpected argument '--env' found" }
+  const { box, started, launched } = await boardServer(box => ({ ...VIA_HERDR, ...PROFILES(box) }))
+  box.state({ ...HERDR, 'tab create': refusal, 'workspace create': refusal })
+  for (const workspace of [{ id: 'wA' }, { create: 'Fresh' }]) {
+    const l = await launched(
+      await started({ name: 'Work job', cwd: box.dir, category: 'acme', workspace, profile: 'work' }),
+    )
+    assert.equal(l.state, 'failed')
+    assert.equal(l.kind, 'launcher')
+    assert.equal(
+      l.error,
+      `herdr cannot set CLAUDE_CONFIG_DIR=${workDirOf(box)} for the new tab (--env needs herdr 0.9.5 or newer): update herdr, or start this session yourself`,
+    )
+  }
+  assert.equal(anyCall(box, 'agent', 'start'), false)
+  assert.equal(recordedPanes(box), null)
+
+  // The board's own spawn-agent says so too, before anything runs in the tab.
+  const own = await boardServer(PROFILES)
+  own.box.state({ ...HERDR, 'tab create': refusal })
+  const l = await own.launched(
+    await own.started({
+      name: 'Work job',
+      cwd: own.box.dir,
+      category: 'acme',
+      workspace: { id: 'wA' },
+      profile: 'work',
+    }),
+  )
+  assert.equal(l.state, 'failed')
+  assert.equal(l.kind, 'launcher')
+  assert.match(l.error, /^herdr cannot set CLAUDE_CONFIG_DIR/)
+  assert.equal(anyCall(own.box, 'pane', 'run'), false)
+  assert.equal(recordedPanes(own.box), null)
+}, 40_000)
+
+test('“New here” from a hidden work card starts in work; another profile than its own is refused', async () => {
+  const { box, proc, board, post, started, launched } = await boardServer(box => ({
+    ...VIA_HERDR,
+    profiles: PROFILES(box).profiles.map(p => (p.id === 'work' ? { ...p, hidden: true } : p)),
+  }))
+  box.state({ ...HERDR, ...OPENED })
+  // s1's hooks reported work.
+  mkdirSync(box.cards, { recursive: true })
+  writeFileSync(
+    join(box.cards, 's1.json'),
+    JSON.stringify({ key: 's1', name: 'Work one', profile: 'work', profileDir: workDirOf(box) }),
+  )
+  const n = proc.messages.length
+  proc.send('refresh')
+  await until(() => proc.messages.slice(n).some(m => (m as { refreshed?: boolean }).refreshed))
+  assert.equal((await board()).items.find(i => i.key === 's1')?.profile, 'work')
+  const dir = join(box.dir, 'Here')
+  mkdirSync(dir)
+  const body = { name: 'Here too', cwd: dir, category: 'acme', workspace: { id: 'wA' }, parent: 's1' }
+  const l = await launched(await started(body))
+  assert.equal(l.state, 'done', l.error)
+  assert.deepEqual([l.profile, l.parent], ['work', 's1'])
+  assert.deepEqual(callOf(box, 'tab', 'create').slice(-3), [
+    '--env',
+    `CLAUDE_CONFIG_DIR=${workDirOf(box)}`,
+    '--no-focus',
+  ])
+  const start = callOf(box, 'agent', 'start')
+  assert.deepEqual(start.slice(-5, -1), ['--', '--model', 'sonnet', '--session-id'])
+  assert.equal(cardOf(box.cards, start.at(-1)).profileWant, 'work')
+  const other = await post('/api/launch', { ...body, profile: 'default' })
+  assert.equal(other.status, 400)
+  assert.deepEqual(await other.json(), {
+    ok: false,
+    field: 'profile',
+    error: 'A session started from Work one runs in its profile, Work',
+  })
+}, 30_000)
+
+test('"Close the tab" takes a card with only the board’s and the hooks’ fields along, and keeps one with more', async () => {
+  const { box, post, board, started } = await boardServer(VIA_HERDR)
+  const dir = join(box.dir, 'unsure')
+  mkdirSync(dir)
+  box.state({
+    ...HERDR,
+    'agent start': { code: 'agent_not_ready', error: 'agent_not_ready: blocked' },
+    'agent get': blocked,
+    'pane read': { text: trustScreen(dir) },
+    'pane get': { result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: 'claude' } } },
+  })
+  const cardFile = (sid: string) => join(box.cards, `${sid}.json`)
+  const held = async (name: string) => {
+    const n = box.calls().filter(a => a[0] === 'agent' && a[1] === 'start').length
+    const id = await started({ name, cwd: dir, category: 'acme', workspace: { id: 'wA' } })
+    await launchState(board, id, l => l?.state === 'trust', 'never asked to trust')
+    const sid =
+      box
+        .calls()
+        .filter(a => a[0] === 'agent' && a[1] === 'start')
+        [n]?.at(-1) ?? ''
+    return { id, sid }
+  }
+  const add = (sid: string, fields: Record<string, unknown>) =>
+    writeFileSync(cardFile(sid), JSON.stringify({ ...JSON.parse(readFileSync(cardFile(sid), 'utf8')), ...fields }))
+  // The hooks ran before the dialog: the card says its profile, still nothing anyone wrote.
+  const a = await held('Hooked')
+  assert.equal(cardOf(box.cards, a.sid).profileWant, 'default')
+  add(a.sid, { profile: 'default', profileDir: join(homeOf(box), '.claude') })
+  assert.equal((await post(`/api/launch/${a.id}/close`, {})).status, 200)
+  assert.equal(existsSync(cardFile(a.sid)), false)
+  // Something written on it: it stays.
+  const b = await held('Noted')
+  add(b.sid, { profile: 'default', profileDir: join(homeOf(box), '.claude'), doing: 'Reading the code' })
+  assert.equal((await post(`/api/launch/${b.id}/close`, {})).status, 200)
+  assert.equal(existsSync(cardFile(b.sid)), true)
+  noEnv(box)
 }, 40_000)
