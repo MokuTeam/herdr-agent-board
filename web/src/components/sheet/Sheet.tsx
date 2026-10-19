@@ -43,7 +43,7 @@ import { Composer, type SessionButtons } from './Composer.tsx'
 import type { ScheduleActions } from './ScheduleRow.tsx'
 import { SheetCard } from './SheetCard.tsx'
 import { SheetHead } from './SheetHead.tsx'
-import { Thread } from './Thread.tsx'
+import { Thread, Waiting } from './Thread.tsx'
 import type { ThreadLinks } from './ThreadLinks.tsx'
 
 /** What later tasks hand the sheet. */
@@ -103,7 +103,7 @@ export function Sheet(slots: SheetSlots) {
   const itemOf = (key: string | null) => (key ? data?.items.find(i => i.key === key) : undefined)
   const shown = useShown(open, itemOf(open))
   const detail = useSessionDetail(shown.key)
-  const composer = useComposer(detail.load)
+  const composer = useComposer(detail.load, detail.value)
   const drop = useFileDrop(composer.addFiles)
   const narrow = useMediaQuery(PHONE_QUERY)
   const body = useRef<HTMLDivElement>(null)
@@ -123,6 +123,10 @@ export function Sheet(slots: SheetSlots) {
   const [scroll] = useState(() => new ConversationScroll())
   // biome-ignore lint/correctness/useExhaustiveDependencies: an opening is when to go to the bottom
   useLayoutEffect(() => scroll.opened(), [scroll, open, ui.opened])
+  // A message going out: the thread goes to its foot, where its bubble is.
+  useLayoutEffect(() => {
+    if (composer.outbox.foot) scroll.opened()
+  }, [scroll, composer.outbox.foot])
   // The helpers window lists what the open session's detail says.
   const fed = open !== null && detail.value.key === open ? detail.value.data : null
   useLayoutEffect(() => helpers?.engine.feed({ key: open, data: fed }), [helpers, open, fed])
@@ -144,7 +148,15 @@ export function Sheet(slots: SheetSlots) {
   // Once its paths are chips: a conversation drawn anew (what upstream's renderSheetBody draws it
   // from) stays at the bottom if it was there; any other render leaves its scroll alone.
   useLayoutEffect(() =>
-    scroll.rendered(body.current, [detail.value, shown.key, ui.opened, t, hasForm, shown.item?.column]),
+    scroll.rendered(body.current, [
+      detail.value,
+      shown.key,
+      ui.opened,
+      t,
+      hasForm,
+      shown.item?.column,
+      composer.outbox.version,
+    ]),
   )
 
   const at = (act: (key: string) => unknown) => () => void (open && act(open))
@@ -323,7 +335,7 @@ export function SheetView(props: SheetViewProps) {
             <Screen screen={detail.data?.screen ?? ''} form={hasForm} asking={asking} />
             <div className="section-title">{t('thread.title')}</div>
             <div className="thread">
-              <Conversation detail={detail} item={item} links={props.links} />
+              <Conversation detail={detail} item={item} links={props.links} composer={composer} />
             </div>
           </>
         )}
@@ -361,14 +373,22 @@ interface ConversationProps {
   detail: DetailSnapshot
   item: Item
   links?: SheetLinks | undefined
+  /** The board's own messages at the thread's foot. */
+  composer: ComposerControls
 }
 
-function Conversation({ detail, item, links }: ConversationProps) {
+function Conversation({ detail, item, links, composer }: ConversationProps) {
   const t = useT()
   const { data } = useBoardContext()
   const conversation = detail.data?.conversation
+  // The foot: the session's queue, then the board's own messages on their way or not sent.
+  const queued = detail.data?.queued ?? []
+  const own = composer.outbox.waiting(item.key)
+  const foot = (queued.length > 0 || own.length > 0) && (
+    <Waiting queued={queued} own={own} onRetry={composer.outbox.retry} onEdit={composer.outbox.edit} />
+  )
   const placeholder = threadPlaceholder(conversation, detail.status, t)
-  if (placeholder !== null || !conversation) return <p className="row-value muted">{placeholder}</p>
+  if (placeholder !== null || !conversation) return foot || <p className="row-value muted">{placeholder}</p>
   // The thread's links: a helper's conversation, a workflow's agents, another session.
   const thread: ThreadLinks = {
     helpers: detail.data?.helpers ?? [],
@@ -378,7 +398,12 @@ function Conversation({ detail, item, links }: ConversationProps) {
     onRun: (id, el) => links?.onList(id, el),
     onSession: key => links?.onSession(key),
   }
-  return <Thread conversation={conversation} item={item} links={thread} />
+  return (
+    <>
+      <Thread conversation={conversation} item={item} links={thread} />
+      {foot}
+    </>
+  )
 }
 
 /** Under "Needs me" with no form to answer: why it stopped, what it asks, and the button that waves it off. */

@@ -8,7 +8,7 @@ import type { ColumnId, Item } from '../../../src/core/types.ts'
 import type { SessionDetail } from '../../../web/src/api/client.ts'
 import { SheetView } from '../../../web/src/components/sheet/Sheet.tsx'
 import { SheetHead } from '../../../web/src/components/sheet/SheetHead.tsx'
-import type { ComposerControls } from '../../../web/src/hooks/useComposer.ts'
+import { type ComposerControls, NO_OUTBOX } from '../../../web/src/hooks/useComposer.ts'
 import { emptyDetail } from '../../../web/src/hooks/useSessionDetail.ts'
 import { NO_MOVES, withMove } from '../../../web/src/models/board-view.ts'
 import type { Attachment } from '../../../web/src/models/composer.ts'
@@ -60,6 +60,7 @@ export function composerOf(scene: Pick<SheetScene, 'message' | 'attachments' | '
     discard() {},
     addFiles() {},
     removeFile() {},
+    outbox: NO_OUTBOX,
   }
 }
 

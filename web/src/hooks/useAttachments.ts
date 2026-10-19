@@ -13,6 +13,10 @@ export interface AttachmentsApi {
   add(files: readonly File[]): void
   remove(id: number): void
   clear(): void
+  /** Empties the list but keeps the previews: a message just sent shows them, and "Edit" puts them back. */
+  release(): void
+  /** A message's files back into the list ("Edit"), the ones not in it already. */
+  restore(files: readonly Attachment[]): void
 }
 
 /** Why an upload failed: the server's words, else its status, else the network's. */
@@ -79,6 +83,13 @@ export function useAttachments(): AttachmentsApi {
       clear(): void {
         for (const a of current.current) if (a.url) URL.revokeObjectURL(a.url)
         commit([])
+      },
+      release(): void {
+        commit([])
+      },
+      restore(files: readonly Attachment[]): void {
+        const back = files.filter(a => !current.current.some(b => b.id === a.id))
+        if (back.length) commit([...current.current, ...back])
       },
     }
   })

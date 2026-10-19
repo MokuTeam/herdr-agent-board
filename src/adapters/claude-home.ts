@@ -11,6 +11,7 @@ import { isAbsolute, join, relative } from 'node:path'
 import { onLanguage } from '../core/lang.ts'
 import { normDir, sameDir } from '../core/launch/names.ts'
 import { type Limits, parseLimits } from '../core/limits.ts'
+import { type QueuedPrompt, type QueueWindow, queuedPrompts } from '../core/queue.ts'
 import {
   type ConversationOptions,
   type ConversationTurn,
@@ -64,11 +65,19 @@ export interface ClaudeHome {
   transcriptPath(sessionId: string, cwd: string): string | null
   transcriptInfo(path: string | null): TranscriptInfo | null
   conversation(path: string, limit?: number, opts?: ConversationOptions): ConversationTurn[]
+  /** The session's conversation() and its queuedPrompts(), from one read of the transcript. */
+  sessionThread(path: string, limit?: number, queue?: QueueWindow): SessionThread
   searchHistory(cwd: string, query: string | null, excludeSession?: string | null): Promise<HistoryResult>
   recentFolders(limit?: number): Promise<string[]>
   /** The same folders, each with when its project last changed (what puts them newest first). */
   recentFoldersAt(limit?: number): Promise<RecentFolder[]>
   localUsage(now?: number): LocalUsage
+}
+
+/** A session's last turns and the user's messages still in its queue (core/queue.ts). */
+export interface SessionThread {
+  conversation: ConversationTurn[]
+  queued: QueuedPrompt[]
 }
 
 /** A folder recent sessions ran in, and when (ms) its project in `projects/` last changed. */
@@ -136,15 +145,32 @@ export function readUsageCache(directory: string, now = Date.now()): LocalUsage 
  * for a helper's own (adapters/helpers.ts).
  */
 export function readConversation(path: string, limit = 40, opts: ConversationOptions = {}): ConversationTurn[] {
+  return readThread(path, limit, opts).items
+}
+
+/** The session's readConversation() and its queuedPrompts() (core/queue.ts), from one read of the transcript. */
+export function readSessionThread(path: string, limit = 40, queue: QueueWindow = {}): SessionThread {
+  const { items, text } = readThread(path, limit)
+  return { conversation: items, queued: queuedPrompts(text, queue) }
+}
+
+/** The last `limit` turns of a transcript, and the end of it they were read from. */
+function readThread(
+  path: string,
+  limit: number,
+  opts: ConversationOptions = {},
+): { items: ConversationTurn[]; text: string } {
   const st = path && statSync(path, { throwIfNoEntry: false })
-  if (!st) return []
+  if (!st) return { items: [], text: '' }
   // Screenshots and big tool results can fill megabytes: read further back when the window held few turns.
   let items: ConversationTurn[] = []
+  let text = ''
   for (const bytes of [2 << 20, 8 << 20]) {
-    items = parseConversation(readTail(path, st.size, bytes).split('\n'), Number.POSITIVE_INFINITY, opts)
+    text = readTail(path, st.size, bytes)
+    items = parseConversation(text.split('\n'), Number.POSITIVE_INFINITY, opts)
     if (items.filter(i => i.role !== 'tool').length >= limit / 3 || bytes >= st.size) break
   }
-  return items.slice(-limit)
+  return { items: items.slice(-limit), text }
 }
 
 /** Folder name Claude gives a project: the cwd without trailing slashes, non-alphanumerics as dashes. */
@@ -391,6 +417,7 @@ export function createClaudeHome(root: string): ClaudeHome {
     transcriptPath,
     transcriptInfo,
     conversation: readConversation,
+    sessionThread: readSessionThread,
     searchHistory,
     recentFolders,
     recentFoldersAt,
