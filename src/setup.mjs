@@ -11,7 +11,7 @@ import { isAbsolute, join, posix, resolve, win32 } from 'node:path'
 import { translator } from '../web/i18n.js'
 import { launcherLabel } from './launch.mjs'
 import { mokupilotCommand } from './mokupilot.mjs'
-import { ROOT } from './paths.mjs'
+import { claudeDirs, ROOT } from './paths.mjs'
 import { claudeCommand, shellLine } from './spawn.mjs'
 
 export const WAKE_REPO = 'https://github.com/Eithery-rc/tg-mcp/tree/main/herdr-wake'
@@ -35,7 +35,7 @@ export function boardFiles(root = ROOT) {
 // Code's user skills; the marker in it tells a copy of ours from someone else's skill of that name.
 export const SKILL = 'herdr-agents'
 const SKILL_MARK = 'agent-board: installed by'
-export const skillFile = (home = homedir()) => join(home, '.claude', 'skills', SKILL, 'SKILL.md')
+export const skillFile = (claudeDir = join(homedir(), '.claude')) => join(claudeDir, 'skills', SKILL, 'SKILL.md')
 
 /** What install does with the skill: 'write' (missing, or an older copy of ours), 'same', or 'foreign'. */
 export function skillAction(installed, source) {
@@ -65,7 +65,7 @@ export function shimTarget(text) {
 const norm = p => String(p ?? '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 const samePath = (a, b) => !!a && !!b && norm(a) === norm(b)
 
-// ------------------------------------------------------------------ ~/.claude/settings.json
+// ------------------------------------------------------------------ <config dir>/settings.json
 
 const BOARD_EVENTS = ['SessionStart', 'UserPromptSubmit']
 const TOAST_EVENTS = [
@@ -225,19 +225,24 @@ function program(name, env, platform) {
 }
 
 /** Everything the checks look at, read from this computer. */
-export async function gatherFacts(cfg, { root = ROOT, env = process.env, platform = process.platform, home = homedir() } = {}) {
-  const settingsFile = join(home, '.claude', 'settings.json')
-  const settingsText = readText(settingsFile)
-  let settings = null
-  let settingsError = ''
-  if (settingsText !== null) {
-    try {
-      settings = JSON.parse(settingsText)
-    } catch (err) {
-      // Only where it broke: V8's message quotes the file around it, and this goes to the page.
-      settingsError = `not valid JSON${/position \d+/.exec(err.message) ? ` (${/position \d+/.exec(err.message)[0]})` : ''}`
+export async function gatherFacts(cfg, { root = ROOT, env = process.env, platform = process.platform, home = homedir(), dirs = claudeDirs(env, home) } = {}) {
+  // Each Claude config folder (paths.mjs claudeDirs) has its own settings.json and skills.
+  const profiles = dirs.map(dir => {
+    const settingsFile = join(dir, 'settings.json')
+    const settingsText = readText(settingsFile)
+    let settings = null
+    let settingsError = ''
+    if (settingsText !== null) {
+      try {
+        settings = JSON.parse(settingsText)
+      } catch (err) {
+        // Only where it broke: V8's message quotes the file around it, and this goes to the page.
+        settingsError = `not valid JSON${/position \d+/.exec(err.message) ? ` (${/position \d+/.exec(err.message)[0]})` : ''}`
+      }
     }
-  }
+    return { dir, settingsFile, settings, settingsError, skill: { file: skillFile(dir), installed: readText(skillFile(dir)), source: readText(boardFiles(root).skill) } }
+  })
+  const { settingsFile, settings, settingsError, skill } = profiles[0]
   const configFile = herdrConfigFile(env, home)
   const launch = cfg?.launch ?? {}
   let launcher = null
@@ -266,7 +271,8 @@ export async function gatherFacts(cfg, { root = ROOT, env = process.env, platfor
     path: String(env.PATH ?? env.Path ?? ''),
     files: boardFiles(root),
     commands: { board: findCommand('board', { env, platform }), 'spawn-agent': findCommand('spawn-agent', { env, platform }) },
-    skill: { file: skillFile(home), installed: readText(skillFile(home)), source: readText(boardFiles(root).skill) },
+    skill,
+    profiles,
     settingsFile,
     settings,
     settingsError,
@@ -319,37 +325,43 @@ export function checkSetup(facts, t = english) {
   }
   command('board', f.cli, 'error', t('setup.board.without'))
 
-  // Claude Code hooks: how sessions learn about the board.
-  if (facts.settingsError) {
-    add('hooks', 'error', t('setup.hooks.unreadable'), `${facts.settingsFile}: ${facts.settingsError}`, t('setup.hooks.unreadableFix'))
-  } else {
+  // Claude Code hooks: how sessions learn about the board. Once per config folder; with more
+  // than one, each check names its folder.
+  const profiles = facts.profiles ?? [facts]
+  const where = p => (profiles.length > 1 ? `${p.dir ?? p.settingsFile}:` : '')
+  for (const p of profiles) {
+    if (p.settingsError) {
+      add('hooks', 'error', t('setup.hooks.unreadable'), `${p.settingsFile}: ${p.settingsError}`, t('setup.hooks.unreadableFix'))
+      continue
+    }
     const ours = matchers(facts.root)
     const per = BOARD_EVENTS.map(event => {
-      const hooks = commandsOf(facts.settings, event).filter(c => ours.hook(c.command))
+      const hooks = commandsOf(p.settings, event).filter(c => ours.hook(c.command))
       return { event, here: hooks.some(c => norm(c.command).includes(norm(f.hook))), other: hooks.find(c => !norm(c.command).includes(norm(f.hook)))?.command }
     })
-    const missing = per.filter(p => !p.here)
-    if (!missing.length) add('hooks', 'ok', t('setup.hooks.ok'), t('setup.hooks.okDetail', { events: BOARD_EVENTS.join(', '), file: facts.settingsFile }))
-    else if (missing.every(p => p.other)) add('hooks', 'warn', t('setup.hooks.stale'), missing[0].other, t('setup.runInstall'), INSTALL)
-    else add('hooks', 'error', t('setup.hooks.missing', { events: missing.map(p => p.event).join(', ') }), t('setup.hooks.without'), t('setup.runInstall'), INSTALL)
+    const missing = per.filter(m => !m.here)
+    if (!missing.length) add('hooks', 'ok', t('setup.hooks.ok'), t('setup.hooks.okDetail', { events: BOARD_EVENTS.join(', '), file: p.settingsFile }))
+    else if (missing.every(m => m.other)) add('hooks', 'warn', t('setup.hooks.stale'), both(where(p), missing[0].other), t('setup.runInstall'), INSTALL)
+    else add('hooks', 'error', t('setup.hooks.missing', { events: missing.map(m => m.event).join(', ') }), both(where(p), t('setup.hooks.without')), t('setup.runInstall'), INSTALL)
 
-    const line = facts.settings?.statusLine?.command
+    const line = p.settings?.statusLine?.command
     if (line && ours.line(line)) {
-      if (norm(line).includes(norm(f.statusline))) add('statusline', 'ok', t('setup.line.ok'), t('setup.line.okDetail'))
-      else add('statusline', 'warn', t('setup.line.stale'), line, t('setup.runInstall'), INSTALL)
-    } else if (line) add('statusline', 'ok', t('setup.line.own'), t('setup.line.ownDetail'))
-    else add('statusline', 'warn', t('setup.line.none'), t('setup.line.noneDetail'), t('setup.runInstall'), INSTALL)
+      if (norm(line).includes(norm(f.statusline))) add('statusline', 'ok', t('setup.line.ok'), both(where(p), t('setup.line.okDetail')))
+      else add('statusline', 'warn', t('setup.line.stale'), both(where(p), line), t('setup.runInstall'), INSTALL)
+    } else if (line) add('statusline', 'ok', t('setup.line.own'), both(where(p), t('setup.line.ownDetail')))
+    else add('statusline', 'warn', t('setup.line.none'), both(where(p), t('setup.line.noneDetail')), t('setup.runInstall'), INSTALL)
   }
 
   command('spawn-agent', f.spawn, 'warn', t('setup.spawn.without'))
 
   // The skill sessions in herdr read on demand (the brief points to it).
-  if (facts.skill) {
-    const state = skillAction(facts.skill.installed, facts.skill.source)
-    if (state === 'same') add('skill', 'ok', t('setup.skill.ok', { name: SKILL }), t('setup.skill.okDetail'))
-    else if (state === 'foreign') add('skill', 'warn', t('setup.skill.foreign', { name: SKILL }), t('setup.skill.foreignDetail', { file: facts.skill.file }), t('setup.skill.foreignFix'), INSTALL)
-    else if (facts.skill.installed !== null) add('skill', 'warn', t('setup.skill.stale', { name: SKILL }), t('setup.skill.without'), t('setup.runInstall'), INSTALL)
-    else add('skill', 'warn', t('setup.skill.missing', { name: SKILL }), t('setup.skill.without'), t('setup.runInstall'), INSTALL)
+  for (const p of profiles) {
+    if (!p.skill) continue
+    const state = skillAction(p.skill.installed, p.skill.source)
+    if (state === 'same') add('skill', 'ok', t('setup.skill.ok', { name: SKILL }), both(where(p), t('setup.skill.okDetail')))
+    else if (state === 'foreign') add('skill', 'warn', t('setup.skill.foreign', { name: SKILL }), t('setup.skill.foreignDetail', { file: p.skill.file }), t('setup.skill.foreignFix'), INSTALL)
+    else if (p.skill.installed !== null) add('skill', 'warn', t('setup.skill.stale', { name: SKILL }), both(where(p), t('setup.skill.without')), t('setup.runInstall'), INSTALL)
+    else add('skill', 'warn', t('setup.skill.missing', { name: SKILL }), both(where(p), t('setup.skill.without')), t('setup.runInstall'), INSTALL)
   }
 
   // herdr's key for the board.

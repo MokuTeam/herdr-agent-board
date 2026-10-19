@@ -1,11 +1,12 @@
 // What Claude Code itself records, read without spending a token: the registry of running
-// sessions (~/.claude/sessions/<pid>.json: name, sessionId, status) and the tail of each
-// transcript, where Claude keeps the session's ai-title and the user's last prompt.
+// sessions (<config dir>/sessions/<pid>.json: name, sessionId, status) and the tail of each
+// transcript, where Claude keeps the session's ai-title and the user's last prompt. Every config
+// folder counts (paths.mjs claudeDirs): ~/.claude and profiles such as ~/.claude-work.
 import { closeSync, openSync, readSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { onLanguage, t } from './lang.mjs'
 import { boardNotice, isNotice, taskNotice } from './notices.mjs'
-import { CLAUDE_DIR } from './paths.mjs'
+import { CLAUDE_DIRS } from './paths.mjs'
 import { questionsOf } from './questions.mjs'
 
 function alive(pid) {
@@ -17,21 +18,23 @@ function alive(pid) {
   }
 }
 
-/** Running interactive sessions by session id. */
-export function liveSessions(dir = join(CLAUDE_DIR, 'sessions')) {
+/** Running interactive sessions by session id, from one registry folder or several. */
+export function liveSessions(dirs = CLAUDE_DIRS.map(d => join(d, 'sessions'))) {
   const byId = new Map()
-  let files = []
-  try {
-    files = readdirSync(dir)
-  } catch {
-    return byId
-  }
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue
+  for (const dir of [dirs].flat()) {
+    let files = []
     try {
-      const s = JSON.parse(readFileSync(join(dir, file), 'utf8'))
-      if (s.sessionId && s.kind === 'interactive' && alive(s.pid)) byId.set(s.sessionId, s)
-    } catch {}
+      files = readdirSync(dir)
+    } catch {
+      continue
+    }
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue
+      try {
+        const s = JSON.parse(readFileSync(join(dir, file), 'utf8'))
+        if (s.sessionId && s.kind === 'interactive' && alive(s.pid) && !byId.has(s.sessionId)) byId.set(s.sessionId, s)
+      } catch {}
+    }
   }
   return byId
 }
@@ -39,27 +42,31 @@ export function liveSessions(dir = join(CLAUDE_DIR, 'sessions')) {
 const pathCache = new Map() // session id -> transcript path
 const missCache = new Map() // session id -> when a full search found nothing (retried after a minute)
 
-/** The transcript of a session: projects/<cwd with non-alphanumerics as dashes>/<id>.jsonl. */
-export function transcriptPath(sessionId, cwd, projects = join(CLAUDE_DIR, 'projects')) {
+/** The transcript of a session: projects/<cwd with non-alphanumerics as dashes>/<id>.jsonl, in any config folder. */
+export function transcriptPath(sessionId, cwd, projects = CLAUDE_DIRS.map(d => join(d, 'projects'))) {
   const cached = pathCache.get(sessionId)
   if (cached && statSync(cached, { throwIfNoEntry: false })) return cached
+  const roots = [projects].flat()
   let found = null
   if (cwd) {
-    const guess = join(projects, cwd.replace(/[\\/]+$/, '').replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
-    if (statSync(guess, { throwIfNoEntry: false })) found = guess
+    const encoded = cwd.replace(/[\\/]+$/, '').replace(/[^a-zA-Z0-9]/g, '-')
+    found = roots.map(root => join(root, encoded, `${sessionId}.jsonl`)).find(guess => statSync(guess, { throwIfNoEntry: false })) ?? null
   }
   if (!found && Date.now() - (missCache.get(sessionId) ?? 0) > 60_000) {
     missCache.set(sessionId, Date.now())
-    try {
-      for (const entry of readdirSync(projects, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue
-        const p = join(projects, entry.name, `${sessionId}.jsonl`)
-        if (statSync(p, { throwIfNoEntry: false })) {
-          found = p
-          break
+    for (const root of roots) {
+      try {
+        for (const entry of readdirSync(root, { withFileTypes: true })) {
+          if (!entry.isDirectory()) continue
+          const p = join(root, entry.name, `${sessionId}.jsonl`)
+          if (statSync(p, { throwIfNoEntry: false })) {
+            found = p
+            break
+          }
         }
-      }
-    } catch {}
+      } catch {}
+      if (found) break
+    }
   }
   if (found) pathCache.set(sessionId, found)
   return found

@@ -1,8 +1,10 @@
 // The "install" action: puts the `board` and `spawn-agent` commands on PATH (~/.local/bin, a sh
 // script for Git Bash, Linux and macOS and a .cmd for PowerShell), registers the SessionStart /
-// UserPromptSubmit hooks and the status line in ~/.claude/settings.json, then says what else is
-// set up and what is not (setup.mjs). Idempotent; replaces its own earlier entries and keeps a
-// backup of settings.json next to it. Run it again after moving or updating the plugin.
+// UserPromptSubmit hooks and the status line in settings.json and the skill, in every Claude config
+// folder (~/.claude, CLAUDE_CONFIG_DIR, profiles such as ~/.claude-work: paths.mjs claudeDirs),
+// then says what else is set up and what is not (setup.mjs). Idempotent; replaces its own earlier
+// entries and keeps a backup of each settings.json next to it. Run it again after moving or
+// updating the plugin, or after adding a profile.
 //
 //   node src/install.mjs              the above; desktop notifications stay as they were
 //   node src/install.mjs --toast      also Windows notifications with the agent's words (the
@@ -13,7 +15,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { loadConfig } from './config.mjs'
 import { t } from './lang.mjs'
-import { ROOT } from './paths.mjs'
+import { CLAUDE_DIRS, ROOT } from './paths.mjs'
 import { boardFiles, checkSetup, gatherFacts, herdrConfigFile, patchSettings, readText, report, shimFiles, skillAction, skillFile, tomlValue } from './setup.mjs'
 
 const args = process.argv.slice(2)
@@ -24,19 +26,22 @@ if (toast && process.platform !== 'win32') {
   toast = undefined
 }
 
-const settingsFile = join(homedir(), '.claude', 'settings.json')
 const binDir = join(homedir(), '.local', 'bin')
 const files = boardFiles(ROOT)
 
 // A settings.json that does not parse is left alone, and so is everything else.
-const text = readText(settingsFile)
-let before = {}
-try {
-  if (text !== null) before = JSON.parse(text)
-} catch {
-  console.log(`${settingsFile} is not valid JSON: fix it, then run the install again. Nothing was changed.`)
-  process.exit(1)
-}
+const profiles = CLAUDE_DIRS.map(dir => {
+  const settingsFile = join(dir, 'settings.json')
+  const text = readText(settingsFile)
+  let before = {}
+  try {
+    if (text !== null) before = JSON.parse(text)
+  } catch {
+    console.log(`${settingsFile} is not valid JSON: fix it, then run the install again. Nothing was changed.`)
+    process.exit(1)
+  }
+  return { dir, settingsFile, text, before }
+})
 
 // --- commands
 mkdirSync(binDir, { recursive: true })
@@ -50,27 +55,30 @@ for (const [name, body] of Object.entries(shimFiles(ROOT))) {
 }
 console.log(`commands: board, spawn-agent in ${binDir} (+ .cmd for PowerShell)`)
 
-// --- the agents' skill (how sessions in herdr work with each other), read by Claude on demand
-const skill = skillFile()
 const skillText = readText(files.skill)
-const skillDo = skillAction(readText(skill), skillText)
-if (skillText === null) console.log(`skill: ${files.skill} is missing from this copy of the board`)
-else if (skillDo === 'foreign') console.log(`skipped ${skill}: a skill of that name that is not ours`)
-else {
-  if (skillDo === 'write') {
-    mkdirSync(dirname(skill), { recursive: true })
-    writeFileSync(skill, skillText)
+let r
+for (const { dir, settingsFile, text, before } of profiles) {
+  // --- the agents' skill (how sessions in herdr work with each other), read by Claude on demand
+  const skill = skillFile(dir)
+  const skillDo = skillAction(readText(skill), skillText)
+  if (skillText === null) console.log(`skill: ${files.skill} is missing from this copy of the board`)
+  else if (skillDo === 'foreign') console.log(`skipped ${skill}: a skill of that name that is not ours`)
+  else {
+    if (skillDo === 'write') {
+      mkdirSync(dirname(skill), { recursive: true })
+      writeFileSync(skill, skillText)
+    }
+    console.log(`skill: ${skill}`)
   }
-  console.log(`skill: ${skill}`)
-}
 
-// --- hooks, status line, notifications
-if (text !== null) copyFileSync(settingsFile, `${settingsFile}.bak-agent-board`)
-mkdirSync(join(homedir(), '.claude'), { recursive: true })
-const r = patchSettings(before, { root: ROOT, toast })
-writeFileSync(settingsFile, `${JSON.stringify(r.settings, null, 2)}\n`)
-console.log(`hooks: SessionStart, UserPromptSubmit -> ${files.hook} in ${settingsFile}`)
-console.log(r.statusLine === 'set' ? `status line: ${files.statusline}` : 'status line: left as it was (not ours)')
+  // --- hooks, status line, notifications
+  if (text !== null) copyFileSync(settingsFile, `${settingsFile}.bak-agent-board`)
+  mkdirSync(dir, { recursive: true })
+  r = patchSettings(before, { root: ROOT, toast })
+  writeFileSync(settingsFile, `${JSON.stringify(r.settings, null, 2)}\n`)
+  console.log(`hooks: SessionStart, UserPromptSubmit -> ${files.hook} in ${settingsFile}`)
+  console.log(r.statusLine === 'set' ? `status line: ${files.statusline}` : `status line in ${settingsFile}: left as it was (not ours)`)
+}
 if (process.platform === 'win32') {
   console.log(r.toast ? `desktop notifications: on (Stop, Notification, PreToolUse AskUserQuestion -> ${files.toast})` : 'desktop notifications: off')
   const delivery = tomlValue(readText(herdrConfigFile()), 'ui.toast', 'delivery') ?? 'off'
