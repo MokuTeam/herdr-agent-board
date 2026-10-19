@@ -43,6 +43,20 @@ test('POST /api/profiles renames a profile; without X-Board it is refused', asyn
   expect(await renamed.json()).toEqual({ ok: true })
   expect(profilesIn(box)).toEqual([expect.objectContaining({ id: 'default', title: 'Private', hidden: false })])
   expect((await post({ op: 'update', id: 'default', title: 'Other' }, {})).status).toBe(403)
+  // It writes Claude's settings.json (Install): a page of another origin is refused, as for the launches.
+  for (const body of [
+    { op: 'update', id: 'default', title: 'Evil' },
+    { op: 'install', id: 'default' },
+  ]) {
+    const foreign = await post(body, { 'x-board': '1', origin: 'http://evil.example' })
+    expect([foreign.status, await foreign.json()]).toEqual([403, { error: 'origin' }])
+  }
+  expect(readFileSync(join(box.dir, 'home', '.claude', 'settings.json'), 'utf8')).toBe('{}')
+  expect(existsSync(join(box.dir, 'home', '.claude', 'settings.json.bak-agent-board'))).toBe(false)
+  expect(profilesIn(box).map(p => p.title)).toEqual(['Private'])
+  // The board's own page passes.
+  const own = await post({ op: 'update', id: 'default', title: 'Private' }, { 'x-board': '1', origin: url })
+  expect(own.status).toBe(200)
   const missing = await post({ op: 'update', id: 'work', title: 'Work' })
   expect(missing.status).toBe(409)
   expect(await missing.json()).toEqual({ ok: false, error: 'No profile “work”' })
