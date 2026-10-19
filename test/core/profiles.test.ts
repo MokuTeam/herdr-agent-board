@@ -1,10 +1,13 @@
 import { expect, test } from 'bun:test'
+import { useLanguage } from '../../src/core/lang.ts'
 import { sameDir } from '../../src/core/launch/names.ts'
 import {
   configDirFor,
   defaultProfileDir,
   envRejected,
+  inBoardProfile,
   launchTarget,
+  mayWake,
   mergeProfiles,
   type Profile,
   profileIdOf,
@@ -37,6 +40,7 @@ const LIST = [DEFAULT, WORK]
 const L = [DEFAULT, WORK, GAMEDEV]
 const SET = profileSet(L, DEFAULT.dir)
 const ONE_SHOWN = profileSet([DEFAULT, { ...WORK, hidden: true }], DEFAULT.dir)
+const LIST1_SET = profileSet([DEFAULT], DEFAULT.dir)
 
 test('every spelling of the default folder is the default profile', () => {
   const d = defaultProfileDir(H, 'win32') // 'C:\\Users\\me\\.claude'
@@ -376,4 +380,48 @@ test('the profile a board launch starts in: the one chosen, the parent’s, or t
   // The board in work: work leaves the env alone, default sets its folder.
   expect(launchTarget('work', null, profileSet(LIST, WORK.dir))).toMatchObject({ ok: true, configDir: null })
   expect(launchTarget('default', null, profileSet(LIST, WORK.dir))).toMatchObject({ ok: true, configDir: DEFAULT.dir })
+})
+
+test('a wake only where the profile is sure: the board’s own, or a pane the board opened in it', () => {
+  useLanguage('en')
+  expect(mayWake({ profile: 'work', pane: 'p1' }, SET, new Map())).toEqual({ ok: false, profile: 'Work' })
+  expect(mayWake({ profile: 'work', pane: 'p1' }, SET, new Map([['p1', 'work']]))).toEqual({ ok: true })
+  expect(mayWake({ profile: 'work', pane: 'p1' }, SET, new Map([['p1', 'default']]))).toEqual({
+    ok: false,
+    profile: 'Work',
+  })
+  expect(mayWake({ profile: 'default', pane: 'p1' }, SET, new Map())).toEqual({ ok: true })
+  expect(mayWake({ profile: null, pane: 'p1' }, SET, new Map())).toEqual({ ok: false, profile: 'unknown profile' })
+  expect(mayWake({ profile: null, profileFolder: 'D:\\x', pane: 'p1' }, SET, new Map())).toEqual({
+    ok: false,
+    profile: 'D:\\x',
+  })
+  expect(mayWake({ profile: null, pane: 'p1' }, LIST1_SET, new Map())).toEqual({ ok: true })
+  // A folder no profile has is never the only one's.
+  expect(mayWake({ profile: null, profileFolder: 'D:\\x', pane: 'p1' }, LIST1_SET, new Map())).toEqual({
+    ok: false,
+    profile: 'D:\\x',
+  })
+  // Another pane's record vouches for nothing; a hidden profile's pane does for its session.
+  expect(mayWake({ profile: 'work', pane: 'p2' }, SET, new Map([['p1', 'work']]))).toEqual({
+    ok: false,
+    profile: 'Work',
+  })
+  expect(mayWake({ profile: 'work', pane: null }, SET, new Map([['p1', 'work']]))).toEqual({
+    ok: false,
+    profile: 'Work',
+  })
+  expect(mayWake({ profile: 'gamedev', pane: 'p1' }, SET, new Map([['p1', 'gamedev']]))).toEqual({ ok: true })
+  // A board started in work: work is its own, default is not.
+  expect(mayWake({ profile: 'work', pane: 'p1' }, profileSet(LIST, WORK.dir), new Map())).toEqual({ ok: true })
+  expect(mayWake({ profile: 'default', pane: 'p1' }, profileSet(LIST, WORK.dir), new Map())).toEqual({
+    ok: false,
+    profile: 'Default',
+  })
+
+  expect([inBoardProfile({ profile: 'default' }, SET), inBoardProfile({ profile: 'work' }, SET)]).toEqual([true, false])
+  expect(inBoardProfile({ profile: null }, SET)).toBe(false)
+  expect(inBoardProfile({ profile: null }, LIST1_SET)).toBe(true)
+  expect(inBoardProfile({ profile: null, profileFolder: 'D:\\x' }, LIST1_SET)).toBe(false)
+  expect(inBoardProfile({ profile: 'work' }, profileSet(LIST, WORK.dir))).toBe(true)
 })

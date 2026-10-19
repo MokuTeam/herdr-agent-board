@@ -44,6 +44,8 @@ export interface HerdrPane {
   cwd?: string
   label?: string
   terminal_title_stripped?: string
+  /** The terminal the pane holds: herdr gives a pane's id out again after it starts over, never a terminal's. */
+  terminal_id?: string
   tokens?: Record<string, unknown>
   [key: string]: unknown
 }
@@ -97,7 +99,16 @@ function stringsOnly<T extends Record<string, unknown>>(record: T, keys: readonl
   return record
 }
 
-const PANE_STRINGS = ['tab_id', 'workspace_id', 'agent', 'agent_status', 'cwd', 'label', 'terminal_title_stripped']
+const PANE_STRINGS = [
+  'tab_id',
+  'workspace_id',
+  'agent',
+  'agent_status',
+  'cwd',
+  'label',
+  'terminal_title_stripped',
+  'terminal_id',
+]
 
 function asPane(v: unknown): HerdrPane | null {
   if (!isRecord(v) || typeof v.pane_id !== 'string') return null
@@ -144,6 +155,11 @@ export function asSnapshot(result: unknown): HerdrSnapshot {
 /** Workspaces, tabs, panes and agents in one call. */
 export async function snapshot(): Promise<HerdrSnapshot> {
   return asSnapshot(await herdr(['api', 'snapshot']))
+}
+
+/** Every pane in a snapshot, with the terminal it holds (null when herdr did not say). */
+export function paneTerminals(snap: Pick<HerdrSnapshot, 'panes'>): Map<string, string | null> {
+  return new Map(snap.panes.map(p => [p.pane_id, p.terminal_id || null]))
 }
 
 /** What `herdr agent get` says about a pane's agent. */

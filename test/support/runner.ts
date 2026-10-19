@@ -39,6 +39,8 @@ if (mode === 'open') {
   const { send: sendText } = await import('../../src/services/actions.ts')
   const { defaultDeps } = await import('../../src/services/deps.ts')
   const { item, cfg, text } = input()
+  // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
+  if (cfg.language) (await import('../../src/core/lang.ts')).useLanguage(cfg.language)
   console.log(JSON.stringify(await sendText(defaultDeps(cfg), item, text)))
 } else if (mode === 'answer') {
   // services/answer.ts against the fake herdr: a question form, a permission prompt, or one own answer typed.

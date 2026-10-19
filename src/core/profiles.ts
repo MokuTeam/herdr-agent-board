@@ -3,11 +3,12 @@
 // → work) and never changes, its title and color are the owner's. Here: how a folder as typed or
 // inherited reads, the listed profiles merged with the folders found on this computer, the folder
 // a start sets, the profile a launch from the board starts in, what a session's card is told about
-// its profile, and the profile it reports.
+// its profile, the profile it reports, and whether the board may wake it or call MokuPilot from it.
 //
 // Pure: the adapters find the folders and read the env and the config, and hand them in.
 import { posix, win32 } from 'node:path'
 import { validColor } from './categories.ts'
+import { t } from './lang.ts'
 import { baseName, sameDir, uniqueSlug } from './launch/names.ts'
 import type { SpawnOptions } from './launch/spawn-args.ts'
 import type { Card, Item } from './types.ts'
@@ -347,4 +348,47 @@ export function sessionProfile(
   const named = text(card?.profile)
   if (named) return { profile: list.some(p => p.id === named) ? named : null }
   return { profile: list.length === 1 ? (list[0]?.id ?? null) : null }
+}
+
+/**
+ * The profile a session runs in, as its item says: the one it names, or the only one listed when
+ * it reported no folder no profile has; else null (not known).
+ */
+function itemProfile(item: Pick<Item, 'profile' | 'profileFolder'>, set: ProfileSet): Profile | null {
+  if (item.profile) return set.list.find(p => p.id === item.profile) ?? null
+  return set.list.length === 1 && !item.profileFolder ? (set.list[0] ?? null) : null
+}
+
+/** A session's profile in a message: its title, else the folder it reported, else "unknown profile". */
+export function profileLabel(item: Pick<Item, 'profile' | 'profileFolder'>, set: ProfileSet): string {
+  return itemProfile(item, set)?.title || item.profileFolder || t('profile.unknown')
+}
+
+/** Whether the board may wake a session; refused: its profile as a message names it (profileLabel). */
+export type WakeCheck = { ok: true } | { ok: false; profile: string }
+
+/**
+ * Whether the board may have herdr-wake wake a session. herdr-wake resumes it in its pane, in the
+ * env of that pane's shell: the board's own (herdr's), unless the board opened the pane with a
+ * profile's CLAUDE_CONFIG_DIR. So: a session in the board's own profile, or one whose pane
+ * `panes` (pane → profile, as the board recorded and herdr proved them) says the board opened in
+ * the session's profile. Anything else, a profile not known included, is refused.
+ */
+export function mayWake(
+  item: Pick<Item, 'profile' | 'profileFolder' | 'pane'>,
+  set: ProfileSet,
+  panes: ReadonlyMap<string, string>,
+): WakeCheck {
+  const own = itemProfile(item, set)
+  if (own && (own.id === set.inherited?.id || (item.pane && panes.get(item.pane) === own.id))) return { ok: true }
+  return { ok: false, profile: profileLabel(item, set) }
+}
+
+/**
+ * Whether a session runs in the board's own profile, the one MokuPilot's running copy is taken to
+ * be in: a call with a fork of it from any other would run in MokuPilot's account, not the session's.
+ */
+export function inBoardProfile(item: Pick<Item, 'profile' | 'profileFolder'>, set: ProfileSet): boolean {
+  const own = itemProfile(item, set)
+  return !!own && own.id === set.inherited?.id
 }

@@ -6,7 +6,7 @@ import { isAbsolute, join } from 'node:path'
 import { allCards, writeCard } from '../adapters/cards.ts'
 import type { ClaudeHome } from '../adapters/claude-home.ts'
 import { helpersOf } from '../adapters/helpers.ts'
-import { snapshot } from '../adapters/herdr.ts'
+import { paneTerminals, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import type { LinksIndex } from '../adapters/links.ts'
 import { contextDir } from '../adapters/paths.ts'
@@ -158,13 +158,19 @@ export interface CollectOptions {
   helpers?: boolean
   /** How sessions work with each other: a links index (adapters/links.ts), for the web board. */
   links?: LinksIndex | null
+  /** Told every pane in herdr's snapshot with the terminal it holds (null: herdr did not say), once collected. */
+  seen?: (panes: ReadonlyMap<string, string | null>) => void
 }
 
 /**
  * All board items, newest activity first. The web board also asks for each session's helpers
- * (`helpers`: adapters/helpers.ts) and how sessions work with each other (`links`: an index).
+ * (`helpers`: adapters/helpers.ts) and how sessions work with each other (`links`: an index), and
+ * hears which panes herdr has (`seen`).
  */
-export async function collect(deps: Deps, { helpers = false, links = null }: CollectOptions = {}): Promise<Item[]> {
+export async function collect(
+  deps: Deps,
+  { helpers = false, links = null, seen: panesSeen = () => {} }: CollectOptions = {},
+): Promise<Item[]> {
   const { cfg } = deps
   const [snap, asleep] = await Promise.all([snapshot(), deps.wake.sleepers()])
   // The registries of every profile, hidden ones too (their running sessions keep their names and
@@ -278,5 +284,6 @@ export async function collect(deps: Deps, { helpers = false, links = null }: Col
       it.links = l && (l.from || l.started.length || l.talks.length) ? l : null
     }
   }
+  panesSeen(paneTerminals(snap))
   return items
 }

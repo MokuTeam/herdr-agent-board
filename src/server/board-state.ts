@@ -4,6 +4,7 @@ import { readUsageCache } from '../adapters/claude-home.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { createLinks } from '../adapters/links.ts'
 import { stateDir } from '../adapters/paths.ts'
+import { forgetProfilePanes } from '../adapters/profile-panes.ts'
 import { listEntries, readLog } from '../adapters/schedule-store.ts'
 import { COLUMNS } from '../core/board.ts'
 import { categoryInfo, colorHex, laneRank, PALETTE } from '../core/categories.ts'
@@ -149,7 +150,17 @@ export function createBoardState({ deps, launches, terminals, version, push, set
     }
     refreshing = true
     try {
-      items = await collect(deps, { helpers: true, links })
+      // The panes the board opened in a profile that herdr no longer has, or gave to another
+      // terminal, are forgotten; one opened while herdr was being asked is not in its answer yet.
+      const asked = Date.now()
+      const seen = (panes: ReadonlyMap<string, string | null>): void => {
+        try {
+          forgetProfilePanes(panes, asked)
+        } catch (err) {
+          log(`profile panes: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+      items = await collect(deps, { helpers: true, links, seen })
       launches.observe(items)
       stale = false
       lastSuccessfulRefreshAt = Date.now()

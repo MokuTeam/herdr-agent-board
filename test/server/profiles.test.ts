@@ -2,6 +2,8 @@
 // panel's edits, and each session's records read from its own profile.
 import { expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { quote } from '../../src/core/install-plan.ts'
 import { serveBoard } from '../support/board-server.ts'
@@ -223,4 +225,100 @@ test('Install from the board writes a shown profile’s hooks and refuses a hidd
   expect(await unknown.json()).toEqual({ ok: false, error: 'No profile “nope”' })
   expect((await post({ op: 'install', id: 'default' }, {})).status).toBe(403)
   expect(readdirSync(dir('.claude'))).toEqual(['settings.json'])
+}, 20_000)
+
+test('a pane record herdr no longer has is dropped at the next refresh', async () => {
+  const box = await boardWith({ '.claude': 'settings.json', '.claude-work': 'settings.json' })
+  const file = join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board', 'profile-panes.json')
+  mkdirSync(join(file, '..'), { recursive: true })
+  const p1 = { profile: 'work', terminal: 'term-1', at: 1, by: 'board' }
+  // A record written while the refresh was asking herdr: its pane is not in that answer yet.
+  const fresh = { profile: 'work', terminal: 'term-3', at: Date.now() + 3_600_000 }
+  writeFileSync(
+    file,
+    JSON.stringify({
+      gone: { profile: 'work', terminal: 'term-0', at: 1 },
+      p1,
+      p2: { profile: 'work', terminal: 'term-old', at: 1 }, // herdr gave the id to another terminal
+      fresh,
+    }),
+  )
+  const panes = [
+    { pane_id: 'p1', terminal_id: 'term-1' },
+    { pane_id: 'p2', terminal_id: 'term-2' },
+  ]
+  box.state({ 'api snapshot': { result: { snapshot: { panes, tabs: [], workspaces: [] } } } })
+  const { proc } = await serveBoard(box, { language: 'en' })
+  // The refresh at its start may still be on its way: the one asked for then runs after it.
+  proc.send('refresh')
+  const left = (): string => {
+    try {
+      return Object.keys(JSON.parse(readFileSync(file, 'utf8')) as object)
+        .sort()
+        .join()
+    } catch {
+      return '' // read while it was being replaced
+    }
+  }
+  await until(() => left() === 'fresh,p1')
+  expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ p1, fresh })
+}, 20_000)
+
+test('the Wake button and Go to herdr refuse a work session started outside the board; herdr-wake is not asked', async () => {
+  const box = await boardWith({ '.claude': 'settings.json', '.claude-work': 'settings.json' })
+  const home = join(box.dir, 'home')
+  mkdirSync(box.cards, { recursive: true })
+  writeFileSync(join(box.cards, 's1.json'), JSON.stringify({ key: 's1', profileDir: join(home, '.claude-work') }))
+  // herdr-wake put s1 to sleep in p1, a plain terminal now.
+  box.state({
+    'api snapshot': {
+      result: { snapshot: { panes: [{ pane_id: 'p1', terminal_id: 'term-1' }], tabs: [], workspaces: [] } },
+    },
+    'agent focus': { result: null },
+  })
+  let wakes = 0
+  const wake = http.createServer((req, res) => {
+    res.setHeader('content-type', 'application/json')
+    if (req.url === '/sleeping') return res.end(JSON.stringify([{ session: 's1', pane: 'p1', name: 'Sleepy' }]))
+    if (req.url === '/wake') wakes++
+    res.end('{"ok":true}')
+  })
+  await new Promise<void>(resolve => wake.listen(0, '127.0.0.1', resolve))
+  try {
+    const { url } = await serveBoard(box, {
+      language: 'en',
+      wakeUrl: `http://127.0.0.1:${(wake.address() as AddressInfo).port}`,
+      profiles: [
+        { id: 'default', title: 'Default', dir: join(home, '.claude'), color: 'indigo', hidden: false },
+        { id: 'work', title: 'Work', dir: join(home, '.claude-work'), color: 'teal', hidden: false },
+      ],
+    })
+    const post = async (path: string) => {
+      const res = await fetch(`${url}${path}`, { method: 'POST', headers: { 'x-board': '1' }, body: '{}' })
+      return [res.status, await res.json()]
+    }
+    // The board has the sleeper, its card saying work.
+    for (let i = 0; ; i++) {
+      const b = (await (await fetch(`${url}/api/board`)).json()) as Board
+      if (b.items.some(it => it.key === 's1' && it.sleeping && it.profile === 'work')) break
+      if (i > 100) throw new Error('the board did not show the sleeper')
+      await Bun.sleep(50)
+    }
+    const refused = {
+      ok: false,
+      error:
+        'Started outside the board in profile Work, so waking could resume it in the wrong account; wake it in herdr where you started it',
+    }
+    expect(await post('/api/session/s1/wake')).toEqual([409, refused])
+    expect(await post('/api/session/s1/focus')).toEqual([409, refused])
+    expect(wakes).toBe(0)
+    // The board opened p1 in work, and herdr shows it still holds that terminal: woken.
+    const file = join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board', 'profile-panes.json')
+    mkdirSync(join(file, '..'), { recursive: true })
+    writeFileSync(file, JSON.stringify({ p1: { profile: 'work', terminal: 'term-1', at: 1 } }))
+    expect(await post('/api/session/s1/wake')).toEqual([200, { ok: true }])
+    expect(wakes).toBe(1)
+  } finally {
+    await new Promise(resolve => wake.close(resolve))
+  }
 }, 20_000)

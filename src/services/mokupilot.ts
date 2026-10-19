@@ -9,6 +9,7 @@ import { cwdOf } from '../adapters/claude-home.ts'
 import { mokupilotCommand } from '../adapters/setup-facts.ts'
 import { t } from '../core/lang.ts'
 import { callable, callCommand } from '../core/mokupilot.ts'
+import { inBoardProfile, type ProfileSet, profileLabel } from '../core/profiles.ts'
 import type { Config, Item } from '../core/types.ts'
 
 /** What starting the launcher gives back: it started, or why not. */
@@ -23,6 +24,8 @@ export interface CallOptions {
   env?: Record<string, string | undefined>
   /** child_process.spawn. */
   run?: (file: string, args: string[], options: SpawnOptions) => CallChild
+  /** The profiles (Deps.profiles): a call is taken only from a session in the board's own. */
+  profiles?: ProfileSet
 }
 
 export type CallResult = { ok: true; file: string } | { ok: false; error: string }
@@ -43,14 +46,20 @@ const reason = (err: unknown): string => {
 /**
  * Start a MokuPilot call with a fork of the session `item` (a board item with its transcript):
  * { ok } once MokuPilot's launcher started, { ok: false, error } when it could not. It runs on
- * its own, past the board's lifetime; the folder is the one the session started in.
+ * its own, past the board's lifetime; the folder is the one the session started in. A running
+ * MokuPilot takes the call over in its own env, so with `profiles` a session in another profile
+ * than the board's own is refused before anything starts.
  */
 export async function startCall(
   cfg: Partial<Config>,
-  item: Pick<Item, 'agent' | 'session' | 'cwd' | 'transcript'> | null | undefined,
-  { platform = process.platform, env = process.env, run = spawn }: CallOptions = {},
+  item: Pick<Item, 'agent' | 'session' | 'cwd' | 'transcript' | 'profile' | 'profileFolder'> | null | undefined,
+  { platform = process.platform, env = process.env, run = spawn, profiles }: CallOptions = {},
 ): Promise<CallResult> {
   if (!item || !callable(item)) return { ok: false, error: t('mokupilot.err.notClaude') }
+  if (profiles && !inBoardProfile(item, profiles)) {
+    const board = profiles.inherited?.title || profiles.inheritedDir
+    return { ok: false, error: t('mokupilot.err.profile', { board, profile: profileLabel(item, profiles) }) }
+  }
   const launcher = mokupilotCommand(cfg, { platform, env })
   if (launcher.state === 'off') return { ok: false, error: t('mokupilot.err.off') }
   if (launcher.state !== 'ok')

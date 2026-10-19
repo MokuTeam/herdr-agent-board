@@ -23,6 +23,14 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'launch.err.profileFolder': 'The folder of the profile {title} is not there: {path}',
     'launch.err.env':
       'herdr cannot set CLAUDE_CONFIG_DIR={dir} for the new tab (--env needs herdr 0.9.5 or newer): update herdr, or start this session yourself',
+    // a session's profile in a message when the board knows neither it nor its folder (core/profiles.ts)
+    'profile.unknown': 'unknown profile',
+    // a wake the board cannot keep in the session's profile (services/actions.ts wake)
+    'err.wakeProfile':
+      'Started outside the board in profile {profile}, so waking could resume it in the wrong account; wake it in herdr where you started it',
+    // a MokuPilot call from a session in another profile than the board's (services/mokupilot.ts)
+    'mokupilot.err.profile':
+      'MokuPilot takes the profile of its running copy, {board}: a call from {profile} would run in the wrong account',
   },
   ru: {
     // the Profiles panel's edits (adapters/config-file.ts editProfiles)
@@ -44,5 +52,13 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'launch.err.profileFolder': 'Папки профиля {title} нет: {path}',
     'launch.err.env':
       'herdr не может задать CLAUDE_CONFIG_DIR={dir} для новой вкладки (--env есть в herdr с 0.9.5): обнови herdr или запусти эту сессию сам',
+    // a session's profile in a message when the board knows neither it nor its folder (core/profiles.ts)
+    'profile.unknown': 'неизвестный профиль',
+    // a wake the board cannot keep in the session's profile (services/actions.ts wake)
+    'err.wakeProfile':
+      'Запущена вне доски в профиле {profile}: пробуждение может продолжить её не в том аккаунте; разбудите её в herdr, там, где запускали',
+    // a MokuPilot call from a session in another profile than the board's (services/mokupilot.ts)
+    'mokupilot.err.profile':
+      'MokuPilot берёт профиль своей запущенной копии, {board}: звонок из {profile} пошёл бы не в том аккаунте',
   },
 }

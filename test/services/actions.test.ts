@@ -1,7 +1,9 @@
 import { describe, expect, setDefaultTimeout, test } from 'bun:test'
 import assert from 'node:assert/strict'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { dirname, join } from 'node:path'
 import { sandbox } from '../support/sandbox.ts'
 
 setDefaultTimeout(10_000)
@@ -77,5 +79,82 @@ describe('send', () => {
     assert.equal(out.code, 0, out.stderr)
     expect(JSON.parse(out.stdout).ok).toBe(false)
     assert.equal(box.calls().length, 1)
+  })
+})
+
+describe('waking a session of another profile than the board’s', () => {
+  const REFUSED =
+    'Started outside the board in profile Work, so waking could resume it in the wrong account; wake it in herdr where you started it'
+
+  /**
+   * A sandbox whose home has the default and work profiles, herdr showing pane1 holding terminal
+   * term-1, the board's launches having left `panes` as profile-panes.json (null: none); then
+   * `send` to the sleeping work session in pane1 through a herdr-wake stand-in: its answer, and how
+   * often herdr-wake was asked to wake it.
+   */
+  async function sendToSleeper(panes: Record<string, unknown> | null): Promise<{ out: unknown; wakes: number }> {
+    const box = await sandbox()
+    const home = join(box.dir, 'home')
+    for (const name of ['.claude', '.claude-work']) {
+      mkdirSync(join(home, name), { recursive: true })
+      writeFileSync(join(home, name, 'settings.json'), '{}')
+    }
+    if (panes) {
+      const file = join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board', 'profile-panes.json')
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, JSON.stringify(panes))
+    }
+    const snapshot = {
+      result: { snapshot: { panes: [{ pane_id: 'pane1', terminal_id: 'term-1' }], tabs: [], workspaces: [] } },
+    }
+    box.state({ 'api snapshot': snapshot, 'agent get': { error: 'must wake first' } })
+    let wakes = 0
+    const server = http.createServer((req, res) => {
+      assert.equal(req.url, '/wake')
+      wakes++
+      box.state({
+        'api snapshot': snapshot,
+        'agent get': { result: { agent: { agent_status: 'idle', agent_session: { value: 'expected' } } } },
+        'agent prompt': { result: {} },
+      })
+      res.setHeader('content-type', 'application/json')
+      res.end('{"ok":true}')
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const cfg = {
+        language: 'en',
+        wakeUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+        profiles: [
+          { id: 'default', title: 'Default', dir: join(home, '.claude'), color: 'indigo', hidden: false },
+          { id: 'work', title: 'Work', dir: join(home, '.claude-work'), color: 'teal', hidden: false },
+        ],
+      }
+      const item = { pane: 'pane1', session: 'expected', name: 'Test', sleeping: true, profile: 'work' }
+      const out = await box.run('send', { item, cfg, text: 'hello' }).exited
+      assert.equal(out.code, 0, out.stderr)
+      return { out: JSON.parse(out.stdout), wakes }
+    } finally {
+      await new Promise(resolve => server.close(resolve))
+    }
+  }
+
+  test('a session started outside the board in work is not woken: the reason, and herdr-wake never asked', async () => {
+    const { out, wakes } = await sendToSleeper(null)
+    expect(out).toEqual({ ok: false, error: REFUSED })
+    expect(wakes).toBe(0)
+  })
+
+  test('a pane the board opened with work’s --env is woken', async () => {
+    const { out, wakes } = await sendToSleeper({ pane1: { profile: 'work', terminal: 'term-1', at: 1 } })
+    expect(out).toEqual({ ok: true })
+    expect(wakes).toBe(1)
+  })
+
+  test('a record of another terminal than the one the pane holds now vouches for nothing', async () => {
+    // herdr started over and gave the pane id to a terminal with its own env.
+    const { out, wakes } = await sendToSleeper({ pane1: { profile: 'work', terminal: 'term-0', at: 1 } })
+    expect(out).toEqual({ ok: false, error: REFUSED })
+    expect(wakes).toBe(0)
   })
 })

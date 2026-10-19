@@ -136,7 +136,10 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   is free (woken if it sleeps), for its information, as `[mokupilot call report]`, the report, and
   a note not to start work on it unless you ask; its conversation shows "MokuPilot call results"
   as a quiet line that opens to the report, its paths (the full protocol, the transcript) as file
-  chips.
+  chips. With more than one Claude profile, a call goes only from a session in the board's own
+  profile (the one its `CLAUDE_CONFIG_DIR` points to): a running MokuPilot takes the call over in
+  its own env, so a fork of a session in another profile would run in the wrong account. The board
+  refuses that call before anything starts, saying so.
 - The sheet's place and size are the viewer's own (kept in this browser): docked right, left or
   at the bottom, flush with that edge like a sidebar, where the board makes room for it (a window
   too narrow for that keeps the board's columns and lays the sheet over them), or floating over
@@ -658,6 +661,16 @@ are files, and the board keeps running.
 - With no board running the scheduler, `board remind` says so; the entry goes out once one runs.
 - At most two sleeping sessions are woken at once. An entry cancelled while its session wakes
   up is not sent.
+- With more than one Claude profile, a sleeping session is woken only where it resumes in its own
+  profile: herdr-wake restarts Claude in the session's pane, with that pane's env. So the board
+  wakes a session of its own profile (the one its `CLAUDE_CONFIG_DIR` points to), or one in a pane
+  the board opened with that session's profile, while herdr shows the pane still holds the
+  terminal it opened. A session started outside the board in another profile is not woken: a
+  reminder for it is held, its reason "Started outside the board in profile …, so waking could
+  resume it in the wrong account; wake it in herdr where you started it", and tried again every
+  tick like any held one. The Wake button, "Go to herdr" and a message refuse that wake alike.
+  The board forgets a pane it opened once herdr no longer has it, or gave its id to another
+  terminal.
 - Runs that came due while the board was off: a one-off is sent once, saying how late it is; a
   cron entry sends one prompt for all the runs it missed, saying how many. Time the board was
   off does not count against the wait.

@@ -174,9 +174,9 @@ async function act(app: SessionApp, item: Item, action: string, body: () => Prom
       return rename(item, await body())
     case 'card':
       return card(item, await body())
-    // A MokuPilot call whose agent is a fork of this session; no herdr in it.
+    // A MokuPilot call whose agent is a fork of this session, only in the board's own profile; no herdr in it.
     case 'mokupilot':
-      return startCall(deps.cfg, item)
+      return startCall(deps.cfg, item, { profiles: deps.profiles() })
     default:
       return { ok: false, error: `unknown action ${action}` }
   }

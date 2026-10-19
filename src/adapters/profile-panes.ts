@@ -115,11 +115,15 @@ const withTerminals = (live: ReadonlySet<string> | PaneTerminals): live is PaneT
  * Drop the records of panes herdr no longer has. `live` as a Set of pane ids keeps the records of
  * those ids; with their terminals (a Map) it also drops a record herdr shows to be of another
  * terminal than the pane holds now. A record whose terminal is not known on either side is kept:
- * it still blocks (possibleProfilePanes).
+ * it still blocks (possibleProfilePanes). `before`: when herdr was asked for `live`; a record
+ * written since is of a pane its answer may not have yet, and is kept.
  */
-export function forgetProfilePanes(live: ReadonlySet<string> | PaneTerminals): void {
-  if (withTerminals(live)) forgetWhere((pane, entry) => live.has(pane) && !reused(entry, live.get(pane)))
-  else forgetWhere(pane => live.has(pane))
+export function forgetProfilePanes(live: ReadonlySet<string> | PaneTerminals, before?: number): void {
+  const since = (entry: unknown): boolean =>
+    before !== undefined && isRecord(entry) && typeof entry.at === 'number' && entry.at >= before
+  if (withTerminals(live))
+    forgetWhere((pane, entry) => since(entry) || (live.has(pane) && !reused(entry, live.get(pane))))
+  else forgetWhere((pane, entry) => since(entry) || live.has(pane))
 }
 
 /** Drop the record of `pane`: herdr opened a new pane of that id without a profile's env. */

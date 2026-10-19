@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { useLanguage } from '../../src/core/lang.ts'
+import { profileSet } from '../../src/core/profiles.ts'
 import type { Config } from '../../src/core/types.ts'
 import { type CallChild, type CallOptions, mokupilotCheck, startCall } from '../../src/services/mokupilot.ts'
 
@@ -97,6 +98,42 @@ test('a call starts MokuPilot on its own, in the folder the session started in, 
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('a call from a session in another profile than the board’s is refused before anything starts', async () => {
+  const DEFAULT = { id: 'default', title: 'Default', dir: '/home/u/.claude', color: 'indigo', hidden: false }
+  const WORK = { id: 'work', title: 'Work', dir: '/home/u/.claude-work', color: 'teal', hidden: false }
+  const SET = profileSet([DEFAULT, WORK], DEFAULT.dir)
+  const started: string[][] = []
+  const run: Run = (_file, args) => {
+    started.push(args)
+    const child = new EventEmitter()
+    queueMicrotask(() => child.emit('spawn'))
+    return Object.assign(child, { unref() {} }) as unknown as CallChild
+  }
+  const cfg = { mokupilot: { command: [process.execPath] } }
+  const call = { agent: 'claude', session: ID, cwd: tmpdir(), transcript: null }
+  const opts = { platform: 'linux', env: { PATH: '' }, profiles: SET, run }
+
+  const work = await startCall(cfg, { ...call, profile: 'work' }, opts)
+  assert.deepEqual(work, {
+    ok: false,
+    error: 'MokuPilot takes the profile of its running copy, Default: a call from Work would run in the wrong account',
+  })
+  assert.equal(started.length, 0)
+  // A session whose profile the board does not know: refused too, naming the folder it reported.
+  const odd = await startCall(cfg, { ...call, profile: null, profileFolder: '/srv/.claude-x' }, opts)
+  assert.match(odd.ok ? '' : odd.error, /a call from \/srv\/\.claude-x would run in the wrong account/)
+  const unknown = await startCall(cfg, { ...call, profile: null }, opts)
+  assert.match(unknown.ok ? '' : unknown.error, /a call from unknown profile would/)
+  assert.equal(started.length, 0)
+
+  assert.deepEqual(await startCall(cfg, { ...call, profile: 'default' }, opts), { ok: true, file: process.execPath })
+  assert.equal(started.length, 1)
+  // One profile listed: a session that names none is in it.
+  const one = { ...opts, profiles: profileSet([DEFAULT], DEFAULT.dir) }
+  assert.equal((await startCall(cfg, { ...call, profile: null }, one)).ok, true)
+  assert.equal(started.length, 2)
 })
 
 test('whether the page offers calls: looked up again when the setting changes, and once a minute', () => {

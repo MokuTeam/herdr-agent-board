@@ -164,3 +164,16 @@ test('one pane forgotten: a new tab of that id opened without --env; no file is 
   forgetProfilePane('wA:p9')
   expect(saved()).toEqual({ 'wB:p1': { profile: 'gamedev', at: 1 } })
 })
+
+test('forgetting by an answer herdr gave at a time: a record written since is kept', () => {
+  isolatedHome()
+  const old = { profile: 'work', terminal: 'term-1', at: 1_000 }
+  const since = { profile: 'work', terminal: 'term-2', at: 2_000 }
+  const reused = { profile: 'work', terminal: 'term-3', at: 2_000 }
+  writeSaved({ 'wA:p1': old, 'wA:p2': since, 'wA:p3': reused, 'wA:p4': { profile: 'work' } })
+  // herdr was asked at 2000: wA:p2 is not in its answer yet, wA:p3 holds another terminal.
+  forgetProfilePanes(new Map([['wA:p3', 'term-9']]), 2_000)
+  expect(saved()).toEqual({ 'wA:p2': since, 'wA:p3': reused })
+  forgetProfilePanes(new Set(), 2_001)
+  expect(saved()).toEqual({})
+})

@@ -312,6 +312,58 @@ describe('startScheduler', () => {
     }
   })
 
+  test('a reminder that would wake a work session started outside the board is held with the reason', async () => {
+    const box = await sandbox()
+    const home = join(box.dir, 'home')
+    for (const name of ['.claude', '.claude-work']) {
+      mkdirSync(join(home, name), { recursive: true })
+      writeFileSync(join(home, name, 'settings.json'), '{}')
+    }
+    // The sleeper's card: its hooks reported the work folder. Its pane is a plain terminal now.
+    mkdirSync(box.cards, { recursive: true })
+    writeFileSync(join(box.cards, 's1.json'), JSON.stringify({ key: 's1', profileDir: join(home, '.claude-work') }))
+    const panes = [{ pane_id: 'p1', terminal_id: 'term-1' }]
+    box.state({ 'api snapshot': { result: { snapshot: { panes, tabs: [], workspaces: [] } } } })
+    let wakes = 0
+    const wake = http.createServer((req, res) => {
+      res.setHeader('content-type', 'application/json')
+      if (req.url === '/sleeping')
+        return res.end(
+          JSON.stringify([{ session: 's1', pane: 'p1', name: 'Sleepy', slept_at: new Date().toISOString() }]),
+        )
+      wakes++
+      res.end('{"ok":true}')
+    })
+    await new Promise<void>(resolve => wake.listen(0, '127.0.0.1', resolve))
+    try {
+      put(box, { id: 'dddd02', text: 'wake up', at: Date.now() - 1000, next: Date.now() - 1000 })
+      await scheduler(box, {
+        wakeUrl: `http://127.0.0.1:${(wake.address() as AddressInfo).port}`,
+        profiles: [
+          { id: 'default', title: 'Default', dir: join(home, '.claude'), color: 'indigo', hidden: false },
+          { id: 'work', title: 'Work', dir: join(home, '.claude-work'), color: 'teal', hidden: false },
+        ],
+      })
+      const why =
+        'Started outside the board in profile Work, so waking could resume it in the wrong account; wake it in herdr where you started it'
+      await until(() => read(box, 'dddd02')?.why === why)
+      const first = read(box, 'dddd02')?.tried
+      // Tried again on a later tick, and held again.
+      await until(() => {
+        const e = read(box, 'dddd02')
+        return e?.tried !== first && e?.why === why
+      })
+      const held = read(box, 'dddd02')
+      assert.ok(held)
+      assert.equal(typeof held.pendingSince, 'number')
+      assert.equal(wakes, 0)
+      assert.deepEqual(prompts(box), [])
+      assert.deepEqual(runs(box), [])
+    } finally {
+      await new Promise(resolve => wake.close(resolve))
+    }
+  })
+
   test('a run another board claimed is left alone until its claim runs out', async () => {
     const box = await sandbox()
     put(box, {

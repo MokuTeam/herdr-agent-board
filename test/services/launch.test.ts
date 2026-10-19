@@ -819,8 +819,22 @@ const oldPanes = (box: Sandbox, panes: Record<string, { profile: string; termina
 }
 const OLD = { 'wA:p9': { profile: 'work', terminal: 't-old' }, 'wN:p1': { profile: 'work', terminal: 't-old' } }
 const KEPT = { 'wZ:p1': { profile: 'work', terminal: 't-z' } }
-// herdr's answers with the terminal each new pane holds.
+// herdr's answers with the terminal each new pane holds; its snapshot has them, and wZ:p1 (KEPT),
+// so a refresh does not forget them as panes herdr no longer has.
 const OPENED = {
+  'api snapshot': {
+    result: {
+      snapshot: {
+        ...SNAPSHOT,
+        panes: [
+          ...SNAPSHOT.panes,
+          { pane_id: 'wA:p9', terminal_id: 'term-9' },
+          { pane_id: 'wN:p1', terminal_id: 'term-1' },
+          { pane_id: 'wZ:p1', terminal_id: 't-z' },
+        ],
+      },
+    },
+  },
   'tab create': { result: { tab: { tab_id: 'wA:t9' }, root_pane: { pane_id: 'wA:p9', terminal_id: 'term-9' } } },
   'workspace create': {
     result: {
