@@ -4,7 +4,7 @@ import { appendFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { Config, Item } from '../../src/core/types.ts'
 
-export type RunnerMode = 'open' | 'send' | 'answer' | 'server' | 'cli' | 'scheduler' | 'write'
+export type RunnerMode = 'open' | 'send' | 'answer' | 'server' | 'cli' | 'scheduler' | 'write' | 'detached'
 
 // The input a test handed over: each mode reads the fields its test wrote.
 type RunnerInput = {
@@ -143,6 +143,13 @@ if (mode === 'open') {
     signal({ error: err instanceof Error ? err.message : String(err) })
   }
   process.disconnect?.()
+} else if (mode === 'detached') {
+  // A program started on its own (detached, as a launcher or a MokuPilot call is) that would run
+  // for good: both pids are told, then this one stays up beside it until it is stopped.
+  const { spawn } = await import('node:child_process')
+  const forever = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })
+  send({ child: process.pid, detached: forever.pid })
+  setInterval(() => {}, 1000)
 } else {
   throw new Error(`Unknown test mode: ${mode}`)
 }

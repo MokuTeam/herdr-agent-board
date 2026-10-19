@@ -55,6 +55,10 @@ export async function sandbox(t?: Registrar): Promise<Sandbox> {
     HERDR_BIN_PATH: herdr,
     FAKE_HERDR_STATE: join(dir, 'fake.json'),
     FAKE_HERDR_LOG: join(dir, 'calls.jsonl'),
+    // A test run that is cut off (Ctrl+C, a stop button, a kill) runs no cleanup: every Bun started
+    // with this env ends as soon as the process that started it is gone, and ends all it started
+    // with it, detached ones included (a launcher's process group, a MokuPilot call).
+    BUN_FEATURE_FLAG_NO_ORPHANS: '1',
   }
   for (const path of [home, config, localState]) mkdirSync(path, { recursive: true })
   writeFileSync(env.FAKE_HERDR_LOG as string, '')
