@@ -7,12 +7,22 @@ import { useT } from '../i18n/I18nProvider.tsx'
 import { pickedProfile, tagView } from '../models/profiles.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 
-/** `item`: a card's session, or an archive row's record (its profile facts at archive time). */
-export function ProfileTag({ item }: { item: Pick<Item, 'profile' | 'profileFolder' | 'profileWanted'> }) {
+/**
+ * `item`: a card's session, or an archive row's record (its profile facts at archive time).
+ * `picked`: the pick to tag by, the profile switch's when not given; the archive, which the switch
+ * does not filter, passes 'all'.
+ */
+export function ProfileTag({
+  item,
+  picked,
+}: {
+  item: Pick<Item, 'profile' | 'profileFolder' | 'profileWanted'>
+  picked?: string
+}) {
   const t = useT()
   const { data, ui } = useBoardContext()
   const profiles = data?.profiles
-  const tag = profileTag(item, profiles ?? [], pickedProfile(ui.profile, profiles))
+  const tag = profileTag(item, profiles ?? [], picked ?? pickedProfile(ui.profile, profiles))
   if (!tag) return null
   const view = tagView(tag, t)
   return (
