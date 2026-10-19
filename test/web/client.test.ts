@@ -92,6 +92,25 @@ test('a profile has what the switch and the tags read: id, title, color, folder,
   expect(isBoardPayload({ ...payload(), profiles: [PROFILE, { ...PROFILE, dir: 3 }] })).toBe(false)
 })
 
+test('a profile has what the Profiles panel reads: its folder there or not, the board’s hooks there, its sessions now', () => {
+  expect(isBoardProfile({ ...PROFILE, exists: false, hooks: false, sessions: 0 })).toBe(true)
+  // A hidden one: its settings.json not read.
+  expect(isBoardProfile({ ...PROFILE, hidden: true, hooks: null })).toBe(true)
+  for (const bad of [
+    { ...PROFILE, exists: undefined },
+    { ...PROFILE, exists: 'yes' },
+    { ...PROFILE, exists: null },
+    { ...PROFILE, hooks: undefined },
+    { ...PROFILE, hooks: 'true' },
+    { ...PROFILE, hooks: 0 },
+    { ...PROFILE, sessions: undefined },
+    { ...PROFILE, sessions: '2' },
+    { ...PROFILE, sessions: null },
+  ])
+    expect([bad, isBoardProfile(bad)]).toEqual([bad, false])
+  expect(isBoardPayload({ ...payload(), profiles: [PROFILE, { ...PROFILE, sessions: '1' }] })).toBe(false)
+})
+
 test('a profile’s usage, which the usage pill reads: none (null), or a reading with its list of windows', () => {
   const reading = {
     source: 'statusline',

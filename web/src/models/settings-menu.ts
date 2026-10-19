@@ -1,7 +1,8 @@
 // Settings (the gear in the toolbar) as a menu: how the board looks (as the system has it, light or
 // dark), its language, where the session panel sits, and whether sleeping sessions show. Light or
 // dark is this browser's (models/theme.ts); the language is the board's, for every board; the
-// panel's place is this browser's too (components/panel/place.ts).
+// panel's place is this browser's too (components/panel/place.ts). With more than one Claude
+// profile folder found, Profiles… opens their panel (components/profiles/ProfilesPanel.tsx).
 import type { Translator } from '../../../src/core/types.ts'
 import type { MenuEntry } from './menu-model.ts'
 import { DOCKS, type Dock } from './panel-layout.ts'
@@ -18,6 +19,8 @@ export interface SettingsNow {
   canEdit: boolean
   dock: Dock
   sleepers: boolean
+  /** More than one profile folder is found (models/profiles.ts offersProfiles): Profiles… is offered. */
+  profiles: boolean
 }
 
 export function settingsMenu(now: SettingsNow): MenuEntry[] {
@@ -48,6 +51,7 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
         { id: 'dock:reset', label: t('panel.reset') },
       ],
     },
+    ...(now.profiles ? [{ id: 'profiles', label: t('set.profiles') }] : []),
     { separator: true },
     { id: 'sleepers', label: t('tb.sleepersTitle'), checked: now.sleepers },
   ]
@@ -60,6 +64,7 @@ export type SettingPick =
   | { kind: 'dock'; value: string }
   | { kind: 'reset' }
   | { kind: 'sleepers' }
+  | { kind: 'profiles' }
   | null
 
 export function settingPicked(id: string): SettingPick {
@@ -67,5 +72,6 @@ export function settingPicked(id: string): SettingPick {
   if (kind === 'theme' || kind === 'lang') return { kind, value }
   if (kind === 'dock') return value === 'reset' ? { kind: 'reset' } : { kind: 'dock', value }
   if (id === 'sleepers') return { kind: 'sleepers' }
+  if (id === 'profiles') return { kind: 'profiles' }
   return null
 }

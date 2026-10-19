@@ -31,7 +31,9 @@ const isProfileLimits = (value: unknown): boolean => value === null || (isReply(
 /**
  * A Claude profile as the board sends it (src/core/payload.ts BoardProfile), as far as the page
  * relies on it: the profile switch and the cards' tags read its id, title, color, folder and
- * whether it is hidden; the usage pill and its popover read its usage.
+ * whether it is hidden; the usage pill and its popover read its usage; the Profiles panel reads
+ * whether its folder is there, whether the board's hooks are in it (none read for a hidden one)
+ * and its sessions now.
  */
 export const isBoardProfile: Guard<BoardProfile> = (value): value is BoardProfile =>
   isReply(value) &&
@@ -40,6 +42,9 @@ export const isBoardProfile: Guard<BoardProfile> = (value): value is BoardProfil
   typeof value.color === 'string' &&
   typeof value.dir === 'string' &&
   typeof value.hidden === 'boolean' &&
+  typeof value.exists === 'boolean' &&
+  (typeof value.hooks === 'boolean' || value.hooks === null) &&
+  typeof value.sessions === 'number' &&
   isProfileLimits(value.limits)
 
 /** The board payload's shape, as far as the page relies on it (src/core/payload.ts). */

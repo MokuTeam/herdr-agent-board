@@ -6,6 +6,7 @@
 import { describe, expect, test } from 'bun:test'
 import { createRef } from 'react'
 import { LANGUAGES, translator } from '../../src/core/i18n/translator.ts'
+import type { BoardProfile } from '../../src/core/payload.ts'
 import type { Translator } from '../../src/core/types.ts'
 import type { MenuSource } from '../../web/src/components/menu/menu-engine.ts'
 import { Toolbar } from '../../web/src/components/Toolbar.tsx'
@@ -17,6 +18,7 @@ import {
 } from '../../web/src/hooks/useSettingsMenu.ts'
 import type { MenuEntry } from '../../web/src/models/menu-model.ts'
 import type { Dock } from '../../web/src/models/panel-layout.ts'
+import { offersProfiles } from '../../web/src/models/profiles.ts'
 import { settingPicked, settingsMenu } from '../../web/src/models/settings-menu.ts'
 import { keptTheme, setTheme, themeNow } from '../../web/src/models/theme.ts'
 import { board, renderInBoard } from './support/board.tsx'
@@ -117,6 +119,9 @@ function newHandler(scene: Scene, calls: Call[], menu: SettingsDeps['menu']) {
     placePanels: dock => void calls.push(['dock', dock]),
     resetPanelSize: () => void calls.push(['reset']),
     toggleSleepers: () => void calls.push(['sleepers', !sleepers]),
+    // One profile folder, as upstream knew: no Profiles… item.
+    profiles: () => false,
+    openProfiles: () => void calls.push(['profiles']),
   })
 }
 
@@ -187,6 +192,7 @@ describe('the menu out of the gear', () => {
       canEdit: true,
       dock: 'left',
       sleepers: true,
+      profiles: false,
     })
     expect(items.map(i => ('id' in i ? i.id : '—'))).toEqual(['theme', 'lang', 'panel', '—', 'sleepers'])
     expect(settingPicked('dock:reset')).toEqual({ kind: 'reset' })
@@ -194,6 +200,81 @@ describe('the menu out of the gear', () => {
     expect(settingPicked('lang:ru')).toEqual({ kind: 'lang', value: 'ru' })
     expect(settingPicked('sleepers')).toEqual({ kind: 'sleepers' })
     expect(settingPicked('panel')).toBeNull()
+  })
+
+  test('the Settings menu offers Profiles… only when more than one profile folder is found', () => {
+    const now = {
+      t: translator('en'),
+      theme: 'auto',
+      languages: { en: 'English' },
+      canEdit: true,
+      dock: 'right' as const,
+      sleepers: true,
+    }
+    const ids = (items: readonly MenuEntry[]) => items.map(i => ('id' in i ? i.id : '—'))
+    // One folder: today's list exactly.
+    expect(ids(settingsMenu({ ...now, profiles: false }))).toEqual(['theme', 'lang', 'panel', '—', 'sleepers'])
+    // More than one: Profiles… after the session panel's place.
+    const items = settingsMenu({ ...now, profiles: true })
+    expect(ids(items)).toEqual(['theme', 'lang', 'panel', 'profiles', '—', 'sleepers'])
+    expect(items[3]).toEqual({ id: 'profiles', label: 'Profiles…' })
+    expect(settingsMenu({ ...now, t: translator('ru'), profiles: true })[3]).toEqual({
+      id: 'profiles',
+      label: 'Профили…',
+    })
+    expect(settingPicked('profiles')).toEqual({ kind: 'profiles' })
+
+    // More than one folder found, shown or hidden; none listed, or a board before profiles: one.
+    const folder = (id: string, hidden: boolean): BoardProfile => ({
+      id,
+      title: id,
+      color: '#5856D6',
+      colorName: 'indigo',
+      dir: `C:\\Users\\me\\.claude-${id}`,
+      hidden,
+      inherited: false,
+      exists: true,
+      hooks: hidden ? null : true,
+      sessions: 0,
+      limits: null,
+    })
+    expect(offersProfiles(undefined)).toBe(false)
+    expect(offersProfiles([])).toBe(false)
+    expect(offersProfiles([folder('default', false)])).toBe(false)
+    expect(offersProfiles([folder('default', false), folder('work', true)])).toBe(true)
+    expect(offersProfiles([folder('default', false), folder('work', false), folder('x', true)])).toBe(true)
+
+    // Picked from the gear: the panel opens.
+    for (const many of [false, true]) {
+      const calls: Call[] = []
+      let opened: readonly MenuEntry[] = []
+      let pick = (_id: string): void => {}
+      settingsMenuFrom({
+        menu: {
+          open: (items, options) => {
+            opened = items
+            pick = id => options.onPick?.(id, { id, label: '' })
+          },
+        },
+        t: () => translator('en'),
+        canEdit: () => true,
+        languages: () => ({ en: 'English' }),
+        dock: () => 'right',
+        sleepers: () => true,
+        root: () => ({ dataset: {} }),
+        coarse: () => false,
+        setTheme() {},
+        chooseLanguage() {},
+        placePanels() {},
+        resetPanelSize() {},
+        toggleSleepers() {},
+        profiles: () => many,
+        openProfiles: () => void calls.push(['profiles']),
+      })({ getBoundingClientRect: () => RECT } as unknown as HTMLElement, false)
+      expect(ids(opened).includes('profiles')).toBe(many)
+      pick('profiles')
+      expect(calls).toEqual([['profiles']])
+    }
   })
 })
 

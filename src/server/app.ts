@@ -135,7 +135,16 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     settingsRoute(),
     scheduleRoute(refresh),
     categoriesRoute(),
-    profilesRoute(id => installProfile(deps, id)),
+    // Install from the Profiles panel: the panel's note and "Setup incomplete" follow at once, not
+    // at the next refresh and the next check in up to 10 minutes.
+    profilesRoute(id => {
+      const done = installProfile(deps, id)
+      if (done.ok) {
+        board.publish()
+        setup.again().catch(err => log(`setup check: ${messageOf(err)}`))
+      }
+      return done
+    }),
     ...launchRoutes(launches, board.items),
     terminalRoute({ cfg, terminals, find: board.find, publish: board.publish }),
     ...sessionRoutes({

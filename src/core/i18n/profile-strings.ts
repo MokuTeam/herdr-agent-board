@@ -48,6 +48,21 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'cat.profileNone': 'None',
     // the profile choice in the new-session window (web/src/components/launch/LaunchDialog.tsx)
     'launch.profile': 'Profile',
+    // the Profiles panel, from Settings with more than one profile folder (web/src/components/profiles)
+    'set.profiles': 'Profiles…',
+    'prof.title': 'Profiles',
+    'prof.about':
+      'The Claude Code folders the board found (CLAUDE_CONFIG_DIR). A hidden profile is left out of the switch, new sessions and Install.',
+    'prof.name': 'Name',
+    'prof.sessions': ['{n} session now', '{n} sessions now'],
+    'prof.shown': 'Shown',
+    'prof.hidden': 'Hidden',
+    'prof.missing': 'Folder not found',
+    'prof.addUnknown': 'Add {path}',
+    'prof.dir': 'Folder, Enter',
+    'prof.add': 'Add a folder somewhere else',
+    'prof.noHooks': 'The board’s hooks are not in {title}’s settings.json: its sessions show no status or title',
+    'prof.install': 'Install',
   },
   ru: {
     // the Profiles panel's edits (adapters/config-file.ts editProfiles)
@@ -94,5 +109,20 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'cat.profileNone': 'Нет',
     // the profile choice in the new-session window (web/src/components/launch/LaunchDialog.tsx)
     'launch.profile': 'Профиль',
+    // the Profiles panel, from Settings with more than one profile folder (web/src/components/profiles)
+    'set.profiles': 'Профили…',
+    'prof.title': 'Профили',
+    'prof.about':
+      'Папки Claude Code, которые нашла доска (CLAUDE_CONFIG_DIR). Скрытого профиля нет в переключателе, в новых сессиях и в установке хуков.',
+    'prof.name': 'Название',
+    'prof.sessions': ['{n} сессия сейчас', '{n} сессии сейчас', '{n} сессий сейчас'],
+    'prof.shown': 'Показан',
+    'prof.hidden': 'Скрыт',
+    'prof.missing': 'Папка не найдена',
+    'prof.addUnknown': 'Добавить {path}',
+    'prof.dir': 'Папка, Enter',
+    'prof.add': 'Добавить папку из другого места',
+    'prof.noHooks': 'Хуков доски нет в settings.json профиля {title}: его сессии не показывают ни статус, ни заголовок',
+    'prof.install': 'Установить',
   },
 }

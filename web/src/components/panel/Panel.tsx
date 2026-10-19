@@ -1,7 +1,7 @@
-// The side-panel shell the session sheet, the categories and the schedule share: an aside with a
-// grip, the head and the panel's content, and the edges that resize it. Where it sits, how it
-// moves and the one-open-at-a-time rule are the shared place's (components/panel/place.ts and
-// motion.ts); `open` asks for it, `onClose` hears when it closed itself or gave way to another.
+// The side-panel shell the session sheet, the categories, the schedule and the profiles share: an
+// aside with a grip, the head and the panel's content, and the edges that resize it. Where it sits,
+// how it moves and the one-open-at-a-time rule are the shared place's (components/panel/place.ts
+// and motion.ts); `open` asks for it, `onClose` hears when it closed itself or gave way to another.
 import type { ReactNode, Ref } from 'react'
 import type { DropHandlers } from '../../hooks/useFileDrop.ts'
 import { usePanel } from '../../hooks/usePanel.ts'
@@ -11,13 +11,14 @@ import { EDGES, edgeChrome, type PanelChrome } from '../../models/panel-motion.t
 import { classNames } from '../class-names.ts'
 import { PanelHead } from './PanelHead.tsx'
 
-export type PanelKind = 'session' | 'categories' | 'schedule'
+export type PanelKind = 'session' | 'categories' | 'schedule' | 'profiles'
 
 /** Each panel's name for screen readers, and the session sheet's close button id. */
 const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
   session: { label: 'sheet.label', closeId: 'sheet-close' },
   categories: { label: 'cats.title' },
   schedule: { label: 'sched.title' },
+  profiles: { label: 'prof.title' },
 }
 
 interface ShellProps {

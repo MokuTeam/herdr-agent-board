@@ -1,7 +1,9 @@
 // The Claude profiles on the web board: the profile switch's options and the profile it shows,
 // which sessions that pick shows, and the words and color of a card's profile tag
 // (src/core/profile-tag.ts says which tag a card has). With fewer than two profiles shown there is
-// no switch, and every session shows, as before profiles.
+// no switch, and every session shows, as before profiles. Then the Profiles panel's rows and the
+// folders it offers to add; with one profile folder there is no such panel.
+import { sameDir } from '../../../src/core/launch/names.ts'
 import type { ProfileTag } from '../../../src/core/profile-tag.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
 import type { BoardProfile } from '../api/client.ts'
@@ -72,4 +74,61 @@ export function tagView(tag: ProfileTag<BoardProfile>, t: Translator): TagView {
       return { kind: 'wrong', text, title: text, color: 'var(--red)' }
     }
   }
+}
+
+/**
+ * Whether the board offers the Profiles panel (Settings → Profiles…): more than one profile folder
+ * found, shown or hidden. With one, the menu is as before profiles.
+ */
+export const offersProfiles = (profiles: readonly BoardProfile[] | undefined): boolean => (profiles?.length ?? 0) > 1
+
+/** A profile's row in the Profiles panel. */
+export interface ProfileRowView {
+  id: string
+  title: string
+  /** Its color as hex. */
+  color: string
+  dir: string
+  /** Its sessions on the board now, in words. */
+  sessions: string
+  shown: boolean
+  /** Its folder is not there. */
+  missing: boolean
+  /** Shown, its folder there, and the board's hooks not in its settings.json: the panel offers Install. */
+  noHooks: boolean
+}
+
+/**
+ * The panel's rows, every profile in the list's order. A folder that is gone gets no Install: it
+ * could only fail, and its row says the folder is not found.
+ */
+export function profileRows(profiles: readonly BoardProfile[], t: Translator): ProfileRowView[] {
+  return profiles.map(p => {
+    const shown = !p.hidden
+    const missing = !p.exists
+    return {
+      id: p.id,
+      title: p.title,
+      color: p.color,
+      dir: p.dir,
+      sessions: t('prof.sessions', { n: p.sessions }),
+      shown,
+      missing,
+      noHooks: shown && !missing && p.hooks === false,
+    }
+  })
+}
+
+/** The folders sessions reported that no profile has, each once (as `sameDir` has it), as the first one wrote it. */
+export function unknownFolders(items: readonly Item[]): string[] {
+  const folders: string[] = []
+  for (const { profileFolder } of items)
+    if (profileFolder && !folders.some(f => sameDir(f, profileFolder))) folders.push(profileFolder)
+  return folders
+}
+
+/** A profile's name as typed, when it is a new one: trimmed; null when it is empty or the same. */
+export function profileRenamed(title: string, value: string): string | null {
+  const next = value.trim()
+  return next && next !== title ? next : null
 }

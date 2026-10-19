@@ -93,6 +93,41 @@ describe('the setup check', () => {
     assert.equal(published.length, 2)
   })
 
+  test('again: after Install the check runs again at once, and after a check that read the files before', async () => {
+    let calls = 0
+    const { checks, published } = checksWith(async () => {
+      calls++
+      return calls === 1 ? fresh() : fresh({ settingsError: 'changed' })
+    })
+    const start = Date.parse('2026-10-17T10:00:00Z')
+    setSystemTime(start)
+    await checks.now()
+    // A moment later, within the 3 s a check is shared: read again, and the board goes out.
+    setSystemTime(start + 500)
+    assert.deepEqual(await checks.again(), checkSetup(fresh({ settingsError: 'changed' }), t))
+    assert.equal(calls, 2)
+    assert.equal(published.length, 2)
+    assert.deepEqual(checks.summary(), setupSummary(checkSetup(fresh({ settingsError: 'changed' }))))
+
+    // A check running as Install wrote: one more after it; two asking at once share that one.
+    setSystemTime()
+    const held = heldGather()
+    const second = checksWith(held.gather)
+    const running = second.checks.now()
+    const one = second.checks.again()
+    const two = second.checks.again()
+    await Promise.resolve()
+    assert.equal(held.calls(), 1) // the gathers waiting for an answer
+    held.release()
+    await running
+    await until(() => held.calls() === 1)
+    held.release(fresh({ settingsError: 'changed' }))
+    assert.deepEqual(await one, checkSetup(fresh({ settingsError: 'changed' }), t))
+    assert.deepEqual(await two, await one)
+    assert.equal(held.calls(), 0)
+    assert.equal(second.published.length, 2)
+  })
+
   test('a check that ends after stop() publishes nothing', async () => {
     const held = heldGather()
     const { checks, published } = checksWith(held.gather)

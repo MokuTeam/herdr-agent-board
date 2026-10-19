@@ -229,6 +229,46 @@ test('Install from the board writes a shown profile’s hooks and refuses a hidd
   expect(readdirSync(dir('.claude'))).toEqual(['settings.json'])
 }, 20_000)
 
+test('Install from the panel shows at once: the board goes out with the hooks there, and the setup check runs again', async () => {
+  const box = await boardWith({ '.claude': 'settings.json', '.claude-work': 'settings.json' })
+  const home = join(box.dir, 'home')
+  const { url } = await serveBoard(box, {
+    language: 'en',
+    profiles: [
+      { id: 'default', title: 'Private', dir: join(home, '.claude'), color: 'indigo', hidden: false },
+      { id: 'work', title: 'Work', dir: join(home, '.claude-work'), color: 'teal', hidden: false },
+    ],
+  })
+  type Payload = { profiles: { id: string; hooks: boolean | null }[]; setup: { sig: string } | null }
+  const latest = async (): Promise<Payload> => (await (await fetch(`${url}/api/board`)).json()) as Payload
+  const hooksOf = (b: Payload, id: string) => b.profiles.find(p => p.id === id)?.hooks
+  /** The board as it last went out, once `done` says so (no refresh runs by itself here: refreshSec 3600). */
+  const once = async (done: (b: Payload) => boolean): Promise<Payload> => {
+    for (let i = 0; i < 250; i++) {
+      const b = await latest()
+      if (done(b)) return b
+      await Bun.sleep(20)
+    }
+    throw new Error(`the board did not go out so: ${JSON.stringify(await latest())}`)
+  }
+  // The check at the start: "Setup incomplete" names work's hooks.
+  await once(b => (b.setup?.sig ?? '').includes('hooks:work:error'))
+  expect(hooksOf(await latest(), 'work')).toBe(false)
+
+  const installed = await fetch(`${url}/api/profiles`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-board': '1' },
+    body: JSON.stringify({ op: 'install', id: 'work' }),
+  })
+  expect(await installed.json()).toEqual({ ok: true })
+  // At once: the panel's note goes.
+  const after = await latest()
+  expect([hooksOf(after, 'work'), hooksOf(after, 'default')]).toEqual([true, false])
+  // Then the check, run again in a moment, no longer names work: the note does not wait 10 minutes.
+  const checked = await once(b => !(b.setup?.sig ?? '').includes(':work:'))
+  expect(checked.setup?.sig).toContain('hooks:default:error')
+}, 20_000)
+
 test('a pane record herdr no longer has is dropped at the next refresh', async () => {
   const box = await boardWith({ '.claude': 'settings.json', '.claude-work': 'settings.json' })
   const file = join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board', 'profile-panes.json')

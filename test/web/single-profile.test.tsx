@@ -1,7 +1,8 @@
 // One profile shown, the page is phase 1's: each surface drawn as its own parity test draws it,
 // once for a phase-1 board and once for the same board with its profile in the payload (and on its
 // sessions), and the two markups held equal. The phase-1 render is pinned to upstream's page by
-// those parity tests, so this pins the one-profile page to it. Later surfaces join here.
+// those parity tests, so this pins the one-profile page to it. Later surfaces join here. The one
+// difference allowed: with more than one profile folder found, Settings has Profiles… and its panel.
 import { expect, test } from 'bun:test'
 import { createRef } from 'react'
 import { translator } from '../../src/core/i18n/translator.ts'
@@ -11,14 +12,19 @@ import { Board } from '../../web/src/components/Board.tsx'
 import { CategoriesPanel } from '../../web/src/components/categories/CategoriesPanel.tsx'
 import { Limits } from '../../web/src/components/Limits.tsx'
 import { LimitsPop } from '../../web/src/components/LimitsPop.tsx'
+import { SidePanels } from '../../web/src/components/SidePanels.tsx'
 import { Toolbar } from '../../web/src/components/Toolbar.tsx'
+import type { Schedule } from '../../web/src/hooks/useSchedule.ts'
+import { settingsMenuFrom } from '../../web/src/hooks/useSettingsMenu.ts'
 import type { LaunchContext } from '../../web/src/models/launch-form.ts'
 import { LAUNCH_PROFILES } from '../../web/src/models/launch-profile.ts'
+import type { MenuEntry } from '../../web/src/models/menu-model.ts'
+import { offersProfiles } from '../../web/src/models/profiles.ts'
 import type { BoardUi } from '../../web/src/state/board-ui.ts'
 import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
 import { board as boardContext, item, payload, renderInBoard } from './support/board.tsx'
 import { type LaunchScene, type LaunchSide, reactLaunchSide } from './support/launch-sides.tsx'
-import { canonical } from './support/markup.ts'
+import { canonical, findAll, type Node } from './support/markup.ts'
 
 const MIN = 60_000
 const NOW = Date.now()
@@ -143,6 +149,50 @@ const categoriesPanel = (data: BoardPayload): string =>
     ),
   )
 
+/** The Settings menu out of the gear, its items as the page has them for the board (hooks/useSettingsMenu.ts). */
+function settingsItems(data: BoardPayload): readonly MenuEntry[] {
+  let items: readonly MenuEntry[] = []
+  settingsMenuFrom({
+    menu: {
+      open: opened => {
+        items = opened
+      },
+    },
+    t: () => translator('en'),
+    canEdit: () => true,
+    languages: () => data.languages,
+    dock: () => 'right',
+    sleepers: () => true,
+    root: () => ({ dataset: {} }),
+    coarse: () => false,
+    setTheme() {},
+    chooseLanguage() {},
+    placePanels() {},
+    resetPanelSize() {},
+    toggleSleepers() {},
+    profiles: () => offersProfiles(data.profiles),
+    openProfiles() {},
+  })({ getBoundingClientRect: () => ({ right: 0, bottom: 0 }) } as unknown as HTMLElement, false)
+  return items
+}
+
+const RESTING: Schedule = { armed: null, held: null, cancel() {}, mode() {}, disarm() {} }
+
+/** The side panels, as panel.test.tsx draws them, asked open or not. */
+const sidePanels = (data: BoardPayload, open = false): Node[] =>
+  renderInBoard(
+    <PanelProvider viewport={() => ({ w: 1600, h: 1000 })}>
+      <SidePanels
+        categories={{ open, focus: null, onClose() {}, onOpen() {} }}
+        schedule={{ open, focus: null, onClose() {}, schedule: RESTING }}
+        profiles={{ open, onClose() {} }}
+      />
+    </PanelProvider>,
+    boardContext({ data, now: NOW }),
+  )
+const sheetIds = (nodes: Node[]): (string | undefined)[] =>
+  findAll(nodes, el => el.tag === 'aside').map(el => el.attrs.get('id'))
+
 test('one profile: the board, its lanes and cards are phase 1’s', () => {
   expect(board(PHASE1)).toContain('Alpha')
   expect(board(ONE)).toBe(board(PHASE1))
@@ -171,6 +221,29 @@ test('one profile shown: the categories panel is phase 1’s, a lane’s usual p
     expect(categoriesPanel(usual(ONE))).toBe(categoriesPanel(PHASE1))
     expect(categoriesPanel(usual(FOLDERS))).toBe(categoriesPanel(PHASE1))
   }
+})
+
+test('one profile folder: the Settings menu’s entries are phase 1’s, and the side panels have no Profiles panel', () => {
+  const phase1 = JSON.stringify(settingsItems(PHASE1))
+  expect(phase1).toContain('"id":"sleepers"')
+  expect(JSON.stringify(settingsItems(ONE))).toBe(phase1)
+  expect(JSON.stringify(settingsItems({ ...ONE, profiles: [] }))).toBe(phase1)
+  for (const open of [false, true]) {
+    expect(sheetIds(sidePanels(PHASE1, open))).toEqual(['sheet', 'cats-sheet', 'sched-sheet'])
+    expect(canonical(sidePanels(ONE, open))).toBe(canonical(sidePanels(PHASE1, open)))
+  }
+  expect(canonical(sidePanels(ONE))).not.toContain('profiles-sheet')
+  // A second folder found, even hidden: Profiles… and its panel, the one difference allowed.
+  expect(JSON.stringify(settingsItems(FOLDERS))).not.toBe(phase1)
+  expect(settingsItems(FOLDERS).map(i => ('id' in i ? i.id : '—'))).toEqual([
+    'theme',
+    'lang',
+    'panel',
+    'profiles',
+    '—',
+    'sleepers',
+  ])
+  expect(sheetIds(sidePanels(FOLDERS))).toEqual(['sheet', 'cats-sheet', 'sched-sheet', 'profiles-sheet'])
 })
 
 test('several folders, one shown: the board and toolbar are still phase 1’s', () => {

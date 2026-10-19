@@ -1,7 +1,7 @@
 // Settings (the gear in the toolbar; the old page's app.js #settings): the menu out of the button,
 // and what its items do — light or dark (models/theme.ts), the board's language for every board,
-// the panels' place and default size (components/panel/place.ts), and whether sleeping sessions
-// show. The items are models/settings-menu.ts.
+// the panels' place and default size (components/panel/place.ts), whether sleeping sessions show,
+// and with more than one profile folder the Profiles panel. The items are models/settings-menu.ts.
 import { useEffect, useState } from 'react'
 import { LANGUAGES, translator } from '../../../src/core/i18n/translator.ts'
 import type { Translator } from '../../../src/core/types.ts'
@@ -9,6 +9,7 @@ import { api, errorText } from '../api/client.ts'
 import type { MenuEngine, MenuSource } from '../components/menu/menu-engine.ts'
 import { useLanguage } from '../i18n/I18nProvider.tsx'
 import { type Dock, isDock } from '../models/panel-layout.ts'
+import { offersProfiles } from '../models/profiles.ts'
 import { settingPicked, settingsMenu } from '../models/settings-menu.ts'
 import { reducedMotion } from '../models/spring.ts'
 import { setTheme, THEME_KEY, themeNow } from '../models/theme.ts'
@@ -34,6 +35,9 @@ export interface SettingsDeps {
   placePanels(dock: string): void
   resetPanelSize(): void
   toggleSleepers(): void
+  /** More than one profile folder is found (the payload's profiles): Profiles… is offered. */
+  profiles(): boolean
+  openProfiles(): void
 }
 
 /** The menu out of the gear (`keyboard`: opened from the keyboard, the first item lit). */
@@ -48,6 +52,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       canEdit: deps.canEdit(),
       dock: deps.dock(),
       sleepers: deps.sleepers(),
+      profiles: deps.profiles(),
     })
     const source: MenuSource = keyboard ? 'keyboard' : deps.coarse() ? 'touch' : 'mouse'
     deps.menu.open(items, {
@@ -63,6 +68,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'dock') deps.placePanels(pick.value)
         else if (pick?.kind === 'reset') deps.resetPanelSize()
         else if (pick?.kind === 'sleepers') deps.toggleSleepers()
+        else if (pick?.kind === 'profiles') deps.openProfiles()
       },
     })
   }
@@ -126,12 +132,15 @@ export function settingsGear(
   }
 }
 
-/** Settings for the page: `menu` is the board's one menu (hooks/useContextMenus.ts). */
-export function useSettingsMenu(menu: MenuEngine): SettingsMenu {
+/**
+ * Settings for the page: `menu` is the board's one menu (hooks/useContextMenus.ts);
+ * `openProfiles` opens the Profiles panel.
+ */
+export function useSettingsMenu(menu: MenuEngine, openProfiles: () => void): SettingsMenu {
   const { t, choose } = useLanguage()
   const board = useBoardContext()
   const place = usePanelPlace()
-  const latest = useLatest({ t, choose, board })
+  const latest = useLatest({ t, choose, board, openProfiles })
   const [expanded, setExpanded] = useState(false)
   const [gear] = useState(() => {
     const open = settingsMenuFrom({
@@ -166,6 +175,8 @@ export function useSettingsMenu(menu: MenuEngine): SettingsMenu {
       placePanels: dock => isDock(dock) && place.placePanels(dock),
       resetPanelSize: () => place.resetPanelSize(),
       toggleSleepers: () => latest.current.board.dispatch({ type: 'toggleSleepers' }),
+      profiles: () => offersProfiles(latest.current.board.data?.profiles),
+      openProfiles: () => latest.current.openProfiles(),
     })
     return settingsGear(menu, open, setExpanded)
   })

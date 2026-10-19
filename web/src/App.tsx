@@ -1,7 +1,7 @@
 // The board page: the toolbar over the board, the side panels, the usage popover, the quick look
 // and the toasts, the keys and the Back button; the chat's files and links, the question forms, the
 // context menus, renaming in place, the "new session" window and the terminal window; the
-// session's helpers in their window.
+// session's helpers in their window; the Claude profiles' panel from Settings.
 import { useEffect, useRef, useState } from 'react'
 import { Board } from './components/Board.tsx'
 import { FileChips } from './components/files/FileChip.tsx'
@@ -55,6 +55,8 @@ export function App() {
     setSchedule(true)
     setSession(key ? { key } : null)
   }
+  // Settings → Profiles…, with more than one profile folder found.
+  const [profiles, setProfiles] = useState(false)
   // The reminders' buttons, shared by the schedule panel and the sheet.
   const reminders = useSchedule()
   // The launch window, and the cards of sessions on their way; without fresh data the board says why.
@@ -86,8 +88,8 @@ export function App() {
     launch: launch.menus,
     terminal: terminal.openTerminal,
   })
-  // Settings (the gear): light or dark, the language, where the panels sit, sleeping sessions.
-  const settings = useSettingsMenu(menus.menu)
+  // Settings (the gear): light or dark, the language, where the panels sit, sleeping sessions, the profiles.
+  const settings = useSettingsMenu(menus.menu, () => setProfiles(true))
   useBoardKeys({
     openNextAttention,
     newSession,
@@ -141,6 +143,7 @@ export function App() {
       <SidePanels
         categories={{ open: categories, focus: lane, onClose: () => setCategories(false), onOpen: openCategories }}
         schedule={{ open: schedule, focus: session, onClose: () => setSchedule(false), schedule: reminders }}
+        profiles={{ open: profiles, onClose: () => setProfiles(false) }}
         sheet={{
           onNewSession: newSession,
           schedule: {
