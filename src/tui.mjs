@@ -594,6 +594,10 @@ process.on('message', m => m === 'restart' && quit(75))
 process.on('uncaughtException', err => {
   cleanup()
   console.error(err)
+  // run.mjs starts the board again, and the screen goes with it: the log keeps the error.
+  try {
+    writeFileSync(join(STATE_DIR, 'web.log'), `${new Date().toISOString()} crash: ${err?.stack || err}\n`, { flag: 'a' })
+  } catch {}
   process.exit(1)
 })
 
