@@ -191,7 +191,7 @@ function ArchiveRow({ record, ...props }: ArchiveBodyProps & { record: PublicArc
           <span className="arch-name" style={{ '--lane': row.color }}>
             {row.name}
           </span>
-          <ProfileTag item={record} />
+          <ProfileTag item={record} picked="all" />
           <span className="arch-when" title={row.whenTitle}>
             {row.when}
           </span>

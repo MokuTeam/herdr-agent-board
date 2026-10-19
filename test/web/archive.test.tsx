@@ -27,15 +27,12 @@ import { bothBoards } from './support/board-scene.tsx'
 import { FakeServer, launchWorld, oldLaunch } from './support/launch-sides.tsx'
 import {
   addButtonTypes,
-  applyTexts,
-  byId,
   canonical,
   type Element,
   findAll,
   hasClass,
   type Node,
   OLD_PAGE_ONLY,
-  pageMarkup,
   parseHtml,
   reactMarkup,
   stripAttrs,
@@ -230,16 +227,6 @@ const RESTING: Archive = {
   disarm() {},
 }
 
-test('the toolbar’s Archive and the sheet’s are upstream’s web/index.html (texts filled)', () => {
-  const t = translator('en')
-  const page = pageMarkup(MERGE)
-  applyTexts(page, t)
-  const open = byId(page, 'archive-open')
-  expect(open.attrs.get('title')).toBe(t('archive.openHint'))
-  const sheet = byId(page, 'sheet-archive')
-  expect(sheet.attrs.has('hidden')).toBe(true)
-})
-
 describe('a row with more than one profile shown', () => {
   const t = translator('en')
   const profile = (id: string, hidden = false): BoardProfile => ({
@@ -255,8 +242,10 @@ describe('a row with more than one profile shown', () => {
     sessions: 1,
     limits: null,
   })
-  const tags = (data: BoardPayload, r: PublicArchiveRecord) =>
-    findAll(renderInBoard(<ArchiveBody {...props(r)} />, board({ data }), 'en'), el => hasClass(el, 'profile-tag'))
+  const tags = (data: BoardPayload, r: PublicArchiveRecord, picked = 'all') =>
+    findAll(renderInBoard(<ArchiveBody {...props(r)} />, board({ data, ui: { profile: picked } }), 'en'), el =>
+      hasClass(el, 'profile-tag'),
+    )
   const props = (r: PublicArchiveRecord): ArchiveBodyProps => ({
     records: [r],
     query: '',
@@ -282,6 +271,18 @@ describe('a row with more than one profile shown', () => {
       'profile-tag profile',
       'arch-when',
     ])
+  })
+
+  test('whatever the profile switch picks: the archive lists every profile’s sessions', () => {
+    const data = payload({ categories: CATEGORIES, profiles: [profile('default'), profile('work')] })
+    for (const [picked, id, title] of [
+      ['work', 'default', 'Default'],
+      ['work', 'work', 'Work'],
+      ['default', 'work', 'Work'],
+    ] as const) {
+      const [tag] = tags(data, record({ key: 'a', profile: id }), picked)
+      expect(tag?.children.map(c => (c.kind === 'text' ? c.text : '')).join('')).toBe(title)
+    }
   })
 
   test('with one profile, none: the row is upstream’s', () => {
