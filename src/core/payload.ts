@@ -1,5 +1,6 @@
 // The board as GET /api/board answers and the event stream pushes it (src/server/board-state.ts
 // builds it; the web board reads it). One type for both sides, so they cannot drift apart.
+import type { BoardArchive } from './archive.ts'
 import type { LimitWindow } from './limits.ts'
 import type { ScheduleEntry } from './schedule-rules.ts'
 import type { SetupSummary } from './setup.ts'
@@ -59,6 +60,8 @@ export interface BoardProfile {
 }
 
 export interface BoardPayload {
+  /** What became of the latest sessions put in the archive (core/archive.ts); a board before the archive sent none. */
+  archive?: BoardArchive
   /** The page's version: an open page reloads when it changes. */
   version: string
   lang: Lang

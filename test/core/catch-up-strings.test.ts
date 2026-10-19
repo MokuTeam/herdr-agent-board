@@ -1,6 +1,6 @@
 // The texts upstream's later merges added, changed or dropped are ours word for word, in English
-// and Russian: each merge's web/i18n.js (and the setup check's web/i18n-setup.js) against its
-// first parent, read from git.
+// and Russian: each merge's web/i18n.js (and the setup check's web/i18n-setup.js, the archive's
+// web/i18n-archive.js) against its first parent, read from git.
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { STRINGS } from '../../src/core/i18n/strings.ts'
@@ -15,6 +15,7 @@ const MERGES = [
   { merge: '2d5c703', pr: '#50 the herdr-agents skill' },
   { merge: '6a7fcb6', pr: '#47 the MokuPilot launcher started, readiness not confirmed' },
   { merge: '513e441', pr: '#51 agents restart themselves: board restart, and Restart on the web board' },
+  { merge: '2b9e6b7', pr: '#56 archive: take sessions off the board, and bring them back' },
 ]
 
 type Dictionaries = Record<string, Record<string, unknown>>
@@ -43,6 +44,7 @@ function upstream(file: string, ref: string, opening: string): Dictionaries {
 const FILES = [
   { file: 'web/i18n.js', opening: 'const STRINGS = {' },
   { file: 'web/i18n-setup.js', opening: 'export const SETUP_STRINGS = {' },
+  { file: 'web/i18n-archive.js', opening: 'export const ARCHIVE_STRINGS = {' },
 ]
 
 type Change = { lang: 'en' | 'ru'; key: string; value: unknown }
