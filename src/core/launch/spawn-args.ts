@@ -165,16 +165,20 @@ export function typingProblem(argv: readonly string[], win: boolean): TypingProb
   return null
 }
 
-// A shell assignment (NAME=value), and `env` as a program (a path to it, or env.exe, too).
-const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
+// A shell assignment (NAME=value, or NAME+=value, which bash also takes before a command), one of
+// CLAUDE_CONFIG_DIR, and `env` as a program (a path to it, or env.exe, too).
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/
+const CONFIG_DIR_ASSIGNMENT = /^CLAUDE_CONFIG_DIR\+?=/i
 const ENV_PROGRAM = /^(?:.*[\\/])?env(?:\.exe)?$/i
 
 /**
  * The first word of a profile's start command that sets an environment variable, which in bash
  * would override the folder the board sets for the profile (`--env CLAUDE_CONFIG_DIR=…`): a program
- * that is an assignment (`CLAUDE_CONFIG_DIR=~/.claude-work claude`), an assignment after the
- * program `env` (`env CLAUDE_CONFIG_DIR=/x claude`), or any word that sets CLAUDE_CONFIG_DIR. Null
- * when there is none. Not a rule of `launch.claude`.
+ * that is an assignment (`CLAUDE_CONFIG_DIR=~/.claude-work claude`, `FOO+=1 claude`), or any word
+ * that sets CLAUDE_CONFIG_DIR. The program `env` is refused whatever follows it (its `-u`, `-i`
+ * and `-S` drop or set the folder too): the word is its first assignment (`env
+ * CLAUDE_CONFIG_DIR=/x claude`), else the program itself. Null when there is none. Not a rule of
+ * `launch.claude`.
  */
 export function envSetting(argv: readonly string[]): string | null {
   const program = String(argv[0] ?? '')
@@ -182,9 +186,9 @@ export function envSetting(argv: readonly string[]): string | null {
   const env = ENV_PROGRAM.test(program)
   for (const arg of argv.slice(1)) {
     const word = String(arg)
-    if ((env && ASSIGNMENT.test(word)) || /^CLAUDE_CONFIG_DIR=/i.test(word)) return word
+    if ((env && ASSIGNMENT.test(word)) || CONFIG_DIR_ASSIGNMENT.test(word)) return word
   }
-  return null
+  return env ? program : null
 }
 
 /**

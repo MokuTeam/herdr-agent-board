@@ -250,6 +250,15 @@ describe('a profile’s start command', () => {
       ['/usr/bin/env FOO=1 claude', 'FOO=1'],
       ['cld-work --settings CLAUDE_CONFIG_DIR=/x', 'CLAUDE_CONFIG_DIR=/x'],
       [['cld-work', 'claude_config_dir=C:\\x'], 'claude_config_dir=C:\\x'],
+      // An append assignment is one too (bash takes NAME+=value before a command).
+      ['CLAUDE_CONFIG_DIR+=/x claude', 'CLAUDE_CONFIG_DIR+=/x'],
+      ['FOO+=1 claude', 'FOO+=1'],
+      ['cld-work CLAUDE_CONFIG_DIR+=/x', 'CLAUDE_CONFIG_DIR+=/x'],
+      // env is refused whatever follows: -u and -i drop the board's folder, -S sets it.
+      ['env claude', 'env'],
+      ['env -u CLAUDE_CONFIG_DIR claude', 'env'],
+      ['/usr/bin/env -i claude', '/usr/bin/env'],
+      [['ENV.EXE', '-S', 'claude'], 'ENV.EXE'],
     ]
     for (const [command, word] of cases) {
       for (const win of [false, true]) expect(() => profileCommand(command, win)).toThrow(refused(word))
@@ -265,6 +274,7 @@ describe('a profile’s start command', () => {
     expect(profileCommand('environ FOO=1', false)).toEqual(['environ', 'FOO=1'])
     expect(envSetting(['cld-work', '--verbose'])).toBeNull()
     expect(envSetting(['C:\\tools\\env.exe', 'X=1'])).toBe('X=1')
+    expect(envSetting(['C:\\tools\\env.exe', '--unset=CLAUDE_CONFIG_DIR', 'claude'])).toBe('C:\\tools\\env.exe')
     // launch.claude keeps its rules: shellLine types an assignment as it did.
     expect(shellLine(['claude', 'CLAUDE_CONFIG_DIR=/x'], false)).toBe('claude CLAUDE_CONFIG_DIR=/x')
     expect(claudeCommand(['FOO=1', 'claude'])).toEqual(['FOO=1', 'claude'])
