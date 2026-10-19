@@ -47,12 +47,13 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
    action again, or from Install in the Profiles panel.
 
    A session brought back from the archive runs in its own profile again, hidden or not, never in
-   another: the one its card reports, whose folder holds its conversation (or, on a card from
-   before profiles, the one profile whose folder holds it). It stays in the archive, saying why,
-   when the board cannot be sure: that profile is no longer listed, the session ran in another
-   profile than its start asked for, its conversation is in another profile's folder, or more
-   than one profile holds it. A MokuPilot call is still refused outside the board's own profile
-   ([Web board](#web-board)). With `~/.claude` alone nothing changes.
+   another: the one its card reports (or, on a card from before profiles, the only profile
+   shown), its conversation looked for in that profile's folder only. It stays in the archive,
+   saying why, when the board cannot be sure: that profile is no longer listed, the card does not
+   say its profile while more than one is shown, the session ran in another profile than its
+   start asked for, or its conversation is in another profile's folder. A MokuPilot call is still
+   refused outside the board's own profile ([Web board](#web-board)). With `~/.claude` alone
+   nothing changes.
 2. **A key** (recommended), in herdr's `config.toml` (`%APPDATA%\herdr\config.toml` on Windows,
    `~/.config/herdr/config.toml` elsewhere), then `herdr server reload-config`. Without it the
    board opens with `herdr plugin action invoke agent-board.open`.

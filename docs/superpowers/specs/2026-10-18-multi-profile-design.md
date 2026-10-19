@@ -182,6 +182,18 @@ Telegram messages. This phase does not change herdr-wake.
   usage guide tells the owner how to start work sessions so that waking stays safe: from the
   board, or in a pane whose shell has the variable exported.
 
+### The archive's Return (upstream #56, #59)
+
+A session goes to the archive with its profile, and Return resumes it in that profile, hidden or
+not, or not at all. The board takes it as a start from the session's own card (`launchTarget`
+with the archive's record as the parent): a card that does not say its profile gets the only
+shown one. Return refuses, with the reason, when that profile is no longer listed, the card does
+not say its profile while more than one is shown, the session ran in another profile than its
+start asked for, or its transcript is not in that profile's folder. A session whose profile the
+board cannot tell is not archived at all. `spawn-agent --resume` takes the profile the board or
+`--profile` gives, else the one listed profile whose folder holds the transcript; none, or more
+than one, is refused.
+
 ### MokuPilot calls
 
 MokuPilot runs as a single instance and takes its profile from its own environment. A call from
