@@ -10,11 +10,11 @@
 //   node src/install.mjs --no-toast   and without them
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { loadConfig } from './config.mjs'
 import { t } from './lang.mjs'
 import { ROOT } from './paths.mjs'
-import { boardFiles, checkSetup, gatherFacts, herdrConfigFile, patchSettings, readText, report, shimFiles, tomlValue } from './setup.mjs'
+import { boardFiles, checkSetup, gatherFacts, herdrConfigFile, patchSettings, readText, report, shimFiles, skillAction, skillFile, tomlValue } from './setup.mjs'
 
 const args = process.argv.slice(2)
 for (const a of args.filter(a => a !== '--toast' && a !== '--no-toast')) console.log(`ignored ${a}: the options are --toast and --no-toast`)
@@ -49,6 +49,20 @@ for (const [name, body] of Object.entries(shimFiles(ROOT))) {
   writeFileSync(file, body, { mode: 0o755 })
 }
 console.log(`commands: board, spawn-agent in ${binDir} (+ .cmd for PowerShell)`)
+
+// --- the agents' skill (how sessions in herdr work with each other), read by Claude on demand
+const skill = skillFile()
+const skillText = readText(files.skill)
+const skillDo = skillAction(readText(skill), skillText)
+if (skillText === null) console.log(`skill: ${files.skill} is missing from this copy of the board`)
+else if (skillDo === 'foreign') console.log(`skipped ${skill}: a skill of that name that is not ours`)
+else {
+  if (skillDo === 'write') {
+    mkdirSync(dirname(skill), { recursive: true })
+    writeFileSync(skill, skillText)
+  }
+  console.log(`skill: ${skill}`)
+}
 
 // --- hooks, status line, notifications
 if (text !== null) copyFileSync(settingsFile, `${settingsFile}.bak-agent-board`)

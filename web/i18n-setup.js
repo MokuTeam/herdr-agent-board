@@ -62,6 +62,15 @@ export const SETUP_STRINGS = {
     'setup.line.none': 'No status line',
     'setup.line.noneDetail': 'Without it the board shows no usage windows (5h, 7d) and guesses the context fill.',
 
+    'setup.skill.ok': 'Skill {name} for the agents',
+    'setup.skill.okDetail': 'how sessions in herdr start and message others, do things later, run a server and get a dropped MCP server back',
+    'setup.skill.missing': 'No skill {name} for the agents',
+    'setup.skill.stale': 'Skill {name} is an older copy',
+    'setup.skill.without': 'The brief points sessions in herdr to it; without it they guess how to work with other sessions and with herdr.',
+    'setup.skill.foreign': 'Skill {name} is not the board\'s',
+    'setup.skill.foreignDetail': '{file} is someone else\'s skill of that name, so the install leaves it alone.',
+    'setup.skill.foreignFix': 'Rename or move that folder, then run the install again.',
+
     'setup.key.ok': 'herdr key for the board',
     'setup.key.okDetail': '{key} in {file}',
     'setup.key.none': 'No herdr key for the board',
@@ -173,6 +182,15 @@ export const SETUP_STRINGS = {
     'setup.line.stale': 'Строка статуса запускает другую копию доски',
     'setup.line.none': 'Нет строки статуса',
     'setup.line.noneDetail': 'Без неё доска не показывает окна лимитов (5ч, 7д) и угадывает заполнение контекста.',
+
+    'setup.skill.ok': 'Скилл {name} для агентов',
+    'setup.skill.okDetail': 'как сессии в herdr запускают другие и пишут им, делают что-то позже, держат сервер и возвращают отвалившийся MCP',
+    'setup.skill.missing': 'Нет скилла {name} для агентов',
+    'setup.skill.stale': 'Скилл {name} устарел',
+    'setup.skill.without': 'Вводная отсылает к нему сессии в herdr; без него они гадают, как работать с другими сессиями и с herdr.',
+    'setup.skill.foreign': 'Скилл {name} не от доски',
+    'setup.skill.foreignDetail': '{file}: чужой скилл с таким именем, установка его не трогает.',
+    'setup.skill.foreignFix': 'Переименуй или перенеси эту папку, потом снова запусти установку.',
 
     'setup.key.ok': 'Клавиша доски в herdr',
     'setup.key.okDetail': '{key} в {file}',

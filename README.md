@@ -28,6 +28,7 @@ Steps 1 and 2 are what the board needs; the rest adds to it.
    [`spawn-agent`](#spawn-agent), which starts a session in a new herdr tab. It registers the
    Claude Code hooks (SessionStart, UserPromptSubmit) that brief every session about the board,
    and the status line when you have none (usage windows and context fill on the board). It
+   installs the Claude Code skill [`herdr-agents`](#agents) into `~/.claude/skills`. It
    replaces only its own entries in `~/.claude/settings.json`, keeps a copy of the file before
    (`settings.json.bak-agent-board`), leaves a command of someone else's name alone, and ends with
    the check below. `~/.local/bin` must be on PATH. Run it again after the plugin moved or was
@@ -732,6 +733,17 @@ board call-report --session <id> --file <report.md>
 board doctor              what is set up on this computer, and what is missing
 spawn-agent --name <Name> --cwd <folder> [--brief-file <file>]   a new session in a herdr tab
 ```
+
+Agents in herdr also get a skill, [`herdr-agents`](skills/herdr-agents/SKILL.md), which the
+install puts into `~/.claude/skills`. Claude Code keeps only its one-line description in a
+session's context and reads the rest when it is needed: how to start another session, message or
+wake one, do something later (`board remind` rather than CronCreate, which dies when the session
+sleeps), run a server or an interactive login in a pane of its own, and what to do when an MCP
+server dropped. herdr puts the pane's ids into its environment (`HERDR_ENV=1`, `HERDR_PANE_ID`,
+`HERDR_TAB_ID`, `HERDR_WORKSPACE_ID`); when they are there, the board's brief tells the session
+its pane and points it to the skill, and outside herdr it says nothing of it. For herdr's own
+command reference, `herdr --skill`. A skill of that name that is not the board's is left alone,
+and `board doctor` says so.
 
 ### Retry-safe call exports (opt-in)
 
