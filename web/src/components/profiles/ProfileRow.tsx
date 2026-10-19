@@ -36,7 +36,7 @@ export function ProfileRow({ row, disabled, edit }: ProfileRowProps) {
 
   return (
     <div
-      className={classNames('cat-row', 'profile-row', !row.shown && 'hidden-profile')}
+      className={classNames('cat-row', 'prof-row', !row.shown && 'hidden-profile')}
       data-id={row.id}
       style={{ '--lane': row.color }}
     >

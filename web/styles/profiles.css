@@ -86,8 +86,8 @@
 /* The Profiles panel (Settings → Profiles…, with more than one profile folder): its rows are drawn
    as the categories panel's lanes (.cat-row, the dot in --lane), with no handle, so the line of
    the folder starts under the name. */
-.profile-row .cat-sub { padding-left: 36px; }
-.profile-row.hidden-profile .cat-title { color: var(--label-2); }
+.prof-row .cat-sub { padding-left: 36px; }
+.prof-row.hidden-profile .cat-title { color: var(--label-2); }
 .profile-dir {
   min-width: 0;
   max-width: 100%;

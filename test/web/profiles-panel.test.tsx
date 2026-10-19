@@ -85,9 +85,9 @@ function panelOf(data: BoardPayload, fields: Partial<Omit<Board, 'ui'>> = {}, la
   return byId(nodes, 'profiles-sheet')
 }
 
-const rowsIn = (panel: Element): Element[] => findAll([panel], el => hasClass(el, 'profile-row'))
+const rowsIn = (panel: Element): Element[] => findAll([panel], el => hasClass(el, 'prof-row'))
 const rowIn = (panel: Element, id: string): Element =>
-  find([panel], el => hasClass(el, 'profile-row') && el.attrs.get('data-id') === id)
+  find([panel], el => hasClass(el, 'prof-row') && el.attrs.get('data-id') === id)
 
 /** A row as drawn: its id, color, name, folder, sessions now, the pressed one of Shown and Hidden, and what it says of its folder. */
 function rowText(row: Element) {
