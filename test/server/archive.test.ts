@@ -11,7 +11,10 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { tidyList } from '../../src/core/archive.ts'
+import { translator } from '../../src/core/i18n/translator.ts'
 import type { Item } from '../../src/core/types.ts'
+import { archiveApi, isBoardPayload } from '../../web/src/api/client.ts'
+import { archiveNotes } from '../../web/src/models/archive-view.ts'
 import { unusedPort } from '../support/board-server.ts'
 import { type Child, type Sandbox, sandbox, until } from '../support/sandbox.ts'
 
@@ -913,3 +916,69 @@ test('board archive reads the target’s registry in its own profile, not in the
   )
   assert.equal(record(box), null)
 }, 30_000)
+
+test('the page’s own calls (web/src/api/client.ts) against these routes: archive, its list, the board’s log, Return, Remove', async () => {
+  const box = await sandbox()
+  const dir = project(box)
+  herdrWith(box, dir)
+  schedule(box)
+  boardConfig(box, { launch: { claude: ['claude-tg', '--dangerously-skip-permissions'] } })
+  const b = await board(box, { archiveUndoSec: 1.5 })
+  // The page asks its own board by path: here, this one.
+  const realFetch = globalThis.fetch
+  const toBoard = (input: string | URL | Request, init?: RequestInit) =>
+    realFetch(typeof input === 'string' && input.startsWith('/') ? `${b.url}${input}` : input, init)
+  globalThis.fetch = Object.assign(toBoard, { preconnect: realFetch.preconnect })
+  try {
+    const t = translator('en')
+    // Archive, as a card's menu or a drop asks it; then the session gets to work in the undo time.
+    const first = await archiveApi.post('archive', [S], t)
+    assert.deepEqual(
+      [first.ok, first.failed, first.done.map(d => [d.key, d.name, d.held, typeof d.closeAt])],
+      [true, [], [[S, 'Probe card', 1, 'number']]],
+    )
+    herdrWith(box, dir, { status: 'working' })
+    await until(() => archiveLog(box).some(e => e.result === 'kept'), 10_000)
+    await b.refresh()
+    // The board as the page takes it, and its log as the page's toast reads it.
+    const kept = await b.payload()
+    assert.ok(isBoardPayload(kept))
+    const notes = archiveNotes(kept.archive?.log ?? [], new Set(), key => (key === S ? 'Probe card' : undefined), t)
+    assert.deepEqual(notes.toasts, ['“Probe card” stayed on the board: it is working; it can go once its turn is over'])
+
+    // Free again: archived, its tab closed once the time is up; the list as the panel reads it.
+    herdrWith(box, dir)
+    await b.refresh()
+    assert.equal((await archiveApi.post('archive', [S], t)).ok, true)
+    await until(() => record(box)?.state === 'archived', 10_000)
+    const listing = await archiveApi.list()
+    assert.deepEqual(
+      listing.records.map(r => [r.key, r.name, r.category, r.state, r.held, r.returning]),
+      [[S, 'Probe card', 'personal', 'archived', 1, false]],
+    )
+    assert.equal(listing.undoMs, 1500)
+
+    // Return from the list: resumed in a new tab; the board's launch says it is one coming back.
+    resumable(box, dir)
+    await b.refresh()
+    const back = await archiveApi.post('return', [S], t)
+    assert.deepEqual([back.ok, back.done.map(d => [d.key, d.name, d.resume])], [true, [[S, 'Probe card', true]]])
+    await until(() => calls(box).some(c => c.startsWith('pane run wP:p9')), 15_000)
+    const returning = await b.payload()
+    assert.ok(isBoardPayload(returning))
+    assert.deepEqual(
+      returning.launches.map(l => l.resume),
+      [S],
+    )
+    assert.equal((await archiveApi.list()).records[0]?.returning, true)
+
+    // Remove of one not in the archive: refused, with the board's own words.
+    const gone = await archiveApi.post('remove', [OTHER], t)
+    assert.deepEqual(
+      [gone.ok, gone.done, gone.failed.map(f => f.key), gone.error],
+      [false, [], [OTHER], 'It is not in the archive any more'],
+    )
+  } finally {
+    globalThis.fetch = realFetch
+  }
+}, 60_000)
