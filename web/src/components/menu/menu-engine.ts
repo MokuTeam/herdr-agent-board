@@ -40,6 +40,8 @@ export interface MenuOpen {
   /** Client coordinates it opens at. */
   x: number
   y: number
+  /** Above x, y when it fits there (a control low in its window). */
+  up?: boolean
   /** Keyboard lights the first item; touch has bigger rows. */
   source?: MenuSource
   /** Where the focus goes back to; what has it now by default. */
@@ -72,7 +74,7 @@ export interface MenuView {
   layers: LayerView[]
 }
 
-type Placing = { at: Point } | { parent: Layer; index: number }
+type Placing = { at: Point; up: boolean } | { parent: Layer; index: number }
 
 interface Layer {
   readonly id: string
@@ -151,7 +153,7 @@ export class MenuEngine {
 
   /** Open `items` at x, y; the one open before closes. */
   open(items: readonly MenuEntry[], options: MenuOpen): void {
-    const { x, y, source = 'mouse', origin = null, onPick = () => {}, label = '' } = options
+    const { x, y, up = false, source = 'mouse', origin = null, onPick = () => {}, label = '' } = options
     if (!items.length) return
     this.clear(false)
     this.pick = onPick
@@ -160,7 +162,7 @@ export class MenuEngine {
     this.openedAt = this.now()
     this.downInside = false
     this.typed = ''
-    const layer = this.build(items, 0, { at: { x, y } })
+    const layer = this.build(items, 0, { at: { x, y }, up })
     layer.touch = source === 'touch'
     layer.label = label
     this.layers = [layer]
@@ -265,7 +267,7 @@ export class MenuEngine {
     const r = el.getBoundingClientRect()
     const size = { width: r.width, height: r.height }
     if ('at' in placing) {
-      const p = placeMenu(placing.at, size, this.viewport())
+      const p = placeMenu(placing.at, size, this.viewport(), { up: placing.up })
       this.position(el, p)
       this.grow(layer, `${p.originX} ${p.originY}`)
     } else {

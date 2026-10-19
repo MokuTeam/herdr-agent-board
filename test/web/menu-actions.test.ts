@@ -1,7 +1,8 @@
 // What the menus' items do on the React board (hooks/useContextMenus.ts boardActions and the
-// sheet's "More actions"), against the old page's app.js: its copyText, openPath and focusLaunch
-// (at the parity baseline) through the same fetch and clipboard, and its #sheet-more handler on
-// the same buttons; the rest asks the React board's ported actions for what the old `do` did.
+// sheet's More), against the old page's app.js: its copyText, openPath and focusLaunch (at the
+// parity baseline) through the same fetch and clipboard, and its #sheet-more handler (at the
+// session panel's row) on the same buttons, the same of them hidden in the row; the rest asks the
+// React board's ported actions for what the old `do` did.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { Item } from '../../src/core/types.ts'
@@ -34,9 +35,18 @@ const PAGE = `<div id="page"><article class="card" data-key="s1" id="card"><span
 <button id="sheet-history" disabled> History </button>
 <button id="sheet-new" disabled> New here </button></div></div>`
 
+/** The buttons the sheet's row shows (the stylesheet's say): More lists the others. */
+const WIDE_ROW = ['sheet-focus', 'sheet-term', 'sheet-changes', 'sheet-history', 'sheet-more']
+const NARROW_ROW = ['sheet-focus', 'sheet-more']
+let rowShows = new Set(WIDE_ROW)
+
 let world: FakeWorld
 beforeEach(() => {
-  world = new FakeWorld({ viewport: { w: 1000, h: 700 } })
+  rowShows = new Set(WIDE_ROW)
+  world = new FakeWorld({
+    viewport: { w: 1000, h: 700 },
+    computed: el => ({ display: rowShows.has(el.id) ? 'inline-flex' : 'none' }),
+  })
   world.install()
   for (const node of parseHtml(PAGE)) if (node.kind === 'element') world.mount(node)
 })
@@ -280,23 +290,25 @@ describe('as the old page: copying, opening with the system, going to a starting
   })
 })
 
-// ---------------------------------------------------------------- "More actions"
+// ---------------------------------------------------------------- More
+
+/** Upstream's merge of the session panel's row: More lists what the row hides, in groups. */
+const MORE_MERGE = '3105958'
 
 interface MoreOpened {
   items: MenuEntry[]
   options: Record<string, unknown> & { onPick?: ((id: string, item: MenuItem) => void) | undefined }
 }
 
-/** The handler as it was at the parity baseline, or at `ref` (the terminal's merge adds its button). */
+/** The handler as it was at MORE_MERGE, with its groups. */
 function oldMore(
   canMutate: boolean,
   coarse: boolean,
   log: string[],
-  ref?: string,
 ): { click(button: FakeElement, detail: number): void; opened: () => MoreOpened | null } {
   let opened: MoreOpened | null = null
   let handler: ((e: unknown) => void) | null = null
-  const statement = [{ statement: "$('#sheet-more').addEventListener('click'" }]
+  const wanted = ['MORE', 'HERDR_MORE', { statement: "$('#sheet-more').addEventListener('click'" }]
   const deps = {
     $: () => ({
       addEventListener: (_type: string, fn: (e: unknown) => void) => {
@@ -321,8 +333,7 @@ function oldMore(
     newSession: (ctx: { item?: Item }, el: FakeElement) => void log.push(`newSession ${ctx.item?.key} #${el.id}`),
     openTerminal: (key: string, el: FakeElement) => void log.push(`terminal ${key} #${el.id}`),
   }
-  if (ref) oldCode('web/app.js', statement, deps, ref)
-  else oldCode('web/app.js', statement, deps)
+  oldCode('web/app.js', wanted, deps, MORE_MERGE)
   return {
     click: (button, detail) => handler?.({ currentTarget: button, detail }),
     opened: () => opened,
@@ -369,27 +380,47 @@ const shown = (o: MoreOpened | null) =>
     origin: nameOf(o.options.origin),
   }
 
-describe('“More actions” on a phone', () => {
-  test('the sheet’s buttons on show, gray with why; out of the button, by keys, finger or mouse', async () => {
-    for (const canMutate of [true, false])
-      for (const coarse of [true, false])
-        for (const detail of [0, 1]) {
-          const [a, b] = [oldMore(canMutate, coarse, []), newMore(canMutate, coarse, [])]
-          a.click(page('sheet-more'), detail)
-          b.click(page('sheet-more'), detail)
-          expect(shown(b.opened())).toEqual(shown(a.opened()))
-        }
-    const o = newMore(true, false, [])
-    o.click(page('sheet-more'), 1)
-    expect(o.opened()?.items.map(it => (it.separator ? '—' : `${it.id}:${it.label}:${it.reason}`))).toEqual([
+/** The menu opened, an item a line: `id:label:reason`, a separator `—`. */
+const lines = (o: MoreOpened | null) => o?.items.map(it => (it.separator ? '—' : `${it.id}:${it.label}:${it.reason}`))
+
+describe('More at the end of the session panel’s row', () => {
+  test('the buttons the row hides, in groups, gray with why; upward out of the button, by keys, finger or mouse', async () => {
+    const all = [...WIDE_ROW, 'sheet-wake', 'sheet-sleep', 'sheet-new']
+    for (const row of [WIDE_ROW, NARROW_ROW, all]) {
+      rowShows = new Set(row)
+      for (const canMutate of [true, false])
+        for (const coarse of [true, false])
+          for (const detail of [0, 1]) {
+            const [a, b] = [oldMore(canMutate, coarse, []), newMore(canMutate, coarse, [])]
+            a.click(page('sheet-more'), detail)
+            b.click(page('sheet-more'), detail)
+            expect(shown(b.opened())).toEqual(shown(a.opened()))
+          }
+    }
+    rowShows = new Set(WIDE_ROW)
+    const wide = newMore(true, false, [])
+    wide.click(page('sheet-more'), 1)
+    expect(lines(wide.opened())).toEqual([
+      `sheet-new:New here:${t('mobile.readOnly')}`,
+      '—',
       'sheet-sleep:Sleep:It works; it can sleep after this turn',
+    ])
+    expect(wide.opened()?.options).toMatchObject({ y: page('sheet-more').getBoundingClientRect().top - 4, up: true })
+    rowShows = new Set(NARROW_ROW)
+    const narrow = newMore(true, false, [])
+    narrow.click(page('sheet-more'), 1)
+    expect(lines(narrow.opened())).toEqual([
       'sheet-changes:Changes:',
       `sheet-history:History:${t('mobile.readOnly')}`,
+      '—',
       `sheet-new:New here:${t('mobile.readOnly')}`,
+      '—',
+      'sheet-sleep:Sleep:It works; it can sleep after this turn',
     ])
   })
 
   test('a pick: the quick looks out of the button, a new session here, a button’s own click; none once it went gray', async () => {
+    rowShows = new Set(NARROW_ROW)
     const clicked: string[] = []
     page('sheet-sleep').addEventListener('click', () => clicked.push('sleep'))
     for (const id of ['sheet-history', 'sheet-new', 'sheet-sleep']) {
@@ -421,7 +452,8 @@ describe('“More actions” on a phone', () => {
     expect(clicked).toEqual(['sleep', 'sleep'])
   })
 
-  test('the Terminal button first, as upstream’s at the terminal’s merge; picked, it opens out of “More actions”', async () => {
+  test('the Terminal first when the row hides it; picked, it opens out of More', async () => {
+    rowShows = new Set(NARROW_ROW)
     const term = world.document.createElement('button')
     term.id = 'sheet-term'
     term.title = t('term.hint')
@@ -431,7 +463,7 @@ describe('“More actions” on a phone', () => {
     term.addEventListener('click', () => clicked.push('terminal'))
     for (const canMutate of [true, false]) {
       const [oldLog, newLog]: [string[], string[]] = [[], []]
-      const [a, b] = [oldMore(canMutate, false, oldLog, '1a1b270'), newMore(canMutate, false, newLog)]
+      const [a, b] = [oldMore(canMutate, false, oldLog), newMore(canMutate, false, newLog)]
       a.click(page('sheet-more'), 1)
       b.click(page('sheet-more'), 1)
       expect(shown(b.opened())).toEqual(shown(a.opened()))
@@ -442,15 +474,19 @@ describe('“More actions” on a phone', () => {
       expect(newLog).toEqual(oldLog)
       expect(oldLog).toEqual(['terminal s1 #sheet-more'])
     }
-    // Hidden (no terminal on this board), it is not in the menu.
-    term.hidden = true
-    const b = newMore(true, false, [])
-    b.click(page('sheet-more'), 1)
-    expect(b.opened()?.items.some(it => !it.separator && it.id === 'sheet-term')).toBe(false)
+    // In the row, or hidden (no terminal on this board), it is not in the menu.
+    for (const inRow of [true, false]) {
+      rowShows = new Set(inRow ? WIDE_ROW : NARROW_ROW)
+      term.hidden = !inRow
+      const b = newMore(true, false, [])
+      b.click(page('sheet-more'), 1)
+      expect(b.opened()?.items.some(it => !it.separator && it.id === 'sheet-term')).toBe(false)
+    }
     expect(clicked).toEqual([])
   })
 
-  test('“Restart” after Put to sleep, as upstream’s at the restart’s merge: without fresh data it waits for herdr, else its own why; picked it is the button’s own click', async () => {
+  test('“Restart” with the session’s own life: without fresh data it waits for herdr, else its own why; picked it is the button’s own click', async () => {
+    rowShows = new Set(NARROW_ROW)
     const restart = world.document.createElement('button')
     restart.id = 'sheet-restart'
     restart.textContent = ` ${t('sheet.restart')} `
@@ -462,7 +498,7 @@ describe('“More actions” on a phone', () => {
         restart.disabled = disabled
         restart.title = disabled ? `${t('sheet.restartPending')}. ${t('restart.title.wait')}` : t('sheet.restartHint')
         const [oldLog, newLog]: [string[], string[]] = [[], []]
-        const [a, b] = [oldMore(canMutate, false, oldLog, '513e441'), newMore(canMutate, false, newLog)]
+        const [a, b] = [oldMore(canMutate, false, oldLog), newMore(canMutate, false, newLog)]
         a.click(page('sheet-more'), 1)
         b.click(page('sheet-more'), 1)
         expect(shown(b.opened())).toEqual(shown(a.opened()))
@@ -531,7 +567,8 @@ describe('“More actions” on a phone', () => {
       }
   })
 
-  test('“Call in MokuPilot” after the Terminal, as upstream’s at MokuPilot’s merge; gray without the board, picked it is the button’s own click', async () => {
+  test('“Call in MokuPilot” with a new session here, after the tools; gray without the board, picked it is the button’s own click', async () => {
+    rowShows = new Set(NARROW_ROW)
     const term = world.document.createElement('button')
     term.id = 'sheet-term'
     term.textContent = ` ${t('term.open')} `
@@ -546,11 +583,21 @@ describe('“More actions” on a phone', () => {
     for (const disabled of [false, true]) {
       call.disabled = disabled
       const [oldLog, newLog]: [string[], string[]] = [[], []]
-      const [a, b] = [oldMore(false, false, oldLog, '75e9c61'), newMore(false, false, newLog)]
+      const [a, b] = [oldMore(false, false, oldLog), newMore(false, false, newLog)]
       a.click(page('sheet-more'), 1)
       b.click(page('sheet-more'), 1)
       expect(shown(b.opened())).toEqual(shown(a.opened()))
-      expect(b.opened()?.items[1]).toMatchObject({ id: 'sheet-mokupilot', label: 'Call in MokuPilot', disabled })
+      expect(b.opened()?.items.map(it => (it.separator ? '—' : it.id))).toEqual([
+        'sheet-term',
+        'sheet-changes',
+        'sheet-history',
+        '—',
+        'sheet-mokupilot',
+        'sheet-new',
+        '—',
+        'sheet-sleep',
+      ])
+      expect(b.opened()?.items[4]).toMatchObject({ id: 'sheet-mokupilot', label: 'Call in MokuPilot', disabled })
       pickIn(a.opened(), 'sheet-mokupilot')
       pickIn(b.opened(), 'sheet-mokupilot')
       await world.flush()

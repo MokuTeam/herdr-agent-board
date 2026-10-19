@@ -1,7 +1,7 @@
 // The board's context menus (the old page's board-menus.js and the menus' part of app.js): a right
 // click, a long press or the menu key opens the menu of what is under the pointer or has the
 // focus — a card, the open session's head, a lane, the board, a starting session, a file chip —
-// and the sheet's "More actions" opens one of the sheet's buttons. Which menu, and what its items
+// and the sheet's More lists the buttons its row hides. Which menu, and what its items
 // do, is models/board-menus.ts; one menu is open at a time (components/menu/menu-engine.ts).
 import { useEffect, useState } from 'react'
 import type { Item, Translator } from '../../../src/core/types.ts'
@@ -262,15 +262,24 @@ export interface SheetMoreDeps {
 const isSheetButton = (el: unknown): el is SheetButton & HTMLElement =>
   typeof el === 'object' && el !== null && 'hidden' in el && 'disabled' in el && 'click' in el
 
-/** The sheet's buttons a phone hides behind "More actions", as a menu out of `button`. */
+/** A button the row hides (the stylesheet's say, read at the click): More lists it. */
+const hiddenInRow = (el: HTMLElement): boolean => getComputedStyle(el).display === 'none'
+
+/** The sheet's buttons the row hides, as a menu opened upward out of More (`button`). */
 export function sheetMoreMenuFrom(deps: SheetMoreDeps): (button: HTMLElement, keyboard: boolean) => void {
   return (button, keyboard) => {
     const rect = button.getBoundingClientRect()
     const t = deps.t()
-    const buttons = SHEET_MORE.map(id => document.getElementById(id)).filter(isSheetButton)
-    deps.menu.open(sheetMoreMenu(buttons, deps.canMutate(), t), {
+    const groups = SHEET_MORE.map(group =>
+      group
+        .map(id => document.getElementById(id))
+        .filter(isSheetButton)
+        .filter(el => !el.hidden && hiddenInRow(el)),
+    )
+    deps.menu.open(sheetMoreMenu(groups, deps.canMutate(), t), {
       x: rect.right,
-      y: rect.top,
+      y: rect.top - 4,
+      up: true,
       source: keyboard ? 'keyboard' : deps.coarse() ? 'touch' : 'mouse',
       origin: button,
       label: t('sheet.more'),

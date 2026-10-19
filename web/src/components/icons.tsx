@@ -94,6 +94,15 @@ export const HistoryIcon = () => (
   </Icon>
 )
 
+/** The session panel's More: three dots. */
+export const MoreIcon = () => (
+  <Icon>
+    <circle cx="4.5" cy="10" r="1.4" fill="currentColor" stroke="none" />
+    <circle cx="10" cy="10" r="1.4" fill="currentColor" stroke="none" />
+    <circle cx="15.5" cy="10" r="1.4" fill="currentColor" stroke="none" />
+  </Icon>
+)
+
 export const ClipIcon = () => (
   <Icon>
     <path d="m15.5 9.5-5.6 5.6a3.5 3.5 0 0 1-5-5l6-6a2.3 2.3 0 0 1 3.3 3.3l-6 6a1.2 1.2 0 0 1-1.7-1.7L12 6.2" />

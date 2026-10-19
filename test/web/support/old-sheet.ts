@@ -4,12 +4,13 @@
 // cancelButton, thread, thumbs, clock), renderDetailState, renderAttachments, syncComposer and
 // syncSheetProperties picked out of web/app.js (support/old-app.ts) with its own markdown.js and
 // when.js, questions.js's threadHTML — run against a small `$` over the parsed page. By hand: the
-// "New here" button app.js appends at start (app.js:2020-2027), the Changes button's rule in the
-// detail's `changed` (app.js:903) and syncAvailability's part for the sheet (app.js:175-195).
-// The page and renderSheetHead are those of the restart's merge (upstream PR #51): the baseline's
+// "New here" button app.js puts before More at start (#54's app.js:2658-2664), the Changes button's
+// rule in the detail's `changed` (app.js:903) and syncAvailability's part for the sheet (app.js:175-195).
+// The page and renderSheetHead are those of the session panel's row (upstream PR #54): the baseline's
 // with the sheet's Terminal button (#36), the facts under its name one span each and Wake's
-// tooltip (#43), "Call in MokuPilot" (#44) and Restart (#51), nothing else. The reminders' row
-// (scheduleRow) is #51's too: a call's results by their title (#45), a restart with how it stands.
+// tooltip (#43), "Call in MokuPilot" (#44), Restart (#51) and More at the row's end (#54), nothing
+// else. The reminders' row (scheduleRow) is #51's: a call's results by their title (#45), a restart
+// with how it stands.
 import { translator } from '../../../src/core/i18n/translator.ts'
 import type { BoardPayload } from '../../../src/core/payload.ts'
 import type { ColumnId, Item, Translator } from '../../../src/core/types.ts'
@@ -18,7 +19,6 @@ import type { Attachment } from '../../../web/src/models/composer.ts'
 import type { DetailValue } from '../../../web/src/models/detail-resource.ts'
 import {
   addButtonTypes,
-  append,
   applyTexts,
   byClass,
   byId,
@@ -27,6 +27,7 @@ import {
   type Node,
   OLD_PAGE_ONLY,
   pageMarkup,
+  parseHtml,
   setAttr,
   setHtml,
   setText,
@@ -66,10 +67,10 @@ export interface OldSheetScene {
 type StyleRule = [string, string]
 
 /**
- * Upstream's merge of the restart (PR #51), which has the terminal's (#36), the compact toolbar's
- * (#43), MokuPilot's call (#44) and its results (#45) in it.
+ * Upstream's merge of the session panel's row (PR #54), which has the terminal's (#36), the compact
+ * toolbar's (#43), MokuPilot's call (#44), its results (#45) and the restart's (#51) in it.
  */
-const SHEET_MERGE = '513e441'
+const SHEET_MERGE = '3105958'
 const OLD_CALL = await oldModule('web/notice-model.js', SHEET_MERGE)
 
 /** Just enough of an element for the old code's writes, onto a parsed node. */
@@ -260,12 +261,17 @@ export function oldSheet(scene: OldSheetScene): Element {
   const code = new Map([...baseline, ...restart, ...head])
   const call: Call = (name, ...args) => oldFunction(code, name)(...args)
 
-  // At start: the "new session here" button, the name focusable, the texts in the language.
+  // At start: the "new session here" button before More, the name focusable, the texts in the language.
   const icons = code.get('ICON')
   const plus = typeof icons === 'object' && icons !== null && 'plus' in icons ? String(icons.plus) : ''
-  append(
-    byClass(nodes, 'composer-actions'),
-    `<button class="button" id="sheet-new" data-hint="launch.hereHint">${plus}<span data-i18n="launch.here"></span></button>`,
+  const actions = byClass(nodes, 'composer-actions')
+  const more = actions.children.indexOf(byId([actions], 'sheet-more'))
+  actions.children.splice(
+    more,
+    0,
+    ...parseHtml(
+      `<button class="button" id="sheet-new" data-hint="launch.hereHint">${plus}<span data-i18n="launch.here"></span></button>`,
+    ),
   )
   setAttr(byId(nodes, 'sheet-name'), 'tabindex', '0')
   applyTexts(nodes, t)

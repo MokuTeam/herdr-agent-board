@@ -39,6 +39,10 @@ test('a menu opens down and right of the click, flips at the edges, and scrolls 
   // No room either way: pressed against the margin, never off screen.
   const wide = placeMenu({ x: 150, y: 20 }, { width: 900, height: 200 }, { width: 960, height: 700 })
   assert.equal(wide.x, 52)
+  // Asked to go up (the session's More, low in its panel): above whenever it fits, else down.
+  const up = placeMenu({ x: 100, y: 500 }, { width: 220, height: 300 }, vp, { up: true })
+  assert.deepEqual([up.y, up.originY], [200, 'bottom'])
+  assert.equal(placeMenu({ x: 100, y: 100 }, { width: 220, height: 300 }, vp, { up: true }).y, 100)
   const tall = placeMenu({ x: 10, y: 300 }, { width: 200, height: 1200 }, vp)
   assert.deepEqual([tall.y, tall.maxHeight], [8, 684])
   for (const p of [
@@ -305,6 +309,8 @@ test('the model gives what the old page’s menu-model.js gave, case by case', (
   ]
   const old = oldCode('web/menu-model.js', names, {})
   const was = (name: string, ...args: unknown[]) => oldFunction(old, name)(...args)
+  // placeMenu's `up` and margin as an option: the session panel's row (#54).
+  const placeAt54 = oldFunction(oldCode('web/menu-model.js', ['placeMenu'], {}, '3105958'), 'placeMenu')
   const ru = translator('ru')
   for (const tr of [t, ru])
     for (const canMutate of [true, false])
@@ -351,6 +357,8 @@ test('the model gives what the old page’s menu-model.js gave, case by case', (
           { width: 200, height: 1200 },
         ]) {
           assert.deepEqual(placeMenu({ x, y }, size, viewport), was('placeMenu', { x, y }, size, viewport))
+          for (const options of [{}, { up: true }, { up: false }, { up: true, margin: 4 }, { margin: 12 }])
+            assert.deepEqual(placeMenu({ x, y }, size, viewport, options), placeAt54({ x, y }, size, viewport, options))
           const item = { top: y, bottom: y + 24 }
           const parent = { left: x, right: x + 220, top: 0, bottom: 400 }
           assert.deepEqual(

@@ -1,6 +1,7 @@
 // The sheet's foot: why the session's actions wait (no fresh data), the session's buttons — go to
 // it in herdr, its terminal, a MokuPilot call with a fork of it, wake it, put it to sleep, restart
-// it, its changes and history, a new session here — the files
+// it, its changes and history, a new session here, and More at the row's end, with what the row
+// hides (the stylesheet decides) — the files
 // that go with the next message, and the message box: Enter sends, Shift+Enter breaks the line,
 // the box grows with the text; files come in through the clip or Ctrl+V (a screenshot).
 import { type ClipboardEvent, type KeyboardEvent, useLayoutEffect, useRef } from 'react'
@@ -17,6 +18,7 @@ import {
   FocusIcon,
   HistoryIcon,
   MoonIcon,
+  MoreIcon,
   PhoneIcon,
   PlusIcon,
   RestartIcon,
@@ -43,7 +45,7 @@ export interface SessionButtons {
   history?: (button: HTMLElement) => void
   /** A new session in this one's lane and folder (the launch window). */
   newHere?: (button: HTMLElement) => void
-  /** The menu of these buttons on a phone (`keyboard`: pressed by keys, it lights its first item). */
+  /** The menu of the buttons the row hides (`keyboard`: pressed by keys, it lights its first item). */
   more?: (button: HTMLElement, keyboard: boolean) => void
 }
 
@@ -109,16 +111,6 @@ export function Composer({
         {av.banner}
       </p>
       <div className="composer-actions">
-        <button
-          type="button"
-          className="button sheet-more"
-          id="sheet-more"
-          aria-haspopup="menu"
-          aria-expanded={moreOpen}
-          onClick={e => on.more?.(e.currentTarget, e.detail === 0)}
-        >
-          {t('sheet.more')}
-        </button>
         <button type="button" className="button" id="sheet-focus" disabled={av.focus} onClick={() => on.focus?.()}>
           <FocusIcon />
           <span>{t('sheet.focus')}</span>
@@ -216,6 +208,18 @@ export function Composer({
         >
           <PlusIcon />
           <span>{t('launch.here')}</span>
+        </button>
+        <button
+          type="button"
+          className="button"
+          id="sheet-more"
+          aria-haspopup="menu"
+          aria-expanded={moreOpen}
+          title={t('sheet.more')}
+          aria-label={t('sheet.more')}
+          onClick={e => on.more?.(e.currentTarget, e.detail === 0)}
+        >
+          <MoreIcon />
         </button>
       </div>
       <Attachments list={attachments} onRemove={composer.removeFile} />

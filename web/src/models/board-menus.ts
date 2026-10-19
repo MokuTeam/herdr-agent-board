@@ -321,17 +321,16 @@ export function keyPoint(r: { left: number; top: number; width: number; height: 
     : { x: r.left + 24, y: r.top + 8 }
 }
 
-/** The sheet's buttons that "More actions" lists on a phone, in their order. */
-export const SHEET_MORE = [
-  'sheet-term',
-  'sheet-mokupilot',
-  'sheet-wake',
-  'sheet-sleep',
-  'sheet-restart',
-  'sheet-changes',
-  'sheet-history',
-  'sheet-new',
-] as const
+/**
+ * What More lists of the sheet's buttons, in groups: the tools, starting something from this
+ * session, then the session's own life. Only those the row does not show (the stylesheet decides;
+ * the buttons stay in the row, hidden, and keep their state).
+ */
+export const SHEET_MORE: readonly (readonly string[])[] = [
+  ['sheet-term', 'sheet-changes', 'sheet-history'],
+  ['sheet-mokupilot', 'sheet-new'],
+  ['sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-archive'],
+]
 
 /** What the "More actions" menu reads of a sheet button. */
 export interface SheetButton {
@@ -343,22 +342,31 @@ export interface SheetButton {
 }
 
 /** Those that go through herdr: gray without fresh herdr data, whatever their own title says. */
-const HERDR_BUTTONS: readonly string[] = ['sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-new']
+const HERDR_MORE: readonly string[] = ['sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-new', 'sheet-archive']
 
-/** The sheet's buttons on show as a menu, gray with why when they are. */
-export function sheetMoreMenu(buttons: readonly SheetButton[], canMutate: boolean, t: Translator): MenuItem[] {
-  return buttons
-    .filter(el => !el.hidden)
-    .map(el => ({
-      id: el.id,
-      label: (el.textContent ?? '').trim(),
-      disabled: el.disabled,
-      reason: el.disabled
-        ? !canMutate && HERDR_BUTTONS.includes(el.id)
-          ? t('mobile.readOnly')
-          : el.title || t('mobile.readOnly')
-        : '',
-    }))
+/** The sheet's buttons on show as a menu, a separator between groups, gray with why when they are. */
+export function sheetMoreMenu(
+  groups: readonly (readonly SheetButton[])[],
+  canMutate: boolean,
+  t: Translator,
+): MenuEntry[] {
+  return groups
+    .map(group =>
+      group
+        .filter(el => !el.hidden)
+        .map(el => ({
+          id: el.id,
+          label: (el.textContent ?? '').trim(),
+          disabled: el.disabled,
+          reason: el.disabled
+            ? !canMutate && HERDR_MORE.includes(el.id)
+              ? t('mobile.readOnly')
+              : el.title || t('mobile.readOnly')
+            : '',
+        })),
+    )
+    .filter(group => group.length)
+    .flatMap((group, i): MenuEntry[] => (i ? [{ separator: true }, ...group] : group))
 }
 
 /** A finger held here opens a menu: on a card, a lane or the board, not on what has its own press. */
