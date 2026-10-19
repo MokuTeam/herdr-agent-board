@@ -151,8 +151,48 @@ describe('gatherFacts', () => {
           settingsFile: join(at('.claude'), 'settings.json'),
           settings: { model: 'x' },
           settingsError: '',
+          // ROOT_A is no copy of the board on this disk: no skill of its own to compare with.
+          skill: { file: join(at('.claude'), 'skills', 'herdr-agents', 'SKILL.md'), installed: null, source: null },
         },
       ])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('the agents’ skill in each shown profile, the first one’s at the top, next to this copy’s', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'board-setup-'))
+    try {
+      const home = join(dir, 'home')
+      const root = join(dir, 'board')
+      const source = '---\nname: herdr-agents\n---\n<!-- agent-board: installed by the install action -->\nours\n'
+      const theirs = '---\nname: herdr-agents\n---\nmine\n'
+      const skillOf = (folder: string): string => join(home, folder, 'skills', 'herdr-agents', 'SKILL.md')
+      for (const [file, text] of [
+        [boardFiles(root).skill, source],
+        [skillOf('.claude'), source],
+        [skillOf('.claude-work'), `﻿${theirs}`],
+      ] as const) {
+        mkdirSync(join(file, '..'), { recursive: true })
+        writeFileSync(file, text)
+      }
+      mkdirSync(join(home, '.claude-games'))
+      const options = { root, env: { PATH: join(dir, 'bin') }, platform: 'win32', home }
+      // One profile: ~/.claude's, as upstream.
+      const one = await gatherFacts({ wakeUrl: null }, options)
+      expect(one.skill).toEqual({ file: skillOf('.claude'), installed: source, source })
+      // Shown ones each; the hidden one is not read.
+      const profiles = [
+        { id: 'work', title: 'Work', dir: join(home, '.claude-work') },
+        { id: 'games', title: 'Games', dir: join(home, '.claude-games'), hidden: true },
+        { id: 'default', title: 'Private', dir: join(home, '.claude') },
+      ]
+      const two = await gatherFacts({ wakeUrl: null, profiles }, options)
+      expect(two.profiles?.map(p => [p.id, p.skill])).toEqual([
+        ['work', { file: skillOf('.claude-work'), installed: theirs, source }],
+        ['default', { file: skillOf('.claude'), installed: source, source }],
+      ])
+      expect(two.skill).toEqual({ file: skillOf('.claude-work'), installed: theirs, source })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

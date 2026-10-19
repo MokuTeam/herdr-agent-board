@@ -28,6 +28,24 @@ test('brief names the guessed lane and the known ids; reminder quotes the wait',
   assert.match(waitReminder({ wait: 'client reply' }), /"client reply"/)
 })
 
+test('brief: a session in herdr hears its pane and the skill; one outside herdr hears nothing of it', () => {
+  const inside = brief(cfg, null, 'C:\\X', {
+    HERDR_ENV: '1',
+    HERDR_PANE_ID: 'w1:p3',
+    HERDR_TAB_ID: 'w1:t2',
+    HERDR_WORKSPACE_ID: 'w1',
+  })
+  assert.match(inside, /runs in herdr, in pane w1:p3 \(tab w1:t2, workspace w1\)\..*herdr-agents skill/)
+  assert.equal(
+    inside.split('\n').at(-1),
+    inside.split('\n').find(l => l.includes('herdr-agents')),
+  )
+  const outside = brief(cfg, null, 'C:\\X', {})
+  assert.doesNotMatch(outside, /herdr-agents|runs in herdr/)
+  // A pane id alone (a variable left over from a parent shell) is not herdr.
+  assert.doesNotMatch(brief(cfg, null, 'C:\\X', { HERDR_PANE_ID: 'w1:p3' }), /runs in herdr/)
+})
+
 test('the board switches language in place: the brief follows', () => {
   try {
     // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
@@ -48,5 +66,5 @@ test('the brief tells agents about the schedule', () => {
   assert.match(text, /board remind <when> "<text>"/)
   assert.match(text, /board every "<cron, 5 fields>"/)
   assert.match(text, /CronCreate or ScheduleWakeup/)
-  assert.ok(BRIEF_VERSION >= 3)
+  assert.ok(BRIEF_VERSION >= 4)
 })

@@ -30,6 +30,7 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
    [`spawn-agent`](#spawn-agent), which starts a session in a new herdr tab. It registers the
    Claude Code hooks (SessionStart, UserPromptSubmit) that brief every session about the board,
    and the status line when you have none (usage windows and context fill on the board). It
+   installs the Claude Code skill [`herdr-agents`](#agents) into `~/.claude/skills`. It
    replaces only its own entries in `~/.claude/settings.json`, keeps a copy of the file before
    (`settings.json.bak-agent-board`), leaves a command of someone else's name alone, and ends with
    the check below. `~/.local/bin` must be on PATH. Run it again after the plugin moved or was
@@ -38,10 +39,12 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
 
    With more than one Claude profile (`CLAUDE_CONFIG_DIR` folders such as `~/.claude-work`) it
    does the same in the `settings.json` of every profile the board shows, each with its own
-   backup; a hidden profile is left alone, and a shown one whose folder is gone is skipped, saying
-   so. One `settings.json` that does not parse stops it before anything is written. It never
-   touches credentials, `.claude.json` or anything else in a profile folder. A profile shown later
-   gets its hooks from the install action again, or from Install in the Profiles panel.
+   backup, and puts the skill into each one's `skills` folder; a hidden profile is left alone,
+   and a shown one whose folder is gone is skipped, saying so. One `settings.json` that does not
+   parse stops it before anything is written. It never touches credentials, `.claude.json` or
+   anything else in a profile folder beyond `settings.json`, its backup and
+   `skills/herdr-agents`. A profile shown later gets its hooks and the skill from the install
+   action again, or from Install in the Profiles panel.
 2. **A key** (recommended), in herdr's `config.toml` (`%APPDATA%\herdr\config.toml` on Windows,
    `~/.config/herdr/config.toml` elsewhere), then `herdr server reload-config`. Without it the
    board opens with `herdr plugin action invoke agent-board.open`.
@@ -977,6 +980,19 @@ board call-report --session <id> --file <report.md>
 board doctor              what is set up on this computer, and what is missing
 spawn-agent --name <Name> --cwd <folder> [--brief-file <file>]   a new session in a herdr tab
 ```
+
+Agents in herdr also get a skill, [`herdr-agents`](skills/herdr-agents/SKILL.md), which the
+install puts into `~/.claude/skills` (with more than one profile, into the `skills` folder of
+each one the board shows). Claude Code keeps only its one-line description in a session's
+context and reads the rest when it is needed: how to start another session, message or wake one,
+do something later (`board remind` rather than CronCreate, which dies when the session sleeps),
+run a server or an interactive login in a pane of its own, and what to do when an MCP server
+dropped. herdr puts the pane's ids into its environment (`HERDR_ENV=1`, `HERDR_PANE_ID`,
+`HERDR_TAB_ID`, `HERDR_WORKSPACE_ID`); when they are there, the board's brief
+([`src/core/brief.ts`](src/core/brief.ts)) tells the session its pane and points it to the skill,
+and outside herdr it says nothing of it. For herdr's own command reference, `herdr --skill`. A
+skill of that name that is not the board's is left alone, and `board doctor` says so (per
+profile, with more than one).
 
 ## Settings
 

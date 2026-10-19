@@ -59,6 +59,9 @@ async function runHook(
 const context = (event: string, text: string): string =>
   `${JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: text } })}\n`
 const sessionStart = (box: Sandbox, sid: string) => ({ hook_event_name: 'SessionStart', session_id: sid, cwd: box.dir })
+/** The brief as the hook in pane p1 gives it: the sandbox's env, which is not herdr's (no HERDR_ENV). */
+const briefIn = (box: Sandbox, card: Card | null): string =>
+  brief(normalizeConfig({ language: 'en' }), card, box.dir, { ...box.env, HERDR_PANE_ID: 'p1' })
 
 test('SessionStart in a herdr pane: the full brief, and the card remembers it was briefed', async () => {
   const box = await sandbox()
@@ -66,9 +69,24 @@ test('SessionStart in a herdr pane: the full brief, and the card remembers it wa
   putCard(box, { key: 's1', category: 'acme', doing: 'fix the CI' })
   const out = await runHook(box, { hook_event_name: 'SessionStart', session_id: 's1', cwd: box.dir })
   useLanguage('en')
-  assert.equal(out, context('SessionStart', brief(normalizeConfig({ language: 'en' }), cardOf(box, 's1'), box.dir)))
+  assert.equal(out, context('SessionStart', briefIn(box, cardOf(box, 's1'))))
   assert.equal(cardOf(box, 's1')?.briefV, BRIEF_VERSION)
   assert.equal(typeof cardOf(box, 's1')?.briefedAt, 'number')
+})
+
+test('SessionStart where herdr says it is the host: the brief tells the session its pane', async () => {
+  const box = await sandbox()
+  englishConfig(box)
+  const herdr = { HERDR_ENV: '1', HERDR_TAB_ID: 'w1:t2', HERDR_WORKSPACE_ID: 'w1' }
+  const out = await runHook(box, sessionStart(box, 's1'), 'w1:p3', herdr)
+  useLanguage('en')
+  const text = brief(normalizeConfig({ language: 'en' }), cardOf(box, 's1'), box.dir, {
+    ...box.env,
+    HERDR_PANE_ID: 'w1:p3',
+    ...herdr,
+  })
+  assert.equal(out, context('SessionStart', text))
+  assert.match(text, /runs in herdr, in pane w1:p3 \(tab w1:t2, workspace w1\)\..*herdr-agents skill/)
 })
 
 test('UserPromptSubmit: the brief once for a session briefed by an older version, then the wait reminder', async () => {
@@ -144,7 +162,7 @@ test('every spelling of the default folder reports default, and the brief is as 
   ]
   for (const v of variants) {
     const out = await runHook(box, sessionStart(box, 's1'), 'p1', v === undefined ? {} : { CLAUDE_CONFIG_DIR: v })
-    expect(out).toBe(context('SessionStart', brief(normalizeConfig({ language: 'en' }), cardOf(box, 's1'), box.dir)))
+    expect(out).toBe(context('SessionStart', briefIn(box, cardOf(box, 's1'))))
     expect(cardOf(box, 's1')?.profile).toBe('default')
     expect(sameDir(String(cardOf(box, 's1')?.profileDir), join(home, '.claude'))).toBe(true)
   }

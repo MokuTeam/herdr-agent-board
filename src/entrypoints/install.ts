@@ -1,8 +1,9 @@
 // The "install" action: puts the `board` and `spawn-agent` commands on PATH (~/.local/bin, a sh
-// script for Git Bash, Linux and macOS and a .cmd for PowerShell), registers the SessionStart /
-// UserPromptSubmit hooks and the status line in the settings.json of every shown Claude profile
-// (~/.claude, and each CLAUDE_CONFIG_DIR folder the board shows; a hidden one is left alone), then
-// says what else is set up and what is not (core/setup.ts). Idempotent; replaces its own earlier
+// script for Git Bash, Linux and macOS and a .cmd for PowerShell), copies the agents' skill
+// (skills/herdr-agents) into the skills folder of every shown Claude profile and registers the
+// SessionStart / UserPromptSubmit hooks and the status line in its settings.json (~/.claude, and
+// each CLAUDE_CONFIG_DIR folder the board shows; a hidden one is left alone), then says what else
+// is set up and what is not (core/setup.ts). Idempotent; replaces its own earlier
 // entries and keeps a backup of each settings.json next to it. A settings.json that does not parse
 // stops it before anything is written. Run it again after moving or updating the plugin or Bun:
 // the hooks, the status line and the shims run the Bun that ran this (an absolute path, no PATH
@@ -15,6 +16,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { installSkill } from '../adapters/agents-skill.ts'
 import { loadConfig } from '../adapters/config-file.ts'
 import { installInto, readSettings } from '../adapters/hook-settings.ts'
 import { ROOT } from '../adapters/paths.ts'
@@ -36,7 +38,8 @@ if (toast && process.platform !== 'win32') {
   toast = undefined
 }
 
-const paths: InstallPaths = { bun: process.execPath, ...boardFiles(ROOT), binDir: join(homedir(), '.local', 'bin') }
+const files = boardFiles(ROOT)
+const paths: InstallPaths = { bun: process.execPath, ...files, binDir: join(homedir(), '.local', 'bin') }
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const isFolder = (path: string): boolean => {
   try {
@@ -80,13 +83,24 @@ for (const profile of profiles) {
 
 try {
   installShims()
-  // --- hooks, status line, notifications: per profile; the default folder is made when it is not there
+  // --- the agents' skill (how sessions in herdr work with each other), read by Claude on demand
+  const skillText = readText(files.skill)
+  if (skillText === null) console.log(`skill: ${files.skill} is missing from this copy of the board`)
+  // --- per profile: the skill, then hooks, status line, notifications; the default folder is made when it is not there
   let toastOn = false
   for (const profile of profiles) {
     const create = profile.id === DEFAULT_PROFILE
     if (!create && !isFolder(profile.dir)) {
       console.log(`skipped ${profile.dir}: the folder is not there`)
       continue
+    }
+    if (skillText !== null) {
+      const skill = installSkill(profile.dir, skillText)
+      console.log(
+        skill.action === 'foreign'
+          ? `skipped ${skill.file}: a skill of that name that is not ours`
+          : `skill: ${skill.file}`,
+      )
     }
     const out = installInto(profile.dir, paths, { toast, create })
     if (!out.ok) throw new Error(out.error)

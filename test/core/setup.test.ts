@@ -18,7 +18,9 @@ import {
   report,
   type SetupCheck,
   type SetupFacts,
+  type SkillFacts,
   setupSummary,
+  skillAction,
   todo,
   tomlValue,
 } from '../../src/core/setup.ts'
@@ -32,6 +34,8 @@ const hookCommand = (f: BoardFiles) => `${quote(BUN)} ${quote(f.hook)}`
 type Settings = { hooks: Record<string, { matcher?: string; hooks: { command: string }[] }[] | undefined> }
 const commands = (settings: unknown, event: string) =>
   ((settings as Settings).hooks[event] ?? []).flatMap(e => e.hooks.map(h => h.command))
+const SKILL_TEXT =
+  '---\nname: herdr-agents\n---\n<!-- agent-board: installed by the install action -->\nHow to work in herdr.\n'
 
 describe('install: the settings it writes', () => {
   test('its hooks once, everyone else’s kept, its own moved to this copy', () => {
@@ -179,6 +183,7 @@ function facts(over: Partial<SetupFacts> = {}): SetupFacts {
       file: 'C:\\Users\\u\\AppData\\Local\\Programs\\MokuPilot\\MokuPilot.exe',
       args: [],
     },
+    skill: { file: 'C:\\Users\\u\\.claude\\skills\\herdr-agents\\SKILL.md', installed: SKILL_TEXT, source: SKILL_TEXT },
     ...over,
   }
 }
@@ -199,6 +204,7 @@ describe('doctor', () => {
         ['hooks', 'ok'],
         ['statusline', 'ok'],
         ['spawn-agent', 'ok'],
+        ['skill', 'ok'],
         ['key', 'ok'],
         ['wake', 'ok'],
         ['launch', 'ok'],
@@ -336,6 +342,29 @@ describe('doctor', () => {
     assert.doesNotMatch(`${secret.title} ${secret.detail}`, /secret words/)
   })
 
+  test('the agents’ skill: installed when missing or older, left alone when it is someone else’s', () => {
+    assert.equal(skillAction(null, SKILL_TEXT), 'write')
+    assert.equal(skillAction(SKILL_TEXT.replace(/\n/g, '\r\n'), SKILL_TEXT), 'same')
+    assert.equal(skillAction(SKILL_TEXT.replace('How', 'Once, how'), SKILL_TEXT), 'write')
+    assert.equal(skillAction('---\nname: herdr-agents\n---\nmine\n', SKILL_TEXT), 'foreign')
+    const base = facts().skill
+    assert.ok(base)
+    const at = (state: Partial<SkillFacts>): SetupCheck =>
+      check(checkSetup(facts({ skill: { ...base, ...state } })), 'skill')
+    assert.equal(at({}).level, 'ok')
+    assert.deepEqual(
+      [at({ installed: null }).level, at({ installed: null }).code],
+      ['warn', 'herdr plugin action invoke agent-board.install'],
+    )
+    assert.match(at({ installed: `${SKILL_TEXT}old\n` }).title, /older copy/)
+    assert.match(at({ installed: 'mine' }).title, /not the board/)
+    // Facts without the skill (an older gatherFacts): no check for it.
+    assert.equal(
+      checkSetup(facts({ skill: undefined })).some(c => c.id === 'skill'),
+      false,
+    )
+  })
+
   test('the summary names the problems in English, whatever the language of the list', () => {
     const checks = checkSetup(facts({ settings: {} }))
     const summary = setupSummary(checks)
@@ -358,9 +387,16 @@ describe('doctor', () => {
 
 describe('the checks per profile', () => {
   const FACTS = facts()
-  const profile = (id: string, title: string, settings: unknown, exists = true): ProfileSettings => {
+  const profile = (
+    id: string,
+    title: string,
+    settings: unknown,
+    exists = true,
+    installed: string | null = SKILL_TEXT,
+  ): ProfileSettings => {
     const dir = id === 'default' ? 'C:\\Users\\u\\.claude' : `C:\\Users\\u\\.claude-${id}`
-    return { id, title, dir, exists, settingsFile: `${dir}\\settings.json`, settings, settingsError: '' }
+    const skill = { file: `${dir}\\skills\\herdr-agents\\SKILL.md`, installed, source: SKILL_TEXT }
+    return { id, title, dir, exists, settingsFile: `${dir}\\settings.json`, settings, settingsError: '', skill }
   }
   const one = profile('default', 'Default', FACTS.settings)
   const privateOk = profile('default', 'Private', FACTS.settings)
@@ -383,6 +419,8 @@ describe('the checks per profile', () => {
       'hooks:work',
       'statusline:work',
       'spawn-agent',
+      'skill:default',
+      'skill:work',
       'key',
       'wake',
       'launch',
@@ -426,10 +464,48 @@ describe('the checks per profile', () => {
       level: 'warn',
       title: 'Work: its folder C:\\Users\\u\\.claude-work is not there',
     })
-    expect(checks.some(c => c.id === 'hooks:work' || c.id === 'statusline:work')).toBe(false)
+    expect(checks.some(c => /^(hooks|statusline|skill):work$/.test(c.id))).toBe(false)
     expect(todo(checks).map(c => c.id)).toEqual(['profile:work'])
     expect(translator('ru')('setup.profile.missing', { profile: 'Work', dir: 'D:\\w' })).not.toBe(
       'Work: its folder D:\\w is not there',
+    )
+  })
+
+  test('the agents’ skill: one profile, the check as upstream; more, one check per profile, by name', () => {
+    // One profile: what upstream checks, in its place (the top-level facts).
+    expect(checkSetup({ ...FACTS, profiles: [one] }).filter(c => c.id.startsWith('skill'))).toEqual([
+      {
+        id: 'skill',
+        level: 'ok',
+        title: 'Skill herdr-agents for the agents',
+        detail:
+          'how sessions in herdr start and message others, do things later, run a server and get a dropped MCP server back',
+        fix: '',
+        code: '',
+      },
+    ])
+    // Several: each its own, its own file named.
+    const work = profile('work', 'Work', {}, true, null)
+    const games = profile('games', 'Games', {}, true, '---\nname: herdr-agents\n---\nmine\n')
+    const old = profile('old', 'Old', {}, true, `${SKILL_TEXT}old\n`)
+    const checks = checkSetup({ ...FACTS, profiles: [privateOk, work, games, old] })
+    expect(checks.filter(c => c.id.startsWith('skill')).map(c => [c.id, c.level, c.title])).toEqual([
+      ['skill:default', 'ok', 'Private: Skill herdr-agents for the agents'],
+      ['skill:work', 'warn', 'Work: No skill herdr-agents for the agents'],
+      ['skill:games', 'warn', "Games: Skill herdr-agents is not the board's"],
+      ['skill:old', 'warn', 'Old: Skill herdr-agents is an older copy'],
+    ])
+    expect(check(checks, 'skill:work')).toMatchObject({
+      fix: 'Run the install:',
+      code: 'herdr plugin action invoke agent-board.install',
+    })
+    expect(check(checks, 'skill:games').detail).toBe(
+      "C:\\Users\\u\\.claude-games\\skills\\herdr-agents\\SKILL.md is someone else's skill of that name, so the install leaves it alone.",
+    )
+    expect(setupSummary(checks).sig).toContain('skill:work:warn:Work: No skill herdr-agents for the agents')
+    // In Russian: the profile's name, then the check.
+    expect(check(checkSetup({ ...FACTS, profiles: [privateOk, work] }, translator('ru')), 'skill:work').title).toBe(
+      'Work: Нет скилла herdr-agents для агентов',
     )
   })
 })

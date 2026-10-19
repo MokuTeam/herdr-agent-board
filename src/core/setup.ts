@@ -1,7 +1,8 @@
 // Checking that the board is set up on this computer: what the install action writes (the board
 // and spawn-agent commands on PATH, the Claude Code hooks, the status line, desktop notifications
-// on Windows; core/install-plan.ts) and what `board doctor`, the install action and the web board
-// check (those, herdr's key for the board, herdr-wake, how new sessions start).
+// on Windows; core/install-plan.ts; and the agents' skill, below) and what `board doctor`, the
+// install action and the web board check (those, herdr's key for the board, herdr-wake, how new
+// sessions start).
 //
 // Pure: adapters/setup-facts.ts reads this computer into SetupFacts, and tests hand in fixtures.
 import { join } from 'node:path'
@@ -13,13 +14,15 @@ import type { Translator } from './types.ts'
 export const WAKE_REPO = 'https://github.com/Eithery-rc/tg-mcp/tree/main/herdr-wake'
 const english = translator('en')
 
-/** The files of a copy of the board that other programs run. */
+/** The files of a copy of the board that other programs run, and the skill install copies. */
 export interface BoardFiles {
   cli: string
   spawn: string
   hook: string
   statusline: string
   toast: string
+  /** The agents' skill (skills/herdr-agents/SKILL.md), which install copies into each shown profile. */
+  skill: string
 }
 
 /** The files of the copy of the board at `root`. */
@@ -31,7 +34,28 @@ export function boardFiles(root: string): BoardFiles {
     hook: entrypoint('hook.ts'),
     statusline: entrypoint('statusline.ts'),
     toast: join(root, 'src', 'integrations', 'toast.ps1'),
+    skill: join(root, 'skills', SKILL, 'SKILL.md'),
   }
+}
+
+// ------------------------------------------------------------------ the agents' skill
+
+// What sessions in herdr read on demand (skills/herdr-agents): install copies it into Claude
+// Code's user skills, in every shown profile's folder (~/.claude/skills with one); the marker in
+// it tells a copy of ours from someone else's skill of that name.
+export const SKILL = 'herdr-agents'
+const SKILL_MARK = 'agent-board: installed by'
+
+/** The skill's file in the Claude profile folder `dir` (~/.claude: ~/.claude/skills/herdr-agents/SKILL.md). */
+export const skillFile = (dir: string): string => join(dir, 'skills', SKILL, 'SKILL.md')
+
+export type SkillAction = 'write' | 'same' | 'foreign'
+
+/** What install does with the skill: 'write' (missing, or an older copy of ours), 'same', or 'foreign'. */
+export function skillAction(installed: string | null | undefined, source: string | null | undefined): SkillAction {
+  if (installed === null || installed === undefined) return 'write'
+  if (!installed.includes(SKILL_MARK)) return 'foreign'
+  return installed.replace(/\r\n/g, '\n') === String(source ?? '').replace(/\r\n/g, '\n') ? 'same' : 'write'
 }
 
 // ------------------------------------------------------------------ herdr's config.toml
@@ -91,7 +115,14 @@ export type LauncherFacts =
   | { kind: 'herdr'; agent: string }
   | { kind: 'builtin'; claude: string[] | null; error: string; program: ProgramFound | null }
 
-/** A shown Claude profile's settings.json (core/profiles.ts): its folder, and whether it is there. */
+/** The agents' skill in a Claude profile folder: its file, the text there (null: none), and this copy's (null: none). */
+export interface SkillFacts {
+  file: string
+  installed: string | null
+  source: string | null
+}
+
+/** A shown Claude profile's settings.json and skill (core/profiles.ts): its folder, and whether it is there. */
 export interface ProfileSettings {
   id: string
   title: string
@@ -101,6 +132,8 @@ export interface ProfileSettings {
   /** settings.json parsed; null when there is none or it does not parse. */
   settings: unknown
   settingsError: string
+  /** The agents' skill in this folder; none: not looked at, no check. */
+  skill?: SkillFacts | undefined
 }
 
 /** Everything the checks look at (adapters/setup-facts.ts gatherFacts). */
@@ -118,8 +151,10 @@ export interface SetupFacts {
   /** settings.json parsed; null when there is none or it does not parse. */
   settings: unknown
   settingsError: string
-  /** Every shown profile's settings.json, the first one's as above; with more than one, the hooks and the status line are checked in each. */
+  /** Every shown profile's settings.json, the first one's as above; with more than one, the hooks, the status line and the skill are checked in each. */
   profiles?: ProfileSettings[]
+  /** The first shown profile's agents' skill (~/.claude's with one profile); none: not looked at, no check. */
+  skill?: SkillFacts | undefined
   herdrConfigFile: string
   herdrConfig: string | null
   wakeUrl: string | null
@@ -292,6 +327,43 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
     }
 
   command('spawn-agent', f.spawn, 'warn', t('setup.spawn.without'))
+
+  // The skill sessions in herdr read on demand (the brief points to it). With more than one
+  // profile shown, in each whose folder is there, by its name (id skill:<id>); with one, as upstream.
+  const skillCheck = (
+    s: SkillFacts | undefined,
+    id = 'skill',
+    named: (title: string) => string = title => title,
+  ): void => {
+    if (!s) return
+    const state = skillAction(s.installed, s.source)
+    const name = SKILL
+    if (state === 'same') add(id, 'ok', named(t('setup.skill.ok', { name })), t('setup.skill.okDetail'))
+    else if (state === 'foreign')
+      add(
+        id,
+        'warn',
+        named(t('setup.skill.foreign', { name })),
+        t('setup.skill.foreignDetail', { file: s.file }),
+        t('setup.skill.foreignFix'),
+        INSTALL,
+      )
+    else if (s.installed !== null)
+      add(id, 'warn', named(t('setup.skill.stale', { name })), t('setup.skill.without'), t('setup.runInstall'), INSTALL)
+    else
+      add(
+        id,
+        'warn',
+        named(t('setup.skill.missing', { name })),
+        t('setup.skill.without'),
+        t('setup.runInstall'),
+        INSTALL,
+      )
+  }
+  if (profiles.length <= 1) skillCheck(facts.skill)
+  else
+    for (const p of profiles)
+      if (p.exists) skillCheck(p.skill, `skill:${p.id}`, check => t('setup.inProfile', { profile: p.title, check }))
 
   // herdr's key for the board.
   const key = boardKey(facts.herdrConfig)

@@ -221,6 +221,10 @@ test('Install from the board writes a shown profile’s hooks and refuses a hidd
   expect(work.hooks.SessionStart.at(-1)).toEqual(ours)
   expect(work.hooks.UserPromptSubmit).toEqual([ours])
   expect(readFileSync(join(dir('.claude-work'), 'settings.json.bak-agent-board'), 'utf8')).toBe('{}')
+  // The agents' skill too, as the install action puts it there.
+  expect(readFileSync(join(dir('.claude-work'), 'skills', 'herdr-agents', 'SKILL.md'), 'utf8')).toBe(
+    readFileSync(join(root, 'skills', 'herdr-agents', 'SKILL.md'), 'utf8'),
+  )
   // Only that profile's folder.
   expect(readdirSync(dir('.claude'))).toEqual(['settings.json'])
 

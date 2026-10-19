@@ -4,6 +4,7 @@ import { copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSyn
 import { dirname, join, sep } from 'node:path'
 import { planShims, quote } from '../../src/core/install-plan.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
+import { oldSource } from '../web/support/old-app.ts'
 
 // The install action end to end, only ever against a sandbox's home (HOME and USERPROFILE).
 const entry = (name: string): string => join(root, 'src', 'entrypoints', name)
@@ -136,6 +137,10 @@ test('install in a sandbox: the commands, the hooks once, a backup, and notifica
   assert.equal(first.code, 0, first.out)
   for (const name of ['board', 'board.cmd', 'spawn-agent', 'spawn-agent.cmd'])
     assert.ok(existsSync(join(home, '.local', 'bin', name)), name)
+  const skill = join(home, '.claude', 'skills', 'herdr-agents', 'SKILL.md')
+  assert.equal(readFileSync(skill, 'utf8'), readFileSync(join(root, 'skills', 'herdr-agents', 'SKILL.md'), 'utf8'))
+  // Where upstream says it: after the commands, before the hooks.
+  assert.match(first.out, new RegExp(`^commands: .*\\nskill: ${literal(skill)}\\nhooks: `, 'm'))
   assert.ok(existsSync(`${settingsFile}.bak-agent-board`))
   const after = JSON.parse(readFileSync(settingsFile, 'utf8'))
   assert.equal(after.hooks.SessionStart.length, 1)
@@ -152,6 +157,10 @@ test('install in a sandbox: the commands, the hooks once, a backup, and notifica
   writeFileSync(join(home, '.local', 'bin', 'spawn-agent'), '#!/bin/sh\necho mine\n')
   assert.match((await run()).out, /skipped .*spawn-agent: exists and is not ours/)
   assert.equal(readFileSync(join(home, '.local', 'bin', 'spawn-agent'), 'utf8'), '#!/bin/sh\necho mine\n')
+  // And so is someone else's skill of that name.
+  writeFileSync(skill, '---\nname: herdr-agents\n---\nmine\n')
+  assert.match((await run()).out, /skipped .*SKILL\.md: a skill of that name that is not ours/)
+  assert.equal(readFileSync(skill, 'utf8'), '---\nname: herdr-agents\n---\nmine\n')
   // Windows PowerShell 5.1 writes UTF-8 with a BOM: still read.
   writeFileSync(settingsFile, `\uFEFF${JSON.stringify({ model: 'opus' })}`)
   assert.equal((await run()).code, 0)
@@ -197,24 +206,58 @@ test('install writes into every shown profile and touches no hidden one', async 
   const { code, stdout, stderr } = await install(box)
   expect(code).toBe(0)
   expect(stderr).toBe('')
+  const skill = read(root, 'skills', 'herdr-agents', 'SKILL.md')
   for (const p of ['.claude', '.claude-work']) {
     expect(JSON.parse(read(home, p, 'settings.json')).hooks.SessionStart.at(-1)).toEqual(ours())
     expect(read(home, p, 'settings.json.bak-agent-board')).toBe(before)
+    // The agents' skill too, each profile its own copy, said before its hooks.
+    expect(read(home, p, 'skills', 'herdr-agents', 'SKILL.md')).toBe(skill)
     expect(stdout).toContain(
-      `hooks: SessionStart, UserPromptSubmit -> ${entry('hook.ts')} in ${join(home, p, 'settings.json')}\nstatus line: ${entry('statusline.ts')}\n`,
+      `skill: ${join(home, p, 'skills', 'herdr-agents', 'SKILL.md')}\nhooks: SessionStart, UserPromptSubmit -> ${entry('hook.ts')} in ${join(home, p, 'settings.json')}\nstatus line: ${entry('statusline.ts')}\n`,
     )
   }
   expect(read(home, '.claude-gamedev', 'settings.json')).toBe(before)
   expect(readdirSync(join(home, '.claude-gamedev'))).toEqual(['settings.json'])
-  expect(readdirSync(join(home, '.claude-work')).sort()).toEqual(['settings.json', 'settings.json.bak-agent-board'])
+  expect(readdirSync(join(home, '.claude-work')).sort()).toEqual([
+    'settings.json',
+    'settings.json.bak-agent-board',
+    'skills',
+  ])
+  expect(readdirSync(join(home, '.claude-work', 'skills'))).toEqual(['herdr-agents'])
+  expect(readdirSync(join(home, '.claude-work', 'skills', 'herdr-agents'))).toEqual(['SKILL.md'])
   // The commands once; the check after it per shown profile, by name, and not the hidden one.
   expect(stdout.match(/^commands: /gm)).toHaveLength(1)
   expect(stdout).toMatch(/^ok Private: Claude Code hooks · /m)
   expect(stdout).toMatch(/^ok Work: Claude Code hooks · /m)
   expect(stdout).toMatch(/^ok Work: Status line · /m)
+  expect(stdout).toMatch(/^ok Private: Skill herdr-agents for the agents · /m)
+  expect(stdout).toMatch(/^ok Work: Skill herdr-agents for the agents · /m)
   expect(stdout).not.toContain('gamedev')
   expect(stdout).not.toContain('Gamedev')
 }, 30_000)
+
+test('the agents’ skill per shown profile: someone else’s in one is left alone there, and the check says so', async () => {
+  const box = await sandbox()
+  const home = profilesIn(box, { '.claude': '{}', '.claude-work': '{}' })
+  const theirs = join(home, '.claude-work', 'skills', 'herdr-agents', 'SKILL.md')
+  mkdirSync(dirname(theirs), { recursive: true })
+  writeFileSync(theirs, '---\nname: herdr-agents\n---\nmine\n')
+  const { code, stdout, stderr } = await install(box)
+  expect(code).toBe(0)
+  expect(stderr).toBe('')
+  expect(read(theirs)).toBe('---\nname: herdr-agents\n---\nmine\n')
+  expect(stdout).toContain(`skipped ${theirs}: a skill of that name that is not ours\n`)
+  expect(read(home, '.claude', 'skills', 'herdr-agents', 'SKILL.md')).toBe(
+    read(root, 'skills', 'herdr-agents', 'SKILL.md'),
+  )
+  expect(stdout).toMatch(/^ok Private: Skill herdr-agents for the agents · /m)
+  expect(stdout).toMatch(/^! {2}Work: Skill herdr-agents is not the board's$/m)
+}, 30_000)
+
+test('the skill install copies is upstream’s, word for word', () => {
+  // Pinned to the merge that brought it (#50); a later upstream change moves the pin.
+  expect(read(root, 'skills', 'herdr-agents', 'SKILL.md')).toBe(oldSource('skills/herdr-agents/SKILL.md', '2d5c703'))
+})
 
 test('one shown profile’s settings.json that does not parse: nothing is written anywhere', async () => {
   const box = await sandbox()

@@ -4,9 +4,31 @@ import { languageName } from './lang.ts'
 import type { Card, Config } from './types.ts'
 
 // Bump when the brief says something new: every running session gets it again on its next prompt.
-export const BRIEF_VERSION = 3
+export const BRIEF_VERSION = 4
 
-export function brief(cfg: Pick<Config, 'categories'>, card: Card | null | undefined, cwd: string): string {
+type Env = Record<string, string | undefined>
+
+/**
+ * Where the session runs, when herdr is its host (herdr puts the pane's ids into its environment),
+ * and where to read how to work in it. Nothing outside herdr.
+ */
+export function herdrLine(env: Env = process.env): string {
+  if (env.HERDR_ENV !== '1' || !env.HERDR_PANE_ID) return ''
+  const where = [
+    env.HERDR_TAB_ID && `tab ${env.HERDR_TAB_ID}`,
+    env.HERDR_WORKSPACE_ID && `workspace ${env.HERDR_WORKSPACE_ID}`,
+  ]
+    .filter(Boolean)
+    .join(', ')
+  return `This session runs in herdr, in pane ${env.HERDR_PANE_ID}${where ? ` (${where})` : ''}. Starting or messaging other sessions, doing something later, a pane for a server or a login, a dropped MCP server: see the herdr-agents skill.`
+}
+
+export function brief(
+  cfg: Pick<Config, 'categories'>,
+  card: Card | null | undefined,
+  cwd: string,
+  env: Env = process.env,
+): string {
   const cat = card?.category
   const guess = categoryFor(cfg, cwd)
   const now = cat ? `${cat}` : guess ? `${guess} (guessed from the folder, set it if wrong)` : 'not set, set it now'
@@ -29,7 +51,10 @@ export function brief(cfg: Pick<Config, 'categories'>, card: Card | null | undef
     '- board remind <when> "<text>": at that time the board types "[board reminder] <text>" into this session as a prompt, waking it if it sleeps; on time, so a working session gets it queued into its turn (add --idle to wait until it is free, for work that needs a fresh turn rather than a time). when: in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time). board every "<cron, 5 fields>" "<text>" repeats it (runs at least 5 minutes apart); board schedule lists this session\'s entries, board unschedule <id> removes one. Write the text as an instruction to yourself.',
     "  More reliable than CronCreate or ScheduleWakeup: those live in this Claude process and die when the idle session is put to sleep; the board's entries survive sleep and restarts. Use it for anything due later than a few minutes.",
     `Card texts in ${languageName()}, short. Call it only when the state changes, not every turn.${state ? ` Card now: ${state}.` : ''}`,
-  ].join('\n')
+    herdrLine(env),
+  ]
+    .filter(Boolean)
+    .join('\n')
 }
 
 export function waitReminder(card: Pick<Card, 'wait'>): string {
