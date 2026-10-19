@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import http from 'node:http'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -78,7 +78,7 @@ test('a call starts MokuPilot on its own, in the folder the session started in, 
   assert.match(missing.error, /MokuPilot not found \(\/opt\/mp\/MokuPilot\)/)
 
   const real = { mokupilot: { command: [process.execPath] } }
-  assert.deepEqual(await startCall(real, item, opts), { ok: true, file: process.execPath })
+  assert.deepEqual(await startCall(real, item, opts), { ok: true, state: 'launched', file: process.execPath })
   const r = runs.at(-1)
   assert.deepEqual(r.args, ['call', '--claude-session', ID, '--cwd', project])
   assert.equal(r.opts.cwd, project)
@@ -113,6 +113,21 @@ test('a call starts MokuPilot on its own, in the folder the session started in, 
   assert.match((await startCall(real, item, { ...opts, run: failing })).error, /did not start: .* not found/)
 })
 
+test('launcher spawn acknowledges only launched, including an immediate application failure', async t => {
+  const run = () => {
+    const child = new EventEmitter()
+    child.unref = () => {}
+    queueMicrotask(() => { child.emit('spawn'); child.emit('exit', 2, null) })
+    return child
+  }
+  const result = await startCall({ mokupilot: { command: [process.execPath] } },
+    { session: ID, agent: 'claude' }, { run })
+  assert.equal(result.ok, true)
+  assert.equal(result.state, 'launched')
+  assert.notEqual(result.state, 'ready')
+  assert.notEqual(result.state, 'recording')
+})
+
 // ---------------------------------------------------------------- through the server
 async function unusedPort() {
   const server = http.createServer()
@@ -128,7 +143,8 @@ async function boardServer(t, cfg, panes, before = () => {}) {
   box.state({ 'api snapshot': { result: { snapshot: { panes, tabs: [], workspaces: [{ workspace_id: 'wA', label: 'Alpha' }] } } } })
   const port = await unusedPort()
   // The board itself runs in a herdr pane: that pane is not the call's.
-  const proc = box.run('server', { port, categories: [{ id: 'other', title: 'Other', color: 'gray' }], wakeUrl: null, refreshSec: 3600, ...cfg }, { HERDR_PANE_ID: 'wB:p1' })
+  // English whatever the system language: the tests read the board's texts.
+  const proc = box.run('server', { port, categories: [{ id: 'other', title: 'Other', color: 'gray' }], wakeUrl: null, refreshSec: 3600, language: 'en', ...cfg }, { HERDR_PANE_ID: 'wB:p1' })
   await until(() => proc.messages.some(m => m.ready))
   const url = `http://127.0.0.1:${port}`
   const board = async () => (await fetch(`${url}/api/board`)).json()
@@ -172,7 +188,7 @@ test('the board starts a MokuPilot call with a fork of a Claude session, only fr
   await until(() => existsSync(record) && readFileSync(record, 'utf8').length > 0, 10_000)
   const seen = JSON.parse(readFileSync(record, 'utf8'))
   assert.deepEqual(seen.args, ['call', '--claude-session', ID, '--cwd', project])
-  assert.equal(seen.cwd, project)
+  assert.equal(seen.cwd, realpathSync(project))
   assert.equal(seen.pane, null)
 
   for (const key of ['1c9d0f3a-2b4e-4d6f-8a1b-2c3d4e5f6a7b', 'pane-p3']) {
