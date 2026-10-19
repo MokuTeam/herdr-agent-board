@@ -776,6 +776,20 @@ body.panel-resizing, body.panel-resizing * { cursor: var(--grab-cursor) !importa
 .msg code { font: 12px var(--mono); padding: 1px 4px; border-radius: 4px; background: var(--fill); overflow-wrap: anywhere; }
 .msg.user code { background: rgba(255, 255, 255, 0.2); }
 .msg .when { display: block; margin-top: 3px; font-size: 11px; opacity: 0.55; }
+/* Not taken in yet (outbox.js): the user's bubble, quiet, with its state where the time goes. */
+.msg.user.waiting { background: color-mix(in srgb, var(--accent) 12%, var(--panel)); color: var(--label); box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--accent) 34%, transparent); }
+.msg.user.waiting .md a { color: var(--accent); text-decoration: none; }
+.msg.user.waiting code, .msg.user.waiting .md pre { background: var(--fill); }
+.msg.user.waiting .fs-chip, .msg.user.waiting code.fs-chip { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: none; color: var(--accent); }
+.msg.waiting .when { display: flex; align-items: center; gap: 4px; color: var(--label-2); opacity: 1; }
+.msg.waiting .when svg { width: 11px; height: 11px; stroke-width: 1.8; }
+.msg.waiting.failed { box-shadow: inset 0 0 0 1px var(--red); }
+.msg.waiting.failed .when { display: block; }
+.msg.waiting.failed .when b { font-weight: 500; color: var(--red); }
+.out-actions { display: flex; gap: 6px; margin-top: 6px; }
+.out-actions button { padding: 3px 10px; border: 0; border-radius: 999px; background: var(--fill); color: var(--accent); font: 500 12px/1.3 var(--font); transition: transform 100ms ease-out, background 120ms ease; }
+.out-actions button:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.out-actions button:active { transform: scale(0.96); }
 .tools { align-self: flex-start; max-width: 100%; font-size: 12px; color: var(--label-2); }
 .tools summary { list-style: none; display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 8px; cursor: default; }
 .tools summary::-webkit-details-marker { display: none; }
@@ -1523,6 +1537,7 @@ button.swatch:active { transform: scale(0.88); }
   :root { --label-2: var(--label); --label-3: rgba(60, 60, 67, 0.7); }
   .card, .group, .sheet, .layout-menu, .setup-pop { box-shadow: 0 0 0 1px var(--label-3); }
   .dock-preview { box-shadow: inset 0 0 0 2px var(--accent); }
+  .msg.user.waiting:not(.failed) { box-shadow: inset 0 0 0 1px var(--accent); }
 }
 
 #connection-state, #sheet-connection-state { margin: 4px 16px; color: var(--orange); font-size: 12px; }
