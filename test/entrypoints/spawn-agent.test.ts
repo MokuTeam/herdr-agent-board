@@ -54,7 +54,11 @@ const cardOf = (box: Sandbox, key: string): Record<string, unknown> | null => {
 const notListed = (dir: string) =>
   `--config-dir ${dir} is not the folder of a profile the board knows: see the board's Settings → Profiles`
 
-async function profileBox(launch: unknown = {}, extra: (home: string) => unknown[] = () => []) {
+async function profileBox(
+  launch: unknown = {},
+  extra: (home: string) => unknown[] = () => [],
+  fields: { default?: Record<string, unknown>; work?: Record<string, unknown> } = {},
+) {
   const box = await sandbox()
   box.state(STATE)
   const home = box.env.HOME as string
@@ -65,10 +69,19 @@ async function profileBox(launch: unknown = {}, extra: (home: string) => unknown
   }
   for (const dir of Object.values(dirs)) mkdirSync(dir, { recursive: true })
   boardConfig(box, {
+    language: 'en',
     launch,
     profiles: [
-      { id: 'default', title: 'Private', dir: dirs.default, color: 'indigo', hidden: false },
-      { id: 'work', title: 'Work', dir: dirs.work, color: 'teal', hidden: false, args: ['--model', 'sonnet'] },
+      { id: 'default', title: 'Private', dir: dirs.default, color: 'indigo', hidden: false, ...fields.default },
+      {
+        id: 'work',
+        title: 'Work',
+        dir: dirs.work,
+        color: 'teal',
+        hidden: false,
+        args: ['--model', 'sonnet'],
+        ...fields.work,
+      },
       { id: 'gamedev', title: 'Gamedev', dir: dirs.gamedev, color: 'pink', hidden: true },
       ...extra(home),
     ],
@@ -564,6 +577,106 @@ test('a pane id herdr gave out again is not the pane it recorded: refused for wo
   const r = await runSpawn(plain.box, [...HERE, '--cwd', plain.dir])
   assert.equal(r.code, 0, r.stderr)
   assert.ok(asked(plain.box).includes('pane run wA:p9 claude'))
+}, 60_000)
+
+test('a work agent’s helper types work’s start command, a string or a list, with --env and work’s args; launch.claude and launch.args go', async () => {
+  const cases: [unknown, string][] = [
+    ['cld-work', `cld-work --model sonnet --session-id ${SID}`],
+    [' cld-work  --verbose ', `cld-work --verbose --model sonnet --session-id ${SID}`],
+    [
+      ['cld-work', '--append-system-prompt', 'be brief'],
+      `cld-work --append-system-prompt 'be brief' --model sonnet --session-id ${SID}`,
+    ],
+  ]
+  for (const [command, typed] of cases) {
+    // No launch.claude: claudeCommand gives ['claude', '--x'], and the start command replaces all of it.
+    const { box, dir, work } = await profileBox({ args: ['--x'] }, () => [], { work: { command } })
+    const r = await runSpawn(box, ['--name', 'Helper', '--cwd', dir, '--workspace', 'wA', '--session-id', SID], {
+      CLAUDE_CONFIG_DIR: work,
+    })
+    assert.equal(r.code, 0, r.stderr)
+    const calls = callList(box)
+    assert.equal(
+      calls[0],
+      `tab create --workspace wA --cwd ${dir} --label Helper --env CLAUDE_CONFIG_DIR=${work} --no-focus`,
+    )
+    assert.equal(calls[1], `pane run wA:p9 ${typed}`)
+    expect(cardOf(box, SID)).toMatchObject({ profileWant: 'work' })
+  }
+}, 60_000)
+test('no start command, or a blank one, types launch.claude as before', async () => {
+  for (const work of [{}, { command: '' }, { command: '   ' }, { command: null }]) {
+    const { box, dir, work: workDir } = await profileBox({}, () => [], { work })
+    const r = await runSpawn(box, ['--name', 'Helper', '--cwd', dir, '--workspace', 'wA', '--session-id', SID], {
+      CLAUDE_CONFIG_DIR: workDir,
+    })
+    assert.equal(r.code, 0, r.stderr)
+    assert.equal(callList(box)[1], `pane run wA:p9 claude --model sonnet --session-id ${SID}`, JSON.stringify(work))
+  }
+}, 60_000)
+test('the board’s own profile types its start command too, its env left alone; --keep-env and --config-dir alike', async () => {
+  const own = await profileBox({}, () => [], { default: { command: 'cld' } })
+  const r = await runSpawn(own.box, [
+    '--name',
+    'Helper',
+    '--cwd',
+    own.dir,
+    '--workspace',
+    'wA',
+    '--session-id',
+    SID,
+    '--keep-env',
+  ])
+  assert.equal(r.code, 0, r.stderr)
+  assert.deepEqual(callList(own.box).slice(0, 2), [
+    `tab create --workspace wA --cwd ${own.dir} --label Helper --no-focus`,
+    `pane run wA:p9 cld --session-id ${SID}`,
+  ])
+  const set = await profileBox({}, () => [], { work: { command: 'cld-work' } })
+  const s = await runSpawn(set.box, [
+    '--name',
+    'Set',
+    '--cwd',
+    set.dir,
+    '--workspace',
+    'wA',
+    '--session-id',
+    SID,
+    '--config-dir',
+    set.work,
+  ])
+  assert.equal(s.code, 0, s.stderr)
+  assert.equal(callList(set.box)[1], `pane run wA:p9 cld-work --model sonnet --session-id ${SID}`)
+}, 60_000)
+test('a start command that picks its session itself gets no --session-id', async () => {
+  const { box, dir, work } = await profileBox({}, () => [], { work: { command: 'cld-work --resume' } })
+  const r = await runSpawn(box, ['--name', 'Helper', '--cwd', dir, '--workspace', 'wA', '--session-id', SID], {
+    CLAUDE_CONFIG_DIR: work,
+  })
+  assert.equal(r.code, 0, r.stderr)
+  assert.equal(callList(box)[1], 'pane run wA:p9 cld-work --resume --model sonnet')
+}, 30_000)
+test('a bad start command is refused before herdr is asked', async () => {
+  const cases: [unknown, string][] = [
+    ['-cld', 'A start command begins with a program, not “-cld”, which starts with a dash'],
+    [
+      "cld-work 'x'",
+      'The start command’s argument "\'x\'" has a quote or a control character in it, which cannot be typed into a shell',
+    ],
+    [
+      ['cld-work', 3],
+      'A start command is a program, or a list of the program and its arguments: "cld-work" or ["cld-work", "--model", "opus"]',
+    ],
+  ]
+  for (const [command, message] of cases) {
+    const { box, dir, work } = await profileBox({}, () => [], { work: { command } })
+    const r = await runSpawn(box, ['--name', 'Helper', '--cwd', dir, '--workspace', 'wA', '--session-id', SID], {
+      CLAUDE_CONFIG_DIR: work,
+    })
+    assert.equal(r.code, 1)
+    assert.equal(r.stderr.trim(), `spawn-agent: ${message}`)
+    assert.deepEqual(box.calls(), [], message)
+  }
 }, 60_000)
 
 test('a new tab opened without --env drops the record of a pane of that id; other records stay', async () => {

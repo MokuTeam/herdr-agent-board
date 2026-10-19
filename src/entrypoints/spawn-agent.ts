@@ -9,8 +9,10 @@
 //   PowerShell-style names work too: -Name, -Cwd, -Label, -BriefFile, -Brief, -Workspace, -TimeoutSec.
 //
 // What it types into the tab is `launch.claude` in the board's config.json (default: claude),
-// so a launcher of your own (one that sets up Telegram topics, say) goes there. --pane starts
-// Claude in that pane (at a shell prompt) instead of a new tab.
+// so a launcher of your own (one that sets up Telegram topics, say) goes there. A profile with a
+// start command of its own (its `command` in config.json, an alias like cld-work) has that typed
+// in place of `launch.claude`, its `args` after it. --pane starts Claude in that pane (at a shell
+// prompt) instead of a new tab.
 //
 // The session starts in the Claude profile of the agent that runs it (its CLAUDE_CONFIG_DIR), or
 // in the one --profile names; the board's own starts pass --config-dir <folder> or --keep-env.

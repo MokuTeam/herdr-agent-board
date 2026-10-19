@@ -64,6 +64,11 @@ export interface LaunchContext {
   readonly configDir: string | null
   /** The profile's own Claude arguments. */
   readonly profileArgs: readonly string[]
+  /**
+   * The profile's start command as the request check read it (the board's own launcher only;
+   * null: none, `launch.claude` is typed). spawn-agent reads it from config.json itself.
+   */
+  readonly profileCommand: readonly string[] | null
   /** A new workspace's first pane and tab: herdr's launcher starts the agent there, not in a new tab. */
   readonly rootPane: string | null
   readonly rootTab: string | null
@@ -262,7 +267,8 @@ const SPAWN_AGENT = join(ROOT, 'src', 'entrypoints', 'spawn-agent.ts')
 
 /**
  * The board's own spawn-agent (entrypoints/spawn-agent.ts) as the launcher, run as a
- * `launch.command` would be: a tab, `launch.claude` typed into it, the names, the first message.
+ * `launch.command` would be: a tab, the profile's start command or `launch.claude` typed into it,
+ * the names, the first message.
  * A new workspace's first pane is used as it is (--pane), as herdr's path does, rather than a
  * second tab beside it. The new-session window words it as before the board had its own launcher.
  */
@@ -273,9 +279,10 @@ export function spawnAgentLauncher(spec: LaunchSpec): Launcher {
     kind: 'builtin',
     describe: () => ({ kind: 'herdr', agent: 'claude' }),
     async start(l, on) {
-      // A launch.claude that picks its own session (--resume) gets no id from the board.
+      // A line that picks its own session (--resume, in the profile's start command, launch.claude
+      // or the profile's arguments) gets no id from the board.
       let sessionId: string | null = null
-      if (!choosesSession(claudeCommand(spec.claude, spec.args))) {
+      if (!choosesSession([...(l.profileCommand ?? claudeCommand(spec.claude, spec.args)), ...l.profileArgs])) {
         sessionId = randomUUID()
         on.session(sessionId)
       }

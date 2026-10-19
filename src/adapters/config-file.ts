@@ -10,6 +10,7 @@ import { isAbsolute, join } from 'node:path'
 import { builtinTitle, DEFAULT_CONFIG, normalizeConfig, validColor } from '../core/categories.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
+import { profileCommand } from '../core/launch/spawn-args.ts'
 import {
   absoluteProfileDir,
   mergeProfiles,
@@ -269,8 +270,9 @@ const freeColor = (list: readonly Profile[]): string =>
 
 /**
  * Change the profiles in config.json from the Profiles panel: { op: 'update', id, title?, color?,
- * hidden? } renames, recolors, shows or hides one, never changing its id or folder, and one stays
- * shown; { op: 'add', dir } adds a folder somewhere else ("~" is the home folder), shown.
+ * hidden?, command? } renames, recolors, shows or hides one, or sets its start command ('' clears
+ * it; one profileCommand refuses is refused with its message), never changing its id or folder,
+ * and one stays shown; { op: 'add', dir } adds a folder somewhere else ("~" is the home folder), shown.
  */
 export function editProfiles(body: unknown, { home = homedir() }: { home?: string } = {}): EditResult {
   const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
@@ -282,6 +284,17 @@ export function editProfiles(body: unknown, { home = homedir() }: { home?: strin
       const p = list.find(x => x.id === b.id)
       if (!p) return { ok: false, error: t('err.profile.missing', { id: String(b.id) }) }
       const entry = profiles.entryOf(p)
+      // The start command first: a refused one leaves the whole edit unwritten.
+      if (b.command !== undefined) {
+        let words: string[] | null
+        try {
+          words = profileCommand(b.command)
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) }
+        }
+        if (words === null) delete entry.command
+        else entry.command = typeof b.command === 'string' ? b.command.trim() : b.command
+      }
       if (b.title !== undefined) {
         if (!cleanTitle(b.title)) return { ok: false, error: t('err.profile.title') }
         entry.title = cleanTitle(b.title)

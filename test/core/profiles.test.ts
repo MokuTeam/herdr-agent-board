@@ -132,6 +132,16 @@ test('a listed profile keeps its id, folder, title and unknown fields; only new 
   expect(added.map(p => [p.id, p.hidden, p.color])).toEqual([['gamedev', true, 'pink']])
 })
 
+test('a listed profile keeps its start command as written, a bad one too: the start says what is wrong', () => {
+  const listed = [DEFAULT, { ...WORK, command: 'cld-work' }, { ...GAMEDEV, command: ['cld-g', 3] }]
+  const { list } = mergeProfiles(listed, [], H, null, 'win32')
+  expect(list.map(p => [p.id, p.command])).toEqual([
+    ['default', undefined],
+    ['work', 'cld-work'],
+    ['gamedev', ['cld-g', 3]],
+  ])
+})
+
 test('a start leaves the env alone only for the inherited profile', () => {
   expect(configDirFor({ dir: 'c:/users/me/.claude/' }, 'C:\\Users\\me\\.claude')).toBeNull()
   expect(configDirFor({ dir: 'C:\\Users\\me\\.claude-work' }, 'c:/users/me/.claude-work')).toBeNull()

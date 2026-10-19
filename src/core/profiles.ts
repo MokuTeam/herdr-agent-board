@@ -30,6 +30,8 @@ export interface Profile {
   hidden: boolean
   /** Extra Claude arguments for this profile's launches. */
   args?: string[]
+  /** typed instead of launch.claude (profileCommand reads it) */
+  command?: unknown
   [extra: string]: unknown
 }
 

@@ -54,6 +54,7 @@ test('a launch request is checked before anything runs', async () => {
       configDir: null,
       parent: null,
       profileArgs: [],
+      profileCommand: null,
     },
   )
   assert.equal((await launchOf({ name: 'A', cwd: dir, workspace: { create: 'Fresh' } })).newWorkspace, true)
@@ -242,6 +243,16 @@ const PROFILES = (box: Sandbox) => ({
     { id: 'gamedev', title: 'Gamedev', dir: join(homeOf(box), '.claude-gamedev'), color: 'pink', hidden: true },
   ],
 })
+/** PROFILES with these fields added to the profiles they name ({ work: { command: 'cld-work' } }). */
+const profilesWith = (box: Sandbox, fields: Record<string, Record<string, unknown>>) => ({
+  profiles: PROFILES(box).profiles.map(p => ({ ...p, ...fields[p.id] })),
+})
+/** The sandbox's config.json, where spawn-agent reads the profiles (their args and start commands). */
+const writeConfig = (box: Sandbox, cfg: unknown) => {
+  const file = join(box.env.APPDATA ?? '', 'herdr/plugins/config/agent-board/config.json')
+  mkdirSync(join(file, '..'), { recursive: true })
+  writeFileSync(file, JSON.stringify(cfg))
+}
 
 /** A server's config or extra env, as is or made from its sandbox (its home folder). */
 type Of<T> = T | ((box: Sandbox) => T)
@@ -1076,6 +1087,149 @@ test('launch.command gets {profile}, {profileDir} and CLAUDE_CONFIG_DIR for work
   // The panes a launcher opens are its own: the board records none of them.
   assert.equal(recordedPanes(box), null)
 }, 30_000)
+
+test('a profile’s start command is read only for the board’s own launcher, and a bad one refuses the launch', async () => {
+  const box = await sandbox()
+  const dir = join(box.dir, 'Acme project')
+  mkdirSync(dir)
+  const home = join(box.dir, 'home folder')
+  const own = defaultProfileDir(home)
+  const workDir = join(home, '.claude-work')
+  mkdirSync(workDir, { recursive: true })
+  const set = (command: unknown) =>
+    profileSet(
+      [
+        ...mergeProfiles([], [], home).list,
+        { id: 'work', title: 'Work', dir: workDir, color: 'teal', hidden: false, args: ['--model', 'sonnet'], command },
+      ],
+      own,
+    )
+  const body = { name: 'A', cwd: dir, workspace: { id: 'w2' }, profile: 'work' }
+  const launchOf = async (command: unknown, typesCommand: boolean) => {
+    const r = await checkRequest(body, { profiles: set(command), typesCommand })
+    assert.ok(r.ok, JSON.stringify(r))
+    return r.launch
+  }
+  assert.deepEqual((await launchOf('cld-work --verbose', true)).profileCommand, ['cld-work', '--verbose'])
+  assert.deepEqual((await launchOf(['cld-work'], true)).profileArgs, ['--model', 'sonnet'])
+  for (const none of [undefined, '', '  ']) assert.equal((await launchOf(none, true)).profileCommand, null)
+  // launch.agent and launch.command type none: never read, a bad one not refused.
+  for (const command of ['cld-work', '-cld']) assert.equal((await launchOf(command, false)).profileCommand, null)
+  assert.deepEqual(await checkRequest(body, { profiles: set('-cld'), typesCommand: true }), {
+    ok: false,
+    field: 'profile',
+    error: 'A start command begins with a program, not “-cld”, which starts with a dash',
+  })
+})
+test('the board’s spawn-agent types the profile’s start command: work’s with --env and its args, the board’s own without --env', async () => {
+  const cfg = (box: Sandbox) => profilesWith(box, { default: { command: 'cld' }, work: { command: 'cld-work' } })
+  const { box, started, launched } = await boardServer(cfg)
+  writeConfig(box, cfg(box))
+  box.state({ ...HERDR, ...OPENED, 'pane get': PANE_READY, 'pane run': { result: null } })
+  for (const [name, profile] of [
+    ['Work job', 'work'],
+    ['Own job', 'default'],
+  ]) {
+    const l = await launched(await started({ name, cwd: box.dir, category: 'acme', workspace: { id: 'wA' }, profile }))
+    assert.equal(l.state, 'done', l.error)
+  }
+  const tabs = box.calls().filter(a => a[0] === 'tab' && a[1] === 'create')
+  assert.deepEqual(
+    tabs.map(a => a.slice(-3)),
+    [
+      ['--env', `CLAUDE_CONFIG_DIR=${workDirOf(box)}`, '--no-focus'],
+      ['--label', 'Own job', '--no-focus'],
+    ],
+  )
+  const runs = box
+    .calls()
+    .filter(a => a[0] === 'pane' && a[1] === 'run')
+    .map(a => a[3] ?? '')
+  assert.equal(runs.length, 2)
+  assert.match(runs[0] ?? '', /^cld-work --model sonnet --session-id [0-9a-f-]{36}$/)
+  assert.match(runs[1] ?? '', /^cld --session-id [0-9a-f-]{36}$/)
+  assert.equal(cardOf(box.cards, runs[0]?.split(' ').at(-1)).profileWant, 'work')
+  assert.equal(cardOf(box.cards, runs[1]?.split(' ').at(-1)).profileWant, 'default')
+}, 60_000)
+test('a start command that picks its session itself gets no --session-id from the board', async () => {
+  const cfg = (box: Sandbox) => profilesWith(box, { work: { command: ['cld-work', '--continue'] } })
+  const { box, started, launched } = await boardServer(cfg)
+  writeConfig(box, cfg(box))
+  box.state({ ...HERDR, ...OPENED, 'pane get': PANE_READY, 'pane run': { result: null } })
+  const l = await launched(
+    await started({ name: 'Work job', cwd: box.dir, category: 'acme', workspace: { id: 'wA' }, profile: 'work' }),
+  )
+  assert.equal(l.state, 'done', l.error)
+  assert.equal(callOf(box, 'pane', 'run')[3], 'cld-work --continue --model sonnet')
+  // The board gave it no id, so it wrote no card for one.
+  const cards = existsSync(box.cards) ? readdirSync(box.cards).filter(f => f.endsWith('.json')) : []
+  assert.deepEqual(
+    cards.filter(f => cardOf(box.cards, f.slice(0, -5)).profileWant),
+    [],
+  )
+}, 40_000)
+test('a bad start command refuses the board’s own launch before anything runs', async () => {
+  const { box, post, board } = await boardServer(box => profilesWith(box, { work: { command: '-cld' } }))
+  for (const workspace of [{ id: 'wA' }, { create: 'Fresh' }]) {
+    const r = await post('/api/launch', { name: 'Nope', cwd: box.dir, category: 'acme', workspace, profile: 'work' })
+    assert.equal(r.status, 400)
+    assert.deepEqual(await r.json(), {
+      ok: false,
+      field: 'profile',
+      error: 'A start command begins with a program, not “-cld”, which starts with a dash',
+    })
+  }
+  assert.equal(
+    box
+      .calls()
+      .some(a => a[0] === 'tab' || (a[0] === 'workspace' && a[1] === 'create') || (a[0] === 'pane' && a[1] === 'run')),
+    false,
+  )
+  assert.deepEqual((await board()).launches, [])
+}, 30_000)
+test('launch.agent and launch.command never read a profile’s start command, a bad one included', async () => {
+  for (const command of ['cld-work', '-cld']) {
+    const { box, started, launched } = await boardServer(box => ({
+      ...VIA_HERDR,
+      ...profilesWith(box, { work: { command } }),
+    }))
+    box.state({ ...HERDR, ...OPENED })
+    const l = await launched(
+      await started({ name: 'Alpha job', cwd: box.dir, category: 'acme', workspace: { id: 'wA' }, profile: 'work' }),
+    )
+    assert.equal(l.state, 'done', l.error)
+    assert.deepEqual(callOf(box, 'agent', 'start').slice(-5, -1), ['--', '--model', 'sonnet', '--session-id'])
+    assert.equal(
+      box.calls().some(a => a.includes(command)),
+      false,
+    )
+  }
+  // …then the launch.command half: {profile} and {profileDir} as before, the start command nowhere.
+  const box0 = await sandbox()
+  const record = join(box0.dir, 'launcher.json')
+  const template = [
+    process.execPath,
+    launcher,
+    record,
+    '-Name',
+    '{name}',
+    '-Profile',
+    '{profile}',
+    '-Dir',
+    '{profileDir}',
+  ]
+  const viaCommand = await boardServer(box => ({
+    launch: { command: template },
+    ...profilesWith(box, { work: { command: 'cld-work' } }),
+  }))
+  const seen = () => JSON.parse(readFileSync(record, 'utf8')) as { args: string[]; configDir: string | null }
+  const work = await viaCommand.launched(
+    await viaCommand.started({ name: 'Work job', cwd: viaCommand.box.dir, workspace: { id: 'wA' }, profile: 'work' }),
+  )
+  assert.equal(work.state, 'done', work.error)
+  assert.deepEqual(seen().args.slice(2), ['-Profile', 'work', '-Dir', workDirOf(viaCommand.box)])
+  assert.equal(seen().args.includes('cld-work'), false)
+}, 90_000)
 
 test('refused before anything runs: two shown and none chosen, hidden, unknown, a folder that is gone', async () => {
   const { box, post, board } = await boardServer(box => ({ ...VIA_HERDR, ...PROFILES(box) }))

@@ -93,7 +93,9 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
 
   async function start(body: unknown, items: Item[] = []): Promise<StartResult> {
     const categories = new Set([...deps.cfg.categories.map(c => c.id), ...items.map(i => i.category)])
-    const r = await checkRequest(body, { categories, profiles: deps.profiles(), items })
+    // Only the board's own spawn-agent types a profile's start command: the others never read it.
+    const typesCommand = launcherFor(deps.cfg.launch).kind === 'builtin'
+    const r = await checkRequest(body, { categories, profiles: deps.profiles(), items, typesCommand })
     if (!r.ok) return r
     const l = newLaunch(r.launch, items)
     launches.set(l.id, l)

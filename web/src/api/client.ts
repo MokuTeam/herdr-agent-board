@@ -32,8 +32,8 @@ const isProfileLimits = (value: unknown): boolean => value === null || (isReply(
  * A Claude profile as the board sends it (src/core/payload.ts BoardProfile), as far as the page
  * relies on it: the profile switch and the cards' tags read its id, title, color, folder and
  * whether it is hidden; the usage pill and its popover read its usage; the Profiles panel reads
- * whether its folder is there, whether the board's hooks are in it (none read for a hidden one)
- * and its sessions now.
+ * whether its folder is there, whether the board's hooks are in it (none read for a hidden one),
+ * its sessions now and its start command (a board before start commands sent none).
  */
 export const isBoardProfile: Guard<BoardProfile> = (value): value is BoardProfile =>
   isReply(value) &&
@@ -45,7 +45,8 @@ export const isBoardProfile: Guard<BoardProfile> = (value): value is BoardProfil
   typeof value.exists === 'boolean' &&
   (typeof value.hooks === 'boolean' || value.hooks === null) &&
   typeof value.sessions === 'number' &&
-  isProfileLimits(value.limits)
+  isProfileLimits(value.limits) &&
+  (value.command === undefined || typeof value.command === 'string')
 
 /** The board payload's shape, as far as the page relies on it (src/core/payload.ts). */
 export const isBoardPayload: Guard<BoardPayload> = (value): value is BoardPayload =>
@@ -59,7 +60,9 @@ export const isBoardPayload: Guard<BoardPayload> = (value): value is BoardPayloa
   // Whether MokuPilot is here for calls (a board before it did not say).
   (value.mokupilot === undefined || typeof value.mokupilot === 'boolean') &&
   // The Claude profiles (a board before them sent none).
-  isListOf(value.profiles, isBoardProfile)
+  isListOf(value.profiles, isBoardProfile) &&
+  // The program launch.claude types (a board before start commands did not say).
+  (value.claudeProgram === undefined || typeof value.claudeProgram === 'string')
 
 /** One session as GET /api/session/<key> answers it (src/server/routes/session.ts). */
 export interface SessionDetail {

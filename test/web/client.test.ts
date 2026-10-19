@@ -111,6 +111,17 @@ test('a profile has what the Profiles panel reads: its folder there or not, the 
   expect(isBoardPayload({ ...payload(), profiles: [PROFILE, { ...PROFILE, sessions: '1' }] })).toBe(false)
 })
 
+test('a profile’s start command, and launch.claude’s program: strings, or none from a board before them', () => {
+  expect(isBoardProfile({ ...PROFILE, command: 'cld-work' })).toBe(true)
+  expect(isBoardProfile({ ...PROFILE, command: '' })).toBe(true)
+  expect(isBoardProfile(PROFILE)).toBe(true)
+  for (const command of [3, null, ['cld-work'], true])
+    expect([command, isBoardProfile({ ...PROFILE, command })]).toEqual([command, false])
+  expect(isBoardPayload({ ...payload(), claudeProgram: 'claude-tg' })).toBe(true)
+  expect(isBoardPayload({ ...payload(), claudeProgram: undefined })).toBe(true)
+  expect(isBoardPayload({ ...payload(), claudeProgram: 3 })).toBe(false)
+})
+
 test('a profile’s usage, which the usage pill reads: none (null), or a reading with its list of windows', () => {
   const reading = {
     source: 'statusline',

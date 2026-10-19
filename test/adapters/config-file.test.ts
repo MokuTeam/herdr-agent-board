@@ -415,6 +415,48 @@ test('a profile edit writes back the file’s own entries: what it does not set 
   expect(savedProfile('gamedev')?.title).toBe('Games')
 })
 
+test('editProfiles sets a profile’s start command, clears it with "", and refuses a bad one, writing nothing', () => {
+  const home = profileHome()
+  useLanguage('en')
+  seed({
+    language: 'en',
+    profiles: [{ id: 'work', dir: join(home, '.claude-work'), args: ['--model', 'sonnet'], note: 'mine' }],
+  })
+  ok(editProfiles({ op: 'update', id: 'work', command: ' cld-work ' }, { home }))
+  expect(savedProfile('work')).toMatchObject({ command: 'cld-work', args: ['--model', 'sonnet'], note: 'mine' })
+  ok(editProfiles({ op: 'update', id: 'work', command: ['cld-work', '--verbose'] }, { home }))
+  expect(savedProfile('work')?.command).toEqual(['cld-work', '--verbose'])
+  ok(editProfiles({ op: 'update', id: 'work', title: 'Job' }, { home }))
+  expect(savedProfile('work')?.command).toEqual(['cld-work', '--verbose'])
+  const before = readFileSync(configFile(), 'utf8')
+  expect(editProfiles({ op: 'update', id: 'work', command: '-cld' }, { home })).toEqual({
+    ok: false,
+    error: 'A start command begins with a program, not “-cld”, which starts with a dash',
+  })
+  expect(editProfiles({ op: 'update', id: 'work', title: 'Other', command: "cld-work 'x'" }, { home })).toEqual({
+    ok: false,
+    error:
+      'The start command’s argument "\'x\'" has a quote or a control character in it, which cannot be typed into a shell',
+  })
+  expect(editProfiles({ op: 'update', id: 'work', command: 42 }, { home })).toEqual({
+    ok: false,
+    error:
+      'A start command is a program, or a list of the program and its arguments: "cld-work" or ["cld-work", "--model", "opus"]',
+  })
+  useLanguage('ru')
+  expect(editProfiles({ op: 'update', id: 'work', command: '-cld' }, { home })).toEqual({
+    ok: false,
+    error: 'Команда запуска начинается с программы, а не с «-cld»: здесь в начале дефис',
+  })
+  useLanguage('en')
+  expect(readFileSync(configFile(), 'utf8')).toBe(before)
+  for (const none of ['', '   ']) {
+    ok(editProfiles({ op: 'update', id: 'work', command: none }, { home }))
+    expect('command' in (savedProfile('work') ?? {})).toBe(false)
+  }
+  expect(savedProfile('work')).toMatchObject({ title: 'Job', args: ['--model', 'sonnet'], note: 'mine' })
+})
+
 test('a lane’s usual profile: set, cleared, a bad id ignored', () => {
   isolatedHome()
   seed({ language: 'en', categories: [{ id: 'acme', color: 'blue', paths: [] }, { id: 'other' }] })

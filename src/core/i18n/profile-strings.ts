@@ -10,6 +10,15 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'err.profile.lastShown': 'At least one profile stays shown',
     'err.profile.noFolder': 'There is no folder {path}',
     'err.profile.exists': '{path} is the profile {title} already',
+    // a profile's start command, refused by the Profiles panel's edit, a launch from the board and
+    // spawn-agent (core/launch/spawn-args.ts profileCommand)
+    'err.profile.commandShape':
+      'A start command is a program, or a list of the program and its arguments: "cld-work" or ["cld-work", "--model", "opus"]',
+    'err.profile.commandDash': 'A start command begins with a program, not “{word}”, which starts with a dash',
+    'err.profile.commandProgram':
+      'The start command is typed at the new tab’s shell prompt, so its program “{word}” must be one word: a name the shell knows (cld-work) or a path, without spaces or quotes',
+    'err.profile.commandChars':
+      'The start command’s argument {word} has a quote or a control character in it, which cannot be typed into a shell',
     // Install from the Profiles panel (services/profiles.ts installProfile)
     'err.profile.hiddenInstall': 'Show {title} first: the board installs only into shown profiles',
     // the setup check with more than one profile shown (core/setup.ts)
@@ -76,6 +85,15 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'err.profile.lastShown': 'Хотя бы один профиль остаётся показанным',
     'err.profile.noFolder': 'Нет папки {path}',
     'err.profile.exists': '{path} — это уже профиль {title}',
+    // a profile's start command, refused by the Profiles panel's edit, a launch from the board and
+    // spawn-agent (core/launch/spawn-args.ts profileCommand)
+    'err.profile.commandShape':
+      'Команда запуска — это программа или список из программы и её аргументов: "cld-work" или ["cld-work", "--model", "opus"]',
+    'err.profile.commandDash': 'Команда запуска начинается с программы, а не с «{word}»: здесь в начале дефис',
+    'err.profile.commandProgram':
+      'Команда запуска набирается в оболочке новой вкладки, поэтому её программа «{word}» должна быть одним словом: имя, которое знает оболочка (cld-work), или путь без пробелов и кавычек',
+    'err.profile.commandChars':
+      'В аргументе команды запуска {word} есть кавычка или управляющий символ: такое не набрать в оболочке',
     // Install from the Profiles panel (services/profiles.ts installProfile)
     'err.profile.hiddenInstall': 'Сначала покажи {title}: доска ставит хуки только в показанные профили',
     // the setup check with more than one profile shown (core/setup.ts)

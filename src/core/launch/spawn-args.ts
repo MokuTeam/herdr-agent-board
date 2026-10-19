@@ -1,6 +1,8 @@
 // spawn-agent (entrypoints/spawn-agent.ts), the logic without herdr: its command line, the
-// command it types into the new tab (`launch.claude`), and whether text typed into a prompt is
-// still on screen. The board's own launcher (services/launch/launcher.ts) uses the same rules.
+// command it types into the new tab (a profile's start command, else `launch.claude`), and whether
+// text typed into a prompt is still on screen. The board's own launcher
+// (services/launch/launcher.ts) uses the same rules.
+import { t } from '../lang.ts'
 import { checkName } from './names.ts'
 
 export const USAGE =
@@ -143,6 +145,25 @@ export const choosesSession = (command: readonly string[]): boolean =>
 // A quote (the typographic ones too, which PowerShell also ends a string at) or a control character.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it refuses
 const UNTYPABLE = /['\u2018-\u201b\u0000-\u001f\u007f-\u009f\u2028\u2029]/
+// A word the shell takes as it is; on Windows a program may have backslashes too.
+const PLAIN = /^[\w=:./~+-]+$/
+const PLAIN_WIN_PROGRAM = /^[\w=:./\\~+-]+$/
+
+/** What keeps argv from being typed by shellLine's rules: the program starts with a dash, or is no
+ *  plain word (/^[\w=:./~+-]+$/, backslash too when win), or an argument holds UNTYPABLE. */
+export type TypingProblem = { why: 'dash' | 'program' | 'chars'; word: string }
+
+/** The first word of `argv` shellLine cannot type, and why; null when it can type them all. */
+export function typingProblem(argv: readonly string[], win: boolean): TypingProblem | null {
+  for (const [i, arg] of argv.entries()) {
+    const word = String(arg)
+    if (i === 0) {
+      if (word.startsWith('-')) return { why: 'dash', word }
+      if (!PLAIN.test(word) && !(win && PLAIN_WIN_PROGRAM.test(word))) return { why: 'program', word }
+    } else if (UNTYPABLE.test(word)) return { why: 'chars', word }
+  }
+  return null
+}
 
 /**
  * A command line for the tab's shell prompt (PowerShell, bash, zsh or fish): plain words as they
@@ -153,25 +174,61 @@ const UNTYPABLE = /['\u2018-\u201b\u0000-\u001f\u007f-\u009f\u2028\u2029]/
  * a path without spaces (with backslashes only on Windows, `win`, where the tab runs PowerShell).
  */
 export function shellLine(argv: readonly string[], win: boolean): string {
-  const plain = /^[\w=:./~+-]+$/
+  const problem = typingProblem(argv, win)
+  if (problem?.why === 'dash') throw new Error(`launch.claude: the program "${problem.word}" starts with a dash`)
+  if (problem?.why === 'program')
+    throw new Error(
+      `launch.claude: "${problem.word}" is typed at the tab's shell prompt, so the program must be a name on PATH or a path without spaces or quotes`,
+    )
+  if (problem?.why === 'chars')
+    throw new Error(
+      `launch.claude: the argument ${JSON.stringify(problem.word)} cannot be typed into a shell as it is (a quote or a control character)`,
+    )
   return argv
     .map((arg, i) => {
       const s = String(arg)
-      if (i === 0) {
-        if (s.startsWith('-')) throw new Error(`launch.claude: the program "${s}" starts with a dash`)
-        if (plain.test(s) || (win && /^[\w=:./\\~+-]+$/.test(s))) return s
-        throw new Error(
-          `launch.claude: "${s}" is typed at the tab's shell prompt, so the program must be a name on PATH or a path without spaces or quotes`,
-        )
-      }
-      if (plain.test(s)) return s
-      if (UNTYPABLE.test(s))
-        throw new Error(
-          `launch.claude: the argument ${JSON.stringify(s)} cannot be typed into a shell as it is (a quote or a control character)`,
-        )
-      return `'${s}'`
+      return i === 0 || PLAIN.test(s) ? s : `'${s}'`
     })
     .join(' ')
+}
+
+/**
+ * A profile's start command (its `command` in config.json), typed instead of `launch.claude`: a
+ * string split on spaces, or a list of the program and its arguments as it is. None (unset, null,
+ * blank) is null. Checked by shellLine's rules (typingProblem); throws with what is wrong, in the
+ * board's language.
+ */
+export function profileCommand(value: unknown, win: boolean = process.platform === 'win32'): string[] | null {
+  if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) return null
+  const words: unknown = typeof value === 'string' ? value.split(' ').filter(Boolean) : value
+  if (
+    !Array.isArray(words) ||
+    !words.length ||
+    !words.every((w): w is string => typeof w === 'string') ||
+    !String(words[0]).trim()
+  )
+    throw new Error(t('err.profile.commandShape'))
+  const problem = typingProblem(words, win)
+  if (problem?.why === 'dash') throw new Error(t('err.profile.commandDash', { word: problem.word }))
+  if (problem?.why === 'program') throw new Error(t('err.profile.commandProgram', { word: problem.word }))
+  if (problem?.why === 'chars') throw new Error(t('err.profile.commandChars', { word: JSON.stringify(problem.word) }))
+  return [...words]
+}
+
+/** A profile's start command as the Profiles panel shows it: one line, '' for none or one it cannot read. */
+export function commandText(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (Array.isArray(value) && value.every((w): w is string => typeof w === 'string')) return value.join(' ')
+  return ''
+}
+
+/** The program `launch.claude` types (claudeCommand's first word); `claude` when it is unset or not valid. */
+export function claudeProgram(setting: unknown, args?: unknown): string {
+  try {
+    return claudeCommand(setting, args)[0] ?? 'claude'
+  } catch {
+    return 'claude'
+  }
 }
 
 /**

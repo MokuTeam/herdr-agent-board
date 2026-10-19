@@ -1,13 +1,18 @@
 import { describe, expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
+import { useLanguage } from '../../src/core/lang.ts'
 import { failureKind, launcherError } from '../../src/core/launch/launcher-command.ts'
 import {
   choosesSession,
   claudeCommand,
+  claudeProgram,
+  commandText,
   parseArgs,
+  profileCommand,
   type SpawnArgs,
   shellLine,
   stillTyped,
+  typingProblem,
   USAGE,
 } from '../../src/core/launch/spawn-args.ts'
 
@@ -184,5 +189,65 @@ describe('what the board reads of spawn-agent’s failures', () => {
       ),
       'launcher',
     )
+  })
+})
+
+describe('a profile’s start command', () => {
+  test('none, a string split on spaces, a list as it is', () => {
+    for (const none of [undefined, null, '', '   ']) expect(profileCommand(none, false)).toBeNull()
+    expect(profileCommand('cld-work', false)).toEqual(['cld-work'])
+    expect(profileCommand('  cld-work   --verbose ', false)).toEqual(['cld-work', '--verbose'])
+    expect(profileCommand(['cld-work', '--append-system-prompt', 'be brief'], false)).toEqual([
+      'cld-work',
+      '--append-system-prompt',
+      'be brief',
+    ])
+    // A path with backslashes only on Windows, as for launch.claude.
+    expect(profileCommand('C:\\tools\\cld.cmd', true)).toEqual(['C:\\tools\\cld.cmd'])
+  })
+  test('refused by launch.claude’s rules, in the board’s words', () => {
+    useLanguage('en')
+    const shape =
+      'A start command is a program, or a list of the program and its arguments: "cld-work" or ["cld-work", "--model", "opus"]'
+    for (const bad of [[], [''], ['  '], ['cld-work', 3], 42, {}, true])
+      expect(() => profileCommand(bad, false)).toThrow(shape)
+    expect(() => profileCommand('-cld', false)).toThrow(
+      'A start command begins with a program, not “-cld”, which starts with a dash',
+    )
+    expect(() => profileCommand(['cld work'], true)).toThrow(
+      'The start command is typed at the new tab’s shell prompt, so its program “cld work” must be one word: a name the shell knows (cld-work) or a path, without spaces or quotes',
+    )
+    expect(() => profileCommand('C:\\tools\\cld.cmd', false)).toThrow(
+      'its program “C:\\tools\\cld.cmd” must be one word',
+    )
+    expect(() => profileCommand("cld-work --name 'x'", false)).toThrow(
+      'The start command’s argument "\'x\'" has a quote or a control character in it, which cannot be typed into a shell',
+    )
+    expect(() => profileCommand(['cld-work', 'a\nb'], false)).toThrow('argument "a\\nb" has a quote')
+    expect(() => profileCommand('cld-work Don’t', true)).toThrow('argument "Don’t" has a quote')
+    useLanguage('ru')
+    expect(() => profileCommand('-cld', false)).toThrow(
+      'Команда запуска начинается с программы, а не с «-cld»: здесь в начале дефис',
+    )
+    useLanguage('en')
+  })
+  test('shellLine’s rules, named', () => {
+    expect(typingProblem(['cld-work', '--model', 'opus 4'], false)).toBeNull()
+    expect(typingProblem(['-x'], false)).toEqual({ why: 'dash', word: '-x' })
+    expect(typingProblem(['C:\\tools\\cld.cmd'], false)).toEqual({ why: 'program', word: 'C:\\tools\\cld.cmd' })
+    expect(typingProblem(['C:\\tools\\cld.cmd'], true)).toBeNull()
+    expect(typingProblem(['cld', "it's"], true)).toEqual({ why: 'chars', word: "it's" })
+  })
+  test('as the Profiles panel shows it, and the program a profile without one types', () => {
+    expect(commandText('  cld-work --verbose ')).toBe('cld-work --verbose')
+    expect(commandText(['cld-work', '--append-system-prompt', 'be brief'])).toBe(
+      'cld-work --append-system-prompt be brief',
+    )
+    for (const none of [undefined, null, 42, ['cld', 3], {}]) expect(commandText(none)).toBe('')
+    expect(claudeProgram(undefined)).toBe('claude')
+    expect(claudeProgram(undefined, ['--model', 'opus'])).toBe('claude')
+    expect(claudeProgram('claude-tg')).toBe('claude-tg')
+    expect(claudeProgram(['claude-tg', '--model', 'opus'])).toBe('claude-tg')
+    expect(claudeProgram([])).toBe('claude')
   })
 })

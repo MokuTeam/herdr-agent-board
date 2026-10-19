@@ -13,6 +13,7 @@ import { COLUMNS } from '../core/board.ts'
 import { categoryInfo, colorHex, laneRank, PALETTE } from '../core/categories.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { lang, t } from '../core/lang.ts'
+import { claudeProgram, commandText } from '../core/launch/spawn-args.ts'
 import type { Limits } from '../core/limits.ts'
 import type { BoardLimits, BoardPayload, BoardProfile } from '../core/payload.ts'
 import { DEFAULT_PROFILE, type Profile, profileLabel } from '../core/profiles.ts'
@@ -102,6 +103,7 @@ function boardProfiles(deps: Deps, items: readonly Item[]): BoardProfile[] {
     hooks: p.hidden ? null : hooksInstalled(p.dir, FILES),
     sessions: items.filter(i => i.profile === p.id).length,
     limits: profileLimits(deps, p),
+    command: commandText(p.command),
   }))
 }
 
@@ -163,6 +165,8 @@ export function createBoardState({ deps, launches, terminals, version, push, set
       mokupilot: mokupilot?.() ?? false,
       setup: setup?.() ?? null,
       profiles,
+      // What a profile without a start command types: the Profiles panel's placeholder.
+      claudeProgram: claudeProgram(cfg.launch?.claude, cfg.launch?.args),
     }
   }
 

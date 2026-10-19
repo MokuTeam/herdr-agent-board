@@ -6,6 +6,7 @@ import { SLOW, statOf } from '../../adapters/folders.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
 import { checkBranch, checkName, NAME_MAX, UNSAFE_CHARS } from '../../core/launch/names.ts'
+import { profileCommand } from '../../core/launch/spawn-args.ts'
 import { type LaunchTarget, launchTarget, type ProfileSet } from '../../core/profiles.ts'
 import type { Item, Vars } from '../../core/types.ts'
 
@@ -40,13 +41,17 @@ export interface LaunchRequest {
   parent: string | null
   /** The profile's own Claude arguments. */
   profileArgs: string[]
+  /** The profile's start command, typed instead of `launch.claude`; null for none, or a launcher that types none. */
+  profileCommand: string[] | null
 }
 
 export type CheckResult = { ok: true; launch: LaunchRequest } | { ok: false; field: string; error: string }
 
 /**
  * Check a launch request: { ok, launch }, or { ok: false, field, error } for the field at fault.
- * `profiles`: the board's; `items`: the board now, for the session a "New here" names.
+ * `profiles`: the board's; `items`: the board now, for the session a "New here" names;
+ * `typesCommand`: the launcher types a command into the tab (the board's own spawn-agent), so the
+ * profile's start command is read and checked; other launchers never read it.
  */
 export async function checkRequest(
   body: unknown,
@@ -54,7 +59,8 @@ export async function checkRequest(
     categories = null,
     profiles,
     items = [],
-  }: { categories?: Set<string> | null; profiles: ProfileSet; items?: Item[] },
+    typesCommand = false,
+  }: { categories?: Set<string> | null; profiles: ProfileSet; items?: Item[]; typesCommand?: boolean },
 ): Promise<CheckResult> {
   const fail = (field: string, key: string, vars?: Vars): CheckResult => ({ ok: false, field, error: t(key, vars) })
   const b = isRecord(body) ? body : {}
@@ -110,6 +116,16 @@ export async function checkRequest(
     if (!st || st === SLOW || !st.isDirectory())
       return fail('profile', 'launch.err.profileFolder', { title: profile.title, path: configDir })
   }
+  // The profile's start command, for a launcher that types one: a bad one is refused here, before
+  // a worktree, a workspace or a tab.
+  let profileCommandWords: string[] | null = null
+  if (typesCommand) {
+    try {
+      profileCommandWords = profileCommand(profile.command)
+    } catch (err) {
+      return { ok: false, field: 'profile', error: err instanceof Error ? err.message : String(err) }
+    }
+  }
   return {
     ok: true,
     launch: {
@@ -127,6 +143,7 @@ export async function checkRequest(
       configDir,
       parent,
       profileArgs: (profile.args ?? []).filter((a): a is string => typeof a === 'string'),
+      profileCommand: profileCommandWords,
     },
   }
 }

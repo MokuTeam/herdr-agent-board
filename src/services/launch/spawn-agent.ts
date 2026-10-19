@@ -19,7 +19,13 @@ import {
 } from '../../adapters/profile-panes.ts'
 import { type Env, inheritedProfileDir, loadProfiles } from '../../adapters/profiles.ts'
 import { slugName, uniqueSlug } from '../../core/launch/names.ts'
-import { choosesSession, type SpawnOptions, shellLine, stillTyped } from '../../core/launch/spawn-args.ts'
+import {
+  choosesSession,
+  profileCommand,
+  type SpawnOptions,
+  shellLine,
+  stillTyped,
+} from '../../core/launch/spawn-args.ts'
 import { envRejected, type Profile, type SpawnEnv, spawnEnv } from '../../core/profiles.ts'
 
 /** A folder as given, absolute: ~ is the home folder, a relative one is from here. */
@@ -138,7 +144,8 @@ export interface SpawnResult {
  * workspace (inside herdr the current one), or in `pane`; wait until herdr sees it ready, name it
  * in herdr and in Claude, then type the brief. Throws with the reason when it cannot. The profile
  * comes from the options, else from `env` (the agent's own); `profiles` are the board's (default:
- * config.json's merged with the folders found in `home`).
+ * config.json's merged with the folders found in `home`). A profile's start command (its
+ * `command`) is typed in place of `claude`, the profile's arguments after it.
  */
 export async function spawnAgent(
   o: SpawnOptions,
@@ -167,7 +174,8 @@ export async function spawnAgent(
           .replace(/^\uFEFF/, '')
           .trim()
       : (o.brief ?? '').trim()
-  const program = [...claude, ...(profile?.args ?? [])]
+  // The profile's start command, else `claude`; a bad one throws here, before herdr is asked.
+  const program = [...(profileCommand(profile?.command) ?? claude), ...(profile?.args ?? [])]
   const argv = o.sessionId && !choosesSession(program) ? [...program, '--session-id', o.sessionId] : program
   const command = shellLine(argv, process.platform === 'win32')
 

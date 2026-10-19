@@ -51,6 +51,11 @@ export interface BoardProfile {
   sessions: number
   /** Its usage windows: from the board's status line in its sessions, else its usagebar cache. */
   limits: BoardLimits | null
+  /**
+   * Its start command, typed instead of `launch.claude`, as one line ('' for none). The server
+   * always sends it; a board before start commands sent none.
+   */
+  command?: string
 }
 
 export interface BoardPayload {
@@ -83,4 +88,6 @@ export interface BoardPayload {
   setup?: SetupSummary | null
   /** Every profile, shown and hidden, in the list's order (core/profiles.ts); a board before profiles sent none. */
   profiles?: BoardProfile[]
+  /** The program `launch.claude` types (`claude` when it is unset or not valid): what a profile without a start command types. */
+  claudeProgram?: string
 }

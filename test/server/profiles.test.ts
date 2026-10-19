@@ -536,3 +536,46 @@ test('a session in the wrong profile: one herdr notification, not one per refres
     ],
   ])
 }, 20_000)
+
+test('the board sends each profile’s start command ("" for none) and launch.claude’s program; a bad one is refused with 409', async () => {
+  const box = await boardWith({ '.claude': 'settings.json', '.claude-work': 'settings.json' })
+  const home = join(box.dir, 'home')
+  const listed = [
+    { id: 'default', title: 'Private', dir: join(home, '.claude'), color: 'indigo', hidden: false },
+    {
+      id: 'work',
+      title: 'Work',
+      dir: join(home, '.claude-work'),
+      color: 'teal',
+      hidden: false,
+      command: ['cld-work', '--verbose'],
+    },
+  ]
+  // config.json too: the panel's edits go there.
+  mkdirSync(join(configOf(box), '..'), { recursive: true })
+  writeFileSync(configOf(box), JSON.stringify({ language: 'en', profiles: listed }))
+  const { url, proc } = await serveBoard(box, {
+    language: 'en',
+    launch: { claude: ['claude-tg', '--model', 'opus'] },
+    profiles: listed,
+  })
+  const body = await boardOf(url, proc, 0)
+  expect(body.profiles?.map(p => [p.id, p.command])).toEqual([
+    ['default', ''],
+    ['work', 'cld-work --verbose'],
+  ])
+  expect(body.claudeProgram).toBe('claude-tg')
+  const post = (b: unknown) =>
+    fetch(`${url}/api/profiles`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify(b),
+    })
+  const bad = await post({ op: 'update', id: 'work', command: '-cld' })
+  expect([bad.status, await bad.json()]).toEqual([
+    409,
+    { ok: false, error: 'A start command begins with a program, not “-cld”, which starts with a dash' },
+  ])
+  expect((await post({ op: 'update', id: 'work', command: 'cld-work' })).status).toBe(200)
+  expect(profilesIn(box).find(p => p.id === 'work')?.command).toBe('cld-work')
+}, 20_000)
