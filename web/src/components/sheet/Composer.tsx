@@ -1,10 +1,11 @@
 // The sheet's foot: why the session's actions wait (no fresh data), the session's buttons — go to
-// it in herdr, a MokuPilot call with a fork of it, its terminal, wake it, put it to sleep, restart
-// it, its changes, take it off the board to the archive, its history, a new session here, and More at the row's end, with what the row
-// hides (the stylesheet decides) — the files
-// that go with the next message, and the message box: Enter sends, Shift+Enter breaks the line,
-// the box grows with the text; files come in through the clip or Ctrl+V (a screenshot).
+// it in herdr, a MokuPilot call with a fork of it, its terminal, its changes, its history, wake it,
+// put it to sleep, restart it, take it off the board to the archive, a new session here, as many
+// as the row's width holds (hooks/useActionRow.ts), and More at the row's end with the rest — the
+// files that go with the next message, and the message box: Enter sends, Shift+Enter breaks the
+// line, the box grows with the text; files come in through the clip or Ctrl+V (a screenshot).
 import { type ClipboardEvent, type KeyboardEvent, useLayoutEffect, useRef } from 'react'
+import { useActionRow } from '../../hooks/useActionRow.ts'
 import type { ComposerControls } from '../../hooks/useComposer.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { composerView, sendsOnKey } from '../../models/composer.ts'
@@ -48,7 +49,7 @@ export interface SessionButtons {
   history?: (button: HTMLElement) => void
   /** A new session in this one's lane and folder (the launch window). */
   newHere?: (button: HTMLElement) => void
-  /** The menu of the buttons the row hides (`keyboard`: pressed by keys, it lights its first item). */
+  /** The menu of the buttons the row leaves over (`keyboard`: pressed by keys, it lights its first item). */
   more?: (button: HTMLElement, keyboard: boolean) => void
 }
 
@@ -84,6 +85,10 @@ export function Composer({
 }: ComposerProps) {
   const t = useT()
   const fileInput = useRef<HTMLInputElement>(null)
+  const actions = useRef<HTMLDivElement>(null)
+  const row = useActionRow(actions)
+  /** `.over`: the row leaves it to More (More itself: nothing is left over). */
+  const over = (id: string) => row.over.has(id) && 'over'
   const { text, attachments, sending, messageRef } = composer
   const view = composerView({ present, sending, canMutate, text, attachments }, t)
 
@@ -113,14 +118,20 @@ export function Composer({
       <p id="sheet-connection-state" role="status" hidden={!av.blocked}>
         {av.banner}
       </p>
-      <div className="composer-actions">
-        <button type="button" className="button" id="sheet-focus" disabled={av.focus} onClick={() => on.focus?.()}>
+      <div className={classNames('composer-actions', row.icons && 'icons')} ref={actions}>
+        <button
+          type="button"
+          className={classNames('button', over('sheet-focus'))}
+          id="sheet-focus"
+          disabled={av.focus}
+          onClick={() => on.focus?.()}
+        >
           <FocusIcon />
           <span>{t('sheet.focus')}</span>
         </button>
         <button
           type="button"
-          className="button"
+          className={classNames('button', over('sheet-mokupilot'))}
           id="sheet-mokupilot"
           hidden={buttons.mokupilotHidden}
           title={t('mokupilot.hint')}
@@ -132,7 +143,7 @@ export function Composer({
         </button>
         <button
           type="button"
-          className={classNames('button', term.hasShell && 'has-shell')}
+          className={classNames('button', term.hasShell && 'has-shell', over('sheet-term'))}
           id="sheet-term"
           hidden={term.hidden}
           title={term.title || t('term.hint')}
@@ -143,43 +154,7 @@ export function Composer({
         </button>
         <button
           type="button"
-          className="button"
-          id="sheet-wake"
-          title={t('sheet.wake')}
-          hidden={buttons.wakeHidden}
-          disabled={av.wake}
-          onClick={() => on.wake?.()}
-        >
-          <SunIcon />
-          <span>{t('sheet.wake')}</span>
-        </button>
-        <button
-          type="button"
-          className="button"
-          id="sheet-sleep"
-          hidden={buttons.sleepHidden}
-          disabled={av.sleep}
-          title={buttons.sleepTitle}
-          onClick={() => on.sleep?.()}
-        >
-          <MoonIcon />
-          <span>{t('sheet.sleep')}</span>
-        </button>
-        <button
-          type="button"
-          className="button"
-          id="sheet-restart"
-          hidden={buttons.restartHidden}
-          disabled={av.restart}
-          title={buttons.restartTitle}
-          onClick={() => on.restart?.()}
-        >
-          <RestartIcon />
-          <span>{t('sheet.restart')}</span>
-        </button>
-        <button
-          type="button"
-          className="button"
+          className={classNames('button', over('sheet-changes'))}
           id="sheet-changes"
           hidden={changesHidden}
           disabled={av.files}
@@ -191,19 +166,7 @@ export function Composer({
         </button>
         <button
           type="button"
-          className="button"
-          id="sheet-archive"
-          hidden={buttons.archiveHidden}
-          disabled={av.archive}
-          title={buttons.archiveTitle}
-          onClick={() => on.archive?.()}
-        >
-          <ArchiveIcon />
-          <span>{t('archive.menu')}</span>
-        </button>
-        <button
-          type="button"
-          className="button"
+          className={classNames('button', over('sheet-history'))}
           id="sheet-history"
           hidden={buttons.historyHidden}
           disabled={av.files}
@@ -215,7 +178,55 @@ export function Composer({
         </button>
         <button
           type="button"
-          className="button"
+          className={classNames('button', over('sheet-wake'))}
+          id="sheet-wake"
+          title={t('sheet.wake')}
+          hidden={buttons.wakeHidden}
+          disabled={av.wake}
+          onClick={() => on.wake?.()}
+        >
+          <SunIcon />
+          <span>{t('sheet.wake')}</span>
+        </button>
+        <button
+          type="button"
+          className={classNames('button', over('sheet-sleep'))}
+          id="sheet-sleep"
+          hidden={buttons.sleepHidden}
+          disabled={av.sleep}
+          title={buttons.sleepTitle}
+          onClick={() => on.sleep?.()}
+        >
+          <MoonIcon />
+          <span>{t('sheet.sleep')}</span>
+        </button>
+        <button
+          type="button"
+          className={classNames('button', over('sheet-restart'))}
+          id="sheet-restart"
+          hidden={buttons.restartHidden}
+          disabled={av.restart}
+          title={buttons.restartTitle}
+          onClick={() => on.restart?.()}
+        >
+          <RestartIcon />
+          <span>{t('sheet.restart')}</span>
+        </button>
+        <button
+          type="button"
+          className={classNames('button', over('sheet-archive'))}
+          id="sheet-archive"
+          hidden={buttons.archiveHidden}
+          disabled={av.archive}
+          title={buttons.archiveTitle}
+          onClick={() => on.archive?.()}
+        >
+          <ArchiveIcon />
+          <span>{t('archive.menu')}</span>
+        </button>
+        <button
+          type="button"
+          className={classNames('button', over('sheet-new'))}
           id="sheet-new"
           disabled={av.newHere}
           title={av.newHereTitle}
@@ -226,7 +237,7 @@ export function Composer({
         </button>
         <button
           type="button"
-          className="button"
+          className={classNames('button', over('sheet-more'))}
           id="sheet-more"
           aria-haspopup="menu"
           aria-expanded={moreOpen}

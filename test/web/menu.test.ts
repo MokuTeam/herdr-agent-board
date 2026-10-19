@@ -137,7 +137,7 @@ test('a card’s menu offers a MokuPilot call for a Claude session when MokuPilo
   const claude = { ...idle, agent: 'claude' }
   const m = cardMenu(claude, { ...fresh, mokupilot: true })
   assert.deepEqual(ids(m).slice(0, 4), ['open', 'focus', 'mokupilot', 'write'])
-  assert.equal(find(m, 'mokupilot')?.label, 'Call in MokuPilot')
+  assert.equal(find(m, 'mokupilot')?.label, 'MokuPilot')
   // It needs the board, not herdr: still there while herdr data is stale.
   assert.equal(
     find(cardMenu(claude, { ...fresh, canMutate: false, mokupilot: true }), 'mokupilot')?.disabled,
@@ -214,9 +214,9 @@ test('Restart sits by Put to sleep for a Claude session: also mid-turn, gray whi
   assert.equal(find(cardMenu({ ...claude, session: null }, fresh), 'restart'), undefined)
 })
 
-test('a card’s menu is upstream’s cardMenu at #56 (Restart, Archive), case by case', () => {
+test('a card’s menu is upstream’s cardMenu at #58 (Restart, Archive), case by case', () => {
   const was = oldFunction(
-    oldCode('web/menu-model.js', ['SEP', 'PIN_COLUMNS', 'COLUMN_COLOR', 'tidy', 'cardMenu'], {}, '2b9e6b7'),
+    oldCode('web/menu-model.js', ['SEP', 'PIN_COLUMNS', 'COLUMN_COLOR', 'tidy', 'cardMenu'], {}, 'b2c5afa'),
     'cardMenu',
   )
   for (const tr of [t, translator('ru')])

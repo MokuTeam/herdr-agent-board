@@ -124,13 +124,14 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   [Answering from the board](#answering-from-the-board)), the conversation (tool calls folded;
   a background command, agent, monitor or MCP task reporting back and a board reminder are a
   quiet line of their own, not your message: an agent's report opens from it, a command's
-  "Output" opens its output file), a message box, "Go to herdr" (focuses the pane and
+  "Output" opens its output file), a message box under a row of actions (as many as the panel's
+  width holds, the most used first, the rest under "⋯"): "Go to herdr" (focuses the pane and
   brings the terminal window up), "Put to sleep" (through herdr-wake, idle sessions only; also
   the moon on a card), "Wake" for sleeping sessions, "Restart" (also in a card's menu) for one
   that lost an MCP server or acts up, see [Restart](#restart). To close: click the board beside
   it, flick it out the way it came, or Esc. Another card switches it to that session.
   Attachments stay with their session through a close.
-- "Call in MokuPilot" (the sheet, a card's menu), when [MokuPilot](https://github.com/MokuTeam/MokuPilot)
+- "MokuPilot", a call (the sheet, a card's menu), when [MokuPilot](https://github.com/MokuTeam/MokuPilot)
   is on this computer: a MokuPilot call starts at once, its agent a fork of the session
   (`claude --resume <id> --fork-session`, in the folder the session started in), so it knows what
   the session knows while the session itself stays as it was. The board runs MokuPilot's launcher

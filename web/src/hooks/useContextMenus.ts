@@ -275,10 +275,10 @@ export interface SheetMoreDeps {
 const isSheetButton = (el: unknown): el is SheetButton & HTMLElement =>
   typeof el === 'object' && el !== null && 'hidden' in el && 'disabled' in el && 'click' in el
 
-/** A button the row hides (the stylesheet's say, read at the click): More lists it. */
-const hiddenInRow = (el: HTMLElement): boolean => getComputedStyle(el).display === 'none'
+/** A button the row leaves over (`.over`, hooks/useActionRow.ts): More lists it. */
+const overInRow = (el: HTMLElement): boolean => el.classList.contains('over')
 
-/** The sheet's buttons the row hides, as a menu opened upward out of More (`button`). */
+/** The sheet's buttons the row leaves over, as a menu opened upward out of More (`button`). */
 export function sheetMoreMenuFrom(deps: SheetMoreDeps): (button: HTMLElement, keyboard: boolean) => void {
   return (button, keyboard) => {
     const rect = button.getBoundingClientRect()
@@ -287,7 +287,7 @@ export function sheetMoreMenuFrom(deps: SheetMoreDeps): (button: HTMLElement, ke
       group
         .map(id => document.getElementById(id))
         .filter(isSheetButton)
-        .filter(el => !el.hidden && hiddenInRow(el)),
+        .filter(el => !el.hidden && overInRow(el)),
     )
     deps.menu.open(sheetMoreMenu(groups, deps.canMutate(), t), {
       x: rect.right,

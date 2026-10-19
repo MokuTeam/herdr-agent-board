@@ -358,8 +358,8 @@ export function keyPoint(r: { left: number; top: number; width: number; height: 
 
 /**
  * What More lists of the sheet's buttons, in groups: the call and the tools, a new session here,
- * then the session's own life. Only those the row does not show (the stylesheet decides; the
- * buttons stay in the row, hidden, and keep their state).
+ * then the session's own life. Only those the row does not show (`.over`: hooks/useActionRow.ts
+ * decides; the buttons stay in the row, hidden, and keep their state).
  */
 export const SHEET_MORE: readonly (readonly string[])[] = [
   ['sheet-mokupilot', 'sheet-term', 'sheet-changes', 'sheet-history'],

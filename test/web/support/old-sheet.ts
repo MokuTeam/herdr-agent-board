@@ -6,10 +6,11 @@
 // when.js, questions.js's threadHTML — run against a small `$` over the parsed page. By hand: the
 // "New here" button app.js puts before More at start (#55's app.js:2658-2664), the Changes button's
 // rule in the detail's `changed` (app.js:903) and syncAvailability's part for the sheet (app.js:175-195).
-// The page and renderSheetHead are those of the archive (upstream PR #56): the baseline's with the
-// sheet's Terminal button (#36), the facts under its name one span each and Wake's tooltip (#43),
-// "Call in MokuPilot" (#44), Restart (#51), More at the row's end (#54), the call before the
-// Terminal (#55) and Archive (#56, with its archive-model.js archiveBlock), nothing else. The reminders' row (scheduleRow) is #51's: a call's results by their title (#45), a restart
+// The page and renderSheetHead are those of the row that fits its width (upstream PR #58): the
+// baseline's with the sheet's Terminal button (#36), the facts under its name one span each and
+// Wake's tooltip (#43), "Call in MokuPilot" (#44), Restart (#51), More at the row's end (#54), the
+// call before the Terminal (#55), Archive (#56, with its archive-model.js archiveBlock) and the
+// row's new order, Changes and History after the Terminal (#58), nothing else. The reminders' row (scheduleRow) is #51's: a call's results by their title (#45), a restart
 // with how it stands.
 import { translator } from '../../../src/core/i18n/translator.ts'
 import type { BoardPayload } from '../../../src/core/payload.ts'
@@ -67,11 +68,12 @@ export interface OldSheetScene {
 type StyleRule = [string, string]
 
 /**
- * Upstream's merge of the archive (PR #56), which has the terminal's (#36), the compact toolbar's
- * (#43), MokuPilot's call (#44), its results (#45), the restart's (#51), the session panel's row
- * (#54) and the call's move to the row's front (#55) in it.
+ * Upstream's merge of the row that fits its width (PR #58), which has the terminal's (#36), the
+ * compact toolbar's (#43), MokuPilot's call (#44), its results (#45), the restart's (#51), the
+ * session panel's row (#54), the call's move to the row's front (#55), the archive (#56) and the
+ * drag to it (#57, nothing of the sheet's) in it.
  */
-const SHEET_MERGE = '2b9e6b7'
+const SHEET_MERGE = 'b2c5afa'
 const OLD_CALL = await oldModule('web/notice-model.js', SHEET_MERGE)
 const OLD_ARCHIVE = await oldModule('web/archive-model.js', SHEET_MERGE)
 const archiveBlock = (it: unknown, schedules: unknown): unknown => {

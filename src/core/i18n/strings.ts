@@ -307,7 +307,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sheet.closeLabel': 'Close',
     'sheet.focus': 'Go to herdr',
     'sheet.wake': 'Wake',
-    'mokupilot.call': 'Call in MokuPilot',
+    'mokupilot.call': 'MokuPilot',
     'mokupilot.hint':
       'Start a MokuPilot call whose agent is a fork of this session: it knows what the session knows, and the session itself stays as it was',
     'mokupilot.started': 'MokuPilot launcher started for “{name}”. Call readiness is not confirmed.',
@@ -825,7 +825,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sheet.closeLabel': 'Закрыть',
     'sheet.focus': 'Перейти в herdr',
     'sheet.wake': 'Разбудить',
-    'mokupilot.call': 'Звонок в MokuPilot',
+    'mokupilot.call': 'MokuPilot',
     'mokupilot.hint':
       'Начать звонок в MokuPilot, где агент: форк этой сессии. Он знает всё, что знает сессия, а сама сессия остаётся как была',
     'mokupilot.started': 'Запущен MokuPilot для «{name}». Готовность звонка ещё не подтверждена.',

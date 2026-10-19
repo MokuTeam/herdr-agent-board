@@ -35,18 +35,32 @@ const PAGE = `<div id="page"><article class="card" data-key="s1" id="card"><span
 <button id="sheet-history" disabled> History </button>
 <button id="sheet-new" disabled> New here </button></div></div>`
 
-/** The buttons the sheet's row shows (the stylesheet's say): More lists the others. */
+/** The buttons the sheet's row shows (the row's fit): the others are `.over`, and More lists them. */
 const WIDE_ROW = ['sheet-focus', 'sheet-mokupilot', 'sheet-term', 'sheet-changes', 'sheet-more']
 const NARROW_ROW = ['sheet-focus', 'sheet-more']
 let rowShows = new Set(WIDE_ROW)
+const ROW = [
+  'sheet-focus',
+  'sheet-mokupilot',
+  'sheet-term',
+  'sheet-changes',
+  'sheet-history',
+  'sheet-wake',
+  'sheet-sleep',
+  'sheet-restart',
+  'sheet-archive',
+  'sheet-new',
+  'sheet-more',
+]
+/** The row as fitted to `rowShows`, before More is pressed. */
+const fitRow = () => {
+  for (const id of ROW) world.document.getElementById(id)?.classList.toggle('over', !rowShows.has(id))
+}
 
 let world: FakeWorld
 beforeEach(() => {
   rowShows = new Set(WIDE_ROW)
-  world = new FakeWorld({
-    viewport: { w: 1000, h: 700 },
-    computed: el => ({ display: rowShows.has(el.id) ? 'inline-flex' : 'none' }),
-  })
+  world = new FakeWorld({ viewport: { w: 1000, h: 700 } })
   world.install()
   for (const node of parseHtml(PAGE)) if (node.kind === 'element') world.mount(node)
 })
@@ -292,8 +306,8 @@ describe('as the old page: copying, opening with the system, going to a starting
 
 // ---------------------------------------------------------------- More
 
-/** Upstream's merge of the call's move to the row (#55): More lists what the row hides, in groups. */
-const MORE_MERGE = '8745585'
+/** Upstream's merge of the row that fits its width (#58): More lists what the row leaves over, in groups. */
+const MORE_MERGE = 'b2c5afa'
 
 interface MoreOpened {
   items: MenuEntry[]
@@ -335,7 +349,10 @@ function oldMore(
   }
   oldCode('web/app.js', wanted, deps, MORE_MERGE)
   return {
-    click: (button, detail) => handler?.({ currentTarget: button, detail }),
+    click: (button, detail) => {
+      fitRow()
+      handler?.({ currentTarget: button, detail })
+    },
     opened: () => opened,
   }
 }
@@ -362,7 +379,10 @@ function newMore(canMutate: boolean, coarse: boolean, log: string[]) {
     coarse: () => coarse,
   })
   return {
-    click: (button: FakeElement, detail: number) => more(asDom(button), detail === 0),
+    click: (button: FakeElement, detail: number) => {
+      fitRow()
+      more(asDom(button), detail === 0)
+    },
     opened: () => opened,
   }
 }
@@ -569,7 +589,7 @@ describe('More at the end of the session panel’s row', () => {
       }
   })
 
-  test('“Call in MokuPilot” first, before the tools; gray without the board, picked it is the button’s own click', async () => {
+  test('“MokuPilot”, the call, first, before the tools; gray without the board, picked it is the button’s own click', async () => {
     rowShows = new Set(NARROW_ROW)
     const term = world.document.createElement('button')
     term.id = 'sheet-term'
@@ -599,7 +619,7 @@ describe('More at the end of the session panel’s row', () => {
         '—',
         'sheet-sleep',
       ])
-      expect(b.opened()?.items[0]).toMatchObject({ id: 'sheet-mokupilot', label: 'Call in MokuPilot', disabled })
+      expect(b.opened()?.items[0]).toMatchObject({ id: 'sheet-mokupilot', label: 'MokuPilot', disabled })
       pickIn(a.opened(), 'sheet-mokupilot')
       pickIn(b.opened(), 'sheet-mokupilot')
       await world.flush()

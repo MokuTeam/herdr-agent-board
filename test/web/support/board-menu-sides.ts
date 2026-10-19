@@ -1,5 +1,5 @@
 // Which menu opens where, both ways in a fake DOM (support/fake-dom.ts), for parity: the old page's
-// board-menus.js (initBoardMenus as it was at the archive's merge — the parity baseline, upstream PR
+// board-menus.js (initBoardMenus as it was at #58's merge — the parity baseline, upstream PR
 // #36's terminal item, #44's MokuPilot call, #51's Restart and #56's archive, nothing else — with
 // its own menu-model.js and archive-model.js) and
 // the React board's listeners (hooks/useContextMenus.ts boardMenuListeners with
@@ -63,11 +63,12 @@ function rects(el: FakeElement): RectBox | null {
 // ---------------------------------------------------------------- the board
 
 /**
- * Upstream's merge of the archive (PR #56): board-menus.js and menu-model.js are the baseline's,
- * the terminal's item, MokuPilot's call (#44), its Restart (#51) and the archive's items (#56: a
- * card's Archive, "Idle"'s menu, a lane's tidy-up, the board's way to the archive).
+ * Upstream's merge of the session panel's row that fits its width (PR #58): board-menus.js and
+ * menu-model.js are the baseline's, the terminal's item, MokuPilot's call (#44), its Restart (#51)
+ * and the archive's items (#56: a card's Archive, "Idle"'s menu, a lane's tidy-up, the board's way
+ * to the archive); the call is just "MokuPilot" (#58).
  */
-const MENUS_MERGE = '2b9e6b7'
+const MENUS_MERGE = 'b2c5afa'
 
 const categories = [
   { id: 'acme', title: 'Acme', color: '#007AFF' },
@@ -267,7 +268,7 @@ function recordingMenu(log: string[]) {
   return { recorder, menu }
 }
 
-/** web/menu-model.js and archive-model.js at the archive's merge: what board-menus.js imported from them. */
+/** web/menu-model.js and archive-model.js at #58's merge: what board-menus.js imported from them. */
 function baselineModel(): Record<string, unknown> {
   const archive = oldCode('web/archive-model.js', ['DAY', 'TIDY_DAYS', 'archiveBlock'], {}, MENUS_MERGE)
   const names = [
@@ -289,7 +290,7 @@ function baselineModel(): Record<string, unknown> {
   return { ...Object.fromEntries(model), archiveBlock: archive.get('archiveBlock') }
 }
 
-/** initBoardMenus of web/board-menus.js as it was at the archive's merge. */
+/** initBoardMenus of web/board-menus.js as it was at #58's merge. */
 export function oldBoardMenus(s: BoardScene): MenuSide {
   const world = newWorld()
   const log: string[] = []
