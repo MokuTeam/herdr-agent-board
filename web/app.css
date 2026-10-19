@@ -585,7 +585,7 @@ body.panel-resizing, body.panel-resizing * { cursor: var(--grab-cursor) !importa
 .sheet-title h2 { margin: 6px 0 0; font: 700 22px/1.15 var(--font-display); letter-spacing: -0.018em; overflow-wrap: anywhere; }
 .sheet-meta { margin: 4px 0 0; font-size: 12.5px; color: var(--label-2); }
 .sheet-meta > span { white-space: nowrap; }
-.sheet-properties-toggle, #sheet-more { display: none; }
+.sheet-properties-toggle { display: none; }
 .sheet-question { flex: 0 1 auto; min-height: 0; max-height: 24vh; overflow: auto; padding: 0 18px 10px 22px; }
 .sheet-question .asked { margin: 0; }
 .status-pill {
@@ -825,15 +825,22 @@ div.notice, .notice > summary { display: flex; align-items: flex-start; gap: 7px
 .notice-body code { font: 12px var(--mono); padding: 1px 4px; border-radius: 4px; background: var(--fill); }
 .notice-body > pre { margin: 0; font: 11.5px/1.5 var(--mono); white-space: pre-wrap; }
 
-.composer { padding: 10px 14px 14px 18px; }
-/* One row: going to the session keeps its words; the rest are icons named by their tooltips
-   while the panel is narrow, and spell themselves out once it is wide enough. */
+.composer { padding: 10px 14px 14px 18px; container: composer / inline-size; }
+/* One row that fits any panel: going to the session keeps its words, the tools beside it are
+   icons named by their tooltips until the row is wide enough to spell them out, and the rest
+   (starting something from the session, its sleep, restart and the like) waits under More at
+   the end, which lists whatever the row hides, in groups (app.js MORE). Going to the session
+   gives up its words before the row would run over. */
 .composer-actions { display: flex; gap: 6px; margin-bottom: 10px; overflow-x: auto; scrollbar-width: none; }
 .composer-actions::-webkit-scrollbar { display: none; }
 .composer-actions > .button { flex: none; }
-@container sheet (max-width: 999px) {
-  .composer-actions > .button:not(#sheet-focus):not(#sheet-more) { justify-content: center; width: 30px; padding: 0; }
-  .composer-actions > .button:not(#sheet-focus):not(#sheet-more) > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.composer-actions > .button:not(#sheet-focus, #sheet-term, #sheet-changes, #sheet-history, #sheet-more) { display: none; }
+#sheet-focus { flex: 0 1 auto; min-width: 0; }
+#sheet-focus > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#sheet-more { justify-content: center; width: 30px; margin-left: auto; padding: 0; }
+@container composer (max-width: 539px) {
+  .composer-actions > .button:not(#sheet-focus) { justify-content: center; width: 30px; padding: 0; }
+  .composer-actions > .button:not(#sheet-focus) > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
 .button {
   display: inline-flex;
@@ -1489,9 +1496,8 @@ button.swatch:active { transform: scale(0.88); }
   #sheet .asked b { display: inline; margin-right: 5px; font-size: 11px; }
   #sheet .asked-dismiss { display: inline-flex; height: 26px; margin: 5px 0 0 6px; font-size: 12px; }
   #sheet .composer-actions { margin-bottom: 8px; flex-wrap: nowrap; }
-  #sheet .composer-actions > button:not(#sheet-focus):not(#sheet-more) { display: none; }
-  #sheet .sheet-more { display: inline-flex; order: 1; }
-  #sheet .composer-actions .button { min-height: 36px; }
+  #sheet .composer-actions .button { min-width: 36px; min-height: 36px; }
+  #sheet .composer-actions > #sheet-term { display: none; } /* a terminal wants a keyboard: under More */
   #sheet .composer { padding: 8px 16px 12px; }
   .ql-head { display: grid; grid-template-columns: 30px 28px minmax(0, 1fr) 30px; gap: 8px; padding: 12px; }
   .ql-back { grid-column: 1; grid-row: 1; }

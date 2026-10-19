@@ -25,9 +25,9 @@ export function initMenu({ onChange = () => {} } = {}) {
 
   /**
    * Open `items` at x, y (client coordinates). source: mouse, touch or keyboard (keyboard lights
-   * the first item). onPick(id, item) runs after the menu closed.
+   * the first item). up: above x, y when it fits there. onPick(id, item) runs after the menu closed.
    */
-  function open(items, { x, y, source = 'mouse', origin = null, onPick = () => {}, label = '' }) {
+  function open(items, { x, y, up = false, source = 'mouse', origin = null, onPick = () => {}, label = '' }) {
     if (!items?.length) return
     clear(false)
     pick = onPick
@@ -40,7 +40,7 @@ export function initMenu({ onChange = () => {} } = {}) {
     if (label) layer.el.setAttribute('aria-label', label)
     document.body.append(layer.el)
     const r = layer.el.getBoundingClientRect()
-    const p = placeMenu({ x, y }, { width: r.width, height: r.height }, viewport())
+    const p = placeMenu({ x, y }, { width: r.width, height: r.height }, viewport(), { up })
     place(layer, p)
     grow(layer, `${p.originX} ${p.originY}`)
     layers = [layer]

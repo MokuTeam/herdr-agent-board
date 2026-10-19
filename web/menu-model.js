@@ -9,8 +9,9 @@
  * Where a menu of `size` opens for a click at `point`: down and to the right of it, flipped
  * left or up when it would leave the viewport, and pressed against the margin when it fits
  * neither way. Taller than the viewport: it scrolls (maxHeight). origin is the corner it grows from.
+ * `up`: above the point whenever it fits there, for a control low in its window.
  */
-export function placeMenu(point, size, viewport, margin = 8) {
+export function placeMenu(point, size, viewport, { margin = 8, up = false } = {}) {
   const maxHeight = viewport.height - 2 * margin
   const h = Math.min(size.height, maxHeight)
   const w = Math.min(size.width, viewport.width - 2 * margin)
@@ -24,7 +25,7 @@ export function placeMenu(point, size, viewport, margin = 8) {
   }
   let y = point.y
   let originY = 'top'
-  if (y + h > viewport.height - margin) {
+  if (y + h > viewport.height - margin || (up && point.y - h >= margin)) {
     if (point.y - h >= margin) {
       y = point.y - h
       originY = 'bottom'
