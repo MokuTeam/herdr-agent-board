@@ -151,8 +151,11 @@ export interface ArchivePanelState {
 }
 
 export interface Archive {
-  /** Off the board until Return: its card flies into the button, its tab closes a few seconds later. */
-  archiveSession(key: string): Promise<void>
+  /**
+   * Off the board until Return: its card flies into the button, its tab closes a few seconds later.
+   * `fly`: false for a card dropped on the archive's place, which went into it on its own.
+   */
+  archiveSession(key: string, opts?: { fly?: boolean }): Promise<void>
   /** Several at once (a tidy-up): one request, one toast, one Return for all. */
   archiveMany(keys: readonly string[]): Promise<void>
   /** Bring sessions back: put back as they were while their tab has not closed yet, else resumed in a new tab. */
@@ -270,7 +273,7 @@ export function useArchive(): Archive {
       own.current.lastArchived = { keys, until: now + ms, hide: () => dispatch({ type: 'toastHide', token }) }
     }
 
-    async function archiveSession(key: string): Promise<void> {
+    async function archiveSession(key: string, { fly = true }: { fly?: boolean } = {}): Promise<void> {
       const it = itemOf(key)
       // On its way already (a double click): one is enough.
       if (!it || isArchiving(key)) return
@@ -279,7 +282,7 @@ export function useArchive(): Archive {
       if (why) return toast(t(why), true)
       if (!board.canMutate) return refused()
       closeSheet([key])
-      flyToArchive([cardEl(key)])
+      if (fly) flyToArchive([cardEl(key)])
       own.current.going.add(key)
       dispatch({ type: 'archiving', keys: [key], at: Date.now() })
       const r = await page().actions.act(key, 'archive')

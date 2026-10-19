@@ -1,6 +1,8 @@
 // Drag a card to another lane or column. A press becomes a drag after 6 px; a ghost of the card
 // then follows the pointer 1:1 (lifted a little), the drop place lights up, the page scrolls at
 // its edges, and on release the ghost lands where the card lives with the pointer's velocity.
+// Or to the archive: its place comes up with the drag (components/DropArchive.tsx); let go over
+// it, or flicked at it, the ghost goes into it and the archive takes the session.
 import {
   type PointerEvent as ReactPointerEvent,
   useCallback,
@@ -10,6 +12,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { type DropArchiveView, dropsOn } from '../models/archive-drop.ts'
 import {
   DRAG,
   type DropLit,
@@ -34,6 +37,19 @@ export interface DragOptions {
   onDrop(key: string, target: DropTarget): void
   /** The height of a panel docked at the bottom: the page scrolls above it. */
   roomBelow?: (() => number) | undefined
+  /** The archive as a place to drop a card on; none: no such place. */
+  archive?: ArchiveDrop | undefined
+}
+
+export interface ArchiveDrop {
+  /** The place's element (components/DropArchive.tsx). */
+  place(): HTMLElement | null
+  /** Why `key` may not go to the archive now, a text key, or '' (models/archive-drop.ts dropWhy). */
+  why(key: string): string
+  /** Let go on the place, and it may go: the archive takes it (its ghost went into the place). */
+  onDrop(key: string): void
+  /** Let go on the place, but it may not go: say why (`why`'s text key). */
+  onRefused(why: string): void
 }
 
 export interface DragHandlers {
@@ -44,6 +60,8 @@ export interface DragHandlers {
   placeholder: string | null
   /** The lane or column lit up as the drop place. */
   lit: DropLit | null
+  /** The archive's place as the drag has it; null: no drag yet. */
+  archive: DropArchiveView | null
 }
 
 interface Ghost {
@@ -65,6 +83,10 @@ interface Drag {
   ghost: Ghost | null
   target: DropTarget | null
   lit: DropLit | null
+  /** Over the archive's place. */
+  over: boolean
+  /** Why it may not go to the archive, or '' (asked as the drag starts). */
+  archiveWhy: string
   /** Listens on `card` (the pointer is captured there) and makes it the drag's card. */
   attach(card: HTMLElement): void
   release(): void
@@ -78,6 +100,10 @@ function placeAt(el: Element | null): DropPlace {
 }
 
 const sameLit = (a: DropLit | null, b: DropLit | null) => a?.lane === b?.lane && a?.column === b?.column
+
+/** Over the archive's place while it is drawn (with some slop), or, with `v`, flicked at it from close by. */
+const overPlace = (place: HTMLElement | null | undefined, p: { x: number; y: number }, v?: { x: number; y: number }) =>
+  !!place?.classList.contains('on') && dropsOn(place.getBoundingClientRect(), p, v)
 
 /** The card of `key` in the page (not a ghost), when there is one. */
 const cardElement = (key: string): HTMLElement | undefined =>
@@ -110,6 +136,7 @@ export function useCardDrag(opts: DragOptions): DragHandlers {
   const options = useLatest(opts)
   const [placeholder, setPlaceholder] = useState<string | null>(null)
   const [lit, setLit] = useState<DropLit | null>(null)
+  const [archive, setArchive] = useState<DropArchiveView | null>(null)
   const current = useRef<Drag | null>(null)
   const dragged = useRef<{ key: string; at: number } | null>(null)
 
@@ -124,7 +151,44 @@ export function useCardDrag(opts: DragOptions): DragHandlers {
     d.card.classList.remove('placeholder')
     document.body.classList.remove('dragging')
     setLit(null)
+    setArchive(view => view && { ...view, up: false })
     setPlaceholder(key => (key === d.key ? null : key))
+  }, [])
+
+  /**
+   * A card let go on the archive's place goes into it, shrinking and fading where the place is,
+   * and the archive takes it as "Archive" in its menu does (the same checks, the toast with Return).
+   */
+  const dropInArchive = useCallback((d: Drag, ghost: Ghost, place: HTMLElement) => {
+    const to = place.getBoundingClientRect()
+    const from = ghost.el.getBoundingClientRect()
+    const dx = to.left + to.width / 2 - (from.left + from.width / 2)
+    const dy = to.top + to.height / 2 - (from.top + from.height / 2)
+    // From where the drag left it, its own springs done.
+    for (const s of [ghost.x, ghost.y, ghost.s]) s.stop()
+    const x0 = ghost.x.value
+    const y0 = ghost.y.value
+    const s0 = ghost.s.value
+    const gone = () => {
+      ghost.el.remove()
+      d.card.classList.remove('placeholder')
+      setPlaceholder(key => (key === d.key ? null : key))
+    }
+    if (reducedMotion.matches) gone()
+    else {
+      const s = new Spring({
+        value: 0,
+        damping: 1,
+        response: 0.32,
+        precision: 0.002,
+        onUpdate: k => {
+          ghost.el.style.transform = `translate3d(${x0 + dx * k}px, ${y0 + dy * k}px, 0) scale(${s0 - (s0 - 0.12) * k})`
+          ghost.el.style.opacity = String(1 - k * k)
+        },
+        onRest: gone,
+      })
+      s.to(1)
+    }
   }, [])
 
   const onPointerDown = useCallback(
@@ -148,6 +212,8 @@ export function useCardDrag(opts: DragOptions): DragHandlers {
         ghost: null,
         target: null,
         lit: null,
+        over: false,
+        archiveWhy: '',
         attach: () => {},
         release: () => {},
       }
@@ -163,11 +229,23 @@ export function useCardDrag(opts: DragOptions): DragHandlers {
           d.card.classList.add('placeholder') // now, not at the next render
           setPlaceholder(d.key)
           document.body.classList.add('dragging')
+          // The archive's place comes up, saying why the session may not go there now.
+          const archive = options.current.archive
+          if (archive) {
+            d.archiveWhy = archive.why(d.key)
+            setArchive({ up: true, over: false, why: d.archiveWhy })
+          }
         }
         d.ghost.x.set(ev.clientX - d.grab.x)
         d.ghost.y.set(ev.clientY - d.grab.y)
+        // Over the archive's place, no lane or column is a drop place, and the page does not scroll.
+        const over = overPlace(options.current.archive?.place(), { x: ev.clientX, y: ev.clientY })
+        if (over !== d.over) {
+          d.over = over
+          setArchive(view => view && { ...view, over })
+        }
         const place = placeAt(document.elementFromPoint(ev.clientX, ev.clientY))
-        const target = options.current.targetAt(d.key, place)
+        const target = over ? null : options.current.targetAt(d.key, place)
         // The column lights up when the card changes column there, else the lane when only the lane changes.
         const nextLit = dropLit(target, place)
         if (!sameLit(nextLit, d.lit)) {
@@ -175,6 +253,7 @@ export function useCardDrag(opts: DragOptions): DragHandlers {
           setLit(nextLit)
         }
         d.target = target
+        if (over) return
         const step = edgeScroll(ev.clientY, innerHeight, options.current.roomBelow?.() ?? 0)
         if (step) scrollBy(0, step)
       }
@@ -189,7 +268,19 @@ export function useCardDrag(opts: DragOptions): DragHandlers {
         const v = velocityOf(d.samples)
         setLit(null)
         document.body.classList.remove('dragging')
-        if (d.target) options.current.onDrop(d.key, d.target)
+        // Let go over the archive's place, or flicked at it from close by.
+        const archive = options.current.archive
+        const place = archive?.place()
+        const over = overPlace(place, { x: ev.clientX, y: ev.clientY }, v)
+        setArchive(view => view && { ...view, up: false })
+        if (over && place && !d.archiveWhy) {
+          dropInArchive(d, ghost, place)
+          archive?.onDrop(d.key)
+          return
+        }
+        // It may not go: it says why, and the card lands back where it lives.
+        if (over) archive?.onRefused(d.archiveWhy)
+        if (d.target && !over) options.current.onDrop(d.key, d.target)
         // Land where the card is on screen, carrying the release velocity into the spring. React
         // draws the drop after this handler, so this is where the card was when let go.
         const r = d.card.getBoundingClientRect()
@@ -235,7 +326,7 @@ export function useCardDrag(opts: DragOptions): DragHandlers {
       card.setPointerCapture(e.pointerId)
       d.attach(card)
     },
-    [options, cancel],
+    [options, cancel, dropInArchive],
   )
 
   // After every draw of the board: a session that left mid-drag ends the drag; a card React drew
@@ -272,7 +363,7 @@ export function useCardDrag(opts: DragOptions): DragHandlers {
   )
 
   return useMemo(
-    () => ({ onPointerDown, justDragged, placeholder, lit }),
-    [onPointerDown, justDragged, placeholder, lit],
+    () => ({ onPointerDown, justDragged, placeholder, lit, archive }),
+    [onPointerDown, justDragged, placeholder, lit, archive],
   )
 }

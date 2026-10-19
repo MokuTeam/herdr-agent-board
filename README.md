@@ -936,6 +936,10 @@ it); Claude keeps the conversation on disk, so it can come back.
   the click (`archiveUndoSec` in config.json), so Return (or Ctrl+Z) in that time puts the card back as it was, nothing closed.
   That wait is kept in the archive's record on disk: a reload of the page or a restart of the
   board in between changes nothing (a board that starts closes the ones that are due).
+- Or drag the card there: while a card is dragged (with a mouse), an "Archive" place comes up at
+  the foot of the board and lights up while the card is over it; let go there, or flick the card
+  at it from close by. It goes the same way, with the same toast. A session that may not go yet
+  shows why on that place, and a drop on it puts the card back.
 - Only a session that is free goes: a Claude session (Return resumes it by its id), its turn
   over, no dialog in its terminal, no helpers at work, no restart under way. The menu item is
   gray with the reason. What only herdr can tell is checked when you click (text you started
