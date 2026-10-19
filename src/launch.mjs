@@ -14,9 +14,9 @@
 import { execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
-import { open, readdir, stat } from 'node:fs/promises'
+import { open, readdir, realpath, stat } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { checkBranch, checkName, normDir, sameDir, slugName, uniqueSlug, UNSAFE_CHARS, worktreePath } from '../web/launch-model.js'
 import { resolvePath } from './files.mjs'
 import { raiseTerminal } from './actions.mjs'
@@ -124,6 +124,15 @@ export function launcherLabel(command) {
 const SLOW = Symbol('slow')
 const within = (promise, ms) => Promise.race([promise, new Promise(r => setTimeout(r, ms, SLOW).unref?.())])
 const statOf = (path, ms = 2000) => within(stat(path).catch(() => null), ms)
+
+// Bound canonicalization too: a network share may disappear after validation.
+export async function worktreeSubdir(root, cwd, { canonicalize = realpath, timeoutMs = 2000 } = {}) {
+  const paths = await within(Promise.all([canonicalize(root), canonicalize(cwd)]).catch(() => null), timeoutMs)
+  if (paths === SLOW) throw new LaunchError(t('launch.err.cwdSlow', { path: cwd }), 'worktree')
+  if (!paths) throw new LaunchError(t('launch.err.cwdMissing', { path: cwd }), 'worktree')
+  const below = relative(paths[0], paths[1])
+  return below !== '..' && !below.startsWith(`..${sep}`) && !isAbsolute(below) ? below : ''
+}
 
 let rootsCache = { at: 0, list: [] }
 /** Where browsing starts: home, and every drive on Windows. */
@@ -474,13 +483,15 @@ export function createLaunches({ cfg, log = () => {}, onChange = () => {} }) {
       step(l, 'worktree')
       const git = await gitInfo(l.cwd)
       if (!git) throw new LaunchError(t('launch.err.notGit', { path: l.cwd }), 'worktree')
+      // Git returns a canonical root (e.g. /private/tmp on macOS); the picker may
+      // have used an alias. Compare canonical paths before carrying the subfolder over.
+      const below = await worktreeSubdir(git.root, l.cwd)
       const path = worktreePath(git.root, l.worktree.branch)
       if (await statOf(path)) throw new LaunchError(t('launch.err.worktreeExists', { path }), 'worktree')
       const r = await run('git', ['-C', git.root, 'worktree', 'add', '-b', l.worktree.branch, path], { timeout: 60_000 })
       if (r.code !== 0) throw new LaunchError(t('launch.err.worktreeGit', { why: launcherError(r.stdout, r.stderr).message || r.error?.message }), 'worktree')
       // The session works in the same place below the checkout as the folder that was picked.
-      const below = relative(git.root, l.cwd)
-      const inside = below && !below.startsWith('..') ? join(path, below) : path
+      const inside = below ? join(path, below) : path
       l.cwd = (await statOf(inside))?.isDirectory?.() ? inside : path
       l.worktreeMade = true
     }
