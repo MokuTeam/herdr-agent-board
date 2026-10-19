@@ -41,6 +41,8 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'tb.profiles': 'Profiles',
     'profile.all': 'All profiles',
     'profile.wrong': 'Wrong profile: started for {want}',
+    // a shown profile with no usage reading, in the usage popover (web/src/components/LimitsPop.tsx)
+    'limits.noSession': 'No session lately',
   },
   ru: {
     // the Profiles panel's edits (adapters/config-file.ts editProfiles)
@@ -80,5 +82,7 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'tb.profiles': 'Профили',
     'profile.all': 'Все профили',
     'profile.wrong': 'Не тот профиль: запущена для {want}',
+    // a shown profile with no usage reading, in the usage popover (web/src/components/LimitsPop.tsx)
+    'limits.noSession': 'Сессий давно не было',
   },
 }

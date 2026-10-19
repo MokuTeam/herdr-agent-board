@@ -22,9 +22,16 @@ const isListOf = <T>(value: unknown, each: Guard<T>): boolean =>
   value === undefined || (Array.isArray(value) && value.every(each))
 
 /**
+ * A profile's usage (src/core/payload.ts BoardLimits): none, or a reading with its list of windows.
+ * The usage pill reads it as the board's own (models/limits.ts limitInfo), leaving out a window it
+ * cannot read and taking a reading of unknown age as an old one.
+ */
+const isProfileLimits = (value: unknown): boolean => value === null || (isReply(value) && Array.isArray(value.windows))
+
+/**
  * A Claude profile as the board sends it (src/core/payload.ts BoardProfile), as far as the page
  * relies on it: the profile switch and the cards' tags read its id, title, color, folder and
- * whether it is hidden.
+ * whether it is hidden; the usage pill and its popover read its usage.
  */
 export const isBoardProfile: Guard<BoardProfile> = (value): value is BoardProfile =>
   isReply(value) &&
@@ -32,7 +39,8 @@ export const isBoardProfile: Guard<BoardProfile> = (value): value is BoardProfil
   typeof value.title === 'string' &&
   typeof value.color === 'string' &&
   typeof value.dir === 'string' &&
-  typeof value.hidden === 'boolean'
+  typeof value.hidden === 'boolean' &&
+  isProfileLimits(value.limits)
 
 /** The board payload's shape, as far as the page relies on it (src/core/payload.ts). */
 export const isBoardPayload: Guard<BoardPayload> = (value): value is BoardPayload =>

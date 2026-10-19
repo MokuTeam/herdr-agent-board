@@ -7,6 +7,7 @@ import { createRef } from 'react'
 import type { BoardCategory, BoardLimits, BoardPayload, BoardProfile } from '../../src/core/payload.ts'
 import { Board } from '../../web/src/components/Board.tsx'
 import { CategoriesPanel } from '../../web/src/components/categories/CategoriesPanel.tsx'
+import { Limits } from '../../web/src/components/Limits.tsx'
 import { LimitsPop } from '../../web/src/components/LimitsPop.tsx'
 import { Toolbar } from '../../web/src/components/Toolbar.tsx'
 import type { BoardUi } from '../../web/src/state/board-ui.ts'
@@ -112,12 +113,18 @@ const toolbar = (data: BoardPayload, more: Partial<BoardUi> = {}): string =>
   )
 
 /** The usage popover, open, as limits-pop.test.tsx draws it. */
-const usagePop = (data: BoardPayload): string =>
+const usagePop = (data: BoardPayload, connected = true): string =>
   canonical(
     renderInBoard(
       <LimitsPop anchor={createRef<HTMLButtonElement>()} />,
-      boardContext({ data, now: NOW, ui: ui({ limitsOpen: true }) }),
+      boardContext({ data, now: NOW, connected, ui: ui({ limitsOpen: true }) }),
     ),
+  )
+
+/** The usage pill, as the toolbar holds it (toolbar.test.tsx). */
+const usagePill = (data: BoardPayload, connected = true): string =>
+  canonical(
+    renderInBoard(<Limits anchor={createRef<HTMLButtonElement>()} />, boardContext({ data, now: NOW, connected })),
   )
 
 /** The categories panel, as categories-panel.test.tsx draws it. */
@@ -168,4 +175,44 @@ test('one profile shown, a profile picked before: the board and toolbar are stil
   const unreported: BoardPayload = { ...FOLDERS, items: PHASE1.items }
   expect(board(unreported, { profile: 'default' })).toBe(board(PHASE1))
   expect(toolbar(unreported, { profile: 'default' })).toBe(toolbar(PHASE1))
+})
+
+test('one profile shown: the usage pill and popover are phase 1’s, whatever its or a hidden profile’s reading', () => {
+  expect(usagePill(PHASE1)).toContain('92%')
+  const work = FOLDERS.profiles?.[1]
+  if (!work) throw new Error('FOLDERS has Work')
+  // Work hidden with a fresh reading of its own; the shown one's own reading missing, or another.
+  const other: BoardLimits = {
+    ...READING,
+    windows: [{ minutes: 300, usedPercentage: 5, resetsAt: null, expired: false }],
+  }
+  const boards: BoardPayload[] = [
+    ONE,
+    FOLDERS,
+    {
+      ...FOLDERS,
+      profiles: [
+        { ...DEFAULT, limits: null },
+        { ...work, limits: other },
+      ],
+    },
+    { ...ONE, profiles: [{ ...DEFAULT, limits: other }] },
+  ]
+  for (const data of boards) {
+    expect(usagePill(data)).toBe(usagePill(PHASE1))
+    expect(usagePop(data)).toBe(usagePop(PHASE1))
+    // Not connected: phase 1's old reading.
+    expect(usagePill(data, false)).toBe(usagePill(PHASE1, false))
+    expect(usagePop(data, false)).toBe(usagePop(PHASE1, false))
+  }
+  // No reading on the board: phase 1's "Usage —" and its note, whatever a hidden profile used.
+  const none = { ...PHASE1, limits: null }
+  expect(usagePill(none)).toContain('Usage —')
+  for (const data of [
+    { ...ONE, limits: null },
+    { ...FOLDERS, limits: null, profiles: [DEFAULT, { ...work, limits: READING }] },
+  ]) {
+    expect(usagePill(data)).toBe(usagePill(none))
+    expect(usagePop(data)).toBe(usagePop(none))
+  }
 })

@@ -1,8 +1,9 @@
 // The usage popover under the pill. A press outside, Escape or a resize closes it; Escape and the
-// close button give the focus back to the pill.
+// close button give the focus back to the pill. With two or more profiles shown, each shown profile
+// has its part: its windows, or "No session lately".
 import { type Dispatch, type RefObject, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { useT } from '../i18n/I18nProvider.tsx'
-import { limitInfo, popoverPosition } from '../models/limits.ts'
+import { limitInfo, popoverPosition, profileUsage } from '../models/limits.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import type { BoardAction } from '../state/board-ui.ts'
 import { LimitsReport } from './LimitsReport.tsx'
@@ -20,6 +21,7 @@ export function LimitsPop({ anchor }: { anchor: Pill }) {
   const { data, connected, ui, dispatch } = useBoardContext()
   const pop = useRef<HTMLDivElement>(null)
   const open = ui.limitsOpen
+  const usage = profileUsage(data?.profiles, { connected })
 
   const close = useCallback((refocus: boolean) => closeLimits(dispatch, anchor, refocus), [dispatch, anchor])
 
@@ -77,7 +79,20 @@ export function LimitsPop({ anchor }: { anchor: Pill }) {
         </button>
       </header>
       <div id="limits-content">
-        <LimitsReport lim={limitInfo(data?.limits, { connected })} />
+        {usage ? (
+          usage.map(u => (
+            <section key={u.id} className="limits-for" data-profile={u.id}>
+              <h4 style={{ '--c': u.color }}>{u.title}</h4>
+              {u.lim.windows.length ? (
+                <LimitsReport lim={u.lim} />
+              ) : (
+                <p className="limits-none">{t('limits.noSession')}</p>
+              )}
+            </section>
+          ))
+        ) : (
+          <LimitsReport lim={limitInfo(data?.limits, { connected })} />
+        )}
       </div>
     </div>
   )

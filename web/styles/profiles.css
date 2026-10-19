@@ -1,8 +1,8 @@
-/* Claude profiles (web/src/components/ProfileSwitch.tsx, ProfileTag.tsx): the switch beside the
-   lanes control and the tag on a card, each in its profile's color (--c, from the board). Red
-   says a session runs in another profile than its start asked for. With one profile shown the
-   page has neither, as before profiles. Every rule here selects by class: the other sheets are
-   upstream's, rule for rule. */
+/* Claude profiles (web/src/components/ProfileSwitch.tsx, ProfileTag.tsx, Limits.tsx,
+   LimitsPop.tsx): the switch beside the lanes control, the tag on a card and the usage per
+   profile, each in its profile's color (--c, from the board). Red says a session runs in another
+   profile than its start asked for. With one profile shown the page has none of it, as before
+   profiles. Every rule here selects by class: the other sheets are upstream's, rule for rule. */
 
 /* The switch is a lanes control (.segmented); each profile's count is in its color. */
 .segmented.profiles .n { color: var(--c, var(--label-3)); font-weight: 600; }
@@ -32,3 +32,13 @@
 }
 /* Started for one profile, running in another: a warning that is not missed. */
 .profile-tag.wrong { max-width: 60%; background: var(--c); color: #fff; }
+
+/* The usage pill: each profile with recent usage, its name in its color before its windows. */
+.limits-profile { color: color-mix(in srgb, var(--c) 75%, var(--label)); font-weight: 600; }
+.limits-profile ~ .limits-profile { margin-left: 4px; }
+
+/* The usage popover: a part per shown profile, headed by its name in its color. */
+.limits-for { margin-top: 14px; }
+.limits-for h4 { margin: 0; color: color-mix(in srgb, var(--c) 75%, var(--label)); font-size: 13px; font-weight: 600; }
+.limits-for p { margin-top: 6px; }
+.limits-none { color: var(--label-2); }

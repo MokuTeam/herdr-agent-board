@@ -1,5 +1,7 @@
-// Claude's usage windows as the toolbar pill and its popover show them, from the payload's `limits`.
+// Claude's usage windows as the toolbar pill and its popover show them, from the payload's `limits`,
+// or with two or more profiles shown, from each shown profile's.
 import type { Translator } from '../../../src/core/types.ts'
+import type { BoardProfile } from '../api/client.ts'
 
 export type LimitSource = 'usagebar' | 'statusline' | 'unknown'
 /** A usage window that passed the checks (the reading's own object, other fields untouched). */
@@ -40,6 +42,31 @@ export function limitInfo(limits: unknown, { connected = true, now = Date.now() 
     source,
     stale: !connected || !!l.stale || !observedAt || now - observedAt > 30 * 60_000,
   }
+}
+
+/** A shown profile's usage: `recent` when it has windows and they are not stale. */
+export interface ProfileUsage {
+  id: string
+  title: string
+  color: string
+  lim: LimitInfo
+  recent: boolean
+}
+
+/**
+ * Each shown profile's usage, in the list's order; null with fewer than two shown, where the pill
+ * and the popover show the board's own usage, as before profiles.
+ */
+export function profileUsage(
+  profiles: BoardProfile[] | undefined,
+  { connected, now = Date.now() }: { connected: boolean; now?: number },
+): ProfileUsage[] | null {
+  const shown = (profiles ?? []).filter(p => !p.hidden)
+  if (shown.length < 2) return null
+  return shown.map(p => {
+    const lim = limitInfo(p.limits, { connected, now })
+    return { id: p.id, title: p.title, color: p.color, lim, recent: lim.windows.length > 0 && !lim.stale }
+  })
 }
 
 /** "5h" or "7d". */

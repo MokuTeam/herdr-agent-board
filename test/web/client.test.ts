@@ -92,6 +92,37 @@ test('a profile has what the switch and the tags read: id, title, color, folder,
   expect(isBoardPayload({ ...payload(), profiles: [PROFILE, { ...PROFILE, dir: 3 }] })).toBe(false)
 })
 
+test('a profile’s usage, which the usage pill reads: none (null), or a reading with its list of windows', () => {
+  const reading = {
+    source: 'statusline',
+    observedAt: 1000,
+    stale: false,
+    windows: [{ minutes: 300, usedPercentage: 92, resetsAt: null, expired: false }],
+  }
+  expect(isBoardProfile({ ...PROFILE, limits: reading })).toBe(true)
+  expect(isBoardProfile({ ...PROFILE, limits: { ...reading, windows: [] } })).toBe(true)
+  // A window the pill cannot read is left out by it (models/limits.ts), as on the board's own usage.
+  expect(isBoardProfile({ ...PROFILE, limits: { ...reading, windows: [{ minutes: 60 }, null] } })).toBe(true)
+  for (const bad of [
+    undefined,
+    'none',
+    0,
+    false,
+    [],
+    [reading],
+    {},
+    { ...reading, windows: undefined },
+    { ...reading, windows: null },
+    { ...reading, windows: 'x' },
+    { ...reading, windows: { 0: reading.windows[0] } },
+  ])
+    expect([bad, isBoardProfile({ ...PROFILE, limits: bad })]).toEqual([bad, false])
+  const { limits: _, ...without } = PROFILE
+  expect(isBoardProfile(without)).toBe(false)
+  expect(isBoardPayload({ ...payload(), profiles: [PROFILE, { ...PROFILE, limits: reading }] })).toBe(true)
+  expect(isBoardPayload({ ...payload(), profiles: [PROFILE, { ...PROFILE, limits: 'x' }] })).toBe(false)
+})
+
 test('POST sends JSON with the X-Board header and answers the reply', async () => {
   const calls = answer(200, '{"ok":true,"id":"x"}')
   expect(await api.post('/api/settings', { language: 'ru' })).toEqual({ ok: true, id: 'x' })
