@@ -3,13 +3,14 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { boardFiles, boardKey, checkSetup, findCommand, patchSettings, report, shimFiles, shimTarget, todo, toastCommand, tomlValue } from '../src/setup.mjs'
+import { boardFiles, boardKey, checkSetup, findCommand, patchSettings, report, shimFiles, shimTarget, skillAction, todo, toastCommand, tomlValue } from '../src/setup.mjs'
 import { root, sandbox } from './fixtures/sandbox.mjs'
 
 const ROOT_A = 'C:\\plugins\\agent-board'
 const ROOT_B = 'C:\\plugins\\mokuteam.herdr-agent-board-1a2b'
 const files = boardFiles(ROOT_A)
 const commands = (settings, event) => (settings.hooks[event] ?? []).flatMap(e => e.hooks.map(h => h.command))
+const SKILL_TEXT = '---\nname: herdr-agents\n---\n<!-- agent-board: installed by the install action -->\nHow to work in herdr.\n'
 
 test('install writes its hooks once, keeps everyone else’s, and moves its own to this copy', () => {
   const theirs = {
@@ -100,6 +101,7 @@ function facts(over = {}) {
     wake: { ok: true, status: 200 },
     launcher: { kind: 'builtin', claude: ['claude'], error: '', program: { file: 'C:\\bin\\claude.exe', found: true }, ownSession: true },
     mokupilot: { state: 'ok', configured: false, file: 'C:\\Users\\u\\AppData\\Local\\Programs\\MokuPilot\\MokuPilot.exe', args: [] },
+    skill: { file: 'C:\\Users\\u\\.claude\\skills\\herdr-agents\\SKILL.md', installed: SKILL_TEXT, source: SKILL_TEXT },
     ...over,
   }
 }
@@ -107,7 +109,7 @@ const level = (checks, id) => checks.find(c => c.id === id)?.level
 
 test('doctor: a computer set up all the way', () => {
   const checks = checkSetup(facts())
-  assert.deepEqual(checks.map(c => [c.id, c.level]), [['board', 'ok'], ['hooks', 'ok'], ['statusline', 'ok'], ['spawn-agent', 'ok'], ['key', 'ok'], ['wake', 'ok'], ['launch', 'ok'], ['mokupilot', 'ok'], ['toast', 'ok']])
+  assert.deepEqual(checks.map(c => [c.id, c.level]), [['board', 'ok'], ['hooks', 'ok'], ['statusline', 'ok'], ['spawn-agent', 'ok'], ['skill', 'ok'], ['key', 'ok'], ['wake', 'ok'], ['launch', 'ok'], ['mokupilot', 'ok'], ['toast', 'ok']])
   assert.deepEqual(todo(checks), [])
   assert.match(report(checks), /Everything the board needs is set up\.$/)
 })
@@ -174,6 +176,20 @@ test('doctor: each missing piece, what it costs and how to fix it', () => {
   assert.doesNotMatch(`${secret.title} ${secret.detail}`, /secret words/)
 })
 
+test('the agents’ skill: installed when missing or older, left alone when it is someone else’s', () => {
+  assert.equal(skillAction(null, SKILL_TEXT), 'write')
+  assert.equal(skillAction(SKILL_TEXT.replace(/\n/g, '\r\n'), SKILL_TEXT), 'same')
+  assert.equal(skillAction(SKILL_TEXT.replace('How', 'Once, how'), SKILL_TEXT), 'write')
+  assert.equal(skillAction('---\nname: herdr-agents\n---\nmine\n', SKILL_TEXT), 'foreign')
+  const at = state => checkSetup(facts({ skill: { ...facts().skill, ...state } })).find(c => c.id === 'skill')
+  assert.equal(at({}).level, 'ok')
+  assert.deepEqual([at({ installed: null }).level, at({ installed: null }).code], ['warn', 'herdr plugin action invoke agent-board.install'])
+  assert.match(at({ installed: `${SKILL_TEXT}old\n` }).title, /older copy/)
+  assert.match(at({ installed: 'mine' }).title, /not the board/)
+  // Facts without the skill (an older gatherFacts): no check for it.
+  assert.equal(checkSetup(facts({ skill: undefined })).some(c => c.id === 'skill'), false)
+})
+
 test('install in a sandbox: the commands, the hooks once, a backup, and notifications only when asked', { timeout: 30_000 }, async t => {
   const box = sandbox(t)
   const settingsFile = join(box.env.HOME, '.claude', 'settings.json')
@@ -193,6 +209,8 @@ test('install in a sandbox: the commands, the hooks once, a backup, and notifica
   const first = await install()
   assert.equal(first.code, 0, first.out)
   for (const name of ['board', 'board.cmd', 'spawn-agent', 'spawn-agent.cmd']) assert.ok(existsSync(join(box.env.HOME, '.local', 'bin', name)), name)
+  const skill = join(box.env.HOME, '.claude', 'skills', 'herdr-agents', 'SKILL.md')
+  assert.equal(readFileSync(skill, 'utf8'), readFileSync(join(root, 'skills', 'herdr-agents', 'SKILL.md'), 'utf8'))
   assert.ok(existsSync(`${settingsFile}.bak-agent-board`))
   const after = JSON.parse(readFileSync(settingsFile, 'utf8'))
   assert.equal(after.hooks.SessionStart.length, 1)
@@ -209,6 +227,10 @@ test('install in a sandbox: the commands, the hooks once, a backup, and notifica
   writeFileSync(join(box.env.HOME, '.local', 'bin', 'spawn-agent'), '#!/bin/sh\necho mine\n')
   assert.match((await install()).out, /skipped .*spawn-agent: exists and is not ours/)
   assert.equal(readFileSync(join(box.env.HOME, '.local', 'bin', 'spawn-agent'), 'utf8'), '#!/bin/sh\necho mine\n')
+  // And so is someone else's skill of that name.
+  writeFileSync(skill, '---\nname: herdr-agents\n---\nmine\n')
+  assert.match((await install()).out, /skipped .*SKILL\.md: a skill of that name that is not ours/)
+  assert.equal(readFileSync(skill, 'utf8'), '---\nname: herdr-agents\n---\nmine\n')
   // Windows PowerShell 5.1 writes UTF-8 with a BOM: still read.
   writeFileSync(settingsFile, `\uFEFF${JSON.stringify({ model: 'opus' })}`)
   assert.equal((await install()).code, 0)
