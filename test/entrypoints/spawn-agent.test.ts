@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { failureKind } from '../../src/core/launch/launcher-command.ts'
+import { profileReport, profileTag, sessionProfile } from '../../src/core/profiles.ts'
 import { absoluteDir } from '../../src/services/launch/spawn-agent.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 
@@ -258,11 +259,31 @@ test('unset, ~/.claude, a trailing slash and another drive case start the child 
         String(own),
       )
       assert.equal(existsSync(panesFile(box)), false, String(own))
-      // A start that keeps the env writes no card.
-      assert.equal(cardOf(box, SID), null, String(own))
+      // A start that keeps the env still says the profile it is meant to be in: herdr's env may
+      // point elsewhere, and the hooks' report then shows the session in the wrong profile.
+      expect(cardOf(box, SID)).toEqual({ key: SID, profileWant: 'default', updatedAt: expect.any(Number) })
     }),
   )
 }, 60_000)
+
+test('a private agent’s helper leaves the env alone and says it is meant for default: herdr’s env in work shows as the wrong profile', async () => {
+  const { box, dir, default: own, work } = await profileBox()
+  const r = await runSpawn(box, ['--name', 'Helper', '--cwd', dir, '--workspace', 'wA', '--session-id', SID])
+  assert.equal(r.code, 0, r.stderr)
+  // No --env: herdr's env is taken to be the default profile's.
+  assert.equal(callList(box)[0], `tab create --workspace wA --cwd ${dir} --label Helper --no-focus`)
+  const card = cardOf(box, SID)
+  expect(card).toMatchObject({ profileWant: 'default' })
+  // herdr's server runs with CLAUDE_CONFIG_DIR at work after all: the hooks in the new tab report
+  // work, and the session is in the wrong profile, which its card's red tag and herdr say.
+  const meant = { id: 'default', title: 'Private', dir: own, color: 'indigo', hidden: false }
+  const list = [meant, { id: 'work', title: 'Work', dir: work, color: 'teal', hidden: false }]
+  const reported = sessionProfile({ ...card, ...profileReport(card, work, list) }, list)
+  expect(reported).toEqual({ profile: 'work', profileWanted: 'default' })
+  expect(profileTag(reported, list)).toEqual({ kind: 'wrong', wantId: 'default', want: meant })
+  // Reported in default, as meant: no warning.
+  expect(sessionProfile({ ...card, ...profileReport(card, own, list) }, list)).toEqual({ profile: 'default' })
+}, 30_000)
 
 test('an agent in a work session starts its helper in work: --env on the tab, the pane recorded, work’s args, the card wants work', async () => {
   const { box, dir, work } = await profileBox()
@@ -383,7 +404,8 @@ test('--keep-env leaves the tab as herdr makes it, even from a work env; --confi
   // The profile of the env it runs in gives its arguments.
   assert.equal(calls[1], `pane run wA:p9 claude --model sonnet --session-id ${SID}`)
   assert.equal(existsSync(panesFile(kept.box)), false)
-  assert.equal(cardOf(kept.box, SID), null)
+  // The profile of the env it runs in is the one it is meant to be in.
+  expect(cardOf(kept.box, SID)).toMatchObject({ profileWant: 'work' })
 
   // The board's start in a profile its own env does not point to.
   const set = await profileBox()
@@ -436,7 +458,8 @@ test('--profile default starts the child as before, without --env, even from a w
     'agent prompt wA:p9  -Check the invoices.\nThen report.',
   ])
   assert.equal(existsSync(panesFile(box)), false)
-  assert.equal(cardOf(box, SID), null)
+  // No --env, but the card says default is meant: herdr's env pointing elsewhere shows as the wrong profile.
+  expect(cardOf(box, SID)).toMatchObject({ profileWant: 'default' })
 }, 30_000)
 
 /**
@@ -555,5 +578,5 @@ test('a new tab opened without --env drops the record of a pane of that id; othe
   expect(JSON.parse(readFileSync(panesFile(box), 'utf8'))).toEqual({
     'wB:p1': { profile: 'gamedev', terminal: 'term-5', at: 1 },
   })
-  assert.equal(cardOf(box, SID), null)
+  expect(cardOf(box, SID)).toMatchObject({ profileWant: 'default' })
 }, 30_000)

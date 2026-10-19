@@ -205,8 +205,9 @@ export async function spawnAgent(
     if (configDir !== null && profile) recordProfilePane(pane, profile.id, opened.terminal)
     else forgetProfilePane(pane)
   }
-  // The profile it is meant to be in, for the board to check against the one its hooks report.
-  if (configDir !== null && profile && o.sessionId) writeCard(o.sessionId, { profileWant: profile.id })
+  // The profile it is meant to be in, for the board to check against the one its hooks report: a
+  // start that leaves the env as herdr makes it too, as herdr's env may point elsewhere.
+  if (profile && o.sessionId) writeCard(o.sessionId, { profileWant: profile.id })
   await herdr(['pane', 'run', pane, command])
 
   const deadline = Date.now() + o.timeoutSec * 1000

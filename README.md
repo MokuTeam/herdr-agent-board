@@ -445,10 +445,11 @@ profile's `args` go after `launch.claude`, before `--session-id`. The default pr
 `--profile default`, leaves the new tab's env as herdr makes it, as before profiles. For any other
 profile, the agent's own or the one `--profile` names, the new tab gets
 `herdr tab create --env CLAUDE_CONFIG_DIR=<folder>`, which needs herdr 0.9.5 or newer. spawn-agent
-then records the pane as opened in that profile, with the terminal herdr opened it with, and, with
-`--session-id`, the card as meant to run in it, so a session that reports another profile shows
-the "wrong profile" warning. spawn-agent never falls back to another profile: it refuses, before
-herdr opens, renames or types anything, when
+then records the pane as opened in that profile, with the terminal herdr opened it with. With
+`--session-id`, every start, one that leaves the env alone included, writes the card as meant to
+run in its profile, so a session that reports another profile (herdr's own env pointing to another
+one, say) shows the "wrong profile" warning. spawn-agent never falls back to another profile: it
+refuses, before herdr opens, renames or types anything, when
 
 - the agent's own folder is not a profile the board knows (or is named relative to where it
   runs): pass `--profile <id>`;
