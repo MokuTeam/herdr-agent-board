@@ -280,15 +280,91 @@ function parse(line) {
  * `sidechain` reads a helper's own transcript (helpers.mjs), whose lines are all sidechain lines.
  */
 export function conversation(path, limit = 40, { sidechain = false } = {}) {
+  return readThread(path, limit, { sidechain }).items
+}
+
+/** The session's conversation() and its queuedPrompts(), from one read of the transcript. */
+export function sessionThread(path, limit = 40, queue = {}) {
+  const { items, text } = readThread(path, limit)
+  return { conversation: items, queued: queuedPrompts(text, queue) }
+}
+
+function readThread(path, limit, { sidechain = false } = {}) {
   const st = path && statSync(path, { throwIfNoEntry: false })
-  if (!st) return []
+  if (!st) return { items: [], text: '' }
   // Screenshots and big tool results can fill megabytes: read further back when the window held few turns.
   let items = []
+  let text = ''
   for (const bytes of [2 << 20, 8 << 20]) {
-    items = turns(readTail(path, st.size, bytes), { sidechain })
+    text = readTail(path, st.size, bytes)
+    items = turns(text, { sidechain })
     if (items.filter(i => i.role !== 'tool').length >= limit / 3 || bytes >= st.size) break
   }
-  return items.slice(-limit)
+  return { items: items.slice(-limit), text }
+}
+
+// Turns that reach a session through its queue but are nobody's typing: they have a line of their own in the thread, or none.
+const SYSTEM_TAG = /^\s*<(?:task-notification|cross-session-message|agent-message|teammate-message|channel)\b/
+const promptText = p => (typeof p === 'string' ? p : Array.isArray(p) ? p.filter(b => b?.type === 'text').map(b => b.text).join('\n') : '')
+
+/**
+ * The user's messages still waiting in Claude Code's queue: sent while the session worked (in its
+ * terminal or from the board) and not taken in yet, [{ text, at }] oldest first. Claude Code logs
+ * the queue in the transcript: `enqueue` with the text, then `dequeue` (the turn is over: the
+ * message comes next as a user line of its own, which says which one went), `remove` (taken
+ * into the running turn, absorbed_mid_turn, and kept as a queued_command attachment), or `popAll`
+ * (pulled back into the input box). Task notifications, other sessions' messages, board
+ * reminders and scheduled prompts go the same way; they are left out. A queue goes with its
+ * Claude process: nothing from before `since` (when it started), nor from before `idleSince`
+ * (when it last said its turn was over, which empties the queue).
+ */
+export function queuedPrompts(text, { since = 0, idleSince = 0 } = {}) {
+  const pending = [] // { content, ts, at, system }
+  const scheduled = new Set() // prompts a CronCreate or ScheduleWakeup call set up, or that came in as a meta line
+  let owed = 0 // dequeues whose user line has not come yet
+  const find = s => pending.findIndex(p => p.content === s)
+  const take = i => i >= 0 && pending.splice(i, 1)
+  const own = p => {
+    if (p.system || scheduled.has(p.content) || SYSTEM_TAG.test(p.content) || p.content.startsWith('[Cross-session ')) return false
+    const said = userText(p.content)
+    return !!said && !taskNotice(said) && !boardNotice(said)
+  }
+  for (const line of String(text ?? '').split('\n')) {
+    if (!/"type":"(?:queue-operation|user|attachment|system)"|"name":"(?:CronCreate|ScheduleWakeup)"/.test(line)) continue
+    const o = parse(line)
+    if (!o || o.isSidechain) continue
+    if (o.type === 'queue-operation') {
+      const content = typeof o.content === 'string' ? o.content : ''
+      if (o.operation === 'enqueue') pending.push({ content, ts: o.timestamp, at: Date.parse(o.timestamp) || 0, system: false })
+      else if (o.operation === 'dequeue') owed++
+      else if (o.operation === 'remove') take(find(content))
+      else if (o.operation === 'popAll') {
+        // Back into the input box, all at once, their texts joined.
+        const back = pending.filter(p => p.content && content.includes(p.content))
+        for (const p of back.length ? back : pending.filter(own)) take(pending.indexOf(p))
+      }
+    } else if (o.type === 'system') {
+      // "Background agent … was stopped by the user" goes into the queue as the agents are killed.
+      if (o.subtype === 'agents_killed') for (const p of pending) if (p.ts === o.timestamp) p.system = true
+    } else if (o.type === 'attachment') {
+      if (o.attachment?.type === 'queued_command') take(find(promptText(o.attachment.prompt)))
+    } else if (o.type === 'assistant') {
+      for (const b of Array.isArray(o.message?.content) ? o.message.content : []) {
+        if (b.type === 'tool_use' && ['CronCreate', 'ScheduleWakeup'].includes(b.name) && typeof b.input?.prompt === 'string') scheduled.add(b.input.prompt)
+      }
+    } else if (o.type === 'user') {
+      const content = o.message?.content
+      if (Array.isArray(content) && content.every(b => b.type === 'tool_result')) continue
+      const said = promptText(content)
+      if (o.isMeta) scheduled.add(said)
+      let i = find(said)
+      // A dequeued prompt Claude Code wrote down otherwise (a slash command): the oldest one went.
+      if (i < 0 && owed && o.origin?.kind === 'human') i = pending.findIndex(own)
+      take(i)
+      if (owed) owed--
+    }
+  }
+  return pending.filter(p => p.at >= since && p.at >= idleSince && own(p)).map(p => ({ text: clip(userText(p.content), 3000), at: p.at }))
 }
 
 const attr = (attrs, name) => new RegExp(`\\b${name}="([^"]*)"`).exec(attrs)?.[1] ?? ''

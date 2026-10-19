@@ -144,6 +144,11 @@ can go to the pane in herdr instead. The same goes to the board as `POST /api/re
   the panel. They upload to `%LOCALAPPDATA%\herdr\plugins\agent-board\uploads\<day>\` (kept 14
   days, `keepUploadsDays`) and the message carries their paths; Claude reads them, images as
   images. Sent images show as previews in the thread.
+- A message sent while the session works shows at once at the foot of the thread, quietly, as
+  "Queued" until Claude takes it in, then as an ordinary message where it landed; one pulled
+  back to the input box in the terminal goes. The queue is read from the transcript (Claude
+  Code logs it there), so messages typed in the terminal show too, and a reload keeps them. A
+  message that could not be sent stays with the reason, "Retry" and "Edit".
 - Files, folders and links in the thread. A path an agent writes (absolute, `~/...`, a
   `herdr-reveal:` or `file:` link, or relative to the session's folder in `code`, with an
   optional `:line`) becomes a chip once the board finds it on disk; file tool calls in the

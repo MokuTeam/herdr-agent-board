@@ -16,7 +16,7 @@ import { answerPermission, answerQuestions } from './answer.mjs'
 import { checkoutChanges, isCheckout } from './changes.mjs'
 import { searchHistory } from './history.mjs'
 import { localUsage } from './usage.mjs'
-import { conversation } from './claude.mjs'
+import { liveSessions, sessionThread } from './claude.mjs'
 import { helperDetail, helpersOf, publicHelper } from './helpers.mjs'
 import { createLinks } from './links.mjs'
 import { describe, FILE_TOKEN, MEDIA_TYPES, openWith, preview, resolvePath } from './files.mjs'
@@ -286,7 +286,11 @@ export function startServer({ cfg, log = () => {} } = {}) {
     const { transcript, alive, since, pipe, ...shown } = item
     // helpers: every subagent, fork, workflow agent and teammate, newest first (helpers.mjs).
     const own = helpersOf(transcript, { alive, since })
-    const out = { item: shown, conversation: withSessions(conversation(transcript, 60)), helpers: own.helpers.map(publicHelper), workflows: own.workflows, screen: '', dialog: null, checkout: await isCheckout(item.cwd) }
+    // queued: the user's messages Claude has not taken in yet. Only a running Claude has a queue,
+    // and once it said its turn was over (its registry: idle, or a background shell) it had none.
+    const reg = alive ? liveSessions().get(item.session) : null
+    const thread = sessionThread(transcript, 60, { since: since ?? 0, idleSince: ['idle', 'shell'].includes(reg?.status) ? (reg.statusUpdatedAt ?? 0) : 0 })
+    const out = { item: shown, conversation: withSessions(thread.conversation), queued: alive ? thread.queued : [], helpers: own.helpers.map(publicHelper), workflows: own.workflows, screen: '', dialog: null, checkout: await isCheckout(item.cwd) }
     if (item.status === 'blocked' && item.pane) {
       try {
         const text = await herdrText(['agent', 'read', item.pane, '--source', 'visible'], 5000)

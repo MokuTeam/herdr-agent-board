@@ -17,6 +17,7 @@ import { limitInfo } from './limits-model.js'
 import { markdown } from './markdown.js'
 import { initMenu } from './menu.js'
 import { callTitle, noticeLine } from './notice-model.js'
+import { newestAt, sentKey, unsettled } from './outbox.js'
 import { initQuestions } from './questions.js'
 import { keepInSight, menuOpen, Panel, panelDock, panels, placePanels, resetPanelSize, roomBelow } from './panel.js'
 import { renameInPlace } from './rename.js'
@@ -1173,6 +1174,7 @@ const detail = detailResource({
 const drafts = draftBook({ getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value), removeItem: key => localStorage.removeItem(key) })
 const draftKey = it => it?.session || it?.key
 const sending = new Set() // sessions with a message on its way
+const outbox = new Map() // session -> the board's messages its thread does not show yet (outbox.js)
 let currentDraft = null
 let draftFor = null // the session the composer's attachments were added for; outlives a close
 let draftIdentity = null
@@ -1195,6 +1197,8 @@ function openSheet(key, { compose = false } = {}) {
   detail.reset(key)
   state.detailState = detail.snapshot()
   currentDraft = drafts.read(draftKey(itemOf(key)))
+  // A message on its way, or not sent, is in the thread: not in the box as well.
+  if (outbox.get(key)?.some(e => e.id === currentDraft?.id)) currentDraft = null
   message.value = currentDraft?.text ?? ''
   syncComposer()
   state.detail = null
@@ -1380,16 +1384,76 @@ function renderSheetBody(reset) {
   renderHelpersStrip()
   html += `<div class="section-title">${esc(t('thread.title'))}</div><div class="thread">`
   const conv = state.detail?.conversation
-  if (!conv) html += `<p class="row-value muted">${esc(t(['error', 'missing'].includes(state.detailState?.status) ? 'detail.noTranscript' : 'loading'))}</p>`
-  else if (!conv.length) html += `<p class="row-value muted">${esc(t('thread.empty'))}</p>`
-  else html += thread(conv, it)
+  const waiting = waitingHTML(it.key)
+  if (!conv) html += waiting || `<p class="row-value muted">${esc(t(['error', 'missing'].includes(state.detailState?.status) ? 'detail.noTranscript' : 'loading'))}</p>`
+  else if (!conv.length) html += waiting || `<p class="row-value muted">${esc(t('thread.empty'))}</p>`
+  else html += thread(conv, it) + waiting
   html += '</div>'
   // The same thread draws the same markup (running clocks are filled in after): a redraw keeps the focus and the open folds.
   redraw(sheetBody, html)
+  arrive()
   files.upgrade(sheetBody, it.cwd)
   syncAvailability()
   if (reset || atBottom) sheetBody.scrollTop = sheetBody.scrollHeight
 }
+
+/**
+ * The foot of the thread: the user's messages waiting in the session's queue, which Claude has
+ * not taken in yet (typed in its terminal or sent from here), then the board's own on their way
+ * or not sent. Quiet bubbles; once Claude has one, it is an ordinary bubble in the same place.
+ */
+function waitingHTML(key) {
+  const queued = (state.detail?.queued ?? []).map(m => `<div class="msg user waiting" title="${esc(t('queue.hint'))}"><div class="md">${markdown(m.text)}</div>${thumbs(m.text)}<span class="when">${ICON.clock}${esc(t('queue.queued'))}</span></div>`)
+  const own = settleOutbox(key).map(e => {
+    const failed = e.state === 'failed'
+    const foot = failed
+      ? `<span class="when"><b>${esc(t('queue.failed'))}</b>${e.error ? ` · ${esc(e.error)}` : ''}</span><span class="out-actions"><button type="button" data-out-retry="${esc(e.id)}">${esc(t('detail.retry'))}</button><button type="button" data-out-edit="${esc(e.id)}">${esc(t('queue.edit'))}</button></span>`
+      : `<span class="when">${esc(t('queue.sending'))}</span>`
+    return `<div class="msg user waiting${failed ? ' failed' : ''}" data-out="${esc(e.id)}"><div class="md">${markdown(e.full)}</div>${thumbs(e.full)}${foot}</div>`
+  })
+  return [...queued, ...own].join('')
+}
+
+/** The session's own messages still to show: the ones its transcript has now go (outbox.js). */
+function settleOutbox(key) {
+  const list = outbox.get(key) ?? []
+  const left = state.open === key ? unsettled(list, state.detail ?? {}) : list
+  for (const e of list) if (!left.includes(e)) forgetOut(e)
+  if (left.length) outbox.set(key, left)
+  else outbox.delete(key)
+  return left
+}
+const forgetOut = e => { for (const a of e.attached) if (a.url && !attachments.includes(a)) URL.revokeObjectURL(a.url) }
+
+// A message just sent rises into the thread out of the box it was written in, once.
+const arrived = new Set()
+function arrive() {
+  for (const el of sheetBody.querySelectorAll('[data-out]')) {
+    if (arrived.has(el.dataset.out)) continue
+    arrived.add(el.dataset.out)
+    el.animate(reducedMotion.matches ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 0, transform: 'translateY(14px) scale(0.98)' }, { opacity: 1, transform: 'none' }], { duration: reducedMotion.matches ? 160 : 300, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' })
+  }
+}
+sheetBody.addEventListener('click', e => {
+  const retry = e.target.closest('[data-out-retry]')
+  const edit = e.target.closest('[data-out-edit]')
+  const key = state.open
+  const entry = (outbox.get(key) ?? []).find(x => x.id === (retry ? retry.dataset.outRetry : edit?.dataset.outEdit))
+  if (!entry) return
+  if (retry) {
+    if (canMutate() && !sending.has(key)) deliver(key, entry)
+    return
+  }
+  // Back into the box, files and all, to change or drop.
+  outbox.set(key, outbox.get(key).filter(x => x !== entry))
+  message.value = message.value.trim() ? `${entry.text}\n${message.value}` : entry.text
+  for (const a of entry.attached) if (!attachments.includes(a)) attachments.push(a)
+  renderAttachments()
+  saveDraft()
+  syncComposer()
+  renderSheetBody(false)
+  message.focus()
+})
 
 /**
  * The session's helpers above its conversation: the ones at work with what each does now and a
@@ -1756,7 +1820,8 @@ message.addEventListener('paste', e => {
 function saveDraft() {
   const key = state.open && draftIdentity
   if (!key) return
-  if (currentDraft?.text === message.value) return
+  // An empty box after a send keeps the message's own draft until the session has it.
+  if (currentDraft ? currentDraft.text === message.value : !message.value) return
   currentDraft = drafts.save(key, message.value)
 }
 message.addEventListener('input', () => { saveDraft(); syncComposer() })
@@ -1775,34 +1840,74 @@ message.addEventListener('keydown', e => {
     $('#composer').requestSubmit()
   }
 })
-$('#composer').addEventListener('submit', async e => {
+$('#composer').addEventListener('submit', e => {
   e.preventDefault()
   const key = state.open
   const text = message.value.trim()
-  const files = attachments.filter(a => a.status === 'done').map(a => a.path)
-  if (!canMutate() || !key || sending.has(key) || (!text && !files.length) || attachments.some(a => a.status === 'uploading')) return
+  const ready = attachments.filter(a => a.status === 'done')
+  if (!canMutate() || !key || sending.has(key) || (!text && !ready.length) || attachments.some(a => a.status === 'uploading')) return
   const it = itemOf(key)
   if (!it) return
   saveDraft()
-  const request = currentDraft ?? (currentDraft = drafts.save(draftKey(it), message.value))
+  // The draft stays stored until the session has the message: a reload before that keeps it.
+  const request = currentDraft ?? drafts.save(draftKey(it), message.value)
+  const files = ready.map(a => a.path)
+  const label = `${t('msg.files', { n: files.length })}:`
+  // It leaves the box for the foot of the thread at once, written as the server types it.
+  const entry = {
+    id: request.id,
+    text,
+    files,
+    attached: ready,
+    full: [text, files.length ? `${label}\n${files.join('\n')}` : ''].filter(Boolean).join('\n\n'),
+    key: sentKey(text, label),
+    after: newestAt(state.detail) || Date.now() - 60_000,
+    state: 'sending',
+    error: '',
+    sentAt: 0,
+  }
+  outbox.set(key, [...(outbox.get(key) ?? []), entry])
+  currentDraft = null
+  message.value = ''
+  attachments.length = 0 // the bubble and "Edit" keep them
+  renderAttachments()
+  sheetBody.scrollTop = sheetBody.scrollHeight
+  deliver(key, entry)
+})
+
+/** Send one of the board's messages (again); its bubble says how it goes. */
+async function deliver(key, entry) {
+  const it = itemOf(key)
+  entry.state = 'sending'
+  entry.error = ''
   sending.add(key)
-  sendBtn.disabled = true
+  syncComposer()
+  if (state.open === key) {
+    renderSheetBody(false)
+    sheetBody.scrollTop = sheetBody.scrollHeight
+  }
   if (it?.sleeping) setBusy(key, t('busy.waking'))
-  const r = await act(key, 'message', { text, files, session: it.session ?? null, requestId: request.id })
+  const r = it ? await act(key, 'message', { text: entry.text, files: entry.files, session: it.session ?? null, requestId: entry.id }) : { ok: false, error: t('detail.missing') }
   sending.delete(key)
   setBusy(key, null)
+  // While the thread is on show, the bubble says it.
+  const shown = state.open === key && sessionPanel.isOpen
   if (r.ok) {
-    drafts.clear(draftKey(it), request.id)
-    if (state.open === key && currentDraft?.id === request.id) {
-      message.value = ''
-      currentDraft = null
-      clearAttachments()
-    }
-    toast(`${t('sent.to', { name: it?.name ?? t('session.lower') })}${files.length ? ` · ${t('sent.files', { n: files.length })}` : ''}`)
+    drafts.clear(draftKey(it), entry.id)
+    Object.assign(entry, { state: 'sent', sentAt: Date.now() })
+    // A pane with no Claude session has no transcript to show it in.
+    if (!it.session) outbox.set(key, (outbox.get(key) ?? []).filter(x => x !== entry))
+    if (!shown || !it.session) toast(`${t('sent.to', { name: it.name ?? t('session.lower') })}${entry.files.length ? ` · ${t('sent.files', { n: entry.files.length })}` : ''}`)
     setTimeout(() => state.open === key && loadDetail(key), 800)
-  } else toast(r.error, true)
+    // Still unseen in the transcript by then, it goes all the same.
+    setTimeout(() => state.open === key && renderSheetBody(false), 31_000)
+  } else {
+    Object.assign(entry, { state: 'failed', error: r.error ?? '' })
+    if (!shown) toast(r.error, true)
+  }
   syncComposer()
-})
+  if (state.open === key) renderSheetBody(false)
+}
 syncComposer()
 
 // ---------------------------------------------------------------- toasts
