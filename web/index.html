@@ -89,11 +89,19 @@
         </button>
         <button class="button" id="sheet-mokupilot" hidden title="Start a MokuPilot call whose agent is a fork of this session" data-i18n-title="mokupilot.hint">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6.6 3.5H4.8A1.8 1.8 0 0 0 3 5.4c.3 6 5.6 11.3 11.6 11.6a1.8 1.8 0 0 0 1.9-1.8v-1.8a1 1 0 0 0-.8-1l-2.6-.6a1 1 0 0 0-1 .3l-1 1.2a10 10 0 0 1-4.8-4.8l1.2-1a1 1 0 0 0 .3-1l-.6-2.6a1 1 0 0 0-1-.8Z"/></svg>
-          <span data-i18n="mokupilot.call">Call in MokuPilot</span>
+          <span data-i18n="mokupilot.call">MokuPilot</span>
         </button>
         <button class="button" id="sheet-term" title="A shell in this session’s folder, or the session’s own terminal, live (Ctrl+`)" data-i18n-title="term.hint">
           <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2.6"/><path d="m6 8.2 2.6 2.1L6 12.4M10.4 12.6h3.6"/></svg>
           <span data-i18n="term.open">Terminal</span>
+        </button>
+        <button class="button" id="sheet-changes" hidden title="What is changed against HEAD in the git checkout of this session’s folder" data-i18n-title="changes.hint">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="6" cy="4.8" r="1.8"/><circle cx="6" cy="15.2" r="1.8"/><circle cx="14" cy="7.6" r="1.8"/><path d="M6 6.6v6.8M14 9.4c0 3-2.6 3.6-6.4 4.6"/></svg>
+          <span data-i18n="changes.open">Changes</span>
+        </button>
+        <button class="button" id="sheet-history" title="Search the past Claude sessions of this project" data-i18n-title="history.hint">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.6 10a6.4 6.4 0 1 0 1.9-4.5M3.5 3.5v3h3"/><path d="M10 6.5V10l2.4 1.6"/></svg>
+          <span data-i18n="history.open">History</span>
         </button>
         <button class="button" id="sheet-wake" hidden data-i18n-title="sheet.wake">
           <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.5"/><path d="M10 2.5v2m0 11v2m7.5-7.5h-2m-11 0h-2m12.8-5.3-1.4 1.4M6.1 13.9l-1.4 1.4m0-10.6 1.4 1.4m7.8 7.8 1.4 1.4"/></svg>
@@ -106,14 +114,6 @@
         <button class="button" id="sheet-restart" hidden>
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.6 8.6a5.6 5.6 0 0 1 10.3-1.4M15.4 11.4a5.6 5.6 0 0 1-10.3 1.4"/><path d="M15.4 3.7v3.6h-3.6M4.6 16.3v-3.6h3.6"/></svg>
           <span data-i18n="sheet.restart">Restart</span>
-        </button>
-        <button class="button" id="sheet-changes" hidden title="What is changed against HEAD in the git checkout of this session’s folder" data-i18n-title="changes.hint">
-          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="6" cy="4.8" r="1.8"/><circle cx="6" cy="15.2" r="1.8"/><circle cx="14" cy="7.6" r="1.8"/><path d="M6 6.6v6.8M14 9.4c0 3-2.6 3.6-6.4 4.6"/></svg>
-          <span data-i18n="changes.open">Changes</span>
-        </button>
-        <button class="button" id="sheet-history" title="Search the past Claude sessions of this project" data-i18n-title="history.hint">
-          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.6 10a6.4 6.4 0 1 0 1.9-4.5M3.5 3.5v3h3"/><path d="M10 6.5V10l2.4 1.6"/></svg>
-          <span data-i18n="history.open">History</span>
         </button>
         <button class="button" id="sheet-more" aria-haspopup="menu" aria-expanded="false" title="More actions" aria-label="More actions" data-i18n-title="sheet.more" data-i18n-label="sheet.more">
           <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4.5" cy="10" r="1.4" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.4" fill="currentColor" stroke="none"/><circle cx="15.5" cy="10" r="1.4" fill="currentColor" stroke="none"/></svg>

@@ -825,23 +825,22 @@ div.notice, .notice > summary { display: flex; align-items: flex-start; gap: 7px
 .notice-body code { font: 12px var(--mono); padding: 1px 4px; border-radius: 4px; background: var(--fill); }
 .notice-body > pre { margin: 0; font: 11.5px/1.5 var(--mono); white-space: pre-wrap; }
 
-.composer { padding: 10px 14px 14px 18px; container: composer / inline-size; }
-/* One row that fits any panel: going to the session keeps its words, the call and the tools
-   beside it are icons named by their tooltips until the row is wide enough to spell them out,
-   and the rest (history, a new session here, sleep, restart and the like) waits under More at
-   the end, which lists whatever the row hides, in groups (app.js MORE). Going to the session
-   gives up its words before the row would run over. */
+.composer { padding: 10px 14px 14px 18px; }
+/* One row that fits any panel: as many actions as its width holds, most used first, and More
+   at the end for the rest (app.js fitActions; .over is under More). With their words while at
+   least four fit so, else icons named by their tooltips; going to the session keeps its words,
+   and gives them up only before the row would run over. .measuring shows every button, for a
+   moment within one task, to take their widths. */
 .composer-actions { display: flex; gap: 6px; margin-bottom: 10px; overflow-x: auto; scrollbar-width: none; }
 .composer-actions::-webkit-scrollbar { display: none; }
 .composer-actions > .button { flex: none; }
-.composer-actions > .button:not(#sheet-focus, #sheet-mokupilot, #sheet-term, #sheet-changes, #sheet-more) { display: none; }
-#sheet-focus { flex: 0 1 auto; min-width: 0; }
+.composer-actions > .over { display: none; }
+.composer-actions.measuring > .button { display: inline-flex; }
+.composer-actions:not(.measuring) > #sheet-focus { flex: 0 1 auto; min-width: 0; }
 #sheet-focus > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 #sheet-more { justify-content: center; width: 30px; margin-left: auto; padding: 0; }
-@container composer (max-width: 539px) {
-  .composer-actions > .button:not(#sheet-focus) { justify-content: center; width: 30px; padding: 0; }
-  .composer-actions > .button:not(#sheet-focus) > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-}
+.composer-actions.icons > .button:not(#sheet-focus) { justify-content: center; width: 30px; padding: 0; }
+.composer-actions.icons > .button:not(#sheet-focus) > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .button {
   display: inline-flex;
   align-items: center;
@@ -1497,7 +1496,6 @@ button.swatch:active { transform: scale(0.88); }
   #sheet .asked-dismiss { display: inline-flex; height: 26px; margin: 5px 0 0 6px; font-size: 12px; }
   #sheet .composer-actions { margin-bottom: 8px; flex-wrap: nowrap; }
   #sheet .composer-actions .button { min-width: 36px; min-height: 36px; }
-  #sheet .composer-actions > #sheet-term { display: none; } /* a terminal wants a keyboard: under More */
   #sheet .composer { padding: 8px 16px 12px; }
   .ql-head { display: grid; grid-template-columns: 30px 28px minmax(0, 1fr) 30px; gap: 8px; padding: 12px; }
   .ql-back { grid-column: 1; grid-row: 1; }
