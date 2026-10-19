@@ -10,6 +10,7 @@
 // missed runs of a cron entry go as one, saying how many. Time the board was off does not count
 // against the wait. An entry is claimed in its file before it is sent, so a second board (a
 // restart that overlaps, a test copy) never sends the same run twice.
+import { beginReport, deferReport, settleReport, verifyReport } from './call-receipts.mjs'
 import { mkdirSync, watch } from 'node:fs'
 import { send, wake } from './actions.mjs'
 import { t } from './lang.mjs'
@@ -62,7 +63,7 @@ const folder = p => String(p ?? '').replace(/[\\/]+/g, '/').replace(/\/$/, '').t
  */
 export function targetOf(entry, items) {
   const own = items.find(i => i.key === entry.key)
-  if (own || !entry.pane || !entry.cwd) return own
+  if (own || entry.receipt || !entry.pane || !entry.cwd) return own
   return items.find(i => i.pane === entry.pane && i.session && !i.sleeping && folder(i.cwd) === folder(entry.cwd))
 }
 
@@ -119,6 +120,12 @@ export function startScheduler({ cfg, log = () => {}, onChange = () => {} }) {
   }
 
   async function run(entry, item) {
+    const receipt = entry.receipt ? verifyReport(entry) : null // Before even waking a session.
+    if (receipt && !['queued', 'dispatching'].includes(receipt.state)) {
+      removeEntry(entry.id)
+      logRun(record(entry, Date.now(), receipt.state))
+      return
+    }
     const now = Date.now()
     // On time (the default) goes into a working session too, queued into its turn as the user's
     // own mid-turn messages are; `idle` entries wait until it is free. A dialog always waits:
@@ -144,7 +151,32 @@ export function startScheduler({ cfg, log = () => {}, onChange = () => {} }) {
         // Cancelled while the session woke up: nothing to send.
         if (r.ok && !getEntry(entry.id)) return
       }
-      if (r.ok) r = await send(cfg, { ...item, sleeping: false }, promptOf(entry, Date.now()), { free: !!entry.idle, draft: true })
+      if (r.ok && entry.receipt) {
+        const state = beginReport(entry)
+        if (state !== 'dispatching') {
+          removeEntry(entry.id)
+          logRun(record(entry, Date.now(), state))
+          return
+        }
+      }
+      if (r.ok) {
+        try {
+          r = await send(cfg, { ...item, sleeping: false }, promptOf(entry, Date.now()), { free: !!entry.idle, draft: true })
+        } catch (error) {
+          if (entry.receipt) settleReport(entry, 'delivery-unknown')
+          throw error
+        }
+        if (entry.receipt && !r.ok && r.busy) {
+          deferReport(entry)
+          return wait(entry, now, r.draft ? 'draft' : r.dialog ? 'dialog' : 'busy')
+        }
+        if (entry.receipt && !r.ok) {
+          settleReport(entry, 'delivery-unknown')
+          removeEntry(entry.id)
+          logRun(record(entry, Date.now(), 'delivery-unknown', r.error))
+          return
+        }
+      }
       if (r.ok) return sent(entry)
       why = r.draft ? 'draft' : r.dialog ? 'dialog' : r.busy ? 'busy' : r.error
     }
@@ -153,7 +185,8 @@ export function startScheduler({ cfg, log = () => {}, onChange = () => {} }) {
 
   /**
    * Taken for this process, unless another board holds a fresh claim or it was handled already.
-   * Delivery is at least once: a board that dies between typing the text and finish() leaves
+   * Legacy delivery is at least once; receipt-backed exports refuse replay after dispatch starts.
+   * A legacy board that dies between typing the text and finish() leaves
    * its claim, and the run goes out again once that claim expires (CLAIM_MS).
    */
   function claim(id, now) {
@@ -166,6 +199,7 @@ export function startScheduler({ cfg, log = () => {}, onChange = () => {} }) {
 
   function sent(entry) {
     const now = Date.now()
+    if (entry.receipt) settleReport(entry, 'sent')
     delivered.set(entry.id, entry.next)
     finish(entry, now)
     logRun(record(entry, now, 'sent'))
@@ -196,7 +230,7 @@ export function startScheduler({ cfg, log = () => {}, onChange = () => {} }) {
     }
     const gone = why === 'gone' ? (entry.gone ?? 0) + 1 : 0
     const drop = !entry.cron || gone >= GONE_RUNS
-    if (drop) removeEntry(entry.id)
+    if (drop) removeEntry(entry.id, 'missed')
     else updateEntry(entry.id, e => settle(e, now, { missed: (e.missed ?? 0) + 1, ...(gone && { gone }) }))
     logRun({ ...record(entry, now, entry.cron && drop ? 'dropped' : 'missed', why), ...(entry.cron && drop && { n: gone }) })
   }
