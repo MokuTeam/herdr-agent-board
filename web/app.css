@@ -1190,6 +1190,42 @@ button.swatch:active { transform: scale(0.88); }
 .arch-tidy > svg { flex: none; width: 16px; height: 16px; color: var(--label-3); }
 .arch-tidy > span { flex: 1; min-width: 0; }
 .arch-tidy .button { flex: none; height: 28px; }
+/* While a card is dragged: the archive as a place to drop it, at the foot of the board (app.js).
+   It materializes with the drag (springs), lights up while the card is over it, and says why
+   when the session may not go yet. Below the dragged card, above everything else. */
+.drop-archive {
+  position: fixed;
+  left: calc(50% + (var(--room-left, 0px) - var(--room-right, 0px)) / 2);
+  bottom: calc(24px + var(--room-bottom, 0px));
+  z-index: 59;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 220px;
+  max-width: min(440px, calc(100vw - 32px));
+  height: 56px;
+  padding: 0 24px;
+  border-radius: 999px;
+  translate: -50% 0;
+  opacity: 0;
+  background: var(--material-thick);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  box-shadow: var(--shadow-lift), inset 0 0.5px 0 var(--edge);
+  color: var(--label-2);
+  font-size: 14px;
+  font-weight: 600;
+  transition: background 140ms ease, color 140ms ease, scale 160ms ease-out;
+}
+.drop-archive.on { display: flex; }
+.drop-archive svg { flex: none; width: 22px; height: 22px; }
+.drop-archive span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.drop-archive.over { scale: 1.06; background: var(--accent); color: #fff; }
+.drop-archive.blocked { color: var(--label-3); }
+.drop-archive.blocked.over { scale: 1; background: color-mix(in srgb, var(--red) 14%, var(--surface)); color: var(--red); }
+@media (prefers-reduced-transparency: reduce) { .drop-archive { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; } }
+@media (prefers-reduced-motion: reduce) { .drop-archive { transition: none; } }
 /* A card on its way into the Archive button (app.js flyToArchive), above the board and its panels. */
 .ghost.to-archive { z-index: 75; will-change: transform, opacity; }
 

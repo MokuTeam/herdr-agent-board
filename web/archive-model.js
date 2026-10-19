@@ -50,3 +50,18 @@ export function searchArchive(records, query, { laneTitle = id => id, dayText = 
     return words.every(w => hay.includes(w))
   })
 }
+
+/**
+ * Whether a card let go at `p` (moving at `v`, px/s) lands on the drop place `r` (a rect): over
+ * it, with `pad` px of slop around it, or flicked at it from within `reach` px, so that where the
+ * flick would come to rest (the scroll-view projection, spring.js) is on it.
+ */
+export function dropsOn(r, p, v = { x: 0, y: 0 }, { pad = 18, reach = 160, rate = 0.99 } = {}) {
+  const on = q => q.x >= r.left - pad && q.x <= r.right + pad && q.y >= r.top - pad && q.y <= r.bottom + pad
+  if (on(p)) return true
+  const dx = Math.max(r.left - p.x, 0, p.x - r.right)
+  const dy = Math.max(r.top - p.y, 0, p.y - r.bottom)
+  if (dx * dx + dy * dy > reach * reach) return false
+  const k = rate / (1 - rate) / 1000
+  return on({ x: p.x + v.x * k, y: p.y + v.y * k })
+}
