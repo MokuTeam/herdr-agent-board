@@ -4,13 +4,14 @@
 // delete asking, a swatch picked and the "new category" form being filled in. What the old handlers
 // send is held against the rules the React rows send by (models/categories.ts). Then the reorder:
 // the old drag on the old rows and the React engine (hooks/useRowReorder.ts) on the rows React
-// renders, frame by frame.
+// renders, frame by frame. Last, a lane's usual profile, which the old page never had: its field
+// with two profiles shown, what a pick sends, and none of it with one shown.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
-import type { BoardCategory, Swatch } from '../../src/core/payload.ts'
+import type { BoardCategory, BoardProfile, Swatch } from '../../src/core/payload.ts'
 import { CategoriesPanel } from '../../web/src/components/categories/CategoriesPanel.tsx'
 import { CategoryDraftView } from '../../web/src/components/categories/CategoryDraft.tsx'
-import { CategoryRowView } from '../../web/src/components/categories/CategoryRow.tsx'
+import { CategoryRow, CategoryRowView } from '../../web/src/components/categories/CategoryRow.tsx'
 import { rowReorder } from '../../web/src/hooks/useRowReorder.ts'
 import { NO_EDITS, withEdit, withEdits } from '../../web/src/models/board-edits.ts'
 import { NO_MOVES, withMove } from '../../web/src/models/board-view.ts'
@@ -19,6 +20,7 @@ import {
   draftCategory,
   draftColor,
   paletteAfter,
+  profileChoices,
   renamed,
   withoutPath,
   withPath,
@@ -26,8 +28,20 @@ import {
 import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
 import { board, item, payload, renderInBoard } from './support/board.tsx'
 import { box, type FakeElement, FakeWorld } from './support/fake-dom.ts'
-import { addButtonTypes, byClass, byId, canonical, type Element, find, hasClass, type Node } from './support/markup.ts'
+import {
+  addButtonTypes,
+  byClass,
+  byId,
+  canonical,
+  type Element,
+  find,
+  findAll,
+  hasClass,
+  type Node,
+} from './support/markup.ts'
 import { OldCategories } from './support/old-categories.ts'
+import { first } from './support/react-commit.ts'
+import { type Host, hostElements, listenLikeReact } from './support/react-events.ts'
 
 const SWATCHES: Swatch[] = [
   { name: 'blue', hex: '#007AFF' },
@@ -65,6 +79,8 @@ interface Scene {
   categories?: BoardCategory[]
   moved?: [string, string][]
   canEdit?: boolean
+  /** The board's Claude profiles; none, as before profiles, unless given. */
+  profiles?: BoardProfile[]
 }
 
 const dataOf = (scene: Scene) =>
@@ -73,6 +89,7 @@ const dataOf = (scene: Scene) =>
     items: ITEMS,
     categories: scene.categories ?? CATEGORIES,
     swatches: SWATCHES,
+    ...(scene.profiles ? { profiles: scene.profiles } : {}),
   })
 
 const opened: OldCategories[] = []
@@ -124,6 +141,7 @@ function reactRow(props: Partial<Parameters<typeof CategoryRowView>[0]> & { cate
       title={c.title}
       path=""
       asking={null}
+      profiles={null}
       {...props}
     />,
     board(),
@@ -426,5 +444,153 @@ describe('reorder: the row follows the pointer 1:1, the others make room, all se
     const before = await oldDrag(one, two)
     expect(await newDrag(one, two)).toEqual(before)
     expect(before.at(-1)).toContain('lanes ops,other,proj,agent-made')
+  })
+})
+
+// ---------------------------------------------------------------- a lane's usual profile
+
+const profile = (id: string, title: string, hidden = false): BoardProfile => ({
+  id,
+  title,
+  color: '#5856D6',
+  colorName: 'indigo',
+  dir: id === 'default' ? 'C:\\Users\\me\\.claude' : `C:\\Users\\me\\.claude-${id}`,
+  hidden,
+  inherited: id === 'default',
+  exists: true,
+  hooks: hidden ? null : true,
+  sessions: 0,
+  limits: null,
+})
+/** Private and Work shown, Gamedev hidden. */
+const PROFILES = [profile('default', 'Private'), profile('work', 'Work'), profile('gamedev', 'Gamedev', true)]
+/** Project's usual profile is Work. */
+const projAtWork: BoardCategory = { ...proj, profile: 'work' }
+const USUAL = CATEGORIES.map(c => (c.id === 'proj' ? projAtWork : c))
+
+const textOf = (n: Node): string => (n.kind === 'text' ? n.text : n.children.map(textOf).join(''))
+const elementsIn = (el: Element): Element[] => el.children.filter((c): c is Element => c.kind === 'element')
+
+/** A row's usual profile as drawn: its label, its options (value, text), the one selected, whether it is off; null without one. */
+function usualOf(nodes: Node[], id: string) {
+  const [field, ...more] = findAll([rowOf(nodes, id)], el => hasClass(el, 'cat-profile'))
+  if (!field) return null
+  expect(more).toEqual([])
+  const [label, select, ...rest] = elementsIn(field)
+  if (!label || !select) throw new Error('a label and a select')
+  expect([field.tag, label.tag, select.tag, rest.length]).toEqual(['label', 'span', 'select', 0])
+  const options = elementsIn(select)
+  return {
+    label: textOf(label),
+    options: options.map(o => [o.attrs.get('value'), textOf(o)]),
+    selected: options.filter(o => o.attrs.has('selected')).map(o => o.attrs.get('value')),
+    disabled: select.attrs.has('disabled'),
+  }
+}
+
+/**
+ * A <CategoryRow> live in a fake DOM with React's handlers on it (support/react-events.ts): the
+ * markup React draws, and the props of its host elements from the same tree, its hooks run in a
+ * probe inside the page's providers. What its edits send is kept.
+ */
+function liveRow(category: BoardCategory, profiles: { id: string; title: string }[] | null) {
+  const posts: Record<string, unknown>[] = []
+  const row = (
+    <CategoryRow
+      category={category}
+      count={0}
+      swatches={SWATCHES}
+      disabled={false}
+      paletteOpen={false}
+      profiles={profiles}
+      onSwatch={() => {}}
+      onPicked={() => {}}
+      edit={async body => {
+        posts.push(body)
+        return true
+      }}
+    />
+  )
+  const context = board()
+  let hosts: Host[] = []
+  // hostElements calls each component of the tree; in a render, the row's hooks are the probe's.
+  function Probe() {
+    hosts = hostElements(row)
+    return null
+  }
+  renderInBoard(<Probe />, context)
+  const world = new FakeWorld({ viewport: VP })
+  const el = world.mount(first(renderInBoard(row, context)))
+  listenLikeReact(
+    world.wrap(world.body),
+    () => el,
+    () => hosts,
+  )
+  const select = el.querySelector('.cat-profile select')
+  if (!select) throw new Error('no usual profile')
+  return { world, select, posts }
+}
+
+describe('a lane’s usual profile', () => {
+  test('two shown profiles: a configured lane offers its usual profile; a pick saves it', async () => {
+    expect(profileChoices(PROFILES)).toEqual([
+      { id: 'default', title: 'Private' },
+      { id: 'work', title: 'Work' },
+    ])
+    const nodes = reactBody({ categories: USUAL, profiles: PROFILES })
+    const options = [
+      ['', 'None'],
+      ['default', 'Private'],
+      ['work', 'Work'],
+    ]
+    expect(usualOf(nodes, 'proj')).toEqual({ label: 'Usual profile', options, selected: ['work'], disabled: false })
+    // None given: None; the fallback lane has one too.
+    for (const id of ['ops', 'other'])
+      expect(usualOf(nodes, id)).toEqual({ label: 'Usual profile', options, selected: [''], disabled: false })
+    // At the end of the line of the lane's folders.
+    expect(
+      elementsIn(byClass([rowOf(nodes, 'proj')], 'cat-sub'))
+        .at(-1)
+        ?.attrs.get('class'),
+    ).toBe('cat-profile')
+    // Without the board it does nothing.
+    expect(usualOf(reactBody({ categories: USUAL, profiles: PROFILES, canEdit: false }), 'proj')?.disabled).toBe(true)
+    // In Russian.
+    expect(usualOf(reactBody({ lang: 'ru', categories: USUAL, profiles: PROFILES }), 'proj')).toEqual({
+      label: 'Обычный профиль',
+      options: [
+        ['', 'Нет'],
+        ['default', 'Private'],
+        ['work', 'Work'],
+      ],
+      selected: ['work'],
+      disabled: false,
+    })
+
+    // A pick goes to the settings as the lane's usual profile.
+    const none = liveRow(proj, profileChoices(PROFILES))
+    expect(none.select.value).toBe('')
+    none.select.value = 'work'
+    await none.world.fire(none.select, 'change')
+    expect(none.posts).toEqual([{ op: 'update', id: 'proj', profile: 'work' }])
+    // None takes it away.
+    const work = liveRow(projAtWork, profileChoices(PROFILES))
+    expect(work.select.value).toBe('work')
+    work.select.value = ''
+    await work.world.fire(work.select, 'change')
+    expect(work.posts).toEqual([{ op: 'update', id: 'proj', profile: '' }])
+  })
+
+  test('an agent’s lane has no usual profile; one shown profile: no field at all', () => {
+    expect(usualOf(reactBody({ categories: USUAL, profiles: PROFILES }), 'agent-made')).toBeNull()
+    // One shown (the others hidden), one only, none listed or a board before profiles: the panel is phase 1's.
+    const phase1 = reactBody({ categories: USUAL })
+    expect(findAll(phase1, el => hasClass(el, 'cat-profile'))).toEqual([])
+    const oneShown = [profile('default', 'Private'), profile('work', 'Work', true), profile('gamedev', 'Gamedev', true)]
+    for (const profiles of [oneShown, [profile('default', 'Private')], [profile('work', 'Work')], []]) {
+      expect(profileChoices(profiles)).toBeNull()
+      expect(canonical(reactBody({ categories: USUAL, profiles }))).toBe(canonical(phase1))
+    }
+    expect(profileChoices(undefined)).toBeNull()
   })
 })

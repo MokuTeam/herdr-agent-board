@@ -153,9 +153,19 @@ test('one profile: the usage popover is phase 1’s', () => {
   expect(usagePop(ONE)).toBe(usagePop(PHASE1))
 })
 
-test('one profile: the categories panel is phase 1’s', () => {
+test('one profile shown: the categories panel is phase 1’s, a lane’s usual profile and all', () => {
   expect(categoriesPanel(PHASE1)).toContain('Project')
   expect(categoriesPanel(ONE)).toBe(categoriesPanel(PHASE1))
+  expect(categoriesPanel(FOLDERS)).toBe(categoriesPanel(PHASE1))
+  // A usual profile set while two were shown: the shown one, or Work hidden since.
+  for (const profile of ['default', 'work']) {
+    const usual = (data: BoardPayload): BoardPayload => ({
+      ...data,
+      categories: data.categories.map(c => (c.id === 'proj' ? { ...c, profile } : c)),
+    })
+    expect(categoriesPanel(usual(ONE))).toBe(categoriesPanel(PHASE1))
+    expect(categoriesPanel(usual(FOLDERS))).toBe(categoriesPanel(PHASE1))
+  }
 })
 
 test('several folders, one shown: the board and toolbar are still phase 1’s', () => {

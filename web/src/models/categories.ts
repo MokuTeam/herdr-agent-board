@@ -1,7 +1,8 @@
 // The categories editor's rules: the latin id a new category gets from its title, what the "new
 // category" form creates and in which color, and what a row says and saves (its title, folders,
-// delete). The editor is components/categories; the server keeps the categories in config.json.
-import type { BoardCategory, Swatch } from '../../../src/core/payload.ts'
+// delete, usual profile). The editor is components/categories; the server keeps the categories in
+// config.json.
+import type { BoardCategory, BoardProfile, Swatch } from '../../../src/core/payload.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
 
 // A category titled in Cyrillic gets a latin id agents can type: "Ромашка" -> "romashka".
@@ -109,3 +110,12 @@ export const paletteAfter = (open: string | null, c: BoardCategory): string | nu
 /** The swatch of the lane's color, named or as hex. */
 export const swatchPressed = (s: Swatch, c: BoardCategory): boolean =>
   s.name === c.colorName || s.hex.toLowerCase() === String(c.colorName).toLowerCase()
+
+/**
+ * What a lane's usual profile can be (besides none): the shown profiles, in the list's order. Null
+ * with fewer than two shown: one profile shown, the rows have no such field, as before profiles.
+ */
+export function profileChoices(profiles: BoardProfile[] | undefined): { id: string; title: string }[] | null {
+  const shown = (profiles ?? []).filter(p => !p.hidden)
+  return shown.length < 2 ? null : shown.map(p => ({ id: p.id, title: p.title }))
+}

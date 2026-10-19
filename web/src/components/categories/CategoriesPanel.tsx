@@ -1,8 +1,9 @@
 // The categories panel: the board's lanes, edited where they are seen — rename, recolor, the
-// folders that sort sessions in, delete, add a lane an agent made to the settings, and drag to
-// reorder. Every change goes to config.json at once (POST /api/categories) and comes back over the
-// live stream, to this page, the terminal board and the agents' next brief alike. A new lane is
-// made in the form at the end of the list. Opened at a lane, its row scrolls into view and lights up.
+// folders that sort sessions in, the usual profile (with two profiles or more shown), delete, add
+// a lane an agent made to the settings, and drag to reorder. Every change goes to config.json at
+// once (POST /api/categories) and comes back over the live stream, to this page, the terminal
+// board and the agents' next brief alike. A new lane is made in the form at the end of the list.
+// Opened at a lane, its row scrolls into view and lights up.
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import type { Swatch } from '../../../../src/core/payload.ts'
 import { api, errorText } from '../../api/client.ts'
@@ -11,7 +12,7 @@ import { useLatest } from '../../hooks/useLatest.ts'
 import { useRowReorder } from '../../hooks/useRowReorder.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { catOf } from '../../models/board-view.ts'
-import { categoryCounts, draftColor, paletteAfter } from '../../models/categories.ts'
+import { categoryCounts, draftColor, paletteAfter, profileChoices } from '../../models/categories.ts'
 import { reducedMotion } from '../../models/spring.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { NewIcon } from '../icons.tsx'
@@ -71,6 +72,7 @@ export function CategoriesPanel({ open, focus, onClose, onOpen }: CategoriesPane
   const shown = useHeld(data, reorder.dragging)
   const moves = useHeld(ui.moves, reorder.dragging)
   const counts = categoryCounts(shown?.items ?? [], it => catOf(moves, it))
+  const profiles = profileChoices(shown?.profiles)
 
   useLayoutEffect(() => {
     if (!focus) return
@@ -114,6 +116,7 @@ export function CategoriesPanel({ open, focus, onClose, onOpen }: CategoriesPane
               onSwatch={() => setPalette(was => paletteAfter(was, c))}
               onPicked={() => setPalette(null)}
               edit={edit}
+              profiles={profiles}
             />
           ))}
         </div>

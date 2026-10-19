@@ -1,8 +1,9 @@
 /* Claude profiles (web/src/components/ProfileSwitch.tsx, ProfileTag.tsx, Limits.tsx,
-   LimitsPop.tsx): the switch beside the lanes control, the tag on a card and the usage per
-   profile, each in its profile's color (--c, from the board). Red says a session runs in another
-   profile than its start asked for. With one profile shown the page has none of it, as before
-   profiles. Every rule here selects by class: the other sheets are upstream's, rule for rule. */
+   LimitsPop.tsx, categories/CategoryRow.tsx): the switch beside the lanes control, the tag on a
+   card and the usage per profile, each in its profile's color (--c, from the board), and a lane's
+   usual profile in the categories panel. Red says a session runs in another profile than its
+   start asked for. With one profile shown the page has none of it, as before profiles. Every rule
+   here selects by class: the other sheets are upstream's, rule for rule. */
 
 /* The switch is a lanes control (.segmented); each profile's count is in its color. */
 .segmented.profiles .n { color: var(--c, var(--label-3)); font-weight: 600; }
@@ -42,3 +43,22 @@
 .limits-for h4 { margin: 0; color: color-mix(in srgb, var(--c) 75%, var(--label)); font-size: 13px; font-weight: 600; }
 .limits-for p { margin-top: 6px; }
 .limits-none { color: var(--label-2); }
+
+/* A lane's usual profile: at the end of the line of its folders, a quiet select as the
+   new-session window's folder one (launch.css .where select), in the line's smaller size. */
+.cat-profile { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--label-3); white-space: nowrap; }
+.cat-profile select {
+  max-width: 160px;
+  height: 22px;
+  padding: 0 22px 0 8px;
+  border: 0;
+  border-radius: 6px;
+  outline: 0;
+  appearance: none;
+  background: var(--fill-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='m6.5 8 3.5 3.5L13.5 8' fill='none' stroke='%238e8e93' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 4px center / 13px;
+  color: var(--label);
+  font: 500 12px var(--font);
+  text-overflow: ellipsis;
+}
+.cat-profile select:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
+.cat-profile select:disabled { opacity: 0.5; }

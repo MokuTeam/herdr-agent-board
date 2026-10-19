@@ -43,6 +43,9 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'profile.wrong': 'Wrong profile: started for {want}',
     // a shown profile with no usage reading, in the usage popover (web/src/components/LimitsPop.tsx)
     'limits.noSession': 'No session lately',
+    // a lane's usual profile in the categories panel (web/src/components/categories/CategoryRow.tsx)
+    'cat.profile': 'Usual profile',
+    'cat.profileNone': 'None',
   },
   ru: {
     // the Profiles panel's edits (adapters/config-file.ts editProfiles)
@@ -84,5 +87,8 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'profile.wrong': 'Не тот профиль: запущена для {want}',
     // a shown profile with no usage reading, in the usage popover (web/src/components/LimitsPop.tsx)
     'limits.noSession': 'Сессий давно не было',
+    // a lane's usual profile in the categories panel (web/src/components/categories/CategoryRow.tsx)
+    'cat.profile': 'Обычный профиль',
+    'cat.profileNone': 'Нет',
   },
 }

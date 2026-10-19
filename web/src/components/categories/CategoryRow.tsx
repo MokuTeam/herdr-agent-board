@@ -1,7 +1,8 @@
 // One lane in the categories editor: its handle (drag to reorder: hooks/useRowReorder.ts), its
 // color (a click opens the swatches), its title (saved when the field is left), how many sessions
-// are in it, delete (the first click asks), its id and the folders that sort sessions in. A lane
-// an agent made up, not in the settings, can only be added to them.
+// are in it, delete (the first click asks), its id, the folders that sort sessions in and, with two
+// profiles or more shown, its usual profile (a lane's + preselects it in the new-session window). A
+// lane an agent made up, not in the settings, can only be added to them.
 import { type FocusEvent, type KeyboardEvent, useRef, useState } from 'react'
 import type { BoardCategory, Swatch } from '../../../../src/core/payload.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
@@ -25,6 +26,8 @@ export interface CategoryRowProps {
   /** A swatch was picked: the swatches close. */
   onPicked(): void
   edit: CategoryEdit
+  /** What its usual profile can be (models/categories.ts profileChoices); null: no such field. */
+  profiles: { id: string; title: string }[] | null
 }
 
 /** The title being typed: kept while the field has the focus, then until the board says anything new of the lane. */
@@ -98,6 +101,7 @@ export function CategoryRow({ category: c, count, edit, onPicked, ...rest }: Cat
           setTitle({ text: value, focused: false, base: c })
           void edit({ op: 'update', id: c.id, title: next })
         },
+        profile: id => void edit({ op: 'update', id: c.id, profile: id }),
         pathChange: setPath,
         pathKey(e) {
           if (e.key === 'Escape') {
@@ -125,6 +129,8 @@ export interface RowHandlers {
   titleChange(text: string): void
   titleKey(e: KeyboardEvent<HTMLInputElement>): void
   titleBlur(e: FocusEvent<HTMLInputElement>): void
+  /** A usual profile picked: its id, or '' for none. */
+  profile(id: string): void
   pathChange(text: string): void
   pathKey(e: KeyboardEvent<HTMLInputElement>): void
 }
@@ -143,13 +149,28 @@ export interface CategoryRowViewProps {
   path: string
   /** Delete asks: its text ("Delete? 2 sessions go by folder"). */
   asking: string | null
+  /** What its usual profile can be; null: no such field, as before profiles. */
+  profiles: { id: string; title: string }[] | null
   onSwatch?: () => void
   on?: RowHandlers
 }
 
 /** The row as drawn for one state. */
 export function CategoryRowView(props: CategoryRowViewProps) {
-  const { category: c, count, swatches, disabled, paletteOpen, lane, title, path, asking, onSwatch, on } = props
+  const {
+    category: c,
+    count,
+    swatches,
+    disabled,
+    paletteOpen,
+    lane,
+    title,
+    path,
+    asking,
+    profiles,
+    onSwatch,
+    on,
+  } = props
   const t = useT()
   const text = rowText(c, count, t)
   return (
@@ -241,6 +262,19 @@ export function CategoryRowView(props: CategoryRowViewProps) {
           onChange={e => on?.pathChange(e.currentTarget.value)}
           onKeyDown={e => on?.pathKey(e)}
         />
+        {profiles && c.configured && (
+          <label className="cat-profile">
+            <span>{t('cat.profile')}</span>
+            <select value={c.profile ?? ''} disabled={disabled} onChange={e => on?.profile(e.currentTarget.value)}>
+              <option value="">{t('cat.profileNone')}</option>
+              {profiles.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.title}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
       <div className="palette" hidden={!paletteOpen}>
         {swatches.map(s => (
