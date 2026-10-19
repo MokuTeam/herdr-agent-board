@@ -4,7 +4,7 @@ import { detailResource } from './detail-resource.js'
 // Agent board, web. Live data over Server-Sent Events; every change of place animates with a
 // spring from where the card is on screen (FLIP), drags stay glued to the pointer and land
 // with the pointer's velocity, and the session sheet can be flicked away.
-import { archiveBlock, searchArchive, tidyList } from './archive-model.js'
+import { archiveBlock, dropsOn, searchArchive, tidyList } from './archive-model.js'
 import { attentionTime, nextAttention, recordView, resultToken, unseenResult } from './attention.js'
 import { initBoardMenus } from './board-menus.js'
 import { draftBook } from './drafts.js'
@@ -387,7 +387,8 @@ async function callMokuPilot(key) {
 const lower = s => (s ? s[0].toLocaleLowerCase(t.lang) + s.slice(1) : s)
 let lastArchived = null // { keys, until, hide }: what Ctrl+Z brings back while its toast shows
 
-async function archiveSession(key) {
+/** `fly`: false for a card dropped on the archive place, which went into it on its own. */
+async function archiveSession(key, { fly = true } = {}) {
   const it = itemOf(key)
   // On its way already (a double click): one is enough.
   if (!it || state.archiving.has(key)) return
@@ -395,7 +396,7 @@ async function archiveSession(key) {
   if (why) return toast(t(why), true)
   if (!canMutate()) return toast(t(canEdit() ? 'mobile.readOnly' : 'live.off'), true)
   if (state.open === key && sessionPanel.isOpen) sessionPanel.close()
-  flyToArchive([cards.get(key)])
+  if (fly) flyToArchive([cards.get(key)])
   state.archiving.set(key, Date.now())
   render()
   const r = await act(key, 'archive')
@@ -1099,6 +1100,36 @@ function appear(el) {
 // ---------------------------------------------------------------- drag a card to another lane or column
 let drag = null
 
+// While a card is dragged, the archive is a place to drop it: a pill at the foot of the board
+// that materializes with the drag and goes with it, lit while the card is over it. A session that
+// may not go yet shows why there, and a drop on it only says so again.
+const dropPlace = document.createElement('div')
+dropPlace.className = 'drop-archive'
+dropPlace.setAttribute('aria-hidden', 'true')
+dropPlace.innerHTML = `${ICON.archive}<span></span>`
+document.body.append(dropPlace)
+const dropShown = new Spring({
+  damping: 1,
+  response: 0.3,
+  precision: 0.002,
+  onUpdate: v => {
+    dropPlace.style.opacity = String(v)
+    dropPlace.style.transform = `translateY(${(1 - v) * 18}px) scale(${0.92 + 0.08 * v})`
+  },
+  onRest: v => v === 0 && dropPlace.classList.remove('on'),
+})
+/** Shows the drop place for item `it`; returns why it may not go to the archive now, or ''. */
+function showDropPlace(it) {
+  const why = archiveBlock(it, state.data.schedules ?? []) || (canMutate() ? '' : canEdit() ? 'mobile.readOnly' : 'live.off')
+  dropPlace.classList.toggle('blocked', !!why)
+  dropPlace.classList.remove('over')
+  dropPlace.lastElementChild.textContent = why ? t(why) : t('archive.menu')
+  dropPlace.classList.add('on')
+  dropShown.to(1)
+  return why
+}
+const overDropPlace = (x, y, v) => dropPlace.classList.contains('on') && dropsOn(dropPlace.getBoundingClientRect(), { x, y }, v)
+
 function onCardDown(e) {
   if (!canEdit() || e.pointerType === 'touch' || e.button !== 0 || e.target.closest('[data-act], [data-launch]') || !itemOf(e.currentTarget.dataset.key)) return
   const card = e.currentTarget
@@ -1133,7 +1164,9 @@ function onDragMove(e) {
   }
   drag.x.set(e.clientX - drag.ox)
   drag.y.set(e.clientY - drag.oy)
-  const target = dropTarget(drag.key, document.elementFromPoint(e.clientX, e.clientY))
+  const archive = overDropPlace(e.clientX, e.clientY)
+  dropPlace.classList.toggle('over', archive)
+  const target = archive ? null : dropTarget(drag.key, document.elementFromPoint(e.clientX, e.clientY))
   // The column lights up when the card changes column there, else the lane when only the lane changes.
   const lit = target?.column ? target.colEl : target?.cat ? target.lane : null
   if (lit !== drag.lit) {
@@ -1142,6 +1175,7 @@ function onDragMove(e) {
     drag.lit = lit
   }
   drag.target = target
+  if (archive) return
   if (e.clientY < 150) scrollBy(0, -14)
   else if (e.clientY > innerHeight - roomBelow() - 70) scrollBy(0, 14) // above a panel at the bottom
 }
@@ -1179,6 +1213,7 @@ function startDrag() {
   apply()
   d.card.classList.add('placeholder')
   document.body.classList.add('dragging')
+  d.archiveWhy = showDropPlace(itemOf(d.key))
 }
 
 function onDragEnd(e) {
@@ -1194,7 +1229,12 @@ function onDragEnd(e) {
   const v = velocityOf(d.samples)
   d.lit?.classList.remove('drop')
   document.body.classList.remove('dragging')
-  if (d.target) moveCard(d.key, d.target)
+  // Let go over the archive place, or flicked at it from close by.
+  const archive = overDropPlace(e.clientX, e.clientY, v)
+  dropShown.to(0)
+  if (archive && !d.archiveWhy) return dropInArchive(d)
+  if (archive) toast(t(d.archiveWhy), true)
+  if (d.target && !archive) moveCard(d.key, d.target)
   else render()
   // Land where the card now lives, carrying the release velocity into the spring.
   const r = d.card.getBoundingClientRect()
@@ -1212,6 +1252,42 @@ function onDragEnd(e) {
     d.ghost.remove()
     d.card.classList.remove('placeholder')
   }
+}
+
+/**
+ * A card dropped on the archive place: it goes into it, shrinking and fading where the pill is,
+ * and the archive takes it as "Archive" in its menu does (the same checks, the toast with Return).
+ */
+function dropInArchive(d) {
+  const to = dropPlace.getBoundingClientRect()
+  const from = d.ghost.getBoundingClientRect()
+  const dx = to.left + to.width / 2 - (from.left + from.width / 2)
+  const dy = to.top + to.height / 2 - (from.top + from.height / 2)
+  // From where the drag left it, its own springs done.
+  for (const s of [d.x, d.y, d.s]) s.stop()
+  const x0 = d.x.value
+  const y0 = d.y.value
+  const s0 = d.s.value
+  const gone = () => {
+    d.ghost.remove()
+    d.card.classList.remove('placeholder')
+  }
+  if (reducedMotion.matches) gone()
+  else {
+    const s = new Spring({
+      value: 0,
+      damping: 1,
+      response: 0.32,
+      precision: 0.002,
+      onUpdate: k => {
+        d.ghost.style.transform = `translate3d(${x0 + dx * k}px, ${y0 + dy * k}px, 0) scale(${s0 - (s0 - 0.12) * k})`
+        d.ghost.style.opacity = String(1 - k * k)
+      },
+      onRest: gone,
+    })
+    s.to(1)
+  }
+  archiveSession(d.key, { fly: false })
 }
 
 function onCardClick(e) {
