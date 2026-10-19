@@ -24,7 +24,7 @@ function ownersHome(): string {
   return home
 }
 
-test('found: the default folder always, then ~/.claude-* folders with settings.json or projects/', () => {
+test('found: the default folder first, then ~/.claude-* folders, each with settings.json or projects/', () => {
   const home = ownersHome()
   expect(findProfileDirs(home)).toEqual([
     join(home, '.claude'),
@@ -33,8 +33,30 @@ test('found: the default folder always, then ~/.claude-* folders with settings.j
   ])
   const emptyHome = join(home, 'empty')
   mkdirSync(emptyHome)
+  expect(findProfileDirs(emptyHome)).toEqual([])
+  // ~/.claude there but holding neither: not in use.
+  mkdirSync(join(emptyHome, '.claude'))
+  expect(findProfileDirs(emptyHome)).toEqual([])
+  mkdirSync(join(emptyHome, '.claude', 'projects'))
   expect(findProfileDirs(emptyHome)).toEqual([join(emptyHome, '.claude')])
-  expect(findProfileDirs(join(home, 'gone'))).toEqual([join(home, 'gone', '.claude')])
+  expect(findProfileDirs(join(home, 'gone'))).toEqual([])
+})
+
+test('loadProfiles: a board whose CLAUDE_CONFIG_DIR is a folder elsewhere keeps one profile shown', () => {
+  const home = join(isolatedHome(), 'home')
+  const own = join(home, 'elsewhere', 'claude')
+  mkdirSync(join(own, 'projects'), { recursive: true })
+  expect(loadProfiles({ home, shownDir: own }).map(p => [p.id, p.hidden])).toEqual([
+    ['default', true],
+    ['claude', false],
+  ])
+  // Once ~/.claude is in use, it is shown as on every board.
+  mkdirSync(join(home, '.claude'))
+  writeFileSync(join(home, '.claude', 'settings.json'), '{}')
+  expect(loadProfiles({ home, shownDir: own }).map(p => [p.id, p.hidden])).toEqual([
+    ['default', false],
+    ['claude', false],
+  ])
 })
 
 test('the inherited folder: unset is ~/.claude; ~ is the home folder', () => {

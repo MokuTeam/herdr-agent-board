@@ -86,7 +86,32 @@ test('found folders join the list: default shown, the others hidden, colors in o
     mergeProfiles(undefined, found, H, `${H}\\.claude-work`, 'win32').list.find(p => p.id === 'work')?.hidden,
   ).toBe(false)
   expect(mergeProfiles(undefined, [], H).list.map(p => p.id)).toEqual(['default'])
+})
+
+test('a board whose own folder is elsewhere shows ~/.claude only when it is in use', () => {
+  // A teammate's CLAUDE_CONFIG_DIR is D:\claude, ~/.claude is not there or empty: one profile shown.
   expect(mergeProfiles(undefined, [], H, 'D:\\claude', 'win32').list.map(p => [p.id, p.hidden])).toEqual([
+    ['default', true],
+    ['claude', false],
+  ])
+  // ~/.claude holds settings.json or projects/ (found): shown, as on every board.
+  expect(mergeProfiles(undefined, [`${H}\\.claude`], H, 'D:\\claude', 'win32').list.map(p => [p.id, p.hidden])).toEqual(
+    [
+      ['default', false],
+      ['claude', false],
+    ],
+  )
+  // The board's own folder is ~/.claude (unset, or set to it however spelled): shown, found or not.
+  for (const own of [undefined, null, `${H}\\.claude`, 'c:/users/me/.claude/', '~/.claude'])
+    expect(mergeProfiles(undefined, [], H, own, 'win32').list.map(p => [p.id, p.hidden])).toEqual([['default', false]])
+  // Its own folder named relative is none: the default one stands for it, shown.
+  expect(mergeProfiles(undefined, [], H, 'claude', 'win32').list.map(p => [p.id, p.hidden])).toEqual([
+    ['default', false],
+  ])
+  // A listed profile keeps what config.json says.
+  expect(
+    mergeProfiles([{ ...DEFAULT, hidden: false }], [], H, 'D:\\claude', 'win32').list.map(p => [p.id, p.hidden]),
+  ).toEqual([
     ['default', false],
     ['claude', false],
   ])

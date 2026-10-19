@@ -24,18 +24,23 @@ const isFile = (path: string): boolean => {
   }
 }
 
-/** The default folder first (always, there or not), then every ~/.claude-* folder holding settings.json or projects/, by name. */
+/**
+ * The Claude folders in use here: the default one first, then every ~/.claude-* folder by name,
+ * each when it holds settings.json or projects/. mergeProfiles lists the default one even when it
+ * is not found, and shows it then only when it is the board's own.
+ */
 export function findProfileDirs(home: string = homedir()): string[] {
   let names: string[] = []
   try {
     names = readdirSync(home)
   } catch {}
+  const used = (dir: string): boolean =>
+    isFolder(dir) && (isFile(join(dir, 'settings.json')) || isFolder(join(dir, 'projects')))
   const found = names
     .filter(name => /^\.claude-./i.test(name))
     .sort()
     .map(name => join(home, name))
-    .filter(dir => isFolder(dir) && (isFile(join(dir, 'settings.json')) || isFolder(join(dir, 'projects'))))
-  return [defaultProfileDir(home), ...found]
+  return [defaultProfileDir(home), ...found].filter(used)
 }
 
 /** The profile folder this process's environment points to (unset: ~/.claude). */

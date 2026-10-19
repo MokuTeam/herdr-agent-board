@@ -131,8 +131,10 @@ const isEntry = (v: unknown): v is Record<string, unknown> => typeof v === 'obje
  * every folder in `found` that none of them has. A listed one's `dir` is its folder resolved
  * (absoluteProfileDir: `~`, Git Bash's `/c/…`, no trailing separator); an entry whose folder is not
  * absolute is no profile. The default folder and the board's own (`shownDir`, when absolute) count
- * as found even when they are not there. A found folder is added shown only when it is one of
- * those two; `added` holds the ones added.
+ * as found even when they are not there. A folder is added shown only when it is the board's own
+ * (the default one when `shownDir` is not given or not absolute), or the default one when `found`
+ * has it (it holds settings.json or projects/): a teammate whose CLAUDE_CONFIG_DIR is a folder
+ * elsewhere keeps one profile shown. `added` holds the ones added.
  */
 export function mergeProfiles(
   listed: unknown,
@@ -175,14 +177,16 @@ export function mergeProfiles(
   // The default folder first, as found spelled it; the board's own last when found has not got it.
   const defaultDir = defaultProfileDir(home, platform)
   const ownDir = absoluteProfileDir(shownDir, home, platform)
-  const dirs = [found.find(f => sameDir(f, defaultDir)) ?? defaultDir, ...found.filter(f => !sameDir(f, defaultDir))]
+  const foundDefault = found.find(f => sameDir(f, defaultDir))
+  const dirs = [foundDefault ?? defaultDir, ...found.filter(f => !sameDir(f, defaultDir))]
   if (ownDir && !dirs.some(d => sameDir(d, ownDir))) dirs.push(ownDir)
+  const shownOne = ownDir ?? defaultDir
 
   const added: Profile[] = []
   for (const dir of dirs) {
     if (profileForDir(list, dir)) continue
     const id = profileIdOf(dir, home, new Set(list.map(p => p.id)))
-    const shown = sameDir(dir, defaultDir) || sameDir(dir, ownDir)
+    const shown = sameDir(dir, shownOne) || (foundDefault !== undefined && sameDir(dir, defaultDir))
     const profile: Profile = { id, title: profileTitleOf(id), dir, color: nextColor(), hidden: !shown }
     list.push(profile)
     added.push(profile)
