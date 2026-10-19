@@ -15,7 +15,10 @@ export interface ProfileHomes {
   forDir(dir: string): ClaudeHome
   /** Running sessions in every folder given, each with the home it was found in. */
   liveSessions(dirs: readonly string[]): Map<string, LiveHit>
-  /** Recent session folders of the given homes, deduplicated (sameDir), first home first. */
+  /**
+   * Recent session folders of the given homes, the newest of all first (each home's own order
+   * kept, a tie to the earlier home), deduplicated (sameDir), no more than `limit`.
+   */
   recentFolders(dirs: readonly string[], limit?: number): Promise<string[]>
 }
 
@@ -43,9 +46,12 @@ export function createProfileHomes(): ProfileHomes {
   }
 
   async function recentFolders(dirs: readonly string[], limit = 12): Promise<string[]> {
-    const lists = await Promise.all(homesOf(dirs).map(home => home.recentFolders(limit)))
+    // Each home's list is newest first: a stable sort by when merges them (a tie to the earlier
+    // home), so a home with many recent folders never crowds out a newer one of another.
+    const lists = await Promise.all(homesOf(dirs).map(home => home.recentFoldersAt(limit)))
     const found: string[] = []
-    for (const dir of lists.flat()) if (!found.some(f => sameDir(f, dir))) found.push(dir)
+    for (const { dir } of lists.flat().sort((x, y) => y.at - x.at))
+      if (!found.some(f => sameDir(f, dir))) found.push(dir)
     return found.slice(0, limit)
   }
 

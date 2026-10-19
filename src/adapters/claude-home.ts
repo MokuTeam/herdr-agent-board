@@ -66,7 +66,15 @@ export interface ClaudeHome {
   conversation(path: string, limit?: number, opts?: ConversationOptions): ConversationTurn[]
   searchHistory(cwd: string, query: string | null, excludeSession?: string | null): Promise<HistoryResult>
   recentFolders(limit?: number): Promise<string[]>
+  /** The same folders, each with when its project last changed (what puts them newest first). */
+  recentFoldersAt(limit?: number): Promise<RecentFolder[]>
   localUsage(now?: number): LocalUsage
+}
+
+/** A folder recent sessions ran in, and when (ms) its project in `projects/` last changed. */
+export interface RecentFolder {
+  dir: string
+  at: number
 }
 
 const errorCode = (err: unknown): unknown => (err && typeof err === 'object' && 'code' in err ? err.code : undefined)
@@ -169,7 +177,7 @@ export function createClaudeHome(root: string): ClaudeHome {
   const missCache = new Map<string, number>() // session id -> when a full search found nothing (retried after a minute)
   const tailCache = new Map<string, { mtimeMs: number; size: number; info: TranscriptInfo }>()
   onLanguage(() => tailCache.clear()) // tool details are in the board's language
-  let recentCache: { at: number; list: string[] } = { at: 0, list: [] }
+  let recentCache: { at: number; list: RecentFolder[] } = { at: 0, list: [] }
 
   function liveSessions(): Map<string, LiveSession> {
     const byId = new Map<string, LiveSession>()
@@ -337,11 +345,12 @@ export function createClaudeHome(root: string): ClaudeHome {
 
   /**
    * Folders recent Claude sessions on this machine ran in, newest first: the cwd in the newest
-   * transcript of each project. Read from the head of the file only, cached for a minute.
+   * transcript of each project, with when the project last changed. Read from the head of the
+   * file only, cached for a minute.
    */
-  async function recentFolders(limit = 12): Promise<string[]> {
+  async function recentFoldersAt(limit = 12): Promise<RecentFolder[]> {
     if (Date.now() - recentCache.at < 60_000) return recentCache.list
-    const found: string[] = []
+    const found: RecentFolder[] = []
     try {
       const mtime = async (p: string): Promise<number> => (await stat(p).catch(() => null))?.mtimeMs ?? 0
       const all = (await readdir(projects, { withFileTypes: true })).filter(d => d.isDirectory())
@@ -352,23 +361,28 @@ export function createClaudeHome(root: string): ClaudeHome {
         .slice(0, 40)
       const temp = normDir(tmpdir())
       const cwds = await Promise.all(
-        dirs.map(async ({ dir }) => {
+        dirs.map(async ({ dir, m }) => {
           const files = (await readdir(dir).catch(() => [] as string[])).filter(f => f.endsWith('.jsonl'))
           const newest = (await Promise.all(files.map(async f => ({ f, m: await mtime(join(dir, f)) })))).sort(
             (a, b) => b.m - a.m,
           )[0]
-          return newest ? cwdOf(join(dir, newest.f)) : null
+          return { cwd: newest ? await cwdOf(join(dir, newest.f)) : null, at: m }
         }),
       )
-      for (const cwd of cwds) {
-        if (!cwd || normDir(cwd).startsWith(temp) || found.some(f => sameDir(f, cwd))) continue
+      for (const { cwd, at } of cwds) {
+        if (!cwd || normDir(cwd).startsWith(temp) || found.some(f => sameDir(f.dir, cwd))) continue
         const st = await statOf(cwd, 500)
-        if (st && st !== SLOW && st.isDirectory()) found.push(cwd)
+        if (st && st !== SLOW && st.isDirectory()) found.push({ dir: cwd, at })
         if (found.length >= limit) break
       }
     } catch {}
     recentCache = { at: Date.now(), list: found }
     return found
+  }
+
+  /** Folders recent Claude sessions on this machine ran in, newest first (recentFoldersAt). */
+  async function recentFolders(limit = 12): Promise<string[]> {
+    return (await recentFoldersAt(limit)).map(f => f.dir)
   }
 
   return {
@@ -379,6 +393,7 @@ export function createClaudeHome(root: string): ClaudeHome {
     conversation: readConversation,
     searchHistory,
     recentFolders,
+    recentFoldersAt,
     localUsage: (now = Date.now()) => readUsageCache(join(root, 'herdr-usagebar'), now),
   }
 }
