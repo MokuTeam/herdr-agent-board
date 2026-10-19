@@ -23,6 +23,7 @@ import { initQuestions } from './questions.js'
 import { keepInSight, menuOpen, Panel, panelDock, panels, placePanels, resetPanelSize, roomBelow } from './panel.js'
 import { renameInPlace } from './rename.js'
 import { initSetupNote } from './setup.js'
+import { fitRow } from './row-model.js'
 import { reducedMotion, rubberband, Spring, velocityOf } from './spring.js'
 import { initTerminal } from './terminal.js'
 import { capital, dayLabel, longWhen, shortWhen, span, timeOf } from './when.js'
@@ -1972,15 +1973,47 @@ $('#sheet-wake').addEventListener('click', async () => {
 $('#sheet-sleep').addEventListener('click', () => state.open && sleepSession(state.open))
 $('#sheet-restart').addEventListener('click', () => state.open && restartSession(state.open))
 $('#sheet-archive').addEventListener('click', () => state.open && archiveSession(state.open))
-// More holds what the row does not show (app.css decides; the buttons stay in the row, hidden,
-// and keep their state), in groups: the call and the tools, a new session here, then the
-// session's own life.
+// The row shows as many actions as its width holds, in this order, and More the rest
+// (row-model.js decides). Their widths are taken once per set of buttons, language and layout:
+// all shown with their words, then as icons, within one task, so nothing flickers. The row's
+// width does not depend on what it shows, so fitting it again never resizes it.
+const PRIORITY = ['sheet-focus', 'sheet-mokupilot', 'sheet-term', 'sheet-changes', 'sheet-history', 'sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-archive', 'sheet-new']
+const actionRow = $('#sheet .composer-actions')
+let rowWidths = { key: '' }
+function fitActions() {
+  const width = el => parseFloat(getComputedStyle(el).width) || 0 // the layout's, whatever the panel's transform
+  const room = width(actionRow)
+  if (!room) return
+  const more = $('#sheet-more')
+  const all = PRIORITY.map(id => document.getElementById(id)).filter(el => el && !el.hidden)
+  // A terminal wants a keyboard: on a phone it stays under More.
+  const row = all.filter(el => !(narrowSheet.matches && el.id === 'sheet-term'))
+  const key = [narrowSheet.matches, ...row.map(el => `${el.id} ${el.textContent.trim()}`)].join('\n')
+  if (key !== rowWidths.key) {
+    actionRow.classList.add('measuring')
+    actionRow.classList.remove('icons')
+    const words = row.map(width)
+    actionRow.classList.add('icons')
+    rowWidths = { key, buttons: row.map((el, i) => ({ words: words[i], icon: width(el) })), more: width(more) }
+    actionRow.classList.remove('measuring')
+  }
+  const fit = fitRow(rowWidths.buttons, room, { gap: parseFloat(getComputedStyle(actionRow).columnGap) || 0, more: rowWidths.more })
+  actionRow.classList.toggle('icons', !fit.words)
+  for (const el of all) el.classList.toggle('over', !row.includes(el) || row.indexOf(el) >= fit.shown)
+  more.classList.toggle('over', !all.some(el => el.classList.contains('over')))
+}
+new ResizeObserver(fitActions).observe(actionRow)
+// A button shown or hidden (no MokuPilot, not in git, asleep...) or another language: fit again.
+new MutationObserver(fitActions).observe(actionRow, { subtree: true, childList: true, characterData: true, attributeFilter: ['hidden'] })
+narrowSheet.addEventListener('change', fitActions)
+// More lists what the row does not show (the buttons stay in it, hidden, and keep their state),
+// in groups: the call and the tools, a new session here, then the session's own life.
 const MORE = [['sheet-mokupilot', 'sheet-term', 'sheet-changes', 'sheet-history'], ['sheet-new'], ['sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-archive']]
 const HERDR_MORE = ['sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-new', 'sheet-archive']
 $('#sheet-more').addEventListener('click', e => {
   const button = e.currentTarget, rect = button.getBoundingClientRect()
   const items = MORE
-    .map(group => group.map(id => document.getElementById(id)).filter(el => el && !el.hidden && getComputedStyle(el).display === 'none')
+    .map(group => group.map(id => document.getElementById(id)).filter(el => el && !el.hidden && el.classList.contains('over'))
       .map(el => ({ id: el.id, label: el.textContent.trim(), disabled: el.disabled, reason: el.disabled ? (!canMutate() && HERDR_MORE.includes(el.id) ? t('mobile.readOnly') : el.title || t('mobile.readOnly')) : '' })))
     .filter(group => group.length)
     .flatMap((group, i) => i ? [{ separator: true }, ...group] : group)

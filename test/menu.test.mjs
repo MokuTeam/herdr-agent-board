@@ -70,7 +70,7 @@ test('a card’s menu offers a MokuPilot call for a Claude session when MokuPilo
   const claude = { ...idle, agent: 'claude' }
   const m = cardMenu(claude, { ...fresh, mokupilot: true })
   assert.deepEqual(ids(m).slice(0, 4), ['open', 'focus', 'mokupilot', 'write'])
-  assert.equal(find(m, 'mokupilot').label, 'Call in MokuPilot')
+  assert.equal(find(m, 'mokupilot').label, 'MokuPilot')
   // It needs the board, not herdr: still there while herdr data is stale.
   assert.equal(find(cardMenu(claude, { ...fresh, canMutate: false, mokupilot: true }), 'mokupilot').disabled, undefined)
   assert.equal(find(cardMenu(claude, { ...fresh, canEdit: false, canMutate: false, mokupilot: true }), 'mokupilot').disabled, true)
