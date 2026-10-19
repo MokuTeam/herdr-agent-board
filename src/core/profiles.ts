@@ -210,8 +210,9 @@ export function configDirFor(target: Pick<Profile, 'dir'>, inheritedDir: string)
 /**
  * Where a launch from the board starts: the profile, and CLAUDE_CONFIG_DIR for it (null: the env
  * as the board inherited it). Refused (`id`: the profile asked for, or the parent's for `parent`):
- * none chosen while more than one is shown (`choose`), one hidden or not listed (`missing`),
- * another than the parent's (`parent`), or none chosen for a parent whose profile is not known.
+ * none chosen while more than one is shown (`choose`), one hidden (`hidden`) or not listed
+ * (`missing`), another than the parent's (`parent`), or none chosen for a parent whose profile is
+ * not known (`unknownParent`).
  */
 export type LaunchTarget =
   | { ok: true; profile: Profile; configDir: string | null }

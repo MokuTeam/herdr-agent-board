@@ -221,8 +221,10 @@ in it, and the folder the board's own `CLAUDE_CONFIG_DIR` points to. It keeps th
 as `profiles`, each with an `id` from its folder (`~/.claude` is `default`, `~/.claude-work` is
 `work`), a `title` ("Default", "Work"), its folder (`dir`), a `color`, `hidden`, and `args`, if you
 like: more Claude arguments for the sessions the board starts in it. `~/.claude` and the board's
-own folder come in shown, any other folder hidden, so a backup or a test folder changes nothing on
-the board. Renaming a profile, or giving it another color, never changes its id or its folder.
+own folder come in shown (`~/.claude` only while it has a `settings.json` or a `projects/`, when
+the board's own is elsewhere: a teammate whose `CLAUDE_CONFIG_DIR` names another folder keeps one
+profile), any other folder hidden, so a backup or a test folder changes nothing on the board.
+Renaming a profile, or giving it another color, never changes its id or its folder.
 
 **One profile shown** (a teammate's board, and yours until you show a second): no profile switch,
 no profile choice for a new session, no `--env` on a start, and no tag on a card but the three
@@ -277,7 +279,8 @@ else none, and Start waits until you pick one. The pick shows in its color next 
 in the board's own profile (the one its `CLAUDE_CONFIG_DIR` points to) leaves the env as the board
 got it; any other profile gets `CLAUDE_CONFIG_DIR=<its folder>` through herdr's `--env`
 (`tab create`, or `workspace create` for a new workspace; with `launch.command`, in its process
-env instead of on the tab). herdr's `--env` needs herdr 0.9.5 or newer. The plugin itself still
+env, and a new workspace for it is still made with `workspace create --env`, its first pane
+recorded). herdr's `--env` needs herdr 0.9.5 or newer. The plugin itself still
 runs on herdr 0.9.2; there only a start that needs herdr's `--env` fails, saying so, and no Claude
 is started. What the board refuses and the "wrong profile" check: [New sessions](#new-sessions).
 
@@ -299,9 +302,10 @@ which the board cannot stop. So start a work session where its pane carries the 
 - From the board: the new-session window or "New here" on a work card, with the default launcher
   or `launch.agent`, or `spawn-agent` (a work agent's helpers too). The new tab has
   `CLAUDE_CONFIG_DIR`, so every wake resumes in work, and the board, which records the pane, wakes
-  it too (while herdr shows the pane still holds the terminal it opened). A `launch.command`'s
-  panes are not recorded, so the board does not wake them, and herdr-wake resumes in work only if
-  your command puts the variable in the pane's shell.
+  it too (while herdr shows the pane still holds the terminal it opened). The panes a
+  `launch.command` opens itself are not recorded (only the first pane of a new workspace, which the
+  board makes with `--env`, is), so the board does not wake a session there, and herdr-wake
+  resumes in work only if your command puts the variable in the pane's shell.
 - Or in a pane whose shell has the variable exported (`export CLAUDE_CONFIG_DIR=~/.claude-work`,
   then `claude`): herdr-wake's own wakes resume there in work. The board cannot see a shell's env,
   so it does not wake such a session itself: wake it in herdr.

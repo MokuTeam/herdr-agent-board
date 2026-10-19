@@ -3,7 +3,8 @@
 // `launch.agent` (launcher.ts), and agents start other sessions with it (entrypoints/spawn-agent.ts).
 // The session starts in a Claude profile (core/profiles.ts spawnEnv): the one the board asks for,
 // the one named with --profile, or the profile of the agent that runs it. When that cannot be
-// sure, it refuses before herdr is asked anything.
+// sure, it refuses before herdr opens, renames or types anything; with --pane, herdr's `pane get`
+// is asked first, as the terminal the pane holds decides whether it is in the profile.
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, resolve } from 'node:path'
