@@ -1,7 +1,7 @@
 // The board's context menus (the old page's board-menus.js and the menus' part of app.js): a right
 // click, a long press or the menu key opens the menu of what is under the pointer or has the
 // focus — a card, the open session's head, a lane, the board, a starting session, a file chip —
-// and the sheet's "More actions" opens one of the sheet's buttons. Which menu, and what its items
+// and the sheet's More lists the buttons its row hides. Which menu, and what its items
 // do, is models/board-menus.ts; one menu is open at a time (components/menu/menu-engine.ts).
 import { useEffect, useState } from 'react'
 import type { Item, Translator } from '../../../src/core/types.ts'
@@ -186,6 +186,16 @@ export interface ActionDeps {
   rename(key: string, el: Element | null): void
   /** The terminal window of a session, grown from `el` (hooks/useTerminal.ts). */
   terminal?: ((key: string, el: Element | null) => void) | undefined
+  /** The archive (hooks/useArchive.ts): a session off the board, a tidy-up, its panel. */
+  archive?: ArchiveMenus | undefined
+}
+
+/** What the menus do with the archive (hooks/useArchive.ts). */
+export interface ArchiveMenus {
+  archiveSession(key: string): unknown
+  archiveMany(keys: readonly string[]): unknown
+  tidyItems(days: number, lane?: string | null): readonly { key: string }[]
+  openPanel(): void
 }
 
 const COLUMNS = ['work', 'me', 'ext', 'done', 'idle'] as const
@@ -228,6 +238,9 @@ export function boardActions(deps: ActionDeps): BoardMenuActions {
     history: (key, from) => deps.quickLook.lookHistory(key, deps.item(key)?.cwd ?? '', elementFrom(from)),
     terminal: (key, from) => deps.terminal?.(key, elementFrom(from)),
     mokupilot: key => actions().callMokuPilot(key),
+    archive: key => deps.archive?.archiveSession(key),
+    tidy: (days, lane) => deps.archive?.archiveMany((deps.archive?.tidyItems(days, lane) ?? []).map(i => i.key)),
+    archiveOpen: () => deps.archive?.openPanel(),
     newSession: (ctx, from) => deps.newSession(ctx, from),
     cats: id => deps.openCategories(id),
     filter: id => dispatch({ type: 'filter', id }),
@@ -262,15 +275,24 @@ export interface SheetMoreDeps {
 const isSheetButton = (el: unknown): el is SheetButton & HTMLElement =>
   typeof el === 'object' && el !== null && 'hidden' in el && 'disabled' in el && 'click' in el
 
-/** The sheet's buttons a phone hides behind "More actions", as a menu out of `button`. */
+/** A button the row leaves over (`.over`, hooks/useActionRow.ts): More lists it. */
+const overInRow = (el: HTMLElement): boolean => el.classList.contains('over')
+
+/** The sheet's buttons the row leaves over, as a menu opened upward out of More (`button`). */
 export function sheetMoreMenuFrom(deps: SheetMoreDeps): (button: HTMLElement, keyboard: boolean) => void {
   return (button, keyboard) => {
     const rect = button.getBoundingClientRect()
     const t = deps.t()
-    const buttons = SHEET_MORE.map(id => document.getElementById(id)).filter(isSheetButton)
-    deps.menu.open(sheetMoreMenu(buttons, deps.canMutate(), t), {
+    const groups = SHEET_MORE.map(group =>
+      group
+        .map(id => document.getElementById(id))
+        .filter(isSheetButton)
+        .filter(el => !el.hidden && overInRow(el)),
+    )
+    deps.menu.open(sheetMoreMenu(groups, deps.canMutate(), t), {
       x: rect.right,
-      y: rect.top,
+      y: rect.top - 4,
+      up: true,
       source: keyboard ? 'keyboard' : deps.coarse() ? 'touch' : 'mouse',
       origin: button,
       label: t('sheet.more'),
@@ -302,6 +324,8 @@ export interface ContextMenusOptions {
   launch?: LaunchMenus | null
   /** The terminal window of a session (hooks/useTerminal.ts). */
   terminal?: ((key: string, el: Element | null) => void) | undefined
+  /** The archive: a card's Archive, the tidy-ups, the panel (hooks/useArchive.ts). */
+  archive?: ArchiveMenus | undefined
 }
 
 export interface ContextMenus {
@@ -356,6 +380,7 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
       get launch() {
         return page().options.launch
       },
+      tidyCount: (days, lane) => page().options.archive?.tidyItems(days, lane).length ?? 0,
       do: boardActions({
         t: () => page().t,
         canEdit: () => page().board.canEdit,
@@ -375,6 +400,9 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
         openCategories: id => page().options.openCategories(id),
         rename: (key, el) => page().options.rename(key, el),
         terminal: (key, el) => page().options.terminal?.(key, el),
+        get archive() {
+          return page().options.archive
+        },
       }),
     }
     return boardMenuListeners({ menu, menuFor: (target, at) => menuFor(target, at, deps) })

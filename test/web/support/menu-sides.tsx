@@ -1,5 +1,6 @@
 // The context menu both ways in a fake DOM (support/fake-dom.ts), for parity: the old page's
-// menu.js — initMenu as it was at the parity baseline, with its own menu-model.js — and the React
+// menu.js — initMenu as it was at the session panel's row (#54: the baseline's with `up`), with its
+// own menu-model.js — and the React
 // port: components/menu/menu-engine.ts on the levels <MenuLayer> draws, drawn again after every
 // event and frame the way React would (support/react-commit.ts). Both sides take the same steps;
 // snapshot() prints what a viewer, or a screen reader, could tell apart.
@@ -17,6 +18,8 @@ export const VIEWPORT = { w: 1000, h: 700 }
 export interface MenuOpenStep {
   x: number
   y: number
+  /** Above x, y when it fits there. */
+  up?: boolean
   source?: MenuSource
   label?: string
   /** The page's element the focus goes back to (by id); what has the focus by default. */
@@ -104,8 +107,14 @@ function snapshotOf(world: FakeWorld, log: string[], open: boolean): string {
 
 // ---------------------------------------------------------------- the old page
 
-/** web/menu-model.js at the parity baseline, its functions by name. */
-function baselineModel(): Record<string, unknown> {
+/**
+ * Upstream's merge of the session panel's row (PR #54): menu.js and the functions it takes of
+ * menu-model.js are the baseline's, with placeMenu's `up`.
+ */
+const MENU_MERGE = '3105958'
+
+/** web/menu-model.js at MENU_MERGE, its functions by name. */
+function oldModel(): Record<string, unknown> {
   const names = [
     'placeMenu',
     'placeSubmenu',
@@ -116,27 +125,32 @@ function baselineModel(): Record<string, unknown> {
     'typeahead',
     'shareReasons',
   ]
-  return Object.fromEntries(oldCode('web/menu-model.js', names, {}))
+  return Object.fromEntries(oldCode('web/menu-model.js', names, {}, MENU_MERGE))
 }
 
-/** initMenu of web/menu.js as it was at the baseline; `onChange` hears what the page's would (app.js). */
+/** initMenu of web/menu.js as it was at MENU_MERGE; `onChange` hears what the page's would (app.js). */
 export function oldMenuSide(onChange: () => void = () => {}): MenuSide {
   const world = newWorld()
   const log: string[] = []
-  const model = baselineModel()
-  const code = oldCode('web/menu.js', ['esc', 'CHECK', 'CHEV', 'initMenu'], {
-    firstIndex: model.firstIndex,
-    lastIndex: model.lastIndex,
-    nextIndex: model.nextIndex,
-    placeMenu: model.placeMenu,
-    placeSubmenu: model.placeSubmenu,
-    shareReasons: model.shareReasons,
-    typeahead: model.typeahead,
-    reducedMotion,
-    Spring,
-    performance: { now: () => world.now },
-    innerHeight: VIEWPORT.h,
-  })
+  const model = oldModel()
+  const code = oldCode(
+    'web/menu.js',
+    ['esc', 'CHECK', 'CHEV', 'initMenu'],
+    {
+      firstIndex: model.firstIndex,
+      lastIndex: model.lastIndex,
+      nextIndex: model.nextIndex,
+      placeMenu: model.placeMenu,
+      placeSubmenu: model.placeSubmenu,
+      shareReasons: model.shareReasons,
+      typeahead: model.typeahead,
+      reducedMotion,
+      Spring,
+      performance: { now: () => world.now },
+      innerHeight: VIEWPORT.h,
+    },
+    MENU_MERGE,
+  )
   const menu: unknown = oldFunction(
     code,
     'initMenu',
@@ -161,10 +175,11 @@ export function oldMenuSide(onChange: () => void = () => {}): MenuSide {
     world,
     log,
     page,
-    async open(items, { x, y, source, label, origin }) {
+    async open(items, { x, y, up, source, label, origin }) {
       call('open', items, {
         x,
         y,
+        up,
         source,
         label,
         origin: origin ? page(origin) : null,
@@ -247,10 +262,11 @@ export function reactMenuSide(): MenuSide & { engine: MenuEngine } {
     world,
     log,
     page,
-    async open(items, { x, y, source, label, origin }) {
+    async open(items, { x, y, up, source, label, origin }) {
       engine.open(items, {
         x,
         y,
+        ...(up !== undefined && { up }),
         ...(source && { source }),
         ...(label !== undefined && { label }),
         origin: origin ? asDom(page(origin)) : null,

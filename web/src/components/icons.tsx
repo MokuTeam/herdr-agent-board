@@ -94,6 +94,23 @@ export const HistoryIcon = () => (
   </Icon>
 )
 
+/** The archive: a box with its lid (the toolbar's button, the sheet's). */
+export const ArchiveIcon = () => (
+  <Icon>
+    <rect x="3" y="4" width="14" height="4" rx="1.3" />
+    <path d="M4.5 8v6.2A1.8 1.8 0 0 0 6.3 16h7.4a1.8 1.8 0 0 0 1.8-1.8V8M8.3 11h3.4" />
+  </Icon>
+)
+
+/** The session panel's More: three dots. */
+export const MoreIcon = () => (
+  <Icon>
+    <circle cx="4.5" cy="10" r="1.4" fill="currentColor" stroke="none" />
+    <circle cx="10" cy="10" r="1.4" fill="currentColor" stroke="none" />
+    <circle cx="15.5" cy="10" r="1.4" fill="currentColor" stroke="none" />
+  </Icon>
+)
+
 export const ClipIcon = () => (
   <Icon>
     <path d="m15.5 9.5-5.6 5.6a3.5 3.5 0 0 1-5-5l6-6a2.3 2.3 0 0 1 3.3 3.3l-6 6a1.2 1.2 0 0 1-1.7-1.7L12 6.2" />
@@ -306,6 +323,22 @@ export const RestartGlyph = () => (
   <Glyph>
     <path d="M4.6 8.6a5.6 5.6 0 0 1 10.3-1.4M15.4 11.4a5.6 5.6 0 0 1-10.3 1.4" />
     <path d="M15.4 3.7v3.6h-3.6M4.6 16.3v-3.6h3.6" />
+  </Glyph>
+)
+
+/** The archive, in its panel (empty). */
+export const ArchiveGlyph = () => (
+  <Glyph>
+    <rect x="3" y="4" width="14" height="4" rx="1.3" />
+    <path d="M4.5 8v6.2A1.8 1.8 0 0 0 6.3 16h7.4a1.8 1.8 0 0 0 1.8-1.8V8M8.3 11h3.4" />
+  </Glyph>
+)
+
+/** Return from the archive: an arrow back. */
+export const BackGlyph = () => (
+  <Glyph>
+    <path d="M8 5.5 4.5 9 8 12.5" />
+    <path d="M4.5 9h7.5a3.5 3.5 0 0 1 0 7H10" />
   </Glyph>
 )
 

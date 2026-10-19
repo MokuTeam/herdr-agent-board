@@ -1,5 +1,15 @@
 // The board's HTTP API as the page uses it. POSTs carry the X-Board header the server asks for;
 // every answer is checked by a narrowing function before the page uses it.
+import type {
+  ArchiveDoneOf,
+  ArchivedOne,
+  ArchiveFailure,
+  ArchiveOp,
+  ArchiveRequest,
+  PublicArchiveRecord,
+  RemovedOne,
+  ReturnedOne,
+} from '../../../src/core/archive.ts'
 import type { PublicDialog } from '../../../src/core/dialogs/questions.ts'
 import type { PublicHelper, WorkflowRun } from '../../../src/core/helpers.ts'
 import type { BoardPayload, BoardProfile } from '../../../src/core/payload.ts'
@@ -200,3 +210,81 @@ async function upload(name: string, file: Blob): Promise<string> {
 }
 
 export const api = { board, get, post, session, upload }
+
+// ---------------------------------------------------------------- the archive
+
+/** A record as GET /api/archive lists it (src/core/archive.ts PublicArchiveRecord), as far as the page relies on it. */
+export const isArchiveRecord: Guard<PublicArchiveRecord> = (value): value is PublicArchiveRecord =>
+  isReply(value) &&
+  typeof value.key === 'string' &&
+  typeof value.name === 'string' &&
+  typeof value.category === 'string' &&
+  typeof value.archivedAt === 'number'
+
+/** GET /api/archive: what the archive holds, newest first, and how long a session keeps its pane for Return. */
+export interface ArchiveListing {
+  records: PublicArchiveRecord[]
+  /** Absent from a board that did not say. */
+  undoMs?: number
+}
+
+const isArchiveListing: Guard<ArchiveListing> = (value): value is ArchiveListing =>
+  isReply(value) &&
+  Array.isArray(value.records) &&
+  value.records.every(isArchiveRecord) &&
+  (value.undoMs === undefined || typeof value.undoMs === 'number')
+
+/** A session a POST /api/archive did, by its op (src/core/archive.ts ArchiveDoneOf), or did not do. */
+const isNamed = (value: unknown): value is Reply & { key: string; name: string } =>
+  isReply(value) && typeof value.key === 'string' && typeof value.name === 'string'
+const DONE: { [O in ArchiveOp]: Guard<ArchiveDoneOf[O]> } = {
+  archive: (value): value is ArchivedOne =>
+    isNamed(value) && typeof value.held === 'number' && typeof value.closeAt === 'number',
+  return: (value): value is ReturnedOne => isNamed(value) && value.ok === true,
+  remove: (value): value is RemovedOne => isNamed(value),
+}
+const isArchiveFailure: Guard<ArchiveFailure> = (value): value is ArchiveFailure =>
+  isReply(value) && typeof value.key === 'string' && typeof value.error === 'string'
+
+/** POST /api/archive's answer as the page reads it: what it did, what it did not, and the first error as text. */
+export interface ArchiveReply<O extends ArchiveOp> {
+  ok: boolean
+  done: ArchiveDoneOf[O][]
+  failed: ArchiveFailure[]
+  error: string
+}
+
+/** The answer's lists; an entry it cannot read is left out. */
+function archiveLists<O extends ArchiveOp>(op: O, reply: Reply): Pick<ArchiveReply<O>, 'done' | 'failed'> {
+  const accept: Guard<ArchiveDoneOf[O]> = DONE[op]
+  return {
+    done: Array.isArray(reply.done) ? reply.done.filter(accept) : [],
+    failed: Array.isArray(reply.failed) ? reply.failed.filter(isArchiveFailure) : [],
+  }
+}
+
+/** GET /api/archive, uncached. */
+function archiveList(): Promise<ArchiveListing> {
+  return get('/api/archive', isArchiveListing, { cache: 'no-store' })
+}
+
+/**
+ * POST /api/archive: archive, bring back or remove sessions, one or many. Never throws: a refusal
+ * (409 with what it did and did not do) or a failed request comes back as `ok: false` with its text.
+ */
+async function archivePost<O extends ArchiveOp>(
+  op: O,
+  keys: readonly string[],
+  t: Translator,
+): Promise<ArchiveReply<O>> {
+  const body: ArchiveRequest = { op, keys: [...keys] }
+  try {
+    const reply = await post('/api/archive', body)
+    return { ...archiveLists(op, reply), ok: true, error: typeof reply.error === 'string' ? reply.error : '' }
+  } catch (err) {
+    const reply = err instanceof ApiError ? err.reply : {}
+    return { ...archiveLists(op, reply), ok: false, error: errorText(err, t) }
+  }
+}
+
+export const archiveApi = { list: archiveList, post: archivePost }

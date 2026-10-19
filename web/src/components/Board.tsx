@@ -1,9 +1,10 @@
 // The board: one lane per category, its cards in the columns. Every change of place animates
 // with a spring from where the card was (useFlip), and a card can be dragged to another lane or
 // column (useCardDrag); a click opens it, its buttons act on the session. Pointing at a card marks
-// the sessions it works with.
+// the sessions it works with. A card back from the archive comes out of the Archive button.
 import { type KeyboardEvent, type MouseEvent, useEffect, useRef, useState } from 'react'
 import type { Item } from '../../../src/core/types.ts'
+import { flyFromArchive } from '../hooks/useArchive.ts'
 import { useBoardView } from '../hooks/useBoardView.ts'
 import { useCardDrag } from '../hooks/useCardDrag.ts'
 import { useFlip } from '../hooks/useFlip.ts'
@@ -54,6 +55,12 @@ export function Board({ onOpen, onNewSession, onLaneHead, launch, takeovers, roo
     root,
     lanes.flatMap(lane => lane.items.map(it => it.key)),
     takeovers,
+    (key, el) => {
+      if (!ui.flyBack.has(key)) return false
+      flyFromArchive(el)
+      dispatch({ type: 'flewBack', key })
+      return true
+    },
   )
   const drag = useCardDrag({
     canEdit: () => canEdit,

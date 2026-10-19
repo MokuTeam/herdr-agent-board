@@ -1,6 +1,6 @@
 // The toolbar, one compact row: the title with the board's summary under it while the row has
 // room (else in the title's tooltip), the lanes control, the profile switch (two or more profiles
-// shown), search, categories and the schedule as small buttons named by their tooltips, Settings
+// shown), search, categories, the schedule and the archive as small buttons named by their tooltips, Settings
 // (the gear), the usage pill and the live dot; the read-only banner and the column heads under
 // it. A narrower window takes two rows, a phone three (the stylesheet). The icon-only buttons'
 // labels carry their text keys (`data-i18n`, as upstream's page wrote them): the stylesheet hides
@@ -16,7 +16,7 @@ import { pickedProfile, profileOptions } from '../models/profiles.ts'
 import { columnHeads, documentTitle, laneOptions, scheduleBadge, summaryParts, summaryText } from '../models/toolbar.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { ColumnsHead } from './ColumnsHead.tsx'
-import { AlarmIcon, GearIcon, PlusIcon, SearchIcon, TagIcon } from './icons.tsx'
+import { AlarmIcon, ArchiveIcon, GearIcon, PlusIcon, SearchIcon, TagIcon } from './icons.tsx'
 import { Lanes } from './Lanes.tsx'
 import { Limits } from './Limits.tsx'
 import { LiveDot } from './LiveDot.tsx'
@@ -31,13 +31,23 @@ export interface ToolbarProps {
   onNewSession?: (from: HTMLElement) => void
   onCategories?: () => void
   onSchedule?: () => void
+  /** The archive's panel: sessions taken off the board, to find and bring back (it opens and closes). */
+  onArchive?: () => void
   /** The quiet "Setup incomplete" note (hooks/useSetupNote.ts). */
   setup?: SetupNoteState
   /** Settings, the gear's menu (hooks/useSettingsMenu.ts). */
   settings?: SettingsMenu
 }
 
-export function Toolbar({ limitsAnchor, onNewSession, onCategories, onSchedule, setup, settings }: ToolbarProps) {
+export function Toolbar({
+  limitsAnchor,
+  onNewSession,
+  onCategories,
+  onSchedule,
+  onArchive,
+  setup,
+  settings,
+}: ToolbarProps) {
   const t = useT()
   const { data, ui, dispatch, canMutate, canEdit, now } = useBoardContext()
   const { visible, categoryOf, anyProfile } = useBoardView()
@@ -121,6 +131,16 @@ export function Toolbar({ limitsAnchor, onNewSession, onCategories, onSchedule, 
               <span className="n" id="sched-count">
                 {badge.count || ''}
               </span>
+            </button>
+            <button
+              type="button"
+              className="pill-toggle icon-only"
+              id="archive-open"
+              title={t('archive.openHint')}
+              onClick={() => onArchive?.()}
+            >
+              <ArchiveIcon />
+              <span data-i18n="archive.open">{t('archive.open')}</span>
             </button>
             <button
               type="button"

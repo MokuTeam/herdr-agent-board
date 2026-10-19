@@ -1,6 +1,7 @@
 // New sessions on the page (the old page's launch.js as app.js used it): the window that starts
 // one (components/launch/launch-window.ts, drawn by LaunchDialog.tsx), and the cards of sessions
-// on their way — what the board draws for them and what their buttons and menus do.
+// on their way — what the board draws for them and what their buttons and menus do. Retry on a
+// session back from the archive is its Return once more (`onResume`, hooks/useArchive.ts).
 import { createElement, createRef, type ReactNode, useEffect, useMemo, useState } from 'react'
 import { flushSync } from 'react-dom'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
@@ -163,10 +164,36 @@ export function windowKeys(dialog: Pick<LaunchWindow, 'keydown'>): () => void {
 /** localStorage, which may be missing or refuse (a private window; state/storage.ts). */
 export const localStore = { get: storage.read, set: storage.set }
 
-export function useLaunch(): Launch {
+/**
+ * Start a failed one again: the window with its values, or, for a session back from the archive,
+ * its Return once more (its card goes, the Return makes a new one).
+ */
+export function retryLaunch(
+  l: LaunchView,
+  from: MenuOrigin | null,
+  deps: {
+    open(l: LaunchView, from: MenuOrigin | null): void
+    dismiss(id: string): void
+    onResume(l: LaunchView & { resume: string }): void
+  },
+): void {
+  if (!l.resume) {
+    deps.open(l, from)
+    return
+  }
+  deps.dismiss(l.id)
+  deps.onResume({ ...l, resume: l.resume })
+}
+
+export interface LaunchOptions {
+  /** Retry on a session back from the archive: its Return again. */
+  onResume?: (l: LaunchView & { resume: string }) => void
+}
+
+export function useLaunch({ onResume }: LaunchOptions = {}): Launch {
   const t = useT()
   const board = useBoardContext()
-  const latest = useLatest({ t, board })
+  const latest = useLatest({ t, board, onResume })
   const [refs] = useState<LaunchRefs>(() => ({ layer: createRef(), win: createRef() }))
   const focus = useModalFocus(refs.layer, refs.win)
   const focusRef = useLatest(focus)
@@ -214,8 +241,17 @@ export function useLaunch(): Launch {
   // biome-ignore lint/correctness/useExhaustiveDependencies: the data going stale or fresh is when to look again, not what it reads
   useEffect(() => dialog.sync(), [dialog, board.canMutate])
 
-  const [cards] = useState(() =>
-    launchCards({
+  // Retry: the window with its values, or a Return once more for a session back from the archive.
+  const retryWith =
+    (dismiss: (id: string) => unknown) =>
+    (l: LaunchView, el: MenuOrigin | null): void =>
+      retryLaunch(l, el, {
+        open: (l, from) => void dialog.retry(l, from),
+        dismiss: id => void dismiss(id),
+        onResume: l => latest.current.onResume?.(l),
+      })
+  const [cards] = useState(() => {
+    const made: LaunchCards = launchCards({
       t: () => latest.current.t,
       canMutate: () => latest.current.board.canMutate,
       toast: (text, error) => latest.current.board.toast(text, error),
@@ -223,7 +259,7 @@ export function useLaunch(): Launch {
       launches: () => latest.current.board.data?.launches ?? [],
       local: () => latest.current.board.ui.launched,
       forget: id => latest.current.board.dispatch({ type: 'launchGone', id }),
-      retry: (l, el) => void dialog.retry(l, el),
+      retry: (l, el) => retryWith(made.dismiss)(l, el),
       press: (key, shown) =>
         setPressed(now => {
           const next = new Map(now)
@@ -231,8 +267,9 @@ export function useLaunch(): Launch {
           else next.set(key, shown)
           return next
         }),
-    }),
-  )
+    })
+    return made
+  })
 
   const shown = useStore(dialog.openNow)
   const launcher = useStore(dialog.launcher)
@@ -247,14 +284,10 @@ export function useLaunch(): Launch {
       ),
     [t, launcher, pressed, cards],
   )
+  // biome-ignore lint/correctness/useExhaustiveDependencies: retryWith reads only what never changes (the window) and the latest values
   const menus = useMemo(
-    () =>
-      launchMenus(
-        () => latestPending.current,
-        cards,
-        (l, el) => void dialog.retry(l, el),
-      ),
-    [cards, dialog, latestPending],
+    () => launchMenus(() => latestPending.current, cards, retryWith(cards.dismiss)),
+    [cards, latestPending],
   )
   const takeovers = useMemo(() => takeoversOf(data?.launches ?? []), [data])
 

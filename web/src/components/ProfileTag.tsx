@@ -7,7 +7,8 @@ import { useT } from '../i18n/I18nProvider.tsx'
 import { pickedProfile, tagView } from '../models/profiles.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 
-export function ProfileTag({ item }: { item: Item }) {
+/** `item`: a card's session, or an archive row's record (its profile facts at archive time). */
+export function ProfileTag({ item }: { item: Pick<Item, 'profile' | 'profileFolder' | 'profileWanted'> }) {
   const t = useT()
   const { data, ui } = useBoardContext()
   const profiles = data?.profiles

@@ -89,12 +89,14 @@ export function appear(el: HTMLElement): void {
 
 /**
  * FLIP for the cards inside `container`; `keys` are the cards rendered. `aliases` (a card's key ->
- * the key of a card it takes over on screen) keep a takeover from materializing anew.
+ * the key of a card it takes over on screen) keep a takeover from materializing anew. `comeBack`:
+ * a new card that arrives its own way (back from the archive, out of its button) — true when it did.
  */
 export function useFlip(
   container: RefObject<HTMLElement | null>,
   keys: string[],
   aliases: ReadonlyMap<string, string> = NO_ALIASES,
+  comeBack?: (key: string, el: HTMLElement) => boolean,
 ): void {
   const motions = useRef(new WeakMap<HTMLElement, Motion>())
   const shown = useRef<ReadonlySet<string> | null>(null)
@@ -109,7 +111,7 @@ export function useFlip(
     flip(cards, first.current, motions.current)
     for (const key of appearing(keys, shown.current, aliases)) {
       const el = cards.get(key)
-      if (el) appear(el)
+      if (el && !comeBack?.(key, el)) appear(el)
     }
     shown.current = new Set(keys)
     // React writes `class` whole when it changes: a card still in flight keeps `moving`.

@@ -1,6 +1,7 @@
 // What the session sheet shows around the conversation: its head (status, name, the line under
 // it, which buttons show), which of its controls work now, the note over the conversation while
 // the detail loads, fails or is out of date, and what the session asks under "Needs me".
+import { archiveBlock } from '../../../src/core/archive.ts'
 import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
 import { ago, dismissable, inTurn } from './card.ts'
@@ -107,6 +108,10 @@ export interface HeadButtons {
   restartTitle: string | undefined
   /** "Call in MokuPilot": with MokuPilot here, for a Claude session with an id. */
   mokupilotHidden: boolean
+  /** "Archive": for a Claude session with an id (Return resumes it by that id). */
+  archiveHidden: boolean
+  /** Why it cannot go to the archive now (as in its menu), or what archiving does; none before a session was ever open. */
+  archiveTitle: string | undefined
 }
 
 /** Before a session was ever open, the buttons as the page starts. */
@@ -118,6 +123,8 @@ export const NO_HEAD_BUTTONS: HeadButtons = {
   restartHidden: true,
   restartTitle: undefined,
   mokupilotHidden: true,
+  archiveHidden: true,
+  archiveTitle: undefined,
 }
 
 /**
@@ -131,6 +138,8 @@ export function headButtons(
   schedules: readonly ScheduleEntry[] = [],
 ): HeadButtons {
   const pending = restartPending(schedules, it.key) ? restartOf(schedules, it.key) : undefined
+  // Gray with the reason while it works (a turn, a dialog, its helpers), as in its menu.
+  const why = archiveBlock(it, schedules)
   return {
     historyHidden: !it.session,
     wakeHidden: !it.sleeping,
@@ -139,6 +148,8 @@ export function headButtons(
     restartHidden: !!it.sleeping || !it.session || it.agent !== 'claude',
     restartTitle: pending ? `${t('sheet.restartPending')}. ${restartText(pending, t)}` : t('sheet.restartHint'),
     mokupilotHidden: !(mokupilot && it.session && it.agent === 'claude'),
+    archiveHidden: !it.session || it.agent !== 'claude',
+    archiveTitle: why ? t(why) : t('archive.sheetHint'),
   }
 }
 
@@ -182,6 +193,8 @@ export interface SheetAvailability {
   sleep: boolean
   /** It waits until the session is free by itself: a turn does not gray it, a restart on its way does. */
   restart: boolean
+  /** Not while it works, waits on a dialog, has helpers at work or a restart under way (src/core/archive.ts archiveBlock). */
+  archive: boolean
   /** The card's chips, fields and schedule buttons, and the clip. */
   edit: boolean
   /** "No reply needed" / "Seen" under the question. */
@@ -201,6 +214,8 @@ export interface AvailabilityScene {
   turn: boolean
   /** A restart of the open session is on its way. */
   restarting?: boolean
+  /** The open session cannot go to the archive now (src/core/archive.ts archiveBlock). */
+  archiveBlocked?: boolean
 }
 
 /**
@@ -209,7 +224,7 @@ export interface AvailabilityScene {
  * syncAvailability).
  */
 export function sheetAvailability(
-  { canMutate, canEdit, missing, turn, restarting = false }: AvailabilityScene,
+  { canMutate, canEdit, missing, turn, restarting = false, archiveBlocked = false }: AvailabilityScene,
   t: Translator,
 ): SheetAvailability {
   const blocked = !canMutate
@@ -221,6 +236,7 @@ export function sheetAvailability(
     wake: herdr,
     sleep: herdr || turn,
     restart: herdr || restarting,
+    archive: herdr || archiveBlocked,
     edit: !canEdit || missing,
     dismiss: !canEdit || missing,
     newHere: herdr,

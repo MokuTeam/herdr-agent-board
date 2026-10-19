@@ -7,6 +7,7 @@
 // quick looks, the reminders' buttons (the page's schedule desk, shared with the schedule panel);
 // the phone's "More actions" menu and renaming; "New here" opens the launch window.
 import { type ReactNode, type Ref, useLayoutEffect, useRef, useState } from 'react'
+import { archiveBlock } from '../../../../src/core/archive.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import type { SessionDetail } from '../../api/client.ts'
 import { type ComposerControls, useComposer } from '../../hooks/useComposer.ts'
@@ -73,6 +74,8 @@ export interface SheetSlots {
   onTerminal?: ((key: string, button: HTMLElement) => void) | undefined
   /** The session's helpers in their window (hooks/useHelpers.ts): it reads the sheet's detail. */
   helpers?: HelpersUi | undefined
+  /** "Archive": off the board until Return (hooks/useArchive.ts). */
+  onArchive?: ((key: string) => void) | undefined
 }
 
 /** The board's card of `key` (a drag's ghost is outside the board). */
@@ -93,7 +96,18 @@ function useShown(open: string | null, item: Item | undefined): { key: string | 
 }
 
 export function Sheet(slots: SheetSlots) {
-  const { question, upgradeFiles, onChanges, onHistory, onMore, onRename, onNewSession, onTerminal, helpers } = slots
+  const {
+    question,
+    upgradeFiles,
+    onChanges,
+    onHistory,
+    onMore,
+    onRename,
+    onNewSession,
+    onTerminal,
+    helpers,
+    onArchive,
+  } = slots
   const t = useT()
   const { data, ui, dispatch } = useBoardContext()
   const actions = useSessionActions()
@@ -167,6 +181,7 @@ export function Sheet(slots: SheetSlots) {
     wake: at(actions.wakeSession),
     sleep: at(actions.sleepSession),
     restart: at(actions.restartSession),
+    archive: () => void (open && onArchive?.(open)),
     mokupilot: at(actions.callMokuPilot),
     changes: button => open && onChanges?.(open, button),
     history: button => open && onHistory?.(open, item?.cwd ?? '', button),
@@ -263,6 +278,7 @@ export function SheetView(props: SheetViewProps) {
       missing,
       turn: !!openItem && inTurn(openItem),
       restarting: !!open && restartPending(schedules, open),
+      archiveBlocked: !!archiveBlock(openItem, schedules),
     },
     t,
   )

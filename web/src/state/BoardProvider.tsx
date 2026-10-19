@@ -15,15 +15,18 @@ import {
 import { type LiveBoard, useBoard } from '../api/useBoard.ts'
 import { useLanguage } from '../i18n/I18nProvider.tsx'
 import { withEdits } from '../models/board-edits.ts'
-import { type BoardAction, type BoardUi, boardUi, initialUi } from './board-ui.ts'
+import { type BoardAction, type BoardUi, boardUi, initialUi, type ToastOptions } from './board-ui.ts'
 import { storage } from './storage.ts'
 import { usePersisted } from './usePersisted.ts'
 
 export interface Board extends LiveBoard {
   ui: BoardUi
   dispatch: Dispatch<BoardAction>
-  /** A short note at the bottom of the page; errors stay longer. */
-  toast(text: string, error?: boolean): void
+  /**
+   * A short note at the bottom of the page; errors stay longer. `options`: a button in it (Return,
+   * after an archive), which also closes it, how long it stays, and the token that hides it early.
+   */
+  toast(text: string, error?: boolean, options?: ToastOptions): void
   /** The time the page was drawn at: card ages and due alarms are against it. */
   now: number
 }
@@ -64,8 +67,8 @@ export function BoardProvider({ children }: { children: ReactNode }) {
   usePersisted('board.sleepers', ui.sleepers ? '1' : '0')
   usePersisted('board.viewed', JSON.stringify(ui.viewed))
 
-  const toast = useCallback((text: string, error = false) => {
-    if (text) dispatch({ type: 'toast', text, error })
+  const toast = useCallback((text: string, error = false, options: ToastOptions = {}) => {
+    if (text) dispatch({ type: 'toast', text, error, ...options })
   }, [])
   // Read at every draw (a new board, the connection, the page state, the tick), as the old page's
   // render() read the clock.

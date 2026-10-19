@@ -17,6 +17,7 @@ const MERGES = [
   { merge: '513e441', pr: '#51 agents restart themselves: board restart, and Restart on the web board' },
   { merge: 'b5a96b8', pr: '#53 queued messages show in the session’s thread' },
   { merge: '2b9e6b7', pr: '#56 archive: take sessions off the board, and bring them back' },
+  { merge: 'b2c5afa', pr: '#58 the session panel row shows as many actions as fit, the rest under More' },
 ]
 
 type Dictionaries = Record<string, Record<string, unknown>>

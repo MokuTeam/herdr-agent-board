@@ -1,7 +1,7 @@
 // Which menu opens where, both ways in a fake DOM (support/fake-dom.ts), for parity: the old page's
-// board-menus.js (initBoardMenus as it was at the restart's merge — the parity baseline, upstream PR
-// #36's terminal item, #44's MokuPilot call and #51's Restart, nothing else — with its own
-// menu-model.js) and
+// board-menus.js (initBoardMenus as it was at #58's merge — the parity baseline, upstream PR
+// #36's terminal item, #44's MokuPilot call, #51's Restart and #56's archive, nothing else — with
+// its own menu-model.js and archive-model.js) and
 // the React board's listeners (hooks/useContextMenus.ts boardMenuListeners with
 // models/board-menus.ts menuFor). Each side gets the same page, the same
 // board (what the page knows and its actions, which note what they were asked to do) and a menu
@@ -20,11 +20,13 @@ import { oldCode, oldFunction } from './old-app.ts'
 // ---------------------------------------------------------------- the page
 
 export const PAGE = `<div id="page">
-<div class="toolbar"><button id="tb-button">Categories</button><input id="search" type="search"></div>
+<div class="toolbar"><button id="tb-button">Categories</button><input id="search" type="search">
+  <div class="columns-head"><div class="col-head" data-col="work" id="head-work"><span class="t" id="head-work-t">Working</span></div><div class="col-head vacant" data-col="idle" id="head-idle"><span class="t" id="head-idle-t">Idle</span></div></div></div>
 <main class="board" id="board">
   <section class="lane" data-cat="acme" id="lane-acme">
     <div class="lane-bar"><header class="lane-head" id="lane-head"><span class="lane-tag">Acme</span></header><button class="lane-new" id="lane-new">+</button></div>
-    <div class="lane-grid"><div class="col" data-col="idle" id="col-idle">
+    <div class="lane-grid"><div class="col" data-col="work" id="col-work"><div class="col-label" id="col-label-work">Working</div></div><div class="col" data-col="idle" id="col-idle">
+      <div class="col-label" id="col-label-idle"><span id="col-label-idle-t">Idle</span></div>
       <article class="card" data-key="s1" tabindex="0" id="card"><div class="card-top"><span class="name" id="card-name">acme</span></div>
         <div class="what" id="card-what">fix <a href="https://example.com" id="link">the docs</a> in <a data-fs="file" data-abs="C:\\Acme\\README.md" data-line="12" href="#" id="chip">README.md</a> and <span data-fs="dir" data-abs="/srv/app" id="dir-chip">app</span></div>
         <div class="card-actions"><button data-act="write" id="card-write">w</button></div>
@@ -61,10 +63,12 @@ function rects(el: FakeElement): RectBox | null {
 // ---------------------------------------------------------------- the board
 
 /**
- * Upstream's merge of the restart (PR #51): board-menus.js and menu-model.js are the baseline's,
- * the terminal's item, MokuPilot's call (#44) and its Restart.
+ * Upstream's merge of the session panel's row that fits its width (PR #58): board-menus.js and
+ * menu-model.js are the baseline's, the terminal's item, MokuPilot's call (#44), its Restart (#51)
+ * and the archive's items (#56: a card's Archive, "Idle"'s menu, a lane's tidy-up, the board's way
+ * to the archive); the call is just "MokuPilot" (#58).
  */
-const RESTART_MERGE = '513e441'
+const MENUS_MERGE = 'b2c5afa'
 
 const categories = [
   { id: 'acme', title: 'Acme', color: '#007AFF' },
@@ -88,6 +92,8 @@ export interface BoardScene {
   mokupilot?: boolean
   /** The payload's `schedules`: a restart on its way grays a card's Restart. */
   schedules?: ScheduleEntry[]
+  /** Sleeping sessions in "Idle" a tidy-up takes: `${lane ?? 'shown'}:${days}` -> how many (none: 0). */
+  tidy?: Record<string, number>
 }
 
 export function scene(fields: Partial<BoardScene> = {}): BoardScene {
@@ -137,6 +143,9 @@ function boardOf(s: BoardScene, log: string[], menu: unknown): BoardMenuDeps & {
     history: note('do.history'),
     terminal: note('do.terminal'),
     mokupilot: note('do.mokupilot'),
+    archive: note('do.archive'),
+    tidy: note('do.tidy'),
+    archiveOpen: note('do.archiveOpen'),
     rename: note('do.rename'),
     move: note('do.move'),
     newSession: note('do.newSession'),
@@ -157,6 +166,7 @@ function boardOf(s: BoardScene, log: string[], menu: unknown): BoardMenuDeps & {
     item: key => s.items.find(i => i.key === key),
     column: it => s.columns[it.key] ?? it.column,
     category: it => it.category,
+    tidyCount: (days, lane) => s.tidy?.[`${lane ?? 'shown'}:${days}`] ?? 0,
     state: () => ({
       open: s.open,
       filter: s.filter,
@@ -258,8 +268,9 @@ function recordingMenu(log: string[]) {
   return { recorder, menu }
 }
 
-/** web/menu-model.js at the restart's merge: what board-menus.js imported from it. */
+/** web/menu-model.js and archive-model.js at #58's merge: what board-menus.js imported from them. */
 function baselineModel(): Record<string, unknown> {
+  const archive = oldCode('web/archive-model.js', ['DAY', 'TIDY_DAYS', 'archiveBlock'], {}, MENUS_MERGE)
   const names = [
     'usable',
     'tidy',
@@ -267,16 +278,19 @@ function baselineModel(): Record<string, unknown> {
     'PIN_COLUMNS',
     'COLUMN_COLOR',
     'cardMenu',
+    'tidyItem',
+    'columnMenu',
     'laneMenu',
     'boardMenu',
     'launchMenu',
     'chipMenu',
     'wantsNativeMenu',
   ]
-  return Object.fromEntries(oldCode('web/menu-model.js', names, {}, RESTART_MERGE))
+  const model = oldCode('web/menu-model.js', names, { TIDY_DAYS: archive.get('TIDY_DAYS') }, MENUS_MERGE)
+  return { ...Object.fromEntries(model), archiveBlock: archive.get('archiveBlock') }
 }
 
-/** initBoardMenus of web/board-menus.js as it was at the restart's merge. */
+/** initBoardMenus of web/board-menus.js as it was at #58's merge. */
 export function oldBoardMenus(s: BoardScene): MenuSide {
   const world = newWorld()
   const log: string[] = []
@@ -285,7 +299,7 @@ export function oldBoardMenus(s: BoardScene): MenuSide {
     'web/board-menus.js',
     ['LONG_PRESS_MS', 'SLOP', 'initBoardMenus'],
     { ...baselineModel(), performance: { now: () => world.now } },
-    RESTART_MERGE,
+    MENUS_MERGE,
   )
   oldFunction(code, 'initBoardMenus')(boardOf(s, log, menu))
   return side(world, log, recorder)

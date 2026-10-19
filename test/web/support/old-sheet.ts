@@ -4,12 +4,14 @@
 // cancelButton, thread, thumbs, clock), renderDetailState, renderAttachments, syncComposer and
 // syncSheetProperties picked out of web/app.js (support/old-app.ts) with its own markdown.js and
 // when.js, questions.js's threadHTML — run against a small `$` over the parsed page. By hand: the
-// "New here" button app.js appends at start (app.js:2020-2027), the Changes button's rule in the
-// detail's `changed` (app.js:903) and syncAvailability's part for the sheet (app.js:175-195).
-// The page and renderSheetHead are those of the restart's merge (upstream PR #51): the baseline's
-// with the sheet's Terminal button (#36), the facts under its name one span each and Wake's
-// tooltip (#43), "Call in MokuPilot" (#44) and Restart (#51), nothing else. The reminders' row
-// (scheduleRow) is #51's too: a call's results by their title (#45), a restart with how it stands.
+// "New here" button app.js puts before More at start (#55's app.js:2658-2664), the Changes button's
+// rule in the detail's `changed` (app.js:903) and syncAvailability's part for the sheet (app.js:175-195).
+// The page and renderSheetHead are those of the row that fits its width (upstream PR #58): the
+// baseline's with the sheet's Terminal button (#36), the facts under its name one span each and
+// Wake's tooltip (#43), "Call in MokuPilot" (#44), Restart (#51), More at the row's end (#54), the
+// call before the Terminal (#55), Archive (#56, with its archive-model.js archiveBlock) and the
+// row's new order, Changes and History after the Terminal (#58), nothing else. The reminders' row (scheduleRow) is #51's: a call's results by their title (#45), a restart
+// with how it stands.
 import { translator } from '../../../src/core/i18n/translator.ts'
 import type { BoardPayload } from '../../../src/core/payload.ts'
 import type { ColumnId, Item, Translator } from '../../../src/core/types.ts'
@@ -18,7 +20,6 @@ import type { Attachment } from '../../../web/src/models/composer.ts'
 import type { DetailValue } from '../../../web/src/models/detail-resource.ts'
 import {
   addButtonTypes,
-  append,
   applyTexts,
   byClass,
   byId,
@@ -27,6 +28,7 @@ import {
   type Node,
   OLD_PAGE_ONLY,
   pageMarkup,
+  parseHtml,
   setAttr,
   setHtml,
   setText,
@@ -66,11 +68,19 @@ export interface OldSheetScene {
 type StyleRule = [string, string]
 
 /**
- * Upstream's merge of the restart (PR #51), which has the terminal's (#36), the compact toolbar's
- * (#43), MokuPilot's call (#44) and its results (#45) in it.
+ * Upstream's merge of the row that fits its width (PR #58), which has the terminal's (#36), the
+ * compact toolbar's (#43), MokuPilot's call (#44), its results (#45), the restart's (#51), the
+ * session panel's row (#54), the call's move to the row's front (#55), the archive (#56) and the
+ * drag to it (#57, nothing of the sheet's) in it.
  */
-const SHEET_MERGE = '513e441'
+const SHEET_MERGE = 'b2c5afa'
 const OLD_CALL = await oldModule('web/notice-model.js', SHEET_MERGE)
+const OLD_ARCHIVE = await oldModule('web/archive-model.js', SHEET_MERGE)
+const archiveBlock = (it: unknown, schedules: unknown): unknown => {
+  const fn = OLD_ARCHIVE.get('archiveBlock')
+  if (typeof fn !== 'function') throw new Error('no archiveBlock')
+  return Reflect.apply(fn, undefined, [it, schedules])
+}
 
 /** Just enough of an element for the old code's writes, onto a parsed node. */
 class FakeElement {
@@ -154,7 +164,7 @@ function threadHTML(t: Translator) {
   return oldFunction(code, 'threadHTML')
 }
 
-/** syncAvailability(), the sheet's part (#51's: a restart on its way grays Restart). */
+/** syncAvailability(), the sheet's part (#56's: a restart on its way grays Restart, archiveBlock grays Archive). */
 function syncAvailability(nodes: Node[], s: OldSheetScene, call: Call): void {
   const t = translator(s.lang ?? 'en')
   const blocked = !call('canMutate')
@@ -167,11 +177,16 @@ function syncAvailability(nodes: Node[], s: OldSheetScene, call: Call): void {
   setText(banner, t(canEdit ? 'mobile.readOnly' : 'live.off'))
   const turn = !!call('inTurn', (s.open && call('itemOf', s.open)) ?? {})
   const restarting = !!call('restartPending', s.open)
-  for (const id of ['sheet-focus', 'sheet-sleep', 'sheet-restart', 'sheet-wake'])
+  const archiveWhy = !!archiveBlock(s.open ? call('itemOf', s.open) : undefined, s.data.schedules ?? [])
+  for (const id of ['sheet-focus', 'sheet-sleep', 'sheet-restart', 'sheet-wake', 'sheet-archive'])
     toggleAttr(
       el(id),
       'disabled',
-      blocked || missing || (id === 'sheet-sleep' && turn) || (id === 'sheet-restart' && restarting),
+      blocked ||
+        missing ||
+        (id === 'sheet-sleep' && turn) ||
+        (id === 'sheet-restart' && restarting) ||
+        (id === 'sheet-archive' && archiveWhy),
     )
   const card = el('sheet-card')
   const edits = [el('attach'), el('sheet-mokupilot'), ...findAll([card], e => e.tag === 'button' || e.tag === 'input')]
@@ -250,22 +265,27 @@ export function oldSheet(scene: OldSheetScene): Element {
     oldCode('web/app.js', picked, { ...deps, ...helpers, callTitle: OLD_CALL.get('callTitle') }, SHEET_MERGE),
     'scheduleRow',
   )
-  // The head with the Terminal button's rule, the facts as spans and Restart, over the baseline's helpers.
+  // The head with the Terminal button's rule, the facts as spans, Restart and Archive, over the baseline's helpers.
   const head = oldCode(
     'web/app.js',
     ['renderSheetHead'],
-    { ...deps, ...Object.fromEntries(baseline), ...Object.fromEntries(restart) },
+    { ...deps, ...Object.fromEntries(baseline), ...Object.fromEntries(restart), archiveBlock },
     SHEET_MERGE,
   )
   const code = new Map([...baseline, ...restart, ...head])
   const call: Call = (name, ...args) => oldFunction(code, name)(...args)
 
-  // At start: the "new session here" button, the name focusable, the texts in the language.
+  // At start: the "new session here" button before More, the name focusable, the texts in the language.
   const icons = code.get('ICON')
   const plus = typeof icons === 'object' && icons !== null && 'plus' in icons ? String(icons.plus) : ''
-  append(
-    byClass(nodes, 'composer-actions'),
-    `<button class="button" id="sheet-new" data-hint="launch.hereHint">${plus}<span data-i18n="launch.here"></span></button>`,
+  const actions = byClass(nodes, 'composer-actions')
+  const more = actions.children.indexOf(byId([actions], 'sheet-more'))
+  actions.children.splice(
+    more,
+    0,
+    ...parseHtml(
+      `<button class="button" id="sheet-new" data-hint="launch.hereHint">${plus}<span data-i18n="launch.here"></span></button>`,
+    ),
   )
   setAttr(byId(nodes, 'sheet-name'), 'tabindex', '0')
   applyTexts(nodes, t)

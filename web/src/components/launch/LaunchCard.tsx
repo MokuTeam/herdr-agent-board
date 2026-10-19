@@ -15,7 +15,7 @@ export interface LaunchLook {
   pressed(what: 'trust' | 'closeTab', l: LaunchView): boolean
 }
 
-/** The card of a launch that is not a session on the board yet. */
+/** The card of a launch that is not a session on the board yet ("back": one back from the archive). */
 export function LaunchCard({ launch: l, look }: { launch: LaunchView; look: LaunchLook }) {
   const { t } = look
   return (
@@ -27,7 +27,7 @@ export function LaunchCard({ launch: l, look }: { launch: LaunchView; look: Laun
           <span className="dot work launching" style={{ '--c': 'var(--green)' }} />
         )}
         <span className="name">{l.name}</span>
-        <span className="age">{t('launch.new')}</span>
+        <span className="age">{t(l.resume ? 'archive.returnLabel' : 'launch.new')}</span>
       </div>
       <div className="said" title={l.cwd}>
         {launchWhere(l, t)}

@@ -41,6 +41,8 @@ export interface Scene {
   canEdit?: boolean
   /** The cards as a later upstream merge draws them (support/old-board.ts), in place of the baseline's. */
   ref?: string
+  /** Sessions on their way to the archive: off the board at once (#56). */
+  archiving?: string[]
 }
 
 export function drawBoth(scene: Scene): { old: Node[]; react: Node[] } {
@@ -77,9 +79,11 @@ export function drawBoth(scene: Scene): { old: Node[]; react: Node[] } {
     canMutate,
     canEdit,
     ref: scene.ref,
+    archiving: new Map((scene.archiving ?? []).map(key => [key, now])),
   })
   const pending = moves.reduce((all, m) => withMove(all, m.key, { ...m, at: now }), NO_MOVES)
-  const value = board({ data, connected: canEdit, canMutate, canEdit, now, ui: { ...ui, moves: pending } })
+  const archiving: ReadonlyMap<string, number> = new Map((scene.archiving ?? []).map(key => [key, now]))
+  const value = board({ data, connected: canEdit, canMutate, canEdit, now, ui: { ...ui, moves: pending, archiving } })
   return { old, react: renderInBoard(<Board />, value, lang) }
 }
 

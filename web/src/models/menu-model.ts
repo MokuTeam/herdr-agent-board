@@ -5,6 +5,7 @@
 //
 // `reason` says why a disabled item is gray.
 
+import { TIDY_DAYS } from '../../../src/core/archive.ts'
 import type { Translator } from '../../../src/core/types.ts'
 
 /** One item of a menu; `submenu` opens beside it (null: it would, but cannot now). */
@@ -58,8 +59,14 @@ export interface MenuPlace {
  * Where a menu of `size` opens for a click at `point`: down and to the right of it, flipped
  * left or up when it would leave the viewport, and pressed against the margin when it fits
  * neither way. Taller than the viewport: it scrolls (maxHeight). origin is the corner it grows from.
+ * `up`: above the point whenever it fits there, for a control low in its window.
  */
-export function placeMenu(point: Point, size: Size, viewport: Size, margin = 8): MenuPlace {
+export function placeMenu(
+  point: Point,
+  size: Size,
+  viewport: Size,
+  { margin = 8, up = false }: { margin?: number; up?: boolean } = {},
+): MenuPlace {
   const maxHeight = viewport.height - 2 * margin
   const h = Math.min(size.height, maxHeight)
   const w = Math.min(size.width, viewport.width - 2 * margin)
@@ -73,7 +80,7 @@ export function placeMenu(point: Point, size: Size, viewport: Size, margin = 8):
   }
   let y = point.y
   let originY: MenuPlace['originY'] = 'top'
-  if (y + h > viewport.height - margin) {
+  if (y + h > viewport.height - margin || (up && point.y - h >= margin)) {
     if (point.y - h >= margin) {
       y = point.y - h
       originY = 'bottom'
@@ -241,6 +248,8 @@ export interface CardMenuContext extends MenuContext {
   mokupilot?: boolean | undefined
   /** A restart of it is on its way. */
   restarting?: boolean | undefined
+  /** Why it cannot go to the archive now, a text key, or '' (src/core/archive.ts archiveBlock). */
+  archiveWhy?: string | undefined
 }
 
 /** What a card's menu reads of the board item. */
@@ -258,8 +267,8 @@ export interface MenuSession {
 
 /**
  * A card's menu. `it` is the board item; ctx: { t, canMutate, canEdit, categories, column (where
- * it shows now), category (its lane now), restarting (a restart of it is on its way) }. Items
- * gray out with the reason when herdr data is stale (going to, waking, sleeping, restarting,
+ * it shows now), category (its lane now), restarting (a restart of it is on its way), archiveWhy
+ * (why it cannot go to the archive now, a text key, or '') }. Items gray out with the reason when herdr data is stale (going to, waking, sleeping, restarting,
  * renaming in Claude) or the board is offline (card edits).
  */
 export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
@@ -339,16 +348,63 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
       submenu: copy.filter((c): c is MenuItem => !!c),
     },
     SEP,
+    // Off the board until Return: its tab closes, Claude keeps the conversation.
+    claude &&
+      it.agent === 'claude' && {
+        id: 'archive',
+        label: t('archive.menu'),
+        ...herdr(ctx.archiveWhy ? { disabled: true, reason: t(ctx.archiveWhy) } : {}),
+      },
     { id: 'clear', label: t('menu.clear'), danger: true, ...edit() },
   ])
+}
+
+export interface TidyContext extends MenuContext {
+  /** How many sleeping sessions in "Idle" a tidy-up of `days` takes (src/core/archive.ts tidyList). */
+  tidyCount(days: number): number
+}
+
+/**
+ * "Archive the sleeping ones" with a submenu by how long they have slept, each with its count.
+ * ctx: { t, canMutate, canEdit, tidyCount(days) }. Gray when no session sleeps there at all.
+ */
+function tidyItem(ctx: TidyContext): MenuItem {
+  const { t } = ctx
+  const all = ctx.tidyCount(0)
+  if (!all) return { id: 'tidy', label: t('archive.tidy.menu'), disabled: true, reason: t('archive.tidy.none') }
+  if (!ctx.canMutate)
+    return {
+      id: 'tidy',
+      label: t('archive.tidy.menu'),
+      disabled: true,
+      reason: ctx.canEdit ? t('mobile.readOnly') : t('live.off'),
+    }
+  const label = (d: number) =>
+    d === 0 ? t('archive.tidy.all') : d === 7 ? t('archive.tidy.week') : t('archive.tidy.days', { n: d })
+  return {
+    id: 'tidy',
+    label: t('archive.tidy.menu'),
+    submenu: TIDY_DAYS.map(d => {
+      const n = ctx.tidyCount(d)
+      return { id: `tidy:${d}`, label: label(d), hint: String(n), ...(n ? {} : { disabled: true }) }
+    }),
+  }
+}
+
+/** A column head's menu: only "Idle" has one, for taking its sleeping sessions to the archive. */
+export function columnMenu(col: string | undefined, ctx: TidyContext): MenuEntry[] | null {
+  if (col !== 'idle') return null
+  return tidy<MenuEntry>([tidyItem(ctx), SEP, { id: 'archiveOpen', label: ctx.t('archive.menuOpen') }])
 }
 
 export interface LaneMenuContext extends MenuContext {
   /** The lane on show, or 'all'. */
   filter: string
+  /** The lane's sleeping sessions a tidy-up takes (its menu then offers it). */
+  tidyCount?: ((days: number) => number) | undefined
 }
 
-/** A lane's menu: new sessions there, its category, the filter. */
+/** A lane's menu: new sessions there, its category, the filter, its sleeping sessions to the archive. */
 export function laneMenu(cat: MenuCategory, ctx: LaneMenuContext): MenuEntry[] {
   const { t } = ctx
   const herdr = ctx.canMutate ? {} : { disabled: true, reason: ctx.canEdit ? t('mobile.readOnly') : t('live.off') }
@@ -365,6 +421,8 @@ export function laneMenu(cat: MenuCategory, ctx: LaneMenuContext): MenuEntry[] {
     only
       ? { id: 'showAll', label: t('menu.showAll') }
       : { id: 'showOnly', label: t('menu.showOnly', { lane: cat.title }) },
+    ctx.tidyCount && SEP,
+    ctx.tidyCount && tidyItem({ ...ctx, tidyCount: ctx.tidyCount }),
   ])
 }
 
@@ -382,6 +440,7 @@ export function boardMenu(ctx: BoardMenuContext): MenuEntry[] {
     { id: 'newWorkspace', label: t('menu.newWorkspace'), ...herdr },
     SEP,
     { id: 'cats', label: t('menu.cats') },
+    { id: 'archiveOpen', label: t('archive.menuOpen') },
     { id: 'sleepers', label: t('tb.sleepersTitle'), checked: ctx.sleepers },
     ctx.filter !== 'all' && { id: 'showAll', label: t('menu.showAll') },
     { id: 'search', label: t('menu.search'), hint: '/' },
