@@ -1608,12 +1608,19 @@ $('#sheet-wake').addEventListener('click', async () => {
 })
 $('#sheet-sleep').addEventListener('click', () => state.open && sleepSession(state.open))
 $('#sheet-restart').addEventListener('click', () => state.open && restartSession(state.open))
+// More holds what the row does not show (app.css decides; the buttons stay in the row, hidden,
+// and keep their state), in groups: the tools, starting something from this session, then the
+// session's own life.
+const MORE = [['sheet-term', 'sheet-changes', 'sheet-history'], ['sheet-mokupilot', 'sheet-new'], ['sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-archive']]
+const HERDR_MORE = ['sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-new', 'sheet-archive']
 $('#sheet-more').addEventListener('click', e => {
   const button = e.currentTarget, rect = button.getBoundingClientRect()
-  const items = ['sheet-term', 'sheet-mokupilot', 'sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-changes', 'sheet-history', 'sheet-new']
-    .map(id => document.getElementById(id)).filter(el => el && !el.hidden)
-    .map(el => ({ id: el.id, label: el.textContent.trim(), disabled: el.disabled, reason: el.disabled ? (!canMutate() && ['sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-new'].includes(el.id) ? t('mobile.readOnly') : el.title || t('mobile.readOnly')) : '' }))
-  menu.open(items, { x: rect.right, y: rect.top, source: e.detail === 0 ? 'keyboard' : matchMedia('(pointer: coarse)').matches ? 'touch' : 'mouse', origin: button, label: t('sheet.more'), onPick: id => {
+  const items = MORE
+    .map(group => group.map(id => document.getElementById(id)).filter(el => el && !el.hidden && getComputedStyle(el).display === 'none')
+      .map(el => ({ id: el.id, label: el.textContent.trim(), disabled: el.disabled, reason: el.disabled ? (!canMutate() && HERDR_MORE.includes(el.id) ? t('mobile.readOnly') : el.title || t('mobile.readOnly')) : '' })))
+    .filter(group => group.length)
+    .flatMap((group, i) => i ? [{ separator: true }, ...group] : group)
+  menu.open(items, { x: rect.right, y: rect.top - 4, up: true, source: e.detail === 0 ? 'keyboard' : matchMedia('(pointer: coarse)').matches ? 'touch' : 'mouse', origin: button, label: t('sheet.more'), onPick: id => {
     const action = document.getElementById(id)
     if (!action || action.disabled || action.hidden) return
     // Dialogs must return focus to this visible opener, not the hidden toolbar button.
@@ -2548,7 +2555,7 @@ $('#sheet-history').addEventListener('click', e => state.open && files.lookHisto
   here.id = 'sheet-new'
   here.dataset.hint = 'launch.hereHint'
   here.innerHTML = `${ICON.plus}<span data-i18n="launch.here"></span>`
-  $('#sheet .composer-actions').append(here)
+  $('#sheet-more').before(here)
   here.addEventListener('click', () => state.open && newSession({ item: itemOf(state.open) }, here))
   applyTexts()
 }
