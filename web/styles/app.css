@@ -586,7 +586,7 @@ body.panel-resizing, body.panel-resizing * { cursor: var(--grab-cursor) !importa
 .sheet-title h2 { margin: 6px 0 0; font: 700 22px/1.15 var(--font-display); letter-spacing: -0.018em; overflow-wrap: anywhere; }
 .sheet-meta { margin: 4px 0 0; font-size: 12.5px; color: var(--label-2); }
 .sheet-meta > span { white-space: nowrap; }
-.sheet-properties-toggle, #sheet-more { display: none; }
+.sheet-properties-toggle { display: none; }
 .sheet-question { flex: 0 1 auto; min-height: 0; max-height: 24vh; overflow: auto; padding: 0 18px 10px 22px; }
 .sheet-question .asked { margin: 0; }
 .status-pill {
@@ -777,6 +777,20 @@ body.panel-resizing, body.panel-resizing * { cursor: var(--grab-cursor) !importa
 .msg code { font: 12px var(--mono); padding: 1px 4px; border-radius: 4px; background: var(--fill); overflow-wrap: anywhere; }
 .msg.user code { background: rgba(255, 255, 255, 0.2); }
 .msg .when { display: block; margin-top: 3px; font-size: 11px; opacity: 0.55; }
+/* Not taken in yet (models/outbox.ts): the user's bubble, quiet, with its state where the time goes. */
+.msg.user.waiting { background: color-mix(in srgb, var(--accent) 12%, var(--panel)); color: var(--label); box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--accent) 34%, transparent); }
+.msg.user.waiting .md a { color: var(--accent); text-decoration: none; }
+.msg.user.waiting code, .msg.user.waiting .md pre { background: var(--fill); }
+.msg.user.waiting .fs-chip, .msg.user.waiting code.fs-chip { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: none; color: var(--accent); }
+.msg.waiting .when { display: flex; align-items: center; gap: 4px; color: var(--label-2); opacity: 1; }
+.msg.waiting .when svg { width: 11px; height: 11px; stroke-width: 1.8; }
+.msg.waiting.failed { box-shadow: inset 0 0 0 1px var(--red); }
+.msg.waiting.failed .when { display: block; }
+.msg.waiting.failed .when b { font-weight: 500; color: var(--red); }
+.out-actions { display: flex; gap: 6px; margin-top: 6px; }
+.out-actions button { padding: 3px 10px; border: 0; border-radius: 999px; background: var(--fill); color: var(--accent); font: 500 12px/1.3 var(--font); transition: transform 100ms ease-out, background 120ms ease; }
+.out-actions button:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.out-actions button:active { transform: scale(0.96); }
 .tools { align-self: flex-start; max-width: 100%; font-size: 12px; color: var(--label-2); }
 .tools summary { list-style: none; display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 8px; cursor: default; }
 .tools summary::-webkit-details-marker { display: none; }
@@ -813,15 +827,21 @@ div.notice, .notice > summary { display: flex; align-items: flex-start; gap: 7px
 .notice-body > pre { margin: 0; font: 11.5px/1.5 var(--mono); white-space: pre-wrap; }
 
 .composer { padding: 10px 14px 14px 18px; }
-/* One row: going to the session keeps its words; the rest are icons named by their tooltips
-   while the panel is narrow, and spell themselves out once it is wide enough. */
+/* One row that fits any panel: as many actions as its width holds, most used first, and More
+   at the end for the rest (hooks/useActionRow.ts with models/row-model.ts; .over is under More).
+   With their words while at least four fit so, else icons named by their tooltips; going to the
+   session keeps its words, and gives them up only before the row would run over. .measuring
+   shows every button, for a moment within one task, to take their widths. */
 .composer-actions { display: flex; gap: 6px; margin-bottom: 10px; overflow-x: auto; scrollbar-width: none; }
 .composer-actions::-webkit-scrollbar { display: none; }
 .composer-actions > .button { flex: none; }
-@container sheet (max-width: 999px) {
-  .composer-actions > .button:not(#sheet-focus):not(#sheet-more) { justify-content: center; width: 30px; padding: 0; }
-  .composer-actions > .button:not(#sheet-focus):not(#sheet-more) > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-}
+.composer-actions > .over { display: none; }
+.composer-actions.measuring > .button { display: inline-flex; }
+.composer-actions:not(.measuring) > #sheet-focus { flex: 0 1 auto; min-width: 0; }
+#sheet-focus > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#sheet-more { justify-content: center; width: 30px; margin-left: auto; padding: 0; }
+.composer-actions.icons > .button:not(#sheet-focus) { justify-content: center; width: 30px; padding: 0; }
+.composer-actions.icons > .button:not(#sheet-focus) > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .button {
   display: inline-flex;
   align-items: center;
@@ -1138,8 +1158,82 @@ button.swatch:active { transform: scale(0.88); }
 .log-row.missed .log-note, .log-row.failed .log-note { color: var(--orange); }
 .log-row.dropped .log-icon { background: var(--fill); color: var(--label-2); font-size: 13px; }
 
+/* ---------------------------------------------------------------- archive */
+/* The archive panel (components/archive/ArchivePanel.tsx): a search on top, then the sessions by
+   the day they went, like the schedule. */
+.archive-find { padding: 0 18px 10px 22px; }
+.archive-find .search { display: flex; height: 32px; }
+.archive-find .search input { flex: 1; width: auto; min-width: 0; }
+.archive-body { padding-top: 0; }
+.archive-body > .section-title:first-child, .arch-tidy + .section-title { margin-top: 10px; }
+.arch-group { margin-top: 0; overflow: hidden; }
+.arch-row { display: flex; align-items: flex-start; gap: 10px; padding: 11px 10px 12px 14px; }
+.arch-row + .arch-row { box-shadow: inset 0 0.5px 0 var(--separator); }
+.arch-main { flex: 1; min-width: 0; }
+.arch-top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.arch-name { flex: 1; min-width: 0; overflow: hidden; font: 600 14px/1.3 var(--font-display); letter-spacing: -0.005em; white-space: nowrap; text-overflow: ellipsis; }
+.arch-name::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 2.5px; background: var(--lane); vertical-align: 1px; }
+.arch-when { flex: none; color: var(--label-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.arch-note { display: -webkit-box; margin-top: 3px; overflow: hidden; color: var(--label-2); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.arch-meta { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 5px; color: var(--label-3); font-size: 11.5px; }
+.arch-where { min-width: 0; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.arch-extra { color: var(--label-2); }
+.arch-actions { display: flex; flex: none; align-items: center; gap: 4px; margin-top: -2px; }
+.arch-return { height: 28px; padding: 0 11px 0 8px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); font-weight: 600; }
+.arch-return svg { width: 15px; height: 15px; flex: none; }
+.arch-return:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.arch-return:active:not(:disabled) { transform: scale(0.96); }
+.arch-return:disabled { opacity: 0.55; }
+.arch-row.returning .arch-return { background: var(--fill-2); color: var(--label-2); opacity: 1; }
+.arch-row .sched-x:disabled { opacity: 0.4; }
+/* While sleeping sessions pile up in "Idle": a quiet offer to take them along. */
+.arch-tidy { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; padding: 9px 9px 9px 13px; border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-card); color: var(--label-2); font-size: 13px; line-height: 1.35; }
+.arch-tidy > svg { flex: none; width: 16px; height: 16px; color: var(--label-3); }
+.arch-tidy > span { flex: 1; min-width: 0; }
+.arch-tidy .button { flex: none; height: 28px; }
+/* While a card is dragged: the archive as a place to drop it, at the foot of the board
+   (components/DropArchive.tsx). It materializes with the drag (springs), lights up while the card
+   is over it, and says why when the session may not go yet. Below the dragged card, above
+   everything else. */
+.drop-archive {
+  position: fixed;
+  left: calc(50% + (var(--room-left, 0px) - var(--room-right, 0px)) / 2);
+  bottom: calc(24px + var(--room-bottom, 0px));
+  z-index: 59;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 220px;
+  max-width: min(440px, calc(100vw - 32px));
+  height: 56px;
+  padding: 0 24px;
+  border-radius: 999px;
+  translate: -50% 0;
+  opacity: 0;
+  background: var(--material-thick);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  box-shadow: var(--shadow-lift), inset 0 0.5px 0 var(--edge);
+  color: var(--label-2);
+  font-size: 14px;
+  font-weight: 600;
+  transition: background 140ms ease, color 140ms ease, scale 160ms ease-out;
+}
+.drop-archive.on { display: flex; }
+.drop-archive svg { flex: none; width: 22px; height: 22px; }
+.drop-archive span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.drop-archive.over { scale: 1.06; background: var(--accent); color: #fff; }
+.drop-archive.blocked { color: var(--label-3); }
+.drop-archive.blocked.over { scale: 1; background: color-mix(in srgb, var(--red) 14%, var(--surface)); color: var(--red); }
+@media (prefers-reduced-transparency: reduce) { .drop-archive { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; } }
+@media (prefers-reduced-motion: reduce) { .drop-archive { transition: none; } }
+/* A card on its way into the Archive button (hooks/useArchive.ts, its flight), above the board and
+   its panels. */
+.ghost.to-archive { z-index: 75; will-change: transform, opacity; }
+
 /* ---------------------------------------------------------------- toasts */
-.toasts { position: fixed; left: calc(50% + (var(--room-left, 0px) - var(--room-right, 0px)) / 2); bottom: calc(28px + var(--room-bottom, 0px)); z-index: 80; display: flex; flex-direction: column; align-items: center; gap: 8px; transform: translateX(-50%); pointer-events: none; }
+.toasts { position: fixed; left: calc(50% + (var(--room-left, 0px) - var(--room-right, 0px)) / 2); bottom: calc(28px + var(--room-bottom, 0px)); z-index: 80; display: flex; flex-direction: column; align-items: center; gap: 8px; width: max-content; max-width: calc(100vw - 32px); transform: translateX(-50%); pointer-events: none; }
 .toast {
   padding: 9px 16px;
   border-radius: 999px;
@@ -1152,6 +1246,16 @@ button.swatch:active { transform: scale(0.88); }
   white-space: nowrap;
 }
 .toast.error { color: var(--red); }
+/* One with a button (Return after an archive): it takes the pointer, and wraps on a phone. */
+.toast.with-action { display: flex; align-items: center; gap: 12px; max-width: calc(100vw - 32px); padding: 5px 5px 5px 16px; pointer-events: auto; }
+.toast-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.toast-action { flex: none; height: 28px; padding: 0 13px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font: 600 13px var(--font); transition: background 150ms ease, transform 100ms ease-out; }
+.toast-action:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.toast-action:active { transform: scale(0.95); }
+.toast-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 760px) {
+  .toast.with-action { white-space: normal; border-radius: 18px; }
+}
 
 /* ---------------------------------------------------------------- files in the chat */
 /* A path the server found on disk becomes a chip; a click opens the quick look. */
@@ -1433,9 +1537,7 @@ button.swatch:active { transform: scale(0.88); }
   #sheet .asked b { display: inline; margin-right: 5px; font-size: 11px; }
   #sheet .asked-dismiss { display: inline-flex; height: 26px; margin: 5px 0 0 6px; font-size: 12px; }
   #sheet .composer-actions { margin-bottom: 8px; flex-wrap: nowrap; }
-  #sheet .composer-actions > button:not(#sheet-focus):not(#sheet-more) { display: none; }
-  #sheet .sheet-more { display: inline-flex; order: 1; }
-  #sheet .composer-actions .button { min-height: 36px; }
+  #sheet .composer-actions .button { min-width: 36px; min-height: 36px; }
   #sheet .composer { padding: 8px 16px 12px; }
   .ql-head { display: grid; grid-template-columns: 30px 28px minmax(0, 1fr) 30px; gap: 8px; padding: 12px; }
   .ql-back { grid-column: 1; grid-row: 1; }
@@ -1480,6 +1582,7 @@ button.swatch:active { transform: scale(0.88); }
   :root { --label-2: var(--label); --label-3: rgba(60, 60, 67, 0.7); }
   .card, .group, .sheet, .layout-menu { box-shadow: 0 0 0 1px var(--label-3); }
   .dock-preview { box-shadow: inset 0 0 0 2px var(--accent); }
+  .msg.user.waiting:not(.failed) { box-shadow: inset 0 0 0 1px var(--accent); }
 }
 
 #connection-state, #sheet-connection-state { margin: 4px 16px; color: var(--orange); font-size: 12px; }

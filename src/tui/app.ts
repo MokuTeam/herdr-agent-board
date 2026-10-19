@@ -340,6 +340,8 @@ process.on('message', m => m === 'restart' && quit(75))
 process.on('uncaughtException', err => {
   cleanup()
   console.error(err)
+  // run.ts starts the board again, and the screen goes with it: the log keeps the error.
+  webLog(`crash: ${(err instanceof Error && err.stack) || String(err)}`)
   process.exit(1)
 })
 

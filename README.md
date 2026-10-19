@@ -959,7 +959,9 @@ dictionary there plus its plural rule; a test checks that every dictionary has e
   board and the terminal board redraw, and the agents' next brief lists the new categories.
 - Plugin code: the pane runs `src/entrypoints/run.ts`, which restarts the board when a file in `src/`
   changes (by its time and size: on Windows a plain read fires the watcher too); open web pages
-  reload themselves when a file in `web/` changes.
+  reload themselves when a file in `web/` changes. A board that crashes starts again by itself
+  (after 2 s, then 10 s, then 30 s; after five crashes in ten minutes it waits for the next code
+  change), and `web.log` in the state folder keeps the error.
 
 Code: `src/server/`, `web/src/` (React; no build step: the server bundles `web/src/main.tsx` in
 memory with Bun; springs in `web/src/models/spring.ts`, the sheet's place in
