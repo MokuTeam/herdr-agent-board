@@ -36,7 +36,7 @@ function lockAge(lock: string): number {
   }
 }
 
-function lockFile(path: string): () => void {
+function lockFile(path: string, recoverStale = true): () => void {
   const lock = `${path}.lock`
   const deadline = performance.now() + LOCK_TIMEOUT_MS
   for (;;) {
@@ -45,7 +45,7 @@ function lockFile(path: string): () => void {
       return () => rmdirSync(lock)
     } catch (err) {
       if (errorCode(err) !== 'EEXIST') throw err
-      if (lockAge(lock) > LOCK_STALE_MS) {
+      if (recoverStale && lockAge(lock) > LOCK_STALE_MS) {
         try {
           rmdirSync(lock)
         } catch {}
@@ -105,30 +105,43 @@ export function replaceFile(path: string, text: string, rename: (a: string, b: s
 }
 
 /**
+ * `mode`: the permissions a written file gets (POSIX; 0o600 for call receipts). `recoverStale`
+ * false: a lock left by a writer that died is never taken over, however old (call-receipts.ts).
+ */
+export type UpdateOptions = { mode?: number; recoverStale?: boolean }
+
+/**
  * Read, change and save a JSON file under its lock, so writers in other processes never lose
  * each other's fields. `change(current)` gets the contents (null when there is no file or it
  * is not what `guard` accepts) and returns the new contents, null to delete the file, or
  * undefined to leave it as it is. Returns what `change` returned.
  */
-export function updateJson<T>(path: string, change: (current: T | null) => T, guard: Guard<T>): T
+export function updateJson<T>(
+  path: string,
+  change: (current: T | null) => T,
+  guard: Guard<T>,
+  options?: UpdateOptions,
+): T
 export function updateJson<T>(
   path: string,
   change: (current: T | null) => T | null | undefined,
   guard: Guard<T>,
+  options?: UpdateOptions,
 ): T | null | undefined
 export function updateJson<T>(
   path: string,
   change: (current: T | null) => T | null | undefined,
   guard: Guard<T>,
+  { mode, recoverStale = true }: UpdateOptions = {},
 ): T | null | undefined {
-  const unlock = lockFile(path)
+  const unlock = lockFile(path, recoverStale)
   const tmp = `${path}.${process.pid}.tmp`
   try {
     const next = change(readJson(path, guard))
     if (next === null) {
       unlinkIfThere(path)
     } else if (next !== undefined) {
-      writeFileSync(tmp, JSON.stringify(next))
+      writeFileSync(tmp, JSON.stringify(next), mode === undefined ? undefined : { mode })
       renameWithRetry(tmp, path)
     }
     return next

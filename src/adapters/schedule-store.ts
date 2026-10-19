@@ -8,7 +8,9 @@
 // (when it is due), created, by, from (the session that set it: { key, name }) } plus the
 // scheduler's own fields: runs, missed, lastRun, gone (runs missed in a row with the session gone),
 // movedFrom (the session it was for before /clear), and while it waits for a busy session
-// pendingSince, waited, tried, why; claim while a run is on its way.
+// pendingSince, waited, tried, why; claim while a run is on its way. A retry-safe call report
+// carries its receipt's identity (receipt: call-receipts.ts); its file is written 0600, and the
+// receipt is settled when the entry goes.
 import { randomBytes } from 'node:crypto'
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -21,6 +23,7 @@ import {
   type ScheduleEntry,
   type SessionRef,
 } from '../core/schedule-rules.ts'
+import { type ReceiptState, settleReport } from './call-receipts.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
 import { scheduleDir } from './paths.ts'
 
@@ -90,6 +93,7 @@ export function addEntry(fields: NewEntry): ScheduleEntry {
       fileOf(id),
       (taken: ScheduleEntry | null) => (taken ? undefined : { id, ...clean, created: Date.now() }),
       isEntry,
+      fields.receipt ? { mode: 0o600 } : undefined,
     )
     if (entry) return entry
   }
@@ -102,14 +106,25 @@ export function updateEntry(
 ): ScheduleEntry | null | undefined {
   if (!ID.test(String(id))) return undefined
   mkdirSync(scheduleDir(), { recursive: true }) // the lock lives next to the file
-  return updateJson(fileOf(String(id)), (entry: ScheduleEntry | null) => (entry ? change(entry) : undefined), isEntry)
+  return updateJson(
+    fileOf(String(id)),
+    (entry: ScheduleEntry | null) => (entry ? change(entry) : undefined),
+    isEntry,
+    getEntry(id)?.receipt ? { mode: 0o600 } : undefined,
+  )
 }
 
-/** Delete an entry; returns it, or null when there was none. */
-export function removeEntry(id: unknown): ScheduleEntry | null {
+/**
+ * Delete an entry; returns it, or null when there was none. A call report's receipt is settled
+ * first (`receiptState`: cancelled, or missed when the scheduler gave up waiting): one on its way
+ * becomes of unknown delivery, one done keeps its state (call-receipts.ts settleReport).
+ */
+export function removeEntry(id: unknown, receiptState: ReceiptState = 'cancelled'): ScheduleEntry | null {
   let removed: ScheduleEntry | null = null
   if (!ID.test(String(id))) return null
   mkdirSync(scheduleDir(), { recursive: true })
+  const existing = getEntry(id)
+  if (existing?.receipt) settleReport(existing, receiptState)
   updateJson(
     fileOf(String(id)),
     (entry: ScheduleEntry | null) => {

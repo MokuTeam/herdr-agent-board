@@ -1,8 +1,9 @@
 import { setDefaultTimeout, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { allCards, readCard, writeCard } from '../../src/adapters/cards.ts'
+import { isRecord, updateJson } from '../../src/adapters/json-store.ts'
 import { cardsDir } from '../../src/adapters/paths.ts'
 import { isolatedHome } from '../support/env.ts'
 import { type Child, sandbox, until } from '../support/sandbox.ts'
@@ -108,4 +109,25 @@ test('allCards lists the cards by key and skips files that are not cards', () =>
   assert.deepEqual([...allCards().keys()], ['a'])
   assert.equal(readCard('a')?.doing, '1')
   assert.equal(readCard('nope'), null)
+})
+
+test('updateJson with recoverStale off never takes over an old lock; mode is the written file’s permissions', () => {
+  const dir = isolatedHome()
+  const file = join(dir, 'journal.json')
+  writeFileSync(file, '{"n":1}')
+  const lock = `${file}.lock`
+  mkdirSync(lock)
+  const old = new Date(Date.now() - 60_000)
+  utimesSync(lock, old, old)
+  assert.throws(
+    () => updateJson(file, () => ({ n: 2 }), isRecord, { recoverStale: false }),
+    /Timed out waiting for lock/,
+  )
+  assert.ok(existsSync(lock))
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).n, 1)
+  // By default a lock that old is taken over, as ever.
+  updateJson(file, () => ({ n: 3 }), isRecord, { mode: 0o600 })
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).n, 3)
+  assert.equal(existsSync(lock), false)
+  if (process.platform !== 'win32') assert.equal(statSync(file).mode & 0o777, 0o600)
 })

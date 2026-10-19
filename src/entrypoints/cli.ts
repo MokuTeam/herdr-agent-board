@@ -15,19 +15,27 @@
 //                            queued into a running turn
 //   board schedule [--all]   this session's entries (every session's)
 //   board unschedule <id|all>    removes an entry (all: every entry of this session)
-//   board call-report --session <id> --file <report.md>
+//   board call-report --session <id> --file <report.md> [--report-id <stable-id>]
 //                            a MokuPilot call's results (services/mokupilot.ts) for the
 //                            session it was a fork of: the board types them in once the session
 //                            is free, for its information, waking it if it sleeps
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync } from 'node:fs'
+import {
+  enqueueReport,
+  getReceipt,
+  type Receipt,
+  readReport,
+  reportHash,
+  reportIdentity,
+} from '../adapters/call-receipts.ts'
 import { readCard, writeCard } from '../adapters/cards.ts'
 import { configFile, editCategories, loadConfig } from '../adapters/config-file.ts'
 import { type HerdrPane, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { boardFile } from '../adapters/paths.ts'
-import { addEntry, listEntries, removeEntry } from '../adapters/schedule-store.ts'
+import { addEntry, listEntries, type NewEntry, removeEntry } from '../adapters/schedule-store.ts'
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
 import { t } from '../core/lang.ts'
@@ -38,7 +46,7 @@ import { shortWhen } from '../core/when-format.ts'
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> | doctor] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | doctor] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -369,18 +377,30 @@ async function main(): Promise<void> {
  * protocol is ready, from outside any pane): queued as a schedule entry of kind 'call', due now
  * and sent once the session is free, so it never cuts into a turn; a sleeping session is woken,
  * and with no board running it goes out once one runs. The scheduler frames it as information
- * (core/schedule-rules.ts promptOf), not as work to start.
+ * (core/schedule-rules.ts promptOf), not as work to start. With --report-id it is retry-safe
+ * (adapters/call-receipts.ts): the answer is its receipt as JSON, and the same report again is
+ * that receipt, not another entry; --status shows the receipt.
  */
 async function callReport(): Promise<void> {
   const usage = 'usage: board call-report --session <Claude session id> --file <report.md>'
   if (!target || !UUID.test(target)) throw new Error(`${usage}; the session id is a UUID`)
   const session = target
+  const ri = rest.indexOf('--report-id')
+  const reportId = ri >= 0 ? rest[ri + 1] : null
+  if (ri >= 0 && (!reportId || reportId.startsWith('--'))) throw new Error('missing report-id')
+  if (reportId) reportIdentity(session, reportId)
+  if (rest.includes('--status')) {
+    if (!reportId) throw new Error('--status requires --report-id')
+    const receipt = getReceipt(session, reportId)
+    if (!receipt) throw new Error('no receipt for this session and report-id')
+    return printReceipt(receipt)
+  }
   const fi = rest.indexOf('--file')
   const file = fi >= 0 ? (rest[fi + 1] ?? '') : ''
   if (!file) throw new Error(usage)
   let report: string
   try {
-    report = readFileSync(file, 'utf8')
+    report = reportId ? readReport(file) : readFileSync(file, 'utf8')
   } catch (err) {
     const e = err as NodeJS.ErrnoException
     throw new Error(`cannot read the report ${file}: ${e.code || e.message}`)
@@ -390,6 +410,7 @@ async function callReport(): Promise<void> {
     .replace(/\r\n?/g, '\n')
     .trim()
   if (!report) throw new Error(`the report ${file} is empty`)
+  const contentHash = reportHash(report)
   if (report.length > MAX_REPORT) {
     const note = `\n\n[the report goes on; all of it: ${file}]`
     report = `${report.slice(0, MAX_REPORT - note.length).trimEnd()}${note}`
@@ -405,8 +426,8 @@ async function callReport(): Promise<void> {
   const name =
     item?.name ?? deps.homes.liveSessions(deps.profiles().list.map(p => p.dir)).get(session)?.session.name ?? ''
   const now = Date.now()
-  const e = addEntry({
-    key: item?.key ?? session,
+  const fields: NewEntry = {
+    key: reportId ? session.toLowerCase() : (item?.key ?? session),
     name,
     ...(item?.pane && { pane: item.pane }),
     ...(item?.cwd && { cwd: item.cwd }),
@@ -416,10 +437,33 @@ async function callReport(): Promise<void> {
     at: now,
     next: now,
     by: 'mokupilot',
-  })
+  }
+  if (reportId) {
+    const identity = reportIdentity(session, reportId, contentHash)
+    const receipt = enqueueReport(identity, {
+      findEntry: key => listEntries().find(e => isRecord(e.receipt) && e.receipt.key === key),
+      createEntry: receipt => addEntry({ ...fields, receipt }),
+    })
+    return printReceipt(receipt)
+  }
+  const e = addEntry(fields)
   console.log(
     `ok · call report ${e.id} for ${name || session.slice(0, 8)}, typed in once the session is free · cancel: board unschedule ${e.id}${await schedulerNote()}`,
   )
+}
+
+/** A retry-safe report's receipt, as JSON; delivery under way or not known exits with 2: do not replay. */
+function printReceipt(receipt: Receipt): void {
+  console.log(
+    JSON.stringify({
+      reportId: receipt.reportId,
+      session: receipt.session,
+      entryId: receipt.entryId,
+      state: receipt.state,
+      reused: !!receipt.reused,
+    }),
+  )
+  if (receipt.state === 'delivery-unknown' || receipt.state === 'dispatching') process.exitCode = 2
 }
 
 main().catch((err: unknown) => {

@@ -11,6 +11,7 @@
 // against the wait. An entry is claimed in its file before it is sent, so a second board (a
 // restart that overlaps, a test copy) never sends the same run twice.
 import { type FSWatcher, mkdirSync, watch } from 'node:fs'
+import { beginReport, deferReport, settleReport, verifyReport } from '../adapters/call-receipts.ts'
 import { readCard } from '../adapters/cards.ts'
 import { scheduleDir } from '../adapters/paths.ts'
 import { getEntry, listEntries, logRun, removeEntry, updateEntry } from '../adapters/schedule-store.ts'
@@ -105,6 +106,12 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
 
   /** `other`: why it does not go to the session now in its pane (another profile's), '' for none. */
   async function run(entry: ScheduleEntry, item: Item | undefined, other: string): Promise<void> {
+    const receipt = entry.receipt ? verifyReport(entry) : null // Before even waking a session.
+    if (receipt && receipt.state !== 'queued' && receipt.state !== 'dispatching') {
+      removeEntry(entry.id)
+      logRun(record(entry, Date.now(), receipt.state))
+      return
+    }
     const now = Date.now()
     // On time (the default) goes into a working session too, queued into its turn as the user's
     // own mid-turn messages are; `idle` entries wait until it is free. A dialog always waits:
@@ -130,11 +137,34 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
         // Cancelled while the session woke up: nothing to send.
         if (r.ok && !getEntry(entry.id)) return
       }
+      if (r.ok && entry.receipt) {
+        const state = beginReport(entry)
+        if (state !== 'dispatching') {
+          removeEntry(entry.id)
+          logRun(record(entry, Date.now(), state))
+          return
+        }
+      }
       if (r.ok) {
-        r = await send(deps, { ...item, sleeping: false }, promptOf(entry, Date.now()), {
-          free: !!entry.idle,
-          draft: true,
-        })
+        try {
+          r = await send(deps, { ...item, sleeping: false }, promptOf(entry, Date.now()), {
+            free: !!entry.idle,
+            draft: true,
+          })
+        } catch (err) {
+          if (entry.receipt) settleReport(entry, 'delivery-unknown')
+          throw err
+        }
+        if (entry.receipt && !r.ok && r.busy) {
+          deferReport(entry)
+          return wait(entry, now, r.draft ? 'draft' : r.dialog ? 'dialog' : 'busy', false)
+        }
+        if (entry.receipt && !r.ok) {
+          settleReport(entry, 'delivery-unknown')
+          removeEntry(entry.id)
+          logRun(record(entry, Date.now(), 'delivery-unknown', r.error))
+          return
+        }
       }
       if (r.ok) return sent(entry)
       why = r.draft ? 'draft' : r.dialog ? 'dialog' : r.busy ? 'busy' : r.error
@@ -144,7 +174,8 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
 
   /**
    * Taken for this process, unless another board holds a fresh claim or it was handled already.
-   * Delivery is at least once: a board that dies between typing the text and finish() leaves
+   * Legacy delivery is at least once; receipt-backed exports refuse replay after dispatch starts.
+   * A legacy board that dies between typing the text and finish() leaves
    * its claim, and the run goes out again once that claim expires (CLAIM_MS).
    */
   function claim(id: string, now: number): boolean {
@@ -158,6 +189,7 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
 
   function sent(entry: ScheduleEntry): void {
     const now = Date.now()
+    if (entry.receipt) settleReport(entry, 'sent')
     delivered.set(entry.id, entry.next)
     finish(entry, now)
     logRun(record(entry, now, 'sent'))
@@ -210,7 +242,7 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
     }
     const goneRuns = gone ? (Number(entry.gone) || 0) + 1 : 0
     const drop = !entry.cron || goneRuns >= GONE_RUNS
-    if (drop) removeEntry(entry.id)
+    if (drop) removeEntry(entry.id, 'missed')
     else
       updateEntry(entry.id, e =>
         settle(e, now, { missed: (Number(e.missed) || 0) + 1, ...(goneRuns && { gone: goneRuns }) }),

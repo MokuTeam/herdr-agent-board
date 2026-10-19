@@ -130,6 +130,26 @@ test('target: a reminder set in a work session never goes to a default session i
   assert.deepEqual(targetOf(entry({ key: 's1' }), items, profiles({})), { item: items[0] })
 })
 
+test('target: a retry-safe call report stays with its own session, never the one now in its pane', () => {
+  const items = [item({ key: 's1', session: 's1', pane: 'p1', cwd: 'C:\\Proj' })]
+  const receipt = { key: 'k', session: 's0', reportId: 'call-1', hash: 'h' }
+  const gone = entry({ key: 's0', pane: 'p1', cwd: 'C:\\Proj', receipt })
+  // Not followed, in one profile or another: it waits for its own session (gone), saying no other.
+  assert.deepEqual(
+    targetOf(gone, items, () => 'default'),
+    {},
+  )
+  assert.deepEqual(
+    targetOf(gone, items, (key: string) => (key === 's0' ? 'work' : 'default')),
+    {},
+  )
+  // Its own session, by key: as any entry.
+  assert.deepEqual(
+    targetOf(entry({ key: 's1', receipt }), items, () => 'default'),
+    { item: items[0] },
+  )
+})
+
 test('entries from before kinds existed are reminders as ever', () => {
   const at = Date.now()
   assert.equal(promptOf({ id: 'eeee01', key: 's1', text: 'old one', next: at }, at), '[board reminder] old one')

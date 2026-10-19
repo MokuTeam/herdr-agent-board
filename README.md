@@ -994,6 +994,61 @@ and outside herdr it says nothing of it. For herdr's own command reference, `her
 skill of that name that is not the board's is left alone, and `board doctor` says so (per
 profile, with more than one).
 
+### Retry-safe call exports (opt-in)
+
+A caller that can retain a stable export/revision ID can opt into a receipt:
+
+```sh
+board call-report --session <uuid> --report-id meeting-42:revision-1 --file report.md
+board call-report --session <uuid> --report-id meeting-42:revision-1 --status
+```
+
+The response is JSON with `reportId`, canonical lower-case `session`, `entryId`, `state`, and
+`reused`. Repeating the same session, report ID, and normalized full content returns the original
+receipt without creating another queue entry. A changed report under that ID is a conflict;
+use a new revision ID deliberately. Different IDs may carry identical content. IDs are case-sensitive,
+1–128 ASCII letters/digits/dots/colons/underscores/hyphens, starting with a letter or digit.
+Inputs are capped at 1 MiB before any queue write; the existing 16,000-character prompt limit remains.
+BOM, line endings and outer whitespace are normalized before hashing, including the untruncated text.
+
+States:
+- `queued`: accepted locally; waits for the original session to be free. Unlike legacy reminders,
+  receipt-backed exports do not follow a replacement session after `/clear`.
+- `dispatching`: the transport attempt was recorded before sending. Exit code 2 means do not replay.
+- `sent`: Herdr's prompt command returned success. This does **not** prove the agent read, understood,
+  or executed anything. The report remains informational, with the existing no-auto-work instruction.
+- `delivery-unknown`: a crash, ambiguous failure, or inconsistent queue left delivery uncertain.
+  Exit code 2; automatic retry never creates another attempt. Inspect the conversation before deciding
+  whether to submit a deliberately new revision. Known busy/draft/dialog guards keep the entry queued.
+- `cancelled` / `missed`: terminal receipts; repeating the ID does not revive them.
+
+Receipt metadata lives in `call-receipts.json` beside the schedule folder. It stores hashes and
+identifiers, not report text. On POSIX, the journal and receipt-backed queue files are created with
+mode 0600, including scheduler rewrites. The journal is bounded to 1,000 IDs across sessions; new
+IDs are rejected at capacity, while existing retries remain available. No automatic TTL or eviction
+is used: forgetting an ID would make old retries unsafe. Keep receipts for as long as clients can
+retry. Archiving/removing them requires explicit operational reconciliation; do not blindly clear
+this file to fix a failure. Windows ACL policy is inherited from the user's profile.
+
+Queue creation and receipt creation are serialized under one receipt lock. A surviving orphan queue
+entry is treated as unknown rather than replayed. A dispatch marker surviving a process restart also
+becomes unknown without another send; locating an interrupted attempt may still wake its original
+session. Terminal receipt cleanup never wakes a session. Corrupt journals fail closed. Receipt locks are never stolen
+based on age: after an interrupted writer, stop the board and export producers, inspect/reconcile
+pending reports, and only then remove the abandoned `call-receipts.json.lock` directory. A lock timeout
+is an error, never permission to submit with a new ID automatically.
+
+These guarantees cover cooperating processes and ordinary process restarts, not power loss (there
+is no fsync transaction), hostile local file modification, or atomic delivery into Herdr's terminal.
+Herdr's identity check and prompt write are separate calls. This is bounded retry suppression, not
+exactly-once agent consumption. Existing callers without `--report-id` keep their current output,
+queue behavior, and legacy at-least-once delivery. MokuPilot must retain and supply stable IDs before
+it benefits; this board change alone does not alter MokuPilot.
+
+With more than one Claude profile there is still one journal: a receipt is keyed by the session's
+UUID, whichever profile the session runs in, and waking it for a report goes through the same
+profile guard as any other wake. The code: [`src/adapters/call-receipts.ts`](src/adapters/call-receipts.ts).
+
 ## Settings
 
 `%APPDATA%\herdr\plugins\config\agent-board\config.json`: `language` (`auto`, `en`, `ru`),

@@ -38,6 +38,11 @@ export type ScheduleEntry = {
   movedFrom?: SessionRef
   /** 'call': a MokuPilot call's results (`board call-report`); a reminder without one. */
   kind?: string
+  /**
+   * A retry-safe call report's identity ({ key, session, reportId, hash }: `board call-report
+   * --report-id`), narrowed where it is read (adapters/call-receipts.ts).
+   */
+  receipt?: unknown
   [extra: string]: unknown
 }
 
@@ -98,7 +103,8 @@ const folder = (p: unknown): string =>
  * pane and the same Claude, so the same profile; the reminder follows it there. A session there
  * in another profile, or one where either profile is not known, is never followed into (it would
  * be reminded in the wrong account): it comes back as `other`, so the entry waits saying why.
- * Neither when there is none (as before the port).
+ * Neither when there is none (as before the port). A retry-safe call report (`receipt`) never
+ * follows: it is for its own session only.
  */
 export function targetOf(
   entry: ScheduleEntry,
@@ -107,7 +113,7 @@ export function targetOf(
 ): { item?: Item; other?: Item } {
   const own = items.find(i => i.key === entry.key)
   if (own) return { item: own }
-  if (!entry.pane || !entry.cwd) return {}
+  if (entry.receipt || !entry.pane || !entry.cwd) return {}
   const next = items.find(i => i.pane === entry.pane && i.session && !i.sleeping && folder(i.cwd) === folder(entry.cwd))
   if (!next) return {}
   const was = profileOf(entry.key)
