@@ -143,7 +143,8 @@ async function boardServer(t, cfg, panes, before = () => {}) {
   box.state({ 'api snapshot': { result: { snapshot: { panes, tabs: [], workspaces: [{ workspace_id: 'wA', label: 'Alpha' }] } } } })
   const port = await unusedPort()
   // The board itself runs in a herdr pane: that pane is not the call's.
-  const proc = box.run('server', { port, categories: [{ id: 'other', title: 'Other', color: 'gray' }], wakeUrl: null, refreshSec: 3600, ...cfg }, { HERDR_PANE_ID: 'wB:p1' })
+  // English whatever the system language: the tests read the board's texts.
+  const proc = box.run('server', { port, categories: [{ id: 'other', title: 'Other', color: 'gray' }], wakeUrl: null, refreshSec: 3600, language: 'en', ...cfg }, { HERDR_PANE_ID: 'wB:p1' })
   await until(() => proc.messages.some(m => m.ready))
   const url = `http://127.0.0.1:${port}`
   const board = async () => (await fetch(`${url}/api/board`)).json()
