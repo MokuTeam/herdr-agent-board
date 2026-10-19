@@ -273,10 +273,11 @@ Picked to start with, the first that fits: from a card, that session's profile, 
 choose; the lane's usual profile; the profile last used in that folder (this browser keeps it);
 else none, and Start waits until you pick one. The pick shows in its color next to Start. A start
 in the board's own profile (the one its `CLAUDE_CONFIG_DIR` points to) leaves the env as the board
-got it; any other profile gets `CLAUDE_CONFIG_DIR=<its folder>` on the new tab, through
-`herdr tab create --env`, which needs herdr 0.9.5 or newer. The plugin itself still runs on herdr
-0.9.2; there only such a start fails, saying so, and no Claude is started. What the board refuses
-and the "wrong profile" check: [New sessions](#new-sessions).
+got it; any other profile gets `CLAUDE_CONFIG_DIR=<its folder>` through herdr's `--env`
+(`tab create`, or `workspace create` for a new workspace; with `launch.command`, in its process
+env instead of on the tab). herdr's `--env` needs herdr 0.9.5 or newer. The plugin itself still
+runs on herdr 0.9.2; there only a start that needs herdr's `--env` fails, saying so, and no Claude
+is started. What the board refuses and the "wrong profile" check: [New sessions](#new-sessions).
 
 **Helpers and forks keep their parent's profile.** "New here" from a card starts in that card's
 profile and no other. `spawn-agent`, run by an agent, starts the new session in the agent's own
@@ -293,10 +294,12 @@ profile; any other it refuses, saying why. The rules are under [Schedule](#sched
 also wakes sessions by itself (after its idle hour put one to sleep, or for a Telegram message),
 which the board cannot stop. So start a work session where its pane carries the profile:
 
-- From the board: the new-session window, "New here" on a work card, or `spawn-agent` (a work
-  agent's helpers too). The new tab has `CLAUDE_CONFIG_DIR`, so every wake resumes in work, and
-  the board, which records the pane, wakes it too (while herdr shows the pane still holds the
-  terminal it opened).
+- From the board: the new-session window or "New here" on a work card, with the default launcher
+  or `launch.agent`, or `spawn-agent` (a work agent's helpers too). The new tab has
+  `CLAUDE_CONFIG_DIR`, so every wake resumes in work, and the board, which records the pane, wakes
+  it too (while herdr shows the pane still holds the terminal it opened). A `launch.command`'s
+  panes are not recorded, so the board does not wake them, and herdr-wake resumes in work only if
+  your command puts the variable in the pane's shell.
 - Or in a pane whose shell has the variable exported (`export CLAUDE_CONFIG_DIR=~/.claude-work`,
   then `claude`): herdr-wake's own wakes resume there in work. The board cannot see a shell's env,
   so it does not wake such a session itself: wake it in herdr.
