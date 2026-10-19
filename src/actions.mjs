@@ -2,9 +2,51 @@
 // returns { ok: true } or { ok: false, error } with a message for the user.
 import { execFile } from 'node:child_process'
 import { hostname } from 'node:os'
+import { liveSessions } from './claude.mjs'
 import { herdr, herdrText } from './herdr.mjs'
 import { t } from './lang.mjs'
 import { inputDraft } from './screen.mjs'
+
+/**
+ * Whether herdr-wake answers, which a restart needs: { ok } or { ok: false, why, error }, why the
+ * reason as it came (empty when wakeUrl is not set) and error a message for the user.
+ */
+export async function wakeAnswers(cfg) {
+  if (!cfg.wakeUrl) return { ok: false, why: '', error: t('err.restart.noWake') }
+  let why
+  try {
+    const res = await fetch(`${String(cfg.wakeUrl).replace(/\/+$/, '')}/sleeping`, { signal: AbortSignal.timeout(5000) })
+    if (res.ok) return { ok: true }
+    why = `HTTP ${res.status}`
+  } catch (err) {
+    why = err.cause?.code || err.message
+  }
+  return { ok: false, why, error: t('err.restart.wakeDown', { url: cfg.wakeUrl, why }) }
+}
+
+/**
+ * Whether a session can be put to sleep now, for a restart: { ok, status } (herdr's status as just
+ * read) or { ok: false, why }, why being 'gone' (another session in its pane), 'busy' (herdr or
+ * Claude says it works), 'dialog', 'draft' (the user's unsent text in its input box), 'tasks' (its
+ * turn is over but a background command or a Monitor still runs: Claude's own registry says
+ * `shell`, and herdr-wake keeps such a session up), or herdr's error.
+ */
+export async function readyToSleep(item) {
+  try {
+    const agent = (await herdr(['agent', 'get', item.pane]))?.agent
+    if (!agent || (agent.agent_session?.value ?? null) !== (item.session ?? null)) return { ok: false, why: 'gone' }
+    if (agent.agent_status === 'blocked') return { ok: false, why: 'dialog' }
+    if (agent.agent_status === 'working') return { ok: false, why: 'busy' }
+    const reg = liveSessions().get(item.session)?.status
+    if (reg === 'busy') return { ok: false, why: 'busy' }
+    if (reg === 'shell') return { ok: false, why: 'tasks' }
+    const draft = inputDraft(await herdrText(['agent', 'read', item.pane, '--source', 'recent', '--lines', '40', '--ansi'], 10_000))
+    if (draft === null) return { ok: false, why: 'dialog' }
+    return draft === '' ? { ok: true, status: agent.agent_status } : { ok: false, why: 'draft' }
+  } catch (err) {
+    return { ok: false, why: t('err.restart.herdr', { why: err.message }) }
+  }
+}
 
 /** Wake a session herdr-wake put to sleep (takes 10 to 30 s). */
 export async function wake(cfg, item) {

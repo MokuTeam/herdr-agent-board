@@ -14,6 +14,10 @@
 //   board every <cron> <text>    the same on a cron schedule (5 fields, quoted)
 //   --idle (remind, every)   wait until the session is free; by default it arrives on time,
 //                            queued into a running turn
+//   board restart [text]     once this turn is over and the session is free, the board has
+//                            herdr-wake put it to sleep and wake it again (MCP servers, settings,
+//                            hooks and skills load anew, the conversation stays), then types
+//                            "[board reminder; restarted as you asked] <text>" into it
 //   board schedule [--all]   this session's entries (every session's)
 //   board unschedule <id|all>    removes an entry (all: every entry of this session)
 //   board call-report --session <id> --file <report.md> [--report-id <stable-id>]
@@ -24,18 +28,20 @@
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { enqueueReport, getReceipt, MAX_REPORT_BYTES, reportHash, reportIdentity } from './call-receipts.mjs'
 import { closeSync, openSync, readFileSync, readSync } from 'node:fs'
+import { wakeAnswers } from './actions.mjs'
 import { categoryFor, categoryInfo, CONFIG_FILE, editCategories, laneRank, loadConfig } from './config.mjs'
 import { liveSessions } from './claude.mjs'
 import { snapshot } from './herdr.mjs'
 import { t } from './lang.mjs'
 import { COLUMNS, collect, noteOf, statusText } from './model.mjs'
 import { BOARD_FILE } from './paths.mjs'
-import { addEntry, listEntries, MAX_REPORT, removeEntry } from './schedule.mjs'
+import { addEntry, askRestart, listEntries, MAX_REPORT, removeEntry } from './schedule.mjs'
+import { promptOf } from './scheduler.mjs'
 import { readCard, writeCard } from './store.mjs'
 import { nextRun, parseCron, parseWhen, shortestGap } from './when.mjs'
 import { shortWhen } from '../web/when.js'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | doctor] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | doctor] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -142,11 +148,21 @@ function fromNow(ms, now) {
 }
 const clip = (s, n = 60) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 
+/** How far a restart got, for its line. */
+function restartState(e) {
+  if (e.failed) return `did not happen (${e.failed}), tells the session once it is free`
+  if (e.step === 'note') return 'restarted, the note goes in once the session is free'
+  if (e.step) return 'under way'
+  const held = { tasks: 'background tasks run', draft: 'unsent text in its input box', dialog: 'a dialog is open', gone: 'the session is not on the board' }[e.why]
+  const refused = e.attempts && e.why && e.why !== 'busy' ? ` (herdr-wake refused, tries again: ${e.why})` : ''
+  return `once the session is free${held ? ` (waits: ${held})` : refused}`
+}
+
 function entryLine(e, now, withSession) {
-  const parts = [e.id, `${stamp(e.next)} (${fromNow(e.next, now)})`, e.cron ? `every "${e.cron}"` : 'once', e.idle ? 'when free' : 'on time']
+  const parts = e.kind === 'restart' ? [e.id, `restart, asked ${stamp(e.created ?? e.next)}`, restartState(e)] : [e.id, `${stamp(e.next)} (${fromNow(e.next, now)})`, e.cron ? `every "${e.cron}"` : 'once', e.idle ? 'when free' : 'on time']
   if (withSession) parts.push(e.name || e.key)
-  if (e.pendingSince) parts.push(`due, waits for the session since ${stamp(e.pendingSince)}`)
-  parts.push(clip(e.text, 80))
+  if (e.pendingSince && e.kind !== 'restart') parts.push(`due, waits for the session since ${stamp(e.pendingSince)}`)
+  if (e.text) parts.push(clip(e.text, 80))
   return parts.join(' · ')
 }
 
@@ -279,6 +295,8 @@ async function main() {
       const e = addEntry({ ...(await entryFor(s)), ...mode(), text: msg, cron: cron.expr, next, by: 'agent' })
       return console.log(`ok · every ${e.id} "${cron.expr}", next ${stamp(next)} (${fromNow(next, now)}${modeText()}): ${clip(msg)} · cancel: board unschedule ${e.id}${await schedulerNote()}`)
     }
+    case 'restart':
+      return restart(s)
     case 'schedule': {
       const list = listEntries().filter(e => e.key === s.key)
       if (!list.length) return console.log('nothing scheduled for this session')
@@ -298,6 +316,32 @@ async function main() {
   const cat = readCard(s.key)?.category
   const extra = cat && !cfg.categories.some(c => c.id === cat) ? ` (new lane "${categoryInfo(cfg, cat).title}")` : ''
   console.log(`ok · ${line(s.key, s.cwd)}${extra}`)
+}
+
+/**
+ * `board restart [note]`: the session restarted once it is free, a schedule entry of kind
+ * 'restart' (scheduler.mjs). Refused at once without herdr-wake, which does the restart, and
+ * outside herdr; asked again, the restart already on its way takes the new note.
+ */
+async function restart(s) {
+  // A session given by its id: its pane, from the board's own idea of it.
+  if (!s.pane && target) {
+    const item = (await collect(cfg).catch(() => [])).find(i => i.key === s.key || i.session === s.key)
+    if (item) s = { ...s, pane: item.pane, cwd: item.cwd, name: item.name }
+  }
+  if (!s.pane) throw new Error(`board restart works for a session in a herdr pane, and ${target ? `herdr has none for "${target}"` : 'this one runs outside herdr'}; nothing was scheduled`)
+  const up = await wakeAnswers(cfg)
+  if (!up.ok) {
+    const what = up.why ? `herdr-wake, which does not answer at ${cfg.wakeUrl} (${up.why})` : "herdr-wake, and wakeUrl in the board's config.json is empty"
+    throw new Error(`a restart needs ${what}; nothing was scheduled. Ask the user to restart this session by hand: /exit in it, then claude --resume ${s.key} in the same pane`)
+  }
+  const { entry, again } = askRestart({ ...(await entryFor(s)), text, by: 'agent' })
+  const own = !entry.from
+  const prompt = clip(promptOf(entry, Date.now()), 160)
+  const head = again ? `ok · restart ${entry.id} is on its way already${text ? ', with this note' : ''}` : `ok · restart ${entry.id}`
+  const turn = own ? 'once this turn is over and the session is free' : 'once the session is free'
+  const stops = own ? ' · end your turn now. It waits for background commands and Monitor to end (10 min at most, then tells you it did not happen); CronCreate and ScheduleWakeup jobs die with it' : ''
+  return console.log(`${head}: ${turn}, Claude exits and resumes in the same pane (MCP servers, settings, hooks, skills and CLAUDE.md load anew, the conversation stays), then gets "${prompt}"${stops} · cancel: board unschedule ${entry.id}${await schedulerNote()}`)
 }
 
 /**

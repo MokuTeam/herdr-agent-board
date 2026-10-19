@@ -11,7 +11,7 @@ import http from 'node:http'
 import { extname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { focus, raiseTerminal, send, sleepSession, wake } from './actions.mjs'
+import { focus, raiseTerminal, send, sleepSession, wake, wakeAnswers } from './actions.mjs'
 import { answerPermission, answerQuestions } from './answer.mjs'
 import { checkoutChanges, isCheckout } from './changes.mjs'
 import { searchHistory } from './history.mjs'
@@ -31,7 +31,7 @@ import { mokupilotCommand, startCall } from './mokupilot.mjs'
 import { busy, COLUMNS, collect, forgetSleepers, PINS } from './model.mjs'
 import { parseDialog, publicDialog } from './questions.mjs'
 import { CARDS_DIR, ROOT, STATE_DIR } from './paths.mjs'
-import { listEntries, readLog, removeEntry, SCHEDULE_DIR, updateEntry } from './schedule.mjs'
+import { askRestart, getEntry, listEntries, readLog, removeEntry, SCHEDULE_DIR, updateEntry } from './schedule.mjs'
 import { startScheduler } from './scheduler.mjs'
 import { checkSetup, gatherFacts, todo } from './setup.mjs'
 import { writeCard } from './store.mjs'
@@ -306,6 +306,17 @@ export function startServer({ cfg, log = () => {} } = {}) {
         return item.sleeping ? wake(cfg, item).finally(forgetSleepers) : { ok: true }
       case 'sleep':
         return sleepSession(cfg, item).finally(forgetSleepers)
+      case 'restart': {
+        // The scheduler does it once the session is free (a schedule entry of kind 'restart'):
+        // herdr-wake puts it to sleep and wakes it again. Asleep, waking it is the restart.
+        if (!item.session || !item.pane || item.agent !== 'claude') return { ok: false, error: t('err.restart.notClaude', { name: item.name }) }
+        if (item.sleeping) return { ok: false, error: t('err.restart.asleep', { name: item.name }) }
+        const up = await wakeAnswers(cfg)
+        if (!up.ok) return up
+        const { entry, again } = askRestart({ key: item.key, name: item.name, pane: item.pane, ...(item.cwd && { cwd: item.cwd }), by: 'user' })
+        log(`restart ${item.name}: ${again ? 'on its way already' : `asked, ${entry.id}`}`)
+        return { ok: true, id: entry.id, again }
+      }
       // A MokuPilot call whose agent is a fork of this session; no herdr in it.
       case 'mokupilot':
         return startCall(cfg, item)
@@ -581,6 +592,8 @@ export function startServer({ cfg, log = () => {} } = {}) {
         if (req.headers['x-board'] !== '1') return json(403, { error: 'header' })
         const body = await readBody(req)
         const id = String(body.id ?? '')
+        // A restart always waits until the session is free.
+        if (body.op === 'mode' && getEntry(id)?.kind === 'restart') return json(400, { ok: false, error: t('err.restart.mode') })
         // cancel: remove the entry; mode: on time (idle false) or when the session is free.
         const done =
           body.op === 'cancel' ? removeEntry(id)
@@ -668,7 +681,7 @@ export function startServer({ cfg, log = () => {} } = {}) {
           const origin = req.headers.origin
           if (['answer', 'permit', 'mokupilot'].includes(m[2]) && origin && origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`) return json(403, { error: 'origin' })
           // Actions that go through herdr wait for a board that can reach it; card edits and the rest do not.
-          if (['focus', 'wake', 'sleep', 'message', 'answer', 'permit'].includes(m[2]) && refuseStale()) return json(409, { ok: false, error: t('mobile.readOnly') })
+          if (['focus', 'wake', 'sleep', 'restart', 'message', 'answer', 'permit'].includes(m[2]) && refuseStale()) return json(409, { ok: false, error: t('mobile.readOnly') })
           const body = await readBody(req)
           if (m[2] === 'rename' && body.claude && refuseStale()) return json(409, { ok: false, error: t('mobile.readOnly') })
           const r = await act(item, m[2], body)

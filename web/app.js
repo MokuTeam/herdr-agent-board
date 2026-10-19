@@ -50,6 +50,7 @@ const ICON = {
   bolt: '<svg viewBox="0 0 20 20"><path d="M11 2.5 4.5 11H10l-1 6.5L15.5 9H10Z"/></svg>',
   phone: '<svg viewBox="0 0 20 20"><path d="M6.6 3.5H4.8A1.8 1.8 0 0 0 3 5.4c.3 6 5.6 11.3 11.6 11.6a1.8 1.8 0 0 0 1.9-1.8v-1.8a1 1 0 0 0-.8-1l-2.6-.6a1 1 0 0 0-1 .3l-1 1.2a10 10 0 0 1-4.8-4.8l1.2-1a1 1 0 0 0 .3-1l-.6-2.6a1 1 0 0 0-1-.8Z"/></svg>',
   hourglass: '<svg viewBox="0 0 20 20"><path d="M6 3h8M6 17h8M7 3v2.6c0 1.2.6 2.1 1.6 2.8L10 9.4l1.4-1c1-.7 1.6-1.6 1.6-2.8V3M7 17v-2.6c0-1.2.6-2.1 1.6-2.8l1.4-1 1.4 1c1 .7 1.6 1.6 1.6 2.8V17"/></svg>',
+  restart: '<svg viewBox="0 0 20 20"><path d="M4.6 8.6a5.6 5.6 0 0 1 10.3-1.4M15.4 11.4a5.6 5.6 0 0 1-10.3 1.4"/><path d="M15.4 3.7v3.6h-3.6M4.6 16.3v-3.6h3.6"/></svg>',
   // Sessions working together: who started it, whom it started, a message out and in.
   from: '<svg viewBox="0 0 20 20"><path d="M8 4.5 4.5 8 8 11.5"/><path d="M4.5 8H12a3.5 3.5 0 0 1 3.5 3.5v4"/></svg>',
   spawned: '<svg viewBox="0 0 20 20"><path d="M4.5 4v5.5A3.5 3.5 0 0 0 8 13h7.5"/><path d="M12 9.5 15.5 13 12 16.5"/></svg>',
@@ -125,7 +126,8 @@ const colOf = it => state.movedCol.get(it.key)?.col ?? it.column
 /** A turn is on: it works, or a dialog stopped it midway. */
 const inTurn = it => it.status === 'working' || it.status === 'blocked'
 const catInfo = id => state.data.categories.find(c => c.id === id) ?? { id, title: id, color: 'var(--gray)' }
-const compact = it => it.sleeping && it.column === 'idle'
+// A restart on its way keeps the card whole: it says so, and does not fold up while Claude is out.
+const compact = it => it.sleeping && it.column === 'idle' && !restartOf(it.key)
 
 function visibleItems() {
   const q = state.query.trim().toLowerCase()
@@ -148,6 +150,7 @@ function onData(data) {
   if (state.version && data.version && data.version !== state.version) return location.reload()
   state.version = data.version
   state.data = data
+  noteRestarts(data.scheduleLog)
   // Right after a switch from this page, a board sent before it may still come in: let it pass.
   const asked = state.langAsked && Date.now() - state.langAsked.at < 4000 ? state.langAsked.lang : null
   if (data.lang && data.lang !== t.lang && (!asked || data.lang === asked)) setLanguage(data.lang)
@@ -212,7 +215,7 @@ const connection = boardConnection({
 // needs fresh herdr data, or it would act on a session that may have moved on.
 const canMutate = () => state.connected && state.data.stale === false && state.data.lastSuccessfulRefreshAt != null
 const canEdit = () => !!state.connected
-const HERDR_ACTIONS = ['focus', 'wake', 'sleep', 'message', 'answer', 'permit']
+const HERDR_ACTIONS = ['focus', 'wake', 'sleep', 'restart', 'message', 'answer', 'permit']
 function syncAvailability() {
   const blocked = !canMutate()
   const missing = !!state.open && (!itemOf(state.open) || state.detailState?.status === 'missing')
@@ -220,7 +223,7 @@ function syncAvailability() {
     banner.hidden = !blocked
     banner.textContent = t(canEdit() ? 'mobile.readOnly' : 'live.off')
   }
-  for (const element of document.querySelectorAll('#sheet-focus, #sheet-sleep, #sheet-wake, [data-act="focus"], [data-act="sleep"]')) element.disabled = blocked || (missing && !!element.closest('#sheet')) || (element.id === 'sheet-sleep' && inTurn(itemOf(state.open) ?? {}))
+  for (const element of document.querySelectorAll('#sheet-focus, #sheet-sleep, #sheet-restart, #sheet-wake, [data-act="focus"], [data-act="sleep"]')) element.disabled = blocked || (missing && !!element.closest('#sheet')) || (element.id === 'sheet-sleep' && inTurn(itemOf(state.open) ?? {})) || (element.id === 'sheet-restart' && restartPending(state.open))
   for (const element of document.querySelectorAll('#attach, #cat-new, #sheet-mokupilot, #sheet-card button:not(.rel-chip):not(.rel-more), #sheet-card input, #cats-sheet button:not([data-close]):not([data-layout]), #cats-sheet input, #sched-body .sched-x, #sched-body .sched-mode, [data-act="dismiss"]')) element.disabled = !canEdit()
   // New sessions go through herdr: they wait for fresh data like going to a session does.
   for (const element of document.querySelectorAll('#new-session, #sheet-new, .lane-new')) {
@@ -280,6 +283,39 @@ async function sleepSession(key) {
   const r = await act(key, 'sleep')
   setBusy(key, null)
   toast(r.ok ? t('asleep', { name: it.name }) : r.error, !r.ok)
+}
+
+/**
+ * Claude exits and resumes in its pane once the session is free, through herdr-wake: MCP
+ * servers, settings, hooks and skills load anew, the conversation stays. The scheduler does it
+ * (a schedule entry of kind 'restart'), so the card says how it goes and a board restart in the
+ * middle loses nothing.
+ */
+async function restartSession(key) {
+  const it = itemOf(key)
+  if (!it || it.sleeping) return
+  const r = await act(key, 'restart')
+  toast(r.ok ? t(r.again ? 'restart.again' : 'restart.asked', { name: it.name }) : r.error, !r.ok)
+}
+
+/**
+ * How the restarts asked for on this page went, once each: the log has a record of every run;
+ * those already there when the page opened are old news.
+ */
+let restartsSeen = null
+function noteRestarts(log) {
+  const restarts = (log ?? []).filter(r => r.kind === 'restart' && r.by === 'user')
+  const first = !restartsSeen
+  restartsSeen ??= new Set()
+  for (const r of restarts) {
+    const id = `${r.id}@${r.at}`
+    if (restartsSeen.has(id)) continue
+    restartsSeen.add(id)
+    if (first) continue
+    const name = itemOf(r.key)?.name || r.name || t('session')
+    if (r.result === 'sent') toast(t('restart.done', { name }))
+    else toast(t('restart.failed', { name, why: logWhy(r) }), true)
+  }
 }
 
 // The page's own dictionary, so a switch from here shows at once (the server's titles come from the same one).
@@ -549,9 +585,41 @@ const dismissable = it => it.attention === 'ask' || it.attention === 'question' 
 const schedulesOf = key => (state.data.schedules ?? []).filter(e => e.key === key)
 const overdue = e => e.next <= Date.now()
 
+/**
+ * The restart of a session on its way, if one is (the scheduler does it once the session is free).
+ * One that gave up and still has to tell the session so does not stop another being asked for.
+ */
+const restartOf = key => (state.data.schedules ?? []).find(e => e.kind === 'restart' && e.key === key)
+const restartPending = key => !!restartOf(key) && !restartOf(key).failed
+/** Claude is out and coming back: put to sleep, or being woken. */
+const restartOn = e => (e.step === 'sleep' || e.step === 'wake') && !e.failed
+
+/** How a restart stands, in a line: under way, waiting for the session (and on what), or given up. */
+function restartText(e) {
+  if (e.failed) return t('restart.title.failed', { why: e.failed })
+  if (e.step === 'note') return t('restart.title.note')
+  if (e.step) return t('restart.title.on')
+  const held = { tasks: 'sched.tasks', draft: 'sched.draft', dialog: 'sched.dialog', gone: 'sched.gone' }[e.why]
+  if (held) return `${t('restart.title.wait')}. ${t(held)}`
+  // What herdr-wake said when it refused, until the session is held for one of the reasons above.
+  return e.attempts && e.why && e.why !== 'busy' ? t('restart.title.retry', { why: e.why }) : t('restart.title.wait')
+}
+
+/**
+ * A restart on its way, on a card: a line like the one for the tool at work, quiet while it waits
+ * for the session (and says on what), tinted with turning arrows while Claude exits and comes back.
+ * The card stays whole meanwhile, also while the session is asleep for a moment (compact).
+ */
+function restartLine(it) {
+  const e = restartOf(it.key)
+  if (!e) return ''
+  const on = restartOn(e)
+  return `<div class="now restart${on ? ' on' : ''}">${ICON.restart}<span class="tool">${esc(t(on ? 'restart.badge.on' : 'restart.badge.wait'))}</span><span class="detail">${esc(restartText(e))}</span></div>`
+}
+
 /** A clock by the name with the soonest time, orange while a due one waits for the session. */
 function alarmBadge(it) {
-  const list = schedulesOf(it.key)
+  const list = schedulesOf(it.key).filter(e => e.kind !== 'restart')
   if (!list.length) return ''
   const first = list[0]
   const title = t('sched.badge', { n: list.length, when: longWhen(first.next, t), text: plain(entryText(first)) })
@@ -589,7 +657,7 @@ function cardHTML(it) {
       ? `<div class="now">${ICON.spin}<span class="tool">${esc(tool.label)}</span><span class="detail">${esc(tool.detail)}</span></div>`
       : `<div class="now idle">${ICON.spin}<span class="tool">${esc(t('card.thinking'))}</span><span class="detail">${tool ? esc(t('card.after', { tool: tool.label })) : ''}</span></div>`
   }
-  body += helpersChip(it) + relationsLine(it)
+  body += restartLine(it) + helpersChip(it) + relationsLine(it)
   // Started from the board and not done starting: how it goes, or why it failed.
   if (it.launch) body += launchUI.note(it.launch)
   return top + body + actions
@@ -1194,6 +1262,12 @@ function renderSheetHead() {
   sleep.hidden = it.sleeping || !it.session
   sleep.disabled = inTurn(it)
   sleep.title = t(inTurn(it) ? 'sheet.sleepBusy' : 'sheet.sleepHint')
+  // It waits until the session is free by itself: a turn does not gray it, a restart on its way does.
+  const restart = $('#sheet-restart')
+  const pending = restartPending(it.key) && restartOf(it.key)
+  restart.hidden = it.sleeping || !it.session || it.agent !== 'claude'
+  restart.disabled = !canMutate() || !!pending
+  restart.title = pending ? `${t('sheet.restartPending')}. ${restartText(pending)}` : t('sheet.restartHint')
 }
 
 const sheetCard = $('#sheet-card')
@@ -1261,8 +1335,9 @@ function linkedSessions(it) {
   return [...by.values()].filter(p => itemOf(p.key)).sort((a, b) => b.from - a.from || b.at - a.at)
 }
 
-/** What a schedule entry says, in a line: a MokuPilot call's results by their title. */
+/** What a schedule entry says, in a line: a MokuPilot call's results by their title, a restart with its note. */
 function entryText(e) {
+  if (e.kind === 'restart') return e.text ? `${t('restart.entry')}: ${e.text}` : t('restart.entry')
   return e.kind === 'call' ? `${t('notice.call')}: ${callTitle(e.text)}` : e.text
 }
 
@@ -1271,6 +1346,11 @@ function scheduleRow(it) {
   const list = schedulesOf(it.key)
   if (!list.length) return ''
   const shown = list.slice(0, 3).map(e => {
+    // A restart has no time of its own: it goes once the session is free, and says how it stands.
+    if (e.kind === 'restart') {
+      const on = restartOn(e)
+      return `<div class="sched-mini restart" data-id="${esc(e.id)}"><span class="when${on ? ' on' : ''}" title="${esc(restartText(e))}">${ICON.restart}${esc(t(on ? 'restart.badge.on' : 'restart.badge.wait'))}</span><span class="text" title="${esc(restartText(e))}">${esc(e.text || restartText(e))}</span>${cancelButton(e)}</div>`
+    }
     const what = `${e.cron ? ICON.repeat : ICON.alarm}${esc(capital(longWhen(e.next, t), t))}`
     return `<div class="sched-mini" data-id="${esc(e.id)}"><span class="when${overdue(e) ? ' due' : ''}" title="${esc(e.cron ? `${t('sched.repeat')}: ${e.cron}` : t('sched.once'))}">${what}</span><span class="text" title="${esc(entryText(e))}">${esc(entryText(e))}</span>${modeButton(e, true)}${cancelButton(e)}</div>`
   })
@@ -1527,11 +1607,12 @@ $('#sheet-wake').addEventListener('click', async () => {
   toast(r.ok ? t('toast.woke') : r.error, !r.ok)
 })
 $('#sheet-sleep').addEventListener('click', () => state.open && sleepSession(state.open))
+$('#sheet-restart').addEventListener('click', () => state.open && restartSession(state.open))
 $('#sheet-more').addEventListener('click', e => {
   const button = e.currentTarget, rect = button.getBoundingClientRect()
-  const items = ['sheet-term', 'sheet-mokupilot', 'sheet-wake', 'sheet-sleep', 'sheet-changes', 'sheet-history', 'sheet-new']
+  const items = ['sheet-term', 'sheet-mokupilot', 'sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-changes', 'sheet-history', 'sheet-new']
     .map(id => document.getElementById(id)).filter(el => el && !el.hidden)
-    .map(el => ({ id: el.id, label: el.textContent.trim(), disabled: el.disabled, reason: el.disabled ? (!canMutate() && ['sheet-wake', 'sheet-sleep', 'sheet-new'].includes(el.id) ? t('mobile.readOnly') : el.title || t('mobile.readOnly')) : '' }))
+    .map(el => ({ id: el.id, label: el.textContent.trim(), disabled: el.disabled, reason: el.disabled ? (!canMutate() && ['sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-new'].includes(el.id) ? t('mobile.readOnly') : el.title || t('mobile.readOnly')) : '' }))
   menu.open(items, { x: rect.right, y: rect.top, source: e.detail === 0 ? 'keyboard' : matchMedia('(pointer: coarse)').matches ? 'touch' : 'mouse', origin: button, label: t('sheet.more'), onPick: id => {
     const action = document.getElementById(id)
     if (!action || action.disabled || action.hidden) return
@@ -2133,6 +2214,7 @@ const cancelButton = e => {
 
 /** Why a due entry has not gone out yet. */
 function pendingText(e) {
+  if (e.kind === 'restart') return restartText(e)
   if (!e.pendingSince) return ''
   const own = { gone: 'sched.gone', draft: 'sched.draft', dialog: 'sched.dialog', busy: 'sched.pending' }
   return t(own[e.why] ?? (e.why ? 'sched.failed' : 'sched.pending'), { why: e.why })
@@ -2147,25 +2229,30 @@ function entryHTML(e, when) {
   const by = e.from && e.from.key !== (e.movedFrom?.key ?? e.key) ? t('sched.by', { name: itemOf(e.from.key)?.name || e.from.name || e.from.key.slice(0, 8) }) : ''
   const stats = [e.cron && `<code>${esc(e.cron)}</code>`, e.runs && esc(t('sched.runs', { n: e.runs })), e.missed && esc(t('sched.missedN', { n: e.missed })), by && esc(by)].filter(Boolean).join(' · ')
   return `<div class="sched-entry${pending ? ' waiting' : ''}" data-id="${esc(e.id)}" data-key="${esc(e.key)}">
-    <div class="sched-time"><b>${esc(when(e))}</b><span>${e.cron ? `${ICON.repeat}${esc(t('sched.repeat'))}` : esc(t('sched.once'))}</span></div>
+    <div class="sched-time"><b>${esc(when(e))}</b><span>${e.kind === 'restart' ? `${ICON.restart}${esc(t('restart.entry'))}` : e.cron ? `${ICON.repeat}${esc(t('sched.repeat'))}` : esc(t('sched.once'))}</span></div>
     <div class="sched-main">
       <button class="sched-who" data-open="${esc(e.key)}" style="--lane:${it ? catInfo(catOf(it)).color : 'var(--gray)'}"${it ? ` title="${esc(t('sched.open'))}"` : ' disabled'}>${esc(it?.name || e.name || t('session'))}</button>
-      <div class="sched-text">${esc(entryText(e))}</div>
+      <div class="sched-text">${esc(e.kind === 'restart' ? e.text || t(e.by === 'user' ? 'restart.byUser' : 'restart.noNote') : entryText(e))}</div>
       <div class="sched-stats">${modeButton(e)}${stats ? `<span>${stats}</span>` : ''}</div>${note ? `<div class="sched-state${pending ? '' : ' muted'}">${esc(note)}</div>` : ''}
     </div>
     ${cancelButton(e)}
   </div>`
 }
 
+/** Why a run did not go out: the scheduler's word for it in a line, or the reason as it came. */
+const logWhy = r => (['busy', 'gone', 'draft', 'dialog', 'tasks'].includes(r.why) ? t(`sched.why.${r.why}`) : r.why ?? '')
+
 function logHTML(r) {
   const it = itemOf(r.key)
   const late = r.at - r.due
   const note =
     r.result === 'dropped' ? t('sched.why.dropped', { n: r.n ?? 3 })
-    : r.result === 'missed' ? (['busy', 'gone', 'draft', 'dialog'].includes(r.why) ? t(`sched.why.${r.why}`) : r.why)
+    : r.result === 'missed' || r.result === 'failed' ? logWhy(r)
+    : r.kind === 'restart' ? ''
     : late > 120_000 ? t('sched.lateBy', { late: span(late, t) }) : ''
   const icon = { sent: ICON.check, missed: '!', dropped: '×' }[r.result] ?? '!'
-  return `<div class="log-row ${esc(r.result)}"><span class="log-icon" title="${esc(t(`sched.${r.result === 'sent' || r.result === 'dropped' ? r.result : 'missed'}`))}">${icon}</span><span class="log-when">${esc(capital(longWhen(r.at, t), t))}</span><span class="log-what"><b>${esc(it?.name || r.name || t('session'))}</b> ${esc(entryText(r))}</span>${note ? `<span class="log-note">${esc(note)}</span>` : ''}</div>`
+  const title = { sent: 'sched.sent', dropped: 'sched.dropped', failed: 'sched.failedRun' }[r.result] ?? 'sched.missed'
+  return `<div class="log-row ${esc(r.result)}"><span class="log-icon" title="${esc(t(title))}">${icon}</span><span class="log-when">${esc(capital(longWhen(r.at, t), t))}</span><span class="log-what"><b>${esc(it?.name || r.name || t('session'))}</b> ${esc(entryText(r))}</span>${note ? `<span class="log-note">${esc(note)}</span>` : ''}</div>`
 }
 
 function renderSchedule() {
@@ -2234,6 +2321,8 @@ function collapse(el) {
 
 /** On time or when the session is free: a pill in the panel, an icon in the sheet. */
 function modeButton(e, short = false) {
+  // A restart always waits until the session is free.
+  if (e.kind === 'restart') return ''
   const label = t(e.idle ? 'sched.mode.idle' : 'sched.mode.onTime')
   const hint = t(e.idle ? 'sched.mode.idleHint' : 'sched.mode.onTimeHint')
   return `<button class="sched-mode${e.idle ? ' idle' : ''}${short ? ' short' : ''}" data-sched-mode="${esc(e.id)}" title="${esc(hint)}" aria-label="${esc(label)}" aria-pressed="${!e.idle}">${e.idle ? ICON.hourglass : ICON.bolt}${short ? '' : `<span>${esc(label)}</span>`}</button>`
@@ -2553,6 +2642,7 @@ initBoardMenus({
       toast(r.ok ? t('toast.woke') : r.error, !r.ok)
     },
     sleep: key => sleepSession(key),
+    restart: key => restartSession(key),
     rename: (key, el) => (el?.isConnected ? startRename(key, el) : (openSheet(key), setTimeout(() => startRename(key, $('#sheet-name')), 380))),
     move: (key, to) => moveCard(key, to),
     dismiss: key => dismissAsk(key),
