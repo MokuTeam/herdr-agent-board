@@ -30,7 +30,11 @@ if (args[0] === '--late') {
     process.exit(1)
   }
   if (args.some(a => /\bhang\b/i.test(a))) {
-    spawn(process.execPath, [fileURLToPath(import.meta.url), `${out}.late`, '--late'], { stdio: 'ignore' })
+    // Without the sandbox's no-orphans flag: with it, on POSIX the descendant would die with this
+    // launcher, and the cut-off test could no longer tell whether the board ended the whole tree.
+    // Real launchers (PowerShell, bash) have no such flag. It still exits by itself after 2.5 s.
+    const { BUN_FEATURE_FLAG_NO_ORPHANS: _, ...env } = process.env
+    spawn(process.execPath, [fileURLToPath(import.meta.url), `${out}.late`, '--late'], { stdio: 'ignore', env })
     setInterval(() => {}, 1000)
   } else console.log('pane=wT:p7 name=Stand-in agent=stand-in')
 }
