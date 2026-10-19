@@ -1,9 +1,8 @@
 # Catch up with `main` @ f0cef14 (PRs #52–#59) — plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development. One task per
-> dispatch; each task's text below is its brief. Every task, fix and review is a **new** subagent
-> (latest Opus), never a resumed one. Lanes run **in parallel**, each in its own worktree; Task 10
-> merges them.
+> dispatch; each task's text below is its brief. Every task, fix and review is a **new** subagent,
+> never a resumed one. Lanes run **in parallel**, each in its own worktree; Task 10 merges them.
 
 **Goal:** port into `feature/ts-rework` (TS/Bun/React, with multi-profile and the start command per
 profile) the PRs `origin/main` merged after `513e441`, as upstream wrote them, **fast**: the PRs are
@@ -506,7 +505,7 @@ one commit each, plain sentences.
 
 ## Estimate
 
-Calibration from the last catch-up (Opus, sequential): #50 208 lines → 15 min; #48+#46+#47 220 →
+Calibration from the last catch-up (sequential): #50 208 lines → 15 min; #48+#46+#47 220 →
 25; #49 419 → 19; #51 995 (web, server, CLI) → 40 + 8 review; a fix round ~6 + re-review ~6; final
 review 14. Upstream lines are diff lines, tests and README included.
 
