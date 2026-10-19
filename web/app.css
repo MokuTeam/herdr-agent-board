@@ -826,15 +826,15 @@ div.notice, .notice > summary { display: flex; align-items: flex-start; gap: 7px
 .notice-body > pre { margin: 0; font: 11.5px/1.5 var(--mono); white-space: pre-wrap; }
 
 .composer { padding: 10px 14px 14px 18px; container: composer / inline-size; }
-/* One row that fits any panel: going to the session keeps its words, the tools beside it are
-   icons named by their tooltips until the row is wide enough to spell them out, and the rest
-   (starting something from the session, its sleep, restart and the like) waits under More at
+/* One row that fits any panel: going to the session keeps its words, the call and the tools
+   beside it are icons named by their tooltips until the row is wide enough to spell them out,
+   and the rest (history, a new session here, sleep, restart and the like) waits under More at
    the end, which lists whatever the row hides, in groups (app.js MORE). Going to the session
    gives up its words before the row would run over. */
 .composer-actions { display: flex; gap: 6px; margin-bottom: 10px; overflow-x: auto; scrollbar-width: none; }
 .composer-actions::-webkit-scrollbar { display: none; }
 .composer-actions > .button { flex: none; }
-.composer-actions > .button:not(#sheet-focus, #sheet-term, #sheet-changes, #sheet-history, #sheet-more) { display: none; }
+.composer-actions > .button:not(#sheet-focus, #sheet-mokupilot, #sheet-term, #sheet-changes, #sheet-more) { display: none; }
 #sheet-focus { flex: 0 1 auto; min-width: 0; }
 #sheet-focus > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 #sheet-more { justify-content: center; width: 30px; margin-left: auto; padding: 0; }
