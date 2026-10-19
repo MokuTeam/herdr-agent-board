@@ -3,6 +3,7 @@
 // (src/core/profile-tag.ts says which tag a card has). With fewer than two profiles shown there is
 // no switch, and every session shows, as before profiles. Then the Profiles panel's rows and the
 // folders it offers to add; with one profile folder there is no such panel.
+import { shownProfiles } from '../../../src/core/item-profile.ts'
 import { sameDir } from '../../../src/core/launch/names.ts'
 import type { ProfileTag } from '../../../src/core/profile-tag.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
@@ -11,8 +12,7 @@ import type { BoardProfile } from '../api/client.ts'
 /** One segment of the switch: "All profiles" (`all`), or a shown profile; `n`: its sessions on show. */
 export type ProfileOption = { id: string; title: string; color: string; n: number }
 
-const shownOf = (profiles: readonly BoardProfile[] | undefined): BoardProfile[] =>
-  (profiles ?? []).filter(p => !p.hidden)
+const shownOf = (profiles: readonly BoardProfile[] | undefined): BoardProfile[] => shownProfiles(profiles ?? [])
 
 /**
  * The switch: "All profiles" with every session on show (`visible`, whatever the switch picks),

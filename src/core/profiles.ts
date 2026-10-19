@@ -4,17 +4,21 @@
 // inherited reads, the listed profiles merged with the folders found on this computer, the folder
 // a start sets, the profile a launch from the board starts in, what a session's card is told about
 // its profile, the profile it reports, whether the board may wake it or call MokuPilot from it, and
-// the tag its card shows (profile-tag.ts).
+// the tag its card shows (profile-tag.ts). The profile a session's item says it runs in, and the
+// profiles shown, are item-profile.ts's, which the web page shares.
 //
 // Pure: the adapters find the folders and read the env and the config, and hand them in.
 import { posix, win32 } from 'node:path'
 import { validColor } from './categories.ts'
+import { itemProfile, shownProfiles } from './item-profile.ts'
 import { t } from './lang.ts'
 import { baseName, sameDir, uniqueSlug } from './launch/names.ts'
 import type { SpawnOptions } from './launch/spawn-args.ts'
 import type { Card, Item } from './types.ts'
 
-// The tag on a session's card: in a module of its own, which the web page bundles (no node:path).
+// The tag on a session's card, and the profiles shown: in modules of their own, which the web page
+// bundles (no node:path).
+export { shownProfiles } from './item-profile.ts'
 export { type ProfileTag, profileTag } from './profile-tag.ts'
 
 /** A profile as config.json lists it. Unknown fields survive. */
@@ -191,11 +195,6 @@ export function profileSet(list: Profile[], inheritedDir: string): ProfileSet {
   return { list, inheritedDir, inherited: profileForDir(list, inheritedDir) }
 }
 
-/** The profiles the owner has not hidden. */
-export function shownProfiles(list: readonly Profile[]): Profile[] {
-  return list.filter(p => !p.hidden)
-}
-
 /**
  * CLAUDE_CONFIG_DIR for a start in `target`: null when it is the inherited folder (the start leaves
  * the env exactly as inherited), else its folder.
@@ -216,8 +215,8 @@ export type LaunchTarget =
 
 /**
  * The profile a launch from the board starts in. Started from a session (`parent`, "New here"):
- * that session's profile (the only one shown when the card does not say, but never for a folder
- * no profile has, `profileFolder`), hidden or not, and no other. A parent whose profile is not
+ * that session's profile (itemProfile: the only one shown when the card does not say, but never
+ * for a folder no profile has, `profileFolder`), hidden or not, and no other. A parent whose profile is not
  * known, or none: the profile `asked` names, listed and shown; none asked is the only shown one,
  * else the owner chooses. Never a guess.
  */
@@ -233,8 +232,7 @@ export function launchTarget(
   })
   const shown = shownProfiles(set.list)
   if (parent) {
-    const only = shown.length === 1 && !parent.profileFolder ? shown[0] : undefined
-    const own = parent.profile ? set.list.find(p => p.id === parent.profile) : only
+    const own = itemProfile(parent, set.list)
     if (own) return asked === undefined || asked === own.id ? target(own) : { ok: false, error: 'parent', id: own.id }
     if (asked === undefined) return { ok: false, error: 'unknownParent', id: '' }
   }
@@ -354,20 +352,9 @@ export function sessionProfile(
   return { profile: list.length === 1 ? (list[0]?.id ?? null) : null }
 }
 
-/**
- * The profile a session runs in, as its item says: the one it names, or the only one shown when it
- * names none and reported no folder no profile has (a card from before profiles, or none yet, on a
- * board with one shown: as before profiles); else null (not known).
- */
-function itemProfile(item: Pick<Item, 'profile' | 'profileFolder'>, set: ProfileSet): Profile | null {
-  if (item.profile) return set.list.find(p => p.id === item.profile) ?? null
-  const shown = shownProfiles(set.list)
-  return shown.length === 1 && !item.profileFolder ? (shown[0] ?? null) : null
-}
-
 /** A session's profile in a message: its title, else the folder it reported, else "unknown profile". */
 export function profileLabel(item: Pick<Item, 'profile' | 'profileFolder'>, set: ProfileSet): string {
-  return itemProfile(item, set)?.title || item.profileFolder || t('profile.unknown')
+  return itemProfile(item, set.list)?.title || item.profileFolder || t('profile.unknown')
 }
 
 /**
@@ -391,7 +378,7 @@ export function mayWake(
   panes: ReadonlyMap<string, string>,
   opened: ReadonlyMap<string, string> = new Map(),
 ): WakeCheck {
-  const own = itemProfile(item, set)
+  const own = itemProfile(item, set.list)
   if (!own) return { ok: false, profile: profileLabel(item, set) }
   const other = item.pane ? opened.get(item.pane) : undefined
   if (other !== undefined && other !== own.id) {
@@ -407,6 +394,6 @@ export function mayWake(
  * be in: a call with a fork of it from any other would run in MokuPilot's account, not the session's.
  */
 export function inBoardProfile(item: Pick<Item, 'profile' | 'profileFolder'>, set: ProfileSet): boolean {
-  const own = itemProfile(item, set)
+  const own = itemProfile(item, set.list)
   return !!own && own.id === set.inherited?.id
 }

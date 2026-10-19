@@ -10,6 +10,7 @@ import { translator } from '../../src/core/i18n/translator.ts'
 import type { BoardCategory, BoardProfile } from '../../src/core/payload.ts'
 import type { LaunchView } from '../../src/core/types.ts'
 import type { LaunchContext } from '../../web/src/models/launch-form.ts'
+import { LAUNCH_PROFILES } from '../../web/src/models/launch-profile.ts'
 import { reducedMotion } from '../../web/src/models/spring.ts'
 import { item } from './support/board.tsx'
 import type { EventFields } from './support/fake-dom.ts'
@@ -716,6 +717,45 @@ describe('the profile', () => {
     // Another folder: nothing picked.
     expect(shots.at(-1)).not.toContain('aria-pressed="true" data-profile=')
     expect(goLine(shots.at(-1))).toContain('title="Choose a profile"')
+  })
+
+  test('another folder and Ctrl+Enter before its check: the profile it brings is shown, not sent', async () => {
+    const remembered: Step = async side => {
+      side.world.storage.set(LAUNCH_PROFILES, JSON.stringify({ '/srv/web': 'default', 'c:/work/acme': 'work' }))
+    }
+    const shots = await react([
+      remembered,
+      ...openAndSettle({ category: 'web' }, 'lane-new'),
+      type('cwd', 'C:\\Work\\acme'),
+      key('Enter', { ctrlKey: true }),
+      settle,
+      key('Enter', { ctrlKey: true }),
+      tick(),
+      settle,
+    ])
+    // Private beside Start, from the lane's folder, also once the other folder is typed (not checked yet).
+    for (const shot of [shots[4], shots[5]]) {
+      expect(shot).toContain('aria-pressed="true" data-profile="default"')
+      expect(shot).toContain(beside('Private', '#5856D6'))
+      expect(logLine(shot)).not.toContain('POST /api/launch ')
+    }
+    expect(fieldsLine(shots[5])).toContain('cwd="C:\\\\Work\\\\acme"')
+    // Ctrl+Enter checks the folder, which brings Work: nothing goes, Work shows beside Start.
+    for (const shot of [shots[6], shots[7]]) {
+      expect(logLine(shot)).toContain('POST /api/fs/dirs {"path":"C:\\\\Work\\\\acme","git":true}')
+      expect(logLine(shot)).not.toContain('POST /api/launch ')
+      expect(shot).toContain('aria-pressed="true" data-profile="work"')
+      expect(shot).toContain('aria-pressed="false" data-profile="default"')
+      expect(shot).toContain(beside('Work', '#30B0C7'))
+      expect(goLine(shot)).not.toContain('disabled')
+    }
+    // Pressed again, with Work shown: Work goes.
+    const sent = logLine(shots.at(-1))
+      .split(' | ')
+      .filter(line => line.startsWith('POST /api/launch {'))
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toContain('"cwd":"C:\\\\Work\\\\acme"')
+    expect(sent[0]).toContain('"profile":"work"}')
   })
 
   test('a card whose profile is unknown, or a refusal about the profile: the choice, nothing picked or sent unasked', async () => {

@@ -464,6 +464,8 @@ export function launchWindow(deps: LaunchWindowDeps) {
 
   async function submit(): Promise<void> {
     if (!s || s.sending) return
+    // The profile drawn as the user pressed Start: the only one a start may send.
+    const seen = s.profile
     // Enter can come before the folder was checked: check it now, then go on with that answer.
     const typed = cwd().trim()
     if (typed && folder.check()?.input !== typed) {
@@ -477,6 +479,9 @@ export function launchWindow(deps: LaunchWindowDeps) {
       $(`[name="${fieldOf(first)}"]`)?.focus()
       return
     }
+    // The check brought the folder's or the lane's profile while the choice is offered: nothing
+    // goes in a profile the user did not see; it is drawn, and Start is pressed again.
+    if (s.profile !== seen && (seen.offered || s.profile.offered)) return renderProfile()
     if (!deps.canMutate()) return deps.toast(t()('mobile.readOnly'), true)
     const st = s
     const body = startBody(fields(), {

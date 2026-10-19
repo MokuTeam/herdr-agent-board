@@ -1,12 +1,13 @@
 // The Claude profile a new session starts in: what the new-session window preselects and whether
 // it offers the choice, the profile last used in each folder (this browser keeps it), the row of
 // shown profiles and the tag beside Start, and what the start sends. A session started from a card
-// keeps the card's profile; a card whose profile the board does not know offers the choice with
-// nothing picked, as the server refuses to guess it (src/core/profiles.ts launchTarget). With one
-// profile shown and nothing unknown, the window and what it sends are as before profiles.
+// keeps the card's profile, by the server's own rule (src/core/item-profile.ts); a card whose
+// profile the board does not know offers the choice with nothing picked, as the server refuses to
+// guess it (src/core/profiles.ts launchTarget). With one profile shown and nothing unknown, the
+// window and what it sends are as before profiles.
+import { itemProfile, shownProfiles } from '../../../src/core/item-profile.ts'
 import { normDir } from '../../../src/core/launch/names.ts'
 import type { BoardCategory, BoardProfile } from '../../../src/core/payload.ts'
-import type { Item } from '../../../src/core/types.ts'
 import type { LaunchContext } from './launch-form.ts'
 
 /** The key the profile last used in each folder is kept under: { [normDir(cwd)]: profileId }. */
@@ -22,22 +23,6 @@ export interface ProfilePick {
   picked: string | null
   locked: boolean
   offered: boolean
-}
-
-const shownOf = (profiles: readonly BoardProfile[]): BoardProfile[] => profiles.filter(p => !p.hidden)
-
-/**
- * The profile a card's session runs in, as the server takes it (launchTarget): the one it names
- * when the list has it; with none named and no folder no profile has, the only one shown when one
- * is; else none (not known).
- */
-function cardProfile(
-  item: Pick<Item, 'profile' | 'profileFolder'>,
-  profiles: readonly BoardProfile[],
-): BoardProfile | undefined {
-  if (item.profile) return profiles.find(p => p.id === item.profile)
-  const shown = shownOf(profiles)
-  return shown.length === 1 && !item.profileFolder ? shown[0] : undefined
 }
 
 /**
@@ -57,10 +42,10 @@ export function profileStart(
     remembered: Record<string, string>
   },
 ): ProfilePick {
-  const shown = shownOf(s.profiles)
+  const shown = shownProfiles(s.profiles)
   const ask: ProfilePick = { picked: null, locked: false, offered: shown.length > 0 }
   if (ctx.item) {
-    const own = cardProfile(ctx.item, s.profiles)
+    const own = itemProfile(ctx.item, s.profiles)
     return own ? { picked: own.id, locked: true, offered: false } : ask
   }
   const again = ctx.retry?.profile
@@ -113,7 +98,7 @@ export interface ProfileRow {
 function named(pick: ProfilePick, profiles: readonly BoardProfile[]): boolean {
   if (!pick.picked) return false
   if (pick.offered) return true
-  const shown = shownOf(profiles)
+  const shown = shownProfiles(profiles)
   return pick.locked && !(shown.length === 1 && shown[0]?.id === pick.picked)
 }
 
@@ -122,7 +107,7 @@ export function profileRow(pick: ProfilePick, profiles: BoardProfile[]): Profile
   return {
     offered: pick.offered,
     options: pick.offered
-      ? shownOf(profiles).map(p => ({ id: p.id, title: p.title, color: p.color, pressed: p.id === pick.picked }))
+      ? shownProfiles(profiles).map(p => ({ id: p.id, title: p.title, color: p.color, pressed: p.id === pick.picked }))
       : [],
     chosen: picked && named(pick, profiles) ? { title: picked.title, color: picked.color } : null,
   }

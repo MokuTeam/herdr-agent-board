@@ -1,11 +1,13 @@
 // The profile a new session starts in (models/launch-profile.ts): what the window preselects and
 // whether it offers the choice, the profiles kept per folder, the row and the tag beside Start, and
 // what the start sends. Never a guess where the server would ask: a card whose profile the board
-// does not know offers the choice with nothing picked.
+// does not know offers the choice with nothing picked. The page holds a card to the profile the
+// server's launchTarget does, case for case.
 import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { BoardCategory, BoardProfile } from '../../src/core/payload.ts'
-import type { LaunchView } from '../../src/core/types.ts'
+import { launchTarget, profileSet, shownProfiles } from '../../src/core/profiles.ts'
+import type { Item, LaunchView } from '../../src/core/types.ts'
 import { formProblems, goButton, type LaunchFields } from '../../web/src/models/launch-form.ts'
 import {
   type ProfilePick,
@@ -264,5 +266,53 @@ describe('what the window shows and sends', () => {
     expect(Object.keys(all)).toEqual(['name', 'profile', 'workspace'])
     for (const pick of [LOCKED('work'), { picked: 'work', locked: false, offered: true }, { ...ASK, offered: false }])
       expect(formProblems(fields(), ok, null, t, pick)).toEqual({})
+  })
+})
+
+describe('the page and the server hold a card to one profile', () => {
+  // The server's side of the same start (src/core/profiles.ts launchTarget), on the same profiles.
+  // Where the page leaves the profile and the card out of the body, the server cannot check it, so
+  // the profile it then takes alone must be the card's.
+  const serverSet = (list: BoardProfile[]) =>
+    profileSet(
+      list.map(p => ({ id: p.id, title: p.title, dir: p.dir, color: p.color, hidden: p.hidden })),
+      PRIVATE.dir,
+    )
+  type Body = { profile?: string; parent?: string }
+  type Case = [string, BoardProfile[], Pick<Item, 'profile' | 'profileFolder'>, string | null, Body]
+  const FOLDER = 'D:\\elsewhere'
+  const CASES: Case[] = [
+    ['a card with a known profile', TWO, { profile: 'work' }, 'work', { profile: 'work', parent: 'c' }],
+    ['a card in the only shown profile', ONE, { profile: 'default' }, 'default', {}],
+    ['profile: null, one shown', ONE, { profile: null }, 'default', {}],
+    ['profile: null, two shown', TWO, { profile: null }, null, {}],
+    ['a folder no profile has, one shown', ONE, { profile: null, profileFolder: FOLDER }, null, {}],
+    ['a folder no profile has, two shown', TWO, { profile: null, profileFolder: FOLDER }, null, {}],
+    ['a profile gone since, one shown', ONE, { profile: 'gone' }, null, {}],
+    ['a profile gone since, two shown', TWO, { profile: 'gone' }, null, {}],
+    ['a hidden profile, one shown', ONE, { profile: 'work' }, 'work', { profile: 'work', parent: 'c' }],
+    ['a hidden profile, two shown', TWO, { profile: 'gamedev' }, 'gamedev', { profile: 'gamedev', parent: 'c' }],
+  ]
+
+  test.each(CASES)('%s', (_, list, fields, own, body) => {
+    const card = item({ key: 'c', ...fields })
+    const set = serverSet(list)
+    // The profile the server holds the card to; not known, it asks.
+    const held = launchTarget(undefined, card, set)
+    expect(held.ok ? held.profile.id : held.error).toBe(own ?? 'unknownParent')
+    // The page: that profile, locked; not known, the choice with nothing picked.
+    const pick = profileStart({ item: card }, scene({ profiles: list }))
+    expect(pick).toEqual(own ? LOCKED(own) : ASK)
+    // What the start sends, and where the server starts it.
+    const start = (p: ProfilePick) => {
+      const sent = profileBody(p, list, card.key)
+      return launchTarget(sent.profile, sent.parent ? card : null, set)
+    }
+    expect(profileBody(pick, list, card.key)).toEqual(body)
+    if (own) expect(start(pick)).toMatchObject({ ok: true, profile: { id: own } })
+    // Not known: any shown profile the user picks goes with the card, and the server starts it there.
+    else
+      for (const p of shownProfiles(list))
+        expect(start({ picked: p.id, locked: false, offered: true })).toMatchObject({ ok: true, profile: { id: p.id } })
   })
 })
