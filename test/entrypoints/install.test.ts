@@ -88,7 +88,7 @@ test('install: a status line someone else set stays, and install says so', async
   const { code, stdout, stderr } = await install(box)
   assert.equal(code, 0, stderr)
   assert.deepEqual(JSON.parse(readFileSync(join(claude, 'settings.json'), 'utf8')).statusLine, line)
-  assert.ok(stdout.includes('status line: left as it was (not ours)'), stdout)
+  assert.ok(stdout.includes(`status line in ${join(claude, 'settings.json')}: left as it was (not ours)`), stdout)
 })
 
 test('install: a settings.json that is not an object is left as it was', async () => {

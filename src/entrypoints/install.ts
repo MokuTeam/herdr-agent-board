@@ -105,7 +105,9 @@ try {
     const out = installInto(profile.dir, paths, { toast, create })
     if (!out.ok) throw new Error(out.error)
     console.log(`hooks: SessionStart, UserPromptSubmit -> ${paths.hook} in ${out.file}`)
-    console.log(out.statusLineSet ? `status line: ${paths.statusline}` : 'status line: left as it was (not ours)')
+    console.log(
+      out.statusLineSet ? `status line: ${paths.statusline}` : `status line in ${out.file}: left as it was (not ours)`,
+    )
     if (process.platform === 'win32')
       console.log(
         out.toast

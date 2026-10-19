@@ -42,6 +42,7 @@ import { configFile, editCategories, loadConfig } from '../adapters/config-file.
 import { type HerdrPane, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { boardFile } from '../adapters/paths.ts'
+import type { LiveHit } from '../adapters/profile-homes.ts'
 import { addEntry, askRestart, listEntries, type NewEntry, removeEntry } from '../adapters/schedule-store.ts'
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
@@ -92,6 +93,14 @@ interface Session {
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const paneOf = async (pane: string): Promise<HerdrPane | undefined> =>
   (await snapshot()).panes.find(x => x.pane_id === pane)
+/**
+ * The sessions running in every profile listed, hidden ones too, this env's own folder first (its
+ * answer wins), as the board reads them (services/board.ts collect).
+ */
+const liveSessions = (): Map<string, LiveHit> => {
+  const profiles = deps.profiles()
+  return deps.homes.liveSessions([profiles.inheritedDir, ...profiles.list.map(p => p.dir)])
+}
 
 /** { key, cwd } of the session the command is about. */
 async function resolveSession(): Promise<Session> {
@@ -109,7 +118,7 @@ async function resolveSession(): Promise<Session> {
     return {
       key: own,
       cwd: process.cwd(),
-      name: deps.claude.liveSessions().get(own)?.name,
+      name: liveSessions().get(own)?.session.name,
       pane: process.env.HERDR_PANE_ID,
     }
   }
@@ -131,7 +140,7 @@ async function ownSession(): Promise<SessionRef | null> {
   } catch {}
   const key = own || (p?.agent ? (p.agent_session?.value ?? `pane-${pane}`) : null)
   if (!key) return null
-  const name = (own && deps.claude.liveSessions().get(own)?.name) || p?.terminal_title_stripped || key.slice(0, 8)
+  const name = (own && liveSessions().get(own)?.session.name) || p?.terminal_title_stripped || key.slice(0, 8)
   return { key, name }
 }
 
@@ -146,7 +155,7 @@ async function entryFor(s: Session) {
   try {
     if (s.pane) cwd = (await paneOf(s.pane))?.cwd ?? ''
   } catch {}
-  cwd ||= deps.claude.liveSessions().get(s.key)?.cwd || s.cwd || ''
+  cwd ||= liveSessions().get(s.key)?.session.cwd || s.cwd || ''
   const setter = target ? await ownSession() : null
   return {
     key: s.key,

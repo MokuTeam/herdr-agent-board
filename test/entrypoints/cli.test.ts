@@ -238,14 +238,20 @@ test('board call-report refuses a bad session id and a missing or empty report',
   assert.equal(existsSync(dirOf(box)) ? readdirSync(dirOf(box)).filter(n => n.endsWith('.json')).length : 0, 0)
 })
 
-/** A profile folder in the sandbox's home whose registry has `name` running as `session`. */
-function profileWith(box: Sandbox, folder: string, session: string, name: string): string {
+/** A profile folder in the sandbox's home whose registry has `name` running as `session` (with `extra` fields). */
+function profileWith(
+  box: Sandbox,
+  folder: string,
+  session: string,
+  name: string,
+  extra: Record<string, unknown> = {},
+): string {
   const dir = join(box.env.HOME as string, folder)
   mkdirSync(join(dir, 'sessions'), { recursive: true })
   writeFileSync(join(dir, 'settings.json'), '{}')
   writeFileSync(
     join(dir, 'sessions', '1.json'),
-    JSON.stringify({ sessionId: session, kind: 'interactive', pid: process.pid, name }),
+    JSON.stringify({ sessionId: session, kind: 'interactive', pid: process.pid, name, ...extra }),
   )
   return dir
 }
@@ -282,4 +288,25 @@ test('board call-report names the session from whichever profile it runs in, a h
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /^ok · call report ([0-9a-f]{6}) for Work one, typed in once the session is free/)
   assert.equal(read(box, /call report ([0-9a-f]{6})/.exec(r.out)?.[1] ?? '')?.name, 'Work one')
+})
+
+test('board remind for a session in another profile takes its folder and name from that profile’s registry', async () => {
+  const box = await sandbox()
+  config(box)
+  // The board command runs with the default env; the sessions run in ~/.claude-work (hidden).
+  const project = join(box.dir, 'invoices')
+  const work = profileWith(box, '.claude-work', SID, 'Work one', { cwd: project })
+  const target = await agentCli(box, ['remind', '--session', SID, 'in', '1h', 'check the invoices'])
+  assert.equal(target.code, 0, target.out)
+  const e = read(box, idIn(target.out, 'reminder'))
+  assert.ok(e)
+  assert.deepEqual([e.key, e.cwd], [SID, project])
+  // Its own session, when it runs in another profile than this env's: named from that registry too.
+  writeFileSync(
+    join(work, 'sessions', '2.json'),
+    JSON.stringify({ sessionId: 's2', kind: 'interactive', pid: process.pid, name: 'Work two' }),
+  )
+  const own = await agentCli(box, ['remind', 'in', '1h', 'own'], { CLAUDE_CODE_SESSION_ID: 's2' })
+  assert.equal(own.code, 0, own.out)
+  assert.equal(read(box, idIn(own.out, 'reminder'))?.name, 'Work two')
 })

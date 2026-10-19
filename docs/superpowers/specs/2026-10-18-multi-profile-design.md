@@ -93,8 +93,9 @@ The terminal board (`src/tui`) shows the profile tag. A profile filter there is 
 
 ### Profiles
 
-- **Found automatically:** `~/.claude` and every `~/.claude-*` folder that holds `settings.json`
-  or `projects/`.
+- **Found automatically:** `~/.claude` when it holds `settings.json` or `projects/`, and every
+  `~/.claude-<name>` folder that holds `settings.json`, `projects/` or `sessions/` (Claude ran in
+  it), `<name>` without a dot (a backup such as `~/.claude-work.bak` is none; upstream #59).
 - **Stored in the board's `config.json` as `profiles`:** a list of objects. Each object has:
   - `id`: stable; derived from the folder (`.claude` → `default`, `.claude-work` → `work`);
   - `title`;
