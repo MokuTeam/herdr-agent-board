@@ -10,7 +10,7 @@ import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 const SPAWN = join(root, 'src', 'entrypoints', 'spawn-agent.ts')
 const READY = { result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: 'claude', agent_status: 'idle' } } }
 const STATE = {
-  'tab create': { result: { tab: { tab_id: 'wA:t9' }, root_pane: { pane_id: 'wA:p9' } } },
+  'tab create': { result: { tab: { tab_id: 'wA:t9' }, root_pane: { pane_id: 'wA:p9', terminal_id: 'term-9' } } },
   'tab rename': { result: null },
   'pane run': { result: null },
   'pane get': { seq: [{ result: { pane: { pane_id: 'wA:p9', agent: null } } }, READY] },
@@ -282,7 +282,10 @@ test('an agent in a work session starts its helper in work: --env on the tab, th
   ])
   const calls = callList(box)
   assert.equal(calls[1], `pane run wA:p9 claude --model sonnet --session-id ${SID}`)
-  expect(JSON.parse(readFileSync(panesFile(box), 'utf8'))).toMatchObject({ 'wA:p9': { profile: 'work' } })
+  // With the terminal herdr opened it with: a pane id it gives out again later is not this pane.
+  expect(JSON.parse(readFileSync(panesFile(box), 'utf8'))).toMatchObject({
+    'wA:p9': { profile: 'work', terminal: 'term-9' },
+  })
   expect(cardOf(box, SID)).toMatchObject({ profileWant: 'work' })
 }, 30_000)
 
@@ -404,42 +407,128 @@ test('--keep-env leaves the tab as herdr makes it, even from a work env; --confi
   expect(cardOf(set.box, SID)).toMatchObject({ profileWant: 'work' })
 }, 30_000)
 
-test('--pane with a profile takes only a pane recorded in it', async () => {
-  const { box, dir, work } = await profileBox()
-  box.state({
-    ...STATE,
-    'pane get': { seq: [{ result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: null } } }, READY] },
-  })
-  const refusal = 'spawn-agent: --pane wA:p9 was not opened in profile work: leave out --pane to get a new tab'
-  const run = () => runSpawn(box, ['--name', 'Here', '--cwd', dir, '--pane', 'wA:p9'], { CLAUDE_CONFIG_DIR: work })
-  // Not recorded at all, then recorded in another profile.
-  const none = await run()
-  assert.equal(none.code, 1)
-  assert.equal(none.stderr.trim(), refusal)
-  mkdirSync(join(panesFile(box), '..'), { recursive: true })
-  writeFileSync(panesFile(box), JSON.stringify({ 'wA:p9': { profile: 'gamedev', at: 1 } }))
-  const other = await run()
-  assert.equal(other.code, 1)
-  assert.equal(other.stderr.trim(), refusal)
-  assert.deepEqual(box.calls(), [])
-
-  writeFileSync(panesFile(box), JSON.stringify({ 'wA:p9': { profile: 'work', at: 1 } }))
-  // A start that leaves the env alone never takes a pane opened in another profile: Claude would run in that one.
-  const fromDefault = await runSpawn(box, ['--name', 'Here', '--cwd', dir, '--pane', 'wA:p9'])
-  assert.equal(fromDefault.code, 1)
-  assert.equal(
-    fromDefault.stderr.trim(),
-    'spawn-agent: --pane wA:p9 was not opened in profile default: leave out --pane to get a new tab',
+test('--profile default starts the child as before, without --env, even from a work env', async () => {
+  const { box, dir, work } = await profileBox({ claude: ['claude-tg', '--model', 'opus 4'] })
+  const brief = join(box.dir, 'brief.txt')
+  writeFileSync(brief, '\uFEFF-Check the invoices.\nThen report.\n')
+  const r = await runSpawn(
+    box,
+    [
+      ...['-Name', 'Acme invoices', '-Cwd', dir, '-Workspace', 'wA', '-BriefFile', brief, '--session-id', SID],
+      ...['-Profile', 'default'],
+    ],
+    { CLAUDE_CONFIG_DIR: work },
   )
-  assert.deepEqual(box.calls(), [])
-
-  const r = await run()
   assert.equal(r.code, 0, r.stderr)
-  const calls = box.calls().map(a => a.join(' '))
+  assert.equal(r.stdout.trim(), 'pane=wA:p9 name=Acme invoices agent=acme-invoices-2')
+  // The default folder is the one herdr's env is taken to be: exactly the calls of the first test above.
+  assert.deepEqual(callList(box), [
+    `tab create --workspace wA --cwd ${dir} --label Acme invoices --no-focus`,
+    `pane run wA:p9 claude-tg --model 'opus 4' --session-id ${SID}`,
+    'pane get',
+    'agent list',
+    'agent rename wA:p9 acme-invoices-2',
+    'agent prompt wA:p9 /rename Acme invoices',
+    'pane read wA:p9 --source visible',
+    'agent prompt wA:p9  -Check the invoices.\nThen report.',
+  ])
+  assert.equal(existsSync(panesFile(box)), false)
+  assert.equal(cardOf(box, SID), null)
+}, 30_000)
+
+/**
+ * A profileBox whose pane wA:p9 waits at a shell prompt in tab wA:t9, holding the terminal
+ * `terminal`; `record` is written as profile-panes.json.
+ */
+async function paneBox(terminal: string, record?: Record<string, unknown>) {
+  const b = await profileBox()
+  b.box.state({
+    ...STATE,
+    'pane get': {
+      seq: [{ result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', terminal_id: terminal, agent: null } } }, READY],
+    },
+  })
+  if (record) writePanes(b.box, record)
+  return b
+}
+/** profile-panes.json, as herdr's launches left it. */
+const writePanes = (box: Sandbox, record: Record<string, unknown>) => {
+  mkdirSync(join(panesFile(box), '..'), { recursive: true })
+  writeFileSync(panesFile(box), JSON.stringify(record))
+}
+const HERE = ['--name', 'Here', '--pane', 'wA:p9']
+const notOpenedIn = (profile: string) =>
+  `spawn-agent: --pane wA:p9 was not opened in profile ${profile}: leave out --pane to get a new tab`
+const asked = (box: Sandbox) => box.calls().map(a => a.join(' '))
+
+test('--pane with a profile takes only a pane recorded in it', async () => {
+  // Not recorded at all, then recorded in another profile: refused before herdr is asked.
+  const none = await paneBox('term-9')
+  const unrecorded = await runSpawn(none.box, [...HERE, '--cwd', none.dir], { CLAUDE_CONFIG_DIR: none.work })
+  assert.equal(unrecorded.code, 1)
+  assert.equal(unrecorded.stderr.trim(), notOpenedIn('work'))
+  writePanes(none.box, { 'wA:p9': { profile: 'gamedev', terminal: 'term-9', at: 1 } })
+  const other = await runSpawn(none.box, [...HERE, '--cwd', none.dir], { CLAUDE_CONFIG_DIR: none.work })
+  assert.equal(other.code, 1)
+  assert.equal(other.stderr.trim(), notOpenedIn('work'))
+  assert.deepEqual(none.box.calls(), [])
+
+  // Recorded in work, and the pane still holds the terminal it was opened with.
+  const same = await paneBox('term-9', { 'wA:p9': { profile: 'work', terminal: 'term-9', at: 1 } })
+  const r = await runSpawn(same.box, [...HERE, '--cwd', same.dir], { CLAUDE_CONFIG_DIR: same.work })
+  assert.equal(r.code, 0, r.stderr)
+  const calls = asked(same.box)
   assert.equal(
     calls.some(c => c.startsWith('tab create')),
     false,
   )
   assert.ok(calls.includes('tab rename wA:t9 Here'))
   assert.ok(calls.includes('pane run wA:p9 claude --model sonnet'))
+}, 60_000)
+
+test('a start that leaves the env alone never takes a pane opened in another profile: Claude would run in that one', async () => {
+  const record = { 'wA:p9': { profile: 'work', terminal: 'term-9', at: 1 } }
+  // From the default env, and with --profile default from a work env: herdr is only asked which pane it is.
+  for (const fromWork of [false, true]) {
+    const b = await paneBox('term-9', record)
+    const r = await runSpawn(
+      b.box,
+      [...HERE, '--cwd', b.dir, ...(fromWork ? ['--profile', 'default'] : [])],
+      fromWork ? { CLAUDE_CONFIG_DIR: b.work } : {},
+    )
+    assert.equal(r.code, 1, String(fromWork))
+    assert.equal(r.stderr.trim(), notOpenedIn('default'))
+    assert.deepEqual(asked(b.box), ['pane get wA:p9'])
+  }
+}, 60_000)
+
+test('a pane id herdr gave out again is not the pane it recorded: refused for work, a plain shell for default', async () => {
+  // wA:p9 was opened in work; herdr started over and wA:p9 is now another terminal's, with herdr's env.
+  const record = { 'wA:p9': { profile: 'work', terminal: 'term-1', at: 1 } }
+  const work = await paneBox('term-9', record)
+  const refused = await runSpawn(work.box, [...HERE, '--cwd', work.dir], { CLAUDE_CONFIG_DIR: work.work })
+  assert.equal(refused.code, 1)
+  assert.equal(refused.stderr.trim(), notOpenedIn('work'))
+  // Nothing was typed or renamed: herdr was only asked which pane it is.
+  assert.deepEqual(asked(work.box), ['pane get wA:p9'])
+
+  const plain = await paneBox('term-9', record)
+  const r = await runSpawn(plain.box, [...HERE, '--cwd', plain.dir])
+  assert.equal(r.code, 0, r.stderr)
+  assert.ok(asked(plain.box).includes('pane run wA:p9 claude'))
+}, 60_000)
+
+test('a new tab opened without --env drops the record of a pane of that id; other records stay', async () => {
+  const { box, dir } = await profileBox()
+  writePanes(box, {
+    'wA:p9': { profile: 'work', terminal: 'term-1', at: 1 },
+    'wB:p1': { profile: 'gamedev', terminal: 'term-5', at: 1 },
+  })
+  const r = await runSpawn(box, ['--name', 'Fresh', '--cwd', dir, '--workspace', 'wA', '--session-id', SID])
+  assert.equal(r.code, 0, r.stderr)
+  assert.equal(callList(box)[0], `tab create --workspace wA --cwd ${dir} --label Fresh --no-focus`)
+  expect(JSON.parse(readFileSync(panesFile(box), 'utf8'))).toEqual({
+    'wB:p1': { profile: 'gamedev', terminal: 'term-5', at: 1 },
+  })
+  assert.equal(cardOf(box, SID), null)
 }, 30_000)

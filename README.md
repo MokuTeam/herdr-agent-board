@@ -313,10 +313,12 @@ With more than one Claude profile (`CLAUDE_CONFIG_DIR` folders such as `~/.claud
 session an agent starts keeps that agent's profile, the one its own `CLAUDE_CONFIG_DIR` points to,
 even when the profile is hidden on the board: a helper of a work session runs in work.
 `--profile <id>` starts it in another profile instead, one the board lists and shows. The
-profile's `args` go after `launch.claude`, before `--session-id`. For an agent's own profile other
-than the default one (`~/.claude`, which herdr's own env is taken to be), and for any profile
-`--profile` names, the new tab gets `herdr tab create --env CLAUDE_CONFIG_DIR=<folder>`, which
-needs herdr 0.9.5 or newer. spawn-agent then records the pane as opened in that profile and, with
+profile's `args` go after `launch.claude`, before `--session-id`. The default profile
+(`~/.claude`) is the one herdr's own env is taken to be: a start in it, the agent's own or
+`--profile default`, leaves the new tab's env as herdr makes it, as before profiles. For any other
+profile, the agent's own or the one `--profile` names, the new tab gets
+`herdr tab create --env CLAUDE_CONFIG_DIR=<folder>`, which needs herdr 0.9.5 or newer. spawn-agent
+then records the pane as opened in that profile, with the terminal herdr opened it with, and, with
 `--session-id`, the card as meant to run in it, so a session that reports another profile shows
 the "wrong profile" warning. spawn-agent never falls back to another profile: it refuses, before
 herdr is asked anything, when
@@ -325,7 +327,10 @@ herdr is asked anything, when
   runs): pass `--profile <id>`;
 - `--profile` names a profile the board does not list, or one that is hidden (show it first);
 - the profile's folder is not there;
-- `--pane` names a pane not opened in that profile (leave `--pane` out to get a new tab).
+- `--pane` names a pane not opened in that profile, or, for a start in the default profile, one
+  opened in another (leave `--pane` out to get a new tab). herdr is asked first which terminal
+  the pane holds: after herdr starts over it gives a pane's id out again, and a record counts only
+  for the terminal the pane was opened with.
 
 herdr that does not take `--env` fails the start too, saying so: nothing was started. The board's
 own launches pass `--config-dir <folder>` (a folder it checked) or `--keep-env` (the env as herdr

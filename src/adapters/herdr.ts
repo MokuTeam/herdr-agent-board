@@ -190,17 +190,26 @@ export async function agentNames(): Promise<Set<string>> {
 const envArgs = (env: Readonly<Record<string, string>> | undefined): string[] =>
   Object.entries(env ?? {}).flatMap(([key, value]) => ['--env', `${key}=${value}`])
 
-/** A new workspace: its id, and the tab and pane it comes with; `env` is added to its shell's. */
+/**
+ * A new workspace: its id, and the tab and pane it comes with, with the terminal that pane holds
+ * (herdr gives a pane id out again after it starts over, never a terminal's); `env` is added to
+ * its shell's.
+ */
 export async function workspaceCreate(
   cwd: string,
   label: string,
   env?: Readonly<Record<string, string>>,
-): Promise<{ id: string; tab: string | null; pane: string | null }> {
+): Promise<{ id: string; tab: string | null; pane: string | null; terminal: string | null }> {
   const args = ['workspace', 'create', '--cwd', cwd, '--label', label, ...envArgs(env), '--no-focus']
   const answer = await herdr(args)
   const id = isRecord(answer) ? stringAt(answer.workspace, 'workspace_id') : null
   if (!isRecord(answer) || !id) throw new HerdrError(args, undefined, 'no workspace in its answer')
-  return { id, tab: stringAt(answer.tab, 'tab_id'), pane: stringAt(answer.root_pane, 'pane_id') }
+  return {
+    id,
+    tab: stringAt(answer.tab, 'tab_id'),
+    pane: stringAt(answer.root_pane, 'pane_id'),
+    terminal: stringAt(answer.root_pane, 'terminal_id'),
+  }
 }
 
 /** A new tab in a workspace, `env` added to its shell's; returns the pane it comes with. */
@@ -210,6 +219,16 @@ export async function tabCreate(
   label: string,
   env?: Readonly<Record<string, string>>,
 ): Promise<string> {
+  return (await tabCreateRoot(workspace, cwd, label, env)).pane
+}
+
+/** tabCreate, with the terminal the new pane holds (null when herdr does not say). */
+export async function tabCreateRoot(
+  workspace: string,
+  cwd: string,
+  label: string,
+  env?: Readonly<Record<string, string>>,
+): Promise<{ pane: string; terminal: string | null }> {
   const args = [
     'tab',
     'create',
@@ -224,8 +243,8 @@ export async function tabCreate(
   ]
   const answer = await herdr(args)
   const pane = isRecord(answer) ? stringAt(answer.root_pane, 'pane_id') : null
-  if (!pane) throw new HerdrError(args, undefined, 'no pane in its answer')
-  return pane
+  if (!isRecord(answer) || !pane) throw new HerdrError(args, undefined, 'no pane in its answer')
+  return { pane, terminal: stringAt(answer.root_pane, 'terminal_id') }
 }
 
 /** The tab a pane is in, or null when herdr does not say. */

@@ -266,6 +266,23 @@ test('spawn-agent starts in the folder of the agent that runs it, or the profile
   })
   expect(spawnEnv({ profile: 'gamedev' }, undefined, L, H, 'win32')).toMatchObject({ ok: false, error: 'hidden' })
   expect(spawnEnv({ profile: 'nope' }, undefined, L, H, 'win32')).toMatchObject({ ok: false, error: 'missing' })
+  // --profile default names the folder herdr's env is taken to be: no --env, from any agent's env.
+  expect(spawnEnv({ profile: 'default' }, undefined, L, H, 'win32')).toEqual({
+    ok: true,
+    configDir: null,
+    profile: DEFAULT,
+  })
+  expect(spawnEnv({ profile: 'default' }, WORK.dir, L, H, 'win32')).toEqual({
+    ok: true,
+    configDir: null,
+    profile: DEFAULT,
+  })
+  const spelled = { ...DEFAULT, dir: 'c:/users/me/.claude/' }
+  expect(spawnEnv({ profile: 'default' }, WORK.dir, [spelled, WORK], H, 'win32')).toEqual({
+    ok: true,
+    configDir: null,
+    profile: spelled,
+  })
   // The board's own starts: the env as it is, or the folder it checked.
   expect(spawnEnv({ keepEnv: true }, WORK.dir, L, H, 'win32')).toEqual({ ok: true, configDir: null, profile: WORK })
   expect(spawnEnv({ keepEnv: true }, 'D:\\odd', L, H, 'win32')).toEqual({ ok: true, configDir: null, profile: null })

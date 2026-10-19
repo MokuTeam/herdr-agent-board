@@ -215,7 +215,8 @@ export type SpawnEnv =
  * any, an agent starts its helper in its own folder, hidden profile or not: a folder no listed
  * profile has, or one named relative to wherever the agent runs, is refused, never folded into
  * another. herdr's env is taken to be the default profile's, as on every computer before
- * profiles, so a start in the default folder leaves it alone.
+ * profiles, so a start in the default folder leaves it alone, whether it is the agent's own or
+ * named with `profile`: setting it would move Claude's `.claude.json` state where it is unset.
  */
 export function spawnEnv(
   o: Pick<SpawnOptions, 'profile' | 'configDir' | 'keepEnv'>,
@@ -226,17 +227,22 @@ export function spawnEnv(
 ): SpawnEnv {
   const defaultDir = defaultProfileDir(home, platform)
   const ownDir = filled(own) ? absoluteProfileDir(own, home, platform) : defaultDir
+  const startIn = (dir: string, profile: Profile): SpawnEnv => ({
+    ok: true,
+    configDir: sameDir(dir, defaultDir) ? null : profile.dir,
+    profile,
+  })
   if (o.keepEnv) return { ok: true, configDir: null, profile: profileForDir(list, ownDir) }
   if (o.configDir !== undefined) return { ok: true, configDir: o.configDir, profile: profileForDir(list, o.configDir) }
   if (o.profile !== undefined) {
     const asked = list.find(p => p.id === o.profile)
     if (!asked) return { ok: false, error: 'missing', detail: o.profile }
     if (asked.hidden) return { ok: false, error: 'hidden', detail: o.profile }
-    return { ok: true, configDir: asked.dir, profile: asked }
+    return startIn(asked.dir, asked)
   }
   const mine = profileForDir(list, ownDir)
   if (!ownDir || !mine) return { ok: false, error: 'unknown', detail: ownDir ?? resolveProfileDir(own, home, platform) }
-  return { ok: true, configDir: sameDir(ownDir, defaultDir) ? null : mine.dir, profile: mine }
+  return startIn(ownDir, mine)
 }
 
 /** herdr said it does not take --env (older than 0.9.5). */

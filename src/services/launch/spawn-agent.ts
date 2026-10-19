@@ -8,9 +8,9 @@ import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, resolve } from 'node:path'
 import { writeCard } from '../../adapters/cards.ts'
-import { herdr, herdrText, tabCreate } from '../../adapters/herdr.ts'
+import { herdr, herdrText, tabCreateRoot } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
-import { profilePanes, recordProfilePane } from '../../adapters/profile-panes.ts'
+import { forgetProfilePane, profilePanes, recordProfilePane } from '../../adapters/profile-panes.ts'
 import { type Env, inheritedProfileDir, loadProfiles } from '../../adapters/profiles.ts'
 import { slugName, uniqueSlug } from '../../core/launch/names.ts'
 import { choosesSession, type SpawnOptions, shellLine, stillTyped } from '../../core/launch/spawn-args.ts'
@@ -39,11 +39,16 @@ const screen = (pane: string): Promise<string> =>
 const stringAt = (value: unknown, key: string): string | null =>
   isRecord(value) && typeof value[key] === 'string' ? value[key] : null
 
-/** A pane as `herdr pane get` says: its agent, its status and its tab. */
+/** A pane as `herdr pane get` says: its agent, its status, its tab and the terminal it holds. */
 async function paneInfo(pane: string, timeoutMs?: number) {
   const answer = await herdr(['pane', 'get', pane], timeoutMs)
   const p = isRecord(answer) ? answer.pane : null
-  return { agent: stringAt(p, 'agent'), status: stringAt(p, 'agent_status'), tab: stringAt(p, 'tab_id') }
+  return {
+    agent: stringAt(p, 'agent'),
+    status: stringAt(p, 'agent_status'),
+    tab: stringAt(p, 'tab_id'),
+    terminal: stringAt(p, 'terminal_id'),
+  }
 }
 
 /** Type a line into the agent's prompt; a leading dash would read as an option to herdr. */
@@ -71,33 +76,45 @@ function refusal(target: Extract<SpawnEnv, { ok: false }>): string {
   return `this session's Claude folder ${target.detail} is not a profile the board knows: pass --profile <id>`
 }
 
+type Start = { configDir: string | null; profile: Profile | null }
+
 /**
  * The profile the start is in and CLAUDE_CONFIG_DIR for its tab (null: herdr's env); throws with
  * the reason it is refused. A folder to set must be there and named in full: a relative one would
- * be another folder in the tab. A pane given with --pane keeps the env it was opened with: one
- * that needs the folder set must have been opened in that profile, and one opened in another
- * profile is never taken for a start that leaves the env alone.
+ * be another folder in the tab. A --pane that needs the folder set and is not even recorded in
+ * that profile is refused here too; the rest of its check needs herdr (paneCheck).
  */
 function startProfile(
   o: SpawnOptions,
   { profiles, env, home }: { profiles: readonly Profile[]; env: Env; home: string },
-): { configDir: string | null; profile: Profile | null } {
+): Start {
   const target = spawnEnv(o, inheritedProfileDir(env, home), profiles, home)
   if (!target.ok) throw new Error(refusal(target))
-  const { configDir, profile } = target
+  const start: Start = { configDir: target.configDir, profile: target.profile }
+  const { configDir } = start
   if (configDir !== null && (!isAbsolute(configDir) || !isFolder(configDir)))
     throw new Error(`the profile folder ${configDir} is not there`)
-  if (o.pane) {
-    const opened = profilePanes().get(o.pane)
-    const wanted = profile?.id ?? configDir
-    if (configDir !== null ? !profile || opened !== profile.id : opened !== undefined && opened !== profile?.id)
-      throw new Error(
-        wanted
-          ? `--pane ${o.pane} was not opened in profile ${wanted}: leave out --pane to get a new tab`
-          : `--pane ${o.pane} was opened in profile ${opened}: leave out --pane to get a new tab`,
-      )
-  }
-  return { configDir, profile }
+  // A record not of this profile fits no better once herdr says which terminal the pane holds.
+  if (o.pane && configDir !== null) paneCheck(o.pane, profilePanes().get(o.pane), start)
+  return start
+}
+
+/**
+ * A pane given with --pane keeps the env it was opened with (`opened`: the profile it is recorded
+ * in, undefined when it is not). A start that sets the folder takes only a pane opened in that
+ * profile; one that leaves the env alone never takes a pane opened in another profile, where
+ * Claude would run in that one. Throws with the reason.
+ */
+function paneCheck(pane: string, opened: string | undefined, { configDir, profile }: Start): void {
+  const setsFolder = configDir !== null
+  const fits = setsFolder ? !!profile && opened === profile.id : opened === undefined || opened === profile?.id
+  if (fits) return
+  const wanted = profile?.id ?? configDir
+  throw new Error(
+    wanted
+      ? `--pane ${pane} was not opened in profile ${wanted}: leave out --pane to get a new tab`
+      : `--pane ${pane} was opened in profile ${opened}: leave out --pane to get a new tab`,
+  )
 }
 
 export interface SpawnResult {
@@ -131,7 +148,8 @@ export async function spawnAgent(
   if (!isDir) throw new Error(`No such folder: ${cwd}`)
   const workspace = o.workspace || process.env.HERDR_WORKSPACE_ID
   if (!o.pane && !workspace) throw new Error('No herdr workspace: run it inside herdr or pass --workspace')
-  const { configDir, profile } = startProfile(o, { profiles: profiles ?? loadProfiles({ home }), env, home })
+  const start = startProfile(o, { profiles: profiles ?? loadProfiles({ home }), env, home })
+  const { configDir, profile } = start
   const label = o.label?.trim() || o.name
   const text =
     o.briefFile !== undefined
@@ -149,10 +167,14 @@ export async function spawnAgent(
     const p = await paneInfo(pane)
     // Typed into a running agent, the command would go to it as a prompt.
     if (p.agent) throw new Error(`${pane} already runs ${p.agent}: --pane takes a pane at a shell prompt`)
+    // herdr gives a pane's id out again after it starts over: only a record of the terminal the
+    // pane holds now tells the env it was opened with.
+    paneCheck(pane, profilePanes(new Map([[pane, p.terminal]])).get(pane), start)
     if (p.tab) await herdr(['tab', 'rename', p.tab, label]).catch(() => {})
   } else {
+    let opened: Awaited<ReturnType<typeof tabCreateRoot>>
     try {
-      pane = await tabCreate(
+      opened = await tabCreateRoot(
         workspace ?? '',
         cwd,
         label,
@@ -165,8 +187,11 @@ export async function spawnAgent(
         )
       throw err
     }
-    // Before Claude runs: a pane the board cannot tell was opened in the profile is never woken there.
-    if (configDir !== null && profile) recordProfilePane(pane, profile.id)
+    pane = opened.pane
+    // Before Claude runs: a pane the board cannot tell was opened in the profile is never woken
+    // there, and the record of an earlier pane of this id (herdr started over) is not this one's.
+    if (configDir !== null && profile) recordProfilePane(pane, profile.id, opened.terminal)
+    else forgetProfilePane(pane)
   }
   // The profile it is meant to be in, for the board to check against the one its hooks report.
   if (configDir !== null && profile && o.sessionId) writeCard(o.sessionId, { profileWant: profile.id })
