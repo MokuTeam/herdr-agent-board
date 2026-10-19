@@ -212,7 +212,7 @@ export type LaunchTarget =
 
 /**
  * The profile a launch from the board starts in. Started from a session (`parent`, "New here"):
- * that session's profile (the only one listed when the card does not say, but never for a folder
+ * that session's profile (the only one shown when the card does not say, but never for a folder
  * no profile has, `profileFolder`), hidden or not, and no other. A parent whose profile is not
  * known, or none: the profile `asked` names, listed and shown; none asked is the only shown one,
  * else the owner chooses. Never a guess.
@@ -227,14 +227,14 @@ export function launchTarget(
     profile,
     configDir: configDirFor(profile, set.inheritedDir),
   })
+  const shown = shownProfiles(set.list)
   if (parent) {
-    const only = set.list.length === 1 && !parent.profileFolder ? set.list[0] : undefined
+    const only = shown.length === 1 && !parent.profileFolder ? shown[0] : undefined
     const own = parent.profile ? set.list.find(p => p.id === parent.profile) : only
     if (own) return asked === undefined || asked === own.id ? target(own) : { ok: false, error: 'parent', id: own.id }
     if (asked === undefined) return { ok: false, error: 'unknownParent', id: '' }
   }
   if (asked === undefined) {
-    const shown = shownProfiles(set.list)
     return shown.length === 1 && shown[0] ? target(shown[0]) : { ok: false, error: 'choose', id: '' }
   }
   const profile = set.list.find(p => p.id === asked)
@@ -351,12 +351,14 @@ export function sessionProfile(
 }
 
 /**
- * The profile a session runs in, as its item says: the one it names, or the only one listed when
- * it reported no folder no profile has; else null (not known).
+ * The profile a session runs in, as its item says: the one it names, or the only one shown when it
+ * names none and reported no folder no profile has (a card from before profiles, or none yet, on a
+ * board with one shown: as before profiles); else null (not known).
  */
 function itemProfile(item: Pick<Item, 'profile' | 'profileFolder'>, set: ProfileSet): Profile | null {
   if (item.profile) return set.list.find(p => p.id === item.profile) ?? null
-  return set.list.length === 1 && !item.profileFolder ? (set.list[0] ?? null) : null
+  const shown = shownProfiles(set.list)
+  return shown.length === 1 && !item.profileFolder ? (shown[0] ?? null) : null
 }
 
 /** A session's profile in a message: its title, else the folder it reported, else "unknown profile". */
@@ -364,23 +366,35 @@ export function profileLabel(item: Pick<Item, 'profile' | 'profileFolder'>, set:
   return itemProfile(item, set)?.title || item.profileFolder || t('profile.unknown')
 }
 
-/** Whether the board may wake a session; refused: its profile as a message names it (profileLabel). */
-export type WakeCheck = { ok: true } | { ok: false; profile: string }
+/**
+ * Whether the board may wake a session; refused: its profile as a message names it (profileLabel),
+ * and `pane`, the profile its pane was opened in (its title, else its id), when that is what refuses it.
+ */
+export type WakeCheck = { ok: true } | { ok: false; profile: string; pane?: string }
 
 /**
  * Whether the board may have herdr-wake wake a session. herdr-wake resumes it in its pane, in the
  * env of that pane's shell: the board's own (herdr's), unless the board opened the pane with a
  * profile's CLAUDE_CONFIG_DIR. So: a session in the board's own profile, or one whose pane
- * `panes` (pane → profile, as the board recorded and herdr proved them) says the board opened in
- * the session's profile. Anything else, a profile not known included, is refused.
+ * `panes` (pane → profile, as the board recorded and herdr proved them: provenProfilePanes) says
+ * the board opened in the session's profile. A pane `opened` (pane → profile it could be in:
+ * possibleProfilePanes) names in another profile than the session's refuses it, the board's own
+ * included: it would resume in that one. Anything else, a profile not known included, is refused.
  */
 export function mayWake(
   item: Pick<Item, 'profile' | 'profileFolder' | 'pane'>,
   set: ProfileSet,
   panes: ReadonlyMap<string, string>,
+  opened: ReadonlyMap<string, string> = new Map(),
 ): WakeCheck {
   const own = itemProfile(item, set)
-  if (own && (own.id === set.inherited?.id || (item.pane && panes.get(item.pane) === own.id))) return { ok: true }
+  if (!own) return { ok: false, profile: profileLabel(item, set) }
+  const other = item.pane ? opened.get(item.pane) : undefined
+  if (other !== undefined && other !== own.id) {
+    const pane = set.list.find(p => p.id === other)?.title || other
+    return { ok: false, profile: profileLabel(item, set), pane }
+  }
+  if (own.id === set.inherited?.id || (item.pane && panes.get(item.pane) === own.id)) return { ok: true }
   return { ok: false, profile: profileLabel(item, set) }
 }
 

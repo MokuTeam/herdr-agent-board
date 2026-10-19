@@ -373,6 +373,18 @@ test('the profile a board launch starts in: the one chosen, the parent’s, or t
   expect(launchTarget('default', elsewhere, profileSet([DEFAULT], DEFAULT.dir))).toMatchObject({ ok: true })
   // One shown: that one, with the env left alone however the board's env spells its folder.
   expect(launchTarget(undefined, null, ONE_SHOWN)).toEqual({ ok: true, profile: DEFAULT, configDir: null })
+  // A parent that names none is the one shown, as with one listed; a hidden one found besides
+  // changes nothing. A folder no profile has is still never folded into it.
+  expect(launchTarget(undefined, { name: 'X', profile: null }, ONE_SHOWN)).toEqual({
+    ok: true,
+    profile: DEFAULT,
+    configDir: null,
+  })
+  expect(launchTarget(undefined, elsewhere, ONE_SHOWN)).toMatchObject({ ok: false, error: 'unknownParent' })
+  expect(launchTarget(undefined, { name: 'W', profile: 'work' }, ONE_SHOWN)).toMatchObject({
+    ok: true,
+    profile: { id: 'work' },
+  })
   expect(launchTarget('default', null, profileSet(LIST, 'c:/users/me/.claude/'))).toMatchObject({
     ok: true,
     configDir: null,
@@ -424,4 +436,59 @@ test('a wake only where the profile is sure: the board’s own, or a pane the bo
   expect(inBoardProfile({ profile: null }, LIST1_SET)).toBe(true)
   expect(inBoardProfile({ profile: null, profileFolder: 'D:\\x' }, LIST1_SET)).toBe(false)
   expect(inBoardProfile({ profile: 'work' }, profileSet(LIST, WORK.dir))).toBe(true)
+})
+
+test('a session that names no profile is the one shown, a hidden one found besides or not', () => {
+  useLanguage('en')
+  expect(mayWake({ profile: null, pane: 'p1' }, ONE_SHOWN, new Map())).toEqual({ ok: true })
+  expect(inBoardProfile({ profile: null }, ONE_SHOWN)).toBe(true)
+  // A folder no profile has is never the shown one's; a session of the hidden one is its own.
+  expect(mayWake({ profile: null, profileFolder: 'D:\\x', pane: 'p1' }, ONE_SHOWN, new Map())).toEqual({
+    ok: false,
+    profile: 'D:\\x',
+  })
+  expect(inBoardProfile({ profile: null, profileFolder: 'D:\\x' }, ONE_SHOWN)).toBe(false)
+  expect(mayWake({ profile: 'work', pane: 'p1' }, ONE_SHOWN, new Map())).toEqual({ ok: false, profile: 'Work' })
+  expect(inBoardProfile({ profile: 'work' }, ONE_SHOWN)).toBe(false)
+  // Two shown: not known.
+  expect(inBoardProfile({ profile: null }, profileSet(LIST, DEFAULT.dir))).toBe(false)
+})
+
+test('a pane the board opened in another profile is never woken into, the board’s own profile included', () => {
+  useLanguage('en')
+  const work = new Map([['p1', 'work']])
+  // herdr-wake would resume the default session with the pane's env, work's.
+  expect(mayWake({ profile: 'default', pane: 'p1' }, SET, new Map(), work)).toEqual({
+    ok: false,
+    profile: 'Default',
+    pane: 'Work',
+  })
+  expect(mayWake({ profile: null, pane: 'p1' }, ONE_SHOWN, new Map(), work)).toEqual({
+    ok: false,
+    profile: 'Default',
+    pane: 'Work',
+  })
+  // A work session in a pane put in default; a profile no longer listed reads as its id.
+  expect(mayWake({ profile: 'work', pane: 'p1' }, SET, new Map(), new Map([['p1', 'default']]))).toEqual({
+    ok: false,
+    profile: 'Work',
+    pane: 'Default',
+  })
+  expect(mayWake({ profile: 'default', pane: 'p1' }, SET, new Map(), new Map([['p1', 'gone']]))).toEqual({
+    ok: false,
+    profile: 'Default',
+    pane: 'gone',
+  })
+  // Its own profile's record blocks nothing; another pane's record says nothing of this one.
+  expect(mayWake({ profile: 'work', pane: 'p1' }, SET, work, work)).toEqual({ ok: true })
+  expect(mayWake({ profile: 'default', pane: 'p1' }, SET, new Map(), new Map([['p1', 'default']]))).toEqual({
+    ok: true,
+  })
+  expect(mayWake({ profile: 'default', pane: 'p2' }, SET, new Map(), work)).toEqual({ ok: true })
+  expect(mayWake({ profile: 'default', pane: null }, SET, new Map(), work)).toEqual({ ok: true })
+  // A session whose profile is not known is refused as before.
+  expect(mayWake({ profile: null, pane: 'p1' }, SET, new Map(), work)).toEqual({
+    ok: false,
+    profile: 'unknown profile',
+  })
 })

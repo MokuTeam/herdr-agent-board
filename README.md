@@ -668,7 +668,10 @@ are files, and the board keeps running.
   terminal it opened. A session started outside the board in another profile is not woken: a
   reminder for it is held, its reason "Started outside the board in profile …, so waking could
   resume it in the wrong account; wake it in herdr where you started it", and tried again every
-  tick like any held one. The Wake button, "Go to herdr" and a message refuse that wake alike.
+  tick like any held one. Nor is a session in a pane the board opened with another profile's env,
+  the board's own profile included, unless herdr shows the pane now holds another terminal: its
+  reason "Its pane was opened in profile …". A session whose card names no profile yet is in the
+  one profile shown, when one is. The Wake button, "Go to herdr" and a message refuse alike.
   The board forgets a pane it opened once herdr no longer has it, or gave its id to another
   terminal.
 - Runs that came due while the board was off: a one-off is sent once, saying how late it is; a

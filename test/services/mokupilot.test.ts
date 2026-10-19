@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { useLanguage } from '../../src/core/lang.ts'
-import { profileSet } from '../../src/core/profiles.ts'
+import { profileSet, sessionProfile } from '../../src/core/profiles.ts'
 import type { Config } from '../../src/core/types.ts'
 import { type CallChild, type CallOptions, mokupilotCheck, startCall } from '../../src/services/mokupilot.ts'
 
@@ -134,6 +134,20 @@ test('a call from a session in another profile than the board’s is refused bef
   const one = { ...opts, profiles: profileSet([DEFAULT], DEFAULT.dir) }
   assert.equal((await startCall(cfg, { ...call, profile: null }, one)).ok, true)
   assert.equal(started.length, 2)
+  // One shown, a hidden folder found besides: a session with no card yet is in the shown one, as
+  // before profiles; one that reported a folder no profile has is still refused.
+  const shown = profileSet([DEFAULT, { ...WORK, hidden: true }], DEFAULT.dir)
+  const cardless = { ...call, ...sessionProfile(null, shown.list) }
+  assert.equal(cardless.profile, null)
+  assert.deepEqual(await startCall(cfg, cardless, { ...opts, profiles: shown }), { ok: true, file: process.execPath })
+  assert.equal(started.length, 3)
+  const stray = await startCall(
+    cfg,
+    { ...call, profile: null, profileFolder: '/srv/.claude-x' },
+    { ...opts, profiles: shown },
+  )
+  assert.match(stray.ok ? '' : stray.error, /a call from \/srv\/\.claude-x would run in the wrong account/)
+  assert.equal(started.length, 3)
 })
 
 test('whether the page offers calls: looked up again when the setting changes, and once a minute', () => {

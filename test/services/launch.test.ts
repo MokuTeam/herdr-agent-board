@@ -111,6 +111,25 @@ test('a launch request is checked before anything runs', async () => {
     ),
     { ok: false, field: 'profile', error: 'A session started from Work one runs in its profile, Work' },
   )
+  // One shown, work found besides and hidden: "New here" from a session with no card yet starts in
+  // the shown one, its env left alone, as before profiles; one that reported a folder no profile
+  // has is not folded into it.
+  const oneShown = profileSet([...profiles.list, { ...work, hidden: true }], own)
+  const cardless = [{ key: 's2', name: 'Old one', profile: null }] as unknown as Item[]
+  const fromOld = await checkRequest(
+    { name: 'A', cwd: dir, workspace: { id: 'w2' }, parent: 's2' },
+    { profiles: oneShown, items: cardless },
+  )
+  assert.ok(fromOld.ok, JSON.stringify(fromOld))
+  assert.deepEqual([fromOld.launch.profile, fromOld.launch.configDir], ['default', null])
+  const stray = [{ key: 's3', name: 'Stray', profile: null, profileFolder: join(box.dir, 'x') }] as unknown as Item[]
+  assert.deepEqual(
+    await checkRequest(
+      { name: 'A', cwd: dir, workspace: { id: 'w2' }, parent: 's3' },
+      { profiles: oneShown, items: stray },
+    ),
+    { ok: false, field: 'profile', error: 'The profile of Stray is not one the board knows: choose one' },
+  )
 })
 
 // ---------------------------------------------------------------- through the server

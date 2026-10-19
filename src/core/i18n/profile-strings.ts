@@ -28,6 +28,9 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     // a wake the board cannot keep in the session's profile (services/actions.ts wake)
     'err.wakeProfile':
       'Started outside the board in profile {profile}, so waking could resume it in the wrong account; wake it in herdr where you started it',
+    // a wake into a pane the board opened in another profile than the session's (services/actions.ts wake)
+    'err.wakePane':
+      'Its pane was opened in profile {profile}, so waking could resume it in the wrong account; wake it in herdr where you started it',
     // a MokuPilot call from a session in another profile than the board's (services/mokupilot.ts)
     'mokupilot.err.profile':
       'MokuPilot takes the profile of its running copy, {board}: a call from {profile} would run in the wrong account',
@@ -59,7 +62,10 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'profile.unknown': 'неизвестный профиль',
     // a wake the board cannot keep in the session's profile (services/actions.ts wake)
     'err.wakeProfile':
-      'Запущена вне доски в профиле {profile}: пробуждение может продолжить её не в том аккаунте; разбудите её в herdr, там, где запускали',
+      'Запущена вне доски в профиле {profile}: пробуждение может продолжить её не в том аккаунте; разбуди её в herdr, там, где запускал',
+    // a wake into a pane the board opened in another profile than the session's (services/actions.ts wake)
+    'err.wakePane':
+      'Её панель открыта в профиле {profile}: пробуждение может продолжить её не в том аккаунте; разбуди её в herdr, там, где запускал',
     // a MokuPilot call from a session in another profile than the board's (services/mokupilot.ts)
     'mokupilot.err.profile':
       'MokuPilot берёт профиль своей запущенной копии, {board}: звонок из {profile} пошёл бы не в том аккаунте',

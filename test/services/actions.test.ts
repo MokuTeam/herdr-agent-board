@@ -88,11 +88,15 @@ describe('waking a session of another profile than the board’s', () => {
 
   /**
    * A sandbox whose home has the default and work profiles, herdr showing pane1 holding terminal
-   * term-1, the board's launches having left `panes` as profile-panes.json (null: none); then
-   * `send` to the sleeping work session in pane1 through a herdr-wake stand-in: its answer, and how
-   * often herdr-wake was asked to wake it.
+   * `terminal` (null: herdr does not say), the board's launches having left `panes` as
+   * profile-panes.json (null: none); then `send` to the sleeping session of `profile` in pane1
+   * through a herdr-wake stand-in: its answer, how often herdr-wake was asked to wake it, and
+   * herdr's calls.
    */
-  async function sendToSleeper(panes: Record<string, unknown> | null): Promise<{ out: unknown; wakes: number }> {
+  async function sendToSleeper(
+    panes: Record<string, unknown> | null,
+    { profile = 'work', terminal = 'term-1' }: { profile?: string; terminal?: string | null } = {},
+  ): Promise<{ out: unknown; wakes: number; calls: string[][] }> {
     const box = await sandbox()
     const home = join(box.dir, 'home')
     for (const name of ['.claude', '.claude-work']) {
@@ -104,9 +108,8 @@ describe('waking a session of another profile than the board’s', () => {
       mkdirSync(dirname(file), { recursive: true })
       writeFileSync(file, JSON.stringify(panes))
     }
-    const snapshot = {
-      result: { snapshot: { panes: [{ pane_id: 'pane1', terminal_id: 'term-1' }], tabs: [], workspaces: [] } },
-    }
+    const pane = terminal === null ? { pane_id: 'pane1' } : { pane_id: 'pane1', terminal_id: terminal }
+    const snapshot = { result: { snapshot: { panes: [pane], tabs: [], workspaces: [] } } }
     box.state({ 'api snapshot': snapshot, 'agent get': { error: 'must wake first' } })
     let wakes = 0
     const server = http.createServer((req, res) => {
@@ -130,10 +133,10 @@ describe('waking a session of another profile than the board’s', () => {
           { id: 'work', title: 'Work', dir: join(home, '.claude-work'), color: 'teal', hidden: false },
         ],
       }
-      const item = { pane: 'pane1', session: 'expected', name: 'Test', sleeping: true, profile: 'work' }
+      const item = { pane: 'pane1', session: 'expected', name: 'Test', sleeping: true, profile }
       const out = await box.run('send', { item, cfg, text: 'hello' }).exited
       assert.equal(out.code, 0, out.stderr)
-      return { out: JSON.parse(out.stdout), wakes }
+      return { out: JSON.parse(out.stdout), wakes, calls: box.calls() }
     } finally {
       await new Promise(resolve => server.close(resolve))
     }
@@ -156,5 +159,35 @@ describe('waking a session of another profile than the board’s', () => {
     const { out, wakes } = await sendToSleeper({ pane1: { profile: 'work', terminal: 'term-0', at: 1 } })
     expect(out).toEqual({ ok: false, error: REFUSED })
     expect(wakes).toBe(0)
+  })
+
+  const snapshots = (calls: string[][]) => calls.filter(a => a[0] === 'api' && a[1] === 'snapshot').length
+
+  test('the board’s own profile in a pane no record names wakes with no more asked of herdr than before', async () => {
+    const { out, wakes, calls } = await sendToSleeper(null, { profile: 'default' })
+    expect(out).toEqual({ ok: true })
+    expect(wakes).toBe(1)
+    expect(snapshots(calls)).toBe(0)
+  })
+
+  const IN_WORK_PANE =
+    'Its pane was opened in profile Work, so waking could resume it in the wrong account; wake it in herdr where you started it'
+
+  test('a default session in a pane the board opened with work’s --env is not woken: herdr-wake would resume it in work', async () => {
+    const record = { pane1: { profile: 'work', terminal: 'term-1', at: 1 } }
+    // herdr shows the pane holds the terminal recorded, or does not say which it holds.
+    for (const terminal of ['term-1', null]) {
+      const { out, wakes, calls } = await sendToSleeper(record, { profile: 'default', terminal })
+      expect(out).toEqual({ ok: false, error: IN_WORK_PANE })
+      expect(wakes).toBe(0)
+      expect(snapshots(calls)).toBe(1)
+    }
+  })
+
+  test('a record of another terminal than the one the pane holds now is no bar to the board’s own profile', async () => {
+    const record = { pane1: { profile: 'work', terminal: 'term-1', at: 1 } }
+    const { out, wakes } = await sendToSleeper(record, { profile: 'default', terminal: 'term-9' })
+    expect(out).toEqual({ ok: true })
+    expect(wakes).toBe(1)
   })
 })
