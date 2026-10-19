@@ -3,7 +3,7 @@ import { categoryFor } from './config.mjs'
 import { languageName } from './lang.mjs'
 
 // Bump when the brief says something new: every running session gets it again on its next prompt.
-export const BRIEF_VERSION = 4
+export const BRIEF_VERSION = 5
 
 /**
  * Where the session runs, when herdr is its host (herdr puts the pane's ids into its environment),
@@ -12,7 +12,7 @@ export const BRIEF_VERSION = 4
 export function herdrLine(env = process.env) {
   if (env.HERDR_ENV !== '1' || !env.HERDR_PANE_ID) return ''
   const where = [env.HERDR_TAB_ID && `tab ${env.HERDR_TAB_ID}`, env.HERDR_WORKSPACE_ID && `workspace ${env.HERDR_WORKSPACE_ID}`].filter(Boolean).join(', ')
-  return `This session runs in herdr, in pane ${env.HERDR_PANE_ID}${where ? ` (${where})` : ''}. Starting or messaging other sessions, doing something later, a pane for a server or a login, a dropped MCP server: see the herdr-agents skill.`
+  return `This session runs in herdr, in pane ${env.HERDR_PANE_ID}${where ? ` (${where})` : ''}. Starting or messaging other sessions, doing something later, restarting itself (a dropped MCP server, changed settings, hooks or skills), a pane for a server or a login: see the herdr-agents skill.`
 }
 
 export function brief(cfg, card, cwd, env = process.env) {

@@ -6,10 +6,14 @@
 //
 // An entry: { id, key (the session's card key), name, pane, cwd, text, at (one-off) | cron, next
 // (when it is due), created, by, from (the session that set it: { key, name }), kind ('call': a
-// MokuPilot call's results, `board call-report`; a reminder without one) } plus the
-// scheduler's own fields: runs, missed, lastRun, gone (runs missed in a row with the session gone),
-// movedFrom (the session it was for before /clear), and while it waits for a busy session
-// pendingSince, waited, tried, why; claim while a run is on its way.
+// MokuPilot call's results, `board call-report`; 'restart': the session restarted once it is
+// free, `board restart` or the web board, the text its note for after; a reminder without one) }
+// plus the scheduler's own fields: runs, missed, lastRun, gone (runs missed in a row with the
+// session gone), movedFrom (the session it was for before /clear), and while it waits for a busy
+// session pendingSince, waited, tried, why; claim while a run is on its way. A restart also keeps
+// step ('sleep', 'wake', 'note': how far it got), attempts and retryAt (herdr-wake refused or
+// failed), tasksSince (background tasks hold it) and failed (it gave up, why: only that note is
+// left to type).
 import { settleReport } from './call-receipts.mjs'
 import { randomBytes } from 'node:crypto'
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -71,6 +75,24 @@ export function addEntry(fields) {
     const entry = updateJson(fileOf(id), taken => (taken ? undefined : { id, ...clean, created: Date.now() }), clean.receipt ? { mode: 0o600 } : undefined)
     if (entry) return entry
   }
+}
+
+/**
+ * A restart of the session `fields.key`, once it is free: the one already asked for (its note
+ * replaced by a new one, when given), else a new entry, due now. One that gave up and still has to
+ * say so is dropped: the new restart is the news. An agent asking for one the user asked for takes
+ * it over, so it hears how it went. Returns { entry, again }.
+ */
+export function askRestart(fields) {
+  const now = Date.now()
+  const text = cleanText(fields.text)
+  const mine = listEntries().filter(e => e.kind === 'restart' && e.key === fields.key)
+  for (const e of mine) if (e.failed) removeEntry(e.id)
+  const pending = mine.find(e => !e.failed)
+  const over = fields.by === 'agent' ? { by: 'agent', from: fields.from && { key: String(fields.from.key), name: cleanName(fields.from.name) } } : {}
+  const again = pending && updateEntry(pending.id, e => (e.failed ? undefined : { ...e, ...(text && { text }), ...over }))
+  if (again) return { entry: again, again: true }
+  return { entry: addEntry({ ...fields, kind: 'restart', idle: true, text, at: now, next: now }), again: false }
 }
 
 /** Change an entry that still exists: `change(entry)` returns the new entry or undefined. */

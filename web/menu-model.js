@@ -123,8 +123,9 @@ const COLUMN_COLOR = { me: 'var(--orange)', ext: 'var(--purple)', done: 'var(--b
 
 /**
  * A card's menu. `it` is the board item; ctx: { t, canMutate, canEdit, categories, column (where
- * it shows now), category (its lane now) }. Items gray out with the reason when herdr data is
- * stale (going to, waking, sleeping, renaming in Claude) or the board is offline (card edits).
+ * it shows now), category (its lane now), restarting (a restart of it is on its way) }. Items
+ * gray out with the reason when herdr data is stale (going to, waking, sleeping, restarting,
+ * renaming in Claude) or the board is offline (card edits).
  */
 export function cardMenu(it, ctx) {
   const { t } = ctx
@@ -149,6 +150,8 @@ export function cardMenu(it, ctx) {
     it.sleeping
       ? { id: 'wake', label: t('sheet.wake'), ...herdr() }
       : claude && { id: 'sleep', label: t('card.sleep'), ...herdr(turn ? { disabled: true, reason: t('sheet.sleepBusy') } : {}) },
+    // Waits until the session is free by itself, so a turn does not gray it; one asked for already does.
+    !it.sleeping && claude && it.agent === 'claude' && { id: 'restart', label: t('sheet.restart'), ...herdr(ctx.restarting ? { disabled: true, reason: t('sheet.restartPending') } : {}) },
     { id: 'rename', label: t('menu.rename'), hint: 'F2', ...edit() },
     SEP,
     { id: 'category', label: t('menu.category'), ...edit(), submenu: ctx.canEdit ? (ctx.categories ?? []).map(c => ({ id: `cat:${c.id}`, label: c.title, checked: c.id === ctx.category, swatch: c.color })) : null },

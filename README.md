@@ -54,9 +54,10 @@ Steps 1 and 2 are what the board needs; the rest adds to it.
 4. **[herdr-wake](https://github.com/Eithery-rc/tg-mcp/tree/main/herdr-wake)** (optional, worth it
    with many sessions). It puts sessions that sat idle for an hour to sleep and wakes them for a
    message, a reminder or a click; with [tg-mcp](https://github.com/Eithery-rc/tg-mcp) it also
-   brings your Telegram messages to them. Without it the board has no "Put to sleep" and "Wake",
-   shows no sleeping sessions, and a reminder cannot wake one. The board finds it at `wakeUrl`
-   (`http://127.0.0.1:12421`).
+   brings your Telegram messages to them. Without it the board has no "Put to sleep", "Wake" and
+   "Restart", agents cannot restart themselves (`board restart`, see [Restart](#restart)), the
+   board shows no sleeping sessions, and a reminder cannot wake one. The board finds it at
+   `wakeUrl` (`http://127.0.0.1:12421`).
 5. **Desktop notifications** (optional, Windows): `herdr plugin action invoke
    agent-board.notifications`. See [Notifications](#notifications).
 6. **Lanes**: "Categories" on the web board (titles, colors, the folders that sort sessions into
@@ -105,9 +106,10 @@ can go to the pane in herdr instead. The same goes to the board as `POST /api/re
   quiet line of their own, not your message: an agent's report opens from it, a command's
   "Output" opens its output file), a message box, "Go to herdr" (focuses the pane and
   brings the terminal window up), "Put to sleep" (through herdr-wake, idle sessions only; also
-  the moon on a card), "Wake" for sleeping sessions. To close: click the board beside it, flick
-  it out the way it came, or Esc. Another card switches it to that session. Attachments stay
-  with their session through a close.
+  the moon on a card), "Wake" for sleeping sessions, "Restart" (also in a card's menu) for one
+  that lost an MCP server or acts up, see [Restart](#restart). To close: click the board beside
+  it, flick it out the way it came, or Esc. Another card switches it to that session.
+  Attachments stay with their session through a close.
 - "Call in MokuPilot" (the sheet, a card's menu), when [MokuPilot](https://github.com/MokuTeam/MokuPilot)
   is on this computer: a MokuPilot call starts at once, its agent a fork of the session
   (`claude --resume <id> --fork-session`, in the folder the session started in), so it knows what
@@ -598,6 +600,54 @@ are files, and the board keeps running.
 - At most 30 entries per session.
 - The terminal board shows `⏰` (`⏳` for one that waits until the session is free) and the soonest
   time by a card's age, the count in its header.
+- A restart (`board restart`, "Restart" on the web board) is an entry too: see [Restart](#restart).
+
+## Restart
+
+A Claude session that restarts stays the same session: Claude exits and resumes in its pane
+(herdr-wake's `wakeCommand`, `claude --resume <id>` by default), with the same session id and
+conversation, and on the way it starts every MCP server again and reads settings.json, hooks,
+skills and CLAUDE.md anew. That is the reliable way to get a dropped MCP server back, which an
+agent cannot reconnect from inside its own turn (`/mcp` is a menu in its own terminal).
+
+- An agent asks with `board restart ["<note for after>"]` during its turn, then ends the turn.
+  You ask with "Restart" in the sheet or a card's menu, for a session that lost an MCP server or
+  acts up. No confirmation: the conversation stays, and it waits until the session is free. A
+  turn that hangs never ends by itself: interrupt it first (Esc in its terminal, "Terminal" then
+  "Claude" on the board), or the restart waits and, after `scheduleWaitMin` (240) minutes, is
+  logged as missed without a word to the session.
+- It is a schedule entry of kind `restart`, due at once, so it survives a board restart:
+  `board schedule` and the web board's schedule list it, `board unschedule <id>` or the trash
+  can cancel it. Asked again before it happens, it stays one restart (a newer note replaces the
+  old one).
+- The scheduler waits until the session is free: its turn over (for herdr and in Claude's own
+  session registry), no dialog, no text you started typing, no background command or Monitor
+  running (that for 10 minutes at most). Then herdr-wake puts it to sleep (`POST /sleep`, which
+  types `/exit`) and wakes it (`POST /wake`). 8 seconds later, so that its MCP servers have a
+  moment to connect, the board types `[board reminder; restarted as you asked] <note>` into it
+  (`Carry on.` without a note). After a restart you asked for, the prompt says you did, and that
+  its MCP servers, settings, hooks, skills and CLAUDE.md are loaded anew.
+- How far it got is kept in the entry (`step`): a board that stops halfway leaves the session
+  asleep at worst, and the next one wakes it and types the note.
+- herdr-wake refusing or failing is tried again, three times in all. Then an agent hears
+  `[board reminder] restart did not happen: <why>. Your note for after it: <note>` once it is
+  free; so it does when background tasks held it for 10 minutes. Asked again meanwhile, the new
+  restart replaces that note. A restart you asked for types nothing then: a toast says it, and
+  the schedule's log ("Did not happen"). A session that could not be woken sleeps on; a message
+  wakes it.
+- The card says it in a line of its own: "Restart" and what it waits for, then "Restarting…"
+  with turning arrows while Claude exits and comes back. The card stays whole meanwhile, also
+  while the session is asleep for that moment. The sheet lists it under "Schedule" with its
+  trash can; the terminal board shows `↻`.
+- `board restart` refuses at once, and schedules nothing, without herdr-wake or when it does not
+  answer (it says how to restart by hand instead), and outside a herdr pane. The web board's
+  "Restart" needs fresh herdr data, as "Put to sleep" does.
+- A restart ends whatever lives in that Claude process: background agents and workflows,
+  teammates, CronCreate and ScheduleWakeup jobs. A background command or a Monitor holds it
+  instead (above). The [`herdr-agents`](skills/herdr-agents/SKILL.md) skill tells agents to
+  finish or stop them first and to put what is due later into `board remind`.
+- A restart is for the session that asked: after `/clear` (a new session id in that pane), or
+  with another Claude started there, it waits as for a session that is gone, unlike a reminder.
 
 ## Notifications
 
@@ -687,7 +737,8 @@ recent folders, the launcher), `POST /api/fs/dirs` (the subfolders of a folder, 
 `POST /api/launch` (starts one in the background; its progress is `launches` in the board
 payload), `POST /api/launch/<id>/dismiss` and `/focus`. `POST /api/launch` also needs the page's
 own `Origin` when the browser sends one, and fresh herdr data like every action through herdr.
-Renaming: `POST /api/session/<key>/rename` with `{ name, claude }`.
+Renaming: `POST /api/session/<key>/rename` with `{ name, claude }`. Restarting:
+`POST /api/session/<key>/restart` (a schedule entry, see [Restart](#restart); `{ id, again }`).
 
 Setup (`src/setup.mjs`, `web/setup.js`): `GET /api/setup` runs the checks again and answers
 `{ checks, todo, sig }`; the board payload has `setup: { todo, sig }` from the last check.
@@ -724,6 +775,9 @@ board cats                known categories
 board remind <when> "<text>"   at that time, "[board reminder] <text>" goes into the session
 board every "<cron>" "<text>"  the same on a cron schedule
   --idle                  (remind, every) wait until the session is free, not on time
+board restart ["<note>"]  once this turn is over: Claude exits and resumes in its pane (MCP
+                          servers, settings, hooks, skills load anew), then gets
+                          "[board reminder; restarted as you asked] <note>"; see Restart
 board schedule [--all]    this session's entries (every session's)
 board unschedule <id|all> remove an entry (all: every entry of this session)
 board call-report --session <id> --file <report.md>
@@ -738,10 +792,11 @@ Agents in herdr also get a skill, [`herdr-agents`](skills/herdr-agents/SKILL.md)
 install puts into `~/.claude/skills`. Claude Code keeps only its one-line description in a
 session's context and reads the rest when it is needed: how to start another session, message or
 wake one, do something later (`board remind` rather than CronCreate, which dies when the session
-sleeps), run a server or an interactive login in a pane of its own, and what to do when an MCP
-server dropped. herdr puts the pane's ids into its environment (`HERDR_ENV=1`, `HERDR_PANE_ID`,
-`HERDR_TAB_ID`, `HERDR_WORKSPACE_ID`); when they are there, the board's brief tells the session
-its pane and points it to the skill, and outside herdr it says nothing of it. For herdr's own
+sleeps), restart itself when an MCP server dropped or its settings, hooks or skills changed
+(`board restart`), and run a server or an interactive login in a pane of its own. herdr puts the
+pane's ids into its environment (`HERDR_ENV=1`, `HERDR_PANE_ID`, `HERDR_TAB_ID`,
+`HERDR_WORKSPACE_ID`); when they are there, the board's brief tells the session its pane and
+points it to the skill, and outside herdr it says nothing of it. For herdr's own
 command reference, `herdr --skill`. A skill of that name that is not the board's is left alone,
 and `board doctor` says so.
 

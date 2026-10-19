@@ -106,6 +106,21 @@ test('a card’s menu follows its state', () => {
   assert.ok(!find(other, 'copy').submenu.some(c => c.id === 'copy:session'))
 })
 
+test('Restart sits by Put to sleep for a Claude session: also mid-turn, gray while one is on its way or herdr data is stale', () => {
+  const claude = { ...idle, agent: 'claude' }
+  assert.deepEqual(ids(cardMenu(claude, fresh)).slice(2, 5), ['write', 'sleep', 'restart'])
+  // It waits for the turn to end by itself.
+  assert.equal(find(cardMenu({ ...claude, status: 'working', column: 'work' }, fresh), 'restart').disabled, undefined)
+  const pending = find(cardMenu(claude, { ...fresh, restarting: true }), 'restart')
+  assert.equal(pending.disabled, true)
+  assert.match(pending.reason, /on its way/)
+  assert.equal(find(cardMenu(claude, { ...fresh, canMutate: false }), 'restart').disabled, true)
+  // Asleep, waking it is the restart; another agent, or a pane without a Claude session, has none.
+  assert.equal(find(cardMenu({ ...claude, sleeping: true, status: 'sleeping' }, fresh), 'restart'), undefined)
+  assert.equal(find(cardMenu({ ...claude, agent: 'codex' }, fresh), 'restart'), undefined)
+  assert.equal(find(cardMenu({ ...claude, session: null }, fresh), 'restart'), undefined)
+})
+
 test('stale herdr data grays what goes through herdr, with the reason once; offline grays card edits too', () => {
   const stale = cardMenu(idle, { ...fresh, canMutate: false })
   for (const id of ['focus', 'sleep', 'newHere']) assert.equal(find(stale, id).disabled, true, id)
