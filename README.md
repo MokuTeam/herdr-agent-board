@@ -229,8 +229,8 @@ never changes its id or its folder.
 
 **One profile shown** (a teammate's board, and yours until you show a second): no profile switch,
 no profile choice for a new session, no `--env` on a start, and no tag on a card but the three
-below that warn: the board is as it was before profiles. Settings has "Profiles…" once the board
-finds more than one profile folder.
+below that warn: the board is as it was before profiles, unless you give its profile a start
+command. Settings has "Profiles…" once the board finds more than one profile folder.
 
 **The Profiles panel** (Settings → Profiles…), built like Categories: a row per profile with its
 color, its name (Enter or leaving the field keeps it, Esc puts it back), its folder, its sessions
@@ -251,8 +251,9 @@ helpers); in the board's own profile too. It is a program, alias or function the
 knows, with arguments if you like: a string, split on spaces, or a list, typed by `launch.claude`'s
 rules (see [spawn-agent](#spawn-agent)). The board adds the profile's `args` after it (not
 `launch.args`), then `--session-id` (none when the command picks its session itself, with
-`--resume` say). `launch.agent` and `launch.command` do not use it, and a profile other than the
-board's own still gets `CLAUDE_CONFIG_DIR` through `--env`. With these in Git Bash, say:
+`--resume` say). `launch.agent` and `launch.command` do not use it, and the env rule does not
+change: a start that sets `CLAUDE_CONFIG_DIR` through `--env` without a command still does with
+one. With these in Git Bash, say:
 
 ```bash
 alias cld='CLAUDE_CONFIG_DIR=$HOME/.claude command claude --allow-dangerously-skip-permissions'
@@ -375,9 +376,10 @@ How it starts, by `launch` in config.json:
 
 - Nothing set (the default): the board's own [spawn-agent](#spawn-agent), run as a launcher (see
   `launch.command` below), with a session id the board picked, so the card has its lane before
-  Claude starts. A new workspace's first tab is used for the session. `launch.claude` (`"claude"`)
-  is what it types into the tab: a program, or a list of the program and its arguments, such as
-  `["claude", "--dangerously-skip-permissions"]` or `["claude-tg"]`. Without it, `launch.args`
+  Claude starts. A new workspace's first tab is used for the session. `launch.claude` (`"claude"`),
+  or the profile's start command ([Claude profiles](#claude-profiles)), is what it types into the
+  tab: a program, or a list of the program and its arguments, such as
+  `["claude", "--dangerously-skip-permissions"]` or `["claude-tg"]`. Without either, `launch.args`
   (from before the board had its own launcher) are `claude`'s arguments. `launch.timeoutSec`
   (120) is how long it waits for Claude to be ready. When Claude stops at a dialog before that, the card
   says so: the folder trust as below, any other in herdr; the board then names the session and
@@ -454,10 +456,10 @@ spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
 
 PowerShell's spelling works too: `-Name`, `-Cwd`, `-Label`, `-BriefFile`, `-Brief`, `-Workspace`,
 `-TimeoutSec`, `-Profile`. It opens a tab in the workspace (inside herdr the current one, from
-`HERDR_WORKSPACE_ID`), labelled with `--label` or the name, and types `launch.claude` into it
-(with `--session-id` when given). Once herdr sees Claude ready, it gives the agent a herdr name to
-address it by (the name in `[a-z0-9_-]`, Cyrillic spelled in Latin, `-2` when taken), types
-`/rename <Name>`, then the brief. It prints
+`HERDR_WORKSPACE_ID`), labelled with `--label` or the name, and types the profile's `command`, or
+`launch.claude`, into it (with `--session-id` when given). Once herdr sees Claude ready, it gives
+the agent a herdr name to address it by (the name in `[a-z0-9_-]`, Cyrillic spelled in Latin, `-2`
+when taken), types `/rename <Name>`, then the brief. It prints
 
 ```
 pane=<pane id> name=<Name> agent=<herdr name>
