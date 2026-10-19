@@ -4,10 +4,11 @@
 // launcher did not type. The card gets the chosen lane as soon as the session has an id, and the
 // profile it is meant to run in, for the board to check against the one its hooks report.
 import { randomUUID } from 'node:crypto'
+import { realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join, relative } from 'node:path'
+import { isAbsolute, join, relative, sep } from 'node:path'
 import { writeCard } from '../../adapters/cards.ts'
-import { SLOW, statOf } from '../../adapters/folders.ts'
+import { SLOW, statOf, within } from '../../adapters/folders.ts'
 import { gitInfo } from '../../adapters/git.ts'
 import { agentGet, type HerdrAgent, herdr, herdrText, workspaceCreate, workspacePanes } from '../../adapters/herdr.ts'
 import { run } from '../../adapters/process.ts'
@@ -83,6 +84,29 @@ const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const ready = (agent: HerdrAgent | null): boolean => agent?.status === 'idle' || agent?.status === 'done'
 
+/**
+ * Where `cwd` is below the checkout `root`, compared as real paths: '' when it is not below it.
+ * Git gives the canonical root (/private/tmp on macOS) where the picker may have used an alias.
+ * Bounded too: a network share may disappear after the request was checked.
+ */
+export async function worktreeSubdir(
+  root: string,
+  cwd: string,
+  {
+    canonicalize = realpath,
+    timeoutMs = 2000,
+  }: { canonicalize?: (path: string) => Promise<string>; timeoutMs?: number } = {},
+): Promise<string> {
+  const paths = await within(
+    Promise.all([canonicalize(root), canonicalize(cwd)]).catch(() => null),
+    timeoutMs,
+  )
+  if (paths === SLOW) throw new LaunchError(t('launch.err.cwdSlow', { path: cwd }), 'worktree')
+  if (!paths) throw new LaunchError(t('launch.err.cwdMissing', { path: cwd }), 'worktree')
+  const below = relative(paths[0], paths[1])
+  return below !== '..' && !below.startsWith(`..${sep}`) && !isAbsolute(below) ? below : ''
+}
+
 /** The launch's pane: past its launcher's start, a launch that needs one has one. */
 function paneOf(l: Launch): string {
   if (!l.pane) throw new LaunchError(t('launch.err.paneGone'), 'other')
@@ -152,6 +176,9 @@ export function launchRunner({
     step(l, 'worktree')
     const git = await gitInfo(l.cwd)
     if (!git) throw new LaunchError(t('launch.err.notGit', { path: l.cwd }), 'worktree')
+    // Git returns a canonical root (e.g. /private/tmp on macOS); the picker may have used an
+    // alias. Compare canonical paths before carrying the subfolder over.
+    const below = await worktreeSubdir(git.root, l.cwd)
     const path = worktreePath(git.root, branch)
     if (await statOf(path)) throw new LaunchError(t('launch.err.worktreeExists', { path }), 'worktree')
     const r = await run('git', ['-C', git.root, 'worktree', 'add', '-b', branch, path], { timeout: 60_000 })
@@ -160,8 +187,7 @@ export function launchRunner({
       throw new LaunchError(t('launch.err.worktreeGit', { why }), 'worktree')
     }
     // The session works in the same place below the checkout as the folder that was picked.
-    const below = relative(git.root, l.cwd)
-    const inside = below && !below.startsWith('..') ? join(path, below) : path
+    const inside = below ? join(path, below) : path
     const st = await statOf(inside)
     l.cwd = st && st !== SLOW && st.isDirectory() ? inside : path
     l.worktreeMade = true

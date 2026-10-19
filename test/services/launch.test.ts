@@ -1,7 +1,16 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
@@ -11,6 +20,7 @@ import { sameDir } from '../../src/core/launch/names.ts'
 import { defaultProfileDir, mergeProfiles, profileSet } from '../../src/core/profiles.ts'
 import type { Item } from '../../src/core/types.ts'
 import { checkRequest } from '../../src/services/launch/request.ts'
+import { worktreeSubdir } from '../../src/services/launch/run.ts'
 import { type Sandbox, sandbox, until } from '../support/sandbox.ts'
 import { trustScreen } from '../support/trust-screen.ts'
 
@@ -528,7 +538,7 @@ test('a retry starts in the worktree and the workspace the failed launch made, n
   )
   assert.equal(failed.state, 'failed')
   assert.equal(failed.worktree, null)
-  assert.ok(sameDir(failed.cwd, join(box.dir, 'repo-feature-x', 'src')), failed.cwd)
+  assert.ok(sameDir(failed.cwd, realpathSync(join(box.dir, 'repo-feature-x', 'src'))), failed.cwd)
   box.state(HERDR)
   const again = await started({
     name: failed.name,
@@ -549,6 +559,35 @@ test('a retry starts in the worktree and the workspace the failed launch made, n
   assert.deepEqual([ws.workspaceId, ws.newWorkspace], ['wN', false])
   noEnv(box)
 }, 40_000)
+
+test('a launch through a symlink preserves the selected subfolder in its new worktree', async () => {
+  const { box, started, launched } = await boardServer(VIA_HERDR, { PATH: process.env.PATH ?? '' })
+  const repo = join(box.dir, 'real-repo')
+  mkdirSync(join(repo, 'src'), { recursive: true })
+  writeFileSync(join(repo, 'src', 'a.txt'), 'a')
+  const git = (...args: string[]) =>
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], {
+      cwd: repo,
+      stdio: 'pipe',
+    })
+  git('init', '-q', '-b', 'main')
+  git('add', '.')
+  git('commit', '-q', '-m', 'init')
+  const alias = join(box.dir, 'alias-repo')
+  symlinkSync(repo, alias, process.platform === 'win32' ? 'junction' : 'dir')
+  box.state({ ...HERDR, 'tab create': { error: 'stop after worktree creation' } })
+  const failed = await launched(
+    await started({
+      name: 'Alias job',
+      cwd: join(alias, 'src'),
+      category: 'acme',
+      workspace: { id: 'wA' },
+      worktree: { branch: 'via-alias' },
+    }),
+  )
+  assert.equal(failed.state, 'failed')
+  assert.ok(sameDir(failed.cwd, realpathSync(join(box.dir, 'real-repo-via-alias', 'src'))), failed.cwd)
+}, 30_000)
 
 test('a launcher that runs too long is ended with everything it started', async () => {
   const box0 = await sandbox()
@@ -1384,3 +1423,21 @@ test('"Close the tab" takes a card with only the board’s and the hooks’ fiel
   assert.equal(existsSync(cardFile(b.sid)), true)
   noEnv(box)
 }, 40_000)
+
+test('worktree canonicalization is bounded and distinguishes parent traversal from a dot-prefixed child', async () => {
+  const canonicalize = async (path: string) => path
+  assert.equal(await worktreeSubdir('/repo', '/repo/..cache', { canonicalize }), '..cache')
+  assert.equal(await worktreeSubdir('/repo', '/elsewhere', { canonicalize }), '')
+  await assert.rejects(
+    worktreeSubdir('/repo', '/repo/src', { canonicalize: () => Promise.reject(new Error('gone')) }),
+    (error: { kind?: string }) => error.kind === 'worktree',
+  )
+  await assert.rejects(
+    worktreeSubdir('/repo', '/repo/src', {
+      canonicalize: path => new Promise(resolve => setTimeout(resolve, 30, path)),
+      timeoutMs: 1,
+    }),
+    (error: { kind?: string; message?: string }) =>
+      error.kind === 'worktree' && /did not answer in time/.test(error.message ?? ''),
+  )
+})
