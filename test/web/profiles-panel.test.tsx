@@ -363,6 +363,7 @@ test('the start command goes on Enter or leaving the field; "" clears it; the sa
   expect(commandEdited('cld-work', '')).toBe('')
   expect(commandEdited('cld-work', '  cld-work ')).toBeNull()
   expect(commandEdited('', '   ')).toBeNull()
+  expect(commandEdited('cld-work -p be brief ', 'cld-work -p be brief ')).toBeNull()
   const typed = async (row: ProfileRowView, value: string, key?: string) => {
     const side = liveRow(row)
     const field = side.pick('.profile-command-field')
@@ -382,6 +383,21 @@ test('the start command goes on Enter or leaving the field; "" clears it; the sa
   expect(await typed(viewOf({ ...WORK, command: 'cld-work' }), ' cld-work ')).toEqual([])
   expect(await typed(viewOf(WORK), '   ')).toEqual([])
   expect(await typed(viewOf(WORK), 'cld-work', 'Escape')).toEqual([])
+})
+
+test('a list command whose last word ends in a space stays a list: focus and leave, or Escape, send nothing', async () => {
+  // ["cld-work", "--append-system-prompt", "be brief "] as the board shows it: joined, not trimmed.
+  const list = viewOf({ ...WORK, command: 'cld-work --append-system-prompt be brief ' })
+  for (const key of [undefined, 'Escape']) {
+    const side = liveRow(list)
+    const field = side.pick('.profile-command-field')
+    expect(field.value).toBe('cld-work --append-system-prompt be brief ')
+    field.focus()
+    await side.world.fire(field, 'focusin')
+    if (key) await side.world.fire(field, 'keydown', { key })
+    await side.world.fire(field, 'focusout')
+    expect([key, side.posts]).toEqual([key, []])
+  }
 })
 
 // ---------------------------------------------------------------- the board's answers

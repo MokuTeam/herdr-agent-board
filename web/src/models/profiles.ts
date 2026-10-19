@@ -157,8 +157,11 @@ export function profileRenamed(title: string, value: string): string | null {
   return next && next !== title ? next : null
 }
 
-/** A start command as typed, when it changed: trimmed ('' clears it); null when it is the same. */
+/**
+ * A start command as typed, when it changed: trimmed ('' clears it); null when it is the same.
+ * Both sides are trimmed: a list command whose last word ends in a space shows a trailing space, and leaving it alone must not save it as a string.
+ */
 export function commandEdited(command: string, value: string): string | null {
   const next = value.trim()
-  return next === command ? null : next
+  return next === command.trim() ? null : next
 }
