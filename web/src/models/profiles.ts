@@ -117,6 +117,8 @@ export interface ProfileRowView {
   missing: boolean
   /** Shown, its folder there, and the board's hooks not in its settings.json: the panel offers Install. */
   noHooks: boolean
+  /** Its start command as one line, typed instead of `launch.claude`; '' for none. */
+  command: string
 }
 
 /**
@@ -136,6 +138,7 @@ export function profileRows(profiles: readonly BoardProfile[], t: Translator): P
       shown,
       missing,
       noHooks: shown && !missing && p.hooks === false,
+      command: p.command ?? '',
     }
   })
 }
@@ -152,4 +155,10 @@ export function unknownFolders(items: readonly Item[]): string[] {
 export function profileRenamed(title: string, value: string): string | null {
   const next = value.trim()
   return next && next !== title ? next : null
+}
+
+/** A start command as typed, when it changed: trimmed ('' clears it); null when it is the same. */
+export function commandEdited(command: string, value: string): string | null {
+  const next = value.trim()
+  return next === command ? null : next
 }

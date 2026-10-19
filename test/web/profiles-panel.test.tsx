@@ -10,7 +10,7 @@ import type { BoardPayload, BoardProfile } from '../../src/core/payload.ts'
 import type { Item } from '../../src/core/types.ts'
 import { ProfileRow } from '../../web/src/components/profiles/ProfileRow.tsx'
 import { ProfilesPanel } from '../../web/src/components/profiles/ProfilesPanel.tsx'
-import { type ProfileRowView, profileRows, unknownFolders } from '../../web/src/models/profiles.ts'
+import { commandEdited, type ProfileRowView, profileRows, unknownFolders } from '../../web/src/models/profiles.ts'
 import type { Board } from '../../web/src/state/BoardProvider.tsx'
 import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
 import { board, item, payload, renderInBoard } from './support/board.tsx'
@@ -127,6 +127,7 @@ test('a row per profile: color, name, folder, sessions now, shown or hidden', ()
       shown: true,
       missing: false,
       noHooks: false,
+      command: '',
     },
     {
       id: 'work',
@@ -137,6 +138,7 @@ test('a row per profile: color, name, folder, sessions now, shown or hidden', ()
       shown: true,
       missing: false,
       noHooks: true,
+      command: '',
     },
     {
       id: 'gamedev',
@@ -147,6 +149,7 @@ test('a row per profile: color, name, folder, sessions now, shown or hidden', ()
       shown: false,
       missing: false,
       noHooks: false,
+      command: '',
     },
   ])
 
@@ -188,7 +191,10 @@ test('a row per profile: color, name, folder, sessions now, shown or hidden', ()
   ])
   // The name is edited; the folder is only read.
   const work = rowIn(panel, 'work')
-  expect(findAll([work], el => el.tag === 'input').map(el => el.attrs.get('aria-label'))).toEqual(['Name'])
+  expect(findAll([work], el => el.tag === 'input').map(el => el.attrs.get('aria-label'))).toEqual([
+    'Name',
+    'Start command',
+  ])
   expect(find([work], el => hasClass(el, 'profile-dir')).tag).toBe('span')
 
   // In Russian.
@@ -207,6 +213,39 @@ test('a row per profile: color, name, folder, sessions now, shown or hidden', ()
   )
   expect(controls.length).toBeGreaterThan(8)
   expect(controls.filter(el => !el.attrs.has('disabled'))).toEqual([])
+})
+
+test('the start command: a field per row, launch.claude’s program as its placeholder, and one hint', () => {
+  const panel = panelOf(
+    payload({ items: ITEMS, profiles: [PRIVATE, { ...WORK, command: 'cld-work' }], claudeProgram: 'claude-tg' }),
+  )
+  const fields = findAll([panel], el => hasClass(el, 'profile-command-field'))
+  expect(
+    fields.map(el => [el.attrs.get('aria-label'), el.attrs.get('value') ?? '', el.attrs.get('placeholder')]),
+  ).toEqual([
+    ['Start command', '', 'claude-tg'],
+    ['Start command', 'cld-work', 'claude-tg'],
+  ])
+  expect(findAll([panel], el => hasClass(el, 'profile-command-hint')).map(textOf)).toEqual([
+    'Start command: typed in the new tab instead of claude-tg. An alias like cld-work works; the board adds its own arguments.',
+  ])
+  // A board that does not say: claude.
+  const plain = panelOf(dataOf([PRIVATE, WORK]))
+  expect(findAll([plain], el => hasClass(el, 'profile-command-field')).map(el => el.attrs.get('placeholder'))).toEqual([
+    'claude',
+    'claude',
+  ])
+  expect(profileRows([WORK, { ...WORK, command: 'cld-work' }], t).map(r => r.command)).toEqual(['', 'cld-work'])
+  // In Russian.
+  const ru = panelOf(
+    payload({ lang: 'ru', items: ITEMS, profiles: [PRIVATE, WORK], claudeProgram: 'claude-tg' }),
+    {},
+    'ru',
+  )
+  expect(textOf(find([ru], el => hasClass(el, 'profile-command-hint')))).toBe(
+    'Команда запуска: набирается в новой вкладке вместо claude-tg. Подойдёт и алиас вроде cld-work; свои аргументы доска добавит сама.',
+  )
+  expect(find([ru], el => hasClass(el, 'profile-command-field')).attrs.get('aria-label')).toBe('Команда запуска')
 })
 
 // ---------------------------------------------------------------- live, with React's handlers
@@ -317,6 +356,32 @@ test('renaming, hiding and showing send the profile’s id', async () => {
   await gamedev.world.fire(hidden, 'click')
   await gamedev.world.fire(shown, 'click')
   expect(gamedev.posts).toEqual([{ op: 'update', id: 'gamedev', hidden: false }])
+})
+
+test('the start command goes on Enter or leaving the field; "" clears it; the same, blanks over none, or Escape send nothing', async () => {
+  expect(commandEdited('', ' cld-work ')).toBe('cld-work')
+  expect(commandEdited('cld-work', '')).toBe('')
+  expect(commandEdited('cld-work', '  cld-work ')).toBeNull()
+  expect(commandEdited('', '   ')).toBeNull()
+  const typed = async (row: ProfileRowView, value: string, key?: string) => {
+    const side = liveRow(row)
+    const field = side.pick('.profile-command-field')
+    field.focus()
+    await side.world.fire(field, 'focusin')
+    field.value = value
+    await side.world.fire(field, 'input')
+    if (key) await side.world.fire(field, 'keydown', { key })
+    await side.world.fire(field, 'focusout')
+    return side.posts
+  }
+  expect(await typed(viewOf(WORK), ' cld-work ')).toEqual([{ op: 'update', id: 'work', command: 'cld-work' }])
+  expect(await typed(viewOf(WORK), 'cld-work --verbose', 'Enter')).toEqual([
+    { op: 'update', id: 'work', command: 'cld-work --verbose' },
+  ])
+  expect(await typed(viewOf({ ...WORK, command: 'cld-work' }), '')).toEqual([{ op: 'update', id: 'work', command: '' }])
+  expect(await typed(viewOf({ ...WORK, command: 'cld-work' }), ' cld-work ')).toEqual([])
+  expect(await typed(viewOf(WORK), '   ')).toEqual([])
+  expect(await typed(viewOf(WORK), 'cld-work', 'Escape')).toEqual([])
 })
 
 // ---------------------------------------------------------------- the board's answers
@@ -448,4 +513,20 @@ test('a shown profile without the hooks offers Install; a hidden one does not; a
     ['/api/profiles', 'POST', '1', { op: 'install', id: 'work' }],
   ])
   expect(live.toasts).toEqual([['Show Work first', true]])
+})
+
+test('a start command the board refuses is toasted', async () => {
+  const refusal = 'A start command begins with a program, not “-cld”, which starts with a dash'
+  const calls = answers([409, { ok: false, error: refusal }])
+  const panel = livePanel(dataOf([PRIVATE, WORK]))
+  const [, work] = panel.el.querySelectorAll('.profile-command-field')
+  if (!work) throw new Error('no field')
+  work.focus()
+  await panel.world.fire(work, 'focusin')
+  work.value = '-cld'
+  await panel.world.fire(work, 'input')
+  await panel.world.fire(work, 'focusout')
+  for (let i = 0; i < 4; i++) await panel.world.flush()
+  expect(sent(calls)).toEqual([['/api/profiles', 'POST', '1', { op: 'update', id: 'work', command: '-cld' }]])
+  expect(panel.toasts).toEqual([[refusal, true]])
 })

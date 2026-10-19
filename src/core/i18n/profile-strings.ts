@@ -72,6 +72,9 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'prof.shown': 'Shown',
     'prof.hidden': 'Hidden',
     'prof.missing': 'Folder not found',
+    'prof.command': 'Start command',
+    'prof.commandHint':
+      'Start command: typed in the new tab instead of {program}. An alias like cld-work works; the board adds its own arguments.',
     'prof.addUnknown': 'Add {path}',
     'prof.dir': 'Folder, Enter',
     'prof.add': 'Add a folder somewhere else',
@@ -147,6 +150,9 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'prof.shown': 'Показан',
     'prof.hidden': 'Скрыт',
     'prof.missing': 'Папка не найдена',
+    'prof.command': 'Команда запуска',
+    'prof.commandHint':
+      'Команда запуска: набирается в новой вкладке вместо {program}. Подойдёт и алиас вроде cld-work; свои аргументы доска добавит сама.',
     'prof.addUnknown': 'Добавить {path}',
     'prof.dir': 'Папка, Enter',
     'prof.add': 'Добавить папку из другого места',

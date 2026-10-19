@@ -1,8 +1,9 @@
 // The Profiles panel, opened from Settings → Profiles… (only with more than one profile folder
-// found) and built like the categories panel: a row per Claude profile, then a folder a session
-// reported that no profile has, a folder added from somewhere else, and Install for a shown
-// profile whose settings.json lacks the board's hooks. Every change goes to config.json at once
-// (POST /api/profiles) and comes back over the live stream; what the board refuses is toasted.
+// found) and built like the categories panel: a row per Claude profile, a hint on what a start
+// command does, then a folder a session reported that no profile has, a folder added from
+// somewhere else, and Install for a shown profile whose settings.json lacks the board's hooks.
+// Every change goes to config.json at once (POST /api/profiles) and comes back over the live
+// stream; what the board refuses is toasted.
 import { useCallback, useState } from 'react'
 import { api, errorText } from '../../api/client.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
@@ -39,6 +40,8 @@ export function ProfilesPanel({ open, onClose }: ProfilesPanelProps) {
   )
 
   const rows = profileRows(data?.profiles ?? [], t)
+  // What a profile without a start command types: launch.claude's program.
+  const program = data?.claudeProgram || 'claude'
   return (
     <Panel
       id="profiles-sheet"
@@ -55,9 +58,10 @@ export function ProfilesPanel({ open, onClose }: ProfilesPanelProps) {
       <div className="sheet-body cats-body profiles-body">
         <div className="cats-list">
           {rows.map(row => (
-            <ProfileRow key={row.id} row={row} disabled={!canEdit} edit={edit} />
+            <ProfileRow key={row.id} row={row} disabled={!canEdit} edit={edit} program={program} />
           ))}
         </div>
+        <p className="profile-command-hint">{t('prof.commandHint', { program })}</p>
         <ProfileAdds rows={rows} unknown={unknownFolders(data?.items ?? [])} disabled={!canEdit} edit={edit} />
       </div>
     </Panel>

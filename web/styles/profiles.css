@@ -98,6 +98,11 @@
   white-space: nowrap;
 }
 .profile-missing { color: var(--orange); font-weight: 600; white-space: nowrap; }
+/* Its start command: a line under the folder, indented as it is, labelled quietly as the folder
+   typed in under the rows (.profile-add); the hint under the rows says what it does. */
+.profile-command { display: flex; align-items: center; gap: 8px; padding: 4px 0 0 36px; color: var(--label-2); font-size: 12px; }
+.profile-command > span { flex: none; font-weight: 600; }
+.profile-command-hint { margin: 10px 0 0; color: var(--label-2); font-size: 12px; line-height: 1.4; }
 
 /* Shown or Hidden: two small segments in a well, the pressed one raised. */
 .profile-shown { display: inline-flex; flex: none; padding: 2px; border-radius: 8px; background: var(--fill-2); }

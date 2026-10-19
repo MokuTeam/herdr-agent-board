@@ -305,6 +305,16 @@ test('one profile shown: the usage pill and popover are phase 1’s, whatever it
   }
 })
 
+test('one profile with no start command, and launch.claude’s program sent: the page is still phase 1’s', () => {
+  const sent: BoardPayload = { ...ONE, claudeProgram: 'claude', profiles: [{ ...DEFAULT, command: '' }] }
+  expect(board(sent)).toBe(board(PHASE1))
+  expect(toolbar(sent)).toBe(toolbar(PHASE1))
+  expect(usagePop(sent)).toBe(usagePop(PHASE1))
+  expect(categoriesPanel(sent)).toBe(categoriesPanel(PHASE1))
+  expect(JSON.stringify(settingsItems(sent))).toBe(JSON.stringify(settingsItems(PHASE1)))
+  for (const open of [false, true]) expect(canonical(sidePanels(sent, open))).toBe(canonical(sidePanels(PHASE1, open)))
+})
+
 // ---------------------------------------------------------------- the new-session window
 // Its lanes and sessions in the folders of the window's fake machine (support/launch-sides.tsx),
 // drawn as launch-dialog.test.tsx draws it.
