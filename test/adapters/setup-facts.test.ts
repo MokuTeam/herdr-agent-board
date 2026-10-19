@@ -171,7 +171,7 @@ describe('gatherFacts', () => {
       for (const [file, text] of [
         [boardFiles(root).skill, source],
         [skillOf('.claude'), source],
-        [skillOf('.claude-work'), `﻿${theirs}`],
+        [skillOf('.claude-work'), `\uFEFF${theirs}`],
       ] as const) {
         mkdirSync(join(file, '..'), { recursive: true })
         writeFileSync(file, text)

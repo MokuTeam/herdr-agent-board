@@ -197,7 +197,8 @@ scope for this phase.
   - Hidden profiles are not touched.
   - Showing a profile later offers Install for it (panel note, setup check).
 - **The setup check** reports per profile.
-- **Never touched:** credentials, `.claude.json` or anything else in a profile folder.
+- **Never touched:** credentials, `.claude.json` or anything else in a profile folder beyond
+  `settings.json`, its backup and `skills/herdr-agents`.
 
 ### Usage
 

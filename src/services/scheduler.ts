@@ -19,7 +19,9 @@
 // or background tasks hold the session too long, the session gets "[board reminder] restart did
 // not happen: <why>" instead, once it is free. The wake goes through the board's profile guard
 // (actions.ts checkWake): one the board would refuse is refused before the session is put to
-// sleep, so a restart never leaves a session asleep for want of a safe wake.
+// sleep. A wake refused after the sleep (the pane's evidence changed, or herdr failed) leaves the
+// session asleep, the safe outcome, never resumed in another account; it is tried again and
+// reported after RESTART_TRIES (3) tries.
 import { type FSWatcher, mkdirSync, watch } from 'node:fs'
 import { beginReport, deferReport, settleReport, verifyReport } from '../adapters/call-receipts.ts'
 import { readCard } from '../adapters/cards.ts'

@@ -20,8 +20,9 @@ export const settingsRoute = (): Route => edit('/api/settings', editSettings)
 export const categoriesRoute = (): Route => edit('/api/categories', editCategories)
 /**
  * The Profiles panel's renames, colors, show/hide and folders added (this computer's home folder);
- * { op: 'install', id } puts the board's hooks into that profile (`install`). It writes Claude's
- * own settings.json, so a page of another origin is refused, as for the launches.
+ * { op: 'install', id } puts the board's hooks and the agents' skill into that profile
+ * (`install`). It writes Claude's own settings.json, so a page of another origin is refused, as
+ * for the launches.
  */
 export const profilesRoute = (install: (id: string) => EditResult): Route =>
   edit(

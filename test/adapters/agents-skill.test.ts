@@ -43,6 +43,6 @@ test('skillIn: the file, the text there (a BOM taken off) or null, and the board
   expect(skillIn(dir, SOURCE)).toEqual({ file, installed: null, source: SOURCE })
   expect(existsSync(join(dir, 'skills'))).toBe(false)
   mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, `﻿${THEIRS}`)
+  writeFileSync(file, `\uFEFF${THEIRS}`)
   expect(skillIn(dir, null)).toEqual({ file, installed: THEIRS, source: null })
 })

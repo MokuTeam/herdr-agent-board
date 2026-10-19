@@ -244,10 +244,11 @@ it, Esc puts it back, empty clears it; its placeholder is what is typed without 
 `launch.claude`'s program). Under the rows, a hint on what a start command does; below it,
 "Add <folder>" for a folder a session runs in that no profile has, "Add a folder somewhere else"
 (`~` is the home folder; the folder must be there), and, for a shown profile whose `settings.json`
-lacks the board's hooks, a note with Install, which writes the hooks and the status line there as
-the [install](#setup) does and checks the setup again at once. Hiding a profile takes it out of the
-switch, out of the profiles a session can be started in, and out of Install. Its running sessions
-still show, with their tag, and their agents can still start helpers in it.
+lacks the board's hooks, a note with Install, which writes the hooks, the status line and the
+agents' skill there as the [install](#setup) does and checks the setup again at once. Hiding a
+profile takes it out of the switch, out of the profiles a session can be started in, and out of
+Install. Its running sessions still show, with their tag, and their agents can still start helpers
+in it.
 
 **A start command per profile.** A profile's `command` is what the board types at the new tab's
 shell prompt instead of `launch.claude`, for every start that types one: the board's, with the
@@ -1052,8 +1053,9 @@ each one the board shows). Claude Code keeps only its one-line description in a 
 context and reads the rest when it is needed: how to start another session, message or wake one,
 do something later (`board remind` rather than CronCreate, which dies when the session sleeps),
 restart itself when an MCP server dropped or its settings, hooks or skills changed
-(`board restart`), and run a server or an interactive login in a pane of its own. herdr puts the pane's ids into its environment (`HERDR_ENV=1`, `HERDR_PANE_ID`,
-`HERDR_TAB_ID`, `HERDR_WORKSPACE_ID`); when they are there, the board's brief
+(`board restart`), and run a server or an interactive login in a pane of its own. herdr puts the
+pane's ids into its environment (`HERDR_ENV=1`, `HERDR_PANE_ID`, `HERDR_TAB_ID`,
+`HERDR_WORKSPACE_ID`); when they are there, the board's brief
 ([`src/core/brief.ts`](src/core/brief.ts)) tells the session its pane and points it to the skill,
 and outside herdr it says nothing of it. For herdr's own command reference, `herdr --skill`. A
 skill of that name that is not the board's is left alone, and `board doctor` says so (per

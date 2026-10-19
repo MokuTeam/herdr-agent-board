@@ -8,7 +8,7 @@ import { type SkillAction, type SkillFacts, skillAction, skillFile } from '../co
 /** A text file as a string (a BOM taken off), or null. */
 function read(file: string): string | null {
   try {
-    return readFileSync(file, 'utf8').replace(/^﻿/, '')
+    return readFileSync(file, 'utf8').replace(/^\uFEFF/, '')
   } catch {
     return null
   }
