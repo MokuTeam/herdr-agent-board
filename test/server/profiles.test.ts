@@ -576,6 +576,16 @@ test('the board sends each profile’s start command ("" for none) and launch.cl
     409,
     { ok: false, error: 'A start command begins with a program, not “-cld”, which starts with a dash' },
   ])
+  const env = await post({ op: 'update', id: 'work', command: 'env CLAUDE_CONFIG_DIR=/x claude' })
+  expect([env.status, await env.json()]).toEqual([
+    409,
+    {
+      ok: false,
+      error:
+        'A start command can’t set environment variables (“CLAUDE_CONFIG_DIR=/x”): the board sets CLAUDE_CONFIG_DIR for the profile itself. Put them in your alias',
+    },
+  ])
+  expect(profilesIn(box).find(p => p.id === 'work')?.command).toEqual(['cld-work', '--verbose'])
   expect((await post({ op: 'update', id: 'work', command: 'cld-work' })).status).toBe(200)
   expect(profilesIn(box).find(p => p.id === 'work')?.command).toBe('cld-work')
 }, 20_000)

@@ -1169,24 +1169,32 @@ test('a start command that picks its session itself gets no --session-id from th
   )
 }, 40_000)
 test('a bad start command refuses the board’s own launch before anything runs', async () => {
-  const { box, post, board } = await boardServer(box => profilesWith(box, { work: { command: '-cld' } }))
-  for (const workspace of [{ id: 'wA' }, { create: 'Fresh' }]) {
-    const r = await post('/api/launch', { name: 'Nope', cwd: box.dir, category: 'acme', workspace, profile: 'work' })
-    assert.equal(r.status, 400)
-    assert.deepEqual(await r.json(), {
-      ok: false,
-      field: 'profile',
-      error: 'A start command begins with a program, not “-cld”, which starts with a dash',
-    })
+  const cases: [string, string][] = [
+    ['-cld', 'A start command begins with a program, not “-cld”, which starts with a dash'],
+    // One that sets the folder itself would override the board's --env in bash.
+    [
+      'CLAUDE_CONFIG_DIR=~/.claude-work claude',
+      'A start command can’t set environment variables (“CLAUDE_CONFIG_DIR=~/.claude-work”): the board sets CLAUDE_CONFIG_DIR for the profile itself. Put them in your alias',
+    ],
+  ]
+  for (const [command, error] of cases) {
+    const { box, post, board } = await boardServer(box => profilesWith(box, { work: { command } }))
+    for (const workspace of [{ id: 'wA' }, { create: 'Fresh' }]) {
+      const r = await post('/api/launch', { name: 'Nope', cwd: box.dir, category: 'acme', workspace, profile: 'work' })
+      assert.equal(r.status, 400)
+      assert.deepEqual(await r.json(), { ok: false, field: 'profile', error })
+    }
+    assert.equal(
+      box
+        .calls()
+        .some(
+          a => a[0] === 'tab' || (a[0] === 'workspace' && a[1] === 'create') || (a[0] === 'pane' && a[1] === 'run'),
+        ),
+      false,
+    )
+    assert.deepEqual((await board()).launches, [])
   }
-  assert.equal(
-    box
-      .calls()
-      .some(a => a[0] === 'tab' || (a[0] === 'workspace' && a[1] === 'create') || (a[0] === 'pane' && a[1] === 'run')),
-    false,
-  )
-  assert.deepEqual((await board()).launches, [])
-}, 30_000)
+}, 60_000)
 test('launch.agent and launch.command never read a profile’s start command, a bad one included', async () => {
   for (const command of ['cld-work', '-cld']) {
     const { box, started, launched } = await boardServer(box => ({

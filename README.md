@@ -249,11 +249,13 @@ shell prompt instead of `launch.claude`, for every start that types one: the boa
 default launcher (the new-session window, "New here"), and an agent's own `spawn-agent` (its
 helpers); in the board's own profile too. It is a program, alias or function the tab's shell
 knows, with arguments if you like: a string, split on spaces, or a list, typed by `launch.claude`'s
-rules (see [spawn-agent](#spawn-agent)). The board adds the profile's `args` after it (not
-`launch.args`), then `--session-id` (none when the command picks its session itself, with
-`--resume` say). `launch.agent` and `launch.command` do not use it, and the env rule does not
-change: a start that sets `CLAUDE_CONFIG_DIR` through `--env` without a command still does with
-one. With these in Git Bash, say:
+rules (see [spawn-agent](#spawn-agent)). It may not set environment variables
+(`CLAUDE_CONFIG_DIR=~/.claude-work claude`, `env FOO=1 claude`): in bash that would override the
+folder the board sets for the profile, so such settings go in the alias. The board adds the
+profile's `args` after it (not `launch.args`), then `--session-id` (none when the command picks its
+session itself, with `--resume` say). `launch.agent` and `launch.command` do not use it, and the env
+rule does not change: a start that sets `CLAUDE_CONFIG_DIR` through `--env` without a command still
+does with one. With these in Git Bash, say:
 
 ```bash
 alias cld='CLAUDE_CONFIG_DIR=$HOME/.claude command claude --allow-dangerously-skip-permissions'

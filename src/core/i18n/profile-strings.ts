@@ -19,6 +19,8 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
       'The start command is typed at the new tab’s shell prompt, so its program “{word}” must be one word: a name the shell knows (cld-work) or a path, without spaces or quotes',
     'err.profile.commandChars':
       'The start command’s argument {word} has a quote or a control character in it, which cannot be typed into a shell',
+    'err.profile.commandEnv':
+      'A start command can’t set environment variables (“{word}”): the board sets CLAUDE_CONFIG_DIR for the profile itself. Put them in your alias',
     // Install from the Profiles panel (services/profiles.ts installProfile)
     'err.profile.hiddenInstall': 'Show {title} first: the board installs only into shown profiles',
     // the setup check with more than one profile shown (core/setup.ts)
@@ -97,6 +99,8 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
       'Команда запуска набирается в оболочке новой вкладки, поэтому её программа «{word}» должна быть одним словом: имя, которое знает оболочка (cld-work), или путь без пробелов и кавычек',
     'err.profile.commandChars':
       'В аргументе команды запуска {word} есть кавычка или управляющий символ: такое не набрать в оболочке',
+    'err.profile.commandEnv':
+      'Команда запуска не может задавать переменные окружения («{word}»): CLAUDE_CONFIG_DIR для профиля задаёт сама доска. Перенеси их в свой алиас',
     // Install from the Profiles panel (services/profiles.ts installProfile)
     'err.profile.hiddenInstall': 'Сначала покажи {title}: доска ставит хуки только в показанные профили',
     // the setup check with more than one profile shown (core/setup.ts)

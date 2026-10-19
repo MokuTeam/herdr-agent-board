@@ -7,6 +7,7 @@ import {
   claudeCommand,
   claudeProgram,
   commandText,
+  envSetting,
   parseArgs,
   profileCommand,
   type SpawnArgs,
@@ -230,6 +231,43 @@ describe('a profile’s start command', () => {
       'Команда запуска начинается с программы, а не с «-cld»: здесь в начале дефис',
     )
     useLanguage('en')
+  })
+  test('refused when it sets an environment variable: the board sets CLAUDE_CONFIG_DIR for the profile', () => {
+    useLanguage('en')
+    const refused = (word: string) =>
+      `A start command can’t set environment variables (“${word}”): the board sets CLAUDE_CONFIG_DIR for the profile itself. Put them in your alias`
+    const cases: [unknown, string][] = [
+      // The owner's alias body, pasted: refused for the assignment, not for its `$`.
+      ['CLAUDE_CONFIG_DIR=$HOME/.claude-work command claude', 'CLAUDE_CONFIG_DIR=$HOME/.claude-work'],
+      [
+        'CLAUDE_CONFIG_DIR=~/.claude-work claude --allow-dangerously-skip-permissions',
+        'CLAUDE_CONFIG_DIR=~/.claude-work',
+      ],
+      ['FOO=1 cld-work', 'FOO=1'],
+      [['_x=', 'claude'], '_x='],
+      ['env CLAUDE_CONFIG_DIR=/x claude', 'CLAUDE_CONFIG_DIR=/x'],
+      ['env -i FOO=1 claude', 'FOO=1'],
+      ['/usr/bin/env FOO=1 claude', 'FOO=1'],
+      ['cld-work --settings CLAUDE_CONFIG_DIR=/x', 'CLAUDE_CONFIG_DIR=/x'],
+      [['cld-work', 'claude_config_dir=C:\\x'], 'claude_config_dir=C:\\x'],
+    ]
+    for (const [command, word] of cases) {
+      for (const win of [false, true]) expect(() => profileCommand(command, win)).toThrow(refused(word))
+    }
+    useLanguage('ru')
+    expect(() => profileCommand('env CLAUDE_CONFIG_DIR=/x claude', false)).toThrow(
+      'Команда запуска не может задавать переменные окружения («CLAUDE_CONFIG_DIR=/x»): CLAUDE_CONFIG_DIR для профиля задаёт сама доска. Перенеси их в свой алиас',
+    )
+    useLanguage('en')
+    // Not an assignment: an `=` further on, or after a program other than env.
+    expect(profileCommand('cld-work --model=opus', false)).toEqual(['cld-work', '--model=opus'])
+    expect(profileCommand('cld-work FOO=1', false)).toEqual(['cld-work', 'FOO=1'])
+    expect(profileCommand('environ FOO=1', false)).toEqual(['environ', 'FOO=1'])
+    expect(envSetting(['cld-work', '--verbose'])).toBeNull()
+    expect(envSetting(['C:\\tools\\env.exe', 'X=1'])).toBe('X=1')
+    // launch.claude keeps its rules: shellLine types an assignment as it did.
+    expect(shellLine(['claude', 'CLAUDE_CONFIG_DIR=/x'], false)).toBe('claude CLAUDE_CONFIG_DIR=/x')
+    expect(claudeCommand(['FOO=1', 'claude'])).toEqual(['FOO=1', 'claude'])
   })
   test('shellLine’s rules, named', () => {
     expect(typingProblem(['cld-work', '--model', 'opus 4'], false)).toBeNull()

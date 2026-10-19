@@ -667,6 +667,10 @@ test('a bad start command is refused before herdr is asked', async () => {
       ['cld-work', 3],
       'A start command is a program, or a list of the program and its arguments: "cld-work" or ["cld-work", "--model", "opus"]',
     ],
+    [
+      'env CLAUDE_CONFIG_DIR=/x claude',
+      'A start command can’t set environment variables (“CLAUDE_CONFIG_DIR=/x”): the board sets CLAUDE_CONFIG_DIR for the profile itself. Put them in your alias',
+    ],
   ]
   for (const [command, message] of cases) {
     const { box, dir, work } = await profileBox({}, () => [], { work: { command } })

@@ -438,6 +438,11 @@ test('editProfiles sets a profile’s start command, clears it with "", and refu
     error:
       'The start command’s argument "\'x\'" has a quote or a control character in it, which cannot be typed into a shell',
   })
+  expect(editProfiles({ op: 'update', id: 'work', command: 'CLAUDE_CONFIG_DIR=~/.claude claude' }, { home })).toEqual({
+    ok: false,
+    error:
+      'A start command can’t set environment variables (“CLAUDE_CONFIG_DIR=~/.claude”): the board sets CLAUDE_CONFIG_DIR for the profile itself. Put them in your alias',
+  })
   expect(editProfiles({ op: 'update', id: 'work', command: 42 }, { home })).toEqual({
     ok: false,
     error:

@@ -165,6 +165,28 @@ export function typingProblem(argv: readonly string[], win: boolean): TypingProb
   return null
 }
 
+// A shell assignment (NAME=value), and `env` as a program (a path to it, or env.exe, too).
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
+const ENV_PROGRAM = /^(?:.*[\\/])?env(?:\.exe)?$/i
+
+/**
+ * The first word of a profile's start command that sets an environment variable, which in bash
+ * would override the folder the board sets for the profile (`--env CLAUDE_CONFIG_DIR=…`): a program
+ * that is an assignment (`CLAUDE_CONFIG_DIR=~/.claude-work claude`), an assignment after the
+ * program `env` (`env CLAUDE_CONFIG_DIR=/x claude`), or any word that sets CLAUDE_CONFIG_DIR. Null
+ * when there is none. Not a rule of `launch.claude`.
+ */
+export function envSetting(argv: readonly string[]): string | null {
+  const program = String(argv[0] ?? '')
+  if (ASSIGNMENT.test(program)) return program
+  const env = ENV_PROGRAM.test(program)
+  for (const arg of argv.slice(1)) {
+    const word = String(arg)
+    if ((env && ASSIGNMENT.test(word)) || /^CLAUDE_CONFIG_DIR=/i.test(word)) return word
+  }
+  return null
+}
+
 /**
  * A command line for the tab's shell prompt (PowerShell, bash, zsh or fish): plain words as they
  * are, anything else in single quotes, which take it literally (fish too, without a backslash
@@ -195,8 +217,9 @@ export function shellLine(argv: readonly string[], win: boolean): string {
 /**
  * A profile's start command (its `command` in config.json), typed instead of `launch.claude`: a
  * string split on spaces, or a list of the program and its arguments as it is. None (unset, null,
- * blank) is null. Checked by shellLine's rules (typingProblem); throws with what is wrong, in the
- * board's language.
+ * blank) is null. Checked by shellLine's rules (typingProblem), and refused when it sets an
+ * environment variable (envSetting): the board sets the profile's folder itself. Throws with what
+ * is wrong, in the board's language.
  */
 export function profileCommand(value: unknown, win: boolean = process.platform === 'win32'): string[] | null {
   if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) return null
@@ -208,6 +231,10 @@ export function profileCommand(value: unknown, win: boolean = process.platform =
     !String(words[0]).trim()
   )
     throw new Error(t('err.profile.commandShape'))
+  // Before the typing rules: the owner's alias body (CLAUDE_CONFIG_DIR=$HOME/… command claude) is
+  // refused for what it does, not for its `$`.
+  const env = envSetting(words)
+  if (env !== null) throw new Error(t('err.profile.commandEnv', { word: env }))
   const problem = typingProblem(words, win)
   if (problem?.why === 'dash') throw new Error(t('err.profile.commandDash', { word: problem.word }))
   if (problem?.why === 'program') throw new Error(t('err.profile.commandProgram', { word: problem.word }))
