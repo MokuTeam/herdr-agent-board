@@ -219,12 +219,13 @@ choose. It never guesses: when it cannot be sure of the profile, it refuses and 
 **What it finds.** `~/.claude`, every `~/.claude-*` folder with a `settings.json` or a `projects/`
 in it, and the folder the board's own `CLAUDE_CONFIG_DIR` points to. It keeps them in config.json
 as `profiles`, each with an `id` from its folder (`~/.claude` is `default`, `~/.claude-work` is
-`work`), a `title` ("Default", "Work"), its folder (`dir`), a `color`, `hidden`, and `args`, if you
-like: more Claude arguments for the sessions the board starts in it. `~/.claude` and the board's
-own folder come in shown (`~/.claude` only while it has a `settings.json` or a `projects/`, when
-the board's own is elsewhere: a teammate whose `CLAUDE_CONFIG_DIR` names another folder keeps one
-profile), any other folder hidden, so a backup or a test folder changes nothing on the board.
-Renaming a profile, or giving it another color, never changes its id or its folder.
+`work`), a `title` ("Default", "Work"), its folder (`dir`), a `color`, `hidden`, and, if you like,
+`command` (its start command, below) and `args` (more Claude arguments for the sessions the board
+starts in it). `~/.claude` and the board's own folder come in shown (`~/.claude` only while it has
+a `settings.json` or a `projects/`, when the board's own is elsewhere: a teammate whose
+`CLAUDE_CONFIG_DIR` names another folder keeps one profile), any other folder hidden, so a backup
+or a test folder changes nothing on the board. Renaming a profile, or giving it another color,
+never changes its id or its folder.
 
 **One profile shown** (a teammate's board, and yours until you show a second): no profile switch,
 no profile choice for a new session, no `--env` on a start, and no tag on a card but the three
@@ -233,13 +234,37 @@ finds more than one profile folder.
 
 **The Profiles panel** (Settings → Profiles…), built like Categories: a row per profile with its
 color, its name (Enter or leaving the field keeps it, Esc puts it back), its folder, its sessions
-now, and Shown or Hidden; one stays shown. Below the rows: "Add <folder>" for a folder a session
-runs in that no profile has, "Add a folder somewhere else" (`~` is the home folder; the folder must
-be there), and, for a shown profile whose `settings.json` lacks the board's hooks, a note with
-Install, which writes the hooks and the status line there as the [install](#setup) does and checks
-the setup again at once. Hiding a profile takes it out of the switch, out of the profiles a session
-can be started in, and out of Install. Its running sessions still show, with their tag, and their
-agents can still start helpers in it.
+now, Shown or Hidden (one stays shown), and its "Start command" (Enter or leaving the field keeps
+it, Esc puts it back, empty clears it; its placeholder is what is typed without one, `claude` or
+`launch.claude`'s program). Under the rows, a hint on what a start command does; below it,
+"Add <folder>" for a folder a session runs in that no profile has, "Add a folder somewhere else"
+(`~` is the home folder; the folder must be there), and, for a shown profile whose `settings.json`
+lacks the board's hooks, a note with Install, which writes the hooks and the status line there as
+the [install](#setup) does and checks the setup again at once. Hiding a profile takes it out of the
+switch, out of the profiles a session can be started in, and out of Install. Its running sessions
+still show, with their tag, and their agents can still start helpers in it.
+
+**A start command per profile.** A profile's `command` is what the board types at the new tab's
+shell prompt instead of `launch.claude`, for every start that types one: the board's, with the
+default launcher (the new-session window, "New here"), and an agent's own `spawn-agent` (its
+helpers); in the board's own profile too. It is a program, alias or function the tab's shell
+knows, with arguments if you like: a string, split on spaces, or a list, typed by `launch.claude`'s
+rules (see [spawn-agent](#spawn-agent)). The board adds the profile's `args` after it (not
+`launch.args`), then `--session-id` (none when the command picks its session itself, with
+`--resume` say). `launch.agent` and `launch.command` do not use it, and a profile other than the
+board's own still gets `CLAUDE_CONFIG_DIR` through `--env`. With these in Git Bash, say:
+
+```bash
+alias cld='CLAUDE_CONFIG_DIR=$HOME/.claude command claude --allow-dangerously-skip-permissions'
+alias cld-work='CLAUDE_CONFIG_DIR=$HOME/.claude-work command claude --allow-dangerously-skip-permissions'
+```
+
+and `"command": "cld"` on Default, `"command": "cld-work"` on Work (or their "Start command" in the
+panel), a Work session from the board types `cld-work --session-id <id>`, so a flag added to the
+alias reaches it without touching the board. An alias that names another profile's folder runs its
+session there: the card's red "Wrong profile" tag and herdr's notification say so. A command that
+breaks the rules is refused with the reason: on save in the panel, and at a start that types it,
+before anything runs.
 
 **Which profile a session is in.** The hooks and the status line run in the session's env: they
 read its `CLAUDE_CONFIG_DIR` (unset is `~/.claude`) and write the profile on its card. A folder is
@@ -314,6 +339,8 @@ An alias like `cld-work` (`CLAUDE_CONFIG_DIR=$HOME/.claude-work claude …`) set
 that one Claude, not for the pane's shell, so a resume in that pane would start in `~/.claude`. The
 board refuses to wake those sessions. herdr-wake resuming one by itself is expected to fail, as
 Claude finds no such session in `~/.claude`; wake it in its pane yourself with `cld-work --resume`.
+A session the board starts with `"command": "cld-work"` still opens its tab with work's
+`CLAUDE_CONFIG_DIR`, so waking it stays in work.
 
 ## New sessions
 
@@ -447,10 +474,10 @@ With more than one Claude profile (`CLAUDE_CONFIG_DIR` folders such as `~/.claud
 session an agent starts keeps that agent's profile, the one its own `CLAUDE_CONFIG_DIR` points to,
 even when the profile is hidden on the board: a helper of a work session runs in work.
 `--profile <id>` starts it in another profile instead, one the board lists and shows. The
-profile's `args` go after `launch.claude`, before `--session-id`. The default profile
-(`~/.claude`) is the one herdr's own env is taken to be: a start in it, the agent's own or
-`--profile default`, leaves the new tab's env as herdr makes it, as before profiles. For any other
-profile, the agent's own or the one `--profile` names, the new tab gets
+profile's `args` go after the profile's `command`, or `launch.claude`, before `--session-id`. The
+default profile (`~/.claude`) is the one herdr's own env is taken to be: a start in it, the agent's
+own or `--profile default`, leaves the new tab's env as herdr makes it, as before profiles. For any
+other profile, the agent's own or the one `--profile` names, the new tab gets
 `herdr tab create --env CLAUDE_CONFIG_DIR=<folder>`, which needs herdr 0.9.5 or newer. spawn-agent
 then records the pane as opened in that profile, with the terminal herdr opened it with. With
 `--session-id`, every start, one that leaves the env alone included, writes the card as meant to
