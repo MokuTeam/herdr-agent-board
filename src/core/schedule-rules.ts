@@ -92,12 +92,24 @@ const folder = (p: unknown): string =>
     .toLowerCase()
 
 /**
- * The session an entry is for: by its id, else the Claude session now in its pane and folder.
- * /clear gives a session a new id in the same pane; the reminder follows it there.
- * Returns undefined when there is none (as before the port).
+ * The session an entry is for (`item`): by its id, else the Claude session now in its pane and
+ * folder, when that one runs in the profile the entry's session ran in (`profileOf`: a session's
+ * profile id by its key, undefined when not known). /clear gives a session a new id in the same
+ * pane and the same Claude, so the same profile; the reminder follows it there. A session there
+ * in another profile, or one where either profile is not known, is never followed into (it would
+ * be reminded in the wrong account): it comes back as `other`, so the entry waits saying why.
+ * Neither when there is none (as before the port).
  */
-export function targetOf(entry: ScheduleEntry, items: Item[]): Item | undefined {
+export function targetOf(
+  entry: ScheduleEntry,
+  items: Item[],
+  profileOf: (key: string) => string | undefined,
+): { item?: Item; other?: Item } {
   const own = items.find(i => i.key === entry.key)
-  if (own || !entry.pane || !entry.cwd) return own
-  return items.find(i => i.pane === entry.pane && i.session && !i.sleeping && folder(i.cwd) === folder(entry.cwd))
+  if (own) return { item: own }
+  if (!entry.pane || !entry.cwd) return {}
+  const next = items.find(i => i.pane === entry.pane && i.session && !i.sleeping && folder(i.cwd) === folder(entry.cwd))
+  if (!next) return {}
+  const was = profileOf(entry.key)
+  return was !== undefined && was === profileOf(next.key) ? { item: next } : { other: next }
 }

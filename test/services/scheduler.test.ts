@@ -216,6 +216,55 @@ describe('startScheduler', () => {
     await until(() => read(box, 'ddddd4')?.why === 'gone')
   })
 
+  test('a reminder set in a work session never goes to a default session now in its pane and folder', async () => {
+    const box = await sandbox()
+    const home = join(box.dir, 'home')
+    for (const name of ['.claude', '.claude-work']) {
+      mkdirSync(join(home, name), { recursive: true })
+      writeFileSync(join(home, name, 'settings.json'), '{}')
+    }
+    herdrWith(box, 'idle')
+    // s0 ran in work and is gone (exited); s1, started with `cld` in its pane and folder, reports the default folder.
+    mkdirSync(box.cards, { recursive: true })
+    const card = (key: string, dir: string) =>
+      writeFileSync(join(box.cards, `${key}.json`), JSON.stringify({ key, profileDir: dir }))
+    card('s0', join(home, '.claude-work'))
+    card('s1', join(home, '.claude'))
+    const past = Date.now() - 1000
+    put(box, {
+      id: 'dddd05',
+      key: 's0',
+      name: 'work one',
+      pane: 'p1',
+      cwd: box.dir,
+      text: 'for work',
+      at: past,
+      next: past,
+    })
+    await scheduler(box, {
+      profiles: [
+        { id: 'default', title: 'Private', dir: join(home, '.claude'), color: 'indigo', hidden: false },
+        { id: 'work', title: 'Work', dir: join(home, '.claude-work'), color: 'teal', hidden: false },
+      ],
+    })
+    const why =
+      'The session now in its pane runs in profile Private, not in Work, where this was set, so it does not go there; if it is for that session, set it there again'
+    await until(() => read(box, 'dddd05')?.why === why)
+    const first = read(box, 'dddd05')?.tried
+    // Tried again on a later tick, and held again: still for s0, nothing typed.
+    await until(() => {
+      const e = read(box, 'dddd05')
+      return e?.tried !== first && e?.why === why
+    })
+    expect(read(box, 'dddd05')).toMatchObject({ key: 's0', pendingSince: expect.any(Number) })
+    assert.deepEqual(prompts(box), [])
+    assert.deepEqual(runs(box), [])
+    // The session in its pane runs in work after all (its hooks say so): the reminder follows it there.
+    card('s1', join(home, '.claude-work'))
+    await until(() => prompts(box).length === 1)
+    assert.deepEqual(prompts(box), ['[board reminder; set by work one before /clear] for work'])
+  })
+
   test('a reminder set for another session says who set it', async () => {
     const box = await sandbox()
     herdrWith(box, 'idle')

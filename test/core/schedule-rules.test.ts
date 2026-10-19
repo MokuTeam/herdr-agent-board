@@ -89,23 +89,45 @@ test('target: the session by key, else the session now in its pane and folder', 
     item({ key: 's1', session: 's1', pane: 'p1', cwd: 'c:/proj/' }),
     item({ key: 's2', session: 's2', pane: 'p2', cwd: 'C:\\Proj' }),
   ]
-  assert.equal(targetOf(entry({ key: 's2' }), items)?.key, 's2')
+  // One profile: every session is in it.
+  const one = () => 'default'
+  assert.deepEqual(targetOf(entry({ key: 's2' }), items, one), { item: items[1] })
   // /clear: s0 is gone, pane p1 and the folder (case, slashes, trailing slash ignored) lead to s1.
-  assert.equal(targetOf(entry({ key: 's0', pane: 'p1', cwd: 'C:\\Proj' }), items)?.key, 's1')
-  assert.equal(targetOf(entry({ key: 's0', pane: 'p1', cwd: 'C:\\Other' }), items), undefined)
-  assert.equal(targetOf(entry({ key: 's0' }), items), undefined) // no pane or folder recorded
-  assert.equal(
-    targetOf(entry({ key: 's0', pane: 'p1', cwd: 'C:\\Proj' }), [
-      item({ key: 's1', session: 's1', pane: 'p1', cwd: 'C:\\Proj', sleeping: true }),
-    ]),
-    undefined,
+  assert.deepEqual(targetOf(entry({ key: 's0', pane: 'p1', cwd: 'C:\\Proj' }), items, one), { item: items[0] })
+  assert.deepEqual(targetOf(entry({ key: 's0', pane: 'p1', cwd: 'C:\\Other' }), items, one), {})
+  assert.deepEqual(targetOf(entry({ key: 's0' }), items, one), {}) // no pane or folder recorded
+  assert.deepEqual(
+    targetOf(
+      entry({ key: 's0', pane: 'p1', cwd: 'C:\\Proj' }),
+      [item({ key: 's1', session: 's1', pane: 'p1', cwd: 'C:\\Proj', sleeping: true })],
+      one,
+    ),
+    {},
   )
-  assert.equal(
-    targetOf(entry({ key: 's0', pane: 'p1', cwd: 'C:\\Proj' }), [
-      item({ key: 's1', session: null, pane: 'p1', cwd: 'C:\\Proj' }),
-    ]),
-    undefined,
+  assert.deepEqual(
+    targetOf(
+      entry({ key: 's0', pane: 'p1', cwd: 'C:\\Proj' }),
+      [item({ key: 's1', session: null, pane: 'p1', cwd: 'C:\\Proj' })],
+      one,
+    ),
+    {},
   )
+})
+
+test('target: a reminder set in a work session never goes to a default session in its pane', () => {
+  const items = [item({ key: 's1', session: 's1', pane: 'p1', cwd: 'C:\\Proj' })]
+  const gone = entry({ key: 's0', pane: 'p1', cwd: 'C:\\Proj' })
+  const profiles = (map: Record<string, string>) => (key: string) => map[key]
+  // s0 ran in work, s1 runs in default: not followed, s1 comes back as the one it did not go to.
+  assert.deepEqual(targetOf(gone, items, profiles({ s0: 'work', s1: 'default' })), { other: items[0] })
+  // Either one not known: not followed either.
+  assert.deepEqual(targetOf(gone, items, profiles({ s1: 'default' })), { other: items[0] })
+  assert.deepEqual(targetOf(gone, items, profiles({ s0: 'work' })), { other: items[0] })
+  assert.deepEqual(targetOf(gone, items, profiles({})), { other: items[0] })
+  // Both in work (/clear keeps the Claude and its profile): followed.
+  assert.deepEqual(targetOf(gone, items, profiles({ s0: 'work', s1: 'work' })), { item: items[0] })
+  // Its own session, by key: whatever profiles say.
+  assert.deepEqual(targetOf(entry({ key: 's1' }), items, profiles({})), { item: items[0] })
 })
 
 test('entries from before kinds existed are reminders as ever', () => {

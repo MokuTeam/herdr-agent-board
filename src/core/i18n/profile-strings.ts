@@ -31,6 +31,9 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     // a wake into a pane the board opened in another profile than the session's (services/actions.ts wake)
     'err.wakePane':
       'Its pane was opened in profile {profile}, so waking could resume it in the wrong account; wake it in herdr where you started it',
+    // a reminder whose session is gone, not sent to the session of another profile now in its pane (services/scheduler.ts)
+    'sched.err.profile':
+      'The session now in its pane runs in profile {now}, not in {was}, where this was set, so it does not go there; if it is for that session, set it there again',
     // a MokuPilot call from a session in another profile than the board's (services/mokupilot.ts)
     'mokupilot.err.profile':
       'MokuPilot takes the profile of its running copy, {board}: a call from {profile} would run in the wrong account',
@@ -94,6 +97,9 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     // a wake into a pane the board opened in another profile than the session's (services/actions.ts wake)
     'err.wakePane':
       'Её панель открыта в профиле {profile}: пробуждение может продолжить её не в том аккаунте; разбуди её в herdr, там, где запускал',
+    // a reminder whose session is gone, not sent to the session of another profile now in its pane (services/scheduler.ts)
+    'sched.err.profile':
+      'Сессия, что сейчас в её панели, работает в профиле {now}, а не в {was}, где это поставлено, поэтому туда оно не уходит; если оно для той сессии, поставь его там заново',
     // a MokuPilot call from a session in another profile than the board's (services/mokupilot.ts)
     'mokupilot.err.profile':
       'MokuPilot берёт профиль своей запущенной копии, {board}: звонок из {profile} пошёл бы не в том аккаунте',

@@ -11,9 +11,13 @@
 // against the wait. An entry is claimed in its file before it is sent, so a second board (a
 // restart that overlaps, a test copy) never sends the same run twice.
 import { type FSWatcher, mkdirSync, watch } from 'node:fs'
+import { readCard } from '../adapters/cards.ts'
 import { scheduleDir } from '../adapters/paths.ts'
 import { getEntry, listEntries, logRun, removeEntry, updateEntry } from '../adapters/schedule-store.ts'
+import { itemProfile } from '../core/item-profile.ts'
+import { t } from '../core/lang.ts'
 import { callTitle } from '../core/notices.ts'
+import { profileLabel, sessionProfile } from '../core/profiles.ts'
 import { promptOf, type ScheduleEntry, targetOf } from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
 import { nextRun } from '../core/when.ts'
@@ -63,17 +67,29 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
       if (!due.length) return
       // Fresh: whether a session sleeps or works decides what happens now.
       const items = await collect(deps)
+      const set = deps.profiles()
+      // A session's profile: as its item on the board says, else (gone from the board) its card.
+      const profileOf = (key: string): Pick<Item, 'profile' | 'profileFolder'> =>
+        items.find(i => i.key === key) ?? sessionProfile(readCard(key), set.list)
+      const profileIdOf = (key: string): string | undefined => itemProfile(profileOf(key), set.list)?.id
       for (const entry of due) {
         if (delivered.get(entry.id) === entry.next) {
           finish(entry)
           continue
         }
-        const item = targetOf(entry, items)
+        const { item, other } = targetOf(entry, items, profileIdOf)
         if (flying.has(entry.key) || (item && flying.has(item.key)) || (item?.sleeping && waking >= MAX_WAKING))
           continue
         const keys = [entry.key, item?.key].filter((k): k is string => !!k)
         for (const k of keys) flying.add(k)
-        run(entry, item)
+        // The session now in its pane runs in another profile: the entry waits, saying so.
+        const held = other
+          ? t('sched.err.profile', {
+              now: profileLabel(other, set),
+              was: profileLabel(profileOf(entry.key), set),
+            })
+          : ''
+        run(entry, item, held)
           .catch(err => log(`schedule ${entry.id}: ${messageOf(err)}`))
           .finally(() => {
             for (const k of keys) flying.delete(k)
@@ -87,13 +103,14 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
     }
   }
 
-  async function run(entry: ScheduleEntry, item: Item | undefined): Promise<void> {
+  /** `other`: why it does not go to the session now in its pane (another profile's), '' for none. */
+  async function run(entry: ScheduleEntry, item: Item | undefined, other: string): Promise<void> {
     const now = Date.now()
     // On time (the default) goes into a working session too, queued into its turn as the user's
     // own mid-turn messages are; `idle` entries wait until it is free. A dialog always waits:
     // typing would answer it.
     const held = item && !item.sleeping && (item.status === 'blocked' || (entry.idle && item.status === 'working'))
-    let why = !item ? 'gone' : held ? (item.status === 'blocked' ? 'dialog' : 'busy') : ''
+    let why = !item ? other || 'gone' : held ? (item.status === 'blocked' ? 'dialog' : 'busy') : ''
     if (item && !why) {
       if (!claim(entry.id, now)) return
       if (item.key !== entry.key) {
@@ -122,7 +139,7 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
       if (r.ok) return sent(entry)
       why = r.draft ? 'draft' : r.dialog ? 'dialog' : r.busy ? 'busy' : r.error
     }
-    wait(entry, now, why)
+    wait(entry, now, why, !item)
   }
 
   /**
@@ -171,8 +188,11 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
     why,
   })
 
-  /** Not sent this time: try again on the next tick, or log it as missed once the wait is over. */
-  function wait(entry: ScheduleEntry, now: number, why: string): void {
+  /**
+   * Not sent this time: try again on the next tick, or log it as missed once the wait is over.
+   * `gone`: its session is not on the board (none in its pane, or one in another profile).
+   */
+  function wait(entry: ScheduleEntry, now: number, why: string, gone: boolean): void {
     // Only time spent trying counts: a gap (the board was off) is not waiting.
     const tried = typeof entry.tried === 'number' ? entry.tried : 0
     const step = tried ? Math.min(now - tried, 2 * tickMs() + 5000) : 0
@@ -188,13 +208,16 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
       }))
       return
     }
-    const gone = why === 'gone' ? (Number(entry.gone) || 0) + 1 : 0
-    const drop = !entry.cron || gone >= GONE_RUNS
+    const goneRuns = gone ? (Number(entry.gone) || 0) + 1 : 0
+    const drop = !entry.cron || goneRuns >= GONE_RUNS
     if (drop) removeEntry(entry.id)
-    else updateEntry(entry.id, e => settle(e, now, { missed: (Number(e.missed) || 0) + 1, ...(gone && { gone }) }))
+    else
+      updateEntry(entry.id, e =>
+        settle(e, now, { missed: (Number(e.missed) || 0) + 1, ...(goneRuns && { gone: goneRuns }) }),
+      )
     logRun({
       ...record(entry, now, entry.cron && drop ? 'dropped' : 'missed', why),
-      ...(entry.cron && drop && { n: gone }),
+      ...(entry.cron && drop && { n: goneRuns }),
     })
   }
 
