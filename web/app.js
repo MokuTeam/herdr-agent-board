@@ -4,6 +4,7 @@ import { detailResource } from './detail-resource.js'
 // Agent board, web. Live data over Server-Sent Events; every change of place animates with a
 // spring from where the card is on screen (FLIP), drags stay glued to the pointer and land
 // with the pointer's velocity, and the session sheet can be flicked away.
+import { archiveBlock, searchArchive, tidyList } from './archive-model.js'
 import { attentionTime, nextAttention, recordView, resultToken, unseenResult } from './attention.js'
 import { initBoardMenus } from './board-menus.js'
 import { draftBook } from './drafts.js'
@@ -26,6 +27,7 @@ import { fitRow } from './row-model.js'
 import { reducedMotion, rubberband, Spring, velocityOf } from './spring.js'
 import { initTerminal } from './terminal.js'
 import { capital, dayLabel, longWhen, shortWhen, span, timeOf } from './when.js'
+import { baseName } from './launch-model.js'
 
 const $ = sel => document.querySelector(sel)
 
@@ -53,6 +55,8 @@ const ICON = {
   phone: '<svg viewBox="0 0 20 20"><path d="M6.6 3.5H4.8A1.8 1.8 0 0 0 3 5.4c.3 6 5.6 11.3 11.6 11.6a1.8 1.8 0 0 0 1.9-1.8v-1.8a1 1 0 0 0-.8-1l-2.6-.6a1 1 0 0 0-1 .3l-1 1.2a10 10 0 0 1-4.8-4.8l1.2-1a1 1 0 0 0 .3-1l-.6-2.6a1 1 0 0 0-1-.8Z"/></svg>',
   hourglass: '<svg viewBox="0 0 20 20"><path d="M6 3h8M6 17h8M7 3v2.6c0 1.2.6 2.1 1.6 2.8L10 9.4l1.4-1c1-.7 1.6-1.6 1.6-2.8V3M7 17v-2.6c0-1.2.6-2.1 1.6-2.8l1.4-1 1.4 1c1 .7 1.6 1.6 1.6 2.8V17"/></svg>',
   restart: '<svg viewBox="0 0 20 20"><path d="M4.6 8.6a5.6 5.6 0 0 1 10.3-1.4M15.4 11.4a5.6 5.6 0 0 1-10.3 1.4"/><path d="M15.4 3.7v3.6h-3.6M4.6 16.3v-3.6h3.6"/></svg>',
+  archive: '<svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="4" rx="1.3"/><path d="M4.5 8v6.2A1.8 1.8 0 0 0 6.3 16h7.4a1.8 1.8 0 0 0 1.8-1.8V8M8.3 11h3.4"/></svg>',
+  back: '<svg viewBox="0 0 20 20"><path d="M8 5.5 4.5 9 8 12.5"/><path d="M4.5 9h7.5a3.5 3.5 0 0 1 0 7H10"/></svg>',
   // Sessions working together: who started it, whom it started, a message out and in.
   from: '<svg viewBox="0 0 20 20"><path d="M8 4.5 4.5 8 8 11.5"/><path d="M4.5 8H12a3.5 3.5 0 0 1 3.5 3.5v4"/></svg>',
   spawned: '<svg viewBox="0 0 20 20"><path d="M4.5 4v5.5A3.5 3.5 0 0 0 8 13h7.5"/><path d="M12 9.5 15.5 13 12 16.5"/></svg>',
@@ -117,12 +121,17 @@ const state = {
   busy: new Map(), // key -> what is happening ("Waking…")
   moved: new Map(), // key -> category the user dropped it in, until the server agrees
   movedCol: new Map(), // key -> { col, at }: column the user dropped it in, until the server agrees
+  archiving: new Map(), // key -> when: off the board at once, until the server's board has it no more
+  flyBack: new Map(), // key (or launch:<id>) -> when: a card back from the archive comes out of its button
 }
 const itemOf = key => state.data.items.find(i => i.key === key)
 let launchUI = null // new sessions (launch.js), set up with the sheet below
 let questionsUI = null // questions asked in a terminal (questions.js), set up with the sheet below
 let termUI = null // the terminal window (terminal.js), set up with the sheet below
 let helpersUI = null // a session's helpers in a window (helpers.js), set up with the sheet below
+let archivePanel = null // the archive's panel, set up with the schedule's below
+let archiveRecords = [] // what the archive holds, as the server last said (GET /api/archive)
+const archiveReturning = new Set() // keys whose Return is on its way from this page
 const catOf = it => state.moved.get(it.key) ?? it.category
 const colOf = it => state.movedCol.get(it.key)?.col ?? it.column
 /** A turn is on: it works, or a dialog stopped it midway. */
@@ -134,6 +143,7 @@ const compact = it => it.sleeping && it.column === 'idle' && !restartOf(it.key)
 function visibleItems() {
   const q = state.query.trim().toLowerCase()
   return state.data.items.filter(it => {
+    if (state.archiving.has(it.key)) return false
     if (!state.sleepers && it.sleeping && it.column === 'idle') return false
     if (!q) return true
     return [it.name, it.autoName, it.doing, it.wait, it.title, it.lastText, it.prompt, it.workspace, catInfo(catOf(it)).title, ...(it.helpers?.live ?? []).map(h => h.label)]
@@ -153,6 +163,11 @@ function onData(data) {
   state.version = data.version
   state.data = data
   noteRestarts(data.scheduleLog)
+  noteArchive(data.archive?.log)
+  // Gone from the server's board (in the archive), or there still long after: the server said no.
+  for (const [key, at] of state.archiving) if (!itemOf(key) || Date.now() - at > 20_000) state.archiving.delete(key)
+  for (const [key, at] of state.flyBack) if (Date.now() - at > 90_000) state.flyBack.delete(key)
+  if (archivePanel?.isOpen) loadArchive()
   // Right after a switch from this page, a board sent before it may still come in: let it pass.
   const asked = state.langAsked && Date.now() - state.langAsked.at < 4000 ? state.langAsked.lang : null
   if (data.lang && data.lang !== t.lang && (!asked || data.lang === asked)) setLanguage(data.lang)
@@ -217,7 +232,7 @@ const connection = boardConnection({
 // needs fresh herdr data, or it would act on a session that may have moved on.
 const canMutate = () => state.connected && state.data.stale === false && state.data.lastSuccessfulRefreshAt != null
 const canEdit = () => !!state.connected
-const HERDR_ACTIONS = ['focus', 'wake', 'sleep', 'restart', 'message', 'answer', 'permit']
+const HERDR_ACTIONS = ['focus', 'wake', 'sleep', 'restart', 'archive', 'message', 'answer', 'permit']
 function syncAvailability() {
   const blocked = !canMutate()
   const missing = !!state.open && (!itemOf(state.open) || state.detailState?.status === 'missing')
@@ -225,7 +240,7 @@ function syncAvailability() {
     banner.hidden = !blocked
     banner.textContent = t(canEdit() ? 'mobile.readOnly' : 'live.off')
   }
-  for (const element of document.querySelectorAll('#sheet-focus, #sheet-sleep, #sheet-restart, #sheet-wake, [data-act="focus"], [data-act="sleep"]')) element.disabled = blocked || (missing && !!element.closest('#sheet')) || (element.id === 'sheet-sleep' && inTurn(itemOf(state.open) ?? {})) || (element.id === 'sheet-restart' && restartPending(state.open))
+  for (const element of document.querySelectorAll('#sheet-focus, #sheet-sleep, #sheet-restart, #sheet-wake, #sheet-archive, [data-act="focus"], [data-act="sleep"]')) element.disabled = blocked || (missing && !!element.closest('#sheet')) || (element.id === 'sheet-sleep' && inTurn(itemOf(state.open) ?? {})) || (element.id === 'sheet-restart' && restartPending(state.open)) || (element.id === 'sheet-archive' && !!archiveBlock(itemOf(state.open), state.data.schedules ?? []))
   for (const element of document.querySelectorAll('#attach, #cat-new, #sheet-mokupilot, #sheet-card button:not(.rel-chip):not(.rel-more), #sheet-card input, #cats-sheet button:not([data-close]):not([data-layout]), #cats-sheet input, #sched-body .sched-x, #sched-body .sched-mode, [data-act="dismiss"]')) element.disabled = !canEdit()
   // New sessions go through herdr: they wait for fresh data like going to a session does.
   for (const element of document.querySelectorAll('#new-session, #sheet-new, .lane-new')) {
@@ -233,6 +248,7 @@ function syncAvailability() {
     element.title = t(blocked ? 'mobile.readOnly' : element.dataset.hint ?? 'launch.inLane')
   }
   launchUI?.syncAvailability()
+  renderArchive()
   if (missing) for (const element of document.querySelectorAll('#sheet-card button, #sheet-card input, #sheet [data-act], #sheet-new, #sheet-mokupilot, #attach, #sheet-changes, #sheet-history')) element.disabled = true
   else for (const element of document.querySelectorAll('#sheet-changes, #sheet-history')) element.disabled = false
   files.refreshAvailability()
@@ -365,6 +381,197 @@ async function callMokuPilot(key) {
   toast(r.ok ? t('mokupilot.started', { name: it.name }) : r.error, !r.ok)
 }
 
+// ---------------------------------------------------------------- the archive
+// A session taken off the board flies into the Archive button and comes back out of it. Its card
+// goes at once; its tab in herdr closes a few seconds later (src/archive.mjs), so "Return" in the
+// toast puts it back as it was. Later, Return in the archive resumes it in a new tab.
+const lower = s => (s ? s[0].toLocaleLowerCase(t.lang) + s.slice(1) : s)
+let lastArchived = null // { keys, until, hide }: what Ctrl+Z brings back while its toast shows
+
+async function archiveSession(key) {
+  const it = itemOf(key)
+  // On its way already (a double click): one is enough.
+  if (!it || state.archiving.has(key)) return
+  const why = archiveBlock(it, state.data.schedules ?? [])
+  if (why) return toast(t(why), true)
+  if (!canMutate()) return toast(t(canEdit() ? 'mobile.readOnly' : 'live.off'), true)
+  if (state.open === key && sessionPanel.isOpen) sessionPanel.close()
+  flyToArchive([cards.get(key)])
+  state.archiving.set(key, Date.now())
+  render()
+  const r = await act(key, 'archive')
+  if (!r.ok) {
+    state.archiving.delete(key)
+    state.flyBack.set(key, Date.now())
+    render()
+    return toast(r.error, true)
+  }
+  offerReturn([key], t(r.held ? 'archive.doneHeld' : 'archive.done', { name: it.name, n: r.held }), r.closeAt)
+}
+
+/** Several at once (a tidy-up): one request, one toast, one Return for all. */
+async function archiveMany(keys) {
+  keys = keys.filter(k => itemOf(k) && !state.archiving.has(k))
+  if (!keys.length) return
+  if (!canMutate()) return toast(t(canEdit() ? 'mobile.readOnly' : 'live.off'), true)
+  if (state.open && keys.includes(state.open) && sessionPanel.isOpen) sessionPanel.close()
+  flyToArchive(keys.map(k => cards.get(k)))
+  for (const k of keys) state.archiving.set(k, Date.now())
+  render()
+  const r = await postArchive({ op: 'archive', keys })
+  for (const f of r.failed ?? []) {
+    state.archiving.delete(f.key)
+    state.flyBack.set(f.key, Date.now())
+  }
+  render()
+  const done = r.done ?? []
+  if (!done.length) return toast(r.error, true)
+  const text = done.length === 1 ? t('archive.done', { name: done[0].name }) : t('archive.doneMany', { n: done.length })
+  offerReturn(done.map(d => d.key), text, Math.min(...done.map(d => d.closeAt ?? Date.now() + archiveUndoMs)))
+  if (r.failed?.length) setTimeout(() => toast(t('archive.stayed', { n: r.failed.length, why: lower(r.failed[0].error) }), true), 400)
+}
+
+// How long a toast offers Return: the server closes the pane after its undo time (8 s).
+let archiveUndoMs = 8000
+function offerReturn(keys, text, closeAt) {
+  const ms = Math.max(2500, Math.min(7000, (closeAt ?? Date.now() + archiveUndoMs) - Date.now() - 1200))
+  const shown = toast(text, false, { action: t('archive.return'), onAction: () => returnSessions(keys), ms })
+  lastArchived = { keys, until: Date.now() + ms, hide: shown?.hide }
+}
+
+/**
+ * Bring sessions back: put back as they were while their tab has not closed yet, else resumed in
+ * a new tab (a card "back" in their lane while Claude starts). Either way out of the button.
+ */
+async function returnSessions(keys) {
+  if (!canMutate()) return toast(t(canEdit() ? 'mobile.readOnly' : 'live.off'), true)
+  // Its toast's Return has nothing left to do.
+  if (lastArchived?.keys.some(k => keys.includes(k))) lastArchived.hide?.()
+  lastArchived = null
+  for (const k of keys) {
+    // Back on the board as soon as the server has it there again, not after the archiving wait.
+    state.archiving.delete(k)
+    state.flyBack.set(k, Date.now())
+    archiveReturning.add(k)
+  }
+  renderArchive()
+  const r = await postArchive({ op: 'return', keys })
+  for (const d of r.done ?? []) if (d.launch) state.flyBack.set(`launch:${d.launch}`, Date.now())
+  for (const k of keys) archiveReturning.delete(k)
+  loadArchive()
+  const done = r.done ?? []
+  if (!done.length) return toast(r.error, true)
+  // Resumed now, or already on its way back from an earlier Return.
+  const resumed = done.filter(d => d.resume || d.again)
+  if (done.length === 1) toast(t(resumed.length ? 'archive.resuming' : 'archive.back', { name: done[0].name || itemOf(done[0].key)?.name || t('session') }))
+  else toast(resumed.length ? t('archive.resumingMany', { n: done.length }) : t('archive.backMany', { n: done.length }))
+  if (r.failed?.length) setTimeout(() => toast(r.failed[0].error, true), done.length ? 400 : 0)
+}
+
+async function postArchive(body) {
+  try {
+    const res = await fetch('/api/archive', { method: 'POST', headers: { 'content-type': 'application/json', 'x-board': '1' }, body: JSON.stringify(body) })
+    const r = await res.json().catch(() => ({}))
+    return { ...r, ok: res.ok && r.ok !== false, error: r.error || (res.ok ? '' : t('err.status', { code: res.status })) }
+  } catch (err) {
+    return { ok: false, done: [], failed: [], error: t('err.offline', { why: err.message }) }
+  }
+}
+
+/** Sleeping sessions in "Idle" a tidy-up takes: in one lane, or in the lanes on show. */
+function tidyItems(days, lane = null) {
+  const items = state.data.items.filter(it => !state.archiving.has(it.key) && (lane ? catOf(it) === lane : laneShown(catOf(it))))
+  return tidyList(items, days, state.data.schedules ?? [])
+}
+
+/**
+ * How the archive went for this page: a close the server called off because the session got to
+ * work meanwhile (it is back on the board) is said once.
+ */
+let archiveSeen = null
+function noteArchive(log) {
+  const first = !archiveSeen
+  archiveSeen ??= new Set()
+  for (const r of log ?? []) {
+    const id = `${r.key}@${r.at}@${r.result}`
+    if (archiveSeen.has(id)) continue
+    archiveSeen.add(id)
+    if (!first && r.result === 'kept') toast(t('archive.kept', { name: itemOf(r.key)?.name || r.name || t('session'), why: lower(t(r.why, { why: r.detail ?? '' })) }), true)
+  }
+}
+
+const archiveButton = () => $('#archive-open')
+/** The button nods when something lands in it, a little bounce: the card arrived with momentum. */
+function bumpArchive() {
+  const b = archiveButton()
+  if (!b || reducedMotion.matches) return
+  const s = new Spring({ value: 0, damping: 0.55, response: 0.3, precision: 0.002, onUpdate: v => (b.style.scale = String(1 + 0.16 * v)), onRest: () => (b.style.scale = '') })
+  s.to(0, { velocity: 9 })
+}
+
+/**
+ * Cards fly into the Archive button, shrinking and fading on the way, the button nodding as they
+ * land. Many go with a short stagger; with reduced motion, or the button out of sight, they just go.
+ */
+function flyToArchive(els) {
+  const to = archiveButton()?.getBoundingClientRect()
+  const list = els.filter(el => el?.isConnected && el.offsetParent)
+  if (!list.length) return
+  if (reducedMotion.matches || !to?.width) return
+  list.slice(0, 12).forEach((el, i) => {
+    const from = el.getBoundingClientRect()
+    const ghost = el.cloneNode(true)
+    ghost.classList.remove('selected', 'moving', 'placeholder', 'busy')
+    ghost.classList.add('ghost', 'to-archive')
+    Object.assign(ghost.style, { left: `${from.left}px`, top: `${from.top}px`, width: `${from.width}px`, height: `${from.height}px`, transform: '', translate: '', scale: '', opacity: '' })
+    document.body.append(ghost)
+    const dx = to.left + to.width / 2 - (from.left + from.width / 2)
+    const dy = to.top + to.height / 2 - (from.top + from.height / 2)
+    const s = new Spring({
+      value: 0,
+      damping: 1,
+      response: 0.46,
+      precision: 0.002,
+      onUpdate: v => {
+        // A gentle arc: up and over toward the toolbar, not a straight cut across the board.
+        const lift = Math.sin(Math.PI * v) * Math.min(80, Math.abs(dy) * 0.15)
+        ghost.style.transform = `translate3d(${dx * v}px, ${dy * v - lift}px, 0) scale(${1 - 0.9 * v})`
+        ghost.style.opacity = String(1 - v ** 3)
+      },
+      onRest: () => {
+        ghost.remove()
+        if (i === 0) bumpArchive()
+      },
+    })
+    setTimeout(() => s.to(1), i * 35)
+  })
+}
+
+/** A card back from the archive comes out of the button and settles into its place. */
+function flyFromArchive(el) {
+  const from = archiveButton()?.getBoundingClientRect()
+  if (reducedMotion.matches || !from?.width || !el.offsetParent) return appear(el)
+  const to = el.getBoundingClientRect()
+  const dx = from.left + from.width / 2 - (to.left + to.width / 2)
+  const dy = from.top + from.height / 2 - (to.top + to.height / 2)
+  bumpArchive()
+  const s = new Spring({
+    value: 1,
+    damping: 1,
+    response: 0.46,
+    precision: 0.002,
+    onUpdate: v => {
+      el.style.translate = `${dx * v}px ${dy * v}px`
+      el.style.scale = String(1 - 0.9 * v)
+      el.style.opacity = String(1 - v ** 3)
+    },
+    onRest: () => {
+      el.style.translate = el.style.scale = el.style.opacity = ''
+    },
+  })
+  s.to(0)
+}
+
 // ---------------------------------------------------------------- language
 /** The page in another language: the static texts by their data-i18n attributes, and every part drawn already. */
 function setLanguage(lang) {
@@ -379,6 +586,8 @@ function setLanguage(lang) {
   if (catDraft) renderDraft()
   sheetCard._html = ''
   schedBody._html = ''
+  archiveBody._html = ''
+  renderArchive()
   if (state.open) renderSheetBody(false)
   renderAttachments()
   syncComposer()
@@ -447,7 +656,7 @@ function renderToolbar(visible) {
   const filled = state.data.columns.map(c => shown.some(i => colOf(i) === c.id))
   const head = $('#columns-head')
   const html = state.data.columns
-    .map((c, k) => `<div class="col-head${filled[k] ? '' : ' vacant'}"><span class="dot" style="--c:${COLORS[c.id]}"></span><span class="t">${esc(colTitle(c.id))}</span><span class="n">${shown.filter(i => i.column === c.id).length}</span></div>`)
+    .map((c, k) => `<div class="col-head${filled[k] ? '' : ' vacant'}" data-col="${c.id}"><span class="dot" style="--c:${COLORS[c.id]}"></span><span class="t">${esc(colTitle(c.id))}</span><span class="n">${shown.filter(i => i.column === c.id).length}</span></div>`)
     .join('')
   if (head.innerHTML !== html) head.innerHTML = html
   // Nothing on show at all: the columns keep their even widths.
@@ -706,7 +915,8 @@ function updateCard(card, it) {
   if (busy) card.dataset.busy = busy
 }
 
-function cardOf(key) {
+/** The card of a session, made when it is new; `quiet`: no appearing of its own (it comes out of the archive). */
+function cardOf(key, { quiet = false } = {}) {
   let card = cards.get(key)
   if (card) return card
   card = document.createElement('article')
@@ -724,7 +934,7 @@ function cardOf(key) {
   card.addEventListener('focusin', () => showRelated(card.dataset.key))
   card.addEventListener('focusout', e => !card.contains(e.relatedTarget) && showRelated(null))
   cards.set(key, card)
-  appear(card)
+  if (!quiet) appear(card)
   return card
 }
 
@@ -738,6 +948,7 @@ function showRelated(key) {
 function render() {
   const first = measure()
   const visible = visibleItems()
+  const comingBack = [] // cards back from the archive, to come out of its button once placed
   renderToolbar(visible)
   const board = $('#board')
   const order = state.data.categories.map(c => c.id)
@@ -770,11 +981,16 @@ function render() {
       col.classList.toggle('has-cards', list.length > 0)
       let prev = col.firstElementChild // the narrow-window label stays first
       for (const it of list) {
-        const card = cardOf(it.key)
+        const back = !cards.has(it.key) && state.flyBack.has(it.key)
+        const card = cardOf(it.key, { quiet: back })
         updateCard(card, it)
         seen.add(it.key)
         if (prev.nextElementSibling !== card) prev.after(card)
         prev = card
+        if (back) {
+          state.flyBack.delete(it.key)
+          comingBack.push(card)
+        }
       }
       while (prev.nextElementSibling) {
         const extra = prev.nextElementSibling
@@ -801,6 +1017,7 @@ function render() {
   } else empty?.remove()
   if (relatedTo) showRelated(cards.has(relatedTo) ? relatedTo : null)
   flip(first)
+  for (const card of comingBack) flyFromArchive(card)
   if (state.open) {
     renderSheetHead()
     const it = itemOf(state.open)
@@ -1079,6 +1296,7 @@ launchUI = initLaunch({
   canMutate,
   data: () => ({ ...state.data, filter: state.filter }),
   onDialogChange: () => dialogBack.sync(),
+  onResume: l => returnSessions([l.resume]),
   onStarted: l => {
     // The new card must be in sight: its lane shown, then drawn at once.
     if (state.filter !== 'all' && state.filter !== l.category) {
@@ -1273,6 +1491,11 @@ function renderSheetHead() {
   restart.hidden = it.sleeping || !it.session || it.agent !== 'claude'
   restart.disabled = !canMutate() || !!pending
   restart.title = pending ? `${t('sheet.restartPending')}. ${restartText(pending)}` : t('sheet.restartHint')
+  // Gray with the reason while it works (a turn, a dialog, its helpers), as in its menu.
+  const archive = $('#sheet-archive')
+  const why = archiveBlock(it, state.data.schedules ?? [])
+  archive.hidden = !it.session || it.agent !== 'claude'
+  archive.title = why ? t(why) : t('archive.sheetHint')
 }
 
 const sheetCard = $('#sheet-card')
@@ -1673,6 +1896,7 @@ $('#sheet-wake').addEventListener('click', async () => {
 })
 $('#sheet-sleep').addEventListener('click', () => state.open && sleepSession(state.open))
 $('#sheet-restart').addEventListener('click', () => state.open && restartSession(state.open))
+$('#sheet-archive').addEventListener('click', () => state.open && archiveSession(state.open))
 // The row shows as many actions as its width holds, in this order, and More the rest
 // (row-model.js decides). Their widths are taken once per set of buttons, language and layout:
 // all shown with their words, then as icons, within one task, so nothing flickers. The row's
@@ -1951,11 +2175,23 @@ async function deliver(key, entry) {
 syncComposer()
 
 // ---------------------------------------------------------------- toasts
-function toast(text, error = false) {
+/**
+ * A short note at the foot of the board. `action`: a button in it (Return, after an archive), which
+ * also closes it; `ms`: how long it stays.
+ */
+function toast(text, error = false, { action = '', onAction = null, ms = 0 } = {}) {
   if (!text) return
   const el = document.createElement('div')
-  el.className = `toast${error ? ' error' : ''}`
-  el.textContent = text
+  el.className = `toast${error ? ' error' : ''}${action ? ' with-action' : ''}`
+  if (action) {
+    el.innerHTML = '<span class="toast-text"></span><button type="button" class="toast-action"></button>'
+    el.firstElementChild.textContent = text
+    el.lastElementChild.textContent = action
+    el.lastElementChild.addEventListener('click', () => {
+      gone()
+      onAction?.()
+    })
+  } else el.textContent = text
   $('#toasts').append(el)
   const s = new Spring({
     value: 0,
@@ -1968,10 +2204,14 @@ function toast(text, error = false) {
     },
   })
   s.to(1)
-  setTimeout(() => {
+  const gone = () => {
+    clearTimeout(timer)
+    el.style.pointerEvents = 'none'
     s.onRest = () => el.remove()
     s.to(0)
-  }, error ? 6000 : 2600)
+  }
+  const timer = setTimeout(gone, ms || (error ? 6000 : 2600))
+  return { hide: gone }
 }
 
 // ---------------------------------------------------------------- categories
@@ -2539,6 +2779,150 @@ schedBody.addEventListener('click', e => {
 })
 $('#sched-open').addEventListener('click', () => (schedPanel.isOpen ? schedPanel.close() : openSchedule()))
 
+// ---------------------------------------------------------------- archive panel
+// Sessions taken off the board, by the day they went, newest first, with a search over the name,
+// lane, folder, what the card said last and the day. Return brings one back; the trash can
+// removes its record (two clicks), never Claude's conversation. On top, while sleeping sessions
+// pile up in "Idle", a quiet offer to take them along. Read from the server when the panel opens
+// and again whenever the board changes while it is open.
+archivePanel = new Panel($('#archive-sheet'), {
+  onClose: () => disarmArchive(false),
+  onChange: () => dialogBack.sync(),
+  text: key => t(key),
+})
+const archiveBody = $('#archive-body')
+let archiveArmed = null // { key, timer }: the row whose trash can asks "Remove?"
+let archiveCollapsing = 0 // rows on their way out; the panel redraws once they are gone
+let archiveLoad = null // the read on its way, and whether another is wanted after it
+let archiveAgain = false
+
+function openArchive() {
+  archiveBody._fresh = true
+  archivePanel.open()
+  renderArchive()
+  loadArchive()
+  if (!matchMedia('(pointer: coarse)').matches) setTimeout(() => $('#archive-search').focus({ preventScroll: true }), 60)
+}
+
+async function loadArchive() {
+  if (archiveLoad) return void (archiveAgain = true)
+  archiveLoad = fetch('/api/archive', { cache: 'no-store' })
+    .then(res => (res.ok ? res.json() : null))
+    .then(r => {
+      if (!r) return
+      archiveRecords = r.records ?? []
+      archiveUndoMs = r.undoMs ?? archiveUndoMs
+      renderArchive()
+    })
+    .catch(() => {})
+    .finally(() => {
+      archiveLoad = null
+      if (archiveAgain) {
+        archiveAgain = false
+        loadArchive()
+      }
+    })
+}
+
+function archiveRowHTML(r) {
+  const lane = catInfo(r.category)
+  const returning = r.returning || archiveReturning.has(r.key)
+  const ask = archiveArmed?.key === r.key
+  const where = [lane.title, baseName(r.cwd), r.workspace && t('meta.workspace', { name: r.workspace })].filter(Boolean)
+  const extra = [r.held && t('archive.held', { n: r.held }), r.from?.name && t('archive.by', { name: r.from.name })].filter(Boolean)
+  const note = plain(r.note || (r.title !== r.name ? r.title : ''))
+  return `<div class="arch-row${returning ? ' returning' : ''}" data-key="${esc(r.key)}">
+    <div class="arch-main">
+      <div class="arch-top"><span class="arch-name" style="--lane:${lane.color}">${esc(r.name)}</span><span class="arch-when" title="${esc(capital(longWhen(r.archivedAt, t), t))}">${esc(timeOf(r.archivedAt, t))}</span></div>
+      ${note ? `<div class="arch-note">${esc(note)}</div>` : ''}
+      <div class="arch-meta"><span class="arch-where" title="${esc(r.cwd)}">${where.map(esc).join(' · ')}</span>${extra.length ? `<span class="arch-extra"${r.held ? ` title="${esc(t('archive.heldHint'))}"` : ''}>${extra.map(esc).join(' · ')}</span>` : ''}</div>
+    </div>
+    <div class="arch-actions">
+      <button class="button arch-return" data-arch-return="${esc(r.key)}" title="${esc(t('archive.returnHint'))}"${returning || !canMutate() ? ' disabled' : ''}>${returning ? ICON.spin : ICON.back}<span>${esc(t(returning ? 'archive.returning' : 'archive.return'))}</span></button>
+      <button class="sched-x" data-arch-remove="${esc(r.key)}"${ask ? ' data-confirm' : ''} title="${esc(t('archive.removeHint'))}" aria-label="${esc(t(ask ? 'archive.removeConfirm' : 'archive.remove'))}"${!canEdit() || r.state === 'closing' || returning ? ' disabled' : ''}>${ICON.trash}<span>${ask ? esc(t('archive.removeConfirm')) : ''}</span></button>
+    </div>
+  </div>`
+}
+
+function renderArchive() {
+  if (!archivePanel?.isOpen || archiveCollapsing) return
+  const q = $('#archive-search').value
+  const list = searchArchive(archiveRecords, q, { laneTitle: id => catInfo(id).title, dayText: ms => `${dayLabel(ms, t)} ${timeOf(ms, t)}` })
+  let html = ''
+  const sleepy = q ? [] : tidyItems(3)
+  if (sleepy.length) html += `<div class="arch-tidy">${ICON.moon}<span>${esc(t('archive.tidy.suggest', { n: sleepy.length }))}</span><button class="button" data-arch-tidy="3"${canMutate() ? '' : ' disabled'}>${esc(t('archive.tidy.go'))}</button></div>`
+  if (!archiveRecords.length) html += `<div class="sched-empty arch-empty">${ICON.archive}<p>${esc(t('archive.empty'))}</p><p class="hint">${esc(t('archive.emptyHint'))}</p></div>`
+  else if (!list.length) html += `<div class="sched-empty arch-empty"><p>${esc(t('archive.noMatch'))}</p></div>`
+  const groups = []
+  for (const r of list) {
+    const title = capital(dayLabel(r.archivedAt, t), t)
+    if (groups.at(-1)?.title !== title) groups.push({ title, list: [] })
+    groups.at(-1).list.push(r)
+  }
+  for (const g of groups) html += `<div class="section-title">${esc(g.title)}</div><div class="group arch-group">${g.list.map(archiveRowHTML).join('')}</div>`
+  if (archiveBody._html === html) return
+  // New rows materialize; on opening the panel its own slide is motion enough.
+  const before = new Set([...archiveBody.querySelectorAll('.arch-row')].map(r => r.dataset.key))
+  archiveBody.innerHTML = html
+  archiveBody._html = html
+  if (!archiveBody._fresh) for (const row of archiveBody.querySelectorAll('.arch-row')) if (!before.has(row.dataset.key)) appear(row)
+  archiveBody._fresh = false
+}
+
+function disarmArchive(redraw = true) {
+  if (!archiveArmed) return
+  clearTimeout(archiveArmed.timer)
+  archiveArmed = null
+  if (redraw) renderArchive()
+}
+
+/** First click arms the trash can ("Remove?"), a second one within four seconds removes the record. */
+async function removeArchived(btn) {
+  const key = btn.dataset.archRemove
+  if (archiveArmed?.key !== key) {
+    disarmArchive(false)
+    archiveArmed = { key, timer: setTimeout(() => disarmArchive(), 4000) }
+    return renderArchive()
+  }
+  disarmArchive(false)
+  const rec = archiveRecords.find(r => r.key === key)
+  const row = btn.closest('.arch-row')
+  archiveCollapsing++
+  let r
+  try {
+    ;[r] = await Promise.all([postArchive({ op: 'remove', keys: [key] }), collapse(row)])
+  } finally {
+    archiveCollapsing--
+  }
+  if (r.done?.length) {
+    archiveRecords = archiveRecords.filter(x => x.key !== key)
+    toast(t('archive.removed', { name: rec?.name ?? '' }))
+  } else {
+    row?.removeAttribute('style')
+    toast(r.error, true)
+  }
+  renderArchive()
+  loadArchive()
+}
+
+archiveBody.addEventListener('click', e => {
+  const back = e.target.closest('[data-arch-return]')
+  if (back) return returnSessions([back.dataset.archReturn])
+  const tidyButton = e.target.closest('[data-arch-tidy]')
+  if (tidyButton) return archiveMany(tidyItems(Number(tidyButton.dataset.archTidy)).map(i => i.key))
+  const remove = e.target.closest('[data-arch-remove]')
+  if (remove) return removeArchived(remove)
+})
+$('#archive-search').addEventListener('input', () => renderArchive())
+$('#archive-search').addEventListener('keydown', e => {
+  // Esc clears the search first, then (again) closes the panel.
+  if (e.key !== 'Escape' || !e.target.value) return
+  e.target.value = ''
+  renderArchive()
+  e.stopPropagation()
+})
+$('#archive-open').addEventListener('click', () => (archivePanel.isOpen ? archivePanel.close() : openArchive()))
+
 // ---------------------------------------------------------------- toolbar controls and keys
 $('#lanes').addEventListener('click', e => {
   const b = e.target.closest('button')
@@ -2653,6 +3037,11 @@ addEventListener('keydown', e => {
   } else if (/^[1-9]$/.test(e.key) && state.open && sessionPanel.isOpen && !files.isOpen() && ($('#sheet').contains(document.activeElement) || document.activeElement?.closest?.('.card')?.dataset.key === state.open)) {
     // Digits pick an option of the question the session waits on, as in the terminal.
     if (questionsUI.onKey(e)) e.preventDefault()
+  } else if (e.key?.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && !typing && lastArchived && Date.now() < lastArchived.until) {
+    // Undo the archive whose toast still shows, as its Return does.
+    e.preventDefault()
+    lastArchived.hide?.()
+    returnSessions(lastArchived.keys)
   } else if (e.key === '/' && !typing) {
     e.preventDefault()
     $('#search').focus()
@@ -2776,6 +3165,7 @@ initBoardMenus({
   category: catOf,
   state: () => state,
   launch: launchUI,
+  tidyCount: (days, lane) => tidyItems(days, lane).length,
   do: {
     open: key => openSheet(key),
     focus: key => focusSession(key),
@@ -2795,6 +3185,9 @@ initBoardMenus({
       const r = await act(key, 'card', { clear: true })
       toast(r.ok ? t('tui.cleared', { name: itemOf(key)?.name ?? '' }) : r.error, !r.ok)
     },
+    archive: key => archiveSession(key),
+    tidy: (days, lane) => archiveMany(tidyItems(days, lane).map(i => i.key)),
+    archiveOpen: () => openArchive(),
     changes: (key, el) => files.lookChanges(key, el),
     history: (key, el) => files.lookHistory(key, itemOf(key)?.cwd ?? '', el),
     terminal: (key, el) => openTerminal(key, el),

@@ -11,6 +11,11 @@
 //                    start --kind <agent>`, then /rename and the first message typed into it.
 // The card gets the chosen category as soon as the session has an id; a Claude started by the
 // board gets its id up front (--session-id), so even its first brief knows the lane.
+//
+// A session coming back from the archive (archive.mjs) starts the same way, resumed by its id
+// (`--resume <id>` instead of --session-id; `{resume}` for a launch.command, which without it
+// leaves the resume to the board's own spawn-agent), with no /rename and no first message: it
+// keeps its name, its card and its conversation.
 import { execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -30,7 +35,7 @@ import { keyTowardYes, sameFolder, trustDialog } from './trust.mjs'
 
 const LAUNCH_DIR = join(STATE_DIR, 'launch') // first messages for {messageFile}, while a launcher runs
 const SPAWN = join(ROOT, 'src', 'spawn.mjs')
-export const PLACEHOLDERS = ['name', 'label', 'cwd', 'workspace', 'workspaceLabel', 'category', 'message', 'messageFile', 'sessionId']
+export const PLACEHOLDERS = ['name', 'label', 'cwd', 'workspace', 'workspaceLabel', 'category', 'message', 'messageFile', 'sessionId', 'resume']
 const MESSAGE_MAX = 20_000
 
 // ------------------------------------------------------------------ the command from config
@@ -451,10 +456,11 @@ export function createLaunches({ cfg, log = () => {}, onChange = () => {} }) {
   const changed = () => onChange()
   const spec = () => cfg.launch ?? {}
 
-  async function start(body, items = []) {
+  /** `resume`: the id of a session to bring back from the archive; set by the server, never by the page. */
+  async function start(body, items = [], { resume = null } = {}) {
     const r = await checkRequest(body, { categories: new Set([...cfg.categories.map(c => c.id), ...items.map(i => i.category)]) })
     if (!r.ok) return r
-    const l = { ...r.launch, id: randomUUID().slice(0, 8), state: 'starting', step: 'prepare', startedAt: Date.now(), knownPanes: new Set(items.map(i => i.pane)), pane: null, key: null, error: '', kind: '' }
+    const l = { ...r.launch, id: randomUUID().slice(0, 8), state: 'starting', step: 'prepare', startedAt: Date.now(), knownPanes: new Set(items.map(i => i.pane)), pane: null, key: null, error: '', kind: '', resume, ...(resume && { message: '' }) }
     launches.set(l.id, l)
     runLaunch(l)
       .then(() => {
@@ -502,13 +508,19 @@ export function createLaunches({ cfg, log = () => {}, onChange = () => {} }) {
       l.rootPane = r.root_pane?.pane_id ?? null
       l.rootTab = r.tab?.tab_id ?? null
     }
-    if (spec().command) await viaCommand(l)
+    // A launcher of one's own resumes only when it takes {resume}; else the board's spawn-agent does.
+    if (spec().command && (!l.resume || usesPlaceholder(spec().command, 'resume'))) await viaCommand(l)
     else if (spec().agent) await viaHerdr(l)
     else await viaCommand(l, { builtin: true })
   }
 
   /** A Claude the board starts gets its session id now, so its card (and lane) exist before it does. */
   function ownSessionId(l) {
+    // A resumed one has its id, and its card already.
+    if (l.resume) {
+      l.sessionId = l.carded = l.resume
+      return
+    }
     l.sessionId = randomUUID()
     writeCard(l.sessionId, { category: l.category })
     l.carded = l.sessionId
@@ -526,7 +538,12 @@ export function createLaunches({ cfg, log = () => {}, onChange = () => {} }) {
     l.pane = pane
     const kind = String(spec().agent ?? 'claude')
     const args = (Array.isArray(spec().args) ? spec().args : []).map(String)
-    if (kind === 'claude' && !args.some(a => /^(--session-id|-r|--resume|-c|--continue)$/.test(a))) {
+    const chooses = args.some(a => /^(--session-id|-r|--resume|-c|--continue)$/.test(a))
+    if (l.resume) {
+      if (kind !== 'claude' || chooses) throw new LaunchError(t('archive.err.cannotResume'), 'launcher')
+      ownSessionId(l)
+      args.push('--resume', l.resume)
+    } else if (kind === 'claude' && !chooses) {
       ownSessionId(l)
       args.push('--session-id', l.sessionId)
     }
@@ -551,7 +568,7 @@ export function createLaunches({ cfg, log = () => {}, onChange = () => {} }) {
       await untilReady(l, 15 * 60_000)
       l.state = 'starting'
     }
-    if (kind === 'claude') {
+    if (kind === 'claude' && !l.resume) {
       step(l, 'rename')
       // The name is cosmetic and Claude runs by now: a herdr error here must not mark the launch
       // failed, or a retry would start a second session.
@@ -590,14 +607,17 @@ export function createLaunches({ cfg, log = () => {}, onChange = () => {} }) {
     args.push(...(l.rootPane ? ['--pane', l.rootPane] : ['--workspace', l.workspaceId]))
     if (vars.messageFile) args.push('--brief-file', vars.messageFile)
     if (vars.sessionId) args.push('--session-id', vars.sessionId)
+    if (l.resume) args.push('--resume', l.resume)
     return { file: process.execPath, args }
   }
 
   async function viaCommand(l, { builtin = false } = {}) {
     const template = spec().command
-    const vars = { name: l.name, label: l.label, cwd: l.cwd, workspace: l.workspaceId, workspaceLabel: l.workspaceLabel, category: l.category, message: l.message, messageFile: '', sessionId: '' }
-    // A launch.claude that picks its own session (--resume) gets no id from the board.
-    if (builtin ? !choosesSession(claudeCommand(spec().claude, spec().args)) : usesPlaceholder(template, 'sessionId')) {
+    const vars = { name: l.name, label: l.label, cwd: l.cwd, workspace: l.workspaceId, workspaceLabel: l.workspaceLabel, category: l.category, message: l.message, messageFile: '', sessionId: '', resume: l.resume ?? '' }
+    // A launch.claude that picks its own session (--resume) gets no id from the board; a resumed
+    // session has its own.
+    if (l.resume) ownSessionId(l)
+    else if (builtin ? !choosesSession(claudeCommand(spec().claude, spec().args)) : usesPlaceholder(template, 'sessionId')) {
       ownSessionId(l)
       vars.sessionId = l.sessionId
     }
@@ -710,7 +730,10 @@ export function createLaunches({ cfg, log = () => {}, onChange = () => {} }) {
    * input box. A name that does not take is no failure; a message that cannot go is.
    */
   async function finishStart(l, { kind, nameAgent }) {
-    if (kind === 'claude') {
+    // A resumed session has its name; its herdr name is given when the launcher did not.
+    if (kind === 'claude' && l.resume) {
+      if (nameAgent) await herdr(['agent', 'rename', l.pane, uniqueSlug(slugName(l.name), await agentNames())]).catch(err => log(`launch ${l.name}: naming: ${err.message}`))
+    } else if (kind === 'claude') {
       step(l, 'rename')
       try {
         if ((await inputEmpty(l.pane)) && (await claudeRename(l.pane, l.name)) && nameAgent) {
@@ -771,7 +794,8 @@ export function createLaunches({ cfg, log = () => {}, onChange = () => {} }) {
       return { ok: false, error: t('err.focus', { name: l.name, why: err.message }) }
     }
     l.closed = true
-    if (l.sessionId && Object.keys(readCard(l.sessionId) ?? {}).every(k => ['key', 'category', 'updatedAt'].includes(k))) {
+    // A resumed session's card is its own from before: it stays.
+    if (l.sessionId && !l.resume && Object.keys(readCard(l.sessionId) ?? {}).every(k => ['key', 'category', 'updatedAt'].includes(k))) {
       try {
         unlinkSync(join(CARDS_DIR, `${l.sessionId}.json`))
       } catch {}
@@ -837,7 +861,7 @@ export function createLaunches({ cfg, log = () => {}, onChange = () => {} }) {
 
   // What a retry starts from: a worktree or a workspace this launch made already is used, not
   // made again (git would refuse the branch; herdr would get a second, empty workspace).
-  const view = l => ({ id: l.id, name: l.name, cwd: l.cwd, category: l.category, workspace: l.workspaceLabel, workspaceId: l.workspaceId || null, state: l.state, step: l.step, error: l.error, kind: l.kind, pane: l.pane, key: l.key, startedAt: l.startedAt, doneAt: l.doneAt ?? null, message: l.message, worktree: l.worktreeMade ? null : l.worktree, newWorkspace: l.newWorkspace && !l.workspaceId })
+  const view = l => ({ id: l.id, resume: l.resume ?? null, name: l.name, cwd: l.cwd, category: l.category, workspace: l.workspaceLabel, workspaceId: l.workspaceId || null, state: l.state, step: l.step, error: l.error, kind: l.kind, pane: l.pane, key: l.key, startedAt: l.startedAt, doneAt: l.doneAt ?? null, message: l.message, worktree: l.worktreeMade ? null : l.worktree, newWorkspace: l.newWorkspace && !l.workspaceId })
 
   /**
    * Take a launch off the board. A failed one goes; one still running only stops showing: it

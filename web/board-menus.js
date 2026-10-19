@@ -2,16 +2,18 @@
 // do. Cards, lanes, the board's empty space, the open session's head, starting sessions and
 // file chips get the board's own menu; fields, selected text and links keep the browser's, and
 // Shift+right click always gives the browser's (copy, paste, the inspector).
-import { boardMenu, cardMenu, chipMenu, laneMenu, launchMenu, wantsNativeMenu } from './menu-model.js'
+import { archiveBlock } from './archive-model.js'
+import { boardMenu, cardMenu, chipMenu, columnMenu, laneMenu, launchMenu, wantsNativeMenu } from './menu-model.js'
 
 const LONG_PRESS_MS = 480
 const SLOP = 9 // px a finger may wander before a long press becomes a scroll
 
 /**
  * board: what the page knows and can do (app.js): t(), menu, canMutate(), canEdit(), item(key),
- * column(it), category(it), state(), launch (launch.js), and do: { open, focus, write, wake,
- * sleep, restart, rename, move, dismiss, clear, changes, history, terminal, mokupilot, newSession, cats, filter,
- * sleepers, search, copy, openPath, look, focusLaunch }.
+ * column(it), category(it), state(), launch (launch.js), tidyCount(days, lane) (sleeping sessions
+ * in "Idle" a tidy-up takes, archive-model.js), and do: { open, focus, write, wake, sleep,
+ * restart, rename, move, dismiss, clear, archive, tidy, archiveOpen, changes, history, terminal,
+ * mokupilot, newSession, cats, filter, sleepers, search, copy, openPath, look, focusLaunch }.
  */
 export function initBoardMenus(board) {
   const { menu } = board
@@ -54,6 +56,13 @@ export function initBoardMenus(board) {
       if (key.startsWith('launch:')) return forLaunch(key.slice(7), card)
       return board.item(key) ? forCard(key, card, at) : null
     }
+    // A column's head (the toolbar's, or a lane's own in a narrow window): "Idle" has a menu.
+    const colHead = el.closest('.col-head[data-col], .col-label')
+    if (colHead) {
+      const col = colHead.dataset.col ?? colHead.closest('.col')?.dataset.col
+      const m = forColumn(col, colHead.closest('.lane[data-cat]')?.dataset.cat ?? null)
+      if (m) return m
+    }
     const lane = el.closest('.lane[data-cat]')
     if (lane) {
       const cat = board.state().data.categories.find(c => c.id === lane.dataset.cat)
@@ -69,7 +78,7 @@ export function initBoardMenus(board) {
     const nameEl = el.matches?.('.card') ? el.querySelector('.name') : el
     return {
       label: it.name,
-      items: cardMenu(it, { ...ctx(), terminal: state.data.terminal !== false, mokupilot: !!state.data.mokupilot, categories: state.data.categories, column: board.column(it), category: board.category(it), restarting: (state.data.schedules ?? []).some(e => e.kind === 'restart' && e.key === key && !e.failed) }),
+      items: cardMenu(it, { ...ctx(), terminal: state.data.terminal !== false, mokupilot: !!state.data.mokupilot, categories: state.data.categories, column: board.column(it), category: board.category(it), restarting: (state.data.schedules ?? []).some(e => e.kind === 'restart' && e.key === key && !e.failed), archiveWhy: archiveBlock(it, state.data.schedules ?? []) }),
       pick: id => {
         const [what, arg] = id.split(/:(.*)/s)
         const from = el.isConnected ? el : pointRect(at.x, at.y)
@@ -106,13 +115,28 @@ export function initBoardMenus(board) {
     }
   }
 
+  /** "Idle": its sleeping sessions to the archive, all lanes on show or one lane's. */
+  function forColumn(col, lane) {
+    const items = columnMenu(col, { ...ctx(), tidyCount: days => board.tidyCount(days, lane) })
+    if (!items) return null
+    return {
+      label: board.t()(`col.${col}`),
+      items,
+      pick: id => {
+        if (id.startsWith('tidy:')) board.do.tidy(Number(id.slice(5)), lane)
+        else if (id === 'archiveOpen') board.do.archiveOpen()
+      },
+    }
+  }
+
   function forLane(cat, at) {
     const state = board.state()
     return {
       label: cat.title,
-      items: laneMenu(cat, { ...ctx(), filter: state.filter }),
+      items: laneMenu(cat, { ...ctx(), filter: state.filter, tidyCount: days => board.tidyCount(days, cat.id) }),
       pick: id => {
         const from = pointRect(at.x, at.y)
+        if (id.startsWith('tidy:')) return board.do.tidy(Number(id.slice(5)), cat.id)
         if (id === 'new') board.do.newSession({ category: cat.id }, from)
         else if (id === 'newWorkspace') board.do.newSession({ category: cat.id, newWorkspace: true }, from)
         else if (id === 'editCat') board.do.cats(cat.id)
@@ -131,6 +155,7 @@ export function initBoardMenus(board) {
         if (id === 'new') board.do.newSession({}, from)
         else if (id === 'newWorkspace') board.do.newSession({ newWorkspace: true }, from)
         else if (id === 'cats') board.do.cats()
+        else if (id === 'archiveOpen') board.do.archiveOpen()
         else if (id === 'sleepers') board.do.sleepers()
         else if (id === 'showAll') board.do.filter('all')
         else if (id === 'search') board.do.search()

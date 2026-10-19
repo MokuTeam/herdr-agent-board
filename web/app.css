@@ -1157,8 +1157,43 @@ button.swatch:active { transform: scale(0.88); }
 .log-row.missed .log-note, .log-row.failed .log-note { color: var(--orange); }
 .log-row.dropped .log-icon { background: var(--fill); color: var(--label-2); font-size: 13px; }
 
+/* ---------------------------------------------------------------- archive */
+/* The archive panel: a search on top, then the sessions by the day they went, like the schedule. */
+.archive-find { padding: 0 18px 10px 22px; }
+.archive-find .search { display: flex; height: 32px; }
+.archive-find .search input { flex: 1; width: auto; min-width: 0; }
+.archive-body { padding-top: 0; }
+.archive-body > .section-title:first-child, .arch-tidy + .section-title { margin-top: 10px; }
+.arch-group { margin-top: 0; overflow: hidden; }
+.arch-row { display: flex; align-items: flex-start; gap: 10px; padding: 11px 10px 12px 14px; }
+.arch-row + .arch-row { box-shadow: inset 0 0.5px 0 var(--separator); }
+.arch-main { flex: 1; min-width: 0; }
+.arch-top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.arch-name { flex: 1; min-width: 0; overflow: hidden; font: 600 14px/1.3 var(--font-display); letter-spacing: -0.005em; white-space: nowrap; text-overflow: ellipsis; }
+.arch-name::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 2.5px; background: var(--lane); vertical-align: 1px; }
+.arch-when { flex: none; color: var(--label-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.arch-note { display: -webkit-box; margin-top: 3px; overflow: hidden; color: var(--label-2); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.arch-meta { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 5px; color: var(--label-3); font-size: 11.5px; }
+.arch-where { min-width: 0; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.arch-extra { color: var(--label-2); }
+.arch-actions { display: flex; flex: none; align-items: center; gap: 4px; margin-top: -2px; }
+.arch-return { height: 28px; padding: 0 11px 0 8px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); font-weight: 600; }
+.arch-return svg { width: 15px; height: 15px; flex: none; }
+.arch-return:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.arch-return:active:not(:disabled) { transform: scale(0.96); }
+.arch-return:disabled { opacity: 0.55; }
+.arch-row.returning .arch-return { background: var(--fill-2); color: var(--label-2); opacity: 1; }
+.arch-row .sched-x:disabled { opacity: 0.4; }
+/* While sleeping sessions pile up in "Idle": a quiet offer to take them along. */
+.arch-tidy { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; padding: 9px 9px 9px 13px; border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-card); color: var(--label-2); font-size: 13px; line-height: 1.35; }
+.arch-tidy > svg { flex: none; width: 16px; height: 16px; color: var(--label-3); }
+.arch-tidy > span { flex: 1; min-width: 0; }
+.arch-tidy .button { flex: none; height: 28px; }
+/* A card on its way into the Archive button (app.js flyToArchive), above the board and its panels. */
+.ghost.to-archive { z-index: 75; will-change: transform, opacity; }
+
 /* ---------------------------------------------------------------- toasts */
-.toasts { position: fixed; left: calc(50% + (var(--room-left, 0px) - var(--room-right, 0px)) / 2); bottom: calc(28px + var(--room-bottom, 0px)); z-index: 80; display: flex; flex-direction: column; align-items: center; gap: 8px; transform: translateX(-50%); pointer-events: none; }
+.toasts { position: fixed; left: calc(50% + (var(--room-left, 0px) - var(--room-right, 0px)) / 2); bottom: calc(28px + var(--room-bottom, 0px)); z-index: 80; display: flex; flex-direction: column; align-items: center; gap: 8px; width: max-content; max-width: calc(100vw - 32px); transform: translateX(-50%); pointer-events: none; }
 .toast {
   padding: 9px 16px;
   border-radius: 999px;
@@ -1171,6 +1206,16 @@ button.swatch:active { transform: scale(0.88); }
   white-space: nowrap;
 }
 .toast.error { color: var(--red); }
+/* One with a button (Return after an archive): it takes the pointer, and wraps on a phone. */
+.toast.with-action { display: flex; align-items: center; gap: 12px; max-width: calc(100vw - 32px); padding: 5px 5px 5px 16px; pointer-events: auto; }
+.toast-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.toast-action { flex: none; height: 28px; padding: 0 13px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font: 600 13px var(--font); transition: background 150ms ease, transform 100ms ease-out; }
+.toast-action:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.toast-action:active { transform: scale(0.95); }
+.toast-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 760px) {
+  .toast.with-action { white-space: normal; border-radius: 18px; }
+}
 
 /* ---------------------------------------------------------------- files in the chat */
 /* A path the server found on disk becomes a chip; a click opens the quick look. */

@@ -143,7 +143,7 @@ test('lanes, the board, starting sessions and file chips have menus of their own
   assert.match(find(lane, 'new').label, /Acme/)
   assert.deepEqual(ids(laneMenu(categories[0], { ...fresh, filter: 'acme' })).at(-1), 'showAll')
   assert.equal(find(laneMenu(categories[0], { ...fresh, canMutate: false, filter: 'all' }), 'new').disabled, true)
-  assert.deepEqual(ids(boardMenu({ ...fresh, filter: 'all', sleepers: true })), ['new', 'newWorkspace', 'cats', 'sleepers', 'search'])
+  assert.deepEqual(ids(boardMenu({ ...fresh, filter: 'all', sleepers: true })), ['new', 'newWorkspace', 'cats', 'archiveOpen', 'sleepers', 'search'])
   assert.equal(find(boardMenu({ ...fresh, filter: 'acme', sleepers: false }), 'sleepers').checked, false)
   assert.deepEqual(ids(launchMenu({ state: 'failed', pane: 'w1:p3' }, fresh)), ['focus', 'retry', 'copyError', 'copy:cwd', 'dismiss'])
   assert.deepEqual(ids(launchMenu({ state: 'starting', pane: null }, fresh)), ['copy:cwd', 'dismiss'])

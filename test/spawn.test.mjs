@@ -161,6 +161,30 @@ test('spawn-agent: a dialog before Claude is ready, a brief herdr calls stalled,
   assert.match(noWorkspace.stderr, /No herdr workspace/)
 })
 
+test('spawn-agent --resume brings a session back by its id: no /rename, no brief, its herdr name', { timeout: 30_000 }, async t => {
+  const id = '0f8fad5b-d9cb-469f-a165-70867728950e'
+  assert.equal(parseArgs(['--name', 'x', '--cwd', '.', '--resume', id]).resume, id)
+  assert.throws(() => parseArgs(['--name', 'x', '--cwd', '.', '--resume', 'abc']), /--resume must be a session id/)
+  assert.throws(() => parseArgs(['--name', 'x', '--cwd', '.', '--resume', id, '--session-id', id]), /not both/)
+  const box = sandbox(t)
+  box.state(STATE)
+  boardConfig(box, { launch: { claude: ['claude-tg', '--dangerously-skip-permissions'] } })
+  const r = await runSpawn(box, ['--name', 'Acme invoices', '--cwd', box.dir, '--workspace', 'wA', '--resume', id])
+  assert.equal(r.code, 0, r.stderr)
+  assert.equal(r.stdout.trim(), 'pane=wA:p9 name=Acme invoices agent=acme-invoices-2')
+  const calls = box.calls().map(a => a.join(' '))
+  assert.ok(calls.includes(`pane run wA:p9 claude-tg --dangerously-skip-permissions --resume ${id}`), calls.join('\n'))
+  assert.ok(calls.includes('agent rename wA:p9 acme-invoices-2'))
+  assert.equal(calls.some(c => c.startsWith('agent prompt')), false)
+  // A launch.claude that picks its own session cannot resume another one.
+  const box2 = sandbox(t)
+  box2.state(STATE)
+  boardConfig(box2, { launch: { claude: ['claude', '--continue'] } })
+  const no = await runSpawn(box2, ['--name', 'x', '--cwd', box2.dir, '--workspace', 'wA', '--resume', id])
+  assert.equal(no.code, 1)
+  assert.match(no.stderr, /picks its own session/)
+})
+
 test('spawn-agent --pane starts Claude in a pane that is there, its tab named after the session', { timeout: 30_000 }, async t => {
   const box = sandbox(t)
   box.state({ ...STATE, 'pane get': { seq: [{ result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: null } } }, READY] } })
