@@ -265,7 +265,11 @@ alias cld-work='CLAUDE_CONFIG_DIR=$HOME/.claude-work command claude --allow-dang
 and `"command": "cld"` on Default, `"command": "cld-work"` on Work (or their "Start command" in the
 panel), a Work session from the board types `cld-work --session-id <id>`, so a flag added to the
 alias reaches it without touching the board. An alias that names another profile's folder runs its
-session there: the card's red "Wrong profile" tag and herdr's notification say so. A command that
+session there. The card's red "Wrong profile" tag and herdr's notification say so when the board
+knows which session the start made: by the session id the board passes, or `--session-id` to
+`spawn-agent`. A helper an agent starts without `--session-id` gets no tag, nor does a helper whose
+command picks its own session (`--resume`, `--continue`). A board start with such a command gets
+one only if herdr reports the new tab's session within two minutes of the start. A command that
 breaks the rules is refused with the reason: on save in the panel, and at a start that types it,
 before anything runs.
 
@@ -486,7 +490,9 @@ other profile, the agent's own or the one `--profile` names, the new tab gets
 then records the pane as opened in that profile, with the terminal herdr opened it with. With
 `--session-id`, every start, one that leaves the env alone included, writes the card as meant to
 run in its profile, so a session that reports another profile (herdr's own env pointing to another
-one, say) shows the "wrong profile" warning. spawn-agent never falls back to another profile: it
+one, or an alias, say) shows the "wrong profile" warning. Without `--session-id` it writes no such
+card, and with a command that picks its own session (`--resume`, `--continue`) the card is not that
+session's: neither start shows the warning. spawn-agent never falls back to another profile: it
 refuses, before herdr opens, renames or types anything, when
 
 - the agent's own folder is not a profile the board knows (or is named relative to where it
