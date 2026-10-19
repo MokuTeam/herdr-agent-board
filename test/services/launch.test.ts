@@ -130,6 +130,18 @@ test('a launch request is checked before anything runs', async () => {
     ),
     { ok: false, field: 'profile', error: 'The profile of Stray is not one the board knows: choose one' },
   )
+  // A card in another profile than its start asked for: "New here" asks, never repeats the mistake.
+  const wrong = [{ key: 's4', name: 'Eps', profile: 'default', profileWanted: 'work' }] as unknown as Item[]
+  assert.deepEqual(
+    await checkRequest({ name: 'A', cwd: dir, workspace: { id: 'w2' }, parent: 's4' }, { profiles: two, items: wrong }),
+    { ok: false, field: 'profile', error: 'The profile of Eps is not one the board knows: choose one' },
+  )
+  const chosen = await checkRequest(
+    { name: 'A', cwd: dir, workspace: { id: 'w2' }, parent: 's4', profile: 'work' },
+    { profiles: two, items: wrong },
+  )
+  assert.ok(chosen.ok, JSON.stringify(chosen))
+  assert.deepEqual([chosen.launch.profile, chosen.launch.parent], ['work', 's4'])
 })
 
 // ---------------------------------------------------------------- through the server

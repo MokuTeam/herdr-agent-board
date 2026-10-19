@@ -10,7 +10,7 @@
 // Pure: the adapters find the folders and read the env and the config, and hand them in.
 import { posix, win32 } from 'node:path'
 import { validColor } from './categories.ts'
-import { itemProfile, shownProfiles } from './item-profile.ts'
+import { itemProfile, parentProfile, shownProfiles } from './item-profile.ts'
 import { t } from './lang.ts'
 import { baseName, sameDir, uniqueSlug } from './launch/names.ts'
 import type { SpawnOptions } from './launch/spawn-args.ts'
@@ -219,14 +219,15 @@ export type LaunchTarget =
 
 /**
  * The profile a launch from the board starts in. Started from a session (`parent`, "New here"):
- * that session's profile (itemProfile: the only one shown when the card does not say, but never
- * for a folder no profile has, `profileFolder`), hidden or not, and no other. A parent whose profile is not
+ * that session's profile (parentProfile: the only one shown when the card does not say, but never
+ * for a folder no profile has, `profileFolder`, nor for a session in another profile than its
+ * start asked for, `profileWanted`), hidden or not, and no other. A parent whose profile is not
  * known, or none: the profile `asked` names, listed and shown; none asked is the only shown one,
  * else the owner chooses. Never a guess.
  */
 export function launchTarget(
   asked: string | undefined,
-  parent: Pick<Item, 'name' | 'profile' | 'profileFolder'> | null,
+  parent: Pick<Item, 'name' | 'profile' | 'profileFolder' | 'profileWanted'> | null,
   set: ProfileSet,
 ): LaunchTarget {
   const target = (profile: Profile): LaunchTarget => ({
@@ -236,7 +237,7 @@ export function launchTarget(
   })
   const shown = shownProfiles(set.list)
   if (parent) {
-    const own = itemProfile(parent, set.list)
+    const own = parentProfile(parent, set.list)
     if (own) return asked === undefined || asked === own.id ? target(own) : { ok: false, error: 'parent', id: own.id }
     if (asked === undefined) return { ok: false, error: 'unknownParent', id: '' }
   }

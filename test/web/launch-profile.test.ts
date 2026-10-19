@@ -92,8 +92,12 @@ describe('what the window preselects', () => {
       LOCKED('work'),
     )
     expect(profileStart(card({ key: 'g', profile: 'gamedev' }), scene())).toEqual(LOCKED('gamedev'))
-    // Running in another profile than its start asked for: the one it runs in.
-    expect(profileStart(card({ key: 'x', profile: 'work', profileWanted: 'default' }), scene())).toEqual(LOCKED('work'))
+    // Running in another profile than its start asked for: which one was meant is not known, so
+    // the choice, nothing picked (the server asks too), with two shown or one.
+    expect(profileStart(card({ key: 'x', profile: 'work', profileWanted: 'default' }), scene())).toEqual(ASK)
+    expect(
+      profileStart(card({ key: 'x', profile: 'default', profileWanted: 'work' }), scene({ profiles: ONE })),
+    ).toEqual(ASK)
     // Not known: no report on a board with two shown, a folder no profile has, a profile gone since.
     for (const fields of [
       { profile: null },
@@ -279,7 +283,7 @@ describe('the page and the server hold a card to one profile', () => {
       PRIVATE.dir,
     )
   type Body = { profile?: string; parent?: string }
-  type Case = [string, BoardProfile[], Pick<Item, 'profile' | 'profileFolder'>, string | null, Body]
+  type Case = [string, BoardProfile[], Pick<Item, 'profile' | 'profileFolder' | 'profileWanted'>, string | null, Body]
   const FOLDER = 'D:\\elsewhere'
   const CASES: Case[] = [
     ['a card with a known profile', TWO, { profile: 'work' }, 'work', { profile: 'work', parent: 'c' }],
@@ -292,6 +296,17 @@ describe('the page and the server hold a card to one profile', () => {
     ['a profile gone since, two shown', TWO, { profile: 'gone' }, null, {}],
     ['a hidden profile, one shown', ONE, { profile: 'work' }, 'work', { profile: 'work', parent: 'c' }],
     ['a hidden profile, two shown', TWO, { profile: 'gamedev' }, 'gamedev', { profile: 'gamedev', parent: 'c' }],
+    ['the wrong profile, two shown', TWO, { profile: 'default', profileWanted: 'work' }, null, {}],
+    ['the wrong profile, one shown', ONE, { profile: 'default', profileWanted: 'work' }, null, {}],
+    ['the wrong, hidden profile', TWO, { profile: 'gamedev', profileWanted: 'work' }, null, {}],
+    ['the wrong profile, wanted one gone', TWO, { profile: 'work', profileWanted: 'gone' }, null, {}],
+    [
+      'a folder no profile has, started for work',
+      TWO,
+      { profile: null, profileFolder: FOLDER, profileWanted: 'work' },
+      null,
+      {},
+    ],
   ]
 
   test.each(CASES)('%s', (_, list, fields, own, body) => {

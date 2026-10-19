@@ -282,12 +282,12 @@ runs on herdr 0.9.2; there only a start that needs herdr's `--env` fails, saying
 is started. What the board refuses and the "wrong profile" check: [New sessions](#new-sessions).
 
 **Helpers and forks keep their parent's profile.** "New here" from a card starts in that card's
-profile and no other. `spawn-agent`, run by an agent, starts the new session in the agent's own
-profile, hidden or not; `--profile <id>` names another, shown one. See [spawn-agent](#spawn-agent).
-A MokuPilot call is the exception: it goes only from a session in the board's own profile, since a
-running MokuPilot takes the call over in its own env and a fork from another profile would run in
-its account. The board refuses the call from any other profile before anything starts (see
-[Web board](#web-board)).
+profile and no other (from a card in the wrong profile, you choose). `spawn-agent`, run by an
+agent, starts the new session in the agent's own profile, hidden or not; `--profile <id>` names
+another, shown one. See [spawn-agent](#spawn-agent). A MokuPilot call is the exception: it goes
+only from a session in the board's own profile, since a running MokuPilot takes the call over in
+its own env and a fork from another profile would run in its account. The board refuses the call
+from any other profile before anything starts (see [Web board](#web-board)).
 
 **Waking stays in the profile.** herdr-wake resumes a sleeping session in its pane, with the env of
 that pane's shell. So the board wakes (the Wake button, Enter on the terminal board, a message, a
@@ -388,7 +388,8 @@ How it starts, by `launch` in config.json:
 With more than one Claude profile shown (`CLAUDE_CONFIG_DIR` folders such as `~/.claude-work`),
 the session starts in the profile chosen in the window; with one shown, in that one, as before. A
 session started from another one ("New here") starts in that session's profile, hidden or not,
-and in no other; when the board does not know that session's profile, choose one. The board's own
+and in no other; when the board does not know that session's profile, or the session runs in
+another profile than its start asked for, choose one. The board's own
 profile, the one its own `CLAUDE_CONFIG_DIR` points to (unset is `~/.claude`, however the folder is
 spelled), keeps the env exactly as the board inherited it: no `--env`, nothing changes for a
 teammate. Any other profile gets `CLAUDE_CONFIG_DIR=<its folder>`: on the tab with

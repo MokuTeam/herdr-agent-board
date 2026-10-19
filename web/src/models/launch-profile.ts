@@ -1,11 +1,12 @@
 // The Claude profile a new session starts in: what the new-session window preselects and whether
 // it offers the choice, the profile last used in each folder (this browser keeps it), the row of
 // shown profiles and the tag beside Start, and what the start sends. A session started from a card
-// keeps the card's profile, by the server's own rule (src/core/item-profile.ts); a card whose
-// profile the board does not know offers the choice with nothing picked, as the server refuses to
-// guess it (src/core/profiles.ts launchTarget). With one profile shown and nothing unknown, the
+// keeps the card's profile, by the server's own rule (src/core/item-profile.ts parentProfile); a
+// card whose profile the board does not know, or whose session runs in another profile than its
+// start asked for, offers the choice with nothing picked, as the server refuses to guess it
+// (src/core/profiles.ts launchTarget). With one profile shown and nothing unknown, the
 // window and what it sends are as before profiles.
-import { itemProfile, shownProfiles } from '../../../src/core/item-profile.ts'
+import { parentProfile, shownProfiles } from '../../../src/core/item-profile.ts'
 import { normDir } from '../../../src/core/launch/names.ts'
 import type { BoardCategory, BoardProfile } from '../../../src/core/payload.ts'
 import type { LaunchContext } from './launch-form.ts'
@@ -27,8 +28,9 @@ export interface ProfilePick {
 
 /**
  * What the window starts with, first match wins: (1) from a card, its profile, locked (a failed
- * launch started again: the profile it asked for); a card whose profile is not known, or a launch
- * whose profile is gone, picks nothing and offers the choice while any profile is shown; (2) the
+ * launch started again: the profile it asked for); a card whose profile is not known, one in
+ * another profile than its start asked for, or a launch whose profile is gone, picks nothing and
+ * offers the choice while any profile is shown; (2) the
  * lane's usual profile, (3) the profile last used in the folder, each only when shown; (4)
  * nothing. Offered otherwise with two or more shown.
  */
@@ -45,7 +47,7 @@ export function profileStart(
   const shown = shownProfiles(s.profiles)
   const ask: ProfilePick = { picked: null, locked: false, offered: shown.length > 0 }
   if (ctx.item) {
-    const own = itemProfile(ctx.item, s.profiles)
+    const own = parentProfile(ctx.item, s.profiles)
     return own ? { picked: own.id, locked: true, offered: false } : ask
   }
   const again = ctx.retry?.profile

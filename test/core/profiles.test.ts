@@ -385,6 +385,14 @@ test('the profile a board launch starts in: the one chosen, the parent’s, or t
   })
   expect(launchTarget('work', { name: 'X', profile: null }, SET)).toMatchObject({ ok: true, profile: WORK })
   expect(launchTarget('gamedev', { name: 'X', profile: null }, SET)).toMatchObject({ ok: false, error: 'hidden' })
+  // A parent in another profile than its start asked for: which one was meant is not known, so
+  // neither is taken without asking; the owner's choice of either goes.
+  const wrong = { name: 'E', profile: 'default', profileWanted: 'work' }
+  for (const set of [SET, ONE_SHOWN])
+    expect(launchTarget(undefined, wrong, set)).toEqual({ ok: false, error: 'unknownParent', id: '' })
+  expect(launchTarget('work', wrong, SET)).toMatchObject({ ok: true, profile: WORK })
+  expect(launchTarget('default', wrong, SET)).toMatchObject({ ok: true, profile: DEFAULT })
+  expect(launchTarget('gamedev', { ...wrong, profile: 'gamedev' }, SET)).toMatchObject({ ok: false, error: 'hidden' })
   // With one profile listed, a parent's is that one, unless it reported a folder no profile has.
   expect(launchTarget(undefined, { name: 'X', profile: null }, profileSet([DEFAULT], DEFAULT.dir))).toEqual({
     ok: true,
