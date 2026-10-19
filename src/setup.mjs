@@ -25,7 +25,23 @@ export function boardFiles(root = ROOT) {
     hook: join(root, 'src', 'hook.mjs'),
     statusline: join(root, 'src', 'statusline.mjs'),
     toast: join(root, 'src', 'toast.ps1'),
+    skill: join(root, 'skills', SKILL, 'SKILL.md'),
   }
+}
+
+// ------------------------------------------------------------------ the agents' skill
+
+// What sessions in herdr read on demand (skills/herdr-agents): install copies it into Claude
+// Code's user skills; the marker in it tells a copy of ours from someone else's skill of that name.
+export const SKILL = 'herdr-agents'
+const SKILL_MARK = 'agent-board: installed by'
+export const skillFile = (home = homedir()) => join(home, '.claude', 'skills', SKILL, 'SKILL.md')
+
+/** What install does with the skill: 'write' (missing, or an older copy of ours), 'same', or 'foreign'. */
+export function skillAction(installed, source) {
+  if (installed === null || installed === undefined) return 'write'
+  if (!installed.includes(SKILL_MARK)) return 'foreign'
+  return installed.replace(/\r\n/g, '\n') === String(source ?? '').replace(/\r\n/g, '\n') ? 'same' : 'write'
 }
 
 // ------------------------------------------------------------------ commands on PATH
@@ -250,6 +266,7 @@ export async function gatherFacts(cfg, { root = ROOT, env = process.env, platfor
     path: String(env.PATH ?? env.Path ?? ''),
     files: boardFiles(root),
     commands: { board: findCommand('board', { env, platform }), 'spawn-agent': findCommand('spawn-agent', { env, platform }) },
+    skill: { file: skillFile(home), installed: readText(skillFile(home)), source: readText(boardFiles(root).skill) },
     settingsFile,
     settings,
     settingsError,
@@ -325,6 +342,15 @@ export function checkSetup(facts, t = english) {
   }
 
   command('spawn-agent', f.spawn, 'warn', t('setup.spawn.without'))
+
+  // The skill sessions in herdr read on demand (the brief points to it).
+  if (facts.skill) {
+    const state = skillAction(facts.skill.installed, facts.skill.source)
+    if (state === 'same') add('skill', 'ok', t('setup.skill.ok', { name: SKILL }), t('setup.skill.okDetail'))
+    else if (state === 'foreign') add('skill', 'warn', t('setup.skill.foreign', { name: SKILL }), t('setup.skill.foreignDetail', { file: facts.skill.file }), t('setup.skill.foreignFix'), INSTALL)
+    else if (facts.skill.installed !== null) add('skill', 'warn', t('setup.skill.stale', { name: SKILL }), t('setup.skill.without'), t('setup.runInstall'), INSTALL)
+    else add('skill', 'warn', t('setup.skill.missing', { name: SKILL }), t('setup.skill.without'), t('setup.runInstall'), INSTALL)
+  }
 
   // herdr's key for the board.
   const key = boardKey(facts.herdrConfig)
