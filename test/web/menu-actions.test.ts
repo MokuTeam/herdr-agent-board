@@ -36,7 +36,7 @@ const PAGE = `<div id="page"><article class="card" data-key="s1" id="card"><span
 <button id="sheet-new" disabled> New here </button></div></div>`
 
 /** The buttons the sheet's row shows (the stylesheet's say): More lists the others. */
-const WIDE_ROW = ['sheet-focus', 'sheet-term', 'sheet-changes', 'sheet-history', 'sheet-more']
+const WIDE_ROW = ['sheet-focus', 'sheet-mokupilot', 'sheet-term', 'sheet-changes', 'sheet-more']
 const NARROW_ROW = ['sheet-focus', 'sheet-more']
 let rowShows = new Set(WIDE_ROW)
 
@@ -292,8 +292,8 @@ describe('as the old page: copying, opening with the system, going to a starting
 
 // ---------------------------------------------------------------- More
 
-/** Upstream's merge of the session panel's row: More lists what the row hides, in groups. */
-const MORE_MERGE = '3105958'
+/** Upstream's merge of the call's move to the row (#55): More lists what the row hides, in groups. */
+const MORE_MERGE = '8745585'
 
 interface MoreOpened {
   items: MenuEntry[]
@@ -401,6 +401,8 @@ describe('More at the end of the session panel’s row', () => {
     const wide = newMore(true, false, [])
     wide.click(page('sheet-more'), 1)
     expect(lines(wide.opened())).toEqual([
+      `sheet-history:History:${t('mobile.readOnly')}`,
+      '—',
       `sheet-new:New here:${t('mobile.readOnly')}`,
       '—',
       'sheet-sleep:Sleep:It works; it can sleep after this turn',
@@ -452,7 +454,7 @@ describe('More at the end of the session panel’s row', () => {
     expect(clicked).toEqual(['sleep', 'sleep'])
   })
 
-  test('the Terminal first when the row hides it; picked, it opens out of More', async () => {
+  test('the Terminal first of the tools when the row hides it; picked, it opens out of More', async () => {
     rowShows = new Set(NARROW_ROW)
     const term = world.document.createElement('button')
     term.id = 'sheet-term'
@@ -567,7 +569,7 @@ describe('More at the end of the session panel’s row', () => {
       }
   })
 
-  test('“Call in MokuPilot” with a new session here, after the tools; gray without the board, picked it is the button’s own click', async () => {
+  test('“Call in MokuPilot” first, before the tools; gray without the board, picked it is the button’s own click', async () => {
     rowShows = new Set(NARROW_ROW)
     const term = world.document.createElement('button')
     term.id = 'sheet-term'
@@ -588,16 +590,16 @@ describe('More at the end of the session panel’s row', () => {
       b.click(page('sheet-more'), 1)
       expect(shown(b.opened())).toEqual(shown(a.opened()))
       expect(b.opened()?.items.map(it => (it.separator ? '—' : it.id))).toEqual([
+        'sheet-mokupilot',
         'sheet-term',
         'sheet-changes',
         'sheet-history',
         '—',
-        'sheet-mokupilot',
         'sheet-new',
         '—',
         'sheet-sleep',
       ])
-      expect(b.opened()?.items[4]).toMatchObject({ id: 'sheet-mokupilot', label: 'Call in MokuPilot', disabled })
+      expect(b.opened()?.items[0]).toMatchObject({ id: 'sheet-mokupilot', label: 'Call in MokuPilot', disabled })
       pickIn(a.opened(), 'sheet-mokupilot')
       pickIn(b.opened(), 'sheet-mokupilot')
       await world.flush()

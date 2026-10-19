@@ -1,5 +1,5 @@
 // The sheet's foot: why the session's actions wait (no fresh data), the session's buttons — go to
-// it in herdr, its terminal, a MokuPilot call with a fork of it, wake it, put it to sleep, restart
+// it in herdr, a MokuPilot call with a fork of it, its terminal, wake it, put it to sleep, restart
 // it, its changes and history, a new session here, and More at the row's end, with what the row
 // hides (the stylesheet decides) — the files
 // that go with the next message, and the message box: Enter sends, Shift+Enter breaks the line,
@@ -117,17 +117,6 @@ export function Composer({
         </button>
         <button
           type="button"
-          className={classNames('button', term.hasShell && 'has-shell')}
-          id="sheet-term"
-          hidden={term.hidden}
-          title={term.title || t('term.hint')}
-          onClick={e => on.terminal?.(e.currentTarget)}
-        >
-          <TermIcon />
-          <span>{t('term.open')}</span>
-        </button>
-        <button
-          type="button"
           className="button"
           id="sheet-mokupilot"
           hidden={buttons.mokupilotHidden}
@@ -137,6 +126,17 @@ export function Composer({
         >
           <PhoneIcon />
           <span>{t('mokupilot.call')}</span>
+        </button>
+        <button
+          type="button"
+          className={classNames('button', term.hasShell && 'has-shell')}
+          id="sheet-term"
+          hidden={term.hidden}
+          title={term.title || t('term.hint')}
+          onClick={e => on.terminal?.(e.currentTarget)}
+        >
+          <TermIcon />
+          <span>{t('term.open')}</span>
         </button>
         <button
           type="button"

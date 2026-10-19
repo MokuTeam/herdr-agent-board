@@ -4,12 +4,12 @@
 // cancelButton, thread, thumbs, clock), renderDetailState, renderAttachments, syncComposer and
 // syncSheetProperties picked out of web/app.js (support/old-app.ts) with its own markdown.js and
 // when.js, questions.js's threadHTML — run against a small `$` over the parsed page. By hand: the
-// "New here" button app.js puts before More at start (#54's app.js:2658-2664), the Changes button's
+// "New here" button app.js puts before More at start (#55's app.js:2658-2664), the Changes button's
 // rule in the detail's `changed` (app.js:903) and syncAvailability's part for the sheet (app.js:175-195).
-// The page and renderSheetHead are those of the session panel's row (upstream PR #54): the baseline's
-// with the sheet's Terminal button (#36), the facts under its name one span each and Wake's
-// tooltip (#43), "Call in MokuPilot" (#44), Restart (#51) and More at the row's end (#54), nothing
-// else. The reminders' row (scheduleRow) is #51's: a call's results by their title (#45), a restart
+// The page and renderSheetHead are those of the call's move to the row's front (upstream PR #55):
+// the baseline's with the sheet's Terminal button (#36), the facts under its name one span each and
+// Wake's tooltip (#43), "Call in MokuPilot" (#44), Restart (#51), More at the row's end (#54) and
+// the call before the Terminal (#55), nothing else. The reminders' row (scheduleRow) is #51's: a call's results by their title (#45), a restart
 // with how it stands.
 import { translator } from '../../../src/core/i18n/translator.ts'
 import type { BoardPayload } from '../../../src/core/payload.ts'
@@ -67,10 +67,11 @@ export interface OldSheetScene {
 type StyleRule = [string, string]
 
 /**
- * Upstream's merge of the session panel's row (PR #54), which has the terminal's (#36), the compact
- * toolbar's (#43), MokuPilot's call (#44), its results (#45) and the restart's (#51) in it.
+ * Upstream's merge of the call's move to the row's front (PR #55), which has the terminal's (#36),
+ * the compact toolbar's (#43), MokuPilot's call (#44), its results (#45), the restart's (#51) and
+ * the session panel's row (#54) in it.
  */
-const SHEET_MERGE = '3105958'
+const SHEET_MERGE = '8745585'
 const OLD_CALL = await oldModule('web/notice-model.js', SHEET_MERGE)
 
 /** Just enough of an element for the old code's writes, onto a parsed node. */
