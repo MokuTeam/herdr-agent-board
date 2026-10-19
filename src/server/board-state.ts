@@ -1,6 +1,7 @@
 // The board as the web page sees it: the latest items, whether they are fresh, and the payload
 // GET /api/board answers with and the event stream pushes.
 import { statSync } from 'node:fs'
+import { readArchiveLog } from '../adapters/archive-store.ts'
 import { readUsageFile } from '../adapters/claude-home.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { notify } from '../adapters/herdr.ts'
@@ -144,6 +145,8 @@ export function createBoardState({ deps, launches, terminals, version, push, set
     const profiles = boardProfiles(deps, items)
     const own = profiles.find(p => p.inherited) ?? profiles.find(p => p.id === DEFAULT_PROFILE)
     return {
+      // archive: what became of the latest sessions put in it (the page's toasts).
+      archive: { log: readArchiveLog(8) },
       version: version(),
       lang: lang(),
       language: cfg.language ?? 'auto',

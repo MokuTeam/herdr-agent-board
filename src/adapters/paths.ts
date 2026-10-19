@@ -16,6 +16,8 @@ export const stateDir = (): string =>
 export const cardsDir = (): string => join(stateDir(), 'cards')
 // Reminders and repeating pings for sessions (schedule-store.ts), one file per entry.
 export const scheduleDir = (): string => join(stateDir(), 'schedule')
+// Sessions taken off the board, one file per session (archive-store.ts).
+export const archiveDir = (): string => join(stateDir(), 'archive')
 export const boardFile = (): string => join(stateDir(), 'board.json')
 export const uploadsDir = (): string => join(stateDir(), 'uploads')
 // First messages for a launcher's {messageFile}, there only while the launcher runs.

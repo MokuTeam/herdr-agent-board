@@ -9,7 +9,7 @@ import { type FSWatcher, mkdirSync, watch } from 'node:fs'
 import { join } from 'node:path'
 import { saveFoundProfiles } from '../adapters/config-file.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
-import { cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
+import { archiveDir, cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
 import { messageGate } from '../core/message-gate.ts'
 import type { SetupFacts } from '../core/setup.ts'
@@ -22,6 +22,7 @@ import { createSetupChecks } from '../services/setup-check.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
 import { createBoardState } from './board-state.ts'
 import { dispatch, json, type Route } from './http.ts'
+import { archiveRoutes } from './routes/archive.ts'
 import { boardRoutes } from './routes/board.ts'
 import { fsRoutes } from './routes/fs.ts'
 import { launchRoutes } from './routes/launch.ts'
@@ -134,6 +135,8 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     revealRoute(board, events, reveals),
     settingsRoute(),
     scheduleRoute(refresh),
+    // The archive: its list, and archiving, bringing back or removing sessions (services/archive.ts).
+    ...archiveRoutes({ deps, launches, items: board.items, find: board.find, refresh }),
     categoriesRoute(),
     // Install from the Profiles panel: the panel's note and "Setup incomplete" follow at once, not
     // at the next refresh and the next check in up to 10 minutes.
@@ -200,6 +203,8 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     watchFolder(cardsDir(), 150, refresh, log),
     // Entries added or cancelled by agents (`board remind`), and runs the scheduler made.
     watchFolder(scheduleDir(), 150, refresh, log),
+    // Sessions an agent put in the archive (`board archive`), whose cards go at once.
+    watchFolder(archiveDir(), 150, refresh, log),
     // A change to the page: build it again; the new version makes open pages reload.
     watchFolder(WEB, 200, () => void bundle.rebuild().then(refresh), log, true),
   ]

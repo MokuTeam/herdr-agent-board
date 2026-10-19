@@ -5,8 +5,13 @@
 //
 //   spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
 //               [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
-//               [--timeout-sec 120] [--session-id <uuid>] [--pane <herdr pane id>] [--profile <id>]
+//               [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--pane <herdr pane id>]
+//               [--profile <id>]
 //   PowerShell-style names work too: -Name, -Cwd, -Label, -BriefFile, -Brief, -Workspace, -TimeoutSec.
+//
+// --resume brings back a session that ended (the board's archive): Claude resumes it by its id, in
+// the folder it ran in, and it keeps the name it had, so no /rename is typed. An agent's resume
+// runs in the profile whose folder holds its conversation.
 //
 // What it types into the tab is `launch.claude` in the board's config.json (default: claude),
 // so a launcher of your own (one that sets up Telegram topics, say) goes there. A profile with a

@@ -6,7 +6,7 @@ import { t } from '../lang.ts'
 import { checkName } from './names.ts'
 
 export const USAGE =
-  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid>] [--pane <pane id>] [--profile <id>]'
+  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--pane <pane id>] [--profile <id>]'
 
 /** What spawn-agent was asked to start. */
 export interface SpawnOptions {
@@ -18,6 +18,8 @@ export interface SpawnOptions {
   workspace?: string
   timeoutSec: number
   sessionId?: string
+  /** A session that ended, brought back by its id (the board's archive): no /rename, its name stays. */
+  resume?: string
   pane?: string
   /** The Claude profile to start in, not the one of the agent that runs spawn-agent. */
   profile?: string
@@ -42,6 +44,7 @@ const OPTIONS: Record<string, Key> = {
   workspace: 'workspace',
   timeoutsec: 'timeoutSec',
   sessionid: 'sessionId',
+  resume: 'resume',
   pane: 'pane',
   profile: 'profile',
   configdir: 'configDir',
@@ -98,7 +101,11 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     throw new Error(`--timeout-sec must be a number of seconds, not "${out.timeoutSec}"`)
   if (out.sessionId !== undefined && !UUID.test(out.sessionId))
     throw new Error(`--session-id must be a UUID, not "${out.sessionId}"`)
-  const { label, briefFile, brief, workspace, sessionId, pane, profile, configDir } = out
+  if (out.resume !== undefined && !UUID.test(out.resume))
+    throw new Error(`--resume must be a session id (a UUID), not "${out.resume}"`)
+  if (out.resume !== undefined && out.sessionId !== undefined)
+    throw new Error('give --session-id or --resume, not both')
+  const { label, briefFile, brief, workspace, sessionId, resume, pane, profile, configDir } = out
   if ([profile !== undefined, configDir !== undefined, keepEnv].filter(Boolean).length > 1)
     throw new Error('give one of --profile, --config-dir and --keep-env')
   return {
@@ -110,6 +117,7 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     ...(brief !== undefined && { brief }),
     ...(workspace !== undefined && { workspace }),
     ...(sessionId !== undefined && { sessionId }),
+    ...(resume !== undefined && { resume }),
     ...(pane !== undefined && { pane }),
     ...(profile !== undefined && { profile }),
     ...(configDir !== undefined && { configDir }),
