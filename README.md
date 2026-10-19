@@ -209,6 +209,103 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   gives its herdr agent the same name, so other sessions and herdr-wake see it: only when ticked,
   and only while the session is idle (not working, not asleep).
 
+## Claude profiles
+
+Claude Code keeps its account, settings and sessions in a config folder: `~/.claude`, or the one
+`CLAUDE_CONFIG_DIR` names. With one folder per account (`~/.claude-work` for work, say), the board
+shows the sessions of all of them, each with its profile, and starts a session in the profile you
+choose. It never guesses: when it cannot be sure of the profile, it refuses and says why.
+
+**What it finds.** `~/.claude`, every `~/.claude-*` folder with a `settings.json` or a `projects/`
+in it, and the folder the board's own `CLAUDE_CONFIG_DIR` points to. It keeps them in config.json
+as `profiles`, each with an `id` from its folder (`~/.claude` is `default`, `~/.claude-work` is
+`work`), a `title` ("Default", "Work"), its folder (`dir`), a `color`, `hidden`, and `args`, if you
+like: more Claude arguments for the sessions the board starts in it. `~/.claude` and the board's
+own folder come in shown, any other folder hidden, so a backup or a test folder changes nothing on
+the board. Renaming a profile, or giving it another color, never changes its id or its folder.
+
+**One profile shown** (a teammate's board, and yours until you show a second): no profile switch,
+no profile choice for a new session, no `--env` on a start, and no tag on a card but the three
+below that warn: the board is as it was before profiles. Settings has "Profiles…" once the board
+finds more than one profile folder.
+
+**The Profiles panel** (Settings → Profiles…), built like Categories: a row per profile with its
+color, its name (Enter or leaving the field keeps it, Esc puts it back), its folder, its sessions
+now, and Shown or Hidden; one stays shown. Below the rows: "Add <folder>" for a folder a session
+runs in that no profile has, "Add a folder somewhere else" (`~` is the home folder; the folder must
+be there), and, for a shown profile whose `settings.json` lacks the board's hooks, a note with
+Install, which writes the hooks and the status line there as the [install](#setup) does and checks
+the setup again at once. Hiding a profile takes it out of the switch, out of the profiles a session
+can be started in, and out of Install. Its running sessions still show, with their tag, and their
+agents can still start helpers in it.
+
+**Which profile a session is in.** The hooks and the status line run in the session's env: they
+read its `CLAUDE_CONFIG_DIR` (unset is `~/.claude`) and write the profile on its card. A folder is
+the same however it is spelled (`C:\Users\me\.claude-work\`, `c:/users/me/.claude-work`,
+`~/.claude-work`). The board reads a session's name, title, conversation and helpers from its
+profile's folder, a hidden one's too. A session no hook has reported on yet shows as a bare herdr
+pane does, without a tag.
+
+**Tags.** With two or more profiles shown, under "All profiles", a card names its profile: the
+profile's name in its color (its folder in the tooltip). Three tags show however many are shown:
+a session in a hidden profile names it; one in a folder no profile has says "unknown profile" in
+gray (the folder in the tooltip; the Profiles panel offers to add it, and it is never taken for
+another profile); one whose hooks report another profile than its start asked for says "Wrong
+profile: started for …" in red, and herdr notifies you. That session is not stopped. The terminal
+board tags a session's line the same way, before its age ("wrong profile" in red there); it has no
+switch, so it tags as "All profiles" does.
+
+**On the web board**, with two or more profiles shown:
+
+- The profile switch in the toolbar, by the lanes: "All profiles" or one profile, each with its
+  sessions on show. It filters the cards as the lanes do, and this browser keeps the pick.
+- Usage per profile: the pill shows each profile with a reading of the last half hour, the popover
+  every shown profile's windows (5h, 7d) or "No session lately". The status line keeps each
+  profile's windows apart in the state folder (`claude-limits-latest.json` for `default`, as
+  before; `claude-limits-profile-<id>.json` for another), and without it the board reads the
+  usagebar cache in the profile's own folder (`herdr-usagebar/`). With one profile shown the pill
+  is as before: the board's own profile's windows.
+- A lane's usual profile: "Usual profile" on its row in Categories. A new session in that lane
+  (its **+**, say) starts with it picked.
+
+**Starting a session in a profile.** The new-session window has a segment per shown profile.
+Picked to start with, the first that fits: from a card, that session's profile, with no other to
+choose; the lane's usual profile; the profile last used in that folder (this browser keeps it);
+else none, and Start waits until you pick one. The pick shows in its color next to Start. A start
+in the board's own profile (the one its `CLAUDE_CONFIG_DIR` points to) leaves the env as the board
+got it; any other profile gets `CLAUDE_CONFIG_DIR=<its folder>` on the new tab, through
+`herdr tab create --env`, which needs herdr 0.9.5 or newer. The plugin itself still runs on herdr
+0.9.2; there only such a start fails, saying so, and no Claude is started. What the board refuses
+and the "wrong profile" check: [New sessions](#new-sessions).
+
+**Helpers and forks keep their parent's profile.** "New here" from a card starts in that card's
+profile and no other. `spawn-agent`, run by an agent, starts the new session in the agent's own
+profile, hidden or not; `--profile <id>` names another, shown one. See [spawn-agent](#spawn-agent).
+A MokuPilot call is the exception: it goes only from a session in the board's own profile, since a
+running MokuPilot takes the call over in its own env and a fork from another profile would run in
+its account. The board refuses the call from any other profile before anything starts (see
+[Web board](#web-board)).
+
+**Waking stays in the profile.** herdr-wake resumes a sleeping session in its pane, with the env of
+that pane's shell. So the board wakes (the Wake button, Enter on the terminal board, a message, a
+reminder) only a session in its own profile, or one in a pane the board opened with that session's
+profile; any other it refuses, saying why. The rules are under [Schedule](#schedule). herdr-wake
+also wakes sessions by itself (after its idle hour put one to sleep, or for a Telegram message),
+which the board cannot stop. So start a work session where its pane carries the profile:
+
+- From the board: the new-session window, "New here" on a work card, or `spawn-agent` (a work
+  agent's helpers too). The new tab has `CLAUDE_CONFIG_DIR`, so every wake resumes in work, and
+  the board, which records the pane, wakes it too (while herdr shows the pane still holds the
+  terminal it opened).
+- Or in a pane whose shell has the variable exported (`export CLAUDE_CONFIG_DIR=~/.claude-work`,
+  then `claude`): herdr-wake's own wakes resume there in work. The board cannot see a shell's env,
+  so it does not wake such a session itself: wake it in herdr.
+
+An alias like `cld-work` (`CLAUDE_CONFIG_DIR=$HOME/.claude-work claude …`) sets the variable for
+that one Claude, not for the pane's shell, so a resume in that pane would start in `~/.claude`. The
+board refuses to wake those sessions. herdr-wake resuming one by itself is expected to fail, as
+Claude finds no such session in `~/.claude`; wake it in its pane yourself with `cld-work --resume`.
+
 ## New sessions
 
 The window asks for a name, a folder, the lane, where to open it (one of herdr's workspaces or a
@@ -836,7 +933,9 @@ spawn-agent --name <Name> --cwd <folder> [--brief-file <file>]   a new session i
 ## Settings
 
 `%APPDATA%\herdr\plugins\config\agent-board\config.json`: `language` (`auto`, `en`, `ru`),
-categories (id, title, color, folders that guess the category), `placement` (`workspace`
+categories (id, title, color, folders that guess the category, the usual Claude profile),
+`profiles` (the Claude profiles: id, title, folder, color, hidden, args; see
+[Claude profiles](#claude-profiles)), `placement` (`workspace`
 default: the board lives in a workspace of its own and stays open; `tab`; `overlay`),
 `refreshSec`, `wakeUrl` (herdr-wake router), `scheduleWaitMin` (how long a due entry waits for a
 busy session, 240), `port` (web board, 12422), `web` (false turns the

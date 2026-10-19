@@ -2,6 +2,7 @@
 // draws it.
 import { COLUMNS } from '../core/board.ts'
 import { categoryInfo, laneRank } from '../core/categories.ts'
+import type { Profile } from '../core/profiles.ts'
 import type { ScheduleEntry } from '../core/schedule-rules.ts'
 import type { Category, ColumnId, Config, Item } from '../core/types.ts'
 import type { Hit } from './input.ts'
@@ -38,6 +39,8 @@ export interface TuiState {
   /** The board closes once you leave it (an overlay) or has nothing to go back to. */
   closesOnQuit: boolean
   items: Item[]
+  /** The Claude profiles, shown and hidden: which tag a card shows (core/profile-tag.ts). */
+  profiles: Profile[]
   /** Session key -> its soonest schedule entry. */
   alarms: Map<string, ScheduleEntry>
   scheduled: number
@@ -69,6 +72,7 @@ export function createState(cfg: Config, closesOnQuit: boolean): TuiState {
     now: Date.now(),
     closesOnQuit,
     items: [],
+    profiles: [],
     alarms: new Map(),
     scheduled: 0,
     lanes: [],

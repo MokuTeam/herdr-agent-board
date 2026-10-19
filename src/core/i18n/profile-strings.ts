@@ -41,6 +41,8 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'tb.profiles': 'Profiles',
     'profile.all': 'All profiles',
     'profile.wrong': 'Wrong profile: started for {want}',
+    // the tag on the terminal board's line of a session in another profile than its start asked for (src/tui/render.ts)
+    'tui.wrongProfile': 'wrong profile',
     // a shown profile with no usage reading, in the usage popover (web/src/components/LimitsPop.tsx)
     'limits.noSession': 'No session lately',
     // a lane's usual profile in the categories panel (web/src/components/categories/CategoryRow.tsx)
@@ -102,6 +104,8 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'tb.profiles': 'Профили',
     'profile.all': 'Все профили',
     'profile.wrong': 'Не тот профиль: запущена для {want}',
+    // the tag on the terminal board's line of a session in another profile than its start asked for (src/tui/render.ts)
+    'tui.wrongProfile': 'не тот профиль',
     // a shown profile with no usage reading, in the usage popover (web/src/components/LimitsPop.tsx)
     'limits.noSession': 'Сессий давно не было',
     // a lane's usual profile in the categories panel (web/src/components/categories/CategoryRow.tsx)

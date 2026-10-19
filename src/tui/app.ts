@@ -84,6 +84,7 @@ async function refresh(): Promise<void> {
   refreshing = true
   try {
     state.items = await collect(deps)
+    state.profiles = deps.profiles().list
     const entries = listEntries()
     state.alarms = new Map()
     for (const e of entries) if (!state.alarms.has(e.key)) state.alarms.set(e.key, e)

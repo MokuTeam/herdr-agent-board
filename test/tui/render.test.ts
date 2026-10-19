@@ -4,6 +4,7 @@
 // a fixed clock, English, and a UTC time zone (the header shows the local time).
 import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { useLanguage } from '../../src/core/lang.ts'
+import type { Profile } from '../../src/core/profiles.ts'
 import type { ScheduleEntry } from '../../src/core/schedule-rules.ts'
 import type { Config, Item } from '../../src/core/types.ts'
 import { render } from '../../src/tui/render.ts'
@@ -122,6 +123,54 @@ test('render filtered lane with a flash 120x40', () => {
   state.filter = 'work'
   build(state)
   expect(render(state, BIG)).toMatchSnapshot()
+})
+
+const PRIVATE: Profile = { id: 'default', title: 'Private', dir: 'C:/Users/me/.claude', color: 'indigo', hidden: false }
+const WORK: Profile = { id: 'work', title: 'Work', dir: 'C:/Users/me/.claude-work', color: 'teal', hidden: false }
+
+const itemOf = (state: TuiState, key: string): Item => {
+  const it = state.items.find(i => i.key === key)
+  if (!it) throw new Error(`no item ${key}`)
+  return it
+}
+
+/** The screen's rows as they read: the cursor moves and the styles taken out. */
+const plainRows = (screen: string): string[] =>
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape sequences are what it splits on and strips
+  screen.split(/\x1b\[\d+;1H/).map(row => row.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ''))
+
+test('a profile tag with two shown profiles; none with one', () => {
+  const two = fixedState()
+  two.profiles = [PRIVATE, WORK]
+  itemOf(two, 'k1').profile = 'work'
+  // k1's line is the one with its alarm; the lane above it is called Work too.
+  for (const size of [
+    { columns: 160, rows: 40 },
+    { columns: 80, rows: 30 },
+  ]) {
+    const line = plainRows(render(two, size)).find(row => row.includes('⏰1:30'))
+    expect(line).toContain('Work')
+  }
+  const one = fixedState()
+  one.profiles = [PRIVATE]
+  for (const it of one.items) it.profile = 'default'
+  expect(render(one, BIG)).toBe(render(fixedState(), BIG))
+  expect(render(one, { columns: 80, rows: 30 })).toBe(render(fixedState(), { columns: 80, rows: 30 }))
+})
+
+test('a tag in its profile color, an unknown folder in gray, a wrong profile in red', () => {
+  const state = fixedState()
+  state.profiles = [PRIVATE, WORK]
+  itemOf(state, 'k1').profileFolder = 'D:/elsewhere/.claude'
+  itemOf(state, 'k2').profile = 'work'
+  Object.assign(itemOf(state, 'k3'), { profile: 'default', profileWanted: 'work' })
+  const screen = render(state, { columns: 80, rows: 30 })
+  // k1 selected (inverse), k2 as it is, k3 asleep (dim).
+  expect(screen).toContain('\x1b[90;7munknown profile\x1b[0m')
+  expect(screen).toContain('\x1b[36mWork\x1b[0m')
+  expect(screen).toContain('\x1b[31;2mwrong profile\x1b[0m')
+  itemOf(state, 'k2').profile = 'default'
+  expect(render(state, { columns: 80, rows: 30 })).toContain('\x1b[34mPrivate\x1b[0m')
 })
 
 test('render does not touch stdout', () => {

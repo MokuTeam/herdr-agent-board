@@ -3,6 +3,7 @@
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { categoryInfo } from '../core/categories.ts'
 import { t } from '../core/lang.ts'
+import { profileTag } from '../core/profile-tag.ts'
 import type { Item } from '../core/types.ts'
 import { shortWhen } from '../core/when-format.ts'
 import type { Hit } from './input.ts'
@@ -36,21 +37,64 @@ function alarm(state: TuiState, it: Item): string {
   return e ? `${e.idle ? '⏳' : '⏰'}${shortWhen(e.next, t, state.now)} ` : ''
 }
 
+/** A profile's color on a terminal: the nearest of its eight; another color by its own name. */
+const TAG_COLORS: Readonly<Record<string, string>> = {
+  indigo: 'blue',
+  teal: 'cyan',
+  pink: 'magenta',
+  brown: 'yellow',
+  mint: 'green',
+  cyan: 'cyan',
+  yellow: 'yellow',
+}
+
+interface Tag {
+  /** Cut to the room it has. */
+  text: string
+  color: string
+}
+
+/**
+ * The profile tag on a session's line, at most `max` cells (core/profile-tag.ts says which; with
+ * no switch here, as the web board's "All profiles" does): the profile's title in its color, a
+ * folder no profile has as "unknown profile" in gray, a session in another profile than its start
+ * asked for as "wrong profile" in red. Null for none, or no room.
+ */
+function tagOf(state: TuiState, it: Item, max: number): Tag | null {
+  const tag = profileTag(it, state.profiles)
+  if (!tag || max < 1) return null
+  const [text, color] =
+    tag.kind === 'profile'
+      ? [tag.profile.title, TAG_COLORS[tag.profile.color] ?? tag.profile.color]
+      : tag.kind === 'unknown'
+        ? [t('profile.unknown'), 'gray']
+        : [t('tui.wrongProfile'), 'red']
+  return { text: fit(text, Math.min(width(text), max)), color }
+}
+
 export function cardLines(state: TuiState, it: Item, w: number, isSel: boolean): string[] {
   const col = colOf(it.column)
   const icon = it.sleeping && it.column === 'idle' ? 'z' : col.icon
   const since = it.column === 'ext' ? it.waitSince || it.activity : it.activity
   const right = state.busy.get(it.key) ?? alarm(state, it) + age(since, state.now)
-  const nameW = Math.max(1, w - 3 - width(right))
+  // The name and the profile tag (with its space) share what the right-hand part leaves; the tag
+  // takes at most half of it.
+  const room = w - 3 - width(right)
+  const tag = tagOf(state, it, Math.floor((room - 1) / 2))
+  const nameW = Math.max(1, tag ? room - width(tag.text) - 1 : room)
   const note = noteOf(it)
   // A sleeping session with nothing pending takes one line: it is there to be found, not read.
   const compact = it.sleeping && it.column === 'idle'
   if (isSel) {
-    const first = paint(`${icon} ${fit(it.name, nameW)} ${right}`, 'inverse', 'bold')
+    // The tag keeps its color on the selected card.
+    const first = tag
+      ? `${paint(`${icon} ${fit(it.name, nameW)} `, 'inverse', 'bold')}${paint(tag.text, tag.color, 'inverse', 'bold')}${paint(` ${right}`, 'inverse', 'bold')}`
+      : paint(`${icon} ${fit(it.name, nameW)} ${right}`, 'inverse', 'bold')
     return compact ? [first] : [first, paint(`  ${fit(note, w - 2)}`, 'inverse')]
   }
   const dim = it.sleeping ? 'dim' : null
-  const first = `${paint(icon, col.color, dim)} ${paint(fit(it.name, nameW), compact ? null : 'bold', dim)} ${paint(right, state.busy.has(it.key) ? 'yellow' : 'gray')}`
+  const shownTag = tag ? `${paint(tag.text, tag.color, dim)} ` : ''
+  const first = `${paint(icon, col.color, dim)} ${paint(fit(it.name, nameW), compact ? null : 'bold', dim)} ${shownTag}${paint(right, state.busy.has(it.key) ? 'yellow' : 'gray')}`
   return compact ? [first] : [first, paint(`  ${fit(note, w - 2)}`, 'gray')]
 }
 
@@ -111,15 +155,25 @@ export function bodyNarrow(state: TuiState, W: number): Body {
       const right = state.busy.get(it.key) ?? alarm(state, it) + age(since, state.now)
       const nameW = Math.min(24, Math.floor(W / 3))
       const stateW = 14
-      const noteW = Math.max(0, W - 2 - 2 - nameW - 1 - stateW - 1 - width(right) - 1)
+      const room = Math.max(0, W - 2 - 2 - nameW - 1 - stateW - 1 - width(right) - 1)
+      // The profile tag goes before the right-hand part; the note gives it the room it needs.
+      const tag = tagOf(state, it, room - 1)
+      const noteW = tag ? room - width(tag.text) - 1 : room
       const status = it.column === 'ext' ? t('status.ext') : statusText(it.status)
-      const text = `${col.icon} ${fit(it.name, nameW)} ${fit(status, stateW)} ${fit(noteOf(it), noteW)} ${right}`
+      const head = `${col.icon} ${fit(it.name, nameW)} ${fit(status, stateW)} ${fit(noteOf(it), noteW)} `
+      const dim = it.sleeping && 'dim'
       tops.set(it.key, lines.length)
-      lines.push(
-        it.key === state.sel
-          ? ` ${paint(text, 'inverse')}`
-          : ` ${paint(col.icon, col.color, it.sleeping && 'dim')}${text.slice(col.icon.length)}`,
-      )
+      if (it.key === state.sel)
+        // The tag keeps its color on the selected line.
+        lines.push(
+          tag
+            ? ` ${paint(head, 'inverse')}${paint(tag.text, tag.color, 'inverse')}${paint(` ${right}`, 'inverse')}`
+            : ` ${paint(head + right, 'inverse')}`,
+        )
+      else
+        lines.push(
+          ` ${paint(col.icon, col.color, dim)}${head.slice(col.icon.length)}${tag ? `${paint(tag.text, tag.color, dim)} ` : ''}${right}`,
+        )
       state.hits.push([{ x0: 1, x1: W - 1, key: it.key }])
     }
     lines.push('')
