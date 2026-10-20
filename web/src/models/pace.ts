@@ -3,12 +3,12 @@
 // has the page drawn at the display's full rate (144 frames a second on a laptop's panel), and each
 // frame costs the renderer and the GPU process about the same whatever moved: the GPU busy and a
 // core warm all day for a dot (#109). So the endless animations advance at PACE_FPS frames a second
-// instead, like Apple's own activity indicator, which steps: each is paused and set to the frame its
-// clock is at, on one timer for the page. What the user moves (a drag, a spring, a transition, a
-// card appearing) is finite and keeps the display's rate. Stopped while the page is hidden; with
-// reduced motion there is nothing endless to pace (the sheets turn the loops off).
+// instead, like Apple's own activity indicator, which steps rather than glides: each is paused and
+// set to the frame its clock is at, on one timer for the page. What the user moves (a drag, a
+// spring, a transition, a card appearing) is finite and keeps the display's rate. Stopped while the
+// page is hidden; with reduced motion there is nothing endless to pace (the sheets turn loops off).
 
-export const PACE_FPS = 15
+export const PACE_FPS = 12
 const FRAME_MS = 1000 / PACE_FPS
 
 /** What the pace reads and sets of an animation (the Web Animations API's Animation). */

@@ -34,7 +34,7 @@ describe('a tick', () => {
     expect(tick([pulse, spin], 10_100, starts)).toBe(true)
     expect([pulse.currentTime, spin.currentTime]).toEqual([frameAt(600), frameAt(100)])
     expect(frameAt(100)).toBeCloseTo(FRAME)
-    expect(frameAt(600)).toBeCloseTo(9 * FRAME)
+    expect(frameAt(600)).toBeCloseTo(7 * FRAME)
   })
 
   test('leaves what ends alone: a transition, a card appearing', () => {
@@ -44,8 +44,8 @@ describe('a tick', () => {
     expect([transition.playState, transition.currentTime]).toEqual(['running', 40])
   })
 
-  test('the pace is a low one: a frame in 66 ms, not the display’s 7', () => {
-    expect(PACE_FPS).toBe(15)
+  test('the pace is a low one: a frame in 83 ms, not the display’s 7', () => {
+    expect(PACE_FPS).toBe(12)
     expect(frameAt(FRAME - 1)).toBe(0)
   })
 })
