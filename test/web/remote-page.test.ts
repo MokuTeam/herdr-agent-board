@@ -4,7 +4,7 @@
 import { expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { cardMenu, chipMenu, launchMenu, type MenuEntry, type MenuItem } from '../../web/src/models/menu-model.ts'
-import { helloOf, pairName, pollStep, remotePage } from '../../web/src/models/remote-page.ts'
+import { gateAfter, helloOf, nextRetryMs, pairName, pollStep, remotePage } from '../../web/src/models/remote-page.ts'
 
 const t = translator('en')
 
@@ -76,4 +76,21 @@ test("in a phone's browser the menus leave out focus, open and show in folder; o
   expect(ids(chipMenu({ dir: false }, { ...base, remote: true }))).toEqual(['look', 'copyPath'])
   // The board's own page has no mark.
   expect(remotePage()).toBe(false)
+})
+
+test('the board on show stays through a check with no answer or a refusal; only "not paired" takes it away (#108)', () => {
+  // A 502 from serve while the board's listener is down, or a whois Tailscale could not answer.
+  expect(gateAfter('board', 'unreachable')).toBe('board')
+  expect(gateAfter('board', 'refused')).toBe('board')
+  expect(gateAfter('board', 'unpaired')).toBe('pair')
+  expect(gateAfter('board', 'paired')).toBe('board')
+  // Before the board: the screens as they were.
+  expect(gateAfter('checking', 'unreachable')).toBe('offline')
+  expect(gateAfter('checking', 'refused')).toBe('refused')
+  expect(gateAfter('offline', 'paired')).toBe('board')
+  expect(gateAfter('pair', 'unreachable')).toBe('offline')
+  // The stream opened again: 2 s, then doubling, at most 15.
+  expect([nextRetryMs(null), nextRetryMs(2000), nextRetryMs(4000), nextRetryMs(8000), nextRetryMs(15_000)]).toEqual([
+    2000, 4000, 8000, 15_000, 15_000,
+  ])
 })

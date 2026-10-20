@@ -5,6 +5,9 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { useLanguage, useT } from '../../i18n/I18nProvider.tsx'
 import {
+  type CheckResult,
+  type Gate,
+  gateAfter,
   helloOf,
   keepLanguage,
   type PairStep,
@@ -13,8 +16,6 @@ import {
   pollStep,
   UNPAIRED,
 } from '../../models/remote-page.ts'
-
-type Gate = 'checking' | 'offline' | 'refused' | 'pair' | 'board'
 
 const POLL_MS = 1500
 const RETRY_MS = 15_000
@@ -26,21 +27,31 @@ export function RemoteGate({ children }: { children: ReactNode }) {
   const [hello, setHello] = useState<PhoneHello | null>(null)
   const followRef = useRef(follow)
   followRef.current = follow
+  const gateRef = useRef(gate)
+  gateRef.current = gate
+  const retryCheck = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const check = useCallback(async () => {
+    let result: CheckResult = 'unreachable'
     try {
       const res = await fetch('/api/hello', { cache: 'no-store' })
       const h = helloOf(await res.json().catch(() => null))
-      if (!h) return setGate(res.status === 403 ? 'refused' : 'offline')
-      setHello(h)
-      if (h.language) {
-        keepLanguage(h.language)
-        followRef.current(h.language)
-      }
-      setGate(h.paired ? 'board' : 'pair')
-    } catch {
-      setGate('offline')
-    }
+      if (h) {
+        setHello(h)
+        if (h.language) {
+          keepLanguage(h.language)
+          followRef.current(h.language)
+        }
+        result = h.paired ? 'paired' : 'unpaired'
+      } else if (res.status === 403) result = 'refused'
+    } catch {}
+    const next = gateAfter(gateRef.current, result)
+    // The board stayed through a check that got no answer: the next one comes by itself.
+    clearTimeout(retryCheck.current)
+    if (next === 'board' && (result === 'unreachable' || result === 'refused'))
+      retryCheck.current = setTimeout(() => void check(), RETRY_MS / 3)
+    gateRef.current = next
+    setGate(next)
   }, [])
 
   useEffect(() => {
@@ -55,6 +66,7 @@ export function RemoteGate({ children }: { children: ReactNode }) {
     addEventListener('pageshow', again)
     document.addEventListener('visibilitychange', visible)
     return () => {
+      clearTimeout(retryCheck.current)
       removeEventListener(UNPAIRED, again)
       removeEventListener('online', again)
       removeEventListener('pageshow', again)

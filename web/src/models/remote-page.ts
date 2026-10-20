@@ -81,3 +81,25 @@ export function pollStep(answer: unknown): PairStep | null {
   if (status === 'gone') return { step: 'expired' }
   return null
 }
+
+/** What the page shows: a check under way, no connection, refused, pairing, or the board. */
+export type Gate = 'checking' | 'offline' | 'refused' | 'pair' | 'board'
+
+/** What a check of /api/hello came to: paired or not, refused (403), or no answer (a 5xx, the network). */
+export type CheckResult = 'paired' | 'unpaired' | 'refused' | 'unreachable'
+
+/**
+ * What the page shows after a check. The board on show stays through a check that got no answer
+ * or a refusal (a 502 from serve while the board's listener is down, a whois Tailscale could not
+ * answer): it says it reconnects and tries again by itself, keeping the open session and its draft
+ * (#108). Only the board saying this browser is not paired takes it away.
+ */
+export function gateAfter(current: Gate, result: CheckResult): Gate {
+  if (result === 'paired') return 'board'
+  if (result === 'unpaired') return 'pair'
+  if (current === 'board') return 'board'
+  return result === 'refused' ? 'refused' : 'offline'
+}
+
+/** How long to wait before the next try after one of `ms`: doubling from 2 seconds, at most 15. */
+export const nextRetryMs = (ms: number | null): number => (ms === null ? 2000 : Math.min(ms * 2, 15_000))
