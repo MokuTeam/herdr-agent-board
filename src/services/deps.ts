@@ -1,6 +1,7 @@
 // What the services need from the outside, built once per process by the entrypoints.
 import { homedir } from 'node:os'
 import type { ClaudeHome } from '../adapters/claude-home.ts'
+import { type CodexHome, createCodexHome } from '../adapters/codex-home.ts'
 import { createPiHome, type PiHome } from '../adapters/pi-home.ts'
 import { createProfileHomes, type ProfileHomes } from '../adapters/profile-homes.ts'
 import { findProfileDirs, inheritedProfileDir } from '../adapters/profiles.ts'
@@ -17,6 +18,8 @@ export interface Deps {
   homes: ProfileHomes
   /** What pi records about its sessions (their session files). */
   pi: PiHome
+  /** Codex rollouts, looked up only for panes herdr reports as codex. */
+  codex: CodexHome
   /** The profiles: config.json's merged with the folders found; read again when they change, or after a minute. */
   profiles(): ProfileSet
   /** herdr-wake for the config's current wakeUrl. */
@@ -33,6 +36,7 @@ export function defaultDeps(cfg: Config, log: (text: string) => void = () => {})
     claude: homes.forDir(inheritedDir),
     homes,
     pi: createPiHome(),
+    codex: createCodexHome(),
     profiles() {
       // A folder made or removed in the home folder shows within a minute; an edit at once.
       const listed = JSON.stringify(cfg.profiles ?? null)
