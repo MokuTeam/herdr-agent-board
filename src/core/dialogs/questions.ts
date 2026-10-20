@@ -20,9 +20,12 @@
 //   the options goes on with Enter.
 // A permission prompt: a title ("Bash command", "Create file"), what the tool will do between
 // dashed rules, "Do you want to ...?" and numbered options; a digit picks one at once.
+// pi's menu and text input are read in pi-dialogs.ts, and only for panes that run pi.
 
 import { createHash } from 'node:crypto'
+import { PI_AGENT } from '../pi.ts'
 import { stripAnsi } from './input-box.ts'
+import { type InputDialog, type PiDialog, parsePiDialog, type SelectDialog } from './pi-dialogs.ts'
 import { type FormQuestion, LIMITS, questionsOf } from './question-form.ts'
 
 export { LIMITS, questionsOf }
@@ -69,7 +72,8 @@ export interface PermissionDialog {
   cursor: number | null
   fingerprint: string
 }
-export type Dialog = QuestionDialog | ReviewDialog | PermissionDialog
+export type Dialog = QuestionDialog | ReviewDialog | PermissionDialog | PiDialog
+export type { InputDialog, SelectDialog }
 
 /** What a user picked for one question: option numbers (from 1) and an own answer. */
 export interface AnswerPick {
@@ -90,6 +94,16 @@ export type PublicDialog =
     }
   | { kind: 'review' }
   | { kind: 'question'; question: string }
+  | {
+      kind: 'select'
+      title: string
+      body: string[]
+      more: number
+      cut: boolean
+      options: { n: number; label: string }[]
+      fingerprint: string
+    }
+  | { kind: 'input'; title: string; body: string[]; more: number; cut: boolean; value: string; fingerprint: string }
 
 const RULE = /^\s*─{8,}\s*$/
 const DASHED = /^\s*╌{8,}\s*$/
@@ -178,12 +192,15 @@ export function answerText(question: FormQuestion, pick: AnswerPick): string {
  *   { kind: 'permission', title, body, prompt, options, cursor, fingerprint }
  * options: [{ n, label, text, checked, cursor }]; text has the wrapped lines under the first;
  * checked is null outside multiSelect. cursor: the option number, 'next', or null.
+ * `agent`: what herdr says the pane runs. A pi pane is read for pi's dialogs only
+ * (pi-dialogs.ts: 'select' and 'input'); every other one for Claude Code's.
  */
-export function parseDialog(screen: unknown): Dialog | null {
+export function parseDialog(screen: unknown, agent?: string | null): Dialog | null {
   const lines = stripAnsi(String(screen ?? ''))
     .replace(/\r/g, '')
     .split('\n')
     .map(l => l.trimEnd())
+  if (agent === PI_AGENT) return parsePiDialog(lines)
   return questionDialog(lines) ?? permissionDialog(lines)
 }
 
@@ -369,9 +386,9 @@ const BODY_LINES = 80
 const LINE = 600
 
 /**
- * The dialog for the page: what it needs to show it and answer it. A permission prompt's text
- * comes as drawn; what does not fit is cut with a mark ("…", `more` lines) and never silently,
- * and the fingerprint is always of the whole.
+ * The dialog for the page: what it needs to show it and answer it. A permission prompt's text,
+ * and pi's, comes as drawn; what does not fit is cut with a mark ("…", `more` lines) and never
+ * silently, and the fingerprint is always of the whole.
  */
 export function publicDialog(d: Dialog | null | undefined): PublicDialog | null {
   if (!d) return null
@@ -385,6 +402,18 @@ export function publicDialog(d: Dialog | null | undefined): PublicDialog | null 
       options: d.options.map(o => ({ n: o.n, label: clip(o.text, LINE) })),
       fingerprint: d.fingerprint,
     }
+  }
+  if (d.kind === 'select' || d.kind === 'input') {
+    const text = {
+      title: clip(d.title, LINE),
+      body: d.body.slice(0, BODY_LINES).map(l => clip(l, LINE)),
+      more: Math.max(0, d.body.length - BODY_LINES),
+      cut: d.cut,
+      fingerprint: d.fingerprint,
+    }
+    return d.kind === 'select'
+      ? { kind: d.kind, ...text, options: d.options.map(o => ({ n: o.n, label: clip(o.text, LINE) })) }
+      : { kind: d.kind, ...text, value: clip(d.value, LINE) }
   }
   if (d.kind === 'review') return { kind: d.kind }
   return { kind: d.kind, question: clip(d.question, LIMITS.question) }
@@ -405,7 +434,7 @@ export function screenIndex(d: Dialog | null | undefined, questions: FormQuestio
 
 /** The own answer the screen's last row holds ('' for the placeholder). */
 export function typedOther(d: Dialog | null | undefined): string {
-  const row = d?.options.at(-1)
+  const row = d && 'options' in d ? d.options.at(-1) : undefined
   if (!row) return ''
   return PLACEHOLDER.test(row.text) ? '' : row.text
 }

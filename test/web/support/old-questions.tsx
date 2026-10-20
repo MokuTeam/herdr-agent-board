@@ -8,6 +8,7 @@ import { translator } from '../../../src/core/i18n/translator.ts'
 import type { Item } from '../../../src/core/types.ts'
 import { PermissionPrompt } from '../../../web/src/components/questions/PermissionPrompt.tsx'
 import { QuestionForm } from '../../../web/src/components/questions/QuestionForm.tsx'
+import { TextInputPrompt } from '../../../web/src/components/questions/TextInputPrompt.tsx'
 import { type AnswerResult, digitFocus, type FormClick, questionDesk } from '../../../web/src/models/question-desk.ts'
 import type { DialogDetail } from '../../../web/src/models/questions.ts'
 import { board, renderInBoard } from './board.tsx'
@@ -219,6 +220,7 @@ export class NewQuestions extends Side {
     const view = this.desk.view()
     if (!view || !this.shownItem) return null
     const { shown, form, peek } = view
+    if (shown.kind === 'input') return <TextInputPrompt shown={shown} form={form} canMutate={this.canMutate} />
     return shown.kind === 'permission' ? (
       <PermissionPrompt shown={shown} form={form} canMutate={this.canMutate} />
     ) : (

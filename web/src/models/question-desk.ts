@@ -59,6 +59,8 @@ export type FormClick =
   | { kind: 'focus' }
   | { kind: 'send' }
   | { kind: 'permit'; n: number }
+  /** pi's text input: what is typed goes. */
+  | { kind: 'reply' }
   | { kind: 'option'; q: number; n: number }
   /** On the own answer's row; `inField`: into its text field. */
   | { kind: 'other'; q: number; inField: boolean }
@@ -103,7 +105,9 @@ export interface QuestionDesk {
   click(target: FormClick): void
   /** Text typed into question `q`'s own answer. */
   type(q: number, text: string): void
-  /** Enter in an own answer's field: the answers go when none is left. */
+  /** Text typed into pi's text input. */
+  write(text: string): void
+  /** Enter in an own answer's field: the answers go when none is left; in pi's text input, the text goes. */
   enter(): void
   /** The pointer or the focus on an option (null: on none). */
   peekAt(target: Peek | null): void
@@ -130,7 +134,7 @@ export function questionDesk(deps: DeskDeps): QuestionDesk {
     let f = forms.get(s.key)
     if (!f) {
       const picks = s.kind === 'question' ? emptyPicks(s.questions) : []
-      f = { picks, status: 'idle', error: '', stopped: false, screen: '', chosen: null }
+      f = { picks, status: 'idle', error: '', stopped: false, screen: '', chosen: null, text: '' }
       forms.set(s.key, f)
       for (const k of forms.keys()) if (forms.size > KEEP_FORMS && k !== s.key) forms.delete(k)
     }
@@ -212,6 +216,22 @@ export function questionDesk(deps: DeskDeps): QuestionDesk {
     finish(s, f, r, () => deps.t()('qa.permDone', { name: s.it.name, choice: o.label }))
   }
 
+  async function sendText(): Promise<void> {
+    const s = shown
+    if (s?.kind !== 'input' || !deps.canMutate()) return
+    const f = forms.get(s.key)
+    const text = f?.text.trim() ?? ''
+    if (!f || !text || formBusy(f)) return
+    Object.assign(f, { status: 'sending', error: '', stopped: false, screen: '' })
+    deps.changed()
+    const r = await deps.act(s.it.key, 'permit', {
+      session: s.it.session ?? null,
+      fingerprint: s.dialog.fingerprint,
+      text,
+    })
+    finish(s, f, r, () => deps.t()('qa.permDone', { name: s.it.name, choice: text }))
+  }
+
   function pick(i: number, n: DigitTarget, viaKey = false): void {
     const s = shown
     const f = s && forms.get(s.key)
@@ -244,6 +264,7 @@ export function questionDesk(deps: DeskDeps): QuestionDesk {
       if (settling()) return
       if (target.kind === 'send') return void sendQuestions()
       if (target.kind === 'permit') return void sendPermission(target.n)
+      if (target.kind === 'reply') return void sendText()
       if (target.kind === 'option') return pick(target.q, target.n)
       // A click into the own answer's field types; a click beside it picks it.
       if (target.inField) {
@@ -260,8 +281,16 @@ export function questionDesk(deps: DeskDeps): QuestionDesk {
       f.picks = typeOther(f.picks, shown.questions, q, text)
       deps.changed()
     },
+    write(text) {
+      const f = shown && forms.get(shown.key)
+      if (shown?.kind !== 'input' || !f || formLocked(f, deps.canMutate())) return
+      if (f.status === 'error') f.status = 'idle'
+      f.text = text
+      deps.changed()
+    },
     enter() {
       const f = shown && forms.get(shown.key)
+      if (shown?.kind === 'input') return void sendText()
       if (shown?.kind === 'question' && f && !remaining(shown.questions, f.picks)) void sendQuestions()
     },
     peekAt(target) {
@@ -281,6 +310,8 @@ export function questionDesk(deps: DeskDeps): QuestionDesk {
       // A held key repeats; a dialog that just came up may not be the one the key was meant for.
       if (press.repeat || settling()) return true
       const d = Number(press.key)
+      // pi's text input takes digits as text, in its field only.
+      if (shown.kind === 'input') return false
       if (shown.kind === 'permission') {
         if (!shown.dialog.options.some(o => o.n === d)) return false
         void sendPermission(d)

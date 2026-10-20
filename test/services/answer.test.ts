@@ -8,6 +8,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { parseDialog } from '../../src/core/dialogs/questions.ts'
+import { inputScreen, PI_IDLE, PI_INPUT, PI_SELECT, selectScreen } from '../support/fake-pi.ts'
 import { type Sandbox, sandbox, until } from '../support/sandbox.ts'
 
 const screen = (name: string): string =>
@@ -217,6 +218,110 @@ test('an own answer that starts with a dash gets a space before it', async () =>
   ])
 }, 10_000)
 
+// ---------------------------------------------------------------- pi
+
+// herdr reports a pi pane's session by its file, which is the session's key on the board.
+const PI_FILE = '/home/u/.pi/agent/sessions/--tmp-probe--/2026-10-20T20-16-28-825Z_01a15af5.jsonl'
+const piAgent = (status = 'blocked', session = PI_FILE) => ({
+  result: { agent: { agent: 'pi', agent_status: status, agent_session: { value: session } } },
+})
+const PI_ITEM = { key: PI_FILE, session: PI_FILE, pane: 'p1', agent: 'pi', name: 'pi probe' }
+/** The fingerprint of pi's dialog on `screen` ('' when there is none: the tests that need it fail). */
+const fingerprintOf = (screen: string): string => {
+  const d = parseDialog(screen, 'pi')
+  return d?.kind === 'select' || d?.kind === 'input' ? d.fingerprint : ''
+}
+const MENU = fingerprintOf(PI_SELECT)
+const NOTE = fingerprintOf(PI_INPUT)
+
+test("a pi pane's menu: one arrow key, then Enter once the screen shows the cursor on the option", async () => {
+  const box = await sandbox()
+  const shows = (text: string) =>
+    box.state({ 'agent get': piAgent(), 'agent read': { text }, 'agent send-keys': { result: null } })
+  shows(PI_SELECT)
+  const running = box.run('answer', { kind: 'permit', item: PI_ITEM, body: { fingerprint: MENU, option: 2 } })
+  await until(() => keysSent(box).length === 1, 10_000)
+  shows(selectScreen(2))
+  await until(() => keysSent(box).length === 2, 10_000)
+  shows(PI_IDLE)
+  const out = await running.exited
+  assert.deepEqual(JSON.parse(out.stdout), { ok: true }, out.stderr)
+  assert.deepEqual(keysSent(box), [
+    ['agent', 'send-keys', 'p1', 'down'],
+    ['agent', 'send-keys', 'p1', 'enter'],
+  ])
+}, 30_000)
+
+test("a pi pane's text input: the note typed, Enter once the field shows it", async () => {
+  const box = await sandbox()
+  const shows = (text: string) =>
+    box.state({
+      'agent get': piAgent(),
+      'agent read': { text },
+      'agent send-keys': { result: null },
+      'pane send-text': { result: null },
+    })
+  shows(PI_INPUT)
+  const running = box.run('answer', {
+    kind: 'permit',
+    item: PI_ITEM,
+    body: { fingerprint: NOTE, text: '  use a branch\nnot main  ' },
+  })
+  await until(() => keysSent(box).length === 1, 10_000)
+  shows(inputScreen('use a branch not main'))
+  await until(() => keysSent(box).length === 2, 10_000)
+  shows(PI_IDLE)
+  const out = await running.exited
+  assert.deepEqual(JSON.parse(out.stdout), { ok: true }, out.stderr)
+  assert.deepEqual(keysSent(box), [
+    ['pane', 'send-text', 'p1', 'use a branch not main'],
+    ['agent', 'send-keys', 'p1', 'enter'],
+  ])
+}, 30_000)
+
+test("pi refusals come before any key; a Claude pane does not take pi's menu", async () => {
+  const box = await sandbox()
+  box.state({ 'agent get': piAgent(), 'agent read': { text: PI_SELECT }, 'agent send-keys': { result: null } })
+  for (const body of [
+    { option: 1 },
+    { fingerprint: MENU, option: 0 },
+    { fingerprint: MENU, option: 51 },
+    { fingerprint: MENU, option: 'two' },
+    { fingerprint: NOTE, text: '  \n ' },
+  ]) {
+    const r = await run(box, { kind: 'permit', item: PI_ITEM, body })
+    assert.match(r.error, /every question|not valid|invalid/i, JSON.stringify(body))
+  }
+  assert.equal(box.calls().length, 0) // refused before asking herdr anything
+  // A pi item whose key is not a session file is not one the board reads.
+  const odd = await run(box, {
+    kind: 'permit',
+    item: { ...PI_ITEM, session: 'abc' },
+    body: { fingerprint: MENU, option: 1 },
+  })
+  assert.match(odd.error, /not a Claude session/)
+  // herdr says another session, or no longer waiting.
+  box.state({ 'agent get': piAgent('blocked', '/other.jsonl'), 'agent read': { text: PI_SELECT } })
+  assert.match(
+    (await run(box, { kind: 'permit', item: PI_ITEM, body: { fingerprint: MENU, option: 1 } })).error,
+    /another session/,
+  )
+  box.state({ 'agent get': piAgent('working'), 'agent read': { text: PI_SELECT } })
+  assert.equal((await run(box, { kind: 'permit', item: PI_ITEM, body: { fingerprint: MENU, option: 1 } })).gone, true)
+  // The text for a menu, an option for the input: the screen shows another dialog.
+  box.state({ 'agent get': piAgent(), 'agent read': { text: PI_SELECT }, 'agent send-keys': { result: null } })
+  const typed = await run(box, { kind: 'permit', item: PI_ITEM, body: { fingerprint: MENU, text: 'x' } })
+  assert.match(typed.error, /another dialog/)
+  box.state({ 'agent get': piAgent(), 'agent read': { text: PI_INPUT }, 'agent send-keys': { result: null } })
+  const picked = await run(box, { kind: 'permit', item: PI_ITEM, body: { fingerprint: NOTE, option: 1 } })
+  assert.match(picked.error, /another dialog/)
+  // A Claude session's pane is read as before: pi's menu there is no prompt of Claude's.
+  box.state({ 'agent get': agent(), 'agent read': { text: PI_SELECT }, 'agent send-keys': { result: null } })
+  const claude = await run(box, { kind: 'permit', item: item(box), body: { fingerprint: MENU, option: 1 } })
+  assert.match(claude.error, /another dialog/)
+  assert.deepEqual(keysSent(box), [])
+}, 40_000)
+
 // ---------------------------------------------------------------- the route
 
 async function unusedPort(): Promise<number> {
@@ -315,4 +420,50 @@ test('the route: stale data, another page, another session, one answer at a time
   assert.equal(stale.status, 409, JSON.stringify(stale.body))
   assert.match(stale.body.error, /No fresh data/)
   assert.equal(keysSent(box).length, 1)
+}, 40_000)
+
+test("the route: a pi pane's detail has its menu, a Claude pane's is read as before, and the menu is answered", async () => {
+  const panes = [
+    { pane_id: 'p1', agent: 'claude', agent_session: { value: 's1' }, agent_status: 'blocked', cwd: '' },
+    { pane_id: 'p2', agent: 'pi', agent_session: { value: PI_FILE }, agent_status: 'blocked', cwd: '' },
+  ]
+  const { box, proc, port } = await board({
+    'api snapshot': { result: { snapshot: { panes, tabs: [], workspaces: [] } } },
+    'agent read p1': { text: PI_SELECT },
+    'agent read p2': { text: PI_SELECT },
+  })
+  await until(() => box.calls().some(a => a[1] === 'snapshot'))
+  proc.send('refresh')
+  await until(() => proc.messages.some(m => (m as { refreshed?: boolean }).refreshed))
+  const detail = async (key: string) =>
+    (await fetch(`http://127.0.0.1:${port}/api/session/${encodeURIComponent(key)}`).then(r => r.json())) as {
+      dialog: Record<string, unknown> | null
+    }
+  // A Claude pane that shows pi's words: no dialog, as before.
+  assert.equal((await detail('s1')).dialog, null)
+  const pi = (await detail(PI_FILE)).dialog
+  assert.equal(pi?.kind, 'select')
+  assert.equal(pi?.title, 'Git approval needed: git commit')
+  assert.equal(pi?.fingerprint, MENU)
+  assert.deepEqual(pi?.options, [
+    { n: 1, label: 'Approve' },
+    { n: 2, label: 'Reject' },
+    { n: 3, label: 'Reject with a note' },
+  ])
+  // A Claude pane with Claude's prompt: as before.
+  box.state({
+    'api snapshot': { result: { snapshot: { panes, tabs: [], workspaces: [] } } },
+    'agent read p1': { text: BASH },
+    'agent read p2': { seq: [{ text: PI_SELECT }, { text: PI_IDLE }] },
+    'agent get': piAgent(),
+    'agent send-keys': { result: null },
+  })
+  assert.equal((await detail('s1')).dialog?.fingerprint, FINGERPRINT)
+  const permit = await fetch(`http://127.0.0.1:${port}/api/session/${encodeURIComponent(PI_FILE)}/permit`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-board': '1' },
+    body: JSON.stringify({ session: PI_FILE, fingerprint: MENU, option: 1 }),
+  })
+  assert.deepEqual([permit.status, await permit.json()], [200, { ok: true }])
+  assert.deepEqual(keysSent(box), [['agent', 'send-keys', 'p2', 'enter']])
 }, 40_000)

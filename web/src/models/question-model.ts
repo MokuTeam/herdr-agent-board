@@ -147,5 +147,8 @@ export function permissionTone(label: unknown): 'yes' | 'always' | 'no' | 'other
   const l = String(label).trim().toLowerCase()
   if (/^no\b/.test(l)) return 'no'
   if (/^yes\b/.test(l)) return l === 'yes' ? 'yes' : 'always'
+  // pi's git guard: Approve, Reject, Reject with a note.
+  if (/^approve\b/.test(l)) return 'yes'
+  if (/^reject\b/.test(l)) return 'no'
   return 'other'
 }
