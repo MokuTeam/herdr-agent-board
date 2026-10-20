@@ -76,6 +76,8 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 const isV4 = (ip: string): boolean => /^\d+\.\d+\.\d+\.\d+$/.test(ip)
 const urlHost = (ip: string): string => (ip.includes(':') ? `[${ip}]` : ip)
 const WHOIS_MS = 60_000
+/** Approving pairings and turning the remote mode on or off: for the board on this computer only. */
+const localOnly = (path: string): boolean => path === '/api/remote' || path.startsWith('/api/remote/')
 
 export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
   let server: ReturnType<typeof Bun.serve> | null = null
@@ -154,12 +156,20 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
       if (req.method === 'GET' && poll) return json(200, o.remote.poll(poll[1] ?? '', who))
       const token = bearerOf(req.headers.get('authorization'))
       if (!token || !o.remote.verify(token, who)) return json(401, { error: 'token' })
-      if (desktopOnly(raw)) return json(403, { error: 'desktop' })
-      if (raw === '/api/remote' || raw.startsWith('/api/remote/')) return json(403, { error: 'local' })
+      // The routes match a string path decoded and a RegExp one as it came: what stays with the
+      // computer is refused in both spellings, or an encoded letter (/api/fs/%6Fpen) would get by.
+      let path: string
+      try {
+        path = decodeURIComponent(raw)
+      } catch {
+        return json(400, { error: 'path' })
+      }
+      if (desktopOnly(raw) || desktopOnly(path)) return json(403, { error: 'desktop' })
+      if (localOnly(raw) || localOnly(path)) return json(403, { error: 'local' })
       if (req.method === 'GET' && raw === '/api/peers') return json(200, { peers: await peers() })
       // The board's page is for the computer's own browser; a phone has its app.
       if (!raw.startsWith('/api/') && !raw.startsWith('/uploads/')) return json(404, { error: 'not found' })
-      return await dispatch(o.routes, req, url, decodeURIComponent(raw), o.guards)
+      return await dispatch(o.routes, req, url, path, o.guards)
     } catch (err) {
       o.log(`remote ${req.method} ${url ? url.pathname : ''}: ${messageOf(err)}`)
       return json(500, { error: messageOf(err) })

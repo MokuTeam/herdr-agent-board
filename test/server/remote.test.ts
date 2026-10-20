@@ -182,6 +182,18 @@ describe('remote mode on', () => {
     expect((await phone('/api/session/s1/wake', { method: 'POST', headers: { 'x-board': '' } })).status).toBe(403)
   })
 
+  test('spelled with an encoded letter, they still stay with the computer: routes match the decoded path', async () => {
+    // Bodies that do nothing where a route is reached: refused here, or the route's own 4xx.
+    const post = (path: string, body: unknown) => phone(path, { method: 'POST', body: JSON.stringify(body) })
+    expect(await (await post('/api/open%2Durl', { url: 'ftp://example.com' })).json()).toEqual({ error: 'desktop' })
+    expect(await (await post('/api/fs/%6Fpen', { path: '/nowhere/at/all' })).json()).toEqual({ error: 'desktop' })
+    expect(await (await post('/api/%72eveal', { key: 'nope' })).json()).toEqual({ error: 'desktop' })
+    expect(await (await post('/api/%72emote', { op: 'nothing' })).json()).toEqual({ error: 'local' })
+    expect(await (await phone('/api/%72emote')).json()).toEqual({ error: 'local' })
+    expect(await (await post('/api/remote%2Fx', { op: 'nothing' })).json()).toEqual({ error: 'local' })
+    expect((await post('/api/session/s1/%66ocus', {})).ok).toBe(false)
+  })
+
   test('revoking a device ends its token at once', async () => {
     const view = (await (await fetch(`${url}/api/remote`)).json()) as { devices: { id: string }[] }
     expect((await local('revoke', view.devices[0]?.id)).status).toBe(200)
