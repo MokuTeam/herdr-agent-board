@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { parseServe, parseStatus, parseWhois } from '../../src/adapters/tailscale.ts'
+import { parseServe, parseStatus, parseWhois, tailscaleBin } from '../../src/adapters/tailscale.ts'
 
 // Shaped as Tailscale 1.104's `status --json` and `whois --json` print them, cut down.
 const STATUS = {
@@ -101,4 +101,28 @@ test('serve status: each port, what it is, and where it forwards /', () => {
   expect(ports.get(443)).toEqual({ kind: 'https', proxy: 'http://127.0.0.1:12423' })
   expect(ports.get(8443)).toEqual({ kind: 'https', proxy: null })
   expect(ports.get(22)).toEqual({ kind: 'tcp', proxy: null })
+})
+
+test('the CLI: TAILSCALE_BIN_PATH, else tailscale from PATH as before, else where the installer puts it', () => {
+  const nowhere = () => false
+  const win = 'C:\\Program Files\\Tailscale\\tailscale.exe'
+  const mac = '/Applications/Tailscale.app/Contents/MacOS/Tailscale'
+  // PATH first, on every platform: what every setup with Tailscale on its PATH ran before.
+  for (const platform of ['win32', 'darwin', 'linux'])
+    expect(tailscaleBin({ env: {}, platform, onPath: () => true, exists: () => true })).toBe('tailscale')
+  expect(tailscaleBin({ env: { TAILSCALE_BIN_PATH: '/x/fake' }, platform: 'win32', onPath: () => true })).toBe(
+    '/x/fake',
+  )
+  // Installed while herdr ran: not on this process's PATH, but where the installer put it.
+  const at = (path: string) => (p: string) => p === path
+  expect(
+    tailscaleBin({ env: { ProgramFiles: 'C:\\Program Files' }, platform: 'win32', onPath: nowhere, exists: at(win) }),
+  ).toBe(win)
+  expect(tailscaleBin({ env: {}, platform: 'win32', onPath: nowhere, exists: at(win) })).toBe(win)
+  const d = 'D:\\Apps\\Tailscale\\tailscale.exe'
+  expect(tailscaleBin({ env: { ProgramFiles: 'D:\\Apps' }, platform: 'win32', onPath: nowhere, exists: at(d) })).toBe(d)
+  expect(tailscaleBin({ env: {}, platform: 'darwin', onPath: nowhere, exists: at(mac) })).toBe(mac)
+  // Nowhere: the name, so the error says what it always said.
+  expect(tailscaleBin({ env: {}, platform: 'linux', onPath: nowhere, exists: () => true })).toBe('tailscale')
+  expect(tailscaleBin({ env: {}, platform: 'win32', onPath: nowhere, exists: nowhere })).toBe('tailscale')
 })
