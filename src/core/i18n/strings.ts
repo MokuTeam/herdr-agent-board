@@ -420,7 +420,13 @@ export const STRINGS: Record<Lang, Dictionary> = {
     // web board: composer
     'compose.attach': 'Attach a file. Paste a screenshot with Ctrl+V or drop files on the panel',
     'compose.attachLabel': 'Attach a file',
+    'compose.pastePicture': 'Paste a picture from the clipboard',
+    'compose.pasteNone': 'No picture on the clipboard. Copy one, or attach it with the paperclip.',
+    'compose.pasteDenied':
+      'The browser did not let the board read the clipboard. Allow it in the site settings, or attach the picture with the paperclip.',
+    'compose.pasteFailed': 'Could not read the clipboard: {why}',
     'compose.placeholder': 'Message the session… Ctrl+V pastes a screenshot',
+    'compose.placeholderPhone': 'Message the session…',
     'compose.label': 'Message',
     'compose.send': 'Send (Enter)',
     'compose.sendLabel': 'Send',
@@ -955,7 +961,13 @@ export const STRINGS: Record<Lang, Dictionary> = {
 
     'compose.attach': 'Прикрепить файл. Скриншот можно вставить через Ctrl+V или перетащить файлы на панель',
     'compose.attachLabel': 'Прикрепить файл',
+    'compose.pastePicture': 'Вставить картинку из буфера',
+    'compose.pasteNone': 'В буфере нет картинки. Скопируйте её или прикрепите скрепкой.',
+    'compose.pasteDenied':
+      'Браузер не дал доске прочитать буфер. Разрешите это в настройках сайта или прикрепите картинку скрепкой.',
+    'compose.pasteFailed': 'Не получилось прочитать буфер: {why}',
     'compose.placeholder': 'Написать сессии… Ctrl+V вставит скриншот',
+    'compose.placeholderPhone': 'Написать сессии…',
     'compose.label': 'Сообщение',
     'compose.send': 'Отправить (Enter)',
     'compose.sendLabel': 'Отправить',

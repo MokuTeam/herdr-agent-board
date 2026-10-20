@@ -117,6 +117,15 @@ export const ClipIcon = () => (
   </Icon>
 )
 
+/** A clipboard with a picture on it: paste a picture. */
+export const PastePictureIcon = () => (
+  <Icon>
+    <path d="M7.2 4.5H6A1.5 1.5 0 0 0 4.5 6v10A1.5 1.5 0 0 0 6 17.5h8a1.5 1.5 0 0 0 1.5-1.5V6A1.5 1.5 0 0 0 14 4.5h-1.2" />
+    <rect x="7.2" y="3" width="5.6" height="3" rx="1" />
+    <path d="m7 14.5 2.4-2.7 1.7 1.8 1.1-1.1 1.8 2" />
+  </Icon>
+)
+
 export const CrossIcon = () => (
   <Icon>
     <path d="m6.5 6.5 7 7m0-7-7 7" />

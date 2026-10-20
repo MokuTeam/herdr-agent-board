@@ -19,6 +19,9 @@ body {
   .ql-win { height: calc(100vh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
 }
 
+/* A long notice wraps on a phone's narrow screen instead of running off its edges. */
+.toast { white-space: normal; text-align: center; }
+
 /* Focus herdr, open on the computer, show in its folder: only at the computer. */
 [data-act="focus"],
 [data-launch="focus"],
