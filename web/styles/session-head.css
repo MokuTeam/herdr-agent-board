@@ -58,17 +58,62 @@
 #sheet .sheet-card .row { min-height: 28px; gap: 10px; padding: 2px 0; }
 #sheet .sheet-card .row + .row { box-shadow: none; }
 #sheet .sheet-card .row-label { width: 76px; font-size: 12px; }
-#sheet .sheet-card .row input { margin: -2px 0 -2px -6px; padding: 3px 6px; border-radius: 6px; font-size: 13px; transition: background-color 120ms ease; }
-#sheet .sheet-card .row input:not(:disabled):hover, #sheet .sheet-card .row input:focus { background: var(--fill-2); }
+/* What it does and what it waits for: a field that reads as the line's text and wraps when long,
+   three lines at most (then it scrolls; the tooltip has it whole). */
+#sheet .sheet-card .row:has(> textarea) { align-items: flex-start; }
+#sheet .sheet-card .row:has(> textarea) > .row-label { padding-top: 3px; line-height: 18px; }
+#sheet .sheet-card textarea {
+  display: block;
+  width: calc(100% + 6px);
+  max-height: calc(3 * 18px + 6px);
+  margin: -2px 0 -2px -6px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 6px;
+  outline: 0;
+  background: none;
+  color: var(--label);
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  resize: none;
+  field-sizing: content;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  transition: background-color 120ms ease;
+}
+#sheet .sheet-card textarea::placeholder { color: var(--label-3); }
+#sheet .sheet-card textarea:not(:disabled):hover, #sheet .sheet-card textarea:focus { background: var(--fill-2); }
+/* The line under the name breaks between its facts, after a separator, as it did. */
+.sheet-meta > .sep { white-space: normal; }
 /* A question form to answer: the fields give way first, as they did under the head. */
 #sheet .sheet-inner:has(.sheet-question .qa) .sheet-card { max-height: 64px; }
 
-/* A wide, low panel (at the bottom, or a window made so): the head, its fields in it, down the
-   left; what it asks, the helpers, the conversation and the message box the whole height beside it. */
-@container sheet (min-width: 680px) and (min-aspect-ratio: 5 / 4) {
-  #sheet .sheet-inner { grid-template-columns: minmax(300px, 30%) minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; }
-  #sheet .sheet-head { grid-column: 1; grid-row: 1 / -1; min-height: 0; overflow: auto; padding-bottom: 16px; box-shadow: inset -0.5px 0 0 var(--separator); }
-  #sheet .sheet-card, #sheet .sheet-inner:has(.sheet-question .qa) .sheet-card { max-height: none; overflow: visible; }
+/* A wide panel (upstream's container query puts the panel's parts side by side there). Tall
+   enough, it reads as a narrow one: one column, the head across the top. */
+@container sheet (min-width: 680px) and (min-aspect-ratio: 5 / 4) and (height >= 600px) {
+  #sheet .sheet-inner { display: flex; }
+  #sheet .sheet-question { padding: 0 18px 10px 22px; }
+  #sheet .sheet-helpers { padding: 0 18px 10px 22px; }
+  #sheet .sheet-body { min-height: max(96px, min(36cqh, 280px)); padding: 2px 18px 16px 22px; }
+  #sheet .composer { padding: 10px 14px 14px 18px; }
+}
+/* Low (at the bottom), one column would leave the conversation no room: the head, its fields in
+   it, is a column down the left, wide enough for the head's lines as the narrow panel has them
+   (the panel's buttons sit in its corner, so the lines take the column's whole width; the facts
+   under the name stack); what it asks, the helpers, the conversation and the message box take the
+   whole height beside it. */
+@container sheet (min-width: 680px) and (min-aspect-ratio: 5 / 4) and (height < 600px) {
+  #sheet .sheet-inner { grid-template-columns: clamp(360px, 36%, 480px) minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; }
+  #sheet .sheet-head { position: relative; grid-column: 1; grid-row: 1 / -1; min-height: 0; overflow: auto; padding-bottom: 16px; box-shadow: inset -0.5px 0 0 var(--separator); }
+  #sheet .sheet-tools { position: absolute; top: 12px; right: 16px; }
+  #sheet .sheet-pills { padding-right: 72px; }
+  #sheet .sheet-meta { display: flex; flex-direction: column; gap: 1px; }
+  #sheet .sheet-meta > .sep { display: none; }
+  #sheet .sheet-card, #sheet .sheet-inner:has(.sheet-question .qa) .sheet-card { max-height: none; overflow: visible; margin-top: 10px; }
+  #sheet .sheet-card .sched-mini { align-items: flex-start; }
+  #sheet .sheet-card .sched-mini .when { padding-top: 5px; }
+  #sheet .sheet-card .sched-mini .text { display: -webkit-box; padding-top: 4px; white-space: normal; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   #sheet .sheet-question { grid-column: 2; grid-row: 1; padding-top: 16px; }
   #sheet .sheet-helpers { grid-column: 2; grid-row: 2; }
   #sheet .sheet-body { grid-column: 2; grid-row: 3; min-height: 0; padding-top: 14px; }

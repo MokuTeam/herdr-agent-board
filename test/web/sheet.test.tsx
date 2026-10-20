@@ -506,6 +506,8 @@ describe('the compact head (#62)', () => {
     expect(text(lane)).toBe('Project')
     expect(lane.attrs.get('style')).toContain('--lane:#007AFF')
     expect(text(byId(nodes, 'sheet-meta'))).toBe('workspace web · active 5 min ago · context 42% · 85k')
+    // The separators are spans of their own: a narrow column stacks the facts without them.
+    expect(findAll([byId(nodes, 'sheet-meta')], el => hasClass(el, 'sep')).map(text)).toEqual([' · ', ' · '])
     // In Russian, with the pills' names.
     const ru = head(working, { lang: 'ru' })
     expect(byId(ru, 'sheet-lane').attrs.get('title')).toBe('Перенести в категорию')
@@ -533,7 +535,14 @@ describe('the compact head (#62)', () => {
 
   test('the card’s fields show when they say something; the pencil shows the empty ones to fill', () => {
     const doing = head(working)
-    expect(byId(doing, 'doing').attrs.get('value')).toBe('the **login** form')
+    // A field that wraps when long (three lines, then it scrolls), the whole value in its tooltip.
+    const field = byId(doing, 'doing')
+    expect([field.tag, field.attrs.get('rows'), text(field), field.attrs.get('title')]).toEqual([
+      'textarea',
+      '1',
+      'the **login** form',
+      'the **login** form',
+    ])
     expect(findAll(doing, el => el.attrs.get('id') === 'wait')).toEqual([])
     const toggle = byId(doing, 'sheet-properties-toggle')
     expect([toggle.attrs.get('aria-expanded'), toggle.attrs.get('aria-controls'), toggle.attrs.get('title')]).toEqual([
@@ -543,12 +552,13 @@ describe('the compact head (#62)', () => {
     ])
     const waits = head(pinned)
     expect(findAll(waits, el => el.attrs.get('id') === 'doing')).toEqual([])
-    expect(byId(waits, 'wait').attrs.get('value')).toBe('review "now"')
+    expect(text(byId(waits, 'wait'))).toBe('review "now"')
     // Opened: both, the empty one with its hint (what it does: Claude's title for it, in plain words).
     const opened = head(pinned, { card: { disabled: false, open: true } })
     expect(byId(opened, 'sheet-properties-toggle').attrs.get('aria-expanded')).toBe('true')
     expect(byId(opened, 'doing').attrs.get('placeholder')).toBe('Claude title')
-    expect(byId(opened, 'wait').attrs.get('value')).toBe('review "now"')
+    expect(byId(opened, 'doing').attrs.has('title')).toBe(false)
+    expect(text(byId(opened, 'wait'))).toBe('review "now"')
     // Nothing to say: the fields' place folds away; the pencil or a reminder brings it back.
     const quiet = { ...working, doing: '' }
     expect(byId(head(quiet), 'sheet-card').attrs.has('hidden')).toBe(true)

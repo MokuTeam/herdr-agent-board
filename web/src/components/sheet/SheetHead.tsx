@@ -176,11 +176,12 @@ export function SheetHead({ item, missing, onRename, onRenameWorkspace, card = N
         {head.name}
       </h2>
       <p className="sheet-meta" id="sheet-meta" title={head.metaTitle}>
-        {/* Each fact whole on its line: the line breaks between them, after a separator, never inside one. */}
+        {/* Each fact whole on its line: the line breaks between them, after a separator, never inside
+            one. A narrow column stacks them, without the separators (session-head.css). */}
         {head.meta.map((part, i) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: the facts in their order
           <Fragment key={i}>
-            {i > 0 && ' · '}
+            {i > 0 && <span className="sep"> · </span>}
             <Fact part={part} onRenameWorkspace={onRenameWorkspace} />
           </Fragment>
         ))}
