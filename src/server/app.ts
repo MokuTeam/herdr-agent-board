@@ -99,6 +99,8 @@ export interface ServerOptions {
 /** `deps.cfg` is the live config (liveConfig): call the returned refresh from its onChange. */
 export async function startServer({ deps, port: asked, gather }: ServerOptions): Promise<BoardServer> {
   const { cfg, log } = deps
+  // Validate before starting a scheduler or changing any state.
+  const cards = cardsDir()
   const port = asked ?? Number(cfg.port ?? 12422)
   pruneUploads(Number(cfg.keepUploadsDays ?? 14))
   // The profile folders found on this computer that config.json does not list yet go into it,
@@ -247,7 +249,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
 
   const poll = setInterval(refresh, Math.max(1, cfg.refreshSec ?? 2) * 1000)
   const watchers = [
-    watchFolder(cardsDir(), 150, refresh, log),
+    watchFolder(cards, 150, refresh, log),
     // Entries added or cancelled by agents (`board remind`), and runs the scheduler made.
     watchFolder(scheduleDir(), 150, refresh, log),
     // Sessions an agent put in the archive (`board archive`), whose cards go at once.

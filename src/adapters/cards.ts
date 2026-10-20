@@ -45,15 +45,17 @@ export function removeCard(key: string): void {
 /** Every card by key. */
 export function allCards(): Map<string, Card> {
   const cards = new Map<string, Card>()
+  // An invalid explicit store must not silently look like an empty board.
+  const dir = cardsDir()
   let names: string[]
   try {
-    names = readdirSync(cardsDir())
+    names = readdirSync(dir)
   } catch {
     return cards
   }
   for (const name of names) {
     if (!name.endsWith('.json')) continue
-    const card = readJson(join(cardsDir(), name), isCard)
+    const card = readJson(join(dir, name), isCard)
     if (card?.key) cards.set(card.key, card)
   }
   return cards

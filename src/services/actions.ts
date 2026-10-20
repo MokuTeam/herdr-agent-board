@@ -1,6 +1,6 @@
 // What the board can do to a session, shared by the terminal board and the web board. Each
 // returns { ok: true } or { ok: false, error } with a message for the user.
-import { agentGet, herdr, herdrText, paneTerminals, snapshot } from '../adapters/herdr.ts'
+import { agentGet, type HerdrAgent, herdr, herdrText, paneTerminals, snapshot } from '../adapters/herdr.ts'
 import { possibleProfilePanes, provenProfilePanes } from '../adapters/profile-panes.ts'
 import { inputDraft } from '../core/dialogs/input-box.ts'
 import { itemProfile } from '../core/item-profile.ts'
@@ -151,9 +151,10 @@ export async function focus(
 
 /**
  * Type a message into the session's prompt, waking it first. Refused while it waits for a
- * decision; with `free`, also while it works (instead of queueing into its turn); with `draft`,
- * also while the user has unsent text in its input box (the scheduler's guards). Those refusals
- * say `busy`, plus `dialog` or `draft` for those two.
+ * decision or Claude's visible screen has no recognizable input box, even if herdr says idle.
+ * With `free`, also while it works (instead of queueing into its turn); with `draft`, also while
+ * the user has unsent text in its input box (the scheduler's guards). Those refusals say `busy`,
+ * plus `dialog` or `draft` for those two.
  */
 export async function send(
   deps: Deps,
@@ -165,6 +166,15 @@ export async function send(
   if (!text) return { ok: false, error: t('err.emptyMessage') }
   if (!item?.pane) return { ok: false, error: t('err.noPane') }
   const expectedSession = item.session ?? null
+  const refused = (agent: HerdrAgent | null): ActionResult | null => {
+    if (!agent || agent.session !== expectedSession)
+      return { ok: false, error: t('err.sessionChanged', { name: item.name }) }
+    if (agent.status === 'blocked')
+      return { ok: false, busy: true, dialog: true, error: t('err.blocked', { name: item.name }) }
+    if (free && agent.status === 'working')
+      return { ok: false, busy: true, error: t('err.working', { name: item.name }) }
+    return null
+  }
   if (item.sleeping) {
     const r = await wake(deps, item)
     if (!r.ok) return r
@@ -172,19 +182,14 @@ export async function send(
   try {
     const agent = await agentGet(item.pane)
     // Recheck after wake too: the pane may now host a different session.
-    if (!agent || agent.session !== expectedSession) {
-      return { ok: false, error: t('err.sessionChanged', { name: item.name }) }
-    }
-    if (agent.status === 'blocked')
-      return { ok: false, busy: true, dialog: true, error: t('err.blocked', { name: item.name }) }
-    if (free && agent.status === 'working')
-      return { ok: false, busy: true, error: t('err.working', { name: item.name }) }
-    if (guardDraft && agent.kind === 'claude') {
-      // Typed after what the user started in the input box, Enter would send both.
-      const draft = inputDraft(
-        await herdrText(['agent', 'read', item.pane, '--source', 'recent', '--lines', '40', '--ansi'], 10_000),
-      )
-      if (draft !== '') {
+    const before = refused(agent)
+    if (before) return before
+    if (agent?.kind === 'claude' || item.agent === 'claude') {
+      // Herdr can miss a dialog (e.g. Teach auto mode). Require the visible prompt for every
+      // send; recent scrollback could still contain an old input box. Only scheduled messages
+      // also refuse a draft: Enter would send both it and the reminder.
+      const draft = inputDraft(await herdrText(['agent', 'read', item.pane, '--source', 'visible', '--ansi'], 10_000))
+      if (draft === null || (guardDraft && draft !== '')) {
         return {
           ok: false,
           busy: true,
@@ -193,6 +198,12 @@ export async function send(
           error: t(draft === null ? 'err.blocked' : 'err.draft', { name: item.name }),
         }
       }
+      // The screen read can take time. Do not send to a replacement session, or one herdr now
+      // knows is blocked (or working, for an idle-only reminder).
+      const fresh = await agentGet(item.pane)
+      const after = refused(fresh)
+      if (after) return after
+      if (fresh?.kind !== agent?.kind) return { ok: false, error: t('err.sessionChanged', { name: item.name }) }
     }
     // This read and prompt are separate CLI calls, not an atomic identity check and send.
     // A leading dash would be read as an option by the herdr CLI.

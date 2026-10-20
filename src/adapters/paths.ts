@@ -5,6 +5,7 @@
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { cardStore } from '../core/card-store.ts'
 
 export const PLUGIN_ID = 'agent-board'
 export const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
@@ -13,7 +14,7 @@ export const configDir = (): string =>
   join(process.env.APPDATA || join(homedir(), '.config'), 'herdr', 'plugins', 'config', PLUGIN_ID)
 export const stateDir = (): string =>
   join(process.env.LOCALAPPDATA || join(homedir(), '.local', 'state'), 'herdr', 'plugins', PLUGIN_ID)
-export const cardsDir = (): string => join(stateDir(), 'cards')
+export const cardsDir = (): string => cardStore(process.env, homedir(), process.platform).cards
 // Reminders and repeating pings for sessions (schedule-store.ts), one file per entry.
 export const scheduleDir = (): string => join(stateDir(), 'schedule')
 // Sessions taken off the board, one file per session (archive-store.ts).

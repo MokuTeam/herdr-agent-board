@@ -137,6 +137,12 @@ hook. Hook commands use `bun` from PATH (including on Windows); keep Bun on PATH
 are treated as new configurations; malformed JSON stops the install before anything is written. The ordinary install
 without `--codex` keeps managing Claude only.
 
+New hook commands carry `--herdr-agent-board-hook`, so reinstalling after moving the checkout
+replaces the board's previous hooks even when the folder has another name. Older unmarked hooks
+at unknown paths are preserved because ownership cannot be proved; review those old commands
+when moving an installation. Unrelated hooks and shell wrappers are never replaced just because
+their text mentions the board's script.
+
 Enable hooks if disabled (`codex features enable hooks`) and review and trust the new definitions
 in Codex's `/hooks`. The board does not change Codex's configuration or hook trust. In a pane herdr
 reports as this Codex session, SessionStart supplies the card brief; UserPromptSubmit clears a
@@ -256,6 +262,10 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   back to the input box in the terminal goes. The queue is read from the transcript (Claude
   Code logs it there), so messages typed in the terminal show too, and a reload keeps them. A
   message that could not be sent stays with the reason, "Retry" and "Edit".
+  Before sending to Claude, the board checks for its input box on the visible terminal screen,
+  even when herdr reports idle or done. A dialog or an unrecognized screen refuses the send;
+  the text stays in the failed message and its saved draft. Resolve the dialog in the terminal,
+  then retry explicitly. The board does not dismiss it or resend automatically.
 - Files, folders and links in the thread. A path an agent writes (absolute, `~/...`, a
   `herdr-reveal:` or `file:` link, or relative to the session's folder in `code`, with an
   optional `:line`) becomes a chip once the board finds it on disk; file tool calls in the
@@ -1574,6 +1584,27 @@ and its first arguments, one per element, no shell, the board adding `call --cla
 
 Cards: `%LOCALAPPDATA%\herdr\plugins\agent-board\cards\<session id>.json`. Sessions in the archive:
 `archive\<session id>.json` beside them (see [Archive](#archive)).
+
+**Sharing cards with an isolated preview (#71).** `HERDR_BOARD_CARDS_DIR` selects an absolute
+cards directory for this process. Unset or empty, the layout above is unchanged. Set the preview
+to the authoritative cards folder already used by its `board` CLI and Claude hooks, or explicitly
+set the same folder for every writer. Paths with spaces, other alphabets and `%` are literal
+paths; relative paths and `~` are refused, because processes can have different working folders.
+This does not change config, schedules, archives, uploads or the rest of runtime state.
+
+For example, on macOS/Linux, a preview with its own `APPDATA` and `LOCALAPPDATA` can use:
+
+```sh
+export HERDR_BOARD_CARDS_DIR="$HOME/.local/state/herdr/plugins/agent-board/cards"
+```
+
+Choose the authoritative folder before starting it. There is no copying, merging, migration or
+clearing of old asks. Do not share the whole `LOCALAPPDATA` between running previews: separate
+schedulers must keep separate schedules. `board doctor` and Setup show this process's effective
+cards folder, its source, and its schedule folder. A Unix preview with a custom `LOCALAPPDATA`
+and no explicit cards folder warns that outside writers may use another store. These diagnostics
+cannot infer another process's environment; compare its own `board doctor` output. Installing a
+hook from a different checkout alone does not choose its store or propagate this variable.
 
 Writes to the same card use a per-card directory lock (`<session id>.json.lock`) around the
 read/merge/rename. Contention waits at most two seconds, then reports an error without replacing
