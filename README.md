@@ -1,6 +1,7 @@
 # agent-board
 
-A [herdr](https://herdr.dev) plugin: a kanban of the Claude Code sessions running in herdr.
+A [herdr](https://herdr.dev) plugin: a kanban of the Claude Code sessions running in herdr, and
+of the [pi](#pi) ones.
 Lanes are categories (one per client, say, plus Personal and Other), columns are Working /
 Needs me / Waiting on others / Done / Idle. Sessions
 [herdr-wake](https://github.com/Eithery-rc/tg-mcp/tree/main/herdr-wake) put to sleep are on it
@@ -375,6 +376,39 @@ board refuses to wake those sessions. herdr-wake resuming one by itself is expec
 Claude finds no such session in `~/.claude`; wake it in its pane yourself with `cld-work --resume`.
 A session the board starts with `"command": "cld-work"` still opens its tab with work's
 `CLAUDE_CONFIG_DIR`, so waking it stays in work.
+
+## pi
+
+[pi](https://pi.dev) sessions in herdr are on the board too. herdr reports a pi pane's session by
+its file (`~/.pi/agent/sessions/--<folder>--/<time>_<id>.jsonl`), the card's key, and the board
+reads that file as it reads a Claude transcript: the card shows the user's last prompt, pi's last
+words (a question at their end puts the card under "Needs me"), the tool it runs and how full its
+context is; the session's sheet shows its turns. A name given with `/name` is the card's name. Only
+the session as it goes on now is read: a branch left with `/tree` is not. pi writes the file once
+the session has something in it; until then the card is bare. Agents in pi keep their card with the
+`board` command as Claude's do (herdr's ids are in their env too).
+
+**Profiles.** pi reaches Claude through its bridge
+([pi-claude-bridge](https://github.com/elidickinson/pi-claude-bridge)), whose Claude runs in a profile's
+folder: the `CLAUDE_CONFIG_DIR` pi inherited, or, with a bridge that has provider profiles (such
+as [Ordinath's fork](https://github.com/Ordinath/pi-claude-bridge)), the folder its config gives a
+provider (`claude-bridge-work`, say). That Claude's hooks tell pi's card the profile on each of its
+prompts, so the card has the tag of the account its last turn went to, and the profile switch sorts
+it. The brief reaches pi the same way. A pi session on another provider (OpenAI, say) keeps the
+profile of its last Claude turn, or has none, and is not briefed.
+
+**Starting pi.** Give a profile `pi` as its start command (Settings → Profiles → Start command, or
+`"command": "pi"`), with arguments if you like (`pi --model claude-bridge/claude-opus-5-5`), or an
+alias for it. The board's launches in that profile (the new-session window, "New here") and
+`spawn-agent` start pi in place of Claude, with the session id the board picked
+(`--session-id`) and in the profile's env as for Claude, so `claude-bridge` runs in that profile's
+account. herdr says which agent came up: the board names a pi session with `/name`, types the
+first message, and puts the lane and the profile it is meant for on pi's card. spawn-agent adds
+` kind=pi` to the line it prints.
+
+Not for pi (yet): the archive and Return, herdr-wake's sleep, wake and restart, the session's own
+name from the board's rename (the card's name works), question forms (pi has none: answer in a
+message), MokuPilot calls, and the status line's context percentage and usage windows.
 
 ## New sessions
 

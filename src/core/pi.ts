@@ -49,6 +49,25 @@ export function piSessionId(file: unknown): string {
   return /_([^_\\/]+)\.jsonl$/i.exec(str(file))?.[1] ?? ''
 }
 
+/**
+ * How a session an agent runs is named once it is up: the slash command typed into it, and what
+ * its screen shows once the name took. Claude's /rename and pi's /name both run without a turn.
+ */
+export interface Naming {
+  /** The agent as messages call it. */
+  title: string
+  command: (name: string) => string
+  done: RegExp
+}
+
+export const CLAUDE_NAMING: Naming = { title: 'Claude', command: name => `/rename ${name}`, done: /Session renamed/i }
+export const PI_NAMING: Naming = { title: 'pi', command: name => `/name ${name}`, done: /Session name set/i }
+
+/** The agents the board starts and names: Claude, and pi (herdr's kinds); null for any other. */
+export function namingOf(kind: string | null | undefined): Naming | null {
+  return kind === 'claude' ? CLAUDE_NAMING : kind === PI_AGENT ? PI_NAMING : null
+}
+
 /** Whether a board item is a pi session the board can read: herdr says pi, and its key is the file. */
 export const isPiItem = (item: { agent?: string | undefined; session?: string | null }): boolean =>
   item.agent === PI_AGENT && isPiSessionFile(item.session)

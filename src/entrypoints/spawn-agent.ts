@@ -22,8 +22,9 @@
 // The session starts in the Claude profile of the agent that runs it (its CLAUDE_CONFIG_DIR), or
 // in the one --profile names; the board's own starts pass --config-dir <folder> or --keep-env.
 //
-// Prints "pane=<id> name=<Name> agent=<herdr name>"; exits 1 with the reason when it fails.
-// The board reads that line (services/launch/launcher.ts).
+// Prints "pane=<id> name=<Name> agent=<herdr name>", with " kind=pi" after it when the start
+// command started pi; exits 1 with the reason when it fails. The board reads that line
+// (services/launch/launcher.ts).
 import { homedir } from 'node:os'
 import { loadConfig } from '../adapters/config-file.ts'
 import { loadProfiles } from '../adapters/profiles.ts'
@@ -44,7 +45,7 @@ try {
       env: process.env,
       home,
     })
-    console.log(`pane=${r.pane} name=${r.name} agent=${r.agent}`)
+    console.log(`pane=${r.pane} name=${r.name} agent=${r.agent}${r.kind === 'claude' ? '' : ` kind=${r.kind}`}`)
   }
 } catch (err) {
   console.error(`spawn-agent: ${err instanceof Error ? err.message : String(err)}`)

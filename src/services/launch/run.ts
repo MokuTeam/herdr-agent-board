@@ -21,10 +21,11 @@ import { keyTowardYes, sameFolder, type TrustDialog, trustDialog } from '../../c
 import { t } from '../../core/lang.ts'
 import { launcherError } from '../../core/launch/launcher-command.ts'
 import { slugName, uniqueSlug, worktreePath } from '../../core/launch/names.ts'
+import { PI_AGENT } from '../../core/pi.ts'
 import type { Item, LaunchFailure, LaunchState, LaunchStep } from '../../core/types.ts'
 import type { Deps } from '../deps.ts'
 import { LaunchError, type LaunchEvents, launcherFor, notePane, openInProfile } from './launcher.ts'
-import { claudeRename, inputEmpty, takenNames, typeLine } from './prompt.ts'
+import { claudeRename, inputEmpty, piName, takenNames, typeLine } from './prompt.ts'
 import type { LaunchRequest } from './request.ts'
 
 /** A launch as the board keeps it while it runs. */
@@ -161,25 +162,28 @@ export function launchRunner({
     }
     const launcher = launcherFor(deps.cfg.launch, { resume: !!l.resume })
     const r = await launcher.start(l, events(l))
+    // The agent herdr says came up once a dialog was answered: the board's spawn-agent stops at
+    // one before it can say whether its start command started Claude or pi.
+    let kind = r.agent
     if (r.dialog && (await trustShown(l, 3))) {
       // Claude asks to trust the folder: the card asks the user, and the board goes on once it is.
-      await holdForTrust(l)
+      kind = (await holdForTrust(l))?.kind || kind
       // What the launcher did not get to: the names and the first message.
-      await finishStart(l, { kind: r.agent, nameAgent: !r.named })
+      await finishStart(l, { kind, nameAgent: !r.named })
     } else {
       if (r.failure) throw r.failure
       if (r.dialog) {
         // Another dialog holds it: the user answers it in herdr, the board waits and goes on.
         l.state = 'waiting'
         step(l, 'dialog')
-        await untilReady(l, 15 * 60_000)
+        kind = (await untilReady(l, 15 * 60_000))?.kind || kind
         l.state = 'starting'
       }
       // What the launcher did not get to: herdr's own start named the agent, so /rename and the
       // first message; the board's spawn-agent stopped at a dialog before any of the names.
       if (!r.typed) {
-        if (r.named) await nameAndBrief(l, r.agent)
-        else await finishStart(l, { kind: r.agent, nameAgent: true })
+        if (r.named) await nameAndBrief(l, kind)
+        else await finishStart(l, { kind, nameAgent: true })
       }
     }
     // A new workspace starts with a tab of shells; a launcher command opened its own tab beside it.
@@ -217,6 +221,9 @@ export function launchRunner({
       // The name is cosmetic and Claude runs by now: a herdr error here must not mark the launch
       // failed, or a retry would start a second session.
       await claudeRename(pane, l.name).catch(err => deps.log(`launch ${l.name}: /rename: ${messageOf(err)}`))
+    } else if (kind === PI_AGENT && !l.resume) {
+      step(l, 'rename')
+      await piName(pane, l.name).catch(err => deps.log(`launch ${l.name}: /name: ${messageOf(err)}`))
     }
     if (l.message) {
       step(l, 'message')
@@ -235,11 +242,13 @@ export function launchRunner({
     }
   }
 
-  async function untilReady(l: Launch, limit: number): Promise<void> {
+  /** Wait until the launch's agent waits for input; what herdr then says of it. */
+  async function untilReady(l: Launch, limit: number): Promise<HerdrAgent | null> {
     const deadline = Date.now() + limit
     while (Date.now() < deadline && !l.dismissed && !l.closed) {
       await sleep(1500)
-      if (ready(await agentNow(l))) return
+      const agent = await agentNow(l)
+      if (ready(agent)) return agent
     }
     throw new LaunchError(t(l.dismissed ? 'launch.err.dismissed' : 'launch.err.dialogTimeout'), 'dialog')
   }
@@ -269,8 +278,11 @@ export function launchRunner({
     return null
   }
 
-  /** Keep the launch on the board, asking, until the folder is trusted (here or in herdr) or its tab closed. */
-  async function holdForTrust(l: Launch): Promise<void> {
+  /**
+   * Keep the launch on the board, asking, until the folder is trusted (here or in herdr) or its tab
+   * closed; what herdr then says of its agent.
+   */
+  async function holdForTrust(l: Launch): Promise<HerdrAgent | null> {
     l.state = 'trust'
     l.error = ''
     step(l, 'trust')
@@ -280,7 +292,7 @@ export function launchRunner({
       const agent = await agentNow(l)
       if (ready(agent)) {
         l.state = 'starting'
-        return
+        return agent
       }
       // Trusted, and Claude asks something else (a project's MCP servers, say): that one is
       // answered in herdr, and the card says so instead of "trusting" on and on.
@@ -315,10 +327,23 @@ export function launchRunner({
       } catch (err) {
         deps.log(`launch ${l.name}: naming: ${messageOf(err)}`)
       }
+    } else if (kind === PI_AGENT && !l.resume) {
+      // pi's input box is not one the board reads (core/dialogs/input-box.ts is Claude's): a pi
+      // that just answered its dialog has nothing typed in it yet.
+      step(l, 'rename')
+      try {
+        if ((await piName(pane, l.name)) && nameAgent) {
+          const taken = await takenNames()
+          await herdr(['agent', 'rename', pane, uniqueSlug(slugName(l.name), taken)])
+        }
+      } catch (err) {
+        deps.log(`launch ${l.name}: naming: ${messageOf(err)}`)
+      }
     }
     if (l.message) {
       step(l, 'message')
-      if (!(await inputEmpty(pane))) throw new LaunchError(t('launch.err.message.draft'), 'message')
+      if (kind !== PI_AGENT && !(await inputEmpty(pane)))
+        throw new LaunchError(t('launch.err.message.draft'), 'message')
       if (!(await typeLine(pane, l.message))) throw new LaunchError(t('launch.err.message.lost'), 'message')
     }
   }
