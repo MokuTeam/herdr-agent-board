@@ -32,6 +32,9 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'access.err.password': 'A password has at least 12 characters',
 
     // Task 7: the login service
+    'access.err.passwordLong': 'A password has at most {max} characters',
+    'access.err.noTotp': 'Set up the code first: it expired, or was never asked for',
+    'access.err.code': 'That code is not the one the app shows now',
 
     // Task 11: the probe and Test connection
 
@@ -72,6 +75,9 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'access.err.password': 'Пароль: не меньше 12 символов',
 
     // Task 7: the login service
+    'access.err.passwordLong': 'Пароль: не больше {max} символов',
+    'access.err.noTotp': 'Сначала настройте код: время вышло или его не запрашивали',
+    'access.err.code': 'Это не тот код, который сейчас показывает приложение',
 
     // Task 11: the probe and Test connection
 
