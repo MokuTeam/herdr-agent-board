@@ -25,6 +25,8 @@ const given = (v: unknown): string | undefined => (v === undefined || v === null
 
 /** What a checked request asks for. `newWorkspace`: make the workspace `workspaceLabel` first. */
 export interface LaunchRequest {
+  /** A Codex fork selected by the server, independently of the new-session agent picker. */
+  codexFork?: true
   name: string
   label: string
   cwd: string
@@ -46,7 +48,7 @@ export interface LaunchRequest {
   /** The profile's start command, typed instead of `launch.claude`; null for none, or a launcher that types none. */
   profileCommand: string[] | null
   /** The agent the board's own launcher starts: the one the request picked, else the board's default. */
-  agent: LaunchAgentId
+  agent: LaunchAgentId | 'codex'
 }
 
 export type CheckResult = { ok: true; launch: LaunchRequest } | { ok: false; field: string; error: string }
@@ -76,16 +78,16 @@ export async function checkRequest(
     agents = () => [],
     standard = () => CLAUDE_AGENT,
     pi,
+    codexFork,
   }: {
     categories?: Set<string> | null
-    profiles: ProfileSet
     items?: Item[]
     typesCommand?: boolean
     parent?: ParentFacts
     agents?: () => readonly LaunchAgent[]
     standard?: (offered: () => readonly LaunchAgent[]) => LaunchAgentId
     pi?: unknown
-  },
+  } & ({ codexFork: true; profiles?: never } | { codexFork?: never; profiles: ProfileSet }),
 ): Promise<CheckResult> {
   const fail = (field: string, key: string, vars?: Vars): CheckResult => ({ ok: false, field, error: t(key, vars) })
   const b = isRecord(body) ? body : {}
@@ -128,6 +130,32 @@ export async function checkRequest(
   const parent = heldTo?.key ?? given(b.parent) ?? null
   const from = heldTo ?? (parent === null ? undefined : items.find(i => i.key === parent))
   const parentName = from?.name || parent || ''
+  const common = {
+    name,
+    label: name,
+    cwd,
+    category,
+    workspaceId,
+    workspaceLabel,
+    newWorkspace: !workspaceId,
+    message,
+    worktree,
+    parent,
+  }
+  if (codexFork)
+    return {
+      ok: true,
+      launch: {
+        ...common,
+        codexFork,
+        agent: 'codex',
+        profile: '',
+        profileDir: '',
+        configDir: null,
+        profileArgs: [],
+        profileCommand: null,
+      },
+    }
   const target = launchTarget(
     given(b.profile),
     parent === null ? null : (from ?? { name: parentName, profile: null }),
@@ -170,19 +198,10 @@ export async function checkRequest(
   return {
     ok: true,
     launch: {
-      name,
-      label: name,
-      cwd,
-      category,
-      workspaceId,
-      workspaceLabel,
-      newWorkspace: !workspaceId,
-      message,
-      worktree,
+      ...common,
       profile: profile.id,
       profileDir: profile.dir,
       configDir,
-      parent,
       profileArgs: (profile.args ?? []).filter((a): a is string => typeof a === 'string'),
       profileCommand: profileCommandWords,
       agent,

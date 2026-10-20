@@ -57,3 +57,12 @@ test('keeps the cached prompt when a long tool result moves its user turn beyond
   expect(home.transcriptInfo(ID)).toMatchObject({ prompt: 'fix the build', lastText: 'Shall I push?', replied: false })
   expect(createCodexHome(root).transcriptInfo(ID)?.prompt).toBe('')
 })
+
+test('reads the rollout header folder, including Cyrillic, quotes and percent signs, with case-insensitive ids', async () => {
+  const { root, file } = fixture()
+  const cwd = 'C:\\Codex проект %USERNAME%\\100%'
+  writeFileSync(file, `${JSON.stringify({ type: 'session_meta', payload: { id: ID, cwd } })}\n${said('user', 'hello')}`)
+  const home = createCodexHome(root)
+  expect(await home.cwdOf(ID.toUpperCase())).toBe(cwd)
+  expect(await home.cwdOf('missing')).toBeNull()
+})
