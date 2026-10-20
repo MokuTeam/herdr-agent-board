@@ -16,7 +16,12 @@ export interface RouteContext {
   url: URL
   /** The decoded path. */
   path: string
-  /** The groups of a RegExp path ('' for one that did not take part). */
+  /**
+   * The path as it came, still percent-encoded: a session key with `/` in it (a pi session's is its
+   * file) is one segment only here.
+   */
+  rawPath: string
+  /** The groups of a RegExp path, each decoded ('' for one that did not take part). */
   params: string[]
   /** The JSON body as it parsed ({} when empty), read once: for code that takes any value. */
   rawBody(): Promise<unknown>
@@ -32,7 +37,10 @@ export type Handler = (req: Request, ctx: RouteContext) => Promise<Response | un
 export interface Route {
   /** ANY: whatever the method (main's session block matched before it looked at the method). */
   method: 'GET' | 'POST' | 'ANY'
-  /** A string matches the whole path; a RegExp is tested as it is. */
+  /**
+   * A string matches the whole decoded path; a RegExp is tested on the path as it came (encoded),
+   * so `([^/]+)` takes a whole key even when the key has a `/`, and its groups are decoded.
+   */
   path: string | RegExp
   /** Checked in this order before the handler runs. */
   guard?: Guard[]
@@ -109,10 +117,11 @@ function check(guard: Guard, req: Request, url: URL, state: GuardState): Respons
   }
 }
 
-function matches(route: Route, method: string, path: string): RegExpExecArray | string[] | null {
+function matches(route: Route, method: string, path: string, rawPath: string): string[] | null {
   if (route.method !== 'ANY' && route.method !== method) return null
   if (typeof route.path === 'string') return route.path === path ? [path] : null
-  return route.path.exec(path)
+  const match = route.path.exec(rawPath)
+  return match?.map(group => (group === undefined ? '' : decodeURIComponent(group))) ?? null
 }
 
 /** The first route that answers; 405 when none does. */
@@ -123,12 +132,13 @@ export async function dispatch(routes: Route[], req: Request, url: URL, path: st
     return parsed
   }
   for (const route of routes) {
-    const match = matches(route, req.method, path)
+    const match = matches(route, req.method, path, url.pathname)
     if (!match) continue
     const ctx: RouteContext = {
       url,
       path,
-      params: match.slice(1).map(group => group ?? ''),
+      rawPath: url.pathname,
+      params: match.slice(1),
       rawBody,
       body: async () => fieldsOf(await rawBody()),
       refuse: guard => check(guard, req, url, state),

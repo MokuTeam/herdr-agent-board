@@ -125,6 +125,76 @@ test('a board reminder does not count as the user answering the session', async 
   assert.equal(cardOf(box, 's1')?.ask, undefined)
 })
 
+// A pi session runs Claude Code through its bridge: the hook hears of the bridge's Claude session,
+// the board shows pi's (herdr's agent_session of the pane, the session's file), where `board ask` went.
+const PI_KEY = '/home/me/.pi/agent/sessions/--home-me--/2026-10-20T05-10-02-695Z_01a1.jsonl'
+const PI_FILE = PI_KEY.replace(/[^A-Za-z0-9_-]/g, '_')
+const piPane = (box: Sandbox) =>
+  box.state({
+    'agent get': { result: { agent: { agent: 'pi', agent_status: 'idle', agent_session: { value: PI_KEY } } } },
+  })
+
+test("a pi session: the user's answer clears the ask on pi's card, the board's, not only the bridge's", async () => {
+  const box = await sandbox()
+  piPane(box)
+  putCard(box, { key: PI_FILE, ask: 'Close the kit?', askSince: 1, pin: 'me', pinAt: 1 })
+  putCard(box, { key: 'cc1', briefV: BRIEF_VERSION })
+  const hook = (prompt: string) =>
+    runHook(box, { hook_event_name: 'UserPromptSubmit', session_id: 'cc1', cwd: box.dir, prompt }, 'w6:p1', {
+      PI_CODING_AGENT: 'true',
+    })
+  await hook('[board reminder from lead-session] check the CI run')
+  expect(cardOf(box, PI_FILE)).toMatchObject({ ask: 'Close the kit?', askSince: 1 })
+  expect(cardOf(box, PI_FILE)?.pin).toBeUndefined()
+  await hook('closed it, go on')
+  expect(cardOf(box, PI_FILE)?.ask).toBeUndefined()
+  expect(cardOf(box, PI_FILE)?.askSince).toBeUndefined()
+  expect(box.calls()).toContainEqual(['agent', 'get', 'w6:p1'])
+})
+
+test("a pi session: the wait reminder comes from pi's card", async () => {
+  const box = await sandbox()
+  englishConfig(box)
+  piPane(box)
+  putCard(box, { key: PI_FILE, wait: 'the client' })
+  putCard(box, { key: 'cc1', briefV: BRIEF_VERSION })
+  const prompt = { hook_event_name: 'UserPromptSubmit', session_id: 'cc1', cwd: box.dir, prompt: 'go on' }
+  useLanguage('en')
+  expect(await runHook(box, prompt, 'w6:p1', { PI_CODING_AGENT: 'true' })).toBe(
+    context('UserPromptSubmit', waitReminder({ wait: 'the client' })),
+  )
+})
+
+test('PI_CODING_AGENT in the env of a pane that herdr says runs Claude: no other card is touched', async () => {
+  const box = await sandbox()
+  box.state({
+    'agent get': { result: { agent: { agent: 'claude', agent_status: 'idle', agent_session: { value: 'other' } } } },
+  })
+  putCard(box, { key: 'other', ask: 'Ship it?', askSince: 1 })
+  putCard(box, { key: 'cc1', ask: 'Send it?', askSince: 1, briefV: BRIEF_VERSION })
+  const prompt = { hook_event_name: 'UserPromptSubmit', session_id: 'cc1', cwd: box.dir, prompt: 'yes' }
+  await runHook(box, prompt, 'w1:p1', { PI_CODING_AGENT: 'true' })
+  expect(cardOf(box, 'other')).toMatchObject({ ask: 'Ship it?', askSince: 1 })
+  expect(cardOf(box, 'cc1')?.ask).toBeUndefined()
+})
+
+test('herdr failing or slow to answer leaves the hook as it was', async () => {
+  const box = await sandbox()
+  box.state({ 'agent get': { error: 'server not running' } })
+  putCard(box, { key: 'cc1', ask: 'Send it?', askSince: 1, briefV: BRIEF_VERSION })
+  const prompt = { hook_event_name: 'UserPromptSubmit', session_id: 'cc1', cwd: box.dir, prompt: 'yes' }
+  expect(await runHook(box, prompt, 'w1:p1', { PI_CODING_AGENT: 'true' })).toBe('')
+  expect(cardOf(box, 'cc1')?.ask).toBeUndefined()
+})
+
+test('a Claude session of its own asks herdr nothing', async () => {
+  const box = await sandbox()
+  putCard(box, { key: 's1', ask: 'Send it?', askSince: 1, briefV: BRIEF_VERSION })
+  await runHook(box, { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: box.dir, prompt: 'yes' })
+  expect(cardOf(box, 's1')?.ask).toBeUndefined()
+  expect(box.calls()).toEqual([])
+})
+
 test('a task reporting back does not count as the user answering the session (hook)', async () => {
   const box = await sandbox()
   putCard(box, { key: 's1', ask: 'Send it?', askSince: 1, briefV: 99 })
