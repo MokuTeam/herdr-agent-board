@@ -137,6 +137,12 @@ hook. Hook commands use `bun` from PATH (including on Windows); keep Bun on PATH
 are treated as new configurations; malformed JSON stops the install before anything is written. The ordinary install
 without `--codex` keeps managing Claude only.
 
+New hook commands carry `--herdr-agent-board-hook`, so reinstalling after moving the checkout
+replaces the board's previous hooks even when the folder has another name. Older unmarked hooks
+at unknown paths are preserved because ownership cannot be proved; review those old commands
+when moving an installation. Unrelated hooks and shell wrappers are never replaced just because
+their text mentions the board's script.
+
 Enable hooks if disabled (`codex features enable hooks`) and review and trust the new definitions
 in Codex's `/hooks`. The board does not change Codex's configuration or hook trust. In a pane herdr
 reports as this Codex session, SessionStart supplies the card brief; UserPromptSubmit clears a
