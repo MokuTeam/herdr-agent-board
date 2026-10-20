@@ -1,16 +1,24 @@
 // The sheet's foot: why the session's actions wait (no fresh data), the session's buttons — go to
-// it in herdr, a MokuPilot call with a fork of it, its terminal, its changes, its history, wake it,
+// it in herdr, a MokuPilot call with a fork of it, a fork of it in a new tab, its terminal, its changes, its history, wake it,
 // put it to sleep, restart it, take it off the board to the archive, a new session here, as many
 // as the row's width holds (hooks/useActionRow.ts), and More at the row's end with the rest — the
 // files that go with the next message, and the message box: Enter sends, Shift+Enter breaks the
 // line, the box grows with the text; files come in through the clip or Ctrl+V (a screenshot).
-import { type ClipboardEvent, type KeyboardEvent, useLayoutEffect, useRef } from 'react'
+import { type ClipboardEvent, type KeyboardEvent, useLayoutEffect, useRef, useState } from 'react'
 import { useActionRow } from '../../hooks/useActionRow.ts'
 import type { ComposerControls } from '../../hooks/useComposer.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import {
+  canReadClipboard,
+  keepPasteHintSeen,
+  pasteHintSeen,
+  readClipboardImages,
+} from '../../models/clipboard-image.ts'
 import { composerView, sendsOnKey } from '../../models/composer.ts'
+import { remotePage } from '../../models/remote-page.ts'
 import type { HeadButtons, SheetAvailability } from '../../models/sheet.ts'
 import type { termButton } from '../../models/terminal.ts'
+import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import {
   ArchiveIcon,
@@ -18,9 +26,11 @@ import {
   ClipIcon,
   CrossIcon,
   FocusIcon,
+  ForkIcon,
   HistoryIcon,
   MoonIcon,
   MoreIcon,
+  PastePictureIcon,
   PhoneIcon,
   PlusIcon,
   RestartIcon,
@@ -28,6 +38,7 @@ import {
   SunIcon,
 } from '../icons.tsx'
 import { TermIcon } from '../terminal/Terminal.tsx'
+import { AsideToggle, useAsideBox } from './Aside.tsx'
 import { Attachments } from './Attachments.tsx'
 
 /** What the session's buttons do; each gets the button it was pressed on, for what opens from it. */
@@ -37,6 +48,8 @@ export interface SessionButtons {
   terminal?: (button: HTMLElement) => void
   /** A MokuPilot call whose agent is a fork of the session. */
   mokupilot?: () => void
+  /** A fork of the session in a new tab (its window grows out of the button). */
+  fork?: (button: HTMLElement) => void
   wake?: () => void
   sleep?: () => void
   /** Claude exits and resumes in its pane once the session is free. */
@@ -91,6 +104,8 @@ export function Composer({
   const over = (id: string) => row.over.has(id) && 'over'
   const { text, attachments, sending, messageRef } = composer
   const view = composerView({ present, sending, canMutate, text, attachments }, t)
+  // A side question (/btw) instead of a message, where the board can ask one: the box's switch, or "/btw …".
+  const aside = useAsideBox(text, composer.input)
 
   // On every draw, as syncComposer ran on every one: the text, the language or the panel's width may have moved.
   useLayoutEffect(() => {
@@ -119,16 +134,19 @@ export function Composer({
         {av.banner}
       </p>
       <div className={classNames('composer-actions', row.icons && 'icons')} ref={actions}>
-        <button
-          type="button"
-          className={classNames('button', over('sheet-focus'))}
-          id="sheet-focus"
-          disabled={av.focus}
-          onClick={() => on.focus?.()}
-        >
-          <FocusIcon />
-          <span>{t('sheet.focus')}</span>
-        </button>
+        {/* Not in a phone's browser: herdr's window is on the computer (the row then fits without it). */}
+        {!remotePage() && (
+          <button
+            type="button"
+            className={classNames('button', over('sheet-focus'))}
+            id="sheet-focus"
+            disabled={av.focus}
+            onClick={() => on.focus?.()}
+          >
+            <FocusIcon />
+            <span>{t('sheet.focus')}</span>
+          </button>
+        )}
         <button
           type="button"
           className={classNames('button', over('sheet-mokupilot'))}
@@ -141,6 +159,20 @@ export function Composer({
           <PhoneIcon />
           <span>{t('mokupilot.call')}</span>
         </button>
+        {/* Only where the board can fork this session: the row is the old page's without it. */}
+        {!buttons.forkHidden && (
+          <button
+            type="button"
+            className={classNames('button', over('sheet-fork'))}
+            id="sheet-fork"
+            title={t('fork.hint')}
+            disabled={av.newHere}
+            onClick={e => on.fork?.(e.currentTarget)}
+          >
+            <ForkIcon />
+            <span>{t('fork.action')}</span>
+          </button>
+        )}
         <button
           type="button"
           className={classNames('button', term.hasShell && 'has-shell', over('sheet-term'))}
@@ -248,13 +280,14 @@ export function Composer({
           <MoreIcon />
         </button>
       </div>
+      {aside.deck}
       <Attachments list={attachments} onRemove={composer.removeFile} />
       <form
-        className="composer-box"
+        className={classNames('composer-box', aside.on && 'aside')}
         id="composer"
         onSubmit={e => {
           e.preventDefault()
-          composer.send()
+          if (!aside.submit()) composer.send()
         }}
       >
         <button
@@ -268,6 +301,15 @@ export function Composer({
         >
           <ClipIcon />
         </button>
+        {remotePage() && canReadClipboard(navigator.clipboard) && (
+          <PastePicture
+            disabled={av.edit}
+            onFiles={files => {
+              composer.addFiles(files)
+              messageRef.current?.focus()
+            }}
+          />
+        )}
         <input
           type="file"
           id="file-input"
@@ -280,10 +322,21 @@ export function Composer({
             messageRef.current?.focus()
           }}
         />
+        {aside.can && (
+          <AsideToggle
+            on={aside.on}
+            onToggle={() => {
+              aside.toggle()
+              messageRef.current?.focus()
+            }}
+          />
+        )}
         <textarea
           id="message"
           rows={1}
-          placeholder={t('compose.placeholder')}
+          placeholder={t(
+            aside.on ? 'aside.placeholder' : remotePage() ? 'compose.placeholderPhone' : 'compose.placeholder',
+          )}
           aria-label={t('compose.label')}
           ref={messageRef}
           value={text}
@@ -306,13 +359,60 @@ export function Composer({
         <button
           className="send"
           type="submit"
-          title={view.sendTitle}
-          aria-label={t('compose.sendLabel')}
-          disabled={view.sendDisabled}
+          title={aside.question === null ? view.sendTitle : t('aside.toggle')}
+          aria-label={t(aside.question === null ? 'compose.sendLabel' : 'aside.toggle')}
+          disabled={aside.question === null ? view.sendDisabled : !aside.question}
         >
           <SendIcon />
         </button>
       </form>
     </footer>
+  )
+}
+
+/**
+ * In a phone's browser only (models/clipboard-image.ts): the picture on the clipboard into the
+ * message, as Ctrl+V does on the computer. What went wrong says so, with the paperclip as the way round.
+ * A phone's keyboard cannot paste a picture here, so the button says what it is for once, in a small
+ * bubble, until it is used or the bubble is tapped away.
+ */
+function PastePicture({ disabled, onFiles }: { disabled: boolean; onFiles: (files: File[]) => void }) {
+  const t = useT()
+  const { toast } = useBoardContext()
+  const [hint, setHint] = useState(() => !pasteHintSeen())
+  const seen = () => {
+    setHint(false)
+    keepPasteHintSeen()
+  }
+  async function paste() {
+    if (!canReadClipboard(navigator.clipboard)) return
+    const got = await readClipboardImages(navigator.clipboard).catch(
+      (err: unknown) => ({ error: 'failed', why: err instanceof Error ? err.message : String(err) }) as const,
+    )
+    if ('files' in got) return onFiles(got.files)
+    if (got.error === 'empty') return toast(t('compose.pasteNone'))
+    toast(got.error === 'denied' ? t('compose.pasteDenied') : t('compose.pasteFailed', { why: got.why ?? '' }), true)
+  }
+  return (
+    <span className="paste-picture">
+      <button
+        type="button"
+        className="attach"
+        title={t('compose.pastePicture')}
+        aria-label={t('compose.pastePicture')}
+        disabled={disabled}
+        onClick={() => {
+          seen()
+          void paste()
+        }}
+      >
+        <PastePictureIcon />
+      </button>
+      {hint && !disabled && (
+        <button type="button" className="paste-hint" onClick={seen}>
+          {t('compose.pasteHint')}
+        </button>
+      )}
+    </span>
   )
 }

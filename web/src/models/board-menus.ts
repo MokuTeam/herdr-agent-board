@@ -23,6 +23,7 @@ import {
   type Point,
   wantsNativeMenu,
 } from './menu-model.ts'
+import { remotePage } from './remote-page.ts'
 
 export const LONG_PRESS_MS = 480
 export const SLOP = 9 // px a finger may wander before a long press becomes a scroll
@@ -67,6 +68,8 @@ export interface BoardMenuActions {
   /** Claude exits and resumes in its pane once the session is free (a schedule entry, the server's). */
   restart(key: string, from: MenuOrigin): unknown
   dismiss(key: string, from: MenuOrigin): unknown
+  /** Into the favorites, or out of them. */
+  favorite(key: string, from: MenuOrigin): unknown
   clear(key: string, from: MenuOrigin): unknown
   changes(key: string, from: MenuOrigin): unknown
   history(key: string, from: MenuOrigin): unknown
@@ -74,6 +77,8 @@ export interface BoardMenuActions {
   terminal(key: string, from: MenuOrigin): unknown
   /** A MokuPilot call whose agent is a fork of the session. */
   mokupilot(key: string, from: MenuOrigin): unknown
+  /** A fork of the session in a new tab: its window (hooks/useFork.ts). */
+  fork(key: string, from: MenuOrigin): unknown
   /** Off the board until Return: its tab closes, Claude keeps the conversation (hooks/useArchive.ts). */
   archive(key: string, from: MenuOrigin): unknown
   /** The sleeping sessions in "Idle" asleep `days` days or more to the archive: in lane `lane`, or in the lanes on show. */
@@ -124,6 +129,7 @@ export interface BoardMenuDeps {
       categories: readonly MenuCategory[]
       terminal?: boolean | undefined
       mokupilot?: boolean | undefined
+      fork?: boolean | undefined
       /** The schedule: a restart of a session on its way grays its Restart. */
       schedules?: readonly ScheduleEntry[] | undefined
     }
@@ -157,6 +163,7 @@ const ctxOf = (board: BoardMenuDeps): MenuContext => ({
   t: board.t(),
   canMutate: board.canMutate(),
   canEdit: board.canEdit(),
+  ...(remotePage() && { remote: true }),
 })
 
 /** The menu for whatever is under `target`, or null when the browser's own should show. */
@@ -180,8 +187,9 @@ export function menuFor(target: unknown, at: Point, board: BoardMenuDeps): Board
     }
   }
   if (el.closest('.ql, .launch, .limits-pop, .rename, .menu')) return null
+  // The head's own menu is the card's; its card fields keep the sheet's (none), as under the head.
   const head = el.closest('#sheet .sheet-head')
-  if (head) {
+  if (head && !el.closest('.sheet-card')) {
     const key = board.state().open
     const it = key ? board.item(key) : undefined
     return key && it ? forCard(board, key, it, head.querySelector('#sheet-name') ?? head, at) : null
@@ -218,11 +226,13 @@ const CARD_ACTIONS = [
   'sleep',
   'restart',
   'dismiss',
+  'favorite',
   'clear',
   'changes',
   'history',
   'terminal',
   'mokupilot',
+  'fork',
   'archive',
 ] as const
 type CardAction = (typeof CARD_ACTIONS)[number]
@@ -238,6 +248,7 @@ function forCard(board: BoardMenuDeps, key: string, it: Item, el: Element, at: P
       ...ctxOf(board),
       terminal: state.data.terminal !== false,
       mokupilot: !!state.data.mokupilot,
+      fork: !!state.data.fork,
       categories: state.data.categories,
       column: board.column(it),
       category: board.category(it),
@@ -366,7 +377,7 @@ export function keyPoint(r: { left: number; top: number; width: number; height: 
  * decides; the buttons stay in the row, hidden, and keep their state).
  */
 export const SHEET_MORE: readonly (readonly string[])[] = [
-  ['sheet-mokupilot', 'sheet-term', 'sheet-changes', 'sheet-history'],
+  ['sheet-mokupilot', 'sheet-fork', 'sheet-term', 'sheet-changes', 'sheet-history'],
   ['sheet-new'],
   ['sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-archive'],
 ]

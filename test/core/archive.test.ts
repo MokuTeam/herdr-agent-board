@@ -51,7 +51,7 @@ test('what may go to the archive, and why not', () => {
 
 test('a tidy-up takes the sessions asleep in "Idle" long enough, and the archive is searched by every word', () => {
   const now = Date.now()
-  const sleeper = (key: string, days: number, extra: { column?: string } = {}) => ({
+  const sleeper = (key: string, days: number, extra: { column?: string; favorite?: boolean } = {}) => ({
     key,
     session: key,
     agent: 'claude',
@@ -85,6 +85,11 @@ test('a tidy-up takes the sessions asleep in "Idle" long enough, and the archive
   assert.deepEqual(
     tidyList(items, 7, [], now).map(i => i.key),
     ['d'],
+  )
+  // A favorite stays, however long it slept (#64).
+  assert.deepEqual(
+    tidyList([...items, sleeper('g', 9, { favorite: true })], 0, [], now).map(i => i.key),
+    ['a', 'b', 'c', 'd'],
   )
 
   const records = [

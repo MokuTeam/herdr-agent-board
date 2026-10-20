@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, statSync, watch } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { builtinTitle, DEFAULT_CONFIG, normalizeConfig, validColor } from '../core/categories.ts'
+import { isFoldMode } from '../core/fold-mode.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
 import { profileCommand } from '../core/launch/spawn-args.ts'
@@ -54,7 +55,31 @@ export function loadConfig(): Config {
   return normalizeConfig(raw)
 }
 
-/** Change settings in config.json from the web board: { language }. */
+/**
+ * Turn the remote mode (core/remote.ts) on or off in config.json, keeping its other fields. The
+ * running board picks it up as any edit (liveConfig).
+ */
+export function setRemoteOn(on: boolean): EditResult {
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  raw.remote = { ...(isRecord(raw.remote) ? raw.remote : {}), on }
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/**
+ * Turn the board in a phone's browser (core/pwa.ts) on or off in config.json, keeping the other
+ * fields of `remote.pwa`. On turns the remote mode on too; off leaves it as it is.
+ */
+export function setPwaOn(on: boolean): EditResult {
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  const remote = isRecord(raw.remote) ? raw.remote : raw.remote === true ? { on: true } : {}
+  const pwa = isRecord(remote.pwa) ? remote.pwa : {}
+  raw.remote = { ...remote, ...(on ? { on: true } : {}), pwa: { ...pwa, on } }
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/** Change settings in config.json from the web board: { language, foldWaiting }. */
 export function editSettings(body: unknown): EditResult {
   const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
   const language = isRecord(body) ? body.language : undefined
@@ -63,6 +88,12 @@ export function editSettings(body: unknown): EditResult {
     if (l !== 'auto' && !LANGUAGES[l as keyof typeof LANGUAGES])
       return { ok: false, error: t('err.language', { lang: l }) }
     raw.language = l
+  }
+  // How a session asleep in "Waiting" folds on the web board.
+  const fold = isRecord(body) ? body.foldWaiting : undefined
+  if (fold !== undefined) {
+    if (!isFoldMode(fold)) return { ok: false, error: t('err.foldWaiting', { mode: String(fold) }) }
+    raw.foldWaiting = fold
   }
   writeRaw(raw)
   return { ok: true }

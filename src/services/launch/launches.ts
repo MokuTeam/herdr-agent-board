@@ -32,11 +32,13 @@ export type StartResult = { ok: true; id: string } | { ok: false; field: string;
 
 /**
  * A start the server makes, never the page: `resume`, the id of a session to bring back from the
- * archive (services/archive.ts), resumed with no first message; `parent`, the card whose profile it
+ * archive (services/archive.ts), resumed with no first message; `fork`, the id of a session whose
+ * conversation a new one starts with (services/launch/fork.ts); `parent`, the card whose profile it
  * keeps when that card is not on the board (checkRequest).
  */
 export interface StartOptions {
   resume?: string | null
+  fork?: string | null
   parent?: ParentFacts | null
 }
 
@@ -63,7 +65,7 @@ const codeOf = (err: unknown): string | undefined =>
 
 // A card with nothing else on it was only the launch's: the board wrote the lane and the profile
 // it is meant to run in, the hooks the profile it reports.
-const LANE_ONLY = ['key', 'category', 'updatedAt', 'profileWant', 'profile', 'profileDir']
+const LANE_ONLY = ['key', 'category', 'updatedAt', 'profileWant', 'profile', 'profileDir', 'forkOf', 'forkAt']
 const laneOnly = (key: string): boolean => Object.keys(readCard(key) ?? {}).every(k => LANE_ONLY.includes(k))
 
 // What a retry starts from: a worktree or a workspace this launch made already is used, not
@@ -71,6 +73,7 @@ const laneOnly = (key: string): boolean => Object.keys(readCard(key) ?? {}).ever
 const view = (l: Launch): LaunchView => ({
   id: l.id,
   resume: l.resume,
+  fork: l.fork,
   name: l.name,
   cwd: l.cwd,
   category: l.category,
@@ -107,11 +110,11 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
   async function start(
     body: unknown,
     items: Item[] = [],
-    { resume = null, parent = null }: StartOptions = {},
+    { resume = null, fork = null, parent = null }: StartOptions = {},
   ): Promise<StartResult> {
     const categories = new Set([...deps.cfg.categories.map(c => c.id), ...items.map(i => i.category)])
     // Only the board's own spawn-agent types a profile's start command: the others never read it.
-    const launcher = launcherFor(deps.cfg.launch, { resume: !!resume })
+    const launcher = launcherFor(deps.cfg.launch, { resume: !!resume, fork: !!fork })
     const r = await checkRequest(body, {
       categories,
       profiles: deps.profiles(),
@@ -123,8 +126,12 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
     // launch.agent whose arguments pick the session cannot resume one: refused before anything runs.
     if (resume && launcher.kind === 'herdr' && herdrCannotResume(deps.cfg.launch ?? {}, r.launch.profileArgs))
       return { ok: false, field: 'launcher', error: t('archive.err.cannotResume') }
-    // A resumed session keeps its conversation: no first message goes into it.
-    const l = newLaunch(resume ? { ...r.launch, message: '' } : r.launch, items, resume)
+    if (fork && launcher.kind === 'herdr' && herdrCannotResume(deps.cfg.launch ?? {}, r.launch.profileArgs))
+      return { ok: false, field: 'launcher', error: t('fork.err.launcher') }
+    // A resumed session keeps its conversation: no first message goes into it. A fork starts with
+    // a copy of its source's in the source's folder: no worktree.
+    const request = resume ? { ...r.launch, message: '' } : fork ? { ...r.launch, worktree: null } : r.launch
+    const l = newLaunch(request, items, resume, fork)
     launches.set(l.id, l)
     runner
       .run(l)

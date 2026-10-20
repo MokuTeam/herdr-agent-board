@@ -12,6 +12,7 @@ import {
   cardWords,
   compact,
   dismissable,
+  folds,
   inTurn,
   plain,
   questionLine,
@@ -63,6 +64,23 @@ describe('card states', () => {
     expect(compact(item({ key: 'a', sleeping: true, column: 'idle' }), [restart])).toBe(false)
     expect(compact(item({ key: 'a', sleeping: true, column: 'idle' }), [{ ...restart, key: 'b' }])).toBe(true)
     expect(compact(item({ key: 'a', sleeping: true, column: 'idle' }), [{ ...restart, kind: 'call' }])).toBe(true)
+  })
+
+  test('folds: asleep in "Waiting" only, and whole while it restarts (#61)', () => {
+    expect(folds(item({ key: 'a', sleeping: true, column: 'ext' }))).toBe(true)
+    expect(folds(item({ key: 'a', column: 'ext' }))).toBe(false)
+    for (const column of ['work', 'me', 'done', 'idle'] as const)
+      expect(folds(item({ key: 'a', sleeping: true, column }))).toBe(false)
+    const restart = { id: 'r1', key: 'a', kind: 'restart', text: '', next: NOW }
+    expect(folds(item({ key: 'a', sleeping: true, column: 'ext' }), [restart])).toBe(false)
+    expect(folds(item({ key: 'a', sleeping: true, column: 'ext' }), [{ ...restart, key: 'b' }])).toBe(true)
+    // The idle column folds its own way, as before.
+    expect(compact(item({ key: 'a', sleeping: true, column: 'ext' }))).toBe(false)
+  })
+
+  test('a favorite stays whole however long it sleeps: not one line in Idle, not folded in Waiting (#64)', () => {
+    expect(compact(item({ key: 'a', sleeping: true, column: 'idle', favorite: true }))).toBe(false)
+    expect(folds(item({ key: 'a', sleeping: true, column: 'ext', favorite: true }))).toBe(false)
   })
 
   test('a question that needs no answer can be dismissed', () => {

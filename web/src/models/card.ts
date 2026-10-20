@@ -32,12 +32,22 @@ export const inTurn = (it: Pick<Item, 'status'>): boolean => it.status === 'work
 
 /**
  * Asleep in the idle column: a one-line card. A restart on its way keeps the card whole: it says
- * so, and does not fold up while Claude is out (`schedules`: the board's).
+ * so, and does not fold up while Claude is out (`schedules`: the board's). A favorite stays whole.
  */
 export const compact = (
-  it: Pick<Item, 'key' | 'sleeping' | 'column'>,
+  it: Pick<Item, 'key' | 'sleeping' | 'column' | 'favorite'>,
   schedules: readonly ScheduleEntry[] = [],
-): boolean => !!it.sleeping && it.column === 'idle' && !restartOf(schedules, it.key)
+): boolean => !!it.sleeping && it.column === 'idle' && !it.favorite && !restartOf(schedules, it.key)
+
+/**
+ * Asleep in "Waiting": folded down to its name, what it waits for and its time, whole while it is
+ * pointed at or focused (models/fold.ts). A restart on its way keeps it whole, as for `compact`,
+ * and so does being a favorite.
+ */
+export const folds = (
+  it: Pick<Item, 'key' | 'sleeping' | 'column' | 'favorite'>,
+  schedules: readonly ScheduleEntry[] = [],
+): boolean => !!it.sleeping && it.column === 'ext' && !it.favorite && !restartOf(schedules, it.key)
 
 // The server builds it (launches.decorate): its id and state are enough to tell it from nothing.
 const isLaunch = (value: unknown): value is LaunchView =>

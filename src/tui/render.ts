@@ -84,18 +84,20 @@ export function cardLines(state: TuiState, it: Item, w: number, isSel: boolean):
   const tag = tagOf(state, it, Math.floor((room - 1) / 2))
   const nameW = Math.max(1, tag ? room - width(tag.text) - 1 : room)
   const note = noteOf(it)
-  // A sleeping session with nothing pending takes one line: it is there to be found, not read.
-  const compact = it.sleeping && it.column === 'idle'
+  // A sleeping session with nothing pending takes one line: it is there to be found, not read. A
+  // favorite stays whole, a star before its name.
+  const compact = it.sleeping && it.column === 'idle' && !it.favorite
+  const name = it.favorite ? `★ ${it.name}` : it.name
   if (isSel) {
     // The tag keeps its color on the selected card.
     const first = tag
-      ? `${paint(`${icon} ${fit(it.name, nameW)} `, 'inverse', 'bold')}${paint(tag.text, tag.color, 'inverse', 'bold')}${paint(` ${right}`, 'inverse', 'bold')}`
-      : paint(`${icon} ${fit(it.name, nameW)} ${right}`, 'inverse', 'bold')
+      ? `${paint(`${icon} ${fit(name, nameW)} `, 'inverse', 'bold')}${paint(tag.text, tag.color, 'inverse', 'bold')}${paint(` ${right}`, 'inverse', 'bold')}`
+      : paint(`${icon} ${fit(name, nameW)} ${right}`, 'inverse', 'bold')
     return compact ? [first] : [first, paint(`  ${fit(note, w - 2)}`, 'inverse')]
   }
   const dim = it.sleeping ? 'dim' : null
   const shownTag = tag ? `${paint(tag.text, tag.color, dim)} ` : ''
-  const first = `${paint(icon, col.color, dim)} ${paint(fit(it.name, nameW), compact ? null : 'bold', dim)} ${shownTag}${paint(right, state.busy.has(it.key) ? 'yellow' : 'gray')}`
+  const first = `${paint(icon, col.color, dim)} ${paint(fit(name, nameW), compact ? null : 'bold', dim)} ${shownTag}${paint(right, state.busy.has(it.key) ? 'yellow' : 'gray')}`
   return compact ? [first] : [first, paint(`  ${fit(note, w - 2)}`, 'gray')]
 }
 
@@ -161,7 +163,7 @@ export function bodyNarrow(state: TuiState, W: number): Body {
       const tag = tagOf(state, it, room - 1)
       const noteW = tag ? room - width(tag.text) - 1 : room
       const status = it.column === 'ext' ? t('status.ext') : statusText(it.status)
-      const head = `${col.icon} ${fit(it.name, nameW)} ${fit(status, stateW)} ${fit(noteOf(it), noteW)} `
+      const head = `${col.icon} ${fit(it.favorite ? `★ ${it.name}` : it.name, nameW)} ${fit(status, stateW)} ${fit(noteOf(it), noteW)} `
       const dim = it.sleeping && 'dim'
       tops.set(it.key, lines.length)
       if (it.key === state.sel)
@@ -231,6 +233,8 @@ function boardKeys(state: TuiState, W: number): string {
     ['1-9', t('key.filter')],
     ['o', t('key.o')],
     ['r', t('key.r')],
+    // Last but the way out: a narrow terminal keeps the keys it showed before.
+    ['f', t('key.f')],
     ['q', t(state.closesOnQuit ? 'key.close' : 'key.back')],
   ]
   let keys = ''

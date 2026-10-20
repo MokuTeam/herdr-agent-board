@@ -19,8 +19,11 @@ import type { Item, Pin } from '../../core/types.ts'
 import { checkWake, focus, send, sleepSession, wake, wakeAnswers } from '../../services/actions.ts'
 import { answerPermission, answerQuestions } from '../../services/answer.ts'
 import { askArchive, undoMs } from '../../services/archive.ts'
+import { askAside } from '../../services/aside.ts'
 import { collect } from '../../services/board.ts'
 import type { Deps } from '../../services/deps.ts'
+import { forkSession } from '../../services/launch/fork.ts'
+import type { Launches } from '../../services/launch/launches.ts'
 import { renameSession, renameWorkspace } from '../../services/launch/rename.ts'
 import { startCall } from '../../services/mokupilot.ts'
 import { type Body, type Handler, json, type Route } from '../http.ts'
@@ -30,6 +33,8 @@ type Result = { ok: boolean; error?: string; [extra: string]: unknown }
 
 export interface SessionApp {
   deps: Deps
+  /** The board's launches, for a fork of a session (services/launch/fork.ts). */
+  launches?: Pick<Launches, 'start' | 'list'>
   find(key: string): Item | undefined
   /** The board's items, for the sessions on the other end of a message. */
   items(): Item[]
@@ -156,6 +161,8 @@ function card(item: Item, body: Body): Result {
       { by: 'user' },
     )
   if (typeof body.doing === 'string') patch.doing = body.doing.trim()
+  // Kept in sight, or not any more.
+  if (typeof body.favorite === 'boolean') patch.favorite = body.favorite || ''
   // A card dragged to another column stays there until the session works again; dropped
   // back where the board would put it by itself, it is unpinned.
   if (typeof body.column === 'string') {
@@ -239,6 +246,11 @@ async function act(app: SessionApp, item: Item, action: string, body: () => Prom
     // A MokuPilot call whose agent is a fork of this session, only in the board's own profile; no herdr in it.
     case 'mokupilot':
       return startCall(deps.cfg, item, { profiles: deps.profiles() })
+    // A new session in a new tab with a copy of this one's conversation; this one stays as it is.
+    case 'fork':
+      return app.launches
+        ? forkSession(deps, { launches: app.launches, items: app.items }, item, await body())
+        : { ok: false, error: `unknown action ${action}` }
     default:
       return { ok: false, error: `unknown action ${action}` }
   }
@@ -293,10 +305,10 @@ export function sessionRoutes(app: SessionApp): Route[] {
     },
     helperRoute(app),
     // Answering a dialog presses keys in a session, an archive closes a pane, a workspace's new name
-    // is every session's there: like a launch, only from this page.
+    // is every session's there, a fork starts one: like a launch, only from this page.
     {
       method: 'POST',
-      path: /^\/api\/session\/([^/]+)\/(answer|permit|archive|workspace)$/,
+      path: /^\/api\/session\/([^/]+)\/(answer|permit|archive|workspace|fork)$/,
       guard: ['board-header', 'origin', 'fresh-data'],
       handle: action,
     },
@@ -306,6 +318,17 @@ export function sessionRoutes(app: SessionApp): Route[] {
       path: /^\/api\/session\/([^/]+)\/(mokupilot)$/,
       guard: ['board-header', 'origin'],
       handle: action,
+    },
+    // A side question runs Claude once on a copy of the conversation (services/aside.ts): like a
+    // call, only from this page, no herdr; the page going away ends it.
+    {
+      method: 'POST',
+      path: /^\/api\/session\/([^/]+)\/aside$/,
+      guard: ['board-header', 'origin'],
+      handle: withItem(async (item, req, ctx) => {
+        const r = await askAside(app.deps, item, (await ctx.body()).question, { signal: req.signal })
+        return json(r.ok ? 200 : 409, r)
+      }),
     },
     // Actions that go through herdr wait for a board that can reach it; card edits and the rest do not.
     {

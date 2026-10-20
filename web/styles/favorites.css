@@ -1,0 +1,25 @@
+/* Favorites (web/src/components/Card.tsx, sheet/SheetHead.tsx): sessions the user keeps in sight,
+   first in their column and whole however long they idle. A small filled star by the card's name;
+   in the session's head a star button that fills while it is one. */
+.card-top .favorite { display: flex; flex: none; color: var(--orange); }
+.card-top .favorite svg { width: 12px; height: 12px; fill: currentColor; stroke-width: 1.2; stroke-linejoin: round; }
+
+#sheet .sheet-favorite {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--label-3);
+}
+#sheet .sheet-favorite svg { width: 14px; height: 14px; stroke-linejoin: round; transition: fill 150ms ease; }
+#sheet .sheet-favorite:not(:disabled):hover { background: var(--fill-2); color: var(--label-2); }
+#sheet .sheet-favorite[aria-pressed="true"] { color: var(--orange); }
+#sheet .sheet-favorite[aria-pressed="true"] svg { fill: currentColor; }
+#sheet .sheet-favorite:disabled { opacity: 0.5; }
+
+@media (max-width: 760px) {
+  #sheet .sheet-favorite { width: 26px; height: 26px; }
+}

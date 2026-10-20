@@ -40,7 +40,7 @@ export const PAGE = `<div id="page">
   <p class="empty" id="board-empty">No sessions</p>
 </main>
 </div>
-<aside class="sheet" id="sheet"><div class="sheet-inner"><header class="sheet-head" id="sheet-head"><div class="sheet-title"><h2 id="sheet-name" tabindex="0">acme</h2><p class="sheet-meta" id="sheet-meta">Acme · workspace <button type="button" class="sheet-workspace" id="sheet-workspace">Sessions</button></p></div></header><div class="sheet-body" id="sheet-body"><p id="sheet-text">thread</p><span data-fs="file" data-abs="/srv/app/a.ts" tabindex="0" id="sheet-chip">a.ts</span><textarea id="message"></textarea></div></div></aside>
+<aside class="sheet" id="sheet"><div class="sheet-inner"><header class="sheet-head" id="sheet-head"><div class="sheet-title"><h2 id="sheet-name" tabindex="0">acme</h2><p class="sheet-meta" id="sheet-meta">Acme · workspace <button type="button" class="sheet-workspace" id="sheet-workspace">Sessions</button></p><div class="sheet-card" id="sheet-card"><span id="sheet-card-text">Doing</span></div></div></header><div class="sheet-body" id="sheet-body"><p id="sheet-text">thread</p><span data-fs="file" data-abs="/srv/app/a.ts" tabindex="0" id="sheet-chip">a.ts</span><textarea id="message"></textarea></div></div></aside>
 <aside class="sheet" id="cats-sheet"><p id="cats-text">lanes</p></aside>
 <div class="ql"><p id="ql-text">preview</p><a data-fs="dir" data-abs="/srv" href="#" id="ql-chip">srv</a></div>
 <div class="launch"><p id="launch-text">new session</p></div>
@@ -138,11 +138,13 @@ function boardOf(s: BoardScene, log: string[], menu: unknown): BoardMenuDeps & {
     sleep: note('do.sleep'),
     restart: note('do.restart'),
     dismiss: note('do.dismiss'),
+    favorite: note('do.favorite'),
     clear: note('do.clear'),
     changes: note('do.changes'),
     history: note('do.history'),
     terminal: note('do.terminal'),
     mokupilot: note('do.mokupilot'),
+    fork: note('do.fork'),
     archive: note('do.archive'),
     tidy: note('do.tidy'),
     archiveOpen: note('do.archiveOpen'),
@@ -215,12 +217,15 @@ function newWorld(): FakeWorld {
   return world
 }
 
+// The board's own Favorites item (#64) is not upstream's: test/web/menu.test.ts has its tests.
 const ids = (items: readonly MenuEntry[]): unknown =>
-  items.map(it =>
-    it.separator
-      ? '—'
-      : `${it.id}${it.disabled ? ' (gray)' : ''}${it.submenu ? ` [${(ids(it.submenu) as string[]).join(' ')}]` : ''}`,
-  )
+  items
+    .filter(it => it.separator || it.id !== 'favorite')
+    .map(it =>
+      it.separator
+        ? '—'
+        : `${it.id}${it.disabled ? ' (gray)' : ''}${it.submenu ? ` [${(ids(it.submenu) as string[]).join(' ')}]` : ''}`,
+    )
 
 function side(world: FakeWorld, log: string[], recorder: { opened: Opened | null }): MenuSide {
   const page = (id: string) => {

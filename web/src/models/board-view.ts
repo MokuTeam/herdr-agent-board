@@ -28,8 +28,8 @@ export interface ViewOptions {
 }
 
 /**
- * The items on the board: none on its way to the archive, sleeping idle ones only when asked for,
- * those of the profile the switch shows, and those the search matches.
+ * The items on the board: none on its way to the archive, sleeping idle ones only when asked for
+ * (favorites always), those of the profile the switch shows, and those the search matches.
  */
 export function visibleItems(
   items: Item[],
@@ -38,7 +38,7 @@ export function visibleItems(
   const q = query.trim().toLowerCase()
   return items.filter(it => {
     if (archiving?.has(it.key)) return false
-    if (!sleepers && it.sleeping && it.column === 'idle') return false
+    if (!sleepers && it.sleeping && it.column === 'idle' && !it.favorite) return false
     if (!profileShown(profile, it)) return false
     if (!q) return true
     const title = categoryInfo(categories, categoryOf(it)).title

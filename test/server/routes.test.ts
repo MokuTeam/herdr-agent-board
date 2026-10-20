@@ -117,6 +117,12 @@ describe('routes', () => {
       'styles/helpers.css',
       'styles/profiles.css',
       'styles/workspaces.css',
+      'styles/fold.css',
+      'styles/session-head.css',
+      'styles/fork.css',
+      'styles/aside.css',
+      'styles/favorites.css',
+      'styles/cards.css',
       'styles/categories.css',
       'app.js',
     ])
@@ -131,7 +137,19 @@ describe('routes', () => {
     const early = await theme.text()
     expect(early).toContain('board.theme')
     expect(early).not.toMatch(/^\s*(import|export)\b/m)
-    for (const sheet of ['app', 'menu', 'launch', 'questions', 'terminal', 'helpers', 'profiles', 'workspaces'])
+    for (const sheet of [
+      'app',
+      'menu',
+      'launch',
+      'questions',
+      'terminal',
+      'helpers',
+      'profiles',
+      'workspaces',
+      'fold',
+      'favorites',
+      'cards',
+    ])
       expect((await fetch(`${url}/styles/${sheet}.css`)).headers.get('content-type')).toBe('text/css; charset=utf-8')
     expect((await fetch(`${url}/icon.svg`)).headers.get('content-type')).toBe('image/svg+xml')
     // Only top-level files and styles/ of the types it knows: nothing else under web/ (the page's source).
@@ -267,6 +285,16 @@ describe('routes', () => {
       404,
       { error: 'The session is no longer on the board' },
     ])
+  })
+
+  test('how sessions asleep in "Waiting" fold: the board says (push unless config.json says otherwise); Settings take a known way', async () => {
+    const board = (await (await fetch(`${url}/api/board`)).json()) as { foldWaiting?: string }
+    expect(board.foldWaiting).toBe('push')
+    expect(await answer(post('/api/settings', { foldWaiting: 'sideways' }))).toEqual([
+      409,
+      { ok: false, error: 'Unknown way to fold sideways' },
+    ])
+    expect(await answer(post('/api/settings', { foldWaiting: 'push' }))).toEqual([200, { ok: true }])
   })
 
   test('settings and categories: refusals answer 409', async () => {

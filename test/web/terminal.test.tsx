@@ -457,14 +457,16 @@ describe('the window’s parts', () => {
     expect(ids(cardMenu({ ...probe, cwd: '', pane: null }, { ...fresh, terminal: true }))).not.toContain('terminal')
     // The same item as upstream's menu-model.js, for every state of the card: at #58's merge (the
     // card's menu as #56 left it, Archive by Clear), the terminal's item as its merge left it. In
-    // no herdr workspace herdr names: upstream had no Rename workspace (the board's own).
+    // no herdr workspace herdr names: upstream had no Rename workspace (the board's own), nor
+    // Favorites (#64, the board's own too: test/web/menu.test.ts).
+    const upstream = (entries: ReturnType<typeof cardMenu>) => entries.filter(e => e.separator || e.id !== 'favorite')
     const names = ['usable', 'tidy', 'SEP', 'PIN_COLUMNS', 'COLUMN_COLOR', 'cardMenu']
     const was = oldFunction(oldCode('web/menu-model.js', names, {}, 'b2c5afa'), 'cardMenu')
     for (const terminal of [true, false, undefined])
       for (const fields of [{}, { sleeping: true }, { cwd: '' }, { pane: null }, { cwd: '', pane: null }]) {
         const it = { ...probe, ...fields, workspace: null }
         const ctx = { ...fresh, ...(terminal === undefined ? {} : { terminal }) }
-        expect<unknown>(cardMenu(it, ctx)).toEqual(was(it, ctx))
+        expect<unknown>(upstream(cardMenu(it, ctx))).toEqual(was(it, ctx))
       }
   })
 

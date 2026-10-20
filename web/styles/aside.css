@@ -1,0 +1,53 @@
+/* Side questions (web/src/components/sheet/Aside.tsx): the message box's switch, and the answers in
+   cards over the box, risen out of it. Purple, as a fork's: a side question is asked of a copy. */
+.aside-toggle { display: grid; flex: none; place-items: center; width: 30px; height: 30px; margin-left: -6px; border: 0; border-radius: 50%; background: none; color: var(--label-2); transition: transform 100ms ease-out, background 120ms ease, color 120ms ease; }
+.aside-toggle svg { width: 18px; height: 18px; }
+.aside-toggle:hover { background: var(--fill-2); color: var(--purple); }
+.aside-toggle:active { transform: scale(0.92); }
+.aside-toggle.on { background: color-mix(in srgb, var(--purple) 16%, transparent); color: var(--purple); }
+.composer-box.aside { box-shadow: var(--shadow-card), 0 0 0 1.5px color-mix(in srgb, var(--purple) 55%, transparent); }
+.composer-box.aside:focus-within { box-shadow: var(--shadow-card), 0 0 0 3px color-mix(in srgb, var(--purple) 35%, transparent); }
+.composer-box.aside .send { background: var(--purple); }
+
+.aside-deck { display: flex; flex-direction: column; gap: 8px; max-height: min(42vh, 420px); margin: 0 0 10px; padding: 2px; overflow-y: auto; overscroll-behavior: contain; }
+.aside-card {
+  flex: none;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--purple) 6%, var(--surface));
+  box-shadow: var(--shadow-card), inset 0 0 0 0.5px color-mix(in srgb, var(--purple) 22%, transparent);
+  transform-origin: 50% 100%;
+  animation: aside-in 320ms cubic-bezier(0.2, 0.9, 0.25, 1) both;
+}
+@keyframes aside-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } }
+.aside-head { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; }
+.aside-glyph { display: grid; flex: none; place-items: center; width: 18px; height: 18px; color: var(--purple); }
+.aside-glyph svg { width: 16px; height: 16px; }
+.aside-label { flex: none; font-weight: 600; color: var(--purple); }
+.aside-q { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--label-2); }
+.aside-close { display: grid; flex: none; place-items: center; width: 22px; height: 22px; margin: -2px -4px -2px 0; border: 0; border-radius: 50%; background: none; color: var(--label-3); transition: background 120ms ease, color 120ms ease; }
+.aside-close:hover { background: var(--fill); color: var(--label-2); }
+.aside-close svg { width: 13px; height: 13px; stroke-width: 2; }
+.aside-answer { margin-top: 6px; font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
+.aside-meta { margin-top: 8px; font-size: 11px; color: var(--label-3); font-variant-numeric: tabular-nums; }
+.aside-wait {
+  margin: 8px 0 2px;
+  font-size: 13px;
+  color: transparent;
+  background: linear-gradient(90deg, var(--label-3) 0%, var(--label) 50%, var(--label-3) 100%) 0 0 / 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: aside-shimmer 1.6s linear infinite;
+}
+@keyframes aside-shimmer { to { background-position: -200% 0; } }
+.aside-error { display: flex; align-items: baseline; gap: 10px; margin: 8px 0 0; font-size: 13px; color: var(--red); overflow-wrap: anywhere; }
+.aside-again { flex: none; padding: 0; border: 0; background: none; color: var(--accent); font-size: 13px; font-weight: 500; }
+
+@media (prefers-reduced-motion: reduce) {
+  .aside-card { animation: aside-fade 200ms ease both; }
+  .aside-wait { animation: none; color: var(--label-2); background: none; }
+}
+@keyframes aside-fade { from { opacity: 0; } }
+@media (prefers-contrast: more) {
+  .aside-card { background: var(--surface); box-shadow: 0 0 0 1px var(--purple); }
+}

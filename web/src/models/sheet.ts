@@ -70,8 +70,10 @@ export interface WorkspaceFact {
 export interface SheetHeadView {
   pill: StatusPill
   name: string
-  /** Its lane, workspace, last activity and context, in one line. */
-  /** The facts under the name, each kept whole on its line (the line breaks between them, after a separator). */
+  /**
+   * Its workspace, last activity and context under the name (its lane has a pill of its own), each
+   * kept whole on its line (the line breaks between them, after a separator).
+   */
   meta: (string | WorkspaceFact)[]
   /** Says what the context number is, when there is one. */
   metaTitle: string
@@ -88,7 +90,7 @@ export function contextText(it: Pick<Item, 'context' | 'contextPct'>, t: Transla
 
 export function sheetHead(
   it: Item,
-  { missing, categoryTitle, now, t }: { missing: boolean; categoryTitle: string; now: number; t: Translator },
+  { missing, now, t }: { missing: boolean; now: number; t: Translator },
 ): SheetHeadView {
   const pill: StatusPill = missing ? { kind: 'missing' } : it.sleeping ? { kind: 'asleep' } : { kind: 'column' }
   const context = contextText(it, t)
@@ -96,7 +98,6 @@ export function sheetHead(
   // The name alone renames the workspace in the sheet: the words around it are the text's, untouched.
   const [before = '', after = ''] = t('meta.workspace').split('{name}')
   const meta = [
-    categoryTitle,
     it.workspace && { before, name: it.workspace, after },
     active && (active === t('ago.now') ? t('meta.activeNow') : t('meta.active', { ago: active })),
     context,
@@ -117,6 +118,8 @@ export interface HeadButtons {
   restartTitle: string | undefined
   /** "Call in MokuPilot": with MokuPilot here, for a Claude session with an id. */
   mokupilotHidden: boolean
+  /** "Fork": where the board can fork, for a Claude session with an id (its conversation is resumed by it). */
+  forkHidden: boolean
   /** "Archive": for a Claude session with an id (Return resumes it by that id). */
   archiveHidden: boolean
   /** Why it cannot go to the archive now (as in its menu), or what archiving does; none before a session was ever open. */
@@ -132,19 +135,22 @@ export const NO_HEAD_BUTTONS: HeadButtons = {
   restartHidden: true,
   restartTitle: undefined,
   mokupilotHidden: true,
+  forkHidden: true,
   archiveHidden: true,
   archiveTitle: undefined,
 }
 
 /**
  * `mokupilot`: the board says MokuPilot is here for calls with a fork of a session; `schedules`:
- * the board's (a restart of it on its way says so on Restart).
+ * the board's (a restart of it on its way says so on Restart); `fork`: the board can fork a
+ * session into a new tab.
  */
 export function headButtons(
   it: Item,
   t: Translator,
   mokupilot = false,
   schedules: readonly ScheduleEntry[] = [],
+  fork = false,
 ): HeadButtons {
   const pending = restartPending(schedules, it.key) ? restartOf(schedules, it.key) : undefined
   // Gray with the reason while it works (a turn, a dialog, its helpers), as in its menu.
@@ -157,6 +163,7 @@ export function headButtons(
     restartHidden: !!it.sleeping || !it.session || it.agent !== 'claude',
     restartTitle: pending ? `${t('sheet.restartPending')}. ${restartText(pending, t)}` : t('sheet.restartHint'),
     mokupilotHidden: !(mokupilot && it.session && it.agent === 'claude'),
+    forkHidden: !(fork && it.session && it.agent === 'claude'),
     archiveHidden: !it.session || it.agent !== 'claude',
     archiveTitle: why ? t(why) : t('archive.sheetHint'),
   }
@@ -314,4 +321,26 @@ export function askedView(it: Item, t: Translator): AskedView {
     text: later ? t('asked.later') : it.question || t('asked.terminal'),
     dismiss: dismissable(it) ? t(later ? 'asked.seen' : 'asked.noReply') : null,
   }
+}
+
+/** The one line a phone's folded head shows for the card's fields: its label and its text. */
+export interface FoldLine {
+  label: string
+  text: string
+}
+
+/**
+ * What matters most of the card's fields, for a phone's head where they fold (#100): what it waits
+ * for, else what it does, else the sessions it works with, else its reminders. Null with none.
+ */
+export function foldLine(
+  item: Pick<Item, 'wait' | 'doing'>,
+  { sessions, reminders }: { sessions: readonly string[]; reminders: number },
+  t: Translator,
+): FoldLine | null {
+  if (item.wait) return { label: t('row.wait'), text: item.wait }
+  if (item.doing) return { label: t('row.doing'), text: item.doing }
+  if (sessions.length) return { label: t('rel.row'), text: sessions.join(', ') }
+  if (reminders) return { label: t('sched.title'), text: String(reminders) }
+  return null
 }

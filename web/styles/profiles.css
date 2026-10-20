@@ -147,3 +147,65 @@
 .profile-note p { flex: 1; min-width: 0; margin: 0; line-height: 1.4; }
 .profile-note .button { flex: none; }
 .profile-note .button:disabled { opacity: 0.5; }
+
+/* The Phones panel (components/phones/PhonesPanel.tsx): built from the profiles' and categories' pieces. */
+.phones-url {
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+}
+.phones-ask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.phones-ask p {
+  flex: 1 1 100%;
+  margin: 0;
+}
+.phones-head {
+  margin: 16px 0 6px;
+  font-size: 13px;
+}
+.phones-device {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+}
+.phones-off {
+  margin-top: 16px;
+}
+.phones-kind {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--fill);
+  color: var(--label-2);
+  font-size: 11px;
+}
+/* The board in a phone's browser: its address as a QR code, black on white in either theme. */
+.phones-pwa {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.phones-pwa p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.phones-pwa .profile-note {
+  align-self: stretch;
+}
+.phones-pwa-actions {
+  display: flex;
+  gap: 8px;
+}
+.phones-qr {
+  width: 176px;
+  height: 176px;
+  border-radius: 12px;
+  box-shadow: 0 0 0 0.5px var(--separator);
+}

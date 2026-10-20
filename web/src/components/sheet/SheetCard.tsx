@@ -1,99 +1,51 @@
-// The card's own fields, pinned under the sheet's head: its lane and column as chips ("Auto" takes
-// a pin off), what it does and what it waits for — Enter saves a field, Escape puts it back — and
-// its reminders, and the sessions it works with. A field being edited keeps what is typed while
-// the board moves on.
+// The card's own fields, in the sheet's head under its name (its lane and column are the head's
+// pills): what it does and what it waits for, when they say something or are opened to be filled
+// (Enter saves a field, Escape puts it back), its reminders, and the sessions it works with. A
+// field being edited keeps what is typed while the board moves on.
 import { type KeyboardEvent, useState } from 'react'
 import type { Item } from '../../../../src/core/types.ts'
 import { useSessionActions } from '../../hooks/useSessionActions.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { catOf, colOf } from '../../models/board-view.ts'
 import { plain } from '../../models/card.ts'
 import { type FieldEdit, type FieldScene, liveEdit, typing } from '../../models/sheet.ts'
-import { COLUMN_COLORS } from '../../models/toolbar.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { RelationsRow } from '../helpers/RelationsRow.tsx'
 import { type ScheduleActions, ScheduleRow } from './ScheduleRow.tsx'
 
 export interface SheetCardProps {
   item: Item
-  /** The chips, fields and reminder buttons do nothing now. */
+  /** What it does and what it waits for show with nothing in them too, to be filled. */
+  open: boolean
+  /** The fields and reminder buttons do nothing now. */
   disabled: boolean
   schedule?: ScheduleActions | undefined
   /** A linked session's name: that session (they work whatever the board can do). */
   onSession?: ((key: string) => void) | undefined
 }
 
-export function SheetCard({ item, disabled, schedule, onSession }: SheetCardProps) {
+export function SheetCard({ item, open, disabled, schedule, onSession }: SheetCardProps) {
   const t = useT()
-  const { data, ui } = useBoardContext()
-  const actions = useSessionActions()
-  const q = (s: string) => t('q', { s })
-  const cat = catOf(ui.moves, item)
-  const col = colOf(ui.moves, item)
-  // Columns the user can put it in; "Auto" drops the pin and lets the board decide again.
-  const pinned = !!item.pin && col === item.pin
-  const auto = item.auto
   const fromTitle = item.title && item.title !== item.name ? item.title : ''
+  // What it does and what it waits for show when they say something, or to be filled.
   return (
     <div className="group">
-      <div className="row">
-        <span className="row-label">{t('row.category')}</span>
-        <div className="row-value chips" id="cats">
-          {(data?.categories ?? []).map(c => (
-            <button
-              type="button"
-              key={c.id}
-              data-cat={c.id}
-              style={{ '--lane': c.color }}
-              aria-pressed={cat === c.id}
-              disabled={disabled}
-              onClick={() => void actions.moveCard(item.key, { cat: c.id, column: null })}
-            >
-              {c.title}
-            </button>
-          ))}
+      {(open || !!item.doing) && (
+        <div className="row">
+          <span className="row-label">{t('row.doing')}</span>
+          <CardField
+            item={item}
+            field="doing"
+            placeholder={plain(fromTitle) || t('row.doingNone')}
+            disabled={disabled}
+          />
         </div>
-      </div>
-      <div className="row">
-        <span className="row-label">{t('row.status')}</span>
-        <div className="row-value chips" id="cols">
-          {(data?.columns ?? [])
-            .filter(c => c.id !== 'work')
-            .map(c => (
-              <button
-                type="button"
-                key={c.id}
-                data-col={c.id}
-                style={{ '--lane': COLUMN_COLORS[c.id] }}
-                aria-pressed={col === c.id}
-                disabled={disabled}
-                onClick={() => void actions.moveCard(item.key, { cat: null, column: c.id })}
-              >
-                {c.title}
-              </button>
-            ))}
-          {pinned && auto && (
-            <button
-              type="button"
-              className="auto"
-              data-col={auto}
-              title={t('chip.autoTitle', { col: q(t(`col.${auto}`)) })}
-              disabled={disabled}
-              onClick={() => void actions.moveCard(item.key, { cat: null, column: auto })}
-            >
-              {t('chip.auto')}
-            </button>
-          )}
+      )}
+      {(open || !!item.wait) && (
+        <div className="row">
+          <span className="row-label">{t('row.wait')}</span>
+          <CardField item={item} field="wait" placeholder={t('row.waitNone')} disabled={disabled} />
         </div>
-      </div>
-      <div className="row">
-        <span className="row-label">{t('row.doing')}</span>
-        <CardField item={item} field="doing" placeholder={plain(fromTitle) || t('row.doingNone')} disabled={disabled} />
-      </div>
-      <div className="row">
-        <span className="row-label">{t('row.wait')}</span>
-        <CardField item={item} field="wait" placeholder={t('row.waitNone')} disabled={disabled} />
-      </div>
+      )}
       <Reminders item={item} disabled={disabled} schedule={schedule} />
       <RelationsRow item={item} onSession={key => onSession?.(key)} />
     </div>
@@ -123,7 +75,11 @@ interface CardFieldProps {
   disabled: boolean
 }
 
-/** One of the card's own lines: Enter saves it on the card (the toast says so), Escape puts it back. */
+/**
+ * One of the card's own lines: Enter saves it on the card (the toast says so), Escape puts it back.
+ * A long one wraps (three lines, then it scrolls; the tooltip has it whole) and stays one line of
+ * text: a line break pasted in is a space.
+ */
 function CardField({ item, field, placeholder, disabled }: CardFieldProps) {
   const t = useT()
   const { toast } = useBoardContext()
@@ -135,7 +91,7 @@ function CardField({ item, field, placeholder, disabled }: CardFieldProps) {
   const live = liveEdit(edit, scene)
   if (live !== edit) setEdit(live)
 
-  async function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+  async function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     const input = e.currentTarget
     if (e.key === 'Escape') {
       setEdit(null)
@@ -152,14 +108,17 @@ function CardField({ item, field, placeholder, disabled }: CardFieldProps) {
     toast(r.ok ? t(done) : r.error, !r.ok)
   }
 
+  const shown = live?.text ?? scene.saved
   return (
-    <input
+    <textarea
       className="row-value"
       id={field}
-      value={live?.text ?? scene.saved}
+      rows={1}
+      value={shown}
+      title={shown || undefined}
       placeholder={placeholder}
       disabled={disabled}
-      onChange={e => setEdit(typing(edit, scene, e.target.value))}
+      onChange={e => setEdit(typing(edit, scene, e.target.value.replace(/\s*[\r\n]+\s*/g, ' ')))}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       onKeyDown={e => void onKeyDown(e)}

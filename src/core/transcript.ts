@@ -44,6 +44,19 @@ export function cleanPrompt(text: unknown, filters: readonly PromptFilter[] = DE
     .trim()
 }
 
+/** The files a meta line of a prompt names as its images ("[Image: source: <path>]"). */
+function imageSources(content: unknown): string[] {
+  const blocks = Array.isArray(content) ? content.map(b => str(rec(b)?.text)) : [str(content)]
+  return blocks.flatMap(text => [...text.matchAll(/\[Image: source: ([^\]\n]+)\]/g)].map(m => m[1] ?? ''))
+}
+
+/** A message with its images named again: their "[Image #N]" marks out, their paths on lines under it. */
+function withImages(text: string, ids: readonly number[], sources: readonly string[]): string {
+  const named = new Set(ids.slice(0, sources.length))
+  const rest = text.replace(/\[Image #(\d+)\] ?/g, (mark, n) => (named.has(Number(n)) ? '' : mark))
+  return `${rest}\n${sources.join('\n')}`
+}
+
 /** Text the user typed, without the envelopes Claude Code and the hooks wrap around it. */
 export function userText(content: unknown, filters: readonly PromptFilter[] = DEFAULT_PROMPT_FILTERS): string {
   const raw =
@@ -60,6 +73,8 @@ export function userText(content: unknown, filters: readonly PromptFilter[] = DE
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
     .replace(/<(local-command-stdout|local-command-stderr|command-message|command-args)>[\s\S]*?<\/\1>/g, '')
     .replace(/<command-name>([\s\S]*?)<\/command-name>/g, '$1')
+    // Pasted text comes between <pasted_content id="…"> and </pasted_content id="…">: the text only.
+    .replace(/<pasted_content id="[^"]*">\n?|\n?<\/pasted_content id="[^"]*">/g, '')
   return filters.reduce((s, filter) => filter(s), stripped).trim()
 }
 
@@ -338,6 +353,8 @@ export function parseConversation(
   // task id alone is not enough, a monitor or a resumed agent reports again under the same one.
   const shown = new Set<string>()
   const keys = new WeakMap<ConversationTurn, string>() // notice item -> its key
+  // The user's last message, for the images Claude Code names in a meta line of the same prompt.
+  let lastUser: { prompt: string; ids: number[]; item: UserTurn } | null = null
   const notice = (n: Notice, at: number) => {
     const key = noticeKey(n)
     const last = items.at(-1)
@@ -363,6 +380,15 @@ export function parseConversation(
     // Claude Code keeps another session's message, and in a helper's transcript a task reporting
     // back, as a meta line: they are shown all the same.
     const kind = rec(o?.origin)?.kind
+    // Claude Code takes an image's path out of a prompt (an "[Image #16]" in its place) and names the
+    // file in a meta line of the same prompt: the path goes back under the message, as it was sent,
+    // where its preview comes from.
+    if (o?.isMeta && o.turnCompanion && o.type === 'user') {
+      const sources = imageSources(rec(o.message)?.content)
+      if (sources.length && lastUser && lastUser.prompt === str(o.promptId))
+        lastUser.item.text = withImages(lastUser.item.text, lastUser.ids, sources)
+      continue
+    }
     if (
       !o ||
       (o.isSidechain && !sidechain) ||
@@ -430,7 +456,12 @@ export function parseConversation(
       }
       const n = taskNotice(text) ?? boardNotice(text)
       if (n) notice(n, at)
-      else if (text) items.push({ role: 'user', text: clip(text, 3000), at })
+      else if (text) {
+        const item: UserTurn = { role: 'user', text: clip(text, 3000), at }
+        items.push(item)
+        const ids = Array.isArray(o.imagePasteIds) ? o.imagePasteIds.filter(n => typeof n === 'number') : []
+        lastUser = { prompt: str(o.promptId), ids, item }
+      }
     } else if (Array.isArray(content)) {
       for (const raw of content) {
         const b = rec(raw)

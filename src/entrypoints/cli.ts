@@ -6,6 +6,8 @@
 //   board ask <question>     needs the user: "Needs me" until the user's next prompt
 //   board done [text]        task finished: clears doing, wait and ask, keeps the result
 //   board clear              clears doing, wait, ask and result
+//   board favorite [off]     keeps the session in sight: first in its column, whole however long
+//                            it idles or sleeps, left out of a tidy-up (off: back among the others)
 //   board list               every session on the board, one line each
 //   board cats               the known categories
 //   board remind <when> <text>   the board types "[board reminder] <text>" into the session then,
@@ -25,6 +27,12 @@
 //                            is free, for its information, waking it if it sleeps
 //   board archive --session <id|name|pane>   takes a finished session off the board: its pane
 //                            closes, the user can bring it back from the board's archive (services/archive.ts)
+//   board sleep <id|name|pane>...   puts those sessions to sleep at once through herdr-wake, a line
+//                            for each: asleep, or kept up and why (services/sleep.ts); with
+//                            --when-free the busy ones go to sleep once they are free
+//   board fork [--name <Name>] [note]   a fork of this session (or --session's): a new session in
+//                            a new tab with a copy of its conversation, started by the web board as
+//                            its Fork does (services/launch/fork.ts); the note is its first message
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync } from 'node:fs'
@@ -38,7 +46,7 @@ import {
   reportIdentity,
 } from '../adapters/call-receipts.ts'
 import { readCard, writeCard } from '../adapters/cards.ts'
-import { configFile, editCategories, loadConfig } from '../adapters/config-file.ts'
+import { configFile, editCategories, loadConfig, setRemoteOn } from '../adapters/config-file.ts'
 import { type HerdrPane, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { boardFile } from '../adapters/paths.ts'
@@ -49,6 +57,7 @@ import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t } from '../core/lang.ts'
 import { type ProfileSet, profileSet, sessionProfile } from '../core/profiles.ts'
+import { type RemoteView, remoteConfig } from '../core/remote.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
 import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
@@ -57,8 +66,9 @@ import { checkWake, wakeAnswers } from '../services/actions.ts'
 import { askArchive, closeDue, getArchived, profileDoubt } from '../services/archive.ts'
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
+import { type SleepOutcome, sleepMany } from '../services/sleep.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | doctor] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | doctor] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -69,11 +79,22 @@ if (si >= 0) {
   target = args[si + 1]
   args.splice(si, 2)
 }
+// fork: the new session's name.
+let forkName: string | undefined
+const ni = args.indexOf('--name')
+if (ni >= 0) {
+  forkName = args[ni + 1]
+  args.splice(ni, 2)
+}
 // remind, every: wait until the session is free instead of arriving on time, mid-turn if need be.
 const ii = args.indexOf('--idle')
 const idle = ii >= 0
 if (idle) args.splice(ii, 1)
 const mode = (): { idle?: true } => (idle ? { idle: true } : {})
+// sleep: the ones that are busy now go to sleep once they are free, instead of staying up.
+const wi = args.indexOf('--when-free')
+const whenFree = wi >= 0
+if (whenFree) args.splice(wi, 1)
 const modeText = (): string => (idle ? ', when the session is free' : '')
 const [cmd = 'show', ...rest] = args
 const text = rest.join(' ').replace(/\s+/g, ' ').trim()
@@ -235,7 +256,7 @@ function fromNow(ms: number, now: number): string {
 }
 const clip = (s: string, n = 60): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 
-/** How far a restart got, for its line. */
+/** How far a restart got, for its line; a sleep (no steps) how it waits. */
 function restartState(e: ScheduleEntry): string {
   if (e.failed) return `did not happen (${String(e.failed)}), tells the session once it is free`
   if (e.step === 'note') return 'restarted, the note goes in once the session is free'
@@ -254,8 +275,8 @@ function restartState(e: ScheduleEntry): string {
 
 function entryLine(e: ScheduleEntry, now: number, withSession: boolean): string {
   const parts =
-    e.kind === 'restart'
-      ? [e.id, `restart, asked ${stamp(e.created ?? e.next)}`, restartState(e)]
+    e.kind === 'restart' || e.kind === 'sleep'
+      ? [e.id, `${e.kind}, asked ${stamp(e.created ?? e.next)}`, restartState(e)]
       : [
           e.id,
           `${stamp(e.next)} (${fromNow(e.next, now)})`,
@@ -263,7 +284,7 @@ function entryLine(e: ScheduleEntry, now: number, withSession: boolean): string 
           e.idle ? 'when free' : 'on time',
         ]
   if (withSession) parts.push(e.name || e.key)
-  if (e.pendingSince && e.kind !== 'restart')
+  if (e.pendingSince && e.kind !== 'restart' && e.kind !== 'sleep')
     parts.push(`due, waits for the session since ${stamp(Number(e.pendingSince))}`)
   if (e.text) parts.push(clip(e.text, 80))
   return parts.join(' · ')
@@ -277,6 +298,7 @@ function line(key: string, cwd: string): string {
   if (card.wait) parts.push(`waiting: ${card.wait}`)
   if (card.ask) parts.push(`asks the user: ${card.ask}`)
   if (card.result) parts.push(`done: ${card.result}`)
+  if (card.favorite) parts.push('favorite')
   return parts.join(' · ')
 }
 
@@ -314,7 +336,14 @@ async function main(): Promise<void> {
   if (cmd === 'doctor') {
     const { gatherFacts } = await import('../adapters/setup-facts.ts')
     const { checkSetup, report } = await import('../core/setup.ts')
-    return console.log(report(checkSetup(await gatherFacts(cfg), t), t))
+    const checks = checkSetup(await gatherFacts(cfg), t)
+    // The remote mode's own checks, only while it is on: off, Tailscale is never asked.
+    if (remoteConfig(cfg.remote).on) {
+      const { phoneChecks } = await import('../core/pwa.ts')
+      const { phoneFacts } = await import('../services/pwa.ts')
+      checks.push(...phoneChecks(await phoneFacts(cfg, Number(cfg.port) || 12422), t))
+    }
+    return console.log(report(checks, t))
   }
 
   // Neither needs to know which session asks.
@@ -332,7 +361,10 @@ async function main(): Promise<void> {
     )
   }
   if (cmd === 'call-report') return callReport()
+  if (cmd === 'remote') return remote()
   if (cmd === 'archive') return archive()
+  if (cmd === 'sleep') return sleep()
+  if (cmd === 'fork') return fork()
 
   const s = await resolveSession()
   const now = Date.now()
@@ -373,6 +405,12 @@ async function main(): Promise<void> {
     case 'clear':
       writeCard(s.key, { doing: '', wait: '', waitSince: '', ask: '', askSince: '', result: '' })
       break
+    case 'favorite': {
+      const off = rest[0]?.toLowerCase()
+      if (off !== undefined && off !== 'off') throw new Error('usage: board favorite [off]')
+      writeCard(s.key, { favorite: off ? '' : true })
+      break
+    }
     case 'remind': {
       // The time is the first one to five words that read as one; the rest is the text.
       let at: number | null = null
@@ -500,6 +538,30 @@ async function restart(s: Session): Promise<void> {
 }
 
 /**
+ * `board fork [--name <Name>] [note]`: a fork of this session (or --session's), started by the web
+ * board as its Fork button does (services/launch/fork.ts): a new tab with a copy of the
+ * conversation, the session's folder, lane, workspace and profile; the session itself goes on as
+ * it is. Without a web board answering there is no fork: it is the board that starts it.
+ */
+async function fork(): Promise<void> {
+  const s = await resolveSession()
+  if (cfg.web === false) throw new Error('board fork goes through the web board, and config.json turns it off')
+  const res = await fetch(`http://127.0.0.1:${cfg.port ?? 12422}/api/session/${encodeURIComponent(s.key)}/fork`, {
+    method: 'POST',
+    headers: { 'X-Board': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...(forkName && { name: forkName }), ...(text && { message: text }) }),
+    signal: AbortSignal.timeout(20_000),
+  }).catch(() => null)
+  if (!res) throw new Error('the web board does not answer, and board fork goes through it (board doctor)')
+  const body: unknown = await res.json().catch(() => null)
+  if (!isRecord(body) || body.ok !== true)
+    throw new Error(String((isRecord(body) && body.error) || `the web board answered ${res.status}`))
+  console.log(
+    `ok · fork "${String(body.name)}" of ${s.name || s.key.slice(0, 8)} starts in a new tab with a copy of the conversation; its card is on the board`,
+  )
+}
+
+/**
  * `board archive --session <id|name|pane>`: another session off the board, by the same rules as
  * the web board's "Archive" (free: no turn, no dialog, no text in its input box, no background
  * command; its profile one the board can tell, its registry read in that profile), its pane
@@ -556,6 +618,144 @@ async function archive(): Promise<void> {
   console.log(
     `ok · archived ${item.name}: ${state}; the user can bring it back from the board's archive (Archive on the toolbar)${held}`,
   )
+}
+
+// What holds a session up, for `board sleep`'s lines.
+const KEPT: Record<string, string> = {
+  busy: 'working',
+  dialog: 'a dialog waits for an answer',
+  draft: 'unsent text in its input box',
+  tasks: 'background tasks run',
+  gone: 'another session is in its pane now',
+  notClaude: 'not a Claude session, and herdr-wake puts only those to sleep',
+}
+
+/** One session's line: who, then asleep, or why it stays up. */
+function sleepLine(o: SleepOutcome): string {
+  const who = o.name ? `${o.name}${o.pane ? ` (${o.pane})` : ''}` : `"${o.target}"`
+  const held = o.why === 'refused' ? `herdr-wake refused: ${o.detail ?? ''}` : (KEPT[o.why ?? ''] ?? o.detail ?? '')
+  if (o.result === 'asleep') return `${who}: asleep`
+  if (o.result === 'already') return `${who}: asleep already`
+  if (o.result === 'scheduled')
+    return `${who}: ${held}; goes to sleep once it is free${o.again ? ' (asked before)' : ''} · cancel: board unschedule ${o.id}`
+  if (o.why === 'unknown') return `${who}: no such session on the board`
+  if (o.why === 'ambiguous') return `${who}: fits several sessions (${o.detail}); give its session id or pane`
+  return `${who}: kept up, ${held}`
+}
+
+/**
+ * `board sleep <id|name|pane>... [--when-free]`: several sessions put to sleep at once
+ * (services/sleep.ts), for a session that coordinates others; a line for each. Refused at once
+ * without herdr-wake, which puts them to sleep. In English for agents, whatever language the board
+ * speaks (but for what herdr-wake and the profile guard say).
+ */
+async function sleep(): Promise<void> {
+  const targets = [...rest, ...(target ? [target] : [])]
+  if (!targets.length)
+    throw new Error(
+      'usage: board sleep <id|name|pane>... [--when-free]: the sessions to put to sleep (a name with spaces in quotes)',
+    )
+  const up = await wakeAnswers(deps)
+  if (!up.ok) {
+    const what = up.why
+      ? `herdr-wake, which does not answer at ${cfg.wakeUrl} (${up.why})`
+      : "herdr-wake, and wakeUrl in the board's config.json is empty"
+    throw new Error(`putting sessions to sleep needs ${what}; nothing was put to sleep`)
+  }
+  const from = await ownSession()
+  const results = await sleepMany(deps, await collect(deps), targets, {
+    whenFree,
+    by: 'agent',
+    ...(from && { from }),
+  })
+  // A session two targets name counts once.
+  const each = [...new Map(results.map(o => [o.key ?? o.target, o.result])).values()]
+  const count = (result: SleepOutcome['result']): number => each.filter(r => r === result).length
+  const kept = count('kept')
+  const head = [
+    `${count('asleep')} put to sleep`,
+    count('already') && `${count('already')} asleep already`,
+    count('scheduled') && `${count('scheduled')} once free`,
+    kept && `${kept} kept up`,
+  ]
+  // Held for what passes: --when-free would have them sleep once it is over.
+  const hint =
+    !whenFree && results.some(o => o.result === 'kept' && ['busy', 'dialog', 'draft', 'tasks'].includes(o.why ?? ''))
+      ? ' · with --when-free the busy ones go to sleep once they are free'
+      : ''
+  const note = count('scheduled') ? await schedulerNote() : ''
+  console.log([`ok · ${head.filter(Boolean).join(', ')}${hint}${note}`, ...results.map(sleepLine)].join('\n'))
+}
+
+/**
+ * `board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>]`: the remote mode
+ * (core/remote.ts). On and off edit config.json (off takes back `tailscale serve` too); `pwa`
+ * sets serve up for the board in a phone's browser (core/pwa.ts) and shows its address and QR
+ * code; the rest goes through the running board, which holds the requests to pair. Without an
+ * argument: where it listens, who waits, who is paired.
+ */
+async function remote(): Promise<void> {
+  const [op = 'status', id = ''] = rest
+  const usage = 'usage: board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>]'
+  const webPort = Number(cfg.port) || 12422
+  if (op === 'pwa') {
+    const { pwaOff, pwaOn } = await import('../services/pwa.ts')
+    if (id === 'off') {
+      const r = await pwaOff(cfg, webPort)
+      if (!r.ok) throw new Error(r.error)
+      return console.log("ok · the board in a phone's browser is off; tailscale serve no longer forwards to it")
+    }
+    if (id !== 'on') throw new Error(usage)
+    const r = await pwaOn(cfg, webPort)
+    if (!r.ok) throw new Error(r.error)
+    const { qrMatrix, qrText } = await import('../core/qr.ts')
+    console.log(`ok · on a phone with Tailscale, open ${r.url}`)
+    console.log(qrText(qrMatrix(r.url)))
+    return console.log('Approve the phone in Settings → Phones… on the web board, or with `board remote approve <id>`.')
+  }
+  if (op === 'on' || op === 'off') {
+    let r: { ok: true } | { ok: false; error: string }
+    if (op === 'on') r = setRemoteOn(true)
+    else r = await (await import('../services/pwa.ts')).remoteOff(cfg, webPort)
+    if (!r.ok) throw new Error(r.error)
+    return console.log(
+      op === 'on'
+        ? 'ok · remote on: the board listens on its Tailscale address in a few seconds; `board remote` says where'
+        : 'ok · remote off',
+    )
+  }
+  const url = `http://127.0.0.1:${webPort}/api/remote`
+  const call = async (init?: RequestInit): Promise<unknown> => {
+    try {
+      return await (await fetch(url, { ...init, signal: AbortSignal.timeout(3000) })).json()
+    } catch {
+      throw new Error('the board does not run: open it first (herdr plugin action invoke agent-board.open)')
+    }
+  }
+  if (op === 'approve' || op === 'deny' || op === 'revoke') {
+    if (!id) throw new Error(usage)
+    const body = JSON.stringify({ op, id })
+    const r = await call({ method: 'POST', headers: { 'content-type': 'application/json', 'x-board': '1' }, body })
+    if (!isRecord(r) || r.ok !== true) throw new Error(`no request or device ${id}: \`board remote\` lists them`)
+    return console.log(`ok · ${op === 'approve' ? 'approved' : op === 'deny' ? 'denied' : 'revoked'} ${id}`)
+  }
+  if (op !== 'status') throw new Error(usage)
+  const view = (await call()) as Partial<RemoteView>
+  if (!view.on) return console.log('remote off · `board remote on` lets a paired phone use this board over Tailscale')
+  console.log(`remote on · ${view.url ?? `not listening: ${view.error ?? 'starting'}`}`)
+  const pwa = view.pwa
+  if (pwa?.on)
+    console.log(
+      `in a phone's browser · ${pwa.url ?? (pwa.error || (pwa.serve === 'other' ? 'serve forwards the port elsewhere' : 'tailscale serve does not forward to it: board remote pwa on'))}`,
+    )
+  for (const r of view.pending ?? [])
+    console.log(
+      `asks to pair: ${r.id} "${r.name}" from ${r.device} (${[r.login, r.os].filter(Boolean).join(', ')}) · board remote approve ${r.id}`,
+    )
+  for (const d of view.devices ?? [])
+    console.log(
+      `paired: ${d.id} "${d.name}"${d.kind === 'browser' ? ' (browser)' : ''} on ${d.device} (${d.login})${d.seenAt ? `, seen ${stamp(d.seenAt)}` : ''}`,
+    )
 }
 
 /**

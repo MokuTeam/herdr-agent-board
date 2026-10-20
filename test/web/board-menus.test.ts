@@ -195,6 +195,11 @@ describe('which menu opens', () => {
     expect(gone).toEqual(['contextmenu'])
   })
 
+  test('the card’s fields in the head keep the browser’s menu, as they did under it (React only: the old page had them under the head)', async () => {
+    expect(await run(() => reactBoardMenus(BOARD), [right('sheet-card-text')])).toEqual(['contextmenu'])
+    expect((await run(() => reactBoardMenus(BOARD), [right('sheet-meta')]))[0]).toContain('"label":"acme"')
+  })
+
   test('a file chip’s (on a card, in the sheet, even in the quick look): the quick look, open, show, copy, a session there', async () => {
     const log = await compare(BOARD, [
       right('chip'),
@@ -444,6 +449,7 @@ describe('without the launch window', () => {
           write: none,
           wake: none,
           sleep: none,
+          favorite: none,
           restart: none,
           dismiss: none,
           clear: none,
@@ -451,6 +457,7 @@ describe('without the launch window', () => {
           history: none,
           terminal: none,
           mokupilot: none,
+          fork: none,
           archive: none,
           tidy: none,
           archiveOpen: none,
@@ -472,6 +479,19 @@ describe('without the launch window', () => {
     } finally {
       world.uninstall()
     }
+  })
+})
+
+describe('favorites (the React board’s own, #64)', () => {
+  test('a card’s Favorites item goes to the board’s favorite action, from the card and from the sheet’s head', async () => {
+    const log = await run(
+      () => reactBoardMenus(BOARD),
+      [right('card-name'), pick('favorite'), right('sheet-meta'), pick('favorite')],
+    )
+    expect(log.filter(l => l.startsWith('do.favorite'))).toEqual([
+      'do.favorite("s1", #card)',
+      'do.favorite("s1", #sheet-name)',
+    ])
   })
 })
 

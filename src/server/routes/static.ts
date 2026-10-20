@@ -1,6 +1,7 @@
 // The page: top-level files of web/ and its styles/ by name, app.js (and theme.js, the viewer's
 // light or dark before the page paints) from the in-memory bundle of the React page
-// (web-bundle.ts). Last in the table: any GET no other route took.
+// (web-bundle.ts). Last in the table: any GET no other route took. `html` changes the page as it
+// goes out: the board for a phone's browser (core/pwa.ts).
 import { readFile } from 'node:fs/promises'
 import { extname, join } from 'node:path'
 import { json, type Route } from '../http.ts'
@@ -17,7 +18,11 @@ const TYPES: Record<string, string> = {
 const PAGE_CSP =
   "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'"
 
-export function staticRoute(web: string, bundle: { js(): string; early(): string }): Route {
+export function staticRoute(
+  web: string,
+  bundle: { js(): string; early(): string },
+  html?: (page: string) => string,
+): Route {
   return {
     method: 'GET',
     path: /^/,
@@ -26,13 +31,14 @@ export function staticRoute(web: string, bundle: { js(): string; early(): string
       const type = TYPES[extname(name)]
       // One folder deep at most, and only styles/: nothing else under web/ (web/src) is served.
       if (!/^(styles\/)?[\w.-]+$/.test(name) || !type) return json(404, { error: 'not found' })
-      const body =
+      const file =
         name === 'app.js'
           ? bundle.js()
           : name === 'theme.js'
             ? bundle.early()
             : await readFile(join(web, name)).catch(() => null)
-      if (!body) return json(404, { error: 'not found' })
+      if (!file) return json(404, { error: 'not found' })
+      const body = html && name.endsWith('.html') ? html(file.toString()) : file
       return new Response(body, {
         headers: {
           'content-type': type,

@@ -227,6 +227,8 @@ export interface MenuContext {
   canMutate: boolean
   /** The board is reachable: its own edits can be done. */
   canEdit: boolean
+  /** The board in a phone's browser: what acts on the computer's screen is left out (models/remote-page.ts). */
+  remote?: boolean | undefined
 }
 
 /** A lane as the menus show it. */
@@ -246,6 +248,8 @@ export interface CardMenuContext extends MenuContext {
   terminal?: boolean | undefined
   /** MokuPilot is here for calls with a fork of a session. */
   mokupilot?: boolean | undefined
+  /** The board can fork a session into a new tab. */
+  fork?: boolean | undefined
   /** A restart of it is on its way. */
   restarting?: boolean | undefined
   /** Why it cannot go to the archive now, a text key, or '' (src/core/archive.ts archiveBlock). */
@@ -264,7 +268,40 @@ export interface MenuSession {
   auto?: string | undefined
   /** The label of the herdr workspace it is in. */
   workspace?: string | null | undefined
+  favorite?: boolean | undefined
   [extra: string]: unknown
+}
+
+/**
+ * The columns a card can be put in (`col:<id>`), the one it shows in checked; while it is pinned
+ * there, "Auto" too, which hands it back to the board. The card's Status, and the sheet's pill.
+ */
+export function statusChoices(
+  it: Pick<MenuSession, 'pin' | 'auto'>,
+  { t, column }: Pick<CardMenuContext, 't' | 'column'>,
+): MenuEntry[] {
+  const columns: MenuEntry[] = PIN_COLUMNS.map(id => ({
+    id: `col:${id}`,
+    label: t(`col.${id}`),
+    checked: column === id,
+    dot: COLUMN_COLOR[id] ?? '',
+  }))
+  if (it.pin && column === it.pin)
+    columns.push(SEP, { id: `col:${it.auto}`, label: t('chip.auto'), hint: t(`col.${it.auto}`) })
+  return columns
+}
+
+/** The lanes a card can be moved to (`cat:<id>`), its own checked. The card's category, and the sheet's pill. */
+export function categoryChoices({
+  categories,
+  category,
+}: Pick<CardMenuContext, 'categories' | 'category'>): MenuEntry[] {
+  return (categories ?? []).map(c => ({
+    id: `cat:${c.id}`,
+    label: c.title,
+    checked: c.id === category,
+    swatch: c.color,
+  }))
 }
 
 /**
@@ -283,14 +320,6 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
   const turn = it.status === 'working' || it.status === 'blocked'
   const claude = !!it.session
   const dismissable = it.attention === 'ask' || it.attention === 'question' || it.attention === 'later'
-  const pinned = it.pin && ctx.column === it.pin
-  const columns: MenuEntry[] = PIN_COLUMNS.map(id => ({
-    id: `col:${id}`,
-    label: t(`col.${id}`),
-    checked: ctx.column === id,
-    dot: COLUMN_COLOR[id] ?? '',
-  }))
-  if (pinned) columns.push(SEP, { id: `col:${it.auto}`, label: t('chip.auto'), hint: t(`col.${it.auto}`) })
   const copy: (MenuItem | Absent)[] = [
     { id: 'copy:name', label: t('menu.copyName') },
     it.cwd && { id: 'copy:cwd', label: t('menu.copyPath') },
@@ -299,11 +328,13 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
   ]
   return tidy<MenuEntry>([
     { id: 'open', label: t('menu.open'), hint: 'Enter' },
-    { id: 'focus', label: t(it.sleeping ? 'menu.wakeFocus' : 'menu.focus'), ...herdr() },
+    !ctx.remote && { id: 'focus', label: t(it.sleeping ? 'menu.wakeFocus' : 'menu.focus'), ...herdr() },
     // Looking needs no fresh data; typing and opening a shell wait for it in the window itself.
     ctx.terminal && (it.cwd || it.pane) && { id: 'terminal', label: t('term.open'), hint: 'Ctrl+`' },
     // A MokuPilot call with a fork of the session: needs the board, not fresh herdr data.
     ctx.mokupilot && claude && it.agent === 'claude' && { id: 'mokupilot', label: t('mokupilot.call'), ...edit() },
+    // A fork in a new tab starts a session through herdr, as a new one does.
+    ctx.fork && claude && it.agent === 'claude' && { id: 'fork', label: t('fork.menu'), ...herdr() },
     { id: 'write', label: t('menu.write'), ...(it.pane ? {} : { disabled: true, reason: t('err.noPane') }) },
     it.sleeping
       ? { id: 'wake', label: t('sheet.wake'), ...herdr() }
@@ -323,24 +354,19 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
     { id: 'rename', label: t('menu.rename'), hint: 'F2', ...edit() },
     // herdr's name for the workspace it is in, every session's there: it goes through herdr.
     it.workspace && { id: 'renameWorkspace', label: t('menu.renameWorkspace'), ...herdr() },
+    // Kept in sight: first in its column, whole, left out of a tidy-up (the card's, so the board's).
+    { id: 'favorite', label: t(it.favorite ? 'menu.unfavorite' : 'menu.favorite'), ...edit() },
     SEP,
     {
       id: 'category',
       label: t('menu.category'),
       ...edit(),
-      submenu: ctx.canEdit
-        ? (ctx.categories ?? []).map(c => ({
-            id: `cat:${c.id}`,
-            label: c.title,
-            checked: c.id === ctx.category,
-            swatch: c.color,
-          }))
-        : null,
+      submenu: ctx.canEdit ? categoryChoices(ctx) : null,
     },
-    { id: 'status', label: t('menu.status'), ...edit(), submenu: ctx.canEdit ? columns : null },
+    { id: 'status', label: t('menu.status'), ...edit(), submenu: ctx.canEdit ? statusChoices(it, ctx) : null },
     dismissable && { id: 'dismiss', label: t(it.attention === 'later' ? 'asked.seen' : 'card.noReply'), ...edit() },
     SEP,
-    it.cwd && { id: 'reveal', label: t('menu.openFolder'), ...edit() },
+    it.cwd && !ctx.remote && { id: 'reveal', label: t('menu.openFolder'), ...edit() },
     it.cwd && { id: 'changes', label: t('changes.open') },
     claude && { id: 'history', label: t('history.open') },
     SEP,
@@ -466,7 +492,7 @@ export function launchMenu(l: MenuLaunch, ctx: MenuContext): MenuEntry[] {
     l.state === 'trust' && { id: 'trust', label: t('launch.trust.go'), ...herdr },
     l.state === 'trust' && { id: 'closeTab', label: t('launch.trust.close'), ...herdr },
     l.state === 'trust' && SEP,
-    l.pane && { id: 'focus', label: t('menu.focus'), ...herdr },
+    l.pane && !ctx.remote && { id: 'focus', label: t('menu.focus'), ...herdr },
     // A launch that failed only at its first message has a running session: a retry would start a second one.
     l.state === 'failed' && l.kind !== 'message' && { id: 'retry', label: t('launch.retry') },
     l.state === 'failed' && { id: 'copyError', label: t('launch.copyError') },
@@ -483,8 +509,8 @@ export function chipMenu(chip: { dir: boolean }, ctx: MenuContext): MenuEntry[] 
   const edit = ctx.canEdit ? {} : { disabled: true, reason: t('live.off') }
   return tidy<MenuEntry>([
     { id: 'look', label: t('menu.quickLook'), hint: 'Enter' },
-    { id: 'open', label: t('ql.open'), ...edit },
-    { id: 'reveal', label: t('ql.reveal'), ...edit },
+    !ctx.remote && { id: 'open', label: t('ql.open'), ...edit },
+    !ctx.remote && { id: 'reveal', label: t('ql.reveal'), ...edit },
     SEP,
     { id: 'copyPath', label: t('ql.copy') },
     chip.dir && {

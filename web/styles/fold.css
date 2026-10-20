@@ -1,0 +1,13 @@
+/* A card asleep in "Waiting" (web/src/components/Card.tsx, hooks/useFold.ts): folded down to its
+   name, what it waits for and its time. Open (data-fold), the cards below move apart for it
+   ("push"), or it lies lifted over them and they stay where they are ("over"); its height and the
+   fade of the lines it hid are the hook's (inline). */
+.card.folds { padding: 9px 12px 10px; }
+.card.folds:not([data-fold]) > .fold-more { display: none; }
+.card.folds[data-fold] { overflow: hidden; }
+.card.folds[data-fold="over"] { z-index: 3; box-shadow: var(--shadow-lift); }
+.card.folds[data-fold="over"]:focus-visible, .card.folds[data-fold="over"].selected { box-shadow: var(--shadow-lift), 0 0 0 2px var(--accent); }
+
+@media (prefers-contrast: more) {
+  .card.folds[data-fold="over"] { box-shadow: 0 0 0 1px var(--label-3), var(--shadow-lift); }
+}

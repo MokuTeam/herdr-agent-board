@@ -118,6 +118,8 @@ const categories = [
 const real = (items: MenuEntry[] | null | undefined): MenuItem[] =>
   (items ?? []).filter((i): i is MenuItem => !isSeparator(i))
 const ids = (items: MenuEntry[] | null | undefined) => real(items).map(i => i.id)
+/** A card's menu without the board's own Favorites item (#64), which upstream's has not. */
+const upstream = (items: MenuEntry[]) => items.filter(i => isSeparator(i) || i.id !== 'favorite')
 const find = (items: MenuEntry[] | null | undefined, id: string): MenuItem | undefined =>
   real(items).find(i => i.id === id)
 const idle = {
@@ -132,6 +134,22 @@ const idle = {
   category: 'acme',
 }
 const fresh = { t, canMutate: true, canEdit: true, categories, column: 'idle', category: 'acme' }
+
+test('a card’s menu forks a Claude session where the board can: after the call, gray without fresh herdr data', () => {
+  const claude = { ...idle, agent: 'claude' }
+  const m = cardMenu(claude, { ...fresh, fork: true, mokupilot: true })
+  assert.deepEqual(ids(m).slice(0, 5), ['open', 'focus', 'mokupilot', 'fork', 'write'])
+  assert.equal(find(m, 'fork')?.label, 'Fork…')
+  assert.equal(find(cardMenu(claude, { ...fresh, fork: true, t: translator('ru') }), 'fork')?.label, 'Форк…')
+  // It starts a session through herdr, as a new one does.
+  const stale = find(cardMenu(claude, { ...fresh, fork: true, canMutate: false }), 'fork')
+  assert.equal(stale?.disabled, true)
+  assert.match(stale?.reason ?? '', /fresh data from herdr/)
+  // Not where the board cannot fork, nor for a pane with no Claude session, nor for another agent.
+  assert.equal(find(cardMenu(claude, fresh), 'fork'), undefined)
+  assert.equal(find(cardMenu({ ...claude, session: null }, { ...fresh, fork: true }), 'fork'), undefined)
+  assert.equal(find(cardMenu({ ...claude, agent: 'codex' }, { ...fresh, fork: true }), 'fork'), undefined)
+})
 
 test('a card’s menu offers a MokuPilot call for a Claude session when MokuPilot is here, also with stale herdr data', () => {
   const claude = { ...idle, agent: 'claude' }
@@ -161,6 +179,7 @@ test('a card’s menu follows its state', () => {
     'write',
     'sleep',
     'rename',
+    'favorite',
     'category',
     'status',
     'reveal',
@@ -214,10 +233,21 @@ test('Restart sits by Put to sleep for a Claude session: also mid-turn, gray whi
   assert.equal(find(cardMenu({ ...claude, session: null }, fresh), 'restart'), undefined)
 })
 
+test('a card goes into the favorites and out of them (#64): a card edit, so it needs the board, not herdr', () => {
+  assert.equal(find(cardMenu(idle, fresh), 'favorite')?.label, 'Add to Favorites')
+  assert.equal(find(cardMenu({ ...idle, favorite: true }, fresh), 'favorite')?.label, 'Remove from Favorites')
+  assert.equal(find(cardMenu(idle, { ...fresh, t: translator('ru') }), 'favorite')?.label, 'В избранное')
+  assert.equal(find(cardMenu(idle, { ...fresh, canMutate: false }), 'favorite')?.disabled, undefined)
+  assert.equal(find(cardMenu(idle, { ...fresh, canMutate: false, canEdit: false }), 'favorite')?.disabled, true)
+  // Any card has it, asleep or not, one of another agent's too.
+  for (const fields of [{ sleeping: true, status: 'sleeping' }, { agent: 'pi' }, { session: null }])
+    assert.ok(find(cardMenu({ ...idle, ...fields }, fresh), 'favorite'))
+})
+
 test('a card in a herdr workspace renames the workspace, by Rename; it goes through herdr', () => {
   const inWorkspace = { ...idle, workspace: 'Sessions' }
   const m = cardMenu(inWorkspace, fresh)
-  assert.deepEqual(ids(m).slice(3, 7), ['sleep', 'rename', 'renameWorkspace', 'category'])
+  assert.deepEqual(ids(m).slice(3, 8), ['sleep', 'rename', 'renameWorkspace', 'favorite', 'category'])
   assert.equal(find(m, 'renameWorkspace')?.label, 'Rename workspace…')
   assert.equal(
     find(cardMenu(inWorkspace, { ...fresh, t: translator('ru') }), 'renameWorkspace')?.label,
@@ -262,7 +292,7 @@ test('a card’s menu is upstream’s cardMenu at #58 (Restart, Archive), case b
           ]) {
             const it = { ...idle, ...fields }
             const c = { ...fresh, ...extra, t: tr, canMutate, canEdit }
-            assert.deepEqual(cardMenu(it, c), was(it, c))
+            assert.deepEqual(upstream(cardMenu(it, c)), was(it, c))
           }
 })
 
@@ -361,7 +391,7 @@ test('the model gives what the old page’s menu-model.js gave, case by case', (
           for (const ctx of [fresh, { ...fresh, categories: [] }, { ...fresh, column: 'done', category: 'other' }]) {
             const it = { ...idle, ...fields }
             const c = { ...ctx, ...base }
-            assert.deepEqual(cardMenu(it, c), was('cardMenu', it, c))
+            assert.deepEqual(upstream(cardMenu(it, c)), was('cardMenu', it, c))
           }
         for (const filter of ['all', 'acme', 'other'])
           for (const sleepers of [true, false]) {

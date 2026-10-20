@@ -1,12 +1,25 @@
 // A session's card: its name, age and alarm, what it works on, said or asks, its helpers at work
 // and the sessions it works with, and its buttons. A session asleep in the idle column is one line.
 // Motion and dragging are the board's (hooks/useFlip.ts, hooks/useCardDrag.ts); the card only says
-// what it is.
-import type { FocusEvent, KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from 'react'
+// what it is. One asleep in "Waiting" folds down to its name, what it waits for and its time, and
+// unfolds in place while pointed at, as the board's Settings say (hooks/useFold.ts, styles/fold.css).
+import { type FocusEvent, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, useRef } from 'react'
+import { foldModeOf } from '../../../src/core/fold-mode.ts'
 import type { Item, LaunchView, ToolCall } from '../../../src/core/types.ts'
+import { useFold } from '../hooks/useFold.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { unseenResult } from '../models/attention.ts'
-import { askLine, cardAge, cardWords, compact, dismissable, inTurn, launchOf, questionLine } from '../models/card.ts'
+import {
+  askLine,
+  cardAge,
+  cardWords,
+  compact,
+  dismissable,
+  folds,
+  inTurn,
+  launchOf,
+  questionLine,
+} from '../models/card.ts'
 import { pendingQuestions } from '../models/question-model.ts'
 import { restartOf, restartView } from '../models/restart.ts'
 import { COLUMN_COLORS } from '../models/toolbar.ts'
@@ -22,6 +35,7 @@ import {
   PinGlyph,
   RestartGlyph,
   SpinGlyph,
+  StarGlyph,
   WriteGlyph,
 } from './icons.tsx'
 import { ProfileTag } from './ProfileTag.tsx'
@@ -57,10 +71,15 @@ export function Card(props: CardProps) {
   const { item, selected, busy, placeholder, launch, onPointerDown, onClick, onKeyDown, onRelated } = props
   const { ui, data } = useBoardContext()
   const launchOnly = !!item.launchOnly
+  const foldMode = foldModeOf(data?.foldWaiting)
+  const folding = !launchOnly && foldMode !== 'off' && folds(item, data?.schedules)
+  const ref = useRef<HTMLElement>(null)
+  const fold = useFold(ref, folding, foldMode === 'over')
   const className = classNames(
     'card',
     launchOnly && 'launch-card',
     compact(item, data?.schedules) && 'compact',
+    folding && 'folds',
     unseenResult(item, ui.viewed) && 'unseen',
     selected && 'selected',
     busy && 'busy',
@@ -69,33 +88,50 @@ export function Card(props: CardProps) {
   )
   return (
     <article
+      ref={ref}
       className={className}
       data-key={item.key}
       // biome-ignore lint/a11y/noNoninteractiveTabindex: a card is focusable and opens with Enter, as before
       tabIndex={0}
       data-col={item.column}
       data-busy={busy}
-      onPointerDown={onPointerDown}
-      onClick={onClick}
+      onPointerDown={(e: PointerEvent<HTMLElement>) => {
+        fold.onPointerDown(e)
+        onPointerDown(e)
+      }}
+      onClick={(e: MouseEvent<HTMLElement>) => {
+        if (!fold.tookClick()) onClick(e)
+      }}
       onKeyDown={onKeyDown}
-      onPointerEnter={(e: PointerEvent<HTMLElement>) => e.pointerType === 'mouse' && onRelated?.(item.key)}
-      onPointerLeave={() => onRelated?.(null)}
-      onFocus={() => onRelated?.(item.key)}
-      onBlur={(e: FocusEvent<HTMLElement>) =>
-        !(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) && onRelated?.(null)
-      }
+      onPointerEnter={(e: PointerEvent<HTMLElement>) => {
+        fold.onPointerEnter(e)
+        if (e.pointerType === 'mouse') onRelated?.(item.key)
+      }}
+      onPointerLeave={(e: PointerEvent<HTMLElement>) => {
+        fold.onPointerLeave(e)
+        onRelated?.(null)
+      }}
+      onFocus={(e: FocusEvent<HTMLElement>) => {
+        fold.onFocus(e)
+        onRelated?.(item.key)
+      }}
+      onBlur={(e: FocusEvent<HTMLElement>) => {
+        if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return
+        fold.onBlur()
+        onRelated?.(null)
+      }}
     >
-      {launchOnly ? launch?.card(item) : <CardContent item={item} launch={launch} />}
+      {launchOnly ? launch?.card(item) : <CardContent item={item} launch={launch} folding={folding} />}
     </article>
   )
 }
 
-function CardContent({ item, launch }: { item: Item; launch: LaunchSlots | undefined }) {
+function CardContent({ item, launch, folding }: { item: Item; launch: LaunchSlots | undefined; folding: boolean }) {
   const { data } = useBoardContext()
   return (
     <>
       <CardTop item={item} />
-      {!compact(item, data?.schedules) && <CardBody item={item} launch={launch} />}
+      {!compact(item, data?.schedules) && <CardBody item={item} launch={launch} folding={folding} />}
       <CardActions item={item} />
     </>
   )
@@ -116,6 +152,12 @@ function CardTop({ item }: { item: Item }) {
       <span className="name" title={renamed ? t('rename.was', { name: item.autoName }) : undefined}>
         {item.name}
       </span>
+      {/* A favorite: a quiet star by the name. */}
+      {item.favorite && (
+        <span className="favorite" title={t('card.favorite')}>
+          <StarGlyph />
+        </span>
+      )}
       {/* Its profile, while the board shows more than one, or one hidden or not known. */}
       <ProfileTag item={item} />
       {/* A result you have not opened yet: a dot by the name. */}
@@ -133,27 +175,51 @@ function CardTop({ item }: { item: Item }) {
   )
 }
 
-function CardBody({ item, launch }: { item: Item; launch: LaunchSlots | undefined }) {
+/** Folded, what it waits for comes first and the rest under it, shown while it is open. */
+function CardBody({ item, launch, folding }: { item: Item; launch: LaunchSlots | undefined; folding: boolean }) {
   const t = useT()
+  const words = cardWords(item)
+  const started = launchOf(item)
+  const what = words.own ? (
+    <div className="what">{words.own}</div>
+  ) : words.asked ? (
+    <div className="what">
+      <span className="you">{t('card.you')}</span> {words.asked}
+    </div>
+  ) : null
+  const wait = item.column === 'ext' && (
+    <div className="chip">
+      <ClockGlyph />
+      <span>{item.wait || t('note.parked')}</span>
+    </div>
+  )
+  if (folding)
+    return (
+      <>
+        {wait}
+        <div className="fold-more">
+          {what}
+          <CardRest item={item} launch={launch} />
+        </div>
+      </>
+    )
+  return (
+    <>
+      {what}
+      {/* A launch held at the trust dialog says what it asks itself (its note), with its buttons. */}
+      {item.column === 'me' && started?.state !== 'trust' && <CardAsk item={item} />}
+      {wait}
+      <CardRest item={item} launch={launch} />
+    </>
+  )
+}
+
+/** What it said last, what it runs, a restart, its helpers and partners, how its start goes. */
+function CardRest({ item, launch }: { item: Item; launch: LaunchSlots | undefined }) {
   const words = cardWords(item)
   const started = launchOf(item)
   return (
     <>
-      {words.own ? (
-        <div className="what">{words.own}</div>
-      ) : words.asked ? (
-        <div className="what">
-          <span className="you">{t('card.you')}</span> {words.asked}
-        </div>
-      ) : null}
-      {/* A launch held at the trust dialog says what it asks itself (its note), with its buttons. */}
-      {item.column === 'me' && started?.state !== 'trust' && <CardAsk item={item} />}
-      {item.column === 'ext' && (
-        <div className="chip">
-          <ClockGlyph />
-          <span>{item.wait || t('note.parked')}</span>
-        </div>
-      )}
       {words.said && <div className="said">{words.said}</div>}
       {item.column === 'work' && <Now tool={item.tool} />}
       <RestartLine item={item} />

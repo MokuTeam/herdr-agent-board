@@ -26,6 +26,9 @@ describe('keymap', () => {
     expect(ACTION.get('\x03')).toBe('exit')
     expect(ACTION.get('\x1b')).toBe('quit')
     expect(ACTION.get('?')).toBeUndefined()
+    // A favorite or not (#64): f, а on a Russian layout.
+    expect(ACTION.get('f')).toBe('favorite')
+    expect(ACTION.get('а')).toBe('favorite')
   })
 
   test('no key belongs to two actions', () => {

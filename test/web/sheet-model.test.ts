@@ -11,6 +11,7 @@ import {
   detailOnBoard,
   detailStamp,
   draftKey,
+  foldLine,
   headButtons,
   liveEdit,
   NO_HEAD_BUTTONS,
@@ -84,36 +85,27 @@ describe('the head', () => {
     expect(contextText({ context: null }, t)).toBe('')
     expect(contextText({ contextPct: 10 }, t)).toBe('context 10% · undefined')
   })
-  test('pill, name and the line under it', () => {
+  test('pill, name and the line under it (the lane has a pill of its own)', () => {
     const a = item({ key: 'a', name: 'Alpha', workspace: 'web', activity: NOW - 5 * 60_000, context: 2000 })
-    expect(sheetHead(a, { missing: false, categoryTitle: 'Project', now: NOW, t })).toEqual({
+    expect(sheetHead(a, { missing: false, now: NOW, t })).toEqual({
       pill: { kind: 'column' },
       name: 'Alpha',
       // The workspace's name apart from the words around it: the name alone renames the workspace.
-      meta: ['Project', { before: 'workspace ', name: 'web', after: '' }, 'active 5 min ago', 'context 2k'],
+      meta: [{ before: 'workspace ', name: 'web', after: '' }, 'active 5 min ago', 'context 2k'],
       metaTitle: 'Tokens its last request carried',
     })
-    expect(sheetHead(a, { missing: false, categoryTitle: '', now: NOW, t: translator('ru') }).meta[0]).toEqual({
+    expect(sheetHead(a, { missing: false, now: NOW, t: translator('ru') }).meta[0]).toEqual({
       before: 'workspace ',
       name: 'web',
       after: '',
     })
     const now = sheetHead(
       { ...a, activity: NOW - 10_000, workspace: null, context: null },
-      {
-        missing: false,
-        categoryTitle: 'Project',
-        now: NOW,
-        t,
-      },
+      { missing: false, now: NOW, t },
     )
-    expect([now.meta, now.metaTitle]).toEqual([['Project', 'active now'], ''])
-    expect(sheetHead({ ...a, sleeping: true }, { missing: false, categoryTitle: '', now: NOW, t }).pill.kind).toBe(
-      'asleep',
-    )
-    expect(sheetHead({ ...a, sleeping: true }, { missing: true, categoryTitle: '', now: NOW, t }).pill.kind).toBe(
-      'missing',
-    )
+    expect([now.meta, now.metaTitle]).toEqual([['active now'], ''])
+    expect(sheetHead({ ...a, sleeping: true }, { missing: false, now: NOW, t }).pill.kind).toBe('asleep')
+    expect(sheetHead({ ...a, sleeping: true }, { missing: true, now: NOW, t }).pill.kind).toBe('missing')
   })
   test('History needs a Claude project, Wake a sleeper, sleep an awake Claude session; the hint says when it cannot', () => {
     const a = item({ key: 'a', status: 'working' })
@@ -125,6 +117,7 @@ describe('the head', () => {
       restartHidden: true,
       restartTitle: t('sheet.restartHint'),
       mokupilotHidden: true,
+      forkHidden: true,
       archiveHidden: true,
       archiveTitle: t('archive.why.notClaude'),
     })
@@ -136,6 +129,7 @@ describe('the head', () => {
       restartHidden: true,
       restartTitle: t('sheet.restartHint'),
       mokupilotHidden: true,
+      forkHidden: true,
       archiveHidden: true,
       archiveTitle: t('archive.why.notClaude'),
     })
@@ -144,6 +138,11 @@ describe('the head', () => {
     expect(headButtons({ ...a, agent: 'codex' }, t, true).mokupilotHidden).toBe(true)
     expect(headButtons({ ...a, agent: 'claude', session: null }, t, true).mokupilotHidden).toBe(true)
     expect(headButtons({ ...a, agent: 'claude' }, t, false).mokupilotHidden).toBe(true)
+    // A fork: where the board can fork, for a Claude session with an id, MokuPilot or not.
+    expect(headButtons({ ...a, agent: 'claude' }, t, false, [], true).forkHidden).toBe(false)
+    expect(headButtons({ ...a, agent: 'claude' }, t, true, [], false).forkHidden).toBe(true)
+    expect(headButtons({ ...a, agent: 'codex' }, t, false, [], true).forkHidden).toBe(true)
+    expect(headButtons({ ...a, agent: 'claude', session: null }, t, false, [], true).forkHidden).toBe(true)
     expect(headButtons({ ...a, sleeping: true }, t).wakeHidden).toBe(false)
     expect(headButtons({ ...a, sleeping: true }, t).sleepHidden).toBe(true)
     expect(NO_HEAD_BUTTONS).toEqual({
@@ -154,6 +153,7 @@ describe('the head', () => {
       restartHidden: true,
       restartTitle: undefined,
       mokupilotHidden: true,
+      forkHidden: true,
       archiveHidden: true,
       archiveTitle: undefined,
     })
@@ -324,4 +324,20 @@ describe('a card field being edited', () => {
     expect(liveEdit(edit, at(true, '', 'b'))).toBe(null)
     expect(typing(edit, at(true, '', 'b'), 'x')).toEqual({ text: 'x', from: '', session: 'b' })
   })
+})
+
+test("a phone's folded head: what it waits for, else what it does, else its sessions, else its reminders (#100)", () => {
+  const t = translator('ru')
+  const none = { sessions: [], reminders: 0 }
+  expect(foldLine({ wait: 'ответа Bruce', doing: 'утро' }, none, t)).toEqual({ label: 'Ждёт', text: 'ответа Bruce' })
+  expect(foldLine({ doing: 'утро: обновляю доску' }, none, t)).toEqual({
+    label: 'Делает',
+    text: 'утро: обновляю доску',
+  })
+  expect(foldLine({}, { sessions: ['board-pwa', 'Billing-master'], reminders: 1 }, t)).toEqual({
+    label: 'Сессии',
+    text: 'board-pwa, Billing-master',
+  })
+  expect(foldLine({}, { sessions: [], reminders: 2 }, t)).toEqual({ label: 'Расписание', text: '2' })
+  expect(foldLine({}, none, t)).toBeNull()
 })

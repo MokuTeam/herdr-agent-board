@@ -1,6 +1,6 @@
 ---
 name: herdr-agents
-description: "How a Claude session that runs inside herdr (HERDR_PANE_ID is set) works with the rest of the setup: start another session, message or wake one, schedule work for later instead of CronCreate or ScheduleWakeup, restart itself (an MCP server dropped, settings, hooks, skills or MCP config changed, the session acts up), run a server or an interactive login in a pane of its own, find its own pane, keep its board card current. For the raw herdr CLI reference run `herdr --skill`."
+description: "How a Claude session that runs inside herdr (HERDR_PANE_ID is set) works with the rest of the setup: start another session, message or wake one, put the sessions it coordinates to sleep in one call, schedule work for later instead of CronCreate or ScheduleWakeup, restart itself (an MCP server dropped, settings, hooks, skills or MCP config changed, the session acts up), run a server or an interactive login in a pane of its own, find its own pane, keep its board card current. For the raw herdr CLI reference run `herdr --skill`."
 ---
 
 <!-- agent-board: installed by the agent-board plugin's install action; it replaces this file on updates. -->
@@ -43,7 +43,23 @@ Use `ListAgents` to see the sessions and `SendMessage` to reach one by name. A r
 
 - A session that sits idle for an hour is put to sleep (herdr-wake, if installed): its pane stays, marked 💤. It is still the same session. `ListAgents` lists the sleeping ones too, and a `SendMessage` to one wakes it first (10 to 30 seconds), then delivers. Do not reroute its work or call it gone.
 - Waking without a message: `curl -s -X POST http://127.0.0.1:12421/wake -d '{"target":"<name>"}'` (herdr-wake's API; `GET /sleeping` lists who sleeps).
+- Putting sessions to sleep that you coordinate: see the next section, one call for all of them.
 - Do not type into another session's pane (`herdr pane send-text`, `send-keys`, `agent prompt`) unless the user asked for it: it lands in whatever that session or the user is typing.
+
+## Put the sessions you are done with to sleep
+
+A session that coordinates others (it starts them, polls them, collects their results) puts the ones it is done with to sleep in one call, not with a herdr-wake `/sleep` for each:
+
+```bash
+board sleep Report-north Report-south "Name with spaces"
+board sleep --when-free Report-north Report-south
+```
+
+- It takes session names, panes or session ids. Every one that is free now goes to sleep at once, and you get a line for each: `asleep`, `asleep already`, or `kept up, <why>` (working, a dialog waits for an answer, unsent text in its input box, background tasks run, herdr-wake refused, not a Claude session, no such session on the board, or a name several sessions go by: then give its session id or pane).
+- `--when-free`: the ones that are busy now go to sleep once they are free, instead of staying up. Use it for a session you just sent its last message, which is still working on it. Its line gives the board entry's id; `board unschedule <id>` cancels it.
+- Only sessions you started, or that the user asked you to put to sleep. A session kept up by unsent text or a dialog is waiting on the user: leave it, or tell the user.
+- A sleeping session is not gone: `SendMessage` or a board reminder wakes it again.
+- Without herdr-wake, `board sleep` says so and puts nothing to sleep.
 
 ## Do something later
 

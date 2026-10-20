@@ -18,6 +18,10 @@ export interface RunOptions {
   timeout?: number
   env?: Record<string, string | undefined>
   cwd?: string
+  /** runTree: written to the program's stdin, which is then closed. */
+  input?: string
+  /** runTree: ends the program and everything it started, as the timeout does. */
+  signal?: AbortSignal | undefined
 }
 
 const OUTPUT_LIMIT = 4 << 20
@@ -28,7 +32,11 @@ const OUTPUT_LIMIT = 4 << 20
  * "timed out"). It settles when the launcher exits, not when every pipe closed, so a descendant
  * that kept stdout open cannot hold the launch at "starting".
  */
-export function runTree(file: string, args: string[], { timeout, env, cwd }: RunOptions = {}): Promise<RunResult> {
+export function runTree(
+  file: string,
+  args: string[],
+  { timeout, env, cwd, input, signal }: RunOptions = {},
+): Promise<RunResult> {
   return new Promise(res => {
     let stdout = ''
     let stderr = ''
@@ -58,14 +66,23 @@ export function runTree(file: string, args: string[], { timeout, env, cwd }: Run
       if (settled) return
       settled = true
       clearTimeout(timer)
+      signal?.removeEventListener('abort', end)
       res({ code: error ? (error.code ?? 1) : code, killed, error, stdout, stderr })
     }
-    const timer = setTimeout(() => {
+    const end = (): void => {
+      if (killed || settled) return
       killed = true
       killTree(child)
       // Whatever the kill managed, the card does not wait for it long.
       setTimeout(finish, 5000).unref?.()
-    }, timeout)
+    }
+    const timer = setTimeout(end, timeout)
+    if (signal?.aborted) end()
+    else signal?.addEventListener('abort', end, { once: true })
+    if (input !== undefined) {
+      child.stdin?.on('error', () => {})
+      child.stdin?.end(input)
+    }
     child.on('error', err => {
       error = err
       finish()

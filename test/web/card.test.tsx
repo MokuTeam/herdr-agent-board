@@ -149,6 +149,59 @@ describe('card markup parity', () => {
     same({ items: [d] }, 'd')
   })
 
+  test('asleep in "Waiting": folded to its name, what it waits on and its time, the rest under it (#61)', () => {
+    const fields = {
+      key: 'e',
+      column: 'ext' as const,
+      wait: 'the review',
+      waitSince: ago(25),
+      lastText: 'Opened PR #12',
+      title: 'Ship it',
+    }
+    const asleep = item({ ...fields, status: 'sleeping', sleeping: true })
+    const { react } = bothCards({ items: [asleep] }, 'e')
+    expect(react).toContain('class="card folds"')
+    const [top, more] = react.split('class="fold-more"')
+    expect(top).toContain('the review')
+    expect(top).toContain('class="age"')
+    expect(top).not.toContain('Ship it')
+    expect(more).toContain('class="what">Ship it')
+    expect(more).toContain('class="said">Opened PR #12')
+    // Awake, or restarting, it is the whole card as before.
+    same({ items: [item(fields)] }, 'e')
+    const restart: ScheduleEntry = { id: 'r1', key: 'e', kind: 'restart', text: '', next: Date.now() + MIN }
+    expect(bothCards({ items: [asleep], schedules: [restart] }, 'e').react).not.toContain('fold')
+    // Folded the same whichever way it unfolds; with folding off in Settings, the whole card as before.
+    for (const foldWaiting of ['push', 'over'] as const)
+      expect(bothCards({ items: [asleep], foldWaiting }, 'e').react).toBe(react)
+    same({ items: [asleep], foldWaiting: 'off' }, 'e')
+  })
+
+  test('a favorite: a star by its name; asleep in Idle or in Waiting, the whole card (#64)', () => {
+    const fields = {
+      name: 'Delta',
+      status: 'sleeping' as const,
+      sleeping: true,
+      result: 'Done',
+      lastText: 'Done',
+      activity: ago(200),
+    }
+    for (const column of ['idle', 'ext'] as const) {
+      const fav = item({ key: 'd', column, wait: 'review', ...fields, favorite: true })
+      const { react } = bothCards({ items: [fav] }, 'd')
+      expect(react).toContain(
+        '<span class="favorite" title="Favorite: first in its column and whole, however long it idles">',
+      )
+      expect(react).toContain('<svg class="star"')
+      expect(react).not.toContain('compact')
+      expect(react).not.toContain('folds')
+      // Its last words are on it, as on a card awake.
+      expect(react).toContain('class="said">Done')
+    }
+    // Not a favorite: the card as before.
+    same({ items: [item({ key: 'd', column: 'idle', ...fields, favorite: false })] }, 'd')
+  })
+
   test('asleep elsewhere: the full card with the moon for a dot', () => {
     const d = item({ key: 'd', status: 'sleeping', column: 'done', sleeping: true, result: 'Done', activity: ago(4) })
     same({ items: [d] }, 'd')

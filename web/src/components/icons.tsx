@@ -117,6 +117,15 @@ export const ClipIcon = () => (
   </Icon>
 )
 
+/** A clipboard with a picture on it: paste a picture. */
+export const PastePictureIcon = () => (
+  <Icon>
+    <path d="M7.2 4.5H6A1.5 1.5 0 0 0 4.5 6v10A1.5 1.5 0 0 0 6 17.5h8a1.5 1.5 0 0 0 1.5-1.5V6A1.5 1.5 0 0 0 14 4.5h-1.2" />
+    <rect x="7.2" y="3" width="5.6" height="3" rx="1" />
+    <path d="m7 14.5 2.4-2.7 1.7 1.8 1.1-1.1 1.8 2" />
+  </Icon>
+)
+
 export const CrossIcon = () => (
   <Icon>
     <path d="m6.5 6.5 7 7m0-7-7 7" />
@@ -237,9 +246,21 @@ export const WriteGlyph = () => (
   </Glyph>
 )
 
+export const ChevronGlyph = () => (
+  <Glyph className="chevron">
+    <path d="m6 8 4 4 4-4" />
+  </Glyph>
+)
+
 export const MoonGlyph = () => (
   <Glyph className="moon">
     <path d="M15.5 12.2A6.5 6.5 0 0 1 7.8 4.5a6.5 6.5 0 1 0 7.7 7.7Z" />
+  </Glyph>
+)
+
+export const StarGlyph = () => (
+  <Glyph className="star">
+    <path d="M10 3.4l1.76 4.77 5.09.21-4 3.15 1.38 4.89L10 13.6l-4.23 2.82 1.38-4.89-4-3.15 5.09-.21Z" />
   </Glyph>
 )
 
@@ -297,6 +318,13 @@ export const RepeatGlyph = () => (
 export const ChevGlyph = () => (
   <Glyph className="chev">
     <path d="m8 5 5 5-5 5" />
+  </Glyph>
+)
+
+/** A pop-up button's mark: its choices open in a menu. */
+export const UpDownGlyph = () => (
+  <Glyph className="updown">
+    <path d="m6.5 8 3.5-3.5L13.5 8M6.5 12l3.5 3.5 3.5-3.5" />
   </Glyph>
 )
 
@@ -369,4 +397,13 @@ export const FileGlyph = () => (
     <path d="M5.5 2.5h6l3.5 3.5v11.5h-9.5Z" />
     <path d="M11.5 2.5V6H15" />
   </Glyph>
+)
+
+export const ForkIcon = () => (
+  <Icon>
+    <circle cx="6" cy="4.5" r="1.8" />
+    <circle cx="14" cy="4.5" r="1.8" />
+    <circle cx="10" cy="15.5" r="1.8" />
+    <path d="M6 6.3v.9a3 3 0 0 0 3 3h2a3 3 0 0 0 3-3v-.9M10 10.2v3.5" />
+  </Icon>
 )

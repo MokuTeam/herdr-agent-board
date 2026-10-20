@@ -3,6 +3,21 @@
 For people and agents changing this repository. What the board does and how to run it is in
 [README.md](README.md); how the code is laid out is under [Development](README.md#development).
 
+## An issue first
+
+Several people and their agents work on the board at once. So that two of them do not build the
+same thing, every change starts from an issue:
+
+- **Look first.** Before you start, search the open issues and pull requests
+  (`gh issue list --search "<words>"`, `gh pr list --search "<words>"`), closed ones too when the
+  subject may have been settled. Someone already on it: work with them, on their issue, instead of
+  starting your own.
+- **No issue yet: open one** before you write code: what is wrong or missing, and what the change
+  will do. Say in it who works on it.
+- **Work by it.** The branch and the pull request refer to the issue (`Closes #<n>` in the pull
+  request), and what comes up on the way goes into the issue, so the next person finds it there.
+  A finding outside your task gets an issue of its own instead of a change in passing.
+
 ## Everyone's setup, not yours
 
 The board runs on many machines, each set up its own way: Windows, macOS and Linux; Claude Code

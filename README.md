@@ -134,9 +134,12 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   session, else "You: <your last request>"), its last words, the tool it runs now, the question
   it is stuck on, what it waits for.
 - Drag a card to another lane to change its category, or to another column to put it there by
-  hand (also the "Status" chips in the sheet). See [Moving a card by hand](#moving-a-card-by-hand).
-- Click a card: a sheet with its card fields, the question and screen when it waits for you
-  (a question form or a permission prompt is answered right there, see
+  hand (also the status pill in the sheet's head). See [Moving a card by hand](#moving-a-card-by-hand).
+- Click a card: a sheet with a compact head (two pills, where the card shows and its lane, each
+  opening a menu to change it; the name; its workspace, last activity and context; then what it
+  does, what it waits for, its reminders and the sessions it works with, each only when there is
+  one, and the pencil shows the empty ones to fill in), the question and screen when it waits for
+  you (a question form or a permission prompt is answered right there, see
   [Answering from the board](#answering-from-the-board)), the conversation (tool calls folded;
   a background command, agent, monitor or MCP task reporting back and a board reminder are a
   quiet line of their own, not your message: an agent's report opens from it, a command's
@@ -162,6 +165,12 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   profile (the one its `CLAUDE_CONFIG_DIR` points to): a running MokuPilot takes the call over in
   its own env, so a fork of a session in another profile would run in the wrong account. The board
   refuses that call before anything starts, saying so.
+- "Fork" (the sheet, a card's menu): a new session in a new tab that starts with a copy of this
+  one's conversation, so it knows what this one knows while this one goes on as it was; see
+  [Fork](#fork).
+- A side question (the bubble in the message box, or a message that starts with `/btw`): asked of
+  a copy of the session's conversation, answered in a card over the box, while nothing goes into
+  the session's conversation; see [Side questions](#side-questions).
 - The sheet's place and size are the viewer's own (kept in this browser): docked right, left or
   at the bottom, flush with that edge like a sidebar, where the board makes room for it (a window
   too narrow for that keeps the board's columns and lays the sheet over them), or floating over
@@ -470,7 +479,9 @@ How it starts, by `launch` in config.json:
   each other element one argument, with `{name}`, `{label}`, `{cwd}`, `{workspace}` (herdr
   workspace id), `{workspaceLabel}`, `{category}`, `{message}`, `{messageFile}` (the first message
   in a UTF-8 file), `{sessionId}`, `{resume}` (the id of a session coming back from the
-  [archive](#archive), empty for a new one), `{profile}` (the Claude profile's id) or `{profileDir}` (its
+  [archive](#archive), empty for a new one), `{fork}` (the id of the session a [fork](#fork)
+  starts from, empty otherwise; a launcher without it leaves forks to the board's own
+  spawn-agent), `{profile}` (the Claude profile's id) or `{profileDir}` (its
   folder) filled in; a nested list is left out when a value in it is empty. Nothing from the request becomes a program or an option: values only fill those
   places. It runs with `HERDR_WORKSPACE_ID` set to the chosen workspace (the board itself lives
   in a workspace of its own) and should print `pane=<pane id>` when the session is up; it fails
@@ -528,7 +539,8 @@ puts it on PATH; it is `bun src/entrypoints/spawn-agent.ts`):
 ```
 spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
             [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
-            [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--pane <herdr pane id>] [--profile <id>]
+            [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>]
+            [--pane <herdr pane id>] [--profile <id>]
 ```
 
 PowerShell's spelling works too: `-Name`, `-Cwd`, `-Label`, `-BriefFile`, `-Brief`, `-Workspace`,
@@ -550,6 +562,10 @@ start another. A `/rename` that does not take is only a warning. `--pane` starts
 pane instead of a new tab; it must be at a shell prompt, not running an agent. `--resume` brings
 back a session that ended (`launch.claude` with `--resume <uuid>`, run in the folder the session
 ran in): it keeps its name, so no `/rename` is typed; the board's [archive](#archive) uses it.
+`--fork <uuid>` starts a new session with a copy of that one's conversation
+(`launch.claude` with `--resume <uuid> --fork-session --session-id <its own id>`, the id given
+with `--session-id` or one of its own): named and briefed as any start, in the profile whose folder
+holds that conversation, as a resume is; the board's [Fork](#fork) uses it.
 
 With more than one Claude profile (`CLAUDE_CONFIG_DIR` folders such as `~/.claude-work`), a
 session an agent starts keeps that agent's profile, the one its own `CLAUDE_CONFIG_DIR` points to,
@@ -604,6 +620,36 @@ card goes, a launcher it ran is left running (and finishes or fails on its own),
 that comes up lands in the lane its folder gives, or in the chosen one when the board had given
 it its session id (the herdr path, or `{sessionId}`). A first message file left behind is
 removed when the board starts again.
+
+## Fork
+
+"Fork" in the sheet's row of actions (or under "⋯") and in a Claude session's card menu: a small
+window grown out of the button or the card, with the fork's name (the session's with "· fork"
+after it, ready to type over) and an optional first message. Fork (Enter in the name, Ctrl+Enter
+in the message) starts a new session in a new tab of the session's workspace, in its folder (the
+one its conversation was recorded in: Claude resumes a session only from there), lane and Claude
+profile, hidden or not, as "New here" keeps it: `claude --resume <id> --fork-session` with an id
+of its own, so its card has its lane before Claude starts. It goes through the board's launches:
+its card shows at once, under "Working" while it starts, and a failure says why on it; Retry
+opens the window again with what it was given. The session itself is not touched: nothing is
+typed into it, its card stays as it was.
+
+The fork's card says at its foot whose fork it is, and the sheet's "Sessions" row marks the two
+with the fork's glyph: a fork's transcript starts with a copy of its source's conversation, each
+copied line marked `forkedFrom` with the source's id, so the board reads the link from the fork
+itself, whoever made it (the board, an agent with `spawn-agent --fork` or `board fork`, or
+`claude --resume <id> --fork-session` by hand). Those copied lines are the source's: the
+sessions it started and the messages it sent are not counted again for the fork.
+
+The board offers Fork where its launcher can make one: its own spawn-agent, a `launch.command`
+that takes `{fork}` (one without it leaves forks to spawn-agent), or `launch.agent` for Claude
+without arguments that pick the session (`--resume`, `--continue`, `--session-id`). An agent forks
+its own session (or another's, with `--session`) with `board fork [--name "<Name>"] ["<note>"]`:
+the web board starts it as its Fork does, the note is its first message.
+
+`POST /api/session/<key>/fork` with `{ name?, message? }` (the page only, like a launch), and the
+board payload's `fork`. Code: `src/services/launch/fork.ts`, `web/src/hooks/useFork.ts`,
+`web/src/components/fork/ForkPop.tsx`.
 
 ## When a card is under "Needs me"
 
@@ -691,6 +737,44 @@ fingerprint comes with the sheet's data); both need the `X-Board` header. Code:
 `src/core/dialogs/questions.ts` (the questions, the screen, the keys), `src/services/answer.ts` (the
 steps through herdr), `web/src/components/questions/` and `web/src/models/question-model.ts` (the
 form).
+
+## Side questions
+
+Claude Code's own `/btw` asks a side question with the conversation's context and keeps it out of
+the conversation, but it answers in an overlay of the terminal, and under `-p` it says it "isn't
+available in this environment": the board could only read its answer off the screen, and only
+while the session runs. So the board asks a one-off copy of the conversation instead, which works
+whatever the session does (working, waiting, asleep):
+
+```
+claude -p --resume <id> --fork-session --no-session-persistence --tools "" \
+       --strict-mcp-config --settings '{"disableAllHooks":true}' --max-turns 1 --output-format json
+```
+
+in the folder the session's conversation was recorded in, with `CLAUDE_CONFIG_DIR` of the profile
+that holds it (none in the board's own), the question on stdin. The copy is never written to disk
+(no new transcript, the session's own untouched), has no tools (it answers from what the
+conversation holds and cannot act), no MCP servers and no hooks (no card, no context, nothing
+ingested or notified). The answer shows in a card over the message box: the question, the answer,
+and that it went as a request of its own, with Claude Code's price for it at API rates and the
+context it read, the whole conversation. The copy's prompt is not the session's (no tools, no MCP
+servers), so the first side question to a session writes the conversation to the cache anew,
+about what the session's own next turn would cost without its cache; another one before the
+session has moved on reads that cache and costs a fraction (measured on a 34k-token session:
+$0.27 for the first, $0.008 for the next, $0.25 again once the session had worked on). Close (×)
+forgets it; on its way the same button cancels it and ends Claude. The cards stay with their
+session while the page is open, and never go to the server or the conversation.
+
+The switch in the message box (the bubble beside the clip, purple while on) sends the next
+message aside; a message that starts with `/btw` goes aside too. Both only where the board can ask
+one: a Claude session with an id, and `claude` on the board's PATH (`claude.exe` on Windows: an
+npm install's `claude.cmd` would need a shell, which the board never runs). Elsewhere the box is
+as it was, and `/btw` goes to the session as typed.
+
+`POST /api/session/<key>/aside` with `{ question }` answers `{ ok, text, costUsd, tokens: {
+context, cached, output }, ms }` or `{ ok: false, error }` (the page only, like a launch); the
+board payload's `aside` says whether the board can ask. Code: `src/core/aside.ts`,
+`src/services/aside.ts`, `web/src/hooks/useAside.ts`, `web/src/components/sheet/Aside.tsx`.
 
 ## Terminal
 
@@ -785,6 +869,8 @@ in-process teammates. Sessions in herdr also hand work to each other: one starts
   subagent's). Backspace goes back to the list, Esc closes.
 - "Sessions" among the card's fields: each linked session once, marked when it started this one
   or this one started it, with the messages each way. A name opens that session.
+- A fork (see [Fork](#fork)) is linked to the session it is a fork of, marked with the fork's
+  glyph, whoever started it.
 - In the conversation, a call that works with others is a line of its own: a subagent, fork or
   workflow it started (it opens the helper, with its status and clock), a message it sent to
   another session or a teammate (it opens to the whole text), a session it started with
@@ -833,12 +919,21 @@ board payload has each item's `helpers` (counts and the newest at work) and `lin
 
 ## Moving a card by hand
 
-A card dragged to another column (or set with the "Status" chips) stays there, marked with a
-pin, until the session works again: you write to it, or another session does. Then the board
-sorts it by itself as before. Dragged while the session works, it stays under "Working" and
-moves once that turn is over. A terminal dialog still puts it under "Needs me". Dropped back on
-the column the board would pick, or with the "Auto" chip, the pin goes. "Working" takes no
-cards. The pin is `pin` in the card file; the hook and the board clear it.
+A card dragged to another column (or set with the status pill in the sheet's head) stays there,
+marked with a pin, until the session works again: you write to it, or another session does. Then
+the board sorts it by itself as before. Dragged while the session works, it stays under "Working"
+and moves once that turn is over. A terminal dialog still puts it under "Needs me". Dropped back
+on the column the board would pick, or with "Auto" in the status pill's menu, the pin goes.
+"Working" takes no cards. The pin is `pin` in the card file; the hook and the board clear it.
+
+## Favorites
+
+Some sessions matter every day even while they idle (the master sessions you go back to). "Add to
+Favorites" in a card's menu, the star in the session panel's head, `f` in the terminal board or
+`board favorite` keeps one in sight: first in its column in its lane, whole (never one line in
+"Idle", never folded in "Waiting"), on show even while sleeping sessions are hidden, and left
+alone by "Archive the sleeping ones". A small star by its name says so. Archiving it by hand
+works as for any other. It sleeps and wakes as before. It is `favorite` in the card file.
 
 ## Schedule
 
@@ -910,6 +1005,8 @@ are files, and the board keeps running.
 - The terminal board shows `⏰` (`⏳` for one that waits until the session is free) and the soonest
   time by a card's age, the count in its header.
 - A restart (`board restart`, "Restart" on the web board) is an entry too: see [Restart](#restart).
+  So is a sleep once the session is free (`board sleep --when-free`): see
+  [Several to sleep at once](#several-to-sleep-at-once).
 
 ## Restart
 
@@ -969,6 +1066,39 @@ agent cannot reconnect from inside its own turn (`/mcp` is a menu in its own ter
   running" is read in the session's own profile's registry (`<profile folder>/sessions`). With
   one profile it is all as above.
 
+## Several to sleep at once
+
+A session that coordinates others (one that polls every session at the end of the day, say) puts
+the ones it is done with to sleep in one call, instead of one herdr-wake `POST /sleep` each:
+
+```sh
+board sleep Report-north Report-south w2:p7 3f2a9c1e-...   # names, panes or session ids
+board sleep --when-free Report-north Report-south           # the busy ones once they are free
+```
+
+- Every session that is free now goes to sleep at once through herdr-wake (four at a time), by
+  the checks a restart makes: its turn over (for herdr and in Claude's own registry), no dialog,
+  no text the user started typing, no background command or Monitor. The command prints a line
+  for each: asleep, asleep already, or kept up and why (working, a dialog, unsent text in its
+  input box, background tasks, herdr-wake refused, not a Claude session, no such session on the
+  board, a name several sessions go by). A session id or a pane names one exactly; a name two
+  sessions go by takes neither, and says so.
+- `--when-free`: one held by its turn, a dialog, a draft or background tasks (or that herdr-wake
+  refused just now) gets a schedule entry of kind `sleep` instead, due at once, and goes to sleep
+  once it is free; its line gives the entry's id (`board unschedule <id>` cancels it). Asked again,
+  it stays one entry. The scheduler waits for it as for a reminder (`scheduleWaitMin`, 240
+  minutes), then logs it as missed; herdr-wake refusing is tried three times, then the log says it
+  did not happen. Nothing is typed into the session, and nothing wakes it: one asleep by other
+  means meanwhile counts as done. Like a restart, it is for that session only (not the one after
+  `/clear` in its pane), and archiving the session drops it.
+- Without herdr-wake, or when it does not answer, it refuses at once and puts nothing to sleep.
+- For agents that talk to the board over HTTP: `POST /api/sleep` with header `X-Board: 1` and
+  `{"targets": ["<id|name|pane>", ...], "whenFree": true}` answers `{ ok, results }`, one per
+  target: `result` (`asleep`, `already`, `scheduled`, `kept`), `why` (`busy`, `dialog`, `draft`,
+  `tasks`, `gone`, `unknown`, `ambiguous`, `notClaude`, `profile`, `refused`, `error`), `detail`,
+  and the session's `key`, `name`, `pane`, and `id` of a scheduled one. It needs fresh herdr data,
+  as "Put to sleep" does (`src/services/sleep.ts`, `src/server/routes/sleep.ts`).
+
 ## Archive
 
 Sessions pile up: one-off jobs that are done, sessions asleep for days. "Archive" takes one off
@@ -1001,7 +1131,7 @@ it); Claude keeps the conversation on disk, so it can come back.
 - Many at once: the menu of the "Idle" column (its head, or a lane's "Idle" in a narrow window)
   and a lane's menu offer "Archive the sleeping ones": asleep for over a day, 3 days, a week, or
   all of them, each with its count. Only sleeping sessions in "Idle": those that wait on you or
-  on someone else stay. One toast, one Return for all.
+  on someone else stay, and so do [favorites](#favorites). One toast, one Return for all.
 - "Archive" on the toolbar opens the list, by the day each went, newest first, with a search over
   the name, lane, folder, what the card said last and the day. While sleeping sessions have sat
   in "Idle" for over 3 days, it offers to take them along. Each row has Return and, two clicks,
@@ -1072,6 +1202,100 @@ in):
 
 On Linux and macOS the board shows none; herdr's own (`delivery = "system"`) say that a session
 finished, without its words.
+
+## Phones
+
+Off unless you turn it on. With [Tailscale](https://tailscale.com) on this computer and on a phone,
+the phone can use the board: an app (such as
+[agent-board-android](https://github.com/MokuTeam/agent-board-android)) sees every session, sends
+messages, answers questions and permission prompts, wakes and starts sessions, and opens the
+terminal, as the web board does.
+
+```sh
+board remote on                  # or "remote": { "on": true } in config.json
+board remote                     # where it listens, who asks to pair, who is paired
+board remote approve <id>        # or Approve in Settings → Phones… on the web board
+board remote revoke <id>         # the phone's token stops working at once
+board remote pwa on              # the board in a phone's browser, below
+board remote off
+```
+
+On, the board listens on this computer's Tailscale address as well (on the web board's port, or
+`remote.port`), never on any other network; the web board stays on 127.0.0.1. What a request on
+it needs:
+
+- **The tailnet vouches for it.** The board asks Tailscale who calls (`tailscale whois`): your own
+  Tailscale user, or one `remote.allow` lists (`"allow": ["teammate@example.com"]`). Anyone else
+  is refused before anything is read.
+- **A paired phone.** The app asks to pair; Settings → Phones… opens on the web board with Approve
+  and Deny (`board remote approve` does the same), and the request goes after 10 minutes. The phone
+  gets its token once; the board keeps only its hash, with the Tailscale device it was given to
+  (`remote-devices.json` in the state folder), and takes it from that device only. Unpair (two
+  clicks) or `board remote revoke` ends it.
+- **Nothing on this computer's screen.** A phone cannot open files or links here, focus herdr or
+  raise windows; the board's page itself is not served to it. Everything else answers as for the
+  web board, with the same checks.
+
+A firewall that drops what comes in on the Tailscale interface must let the port through (on
+Linux with ufw: `sudo ufw allow in on tailscale0 to any port 12422 proto tcp`). Off, nothing
+listens and Tailscale is never asked.
+
+`GET /api/hello` says what the board is (`{ board, api, version, host, name, dnsName, platform,
+remote }`, `api` 1). On the Tailscale address also: `POST /api/remote/pair` with `{ name }` (202
+`{ id }`), `GET /api/remote/pair/<id>` (`pending`, `denied`, once `approved` with `token`, then
+`gone`), and with `Authorization: Bearer <token>` the web board's `/api/*` routes plus
+`GET /api/peers`: the other computers on the tailnet whose board answers. Code:
+`src/core/remote.ts` (the rules), `src/adapters/tailscale.ts`, `src/services/remote.ts` (pairing),
+`src/server/remote.ts` (the listener), `src/server/routes/remote.ts`,
+`web/src/components/phones/PhonesPanel.tsx`.
+
+### In a phone's browser
+
+No app needed: a phone's browser opens the board, and the board goes on the home screen as an
+app (a PWA). A browser installs a page over HTTPS only, so Tailscale gives the board an HTTPS
+address of its own: `tailscale serve` puts this computer's Tailscale name, with its real
+`*.ts.net` certificate, in front of a listener of the board's on 127.0.0.1.
+
+Once, in the Tailscale admin console, on the [DNS page](https://login.tailscale.com/admin/dns):
+**HTTPS Certificates → Enable** (with MagicDNS on). Until then the Phones panel and `board
+doctor` say so, and the board sets nothing up.
+
+```sh
+board remote pwa on      # or "Set up the HTTPS address" in Settings → Phones…
+board remote pwa off     # serve no longer forwards to the board; board remote off does it too
+```
+
+`pwa on` turns the remote mode on, runs `tailscale serve --bg --https=443 http://127.0.0.1:<port>`
+(the web board's port plus one, or `remote.pwa.port`) and prints the address with a QR code; the
+Phones panel shows them too. Serve keeps it across restarts; the board changes it only when you
+ask, and takes back only what forwards to it. When port 443 of the name already serves something
+else, it refuses: give `remote.pwa.https` another port (8443, say). In config.json:
+`"remote": { "on": true, "pwa": { "on": true, "https": 443, "port": 12423 } }`. On Linux,
+`tailscale serve` may need `sudo tailscale set --operator=$USER` once.
+
+On the phone, with Tailscale on: open the address, tap **Ask for access**, and approve it on the
+computer (Settings → Phones…, or `board remote approve <id>`). Then add it to the home screen:
+Share → Add to Home Screen on an iPhone, ⋮ → Install app on Android.
+
+- **Who calls** is checked as on the remote listener: serve tells the board the caller's Tailscale
+  address (X-Forwarded-For, which serve sets itself over anything the caller sent), the board asks
+  `tailscale whois`, and only your own Tailscale user or one `remote.allow` lists gets in. Serve's
+  `Tailscale-User-Login`, when it sends one, must name the same user. The listener for serve is on
+  127.0.0.1 only: what reaches it comes from serve or from a program on this computer, which can use
+  the web board itself anyway.
+- **The token** is in a cookie the page's scripts cannot read (`__Host-`, Secure, HttpOnly,
+  SameSite=Strict): an EventSource sends no headers. Anything that changes something needs the
+  board's header and comes from the board's own HTTPS address. Unpair ends the token and the
+  streams the phone has open (the app's too). The app and the browser on one phone pair each on
+  their own.
+- **Nothing on this computer's screen**, as for the app; the page leaves out focus, open and show
+  in folder.
+- **No connection**: a service worker keeps the page's own files (never `/api` or `/uploads`), so
+  the app still opens and says what to check.
+
+Code: `src/core/pwa.ts` (the rules), `src/services/pwa.ts` (serve), `src/core/qr.ts`,
+`web/src/components/remote/RemoteGate.tsx` (pairing, no connection), `web/sw.js`,
+`web/manifest.webmanifest`, `web/styles/pwa.css`.
 
 ## Language
 
@@ -1151,6 +1375,7 @@ Setup (`src/core/setup.ts`, `src/adapters/setup-facts.ts`, `src/services/setup-c
 | w | set what it waits for (empty clears) |
 | x | clear its card (doing, wait, result, a column set by hand) |
 | z | put the session to sleep (herdr-wake; idle sessions only) |
+| f | a favorite, or not any more (see [Favorites](#favorites)) |
 | c | change its category (n: a new one) |
 | 1-9 / 0 | show one lane / all |
 | o | open the web board |
@@ -1168,6 +1393,8 @@ board doing "<text>"      what it works on now
 board wait "<text>"       what it waits for outside the chat (card goes to "Waiting on others")
 board ask "<question>"    needs your answer: "Needs me" until you reply
 board done ["<text>"]     finished: clears doing, wait and ask
+board favorite [off]      keep this session in sight: first in its column, whole, left out of
+                          "Archive the sleeping ones" (off: back among the others)
 board list                every session, one line each
 board cats                known categories
 board remind <when> "<text>"   at that time, "[board reminder] <text>" goes into the session
@@ -1185,6 +1412,13 @@ board archive --session <id|name|pane>
                           another session off the board, its pane closed (a one-off one you
                           started, or one the user asked you to); the user brings it back from
                           the board's archive; see Archive
+board sleep <id|name|pane>... [--when-free]
+                          several sessions to sleep at once, a line for each: asleep, or kept
+                          up and why; --when-free: the busy ones once they are free; see
+                          Several to sleep at once
+board fork [--name "<Name>"] ["<note>"]
+                          a fork of this session in a new tab, with a copy of its conversation
+                          (the web board starts it; the note is its first message); see Fork
 --session <id|name|pane>  for another session's card
 board doctor              what is set up on this computer, and what is missing
 spawn-agent --name <Name> --cwd <folder> [--brief-file <file>]   a new session in a herdr tab
@@ -1194,7 +1428,7 @@ Agents in herdr also get a skill, [`herdr-agents`](skills/herdr-agents/SKILL.md)
 install puts into `~/.claude/skills` (with more than one profile, into the `skills` folder of
 each one the board shows). Claude Code keeps only its one-line description in a session's
 context and reads the rest when it is needed: how to start another session, message or wake one,
-do something later (`board remind` rather than CronCreate, which dies when the session sleeps),
+put the sessions it coordinates to sleep in one call (`board sleep`), do something later (`board remind` rather than CronCreate, which dies when the session sleeps),
 restart itself when an MCP server dropped or its settings, hooks or skills changed
 (`board restart`), and run a server or an interactive login in a pane of its own. herdr puts the
 pane's ids into its environment (`HERDR_ENV=1`, `HERDR_PANE_ID`, `HERDR_TAB_ID`,
@@ -1269,7 +1503,10 @@ default: the board lives in a workspace of its own and stays open; `tab`; `overl
 `refreshSec`, `wakeUrl` (herdr-wake router), `scheduleWaitMin` (how long a due entry waits for a
 busy session, 240), `port` (web board, 12422), `web` (false turns the
 web board off), `terminal` (false turns the web board's [terminal](#terminal) off), `browser`
-(path for the app window), `terminalTitle` (window title pattern to
+(path for the app window), `foldWaiting` (how the web board folds a session asleep in
+"Waiting" down to its name, what it waits for and its time: `push`, the default, unfolds it on
+hover moving the cards below apart; `over` unfolds it over them; `off` keeps it whole; the gear's
+Settings set it too), `terminalTitle` (window title pattern to
 raise, default `<COMPUTERNAME>:*`), `raiseTerminal`, `launch` (how new sessions start: `claude`,
 `command`, `agent`, `args`, `timeoutSec`, see [New sessions](#new-sessions)), `mokupilot` (calls
 with a fork of a session: `false` turns them off; `{ "dir": "<MokuPilot checkout>" }` runs its

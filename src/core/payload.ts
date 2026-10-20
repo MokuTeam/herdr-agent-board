@@ -1,7 +1,9 @@
 // The board as GET /api/board answers and the event stream pushes it (src/server/board-state.ts
 // builds it; the web board reads it). One type for both sides, so they cannot drift apart.
 import type { BoardArchive } from './archive.ts'
+import type { FoldMode } from './fold-mode.ts'
 import type { LimitWindow } from './limits.ts'
+import type { RemoteView } from './remote.ts'
 import type { ScheduleEntry } from './schedule-rules.ts'
 import type { SetupSummary } from './setup.ts'
 import type { ColumnId, Item, Lang, LaunchView } from './types.ts'
@@ -90,10 +92,18 @@ export interface BoardPayload {
   shells?: string[]
   /** Whether a session's sheet offers a MokuPilot call with a fork of it (services/mokupilot.ts). */
   mokupilot?: boolean
+  /** Whether the board can fork a session into a new tab here (services/launch/fork.ts canFork). */
+  fork?: boolean
+  /** Whether the board can ask a session a side question here (services/aside.ts: Claude Code on PATH). */
+  aside?: boolean
   /** What of the board is not set up on this computer (core/setup.ts); null before the first check. */
   setup?: SetupSummary | null
   /** Every profile, shown and hidden, in the list's order (core/profiles.ts); a board before profiles sent none. */
   profiles?: BoardProfile[]
   /** The program `launch.claude` types (`claude` when it is unset or not valid): what a profile without a start command types. */
   claudeProgram?: string
+  /** How a session asleep in "Waiting" folds (core/fold-mode.ts); a board before the setting sent none. */
+  foldWaiting?: FoldMode
+  /** The remote mode (core/remote.ts), only while it is on. */
+  remote?: RemoteView
 }

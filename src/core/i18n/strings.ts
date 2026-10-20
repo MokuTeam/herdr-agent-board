@@ -6,9 +6,12 @@
 
 import type { Lang } from '../types.ts'
 import { ARCHIVE_STRINGS } from './archive-strings.ts'
+import { ASIDE_STRINGS } from './aside-strings.ts'
+import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
 import { PROFILE_STRINGS } from './profile-strings.ts'
+import { REMOTE_STRINGS } from './remote-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
 
@@ -144,6 +147,9 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'card.write': 'Message',
     'card.focus': 'Go to herdr',
     'card.pinned': 'You put it here. It goes back by itself once the session works again',
+    'card.favorite': 'Favorite: first in its column and whole, however long it idles',
+    'menu.favorite': 'Add to Favorites',
+    'menu.unfavorite': 'Remove from Favorites',
     'tool.peer': '→ another session',
 
     // messages and errors from the board
@@ -176,6 +182,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'err.restart.notClaude': '{name} is not a Claude session in herdr: it cannot be restarted',
     'err.restart.asleep': '{name} is asleep: waking it restarts it',
     'err.restart.mode': 'A restart always waits until the session is free',
+    'err.sleep.mode': 'Putting it to sleep always waits until the session is free',
     'err.restart.tasks':
       'background tasks (a command, a Monitor) kept running in it for 10 minutes; stop them or let them finish, then ask for the restart again',
     'err.restart.herdr': 'herdr did not answer ({why})',
@@ -247,6 +254,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'err.cat.emptyTitle': 'Empty title',
     'err.cat.other': '{title} is the fallback lane and stays',
     'err.language': 'Unknown language {lang}',
+    'err.foldWaiting': 'Unknown way to fold {mode}',
     'err.fs.missing': 'Not found: {path}',
     'err.fs.open': 'Could not open it: {why}',
 
@@ -287,6 +295,10 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'set.theme.dark': 'Dark',
     'set.lang': 'Language',
     'set.panel': 'Session panel',
+    'set.fold': 'Sleeping in Waiting',
+    'set.fold.push': 'Unfold, moving cards below',
+    'set.fold.over': 'Unfold over cards below',
+    'set.fold.off': 'Don’t fold',
     'live.on': 'Live',
     'live.off': 'No connection to the board, reconnecting…',
     'live.none': 'No connection to the board',
@@ -341,6 +353,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'restart.noNote': 'No note',
     'restart.title.failed': 'The restart did not happen: {why}. The session hears it once it is free',
     'restart.entry': 'Restart',
+    'sleep.entry': 'Put to sleep once free',
     'sheet.asleep': 'Asleep',
     'panel.place': 'Where the panel sits',
     'panel.right': 'Docked right',
@@ -407,7 +420,14 @@ export const STRINGS: Record<Lang, Dictionary> = {
     // web board: composer
     'compose.attach': 'Attach a file. Paste a screenshot with Ctrl+V or drop files on the panel',
     'compose.attachLabel': 'Attach a file',
+    'compose.pastePicture': 'Paste a picture from the clipboard',
+    'compose.pasteHint': 'Copied a screenshot? Paste it from here',
+    'compose.pasteNone': 'No picture on the clipboard. Copy one, or attach it with the paperclip.',
+    'compose.pasteDenied':
+      'The browser did not let the board read the clipboard. Allow it in the site settings, or attach the picture with the paperclip.',
+    'compose.pasteFailed': 'Could not read the clipboard: {why}',
     'compose.placeholder': 'Message the session… Ctrl+V pastes a screenshot',
+    'compose.placeholderPhone': 'Message the session…',
     'compose.label': 'Message',
     'compose.send': 'Send (Enter)',
     'compose.sendLabel': 'Send',
@@ -519,6 +539,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'tui.messageFor': 'Message for {name}',
     'tui.waitsFor': '{name} waits for',
     'tui.cleared': 'Card of {name} cleared',
+    'tui.favorite': '{name} added to Favorites',
+    'tui.unfavorite': '{name} removed from Favorites',
     'tui.newCat': 'New category for {name} (latin id)',
     'tui.sessions': ['{n} session', '{n} sessions'],
     'tui.asleep': ['{n} asleep', '{n} asleep'],
@@ -535,6 +557,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'key.x': 'clear',
     'key.c': 'category',
     'key.z': 'sleep',
+    'key.f': 'favorite',
     'key.filter': 'filter',
     'key.o': 'web',
     'key.r': 'refresh',
@@ -667,6 +690,9 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'card.write': 'Написать',
     'card.focus': 'Перейти в herdr',
     'card.pinned': 'Ты перенёс сюда. Вернётся само, когда сессия снова заработает',
+    'card.favorite': 'Избранная: первая в своей колонке и целиком, сколько бы ни простаивала',
+    'menu.favorite': 'В избранное',
+    'menu.unfavorite': 'Убрать из избранного',
     'tool.peer': '→ другой сессии',
 
     session: 'Сессия',
@@ -698,6 +724,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'err.restart.notClaude': '{name} не сессия Claude в herdr: перезапустить её нельзя',
     'err.restart.asleep': '{name} спит: разбудить её и значит перезапустить',
     'err.restart.mode': 'Перезапуск всегда ждёт, пока сессия освободится',
+    'err.sleep.mode': 'Усыпление ждёт, пока сессия освободится',
     'err.restart.tasks':
       'в ней 10 минут шли фоновые задачи (команда, Monitor); останови их или дождись конца, потом попроси перезапуск снова',
     'err.restart.herdr': 'herdr не ответил ({why})',
@@ -774,6 +801,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'err.cat.emptyTitle': 'Пустое название',
     'err.cat.other': '{title} нужна как запасная дорожка',
     'err.language': 'Нет языка {lang}',
+    'err.foldWaiting': 'Нет такого способа сворачивать: {mode}',
     'err.fs.missing': 'Не найдено: {path}',
     'err.fs.open': 'Не открылось: {why}',
 
@@ -812,6 +840,10 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'set.theme.dark': 'Тёмное',
     'set.lang': 'Язык',
     'set.panel': 'Панель сессии',
+    'set.fold': 'Спящие в «Ждёт внешнего»',
+    'set.fold.push': 'Раскрывать, раздвигая соседние',
+    'set.fold.over': 'Раскрывать поверх соседних',
+    'set.fold.off': 'Не сворачивать',
     'live.on': 'Живые данные',
     'live.off': 'Нет связи с доской, переподключаюсь…',
     'live.none': 'Нет связи с доской',
@@ -865,6 +897,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'restart.noNote': 'Без заметки',
     'restart.title.failed': 'Перезапуск не состоялся: {why}. Сессия узнает, когда освободится',
     'restart.entry': 'Перезапуск',
+    'sleep.entry': 'Уснёт, когда освободится',
     'sheet.asleep': 'Спит',
     'panel.place': 'Где стоит панель',
     'panel.right': 'Справа',
@@ -929,7 +962,14 @@ export const STRINGS: Record<Lang, Dictionary> = {
 
     'compose.attach': 'Прикрепить файл. Скриншот можно вставить через Ctrl+V или перетащить файлы на панель',
     'compose.attachLabel': 'Прикрепить файл',
+    'compose.pastePicture': 'Вставить картинку из буфера',
+    'compose.pasteHint': 'Скопировали скриншот? Вставьте его отсюда',
+    'compose.pasteNone': 'В буфере нет картинки. Скопируйте её или прикрепите скрепкой.',
+    'compose.pasteDenied':
+      'Браузер не дал доске прочитать буфер. Разрешите это в настройках сайта или прикрепите картинку скрепкой.',
+    'compose.pasteFailed': 'Не получилось прочитать буфер: {why}',
     'compose.placeholder': 'Написать сессии… Ctrl+V вставит скриншот',
+    'compose.placeholderPhone': 'Написать сессии…',
     'compose.label': 'Сообщение',
     'compose.send': 'Отправить (Enter)',
     'compose.sendLabel': 'Отправить',
@@ -1051,6 +1091,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'tui.messageFor': 'Сообщение для {name}',
     'tui.waitsFor': '{name} ждёт',
     'tui.cleared': 'Карточка {name} очищена',
+    'tui.favorite': 'В избранном: {name}',
+    'tui.unfavorite': 'Убрано из избранного: {name}',
     'tui.newCat': 'Новая категория для {name} (id латиницей)',
     'tui.sessions': ['{n} сессия', '{n} сессии', '{n} сессий'],
     'tui.asleep': ['{n} спит', '{n} спят', '{n} спят'],
@@ -1067,6 +1109,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'key.x': 'очистить',
     'key.c': 'категория',
     'key.z': 'усыпить',
+    'key.f': 'избранное',
     'key.filter': 'фильтр',
     'key.o': 'веб',
     'key.r': 'обновить',
@@ -1085,5 +1128,10 @@ for (const code of Object.keys(HELPER_STRINGS) as Lang[]) Object.assign(STRINGS[
 for (const code of Object.keys(SETUP_STRINGS) as Lang[]) Object.assign(STRINGS[code], SETUP_STRINGS[code])
 // And the Claude profiles.
 for (const code of Object.keys(PROFILE_STRINGS) as Lang[]) Object.assign(STRINGS[code], PROFILE_STRINGS[code])
+for (const code of Object.keys(REMOTE_STRINGS) as Lang[]) Object.assign(STRINGS[code], REMOTE_STRINGS[code])
 // The archive's too.
 for (const code of Object.keys(ARCHIVE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ARCHIVE_STRINGS[code])
+// And a fork of a session.
+for (const code of Object.keys(FORK_STRINGS) as Lang[]) Object.assign(STRINGS[code], FORK_STRINGS[code])
+// And a side question to a session.
+for (const code of Object.keys(ASIDE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ASIDE_STRINGS[code])
