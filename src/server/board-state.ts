@@ -5,13 +5,13 @@ import { readArchiveLog } from '../adapters/archive-store.ts'
 import { readUsageFile } from '../adapters/claude-home.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { notify } from '../adapters/herdr.ts'
-import { hooksInstalled } from '../adapters/hook-settings.ts'
 import { createLinks } from '../adapters/links.ts'
-import { ROOT, usageFileFor } from '../adapters/paths.ts'
+import { usageFileFor } from '../adapters/paths.ts'
 import { forgetProfilePanes } from '../adapters/profile-panes.ts'
 import { listEntries, readLog } from '../adapters/schedule-store.ts'
 import { COLUMNS } from '../core/board.ts'
 import { categoryInfo, colorHex, laneRank, PALETTE } from '../core/categories.ts'
+import { foldModeOf } from '../core/fold-mode.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { lang, t } from '../core/lang.ts'
 import { claudeProgram, commandText } from '../core/launch/spawn-args.ts'
@@ -19,11 +19,12 @@ import type { Limits } from '../core/limits.ts'
 import type { BoardLimits, BoardPayload, BoardProfile } from '../core/payload.ts'
 import { DEFAULT_PROFILE, type Profile, profileLabel } from '../core/profiles.ts'
 import type { RemoteView } from '../core/remote.ts'
-import { boardFiles, type SetupSummary } from '../core/setup.ts'
+import type { SetupSummary } from '../core/setup.ts'
 import type { Item } from '../core/types.ts'
 import { collect } from '../services/board.ts'
 import type { Deps } from '../services/deps.ts'
 import type { Launches } from '../services/launch/launches.ts'
+import { hooksInPlace } from '../services/profiles.ts'
 import { type Terminals, terminalOn } from '../services/terminals.ts'
 
 export interface BoardState {
@@ -60,9 +61,6 @@ interface Options {
 const SWATCHES = Object.entries(PALETTE)
   .filter(([name]) => !['magenta', 'white'].includes(name))
   .map(([name, hex]) => ({ name, hex }))
-
-// The files of this copy of the board: a profile's settings.json has its hooks when they run these.
-const FILES = boardFiles(ROOT)
 
 const isFolder = (path: string): boolean => {
   try {
@@ -104,7 +102,7 @@ function boardProfiles(deps: Deps, items: readonly Item[]): BoardProfile[] {
     inherited: p.id === set.inherited?.id,
     exists: isFolder(p.dir),
     // A hidden profile's settings.json is not read: Install leaves it alone.
-    hooks: p.hidden ? null : hooksInstalled(p.dir, FILES),
+    hooks: p.hidden ? null : hooksInPlace(p.dir),
     sessions: items.filter(i => i.profile === p.id).length,
     limits: profileLimits(deps, p),
     command: commandText(p.command),
@@ -187,6 +185,7 @@ export function createBoardState({
       profiles,
       // What a profile without a start command types: the Profiles panel's placeholder.
       claudeProgram: claudeProgram(cfg.launch?.claude, cfg.launch?.args),
+      foldWaiting: foldModeOf(cfg.foldWaiting),
       // remote: only while the remote mode is on; a board without it sends none.
       ...remoteOf(remote),
     }

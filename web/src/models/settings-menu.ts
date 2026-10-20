@@ -4,6 +4,8 @@
 // panel's place is this browser's too (components/panel/place.ts). With more than one Claude
 // profile folder found, Profiles… opens their panel (components/profiles/ProfilesPanel.tsx). While
 // the remote mode is on (core/remote.ts), Phones… opens theirs (components/phones/PhonesPanel.tsx).
+// How sessions asleep in "Waiting" fold is the board's, for every board (src/core/fold-mode.ts).
+import { FOLD_MODES, type FoldMode, isFoldMode } from '../../../src/core/fold-mode.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import type { MenuEntry } from './menu-model.ts'
 import { DOCKS, type Dock } from './panel-layout.ts'
@@ -22,6 +24,8 @@ export interface SettingsNow {
   sleepers: boolean
   /** More than one profile folder is found (models/profiles.ts offersProfiles): Profiles… is offered. */
   profiles: boolean
+  /** How sessions asleep in "Waiting" fold; null from a board that does not say (none offered). */
+  fold?: FoldMode | null | undefined
   /** The remote mode is on (the payload's `remote`): Phones… is offered. */
   phones?: boolean
 }
@@ -58,6 +62,16 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
     ...(now.phones ? [{ id: 'phones', label: t('set.phones') }] : []),
     { separator: true },
     { id: 'sleepers', label: t('tb.sleepersTitle'), checked: now.sleepers },
+    ...(now.fold
+      ? [
+          {
+            id: 'fold',
+            label: t('set.fold'),
+            ...edit,
+            submenu: FOLD_MODES.map(id => ({ id: `fold:${id}`, label: t(`set.fold.${id}`), checked: now.fold === id })),
+          },
+        ]
+      : []),
   ]
 }
 
@@ -69,6 +83,7 @@ export type SettingPick =
   | { kind: 'reset' }
   | { kind: 'sleepers' }
   | { kind: 'profiles' }
+  | { kind: 'fold'; value: FoldMode }
   | { kind: 'phones' }
   | null
 
@@ -78,6 +93,7 @@ export function settingPicked(id: string): SettingPick {
   if (kind === 'dock') return value === 'reset' ? { kind: 'reset' } : { kind: 'dock', value }
   if (id === 'sleepers') return { kind: 'sleepers' }
   if (id === 'profiles') return { kind: 'profiles' }
+  if (kind === 'fold' && isFoldMode(value)) return { kind, value }
   if (id === 'phones') return { kind: 'phones' }
   return null
 }

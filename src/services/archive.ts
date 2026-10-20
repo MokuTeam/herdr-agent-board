@@ -13,8 +13,9 @@
 // transcript is never touched.
 //
 // The session's schedule entries wait in the record (held) and go back into the schedule with
-// it; a restart on its way is dropped, since a resume is one. Putting them back marks the record
-// `restoring` first and drops it only once every entry is back, so a board that stops in between
+// it; a restart on its way is dropped, since a resume is one, and so is a sleep (`board sleep
+// --when-free`), which would put it back to sleep as it comes back. Putting them back marks the
+// record `restoring` first and drops it only once every entry is back, so a board that stops in between
 // finishes the job on its next refresh (collect calls settleReturned). The card file stays where
 // it is, so a session resumed by hand elsewhere comes back with its name and lane too.
 //
@@ -214,7 +215,7 @@ export type AskArchive =
  * freeToClose). The record keeps what its card says last (core/board.ts noteOf) and the profile it
  * runs in. by: 'user' or 'agent'; from: the session that asked, when another one did; tr: the
  * language of a refusal's detail (freeToClose). Returns { ok, record, held, dropped }: how many
- * entries wait with it, how many (a restart) were dropped.
+ * entries wait with it, how many (a restart, a sleep) were dropped.
  */
 export async function askArchive(
   deps: Deps,
@@ -267,13 +268,13 @@ export async function askArchive(
 /**
  * The session's schedule entries into its record: each copied first, then taken out of the
  * schedule, so a board that stops in between leaves one in both at worst (putting it back finds
- * it there). A restart on its way is dropped; a report with a receipt is left where it is (it
- * keeps the session on the board, see closeOne). Returns how many were dropped.
+ * it there). A restart or a sleep on its way is dropped; a report with a receipt is left where it
+ * is (it keeps the session on the board, see closeOne). Returns how many were dropped.
  */
 export function holdEntries(key: string): number {
   let dropped = 0
   for (const e of listEntries().filter(x => x.key === key && !x.receipt)) {
-    if (e.kind === 'restart') {
+    if (e.kind === 'restart' || e.kind === 'sleep') {
       removeEntry(e.id)
       dropped++
       continue

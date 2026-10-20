@@ -62,11 +62,14 @@ export function archiveBlock(
   return ''
 }
 
-/** The schedule entries that wait with an archived session and come back with it (a restart does not: a resume is one). */
+/**
+ * The schedule entries that wait with an archived session and come back with it (a restart does
+ * not: a resume is one; nor does a sleep, which would put it back to sleep as it comes back).
+ */
 export const heldEntries = <E extends { key: string; kind?: string | undefined }>(
   schedules: readonly E[],
   key: string,
-): E[] => schedules.filter(e => e.key === key && e.kind !== 'restart')
+): E[] => schedules.filter(e => e.key === key && e.kind !== 'restart' && e.kind !== 'sleep')
 
 /**
  * The sleeping sessions in "Idle" that a tidy-up takes: asleep and quiet for at least `days` days

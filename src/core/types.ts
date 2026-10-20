@@ -128,6 +128,8 @@ export interface Config {
    * seconds, as config.json has it (a number from 0 up counts; else 8).
    */
   archiveUndoSec?: unknown
+  /** How the web board folds a session asleep in "Waiting" (core/fold-mode.ts), as config.json has it. */
+  foldWaiting?: unknown
   [extra: string]: unknown
 }
 

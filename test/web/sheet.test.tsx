@@ -1,16 +1,19 @@
 // The React session sheet against the old page's (at the parity baseline): each scene drawn by
 // web/app.js's own sheet code on the #sheet of web/index.html (support/old-sheet.ts) and by
-// <SheetHead> and <SheetView> for the same state (support/sheet-scene.tsx) — the head's title, then
-// everything under the head. Whitespace between elements is dropped by the comparison; where text
+// <SheetHead> and <SheetView> for the same state (support/sheet-scene.tsx) — the head's title (with
+// a session in it, #62's compact head keeps only the old reminders' row), then everything under the
+// head. The compact head itself is looked at on its own, below. Whitespace between elements is dropped by the comparison; where text
 // runs inline, a second comparison keeps it (canonical `spaces`). Then the mounted sheet, as the
 // page draws it before any effect ran.
 import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { ScheduleEntry } from '../../src/core/schedule-rules.ts'
 import type { ConversationTurn } from '../../src/core/transcript.ts'
-import type { Item } from '../../src/core/types.ts'
+import type { ColumnId, Item } from '../../src/core/types.ts'
 import type { SessionDetail } from '../../web/src/api/client.ts'
 import { Sheet } from '../../web/src/components/sheet/Sheet.tsx'
+import { type HeadCard, SheetHead } from '../../web/src/components/sheet/SheetHead.tsx'
+import { NO_MOVES, withMove } from '../../web/src/models/board-view.ts'
 import type { Attachment } from '../../web/src/models/composer.ts'
 import type { DetailValue } from '../../web/src/models/detail-resource.ts'
 import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
@@ -244,29 +247,6 @@ describe('session sheet markup parity', () => {
     same({ lang: 'ru', items: [working], open: 'a', detail: ready(data, { status: 'loading' }) })
   })
 
-  test('the card fields: lane and column chips (moves on screen at once), a pin with Auto, the fields and their hints', () => {
-    const pinned = {
-      ...working,
-      status: 'idle' as const,
-      column: 'ext' as const,
-      pin: 'ext' as const,
-      auto: 'done' as const,
-      wait: 'review "now"',
-      title: 'Claude *title*',
-      doing: '',
-    }
-    same({ items: [pinned], open: 'a', detail: ready(detailOf(pinned)) })
-    same({
-      items: [pinned],
-      open: 'a',
-      detail: ready(detailOf(pinned)),
-      moves: [{ key: 'a', cat: 'other', column: 'me' }],
-    })
-    same({ lang: 'ru', items: [pinned], open: 'a', detail: ready(detailOf(pinned)) })
-    const unknownLane = { ...working, category: 'gone' }
-    same({ items: [unknownLane], open: 'a', categories: CATEGORIES.slice(0, 2) })
-  })
-
   test('the reminders: the first three (due, repeating, when free, one asking "Cancel?") and the rest in the panel', () => {
     const now = Date.now()
     const schedules: ScheduleEntry[] = [
@@ -316,23 +296,16 @@ describe('session sheet markup parity', () => {
     same({ items: [working], open: 'a', detail, message: '   ' })
     same({ lang: 'ru', items: [working], open: 'a', detail, attachments: files })
   })
-
-  test('on a phone the card fields fold behind "Card details"', () => {
-    same({ items: [working], open: 'a', narrow: true })
-    same({ items: [working], open: 'a', narrow: true, propertiesOpen: true })
-    same({ items: [working], open: 'a', propertiesOpen: true })
-  })
 })
 
 describe('text that runs inline keeps its spaces', () => {
   const spaced = (nodes: Node[], match: Parameters<typeof findAll>[1]) =>
     findAll(nodes, match).map(el => canonical([el], { spaces: true }))
-  const parts = (el: { attrs: Map<string, string> }) =>
-    ['sheet-status', 'sheet-detail-state', 'cats', 'cols'].includes(el.attrs.get('id') ?? '')
+  const parts = (el: { attrs: Map<string, string> }) => ['sheet-detail-state'].includes(el.attrs.get('id') ?? '')
   const classes = ['asked', 'sched-mini', 'thread', 'att-text', 'sched-more']
   const inline = (el: Parameters<typeof hasClass>[0]) => parts(el) || classes.some(c => hasClass(el, c))
 
-  test('the pill, the note, what it asks, the chips, the reminders, the conversation, the files', () => {
+  test('the note, what it asks, the reminders, the conversation, the files', () => {
     const asking = item({ key: 'b', name: 'Beta', status: 'blocked', column: 'me', attention: 'ask', question: 'Go?' })
     const schedules: ScheduleEntry[] = [1, 2, 3, 4].map(n => ({
       id: `s${n}`,
@@ -350,21 +323,60 @@ describe('text that runs inline keeps its spaces', () => {
       schedules,
       attachments: files,
     })
-    const old = [...spaced(sides.oldTitle, inline), ...spaced(sides.oldBody, inline)]
-    const react = [...spaced(sides.reactTitle, inline), ...spaced(sides.reactBody, inline)]
-    // The pill, the note, the two chip rows, what it asks, three reminders and "+1 more", the conversation, a file.
-    expect(old.length).toBe(11)
+    const old = [...spaced(sides.oldSchedule, inline), ...spaced(sides.oldBody, inline)]
+    const react = [...spaced(sides.reactSchedule, inline), ...spaced(sides.reactBody, inline)]
+    // Three reminders and "+1 more", the note, what it asks, the conversation, a file.
+    expect(old.length).toBe(8)
     expect(react).toEqual(old)
+  })
+})
+
+describe('the workspace’s name in the head', () => {
+  const head = (onRenameWorkspace?: (name: HTMLElement) => void, lang = 'en') =>
+    renderInBoard(
+      <SheetHead item={working} missing={false} onRenameWorkspace={onRenameWorkspace} />,
+      board({ data: payload({ items: [working], categories: CATEGORIES }), ui: { open: 'a' } }),
+      lang,
+    )
+
+  test('where the page renames workspaces, the name alone is a button, in the line’s own words', () => {
+    const meta = byId(
+      head(() => {}),
+      'sheet-meta',
+    )
+    expect(canonical([byId([meta], 'sheet-workspace')])).toBe(
+      '<button class="sheet-workspace" id="sheet-workspace" title="Rename workspace…" type="button">web</button>',
+    )
+    expect(canonical(findAll([meta], el => el.tag === 'span').slice(0, 1), { spaces: true })).toBe(
+      [
+        '<span>',
+        '  workspace ',
+        '  <button class="sheet-workspace" id="sheet-workspace" title="Rename workspace…" type="button">web</button>',
+        '</span>',
+      ].join('\n'),
+    )
+    expect(
+      byId(
+        head(() => {}, 'ru'),
+        'sheet-workspace',
+      ).attrs.get('title'),
+    ).toBe('Переименовать workspace…')
+  })
+
+  test('without a way to rename it, the line is as it was', () => {
+    const meta = byId(head(), 'sheet-meta')
+    expect(findAll([meta], el => el.tag === 'button')).toEqual([])
+    expect(canonical(findAll([meta], el => el.tag === 'span').slice(0, 1))).toBe('<span>workspace web</span>')
   })
 })
 
 describe('the mounted sheet', () => {
   const VP = { w: 1600, h: 1000 }
-  /** What comes in .sheet-inner: the head's title, and the rest under the head. */
-  function inner(nodes: Node[]): string {
+  /** What comes in .sheet-inner: the head's title (with a session, its reminders' row), and the rest under the head. */
+  function inner(nodes: Node[], session: boolean): string {
     const aside = byId(nodes, 'sheet')
-    const { title, body } = sheetParts(aside)
-    return `${canonical([title])}\n${canonical(body)}`
+    const { title, body, schedule } = sheetParts(aside)
+    return `${canonical(session ? schedule : [title])}\n${canonical(body)}`
   }
   const mounted = (open: string | null, data = payload({ items: [working], categories: CATEGORIES })) =>
     renderInBoard(
@@ -376,15 +388,20 @@ describe('the mounted sheet', () => {
 
   test('before any session opened, as the page starts', () => {
     const data = payload({ items: [working], categories: CATEGORIES })
-    expect(inner(mounted(null, data))).toBe(inner([oldSheet({ data, open: null })]))
+    expect(inner(mounted(null, data), false)).toBe(inner([oldSheet({ data, open: null })], false))
   })
 
   test('on its first draw for a session, its detail not asked for yet', () => {
     const data = payload({ items: [working], categories: CATEGORIES })
     const react = mounted('a', data)
-    expect(inner(react)).toBe(
-      inner([oldSheet({ data, open: 'a', detail: { key: 'a', data: null, status: 'idle', error: '', at: null } })]),
+    expect(inner(react, true)).toBe(
+      inner(
+        [oldSheet({ data, open: 'a', detail: { key: 'a', data: null, status: 'idle', error: '', at: null } })],
+        true,
+      ),
     )
+    // The head's title is #62's: the card's fields in it, nothing of them under it.
+    expect(findAll(byClass(react, 'sheet-title').children, el => el.attrs.get('id') === 'sheet-card').length).toBe(1)
     const aside = byId(react, 'sheet')
     expect(hasClass(aside, 'sheet')).toBe(true)
     expect(find([aside], el => el.attrs.get('id') === 'sheet-close').tag).toBe('button')
@@ -421,5 +438,129 @@ describe('the mounted sheet', () => {
       'ru',
     )
     expect(canonical([byId(react, 'sheet-focus')])).toContain(t('sheet.focus'))
+  })
+})
+
+describe('the compact head (#62)', () => {
+  const pinned = {
+    ...working,
+    status: 'idle' as const,
+    column: 'ext' as const,
+    pin: 'ext' as const,
+    auto: 'done' as const,
+    wait: 'review "now"',
+    title: 'Claude *title*',
+    doing: '',
+  }
+  const head = (
+    it: Item | null,
+    {
+      card = { disabled: false, open: false },
+      missing = false,
+      lang = 'en',
+      moves = [],
+      connected = true,
+    }: {
+      card?: HeadCard
+      missing?: boolean
+      lang?: string
+      moves?: { key: string; cat: string | null; column: ColumnId | null }[]
+      connected?: boolean
+    } = {},
+  ) => {
+    const ui = {
+      open: it?.key ?? null,
+      moves: moves.reduce((all, m) => withMove(all, m.key, { ...m, at: Date.now() }), NO_MOVES),
+    }
+    const data = payload({ items: it ? [it] : [], categories: CATEGORIES })
+    return renderInBoard(<SheetHead item={it} missing={missing} card={card} />, board({ data, connected, ui }), lang)
+  }
+  const text = (el: Node): string => (el.kind === 'text' ? el.text : el.children.map(text).join(''))
+
+  test('before a session was ever open: the empty places the page starts with', () => {
+    expect(canonical(head(null))).toBe(
+      [
+        '<span class="status-pill" id="sheet-status"></span>',
+        '<h2 id="sheet-name" tabindex="0"></h2>',
+        '<p class="sheet-meta" id="sheet-meta"></p>',
+      ].join('\n'),
+    )
+  })
+
+  test('where it shows and its lane are pills whose choices open in a menu; the lane leaves the line under the name', () => {
+    const nodes = head(working, { card: { disabled: false, open: false, pickOpen: 'category' } })
+    const status = byId(nodes, 'sheet-status')
+    expect([status.tag, status.attrs.get('aria-haspopup'), status.attrs.get('aria-expanded')]).toEqual([
+      'button',
+      'menu',
+      'false',
+    ])
+    expect(text(status)).toBe('Working')
+    expect(byClass([status], 'dot').attrs.get('class')).toBe('dot work')
+    const lane = byId(nodes, 'sheet-lane')
+    expect([lane.tag, lane.attrs.get('aria-haspopup'), lane.attrs.get('aria-expanded')]).toEqual([
+      'button',
+      'menu',
+      'true',
+    ])
+    expect(text(lane)).toBe('Project')
+    expect(lane.attrs.get('style')).toContain('--lane:#007AFF')
+    expect(text(byId(nodes, 'sheet-meta'))).toBe('workspace web · active 5 min ago · context 42% · 85k')
+    // In Russian, with the pills' names.
+    const ru = head(working, { lang: 'ru' })
+    expect(byId(ru, 'sheet-lane').attrs.get('title')).toBe('Перенести в категорию')
+    expect(byId(ru, 'sheet-status').attrs.get('title')).toBe('Статус')
+  })
+
+  test('a move shows on the pills at once, as it did on the chips', () => {
+    const nodes = head(pinned, { moves: [{ key: 'a', cat: 'other', column: 'me' }] })
+    expect(text(byId(nodes, 'sheet-status'))).toBe('Needs me')
+    expect(byClass([byId(nodes, 'sheet-status')], 'dot').attrs.get('class')).toBe('dot me')
+    expect(text(byId(nodes, 'sheet-lane'))).toBe('Other')
+  })
+
+  test('asleep, the pill says so; gone from the board, it is no button; without the board, the pills open nothing', () => {
+    const asleep = byId(head({ ...working, sleeping: true }), 'sheet-status')
+    expect([asleep.tag, text(asleep)]).toEqual(['button', 'Asleep'])
+    const gone = head(working, { missing: true })
+    expect([byId(gone, 'sheet-status').tag, text(byId(gone, 'sheet-status'))]).toEqual(['span', 'Session unavailable'])
+    expect(byId(gone, 'sheet-lane').attrs.has('disabled')).toBe(true)
+    const offline = head(working, { card: { disabled: true, open: false } })
+    expect(byId(offline, 'sheet-status').attrs.has('disabled')).toBe(true)
+    expect(byId(offline, 'sheet-lane').attrs.has('disabled')).toBe(true)
+    expect(byId(offline, 'doing').attrs.has('disabled')).toBe(true)
+  })
+
+  test('the card’s fields show when they say something; the pencil shows the empty ones to fill', () => {
+    const doing = head(working)
+    expect(byId(doing, 'doing').attrs.get('value')).toBe('the **login** form')
+    expect(findAll(doing, el => el.attrs.get('id') === 'wait')).toEqual([])
+    const toggle = byId(doing, 'sheet-properties-toggle')
+    expect([toggle.attrs.get('aria-expanded'), toggle.attrs.get('aria-controls'), toggle.attrs.get('title')]).toEqual([
+      'false',
+      'sheet-card',
+      'Card details',
+    ])
+    const waits = head(pinned)
+    expect(findAll(waits, el => el.attrs.get('id') === 'doing')).toEqual([])
+    expect(byId(waits, 'wait').attrs.get('value')).toBe('review "now"')
+    // Opened: both, the empty one with its hint (what it does: Claude's title for it, in plain words).
+    const opened = head(pinned, { card: { disabled: false, open: true } })
+    expect(byId(opened, 'sheet-properties-toggle').attrs.get('aria-expanded')).toBe('true')
+    expect(byId(opened, 'doing').attrs.get('placeholder')).toBe('Claude title')
+    expect(byId(opened, 'wait').attrs.get('value')).toBe('review "now"')
+    // Nothing to say: the fields' place folds away; the pencil or a reminder brings it back.
+    const quiet = { ...working, doing: '' }
+    expect(byId(head(quiet), 'sheet-card').attrs.has('hidden')).toBe(true)
+    expect(byId(head(quiet, { card: { disabled: false, open: true } }), 'sheet-card').attrs.has('hidden')).toBe(false)
+    const reminded = renderInBoard(
+      <SheetHead item={quiet} missing={false} card={{ disabled: false, open: false }} />,
+      board({
+        data: payload({ items: [quiet], schedules: [{ id: 's1', key: 'a', text: 'check', next: Date.now() }] }),
+        ui: { open: 'a' },
+      }),
+    )
+    expect(byId(reminded, 'sheet-card').attrs.has('hidden')).toBe(false)
+    expect(findAll(reminded, el => hasClass(el, 'sched-row')).length).toBe(1)
   })
 })

@@ -14,13 +14,14 @@ import { publicHelper } from '../../core/helpers.ts'
 import { t } from '../../core/lang.ts'
 import { checkName } from '../../core/launch/names.ts'
 import type { MessageGate } from '../../core/message-gate.ts'
+import { isPiItem } from '../../core/pi.ts'
 import type { Item, Pin } from '../../core/types.ts'
 import { checkWake, focus, send, sleepSession, wake, wakeAnswers } from '../../services/actions.ts'
 import { answerPermission, answerQuestions } from '../../services/answer.ts'
 import { askArchive, undoMs } from '../../services/archive.ts'
 import { collect } from '../../services/board.ts'
 import type { Deps } from '../../services/deps.ts'
-import { renameSession } from '../../services/launch/rename.ts'
+import { renameSession, renameWorkspace } from '../../services/launch/rename.ts'
 import { startCall } from '../../services/mokupilot.ts'
 import { type Body, type Handler, json, type Route } from '../http.ts'
 import { helperRoute, withSessions } from './helpers.ts'
@@ -55,7 +56,10 @@ async function detail(app: SessionApp, item: Item) {
     reg && ['idle', 'shell'].includes(reg.status ?? '') && typeof reg.statusUpdatedAt === 'number'
       ? reg.statusUpdatedAt
       : 0
-  const thread = deps.claude.sessionThread(transcript ?? '', 60, { since: since ?? 0, idleSince })
+  // A pi session's turns are in its session file, its key.
+  const thread = isPiItem(item)
+    ? deps.pi.sessionThread(item.session ?? '', 60)
+    : deps.claude.sessionThread(transcript ?? '', 60, { since: since ?? 0, idleSince })
   const conversation = withSessions(app.items(), thread.conversation)
   // helpers: every subagent, fork, workflow agent and teammate, newest first (adapters/helpers.ts).
   const own = helpersOf(transcript, { alive: !!alive, since: since ?? null })
@@ -138,6 +142,10 @@ async function rename(item: Item, body: Body): Promise<Result> {
   return claude
 }
 
+/** The board's own workspace, when it opens in one of its own ('' when it opens as a tab or over a pane). */
+const boardWorkspace = (cfg: Deps['cfg']): string =>
+  (cfg.placement ?? 'workspace') === 'workspace' ? (cfg.workspace ?? 'Board') : ''
+
 function card(item: Item, body: Body): Result {
   const patch: CardPatch = {}
   if (typeof body.category === 'string') patch.category = body.category.toLowerCase().replace(/[^a-z0-9_-]/g, '')
@@ -213,6 +221,9 @@ async function act(app: SessionApp, item: Item, action: string, body: () => Prom
       return answer(app, item, action, await body())
     case 'rename':
       return rename(item, await body())
+    // herdr's name for the workspace it is in, which every session there shows.
+    case 'workspace':
+      return renameWorkspace(item, String((await body()).name ?? ''), boardWorkspace(deps.cfg))
     case 'card':
       return card(item, await body())
     // Off the board: hidden at once, its pane closed a few seconds later by the scheduler (services/archive.ts).
@@ -281,10 +292,11 @@ export function sessionRoutes(app: SessionApp): Route[] {
       handle: withItem(async item => json(200, await detail(app, item))),
     },
     helperRoute(app),
-    // Answering a dialog presses keys in a session, an archive closes a pane: like a launch, only from this page.
+    // Answering a dialog presses keys in a session, an archive closes a pane, a workspace's new name
+    // is every session's there: like a launch, only from this page.
     {
       method: 'POST',
-      path: /^\/api\/session\/([^/]+)\/(answer|permit|archive)$/,
+      path: /^\/api\/session\/([^/]+)\/(answer|permit|archive|workspace)$/,
       guard: ['board-header', 'origin', 'fresh-data'],
       handle: action,
     },

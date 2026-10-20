@@ -14,7 +14,13 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { hooksInstalled, installInto, readSettings } from '../../src/adapters/hook-settings.ts'
+import {
+  herdrHookInstalled,
+  herdrHookOf,
+  hooksInstalled,
+  installInto,
+  readSettings,
+} from '../../src/adapters/hook-settings.ts'
 import type { InstallPaths } from '../../src/core/install-plan.ts'
 import { boardFiles } from '../../src/core/setup.ts'
 
@@ -111,4 +117,44 @@ test('hooksInstalled: both events with this copy’s hook; read again only when 
   expect(hooksInstalled(dir, A)).toBe(false)
   changed()
   expect(hooksInstalled(dir, A)).toBe(true)
+})
+
+test('herdr’s own hook: its SessionStart entry and the script it runs, both there; the board’s install keeps it', () => {
+  const dir = tempDir()
+  const file = join(dir, 'settings.json')
+  let n = 0
+  const changed = (): void => {
+    const at = new Date(Date.UTC(2026, 0, 1, 0, 0, ++n))
+    utimesSync(file, at, at)
+  }
+  const script = join(dir, 'hooks', 'herdr-agent-state.ps1')
+  // As herdr 0.9.5 writes it.
+  const command = `powershell -NoProfile -ExecutionPolicy Bypass -File "${script}" session`
+  const settings = {
+    hooks: {
+      SessionStart: [
+        { matcher: '^(startup|resume|clear|compact|fork)$', hooks: [{ type: 'command', command, timeout: 10 }] },
+      ],
+    },
+  }
+  expect(herdrHookOf({})).toEqual({ script: null, found: false })
+  expect(herdrHookOf(settings)).toEqual({ script, found: false })
+  expect(herdrHookInstalled(dir)).toBe(false) // no settings.json
+  writeFileSync(file, '{}')
+  changed()
+  expect(herdrHookInstalled(dir)).toBe(false) // no entry
+  writeFileSync(file, JSON.stringify(settings))
+  changed()
+  expect(herdrHookInstalled(dir)).toBe(false) // no script
+  mkdirSync(join(dir, 'hooks'))
+  writeFileSync(script, '# installed by herdr\n')
+  expect(herdrHookOf(settings)).toEqual({ script, found: true })
+  expect(herdrHookInstalled(dir)).toBe(true)
+  installInto(dir, A)
+  changed()
+  expect(herdrHookInstalled(dir)).toBe(true)
+  expect(hooksInstalled(dir, A)).toBe(true)
+  // The script gone: missing at once, though settings.json did not change.
+  rmSync(script)
+  expect(herdrHookInstalled(dir)).toBe(false)
 })

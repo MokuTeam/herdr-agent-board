@@ -9,6 +9,7 @@ import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
 import { failureKind } from '../../core/launch/launcher-command.ts'
 import { sameDir } from '../../core/launch/names.ts'
+import { isPiItem, piSessionId } from '../../core/pi.ts'
 import { shownProfiles } from '../../core/profiles.ts'
 import type { Item, LaunchView } from '../../core/types.ts'
 import { raiseTerminal } from '../../integrations/terminal-window.ts'
@@ -63,6 +64,7 @@ const codeOf = (err: unknown): string | undefined =>
 // A card with nothing else on it was only the launch's: the board wrote the lane and the profile
 // it is meant to run in, the hooks the profile it reports.
 const LANE_ONLY = ['key', 'category', 'updatedAt', 'profileWant', 'profile', 'profileDir']
+const laneOnly = (key: string): boolean => Object.keys(readCard(key) ?? {}).every(k => LANE_ONLY.includes(k))
 
 // What a retry starts from: a worktree or a workspace this launch made already is used, not
 // made again (git would refuse the branch; herdr would get a second, empty workspace).
@@ -167,7 +169,6 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
       return { ok: false, error: t('err.focus', { name: l.name, why: messageOf(err) }) }
     }
     l.closed = true
-    const laneOnly = (key: string): boolean => Object.keys(readCard(key) ?? {}).every(k => LANE_ONLY.includes(k))
     // A resumed session's card is its own from before: it stays.
     if (l.sessionId && !l.resume && laneOnly(l.sessionId)) removeCard(l.sessionId)
     launches.delete(id)
@@ -177,10 +178,12 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
 
   function observe(items: Item[]): void {
     const claimed = new Set<string>()
+    // A pi session started with the board's id is keyed by its file, whose name holds that id.
+    const started = (i: Item, id: string): boolean => i.session === id || (isPiItem(i) && piSessionId(i.session) === id)
     for (const l of launches.values()) {
+      const id = l.sessionId
       let it =
-        (l.sessionId ? items.find(i => i.session === l.sessionId) : undefined) ??
-        (l.pane ? items.find(i => i.pane === l.pane) : undefined)
+        (id ? items.find(i => started(i, id)) : undefined) ?? (l.pane ? items.find(i => i.pane === l.pane) : undefined)
       // A launcher that says its pane only at the end: while it runs, a new agent pane in that
       // folder and workspace is taken for it, and the pane it prints settles it. herdr's own path
       // and launchers given {sessionId} need no guess: they are matched by the session id.
@@ -204,6 +207,8 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
       if (l.carded !== it.key && (it.session || it.agent !== 'claude')) {
         try {
           writeCard(it.key, { category: l.category, profileWant: l.profile })
+          // pi's card is under its file: the one written under the board's id before pi was up goes.
+          if (isPiItem(it) && l.carded && laneOnly(l.carded)) removeCard(l.carded)
           l.carded = it.key
         } catch {}
       }

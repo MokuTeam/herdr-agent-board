@@ -2,12 +2,13 @@
 // script for Git Bash, Linux and macOS and a .cmd for PowerShell), copies the agents' skill
 // (skills/herdr-agents) into the skills folder of every shown Claude profile and registers the
 // SessionStart / UserPromptSubmit hooks and the status line in its settings.json (~/.claude, and
-// each CLAUDE_CONFIG_DIR folder the board shows; a hidden one is left alone), then says what else
-// is set up and what is not (core/setup.ts). Idempotent; replaces its own earlier
-// entries and keeps a backup of each settings.json next to it. A settings.json that does not parse
-// stops it before anything is written. Run it again after moving or updating the plugin or Bun:
-// the hooks, the status line and the shims run the Bun that ran this (an absolute path, no PATH
-// lookup).
+// each CLAUDE_CONFIG_DIR folder the board shows; a hidden one is left alone), has herdr put its
+// own Claude hook there too (herdr integration install claude, from which herdr learns the session
+// a pane runs), then says what else is set up and what is not (core/setup.ts). Idempotent;
+// replaces its own earlier entries and keeps a backup of each settings.json next to it. A
+// settings.json that does not parse stops it before anything is written. Run it again after
+// moving or updating the plugin or Bun: the hooks, the status line and the shims run the Bun that
+// ran this (an absolute path, no PATH lookup).
 //
 //   bun src/entrypoints/install.ts              the above; desktop notifications stay as they were
 //   bun src/entrypoints/install.ts --toast      also Windows notifications with the agent's words
@@ -18,6 +19,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { installSkill } from '../adapters/agents-skill.ts'
 import { loadConfig } from '../adapters/config-file.ts'
+import { claudeIntegrationInstall } from '../adapters/herdr.ts'
 import { installInto, readSettings } from '../adapters/hook-settings.ts'
 import { ROOT } from '../adapters/paths.ts'
 import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
@@ -115,6 +117,14 @@ try {
           : 'desktop notifications: off',
       )
     toastOn ||= out.toast
+    // herdr's own Claude hook, from which herdr learns the session a pane runs: herdr writes it.
+    // A herdr that cannot (none on PATH, an older one) is said, and the install goes on.
+    try {
+      await claudeIntegrationInstall(profile.dir)
+      console.log(`herdr's hook: claude integration in ${profile.dir}`)
+    } catch (err) {
+      console.log(`herdr's hook in ${profile.dir}: not installed: ${messageOf(err).split(/\r?\n/)[0]}`)
+    }
   }
   if (process.platform === 'win32') {
     const delivery = tomlValue(readText(herdrConfigFile()), 'ui.toast', 'delivery') ?? 'off'

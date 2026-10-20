@@ -5,6 +5,7 @@ import {
   checkBranch,
   checkName,
   defaultWorkspace,
+  kebabName,
   NAME_MAX,
   suggestName,
   worktreePath,
@@ -40,13 +41,17 @@ export interface LaunchFields {
 /** The workspace the form wants: by id, by label, or a new one by that name. */
 export type WorkspaceWant = { id: string } | { label: string } | { create: string }
 
-/** Values the user set: those stop following the folder. */
+/**
+ * Values the user set: those stop following the folder. `newWorkspace`: a new workspace's name
+ * typed or asked for, which stops following the session's name.
+ */
 export interface SetByUser {
   category: boolean
   cwd: boolean
   name: boolean
   branch: boolean
   workspace: boolean
+  newWorkspace: boolean
 }
 
 /** What the form starts with: the values, which of them count as set, and the workspace it wants. */
@@ -86,15 +91,27 @@ export function formStart(
       : card?.workspace
         ? { label: card.workspace }
         : null
+  const name = r?.name ?? (cwd ? suggestName(cwd, [...board.items]) : '')
+  // A workspace asked for by its label is made again by that name when herdr no longer has it; a
+  // new one's name counts unless it is only what the session's name gives.
+  const create = workspace && 'create' in workspace ? workspace.create : ''
+  const named = (!!workspace && 'label' in workspace) || (!!create && create !== kebabName(name))
   return {
     category: picked || 'other',
     cwd,
-    name: r?.name ?? (cwd ? suggestName(cwd, [...board.items]) : ''),
+    name,
     message: r?.message ?? '',
     wt: !!r?.worktree,
     branch: r?.worktree?.branch ?? '',
     workspace,
-    set: { category: !!picked, cwd: !!cwd, name: !!r, branch: !!r?.worktree, workspace: !!workspace },
+    set: {
+      category: !!picked,
+      cwd: !!cwd,
+      name: !!r,
+      branch: !!r?.worktree,
+      workspace: !!workspace,
+      newWorkspace: named,
+    },
   }
 }
 
@@ -156,9 +173,12 @@ export function workspaceChoice(s: WorkspaceScene): WorkspaceChoice {
   return { list, value, create, seed: (want && 'create' in want ? want.create : '') || label }
 }
 
-/** A new workspace's default name: the lane's title, else the folder's name. */
-export const workspaceName = (category: string, title: string, cwd: string, t: Translator): string =>
-  category && category !== 'other' ? title : baseName(cwd) || t('launch.workspaceDefault')
+/**
+ * A new workspace's default name: the session's name in kebab-case; without one, the lane's title,
+ * else the folder's name.
+ */
+export const workspaceName = (name: string, category: string, title: string, cwd: string, t: Translator): string =>
+  kebabName(name) || (category && category !== 'other' ? title : baseName(cwd) || t('launch.workspaceDefault'))
 
 /** A folder in a git checkout: its root and the branch it is on. */
 export type GitInfo = { root: string; branch: string }

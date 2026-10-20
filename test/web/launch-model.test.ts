@@ -239,20 +239,23 @@ describe('what the form starts with', () => {
       wt: false,
       branch: '',
       workspace: { label: 'Acme' },
-      set: { category: true, cwd: true, name: false, branch: false, workspace: true },
+      set: { category: true, cwd: true, name: false, branch: false, workspace: true, newWorkspace: true },
     })
   })
 
   test('a lane, the lane on show, a new workspace, nothing at all', () => {
     expect(formStart({ category: 'web' }, null, board).category).toBe('web')
     expect(formStart({}, null, { ...board, filter: 'ops' }).category).toBe('ops')
-    expect(formStart({ newWorkspace: true }, null, board).workspace).toEqual({ create: '' })
+    expect(formStart({ newWorkspace: true }, null, board)).toMatchObject({
+      workspace: { create: '' },
+      set: { workspace: true, newWorkspace: false },
+    })
     expect(formStart({}, null, board)).toMatchObject({
       category: 'other',
       cwd: '',
       name: '',
       workspace: null,
-      set: { category: false, cwd: false, name: false, workspace: false },
+      set: { category: false, cwd: false, name: false, workspace: false, newWorkspace: false },
     })
   })
 
@@ -273,8 +276,10 @@ describe('what the form starts with', () => {
       wt: true,
       branch: 'march',
       workspace: { create: 'Fresh' },
-      set: { name: true, branch: true },
+      set: { name: true, branch: true, newWorkspace: true },
     })
+    // A new workspace's name that was only what the session's name gives goes on following it.
+    expect(formStart({ category: 'acme' }, { ...draft, workspace: 'invoices' }, board).set.newWorkspace).toBe(false)
     expect(formStart({ category: 'acme' }, { ...draft, newWorkspace: false }, board).workspace).toEqual({
       label: 'Fresh',
     })
@@ -356,10 +361,12 @@ describe('the workspace it offers', () => {
     })
   })
 
-  test("a new one's default name: the lane's title, else the folder's name, else Sessions", () => {
-    expect(workspaceName('acme', 'Acme', 'C:\\Work\\x', t)).toBe('Acme')
-    expect(workspaceName('other', 'Other', 'C:\\Work\\x\\', t)).toBe('x')
-    expect(workspaceName('other', 'Other', '', t)).toBe('Sessions')
+  test("a new one's default name: the session's name in kebab-case, else the lane's title, the folder's, Sessions", () => {
+    expect(workspaceName('New Test Project', 'acme', 'Acme', 'C:\\Work\\x', t)).toBe('new-test-project')
+    expect(workspaceName('Новый проект', 'other', 'Other', '', translator('ru'))).toBe('новый-проект')
+    expect(workspaceName('', 'acme', 'Acme', 'C:\\Work\\x', t)).toBe('Acme')
+    expect(workspaceName('!!!', 'other', 'Other', 'C:\\Work\\x\\', t)).toBe('x')
+    expect(workspaceName(' ', 'other', 'Other', '', t)).toBe('Sessions')
   })
 })
 

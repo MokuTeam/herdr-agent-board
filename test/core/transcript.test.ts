@@ -33,6 +33,18 @@ test('without filters the envelope stays; userText takes the same seam', () => {
   assert.equal(userText([{ type: 'text', text: '<system-reminder>x</system-reminder>go' }]), 'go')
 })
 
+test('pasted text shows without the pasted_content tags around it', () => {
+  assert.equal(
+    userText(
+      '[Image #1]\n\n<pasted_content id="7952">\nFirst line\nSecond line\n</pasted_content id="7952">\n\nplain one',
+    ),
+    '[Image #1]\n\nFirst line\nSecond line\n\nplain one',
+  )
+  assert.equal(userText('<pasted_content id="3cf7">\nonly this\n</pasted_content id="3cf7">'), 'only this')
+  // Only the tags Claude Code puts there: a message that names the tag keeps it.
+  assert.equal(userText('write <pasted_content> as a tag'), 'write <pasted_content> as a tag')
+})
+
 test('tool labels and details read like a sentence', () => {
   assert.equal(toolLabel('mcp__plugin_slack_slack__slack_read_channel'), 'slack · read_channel')
   assert.equal(toolLabel('mcp__claude_ai_Gmail__search_threads'), 'Gmail · search_threads')

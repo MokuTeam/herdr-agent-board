@@ -16,7 +16,7 @@ import type { SetupFacts } from '../core/setup.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
-import { installProfile } from '../services/profiles.ts'
+import { editProfile, installProfile } from '../services/profiles.ts'
 import { createRemote } from '../services/remote.ts'
 import { startScheduler } from '../services/scheduler.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
@@ -34,6 +34,7 @@ import { scheduleRoute } from './routes/schedule.ts'
 import { sessionRoutes } from './routes/session.ts'
 import { categoriesRoute, profilesRoute, settingsRoute } from './routes/settings.ts'
 import { setupRoute } from './routes/setup.ts'
+import { sleepRoute } from './routes/sleep.ts'
 import { staticRoute } from './routes/static.ts'
 import { terminalRoute } from './routes/terminal.ts'
 import { createBroadcaster } from './sse.ts'
@@ -152,6 +153,13 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
   })
   board.publish()
   const refresh = (): void => void board.refresh()
+  // After Install from the Profiles panel, and the install a show runs: the panel's note and "Setup
+  // incomplete" follow at once, not at the next refresh and the next check in up to 10 minutes;
+  // also when only herdr's own hook failed, after the board's went in.
+  const installed = (): void => {
+    board.publish()
+    setup.again().catch(err => log(`setup check: ${messageOf(err)}`))
+  }
 
   // The order of main's `if` chain: the first route that answers wins.
   routes.push(
@@ -163,19 +171,20 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     revealRoute(board, events, reveals),
     settingsRoute(),
     scheduleRoute(refresh),
+    // Several sessions put to sleep at once, for agents (services/sleep.ts).
+    sleepRoute({ deps, items: board.items, refresh }),
     // The archive: its list, and archiving, bringing back or removing sessions (services/archive.ts).
     ...archiveRoutes({ deps, launches, items: board.items, find: board.find, refresh }),
     categoriesRoute(),
-    // Install from the Profiles panel: the panel's note and "Setup incomplete" follow at once, not
-    // at the next refresh and the next check in up to 10 minutes.
-    profilesRoute(id => {
-      const done = installProfile(deps, id)
-      if (done.ok) {
-        board.publish()
-        setup.again().catch(err => log(`setup check: ${messageOf(err)}`))
-      }
-      return done
-    }),
+    // The Profiles panel: Install, and its edits, a show installing too (services/profiles.ts).
+    profilesRoute(
+      async id => {
+        const done = await installProfile(deps, id)
+        installed()
+        return done
+      },
+      body => editProfile(body, installed),
+    ),
     ...launchRoutes(launches, board.items),
     terminalRoute({ cfg, terminals, find: board.find, publish: board.publish }),
     ...sessionRoutes({

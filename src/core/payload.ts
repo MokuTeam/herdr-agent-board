@@ -1,6 +1,7 @@
 // The board as GET /api/board answers and the event stream pushes it (src/server/board-state.ts
 // builds it; the web board reads it). One type for both sides, so they cannot drift apart.
 import type { BoardArchive } from './archive.ts'
+import type { FoldMode } from './fold-mode.ts'
 import type { LimitWindow } from './limits.ts'
 import type { RemoteView } from './remote.ts'
 import type { ScheduleEntry } from './schedule-rules.ts'
@@ -47,7 +48,10 @@ export interface BoardProfile {
   inherited: boolean
   /** Its folder is there. */
   exists: boolean
-  /** The board's hooks are in its settings.json; null for a hidden one, which the board does not read. */
+  /**
+   * The hooks its sessions need are in its settings.json: the board's, and herdr's own Claude hook
+   * (from which herdr learns the session a pane runs); null for a hidden one, which the board does not read.
+   */
   hooks: boolean | null
   /** The sessions on the board that run in it now. */
   sessions: number
@@ -94,6 +98,8 @@ export interface BoardPayload {
   profiles?: BoardProfile[]
   /** The program `launch.claude` types (`claude` when it is unset or not valid): what a profile without a start command types. */
   claudeProgram?: string
+  /** How a session asleep in "Waiting" folds (core/fold-mode.ts); a board before the setting sent none. */
+  foldWaiting?: FoldMode
   /** The remote mode (core/remote.ts), only while it is on. */
   remote?: RemoteView
 }

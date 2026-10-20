@@ -77,7 +77,8 @@ test('pasted text, images and two messages typed in a row come as one queued ent
   const content =
     '[Image #1]\n\n<pasted_content id="7952">\nFirst line\nSecond line\nFiles:\n</pasted_content id="7952">\n\nplain one'
   const lines = [...busy, q(10, 'enqueue', content)]
-  assert.deepEqual(queued(lines), [content])
+  // Shown as the thread shows it: the pasted text without its tags.
+  assert.deepEqual(queued(lines), ['[Image #1]\n\nFirst line\nSecond line\nFiles:\n\nplain one'])
   // Absorbed with its image: the attachment holds the text and the image as blocks.
   const blocks = [
     { type: 'text', text: content },

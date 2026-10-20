@@ -208,7 +208,7 @@ function reactThread(scene: Scene): Element {
     },
   }
   const nodes = renderInBoard(
-    <SheetView open={open} item={working} detail={detail} narrow={false} propertiesOpen={false} composer={composer} />,
+    <SheetView open={open} item={working} detail={detail} composer={composer} />,
     board({ data: payload({ items: [working] }), ui: { open } }),
     scene.lang ?? 'en',
   )

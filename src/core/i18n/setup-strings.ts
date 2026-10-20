@@ -78,6 +78,12 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.skill.foreignDetail': "{file} is someone else's skill of that name, so the install leaves it alone.",
     'setup.skill.foreignFix': 'Rename or move that folder, then run the install again.',
 
+    'setup.herdr.ok': 'herdr’s Claude hook',
+    'setup.herdr.okDetail': 'herdr learns from it which conversation each session has',
+    'setup.herdr.missing': 'herdr’s Claude hook is missing',
+    'setup.herdr.without':
+      'Without it herdr does not see which conversation a session has: its card shows no conversation and no profile.',
+
     'setup.key.ok': 'herdr key for the board',
     'setup.key.okDetail': '{key} in {file}',
     'setup.key.none': 'No herdr key for the board',
@@ -210,6 +216,12 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.skill.foreign': 'Скилл {name} не от доски',
     'setup.skill.foreignDetail': '{file}: чужой скилл с таким именем, установка его не трогает.',
     'setup.skill.foreignFix': 'Переименуй или перенеси эту папку, потом снова запусти установку.',
+
+    'setup.herdr.ok': 'Хук Claude для herdr',
+    'setup.herdr.okDetail': 'из него herdr узнаёт, какой разговор у каждой сессии',
+    'setup.herdr.missing': 'Нет хука Claude для herdr',
+    'setup.herdr.without':
+      'Без него herdr не видит, какой разговор у сессии: в её карточке нет ни переписки, ни профиля.',
 
     'setup.key.ok': 'Клавиша доски в herdr',
     'setup.key.okDetail': '{key} в {file}',

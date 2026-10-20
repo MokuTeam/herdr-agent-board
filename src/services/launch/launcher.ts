@@ -389,7 +389,8 @@ async function runLauncher(l: LaunchContext, on: LaunchEvents, run: RunSpec): Pr
       return {
         pane,
         sessionId: run.sessionId,
-        agent: 'claude',
+        // The board's spawn-agent says when its start command started pi; a launcher of one's own is taken as before.
+        agent: (run.builtin && out.kind) || 'claude',
         dialog: false,
         failure: null,
         named: false,

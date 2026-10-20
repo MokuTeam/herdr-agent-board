@@ -47,10 +47,16 @@ async function run(make: () => LaunchSide, steps: Step[]): Promise<string[]> {
   }
 }
 
-/** Both sides the same after every step; returns the baseline's snapshots. */
-async function compare(steps: Step[], scene: () => LaunchScene = board): Promise<string[]> {
-  const baseline = await run(() => oldLaunchSide(scene()), steps)
-  const react = await run(() => reactLaunchSide(scene()), steps)
+/**
+ * Both sides the same after every step; returns the baseline's snapshots. `renamed`: a new
+ * workspace's name is left out of both, the old page's being the lane's or the folder's and the
+ * React window's the session's ("a new workspace's name" runs the React window alone for it).
+ */
+async function compare(steps: Step[], scene: () => LaunchScene = board, renamed = false): Promise<string[]> {
+  const unnamed = (shot: string) =>
+    renamed ? shot.replace(/ newWorkspace="(?:[^"\\]|\\.)*"/, ' newWorkspace=…') : shot
+  const baseline = (await run(() => oldLaunchSide(scene()), steps)).map(unnamed)
+  const react = (await run(() => reactLaunchSide(scene()), steps)).map(unnamed)
   expect(react.length).toBe(baseline.length)
   for (const [i, shot] of baseline.entries()) expect(`react step ${i}\n${react[i]}`).toBe(`react step ${i}\n${shot}`)
   return baseline
@@ -237,8 +243,12 @@ describe('the window opens and grows out of what opened it', () => {
   })
 
   test('from a menu, in a new workspace: grown out of the point, the new name field first', async () => {
-    const shots = await compare(openAndSettle({ newWorkspace: true, category: 'web' }, pointRect(500, 300)))
-    expect(fieldsLine(shots.at(-1))).toContain('workspace="" newWorkspace="Web"')
+    const shots = await compare(
+      openAndSettle({ newWorkspace: true, category: 'web' }, pointRect(500, 300)),
+      board,
+      true,
+    )
+    expect(fieldsLine(shots.at(-1))).toContain('workspace="" newWorkspace=…')
     expect(focusLine(shots.at(-1))).toBe('focus: input[name=newWorkspace]')
   })
 
@@ -263,7 +273,7 @@ describe('the window opens and grows out of what opened it', () => {
     const command: Step = async side => {
       side.server.options = { ...OPTIONS_COMMAND }
     }
-    await compare([command, ...openAndSettle()])
+    await compare([command, ...openAndSettle()], board, true)
     await compare(openAndSettle(), () => board({ t: translator('ru') }))
   })
 
@@ -431,14 +441,18 @@ describe('the form', () => {
   })
 
   test('a new workspace: its default name, put in the field; then back to one of herdr', async () => {
-    const shots = await compare([
-      ...openAndSettle({ category: 'acme' }, 'lane-new'),
-      choose('workspace', ''),
-      type('newWorkspace', ''),
-      key('Enter', { ctrlKey: true }),
-      type('newWorkspace', 'Invoices'),
-      choose('workspace', 'w3'),
-    ])
+    const shots = await compare(
+      [
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        choose('workspace', ''),
+        type('newWorkspace', ''),
+        key('Enter', { ctrlKey: true }),
+        type('newWorkspace', 'Invoices'),
+        choose('workspace', 'w3'),
+      ],
+      board,
+      true,
+    )
     expect(focusLine(shots[shots.length - 5])).toBe('focus: input[name=newWorkspace]')
     expect(shots.join('\n')).toContain('Name the new workspace')
   })
@@ -819,6 +833,72 @@ describe('the profile', () => {
     expect(sent[0]).not.toContain('"profile"')
     expect(sent[0]).not.toContain('"parent"')
     expect(sent[1]).toContain('"profile":"default","parent":"s1"}')
+  })
+})
+
+// ---------------------------------------------------------------- a new workspace's name (the old page's: the lane's)
+
+describe("a new workspace's name", () => {
+  test("the session's name in kebab-case, following it until a name is typed there", async () => {
+    const shots = await react(
+      [
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        choose('workspace', ''),
+        type('name', 'New Test Project'),
+        type('newWorkspace', 'Invoices'),
+        type('name', 'Other'),
+      ],
+      board,
+    )
+    expect(fieldsLine(shots[4])).toContain('name="acme 2" cwd="C:\\\\Work\\\\acme" workspace="" newWorkspace="acme-2"')
+    expect(fieldsLine(shots[5])).toContain('workspace="" newWorkspace="new-test-project"')
+    expect(fieldsLine(shots[7])).toContain('name="Other"')
+    expect(fieldsLine(shots[7])).toContain('newWorkspace="Invoices"')
+  })
+
+  test('from a menu, in a new workspace: the name it starts with; no name, the lane’s title as before', async () => {
+    const shots = await react(
+      [
+        ...openAndSettle({ newWorkspace: true, category: 'web' }, pointRect(500, 300)),
+        type('name', ''),
+        type('name', 'Новый проект'),
+      ],
+      board,
+    )
+    expect(fieldsLine(shots[3])).toContain('name="web" cwd="/srv/web" workspace="" newWorkspace="web"')
+    expect(fieldsLine(shots[4])).toContain('newWorkspace="Web"')
+    expect(fieldsLine(shots[5])).toContain('newWorkspace="новый-проект"')
+  })
+
+  test('a draft: a name typed there stays, one that only followed goes on following', async () => {
+    const shots = await react(
+      [
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        choose('workspace', ''),
+        key('Escape'),
+        settle,
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        type('name', 'Invoices'),
+        type('newWorkspace', 'Mine'),
+        key('Escape'),
+        settle,
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        type('name', 'Else'),
+      ],
+      board,
+    )
+    expect(fieldsLine(shots[10])).toContain('name="acme 2" cwd="C:\\\\Work\\\\acme" workspace="" newWorkspace="acme-2"')
+    expect(fieldsLine(shots[11])).toContain('name="Invoices"')
+    expect(fieldsLine(shots[11])).toContain('workspace="" newWorkspace="invoices"')
+    expect(fieldsLine(shots[19])).toContain('name="Else"')
+    expect(fieldsLine(shots[19])).toContain('workspace="" newWorkspace="Mine"')
+  })
+
+  test("a card's workspace herdr no longer has: its name stays", async () => {
+    const gone = item({ key: 's9', name: 'gone', cwd: '/srv/web', category: 'web', workspace: 'Gone' })
+    const shots = await react([...openAndSettle({ item: gone }, 'card'), type('name', 'Renamed')], board)
+    expect(fieldsLine(shots[4])).toContain('name="Renamed"')
+    expect(fieldsLine(shots[4])).toContain('workspace="" newWorkspace="Gone"')
   })
 })
 

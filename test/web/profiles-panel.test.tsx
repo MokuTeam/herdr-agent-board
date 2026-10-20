@@ -500,7 +500,7 @@ test('a shown profile without the hooks offers Install; a hidden one does not; a
   expect(notesIn(panel)).toEqual([
     {
       id: 'work',
-      text: 'The board’s hooks are not in Work’s settings.json: its sessions show no status or title',
+      text: 'The board’s or herdr’s hooks are not in Work’s settings.json: its sessions show no status, title or conversation',
       button: 'Install',
     },
   ])
@@ -512,7 +512,7 @@ test('a shown profile without the hooks offers Install; a hidden one does not; a
   expect(notesIn(panelOf(dataOf([PRIVATE, WORK], ITEMS, 'ru'), {}, 'ru'))).toEqual([
     {
       id: 'work',
-      text: 'Хуков доски нет в settings.json профиля Work: его сессии не показывают ни статус, ни заголовок',
+      text: 'Хуков доски или herdr нет в settings.json профиля Work: его сессии не показывают ни статус, ни заголовок, ни переписку',
       button: 'Установить',
     },
   ])
@@ -545,4 +545,18 @@ test('a start command the board refuses is toasted', async () => {
   for (let i = 0; i < 4; i++) await panel.world.flush()
   expect(sent(calls)).toEqual([['/api/profiles', 'POST', '1', { op: 'update', id: 'work', command: '-cld' }]])
   expect(panel.toasts).toEqual([[refusal, true]])
+})
+
+test('Shown on a hidden profile: what its install could not do is toasted, as Install’s own', async () => {
+  // The board shows it and installs into it; herdr could not put its hook in (services/profiles.ts).
+  const failed =
+    'The board’s hooks are in Gamedev, but herdr did not put in its own: herdr integration install: no such command'
+  const calls = answers([409, { ok: false, error: failed }])
+  const panel = livePanel(dataOf([PRIVATE, WORK, GAMEDEV]))
+  const [shown] = panel.pick('.prof-row[data-id="gamedev"]').querySelectorAll('.profile-shown button')
+  if (!shown) throw new Error('no Shown')
+  await panel.world.fire(shown, 'click')
+  for (let i = 0; i < 4; i++) await panel.world.flush()
+  expect(sent(calls)).toEqual([['/api/profiles', 'POST', '1', { op: 'update', id: 'gamedev', hidden: false }]])
+  expect(panel.toasts).toEqual([[failed, true]])
 })

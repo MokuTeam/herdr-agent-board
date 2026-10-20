@@ -1,6 +1,7 @@
 // What the setup checks (core/setup.ts) look at, read from this computer: the commands on PATH,
-// Claude Code's settings.json and the agents' skill in each shown profile, herdr's config.toml,
-// herdr-wake, how new sessions start, and how the board would start MokuPilot (core/mokupilot.ts).
+// Claude Code's settings.json, the agents' skill and herdr's own Claude hook in each shown profile,
+// herdr's config.toml, herdr-wake, how new sessions start, and how the board would start MokuPilot
+// (core/mokupilot.ts).
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, posix, resolve, win32 } from 'node:path'
@@ -21,7 +22,7 @@ import {
 } from '../core/setup.ts'
 import type { Config } from '../core/types.ts'
 import { skillIn } from './agents-skill.ts'
-import { readSettings } from './hook-settings.ts'
+import { herdrHookOf, readSettings } from './hook-settings.ts'
 import { ROOT } from './paths.ts'
 import { findProfileDirs, inheritedProfileDir } from './profiles.ts'
 
@@ -266,9 +267,17 @@ export async function gatherFacts(
     shownProfiles(mergeProfiles(cfg?.profiles, findProfileDirs(home), home, inheritedProfileDir(env, home)).list)
   // The board's own copy of the agents' skill, which each profile's is compared with.
   const source = readText(boardFiles(root).skill)
-  const settingsIn = (dir: string): Pick<ProfileSettings, 'settingsFile' | 'settings' | 'settingsError' | 'skill'> => {
+  const settingsIn = (
+    dir: string,
+  ): Pick<ProfileSettings, 'settingsFile' | 'settings' | 'settingsError' | 'skill' | 'herdrHook'> => {
     const read = readSettings(dir)
-    return { settingsFile: read.file, settings: read.settings, settingsError: read.error, skill: skillIn(dir, source) }
+    return {
+      settingsFile: read.file,
+      settings: read.settings,
+      settingsError: read.error,
+      skill: skillIn(dir, source),
+      herdrHook: herdrHookOf(read.settings),
+    }
   }
   const profiles: ProfileSettings[] = shown.map(p => ({
     id: p.id,
@@ -298,6 +307,7 @@ export async function gatherFacts(
     settingsError: first.settingsError,
     profiles,
     skill: first.skill,
+    herdrHook: first.herdrHook,
     herdrConfigFile: configFile,
     herdrConfig: readText(configFile),
     wakeUrl,

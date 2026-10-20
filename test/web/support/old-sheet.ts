@@ -25,6 +25,7 @@ import {
   byId,
   type Element,
   findAll,
+  hasClass,
   type Node,
   OLD_PAGE_ONLY,
   pageMarkup,
@@ -307,9 +308,22 @@ export function oldSheet(scene: OldSheetScene): Element {
   return aside
 }
 
-/** The aside's head title (`.sheet-title`) and what comes under the head in `.sheet-inner`. */
-export function sheetParts(aside: Element): { title: Element; body: Node[] } {
+/** The card's fields and their phone toggle, under the head on the old page, in it since #62. */
+const CARD = new Set(['sheet-card', 'sheet-properties-toggle'])
+const isCard = (n: Node): boolean => n.kind === 'element' && CARD.has(n.attrs.get('id') ?? '')
+
+/**
+ * The aside's head title (`.sheet-title`), what comes under the head in `.sheet-inner` but the
+ * card's fields, and the reminders' row among those fields (#62 put the fields in the head, with
+ * only the reminders' row as the old page drew it).
+ */
+export function sheetParts(aside: Element): { title: Element; body: Node[]; schedule: Element[] } {
   const inner = byClass([aside], 'sheet-inner')
   const title = byClass([aside], 'sheet-title')
-  return { title, body: inner.children.filter(n => !(n.kind === 'element' && n.tag === 'header')) }
+  const under = inner.children.filter(n => !(n.kind === 'element' && n.tag === 'header'))
+  return {
+    title,
+    body: under.filter(n => !isCard(n)),
+    schedule: findAll([...under.filter(isCard), title], el => hasClass(el, 'sched-row')),
+  }
 }

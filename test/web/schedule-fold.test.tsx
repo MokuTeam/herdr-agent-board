@@ -189,7 +189,7 @@ async function newDraws(steps: Step[]): Promise<Drawn[]> {
       const body = findAll(panel, el => el.attrs.get('id') === 'sched-body')[0]
       const it = shown().items.find(i => i.key === 'a')
       const card: Node[] = it
-        ? renderInBoard(<SheetCard item={it} disabled={false} schedule={{ armed, held }} />, value)
+        ? renderInBoard(<SheetCard item={it} open={false} disabled={false} schedule={{ armed, held }} />, value)
         : []
       return {
         panel: canonical(body?.children ?? []),

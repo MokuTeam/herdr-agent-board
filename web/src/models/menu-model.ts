@@ -262,14 +262,48 @@ export interface MenuSession {
   attention?: string | undefined
   pin?: string | undefined
   auto?: string | undefined
+  /** The label of the herdr workspace it is in. */
+  workspace?: string | null | undefined
   [extra: string]: unknown
+}
+
+/**
+ * The columns a card can be put in (`col:<id>`), the one it shows in checked; while it is pinned
+ * there, "Auto" too, which hands it back to the board. The card's Status, and the sheet's pill.
+ */
+export function statusChoices(
+  it: Pick<MenuSession, 'pin' | 'auto'>,
+  { t, column }: Pick<CardMenuContext, 't' | 'column'>,
+): MenuEntry[] {
+  const columns: MenuEntry[] = PIN_COLUMNS.map(id => ({
+    id: `col:${id}`,
+    label: t(`col.${id}`),
+    checked: column === id,
+    dot: COLUMN_COLOR[id] ?? '',
+  }))
+  if (it.pin && column === it.pin)
+    columns.push(SEP, { id: `col:${it.auto}`, label: t('chip.auto'), hint: t(`col.${it.auto}`) })
+  return columns
+}
+
+/** The lanes a card can be moved to (`cat:<id>`), its own checked. The card's category, and the sheet's pill. */
+export function categoryChoices({
+  categories,
+  category,
+}: Pick<CardMenuContext, 'categories' | 'category'>): MenuEntry[] {
+  return (categories ?? []).map(c => ({
+    id: `cat:${c.id}`,
+    label: c.title,
+    checked: c.id === category,
+    swatch: c.color,
+  }))
 }
 
 /**
  * A card's menu. `it` is the board item; ctx: { t, canMutate, canEdit, categories, column (where
  * it shows now), category (its lane now), restarting (a restart of it is on its way), archiveWhy
  * (why it cannot go to the archive now, a text key, or '') }. Items gray out with the reason when herdr data is stale (going to, waking, sleeping, restarting,
- * renaming in Claude) or the board is offline (card edits).
+ * renaming in Claude, renaming its workspace) or the board is offline (card edits).
  */
 export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
   const { t } = ctx
@@ -281,14 +315,6 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
   const turn = it.status === 'working' || it.status === 'blocked'
   const claude = !!it.session
   const dismissable = it.attention === 'ask' || it.attention === 'question' || it.attention === 'later'
-  const pinned = it.pin && ctx.column === it.pin
-  const columns: MenuEntry[] = PIN_COLUMNS.map(id => ({
-    id: `col:${id}`,
-    label: t(`col.${id}`),
-    checked: ctx.column === id,
-    dot: COLUMN_COLOR[id] ?? '',
-  }))
-  if (pinned) columns.push(SEP, { id: `col:${it.auto}`, label: t('chip.auto'), hint: t(`col.${it.auto}`) })
   const copy: (MenuItem | Absent)[] = [
     { id: 'copy:name', label: t('menu.copyName') },
     it.cwd && { id: 'copy:cwd', label: t('menu.copyPath') },
@@ -319,21 +345,16 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
         ...herdr(ctx.restarting ? { disabled: true, reason: t('sheet.restartPending') } : {}),
       },
     { id: 'rename', label: t('menu.rename'), hint: 'F2', ...edit() },
+    // herdr's name for the workspace it is in, every session's there: it goes through herdr.
+    it.workspace && { id: 'renameWorkspace', label: t('menu.renameWorkspace'), ...herdr() },
     SEP,
     {
       id: 'category',
       label: t('menu.category'),
       ...edit(),
-      submenu: ctx.canEdit
-        ? (ctx.categories ?? []).map(c => ({
-            id: `cat:${c.id}`,
-            label: c.title,
-            checked: c.id === ctx.category,
-            swatch: c.color,
-          }))
-        : null,
+      submenu: ctx.canEdit ? categoryChoices(ctx) : null,
     },
-    { id: 'status', label: t('menu.status'), ...edit(), submenu: ctx.canEdit ? columns : null },
+    { id: 'status', label: t('menu.status'), ...edit(), submenu: ctx.canEdit ? statusChoices(it, ctx) : null },
     dismissable && { id: 'dismiss', label: t(it.attention === 'later' ? 'asked.seen' : 'card.noReply'), ...edit() },
     SEP,
     it.cwd && { id: 'reveal', label: t('menu.openFolder'), ...edit() },

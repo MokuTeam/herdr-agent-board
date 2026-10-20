@@ -4,7 +4,7 @@
 // and the sheet's More lists the buttons its row hides. Which menu, and what its items
 // do, is models/board-menus.ts; one menu is open at a time (components/menu/menu-engine.ts).
 import { useEffect, useState } from 'react'
-import type { Item, Translator } from '../../../src/core/types.ts'
+import type { ColumnId, Item, Translator } from '../../../src/core/types.ts'
 import { filesApi } from '../api/files.ts'
 import { focusLaunch } from '../api/launch.ts'
 import { isFocusable, MenuEngine, type MenuSource } from '../components/menu/menu-engine.ts'
@@ -29,13 +29,14 @@ import {
   typingIn,
 } from '../models/board-menus.ts'
 import { catOf, colOf } from '../models/board-view.ts'
-import type { Point } from '../models/menu-model.ts'
+import { categoryChoices, type MenuCategory, type Point, statusChoices } from '../models/menu-model.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import type { BoardAction } from '../state/board-ui.ts'
 import { useStore } from '../state/store.ts'
 import { useLatest } from './useLatest.ts'
 import type { OpenLaunch } from './useNewSession.ts'
 import type { QuickLook } from './useQuickLook.ts'
+import type { RenameKind } from './useRenameInPlace.ts'
 import { type SessionActions, useSessionActions } from './useSessionActions.ts'
 
 /** What the listeners open a menu with. */
@@ -182,8 +183,8 @@ export interface ActionDeps {
   newSession: OpenLaunch
   /** The categories panel, at a lane. */
   openCategories(id?: string): void
-  /** Rename where the name is (hooks/useRenameInPlace.ts). */
-  rename(key: string, el: Element | null): void
+  /** Rename where the name is: the session's, or its workspace's (hooks/useRenameInPlace.ts). */
+  rename(key: string, el: Element | null, kind?: RenameKind): void
   /** The terminal window of a session, grown from `el` (hooks/useTerminal.ts). */
   terminal?: ((key: string, el: Element | null) => void) | undefined
   /** The archive (hooks/useArchive.ts): a session off the board, a tidy-up, its panel. */
@@ -227,6 +228,12 @@ export function boardActions(deps: ActionDeps): BoardMenuActions {
       if (el?.isConnected) return deps.rename(key, el)
       dispatch({ type: 'open', key })
       setTimeout(() => deps.rename(key, document.getElementById('sheet-name')), 380)
+    },
+    // The workspace's name is in the sheet's head alone: from a card, there once it opened.
+    renameWorkspace: (key, el) => {
+      if (el?.isConnected) return deps.rename(key, el, 'workspace')
+      dispatch({ type: 'open', key })
+      setTimeout(() => deps.rename(key, document.getElementById('sheet-workspace'), 'workspace'), 380)
     },
     move: (key, to) => actions().moveCard(key, { cat: to.cat ?? null, column: columnOf(to.column) }),
     dismiss: key => actions().dismissAsk(key),
@@ -315,11 +322,51 @@ export function sheetMoreMenuFrom(deps: SheetMoreDeps): (button: HTMLElement, ke
   }
 }
 
+/** The sheet head's pills that open a menu: where the card shows, and its lane. */
+export type SheetPick = 'status' | 'category'
+
+export interface SheetPickDeps {
+  menu: MenuOpener
+  t(): Translator
+  /** The open session's card: its pin, its column and lane now, the lanes there are. */
+  card(): { key: string; item: Item; column: string; category: string; categories: readonly MenuCategory[] } | null
+  move(key: string, to: { cat: string | null; column: ColumnId | null }): void
+  coarse(): boolean
+}
+
+/** A pill's choices as a menu out of it (`button`), downward: picking one moves the card, as its chips did. */
+export function sheetPickMenuFrom(
+  deps: SheetPickDeps,
+): (kind: SheetPick, button: HTMLElement, keyboard: boolean) => void {
+  return (kind, button, keyboard) => {
+    const card = deps.card()
+    if (!card) return
+    const t = deps.t()
+    const rect = button.getBoundingClientRect()
+    const items =
+      kind === 'status'
+        ? statusChoices(card.item, { t, column: card.column })
+        : categoryChoices({ categories: card.categories, category: card.category })
+    deps.menu.open(items, {
+      x: rect.left,
+      y: rect.bottom + 4,
+      source: keyboard ? 'keyboard' : deps.coarse() ? 'touch' : 'mouse',
+      origin: button,
+      label: t(kind === 'status' ? 'menu.status' : 'row.category'),
+      onPick: id => {
+        const [what = '', arg = ''] = id.split(':')
+        if (what === 'cat') deps.move(card.key, { cat: arg, column: null })
+        else if (what === 'col') deps.move(card.key, { cat: null, column: arg as ColumnId })
+      },
+    })
+  }
+}
+
 export interface ContextMenusOptions {
   quickLook: Pick<QuickLook, 'look' | 'lookChanges' | 'lookHistory'>
   newSession: OpenLaunch
   openCategories(id?: string): void
-  rename(key: string, el: Element | null): void
+  rename(key: string, el: Element | null, kind?: RenameKind): void
   /** Sessions on their way and what their menu does that is the launch window's (hooks/useLaunch.ts). */
   launch?: LaunchMenus | null
   /** The terminal window of a session (hooks/useTerminal.ts). */
@@ -336,6 +383,10 @@ export interface ContextMenus {
   moreOpen: boolean
   /** "More actions": the sheet's buttons as a menu. */
   sheetMore(button: HTMLElement, keyboard: boolean): void
+  /** The sheet head's pill whose menu is open (its aria-expanded), if one is. */
+  pickOpen: SheetPick | null
+  /** A pill in the sheet's head: its choices as a menu. */
+  sheetPick(kind: SheetPick, button: HTMLElement, keyboard: boolean): void
 }
 
 export function useContextMenus(options: ContextMenusOptions): ContextMenus {
@@ -344,8 +395,15 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
   const actions = useSessionActions()
   const latest = useLatest({ t, board, actions, options })
   const [moreOpen, setMoreOpen] = useState(false)
+  const [pickOpen, setPickOpen] = useState<SheetPick | null>(null)
   const [menu] = useState(() => {
-    const engine: MenuEngine = new MenuEngine({ onChange: () => !engine.isOpen() && setMoreOpen(false) })
+    const engine: MenuEngine = new MenuEngine({
+      onChange: () => {
+        if (engine.isOpen()) return
+        setMoreOpen(false)
+        setPickOpen(null)
+      },
+    })
     return engine
   })
   const open = useStore(menu.openNow)
@@ -398,7 +456,7 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
         },
         newSession: (ctx, from) => page().options.newSession(ctx, from),
         openCategories: id => page().options.openCategories(id),
-        rename: (key, el) => page().options.rename(key, el),
+        rename: (key, el, kind) => page().options.rename(key, el, kind),
         terminal: (key, el) => page().options.terminal?.(key, el),
         get archive() {
           return page().options.archive
@@ -425,13 +483,37 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
     }),
   )
 
+  const [sheetPick] = useState(() =>
+    sheetPickMenuFrom({
+      menu,
+      t: () => latest.current.t,
+      card: () => {
+        const { ui, data } = latest.current.board
+        const item = ui.open ? data?.items.find(i => i.key === ui.open) : undefined
+        if (!item) return null
+        const { moves } = ui
+        const categories = data?.categories ?? []
+        return { key: item.key, item, column: colOf(moves, item), category: catOf(moves, item), categories }
+      },
+      move: (key, to) => void latest.current.actions.moveCard(key, to),
+      coarse: () => matchMedia('(pointer: coarse)').matches,
+    }),
+  )
+
   return {
     menu,
     open,
     moreOpen: moreOpen && open,
     sheetMore(button, keyboard) {
       sheetMore(button, keyboard)
+      setPickOpen(null)
       setMoreOpen(true)
+    },
+    pickOpen: open ? pickOpen : null,
+    sheetPick(kind, button, keyboard) {
+      sheetPick(kind, button, keyboard)
+      setMoreOpen(false)
+      setPickOpen(kind)
     },
   }
 }

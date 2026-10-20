@@ -165,6 +165,43 @@ test("a pi session: the wait reminder comes from pi's card", async () => {
   )
 })
 
+test("a pi session: pi's card is told the profile of the account its turn went to, as it changes", async () => {
+  const box = await sandbox()
+  const home = box.env.USERPROFILE as string
+  const work = profileFolder(box, '.claude-work')
+  piPane(box)
+  putCard(box, { key: PI_FILE, category: 'acme', doing: 'fix the CI' })
+  const prompt = (sid: string) => ({ hook_event_name: 'UserPromptSubmit', session_id: sid, cwd: box.dir, prompt: 'go' })
+  // claude-bridge-work: the bridge runs its Claude in the work folder.
+  await runHook(box, prompt('cc1'), 'w6:p1', { PI_CODING_AGENT: 'true', CLAUDE_CONFIG_DIR: work })
+  expect(cardOf(box, PI_FILE)).toMatchObject({
+    category: 'acme',
+    doing: 'fix the CI',
+    profile: 'work',
+    profileDir: work,
+  })
+  const first = cardOf(box, PI_FILE)
+  await Bun.sleep(5)
+  await runHook(box, prompt('cc1'), 'w6:p1', { PI_CODING_AGENT: 'true', CLAUDE_CONFIG_DIR: work })
+  expect(cardOf(box, PI_FILE)).toEqual(first)
+  // The session switched to the personal account: the bridge's new Claude runs in ~/.claude.
+  await runHook(box, prompt('cc2'), 'w6:p1', { PI_CODING_AGENT: 'true' })
+  expect(cardOf(box, PI_FILE)?.profile).toBe('default')
+  expect(sameDir(String(cardOf(box, PI_FILE)?.profileDir), join(home, '.claude'))).toBe(true)
+})
+
+test('a Claude session of its own tells no other card its profile', async () => {
+  const box = await sandbox()
+  const work = profileFolder(box, '.claude-work')
+  putCard(box, { key: PI_FILE, category: 'acme' })
+  putCard(box, { key: 's1', briefV: BRIEF_VERSION })
+  const prompt = { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: box.dir, prompt: 'go' }
+  await runHook(box, prompt, 'w6:p1', { CLAUDE_CONFIG_DIR: work })
+  expect(cardOf(box, 's1')?.profile).toBe('work')
+  expect(cardOf(box, PI_FILE)).toEqual({ key: PI_FILE, category: 'acme' })
+  expect(box.calls()).toEqual([])
+})
+
 test('PI_CODING_AGENT in the env of a pane that herdr says runs Claude: no other card is touched', async () => {
   const box = await sandbox()
   box.state({
@@ -174,7 +211,7 @@ test('PI_CODING_AGENT in the env of a pane that herdr says runs Claude: no other
   putCard(box, { key: 'cc1', ask: 'Send it?', askSince: 1, briefV: BRIEF_VERSION })
   const prompt = { hook_event_name: 'UserPromptSubmit', session_id: 'cc1', cwd: box.dir, prompt: 'yes' }
   await runHook(box, prompt, 'w1:p1', { PI_CODING_AGENT: 'true' })
-  expect(cardOf(box, 'other')).toMatchObject({ ask: 'Ship it?', askSince: 1 })
+  expect(cardOf(box, 'other')).toEqual({ key: 'other', ask: 'Ship it?', askSince: 1 })
   expect(cardOf(box, 'cc1')?.ask).toBeUndefined()
 })
 

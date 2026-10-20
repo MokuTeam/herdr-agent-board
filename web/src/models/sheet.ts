@@ -60,12 +60,21 @@ export function detailOnBoard({ before, board, key, stamp, status }: BoardTurn):
 
 export type StatusPill = { kind: 'missing' } | { kind: 'asleep' } | { kind: 'column' }
 
+/** The workspace among the facts: its name apart from the words the language puts around it. */
+export interface WorkspaceFact {
+  before: string
+  name: string
+  after: string
+}
+
 export interface SheetHeadView {
   pill: StatusPill
   name: string
-  /** Its lane, workspace, last activity and context, in one line. */
-  /** The facts under the name, each kept whole on its line (the line breaks between them, after a separator). */
-  meta: string[]
+  /**
+   * Its workspace, last activity and context under the name (its lane has a pill of its own), each
+   * kept whole on its line (the line breaks between them, after a separator).
+   */
+  meta: (string | WorkspaceFact)[]
   /** Says what the context number is, when there is one. */
   metaTitle: string
 }
@@ -81,17 +90,18 @@ export function contextText(it: Pick<Item, 'context' | 'contextPct'>, t: Transla
 
 export function sheetHead(
   it: Item,
-  { missing, categoryTitle, now, t }: { missing: boolean; categoryTitle: string; now: number; t: Translator },
+  { missing, now, t }: { missing: boolean; now: number; t: Translator },
 ): SheetHeadView {
   const pill: StatusPill = missing ? { kind: 'missing' } : it.sleeping ? { kind: 'asleep' } : { kind: 'column' }
   const context = contextText(it, t)
   const active = it.activity ? ago(it.activity, now, t) : ''
+  // The name alone renames the workspace in the sheet: the words around it are the text's, untouched.
+  const [before = '', after = ''] = t('meta.workspace').split('{name}')
   const meta = [
-    categoryTitle,
-    it.workspace && t('meta.workspace', { name: it.workspace }),
+    it.workspace && { before, name: it.workspace, after },
     active && (active === t('ago.now') ? t('meta.activeNow') : t('meta.active', { ago: active })),
     context,
-  ].filter((s): s is string => !!s)
+  ].filter((s): s is string | WorkspaceFact => !!s)
   return { pill, name: it.name, meta, metaTitle: context ? t('meta.contextHint') : '' }
 }
 

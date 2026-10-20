@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, statSync, watch } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { builtinTitle, DEFAULT_CONFIG, normalizeConfig, validColor } from '../core/categories.ts'
+import { isFoldMode } from '../core/fold-mode.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
 import { profileCommand } from '../core/launch/spawn-args.ts'
@@ -65,7 +66,7 @@ export function setRemoteOn(on: boolean): EditResult {
   return { ok: true }
 }
 
-/** Change settings in config.json from the web board: { language }. */
+/** Change settings in config.json from the web board: { language, foldWaiting }. */
 export function editSettings(body: unknown): EditResult {
   const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
   const language = isRecord(body) ? body.language : undefined
@@ -74,6 +75,12 @@ export function editSettings(body: unknown): EditResult {
     if (l !== 'auto' && !LANGUAGES[l as keyof typeof LANGUAGES])
       return { ok: false, error: t('err.language', { lang: l }) }
     raw.language = l
+  }
+  // How a session asleep in "Waiting" folds on the web board.
+  const fold = isRecord(body) ? body.foldWaiting : undefined
+  if (fold !== undefined) {
+    if (!isFoldMode(fold)) return { ok: false, error: t('err.foldWaiting', { mode: String(fold) }) }
+    raw.foldWaiting = fold
   }
   writeRaw(raw)
   return { ok: true }

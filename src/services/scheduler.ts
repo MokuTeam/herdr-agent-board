@@ -23,6 +23,11 @@
 // session asleep, the safe outcome, never resumed in another account; it is tried again and
 // reported after RESTART_TRIES (3) tries.
 //
+// A sleep (kind 'sleep', `board sleep --when-free`) waits as a restart does until the session is
+// free, then has herdr-wake put it to sleep, and that is all: no wake, no note. It waits as long as
+// a reminder does (`scheduleWaitMin`); herdr-wake refusing is tried RESTART_TRIES times, then the
+// log says it did not happen. Asleep by other means meanwhile (the reaper, the user), it is done.
+//
 // It also closes the panes of sessions put in the archive once their time to come back from the
 // page's toast is over (archive.ts closeDue): a board that restarts meanwhile does it on start.
 import { type FSWatcher, mkdirSync, watch } from 'node:fs'
@@ -140,6 +145,7 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
   /** `other`: why it does not go to the session now in its pane (another profile's), '' for none. */
   async function run(entry: ScheduleEntry, item: Item | undefined, other: string): Promise<void> {
     if (entry.kind === 'restart') return restart(entry, item)
+    if (entry.kind === 'sleep') return sleep(entry, item)
     const receipt = entry.receipt ? verifyReport(entry) : null // Before even waking a session.
     if (receipt && receipt.state !== 'queued' && receipt.state !== 'dispatching') {
       removeEntry(entry.id)
@@ -280,6 +286,23 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
     return failed ? sent(entry, 'failed', failed) : sent(entry)
   }
 
+  /** A sleep, once the session is free (see the top of the file). */
+  async function sleep(entry: ScheduleEntry, item: Item | undefined): Promise<void> {
+    const now = Date.now()
+    // Only the session it was asked for: targetOf does not follow a sleep to another one in its pane.
+    if (!item) return wait(entry, now, 'gone', true)
+    if (item.sleeping) {
+      if (claim(entry.id, now)) sent(entry)
+      return
+    }
+    const ready = await readyToSleep(deps, item)
+    if (!ready.ok) return ready.profile ? giveUp(entry, ready.why) : wait(entry, now, ready.why, false)
+    if (!claim(entry.id, now)) return
+    // herdr's status as just read, not the tick's: a turn that ended meanwhile is not "working".
+    const asleep = await sleepSession(deps, { ...item, status: ready.status }).finally(() => deps.wake.forget())
+    return asleep.ok ? sent(entry) : retry(entry, asleep.error)
+  }
+
   /**
    * herdr-wake refused or failed: tried again in a while, RESTART_TRIES times in all. Then the
    * session hears why; one that could not be woken sleeps on (a message wakes it), and only the
@@ -313,11 +336,12 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
    * A restart that will not happen: the entry stays only to tell the session why, once it is
    * free. One the user asked for on the board is the user's to hear about (the log, a toast on
    * the page): the session did not ask, so nothing is typed into it. The reason comes from
-   * herdr-wake too, and goes into a terminal: no control characters.
+   * herdr-wake too, and goes into a terminal: no control characters. A sleep that will not happen
+   * is only logged too: the session it is for did not ask either.
    */
   function giveUp(entry: ScheduleEntry, reason: string): void {
     const why = cleanText(reason, 300)
-    if (entry.by === 'user') {
+    if (entry.by === 'user' || entry.kind === 'sleep') {
       removeEntry(entry.id)
       logRun(record(entry, Date.now(), 'failed', why))
       return

@@ -11,6 +11,7 @@ import type { Translator } from '../../src/core/types.ts'
 import type { MenuSource } from '../../web/src/components/menu/menu-engine.ts'
 import { Toolbar } from '../../web/src/components/Toolbar.tsx'
 import {
+  chooseFold,
   chooseLanguage,
   type SettingsDeps,
   settingsGear,
@@ -122,6 +123,9 @@ function newHandler(scene: Scene, calls: Call[], menu: SettingsDeps['menu']) {
     // One profile folder, as upstream knew: no Profiles… item.
     profiles: () => false,
     openProfiles: () => void calls.push(['profiles']),
+    // A board that does not say how sessions asleep in "Waiting" fold, as upstream's: no such item.
+    fold: () => null,
+    chooseFold: mode => void calls.push(['fold', mode]),
   })
 }
 
@@ -230,6 +234,51 @@ describe('the menu out of the gear', () => {
     expect(settingPicked('phones')).toEqual({ kind: 'phones' })
   })
 
+  test('how sessions asleep in "Waiting" fold: the board’s way checked; gray without the board; a pick saves it (the board’s own)', async () => {
+    const now = {
+      t: translator('en'),
+      theme: 'auto',
+      languages: { en: 'English' },
+      canEdit: true,
+      dock: 'right' as const,
+      sleepers: true,
+      profiles: false,
+    }
+    const fold = (items: readonly MenuEntry[]) => items.find(i => 'id' in i && i.id === 'fold')
+    // A board that does not say (upstream's): none.
+    expect(fold(settingsMenu(now))).toBeUndefined()
+    expect(JSON.stringify(fold(settingsMenu({ ...now, fold: 'push' })))).toBe(
+      JSON.stringify({
+        id: 'fold',
+        label: 'Sleeping in Waiting',
+        submenu: [
+          { id: 'fold:push', label: 'Unfold, moving cards below', checked: true },
+          { id: 'fold:over', label: 'Unfold over cards below', checked: false },
+          { id: 'fold:off', label: 'Don’t fold', checked: false },
+        ],
+      }),
+    )
+    expect(JSON.stringify(fold(settingsMenu({ ...now, fold: 'off', canEdit: false })))).toContain(
+      '"disabled":true,"reason"',
+    )
+    expect(settingPicked('fold:over')).toEqual({ kind: 'fold', value: 'over' })
+    expect(settingPicked('fold:sideways')).toBeNull()
+
+    const saved: unknown[] = []
+    const toasts: unknown[] = []
+    const deps = (canEdit: boolean) => ({
+      t: translator('en'),
+      canEdit,
+      save: async (body: unknown) => void saved.push(body),
+      toast: (text: string, error?: boolean) => void toasts.push([text, error]),
+    })
+    await chooseFold('over', deps(true))
+    expect(saved).toEqual([{ foldWaiting: 'over' }])
+    await chooseFold('off', deps(false))
+    expect(saved).toHaveLength(1)
+    expect(toasts).toEqual([[translator('en')('live.off'), true]])
+  })
+
   test('the Settings menu offers Profiles… only when more than one profile folder is found', () => {
     const now = {
       t: translator('en'),
@@ -298,6 +347,8 @@ describe('the menu out of the gear', () => {
         toggleSleepers() {},
         profiles: () => many,
         openProfiles: () => void calls.push(['profiles']),
+        fold: () => null,
+        chooseFold() {},
       })({ getBoundingClientRect: () => RECT } as unknown as HTMLElement, false)
       expect(ids(opened).includes('profiles')).toBe(many)
       pick('profiles')

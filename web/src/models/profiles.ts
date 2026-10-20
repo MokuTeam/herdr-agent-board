@@ -115,7 +115,7 @@ export interface ProfileRowView {
   shown: boolean
   /** Its folder is not there. */
   missing: boolean
-  /** Shown, its folder there, and the board's hooks not in its settings.json: the panel offers Install. */
+  /** Shown, its folder there, and the board's hooks or herdr's not in its settings.json: the panel offers Install. */
   noHooks: boolean
   /** Its start command as one line, typed instead of `launch.claude`; '' for none. */
   command: string

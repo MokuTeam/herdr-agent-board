@@ -84,30 +84,27 @@ describe('the head', () => {
     expect(contextText({ context: null }, t)).toBe('')
     expect(contextText({ contextPct: 10 }, t)).toBe('context 10% · undefined')
   })
-  test('pill, name and the line under it', () => {
+  test('pill, name and the line under it (the lane has a pill of its own)', () => {
     const a = item({ key: 'a', name: 'Alpha', workspace: 'web', activity: NOW - 5 * 60_000, context: 2000 })
-    expect(sheetHead(a, { missing: false, categoryTitle: 'Project', now: NOW, t })).toEqual({
+    expect(sheetHead(a, { missing: false, now: NOW, t })).toEqual({
       pill: { kind: 'column' },
       name: 'Alpha',
-      meta: ['Project', 'workspace web', 'active 5 min ago', 'context 2k'],
+      // The workspace's name apart from the words around it: the name alone renames the workspace.
+      meta: [{ before: 'workspace ', name: 'web', after: '' }, 'active 5 min ago', 'context 2k'],
       metaTitle: 'Tokens its last request carried',
+    })
+    expect(sheetHead(a, { missing: false, now: NOW, t: translator('ru') }).meta[0]).toEqual({
+      before: 'workspace ',
+      name: 'web',
+      after: '',
     })
     const now = sheetHead(
       { ...a, activity: NOW - 10_000, workspace: null, context: null },
-      {
-        missing: false,
-        categoryTitle: 'Project',
-        now: NOW,
-        t,
-      },
+      { missing: false, now: NOW, t },
     )
-    expect([now.meta, now.metaTitle]).toEqual([['Project', 'active now'], ''])
-    expect(sheetHead({ ...a, sleeping: true }, { missing: false, categoryTitle: '', now: NOW, t }).pill.kind).toBe(
-      'asleep',
-    )
-    expect(sheetHead({ ...a, sleeping: true }, { missing: true, categoryTitle: '', now: NOW, t }).pill.kind).toBe(
-      'missing',
-    )
+    expect([now.meta, now.metaTitle]).toEqual([['active now'], ''])
+    expect(sheetHead({ ...a, sleeping: true }, { missing: false, now: NOW, t }).pill.kind).toBe('asleep')
+    expect(sheetHead({ ...a, sleeping: true }, { missing: true, now: NOW, t }).pill.kind).toBe('missing')
   })
   test('History needs a Claude project, Wake a sleeper, sleep an awake Claude session; the hint says when it cannot', () => {
     const a = item({ key: 'a', status: 'working' })

@@ -236,6 +236,55 @@ test('install writes into every shown profile and touches no hidden one', async 
   expect(stdout).not.toContain('Gamedev')
 }, 30_000)
 
+test('herdr’s own Claude hook: herdr writes it into every shown profile, CLAUDE_CONFIG_DIR set to each, not a hidden one', async () => {
+  const box = await sandbox()
+  const home = profilesIn(box, { '.claude': '{}', '.claude-work': '{}', '.claude-gamedev': '{}' }, ['gamedev'])
+  box.state({ 'integration install claude': { claudeHook: true } })
+  const { code, stdout, stderr } = await install(box)
+  expect(code).toBe(0)
+  expect(stderr).toBe('')
+  expect(box.calls()).toEqual([
+    ['integration', 'install', 'claude'],
+    ['integration', 'install', 'claude'],
+  ])
+  for (const p of ['.claude', '.claude-work']) {
+    expect(existsSync(join(home, p, 'hooks', 'herdr-agent-state.ps1'))).toBe(true)
+    // herdr's entry next to the board's.
+    const start = JSON.parse(read(home, p, 'settings.json')).hooks.SessionStart
+    expect(start).toContainEqual(ours())
+    expect(JSON.stringify(start)).toContain('herdr-agent-state.ps1')
+    // After the board's own, per profile.
+    expect(stdout).toMatch(
+      new RegExp(
+        `^status line: .*\\n(desktop notifications: .*\\n)?herdr's hook: claude integration in ${literal(join(home, p))}$`,
+        'm',
+      ),
+    )
+  }
+  expect(readdirSync(join(home, '.claude-gamedev'))).toEqual(['settings.json'])
+  // The check after it finds it in each.
+  expect(stdout).toMatch(/^ok Private: herdr’s Claude hook · /m)
+  expect(stdout).toMatch(/^ok Work: herdr’s Claude hook · /m)
+}, 30_000)
+
+test('a herdr that cannot install its hook: said per profile, the rest installed all the same', async () => {
+  const box = await sandbox()
+  const home = profilesIn(box, { '.claude': '{}', '.claude-work': '{}' })
+  box.state({ 'integration install claude': { error: 'no such command' } })
+  const { code, stdout, stderr } = await install(box)
+  expect(code).toBe(0)
+  expect(stderr).toBe('')
+  for (const p of ['.claude', '.claude-work']) {
+    expect(JSON.parse(read(home, p, 'settings.json')).hooks.SessionStart).toEqual([ours()])
+    expect(existsSync(join(home, p, 'skills', 'herdr-agents', 'SKILL.md'))).toBe(true)
+    expect(stdout).toContain(
+      `herdr's hook in ${join(home, p)}: not installed: herdr integration install: no such command\n`,
+    )
+  }
+  expect(stdout).toMatch(/^! {2}Work: herdr’s Claude hook is missing$/m)
+  expect(stdout).toContain('herdr plugin action invoke agent-board.install')
+}, 30_000)
+
 test('the agents’ skill per shown profile: someone else’s in one is left alone there, and the check says so', async () => {
   const box = await sandbox()
   const home = profilesIn(box, { '.claude': '{}', '.claude-work': '{}' })
@@ -254,10 +303,15 @@ test('the agents’ skill per shown profile: someone else’s in one is left alo
   expect(stdout).toMatch(/^! {2}Work: Skill herdr-agents is not the board's$/m)
 }, 30_000)
 
-test('the skill install copies is upstream’s, word for word', () => {
+test('the skill install copies is upstream’s, word for word, but for what `board sleep` added', () => {
   // Pinned to the newest web merge ported, b2c5afa (#50 brought it, #51 changed it, #56 last, its `board archive`
-  // line; nothing since, up to f0cef14); a later upstream change moves the pin.
-  expect(read(root, 'skills', 'herdr-agents', 'SKILL.md')).toBe(oldSource('skills/herdr-agents/SKILL.md', 'b2c5afa'))
+  // line; nothing since, up to f0cef14); a later upstream change moves the pin. #60 added `board sleep`: its
+  // section, the line pointing to it and its words in the description, taken out here.
+  const ours = read(root, 'skills', 'herdr-agents', 'SKILL.md')
+    .replace(' put the sessions it coordinates to sleep in one call,', '')
+    .replace('- Putting sessions to sleep that you coordinate: see the next section, one call for all of them.\n', '')
+    .replace(/## Put the sessions you are done with to sleep\n[\s\S]*?(?=## Do something later\n)/, '')
+  expect(ours).toBe(oldSource('skills/herdr-agents/SKILL.md', 'b2c5afa'))
 })
 
 test('one shown profile’s settings.json that does not parse: nothing is written anywhere', async () => {

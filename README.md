@@ -1,6 +1,7 @@
 # agent-board
 
-A [herdr](https://herdr.dev) plugin: a kanban of the Claude Code sessions running in herdr.
+A [herdr](https://herdr.dev) plugin: a kanban of the Claude Code sessions running in herdr, and
+of the [pi](#pi) ones.
 Lanes are categories (one per client, say, plus Personal and Other), columns are Working /
 Needs me / Waiting on others / Done / Idle. Sessions
 [herdr-wake](https://github.com/Eithery-rc/tg-mcp/tree/main/herdr-wake) put to sleep are on it
@@ -30,8 +31,10 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
    [`spawn-agent`](#spawn-agent), which starts a session in a new herdr tab. It registers the
    Claude Code hooks (SessionStart, UserPromptSubmit) that brief every session about the board,
    and the status line when you have none (usage windows and context fill on the board). It
-   installs the Claude Code skill [`herdr-agents`](#agents) into `~/.claude/skills`. It
-   replaces only its own entries in `~/.claude/settings.json`, keeps a copy of the file before
+   installs the Claude Code skill [`herdr-agents`](#agents) into `~/.claude/skills`, and has herdr
+   install its own Claude hook (`herdr integration install claude`), from which herdr learns which
+   conversation a pane runs; a herdr that cannot is said, and the rest goes on. It replaces only
+   its own entries in `~/.claude/settings.json`, keeps a copy of the file before
    (`settings.json.bak-agent-board`), leaves a command of someone else's name alone, and ends with
    the check below. `~/.local/bin` must be on PATH. Run it again after the plugin moved or was
    updated, or Bun moved: the hooks and the commands point at the plugin's folder and run the Bun
@@ -39,12 +42,14 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
 
    With more than one Claude profile (`CLAUDE_CONFIG_DIR` folders such as `~/.claude-work`) it
    does the same in the `settings.json` of every profile the board shows, each with its own
-   backup, and puts the skill into each one's `skills` folder; a hidden profile is left alone,
+   backup, puts the skill into each one's `skills` folder and has herdr put its hook there
+   (`CLAUDE_CONFIG_DIR` set to that folder); a hidden profile is left alone,
    and a shown one whose folder is gone is skipped, saying so. One `settings.json` that does not
    parse stops it before anything is written. It never touches credentials, `.claude.json` or
    anything else in a profile folder beyond `settings.json`, its backup and
-   `skills/herdr-agents`. A profile shown later gets its hooks and the skill from the install
-   action again, or from Install in the Profiles panel.
+   `skills/herdr-agents` (herdr writes its own `hooks/herdr-agent-state.ps1` and its entry). A
+   profile shown later in the Profiles panel gets its hooks, the skill and herdr's hook then and
+   there; the install action run again, or Install in that panel, puts them in too.
 
    A session brought back from the archive runs in its own profile again, hidden or not, never in
    another: the one its card reports (or, on a card from before profiles, the only profile
@@ -87,7 +92,9 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
 `board doctor` (or `herdr plugin action invoke agent-board.doctor`) says what is set up and what
 is not, what each missing piece costs and how to fix it: the commands (and whether PowerShell or
 Git Bash finds someone else's of that name first), the hooks and the status line (and whether they
-run this copy of the plugin; with more than one profile shown, in each, by its name), the key,
+run this copy of the plugin; with more than one profile shown, in each, by its name), herdr's own
+Claude hook (in each shown profile too: without it a session's card has no conversation and no
+profile), the key,
 herdr-wake, how new sessions start, MokuPilot, the notifications. The
 web board says it too, quietly: "Setup incomplete" in its toolbar while something the board needs
 does not work (see [Web board](#web-board)).
@@ -127,9 +134,12 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   session, else "You: <your last request>"), its last words, the tool it runs now, the question
   it is stuck on, what it waits for.
 - Drag a card to another lane to change its category, or to another column to put it there by
-  hand (also the "Status" chips in the sheet). See [Moving a card by hand](#moving-a-card-by-hand).
-- Click a card: a sheet with its card fields, the question and screen when it waits for you
-  (a question form or a permission prompt is answered right there, see
+  hand (also the status pill in the sheet's head). See [Moving a card by hand](#moving-a-card-by-hand).
+- Click a card: a sheet with a compact head (two pills, where the card shows and its lane, each
+  opening a menu to change it; the name; its workspace, last activity and context; then what it
+  does, what it waits for, its reminders and the sessions it works with, each only when there is
+  one, and the pencil shows the empty ones to fill in), the question and screen when it waits for
+  you (a question form or a permission prompt is answered right there, see
   [Answering from the board](#answering-from-the-board)), the conversation (tool calls folded;
   a background command, agent, monitor or MCP task reporting back and a board reminder are a
   quiet line of their own, not your message: an agent's report opens from it, a command's
@@ -265,8 +275,11 @@ it, Esc puts it back, empty clears it; its placeholder is what is typed without 
 `launch.claude`'s program). Under the rows, a hint on what a start command does; below it,
 "Add <folder>" for a folder a session runs in that no profile has, "Add a folder somewhere else"
 (`~` is the home folder; the folder must be there), and, for a shown profile whose `settings.json`
-lacks the board's hooks, a note with Install, which writes the hooks, the status line and the
-agents' skill there as the [install](#setup) does and checks the setup again at once. Hiding a
+lacks the board's hooks or herdr's, a note with Install, which writes the hooks, the status line
+and the agents' skill there and has herdr put in its own, as the [install](#setup) does, and
+checks the setup again at once. Showing a hidden profile does the same Install right away, unless
+both hooks are there already; what it could not do is said as Install says it, and the profile
+stays shown, with the note while a hook is missing. Hiding a
 profile takes it out of the switch, out of the profiles a session can be started in, and out of
 Install. Its running sessions still show, with their tag, and their agents can still start helpers
 in it.
@@ -375,6 +388,39 @@ board refuses to wake those sessions. herdr-wake resuming one by itself is expec
 Claude finds no such session in `~/.claude`; wake it in its pane yourself with `cld-work --resume`.
 A session the board starts with `"command": "cld-work"` still opens its tab with work's
 `CLAUDE_CONFIG_DIR`, so waking it stays in work.
+
+## pi
+
+[pi](https://pi.dev) sessions in herdr are on the board too. herdr reports a pi pane's session by
+its file (`~/.pi/agent/sessions/--<folder>--/<time>_<id>.jsonl`), the card's key, and the board
+reads that file as it reads a Claude transcript: the card shows the user's last prompt, pi's last
+words (a question at their end puts the card under "Needs me"), the tool it runs and how full its
+context is; the session's sheet shows its turns. A name given with `/name` is the card's name. Only
+the session as it goes on now is read: a branch left with `/tree` is not. pi writes the file once
+the session has something in it; until then the card is bare. Agents in pi keep their card with the
+`board` command as Claude's do (herdr's ids are in their env too).
+
+**Profiles.** pi reaches Claude through its bridge
+([pi-claude-bridge](https://github.com/elidickinson/pi-claude-bridge)), whose Claude runs in a profile's
+folder: the `CLAUDE_CONFIG_DIR` pi inherited, or, with a bridge that has provider profiles (such
+as [Ordinath's fork](https://github.com/Ordinath/pi-claude-bridge)), the folder its config gives a
+provider (`claude-bridge-work`, say). That Claude's hooks tell pi's card the profile on each of its
+prompts, so the card has the tag of the account its last turn went to, and the profile switch sorts
+it. The brief reaches pi the same way. A pi session on another provider (OpenAI, say) keeps the
+profile of its last Claude turn, or has none, and is not briefed.
+
+**Starting pi.** Give a profile `pi` as its start command (Settings → Profiles → Start command, or
+`"command": "pi"`), with arguments if you like (`pi --model claude-bridge/claude-opus-5-5`), or an
+alias for it. The board's launches in that profile (the new-session window, "New here") and
+`spawn-agent` start pi in place of Claude, with the session id the board picked
+(`--session-id`) and in the profile's env as for Claude, so `claude-bridge` runs in that profile's
+account. herdr says which agent came up: the board names a pi session with `/name`, types the
+first message, and puts the lane and the profile it is meant for on pi's card. spawn-agent adds
+` kind=pi` to the line it prints.
+
+Not for pi (yet): the archive and Return, herdr-wake's sleep, wake and restart, the session's own
+name from the board's rename (the card's name works), question forms (pi has none: answer in a
+message), MokuPilot calls, and the status line's context percentage and usage windows.
 
 ## New sessions
 
@@ -790,12 +836,12 @@ board payload has each item's `helpers` (counts and the newest at work) and `lin
 
 ## Moving a card by hand
 
-A card dragged to another column (or set with the "Status" chips) stays there, marked with a
-pin, until the session works again: you write to it, or another session does. Then the board
-sorts it by itself as before. Dragged while the session works, it stays under "Working" and
-moves once that turn is over. A terminal dialog still puts it under "Needs me". Dropped back on
-the column the board would pick, or with the "Auto" chip, the pin goes. "Working" takes no
-cards. The pin is `pin` in the card file; the hook and the board clear it.
+A card dragged to another column (or set with the status pill in the sheet's head) stays there,
+marked with a pin, until the session works again: you write to it, or another session does. Then
+the board sorts it by itself as before. Dragged while the session works, it stays under "Working"
+and moves once that turn is over. A terminal dialog still puts it under "Needs me". Dropped back
+on the column the board would pick, or with "Auto" in the status pill's menu, the pin goes.
+"Working" takes no cards. The pin is `pin` in the card file; the hook and the board clear it.
 
 ## Schedule
 
@@ -867,6 +913,8 @@ are files, and the board keeps running.
 - The terminal board shows `⏰` (`⏳` for one that waits until the session is free) and the soonest
   time by a card's age, the count in its header.
 - A restart (`board restart`, "Restart" on the web board) is an entry too: see [Restart](#restart).
+  So is a sleep once the session is free (`board sleep --when-free`): see
+  [Several to sleep at once](#several-to-sleep-at-once).
 
 ## Restart
 
@@ -925,6 +973,39 @@ agent cannot reconnect from inside its own turn (`/mcp` is a menu in its own ter
   session (or, for one you asked for, the log and a toast) hears why. "Is a background command
   running" is read in the session's own profile's registry (`<profile folder>/sessions`). With
   one profile it is all as above.
+
+## Several to sleep at once
+
+A session that coordinates others (one that polls every session at the end of the day, say) puts
+the ones it is done with to sleep in one call, instead of one herdr-wake `POST /sleep` each:
+
+```sh
+board sleep Report-north Report-south w2:p7 3f2a9c1e-...   # names, panes or session ids
+board sleep --when-free Report-north Report-south           # the busy ones once they are free
+```
+
+- Every session that is free now goes to sleep at once through herdr-wake (four at a time), by
+  the checks a restart makes: its turn over (for herdr and in Claude's own registry), no dialog,
+  no text the user started typing, no background command or Monitor. The command prints a line
+  for each: asleep, asleep already, or kept up and why (working, a dialog, unsent text in its
+  input box, background tasks, herdr-wake refused, not a Claude session, no such session on the
+  board, a name several sessions go by). A session id or a pane names one exactly; a name two
+  sessions go by takes neither, and says so.
+- `--when-free`: one held by its turn, a dialog, a draft or background tasks (or that herdr-wake
+  refused just now) gets a schedule entry of kind `sleep` instead, due at once, and goes to sleep
+  once it is free; its line gives the entry's id (`board unschedule <id>` cancels it). Asked again,
+  it stays one entry. The scheduler waits for it as for a reminder (`scheduleWaitMin`, 240
+  minutes), then logs it as missed; herdr-wake refusing is tried three times, then the log says it
+  did not happen. Nothing is typed into the session, and nothing wakes it: one asleep by other
+  means meanwhile counts as done. Like a restart, it is for that session only (not the one after
+  `/clear` in its pane), and archiving the session drops it.
+- Without herdr-wake, or when it does not answer, it refuses at once and puts nothing to sleep.
+- For agents that talk to the board over HTTP: `POST /api/sleep` with header `X-Board: 1` and
+  `{"targets": ["<id|name|pane>", ...], "whenFree": true}` answers `{ ok, results }`, one per
+  target: `result` (`asleep`, `already`, `scheduled`, `kept`), `why` (`busy`, `dialog`, `draft`,
+  `tasks`, `gone`, `unknown`, `ambiguous`, `notClaude`, `profile`, `refused`, `error`), `detail`,
+  and the session's `key`, `name`, `pane`, and `id` of a scheduled one. It needs fresh herdr data,
+  as "Put to sleep" does (`src/services/sleep.ts`, `src/server/routes/sleep.ts`).
 
 ## Archive
 
@@ -1187,6 +1268,10 @@ board archive --session <id|name|pane>
                           another session off the board, its pane closed (a one-off one you
                           started, or one the user asked you to); the user brings it back from
                           the board's archive; see Archive
+board sleep <id|name|pane>... [--when-free]
+                          several sessions to sleep at once, a line for each: asleep, or kept
+                          up and why; --when-free: the busy ones once they are free; see
+                          Several to sleep at once
 --session <id|name|pane>  for another session's card
 board doctor              what is set up on this computer, and what is missing
 spawn-agent --name <Name> --cwd <folder> [--brief-file <file>]   a new session in a herdr tab
@@ -1196,7 +1281,7 @@ Agents in herdr also get a skill, [`herdr-agents`](skills/herdr-agents/SKILL.md)
 install puts into `~/.claude/skills` (with more than one profile, into the `skills` folder of
 each one the board shows). Claude Code keeps only its one-line description in a session's
 context and reads the rest when it is needed: how to start another session, message or wake one,
-do something later (`board remind` rather than CronCreate, which dies when the session sleeps),
+put the sessions it coordinates to sleep in one call (`board sleep`), do something later (`board remind` rather than CronCreate, which dies when the session sleeps),
 restart itself when an MCP server dropped or its settings, hooks or skills changed
 (`board restart`), and run a server or an interactive login in a pane of its own. herdr puts the
 pane's ids into its environment (`HERDR_ENV=1`, `HERDR_PANE_ID`, `HERDR_TAB_ID`,
@@ -1271,7 +1356,10 @@ default: the board lives in a workspace of its own and stays open; `tab`; `overl
 `refreshSec`, `wakeUrl` (herdr-wake router), `scheduleWaitMin` (how long a due entry waits for a
 busy session, 240), `port` (web board, 12422), `web` (false turns the
 web board off), `terminal` (false turns the web board's [terminal](#terminal) off), `browser`
-(path for the app window), `terminalTitle` (window title pattern to
+(path for the app window), `foldWaiting` (how the web board folds a session asleep in
+"Waiting" down to its name, what it waits for and its time: `push`, the default, unfolds it on
+hover moving the cards below apart; `over` unfolds it over them; `off` keeps it whole; the gear's
+Settings set it too), `terminalTitle` (window title pattern to
 raise, default `<COMPUTERNAME>:*`), `raiseTerminal`, `launch` (how new sessions start: `claude`,
 `command`, `agent`, `args`, `timeoutSec`, see [New sessions](#new-sessions)), `mokupilot` (calls
 with a fork of a session: `false` turns them off; `{ "dir": "<MokuPilot checkout>" }` runs its

@@ -7,7 +7,8 @@
 // An entry: { id, key (the session's card key), name, pane, cwd, text, at (one-off) | cron, next
 // (when it is due), created, by, from (the session that set it: { key, name }), kind ('call': a
 // MokuPilot call's results, `board call-report`; 'restart': the session restarted once it is
-// free, `board restart` or the web board, the text its note for after; a reminder without one) }
+// free, `board restart` or the web board, the text its note for after; 'sleep': the session put
+// to sleep once it is free, `board sleep --when-free`; a reminder without one) }
 // plus the scheduler's own fields: runs, missed, lastRun, gone (runs missed in a row with the
 // session gone), movedFrom (the session it was for before /clear), and while it waits for a busy
 // session pendingSince, waited, tried, why; claim while a run is on its way. A restart also keeps
@@ -167,6 +168,17 @@ export function askRestart(fields: RestartAsk): { entry: ScheduleEntry; again: b
     })
   if (again) return { entry: again, again: true }
   return { entry: addEntry({ ...fields, kind: 'restart', idle: true, text, at: now, next: now }), again: false }
+}
+
+/**
+ * The session `fields.key` put to sleep once it is free (`board sleep --when-free`): the one asked
+ * for already, else a new entry of kind 'sleep', due now. Returns { entry, again }.
+ */
+export function askSleep(fields: Omit<RestartAsk, 'text'>): { entry: ScheduleEntry; again: boolean } {
+  const pending = listEntries().find(e => e.kind === 'sleep' && e.key === fields.key)
+  if (pending) return { entry: pending, again: true }
+  const now = Date.now()
+  return { entry: addEntry({ ...fields, kind: 'sleep', idle: true, text: '', at: now, next: now }), again: false }
 }
 
 /** Change an entry that still exists: `change(entry)` returns the new entry or undefined. */

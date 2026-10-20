@@ -82,6 +82,8 @@ export interface BoardMenuActions {
   archiveOpen(): unknown
   /** Rename where the name is (`name`: the card's name or the sheet's head). */
   rename(key: string, name: Element | null): unknown
+  /** Rename its herdr workspace where that name is (`name`: in the sheet's head; null from a card). */
+  renameWorkspace(key: string, name: Element | null): unknown
   move(key: string, to: { cat?: string; column?: string }): unknown
   newSession(ctx: MenuLaunchContext, from: MenuOrigin): unknown
   /** The categories panel, at a lane. */
@@ -178,8 +180,9 @@ export function menuFor(target: unknown, at: Point, board: BoardMenuDeps): Board
     }
   }
   if (el.closest('.ql, .launch, .limits-pop, .rename, .menu')) return null
+  // The head's own menu is the card's; its card fields keep the sheet's (none), as under the head.
   const head = el.closest('#sheet .sheet-head')
-  if (head) {
+  if (head && !el.closest('.sheet-card')) {
     const key = board.state().open
     const it = key ? board.item(key) : undefined
     return key && it ? forCard(board, key, it, head.querySelector('#sheet-name') ?? head, at) : null
@@ -257,6 +260,8 @@ function forCard(board: BoardMenuDeps, key: string, it: Item, el: Element, at: P
         return void board.do.copy(values[arg], t('menu.copied'))
       }
       if (id === 'rename') return void board.do.rename(key, nameEl)
+      if (id === 'renameWorkspace')
+        return void board.do.renameWorkspace(key, el.closest('.sheet-head')?.querySelector('#sheet-workspace') ?? null)
       if (id === 'reveal') return void board.do.openPath(it.cwd, 'open')
       if (id === 'newHere') return void board.do.newSession({ item: it }, from)
       if (isCardAction(id)) board.do[id](key, from)

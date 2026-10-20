@@ -1,8 +1,8 @@
 // Checking that the board is set up on this computer: what the install action writes (the board
 // and spawn-agent commands on PATH, the Claude Code hooks, the status line, desktop notifications
-// on Windows; core/install-plan.ts; and the agents' skill, below) and what `board doctor`, the
-// install action and the web board check (those, herdr's key for the board, herdr-wake, how new
-// sessions start).
+// on Windows; core/install-plan.ts; the agents' skill and herdr's own Claude hook, below) and what
+// `board doctor`, the install action and the web board check (those, herdr's key for the board,
+// herdr-wake, how new sessions start).
 //
 // Pure: adapters/setup-facts.ts reads this computer into SetupFacts, and tests hand in fixtures.
 import { join } from 'node:path'
@@ -91,6 +91,25 @@ export function boardKey(text: unknown): string | null {
 export const KEY_SNIPPET =
   '[[keys.command]]\nkey = "prefix+a"\ntype = "plugin_action"\ncommand = "agent-board.open"\ndescription = "agent board"'
 
+// ------------------------------------------------------------------ herdr's own Claude hook
+
+// herdr learns which Claude session a pane runs only from its own SessionStart hook, which
+// `herdr integration install claude` writes into one profile folder (the one CLAUDE_CONFIG_DIR
+// names, else ~/.claude): hooks/herdr-agent-state.ps1 on Windows, registered in that folder's
+// settings.json. Without it a pane running Claude in that profile has no session in herdr's
+// snapshot: its card shows no conversation and no profile. The install action has herdr write it
+// into every shown profile.
+const HERDR_HOOK = /(["'])([^"']*herdr-agent-state[^"']*)\1|(\S*herdr-agent-state\S*)/
+
+/** The script herdr's own Claude hook runs at SessionStart in these settings, or null when none does. */
+export function herdrHookScript(settings: unknown): string | null {
+  for (const { command } of commandsOf(settings, 'SessionStart')) {
+    const m = HERDR_HOOK.exec(command)
+    if (m) return m[2] ?? m[3] ?? null
+  }
+  return null
+}
+
 // ------------------------------------------------------------------ what the checks look at
 
 /** Where a shell finds a command: the file, and for one of ours the script it runs (`gone`: no longer there). */
@@ -122,6 +141,12 @@ export interface SkillFacts {
   source: string | null
 }
 
+/** herdr's own Claude hook in a profile folder: the script its SessionStart entry runs (null: no entry), and whether that file is there. */
+export interface HerdrHookFacts {
+  script: string | null
+  found: boolean
+}
+
 /** A shown Claude profile's settings.json and skill (core/profiles.ts): its folder, and whether it is there. */
 export interface ProfileSettings {
   id: string
@@ -134,6 +159,8 @@ export interface ProfileSettings {
   settingsError: string
   /** The agents' skill in this folder; none: not looked at, no check. */
   skill?: SkillFacts | undefined
+  /** herdr's own Claude hook in this folder; none: not looked at, no check. */
+  herdrHook?: HerdrHookFacts | undefined
 }
 
 /** Everything the checks look at (adapters/setup-facts.ts gatherFacts). */
@@ -155,6 +182,8 @@ export interface SetupFacts {
   profiles?: ProfileSettings[]
   /** The first shown profile's agents' skill (~/.claude's with one profile); none: not looked at, no check. */
   skill?: SkillFacts | undefined
+  /** The first shown profile's herdr hook (~/.claude's with one profile); none: not looked at, no check. */
+  herdrHook?: HerdrHookFacts | undefined
   herdrConfigFile: string
   herdrConfig: string | null
   wakeUrl: string | null
@@ -364,6 +393,22 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
   else
     for (const p of profiles)
       if (p.exists) skillCheck(p.skill, `skill:${p.id}`, check => t('setup.inProfile', { profile: p.title, check }))
+
+  // herdr's own Claude hook, from which herdr learns the session a pane runs. With more than one
+  // profile shown, in each whose folder is there, by its name (id herdr:<id>); with one, once.
+  const herdrCheck = (
+    h: HerdrHookFacts | undefined,
+    id = 'herdr',
+    named: (title: string) => string = title => title,
+  ): void => {
+    if (!h) return
+    if (h.script && h.found) add(id, 'ok', named(t('setup.herdr.ok')), t('setup.herdr.okDetail'))
+    else add(id, 'warn', named(t('setup.herdr.missing')), t('setup.herdr.without'), t('setup.runInstall'), INSTALL)
+  }
+  if (profiles.length <= 1) herdrCheck(facts.herdrHook)
+  else
+    for (const p of profiles)
+      if (p.exists) herdrCheck(p.herdrHook, `herdr:${p.id}`, check => t('setup.inProfile', { profile: p.title, check }))
 
   // herdr's key for the board.
   const key = boardKey(facts.herdrConfig)

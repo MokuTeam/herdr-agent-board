@@ -184,7 +184,7 @@ type LaunchView = {
 type BoardPayload = {
   stale: boolean
   launches: LaunchView[]
-  items: { key: string; name: string; autoName: string; profile?: string | null }[]
+  items: { key: string; name: string; autoName: string; profile?: string | null; workspace?: string | null }[]
 }
 
 // Claude's input box as herdr reads it: a rule, the ❯ line with what is typed, a rule.
@@ -513,6 +513,67 @@ test('renaming: the board’s name on the card, back to the automatic one, and C
   assert.equal(((await quiet.json()) as { confirmed: boolean }).confirmed, false)
   assert.ok(!box.calls().some(a => a.join(' ') === 'agent rename p1 quiet-name'))
   assert.equal((await named()).name, 'Quiet name')
+}, 30_000)
+
+test('renaming a workspace: the one the session’s pane is in now, never the board’s own nor to its name, shown at once', async () => {
+  const { box, post, board, url } = await boardServer({ language: 'en' })
+  const renamed = { ...SNAPSHOT, workspaces: [{ workspace_id: 'wA', label: 'Billing work' }] }
+  box.state({
+    ...HERDR,
+    'api snapshot': {
+      result: { snapshot: SNAPSHOT },
+      until: ['workspace rename'],
+      // biome-ignore lint/suspicious/noThenProperty: the fake herdr's reply after the rename (test/support/fake-herdr.ts)
+      then: { result: { snapshot: renamed } },
+    },
+    'workspace rename': { result: null },
+  })
+  const path = '/api/session/s1/workspace'
+  const renames = () => box.calls().filter(a => a[0] === 'workspace' && a[1] === 'rename')
+  const errorOf = async (r: Response) => ((await r.json()) as { error: string }).error
+  // It changes herdr for every session there: only from this page.
+  assert.equal((await fetch(url + path, { method: 'POST', body: '{"name":"x"}' })).status, 403)
+  assert.equal((await post(path, { name: 'x' }, { origin: 'http://evil.example' })).status, 403)
+  // Not a name herdr takes, nor the board's own workspace's: refused before herdr hears of it.
+  for (const name of ['', '   ', '-x', 'x'.repeat(61), 'Board'])
+    assert.equal((await post(path, { name })).status, 409, name)
+  assert.match(await errorOf(await post(path, { name: 'Board' })), /board’s own/)
+  assert.deepEqual(renames(), [])
+
+  assert.equal((await post(path, { name: '  Billing work  ' })).status, 200)
+  assert.deepEqual(renames(), [['workspace', 'rename', 'wA', 'Billing work']])
+  // The board shows the new name without waiting for its next look at herdr.
+  const deadline = Date.now() + 5000
+  while ((await board()).items[0]?.workspace !== 'Billing work') {
+    if (Date.now() > deadline) throw new Error('the new name did not show')
+    await new Promise(r => setTimeout(r, 25))
+  }
+  // The name it has already: nothing to tell herdr.
+  assert.equal((await post(path, { name: 'Billing work' })).status, 200)
+  assert.equal(renames().length, 1)
+
+  // herdr refuses: the page hears why.
+  box.state({ ...HERDR, 'workspace rename': { error: 'no such workspace', code: 'not_found' } })
+  const refused = await post(path, { name: 'Gamma' })
+  assert.equal(refused.status, 409)
+  assert.match(await errorOf(refused), /no such workspace/)
+  // The session's pane is in the board's own workspace now: that one keeps its name.
+  const inBoard = {
+    ...SNAPSHOT,
+    panes: SNAPSHOT.panes.map(p => ({ ...p, workspace_id: 'wB' })),
+    workspaces: [...SNAPSHOT.workspaces, { workspace_id: 'wB', label: 'Board' }],
+  }
+  box.state({ ...HERDR, 'api snapshot': { result: { snapshot: inBoard } }, 'workspace rename': { result: null } })
+  const own = await post(path, { name: 'Mine' })
+  assert.equal(own.status, 409)
+  assert.match(await errorOf(own), /“Board”/)
+  // herdr does not know the workspace its pane is in: nothing to rename.
+  const lost = { ...SNAPSHOT, panes: SNAPSHOT.panes.map(p => ({ ...p, workspace_id: 'wGone' })) }
+  box.state({ ...HERDR, 'api snapshot': { result: { snapshot: lost } } })
+  const gone = await post(path, { name: 'Mine' })
+  assert.equal(gone.status, 409)
+  assert.match(await errorOf(gone), /not in herdr/)
+  assert.equal(renames().filter(a => a[3] === 'Mine').length, 0)
 }, 30_000)
 
 test('a retry starts in the worktree and the workspace the failed launch made, not new ones', async () => {
@@ -1190,6 +1251,92 @@ test('the board’s spawn-agent types the profile’s start command: work’s wi
   assert.equal(cardOf(box.cards, runs[0]?.split(' ').at(-1)).profileWant, 'work')
   assert.equal(cardOf(box.cards, runs[1]?.split(' ').at(-1)).profileWant, 'default')
 }, 60_000)
+test('a profile that starts pi: pi with the board’s id, named with /name, briefed; the lane and the profile go on pi’s own card', async () => {
+  const cfg = (box: Sandbox) => profilesWith(box, { work: { command: 'pi' } })
+  const { box, board, started, launched } = await boardServer(cfg)
+  writeConfig(box, cfg(box))
+  const ready = { result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: 'pi', agent_status: 'idle' } } }
+  const state = { ...HERDR, ...OPENED, 'pane get': ready, 'pane run': { result: null } }
+  box.state({ ...state, 'pane read': { text: 'Session name set: Pi job' } })
+  const l = await launched(
+    await started({
+      name: 'Pi job',
+      cwd: box.dir,
+      category: 'acme',
+      workspace: { id: 'wA' },
+      profile: 'work',
+      message: 'Go.',
+    }),
+  )
+  assert.equal(l.state, 'done', l.error)
+  assert.match(callOf(box, 'pane', 'run')[3] ?? '', /^pi --model sonnet --session-id [0-9a-f-]{36}$/)
+  assert.deepEqual(callOf(box, 'tab', 'create').slice(-3), [
+    '--env',
+    `CLAUDE_CONFIG_DIR=${workDirOf(box)}`,
+    '--no-focus',
+  ])
+  assert.deepEqual(promptsSent(box), ['wA:p9 /name Pi job', 'wA:p9 Go.'])
+  // herdr reports pi's session by its file, whose name holds the board's id.
+  const sid = (callOf(box, 'pane', 'run')[3] ?? '').split(' ').at(-1) ?? ''
+  const file = join(box.dir, `2026-10-20T08-15-48-746Z_${sid}.jsonl`)
+  const pane = { pane_id: 'wA:p9', agent: 'pi', agent_session: { value: file }, agent_status: 'idle', cwd: box.dir }
+  box.state({
+    ...state,
+    'api snapshot': {
+      result: { snapshot: { ...SNAPSHOT, panes: [...SNAPSHOT.panes, { ...pane, workspace_id: 'wA' }] } },
+    },
+  })
+  writeFileSync(join(box.cards, 'refresh.json'), '{}') // a card that changes: the board looks again
+  const card = join(box.cards, `${file.replace(/[^A-Za-z0-9_-]/g, '_')}.json`)
+  await until(() => existsSync(card), 5000)
+  assert.deepEqual(JSON.parse(readFileSync(card, 'utf8')), {
+    key: file,
+    category: 'acme',
+    profileWant: 'work',
+    updatedAt: JSON.parse(readFileSync(card, 'utf8')).updatedAt,
+  })
+  // The card written under the id before pi was up had nothing else: it is gone.
+  assert.equal(existsSync(join(box.cards, `${sid}.json`)), false)
+  assert.ok((await board()).items.some(i => i.key === file))
+}, 40_000)
+
+test('pi held by a dialog before it was ready: once answered in herdr, the board names it with /name and sends the message', async () => {
+  const cfg = (box: Sandbox) => profilesWith(box, { default: { command: 'pi' } })
+  const { box, board, started, launched } = await boardServer(cfg)
+  writeConfig(box, cfg(box))
+  const pi = (status: string) => ({ result: { agent: { agent: 'pi', agent_status: status } } })
+  const state = {
+    ...HERDR,
+    ...OPENED,
+    'pane get': { result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: 'pi', agent_status: 'blocked' } } },
+    'pane run': { result: null },
+    'agent get': pi('blocked'),
+    'pane read': { text: 'Trust project-local files in this folder?' },
+  }
+  box.state(state)
+  const id = await started({
+    name: 'Pi job',
+    cwd: box.dir,
+    category: 'acme',
+    workspace: { id: 'wA' },
+    profile: 'default',
+    message: 'Go.',
+  })
+  const waiting = await launchState(board, id, x => x?.state === 'waiting' || x?.state === 'failed', 'did not wait')
+  assert.equal(waiting.state, 'waiting', waiting.error)
+  assert.deepEqual(promptsSent(box), []) // nothing typed while the dialog is up
+  box.state({ ...state, 'agent get': pi('idle'), 'pane read': { text: 'Session name set: Pi job' } })
+  const l = await launched(id)
+  assert.equal(l.state, 'done', l.error)
+  // pi's, not Claude's /rename; pi's input box is not one the board reads, so it is not read first.
+  assert.deepEqual(promptsSent(box), ['wA:p9 /name Pi job', 'wA:p9 Go.'])
+  assert.ok(box.calls().some(a => a.join(' ') === 'agent rename wA:p9 pi-job'))
+  assert.equal(
+    box.calls().some(a => a[0] === 'agent' && a[1] === 'read'),
+    false,
+  )
+}, 40_000)
+
 test('a start command that picks its session itself gets no --session-id from the board', async () => {
   const cfg = (box: Sandbox) => profilesWith(box, { work: { command: ['cld-work', '--continue'] } })
   const { box, started, launched } = await boardServer(cfg)

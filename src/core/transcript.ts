@@ -60,6 +60,8 @@ export function userText(content: unknown, filters: readonly PromptFilter[] = DE
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
     .replace(/<(local-command-stdout|local-command-stderr|command-message|command-args)>[\s\S]*?<\/\1>/g, '')
     .replace(/<command-name>([\s\S]*?)<\/command-name>/g, '$1')
+    // Pasted text comes between <pasted_content id="…"> and </pasted_content id="…">: the text only.
+    .replace(/<pasted_content id="[^"]*">\n?|\n?<\/pasted_content id="[^"]*">/g, '')
   return filters.reduce((s, filter) => filter(s), stripped).trim()
 }
 

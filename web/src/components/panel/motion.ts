@@ -386,8 +386,11 @@ export class PanelMotion implements PlacedPanel {
       return
     }
     if (e.pointerType === 'touch' && !closest(e.target, '.sheet-grip')) return
-    // The session's name renames it on a click: it does not move the panel.
-    if (!closest(e.target, '.sheet-head, .sheet-grip') || closest(e.target, 'button, input, textarea, a, #sheet-name'))
+    // The session's name renames it on a click, its card's fields are fields: they do not move the panel.
+    if (
+      !closest(e.target, '.sheet-head, .sheet-grip') ||
+      closest(e.target, 'button, input, textarea, a, #sheet-name, .sheet-card')
+    )
       return
     this.halt()
     const at = this.at()

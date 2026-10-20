@@ -66,10 +66,18 @@ export function commandArgs(template: unknown, vars: Vars): { file: string; args
   return { file, args }
 }
 
-/** What a launcher printed when it worked: `pane=<id> name=<name> agent=<herdr name>`, each optional. */
-export function parseLauncherOutput(stdout: unknown): { pane?: string; agent?: string; session?: string } {
+/**
+ * What a launcher printed when it worked: `pane=<id> name=<name> agent=<herdr name>`, and
+ * `kind=<agent kind>` when it started another agent than Claude (spawn-agent: pi), each optional.
+ */
+export function parseLauncherOutput(stdout: unknown): {
+  pane?: string
+  agent?: string
+  session?: string
+  kind?: string
+} {
   const out: Record<string, string> = {}
-  for (const m of String(stdout ?? '').matchAll(/\b(pane|agent|session)=(\S+)/g)) out[m[1] ?? ''] = m[2] ?? ''
+  for (const m of String(stdout ?? '').matchAll(/\b(pane|agent|session|kind)=(\S+)/g)) out[m[1] ?? ''] = m[2] ?? ''
   return out
 }
 

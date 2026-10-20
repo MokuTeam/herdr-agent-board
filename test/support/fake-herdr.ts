@@ -1,6 +1,9 @@
 // Compiled to an executable (see fake-herdr-bin.ts) and used as HERDR_BIN_PATH.
-// Only file-backed canned replies; never loads or contacts Herdr.
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+// Only file-backed canned replies (and herdr's Claude hook, written where herdr writes it); never
+// loads or contacts Herdr.
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
 
 type Reply = {
   until?: string[]
@@ -11,6 +14,11 @@ type Reply = {
   error?: string
   code?: unknown
   result?: unknown
+  /**
+   * What `herdr integration install claude` does: its hook script into the folder CLAUDE_CONFIG_DIR
+   * names (else ~/.claude), registered at SessionStart in that folder's settings.json.
+   */
+  claudeHook?: true
 }
 
 const logPath = process.env.FAKE_HERDR_LOG ?? ''
@@ -50,7 +58,23 @@ if (reply.waitFor) {
     await new Promise(resolve => setTimeout(resolve, 10))
   }
 }
-if (reply.text !== undefined) {
+if (reply.claudeHook) {
+  const dir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
+  const script = join(dir, 'hooks', 'herdr-agent-state.ps1')
+  mkdirSync(dirname(script), { recursive: true })
+  writeFileSync(script, '# installed by herdr\n# HERDR_INTEGRATION_ID=claude\n')
+  const file = join(dir, 'settings.json')
+  type Settings = { hooks?: Record<string, unknown[]> }
+  const settings: Settings = existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Settings) : {}
+  const command = `powershell -NoProfile -ExecutionPolicy Bypass -File "${script}" session`
+  settings.hooks ??= {}
+  settings.hooks.SessionStart ??= []
+  const list = settings.hooks.SessionStart
+  if (!JSON.stringify(list).includes(JSON.stringify(command)))
+    list.push({ matcher: '^(startup|resume|clear|compact|fork)$', hooks: [{ type: 'command', command, timeout: 10 }] })
+  writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`)
+  process.stdout.write(`installed claude integration hook to ${script}\nensured claude settings at ${file}\n`)
+} else if (reply.text !== undefined) {
   // Commands that print plain text (agent read, pane read).
   process.stdout.write(reply.text)
 } else if (reply.error) {

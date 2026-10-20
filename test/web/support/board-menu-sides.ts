@@ -40,7 +40,7 @@ export const PAGE = `<div id="page">
   <p class="empty" id="board-empty">No sessions</p>
 </main>
 </div>
-<aside class="sheet" id="sheet"><div class="sheet-inner"><header class="sheet-head" id="sheet-head"><div class="sheet-title"><h2 id="sheet-name" tabindex="0">acme</h2><p class="sheet-meta" id="sheet-meta">Acme</p></div></header><div class="sheet-body" id="sheet-body"><p id="sheet-text">thread</p><span data-fs="file" data-abs="/srv/app/a.ts" tabindex="0" id="sheet-chip">a.ts</span><textarea id="message"></textarea></div></div></aside>
+<aside class="sheet" id="sheet"><div class="sheet-inner"><header class="sheet-head" id="sheet-head"><div class="sheet-title"><h2 id="sheet-name" tabindex="0">acme</h2><p class="sheet-meta" id="sheet-meta">Acme · workspace <button type="button" class="sheet-workspace" id="sheet-workspace">Sessions</button></p><div class="sheet-card" id="sheet-card"><span id="sheet-card-text">Doing</span></div></div></header><div class="sheet-body" id="sheet-body"><p id="sheet-text">thread</p><span data-fs="file" data-abs="/srv/app/a.ts" tabindex="0" id="sheet-chip">a.ts</span><textarea id="message"></textarea></div></div></aside>
 <aside class="sheet" id="cats-sheet"><p id="cats-text">lanes</p></aside>
 <div class="ql"><p id="ql-text">preview</p><a data-fs="dir" data-abs="/srv" href="#" id="ql-chip">srv</a></div>
 <div class="launch"><p id="launch-text">new session</p></div>
@@ -147,6 +147,7 @@ function boardOf(s: BoardScene, log: string[], menu: unknown): BoardMenuDeps & {
     tidy: note('do.tidy'),
     archiveOpen: note('do.archiveOpen'),
     rename: note('do.rename'),
+    renameWorkspace: note('do.renameWorkspace'),
     move: note('do.move'),
     newSession: note('do.newSession'),
     cats: note('do.cats'),

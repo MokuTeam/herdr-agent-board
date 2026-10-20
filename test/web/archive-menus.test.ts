@@ -108,11 +108,13 @@ async function compare(s: BoardScene, steps: Step[]): Promise<string[]> {
   return baseline
 }
 
+// In no herdr workspace herdr names: upstream had no Rename workspace (the board's own, test/web/board-menus.test.ts).
 const session = item({
   key: 's1',
   name: 'acme',
   cwd: 'C:\\Acme',
   pane: 'w1:p1',
+  workspace: null,
   category: 'acme',
   column: 'idle',
   agent: 'claude',

@@ -172,6 +172,8 @@ function settingsItems(data: BoardPayload): readonly MenuEntry[] {
     toggleSleepers() {},
     profiles: () => offersProfiles(data.profiles),
     openProfiles() {},
+    fold: () => data.foldWaiting ?? null,
+    chooseFold() {},
   })({ getBoundingClientRect: () => ({ right: 0, bottom: 0 }) } as unknown as HTMLElement, false)
   return items
 }
