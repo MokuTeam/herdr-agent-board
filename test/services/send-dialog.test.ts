@@ -85,7 +85,11 @@ for (const text of ['', '\x1b[2mTry running the tests\x1b[0m', 'already typed'])
   })
 }
 
-for (const next of [agent('idle', 'replacement'), agent('blocked')]) {
+for (const next of [
+  agent('idle', 'replacement'),
+  agent('blocked'),
+  { result: { agent: { agent: 'pi', agent_status: 'idle', agent_session: { value: 'expected' } } } },
+]) {
   test(`a change while reading the screen refuses before typing (${JSON.stringify(next)})`, async () => {
     const box = await sandbox()
     box.state({
@@ -96,5 +100,26 @@ for (const next of [agent('idle', 'replacement'), agent('blocked')]) {
     const out = await box.run('send', { item, cfg: {}, text: 'must stay here' }).exited
     expect(JSON.parse(out.stdout)).toMatchObject({ ok: false })
     expect(box.calls().some(args => args[1] === 'prompt')).toBe(false)
+  })
+}
+
+for (const [kind, session] of [
+  ['pi', 'C:\\Team Work\\сессия 100%.jsonl'],
+  ['custom', 'session-2'],
+] as const) {
+  test(`a ${kind} session keeps the original send calls without a Claude screen check`, async () => {
+    const box = await sandbox()
+    box.state({
+      'agent get': { result: { agent: { agent: kind, agent_status: 'idle', agent_session: { value: session } } } },
+      'agent read': { error: 'This agent does not use a Claude input box' },
+      'agent prompt': { result: {} },
+    })
+    const out = await box.run('send', { item: { ...item, agent: kind, session }, cfg: {}, text: '-hello' }).exited
+    expect(out.code).toBe(0)
+    expect(JSON.parse(out.stdout)).toEqual({ ok: true })
+    expect(box.calls()).toEqual([
+      ['agent', 'get', 'pane1'],
+      ['agent', 'prompt', 'pane1', ' -hello'],
+    ])
   })
 }
