@@ -53,3 +53,29 @@ test('a finished program reports its code and output; a missing one its error', 
   expect(gone.error?.code).toBe('ENOENT')
   expect(gone.code).toBe('ENOENT')
 })
+
+test('runTree hands the program its input on stdin and closes it; a signal ends it as the timeout does', async () => {
+  const echo = await runTree(
+    process.execPath,
+    [
+      '-e',
+      'let s = ""; process.stdin.on("data", d => (s += d)); process.stdin.on("end", () => console.log("got:" + s))',
+    ],
+    { timeout: 10_000, input: 'what was the code word?' },
+  )
+  expect(echo.stdout.trim()).toBe('got:what was the code word?')
+  expect(echo.killed).toBe(false)
+  const control = new AbortController()
+  const started = Date.now()
+  const long = runTree(process.execPath, ['-e', 'setTimeout(() => {}, 15000)'], {
+    timeout: 15_000,
+    signal: control.signal,
+  })
+  setTimeout(() => control.abort(), 300)
+  const ended = await long
+  expect(ended.killed).toBe(true)
+  expect(Date.now() - started).toBeLessThan(8000)
+  // Without them, as before: the program runs to its end.
+  const plain = await runTree(process.execPath, ['-e', 'console.log("done")'], { timeout: 10_000 })
+  expect([plain.stdout.trim(), plain.killed]).toEqual(['done', false])
+})

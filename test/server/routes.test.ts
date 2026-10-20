@@ -120,6 +120,7 @@ describe('routes', () => {
       'styles/fold.css',
       'styles/session-head.css',
       'styles/fork.css',
+      'styles/aside.css',
       'app.js',
     ])
     for (const link of links) expect([link, (await fetch(`${url}/${link}`)).status]).toEqual([link, 200])
