@@ -33,6 +33,7 @@ const REMOTE: RemoteView = {
       seenAt: null,
     },
   ],
+  pwa: { on: false, https: 443, url: null, certs: false, serve: null, error: null },
 }
 
 const render = (remote: RemoteView | undefined, lang = 'en') =>
@@ -59,7 +60,7 @@ describe('Phones panel', () => {
     expect(all).toContain('me@example.com, android')
     expect(all).toContain('not seen yet')
     const buttons = findAll(nodes, el => el.tag === 'button' && hasClass(el, 'button')).map(b => text(b.children))
-    expect(buttons).toEqual(['Approve', 'Deny', 'Unpair', 'Turn off phones'])
+    expect(buttons).toEqual(['Approve', 'Deny', 'Set up the HTTPS address', 'Unpair', 'Turn off phones'])
   })
 
   test('no phone yet; and why phones cannot reach it', () => {
@@ -67,5 +68,35 @@ describe('Phones panel', () => {
     expect(none).toContain('No phone is paired yet')
     const down = text(render({ ...REMOTE, url: null, error: 'Tailscale is not connected on this computer' }, 'ru'))
     expect(down).toContain('Телефоны не достанут доску: Tailscale is not connected on this computer')
+  })
+
+  test("in a phone's browser: what Tailscale still needs, then the address and its QR code", () => {
+    const button = (nodes: Node[], label: string) =>
+      findAll(nodes, el => el.tag === 'button' && text(el.children) === label)[0]
+    const noCerts = render(REMOTE)
+    expect(text(noCerts)).toContain('HTTPS certificates are off for your tailnet.')
+    const link = findAll(noCerts, el => el.tag === 'a' && hasClass(el, 'ext'))[0]
+    expect(link?.attrs.get('href')).toBe('https://login.tailscale.com/admin/dns')
+    expect(button(noCerts, 'Set up the HTTPS address')?.attrs.has('disabled')).toBe(true)
+
+    const ready = render({ ...REMOTE, pwa: { ...REMOTE.pwa, certs: true } })
+    expect(text(ready)).not.toContain('HTTPS certificates are off')
+    expect(button(ready, 'Set up the HTTPS address')?.attrs.has('disabled')).toBe(false)
+
+    const url = 'https://box.tail0.ts.net'
+    const on = render({ ...REMOTE, pwa: { on: true, https: 443, url, certs: true, serve: 'ours', error: null } })
+    expect(text(on)).toContain(`Scan it with the phone, or open ${url}`)
+    expect(findAll(on, el => el.tag === 'svg' && hasClass(el, 'phones-qr'))).toHaveLength(1)
+    expect(button(on, 'Turn off')).toBeDefined()
+    const other = render({
+      ...REMOTE,
+      pwa: { on: true, https: 443, url: null, certs: true, serve: 'other', error: null },
+    })
+    expect(text(other)).toContain("Port 443 of this computer's Tailscale name already serves something else")
+  })
+
+  test('a paired browser says so', () => {
+    const devices = [{ ...(REMOTE.devices[0] as RemoteView['devices'][number]), kind: 'browser' as const }]
+    expect(text(render({ ...REMOTE, devices }))).toContain('Agent board app · pixelbrowser')
   })
 })

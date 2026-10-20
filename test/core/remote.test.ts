@@ -1,16 +1,19 @@
 import { expect, test } from 'bun:test'
 import { allowedLogin, bearerOf, desktopOnly, remoteConfig } from '../../src/core/remote.ts'
 
+const PWA_OFF = { on: false, https: 443, port: null }
+
 test('remote is off unless config.json turns it on', () => {
-  expect(remoteConfig(undefined)).toEqual({ on: false, port: null, allow: [] })
-  expect(remoteConfig(false)).toEqual({ on: false, port: null, allow: [] })
-  expect(remoteConfig('yes')).toEqual({ on: false, port: null, allow: [] })
-  expect(remoteConfig({ on: 'true' })).toEqual({ on: false, port: null, allow: [] })
-  expect(remoteConfig(true)).toEqual({ on: true, port: null, allow: [] })
+  expect(remoteConfig(undefined)).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF })
+  expect(remoteConfig(false)).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF })
+  expect(remoteConfig('yes')).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF })
+  expect(remoteConfig({ on: 'true' })).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF })
+  expect(remoteConfig(true)).toEqual({ on: true, port: null, allow: [], pwa: PWA_OFF })
   expect(remoteConfig({ on: true, port: 12500, allow: [' Anna@Example.com ', 'anna@example.com', '', 3] })).toEqual({
     on: true,
     port: 12500,
     allow: ['anna@example.com'],
+    pwa: PWA_OFF,
   })
   expect(remoteConfig({ on: true, port: 70000 }).port).toBeNull()
   expect(remoteConfig({ on: true, port: 1.5 }).port).toBeNull()
@@ -58,4 +61,20 @@ test('the token comes as Authorization: Bearer', () => {
   expect(bearerOf(token)).toBeNull()
   expect(bearerOf('Bearer short')).toBeNull()
   expect(bearerOf(null)).toBeNull()
+})
+
+test("the board in a phone's browser is off unless remote.pwa turns it on", () => {
+  expect(remoteConfig({ on: true, pwa: true }).pwa).toEqual({ on: true, https: 443, port: null })
+  expect(remoteConfig({ on: true, pwa: { on: true, https: 8443, port: 12600 } }).pwa).toEqual({
+    on: true,
+    https: 8443,
+    port: 12600,
+  })
+  expect(remoteConfig({ on: true, pwa: { https: 8443 } }).pwa).toEqual({ on: false, https: 8443, port: null })
+  expect(remoteConfig({ on: true, pwa: { on: true, https: 0, port: 'x' } }).pwa).toEqual({
+    on: true,
+    https: 443,
+    port: null,
+  })
+  expect(remoteConfig({ on: true, pwa: 'yes' }).pwa).toEqual(PWA_OFF)
 })

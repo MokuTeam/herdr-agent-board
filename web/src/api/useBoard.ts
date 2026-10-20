@@ -2,6 +2,7 @@
 // while the page is hidden or offline and resumed when it is back.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { boardConnection } from '../models/lifecycle.ts'
+import { remotePage, UNPAIRED } from '../models/remote-page.ts'
 import { listenForReveals, type Reveal } from '../models/reveal.ts'
 import { api, type BoardPayload, isBoardPayload } from './client.ts'
 
@@ -41,6 +42,8 @@ export function useBoard(): LiveBoard {
         const stream = new EventSource('/api/events')
         // A notification clicked while this page is open (entrypoints/web-open.ts through /api/reveal).
         listenForReveals(stream, () => latest, setReveal)
+        // In a phone's browser: unpaired on the computer, the board says so as it ends the stream.
+        if (remotePage()) stream.addEventListener('unpaired', () => dispatchEvent(new Event(UNPAIRED)))
         return stream
       },
       snapshot: signal => api.board(signal),

@@ -2,14 +2,24 @@
 // waits, in memory, until the user approves or denies it on the board (or `board remote`), or 10
 // minutes pass. An approved phone gets its token once, on its next poll; the board keeps only
 // the token's hash, with the Tailscale device it was given to, in remote-devices.json in the state
-// folder. A token works from that device only.
+// folder. A token works from that device only. A device's open streams end when it is unpaired
+// (watch).
 import { createHash, randomBytes } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { isRecord, readJson, updateJson } from '../adapters/json-store.ts'
 import { stateDir } from '../adapters/paths.ts'
 import type { Caller } from '../adapters/tailscale.ts'
-import { deviceFor, PAIR_MAX, PAIR_TTL_MS, type PairRequest, type RemoteDevice } from '../core/remote.ts'
+import {
+  type DeviceKind,
+  deviceFor,
+  kindOf,
+  PAIR_MAX,
+  PAIR_TTL_MS,
+  type PairRequest,
+  type RemoteDevice,
+  samePairing,
+} from '../core/remote.ts'
 
 export const devicesFile = (): string => join(stateDir(), 'remote-devices.json')
 
@@ -27,8 +37,11 @@ export type PollAnswer =
   | { status: 'gone' }
 
 export interface Remote {
-  /** A request from `who`; one of its own that still waits is answered again instead. */
-  request(name: unknown, who: Caller): PairAnswer
+  /**
+   * A request from `who`, for the app or (`browser`) the board in its browser; one of its own of
+   * that kind that still waits is answered again instead.
+   */
+  request(name: unknown, who: Caller, kind?: DeviceKind): PairAnswer
   /** How the request stands, for the device that made it only; the token goes out once. */
   poll(id: string, who: Caller): PollAnswer
   approve(id: string): boolean
@@ -39,6 +52,8 @@ export interface Remote {
   verify(token: string, who: Caller): RemoteDevice | null
   pending(): PairRequest[]
   devices(): RemoteDevice[]
+  /** Calls `gone` once the device's token stops working (unpaired, or paired again); returns the unwatch. */
+  watch(id: string, gone: () => void): () => void
 }
 
 export function createRemote({ onChange, now = Date.now }: { onChange: () => void; now?: () => number }): Remote {
@@ -46,6 +61,14 @@ export function createRemote({ onChange, now = Date.now }: { onChange: () => voi
   /** Tokens of approved requests, until their phone polls once. */
   const handed = new Map<string, string>()
   const seen = new Map<string, number>()
+  const watchers = new Map<string, Set<() => void>>()
+  function ended(ids: readonly string[]): void {
+    for (const id of ids) {
+      const set = watchers.get(id)
+      watchers.delete(id)
+      for (const gone of set ?? []) gone()
+    }
+  }
 
   const devices = (): RemoteDevice[] => readJson(devicesFile(), isDevices) ?? []
   function save(change: (list: RemoteDevice[]) => RemoteDevice[]): void {
@@ -63,16 +86,25 @@ export function createRemote({ onChange, now = Date.now }: { onChange: () => voi
   }
 
   return {
-    request(name, who) {
+    request(name, who, kind) {
       expire()
       const label = typeof name === 'string' ? name.trim().slice(0, 60) : ''
       if (!label) return { ok: false, status: 400, error: 'name' }
-      const mine = [...requests.values()].find(r => r.node === who.node && r.status === 'pending')
+      const mine = [...requests.values()].find(
+        r => r.node === who.node && kindOf(r) === kindOf({ kind }) && r.status === 'pending',
+      )
       if (mine) return { ok: true, id: mine.id }
       if ([...requests.values()].filter(r => r.status === 'pending').length >= PAIR_MAX)
         return { ok: false, status: 429, error: 'busy' }
       const id = newId()
-      requests.set(id, { id, name: label, ...who, at: now(), status: 'pending' })
+      requests.set(id, {
+        id,
+        name: label,
+        ...who,
+        ...(kind === 'browser' ? { kind } : {}),
+        at: now(),
+        status: 'pending',
+      })
       onChange()
       return { ok: true, id }
     },
@@ -92,11 +124,16 @@ export function createRemote({ onChange, now = Date.now }: { onChange: () => voi
       if (r?.status !== 'pending') return false
       const token = randomBytes(32).toString('base64url')
       const { status: _, at: __, ...who } = r
-      // One device, one pairing: pairing it again replaces its old token.
-      save(list => [
-        ...list.filter(d => d.node !== r.node),
-        { ...who, id: newId(), tokenHash: hashToken(token), pairedAt: now(), seenAt: null },
-      ])
+      // One device, one pairing of each kind: pairing it again replaces its old token.
+      let replaced: string[] = []
+      save(list => {
+        replaced = list.filter(d => samePairing(d, r)).map(d => d.id)
+        return [
+          ...list.filter(d => !samePairing(d, r)),
+          { ...who, id: newId(), tokenHash: hashToken(token), pairedAt: now(), seenAt: null },
+        ]
+      })
+      ended(replaced)
       r.status = 'approved'
       handed.set(id, token)
       onChange()
@@ -115,7 +152,10 @@ export function createRemote({ onChange, now = Date.now }: { onChange: () => voi
         found = list.some(d => d.id === id)
         return list.filter(d => d.id !== id)
       })
-      if (found) onChange()
+      if (found) {
+        ended([id])
+        onChange()
+      }
       return found
     },
     verify(token, who) {
@@ -134,5 +174,14 @@ export function createRemote({ onChange, now = Date.now }: { onChange: () => voi
       return [...requests.values()].filter(r => r.status === 'pending')
     },
     devices,
+    watch(id, gone) {
+      const set = watchers.get(id) ?? new Set()
+      watchers.set(id, set)
+      set.add(gone)
+      return () => {
+        set.delete(gone)
+        if (!set.size && watchers.get(id) === set) watchers.delete(id)
+      }
+    },
   }
 }

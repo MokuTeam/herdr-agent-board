@@ -23,6 +23,7 @@ import {
   type Point,
   wantsNativeMenu,
 } from './menu-model.ts'
+import { remotePage } from './remote-page.ts'
 
 export const LONG_PRESS_MS = 480
 export const SLOP = 9 // px a finger may wander before a long press becomes a scroll
@@ -162,6 +163,7 @@ const ctxOf = (board: BoardMenuDeps): MenuContext => ({
   t: board.t(),
   canMutate: board.canMutate(),
   canEdit: board.canEdit(),
+  ...(remotePage() && { remote: true }),
 })
 
 /** The menu for whatever is under `target`, or null when the browser's own should show. */

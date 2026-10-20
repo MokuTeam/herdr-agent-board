@@ -12,6 +12,7 @@ import { FILE_TOKEN } from '../adapters/files.ts'
 import { archiveDir, cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
 import { messageGate } from '../core/message-gate.ts'
+import { pwaPage } from '../core/pwa.ts'
 import type { SetupFacts } from '../core/setup.ts'
 import { asideCheck } from '../services/aside.ts'
 import type { Deps } from '../services/deps.ts'
@@ -140,6 +141,8 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     version: PLUGIN_VERSION,
     routes,
     guards,
+    // The page for a phone's browser through `tailscale serve`, while remote.pwa is on.
+    page: staticRoute(WEB, bundle, pwaPage),
     remote,
     log,
     onChange: () => board.publish(),
@@ -168,7 +171,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
   // The order of main's `if` chain: the first route that answers wins.
   routes.push(
     setupRoute(setup),
-    ...remoteRoutes(listener, remote),
+    ...remoteRoutes(listener, remote, cfg, port),
     ...boardRoutes(board, events),
     ...fsRoutes(),
     ...uploadRoutes(),

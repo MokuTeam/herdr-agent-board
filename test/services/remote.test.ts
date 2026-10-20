@@ -81,3 +81,41 @@ test('pairing a device again replaces its old token; revoking ends it', () => {
   expect(remote.verify(second, phone)).toBeNull()
   expect(remote.revoke('nope')).toBe(false)
 })
+
+test('the app and the browser on one phone are paired each on its own; unpairing tells who watches', () => {
+  const { remote } = setup()
+  const pair = (kind?: 'browser'): string => {
+    const r = remote.request(kind ? 'Board in Chrome' : 'App', phone, kind)
+    if (!r.ok) throw new Error('refused')
+    remote.approve(r.id)
+    const answer = remote.poll(r.id, phone)
+    if (answer.status !== 'approved') throw new Error(answer.status)
+    return answer.token
+  }
+  // Waiting requests of both kinds at once are two requests.
+  const app = remote.request('App', phone)
+  const browser = remote.request('Board in Chrome', phone, 'browser')
+  expect(app.ok && browser.ok && app.id !== browser.id).toBe(true)
+  expect(remote.pending().map(r => r.kind ?? 'app')).toEqual(['app', 'browser'])
+
+  const appToken = pair()
+  const browserToken = pair('browser')
+  expect(remote.devices().map(d => d.kind ?? 'app')).toEqual(['app', 'browser'])
+  const appDevice = remote.verify(appToken, phone)
+  const browserDevice = remote.verify(browserToken, phone)
+  expect(appDevice && browserDevice && appDevice.id !== browserDevice.id).toBe(true)
+
+  const gone: string[] = []
+  remote.watch(browserDevice?.id ?? '', () => gone.push('browser'))
+  remote.watch(appDevice?.id ?? '', () => gone.push('app'))
+  const unwatched = remote.watch(appDevice?.id ?? '', () => gone.push('never'))
+  unwatched()
+  // Pairing the browser again ends the old browser token only.
+  const again = pair('browser')
+  expect(gone).toEqual(['browser'])
+  expect(remote.verify(browserToken, phone)).toBeNull()
+  expect(remote.verify(again, phone)).not.toBeNull()
+  expect(remote.verify(appToken, phone)).not.toBeNull()
+  expect(remote.revoke(appDevice?.id ?? '')).toBe(true)
+  expect(gone).toEqual(['browser', 'app'])
+})
