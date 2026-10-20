@@ -2,14 +2,49 @@
 // other devices, and who is calling (`whois`); for the board in a phone's browser (core/pwa.ts),
 // what `tailscale serve` forwards, and setting it. TAILSCALE_BIN_PATH names another binary (tests).
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { posix, win32 } from 'node:path'
 import { isRecord } from './json-store.ts'
 
-const BIN = process.env.TAILSCALE_BIN_PATH || 'tailscale'
+/** Where Tailscale's installers put the CLI. */
+export function installedPaths(platform: string, env: Record<string, string | undefined>): string[] {
+  if (platform === 'win32') return [win32.join(env.ProgramFiles || 'C:\\Program Files', 'Tailscale', 'tailscale.exe')]
+  if (platform === 'darwin') return [posix.join('/Applications', 'Tailscale.app', 'Contents', 'MacOS', 'Tailscale')]
+  return []
+}
+
+export interface BinOptions {
+  env?: Record<string, string | undefined>
+  platform?: string
+  onPath?: (name: string) => boolean
+  exists?: (path: string) => boolean
+}
+
+/**
+ * The CLI to run: TAILSCALE_BIN_PATH, else `tailscale` from PATH as always, else where the
+ * installer puts it. Tailscale installed while herdr ran is on the system's PATH but not on herdr's
+ * panes', the board's among them, until herdr restarts. Asked on every run, so an install after the
+ * board started is found too.
+ */
+export function tailscaleBin({
+  env = process.env,
+  platform = process.platform,
+  onPath = name => !!Bun.which(name),
+  exists = existsSync,
+}: BinOptions = {}): string {
+  if (env.TAILSCALE_BIN_PATH) return env.TAILSCALE_BIN_PATH
+  if (onPath('tailscale')) return 'tailscale'
+  return installedPaths(platform, env).find(path => exists(path)) ?? 'tailscale'
+}
 
 function run(args: string[], timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(BIN, args, { encoding: 'utf8', timeout: timeoutMs, windowsHide: true, maxBuffer: 8 << 20 }, (err, out) =>
-      err ? reject(new Error(`tailscale ${args[0]}: ${String(out || err.message).trim()}`)) : resolve(out),
+    execFile(
+      tailscaleBin(),
+      args,
+      { encoding: 'utf8', timeout: timeoutMs, windowsHide: true, maxBuffer: 8 << 20 },
+      (err, out) =>
+        err ? reject(new Error(`tailscale ${args[0]}: ${String(out || err.message).trim()}`)) : resolve(out),
     )
   })
 }
