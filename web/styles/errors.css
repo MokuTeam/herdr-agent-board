@@ -1,0 +1,61 @@
+/* What the page shows in place of a part that failed to draw (components/ErrorBoundary.tsx): the
+   whole page, or the session panel's note over the board, which keeps working under it. Short, in
+   the system's type, with Reload under the thumb. Loaded after app.css, whose variables it uses. */
+.error-screen { color: var(--label); font-family: var(--font); }
+.error-screen.page {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  min-height: 100dvh;
+  box-sizing: border-box;
+  padding: max(24px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  background: var(--bg);
+}
+.error-screen.panel {
+  position: fixed;
+  z-index: 60;
+  left: 50%;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  width: min(420px, calc(100vw - 32px));
+  transform: translateX(-50%);
+}
+.error-note { box-sizing: border-box; width: min(420px, 100%); }
+.error-screen.panel .error-note { padding: 20px; border-radius: 18px; background: var(--panel-float); box-shadow: var(--shadow-sheet); }
+.error-title { margin: 0 0 6px; font-family: var(--font-display); font-size: 22px; font-weight: 600; line-height: 1.2; letter-spacing: -0.01em; }
+.error-screen.panel .error-title { font-size: 17px; letter-spacing: -0.005em; }
+.error-about { margin: 0 0 14px; color: var(--label-2); font-size: 15px; line-height: 1.45; }
+.error-detail {
+  max-height: 30vh;
+  overflow: auto;
+  margin: 0 0 18px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--fill-2);
+  color: var(--label-2);
+  font: 12px/1.45 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.error-actions { display: flex; gap: 10px; }
+.error-button {
+  flex: 1;
+  height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--fill);
+  color: var(--label);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 100ms ease-out;
+}
+.error-button.primary { background: var(--accent); color: #fff; }
+.error-button:active { transform: scale(0.97); }
+.error-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .error-button { transition: none; }
+  .error-button:active { transform: none; }
+}

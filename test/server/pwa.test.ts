@@ -124,6 +124,10 @@ describe("the board in a phone's browser, through tailscale serve", () => {
     const manifest = await phone('/manifest.webmanifest')
     expect(manifest.headers.get('content-type')).toBe('application/manifest+json')
     expect(await manifest.json()).toMatchObject({ display: 'standalone', start_url: '/' })
+    // The script by the page's build (#116), the version the board goes by.
+    const board = (await (await fetch(`${url}/api/board`)).json()) as { version: string }
+    expect(html).toContain(`<script type="module" src="app.js?v=${board.version}"></script>`)
+    expect((await phone(`/app.js?v=${board.version}`)).headers.get('content-type')).toContain('javascript')
     const sw = await phone('/sw.js')
     expect(sw.headers.get('content-type')).toContain('javascript')
     expect(await sw.text()).toContain("startsWith('/api/')")
@@ -142,6 +146,7 @@ describe("the board in a phone's browser, through tailscale serve", () => {
     const html = await (await fetch(`${url}/`)).text()
     expect(html).not.toContain('data-remote')
     expect(html).not.toContain('manifest')
+    expect(html).toContain('<script type="module" src="app.js"></script>')
   })
 
   test('it pairs as a browser: approved on the computer, the token goes into a cookie the page cannot read', async () => {
