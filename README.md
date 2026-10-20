@@ -1216,6 +1216,7 @@ board remote on                  # or "remote": { "on": true } in config.json
 board remote                     # where it listens, who asks to pair, who is paired
 board remote approve <id>        # or Approve in Settings → Phones… on the web board
 board remote revoke <id>         # the phone's token stops working at once
+board remote pwa on              # the board in a phone's browser, below
 board remote off
 ```
 
@@ -1247,6 +1248,54 @@ remote }`, `api` 1). On the Tailscale address also: `POST /api/remote/pair` with
 `src/core/remote.ts` (the rules), `src/adapters/tailscale.ts`, `src/services/remote.ts` (pairing),
 `src/server/remote.ts` (the listener), `src/server/routes/remote.ts`,
 `web/src/components/phones/PhonesPanel.tsx`.
+
+### In a phone's browser
+
+No app needed: a phone's browser opens the board, and the board goes on the home screen as an
+app (a PWA). A browser installs a page over HTTPS only, so Tailscale gives the board an HTTPS
+address of its own: `tailscale serve` puts this computer's Tailscale name, with its real
+`*.ts.net` certificate, in front of a listener of the board's on 127.0.0.1.
+
+Once, in the Tailscale admin console, on the [DNS page](https://login.tailscale.com/admin/dns):
+**HTTPS Certificates → Enable** (with MagicDNS on). Until then the Phones panel and `board
+doctor` say so, and the board sets nothing up.
+
+```sh
+board remote pwa on      # or "Set up the HTTPS address" in Settings → Phones…
+board remote pwa off     # serve no longer forwards to the board; board remote off does it too
+```
+
+`pwa on` turns the remote mode on, runs `tailscale serve --bg --https=443 http://127.0.0.1:<port>`
+(the web board's port plus one, or `remote.pwa.port`) and prints the address with a QR code; the
+Phones panel shows them too. Serve keeps it across restarts; the board changes it only when you
+ask, and takes back only what forwards to it. When port 443 of the name already serves something
+else, it refuses: give `remote.pwa.https` another port (8443, say). In config.json:
+`"remote": { "on": true, "pwa": { "on": true, "https": 443, "port": 12423 } }`. On Linux,
+`tailscale serve` may need `sudo tailscale set --operator=$USER` once.
+
+On the phone, with Tailscale on: open the address, tap **Ask for access**, and approve it on the
+computer (Settings → Phones…, or `board remote approve <id>`). Then add it to the home screen:
+Share → Add to Home Screen on an iPhone, ⋮ → Install app on Android.
+
+- **Who calls** is checked as on the remote listener: serve tells the board the caller's Tailscale
+  address (X-Forwarded-For, which serve sets itself over anything the caller sent), the board asks
+  `tailscale whois`, and only your own Tailscale user or one `remote.allow` lists gets in. Serve's
+  `Tailscale-User-Login`, when it sends one, must name the same user. The listener for serve is on
+  127.0.0.1 only: what reaches it comes from serve or from a program on this computer, which can use
+  the web board itself anyway.
+- **The token** is in a cookie the page's scripts cannot read (`__Host-`, Secure, HttpOnly,
+  SameSite=Strict): an EventSource sends no headers. Anything that changes something needs the
+  board's header and comes from the board's own HTTPS address. Unpair ends the token and the
+  streams the phone has open (the app's too). The app and the browser on one phone pair each on
+  their own.
+- **Nothing on this computer's screen**, as for the app; the page leaves out focus, open and show
+  in folder.
+- **No connection**: a service worker keeps the page's own files (never `/api` or `/uploads`), so
+  the app still opens and says what to check.
+
+Code: `src/core/pwa.ts` (the rules), `src/services/pwa.ts` (serve), `src/core/qr.ts`,
+`web/src/components/remote/RemoteGate.tsx` (pairing, no connection), `web/sw.js`,
+`web/manifest.webmanifest`, `web/styles/pwa.css`.
 
 ## Language
 

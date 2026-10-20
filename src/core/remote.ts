@@ -12,19 +12,39 @@ export interface RemoteConfig {
   port: number | null
   /** Tailscale logins that may pair besides the computer's own user, lowercase. */
   allow: string[]
+  /** The board in a phone's browser, over HTTPS through `tailscale serve` (core/pwa.ts). */
+  pwa: PwaConfig
+}
+
+export interface PwaConfig {
+  on: boolean
+  /** The HTTPS port on the computer's Tailscale name. */
+  https: number
+  /** The port on 127.0.0.1 that `tailscale serve` forwards to; null: the web board's own plus one. */
+  port: number | null
 }
 
 const isPort = (v: unknown): v is number => Number.isInteger(v) && Number(v) > 0 && Number(v) < 65536
 
-/** config.json's `remote`: `true`, or `{ on, port, allow }`; anything else is off. */
+const PWA_OFF: PwaConfig = { on: false, https: 443, port: null }
+
+/** `remote.pwa`: `true`, or `{ on, https, port }`; anything else is off. */
+function pwaConfig(value: unknown): PwaConfig {
+  if (value === true) return { ...PWA_OFF, on: true }
+  if (!value || typeof value !== 'object') return PWA_OFF
+  const p = value as Record<string, unknown>
+  return { on: p.on === true, https: isPort(p.https) ? p.https : 443, port: isPort(p.port) ? p.port : null }
+}
+
+/** config.json's `remote`: `true`, or `{ on, port, allow, pwa }`; anything else is off. */
 export function remoteConfig(value: unknown): RemoteConfig {
-  if (value === true) return { on: true, port: null, allow: [] }
-  if (!value || typeof value !== 'object') return { on: false, port: null, allow: [] }
+  if (value === true) return { on: true, port: null, allow: [], pwa: PWA_OFF }
+  if (!value || typeof value !== 'object') return { on: false, port: null, allow: [], pwa: PWA_OFF }
   const r = value as Record<string, unknown>
   const allow = Array.isArray(r.allow)
     ? [...new Set(r.allow.filter(a => typeof a === 'string' && a.trim()).map(a => String(a).trim().toLowerCase()))]
     : []
-  return { on: r.on === true, port: isPort(r.port) ? r.port : null, allow }
+  return { on: r.on === true, port: isPort(r.port) ? r.port : null, allow, pwa: pwaConfig(r.pwa) }
 }
 
 /**
@@ -53,11 +73,19 @@ const DESKTOP_ONLY: readonly RegExp[] = [
 
 export const desktopOnly = (rawPath: string): boolean => DESKTOP_ONLY.some(re => re.test(rawPath))
 
+/**
+ * What pairs: the app, or the board in a phone's browser (core/pwa.ts). A phone can have both,
+ * each with a token of its own.
+ */
+export type DeviceKind = 'app' | 'browser'
+
 /** A phone asking to pair, until it is answered or 10 minutes pass. */
 export interface PairRequest {
   id: string
   /** What the app calls itself ("Pixel 7, agent board"). */
   name: string
+  /** Absent: the app (what the remote mode paired before the browser could). */
+  kind?: DeviceKind
   /** Tailscale's name of the device and its owner's login, which the user approves. */
   device: string
   login: string
@@ -72,6 +100,7 @@ export interface PairRequest {
 export interface RemoteDevice {
   id: string
   name: string
+  kind?: DeviceKind
   device: string
   login: string
   node: string
@@ -90,7 +119,25 @@ export interface RemoteView {
   error: string | null
   pending: Omit<PairRequest, 'status'>[]
   devices: Omit<RemoteDevice, 'tokenHash'>[]
+  /** The board in a phone's browser (core/pwa.ts). */
+  pwa: PwaView
 }
+
+export interface PwaView {
+  /** config.json turns it on. */
+  on: boolean
+  /** The HTTPS port on the computer's Tailscale name. */
+  https: number
+  /** Where a phone's browser opens the board, once `tailscale serve` forwards it here. */
+  url: string | null
+  /** The tailnet gives this computer HTTPS certificates (the admin console's DNS page). */
+  certs: boolean
+  /** What `tailscale serve` does with the HTTPS port: forwards it here, nothing, or something else. */
+  serve: ServeUse | null
+  error: string | null
+}
+
+export type ServeUse = 'ours' | 'free' | 'other'
 
 export const PAIR_TTL_MS = 10 * 60_000
 /** At most this many requests wait at once; more are refused until one is answered or goes. */
@@ -100,6 +147,12 @@ export const PAIR_MAX = 5
 export function deviceFor(devices: readonly RemoteDevice[], tokenHash: string, node: string): RemoteDevice | null {
   return devices.find(d => d.tokenHash === tokenHash && d.node === node) ?? null
 }
+
+export const kindOf = (d: { kind?: DeviceKind | undefined }): DeviceKind => d.kind ?? 'app'
+
+/** Whether pairing `next` replaces `d`: the same Tailscale device, the same kind (the app, the browser). */
+export const samePairing = (d: RemoteDevice, next: { node: string; kind?: DeviceKind | undefined }): boolean =>
+  d.node === next.node && kindOf(d) === kindOf(next)
 
 /** `Authorization: Bearer <token>`, or null. */
 export function bearerOf(header: string | null): string | null {

@@ -57,7 +57,7 @@ import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t } from '../core/lang.ts'
 import { type ProfileSet, profileSet, sessionProfile } from '../core/profiles.ts'
-import type { RemoteView } from '../core/remote.ts'
+import { type RemoteView, remoteConfig } from '../core/remote.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
 import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
@@ -68,7 +68,7 @@ import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sleepMany } from '../services/sleep.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | approve <id> | deny <id> | revoke <id>] | doctor] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | doctor] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -336,7 +336,14 @@ async function main(): Promise<void> {
   if (cmd === 'doctor') {
     const { gatherFacts } = await import('../adapters/setup-facts.ts')
     const { checkSetup, report } = await import('../core/setup.ts')
-    return console.log(report(checkSetup(await gatherFacts(cfg), t), t))
+    const checks = checkSetup(await gatherFacts(cfg), t)
+    // The remote mode's own checks, only while it is on: off, Tailscale is never asked.
+    if (remoteConfig(cfg.remote).on) {
+      const { phoneChecks } = await import('../core/pwa.ts')
+      const { phoneFacts } = await import('../services/pwa.ts')
+      checks.push(...phoneChecks(await phoneFacts(cfg, Number(cfg.port) || 12422), t))
+    }
+    return console.log(report(checks, t))
   }
 
   // Neither needs to know which session asks.
@@ -681,15 +688,35 @@ async function sleep(): Promise<void> {
 }
 
 /**
- * `board remote [on | off | approve <id> | deny <id> | revoke <id>]`: the remote mode
- * (core/remote.ts). On and off edit config.json; the rest goes through the running board, which
- * holds the requests to pair. Without an argument: where it listens, who waits, who is paired.
+ * `board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>]`: the remote mode
+ * (core/remote.ts). On and off edit config.json (off takes back `tailscale serve` too); `pwa`
+ * sets serve up for the board in a phone's browser (core/pwa.ts) and shows its address and QR
+ * code; the rest goes through the running board, which holds the requests to pair. Without an
+ * argument: where it listens, who waits, who is paired.
  */
 async function remote(): Promise<void> {
   const [op = 'status', id = ''] = rest
-  const usage = 'usage: board remote [on | off | approve <id> | deny <id> | revoke <id>]'
+  const usage = 'usage: board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>]'
+  const webPort = Number(cfg.port) || 12422
+  if (op === 'pwa') {
+    const { pwaOff, pwaOn } = await import('../services/pwa.ts')
+    if (id === 'off') {
+      const r = await pwaOff(cfg, webPort)
+      if (!r.ok) throw new Error(r.error)
+      return console.log("ok · the board in a phone's browser is off; tailscale serve no longer forwards to it")
+    }
+    if (id !== 'on') throw new Error(usage)
+    const r = await pwaOn(cfg, webPort)
+    if (!r.ok) throw new Error(r.error)
+    const { qrMatrix, qrText } = await import('../core/qr.ts')
+    console.log(`ok · on a phone with Tailscale, open ${r.url}`)
+    console.log(qrText(qrMatrix(r.url)))
+    return console.log('Approve the phone in Settings → Phones… on the web board, or with `board remote approve <id>`.')
+  }
   if (op === 'on' || op === 'off') {
-    const r = setRemoteOn(op === 'on')
+    let r: { ok: true } | { ok: false; error: string }
+    if (op === 'on') r = setRemoteOn(true)
+    else r = await (await import('../services/pwa.ts')).remoteOff(cfg, webPort)
     if (!r.ok) throw new Error(r.error)
     return console.log(
       op === 'on'
@@ -697,7 +724,7 @@ async function remote(): Promise<void> {
         : 'ok · remote off',
     )
   }
-  const url = `http://127.0.0.1:${cfg.port ?? 12422}/api/remote`
+  const url = `http://127.0.0.1:${webPort}/api/remote`
   const call = async (init?: RequestInit): Promise<unknown> => {
     try {
       return await (await fetch(url, { ...init, signal: AbortSignal.timeout(3000) })).json()
@@ -716,12 +743,19 @@ async function remote(): Promise<void> {
   const view = (await call()) as Partial<RemoteView>
   if (!view.on) return console.log('remote off · `board remote on` lets a paired phone use this board over Tailscale')
   console.log(`remote on · ${view.url ?? `not listening: ${view.error ?? 'starting'}`}`)
+  const pwa = view.pwa
+  if (pwa?.on)
+    console.log(
+      `in a phone's browser · ${pwa.url ?? (pwa.error || (pwa.serve === 'other' ? 'serve forwards the port elsewhere' : 'tailscale serve does not forward to it: board remote pwa on'))}`,
+    )
   for (const r of view.pending ?? [])
     console.log(
       `asks to pair: ${r.id} "${r.name}" from ${r.device} (${[r.login, r.os].filter(Boolean).join(', ')}) · board remote approve ${r.id}`,
     )
   for (const d of view.devices ?? [])
-    console.log(`paired: ${d.id} "${d.name}" on ${d.device} (${d.login})${d.seenAt ? `, seen ${stamp(d.seenAt)}` : ''}`)
+    console.log(
+      `paired: ${d.id} "${d.name}"${d.kind === 'browser' ? ' (browser)' : ''} on ${d.device} (${d.login})${d.seenAt ? `, seen ${stamp(d.seenAt)}` : ''}`,
+    )
 }
 
 /**

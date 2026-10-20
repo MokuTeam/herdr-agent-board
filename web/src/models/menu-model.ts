@@ -227,6 +227,8 @@ export interface MenuContext {
   canMutate: boolean
   /** The board is reachable: its own edits can be done. */
   canEdit: boolean
+  /** The board in a phone's browser: what acts on the computer's screen is left out (models/remote-page.ts). */
+  remote?: boolean | undefined
 }
 
 /** A lane as the menus show it. */
@@ -326,7 +328,7 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
   ]
   return tidy<MenuEntry>([
     { id: 'open', label: t('menu.open'), hint: 'Enter' },
-    { id: 'focus', label: t(it.sleeping ? 'menu.wakeFocus' : 'menu.focus'), ...herdr() },
+    !ctx.remote && { id: 'focus', label: t(it.sleeping ? 'menu.wakeFocus' : 'menu.focus'), ...herdr() },
     // Looking needs no fresh data; typing and opening a shell wait for it in the window itself.
     ctx.terminal && (it.cwd || it.pane) && { id: 'terminal', label: t('term.open'), hint: 'Ctrl+`' },
     // A MokuPilot call with a fork of the session: needs the board, not fresh herdr data.
@@ -364,7 +366,7 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
     { id: 'status', label: t('menu.status'), ...edit(), submenu: ctx.canEdit ? statusChoices(it, ctx) : null },
     dismissable && { id: 'dismiss', label: t(it.attention === 'later' ? 'asked.seen' : 'card.noReply'), ...edit() },
     SEP,
-    it.cwd && { id: 'reveal', label: t('menu.openFolder'), ...edit() },
+    it.cwd && !ctx.remote && { id: 'reveal', label: t('menu.openFolder'), ...edit() },
     it.cwd && { id: 'changes', label: t('changes.open') },
     claude && { id: 'history', label: t('history.open') },
     SEP,
@@ -490,7 +492,7 @@ export function launchMenu(l: MenuLaunch, ctx: MenuContext): MenuEntry[] {
     l.state === 'trust' && { id: 'trust', label: t('launch.trust.go'), ...herdr },
     l.state === 'trust' && { id: 'closeTab', label: t('launch.trust.close'), ...herdr },
     l.state === 'trust' && SEP,
-    l.pane && { id: 'focus', label: t('menu.focus'), ...herdr },
+    l.pane && !ctx.remote && { id: 'focus', label: t('menu.focus'), ...herdr },
     // A launch that failed only at its first message has a running session: a retry would start a second one.
     l.state === 'failed' && l.kind !== 'message' && { id: 'retry', label: t('launch.retry') },
     l.state === 'failed' && { id: 'copyError', label: t('launch.copyError') },
@@ -507,8 +509,8 @@ export function chipMenu(chip: { dir: boolean }, ctx: MenuContext): MenuEntry[] 
   const edit = ctx.canEdit ? {} : { disabled: true, reason: t('live.off') }
   return tidy<MenuEntry>([
     { id: 'look', label: t('menu.quickLook'), hint: 'Enter' },
-    { id: 'open', label: t('ql.open'), ...edit },
-    { id: 'reveal', label: t('ql.reveal'), ...edit },
+    !ctx.remote && { id: 'open', label: t('ql.open'), ...edit },
+    !ctx.remote && { id: 'reveal', label: t('ql.reveal'), ...edit },
     SEP,
     { id: 'copyPath', label: t('ql.copy') },
     chip.dir && {

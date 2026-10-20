@@ -1,5 +1,6 @@
 // The Tailscale CLI, for the remote mode (core/remote.ts): this computer's address and user, the
-// other devices, and who is calling (`whois`). TAILSCALE_BIN_PATH names another binary (tests).
+// other devices, and who is calling (`whois`); for the board in a phone's browser (core/pwa.ts),
+// what `tailscale serve` forwards, and setting it. TAILSCALE_BIN_PATH names another binary (tests).
 import { execFile } from 'node:child_process'
 import { isRecord } from './json-store.ts'
 
@@ -33,6 +34,8 @@ export interface TailscaleStatus {
   running: boolean
   self: TailscaleNode | null
   peers: TailscaleNode[]
+  /** The names this computer can have an HTTPS certificate for: none while the tailnet has them off. */
+  certDomains: string[]
 }
 
 function nodeOf(raw: unknown, users: Record<string, unknown>): TailscaleNode | null {
@@ -52,13 +55,14 @@ function nodeOf(raw: unknown, users: Record<string, unknown>): TailscaleNode | n
 /** `tailscale status --json` as the board reads it. */
 export function parseStatus(text: string): TailscaleStatus {
   const raw: unknown = JSON.parse(text)
-  if (!isRecord(raw)) return { running: false, self: null, peers: [] }
+  if (!isRecord(raw)) return { running: false, self: null, peers: [], certDomains: [] }
   const users = isRecord(raw.User) ? raw.User : {}
   const peers = isRecord(raw.Peer) ? Object.values(raw.Peer) : []
   return {
     running: raw.BackendState === 'Running',
     self: nodeOf(raw.Self, users),
     peers: peers.map(p => nodeOf(p, users)).filter((p): p is TailscaleNode => !!p),
+    certDomains: strings(raw.CertDomains).map(bare),
   }
 }
 
@@ -98,4 +102,47 @@ export async function whois(address: string, timeoutMs = 3000): Promise<Caller |
   } catch {
     return null
   }
+}
+
+/** What `tailscale serve` does with one port of this computer's name. */
+export interface ServePort {
+  /** HTTPS, plain HTTP, or a raw TCP forward. */
+  kind: 'https' | 'http' | 'tcp'
+  /** Where it forwards `/` (`http://127.0.0.1:12423`), when it does. */
+  proxy: string | null
+}
+
+/** `tailscale serve status --json` as the board reads it: the ports in use, by number. */
+export function parseServe(text: string): Map<number, ServePort> {
+  const raw: unknown = JSON.parse(text || '{}')
+  const ports = new Map<number, ServePort>()
+  if (!isRecord(raw)) return ports
+  const tcp = isRecord(raw.TCP) ? raw.TCP : {}
+  const web = isRecord(raw.Web) ? raw.Web : {}
+  for (const [port, conf] of Object.entries(tcp)) {
+    if (!isRecord(conf)) continue
+    const kind = conf.HTTPS === true ? 'https' : conf.HTTP === true ? 'http' : 'tcp'
+    let proxy: string | null = null
+    // Web is keyed by "<name>:<port>"; the root handler is what a browser opening the address gets.
+    for (const [hostPort, site] of Object.entries(web)) {
+      if (!hostPort.endsWith(`:${port}`) || !isRecord(site) || !isRecord(site.Handlers)) continue
+      const root = site.Handlers['/']
+      if (isRecord(root) && str(root.Proxy)) proxy = str(root.Proxy)
+    }
+    ports.set(Number(port), { kind, proxy })
+  }
+  return ports
+}
+
+export async function serveStatus(timeoutMs = 5000): Promise<Map<number, ServePort>> {
+  return parseServe(await run(['serve', 'status', '--json'], timeoutMs))
+}
+
+/** `tailscale serve --bg`: HTTPS on `https` of this computer's name, forwarded to `target`; kept across restarts. */
+export async function serveOn(https: number, target: string): Promise<void> {
+  await run(['serve', '--bg', `--https=${https}`, target], 15_000)
+}
+
+export async function serveOff(https: number): Promise<void> {
+  await run(['serve', `--https=${https}`, 'off'], 15_000)
 }

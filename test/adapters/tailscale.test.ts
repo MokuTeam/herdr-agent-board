@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { parseStatus, parseWhois } from '../../src/adapters/tailscale.ts'
+import { parseServe, parseStatus, parseWhois } from '../../src/adapters/tailscale.ts'
 
 // Shaped as Tailscale 1.104's `status --json` and `whois --json` print them, cut down.
 const STATUS = {
@@ -76,4 +76,29 @@ test('whois: the calling device and its user', () => {
   })
   expect(parseWhois('{}')).toBeNull()
   expect(parseWhois(JSON.stringify({ ...whois, UserProfile: {} }))).toBeNull()
+})
+
+test('status: the names this computer can have an HTTPS certificate for; none while the tailnet has them off', () => {
+  expect(parseStatus(JSON.stringify(STATUS)).certDomains).toEqual([])
+  expect(parseStatus(JSON.stringify({ ...STATUS, CertDomains: null })).certDomains).toEqual([])
+  const on = parseStatus(JSON.stringify({ ...STATUS, CertDomains: ['nicholas-omarchy.tail0.ts.net'] }))
+  expect(on.certDomains).toEqual(['nicholas-omarchy.tail0.ts.net'])
+})
+
+test('serve status: each port, what it is, and where it forwards /', () => {
+  // As Tailscale 1.104's `serve status --json` prints it: empty, and with three ports in use.
+  expect(parseServe('{}').size).toBe(0)
+  expect(parseServe('').size).toBe(0)
+  const ports = parseServe(
+    JSON.stringify({
+      TCP: { '443': { HTTPS: true }, '8443': { HTTPS: true }, '22': { TCPForward: '127.0.0.1:22' } },
+      Web: {
+        'box.tail0.ts.net:443': { Handlers: { '/': { Proxy: 'http://127.0.0.1:12423' } } },
+        'box.tail0.ts.net:8443': { Handlers: { '/files': { Path: '/srv' } } },
+      },
+    }),
+  )
+  expect(ports.get(443)).toEqual({ kind: 'https', proxy: 'http://127.0.0.1:12423' })
+  expect(ports.get(8443)).toEqual({ kind: 'https', proxy: null })
+  expect(ports.get(22)).toEqual({ kind: 'tcp', proxy: null })
 })

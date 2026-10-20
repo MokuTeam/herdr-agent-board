@@ -12,20 +12,40 @@
 //   for the board on this computer only).
 // The routes' own guards apply as for the web board (X-Board on POSTs, fresh herdr data, the file
 // token).
+//
+// With `remote.pwa` on as well, one more listener, on 127.0.0.1, takes what `tailscale serve`
+// forwards from the computer's HTTPS name (core/pwa.ts): the same checks, with the caller's
+// address from serve, the token in a cookie, and the board's page for a phone's browser.
+// A device's open streams end when it is unpaired, on both.
 import { hostname } from 'node:os'
-import { type Caller, tailscaleStatus, whois } from '../adapters/tailscale.ts'
+import { type Caller, serveStatus, tailscaleStatus, whois } from '../adapters/tailscale.ts'
+import {
+  clearCookie,
+  cookieToken,
+  forwardedFor,
+  pwaHosts,
+  pwaPort,
+  pwaTarget,
+  pwaUrl,
+  serveUse,
+  tokenCookie,
+} from '../core/pwa.ts'
 import {
   allowedLogin,
   bearerOf,
   desktopOnly,
+  type PwaView,
   REMOTE_API,
   type RemoteConfig,
+  type RemoteDevice,
   type RemoteView,
   remoteConfig,
+  type ServeUse,
 } from '../core/remote.ts'
 import type { Config } from '../core/types.ts'
 import type { Remote } from '../services/remote.ts'
 import { dispatch, type GuardState, json, type Route, readBody } from './http.ts'
+import { namedEvent } from './sse.ts'
 
 export interface Hello {
   board: 'agent-board'
@@ -38,6 +58,9 @@ export interface Hello {
   dnsName: string | null
   platform: string
   remote: boolean
+  /** Through `tailscale serve` only: whether this browser is paired, and the board's language (core/pwa.ts). */
+  paired?: boolean
+  language?: string | null
 }
 
 export interface Peer {
@@ -66,6 +89,8 @@ export interface RemoteListenerOptions {
   version: string
   routes: Route[]
   guards: GuardState
+  /** The board's page for a phone's browser, through `tailscale serve` (core/pwa.ts). */
+  page: Route
   remote: Remote
   log: (text: string) => void
   /** What the page shows changed. */
@@ -76,12 +101,77 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 const isV4 = (ip: string): boolean => /^\d+\.\d+\.\d+\.\d+$/.test(ip)
 const urlHost = (ip: string): string => (ip.includes(':') ? `[${ip}]` : ip)
 const WHOIS_MS = 60_000
+/** The path decoded; null when it does not decode (a 400). */
+function decoded(raw: string): string | null {
+  try {
+    return decodeURIComponent(raw)
+  } catch {
+    return null
+  }
+}
+
 /** Approving pairings and turning the remote mode on or off: for the board on this computer only. */
 const localOnly = (path: string): boolean => path === '/api/remote' || path.startsWith('/api/remote/')
 
+type Server = ReturnType<typeof Bun.serve>
+/** Which listener a request came to: the one on the Tailscale address, or the one for `tailscale serve`. */
+type Via = 'tailnet' | 'serve'
+
+/**
+ * `res` as it is, unless it is a stream (the board's events, a terminal): then one that ends,
+ * after an `unpaired` event, once the device is unpaired.
+ */
+function endsWhenUnpaired(res: Response, device: RemoteDevice, remote: Remote): Response {
+  if (!res.body || !(res.headers.get('content-type') ?? '').startsWith('text/event-stream')) return res
+  const reader = res.body.getReader()
+  let unwatch = (): void => {}
+  let done = false
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      unwatch = remote.watch(device.id, () => {
+        if (done) return
+        done = true
+        try {
+          controller.enqueue(new TextEncoder().encode(namedEvent('unpaired', {})))
+          controller.close()
+        } catch {}
+        void reader.cancel().catch(() => {})
+      })
+    },
+    async pull(controller) {
+      const next = await reader.read().catch(() => ({ done: true as const, value: undefined }))
+      if (done) return
+      if (next.done) {
+        done = true
+        unwatch()
+        return controller.close()
+      }
+      controller.enqueue(next.value)
+    },
+    cancel() {
+      done = true
+      unwatch()
+      return reader.cancel()
+    },
+  })
+  return new Response(stream, { status: res.status, headers: res.headers })
+}
+
+/** Serve's own word for the user, when it gives one in plain text, must be Tailscale's. */
+const sameUser = (header: string | null, who: Caller): boolean =>
+  !header || header.startsWith('=?') || header.toLowerCase() === who.login.toLowerCase()
+
 export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
-  let server: ReturnType<typeof Bun.serve> | null = null
+  let server: Server | null = null
   let bound: { ip: string; port: number } | null = null
+  // The listener for `tailscale serve`, while remote.pwa is on.
+  let web: Server | null = null
+  let webPort: number | null = null
+  let pwaHostSet = new Set<string>()
+  let pwaOrigin = ''
+  let certs = false
+  let serve: ServeUse | null = null
+  let pwaError: string | null = null
   let hosts = new Set<string>()
   let names: { name: string; dnsName: string } | null = null
   let owner: string | null = null
@@ -136,40 +226,72 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
     return found.filter((p): p is Peer => !!p)
   }
 
-  async function answer(req: Request, srv: ReturnType<typeof Bun.serve>): Promise<Response> {
-    if (!hosts.has((req.headers.get('host') ?? '').toLowerCase())) return json(403, { error: 'host' })
-    const address = (srv.requestIP(req)?.address ?? '').replace(/^::ffff:/, '')
+  async function answer(req: Request, srv: Server, via: Via): Promise<Response> {
+    const fromServe = via === 'serve'
+    if (!(fromServe ? pwaHostSet : hosts).has((req.headers.get('host') ?? '').toLowerCase()))
+      return json(403, { error: 'host' })
+    if (fromServe && req.headers.get('x-forwarded-proto') !== 'https') return json(403, { error: 'https' })
+    const address = fromServe
+      ? forwardedFor(req.headers.get('x-forwarded-for'))
+      : (srv.requestIP(req)?.address ?? '').replace(/^::ffff:/, '')
     const who = address ? await caller(address) : null
     if (!who) return json(403, { error: 'tailnet' })
+    if (fromServe && !sameUser(req.headers.get('tailscale-user-login'), who)) return json(403, { error: 'user' })
     if (!allowedLogin(who.login, owner, rc().allow)) return json(403, { error: 'user' })
+    // A browser sends the cookie by itself: what changes anything must come from the board's own page.
+    if (fromServe && req.method !== 'GET' && req.method !== 'HEAD') {
+      const origin = req.headers.get('origin')
+      if (req.headers.get('x-board') !== '1' || (origin && origin !== pwaOrigin)) return json(403, { error: 'origin' })
+    }
+    const token = fromServe ? cookieToken(req.headers.get('cookie')) : bearerOf(req.headers.get('authorization'))
     let url: URL | undefined
     try {
       url = new URL(req.url)
       const raw = url.pathname
-      if (req.method === 'GET' && raw === '/api/hello') return json(200, hello())
+      if (req.method === 'GET' && raw === '/api/hello')
+        return json(
+          200,
+          fromServe
+            ? { ...hello(), paired: !!(token && o.remote.verify(token, who)), language: o.cfg.language ?? null }
+            : hello(),
+        )
       if (req.method === 'POST' && raw === '/api/remote/pair') {
         const body = await readBody(req)
-        const r = o.remote.request((body as { name?: unknown })?.name, who)
+        const r = o.remote.request((body as { name?: unknown })?.name, who, fromServe ? 'browser' : undefined)
         return r.ok ? json(202, { id: r.id }) : json(r.status, { error: r.error })
       }
       const poll = /^\/api\/remote\/pair\/([a-f0-9]{1,32})$/.exec(raw)
-      if (req.method === 'GET' && poll) return json(200, o.remote.poll(poll[1] ?? '', who))
-      const token = bearerOf(req.headers.get('authorization'))
-      if (!token || !o.remote.verify(token, who)) return json(401, { error: 'token' })
+      if (req.method === 'GET' && poll) {
+        const answer = o.remote.poll(poll[1] ?? '', who)
+        if (!fromServe || answer.status !== 'approved') return json(200, answer)
+        // A browser's token goes into its cookie, where the page's scripts never see it.
+        const { token: given, ...rest } = answer
+        const res = json(200, rest)
+        res.headers.set('set-cookie', tokenCookie(given))
+        return res
+      }
+      // The page, its scripts, styles, icons and service worker: the pairing screen needs them too.
+      if (fromServe && req.method === 'GET' && !raw.startsWith('/api/') && !raw.startsWith('/uploads/')) {
+        const page = decoded(raw)
+        return page === null ? json(400, { error: 'path' }) : await dispatch([o.page], req, url, page, o.guards)
+      }
+      const device = token ? o.remote.verify(token, who) : null
+      if (!device) {
+        const res = json(401, { error: 'token' })
+        if (fromServe && token) res.headers.set('set-cookie', clearCookie())
+        return res
+      }
       // The routes match a string path decoded and a RegExp one as it came: what stays with the
       // computer is refused in both spellings, or an encoded letter (/api/fs/%6Fpen) would get by.
-      let path: string
-      try {
-        path = decodeURIComponent(raw)
-      } catch {
-        return json(400, { error: 'path' })
-      }
+      const path = decoded(raw)
+      if (path === null) return json(400, { error: 'path' })
       if (desktopOnly(raw) || desktopOnly(path)) return json(403, { error: 'desktop' })
       if (localOnly(raw) || localOnly(path)) return json(403, { error: 'local' })
       if (req.method === 'GET' && raw === '/api/peers') return json(200, { peers: await peers() })
       // The board's page is for the computer's own browser; a phone has its app.
       if (!raw.startsWith('/api/') && !raw.startsWith('/uploads/')) return json(404, { error: 'not found' })
-      return await dispatch(o.routes, req, url, path, o.guards)
+      const guards = fromServe ? { ...o.guards, origins: [pwaOrigin] } : o.guards
+      return endsWhenUnpaired(await dispatch(o.routes, req, url, path, guards), device, o.remote)
     } catch (err) {
       o.log(`remote ${req.method} ${url ? url.pathname : ''}: ${messageOf(err)}`)
       return json(500, { error: messageOf(err) })
@@ -183,6 +305,61 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
     if (s) await s.stop(true)
   }
 
+  async function stopWeb(): Promise<void> {
+    const s = web
+    web = null
+    webPort = null
+    if (s) await s.stop(true)
+  }
+
+  function pwaView(): PwaView {
+    const { pwa } = rc()
+    return {
+      on: pwa.on,
+      https: pwa.https,
+      url: pwa.on && web && serve === 'ours' && pwaOrigin ? pwaOrigin : null,
+      certs,
+      serve: pwa.on ? serve : null,
+      error: pwa.on ? pwaError : null,
+    }
+  }
+
+  /** The listener for `tailscale serve`, and what serve does with the HTTPS port, as remote.pwa says. */
+  async function syncPwa(conf: RemoteConfig, dnsName: string): Promise<void> {
+    if (!conf.pwa.on || !dnsName) {
+      await stopWeb()
+      serve = null
+      pwaError = null
+      return
+    }
+    const port = pwaPort(conf.pwa, o.webPort)
+    pwaHostSet = pwaHosts(dnsName, conf.pwa.https)
+    pwaOrigin = pwaUrl(dnsName, conf.pwa.https)
+    pwaError = null
+    try {
+      serve = serveUse((await serveStatus()).get(conf.pwa.https), pwaTarget(port))
+    } catch (err) {
+      serve = null
+      pwaError = `tailscale serve: ${messageOf(err)}`
+    }
+    if (web && webPort === port) return
+    await stopWeb()
+    try {
+      web = Bun.serve({
+        hostname: '127.0.0.1',
+        port,
+        idleTimeout: 0,
+        development: false,
+        reusePort: false,
+        fetch: (req, srv) => answer(req, srv, 'serve'),
+      })
+      webPort = port
+      o.log(`remote: ${pwaOrigin}/ through tailscale serve to 127.0.0.1:${port}`)
+    } catch (err) {
+      pwaError = `Cannot listen on 127.0.0.1:${port}: ${messageOf(err)}`
+    }
+  }
+
   function setError(next: string | null): void {
     if (next !== error) {
       error = next
@@ -194,8 +371,9 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
   async function syncNow(): Promise<void> {
     const conf = rc()
     if (!conf.on) {
-      const was = !!server
+      const was = !!server || !!web
       await stop()
+      await stopWeb()
       error = null
       if (was) o.onChange()
       return
@@ -205,16 +383,22 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
       status = await tailscaleStatus()
     } catch (err) {
       await stop()
+      await stopWeb()
       return setError(`Tailscale is not available: ${messageOf(err)}`)
     }
     const self = status.self
     const ip = self?.ips.find(isV4) ?? self?.ips[0]
     if (!status.running || !self || !ip) {
       await stop()
+      await stopWeb()
       return setError('Tailscale is not connected on this computer')
     }
     owner = self.login
     names = { name: self.name, dnsName: self.dnsName }
+    const before = JSON.stringify(pwaView())
+    certs = status.certDomains.includes(self.dnsName)
+    await syncPwa(conf, self.dnsName)
+    if (JSON.stringify(pwaView()) !== before) o.onChange()
     const port = conf.port ?? o.webPort
     hosts = new Set([ip, urlHost(ip), self.name, self.dnsName].filter(Boolean).map(h => `${h.toLowerCase()}:${port}`))
     if (server && bound?.ip === ip && bound.port === port) return setError(null)
@@ -227,7 +411,7 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
         idleTimeout: 0,
         development: false,
         reusePort: false,
-        fetch: (req, srv) => answer(req, srv),
+        fetch: (req, srv) => answer(req, srv, 'tailnet'),
       })
       bound = { ip, port }
       o.log(`remote: listening on http://${self.dnsName || urlHost(ip)}:${port}/`)
@@ -270,12 +454,14 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
         error,
         pending: pending().map(({ status, ...r }) => r),
         devices: devices().map(({ tokenHash, ...d }) => d),
+        pwa: pwaView(),
       }
     },
     hello,
     async close() {
       clearInterval(timer)
       await stop()
+      await stopWeb()
     },
   }
 }

@@ -1,12 +1,14 @@
 // The remote mode as the board on this computer runs it (core/remote.ts): turning it on and off,
-// and answering the phones that ask to pair. Never from a phone: the remote listener refuses
+// the board in a phone's browser too (core/pwa.ts), and answering the phones that ask to pair. Never from a phone: the remote listener refuses
 // /api/remote for them (server/remote.ts). /api/hello says what this board is, on both.
 import { setRemoteOn } from '../../adapters/config-file.ts'
+import type { Config } from '../../core/types.ts'
+import { pwaOff, pwaOn, remoteOff } from '../../services/pwa.ts'
 import type { Remote } from '../../services/remote.ts'
 import { json, type Route } from '../http.ts'
 import type { RemoteListener } from '../remote.ts'
 
-export function remoteRoutes(listener: RemoteListener, remote: Remote): Route[] {
+export function remoteRoutes(listener: RemoteListener, remote: Remote, cfg: Config, webPort: number): Route[] {
   return [
     { method: 'GET', path: '/api/hello', handle: () => json(200, listener.hello()) },
     { method: 'GET', path: '/api/remote', handle: () => json(200, listener.view() ?? { on: false }) },
@@ -18,9 +20,17 @@ export function remoteRoutes(listener: RemoteListener, remote: Remote): Route[] 
         const { op, id } = await ctx.body()
         const key = typeof id === 'string' ? id : ''
         switch (op) {
-          case 'on':
+          case 'on': {
+            const r = setRemoteOn(true)
+            return json(r.ok ? 200 : 409, r)
+          }
           case 'off': {
-            const r = setRemoteOn(op === 'on')
+            const r = await remoteOff(cfg, webPort)
+            return json(r.ok ? 200 : 409, r)
+          }
+          case 'pwa-on':
+          case 'pwa-off': {
+            const r = op === 'pwa-on' ? await pwaOn(cfg, webPort) : await pwaOff(cfg, webPort)
             return json(r.ok ? 200 : 409, r)
           }
           case 'approve':

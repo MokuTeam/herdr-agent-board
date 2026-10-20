@@ -194,10 +194,22 @@ describe('remote mode on', () => {
     expect((await post('/api/session/s1/%66ocus', {})).ok).toBe(false)
   })
 
-  test('revoking a device ends its token at once', async () => {
+  test('revoking a device ends its token at once, and the stream it has open', async () => {
+    const events = await phone('/api/events')
+    expect(events.status).toBe(200)
+    const reader = (events.body as ReadableStream<Uint8Array>).getReader()
+    const decoder = new TextDecoder()
+    let seen = decoder.decode((await reader.read()).value)
     const view = (await (await fetch(`${url}/api/remote`)).json()) as { devices: { id: string }[] }
     expect((await local('revoke', view.devices[0]?.id)).status).toBe(200)
     expect((await phone('/api/board')).status).toBe(401)
+    // The live board stops coming: the stream says why and ends.
+    for (;;) {
+      const next = await reader.read()
+      if (next.done) break
+      seen += decoder.decode(next.value)
+    }
+    expect(seen).toContain('event: unpaired')
   })
 })
 

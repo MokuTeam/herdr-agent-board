@@ -50,6 +50,8 @@ export interface Route {
 /** What the guards check against. */
 export interface GuardState {
   port: number
+  /** Origins besides the board's own on 127.0.0.1: its HTTPS name through `tailscale serve` (core/pwa.ts). */
+  origins?: readonly string[]
   token: string
   /** True when the data is too old for actions that go through herdr. */
   stale(): boolean
@@ -107,7 +109,10 @@ function check(guard: Guard, req: Request, url: URL, state: GuardState): Respons
       return req.headers.get('x-board') === '1' ? null : json(403, { error: 'header' })
     case 'origin': {
       const origin = req.headers.get('origin')
-      const own = origin === `http://127.0.0.1:${state.port}` || origin === `http://localhost:${state.port}`
+      const own =
+        origin === `http://127.0.0.1:${state.port}` ||
+        origin === `http://localhost:${state.port}` ||
+        (!!origin && !!state.origins?.includes(origin))
       return origin && !own ? json(403, { error: 'origin' }) : null
     }
     case 'fresh-data':

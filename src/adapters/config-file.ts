@@ -66,6 +66,19 @@ export function setRemoteOn(on: boolean): EditResult {
   return { ok: true }
 }
 
+/**
+ * Turn the board in a phone's browser (core/pwa.ts) on or off in config.json, keeping the other
+ * fields of `remote.pwa`. On turns the remote mode on too; off leaves it as it is.
+ */
+export function setPwaOn(on: boolean): EditResult {
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  const remote = isRecord(raw.remote) ? raw.remote : raw.remote === true ? { on: true } : {}
+  const pwa = isRecord(remote.pwa) ? remote.pwa : {}
+  raw.remote = { ...remote, ...(on ? { on: true } : {}), pwa: { ...pwa, on } }
+  writeRaw(raw)
+  return { ok: true }
+}
+
 /** Change settings in config.json from the web board: { language, foldWaiting }. */
 export function editSettings(body: unknown): EditResult {
   const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
