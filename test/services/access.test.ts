@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from 'bun:test'
 import { randomBytes } from 'node:crypto'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import {
   accessFile,
   addAttempt,
@@ -50,9 +50,11 @@ function setup({ random }: { random?: (n: number) => Uint8Array } = {}) {
   let clock = Date.UTC(2026, 9, 20, 12, 0, 0)
   let changes = 0
   const timers: Timer[] = []
+  const logged: string[] = []
   const access: Access = createAccess({
     onChange: () => changes++,
     now: () => clock,
+    log: text => logged.push(text),
     random: random ?? (n => (n === 20 ? RFC : new Uint8Array(randomBytes(n)))),
     setTimer: (fn, ms) => {
       const timer = { fn, ms, live: true }
@@ -89,6 +91,7 @@ function setup({ random }: { random?: (n: number) => Uint8Array } = {}) {
     now: () => clock,
     tick: (ms: number) => (clock += ms),
     changes: () => changes,
+    logged,
   }
 }
 
@@ -338,6 +341,115 @@ test('5 failures in a row lock sign-in for a minute, each one more doubles it up
   expect(readSecrets().lockout).toEqual({ failures: 0, until: null })
   expect(s.access.view().lockout).toBeNull()
   expect((await s.signedIn()).ok).toBe(true)
+})
+
+test('wrong sign-ins at once: the first 5 count, the rest meet the lockout they set', async () => {
+  const s = setup()
+  await s.ready()
+  const statuses: number[] = []
+  // From 3 addresses, under the per-address limit: only the lockout stops them.
+  await Promise.all(
+    Array.from({ length: 12 }, (_, i) =>
+      s
+        .signIn(
+          { password: 'not the password', code: s.code() },
+          { address: `203.0.113.${20 + (i % 3)}`, userAgent: null },
+        )
+        .then(r => statuses.push(r.ok ? 200 : r.status)),
+    ),
+  )
+  expect(statuses).toEqual([...Array(5).fill(401), ...Array(7).fill(423)])
+  // The ones refused under the lock did not count.
+  expect(readSecrets().lockout).toEqual({ failures: 5, until: s.now() + 60_000 })
+  expect(readAttempts().map(a => a.reason)).toEqual([...Array(5).fill('wrong'), ...Array(7).fill('locked')])
+})
+
+test('the right pair in a burst, checked after the 5th failure, is locked; its code is not used up', async () => {
+  const s = setup()
+  await s.ready()
+  const code = s.code()
+  // Each hash check waits until the test lets it finish, so the test picks the order.
+  const waiting: Array<() => void> = []
+  const finish = (): void => {
+    const next = waiting.shift()
+    if (!next) throw new Error('no hash check waits')
+    next()
+  }
+  const verify = spyOn(Bun.password, 'verify').mockImplementation(
+    password => new Promise<boolean>(done => waiting.push(() => done(password === PASSWORD))),
+  )
+  const until = s.now() + 60_000
+  try {
+    const wrong = Array.from({ length: 5 }, (_, i) =>
+      s.signIn({ password: 'not the password', code }, { address: `203.0.113.${20 + i}`, userAgent: null }),
+    )
+    const right = s.signIn({ password: PASSWORD, code }, other)
+    expect(waiting).toHaveLength(6)
+    for (const answer of wrong) {
+      finish()
+      expect(await answer).toEqual(WRONG)
+    }
+    finish()
+    expect(await right).toEqual({ ok: false, status: 423, error: 'locked', until })
+  } finally {
+    verify.mockRestore()
+  }
+  expect(readLogins()).toEqual([])
+  expect(readSecrets().lockout).toEqual({ failures: 5, until })
+  expect(readAttempts().map(a => [a.reason, a.address])).toEqual([
+    ...Array.from({ length: 5 }, (_, i) => ['wrong', `203.0.113.${20 + i}`]),
+    ['locked', other.address],
+  ])
+  s.access.liftLockout()
+  expect((await s.signIn({ password: PASSWORD, code }, other)).ok).toBe(true)
+})
+
+test('a flood over the rate limit records at most 10 rows an address and 30 a minute; the rows before it stay', async () => {
+  const s = setup()
+  await s.ready()
+  const bad = (who: Who): Promise<SignIn> => s.signIn({ password: 'not the password', code: s.code() }, who)
+  for (let i = 0; i < 5; i++) await bad(phone)
+  expect(await bad(phone)).toMatchObject({ status: 423 })
+  const before = readAttempts()
+  expect(before.map(a => a.reason)).toEqual(['wrong', 'wrong', 'wrong', 'wrong', 'wrong', 'locked'])
+  // The rest of the minute's 30 password sign-ins go elsewhere: every one after is over the limit.
+  for (let i = 0; i < 24; i++) expect(s.access.rate('password', `192.0.2.${i}`)).toEqual({ ok: true })
+  const changes = s.changes()
+  const flood = [
+    ...Array.from({ length: 500 }, () => bad(other)),
+    ...Array.from({ length: 500 }, (_, i) => bad({ address: `198.51.100.${i % 100}`, userAgent: null })),
+  ]
+  const answers = await Promise.all(flood)
+  expect(answers.every(a => !a.ok && a.status === 429 && a.retryAfterS === 60)).toBe(true)
+  const after = readAttempts()
+  // 10 from the one address, then 20 more until the minute's 30.
+  expect(after.slice(before.length).map(a => [a.reason, a.address === other.address])).toEqual([
+    ...Array(10).fill(['limited', true]),
+    ...Array(20).fill(['limited', false]),
+  ])
+  expect(after.slice(0, before.length)).toEqual(before)
+  expect(s.changes() - changes).toBe(30)
+})
+
+test('a failed attempt that cannot be recorded is logged; the sign-in is refused all the same', async () => {
+  const s = setup()
+  await s.ready()
+  // A folder where the attempts file goes: it cannot be written.
+  mkdirSync(attemptsFile())
+  const bad = (): Promise<SignIn> => s.signIn({ password: 'not the password', code: s.code() })
+  let changes = s.changes()
+  expect(await bad()).toEqual(WRONG)
+  // The lockout's count changed all the same.
+  expect(readSecrets().lockout.failures).toBe(1)
+  expect(s.changes()).toBe(++changes)
+  const until = s.now() + 60_000
+  updateSecrets(x => ({ ...x, lockout: { failures: 5, until } }))
+  expect(await bad()).toEqual({ ok: false, status: 423, error: 'locked', until })
+  for (let i = 0; i < 8; i++) s.access.rate('password', phone.address)
+  expect(await bad()).toMatchObject({ status: 429, error: 'limited' })
+  expect(s.changes()).toBe(changes)
+  expect(s.logged).toHaveLength(3)
+  for (const line of s.logged) expect(line).toStartWith('access: a failed sign-in was not recorded: ')
 })
 
 test('10 password sign-ins a minute from one address; the 11th is limited, others and passkeys go on', async () => {

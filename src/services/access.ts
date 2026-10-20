@@ -5,7 +5,9 @@
 // sign-in after 5 in a row; the public routes are rate-limited in memory. Ending a login tells
 // whoever watches it (its open event streams), as services/remote.ts does for phones.
 // newLogin takes the method and the passkey's id, and failed the method, for a passkey sign-in
-// beside the password's; its failures never count toward the lockout.
+// beside the password's; its failures never count toward the lockout. Sign-ins refused for the
+// rate are recorded at a capped rate of their own (10 an address, 30 a minute), so a flood of
+// them never rewrites the attempts file, or tells the panel, at the flood's own rate.
 import { randomBytes } from 'node:crypto'
 import {
   accessReady,
@@ -46,6 +48,8 @@ const TIMER_MAX_MS = 2_147_483_647
 /** When a login was last seen goes to the file at most this often. */
 const SEEN_EVERY_MS = 60_000
 const ATTEMPTS_SHOWN = 20
+
+const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 /** Who signs in: the address from the proxy (forwardedAddress) and the browser's User-Agent. */
 export interface Who {
@@ -89,6 +93,8 @@ export interface AccessOptions {
   random?: (n: number) => Uint8Array
   /** Runs `fn` once after `ms`; returns its cancel. */
   setTimer?: (fn: () => void, ms: number) => () => void
+  /** A line for the board's log (web.log): a failed sign-in that could not be recorded. */
+  log?: (text: string) => void
 }
 
 function realTimer(fn: () => void, ms: number): () => void {
@@ -124,12 +130,15 @@ export function createAccess({
   now = Date.now,
   random = n => randomBytes(n),
   setTimer = realTimer,
+  log = () => {},
 }: AccessOptions): Access {
   const limits = {
     open: new RateLimiter(RATES.open),
     password: new RateLimiter(RATES.password),
     passkey: new RateLimiter(RATES.passkey),
   }
+  /** Room to record a `limited` attempt: password sign-in's numbers, apart from its counters. */
+  const limitedRows = new RateLimiter(RATES.password)
   let pendingTotp: { bytes: Uint8Array; at: number } | null = null
   const seen = new Map<string, number>()
   const watchers = new Map<string, Set<() => void>>()
@@ -185,9 +194,26 @@ export function createAccess({
     return { ok: true, token, maxAgeS: Math.round((login.expiresAt - at) / 1000), login: publicLogin(login) }
   }
 
-  /** Records a failed sign-in. */
-  function failed(who: Who, method: LoginMethod, reason: AttemptReason): void {
-    addAttempt({ at: now(), address: who.address, label: deviceLabel(who.userAgent), method, reason })
+  /**
+   * Records a failed sign-in; whether it did. A `limited` one only while `limitedRows` has room.
+   * A file that cannot be written is logged, and the sign-in is refused all the same.
+   */
+  function failed(who: Who, method: LoginMethod, reason: AttemptReason): boolean {
+    const at = now()
+    if (reason === 'limited' && !limitedRows.take(who.address, at).ok) return false
+    try {
+      addAttempt({ at, address: who.address, label: deviceLabel(who.userAgent), method, reason })
+      return true
+    } catch (err) {
+      log(`access: a failed sign-in was not recorded: ${messageOf(err)}`)
+      return false
+    }
+  }
+
+  /** 423 while the lockout holds; recorded, not counted. */
+  function locked(who: Who, until: number): SignIn {
+    if (failed(who, 'password', 'locked')) onChange()
+    return { ok: false, status: 423, error: 'locked', until }
   }
 
   return {
@@ -234,34 +260,38 @@ export function createAccess({
       const code = isRecord(body) ? body.code : undefined
       const room = limits.password.take(who.address, now())
       if (!room.ok) {
-        failed(who, 'password', 'limited')
-        onChange()
+        if (failed(who, 'password', 'limited')) onChange()
         return { ok: false, status: 429, error: 'limited', retryAfterS: room.retryAfterS }
       }
       const { passwordHash, lockout } = readSecrets()
-      if (lockout.until !== null && lockout.until > now()) {
-        failed(who, 'password', 'locked')
-        onChange()
-        return { ok: false, status: 423, error: 'locked', until: lockout.until }
-      }
+      if (lockout.until !== null && lockout.until > now()) return locked(who, lockout.until)
       // The hash is checked whatever the code is, so the time taken never tells which was wrong.
       const passwordOk = await passwordMatches(password, passwordHash)
       const at = now()
-      let passed = false
-      // The code is checked against the file under its lock, so a code a sign-in at the same
-      // moment used is used up here too; a failed sign-in's code is not used up.
+      // What the check under the lock found (its callback sets it).
+      const found: { passed: boolean; lockedUntil: number | null } = { passed: false, lockedUntil: null }
+      // Under access.json's lock: the lockout again, which sign-ins at the same moment may have
+      // set while this one's hash was checked (then refused uncounted, the right pair too); and
+      // the code against the file, so a code a sign-in at the same moment used is used up here
+      // too. A failed sign-in's code is not used up.
       updateSecrets(s => {
+        if (s.lockout.until !== null && s.lockout.until > at) {
+          found.lockedUntil = s.lockout.until
+          return s
+        }
         const secret = s.totp ? base32Bytes(s.totp.secret) : null
         const step = s.totp && secret ? totpMatch(secret, code, at, s.totp.lastStep) : null
         if (passwordOk && s.passwordHash === passwordHash && s.totp && step !== null) {
-          passed = true
+          found.passed = true
           return { ...s, totp: { ...s.totp, lastStep: step }, lockout: { failures: 0, until: null } }
         }
         const failures = s.lockout.failures + 1
         const wait = lockWaitMs(failures)
         return { ...s, lockout: { failures, until: wait ? at + wait : s.lockout.until } }
       })
-      if (!passed) {
+      if (found.lockedUntil !== null) return locked(who, found.lockedUntil)
+      if (!found.passed) {
+        // the lockout's count changed, recorded or not
         failed(who, 'password', 'wrong')
         onChange()
         return { ok: false, status: 401, error: 'wrong' }
