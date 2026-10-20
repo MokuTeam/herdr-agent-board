@@ -46,12 +46,14 @@ async function compare(s: BoardScene, steps: Step[]): Promise<string[]> {
 }
 
 const t = translator('en')
+// In no herdr workspace herdr names: the old page had no Rename workspace (the board's own, below).
 const session = item({
   key: 's1',
   name: 'acme',
   autoName: 'acme-api',
   cwd: 'C:\\Acme',
   pane: 'w1:p1',
+  workspace: null,
   category: 'acme',
   column: 'me',
   attention: 'question',
@@ -453,6 +455,7 @@ describe('without the launch window', () => {
           tidy: none,
           archiveOpen: none,
           rename: none,
+          renameWorkspace: none,
           move: none,
           newSession: none,
           cats: none,
@@ -469,5 +472,29 @@ describe('without the launch window', () => {
     } finally {
       world.uninstall()
     }
+  })
+})
+
+describe('renaming a session’s workspace (the React board’s own)', () => {
+  const react = (s: BoardScene, steps: Step[]) => run(() => reactBoardMenus(s), steps)
+  const inWorkspace = { ...BOARD, items: [{ ...session, workspace: 'Sessions' }] }
+
+  test('a card in a workspace offers it by Rename; from the card it renames in the sheet’s head, from the head right there', async () => {
+    const log = await react(inWorkspace, [
+      right('card-name'),
+      pick('renameWorkspace'),
+      right('sheet-meta'),
+      pick('renameWorkspace'),
+    ])
+    expect(log[0]).toContain('"restart","rename","renameWorkspace","—","category')
+    expect(log).toContain('do.renameWorkspace("s1", null)')
+    expect(log).toContain('do.renameWorkspace("s1", #sheet-workspace)')
+  })
+
+  test('gray without fresh herdr data; none for a session in no workspace', async () => {
+    const stale = await react({ ...inWorkspace, canMutate: false }, [right('card-name')])
+    expect(stale[0]).toContain('"renameWorkspace (gray)"')
+    const none = await react(BOARD, [right('card-name')])
+    expect(none[0]).not.toContain('renameWorkspace')
   })
 })

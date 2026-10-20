@@ -11,6 +11,7 @@ import type { ConversationTurn } from '../../src/core/transcript.ts'
 import type { Item } from '../../src/core/types.ts'
 import type { SessionDetail } from '../../web/src/api/client.ts'
 import { Sheet } from '../../web/src/components/sheet/Sheet.tsx'
+import { SheetHead } from '../../web/src/components/sheet/SheetHead.tsx'
 import type { Attachment } from '../../web/src/models/composer.ts'
 import type { DetailValue } from '../../web/src/models/detail-resource.ts'
 import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
@@ -355,6 +356,45 @@ describe('text that runs inline keeps its spaces', () => {
     // The pill, the note, the two chip rows, what it asks, three reminders and "+1 more", the conversation, a file.
     expect(old.length).toBe(11)
     expect(react).toEqual(old)
+  })
+})
+
+describe('the workspace’s name in the head', () => {
+  const head = (onRenameWorkspace?: (name: HTMLElement) => void, lang = 'en') =>
+    renderInBoard(
+      <SheetHead item={working} missing={false} onRenameWorkspace={onRenameWorkspace} />,
+      board({ data: payload({ items: [working], categories: CATEGORIES }), ui: { open: 'a' } }),
+      lang,
+    )
+
+  test('where the page renames workspaces, the name alone is a button, in the line’s own words', () => {
+    const meta = byId(
+      head(() => {}),
+      'sheet-meta',
+    )
+    expect(canonical([byId([meta], 'sheet-workspace')])).toBe(
+      '<button class="sheet-workspace" id="sheet-workspace" title="Rename workspace…" type="button">web</button>',
+    )
+    expect(canonical(findAll([meta], el => el.tag === 'span').slice(1, 2), { spaces: true })).toBe(
+      [
+        '<span>',
+        '  workspace ',
+        '  <button class="sheet-workspace" id="sheet-workspace" title="Rename workspace…" type="button">web</button>',
+        '</span>',
+      ].join('\n'),
+    )
+    expect(
+      byId(
+        head(() => {}, 'ru'),
+        'sheet-workspace',
+      ).attrs.get('title'),
+    ).toBe('Переименовать workspace…')
+  })
+
+  test('without a way to rename it, the line is as it was', () => {
+    const meta = byId(head(), 'sheet-meta')
+    expect(findAll([meta], el => el.tag === 'button')).toEqual([])
+    expect(canonical(findAll([meta], el => el.tag === 'span').slice(1, 2))).toBe('<span>workspace web</span>')
   })
 })
 

@@ -6,6 +6,7 @@ import {
   categoryForDir,
   checkBranch,
   checkName,
+  checkWorkspaceName,
   completions,
   defaultWorkspace,
   folderSuggestions,
@@ -59,6 +60,19 @@ test('a name in kebab-case, for a new workspace: lower case, letters and digits 
   assert.equal(kebabName('a'.repeat(50)), 'a'.repeat(40))
   assert.equal(kebabName(`${'a'.repeat(39)} b`), 'a'.repeat(39))
   assert.equal(kebabName(`${'a'.repeat(39)}𝒜`), 'a'.repeat(39))
+})
+
+test('workspace names: what herdr takes as one, a slash first as well', () => {
+  assert.equal(checkWorkspaceName('Billing'), '')
+  assert.equal(checkWorkspaceName(' Ромашка 2 '), '')
+  assert.equal(checkWorkspaceName('/srv work'), '')
+  assert.equal(checkWorkspaceName('x'.repeat(60)), '')
+  assert.equal(checkWorkspaceName('  '), 'rename.err.workspaceEmpty')
+  assert.equal(checkWorkspaceName(null), 'rename.err.workspaceEmpty')
+  assert.equal(checkWorkspaceName('x'.repeat(61)), 'launch.err.nameLong')
+  assert.equal(checkWorkspaceName('two\nlines'), 'launch.err.nameChars')
+  assert.equal(checkWorkspaceName('a‮b'), 'launch.err.nameChars')
+  assert.equal(checkWorkspaceName('--help'), 'rename.err.workspaceDash') // would read as an option
 })
 
 test('folders: absolute paths, completion, the lane a folder falls in', () => {

@@ -262,6 +262,8 @@ export interface MenuSession {
   attention?: string | undefined
   pin?: string | undefined
   auto?: string | undefined
+  /** The label of the herdr workspace it is in. */
+  workspace?: string | null | undefined
   [extra: string]: unknown
 }
 
@@ -269,7 +271,7 @@ export interface MenuSession {
  * A card's menu. `it` is the board item; ctx: { t, canMutate, canEdit, categories, column (where
  * it shows now), category (its lane now), restarting (a restart of it is on its way), archiveWhy
  * (why it cannot go to the archive now, a text key, or '') }. Items gray out with the reason when herdr data is stale (going to, waking, sleeping, restarting,
- * renaming in Claude) or the board is offline (card edits).
+ * renaming in Claude, renaming its workspace) or the board is offline (card edits).
  */
 export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
   const { t } = ctx
@@ -319,6 +321,8 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
         ...herdr(ctx.restarting ? { disabled: true, reason: t('sheet.restartPending') } : {}),
       },
     { id: 'rename', label: t('menu.rename'), hint: 'F2', ...edit() },
+    // herdr's name for the workspace it is in, every session's there: it goes through herdr.
+    it.workspace && { id: 'renameWorkspace', label: t('menu.renameWorkspace'), ...herdr() },
     SEP,
     {
       id: 'category',

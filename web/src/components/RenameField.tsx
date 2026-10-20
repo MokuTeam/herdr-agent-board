@@ -1,7 +1,7 @@
 // The field that renames a session where its name is: over the name, in its type, with what an
 // empty name gives back and, for a Claude session, the choice to rename it in Claude and herdr
-// too. It lives in <body> beside the page, like the menus; its keys, focus and motion are
-// hooks/useRenameInPlace.ts's.
+// too. Over a workspace's name it says what renaming that does instead. It lives in <body> beside
+// the page, like the menus; its keys, focus and motion are hooks/useRenameInPlace.ts's.
 import { type RefObject, useLayoutEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { NAME_MAX } from '../../../src/core/launch/names.ts'
@@ -39,6 +39,7 @@ function Field({ view, rename, t }: { view: RenameView; rename: Renamer; t: Tran
 /** The field as drawn for one rename. */
 export function RenameFieldView({ view, t, refs }: { view: RenameView; t: Translator; refs?: Partial<RenameRefs> }) {
   const { box, font, claude } = view
+  const workspace = view.kind === 'workspace'
   return (
     <div
       className="rename"
@@ -50,13 +51,17 @@ export function RenameFieldView({ view, t, refs }: { view: RenameView; t: Transl
         maxLength={NAME_MAX}
         spellCheck={false}
         autoComplete="off"
-        aria-label={t('rename.label')}
+        aria-label={t(workspace ? 'launch.workspaceName' : 'rename.label')}
         style={{ ...font, height: `${box.fieldHeight}px` }}
         defaultValue={view.value}
         ref={refs?.field}
       />
       <div className="rename-more" ref={refs?.more}>
-        <span className="rename-auto">{t('rename.auto', { name: view.auto })}</span>
+        {workspace ? (
+          <span className="rename-hint">{t('rename.workspaceHint')}</span>
+        ) : (
+          <span className="rename-auto">{t('rename.auto', { name: view.auto })}</span>
+        )}
         {claude && (
           <label className={classNames('rename-claude', !!claude.why && 'off')}>
             <input type="checkbox" disabled={!!claude.why} ref={refs?.check} />

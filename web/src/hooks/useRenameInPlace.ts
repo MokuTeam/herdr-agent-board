@@ -5,6 +5,9 @@
 // and herdr too: that types /rename into the session, so it is never done without asking, and
 // only while the session is idle. The board keeps the name on the card either way.
 //
+// The same field renames the herdr workspace a session is in, over its name in the sheet's head:
+// herdr's name, for every session there, so it waits for fresh herdr data; an empty name is none.
+//
 // components/RenameField.tsx draws the field from `view`; `field` gives it its keys, focus and motion.
 import { useState } from 'react'
 import type { Item, Translator } from '../../../src/core/types.ts'
@@ -16,12 +19,16 @@ import { Store } from '../state/store.ts'
 import { useLatest } from './useLatest.ts'
 import { type ActResult, useSessionActions } from './useSessionActions.ts'
 
+/** What a rename renames: the session, or the herdr workspace it is in. */
+export type RenameKind = 'session' | 'workspace'
+
 /** The field as drawn, measured from the name when it opened. */
 export interface RenameView {
   /** A new one for every rename: the field is drawn afresh. */
   id: number
+  kind: RenameKind
   value: string
-  /** What an empty name gives back. */
+  /** What an empty name gives back ('' for a workspace: nothing). */
   auto: string
   /** null: no Claude session; else why it cannot be renamed there now ('' when it can). */
   claude: { why: string } | null
@@ -41,6 +48,8 @@ export interface RenameElements {
 export interface RenameCallbacks {
   /** The name as it was: the same again (without Claude) is no rename. */
   value: string
+  /** An empty name gives an automatic one back (true when not given); without one it is no rename. */
+  auto?: boolean
   /** Saves it; `{ ok: false }` keeps the field open to try again. */
   onCommit(name: string, opts: { claude: boolean }): Promise<{ ok?: boolean } | undefined>
   /** Kept, put back or cancelled: the field goes. */
@@ -55,7 +64,10 @@ export interface RenameControls {
 }
 
 /** The field's behaviour on its drawn parts: focus and selection, keys, leaving it, its options' motion. */
-export function renameField(els: RenameElements, { value, onCommit, onClose }: RenameCallbacks): RenameControls {
+export function renameField(
+  els: RenameElements,
+  { value, auto = true, onCommit, onClose }: RenameCallbacks,
+): RenameControls {
   const { box, field, more, check } = els
   const s = new Spring({
     value: 0,
@@ -83,7 +95,7 @@ export function renameField(els: RenameElements, { value, onCommit, onClose }: R
     if (done || saving) return
     const name = field.value.trim()
     const claudeToo = !!check?.checked
-    if (!renameChanges(name, value, claudeToo)) return finish()
+    if (!renameChanges(name, value, claudeToo, auto)) return finish()
     saving = true
     field.disabled = true
     const r = await onCommit(name, { claude: claudeToo })
@@ -164,8 +176,11 @@ export interface RenameDeps {
 export interface Renamer {
   /** The field now; null when none is open. */
   view: Store<RenameView | null>
-  /** Rename `key` where its name is: `el`, the card's name or the sheet's head. */
-  start(key: string, el: Element | null): void
+  /**
+   * Rename `key` where its name is: `el`, the card's name or the sheet's head. `kind` 'workspace':
+   * the herdr workspace it is in, where that name is (`el`, in the sheet's head).
+   */
+  start(key: string, el: Element | null, kind?: RenameKind): void
   /** The drawn field takes its behaviour (RenameField's layout effect). */
   attach(els: RenameElements): () => void
 }
@@ -198,22 +213,32 @@ export function renamer(deps: RenameDeps): Renamer {
     return r
   }
 
+  async function saveWorkspace(key: string, name: string): Promise<ActResult> {
+    const r = await deps.act(key, 'workspace', { name })
+    deps.toast(r.ok ? deps.t()('rename.workspaceDone', { name }) : r.error, !r.ok)
+    return r
+  }
+
   return {
     view,
-    start(key, el) {
+    start(key, el, kind = 'session') {
       const it = deps.item(key)
-      if (!it || !el) return
+      const workspace = kind === 'workspace'
+      if (!it || !el || (workspace && !it.workspace)) return
       const t = deps.t()
-      if (!deps.canEdit()) return deps.toast(t('live.off'), true)
+      // A workspace's name is herdr's: it waits for fresh herdr data, as what else goes through herdr.
+      if (workspace ? !deps.canMutate() : !deps.canEdit())
+        return deps.toast(t(deps.canEdit() ? 'mobile.readOnly' : 'live.off'), true)
       current?.controls?.cancel()
       if (current) close()
       const r = el.getBoundingClientRect()
       const cs = getComputedStyle(el)
       view.set({
         id: ++seq,
-        value: it.name,
-        auto: it.autoName || it.name,
-        claude: claudeRename(it, deps.canMutate(), t),
+        kind,
+        value: workspace ? (it.workspace ?? '') : it.name,
+        auto: workspace ? '' : it.autoName || it.name,
+        claude: workspace ? null : claudeRename(it, deps.canMutate(), t),
         box: renameBox(r, deps.viewportWidth?.() ?? innerWidth),
         font: { font: cs.font, letterSpacing: cs.letterSpacing, color: cs.color },
       })
@@ -224,9 +249,12 @@ export function renamer(deps: RenameDeps): Renamer {
       const open = current
       const shown = view.get()
       if (!open || !shown) return () => {}
+      const workspace = shown.kind === 'workspace'
       const controls = renameField(els, {
         value: shown.value,
-        onCommit: (name, { claude }) => save(open.key, open.item, name, claude),
+        auto: !workspace,
+        onCommit: (name, { claude }) =>
+          workspace ? saveWorkspace(open.key, name) : save(open.key, open.item, name, claude),
         onClose: () => {
           if (current === open) close()
         },

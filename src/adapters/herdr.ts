@@ -229,6 +229,11 @@ export async function workspaceCreate(
   }
 }
 
+/** A workspace's new name, in herdr's sidebar and for every pane in it. */
+export async function workspaceRename(workspace: string, label: string): Promise<void> {
+  await herdr(['workspace', 'rename', workspace, label])
+}
+
 /** A new tab in a workspace, `env` added to its shell's; returns the pane it comes with. */
 export async function tabCreate(
   workspace: string,

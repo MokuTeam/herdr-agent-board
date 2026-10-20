@@ -26,7 +26,7 @@ const t = translator('en')
 const session = item({ key: 's1', name: 'acme', cwd: '/srv/acme' })
 
 const PAGE = `<div id="page"><article class="card" data-key="s1" id="card"><span class="name" id="card-name">acme</span></article>
-<h2 id="sheet-name">acme</h2><input id="search" type="search">
+<h2 id="sheet-name">acme</h2><p class="sheet-meta">workspace <button id="sheet-workspace">Sessions</button></p><input id="search" type="search">
 <div class="composer-actions"><button id="sheet-more">More actions</button>
 <button id="sheet-focus">Go</button>
 <button id="sheet-wake" hidden> Wake </button>
@@ -113,7 +113,7 @@ function actionsWorld(fields: Partial<{ canEdit: boolean; canMutate: boolean; ac
     },
     newSession: (ctx, from) => void calls.push(`newSession ${JSON.stringify(ctx)} ${nameOf(from)}`),
     openCategories: id => void calls.push(`openCategories ${id}`),
-    rename: (key, el) => void calls.push(`rename ${key} ${nameOf(el)}`),
+    rename: (key, el, kind) => void calls.push(`rename ${key} ${nameOf(el)}${kind ? ` ${kind}` : ''}`),
   }
   return { calls, deps, act: boardActions(deps) }
 }
@@ -195,6 +195,16 @@ describe('the menus’ actions', () => {
     ])
     await world.tick(20)
     expect(calls.slice(3)).toEqual(['rename s1 #sheet-name', 'rename s1 #sheet-name'])
+  })
+
+  test('its workspace renamed where its name is: in the sheet’s head, once it opened when the menu was the card’s', async () => {
+    const { calls, act } = actionsWorld()
+    act.renameWorkspace('s1', asDom(page('sheet-workspace')))
+    act.renameWorkspace('s1', null)
+    await world.tick(370)
+    expect(calls).toEqual(['rename s1 #sheet-workspace workspace', 'dispatch {"type":"open","key":"s1"}'])
+    await world.tick(20)
+    expect(calls.slice(2)).toEqual(['rename s1 #sheet-workspace workspace'])
   })
 
   test('clearing a card says so, or why not', async () => {
