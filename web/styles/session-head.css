@@ -120,11 +120,56 @@
   #sheet .composer { grid-column: 2; grid-row: 4; }
 }
 
+/* The card's fields folded into one line, on a phone only (below). */
+.sheet-fold { display: none; }
+
+/* A phone (#100): the head stays short, so the conversation and the message box keep the room
+   whatever the text size. The pills keep to one line (the lane gives way), the facts under the
+   name to one, and the card's fields fold into the line that matters most (what it waits for,
+   else what it does, else its sessions), a tap away; open, they show whole, with no scroll of
+   their own. What gives way when the panel is short: the helpers first, then the conversation
+   (down to 96px), then an open card's fields (the head scrolls); never the message box. */
 @media (max-width: 760px) {
-  #sheet .sheet-card { max-height: 22vh; }
+  #sheet .sheet-pills { flex-wrap: nowrap; }
+  #sheet .sheet-pills > * { flex: none; }
+  #sheet .sheet-pills > .lane-pill { flex: 0 3 auto; }
+  #sheet .sheet-pills > .status-pill { flex: 0 1 auto; min-width: 0; }
+  #sheet .status-pill > :not(.pill-label) { flex: none; }
+  #sheet .status-pill > .pill-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   #sheet .sheet-pills button { min-height: 26px; }
   #sheet .sheet-properties-toggle { width: 28px; height: 26px; }
+  #sheet .sheet-meta { -webkit-line-clamp: 1; overflow-wrap: anywhere; }
+  .sheet-fold {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-height: 32px;
+    margin-top: 4px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--label);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+    transition: opacity 120ms ease-out;
+  }
+  .sheet-fold:active { opacity: 0.55; }
+  .sheet-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+  .sheet-fold-label { flex: none; color: var(--label-2); font-size: 12px; }
+  .sheet-fold-text { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .sheet-fold .chevron { flex: none; width: 16px; height: 16px; fill: none; stroke: var(--label-3); stroke-width: 1.8; transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+  .sheet-fold[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+  #sheet .sheet-card { max-height: none; }
+  #sheet .sheet-card[data-folded] { display: none; }
+  #sheet .composer { flex: none; }
+  #sheet .sheet-head { flex-shrink: 0; }
+  #sheet .sheet-head:has(.sheet-card:not([hidden], [data-folded])) { flex-shrink: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+  #sheet .sheet-helpers { flex-shrink: 1; }
+  #sheet .sheet-body { min-height: 96px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .sheet-pills button { transition: none; }
+  .sheet-pills button, .sheet-fold .chevron { transition: none; }
 }

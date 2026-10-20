@@ -97,7 +97,14 @@ export function fitActions(
   if (!room) return null
   const measured = buttons.key === widths.key ? widths : measure(actions, buttons)
   const gap = Number.parseFloat(getComputedStyle(actions).columnGap) || 0
-  const fit = fitRow(measured.buttons, room, { gap, more: measured.more })
+  // A button the row never shows (the terminal on a phone) keeps More on the row: room for it.
+  // As icons only Focus keeps its words (app.css); in a phone's browser there is no Focus.
+  const fit = fitRow(measured.buttons, room, {
+    gap,
+    more: measured.more,
+    moreAlways: buttons.all.length > buttons.row.length,
+    firstWords: buttons.row[0]?.id === 'sheet-focus',
+  })
   const over = new Set(
     buttons.all
       .filter(el => {

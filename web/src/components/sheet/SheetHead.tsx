@@ -4,16 +4,16 @@
 // line with its workspace, last activity and
 // context (the workspace's name renames the workspace there on a click, where the page can), and
 // the card's fields that say something. Before a session was ever open, the empty places of the page.
-import { Fragment, type KeyboardEvent, type MouseEvent } from 'react'
+import { Fragment, type KeyboardEvent, type MouseEvent, useState } from 'react'
 import type { Item } from '../../../../src/core/types.ts'
 import type { SheetPick } from '../../hooks/useContextMenus.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { categoryInfo, catOf, colOf } from '../../models/board-view.ts'
 import { linkedSessions } from '../../models/helper-model.ts'
-import { sheetHead, type WorkspaceFact } from '../../models/sheet.ts'
+import { foldLine, sheetHead, type WorkspaceFact } from '../../models/sheet.ts'
 import { COLUMN_COLORS } from '../../models/toolbar.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
-import { MoonGlyph, StarGlyph, UpDownGlyph, WriteGlyph } from '../icons.tsx'
+import { ChevronGlyph, MoonGlyph, StarGlyph, UpDownGlyph, WriteGlyph } from '../icons.tsx'
 import type { ScheduleActions } from './ScheduleRow.tsx'
 import { SheetCard } from './SheetCard.tsx'
 
@@ -79,6 +79,8 @@ const NO_CARD: HeadCard = { disabled: true, open: false }
 export function SheetHead({ item, missing, onRename, onRenameWorkspace, card = NO_CARD }: SheetHeadProps) {
   const t = useT()
   const { data, ui, now } = useBoardContext()
+  // On a phone the card's fields fold into one line (session-head.css); which session's are open.
+  const [unfolded, setUnfolded] = useState<string | null>(null)
   const rename = {
     onClick: (e: MouseEvent<HTMLElement>) => onRename?.(e.currentTarget),
     onKeyDown(e: KeyboardEvent<HTMLElement>) {
@@ -105,12 +107,14 @@ export function SheetHead({ item, missing, onRename, onRenameWorkspace, card = N
   // Nothing of the card's to show: its place folds away (the reminders as their row shows them, a
   // cancelled one while it folds).
   const schedules = (card.schedule?.held ? card.schedule.held.view.data : data)?.schedules ?? []
-  const fields =
-    card.open ||
-    !!item.doing ||
-    !!item.wait ||
-    schedules.some(e => e.key === item.key) ||
-    linkedSessions(item, key => !!data?.items.some(i => i.key === key)).length > 0
+  const reminders = schedules.filter(e => e.key === item.key).length
+  const linked = linkedSessions(item, key => !!data?.items.some(i => i.key === key))
+  const fields = card.open || !!item.doing || !!item.wait || reminders > 0 || linked.length > 0
+  // What a phone's head shows of them folded: the pencil (filling the empty ones) opens them too.
+  const fold = fields
+    ? foldLine(item, { sessions: linked.map(l => data?.items.find(i => i.key === l.key)?.name ?? l.key), reminders }, t)
+    : null
+  const folded = !!fold && unfolded !== item.key && !card.open
   // A pill's menu out of it; a click with no pointer (detail 0) came from the keys.
   const pick = (kind: SheetPick) => (e: MouseEvent<HTMLButtonElement>) =>
     card.onPick?.(kind, e.currentTarget, e.detail === 0)
@@ -136,12 +140,12 @@ export function SheetHead({ item, missing, onRename, onRenameWorkspace, card = N
             {head.pill.kind === 'asleep' ? (
               <>
                 <MoonGlyph />
-                {t('sheet.asleep')}
+                <span className="pill-label">{t('sheet.asleep')}</span>
               </>
             ) : (
               <>
                 <span className={`dot ${column}`} style={{ '--c': color }} />
-                {t(`col.${column}`)}
+                <span className="pill-label">{t(`col.${column}`)}</span>
               </>
             )}
             <UpDownGlyph />
@@ -201,7 +205,20 @@ export function SheetHead({ item, missing, onRename, onRenameWorkspace, card = N
           </Fragment>
         ))}
       </p>
-      <div className="sheet-card" id="sheet-card" hidden={!fields}>
+      {fold && (
+        <button
+          type="button"
+          className="sheet-fold"
+          aria-expanded={!folded}
+          aria-controls="sheet-card"
+          onClick={() => setUnfolded(folded ? item.key : null)}
+        >
+          <span className="sheet-fold-label">{fold.label}</span>
+          <span className="sheet-fold-text">{fold.text}</span>
+          <ChevronGlyph />
+        </button>
+      )}
+      <div className="sheet-card" id="sheet-card" hidden={!fields} data-folded={folded ? '' : undefined}>
         {/* Each session's card fields start afresh: nothing typed for one shows in another's. */}
         <SheetCard
           key={item.key}
