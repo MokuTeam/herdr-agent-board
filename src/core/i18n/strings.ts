@@ -10,6 +10,7 @@ import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
 import { PROFILE_STRINGS } from './profile-strings.ts'
+import { REMOTE_STRINGS } from './remote-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
 
@@ -1112,6 +1113,7 @@ for (const code of Object.keys(HELPER_STRINGS) as Lang[]) Object.assign(STRINGS[
 for (const code of Object.keys(SETUP_STRINGS) as Lang[]) Object.assign(STRINGS[code], SETUP_STRINGS[code])
 // And the Claude profiles.
 for (const code of Object.keys(PROFILE_STRINGS) as Lang[]) Object.assign(STRINGS[code], PROFILE_STRINGS[code])
+for (const code of Object.keys(REMOTE_STRINGS) as Lang[]) Object.assign(STRINGS[code], REMOTE_STRINGS[code])
 // The archive's too.
 for (const code of Object.keys(ARCHIVE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ARCHIVE_STRINGS[code])
 // And a fork of a session.

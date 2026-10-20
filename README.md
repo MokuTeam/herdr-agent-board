@@ -1162,6 +1162,51 @@ in):
 On Linux and macOS the board shows none; herdr's own (`delivery = "system"`) say that a session
 finished, without its words.
 
+## Phones
+
+Off unless you turn it on. With [Tailscale](https://tailscale.com) on this computer and on a phone,
+the phone can use the board: an app (such as
+[agent-board-android](https://github.com/MokuTeam/agent-board-android)) sees every session, sends
+messages, answers questions and permission prompts, wakes and starts sessions, and opens the
+terminal, as the web board does.
+
+```sh
+board remote on                  # or "remote": { "on": true } in config.json
+board remote                     # where it listens, who asks to pair, who is paired
+board remote approve <id>        # or Approve in Settings → Phones… on the web board
+board remote revoke <id>         # the phone's token stops working at once
+board remote off
+```
+
+On, the board listens on this computer's Tailscale address as well (on the web board's port, or
+`remote.port`), never on any other network; the web board stays on 127.0.0.1. What a request on
+it needs:
+
+- **The tailnet vouches for it.** The board asks Tailscale who calls (`tailscale whois`): your own
+  Tailscale user, or one `remote.allow` lists (`"allow": ["teammate@example.com"]`). Anyone else
+  is refused before anything is read.
+- **A paired phone.** The app asks to pair; Settings → Phones… opens on the web board with Approve
+  and Deny (`board remote approve` does the same), and the request goes after 10 minutes. The phone
+  gets its token once; the board keeps only its hash, with the Tailscale device it was given to
+  (`remote-devices.json` in the state folder), and takes it from that device only. Unpair (two
+  clicks) or `board remote revoke` ends it.
+- **Nothing on this computer's screen.** A phone cannot open files or links here, focus herdr or
+  raise windows; the board's page itself is not served to it. Everything else answers as for the
+  web board, with the same checks.
+
+A firewall that drops what comes in on the Tailscale interface must let the port through (on
+Linux with ufw: `sudo ufw allow in on tailscale0 to any port 12422 proto tcp`). Off, nothing
+listens and Tailscale is never asked.
+
+`GET /api/hello` says what the board is (`{ board, api, version, host, name, dnsName, platform,
+remote }`, `api` 1). On the Tailscale address also: `POST /api/remote/pair` with `{ name }` (202
+`{ id }`), `GET /api/remote/pair/<id>` (`pending`, `denied`, once `approved` with `token`, then
+`gone`), and with `Authorization: Bearer <token>` the web board's `/api/*` routes plus
+`GET /api/peers`: the other computers on the tailnet whose board answers. Code:
+`src/core/remote.ts` (the rules), `src/adapters/tailscale.ts`, `src/services/remote.ts` (pairing),
+`src/server/remote.ts` (the listener), `src/server/routes/remote.ts`,
+`web/src/components/phones/PhonesPanel.tsx`.
+
 ## Language
 
 English and Russian. Settings (the gear) on the web board's toolbar switches between them; the

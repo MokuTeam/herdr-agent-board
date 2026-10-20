@@ -3,6 +3,7 @@
 import type { BoardArchive } from './archive.ts'
 import type { FoldMode } from './fold-mode.ts'
 import type { LimitWindow } from './limits.ts'
+import type { RemoteView } from './remote.ts'
 import type { ScheduleEntry } from './schedule-rules.ts'
 import type { SetupSummary } from './setup.ts'
 import type { ColumnId, Item, Lang, LaunchView } from './types.ts'
@@ -101,4 +102,6 @@ export interface BoardPayload {
   claudeProgram?: string
   /** How a session asleep in "Waiting" folds (core/fold-mode.ts); a board before the setting sent none. */
   foldWaiting?: FoldMode
+  /** The remote mode (core/remote.ts), only while it is on. */
+  remote?: RemoteView
 }

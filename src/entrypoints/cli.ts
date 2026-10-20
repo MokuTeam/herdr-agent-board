@@ -46,7 +46,7 @@ import {
   reportIdentity,
 } from '../adapters/call-receipts.ts'
 import { readCard, writeCard } from '../adapters/cards.ts'
-import { configFile, editCategories, loadConfig } from '../adapters/config-file.ts'
+import { configFile, editCategories, loadConfig, setRemoteOn } from '../adapters/config-file.ts'
 import { type HerdrPane, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { boardFile } from '../adapters/paths.ts'
@@ -57,6 +57,7 @@ import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t } from '../core/lang.ts'
 import { type ProfileSet, profileSet, sessionProfile } from '../core/profiles.ts'
+import type { RemoteView } from '../core/remote.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
 import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
@@ -67,7 +68,7 @@ import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sleepMany } from '../services/sleep.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | doctor] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | approve <id> | deny <id> | revoke <id>] | doctor] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -353,6 +354,7 @@ async function main(): Promise<void> {
     )
   }
   if (cmd === 'call-report') return callReport()
+  if (cmd === 'remote') return remote()
   if (cmd === 'archive') return archive()
   if (cmd === 'sleep') return sleep()
   if (cmd === 'fork') return fork()
@@ -676,6 +678,50 @@ async function sleep(): Promise<void> {
       : ''
   const note = count('scheduled') ? await schedulerNote() : ''
   console.log([`ok · ${head.filter(Boolean).join(', ')}${hint}${note}`, ...results.map(sleepLine)].join('\n'))
+}
+
+/**
+ * `board remote [on | off | approve <id> | deny <id> | revoke <id>]`: the remote mode
+ * (core/remote.ts). On and off edit config.json; the rest goes through the running board, which
+ * holds the requests to pair. Without an argument: where it listens, who waits, who is paired.
+ */
+async function remote(): Promise<void> {
+  const [op = 'status', id = ''] = rest
+  const usage = 'usage: board remote [on | off | approve <id> | deny <id> | revoke <id>]'
+  if (op === 'on' || op === 'off') {
+    const r = setRemoteOn(op === 'on')
+    if (!r.ok) throw new Error(r.error)
+    return console.log(
+      op === 'on'
+        ? 'ok · remote on: the board listens on its Tailscale address in a few seconds; `board remote` says where'
+        : 'ok · remote off',
+    )
+  }
+  const url = `http://127.0.0.1:${cfg.port ?? 12422}/api/remote`
+  const call = async (init?: RequestInit): Promise<unknown> => {
+    try {
+      return await (await fetch(url, { ...init, signal: AbortSignal.timeout(3000) })).json()
+    } catch {
+      throw new Error('the board does not run: open it first (herdr plugin action invoke agent-board.open)')
+    }
+  }
+  if (op === 'approve' || op === 'deny' || op === 'revoke') {
+    if (!id) throw new Error(usage)
+    const body = JSON.stringify({ op, id })
+    const r = await call({ method: 'POST', headers: { 'content-type': 'application/json', 'x-board': '1' }, body })
+    if (!isRecord(r) || r.ok !== true) throw new Error(`no request or device ${id}: \`board remote\` lists them`)
+    return console.log(`ok · ${op === 'approve' ? 'approved' : op === 'deny' ? 'denied' : 'revoked'} ${id}`)
+  }
+  if (op !== 'status') throw new Error(usage)
+  const view = (await call()) as Partial<RemoteView>
+  if (!view.on) return console.log('remote off · `board remote on` lets a paired phone use this board over Tailscale')
+  console.log(`remote on · ${view.url ?? `not listening: ${view.error ?? 'starting'}`}`)
+  for (const r of view.pending ?? [])
+    console.log(
+      `asks to pair: ${r.id} "${r.name}" from ${r.device} (${[r.login, r.os].filter(Boolean).join(', ')}) · board remote approve ${r.id}`,
+    )
+  for (const d of view.devices ?? [])
+    console.log(`paired: ${d.id} "${d.name}" on ${d.device} (${d.login})${d.seenAt ? `, seen ${stamp(d.seenAt)}` : ''}`)
 }
 
 /**
