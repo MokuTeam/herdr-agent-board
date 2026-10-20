@@ -27,7 +27,7 @@ export function LaunchCard({ launch: l, look }: { launch: LaunchView; look: Laun
           <span className="dot work launching" style={{ '--c': 'var(--green)' }} />
         )}
         <span className="name">{l.name}</span>
-        <span className="age">{t(l.resume ? 'archive.returnLabel' : 'launch.new')}</span>
+        <span className="age">{t(l.resume ? 'archive.returnLabel' : l.fork ? 'fork.label' : 'launch.new')}</span>
       </div>
       <div className="said" title={l.cwd}>
         {launchWhere(l, t)}

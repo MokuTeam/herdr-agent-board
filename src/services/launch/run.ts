@@ -7,7 +7,8 @@
 // A session coming back from the archive (services/archive.ts) starts the same way, resumed by its
 // id (`--resume <id>` instead of --session-id; `{resume}` for a launch.command, which without it
 // leaves the resume to the board's own spawn-agent), with no /rename and no first message: it
-// keeps its name, its card and its conversation.
+// keeps its name, its card and its conversation. A fork (services/launch/fork.ts) is a new session
+// that starts with a copy of another one's conversation: named and briefed as any new one.
 import { randomUUID } from 'node:crypto'
 import { realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -21,6 +22,7 @@ import { keyTowardYes, sameFolder, type TrustDialog, trustDialog } from '../../c
 import { t } from '../../core/lang.ts'
 import { launcherError } from '../../core/launch/launcher-command.ts'
 import { slugName, uniqueSlug, worktreePath } from '../../core/launch/names.ts'
+import { forkCard } from '../../core/links.ts'
 import { PI_AGENT } from '../../core/pi.ts'
 import type { Item, LaunchFailure, LaunchState, LaunchStep } from '../../core/types.ts'
 import type { Deps } from '../deps.ts'
@@ -33,6 +35,8 @@ export interface Launch extends LaunchRequest {
   id: string
   /** The id of the session it resumes (Return, from the archive), null for a new one. */
   resume: string | null
+  /** The id of the session whose conversation it starts with (a fork), null for none. */
+  fork: string | null
   state: LaunchState
   step: LaunchStep
   startedAt: number
@@ -54,12 +58,21 @@ export interface Launch extends LaunchRequest {
   trusting: boolean
 }
 
-/** A new launch for a checked request; `items`: the board as it is now; `resume`: the session it resumes. */
-export function newLaunch(request: LaunchRequest, items: Item[], resume: string | null = null): Launch {
+/**
+ * A new launch for a checked request; `items`: the board as it is now; `resume`: the session it
+ * resumes; `fork`: the session whose conversation it starts with.
+ */
+export function newLaunch(
+  request: LaunchRequest,
+  items: Item[],
+  resume: string | null = null,
+  fork: string | null = null,
+): Launch {
   return {
     ...request,
     id: randomUUID().slice(0, 8),
     resume,
+    fork,
     state: 'starting',
     step: 'prepare',
     startedAt: Date.now(),
@@ -137,7 +150,8 @@ export function launchRunner({
     },
     session: id => {
       l.sessionId = id
-      writeCard(id, { category: l.category, profileWant: l.profile })
+      // A fork's card says whose fork it is, and since when (core/links.ts).
+      writeCard(id, { category: l.category, profileWant: l.profile, ...(l.fork && forkCard(l.fork)) })
       l.carded = id
     },
   })
@@ -160,7 +174,7 @@ export function launchRunner({
       l.rootTab = ws.tab
       if (ws.pane) notePane(l, ws.pane, ws.terminal)
     }
-    const launcher = launcherFor(deps.cfg.launch, { resume: !!l.resume })
+    const launcher = launcherFor(deps.cfg.launch, { resume: !!l.resume, fork: !!l.fork })
     const r = await launcher.start(l, events(l))
     // The agent herdr says came up once a dialog was answered: the board's spawn-agent stops at
     // one before it can say whether its start command started Claude or pi.

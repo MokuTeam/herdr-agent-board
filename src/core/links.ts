@@ -4,6 +4,11 @@
 //   sent       it called SendMessage with another session's name
 //   received   another session's message came in (Claude Code records the sender's name and
 //              its message pipe with it)
+//   fork       it is a fork of another session: its transcript starts with a copy of that one's
+//              conversation, whose calls and messages are the other session's, not this one's.
+//              Claude Code marks each copied line `forkedFrom` in some versions; in others the
+//              copies keep only their time, older than the fork: the board's forks say on their
+//              card whose fork they are and since when (forkCard), and older events are left out
 // Pure: adapters/links.ts reads the transcripts' lines in the background.
 import { spawnOf, spawnResult } from './transcript-links.ts'
 
@@ -27,6 +32,7 @@ function parse(line: string): Rec | null {
 
 export type LinkEvent =
   | { kind: 'spawn'; name: string; pane: string; at: number }
+  | { kind: 'fork'; of: string; at: number }
   | { kind: 'sent'; to: string; name: string; summary: string; at: number }
   | { kind: 'received'; name: string; pipe: string; id: string; text: string; at: number }
 
@@ -40,9 +46,22 @@ export interface LinkState {
   pipes: Map<string, string>
   /** Agents the session named, and its teammates. */
   agents: Set<string>
+  /** The session it is a fork of, once a copied line said so. */
+  forkOf?: string
 }
 
+/** What a fork's card says before its Claude starts: whose fork it is, and since when. */
+export const forkCard = (of: string, now = Date.now()): { forkOf: string; forkAt: number } => ({
+  forkOf: of,
+  forkAt: now,
+})
+
 export const newState = (): LinkState => ({ pending: new Map(), seen: new Set(), pipes: new Map(), agents: new Set() })
+
+// A line a fork copied from its source, as Claude Code writes it: `"forkedFrom":{"sessionId":…}`
+// (in a message's text the quotes would be escaped).
+const FORKED = /"forkedFrom":\{"sessionId":"([0-9a-f-]{36})"/
+const TIMESTAMP = /"timestamp":"([^"]+)"/
 
 function received(origin: Rec, at: number, state: LinkState): LinkEvent | null {
   const id = String(origin.msg_id ?? '')
@@ -62,6 +81,13 @@ function received(origin: Rec, at: number, state: LinkState): LinkEvent | null {
  * recorded twice when a request is logged with it).
  */
 export function lineEvents(line: string, state: LinkState): LinkEvent[] {
+  // A copied line is the source's: only the first one counts, for whose fork this is.
+  const copied = FORKED.exec(line)
+  if (copied) {
+    if (state.forkOf) return []
+    state.forkOf = copied[1] ?? ''
+    return [{ kind: 'fork', of: state.forkOf, at: Date.parse(TIMESTAMP.exec(line)?.[1] ?? '') || 0 }]
+  }
   const o = parse(line)
   if (!o || o.isSidechain || !['user', 'assistant', 'attachment'].includes(str(o.type))) return []
   const at = Date.parse(str(o.timestamp)) || 0
@@ -123,6 +149,10 @@ export function lineEvents(line: string, state: LinkState): LinkEvent[] {
 /** A board item as the links see it. */
 export interface LinkItem {
   key: string
+  /** Its Claude session id: a fork names its source by it. */
+  session?: string | null
+  /** A fork's card: the session it is a fork of, and when it started. */
+  fork?: { of: string; at: number } | null
   name: string
   autoName?: string
   pane?: string | null
@@ -134,6 +164,8 @@ export interface SessionRef {
   key: string
   name: string
   at: number
+  /** A fork: it started with a copy of the other one's conversation. */
+  fork?: true
 }
 /** Messages with one other session: how many came in, how many went out, the latest. */
 export interface Talk extends SessionRef {
@@ -194,7 +226,12 @@ export function relate<T extends LinkItem>(
     t.at = Math.max(t.at, at)
   }
   for (const a of items) {
-    for (const ev of eventsOf(a) ?? []) {
+    // A fork's events from before it started are its source's, copied; its card says whose fork it is.
+    const own = a.fork
+    const read = (eventsOf(a) ?? []).filter(ev => !own || ev.kind === 'fork' || ev.at >= own.at)
+    const events: readonly LinkEvent[] =
+      own?.of && !read.some(ev => ev.kind === 'fork') ? [...read, { kind: 'fork', of: own.of, at: own.at }] : read
+    for (const ev of events) {
       if (ev.kind === 'spawn') {
         const b = items.find(it => it.key !== a.key && it.pane && it.pane === ev.pane && names(it).has(norm(ev.name)))
         if (!b) continue
@@ -203,8 +240,16 @@ export function relate<T extends LinkItem>(
         if (prev) prev.at = Math.max(prev.at, ev.at)
         else mine.push({ key: b.key, name: b.name, at: ev.at })
         const theirs = linksOf(b.key)
-        // Started again in the same pane under the same name: the latest start counts.
-        if (!theirs.from || theirs.from.at <= ev.at) theirs.from = { key: a.key, name: a.name, at: ev.at }
+        // Started again in the same pane under the same name: the latest start counts. A fork is
+        // the session it is a fork of's, whoever started it.
+        if (!theirs.from || (!theirs.from.fork && theirs.from.at <= ev.at))
+          theirs.from = { key: a.key, name: a.name, at: ev.at }
+      } else if (ev.kind === 'fork') {
+        const b = items.find(it => it.key !== a.key && (it.session === ev.of || it.key === ev.of))
+        if (!b) continue
+        linksOf(a.key).from = { key: b.key, name: b.name, at: ev.at, fork: true }
+        const theirs = linksOf(b.key).started
+        if (!theirs.some(x => x.key === a.key)) theirs.push({ key: a.key, name: a.name, at: ev.at, fork: true })
       } else if (ev.kind === 'sent') {
         // A reply goes to the pipe the message came from.
         const b = ev.to.startsWith('uds:') ? (byPipe.get(ev.to.slice(4)) ?? one(ev.name, a)) : one(ev.to, a)

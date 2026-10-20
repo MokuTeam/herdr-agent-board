@@ -8,6 +8,7 @@ import { categoryInfo, catOf } from '../../models/board-view.ts'
 import { ago } from '../../models/card.ts'
 import { linkedSessions } from '../../models/helper-model.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
+import { ForkIcon } from '../icons.tsx'
 import { FromGlyph, SpawnedGlyph } from './glyphs.tsx'
 
 // Sessions whose sheet shows every linked session, not the first few (for as long as the page is open).
@@ -29,8 +30,8 @@ export function RelationsRow({ item, onSession }: { item: Item; onSession: (key:
           const other = itemOf(p.key)
           if (!other) return null
           const title = [
-            p.from && t('rel.fromHint', { name: other.name }),
-            p.started && t('rel.startedThis'),
+            p.from && t(p.fork ? 'rel.forkOfHint' : 'rel.fromHint', { name: other.name }),
+            p.started && t(p.fork ? 'rel.forkedThis' : 'rel.startedThis'),
             (p.in || p.out) && t('rel.talkHint', { name: other.name, in: p.in, out: p.out, when: ago(p.at, now, t) }),
           ]
             .filter(Boolean)
@@ -48,8 +49,8 @@ export function RelationsRow({ item, onSession }: { item: Item; onSession: (key:
             >
               {(p.from || p.started) && (
                 <span className="rel-marks">
-                  {p.from && <FromGlyph />}
-                  {p.started && <SpawnedGlyph />}
+                  {p.fork ? <ForkIcon /> : p.from && <FromGlyph />}
+                  {p.started && !p.fork && <SpawnedGlyph />}
                 </span>
               )}
               <span className="rel-name">{other.name}</span>

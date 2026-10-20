@@ -1,5 +1,5 @@
 // The sheet's foot: why the session's actions wait (no fresh data), the session's buttons — go to
-// it in herdr, a MokuPilot call with a fork of it, its terminal, its changes, its history, wake it,
+// it in herdr, a MokuPilot call with a fork of it, a fork of it in a new tab, its terminal, its changes, its history, wake it,
 // put it to sleep, restart it, take it off the board to the archive, a new session here, as many
 // as the row's width holds (hooks/useActionRow.ts), and More at the row's end with the rest — the
 // files that go with the next message, and the message box: Enter sends, Shift+Enter breaks the
@@ -18,6 +18,7 @@ import {
   ClipIcon,
   CrossIcon,
   FocusIcon,
+  ForkIcon,
   HistoryIcon,
   MoonIcon,
   MoreIcon,
@@ -37,6 +38,8 @@ export interface SessionButtons {
   terminal?: (button: HTMLElement) => void
   /** A MokuPilot call whose agent is a fork of the session. */
   mokupilot?: () => void
+  /** A fork of the session in a new tab (its window grows out of the button). */
+  fork?: (button: HTMLElement) => void
   wake?: () => void
   sleep?: () => void
   /** Claude exits and resumes in its pane once the session is free. */
@@ -141,6 +144,20 @@ export function Composer({
           <PhoneIcon />
           <span>{t('mokupilot.call')}</span>
         </button>
+        {/* Only where the board can fork this session: the row is the old page's without it. */}
+        {!buttons.forkHidden && (
+          <button
+            type="button"
+            className={classNames('button', over('sheet-fork'))}
+            id="sheet-fork"
+            title={t('fork.hint')}
+            disabled={av.newHere}
+            onClick={e => on.fork?.(e.currentTarget)}
+          >
+            <ForkIcon />
+            <span>{t('fork.action')}</span>
+          </button>
+        )}
         <button
           type="button"
           className={classNames('button', term.hasShell && 'has-shell', over('sheet-term'))}

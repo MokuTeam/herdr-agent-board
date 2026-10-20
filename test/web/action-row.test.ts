@@ -22,7 +22,9 @@ const WORDS: Record<string, string> = {
   'sheet-archive': 'Archive',
   'sheet-new': 'New session here',
 }
-const PAGE = `<div id="sheet"><div class="composer-actions">${PRIORITY.map(
+// Upstream's row: Fork is the React board's own, drawn only where the board can fork.
+const UPSTREAM = PRIORITY.filter(id => id in WORDS)
+const PAGE = `<div id="sheet"><div class="composer-actions">${UPSTREAM.map(
   id => `<button class="button" id="${id}"><svg></svg><span>${WORDS[id]}</span></button>`,
 ).join('')}<button class="button" id="sheet-more"><svg></svg></button></div></div>`
 
@@ -59,7 +61,7 @@ function computed(el: FakeElement): Record<string, string> {
 /** The row as the classes have it: icons or words, and what is left to More. */
 const classes = () => ({
   icons: actions().classList.contains('icons'),
-  over: [...PRIORITY, 'sheet-more'].filter(id => !page(id).hidden && page(id).classList.contains('over')),
+  over: [...UPSTREAM, 'sheet-more'].filter(id => !page(id).hidden && page(id).classList.contains('over')),
 })
 
 test('the row shows as many as fit and More the rest, as upstream’s fitActions has it, width by width', async () => {
@@ -85,7 +87,7 @@ test('the row shows as many as fit and More the rest, as upstream’s fitActions
     const fit = fitActions(asDom(actions()), rowButtons(asDom(actions()), narrow), widths)
     if (!fit) return null
     widths = fit.widths
-    return { icons: fit.shown.icons, over: [...PRIORITY, 'sheet-more'].filter(id => fit.shown.over.has(id)) }
+    return { icons: fit.shown.icons, over: [...UPSTREAM, 'sheet-more'].filter(id => fit.shown.over.has(id)) }
   }
   const hide = (...ids: string[]) => {
     for (const id of ids) page(id).hidden = true
@@ -144,4 +146,26 @@ test('the widths are taken once per set of buttons, language and layout; the row
   // Not laid out: nothing to say.
   room = 0
   expect(fitActions(asDom(actions()), rowButtons(asDom(actions()), false), NOT_MEASURED)).toBeNull()
+})
+
+test('Fork, where the board draws it, is measured with the rest and has its place after the call', () => {
+  const fork = world.document.createElement('button')
+  fork.id = 'sheet-fork'
+  fork.className = 'button'
+  fork.textContent = 'Fork'
+  page('sheet-mokupilot').after(fork)
+  const buttons = rowButtons(asDom(actions()), false)
+  expect(buttons.row.map(el => el.id).slice(0, 4)).toEqual([
+    'sheet-focus',
+    'sheet-mokupilot',
+    'sheet-fork',
+    'sheet-term',
+  ])
+  room = 2000
+  const all = fitActions(asDom(actions()), buttons, NOT_MEASURED)
+  expect(all?.widths.buttons[2]).toEqual({ words: 26 + 8 * 'Fork'.length, icon: 30 })
+  // Room for the first three with their words and the rest as icons: Fork is not left to More.
+  room = 26 + 8 * 'Go to herdr'.length + 30 * 9 + 30 + 6 * 10
+  const tight = fitActions(asDom(actions()), buttons, NOT_MEASURED)
+  expect(tight?.shown.over.has('sheet-fork')).toBe(false)
 })

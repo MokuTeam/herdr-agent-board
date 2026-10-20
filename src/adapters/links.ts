@@ -4,10 +4,17 @@
 import { open, stat } from 'node:fs/promises'
 import { type LinkEvent, type LinkState, lineEvents, newState } from '../core/links.ts'
 
-// The lines worth parsing; Agent and Task calls name the agents a message to whom is no session's.
-const MARKERS = ['spawn-agent', '"SendMessage"', '"kind":"peer"', 'pane=', '"name":"Agent"', '"name":"Task"'].map(m =>
-  Buffer.from(m),
-)
+// The lines worth parsing; Agent and Task calls name the agents a message to whom is no session's;
+// a fork's copied lines are its source's (and the first says whose fork it is).
+const MARKERS = [
+  'spawn-agent',
+  '"SendMessage"',
+  '"kind":"peer"',
+  'pane=',
+  '"name":"Agent"',
+  '"name":"Task"',
+  '"forkedFrom"',
+].map(m => Buffer.from(m))
 const CHUNK = 4 << 20
 const MAX_LINE = 64 << 20 // a line longer than this (a pasted screenshot) is skipped, not held
 

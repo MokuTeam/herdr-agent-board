@@ -267,6 +267,41 @@ export function defaultWorkspace({
   return usable.some(w => w.id === fallback) ? fallback : ''
 }
 
+/**
+ * Where a session goes back to, or a copy of it goes (Return from the archive, a fork): the
+ * workspace it was in while herdr has it (by its id and name, else by its name, never the board's
+ * own), else its lane's default, else a new one named like its workspace or its lane.
+ */
+export function sessionWorkspace({
+  workspaceId = '',
+  workspace = '',
+  category,
+  title = '',
+  items = [],
+  workspaces = [],
+  board = '',
+}: { workspaceId?: string | null; workspace?: string | null } & Omit<WorkspaceChoice, 'fallback'>):
+  | { id: string; label: string }
+  | { create: string } {
+  const own =
+    workspaces.find(w => w.id === workspaceId && w.label === workspace) ??
+    workspaces.find(w => workspace && w.label === workspace && w.label !== board)
+  const id = own?.id || defaultWorkspace({ category, title, items, workspaces, board })
+  return id
+    ? { id, label: workspaces.find(w => w.id === id)?.label ?? '' }
+    : { create: (workspace || title || 'Sessions').slice(0, 40) }
+}
+
+/** A fork's name: the session's with `mark` after it ("Name · fork"), within NAME_MAX. */
+export function forkName(name: string, mark: string): string {
+  const tail = ` · ${mark}`
+  const base = String(name ?? '')
+    .replace(new RegExp(UNSAFE_CHARS.source, 'g'), '')
+    .replace(/^[\s/-]+/, '')
+    .trim()
+  return `${base.slice(0, NAME_MAX - tail.length).trim() || 'session'}${tail}`
+}
+
 interface FolderSuggestion {
   path: string
   why: 'card' | 'lane' | 'session' | 'recent'
