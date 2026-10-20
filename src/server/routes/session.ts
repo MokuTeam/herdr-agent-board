@@ -9,6 +9,7 @@ import { herdrText } from '../../adapters/herdr.ts'
 import { uploadsDir } from '../../adapters/paths.ts'
 import { askRestart } from '../../adapters/schedule-store.ts'
 import { busy, PINS } from '../../core/board.ts'
+import { isCodexItem } from '../../core/codex.ts'
 import { type PublicDialog, parseDialog, publicDialog } from '../../core/dialogs/questions.ts'
 import { publicHelper } from '../../core/helpers.ts'
 import { t } from '../../core/lang.ts'
@@ -62,9 +63,11 @@ async function detail(app: SessionApp, item: Item) {
       ? reg.statusUpdatedAt
       : 0
   // A pi session's turns are in its session file, its key.
-  const thread = isPiItem(item)
-    ? deps.pi.sessionThread(item.session ?? '', 60)
-    : deps.claude.sessionThread(transcript ?? '', 60, { since: since ?? 0, idleSince })
+  const thread = isCodexItem(item)
+    ? deps.codex.sessionThread(item.session ?? '', 60)
+    : isPiItem(item)
+      ? deps.pi.sessionThread(item.session ?? '', 60)
+      : deps.claude.sessionThread(transcript ?? '', 60, { since: since ?? 0, idleSince })
   const conversation = withSessions(app.items(), thread.conversation)
   // helpers: every subagent, fork, workflow agent and teammate, newest first (adapters/helpers.ts).
   const own = helpersOf(transcript, { alive: !!alive, since: since ?? null })

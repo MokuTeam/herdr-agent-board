@@ -13,6 +13,7 @@ import { contextDir } from '../adapters/paths.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
 import { attentionOf, busy, columnOf, isAgentStatus, PINS } from '../core/board.ts'
 import { categoryFor } from '../core/categories.ts'
+import { isCodexItem } from '../core/codex.ts'
 import { type HelperSummary, summarize } from '../core/helpers.ts'
 import { t } from '../core/lang.ts'
 import { relate } from '../core/links.ts'
@@ -204,10 +205,10 @@ export async function collect(
     const hit = base.session ? live.get(base.session) : undefined
     // A pi session's records are its session file, its key: none of Claude's folders has them.
     const pi = isPiItem(base) ? (deps.pi.transcriptInfo(base.session) ?? {}) : null
-    const { home, path } = pi
-      ? { home: null, path: null }
-      : recordsOf(deps, card, base.session, base.cwd, hit, searched)
-    const info = pi ?? home?.transcriptInfo(path) ?? {}
+    const codex = isCodexItem(base) ? (deps.codex.transcriptInfo(base.session) ?? {}) : null
+    const { home, path } =
+      pi || codex ? { home: null, path: null } : recordsOf(deps, card, base.session, base.cwd, hit, searched)
+    const info = codex ?? pi ?? home?.transcriptInfo(path) ?? {}
     // The name given to a pi session (/name) is what herdr and pi know it by, as a Claude's /rename.
     const autoName = pi?.name || base.name
     const guess = categoryFor(cfg, base.cwd)
@@ -233,7 +234,7 @@ export async function collect(
       title: info.title ?? '',
       prompt: info.prompt ?? '',
       lastText: info.lastText ?? '',
-      ...contextOf(base.session, info), // context: tokens of its last request; contextPct, contextSize when the status line said
+      ...contextOf(codex ? null : base.session, info), // Codex has no Claude status line file.
       tool,
       attention,
       question: askedText(attention, card, info, tool),
