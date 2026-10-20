@@ -936,6 +936,85 @@ New:
   - the login routes are rate-limited;
   - failed attempts are visible in the panel.
 
+**Checked by the spike (2026-10-20, OpenSSH_for_Windows_9.5p2, Debian 12.15 sshd):** server
+OpenSSH_9.2p1 Debian-2+deb12u10 in a container set up as "The server" steps 2–4; Windows' own
+`ssh.exe` spawned from Bun as an argument list (no shell), the line of "The tunnel on the PC" plus
+`-v`; `<scratch>` is a folder whose name has a space.
+
+- **The sshd block of step 4 refuses the socket forward.** With `AllowTcpForwarding no`, ssh
+  prints `debug1: Remote: port forwarding refused`, then `Error: remote port forwarding failed for
+  listen path /var/lib/boardtunnel/board.sock`, and exits 255; sshd logs `Received request from …
+  to remote forward to path "/var/lib/boardtunnel/board.sock", but the request was denied.` sshd
+  grants a remote socket forward only where `AllowTcpForwarding` allows remote forwards;
+  `PermitListen` does not apply to paths. **Use instead of `AllowTcpForwarding no`:**
+
+  ```
+      AllowTcpForwarding remote
+      PermitListen none
+  ```
+
+  With these two lines (the rest of the block unchanged) the socket forward works, and the key
+  still gets no TCP forward: `-R 127.0.0.1:18080:…` and `-R 0:…` → `Remote: port forwarding
+  refused`, exit 255; `-L` to TCP → sshd `refused local port forward`, the client `open failed:
+  administratively prohibited`; `-L` to the board's socket → sshd `refused streamlocal port
+  forward`. The step 4 block and its `AllowTcpForwarding` bullet follow this.
+- **Success line**, verbatim: `debug1: remote forward success for: listen
+  /var/lib/boardtunnel/board.sock:-2, connect 127.0.0.1:56072` (`-2` is ssh's port number for a
+  path; the forward's target follows). Match `remote forward success for: listen <socket>:`, not
+  the line's end. The next line is `debug1: forwarding_success: all expected forwarding replies
+  received`.
+- **Lines without `debug1:` on a good connection** (keep them out of error texts): `Warning:
+  Permanently added '[127.0.0.1]:2222' (ED25519) to the list of known hosts.` (first connection
+  only) and `Authenticated to 127.0.0.1 ([127.0.0.1]:2222) using "publickey".`, besides the first
+  line `OpenSSH_for_Windows_9.5p2, LibreSSL 3.8.2`.
+- **Paths:** `-i <scratch>/key` and `UserKnownHostsFile="<scratch>/known_hosts"` each reached ssh
+  as one value; the known_hosts file in the folder with a space holds `[127.0.0.1]:2222
+  ssh-ed25519 AAAA…`, the server's `ssh_host_ed25519_key.pub`.
+- **The socket:** `stat -c '%A %U %G'` → `srw-rw---- boardtunnel caddy`; its folder `drwxr-s---
+  boardtunnel caddy`. The setgid bit and `StreamLocalBindMask 0117` are honoured.
+- **curl through the socket:** as `caddy` → `hello from the PC`; as `nobody` → exit 7, `curl -v`:
+  `Immediate connect fail for /var/lib/boardtunnel/board.sock: Permission denied` (and `ls` of the
+  folder: `Permission denied`); as `boardtunnel` → `hello from the PC`.
+- **Noise per connection through the tunnel** (per TCP connection Caddy opens, not per request):
+  8 lines, all `debug1:`: `client_input_channel_open: ctype forwarded-streamlocal@openssh.com …`,
+  `client_request_forwarded_streamlocal: request: /var/lib/boardtunnel/board.sock`,
+  `connect_next: start for host 127.0.0.1 ([127.0.0.1]:<port>)`, `connect_next: connect host … in
+  progress, fd=4`, `channel 0: new forwarded-streamlocal@openssh.com …`, `confirm
+  forwarded-streamlocal@openssh.com`, `channel 0: connected to 127.0.0.1 port <port>`, `channel 0:
+  free: forwarded-streamlocal, nchannels 1`.
+- **Stale socket:** after `taskkill /F` (the parent sees exit code 1) the socket file stays on
+  the server; the same line started at once prints the success line again, the socket is new
+  (`StreamLocalBindUnlink` replaced it) and curl as `caddy` answers.
+- **Refused forward** (folder `chown root`): ssh exits by itself (`ExitOnForwardFailure`), exit
+  code **255**, after `debug1: remote forward failure for: listen
+  /var/lib/boardtunnel/board.sock:-2, connect 127.0.0.1:56072` and `Error: remote port forwarding
+  failed for listen path /var/lib/boardtunnel/board.sock`. sshd logs `unlink(…): Permission
+  denied` and `unix_listener: cannot bind to path …: Permission denied`; the client sees neither.
+  A refusal by sshd's settings has the same `Error:` line, with `debug1: Remote: port forwarding
+  refused` before it.
+- **Locked account:** Debian's default `UsePAM yes` accepts the key although `useradd` left `!`
+  as the password. With `UsePAM no`: `boardtunnel@127.0.0.1: Permission denied (publickey).`,
+  exit 255, sshd logs `User boardtunnel not allowed because account is locked`. After `sudo
+  usermod -p '*' boardtunnel` it connects. The README adds that line to step 2 (harmless with
+  PAM).
+- **Key ACL, Windows' ssh-keygen:** in a folder granting `BUILTIN\Users:(OI)(CI)(R)`, the key it
+  makes is not inherited from the folder: `BUILTIN\Administrators:(F)`, `NT
+  AUTHORITY\SYSTEM:(F)`, `<COMPUTER>\<user>:(M)` (the `.pub` also `Everyone:(RX)`). `ssh-keygen -y`
+  and ssh accept it.
+- **Key ACL, any other writer:** the same bytes written by Bun into that folder inherit
+  `BUILTIN\Users:(I)(R)`, `NT AUTHORITY\SYSTEM:(I)(F)`, `BUILTIN\Administrators:(I)(F)`,
+  `<COMPUTER>\<user>:(I)(F)`. `ssh-keygen -y -P ""` and ssh both refuse it, exit 255: `Bad
+  permissions. Try removing permissions for user: BUILTIN\\Users (S-1-5-32-545) on file <key>.`,
+  `WARNING: UNPROTECTED PRIVATE KEY FILE!`, `Load key "<key>": bad permissions`; ssh then ends
+  with `boardtunnel@127.0.0.1: Permission denied (publickey).` (the server accepted the public
+  half).
+- **`whoami /user /fo csv /nh`:** one line, `"<computer>\<user>","S-1-5-21-…-1001"` and CRLF:
+  the name lowercased, the SID the second quoted field.
+- **The recipe holds:** `icacls <key> /inheritance:r /grant:r *<SID>:F` leaves
+  `<COMPUTER>\<user>:(F)` alone; `ssh-keygen -y` and ssh accept the key (the success line). The
+  board still applies it after ssh-keygen: harmless for Windows' own, needed for any other
+  ssh-keygen or a key written otherwise.
+
 ## Testing
 
 - **Unit:**
