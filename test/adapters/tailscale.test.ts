@@ -126,3 +126,10 @@ test('the CLI: TAILSCALE_BIN_PATH, else tailscale from PATH as before, else wher
   expect(tailscaleBin({ env: {}, platform: 'linux', onPath: nowhere, exists: () => true })).toBe('tailscale')
   expect(tailscaleBin({ env: {}, platform: 'win32', onPath: nowhere, exists: nowhere })).toBe('tailscale')
 })
+
+test("status: tailscaled's own word, so starting again is not taken for logged out (#108)", () => {
+  expect(parseStatus(JSON.stringify(STATUS)).backend).toBe('Running')
+  const starting = parseStatus(JSON.stringify({ ...STATUS, BackendState: 'Starting' }))
+  expect([starting.running, starting.backend]).toEqual([false, 'Starting'])
+  expect(parseStatus('null').backend).toBe('')
+})

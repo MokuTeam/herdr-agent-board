@@ -41,6 +41,8 @@ import {
   type RemoteView,
   remoteConfig,
   type ServeUse,
+  statusVerdict,
+  WHOIS_GRACE_MS,
 } from '../core/remote.ts'
 import type { Config } from '../core/types.ts'
 import type { Remote } from '../services/remote.ts'
@@ -172,6 +174,9 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
   let certs = false
   let serve: ServeUse | null = null
   let pwaError: string | null = null
+  // Failed looks at Tailscale in a row, and the look that comes sooner after one (#108).
+  let failures = 0
+  let retry: ReturnType<typeof setTimeout> | undefined
   let hosts = new Set<string>()
   let names: { name: string; dnsName: string } | null = null
   let owner: string | null = null
@@ -187,6 +192,9 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
     // An address Tailscale did not know is asked again sooner.
     if (hit && Date.now() - hit.at < (hit.who ? WHOIS_MS : 10_000)) return hit.who
     const who = await whois(address)
+    // Tailscale not answering for a moment (whois fails as an unknown address does) leaves a caller
+    // it vouched for as it was, for a while: an address on the tailnet keeps its device (#108).
+    if (!who && hit?.who && Date.now() - hit.at < WHOIS_GRACE_MS) return hit.who
     callers.set(address, { who, at: Date.now() })
     return who
   }
@@ -368,6 +376,20 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
     }
   }
 
+  /**
+   * A look at Tailscale that failed: while it is one of a few in a row and something listens, the
+   * listeners stay and the next look comes sooner (true); after that, they go (false).
+   */
+  async function waitOut(why: string): Promise<boolean> {
+    failures++
+    const verdict = statusVerdict(failures)
+    if (verdict.down || (!server && !web)) return false
+    o.log(`remote: Tailscale did not answer (${why}); the listeners stay, again in ${verdict.retryMs / 1000} s`)
+    clearTimeout(retry)
+    retry = setTimeout(() => void sync(), verdict.retryMs)
+    return true
+  }
+
   async function syncNow(): Promise<void> {
     const conf = rc()
     if (!conf.on) {
@@ -382,10 +404,14 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
     try {
       status = await tailscaleStatus()
     } catch (err) {
+      if (await waitOut(messageOf(err))) return
       await stop()
       await stopWeb()
       return setError(`Tailscale is not available: ${messageOf(err)}`)
     }
+    // Starting again (a network change) is a moment too; logged out or stopped is not.
+    if (status.backend === 'Starting' && (await waitOut('tailscaled is starting'))) return
+    failures = 0
     const self = status.self
     const ip = self?.ips.find(isV4) ?? self?.ips[0]
     if (!status.running || !self || !ip) {
@@ -460,6 +486,7 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
     hello,
     async close() {
       clearInterval(timer)
+      clearTimeout(retry)
       await stop()
       await stopWeb()
     },
