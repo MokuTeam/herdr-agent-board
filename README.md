@@ -209,6 +209,10 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   back to the input box in the terminal goes. The queue is read from the transcript (Claude
   Code logs it there), so messages typed in the terminal show too, and a reload keeps them. A
   message that could not be sent stays with the reason, "Retry" and "Edit".
+  Before sending to Claude, the board checks for its input box on the visible terminal screen,
+  even when herdr reports idle or done. A dialog or an unrecognized screen refuses the send;
+  the text stays in the failed message and its saved draft. Resolve the dialog in the terminal,
+  then retry explicitly. The board does not dismiss it or resend automatically.
 - Files, folders and links in the thread. A path an agent writes (absolute, `~/...`, a
   `herdr-reveal:` or `file:` link, or relative to the session's folder in `code`, with an
   optional `:line`) becomes a chip once the board finds it on disk; file tool calls in the

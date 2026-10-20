@@ -87,6 +87,7 @@ function twoSessions(box: Sandbox, other: string): void {
     'api snapshot': { result: { snapshot } },
     'agent get p1': { result: { agent: { agent_status: 'idle', agent_session: { value: 's1' } } } },
     'agent get p2': { result: { agent: { agent_status: 'idle', agent_session: { value: other } } } },
+    'agent read': { text: screen() },
     'agent prompt': { result: {} },
   })
 }

@@ -33,7 +33,8 @@ function nonDimText(line: string): string {
 
 /**
  * What the user has typed into the input box: '' when it is empty or shows only a dim
- * placeholder or suggestion, null when there is no input box on screen (a dialog, a picker).
+ * placeholder or suggestion, null when there is no complete current input box on screen (a
+ * dialog, a picker, or an incomplete capture). Never fall back to a box above a newer cursor.
  */
 export function inputDraft(ansiScreen: unknown): string | null {
   const lines = String(ansiScreen ?? '').split(/\r?\n/)
@@ -42,7 +43,20 @@ export function inputDraft(ansiScreen: unknown): string | null {
     if (!plain(i).trimStart().startsWith('❯')) continue
     if (!RULE.test(plain(i - 1))) continue
     const parts: string[] = []
-    for (let j = i; j < lines.length && !(j > i && RULE.test(plain(j))); j++) parts.push(nonDimText(lines[j] ?? ''))
+    let end = i
+    for (; end < lines.length && !(end > i && RULE.test(plain(end))); end++) parts.push(nonDimText(lines[end] ?? ''))
+    if (end === lines.length) return null
+    // A dialog can leave the previous input box above it, with or without a new ❯ cursor.
+    // Its instructions are not the normal prompt's "esc to interrupt" or "tab to accept".
+    const footer = lines
+      .slice(end + 1)
+      .map(stripAnsi)
+      .join('\n')
+    if (
+      /^\s*❯/m.test(footer) ||
+      /\b(?:esc(?:ape)? to (?:cancel|close)|enter to (?:continue|confirm|select|submit))\b/i.test(footer)
+    )
+      return null
     parts[0] = (parts[0] ?? '').replace(/^\s*❯\s?/, '')
     return parts.join('\n').trim()
   }
