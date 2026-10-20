@@ -3,16 +3,24 @@
 // a lane an agent made to the settings, and drag to reorder. Every change goes to config.json at
 // once (POST /api/categories) and comes back over the live stream, to this page, the terminal
 // board and the agents' next brief alike. A new lane is made in the form at the end of the list.
-// Opened at a lane, its row scrolls into view and lights up.
-import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+// Opened at a lane, its row scrolls into view and lights up. Opening it asks the server for the
+// folders of recent sessions, which a lane's "+ folder" offers.
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Swatch } from '../../../../src/core/payload.ts'
 import { api, errorText } from '../../api/client.ts'
+import { launchApi } from '../../api/launch.ts'
 import { useHeld } from '../../hooks/useHeld.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
 import { useRowReorder } from '../../hooks/useRowReorder.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { catOf } from '../../models/board-view.ts'
-import { categoryCounts, draftColor, paletteAfter, profileChoices } from '../../models/categories.ts'
+import {
+  categoryCounts,
+  draftColor,
+  type FolderSources,
+  paletteAfter,
+  profileChoices,
+} from '../../models/categories.ts'
 import { reducedMotion } from '../../models/spring.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { NewIcon } from '../icons.tsx'
@@ -40,7 +48,20 @@ export function CategoriesPanel({ open, focus, onClose, onOpen }: CategoriesPane
   const [draft, setDraft] = useState<{ color: Swatch } | null>(null)
   // The row whose swatches are open; one at a time.
   const [palette, setPalette] = useState<string | null>(null)
+  // Folders of recent sessions (GET /api/launch/options), asked for at each opening.
+  const [recent, setRecent] = useState<string[]>([])
   const latest = useLatest({ canEdit, t, toast })
+
+  useEffect(() => {
+    if (!open) return
+    let here = true
+    void launchApi.options().then(options => {
+      if (here && options) setRecent(options.recent)
+    })
+    return () => {
+      here = false
+    }
+  }, [open])
 
   const edit: CategoryEdit = useCallback(
     async body => {
@@ -73,6 +94,10 @@ export function CategoriesPanel({ open, focus, onClose, onOpen }: CategoriesPane
   const moves = useHeld(ui.moves, reorder.dragging)
   const counts = categoryCounts(shown?.items ?? [], it => catOf(moves, it))
   const profiles = profileChoices(shown?.profiles)
+  const folders: FolderSources = {
+    sessions: (shown?.items ?? []).map(it => ({ ...it, category: catOf(moves, it) })),
+    recent,
+  }
 
   useLayoutEffect(() => {
     if (!focus) return
@@ -117,6 +142,7 @@ export function CategoriesPanel({ open, focus, onClose, onOpen }: CategoriesPane
               onPicked={() => setPalette(null)}
               edit={edit}
               profiles={profiles}
+              folders={folders}
             />
           ))}
         </div>

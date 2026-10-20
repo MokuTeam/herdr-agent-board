@@ -4,14 +4,19 @@
 // delete asking, a swatch picked and the "new category" form being filled in. What the old handlers
 // send is held against the rules the React rows send by (models/categories.ts). Then the reorder:
 // the old drag on the old rows and the React engine (hooks/useRowReorder.ts) on the rows React
-// renders, frame by frame. Last, a lane's usual profile, which the old page never had: its field
-// with two profiles shown, what a pick sends, and none of it with one shown.
+// renders, frame by frame. Then a lane's usual profile, which the old page never had: its field
+// with two profiles shown, what a pick sends, and none of it with one shown. Last, a lane's
+// "+ folder", which is the new-session window's folder field now (the old page had a bare field):
+// left out of the parity above, it runs on the React row alone against the window's fake server.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { BoardCategory, BoardProfile, Swatch } from '../../src/core/payload.ts'
+import { launchApi } from '../../web/src/api/launch.ts'
 import { CategoriesPanel } from '../../web/src/components/categories/CategoriesPanel.tsx'
 import { CategoryDraftView } from '../../web/src/components/categories/CategoryDraft.tsx'
-import { CategoryRow, CategoryRowView } from '../../web/src/components/categories/CategoryRow.tsx'
+import { CategoryRow, CategoryRowView, type RowHandlers } from '../../web/src/components/categories/CategoryRow.tsx'
+import { laneFolder } from '../../web/src/components/categories/lane-folder.ts'
+import { folderAtRest, NO_NOTE } from '../../web/src/components/launch/folder-field.ts'
 import { rowReorder } from '../../web/src/hooks/useRowReorder.ts'
 import { NO_EDITS, withEdit, withEdits } from '../../web/src/models/board-edits.ts'
 import { NO_MOVES, withMove } from '../../web/src/models/board-view.ts'
@@ -19,6 +24,7 @@ import {
   confirmText,
   draftCategory,
   draftColor,
+  type FolderSources,
   paletteAfter,
   profileChoices,
   renamed,
@@ -29,6 +35,7 @@ import {
 import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
 import { board, item, payload, renderInBoard } from './support/board.tsx'
 import { box, type FakeElement, FakeWorld } from './support/fake-dom.ts'
+import { FakeServer } from './support/launch-sides.tsx'
 import {
   addButtonTypes,
   byClass,
@@ -41,7 +48,7 @@ import {
   type Node,
 } from './support/markup.ts'
 import { OldCategories } from './support/old-categories.ts'
-import { first } from './support/react-commit.ts'
+import { asDom, clone, commit, first } from './support/react-commit.ts'
 import { type Host, hostElements, listenLikeReact } from './support/react-events.ts'
 
 const SWATCHES: Swatch[] = [
@@ -129,7 +136,23 @@ function reactBody(scene: Scene): Node[] {
 const rowOf = (nodes: Node[], id: string): Element =>
   find(nodes, el => hasClass(el, 'cat-row') && el.attrs.get('data-id') === id)
 
-/** A React row drawn for a state, as its markup. */
+/**
+ * The lanes without their "+ folder", on both sides: the old page's bare field (`.path-add`), and
+ * the React row's, the new-session window's folder field with its note and its columns, which the
+ * old page never had (its tests, at the end, run the React row alone).
+ */
+function withoutFolderField(nodes: Node[]): Node[] {
+  const field = (n: Node) =>
+    n.kind === 'element' && ['path-add', 'cat-folder', 'field-note', 'folder-cols'].some(c => hasClass(n, c))
+  return nodes
+    .filter(n => !field(n))
+    .map(n => (n.kind === 'element' ? { ...n, children: withoutFolderField(n.children) } : n))
+}
+
+/** A row of the old page's, its "+ folder" left out. */
+const oldRow = (old: OldCategories, id: string): Node[] => withoutFolderField([rowOf(old.body(), id)])
+
+/** A React row drawn for a state, as its markup, its "+ folder" left out. */
 function reactRow(props: Partial<Parameters<typeof CategoryRowView>[0]> & { category: BoardCategory }): Node[] {
   const c = props.category
   const nodes = renderInBoard(
@@ -140,14 +163,15 @@ function reactRow(props: Partial<Parameters<typeof CategoryRowView>[0]> & { cate
       paletteOpen={false}
       lane={c.color}
       title={c.title}
-      path=""
+      folder={folderAtRest(`cat-${c.id}`)}
+      note={NO_NOTE}
       asking={null}
       profiles={null}
       {...props}
     />,
     board(),
   )
-  return nodes
+  return withoutFolderField(nodes)
 }
 
 const proj = CATEGORIES[0] as BoardCategory
@@ -155,22 +179,22 @@ const proj = CATEGORIES[0] as BoardCategory
 describe('categories panel markup parity', () => {
   test('every kind of lane: folders, colors by name or hex, made by an agent, the fallback; counts with a card moved', () => {
     const scene: Scene = { moved: [['b', 'ops']] }
-    expect(canonical(reactBody(scene))).toBe(canonical(oldSide(scene).body()))
+    expect(canonical(withoutFolderField(reactBody(scene)))).toBe(canonical(withoutFolderField(oldSide(scene).body())))
   })
 
   test('in Russian', () => {
     const scene: Scene = { lang: 'ru' }
-    expect(canonical(reactBody(scene))).toBe(canonical(oldSide(scene).body()))
+    expect(canonical(withoutFolderField(reactBody(scene)))).toBe(canonical(withoutFolderField(oldSide(scene).body())))
   })
 
   test('without the board its buttons and fields do nothing', () => {
     const scene: Scene = { canEdit: false }
-    expect(canonical(reactBody(scene))).toBe(canonical(oldSide(scene).body()))
+    expect(canonical(withoutFolderField(reactBody(scene)))).toBe(canonical(withoutFolderField(oldSide(scene).body())))
   })
 
   test('no lanes yet', () => {
     const scene: Scene = { categories: [] }
-    expect(canonical(reactBody(scene))).toBe(canonical(oldSide(scene).body()))
+    expect(canonical(withoutFolderField(reactBody(scene)))).toBe(canonical(withoutFolderField(oldSide(scene).body())))
   })
 })
 
@@ -185,9 +209,7 @@ describe('a row’s states, by the old page’s own clicks', () => {
       const shown = old.list.querySelectorAll('.palette').filter(p => !p.hidden)
       expect(shown.map(p => p.parentElement?.dataset.id ?? '')).toEqual(open ? [open] : [])
     }
-    expect(canonical([rowOf(old.body(), 'proj')])).toBe(
-      canonical(reactRow({ category: proj, count: 2, paletteOpen: true })),
-    )
+    expect(canonical(oldRow(old, 'proj'))).toBe(canonical(reactRow({ category: proj, count: 2, paletteOpen: true })))
   })
 
   test('a swatch picked: the row takes its color at once, the swatches close, the lane is recolored', async () => {
@@ -195,23 +217,21 @@ describe('a row’s states, by the old page’s own clicks', () => {
     await old.world.fire(old.el('.cat-row[data-id="proj"] .swatch'), 'click')
     await old.world.fire(old.el('.cat-row[data-id="proj"] .sw[data-color="orange"]'), 'click')
     expect(old.posts).toEqual([{ op: 'update', id: 'proj', color: 'orange' }])
-    expect(canonical([rowOf(old.body(), 'proj')])).toBe(
-      canonical(reactRow({ category: proj, count: 2, lane: '#FF9500' })),
-    )
+    expect(canonical(oldRow(old, 'proj'))).toBe(canonical(reactRow({ category: proj, count: 2, lane: '#FF9500' })))
   })
 
   test('delete asks first, saying how many sessions then go by folder; the second click deletes', async () => {
     const old = oldSide({})
     await old.world.fire(old.el('.cat-row[data-id="proj"] .cat-del'), 'click')
     const asking = confirmText(2, translator('en'))
-    expect(canonical([rowOf(old.body(), 'proj')])).toBe(canonical(reactRow({ category: proj, count: 2, asking })))
+    expect(canonical(oldRow(old, 'proj'))).toBe(canonical(reactRow({ category: proj, count: 2, asking })))
     await old.world.fire(old.el('.cat-row[data-id="proj"] .cat-del'), 'click')
     expect(old.posts).toEqual([{ op: 'delete', id: 'proj' }])
     expect(old.toasts).toEqual([['Category “Project <Acme> & "co"” deleted', false]])
     // Not confirmed in four seconds: it asks no more.
     await old.world.fire(old.el('.cat-row[data-id="ops"] .cat-del'), 'click')
     await old.world.tick(4000)
-    expect(canonical([rowOf(old.body(), 'ops')])).toBe(
+    expect(canonical(oldRow(old, 'ops'))).toBe(
       canonical(reactRow({ category: CATEGORIES[1] as BoardCategory, count: 0 })),
     )
   })
@@ -504,6 +524,7 @@ function liveRow(category: BoardCategory, profiles: { id: string; title: string 
       disabled={false}
       paletteOpen={false}
       profiles={profiles}
+      folders={{ sessions: [], recent: [] }}
       onSwatch={() => {}}
       onPicked={() => {}}
       edit={async body => {
@@ -630,4 +651,342 @@ describe('a lane’s usual profile', () => {
     }
     expect(profileChoices(undefined)).toBeNull()
   })
+})
+
+// ---------------------------------------------------------------- a lane's "+ folder"
+
+/** What the field offers from: the board's sessions, in the lanes they show in, and recent ones. */
+const FOLDERS: FolderSources = {
+  sessions: [
+    { cwd: 'C:\\Work\\acme', category: 'acme', activity: 50 },
+    { cwd: '/srv/web', category: 'web', activity: 60 },
+    { cwd: 'C:\\Work\\acme-web', category: 'acme', activity: 40 },
+  ],
+  recent: ['C:\\Work\\beta', 'D:\\data'],
+}
+/** A lane with a folder of the fake machine's (support/launch-sides.tsx). */
+const ACME = cat({ id: 'acme', title: 'Acme', paths: ['C:\\Work\\acme'] })
+
+/** The row's parts that do nothing here. */
+const NO_ROW: Omit<RowHandlers, 'folder'> = {
+  pick() {},
+  removePath() {},
+  add() {},
+  remove() {},
+  titleFocus() {},
+  titleChange() {},
+  titleKey() {},
+  titleBlur() {},
+  profile() {},
+}
+
+/**
+ * A lane's row live in a fake DOM against the new-session window's fake server
+ * (support/launch-sides.tsx): its folder field (categories/lane-folder.ts) on the row
+ * <CategoryRowView> draws, drawn again after every event and frame the way React would
+ * (support/react-commit.ts), its handlers React's own (support/react-events.ts). What its edits
+ * send is kept; `shown()` is what a viewer could tell apart of the field.
+ */
+function laneSide(category: BoardCategory = ACME) {
+  const world = new FakeWorld({ viewport: VP })
+  world.install()
+  const savedFetch = Object.getOwnPropertyDescriptor(globalThis, 'fetch')
+  const server = new FakeServer([])
+  Object.defineProperty(globalThis, 'fetch', { value: server.fetch, configurable: true, writable: true })
+  const t = translator('en')
+  const posts: Record<string, unknown>[] = []
+  let drawn: { el: FakeElement; markup: Element; hosts: Host[] } | null = null
+  const lane = laneFolder({
+    t: () => t,
+    dirs: launchApi.dirs,
+    category: () => category,
+    folders: () => FOLDERS,
+    edit: async body => {
+      posts.push(body)
+      return true
+    },
+    find: selector => {
+      const el = drawn?.el.querySelector(selector)
+      return el ? asDom(el) : null
+    },
+  })
+  const context = board()
+  const draw = () => {
+    const node = (
+      <CategoryRowView
+        category={category}
+        count={0}
+        swatches={SWATCHES}
+        disabled={false}
+        paletteOpen={false}
+        lane={category.color}
+        title={category.title}
+        folder={lane.folder.view.get()}
+        note={lane.view.get().note}
+        asking={null}
+        profiles={null}
+        on={{ ...NO_ROW, folder: lane }}
+      />
+    )
+    let hosts: Host[] = []
+    function Probe() {
+      hosts = hostElements(node)
+      return null
+    }
+    renderInBoard(<Probe />, context)
+    const next = first(renderInBoard(node, context))
+    if (!drawn) drawn = { el: world.mount(clone(next)), markup: next, hosts }
+    else {
+      commit(world, drawn.el.node, drawn.markup, next)
+      drawn = { el: drawn.el, markup: next, hosts }
+    }
+    lane.afterDraw()
+  }
+  const stores = () => [lane.view.get(), lane.folder.view.get()]
+  world.afterFlush = () => {
+    for (let i = 0; i < 6; i++) {
+      const before = stores()
+      draw()
+      if (stores().every((s, j) => s === before[j])) return
+    }
+  }
+  draw()
+  const stopReact = listenLikeReact(
+    world.wrap(world.body),
+    () => drawn?.el ?? null,
+    () => drawn?.hosts ?? [],
+  )
+  const el = (selector: string): FakeElement => {
+    const found = drawn?.el.querySelector(selector)
+    if (!found) throw new Error(`no ${selector}`)
+    return found
+  }
+  const field = () => el('input[name="cwd"]')
+  /** Lets the server's answers and their follow-ups come in (no time passes). */
+  const idle = async () => {
+    for (let i = 0; i < 6; i++) await world.flush()
+  }
+  return {
+    world,
+    posts,
+    async focus() {
+      field().focus()
+      await world.fire(field(), 'focusin')
+      await idle()
+    },
+    async type(text: string) {
+      field().value = text
+      await world.fire(field(), 'input')
+      await idle()
+    },
+    /** A key on what has the focus; the event, to see whether it went on to the panel. */
+    async key(key: string) {
+      const target = world.document.activeElement
+      if (!target) throw new Error('nothing has the focus')
+      const event = await world.fire(target, 'keydown', { key })
+      await idle()
+      return event
+    },
+    async click(selector: string, type = 'click') {
+      await world.fire(el(selector), type)
+      await idle()
+    },
+    shown() {
+      const pop = el('.folder-pop')
+      const note = el('.field-note')
+      const cols = el('.folder-cols')
+      const active = world.document.activeElement
+      return {
+        text: field().value,
+        mark: el('.folder-state').getAttribute('data-state'),
+        list: pop.hidden
+          ? null
+          : pop.querySelectorAll('.pop-item').map(x => {
+              const lit = x.className.split(' ').includes('active') ? '> ' : ''
+              return `${lit}${x.querySelector('.pop-name')?.textContent} (${x.querySelector('.pop-detail')?.textContent})`
+            }),
+        note: note.hidden ? null : `${note.className.includes('error') ? 'error: ' : ''}${note.textContent}`,
+        columns: cols.hidden ? null : cols.querySelectorAll('.col-list').map(c => c.getAttribute('aria-label')),
+        focus: active === field() ? 'field' : (active?.getAttribute('data-path') ?? active?.node.tag ?? 'none'),
+      }
+    },
+    async dispose() {
+      try {
+        await world.settle()
+      } finally {
+        stopReact()
+        world.uninstall()
+        if (savedFetch) Object.defineProperty(globalThis, 'fetch', savedFetch)
+        else Reflect.deleteProperty(globalThis, 'fetch')
+      }
+    },
+  }
+}
+
+/** A test on a lane's live row, disposed of after. */
+const onLane = (run: (side: ReturnType<typeof laneSide>) => Promise<void>) => async () => {
+  const side = laneSide()
+  try {
+    await run(side)
+  } finally {
+    await side.dispose()
+  }
+}
+
+describe('a lane’s "+ folder": the new-session window’s folder field', () => {
+  test('in the line of the lane’s folders: the path, its mark and Browse, the list under it; its note and the columns under the line', () => {
+    const row = rowOf(reactBody({}), 'proj')
+    expect(canonical([byClass([row], 'cat-folder')])).toBe(
+      [
+        '<div class="cat-folder">',
+        '  <div class="folder-field">',
+        '    <input aria-autocomplete="list" aria-controls="cat-proj-pop" aria-expanded="false" aria-label="Add a folder" class="path-add" name="cwd" placeholder="+ folder, Enter" role="combobox" spellcheck="false" value="">',
+        '    <span aria-hidden="true" class="folder-state"></span>',
+        '    <button aria-expanded="false" class="folder-browse" type="button">Browse</button>',
+        '  </div>',
+        '  <div class="folder-pop" hidden="" id="cat-proj-pop" role="listbox"></div>',
+        '</div>',
+      ].join('\n'),
+    )
+    expect(elementsIn(row).map(el => el.attrs.get('class'))).toEqual([
+      'cat-main',
+      'cat-sub',
+      'field-note',
+      'folder-cols',
+      'palette',
+    ])
+    expect(canonical(elementsIn(row).slice(2, 4))).toBe(
+      ['<p class="field-note" data-for="cwd" hidden=""></p>', '<div class="folder-cols" hidden=""></div>'].join('\n'),
+    )
+    // Without the board it does nothing; an agent's lane has none.
+    const off = rowOf(reactBody({ canEdit: false }), 'proj')
+    expect(findAll([off], el => el.attrs.has('disabled')).map(el => el.attrs.get('class'))).toContain('path-add')
+    expect(findAll([off], el => hasClass(el, 'folder-browse'))[0]?.attrs.has('disabled')).toBe(true)
+    expect(findAll([rowOf(reactBody({}), 'agent-made')], el => el.attrs.get('name') === 'cwd')).toEqual([])
+  })
+
+  test(
+    'focused empty: the folders of the lane’s sessions first, then recent ones; none the lane has',
+    onLane(async side => {
+      await side.focus()
+      expect(side.shown().list).toEqual([
+        'acme-web (session on the board)',
+        'beta (recent session)',
+        'data (recent session)',
+        'web (session on the board)',
+      ])
+      expect(side.posts).toEqual([])
+    }),
+  )
+
+  test(
+    'typing: the folders that match, under the field; the arrows and Tab complete',
+    onLane(async side => {
+      await side.focus()
+      await side.type('C:\\Work\\ac')
+      expect(side.shown()).toMatchObject({
+        text: 'C:\\Work\\ac',
+        mark: 'wait',
+        list: ['acme (C:\\Work\\acme)', 'acme-web (C:\\Work\\acme-web)'],
+      })
+      await side.key('ArrowDown')
+      await side.key('ArrowDown')
+      expect(side.shown().list).toEqual(['acme (C:\\Work\\acme)', '> acme-web (C:\\Work\\acme-web)'])
+      await side.key('Tab')
+      // A folder name completed goes on with its separator: its own folders come next (none here).
+      expect(side.shown()).toMatchObject({ text: 'C:\\Work\\acme-web\\', list: null, focus: 'field' })
+      // One folder matches: Tab takes it.
+      await side.type('C:\\Work\\be')
+      await side.key('Tab')
+      expect(side.shown()).toMatchObject({ text: 'C:\\Work\\beta\\', focus: 'field' })
+      await side.world.tick(200)
+      expect(side.shown().mark).toBe('ok')
+      expect(side.posts).toEqual([])
+    }),
+  )
+
+  test(
+    'Enter on a folder that is not there, or on a file, adds nothing; the note says so',
+    onLane(async side => {
+      await side.focus()
+      await side.type('C:\\Work\\nope')
+      await side.key('Enter')
+      expect(side.shown()).toEqual({
+        text: 'C:\\Work\\nope',
+        mark: 'bad',
+        list: null,
+        note: 'error: No such folder: C:\\Work\\nope',
+        columns: null,
+        focus: 'field',
+      })
+      await side.type('C:\\Work\\notes.txt')
+      await side.world.tick(200)
+      await side.key('Enter')
+      expect(side.shown()).toMatchObject({ mark: 'bad', note: 'error: A file, not a folder: C:\\Work\\notes.txt' })
+      expect(side.posts).toEqual([])
+    }),
+  )
+
+  test(
+    'Enter on a folder that is there adds it, as the server says it, and the field is empty for the next one; one the lane has is not added again',
+    onLane(async side => {
+      await side.focus()
+      // Enter before the check: it checks first.
+      await side.type('d:\\DATA')
+      await side.key('Enter')
+      expect(side.posts).toEqual([{ op: 'update', id: 'acme', paths: ['C:\\Work\\acme', 'D:\\data'] }])
+      expect(side.shown()).toEqual({ text: '', mark: '', list: null, note: null, columns: null, focus: 'field' })
+      // Checked already, home's folder by ~.
+      await side.type('~\\notes')
+      await side.world.tick(200)
+      expect(side.shown().mark).toBe('ok')
+      await side.key('Enter')
+      expect(side.posts.at(-1)).toEqual({ op: 'update', id: 'acme', paths: ['C:\\Work\\acme', 'C:\\Users\\me\\notes'] })
+      // The lane's own folder, as typed another way.
+      await side.type('c:/work/ACME/')
+      await side.key('Enter')
+      expect(side.posts.length).toBe(2)
+      expect(side.shown()).toMatchObject({ text: '', note: null })
+    }),
+  )
+
+  test(
+    'Browse: the same columns; a folder chosen there (a double click, Enter) is added, the columns close',
+    onLane(async side => {
+      await side.click('.folder-browse')
+      expect(side.shown().columns).toEqual(['This computer'])
+      await side.click('.col-row[data-path="C:\\\\"]')
+      await side.click('.col-row[data-path="C:\\\\Work"]')
+      expect(side.shown()).toMatchObject({ text: 'C:\\Work', columns: ['This computer', 'C:\\', 'C:\\Work'] })
+      await side.click('.col-row[data-path="C:\\\\Work\\\\beta"]')
+      await side.click('.col-row[data-path="C:\\\\Work\\\\beta"]', 'dblclick')
+      expect(side.posts).toEqual([{ op: 'update', id: 'acme', paths: ['C:\\Work\\acme', 'C:\\Work\\beta'] }])
+      expect(side.shown()).toMatchObject({ text: '', mark: '', columns: null, focus: 'field' })
+      // By keys: Enter on the row lit.
+      await side.click('.folder-browse')
+      await side.click('.col-row[data-path="D:\\\\"]')
+      await side.click('.col-row[data-path="D:\\\\data"]')
+      expect(side.shown().focus).toBe('D:\\data')
+      await side.key('Enter')
+      expect(side.posts.at(-1)).toEqual({ op: 'update', id: 'acme', paths: ['C:\\Work\\acme', 'D:\\data'] })
+      expect(side.shown()).toMatchObject({ text: '', columns: null, focus: 'field' })
+    }),
+  )
+
+  test(
+    'Escape: the list first, then the columns, then the field empties and is left; never the panel’s',
+    onLane(async side => {
+      await side.focus()
+      await side.type('C:\\Work\\ac')
+      expect((await side.key('Escape')).stopped).toBe(true)
+      expect(side.shown()).toMatchObject({ text: 'C:\\Work\\ac', list: null, focus: 'field' })
+      await side.click('.folder-browse')
+      await side.click('.col-row[data-path="C:\\\\"]')
+      expect((await side.key('Escape')).stopped).toBe(true)
+      expect(side.shown()).toMatchObject({ text: 'C:\\', columns: null, focus: 'field' })
+      expect((await side.key('Escape')).stopped).toBe(true)
+      expect(side.shown()).toEqual({ text: '', mark: '', list: null, note: null, columns: null, focus: 'body' })
+      expect(side.posts).toEqual([])
+    }),
+  )
 })

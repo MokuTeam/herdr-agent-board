@@ -1,7 +1,8 @@
 // The categories editor's rules: the latin id a new category gets from its title, what the "new
-// category" form creates and in which color, and what a row says and saves (its title, folders,
-// delete, usual profile). The editor is components/categories; the server keeps the categories in
-// config.json.
+// category" form creates and in which color, and what a row says and saves (its title, folders
+// and the folders it offers to add, delete, usual profile). The editor is components/categories;
+// the server keeps the categories in config.json.
+import { folderSuggestions, sameDir } from '../../../src/core/launch/names.ts'
 import type { BoardCategory, BoardProfile, Swatch } from '../../../src/core/payload.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
 
@@ -89,11 +90,35 @@ export function renamed(c: BoardCategory | undefined, value: string): string | n
 /**
  * The lane's folders with one more, as typed (trimmed): `C:\work`, `\\server\share`, `/home/me`
  * and `~/src` alike. The server drops a trailing separator and matches either one
- * (src/adapters/config-file.ts, src/core/categories.ts). Null when nothing is typed.
+ * (src/adapters/config-file.ts, src/core/categories.ts). Null when nothing is typed, or when the
+ * lane has that folder already, however it is written (case, separators, a trailing one).
  */
 export function withPath(c: BoardCategory, value: string): string[] | null {
   const path = value.trim()
-  return path ? [...c.paths, path] : null
+  return path && !c.paths.some(p => sameDir(p, path)) ? [...c.paths, path] : null
+}
+
+/** Where a lane's "+ folder" finds folders to offer: the board's sessions, in the lanes they show in, and recent ones. */
+export interface FolderSources {
+  sessions: { cwd?: string; category?: string; activity?: number }[]
+  /** Folders of recent Claude sessions on this machine (GET /api/launch/options). */
+  recent: string[]
+}
+
+/** How many folders a lane's "+ folder" offers at most. */
+const OFFERED = 10
+
+/**
+ * What a lane's "+ folder" offers while it is empty, best first: the folders of the lane's sessions,
+ * newest first, then of recent sessions, then of the board's other sessions (core/launch/names.ts
+ * folderSuggestions, without the lanes' own folders); none the lane has already.
+ */
+export function laneSuggestions(c: BoardCategory, { sessions, recent }: FolderSources) {
+  const offered = folderSuggestions(
+    { context: { category: c.id }, categories: [], items: sessions, recent },
+    OFFERED + c.paths.length,
+  )
+  return offered.filter(x => !c.paths.some(p => sameDir(p, x.path))).slice(0, OFFERED)
 }
 
 /** The lane's folders without the one whose × was clicked (by its exact text). */

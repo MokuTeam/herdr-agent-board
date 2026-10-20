@@ -9,6 +9,7 @@ import {
   confirmText,
   draftCategory,
   draftColor,
+  laneSuggestions,
   renamed,
   rowText,
   slug,
@@ -135,6 +136,14 @@ describe('a row', () => {
     expect(withoutPath(cat({ id: 'p', paths: ['C:\\a', '/b', 'C:\\a\\b'] }), 'C:\\a')).toEqual(['/b', 'C:\\a\\b'])
   })
 
+  test('a folder the lane has already, however it is written, is not added twice', () => {
+    const c = cat({ id: 'p', paths: ['C:\\work\\acme', '/home/me/src'] })
+    for (const typed of ['C:\\work\\acme', ' c:/Work/ACME/ ', 'C:\\work\\acme\\', '/home/me/src/'])
+      expect([typed, withPath(c, typed)]).toEqual([typed, null])
+    // A folder inside one it has is another folder.
+    expect(withPath(c, 'C:\\work\\acme\\web')).toEqual(['C:\\work\\acme', '/home/me/src', 'C:\\work\\acme\\web'])
+  })
+
   test('the first click on delete asks, saying how many sessions then go by folder', () => {
     expect(confirmText(0, t)).toBe('Delete?')
     expect(confirmText(1, t)).toBe('Delete? 1 session goes by folder')
@@ -146,5 +155,36 @@ describe('a row', () => {
     expect(swatchPressed(blue, cat({ id: 'p', colorName: 'blue' }))).toBe(true)
     expect(swatchPressed(blue, cat({ id: 'p', colorName: '#007aff' }))).toBe(true)
     expect(swatchPressed(blue, cat({ id: 'p', colorName: 'green' }))).toBe(false)
+  })
+})
+
+describe('a lane’s "+ folder" offers, while it is empty', () => {
+  const acme = cat({ id: 'acme', paths: ['C:\\Work\\acme'] })
+
+  test('folders of the lane’s sessions first, newest first, then recent ones, then the board’s others; none the lane has', () => {
+    const sessions = [
+      { cwd: 'C:\\Work\\acme', category: 'acme', activity: 50 },
+      { cwd: '/srv/web', category: 'web', activity: 60 },
+      { cwd: 'C:\\Work\\acme-web', category: 'acme', activity: 40 },
+      { cwd: 'D:\\old\\acme', category: 'acme', activity: 10 },
+    ]
+    const recent = ['C:\\Work\\beta', 'c:/work/acme/', 'C:\\Users\\me\\AppData\\Local\\Temp\\scratch', '/srv/web']
+    expect(laneSuggestions(acme, { sessions, recent })).toEqual([
+      { path: 'C:\\Work\\acme-web', why: 'session' },
+      { path: 'D:\\old\\acme', why: 'session' },
+      { path: 'C:\\Work\\beta', why: 'recent' },
+      { path: '/srv/web', why: 'recent' },
+    ])
+  })
+
+  test('ten at most, once the lane’s own are left out; nothing known, nothing offered', () => {
+    const sessions = Array.from({ length: 14 }, (_, i) => ({
+      cwd: i < 3 ? 'C:\\Work\\acme' : `C:\\Work\\s${i}`,
+      category: 'acme',
+      activity: 100 - i,
+    }))
+    const offered = laneSuggestions(acme, { sessions, recent: [] })
+    expect(offered.map(x => x.path)).toEqual(Array.from({ length: 10 }, (_, i) => `C:\\Work\\s${i + 3}`))
+    expect(laneSuggestions(cat({ id: 'web', paths: ['/srv/web'] }), { sessions: [], recent: [] })).toEqual([])
   })
 })
