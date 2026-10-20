@@ -6,7 +6,7 @@
 import { NAME_MAX } from '../../../src/core/launch/names.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
 import { RenameFieldView } from '../../../web/src/components/RenameField.tsx'
-import { renamer } from '../../../web/src/hooks/useRenameInPlace.ts'
+import { type RenameKind, renamer } from '../../../web/src/hooks/useRenameInPlace.ts'
 import type { ActResult } from '../../../web/src/hooks/useSessionActions.ts'
 import { reducedMotion, Spring } from '../../../web/src/models/spring.ts'
 import { box, type FakeElement, FakeWorld, type RectBox } from './fake-dom.ts'
@@ -26,8 +26,11 @@ export interface RenameBoard {
 
 export interface RenameSide {
   world: FakeWorld
-  /** Rename `key` over the page's element `id` (the card's name, the sheet's head). */
-  start(key: string, id: string): Promise<void>
+  /**
+   * Rename `key` over the page's element `id` (the card's name, the sheet's head); `kind`
+   * 'workspace': its workspace, over its name in the sheet's head (the React board's alone).
+   */
+  start(key: string, id: string, kind?: RenameKind): Promise<void>
   /** The open field's parts. */
   part(selector: '.rename' | '.rename-field' | '.rename-more' | '.rename-claude' | '.rename-claude input'): FakeElement
   page(id: string): FakeElement
@@ -42,11 +45,13 @@ export interface RenameSide {
 
 const PAGE =
   '<div id="page"><article class="card" data-key="s1"><span class="name" id="card-name">acme</span></article>' +
-  '<h2 id="sheet-name">acme</h2><span class="name" id="edge-name">far right</span><p id="outside">x</p></div>'
+  '<h2 id="sheet-name">acme</h2><p class="sheet-meta">workspace <button class="sheet-workspace" id="sheet-workspace">ws</button></p>' +
+  '<span class="name" id="edge-name">far right</span><p id="outside">x</p></div>'
 
 function rects(el: FakeElement): RectBox | null {
   if (el.id === 'card-name') return box(40, 300, 120, 18)
   if (el.id === 'sheet-name') return box(700, 40, 260, 26)
+  if (el.id === 'sheet-workspace') return box(790, 72, 24, 17)
   if (el.id === 'edge-name') return box(900, 500, 60, 18)
   return null
 }
@@ -55,6 +60,8 @@ function rects(el: FakeElement): RectBox | null {
 function computed(el: FakeElement): Record<string, string> {
   if (el.id === 'sheet-name')
     return { font: '600 19px / 1.25 system-ui', letterSpacing: '-0.02em', color: 'rgb(28, 28, 30)' }
+  if (el.id === 'sheet-workspace')
+    return { font: '400 12.5px / 1.35 system-ui', letterSpacing: 'normal', color: 'rgb(99, 99, 102)' }
   if (el.className === 'name')
     return { font: '600 13px / 1.3 system-ui', letterSpacing: '-0.01em', color: 'rgb(0, 0, 0)' }
   return {}
@@ -214,8 +221,8 @@ export function reactRenameSide(board: RenameBoard): RenameSide {
     world,
     log,
     page,
-    async start(key, id) {
-      rename.start(key, asDom(page(id)))
+    async start(key, id, kind) {
+      rename.start(key, asDom(page(id)), kind)
       await world.flush()
     },
     part(selector) {

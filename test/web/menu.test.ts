@@ -214,6 +214,28 @@ test('Restart sits by Put to sleep for a Claude session: also mid-turn, gray whi
   assert.equal(find(cardMenu({ ...claude, session: null }, fresh), 'restart'), undefined)
 })
 
+test('a card in a herdr workspace renames the workspace, by Rename; it goes through herdr', () => {
+  const inWorkspace = { ...idle, workspace: 'Sessions' }
+  const m = cardMenu(inWorkspace, fresh)
+  assert.deepEqual(ids(m).slice(3, 7), ['sleep', 'rename', 'renameWorkspace', 'category'])
+  assert.equal(find(m, 'renameWorkspace')?.label, 'Rename workspace…')
+  assert.equal(
+    find(cardMenu(inWorkspace, { ...fresh, t: translator('ru') }), 'renameWorkspace')?.label,
+    'Переименовать workspace…',
+  )
+  const stale = find(cardMenu(inWorkspace, { ...fresh, canMutate: false }), 'renameWorkspace')
+  assert.equal(stale?.disabled, true)
+  assert.match(stale?.reason ?? '', /fresh data from herdr/)
+  assert.match(
+    find(cardMenu(inWorkspace, { ...fresh, canMutate: false, canEdit: false }), 'renameWorkspace')?.reason ?? '',
+    /connection/,
+  )
+  // A session herdr names no workspace for: nothing to rename.
+  assert.equal(find(cardMenu(idle, fresh), 'renameWorkspace'), undefined)
+  assert.equal(find(cardMenu({ ...idle, workspace: '' }, fresh), 'renameWorkspace'), undefined)
+  assert.equal(find(cardMenu({ ...idle, workspace: null }, fresh), 'renameWorkspace'), undefined)
+})
+
 test('a card’s menu is upstream’s cardMenu at #58 (Restart, Archive), case by case', () => {
   const was = oldFunction(
     oldCode('web/menu-model.js', ['SEP', 'PIN_COLUMNS', 'COLUMN_COLOR', 'tidy', 'cardMenu'], {}, 'b2c5afa'),

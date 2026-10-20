@@ -68,6 +68,8 @@ export interface SheetSlots {
   moreOpen?: boolean | undefined
   /** Rename where the name is, in the head (hooks/useRenameInPlace.ts). */
   onRename?: ((key: string, name: HTMLElement) => void) | undefined
+  /** Rename the session's herdr workspace where its name is, in the head's line (hooks/useRenameInPlace.ts). */
+  onRenameWorkspace?: ((key: string, name: HTMLElement) => void) | undefined
   /** "New here": the launch window, from the button (without fresh data, the toast that says why). */
   onNewSession?: OpenLaunch | undefined
   /** "Terminal": the terminal window of the session, from the button (hooks/useTerminal.ts). */
@@ -103,6 +105,7 @@ export function Sheet(slots: SheetSlots) {
     onHistory,
     onMore,
     onRename,
+    onRenameWorkspace,
     onNewSession,
     onTerminal,
     helpers,
@@ -202,6 +205,7 @@ export function Sheet(slots: SheetSlots) {
           item={shown.item}
           missing={sessionMissing(shown.key, !!itemOf(shown.key), detail.value.status)}
           onRename={name => open && onRename?.(open, name)}
+          onRenameWorkspace={onRenameWorkspace && (name => open && onRenameWorkspace(open, name))}
         />
       }
     >

@@ -6,6 +6,7 @@ import {
   categoryForDir,
   checkBranch,
   checkName,
+  checkWorkspaceName,
   completions,
   defaultWorkspace,
   folderSuggestions,
@@ -41,6 +42,19 @@ test('session names: what a name may be, and herdr’s name for it', () => {
   assert.equal(uniqueSlug('job', new Set()), 'job')
   assert.equal(uniqueSlug('job', new Set(['job', 'job-2'])), 'job-3')
   assert.equal(uniqueSlug('a'.repeat(32), new Set(['a'.repeat(32)])).length, 32)
+})
+
+test('workspace names: what herdr takes as one, a slash first as well', () => {
+  assert.equal(checkWorkspaceName('Billing'), '')
+  assert.equal(checkWorkspaceName(' Ромашка 2 '), '')
+  assert.equal(checkWorkspaceName('/srv work'), '')
+  assert.equal(checkWorkspaceName('x'.repeat(60)), '')
+  assert.equal(checkWorkspaceName('  '), 'rename.err.workspaceEmpty')
+  assert.equal(checkWorkspaceName(null), 'rename.err.workspaceEmpty')
+  assert.equal(checkWorkspaceName('x'.repeat(61)), 'launch.err.nameLong')
+  assert.equal(checkWorkspaceName('two\nlines'), 'launch.err.nameChars')
+  assert.equal(checkWorkspaceName('a‮b'), 'launch.err.nameChars')
+  assert.equal(checkWorkspaceName('--help'), 'rename.err.workspaceDash') // would read as an option
 })
 
 test('folders: absolute paths, completion, the lane a folder falls in', () => {

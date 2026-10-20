@@ -1,5 +1,6 @@
 // Renaming a session where its name is, without a page: where the field goes over the name, whether
-// a rename does anything, and whether it can go to Claude and herdr too. The field itself is
+// a rename does anything, and whether it can go to Claude and herdr too. The same field renames
+// the herdr workspace a session is in, over its name in the sheet's head. The field itself is
 // components/RenameField.tsx (the old page's rename.js).
 import type { Item, Translator } from '../../../src/core/types.ts'
 import { inTurn } from './card.ts'
@@ -30,8 +31,12 @@ export function renameBox(
   }
 }
 
-/** A rename does something when the name changed, or when it goes to Claude and herdr too. */
-export const renameChanges = (name: string, value: string, claudeToo: boolean): boolean => name !== value || claudeToo
+/**
+ * A rename does something when the name changed, or when it goes to Claude and herdr too. An empty
+ * name gives the automatic one back where there is one (`auto`): a workspace has none.
+ */
+export const renameChanges = (name: string, value: string, claudeToo: boolean, auto = true): boolean =>
+  (name !== value || claudeToo) && (auto || name !== '')
 
 /**
  * The choice to rename it in Claude and herdr too: only for a Claude session in a pane (null

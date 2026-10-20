@@ -253,3 +253,85 @@ describe('renaming in place', () => {
     }
   })
 })
+
+// ---------------------------------------------------------------- a workspace (the React board's own)
+
+describe('renaming a session’s workspace in place', () => {
+  /** The React side alone: the old page renamed no workspaces. */
+  const react = (board: RenameBoard, steps: Step[]) => run(() => reactRenameSide(board), steps)
+  const workspace: Step = s => s.start('s1', 'sheet-workspace', 'workspace')
+
+  test('a field over its name in the head, in its type, the name selected; what it does under it; Enter renames it in herdr', async () => {
+    const shots = await react(boardOf([claude()]), [
+      workspace,
+      settle,
+      type('  Billing  '),
+      key('Enter'),
+      answer({ ok: true }),
+    ])
+    expect(shots[1]).toContain('renaming: sheet-workspace')
+    expect(shots[1]).toContain('aria-label="Workspace name"')
+    expect(shots[1]).toContain('font:400 12.5px / 1.35 system-ui')
+    expect(shots[1]).toContain('maxlength="60"')
+    expect(shots[1]).toContain('field value: "ws"')
+    expect(shots[1]).toContain('selected: input.rename-field')
+    expect(shots[1]).toContain('Renames it in herdr, for every session in it')
+    // No automatic name to go back to, and nothing to type into Claude.
+    expect(shots[1]).not.toContain('Empty: back to')
+    expect(shots[1]).not.toContain('rename-claude')
+    expect(shots[4]).toContain('act s1 workspace {"name":"Billing"}')
+    expect(shots[4]).toContain('disabled: true')
+    expect(shots.at(-1)).toContain('toast Workspace renamed: Billing')
+    expect(shots.at(-1)).toContain('renaming: \n')
+  })
+
+  test('empty, the same name or Esc: nothing goes, the field goes', async () => {
+    const shots = await react(boardOf([claude()]), [
+      workspace,
+      type('   '),
+      key('Enter'),
+      workspace,
+      key('Enter'),
+      workspace,
+      type('other'),
+      key('Escape'),
+    ])
+    expect(shots[3]).not.toContain('class="rename"')
+    expect(shots.at(-1)).not.toContain('act ')
+    expect(shots.at(-1)).not.toContain('class="rename"')
+  })
+
+  test('refused: the toast says why, the field stays to try again', async () => {
+    const shots = await react(boardOf([claude()]), [
+      workspace,
+      type('Board'),
+      key('Enter'),
+      answer({ ok: false, error: '“Board” is the name of the board’s own workspace' }),
+    ])
+    expect(shots.at(-1)).toContain('toast error “Board” is the name of the board’s own workspace')
+    expect(shots.at(-1)).toContain('disabled: false')
+    expect(shots.at(-1)).toContain('focus: input.rename-field')
+  })
+
+  test('it goes through herdr: without fresh data, or offline, the toast says why; no workspace, no field', async () => {
+    const stale = await react(boardOf([claude()], { canMutate: false }), [workspace])
+    expect(stale.at(-1)).toContain(`toast error ${t('mobile.readOnly')}`)
+    expect(stale.at(-1)).not.toContain('class="rename"')
+    const off = await react(boardOf([claude()], { canMutate: false, canEdit: false }), [workspace])
+    expect(off.at(-1)).toContain(`toast error ${t('live.off')}`)
+    const none = await react(boardOf([claude({ workspace: '' })]), [workspace])
+    expect(none.at(-1)).not.toContain('class="rename"')
+    expect(none.at(-1)).not.toContain('toast')
+  })
+
+  test('in Russian', async () => {
+    const shots = await react(boardOf([claude()], { t: translator('ru') }), [
+      workspace,
+      type('Счета'),
+      key('Enter'),
+      answer({ ok: true }),
+    ])
+    expect(shots[1]).toContain('Переименует его в herdr — для всех сессий в нём')
+    expect(shots.at(-1)).toContain('toast Workspace переименован: Счета')
+  })
+})

@@ -36,6 +36,7 @@ import { useStore } from '../state/store.ts'
 import { useLatest } from './useLatest.ts'
 import type { OpenLaunch } from './useNewSession.ts'
 import type { QuickLook } from './useQuickLook.ts'
+import type { RenameKind } from './useRenameInPlace.ts'
 import { type SessionActions, useSessionActions } from './useSessionActions.ts'
 
 /** What the listeners open a menu with. */
@@ -182,8 +183,8 @@ export interface ActionDeps {
   newSession: OpenLaunch
   /** The categories panel, at a lane. */
   openCategories(id?: string): void
-  /** Rename where the name is (hooks/useRenameInPlace.ts). */
-  rename(key: string, el: Element | null): void
+  /** Rename where the name is: the session's, or its workspace's (hooks/useRenameInPlace.ts). */
+  rename(key: string, el: Element | null, kind?: RenameKind): void
   /** The terminal window of a session, grown from `el` (hooks/useTerminal.ts). */
   terminal?: ((key: string, el: Element | null) => void) | undefined
   /** The archive (hooks/useArchive.ts): a session off the board, a tidy-up, its panel. */
@@ -227,6 +228,12 @@ export function boardActions(deps: ActionDeps): BoardMenuActions {
       if (el?.isConnected) return deps.rename(key, el)
       dispatch({ type: 'open', key })
       setTimeout(() => deps.rename(key, document.getElementById('sheet-name')), 380)
+    },
+    // The workspace's name is in the sheet's head alone: from a card, there once it opened.
+    renameWorkspace: (key, el) => {
+      if (el?.isConnected) return deps.rename(key, el, 'workspace')
+      dispatch({ type: 'open', key })
+      setTimeout(() => deps.rename(key, document.getElementById('sheet-workspace'), 'workspace'), 380)
     },
     move: (key, to) => actions().moveCard(key, { cat: to.cat ?? null, column: columnOf(to.column) }),
     dismiss: key => actions().dismissAsk(key),
@@ -319,7 +326,7 @@ export interface ContextMenusOptions {
   quickLook: Pick<QuickLook, 'look' | 'lookChanges' | 'lookHistory'>
   newSession: OpenLaunch
   openCategories(id?: string): void
-  rename(key: string, el: Element | null): void
+  rename(key: string, el: Element | null, kind?: RenameKind): void
   /** Sessions on their way and what their menu does that is the launch window's (hooks/useLaunch.ts). */
   launch?: LaunchMenus | null
   /** The terminal window of a session (hooks/useTerminal.ts). */
@@ -398,7 +405,7 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
         },
         newSession: (ctx, from) => page().options.newSession(ctx, from),
         openCategories: id => page().options.openCategories(id),
-        rename: (key, el) => page().options.rename(key, el),
+        rename: (key, el, kind) => page().options.rename(key, el, kind),
         terminal: (key, el) => page().options.terminal?.(key, el),
         get archive() {
           return page().options.archive

@@ -184,7 +184,7 @@ type LaunchView = {
 type BoardPayload = {
   stale: boolean
   launches: LaunchView[]
-  items: { key: string; name: string; autoName: string; profile?: string | null }[]
+  items: { key: string; name: string; autoName: string; profile?: string | null; workspace?: string | null }[]
 }
 
 // Claude's input box as herdr reads it: a rule, the ❯ line with what is typed, a rule.
@@ -513,6 +513,67 @@ test('renaming: the board’s name on the card, back to the automatic one, and C
   assert.equal(((await quiet.json()) as { confirmed: boolean }).confirmed, false)
   assert.ok(!box.calls().some(a => a.join(' ') === 'agent rename p1 quiet-name'))
   assert.equal((await named()).name, 'Quiet name')
+}, 30_000)
+
+test('renaming a workspace: the one the session’s pane is in now, never the board’s own nor to its name, shown at once', async () => {
+  const { box, post, board, url } = await boardServer({ language: 'en' })
+  const renamed = { ...SNAPSHOT, workspaces: [{ workspace_id: 'wA', label: 'Billing work' }] }
+  box.state({
+    ...HERDR,
+    'api snapshot': {
+      result: { snapshot: SNAPSHOT },
+      until: ['workspace rename'],
+      // biome-ignore lint/suspicious/noThenProperty: the fake herdr's reply after the rename (test/support/fake-herdr.ts)
+      then: { result: { snapshot: renamed } },
+    },
+    'workspace rename': { result: null },
+  })
+  const path = '/api/session/s1/workspace'
+  const renames = () => box.calls().filter(a => a[0] === 'workspace' && a[1] === 'rename')
+  const errorOf = async (r: Response) => ((await r.json()) as { error: string }).error
+  // It changes herdr for every session there: only from this page.
+  assert.equal((await fetch(url + path, { method: 'POST', body: '{"name":"x"}' })).status, 403)
+  assert.equal((await post(path, { name: 'x' }, { origin: 'http://evil.example' })).status, 403)
+  // Not a name herdr takes, nor the board's own workspace's: refused before herdr hears of it.
+  for (const name of ['', '   ', '-x', 'x'.repeat(61), 'Board'])
+    assert.equal((await post(path, { name })).status, 409, name)
+  assert.match(await errorOf(await post(path, { name: 'Board' })), /board’s own/)
+  assert.deepEqual(renames(), [])
+
+  assert.equal((await post(path, { name: '  Billing work  ' })).status, 200)
+  assert.deepEqual(renames(), [['workspace', 'rename', 'wA', 'Billing work']])
+  // The board shows the new name without waiting for its next look at herdr.
+  const deadline = Date.now() + 5000
+  while ((await board()).items[0]?.workspace !== 'Billing work') {
+    if (Date.now() > deadline) throw new Error('the new name did not show')
+    await new Promise(r => setTimeout(r, 25))
+  }
+  // The name it has already: nothing to tell herdr.
+  assert.equal((await post(path, { name: 'Billing work' })).status, 200)
+  assert.equal(renames().length, 1)
+
+  // herdr refuses: the page hears why.
+  box.state({ ...HERDR, 'workspace rename': { error: 'no such workspace', code: 'not_found' } })
+  const refused = await post(path, { name: 'Gamma' })
+  assert.equal(refused.status, 409)
+  assert.match(await errorOf(refused), /no such workspace/)
+  // The session's pane is in the board's own workspace now: that one keeps its name.
+  const inBoard = {
+    ...SNAPSHOT,
+    panes: SNAPSHOT.panes.map(p => ({ ...p, workspace_id: 'wB' })),
+    workspaces: [...SNAPSHOT.workspaces, { workspace_id: 'wB', label: 'Board' }],
+  }
+  box.state({ ...HERDR, 'api snapshot': { result: { snapshot: inBoard } }, 'workspace rename': { result: null } })
+  const own = await post(path, { name: 'Mine' })
+  assert.equal(own.status, 409)
+  assert.match(await errorOf(own), /“Board”/)
+  // herdr does not know the workspace its pane is in: nothing to rename.
+  const lost = { ...SNAPSHOT, panes: SNAPSHOT.panes.map(p => ({ ...p, workspace_id: 'wGone' })) }
+  box.state({ ...HERDR, 'api snapshot': { result: { snapshot: lost } } })
+  const gone = await post(path, { name: 'Mine' })
+  assert.equal(gone.status, 409)
+  assert.match(await errorOf(gone), /not in herdr/)
+  assert.equal(renames().filter(a => a[3] === 'Mine').length, 0)
 }, 30_000)
 
 test('a retry starts in the worktree and the workspace the failed launch made, not new ones', async () => {

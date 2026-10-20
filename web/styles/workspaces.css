@@ -1,0 +1,9 @@
+/* herdr workspaces (web/src/components/sheet/SheetHead.tsx): in the line under the session's name
+   in its panel, the workspace's name renames the workspace on a click, in the field that renames
+   a session (components/RenameField.tsx). Every rule here selects by class: the other sheets are
+   upstream's, rule for rule. */
+
+/* A button that reads as the line's own text, lit like the session's name above it. */
+.sheet-workspace { margin: 0 -3px; padding: 0 3px; border: 0; border-radius: 5px; background: none; cursor: text; outline: none; transition: background 120ms ease; }
+.sheet-workspace:hover, .sheet-workspace:focus-visible { background: var(--fill-2); }
+.sheet-workspace:focus-visible { box-shadow: 0 0 0 2px var(--accent); }

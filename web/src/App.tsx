@@ -172,6 +172,7 @@ export function App() {
           onMore: menus.sheetMore,
           moreOpen: menus.moreOpen,
           onRename: rename.start,
+          onRenameWorkspace: (key, name) => rename.start(key, name, 'workspace'),
           onTerminal: terminal.openTerminal,
           helpers,
           onArchive: key => void archive.archiveSession(key),
