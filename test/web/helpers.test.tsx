@@ -217,11 +217,45 @@ describe('the sheet', () => {
   test('no helpers: the strip stays hidden', () => strip([], []))
   test('at work: the runs that run, then the first four, then how many more', () => strip(HELPERS, RUNS))
   test('at work, a few: no "more"', () => strip(HELPERS.slice(0, 2), []))
-  test('none at work: the newest of its own helpers, or of its runs', () => {
+  test('none at work: the newest of its own helpers, a teammate waiting for a message as before', () => {
     const finished = HELPERS.filter(h => h.status !== 'running')
     strip(finished, [])
-    strip(finished, [run('wf_late', { endedAt: NOW - 10 * S, status: 'failed' })])
-    strip([], [run('wf_only', { status: 'done' })])
+  })
+  test('none at work, the newest ended: how and when in its mark’s place, the head as before (#113)', () => {
+    const textOf = (n: Node): string => (n.kind === 'text' ? n.text : n.children.map(textOf).join(''))
+    const ended = (helpers: PublicHelper[], workflows: WorkflowRun[]) => {
+      const old = oldApp({ items: ITEMS, detail: { helpers, workflows } }).strip()
+      addButtonTypes([old])
+      const react = inBoard(
+        <HelpersStrip helpers={helpers} workflows={workflows} onHelper={() => {}} onList={() => {}} />,
+      )
+      const last = findAll(react, el => hasClass(el, 'helper-last'))[0]
+      // The head and the strip around the line are the old ones.
+      for (const rows of [
+        ...findAll([old], el => hasClass(el, 'helper-rows')),
+        ...findAll(react, el => hasClass(el, 'helper-rows')),
+      ])
+        rows.children = []
+      same([old], react)
+      if (!last) throw new Error('no last line')
+      expect(last.attrs.get('class')).toBe('helper-last past')
+      expect(findAll([last], el => hasClass(el, 'h-mark'))).toEqual([])
+      return { title: last.attrs.get('title'), parts: last.children.slice(1).map(textOf) }
+    }
+    const stopped = helper('s9', {
+      status: 'stopped',
+      description: 'Denser board header',
+      endedAt: NOW - 29 * 3600 * S,
+    })
+    expect(ended([stopped], [])).toEqual({
+      title: 'Denser board header · stopped 1 d ago',
+      parts: ['Denser board header', 'stopped 1 d ago'],
+    })
+    expect(ended([], [run('wf_late', { endedAt: NOW - 10 * S, status: 'failed' })]).parts).toEqual([
+      'flow-wf_late',
+      'failed just now',
+    ])
+    expect(ended([], [run('wf_only', { status: 'done' })]).parts).toEqual(['flow-wf_only', 'finished 13 min ago'])
   })
 
   const relations = (links: NonNullable<Item['links']> | null, items = ITEMS) => {
