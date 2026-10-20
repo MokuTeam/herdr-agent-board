@@ -76,6 +76,8 @@ export interface BoardMenuActions {
   terminal(key: string, from: MenuOrigin): unknown
   /** A MokuPilot call whose agent is a fork of the session. */
   mokupilot(key: string, from: MenuOrigin): unknown
+  /** A fork of the session in a new tab: its window (hooks/useFork.ts). */
+  fork(key: string, from: MenuOrigin): unknown
   /** Off the board until Return: its tab closes, Claude keeps the conversation (hooks/useArchive.ts). */
   archive(key: string, from: MenuOrigin): unknown
   /** The sleeping sessions in "Idle" asleep `days` days or more to the archive: in lane `lane`, or in the lanes on show. */
@@ -126,6 +128,7 @@ export interface BoardMenuDeps {
       categories: readonly MenuCategory[]
       terminal?: boolean | undefined
       mokupilot?: boolean | undefined
+      fork?: boolean | undefined
       /** The schedule: a restart of a session on its way grays its Restart. */
       schedules?: readonly ScheduleEntry[] | undefined
     }
@@ -227,6 +230,7 @@ const CARD_ACTIONS = [
   'history',
   'terminal',
   'mokupilot',
+  'fork',
   'archive',
 ] as const
 type CardAction = (typeof CARD_ACTIONS)[number]
@@ -242,6 +246,7 @@ function forCard(board: BoardMenuDeps, key: string, it: Item, el: Element, at: P
       ...ctxOf(board),
       terminal: state.data.terminal !== false,
       mokupilot: !!state.data.mokupilot,
+      fork: !!state.data.fork,
       categories: state.data.categories,
       column: board.column(it),
       category: board.category(it),
@@ -370,7 +375,7 @@ export function keyPoint(r: { left: number; top: number; width: number; height: 
  * decides; the buttons stay in the row, hidden, and keep their state).
  */
 export const SHEET_MORE: readonly (readonly string[])[] = [
-  ['sheet-mokupilot', 'sheet-term', 'sheet-changes', 'sheet-history'],
+  ['sheet-mokupilot', 'sheet-fork', 'sheet-term', 'sheet-changes', 'sheet-history'],
   ['sheet-new'],
   ['sheet-wake', 'sheet-sleep', 'sheet-restart', 'sheet-archive'],
 ]

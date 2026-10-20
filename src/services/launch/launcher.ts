@@ -13,7 +13,9 @@
 // A Claude started by the board gets its id up front (--session-id, {sessionId}), so even its
 // first brief knows the lane. One coming back from the archive is resumed by its id instead
 // (--resume, {resume}): a launch.command without {resume} leaves that to the board's own
-// spawn-agent, and launch.agent whose arguments pick a session cannot do it.
+// spawn-agent, and launch.agent whose arguments pick a session cannot do it. A fork starts a new
+// session with a copy of another one's conversation (`--resume <id> --fork-session` with its own
+// --session-id; {fork} and {sessionId}), under the same rules.
 // It starts in the Claude profile the launch was checked for (request.ts): in the board's own one
 // with the env exactly as inherited; in any other with CLAUDE_CONFIG_DIR set, by herdr's --env on
 // the tab (spawn-agent's --config-dir; herdr's launcher), or in a launcher command's process env.
@@ -78,6 +80,8 @@ export interface LaunchContext {
   readonly sessionId: string | null
   /** The id of the session it resumes (Return, from the archive), null for a new one. */
   readonly resume: string | null
+  /** The id of the session whose conversation it starts with (a fork), null for none. */
+  readonly fork: string | null
   readonly pane: string | null
 }
 
@@ -158,10 +162,14 @@ export function notePane(l: Pick<LaunchContext, 'configDir' | 'profile'>, pane: 
 /**
  * The launcher the config asks for: `launch.command`, else herdr's for `launch.agent`, else the
  * board's spawn-agent. A launcher of one's own resumes a session (`resume`) only when it takes
- * {resume}; else the next one does.
+ * {resume}, and forks one (`fork`) only when it takes {fork}; else the next one does.
  */
-export function launcherFor(spec: LaunchSpec | undefined, { resume = false }: { resume?: boolean } = {}): Launcher {
-  if (spec?.command && (!resume || usesPlaceholder(spec.command, 'resume'))) return commandLauncher(spec)
+export function launcherFor(
+  spec: LaunchSpec | undefined,
+  { resume = false, fork = false }: { resume?: boolean; fork?: boolean } = {},
+): Launcher {
+  const takes = (key: 'resume' | 'fork') => usesPlaceholder(spec?.command, key)
+  if (spec?.command && (!resume || takes('resume')) && (!fork || takes('fork'))) return commandLauncher(spec)
   if (spec?.agent) return herdrLauncher(spec)
   return spawnAgentLauncher(spec ?? {})
 }
@@ -193,9 +201,9 @@ export function herdrLauncher(spec: LaunchSpec): Launcher {
     async start(l, on) {
       const { args } = herdrAgent(spec, l.profileArgs)
       const chooses = picksSession(args)
-      // A session is resumed by its id: not by another agent, nor by arguments that pick one
-      // (launches.ts refuses it before the launch; said here too before a tab is opened).
-      if (l.resume && herdrCannotResume(spec, l.profileArgs))
+      // A session is resumed (or forked) by its id: not by another agent, nor by arguments that
+      // pick one (launches.ts refuses it before the launch; said here too before a tab is opened).
+      if ((l.resume || l.fork) && herdrCannotResume(spec, l.profileArgs))
         throw new LaunchError(t('archive.err.cannotResume'), 'launcher')
       on.step('tab')
       let pane: string
@@ -212,6 +220,10 @@ export function herdrLauncher(spec: LaunchSpec): Launcher {
       if (l.resume) {
         sessionId = l.resume
         args.push('--resume', l.resume)
+      } else if (l.fork) {
+        sessionId = randomUUID()
+        on.session(sessionId)
+        args.push('--resume', l.fork, '--fork-session', '--session-id', sessionId)
       } else if (kind === 'claude' && !chooses) {
         sessionId = randomUUID()
         on.session(sessionId)
@@ -272,6 +284,7 @@ export function commandLauncher(spec: LaunchSpec): Launcher {
         messageFile: '',
         sessionId: '',
         resume: l.resume ?? '',
+        fork: l.fork ?? '',
         profile: l.profile,
         profileDir: l.profileDir,
       }
@@ -314,11 +327,12 @@ export function spawnAgentLauncher(spec: LaunchSpec): Launcher {
     describe: () => ({ kind: 'herdr', agent: 'claude' }),
     async start(l, on) {
       // A line that picks its own session (--resume, in the profile's start command, launch.claude
-      // or the profile's arguments) gets no id from the board; a resumed session has its own.
+      // or the profile's arguments) gets no id from the board; a resumed session has its own. A
+      // fork gets one (spawn-agent refuses a line that picks its own session for it).
       let sessionId: string | null = l.resume
       if (
         !l.resume &&
-        !choosesSession([...(l.profileCommand ?? claudeCommand(spec.claude, spec.args)), ...l.profileArgs])
+        (l.fork || !choosesSession([...(l.profileCommand ?? claudeCommand(spec.claude, spec.args)), ...l.profileArgs]))
       ) {
         sessionId = randomUUID()
         on.session(sessionId)
@@ -334,6 +348,7 @@ export function spawnAgentLauncher(spec: LaunchSpec): Launcher {
           args: [
             ...args,
             ...(messageFile ? ['--brief-file', messageFile] : []),
+            ...(l.fork ? ['--fork', l.fork] : []),
             ...(l.resume ? ['--resume', l.resume] : sessionId ? ['--session-id', sessionId] : []),
           ],
         }),

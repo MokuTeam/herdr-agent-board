@@ -119,6 +119,7 @@ describe('routes', () => {
       'styles/workspaces.css',
       'styles/fold.css',
       'styles/session-head.css',
+      'styles/fork.css',
       'styles/favorites.css',
       'app.js',
     ])

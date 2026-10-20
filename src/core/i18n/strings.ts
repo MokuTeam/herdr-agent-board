@@ -6,6 +6,7 @@
 
 import type { Lang } from '../types.ts'
 import { ARCHIVE_STRINGS } from './archive-strings.ts'
+import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
 import { PROFILE_STRINGS } from './profile-strings.ts'
@@ -1113,3 +1114,5 @@ for (const code of Object.keys(SETUP_STRINGS) as Lang[]) Object.assign(STRINGS[c
 for (const code of Object.keys(PROFILE_STRINGS) as Lang[]) Object.assign(STRINGS[code], PROFILE_STRINGS[code])
 // The archive's too.
 for (const code of Object.keys(ARCHIVE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ARCHIVE_STRINGS[code])
+// And a fork of a session.
+for (const code of Object.keys(FORK_STRINGS) as Lang[]) Object.assign(STRINGS[code], FORK_STRINGS[code])

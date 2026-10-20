@@ -1,6 +1,6 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { type LinkEvent, type LinkItem, lineEvents, newState, relate } from '../../src/core/links.ts'
+import { forkCard, type LinkEvent, type LinkItem, lineEvents, newState, relate } from '../../src/core/links.ts'
 import { type Line, line, T0 } from '../support/helper-fixtures.ts'
 
 const main = (o: Line) => JSON.stringify({ ...o, isSidechain: false })
@@ -97,4 +97,80 @@ test("links between the board's sessions", () => {
   assert.deepEqual(rel.get('c')?.talks, [{ key: 'm', name: 'Master', in: 1, out: 1, at: 16 }])
   assert.deepEqual(rel.get('d1'), { from: null, started: [], talks: [] })
   assert.deepEqual(rel.get('e')?.talks, [])
+})
+
+const SOURCE = '0f8fad5b-d9cb-469f-a165-70867728950e'
+
+test('a fork’s copied lines are its source’s: the first says whose fork it is, none of them is the fork’s own', () => {
+  const st = newState()
+  const copied = (o: Line) =>
+    JSON.stringify({ ...o, isSidechain: false, forkedFrom: { sessionId: SOURCE, messageUuid: 'u' } })
+  // The source's spawn-agent call and what it printed, a message it sent: copied, so no events.
+  assert.deepEqual(lineEvents(copied(line.user(1, 'go')), st), [{ kind: 'fork', of: SOURCE, at: T0 + 1000 }])
+  assert.deepEqual(
+    lineEvents(copied(line.call(2, 'sp', 'Bash', { command: 'spawn-agent -Name case-42 -Cwd C:\\w' })), st),
+    [],
+  )
+  assert.deepEqual(lineEvents(copied(line.result(3, 'sp', 'pane=wP:p3D name=case-42 agent=case-42')), st), [])
+  assert.deepEqual(lineEvents(copied(line.call(4, 'sm', 'SendMessage', { to: 'Master', message: 'hi' })), st), [])
+  // The fork's own work after them counts as any session's.
+  lineEvents(main(line.call(5, 'sp2', 'Bash', { command: 'spawn-agent -Name helper -Cwd C:\\w' })), st)
+  assert.deepEqual(lineEvents(main(line.result(6, 'sp2', 'pane=wP:p4 name=helper agent=helper')), st), [
+    { kind: 'spawn', name: 'helper', pane: 'wP:p4', at: T0 + 5000 },
+  ])
+  // A line that only talks about forkedFrom (in a message's text, its quotes escaped) is no copy.
+  const talk = main(line.user(7, 'the copies say "forkedFrom":{"sessionId":"x"}'))
+  assert.equal(lineEvents(talk, newState()).length, 0)
+})
+
+test('a fork links to the session it is a fork of, whoever started it; a source not on the board links nothing', () => {
+  const items: LinkItem[] = [
+    { key: SOURCE, session: SOURCE, name: 'Acme', pane: 'w:p1' },
+    { key: 'f', session: 'f', name: 'Acme · fork', autoName: 'acme-fork', pane: 'w:p2' },
+    { key: 'h', session: 'h', name: 'Helper', pane: 'w:p3' },
+    { key: 'g', session: 'g', name: 'Orphan', pane: 'w:p4' },
+  ]
+  const events: Record<string, LinkEvent[]> = {
+    // Another session ran spawn-agent --fork: it started the fork, the fork is the source's.
+    h: [{ kind: 'spawn', name: 'acme-fork', pane: 'w:p2', at: 20 }],
+    f: [{ kind: 'fork', of: SOURCE, at: 10 }],
+    g: [{ kind: 'fork', of: 'not-here', at: 10 }],
+  }
+  const rel = relate(items, it => events[it.key])
+  assert.deepEqual(rel.get('f')?.from, { key: SOURCE, name: 'Acme', at: 10, fork: true })
+  assert.deepEqual(rel.get(SOURCE)?.started, [{ key: 'f', name: 'Acme · fork', at: 10, fork: true }])
+  assert.deepEqual(rel.get('h')?.started, [{ key: 'f', name: 'Acme · fork', at: 20 }])
+  assert.equal(rel.get('g')?.from, null)
+})
+
+test('a fork its card names: its events from before it started are its source’s, and it links to that one', () => {
+  const items: LinkItem[] = [
+    { key: SOURCE, session: SOURCE, name: 'Acme', pane: 'w:p1' },
+    { key: 'f', session: 'f', name: 'Acme · fork', pane: 'w:p2', fork: { of: SOURCE, at: 100 } },
+    { key: 'c', session: 'c', name: 'Case', autoName: 'case-42', pane: 'w:p3' },
+  ]
+  const events: Record<string, LinkEvent[]> = {
+    // Its source started Case; the fork's transcript has a copy of that call, from before it started.
+    [SOURCE]: [{ kind: 'spawn', name: 'case-42', pane: 'w:p3', at: 50 }],
+    f: [
+      { kind: 'spawn', name: 'case-42', pane: 'w:p3', at: 50 },
+      { kind: 'sent', to: 'Case', name: '', summary: '', at: 60 },
+      { kind: 'sent', to: 'Case', name: '', summary: '', at: 120 },
+    ],
+  }
+  const rel = relate(items, it => events[it.key])
+  assert.deepEqual(rel.get('f')?.from, { key: SOURCE, name: 'Acme', at: 100, fork: true })
+  assert.deepEqual(rel.get('f')?.started, [])
+  assert.deepEqual(rel.get('f')?.talks, [{ key: 'c', name: 'Case', in: 0, out: 1, at: 120 }])
+  assert.deepEqual(rel.get('c')?.from, { key: SOURCE, name: 'Acme', at: 50 })
+  assert.deepEqual(
+    rel.get(SOURCE)?.started.map(s => s.key),
+    ['f', 'c'],
+  )
+  // A session without a fork on its card goes as before.
+  assert.deepEqual(relate([items[0] as LinkItem], it => events[it.key]).get(SOURCE)?.from, null)
+})
+
+test('a fork’s card says whose fork it is and since when', () => {
+  assert.deepEqual(forkCard(SOURCE, 1234), { forkOf: SOURCE, forkAt: 1234 })
 })

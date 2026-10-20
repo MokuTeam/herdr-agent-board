@@ -135,6 +135,22 @@ const idle = {
 }
 const fresh = { t, canMutate: true, canEdit: true, categories, column: 'idle', category: 'acme' }
 
+test('a card’s menu forks a Claude session where the board can: after the call, gray without fresh herdr data', () => {
+  const claude = { ...idle, agent: 'claude' }
+  const m = cardMenu(claude, { ...fresh, fork: true, mokupilot: true })
+  assert.deepEqual(ids(m).slice(0, 5), ['open', 'focus', 'mokupilot', 'fork', 'write'])
+  assert.equal(find(m, 'fork')?.label, 'Fork…')
+  assert.equal(find(cardMenu(claude, { ...fresh, fork: true, t: translator('ru') }), 'fork')?.label, 'Форк…')
+  // It starts a session through herdr, as a new one does.
+  const stale = find(cardMenu(claude, { ...fresh, fork: true, canMutate: false }), 'fork')
+  assert.equal(stale?.disabled, true)
+  assert.match(stale?.reason ?? '', /fresh data from herdr/)
+  // Not where the board cannot fork, nor for a pane with no Claude session, nor for another agent.
+  assert.equal(find(cardMenu(claude, fresh), 'fork'), undefined)
+  assert.equal(find(cardMenu({ ...claude, session: null }, { ...fresh, fork: true }), 'fork'), undefined)
+  assert.equal(find(cardMenu({ ...claude, agent: 'codex' }, { ...fresh, fork: true }), 'fork'), undefined)
+})
+
 test('a card’s menu offers a MokuPilot call for a Claude session when MokuPilot is here, also with stale herdr data', () => {
   const claude = { ...idle, agent: 'claude' }
   const m = cardMenu(claude, { ...fresh, mokupilot: true })

@@ -2,11 +2,12 @@
 // and the toasts, the keys and the Back button; the chat's files and links, the question forms, the
 // context menus, renaming in place, the "new session" window and the terminal window; the
 // session's helpers in their window; the Claude profiles' panel from Settings; the archive (its
-// panel, sessions off the board and back, Ctrl+Z).
+// panel, sessions off the board and back, Ctrl+Z); a fork of a session in a new tab.
 import { useEffect, useRef, useState } from 'react'
 import { Board } from './components/Board.tsx'
 import { FileChips } from './components/files/FileChip.tsx'
 import { QuickLook } from './components/files/QuickLook.tsx'
+import { ForkPop } from './components/fork/ForkPop.tsx'
 import { HelpersWindow } from './components/helpers/HelpersWindow.tsx'
 import { closeLimits, LimitsPop } from './components/LimitsPop.tsx'
 import { LaunchDialog } from './components/launch/LaunchDialog.tsx'
@@ -24,6 +25,7 @@ import { useContextMenus } from './hooks/useContextMenus.ts'
 import { useDialogHistory } from './hooks/useDialogHistory.ts'
 import { useFileChips } from './hooks/useFileChips.ts'
 import { useFileLinks } from './hooks/useFileLinks.ts'
+import { useFork } from './hooks/useFork.ts'
 import { useHelpers } from './hooks/useHelpers.ts'
 import { useLaunch } from './hooks/useLaunch.ts'
 import { laneContext, useNewSession } from './hooks/useNewSession.ts'
@@ -64,8 +66,14 @@ export function App() {
   const reminders = useSchedule()
   // Sessions off the board and back, the archive's panel; Retry on a session back from it is its Return again.
   const archive = useArchive()
+  // A fork of a session in a new tab: its window, out of the button or the card it was asked from.
+  const fork = useFork()
   // The launch window, and the cards of sessions on their way; without fresh data the board says why.
-  const launch = useLaunch({ onResume: l => void archive.returnSessions([l.resume]) })
+  // Retry on a fork opens its window again with what it was given.
+  const launch = useLaunch({
+    onResume: l => void archive.returnSessions([l.resume]),
+    onFork: (l, from) => l.parent && fork.show(l.parent, from, { name: l.name, message: l.message }),
+  })
   const newSession = useNewSession(launch.open)
   const openNextAttention = useNextAttention()
   // Paths in the chat become chips; a chip, the sheet's Changes and History open the quick look.
@@ -94,6 +102,7 @@ export function App() {
     rename: rename.start,
     launch: launch.menus,
     terminal: terminal.openTerminal,
+    fork: fork.show,
     archive,
   })
   // Settings (the gear): light or dark, the language, where the panels sit, sleeping sessions, the profiles.
@@ -102,7 +111,7 @@ export function App() {
     openNextAttention,
     newSession,
     // They take their keys first; the terminal window too, even while its screen has not the keys.
-    layerOpen: () => menus.menu.isOpen() || launch.isOpen() || terminal.isOpen() || helpers.isOpen(),
+    layerOpen: () => menus.menu.isOpen() || launch.isOpen() || terminal.isOpen() || helpers.isOpen() || fork.isOpen(),
     quickLookOpen: quickLook.isOpen,
     panelOpen: () => !!panels.place.openPanel(),
     closePanel: panels.closeOpen,
@@ -178,6 +187,7 @@ export function App() {
           onTerminal: terminal.openTerminal,
           helpers,
           onArchive: key => void archive.archiveSession(key),
+          onFork: fork.show,
         }}
       />
       <LimitsPop anchor={limitsAnchor} />
@@ -187,6 +197,8 @@ export function App() {
       <Terminal engine={terminal.engine} />
       <HelpersWindow engine={helpers.engine} upgrade={chips.upgrade} />
       <LaunchDialog launch={launch.dialog} refs={launch.refs} />
+      {/* Only while it is open or folding away: the page is as it was otherwise. */}
+      {!fork.hidden && <ForkPop fork={fork} />}
       <ContextMenu engine={menus.menu} />
       <RenameField rename={rename} />
       <Toasts />

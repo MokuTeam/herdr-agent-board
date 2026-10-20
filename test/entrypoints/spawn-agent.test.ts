@@ -856,6 +856,92 @@ test('an agent’s resume is refused before herdr is asked: --profile default fo
   assert.equal(cardOf(other.box, SID), null)
 }, 60_000)
 
+// ---------------------------------------------------------------- --fork (a copy of a conversation)
+
+const FORK = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
+
+test('spawn-agent --fork starts a new session with a copy of the conversation: its own id, named and briefed', async () => {
+  assert.equal((parseArgs(['--name', 'x', '--cwd', '.', '--fork', SID]) as { fork?: string }).fork, SID)
+  assert.throws(() => parseArgs(['--name', 'x', '--cwd', '.', '--fork', 'abc']), /--fork must be a session id/)
+  assert.throws(() => parseArgs(['--name', 'x', '--cwd', '.', '--fork', SID, '--resume', SID]), /--resume or --fork/)
+  const box = await sandbox()
+  box.state(STATE)
+  boardConfig(box, { launch: { claude: ['claude-tg', '--dangerously-skip-permissions'] } })
+  transcript(join(box.env.HOME as string, '.claude'), box.dir)
+  const r = await runSpawn(box, [
+    '--name',
+    'Acme invoices · fork',
+    '--cwd',
+    box.dir,
+    '--workspace',
+    'wA',
+    '--fork',
+    SID,
+    '--session-id',
+    FORK,
+    '--brief',
+    'Try the other way.',
+  ])
+  assert.equal(r.code, 0, r.stderr)
+  const calls = box.calls().map(a => a.join(' '))
+  assert.ok(
+    calls.includes(
+      `pane run wA:p9 claude-tg --dangerously-skip-permissions --resume ${SID} --fork-session --session-id ${FORK}`,
+    ),
+    calls.join('\n'),
+  )
+  // A new session: /rename and the brief, as for any start; its card is the new id's.
+  assert.ok(calls.includes('agent prompt wA:p9 /rename Acme invoices · fork'), calls.join('\n'))
+  assert.ok(calls.includes('agent prompt wA:p9 Try the other way.'), calls.join('\n'))
+  expect(cardOf(box, FORK)).toMatchObject({ profileWant: 'default', forkOf: SID })
+  assert.equal(cardOf(box, SID), null)
+  // Without --session-id it picks one itself, so the card is known all the same.
+  const own = await sandbox()
+  own.state(STATE)
+  transcript(join(own.env.HOME as string, '.claude'), own.dir)
+  const r2 = await runSpawn(own, ['--name', 'x', '--cwd', own.dir, '--workspace', 'wA', '--fork', SID])
+  assert.equal(r2.code, 0, r2.stderr)
+  const run = own
+    .calls()
+    .map(a => a.join(' '))
+    .find(c => c.startsWith('pane run'))
+  assert.match(
+    run ?? '',
+    new RegExp(`^pane run wA:p9 claude --resume ${SID} --fork-session --session-id [0-9a-f-]{36}$`),
+  )
+  // A launch.claude that picks its own session cannot fork another one; nothing is asked of herdr.
+  const box2 = await sandbox()
+  box2.state(STATE)
+  boardConfig(box2, { launch: { claude: ['claude', '--continue'] } })
+  transcript(join(box2.env.HOME as string, '.claude'), box2.dir)
+  const no = await runSpawn(box2, ['--name', 'x', '--cwd', box2.dir, '--workspace', 'wA', '--fork', SID])
+  assert.equal(no.code, 1)
+  assert.match(no.stderr, /picks its own session \(claude --continue\), so it cannot fork/)
+  assert.deepEqual(box2.calls(), [])
+}, 60_000)
+
+test('an agent forks a session in the profile whose folder holds its conversation; none there is refused before herdr', async () => {
+  const { box, dir, work } = await profileBox()
+  transcript(work, dir)
+  const r = await runSpawn(box, ['--name', 'Acme · fork', '--cwd', dir, '--workspace', 'wA', '--fork', SID])
+  assert.equal(r.code, 0, r.stderr)
+  const calls = callList(box)
+  assert.equal(
+    calls[0],
+    `tab create --workspace wA --cwd ${dir} --label Acme · fork --env CLAUDE_CONFIG_DIR=${work} --no-focus`,
+  )
+  assert.match(calls[1] ?? '', new RegExp(`^pane run wA:p9 claude --model sonnet --resume ${SID} --fork-session`))
+  // No conversation of that id in any profile: nothing to fork.
+  const empty = await profileBox()
+  const no = await runSpawn(empty.box, ['--name', 'x', '--cwd', empty.dir, '--workspace', 'wA', '--fork', SID])
+  assert.equal(no.code, 1)
+  assert.equal(
+    no.stderr.trim(),
+    `spawn-agent: The conversation of ${SID} is not on this computer: there is nothing to fork`,
+  )
+  assert.deepEqual(empty.box.calls(), [])
+}, 60_000)
+
 // A profile whose start command starts pi: herdr says pi came up, and the session is named and
 // carded as pi's. pi's session is keyed by its file, whose name holds the id the start gave it.
 const PI_FILE = `/home/me/.pi/agent/sessions/--w--/2026-10-20T08-15-48-746Z_${SID}.jsonl`

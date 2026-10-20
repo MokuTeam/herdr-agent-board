@@ -80,6 +80,8 @@ export interface SheetSlots {
   helpers?: HelpersUi | undefined
   /** "Archive": off the board until Return (hooks/useArchive.ts). */
   onArchive?: ((key: string) => void) | undefined
+  /** "Fork": a fork of the session in a new tab, its window out of the button (hooks/useFork.ts). */
+  onFork?: ((key: string, button: HTMLElement) => void) | undefined
 }
 
 /** The board's card of `key` (a drag's ghost is outside the board). */
@@ -112,6 +114,7 @@ export function Sheet(slots: SheetSlots) {
     onTerminal,
     helpers,
     onArchive,
+    onFork,
   } = slots
   const t = useT()
   const { data, ui, dispatch, canEdit } = useBoardContext()
@@ -187,6 +190,7 @@ export function Sheet(slots: SheetSlots) {
     restart: at(actions.restartSession),
     archive: () => void (open && onArchive?.(open)),
     mokupilot: at(actions.callMokuPilot),
+    fork: button => open && onFork?.(open, button),
     changes: button => open && onChanges?.(open, button),
     history: button => open && onHistory?.(open, item?.cwd ?? '', button),
     newHere: button => open && newSession(item ? { item } : {}, button),
@@ -343,7 +347,7 @@ export function SheetView(props: SheetViewProps) {
       <Composer
         composer={composer}
         availability={availability}
-        buttons={item ? headButtons(item, t, !!data?.mokupilot, schedules) : NO_HEAD_BUTTONS}
+        buttons={item ? headButtons(item, t, !!data?.mokupilot, schedules, !!data?.fork) : NO_HEAD_BUTTONS}
         term={item ? termButton(item, data, t) : undefined}
         changesHidden={!detail.data?.checkout}
         present={!!openItem && detail.status !== 'missing'}

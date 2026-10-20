@@ -383,3 +383,12 @@ export const FileGlyph = () => (
     <path d="M11.5 2.5V6H15" />
   </Glyph>
 )
+
+export const ForkIcon = () => (
+  <Icon>
+    <circle cx="6" cy="4.5" r="1.8" />
+    <circle cx="14" cy="4.5" r="1.8" />
+    <circle cx="10" cy="15.5" r="1.8" />
+    <path d="M6 6.3v.9a3 3 0 0 0 3 3h2a3 3 0 0 0 3-3v-.9M10 10.2v3.5" />
+  </Icon>
+)
