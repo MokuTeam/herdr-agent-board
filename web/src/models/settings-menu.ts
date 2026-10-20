@@ -5,6 +5,7 @@
 // profile folder found, Profiles… opens their panel (components/profiles/ProfilesPanel.tsx). While
 // the remote mode is on (core/remote.ts), Phones… opens theirs (components/phones/PhonesPanel.tsx).
 // How sessions asleep in "Waiting" fold is the board's, for every board (src/core/fold-mode.ts).
+// On a page signed in through the owner's domain, Sign out ends this browser's own login (Call 15).
 import { FOLD_MODES, type FoldMode, isFoldMode } from '../../../src/core/fold-mode.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import type { MenuEntry } from './menu-model.ts'
@@ -28,6 +29,8 @@ export interface SettingsNow {
   fold?: FoldMode | null | undefined
   /** The remote mode is on (the payload's `remote`): Phones… is offered. */
   phones?: boolean
+  /** This page signed in through the owner's domain: Sign out is offered, last. */
+  signOut?: boolean
 }
 
 export function settingsMenu(now: SettingsNow): MenuEntry[] {
@@ -72,6 +75,7 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
           },
         ]
       : []),
+    ...(now.signOut ? [{ separator: true as const }, { id: 'signout', label: t('set.signOut') }] : []),
   ]
 }
 
@@ -85,6 +89,7 @@ export type SettingPick =
   | { kind: 'profiles' }
   | { kind: 'fold'; value: FoldMode }
   | { kind: 'phones' }
+  | { kind: 'signout' }
   | null
 
 export function settingPicked(id: string): SettingPick {
@@ -95,5 +100,6 @@ export function settingPicked(id: string): SettingPick {
   if (id === 'profiles') return { kind: 'profiles' }
   if (kind === 'fold' && isFoldMode(value)) return { kind, value }
   if (id === 'phones') return { kind: 'phones' }
+  if (id === 'signout') return { kind: 'signout' }
   return null
 }
