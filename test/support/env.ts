@@ -18,12 +18,14 @@ export function isolatedHome(): string {
     HOME: process.env.HOME,
     USERPROFILE: process.env.USERPROFILE,
     CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+    HERDR_BOARD_CARDS_DIR: process.env.HERDR_BOARD_CARDS_DIR,
   }
   process.env.APPDATA = join(dir, 'config')
   process.env.LOCALAPPDATA = join(dir, 'state')
   process.env.HOME = home
   process.env.USERPROFILE = home
   delete process.env.CLAUDE_CONFIG_DIR
+  delete process.env.HERDR_BOARD_CARDS_DIR
   // Bun on macOS can cache homedir() before HOME changes. Keep the fixture isolated there
   // too, including modules that already imported the named export; restore it after the test.
   const originalOs = { ...os }

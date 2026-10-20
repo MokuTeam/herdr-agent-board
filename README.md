@@ -1528,6 +1528,27 @@ and its first arguments, one per element, no shell, the board adding `call --cla
 Cards: `%LOCALAPPDATA%\herdr\plugins\agent-board\cards\<session id>.json`. Sessions in the archive:
 `archive\<session id>.json` beside them (see [Archive](#archive)).
 
+**Sharing cards with an isolated preview (#71).** `HERDR_BOARD_CARDS_DIR` selects an absolute
+cards directory for this process. Unset or empty, the layout above is unchanged. Set the preview
+to the authoritative cards folder already used by its `board` CLI and Claude hooks, or explicitly
+set the same folder for every writer. Paths with spaces, other alphabets and `%` are literal
+paths; relative paths and `~` are refused, because processes can have different working folders.
+This does not change config, schedules, archives, uploads or the rest of runtime state.
+
+For example, on macOS/Linux, a preview with its own `APPDATA` and `LOCALAPPDATA` can use:
+
+```sh
+export HERDR_BOARD_CARDS_DIR="$HOME/.local/state/herdr/plugins/agent-board/cards"
+```
+
+Choose the authoritative folder before starting it. There is no copying, merging, migration or
+clearing of old asks. Do not share the whole `LOCALAPPDATA` between running previews: separate
+schedulers must keep separate schedules. `board doctor` and Setup show this process's effective
+cards folder, its source, and its schedule folder. A Unix preview with a custom `LOCALAPPDATA`
+and no explicit cards folder warns that outside writers may use another store. These diagnostics
+cannot infer another process's environment; compare its own `board doctor` output. Installing a
+hook from a different checkout alone does not choose its store or propagate this variable.
+
 Writes to the same card use a per-card directory lock (`<session id>.json.lock`) around the
 read/merge/rename. Contention waits at most two seconds, then reports an error without replacing
 the card. Locks are released on ordinary errors. A writer killed mid-write leaves its lock
