@@ -23,6 +23,7 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
       'A start command can’t set environment variables (“{word}”): the board sets CLAUDE_CONFIG_DIR for the profile itself. Put them in your alias',
     // Install from the Profiles panel (services/profiles.ts installProfile)
     'err.profile.hiddenInstall': 'Show {title} first: the board installs only into shown profiles',
+    'err.profile.herdrHook': 'The board’s hooks are in {title}, but herdr did not put in its own: {error}',
     // the setup check with more than one profile shown (core/setup.ts)
     'setup.inProfile': '{profile}: {check}',
     'setup.profile.missing': '{profile}: its folder {dir} is not there',
@@ -80,7 +81,8 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'prof.addUnknown': 'Add {path}',
     'prof.dir': 'Folder, Enter',
     'prof.add': 'Add a folder somewhere else',
-    'prof.noHooks': 'The board’s hooks are not in {title}’s settings.json: its sessions show no status or title',
+    'prof.noHooks':
+      'The board’s or herdr’s hooks are not in {title}’s settings.json: its sessions show no status, title or conversation',
     'prof.install': 'Install',
     // the archive (services/archive.ts): a session whose profile the board cannot tell is not
     // archived, and one in the archive comes back only in its own profile
@@ -114,6 +116,7 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
       'Команда запуска не может задавать переменные окружения («{word}»): CLAUDE_CONFIG_DIR для профиля задаёт сама доска. Перенеси их в свой алиас',
     // Install from the Profiles panel (services/profiles.ts installProfile)
     'err.profile.hiddenInstall': 'Сначала покажи {title}: доска ставит хуки только в показанные профили',
+    'err.profile.herdrHook': 'Хуки доски в профиле {title} стоят, а свой хук herdr не поставил: {error}',
     // the setup check with more than one profile shown (core/setup.ts)
     'setup.inProfile': '{profile}: {check}',
     'setup.profile.missing': '{profile}: папки {dir} нет',
@@ -171,7 +174,8 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'prof.addUnknown': 'Добавить {path}',
     'prof.dir': 'Папка, Enter',
     'prof.add': 'Добавить папку из другого места',
-    'prof.noHooks': 'Хуков доски нет в settings.json профиля {title}: его сессии не показывают ни статус, ни заголовок',
+    'prof.noHooks':
+      'Хуков доски или herdr нет в settings.json профиля {title}: его сессии не показывают ни статус, ни заголовок, ни переписку',
     'prof.install': 'Установить',
     // the archive (services/archive.ts): a session whose profile the board cannot tell is not
     // archived, and one in the archive comes back only in its own profile

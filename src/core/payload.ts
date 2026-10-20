@@ -46,7 +46,10 @@ export interface BoardProfile {
   inherited: boolean
   /** Its folder is there. */
   exists: boolean
-  /** The board's hooks are in its settings.json; null for a hidden one, which the board does not read. */
+  /**
+   * The hooks its sessions need are in its settings.json: the board's, and herdr's own Claude hook
+   * (from which herdr learns the session a pane runs); null for a hidden one, which the board does not read.
+   */
   hooks: boolean | null
   /** The sessions on the board that run in it now. */
   sessions: number

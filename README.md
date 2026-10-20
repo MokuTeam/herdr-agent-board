@@ -30,8 +30,10 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
    [`spawn-agent`](#spawn-agent), which starts a session in a new herdr tab. It registers the
    Claude Code hooks (SessionStart, UserPromptSubmit) that brief every session about the board,
    and the status line when you have none (usage windows and context fill on the board). It
-   installs the Claude Code skill [`herdr-agents`](#agents) into `~/.claude/skills`. It
-   replaces only its own entries in `~/.claude/settings.json`, keeps a copy of the file before
+   installs the Claude Code skill [`herdr-agents`](#agents) into `~/.claude/skills`, and has herdr
+   install its own Claude hook (`herdr integration install claude`), from which herdr learns which
+   conversation a pane runs; a herdr that cannot is said, and the rest goes on. It replaces only
+   its own entries in `~/.claude/settings.json`, keeps a copy of the file before
    (`settings.json.bak-agent-board`), leaves a command of someone else's name alone, and ends with
    the check below. `~/.local/bin` must be on PATH. Run it again after the plugin moved or was
    updated, or Bun moved: the hooks and the commands point at the plugin's folder and run the Bun
@@ -39,12 +41,14 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
 
    With more than one Claude profile (`CLAUDE_CONFIG_DIR` folders such as `~/.claude-work`) it
    does the same in the `settings.json` of every profile the board shows, each with its own
-   backup, and puts the skill into each one's `skills` folder; a hidden profile is left alone,
+   backup, puts the skill into each one's `skills` folder and has herdr put its hook there
+   (`CLAUDE_CONFIG_DIR` set to that folder); a hidden profile is left alone,
    and a shown one whose folder is gone is skipped, saying so. One `settings.json` that does not
    parse stops it before anything is written. It never touches credentials, `.claude.json` or
    anything else in a profile folder beyond `settings.json`, its backup and
-   `skills/herdr-agents`. A profile shown later gets its hooks and the skill from the install
-   action again, or from Install in the Profiles panel.
+   `skills/herdr-agents` (herdr writes its own `hooks/herdr-agent-state.ps1` and its entry). A
+   profile shown later gets its hooks and the skill from the install action again, or from
+   Install in the Profiles panel.
 
    A session brought back from the archive runs in its own profile again, hidden or not, never in
    another: the one its card reports (or, on a card from before profiles, the only profile
@@ -87,7 +91,9 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
 `board doctor` (or `herdr plugin action invoke agent-board.doctor`) says what is set up and what
 is not, what each missing piece costs and how to fix it: the commands (and whether PowerShell or
 Git Bash finds someone else's of that name first), the hooks and the status line (and whether they
-run this copy of the plugin; with more than one profile shown, in each, by its name), the key,
+run this copy of the plugin; with more than one profile shown, in each, by its name), herdr's own
+Claude hook (in each shown profile too: without it a session's card has no conversation and no
+profile), the key,
 herdr-wake, how new sessions start, MokuPilot, the notifications. The
 web board says it too, quietly: "Setup incomplete" in its toolbar while something the board needs
 does not work (see [Web board](#web-board)).
@@ -265,8 +271,9 @@ it, Esc puts it back, empty clears it; its placeholder is what is typed without 
 `launch.claude`'s program). Under the rows, a hint on what a start command does; below it,
 "Add <folder>" for a folder a session runs in that no profile has, "Add a folder somewhere else"
 (`~` is the home folder; the folder must be there), and, for a shown profile whose `settings.json`
-lacks the board's hooks, a note with Install, which writes the hooks, the status line and the
-agents' skill there as the [install](#setup) does and checks the setup again at once. Hiding a
+lacks the board's hooks or herdr's, a note with Install, which writes the hooks, the status line
+and the agents' skill there and has herdr put in its own, as the [install](#setup) does, and
+checks the setup again at once. Hiding a
 profile takes it out of the switch, out of the profiles a session can be started in, and out of
 Install. Its running sessions still show, with their tag, and their agents can still start helpers
 in it.

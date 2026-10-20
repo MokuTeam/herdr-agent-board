@@ -17,6 +17,8 @@ const configOf = (box: Sandbox): string =>
 const profilesIn = (box: Sandbox): Record<string, unknown>[] =>
   (JSON.parse(readFileSync(configOf(box), 'utf8')) as { profiles: Record<string, unknown>[] }).profiles
 
+const EMPTY = { result: { snapshot: { panes: [], tabs: [], workspaces: [] } } }
+
 /** A sandbox whose home has these profile folders, each with its settings.json or projects/. */
 async function boardWith(folders: Record<string, 'settings.json' | 'projects'>): Promise<Sandbox> {
   const box = await sandbox()
@@ -25,7 +27,7 @@ async function boardWith(folders: Record<string, 'settings.json' | 'projects'>):
     mkdirSync(holds === 'projects' ? join(dir, 'projects') : dir, { recursive: true })
     if (holds === 'settings.json') writeFileSync(join(dir, 'settings.json'), '{}')
   }
-  box.state({ 'api snapshot': { result: { snapshot: { panes: [], tabs: [], workspaces: [] } } } })
+  box.state({ 'api snapshot': EMPTY })
   return box
 }
 
@@ -189,6 +191,7 @@ test('Install from the board writes a shown profile’s hooks and refuses a hidd
     '.claude-work': 'settings.json',
     '.claude-gamedev': 'settings.json',
   })
+  box.state({ 'api snapshot': EMPTY, 'integration install claude': { claudeHook: true } })
   const home = join(box.dir, 'home')
   const dir = (name: string): string => join(home, name)
   const profiles = [
@@ -218,13 +221,17 @@ test('Install from the board writes a shown profile’s hooks and refuses a hidd
   expect(installed.status).toBe(200)
   expect(await installed.json()).toEqual({ ok: true })
   const work = JSON.parse(readFileSync(join(dir('.claude-work'), 'settings.json'), 'utf8'))
-  expect(work.hooks.SessionStart.at(-1)).toEqual(ours)
+  expect(work.hooks.SessionStart[0]).toEqual(ours)
   expect(work.hooks.UserPromptSubmit).toEqual([ours])
   expect(readFileSync(join(dir('.claude-work'), 'settings.json.bak-agent-board'), 'utf8')).toBe('{}')
   // The agents' skill too, as the install action puts it there.
   expect(readFileSync(join(dir('.claude-work'), 'skills', 'herdr-agents', 'SKILL.md'), 'utf8')).toBe(
     readFileSync(join(root, 'skills', 'herdr-agents', 'SKILL.md'), 'utf8'),
   )
+  // herdr's own Claude hook too, after them: herdr wrote it into work's folder (CLAUDE_CONFIG_DIR).
+  expect(existsSync(join(dir('.claude-work'), 'hooks', 'herdr-agent-state.ps1'))).toBe(true)
+  expect(JSON.stringify(work.hooks.SessionStart.at(-1))).toContain('herdr-agent-state.ps1')
+  expect(box.calls().filter(c => c[0] === 'integration')).toEqual([['integration', 'install', 'claude']])
   // Only that profile's folder.
   expect(readdirSync(dir('.claude'))).toEqual(['settings.json'])
 
@@ -245,10 +252,53 @@ test('Install from the board writes a shown profile’s hooks and refuses a hidd
   expect(await unknown.json()).toEqual({ ok: false, error: 'No profile “nope”' })
   expect((await post({ op: 'install', id: 'default' }, {})).status).toBe(403)
   expect(readdirSync(dir('.claude'))).toEqual(['settings.json'])
+  expect(box.calls().filter(c => c[0] === 'integration')).toHaveLength(1)
+}, 20_000)
+
+test('Install from the panel puts herdr’s own Claude hook in too; without it a profile still needs Install', async () => {
+  const box = await boardWith({ '.claude': 'settings.json', '.claude-work': 'settings.json' })
+  box.state({ 'api snapshot': EMPTY, 'integration install claude': { error: 'no such command' } })
+  const home = join(box.dir, 'home')
+  const { url } = await serveBoard(box, {
+    language: 'en',
+    profiles: [
+      { id: 'default', title: 'Private', dir: join(home, '.claude'), color: 'indigo', hidden: false },
+      { id: 'work', title: 'Work', dir: join(home, '.claude-work'), color: 'teal', hidden: false },
+    ],
+  })
+  const install = async (id: string): Promise<unknown> =>
+    (
+      await fetch(`${url}/api/profiles`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-board': '1' },
+        body: JSON.stringify({ op: 'install', id }),
+      })
+    ).json()
+  const hooksOf = async (id: string): Promise<unknown> =>
+    ((await (await fetch(`${url}/api/board`)).json()) as BoardPayload).profiles?.find(p => p.id === id)?.hooks
+
+  // herdr cannot: the board's hooks go in all the same, the answer says what did not.
+  expect(await install('work')).toEqual({
+    ok: false,
+    error:
+      'The board’s hooks are in Work, but herdr did not put in its own: herdr integration install: no such command',
+  })
+  const settings = JSON.parse(readFileSync(join(home, '.claude-work', 'settings.json'), 'utf8'))
+  expect(settings.hooks.UserPromptSubmit).toHaveLength(1)
+  // Without herdr's the panel still offers Install.
+  expect(await hooksOf('work')).toBe(false)
+
+  box.state({ 'api snapshot': EMPTY, 'integration install claude': { claudeHook: true } })
+  expect(await install('work')).toEqual({ ok: true })
+  expect(existsSync(join(home, '.claude-work', 'hooks', 'herdr-agent-state.ps1'))).toBe(true)
+  expect(existsSync(join(home, '.claude', 'hooks'))).toBe(false)
+  expect(await hooksOf('work')).toBe(true)
+  expect(box.calls().filter(c => c[0] === 'integration')).toHaveLength(2)
 }, 20_000)
 
 test('Install from the panel shows at once: the board goes out with the hooks there, and the setup check runs again', async () => {
   const box = await boardWith({ '.claude': 'settings.json', '.claude-work': 'settings.json' })
+  box.state({ 'api snapshot': EMPTY, 'integration install claude': { claudeHook: true } })
   const home = join(box.dir, 'home')
   const { url } = await serveBoard(box, {
     language: 'en',
@@ -408,15 +458,19 @@ test('the board sends every profile with its usage, sessions, hooks and folder, 
   const home = join(box.dir, 'home')
   const own = join(home, '.claude')
   const work = join(home, '.claude-work')
-  // The board's hooks are in work's settings.json, not in default's.
+  // The board's hooks and herdr's own are in work's settings.json, not in default's.
   const ours = {
     hooks: [
       { type: 'command', command: `${quote(process.execPath)} ${quote(join(root, 'src', 'entrypoints', 'hook.ts'))}` },
     ],
   }
+  const script = join(work, 'hooks', 'herdr-agent-state.ps1')
+  mkdirSync(join(work, 'hooks'))
+  writeFileSync(script, '# installed by herdr\n')
+  const herdrs = { hooks: [{ type: 'command', command: `powershell -File "${script}" session` }] }
   writeFileSync(
     join(work, 'settings.json'),
-    JSON.stringify({ hooks: { SessionStart: [ours], UserPromptSubmit: [ours] } }),
+    JSON.stringify({ hooks: { SessionStart: [ours, herdrs], UserPromptSubmit: [ours] } }),
   )
   // The status line's readings, each profile's in its own file; work's usagebar cache too, which its
   // status line's reading beats.

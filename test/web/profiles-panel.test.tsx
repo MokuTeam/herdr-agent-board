@@ -500,7 +500,7 @@ test('a shown profile without the hooks offers Install; a hidden one does not; a
   expect(notesIn(panel)).toEqual([
     {
       id: 'work',
-      text: 'The board’s hooks are not in Work’s settings.json: its sessions show no status or title',
+      text: 'The board’s or herdr’s hooks are not in Work’s settings.json: its sessions show no status, title or conversation',
       button: 'Install',
     },
   ])
@@ -512,7 +512,7 @@ test('a shown profile without the hooks offers Install; a hidden one does not; a
   expect(notesIn(panelOf(dataOf([PRIVATE, WORK], ITEMS, 'ru'), {}, 'ru'))).toEqual([
     {
       id: 'work',
-      text: 'Хуков доски нет в settings.json профиля Work: его сессии не показывают ни статус, ни заголовок',
+      text: 'Хуков доски или herdr нет в settings.json профиля Work: его сессии не показывают ни статус, ни заголовок, ни переписку',
       button: 'Установить',
     },
   ])

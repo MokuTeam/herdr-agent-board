@@ -5,7 +5,7 @@ import { readArchiveLog } from '../adapters/archive-store.ts'
 import { readUsageFile } from '../adapters/claude-home.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { notify } from '../adapters/herdr.ts'
-import { hooksInstalled } from '../adapters/hook-settings.ts'
+import { herdrHookInstalled, hooksInstalled } from '../adapters/hook-settings.ts'
 import { createLinks } from '../adapters/links.ts'
 import { ROOT, usageFileFor } from '../adapters/paths.ts'
 import { forgetProfilePanes } from '../adapters/profile-panes.ts'
@@ -101,7 +101,7 @@ function boardProfiles(deps: Deps, items: readonly Item[]): BoardProfile[] {
     inherited: p.id === set.inherited?.id,
     exists: isFolder(p.dir),
     // A hidden profile's settings.json is not read: Install leaves it alone.
-    hooks: p.hidden ? null : hooksInstalled(p.dir, FILES),
+    hooks: p.hidden ? null : hooksInstalled(p.dir, FILES) && herdrHookInstalled(p.dir),
     sessions: items.filter(i => i.profile === p.id).length,
     limits: profileLimits(deps, p),
     command: commandText(p.command),

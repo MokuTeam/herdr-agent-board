@@ -139,13 +139,12 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     ...archiveRoutes({ deps, launches, items: board.items, find: board.find, refresh }),
     categoriesRoute(),
     // Install from the Profiles panel: the panel's note and "Setup incomplete" follow at once, not
-    // at the next refresh and the next check in up to 10 minutes.
-    profilesRoute(id => {
-      const done = installProfile(deps, id)
-      if (done.ok) {
-        board.publish()
-        setup.again().catch(err => log(`setup check: ${messageOf(err)}`))
-      }
+    // at the next refresh and the next check in up to 10 minutes; also when only herdr's own hook
+    // failed, after the board's went in.
+    profilesRoute(async id => {
+      const done = await installProfile(deps, id)
+      board.publish()
+      setup.again().catch(err => log(`setup check: ${messageOf(err)}`))
       return done
     }),
     ...launchRoutes(launches, board.items),
