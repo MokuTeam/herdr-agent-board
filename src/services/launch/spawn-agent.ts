@@ -11,10 +11,15 @@
 // typed. An agent's resume runs in the profile whose folder holds its conversation, never in the
 // agent's own (resumeProfile); the board's own starts say the profile, as for any start.
 //
+// --fork starts a new session with a copy of another one's conversation (`--resume <id>
+// --fork-session`, with the new session's own --session-id): named and briefed as any start, in
+// the profile that holds that conversation, as a resume is; the session it forks is not touched.
+//
 // The start command may start pi instead of Claude (a profile's `command` of `pi`, or an alias
 // for it): herdr says which agent came up in the tab, and the session is named as that agent
 // names one (core/pi.ts namingOf: Claude's /rename, pi's /name). pi's session is keyed by its
 // file, which herdr reports once pi is up: the profile it is meant for goes on that card.
+import { randomUUID } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, resolve } from 'node:path'
@@ -38,6 +43,7 @@ import {
   shellLine,
   stillTyped,
 } from '../../core/launch/spawn-args.ts'
+import { forkCard } from '../../core/links.ts'
 import { CLAUDE_NAMING, isPiSessionFile, type Naming, namingOf, PI_AGENT } from '../../core/pi.ts'
 import { defaultProfileDir, envRejected, type Profile, type SpawnEnv, spawnEnv } from '../../core/profiles.ts'
 
@@ -128,7 +134,8 @@ function resumeProfile(o: SpawnOptions, session: string, { profiles, env, home, 
   if (holders.length > 1)
     throw new Error(t('spawn.err.resumeMany', { session, profiles: holders.map(p => p.id).join(', ') }))
   const own = holders[0]
-  if (!own) throw new Error(t('archive.err.noTranscript', { name: o.name }))
+  if (!own)
+    throw new Error(o.fork ? t('fork.err.noTranscript', { session }) : t('archive.err.noTranscript', { name: o.name }))
   // As for --profile: herdr's env is taken to be the default profile's, so that one leaves it alone.
   return { ok: true, configDir: sameDir(own.dir, defaultProfileDir(home)) ? null : own.dir, profile: own }
 }
@@ -143,10 +150,10 @@ function startProfile(o: SpawnOptions, facts: StartFacts): Start {
   const { profiles, env, home } = facts
   // The board's own starts (--config-dir, --keep-env) say the profile, of a resume too.
   const boards = o.keepEnv || o.configDir !== undefined
+  // A resume and a fork go on from a conversation: in the profile that holds it.
+  const from = o.resume ?? o.fork
   const target =
-    o.resume && !boards
-      ? resumeProfile(o, o.resume, facts)
-      : spawnEnv(o, inheritedProfileDir(env, home), profiles, home)
+    from && !boards ? resumeProfile(o, from, facts) : spawnEnv(o, inheritedProfileDir(env, home), profiles, home)
   if (!target.ok) throw new Error(refusal(target))
   const start: Start = { configDir: target.configDir, profile: target.profile }
   const { configDir } = start
@@ -186,7 +193,7 @@ export interface SpawnResult {
 }
 
 // A card the start wrote before it knew the agent, with nothing on it but what a start writes.
-const START_ONLY = ['key', 'category', 'updatedAt', 'profileWant']
+const START_ONLY = ['key', 'category', 'updatedAt', 'profileWant', 'forkOf', 'forkAt']
 
 /**
  * pi's session is keyed by its file, not by the id the start gave it: the profile it is meant for
@@ -238,11 +245,17 @@ export async function spawnAgent(
   // A launch.claude that picks its own session (--resume, --continue) cannot resume another one.
   if (o.resume && choosesSession(program))
     throw new Error(`launch.claude picks its own session (${program.join(' ')}), so it cannot resume ${o.resume}`)
+  if (o.fork && choosesSession(program))
+    throw new Error(`launch.claude picks its own session (${program.join(' ')}), so it cannot fork ${o.fork}`)
+  // A fork is a new session: its id is the one given, else one of its own, so its card is known.
+  const sessionId = o.fork ? (o.sessionId ?? randomUUID()) : o.sessionId
   const argv = o.resume
     ? [...program, '--resume', o.resume]
-    : o.sessionId && !choosesSession(program)
-      ? [...program, '--session-id', o.sessionId]
-      : program
+    : o.fork
+      ? [...program, '--resume', o.fork, '--fork-session', '--session-id', String(sessionId)]
+      : sessionId && !choosesSession(program)
+        ? [...program, '--session-id', sessionId]
+        : program
   const command = shellLine(argv, process.platform === 'win32')
 
   // The tab is labelled before Claude runs: a launcher may name things after it (a Telegram topic).
@@ -282,8 +295,9 @@ export async function spawnAgent(
   }
   // The profile it is meant to be in, for the board to check against the one its hooks report: a
   // start that leaves the env as herdr makes it too, as herdr's env may point elsewhere; a resume too.
-  const carded = o.sessionId ?? o.resume
-  if (profile && carded) writeCard(carded, { profileWant: profile.id })
+  const carded = sessionId ?? o.resume
+  // A fork's card says whose fork it is, and since when: its copied lines are older (core/links.ts).
+  if (profile && carded) writeCard(carded, { profileWant: profile.id, ...(o.fork && forkCard(o.fork)) })
   await herdr(['pane', 'run', pane, command])
 
   const deadline = Date.now() + o.timeoutSec * 1000

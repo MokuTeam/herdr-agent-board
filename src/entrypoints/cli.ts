@@ -28,6 +28,9 @@
 //   board sleep <id|name|pane>...   puts those sessions to sleep at once through herdr-wake, a line
 //                            for each: asleep, or kept up and why (services/sleep.ts); with
 //                            --when-free the busy ones go to sleep once they are free
+//   board fork [--name <Name>] [note]   a fork of this session (or --session's): a new session in
+//                            a new tab with a copy of its conversation, started by the web board as
+//                            its Fork does (services/launch/fork.ts); the note is its first message
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync } from 'node:fs'
@@ -63,7 +66,7 @@ import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sleepMany } from '../services/sleep.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | approve <id> | deny <id> | revoke <id>] | doctor] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | approve <id> | deny <id> | revoke <id>] | doctor] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -73,6 +76,13 @@ const si = args.indexOf('--session')
 if (si >= 0) {
   target = args[si + 1]
   args.splice(si, 2)
+}
+// fork: the new session's name.
+let forkName: string | undefined
+const ni = args.indexOf('--name')
+if (ni >= 0) {
+  forkName = args[ni + 1]
+  args.splice(ni, 2)
 }
 // remind, every: wait until the session is free instead of arriving on time, mid-turn if need be.
 const ii = args.indexOf('--idle')
@@ -344,6 +354,7 @@ async function main(): Promise<void> {
   if (cmd === 'remote') return remote()
   if (cmd === 'archive') return archive()
   if (cmd === 'sleep') return sleep()
+  if (cmd === 'fork') return fork()
 
   const s = await resolveSession()
   const now = Date.now()
@@ -507,6 +518,30 @@ async function restart(s: Session): Promise<void> {
     : ''
   console.log(
     `${head}: ${turn}, Claude exits and resumes in the same pane (MCP servers, settings, hooks, skills and CLAUDE.md load anew, the conversation stays), then gets "${prompt}"${stops} · cancel: board unschedule ${entry.id}${await schedulerNote()}`,
+  )
+}
+
+/**
+ * `board fork [--name <Name>] [note]`: a fork of this session (or --session's), started by the web
+ * board as its Fork button does (services/launch/fork.ts): a new tab with a copy of the
+ * conversation, the session's folder, lane, workspace and profile; the session itself goes on as
+ * it is. Without a web board answering there is no fork: it is the board that starts it.
+ */
+async function fork(): Promise<void> {
+  const s = await resolveSession()
+  if (cfg.web === false) throw new Error('board fork goes through the web board, and config.json turns it off')
+  const res = await fetch(`http://127.0.0.1:${cfg.port ?? 12422}/api/session/${encodeURIComponent(s.key)}/fork`, {
+    method: 'POST',
+    headers: { 'X-Board': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...(forkName && { name: forkName }), ...(text && { message: text }) }),
+    signal: AbortSignal.timeout(20_000),
+  }).catch(() => null)
+  if (!res) throw new Error('the web board does not answer, and board fork goes through it (board doctor)')
+  const body: unknown = await res.json().catch(() => null)
+  if (!isRecord(body) || body.ok !== true)
+    throw new Error(String((isRecord(body) && body.error) || `the web board answered ${res.status}`))
+  console.log(
+    `ok · fork "${String(body.name)}" of ${s.name || s.key.slice(0, 8)} starts in a new tab with a copy of the conversation; its card is on the board`,
   )
 }
 

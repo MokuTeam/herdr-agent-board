@@ -189,6 +189,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     terminalRoute({ cfg, terminals, find: board.find, publish: board.publish }),
     ...sessionRoutes({
       deps,
+      launches,
       find: board.find,
       items: board.items,
       refresh,

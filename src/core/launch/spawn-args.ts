@@ -6,7 +6,7 @@ import { t } from '../lang.ts'
 import { checkName } from './names.ts'
 
 export const USAGE =
-  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--pane <pane id>] [--profile <id>]'
+  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>] [--pane <pane id>] [--profile <id>]'
 
 /** What spawn-agent was asked to start. */
 export interface SpawnOptions {
@@ -20,6 +20,11 @@ export interface SpawnOptions {
   sessionId?: string
   /** A session that ended, brought back by its id (the board's archive): no /rename, its name stays. */
   resume?: string
+  /**
+   * A session whose conversation the new one starts with (`--resume <id> --fork-session`): a new
+   * session, named and briefed as any other; the one it forks goes on as it was.
+   */
+  fork?: string
   pane?: string
   /** The Claude profile to start in, not the one of the agent that runs spawn-agent. */
   profile?: string
@@ -45,6 +50,7 @@ const OPTIONS: Record<string, Key> = {
   timeoutsec: 'timeoutSec',
   sessionid: 'sessionId',
   resume: 'resume',
+  fork: 'fork',
   pane: 'pane',
   profile: 'profile',
   configdir: 'configDir',
@@ -105,7 +111,10 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     throw new Error(`--resume must be a session id (a UUID), not "${out.resume}"`)
   if (out.resume !== undefined && out.sessionId !== undefined)
     throw new Error('give --session-id or --resume, not both')
-  const { label, briefFile, brief, workspace, sessionId, resume, pane, profile, configDir } = out
+  if (out.fork !== undefined && !UUID.test(out.fork))
+    throw new Error(`--fork must be a session id (a UUID), not "${out.fork}"`)
+  if (out.fork !== undefined && out.resume !== undefined) throw new Error('give --resume or --fork, not both')
+  const { label, briefFile, brief, workspace, sessionId, resume, fork, pane, profile, configDir } = out
   if ([profile !== undefined, configDir !== undefined, keepEnv].filter(Boolean).length > 1)
     throw new Error('give one of --profile, --config-dir and --keep-env')
   return {
@@ -118,6 +127,7 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     ...(workspace !== undefined && { workspace }),
     ...(sessionId !== undefined && { sessionId }),
     ...(resume !== undefined && { resume }),
+    ...(fork !== undefined && { fork }),
     ...(pane !== undefined && { pane }),
     ...(profile !== undefined && { profile }),
     ...(configDir !== undefined && { configDir }),

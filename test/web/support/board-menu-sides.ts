@@ -143,6 +143,7 @@ function boardOf(s: BoardScene, log: string[], menu: unknown): BoardMenuDeps & {
     history: note('do.history'),
     terminal: note('do.terminal'),
     mokupilot: note('do.mokupilot'),
+    fork: note('do.fork'),
     archive: note('do.archive'),
     tidy: note('do.tidy'),
     archiveOpen: note('do.archiveOpen'),

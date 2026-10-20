@@ -178,6 +178,8 @@ export interface LinkedSession {
   from: boolean
   /** This one started it. */
   started: boolean
+  /** One is a fork of the other (it started with a copy of the other's conversation). */
+  fork?: true
   in: number
   out: number
   at: number
@@ -191,12 +193,13 @@ export function linkedSessions(it: Pick<Item, 'links'>, onBoard: (key: string) =
   const get = (key: string): LinkedSession => {
     const known = by.get(key)
     if (known) return known
-    const made = { key, from: false, started: false, in: 0, out: 0, at: 0 }
+    const made: LinkedSession = { key, from: false, started: false, in: 0, out: 0, at: 0 }
     by.set(key, made)
     return made
   }
-  if (l.from) Object.assign(get(l.from.key), { from: true, at: l.from.at })
-  for (const s of l.started ?? []) Object.assign(get(s.key), { started: true, at: Math.max(get(s.key).at, s.at) })
+  if (l.from) Object.assign(get(l.from.key), { from: true, at: l.from.at, ...(l.from.fork && { fork: true }) })
+  for (const s of l.started ?? [])
+    Object.assign(get(s.key), { started: true, at: Math.max(get(s.key).at, s.at), ...(s.fork && { fork: true }) })
   for (const x of l.talks ?? []) Object.assign(get(x.key), { in: x.in, out: x.out, at: Math.max(get(x.key).at, x.at) })
   return [...by.values()].filter(p => onBoard(p.key)).sort((a, b) => Number(b.from) - Number(a.from) || b.at - a.at)
 }

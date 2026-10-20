@@ -165,6 +165,9 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   profile (the one its `CLAUDE_CONFIG_DIR` points to): a running MokuPilot takes the call over in
   its own env, so a fork of a session in another profile would run in the wrong account. The board
   refuses that call before anything starts, saying so.
+- "Fork" (the sheet, a card's menu): a new session in a new tab that starts with a copy of this
+  one's conversation, so it knows what this one knows while this one goes on as it was; see
+  [Fork](#fork).
 - The sheet's place and size are the viewer's own (kept in this browser): docked right, left or
   at the bottom, flush with that edge like a sidebar, where the board makes room for it (a window
   too narrow for that keeps the board's columns and lays the sheet over them), or floating over
@@ -473,7 +476,9 @@ How it starts, by `launch` in config.json:
   each other element one argument, with `{name}`, `{label}`, `{cwd}`, `{workspace}` (herdr
   workspace id), `{workspaceLabel}`, `{category}`, `{message}`, `{messageFile}` (the first message
   in a UTF-8 file), `{sessionId}`, `{resume}` (the id of a session coming back from the
-  [archive](#archive), empty for a new one), `{profile}` (the Claude profile's id) or `{profileDir}` (its
+  [archive](#archive), empty for a new one), `{fork}` (the id of the session a [fork](#fork)
+  starts from, empty otherwise; a launcher without it leaves forks to the board's own
+  spawn-agent), `{profile}` (the Claude profile's id) or `{profileDir}` (its
   folder) filled in; a nested list is left out when a value in it is empty. Nothing from the request becomes a program or an option: values only fill those
   places. It runs with `HERDR_WORKSPACE_ID` set to the chosen workspace (the board itself lives
   in a workspace of its own) and should print `pane=<pane id>` when the session is up; it fails
@@ -531,7 +536,8 @@ puts it on PATH; it is `bun src/entrypoints/spawn-agent.ts`):
 ```
 spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
             [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
-            [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--pane <herdr pane id>] [--profile <id>]
+            [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>]
+            [--pane <herdr pane id>] [--profile <id>]
 ```
 
 PowerShell's spelling works too: `-Name`, `-Cwd`, `-Label`, `-BriefFile`, `-Brief`, `-Workspace`,
@@ -553,6 +559,10 @@ start another. A `/rename` that does not take is only a warning. `--pane` starts
 pane instead of a new tab; it must be at a shell prompt, not running an agent. `--resume` brings
 back a session that ended (`launch.claude` with `--resume <uuid>`, run in the folder the session
 ran in): it keeps its name, so no `/rename` is typed; the board's [archive](#archive) uses it.
+`--fork <uuid>` starts a new session with a copy of that one's conversation
+(`launch.claude` with `--resume <uuid> --fork-session --session-id <its own id>`, the id given
+with `--session-id` or one of its own): named and briefed as any start, in the profile whose folder
+holds that conversation, as a resume is; the board's [Fork](#fork) uses it.
 
 With more than one Claude profile (`CLAUDE_CONFIG_DIR` folders such as `~/.claude-work`), a
 session an agent starts keeps that agent's profile, the one its own `CLAUDE_CONFIG_DIR` points to,
@@ -607,6 +617,36 @@ card goes, a launcher it ran is left running (and finishes or fails on its own),
 that comes up lands in the lane its folder gives, or in the chosen one when the board had given
 it its session id (the herdr path, or `{sessionId}`). A first message file left behind is
 removed when the board starts again.
+
+## Fork
+
+"Fork" in the sheet's row of actions (or under "⋯") and in a Claude session's card menu: a small
+window grown out of the button or the card, with the fork's name (the session's with "· fork"
+after it, ready to type over) and an optional first message. Fork (Enter in the name, Ctrl+Enter
+in the message) starts a new session in a new tab of the session's workspace, in its folder (the
+one its conversation was recorded in: Claude resumes a session only from there), lane and Claude
+profile, hidden or not, as "New here" keeps it: `claude --resume <id> --fork-session` with an id
+of its own, so its card has its lane before Claude starts. It goes through the board's launches:
+its card shows at once, under "Working" while it starts, and a failure says why on it; Retry
+opens the window again with what it was given. The session itself is not touched: nothing is
+typed into it, its card stays as it was.
+
+The fork's card says at its foot whose fork it is, and the sheet's "Sessions" row marks the two
+with the fork's glyph: a fork's transcript starts with a copy of its source's conversation, each
+copied line marked `forkedFrom` with the source's id, so the board reads the link from the fork
+itself, whoever made it (the board, an agent with `spawn-agent --fork` or `board fork`, or
+`claude --resume <id> --fork-session` by hand). Those copied lines are the source's: the
+sessions it started and the messages it sent are not counted again for the fork.
+
+The board offers Fork where its launcher can make one: its own spawn-agent, a `launch.command`
+that takes `{fork}` (one without it leaves forks to spawn-agent), or `launch.agent` for Claude
+without arguments that pick the session (`--resume`, `--continue`, `--session-id`). An agent forks
+its own session (or another's, with `--session`) with `board fork [--name "<Name>"] ["<note>"]`:
+the web board starts it as its Fork does, the note is its first message.
+
+`POST /api/session/<key>/fork` with `{ name?, message? }` (the page only, like a launch), and the
+board payload's `fork`. Code: `src/services/launch/fork.ts`, `web/src/hooks/useFork.ts`,
+`web/src/components/fork/ForkPop.tsx`.
 
 ## When a card is under "Needs me"
 
@@ -788,6 +828,8 @@ in-process teammates. Sessions in herdr also hand work to each other: one starts
   subagent's). Backspace goes back to the list, Esc closes.
 - "Sessions" among the card's fields: each linked session once, marked when it started this one
   or this one started it, with the messages each way. A name opens that session.
+- A fork (see [Fork](#fork)) is linked to the session it is a fork of, marked with the fork's
+  glyph, whoever started it.
 - In the conversation, a call that works with others is a line of its own: a subagent, fork or
   workflow it started (it opens the helper, with its status and clock), a message it sent to
   another session or a teammate (it opens to the whole text), a session it started with
@@ -1272,6 +1314,9 @@ board sleep <id|name|pane>... [--when-free]
                           several sessions to sleep at once, a line for each: asleep, or kept
                           up and why; --when-free: the busy ones once they are free; see
                           Several to sleep at once
+board fork [--name "<Name>"] ["<note>"]
+                          a fork of this session in a new tab, with a copy of its conversation
+                          (the web board starts it; the note is its first message); see Fork
 --session <id|name|pane>  for another session's card
 board doctor              what is set up on this computer, and what is missing
 spawn-agent --name <Name> --cwd <folder> [--brief-file <file>]   a new session in a herdr tab

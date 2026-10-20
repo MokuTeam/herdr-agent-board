@@ -118,6 +118,8 @@ export interface HeadButtons {
   restartTitle: string | undefined
   /** "Call in MokuPilot": with MokuPilot here, for a Claude session with an id. */
   mokupilotHidden: boolean
+  /** "Fork": where the board can fork, for a Claude session with an id (its conversation is resumed by it). */
+  forkHidden: boolean
   /** "Archive": for a Claude session with an id (Return resumes it by that id). */
   archiveHidden: boolean
   /** Why it cannot go to the archive now (as in its menu), or what archiving does; none before a session was ever open. */
@@ -133,19 +135,22 @@ export const NO_HEAD_BUTTONS: HeadButtons = {
   restartHidden: true,
   restartTitle: undefined,
   mokupilotHidden: true,
+  forkHidden: true,
   archiveHidden: true,
   archiveTitle: undefined,
 }
 
 /**
  * `mokupilot`: the board says MokuPilot is here for calls with a fork of a session; `schedules`:
- * the board's (a restart of it on its way says so on Restart).
+ * the board's (a restart of it on its way says so on Restart); `fork`: the board can fork a
+ * session into a new tab.
  */
 export function headButtons(
   it: Item,
   t: Translator,
   mokupilot = false,
   schedules: readonly ScheduleEntry[] = [],
+  fork = false,
 ): HeadButtons {
   const pending = restartPending(schedules, it.key) ? restartOf(schedules, it.key) : undefined
   // Gray with the reason while it works (a turn, a dialog, its helpers), as in its menu.
@@ -158,6 +163,7 @@ export function headButtons(
     restartHidden: !!it.sleeping || !it.session || it.agent !== 'claude',
     restartTitle: pending ? `${t('sheet.restartPending')}. ${restartText(pending, t)}` : t('sheet.restartHint'),
     mokupilotHidden: !(mokupilot && it.session && it.agent === 'claude'),
+    forkHidden: !(fork && it.session && it.agent === 'claude'),
     archiveHidden: !it.session || it.agent !== 'claude',
     archiveTitle: why ? t(why) : t('archive.sheetHint'),
   }

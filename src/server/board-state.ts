@@ -23,6 +23,7 @@ import type { SetupSummary } from '../core/setup.ts'
 import type { Item } from '../core/types.ts'
 import { collect } from '../services/board.ts'
 import type { Deps } from '../services/deps.ts'
+import { canFork } from '../services/launch/fork.ts'
 import type { Launches } from '../services/launch/launches.ts'
 import { hooksInPlace } from '../services/profiles.ts'
 import { type Terminals, terminalOn } from '../services/terminals.ts'
@@ -181,6 +182,8 @@ export function createBoardState({
       shells: terminalOn(cfg) ? (terminals?.keys() ?? []) : [],
       // mokupilot: whether a session's sheet offers a MokuPilot call with a fork of it.
       mokupilot: mokupilot?.() ?? false,
+      // fork: whether the board can fork a session into a new tab with its launcher.
+      fork: canFork(cfg),
       setup: setup?.() ?? null,
       profiles,
       // What a profile without a start command types: the Profiles panel's placeholder.

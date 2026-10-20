@@ -187,6 +187,8 @@ export interface ActionDeps {
   rename(key: string, el: Element | null, kind?: RenameKind): void
   /** The terminal window of a session, grown from `el` (hooks/useTerminal.ts). */
   terminal?: ((key: string, el: Element | null) => void) | undefined
+  /** A fork of a session: its window, grown from `from` (hooks/useFork.ts). */
+  fork?: ((key: string, from: MenuOrigin | null) => void) | undefined
   /** The archive (hooks/useArchive.ts): a session off the board, a tidy-up, its panel. */
   archive?: ArchiveMenus | undefined
 }
@@ -245,6 +247,7 @@ export function boardActions(deps: ActionDeps): BoardMenuActions {
     history: (key, from) => deps.quickLook.lookHistory(key, deps.item(key)?.cwd ?? '', elementFrom(from)),
     terminal: (key, from) => deps.terminal?.(key, elementFrom(from)),
     mokupilot: key => actions().callMokuPilot(key),
+    fork: (key, from) => deps.fork?.(key, from),
     archive: key => deps.archive?.archiveSession(key),
     tidy: (days, lane) => deps.archive?.archiveMany((deps.archive?.tidyItems(days, lane) ?? []).map(i => i.key)),
     archiveOpen: () => deps.archive?.openPanel(),
@@ -275,6 +278,8 @@ export interface SheetMoreDeps {
   newSession: OpenLaunch
   /** The terminal window of the open session, out of the button. */
   terminal?: ((key: string, el: Element | null) => void) | undefined
+  /** A fork of the open session, its window out of the button. */
+  fork?: ((key: string, from: MenuOrigin | null) => void) | undefined
   /** The pointer is a finger. */
   coarse(): boolean
 }
@@ -312,6 +317,7 @@ export function sheetMoreMenuFrom(deps: SheetMoreDeps): (button: HTMLElement, ke
           return void (open && deps.quickLook.lookHistory(open, deps.item(open)?.cwd ?? '', button))
         if (id === 'sheet-changes') return void (open && deps.quickLook.lookChanges(open, button))
         if (id === 'sheet-term') return void (open && deps.terminal?.(open, button))
+        if (id === 'sheet-fork') return void (open && deps.fork?.(open, button))
         if (id === 'sheet-new') {
           const it = open ? deps.item(open) : undefined
           return void (open && deps.newSession(it ? { item: it } : {}, button))
@@ -371,6 +377,8 @@ export interface ContextMenusOptions {
   launch?: LaunchMenus | null
   /** The terminal window of a session (hooks/useTerminal.ts). */
   terminal?: ((key: string, el: Element | null) => void) | undefined
+  /** A fork of a session: its window (hooks/useFork.ts). */
+  fork?: ((key: string, from: MenuOrigin | null) => void) | undefined
   /** The archive: a card's Archive, the tidy-ups, the panel (hooks/useArchive.ts). */
   archive?: ArchiveMenus | undefined
 }
@@ -431,6 +439,7 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
             categories: data?.categories ?? [],
             terminal: data?.terminal,
             mokupilot: data?.mokupilot,
+            fork: data?.fork,
             schedules: data?.schedules,
           },
         }
@@ -458,6 +467,7 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
         openCategories: id => page().options.openCategories(id),
         rename: (key, el, kind) => page().options.rename(key, el, kind),
         terminal: (key, el) => page().options.terminal?.(key, el),
+        fork: (key, from) => page().options.fork?.(key, from),
         get archive() {
           return page().options.archive
         },
@@ -479,6 +489,7 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
       },
       newSession: (ctx, from) => latest.current.options.newSession(ctx, from),
       terminal: (key, el) => latest.current.options.terminal?.(key, el),
+      fork: (key, from) => latest.current.options.fork?.(key, from),
       coarse: () => matchMedia('(pointer: coarse)').matches,
     }),
   )

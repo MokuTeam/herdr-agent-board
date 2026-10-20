@@ -166,7 +166,8 @@ export const localStore = { get: storage.read, set: storage.set }
 
 /**
  * Start a failed one again: the window with its values, or, for a session back from the archive,
- * its Return once more (its card goes, the Return makes a new one).
+ * its Return once more (its card goes, the Return makes a new one), or, for a fork, its own window
+ * again with its name and first message (its card goes, the fork makes a new one).
  */
 export function retryLaunch(
   l: LaunchView,
@@ -175,8 +176,14 @@ export function retryLaunch(
     open(l: LaunchView, from: MenuOrigin | null): void
     dismiss(id: string): void
     onResume(l: LaunchView & { resume: string }): void
+    onFork?(l: LaunchView & { fork: string }, from: MenuOrigin | null): void
   },
 ): void {
+  if (l.fork && deps.onFork) {
+    deps.dismiss(l.id)
+    deps.onFork({ ...l, fork: l.fork }, from)
+    return
+  }
   if (!l.resume) {
     deps.open(l, from)
     return
@@ -188,12 +195,14 @@ export function retryLaunch(
 export interface LaunchOptions {
   /** Retry on a session back from the archive: its Return again. */
   onResume?: (l: LaunchView & { resume: string }) => void
+  /** Retry on a fork: its window again (hooks/useFork.ts). */
+  onFork?: (l: LaunchView & { fork: string }, from: MenuOrigin | null) => void
 }
 
-export function useLaunch({ onResume }: LaunchOptions = {}): Launch {
+export function useLaunch({ onResume, onFork }: LaunchOptions = {}): Launch {
   const t = useT()
   const board = useBoardContext()
-  const latest = useLatest({ t, board, onResume })
+  const latest = useLatest({ t, board, onResume, onFork })
   const [refs] = useState<LaunchRefs>(() => ({ layer: createRef(), win: createRef() }))
   const focus = useModalFocus(refs.layer, refs.win)
   const focusRef = useLatest(focus)
@@ -249,6 +258,7 @@ export function useLaunch({ onResume }: LaunchOptions = {}): Launch {
         open: (l, from) => void dialog.retry(l, from),
         dismiss: id => void dismiss(id),
         onResume: l => latest.current.onResume?.(l),
+        onFork: (l, from) => latest.current.onFork?.(l, from),
       })
   const [cards] = useState(() => {
     const made: LaunchCards = launchCards({

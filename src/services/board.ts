@@ -243,6 +243,8 @@ export async function collect(
       pin, // the column the user dragged it to, or ''
       auto: columnOf(base.status, { ...card, pin: '' }, info), // where it would be without the pin
       helpers: own, // its subagents, forks, workflow agents and teammates in short, or null
+      // a fork's card says whose fork it is, and when it started
+      ...(typeof card.forkOf === 'string' && { fork: { of: card.forkOf, at: Number(card.forkAt) || 0 } }),
       transcript: path,
       ...sessionProfile(card, profiles.list), // its profile, as its hooks reported it
       claudeRoot: home?.root ?? null, // the folder its records were read from
