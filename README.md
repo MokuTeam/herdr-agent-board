@@ -134,9 +134,12 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   session, else "You: <your last request>"), its last words, the tool it runs now, the question
   it is stuck on, what it waits for.
 - Drag a card to another lane to change its category, or to another column to put it there by
-  hand (also the "Status" chips in the sheet). See [Moving a card by hand](#moving-a-card-by-hand).
-- Click a card: a sheet with its card fields, the question and screen when it waits for you
-  (a question form or a permission prompt is answered right there, see
+  hand (also the status pill in the sheet's head). See [Moving a card by hand](#moving-a-card-by-hand).
+- Click a card: a sheet with a compact head (two pills, where the card shows and its lane, each
+  opening a menu to change it; the name; its workspace, last activity and context; then what it
+  does, what it waits for, its reminders and the sessions it works with, each only when there is
+  one, and the pencil shows the empty ones to fill in), the question and screen when it waits for
+  you (a question form or a permission prompt is answered right there, see
   [Answering from the board](#answering-from-the-board)), the conversation (tool calls folded;
   a background command, agent, monitor or MCP task reporting back and a board reminder are a
   quiet line of their own, not your message: an agent's report opens from it, a command's
@@ -833,12 +836,12 @@ board payload has each item's `helpers` (counts and the newest at work) and `lin
 
 ## Moving a card by hand
 
-A card dragged to another column (or set with the "Status" chips) stays there, marked with a
-pin, until the session works again: you write to it, or another session does. Then the board
-sorts it by itself as before. Dragged while the session works, it stays under "Working" and
-moves once that turn is over. A terminal dialog still puts it under "Needs me". Dropped back on
-the column the board would pick, or with the "Auto" chip, the pin goes. "Working" takes no
-cards. The pin is `pin` in the card file; the hook and the board clear it.
+A card dragged to another column (or set with the status pill in the sheet's head) stays there,
+marked with a pin, until the session works again: you write to it, or another session does. Then
+the board sorts it by itself as before. Dragged while the session works, it stays under "Working"
+and moves once that turn is over. A terminal dialog still puts it under "Needs me". Dropped back
+on the column the board would pick, or with "Auto" in the status pill's menu, the pin goes.
+"Working" takes no cards. The pin is `pin` in the card file; the hook and the board clear it.
 
 ## Schedule
 

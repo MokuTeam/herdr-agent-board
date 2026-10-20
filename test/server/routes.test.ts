@@ -118,6 +118,7 @@ describe('routes', () => {
       'styles/profiles.css',
       'styles/workspaces.css',
       'styles/fold.css',
+      'styles/session-head.css',
       'app.js',
     ])
     for (const link of links) expect([link, (await fetch(`${url}/${link}`)).status]).toEqual([link, 200])

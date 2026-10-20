@@ -195,6 +195,11 @@ describe('which menu opens', () => {
     expect(gone).toEqual(['contextmenu'])
   })
 
+  test('the card’s fields in the head keep the browser’s menu, as they did under it (React only: the old page had them under the head)', async () => {
+    expect(await run(() => reactBoardMenus(BOARD), [right('sheet-card-text')])).toEqual(['contextmenu'])
+    expect((await run(() => reactBoardMenus(BOARD), [right('sheet-meta')]))[0]).toContain('"label":"acme"')
+  })
+
   test('a file chip’s (on a card, in the sheet, even in the quick look): the quick look, open, show, copy, a session there', async () => {
     const log = await compare(BOARD, [
       right('chip'),

@@ -1,6 +1,8 @@
 // One session-sheet scene drawn both ways: by the old page's own code (support/old-sheet.ts) and by
 // the React sheet's parts — <SheetHead> in the head's title, <SheetView> under the head — inside
-// the page's providers, with the hooks' state handed in as it would be at that moment.
+// the page's providers, with the hooks' state handed in as it would be at that moment. The head
+// with a session in it is #62's own (sheet.test.tsx looks at it); of it, the reminders' row is
+// still the old page's.
 import { createRef, type ReactNode } from 'react'
 import type { BoardCategory, BoardPayload } from '../../../src/core/payload.ts'
 import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
@@ -16,7 +18,7 @@ import type { DetailValue } from '../../../web/src/models/detail-resource.ts'
 import { sessionMissing } from '../../../web/src/models/sheet.ts'
 import { board, payload, renderInBoard } from './board.tsx'
 import { CATEGORIES } from './board-scene.tsx'
-import { canonical, type Node } from './markup.ts'
+import { canonical, findAll, hasClass, type Node } from './markup.ts'
 import { oldSheet, sheetParts } from './old-sheet.ts'
 
 export interface SheetScene {
@@ -37,8 +39,6 @@ export interface SheetScene {
   formHtml?: string
   /** …or the old page's own form (`formHtml`) beside the React one. */
   formNode?: ReactNode
-  narrow?: boolean
-  propertiesOpen?: boolean
   message?: string
   attachments?: Attachment[]
   sending?: string[]
@@ -83,13 +83,18 @@ const formNode = (html: string | undefined): ReactNode =>
   html === undefined ? null : <div className="qa-stand-in" dangerouslySetInnerHTML={{ __html: html }} />
 
 export interface SheetSides {
+  /** A session is shown: the head is #62's, and only its reminders' row is compared. */
+  session: boolean
   title: string
   body: string
+  schedule: string
   /** The trees, for looking at one part with its inline spaces. */
   oldTitle: Node[]
   oldBody: Node[]
+  oldSchedule: Node[]
   reactTitle: Node[]
   reactBody: Node[]
+  reactSchedule: Node[]
 }
 
 export function drawSheet(scene: SheetScene): SheetSides {
@@ -121,8 +126,6 @@ export function drawSheet(scene: SheetScene): SheetSides {
       armed: scene.armed ?? null,
       form: formHtml !== undefined,
       ...(formHtml !== undefined ? { formHtml } : {}),
-      narrow: !!scene.narrow,
-      propertiesOpen: !!scene.propertiesOpen,
       message: scene.message ?? '',
       attachments: scene.attachments ?? [],
       sending: scene.sending ?? [],
@@ -135,7 +138,11 @@ export function drawSheet(scene: SheetScene): SheetSides {
   const missing = sessionMissing(detail.key, !!data.items.find(i => i.key === detail.key), detail.status)
   const reactTitle = renderInBoard(
     <div className="sheet-title">
-      <SheetHead item={shown} missing={missing} />
+      <SheetHead
+        item={shown}
+        missing={missing}
+        card={{ disabled: !value.canEdit, open: false, schedule: { armed: scene.armed ?? null } }}
+      />
     </div>,
     value,
     lang,
@@ -146,22 +153,24 @@ export function drawSheet(scene: SheetScene): SheetSides {
       item={shown}
       detail={detail}
       form={scene.formNode ?? formNode(scene.formHtml)}
-      narrow={!!scene.narrow}
-      propertiesOpen={!!scene.propertiesOpen}
       composer={composerOf(scene)}
-      schedule={{ armed: scene.armed ?? null }}
     />,
     value,
     lang,
   )
   const oldTitle = [old.title]
+  const reactSchedule = findAll(reactTitle, el => hasClass(el, 'sched-row'))
   return {
+    session: shown !== null,
     title: canonical(oldTitle),
     body: canonical(old.body),
+    schedule: canonical(old.schedule),
     oldTitle,
     oldBody: old.body,
+    oldSchedule: old.schedule,
     reactTitle,
     reactBody: withoutPreloads(reactBody),
+    reactSchedule,
   }
 }
 
@@ -173,11 +182,14 @@ export function withoutPreloads(nodes: Node[]): Node[] {
   return nodes.filter(n => !(n.kind === 'element' && n.tag === 'link' && n.attrs.get('rel') === 'preload'))
 }
 
-/** Both sides' canonical text of the title and the body. */
+/**
+ * Both sides' canonical text of the head (with a session shown, its reminders' row; else the empty
+ * title the page starts with) and of what comes under it.
+ */
 export function bothSheets(scene: SheetScene): { old: string; react: string } {
   const sides = drawSheet(scene)
   return {
-    old: `${sides.title}\n${sides.body}`,
-    react: `${canonical(sides.reactTitle)}\n${canonical(sides.reactBody)}`,
+    old: `${sides.session ? sides.schedule : sides.title}\n${sides.body}`,
+    react: `${canonical(sides.session ? sides.reactSchedule : sides.reactTitle)}\n${canonical(sides.reactBody)}`,
   }
 }

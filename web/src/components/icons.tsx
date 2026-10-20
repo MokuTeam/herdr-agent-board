@@ -300,6 +300,13 @@ export const ChevGlyph = () => (
   </Glyph>
 )
 
+/** A pop-up button's mark: its choices open in a menu. */
+export const UpDownGlyph = () => (
+  <Glyph className="updown">
+    <path d="m6.5 8 3.5-3.5L13.5 8M6.5 12l3.5 3.5 3.5-3.5" />
+  </Glyph>
+)
+
 export const TrashGlyph = () => (
   <Glyph>
     <path d="M4.5 6h11M8 6V4.5h4V6m-6 0 .7 9.5h6.6L14 6" />
