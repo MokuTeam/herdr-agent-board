@@ -108,7 +108,8 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.wake.down': 'herdr-wake does not answer at {url}',
     'setup.wake.without':
       'Without it there is no “Put to sleep”, “Wake” or “Restart”, agents cannot restart themselves (board restart, the way to get a dropped MCP server back), no sleeping sessions show on the board, and reminders cannot wake a session that sleeps.',
-    'setup.wake.fix': 'Install and start it, then set wakeUrl if it runs elsewhere:',
+    'setup.wake.fix':
+      'It needs Node.js 20 or newer. Install it, add its hooks and start it (herdr-wake/README.md in the board’s repository), then set wakeUrl if it runs elsewhere:',
 
     'setup.launch.command': 'New sessions: your launch.command ({name})',
     'setup.launch.commandBad': 'New sessions: launch.command ({name}) cannot run',
@@ -246,7 +247,8 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.wake.down': 'herdr-wake не отвечает на {url}',
     'setup.wake.without':
       'Без него нет «Усыпить», «Разбудить» и «Перезапустить», агенты не могут перезапустить себя (board restart, способ вернуть отвалившийся MCP-сервер), спящих сессий на доске не видно, и напоминания не будят спящую сессию.',
-    'setup.wake.fix': 'Поставь и запусти его, потом задай wakeUrl, если он работает не по умолчанию:',
+    'setup.wake.fix':
+      'Ему нужен Node.js 20 или новее. Поставь его, добавь его хуки и запусти (herdr-wake/README.md в репозитории доски), потом задай wakeUrl, если он работает не по умолчанию:',
 
     'setup.launch.command': 'Новые сессии: твой launch.command ({name})',
     'setup.launch.commandBad': 'Новые сессии: launch.command ({name}) не запустится',
