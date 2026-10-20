@@ -143,7 +143,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     routes,
     guards,
     // The page for a phone's browser through `tailscale serve`, while remote.pwa is on.
-    page: staticRoute(WEB, bundle, pwaPage),
+    page: staticRoute(WEB, bundle, html => pwaPage(html, bundle.version())),
     remote,
     log,
     onChange: () => board.publish(),

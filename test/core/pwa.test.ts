@@ -52,15 +52,18 @@ test('the token rides in a cookie the page cannot read, sent to this name over H
 
 test("the page for a phone's browser is marked and installable; the board's own stays as it is", () => {
   const html = readFileSync(join(ROOT, 'web', 'index.html'), 'utf8')
-  const page = pwaPage(html)
+  const page = pwaPage(html, 'a1b2c3d4e5f6')
   expect(page).toContain('<html data-remote lang="en">')
   expect(page).toContain('<link rel="manifest" href="manifest.webmanifest">')
   expect(page.indexOf('styles/pwa.css')).toBeGreaterThan(page.indexOf('styles/profiles.css'))
+  // The script by its build (#116): the service worker keeps each apart, and the page says which ran.
+  expect(page).toContain('<script type="module" src="app.js?v=a1b2c3d4e5f6"></script>')
   // Only what was added: take it out again and the page is the board's own, marked.
   const added = /\n\s*<(link|meta) [^>]*(manifest|theme-color|apple-|mobile-web-app|pwa\.css)[^>]*>/g
-  expect(page.replace(added, '')).toBe(html.replace('<html ', '<html data-remote '))
+  expect(page.replace(added, '').replace('?v=a1b2c3d4e5f6', '')).toBe(html.replace('<html ', '<html data-remote '))
   expect(html).not.toContain('manifest')
   expect(html).not.toContain('data-remote')
+  expect(html).toContain('<script type="module" src="app.js"></script>')
 })
 
 test("serve's port: forwarded to the board, free, or someone else's", () => {

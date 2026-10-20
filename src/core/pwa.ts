@@ -77,10 +77,16 @@ const HEAD = [
 
 /**
  * The board's page as serve gives it to a phone: marked remote (`data-remote` on <html>, which
- * the page reads) and with what installs it. The page on 127.0.0.1 stays as it is.
+ * the page reads) and with what installs it. Its script is named by the page's `version`
+ * (app.js?v=…): the service worker (web/sw.js) keeps each version apart, so a new page never runs
+ * the script kept from before while the new one is slow to come, and the page can say which build
+ * runs. The page on 127.0.0.1 stays as it is.
  */
-export function pwaPage(html: string): string {
-  return html.replace(/<html\b/, '<html data-remote').replace('</head>', `  ${HEAD.join('\n  ')}\n</head>`)
+export function pwaPage(html: string, version: string): string {
+  return html
+    .replace(/<html\b/, '<html data-remote')
+    .replace('</head>', `  ${HEAD.join('\n  ')}\n</head>`)
+    .replace('src="app.js"', `src="app.js?v=${encodeURIComponent(version)}"`)
 }
 
 /** Which way serve's port goes, from what `tailscale serve status` says of it. */
