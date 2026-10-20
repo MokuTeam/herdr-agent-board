@@ -125,9 +125,42 @@ events, instructions, reasoning and tool outputs are left out. A missing or unre
 leaves the card and live terminal available. The board reads bounded tails and caches card data
 until the file changes.
 
-This is the first part of [#126](https://github.com/MokuTeam/herdr-agent-board/issues/126).
-Codex hooks, the brief and Codex-specific session actions follow separately. Claude Code and pi
-keep their existing readers and actions.
+To install the board's Codex hooks and the `board` command, run from this checkout:
+
+```sh
+bun src/entrypoints/install.ts --codex
+```
+
+This adds SessionStart and UserPromptSubmit to Codex's `hooks.json`, preserving herdr's and other
+hooks, with the first `hooks.json.bak-agent-board` kept beside it. It also asks herdr to install its Codex identity
+hook. Hook commands use `bun` from PATH (including on Windows); keep Bun on PATH. Empty hooks files
+are treated as new configurations; malformed JSON stops the install before anything is written. The ordinary install
+without `--codex` keeps managing Claude only.
+
+Enable hooks if disabled (`codex features enable hooks`) and review and trust the new definitions
+in Codex's `/hooks`. The board does not change Codex's configuration or hook trust. In a pane herdr
+reports as this Codex session, SessionStart supplies the card brief; UserPromptSubmit clears a
+question the user answered and a pinned column, and reminds the agent when its card says it waits.
+A board reminder preserves the question. A start that races herdr's identity hook receives its
+brief on its first prompt instead. A Codex child or a session outside herdr gets no brief or card
+write from these hooks. The brief names `board --session <id>` so a tool's shell can update the
+correct card even without the pane environment. Without an explicit target, `board doing`,
+`ask`, `wait`, `done` and `cat` use the pane's reported Codex identity, even
+when the environment still carries a parent Claude session id.
+
+For mixed environments the root Codex hook records the Claude id it inherited. A Claude child
+has a different id and keeps its own Claude card, even in the same Codex pane and while herdr is
+offline. Before that hook record exists, mixed environments keep Claude priority: use the
+explicit `board --session <id>` form for Codex. A Codex child under a Claude root still inherits
+that root's card as before; it must use an explicit target when coordinating a different card.
+
+To remove these hooks, delete only the command handlers running `src/entrypoints/codex-hook.ts`
+from SessionStart and UserPromptSubmit in Codex's `hooks.json`; remove an enclosing matcher group
+only if it is then empty. Keep herdr's and other handlers. Do not restore the whole backup over
+hooks installed later. The shared `board` and `spawn-agent` commands can stay for Claude.
+
+Codex session actions follow separately under [#126](https://github.com/MokuTeam/herdr-agent-board/issues/126).
+Claude Code and pi keep their existing hooks, brief and readers.
 
 ## Web board
 
