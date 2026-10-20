@@ -1,0 +1,23 @@
+/* The cards, polished over upstream's rules (web/src/components/Card.tsx; #94), mostly for a
+   phone. Every rule here outranks the one it changes or is new. */
+
+/* Every name starts at the same place: the dot takes the moon's width (13px). */
+.card-top > .dot { margin-inline: 2.5px; }
+
+/* A finger's press shows as the card's own press (it scales), not as a square flash over it. */
+.card { -webkit-tap-highlight-color: transparent; }
+
+/* No pointer that hovers (a phone): a tap leaves no hover behind, so the card keeps its age and
+   its clock, and its hover buttons stay away. They are in the session panel and the long-press
+   menu; the keyboard still shows them on focus. */
+@media (hover: none) {
+  .card:hover:not(:focus-visible) .card-actions { opacity: 0; transform: scale(0.92); pointer-events: none; }
+  .card:hover .age, .card:hover .alarm { opacity: 1; }
+}
+
+/* A finger gets a bigger target than the line shows: the sessions it works with, its helpers. */
+@media (pointer: coarse) {
+  button.rel, .helpers-chip { position: relative; }
+  button.rel::after { content: ""; position: absolute; inset: -8px -4px; }
+  .helpers-chip::after { content: ""; position: absolute; inset: -8px 0; }
+}
