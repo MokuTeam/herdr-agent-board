@@ -8,9 +8,12 @@ import { type ClipboardEvent, type KeyboardEvent, useLayoutEffect, useRef } from
 import { useActionRow } from '../../hooks/useActionRow.ts'
 import type { ComposerControls } from '../../hooks/useComposer.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import { canReadClipboard, readClipboardImages } from '../../models/clipboard-image.ts'
 import { composerView, sendsOnKey } from '../../models/composer.ts'
+import { remotePage } from '../../models/remote-page.ts'
 import type { HeadButtons, SheetAvailability } from '../../models/sheet.ts'
 import type { termButton } from '../../models/terminal.ts'
+import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import {
   ArchiveIcon,
@@ -22,6 +25,7 @@ import {
   HistoryIcon,
   MoonIcon,
   MoreIcon,
+  PastePictureIcon,
   PhoneIcon,
   PlusIcon,
   RestartIcon,
@@ -289,6 +293,15 @@ export function Composer({
         >
           <ClipIcon />
         </button>
+        {remotePage() && canReadClipboard(navigator.clipboard) && (
+          <PastePicture
+            disabled={av.edit}
+            onFiles={files => {
+              composer.addFiles(files)
+              messageRef.current?.focus()
+            }}
+          />
+        )}
         <input
           type="file"
           id="file-input"
@@ -313,7 +326,9 @@ export function Composer({
         <textarea
           id="message"
           rows={1}
-          placeholder={t(aside.on ? 'aside.placeholder' : 'compose.placeholder')}
+          placeholder={t(
+            aside.on ? 'aside.placeholder' : remotePage() ? 'compose.placeholderPhone' : 'compose.placeholder',
+          )}
           aria-label={t('compose.label')}
           ref={messageRef}
           value={text}
@@ -344,5 +359,35 @@ export function Composer({
         </button>
       </form>
     </footer>
+  )
+}
+
+/**
+ * In a phone's browser only (models/clipboard-image.ts): the picture on the clipboard into the
+ * message, as Ctrl+V does on the computer. What went wrong says so, with the paperclip as the way round.
+ */
+function PastePicture({ disabled, onFiles }: { disabled: boolean; onFiles: (files: File[]) => void }) {
+  const t = useT()
+  const { toast } = useBoardContext()
+  async function paste() {
+    if (!canReadClipboard(navigator.clipboard)) return
+    const got = await readClipboardImages(navigator.clipboard).catch(
+      (err: unknown) => ({ error: 'failed', why: err instanceof Error ? err.message : String(err) }) as const,
+    )
+    if ('files' in got) return onFiles(got.files)
+    if (got.error === 'empty') return toast(t('compose.pasteNone'))
+    toast(got.error === 'denied' ? t('compose.pasteDenied') : t('compose.pasteFailed', { why: got.why ?? '' }), true)
+  }
+  return (
+    <button
+      type="button"
+      className="attach"
+      title={t('compose.pastePicture')}
+      aria-label={t('compose.pastePicture')}
+      disabled={disabled}
+      onClick={() => void paste()}
+    >
+      <PastePictureIcon />
+    </button>
   )
 }
