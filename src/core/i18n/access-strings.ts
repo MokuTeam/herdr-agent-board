@@ -37,6 +37,22 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'access.err.code': 'That code is not the one the app shows now',
 
     // Task 11: the probe and Test connection
+    'tunnel.hint.publickey':
+      'The server refused the key: put the authorized_keys line in the keys file on the server, and the sshd Match block in sshd_config.',
+    'tunnel.hint.listenPath':
+      "The server refused the socket: its folder is missing or not the tunnel user's to write, the sshd Match block lacks AllowStreamLocalForwarding remote or AllowTcpForwarding remote (with PermitListen none), or a stale socket is there and StreamLocalBindUnlink is not yes.",
+    'tunnel.hint.keyPermissions':
+      'ssh refuses the key file for its access rights (UNPROTECTED PRIVATE KEY FILE): only you may read it. Generate key sets that; for a key of your own, fix its rights yourself.',
+    'tunnel.hint.hostKey':
+      "The server's key changed since it was pinned. If you changed the server on purpose, Forget the server's key; otherwise find out why first.",
+    'tunnel.hint.network': 'No answer from the server: check the host, the SSH port and the firewall.',
+    'tunnel.hint.noSsh': 'No OpenSSH client found. On Windows, add the optional feature "OpenSSH Client".',
+    'tunnel.hint.passphrase': 'The key has a passphrase: the tunnel needs a key without one.',
+    'tunnel.hint.caddy502':
+      "Caddy answered 502: its socket path and the board's differ, or Caddy cannot open the socket (the folder's group or setgid bit, StreamLocalBindMask).",
+    'tunnel.hint.tls': "No HTTPS answer: check the domain's DNS record, or Caddy has no certificate yet.",
+    'tunnel.hint.answer': 'Something else answers on the domain, not this board.',
+    'tunnel.hint.notConnected': 'The tunnel is not connected now.',
 
     // Task 12: the tunnel listener
 
@@ -101,6 +117,22 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'access.err.code': 'Это не тот код, который сейчас показывает приложение',
 
     // Task 11: the probe and Test connection
+    'tunnel.hint.publickey':
+      'Сервер отклонил ключ: добавьте строку authorized_keys в файл ключей на сервере, а блок Match для sshd — в sshd_config.',
+    'tunnel.hint.listenPath':
+      'Сервер отклонил сокет: его папки нет или пользователь туннеля не может в неё писать, в блоке Match для sshd нет AllowStreamLocalForwarding remote или AllowTcpForwarding remote (с PermitListen none), либо там остался старый сокет, а StreamLocalBindUnlink не yes.',
+    'tunnel.hint.keyPermissions':
+      'ssh не принимает файл ключа из-за прав доступа (UNPROTECTED PRIVATE KEY FILE): читать его должны только вы. «Создать ключ» выставляет их сам; права своего ключа исправьте сами.',
+    'tunnel.hint.hostKey':
+      'Ключ сервера изменился с тех пор, как был запомнен. Если вы меняли сервер намеренно, нажмите «Забыть ключ сервера»; иначе сначала выясните почему.',
+    'tunnel.hint.network': 'Сервер не отвечает: проверьте хост, порт SSH и брандмауэр.',
+    'tunnel.hint.noSsh': 'Клиент OpenSSH не найден. В Windows добавьте дополнительный компонент «Клиент OpenSSH».',
+    'tunnel.hint.passphrase': 'У ключа есть парольная фраза: туннелю нужен ключ без неё.',
+    'tunnel.hint.caddy502':
+      'Caddy ответил 502: путь к сокету у Caddy и у доски разный, или Caddy не может открыть сокет (группа папки или бит setgid, StreamLocalBindMask).',
+    'tunnel.hint.tls': 'Нет ответа по HTTPS: проверьте DNS-запись домена, или у Caddy ещё нет сертификата.',
+    'tunnel.hint.answer': 'На домене отвечает что-то другое, не эта доска.',
+    'tunnel.hint.notConnected': 'Туннель сейчас не подключён.',
 
     // Task 12: the tunnel listener
 
