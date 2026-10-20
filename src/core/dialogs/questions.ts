@@ -2,7 +2,8 @@
 // visible`), and the keys that answer them. Pure functions; services/answer.ts reads and types.
 //
 // The question dialog (AskUserQuestion), as Claude Code 2.1 draws and drives it:
-// - One question: a header line (" ☐ Color"), the question, numbered options with their
+// - One question: a header line (" ☐ Color"), the question (from 2.1.303 with "│ " before each of
+//   its lines), numbered options with their
 //   descriptions indented under them, then "N+1. Type something." for an own answer. The cursor
 //   (❯) starts on option 1.
 // - Several questions, or one multiSelect question: a tab bar
@@ -98,6 +99,8 @@ const TABS = /^\s*(?:←\s+)?[☐☒]\s/
 const OPTION = /^(❯| ) (\d+)\. (?:\[( |✔)\] )?(.*)$/
 const NEXT = /^(❯| )\s{3,}(Next|Submit)\s*$/
 const BOX = /\s{2,}[┌│└].*$/
+// Claude Code 2.1.303 draws a bar before every line of a question; earlier versions none.
+const QUESTION_BAR = /^│ ?/
 const PLACEHOLDER = /^Type something\.?$/
 export const OTHER_LIMIT = 1000
 
@@ -206,13 +209,16 @@ function questionDialog(lines: string[]): QuestionDialog | ReviewDialog | null {
   const text: string[] = []
   for (; i < lines.length && (lines[i] ?? '').trim() && !OPTION.test(lines[i] ?? ''); i++) text.push(lines[i] ?? '')
   if (!text.length) return null
+  // The bar only when every line has it: then it is Claude Code's, not the question's own text.
+  const barred = text.every(l => QUESTION_BAR.test(l))
+  const question = barred ? text.map(l => l.replace(QUESTION_BAR, '')) : text
   const block = optionBlock(lines, i)
   if (!block.options.length) return null
   const footer = lines.slice(block.end).find(l => /Esc to cancel/.test(l)) ?? ''
   return {
     kind: 'question',
     tabs,
-    question: norm(text.join(' ')),
+    question: norm(question.join(' ')),
     options: block.options,
     next: block.next,
     cursor: block.next?.cursor ? 'next' : (block.options.find(o => o.cursor)?.n ?? null),

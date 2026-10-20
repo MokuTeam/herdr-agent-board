@@ -216,6 +216,39 @@ test('parseDialog reads a lone question as Claude Code draws it', () => {
   assert.equal(publicDialog(d)?.kind, 'question')
 })
 
+test('parseDialog reads a question Claude Code 2.1.303 draws with a bar before each of its lines', () => {
+  const long = form({
+    questions: [
+      {
+        question:
+          'Which color should the test widget use when it is shown on a very wide dashboard next to the other widgets that already use most of the palette, so that it still stands out clearly?',
+        header: 'Color',
+        multiSelect: false,
+        options: [
+          { label: 'Red', description: 'A warm red, good for alerts' },
+          { label: 'Green', description: 'Calm green for success states' },
+        ],
+      },
+    ],
+  })
+  const d = asQuestion(parseDialog(screen('question-single-bar')))
+  assert.equal(d.question, first(long).question)
+  assert.deepEqual(
+    d.options.map(o => o.label),
+    ['Red', 'Green', 'Type something.'],
+  )
+  assert.equal(d.cursor, 1)
+  assert.ok(onQuestion(d, first(long)))
+  assert.equal(screenIndex(d, long), 0)
+  assert.equal(publicDialog(d)?.kind, 'question')
+  // Only Claude Code's bar goes: one the question itself starts with stays.
+  const own = screen('question-single-bar').replace('│ Which color', '│ │ Which color')
+  assert.equal(asQuestion(parseDialog(own)).question, `│ ${first(long).question}`)
+  // A screen without the bar on every line (earlier Claude Code) is read as it is.
+  const once = screen('question-single-bar').replace('│ stands out', 'stands out')
+  assert.ok(asQuestion(parseDialog(once)).question.startsWith('│ Which color'))
+})
+
 test('parseDialog follows the tabs of several questions', () => {
   const tab1 = asQuestion(parseDialog(screen('question-tabs-1')))
   assert.deepEqual(tab1.tabs, [
@@ -441,6 +474,27 @@ test('a lone single select: one digit, nothing else', async () => {
     assert.deepEqual(fake.keysLog, ['3'])
     assert.deepEqual(fake.submitted, ['Blue'])
   }
+})
+
+test('a question drawn with a bar is answered as before: an option, or an own answer', async () => {
+  const option = new FakeDialog(COLOR, { bar: true, lag: 1 })
+  const r = await driveQuestions({
+    questions: COLOR,
+    picks: picksOf(COLOR, [{ options: ['Green'] }]),
+    io: option.io(),
+    timing: fast,
+  })
+  assert.deepEqual(r, { ok: true })
+  assert.deepEqual(option.submitted, ['Green'])
+  const own = new FakeDialog(COLOR, { bar: true, lag: 1 })
+  const typed = await driveQuestions({
+    questions: COLOR,
+    picks: picksOf(COLOR, [{ other: 'cancel that, no remote for now' }]),
+    io: own.io(),
+    timing: fast,
+  })
+  assert.deepEqual(typed, { ok: true })
+  assert.deepEqual(own.submitted, ['cancel that, no remote for now'])
 })
 
 test('option 1 with a slow redraw is pressed once, never followed by Enter', async () => {
