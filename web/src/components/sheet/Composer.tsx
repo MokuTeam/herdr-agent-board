@@ -29,6 +29,7 @@ import {
   SunIcon,
 } from '../icons.tsx'
 import { TermIcon } from '../terminal/Terminal.tsx'
+import { AsideToggle, useAsideBox } from './Aside.tsx'
 import { Attachments } from './Attachments.tsx'
 
 /** What the session's buttons do; each gets the button it was pressed on, for what opens from it. */
@@ -94,6 +95,8 @@ export function Composer({
   const over = (id: string) => row.over.has(id) && 'over'
   const { text, attachments, sending, messageRef } = composer
   const view = composerView({ present, sending, canMutate, text, attachments }, t)
+  // A side question (/btw) instead of a message, where the board can ask one: the box's switch, or "/btw …".
+  const aside = useAsideBox(text, composer.input)
 
   // On every draw, as syncComposer ran on every one: the text, the language or the panel's width may have moved.
   useLayoutEffect(() => {
@@ -265,13 +268,14 @@ export function Composer({
           <MoreIcon />
         </button>
       </div>
+      {aside.deck}
       <Attachments list={attachments} onRemove={composer.removeFile} />
       <form
-        className="composer-box"
+        className={classNames('composer-box', aside.on && 'aside')}
         id="composer"
         onSubmit={e => {
           e.preventDefault()
-          composer.send()
+          if (!aside.submit()) composer.send()
         }}
       >
         <button
@@ -297,10 +301,19 @@ export function Composer({
             messageRef.current?.focus()
           }}
         />
+        {aside.can && (
+          <AsideToggle
+            on={aside.on}
+            onToggle={() => {
+              aside.toggle()
+              messageRef.current?.focus()
+            }}
+          />
+        )}
         <textarea
           id="message"
           rows={1}
-          placeholder={t('compose.placeholder')}
+          placeholder={t(aside.on ? 'aside.placeholder' : 'compose.placeholder')}
           aria-label={t('compose.label')}
           ref={messageRef}
           value={text}
@@ -323,9 +336,9 @@ export function Composer({
         <button
           className="send"
           type="submit"
-          title={view.sendTitle}
-          aria-label={t('compose.sendLabel')}
-          disabled={view.sendDisabled}
+          title={aside.question === null ? view.sendTitle : t('aside.toggle')}
+          aria-label={t(aside.question === null ? 'compose.sendLabel' : 'aside.toggle')}
+          disabled={aside.question === null ? view.sendDisabled : !aside.question}
         >
           <SendIcon />
         </button>

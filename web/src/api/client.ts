@@ -72,6 +72,8 @@ export const isBoardPayload: Guard<BoardPayload> = (value): value is BoardPayloa
   (value.mokupilot === undefined || typeof value.mokupilot === 'boolean') &&
   // Whether the board can fork a session (a board before forks did not say).
   (value.fork === undefined || typeof value.fork === 'boolean') &&
+  // Whether the board can ask side questions (a board before them did not say).
+  (value.aside === undefined || typeof value.aside === 'boolean') &&
   // The Claude profiles (a board before them sent none).
   isListOf(value.profiles, isBoardProfile) &&
   // The program launch.claude types (a board before start commands did not say).

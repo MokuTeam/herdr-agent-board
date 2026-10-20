@@ -94,6 +94,8 @@ export interface BoardPayload {
   mokupilot?: boolean
   /** Whether the board can fork a session into a new tab here (services/launch/fork.ts canFork). */
   fork?: boolean
+  /** Whether the board can ask a session a side question here (services/aside.ts: Claude Code on PATH). */
+  aside?: boolean
   /** What of the board is not set up on this computer (core/setup.ts); null before the first check. */
   setup?: SetupSummary | null
   /** Every profile, shown and hidden, in the list's order (core/profiles.ts); a board before profiles sent none. */

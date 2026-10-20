@@ -13,6 +13,7 @@ import { archiveDir, cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
 import { messageGate } from '../core/message-gate.ts'
 import type { SetupFacts } from '../core/setup.ts'
+import { asideCheck } from '../services/aside.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
@@ -123,6 +124,8 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
   // Whether MokuPilot is here for calls with a fork of a session: looked up again when its
   // setting changes, and once a minute for one installed or removed meanwhile.
   const mokupilot = mokupilotCheck(cfg)
+  // Whether Claude Code is here for side questions to a session: looked up again once a minute.
+  const aside = asideCheck()
   // A notification click asks for a session: pages that connect right after are told it too.
   const reveals = revealState()
   const events = createBroadcaster(() => board.payload(), { greet: reveals.greet })
@@ -150,6 +153,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     setup: setup.summary,
     mokupilot,
     remote: listener.view,
+    aside,
   })
   board.publish()
   const refresh = (): void => void board.refresh()

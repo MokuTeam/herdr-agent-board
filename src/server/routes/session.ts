@@ -19,6 +19,7 @@ import type { Item, Pin } from '../../core/types.ts'
 import { checkWake, focus, send, sleepSession, wake, wakeAnswers } from '../../services/actions.ts'
 import { answerPermission, answerQuestions } from '../../services/answer.ts'
 import { askArchive, undoMs } from '../../services/archive.ts'
+import { askAside } from '../../services/aside.ts'
 import { collect } from '../../services/board.ts'
 import type { Deps } from '../../services/deps.ts'
 import { forkSession } from '../../services/launch/fork.ts'
@@ -317,6 +318,17 @@ export function sessionRoutes(app: SessionApp): Route[] {
       path: /^\/api\/session\/([^/]+)\/(mokupilot)$/,
       guard: ['board-header', 'origin'],
       handle: action,
+    },
+    // A side question runs Claude once on a copy of the conversation (services/aside.ts): like a
+    // call, only from this page, no herdr; the page going away ends it.
+    {
+      method: 'POST',
+      path: /^\/api\/session\/([^/]+)\/aside$/,
+      guard: ['board-header', 'origin'],
+      handle: withItem(async (item, req, ctx) => {
+        const r = await askAside(app.deps, item, (await ctx.body()).question, { signal: req.signal })
+        return json(r.ok ? 200 : 409, r)
+      }),
     },
     // Actions that go through herdr wait for a board that can reach it; card edits and the rest do not.
     {

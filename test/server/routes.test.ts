@@ -120,6 +120,7 @@ describe('routes', () => {
       'styles/fold.css',
       'styles/session-head.css',
       'styles/fork.css',
+      'styles/aside.css',
       'styles/favorites.css',
       'app.js',
     ])

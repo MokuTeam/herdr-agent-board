@@ -56,6 +56,8 @@ interface Options {
   mokupilot?: () => boolean
   /** The remote mode as the page shows it; null while it is off (server/remote.ts). */
   remote?: () => RemoteView | null
+  /** Whether the board can ask a session a side question (services/aside.ts asideCheck). */
+  aside?: () => boolean
 }
 
 // The colors the category editor offers (aliases left out).
@@ -124,6 +126,7 @@ export function createBoardState({
   setup,
   mokupilot,
   remote,
+  aside,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -184,6 +187,8 @@ export function createBoardState({
       mokupilot: mokupilot?.() ?? false,
       // fork: whether the board can fork a session into a new tab with its launcher.
       fork: canFork(cfg),
+      // aside: whether a session's sheet offers a side question (Claude Code on PATH).
+      aside: aside?.() ?? false,
       setup: setup?.() ?? null,
       profiles,
       // What a profile without a start command types: the Profiles panel's placeholder.
