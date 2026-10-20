@@ -50,6 +50,8 @@ export function tick(animations: Iterable<Paceable>, now: number, starts: WeakMa
  * page is on show, and a CSS animation that starts wakes it. Returns what stops it all.
  */
 export function startPace(doc: Document = document): () => void {
+  // A browser without the Web Animations API keeps the loops at its own rate.
+  if (typeof doc.getAnimations !== 'function') return () => {}
   const starts = new WeakMap<Paceable, number>()
   let timer: ReturnType<typeof setInterval> | undefined
   const stop = () => {
