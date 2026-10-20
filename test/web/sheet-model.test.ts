@@ -89,8 +89,14 @@ describe('the head', () => {
     expect(sheetHead(a, { missing: false, categoryTitle: 'Project', now: NOW, t })).toEqual({
       pill: { kind: 'column' },
       name: 'Alpha',
-      meta: ['Project', 'workspace web', 'active 5 min ago', 'context 2k'],
+      // The workspace's name apart from the words around it: the name alone renames the workspace.
+      meta: ['Project', { before: 'workspace ', name: 'web', after: '' }, 'active 5 min ago', 'context 2k'],
       metaTitle: 'Tokens its last request carried',
+    })
+    expect(sheetHead(a, { missing: false, categoryTitle: '', now: NOW, t: translator('ru') }).meta[0]).toEqual({
+      before: 'workspace ',
+      name: 'web',
+      after: '',
     })
     const now = sheetHead(
       { ...a, activity: NOW - 10_000, workspace: null, context: null },

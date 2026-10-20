@@ -24,6 +24,19 @@ export function checkName(name: unknown): string {
   return ''
 }
 
+/**
+ * Why a new name for a herdr workspace is refused (a key of the texts), or '' when it is fine: as
+ * a session's, but only a leading dash is out (herdr would read it as an option).
+ */
+export function checkWorkspaceName(name: unknown): string {
+  const s = String(name ?? '').trim()
+  if (!s) return 'rename.err.workspaceEmpty'
+  if (s.length > NAME_MAX) return 'launch.err.nameLong'
+  if (UNSAFE_CHARS.test(s)) return 'launch.err.nameChars'
+  if (s.startsWith('-')) return 'rename.err.workspaceDash'
+  return ''
+}
+
 const TRANSLIT: Record<string, string> = {
   а: 'a',
   б: 'b',
@@ -70,6 +83,25 @@ export function slugName(name: unknown): string {
   if (!s) s = 'session'
   if (!/^[a-z]/.test(s)) s = `s-${s}`
   return s.slice(0, 32).replace(/-+$/, '')
+}
+
+/**
+ * A name in kebab-case, for a new workspace: lower case, letters (with their marks) and digits of
+ * any script, one dash for whatever is between them; cut at 40 like herdr's workspace names, and
+ * '' when nothing is left.
+ */
+export function kebabName(name: unknown): string {
+  return (
+    String(name ?? '')
+      .normalize('NFC')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{M}\p{N}]+/gu, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40)
+      // The cut may leave half of a character outside the BMP, or a dash, at the end.
+      .replace(/[\ud800-\udbff]$/, '')
+      .replace(/-+$/, '')
+  )
 }
 
 /** `slug`, or slug-2, slug-3… when a live agent has that name already. */

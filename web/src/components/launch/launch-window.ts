@@ -251,7 +251,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
     s = {
       ctx,
       draftKey: launchContext(ctx, data.filter),
-      set: { category: false, cwd: false, name: false, branch: false, workspace: false },
+      set: { category: false, cwd: false, name: false, branch: false, workspace: false, newWorkspace: false },
       retry: ctx.retry ?? null,
       category: 'other',
       workspace: null,
@@ -355,8 +355,15 @@ export function launchWindow(deps: LaunchWindowDeps) {
     setFields({ workspace: choice.value })
     if (choice.create && !view.get().fields.newWorkspace)
       setFields({ newWorkspace: choice.seed || defaultWorkspaceName() })
+    followWorkspaceName()
   }
-  const defaultWorkspaceName = () => workspaceName(s?.category ?? '', catTitle(s?.category ?? ''), cwd(), t())
+  const defaultWorkspaceName = () =>
+    workspaceName(view.get().fields.name, s?.category ?? '', catTitle(s?.category ?? ''), cwd(), t())
+
+  /** A new workspace's name, while its field shows, follows the session's name until one is typed there. */
+  function followWorkspaceName(): void {
+    if (s && !s.set.newWorkspace && !view.get().newWorkspaceHidden) setFields({ newWorkspace: defaultWorkspaceName() })
+  }
 
   // ---------------------------------------------------------------- the profile
   /** The folder a profile is remembered for: as the server resolved it once checked, else as typed. */
@@ -412,6 +419,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
     folder.setText(path)
     if (byUser) s.set.cwd = true
     if (!s.set.name) setFields({ name: path ? suggestName(path, d().items) : '' })
+    followWorkspaceName()
     if (!s.set.branch) setFields({ branch: '' })
     folder.checkFolder()
     syncGo()
@@ -559,6 +567,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
       s.set.category = true
       renderCats()
       if (!s.set.workspace) renderWorkspaces()
+      else followWorkspaceName()
       followProfile()
     },
     /** A profile picked (the choice is offered): it stops following the lane and the folder. */
@@ -573,6 +582,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
       if (!s) return
       setFields({ name: value })
       s.set.name = true
+      followWorkspaceName()
       noteFor('name', '')
       if (!s.set.branch) renderWorktree()
       syncGo()
@@ -586,6 +596,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
       patch({ newWorkspaceHidden: !create })
       if (create) {
         if (!view.get().fields.newWorkspace) setFields({ newWorkspace: defaultWorkspaceName() })
+        followWorkspaceName()
         later(() => {
           const field = $('input[name="newWorkspace"]')
           field?.focus()
@@ -598,6 +609,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
       if (!s) return
       setFields({ newWorkspace: value })
       s.set.workspace = true
+      s.set.newWorkspace = true
       s.workspace = { create: value }
     },
     worktree(on: boolean): void {
