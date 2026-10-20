@@ -45,6 +45,8 @@ export interface Card {
   /** A fork's: the id of the session it is a fork of, and when it started (its copied lines are older). */
   forkOf?: string
   forkAt?: number
+  /** The user keeps it in sight: first in its column, whole, left out of a tidy-up. */
+  favorite?: boolean
   [extra: string]: unknown
 }
 
@@ -195,6 +197,8 @@ export interface Item {
   activity?: number
   pin?: Pin | ''
   auto?: ColumnId
+  /** A favorite (card.favorite); absent for the others. */
+  favorite?: boolean
   /** Its subagents, forks, workflow agents and teammates in short (core/helpers.ts), or null. */
   helpers?: HelperSummary | null
   /** How it works with the board's other sessions (core/links.ts), or null. */

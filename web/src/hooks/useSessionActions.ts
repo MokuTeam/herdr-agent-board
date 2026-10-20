@@ -35,6 +35,8 @@ export interface SessionActions {
   restartSession(key: string): Promise<void>
   /** A question that does not need an answer: off the "Needs me" column until the next one. */
   dismissAsk(key: string): Promise<void>
+  /** Kept in sight (first in its column, whole), or back among the others; the board shows it once the server has it. */
+  setFavorite(key: string, on: boolean): Promise<void>
   /** A MokuPilot call whose agent is a fork of the session (services/mokupilot.ts): the session goes on as it was. */
   callMokuPilot(key: string): Promise<void>
 }
@@ -159,6 +161,11 @@ export function useSessionActions(): SessionActions {
       toast(r.ok ? done : r.error, !r.ok)
     }
 
+    async function setFavorite(key: string, on: boolean): Promise<void> {
+      const r = await act(key, 'card', { favorite: on })
+      if (!r.ok) toast(r.error, true)
+    }
+
     return {
       act,
       moveCard,
@@ -167,6 +174,7 @@ export function useSessionActions(): SessionActions {
       sleepSession,
       restartSession: key => restartSession(key, { t: latest.current.t, itemOf, act, toast }),
       dismissAsk,
+      setFavorite,
       callMokuPilot: key => callMokuPilot(key, { t: latest.current.t, itemOf, act, toast }),
     }
   }, [latest, dispatch, toast])

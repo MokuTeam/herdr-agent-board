@@ -6,6 +6,8 @@
 //   board ask <question>     needs the user: "Needs me" until the user's next prompt
 //   board done [text]        task finished: clears doing, wait and ask, keeps the result
 //   board clear              clears doing, wait, ask and result
+//   board favorite [off]     keeps the session in sight: first in its column, whole however long
+//                            it idles or sleeps, left out of a tidy-up (off: back among the others)
 //   board list               every session on the board, one line each
 //   board cats               the known categories
 //   board remind <when> <text>   the board types "[board reminder] <text>" into the session then,
@@ -66,7 +68,7 @@ import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sleepMany } from '../services/sleep.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | approve <id> | deny <id> | revoke <id>] | doctor] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | approve <id> | deny <id> | revoke <id>] | doctor] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -296,6 +298,7 @@ function line(key: string, cwd: string): string {
   if (card.wait) parts.push(`waiting: ${card.wait}`)
   if (card.ask) parts.push(`asks the user: ${card.ask}`)
   if (card.result) parts.push(`done: ${card.result}`)
+  if (card.favorite) parts.push('favorite')
   return parts.join(' · ')
 }
 
@@ -395,6 +398,12 @@ async function main(): Promise<void> {
     case 'clear':
       writeCard(s.key, { doing: '', wait: '', waitSince: '', ask: '', askSince: '', result: '' })
       break
+    case 'favorite': {
+      const off = rest[0]?.toLowerCase()
+      if (off !== undefined && off !== 'off') throw new Error('usage: board favorite [off]')
+      writeCard(s.key, { favorite: off ? '' : true })
+      break
+    }
     case 'remind': {
       // The time is the first one to five words that read as one; the rest is the text.
       let at: number | null = null

@@ -2,7 +2,8 @@
 // herdr, the Claude registry, transcript tails and the card files, and redraws.
 //   lanes = categories, columns = Working / Needs me / Waiting on others / Done / Idle
 //   Enter or double click: go to the session (waking it if it sleeps); m: send it a message;
-//   w: set what it waits for; x: clear its card; c: change its category; 1-9 / 0: filter lanes;
+//   w: set what it waits for; x: clear its card; c: change its category; f: a favorite or not;
+//   1-9 / 0: filter lanes;
 //   q / Esc: back to where you were (an overlay board closes instead); Ctrl+C: close the board.
 // This module owns stdin, stdout and the process; render.ts only turns state into text.
 import { mkdirSync, readFileSync, unlinkSync, watch, writeFileSync } from 'node:fs'
@@ -203,6 +204,11 @@ function onAction(name: string): void {
       return
     case 'sleep':
       if (it && !it.sleeping) void sleepIt(it)
+      return
+    case 'favorite':
+      if (it && save(it.key, { favorite: it.favorite ? '' : true }))
+        say(t(it.favorite ? 'tui.unfavorite' : 'tui.favorite', { name: it.name }))
+      void refresh()
       return
     case 'category':
       if (it) {

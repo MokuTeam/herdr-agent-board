@@ -242,6 +242,7 @@ export async function collect(
       column: columnOf(base.status, card, info),
       pin, // the column the user dragged it to, or ''
       auto: columnOf(base.status, { ...card, pin: '' }, info), // where it would be without the pin
+      ...(card.favorite === true && { favorite: true }), // the user keeps it in sight
       helpers: own, // its subagents, forks, workflow agents and teammates in short, or null
       // a fork's card says whose fork it is, and when it started
       ...(typeof card.forkOf === 'string' && { fork: { of: card.forkOf, at: Number(card.forkAt) || 0 } }),
@@ -296,7 +297,8 @@ export async function collect(
     })
   }
 
-  items.sort((a, b) => (b.activity ?? 0) - (a.activity ?? 0))
+  // Favorites first in their columns, then the latest activity first.
+  items.sort((a, b) => Number(!!b.favorite) - Number(!!a.favorite) || (b.activity ?? 0) - (a.activity ?? 0))
   if (links) {
     links.update(items.map(i => i.transcript))
     const rel = relate(items, it => links.events(it.transcript))

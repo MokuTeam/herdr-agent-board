@@ -177,6 +177,31 @@ describe('card markup parity', () => {
     same({ items: [asleep], foldWaiting: 'off' }, 'e')
   })
 
+  test('a favorite: a star by its name; asleep in Idle or in Waiting, the whole card (#64)', () => {
+    const fields = {
+      name: 'Delta',
+      status: 'sleeping' as const,
+      sleeping: true,
+      result: 'Done',
+      lastText: 'Done',
+      activity: ago(200),
+    }
+    for (const column of ['idle', 'ext'] as const) {
+      const fav = item({ key: 'd', column, wait: 'review', ...fields, favorite: true })
+      const { react } = bothCards({ items: [fav] }, 'd')
+      expect(react).toContain(
+        '<span class="favorite" title="Favorite: first in its column and whole, however long it idles">',
+      )
+      expect(react).toContain('<svg class="star"')
+      expect(react).not.toContain('compact')
+      expect(react).not.toContain('folds')
+      // Its last words are on it, as on a card awake.
+      expect(react).toContain('class="said">Done')
+    }
+    // Not a favorite: the card as before.
+    same({ items: [item({ key: 'd', column: 'idle', ...fields, favorite: false })] }, 'd')
+  })
+
   test('asleep elsewhere: the full card with the moon for a dot', () => {
     const d = item({ key: 'd', status: 'sleeping', column: 'done', sleeping: true, result: 'Done', activity: ago(4) })
     same({ items: [d] }, 'd')

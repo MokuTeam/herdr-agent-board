@@ -96,6 +96,7 @@ function actionsWorld(fields: Partial<{ canEdit: boolean; canMutate: boolean; ac
     sleepSession: note('sleepSession'),
     restartSession: note('restartSession'),
     dismissAsk: note('dismissAsk'),
+    setFavorite: note('setFavorite'),
     callMokuPilot: note('callMokuPilot'),
   }
   const deps: ActionDeps = {

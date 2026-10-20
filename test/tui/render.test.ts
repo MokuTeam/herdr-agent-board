@@ -197,3 +197,16 @@ test('a restart on its way shows ↻ by the card, in place of the clock (upstrea
     expect(line).not.toMatch(/[⏳⏰]/)
   }
 })
+
+test('a favorite: a star before its name, and whole while it sleeps in Idle (#64)', () => {
+  const state = fixedState()
+  itemOf(state, 'k3').favorite = true
+  for (const size of [BIG, { columns: 80, rows: 30 }]) {
+    const rows = plainRows(render(state, size))
+    expect(rows.some(row => row.includes('★ notes'))).toBe(true)
+  }
+  // Asleep in Idle it keeps its second line (its result), where the others take one.
+  const wide = plainRows(render(state, BIG))
+  expect(wide.some(row => row.includes('finished earlier'))).toBe(true)
+  expect(plainRows(render(fixedState(), BIG)).some(row => row.includes('finished earlier'))).toBe(false)
+})

@@ -53,6 +53,14 @@ describe('visibleItems', () => {
     expect(keys(visibleItems(items, { query: '', sleepers: true, categories, categoryOf }))).toEqual(['a', 'b', 'c'])
   })
 
+  test('a favorite asleep in the idle column shows all the same (#64)', () => {
+    const items = [
+      item({ key: 'a', column: 'idle', sleeping: true, favorite: true }),
+      item({ key: 'b', column: 'idle', sleeping: true }),
+    ]
+    expect(keys(visibleItems(items, { query: '', sleepers: false, categories, categoryOf }))).toEqual(['a'])
+  })
+
   test('the search matches names, texts, the workspace and the lane title, ignoring case and outer spaces', () => {
     const items = [
       item({ key: 'a', name: 'Alpha' }),

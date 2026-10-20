@@ -160,6 +160,8 @@ function card(item: Item, body: Body): Result {
       { by: 'user' },
     )
   if (typeof body.doing === 'string') patch.doing = body.doing.trim()
+  // Kept in sight, or not any more.
+  if (typeof body.favorite === 'boolean') patch.favorite = body.favorite || ''
   // A card dragged to another column stays there until the session works again; dropped
   // back where the board would put it by itself, it is unpinned.
   if (typeof body.column === 'string') {
