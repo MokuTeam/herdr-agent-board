@@ -12,9 +12,10 @@ export function scheduleRoute(refresh: () => void): Route {
     async handle(_req, ctx) {
       const body = await ctx.body()
       const id = String(body.id ?? '')
-      // A restart always waits until the session is free.
-      if (body.op === 'mode' && getEntry(id)?.kind === 'restart')
-        return json(400, { ok: false, error: t('err.restart.mode') })
+      // A restart, and a sleep, always wait until the session is free.
+      const kind = body.op === 'mode' ? getEntry(id)?.kind : undefined
+      if (kind === 'restart' || kind === 'sleep')
+        return json(400, { ok: false, error: t(kind === 'sleep' ? 'err.sleep.mode' : 'err.restart.mode') })
       // cancel: remove the entry; mode: on time (idle false) or when the session is free.
       const done =
         body.op === 'cancel'

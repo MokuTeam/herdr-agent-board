@@ -25,6 +25,9 @@
 //                            is free, for its information, waking it if it sleeps
 //   board archive --session <id|name|pane>   takes a finished session off the board: its pane
 //                            closes, the user can bring it back from the board's archive (services/archive.ts)
+//   board sleep <id|name|pane>...   puts those sessions to sleep at once through herdr-wake, a line
+//                            for each: asleep, or kept up and why (services/sleep.ts); with
+//                            --when-free the busy ones go to sleep once they are free
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync } from 'node:fs'
@@ -57,8 +60,9 @@ import { checkWake, wakeAnswers } from '../services/actions.ts'
 import { askArchive, closeDue, getArchived, profileDoubt } from '../services/archive.ts'
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
+import { type SleepOutcome, sleepMany } from '../services/sleep.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | doctor] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | doctor] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -74,6 +78,10 @@ const ii = args.indexOf('--idle')
 const idle = ii >= 0
 if (idle) args.splice(ii, 1)
 const mode = (): { idle?: true } => (idle ? { idle: true } : {})
+// sleep: the ones that are busy now go to sleep once they are free, instead of staying up.
+const wi = args.indexOf('--when-free')
+const whenFree = wi >= 0
+if (whenFree) args.splice(wi, 1)
 const modeText = (): string => (idle ? ', when the session is free' : '')
 const [cmd = 'show', ...rest] = args
 const text = rest.join(' ').replace(/\s+/g, ' ').trim()
@@ -235,7 +243,7 @@ function fromNow(ms: number, now: number): string {
 }
 const clip = (s: string, n = 60): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 
-/** How far a restart got, for its line. */
+/** How far a restart got, for its line; a sleep (no steps) how it waits. */
 function restartState(e: ScheduleEntry): string {
   if (e.failed) return `did not happen (${String(e.failed)}), tells the session once it is free`
   if (e.step === 'note') return 'restarted, the note goes in once the session is free'
@@ -254,8 +262,8 @@ function restartState(e: ScheduleEntry): string {
 
 function entryLine(e: ScheduleEntry, now: number, withSession: boolean): string {
   const parts =
-    e.kind === 'restart'
-      ? [e.id, `restart, asked ${stamp(e.created ?? e.next)}`, restartState(e)]
+    e.kind === 'restart' || e.kind === 'sleep'
+      ? [e.id, `${e.kind}, asked ${stamp(e.created ?? e.next)}`, restartState(e)]
       : [
           e.id,
           `${stamp(e.next)} (${fromNow(e.next, now)})`,
@@ -263,7 +271,7 @@ function entryLine(e: ScheduleEntry, now: number, withSession: boolean): string 
           e.idle ? 'when free' : 'on time',
         ]
   if (withSession) parts.push(e.name || e.key)
-  if (e.pendingSince && e.kind !== 'restart')
+  if (e.pendingSince && e.kind !== 'restart' && e.kind !== 'sleep')
     parts.push(`due, waits for the session since ${stamp(Number(e.pendingSince))}`)
   if (e.text) parts.push(clip(e.text, 80))
   return parts.join(' · ')
@@ -333,6 +341,7 @@ async function main(): Promise<void> {
   }
   if (cmd === 'call-report') return callReport()
   if (cmd === 'archive') return archive()
+  if (cmd === 'sleep') return sleep()
 
   const s = await resolveSession()
   const now = Date.now()
@@ -556,6 +565,73 @@ async function archive(): Promise<void> {
   console.log(
     `ok · archived ${item.name}: ${state}; the user can bring it back from the board's archive (Archive on the toolbar)${held}`,
   )
+}
+
+// What holds a session up, for `board sleep`'s lines.
+const KEPT: Record<string, string> = {
+  busy: 'working',
+  dialog: 'a dialog waits for an answer',
+  draft: 'unsent text in its input box',
+  tasks: 'background tasks run',
+  gone: 'another session is in its pane now',
+  notClaude: 'not a Claude session, and herdr-wake puts only those to sleep',
+}
+
+/** One session's line: who, then asleep, or why it stays up. */
+function sleepLine(o: SleepOutcome): string {
+  const who = o.name ? `${o.name}${o.pane ? ` (${o.pane})` : ''}` : `"${o.target}"`
+  const held = o.why === 'refused' ? `herdr-wake refused: ${o.detail ?? ''}` : (KEPT[o.why ?? ''] ?? o.detail ?? '')
+  if (o.result === 'asleep') return `${who}: asleep`
+  if (o.result === 'already') return `${who}: asleep already`
+  if (o.result === 'scheduled')
+    return `${who}: ${held}; goes to sleep once it is free${o.again ? ' (asked before)' : ''} · cancel: board unschedule ${o.id}`
+  if (o.why === 'unknown') return `${who}: no such session on the board`
+  if (o.why === 'ambiguous') return `${who}: fits several sessions (${o.detail}); give its session id or pane`
+  return `${who}: kept up, ${held}`
+}
+
+/**
+ * `board sleep <id|name|pane>... [--when-free]`: several sessions put to sleep at once
+ * (services/sleep.ts), for a session that coordinates others; a line for each. Refused at once
+ * without herdr-wake, which puts them to sleep. In English for agents, whatever language the board
+ * speaks (but for what herdr-wake and the profile guard say).
+ */
+async function sleep(): Promise<void> {
+  const targets = [...rest, ...(target ? [target] : [])]
+  if (!targets.length)
+    throw new Error(
+      'usage: board sleep <id|name|pane>... [--when-free]: the sessions to put to sleep (a name with spaces in quotes)',
+    )
+  const up = await wakeAnswers(deps)
+  if (!up.ok) {
+    const what = up.why
+      ? `herdr-wake, which does not answer at ${cfg.wakeUrl} (${up.why})`
+      : "herdr-wake, and wakeUrl in the board's config.json is empty"
+    throw new Error(`putting sessions to sleep needs ${what}; nothing was put to sleep`)
+  }
+  const from = await ownSession()
+  const results = await sleepMany(deps, await collect(deps), targets, {
+    whenFree,
+    by: 'agent',
+    ...(from && { from }),
+  })
+  // A session two targets name counts once.
+  const each = [...new Map(results.map(o => [o.key ?? o.target, o.result])).values()]
+  const count = (result: SleepOutcome['result']): number => each.filter(r => r === result).length
+  const kept = count('kept')
+  const head = [
+    `${count('asleep')} put to sleep`,
+    count('already') && `${count('already')} asleep already`,
+    count('scheduled') && `${count('scheduled')} once free`,
+    kept && `${kept} kept up`,
+  ]
+  // Held for what passes: --when-free would have them sleep once it is over.
+  const hint =
+    !whenFree && results.some(o => o.result === 'kept' && ['busy', 'dialog', 'draft', 'tasks'].includes(o.why ?? ''))
+      ? ' · with --when-free the busy ones go to sleep once they are free'
+      : ''
+  const note = count('scheduled') ? await schedulerNote() : ''
+  console.log([`ok · ${head.filter(Boolean).join(', ')}${hint}${note}`, ...results.map(sleepLine)].join('\n'))
 }
 
 /**

@@ -910,6 +910,8 @@ are files, and the board keeps running.
 - The terminal board shows `⏰` (`⏳` for one that waits until the session is free) and the soonest
   time by a card's age, the count in its header.
 - A restart (`board restart`, "Restart" on the web board) is an entry too: see [Restart](#restart).
+  So is a sleep once the session is free (`board sleep --when-free`): see
+  [Several to sleep at once](#several-to-sleep-at-once).
 
 ## Restart
 
@@ -968,6 +970,39 @@ agent cannot reconnect from inside its own turn (`/mcp` is a menu in its own ter
   session (or, for one you asked for, the log and a toast) hears why. "Is a background command
   running" is read in the session's own profile's registry (`<profile folder>/sessions`). With
   one profile it is all as above.
+
+## Several to sleep at once
+
+A session that coordinates others (one that polls every session at the end of the day, say) puts
+the ones it is done with to sleep in one call, instead of one herdr-wake `POST /sleep` each:
+
+```sh
+board sleep Report-north Report-south w2:p7 3f2a9c1e-...   # names, panes or session ids
+board sleep --when-free Report-north Report-south           # the busy ones once they are free
+```
+
+- Every session that is free now goes to sleep at once through herdr-wake (four at a time), by
+  the checks a restart makes: its turn over (for herdr and in Claude's own registry), no dialog,
+  no text the user started typing, no background command or Monitor. The command prints a line
+  for each: asleep, asleep already, or kept up and why (working, a dialog, unsent text in its
+  input box, background tasks, herdr-wake refused, not a Claude session, no such session on the
+  board, a name several sessions go by). A session id or a pane names one exactly; a name two
+  sessions go by takes neither, and says so.
+- `--when-free`: one held by its turn, a dialog, a draft or background tasks (or that herdr-wake
+  refused just now) gets a schedule entry of kind `sleep` instead, due at once, and goes to sleep
+  once it is free; its line gives the entry's id (`board unschedule <id>` cancels it). Asked again,
+  it stays one entry. The scheduler waits for it as for a reminder (`scheduleWaitMin`, 240
+  minutes), then logs it as missed; herdr-wake refusing is tried three times, then the log says it
+  did not happen. Nothing is typed into the session, and nothing wakes it: one asleep by other
+  means meanwhile counts as done. Like a restart, it is for that session only (not the one after
+  `/clear` in its pane), and archiving the session drops it.
+- Without herdr-wake, or when it does not answer, it refuses at once and puts nothing to sleep.
+- For agents that talk to the board over HTTP: `POST /api/sleep` with header `X-Board: 1` and
+  `{"targets": ["<id|name|pane>", ...], "whenFree": true}` answers `{ ok, results }`, one per
+  target: `result` (`asleep`, `already`, `scheduled`, `kept`), `why` (`busy`, `dialog`, `draft`,
+  `tasks`, `gone`, `unknown`, `ambiguous`, `notClaude`, `profile`, `refused`, `error`), `detail`,
+  and the session's `key`, `name`, `pane`, and `id` of a scheduled one. It needs fresh herdr data,
+  as "Put to sleep" does (`src/services/sleep.ts`, `src/server/routes/sleep.ts`).
 
 ## Archive
 
@@ -1185,6 +1220,10 @@ board archive --session <id|name|pane>
                           another session off the board, its pane closed (a one-off one you
                           started, or one the user asked you to); the user brings it back from
                           the board's archive; see Archive
+board sleep <id|name|pane>... [--when-free]
+                          several sessions to sleep at once, a line for each: asleep, or kept
+                          up and why; --when-free: the busy ones once they are free; see
+                          Several to sleep at once
 --session <id|name|pane>  for another session's card
 board doctor              what is set up on this computer, and what is missing
 spawn-agent --name <Name> --cwd <folder> [--brief-file <file>]   a new session in a herdr tab
@@ -1194,7 +1233,7 @@ Agents in herdr also get a skill, [`herdr-agents`](skills/herdr-agents/SKILL.md)
 install puts into `~/.claude/skills` (with more than one profile, into the `skills` folder of
 each one the board shows). Claude Code keeps only its one-line description in a session's
 context and reads the rest when it is needed: how to start another session, message or wake one,
-do something later (`board remind` rather than CronCreate, which dies when the session sleeps),
+put the sessions it coordinates to sleep in one call (`board sleep`), do something later (`board remind` rather than CronCreate, which dies when the session sleeps),
 restart itself when an MCP server dropped or its settings, hooks or skills changed
 (`board restart`), and run a server or an interactive login in a pane of its own. herdr puts the
 pane's ids into its environment (`HERDR_ENV=1`, `HERDR_PANE_ID`, `HERDR_TAB_ID`,

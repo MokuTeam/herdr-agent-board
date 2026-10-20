@@ -47,6 +47,8 @@ const WAITS: Record<string, string> = {
   draft: 'sched.draft',
   dialog: 'sched.dialog',
   busy: 'sched.pending',
+  // A sleep waits for them too, as a restart does.
+  tasks: 'sched.tasks',
 }
 
 /** Why a due entry has not gone out yet; nothing while it is not waiting. A restart: how it stands. */
@@ -113,10 +115,11 @@ export function entryView(
 
 /**
  * What a schedule entry (or a line of the log) says, in a line: a MokuPilot call's results by
- * their title, a restart with its note.
+ * their title, a restart with its note, a sleep as one.
  */
 export function entryText(e: { kind?: unknown; text: string }, t: Translator): string {
   if (e.kind === 'restart') return e.text ? `${t('restart.entry')}: ${e.text}` : t('restart.entry')
+  if (e.kind === 'sleep') return t('sleep.entry')
   return e.kind === 'call' ? `${t('notice.call')}: ${callTitle(e.text)}` : e.text
 }
 
@@ -186,7 +189,7 @@ export function logView(r: LogRecord, itemOf: (key: string) => Item | undefined,
       ? t('sched.why.dropped', { n: r.n ?? 3 })
       : r.result === 'missed' || r.result === 'failed'
         ? logWhy(r, t)
-        : r.kind === 'restart'
+        : r.kind === 'restart' || r.kind === 'sleep'
           ? ''
           : late > 120_000
             ? t('sched.lateBy', { late: span(late, t) })
