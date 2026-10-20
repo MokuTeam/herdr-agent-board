@@ -4,7 +4,7 @@
 // (its argv); FAKE_SSH_STATE (a JSON file, missing = {}) picks the answers:
 //   { keygen?: 'unprotected' | 'passphrase',      ssh-keygen -y refuses the key so
 //     ssh?: { mode?: Mode, seq?: Mode[],          one mode, or one per call in turn (the last repeats)
-//             exitAfterMs?: number } }            forward and hang drop after that long (else: until killed)
+//             exitAfterMs?: number } }            forward drops after that long (else: until killed)
 // Modes (none: forward): forward holds the -R forward; refuse, publickey and hostkey exit 255 as
 // ssh does for a refused forward, a refused key, a changed server key; hang stays up silent.
 // ssh prints what Windows' ssh 9.5 printed in the spike (spec, "Checked by the spike"): with -v,
@@ -135,7 +135,8 @@ function ssh(): void {
   }
   const now = mode()
   if (now === 'hang') {
-    stayUp()
+    // Silent until killed: exitAfterMs is the forward's alone.
+    setInterval(() => {}, 1 << 30)
     return
   }
   if (verbose) say('OpenSSH_for_Windows_9.5p2, LibreSSL 3.8.2')
