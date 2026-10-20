@@ -7,7 +7,7 @@ import type { Item } from '../../../../src/core/types.ts'
 import { useSessionActions } from '../../hooks/useSessionActions.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { plain } from '../../models/card.ts'
-import { type FieldEdit, type FieldScene, liveEdit, typing } from '../../models/sheet.ts'
+import { doingLabel, type FieldEdit, type FieldScene, liveEdit, typing } from '../../models/sheet.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { RelationsRow } from '../helpers/RelationsRow.tsx'
 import { type ScheduleActions, ScheduleRow } from './ScheduleRow.tsx'
@@ -31,7 +31,7 @@ export function SheetCard({ item, open, disabled, schedule, onSession }: SheetCa
     <div className="group">
       {(open || !!item.doing) && (
         <div className="row">
-          <span className="row-label">{t('row.doing')}</span>
+          <span className="row-label">{doingLabel(item, t)}</span>
           <CardField
             item={item}
             field="doing"
