@@ -3,6 +3,7 @@
 // chain matched (prefix routes, a missing session before any guard).
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { connect } from 'node:net'
+import { brotliDecompressSync, gunzipSync } from 'node:zlib'
 import { serveBoard, sharedSandbox } from '../support/board-server.ts'
 
 const PAGE_CSP =
@@ -169,6 +170,44 @@ describe('routes', () => {
       '/api/nothing',
     ])
       expect([path, ...(await answer(fetch(url + path)))]).toEqual([path, 404, { error: 'not found' }])
+  })
+
+  test('the page goes out compressed when the browser takes it (br, else gzip), its source map apart', async () => {
+    const plain = await fetch(`${url}/app.js`, { headers: { 'accept-encoding': 'identity' } })
+    expect(plain.headers.get('content-encoding')).toBe(null)
+    expect(plain.headers.get('vary')).toBe('accept-encoding')
+    const script = await plain.text()
+    // The script names its map, which devtools load and the page does not.
+    expect(script).not.toContain('sourceMappingURL=data:')
+    expect(script.trimEnd().endsWith('//# sourceMappingURL=app.js.map')).toBe(true)
+    const map = await fetch(`${url}/app.js.map`)
+    expect(map.headers.get('content-type')).toBe('application/json; charset=utf-8')
+    const { sources } = (await map.json()) as { sources: string[] }
+    expect(sources.some(s => s.endsWith('web/src/main.tsx'))).toBe(true)
+    // As the bytes go: a fraction of the script, the same script once decoded.
+    const raw = (path: string, accept: string) =>
+      fetch(url + path, { headers: { 'accept-encoding': accept }, decompress: false } as RequestInit)
+    for (const [accept, encoding] of [
+      ['gzip, deflate, br, zstd', 'br'],
+      ['gzip, deflate', 'gzip'],
+      ['br;q=0, gzip', 'gzip'],
+      ['*', 'br'],
+    ] as const) {
+      const res = await raw('/app.js', accept)
+      expect([accept, res.headers.get('content-encoding'), res.headers.get('vary')]).toEqual([
+        accept,
+        encoding,
+        'accept-encoding',
+      ])
+      const bytes = Buffer.from(await res.arrayBuffer())
+      expect(bytes.length).toBeLessThan(script.length / 3)
+      expect((encoding === 'br' ? brotliDecompressSync(bytes) : gunzipSync(bytes)).toString()).toBe(script)
+    }
+    // The page's other text too; the PNG icons as they are.
+    for (const path of ['/', '/theme.js', '/styles/app.css', '/icon.svg', '/app.js.map'])
+      expect([path, (await raw(path, 'gzip')).headers.get('content-encoding')]).toEqual([path, 'gzip'])
+    const png = await raw('/icon-192.png', 'gzip, br')
+    expect([png.headers.get('content-encoding'), png.headers.get('vary')]).toEqual([null, null])
   })
 
   test('anything else that matches no route: 405', async () => {

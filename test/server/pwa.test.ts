@@ -127,7 +127,12 @@ describe("the board in a phone's browser, through tailscale serve", () => {
     // The script by the page's build (#116), the version the board goes by.
     const board = (await (await fetch(`${url}/api/board`)).json()) as { version: string }
     expect(html).toContain(`<script type="module" src="app.js?v=${board.version}"></script>`)
-    expect((await phone(`/app.js?v=${board.version}`)).headers.get('content-type')).toContain('javascript')
+    const script = await phone(`/app.js?v=${board.version}`, { decompress: false } as RequestInit, {
+      'accept-encoding': 'gzip, deflate, br',
+    })
+    expect(script.headers.get('content-type')).toContain('javascript')
+    // Compressed for the phone's link (#122): serve passes the encoding on as it is.
+    expect([script.headers.get('content-encoding'), script.headers.get('vary')]).toEqual(['br', 'accept-encoding'])
     const sw = await phone('/sw.js')
     expect(sw.headers.get('content-type')).toContain('javascript')
     expect(await sw.text()).toContain("startsWith('/api/')")
