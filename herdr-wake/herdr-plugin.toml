@@ -11,7 +11,7 @@ command = ["node", "src/start.mjs"]
 
 [[actions]]
 id = "start"
-title = "Start the Telegram router"
+title = "Start the router (sleep, wake, and Telegram with tg-mcp)"
 contexts = ["workspace"]
 command = ["node", "src/start.mjs"]
 

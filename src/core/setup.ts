@@ -11,7 +11,12 @@ import { BOARD_EVENTS, commandsOf, normPath, ourCommands, TOAST_EVENTS } from '.
 import type { MokupilotLauncher } from './mokupilot.ts'
 import type { Translator } from './types.ts'
 
-export const WAKE_REPO = 'https://github.com/Eithery-rc/tg-mcp/tree/main/herdr-wake'
+/** herdr-wake from this repository (herdr-wake/README.md): install, its Claude Code hooks, start. */
+export const WAKE_INSTALL = [
+  'herdr plugin install MokuTeam/herdr-agent-board/herdr-wake',
+  'herdr plugin action invoke herdr-wake.install-hooks',
+  'herdr plugin action invoke herdr-wake.start',
+].join('\n')
 const english = translator('en')
 
 /** The files of a copy of the board that other programs run, and the skill install copies. */
@@ -432,7 +437,7 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
       t('setup.wake.off'),
       both(t('setup.wake.offDetail'), t('setup.wake.without')),
       t('setup.wake.fix'),
-      WAKE_REPO,
+      WAKE_INSTALL,
     )
   else if (facts.wake?.ok) add('wake', 'ok', t('setup.wake.ok'), t('setup.wake.okDetail', { url: facts.wakeUrl }))
   else
@@ -442,7 +447,7 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
       t('setup.wake.down', { url: facts.wakeUrl }),
       t('setup.wake.without'),
       t('setup.wake.fix'),
-      WAKE_REPO,
+      WAKE_INSTALL,
     )
 
   // How new sessions start.

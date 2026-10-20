@@ -1,13 +1,16 @@
 # herdr-wake
 
 A [herdr](https://herdr.dev) plugin that lets idle Claude Code sessions sleep and wakes them
-when there is work for them:
+when there is work for them. The [agent board](../README.md) uses it for "Put to sleep",
+"Wake" and "Restart", `board restart`, sleeping sessions on the board and reminders that wake
+a session.
 
 - **Reaper.** A session that sat idle for an hour is put to sleep: it gets `/exit`, the pane
   stays, labelled `💤 <name>`, with the resume command already typed at its prompt (press
   Enter to wake it yourself).
-- **Telegram router.** Your Telegram messages reach sessions without Claude Code channels.
-  It works with [tg-mcp](../README.md) in router mode (`ROUTER=1`, tg-mcp 0.2.0 or newer):
+- **Telegram router** (optional). Your Telegram messages reach sessions without Claude Code
+  channels. It works with [tg-mcp](https://github.com/Eithery-rc/tg-mcp) in router mode
+  (`ROUTER=1`, tg-mcp 0.2.0 or newer):
   the router long-polls tg-mcp, finds the pane a message is for, wakes the session there if
   it sleeps, and types the message in.
 - **Handoff between sessions.** `ListAgents` also lists the sleeping sessions, and a
@@ -20,17 +23,21 @@ default; point it at your own launcher, such as [claude-tg](#claude-tg)), so the
 comes back in the same pane, under the same name, with the same transcript.
 
 Tested on Windows (PowerShell panes). Linux and macOS should work, but have not been tried.
+It runs on Node.js 20 or newer (`node` on PATH), not on Bun like the board.
 
 ## Setup
 
-1. tg-mcp server: set `ROUTER=1` in its `.env` and restart it (only needed for Telegram).
-2. Install and start the plugin. The router runs in a pane of its own workspace,
-   `tg-router`, and comes back by itself after a herdr restart (startup hook).
+1. Install and start the plugin. The router runs in a pane of its own workspace,
+   `tg-router`, and comes back by itself after a herdr restart (startup hook). Without
+   tg-mcp it runs without Telegram: sleep, wake and the local API work all the same.
 
    ```bash
-   herdr plugin install Eithery-rc/tg-mcp/herdr-wake
+   herdr plugin install MokuTeam/herdr-agent-board/herdr-wake
    herdr plugin action invoke herdr-wake.start
    ```
+
+2. For Telegram only: set `ROUTER=1` in tg-mcp's `.env` and restart it, then restart the
+   router (close its pane, then `herdr plugin action invoke herdr-wake.start`).
 
 3. Install the Claude Code hooks (they make sleeping sessions visible in `ListAgents` and
    wake them on `SendMessage`; both do nothing while the router is not running). A third
@@ -94,7 +101,7 @@ it installs nothing and says so. Its arguments go to `claude` as they are:
 
 In the agent board's config.json: `"launch": { "claude": ["claude-tg", "--dangerously-skip-permissions"] }`
 (leave out the flag if you run Claude with permission prompts). See
-[tg-mcp's README](../README.md#herdr-launcher) for the server side.
+[tg-mcp's README](https://github.com/Eithery-rc/tg-mcp#herdr-launcher) for the server side.
 
 ## Reaper
 
@@ -159,7 +166,7 @@ it has written an explicit `hasTrustDialogAccepted: false` for it into `~/.claud
 | `listSleepingDays` | `7` | `ListAgents` lists sessions asleep for less than this (at most 15) and only counts the rest; a session sleeps until its pane is closed, so the full list keeps growing. All of them stay wakeable by name |
 | `wakeCommand` | `claude --resume {session}` | command typed into the pane to resume a session; with the hooks installed, herdr resumes through it after a restart too, when it is a command name on PATH followed by plain words (`claude-tg --resume {session}`, not a path) |
 | `wakeTimeoutSec` | `120` | how long to wait for a resumed session |
-| `url`, `authorization` | from `~/.claude.json` | tg-mcp base url (without `/mcp`) and the `Authorization` header value |
+| `url`, `authorization` | from `~/.claude.json` | tg-mcp base url (without `/mcp`) and the `Authorization` header value; neither there nor here: no Telegram |
 | `server` | `telegram` | MCP server in `~/.claude.json` to take them from |
 | `pollTimeoutSec` | `25` | long poll length |
 | `port` | `12421` | local API; also keeps the router single-instance |

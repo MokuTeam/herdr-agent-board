@@ -17,6 +17,7 @@ import http from 'node:http'
 import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
 import { hasSchedules, liveSessions, transcriptPath } from './claude.mjs'
+import { resolveConfig } from './config.mjs'
 import { herdr, herdrText, snapshot } from './herdr.mjs'
 import { exitedPanes, reapPlan } from './reaper.mjs'
 import { formatPrompt, resolve, samePath } from './route.mjs'
@@ -45,23 +46,7 @@ function readJson(file, fallback) {
 
 /** config.json in the plugin config dir; url and token default to the `telegram` MCP server in ~/.claude.json. */
 function loadConfig() {
-  const file = readJson(join(CONFIG_DIR, 'config.json'), {})
-  const c = {
-    server: 'telegram',
-    port: 12421, // local API; also keeps the router single-instance
-    wakeCommand: 'claude --resume {session}', // e.g. the claude-tg launcher: "claude-tg --resume {session}"
-    wakeTimeoutSec: 120,
-    pollTimeoutSec: 25,
-    ...file,
-    reaper: { enabled: false, idleMinutes: 60, exclude: [], maxPerRound: 3, ...file.reaper },
-  }
-  if (!c.url || !c.authorization) {
-    const mcp = readJson(join(homedir(), '.claude.json'), {}).mcpServers?.[c.server]
-    c.url ??= mcp?.url?.replace(/\/mcp\/?$/, '')
-    c.authorization ??= mcp?.headers?.Authorization
-  }
-  if (!c.url || !c.authorization) throw new Error(`no tg-mcp url/token: set them in ${join(CONFIG_DIR, 'config.json')}`)
-  return c
+  return resolveConfig(readJson(join(CONFIG_DIR, 'config.json'), {}), readJson(join(homedir(), '.claude.json'), {}))
 }
 
 function log(...parts) {
@@ -518,8 +503,9 @@ server.on('error', err => {
 })
 server.listen(cfg.port, '127.0.0.1', () => {
   const reaper = cfg.reaper.enabled ? `reaper on (${cfg.reaper.idleMinutes} min)` : 'reaper off'
-  log(`router up: ${new URL(cfg.url).host}, ${reaper}, state ${STATE_DIR}, API http://127.0.0.1:${cfg.port}`)
+  const telegram = cfg.telegram ? new URL(cfg.url).host : 'Telegram off (no tg-mcp url/token)'
+  log(`router up: ${telegram}, ${reaper}, state ${STATE_DIR}, API http://127.0.0.1:${cfg.port}`)
   every(15_000, 'snapshot', async () => remember(await freshSnapshot()))
   if (cfg.reaper.enabled) every(60_000, 'reaper', reapRound)
-  pollLoop()
+  if (cfg.telegram) pollLoop()
 })

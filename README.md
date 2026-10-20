@@ -4,7 +4,7 @@ A [herdr](https://herdr.dev) plugin: a kanban of the Claude Code sessions runnin
 of the [pi](#pi) ones.
 Lanes are categories (one per client, say, plus Personal and Other), columns are Working /
 Needs me / Waiting on others / Done / Idle. Sessions
-[herdr-wake](https://github.com/Eithery-rc/tg-mcp/tree/main/herdr-wake) put to sleep are on it
+[herdr-wake](herdr-wake/) put to sleep are on it
 too (one line, `z`). In English and Russian; see [Language](#language).
 
 No model runs for the board. It reads herdr's snapshot, Claude's session registry and the tail
@@ -77,13 +77,22 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
    asking), a model, or a launcher of your own, such as tg-mcp's
    [`claude-tg`](https://github.com/Eithery-rc/tg-mcp#herdr-launcher), which gives each herdr tab
    its own Telegram topic. See [New sessions](#new-sessions).
-4. **[herdr-wake](https://github.com/Eithery-rc/tg-mcp/tree/main/herdr-wake)** (optional, worth it
-   with many sessions). It puts sessions that sat idle for an hour to sleep and wakes them for a
-   message, a reminder or a click; with [tg-mcp](https://github.com/Eithery-rc/tg-mcp) it also
-   brings your Telegram messages to them. Without it the board has no "Put to sleep", "Wake" and
-   "Restart", agents cannot restart themselves (`board restart`, see [Restart](#restart)), the
-   board shows no sleeping sessions, and a reminder cannot wake one. The board finds it at
-   `wakeUrl` (`http://127.0.0.1:12421`).
+4. **[herdr-wake](herdr-wake/)** (optional, worth it with many sessions; a plugin of its own in
+   this repository, on Node.js 20 or newer). It puts sessions that sat idle for an hour to sleep
+   and wakes them for a message, a reminder or a click; with
+   [tg-mcp](https://github.com/Eithery-rc/tg-mcp) it also brings your Telegram messages to them.
+   Without it the board has no "Put to sleep", "Wake" and "Restart", agents cannot restart
+   themselves (`board restart`, see [Restart](#restart)), the board shows no sleeping sessions,
+   and a reminder cannot wake one. The board finds it at `wakeUrl` (`http://127.0.0.1:12421`).
+
+   ```bash
+   herdr plugin install MokuTeam/herdr-agent-board/herdr-wake
+   herdr plugin action invoke herdr-wake.install-hooks
+   herdr plugin action invoke herdr-wake.start
+   ```
+
+   Its own settings (the idle hour, sessions never to put to sleep, the wake command) are in
+   [herdr-wake/README.md](herdr-wake/README.md).
 5. **Desktop notifications** (optional, Windows): `herdr plugin action invoke
    agent-board.notifications`. See [Notifications](#notifications).
 6. **Lanes**: "Categories" on the web board (titles, colors, the folders that sort sessions into
@@ -1546,3 +1555,7 @@ The code is in layers: `src/core` (pure rules, no I/O), `src/adapters` and `src/
 (files, processes, herdr, Claude's files, herdr-wake), `src/services` (what the board does with
 them), `src/server`, `src/tui` and `src/entrypoints` (the web server, the terminal board, the
 commands), `web/src` (the React page). Tests mirror them under `test/`.
+
+`herdr-wake/` is a herdr plugin of its own, on Node.js rather than Bun: `bun test`, `bun run check`
+and tsc leave it out (their roots are `test`, `src`, `web/src`), and its tests run with
+`node --test herdr-wake/test/*.test.mjs` (Node.js 20 or newer).

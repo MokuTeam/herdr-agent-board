@@ -309,6 +309,16 @@ describe('doctor', () => {
     assert.match(check(rest, 'key').code, /command = "agent-board\.open"/)
     assert.equal(level(rest, 'wake'), 'off')
     assert.match(check(rest, 'wake').detail, /Put to sleep/)
+    // herdr-wake lives in this repository: the commands to copy, and what it runs on (#118).
+    assert.equal(
+      check(rest, 'wake').code,
+      [
+        'herdr plugin install MokuTeam/herdr-agent-board/herdr-wake',
+        'herdr plugin action invoke herdr-wake.install-hooks',
+        'herdr plugin action invoke herdr-wake.start',
+      ].join('\n'),
+    )
+    assert.match(check(rest, 'wake').fix, /Node\.js 20/)
     assert.equal(level(rest, 'launch'), 'warn')
     assert.equal(level(rest, 'toast'), 'warn') // herdr's own notifications on top of the board's
     assert.deepEqual(
