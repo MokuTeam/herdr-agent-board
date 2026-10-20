@@ -569,12 +569,15 @@ describe('a lane’s usual profile', () => {
     // None given: None; the fallback lane has one too.
     for (const id of ['ops', 'other'])
       expect(usualOf(nodes, id)).toEqual({ label: 'Usual profile', options, selected: [''], disabled: false })
-    // At the end of the line of the lane's folders.
-    expect(
-      elementsIn(byClass([rowOf(nodes, 'proj')], 'cat-sub'))
-        .at(-1)
-        ?.attrs.get('class'),
-    ).toBe('cat-profile')
+    // A line of its own, under the line of the lane's folders and what opens under it.
+    expect(elementsIn(rowOf(nodes, 'proj')).map(el => el.attrs.get('class'))).toEqual([
+      'cat-main',
+      'cat-sub',
+      'field-note',
+      'folder-cols',
+      'cat-profile',
+      'palette',
+    ])
     // Without the board it does nothing.
     expect(usualOf(reactBody({ categories: USUAL, profiles: PROFILES, canEdit: false }), 'proj')?.disabled).toBe(true)
     // In Russian.

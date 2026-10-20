@@ -2,8 +2,9 @@
 // color (a click opens the swatches), its title (saved when the field is left), how many sessions
 // are in it, delete (the first click asks), its id, the folders that sort sessions in with the
 // field that adds one (the new-session window's folder field: lane-folder.ts) and, with two
-// profiles or more shown, its usual profile (a lane's + preselects it in the new-session window). A
-// lane an agent made up, not in the settings, can only be added to them.
+// profiles or more shown, its usual profile on a line of its own under them (a lane's + preselects
+// it in the new-session window). A lane an agent made up, not in the settings, can only be added
+// to them.
 import { type FocusEvent, type KeyboardEvent, type Ref, useLayoutEffect, useRef, useState } from 'react'
 import type { BoardCategory, Swatch } from '../../../../src/core/payload.ts'
 import { launchApi } from '../../api/launch.ts'
@@ -292,25 +293,25 @@ export function CategoryRowView(props: CategoryRowViewProps) {
             <FolderPop view={folder} on={on?.folder} />
           </div>
         )}
-        {profiles && c.configured && (
-          <label className="cat-profile">
-            <span>{t('cat.profile')}</span>
-            <select value={c.profile ?? ''} disabled={disabled} onChange={e => on?.profile(e.currentTarget.value)}>
-              <option value="">{t('cat.profileNone')}</option>
-              {usualOptions(profiles, c.profile).map(p => (
-                <option key={p.id} value={p.id} disabled={p.off}>
-                  {p.title}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
       </div>
       {c.configured && (
         <>
           <Note field="cwd" note={note} />
           <FolderColumns view={folder} on={on?.folder} />
         </>
+      )}
+      {profiles && c.configured && (
+        <label className="cat-profile">
+          <span>{t('cat.profile')}</span>
+          <select value={c.profile ?? ''} disabled={disabled} onChange={e => on?.profile(e.currentTarget.value)}>
+            <option value="">{t('cat.profileNone')}</option>
+            {usualOptions(profiles, c.profile).map(p => (
+              <option key={p.id} value={p.id} disabled={p.off}>
+                {p.title}
+              </option>
+            ))}
+          </select>
+        </label>
       )}
       <div className="palette" hidden={!paletteOpen}>
         {swatches.map(s => (
