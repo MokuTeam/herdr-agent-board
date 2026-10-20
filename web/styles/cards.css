@@ -15,6 +15,21 @@
   .card:hover .age, .card:hover .alarm { opacity: 1; }
 }
 
+/* A narrow card (five columns in a window between a phone's and a wide monitor's; #114) keeps
+   its name readable: the head's extras give way first. The clock is a glyph, as on a one-line
+   card (orange while due), its time in the glyph's tooltip and in the session's panel, and the
+   head's gaps tighten. What the session waits for takes a second line instead of breaking off
+   after a few words. A wider card is as before. */
+.card { container: card / inline-size; }
+@container card (max-width: 250px) {
+  .card-top { gap: 6px; }
+  .card-top .alarm { padding: 0; background: none; }
+  .card-top .alarm > span { display: none; }
+  .card .chip { align-items: flex-start; border-radius: 12px; }
+  .card .chip svg { flex: none; margin-top: 2px; }
+  .card .chip span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: normal; overflow-wrap: anywhere; }
+}
+
 /* A finger gets a bigger target than the line shows: the sessions it works with, its helpers. */
 @media (pointer: coarse) {
   button.rel, .helpers-chip { position: relative; }

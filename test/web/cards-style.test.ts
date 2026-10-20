@@ -19,6 +19,18 @@ test('the dot of an awake card takes the moon’s width, so names line up across
   expect(dot + 2 * margin).toBe(moon)
 })
 
+test('a narrow card leaves its head to the name: the clock a bare glyph, tighter gaps, the wait in two lines (#114)', () => {
+  const css = sheet('cards.css')
+  expect(css).toContain('.card { container: card / inline-size; }')
+  const narrow = /@container card \(max-width: 250px\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? ''
+  expect(narrow).toContain('.card-top { gap: 6px; }')
+  expect(narrow).toContain('.card-top .alarm { padding: 0; background: none; }')
+  expect(narrow).toContain('.card-top .alarm > span { display: none; }')
+  expect(narrow).toMatch(/\.card \.chip span \{[^}]*-webkit-line-clamp: 2;[^}]*white-space: normal;/)
+  // Only inside the query: a wider card keeps upstream's head as it was.
+  expect(px(sheet('app.css'), /^\.card-top \{([^}]*)\}/m, 'gap')).toBe(8)
+})
+
 test('on a screen without hover a tap leaves the age, the clock and no hover buttons; cards flash no square highlight', () => {
   const css = sheet('cards.css')
   const touch = /@media \(hover: none\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? ''
