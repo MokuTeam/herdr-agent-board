@@ -4,8 +4,12 @@
 // else: no page, no login, no board route. It is not the tunnel listener, and lives for one Test.
 import { json } from './http.ts'
 
-/** How long a probe-only listener lives at most, should nobody close it. */
-const CLOSE_AFTER_MS = 30_000
+/**
+ * How long a probe-only listener lives at most, should nobody close it. Test waits up to 25 s for
+ * the forward, then up to 10 s (PROBE_TIMEOUT_MS) for the probe through it: this outlives both, with
+ * 5 s to spare (the spec's "about 30 s" was too short for a forward taken late).
+ */
+export const PROBE_LISTENER_LIVES_MS = 40_000
 
 /** GET /api/probe/<nonce>'s answer, here and on the tunnel listener. */
 export function probeAnswer(nonce: string): Response {
@@ -37,6 +41,6 @@ export async function openProbeListener(
     clearTimeout(timer)
     void server.stop(true)
   }
-  const timer = setTimeout(close, o.closeAfterMs ?? CLOSE_AFTER_MS)
+  const timer = setTimeout(close, o.closeAfterMs ?? PROBE_LISTENER_LIVES_MS)
   return { port: server.port ?? 0, close }
 }

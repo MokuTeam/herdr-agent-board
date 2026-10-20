@@ -4,7 +4,7 @@
 import type { ProbeResult } from '../core/tunnel.ts'
 import { isRecord } from './json-store.ts'
 
-const TIMEOUT_MS = 10_000
+export const PROBE_TIMEOUT_MS = 10_000
 /** The answer is a few dozen bytes: more than this is read no further. */
 const BODY_BYTES = 16 << 10
 /** How much of another answer the detail keeps. */
@@ -55,7 +55,7 @@ function errorDetail(err: unknown): string {
  * answered with that nonce; else what came back (another status, another answer, a TLS error, or
  * none at all). Never throws.
  */
-export async function fetchProbe(origin: string, nonce: string, timeoutMs = TIMEOUT_MS): Promise<ProbeResult> {
+export async function fetchProbe(origin: string, nonce: string, timeoutMs = PROBE_TIMEOUT_MS): Promise<ProbeResult> {
   const url = `${origin.replace(/\/+$/, '')}/api/probe/${encodeURIComponent(nonce)}`
   try {
     const res = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) })

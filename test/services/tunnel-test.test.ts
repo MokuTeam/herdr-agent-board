@@ -1,10 +1,10 @@
 // The probe through the domain (now and then while connected) and Test connection, over the
 // supervisor's fakes (test/support/fake-tunnel.ts).
 import { expect, test } from 'bun:test'
-import { fetchProbe } from '../../src/adapters/probe.ts'
+import { fetchProbe, PROBE_TIMEOUT_MS } from '../../src/adapters/probe.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { type StepHint, type TestStep, TUNNEL_SOCKET } from '../../src/core/tunnel.ts'
-import { openProbeListener } from '../../src/server/tunnel-probe.ts'
+import { openProbeListener, PROBE_LISTENER_LIVES_MS } from '../../src/server/tunnel-probe.ts'
 import { createProbes } from '../../src/services/tunnel.ts'
 import { HEALTHY, planTo, SSH, success, world } from '../support/fake-tunnel.ts'
 
@@ -248,7 +248,7 @@ test('Test while off: an ssh that cannot start is noSsh; settings that do not ch
   expect(w.listeners[1]?.closed).toBe(1)
 })
 
-test('Test while off with a recorded ssh of ours that may still run: none of its own, the record kept', async () => {
+test('Test while off with a recorded ssh of ours that may still run: no ssh and no listener of its own, the record kept', async () => {
   const w = world()
   w.plan = null
   const stray = { pid: 4242, forward: planTo(12424).forward, at: 1 }
@@ -261,16 +261,88 @@ test('Test while off with a recorded ssh of ours that may still run: none of its
   expect(steps[2]).toEqual(notRun('domain'))
   expect(w.spawns).toHaveLength(0)
   expect(w.record).toEqual(stray)
-  expect(w.listeners[0]?.closed).toBe(1)
+  expect(w.listeners).toHaveLength(0)
 
   // Gone by the next Test: its record cleared, the Test's ssh runs.
   w.strayEnd = async () => true
   const run = w.sup.test()
   await w.time.advance(0)
   expect(w.spawns).toHaveLength(1)
-  w.child().line(success(w.listeners[1]?.port))
+  w.child().line(success(w.listeners[0]?.port))
   expect((await run).map(s => s.ok)).toEqual([true, true, true])
   expect(w.record).toBeNull()
+})
+
+test('Test while off, the forward taken at the last moment and the probe as slow as it may be: the probe-only listener is still up for it, a stray’s end not counted', async () => {
+  // 0: no record. 8000: a record whose ssh takes 8 s to end (PowerShell), before the listener opens.
+  for (const strayMs of [0, 8000]) {
+    const w = world()
+    w.plan = null
+    if (strayMs) {
+      w.record = { pid: 4242, forward: planTo(12424).forward, at: 1 }
+      w.strayEnd = () => new Promise(resolve => w.time.clock.setTimeout(() => resolve(true), strayMs))
+    }
+    // As the real one: it closes itself PROBE_LISTENER_LIVES_MS after it opened (here on the fake clock).
+    let up = false
+    let opened = 0
+    w.listen = async () => {
+      up = true
+      opened += 1
+      const timer = w.time.clock.setTimeout(() => {
+        up = false
+      }, PROBE_LISTENER_LIVES_MS)
+      return {
+        port: 40_001,
+        close: () => {
+          up = false
+          w.time.clock.clearTimeout(timer)
+        },
+      }
+    }
+    // The probe answers at the end of its timeout, through the listener if that is still up.
+    w.probeWith = () =>
+      new Promise(resolve =>
+        w.time.clock.setTimeout(
+          () => resolve(up ? { ok: true } : { ok: false, kind: 'status', status: 502, detail: '502' }),
+          PROBE_TIMEOUT_MS,
+        ),
+      )
+    const run = w.sup.test()
+    await w.time.advance(strayMs)
+    expect(w.spawns).toHaveLength(1)
+    expect(opened).toBe(1)
+    // The forward wait is 25 s: taken 1 ms before it runs out.
+    await w.time.advance(24_999)
+    w.child().line(success(40_001))
+    await w.time.advance(PROBE_TIMEOUT_MS)
+    expect(await run).toEqual([sshOk, step('forward', true, planTo(40_001).forward), domainOk])
+    expect(up).toBe(false)
+    expect(w.child().gone()).toBe(true)
+    expect(w.time.pending()).toBe(0)
+  }
+})
+
+test('close while a Test waits on a stray’s end: the Test starts no ssh after, and close does not wait on one', async () => {
+  const w = world()
+  w.plan = null
+  w.record = { pid: 4242, forward: planTo(12424).forward, at: 1 }
+  let strayGone: (gone: boolean) => void = () => {}
+  w.strayEnd = () =>
+    new Promise(resolve => {
+      strayGone = resolve
+    })
+  const run = w.sup.test()
+  await w.time.advance(0)
+  expect(w.ended).toHaveLength(1)
+  const closing = watch(w.sup.close())
+  strayGone(true)
+  await w.time.advance(0)
+  expect(closing.done()).toBe(true)
+  expect(await run).toEqual([sshOk, step('forward', false, 'the board is shutting down'), notRun('domain')])
+  expect(w.spawns).toHaveLength(0)
+  expect(w.listeners.every(l => l.closed === 1)).toBe(true)
+  expect(w.record).toBeNull()
+  expect(w.time.pending()).toBe(0)
 })
 
 test('no ssh found, or a key refused: the ssh step ✗ with its hint, the rest not run, nothing spawned or opened', async () => {

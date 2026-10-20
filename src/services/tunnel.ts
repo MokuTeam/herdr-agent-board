@@ -130,7 +130,7 @@ const NETWORK_POLL_MS = 10_000
 /** The probe through the domain: this long after connecting, then this often while connected. */
 const PROBE_FIRST_MS = 3000
 const PROBE_EVERY_MS = 5 * 60_000
-/** How long Test waits for the server to take its forward. */
+/** How long Test waits for the server to take its forward (the probe-only listener outlives it and the probe). */
 const FORWARD_WAIT_MS = 25_000
 /** ssh's last lines kept for the error text, and how long that text may be. */
 const LINES_KEPT = 20
@@ -518,13 +518,16 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
    */
   async function ownSteps(): Promise<TestStep[] | null> {
     if (closed || held || d.plan()) return null
+    // Before the listener opens: ending a stray may take a while, and the listener's life is short.
+    const stray = await endStray()
+    if (stray) return [testStep('forward', false, strayError(stray)), notRun('domain')]
     const nonce = d.probes.issue()
     const listener = await d.openProbeListener(nonce)
     try {
       const plan = d.testPlan(listener.port)
       if (!plan) return [testStep('forward', false, 'the settings do not check out'), notRun('domain')]
-      const stray = await endStray()
-      if (stray) return [testStep('forward', false, strayError(stray)), notRun('domain')]
+      // close() may have come while this waited: no ssh after it (close's own sync waits on this).
+      if (closed) return [testStep('forward', false, 'the board is shutting down'), notRun('domain')]
       const child = d.spawn(plan.bin, plan.args)
       testChild = child
       if (child.pid > 0) record({ pid: child.pid, forward: plan.forward, at: clock.now() })
