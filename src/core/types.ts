@@ -42,6 +42,8 @@ export interface Card {
   profileDir?: string
   /** The profile a start asked for (the board's launch or spawn-agent). */
   profileWant?: string
+  /** The Claude id inherited by the root Codex hook, false when none. A Claude child has its own id. */
+  codexParentClaude?: string | false
   /** A fork's: the id of the session it is a fork of, and when it started (its copied lines are older). */
   forkOf?: string
   forkAt?: number

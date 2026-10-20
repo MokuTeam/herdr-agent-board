@@ -279,6 +279,11 @@ export function claudeIntegrationInstall(dir: string, timeoutMs = 30_000): Promi
   return run(['integration', 'install', 'claude'], timeoutMs, { ...process.env, CLAUDE_CONFIG_DIR: dir })
 }
 
+/** Codex's own identity hook, in the same CODEX_HOME as the board's Codex hooks. */
+export function codexIntegrationInstall(dir: string, timeoutMs = 30_000): Promise<string> {
+  return run(['integration', 'install', 'codex'], timeoutMs, { ...process.env, CODEX_HOME: dir })
+}
+
 /** A herdr notification with its "request" sound; what herdr prints is not read. */
 export async function notify(title: string, body: string): Promise<void> {
   await run(['notification', 'show', title, '--body', body, '--sound', 'request'], 10_000)

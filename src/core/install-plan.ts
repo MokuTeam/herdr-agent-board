@@ -92,7 +92,7 @@ const bunCommand = (bun: string, script: string): string => `${quote(bun)} ${quo
  * entry left with no hooks goes (as main did); anything not shaped like a hook entry is someone
  * else's and stays. An event that is not a list is taken for an empty one (as upstream's install).
  */
-function withOurHook(list: unknown, entry: unknown, isOurs: CommandTest, replaced: string[]): unknown[] {
+export function withOurHook(list: unknown, entry: unknown, isOurs: CommandTest, replaced: string[]): unknown[] {
   const entries = Array.isArray(list) ? list : []
   const kept: unknown[] = []
   for (const e of entries) {

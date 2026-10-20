@@ -14,12 +14,14 @@
 //   bun src/entrypoints/install.ts --toast      also Windows notifications with the agent's words
 //                                               (the "notifications" action)
 //   bun src/entrypoints/install.ts --no-toast   and without them
+//   bun src/entrypoints/install.ts --codex      Codex's hooks and the commands, leaving Claude alone
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { installSkill } from '../adapters/agents-skill.ts'
+import { codexHooksPlan, installCodexHooks } from '../adapters/codex-hooks.ts'
 import { loadConfig } from '../adapters/config-file.ts'
-import { claudeIntegrationInstall } from '../adapters/herdr.ts'
+import { claudeIntegrationInstall, codexIntegrationInstall } from '../adapters/herdr.ts'
 import { installInto, readSettings } from '../adapters/hook-settings.ts'
 import { ROOT } from '../adapters/paths.ts'
 import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
@@ -30,8 +32,8 @@ import { DEFAULT_PROFILE, shownProfiles } from '../core/profiles.ts'
 import { boardFiles, checkSetup, report, tomlValue } from '../core/setup.ts'
 
 const args = process.argv.slice(2)
-for (const a of args.filter(a => a !== '--toast' && a !== '--no-toast'))
-  console.log(`ignored ${a}: the options are --toast and --no-toast`)
+for (const a of args.filter(a => a !== '--toast' && a !== '--no-toast' && a !== '--codex'))
+  console.log(`ignored ${a}: the options are --toast, --no-toast and --codex`)
 let toast = args.includes('--toast') ? true : args.includes('--no-toast') ? false : undefined
 if (toast && process.platform !== 'win32') {
   console.log(
@@ -49,6 +51,34 @@ const isFolder = (path: string): boolean => {
   } catch {
     return false
   }
+}
+// Opt-in: the normal Claude install never reads or changes a Codex folder.
+if (args.includes('--codex')) {
+  try {
+    if (args.includes('--toast') || args.includes('--no-toast'))
+      throw new Error('--codex does not take --toast or --no-toast')
+    const dir = process.env.CODEX_HOME || join(homedir(), '.codex')
+    const script = join(ROOT, 'src', 'entrypoints', 'codex-hook.ts')
+    const plan = codexHooksPlan(dir, script)
+    installCodexHooks(plan)
+    installShims()
+    console.log(`Codex hooks: SessionStart, UserPromptSubmit -> ${script} in ${plan.file}`)
+    console.log(
+      'Codex: enable hooks if disabled (codex features enable hooks), then review and trust these hooks in /hooks.',
+    )
+    try {
+      await codexIntegrationInstall(dir)
+      console.log(`herdr's hook: codex integration in ${dir}`)
+    } catch (err) {
+      console.log(
+        `herdr's Codex hook: not installed: ${messageOf(err).split(/\r?\n/)[0]}. Run herdr integration install codex.`,
+      )
+    }
+  } catch (err) {
+    console.error(`agent-board install: ${messageOf(err)}`)
+    process.exit(1)
+  }
+  process.exit(0)
 }
 // The shown profiles: config.json's with the folders found, the one this env points to shown too.
 const profiles = shownProfiles(loadProfiles({ shownDir: inheritedProfileDir() }))
