@@ -70,8 +70,10 @@ export interface WorkspaceFact {
 export interface SheetHeadView {
   pill: StatusPill
   name: string
-  /** Its lane, workspace, last activity and context, in one line. */
-  /** The facts under the name, each kept whole on its line (the line breaks between them, after a separator). */
+  /**
+   * Its workspace, last activity and context under the name (its lane has a pill of its own), each
+   * kept whole on its line (the line breaks between them, after a separator).
+   */
   meta: (string | WorkspaceFact)[]
   /** Says what the context number is, when there is one. */
   metaTitle: string
@@ -88,7 +90,7 @@ export function contextText(it: Pick<Item, 'context' | 'contextPct'>, t: Transla
 
 export function sheetHead(
   it: Item,
-  { missing, categoryTitle, now, t }: { missing: boolean; categoryTitle: string; now: number; t: Translator },
+  { missing, now, t }: { missing: boolean; now: number; t: Translator },
 ): SheetHeadView {
   const pill: StatusPill = missing ? { kind: 'missing' } : it.sleeping ? { kind: 'asleep' } : { kind: 'column' }
   const context = contextText(it, t)
@@ -96,7 +98,6 @@ export function sheetHead(
   // The name alone renames the workspace in the sheet: the words around it are the text's, untouched.
   const [before = '', after = ''] = t('meta.workspace').split('{name}')
   const meta = [
-    categoryTitle,
     it.workspace && { before, name: it.workspace, after },
     active && (active === t('ago.now') ? t('meta.activeNow') : t('meta.active', { ago: active })),
     context,

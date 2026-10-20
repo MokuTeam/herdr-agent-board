@@ -101,8 +101,6 @@ describe.each(['en', 'ru'])('the shell in %s', lang => {
     // The session sheet's own parts (their markup: sheet.test.tsx).
     expect(inner('sheet').map(n => (n.kind === 'element' ? (n.attrs.get('id') ?? n.attrs.get('class')) : ''))).toEqual([
       'sheet-head',
-      'sheet-properties-toggle',
-      'sheet-card',
       'sheet-question',
       'sheet-helpers',
       'sheet-body',

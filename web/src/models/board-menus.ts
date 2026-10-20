@@ -180,8 +180,9 @@ export function menuFor(target: unknown, at: Point, board: BoardMenuDeps): Board
     }
   }
   if (el.closest('.ql, .launch, .limits-pop, .rename, .menu')) return null
+  // The head's own menu is the card's; its card fields keep the sheet's (none), as under the head.
   const head = el.closest('#sheet .sheet-head')
-  if (head) {
+  if (head && !el.closest('.sheet-card')) {
     const key = board.state().open
     const it = key ? board.item(key) : undefined
     return key && it ? forCard(board, key, it, head.querySelector('#sheet-name') ?? head, at) : null

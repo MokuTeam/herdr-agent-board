@@ -1,5 +1,5 @@
-// The session sheet: the session panel with the open session's head, its card fields, what it asks,
-// the conversation and the message box. It opens for a card (the board's `open`, "Write" with the
+// The session sheet: the session panel with the open session's head (its card fields in it), what it
+// asks, the conversation and the message box. It opens for a card (the board's `open`, "Write" with the
 // message box ready); a click on another card switches it to that session, and while it slides
 // out it keeps showing the last one. Files dropped anywhere on the panel go with the message.
 //
@@ -11,18 +11,17 @@ import { archiveBlock } from '../../../../src/core/archive.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import type { SessionDetail } from '../../api/client.ts'
 import { type ComposerControls, useComposer } from '../../hooks/useComposer.ts'
+import type { SheetPick } from '../../hooks/useContextMenus.ts'
 import { useFileDrop } from '../../hooks/useFileDrop.ts'
 import { useGoToSession } from '../../hooks/useGoToSession.ts'
 import type { HelpersUi } from '../../hooks/useHelpers.ts'
 import { useKeepFocus } from '../../hooks/useKeepFocus.ts'
-import { useMediaQuery } from '../../hooks/useMediaQuery.ts'
 import { type OpenLaunch, useNewSession } from '../../hooks/useNewSession.ts'
 import { useSessionActions } from '../../hooks/useSessionActions.ts'
 import { type DetailSnapshot, useSessionDetail } from '../../hooks/useSessionDetail.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { inTurn } from '../../models/card.ts'
 import { ConversationScroll } from '../../models/conversation-scroll.ts'
-import { PHONE_QUERY } from '../../models/panel-motion.ts'
 import { restartPending } from '../../models/restart.ts'
 import {
   askedView,
@@ -42,7 +41,6 @@ import { CheckGlyph } from '../icons.tsx'
 import { Panel } from '../panel/Panel.tsx'
 import { Composer, type SessionButtons } from './Composer.tsx'
 import type { ScheduleActions } from './ScheduleRow.tsx'
-import { SheetCard } from './SheetCard.tsx'
 import { SheetHead } from './SheetHead.tsx'
 import { Thread, Waiting } from './Thread.tsx'
 import type { ThreadLinks } from './ThreadLinks.tsx'
@@ -66,6 +64,10 @@ export interface SheetSlots {
   onMore?: ((button: HTMLElement, keyboard: boolean) => void) | undefined
   /** That menu is the one open ("More actions" says it is expanded). */
   moreOpen?: boolean | undefined
+  /** A pill in the head (where the card shows, its lane): its choices as a menu out of it. */
+  onPick?: ((kind: SheetPick, button: HTMLElement, keyboard: boolean) => void) | undefined
+  /** The pill whose menu is open. */
+  pickOpen?: SheetPick | null | undefined
   /** Rename where the name is, in the head (hooks/useRenameInPlace.ts). */
   onRename?: ((key: string, name: HTMLElement) => void) | undefined
   /** Rename the session's herdr workspace where its name is, in the head's line (hooks/useRenameInPlace.ts). */
@@ -112,7 +114,7 @@ export function Sheet(slots: SheetSlots) {
     onArchive,
   } = slots
   const t = useT()
-  const { data, ui, dispatch } = useBoardContext()
+  const { data, ui, dispatch, canEdit } = useBoardContext()
   const actions = useSessionActions()
   const fallbackNewSession = useNewSession()
   const newSession = onNewSession ?? fallbackNewSession
@@ -122,10 +124,9 @@ export function Sheet(slots: SheetSlots) {
   const detail = useSessionDetail(shown.key)
   const composer = useComposer(detail.load, detail.value)
   const drop = useFileDrop(composer.addFiles)
-  const narrow = useMediaQuery(PHONE_QUERY)
   const body = useRef<HTMLDivElement>(null)
 
-  // The card's details fold up on a phone; each session opens with them folded.
+  // The card's empty fields show only when asked for; each session opens without them.
   const [propertiesOpen, setPropertiesOpen] = useState(false)
   // Switching sessions in the open panel: its conversation fades in; it starts at the bottom.
   const before = useRef(open)
@@ -206,6 +207,15 @@ export function Sheet(slots: SheetSlots) {
           missing={sessionMissing(shown.key, !!itemOf(shown.key), detail.value.status)}
           onRename={name => open && onRename?.(open, name)}
           onRenameWorkspace={onRenameWorkspace && (name => open && onRenameWorkspace(open, name))}
+          card={{
+            disabled: !canEdit || sessionMissing(open, !!itemOf(open), detail.value.status),
+            open: propertiesOpen,
+            onToggle: () => setPropertiesOpen(was => !was),
+            pickOpen: slots.pickOpen,
+            onPick: slots.onPick,
+            schedule: slots.schedule,
+            onSession: goToSession,
+          }}
         />
       }
     >
@@ -214,16 +224,12 @@ export function Sheet(slots: SheetSlots) {
         item={shown.item}
         detail={detail.value}
         form={form}
-        narrow={narrow}
-        propertiesOpen={propertiesOpen}
-        onProperties={() => setPropertiesOpen(was => !was)}
         composer={composer}
         bodyRef={body}
         onBodyScroll={() => body.current && scroll.scrolled(body.current)}
         onRetry={() => open && detail.load(open)}
         onDismiss={at(actions.dismissAsk)}
         buttons={buttons}
-        schedule={slots.schedule}
         moreOpen={slots.moreOpen ?? false}
         links={links}
       />
@@ -246,17 +252,12 @@ export interface SheetViewProps {
   detail: DetailSnapshot
   /** The form the session waits on, in place of what it asks (SheetSlots.question). */
   form?: ReactNode
-  /** A phone: the card's details fold up behind "Card details". */
-  narrow: boolean
-  propertiesOpen: boolean
-  onProperties?: () => void
   composer: ComposerControls
   bodyRef?: Ref<HTMLDivElement>
   onBodyScroll?: () => void
   onRetry?: () => void
   onDismiss?: () => void
   buttons?: SessionButtons
-  schedule?: ScheduleActions | undefined
   /** The "More actions" menu is open. */
   moreOpen?: boolean
   links?: SheetLinks | undefined
@@ -264,7 +265,7 @@ export interface SheetViewProps {
 
 /** The sheet under its head, as drawn for one state. */
 export function SheetView(props: SheetViewProps) {
-  const { open, item, detail, form, narrow, propertiesOpen, onProperties, composer, buttons, schedule } = props
+  const { open, item, detail, form, composer, buttons } = props
   const t = useT()
   const { data, connected, canMutate, canEdit } = useBoardContext()
   // A redraw of the conversation keeps the focus on what opens the same thing (a helper's line).
@@ -295,28 +296,6 @@ export function SheetView(props: SheetViewProps) {
   const asking = !hasForm && item?.column === 'me'
   return (
     <>
-      <button
-        type="button"
-        className="sheet-properties-toggle"
-        id="sheet-properties-toggle"
-        aria-expanded={propertiesOpen}
-        aria-controls="sheet-card"
-        onClick={() => onProperties?.()}
-      >
-        {t('sheet.properties')}
-      </button>
-      <div className="sheet-card" id="sheet-card" hidden={narrow && !propertiesOpen}>
-        {/* Each session's card fields start afresh: nothing typed for one shows in another's. */}
-        {item && (
-          <SheetCard
-            key={item.key}
-            item={item}
-            disabled={availability.edit}
-            schedule={schedule}
-            onSession={key => props.links?.onSession(key)}
-          />
-        )}
-      </div>
       <div className="sheet-question" id="sheet-question" hidden={!hasForm && !asking}>
         {hasForm
           ? form
