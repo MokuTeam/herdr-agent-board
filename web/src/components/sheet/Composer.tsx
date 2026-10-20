@@ -5,6 +5,7 @@
 // files that go with the next message, and the message box: Enter sends, Shift+Enter breaks the
 // line, the box grows with the text; files come in through the clip or Ctrl+V (a screenshot).
 import { type ClipboardEvent, type KeyboardEvent, useLayoutEffect, useRef, useState } from 'react'
+import { pageLog } from '../../api/client.ts'
 import { useActionRow } from '../../hooks/useActionRow.ts'
 import type { ComposerControls } from '../../hooks/useComposer.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
@@ -386,11 +387,15 @@ function PastePicture({ disabled, onFiles }: { disabled: boolean; onFiles: (file
   }
   async function paste() {
     if (!canReadClipboard(navigator.clipboard)) return
-    const got = await readClipboardImages(navigator.clipboard).catch(
-      (err: unknown) => ({ error: 'failed', why: err instanceof Error ? err.message : String(err) }) as const,
-    )
+    const got = await readClipboardImages(navigator.clipboard).catch((err: unknown) => {
+      const why = err instanceof Error ? err.message : String(err)
+      return { error: 'failed', why, seen: why } as const
+    })
     if ('files' in got) return onFiles(got.files)
-    if (got.error === 'empty') return toast(t('compose.pasteNone'))
+    // What the clipboard held, for the board's log: a phone's Chrome may hand over no picture though
+    // one was copied (#102), and only the page can see it.
+    pageLog(`paste: ${got.error}; the clipboard held ${got.seen}`)
+    if (got.error === 'empty') return toast(t('compose.pasteNone', { seen: got.seen }), true)
     toast(got.error === 'denied' ? t('compose.pasteDenied') : t('compose.pasteFailed', { why: got.why ?? '' }), true)
   }
   return (

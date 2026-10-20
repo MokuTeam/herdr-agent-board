@@ -30,6 +30,7 @@ import { archiveRoutes } from './routes/archive.ts'
 import { boardRoutes } from './routes/board.ts'
 import { fsRoutes } from './routes/fs.ts'
 import { launchRoutes } from './routes/launch.ts'
+import { pageLogRoute } from './routes/page-log.ts'
 import { remoteRoutes } from './routes/remote.ts'
 import { revealRoute, revealState } from './routes/reveal.ts'
 import { scheduleRoute } from './routes/schedule.ts'
@@ -177,6 +178,8 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     ...uploadRoutes(),
     revealRoute(board, events, reveals),
     settingsRoute(),
+    // A line from the page for this log (a phone's browser says what it could not do there).
+    pageLogRoute(log),
     scheduleRoute(refresh),
     // Several sessions put to sleep at once, for agents (services/sleep.ts).
     sleepRoute({ deps, items: board.items, refresh }),
