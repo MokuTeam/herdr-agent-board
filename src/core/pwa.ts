@@ -36,7 +36,8 @@ export function pwaHosts(dnsName: string, https: number): Set<string> {
   return new Set(https === 443 ? [name, `${name}:443`] : [`${name}:${https}`])
 }
 
-const IP = /^(\d{1,3}(\.\d{1,3}){3}|[0-9a-f]*:[0-9a-f:.]+)$/i
+/** An IPv4 or IPv6 address, as a proxy writes it in X-Forwarded-For. */
+export const IP = /^(\d{1,3}(\.\d{1,3}){3}|[0-9a-f]*:[0-9a-f:.]+)$/i
 
 /** The caller's address as serve gives it (X-Forwarded-For): exactly one address, else null. */
 export function forwardedFor(header: string | null): string | null {
@@ -44,23 +45,23 @@ export function forwardedFor(header: string | null): string | null {
   return IP.test(value) ? value : null
 }
 
-/** The device token in a Cookie header, or null. */
-export function cookieToken(header: string | null): string | null {
+/** The token in a Cookie header's cookie `name` (the device token by default), when it has `shape`; else null. */
+export function cookieToken(header: string | null, name = COOKIE, shape = /^[\w-]{20,200}$/): string | null {
   for (const part of (header ?? '').split(';')) {
     const at = part.indexOf('=')
-    if (at < 0 || part.slice(0, at).trim() !== COOKIE) continue
+    if (at < 0 || part.slice(0, at).trim() !== name) continue
     const token = part.slice(at + 1).trim()
-    return /^[\w-]{20,200}$/.test(token) ? token : null
+    return shape.test(token) ? token : null
   }
   return null
 }
 
-/** Set-Cookie for a paired browser: over HTTPS only, never to the page's scripts, never from another site. */
-export const tokenCookie = (token: string): string =>
-  `${COOKIE}=${token}; Path=/; Max-Age=${COOKIE_AGE}; Secure; HttpOnly; SameSite=Strict`
+/** Set-Cookie for a paired browser (or a login): over HTTPS only, never to the page's scripts, never from another site. */
+export const tokenCookie = (token: string, name = COOKIE, maxAgeS = COOKIE_AGE): string =>
+  `${name}=${token}; Path=/; Max-Age=${maxAgeS}; Secure; HttpOnly; SameSite=Strict`
 
 /** Set-Cookie that drops a token that no longer works. */
-export const clearCookie = (): string => `${COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict`
+export const clearCookie = (name = COOKIE): string => `${name}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict`
 
 /** What a phone's browser needs to install the board and show it full screen; colors as web/styles/app.css. */
 const HEAD = [
