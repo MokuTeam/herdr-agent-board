@@ -75,7 +75,11 @@ interface CardFieldProps {
   disabled: boolean
 }
 
-/** One of the card's own lines: Enter saves it on the card (the toast says so), Escape puts it back. */
+/**
+ * One of the card's own lines: Enter saves it on the card (the toast says so), Escape puts it back.
+ * A long one wraps (three lines, then it scrolls; the tooltip has it whole) and stays one line of
+ * text: a line break pasted in is a space.
+ */
 function CardField({ item, field, placeholder, disabled }: CardFieldProps) {
   const t = useT()
   const { toast } = useBoardContext()
@@ -87,7 +91,7 @@ function CardField({ item, field, placeholder, disabled }: CardFieldProps) {
   const live = liveEdit(edit, scene)
   if (live !== edit) setEdit(live)
 
-  async function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+  async function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     const input = e.currentTarget
     if (e.key === 'Escape') {
       setEdit(null)
@@ -104,14 +108,17 @@ function CardField({ item, field, placeholder, disabled }: CardFieldProps) {
     toast(r.ok ? t(done) : r.error, !r.ok)
   }
 
+  const shown = live?.text ?? scene.saved
   return (
-    <input
+    <textarea
       className="row-value"
       id={field}
-      value={live?.text ?? scene.saved}
+      rows={1}
+      value={shown}
+      title={shown || undefined}
       placeholder={placeholder}
       disabled={disabled}
-      onChange={e => setEdit(typing(edit, scene, e.target.value))}
+      onChange={e => setEdit(typing(edit, scene, e.target.value.replace(/\s*[\r\n]+\s*/g, ' ')))}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       onKeyDown={e => void onKeyDown(e)}
