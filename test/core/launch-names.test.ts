@@ -10,6 +10,7 @@ import {
   defaultWorkspace,
   folderSuggestions,
   isAbsolutePath,
+  kebabName,
   sameDir,
   slugName,
   splitPathInput,
@@ -41,6 +42,23 @@ test('session names: what a name may be, and herdr’s name for it', () => {
   assert.equal(uniqueSlug('job', new Set()), 'job')
   assert.equal(uniqueSlug('job', new Set(['job', 'job-2'])), 'job-3')
   assert.equal(uniqueSlug('a'.repeat(32), new Set(['a'.repeat(32)])).length, 32)
+})
+
+test('a name in kebab-case, for a new workspace: lower case, letters and digits of any script, one dash between', () => {
+  assert.equal(kebabName('New Test Project'), 'new-test-project')
+  assert.equal(kebabName('herdr-agent-board 2'), 'herdr-agent-board-2')
+  assert.equal(kebabName('Новый проект'), 'новый-проект')
+  assert.equal(kebabName('  Acme: invoices (March)!  '), 'acme-invoices-march')
+  assert.equal(kebabName('--snake_case--and  spaces'), 'snake-case-and-spaces')
+  // Accents typed apart are put together; the marks of a script stay with their letters.
+  assert.equal(kebabName('Café Ü'), 'café-ü')
+  assert.equal(kebabName('हिंदी नोट्स'), 'हिंदी-नोट्स')
+  assert.equal(kebabName('!!! ???'), '')
+  assert.equal(kebabName(''), '')
+  // Cut at 40, as herdr's workspace names are: no dash or half a character left at the end.
+  assert.equal(kebabName('a'.repeat(50)), 'a'.repeat(40))
+  assert.equal(kebabName(`${'a'.repeat(39)} b`), 'a'.repeat(39))
+  assert.equal(kebabName(`${'a'.repeat(39)}𝒜`), 'a'.repeat(39))
 })
 
 test('folders: absolute paths, completion, the lane a folder falls in', () => {

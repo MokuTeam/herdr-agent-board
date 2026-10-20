@@ -72,6 +72,25 @@ export function slugName(name: unknown): string {
   return s.slice(0, 32).replace(/-+$/, '')
 }
 
+/**
+ * A name in kebab-case, for a new workspace: lower case, letters (with their marks) and digits of
+ * any script, one dash for whatever is between them; cut at 40 like herdr's workspace names, and
+ * '' when nothing is left.
+ */
+export function kebabName(name: unknown): string {
+  return (
+    String(name ?? '')
+      .normalize('NFC')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{M}\p{N}]+/gu, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40)
+      // The cut may leave half of a character outside the BMP, or a dash, at the end.
+      .replace(/[\ud800-\udbff]$/, '')
+      .replace(/-+$/, '')
+  )
+}
+
 /** `slug`, or slug-2, slug-3… when a live agent has that name already. */
 export function uniqueSlug(slug: string, taken: ReadonlySet<string>): string {
   if (!taken.has(slug)) return slug
