@@ -10,10 +10,15 @@
 // resumes it by its id, in the folder it ran in, and it keeps the name it had, so no /rename is
 // typed. An agent's resume runs in the profile whose folder holds its conversation, never in the
 // agent's own (resumeProfile); the board's own starts say the profile, as for any start.
+//
+// The start command may start pi instead of Claude (a profile's `command` of `pi`, or an alias
+// for it): herdr says which agent came up in the tab, and the session is named as that agent
+// names one (core/pi.ts namingOf: Claude's /rename, pi's /name). pi's session is keyed by its
+// file, which herdr reports once pi is up: the profile it is meant for goes on that card.
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, resolve } from 'node:path'
-import { writeCard } from '../../adapters/cards.ts'
+import { readCard, removeCard, writeCard } from '../../adapters/cards.ts'
 import { createClaudeHome } from '../../adapters/claude-home.ts'
 import { herdr, herdrText, tabCreateRoot } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
@@ -33,6 +38,7 @@ import {
   shellLine,
   stillTyped,
 } from '../../core/launch/spawn-args.ts'
+import { CLAUDE_NAMING, isPiSessionFile, type Naming, namingOf, PI_AGENT } from '../../core/pi.ts'
 import { defaultProfileDir, envRejected, type Profile, type SpawnEnv, spawnEnv } from '../../core/profiles.ts'
 
 /** A folder as given, absolute: ~ is the home folder, a relative one is from here. */
@@ -58,7 +64,7 @@ const screen = (pane: string): Promise<string> =>
 const stringAt = (value: unknown, key: string): string | null =>
   isRecord(value) && typeof value[key] === 'string' ? value[key] : null
 
-/** A pane as `herdr pane get` says: its agent, its status, its tab and the terminal it holds. */
+/** A pane as `herdr pane get` says: its agent, its status, its tab, the terminal it holds and its agent's session. */
 async function paneInfo(pane: string, timeoutMs?: number) {
   const answer = await herdr(['pane', 'get', pane], timeoutMs)
   const p = isRecord(answer) ? answer.pane : null
@@ -67,6 +73,7 @@ async function paneInfo(pane: string, timeoutMs?: number) {
     status: stringAt(p, 'agent_status'),
     tab: stringAt(p, 'tab_id'),
     terminal: stringAt(p, 'terminal_id'),
+    session: stringAt(isRecord(p) ? p.agent_session : null, 'value'),
   }
 }
 
@@ -174,6 +181,21 @@ export interface SpawnResult {
   pane: string
   name: string
   agent: string
+  /** The kind of agent that came up: 'claude', or 'pi' when the start command started pi. */
+  kind: string
+}
+
+// A card the start wrote before it knew the agent, with nothing on it but what a start writes.
+const START_ONLY = ['key', 'category', 'updatedAt', 'profileWant']
+
+/**
+ * pi's session is keyed by its file, not by the id the start gave it: the profile it is meant for
+ * goes on that card, and the card written under the id before pi was up goes when it holds
+ * nothing else.
+ */
+function movePiCard(carded: string, file: string, profile: string): void {
+  writeCard(file, { profileWant: profile })
+  if (Object.keys(readCard(carded) ?? {}).every(k => START_ONLY.includes(k))) removeCard(carded)
 }
 
 /**
@@ -266,6 +288,10 @@ export async function spawnAgent(
 
   const deadline = Date.now() + o.timeoutSec * 1000
   let ready = false
+  // The agent that came up (herdr says): Claude, or pi for a start command that starts it.
+  let naming: Naming = CLAUDE_NAMING
+  let kind = 'claude'
+  let session: string | null = null
   while (Date.now() < deadline) {
     await sleep(1500)
     let p: Awaited<ReturnType<typeof paneInfo>>
@@ -276,18 +302,25 @@ export async function spawnAgent(
         throw new Error(`The tab of ${pane} was closed before Claude got ready`)
       continue
     }
-    if (p.agent !== 'claude') continue
+    const own = namingOf(p.agent)
+    if (!own || !p.agent) continue
+    naming = own
+    kind = p.agent
+    session = p.session
     if (p.status === 'idle' || p.status === 'done') {
       ready = true
       break
     }
     if (p.status === 'blocked') {
       throw new Error(
-        `Claude in ${pane} waits for a dialog (folder trust?). Answer it in that tab, then: herdr agent prompt ${pane} "/rename ${o.name}" and send the brief.`,
+        kind === PI_AGENT
+          ? `pi in ${pane} waits for a dialog. Answer it in that tab, then: herdr agent prompt ${pane} "${naming.command(o.name)}" and send the brief.`
+          : `Claude in ${pane} waits for a dialog (folder trust?). Answer it in that tab, then: herdr agent prompt ${pane} "/rename ${o.name}" and send the brief.`,
       )
     }
   }
   if (!ready) throw new Error(`Claude did not get ready in ${pane} within ${o.timeoutSec} s`)
+  if (kind === PI_AGENT && profile && carded && isPiSessionFile(session)) movePiCard(carded, session, profile.id)
 
   const agent = await nameInHerdr(pane, o.name)
 
@@ -295,14 +328,20 @@ export async function spawnAgent(
   // name is cosmetic and Claude runs by now: no failure for it, or a retry would start a second one.
   // A resumed session keeps the name it had.
   if (!o.resume) {
+    const line = naming.command(o.name)
     try {
-      await prompt(pane, `/rename ${o.name}`)
+      await prompt(pane, line)
     } catch (err) {
-      if (!stalled(err)) log(`/rename in ${pane}: ${messageOf(err)}`)
+      if (!stalled(err)) log(`${line.split(' ')[0]} in ${pane}: ${messageOf(err)}`)
     }
     for (let i = 0; i < 10; i++) {
       await sleep(500)
-      if (/Session renamed/i.test(await screen(pane))) break
+      const shown = await screen(pane)
+      if (naming.done.test(shown)) break
+      // pi's first Enter on a slash command with an argument can take its completion instead:
+      // the line still in the editor gets one more.
+      if (kind === PI_AGENT && i === 1 && stillTyped(shown, line))
+        await herdr(['pane', 'send-keys', pane, 'enter']).catch(() => {})
     }
   }
 
@@ -320,7 +359,7 @@ export async function spawnAgent(
         // "brief did not reach" tells the board the session runs: no retry that starts another.
         if (!stalled(err))
           throw new Error(
-            `The brief did not reach Claude in ${pane}: ${messageOf(err)}. Send it by hand: herdr agent prompt ${pane} "<brief>"`,
+            `The brief did not reach ${naming.title} in ${pane}: ${messageOf(err)}. Send it by hand: herdr agent prompt ${pane} "<brief>"`,
           )
         if (stillTyped(await screen(pane), text)) {
           await herdr(['pane', 'send-keys', pane, 'enter']).catch(() => {})
@@ -330,8 +369,8 @@ export async function spawnAgent(
     }
     if (!sent)
       throw new Error(
-        `The brief did not reach Claude in ${pane}. Send it by hand: herdr agent prompt ${pane} "<brief>"`,
+        `The brief did not reach ${naming.title} in ${pane}. Send it by hand: herdr agent prompt ${pane} "<brief>"`,
       )
   }
-  return { pane, name: o.name, agent }
+  return { pane, name: o.name, agent, kind }
 }

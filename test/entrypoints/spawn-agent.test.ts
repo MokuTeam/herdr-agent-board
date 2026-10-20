@@ -855,3 +855,93 @@ test('an agent’s resume is refused before herdr is asked: --profile default fo
   assert.deepEqual(other.box.calls(), [])
   assert.equal(cardOf(other.box, SID), null)
 }, 60_000)
+
+// A profile whose start command starts pi: herdr says pi came up, and the session is named and
+// carded as pi's. pi's session is keyed by its file, whose name holds the id the start gave it.
+const PI_FILE = `/home/me/.pi/agent/sessions/--w--/2026-10-20T08-15-48-746Z_${SID}.jsonl`
+const PI_READY = {
+  result: {
+    pane: {
+      pane_id: 'wA:p9',
+      tab_id: 'wA:t9',
+      agent: 'pi',
+      agent_status: 'idle',
+      agent_session: { agent: 'pi', kind: 'path', value: PI_FILE },
+    },
+  },
+}
+const PI_CARD = PI_FILE.replace(/[^A-Za-z0-9_-]/g, '_')
+
+test('a start command that starts pi: pi is named with /name, briefed, and its file’s card wants the profile', async () => {
+  const { box, dir } = await profileBox({}, () => [], { default: { command: 'pi' } })
+  box.state({
+    ...STATE,
+    'pane get': { seq: [{ result: { pane: { pane_id: 'wA:p9', agent: null } } }, PI_READY] },
+    'pane read': { text: 'Session name set: Acme invoices' },
+  })
+  const args = ['--name', 'Acme invoices', '--cwd', dir, '--workspace', 'wA', '--brief', 'Check the invoices.']
+  const r = await runSpawn(box, [...args, '--session-id', SID])
+  assert.equal(r.code, 0, r.stderr)
+  assert.equal(r.stdout.trim(), 'pane=wA:p9 name=Acme invoices agent=acme-invoices-2 kind=pi')
+  assert.deepEqual(callList(box), [
+    `tab create --workspace wA --cwd ${dir} --label Acme invoices --no-focus`,
+    `pane run wA:p9 pi --session-id ${SID}`,
+    'pane get',
+    'agent list',
+    'agent rename wA:p9 acme-invoices-2',
+    'agent prompt wA:p9 /name Acme invoices',
+    'pane read wA:p9 --source visible',
+    'agent prompt wA:p9 Check the invoices.',
+  ])
+  // The card is pi's, under its file; the one written under the id before pi was up is gone.
+  expect(cardOf(box, PI_CARD)).toMatchObject({ key: PI_FILE, profileWant: 'default' })
+  expect(cardOf(box, SID)).toBeNull()
+}, 30_000)
+
+test('pi’s first Enter takes the completion of /name: the line still in its editor gets one more', async () => {
+  const { box, dir } = await profileBox({}, () => [], { default: { command: 'pi' } })
+  box.state({
+    ...STATE,
+    'pane get': { seq: [{ result: { pane: { pane_id: 'wA:p9', agent: null } } }, PI_READY] },
+    'pane read': {
+      seq: [
+        { text: '> /name Acme invoices' },
+        { text: '> /name Acme invoices' },
+        { text: 'Session name set: Acme invoices' },
+      ],
+    },
+  })
+  const r = await runSpawn(box, ['--name', 'Acme invoices', '--cwd', dir, '--workspace', 'wA'])
+  assert.equal(r.code, 0, r.stderr)
+  const calls = callList(box)
+  const named = calls.indexOf('agent prompt wA:p9 /name Acme invoices')
+  expect(calls.slice(named)).toEqual([
+    'agent prompt wA:p9 /name Acme invoices',
+    'pane read wA:p9 --source visible',
+    'pane read wA:p9 --source visible',
+    'pane send-keys wA:p9 enter',
+    'pane read wA:p9 --source visible',
+  ])
+  // Without --session-id no card is written, pi's or another.
+  expect(cardOf(box, PI_CARD)).toBeNull()
+}, 30_000)
+
+test('pi waiting for a dialog before it is ready: said as pi’s, with /name to type, nothing typed', async () => {
+  const { box, dir } = await profileBox({}, () => [], { default: { command: 'pi' } })
+  box.state({
+    ...STATE,
+    'pane get': { result: { pane: { pane_id: 'wA:p9', agent: 'pi', agent_status: 'blocked' } } },
+  })
+  const r = await runSpawn(box, ['--name', 'Fresh', '--cwd', dir, '--workspace', 'wA', '--brief', 'Hi'])
+  assert.equal(r.code, 1)
+  assert.equal(
+    r.stderr.trim(),
+    'spawn-agent: pi in wA:p9 waits for a dialog. Answer it in that tab, then: herdr agent prompt wA:p9 "/name Fresh" and send the brief.',
+  )
+  // The board reads it as a dialog, as Claude's.
+  assert.equal(failureKind(r.stderr), 'dialog')
+  assert.equal(
+    box.calls().some(a => a[0] === 'agent' && a[1] === 'prompt'),
+    false,
+  )
+}, 30_000)

@@ -1,9 +1,10 @@
-// Typing into a live agent's prompt through herdr: a line, Claude's /rename, and the checks that
+// Typing into a live agent's prompt through herdr: a line, Claude's /rename and pi's /name, and the checks that
 // come first. Shared by the launches (name and first message) and renaming a session.
 import { agentNames, herdr, herdrText } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { inputDraft } from '../../core/dialogs/input-box.ts'
 import { stillTyped } from '../../core/launch/spawn-args.ts'
+import { PI_NAMING } from '../../core/pi.ts'
 
 const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 const stalled = (err: unknown): boolean => isRecord(err) && /agent_prompt_stalled/.test(`${err.code} ${err.message}`)
@@ -45,6 +46,27 @@ export async function claudeRename(pane: string, name: string): Promise<boolean>
   for (let i = 0; i < 10; i++) {
     await sleep(500)
     if (/Session renamed/i.test(await visible(pane))) return true
+  }
+  return false
+}
+
+/**
+ * pi's /name, as Claude's /rename: no turn, the screen says whether it took. pi's first Enter on a
+ * slash command with an argument can take its completion instead: the line still in the editor
+ * gets one more.
+ */
+export async function piName(pane: string, name: string): Promise<boolean> {
+  const line = PI_NAMING.command(name)
+  try {
+    await herdr(['agent', 'prompt', pane, line])
+  } catch (err) {
+    if (!stalled(err)) throw err
+  }
+  for (let i = 0; i < 10; i++) {
+    await sleep(500)
+    const shown = await visible(pane)
+    if (PI_NAMING.done.test(shown)) return true
+    if (i === 1 && stillTyped(shown, line)) await herdr(['pane', 'send-keys', pane, 'enter']).catch(() => {})
   }
   return false
 }

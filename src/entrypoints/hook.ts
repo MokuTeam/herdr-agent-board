@@ -8,7 +8,8 @@
 // Only sessions in a herdr pane are briefed: `claude -p` runs and other terminals are not on the board.
 // A pi session that runs Claude Code through its bridge (PI_CODING_AGENT) has two cards: the
 // bridge's own Claude session, which the hook is told, and pi's, which the board shows and `board`
-// writes (herdr's agent_session of the pane: the session's file). The user's answer clears pi's.
+// writes (herdr's agent_session of the pane: the session's file). The user's answer clears pi's,
+// and pi's is told the profile of the folder this Claude runs in: the account of pi's turn.
 // Claude Code waits for it: an empty or broken input ends it at once, silently, with exit code 0.
 import { type CardPatch, readCard, writeCard } from '../adapters/cards.ts'
 import { loadConfig } from '../adapters/config-file.ts'
@@ -47,7 +48,9 @@ async function main(): Promise<void> {
   const card = readCard(sid)
   // What changes on the card, written at once. First the session's folder and its profile, where
   // the card says otherwise.
-  const patch: CardPatch = profileReport(card, inheritedProfileDir(), loadProfiles())
+  const dir = inheritedProfileDir()
+  const profiles = loadProfiles()
+  const patch: CardPatch = profileReport(card, dir, profiles)
   // The user wrote to the session: whatever it asked them is answered. A reminder from the board's
   // scheduler or a background task reporting back is not the user, so its ask stays. A column the
   // user dragged the card to has done its job either way: the session works again, which drops
@@ -58,13 +61,15 @@ async function main(): Promise<void> {
       ? { ...(!fromBoard && { ask: '', askSince: '' }), pin: '', pinAt: '', pinBusy: '' }
       : null
   // A pi session's ask and wait are on pi's card; the brief stays with the Claude session it went to.
+  // pi's card is told the profile too: the folder this Claude runs in is the account pi's turn
+  // goes to, whichever of the bridge's providers it took.
   const boardKey = event === 'UserPromptSubmit' ? await boardKeyOf(pane, sid) : null
   const boardCard = boardKey ? readCard(boardKey) : card
   if (event === 'UserPromptSubmit') {
     const done = answered(card)
     if (done) Object.assign(patch, done)
-    const piDone = boardKey ? answered(boardCard) : null
-    if (boardKey && piDone) writeCard(boardKey, piDone)
+    const piPatch: CardPatch = boardKey ? { ...profileReport(boardCard, dir, profiles), ...answered(boardCard) } : {}
+    if (boardKey && Object.keys(piPatch).length) writeCard(boardKey, piPatch)
   }
   let context: string | null = null
   const briefed = card?.briefV ?? (card?.briefedAt ? 1 : 0)

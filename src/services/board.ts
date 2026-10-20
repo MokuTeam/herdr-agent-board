@@ -16,6 +16,7 @@ import { categoryFor } from '../core/categories.ts'
 import { type HelperSummary, summarize } from '../core/helpers.ts'
 import { t } from '../core/lang.ts'
 import { relate } from '../core/links.ts'
+import { isPiItem } from '../core/pi.ts'
 import { sessionProfile } from '../core/profiles.ts'
 import type { AgentStatus, Attention, Card, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
 import { archivedFiles, getArchived, hides, isArchived, settleReturned } from './archive.ts'
@@ -201,8 +202,14 @@ export async function collect(
     const pin = pinOf(base.key, base.status, saved)
     const card: Card = { ...saved, pin }
     const hit = base.session ? live.get(base.session) : undefined
-    const { home, path } = recordsOf(deps, card, base.session, base.cwd, hit, searched)
-    const info = home?.transcriptInfo(path) ?? {}
+    // A pi session's records are its session file, its key: none of Claude's folders has them.
+    const pi = isPiItem(base) ? (deps.pi.transcriptInfo(base.session) ?? {}) : null
+    const { home, path } = pi
+      ? { home: null, path: null }
+      : recordsOf(deps, card, base.session, base.cwd, hit, searched)
+    const info = pi ?? home?.transcriptInfo(path) ?? {}
+    // The name given to a pi session (/name) is what herdr and pi know it by, as a Claude's /rename.
+    const autoName = pi?.name || base.name
     const guess = categoryFor(cfg, base.cwd)
     const tool = info.tool ?? null
     const attention = attentionOf(base.status, card, info)
@@ -215,8 +222,8 @@ export async function collect(
     items.push({
       ...base,
       // A name given on the board beats the one herdr and Claude know it by; autoName is theirs.
-      name: card.name || base.name,
-      autoName: base.name,
+      name: card.name || autoName,
+      autoName,
       category: card.category || guess || 'other',
       categorySet: !!card.category,
       doing: card.doing ?? '',

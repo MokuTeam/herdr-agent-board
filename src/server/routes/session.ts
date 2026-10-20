@@ -14,6 +14,7 @@ import { publicHelper } from '../../core/helpers.ts'
 import { t } from '../../core/lang.ts'
 import { checkName } from '../../core/launch/names.ts'
 import type { MessageGate } from '../../core/message-gate.ts'
+import { isPiItem } from '../../core/pi.ts'
 import type { Item, Pin } from '../../core/types.ts'
 import { checkWake, focus, send, sleepSession, wake, wakeAnswers } from '../../services/actions.ts'
 import { answerPermission, answerQuestions } from '../../services/answer.ts'
@@ -55,7 +56,10 @@ async function detail(app: SessionApp, item: Item) {
     reg && ['idle', 'shell'].includes(reg.status ?? '') && typeof reg.statusUpdatedAt === 'number'
       ? reg.statusUpdatedAt
       : 0
-  const thread = deps.claude.sessionThread(transcript ?? '', 60, { since: since ?? 0, idleSince })
+  // A pi session's turns are in its session file, its key.
+  const thread = isPiItem(item)
+    ? deps.pi.sessionThread(item.session ?? '', 60)
+    : deps.claude.sessionThread(transcript ?? '', 60, { since: since ?? 0, idleSince })
   const conversation = withSessions(app.items(), thread.conversation)
   // helpers: every subagent, fork, workflow agent and teammate, newest first (adapters/helpers.ts).
   const own = helpersOf(transcript, { alive: !!alive, since: since ?? null })
