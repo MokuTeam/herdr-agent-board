@@ -270,6 +270,16 @@ describe('routes', () => {
     ])
   })
 
+  test('how sessions asleep in "Waiting" fold: the board says (push unless config.json says otherwise); Settings take a known way', async () => {
+    const board = (await (await fetch(`${url}/api/board`)).json()) as { foldWaiting?: string }
+    expect(board.foldWaiting).toBe('push')
+    expect(await answer(post('/api/settings', { foldWaiting: 'sideways' }))).toEqual([
+      409,
+      { ok: false, error: 'Unknown way to fold sideways' },
+    ])
+    expect(await answer(post('/api/settings', { foldWaiting: 'push' }))).toEqual([200, { ok: true }])
+  })
+
   test('settings and categories: refusals answer 409', async () => {
     expect(await answer(post('/api/settings', { language: 'xx' }))).toEqual([
       409,

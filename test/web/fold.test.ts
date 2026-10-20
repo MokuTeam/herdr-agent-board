@@ -23,13 +23,19 @@ describe('fold', () => {
     expect(tapUnfolds({ pointerType: 'mouse', open: false, onControl: false })).toBe(false)
   })
 
-  test('on its way the cards below stay put and the hidden lines fade in with the height', () => {
-    expect(foldFrame(60, 60, 160)).toEqual({ height: 60, marginBottom: 0, opacity: 0 })
-    expect(foldFrame(110, 60, 160)).toEqual({ height: 110, marginBottom: -50, opacity: 0.5 })
-    expect(foldFrame(160, 60, 160)).toEqual({ height: 160, marginBottom: -100, opacity: 1 })
+  test('over the cards below they stay put; the hidden lines fade in with the height', () => {
+    expect(foldFrame(60, 60, 160, true)).toEqual({ height: 60, marginBottom: 0, opacity: 0 })
+    expect(foldFrame(110, 60, 160, true)).toEqual({ height: 110, marginBottom: -50, opacity: 0.5 })
+    expect(foldFrame(160, 60, 160, true)).toEqual({ height: 160, marginBottom: -100, opacity: 1 })
     // A spring a touch past either end, and nothing to unfold.
-    expect(foldFrame(58, 60, 160).opacity).toBe(0)
-    expect(foldFrame(162, 60, 160).opacity).toBe(1)
-    expect(foldFrame(60, 60, 60)).toEqual({ height: 60, marginBottom: 0, opacity: 1 })
+    expect(foldFrame(58, 60, 160, true).opacity).toBe(0)
+    expect(foldFrame(162, 60, 160, true).opacity).toBe(1)
+    expect(foldFrame(60, 60, 60, true)).toEqual({ height: 60, marginBottom: 0, opacity: 1 })
+  })
+
+  test('making room, the card takes its height and the cards below move with it', () => {
+    expect(foldFrame(60, 60, 160, false)).toEqual({ height: 60, marginBottom: 0, opacity: 0 })
+    expect(foldFrame(110, 60, 160, false)).toEqual({ height: 110, marginBottom: 0, opacity: 0.5 })
+    expect(foldFrame(160, 60, 160, false)).toEqual({ height: 160, marginBottom: 0, opacity: 1 })
   })
 })

@@ -99,6 +99,20 @@ test('editSettings refuses an unknown language', () => {
   assert.equal(saved().language, 'en')
 })
 
+test('editSettings keeps how sessions asleep in "Waiting" fold; refuses a way it does not know', () => {
+  isolatedHome()
+  seed({ language: 'en' })
+  assert.deepEqual(editSettings({ foldWaiting: 'over' }), { ok: true })
+  assert.equal(saved().foldWaiting, 'over')
+  assert.equal(saved().language, 'en')
+  assert.equal(loadConfig().foldWaiting, 'over')
+  assert.equal(editSettings({ foldWaiting: 'sideways' }).ok, false)
+  assert.equal(saved().foldWaiting, 'over')
+  // The language alone leaves it as it was.
+  assert.deepEqual(editSettings({ language: 'ru' }), { ok: true })
+  assert.equal(saved().foldWaiting, 'over')
+})
+
 test('editCategories creates, updates, orders and deletes; unknown fields survive', () => {
   isolatedHome()
   seed({

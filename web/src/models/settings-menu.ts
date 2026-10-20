@@ -2,7 +2,9 @@
 // dark), its language, where the session panel sits, and whether sleeping sessions show. Light or
 // dark is this browser's (models/theme.ts); the language is the board's, for every board; the
 // panel's place is this browser's too (components/panel/place.ts). With more than one Claude
-// profile folder found, Profiles… opens their panel (components/profiles/ProfilesPanel.tsx).
+// profile folder found, Profiles… opens their panel (components/profiles/ProfilesPanel.tsx). How
+// sessions asleep in "Waiting" fold is the board's, for every board (src/core/fold-mode.ts).
+import { FOLD_MODES, type FoldMode, isFoldMode } from '../../../src/core/fold-mode.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import type { MenuEntry } from './menu-model.ts'
 import { DOCKS, type Dock } from './panel-layout.ts'
@@ -21,6 +23,8 @@ export interface SettingsNow {
   sleepers: boolean
   /** More than one profile folder is found (models/profiles.ts offersProfiles): Profiles… is offered. */
   profiles: boolean
+  /** How sessions asleep in "Waiting" fold; null from a board that does not say (none offered). */
+  fold?: FoldMode | null | undefined
 }
 
 export function settingsMenu(now: SettingsNow): MenuEntry[] {
@@ -54,6 +58,16 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
     ...(now.profiles ? [{ id: 'profiles', label: t('set.profiles') }] : []),
     { separator: true },
     { id: 'sleepers', label: t('tb.sleepersTitle'), checked: now.sleepers },
+    ...(now.fold
+      ? [
+          {
+            id: 'fold',
+            label: t('set.fold'),
+            ...edit,
+            submenu: FOLD_MODES.map(id => ({ id: `fold:${id}`, label: t(`set.fold.${id}`), checked: now.fold === id })),
+          },
+        ]
+      : []),
   ]
 }
 
@@ -65,6 +79,7 @@ export type SettingPick =
   | { kind: 'reset' }
   | { kind: 'sleepers' }
   | { kind: 'profiles' }
+  | { kind: 'fold'; value: FoldMode }
   | null
 
 export function settingPicked(id: string): SettingPick {
@@ -73,5 +88,6 @@ export function settingPicked(id: string): SettingPick {
   if (kind === 'dock') return value === 'reset' ? { kind: 'reset' } : { kind: 'dock', value }
   if (id === 'sleepers') return { kind: 'sleepers' }
   if (id === 'profiles') return { kind: 'profiles' }
+  if (kind === 'fold' && isFoldMode(value)) return { kind, value }
   return null
 }

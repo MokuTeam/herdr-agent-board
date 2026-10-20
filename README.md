@@ -1311,7 +1311,10 @@ default: the board lives in a workspace of its own and stays open; `tab`; `overl
 `refreshSec`, `wakeUrl` (herdr-wake router), `scheduleWaitMin` (how long a due entry waits for a
 busy session, 240), `port` (web board, 12422), `web` (false turns the
 web board off), `terminal` (false turns the web board's [terminal](#terminal) off), `browser`
-(path for the app window), `terminalTitle` (window title pattern to
+(path for the app window), `foldWaiting` (how the web board folds a session asleep in
+"Waiting" down to its name, what it waits for and its time: `push`, the default, unfolds it on
+hover moving the cards below apart; `over` unfolds it over them; `off` keeps it whole; the gear's
+Settings set it too), `terminalTitle` (window title pattern to
 raise, default `<COMPUTERNAME>:*`), `raiseTerminal`, `launch` (how new sessions start: `claude`,
 `command`, `agent`, `args`, `timeoutSec`, see [New sessions](#new-sessions)), `mokupilot` (calls
 with a fork of a session: `false` turns them off; `{ "dir": "<MokuPilot checkout>" }` runs its
