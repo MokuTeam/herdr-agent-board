@@ -210,6 +210,41 @@ describe('routes', () => {
     expect([png.headers.get('content-encoding'), png.headers.get('vary')]).toEqual([null, null])
   })
 
+  test('a file the browser already has, by its ETag: a 304 with no body', async () => {
+    const get = (path: string, headers: Record<string, string> = {}) =>
+      fetch(url + path, { headers: { 'accept-encoding': 'br', ...headers }, decompress: false } as RequestInit)
+    for (const path of ['/', '/app.js', '/app.js.map', '/theme.js', '/styles/app.css', '/icon-192.png']) {
+      const first = await get(path)
+      const etag = first.headers.get('etag') ?? ''
+      expect([path, etag]).toEqual([path, expect.stringMatching(/^"[\w-]+"$/)])
+      expect(first.headers.get('cache-control')).toBe('no-cache')
+      // The same file: the same tag, and with it a 304 that carries nothing.
+      expect((await get(path)).headers.get('etag')).toBe(etag)
+      for (const ask of [etag, `W/${etag}`, `"other", ${etag}`, '*']) {
+        const again = await get(path, { 'if-none-match': ask })
+        expect([path, ask, again.status, again.headers.get('etag'), (await again.arrayBuffer()).byteLength]).toEqual([
+          path,
+          ask,
+          304,
+          etag,
+          0,
+        ])
+      }
+      // Another tag: the whole file.
+      const other = await get(path, { 'if-none-match': '"other"' })
+      expect([path, other.status]).toEqual([path, 200])
+      expect((await other.arrayBuffer()).byteLength).toBeGreaterThan(0)
+    }
+    // The compressed and the plain answer are different bytes: different tags, neither stands for the other.
+    const br = (await get('/app.js')).headers.get('etag') ?? ''
+    const plain = (await get('/app.js', { 'accept-encoding': 'identity' })).headers.get('etag') ?? ''
+    const gzip = (await get('/app.js', { 'accept-encoding': 'gzip' })).headers.get('etag') ?? ''
+    expect(new Set([br, plain, gzip]).size).toBe(3)
+    expect((await get('/app.js', { 'accept-encoding': 'identity', 'if-none-match': br })).status).toBe(200)
+    // Files of their own, tags of their own.
+    expect((await get('/theme.js')).headers.get('etag')).not.toBe(br)
+  })
+
   test('anything else that matches no route: 405', async () => {
     expect(await answer(fetch(`${url}/api/board`, { method: 'PUT' }))).toEqual([405, { error: 'method' }])
     expect(await answer(fetch(`${url}/`, { method: 'DELETE' }))).toEqual([405, { error: 'method' }])
