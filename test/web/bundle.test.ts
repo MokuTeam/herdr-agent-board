@@ -15,7 +15,10 @@ test('web/src/main.tsx bundles', async () => {
   })
   expect(logs).toEqual([])
   expect(bundle.js()).toContain('limits-pop')
-  expect(bundle.js()).toContain('react-dom-client.production')
   expect(bundle.js()).not.toContain('react-dom-client.development')
+  // What went into it, by its source map: the minified script names no files.
+  const { sources } = JSON.parse(bundle.map()) as { sources: string[] }
+  expect(sources.some(s => s.endsWith('react-dom-client.production.js'))).toBe(true)
+  expect(sources.some(s => s.includes('react-dom-client.development'))).toBe(false)
   expect(bundle.js()).not.toMatch(/^import .* from ['"]\.{1,2}\//m)
 })
