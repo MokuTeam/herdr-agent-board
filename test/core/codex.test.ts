@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { isCodexItem, isCodexSession, parseCodexConversation, parseCodexTail } from '../../src/core/codex.ts'
 
 const row = (type: string, payload: Record<string, unknown>) =>
@@ -102,4 +103,17 @@ test('unknown message metadata and context combined with a user prompt preserve 
     }),
   ]
   expect(parseCodexTail(lines).prompt).toBe('fix it')
+})
+
+test('recorded injected user-role envelopes do not replace the prompt or answer an open question', () => {
+  // Codex 0.142.2, 0.142.5, 0.144.6 and 0.153.4 envelopes; bodies and paths shortened.
+  const injected = readFileSync(new URL('../fixtures/codex-injected.jsonl', import.meta.url), 'utf8')
+    .trim()
+    .split('\n')
+  expect(injected).toHaveLength(4)
+  for (const line of injected) {
+    const lines = [message('user', 'fix the build'), message('assistant', 'Shall I push?'), line]
+    expect(parseCodexTail(lines)).toMatchObject({ prompt: 'fix the build', question: 'Shall I push?', replied: false })
+    expect(parseCodexConversation(lines).map(t => t.role)).toEqual(['user', 'assistant'])
+  }
 })

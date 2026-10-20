@@ -46,3 +46,14 @@ test('widens the bounded read past a large tool result and skips a partial first
   writeFileSync(file, said('user', 'Привет 100%') + result + said('assistant', 'Готово.'))
   expect(createCodexHome(root).transcriptInfo(ID)).toMatchObject({ prompt: 'Привет 100%', lastText: 'Готово.' })
 })
+
+test('keeps the cached prompt when a long tool result moves its user turn beyond the card window', () => {
+  const { root, file } = fixture()
+  writeFileSync(file, said('user', 'fix the build') + said('assistant', 'Looking.'))
+  const home = createCodexHome(root)
+  expect(home.transcriptInfo(ID)?.prompt).toBe('fix the build')
+  const output = `${JSON.stringify({ type: 'response_item', payload: { type: 'function_call_output', output: 'x'.repeat(3 << 20) } })}\n`
+  appendFileSync(file, output + said('assistant', 'Shall I push?'))
+  expect(home.transcriptInfo(ID)).toMatchObject({ prompt: 'fix the build', lastText: 'Shall I push?', replied: false })
+  expect(createCodexHome(root).transcriptInfo(ID)?.prompt).toBe('')
+})

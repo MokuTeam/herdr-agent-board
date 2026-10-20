@@ -66,6 +66,8 @@ export function createCodexHome(root = process.env.CODEX_HOME || join(homedir(),
         info = parseCodexTail(readTail(file, st.size, bytes).split('\n'))
         if ((info.prompt && info.lastText) || bytes >= st.size) break
       }
+      // A long tool result can move the last user turn outside the bounded tail.
+      if (!info.prompt && hit?.info.prompt && st.size >= hit.size) info.prompt = hit.info.prompt
       info.activity = st.mtimeMs
       cache.set(file, { mtimeMs: st.mtimeMs, size: st.size, info })
       return info
