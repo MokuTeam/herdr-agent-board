@@ -29,6 +29,7 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'tunnel.err.key': 'The key\'s path cannot start with a dash or hold " or ${',
 
     // Task 4: the login's rules
+    'access.err.password': 'A password has at least 12 characters',
 
     // Task 7: the login service
 
@@ -68,6 +69,7 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'tunnel.err.key': 'Путь к ключу не может начинаться с дефиса или содержать " или ${',
 
     // Task 4: the login's rules
+    'access.err.password': 'Пароль: не меньше 12 символов',
 
     // Task 7: the login service
 
