@@ -39,9 +39,14 @@ function textOf(content: unknown): string {
 function userText(item: Rec): string {
   const metadata = rec(item.internal_chat_message_metadata_passthrough)
   const kinds = metadata?.content_item_kinds
-  if (Array.isArray(kinds) && !kinds.some(k => k === 'user.text' || k === 'unknown')) return ''
+  const classified = Array.isArray(kinds) && kinds.length > 0
+  if (classified && !kinds.some(k => k === 'user.text' || k === 'unknown')) return ''
   const text = textOf(item.content)
-  if (/^<(?:skill|turn_aborted|subagent_notification|recommended_plugins)(?:\s|>)/.test(text)) return ''
+  if (
+    !classified &&
+    /^<(?:skill|turn_aborted|subagent_notification|recommended_plugins|codex_internal_context)(?:\s|>)/.test(text)
+  )
+    return ''
   return text
     .replace(/^# AGENTS\.md instructions for [^\n]*\n\s*<INSTRUCTIONS>[\s\S]*?<\/INSTRUCTIONS>\s*/g, '')
     .replace(/<environment_context>[\s\S]*?<\/environment_context>/g, '')

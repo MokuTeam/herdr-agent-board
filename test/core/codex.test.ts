@@ -110,10 +110,28 @@ test('recorded injected user-role envelopes do not replace the prompt or answer 
   const injected = readFileSync(new URL('../fixtures/codex-injected.jsonl', import.meta.url), 'utf8')
     .trim()
     .split('\n')
-  expect(injected).toHaveLength(4)
+  expect(injected).toHaveLength(5)
   for (const line of injected) {
     const lines = [message('user', 'fix the build'), message('assistant', 'Shall I push?'), line]
     expect(parseCodexTail(lines)).toMatchObject({ prompt: 'fix the build', question: 'Shall I push?', replied: false })
     expect(parseCodexConversation(lines).map(t => t.role)).toEqual(['user', 'assistant'])
+  }
+})
+
+test('explicit user.text and mixed classifications preserve real prompts; empty kinds behave like absent kinds', () => {
+  for (const kinds of [[], ['user.text'], ['plugins.recommendations', 'user.text'], ['unknown']]) {
+    const raw = message('user', 'real request', {
+      internal_chat_message_metadata_passthrough: { content_item_kinds: kinds },
+    })
+    expect(parseCodexTail([raw]).prompt).toBe('real request')
+  }
+  for (const kinds of [['user.text'], ['plugins.recommendations', 'user.text']]) {
+    const raw = message('user', '<skill>user supplied content</skill> real request', {
+      internal_chat_message_metadata_passthrough: { content_item_kinds: kinds },
+    })
+    expect(parseCodexConversation([raw])[0]).toMatchObject({
+      role: 'user',
+      text: '<skill>user supplied content</skill> real request',
+    })
   }
 })
