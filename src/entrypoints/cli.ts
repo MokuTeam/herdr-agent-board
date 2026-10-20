@@ -54,6 +54,7 @@ import type { LiveHit } from '../adapters/profile-homes.ts'
 import { addEntry, askRestart, listEntries, type NewEntry, removeEntry } from '../adapters/schedule-store.ts'
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
+import { CODEX_AGENT } from '../core/codex.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t } from '../core/lang.ts'
 import { type ProfileSet, profileSet, sessionProfile } from '../core/profiles.ts'
@@ -114,6 +115,24 @@ interface Session {
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const paneOf = async (pane: string): Promise<HerdrPane | undefined> =>
   (await snapshot()).panes.find(x => x.pane_id === pane)
+
+/** A real Claude child has a new id; a root Codex can carry the Claude id its hook recorded. */
+function codexCaller(): boolean {
+  const codex = process.env.CODEX_THREAD_ID
+  if (!codex) return false
+  const claude = process.env.CLAUDE_CODE_SESSION_ID
+  return !claude || readCard(codex)?.codexParentClaude === claude
+}
+
+/** A Codex child inherits its parent's pane env; only the reported root session owns its card. */
+function codexSession(p: HerdrPane | undefined): (Session & { name: string }) | null {
+  if (p?.agent !== CODEX_AGENT) return null
+  const own = process.env.CODEX_THREAD_ID
+  const pane = process.env.HERDR_PANE_ID
+  if (own && p.agent_session?.value === own)
+    return { key: own, cwd: p.cwd ?? '', pane, name: p.terminal_title_stripped || own.slice(0, 8) }
+  throw new Error('cannot tell which Codex session this is: use its herdr pane, or pass --session')
+}
 /**
  * The sessions running in every profile listed, hidden ones too, this env's own folder first (its
  * answer wins), as the board reads them (services/board.ts collect).
@@ -134,6 +153,14 @@ async function resolveSession(): Promise<Session> {
     if (!item) throw new Error(`no session "${target}" on the board`)
     return { key: item.key, cwd: item.cwd, name: item.name, pane: item.pane }
   }
+  const pane = process.env.HERDR_PANE_ID
+  const fromCodex = codexCaller()
+  let reported: HerdrPane | undefined
+  if (fromCodex && pane) {
+    reported = await paneOf(pane)
+    const codex = codexSession(reported)
+    if (codex) return codex
+  }
   const own = process.env.CLAUDE_CODE_SESSION_ID
   if (own) {
     return {
@@ -143,9 +170,8 @@ async function resolveSession(): Promise<Session> {
       pane: process.env.HERDR_PANE_ID,
     }
   }
-  const pane = process.env.HERDR_PANE_ID
   if (pane) {
-    const p = await paneOf(pane)
+    const p = fromCodex ? reported : await paneOf(pane)
     if (p?.agent) return { key: p.agent_session?.value ?? `pane-${pane}`, cwd: p.cwd ?? '', pane }
   }
   throw new Error('cannot tell which session this is: run it from a Claude session, or pass --session')
@@ -159,6 +185,15 @@ async function ownSession(): Promise<SessionRef | null> {
   try {
     if (pane) p = await paneOf(pane)
   } catch {}
+  if (codexCaller()) {
+    try {
+      const codex = codexSession(p)
+      if (codex) return { key: codex.key, name: codex.name }
+      if (!p) return null
+    } catch {
+      return null
+    }
+  }
   const key = own || (p?.agent ? (p.agent_session?.value ?? `pane-${pane}`) : null)
   if (!key) return null
   const name = (own && liveSessions().get(own)?.session.name) || p?.terminal_title_stripped || key.slice(0, 8)
