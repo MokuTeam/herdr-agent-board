@@ -1099,6 +1099,7 @@ the ones it is done with to sleep in one call, instead of one herdr-wake `POST /
 ```sh
 board sleep Report-north Report-south w2:p7 3f2a9c1e-...   # names, panes or session ids
 board sleep --when-free Report-north Report-south           # the busy ones once they are free
+board sleep --when-free Report-north --self                 # and this session, once its turn is over
 ```
 
 - Every session that is free now goes to sleep at once through herdr-wake (four at a time), by
@@ -1116,6 +1117,12 @@ board sleep --when-free Report-north Report-south           # the busy ones once
   did not happen. Nothing is typed into the session, and nothing wakes it: one asleep by other
   means meanwhile counts as done. Like a restart, it is for that session only (not the one after
   `/clear` in its pane), and archiving the session drops it.
+- `--self`: the session running the command too, found as `board doing` finds it (its
+  `CLAUDE_CODE_SESSION_ID`, else the session herdr sees in its pane), so it need not know its own
+  name. It is in a turn then, so it always goes as with `--when-free`, last; the others named with
+  it only when `--when-free` is given. End the turn after it: the session goes to sleep once it is
+  free. The skill tells agents to do it only when the user asks or a coordinating session's run is
+  over, not by default. Outside a session it refuses and puts nothing to sleep.
 - Without herdr-wake, or when it does not answer, it refuses at once and puts nothing to sleep.
 - For agents that talk to the board over HTTP: `POST /api/sleep` with header `X-Board: 1` and
   `{"targets": ["<id|name|pane>", ...], "whenFree": true}` answers `{ ok, results }`, one per
@@ -1437,10 +1444,10 @@ board archive --session <id|name|pane>
                           another session off the board, its pane closed (a one-off one you
                           started, or one the user asked you to); the user brings it back from
                           the board's archive; see Archive
-board sleep <id|name|pane>... [--when-free]
+board sleep <id|name|pane>... [--when-free] [--self]
                           several sessions to sleep at once, a line for each: asleep, or kept
-                          up and why; --when-free: the busy ones once they are free; see
-                          Several to sleep at once
+                          up and why; --when-free: the busy ones once they are free; --self:
+                          this session too, once its turn is over; see Several to sleep at once
 board fork [--name "<Name>"] ["<note>"]
                           a fork of this session in a new tab, with a copy of its conversation
                           (the web board starts it; the note is its first message); see Fork
@@ -1453,7 +1460,7 @@ Agents in herdr also get a skill, [`herdr-agents`](skills/herdr-agents/SKILL.md)
 install puts into `~/.claude/skills` (with more than one profile, into the `skills` folder of
 each one the board shows). Claude Code keeps only its one-line description in a session's
 context and reads the rest when it is needed: how to start another session, message or wake one,
-put the sessions it coordinates to sleep in one call (`board sleep`), do something later (`board remind` rather than CronCreate, which dies when the session sleeps),
+put the sessions it coordinates to sleep in one call, itself too once its run is over (`board sleep`), do something later (`board remind` rather than CronCreate, which dies when the session sleeps),
 restart itself when an MCP server dropped or its settings, hooks or skills changed
 (`board restart`), and run a server or an interactive login in a pane of its own. herdr puts the
 pane's ids into its environment (`HERDR_ENV=1`, `HERDR_PANE_ID`, `HERDR_TAB_ID`,

@@ -309,6 +309,63 @@ test('board sleep --when-free: the free ones now, the busy ones once they are fr
   assert.match(list.out, new RegExp(`^${e.id} · sleep, asked .+ · once the session is free · Two$`))
 })
 
+test('board sleep --self: the session running it, once its turn is over, found as board doing finds it (#130)', async () => {
+  const box = await sandbox()
+  const panes = [pane('p1', 'One', 'idle'), pane('p2', 'Two', 'working'), pane('p3', 'Lead', 'working')]
+  herdrWith(box, panes)
+  const wake = await fakeWake(box, panes)
+  config(box, { wakeUrl: wake.url })
+  // Without --when-free the others are as before: the free one now, the busy one kept up; itself
+  // once it is free, an entry of its own that names no other session as its setter.
+  const r = await agentCli(box, ['sleep', 'One', 'Two', '--self'], {
+    CLAUDE_CODE_SESSION_ID: 's-p3',
+    HERDR_PANE_ID: 'p3',
+  })
+  assert.equal(r.code, 0, r.out)
+  const [e] = stored(box)
+  assert.ok(e)
+  assert.deepEqual(
+    [e.kind, e.idle, e.by, e.key, e.pane, e.text, e.from],
+    ['sleep', true, 'agent', 's-p3', 'p3', '', undefined],
+  )
+  const lines = r.out.split('\n')
+  assert.match(
+    lines[0] ?? '',
+    /^ok · 1 put to sleep, 1 once free, 1 kept up · with --when-free the busy ones go to sleep once they are free · note: no board with the scheduler/,
+  )
+  assert.deepEqual(lines.slice(1), [
+    'One (p1): asleep',
+    'Two (p2): kept up, working',
+    `Lead (p3): working; goes to sleep once it is free · cancel: board unschedule ${e.id}`,
+  ])
+  assert.deepEqual(wake.targets(), ['p1'])
+
+  // Alone, from a pane whose session herdr names (no CLAUDE_CODE_SESSION_ID): asked again, one entry.
+  const again = await agentCli(box, ['sleep', '--self'], { HERDR_PANE_ID: 'p3' })
+  assert.equal(again.code, 0, again.out)
+  assert.match(again.out, /^ok · 0 put to sleep, 1 once free/)
+  assert.match(
+    again.out,
+    new RegExp(
+      `\nLead \\(p3\\): working; goes to sleep once it is free \\(asked before\\) · cancel: board unschedule ${e.id}$`,
+    ),
+  )
+  assert.equal(stored(box).length, 1)
+
+  // Outside a session there is none to put to sleep, and nothing is.
+  const none = await agentCli(box, ['sleep', '--self'])
+  assert.equal(none.code, 1)
+  assert.match(
+    none.out,
+    /board sleep --self is for the session running it, and this is none: .+; nothing was put to sleep/,
+  )
+  assert.deepEqual(wake.targets(), ['p1'])
+  assert.equal(stored(box).length, 1)
+  // The word is sleep's only: in another command's text it stays.
+  const doing = await agentCli(box, ['doing', 'try', '--self'], { CLAUDE_CODE_SESSION_ID: 's-p3' })
+  assert.match(doing.out, /doing: try --self$/)
+})
+
 test('the scheduler puts a busy one to sleep once it is free, and nothing more: no wake, nothing typed', async () => {
   const box = await sandbox()
   const two = pane('p2', 'Two', 'working')
