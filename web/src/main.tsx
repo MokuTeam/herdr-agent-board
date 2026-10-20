@@ -1,10 +1,12 @@
 // The web board in React: the language, the live board, the side panels' place and the page,
-// mounted on #root. In a phone's browser (models/remote-page.ts) the board waits behind pairing.
+// mounted on #root. In a phone's browser (models/remote-page.ts) the board waits behind pairing. The
+// live signs loop at a pace of their own (models/pace.ts).
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App.tsx'
 import { RemoteGate } from './components/remote/RemoteGate.tsx'
 import { I18nProvider } from './i18n/I18nProvider.tsx'
+import { startPace } from './models/pace.ts'
 import { keptLanguage, remotePage } from './models/remote-page.ts'
 import { startPhoneApp } from './phone-app.ts'
 import { BoardProvider } from './state/BoardProvider.tsx'
@@ -27,3 +29,4 @@ if (root)
     </StrictMode>,
   )
 if (remotePage()) startPhoneApp()
+startPace()

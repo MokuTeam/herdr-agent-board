@@ -1,0 +1,33 @@
+/* What the board draws while sessions work and nobody touches it (#109). The live signs loop at a
+   pace of their own (web/src/models/pace.ts); this sheet keeps each of their frames cheap. */
+
+/* A glyph that turns sits in a box of its own (.turn, Turn in web/src/components/icons.tsx) and the
+   box turns, at the glyph's pace. Chromium animates an SVG element's transform on the main thread,
+   the page styled, layered and committed again for every frame; an HTML box's transform moves on
+   the compositor with the main thread idle. The glyph keeps its size and color from the sheets
+   above, whose rules turning the SVG itself are stopped here. The dot's pulse (app.css) already
+   moves a box's transform and opacity. */
+.turn { display: inline-grid; flex: none; }
+
+.spin, .now.restart.on svg, .sched-mini .when.on svg, .ln-spin svg, .folder-state[data-state="wait"] svg { animation: none; }
+.turn.spinning, .ln-spin { animation: spin 1s linear infinite; }
+.now.restart.on .turn, .sched-mini .when.on .turn { animation: spin 1.6s linear infinite; }
+.folder-state[data-state="wait"] { animation: spin 0.9s linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .turn.spinning, .ln-spin, .now.restart.on .turn, .sched-mini .when.on .turn, .folder-state[data-state="wait"] { animation: none; }
+}
+
+/* A card's hover buttons take their glass only while they show: hidden (app.css: no opacity until
+   the card is pointed at or focused) each was a backdrop-filter layer of its own, two per card, and
+   every frame of the page went through them all. Leaving, the glass stays until they have faded. */
+.card-actions button {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  transition: transform 100ms ease-out, background 120ms ease, -webkit-backdrop-filter 0s linear 160ms, backdrop-filter 0s linear 160ms;
+}
+.card:hover .card-actions button, .card:focus-visible .card-actions button {
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  transition-delay: 0s;
+}
