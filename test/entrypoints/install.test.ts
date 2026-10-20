@@ -306,9 +306,10 @@ test('the agents’ skill per shown profile: someone else’s in one is left alo
 test('the skill install copies is upstream’s, word for word, but for what `board sleep` added', () => {
   // Pinned to the newest web merge ported, b2c5afa (#50 brought it, #51 changed it, #56 last, its `board archive`
   // line; nothing since, up to f0cef14); a later upstream change moves the pin. #60 added `board sleep`: its
-  // section, the line pointing to it and its words in the description, taken out here.
+  // section, the line pointing to it and its words in the description, taken out here; #130 its `--self`, in
+  // the same section and words.
   const ours = read(root, 'skills', 'herdr-agents', 'SKILL.md')
-    .replace(' put the sessions it coordinates to sleep in one call,', '')
+    .replace(' put the sessions it coordinates to sleep in one call (itself too, once its run is over),', '')
     .replace('- Putting sessions to sleep that you coordinate: see the next section, one call for all of them.\n', '')
     .replace(/## Put the sessions you are done with to sleep\n[\s\S]*?(?=## Do something later\n)/, '')
   expect(ours).toBe(oldSource('skills/herdr-agents/SKILL.md', 'b2c5afa'))

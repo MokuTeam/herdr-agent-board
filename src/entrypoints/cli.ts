@@ -29,7 +29,8 @@
 //                            closes, the user can bring it back from the board's archive (services/archive.ts)
 //   board sleep <id|name|pane>...   puts those sessions to sleep at once through herdr-wake, a line
 //                            for each: asleep, or kept up and why (services/sleep.ts); with
-//                            --when-free the busy ones go to sleep once they are free
+//                            --when-free the busy ones go to sleep once they are free; --self
+//                            puts this session to sleep too, once its turn is over
 //   board fork [--name <Name>] [note]   a fork of this session (or --session's): a new session in
 //                            a new tab with a copy of its conversation, started by the web board as
 //                            its Fork does (services/launch/fork.ts); the note is its first message
@@ -67,9 +68,9 @@ import { checkWake, wakeAnswers } from '../services/actions.ts'
 import { askArchive, closeDue, getArchived, profileDoubt } from '../services/archive.ts'
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
-import { type SleepOutcome, sleepMany } from '../services/sleep.ts'
+import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | doctor] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | doctor] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -96,6 +97,10 @@ const mode = (): { idle?: true } => (idle ? { idle: true } : {})
 const wi = args.indexOf('--when-free')
 const whenFree = wi >= 0
 if (whenFree) args.splice(wi, 1)
+// sleep: this session too, once it is free; a word of any other command's text stays.
+const mi = args[0] === 'sleep' ? args.indexOf('--self') : -1
+const self = mi >= 0
+if (self) args.splice(mi, 1)
 const modeText = (): string => (idle ? ', when the session is free' : '')
 const [cmd = 'show', ...rest] = args
 const text = rest.join(' ').replace(/\s+/g, ' ').trim()
@@ -679,16 +684,17 @@ function sleepLine(o: SleepOutcome): string {
 }
 
 /**
- * `board sleep <id|name|pane>... [--when-free]`: several sessions put to sleep at once
- * (services/sleep.ts), for a session that coordinates others; a line for each. Refused at once
- * without herdr-wake, which puts them to sleep. In English for agents, whatever language the board
- * speaks (but for what herdr-wake and the profile guard say).
+ * `board sleep <id|name|pane>... [--when-free] [--self]`: several sessions put to sleep at once
+ * (services/sleep.ts), for a session that coordinates others; a line for each. `--self` adds the
+ * session running it, found as `board doing` finds it, always once it is free: it is in a turn
+ * now. Refused at once without herdr-wake, which puts them to sleep. In English for agents,
+ * whatever language the board speaks (but for what herdr-wake and the profile guard say).
  */
 async function sleep(): Promise<void> {
   const targets = [...rest, ...(target ? [target] : [])]
-  if (!targets.length)
+  if (!targets.length && !self)
     throw new Error(
-      'usage: board sleep <id|name|pane>... [--when-free]: the sessions to put to sleep (a name with spaces in quotes)',
+      'usage: board sleep <id|name|pane>... [--when-free] [--self]: the sessions to put to sleep (a name with spaces in quotes; --self: this one, once its turn is over)',
     )
   const up = await wakeAnswers(deps)
   if (!up.ok) {
@@ -698,11 +704,27 @@ async function sleep(): Promise<void> {
     throw new Error(`putting sessions to sleep needs ${what}; nothing was put to sleep`)
   }
   const from = await ownSession()
-  const results = await sleepMany(deps, await collect(deps), targets, {
-    whenFree,
-    by: 'agent',
-    ...(from && { from }),
-  })
+  if (self && !from)
+    throw new Error(
+      'board sleep --self is for the session running it, and this is none: run it from a Claude session in herdr; nothing was put to sleep',
+    )
+  const items = await collect(deps)
+  let others = targets
+  if (self && from) {
+    const me = sessionsFor(items, from.key)
+    if (!me.length)
+      throw new Error(`board sleep --self: this session (${from.key}) is not on the board; nothing was put to sleep`)
+    // A target that names it too goes with --self, once it is free, not as one more line.
+    others = targets.filter(t => {
+      const fits = sessionsFor(items, t)
+      return !(fits.length === 1 && me.some(m => m.key === fits[0]?.key))
+    })
+  }
+  const results = [
+    ...(others.length ? await sleepMany(deps, items, others, { whenFree, by: 'agent', ...(from && { from }) }) : []),
+    // Itself last, so the others go first; its entry is its own, set by no other session.
+    ...(self && from ? await sleepMany(deps, items, [from.key], { whenFree: true, by: 'agent' }) : []),
+  ]
   // A session two targets name counts once.
   const each = [...new Map(results.map(o => [o.key ?? o.target, o.result])).values()]
   const count = (result: SleepOutcome['result']): number => each.filter(r => r === result).length
