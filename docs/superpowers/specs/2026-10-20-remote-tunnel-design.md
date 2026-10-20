@@ -103,10 +103,12 @@ is a passkey or password + TOTP, with a lockout, and a login that is ended stops
     the tunnel user, with a group Caddy has, mode `2750`; the socket's mask lets in its owner and
     that group only.
   - A dedicated SSH user for the tunnel: key only, no shell, and only remote socket forwards
-    allowed. In sshd, for that user: `AllowStreamLocalForwarding remote`,
-    `StreamLocalBindUnlink yes` (a dead tunnel's socket is replaced), a `StreamLocalBindMask` and
-    `AllowTcpForwarding no`. `permitlisten` covers TCP only, so it does not keep the key to one
-    socket path; what does, and what is left, is in "The server" below **(call 31)**.
+    allowed. In sshd, for that user: `AllowStreamLocalForwarding remote`;
+    `AllowTcpForwarding remote` with `PermitListen none` (sshd lets a socket forward through only
+    where remote forwards are allowed, and `PermitListen none` still refuses every TCP listen);
+    `StreamLocalBindUnlink yes` (a dead tunnel's socket is replaced) and a `StreamLocalBindMask`.
+    Neither `permitlisten` nor `PermitListen` names a socket's path, so neither keeps the key to
+    one socket path; what does, and what is left, is in "The server" below **(call 31)**.
   - **The board does not set up the server.** The README gives ready Caddy and sshd snippets,
     and the panel shows them filled in, with Copy.
 - **Where a login is needed: decided by the listener, never by headers.**
@@ -250,8 +252,8 @@ is a passkey or password + TOTP, with a lockout, and a login that is ended stops
 - **The server's host key (call 7).** Trust on first use, kept in the board's own `known_hosts` in
   the state folder, never the user's.
   - The first connection pins the key (`accept-new`), and the panel shows its fingerprint.
-  - The README tells the owner to compare it with `ssh-keygen -lf
-    /etc/ssh/ssh_host_ed25519_key.pub` on the server.
+  - The README tells the owner to compare it with
+    `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the server.
   - If the key later changes, ssh refuses and the status says so. The panel then offers "Forget
     the server's key".
 - **"Generate key".**
@@ -262,10 +264,12 @@ is a passkey or password + TOTP, with a lockout, and a login that is ended stops
     works again.
   - **Windows: set the private key's ACL.** Windows' OpenSSH refuses a key that anyone other than
     the user, SYSTEM or Administrators can read ("UNPROTECTED PRIVATE KEY FILE", "bad
-    permissions"). A key file inherits its folder's ACL, so the board sets it explicitly: icacls
-    removes inheritance and grants full control to the current user, by SID from `whoami /user`
-    (a user name can be localized or carry a domain). Elsewhere, mode 600; ssh-keygen sets it
-    already. The builder checks this on a real Windows machine: `ssh -i <key>` must not complain.
+    permissions"). Windows' own ssh-keygen gives the key an ACL of its own, but a key file
+    written any other way inherits its folder's, so the board sets it explicitly, after
+    ssh-keygen too: icacls removes inheritance and grants full control to the current user, by
+    SID from `whoami /user` (a user name can be localized or carry a domain). Elsewhere, mode
+    600; ssh-keygen sets it already. The spike checked the recipe on a real Windows machine
+    (end of "Risks and things to watch"): after it, `ssh -i <key>` does not complain.
   - **A key the owner points to (`key` set):** used as it is. The board does not change the ACL of
     a file it did not make **(call 8)**. If ssh refuses it, the status shows ssh's message and how
     to fix it. It must have no passphrase.
@@ -277,9 +281,15 @@ is a passkey or password + TOTP, with a lockout, and a login that is ended stops
   - `error`: ssh's own last lines, trimmed, with a hint for the common cases below.
 
   "Connected" means the server accepted the forward, not only that ssh runs. How to detect it is
-  the builder's call. One option: run ssh with `-v` and read "remote forward success". Another:
-  with `ExitOnForwardFailure`, an ssh still running a few seconds after authenticating holds the
-  forward, and a probe through the domain (below) confirms it.
+  the builder's call. One option: run ssh with `-v` and read the success line,
+  `debug1: remote forward success for: listen <socket>:-2, connect 127.0.0.1:<port>`, matched by
+  its start including `listen <socket>:` (with the colon, so `board.sock` does not match
+  `board.sock2`). The error text then leaves out the `debug1:` lines and the lines a healthy
+  connection prints without that prefix (`Authenticated to …`, the version banner, the first
+  connection's known-hosts warning), which are not errors. The exact lines are in "Checked by
+  the spike" at the end of "Risks and things to watch". Another: with `ExitOnForwardFailure`, an
+  ssh still running a few seconds after authenticating holds the forward, and a probe through the
+  domain (below) confirms it.
 - **And that the domain reaches this board (call 32).** A forward on the same socket path replaces
   the one before (`StreamLocalBindUnlink`, below), so a forward the server accepted can later be
   taken by another connection with the tunnel's key. While connected, the board fetches its own
@@ -354,9 +364,11 @@ is a passkey or password + TOTP, with a lockout, and a login that is ended stops
 
   Hints for the usual failures:
   - "Permission denied (publickey)": the line is not in the keys file
-    (`/etc/ssh/authorized_keys/boardtunnel`), or the sshd block is not there.
+    (`/etc/ssh/authorized_keys/boardtunnel`), the sshd block is not there, or the account is
+    locked (an sshd with `UsePAM no` and no `usermod -p '*'` from step 2).
   - "remote port forwarding failed for listen path …": the socket's folder is missing or not the
-    tunnel user's to write, `AllowStreamLocalForwarding` is not `remote`, or a stale socket is
+    tunnel user's to write, `AllowStreamLocalForwarding` is not `remote`, `AllowTcpForwarding` is
+    `no` or `local` (it must allow remote forwards, socket ones included), or a stale socket is
     there and `StreamLocalBindUnlink` is not `yes`.
   - "UNPROTECTED PRIVATE KEY FILE": the key's ACL.
   - "Host key verification failed": the server's key changed.
@@ -376,6 +388,8 @@ The panel shows the same snippets with the owner's values filled in, each with C
    ```sh
    sudo useradd --system --no-create-home --home-dir /nonexistent \
        --shell /usr/sbin/nologin boardtunnel
+   # useradd leaves the account locked; an sshd with UsePAM no refuses a locked one, key or not
+   sudo usermod -p '*' boardtunnel
    # the socket's folder: the tunnel user makes the socket, Caddy's group opens it, no one else
    sudo install -d -m 2750 -o boardtunnel -g caddy /var/lib/boardtunnel
    # the key's file belongs to root, out of the tunnel user's reach
@@ -388,6 +402,10 @@ The panel shows the same snippets with the owner's values filled in, each with C
    - The setgid bit (the `2` in `2750`) gives the socket the folder's group, so Caddy can open it.
      The mask in the sshd block makes it `srw-rw----`: its owner and that group only.
    - The tunnel user has no home and no file of its own on the server.
+   - `usermod -p '*'`: `useradd` leaves `!` as the password, which locks the account. `*` matches
+     no password either, but does not lock it. An sshd with `UsePAM yes` (Debian's default) lets
+     the key in anyway; one with `UsePAM no` refuses a locked account ("Permission denied
+     (publickey)"; see "Checked by the spike").
 3. **The key, allowed to forward only** (`/etc/ssh/authorized_keys/boardtunnel`):
 
    ```
@@ -405,7 +423,8 @@ The panel shows the same snippets with the owner's values filled in, each with C
        AuthenticationMethods publickey
        PasswordAuthentication no
        KbdInteractiveAuthentication no
-       AllowTcpForwarding no
+       AllowTcpForwarding remote
+       PermitListen none
        AllowStreamLocalForwarding remote
        StreamLocalBindUnlink yes
        StreamLocalBindMask 0117
@@ -418,8 +437,12 @@ The panel shows the same snippets with the owner's values filled in, each with C
        ClientAliveCountMax 2
    ```
 
-   - `AllowTcpForwarding no`: no TCP forward either way. A stolen key cannot use `-L` to reach
-     anything on the server's network, nor listen on a port.
+   - `AllowTcpForwarding remote` and `PermitListen none`: no TCP forward either way. sshd lets a
+     remote socket forward through only where `AllowTcpForwarding` allows remote forwards, so
+     `no` would refuse the board's own forward too (ssh exits 255; see "Checked by the spike").
+     `remote` refuses every `-L`, so a stolen key cannot reach anything on the server's network;
+     `PermitListen none` refuses every TCP listen (`-R <port>:…`, `-R 0:…`), so it cannot listen
+     on a port either. `PermitListen` does not apply to a socket's path.
    - `AllowStreamLocalForwarding remote`: socket forwards from the server to the PC only. No `-L`
      to a socket on the server (Docker's, say).
    - `StreamLocalBindUnlink yes`: a new forward replaces the socket a dead connection left (see
@@ -428,8 +451,9 @@ The panel shows the same snippets with the owner's values filled in, each with C
    - `AuthorizedKeysFile`: the key lives in root's file, which the tunnel user cannot change.
    - `ForceCommand` and the nologin shell: it runs no command.
    - `ClientAlive*`: a dead connection's sshd ends within about 30 s.
-   - These need OpenSSH 6.7 or newer on the server. `KbdInteractiveAuthentication` is 8.7's name;
-     older servers call it `ChallengeResponseAuthentication`.
+   - These need OpenSSH 7.8 or newer on the server: `PermitListen` came in 7.8, the rest
+     earlier. `KbdInteractiveAuthentication` is 8.7's name; older servers call it
+     `ChallengeResponseAuthentication`.
 
    **What keeps the tunnel user to that one path (call 31).** No sshd or `authorized_keys` option
    names the paths a socket forward may use: `permitlisten` and `PermitListen` cover TCP only.
@@ -889,16 +913,18 @@ New:
 
 ## Risks and things to watch
 
-- **Windows key ACL.** If the generated key's ACL is not set, Windows' ssh will not use it. Check
-  on a real machine, including a state folder whose parent grants other users.
+- **Windows key ACL.** Windows' ssh will not use a key that other users can read. Windows' own
+  ssh-keygen sets the key's ACL itself; a key written any other way (`node:crypto`, another
+  ssh-keygen) inherits its folder's, so the board sets it always (the recipe the spike checked,
+  below). Check on a real machine, including a state folder whose parent grants other users.
 - **Git's ssh instead of Windows' ssh**: different path and permission handling. Use Windows' own
   by full path.
 - **Buffered streams.** Caddy is fine as configured. nginx needs `proxy_buffering off`.
   Compression in front of the streams can hold them.
 - **Windows' ssh and a socket forward.** The Windows client only asks the server for the forward
-  and connects to TCP on the PC, so it needs no Unix socket of its own. Check on a real machine
+  and connects to TCP on the PC, so it needs no Unix socket of its own. The spike (below) found
   that `-R /var/lib/…/board.sock:127.0.0.1:<port>` reaches the server unchanged and that
-  `ExitOnForwardFailure` still stops ssh when the server refuses it.
+  `ExitOnForwardFailure` stops ssh (exit 255) when the server refuses it.
 - **The socket's permissions.** A wrong group, a missing setgid bit or the default mask give Caddy
   a 502 (Test connection says so). A looser folder lets other users on the server connect around
   Caddy and send any header (they would still need a login) or take the path. Check that
@@ -937,16 +963,28 @@ New:
   - failed attempts are visible in the panel.
 
 **Checked by the spike (2026-10-20, OpenSSH_for_Windows_9.5p2, Debian 12.15 sshd):** server
-OpenSSH_9.2p1 Debian-2+deb12u10 in a container set up as "The server" steps 2–4; Windows' own
-`ssh.exe` spawned from Bun as an argument list (no shell), the line of "The tunnel on the PC" plus
-`-v`; `<scratch>` is a folder whose name has a space.
+OpenSSH_9.2p1 Debian-2+deb12u10 in a container set up as "The server" steps 2–4 stood before the
+spike (step 4 then had `AllowTcpForwarding no`; the first point below is why it no longer does);
+Windows' own `ssh.exe` spawned from Bun as an argument list (no shell), the line of "The tunnel on
+the PC" plus `-v`; `<scratch>` is a folder whose name has a space. A code block below holds whole
+lines as printed, one per line; `…` marks what is left out or varies.
 
-- **The sshd block of step 4 refuses the socket forward.** With `AllowTcpForwarding no`, ssh
-  prints `debug1: Remote: port forwarding refused`, then `Error: remote port forwarding failed for
-  listen path /var/lib/boardtunnel/board.sock`, and exits 255; sshd logs `Received request from …
-  to remote forward to path "/var/lib/boardtunnel/board.sock", but the request was denied.` sshd
-  grants a remote socket forward only where `AllowTcpForwarding` allows remote forwards;
-  `PermitListen` does not apply to paths. **Use instead of `AllowTcpForwarding no`:**
+- **`AllowTcpForwarding no` refuses the socket forward.** With it, ssh prints, among its `-v`
+  lines,
+
+  ```
+  debug1: Remote: port forwarding refused
+  Error: remote port forwarding failed for listen path /var/lib/boardtunnel/board.sock
+  ```
+
+  and exits 255; sshd logs
+
+  ```
+  Received request from 172.17.0.1 port … to remote forward to path "/var/lib/boardtunnel/board.sock", but the request was denied.
+  ```
+
+  sshd grants a remote socket forward only where `AllowTcpForwarding` allows remote forwards;
+  `PermitListen` does not apply to paths. **So step 4 has, in place of `AllowTcpForwarding no`:**
 
   ```
       AllowTcpForwarding remote
@@ -954,60 +992,94 @@ OpenSSH_9.2p1 Debian-2+deb12u10 in a container set up as "The server" steps 2–
   ```
 
   With these two lines (the rest of the block unchanged) the socket forward works, and the key
-  still gets no TCP forward: `-R 127.0.0.1:18080:…` and `-R 0:…` → `Remote: port forwarding
-  refused`, exit 255; `-L` to TCP → sshd `refused local port forward`, the client `open failed:
-  administratively prohibited`; `-L` to the board's socket → sshd `refused streamlocal port
-  forward`. The step 4 block and its `AllowTcpForwarding` bullet follow this.
-- **Success line**, verbatim: `debug1: remote forward success for: listen
-  /var/lib/boardtunnel/board.sock:-2, connect 127.0.0.1:56072` (`-2` is ssh's port number for a
-  path; the forward's target follows). Match `remote forward success for: listen <socket>:`, not
-  the line's end. The next line is `debug1: forwarding_success: all expected forwarding replies
-  received`.
-- **Lines without `debug1:` on a good connection** (keep them out of error texts): `Warning:
-  Permanently added '[127.0.0.1]:2222' (ED25519) to the list of known hosts.` (first connection
-  only) and `Authenticated to 127.0.0.1 ([127.0.0.1]:2222) using "publickey".`, besides the first
-  line `OpenSSH_for_Windows_9.5p2, LibreSSL 3.8.2`.
+  still gets no TCP forward:
+  - `-R 127.0.0.1:18080:…` and `-R 0:…`: `Remote: port forwarding refused`, exit 255;
+  - `-L` to TCP: sshd `refused local port forward`, the client
+    `open failed: administratively prohibited`;
+  - `-L` to the board's socket: sshd `refused streamlocal port forward`.
+
+  `PermitListen` needs OpenSSH 7.8 or newer on the server (this one was 9.2p1). Step 4's block,
+  its `AllowTcpForwarding` bullet and its version floor, "Decided with the owner" and call 11 say
+  the same.
+- **Success line**, and the line after it:
+
+  ```
+  debug1: remote forward success for: listen /var/lib/boardtunnel/board.sock:-2, connect 127.0.0.1:56072
+  debug1: forwarding_success: all expected forwarding replies received
+  ```
+
+  In general (`-2` is ssh's port number for a path; the forward's target follows):
+
+  ```
+  debug1: remote forward success for: listen <socket>:-2, connect 127.0.0.1:<port>
+  ```
+
+  Match it by its start, `debug1: remote forward success for: listen <socket>:`, the colon
+  included, so a socket `board.sock` does not match a line for `board.sock2`; never by its end,
+  which carries the target's port.
+- **Lines without `debug1:` on a good connection.** None is an error; keep them out of error
+  texts. The version banner comes first; the warning only on the first connection;
+  `Authenticated to …` has no `debug1:` in front:
+
+  ```
+  OpenSSH_for_Windows_9.5p2, LibreSSL 3.8.2
+  Warning: Permanently added '[127.0.0.1]:2222' (ED25519) to the list of known hosts.
+  Authenticated to 127.0.0.1 ([127.0.0.1]:2222) using "publickey".
+  ```
 - **Paths:** `-i <scratch>/key` and `UserKnownHostsFile="<scratch>/known_hosts"` each reached ssh
-  as one value; the known_hosts file in the folder with a space holds `[127.0.0.1]:2222
-  ssh-ed25519 AAAA…`, the server's `ssh_host_ed25519_key.pub`.
-- **The socket:** `stat -c '%A %U %G'` → `srw-rw---- boardtunnel caddy`; its folder `drwxr-s---
-  boardtunnel caddy`. The setgid bit and `StreamLocalBindMask 0117` are honoured.
+  as one value; the known_hosts file in the folder with a space holds the server's
+  `ssh_host_ed25519_key.pub`: `[127.0.0.1]:2222 ssh-ed25519 AAAA…`.
+- **The socket:** `stat -c '%A %U %G'` → `srw-rw---- boardtunnel caddy`; its folder
+  `drwxr-s--- boardtunnel caddy`. The setgid bit and `StreamLocalBindMask 0117` are honoured.
 - **curl through the socket:** as `caddy` → `hello from the PC`; as `nobody` → exit 7, `curl -v`:
   `Immediate connect fail for /var/lib/boardtunnel/board.sock: Permission denied` (and `ls` of the
   folder: `Permission denied`); as `boardtunnel` → `hello from the PC`.
 - **Noise per connection through the tunnel** (per TCP connection Caddy opens, not per request):
-  8 lines, all `debug1:`: `client_input_channel_open: ctype forwarded-streamlocal@openssh.com …`,
-  `client_request_forwarded_streamlocal: request: /var/lib/boardtunnel/board.sock`,
-  `connect_next: start for host 127.0.0.1 ([127.0.0.1]:<port>)`, `connect_next: connect host … in
-  progress, fd=4`, `channel 0: new forwarded-streamlocal@openssh.com …`, `confirm
-  forwarded-streamlocal@openssh.com`, `channel 0: connected to 127.0.0.1 port <port>`, `channel 0:
-  free: forwarded-streamlocal, nchannels 1`.
+  8 lines, all `debug1:`:
+
+  ```
+  debug1: client_input_channel_open: ctype forwarded-streamlocal@openssh.com …
+  debug1: client_request_forwarded_streamlocal: request: /var/lib/boardtunnel/board.sock
+  debug1: connect_next: start for host 127.0.0.1 ([127.0.0.1]:<port>)
+  debug1: connect_next: connect host … in progress, fd=4
+  debug1: channel 0: new forwarded-streamlocal@openssh.com …
+  debug1: confirm forwarded-streamlocal@openssh.com
+  debug1: channel 0: connected to 127.0.0.1 port <port>
+  debug1: channel 0: free: forwarded-streamlocal, nchannels 1
+  ```
 - **Stale socket:** after `taskkill /F` (the parent sees exit code 1) the socket file stays on
   the server; the same line started at once prints the success line again, the socket is new
   (`StreamLocalBindUnlink` replaced it) and curl as `caddy` answers.
 - **Refused forward** (folder `chown root`): ssh exits by itself (`ExitOnForwardFailure`), exit
-  code **255**, after `debug1: remote forward failure for: listen
-  /var/lib/boardtunnel/board.sock:-2, connect 127.0.0.1:56072` and `Error: remote port forwarding
-  failed for listen path /var/lib/boardtunnel/board.sock`. sshd logs `unlink(…): Permission
-  denied` and `unix_listener: cannot bind to path …: Permission denied`; the client sees neither.
-  A refusal by sshd's settings has the same `Error:` line, with `debug1: Remote: port forwarding
-  refused` before it.
+  code **255**, after
+
+  ```
+  debug1: remote forward failure for: listen /var/lib/boardtunnel/board.sock:-2, connect 127.0.0.1:56072
+  Error: remote port forwarding failed for listen path /var/lib/boardtunnel/board.sock
+  ```
+
+  sshd logs `unlink(…): Permission denied` and
+  `unix_listener: cannot bind to path …: Permission denied`; the client sees neither. A refusal
+  by sshd's settings has the same `Error:` line, with `debug1: Remote: port forwarding refused`
+  before it (the first point).
 - **Locked account:** Debian's default `UsePAM yes` accepts the key although `useradd` left `!`
   as the password. With `UsePAM no`: `boardtunnel@127.0.0.1: Permission denied (publickey).`,
-  exit 255, sshd logs `User boardtunnel not allowed because account is locked`. After `sudo
-  usermod -p '*' boardtunnel` it connects. The README adds that line to step 2 (harmless with
-  PAM).
+  exit 255, sshd logs `User boardtunnel not allowed because account is locked`. After
+  `sudo usermod -p '*' boardtunnel` it connects. So the README needs that line: step 2 has it
+  (harmless with PAM).
 - **Key ACL, Windows' ssh-keygen:** in a folder granting `BUILTIN\Users:(OI)(CI)(R)`, the key it
-  makes is not inherited from the folder: `BUILTIN\Administrators:(F)`, `NT
-  AUTHORITY\SYSTEM:(F)`, `<COMPUTER>\<user>:(M)` (the `.pub` also `Everyone:(RX)`). `ssh-keygen -y`
-  and ssh accept it.
+  makes is not inherited from the folder: `BUILTIN\Administrators:(F)`,
+  `NT AUTHORITY\SYSTEM:(F)`, `<COMPUTER>\<user>:(M)` (the `.pub` also `Everyone:(RX)`).
+  `ssh-keygen -y` and ssh accept it.
 - **Key ACL, any other writer:** the same bytes written by Bun into that folder inherit
   `BUILTIN\Users:(I)(R)`, `NT AUTHORITY\SYSTEM:(I)(F)`, `BUILTIN\Administrators:(I)(F)`,
-  `<COMPUTER>\<user>:(I)(F)`. `ssh-keygen -y -P ""` and ssh both refuse it, exit 255: `Bad
-  permissions. Try removing permissions for user: BUILTIN\\Users (S-1-5-32-545) on file <key>.`,
-  `WARNING: UNPROTECTED PRIVATE KEY FILE!`, `Load key "<key>": bad permissions`; ssh then ends
-  with `boardtunnel@127.0.0.1: Permission denied (publickey).` (the server accepted the public
-  half).
+  `<COMPUTER>\<user>:(I)(F)`. `ssh-keygen -y -P ""` and ssh both refuse it, exit 255, with:
+  - `Bad permissions. Try removing permissions for user: BUILTIN\\Users (S-1-5-32-545) on file <key>.`
+  - `WARNING: UNPROTECTED PRIVATE KEY FILE!`
+  - `Load key "<key>": bad permissions`
+
+  ssh then ends with `boardtunnel@127.0.0.1: Permission denied (publickey).` (the server accepted
+  the public half).
 - **`whoami /user /fo csv /nh`:** one line, `"<computer>\<user>","S-1-5-21-…-1001"` and CRLF:
   the name lowercased, the SID the second quoted field.
 - **The recipe holds:** `icacls <key> /inheritance:r /grant:r *<SID>:F` leaves
@@ -1124,10 +1196,11 @@ Made in this document; the owner can overturn any of them.
 10. **Test connection checks end to end through the domain** with a one-time probe (with the
     tunnel off: call 33).
 11. **The README's sshd `Match` block is a second fence**, beside the `authorized_keys` options:
-    socket forwards from the server only (`AllowStreamLocalForwarding remote`,
-    `AllowTcpForwarding no`), `StreamLocalBindUnlink yes` and a mask that lets in Caddy's group,
-    the keys in a root-owned file, no TTY, a forced command, and `ClientAlive*` to end a dead
-    connection's sshd.
+    socket forwards from the server only (`AllowStreamLocalForwarding remote`;
+    `AllowTcpForwarding remote`, which sshd needs for a remote socket forward and which refuses
+    every `-L`; `PermitListen none`, so no TCP port is listened on), `StreamLocalBindUnlink yes`
+    and a mask that lets in Caddy's group, the keys in a root-owned file, no TTY, a forced
+    command, and `ClientAlive*` to end a dead connection's sshd.
 12. **`X-Accel-Buffering: no` on event streams** through the tunnel.
 13. **The tunnel listener runs, and `tunnel on` is allowed, only once the password and TOTP are
     set up** and the fields check out. Test connection's probe-only listener (call 33) is not
