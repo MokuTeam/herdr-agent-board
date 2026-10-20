@@ -422,7 +422,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'compose.attachLabel': 'Attach a file',
     'compose.pastePicture': 'Paste a picture from the clipboard',
     'compose.pasteHint': 'Copied a screenshot? Paste it from here',
-    'compose.pasteNone': 'No picture on the clipboard. Copy one, or attach it with the paperclip.',
+    'compose.pasteNone':
+      'The browser handed over no picture from the clipboard (it held {seen}). Attach it with the paperclip: Recent or Screenshots.',
     'compose.pasteDenied':
       'The browser did not let the board read the clipboard. Allow it in the site settings, or attach the picture with the paperclip.',
     'compose.pasteFailed': 'Could not read the clipboard: {why}',
@@ -964,7 +965,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'compose.attachLabel': 'Прикрепить файл',
     'compose.pastePicture': 'Вставить картинку из буфера',
     'compose.pasteHint': 'Скопировали скриншот? Вставьте его отсюда',
-    'compose.pasteNone': 'В буфере нет картинки. Скопируйте её или прикрепите скрепкой.',
+    'compose.pasteNone':
+      'Браузер не отдал картинку из буфера (там было: {seen}). Прикрепите её скрепкой: «Недавние» или «Скриншоты».',
     'compose.pasteDenied':
       'Браузер не дал доске прочитать буфер. Разрешите это в настройках сайта или прикрепите картинку скрепкой.',
     'compose.pasteFailed': 'Не получилось прочитать буфер: {why}',

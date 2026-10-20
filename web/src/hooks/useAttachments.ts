@@ -2,9 +2,10 @@
 // a picture previews in the box from the browser's own copy, and a failed one says why in a toast.
 import { useRef, useState } from 'react'
 import type { Translator } from '../../../src/core/types.ts'
-import { ApiError, api, errorText } from '../api/client.ts'
+import { ApiError, api, errorText, pageLog } from '../api/client.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { type Attachment, previewsAsImage, screenshotName } from '../models/composer.ts'
+import { remotePage } from '../models/remote-page.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { useLatest } from './useLatest.ts'
 
@@ -40,10 +41,24 @@ export function useAttachments(): AttachmentsApi {
     const update = (id: number, fields: Partial<Attachment>) =>
       commit(current.current.map(a => (a.id === id ? { ...a, ...fields } : a)))
 
+    // In a phone's browser the network may still be waking when the page comes back from the
+    // picker: an upload that did not get through is tried again, three times a second apart.
+    async function send(a: Attachment, file: File, tries: number): Promise<string> {
+      try {
+        return await api.upload(a.name, file)
+      } catch (err) {
+        if (tries <= 1 || err instanceof ApiError) throw err
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        return send(a, file, tries - 1)
+      }
+    }
+
     async function upload(a: Attachment, file: File): Promise<void> {
       try {
-        update(a.id, { status: 'done', path: await api.upload(a.name, file) })
+        update(a.id, { status: 'done', path: await send(a, file, remotePage() ? 4 : 1) })
       } catch (err) {
+        if (remotePage())
+          pageLog(`upload ${a.name} (${file.type || 'no type'}, ${file.size} B): ${uploadError(err, latest.current.t)}`)
         update(a.id, { status: 'error' })
         const { t, toast } = latest.current
         toast(t('err.upload', { name: a.name, why: uploadError(err, t) }), true)
@@ -53,7 +68,9 @@ export function useAttachments(): AttachmentsApi {
     return {
       add(files: readonly File[]): void {
         const { t, canEdit, toast } = latest.current
-        if (!canEdit) {
+        // A phone's browser comes back from the photo picker or the camera before the board's live
+        // connection does (the page was hidden): the files are kept and uploaded, not dropped (#102).
+        if (!canEdit && !remotePage()) {
           toast(t('live.off'), true)
           return
         }

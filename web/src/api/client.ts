@@ -213,6 +213,11 @@ async function upload(name: string, file: Blob): Promise<string> {
   return typeof reply.path === 'string' ? reply.path : ''
 }
 
+/** A line for the board's log (POST /api/log): what the page could not do; a failure to send it is dropped. */
+export function pageLog(text: string): void {
+  void postJson('/api/log', { text }).catch(() => {})
+}
+
 export const api = { board, get, post, session, upload }
 
 // ---------------------------------------------------------------- the archive

@@ -9,7 +9,11 @@ export interface ClipboardLike {
   read(): Promise<readonly { types: readonly string[]; getType(type: string): Promise<Blob> }[]>
 }
 
-export type ClipboardImages = { files: File[] } | { error: 'empty' | 'denied' | 'failed'; why?: string }
+/**
+ * The pictures, or why there are none; `seen` says what the clipboard held, for the toast and the
+ * board's log (#102: a phone's Chrome may hand over no picture though one was copied).
+ */
+export type ClipboardImages = { files: File[] } | { error: 'empty' | 'denied' | 'failed'; why?: string; seen: string }
 
 /** Whether this browser can read pictures from the clipboard at all. */
 export const canReadClipboard = (clipboard: unknown): clipboard is ClipboardLike =>
@@ -25,6 +29,22 @@ const EXT: Record<string, string> = {
 /** The name a picture from the clipboard goes under, as a pasted screenshot's on the computer. */
 export const clipboardName = (type: string): string => `image.${EXT[type] ?? type.split('/')[1] ?? 'png'}`
 
+/** A picture's type as the clipboard names it: `image/…`, or a page's own `web image/…`. */
+const imageType = (type: string): string | null =>
+  /^(?:web )?(image\/[\w.+-]+)$/i.exec(type)?.[1]?.toLowerCase() ?? null
+
+/** A picture written into HTML as a data: URL (some apps copy a picture so), else null. */
+export function htmlImage(html: string): File | null {
+  const m = /<img\b[^>]*\bsrc\s*=\s*["']data:(image\/[\w.+-]+);base64,([A-Za-z0-9+/=\s]+)["']/i.exec(html)
+  if (!m?.[1] || !m[2]) return null
+  try {
+    const bytes = Uint8Array.from(atob(m[2].replace(/\s+/g, '')), c => c.charCodeAt(0))
+    return new File([bytes], clipboardName(m[1]), { type: m[1] })
+  } catch {
+    return null
+  }
+}
+
 /** The pictures on the clipboard, or why there are none: nothing there, not allowed, or another failure. */
 export async function readClipboardImages(clipboard: ClipboardLike): Promise<ClipboardImages> {
   let items: Awaited<ReturnType<ClipboardLike['read']>>
@@ -32,18 +52,28 @@ export async function readClipboardImages(clipboard: ClipboardLike): Promise<Cli
     items = await clipboard.read()
   } catch (err) {
     const name = err instanceof Error ? err.name : ''
+    const why = err instanceof Error ? err.message : String(err)
+    const seen = `${name || 'Error'}: ${why}`
     // Not allowed (the site's setting, or the Paste bubble dismissed), or the page not in front.
-    if (name === 'NotAllowedError' || name === 'SecurityError') return { error: 'denied' }
-    return { error: 'failed', why: err instanceof Error ? err.message : String(err) }
+    if (name === 'NotAllowedError' || name === 'SecurityError') return { error: 'denied', seen }
+    return { error: 'failed', why, seen }
   }
   const files: File[] = []
   for (const item of items) {
-    const type = item.types.find(t => t.startsWith('image/'))
-    if (!type) continue
-    const blob = await item.getType(type)
-    files.push(new File([blob], clipboardName(type), { type }))
+    const type = item.types.find(t => imageType(t))
+    const html = item.types.includes('text/html') ? 'text/html' : null
+    if (type) {
+      const blob = await item.getType(type)
+      const as = imageType(type) ?? 'image/png'
+      files.push(new File([blob], clipboardName(as), { type: as }))
+    } else if (html) {
+      const found = htmlImage(await (await item.getType(html)).text())
+      if (found) files.push(found)
+    }
   }
-  return files.length ? { files } : { error: 'empty' }
+  if (files.length) return { files }
+  const seen = items.map(item => item.types.join(' + ') || 'an empty item').join('; ') || 'nothing'
+  return { error: 'empty', seen }
 }
 
 const HINT_KEY = 'agent-board:paste-hint-seen'
