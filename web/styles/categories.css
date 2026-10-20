@@ -1,0 +1,24 @@
+/* A lane's "+ folder" in the categories panel (web/src/components/categories/CategoryRow.tsx): the
+   new-session window's folder field (launch.css), in the line of the lane's folders: the path, its
+   mark and Browse, the list under it over the rows below; its note and the columns to browse under
+   that line, from where the line starts. Its usual profile (profiles.css) is a line of its own
+   under all of that, from there too. Every rule here selects by class: the other sheets are
+   upstream's, rule for rule. */
+
+/* Where the bare field was, as wide as the line leaves it after the lane's id, even in the
+   narrowest panel; after its folders it goes under them when they leave too little. Browse as
+   high as the usual profile. */
+.cat-folder { position: relative; flex: 1; min-width: 160px; }
+.cat-folder .folder-field { gap: 4px; }
+.cat-folder .folder-browse { height: 22px; padding: 0 8px; border-radius: 6px; }
+.cat-folder .folder-browse:disabled { opacity: 0.5; }
+.cat-folder .folder-pop { top: calc(100% + 2px); left: 0; right: 0; }
+
+/* Under the line: why a folder was not added, and the columns, set off by a hairline. */
+.cat-row .field-note { padding: 4px 0 0 58px; }
+.cat-row .folder-cols { height: 200px; margin: 8px 0 2px 58px; border-radius: 8px; box-shadow: inset 0 0 0 0.5px var(--separator); }
+
+/* The usual profile: always a line of its own, under the lane's id, the line's gap above it and
+   its size, as the Profiles panel's start command sits under its folder; no wider than it is, so
+   only the label and the select take a click. */
+.cat-row > .cat-profile { display: flex; width: fit-content; max-width: calc(100% - 58px); margin: 6px 0 0 58px; font-size: 12px; }

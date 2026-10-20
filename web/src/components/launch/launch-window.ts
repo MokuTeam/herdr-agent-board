@@ -49,14 +49,7 @@ import {
 import type { FocusScope } from '../../models/modal-focus.ts'
 import { reducedMotion, Spring } from '../../models/spring.ts'
 import { Store } from '../../state/store.ts'
-import { folderField } from './folder-field.ts'
-
-/** A note under a field; hidden ones keep what they said last. */
-export interface FieldNote {
-  text: string
-  error: boolean
-  hidden: boolean
-}
+import { type FieldNote, folderField, NO_NOTE } from './folder-field.ts'
 
 export type CategoryChip = Pick<BoardCategory, 'id' | 'title' | 'color'> & { pressed: boolean }
 
@@ -84,8 +77,6 @@ export interface LaunchWindowView {
   seq: number
 }
 
-const HIDDEN: FieldNote = { text: '', error: false, hidden: true }
-
 export const CLOSED_VIEW: LaunchWindowView = {
   shown: false,
   retry: false,
@@ -96,7 +87,7 @@ export const CLOSED_VIEW: LaunchWindowView = {
   profile: { offered: false, options: [], chosen: null },
   worktree: false,
   branchHidden: true,
-  notes: { name: HIDDEN, cwd: HIDDEN, profile: HIDDEN, workspace: HIDDEN, worktree: HIDDEN },
+  notes: { name: NO_NOTE, cwd: NO_NOTE, profile: NO_NOTE, workspace: NO_NOTE, worktree: NO_NOTE },
   error: { text: '', hidden: true },
   go: null,
   seq: 0,
@@ -185,6 +176,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
   }
 
   const folder = folderField({
+    id: 'launch',
     t,
     dirs: (path, git) => deps.api.dirs(path, git),
     live: () => !!s,

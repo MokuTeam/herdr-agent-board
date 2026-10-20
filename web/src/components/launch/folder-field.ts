@@ -1,7 +1,8 @@
 // The launch window's folder field (the old page's launch.js folder picker): a path field with
 // completion (folders only; the server lists them and says whether a path exists), suggestions
 // from the context, and a column view to browse, Finder style. The browser offers no picker that
-// gives an absolute path, so this is ours. What it draws is a FolderView (FolderPicker.tsx).
+// gives an absolute path, so this is ours. What it draws is a FolderView (FolderPicker.tsx). A
+// lane's "+ folder" in the categories panel is one too (categories/lane-folder.ts).
 import { splitPathInput } from '../../../../src/core/launch/names.ts'
 import type { Translator } from '../../../../src/core/types.ts'
 import type { LaunchApi } from '../../api/launch.ts'
@@ -19,8 +20,19 @@ import { Store } from '../../state/store.ts'
 
 export type FolderState = '' | 'ok' | 'bad' | 'wait'
 
+/** A note under a field; hidden ones keep what they said last. */
+export interface FieldNote {
+  text: string
+  error: boolean
+  hidden: boolean
+}
+
+export const NO_NOTE: FieldNote = { text: '', error: false, hidden: true }
+
 /** The field as drawn. What is hidden keeps what it showed last, as the old page's elements did. */
 export interface FolderView {
+  /** What its list's id and its lines' start with: `launch` gives launch-pop, launch-opt-0… */
+  id: string
   text: string
   /** The mark beside the field; null before any folder was looked at. */
   state: FolderState | null
@@ -35,6 +47,8 @@ export interface FolderView {
 
 /** What the field needs of the window around it. */
 export interface FolderHost {
+  /** The FolderView's id. */
+  id: string
   t(): Translator
   dirs: LaunchApi['dirs']
   /** The window is open for a context (the old `s`). */
@@ -50,6 +64,8 @@ export interface FolderHost {
   /** The Start button's state may have changed. */
   sync(): void
   submit(): void
+  /** The columns closed on a folder chosen there (a double click, Enter on its row): a lane adds it; the window takes no more. */
+  chosen?(): void
   /** After the next draw (focus and scrolling need the drawn page). */
   later(fn: () => void): void
   /** The field, the columns, a row: in the drawn window. */
@@ -65,14 +81,16 @@ export interface FieldKey {
   stopPropagation(): void
 }
 
-const VIEW: FolderView = {
+/** The field before anything was typed or looked at. */
+export const folderAtRest = (id: string): FolderView => ({
+  id,
   text: '',
   state: null,
   pop: { hidden: true, items: [], lit: -1 },
   expanded: false,
   activeId: null,
   browse: { open: false, columns: [] },
-}
+})
 
 /** How long the field waits after typing stops before it asks about the folder. */
 export const CHECK_MS = 160
@@ -80,7 +98,7 @@ export const CHECK_MS = 160
 export const BLUR_MS = 120
 
 export function folderField(host: FolderHost) {
-  const view = new Store<FolderView>(VIEW)
+  const view = new Store<FolderView>(folderAtRest(host.id))
   const patch = (next: Partial<FolderView>) => view.set({ ...view.get(), ...next })
   const text = () => view.get().text
 
@@ -169,11 +187,11 @@ export function folderField(host: FolderHost) {
 
   function lightPop(i: number): void {
     pop.active = i
-    const id = `launch-opt-${i}`
+    const id = `${view.get().id}-opt-${i}`
     const shown = view.get().pop
     const el = i >= 0 && i < shown.items.length ? id : null
     patch({ pop: { ...shown, lit: i }, ...(el && { activeId: el }) })
-    if (el) host.find(`#${el}`)?.scrollIntoView({ block: 'nearest' })
+    if (el) host.find(`#${CSS.escape(el)}`)?.scrollIntoView({ block: 'nearest' })
   }
 
   function takePop(i: number): void {
@@ -207,6 +225,12 @@ export function folderField(host: FolderHost) {
 
   function closeBrowse(): void {
     patch({ browse: { ...view.get().browse, open: false } })
+  }
+
+  /** A row double-clicked: the columns close on the folder it chose. */
+  function chooseRow(): void {
+    closeBrowse()
+    host.chosen?.()
   }
 
   async function showChain(next: string[]): Promise<void> {
@@ -309,6 +333,7 @@ export function folderField(host: FolderHost) {
     // The columns' events.
     pickRow,
     closeBrowse,
+    chooseRow,
     /** A key on row `row` of column `col`. */
     rowKey(e: Pick<FieldKey, 'key' | 'preventDefault'>, col: number, row: number): void {
       const columns = view.get().browse.columns
@@ -329,6 +354,7 @@ export function folderField(host: FolderHost) {
         e.preventDefault()
         closeBrowse()
         host.find('input[name="cwd"]')?.focus()
+        host.chosen?.()
       }
     },
   }
