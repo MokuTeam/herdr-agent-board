@@ -322,3 +322,25 @@ export function askedView(it: Item, t: Translator): AskedView {
     dismiss: dismissable(it) ? t(later ? 'asked.seen' : 'asked.noReply') : null,
   }
 }
+
+/** The one line a phone's folded head shows for the card's fields: its label and its text. */
+export interface FoldLine {
+  label: string
+  text: string
+}
+
+/**
+ * What matters most of the card's fields, for a phone's head where they fold (#100): what it waits
+ * for, else what it does, else the sessions it works with, else its reminders. Null with none.
+ */
+export function foldLine(
+  item: Pick<Item, 'wait' | 'doing'>,
+  { sessions, reminders }: { sessions: readonly string[]; reminders: number },
+  t: Translator,
+): FoldLine | null {
+  if (item.wait) return { label: t('row.wait'), text: item.wait }
+  if (item.doing) return { label: t('row.doing'), text: item.doing }
+  if (sessions.length) return { label: t('rel.row'), text: sessions.join(', ') }
+  if (reminders) return { label: t('sched.title'), text: String(reminders) }
+  return null
+}

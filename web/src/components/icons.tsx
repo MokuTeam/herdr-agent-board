@@ -246,6 +246,12 @@ export const WriteGlyph = () => (
   </Glyph>
 )
 
+export const ChevronGlyph = () => (
+  <Glyph className="chevron">
+    <path d="m6 8 4 4 4-4" />
+  </Glyph>
+)
+
 export const MoonGlyph = () => (
   <Glyph className="moon">
     <path d="M15.5 12.2A6.5 6.5 0 0 1 7.8 4.5a6.5 6.5 0 1 0 7.7 7.7Z" />

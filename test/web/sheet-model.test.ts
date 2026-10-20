@@ -11,6 +11,7 @@ import {
   detailOnBoard,
   detailStamp,
   draftKey,
+  foldLine,
   headButtons,
   liveEdit,
   NO_HEAD_BUTTONS,
@@ -323,4 +324,20 @@ describe('a card field being edited', () => {
     expect(liveEdit(edit, at(true, '', 'b'))).toBe(null)
     expect(typing(edit, at(true, '', 'b'), 'x')).toEqual({ text: 'x', from: '', session: 'b' })
   })
+})
+
+test("a phone's folded head: what it waits for, else what it does, else its sessions, else its reminders (#100)", () => {
+  const t = translator('ru')
+  const none = { sessions: [], reminders: 0 }
+  expect(foldLine({ wait: 'ответа Bruce', doing: 'утро' }, none, t)).toEqual({ label: 'Ждёт', text: 'ответа Bruce' })
+  expect(foldLine({ doing: 'утро: обновляю доску' }, none, t)).toEqual({
+    label: 'Делает',
+    text: 'утро: обновляю доску',
+  })
+  expect(foldLine({}, { sessions: ['board-pwa', 'Billing-master'], reminders: 1 }, t)).toEqual({
+    label: 'Сессии',
+    text: 'board-pwa, Billing-master',
+  })
+  expect(foldLine({}, { sessions: [], reminders: 2 }, t)).toEqual({ label: 'Расписание', text: '2' })
+  expect(foldLine({}, none, t)).toBeNull()
 })

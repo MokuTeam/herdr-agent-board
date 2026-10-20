@@ -48,3 +48,21 @@ test('upstream’s fitRow at #58, width by width, row by row, with its options',
       for (let room = 0; room <= 1200; room += 7)
         expect(fitRow(buttons, room, options)).toEqual(Reflect.apply(fn, undefined, [buttons, room, options]))
 })
+
+test('More always on the row (the terminal under it on a phone) keeps its room even when the rest fit (#100)', () => {
+  // A phone's row as icons: seven buttons of 36, More of 36, gaps of 6: 7 * 36 + 6 * 6 = 288.
+  const icons = Array.from({ length: 7 }, () => ({ words: 120, icon: 36 }))
+  const options = { gap: 6, more: 36, wordsFor: 99, firstWords: false }
+  expect(fitRow(icons, 307, options)).toEqual({ words: false, shown: 7 })
+  // With More on the row anyway, seven and More need 330: six show.
+  expect(fitRow(icons, 307, { ...options, moreAlways: true })).toEqual({ words: false, shown: 6 })
+  expect(fitRow(icons, 330, { ...options, moreAlways: true })).toEqual({ words: false, shown: 7 })
+})
+
+test('as icons, the first keeps its words only where it does (Focus; a phone browser has none)', () => {
+  const icons = [{ words: 140, icon: 36 }, ...Array.from({ length: 6 }, () => ({ words: 120, icon: 36 }))]
+  const options = { gap: 6, more: 36, wordsFor: 99, moreAlways: true }
+  // Counted with its words (140), the first leaves room for three; as the icon it is, six.
+  expect(fitRow(icons, 307, options).shown).toBe(3)
+  expect(fitRow(icons, 307, { ...options, firstWords: false }).shown).toBe(6)
+})

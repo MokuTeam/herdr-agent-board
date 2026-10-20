@@ -4,11 +4,16 @@
 // as the row's width holds (hooks/useActionRow.ts), and More at the row's end with the rest — the
 // files that go with the next message, and the message box: Enter sends, Shift+Enter breaks the
 // line, the box grows with the text; files come in through the clip or Ctrl+V (a screenshot).
-import { type ClipboardEvent, type KeyboardEvent, useLayoutEffect, useRef } from 'react'
+import { type ClipboardEvent, type KeyboardEvent, useLayoutEffect, useRef, useState } from 'react'
 import { useActionRow } from '../../hooks/useActionRow.ts'
 import type { ComposerControls } from '../../hooks/useComposer.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { canReadClipboard, readClipboardImages } from '../../models/clipboard-image.ts'
+import {
+  canReadClipboard,
+  keepPasteHintSeen,
+  pasteHintSeen,
+  readClipboardImages,
+} from '../../models/clipboard-image.ts'
 import { composerView, sendsOnKey } from '../../models/composer.ts'
 import { remotePage } from '../../models/remote-page.ts'
 import type { HeadButtons, SheetAvailability } from '../../models/sheet.ts'
@@ -129,16 +134,19 @@ export function Composer({
         {av.banner}
       </p>
       <div className={classNames('composer-actions', row.icons && 'icons')} ref={actions}>
-        <button
-          type="button"
-          className={classNames('button', over('sheet-focus'))}
-          id="sheet-focus"
-          disabled={av.focus}
-          onClick={() => on.focus?.()}
-        >
-          <FocusIcon />
-          <span>{t('sheet.focus')}</span>
-        </button>
+        {/* Not in a phone's browser: herdr's window is on the computer (the row then fits without it). */}
+        {!remotePage() && (
+          <button
+            type="button"
+            className={classNames('button', over('sheet-focus'))}
+            id="sheet-focus"
+            disabled={av.focus}
+            onClick={() => on.focus?.()}
+          >
+            <FocusIcon />
+            <span>{t('sheet.focus')}</span>
+          </button>
+        )}
         <button
           type="button"
           className={classNames('button', over('sheet-mokupilot'))}
@@ -365,10 +373,17 @@ export function Composer({
 /**
  * In a phone's browser only (models/clipboard-image.ts): the picture on the clipboard into the
  * message, as Ctrl+V does on the computer. What went wrong says so, with the paperclip as the way round.
+ * A phone's keyboard cannot paste a picture here, so the button says what it is for once, in a small
+ * bubble, until it is used or the bubble is tapped away.
  */
 function PastePicture({ disabled, onFiles }: { disabled: boolean; onFiles: (files: File[]) => void }) {
   const t = useT()
   const { toast } = useBoardContext()
+  const [hint, setHint] = useState(() => !pasteHintSeen())
+  const seen = () => {
+    setHint(false)
+    keepPasteHintSeen()
+  }
   async function paste() {
     if (!canReadClipboard(navigator.clipboard)) return
     const got = await readClipboardImages(navigator.clipboard).catch(
@@ -379,15 +394,25 @@ function PastePicture({ disabled, onFiles }: { disabled: boolean; onFiles: (file
     toast(got.error === 'denied' ? t('compose.pasteDenied') : t('compose.pasteFailed', { why: got.why ?? '' }), true)
   }
   return (
-    <button
-      type="button"
-      className="attach"
-      title={t('compose.pastePicture')}
-      aria-label={t('compose.pastePicture')}
-      disabled={disabled}
-      onClick={() => void paste()}
-    >
-      <PastePictureIcon />
-    </button>
+    <span className="paste-picture">
+      <button
+        type="button"
+        className="attach"
+        title={t('compose.pastePicture')}
+        aria-label={t('compose.pastePicture')}
+        disabled={disabled}
+        onClick={() => {
+          seen()
+          void paste()
+        }}
+      >
+        <PastePictureIcon />
+      </button>
+      {hint && !disabled && (
+        <button type="button" className="paste-hint" onClick={seen}>
+          {t('compose.pasteHint')}
+        </button>
+      )}
+    </span>
   )
 }

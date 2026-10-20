@@ -104,6 +104,7 @@ test('the row shows as many as fit and More the rest, as upstream’s fitActions
     () => hide('sheet-term'), // no terminal
   ]
   let checked = 0
+  let roomForMore = 0
   for (const change of scenes) {
     change()
     for (const narrow of [false, true]) {
@@ -111,12 +112,29 @@ test('the row shows as many as fit and More the rest, as upstream’s fitActions
       for (room = 0; room <= 1100; room += 9) {
         old()
         const theirs = room ? classes() : null
-        expect(ours(narrow)).toEqual(theirs)
+        const mine = ours(narrow)
         checked++
+        if (
+          !narrow ||
+          page('sheet-term').hidden ||
+          !mine ||
+          !theirs ||
+          JSON.stringify(mine) === JSON.stringify(theirs)
+        ) {
+          expect(mine).toEqual(theirs)
+          continue
+        }
+        // On a phone the terminal is always under More, so More is always on the row: upstream left
+        // it no room when the rest fit, and the row ran off the panel (#100). Here one more goes to More.
+        expect(mine.icons).toBe(theirs.icons)
+        expect(theirs.over.every(id => mine.over.includes(id))).toBe(true)
+        expect(mine.over.length).toBe(theirs.over.length + 1)
+        roomForMore++
       }
     }
   }
   expect(checked).toBeGreaterThan(1000)
+  expect(roomForMore).toBeGreaterThan(0)
 })
 
 test('the widths are taken once per set of buttons, language and layout; the row’s classes stay as they were', () => {

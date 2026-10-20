@@ -45,3 +45,20 @@ export async function readClipboardImages(clipboard: ClipboardLike): Promise<Cli
   }
   return files.length ? { files } : { error: 'empty' }
 }
+
+const HINT_KEY = 'agent-board:paste-hint-seen'
+
+/** Whether the paste button's one-time hint was seen (used or tapped away) in this browser. */
+export function pasteHintSeen(): boolean {
+  try {
+    return localStorage.getItem(HINT_KEY) === '1'
+  } catch {
+    return true
+  }
+}
+
+export function keepPasteHintSeen(): void {
+  try {
+    localStorage.setItem(HINT_KEY, '1')
+  } catch {}
+}
