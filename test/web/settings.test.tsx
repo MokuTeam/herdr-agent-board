@@ -206,6 +206,34 @@ describe('the menu out of the gear', () => {
     expect(settingPicked('panel')).toBeNull()
   })
 
+  test('the Settings menu offers Phones… only while the remote mode is on', () => {
+    const now = {
+      t: translator('en'),
+      theme: 'auto',
+      languages: { en: 'English' },
+      canEdit: true,
+      dock: 'right' as const,
+      sleepers: true,
+      profiles: false,
+    }
+    const ids = (items: readonly MenuEntry[]) => items.map(i => ('id' in i ? i.id : '—'))
+    // Off, or a board before the remote mode: today's list exactly.
+    expect(ids(settingsMenu(now))).toEqual(['theme', 'lang', 'panel', '—', 'sleepers'])
+    expect(ids(settingsMenu({ ...now, phones: false }))).toEqual(['theme', 'lang', 'panel', '—', 'sleepers'])
+    expect(ids(settingsMenu({ ...now, profiles: true, phones: true }))).toEqual([
+      'theme',
+      'lang',
+      'panel',
+      'profiles',
+      'phones',
+      '—',
+      'sleepers',
+    ])
+    expect(settingsMenu({ ...now, phones: true })[3]).toEqual({ id: 'phones', label: 'Phones…' })
+    expect(settingsMenu({ ...now, t: translator('ru'), phones: true })[3]).toEqual({ id: 'phones', label: 'Телефоны…' })
+    expect(settingPicked('phones')).toEqual({ kind: 'phones' })
+  })
+
   test('how sessions asleep in "Waiting" fold: the board’s way checked; gray without the board; a pick saves it (the board’s own)', async () => {
     const now = {
       t: translator('en'),

@@ -5,7 +5,7 @@
 // Only loopback, only the Host it was asked for, and every POST needs an X-Board header: a page
 // on another site cannot send that without a CORS preflight, which this server never grants, so
 // it cannot type into a session.
-import { type FSWatcher, mkdirSync, watch } from 'node:fs'
+import { type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
 import { join } from 'node:path'
 import { saveFoundProfiles } from '../adapters/config-file.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
@@ -17,15 +17,18 @@ import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
 import { editProfile, installProfile } from '../services/profiles.ts'
+import { createRemote } from '../services/remote.ts'
 import { startScheduler } from '../services/scheduler.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
 import { createBoardState } from './board-state.ts'
 import { dispatch, json, type Route } from './http.ts'
+import { createRemoteListener } from './remote.ts'
 import { archiveRoutes } from './routes/archive.ts'
 import { boardRoutes } from './routes/board.ts'
 import { fsRoutes } from './routes/fs.ts'
 import { launchRoutes } from './routes/launch.ts'
+import { remoteRoutes } from './routes/remote.ts'
 import { revealRoute, revealState } from './routes/reveal.ts'
 import { scheduleRoute } from './routes/schedule.ts'
 import { sessionRoutes } from './routes/session.ts'
@@ -39,6 +42,14 @@ import { pruneUploads, uploadRoutes } from './uploads.ts'
 import { createWebBundle } from './web-bundle.ts'
 
 const WEB = join(ROOT, 'web')
+/** The plugin's version, for /api/hello. */
+const PLUGIN_VERSION = (() => {
+  try {
+    return String(JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version ?? '')
+  } catch {
+    return ''
+  }
+})()
 
 export interface BoardServer {
   port: number
@@ -115,6 +126,21 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
   // A notification click asks for a session: pages that connect right after are told it too.
   const reveals = revealState()
   const events = createBroadcaster(() => board.payload(), { greet: reveals.greet })
+  // The remote mode (core/remote.ts): pairing, and the listener on the Tailscale address while it
+  // is on. Off, it reads the config and nothing else.
+  const remote = createRemote({ onChange: () => board.publish() })
+  const routes: Route[] = []
+  const guards = { port, token: FILE_TOKEN, stale: () => board.stale() }
+  const listener = createRemoteListener({
+    cfg,
+    webPort: port,
+    version: PLUGIN_VERSION,
+    routes,
+    guards,
+    remote,
+    log,
+    onChange: () => board.publish(),
+  })
   const board = createBoardState({
     deps,
     launches,
@@ -123,6 +149,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     push: payload => events.send(payload),
     setup: setup.summary,
     mokupilot,
+    remote: listener.view,
   })
   board.publish()
   const refresh = (): void => void board.refresh()
@@ -135,8 +162,9 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
   }
 
   // The order of main's `if` chain: the first route that answers wins.
-  const routes: Route[] = [
+  routes.push(
     setupRoute(setup),
+    ...remoteRoutes(listener, remote),
     ...boardRoutes(board, events),
     ...fsRoutes(),
     ...uploadRoutes(),
@@ -169,8 +197,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
       answering: new Set(),
     }),
     staticRoute(WEB, bundle),
-  ]
-  const guards = { port, token: FILE_TOKEN, stale: board.stale }
+  )
   const host = new RegExp(`^(127\\.0\\.0\\.1|localhost):${port}$`)
 
   async function answer(req: Request): Promise<Response> {
@@ -224,11 +251,16 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
   // Shells a board before this one opened and that are gone by now are forgotten.
   if (terminalOn(cfg)) void terminals.prune()
   setup.start()
+  void listener.sync()
 
   return {
     port,
     url: `http://127.0.0.1:${port}/`,
-    refresh: board.refresh,
+    // Called when config.json changes, too: the remote mode follows it.
+    async refresh() {
+      listener.configChanged()
+      await board.refresh()
+    },
     async close() {
       clearInterval(poll)
       for (const watcher of watchers) watcher.close()
@@ -236,6 +268,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
       terminals.stopAll()
       setup.stop()
       events.close()
+      await listener.close()
       await server.stop(true)
     },
   }

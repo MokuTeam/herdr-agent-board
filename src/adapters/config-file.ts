@@ -55,6 +55,17 @@ export function loadConfig(): Config {
   return normalizeConfig(raw)
 }
 
+/**
+ * Turn the remote mode (core/remote.ts) on or off in config.json, keeping its other fields. The
+ * running board picks it up as any edit (liveConfig).
+ */
+export function setRemoteOn(on: boolean): EditResult {
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  raw.remote = { ...(isRecord(raw.remote) ? raw.remote : {}), on }
+  writeRaw(raw)
+  return { ok: true }
+}
+
 /** Change settings in config.json from the web board: { language, foldWaiting }. */
 export function editSettings(body: unknown): EditResult {
   const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)

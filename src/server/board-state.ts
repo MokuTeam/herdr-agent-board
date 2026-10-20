@@ -18,6 +18,7 @@ import { claudeProgram, commandText } from '../core/launch/spawn-args.ts'
 import type { Limits } from '../core/limits.ts'
 import type { BoardLimits, BoardPayload, BoardProfile } from '../core/payload.ts'
 import { DEFAULT_PROFILE, type Profile, profileLabel } from '../core/profiles.ts'
+import type { RemoteView } from '../core/remote.ts'
 import type { SetupSummary } from '../core/setup.ts'
 import type { Item } from '../core/types.ts'
 import { collect } from '../services/board.ts'
@@ -53,6 +54,8 @@ interface Options {
   setup?: () => SetupSummary | null
   /** Whether MokuPilot is here for calls with a fork of a session (services/mokupilot.ts). */
   mokupilot?: () => boolean
+  /** The remote mode as the page shows it; null while it is off (server/remote.ts). */
+  remote?: () => RemoteView | null
 }
 
 // The colors the category editor offers (aliases left out).
@@ -107,7 +110,21 @@ function boardProfiles(deps: Deps, items: readonly Item[]): BoardProfile[] {
   }))
 }
 
-export function createBoardState({ deps, launches, terminals, version, push, setup, mokupilot }: Options): BoardState {
+function remoteOf(remote: Options['remote']): { remote?: RemoteView } {
+  const view = remote?.() ?? null
+  return view ? { remote: view } : {}
+}
+
+export function createBoardState({
+  deps,
+  launches,
+  terminals,
+  version,
+  push,
+  setup,
+  mokupilot,
+  remote,
+}: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
   let stale = true
@@ -172,6 +189,8 @@ export function createBoardState({ deps, launches, terminals, version, push, set
       // What a profile without a start command types: the Profiles panel's placeholder.
       claudeProgram: claudeProgram(cfg.launch?.claude, cfg.launch?.args),
       foldWaiting: foldModeOf(cfg.foldWaiting),
+      // remote: only while the remote mode is on; a board without it sends none.
+      ...remoteOf(remote),
     }
   }
 
