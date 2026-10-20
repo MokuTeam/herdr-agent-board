@@ -39,6 +39,15 @@ export const compact = (
   schedules: readonly ScheduleEntry[] = [],
 ): boolean => !!it.sleeping && it.column === 'idle' && !restartOf(schedules, it.key)
 
+/**
+ * Asleep in "Waiting": folded down to its name, what it waits for and its time, whole while it is
+ * pointed at or focused (models/fold.ts). A restart on its way keeps it whole, as for `compact`.
+ */
+export const folds = (
+  it: Pick<Item, 'key' | 'sleeping' | 'column'>,
+  schedules: readonly ScheduleEntry[] = [],
+): boolean => !!it.sleeping && it.column === 'ext' && !restartOf(schedules, it.key)
+
 // The server builds it (launches.decorate): its id and state are enough to tell it from nothing.
 const isLaunch = (value: unknown): value is LaunchView =>
   typeof value === 'object' && value !== null && 'id' in value && 'state' in value
