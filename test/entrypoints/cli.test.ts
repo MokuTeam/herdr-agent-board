@@ -94,6 +94,26 @@ test('board remind / every / schedule / unschedule keep entries for the session'
   )
 })
 
+test('board favorite keeps the session in sight; off takes it back (#64)', async () => {
+  const box = await sandbox()
+  const key = '11111111-2222-3333-4444-555555555555'
+  const s = ['--session', key]
+  const card = () =>
+    JSON.parse(
+      readFileSync(join(box.env.LOCALAPPDATA as string, 'herdr/plugins/agent-board/cards', `${key}.json`), 'utf8'),
+    )
+  const on = await cli(box, ['favorite', ...s])
+  assert.equal(on.code, 0, on.out)
+  assert.match(on.out, /^ok · .* · favorite$/)
+  assert.equal(card().favorite, true)
+  const off = await cli(box, ['favorite', ...s, 'off'])
+  assert.equal(off.code, 0, off.out)
+  assert.doesNotMatch(off.out, /favorite/)
+  assert.equal(card().favorite, undefined)
+  assert.match((await cli(box, ['favorite', ...s, 'maybe'])).out, /usage: board favorite \[off\]/)
+  assert.equal(card().favorite, undefined)
+})
+
 test('board remind records who set it, the pane and the pane folder, and no control characters', async () => {
   const box = await sandbox()
   config(box)

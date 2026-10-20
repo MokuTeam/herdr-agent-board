@@ -78,6 +78,11 @@ describe('card states', () => {
     expect(compact(item({ key: 'a', sleeping: true, column: 'ext' }))).toBe(false)
   })
 
+  test('a favorite stays whole however long it sleeps: not one line in Idle, not folded in Waiting (#64)', () => {
+    expect(compact(item({ key: 'a', sleeping: true, column: 'idle', favorite: true }))).toBe(false)
+    expect(folds(item({ key: 'a', sleeping: true, column: 'ext', favorite: true }))).toBe(false)
+  })
+
   test('a question that needs no answer can be dismissed', () => {
     const kinds: Attention[] = ['ask', 'question', 'later', 'decision', '']
     expect(kinds.map(attention => dismissable(item({ key: 'a', attention })))).toEqual([true, true, true, false, false])

@@ -35,6 +35,7 @@ import {
   PinGlyph,
   RestartGlyph,
   SpinGlyph,
+  StarGlyph,
   WriteGlyph,
 } from './icons.tsx'
 import { ProfileTag } from './ProfileTag.tsx'
@@ -151,6 +152,12 @@ function CardTop({ item }: { item: Item }) {
       <span className="name" title={renamed ? t('rename.was', { name: item.autoName }) : undefined}>
         {item.name}
       </span>
+      {/* A favorite: a quiet star by the name. */}
+      {item.favorite && (
+        <span className="favorite" title={t('card.favorite')}>
+          <StarGlyph />
+        </span>
+      )}
       {/* Its profile, while the board shows more than one, or one hidden or not known. */}
       <ProfileTag item={item} />
       {/* A result you have not opened yet: a dot by the name. */}
