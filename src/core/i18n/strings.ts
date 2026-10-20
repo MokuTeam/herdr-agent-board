@@ -283,6 +283,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     // web board: toolbar
     'tb.title': 'Agents',
     'tb.lanes': 'Categories',
+    // the lanes control folded into one pill (web/src/components/SegmentPick.tsx)
+    'tb.lanesPick': 'Category: {title}',
     'tb.search': 'Search',
     'tb.sleepersTitle': 'Show sleeping sessions',
     'tb.cats': 'Categories',
@@ -831,6 +833,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
 
     'tb.title': 'Агенты',
     'tb.lanes': 'Категории',
+    // the lanes control folded into one pill (web/src/components/SegmentPick.tsx)
+    'tb.lanesPick': 'Категория: {title}',
     'tb.search': 'Поиск',
     'tb.sleepersTitle': 'Показывать спящие сессии',
     'tb.cats': 'Категории',

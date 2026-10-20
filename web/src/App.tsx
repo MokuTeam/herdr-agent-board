@@ -38,6 +38,7 @@ import { useRenameInPlace } from './hooks/useRenameInPlace.ts'
 import { useRestartNotes } from './hooks/useRestartNotes.ts'
 import { useReveal } from './hooks/useReveal.ts'
 import { useSchedule } from './hooks/useSchedule.ts'
+import { useSegmentPicks } from './hooks/useSegmentPicks.ts'
 import { useSettingsMenu } from './hooks/useSettingsMenu.ts'
 import { useSetupNote } from './hooks/useSetupNote.ts'
 import { useTerminal } from './hooks/useTerminal.ts'
@@ -114,6 +115,8 @@ export function App() {
     () => setProfiles(true),
     () => setPhones(true),
   )
+  // The lanes control and the profile switch folded into pills: their choices as menus.
+  const picks = useSegmentPicks(menus.menu)
   useBoardKeys({
     openNextAttention,
     newSession,
@@ -157,6 +160,7 @@ export function App() {
           onArchive={archive.togglePanel}
           setup={setup}
           settings={settings}
+          picks={picks}
         />
         <Board
           onNewSession={newSession}

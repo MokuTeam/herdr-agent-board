@@ -168,6 +168,13 @@ export const ChevIcon = () => (
   </Icon>
 )
 
+/** A folded toolbar control's pill (SegmentPick.tsx): its choices open in a menu under it. */
+export const DownIcon = () => (
+  <Icon>
+    <path d="m6 8 4 4 4-4" />
+  </Icon>
+)
+
 // The new-session window's and the cards of sessions on their way.
 
 export const FolderIcon = () => (

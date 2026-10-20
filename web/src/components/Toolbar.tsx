@@ -2,13 +2,17 @@
 // room (else in the title's tooltip), the lanes control, the profile switch (two or more profiles
 // shown), search, categories, the schedule and the archive as small buttons named by their tooltips, Settings
 // (the gear), the usage pill and the live dot; the read-only banner and the column heads under
-// it. A narrower window takes two rows, a phone three (the stylesheet). The icon-only buttons'
-// labels carry their text keys (`data-i18n`, as upstream's page wrote them): the stylesheet hides
-// a label beside its icon by that, leaving it the button's name.
-import { type RefObject, useEffect } from 'react'
+// it. A narrower window takes two rows, a phone three (the stylesheet). The lanes control and the
+// profile switch each fold into a pill where the row has no room for all of their segments
+// (hooks/useSegmentFolds.ts). The icon-only buttons' labels carry their text keys (`data-i18n`,
+// as upstream's page wrote them): the stylesheet hides a label beside its icon by that, leaving
+// it the button's name.
+import { type RefObject, useEffect, useRef } from 'react'
 import { useBoardView } from '../hooks/useBoardView.ts'
 import { useColumnWidths } from '../hooks/useColumnWidths.ts'
 import { useScrolled } from '../hooks/useScrolled.ts'
+import { useSegmentFolds } from '../hooks/useSegmentFolds.ts'
+import type { SegmentPicks } from '../hooks/useSegmentPicks.ts'
 import type { SettingsMenu } from '../hooks/useSettingsMenu.ts'
 import type { SetupNoteState } from '../hooks/useSetupNote.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
@@ -37,6 +41,8 @@ export interface ToolbarProps {
   setup?: SetupNoteState
   /** Settings, the gear's menu (hooks/useSettingsMenu.ts). */
   settings?: SettingsMenu
+  /** The menus of the lanes control and the profile switch folded into pills (hooks/useSegmentPicks.ts). */
+  picks?: SegmentPicks
 }
 
 export function Toolbar({
@@ -47,11 +53,16 @@ export function Toolbar({
   onArchive,
   setup,
   settings,
+  picks,
 }: ToolbarProps) {
   const t = useT()
   const { data, ui, dispatch, canMutate, canEdit, now } = useBoardContext()
   const { visible, categoryOf, anyProfile } = useBoardView()
+  const lanes = data && laneOptions(data.categories, visible, ui.filter, categoryOf, t)
   const profiles = data && profileOptions(data.profiles, anyProfile, t)
+  const profile = pickedProfile(ui.profile, data?.profiles)
+  const row = useRef<HTMLDivElement>(null)
+  const folded = useSegmentFolds(row, JSON.stringify([lanes, ui.filter, profiles, profile]))
   const scrolled = useScrolled()
   const badge = scheduleBadge(data?.schedules ?? [], now)
   const parts = data && summaryParts(data.items, t)
@@ -66,7 +77,7 @@ export function Toolbar({
     <header className={scrolled ? 'toolbar scrolled' : 'toolbar'}>
       {/* The row's own width: the page's, less a side panel lying over the board (--over-*). */}
       <div className="toolbar-fit">
-        <div className="toolbar-row">
+        <div className="toolbar-row" ref={row}>
           {/* The summary hides in a narrower toolbar: its words are the title's tooltip too. */}
           <div className="titles" title={parts ? summaryText(parts) : undefined}>
             <h1>{t('tb.title')}</h1>
@@ -86,15 +97,19 @@ export function Toolbar({
               <span data-i18n="launch.toolbar">{t('launch.toolbar')}</span>
             </button>
             <Lanes
-              options={data && laneOptions(data.categories, visible, ui.filter, categoryOf, t)}
+              options={lanes}
               picked={ui.filter}
               onPick={id => dispatch({ type: 'filter', id })}
+              folded={folded.has('lanes')}
+              picks={picks}
             />
             {profiles && (
               <ProfileSwitch
                 options={profiles}
-                picked={pickedProfile(ui.profile, data?.profiles)}
+                picked={profile}
                 onPick={id => dispatch({ type: 'profile', id })}
+                folded={folded.has('profiles')}
+                picks={picks}
               />
             )}
             <label className="search">
