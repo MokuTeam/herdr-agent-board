@@ -98,15 +98,32 @@ export function runTree(
 }
 
 function killTree(child: ChildProcess): void {
+  if (child.pid) killTreePid(child.pid)
+  else child.kill('SIGKILL')
+}
+
+const killPid = (pid: number): void => {
+  try {
+    process.kill(pid, 'SIGKILL')
+  } catch {}
+}
+
+/**
+ * End a program and everything it started, by its pid: also one this process did not start (the
+ * ssh a killed board left). Windows: taskkill /T, the program alone if that fails. POSIX: its
+ * process group, else the program alone.
+ */
+export function killTreePid(pid: number): void {
+  if (!Number.isInteger(pid) || pid <= 0) return
   if (process.platform === 'win32') {
     // By its full path: the board's PATH need not have System32 on it.
     const taskkill = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe')
-    execFile(taskkill, ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true }, err => err && child.kill())
+    execFile(taskkill, ['/T', '/F', '/PID', String(pid)], { windowsHide: true }, err => err && killPid(pid))
   } else {
     try {
-      process.kill(-(child.pid as number), 'SIGKILL')
+      process.kill(-pid, 'SIGKILL')
     } catch {
-      child.kill('SIGKILL')
+      killPid(pid)
     }
   }
 }
