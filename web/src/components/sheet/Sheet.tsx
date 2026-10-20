@@ -215,6 +215,7 @@ export function Sheet(slots: SheetSlots) {
             onPick: slots.onPick,
             schedule: slots.schedule,
             onSession: goToSession,
+            onFavorite: () => open && void actions.setFavorite(open, !itemOf(open)?.favorite),
           }}
         />
       }

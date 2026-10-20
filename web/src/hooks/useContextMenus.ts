@@ -237,6 +237,7 @@ export function boardActions(deps: ActionDeps): BoardMenuActions {
     },
     move: (key, to) => actions().moveCard(key, { cat: to.cat ?? null, column: columnOf(to.column) }),
     dismiss: key => actions().dismissAsk(key),
+    favorite: key => actions().setFavorite(key, !deps.item(key)?.favorite),
     clear: async key => {
       const r = await actions().act(key, 'card', { clear: true })
       toast(r.ok ? deps.t()('tui.cleared', { name: deps.item(key)?.name ?? '' }) : r.error, !r.ok)

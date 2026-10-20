@@ -42,6 +42,8 @@ export interface Card {
   profileDir?: string
   /** The profile a start asked for (the board's launch or spawn-agent). */
   profileWant?: string
+  /** The user keeps it in sight: first in its column, whole, left out of a tidy-up. */
+  favorite?: boolean
   [extra: string]: unknown
 }
 
@@ -190,6 +192,8 @@ export interface Item {
   activity?: number
   pin?: Pin | ''
   auto?: ColumnId
+  /** A favorite (card.favorite); absent for the others. */
+  favorite?: boolean
   /** Its subagents, forks, workflow agents and teammates in short (core/helpers.ts), or null. */
   helpers?: HelperSummary | null
   /** How it works with the board's other sessions (core/links.ts), or null. */

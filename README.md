@@ -843,6 +843,15 @@ and moves once that turn is over. A terminal dialog still puts it under "Needs m
 on the column the board would pick, or with "Auto" in the status pill's menu, the pin goes.
 "Working" takes no cards. The pin is `pin` in the card file; the hook and the board clear it.
 
+## Favorites
+
+Some sessions matter every day even while they idle (the master sessions you go back to). "Add to
+Favorites" in a card's menu, the star in the session panel's head, `f` in the terminal board or
+`board favorite` keeps one in sight: first in its column in its lane, whole (never one line in
+"Idle", never folded in "Waiting"), on show even while sleeping sessions are hidden, and left
+alone by "Archive the sleeping ones". A small star by its name says so. Archiving it by hand
+works as for any other. It sleeps and wakes as before. It is `favorite` in the card file.
+
 ## Schedule
 
 An agent can ask the board to come back to it later: `board remind in 2h "check the CI run"`,
@@ -1039,7 +1048,7 @@ it); Claude keeps the conversation on disk, so it can come back.
 - Many at once: the menu of the "Idle" column (its head, or a lane's "Idle" in a narrow window)
   and a lane's menu offer "Archive the sleeping ones": asleep for over a day, 3 days, a week, or
   all of them, each with its count. Only sleeping sessions in "Idle": those that wait on you or
-  on someone else stay. One toast, one Return for all.
+  on someone else stay, and so do [favorites](#favorites). One toast, one Return for all.
 - "Archive" on the toolbar opens the list, by the day each went, newest first, with a search over
   the name, lane, folder, what the card said last and the day. While sleeping sessions have sat
   in "Idle" for over 3 days, it offers to take them along. Each row has Return and, two clicks,
@@ -1189,6 +1198,7 @@ Setup (`src/core/setup.ts`, `src/adapters/setup-facts.ts`, `src/services/setup-c
 | w | set what it waits for (empty clears) |
 | x | clear its card (doing, wait, result, a column set by hand) |
 | z | put the session to sleep (herdr-wake; idle sessions only) |
+| f | a favorite, or not any more (see [Favorites](#favorites)) |
 | c | change its category (n: a new one) |
 | 1-9 / 0 | show one lane / all |
 | o | open the web board |
@@ -1206,6 +1216,8 @@ board doing "<text>"      what it works on now
 board wait "<text>"       what it waits for outside the chat (card goes to "Waiting on others")
 board ask "<question>"    needs your answer: "Needs me" until you reply
 board done ["<text>"]     finished: clears doing, wait and ask
+board favorite [off]      keep this session in sight: first in its column, whole, left out of
+                          "Archive the sleeping ones" (off: back among the others)
 board list                every session, one line each
 board cats                known categories
 board remind <when> "<text>"   at that time, "[board reminder] <text>" goes into the session

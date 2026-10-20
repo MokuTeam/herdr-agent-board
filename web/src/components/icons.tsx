@@ -243,6 +243,12 @@ export const MoonGlyph = () => (
   </Glyph>
 )
 
+export const StarGlyph = () => (
+  <Glyph className="star">
+    <path d="M10 3.4l1.76 4.77 5.09.21-4 3.15 1.38 4.89L10 13.6l-4.23 2.82 1.38-4.89-4-3.15 5.09-.21Z" />
+  </Glyph>
+)
+
 export const ClockGlyph = () => (
   <Glyph>
     <circle cx="10" cy="10" r="7" />

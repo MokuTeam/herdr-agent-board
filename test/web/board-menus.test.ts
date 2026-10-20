@@ -449,6 +449,7 @@ describe('without the launch window', () => {
           write: none,
           wake: none,
           sleep: none,
+          favorite: none,
           restart: none,
           dismiss: none,
           clear: none,
@@ -477,6 +478,19 @@ describe('without the launch window', () => {
     } finally {
       world.uninstall()
     }
+  })
+})
+
+describe('favorites (the React board’s own, #64)', () => {
+  test('a card’s Favorites item goes to the board’s favorite action, from the card and from the sheet’s head', async () => {
+    const log = await run(
+      () => reactBoardMenus(BOARD),
+      [right('card-name'), pick('favorite'), right('sheet-meta'), pick('favorite')],
+    )
+    expect(log.filter(l => l.startsWith('do.favorite'))).toEqual([
+      'do.favorite("s1", #card)',
+      'do.favorite("s1", #sheet-name)',
+    ])
   })
 })
 

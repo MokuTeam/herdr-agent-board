@@ -138,6 +138,7 @@ function boardOf(s: BoardScene, log: string[], menu: unknown): BoardMenuDeps & {
     sleep: note('do.sleep'),
     restart: note('do.restart'),
     dismiss: note('do.dismiss'),
+    favorite: note('do.favorite'),
     clear: note('do.clear'),
     changes: note('do.changes'),
     history: note('do.history'),
@@ -215,12 +216,15 @@ function newWorld(): FakeWorld {
   return world
 }
 
+// The board's own Favorites item (#64) is not upstream's: test/web/menu.test.ts has its tests.
 const ids = (items: readonly MenuEntry[]): unknown =>
-  items.map(it =>
-    it.separator
-      ? '—'
-      : `${it.id}${it.disabled ? ' (gray)' : ''}${it.submenu ? ` [${(ids(it.submenu) as string[]).join(' ')}]` : ''}`,
-  )
+  items
+    .filter(it => it.separator || it.id !== 'favorite')
+    .map(it =>
+      it.separator
+        ? '—'
+        : `${it.id}${it.disabled ? ' (gray)' : ''}${it.submenu ? ` [${(ids(it.submenu) as string[]).join(' ')}]` : ''}`,
+    )
 
 function side(world: FakeWorld, log: string[], recorder: { opened: Opened | null }): MenuSide {
   const page = (id: string) => {

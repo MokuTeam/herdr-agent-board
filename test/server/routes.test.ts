@@ -119,6 +119,7 @@ describe('routes', () => {
       'styles/workspaces.css',
       'styles/fold.css',
       'styles/session-head.css',
+      'styles/favorites.css',
       'app.js',
     ])
     for (const link of links) expect([link, (await fetch(`${url}/${link}`)).status]).toEqual([link, 200])
@@ -132,7 +133,18 @@ describe('routes', () => {
     const early = await theme.text()
     expect(early).toContain('board.theme')
     expect(early).not.toMatch(/^\s*(import|export)\b/m)
-    for (const sheet of ['app', 'menu', 'launch', 'questions', 'terminal', 'helpers', 'profiles', 'workspaces', 'fold'])
+    for (const sheet of [
+      'app',
+      'menu',
+      'launch',
+      'questions',
+      'terminal',
+      'helpers',
+      'profiles',
+      'workspaces',
+      'fold',
+      'favorites',
+    ])
       expect((await fetch(`${url}/styles/${sheet}.css`)).headers.get('content-type')).toBe('text/css; charset=utf-8')
     expect((await fetch(`${url}/icon.svg`)).headers.get('content-type')).toBe('image/svg+xml')
     // Only top-level files and styles/ of the types it knows: nothing else under web/ (the page's source).

@@ -23,6 +23,8 @@ export interface ArchiveCandidate {
   launchOnly?: unknown
   /** A launch on its way into this session. */
   launch?: unknown
+  /** The user keeps it in sight: a tidy-up leaves it be (by hand it goes as any other). */
+  favorite?: boolean
 }
 
 /** What the archive's rules read of a schedule entry (a ScheduleEntry is one). */
@@ -73,7 +75,8 @@ export const heldEntries = <E extends { key: string; kind?: string | undefined }
 
 /**
  * The sleeping sessions in "Idle" that a tidy-up takes: asleep and quiet for at least `days` days
- * (0: all of them), and free to go. Sessions that wait on the user or on someone else stay.
+ * (0: all of them), and free to go. Sessions that wait on the user or on someone else stay, and
+ * so do favorites.
  */
 export function tidyList<T extends ArchiveCandidate & { column?: string; activity?: number }>(
   items: readonly T[],
@@ -82,7 +85,12 @@ export function tidyList<T extends ArchiveCandidate & { column?: string; activit
   now = Date.now(),
 ): T[] {
   return items.filter(
-    it => it.sleeping && it.column === 'idle' && !archiveBlock(it, schedules) && now - (it.activity || 0) >= days * DAY,
+    it =>
+      it.sleeping &&
+      it.column === 'idle' &&
+      !it.favorite &&
+      !archiveBlock(it, schedules) &&
+      now - (it.activity || 0) >= days * DAY,
   )
 }
 

@@ -264,6 +264,7 @@ export interface MenuSession {
   auto?: string | undefined
   /** The label of the herdr workspace it is in. */
   workspace?: string | null | undefined
+  favorite?: boolean | undefined
   [extra: string]: unknown
 }
 
@@ -347,6 +348,8 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
     { id: 'rename', label: t('menu.rename'), hint: 'F2', ...edit() },
     // herdr's name for the workspace it is in, every session's there: it goes through herdr.
     it.workspace && { id: 'renameWorkspace', label: t('menu.renameWorkspace'), ...herdr() },
+    // Kept in sight: first in its column, whole, left out of a tidy-up (the card's, so the board's).
+    { id: 'favorite', label: t(it.favorite ? 'menu.unfavorite' : 'menu.favorite'), ...edit() },
     SEP,
     {
       id: 'category',

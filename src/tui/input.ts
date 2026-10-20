@@ -14,6 +14,7 @@ export const KEYMAP: Readonly<Record<string, readonly string[]>> = {
   wait: ['w', 'ц'],
   clear: ['x', 'ч'],
   sleep: ['z', 'я'],
+  favorite: ['f', 'а'],
   category: ['c', 'с'],
   refresh: ['r', 'к'],
   web: ['o', 'щ'],

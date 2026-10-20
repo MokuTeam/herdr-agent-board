@@ -67,6 +67,8 @@ export interface BoardMenuActions {
   /** Claude exits and resumes in its pane once the session is free (a schedule entry, the server's). */
   restart(key: string, from: MenuOrigin): unknown
   dismiss(key: string, from: MenuOrigin): unknown
+  /** Into the favorites, or out of them. */
+  favorite(key: string, from: MenuOrigin): unknown
   clear(key: string, from: MenuOrigin): unknown
   changes(key: string, from: MenuOrigin): unknown
   history(key: string, from: MenuOrigin): unknown
@@ -219,6 +221,7 @@ const CARD_ACTIONS = [
   'sleep',
   'restart',
   'dismiss',
+  'favorite',
   'clear',
   'changes',
   'history',

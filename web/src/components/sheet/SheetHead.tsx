@@ -1,6 +1,7 @@
 // The session sheet's title, compact so the conversation gets the room: a row of pills (where the
 // card shows and its lane, each opening a menu to change it; the pencil shows the fields to fill),
-// its name (a click, Enter or F2 renames it there), a line with its workspace, last activity and
+// a star that keeps it among the favorites, its name (a click, Enter or F2 renames it there), a
+// line with its workspace, last activity and
 // context (the workspace's name renames the workspace there on a click, where the page can), and
 // the card's fields that say something. Before a session was ever open, the empty places of the page.
 import { Fragment, type KeyboardEvent, type MouseEvent } from 'react'
@@ -12,7 +13,7 @@ import { linkedSessions } from '../../models/helper-model.ts'
 import { sheetHead, type WorkspaceFact } from '../../models/sheet.ts'
 import { COLUMN_COLORS } from '../../models/toolbar.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
-import { MoonGlyph, UpDownGlyph, WriteGlyph } from '../icons.tsx'
+import { MoonGlyph, StarGlyph, UpDownGlyph, WriteGlyph } from '../icons.tsx'
 import type { ScheduleActions } from './ScheduleRow.tsx'
 import { SheetCard } from './SheetCard.tsx'
 
@@ -30,6 +31,8 @@ export interface HeadCard {
   schedule?: ScheduleActions | undefined
   /** A linked session's name: that session. */
   onSession?: ((key: string) => void) | undefined
+  /** The star: into the favorites, or out of them. */
+  onFavorite?: (() => void) | undefined
 }
 
 export interface SheetHeadProps {
@@ -169,6 +172,18 @@ export function SheetHead({ item, missing, onRename, onRenameWorkspace, card = N
           onClick={() => card.onToggle?.()}
         >
           <WriteGlyph />
+        </button>
+        <button
+          type="button"
+          className="sheet-favorite"
+          id="sheet-favorite"
+          aria-pressed={!!item.favorite}
+          title={t(item.favorite ? 'menu.unfavorite' : 'menu.favorite')}
+          aria-label={t(item.favorite ? 'menu.unfavorite' : 'menu.favorite')}
+          disabled={locked}
+          onClick={() => card.onFavorite?.()}
+        >
+          <StarGlyph />
         </button>
       </div>
       {/* biome-ignore lint/a11y/noNoninteractiveTabindex: the name is where it is renamed, as before */}
