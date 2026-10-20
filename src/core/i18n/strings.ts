@@ -5,6 +5,7 @@
 // (English: one, other; Russian: one, few, many). A key missing in a language falls back to English.
 
 import type { Lang } from '../types.ts'
+import { ACCESS_STRINGS } from './access-strings.ts'
 import { ARCHIVE_STRINGS } from './archive-strings.ts'
 import { ASIDE_STRINGS } from './aside-strings.ts'
 import { FORK_STRINGS } from './fork-strings.ts'
@@ -1145,3 +1146,5 @@ for (const code of Object.keys(ARCHIVE_STRINGS) as Lang[]) Object.assign(STRINGS
 for (const code of Object.keys(FORK_STRINGS) as Lang[]) Object.assign(STRINGS[code], FORK_STRINGS[code])
 // And a side question to a session.
 for (const code of Object.keys(ASIDE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ASIDE_STRINGS[code])
+// And the board through the owner's own domain: the tunnel and its login.
+for (const code of Object.keys(ACCESS_STRINGS) as Lang[]) Object.assign(STRINGS[code], ACCESS_STRINGS[code])
