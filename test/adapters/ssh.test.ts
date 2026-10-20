@@ -1,4 +1,4 @@
-import { expect, onTestFinished, setDefaultTimeout, test } from 'bun:test'
+import { expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { stateDir } from '../../src/adapters/paths.ts'
@@ -31,7 +31,7 @@ import {
   tunnelConfig,
 } from '../../src/core/tunnel.ts'
 import { isolatedHome } from '../support/env.ts'
-import { fakeSshBin } from '../support/fake-ssh-bin.ts'
+import { useFakeSsh } from '../support/fake-ssh-bin.ts'
 import { sandbox, until } from '../support/sandbox.ts'
 
 // The first run compiles the fake ssh; PowerShell takes a second or two per command line it reads.
@@ -43,46 +43,6 @@ const alive = (pid: number): boolean => {
     return true
   } catch {
     return false
-  }
-}
-
-/**
- * A fresh isolatedHome() with the fake as both ssh and ssh-keygen, its state and its log in that
- * folder (isolatedHome restores the BOARD_SSH_* variables, this the others).
- */
-async function useFakeSsh() {
-  const bin = await fakeSshBin()
-  const dir = isolatedHome()
-  const log = join(dir, 'ssh-calls.jsonl')
-  const stateFile = join(dir, 'ssh-state.json')
-  const saved = {
-    FAKE_SSH_LOG: process.env.FAKE_SSH_LOG,
-    FAKE_SSH_STATE: process.env.FAKE_SSH_STATE,
-    BUN_FEATURE_FLAG_NO_ORPHANS: process.env.BUN_FEATURE_FLAG_NO_ORPHANS,
-  }
-  process.env.FAKE_SSH_LOG = log
-  process.env.FAKE_SSH_STATE = stateFile
-  // A fake ssh that holds its forward ends with this test process, should the run be cut off (as sandbox() does).
-  process.env.BUN_FEATURE_FLAG_NO_ORPHANS = '1'
-  process.env.BOARD_SSH_BIN_PATH = bin
-  process.env.BOARD_SSH_KEYGEN_BIN_PATH = bin
-  onTestFinished(() => {
-    for (const [k, v] of Object.entries(saved)) {
-      if (v === undefined) delete process.env[k]
-      else process.env[k] = v
-    }
-  })
-  return {
-    bin,
-    dir,
-    state: (value: unknown): void => writeFileSync(stateFile, JSON.stringify(value)),
-    calls: (): string[][] =>
-      existsSync(log)
-        ? readFileSync(log, 'utf8')
-            .split('\n')
-            .filter(Boolean)
-            .map(line => JSON.parse(line) as string[])
-        : [],
   }
 }
 
@@ -322,6 +282,39 @@ test('endStraySsh ends a recorded ssh that runs with this forward, and leaves an
   // A pid that no longer runs.
   expect(await commandLineOf(other.pid)).toBeNull()
   expect(await endStraySsh({ pid: other.pid, forward, at: Date.now() })).toBe(false)
+})
+
+test('endStraySsh says false when the recorded ssh still runs after its wait', async () => {
+  const fake = await useFakeSsh()
+  fake.state({ ssh: { mode: 'hang' } })
+  const forward = forwardSpec(TUNNEL_SOCKET, 12999)
+  const ssh = spawnSsh(fake.bin, ['-v', '-N', '-R', forward, 'boardtunnel@ssh.example.com'])
+  try {
+    const killed: number[] = []
+    const record = { pid: ssh.pid, forward, at: Date.now() }
+    // A kill that does not take: the ssh outlives the wait.
+    expect(await endStraySsh(record, { kill: pid => killed.push(pid), waitMs: 200 })).toBe(false)
+    expect(killed).toEqual([ssh.pid])
+    expect(alive(ssh.pid)).toBe(true)
+  } finally {
+    ssh.kill()
+    await ssh.exited
+  }
+})
+
+test('the fake ssh in hang mode stays up and silent, exitAfterMs or not', async () => {
+  const fake = await useFakeSsh()
+  fake.state({ ssh: { mode: 'hang', exitAfterMs: 100 } })
+  const ssh = spawnSsh(fake.bin, ['-v', '-N', '-R', forwardSpec(TUNNEL_SOCKET, 12999), 'boardtunnel@ssh.example.com'])
+  try {
+    const lines = linesOf(ssh)
+    const first = await Promise.race([ssh.exited.then(() => 'exited'), Bun.sleep(1500).then(() => 'still up')])
+    expect(first).toBe('still up')
+    expect(lines).toEqual([])
+  } finally {
+    ssh.kill()
+    await ssh.exited
+  }
 })
 
 test('the pid record: written, read back, removed', () => {

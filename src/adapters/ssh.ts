@@ -246,13 +246,20 @@ const running = (pid: number): boolean => {
   }
 }
 
-/** Ends a recorded ssh that still runs with this forward (its tree); true when it did. */
-export async function endStraySsh(r: PidRecord): Promise<boolean> {
+/**
+ * Ends a recorded ssh that still runs with this forward (its tree), waiting up to `waitMs` for it
+ * to go; true once it is gone. False: another program has the pid, nothing does, or the ssh still
+ * runs. `kill` is for tests.
+ */
+export async function endStraySsh(
+  r: PidRecord,
+  o: { kill?: (pid: number) => void; waitMs?: number } = {},
+): Promise<boolean> {
+  const { kill = killTreePid, waitMs = 5000 } = o
   const line = await commandLineOf(r.pid)
   if (!line?.includes(r.forward)) return false
-  killTreePid(r.pid)
-  // Gone before the caller starts the next ssh, or as good as (5 s at most).
-  for (const deadline = Date.now() + 5000; running(r.pid) && Date.now() < deadline; )
+  kill(r.pid)
+  for (const deadline = Date.now() + waitMs; running(r.pid) && Date.now() < deadline; )
     await new Promise(resolve => setTimeout(resolve, 50))
-  return true
+  return !running(r.pid)
 }
