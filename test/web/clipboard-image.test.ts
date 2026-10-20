@@ -6,6 +6,7 @@ import {
   canReadClipboard,
   clipboardName,
   htmlImage,
+  pickInstead,
   readClipboardImages,
 } from '../../web/src/models/clipboard-image.ts'
 
@@ -81,4 +82,16 @@ test('the button shows only where the browser can read the clipboard', () => {
   expect(canReadClipboard({ read: async () => [] })).toBe(true)
   expect(canReadClipboard({ readText: async () => '' })).toBe(false)
   expect(canReadClipboard(undefined)).toBe(false)
+})
+
+test('Android picks a picture instead: its Chrome hands a page no copied screenshot (#105)', () => {
+  const android =
+    'Mozilla/5.0 (Linux; Android 16; CPH2749) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36'
+  const iphone =
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Mobile/15E148 Safari/604.1'
+  expect(pickInstead(android)).toBe(true)
+  expect(pickInstead(iphone)).toBe(false)
+  expect(pickInstead('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0')).toBe(
+    false,
+  )
 })

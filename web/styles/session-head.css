@@ -137,7 +137,7 @@
   #sheet .status-pill > :not(.pill-label) { flex: none; }
   #sheet .status-pill > .pill-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   #sheet .sheet-pills button { min-height: 26px; }
-  #sheet .sheet-properties-toggle { width: 28px; height: 26px; }
+  #sheet .sheet-properties-toggle { display: none; }
   #sheet .sheet-meta { -webkit-line-clamp: 1; overflow-wrap: anywhere; }
   .sheet-fold {
     display: flex;
