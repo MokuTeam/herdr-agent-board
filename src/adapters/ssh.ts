@@ -237,6 +237,7 @@ export async function commandLineOf(pid: number): Promise<string | null> {
   return (r.code === 0 && r.stdout.trim()) || null
 }
 
+/** A process of ours runs under the pid (another user's, which we may not signal, counts as none). */
 const running = (pid: number): boolean => {
   try {
     process.kill(pid, 0)
@@ -248,16 +249,18 @@ const running = (pid: number): boolean => {
 
 /**
  * Ends a recorded ssh that still runs with this forward (its tree), waiting up to `waitMs` for it
- * to go; true once it is gone. False: another program has the pid, nothing does, or the ssh still
- * runs. `kill` is for tests.
+ * to go. True: no ssh of ours runs under the pid (it is gone, or another program has the pid).
+ * False: ours still runs, or something runs under the pid and its command line could not be read.
+ * `kill` and `commandLine` are for tests.
  */
 export async function endStraySsh(
   r: PidRecord,
-  o: { kill?: (pid: number) => void; waitMs?: number } = {},
+  o: { kill?: (pid: number) => void; commandLine?: (pid: number) => Promise<string | null>; waitMs?: number } = {},
 ): Promise<boolean> {
-  const { kill = killTreePid, waitMs = 5000 } = o
-  const line = await commandLineOf(r.pid)
-  if (!line?.includes(r.forward)) return false
+  const { kill = killTreePid, commandLine = commandLineOf, waitMs = 5000 } = o
+  const line = await commandLine(r.pid)
+  if (line === null) return !running(r.pid)
+  if (!line.includes(r.forward)) return true
   kill(r.pid)
   for (const deadline = Date.now() + waitMs; running(r.pid) && Date.now() < deadline; )
     await new Promise(resolve => setTimeout(resolve, 50))

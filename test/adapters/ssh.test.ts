@@ -255,7 +255,7 @@ test("the fake ssh's other answers, one per call in turn, and a forward that dro
   ])
 })
 
-test('endStraySsh ends a recorded ssh that runs with this forward, and leaves anything else alone', async () => {
+test('endStraySsh ends a recorded ssh that runs with this forward, leaves anything else alone, and says true once none of ours runs there', async () => {
   const fake = await useFakeSsh()
   const forward = forwardSpec(TUNNEL_SOCKET, 12999)
   const ssh = spawnSsh(fake.bin, ['-v', '-N', '-R', forward, 'boardtunnel@ssh.example.com'])
@@ -270,9 +270,9 @@ test('endStraySsh ends a recorded ssh that runs with this forward, and leaves an
     expect(alive(ssh.pid)).toBe(false)
     await ssh.exited
 
-    // A pid now used by another program.
+    // A pid now used by another program: no ssh of ours runs there.
     expect(await commandLineOf(other.pid)).toContain('setInterval')
-    expect(await endStraySsh({ pid: other.pid, forward, at: Date.now() })).toBe(false)
+    expect(await endStraySsh({ pid: other.pid, forward, at: Date.now() })).toBe(true)
     expect(alive(other.pid)).toBe(true)
   } finally {
     ssh.killNow()
@@ -281,7 +281,28 @@ test('endStraySsh ends a recorded ssh that runs with this forward, and leaves an
   }
   // A pid that no longer runs.
   expect(await commandLineOf(other.pid)).toBeNull()
-  expect(await endStraySsh({ pid: other.pid, forward, at: Date.now() })).toBe(false)
+  expect(await endStraySsh({ pid: other.pid, forward, at: Date.now() })).toBe(true)
+})
+
+test('endStraySsh says false for a pid that runs but whose command line cannot be read, and kills nothing', async () => {
+  const forward = forwardSpec(TUNNEL_SOCKET, 12999)
+  const other = Bun.spawn([process.execPath, '-e', 'setInterval(() => {}, 1000)'], {
+    stdio: ['ignore', 'ignore', 'ignore'],
+  })
+  const killed: number[] = []
+  // PowerShell (or ps) failing: what runs under the pid is unknown, maybe that ssh.
+  const unreadable = { commandLine: async () => null, kill: (pid: number) => killed.push(pid), waitMs: 200 }
+  try {
+    expect(await endStraySsh({ pid: other.pid, forward, at: Date.now() }, unreadable)).toBe(false)
+    expect(killed).toEqual([])
+    expect(alive(other.pid)).toBe(true)
+  } finally {
+    other.kill()
+    await other.exited
+  }
+  // Unreadable and no longer running: none of ours runs there.
+  expect(await endStraySsh({ pid: other.pid, forward, at: Date.now() }, unreadable)).toBe(true)
+  expect(killed).toEqual([])
 })
 
 test('endStraySsh says false when the recorded ssh still runs after its wait', async () => {

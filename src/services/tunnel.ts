@@ -3,7 +3,7 @@
 // started again with a backoff (lasting errors every 60 s); at once after the computer slept or
 // its addresses changed. Its pid is recorded so that the next board can end it should this one
 // die without doing so, and a recorded one is ended before a start. Never two at a time: a new
-// ssh starts only once the one before has exited.
+// ssh starts only once the one before has exited, and none while a recorded one may still run.
 import { networkInterfaces } from 'node:os'
 import type { PidRecord, SshChild } from '../adapters/ssh.ts'
 import {
@@ -47,7 +47,11 @@ export interface SupervisorDeps {
   /** What to run now; null: no tunnel (off, a problem, no login set up, the listener not listening). */
   plan(): TunnelPlan | null
   spawn(bin: string, args: string[]): SshChild
-  /** The pid record (adapters/ssh.ts), and ending the ssh it names: true once that is gone. */
+  /**
+   * The pid record (adapters/ssh.ts), and ending the ssh it names. `end`: true once no ssh of ours
+   * runs under its pid (gone, or another program's); false while ours may still run (it outlived
+   * its kill, or what runs under the pid could not be read).
+   */
   stray: { read(): PidRecord | null; write(r: PidRecord | null): void; end(r: PidRecord): Promise<boolean> }
   clock: Clock
   /** A signature of this computer's addresses (os.networkInterfaces(), non-internal, sorted). */
@@ -200,20 +204,25 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
     watch = null
   }
 
-  /** An ssh a board before this one left (the record), ended if it still runs; the record cleared. */
-  async function endStray(): Promise<void> {
+  /**
+   * An ssh a board before this one left (the record), ended if it still runs. Null once none of
+   * ours runs under the recorded pid: the record cleared. The record, kept to be tried again, when
+   * ours may still run (it outlived its kill, or what runs under the pid could not be read).
+   */
+  async function endStray(): Promise<PidRecord | null> {
     const r = d.stray.read()
-    if (!r) return
-    const ended = await d.stray.end(r).catch((err: unknown) => {
+    if (!r) return null
+    const gone = await d.stray.end(r).catch((err: unknown) => {
       d.log(`tunnel: ending the recorded pid ${r.pid}: ${messageOf(err)}`)
       return false
     })
-    d.log(
-      ended
-        ? `tunnel: ended the ssh a board before left running (pid ${r.pid})`
-        : `tunnel: the recorded pid ${r.pid} was not ended (not that ssh any more, or it did not end in time)`,
-    )
+    if (!gone) {
+      d.log(`tunnel: the ssh a board before left (pid ${r.pid}) may still run: its record kept`)
+      return r
+    }
+    d.log(`tunnel: no ssh a board before left runs any more (pid ${r.pid})`)
     record(null)
+    return null
   }
 
   /** Ends the held ssh with its tree and waits for its exit. */
@@ -226,8 +235,13 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
   }
 
   async function start(plan: TunnelPlan): Promise<void> {
-    await endStray()
     lastPlan = plan
+    const stray = await endStray()
+    if (stray) {
+      // Never two: no ssh while that one may still run; tried again after the backoff.
+      d.log('tunnel: no ssh started')
+      return later(`an ssh a board before left (pid ${stray.pid}) may still run; it must end first`, null)
+    }
     const child = d.spawn(plan.bin, plan.args)
     const h: Held = { child, plan, connectedAt: null, lines: [], asked: false }
     held = h
@@ -265,6 +279,12 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
       ? `${h.plan.bin}: ${r.error}`
       : errorText(h.lines) || (r.code === null ? 'ssh was ended' : `ssh exited with code ${r.code}`)
     d.log(`tunnel: ssh exited (${r.error ?? `code ${String(r.code)}`}): ${error.split('\n').at(-1)}`)
+    later(error, hint)
+  }
+
+  /** Tried again: in 60 s for a lasting error (`error`), else after the backoff (`reconnecting`). */
+  function later(error: string, hint: TunnelHint | null): void {
+    const now = clock.now()
     if (isLasting(hint)) {
       set({ state: 'error', since: now, error, hint, nextAt: now + LASTING_RETRY_MS })
       retryIn(LASTING_RETRY_MS)

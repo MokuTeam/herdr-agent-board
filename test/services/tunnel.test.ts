@@ -161,8 +161,8 @@ function world() {
     time,
     plan: planTo(12424) as TunnelPlan | null,
     record: null as PidRecord | null,
-    /** What stray.end answers. */
-    strayEnded: true,
+    /** stray.end: true once no ssh of ours runs under the recorded pid. */
+    strayEnd: (async () => true) as (r: PidRecord) => Promise<boolean>,
     net: 'eth0 192.168.1.20',
     /** The next spawn fails so (pid 0). */
     spawnError: null as string | null,
@@ -184,9 +184,9 @@ function world() {
       write: r => {
         w.record = r
       },
-      end: async r => {
+      end: r => {
         w.ended.push({ record: r, spawnsBefore: w.spawns.length })
-        return w.strayEnded
+        return w.strayEnd(r)
       },
     },
     clock: time.clock,
@@ -405,17 +405,34 @@ test('a change in this computer’s addresses starts ssh again at the next poll,
   expect(await w.failAndWait()).toBe(1000)
 })
 
-test('a stray recorded ssh is ended before the first start; one that is not ours any more is left, the record overwritten', async () => {
-  const stray = { pid: 4242, forward: forwardSpec(TUNNEL_SOCKET, 12424), at: 1 }
-  for (const ends of [true, false]) {
-    const w = world()
-    w.record = stray
-    w.strayEnded = ends
-    await w.sup.sync()
-    expect(w.ended).toEqual([{ record: stray, spawnsBefore: 0 }])
-    expect(w.spawns).toHaveLength(1)
-    expect(w.record).toEqual({ pid: w.child().pid, forward: stray.forward, at: w.time.now() })
-  }
+const FORWARD = forwardSpec(TUNNEL_SOCKET, 12424)
+/** The real endStraySsh on this test's own pid (alive), its command line made up, its kill a no-op. */
+function endAs(line: string | null, kills: number[]): (r: PidRecord) => Promise<boolean> {
+  return r => endStraySsh(r, { commandLine: async () => line, kill: pid => kills.push(pid), waitMs: 0 })
+}
+
+test('a stray recorded ssh is ended before the first start; once none of ours runs under its pid, ssh starts and the record is overwritten', async () => {
+  // Gone (its kill took, or it had ended).
+  const stray = { pid: 4242, forward: FORWARD, at: 1 }
+  const gone = world()
+  gone.record = stray
+  await gone.sup.sync()
+  expect(gone.ended).toEqual([{ record: stray, spawnsBefore: 0 }])
+  expect(gone.spawns).toHaveLength(1)
+  expect(gone.record).toEqual({ pid: gone.child().pid, forward: FORWARD, at: gone.time.now() })
+
+  // Another program holds the pid now: left alone, ssh starts.
+  const other = world()
+  const kills: number[] = []
+  const taken = { pid: process.pid, forward: FORWARD, at: 1 }
+  other.record = taken
+  other.strayEnd = endAs(`${process.execPath} other.js`, kills)
+  await other.sup.sync()
+  expect(other.ended).toEqual([{ record: taken, spawnsBefore: 0 }])
+  expect(kills).toEqual([])
+  expect(other.spawns).toHaveLength(1)
+  expect(other.record).toEqual({ pid: other.child().pid, forward: FORWARD, at: other.time.now() })
+  expect(other.sup.status().state).toBe('connecting')
 
   // Off: a stray is still ended, and nothing starts.
   const w = world()
@@ -426,6 +443,83 @@ test('a stray recorded ssh is ended before the first start; one that is not ours
   expect(w.record).toBeNull()
   expect(w.spawns).toHaveLength(0)
   expect(w.sup.status().state).toBe('off')
+})
+
+test('our stray outliving its kill: no ssh starts, its record kept, reconnecting after a backoff; an attempt that finds it gone starts one', async () => {
+  const w = world()
+  const stray = { pid: process.pid, forward: FORWARD, at: 1 }
+  w.record = stray
+  const kills: number[] = []
+  w.strayEnd = endAs(`C:/Windows/System32/OpenSSH/ssh.exe -v -N -R ${FORWARD} boardtunnel@ssh.example.com`, kills)
+  await w.sup.sync()
+  expect(kills).toEqual([process.pid])
+  expect(w.spawns).toHaveLength(0)
+  expect(w.sup.running()).toBe(false)
+  expect(w.record).toEqual(stray)
+  const start = w.time.now()
+  expect(w.sup.status()).toMatchObject({
+    state: 'reconnecting',
+    since: start,
+    attempt: 1,
+    nextAt: start + 1000,
+    hint: null,
+  })
+  expect(w.sup.status().error).toContain(`pid ${process.pid}`)
+
+  // A sync with the same plan waits out the backoff; then it is tried again, still there.
+  await w.sup.sync()
+  await w.time.advance(999)
+  expect(w.ended).toHaveLength(1)
+  await w.time.advance(1)
+  expect(w.ended).toHaveLength(2)
+  expect(kills).toEqual([process.pid, process.pid])
+  expect(w.spawns).toHaveLength(0)
+  expect(w.record).toEqual(stray)
+  expect(w.sup.status()).toMatchObject({ state: 'reconnecting', attempt: 2, nextAt: w.time.now() + 2000 })
+
+  // Gone at the next attempt: one ssh starts, recorded in its place.
+  w.strayEnd = async () => true
+  await w.time.advance(2000)
+  expect(w.ended).toHaveLength(3)
+  expect(w.ended[2]?.spawnsBefore).toBe(0)
+  expect(w.spawns).toHaveLength(1)
+  expect(w.record).toEqual({ pid: w.child().pid, forward: FORWARD, at: w.time.now() })
+  expect(w.sup.status().state).toBe('connecting')
+  w.child().line(success())
+  expect(w.sup.status().state).toBe('connected')
+})
+
+test('a recorded pid that runs but cannot be read (PowerShell failing), or an end that throws: no ssh starts, the record kept', async () => {
+  const w = world()
+  const stray = { pid: process.pid, forward: FORWARD, at: 1 }
+  w.record = stray
+  const kills: number[] = []
+  w.strayEnd = endAs(null, kills)
+  await w.sup.sync()
+  expect(w.ended).toHaveLength(1)
+  expect(kills).toEqual([])
+  expect(w.spawns).toHaveLength(0)
+  expect(w.record).toEqual(stray)
+  expect(w.sup.status()).toMatchObject({ state: 'reconnecting', attempt: 1 })
+
+  w.strayEnd = async () => {
+    throw new Error('Get-CimInstance failed')
+  }
+  await w.time.advance(1000)
+  expect(w.ended).toHaveLength(2)
+  expect(w.spawns).toHaveLength(0)
+  expect(w.record).toEqual(stray)
+  expect(w.sup.status()).toMatchObject({ state: 'reconnecting', attempt: 2 })
+
+  // Off: tried once more; nothing starts, nothing waits, the record kept for the next try.
+  w.strayEnd = endAs(null, kills)
+  w.plan = null
+  await w.sup.sync()
+  expect(w.ended).toHaveLength(3)
+  expect(w.spawns).toHaveLength(0)
+  expect(w.record).toEqual(stray)
+  expect(w.sup.status().state).toBe('off')
+  expect(w.time.pending()).toBe(0)
 })
 
 test('off: ssh ended with its tree and waited for, the record cleared, no timer left; killNow ends it at once; close', async () => {
