@@ -143,8 +143,15 @@ function joinTexts(nodes: Node[]): Node[] {
   return joined
 }
 
+/**
+ * React turns a glyph in a box of its own (components/icons.tsx Turn, #109) where the old page
+ * turned the SVG itself: the box is left out and its glyph compared in its place.
+ */
+const unwrapTurns = (nodes: Node[]): Node[] =>
+  nodes.flatMap(n => (n.kind === 'element' && n.tag === 'span' && hasClass(n, 'turn') ? unwrapTurns(n.children) : [n]))
+
 const visible = (nodes: Node[], spaces = false): Node[] =>
-  joinTexts(nodes).filter(n => n.kind === 'element' || spaces || n.text.trim() !== '')
+  joinTexts(unwrapTurns(nodes)).filter(n => n.kind === 'element' || spaces || n.text.trim() !== '')
 const collapse = (text: string) => text.replace(/\s+/g, ' ')
 const textLine = (text: string) => (text.trim() === '' ? "' '" : escapeText(collapse(text)))
 

@@ -1,6 +1,7 @@
 // The helpers' icons (the old page's helpers.js HELPER_ICONS, hidden from screen readers) and the
 // links' between sessions (app.js ICON: from, spawned, out, peer, not hidden, as the cards' are).
 import type { ReactNode } from 'react'
+import { Turn } from '../icons.tsx'
 
 function HelperSvg({ className, children }: { className?: string; children: ReactNode }) {
   return (
@@ -72,9 +73,11 @@ export function HelperIcon({ name }: { name: string }) {
   const known = isKnown(name) ? name : 'agent'
   if (known === 'spin')
     return (
-      <HelperSvg className="spin">
-        <path d="M10 3a7 7 0 1 1-7 7" />
-      </HelperSvg>
+      <Turn spinning>
+        <HelperSvg className="spin">
+          <path d="M10 3a7 7 0 1 1-7 7" />
+        </HelperSvg>
+      </Turn>
     )
   return <HelperSvg>{PATHS[known]}</HelperSvg>
 }

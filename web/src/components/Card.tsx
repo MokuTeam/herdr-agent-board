@@ -36,6 +36,7 @@ import {
   RestartGlyph,
   SpinGlyph,
   StarGlyph,
+  Turn,
   WriteGlyph,
 } from './icons.tsx'
 import { ProfileTag } from './ProfileTag.tsx'
@@ -292,7 +293,9 @@ function RestartLine({ item }: { item: Item }) {
   const view = restartView(e, t)
   return (
     <div className={classNames('now restart', view.on && 'on')}>
-      <RestartGlyph />
+      <Turn>
+        <RestartGlyph />
+      </Turn>
       <span className="tool">{view.badge}</span>
       <span className="detail">{view.title}</span>
     </div>

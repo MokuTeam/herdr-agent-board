@@ -17,6 +17,7 @@ import {
   sendButton,
 } from '../../models/questions.ts'
 import { classNames } from '../class-names.ts'
+import { Turn } from '../icons.tsx'
 
 /** What the form does with the user's clicks and keys (the desk). */
 export type FormActions = Pick<QuestionDesk, 'click' | 'type' | 'enter' | 'peekAt' | 'unpeek'>
@@ -32,9 +33,11 @@ function QaGlyph({ className, children }: { className?: string; children: ReactN
 }
 
 export const SpinQa = () => (
-  <QaGlyph className="spin">
-    <path d="M10 3a7 7 0 1 1-7 7" />
-  </QaGlyph>
+  <Turn spinning>
+    <QaGlyph className="spin">
+      <path d="M10 3a7 7 0 1 1-7 7" />
+    </QaGlyph>
+  </Turn>
 )
 
 const CheckQa = () => (

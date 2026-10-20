@@ -15,6 +15,7 @@ import { agentName, footStatus, KEY_ROW, type StatePanel, statePanel, type TermT
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { useStore } from '../../state/store.ts'
 import { classNames } from '../class-names.ts'
+import { Turn } from '../icons.tsx'
 
 /** The terminal's icon: a window with a prompt (the sheet's Terminal button has it too). */
 export const TermIcon = () => (
@@ -34,9 +35,11 @@ const CloseIcon = () => (
   </svg>
 )
 const Spin = () => (
-  <svg className="spin" viewBox="0 0 20 20" aria-hidden="true">
-    <path d="M10 3a7 7 0 1 1-7 7" />
-  </svg>
+  <Turn spinning>
+    <svg className="spin" viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M10 3a7 7 0 1 1-7 7" />
+    </svg>
+  </Turn>
 )
 
 export interface TermHandlers {
