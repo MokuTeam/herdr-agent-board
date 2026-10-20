@@ -1,8 +1,9 @@
 // A Claude profile folder's settings.json, as far as the board goes there: read it, write the
 // board's hooks and status line into it (core/install-plan.ts planSettings, a backup next to it
-// first), and tell whether this copy's hooks are in it. Nothing else in the folder is read or
-// written: no credentials, no .claude.json.
-import { copyFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+// first), and tell whether this copy's hooks are in it, and herdr's own Claude hook (and whether
+// the script it runs is there). Nothing else in the folder is read or written: no credentials, no
+// .claude.json.
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   BOARD_EVENTS,
@@ -12,6 +13,7 @@ import {
   ourCommands,
   planSettings,
 } from '../core/install-plan.ts'
+import { type HerdrHookFacts, herdrHookScript } from '../core/setup.ts'
 
 /** settings.json as read: its text (null when there is none), parsed (null when none or broken), and what is wrong with it. */
 export interface SettingsRead {
@@ -107,4 +109,34 @@ export function hooksInstalled(dir: string, files: Pick<InstallPaths, 'hook' | '
   )
   seen.set(file, { mtimeMs, hook: files.hook, installed })
   return installed
+}
+
+/** herdr's own Claude hook in these settings (core/setup.ts herdrHookScript): the script it runs, and whether that file is there. */
+export function herdrHookOf(settings: unknown): HerdrHookFacts {
+  const script = herdrHookScript(settings)
+  return { script, found: !!script && existsSync(script) }
+}
+
+// The script herdr's hook runs, per settings.json: read again only when its modification time changed.
+const herdrSeen = new Map<string, { mtimeMs: number; script: string | null }>()
+
+/**
+ * herdr's own Claude hook is in <dir>/settings.json and the script it runs is there; settings.json
+ * cached by its mtime, the script looked for each time.
+ */
+export function herdrHookInstalled(dir: string): boolean {
+  const file = join(dir, 'settings.json')
+  let mtimeMs: number
+  try {
+    mtimeMs = statSync(file).mtimeMs
+  } catch {
+    herdrSeen.delete(file)
+    return false
+  }
+  let last = herdrSeen.get(file)
+  if (!last || last.mtimeMs !== mtimeMs) {
+    last = { mtimeMs, script: herdrHookScript(readSettings(dir).settings) }
+    herdrSeen.set(file, last)
+  }
+  return !!last.script && existsSync(last.script)
 }

@@ -14,6 +14,7 @@ import {
   boardFiles,
   boardKey,
   checkSetup,
+  herdrHookScript,
   type ProfileSettings,
   report,
   type SetupCheck,
@@ -148,6 +149,29 @@ describe('herdr’s config', () => {
     assert.equal(tomlValue(toml, 'ui', 'delivery'), undefined)
     assert.equal(tomlValue('[ui.toast]\n# delivery = "herdr"\n', 'ui.toast', 'delivery'), undefined)
   })
+
+  test('herdr’s own Claude hook: the script its SessionStart entry runs, quoted or not', () => {
+    const at = (event: string, command: string): string | null =>
+      herdrHookScript({
+        hooks: {
+          [event]: [{ matcher: '^(startup|resume|clear|compact|fork)$', hooks: [{ type: 'command', command }] }],
+        },
+      })
+    const ps1 = 'C:\\Users\\u\\.claude-work\\hooks\\herdr-agent-state.ps1'
+    // As herdr 0.9.5 writes it on Windows.
+    expect(at('SessionStart', `powershell -NoProfile -ExecutionPolicy Bypass -File "${ps1}" session`)).toBe(ps1)
+    expect(at('SessionStart', "sh '/home/u/.claude/hooks/herdr-agent-state.sh' session")).toBe(
+      '/home/u/.claude/hooks/herdr-agent-state.sh',
+    )
+    expect(at('SessionStart', '/home/u/.claude/hooks/herdr-agent-state.sh session')).toBe(
+      '/home/u/.claude/hooks/herdr-agent-state.sh',
+    )
+    // Someone else's hook, or herdr's on another event: none.
+    expect(at('SessionStart', 'python recall.py')).toBeNull()
+    expect(at('Stop', `powershell -File "${ps1}" session`)).toBeNull()
+    for (const settings of [{}, null, undefined, { hooks: [] }, { hooks: { SessionStart: 'x' } }])
+      expect(herdrHookScript(settings)).toBeNull()
+  })
 })
 
 // What gatherFacts would find on a computer set up all the way, to spoil one thing at a time.
@@ -184,6 +208,7 @@ function facts(over: Partial<SetupFacts> = {}): SetupFacts {
       args: [],
     },
     skill: { file: 'C:\\Users\\u\\.claude\\skills\\herdr-agents\\SKILL.md', installed: SKILL_TEXT, source: SKILL_TEXT },
+    herdrHook: { script: 'C:\\Users\\u\\.claude\\hooks\\herdr-agent-state.ps1', found: true },
     ...over,
   }
 }
@@ -205,6 +230,7 @@ describe('doctor', () => {
         ['statusline', 'ok'],
         ['spawn-agent', 'ok'],
         ['skill', 'ok'],
+        ['herdr', 'ok'],
         ['key', 'ok'],
         ['wake', 'ok'],
         ['launch', 'ok'],
@@ -396,7 +422,9 @@ describe('the checks per profile', () => {
   ): ProfileSettings => {
     const dir = id === 'default' ? 'C:\\Users\\u\\.claude' : `C:\\Users\\u\\.claude-${id}`
     const skill = { file: `${dir}\\skills\\herdr-agents\\SKILL.md`, installed, source: SKILL_TEXT }
-    return { id, title, dir, exists, settingsFile: `${dir}\\settings.json`, settings, settingsError: '', skill }
+    const herdrHook = { script: `${dir}\\hooks\\herdr-agent-state.ps1`, found: true }
+    const settingsFile = `${dir}\\settings.json`
+    return { id, title, dir, exists, settingsFile, settings, settingsError: '', skill, herdrHook }
   }
   const one = profile('default', 'Default', FACTS.settings)
   const privateOk = profile('default', 'Private', FACTS.settings)
@@ -421,6 +449,8 @@ describe('the checks per profile', () => {
       'spawn-agent',
       'skill:default',
       'skill:work',
+      'herdr:default',
+      'herdr:work',
       'key',
       'wake',
       'launch',
@@ -464,7 +494,7 @@ describe('the checks per profile', () => {
       level: 'warn',
       title: 'Work: its folder C:\\Users\\u\\.claude-work is not there',
     })
-    expect(checks.some(c => /^(hooks|statusline|skill):work$/.test(c.id))).toBe(false)
+    expect(checks.some(c => /^(hooks|statusline|skill|herdr):work$/.test(c.id))).toBe(false)
     expect(todo(checks).map(c => c.id)).toEqual(['profile:work'])
     expect(translator('ru')('setup.profile.missing', { profile: 'Work', dir: 'D:\\w' })).not.toBe(
       'Work: its folder D:\\w is not there',
@@ -507,5 +537,49 @@ describe('the checks per profile', () => {
     expect(check(checkSetup({ ...FACTS, profiles: [privateOk, work] }, translator('ru')), 'skill:work').title).toBe(
       'Work: Нет скилла herdr-agents для агентов',
     )
+  })
+
+  test('herdr’s own Claude hook: one profile, one check; more, one per profile whose folder is there, by name', () => {
+    // One profile: in its place, after the skill (the top-level facts).
+    expect(checkSetup({ ...FACTS, profiles: [one] }).filter(c => c.id.startsWith('herdr'))).toEqual([
+      {
+        id: 'herdr',
+        level: 'ok',
+        title: 'herdr’s Claude hook',
+        detail: 'herdr learns from it which conversation each session has',
+        fix: '',
+        code: '',
+      },
+    ])
+    expect(check(checkSetup(facts({ herdrHook: { script: null, found: false } })), 'herdr')).toMatchObject({
+      level: 'warn',
+      title: 'herdr’s Claude hook is missing',
+    })
+    // Several: each its own. No entry in settings.json, or an entry whose script is gone: missing.
+    const work = { ...profile('work', 'Work', {}), herdrHook: { script: null, found: false } }
+    const games = {
+      ...profile('games', 'Games', {}),
+      herdrHook: { script: 'C:\\Users\\u\\.claude-games\\hooks\\herdr-agent-state.ps1', found: false },
+    }
+    const gone = profile('old', 'Old', null, false)
+    const checks = checkSetup({ ...FACTS, profiles: [privateOk, work, games, gone] })
+    expect(checks.filter(c => c.id.startsWith('herdr')).map(c => [c.id, c.level, c.title])).toEqual([
+      ['herdr:default', 'ok', 'Private: herdr’s Claude hook'],
+      ['herdr:work', 'warn', 'Work: herdr’s Claude hook is missing'],
+      ['herdr:games', 'warn', 'Games: herdr’s Claude hook is missing'],
+    ])
+    expect(check(checks, 'herdr:work')).toMatchObject({
+      detail:
+        'Without it herdr does not see which conversation a session has: its card shows no conversation and no profile.',
+      fix: 'Run the install:',
+      code: 'herdr plugin action invoke agent-board.install',
+    })
+    expect(setupSummary(checks).sig).toContain('herdr:work:warn:Work: herdr’s Claude hook is missing')
+    // In Russian: the profile's name, then the check.
+    expect(check(checkSetup({ ...FACTS, profiles: [privateOk, work] }, translator('ru')), 'herdr:work').title).toBe(
+      'Work: Нет хука Claude для herdr',
+    )
+    // Facts without it (an older gatherFacts): no check for it.
+    expect(checkSetup(facts({ herdrHook: undefined })).some(c => c.id.startsWith('herdr'))).toBe(false)
   })
 })

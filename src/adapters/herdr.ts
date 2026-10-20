@@ -60,12 +60,13 @@ export interface HerdrSnapshot {
 
 const asString = (v: unknown): string => (typeof v === 'string' ? v : '')
 
-function run(args: string[], timeoutMs: number | undefined): Promise<string> {
+/** `env`: herdr's environment instead of this process's. */
+function run(args: string[], timeoutMs: number | undefined, env?: NodeJS.ProcessEnv): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       BIN,
       args,
-      { encoding: 'utf8', timeout: timeoutMs ?? 0, windowsHide: true, maxBuffer: 32 << 20 },
+      { encoding: 'utf8', timeout: timeoutMs ?? 0, windowsHide: true, maxBuffer: 32 << 20, ...(env && { env }) },
       (err, stdout, stderr) => {
         if (!err) return resolve(stdout)
         const out = `${asString(stdout)}${asString(stderr)}`.trim()
@@ -261,6 +262,16 @@ export async function tabCreateRoot(
   const pane = isRecord(answer) ? stringAt(answer.root_pane, 'pane_id') : null
   if (!isRecord(answer) || !pane) throw new HerdrError(args, undefined, 'no pane in its answer')
   return { pane, terminal: stringAt(answer.root_pane, 'terminal_id') }
+}
+
+/**
+ * herdr's Claude integration (its own SessionStart hook, from which herdr learns the session a
+ * pane runs) into the Claude profile folder `dir`: herdr writes it into the folder
+ * CLAUDE_CONFIG_DIR names, so that is `dir` and the rest of the environment this process's.
+ * What herdr printed.
+ */
+export function claudeIntegrationInstall(dir: string, timeoutMs = 30_000): Promise<string> {
+  return run(['integration', 'install', 'claude'], timeoutMs, { ...process.env, CLAUDE_CONFIG_DIR: dir })
 }
 
 /** A herdr notification with its "request" sound; what herdr prints is not read. */

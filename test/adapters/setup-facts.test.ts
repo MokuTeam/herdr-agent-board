@@ -153,6 +153,7 @@ describe('gatherFacts', () => {
           settingsError: '',
           // ROOT_A is no copy of the board on this disk: no skill of its own to compare with.
           skill: { file: join(at('.claude'), 'skills', 'herdr-agents', 'SKILL.md'), installed: null, source: null },
+          herdrHook: { script: null, found: false },
         },
       ])
     } finally {
@@ -193,6 +194,57 @@ describe('gatherFacts', () => {
         ['default', { file: skillOf('.claude'), installed: source, source }],
       ])
       expect(two.skill).toEqual({ file: skillOf('.claude-work'), installed: theirs, source })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('herdr’s own Claude hook in each shown profile, the first one’s at the top', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'board-setup-'))
+    try {
+      const home = join(dir, 'home')
+      const scriptOf = (folder: string): string => join(home, folder, 'hooks', 'herdr-agent-state.ps1')
+      const entry = (folder: string): string =>
+        JSON.stringify({
+          hooks: {
+            SessionStart: [
+              {
+                hooks: [
+                  {
+                    type: 'command',
+                    command: `powershell -NoProfile -ExecutionPolicy Bypass -File "${scriptOf(folder)}" session`,
+                  },
+                ],
+              },
+            ],
+          },
+        })
+      // ~/.claude: herdr's, as herdr writes it; work: none; games: the entry, its script gone.
+      for (const [folder, settings, script] of [
+        ['.claude', entry('.claude'), true],
+        ['.claude-work', '{}', false],
+        ['.claude-games', entry('.claude-games'), false],
+      ] as const) {
+        mkdirSync(join(home, folder, 'hooks'), { recursive: true })
+        writeFileSync(join(home, folder, 'settings.json'), settings)
+        if (script) writeFileSync(scriptOf(folder), '# installed by herdr\n')
+      }
+      const options = { root: ROOT_A, env: { PATH: join(dir, 'bin') }, platform: 'win32', home }
+      // One profile: ~/.claude's.
+      const one = await gatherFacts({ wakeUrl: null }, options)
+      expect(one.herdrHook).toEqual({ script: scriptOf('.claude'), found: true })
+      const profiles = [
+        { id: 'work', title: 'Work', dir: join(home, '.claude-work') },
+        { id: 'games', title: 'Games', dir: join(home, '.claude-games') },
+        { id: 'default', title: 'Private', dir: join(home, '.claude') },
+      ]
+      const two = await gatherFacts({ wakeUrl: null, profiles }, options)
+      expect(two.profiles?.map(p => [p.id, p.herdrHook])).toEqual([
+        ['work', { script: null, found: false }],
+        ['games', { script: scriptOf('.claude-games'), found: false }],
+        ['default', { script: scriptOf('.claude'), found: true }],
+      ])
+      expect(two.herdrHook).toEqual({ script: null, found: false })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
