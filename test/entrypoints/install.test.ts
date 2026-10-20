@@ -303,10 +303,15 @@ test('the agents’ skill per shown profile: someone else’s in one is left alo
   expect(stdout).toMatch(/^! {2}Work: Skill herdr-agents is not the board's$/m)
 }, 30_000)
 
-test('the skill install copies is upstream’s, word for word', () => {
+test('the skill install copies is upstream’s, word for word, but for what `board sleep` added', () => {
   // Pinned to the newest web merge ported, b2c5afa (#50 brought it, #51 changed it, #56 last, its `board archive`
-  // line; nothing since, up to f0cef14); a later upstream change moves the pin.
-  expect(read(root, 'skills', 'herdr-agents', 'SKILL.md')).toBe(oldSource('skills/herdr-agents/SKILL.md', 'b2c5afa'))
+  // line; nothing since, up to f0cef14); a later upstream change moves the pin. #60 added `board sleep`: its
+  // section, the line pointing to it and its words in the description, taken out here.
+  const ours = read(root, 'skills', 'herdr-agents', 'SKILL.md')
+    .replace(' put the sessions it coordinates to sleep in one call,', '')
+    .replace('- Putting sessions to sleep that you coordinate: see the next section, one call for all of them.\n', '')
+    .replace(/## Put the sessions you are done with to sleep\n[\s\S]*?(?=## Do something later\n)/, '')
+  expect(ours).toBe(oldSource('skills/herdr-agents/SKILL.md', 'b2c5afa'))
 })
 
 test('one shown profile’s settings.json that does not parse: nothing is written anywhere', async () => {

@@ -176,6 +176,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'err.restart.notClaude': '{name} is not a Claude session in herdr: it cannot be restarted',
     'err.restart.asleep': '{name} is asleep: waking it restarts it',
     'err.restart.mode': 'A restart always waits until the session is free',
+    'err.sleep.mode': 'Putting it to sleep always waits until the session is free',
     'err.restart.tasks':
       'background tasks (a command, a Monitor) kept running in it for 10 minutes; stop them or let them finish, then ask for the restart again',
     'err.restart.herdr': 'herdr did not answer ({why})',
@@ -341,6 +342,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'restart.noNote': 'No note',
     'restart.title.failed': 'The restart did not happen: {why}. The session hears it once it is free',
     'restart.entry': 'Restart',
+    'sleep.entry': 'Put to sleep once free',
     'sheet.asleep': 'Asleep',
     'panel.place': 'Where the panel sits',
     'panel.right': 'Docked right',
@@ -698,6 +700,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'err.restart.notClaude': '{name} не сессия Claude в herdr: перезапустить её нельзя',
     'err.restart.asleep': '{name} спит: разбудить её и значит перезапустить',
     'err.restart.mode': 'Перезапуск всегда ждёт, пока сессия освободится',
+    'err.sleep.mode': 'Усыпление ждёт, пока сессия освободится',
     'err.restart.tasks':
       'в ней 10 минут шли фоновые задачи (команда, Monitor); останови их или дождись конца, потом попроси перезапуск снова',
     'err.restart.herdr': 'herdr не ответил ({why})',
@@ -865,6 +868,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'restart.noNote': 'Без заметки',
     'restart.title.failed': 'Перезапуск не состоялся: {why}. Сессия узнает, когда освободится',
     'restart.entry': 'Перезапуск',
+    'sleep.entry': 'Уснёт, когда освободится',
     'sheet.asleep': 'Спит',
     'panel.place': 'Где стоит панель',
     'panel.right': 'Справа',

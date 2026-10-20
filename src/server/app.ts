@@ -31,6 +31,7 @@ import { scheduleRoute } from './routes/schedule.ts'
 import { sessionRoutes } from './routes/session.ts'
 import { categoriesRoute, profilesRoute, settingsRoute } from './routes/settings.ts'
 import { setupRoute } from './routes/setup.ts'
+import { sleepRoute } from './routes/sleep.ts'
 import { staticRoute } from './routes/static.ts'
 import { terminalRoute } from './routes/terminal.ts'
 import { createBroadcaster } from './sse.ts'
@@ -142,6 +143,8 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     revealRoute(board, events, reveals),
     settingsRoute(),
     scheduleRoute(refresh),
+    // Several sessions put to sleep at once, for agents (services/sleep.ts).
+    sleepRoute({ deps, items: board.items, refresh }),
     // The archive: its list, and archiving, bringing back or removing sessions (services/archive.ts).
     ...archiveRoutes({ deps, launches, items: board.items, find: board.find, refresh }),
     categoriesRoute(),
