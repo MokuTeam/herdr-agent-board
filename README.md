@@ -24,10 +24,12 @@ Start with the interface you need; there is no separate dashboard MCP server in 
   [Schedule lifecycle](skills/herdr-dashboard/references/schedule.md) and the
   [local HTTP API](skills/herdr-dashboard/references/http-api.md).
 
-The dashboard skill supplements the feature descriptions below. To use it outside this
-checkout, copy its **whole folder**, including `references/`, into your agent's skill directory.
+The README below remains the feature reference; the optional skill adds navigation, instance
+discovery and operation verification, not a second manual. To use it outside this checkout,
+copy its **whole folder**, including `references/`, into your agent's skill directory.
 The plugin installer continues to install only `herdr-agents`; adding the optional skill does
-not install hooks, change permissions or create schedules.
+not install hooks, change permissions or create schedules. See [Documentation maintenance](#documentation-maintenance)
+for what to update with a behavior change and how copied skills are refreshed.
 
 ## Setup
 
@@ -829,6 +831,10 @@ are files, and the board keeps running.
 
 - Times are local: `in 30m`, `in 1h30m`, `at 15:30` (the next 15:30), `tomorrow 9:00`,
   `fri 17:00`, `2026-10-20 14:00`, or an ISO time with a zone. A date alone means 9:00.
+- Unzoned one-off times use the creating CLI process's local zone; later cron occurrences use
+  the running scheduler's zone, while the browser displays its own local dates. Entries have
+  no per-entry IANA zone field. Setting `TZ` for just the CLI does not change the running
+  scheduler's clock; verify the saved next time in the intended zone.
 - Cron has the usual 5 fields (minute, hour, day of month, month, day of week; names, ranges,
   lists and steps) or `@hourly`, `@daily`, `@weekly`, `@monthly`, `@yearly`. Day fields work as
   in Vixie cron: two restricted ones are either-or, one that starts with `*` narrows the other.
@@ -847,7 +853,7 @@ are files, and the board keeps running.
   pane, not the shell's after a `cd`), and the prompt says it was set before `/clear`.
 - `--session` sets one for another session; the tag then names who set it,
   `[board reminder from <name>] <text>`, since the receiver takes it as a prompt. Control
-  characters are taken out of the text.
+  characters are taken out of the text; ordinary reminder text is truncated to 2000 characters.
 - A cron entry whose session stays gone for 3 runs in a row is dropped (logged as removed).
 - Delivery is at least once: a board that dies between typing the text and recording the run
   sends it again once its claim expires (5 minutes).
@@ -878,13 +884,20 @@ are files, and the board keeps running.
   under the same per-file lock as the cards, so an agent cancelling an entry while the
   scheduler marks its run never brings it back. Before sending, the scheduler claims the entry
   in its file: a second board running at the same time (a restart that overlaps) never sends a
-  run twice. `log.jsonl` there keeps the last 200 runs.
+  run twice. The API exposes recent log records; `log.jsonl` is periodically trimmed to the
+  newest 200, so it can contain more between compactions. It is not a permanent audit trail.
 - The scheduler runs in the web board's server (`src/services/scheduler.ts`), one per machine since
   only one board holds the port; with `web: false` the terminal board runs it.
 - At most 30 entries per session.
 - The terminal board shows `⏰` (`⏳` for one that waits until the session is free) and the soonest
   time by a card's age, the count in its header.
 - A restart (`board restart`, "Restart" on the web board) is an entry too: see [Restart](#restart).
+
+Create reminders with the CLI. The Schedule UI/API can cancel an entry or change On time /
+When free; a restart always waits. There is no schedule text/time editor, pause/resume, run-now
+or end-count/date option. To change text/time, check whether delivery is already in flight,
+cancel and verify removal, then create a replacement with a new ID. Cancellation cannot retract
+a delivered prompt. `board unschedule all` affects only the selected session, not every session.
 
 ## Restart
 
@@ -1282,3 +1295,47 @@ The code is in layers: `src/core` (pure rules, no I/O), `src/adapters` and `src/
 (files, processes, herdr, Claude's files, herdr-wake), `src/services` (what the board does with
 them), `src/server`, `src/tui` and `src/entrypoints` (the web server, the terminal board, the
 commands), `web/src` (the React page). Tests mirror them under `test/`.
+
+### Documentation maintenance
+
+Update documentation in the same change as the behavior it describes. README is the canonical
+feature manual; do not copy its command lists, defaults or limits into another guide. The dated
+files in `docs/superpowers/specs/` and `docs/superpowers/plans/` preserve design/implementation
+history, not a guarantee of current runtime behavior. This repository has no root AGENTS.md,
+CLAUDE.md or CONTRIBUTING.md; this section is its documentation contribution contract.
+
+| A change to… | Update / verify |
+| --- | --- |
+| User-visible behavior, configuration, profiles, UI, defaults or limitations | The relevant README feature section and its examples. |
+| CLI syntax | `USAGE` / parsing in `src/entrypoints/cli.ts`, README **Agents**, and any affected example. Check `board --help` in an isolated config/state environment. |
+| Schedule delivery, time handling, limits or recovery | README **Schedule** / **Restart**; update the dashboard schedule checklist only if the agent's decisions or verification change. |
+| Installed Claude-session workflow, hooks, spawn or restart | `skills/herdr-agents/SKILL.md` and affected installer/parity tests. Its current test compares the file byte-for-byte with a pinned historical revision; a deliberate behavior change must review that pin too. |
+| Dashboard task selection or diagnostic workflow | Keep `skills/herdr-dashboard/SKILL.md` a concise router; update only the relevant reference or canonical link. Do not add every feature to the router. |
+| HTTP route, payload, guard or UI request | Update implementation/types/tests together; check the API source index and its example if affected. There is no generated OpenAPI contract to update. |
+| Code/state discovery or skill distribution | The discovery reference and this section; verify the actual install/copy path. |
+
+Before merging, the author and reviewer should:
+
+- Identify the behavior change and affected canonical section, or state why no docs change is
+  needed (for example, an internal refactor with unchanged behavior).
+- Check examples against the current CLI/handlers/types. Use temporary config/state and fake
+  targets for mutating examples; never send a real message or schedule a job merely to test docs.
+- Check links, anchors, Markdown tables and skill frontmatter, and remove conflicting duplicate
+  statements. Compare exact API fields with both the handler and the UI caller.
+- Run the relevant existing tests, including the skill parity test when touching `herdr-agents`.
+  Record what actually ran; a passing type check is not proof that prose matches behavior.
+
+**Enforcement today:** this checkout has no PR template or GitHub Actions workflow. `bun run
+check` runs TypeScript and Biome on code, not Markdown. `bun test` includes installer/skill
+parity checks, but no general documentation-completeness or link check. The steps above are
+human author/reviewer responsibilities, not an automatic commit hook or a required CI gate.
+A future checker could flag broken local links, invalid frontmatter, missing referenced paths,
+or a behavior-file change with no docs change. It cannot prove that prose is correct or that a
+required workflow is fully covered. No such checker is installed by this documentation.
+
+**Copied skills:** a Git commit/push updates repository files only. The plugin installer copies
+`herdr-agents` when installation is explicitly run; it does not distribute `herdr-dashboard`.
+For a manually installed dashboard skill, record its source SHA and refresh the whole folder
+(including references) during an authorized update. Verify reload behavior for the receiving
+agent. Do not silently reinstall hooks or restart sessions to refresh documentation. Prefer
+README/source from the running checkout; online `main` may be ahead of that installation.

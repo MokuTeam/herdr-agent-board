@@ -5,7 +5,8 @@ description: "Inspect and operate the agent-board dashboard for Herdr: explain c
 
 # Herdr dashboard
 
-Use this as a router, not as a replacement for Herdr's own instructions.
+The README is the feature manual. Use this router to find the right section and the small
+workflow references; do not treat it as another full manual or as Herdr's own instructions.
 
 1. Identify the requested operation and the actual dashboard instance. A preview, the
    registered plugin, `board` on PATH and the session's hooks can point to different code or
@@ -22,7 +23,8 @@ Use this as a router, not as a replacement for Herdr's own instructions.
 3. For raw Herdr pane/agent/workspace control, run `herdr --skill` and follow its caller-context
    rules. For a Claude session's spawn, messaging, restart and MCP-recovery workflow, read the
    existing `herdr-agents` skill installed by this plugin. Do not invent another version of
-   those interfaces or assume optional messaging tools are present.
+   those interfaces. `ListAgents` / `SendMessage` belong to optional integrations, not to
+   agent-board itself; check tool availability before using them.
 4. Match the user's authorized scope. Inspection does not imply permission to create jobs,
    message another session, answer its permission dialog, install hooks or grant folder trust.
    Reuse authorization already given; do not add a confirmation roundtrip for an already
@@ -40,4 +42,6 @@ live state just to test the UI; use fixtures for inspection and tests.
 
 This optional skill is a complete folder: retain `references/` beside `SKILL.md` when copying
 it to an agent's skill directory. The plugin installer installs `herdr-agents`, not this folder.
-No script, MCP server, account access or schedule is installed by this documentation.
+A Git push does not refresh an installed copy. Follow README **Development → Documentation
+maintenance** and record the source SHA when copying the folder. No script, MCP server,
+account access or schedule is installed by this documentation.
