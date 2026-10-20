@@ -1,8 +1,10 @@
 // Settings (the gear in the toolbar; the old page's app.js #settings): the menu out of the button,
 // and what its items do — light or dark (models/theme.ts), the board's language for every board,
 // the panels' place and default size (components/panel/place.ts), whether sleeping sessions show,
-// and with more than one profile folder the Profiles panel. The items are models/settings-menu.ts.
+// with more than one profile folder the Profiles panel, and how sessions asleep in "Waiting" fold,
+// for every board. The items are models/settings-menu.ts.
 import { useEffect, useState } from 'react'
+import type { FoldMode } from '../../../src/core/fold-mode.ts'
 import { LANGUAGES, translator } from '../../../src/core/i18n/translator.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import { api, errorText } from '../api/client.ts'
@@ -38,6 +40,9 @@ export interface SettingsDeps {
   /** More than one profile folder is found (the payload's profiles): Profiles… is offered. */
   profiles(): boolean
   openProfiles(): void
+  /** How sessions asleep in "Waiting" fold, as the board says (null: it does not, none offered). */
+  fold(): FoldMode | null
+  chooseFold(mode: FoldMode): void
 }
 
 /** The menu out of the gear (`keyboard`: opened from the keyboard, the first item lit). */
@@ -53,6 +58,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       dock: deps.dock(),
       sleepers: deps.sleepers(),
       profiles: deps.profiles(),
+      fold: deps.fold(),
     })
     const source: MenuSource = keyboard ? 'keyboard' : deps.coarse() ? 'touch' : 'mouse'
     deps.menu.open(items, {
@@ -69,6 +75,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'reset') deps.resetPanelSize()
         else if (pick?.kind === 'sleepers') deps.toggleSleepers()
         else if (pick?.kind === 'profiles') deps.openProfiles()
+        else if (pick?.kind === 'fold') deps.chooseFold(pick.value)
       },
     })
   }
@@ -82,6 +89,26 @@ export interface LanguageDeps {
   /** POST /api/settings. */
   save(body: { language: string }): Promise<unknown>
   toast(text: string, error?: boolean): void
+}
+
+/** How sessions asleep in "Waiting" fold, for every board (config.json); the board shows it once the server has it. */
+export async function chooseFold(
+  mode: FoldMode,
+  {
+    t,
+    canEdit,
+    save,
+    toast,
+  }: Pick<LanguageDeps, 't' | 'canEdit' | 'toast'> & {
+    save(body: { foldWaiting: FoldMode }): Promise<unknown>
+  },
+): Promise<void> {
+  if (!canEdit) return toast(t('live.off'), true)
+  try {
+    await save({ foldWaiting: mode })
+  } catch (err) {
+    toast(errorText(err, t), true)
+  }
 }
 
 /** The board's language, for every board (the server keeps it in config.json). */
@@ -177,6 +204,16 @@ export function useSettingsMenu(menu: MenuEngine, openProfiles: () => void): Set
       toggleSleepers: () => latest.current.board.dispatch({ type: 'toggleSleepers' }),
       profiles: () => offersProfiles(latest.current.board.data?.profiles),
       openProfiles: () => latest.current.openProfiles(),
+      fold: () => latest.current.board.data?.foldWaiting ?? null,
+      chooseFold: mode => {
+        const { t, board } = latest.current
+        void chooseFold(mode, {
+          t,
+          canEdit: board.canEdit,
+          save: body => api.post('/api/settings', body),
+          toast: board.toast,
+        })
+      },
     })
     return settingsGear(menu, open, setExpanded)
   })

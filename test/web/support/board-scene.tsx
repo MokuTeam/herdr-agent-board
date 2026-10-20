@@ -1,5 +1,6 @@
 // One board scene drawn both ways: by the old page's code (support/old-board.ts) and by the
 // React board, inside the page's providers. Both read the clock as they draw.
+import type { FoldMode } from '../../../src/core/fold-mode.ts'
 import { translator } from '../../../src/core/i18n/translator.ts'
 import type { BoardCategory } from '../../../src/core/payload.ts'
 import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
@@ -43,6 +44,8 @@ export interface Scene {
   ref?: string
   /** Sessions on their way to the archive: off the board at once (#56). */
   archiving?: string[]
+  /** How sessions asleep in "Waiting" fold, as the board says (the React board's own); none: the default. */
+  foldWaiting?: FoldMode
 }
 
 export function drawBoth(scene: Scene): { old: Node[]; react: Node[] } {
@@ -53,6 +56,7 @@ export function drawBoth(scene: Scene): { old: Node[]; react: Node[] } {
     items: scene.items,
     categories: scene.categories ?? CATEGORIES,
     schedules: scene.schedules ?? [],
+    ...(scene.foldWaiting && { foldWaiting: scene.foldWaiting }),
   })
   const ui = {
     filter: scene.filter ?? 'all',

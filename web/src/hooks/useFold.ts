@@ -1,7 +1,8 @@
 // A folded card unfolding (models/fold.ts): its height springs between folded and whole from where
-// it is on screen, so pointing away midway turns it back without a jump, and the cards below stay
-// where they are while it lies over them. With reduced motion it does not move: its hidden lines
-// fade in and out. The card's class stays React's; the fold is `data-fold` and inline styles.
+// it is on screen, so pointing away midway turns it back without a jump. The cards below move with
+// it, or (`over`) stay where they are while it lies over them. With reduced motion it does not
+// move: its hidden lines fade in and out. The card's class stays React's; the fold is `data-fold`
+// (its mode while open) and inline styles.
 import { type FocusEvent, type PointerEvent, type RefObject, useEffect, useLayoutEffect, useRef } from 'react'
 import { type FoldWants, foldFrame, HOVER_INTENT_MS, hovers, tapUnfolds, wantsOpen } from '../models/fold.ts'
 import { reducedMotion } from '../models/spring.ts'
@@ -29,7 +30,8 @@ function natural(el: HTMLElement): number {
   return h
 }
 
-export function useFold(card: RefObject<HTMLElement | null>, on: boolean): Fold {
+export function useFold(card: RefObject<HTMLElement | null>, on: boolean, over: boolean): Fold {
+  const mode = over ? 'over' : 'push'
   const wants = useRef<FoldWants>({ hover: false, focus: false, touch: false })
   const size = useRef({ folded: 0, full: 0 })
   const hoverTimer = useRef(0)
@@ -41,9 +43,9 @@ export function useFold(card: RefObject<HTMLElement | null>, on: boolean): Fold 
   const paint = (h: number) => {
     const el = card.current
     if (!el) return
-    const f = foldFrame(h, size.current.folded, size.current.full)
+    const f = foldFrame(h, size.current.folded, size.current.full, el.dataset.fold === 'over')
     el.style.height = `${f.height}px`
-    el.style.marginBottom = `${f.marginBottom}px`
+    el.style.marginBottom = f.marginBottom ? `${f.marginBottom}px` : ''
     const m = more()
     if (m) m.style.opacity = String(f.opacity)
   }
@@ -79,7 +81,7 @@ export function useFold(card: RefObject<HTMLElement | null>, on: boolean): Fold 
       const opening = !el.dataset.fold
       if (opening) {
         size.current.folded = el.offsetHeight
-        el.dataset.fold = 'open'
+        el.dataset.fold = mode
       }
       size.current.full = natural(el)
       if (opening) spring.set(size.current.folded)
@@ -127,7 +129,8 @@ export function useFold(card: RefObject<HTMLElement | null>, on: boolean): Fold 
   useLayoutEffect(() => {
     const el = card.current
     if (!el) return
-    if (!on) {
+    // Another mode in Settings: flat at once, open the new way next time.
+    if (!on || (el.dataset.fold && el.dataset.fold !== mode)) {
       if (el.dataset.fold || wantsOpen(wants.current)) reset()
       return
     }

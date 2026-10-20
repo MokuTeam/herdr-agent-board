@@ -2,8 +2,9 @@
 // and the sessions it works with, and its buttons. A session asleep in the idle column is one line.
 // Motion and dragging are the board's (hooks/useFlip.ts, hooks/useCardDrag.ts); the card only says
 // what it is. One asleep in "Waiting" folds down to its name, what it waits for and its time, and
-// unfolds in place while pointed at (hooks/useFold.ts, styles/fold.css).
+// unfolds in place while pointed at, as the board's Settings say (hooks/useFold.ts, styles/fold.css).
 import { type FocusEvent, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, useRef } from 'react'
+import { foldModeOf } from '../../../src/core/fold-mode.ts'
 import type { Item, LaunchView, ToolCall } from '../../../src/core/types.ts'
 import { useFold } from '../hooks/useFold.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
@@ -69,9 +70,10 @@ export function Card(props: CardProps) {
   const { item, selected, busy, placeholder, launch, onPointerDown, onClick, onKeyDown, onRelated } = props
   const { ui, data } = useBoardContext()
   const launchOnly = !!item.launchOnly
-  const folding = !launchOnly && folds(item, data?.schedules)
+  const foldMode = foldModeOf(data?.foldWaiting)
+  const folding = !launchOnly && foldMode !== 'off' && folds(item, data?.schedules)
   const ref = useRef<HTMLElement>(null)
-  const fold = useFold(ref, folding)
+  const fold = useFold(ref, folding, foldMode === 'over')
   const className = classNames(
     'card',
     launchOnly && 'launch-card',

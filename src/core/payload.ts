@@ -1,6 +1,7 @@
 // The board as GET /api/board answers and the event stream pushes it (src/server/board-state.ts
 // builds it; the web board reads it). One type for both sides, so they cannot drift apart.
 import type { BoardArchive } from './archive.ts'
+import type { FoldMode } from './fold-mode.ts'
 import type { LimitWindow } from './limits.ts'
 import type { ScheduleEntry } from './schedule-rules.ts'
 import type { SetupSummary } from './setup.ts'
@@ -96,4 +97,6 @@ export interface BoardPayload {
   profiles?: BoardProfile[]
   /** The program `launch.claude` types (`claude` when it is unset or not valid): what a profile without a start command types. */
   claudeProgram?: string
+  /** How a session asleep in "Waiting" folds (core/fold-mode.ts); a board before the setting sent none. */
+  foldWaiting?: FoldMode
 }

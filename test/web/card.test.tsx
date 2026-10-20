@@ -171,6 +171,10 @@ describe('card markup parity', () => {
     same({ items: [item(fields)] }, 'e')
     const restart: ScheduleEntry = { id: 'r1', key: 'e', kind: 'restart', text: '', next: Date.now() + MIN }
     expect(bothCards({ items: [asleep], schedules: [restart] }, 'e').react).not.toContain('fold')
+    // Folded the same whichever way it unfolds; with folding off in Settings, the whole card as before.
+    for (const foldWaiting of ['push', 'over'] as const)
+      expect(bothCards({ items: [asleep], foldWaiting }, 'e').react).toBe(react)
+    same({ items: [asleep], foldWaiting: 'off' }, 'e')
   })
 
   test('asleep elsewhere: the full card with the moon for a dot', () => {
