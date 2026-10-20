@@ -2,7 +2,8 @@
 // works with (src/core/links.ts): titles, times, the order they are listed in, which session a
 // name in the thread is. No DOM here, so the tests can read it.
 import type { HelperStatus, PublicHelper, WorkflowRun } from '../../../src/core/helpers.ts'
-import type { Item } from '../../../src/core/types.ts'
+import type { Item, Translator } from '../../../src/core/types.ts'
+import { ago } from './card.ts'
 
 /** A helper's title: what it was asked to do in a few words, else its name or type. */
 export const helperTitle = (
@@ -46,6 +47,18 @@ export function took(h: Timed | null | undefined, now = Date.now()): number | nu
   if (!h?.startedAt) return null
   const end = h.status === 'running' ? now : (h.endedAt ?? h.activity ?? h.startedAt)
   return Math.max(0, end - h.startedAt)
+}
+
+/**
+ * How and when the newest helper ended, for the sheet's strip when none is at work ("stopped 1 d
+ * ago"): it takes the status mark's place, so a helper stopped long ago reads as past, not as one
+ * at work with a stop button (#113). Null for one at work or waiting for a message: it has not ended.
+ */
+export function endedLine(h: Timed, now: number, t: Translator): string | null {
+  if (h.status === 'running' || h.status === 'idle') return null
+  const at = h.endedAt ?? h.activity
+  const when = !at ? '' : now - at < 60_000 ? t('helpers.endedNow') : t('helpers.endedAgo', { when: ago(at, now, t) })
+  return t('helpers.ended', { status: t(`helpers.ended.${toneOf(h.status)}`), when }).trim()
 }
 
 /** A helper in the list, a level further in under the helper that started it. */

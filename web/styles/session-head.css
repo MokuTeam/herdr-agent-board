@@ -89,6 +89,10 @@
 /* A question form to answer: the fields give way first, as they did under the head. */
 #sheet .sheet-inner:has(.sheet-question .qa) .sheet-card { max-height: 64px; }
 
+/* The helpers strip with none at work: a helper that ended says how and when in its mark's place
+   ("stopped 1 d ago", web/src/models/helper-model.ts endedLine), quiet as the rows' clocks (#113). */
+#sheet .helper-last.past { grid-template-columns: 22px minmax(0, 1fr) auto; }
+
 /* A wide panel (upstream's container query puts the panel's parts side by side there). Tall
    enough, it reads as a narrow one: one column, the head across the top. */
 @container sheet (min-width: 680px) and (min-aspect-ratio: 5 / 4) and (height >= 600px) {

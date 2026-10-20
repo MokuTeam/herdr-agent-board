@@ -10,6 +10,7 @@ import {
   detailNotice,
   detailOnBoard,
   detailStamp,
+  doingLabel,
   draftKey,
   foldLine,
   headButtons,
@@ -330,9 +331,14 @@ test("a phone's folded head: what it waits for, else what it does, else its sess
   const t = translator('ru')
   const none = { sessions: [], reminders: 0 }
   expect(foldLine({ wait: 'ответа Bruce', doing: 'утро' }, none, t)).toEqual({ label: 'Ждёт', text: 'ответа Bruce' })
-  expect(foldLine({ doing: 'утро: обновляю доску' }, none, t)).toEqual({
+  expect(foldLine({ doing: 'утро: обновляю доску', status: 'working' }, none, t)).toEqual({
     label: 'Делает',
     text: 'утро: обновляю доску',
+  })
+  // Its turn over (it asks you, say): the task it stopped in, not what it does now (#113).
+  expect(foldLine({ doing: '#112: ревью и мёрж', status: 'idle' }, none, t)).toEqual({
+    label: 'Задача',
+    text: '#112: ревью и мёрж',
   })
   expect(foldLine({}, { sessions: ['board-pwa', 'Billing-master'], reminders: 1 }, t)).toEqual({
     label: 'Сессии',
@@ -340,4 +346,16 @@ test("a phone's folded head: what it waits for, else what it does, else its sess
   })
   expect(foldLine({}, { sessions: [], reminders: 2 }, t)).toEqual({ label: 'Расписание', text: '2' })
   expect(foldLine({}, none, t)).toBeNull()
+})
+
+test("the card's doing is what it does while a turn is on, else the task it stopped in under a newer ask or wait (#113)", () => {
+  const ru = translator('ru')
+  expect((['working', 'blocked'] as const).map(status => doingLabel({ status }, ru))).toEqual(['Делает', 'Делает'])
+  expect((['idle', 'done', 'sleeping'] as const).map(status => doingLabel({ status }, ru))).toEqual([
+    'Задача',
+    'Задача',
+    'Задача',
+  ])
+  expect(doingLabel({ status: 'working' }, t)).toBe('Doing')
+  expect(doingLabel({ status: 'idle' }, t)).toBe('Task')
 })
