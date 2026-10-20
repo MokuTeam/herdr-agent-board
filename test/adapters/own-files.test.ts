@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { ownFileCheck, ownFolders, realOrNearest } from '../../src/adapters/own-files.ts'
 import { configDir, stateDir, uploadsDir } from '../../src/adapters/paths.ts'
 import { DEFAULT_CONFIG } from '../../src/core/categories.ts'
@@ -155,25 +155,29 @@ describe('the board’s own files', () => {
         expect([path, own(path)]).toEqual([path, true])
     })
 
-    test('no spelling with a trailing dot or space is both readable and not own', () => {
-      const { state, own } = board()
-      const readable = (path: string): boolean => {
-        try {
-          readFileSync(path)
-          return true
-        } catch {
-          return false
-        }
-      }
+    test('a name spelled with trailing dots or spaces counts as the name Windows opens', () => {
+      const { home, state, own } = board()
+      const link = join(home, 'link')
+      symlinkSync(state, link, 'junction')
       for (const path of [
+        `${state}.`,
+        `${state} `,
+        `${state}. .`,
+        `${state}...`,
         `${state}\\access.json.`,
         `${state}\\access.json `,
         `${state}\\access.json. .`,
         `${state}.\\access.json`,
         `${state} \\access.json`,
         `${state}...\\access.json`,
+        `${state}.\\nope\\x.txt`,
+        `${state} \\nope\\x.txt`,
+        `${dirname(state)}.\\${basename(state)}\\access.json`,
+        `${link}.\\access.json`,
       ])
-        expect([path, own(path) || !readable(path)]).toEqual([path, true])
+        expect([path, own(path)]).toEqual([path, true])
+      expect(own(`${state}.\\uploads\\2026-10-20\\a.png`)).toBe(false)
+      expect(own(`${home}.\\x`)).toBe(false)
     })
 
     test.skipIf(!shortNames)(

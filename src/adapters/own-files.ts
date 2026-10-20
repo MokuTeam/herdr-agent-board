@@ -58,9 +58,17 @@ export function ownFolders(cfg: Config): OwnFolders {
 }
 
 /**
+ * The path with the trailing dots and spaces of each name dropped. Windows drops some of them
+ * (`<state>.\access.json` and `<state> ` open the state folder's) though Bun's file calls may not;
+ * this drops more, so a path counted under both spellings is counted under what Windows opens.
+ */
+const withoutTrailingDots = (path: string): string => path.replace(/[. ]+(?=[\\/]|$)/g, '')
+
+/**
  * Whether `target` is one of the board's own files. On win32 a UNC, device or stream path is,
  * before any file-system call (one on a UNC path would reach that server); so is a path whose
- * real path is one (a mapped network drive can name the board's folders as \\localhost\C$\…).
+ * real path is one (a mapped network drive can name the board's folders as \\localhost\C$\…),
+ * and so is a path that is the board's own once its names lose their trailing dots and spaces.
  * The folders are read at each call: config.json can change.
  */
 export function ownFileCheck(cfg: Config, platform: string = process.platform): (target: string) => boolean {
@@ -69,7 +77,14 @@ export function ownFileCheck(cfg: Config, platform: string = process.platform): 
     if (odd(target)) return true
     const full = resolve(target)
     if (odd(full)) return true
-    const real = realOrNearest(full)
-    return odd(real) || isOwnFile(real, ownFolders(cfg), platform)
+    const folders = ownFolders(cfg)
+    const own = (path: string): boolean => {
+      const real = realOrNearest(path)
+      return odd(real) || isOwnFile(real, folders, platform)
+    }
+    if (own(full)) return true
+    if (platform !== 'win32') return false
+    const plain = withoutTrailingDots(full)
+    return plain !== full && own(plain)
   }
 }
