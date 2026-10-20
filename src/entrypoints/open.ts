@@ -44,6 +44,7 @@ if (board && snap.panes.some(p => p.pane_id === board)) {
   } else {
     rememberReturn(snap, board)
     await herdr(['plugin', 'pane', 'focus', board])
+    await show(snap.panes.find(p => p.pane_id === board)?.tab_id)
     if (placement === 'workspace') await zoom(board)
   }
 } else {
@@ -90,8 +91,16 @@ if (board && snap.panes.some(p => p.pane_id === board)) {
     if (opened?.plugin_pane?.pane?.pane_id) {
       for (const tab of initialTab ? [initialTab] : leftovers) await herdr(['tab', 'close', tab]).catch(() => {})
     }
-    await zoom(opened?.plugin_pane?.pane?.pane_id)
+    const pane = opened?.plugin_pane?.pane?.pane_id
+    if (!background && pane) await show((await snapshot()).panes.find(p => p.pane_id === pane)?.tab_id)
+    await zoom(pane)
   }
+}
+
+// herdr (0.9.5) moves the attached windows' views only on workspace, tab, pane and agent focus:
+// `plugin pane focus` and `--focus` change the server's focus alone, and no window shows the board.
+async function show(tab: string | undefined): Promise<void> {
+  if (tab) await herdr(['tab', 'focus', tab]).catch(() => {})
 }
 
 /** Tabs of the workspace with panes, all of them herdr-sidebar panes: nothing of the user's in there. */
