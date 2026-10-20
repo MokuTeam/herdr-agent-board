@@ -63,6 +63,8 @@ if (args.includes('--codex')) {
     installCodexHooks(plan)
     installShims()
     console.log(`Codex hooks: SessionStart, UserPromptSubmit -> ${script} in ${plan.file}`)
+    if (Bun.which('bun') === null)
+      console.log('Codex hooks: warning: bun is not on PATH; add Bun to PATH before starting Codex.')
     console.log(
       'Codex: enable hooks if disabled (codex features enable hooks), then review and trust these hooks in /hooks.',
     )

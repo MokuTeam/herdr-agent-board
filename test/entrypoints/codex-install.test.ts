@@ -14,6 +14,14 @@ async function install(box: Sandbox, args = ['--codex'], extra = {}) {
   return { code: await proc.exited, stdout, stderr }
 }
 
+test('Codex install warns when the hook cannot find Bun on PATH', async () => {
+  const box = await sandbox()
+  const result = await install(box, ['--codex'], { PATH: box.dir })
+  expect(result.code).toBe(0)
+  expect(result.stdout).toContain('warning: bun is not on PATH')
+  expect(result.stdout).toContain('add Bun to PATH before starting Codex')
+})
+
 test('--codex installs only Codex hooks and commands, preserving herdr and the original backup on repeated installs', async () => {
   const box = await sandbox()
   const dir = join(box.dir, 'Codex дом 100%')

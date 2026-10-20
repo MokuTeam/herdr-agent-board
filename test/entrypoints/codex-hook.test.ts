@@ -58,6 +58,36 @@ test('first prompt briefs an already running Codex session; subsequent prompts c
   for (const field of ['ask', 'askSince', 'pin', 'pinAt', 'pinBusy']) expect(readCard(box)?.[field]).toBeUndefined()
 })
 
+test('the root hook refreshes a changed inherited Claude identity, including its removal', async () => {
+  const box = await sandbox()
+  configure(box)
+  for (const parent of ['previous-claude', 'current-claude', '']) {
+    await hook(box, 'UserPromptSubmit', 'hello', { CLAUDE_CODE_SESSION_ID: parent })
+    expect(readCard(box)?.codexParentClaude).toBe(parent || false)
+  }
+})
+
+test('a pure Codex root can update its board card without a Claude identity or prior hook record', async () => {
+  const box = await sandbox()
+  box.state({
+    'api snapshot': {
+      result: {
+        snapshot: {
+          panes: [{ pane_id: 'p1', agent: 'codex', agent_session: { value: ID } }],
+          tabs: [],
+          workspaces: [],
+        },
+      },
+    },
+  })
+  const result = await box.run('cli', {
+    args: ['doing', 'Codex root'],
+    env: { CODEX_THREAD_ID: ID, HERDR_PANE_ID: 'p1' },
+  }).exited
+  expect(result.code).toBe(0)
+  expect(readCard(box)?.doing).toBe('Codex root')
+})
+
 test('a reminder preserves ask; waiting sessions get the same wait reminder as Claude', async () => {
   const box = await sandbox()
   configure(box)
