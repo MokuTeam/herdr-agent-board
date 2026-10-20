@@ -3,7 +3,7 @@
 // its setTheme and its chooseLanguage, picked out of app.js there and run with the same state;
 // then the look kept in this browser before the page paints (web/src/theme.ts, as theme.js); and
 // what the gear says of its menu (aria-expanded) as menus come and go, on each side's own menu.
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import { createRef } from 'react'
 import { LANGUAGES, translator } from '../../src/core/i18n/translator.ts'
 import type { BoardProfile } from '../../src/core/payload.ts'
@@ -13,6 +13,7 @@ import { Toolbar } from '../../web/src/components/Toolbar.tsx'
 import {
   chooseFold,
   chooseLanguage,
+  endLogin,
   type SettingsDeps,
   settingsGear,
   settingsMenuFrom,
@@ -20,15 +21,19 @@ import {
 import type { MenuEntry } from '../../web/src/models/menu-model.ts'
 import type { Dock } from '../../web/src/models/panel-layout.ts'
 import { offersProfiles } from '../../web/src/models/profiles.ts'
+import { UNPAIRED } from '../../web/src/models/remote-page.ts'
 import { settingPicked, settingsMenu } from '../../web/src/models/settings-menu.ts'
 import { keptTheme, setTheme, themeNow } from '../../web/src/models/theme.ts'
 import { board, renderInBoard } from './support/board.tsx'
+import { type Answer, answers, restoreFetch, sent } from './support/fetch-answers.ts'
 import { byId } from './support/markup.ts'
 import { oldMenuSide, reactMenuSide } from './support/menu-sides.tsx'
 import { oldCode, oldFunction } from './support/old-app.ts'
 import { asDom } from './support/react-commit.ts'
 
 const SETTINGS_MERGE = '8c4b987'
+
+afterEach(restoreFetch)
 
 interface Scene {
   t: Translator
@@ -232,6 +237,95 @@ describe('the menu out of the gear', () => {
     expect(settingsMenu({ ...now, phones: true })[3]).toEqual({ id: 'phones', label: 'Phones…' })
     expect(settingsMenu({ ...now, t: translator('ru'), phones: true })[3]).toEqual({ id: 'phones', label: 'Телефоны…' })
     expect(settingPicked('phones')).toEqual({ kind: 'phones' })
+  })
+
+  test('a page signed in through the domain offers Sign out, last after a separator; it ends that login', async () => {
+    const now = {
+      t: translator('en'),
+      theme: 'auto',
+      languages: { en: 'English' },
+      canEdit: true,
+      dock: 'right' as const,
+      sleepers: true,
+      profiles: false,
+    }
+    const ids = (items: readonly MenuEntry[]) => items.map(i => ('id' in i ? i.id : '—'))
+    // Not through the domain: today's list exactly.
+    expect(ids(settingsMenu(now))).toEqual(['theme', 'lang', 'panel', '—', 'sleepers'])
+    expect(ids(settingsMenu({ ...now, signOut: false }))).toEqual(['theme', 'lang', 'panel', '—', 'sleepers'])
+    const items = settingsMenu({ ...now, signOut: true })
+    expect(ids(items)).toEqual(['theme', 'lang', 'panel', '—', 'sleepers', '—', 'signout'])
+    expect(items.at(-1)).toEqual({ id: 'signout', label: 'Sign out' })
+    expect(ids(settingsMenu({ ...now, fold: 'push', signOut: true }))).toEqual([
+      'theme',
+      'lang',
+      'panel',
+      '—',
+      'sleepers',
+      'fold',
+      '—',
+      'signout',
+    ])
+    expect(settingsMenu({ ...now, t: translator('ru'), signOut: true }).at(-1)).toEqual({
+      id: 'signout',
+      label: 'Выйти',
+    })
+    expect(settingPicked('signout')).toEqual({ kind: 'signout' })
+
+    // Picked from the gear: this page's login ends.
+    for (const signedIn of [false, true]) {
+      const calls: Call[] = []
+      let opened: readonly MenuEntry[] = []
+      let pick = (_id: string): void => {}
+      settingsMenuFrom({
+        menu: {
+          open: (items, options) => {
+            opened = items
+            pick = id => options.onPick?.(id, { id, label: '' })
+          },
+        },
+        t: () => translator('en'),
+        canEdit: () => true,
+        languages: () => ({ en: 'English' }),
+        dock: () => 'right',
+        sleepers: () => true,
+        root: () => ({ dataset: {} }),
+        coarse: () => false,
+        setTheme() {},
+        chooseLanguage() {},
+        placePanels() {},
+        resetPanelSize() {},
+        toggleSleepers() {},
+        profiles: () => false,
+        openProfiles() {},
+        fold: () => null,
+        chooseFold() {},
+        signOut: () => signedIn,
+        endLogin: () => void calls.push(['signout']),
+      })({ getBoundingClientRect: () => RECT } as unknown as HTMLElement, false)
+      expect(ids(opened).includes('signout')).toBe(signedIn)
+      pick('signout')
+      expect(calls).toEqual([['signout']])
+    }
+
+    // Ending it: POST /api/logout with the board's header (the tunnel listener refuses a POST
+    // without it), then the gate asks hello again (UNPAIRED), also when the board did not answer.
+    const replies: Answer[] = [[200, { ok: true }], new TypeError('Failed to fetch')]
+    for (const answer of replies) {
+      const posted = answers(answer)
+      let asked = 0
+      const again = () => void asked++
+      addEventListener(UNPAIRED, again)
+      try {
+        await endLogin()
+      } finally {
+        removeEventListener(UNPAIRED, again)
+      }
+      expect(sent(posted)).toEqual([['/api/logout', 'POST', '1', {}]])
+      const headers = posted[0]?.init?.headers as Record<string, string> | undefined
+      expect(headers?.['content-type']).toBe('application/json')
+      expect(asked).toBe(1)
+    }
   })
 
   test('how sessions asleep in "Waiting" fold: the board’s way checked; gray without the board; a pick saves it (the board’s own)', async () => {

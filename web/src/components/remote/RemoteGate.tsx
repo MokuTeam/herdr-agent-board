@@ -1,85 +1,168 @@
 // The board in a phone's browser (src/core/pwa.ts) before the board itself: a browser that is
 // not paired asks for access and waits until the computer approves it (Settings → Phones…), as
-// the app does; then its cookie carries the token and the board shows. No connection to the
-// computer: a screen that says what to check, and tries again by itself.
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+// the app does; then its cookie carries the token and the board shows. Through the owner's own
+// domain (src/core/tunnel.ts) hello says `auth: 'login'` instead: the login screen
+// (LoginScreen.tsx) until this browser is signed in. No connection to the computer: a screen that
+// says what to check, and tries again by itself.
+import { type ReactNode, useEffect, useRef, useState } from 'react'
+import type { Translator } from '../../../../src/core/types.ts'
 import { useLanguage, useT } from '../../i18n/I18nProvider.tsx'
+import { passkeysHere } from '../../models/passkey.ts'
 import {
   helloOf,
+  keepAuth,
   keepLanguage,
+  keptAuth,
   type PairStep,
   type PhoneHello,
   pairName,
   pollStep,
+  standalone,
   UNPAIRED,
 } from '../../models/remote-page.ts'
+import { Store, useStore } from '../../state/store.ts'
+import { LoginCard, type LoginDeps, type LoginFlow, type LoginState, loginFlow } from './LoginScreen.tsx'
 
-type Gate = 'checking' | 'offline' | 'refused' | 'pair' | 'board'
+export type Gate = 'checking' | 'offline' | 'refused' | 'pair' | 'login' | 'board'
+
+/** Where the gate stands, and what the last hello said. */
+export interface GateNow {
+  gate: Gate
+  hello: PhoneHello | null
+}
+
+export interface GateFlow {
+  view: Store<GateNow>
+  /** The login screen's own steps. */
+  login: LoginFlow
+  /** Asks the board what this browser may see (GET /api/hello). */
+  check(): Promise<void>
+  /** Checks now, and again as the page comes back or hears it was unpaired; offline, every so often. Returns how to stop. */
+  start(): () => void
+}
 
 const POLL_MS = 1500
 const RETRY_MS = 15_000
 
-/** The board once this browser is paired; the pairing or offline screen until then. */
+/** The gate's steps: hello asked, and what its answer opens. */
+export function gateFlow(deps: { follow(lang: string): void; credentials?: LoginDeps['credentials'] }): GateFlow {
+  const view = new Store<GateNow>({ gate: 'checking', hello: null })
+  const login = loginFlow({ signedIn: () => void check(), ...(deps.credentials && { credentials: deps.credentials }) })
+
+  const gateOf = (h: PhoneHello): Gate => {
+    if (h.auth === 'pair') return h.paired ? 'board' : 'pair'
+    if (!h.signedIn) {
+      // Not signed in, or no longer (Sign out, a login ended on the computer): from the start,
+      // unless this is the login screen already up, with what was typed into it.
+      if (view.get().gate !== 'login' || login.view.get().step !== 'start') login.reset()
+      return 'login'
+    }
+    // Signed in: the board, unless the offer of a passkey is still up (its next code is read in
+    // another app, and the page shown again asks hello again).
+    return login.offering() ? 'login' : 'board'
+  }
+
+  const check = async (): Promise<void> => {
+    let res: Response
+    let h: PhoneHello | null
+    try {
+      res = await fetch('/api/hello', { cache: 'no-store' })
+      h = helloOf(await res.json().catch(() => null))
+    } catch {
+      return view.set({ gate: 'offline', hello: view.get().hello })
+    }
+    if (!h) return view.set({ gate: res.status === 403 ? 'refused' : 'offline', hello: view.get().hello })
+    if (h.language) {
+      keepLanguage(h.language)
+      deps.follow(h.language)
+    }
+    keepAuth(h.auth)
+    view.set({ gate: gateOf(h), hello: h })
+  }
+
+  return {
+    view,
+    login,
+    check,
+    start() {
+      void check()
+      // Unpaired on the computer while the page was away, the stream said so, or Sign out: ask again.
+      const visible = () => {
+        if (!document.hidden) void check()
+      }
+      const again = () => void check()
+      addEventListener(UNPAIRED, again)
+      addEventListener('online', again)
+      addEventListener('pageshow', again)
+      document.addEventListener('visibilitychange', visible)
+      const timer = setInterval(() => {
+        if (view.get().gate === 'offline') void check()
+      }, RETRY_MS)
+      return () => {
+        removeEventListener(UNPAIRED, again)
+        removeEventListener('online', again)
+        removeEventListener('pageshow', again)
+        document.removeEventListener('visibilitychange', visible)
+        clearInterval(timer)
+      }
+    },
+  }
+}
+
+/** The board once this browser is paired or signed in; the pairing, login or offline screen until then. */
 export function RemoteGate({ children }: { children: ReactNode }) {
+  const t = useT()
   const { follow } = useLanguage()
-  const [gate, setGate] = useState<Gate>('checking')
-  const [hello, setHello] = useState<PhoneHello | null>(null)
   const followRef = useRef(follow)
   followRef.current = follow
+  const [gate] = useState(() => gateFlow({ follow: lang => followRef.current(lang) }))
+  const now = useStore(gate.view)
+  const login = useStore(gate.login.view)
+  useEffect(() => gate.start(), [gate])
+  return (
+    <GateView now={now} login={login} on={gate} t={t}>
+      {children}
+    </GateView>
+  )
+}
 
-  const check = useCallback(async () => {
-    try {
-      const res = await fetch('/api/hello', { cache: 'no-store' })
-      const h = helloOf(await res.json().catch(() => null))
-      if (!h) return setGate(res.status === 403 ? 'refused' : 'offline')
-      setHello(h)
-      if (h.language) {
-        keepLanguage(h.language)
-        followRef.current(h.language)
-      }
-      setGate(h.paired ? 'board' : 'pair')
-    } catch {
-      setGate('offline')
-    }
-  }, [])
+export interface GateViewProps {
+  now: GateNow
+  login: LoginState
+  on: Pick<GateFlow, 'check' | 'login'>
+  t: Translator
+  children: ReactNode
+}
 
-  useEffect(() => {
-    void check()
-    // Unpaired on the computer while the page was away, or the stream said so: ask again.
-    const visible = () => {
-      if (!document.hidden) void check()
-    }
-    const again = () => void check()
-    addEventListener(UNPAIRED, again)
-    addEventListener('online', again)
-    addEventListener('pageshow', again)
-    document.addEventListener('visibilitychange', visible)
-    return () => {
-      removeEventListener(UNPAIRED, again)
-      removeEventListener('online', again)
-      removeEventListener('pageshow', again)
-      document.removeEventListener('visibilitychange', visible)
-    }
-  }, [check])
-
-  useEffect(() => {
-    if (gate !== 'offline') return
-    const timer = setInterval(() => void check(), RETRY_MS)
-    return () => clearInterval(timer)
-  }, [gate, check])
-
+/** What the gate shows for where it stands. */
+export function GateView({ now, login, on, t, children }: GateViewProps) {
+  const { gate, hello } = now
   if (gate === 'board') return children
   if (gate === 'checking') return <div className="phone-screen" aria-busy="true" />
-  if (gate === 'pair') return <PairScreen computer={hello?.name || hello?.host || ''} onPaired={check} />
-  return <OfflineScreen refused={gate === 'refused'} computer={hello?.name ?? ''} onRetry={check} />
+  if (gate === 'pair') return <PairScreen computer={hello?.name || hello?.host || ''} onPaired={on.check} />
+  if (gate === 'login')
+    return (
+      <main className="phone-screen">
+        <div className="phone-card">
+          <AppIcon />
+          <LoginCard state={login} t={t} passkeys={passkeysHere()} on={on.login} />
+        </div>
+        {!standalone() && <p className="phone-foot">{t('pair.install')}</p>}
+      </main>
+    )
+  return (
+    <OfflineScreen
+      refused={gate === 'refused'}
+      domain={keptAuth() === 'login'}
+      computer={hello?.name ?? ''}
+      onRetry={on.check}
+    />
+  )
 }
 
 function AppIcon() {
   return <img className="phone-icon" src="icon.svg" alt="" width={72} height={72} />
 }
-
-const standalone = (): boolean =>
-  matchMedia('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone === true
 
 function PairScreen({ computer, onPaired }: { computer: string; onPaired: () => void }) {
   const t = useT()
@@ -166,14 +249,30 @@ function PairScreen({ computer, onPaired }: { computer: string; onPaired: () => 
   )
 }
 
-function OfflineScreen({ refused, computer, onRetry }: { refused: boolean; computer: string; onRetry: () => void }) {
+/** No connection, or not let in; through the domain (`domain`) the texts say nothing of Tailscale. */
+function OfflineScreen({
+  refused,
+  domain,
+  computer,
+  onRetry,
+}: {
+  refused: boolean
+  domain: boolean
+  computer: string
+  onRetry: () => void
+}) {
   const t = useT()
+  const about = refused
+    ? t(domain ? 'login.refused' : 'pair.refused')
+    : domain
+      ? t('offline.aboutDomain')
+      : t('offline.about', { computer: computer || t('offline.computer') })
   return (
     <main className="phone-screen">
       <div className="phone-card">
         <AppIcon />
         <h1>{t('offline.title')}</h1>
-        <p>{refused ? t('pair.refused') : t('offline.about', { computer: computer || t('offline.computer') })}</p>
+        <p>{about}</p>
         <button type="button" className="button primary phone-action" onClick={onRetry}>
           {t('offline.retry')}
         </button>
