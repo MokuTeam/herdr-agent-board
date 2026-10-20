@@ -546,3 +546,17 @@ test('a start command the board refuses is toasted', async () => {
   expect(sent(calls)).toEqual([['/api/profiles', 'POST', '1', { op: 'update', id: 'work', command: '-cld' }]])
   expect(panel.toasts).toEqual([[refusal, true]])
 })
+
+test('Shown on a hidden profile: what its install could not do is toasted, as Install’s own', async () => {
+  // The board shows it and installs into it; herdr could not put its hook in (services/profiles.ts).
+  const failed =
+    'The board’s hooks are in Gamedev, but herdr did not put in its own: herdr integration install: no such command'
+  const calls = answers([409, { ok: false, error: failed }])
+  const panel = livePanel(dataOf([PRIVATE, WORK, GAMEDEV]))
+  const [shown] = panel.pick('.prof-row[data-id="gamedev"]').querySelectorAll('.profile-shown button')
+  if (!shown) throw new Error('no Shown')
+  await panel.world.fire(shown, 'click')
+  for (let i = 0; i < 4; i++) await panel.world.flush()
+  expect(sent(calls)).toEqual([['/api/profiles', 'POST', '1', { op: 'update', id: 'gamedev', hidden: false }]])
+  expect(panel.toasts).toEqual([[failed, true]])
+})

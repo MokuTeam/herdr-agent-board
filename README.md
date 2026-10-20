@@ -47,8 +47,8 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
    parse stops it before anything is written. It never touches credentials, `.claude.json` or
    anything else in a profile folder beyond `settings.json`, its backup and
    `skills/herdr-agents` (herdr writes its own `hooks/herdr-agent-state.ps1` and its entry). A
-   profile shown later gets its hooks and the skill from the install action again, or from
-   Install in the Profiles panel.
+   profile shown later in the Profiles panel gets its hooks, the skill and herdr's hook then and
+   there; the install action run again, or Install in that panel, puts them in too.
 
    A session brought back from the archive runs in its own profile again, hidden or not, never in
    another: the one its card reports (or, on a card from before profiles, the only profile
@@ -273,7 +273,9 @@ it, Esc puts it back, empty clears it; its placeholder is what is typed without 
 (`~` is the home folder; the folder must be there), and, for a shown profile whose `settings.json`
 lacks the board's hooks or herdr's, a note with Install, which writes the hooks, the status line
 and the agents' skill there and has herdr put in its own, as the [install](#setup) does, and
-checks the setup again at once. Hiding a
+checks the setup again at once. Showing a hidden profile does the same Install right away, unless
+both hooks are there already; what it could not do is said as Install says it, and the profile
+stays shown, with the note while a hook is missing. Hiding a
 profile takes it out of the switch, out of the profiles a session can be started in, and out of
 Install. Its running sessions still show, with their tag, and their agents can still start helpers
 in it.

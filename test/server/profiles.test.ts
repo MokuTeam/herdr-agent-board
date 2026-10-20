@@ -337,6 +337,143 @@ test('Install from the panel shows at once: the board goes out with the hooks th
   expect(checked.setup?.sig).toContain('hooks:default:error')
 }, 20_000)
 
+test('showing a hidden profile installs into it as Install does, and the board goes out with its hooks there', async () => {
+  const box = await boardWith({ '.claude': 'settings.json', '.claude-work': 'settings.json' })
+  // herdr puts its hook in only once the test lets it: the board has gone out with the show by then.
+  const gate = join(box.dir, 'herdr-may-install')
+  box.state({ 'api snapshot': EMPTY, 'integration install claude': { waitFor: gate, claudeHook: true } })
+  const home = join(box.dir, 'home')
+  const dir = (name: string): string => join(home, name)
+  // The board reads config.json as it changes, as the real one does (TEST_LIVE_CONFIG).
+  const cfg = {
+    language: 'en',
+    categories: [{ id: 'other', title: 'Other', color: 'gray' }],
+    wakeUrl: null,
+    refreshSec: 3600,
+    profiles: [
+      { id: 'default', title: 'Private', dir: dir('.claude'), color: 'indigo', hidden: false },
+      { id: 'work', title: 'Work', dir: dir('.claude-work'), color: 'teal', hidden: true },
+    ],
+  }
+  mkdirSync(join(configOf(box), '..'), { recursive: true })
+  writeFileSync(configOf(box), JSON.stringify(cfg))
+  const { url } = await serveBoard(box, cfg, { TEST_LIVE_CONFIG: '1' })
+  const post = async (body: unknown): Promise<[number, unknown]> => {
+    const res = await fetch(`${url}/api/profiles`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify(body),
+    })
+    return [res.status, await res.json()]
+  }
+  /** work as the board last sent it (no refresh runs by itself here: refreshSec 3600). */
+  const work = async () =>
+    ((await (await fetch(`${url}/api/board`)).json()) as BoardPayload).profiles?.find(p => p.id === 'work')
+  const once = async (done: (p: Awaited<ReturnType<typeof work>>) => boolean) => {
+    for (let i = 0; i < 250; i++) {
+      const p = await work()
+      if (done(p)) return p
+      await Bun.sleep(20)
+    }
+    throw new Error(`the board did not send work so: ${JSON.stringify(await work())}`)
+  }
+  const integrations = () => box.calls().filter(c => c[0] === 'integration')
+
+  const shown = post({ op: 'update', id: 'work', hidden: false })
+  // The show is saved and goes out at once; the board's hooks are in, herdr's not yet.
+  expect((await once(p => p?.hidden === false))?.hooks).toBe(false)
+  expect(profilesIn(box).find(p => p.id === 'work')?.hidden).toBe(false)
+  writeFileSync(gate, '')
+  expect(await shown).toEqual([200, { ok: true }])
+  // The board went out again after it, the note gone: no refresh did that here.
+  expect((await work())?.hooks).toBe(true)
+  // What Install puts there: the board's hooks, the agents' skill, and herdr's own hook in work's folder.
+  const settings = JSON.parse(readFileSync(join(dir('.claude-work'), 'settings.json'), 'utf8'))
+  expect(settings.hooks.UserPromptSubmit).toHaveLength(1)
+  expect(JSON.stringify(settings.hooks.SessionStart.at(-1))).toContain('herdr-agent-state.ps1')
+  expect(readFileSync(join(dir('.claude-work'), 'skills', 'herdr-agents', 'SKILL.md'), 'utf8')).toBe(
+    readFileSync(join(root, 'skills', 'herdr-agents', 'SKILL.md'), 'utf8'),
+  )
+  expect(existsSync(join(dir('.claude-work'), 'hooks', 'herdr-agent-state.ps1'))).toBe(true)
+  expect(integrations()).toEqual([['integration', 'install', 'claude']])
+  expect(readdirSync(dir('.claude'))).toEqual(['settings.json'])
+
+  // Hidden, renamed, recolored, given a start command, shown again with everything in already:
+  // nothing more is installed.
+  const before = readFileSync(join(dir('.claude-work'), 'settings.json'), 'utf8')
+  for (const edit of [
+    { op: 'update', id: 'work', hidden: true },
+    { op: 'update', id: 'work', title: 'Job', color: 'mint', command: 'cld-work' },
+    { op: 'update', id: 'work', hidden: false },
+  ])
+    expect(await post(edit)).toEqual([200, { ok: true }])
+  expect(readFileSync(join(dir('.claude-work'), 'settings.json'), 'utf8')).toBe(before)
+  expect(integrations()).toHaveLength(1)
+}, 20_000)
+
+test('a show stays saved when its install fails, which is its answer; an edit that shows nothing installs nothing', async () => {
+  const box = await boardWith({ '.claude': 'settings.json', '.claude-work': 'settings.json' })
+  box.state({ 'api snapshot': EMPTY, 'integration install claude': { error: 'no such command' } })
+  const home = join(box.dir, 'home')
+  const dir = (name: string): string => join(home, name)
+  const profiles = [
+    { id: 'default', title: 'Private', dir: dir('.claude'), color: 'indigo', hidden: false },
+    { id: 'work', title: 'Work', dir: dir('.claude-work'), color: 'teal', hidden: true },
+    // Listed, hidden, and its folder not there.
+    { id: 'old', title: 'Old', dir: dir('.claude-old'), color: 'pink', hidden: true },
+  ]
+  // config.json too: the panel's edits go there.
+  mkdirSync(join(configOf(box), '..'), { recursive: true })
+  writeFileSync(configOf(box), JSON.stringify({ language: 'en', profiles }))
+  const { url } = await serveBoard(box, { language: 'en', profiles })
+  const post = async (body: unknown): Promise<[number, unknown]> => {
+    const res = await fetch(`${url}/api/profiles`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify(body),
+    })
+    return [res.status, await res.json()]
+  }
+  const hiddenOf = (id: string) => profilesIn(box).find(p => p.id === id)?.hidden
+  const integrations = () => box.calls().filter(c => c[0] === 'integration')
+
+  // Shown already, its hooks not in: Install is for that. A hidden one renamed: nothing either.
+  expect(await post({ op: 'update', id: 'default', hidden: false })).toEqual([200, { ok: true }])
+  expect(await post({ op: 'update', id: 'work', title: 'Job' })).toEqual([200, { ok: true }])
+  expect(readdirSync(dir('.claude'))).toEqual(['settings.json'])
+  expect(readdirSync(dir('.claude-work'))).toEqual(['settings.json'])
+  expect(integrations()).toEqual([])
+
+  // herdr cannot: the board's hooks go in, the show stays, and the answer says what did not.
+  const failed: [number, unknown] = [
+    409,
+    {
+      ok: false,
+      error:
+        'The board’s hooks are in Job, but herdr did not put in its own: herdr integration install: no such command',
+    },
+  ]
+  expect(await post({ op: 'update', id: 'work', hidden: false })).toEqual(failed)
+  expect(hiddenOf('work')).toBe(false)
+  const settings = JSON.parse(readFileSync(join(dir('.claude-work'), 'settings.json'), 'utf8'))
+  expect(settings.hooks.UserPromptSubmit).toHaveLength(1)
+  expect(integrations()).toHaveLength(1)
+  // Hidden, then shown again without herdr's hook: the install runs again.
+  expect(await post({ op: 'update', id: 'work', hidden: true })).toEqual([200, { ok: true }])
+  expect(integrations()).toHaveLength(1)
+  expect(await post({ op: 'update', id: 'work', hidden: false })).toEqual(failed)
+  expect(integrations()).toHaveLength(2)
+
+  // A folder that is not there: shown all the same, nothing made, and said as Install says it.
+  expect(await post({ op: 'update', id: 'old', hidden: false })).toEqual([
+    409,
+    { ok: false, error: `There is no folder ${dir('.claude-old')}` },
+  ])
+  expect(hiddenOf('old')).toBe(false)
+  expect(existsSync(dir('.claude-old'))).toBe(false)
+  expect(integrations()).toHaveLength(2)
+}, 20_000)
+
 test('a pane record herdr no longer has is dropped at the next refresh', async () => {
   const box = await boardWith({ '.claude': 'settings.json', '.claude-work': 'settings.json' })
   const file = join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board', 'profile-panes.json')
