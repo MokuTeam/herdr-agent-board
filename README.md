@@ -11,6 +11,24 @@ of each transcript (ai-title, last prompt), herdr-wake's `/sleeping`, and the ca
 what only the agent knows: its category, what it works on, what it waits for. Agents keep it
 current with the `board` command; a SessionStart / UserPromptSubmit hook tells each session how.
 
+## Agent documentation
+
+Start with the interface you need; there is no separate dashboard MCP server in this plugin.
+
+- `herdr --skill`: the installed Herdr CLI's pane, agent and workspace controls.
+- [`herdr-agents`](skills/herdr-agents/SKILL.md): the session workflow installed by this plugin
+  (spawn, messaging, reminders, restart and MCP recovery).
+- [`herdr-dashboard`](skills/herdr-dashboard/SKILL.md): an optional, concise router for dashboard
+  [discovery](skills/herdr-dashboard/references/discovery.md),
+  [operations and configuration](skills/herdr-dashboard/references/operations.md),
+  [Schedule lifecycle](skills/herdr-dashboard/references/schedule.md) and the
+  [local HTTP API](skills/herdr-dashboard/references/http-api.md).
+
+The dashboard skill supplements the feature descriptions below. To use it outside this
+checkout, copy its **whole folder**, including `references/`, into your agent's skill directory.
+The plugin installer continues to install only `herdr-agents`; adding the optional skill does
+not install hooks, change permissions or create schedules.
+
 ## Setup
 
 [Bun](https://bun.com/docs/installation) 1.4.3 or newer. `herdr plugin install` runs

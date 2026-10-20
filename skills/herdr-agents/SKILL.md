@@ -39,7 +39,10 @@ PowerShell-style names work too (`-Name -Cwd -Label -BriefFile -Brief -Workspace
 
 ## Talk to another session
 
-Use `ListAgents` to see the sessions and `SendMessage` to reach one by name. A reply comes back to you as a message of its own.
+If the configured messaging integration exposes `ListAgents` and `SendMessage`, use them to see
+sessions and reach one by name. These are integration tools, not commands or MCP methods
+provided by agent-board itself. Check that they are available before calling them. A reply comes
+back to you as a message of its own.
 
 - A session that sits idle for an hour is put to sleep (herdr-wake, if installed): its pane stays, marked 💤. It is still the same session. `ListAgents` lists the sleeping ones too, and a `SendMessage` to one wakes it first (10 to 30 seconds), then delivers. Do not reroute its work or call it gone.
 - Waking without a message: `curl -s -X POST http://127.0.0.1:12421/wake -d '{"target":"<name>"}'` (herdr-wake's API; `GET /sleeping` lists who sleeps).
