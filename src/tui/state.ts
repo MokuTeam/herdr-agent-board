@@ -151,6 +151,21 @@ function positionOf(state: TuiState): { li: number; ci: number; ii: number } | n
   return null
 }
 
+/**
+ * The card of a lane in the column nearest to `ci` (the left one first on a tie): its last one
+ * going up, its first going down. So up and down reach a lane with nothing in this column.
+ */
+function nearestIn(lane: Lane | undefined, ci: number, last: boolean): Item | null {
+  if (!lane) return null
+  for (let d = 0; d < COLUMNS.length; d++) {
+    for (const c of d ? [ci - d, ci + d] : [ci]) {
+      const col = lane.cols[c]
+      if (col?.length) return (last ? col.at(-1) : col[0]) ?? null
+    }
+  }
+  return null
+}
+
 /** The neighbour of the selected item in the wide grid, or null at the edge. */
 function neighbour(state: TuiState, dir: Exclude<Dir, 'home'>): Item | null {
   const pos = positionOf(state)
@@ -161,10 +176,10 @@ function neighbour(state: TuiState, dir: Exclude<Dir, 'home'>): Item | null {
   let next: Item | null = null
   if (dir === 'up') {
     if (ii > 0) next = col[ii - 1] ?? null
-    else for (let l = li - 1; l >= 0 && !next; l--) next = lanes[l]?.cols[ci]?.at(-1) ?? null
+    else for (let l = li - 1; l >= 0 && !next; l--) next = nearestIn(lanes[l], ci, true)
   } else if (dir === 'down') {
     if (ii < col.length - 1) next = col[ii + 1] ?? null
-    else for (let l = li + 1; l < lanes.length && !next; l++) next = lanes[l]?.cols[ci]?.[0] ?? null
+    else for (let l = li + 1; l < lanes.length && !next; l++) next = nearestIn(lanes[l], ci, false)
   } else {
     const step = dir === 'right' ? 1 : -1
     for (let c = ci + step; c >= 0 && c < COLUMNS.length && !next; c += step) {

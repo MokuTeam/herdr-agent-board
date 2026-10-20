@@ -71,13 +71,25 @@ describe('move', () => {
     expect(state.sel).toBe('b')
     expect(move(state, 'down', true)).toBe(true)
     expect(state.sel).toBe('c')
-    expect(move(state, 'down', true)).toBe(false)
     expect(move(state, 'left', true)).toBe(true)
     expect(state.sel).toBe('a')
     expect(move(state, 'down', true)).toBe(true)
     expect(state.sel).toBe('d')
+    expect(move(state, 'down', true)).toBe(false)
     expect(move(state, 'up', true)).toBe(true)
     expect(state.sel).toBe('a')
+  })
+
+  test('wide: up and down reach a lane with nothing in this column, at its nearest column', () => {
+    const state = board()
+    state.sel = 'c'
+    expect(move(state, 'down', true)).toBe(true)
+    expect(state.sel).toBe('d')
+    state.items = [...state.items, item('e', 'personal', 'idle')]
+    build(state)
+    state.sel = 'e'
+    expect(move(state, 'up', true)).toBe(true)
+    expect(state.sel).toBe('c')
   })
 
   test('narrow: a plain list in column order, home goes to the first', () => {
