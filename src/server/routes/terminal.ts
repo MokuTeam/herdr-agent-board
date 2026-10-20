@@ -152,9 +152,10 @@ export function terminalRoute(app: TerminalApp): Route {
     path: /^\/api\/term\//,
     async handle(req, ctx) {
       if (!terminalOn(app.cfg)) return json(404, { error: t('term.off') })
-      const tm = TERM_PATH.exec(ctx.path)
+      // On the path as it came: a pi session's key is its file, with `/` in it.
+      const tm = TERM_PATH.exec(ctx.rawPath)
       if (!tm) return json(404, { error: 'not found' })
-      const item = app.find(tm[1] ?? '')
+      const item = app.find(decodeURIComponent(tm[1] ?? ''))
       if (!item) return json(404, { error: t('err.gone') })
       const target = tm[2] ?? ''
       const op = tm[3] ?? ''

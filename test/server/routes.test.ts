@@ -28,6 +28,10 @@ const statusAndBody = (text: string) => {
   return [head.split(' ')[1], body.includes('{') ? body.slice(body.indexOf('{'), body.lastIndexOf('}') + 1) : body]
 }
 
+// A pi session's key is its session file: `/` in it, sent encoded as one segment.
+const PI_KEY = '/home/me/.pi/agent/sessions/--home-me--/2026-10-20T05-10-02-695Z_01a1.jsonl'
+const PI = encodeURIComponent(PI_KEY)
+
 describe('routes', () => {
   const sandbox = sharedSandbox()
   let url = ''
@@ -45,7 +49,10 @@ describe('routes', () => {
   beforeAll(async () => {
     const box = await sandbox()
     const snapshot = {
-      panes: [{ pane_id: 'p1', agent: 'claude', agent_session: { value: 's1' }, agent_status: 'idle', cwd: box.dir }],
+      panes: [
+        { pane_id: 'p1', agent: 'claude', agent_session: { value: 's1' }, agent_status: 'idle', cwd: box.dir },
+        { pane_id: 'p2', agent: 'pi', agent_session: { value: PI_KEY }, agent_status: 'idle', cwd: box.dir },
+      ],
       tabs: [],
       workspaces: [],
     }
@@ -239,6 +246,24 @@ describe('routes', () => {
     expect(await answer(post('/api/session/s1/bogus', {}, { 'x-board': '1', origin: 'http://evil.example' }))).toEqual([
       409,
       { ok: false, error: 'unknown action bogus' },
+    ])
+  })
+
+  test('a session whose key has a slash (pi): every route finds it', async () => {
+    const detail = await fetch(`${url}/api/session/${PI}`)
+    expect(detail.status).toBe(200)
+    expect(((await detail.json()) as { item: { key: string } }).item.key).toBe(PI_KEY)
+    expect((await fetch(`${url}/api/session/${PI}/changes`)).status).toBe(200)
+    expect(await answer(post(`/api/session/${PI}/card`, { ask: '' }))).toEqual([
+      200,
+      expect.objectContaining({ ok: true }),
+    ])
+    // The terminal's stream finds the session too, and asks for the page's token like any other.
+    expect(await answer(fetch(`${url}/api/term/${PI}/agent/stream`))).toEqual([403, { error: 'token' }])
+    // Decoded too early, the key was cut at its first slash and the page got "not found".
+    expect(await answer(fetch(`${url}/api/session/%2Fnope%2Fx.jsonl`))).toEqual([
+      404,
+      { error: 'The session is no longer on the board' },
     ])
   })
 
