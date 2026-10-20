@@ -598,7 +598,7 @@ async function remote(): Promise<void> {
   console.log(`remote on · ${view.url ?? `not listening: ${view.error ?? 'starting'}`}`)
   for (const r of view.pending ?? [])
     console.log(
-      `asks to pair: ${r.id} "${r.name}" from ${r.device} (${r.login}, ${r.os}) · board remote approve ${r.id}`,
+      `asks to pair: ${r.id} "${r.name}" from ${r.device} (${[r.login, r.os].filter(Boolean).join(', ')}) · board remote approve ${r.id}`,
     )
   for (const d of view.devices ?? [])
     console.log(`paired: ${d.id} "${d.name}" on ${d.device} (${d.login})${d.seenAt ? `, seen ${stamp(d.seenAt)}` : ''}`)

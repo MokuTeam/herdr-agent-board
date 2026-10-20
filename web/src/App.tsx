@@ -11,6 +11,7 @@ import { HelpersWindow } from './components/helpers/HelpersWindow.tsx'
 import { closeLimits, LimitsPop } from './components/LimitsPop.tsx'
 import { LaunchDialog } from './components/launch/LaunchDialog.tsx'
 import { ContextMenu } from './components/menu/ContextMenu.tsx'
+import { usePhonesPanel } from './components/phones/PhonesPanel.tsx'
 import { SheetQuestion } from './components/questions/SheetQuestion.tsx'
 import { RenameField } from './components/RenameField.tsx'
 import { SetupPop } from './components/SetupPop.tsx'
@@ -60,6 +61,8 @@ export function App() {
   }
   // Settings → Profiles…, with more than one profile folder found.
   const [profiles, setProfiles] = useState(false)
+  // Settings → Phones…, while the remote mode is on; a phone that asks to pair opens it.
+  const [phones, setPhones] = usePhonesPanel()
   // The reminders' buttons, shared by the schedule panel and the sheet.
   const reminders = useSchedule()
   // Sessions off the board and back, the archive's panel; Retry on a session back from it is its Return again.
@@ -97,7 +100,11 @@ export function App() {
     archive,
   })
   // Settings (the gear): light or dark, the language, where the panels sit, sleeping sessions, the profiles.
-  const settings = useSettingsMenu(menus.menu, () => setProfiles(true))
+  const settings = useSettingsMenu(
+    menus.menu,
+    () => setProfiles(true),
+    () => setPhones(true),
+  )
   useBoardKeys({
     openNextAttention,
     newSession,
@@ -155,6 +162,7 @@ export function App() {
         categories={{ open: categories, focus: lane, onClose: () => setCategories(false), onOpen: openCategories }}
         schedule={{ open: schedule, focus: session, onClose: () => setSchedule(false), schedule: reminders }}
         profiles={{ open: profiles, onClose: () => setProfiles(false) }}
+        phones={{ open: phones, onClose: () => setPhones(false) }}
         archive={archive}
         sheet={{
           onNewSession: newSession,

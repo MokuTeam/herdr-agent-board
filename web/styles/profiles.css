@@ -141,3 +141,33 @@
 .profile-note p { flex: 1; min-width: 0; margin: 0; line-height: 1.4; }
 .profile-note .button { flex: none; }
 .profile-note .button:disabled { opacity: 0.5; }
+
+/* The Phones panel (components/phones/PhonesPanel.tsx): built from the profiles' and categories' pieces. */
+.phones-url {
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+}
+.phones-ask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.phones-ask p {
+  flex: 1 1 100%;
+  margin: 0;
+}
+.phones-head {
+  margin: 16px 0 6px;
+  font-size: 13px;
+}
+.phones-device {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+}
+.phones-off {
+  margin-top: 16px;
+}

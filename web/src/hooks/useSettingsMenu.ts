@@ -38,6 +38,9 @@ export interface SettingsDeps {
   /** More than one profile folder is found (the payload's profiles): Profiles… is offered. */
   profiles(): boolean
   openProfiles(): void
+  /** The remote mode is on: Phones… is offered. */
+  phones?(): boolean
+  openPhones?(): void
 }
 
 /** The menu out of the gear (`keyboard`: opened from the keyboard, the first item lit). */
@@ -53,6 +56,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       dock: deps.dock(),
       sleepers: deps.sleepers(),
       profiles: deps.profiles(),
+      phones: deps.phones?.() ?? false,
     })
     const source: MenuSource = keyboard ? 'keyboard' : deps.coarse() ? 'touch' : 'mouse'
     deps.menu.open(items, {
@@ -69,6 +73,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'reset') deps.resetPanelSize()
         else if (pick?.kind === 'sleepers') deps.toggleSleepers()
         else if (pick?.kind === 'profiles') deps.openProfiles()
+        else if (pick?.kind === 'phones') deps.openPhones?.()
       },
     })
   }
@@ -134,13 +139,17 @@ export function settingsGear(
 
 /**
  * Settings for the page: `menu` is the board's one menu (hooks/useContextMenus.ts);
- * `openProfiles` opens the Profiles panel.
+ * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel.
  */
-export function useSettingsMenu(menu: MenuEngine, openProfiles: () => void): SettingsMenu {
+export function useSettingsMenu(
+  menu: MenuEngine,
+  openProfiles: () => void,
+  openPhones: () => void = () => {},
+): SettingsMenu {
   const { t, choose } = useLanguage()
   const board = useBoardContext()
   const place = usePanelPlace()
-  const latest = useLatest({ t, choose, board, openProfiles })
+  const latest = useLatest({ t, choose, board, openProfiles, openPhones })
   const [expanded, setExpanded] = useState(false)
   const [gear] = useState(() => {
     const open = settingsMenuFrom({
@@ -177,6 +186,8 @@ export function useSettingsMenu(menu: MenuEngine, openProfiles: () => void): Set
       toggleSleepers: () => latest.current.board.dispatch({ type: 'toggleSleepers' }),
       profiles: () => offersProfiles(latest.current.board.data?.profiles),
       openProfiles: () => latest.current.openProfiles(),
+      phones: () => !!latest.current.board.data?.remote,
+      openPhones: () => latest.current.openPhones(),
     })
     return settingsGear(menu, open, setExpanded)
   })
