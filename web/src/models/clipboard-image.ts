@@ -76,19 +76,27 @@ export async function readClipboardImages(clipboard: ClipboardLike): Promise<Cli
   return { error: 'empty', seen }
 }
 
-const HINT_KEY = 'agent-board:paste-hint-seen'
+/**
+ * Android: a copied screenshot stays where Chrome does not hand it to a page (the board's log after
+ * #104: only text/plain came), so there the button picks a picture instead (#105).
+ */
+export const pickInstead = (userAgent: string): boolean => /\bAndroid\b/i.test(userAgent)
 
-/** Whether the paste button's one-time hint was seen (used or tapped away) in this browser. */
-export function pasteHintSeen(): boolean {
+export type HintKind = 'paste' | 'pick'
+
+const hintKey = (kind: HintKind): string => `agent-board:${kind}-hint-seen`
+
+/** Whether the button's one-time hint was seen (used or tapped away) in this browser. */
+export function pasteHintSeen(kind: HintKind = 'paste'): boolean {
   try {
-    return localStorage.getItem(HINT_KEY) === '1'
+    return localStorage.getItem(hintKey(kind)) === '1'
   } catch {
     return true
   }
 }
 
-export function keepPasteHintSeen(): void {
+export function keepPasteHintSeen(kind: HintKind = 'paste'): void {
   try {
-    localStorage.setItem(HINT_KEY, '1')
+    localStorage.setItem(hintKey(kind), '1')
   } catch {}
 }

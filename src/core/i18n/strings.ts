@@ -422,6 +422,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'compose.attachLabel': 'Attach a file',
     'compose.pastePicture': 'Paste a picture from the clipboard',
     'compose.pasteHint': 'Copied a screenshot? Paste it from here',
+    'compose.pickPicture': 'A screenshot or a photo',
+    'compose.pickHint': 'A screenshot? Pick it here: the newest come first',
     'compose.pasteNone':
       'The browser handed over no picture from the clipboard (it held {seen}). Attach it with the paperclip: Recent or Screenshots.',
     'compose.pasteDenied':
@@ -965,6 +967,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'compose.attachLabel': 'Прикрепить файл',
     'compose.pastePicture': 'Вставить картинку из буфера',
     'compose.pasteHint': 'Скопировали скриншот? Вставьте его отсюда',
+    'compose.pickPicture': 'Скриншот или фото',
+    'compose.pickHint': 'Скриншот? Выберите его здесь: свежие сверху',
     'compose.pasteNone':
       'Браузер не отдал картинку из буфера (там было: {seen}). Прикрепите её скрепкой: «Недавние» или «Скриншоты».',
     'compose.pasteDenied':

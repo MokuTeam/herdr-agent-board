@@ -13,6 +13,7 @@ import {
   canReadClipboard,
   keepPasteHintSeen,
   pasteHintSeen,
+  pickInstead,
   readClipboardImages,
 } from '../../models/clipboard-image.ts'
 import { composerView, sendsOnKey } from '../../models/composer.ts'
@@ -33,6 +34,7 @@ import {
   MoreIcon,
   PastePictureIcon,
   PhoneIcon,
+  PhotoIcon,
   PlusIcon,
   RestartIcon,
   SendIcon,
@@ -302,10 +304,11 @@ export function Composer({
         >
           <ClipIcon />
         </button>
-        {remotePage() && canReadClipboard(navigator.clipboard) && (
+        {remotePage() && (pickInstead(navigator.userAgent) || canReadClipboard(navigator.clipboard)) && (
           <PastePicture
             disabled={av.edit}
             onFiles={files => {
+              if (!files.length) return
               composer.addFiles(files)
               messageRef.current?.focus()
             }}
@@ -375,16 +378,21 @@ export function Composer({
  * In a phone's browser only (models/clipboard-image.ts): the picture on the clipboard into the
  * message, as Ctrl+V does on the computer. What went wrong says so, with the paperclip as the way round.
  * A phone's keyboard cannot paste a picture here, so the button says what it is for once, in a small
- * bubble, until it is used or the bubble is tapped away.
+ * bubble, until it is used or the bubble is tapped away. On Android Chrome hands a page no copied
+ * screenshot (#105): there the button opens the picture picker instead, whose newest come first.
  */
 function PastePicture({ disabled, onFiles }: { disabled: boolean; onFiles: (files: File[]) => void }) {
   const t = useT()
   const { toast } = useBoardContext()
-  const [hint, setHint] = useState(() => !pasteHintSeen())
+  const [pick] = useState(() => pickInstead(navigator.userAgent))
+  const kind = pick ? 'pick' : 'paste'
+  const [hint, setHint] = useState(() => !pasteHintSeen(kind))
+  const picker = useRef<HTMLInputElement>(null)
   const seen = () => {
     setHint(false)
-    keepPasteHintSeen()
+    keepPasteHintSeen(kind)
   }
+  const label = t(pick ? 'compose.pickPicture' : 'compose.pastePicture')
   async function paste() {
     if (!canReadClipboard(navigator.clipboard)) return
     const got = await readClipboardImages(navigator.clipboard).catch((err: unknown) => {
@@ -403,19 +411,33 @@ function PastePicture({ disabled, onFiles }: { disabled: boolean; onFiles: (file
       <button
         type="button"
         className="attach"
-        title={t('compose.pastePicture')}
-        aria-label={t('compose.pastePicture')}
+        title={label}
+        aria-label={label}
         disabled={disabled}
         onClick={() => {
           seen()
-          void paste()
+          if (pick) picker.current?.click()
+          else void paste()
         }}
       >
-        <PastePictureIcon />
+        {pick ? <PhotoIcon /> : <PastePictureIcon />}
       </button>
+      {pick && (
+        <input
+          type="file"
+          accept="image/*"
+          multiple
+          hidden
+          ref={picker}
+          onChange={e => {
+            onFiles([...(e.currentTarget.files ?? [])])
+            e.currentTarget.value = ''
+          }}
+        />
+      )}
       {hint && !disabled && (
         <button type="button" className="paste-hint" onClick={seen}>
-          {t('compose.pasteHint')}
+          {t(pick ? 'compose.pickHint' : 'compose.pasteHint')}
         </button>
       )}
     </span>

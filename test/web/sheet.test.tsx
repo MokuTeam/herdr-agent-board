@@ -573,4 +573,22 @@ describe('the compact head (#62)', () => {
     expect(byId(reminded, 'sheet-card').attrs.has('hidden')).toBe(false)
     expect(findAll(reminded, el => hasClass(el, 'sched-row')).length).toBe(1)
   })
+
+  test("a phone's fold line opens the fields as the pencil does, and says the pencil's words with none (#105)", () => {
+    const fold = (nodes: Node[]) => findAll(nodes, el => hasClass(el, 'sheet-fold'))[0]
+    const folded = head(working)
+    const line = fold(folded)
+    expect([line ? text(line) : '', line?.attrs.get('aria-expanded'), line?.attrs.get('aria-controls')]).toEqual([
+      'Doingthe **login** form',
+      'false',
+      'sheet-card',
+    ])
+    expect(byId(folded, 'sheet-card').attrs.has('data-folded')).toBe(true)
+    const opened = head(working, { card: { disabled: false, open: true } })
+    expect(fold(opened)?.attrs.get('aria-expanded')).toBe('true')
+    expect(byId(opened, 'sheet-card').attrs.has('data-folded')).toBe(false)
+    // Nothing to say: the line is the pencil's own, the place it opens holds the empty fields to fill.
+    const none = fold(head({ ...working, doing: '' }))
+    expect(none ? text(none) : '').toBe('Card details')
+  })
 })
