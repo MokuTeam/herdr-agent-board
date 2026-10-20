@@ -1,7 +1,7 @@
 # agent-board
 
 A [herdr](https://herdr.dev) plugin: a kanban of the Claude Code sessions running in herdr, and
-of the [pi](#pi) ones.
+of the [pi](#pi) and [Codex](#codex) ones.
 Lanes are categories (one per client, say, plus Personal and Other), columns are Working /
 Needs me / Waiting on others / Done / Idle. Sessions
 [herdr-wake](herdr-wake/) put to sleep are on it
@@ -114,6 +114,20 @@ would leave them beside its own. First take them out of `~/.claude/settings.json
 `statusLine` that runs `src/entrypoints/statusline.ts`, and the notification hooks that run
 `src/integrations/toast.ps1`. Then put `main` in the plugin's folder and run its install action
 again, which writes its own `node "…/src/hook.mjs"` hooks, status line and commands.
+
+## Codex
+
+For panes herdr reports as `codex`, the board reads the rollout in
+`~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<session-id>.jsonl` (`CODEX_HOME` changes the
+Codex folder). The card shows the last prompt, the agent's last words, its last tool and its
+request's input tokens; the session panel shows the conversation and tool calls. Duplicate
+events, instructions, reasoning and tool outputs are left out. A missing or unreadable rollout
+leaves the card and live terminal available. The board reads bounded tails and caches card data
+until the file changes.
+
+This is the first part of [#126](https://github.com/MokuTeam/herdr-agent-board/issues/126).
+Codex hooks, the brief and Codex-specific session actions follow separately. Claude Code and pi
+keep their existing readers and actions.
 
 ## Web board
 
