@@ -1120,9 +1120,11 @@ board sleep --when-free Report-north --self                 # and this session, 
 - `--self`: the session running the command too, found as `board doing` finds it (its
   `CLAUDE_CODE_SESSION_ID`, else the session herdr sees in its pane), so it need not know its own
   name. It is in a turn then, so it always goes as with `--when-free`, last; the others named with
-  it only when `--when-free` is given. End the turn after it: the session goes to sleep once it is
-  free. The skill tells agents to do it only when the user asks or a coordinating session's run is
-  over, not by default. Outside a session it refuses and puts nothing to sleep.
+  it only when `--when-free` is given; a target that names it too goes with `--self`, one line.
+  End the turn after it: the session goes to sleep once it is free, its entry waiting as any
+  `--when-free` one does; a new turn meanwhile does not cancel it. The skill tells agents to do it
+  only when the user asks or a coordinating session's run is over, not by default. Outside a
+  session, or for one the board does not know, it refuses and puts nothing to sleep.
 - Without herdr-wake, or when it does not answer, it refuses at once and puts nothing to sleep.
 - For agents that talk to the board over HTTP: `POST /api/sleep` with header `X-Board: 1` and
   `{"targets": ["<id|name|pane>", ...], "whenFree": true}` answers `{ ok, results }`, one per

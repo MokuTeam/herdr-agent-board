@@ -67,7 +67,7 @@ import { checkWake, wakeAnswers } from '../services/actions.ts'
 import { askArchive, closeDue, getArchived, profileDoubt } from '../services/archive.ts'
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
-import { type SleepOutcome, sleepMany } from '../services/sleep.ts'
+import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 
 const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | doctor] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
@@ -674,8 +674,19 @@ async function sleep(): Promise<void> {
       'board sleep --self is for the session running it, and this is none: run it from a Claude session in herdr; nothing was put to sleep',
     )
   const items = await collect(deps)
+  let others = targets
+  if (self && from) {
+    const me = sessionsFor(items, from.key)
+    if (!me.length)
+      throw new Error(`board sleep --self: this session (${from.key}) is not on the board; nothing was put to sleep`)
+    // A target that names it too goes with --self, once it is free, not as one more line.
+    others = targets.filter(t => {
+      const fits = sessionsFor(items, t)
+      return !(fits.length === 1 && me.some(m => m.key === fits[0]?.key))
+    })
+  }
   const results = [
-    ...(targets.length ? await sleepMany(deps, items, targets, { whenFree, by: 'agent', ...(from && { from }) }) : []),
+    ...(others.length ? await sleepMany(deps, items, others, { whenFree, by: 'agent', ...(from && { from }) }) : []),
     // Itself last, so the others go first; its entry is its own, set by no other session.
     ...(self && from ? await sleepMany(deps, items, [from.key], { whenFree: true, by: 'agent' }) : []),
   ]
