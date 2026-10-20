@@ -2,6 +2,7 @@
 // builds it; the web board reads it). One type for both sides, so they cannot drift apart.
 import type { BoardArchive } from './archive.ts'
 import type { LimitWindow } from './limits.ts'
+import type { RemoteView } from './remote.ts'
 import type { ScheduleEntry } from './schedule-rules.ts'
 import type { SetupSummary } from './setup.ts'
 import type { ColumnId, Item, Lang, LaunchView } from './types.ts'
@@ -93,4 +94,6 @@ export interface BoardPayload {
   profiles?: BoardProfile[]
   /** The program `launch.claude` types (`claude` when it is unset or not valid): what a profile without a start command types. */
   claudeProgram?: string
+  /** The remote mode (core/remote.ts), only while it is on. */
+  remote?: RemoteView
 }
