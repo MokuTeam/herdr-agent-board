@@ -5,7 +5,8 @@
    start asked for. The new-session window (components/launch/LaunchDialog.tsx) offers the shown
    profiles as chips, as its lanes (.chips, by --lane), and names the profile it starts in beside
    Start. The Profiles panel (components/profiles) comes last. With one profile shown the page has
-   none of it, as before profiles. Every rule here selects by class: the other sheets are
+   none of it, as before profiles. The lists of the selects, a lane's profile and the window's
+   workspace, are in the theme's colors. Every rule here selects by class: the other sheets are
    upstream's, rule for rule. */
 
 /* The switch is a lanes control (.segmented); each profile's count is in its color. */
@@ -65,6 +66,10 @@
 }
 .cat-profile select:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
 .cat-profile select:disabled { opacity: 0.5; }
+/* The lists of this select and the window's workspace one: the system draws them from their
+   options' colors, over white where the select's fill is see-through, so the options take the
+   theme's (else the dark theme's light text sits on white). */
+.cat-profile option, .where option { background: var(--panel-float); color: var(--label); }
 
 /* The new-session window: the profile it starts in, right before Start, as a card's tag says it. */
 .launch-profile {
