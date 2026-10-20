@@ -125,14 +125,18 @@ export function fieldProblem(field: TunnelField, value: unknown, ports?: Ports):
 const FIELDS: readonly TunnelField[] = ['host', 'sshPort', 'user', 'key', 'socket', 'domain', 'port']
 const NEEDED: ReadonlySet<TunnelField> = new Set(['host', 'user', 'domain'])
 
-/** Every field's check, in TunnelField order; empty host, user and domain are named as missing. */
+/**
+ * Every field's check, in TunnelField order; empty host, user and domain are named as missing.
+ * The port checked is the one the listener takes, the default (web + 2) too.
+ */
 export function tunnelProblems(conf: TunnelConfig, ports: Ports): TunnelProblem[] {
   const problems: TunnelProblem[] = []
   for (const field of FIELDS) {
+    const value = field === 'port' ? tunnelPort(conf, ports.web) : conf[field]
     const message =
-      NEEDED.has(field) && conf[field] === ''
+      NEEDED.has(field) && value === ''
         ? t('tunnel.err.required', { field: fieldName(field) })
-        : fieldProblem(field, conf[field], ports)
+        : fieldProblem(field, value, ports)
     if (message) problems.push({ field, message })
   }
   return problems

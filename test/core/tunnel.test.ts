@@ -11,6 +11,7 @@ import {
   sshHint,
   sshPathArg,
   TUNNEL_SOCKET,
+  type TunnelProblem,
   tunnelConfig,
   tunnelPort,
   tunnelProblems,
@@ -146,6 +147,14 @@ describe('the tunnel’s settings', () => {
     useLanguage('ru')
     expect(tunnelProblems(tunnelConfig({}), PORTS)[0]?.message).not.toBe('Server: needed')
     useLanguage('en')
+  })
+  test('the default listener port (web + 2) is checked against the board’s other ports too', () => {
+    const taken: TunnelProblem[] = [
+      { field: 'port', message: "Port 12424 is the board's already (the web board, phones, or the phone's browser)" },
+    ]
+    expect(tunnelProblems(GOOD, { ...PORTS, pwa: 12424 })).toEqual(taken)
+    expect(tunnelProblems(GOOD, { ...PORTS, remote: 12424 })).toEqual(taken)
+    expect(tunnelProblems({ ...GOOD, port: 12500 }, { ...PORTS, pwa: 12424 })).toEqual([])
   })
 })
 
