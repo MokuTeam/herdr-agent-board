@@ -14,6 +14,7 @@ import { useMediaQuery } from './useMediaQuery.ts'
 export const PRIORITY: readonly string[] = [
   'sheet-focus',
   'sheet-mokupilot',
+  'sheet-fork',
   'sheet-term',
   'sheet-changes',
   'sheet-history',

@@ -45,7 +45,7 @@ import { noteOf } from '../core/board.ts'
 import { categoryInfo } from '../core/categories.ts'
 import { parentProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
-import { defaultWorkspace, sameDir, UNSAFE_CHARS } from '../core/launch/names.ts'
+import { sameDir, sessionWorkspace, UNSAFE_CHARS } from '../core/launch/names.ts'
 import { launchTarget, type ProfileSet, sessionProfile } from '../core/profiles.ts'
 import type { ScheduleEntry, SessionRef } from '../core/schedule-rules.ts'
 import type { Config, Item, Translator } from '../core/types.ts'
@@ -622,22 +622,15 @@ export async function bringBack(deps: Deps, app: ReturnApp, key: string): Promis
   const board = (cfg.placement ?? 'workspace') === 'workspace' ? (cfg.workspace ?? 'Board') : ''
   const known = new Set([...cfg.categories.map(c => c.id), ...items.map(i => i.category)])
   const category = known.has(rec.category) ? rec.category : 'other'
-  const ownWorkspace =
-    workspaces.find(w => w.id === rec.workspaceId && w.label === rec.workspace) ??
-    workspaces.find(w => rec.workspace && w.label === rec.workspace && w.label !== board)
-  const lane = ownWorkspace
-    ? ''
-    : defaultWorkspace({
-        category: rec.category,
-        title: categoryInfo(cfg, rec.category).title,
-        items,
-        workspaces,
-        board,
-      })
-  const id = ownWorkspace?.id || lane
-  const workspace = id
-    ? { id, label: workspaces.find(w => w.id === id)?.label ?? '' }
-    : { create: (rec.workspace || categoryInfo(cfg, rec.category).title || 'Sessions').slice(0, 40) }
+  const workspace = sessionWorkspace({
+    workspaceId: rec.workspaceId,
+    workspace: rec.workspace,
+    category: rec.category,
+    title: categoryInfo(cfg, rec.category).title,
+    items,
+    workspaces,
+    board,
+  })
   const name =
     String(rec.name ?? '')
       .replace(new RegExp(UNSAFE_CHARS.source, 'g'), '')

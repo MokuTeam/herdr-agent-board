@@ -116,6 +116,7 @@ describe('the head', () => {
       restartHidden: true,
       restartTitle: t('sheet.restartHint'),
       mokupilotHidden: true,
+      forkHidden: true,
       archiveHidden: true,
       archiveTitle: t('archive.why.notClaude'),
     })
@@ -127,6 +128,7 @@ describe('the head', () => {
       restartHidden: true,
       restartTitle: t('sheet.restartHint'),
       mokupilotHidden: true,
+      forkHidden: true,
       archiveHidden: true,
       archiveTitle: t('archive.why.notClaude'),
     })
@@ -135,6 +137,11 @@ describe('the head', () => {
     expect(headButtons({ ...a, agent: 'codex' }, t, true).mokupilotHidden).toBe(true)
     expect(headButtons({ ...a, agent: 'claude', session: null }, t, true).mokupilotHidden).toBe(true)
     expect(headButtons({ ...a, agent: 'claude' }, t, false).mokupilotHidden).toBe(true)
+    // A fork: where the board can fork, for a Claude session with an id, MokuPilot or not.
+    expect(headButtons({ ...a, agent: 'claude' }, t, false, [], true).forkHidden).toBe(false)
+    expect(headButtons({ ...a, agent: 'claude' }, t, true, [], false).forkHidden).toBe(true)
+    expect(headButtons({ ...a, agent: 'codex' }, t, false, [], true).forkHidden).toBe(true)
+    expect(headButtons({ ...a, agent: 'claude', session: null }, t, false, [], true).forkHidden).toBe(true)
     expect(headButtons({ ...a, sleeping: true }, t).wakeHidden).toBe(false)
     expect(headButtons({ ...a, sleeping: true }, t).sleepHidden).toBe(true)
     expect(NO_HEAD_BUTTONS).toEqual({
@@ -145,6 +152,7 @@ describe('the head', () => {
       restartHidden: true,
       restartTitle: undefined,
       mokupilotHidden: true,
+      forkHidden: true,
       archiveHidden: true,
       archiveTitle: undefined,
     })

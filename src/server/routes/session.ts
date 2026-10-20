@@ -21,6 +21,8 @@ import { answerPermission, answerQuestions } from '../../services/answer.ts'
 import { askArchive, undoMs } from '../../services/archive.ts'
 import { collect } from '../../services/board.ts'
 import type { Deps } from '../../services/deps.ts'
+import { forkSession } from '../../services/launch/fork.ts'
+import type { Launches } from '../../services/launch/launches.ts'
 import { renameSession, renameWorkspace } from '../../services/launch/rename.ts'
 import { startCall } from '../../services/mokupilot.ts'
 import { type Body, type Handler, json, type Route } from '../http.ts'
@@ -30,6 +32,8 @@ type Result = { ok: boolean; error?: string; [extra: string]: unknown }
 
 export interface SessionApp {
   deps: Deps
+  /** The board's launches, for a fork of a session (services/launch/fork.ts). */
+  launches?: Pick<Launches, 'start' | 'list'>
   find(key: string): Item | undefined
   /** The board's items, for the sessions on the other end of a message. */
   items(): Item[]
@@ -239,6 +243,11 @@ async function act(app: SessionApp, item: Item, action: string, body: () => Prom
     // A MokuPilot call whose agent is a fork of this session, only in the board's own profile; no herdr in it.
     case 'mokupilot':
       return startCall(deps.cfg, item, { profiles: deps.profiles() })
+    // A new session in a new tab with a copy of this one's conversation; this one stays as it is.
+    case 'fork':
+      return app.launches
+        ? forkSession(deps, { launches: app.launches, items: app.items }, item, await body())
+        : { ok: false, error: `unknown action ${action}` }
     default:
       return { ok: false, error: `unknown action ${action}` }
   }
@@ -293,10 +302,10 @@ export function sessionRoutes(app: SessionApp): Route[] {
     },
     helperRoute(app),
     // Answering a dialog presses keys in a session, an archive closes a pane, a workspace's new name
-    // is every session's there: like a launch, only from this page.
+    // is every session's there, a fork starts one: like a launch, only from this page.
     {
       method: 'POST',
-      path: /^\/api\/session\/([^/]+)\/(answer|permit|archive|workspace)$/,
+      path: /^\/api\/session\/([^/]+)\/(answer|permit|archive|workspace|fork)$/,
       guard: ['board-header', 'origin', 'fresh-data'],
       handle: action,
     },

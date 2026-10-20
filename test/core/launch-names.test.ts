@@ -10,9 +10,12 @@ import {
   completions,
   defaultWorkspace,
   folderSuggestions,
+  forkName,
   isAbsolutePath,
   kebabName,
+  NAME_MAX,
   sameDir,
+  sessionWorkspace,
   slugName,
   splitPathInput,
   suggestName,
@@ -162,4 +165,33 @@ test('worktrees: branch names git takes, and the sibling folder they go to', () 
     assert.equal(checkBranch(bad), 'launch.err.branch', bad)
   assert.equal(worktreePath('C:\\Work\\agent-board', 'new-session'), 'C:\\Work\\agent-board-new-session')
   assert.equal(worktreePath('/src/app/', 'feature/menu'), '/src/app-feature-menu')
+})
+
+test('a fork’s name: the session’s with the mark after it, within the limit, without what a name may not start with', () => {
+  assert.equal(forkName('Acme invoices', 'fork'), 'Acme invoices · fork')
+  assert.equal(forkName('Счета', 'форк'), 'Счета · форк')
+  const long = forkName('x'.repeat(80), 'fork')
+  assert.equal(long.length, NAME_MAX)
+  assert.ok(long.endsWith(' · fork'))
+  assert.equal(forkName('/rename me', 'fork'), 'rename me · fork')
+  assert.equal(forkName('', 'fork'), 'session · fork')
+  assert.equal(checkName(forkName('-x\u0007', 'fork')), '')
+})
+
+test('where a session goes back to, or its fork goes: its workspace by id and name, by name, its lane’s, a new one', () => {
+  const workspaces = [
+    { id: 'w1', label: 'Acme' },
+    { id: 'w2', label: 'Board' },
+    { id: 'w3', label: 'Personal' },
+  ]
+  const base = { category: 'acme', title: 'Acme', workspaces, board: 'Board' }
+  assert.deepEqual(sessionWorkspace({ ...base, workspaceId: 'w1', workspace: 'Acme' }), { id: 'w1', label: 'Acme' })
+  assert.deepEqual(sessionWorkspace({ ...base, workspace: 'Personal' }), { id: 'w3', label: 'Personal' })
+  // Never the board's own: the lane's default instead.
+  assert.deepEqual(sessionWorkspace({ ...base, workspace: 'Board' }), { id: 'w1', label: 'Acme' })
+  // Gone, and no lane default: a new one named like it.
+  assert.deepEqual(sessionWorkspace({ ...base, title: 'Other', category: 'other', workspace: 'Old' }), {
+    create: 'Old',
+  })
+  assert.deepEqual(sessionWorkspace({ ...base, title: '', category: 'other', workspace: null }), { create: 'Sessions' })
 })

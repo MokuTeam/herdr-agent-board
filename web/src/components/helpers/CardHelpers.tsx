@@ -5,6 +5,7 @@ import type { Item } from '../../../../src/core/types.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { liveCount } from '../../models/helper-model.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
+import { ForkIcon } from '../icons.tsx'
 import { FromGlyph, SpawnedGlyph } from './glyphs.tsx'
 
 /**
@@ -52,9 +53,9 @@ export function Relations({ item }: { item: Item }) {
           className="rel"
           data-act="rel"
           data-key={from.key}
-          title={t('rel.fromHint', { name: from.name })}
+          title={t(l.from?.fork ? 'rel.forkOfHint' : 'rel.fromHint', { name: from.name })}
         >
-          <FromGlyph />
+          {l.from?.fork ? <ForkIcon /> : <FromGlyph />}
           <span>{from.name}</span>
         </button>
       )}

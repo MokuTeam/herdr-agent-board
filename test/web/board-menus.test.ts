@@ -456,6 +456,7 @@ describe('without the launch window', () => {
           history: none,
           terminal: none,
           mokupilot: none,
+          fork: none,
           archive: none,
           tidy: none,
           archiveOpen: none,

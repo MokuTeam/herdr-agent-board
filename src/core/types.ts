@@ -42,6 +42,9 @@ export interface Card {
   profileDir?: string
   /** The profile a start asked for (the board's launch or spawn-agent). */
   profileWant?: string
+  /** A fork's: the id of the session it is a fork of, and when it started (its copied lines are older). */
+  forkOf?: string
+  forkAt?: number
   [extra: string]: unknown
 }
 
@@ -87,6 +90,8 @@ export interface LaunchView {
   id: string
   /** The id of the session it resumes (Return, from the archive), null for a new one; a board before the archive sent none. */
   resume?: string | null
+  /** The id of the session whose conversation it starts with (a fork), null for none. */
+  fork?: string | null
   name: string
   cwd: string
   category: string
@@ -194,6 +199,8 @@ export interface Item {
   helpers?: HelperSummary | null
   /** How it works with the board's other sessions (core/links.ts), or null. */
   links?: ItemLinks | null
+  /** A fork's card: the session it is a fork of and when it started (core/links.ts), or none. */
+  fork?: { of: string; at: number } | null
   /** Its Claude process: whether it runs, since when, the pipe other sessions write to (server only). */
   alive?: boolean
   since?: number | null
