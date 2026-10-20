@@ -83,6 +83,11 @@ if (mode === 'open') {
     ...(probeMs && { gather: () => gatherFacts(deps.cfg, { probeMs }) }),
   })
   refresh = () => void server.refresh()
+  // TEST_ROUTE_TABLE: the board's routes, each RegExp path by its source (test/support/tunnel-board.ts).
+  if (process.env.TEST_ROUTE_TABLE)
+    send({
+      routes: server.routes.map(r => ({ method: r.method, path: typeof r.path === 'string' ? r.path : r.path.source })),
+    })
   send({ ready: true })
   process.on('message', async message => {
     if (message === 'refresh') {

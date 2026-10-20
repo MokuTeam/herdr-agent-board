@@ -74,6 +74,12 @@ const DESKTOP_ONLY: readonly RegExp[] = [
 export const desktopOnly = (rawPath: string): boolean => DESKTOP_ONLY.some(re => re.test(rawPath))
 
 /**
+ * For the board on this computer only: the remote mode's and Remote access's management (approving
+ * pairings, the login, the tunnel). Refused on every remote listener, in both spellings of a path.
+ */
+export const localOnly = (path: string): boolean => /^\/api\/(remote|access)(\/|$)/.test(path)
+
+/**
  * What pairs: the app, or the board in a phone's browser (core/pwa.ts). A phone can have both,
  * each with a token of its own.
  */
