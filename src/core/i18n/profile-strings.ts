@@ -54,6 +54,8 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'profile.wrongBody': '{name} was started in {want} but runs in {got}',
     // the profile switch beside the lanes control, and the tag on a card (web/src/components/ProfileSwitch.tsx, ProfileTag.tsx)
     'tb.profiles': 'Profiles',
+    // the profile switch folded into one pill (web/src/components/SegmentPick.tsx)
+    'tb.profilesPick': 'Profile: {title}',
     'profile.all': 'All profiles',
     'profile.wrong': 'Wrong profile: started for {want}',
     // the tag on the terminal board's line of a session in another profile than its start asked for (src/tui/render.ts)
@@ -147,6 +149,8 @@ export const PROFILE_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'profile.wrongBody': '{name}: запущена в профиле {want}, а работает в {got}',
     // the profile switch beside the lanes control, and the tag on a card (web/src/components/ProfileSwitch.tsx, ProfileTag.tsx)
     'tb.profiles': 'Профили',
+    // the profile switch folded into one pill (web/src/components/SegmentPick.tsx)
+    'tb.profilesPick': 'Профиль: {title}',
     'profile.all': 'Все профили',
     'profile.wrong': 'Не тот профиль: запущена для {want}',
     // the tag on the terminal board's line of a session in another profile than its start asked for (src/tui/render.ts)

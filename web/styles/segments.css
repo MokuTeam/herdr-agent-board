@@ -1,0 +1,33 @@
+/* The lanes control and the profile switch folded (web/src/hooks/useSegmentFolds.ts): where the
+   toolbar has no room for all of a control's segments, a pill like the toolbar's others takes
+   their place (components/SegmentPick.tsx), naming the choice on show with its count as its
+   segment did (a profile's in its color, --c) and a chevron. Its choices open in a menu, each
+   with its count (components/menu/MenuItem.tsx). Every rule here selects by class: the other
+   sheets are upstream's, rule for rule. */
+
+.pill-toggle.segment-pick { gap: 0; max-width: 100%; color: var(--label); }
+.segment-pick-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Its count as a segment's (app.css .segmented button .n), not a button's badge (.pill-toggle .n). */
+.pill-toggle.segment-pick .n {
+  display: inline;
+  min-width: 0;
+  height: auto;
+  margin-left: 5px;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--label-3);
+  font-size: inherit;
+}
+.pill-toggle.segment-pick.profiles .n { color: var(--c, var(--label-3)); font-weight: 600; }
+.segment-pick svg { width: 12px; height: 12px; margin: 0 -3px 0 5px; color: var(--label-2); stroke-width: 2; }
+/* Where the segments move to a row of their own (app.css), their pill goes too; on a phone it
+   keeps its width, so two pills share their row. */
+@container tools (max-width: 1200px) {
+  .controls > .segment-pick { order: 3; margin-top: 8px; }
+}
+
+/* A choice's count in the menu, after its name: a lane's quiet, a profile's in its color. */
+.mi-count { flex: none; margin-left: 18px; color: var(--label-3); font-variant-numeric: tabular-nums; }
+.mi-count.tint { color: var(--c, var(--label-3)); font-weight: 600; }
+.menu-item.active .mi-count { color: inherit; opacity: 0.8; }

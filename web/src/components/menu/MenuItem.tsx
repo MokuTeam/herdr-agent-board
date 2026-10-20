@@ -1,5 +1,6 @@
 // One item of a context menu: its check (when the menu has a check column), a lane's or a
-// column's color, the label and, when it is gray, why; a submenu's chevron or a key hint.
+// column's color, the label and, when it is gray, why; a choice's count (a folded toolbar
+// control's, as its segment shows it); a submenu's chevron or a key hint.
 import type { MenuItem as MenuItemModel } from '../../models/menu-model.ts'
 import { classNames } from '../class-names.ts'
 import { CheckIcon, ChevIcon } from '../icons.tsx'
@@ -38,6 +39,14 @@ export function MenuItem({ item, id, index, checks, active, expanded }: MenuItem
         <span className="mi-label">{item.label}</span>
         {item.reason && <span className="mi-reason">{item.reason}</span>}
       </span>
+      {item.count !== undefined && (
+        <span
+          className={classNames('mi-count', item.tint !== undefined && 'tint')}
+          style={item.tint ? { '--c': item.tint } : undefined}
+        >
+          {item.count}
+        </span>
+      )}
       {item.submenu ? (
         <span className="mi-chev">
           <ChevIcon />

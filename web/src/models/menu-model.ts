@@ -23,6 +23,10 @@ export interface MenuItem {
   swatch?: string
   /** A column's color: a round dot. */
   dot?: string
+  /** A choice's sessions on show, after its label, as its segment shows them (models/segment-fold.ts). */
+  count?: number
+  /** Set: the count in this color, as a profile's segment has it ('' for none). */
+  tint?: string
   separator?: undefined
 }
 

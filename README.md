@@ -127,7 +127,9 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
 - One compact toolbar row: the title with the board's summary under it while the row has room
   (else in the title's tooltip), the lanes, search, categories and the schedule as small buttons
   named by their tooltips, and Settings (the gear). A narrower window takes two rows, a phone
-  three.
+  three. Where the row has no room for all of the lanes, they fold into one pill naming the lane
+  on show with its count; it opens every lane, with its count, in a menu. The profile switch
+  folds the same way, on its own.
 - Settings (the gear): appearance (as the system has it, light or dark; kept in this browser),
   language, where the session panel sits, and whether sleeping sessions show.
 - A card says what the session works on (its own `board doing`, else Claude's title of the
