@@ -324,3 +324,49 @@ test("a helper's own transcript: its lines are sidechain lines, a fork's work be
   )
   assert.deepEqual(parseConversation(jsonl(lines).split('\n')), [])
 })
+
+test('images sent with a message: their paths back under it from the meta line that names them', () => {
+  const upload = 'C:\\Users\\me\\AppData\\Local\\herdr\\plugins\\agent-board\\uploads\\2026-10-20\\'
+  const at = '2026-10-20T10:45:14.374Z'
+  const png = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }
+  // As Claude Code 2.1.303 keeps a message the board typed with two images under "Files:".
+  const sent = {
+    type: 'user',
+    promptId: 'p1',
+    imagePasteIds: [16, 17],
+    timestamp: at,
+    message: { role: 'user', content: [{ type: 'text', text: '[Image #16] [Image #17]see these\nFiles:' }, png, png] },
+  }
+  const sources = {
+    type: 'user',
+    promptId: 'p1',
+    isMeta: true,
+    turnCompanion: true,
+    timestamp: at,
+    message: {
+      role: 'user',
+      content: [
+        { type: 'text', text: `[Image: source: ${upload}a.png]` },
+        { type: 'text', text: `[Image: source: ${upload}b.png]` },
+      ],
+    },
+  }
+  const reminder = { type: 'attachment', attachment: { type: 'total_tokens_reminder', text: 'x' }, timestamp: at }
+  const thread = (lines: object[]) => parseConversation(lines.map(l => JSON.stringify(l)))
+  assert.deepEqual(thread([sent, reminder, sources]), [
+    { role: 'user', text: `see these\nFiles:\n${upload}a.png\n${upload}b.png`, at: Date.parse(at) },
+  ])
+  // Without the meta line, or with one of another prompt, the message is as Claude Code keeps it.
+  const kept = { role: 'user', text: '[Image #16] [Image #17]see these\nFiles:', at: Date.parse(at) }
+  assert.deepEqual(thread([sent]), [kept])
+  assert.deepEqual(thread([sent, { ...sources, promptId: 'p2' }]), [kept])
+  // A pasted screenshot Claude Code names no file for keeps its mark.
+  const clipboard = {
+    ...sent,
+    imagePasteIds: [3],
+    message: { role: 'user', content: [{ type: 'text', text: '[Image #3] look' }, png] },
+  }
+  assert.deepEqual(thread([clipboard, { ...sources, message: { role: 'user', content: [] } }]), [
+    { role: 'user', text: '[Image #3] look', at: Date.parse(at) },
+  ])
+})
