@@ -2,7 +2,7 @@
 // is there with a state other than held; otherwise wakeUrl and the old guard, exactly as today.
 import { expect, test } from 'bun:test'
 import { WAKE_SHIPPED, wakeConfig } from '../../../src/core/wake/config.ts'
-import { wakeMode } from '../../../src/core/wake/mode.ts'
+import { wakeMode, wakeOffByKey } from '../../../src/core/wake/mode.ts'
 import type { WakeStatusFile } from '../../../src/core/wake/status.ts'
 
 const OLD = 'http://127.0.0.1:12421'
@@ -62,4 +62,13 @@ test('wakeUrl set elsewhere is kept on the old path, and not used on the new one
     kind: 'new',
     url: 'http://127.0.0.1:23456',
   })
+})
+
+test('wake off by a key of its own (H1): `false`, or a section that is off; no key is not', () => {
+  for (const wake of [false, { enabled: false }, { enabled: false, port: 23456 }])
+    expect(wakeOffByKey({ wake })).toBe(true)
+  for (const wake of [true, { enabled: true }]) expect(wakeOffByKey({ wake })).toBe(false)
+  expect(wakeOffByKey({})).toBe(false)
+  // A section without `enabled` is the default: off by its key until wake ships.
+  expect(wakeOffByKey({ wake: { reaper: { enabled: true } } })).toBe(!WAKE_SHIPPED)
 })

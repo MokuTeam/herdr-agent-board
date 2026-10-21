@@ -80,6 +80,7 @@ import { askArchive, closeDue, getArchived, profileDoubt } from '../services/arc
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
+import { currentWakeMode } from '../services/wake/mode.ts'
 
 const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | doctor | resume <session id> [--profile <id>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
@@ -534,6 +535,19 @@ async function main(): Promise<void> {
 }
 
 /**
+ * What `board restart` and `board sleep` need and do not have, from wakeAnswers: wake, turned off
+ * in config.json (#119), or not answering; else herdr-wake at wakeUrl, as before.
+ */
+function wakeMissing(up: { why: string }): string {
+  if (up.why === 'off') return 'wake, and it is off (Settings → Sleep and wake…)'
+  const mode = currentWakeMode(cfg)
+  if (mode.kind === 'new') return `wake, which does not answer at ${mode.url} (${up.why})`
+  return up.why
+    ? `herdr-wake, which does not answer at ${cfg.wakeUrl} (${up.why})`
+    : "herdr-wake, and wakeUrl in the board's config.json is empty"
+}
+
+/**
  * `board restart [note]`: the session restarted once it is free, a schedule entry of kind
  * 'restart' (services/scheduler.ts). Refused at once without herdr-wake, which does the restart,
  * outside herdr, and when the board would not wake the session again (its profile guard,
@@ -555,14 +569,10 @@ async function restart(s: Session): Promise<void> {
       `board restart works for a session in a herdr pane, and ${target ? `herdr has none for "${target}"` : 'this one runs outside herdr'}; nothing was scheduled`,
     )
   const up = await wakeAnswers(deps)
-  if (!up.ok) {
-    const what = up.why
-      ? `herdr-wake, which does not answer at ${cfg.wakeUrl} (${up.why})`
-      : "herdr-wake, and wakeUrl in the board's config.json is empty"
+  if (!up.ok)
     throw new Error(
-      `a restart needs ${what}; nothing was scheduled. Ask the user to restart this session by hand: /exit in it, then claude --resume ${s.key} in the same pane`,
+      `a restart needs ${wakeMissing(up)}; nothing was scheduled. Ask the user to restart this session by hand: /exit in it, then claude --resume ${s.key} in the same pane`,
     )
-  }
   // The restart ends in a wake: one the board would refuse (another profile than herdr-wake would
   // resume it in, or one not known) is refused now, before anything is scheduled. The session as
   // the board shows it, else as its card says.
@@ -570,7 +580,13 @@ async function restart(s: Session): Promise<void> {
   const shown = await find(s.key)
   const guard = await checkWake(
     deps,
-    shown ?? { name: s.name || s.key.slice(0, 8), pane: s.pane, ...sessionProfile(readCard(s.key), set.list) },
+    shown ?? {
+      name: s.name || s.key.slice(0, 8),
+      pane: s.pane,
+      session: s.key,
+      cwd: s.cwd,
+      ...sessionProfile(readCard(s.key), set.list),
+    },
     set,
   )
   if (!guard.ok) throw new Error(`${guard.error}; nothing was scheduled`)
@@ -763,12 +779,7 @@ async function sleep(): Promise<void> {
       'usage: board sleep <id|name|pane>... [--when-free] [--self]: the sessions to put to sleep (a name with spaces in quotes; --self: this one, once its turn is over)',
     )
   const up = await wakeAnswers(deps)
-  if (!up.ok) {
-    const what = up.why
-      ? `herdr-wake, which does not answer at ${cfg.wakeUrl} (${up.why})`
-      : "herdr-wake, and wakeUrl in the board's config.json is empty"
-    throw new Error(`putting sessions to sleep needs ${what}; nothing was put to sleep`)
-  }
+  if (!up.ok) throw new Error(`putting sessions to sleep needs ${wakeMissing(up)}; nothing was put to sleep`)
   const from = await ownSession()
   if (self && !from)
     throw new Error(
