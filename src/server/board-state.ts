@@ -11,6 +11,7 @@ import { forgetProfilePanes } from '../adapters/profile-panes.ts'
 import { listEntries, readLog } from '../adapters/schedule-store.ts'
 import { COLUMNS } from '../core/board.ts'
 import { categoryInfo, colorHex, laneRank, PALETTE } from '../core/categories.ts'
+import { isCodexItem } from '../core/codex.ts'
 import { foldModeOf } from '../core/fold-mode.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { lang, t } from '../core/lang.ts'
@@ -24,7 +25,7 @@ import type { Item } from '../core/types.ts'
 import type { WakeView } from '../core/wake/view.ts'
 import { collect } from '../services/board.ts'
 import type { Deps } from '../services/deps.ts'
-import { canFork } from '../services/launch/fork.ts'
+import { canCodexFork, canFork } from '../services/launch/fork.ts'
 import type { Launches } from '../services/launch/launches.ts'
 import { hooksInPlace } from '../services/profiles.ts'
 import { type Terminals, terminalOn } from '../services/terminals.ts'
@@ -204,6 +205,7 @@ export function createBoardState({
       mokupilot: mokupilot?.() ?? false,
       // fork: whether the board can fork a session into a new tab with its launcher.
       fork: canFork(cfg),
+      codexFork: list.some(isCodexItem) && canCodexFork(),
       // aside: whether a session's sheet offers a side question (Claude Code on PATH).
       aside: aside?.() ?? false,
       setup: setup?.() ?? null,

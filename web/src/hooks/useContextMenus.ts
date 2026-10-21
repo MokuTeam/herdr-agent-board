@@ -456,6 +456,7 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
             terminal: data?.terminal,
             mokupilot: data?.mokupilot,
             fork: data?.fork,
+            codexFork: data?.codexFork,
             schedules: data?.schedules,
           },
         }

@@ -7,10 +7,12 @@ import { readCard, removeCard, writeCard } from '../../adapters/cards.ts'
 import { herdr, paneTab, workspaceList } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { findCommand } from '../../adapters/setup-facts.ts'
+import { isCodexSession } from '../../core/codex.ts'
 import { t } from '../../core/lang.ts'
 import { defaultAgent, type LaunchAgent, type LaunchAgentId, launchAgents } from '../../core/launch/agents.ts'
 import { failureKind } from '../../core/launch/launcher-command.ts'
 import { sameDir } from '../../core/launch/names.ts'
+import { forkCard } from '../../core/links.ts'
 import { isPiItem, piSessionId } from '../../core/pi.ts'
 import { shownProfiles } from '../../core/profiles.ts'
 import type { Item, LaunchView } from '../../core/types.ts'
@@ -43,6 +45,7 @@ export type StartResult = { ok: true; id: string } | { ok: false; field: string;
  * keeps when that card is not on the board (checkRequest).
  */
 export interface StartOptions {
+  codexFork?: true
   resume?: string | null
   fork?: string | null
   parent?: ParentFacts | null
@@ -123,14 +126,14 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
   async function start(
     body: unknown,
     items: Item[] = [],
-    { resume = null, fork = null, parent = null }: StartOptions = {},
+    { resume = null, fork = null, parent = null, codexFork }: StartOptions = {},
   ): Promise<StartResult> {
     const categories = new Set([...deps.cfg.categories.map(c => c.id), ...items.map(i => i.category)])
     // Only the board's own spawn-agent types a profile's start command: the others never read it.
-    const launcher = launcherFor(deps.cfg.launch, { resume: !!resume, fork: !!fork })
+    const launcher = launcherFor(deps.cfg.launch, { resume: !!resume, fork: !!fork, ...(codexFork && { codexFork }) })
     const r = await checkRequest(body, {
       categories,
-      profiles: deps.profiles(),
+      ...(codexFork ? { codexFork } : { profiles: deps.profiles() }),
       items,
       typesCommand: launcher.kind === 'builtin',
       ...(parent && { parent }),
@@ -143,7 +146,12 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
     // launch.agent whose arguments pick the session cannot resume one: refused before anything runs.
     if (resume && launcher.kind === 'herdr' && herdrCannotResume(deps.cfg.launch ?? {}, r.launch.profileArgs))
       return { ok: false, field: 'launcher', error: t('archive.err.cannotResume') }
-    if (fork && launcher.kind === 'herdr' && herdrCannotResume(deps.cfg.launch ?? {}, r.launch.profileArgs))
+    if (
+      fork &&
+      !codexFork &&
+      launcher.kind === 'herdr' &&
+      herdrCannotResume(deps.cfg.launch ?? {}, r.launch.profileArgs)
+    )
       return { ok: false, field: 'launcher', error: t('fork.err.launcher') }
     // A resumed session keeps its conversation: no first message goes into it. A fork starts with
     // a copy of its source's in the source's folder: no worktree.
@@ -223,6 +231,14 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
         )
       }
       if (!it) continue
+      if (
+        l.codexFork &&
+        (it.agent !== 'codex' ||
+          !l.sessionId ||
+          !isCodexSession(it.session ?? '') ||
+          it.session?.toLowerCase() !== l.sessionId.toLowerCase())
+      )
+        continue
       claimed.add(it.key)
       l.key = it.key
       l.pane ??= it.pane
@@ -230,7 +246,10 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
       // in a moment, so only other agents get a card by their pane.
       if (l.carded !== it.key && (it.session || it.agent !== 'claude')) {
         try {
-          writeCard(it.key, { category: l.category, profileWant: l.profile })
+          writeCard(it.key, {
+            category: l.category,
+            ...(l.codexFork ? { name: l.name, ...(l.fork && forkCard(l.fork)) } : { profileWant: l.profile }),
+          })
           // pi's card is under its file: the one written under the board's id before pi was up goes.
           if (isPiItem(it) && l.carded && laneOnly(l.carded)) removeCard(l.carded)
           l.carded = it.key

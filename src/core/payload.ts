@@ -95,6 +95,8 @@ export interface BoardPayload {
   mokupilot?: boolean
   /** Whether the board can fork a session into a new tab here (services/launch/fork.ts canFork). */
   fork?: boolean
+  /** Codex forks use herdr's Codex launcher independently of the configured Claude launcher. */
+  codexFork?: boolean
   /** Whether the board can ask a session a side question here (services/aside.ts: Claude Code on PATH). */
   aside?: boolean
   /** What of the board is not set up on this computer (core/setup.ts); null before the first check. */

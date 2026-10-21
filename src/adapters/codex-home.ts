@@ -5,9 +5,11 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { isCodexSession, parseCodexConversation, parseCodexTail } from '../core/codex.ts'
 import type { TranscriptInfo } from '../core/types.ts'
-import { readTail, type SessionThread } from './claude-home.ts'
+import { cwdOf as readCwd, readTail, type SessionThread } from './claude-home.ts'
 
 export interface CodexHome {
+  /** The folder in the rollout header, rather than the enclosing shell's folder. */
+  cwdOf(session: string): Promise<string | null>
   transcriptInfo(session: string | null): TranscriptInfo | null
   sessionThread(session: string, limit?: number): SessionThread
 }
@@ -92,5 +94,12 @@ export function createCodexHome(root = process.env.CODEX_HOME || join(homedir(),
     }
   }
 
-  return { transcriptInfo, sessionThread }
+  return {
+    transcriptInfo,
+    sessionThread,
+    async cwdOf(session) {
+      const found = locate(session)
+      return found ? readCwd(found.file) : null
+    },
+  }
 }

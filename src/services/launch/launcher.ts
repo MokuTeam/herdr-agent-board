@@ -171,8 +171,9 @@ export function notePane(l: Pick<LaunchContext, 'configDir' | 'profile'>, pane: 
  */
 export function launcherFor(
   spec: LaunchSpec | undefined,
-  { resume = false, fork = false }: { resume?: boolean; fork?: boolean } = {},
+  { resume = false, fork = false, codexFork }: { resume?: boolean; fork?: boolean; codexFork?: true } = {},
 ): Launcher {
+  if (codexFork && fork) return herdrLauncher({ agent: 'codex' }, true)
   const takes = (key: 'resume' | 'fork') => usesPlaceholder(spec?.command, key)
   if (spec?.command && (!resume || takes('resume')) && (!fork || takes('fork'))) return commandLauncher(spec)
   if (spec?.agent) return herdrLauncher(spec)
@@ -198,7 +199,7 @@ export function herdrCannotResume(spec: LaunchSpec, profileArgs: readonly string
 }
 
 /** `herdr agent start <name> --kind <agent> … -- --session-id <id>` in a tab of its own. */
-export function herdrLauncher(spec: LaunchSpec): Launcher {
+export function herdrLauncher(spec: LaunchSpec, codexFork = false): Launcher {
   const kind = String(spec.agent ?? 'claude')
   return {
     kind: 'herdr',
@@ -208,7 +209,7 @@ export function herdrLauncher(spec: LaunchSpec): Launcher {
       const chooses = picksSession(args)
       // A session is resumed (or forked) by its id: not by another agent, nor by arguments that
       // pick one (launches.ts refuses it before the launch; said here too before a tab is opened).
-      if ((l.resume || l.fork) && herdrCannotResume(spec, l.profileArgs))
+      if ((l.resume || l.fork) && !codexFork && herdrCannotResume(spec, l.profileArgs))
         throw new LaunchError(t('archive.err.cannotResume'), 'launcher')
       on.step('tab')
       let pane: string
@@ -225,6 +226,10 @@ export function herdrLauncher(spec: LaunchSpec): Launcher {
       if (l.resume) {
         sessionId = l.resume
         args.push('--resume', l.resume)
+      } else if (codexFork && l.fork) {
+        // Codex allocates the new id itself. The root hook reports it through herdr.
+        // The shell carries only a UUID. The tab already has the rollout's folder.
+        args.push('fork', l.fork)
       } else if (l.fork) {
         sessionId = randomUUID()
         on.session(sessionId)
@@ -256,7 +261,11 @@ export function herdrLauncher(spec: LaunchSpec): Launcher {
         )
       } catch (err) {
         const message = messageOf(err)
-        if (codeOf(err) !== 'agent_not_ready' && !/agent_not_ready/.test(message)) {
+        if (
+          codeOf(err) !== 'agent_not_ready' &&
+          !/agent_not_ready/.test(message) &&
+          !(codexFork && /timeout|timed out/i.test(message))
+        ) {
           const agent = kind === 'claude' ? 'Claude' : kind
           throw new LaunchError(
             /timeout|timed out/i.test(message) ? t('launch.err.notReady', { s: ms / 1000, agent }) : message,
@@ -266,7 +275,7 @@ export function herdrLauncher(spec: LaunchSpec): Launcher {
         // A dialog holds it (the folder trust, say): the board takes it from there.
         dialog = true
       }
-      return { pane, sessionId, agent: kind, dialog, failure: null, named: true, typed: false }
+      return { pane, sessionId, agent: kind, dialog, failure: null, named: true, typed: codexFork }
     },
   }
 }
