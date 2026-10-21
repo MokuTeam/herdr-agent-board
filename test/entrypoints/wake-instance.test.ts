@@ -59,6 +59,22 @@ test('a second wake process finds the port held by a wake and exits 0 quietly', 
   expect(statusOf(box)).toBeNull()
 })
 
+test('a port held by a wake whose herdr hangs: the second wake still knows it for a wake (its /alive) and exits 0 quietly', async () => {
+  const box = await wakeSandbox()
+  emptyHerdr(box)
+  const port = await unusedPort()
+  const first = await startWakeProcess(box, { port })
+  // herdr's snapshot never comes from now on: the first wake's /status does not answer.
+  box.state({ 'api snapshot': { waitFor: join(box.dir, 'never') } })
+  const second = spawnWake(box)
+  expect(await exitWithin(second.proc, 15_000)).toBe(0)
+  expect(second.output().stderr).toBe('')
+  expect(wakeLogText(box)).toContain(` another wake answers on 127.0.0.1:${port}: this one ends\n`)
+  // No portTaken written over the live wake's record.
+  expect(statusOf(box)).toBeNull()
+  expect(first.proc.exitCode).toBeNull()
+})
+
 test('a port held by another program: status portTaken, exit 76', async () => {
   const box = await wakeSandbox()
   emptyHerdr(box)

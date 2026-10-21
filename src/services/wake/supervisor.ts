@@ -23,7 +23,7 @@ export interface WakeChild {
 
 export interface SupervisorDeps {
   spawn(): WakeChild
-  /** Whether a wake answers its /status (within 5 s). */
+  /** Whether the wake process answers its GET /alive, which never waits on herdr (within 5 s). */
   health(): Promise<boolean>
   writeStatus(s: WakeStatusFile): void
   /** On the pane's screen. */
