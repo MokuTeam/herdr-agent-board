@@ -44,6 +44,13 @@ const NO_ITEM = { key: '', column: '' }
 
 const itemIn = (data: BoardPayload | null, key: string) => data?.items.find(i => i.key === key)
 
+/**
+ * A read again of the conversation on screen says "Refreshing" only once it takes this long: it
+ * comes with every step of a working session and is done in a few ms most times (#169). Under the
+ * board's refresh (2 s), so a slow read still says so before the next one.
+ */
+export const REFRESH_QUIET_MS = 1000
+
 /** `shown`: the session the sheet shows (the open one, else the one it showed last). */
 export function useSessionDetail(shown: string | null): SessionDetailApi {
   const t = useT()
@@ -58,6 +65,7 @@ export function useSessionDetail(shown: string | null): SessionDetailApi {
   const [resource] = useState(() =>
     detailResource<SessionDetail>({
       read: (key, signal) => readDetail(key, signal, latest.current.t),
+      quietMs: REFRESH_QUIET_MS,
       changed(value) {
         const { board } = latest.current
         if (board.ui.open !== value.key || value.key === null) return
