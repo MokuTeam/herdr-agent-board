@@ -1,7 +1,8 @@
 // What the install action writes, worked out without touching a file: the SessionStart /
-// UserPromptSubmit hooks, the status line and (on request) the desktop notification hooks in
-// Claude Code's settings.json, and the `board` and `spawn-agent` shims for ~/.local/bin. The
-// entrypoint (entrypoints/install.ts) reads, backs up and writes; core/setup.ts checks the result.
+// UserPromptSubmit hooks, the status line, (on request) the desktop notification hooks and (while
+// wake is on) wake's ListAgents / SendMessage hooks in Claude Code's settings.json, and the
+// `board` and `spawn-agent` shims for ~/.local/bin. The entrypoint (entrypoints/install.ts)
+// reads, backs up and writes; core/setup.ts checks the result.
 
 export interface InstallPaths {
   bun: string
@@ -30,6 +31,15 @@ export const TOAST_EVENTS = [
   ['Notification', 'permission_prompt|elicitation_dialog'],
   ['PreToolUse', 'AskUserQuestion'],
 ] as const
+/** The separate herdr-wake plugin's hooks, as its install-hooks.mjs recognises them. */
+export const OLD_WAKE_HOOK = /herdr-wake.*hook\.mjs"? (pre-send|post-list|session-start)$/
+/** Wake's hooks (#119): the event, its matcher, entrypoints/wake-hook.ts's mode, the timeout in seconds. */
+export const WAKE_HOOKS = [
+  ['PreToolUse', 'SendMessage', 'pre-send', 180],
+  ['PostToolUse', 'ListAgents', 'post-list', 10],
+] as const
+// Ours from any copy: `"<bun>" "…agent-board…/src/entrypoints/wake-hook.ts" <mode>`.
+const OUR_WAKE_HOOK = /agent-board.*[\\/]entrypoints[\\/]wake-hook\.ts"? (pre-send|post-list)$/
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 const commandOf = (v: unknown): string => (isRecord(v) && typeof v.command === 'string' ? v.command : '')
@@ -87,6 +97,35 @@ export function commandsOf(settings: unknown, event: string): { command: string;
 
 const bunCommand = (bun: string, script: string): string => `${quote(bun)} ${quote(script)}`
 
+/** Which hook commands are wake's of the board's: from any copy, or running `wakeHook`. */
+const ourWakeCommands =
+  (wakeHook: string): CommandTest =>
+  command =>
+    OUR_WAKE_HOOK.test(command) || (!!wakeHook && normPath(command).includes(normPath(wakeHook)))
+
+/** A hook the separate herdr-wake plugin wrote is in these settings, under any event. */
+export function hasOldWakeHook(settings: unknown): boolean {
+  const hooks = isRecord(settings) && isRecord(settings.hooks) ? settings.hooks : {}
+  return Object.keys(hooks).some(event => commandsOf(settings, event).some(c => OLD_WAKE_HOOK.test(c.command)))
+}
+
+export type WakeHooksState = 'in' | 'old' | 'missing'
+
+/**
+ * What a settings.json has of wake's hooks: `old` when the separate herdr-wake plugin's are there
+ * (install puts none of ours beside them), `in` when both of ours run this copy's `wakeHook`, else
+ * `missing`.
+ */
+export function wakeHooksState(settings: unknown, wakeHook: string): WakeHooksState {
+  if (hasOldWakeHook(settings)) return 'old'
+  const here = normPath(wakeHook)
+  const has = ([event, matcher, mode]: (typeof WAKE_HOOKS)[number]): boolean =>
+    commandsOf(settings, event).some(
+      c => c.matcher === matcher && normPath(c.command).includes(here) && c.command.endsWith(` ${mode}`),
+    )
+  return WAKE_HOOKS.every(has) ? 'in' : 'missing'
+}
+
 /**
  * The event's hook list without our earlier hooks (`isOurs`), then `entry` when there is one. An
  * entry left with no hooks goes (as main did); anything not shaped like a hook entry is someone
@@ -127,15 +166,18 @@ export interface SettingsPlan {
  * settings.json (parsed; undefined when there is none) with our hooks and status line in place
  * of any earlier ones of ours. A status line someone else set stays. The notification hooks go
  * in when `toast` is true and out when it is false; left as they are (pointed at this copy) when
- * it is undefined. `replaced` lists the commands of ours that went. The input is not changed.
- * `hooks` that is not an object, or an event in it that is not a list, is replaced (as upstream's
- * install): the board's events get its entries, the notification events its entries or nothing.
+ * it is undefined. Wake's hooks (WAKE_HOOKS) go in with `wake` (wake on), in place of earlier ones
+ * of ours, unless the separate herdr-wake plugin's are in the file (`oldWake`): then none of ours
+ * stays beside them. Without `wake`, ours are left as they are (inert while wake is off).
+ * `replaced` lists the commands of ours that went. The input is not changed. `hooks` that is not
+ * an object, or an event in it that is not a list, is replaced (as upstream's install): the
+ * board's events get its entries, the notification events its entries or nothing.
  */
 export function planSettings(
   settings: unknown,
-  paths: InstallPaths,
-  { toast }: { toast?: boolean | undefined } = {},
-): SettingsPlan {
+  paths: InstallPaths & { wakeHook: string },
+  { toast, wake = false }: { toast?: boolean | undefined; wake?: boolean } = {},
+): SettingsPlan & { oldWake: boolean } {
   if (settings !== undefined && !isRecord(settings))
     throw new Error('settings.json is not a JSON object; left as it was')
   const next: Settings = structuredClone(settings ?? {})
@@ -155,6 +197,20 @@ export function planSettings(
     if (list.length) hooks[event] = list
     else delete hooks[event]
   }
+  // Wake's: only while wake is on, and never beside the separate plugin's (two hooks would wake one
+  // session). Run by the Bun the install ran, as the board's hooks.
+  const oldWake = hasOldWakeHook(settings)
+  if (wake) {
+    const isOurs = ourWakeCommands(paths.wakeHook)
+    for (const [event, matcher, mode, timeout] of WAKE_HOOKS) {
+      const command = `${bunCommand(paths.bun, paths.wakeHook)} ${mode}`
+      const entry = !oldWake && { matcher, hooks: [{ type: 'command', command, timeout }] }
+      if (!entry && !commandsOf(next, event).some(c => isOurs(c.command))) continue
+      const list = withOurHook(hooks[event], entry, isOurs, replaced)
+      if (list.length) hooks[event] = list
+      else delete hooks[event]
+    }
+  }
   // Claude Code's own numbers for the board (usage windows, context fill). A status line someone
   // else set stays; the board then reads the usagebar cache, if there is one.
   const line = commandOf(next.statusLine)
@@ -163,7 +219,7 @@ export function planSettings(
     if (next.statusLine) replaced.push(line)
     next.statusLine = { type: 'command', command: bunCommand(paths.bun, paths.statusline) }
   }
-  return { settings: next, replaced, statusLineSet, toast: withToast }
+  return { settings: next, replaced, statusLineSet, toast: withToast, oldWake }
 }
 
 const MARK = 'agent-board'

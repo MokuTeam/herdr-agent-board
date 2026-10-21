@@ -31,7 +31,11 @@ const ROOT_A = 'C:\\plugins\\agent-board'
 const ROOT_B = 'C:\\plugins\\mokuteam.herdr-agent-board-1a2b'
 const BUN = 'C:\\Users\\u\\.bun\\bin\\bun.exe'
 const files = boardFiles(ROOT_A)
-const pathsOf = (root: string): InstallPaths => ({ bun: BUN, ...boardFiles(root), binDir: 'C:\\Users\\u\\.local\\bin' })
+const pathsOf = (root: string): InstallPaths & { wakeHook: string } => ({
+  bun: BUN,
+  ...boardFiles(root),
+  binDir: 'C:\\Users\\u\\.local\\bin',
+})
 const hookCommand = (f: BoardFiles) => `${quote(BUN)} ${quote(f.hook)}`
 type Settings = { hooks: Record<string, { matcher?: string; hooks: { command: string }[] }[] | undefined> }
 const commands = (settings: unknown, event: string) =>

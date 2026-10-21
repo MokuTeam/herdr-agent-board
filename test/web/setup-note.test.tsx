@@ -16,7 +16,7 @@ import { newMarkup, OldSetup, oldMarkup, type SetupServer } from './support/old-
 
 const ROOT = 'C:\\plugins\\agent-board'
 const files = boardFiles(ROOT)
-const paths: InstallPaths = { bun: 'C:\\bun.exe', ...files, binDir: 'C:\\Users\\u\\.local\\bin' }
+const paths: InstallPaths & { wakeHook: string } = { bun: 'C:\\bun.exe', ...files, binDir: 'C:\\Users\\u\\.local\\bin' }
 
 /** A computer half set up: no hooks, no key, no herdr-wake, notifications off; the commands in place. */
 function facts(): SetupFacts {
