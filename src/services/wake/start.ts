@@ -18,7 +18,7 @@ import { STARTING_MS, type WakeStatusFile } from '../../core/wake/status.ts'
 
 export interface StartDeps {
   herdr<T = unknown>(args: string[], timeoutMs?: number): Promise<T>
-  /** Whether a wake answers on the port (adapters/wake-api.ts wakeAnswers). */
+  /** Whether the board's wake answers GET /alive on the port (adapters/wake-api.ts wakeAlive); the old router never does. */
   answers(port: number): Promise<boolean>
   readStatus(): WakeStatusFile | null
   writeStatus(s: WakeStatusFile): void
