@@ -1,7 +1,8 @@
 // What the install action writes, worked out without touching a file: the SessionStart /
-// UserPromptSubmit hooks, the status line and (on request) the desktop notification hooks in
-// Claude Code's settings.json, and the `board` and `spawn-agent` shims for ~/.local/bin. The
-// entrypoint (entrypoints/install.ts) reads, backs up and writes; core/setup.ts checks the result.
+// UserPromptSubmit hooks, the question form's PreToolUse hook, the status line and (on request)
+// the desktop notification hooks in Claude Code's settings.json, and the `board` and
+// `spawn-agent` shims for ~/.local/bin. The entrypoint (entrypoints/install.ts) reads, backs up
+// and writes; core/setup.ts checks the result.
 
 export interface InstallPaths {
   bun: string
@@ -24,6 +25,11 @@ const OUR_HOOK = /agent-board.*[\\/](hook\.mjs|entrypoints[\\/]hook\.ts)/
 const OUR_STATUS_LINE = /agent-board.*[\\/](statusline\.mjs|entrypoints[\\/]statusline\.ts)/
 const OUR_TOAST = /agent-board.*[\\/]toast\.ps1/
 export const BOARD_EVENTS = ['SessionStart', 'UserPromptSubmit'] as const
+/**
+ * The board's hook on a question form, before its dialog opens: the event and its matcher. It
+ * keeps the questions Claude Code holds back from the transcript (core/held-question.ts).
+ */
+export const QUESTION_HOOK = ['PreToolUse', 'AskUserQuestion'] as const
 /** The notification hooks: the event and its matcher. */
 export const TOAST_EVENTS = [
   ['Stop', null],
@@ -145,6 +151,8 @@ export function planSettings(
   const replaced: string[] = []
   const hook = { hooks: [{ type: 'command', command: bunCommand(paths.bun, paths.hook), timeout: 10 }] }
   for (const event of BOARD_EVENTS) hooks[event] = withOurHook(hooks[event], hook, ours.hook, replaced)
+  const [asked, matcher] = QUESTION_HOOK
+  hooks[asked] = withOurHook(hooks[asked], { matcher, ...hook }, ours.hook, replaced)
   // Desktop notifications: Windows PowerShell shows them, in the background (async), so Claude does not wait.
   const had = TOAST_EVENTS.some(([event]) => commandsOf(settings, event).some(c => ours.toast(c.command)))
   const withToast = toast ?? had

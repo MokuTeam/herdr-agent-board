@@ -68,7 +68,11 @@ test('install: settings.json backed up and rewritten with the Bun path, shims in
   assert.equal(readFileSync(join(claude, 'settings.json.bak-agent-board'), 'utf8'), original)
   assert.deepEqual(JSON.parse(readFileSync(join(claude, 'settings.json'), 'utf8')), {
     model: 'opus',
-    hooks: { SessionStart: [own, ours], UserPromptSubmit: [ours] },
+    hooks: {
+      SessionStart: [own, ours],
+      UserPromptSubmit: [ours],
+      PreToolUse: [{ matcher: 'AskUserQuestion', ...ours }],
+    },
     statusLine: { type: 'command', command: command('statusline.ts') },
   })
   assert.ok(readFileSync(join(bin, 'board'), 'utf8').includes(`\nexec ${command('cli.ts')} "$@"\n`))
@@ -116,7 +120,11 @@ test('install: "hooks" that is not an object is replaced with the board’s, as 
   }
   const after = JSON.parse(readFileSync(join(claude, 'settings.json'), 'utf8'))
   assert.equal(after.model, 'opus')
-  assert.deepEqual(after.hooks, { SessionStart: [ours], UserPromptSubmit: [ours] })
+  assert.deepEqual(after.hooks, {
+    SessionStart: [ours],
+    UserPromptSubmit: [ours],
+    PreToolUse: [{ matcher: 'AskUserQuestion', ...ours }],
+  })
   assert.equal(readFileSync(join(claude, 'settings.json.bak-agent-board'), 'utf8'), original)
 })
 
@@ -213,7 +221,7 @@ test('install writes into every shown profile and touches no hidden one', async 
     // The agents' skill too, each profile its own copy, said before its hooks.
     expect(read(home, p, 'skills', 'herdr-agents', 'SKILL.md')).toBe(skill)
     expect(stdout).toContain(
-      `skill: ${join(home, p, 'skills', 'herdr-agents', 'SKILL.md')}\nhooks: SessionStart, UserPromptSubmit -> ${entry('hook.ts')} in ${join(home, p, 'settings.json')}\nstatus line: ${entry('statusline.ts')}\n`,
+      `skill: ${join(home, p, 'skills', 'herdr-agents', 'SKILL.md')}\nhooks: SessionStart, UserPromptSubmit, PreToolUse (AskUserQuestion) -> ${entry('hook.ts')} in ${join(home, p, 'settings.json')}\nstatus line: ${entry('statusline.ts')}\n`,
     )
   }
   expect(read(home, '.claude-gamedev', 'settings.json')).toBe(before)

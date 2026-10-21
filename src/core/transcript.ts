@@ -188,6 +188,7 @@ export const tailComplete = (info: TranscriptInfo): boolean =>
  *   tool      the last tool call: { id, name, label, detail, pending, questions }; pending = no
  *             result yet, questions = an AskUserQuestion call's questions
  *   question  the agent's last words end in a question; replied: the user wrote after them
+ *   lastAt    the time of the newest user or assistant line
  */
 export function parseTranscriptTail(lines: string[]): TranscriptInfo {
   const info: TranscriptInfo = { title: '', prompt: '', lastText: '', question: '', replied: false, tool: null }
@@ -206,6 +207,10 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
     if (!line.includes('"type":"user"') && !line.includes('"type":"assistant"')) continue
     const o = parse(line)
     if (!o || o.isSidechain) continue
+    if (info.lastAt === undefined && (o.type === 'user' || o.type === 'assistant')) {
+      const at = Date.parse(str(o.timestamp))
+      if (at) info.lastAt = at
+    }
     const message = rec(o.message)
     const content = message?.content
     if (o.type === 'user') {
