@@ -452,8 +452,9 @@ The panel shows the same snippets with the owner's values filled in, each with C
    - `ForceCommand` and the nologin shell: it runs no command.
    - `ClientAlive*`: a dead connection's sshd ends within about 30 s.
    - These need OpenSSH 7.8 or newer on the server: `PermitListen` came in 7.8, the rest
-     earlier. `KbdInteractiveAuthentication` is 8.7's name; older servers call it
-     `ChallengeResponseAuthentication`.
+     earlier, and the block works as written from 7.8 on: `KbdInteractiveAuthentication` is
+     allowed in a `Match` block there, while `ChallengeResponseAuthentication` (an alias of it
+     since 8.7) is not before 8.7, so the block never uses it.
 
    **What keeps the tunnel user to that one path (call 31).** No sshd or `authorized_keys` option
    names the paths a socket forward may use: `permitlisten` and `PermitListen` cover TCP only.

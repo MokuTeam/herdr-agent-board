@@ -1583,8 +1583,9 @@ Match User boardtunnel
 - `AuthorizedKeysFile`: the key lives in root's file, out of the tunnel user's reach.
   `ForceCommand` and the nologin shell: it runs no command. `ClientAlive*`: a dead connection's
   sshd ends within about 30 s.
-- `PermitListen` needs OpenSSH 7.8 or newer. `KbdInteractiveAuthentication` is 8.7's name; older
-  servers call it `ChallengeResponseAuthentication`.
+- `PermitListen` needs OpenSSH 7.8 or newer; from there on the block works as it is. Keep
+  `KbdInteractiveAuthentication`: before 8.7, sshd refuses `ChallengeResponseAuthentication` in a
+  `Match` block.
 
 No sshd or `authorized_keys` option names the paths a socket forward may take; the folder does.
 Only the tunnel's user (and root) can make a socket in it and only Caddy's group can open it, so
