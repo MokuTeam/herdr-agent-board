@@ -73,6 +73,7 @@ const BARE: AccessView = {
   login: { password: false, totp: false, passkeys: [], lockout: null },
   logins: [],
   attempts: [],
+  server: null,
 }
 
 const IPAD_ADDED = new Date(2026, 9, 18, 10, 0).getTime()

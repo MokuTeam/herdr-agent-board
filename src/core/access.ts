@@ -6,6 +6,7 @@
 // Pure, with no node: import: the page imports it too.
 import { t } from './lang.ts'
 import { clearCookie, cookieToken, IP, tokenCookie } from './pwa.ts'
+import { isServerView, type ServerView } from './server-view.ts'
 import type { TunnelConfig, TunnelProblem, TunnelStatus } from './tunnel.ts'
 
 /** A login lasts 30 days from sign-in, fixed, not sliding. */
@@ -202,6 +203,8 @@ export interface AccessView {
   login: { password: boolean; totp: boolean; passkeys: PublicPasskey[]; lockout: { until: number } | null }
   logins: PublicLogin[]
   attempts: Attempt[]
+  /** Setting up the server's web server (core/server-view.ts); null until the board has something to show. */
+  server: ServerView | null
 }
 
 type Fields = Record<string, unknown>
@@ -282,6 +285,7 @@ export function isAccessView(v: unknown): v is AccessView {
     isTunnelView(v.tunnel) &&
     isLoginView(v.login) &&
     listOf(v.logins, isPublicLogin) &&
-    listOf(v.attempts, isAttempt)
+    listOf(v.attempts, isAttempt) &&
+    (v.server === null || isServerView(v.server))
   )
 }
