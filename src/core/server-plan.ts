@@ -706,7 +706,8 @@ function runStep(id: string, name: string, role: string, args: string[], setup: 
     {
       commands: [
         `if ${ours}; then sudo docker rm -f ${name} >/dev/null; fi`,
-        `sudo docker run ${args.map(q).join(' ')}`,
+        // the argv after `docker` (caddyRunArgs, socatRunArgs): `run` is its first word
+        `sudo docker ${args.map(q).join(' ')}`,
       ],
       skipIf: [
         `[ "$(sudo docker inspect -f '{{index .Config.Labels "${ARGS_LABEL}"}} {{.State.Running}}' ${name} 2>/dev/null)" = '${hash} true' ]`,

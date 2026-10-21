@@ -325,9 +325,12 @@ for (const distro of DISTROS) {
       expect(text(step(p, 'write'))).toContain(String.raw`'/srv/it'\''s web/Caddyfile'`)
       expect(text(step(p, 'candidate'))).toContain(String.raw`'/srv/it'\''s web/.Caddyfile.agent-board'`)
       expect(all(p)).not.toContain("/srv/it's web")
+      // the argv after `docker`, `run` its first word: once
       expect(text(step(p, 'run-socat'))).toContain(
-        `sudo docker run ${socatRunArgs({ network: 'web_default' }, W, GID, 'r1').join(' ')}`,
+        `sudo docker ${socatRunArgs({ network: 'web_default' }, W, GID, 'r1').join(' ')}`,
       )
+      expect(all(p)).not.toContain('docker run run')
+      expect(all(plan(factsFor('bare', distro)))).not.toContain('docker run run')
       expect(text(step(p, 'pull-socat'))).toBe(
         `sudo docker pull ${SOCAT_IMAGE}\nsudo docker image inspect ${SOCAT_IMAGE} >/dev/null`,
       )
