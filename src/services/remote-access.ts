@@ -5,7 +5,11 @@
 // totp-begin's own answer. A tunnel field that fails its own check is refused with config.json
 // untouched; changing the domain while passkeys or logins exist is asked first (they belong to
 // the old one), and then ends them all.
-import { existsSync } from 'node:fs'
+// The view is fetched on every change of the board's access, which anyone on the internet can
+// make (a failed sign-in is recorded): what ssh-keygen reads of the key and of the pinned server
+// key is kept while their files stay as they were, and read again after Generate key, Forget the
+// server's key and Test connection.
+import { existsSync, statSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { type EditResult, editTunnel, setTunnelOn } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
@@ -15,8 +19,10 @@ import {
   generateKey,
   hostKeyFingerprint,
   keyPath,
+  knownHostsFile,
   publicKeyOf,
   sshBin,
+  sshKeygenBin,
 } from '../adapters/ssh.ts'
 import type { AccessView } from '../core/access.ts'
 import { t } from '../core/lang.ts'
@@ -64,11 +70,45 @@ const malformed = (error: string): Answer => ({ status: 400, body: { ok: false, 
 const FIELDS: ReadonlySet<string> = new Set<TunnelField>(['host', 'sshPort', 'user', 'key', 'socket', 'domain', 'port'])
 const isField = (name: string): name is TunnelField => FIELDS.has(name)
 
+/** A file as it stands (its size and times), '' when it is not there. */
+function stampOf(path: string): string {
+  try {
+    const s = statSync(path)
+    return `${s.size}:${s.mtimeMs}:${s.ctimeMs}`
+  } catch {
+    return ''
+  }
+}
+
+/** One answer kept while its stamp (the files it read, as they stand) stays the same. */
+function keptBy<T>(): { get(stamp: string, read: () => Promise<T>): Promise<T>; forget(): void } {
+  let kept: { stamp: string; value: Promise<T> } | null = null
+  return {
+    get(stamp, read) {
+      if (kept?.stamp === stamp) return kept.value
+      const value = read()
+      const entry = { stamp, value }
+      kept = entry
+      // A read that failed is not kept.
+      value.catch(() => {
+        if (kept === entry) kept = null
+      })
+      return value
+    },
+    forget() {
+      kept = null
+    },
+  }
+}
+
 export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
   const { cfg, webPort, access, supervisor } = d
   const conf = () => tunnelConfig(cfg.tunnel)
   const ports = () => boardPorts(cfg.remote, webPort)
   const changed = (): void => d.onChange?.()
+  // What ssh-keygen said of the key and of the pinned server key, by the files it read.
+  const keyRead = keptBy<Awaited<ReturnType<typeof publicKeyOf>>>()
+  const hostKeyRead = keptBy<string | null>()
 
   /** Why On is refused now: the first setting that does not check out, or the login not set up; null when it may be on. */
   const blocked = (problems: readonly TunnelProblem[]): string | null =>
@@ -78,7 +118,8 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
   async function keyView(c: TunnelConfig): Promise<AccessView['tunnel']['key']> {
     const path = keyPath(c)
     const exists = existsSync(path)
-    const read = exists ? await publicKeyOf(path) : null
+    const stamp = JSON.stringify([sshKeygenBin(), path, stampOf(path), stampOf(`${path}.pub`)])
+    const read = exists ? await keyRead.get(stamp, () => publicKeyOf(path)) : null
     return {
       path,
       generated: !c.key,
@@ -116,6 +157,7 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
   async function newKey(replace: boolean): Promise<Answer> {
     if (existsSync(generatedKey()) && !replace) return refused(t('access.keySure'), { confirm: 'key' })
     const made = await generateKey(`agent-board@${hostname()}`)
+    keyRead.forget()
     if (!made.ok) return refused(made.error)
     changed()
     return ok({ publicKey: made.publicKey })
@@ -135,7 +177,9 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
           status: supervisor.status(),
           ssh: sshBin(),
           key: await keyView(c),
-          hostKey: await hostKeyFingerprint(),
+          hostKey: await hostKeyRead.get(JSON.stringify([sshKeygenBin(), stampOf(knownHostsFile())]), () =>
+            hostKeyFingerprint(),
+          ),
         },
         login,
         logins,
@@ -159,11 +203,14 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
           return newKey(b.replace === true)
         case 'hostkey-forget':
           forgetHostKey()
+          hostKeyRead.forget()
           changed()
           return ok()
         case 'test': {
           const steps = await supervisor.test()
-          // its own ssh may have pinned the server's key
+          // its own ssh may have pinned the server's key; the key's rights may have been put right
+          keyRead.forget()
+          hostKeyRead.forget()
           changed()
           return ok({ steps })
         }

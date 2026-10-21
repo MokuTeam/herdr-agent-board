@@ -6,13 +6,14 @@
 // passes the domain on through the socket. The probe through the domain goes there too
 // (BOARD_TUNNEL_PROBE_ORIGIN).
 import { beforeAll, describe, expect, onTestFinished, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { type AccessView, isAccessView } from '../../src/core/access.ts'
 import { REMOTE_API } from '../../src/core/remote.ts'
 import { base32Bytes, totpCode, totpStep } from '../../src/core/totp.ts'
 import { forwardSpec, sshArgs, tunnelConfig } from '../../src/core/tunnel.ts'
+import { ACCESS_PUBLISH_MS } from '../../src/server/app.ts'
 import { logged, serveBoard, sharedSandbox, unusedPort } from '../support/board-server.ts'
 import { fakeSshBin } from '../support/fake-ssh-bin.ts'
 import { type Child, type Sandbox, sandbox, until } from '../support/sandbox.ts'
@@ -21,6 +22,7 @@ import {
   PASSWORD,
   seedAccess,
   seededLogin,
+  startTunnelBoard,
   stateFolder,
   viaCaddy,
   writeState,
@@ -47,6 +49,11 @@ function fakeSsh(box: Sandbox, proxyPort: number) {
       lines(log)
         .map(line => JSON.parse(line) as string[])
         .filter(a => a.includes('-R')),
+    /** The ssh-keygen calls, oldest first. */
+    keygenCalls: (): string[][] =>
+      lines(log)
+        .map(line => JSON.parse(line) as string[])
+        .filter(a => !a.includes('-R')),
     /** Each ssh the fake ran, by its pid. */
     pids: (): number[] => lines(`${log}.pids`).map(Number),
   }
@@ -333,6 +340,37 @@ describe('Remote access, set up from the local board', () => {
     expect((await api.view()).tunnel.hostKey).toBe(FINGERPRINT)
   }, 60_000)
 
+  test('the view asks ssh-keygen again only once the key’s or the server key’s file changed', async () => {
+    // The panel fetches the view on every change of the board's access (a failed sign-in through
+    // the domain, say): the key and the pinned server key are read once while their files stay.
+    const asked = (from: number): string[] =>
+      ssh
+        .keygenCalls()
+        .slice(from)
+        .map(a => a[0] ?? '')
+    const v = await api.view()
+    expect([v.tunnel.key.publicKey, v.tunnel.hostKey]).toEqual([`${PUBLIC_KEY} agent-board@${hostname()}`, FINGERPRINT])
+    const before = ssh.keygenCalls().length
+    expect(await api.view()).toEqual(v)
+    expect(await api.view()).toEqual(v)
+    expect(asked(before)).toEqual([])
+    // The key's file changed: its public half is read again, the server's key is not.
+    const later = new Date(Date.now() + 60_000)
+    utimesSync(join(state, 'tunnel', 'id_ed25519'), later, later)
+    expect(await api.view()).toEqual(v)
+    expect(asked(before)).toEqual(['-y'])
+    // known_hosts changed: the server's key is read again.
+    utimesSync(join(state, 'tunnel', 'known_hosts'), later, later)
+    expect(await api.view()).toEqual(v)
+    expect(await api.view()).toEqual(v)
+    expect(asked(before)).toEqual(['-y', '-l'])
+    // Generate key: the new key shows at once.
+    expect((await api.op({ op: 'key-generate', replace: true }))[0]).toBe(200)
+    const made = ssh.keygenCalls().length
+    expect((await api.view()).tunnel.key.publicKey).toBe(`${PUBLIC_KEY} agent-board@${hostname()}`)
+    expect(asked(made)).toEqual(['-y'])
+  })
+
   test('On: the board runs the tunnel’s ssh, the domain reaches it, and Test runs no ssh of its own', async () => {
     const rev = await api.accessRev()
     const before = ssh.sshCalls().length
@@ -517,5 +555,82 @@ describe('the board restarts: never two ssh, and none left behind', () => {
     expect(v.tunnel.status.state).toBe('connected')
     expect(alive(first)).toBe(false)
     expect(ssh.pids().filter(alive)).toHaveLength(1)
+  }, 60_000)
+})
+
+/** The local board's event stream: each payload it pushed, oldest first. */
+async function payloadsOf(url: string): Promise<{ payloads: Reply[]; close(): Promise<void> }> {
+  const res = await fetch(`${url}/api/events`)
+  const reader = (res.body as ReadableStream<Uint8Array>).getReader()
+  const decoder = new TextDecoder()
+  const payloads: Reply[] = []
+  let rest = ''
+  const read = (async () => {
+    for (;;) {
+      const chunk = await reader.read().catch(() => ({ done: true, value: undefined }))
+      if (chunk.done) return
+      rest += decoder.decode(chunk.value, { stream: true })
+      const events = rest.split('\n\n')
+      rest = events.pop() ?? ''
+      for (const event of events)
+        for (const line of event.split('\n'))
+          if (line.startsWith('data: ')) payloads.push(JSON.parse(line.slice('data: '.length)) as Reply)
+    }
+  })()
+  return {
+    payloads,
+    async close() {
+      await reader.cancel().catch(() => {})
+      await read
+    },
+  }
+}
+
+describe('failed sign-ins through the domain, many at once', () => {
+  /** A passkey sign-in with no challenge of the board's: refused, and recorded as a failed one. */
+  const WRONG_PASSKEY = { id: 'x', response: { clientDataJSON: 'e30', authenticatorData: 'AA', signature: 'AA' } }
+
+  test('the board goes out once for the burst and once after it, with the latest revision', async () => {
+    const box = await sandbox()
+    await seedAccess(box)
+    // No ssh here: its error is retried in a minute, after this test.
+    const { url, tunnel } = await startTunnelBoard(box)
+    await eventually(async () => !(await refuses(tunnel)), 10_000)
+    const stream = await payloadsOf(url)
+    try {
+      // The board's start (the listener, ssh not found) has gone out: nothing more for a while.
+      for (let seen = -1; seen !== stream.payloads.length; ) {
+        seen = stream.payloads.length
+        await Bun.sleep(ACCESS_PUBLISH_MS + 500)
+      }
+      const from = stream.payloads.length
+      const rev = Number(((await (await fetch(`${url}/api/board`)).json()) as Reply).accessRev)
+      const caddy = viaCaddy(tunnel)
+      const n = 30
+      const started = Date.now()
+      const statuses = await Promise.all(
+        Array.from({ length: n }, (_, i) =>
+          caddy
+            .post('/api/login/passkey', WRONG_PASSKEY, { 'x-forwarded-for': `198.51.100.${i + 1}` })
+            .then(r => r.status),
+        ),
+      )
+      const took = Date.now() - started
+      expect(statuses).toEqual(Array<number>(n).fill(401))
+      // The window after the last one: its change goes out too.
+      await Bun.sleep(ACCESS_PUBLISH_MS + 700)
+      const pushed = stream.payloads.slice(from)
+      // Once at the first change and once at the end of its window: 2 for a burst within one
+      // window (one more for each further window a slow machine took).
+      expect(pushed.length).toBeGreaterThanOrEqual(1)
+      expect(pushed.length).toBeLessThanOrEqual(1 + Math.max(1, Math.ceil(took / ACCESS_PUBLISH_MS)))
+      // Each recorded failure counted; the last payload out carries them all.
+      const last = Number(pushed.at(-1)?.accessRev)
+      expect(last - rev).toBeGreaterThanOrEqual(n)
+      expect(((await (await fetch(`${url}/api/board`)).json()) as Reply).accessRev).toBe(last)
+      expect((await local(url).view()).attempts).toHaveLength(20)
+    } finally {
+      await stream.close()
+    }
   }, 60_000)
 })

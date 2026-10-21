@@ -110,6 +110,40 @@ function watchFolder(dir: string, ms: number, onChange: () => void, log: Deps['l
   }
 }
 
+/** The board goes out for changes of Remote access at most this often (see accessChanged). */
+export const ACCESS_PUBLISH_MS = 1000
+
+/**
+ * `fn` at most once every `ms`: a call in a quiet time runs it at once; the calls during the
+ * window after it run it once more at the window's end, which opens another.
+ */
+function atMostEvery(ms: number, fn: () => void): { call(): void; cancel(): void } {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let again = false
+  const windowEnds = (): void => {
+    timer = undefined
+    if (!again) return
+    again = false
+    fn()
+    timer = setTimeout(windowEnds, ms)
+  }
+  return {
+    call() {
+      if (timer) {
+        again = true
+        return
+      }
+      fn()
+      timer = setTimeout(windowEnds, ms)
+    },
+    cancel() {
+      clearTimeout(timer)
+      timer = undefined
+      again = false
+    },
+  }
+}
+
 export interface ServerOptions {
   deps: Deps
   port?: number
@@ -179,11 +213,14 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
   //
   // The Remote access view's revision (the payload's accessRev): a change of the login, of the
   // tunnel's status or of its settings counts one, and the board goes out again; the panel then
-  // fetches the view, which never goes out with the board.
+  // fetches the view, which never goes out with the board. Anyone on the internet can make such a
+  // change (a failed sign-in is recorded): the board goes out for them at most once a window, at
+  // the first change and then at the window's end with the latest revision.
   let accessRev = 0
+  const accessOut = atMostEvery(ACCESS_PUBLISH_MS, () => board.publish())
   const accessChanged = (): void => {
     accessRev += 1
-    board.publish()
+    accessOut.call()
   }
   const access = createAccess({
     onChange: () => {
@@ -350,6 +387,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     // The tunnel is the web port's board's: this one never listens for it, and never touches its
     // ssh (the supervisor, which started nothing, is left alone: closing it would end the
     // recorded ssh, the other board's).
+    accessOut.cancel()
     events.close()
     void tunnel.close()
     throw err
@@ -414,6 +452,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
       scheduler.stop()
       terminals.stopAll()
       setup.stop()
+      accessOut.cancel()
       events.close()
       await listener.close()
       // ssh before the listener it forwards to.
