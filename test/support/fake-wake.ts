@@ -1,4 +1,4 @@
-// A stand-in for wake's local API (GET /status, /sleeping, /awake; POST /wake, /sleep) on a port of
+// A stand-in for wake's local API (GET /status, /alive, /sleeping, /awake; POST /wake, /sleep) on a port of
 // the test's own: Bun.serve on port 0, so never wake's 12421 nor the web board's 12422. It records
 // every request it takes. Switches: `slow` holds every request unanswered while it is on; `down()`
 // stops listening (a connection is refused), `up()` listens on the same port again. Stopped once the
@@ -21,6 +21,11 @@ export interface FakeWakeOptions {
   wake?: (target: unknown) => unknown
   /** POST /sleep's answer for the body's target; `{ ok: true }` without it. */
   sleep?: (target: unknown) => unknown
+  /**
+   * The separate herdr-wake plugin's router: no GET /alive (404) and no Telegram state in /status.
+   * Without it, the board's wake: /alive answers its pid, /status has Telegram's state (off).
+   */
+  oldRouter?: boolean
 }
 
 export interface FakeWake {
@@ -73,7 +78,9 @@ export async function fakeWake(o: FakeWakeOptions = {}): Promise<FakeWake> {
     requests.push({ method: req.method, path, body })
     while (fake.slow) await Bun.sleep(10)
     const target = body && typeof body === 'object' ? (body as { target?: unknown }).target : undefined
-    if (req.method === 'GET' && path === '/status') return json({ pid: process.pid, sessions: {} })
+    if (req.method === 'GET' && path === '/status')
+      return json({ pid: process.pid, sessions: {}, ...(!o.oldRouter && { telegram: { state: 'off' } }) })
+    if (req.method === 'GET' && path === '/alive' && !o.oldRouter) return json({ pid: process.pid })
     if (req.method === 'GET' && path === '/sleeping') return json(fake.sleeping)
     if (req.method === 'GET' && path === '/awake')
       return fake.awake ? json(fake.awake) : new Response(null, { status: 404 })

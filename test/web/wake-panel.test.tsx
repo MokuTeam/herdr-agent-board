@@ -8,13 +8,14 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import type { ReactElement } from 'react'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { BoardPayload, BoardProfile } from '../../src/core/payload.ts'
-import type { WakeSettingsView, WakeView } from '../../src/core/wake/view.ts'
+import type { Switched, WakeSettingsView, WakeView } from '../../src/core/wake/view.ts'
 import { timeOf } from '../../src/core/when-format.ts'
 import { ProfilesPanel } from '../../web/src/components/profiles/ProfilesPanel.tsx'
 import { Toolbar } from '../../web/src/components/Toolbar.tsx'
 import { WakeNote } from '../../web/src/components/wake/WakeNote.tsx'
 import { WakeBody, WakePanel } from '../../web/src/components/wake/WakePanel.tsx'
 import { type WakeActions, wakeActions } from '../../web/src/hooks/useWake.ts'
+import { isWakeView } from '../../web/src/models/wake.ts'
 import type { Board } from '../../web/src/state/BoardProvider.tsx'
 import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
 import { board, payload, renderInBoard } from './support/board.tsx'
@@ -85,13 +86,20 @@ function recorder(): { act: WakeActions; asked: unknown[][] } {
       log: rec('log'),
       install: rec('install'),
       launcher: rec('launcher'),
+      switchOver: rec('switchOver'),
     },
   }
 }
 
 /** The panel's body as drawn for a view and settings. */
 function bodyOf(
-  fields: { view?: WakeView; settings?: WakeSettingsView | null; log?: string | null; phone?: boolean },
+  fields: {
+    view?: WakeView
+    settings?: WakeSettingsView | null
+    log?: string | null
+    phone?: boolean
+    switched?: Switched | null
+  },
   lang = 'en',
 ): Element {
   const { act } = recorder()
@@ -100,6 +108,7 @@ function bodyOf(
       view={fields.view ?? RUNNING}
       settings={fields.settings ?? null}
       log={fields.log ?? null}
+      switched={fields.switched ?? null}
       phone={fields.phone ?? false}
       canEdit
       now={NOW}
@@ -586,4 +595,160 @@ test('the Profiles panel’s Install says when it left wake’s hooks out beside
       false,
     ],
   ])
+})
+
+// ---------------------------------------------------------------- Switch over… (Task 7.2)
+
+const HELD: WakeView = { ...RUNNING, state: 'held', since: null, downSince: null }
+const SWITCHED: Switched = {
+  did: ['config: reaper, telegram into the wake section'],
+  summary: { reaper: 'on', minutes: 60, excluded: 2, telegram: true, asleep: 4 },
+  launcher: { old: 'claude-tg', now: 'claude' },
+  bindings: [
+    { key: 'ctrl+s', old: 'herdr-wake.sleep', now: 'agent-board.sleep' },
+    { key: '', old: 'herdr-wake.wake', now: 'agent-board.wake' },
+  ],
+}
+
+describe('Switch over…', () => {
+  test('offered while the separate plugin holds wake, and then only', () => {
+    const open = (view: WakeView, lang = 'en') =>
+      texts(findAll([bodyOf({ view, settings: SETTINGS }, lang)], el => hasClass(el, 'wake-switch-over')))
+    expect(open(HELD)).toEqual(['Switch over…'])
+    expect(open(HELD, 'ru')).toEqual(['Переключиться…'])
+    for (const view of [RUNNING, CRASHED, { ...RUNNING, on: false, state: 'off' as const, since: null }])
+      expect(open(view)).toEqual([])
+  })
+
+  test('one confirm listing the steps: Cancel sends nothing, Switch over sends it once', async () => {
+    const { act, asked } = recorder()
+    const asking: boolean[] = []
+    const body = (up: boolean) =>
+      live(
+        <WakeBody
+          view={HELD}
+          settings={SETTINGS}
+          log={null}
+          asking={up}
+          onAsking={a => void asking.push(a)}
+          phone={false}
+          canEdit
+          now={NOW}
+          act={act}
+        />,
+        board(),
+      )
+    // Not asked yet: no question; Switch over… puts it up.
+    const before = body(false)
+    expect(before.el.querySelector('.wake-confirm')).toBeNull()
+    await before.world.fire(before.pick('.wake-switch-over'), 'click')
+    expect(asking).toEqual([true])
+    // Up: the steps; Cancel takes it down and sends nothing; Switch over takes it down and sends it.
+    const up = body(true)
+    expect(up.pick('.wake-confirm p').textContent).toBe(
+      "Take over the herdr-wake plugin's settings and sleeping sessions, uninstall it, move its hooks to the board's in every profile, close its tg-router workspace and start the board's wake?",
+    )
+    expect(up.pick('.wake-switch-over').hasAttribute('disabled')).toBe(true)
+    await up.world.fire(up.pick('.wake-confirm .wake-cancel'), 'click')
+    expect([asking, asked]).toEqual([[true, false], []])
+    await up.world.fire(up.pick('.wake-confirm .wake-switch-go'), 'click')
+    expect([asking, asked]).toEqual([[true, false, false], [['switchOver']]])
+    expect(texts(findAll([bodyOf({ view: HELD }, 'ru')], el => hasClass(el, 'wake-switch-over')))).toEqual([
+      'Переключиться…',
+    ])
+  })
+
+  test('what was taken over, the launcher note and the bindings', () => {
+    const lines = (switched: Switched, lang = 'en') =>
+      findAll([bodyOf({ view: RUNNING, switched }, lang)], el => hasClass(el, 'wake-switched')).flatMap(box =>
+        texts(findAll([box], el => el.tag === 'p')),
+      )
+    expect(lines(SWITCHED)).toEqual([
+      'Taken over: reaper on, 60 min, 2 excluded; Telegram; 4 sleeping sessions',
+      "herdr-wake woke sessions with claude-tg; the board starts them with claude. Set launch.claude in the board's config.json to keep claude-tg.",
+      "Rename in herdr's config.toml: ctrl+s herdr-wake.sleep → agent-board.sleep, herdr-wake.wake → agent-board.wake",
+    ])
+    expect(lines(SWITCHED, 'ru')).toEqual([
+      'Перенесено: усыпление вкл., через 60 мин, 2 исключения; Телеграм; 4 спящие сессии',
+      'herdr-wake будил сессии через claude-tg; доска запускает их через claude. Чтобы оставить claude-tg, задай launch.claude в config.json доски.',
+      'Переименуй в config.toml herdr: ctrl+s herdr-wake.sleep → agent-board.sleep, herdr-wake.wake → agent-board.wake',
+    ])
+    // Less to say: only what there is.
+    const plain: Switched = {
+      did: [],
+      summary: { reaper: 'off', minutes: 60, excluded: 0, telegram: false, asleep: 1 },
+      launcher: null,
+      bindings: [],
+    }
+    expect(lines(plain)).toEqual(['Taken over: reaper off; 1 sleeping session'])
+    expect(lines(plain, 'ru')).toEqual(['Перенесено: усыпление выкл.; 1 спящая сессия'])
+  })
+
+  test('the action: POST { op: "switch" }, what it did shown; a refusal toasted', async () => {
+    const posts: unknown[][] = []
+    const toasts: [string, boolean][] = []
+    const shown: unknown[] = []
+    const replies: [number, Record<string, unknown>][] = [
+      [200, { ok: true, ...SWITCHED }],
+      [409, { ok: false, error: 'Switch over stopped: herdr plugin uninstall herdr-wake: busy' }],
+    ]
+    const act = wakeActions({
+      post: async (path, body) => {
+        posts.push([path, body])
+        const [status, reply] = replies.shift() ?? [200, { ok: true }]
+        if (status !== 200) {
+          const { ApiError } = await import('../../web/src/api/client.ts')
+          throw new ApiError(status, reply)
+        }
+        return reply
+      },
+      t: () => translator('en'),
+      canEdit: () => true,
+      toast: (text, error = false) => void toasts.push([text, error]),
+      sent: () => {},
+      reload: () => {},
+      showLog: () => {},
+      showSwitched: s => void shown.push(s),
+    })
+    expect(await act.switchOver()).toBe(true)
+    expect(await act.switchOver()).toBe(false)
+    expect(posts).toEqual([
+      ['/api/wake', { op: 'switch' }],
+      ['/api/wake', { op: 'switch' }],
+    ])
+    expect(shown).toEqual([SWITCHED])
+    expect(toasts).toEqual([['Switch over stopped: herdr plugin uninstall herdr-wake: busy', true]])
+  })
+})
+
+// ---------------------------------------------------------------- the Telegram router's line (Task 7.2)
+
+describe('the Telegram router’s line', () => {
+  const router = (view: WakeView, lang = 'en') =>
+    texts(findAll([bodyOf({ view, settings: SETTINGS }, lang)], el => hasClass(el, 'wake-router')))
+
+  test('while wake runs: what its router does', () => {
+    expect(router({ ...RUNNING, telegram: { state: 'polling', host: '127.0.0.1:8787' } })).toEqual([
+      'Receiving messages from 127.0.0.1:8787',
+    ])
+    expect(router({ ...RUNNING, telegram: { state: 'error', error: 'tg-mcp: 401 Unauthorized\n  at poll' } })).toEqual([
+      'Not receiving messages: tg-mcp: 401 Unauthorized',
+    ])
+    expect(router({ ...RUNNING, telegram: { state: 'off' } })).toEqual(['Not receiving messages'])
+    expect(router({ ...RUNNING, telegram: { state: 'polling', host: '127.0.0.1:8787' } }, 'ru')).toEqual([
+      'Получает сообщения от 127.0.0.1:8787',
+    ])
+  })
+
+  test('never while it does not run, whatever its last state was; none without one', () => {
+    const polling = { state: 'polling' as const, host: '127.0.0.1:8787' }
+    expect(router({ ...CRASHED, telegram: polling })).toEqual([])
+    expect(router({ ...RUNNING, state: 'notRunning', since: null, telegram: polling })).toEqual([])
+    expect(router(RUNNING)).toEqual([])
+  })
+
+  test('the payload’s state line with the router’s state reads as one; a broken one does not', () => {
+    expect(isWakeView({ ...RUNNING, telegram: { state: 'polling', host: 'h:1' } })).toBe(true)
+    expect(isWakeView({ ...RUNNING, telegram: { state: 'sometimes' } })).toBe(false)
+  })
 })

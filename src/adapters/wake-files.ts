@@ -5,7 +5,9 @@
 // overwriting it (a copy of it, when only some entries do not read). The board only peeks at it.
 // The status file is written atomically too, its unknown fields kept. The log is rotated to
 // `wake.log.1` past 2 MB. Wake's start holds `wake-start.lock` while it runs, so two starts never
-// open two panes. Paths are computed at call time, as paths.ts does.
+// open two panes. The takeover of the separate herdr-wake plugin leaves its marker
+// (`wake-takeover.json`: when, and what it did), so it runs once at wake's first start. Paths are
+// computed at call time, as paths.ts does.
 import {
   appendFileSync,
   closeSync,
@@ -33,6 +35,7 @@ export const wakeSessionsFile = (): string => join(stateDir(), 'wake-sessions.js
 export const wakeLogFile = (): string => join(stateDir(), 'wake.log')
 export const wakeStatusFile = (): string => join(stateDir(), 'wake-status.json')
 export const wakeStartLockFile = (): string => join(stateDir(), 'wake-start.lock')
+export const wakeTakeoverFile = (): string => join(stateDir(), 'wake-takeover.json')
 
 /** Past this size the log becomes `wake.log.1` before the next line. */
 const LOG_MAX_BYTES = 2_000_000
@@ -141,6 +144,32 @@ export function writeWakeStatus(status: WakeStatusFile, file = wakeStatusFile())
   } catch {}
   mkdirSync(dirname(file), { recursive: true })
   replaceFile(file, `${JSON.stringify({ ...kept, ...status }, null, 1)}\n`)
+}
+
+/** The takeover's marker: when it ran, and what it did, line by line. */
+export interface WakeTakeover {
+  at: number
+  did: string[]
+}
+
+/** The takeover's marker; null when there is none or it does not read as one. */
+export function readWakeTakeover(file = wakeTakeoverFile()): WakeTakeover | null {
+  try {
+    const v = parsed(readText(file) ?? '')
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+    const { at, did } = v as Record<string, unknown>
+    return typeof at === 'number' && Number.isFinite(at) && Array.isArray(did)
+      ? { at, did: did.filter((line): line is string => typeof line === 'string') }
+      : null
+  } catch {
+    return null
+  }
+}
+
+/** Atomic (json-store.ts replaceFile). Throws when it cannot be written. */
+export function writeWakeTakeover(marker: WakeTakeover, file = wakeTakeoverFile()): void {
+  mkdirSync(dirname(file), { recursive: true })
+  replaceFile(file, `${JSON.stringify(marker, null, 1)}\n`)
 }
 
 /** The pane board.json names (the board's own, which wake never closes); null when there is none. */

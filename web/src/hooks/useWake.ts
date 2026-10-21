@@ -2,14 +2,15 @@
 // asked when the panel opens and again when wake's line in the payload changes or while something
 // it sent is not said back yet; what its controls send (POST /api/wake, and Install into a profile
 // through POST /api/profiles), refusals toasted; the switches shown as sent until the board says
-// the same; the log once asked for. Nothing is asked on a phone: those routes are the computer's.
+// the same; the log once asked for; Switch over… and what it took over. Nothing is asked on a
+// phone: those routes are the computer's.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Translator } from '../../../src/core/types.ts'
 import type { TelegramMode } from '../../../src/core/wake/config.ts'
-import type { WakeSettingsView } from '../../../src/core/wake/view.ts'
+import type { Switched, WakeSettingsView } from '../../../src/core/wake/view.ts'
 import { api, errorText, type Reply } from '../api/client.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
-import { isWakeReply, isWakeView, settledPending, type WakePending } from '../models/wake.ts'
+import { isSwitched, isWakeReply, isWakeView, settledPending, type WakePending } from '../models/wake.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { useLatest } from './useLatest.ts'
 
@@ -33,6 +34,8 @@ export interface WakeActions {
   install(id: string): Promise<boolean>
   /** claude-tg into ~/.local/bin, once Telegram is set up; a toast says where. */
   launcher(): Promise<boolean>
+  /** Switch over… from the separate herdr-wake plugin, once confirmed; what it took over is shown. */
+  switchOver(): Promise<boolean>
 }
 
 export interface WakeActionDeps {
@@ -45,6 +48,8 @@ export interface WakeActionDeps {
   /** GET /api/wake again (a profile's hooks changed). */
   reload(): void
   showLog(text: string): void
+  /** What Switch over… took over, shown under the state line. */
+  showSwitched?(switched: Switched): void
 }
 
 /** What was sent of the reaper, as it will read back: minutes that are no number are the board's to refuse. */
@@ -101,6 +106,15 @@ export function wakeActions(deps: WakeActionDeps): WakeActions {
       deps.toast(deps.t()('wake.launcherDone', { dir: String(reply.dir ?? '') }))
       return true
     },
+    async switchOver() {
+      const reply = await ask('/api/wake', { op: 'switch' })
+      if (!reply) return false
+      if (isSwitched(reply)) {
+        const { did, summary, launcher, bindings } = reply
+        deps.showSwitched?.({ did, summary, launcher, bindings })
+      }
+      return true
+    },
   }
 }
 
@@ -117,6 +131,11 @@ export interface WakePanelState {
   pending: WakePending
   /** wake.log's last lines, once Log was pressed. */
   log: string | null
+  /** What Switch over… took over, once it went through. */
+  switched: Switched | null
+  /** Switch over… asks once before it goes: whether its question is up. */
+  asking: boolean
+  ask(asking: boolean): void
   act: WakeActions
 }
 
@@ -127,6 +146,8 @@ export function useWake(active: boolean): WakePanelState {
   const [settings, setSettings] = useState<WakeSettingsView | null>(null)
   const [pending, setPending] = useState<WakePending>({})
   const [log, setLog] = useState<string | null>(null)
+  const [switched, setSwitched] = useState<Switched | null>(null)
+  const [asking, ask] = useState(false)
   const latest = useLatest({ t, canEdit, toast, active })
   const asked = useRef(0)
   const view = isWakeView(data?.wake) ? data.wake : undefined
@@ -151,6 +172,7 @@ export function useWake(active: boolean): WakePanelState {
       sent: more => setPending(was => addPending(was, more)),
       reload: () => void load(),
       showLog: setLog,
+      showSwitched: setSwitched,
     }),
   )
 
@@ -170,6 +192,8 @@ export function useWake(active: boolean): WakePanelState {
     setSettings(null)
     setPending({})
     setLog(null)
+    setSwitched(null)
+    ask(false)
   }, [active])
 
   // What the board says the same of now is no longer held as sent.
@@ -181,5 +205,5 @@ export function useWake(active: boolean): WakePanelState {
     })
   }, [viewKey, settings])
 
-  return { settings, pending, log, act }
+  return { settings, pending, log, switched, asking, ask, act }
 }

@@ -87,6 +87,27 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'err.launcherForeign':
       '{files}: not the board’s nor herdr-wake’s, so it was left as it is. Move it away and try again',
     // Task 7.2: Switch over…
+    'wake.switchOver': 'Switch over…',
+    'wake.switchConfirm':
+      "Take over the herdr-wake plugin's settings and sleeping sessions, uninstall it, move its hooks to the board's in every profile, close its tg-router workspace and start the board's wake?",
+    'wake.switchGo': 'Switch over',
+    'wake.switched': 'Taken over: {summary}',
+    'wake.launcherNote':
+      "herdr-wake woke sessions with {old}; the board starts them with {now}. Set launch.claude in the board's config.json to keep {old}.",
+    'wake.bindings': "Rename in herdr's config.toml: {list}",
+    // what was taken over, in wake.switched's {summary}: "reaper on, 60 min, 2 excluded; Telegram; 4 sleeping sessions"
+    'wake.summary.reaperOn': 'reaper on, {min} min',
+    'wake.summary.reaperOff': 'reaper off',
+    'wake.summary.excluded': '{n} excluded',
+    'wake.summary.telegram': 'Telegram',
+    'wake.summary.asleep': ['{n} sleeping session', '{n} sleeping sessions'],
+    'err.switchOver': 'Switch over stopped: {error}',
+    'err.oldRouter':
+      'The herdr-wake plugin’s router still answers on port {port} (process {pid}): close its pane, then Switch over… again',
+    // the Telegram router's state while wake runs
+    'wake.router.polling': 'Receiving messages from {host}',
+    'wake.router.error': 'Not receiving messages: {error}',
+    'wake.router.off': 'Not receiving messages',
   },
   ru: {
     // Task 4.1: Settings → Sleep and wake…, its state and switches
@@ -181,5 +202,26 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'err.launcherForeign':
       '{files}: не от доски и не от herdr-wake, поэтому оставлен как есть. Убери его и попробуй снова',
     // Task 7.2: Switch over…
+    'wake.switchOver': 'Переключиться…',
+    'wake.switchConfirm':
+      'Перенести настройки и спящие сессии плагина herdr-wake, удалить его, заменить его хуки хуками доски во всех профилях, закрыть его рабочее пространство tg-router и запустить пробуждение доски?',
+    'wake.switchGo': 'Переключиться',
+    'wake.switched': 'Перенесено: {summary}',
+    'wake.launcherNote':
+      'herdr-wake будил сессии через {old}; доска запускает их через {now}. Чтобы оставить {old}, задай launch.claude в config.json доски.',
+    'wake.bindings': 'Переименуй в config.toml herdr: {list}',
+    // what was taken over, in wake.switched's {summary}: "reaper on, 60 min, 2 excluded; Telegram; 4 sleeping sessions"
+    'wake.summary.reaperOn': 'усыпление вкл., через {min} мин',
+    'wake.summary.reaperOff': 'усыпление выкл.',
+    'wake.summary.excluded': ['{n} исключение', '{n} исключения', '{n} исключений'],
+    'wake.summary.telegram': 'Телеграм',
+    'wake.summary.asleep': ['{n} спящая сессия', '{n} спящие сессии', '{n} спящих сессий'],
+    'err.switchOver': 'Переключение остановлено: {error}',
+    'err.oldRouter':
+      'Роутер плагина herdr-wake всё ещё отвечает на порту {port} (процесс {pid}): закрой его панель и нажми «Переключиться…» ещё раз',
+    // the Telegram router's state while wake runs
+    'wake.router.polling': 'Получает сообщения от {host}',
+    'wake.router.error': 'Сообщения не приходят: {error}',
+    'wake.router.off': 'Сообщения не получает',
   },
 }

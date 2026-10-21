@@ -106,3 +106,12 @@ export function isWakeStatus(value: unknown): boolean {
   const v = record(value)
   return v !== null && typeof v.pid === 'number' && record(v.sessions) !== null
 }
+
+/**
+ * Whether a /status answer is the board's own wake's, not the separate herdr-wake plugin's router
+ * (which may still hold the port after it was uninstalled): a wake's, with its Telegram router's
+ * state, a field the old router never had.
+ */
+export function isBoardWakeStatus(value: unknown): boolean {
+  return isWakeStatus(value) && asTelegramStatus(record(value)?.telegram) !== null
+}

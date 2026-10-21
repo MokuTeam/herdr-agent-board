@@ -3,6 +3,7 @@ import { expect, test } from 'bun:test'
 import {
   asTelegramStatus,
   asWakeStatus,
+  isBoardWakeStatus,
   isWakeStatus,
   STARTING_MS,
   type WakeStatusFile,
@@ -92,4 +93,13 @@ test('asWakeStatus: the Telegram router’s state the wake process writes, its h
     expect(asTelegramStatus(not)).toBeNull()
     expect(asWakeStatus({ state: 'running', at: NOW, telegram: not })).toEqual({ state: 'running', at: NOW })
   }
+})
+
+test('isBoardWakeStatus: the board’s wake by its Telegram router’s state; the separate plugin’s router never had one', () => {
+  const oldRouter = { pid: 4242, started: 'x', lastPoll: null, lastError: null, sleeping: [], sessions: {} }
+  expect(isBoardWakeStatus(oldRouter)).toBe(false)
+  expect(isBoardWakeStatus({ ...oldRouter, telegram: { state: 'off' } })).toBe(true)
+  expect(isBoardWakeStatus({ ...oldRouter, telegram: { state: 'polling', host: '127.0.0.1:8787' } })).toBe(true)
+  for (const not of [{ ...oldRouter, telegram: 'off' }, { ...oldRouter, telegram: {} }, { telegram: { state: 'off' } }])
+    expect(isBoardWakeStatus(not)).toBe(false)
 })
