@@ -29,7 +29,7 @@ export type WakeSessions = Record<string, WakeEntry>
 
 /** Panes herdr has not shown for this long are forgotten. */
 export const KEEP_GONE_MS = 7 * 86_400_000
-/** A session seen again in its pane within this time, under the same name, is not written again. */
+/** A session seen again in its pane within this time, under the same name and profile, is not written again. */
 const SEEN_AGAIN_MS = 60_000
 
 const record = (v: unknown): Record<string, unknown> | null =>
@@ -38,20 +38,27 @@ const record = (v: unknown): Record<string, unknown> | null =>
 const time = (v: unknown): v is number => typeof v === 'number' && Math.abs(v) <= 8.64e15
 const iso = (t: number | undefined): string => (time(t) ? new Date(t).toISOString() : '')
 const isString = (v: unknown): boolean => typeof v === 'string'
+const filled = (v: unknown): boolean => typeof v === 'string' && v !== ''
 
-// The entry's optional fields; one of another type is left out.
+// The entry's optional fields other than its profile; one of another type is left out.
 const OPTIONAL: ReadonlyMap<string, (v: unknown) => boolean> = new Map([
   ['cwd', isString],
   ['title', isString],
   ['slept_at', time],
   ['exited', (v: unknown) => typeof v === 'boolean'],
-  ['profileDir', isString],
-  ['profile', isString],
 ])
+
+/**
+ * The profile a wake resumes the entry in is whole: a folder, with its id or without, or neither
+ * (the default profile). Only a missing profile means the default one, so a folder or id that is
+ * there but broken, or an id without its folder, drops the entry rather than wake it elsewhere.
+ */
+const profileWhole = ({ profileDir: dir, profile: id }: Record<string, unknown>): boolean =>
+  dir === undefined ? id === undefined : filled(dir) && (id === undefined || filled(id))
 
 function asEntry(value: unknown): WakeEntry | null {
   const e = record(value)
-  if (!e || typeof e.session !== 'string' || !time(e.seen_at)) return null
+  if (!e || typeof e.session !== 'string' || !time(e.seen_at) || !profileWhole(e)) return null
   const fields = Object.entries(e).filter(([key, v]) => OPTIONAL.get(key)?.(v) ?? true)
   return {
     ...Object.fromEntries(fields),
@@ -61,7 +68,7 @@ function asEntry(value: unknown): WakeEntry | null {
   }
 }
 
-/** null for what is not an object; entries without a string `session` and a number `seen_at` dropped; unknown fields kept. */
+/** null for what is not an object; entries without a string `session` and a number `seen_at`, or with a broken profile, dropped; unknown fields kept. */
 export function asWakeSessions(value: unknown): WakeSessions | null {
   const all = record(value)
   if (!all) return null
@@ -146,9 +153,15 @@ export function rememberSeen(
     const seen = live.get(id)
     const same = cur?.session === id ? cur : undefined
     const name = seen?.name || same?.name || ''
-    if (same && same.name === name && now - same.seen_at < SEEN_AGAIN_MS) continue
-    // Out of the registries for a moment, the same session keeps the folder it had.
+    // Out of the registries for a moment, the same session keeps the folder it had. An id only
+    // with its folder.
     const where = seen ?? same
+    const profileDir = where?.profileDir || undefined
+    const profile = (profileDir && where?.profile) || undefined
+    // Seen again within the minute as written: nothing to write. A profile the registries show only
+    // now (late at the first look) is written, or the exit would sleep it in the default profile.
+    const unchanged = same && same.name === name && same.profileDir === profileDir && same.profile === profile
+    if (unchanged && now - same.seen_at < SEEN_AGAIN_MS) continue
     sessions[pane] = {
       session: id,
       name,
@@ -156,8 +169,8 @@ export function rememberSeen(
       title: p.terminal_title_stripped || cur?.title || '',
       seen_at: now,
       ...(going.has(pane) && cur?.slept_at ? { slept_at: cur.slept_at } : {}),
-      ...(where?.profileDir ? { profileDir: where.profileDir } : {}),
-      ...(where?.profile ? { profile: where.profile } : {}),
+      ...(profileDir ? { profileDir } : {}),
+      ...(profile ? { profile } : {}),
     }
     changed = true
   }

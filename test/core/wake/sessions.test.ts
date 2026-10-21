@@ -100,9 +100,77 @@ test('a Claude seen in a pane is remembered with its name and its profile folder
   const other = rememberSeen(view([claude('w1:p1', SID2)]), frozen(r.sessions), new Map(), now + 90_000)
   expect(other.sessions['w1:p1']).toEqual({ session: SID2, name: '', title: 'Billing work', seen_at: now + 90_000 })
 
+  // A profile id without its folder is not written.
+  const noDir = rememberSeen(snap, {}, new Map([[SID, { name: 'Billing', profileDir: '', profile: 'work' }]]), now)
+  expect(noDir.sessions['w1:p1']).toEqual({
+    session: SID,
+    name: 'Billing',
+    cwd: PROJECT,
+    title: 'Billing work',
+    seen_at: now,
+  })
+
   // Not Claude, or no session id: not remembered.
   const none = rememberSeen(view([{ ...claude('w1:p1', SID), agent: 'pi' }, shell('w1:p2')]), {}, new Map(), now)
   expect(none).toEqual({ sessions: {}, changed: false, renames: [], exited: [] })
+})
+
+test('a profile the registries show only after the first look is written within the minute, so the exit sleeps in that profile', () => {
+  const panes = [claude('w1:p1', SID)]
+  // First look: the registry has not got the session yet.
+  const first = rememberSeen(view(panes), frozen({}), new Map(), now)
+  expect(first.sessions['w1:p1']).toEqual({ session: SID, name: '', title: '', seen_at: now })
+
+  // Late in the default folder's registry (a folder without an id): written as well.
+  const dflt = rememberSeen(
+    view(panes, now + 15_000),
+    frozen(first.sessions),
+    new Map([[SID, { profileDir: 'C:\\h\\.claude' }]]),
+    now + 15_000,
+  )
+  expect(dflt.changed).toBe(true)
+  expect(dflt.sessions['w1:p1']?.profileDir).toBe('C:\\h\\.claude')
+
+  // 15 s later the work profile's registry has it (no name yet): written with its folder and id.
+  const late = rememberSeen(
+    view(panes, now + 15_000),
+    frozen(first.sessions),
+    new Map([[SID, { profileDir: WORK, profile: 'work' }]]),
+    now + 15_000,
+  )
+  expect(late.changed).toBe(true)
+  expect(late.sessions['w1:p1']).toEqual({
+    session: SID,
+    name: '',
+    title: '',
+    seen_at: now + 15_000,
+    profileDir: WORK,
+    profile: 'work',
+  })
+
+  // Exited at 30 s: asleep in the work profile.
+  const gone = rememberSeen(view([shell('w1:p1')], now + 30_000), frozen(late.sessions), new Map(), now + 30_000)
+  expect(gone.exited).toEqual(['w1:p1'])
+  expect(sleepingOf(view([shell('w1:p1')]), gone.sessions)[0]?.profile).toEqual({ dir: WORK, id: 'work' })
+
+  // Within the minute, the registries showing another folder, or the same folder without its id: written.
+  const r = frozen(late.sessions)
+  const at = now + 30_000
+  const other = rememberSeen(view(panes, at), r, new Map([[SID, { profileDir: 'C:\\h\\.claude' }]]), at)
+  expect(other.changed).toBe(true)
+  expect(other.sessions['w1:p1']).toEqual({
+    session: SID,
+    name: '',
+    title: '',
+    seen_at: at,
+    profileDir: 'C:\\h\\.claude',
+  })
+  expect(rememberSeen(view(panes, at), r, new Map([[SID, { profileDir: WORK }]]), at).changed).toBe(true)
+  // The same folder and id, or out of the registries for a moment: nothing to write.
+  expect(rememberSeen(view(panes, at), r, new Map([[SID, { profileDir: WORK, profile: 'work' }]]), at).changed).toBe(
+    false,
+  )
+  expect(rememberSeen(view(panes, at), r, new Map(), at).changed).toBe(false)
 })
 
 test('a session the user exited counts as asleep, its pane renamed 💤 <name>', () => {
@@ -425,7 +493,7 @@ test('asWakeSessions keeps unknown fields and drops what is not an entry', () =>
 
   // A known field of the wrong type is left out, so what the type says holds.
   const odd = asWakeSessions({
-    'w1:p3': { session: SID, name: 5, seen_at: 1, slept_at: 'x', exited: 'yes', cwd: 3, profileDir: 7, profile: null },
+    'w1:p3': { session: SID, name: 5, seen_at: 1, slept_at: 'x', exited: 'yes', cwd: 3, title: [] },
     'w1:p4': { session: SID, seen_at: '1' },
     'w1:p5': { session: SID, seen_at: Number.POSITIVE_INFINITY },
     'w1:p6': [SID],
@@ -444,4 +512,25 @@ test('asWakeSessions keeps unknown fields and drops what is not an entry', () =>
     profile: 'work',
   }
   expect(asWakeSessions(JSON.parse(JSON.stringify({ 'w1:p1': whole })))).toStrictEqual({ 'w1:p1': whole })
+})
+
+test('a broken profile in the file drops the entry: never listed or woken in the default profile instead of its own', () => {
+  const at = now - 60_000
+  const asleep = { session: SID, name: 'Billing', seen_at: at, slept_at: at }
+  const read = asWakeSessions({
+    'w1:p1': { ...asleep, profileDir: 7, profile: 'work' },
+    'w1:p2': { ...asleep, profileDir: WORK, profile: null },
+    'w1:p3': { ...asleep, profileDir: '', profile: 'work' },
+    'w1:p4': { ...asleep, profileDir: WORK, profile: '' },
+    'w1:p5': { ...asleep, profile: 'work' },
+    'w1:p6': { ...asleep, profileDir: null },
+    // A folder without a listed id (the default folder), and no profile at all (the default one): kept.
+    'w1:p7': { ...asleep, profileDir: 'C:\\h\\.claude' },
+    'w1:p8': { ...asleep },
+  })
+  expect(read).toStrictEqual({ 'w1:p7': { ...asleep, profileDir: 'C:\\h\\.claude' }, 'w1:p8': asleep })
+
+  const panes = ['w1:p1', 'w1:p2', 'w1:p3', 'w1:p4', 'w1:p5', 'w1:p6'].map(p => shell(p))
+  expect(sleepingOf(view(panes), read ?? {})).toEqual([])
+  expect(findSession('Billing', view(panes), read ?? {})).toBeUndefined()
 })
