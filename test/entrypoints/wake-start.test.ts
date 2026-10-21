@@ -13,6 +13,8 @@ setDefaultTimeout(30_000)
 
 const START_ENTRY = join(root, 'src', 'entrypoints', 'wake-start.ts')
 const ROOT = resolve(root)
+/** A folder of the user's, with spaces, Cyrillic and %. */
+const OTHER_DIR = process.platform === 'win32' ? 'C:\\Work\\Проект x 50%' : '/work/Проект x 50%'
 const DEADLINE_MS = 8000
 
 const stateOf = (box: Sandbox): string => join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board')
@@ -123,7 +125,7 @@ test('wake off, by "wake": false or a config.json that does not parse: exits 0 a
 test('the old plugin installed: one herdr plugin list, status held, nothing opened', async () => {
   const box = await wakeSandbox()
   await wakeOn(box)
-  writeStatus(box, { state: 'running', at: 1, pane: 'wW:p1', pid: 4242, port: 40000 })
+  writeStatus(box, { state: 'running', at: Date.now(), pane: 'wW:p1', pid: 4242, port: 40000 })
   box.state({ 'plugin list': { result: { plugins: [{ plugin_id: 'agent-board' }, { plugin_id: 'herdr-wake' }] } } })
   const out = await runStart(box)
   expect(out.code).toBe(0)
@@ -135,7 +137,7 @@ test('the old plugin installed: one herdr plugin list, status held, nothing open
 test('a wake answering already: nothing opened; a held status the old plugin left is rewritten stopped', async () => {
   const box = await wakeSandbox()
   const port = await wakeOn(box)
-  writeStatus(box, { state: 'held', at: 1, pane: 'wW:p1', pid: 4242 })
+  writeStatus(box, { state: 'held', at: Date.now(), pane: 'wW:p1', pid: 4242 })
   box.state(noOldPlugin)
   const wake = Bun.serve({
     hostname: '127.0.0.1',
@@ -155,7 +157,7 @@ test('a wake answering already: nothing opened; a held status the old plugin lef
 test('its pane is there with its supervisor running: nothing opened, nothing closed', async () => {
   const box = await wakeSandbox()
   await wakeOn(box)
-  const status = { state: 'starting', at: 1, pane: 'wW:p1', pid: process.pid }
+  const status = { state: 'starting', at: Date.now(), pane: 'wW:p1', pid: process.pid }
   writeStatus(box, status)
   box.state({
     ...noOldPlugin,
@@ -218,23 +220,119 @@ test('a restored bare-shell wake pane is replaced: its tab closed, a new wake pa
   expect(statusOf(box)).toEqual({ state: 'starting', at: expect.any(Number), pane: 'wW:p9' })
 })
 
-test('a stale wake pane in a tab with an agent: only that pane is closed, never the agent’s tab', async () => {
+test('a stale wake pane in Wake beside a pane of the user’s: only that pane is closed, never their tab', async () => {
+  for (const user of [
+    { pane_id: 'wW:p5', tab_id: 'wake-tab', workspace_id: 'wW', agent: 'claude', agent_status: 'idle' },
+    // An editor: no agent, in a folder of the user's.
+    { pane_id: 'wW:p5', tab_id: 'wake-tab', workspace_id: 'wW', cwd: OTHER_DIR, terminal_title_stripped: 'vim' },
+  ]) {
+    const box = await wakeSandbox()
+    await wakeOn(box)
+    writeStatus(box, { state: 'running', at: Date.now(), pane: 'wW:p1', pid: await deadPid() })
+    const shared = {
+      workspaces: [{ workspace_id: 'wW', label: 'Wake' }, main.workspace],
+      tabs: [{ tab_id: 'wake-tab', workspace_id: 'wW' }, main.tab],
+      panes: [
+        { pane_id: 'wW:p1', tab_id: 'wake-tab', workspace_id: 'wW', cwd: ROOT },
+        { pane_id: 'wW:p2', tab_id: 'wake-tab', workspace_id: 'wW', tokens: sidebar },
+        user,
+        main.agent,
+      ],
+    }
+    box.state({
+      ...noOldPlugin,
+      'api snapshot': { result: { snapshot: shared } },
+      'pane close': { result: {} },
+      'tab close': { result: {} },
+      ...opensIn('wW:p9'),
+    })
+    const out = await runStart(box)
+    expect(out.code).toBe(0)
+    expect(box.calls()).toEqual([
+      ['plugin', 'list', '--json'],
+      ['api', 'snapshot'],
+      ['pane', 'close', 'wW:p1'],
+      ['api', 'snapshot'],
+      openCall('wW'),
+    ])
+  }
+})
+
+// herdr gives a pane's id out again after it starts over: the id wake's status names may be a
+// pane of the user's now, outside Wake or with an agent in it. Such a record is left alone.
+test('the recorded pane is a Claude session alone in a tab of Main now: nothing closed, a new wake pane opened in Wake', async () => {
   const box = await wakeSandbox()
   await wakeOn(box)
-  writeStatus(box, { state: 'running', at: 1, pane: 'w1:p7', pid: await deadPid() })
-  const shared = {
-    workspaces: [{ workspace_id: 'wW', label: 'Wake' }, main.workspace],
-    tabs: [{ tab_id: 'spare', workspace_id: 'wW' }, main.tab],
-    panes: [
-      { pane_id: 'wW:p1', tab_id: 'spare', workspace_id: 'wW', tokens: sidebar },
-      { pane_id: 'w1:p7', tab_id: 't1', workspace_id: 'w1' },
-      main.agent,
-    ],
-  }
+  writeStatus(box, { state: 'stopped', at: Date.now(), pane: 'w1:p1', pid: await deadPid() })
   box.state({
     ...noOldPlugin,
-    'api snapshot': { result: { snapshot: shared } },
+    'api snapshot': {
+      result: {
+        snapshot: {
+          workspaces: [{ workspace_id: 'wW', label: 'Wake' }, main.workspace],
+          tabs: [main.tab],
+          panes: [main.agent],
+        },
+      },
+    },
     'pane close': { result: {} },
+    'tab close': { result: {} },
+    ...opensIn('wW:p9'),
+  })
+  const out = await runStart(box)
+  expect(out.code).toBe(0)
+  expect(box.calls()).toEqual([['plugin', 'list', '--json'], ['api', 'snapshot'], openCall('wW')])
+  expect(statusOf(box)).toEqual({ state: 'starting', at: expect.any(Number), pane: 'wW:p9' })
+})
+
+test('the recorded pane is a shell beside an editor in Main now: nothing closed, a new wake pane opened in Wake', async () => {
+  const box = await wakeSandbox()
+  await wakeOn(box)
+  writeStatus(box, { state: 'running', at: Date.now(), pane: 'w1:p7', pid: await deadPid() })
+  box.state({
+    ...noOldPlugin,
+    'api snapshot': {
+      result: {
+        snapshot: {
+          workspaces: [main.workspace],
+          tabs: [main.tab],
+          panes: [
+            { pane_id: 'w1:p7', tab_id: 't1', workspace_id: 'w1', cwd: ROOT, terminal_title_stripped: 'pwsh' },
+            { pane_id: 'w1:p8', tab_id: 't1', workspace_id: 'w1', cwd: OTHER_DIR, terminal_title_stripped: 'vim' },
+          ],
+        },
+      },
+    },
+    'workspace create': { result: { workspace: { workspace_id: 'wN', label: 'Wake' }, tab: { tab_id: 'first-tab' } } },
+    'pane close': { result: {} },
+    'tab close': { result: {} },
+    ...opensIn('wN:p2'),
+  })
+  const out = await runStart(box)
+  expect(out.code).toBe(0)
+  expect(box.calls()).toEqual([
+    ['plugin', 'list', '--json'],
+    ['api', 'snapshot'],
+    ['workspace', 'create', '--label', 'Wake', '--cwd', ROOT, '--no-focus'],
+    openCall('wN'),
+    ['tab', 'close', 'first-tab'],
+  ])
+  expect(statusOf(box)).toEqual({ state: 'starting', at: expect.any(Number), pane: 'wN:p2' })
+})
+
+test('a record from before this boot is stale though its pid runs now (a pid given out again): the restored pane replaced', async () => {
+  const box = await wakeSandbox()
+  await wakeOn(box)
+  // Written before this computer started; the pid is a process of this boot's (the test's own).
+  writeStatus(box, { state: 'running', at: 1, pane: 'wW:p1', pid: process.pid, port: 40000 })
+  box.state({
+    ...noOldPlugin,
+    'api snapshot': {
+      result: { snapshot: restored },
+      until: ['tab close'],
+      // biome-ignore lint/suspicious/noThenProperty: the fake herdr's reply after the close (test/support/fake-herdr.ts)
+      then: { result: { snapshot: wakeTabClosed } },
+    },
     'tab close': { result: {} },
     ...opensIn('wW:p9'),
   })
@@ -243,14 +341,14 @@ test('a stale wake pane in a tab with an agent: only that pane is closed, never 
   expect(box.calls()).toEqual([
     ['plugin', 'list', '--json'],
     ['api', 'snapshot'],
-    ['pane', 'close', 'w1:p7'],
+    ['tab', 'close', 'wake-tab'],
     ['api', 'snapshot'],
     openCall('wW'),
-    ['tab', 'close', 'spare'],
   ])
+  expect(statusOf(box)).toEqual({ state: 'starting', at: expect.any(Number), pane: 'wW:p9' })
 })
 
-test('tabs in Wake with only shells or sidebar panes are closed; a tab with an agent never', async () => {
+test('tabs in Wake with only wake’s leftovers (shells in the plugin’s folder, sidebar panes) are closed; an agent’s, an editor’s or a server’s never', async () => {
   const box = await wakeSandbox()
   await wakeOn(box)
   box.state({
@@ -263,17 +361,29 @@ test('tabs in Wake with only shells or sidebar panes are closed; a tab with an a
             { tab_id: 'shell-tab', workspace_id: 'wW' },
             { tab_id: 'sidebar-tab', workspace_id: 'wW' },
             { tab_id: 'agent-tab', workspace_id: 'wW' },
+            { tab_id: 'editor-tab', workspace_id: 'wW' },
+            { tab_id: 'server-tab', workspace_id: 'wW' },
             { tab_id: 'empty-tab', workspace_id: 'wW' },
             main.tab,
           ],
           panes: [
-            { pane_id: 'wW:p1', tab_id: 'shell-tab', workspace_id: 'wW', terminal_title_stripped: 'bash' },
+            { pane_id: 'wW:p1', tab_id: 'shell-tab', workspace_id: 'wW', cwd: ROOT, terminal_title_stripped: 'bash' },
             { pane_id: 'wW:p2', tab_id: 'shell-tab', workspace_id: 'wW', tokens: sidebar },
             { pane_id: 'wW:p3', tab_id: 'sidebar-tab', workspace_id: 'wW', tokens: sidebar },
-            { pane_id: 'wW:p4', tab_id: 'agent-tab', workspace_id: 'wW' },
+            { pane_id: 'wW:p4', tab_id: 'agent-tab', workspace_id: 'wW', cwd: ROOT },
             { pane_id: 'wW:p5', tab_id: 'agent-tab', workspace_id: 'wW', agent: 'pi', agent_status: 'idle' },
+            {
+              pane_id: 'wW:p6',
+              tab_id: 'editor-tab',
+              workspace_id: 'wW',
+              cwd: OTHER_DIR,
+              terminal_title_stripped: 'vim',
+            },
+            { pane_id: 'wW:p7', tab_id: 'editor-tab', workspace_id: 'wW', tokens: sidebar },
+            // No folder herdr knows: not known to be wake's.
+            { pane_id: 'wW:p8', tab_id: 'server-tab', workspace_id: 'wW', terminal_title_stripped: 'node' },
             // A shell in the user's own workspace is not wake's to close.
-            { pane_id: 'w1:p2', tab_id: 't1', workspace_id: 'w1' },
+            { pane_id: 'w1:p2', tab_id: 't1', workspace_id: 'w1', cwd: ROOT },
           ],
         },
       },
@@ -290,6 +400,71 @@ test('tabs in Wake with only shells or sidebar panes are closed; a tab with an a
     ['tab', 'close', 'shell-tab'],
     ['tab', 'close', 'sidebar-tab'],
   ])
+})
+
+/** The board's own workspace: the board's plugin pane (no agent, the plugin's folder) with herdr-sidebar's, and a tab of sidebar panes only. */
+const boardWorkspace = (label: string) => ({
+  workspaces: [{ workspace_id: 'wB', label }, main.workspace],
+  tabs: [{ tab_id: 'board-tab', workspace_id: 'wB' }, { tab_id: 'spare-tab', workspace_id: 'wB' }, main.tab],
+  panes: [
+    { pane_id: 'wB:p1', tab_id: 'board-tab', workspace_id: 'wB', cwd: ROOT, terminal_title_stripped: 'bun' },
+    { pane_id: 'wB:p2', tab_id: 'board-tab', workspace_id: 'wB', tokens: sidebar },
+    { pane_id: 'wB:p3', tab_id: 'spare-tab', workspace_id: 'wB', tokens: sidebar },
+    main.agent,
+  ],
+})
+
+test('wake.workspace set to the board’s own workspace (Board, or the label config.json gives it): no tab there is closed', async () => {
+  for (const { config, label } of [
+    { config: {}, label: 'Board' },
+    { config: { workspace: 'Agents' }, label: 'Agents' },
+  ]) {
+    const box = await wakeSandbox()
+    writeBoardConfig(box, wakeOnConfig(await unusedPort(), { config, wake: { workspace: label } }))
+    box.state({
+      ...noOldPlugin,
+      'api snapshot': { result: { snapshot: boardWorkspace(label) } },
+      'tab close': { result: {} },
+      ...opensIn('wB:p9'),
+    })
+    const out = await runStart(box)
+    expect(out.code).toBe(0)
+    expect(box.calls()).toEqual([['plugin', 'list', '--json'], ['api', 'snapshot'], openCall('wB')])
+  }
+})
+
+test('the board’s pane (board.json) in wake’s workspace: no tab there is closed', async () => {
+  const box = await wakeSandbox()
+  writeBoardConfig(box, wakeOnConfig(await unusedPort(), { wake: { workspace: 'Tools' } }))
+  mkdirSync(stateOf(box), { recursive: true })
+  writeFileSync(join(stateOf(box), 'board.json'), JSON.stringify({ pane: 'wB:p1', pid: process.pid }))
+  box.state({
+    ...noOldPlugin,
+    'api snapshot': { result: { snapshot: boardWorkspace('Tools') } },
+    'tab close': { result: {} },
+    ...opensIn('wB:p9'),
+  })
+  const out = await runStart(box)
+  expect(out.code).toBe(0)
+  expect(box.calls()).toEqual([['plugin', 'list', '--json'], ['api', 'snapshot'], openCall('wB')])
+})
+
+test('the recorded pane is the board’s (board.json): it is left alone, whatever wake’s record says', async () => {
+  const box = await wakeSandbox()
+  writeBoardConfig(box, wakeOnConfig(await unusedPort(), { wake: { workspace: 'Board' } }))
+  mkdirSync(stateOf(box), { recursive: true })
+  writeFileSync(join(stateOf(box), 'board.json'), JSON.stringify({ pane: 'wB:p1', pid: process.pid }))
+  writeStatus(box, { state: 'running', at: Date.now(), pane: 'wB:p1', pid: await deadPid() })
+  box.state({
+    ...noOldPlugin,
+    'api snapshot': { result: { snapshot: boardWorkspace('Board') } },
+    'pane close': { result: {} },
+    'tab close': { result: {} },
+    ...opensIn('wB:p9'),
+  })
+  const out = await runStart(box)
+  expect(out.code).toBe(0)
+  expect(box.calls()).toEqual([['plugin', 'list', '--json'], ['api', 'snapshot'], openCall('wB')])
 })
 
 test('no Wake workspace: one is made, the pane opened there, its first tab closed', async () => {
@@ -347,7 +522,7 @@ test('--again (Start again): its pane is closed and a new one opened, even while
 test('herdr does not answer: snapshot tried four times, exits 0 within the deadline, the error in wake.log and the status file', async () => {
   const box = await wakeSandbox()
   await wakeOn(box)
-  writeStatus(box, { state: 'running', at: 1, pane: 'wW:p1', pid: 4242 })
+  writeStatus(box, { state: 'running', at: Date.now(), pane: 'wW:p1', pid: 4242 })
   box.state({ ...noOldPlugin, 'api snapshot': { error: 'herdr is not ready', code: 'not_ready' } })
   const out = await runStart(box)
   expect(out.code).toBe(0)

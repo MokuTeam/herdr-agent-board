@@ -438,3 +438,25 @@ test('a web page cannot drive it: 403 for a request with an Origin, or a Host ot
   // Nothing was woken: no herdr call but its looks.
   expect(box.calls().filter(c => c.join(' ') !== 'api snapshot')).toEqual([])
 })
+
+test('GET /alive answers its pid at once while herdr hangs (the supervisor’s health check); a web page gets 403 there too', async () => {
+  const box = await wakeSandbox()
+  idleAndAsleep(box)
+  const port = await unusedPort()
+  const wake = await startWakeProcess(box, { port })
+  // From now on herdr's snapshot never comes: /status, which asks herdr, does not answer.
+  herdrShows(box, [], { 'api snapshot': { waitFor: join(box.dir, 'never') } })
+  const slow = await fetch(`${wake.url}/status`, { signal: AbortSignal.timeout(1000) }).then(
+    () => 'answered',
+    () => 'no answer',
+  )
+  expect(slow).toBe('no answer')
+
+  const started = Date.now()
+  const alive = await fetch(`${wake.url}/alive`, { signal: AbortSignal.timeout(1000) })
+  expect(Date.now() - started).toBeLessThan(1000)
+  expect(alive.status).toBe(200)
+  expect(await alive.json()).toEqual({ pid: wake.proc.pid })
+  expect((await fetch(`${wake.url}/alive`, { headers: { origin: wake.url } })).status).toBe(403)
+  expect((await fetch(`${wake.url}/alive`, { headers: { host: `evil.example:${port}` } })).status).toBe(403)
+})

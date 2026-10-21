@@ -1,20 +1,21 @@
 // What wake's pane runs (#119): the supervisor (services/wake/supervisor.ts) with the wake process
-// (wake.ts) under it. It starts it again after a crash, ends one whose API stops answering, and
-// restarts it when the plugin's code changes, so an update reaches wake without anyone touching
-// herdr. The wake process's errors show on the pane's screen; the last one is kept for the status
-// file. config.json's kill switch is read first: wake off, it ends with 0 and starts nothing.
+// (wake.ts) under it. It starts it again after a crash, ends one whose API stops answering (GET
+// /alive, which never waits on herdr: a slow herdr is no hung wake), and restarts it when the
+// plugin's code changes, so an update reaches wake without anyone touching herdr. The wake
+// process's errors show on the pane's screen; the last one is kept for the status file.
+// config.json's kill switch is read first: wake off, it ends with 0 and starts nothing.
 import { type ChildProcess, spawn } from 'node:child_process'
 import { existsSync, readdirSync, statSync, watch } from 'node:fs'
 import { join } from 'node:path'
 import { configFile, readConfigFile } from '../adapters/config-file.ts'
 import { ROOT } from '../adapters/paths.ts'
+import { wakeAlive } from '../adapters/wake-api.ts'
 import { wakeLog, writeWakeStatus } from '../adapters/wake-files.ts'
 import { wakeConfig, wakeSwitch } from '../core/wake/config.ts'
-import { isWakeStatus } from '../core/wake/status.ts'
 import { createSupervisor, type WakeChild } from '../services/wake/supervisor.ts'
 
 const SRC = join(ROOT, 'src')
-/** How long a health check waits for /status. */
+/** How long a health check waits for /alive. */
 const HEALTH_TIMEOUT_MS = 5000
 /** After the wake process's exit, how long its last stderr may take to come in. */
 const LAST_WORDS_MS = 1000
@@ -74,19 +75,10 @@ function spawnWake(): WakeChild {
   }
 }
 
-/** Whether a wake answers GET /status on its port within 5 s. */
-async function health(): Promise<boolean> {
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/status`, { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) })
-    return res.ok && isWakeStatus(await res.json())
-  } catch {
-    return false
-  }
-}
-
 const supervisor = createSupervisor({
   spawn: spawnWake,
-  health,
+  // The wake process answers GET /alive on its port within 5 s.
+  health: () => wakeAlive(port, HEALTH_TIMEOUT_MS),
   writeStatus: s => writeWakeStatus(s),
   print: text => console.error(`\n${new Date().toLocaleTimeString()} ${text}`),
   log: text => wakeLog(`supervisor: ${text}`),

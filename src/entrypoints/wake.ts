@@ -11,9 +11,10 @@
 //                                            (the session file only read, never written)
 //
 // API: GET /status, GET /sleeping, GET /awake, POST /wake { target }, POST /sleep { target }; target
-// is a session name, a pane id or a session id. Programs on this computer only: a request with an
-// Origin, or a Host other than 127.0.0.1:<port> or localhost:<port> (a web page, DNS rebinding), is
-// refused with 403. Once it listens it says { up: <port> } over its IPC channel, when it has one
+// is a session name, a pane id or a session id. GET /alive answers { pid } without asking herdr (the
+// supervisor's health check: a slow herdr never gets wake ended). Programs on this computer only: a
+// request with an Origin, or a Host other than 127.0.0.1:<port> or localhost:<port> (a web page, DNS
+// rebinding), is refused with 403. Once it listens it says { up: <port> } over its IPC channel, when it has one
 // (the supervisor's, services/wake/supervisor.ts); told 'restart' there (a code change), it ends
 // with 75 once no wake or sleep is under way, answering new ones 503 meanwhile. The port keeps wake
 // to one process: held by a wake, this one ends with 0 quietly; by another program, the status
@@ -25,11 +26,11 @@ import { configFile, liveConfig, loadConfig, readConfigFile } from '../adapters/
 import { isRecord } from '../adapters/json-store.ts'
 import { stateDir } from '../adapters/paths.ts'
 import { boardOnPath } from '../adapters/resume-report.ts'
+import { wakeAnswers } from '../adapters/wake-api.ts'
 import { readWakeStatus, wakeLog, wakeSessionsFile, writeWakeStatus } from '../adapters/wake-files.ts'
 import { cliWakeHerdr } from '../adapters/wake-herdr.ts'
 import { scheduledJobs } from '../adapters/wake-transcripts.ts'
 import { telegramTarget, type WakeConfig, wakeConfig, wakeSwitch } from '../core/wake/config.ts'
-import { isWakeStatus } from '../core/wake/status.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { createWakeEngine, type WakeEngine } from '../services/wake/engine.ts'
 import { PORT_TAKEN_EXIT, RESTART_EXIT } from '../services/wake/supervisor.ts'
@@ -232,11 +233,14 @@ const failed = (status: number, error: string): Response =>
 /**
  * 200 with the answer pretty-printed (a one-space indent, as the old router's), 404 with an empty
  * body, 500 { ok: false, error }; 403 for a web page, 503 for a new sleep or wake on the way out.
+ * GET /alive is this process's pid, the engine and herdr never asked.
  */
 async function answer(req: Request, port: number): Promise<Response> {
   if (!fromHere(req, port)) return failed(403, 'only programs on this computer may use wake, not web pages')
   try {
     const path = new URL(req.url).pathname
+    if (req.method === 'GET' && path === '/alive')
+      return new Response(JSON.stringify({ pid: process.pid }, null, 1), { headers: JSON_HEADERS })
     if (leaving && req.method === 'POST' && (path === '/wake' || path === '/sleep')) return failed(503, leaving.why)
     const out = await api(req, path)
     if (out === null) return new Response(null, { status: 404 })
@@ -246,24 +250,15 @@ async function answer(req: Request, port: number): Promise<Response> {
   }
 }
 
-/** Whether a wake (the old router or another new one) answers GET /status on the port. */
-async function wakeAnswers(port: number): Promise<boolean> {
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/status`, { signal: AbortSignal.timeout(PORT_ASK_MS) })
-    return res.ok && isWakeStatus(await res.json())
-  } catch {
-    return false
-  }
-}
-
 /**
- * The port is taken (one wake per machine, held by its port). By a wake: this one ends with 0,
+ * The port is taken (one wake per machine, held by its port). By a wake (its /alive, or the old
+ * router's /status, within 5 s, so a wake whose herdr is slow is still one): this one ends with 0,
  * quietly, a line in wake.log. By another program: the status says portTaken (the pane and the
  * supervisor it names kept), the error goes to stderr for the supervisor, and the exit is 76, which
  * the supervisor does not start again.
  */
 async function portTaken(port: number): Promise<never> {
-  if (await wakeAnswers(port)) {
+  if (await wakeAnswers(port, PORT_ASK_MS)) {
     wakeLog(`another wake answers on 127.0.0.1:${port}: this one ends`)
     process.exit(0)
   }
