@@ -145,6 +145,8 @@ export interface Config {
   archiveUndoSec?: unknown
   /** How the web board folds a session asleep in "Waiting" (core/fold-mode.ts), as config.json has it. */
   foldWaiting?: unknown
+  /** Wake's section (`true`, `false` or an object), as config.json has it: read through core/wake/config.ts wakeConfig. */
+  wake?: unknown
   [extra: string]: unknown
 }
 
