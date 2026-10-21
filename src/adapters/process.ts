@@ -113,28 +113,42 @@ function killTree(child: ChildProcess): void {
 
 /**
  * Run a program in this terminal, in the foreground, no shell: its input and output are this
- * process's, and a Ctrl+C that reaches this process too leaves it waiting for the program. What
- * the program exited with (1 when a signal ended it), or the error that kept it from starting.
+ * process's, and a Ctrl+C that reaches this process too leaves it waiting for the program. In
+ * `cwd` when given, else in this process's folder; one it does not start in (the folder gone since
+ * it was looked at, or not to be entered) is tried once more in this process's folder, as without
+ * `cwd`. What the program exited with (1 when a signal ended it), or the error that kept it from
+ * starting.
  */
 export function runHere(
   file: string,
   args: string[],
   env?: Record<string, string | undefined>,
+  cwd?: string,
 ): Promise<{ code: number; error: (Error & { code?: unknown }) | null }> {
   return new Promise(res => {
     const wait = (): void => {}
     process.on('SIGINT', wait)
-    const done = (code: number, error: (Error & { code?: unknown }) | null = null): void => {
-      process.off('SIGINT', wait)
-      res({ code, error })
+    const start = (dir?: string): void => {
+      let over = false
+      const done = (code: number, error: (Error & { code?: unknown }) | null = null, unstarted = false): void => {
+        if (over) return
+        over = true
+        if (unstarted && dir) {
+          start()
+          return
+        }
+        process.off('SIGINT', wait)
+        res({ code, error })
+      }
+      try {
+        const child = spawn(file, args, { stdio: 'inherit', ...(env ? { env } : {}), ...(dir ? { cwd: dir } : {}) })
+        child.on('error', err => done(127, err, child.pid === undefined))
+        child.on('exit', code => done(code ?? 1))
+      } catch (err) {
+        done(127, err as Error, true)
+      }
     }
-    try {
-      const child = spawn(file, args, { stdio: 'inherit', ...(env ? { env } : {}) })
-      child.on('error', err => done(127, err))
-      child.on('exit', code => done(code ?? 1))
-    } catch (err) {
-      done(127, err as Error)
-    }
+    start(cwd)
   })
 }
 
