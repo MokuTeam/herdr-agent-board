@@ -1603,9 +1603,10 @@ Match User boardtunnel
 All of this is also in the panel as one script, **All of step 1 in one paste**, once Generate key
 has made the key: it stops at its first error, makes only what is missing, writes the keys file
 with your key, adds the `Match` block only when sshd_config has none for the tunnel's user, then
-runs `sshd -t` and reloads sshd. Pasting it twice changes nothing more. Paste it over SSH, as an
-admin: on Ubuntu 24.04 an sshd that no one has connected to yet (a fresh server's web console)
-has no `/run/sshd`, and `sshd -t` stops there ("Missing privilege separation directory").
+runs `sshd -t` and reloads sshd. Pasting it twice changes nothing more. It also makes `/run/sshd`
+when there is none, so it works from a fresh server's web console too: on Ubuntu 24.04 an sshd
+that no one has connected to yet has no `/run/sshd`, and `sshd -t` would stop there ("Missing
+privilege separation directory"). Where the folder is there already, it is left as it is.
 
 No sshd or `authorized_keys` option names the paths a socket forward may take; the folder does.
 Only the tunnel's user (and root) can make a socket in it and only the folder's group can open
@@ -1659,10 +1660,11 @@ used for this: it can run no command.
   minutes, while the certificate comes.
 - **Undo** (two clicks) looks again first, then shows its own plan: your line or block taken out
   of your file as it is now (not the backup: your edits since stay), your web server checked and
-  reloaded, the board's containers and volumes removed (by name and label: one with the name but
-  not the label is not the board's), its images only when it pulled them and nothing else uses
-  them, the folder's group back, a file of the board's you edited only when you tick it, Docker
-  only when the board installed it, nothing else uses it and you tick it, and last
+  reloaded when Look finds it running that file (else the file is only edited), the board's
+  containers and volumes removed (by name and label: one with the name but not the label is not
+  the board's), its images only when it pulled them and nothing else uses them, the folder's group
+  back, a file of the board's you edited only when you tick it, Docker only when the board
+  installed it, nothing else uses it and you tick it, and last
   `/etc/agent-board`. What you made by hand in step 1 stays; the Undo plan ends with the commands
   to remove it, to copy if you want to.
 - **sudo.** Root needs none; sudo without a password is used as it is (`sudo -n`); otherwise the
@@ -1799,7 +1801,8 @@ the domain or Tailscale. It has three parts: Tunnel, Login and Active logins.
    passphrase, its rights yours to set.
 3. **Test connection**, with the tunnel still off. Each step ✓ or ✗, with what to fix: ssh and the
    key; the server takes the socket; the domain reaches this board (a fetch of
-   `https://<domain>/api/probe/<nonce>` from this computer). With the tunnel off it runs a short
+   `https://<domain>/api/probe/<nonce>` from this computer, with `:<publicPort>` after the domain
+   when the public port is not 443). With the tunnel off it runs a short
    ssh of its own to a listener that answers that one probe and nothing else, closed when the test
    is over (within 40 s). With the tunnel on it runs no ssh of its own, since a second forward on
    the same socket would take the tunnel's, and checks the running one.

@@ -175,8 +175,17 @@ const PLAIN_ID = /^[A-Za-z0-9._-]{1,64}$/
 const PLACEHOLDER = /^<[^<>\n]+>$/
 /** The step that only lists commands for the owner: the run always skips it. */
 const BY_HAND = ['true']
-/** How many of their hosts are fetched before and after a reload. */
+const BY_HAND_ID = 'by-hand'
+
+/** Undo's last step, what the owner made by hand in step 1: theirs to run, never the run's (core/server-script.ts says it skipped). */
+export const byHand = (s: PlanStep): boolean => s.id === BY_HAND_ID
+/**
+ * How many of their hosts are fetched before and after a reload, and how many characters of their
+ * names at most: the names travel in the run, and the whole ssh line (the run in base64 among it)
+ * must fit Windows' command line, 32,767 characters, for the biggest plan too (core/server-script.ts).
+ */
 const FETCH_MOST = 20
+const FETCH_CHARS = 1500
 
 // ---------------------------------------------------------------------------------------------
 // The record and whose it is
@@ -724,10 +733,29 @@ function runStep(id: string, name: string, role: string, args: string[], setup: 
 
 const reloadOwn = `if [ "$(sudo docker inspect -f '{{index .Config.Labels "${ROLE_LABEL}"}} {{.State.Running}}' ${CADDY_NAME} 2>/dev/null)" = 'caddy true' ]; then sudo docker exec ${CADDY_NAME} caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile; fi`
 
-/** Their hosts to fetch: exact names (no wildcard, no address), not the board's domain, at most 20. */
+const HOST_NAME = /^(?=.*[a-z])[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i
+
+/** Their exact host names (no wildcard, no address), not the board's domain, each once. */
+const exactHosts = (names: readonly string[], domain: string): string[] =>
+  [...new Set(names)].filter(h => HOST_NAME.test(h) && h !== domain)
+
+/** Their hosts to fetch: the first exact names, at most 20 and 1,500 characters of them. */
 function fetchHosts(names: readonly string[], domain: string): string[] {
-  const name = /^(?=.*[a-z])[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i
-  return [...new Set(names)].filter(h => name.test(h) && h !== domain).slice(0, FETCH_MOST)
+  const out: string[] = []
+  let chars = 0
+  for (const h of exactHosts(names, domain)) {
+    if (out.length === FETCH_MOST || chars + h.length > FETCH_CHARS) break
+    out.push(h)
+    chars += h.length
+  }
+  return out
+}
+
+/** A note for the plan when some of their exact host names are left out of the fetches. */
+function someHosts(names: readonly string[], domain: string): Text[] {
+  const all = exactHosts(names, domain).length
+  const n = fetchHosts(names, domain).length
+  return n < all ? [{ key: 'server.warn.someHosts', params: { n: String(n), all: String(all) } }] : []
 }
 
 const resolveAt = (address: string): string => (address.includes(':') ? `[${address}]` : address)
@@ -1237,6 +1265,8 @@ function warningsFor(x: Ctx, c: SetupCase, steps: PlanStep[]): Text[] {
   }
   if ((c === '2' || c === '3a' || c === '3b' || c === '4b') && f.host.fetch !== 'curl')
     out.push({ key: 'server.warn.noFetch' })
+  if (steps.some(s => s.id === 'fetch-before')) out.push(...someHosts(f.caddy?.hosts ?? [], w.domain))
+  if (c === '4b' && f.host.fetch === 'curl') out.push(...someHosts(f.nginx?.serverNames ?? [], w.domain))
   if (f.folder && f.folder.members.length > 0)
     out.push({
       key: 'server.warn.groupMembers',
@@ -1375,6 +1405,10 @@ export function undoPlan(
   const b = `${BACKUPS_DIR}/${o.id}`
   const relies: Rely[] = []
   const warnings: Text[] = []
+  /** A warning once, however many steps give it. */
+  const warn = (more: Text[]): void => {
+    for (const w of more) if (!warnings.some(x => x.key === w.key)) warnings.push(w)
+  }
   const steps: PlanStep[] = []
   const done = new Set<string>()
   const dockerItem = items.find(i => i.kind === 'docker')
@@ -1411,6 +1445,7 @@ export function undoPlan(
         if (theirs && t) {
           if (t.sha !== '') relies.push({ kind: 'config', path: t.file, sha: t.sha })
           relies.push(...relyOn(f, 443))
+          if (t.live && t.fetch) warn(someHosts(f.caddy?.hosts ?? [], r.domain))
         }
         break
       }
@@ -1422,6 +1457,7 @@ export function undoPlan(
         // a copy first, which the rollback puts back (only where the file is gone)
         const saved = `${b}/${item.path.slice(item.path.lastIndexOf('/') + 1)}.dropped`
         const hosts = nginx && f.host.fetch === 'curl' ? fetchHosts(f.nginx?.serverNames ?? [], r.domain) : []
+        if (nginx && f.host.fetch === 'curl') warn(someHosts(f.nginx?.serverNames ?? [], r.domain))
         // board.caddy stays while a Caddyfile imports it: their Caddy would not start without it
         const importers = [
           ...new Set([
@@ -1569,7 +1605,7 @@ export function undoPlan(
       touches: [{ kind: 'file', what: RECORD_FILE }],
       record: items,
     }),
-    mk('by-hand', {
+    mk(BY_HAND_ID, {
       commands: [
         '# what you made by hand in step 1, if you want it gone too:',
         `sudo rm -f ${q(keysFile(r.pair.user))}`,
@@ -1760,15 +1796,16 @@ export function manualFacts(c: SetupCase, distro: 'debian' | 'ubuntu'): ServerFa
   }
 }
 
-/** Each placeholder of `manualFacts(c, …)`'s plan with the command that finds its value. */
-export function placeholderFinders(c: SetupCase): { placeholder: string; command: string }[] {
-  const gid = { placeholder: '<gid>', command: 'stat -c %g /var/lib/boardtunnel' }
+/** Each placeholder of `manualFacts(c, …)`'s plan with the command that finds its value (the folder's, of the tunnel's socket). */
+export function placeholderFinders(c: SetupCase, socket: string): { placeholder: string; command: string }[] {
+  const folder = q(socketFolder(socket))
+  const gid = { placeholder: '<gid>', command: `stat -c %g ${folder}` }
   const inspect = (what: string): string => `docker inspect -f '${what}' '${P_CONTAINER}'`
   switch (c) {
     case '2':
       return [
         { placeholder: P_FILE, command: 'systemctl show caddy -p ExecStart' },
-        { placeholder: P_GROUP, command: 'stat -c %G /var/lib/boardtunnel' },
+        { placeholder: P_GROUP, command: `stat -c %G ${folder}` },
       ]
     case '3a':
     case '3b':

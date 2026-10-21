@@ -193,7 +193,14 @@ describe('board doctor and the tunnel', () => {
  */
 async function startBoard(
   box: Sandbox,
-  o: { mode?: 'forward' | 'publickey'; probeAnswers?: boolean; login?: boolean; want: (s: TunnelStatus) => boolean },
+  o: {
+    mode?: 'forward' | 'publickey'
+    probeAnswers?: boolean
+    login?: boolean
+    /** The domain served on this port on the server (the fake's Caddy sends the Host with it). */
+    publicPort?: number
+    want: (s: TunnelStatus) => boolean
+  },
 ): Promise<{ env: Record<string, string>; status: TunnelStatus }> {
   if (o.login !== false) await seedAccess(box)
   // the board's own key, as Generate key leaves it (the fake ssh-keygen reads it)
@@ -208,10 +215,11 @@ async function startBoard(
     wakeUrl: null,
     refreshSec: 3600,
     port: web,
-    tunnel: { ...FIELDS, on: true, port: tunnelPort },
+    tunnel: { ...FIELDS, on: true, port: tunnelPort, ...(o.publicPort && { publicPort: o.publicPort }) },
   }
   writeConfig(box, cfg)
-  const env = await fakeEnv(box, { ssh: { mode: o.mode ?? 'forward', proxyPort: proxy, domain: DOMAIN } })
+  const host = o.publicPort ? `${DOMAIN}:${o.publicPort}` : DOMAIN
+  const env = await fakeEnv(box, { ssh: { mode: o.mode ?? 'forward', proxyPort: proxy, domain: host } })
   const probe = o.probeAnswers === false ? await unusedPort() : proxy
   await serveBoard(box, cfg, {
     ...env,
@@ -256,6 +264,21 @@ describe('board tunnel with the board running the tunnel', () => {
     expect(lines[0]).toStartWith('✓ ssh and the key')
     expect(lines[1]).toStartWith('✓ the server takes the forward')
     expect(lines[2]).toStartWith('✓ through https://board.example.com')
+  }, 90_000)
+
+  test('a public port other than 443: the address and Test connection’s domain step with it', async () => {
+    const box = await sandbox()
+    await startBoard(box, { publicPort: 8443, want: s => s.state === 'connected' })
+
+    const status = await board(box, ['tunnel'])
+    expect(status.code).toBe(0)
+    expect(status.stdout).toMatch(/^tunnel connected since \d\d:\d\d · https:\/\/board\.example\.com:8443$/m)
+
+    const test = await board(box, ['tunnel', 'test'])
+    expect(test.stderr).toBe('')
+    expect(test.code).toBe(0)
+    // the domain the step names is in the label already: not said again
+    expect(test.stdout.trimEnd().split('\n')[2]).toBe('✓ through https://board.example.com:8443')
   }, 90_000)
 
   test('a key the server refuses: the error and its fix; test fails at the forward and leaves the domain', async () => {

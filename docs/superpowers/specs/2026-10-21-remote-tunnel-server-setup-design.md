@@ -277,7 +277,7 @@ Docker, call 20). Undo is a two-click button, as Unpair is.
 | `toomanyrequests` on a pull | Docker Hub's pull limit. Try again later. |
 | 80/443 taken, holder changed or their config changed since Look | The server changed since Look: Look again (call 11). |
 | `caddy validate` failed | Your Caddy refused the config with the board's block (the line it names). Nothing was reloaded; your file is as it was. A site without braces as the last block is a usual cause. |
-| reload failed | Your Caddy kept its running config; the file was put back and reloaded. |
+| reload failed | The reload did not go through: your file was put back as it was. Your Caddy was reloaded again only if that reload had taken; otherwise it kept its running config. |
 | a site answers differently | `<host>` answered 200 before and 502 after: everything was rolled back (call 21). |
 | the domain's step: TLS | The certificate is not there yet: the domain's DNS record, or ports 80/443 (or 8443) closed at your provider. The web server keeps trying. |
 | the domain's step: 502 | The proxy cannot open the socket: the folder's group (see Look's findings). |

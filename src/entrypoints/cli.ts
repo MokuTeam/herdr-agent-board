@@ -71,7 +71,7 @@ import { type ProfileSet, profileSet, sessionProfile } from '../core/profiles.ts
 import { type RemoteView, remoteConfig } from '../core/remote.ts'
 import { parseResume, resumePlan } from '../core/resume.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
-import { boardPorts, type TestStep, tunnelChecks, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
+import { boardPorts, publicOrigin, type TestStep, tunnelChecks, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
 import type { Item } from '../core/types.ts'
 import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
 import { shortWhen } from '../core/when-format.ts'
@@ -904,14 +904,14 @@ async function tunnel(): Promise<void> {
     if (!r.ok) throw new Error(r.error)
     return console.log('ok · tunnel off')
   }
-  if (op === 'test') return tunnelTest(webPort, conf.domain)
+  if (op === 'test') return tunnelTest(webPort, conf.domain ? publicOrigin(conf) : '')
   if (op !== 'status') throw new Error('usage: board tunnel [on | off | test]')
   const { boardAccessView } = await import('../services/tunnel-facts.ts')
   const view = await boardAccessView(webPort)
   if (!view) return console.log(conf.on ? 'tunnel on · the board does not run' : TUNNEL_OFF)
   const { settings, status: s, ssh } = view.tunnel
   if (!settings.on) return console.log(TUNNEL_OFF)
-  const lines = [`tunnel ${s.state} since ${clock(s.since)}${settings.domain ? ` · https://${settings.domain}` : ''}`]
+  const lines = [`tunnel ${s.state} since ${clock(s.since)}${settings.domain ? ` · ${publicOrigin(settings)}` : ''}`]
   // on, and the board has not started it: what holds it, as `board tunnel on` would say
   const why = s.state === 'off' ? await blocked() : null
   if (why) lines.push(`not started: ${why}`)
@@ -926,8 +926,8 @@ async function tunnel(): Promise<void> {
   console.log(lines.join('\n'))
 }
 
-/** `board tunnel test`: Test connection on the running board, a line for each step; one that failed exits with 1. */
-async function tunnelTest(webPort: number, domain: string): Promise<void> {
+/** `board tunnel test`: Test connection on the running board, a line for each step; one that failed exits with 1. `origin`: the domain's ('' for none). */
+async function tunnelTest(webPort: number, origin: string): Promise<void> {
   let res: Response
   try {
     res = await fetch(`http://127.0.0.1:${webPort}/api/access`, {
@@ -948,13 +948,13 @@ async function tunnelTest(webPort: number, domain: string): Promise<void> {
   const label: Record<TestStep['id'], string> = {
     ssh: 'ssh and the key',
     forward: 'the server takes the forward',
-    domain: domain ? `through https://${domain}` : 'through the domain',
+    domain: origin ? `through ${origin}` : 'through the domain',
   }
   const lines: string[] = []
   for (const step of steps) {
     const mark = step.ok === true ? '✓' : step.ok === false ? '✗' : '–'
     // a detail the label says already (the domain) is left out
-    const detail = step.detail && !label[step.id].endsWith(step.detail) ? `: ${step.detail}` : ''
+    const detail = step.detail && !label[step.id].includes(step.detail) ? `: ${step.detail}` : ''
     lines.push(`${mark} ${label[step.id]}${detail}`)
     if (step.ok === false && step.hint) lines.push(`  ${t(`tunnel.hint.${step.hint}`)}`)
   }

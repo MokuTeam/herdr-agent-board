@@ -648,7 +648,15 @@ test('a failure: the step and its lines, the hint, what was rolled back with ✓
     `✓ ${title(plan, validate - 1)}`,
     `✓ ${title(plan, validate - 3)}`,
   ])
-  expect(textsOf([failure], 'access-result')).toEqual(['Everything was rolled back: the server is as it was.'])
+  // a Docker install that finished stays after a rollback (call 20): the line does not say the server is as it was
+  expect(textsOf([failure], 'access-result')).toEqual([
+    'Everything the run changed was rolled back; a Docker install that had finished stays.',
+  ])
+  // a failed reload leaves no mark, so the rollback reloads only a reload that took
+  expect(t('server.panel.fail.reload')).toBe(
+    'The reload did not go through: your file was put back as it was. Your Caddy was reloaded again only if that reload had taken; otherwise it kept its running config.',
+  )
+  expect(ru('server.panel.fail.reload')).not.toContain('перезагружен.')
   expect(buttonsIn([failure]).map(textOf)).toEqual(['Look again', 'Do it myself'])
   // The failed step's output, open.
   const out = find(part, el => el.tag === 'details' && hasClass(el, 'access-out'))
@@ -741,7 +749,7 @@ test('Do it myself without Look: the case picked, its commands with <placeholder
   expect(live.text('.access-block .access-pre').join('\n')).toContain('<your Caddyfile>')
   // Each placeholder with the command that finds it, each with Copy.
   const finders = live.text('.access-finder')
-  expect(finders).toEqual(placeholderFinders('3a').map(f => `${f.placeholder}${f.command}Copy`))
+  expect(finders).toEqual(placeholderFinders('3a', TUNNEL_SOCKET).map(f => `${f.placeholder}${f.command}Copy`))
   expect(finders.some(f => f.includes('docker ps'))).toBe(true)
   expect(live.text('.access-block .access-copy')).toHaveLength(live.text('.access-block .access-pre').length)
   // On the host network, and on Ubuntu: those commands instead.
@@ -758,6 +766,31 @@ test('Do it myself without Look: the case picked, its commands with <placeholder
   // Closed again.
   await live.click('Do it myself')
   expect(live.has('.access-myself')).toBe(false)
+})
+
+test('Do it myself without Look follows the tunnel’s socket; a plan its own check refuses says why, and the part stays', async () => {
+  const settings = READY.tunnel.settings
+  const at = (over: Partial<typeof settings>): AccessView => ({
+    ...READY,
+    tunnel: { ...READY.tunnel, settings: { ...settings, ...over } },
+    server: IDLE,
+  })
+  // another socket: what finds the folder's group reads its folder, not the default one
+  const other = liveServer(at({ socket: '/srv/b/x.sock' }))
+  await other.click('Do it myself')
+  expect(other.text('.access-finder')).toEqual(
+    placeholderFinders('1', '/srv/b/x.sock').map(f => `${f.placeholder}${f.command}Copy`),
+  )
+  expect(other.text('.access-finder')).toEqual(['<gid>stat -c %g /srv/bCopy'])
+  // a public port the plan's check refuses (the board's own config check never sends one): the
+  // field's words instead of the blocks, the picker still there to choose another case
+  const refused = liveServer(at({ publicPort: 0 }))
+  await refused.click('Do it myself')
+  expect(refused.text('.access-why')).toEqual([t('tunnel.err.port', { field: t('tunnel.field.publicPort') })])
+  expect(refused.has('.access-block')).toBe(false)
+  expect(refused.has('.access-picker')).toBe(true)
+  await refused.click('Caddy as a service')
+  expect(refused.text('.access-why')).toHaveLength(1)
 })
 
 test('Do it myself with Look: the plan Look made, as commands; for another board’s setup, that setup’s Undo', async () => {

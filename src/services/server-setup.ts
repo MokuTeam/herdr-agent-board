@@ -18,6 +18,7 @@ import {
   adminHint,
   adminProblems,
   adminSshArgs,
+  connectionLost,
   PROBE_SCRIPT,
   readProbe,
   remoteCommand,
@@ -218,11 +219,11 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
 
   const cancelled = (): Answer => refused(null, t('server.err.cancelled'))
 
-  /** A Look that stopped: the view says why, as the answer does. */
+  /** A Look that stopped: the view says why, as the answer does (the hint's own words once: the panel shows the hint). */
   function stopLook(h: AdminHint | null, detail: string | null, more: Fields = {}): Answer {
     phase = 'idle'
     hint = h
-    error = detail ?? (h ? hintText(h) : null)
+    error = detail
     changed()
     return refused(h, detail, more)
   }
@@ -264,10 +265,20 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
 
   const mask = (line: string, password: string | null): string => (password ? line.replaceAll(password, MASK) : line)
 
-  /** Why an ssh that did not give its answer stopped. */
+  /**
+   * Why an ssh that did not give its answer stopped: ssh missing (noSsh), or not started for
+   * another reason (a command line longer than Windows takes…) in its own code; killed at its
+   * limit; else what its lines say.
+   */
   function stopped(h: Heard): { hint: AdminHint | null; detail: string | null } {
-    if (h.code === null && h.error !== null && h.error !== 'timeout') return { hint: 'noSsh', detail: h.error }
-    return { hint: adminHint(h.err), detail: detailOf(h.err) }
+    if (h.code === null && h.error !== null && h.error !== 'timeout')
+      return h.error === 'ENOENT'
+        ? { hint: 'noSsh', detail: h.error }
+        : { hint: null, detail: t('server.err.spawn', { code: h.error }) }
+    const detail = detailOf(h.err)
+    if (h.error === 'timeout')
+      return { hint: adminHint(h.err), detail: [t('server.err.timeout'), detail].filter(Boolean).join('\n') }
+    return { hint: adminHint(h.err), detail }
   }
 
   async function lookAt(o: Fields, kind: 'look' | 'undo'): Promise<Answer> {
@@ -418,10 +429,13 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
         if (result === 'busy' || result === 'changed') hint = result
         else if (result === null && progress?.exit === null) {
           // no end from the server: ssh could not start, was refused, or the connection went. Lost
-          // only once the run printed something; before that (ssh or sudo refused, in words the
-          // hints do not know) their own lines are the error.
+          // once the run printed something, or when ssh (exit 255) says in its own words that the
+          // connection went (the PC asleep before the run's first line); else (ssh or sudo refused,
+          // in words the hints do not know) their own lines are the error.
           const why = stopped(heard)
-          hint = why.hint ?? (heard.out.length ? 'lost' : null)
+          const gone = heard.out.length > 0 || (heard.code === 255 && connectionLost(heard.err))
+          hint = why.hint ?? (gone ? 'lost' : null)
+          error = why.detail
         } else if (result === null && progress?.exit === LAUNCH_FAILED) {
           // the launch could not write the run: it never started
           hint = null

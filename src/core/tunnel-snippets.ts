@@ -47,8 +47,9 @@ export const SSHD_RELOAD =
 /**
  * The user and its folder, the keys file and sshd's block in one paste: a subshell that stops at
  * the first error, and is safe to paste twice (what is there is left; the keys file is written
- * anew; the `Match` block is added only when sshd_config has none for `user`). No comments in it:
- * zsh takes a pasted `#` for a command.
+ * anew; the `Match` block is added only when sshd_config has none for `user`). `/run/sshd` is made
+ * when missing, as an sshd no one has connected to yet leaves it (Ubuntu 24.04 from the web
+ * console: `sshd -t` stops without it). No comments in it: zsh takes a pasted `#` for a command.
  */
 export function stepOnePaste(user: string, socket: string, publicKey: string): string {
   const folder = socketFolder(socket)
@@ -61,6 +62,7 @@ export function stepOnePaste(user: string, socket: string, publicKey: string): s
     'sudo install -d -m 755 /etc/ssh/authorized_keys',
     `echo ${word(keysLine(publicKey))} | sudo tee ${keysFile(user)} >/dev/null`,
     `grep -qx ${word(`Match User ${user}`)} ${config} || printf '\\n%s\\n' ${word(sshdBlock(user))} | sudo tee -a ${config} >/dev/null`,
+    '[ -d /run/sshd ] || sudo install -d -m 755 /run/sshd',
     'sudo sshd -t',
     SSHD_RELOAD,
     ')',

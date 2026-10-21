@@ -9,6 +9,7 @@ import {
   adminHint,
   adminProblems,
   adminSshArgs,
+  connectionLost,
   PROBE_SCRIPT,
   pinnedIn,
   readProbe,
@@ -238,6 +239,31 @@ describe('the hint for what ssh, sudo and sudo-rs said (first match)', () => {
   test('sudo-rs only warns of requiretty: no hint for its warning alone, nor for lines of no matter', () => {
     expect(adminHint(["/etc/sudoers.d/admin:1:10: unknown setting: 'requiretty'", 'Defaults requiretty'])).toBeNull()
     expect(adminHint(['all fine', '@@step 1 ok'])).toBeNull()
+  })
+})
+
+describe('ssh’s own words for a connection that went (a run goes on on the server then)', () => {
+  const lost: string[][] = [
+    ['Connection to ssh.example.com closed by remote host.'],
+    ['client_loop: send disconnect: Broken pipe'],
+    ['client_loop: send disconnect: Connection reset'],
+    ['packet_write_wait: Connection to 203.0.113.7 port 22: Broken pipe'],
+    ['Read from remote host ssh.example.com: Connection reset by peer'],
+    ['Timeout, server ssh.example.com not responding.'],
+  ]
+  for (const lines of lost) test(lines[0] ?? '', () => expect(connectionLost(lines)).toBe(true))
+  test('a connection refused before the login, or refused at it: not lost', () => {
+    expect(
+      connectionLost([
+        'kex_exchange_identification: read: Connection reset by peer',
+        'Connection reset by 203.0.113.7 port 22',
+      ]),
+    ).toBe(false)
+    expect(connectionLost(['ssh_exchange_identification: Connection closed by remote host'])).toBe(false)
+    expect(connectionLost(['admin@ssh.example.com: Permission denied (publickey).'])).toBe(false)
+    expect(connectionLost(['ssh: connect to host ssh.example.com port 22: Connection refused'])).toBe(false)
+    expect(connectionLost(['Connection closed by 203.0.113.7 port 22'])).toBe(false)
+    expect(connectionLost([])).toBe(false)
   })
 })
 

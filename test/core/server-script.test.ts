@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { adminSshArgs, remoteCommand } from '../../src/core/server-admin.ts'
 import type { ServerFacts } from '../../src/core/server-facts.ts'
 import {
   buildPlan,
@@ -16,6 +17,7 @@ import {
 } from '../../src/core/server-plan.ts'
 import { doItMyself, launchScript, readProgress, runScript, startProgress } from '../../src/core/server-script.ts'
 import { CADDY_FILE, CADDY_IMAGE, IMPORT_LINE, SITE_FILE, SOCAT_IMAGE } from '../../src/core/server-texts.ts'
+import { tunnelConfig } from '../../src/core/tunnel.ts'
 import { factsFor, recordFor } from '../support/server-facts.ts'
 
 const W: Wanted = {
@@ -118,9 +120,15 @@ describe('the run script: one plan, the same lines as "Do it myself"', () => {
         expect(block.commands).toBe(s.commands.join('\n'))
         expect(block.check).toBe(s.check.join('\n'))
         expect(block.undo).toBe(s.undo.join('\n'))
+        // Undo's last step is the owner's to run by hand: the run only says it skipped, its lines
+        // (userdel…) are not even in it
+        const byHand = s.id === 'by-hand'
         for (const line of [...s.commands, ...s.check, ...s.undo])
-          expect([s.id, run.includes(`\n${line}\n`)]).toEqual([s.id, true])
+          expect([s.id, run.includes(`\n${line}\n`)]).toEqual([s.id, !byHand])
+        if (byHand) expect(run).toContain(`\necho '@@step ${i + 1} start'; echo '@@step ${i + 1} skip'\n`)
       })
+      if (p.kind === 'undo')
+        expect([name, p.steps.at(-1)?.id, run.includes('userdel')]).toEqual([name, 'by-hand', false])
       for (const b of BASHISMS) expect([name, b, run.includes(b)]).toEqual([name, b, false])
       expect(syntax(run)).toEqual({ code: 0, err: '' })
     })
@@ -151,22 +159,110 @@ describe('the launch: the run written, started detached, its log followed', () =
     expect(() => launchScript('r1', run.replace('# agent-board: end\n', ''))).toThrow()
     expect(launch).toContain(`[ "$(tail -n 1 "$R.sh")" = '# agent-board: end' ] || { echo '@@exit 70'; exit 70; }`)
   })
-  test('the biggest plans still fit a Windows command line in base64, with 20 of their hosts', () => {
-    const f = factsFor('4b')
-    const many = Array.from({ length: 25 }, (_, i) => `site-number-${i}.some-long-domain.example.org`)
-    const big = planOf({ ...f, docker: null, nginx: f.nginx && { ...f.nginx, serverNames: many } })
-    const f3 = factsFor('3a')
-    const big3 = planOf({ ...f3, caddy: f3.caddy && { ...f3.caddy, hosts: many } })
-    for (const [name, p] of [
-      ...PLANS,
-      ['4b with Docker to install', big] as const,
-      ['3a with 25 hosts', big3] as const,
-    ]) {
-      const sent = Buffer.from(launchScript('r1', runScript(p, W, RUN))).toString('base64')
-      expect([name, sent.length < 30_000]).toEqual([name, true])
+  test('every plan’s whole ssh command line fits Windows’ (32,767 characters), with 20 of their sites named in 253 characters each', () => {
+    // the most a host name has, each its own
+    const hosts = Array.from(
+      { length: 20 },
+      (_, i) =>
+        `${String(i).padStart(2, '0')}${'a'.repeat(59)}.${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(59)}.org`,
+    )
+    expect(hosts.every(h => h.length === 253)).toBe(true)
+    const long = (f: ServerFacts): ServerFacts => ({
+      ...f,
+      caddy: f.caddy && { ...f.caddy, hosts },
+      nginx: f.nginx && { ...f.nginx, serverNames: hosts },
+    })
+    const plans: [string, Plan][] = []
+    for (const distro of ['debian13', 'ubuntu2604'] as const) {
+      for (const c of ['bare', 'nodocker', '1b', '2', '3a', '3b', '4a', '4b'] as const)
+        for (const install of [false, true]) {
+          // with Docker there, and with Docker to install (the biggest)
+          const f = long(factsFor(c, distro))
+          const built = buildPlan(install ? { ...f, docker: null } : f, W, { id: 'r1', docker: true })
+          if ('steps' in built) plans.push([`${c} on ${distro}${install ? ', Docker to install' : ''}`, built])
+        }
+      const undoOf = (c: '2' | '3a' | '4b', items: RecordItem[]): Plan => {
+        const r = recordFor(c, { items })
+        return undoPlan(
+          r,
+          { ...long(factsFor(c, distro)), record: r },
+          { id: 'u1', removeDocker: true, removeEdited: true },
+        )
+      }
+      // an update: their Caddy's setup to another domain
+      const r2 = recordFor('2', {
+        items: [
+          { kind: 'file', path: SITE_FILE, sha256: 'ab'.repeat(32) },
+          { kind: 'group', path: '/var/lib/boardtunnel', from: 'boardtunnel', to: 'caddy' },
+          { kind: 'line', file: '/etc/caddy/Caddyfile', line: IMPORT_LINE },
+        ],
+      })
+      const f2 = long(factsFor('2', distro))
+      const update = buildPlan(
+        { ...f2, record: r2, folder: f2.folder && { ...f2.folder, group: 'caddy' } },
+        { ...W, domain: 'new.example.com' },
+        { id: 'r1', docker: true },
+      )
+      if (!('steps' in update) || update.kind !== 'update') throw new Error('an update')
+      plans.push(
+        [`update 2 on ${distro}`, update],
+        [`undo 2 on ${distro}`, undoOf('2', [{ kind: 'line', file: '/etc/caddy/Caddyfile', line: IMPORT_LINE }])],
+        [
+          `undo 3a on ${distro}`,
+          undoOf('3a', [
+            { kind: 'block', file: '/srv/my web/Caddyfile', begin: '# >>> agent-board', end: '# <<< agent-board' },
+          ]),
+        ],
+        [
+          `undo 4b on ${distro}`,
+          undoOf('4b', [
+            { kind: 'docker', packages: ['docker-ce'], files: ['/etc/apt/sources.list.d/docker.list'] },
+            { kind: 'file', path: '/etc/nginx/conf.d/agent-board.conf', sha256: 'cd'.repeat(32) },
+            { kind: 'container', name: 'agent-board-caddy', setup: 'r0' },
+          ]),
+        ],
+      )
+    }
+    expect(plans.length).toBeGreaterThan(30)
+    // Windows' ssh, the admin's key and the board's known_hosts under a user name with a space, Cyrillic and %
+    const conf = tunnelConfig({ host: 'ssh.example.com', user: 'boardtunnel', domain: 'board.example.com' })
+    const home = 'C:\\Users\\Иван Петров%a b'
+    for (const [name, p] of plans) {
+      const args = adminSshArgs({
+        conf,
+        admin: { user: 'administrator', key: `${home}\\.ssh\\id_ed25519 admin` },
+        knownHosts: `${home}\\AppData\\Local\\agent-board\\state\\tunnel\\known_hosts`,
+        command: remoteCommand(launchScript('r1', runScript(p, W, RUN)), 'password'),
+        platform: 'win32',
+      })
+      const line = windowsLine(['C:\\Windows\\System32\\OpenSSH\\ssh.exe', ...args])
+      expect([name, line.length < 30_000]).toEqual([name, true])
     }
   })
 })
+
+/**
+ * The command line Windows gets for an argv, as libuv (Node's, Bun's) makes it: an argument with a
+ * space, tab or quote in quotes, its quotes and the backslashes before them escaped.
+ */
+function windowsLine(argv: readonly string[]): string {
+  const quote = (a: string): string => {
+    if (a === '') return '""'
+    if (!/[ \t"]/.test(a)) return a
+    if (!/["\\]/.test(a)) return `"${a}"`
+    let out = '"'
+    let slashes = 0
+    for (const ch of a) {
+      if (ch === '\\') slashes++
+      else {
+        out += ch === '"' ? `${'\\'.repeat(slashes * 2 + 1)}"` : `${'\\'.repeat(slashes)}${ch}`
+        slashes = 0
+      }
+    }
+    return `${out}${'\\'.repeat(slashes * 2)}"`
+  }
+  return argv.map(quote).join(' ')
+}
 
 describe('progress from the run’s lines', () => {
   const p = planOf(factsFor('2'))
@@ -667,6 +763,37 @@ describe.skipIf(!SH)('a run, for real', () => {
       { id: 'u1', removeDocker: false, removeEdited: false },
     )
   }
+
+  test('Undo’s by-hand step: said skipped and never run, even where a skip check fails (a fork failure, a TERM)', () => {
+    const root = `${dir}/by-hand`
+    // a `timeout` under which every skip check (its 60 s) fails, every other command runs
+    const stubs = `${dir}/failing-skip`
+    mkdirSync(stubs, { recursive: true })
+    writeFileSync(`${stubs}/timeout`, '#!/bin/sh\n[ "$3" = 60 ] && exit 1\nshift 3\nexec "$@"\n', { mode: 0o755 })
+    const SEP = process.platform === 'win32' ? ';' : ':'
+    const p = {
+      ...fake([
+        step('guard'),
+        step('forget'),
+        step('by-hand', { skipIf: ['true'], commands: ["echo 'did by-hand'", 'sudo userdel boardtunnel'] }),
+      ]),
+      kind: 'undo' as const,
+    }
+    const { out, code } = runIn(p, root, { PATH: `${stubs}${SEP}${env.PATH}` })
+    expect(markers(out)).toEqual([
+      '@@step 1 start',
+      'did guard',
+      '@@step 1 ok',
+      '@@step 2 start',
+      'did forget',
+      '@@step 2 ok',
+      '@@step 3 start',
+      '@@step 3 skip',
+      '@@result applied',
+    ])
+    expect(code).toBe(0)
+    expect(out).not.toContain('userdel')
+  })
 
   test('Undo of a run cut short before it recorded the line: the line comes out of their file all the same', () => {
     const root = `${dir}/interrupted`
