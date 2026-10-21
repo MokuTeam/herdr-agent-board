@@ -360,7 +360,13 @@ describe('wake’s hooks (#119)', () => {
       assert.equal(JSON.stringify(none.settings).includes('wake-hook.ts'), false)
       const had = planSettings({}, paths, { wake: true }).settings
       const kept = planSettings(had, paths, off)
-      assert.deepEqual(kept.settings, had)
+      // The same entries; the question form's hook moves after wake's once (ours go last), then stays.
+      const sorted = (s: Record<string, unknown>) =>
+        Object.fromEntries(
+          Object.entries(hooksOf(s)).map(([e, l]) => [e, (l ?? []).map(x => JSON.stringify(x)).sort()]),
+        )
+      assert.deepEqual(sorted(kept.settings), sorted(had))
+      assert.deepEqual(planSettings(kept.settings, paths, off).settings, kept.settings)
       assert.equal(kept.oldWake, false)
     }
   })
