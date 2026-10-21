@@ -9,6 +9,7 @@ import { type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
 import { join } from 'node:path'
 import { saveFoundProfiles } from '../adapters/config-file.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
+import { ownFileCheck } from '../adapters/own-files.ts'
 import { archiveDir, cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
 import { messageGate } from '../core/message-gate.ts'
@@ -174,6 +175,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     page,
     access,
     probes,
+    ownFiles: ownFileCheck(cfg),
     log,
     onChange: () => board.publish(),
   })

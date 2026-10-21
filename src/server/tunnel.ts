@@ -10,7 +10,8 @@
 // - it carries the cookie of a live login;
 // - it does not act on this computer's screen (desktopOnly), nor manage the remote mode or Remote
 //   access (localOnly), in either spelling of its path; pairing and peers are not here at all.
-// The routes' own guards apply as for the web board, with the domain's origin as the board's own.
+// The routes' own guards apply as for the web board, with the domain's origin as the board's own,
+// and the routes that read by a path refuse the board's own files (ownFiles).
 // Without a login only what signing in needs: the page and its files (marked remote, as for a
 // phone's browser), a reduced hello, the login routes and the board's probe; anything else is 401,
 // and a cookie that is no login is cleared. A body that is no JSON or too large on the listener's
@@ -48,6 +49,8 @@ export interface TunnelListenerOptions {
   access: Access
   /** The nonces the board's own probe answers (services/tunnel.ts). */
   probes: Probes
+  /** Whether a path is one of the board's own files (adapters/own-files.ts), which no route here reads. */
+  ownFiles: (target: string) => boolean
   log: (text: string) => void
   /** listening() changed: it started, stopped or moved. */
   onChange: () => void
@@ -259,7 +262,7 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
         const r = o.access.addPasskey(login.id, body, { origin, rpId: site }, who.userAgent)
         return r.ok ? json(200, { ok: true, id: r.id }) : json(400, { ok: false, error: r.error })
       }
-      const res = await dispatch(o.routes, req, url, path, { ...o.guards, origins: [origin] })
+      const res = await dispatch(o.routes, req, url, path, { ...o.guards, origins: [origin], ownFiles: o.ownFiles })
       return endsWhenGone(res, gone => o.access.watch(login.id, gone), { 'x-accel-buffering': 'no' })
     } catch (err) {
       // The path only: a query can carry the page's file token.

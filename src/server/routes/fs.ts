@@ -1,13 +1,17 @@
 // Files and folders the chat mentions: what they are, a preview, opening them, links, and the
 // raw bytes of media for the quick look (adapters/files.ts); folders for the folder picker.
+// Through the tunnel, the board's own files are none of these (ctx.ownFile): stat says they are
+// missing, the others refuse them.
 import { statSync } from 'node:fs'
-import { extname } from 'node:path'
+import { basename, extname } from 'node:path'
 import { describe, MEDIA_TYPES, openWith, preview, resolvePath } from '../../adapters/files.ts'
 import { listDirs } from '../../adapters/folders.ts'
 import { t } from '../../core/lang.ts'
-import { type Body, json, type Route } from '../http.ts'
+import { type Body, json, type Route, type RouteContext } from '../http.ts'
 
 const missing = (body: Body) => json(400, { error: t('err.fs.missing', { path: String(body.path ?? '') }) })
+/** A file of the board's own, asked for through the tunnel. */
+const ownRefusal = () => json(403, { error: t('err.fs.own') })
 const opened = (r: { ok: boolean; error?: string }) =>
   json(r.ok ? 200 : 500, r.ok ? r : { error: t('err.fs.open', { why: String(r.error) }) })
 
@@ -34,8 +38,9 @@ function byteRange(header: string | null, size: number): { start: number; end: n
  * otherwise, except when the request carries a Range main did not read: Bun.serve would answer
  * that one with a 206 of its own, so that body goes from memory.
  */
-async function raw(req: Request, url: URL): Promise<Response> {
-  const { path: target } = resolvePath(url.searchParams.get('path'))
+async function raw(req: Request, ctx: RouteContext): Promise<Response> {
+  const { path: target } = resolvePath(ctx.url.searchParams.get('path'))
+  if (target && ctx.ownFile(target)) return ownRefusal()
   const type = MEDIA_TYPES[extname(target).slice(1).toLowerCase()]
   const st = target ? statSync(target, { throwIfNoEntry: false }) : null
   if (!type || !st?.isFile()) return json(404, { error: 'not found' })
@@ -77,6 +82,11 @@ export function fsRoutes(): Route[] {
     // Folders only, for the new-session window's folder picker (adapters/folders.ts).
     post('/api/fs/dirs', async (_req, ctx) => {
       const body = await ctx.body()
+      // A blank path lists the roots; any other is the folder listDirs reads.
+      if (String(body.path ?? '').trim()) {
+        const { path: target } = resolvePath(body.path)
+        if (target && ctx.ownFile(target)) return ownRefusal()
+      }
       return json(200, await listDirs(body.path, { git: !!body.git }))
     }),
     post('/api/fs/stat', async (_req, ctx) => {
@@ -84,14 +94,18 @@ export function fsRoutes(): Route[] {
       const raws = Array.isArray(body.paths) ? body.paths.slice(0, 300).map(String) : []
       const items = raws.map(raw => {
         const { path: target, line } = resolvePath(raw, String(body.cwd ?? ''))
-        return { raw, line, ...(target ? describe(target) : { path: '', exists: false }) }
+        if (!target) return { raw, line, path: '', exists: false }
+        // Missing, so the page shows no link for it.
+        if (ctx.ownFile(target)) return { raw, line, path: target, name: basename(target), exists: false }
+        return { raw, line, ...describe(target) }
       })
       return json(200, { items })
     }),
     post('/api/fs/preview', async (_req, ctx) => {
       const body = await ctx.body()
       const { path: target } = resolvePath(body.path, String(body.cwd ?? ''))
-      return target ? json(200, preview(target)) : missing(body)
+      if (!target) return missing(body)
+      return ctx.ownFile(target) ? ownRefusal() : json(200, preview(target))
     }),
     post('/api/fs/open', async (_req, ctx) => {
       const body = await ctx.body()
@@ -117,6 +131,6 @@ export function fsRoutes(): Route[] {
     }),
     // Bytes of an image, PDF, video or audio file for the quick look: the per-run token stands
     // for the X-Board header, which <img>, <video> and the PDF viewer cannot send.
-    { method: 'GET', path: '/api/fs/raw', guard: ['fs-token'], handle: (req, ctx) => raw(req, ctx.url) },
+    { method: 'GET', path: '/api/fs/raw', guard: ['fs-token'], handle: raw },
   ]
 }
