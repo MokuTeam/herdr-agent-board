@@ -1796,15 +1796,16 @@ export function manualFacts(c: SetupCase, distro: 'debian' | 'ubuntu'): ServerFa
   }
 }
 
-/** Each placeholder of `manualFacts(c, …)`'s plan with the command that finds its value. */
-export function placeholderFinders(c: SetupCase): { placeholder: string; command: string }[] {
-  const gid = { placeholder: '<gid>', command: 'stat -c %g /var/lib/boardtunnel' }
+/** Each placeholder of `manualFacts(c, …)`'s plan with the command that finds its value (the folder's, of the tunnel's socket). */
+export function placeholderFinders(c: SetupCase, socket: string): { placeholder: string; command: string }[] {
+  const folder = q(socketFolder(socket))
+  const gid = { placeholder: '<gid>', command: `stat -c %g ${folder}` }
   const inspect = (what: string): string => `docker inspect -f '${what}' '${P_CONTAINER}'`
   switch (c) {
     case '2':
       return [
         { placeholder: P_FILE, command: 'systemctl show caddy -p ExecStart' },
-        { placeholder: P_GROUP, command: 'stat -c %G /var/lib/boardtunnel' },
+        { placeholder: P_GROUP, command: `stat -c %G ${folder}` },
       ]
     case '3a':
     case '3b':

@@ -699,7 +699,7 @@ describe('Do it myself without Look (call 28)', () => {
     const p = plan(f)
     expect(p.case).toBe('3a')
     expect(all(p)).toContain('<your Caddyfile>')
-    const finders = placeholderFinders('3a')
+    const finders = placeholderFinders('3a', W.socket)
     expect(finders.map(x => x.command).join('\n')).toContain('docker ps')
     expect(finders.map(x => x.command).join('\n')).toContain('docker inspect')
     for (const x of finders) expect(all(p)).toContain(x.placeholder)
@@ -708,10 +708,21 @@ describe('Do it myself without Look (call 28)', () => {
     for (const c of ['1', '2', '3a', '3b', '4a', '4b'] as SetupCase[]) {
       const p = plan(manualFacts(c, 'debian'))
       expect([c, p.case]).toEqual([c, c])
-      for (const x of placeholderFinders(c)) expect([c, all(p).includes(x.placeholder)]).toEqual([c, true])
+      for (const x of placeholderFinders(c, W.socket)) expect([c, all(p).includes(x.placeholder)]).toEqual([c, true])
     }
     expect(all(plan(manualFacts('2', 'debian')))).toContain('<your Caddyfile>')
     expect(all(plan(manualFacts('1', 'debian')))).toContain("'<gid>'")
+  })
+  test('the commands that find the folder’s group read the tunnel’s own socket folder', () => {
+    expect(placeholderFinders('1', W.socket)).toEqual([
+      { placeholder: '<gid>', command: 'stat -c %g /var/lib/boardtunnel' },
+    ])
+    expect(placeholderFinders('2', '/srv/b/x.sock').map(x => x.command)).toContain('stat -c %G /srv/b')
+    for (const c of ['1', '1b', '2', '3a', '3b', '4a', '4b'] as SetupCase[]) {
+      const commands = placeholderFinders(c, '/srv/b/x.sock').map(x => x.command)
+      expect([c, commands.some(x => x.endsWith(' /srv/b'))]).toEqual([c, true])
+      expect([c, commands.some(x => x.includes('boardtunnel'))]).toEqual([c, false])
+    }
   })
 })
 

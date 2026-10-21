@@ -81,6 +81,7 @@ export function DoItMyself({ view, state, onState }: DoItMyselfProps) {
           </div>
         </div>
       )}
+      {manual.error && <p className="access-why">{manual.error}</p>}
       {manual.finders.length > 0 && (
         <>
           <p className="access-note">{t('server.panel.placeholders')}</p>

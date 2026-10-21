@@ -251,6 +251,8 @@ export interface Manual {
   finders: { placeholder: string; command: string }[]
   /** No plan from Look: the case comes from the owner's pick. */
   picker: boolean
+  /** Why there is no plan to show: the words of the check that refused it (a field's); null with one. */
+  error: string | null
 }
 
 /** The distribution "Do it myself" writes for: the one picked, else Look's when it is one of the two, else Debian. */
@@ -262,18 +264,34 @@ export function distroOf(s: ServerView, state: SetupState): Distro {
 
 /**
  * What "Do it myself" shows: the plan Look made; for another board's setup on the server, that
- * setup's Undo (what the spec offers then); else the plan for the case the owner picked.
+ * setup's Undo (what the spec offers then); else the plan for the case the owner picked. A plan the
+ * core's checks refuse (they throw) gives their words instead of blocks, never a page that fails to draw.
  */
 export function manualOf(s: ServerView, settings: TunnelConfig, state: SetupState): Manual {
-  if (s.plan) return { blocks: doItMyself(s.plan), finders: [], picker: false }
+  const plan = s.plan
+  if (plan) return made(false, () => ({ blocks: doItMyself(plan), finders: [] }))
+  const facts = s.facts
   const record =
-    s.facts && s.choice?.case === null && s.choice.why.includes('otherSetup') ? setupRecord(s.facts.record) : null
-  if (s.facts && record) {
-    const undo = undoPlan(record, s.facts, { id: 'manual', removeDocker: false, removeEdited: false })
-    return { blocks: doItMyself(undo), finders: [], picker: false }
+    facts && s.choice?.case === null && s.choice.why.includes('otherSetup') ? setupRecord(facts.record) : null
+  if (facts && record)
+    return made(false, () => ({
+      blocks: doItMyself(undoPlan(record, facts, { id: 'manual', removeDocker: false, removeEdited: false })),
+      finders: [],
+    }))
+  const wanted = wantedOf(settings)
+  return made(true, () => ({
+    blocks: doItMyself(manualPlan(state.pick, wanted, distroOf(s, state))),
+    finders: placeholderFinders(state.pick, wanted.socket),
+  }))
+}
+
+/** The blocks `make` gives, or the words it was refused in. */
+function made(picker: boolean, make: () => Pick<Manual, 'blocks' | 'finders'>): Manual {
+  try {
+    return { ...make(), picker, error: null }
+  } catch (err) {
+    return { blocks: [], finders: [], picker, error: err instanceof Error ? err.message : String(err) }
   }
-  const plan = manualPlan(state.pick, wantedOf(settings), distroOf(s, state))
-  return { blocks: doItMyself(plan), finders: placeholderFinders(state.pick), picker: true }
 }
 
 /** A plan's tick as the part keeps it. */
