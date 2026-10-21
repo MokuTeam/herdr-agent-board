@@ -100,8 +100,9 @@ function aheadWord(i: RecordItem): string {
 /**
  * The script the board runs as root for a plan (Apply, an update or Undo). Each step: `@@step <n>
  * start`, then `skip` when its skipIf all hold, else its commands and check under `timeout`, `ok`
- * or `fail`; Undo's by-hand step is only said skipped, its commands left out. A failure runs the failed step's undo and the done steps', newest first (`@@undo <n>
- * ok|fail`), then `@@result rolled-back|rollback-failed`; all done gives `@@result applied`. The
+ * or `fail`; Undo's by-hand step is only said skipped, its commands left out. A failure runs the
+ * failed step's undo and the done steps', newest first (`@@undo <n> ok|fail`), then `@@result
+ * rolled-back|rollback-failed`; all done gives `@@result applied`. The
  * first step (the guard) changes nothing: when it fails, nothing is rolled back or recorded and the
  * run exits 3. The record is written as `running` after it, before each step with what the step
  * will change, and after each step with what it did; a record that cannot be written rolls the run
