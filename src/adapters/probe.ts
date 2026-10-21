@@ -1,7 +1,8 @@
 // The board's own probe through the owner's domain (spec, "And that the domain reaches this
-// board", Test connection's step 3): a GET of https://<domain>/api/probe/<nonce> from the PC, which
-// only this board answers, with that nonce. BOARD_TUNNEL_PROBE_ORIGIN names another origin (tests).
-import type { ProbeResult } from '../core/tunnel.ts'
+// board", Test connection's step 3): a GET of https://<domain>/api/probe/<nonce> (with the public
+// port, when it is not 443) from the PC, which only this board answers, with that nonce.
+// BOARD_TUNNEL_PROBE_ORIGIN names another origin (tests).
+import { type ProbeResult, publicOrigin, type TunnelConfig } from '../core/tunnel.ts'
 import { isRecord } from './json-store.ts'
 
 export const PROBE_TIMEOUT_MS = 10_000
@@ -10,9 +11,9 @@ const BODY_BYTES = 16 << 10
 /** How much of another answer the detail keeps. */
 const DETAIL_CHARS = 200
 
-/** Where the probe goes: BOARD_TUNNEL_PROBE_ORIGIN, else https://<domain>. */
-export const probeOrigin = (domain: string, env: Record<string, string | undefined> = process.env): string =>
-  env.BOARD_TUNNEL_PROBE_ORIGIN || `https://${domain}`
+/** Where the probe goes: BOARD_TUNNEL_PROBE_ORIGIN, else the domain's own origin (publicOrigin). */
+export const probeOrigin = (c: TunnelConfig, env: Record<string, string | undefined> = process.env): string =>
+  env.BOARD_TUNNEL_PROBE_ORIGIN || publicOrigin(c)
 
 /** The body's first BODY_BYTES at most, as text. */
 async function bodyStart(res: Response): Promise<string> {

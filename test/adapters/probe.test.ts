@@ -1,6 +1,7 @@
 // The probe through the domain, against a local Bun.serve standing in for the domain.
 import { expect, onTestFinished, test } from 'bun:test'
 import { fetchProbe, probeOrigin } from '../../src/adapters/probe.ts'
+import { tunnelConfig } from '../../src/core/tunnel.ts'
 
 const NONCE = '0123456789abcdef0123456789abcdef'
 
@@ -66,10 +67,14 @@ test('a closed port: network; TLS spoken to a server without it: tls; no answer 
   expect(Date.now() - started).toBeLessThan(5000)
 })
 
-test('probeOrigin: https://<domain>, or BOARD_TUNNEL_PROBE_ORIGIN', () => {
-  expect(probeOrigin('board.example.com', {})).toBe('https://board.example.com')
-  expect(probeOrigin('board.example.com', { BOARD_TUNNEL_PROBE_ORIGIN: 'http://127.0.0.1:40123' })).toBe(
-    'http://127.0.0.1:40123',
-  )
-  expect(probeOrigin('board.example.com', { BOARD_TUNNEL_PROBE_ORIGIN: '' })).toBe('https://board.example.com')
+test('probeOrigin: https://<domain>, with the public port unless it is 443; or BOARD_TUNNEL_PROBE_ORIGIN', () => {
+  const conf = tunnelConfig({ domain: 'board.example.com' })
+  const conf8443 = { ...conf, publicPort: 8443 }
+  expect(probeOrigin(conf, {})).toBe('https://board.example.com')
+  expect(probeOrigin({ ...conf, publicPort: 443 }, {})).toBe('https://board.example.com')
+  expect(probeOrigin(conf8443, {})).toBe('https://board.example.com:8443')
+  for (const c of [conf, conf8443]) {
+    expect(probeOrigin(c, { BOARD_TUNNEL_PROBE_ORIGIN: 'http://127.0.0.1:40123' })).toBe('http://127.0.0.1:40123')
+    expect(probeOrigin(c, { BOARD_TUNNEL_PROBE_ORIGIN: '' })).toBe(probeOrigin(c, {}))
+  }
 })

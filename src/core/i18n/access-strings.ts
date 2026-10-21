@@ -12,6 +12,7 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'tunnel.field.key': 'Key',
     'tunnel.field.socket': 'Socket on the server',
     'tunnel.field.domain': 'Domain',
+    'tunnel.field.publicPort': 'Public port',
     'tunnel.field.port': 'Local port',
     // what their checks say
     'tunnel.err.required': '{field}: needed',
@@ -124,13 +125,18 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'access.copy': 'Copy',
     'access.copied': 'Copied',
     'access.snippets': 'On the server',
+    'access.snip.paste': 'All of step 1 in one paste',
+    'access.snip.pasteNote':
+      'The user and its folder, the keys file and the sshd block below, as one script that stops at its first error and is safe to paste twice: it makes only what is missing, writes the keys file with this key, and adds the Match block only when sshd_config has none for this user.',
+    'access.snip.pasteNoKey': 'Generate key first: this script writes its line into the keys file.',
     'access.snip.commands': "The tunnel's user and the socket's folder",
     'access.snip.keys': 'The keys file, {file}',
     'access.snip.sshd': 'At the end of /etc/ssh/sshd_config',
     'access.snip.caddy': 'The Caddyfile',
+    'access.snip.caddyGroup': "With Caddy from its package (it runs as caddy), give it the socket's folder:",
     'access.snip.nginx': 'With nginx instead of Caddy',
     'access.snip.nginxNote':
-      "The socket's folder then takes nginx's group instead of caddy's (-g nginx in the commands above, or -g www-data on Debian and Ubuntu), and this goes in the domain's server block:",
+      "The socket's folder then takes nginx's group instead (chgrp as for Caddy above, with www-data on Debian and Ubuntu, nginx elsewhere), and this goes in the domain's server block:",
 
     // Task 17: the panel's Login parts
     'access.login': 'Login',
@@ -213,6 +219,7 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'tunnel.field.key': 'Ключ',
     'tunnel.field.socket': 'Сокет на сервере',
     'tunnel.field.domain': 'Домен',
+    'tunnel.field.publicPort': 'Публичный порт',
     'tunnel.field.port': 'Локальный порт',
     'tunnel.err.required': '{field}: нужно указать',
     'tunnel.err.host': 'Сервер: имя хоста или адрес, без пробелов, @ и дефиса в начале',
@@ -321,13 +328,18 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'access.copy': 'Копировать',
     'access.copied': 'Скопировано',
     'access.snippets': 'На сервере',
+    'access.snip.paste': 'Весь шаг 1 одной вставкой',
+    'access.snip.pasteNote':
+      'Пользователь и его папка, файл ключей и блок sshd ниже одним скриптом, который останавливается на первой ошибке и который можно вставить дважды: он создаёт только то, чего нет, записывает в файл ключей этот ключ и добавляет блок Match, только если в sshd_config его для этого пользователя ещё нет.',
+    'access.snip.pasteNoKey': 'Сначала создайте ключ: этот скрипт записывает его строку в файл ключей.',
     'access.snip.commands': 'Пользователь туннеля и папка сокета',
     'access.snip.keys': 'Файл ключей, {file}',
     'access.snip.sshd': 'В конец /etc/ssh/sshd_config',
     'access.snip.caddy': 'Caddyfile',
+    'access.snip.caddyGroup': 'С Caddy из пакета (он работает как caddy) отдайте ему папку сокета:',
     'access.snip.nginx': 'С nginx вместо Caddy',
     'access.snip.nginxNote':
-      'Тогда папка сокета получает группу nginx, а не caddy (-g nginx в командах выше, в Debian и Ubuntu -g www-data), а это идёт в блок server домена:',
+      'Тогда папка сокета получает группу nginx (chgrp, как для Caddy выше, с www-data в Debian и Ubuntu, nginx в остальных), а это идёт в блок server домена:',
 
     // Task 17: the panel's Login parts
     'access.login': 'Вход',

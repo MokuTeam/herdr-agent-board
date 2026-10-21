@@ -67,7 +67,16 @@ const refused = (error: string, more: object = {}): Answer => ({ status: 409, bo
 const edited = (r: EditResult): Answer => (r.ok ? ok() : refused(r.error))
 const malformed = (error: string): Answer => ({ status: 400, body: { ok: false, error } })
 
-const FIELDS: ReadonlySet<string> = new Set<TunnelField>(['host', 'sshPort', 'user', 'key', 'socket', 'domain', 'port'])
+const FIELDS: ReadonlySet<string> = new Set<TunnelField>([
+  'host',
+  'sshPort',
+  'user',
+  'key',
+  'socket',
+  'domain',
+  'publicPort',
+  'port',
+])
 const isField = (name: string): name is TunnelField => FIELDS.has(name)
 
 /** A file as it stands (its size and times), '' when it is not there. */

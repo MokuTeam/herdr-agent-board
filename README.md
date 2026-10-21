@@ -1498,40 +1498,45 @@ terminal's too, end.
 login is needed whatever the request says: no header, setting or state turns it off. Without a
 login only what signing in needs answers (the page and its files, a hello that tells nothing of
 this computer, the sign-in routes, the board's probe); everything else is 401. Its Host must be
-the domain, Caddy must have had it over HTTPS, and a change needs the board's header and the
-domain's own Origin. The password's hash, the code's secret, the passkeys, the logins (only their
-tokens' hashes), the failed attempts, the tunnel's private key and the server's pinned key stay in
-the state folder: none of it goes into the board's payload, a log, a URL or to the server. Only
-the code's secret goes, once, to this computer's panel, for its QR code.
+the domain (with its port, when `tunnel.publicPort` is not 443), Caddy must have had it over
+HTTPS, and a change needs the board's header and the domain's own Origin. The password's hash,
+the code's secret, the passkeys, the logins (only their tokens' hashes), the failed attempts, the
+tunnel's private key and the server's pinned key stay in the state folder: none of it goes into
+the board's payload, a log, a URL or to the server. Only the code's secret goes, once, to this
+computer's panel, for its QR code.
 
 ### On the server
 
-The board never touches the server. These are the steps for the defaults: the user `boardtunnel`,
-the socket `/var/lib/boardtunnel/board.sock`, the domain `board.example.com`. Settings → Remote
-access… on the web board shows the same with your values, each with Copy. The server is yours
-alone (it ends HTTPS, so root there sees what passes), with Caddy and OpenSSH 7.8 or newer.
+What gives the tunnel its rights on the server (DNS, the tunnel's user, the socket's folder, the
+key, sshd) is yours to set up, by hand: the board runs none of it. These are the steps for the
+defaults: the user `boardtunnel`, the socket `/var/lib/boardtunnel/board.sock`, the domain
+`board.example.com`. Settings → Remote access… on the web board shows the same with your values,
+each with Copy. The server is yours alone (it ends HTTPS, so root there sees what passes), with
+Caddy and OpenSSH 7.8 or newer.
 
 **1. DNS.** An A (and AAAA) record for the domain points to the server.
 
 **2. A user for the tunnel, with no shell and no home, and the socket's folder:**
 
 ```sh
-sudo useradd --system --no-create-home --home-dir /nonexistent \
+sudo useradd --system --user-group --no-create-home --home-dir /nonexistent \
     --shell /usr/sbin/nologin boardtunnel
 # useradd leaves the account locked; an sshd with UsePAM no refuses a locked one, key or not
 sudo usermod -p '*' boardtunnel
-# the socket's folder: the tunnel user makes the socket, Caddy's group opens it, no one else
-sudo install -d -m 2750 -o boardtunnel -g caddy /var/lib/boardtunnel
+# the socket's folder: the tunnel user makes the socket; its group is the reader's (step 3)
+sudo install -d -m 2750 -o boardtunnel -g boardtunnel /var/lib/boardtunnel
 # the key's file belongs to root, out of the tunnel user's reach
 sudo install -d -m 755 /etc/ssh/authorized_keys
 # the line below goes into /etc/ssh/authorized_keys/boardtunnel (owner root, mode 644)
 ```
 
-- The folder is the socket's own. `caddy` is the group Caddy's package runs as; if yours runs as
-  another, use that one.
-- The setgid bit (the `2` in `2750`) gives the socket the folder's group, so Caddy can open it;
-  the mask in step 4 makes it `srw-rw----`, its owner and that group only. The tunnel's user has
-  no home and no file of its own on the server.
+- The folder is the socket's own. It takes the tunnel user's own group, so this step works before
+  any web server is there; until the web server gets the folder's group (step 5), only root and
+  the tunnel's user can open the socket. A folder made with `-g caddy`, as these steps once said,
+  works as it is.
+- The setgid bit (the `2` in `2750`) gives the socket the folder's group, so the web server can
+  open it once it has that group; the mask in step 4 makes it `srw-rw----`, its owner and that
+  group only. The tunnel's user has no home and no file of its own on the server.
 - `usermod -p '*'`: `useradd` leaves `!` as the password, which locks the account. `*` matches no
   password either, but does not lock it. An sshd with `UsePAM yes` (Debian's and Ubuntu's
   default) lets the key in anyway; one with `UsePAM no` refuses a locked account ("Permission
@@ -1587,6 +1592,11 @@ Match User boardtunnel
   `KbdInteractiveAuthentication`: before 8.7, sshd refuses `ChallengeResponseAuthentication` in a
   `Match` block.
 
+Steps 2 to 4 are also in the panel as one script, **All of step 1 in one paste**, once Generate key
+has made the key: it stops at its first error, makes only what is missing, writes the keys file
+with your key, adds the `Match` block only when sshd_config has none for the tunnel's user, then
+runs `sshd -t` and reloads sshd. Pasting it twice changes nothing more.
+
 No sshd or `authorized_keys` option names the paths a socket forward may take; the folder does.
 Only the tunnel's user (and root) can make a socket in it and only Caddy's group can open it, so
 no other user on the server can take the path. Elsewhere the tunnel's user can make a socket only
@@ -1604,6 +1614,13 @@ board.example.com {
 }
 ```
 
+Caddy from its package runs as the user `caddy`: give its group the socket's folder (`chmod` puts
+back the setgid bit `chgrp` may clear). If yours runs as another, use that group.
+
+```sh
+sudo chgrp caddy /var/lib/boardtunnel && sudo chmod 2750 /var/lib/boardtunnel
+```
+
 Caddy gets and renews the certificate, keeps the Host header, sets `X-Forwarded-For` and
 `X-Forwarded-Proto` itself (over anything the caller sent), and passes event streams on at once.
 The board's live updates and the terminal are event streams: put no `encode` in front of the board
@@ -1612,8 +1629,8 @@ unless you have checked that they still flow, since compression can hold them ba
 **6. Firewall.** Only 22, 80 and 443 open. The socket needs no rule: it is a file, not a port.
 
 **7. nginx instead of Caddy** gets this note only; Caddy is the one supported. The socket's folder
-then takes nginx's group (`-g nginx` in step 2, or `-g www-data` on Debian and Ubuntu), and the
-domain's `server` block passes everything to the socket,
+then takes nginx's group (`chgrp` as in step 5, with `www-data` on Debian and Ubuntu, `nginx`
+elsewhere), and the domain's `server` block passes everything to the socket,
 `proxy_pass http://unix:/var/lib/boardtunnel/board.sock:;`, without buffering the streams and
 with the headers the board needs: `proxy_buffering off;`, `proxy_http_version 1.1;`,
 `proxy_set_header Connection "";`, `proxy_read_timeout 1h;`, `proxy_set_header Host $host;`,
@@ -1627,11 +1644,12 @@ Settings → **Remote access…** on the web board: on this computer's own board
 the domain or Tailscale. It has three parts: Tunnel, Login and Active logins.
 
 1. **The fields**: the server, the user (`boardtunnel`) and the domain; the SSH port (22), the
-   key, the socket and the local port have defaults (see [Settings](#settings)). Each is saved on
-   Enter or when you leave it, and checked first: a value ssh would read as an option (a leading
-   `-`), a socket right in a folder anyone could take its name in (`/tmp`, `/run` and the like),
-   or a port the board has already is refused, saying why. Changing the domain later removes the
-   passkeys (they belong to the old one) and ends every login; the panel asks first.
+   key, the socket, the public port (443) and the local port have defaults (see
+   [Settings](#settings)). Each is saved on Enter or when you leave it, and checked first: a
+   value ssh would read as an option (a leading `-`), a socket right in a folder anyone could
+   take its name in (`/tmp`, `/run` and the like), or a port the board has already is refused,
+   saying why. Changing the domain later removes the passkeys (they belong to the old one) and
+   ends every login; the panel asks first. Changing the public port keeps both.
 2. **Generate key**: an Ed25519 key without a passphrase in the state folder (`tunnel/id_ed25519`),
    that only you can read (on Windows the board sets its ACL), and its line for the keys file
    (step 3 above), with Copy. Generated again, it replaces the old one, and the server needs the
@@ -1941,9 +1959,11 @@ Settings → Remote access… and `board tunnel on|off` set it): `on` (false), `
 `sshPort` (22), `user` (the tunnel's user on the server), `key` (the private key's path; empty:
 the one Generate key made, `tunnel/id_ed25519` in the state folder), `socket` (the Unix socket on
 the server, `/var/lib/boardtunnel/board.sock`), `domain` (a bare host name such as
-`board.example.com`), `port` (the tunnel listener's on 127.0.0.1; empty: the web board's port plus
-two). None of it is secret. The board checks every field before it uses it, and runs nothing
-while one does not check out.
+`board.example.com`), `publicPort` (the port the server serves the domain on; empty: 443. Another
+one makes the board's address `https://<domain>:<publicPort>`: the Host and Origin it takes, the
+passkeys' origin and the probe follow it; the passkeys and logins stay), `port` (the tunnel
+listener's on 127.0.0.1; empty: the web board's port plus two). None of it is secret. The board
+checks every field before it uses it, and runs nothing while one does not check out.
 
 Cards: `%LOCALAPPDATA%\herdr\plugins\agent-board\cards\<session id>.json`. Sessions in the archive:
 `archive\<session id>.json` beside them (see [Archive](#archive)).

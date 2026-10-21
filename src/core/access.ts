@@ -220,7 +220,8 @@ const isSettings = (v: unknown): boolean =>
   typeof v.on === 'boolean' &&
   ['host', 'user', 'key', 'socket', 'domain'].every(k => isText(v[k])) &&
   isNum(v.sshPort) &&
-  numOrNull(v.port)
+  numOrNull(v.port) &&
+  numOrNull(v.publicPort)
 
 const isStatus = (v: unknown): boolean =>
   isFields(v) &&

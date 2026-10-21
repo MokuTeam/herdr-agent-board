@@ -508,6 +508,84 @@ describe('the lockout and the rate limits, through the tunnel', () => {
   }, 30_000)
 })
 
+describe('the domain on another public port (tunnel.publicPort)', () => {
+  const shared = sharedSandbox()
+  let tunnel = ''
+  let tunnelPort = 0
+  let auth: SoftAuthenticator
+  let proc: Awaited<ReturnType<typeof startTunnelBoard>>['proc']
+  const HOST = `${DOMAIN}:8443`
+  const AT = `${ORIGIN}:8443`
+  /** As Caddy forwards a request to https://board.example.com:8443 from the board's own page there. */
+  const at8443 = { host: HOST, origin: AT }
+
+  beforeAll(async () => {
+    const box = await shared()
+    oneSession(box)
+    auth = await softAuthenticator(-7)
+    // The passkey was registered through the domain on 443, before the port moved.
+    await seedAccess(box, { logins: [{ token: SEEDED }], passkeys: [seededPasskey(auth)] })
+    ;({ tunnel, tunnelPort, proc } = await startTunnelBoard(box, { tunnel: { publicPort: 8443 } }))
+  }, 30_000)
+
+  test('the domain with that port as Host and Origin reaches hello, and a board route after login', async () => {
+    expect(logged(proc, `tunnel: listening on 127.0.0.1:${tunnelPort} for https://board.example.com:8443/`)).toBe(true)
+    const caddy = viaCaddy(tunnel)
+    expect(await answer(caddy.get('/api/hello', at8443))).toEqual([
+      200,
+      { board: 'agent-board', api: REMOTE_API, auth: 'login', signedIn: false, language: 'en' },
+    ])
+    const me = viaCaddy(tunnel, `${COOKIE}=${SEEDED}`)
+    const board = await me.get('/api/board', at8443)
+    expect(board.status).toBe(200)
+    // The board's own answer (its sessions may not be read yet this early).
+    expect((await board.json()) as Record<string, unknown>).toHaveProperty('items', expect.any(Array))
+    // A write from the board's own page there passes the listener's Origin check and the route's own.
+    const permit = await me.post('/api/session/s1/permit', { allow: true }, at8443)
+    expect(await permit.json()).not.toEqual({ error: 'origin' })
+    expect(permit.status).not.toBe(403)
+  })
+
+  test('the domain without that port is another site: Host 403, Origin 403', async () => {
+    const caddy = viaCaddy(tunnel)
+    for (const host of [DOMAIN, `${DOMAIN}:443`, `${DOMAIN}:8444`, `127.0.0.1:${tunnelPort}`])
+      expect([host, ...(await answer(caddy.get('/api/hello', { host })))]).toEqual([host, 403, { error: 'host' }])
+    const me = viaCaddy(tunnel, `${COOKIE}=${SEEDED}`)
+    for (const origin of [ORIGIN, `${ORIGIN}:443`, `http://${HOST}`]) {
+      const headers = { host: HOST, origin }
+      expect([origin, ...(await answer(me.post('/api/session/s1/permit', { allow: true }, headers)))]).toEqual([
+        origin,
+        403,
+        { error: 'origin' },
+      ])
+      expect([
+        origin,
+        ...(await answer(caddy.post('/api/login/password', { password: PASSWORD, code: '000000' }, headers))),
+      ]).toEqual([origin, 403, { error: 'origin' }])
+    }
+  })
+
+  test('a passkey registered through the domain on 443 signs in through :8443; the origin it signs for is the one with the port', async () => {
+    const caddy = viaCaddy(tunnel)
+    const challengeOf = async (): Promise<string> => {
+      const options = await caddy.post('/api/login/passkey/options', {}, at8443)
+      const body = (await options.json()) as { challenge: string; rpId: string }
+      // The relying party stays the domain, so passkeys survive the port.
+      expect(body.rpId).toBe(DOMAIN)
+      return body.challenge
+    }
+    const old = auth.assert({ challenge: await challengeOf(), origin: ORIGIN, rpId: DOMAIN, userHandle: USER_ID })
+    const refused = await caddy.post('/api/login/passkey', { ...old, type: 'public-key' }, at8443)
+    expect(refused.status).toBe(401)
+    expect(refused.headers.get('set-cookie')).toBeNull()
+    const assertion = auth.assert({ challenge: await challengeOf(), origin: AT, rpId: DOMAIN, userHandle: USER_ID })
+    const res = await caddy.post('/api/login/passkey', { ...assertion, type: 'public-key' }, at8443)
+    expect(await res.json()).toEqual({ ok: true, method: 'passkey' })
+    expect(res.headers.get('set-cookie')).toMatch(LOGIN_SET)
+    expect((await viaCaddy(tunnel, cookieOf(res)).get('/api/board', at8443)).status).toBe(200)
+  })
+})
+
 // The listener listens before the board says it is ready (the first test above): nothing there by then is nothing at all.
 describe('nothing listens unless the tunnel is on, its settings check out and the login is set up', () => {
   test('no login set up', async () => {

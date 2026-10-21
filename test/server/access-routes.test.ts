@@ -240,6 +240,11 @@ describe('Remote access, set up from the local board', () => {
     expect([status, refused.field]).toEqual([409, 'socket'])
     // only the tunnel's fields: never `on` past its checks
     expect((await api.op({ op: 'tunnel', fields: { on: true } }))[0]).toBe(400)
+    // the public port is one of them, checked as the SSH port
+    expect(await api.op({ op: 'tunnel', fields: { publicPort: 0 } })).toEqual([
+      409,
+      { ok: false, field: 'publicPort', error: 'Public port is a whole number from 1 to 65535' },
+    ])
     expect(readFileSync(configPath, 'utf8')).toBe(before)
 
     expect(await opReloaded({ op: 'tunnel', fields: { ...settings, domain: ' Board.Example.COM ' } })).toEqual([
@@ -254,6 +259,14 @@ describe('Remote access, set up from the local board', () => {
     // the settings check out; the login is not set up yet
     expect(v.tunnel.blocked).toBe('Set up the password and the code first')
     expect(await api.op({ op: 'on' })).toEqual([409, { ok: false, error: 'Set up the password and the code first' }])
+
+    // Another public port is saved and shown; emptied, it is 443 again and leaves config.json.
+    expect(await opReloaded({ op: 'tunnel', fields: { publicPort: 8443 } })).toEqual([200, { ok: true }])
+    expect((JSON.parse(readFileSync(configPath, 'utf8')) as Reply).tunnel).toEqual({ ...settings, publicPort: 8443 })
+    expect((await api.view()).tunnel.settings.publicPort).toBe(8443)
+    expect(await opReloaded({ op: 'tunnel', fields: { publicPort: null } })).toEqual([200, { ok: true }])
+    expect((JSON.parse(readFileSync(configPath, 'utf8')) as Reply).tunnel).toEqual(settings)
+    expect((await api.view()).tunnel.settings.publicPort).toBeNull()
   })
 
   test('the code and the password, set up here: the secret goes out once, in its own answer only', async () => {

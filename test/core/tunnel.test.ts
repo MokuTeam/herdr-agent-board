@@ -9,6 +9,8 @@ import {
   fieldProblem,
   forwardAccepted,
   isLasting,
+  publicHosts,
+  publicOrigin,
   sshArgs,
   sshHint,
   sshPathArg,
@@ -35,6 +37,7 @@ describe('the tunnel’s settings', () => {
       socket: TUNNEL_SOCKET,
       domain: '',
       port: null,
+      publicPort: null,
     })
     expect(
       tunnelConfig({
@@ -46,6 +49,7 @@ describe('the tunnel’s settings', () => {
         socket: '/srv/b/b.sock',
         domain: 'board.example.com',
         port: 12500,
+        publicPort: 8443,
         extra: 1,
       }),
     ).toEqual({
@@ -57,6 +61,7 @@ describe('the tunnel’s settings', () => {
       socket: '/srv/b/b.sock',
       domain: 'board.example.com',
       port: 12500,
+      publicPort: 8443,
     })
     expect(tunnelConfig({ on: 'yes', sshPort: '22', port: 0, host: 3 })).toEqual(tunnelConfig(undefined))
     expect([tunnelPort(GOOD, 12422), tunnelPort({ ...GOOD, port: 12500 }, 12422)]).toEqual([12424, 12500])
@@ -159,6 +164,29 @@ describe('the tunnel’s settings', () => {
     expect(tunnelProblems(GOOD, { ...PORTS, pwa: 12424 })).toEqual(taken)
     expect(tunnelProblems(GOOD, { ...PORTS, remote: 12424 })).toEqual(taken)
     expect(tunnelProblems({ ...GOOD, port: 12500 }, { ...PORTS, pwa: 12424 })).toEqual([])
+  })
+  test('the public port: 443 unless set, checked as the SSH port; the address and the Host the listener takes follow it', () => {
+    useLanguage('en')
+    expect(tunnelConfig(undefined).publicPort).toBeNull()
+    expect(tunnelConfig({ publicPort: 8443 }).publicPort).toBe(8443)
+    for (const v of ['8443', 0, 65536, 1.5, -1, null]) expect(tunnelConfig({ publicPort: v }).publicPort).toBeNull()
+    for (const v of [null, 1, 443, 8443, 65535]) expect(fieldProblem('publicPort', v)).toBeNull()
+    for (const v of [0, 65536, 1.5, '8443', -1])
+      expect(fieldProblem('publicPort', v)).toBe('Public port is a whole number from 1 to 65535')
+    // The server's port, not this computer's: the board's own ports are no matter for it.
+    expect(fieldProblem('publicPort', 12422, PORTS)).toBeNull()
+    expect(tunnelProblems({ ...GOOD, publicPort: 8443 }, PORTS)).toEqual([])
+    expect(translator('ru')('tunnel.field.publicPort')).not.toBe('Public port')
+
+    const at = (publicPort: number | null) => ({ ...GOOD, publicPort })
+    expect([null, 443, 8443].map(p => publicOrigin(at(p)))).toEqual([
+      'https://board.example.com',
+      'https://board.example.com',
+      'https://board.example.com:8443',
+    ])
+    expect(publicHosts(at(null))).toEqual(['board.example.com', 'board.example.com:443'])
+    expect(publicHosts(at(443))).toEqual(['board.example.com', 'board.example.com:443'])
+    expect(publicHosts(at(8443))).toEqual(['board.example.com:8443'])
   })
 })
 

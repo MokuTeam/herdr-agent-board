@@ -54,6 +54,7 @@ const BARE: AccessView = {
       socket: TUNNEL_SOCKET,
       domain: 'board.example.com',
       port: null,
+      publicPort: null,
     },
     problems: [],
     blocked: 'Set up the password and the code first',
@@ -196,6 +197,15 @@ test('nothing set up: the password and the code not set, no passkey rows, the hi
   // No domain yet: the hint says where it goes.
   const none = { ...BARE, tunnel: { ...BARE.tunnel, settings: { ...BARE.tunnel.settings, domain: '' } } }
   expect(textsOf(bodyOf(none), 'access-tip')).toEqual([HINT.replace('board.example.com', '<domain>')])
+  // The domain on another public port: its address has the port; on 443 it has none.
+  const at = (publicPort: number) => ({
+    ...BARE,
+    tunnel: { ...BARE.tunnel, settings: { ...BARE.tunnel.settings, publicPort } },
+  })
+  expect(textsOf(bodyOf(at(8443)), 'access-tip')).toEqual([
+    HINT.replace('https://board.example.com', 'https://board.example.com:8443'),
+  ])
+  expect(textsOf(bodyOf(at(443)), 'access-tip')).toEqual([HINT])
 })
 
 test('set up, two passkeys, one used, a lockout: two rows with Remove, the lockout line with Lift', () => {
