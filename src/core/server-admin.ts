@@ -171,6 +171,17 @@ export function adminHint(lines: readonly string[]): AdminHint | null {
   return null
 }
 
+/** ssh's words for a connection that went after the login (the PC asleep, the network gone). */
+const LOST =
+  /closed by remote host|^client_loop: |packet_write_wait: |Broken pipe|Connection reset|Timeout, server .* not responding/
+/** A connection the server ended before the login: a refusal, not a loss. */
+const BEFORE_LOGIN = /exchange_identification/
+
+/** Whether ssh's lines say the connection went once it was up (so a run it launched may go on); not a refusal before it. */
+export function connectionLost(lines: readonly string[]): boolean {
+  return !lines.some(l => BEFORE_LOGIN.test(l)) && lines.some(l => LOST.test(l))
+}
+
 /**
  * Whether known_hosts' text pins a key for the host, as ssh writes it: the host on port 22,
  * `[host]:port` on another; a hashed line may be it (ssh decides then). Markers (@revoked,

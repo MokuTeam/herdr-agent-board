@@ -49,8 +49,14 @@ interface AdminState {
 
 type Fields = Record<string, unknown>
 
-/** A board whose config.json has the tunnel's settings (and `tunnel`'s more) and the admin user, the fake as its ssh. */
-async function useBoard(admin: AdminState, o: { pinned?: boolean; tunnel?: Fields; acme?: Acme } = {}) {
+/**
+ * A board whose config.json has the tunnel's settings (and `tunnel`'s more) and the admin user, the
+ * fake as its ssh; `spawn` in place of the real spawnRemote, for an ssh that does not start or runs out of time.
+ */
+async function useBoard(
+  admin: AdminState,
+  o: { pinned?: boolean; tunnel?: Fields; acme?: Acme; spawn?: typeof spawnRemote } = {},
+) {
   const fake = await useFakeSsh()
   if (o.pinned !== false) {
     mkdirSync(tunnelDir(), { recursive: true })
@@ -88,7 +94,7 @@ async function useBoard(admin: AdminState, o: { pinned?: boolean; tunnel?: Field
     hostKeyPinned: () => hostKeyPinned('ssh.example.com', 22),
     spawn: (bin, args, stdin, ms) => {
       deadlines.push(ms)
-      return spawnRemote(bin, args, stdin, ms)
+      return (o.spawn ?? spawnRemote)(bin, args, stdin, ms)
     },
     test: async () => {
       tests++
@@ -622,5 +628,106 @@ describe('the admin’s fields and Cancel', () => {
     expect(await b.look({ password: 'a\rb' })).toEqual({ status: 400, body: { ok: false, error: 'password' } })
     expect(await b.look({ password: 5 })).toEqual({ status: 400, body: { ok: false, error: 'password' } })
     expect(b.fake.calls()).toEqual([])
+  })
+})
+
+type End = { code: number | null; error: string | null }
+
+/** spawnRemote, until `breakWith`: after `after` more spawns, each ssh ends so without running (a spawn error, or killed at its limit). */
+function breakable() {
+  let end: End | null = null
+  let left = 0
+  const spawn: typeof spawnRemote = (bin, args, stdin, ms) => {
+    if (end && left-- <= 0) return { onLine: () => {}, done: Promise.resolve(end), kill: () => {} }
+    return spawnRemote(bin, args, stdin, ms)
+  }
+  return {
+    spawn,
+    breakWith(e: End, after = 0): void {
+      end = e
+      left = after
+    },
+  }
+}
+
+const TIMEOUT = 'The server took too long to answer (a hung Docker daemon is a usual cause): try again later.'
+
+describe('why a Look or a run stopped, said once and as it was', () => {
+  test('a Look stopped by a hint alone: the hint’s sentence once, as the answer’s error, not again as the view’s', async () => {
+    const pw = await useBoard({ sudo: 'password', password: SENTINEL, fixture: fixture('debian13', 'caddy-unit') })
+    expect(await pw.look()).toMatchObject({
+      status: 409,
+      body: { hint: 'needPassword', error: 'Type admin’s sudo password.' },
+    })
+    expect(pw.setup.view()).toMatchObject({ phase: 'idle', hint: 'needPassword', error: null })
+    const tty = await useBoard({ sudo: 'requiretty', flavor: 'sudo', fixture: fixture('debian13', 'bare') })
+    expect(await tty.look({ password: 'x' })).toMatchObject({ status: 409, body: { hint: 'requiretty' } })
+    expect(tty.setup.view()).toMatchObject({ hint: 'requiretty', error: null })
+    const unpinned = await useBoard({ uid: 0, fixture: fixture('debian13', 'bare') }, { pinned: false })
+    expect(await unpinned.look()).toMatchObject({ status: 409, body: { hint: 'noHostKey' } })
+    expect(unpinned.setup.view()).toMatchObject({ hint: 'noHostKey', error: null })
+    // a hint with lines of its own keeps them as the error
+    const key = await useBoard({ publickey: true, fixture: fixture('debian13', 'bare') })
+    expect(await key.look()).toMatchObject({ status: 409, body: { hint: 'publickey' } })
+    expect(key.setup.view()).toMatchObject({
+      hint: 'publickey',
+      error: 'admin@ssh.example.com: Permission denied (publickey).',
+    })
+  })
+
+  test('a Look cut at its limit (the probe, or a round a hung Docker holds): the server took too long', async () => {
+    const probe = breakable()
+    const early = await useBoard({ uid: 0, fixture: fixture('debian13', 'bare') }, { spawn: probe.spawn })
+    probe.breakWith({ code: null, error: 'timeout' })
+    expect(await early.look()).toEqual({ status: 409, body: { ok: false, hint: null, error: TIMEOUT } })
+    expect(early.setup.view()).toMatchObject({ phase: 'idle', hint: null, error: TIMEOUT, plan: null })
+    const round = breakable()
+    const late = await useBoard({ uid: 0, fixture: fixture('debian13', 'bare') }, { spawn: round.spawn })
+    round.breakWith({ code: 1, error: 'timeout' }, 1)
+    expect(await late.look()).toEqual({ status: 409, body: { ok: false, hint: null, error: TIMEOUT } })
+    expect(late.setup.view()).toMatchObject({ phase: 'idle', hint: null, error: TIMEOUT })
+    expect(late.commands()).toHaveLength(1)
+  })
+
+  test('ssh that could not start: no OpenSSH client only when it is missing; another reason in its own code', async () => {
+    const missing = breakable()
+    const none = await useBoard({ uid: 0, fixture: fixture('debian13', 'bare') }, { spawn: missing.spawn })
+    missing.breakWith({ code: null, error: 'ENOENT' })
+    expect(await none.look()).toMatchObject({ status: 409, body: { hint: 'noSsh' } })
+    const long = breakable()
+    const b = await useBoard({ uid: 0, fixture: fixture('debian13', 'bare') }, { spawn: long.spawn })
+    long.breakWith({ code: null, error: 'ENAMETOOLONG' })
+    const said = 'ssh could not start (ENAMETOOLONG).'
+    expect(await b.look()).toEqual({ status: 409, body: { ok: false, hint: null, error: said } })
+    expect(b.setup.view()).toMatchObject({ hint: null, error: said })
+    // and a run's: failed with that, not "No OpenSSH client found" or "the connection was lost"
+    const runs = breakable()
+    const r = await useBoard({ uid: 0, fixture: fixture('debian13', 'bare') }, { spawn: runs.spawn })
+    expect(await r.look()).toEqual(OK)
+    runs.breakWith({ code: null, error: 'ENAMETOOLONG' })
+    expect(await r.apply({ plan: planOf(r.setup).id })).toEqual(OK)
+    await r.until(['done', 'failed'])
+    expect(r.setup.view()).toMatchObject({ phase: 'failed', hint: null, error: said })
+  })
+
+  test('the connection gone before the run’s first line (ssh’s own words, exit 255): lost, the server finishes by itself', async () => {
+    const b = await useBoard({ uid: 0, fixture: fixture('debian13', 'bare') })
+    expect(await b.look()).toEqual(OK)
+    const p = planOf(b.setup)
+    b.server({ run: { lines: goesThrough(p), dropAfter: 0 } })
+    expect(await b.apply({ plan: p.id })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    expect(b.setup.view()).toMatchObject({
+      phase: 'failed',
+      hint: 'lost',
+      error: 'Connection to ssh.example.com closed by remote host.',
+    })
+    expect(b.setup.view().progress?.steps.every(s => s.state === 'waiting')).toBe(true)
+    // refused before the launch (exit 255 too, in other words): its own hint, not lost
+    expect(await b.look()).toEqual(OK)
+    b.server({ publickey: true })
+    expect(await b.apply({ plan: planOf(b.setup).id })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    expect(b.setup.view()).toMatchObject({ phase: 'failed', hint: 'publickey' })
   })
 })

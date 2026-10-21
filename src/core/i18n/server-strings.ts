@@ -282,6 +282,9 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.err.docker': 'Tick “Install Docker from Docker’s own repository” first.',
     'server.err.noRecord': 'Nothing of the board’s is set up on this server.',
     'server.err.cancelled': 'Cancelled.',
+    'server.err.spawn': 'ssh could not start ({code}).',
+    'server.err.timeout':
+      'The server took too long to answer (a hung Docker daemon is a usual cause): try again later.',
     'server.err.launch':
       'The server could not write the run to /etc/agent-board/runs (a full disk, or /etc read-only?): it did not start, nothing was changed.',
   },
@@ -567,6 +570,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.err.docker': 'Сначала отметьте «Установить Docker из собственного репозитория Docker».',
     'server.err.noRecord': 'На этом сервере ничего от доски не настроено.',
     'server.err.cancelled': 'Отменено.',
+    'server.err.spawn': 'ssh не запустился ({code}).',
+    'server.err.timeout': 'Сервер слишком долго не отвечал (частая причина — зависший демон Docker): попробуйте позже.',
     'server.err.launch':
       'Сервер не смог записать запуск в /etc/agent-board/runs (диск заполнен или /etc только для чтения?): запуск не начался, ничего не изменено.',
   },
