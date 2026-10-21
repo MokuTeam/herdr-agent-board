@@ -7,8 +7,9 @@
 import { readFileSync } from 'node:fs'
 import { loadConfig } from '../adapters/config-file.ts'
 import { type HerdrPane, type HerdrWorkspace, herdr, snapshot } from '../adapters/herdr.ts'
-import { isRecord } from '../adapters/json-store.ts'
 import { boardFile, PLUGIN_ID, ROOT } from '../adapters/paths.ts'
+import { isAlive } from '../adapters/process.ts'
+import { asSavedBoard, lastBoard, type SavedBoard } from '../core/board-pane.ts'
 import { goBack, rememberReturn } from '../services/nav.ts'
 
 /** What `herdr workspace create` and `herdr plugin pane open` answer, as far as this reads them. */
@@ -20,11 +21,10 @@ interface Opened {
   plugin_pane?: { pane?: { pane_id?: string } }
 }
 
-/** The pane of the board that ran last (board.json), if it says one. */
-function boardPane(): string | null {
+/** The board that ran last (board.json), if it says one. */
+function savedBoard(): SavedBoard | null {
   try {
-    const saved: unknown = JSON.parse(readFileSync(boardFile(), 'utf8'))
-    return isRecord(saved) && typeof saved.pane === 'string' ? saved.pane : null
+    return asSavedBoard(JSON.parse(readFileSync(boardFile(), 'utf8')))
   } catch {
     return null
   }
@@ -32,12 +32,20 @@ function boardPane(): string | null {
 
 const cfg = loadConfig()
 const background = process.argv.includes('--background')
-const board = boardPane()
+const saved = savedBoard()
 
-const snap = await snapshot()
+let snap = await snapshot()
 const placement = cfg.placement === 'tab' || cfg.placement === 'overlay' ? cfg.placement : 'workspace'
 if (background && placement !== 'workspace') process.exit(0)
-if (board && snap.panes.some(p => p.pane_id === board)) {
+const last = lastBoard(saved, snap.panes, isAlive)
+if (last?.stale) {
+  // herdr brought the board's pane back (after a restart) with a shell in it, not the board: it is
+  // no plugin pane any more. Close it and open a board as if there were none.
+  await herdr(['pane', 'close', last.pane]).catch(() => {})
+  snap = await snapshot()
+}
+const board = last && !last.stale ? last.pane : null
+if (board) {
   if (background) process.exit(0)
   if (snap.focused_pane_id === board) {
     if (!(await goBack())) await herdr(['plugin', 'pane', 'close', board])

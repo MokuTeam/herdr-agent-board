@@ -138,6 +138,16 @@ export function runHere(
   })
 }
 
+/** Whether a process with this id runs; one this process may not signal (EPERM) runs too. */
+export function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
 /** Run a program to its end (no tree kill) with a 15 s default timeout. */
 export function run(file: string, args: string[], { timeout = 15_000, env, cwd }: RunOptions = {}): Promise<RunResult> {
   return new Promise(res => {
