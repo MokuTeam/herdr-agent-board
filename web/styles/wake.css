@@ -80,3 +80,5 @@
 .wake-field-names { align-items: flex-start; flex-direction: column; gap: 4px; }
 .wake-exclude { align-self: stretch; min-height: 64px; resize: vertical; font: 12px var(--mono); }
 .wake-telegram-line { overflow-wrap: anywhere; }
+.wake-launcher { align-self: flex-start; }
+.wake-launcher:disabled { opacity: 0.5; }

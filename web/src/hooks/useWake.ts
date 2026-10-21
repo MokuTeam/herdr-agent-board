@@ -31,6 +31,8 @@ export interface WakeActions {
   log(): Promise<boolean>
   /** Wake's hooks (with the board's) into a shown profile, as the Profiles panel's Install. */
   install(id: string): Promise<boolean>
+  /** claude-tg into ~/.local/bin, once Telegram is set up; a toast says where. */
+  launcher(): Promise<boolean>
 }
 
 export interface WakeActionDeps {
@@ -91,6 +93,12 @@ export function wakeActions(deps: WakeActionDeps): WakeActions {
     async install(id) {
       if (!(await ask('/api/profiles', { op: 'install', id }))) return false
       deps.reload()
+      return true
+    },
+    async launcher() {
+      const reply = await ask('/api/wake', { op: 'launcher' })
+      if (!reply) return false
+      deps.toast(deps.t()('wake.launcherDone', { dir: String(reply.dir ?? '') }))
       return true
     },
   }

@@ -84,6 +84,7 @@ function recorder(): { act: WakeActions; asked: unknown[][] } {
       again: rec('again'),
       log: rec('log'),
       install: rec('install'),
+      launcher: rec('launcher'),
     },
   }
 }
@@ -191,6 +192,15 @@ describe('the panel as drawn', () => {
     // The reaper off: no "after".
     const off = bodyOf({ settings: { ...SETTINGS, reaper: { ...SETTINGS.reaper, enabled: false } } })
     expect(findAll([off], el => hasClass(el, 'wake-reaper-after'))).toEqual([])
+  })
+
+  test('Install claude-tg once Telegram is Auto and has found tg-mcp', () => {
+    const launcher = (settings: WakeSettingsView, lang = 'en') =>
+      texts(findAll([bodyOf({ settings }, lang)], el => hasClass(el, 'wake-launcher')))
+    expect(launcher(SETTINGS)).toEqual(['Install claude-tg'])
+    expect(launcher(SETTINGS, 'ru')).toEqual(['Установить claude-tg'])
+    expect(launcher({ ...SETTINGS, telegram: 'off' })).toEqual([])
+    expect(launcher({ ...SETTINGS, found: null })).toEqual([])
   })
 
   test('a shown profile without wake’s hooks offers Install; one with the old plugin’s says so', () => {
@@ -350,6 +360,7 @@ test('the panel’s controls ask for what they say', async () => {
   if (!auto || !off) throw new Error('no Auto and Off')
   await side.world.fire(auto, 'click')
   await side.world.fire(off, 'click')
+  await side.world.fire(side.pick('.wake-launcher'), 'click')
   // Install for the profile without wake's hooks.
   await side.world.fire(side.pick('.wake-hooks[data-id="work"] button'), 'click')
   expect(asked).toEqual([
@@ -359,6 +370,7 @@ test('the panel’s controls ask for what they say', async () => {
     ['reaper', { idleMinutes: 45 }],
     ['reaper', { exclude: ['build', '/^tmp/'] }],
     ['telegram', 'off'],
+    ['launcher'],
     ['install', 'work'],
   ])
 })
@@ -431,6 +443,23 @@ describe('what the actions send, and what comes of the answers', () => {
     expect(d.toasts).toEqual([['Sleep and wake is off (Settings → Sleep and wake…)', true]])
     expect(d.logs).toEqual(['line 1\nline 2'])
     expect(d.reloads()).toBe(1)
+  })
+
+  test('Install claude-tg: into the folder the board names, said in a toast', async () => {
+    const d = deps(
+      [200, { ok: true, dir: 'C:\\Users\\Иван Петров\\.local\\bin' }],
+      [409, { ok: false, error: 'C:\\b\\claude-tg.cmd: not the board’s nor herdr-wake’s' }],
+    )
+    expect(await d.act.launcher()).toBe(true)
+    expect(await d.act.launcher()).toBe(false)
+    expect(d.posts).toEqual([
+      ['/api/wake', { op: 'launcher' }],
+      ['/api/wake', { op: 'launcher' }],
+    ])
+    expect(d.toasts).toEqual([
+      ['claude-tg is in C:\\Users\\Иван Петров\\.local\\bin', false],
+      ['C:\\b\\claude-tg.cmd: not the board’s nor herdr-wake’s', true],
+    ])
   })
 
   test('without the board: nothing is sent, the toast says why', async () => {

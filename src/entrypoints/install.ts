@@ -5,7 +5,8 @@
 // each CLAUDE_CONFIG_DIR folder the board shows; a hidden one is left alone), has herdr put its
 // own Claude hook there too (herdr integration install claude, from which herdr learns the session
 // a pane runs), and while wake is on adds wake's ListAgents / SendMessage hooks (never beside the
-// separate herdr-wake plugin's), then says what else is set up and what is not (core/setup.ts).
+// separate herdr-wake plugin's), refreshes a claude-tg launcher of herdr-wake's to one that needs no
+// Node (only where one is there), then says what else is set up and what is not (core/setup.ts).
 // Idempotent; replaces its own earlier entries and keeps a backup of each settings.json next to it. A
 // settings.json that does not parse stops it before anything is written. Run it again after
 // moving or updating the plugin or Bun: the hooks, the status line and the shims run the Bun that
@@ -24,6 +25,7 @@ import { codexHooksPlan, installCodexHooks } from '../adapters/codex-hooks.ts'
 import { configFile, loadConfig, readConfigFile } from '../adapters/config-file.ts'
 import { claudeIntegrationInstall, codexIntegrationInstall } from '../adapters/herdr.ts'
 import { installInto, readSettings } from '../adapters/hook-settings.ts'
+import { installLaunchers } from '../adapters/launchers.ts'
 import { ROOT } from '../adapters/paths.ts'
 import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { gatherFacts, herdrConfigFile, readText } from '../adapters/setup-facts.ts'
@@ -124,8 +126,23 @@ for (const profile of profiles) {
   }
 }
 
+/**
+ * claude-tg (#119): a herdr-wake (or the board's) claude-tg already in the commands' folder is
+ * replaced by the board's, which needs no Node; where there is none, none is written (the panel's
+ * Install claude-tg does that), and someone else's is left alone. Said only when one was written.
+ */
+function refreshLaunchers(): void {
+  try {
+    const { written } = installLaunchers(paths.binDir, { onlyWhereThere: true })
+    if (written.length) console.log(`claude-tg: ${written.join(', ')} take the Telegram key from board tg-key now`)
+  } catch (err) {
+    console.log(`claude-tg: not refreshed: ${messageOf(err)}`)
+  }
+}
+
 try {
   installShims()
+  refreshLaunchers()
   // --- the agents' skill (how sessions in herdr work with each other), read by Claude on demand
   const skillText = readText(files.skill)
   if (skillText === null) console.log(`skill: ${files.skill} is missing from this copy of the board`)

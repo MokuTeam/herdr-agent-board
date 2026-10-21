@@ -41,6 +41,10 @@
 //                            (core/resume.ts); runs Claude in the foreground, exits with its code;
 //                            in the session's project folder, found from its transcript, when
 //                            this folder is not it
+//   board tg-key             the Telegram topic of this pane's herdr tab, which claude-tg puts in
+//                            TG_KEY (core/wake/topics.ts keyFor); outside herdr, or with a herdr
+//                            that does not answer within 5 s, the folder; always exits 0. For the
+//                            launchers (core/wake/launchers.ts), so not in the usage line
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -57,7 +61,7 @@ import {
 import { readCard, writeCard } from '../adapters/cards.ts'
 import { createClaudeHome, cwdOf } from '../adapters/claude-home.ts'
 import { configFile, editCategories, loadConfig, setRemoteOn } from '../adapters/config-file.ts'
-import { type HerdrPane, snapshot } from '../adapters/herdr.ts'
+import { asSnapshot, type HerdrPane, herdr, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { boardFile } from '../adapters/paths.ts'
 import { runHere } from '../adapters/process.ts'
@@ -73,6 +77,7 @@ import { type RemoteView, remoteConfig } from '../core/remote.ts'
 import { parseResume, projectFolderName, resumeDir, resumePlan } from '../core/resume.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
+import { keyFor, type TopicSnapshot } from '../core/wake/topics.ts'
 import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
 import { shortWhen } from '../core/when-format.ts'
 import { checkWake, wakeAnswers } from '../services/actions.ts'
@@ -417,6 +422,7 @@ async function main(): Promise<void> {
   if (cmd === 'sleep') return sleep()
   if (cmd === 'fork') return fork()
   if (cmd === 'resume') return resume()
+  if (cmd === 'tg-key') return tgKey()
 
   const s = await resolveSession()
   const now = Date.now()
@@ -636,6 +642,22 @@ async function resume(): Promise<void> {
   const ran = await runHere(file, argv, plan.env, (await resumeFolder(o.session, dir)) ?? undefined)
   if (ran.error) throw new Error(`${file} did not start: ${messageOf(ran.error)}`)
   process.exit(ran.code)
+}
+
+/**
+ * `board tg-key`: the key claude-tg puts in TG_KEY (#119), as herdr-wake's tg-key.mjs printed it:
+ * the Telegram topic of this pane's tab from one `herdr api snapshot` (5 s at most) when
+ * HERDR_PANE_ID is set, else, or when herdr does not answer, this folder. Prints it; never fails.
+ */
+async function tgKey(): Promise<void> {
+  const pane = process.env.HERDR_PANE_ID || undefined
+  let snap: TopicSnapshot | null = null
+  if (pane) {
+    try {
+      snap = asSnapshot(await herdr(['api', 'snapshot'], 5000))
+    } catch {}
+  }
+  console.log(keyFor(snap, pane, process.cwd()))
 }
 
 /**

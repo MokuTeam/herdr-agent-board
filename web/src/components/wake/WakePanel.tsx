@@ -3,7 +3,8 @@
 // switch, the state line and the buttons its state offers (Start; Start again and Log), the shown
 // profiles that lack wake's hooks with Install (or have the separate plugin's), the reaper (on or
 // off, the minutes idle, the names never put to sleep, each saved when its field is left) and
-// Telegram (Auto or Off, what it found). Every change goes to the board at once
+// Telegram (Auto or Off, what it found; Install claude-tg once it is Auto and found tg-mcp).
+// Every change goes to the board at once
 // (hooks/useWake.ts) and comes back over the live stream. On a phone: the state line, read only.
 import type { WakeSettingsView, WakeView } from '../../../../src/core/wake/view.ts'
 import { useWake, type WakeActions } from '../../hooks/useWake.ts'
@@ -282,6 +283,11 @@ function Telegram({ settings, disabled, act }: SectionProps) {
           ))}
         </span>
       </div>
+      {settings.telegram === 'auto' && settings.found && (
+        <button type="button" className="button wake-launcher" disabled={disabled} onClick={() => void act.launcher()}>
+          {t('wake.launcher')}
+        </button>
+      )}
     </div>
   )
 }

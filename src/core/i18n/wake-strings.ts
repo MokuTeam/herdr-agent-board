@@ -81,6 +81,10 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.wake.hooks.old': 'The separate herdr-wake plugin’s hooks are in place',
     'setup.wake.hooks.oldDetail': 'Sessions here ask the separate plugin, not the board’s wake.',
     // Task 6.2: claude-tg
+    'wake.launcher': 'Install claude-tg',
+    'wake.launcherDone': 'claude-tg is in {dir}',
+    'err.launcherForeign':
+      '{files}: not the board’s nor herdr-wake’s, so it was left as it is. Move it away and try again',
     // Task 7.2: Switch over…
   },
   ru: {
@@ -170,6 +174,10 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.wake.hooks.old': 'Стоят хуки отдельного плагина herdr-wake',
     'setup.wake.hooks.oldDetail': 'Сессии здесь спрашивают отдельный плагин, а не пробуждение доски.',
     // Task 6.2: claude-tg
+    'wake.launcher': 'Установить claude-tg',
+    'wake.launcherDone': 'claude-tg теперь в {dir}',
+    'err.launcherForeign':
+      '{files}: не от доски и не от herdr-wake, поэтому оставлен как есть. Убери его и попробуй снова',
     // Task 7.2: Switch over…
   },
 }
