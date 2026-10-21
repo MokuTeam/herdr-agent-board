@@ -4,7 +4,7 @@ import { appendFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { Config, Item } from '../../src/core/types.ts'
 
-export type RunnerMode = 'open' | 'send' | 'answer' | 'server' | 'cli' | 'scheduler' | 'write' | 'detached'
+export type RunnerMode = 'open' | 'send' | 'answer' | 'server' | 'cli' | 'scheduler' | 'write' | 'detached' | 'wake-io'
 
 // The input a test handed over: each mode reads the fields its test wrote.
 type RunnerInput = {
@@ -150,6 +150,14 @@ if (mode === 'open') {
   const forever = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })
   send({ child: process.pid, detached: forever.pid })
   setInterval(() => {}, 1000)
+} else if (mode === 'wake-io') {
+  // One of wake's herdr calls (adapters/wake-herdr.ts) against the fake herdr; its result printed.
+  const { cliWakeHerdr } = await import('../../src/adapters/wake-herdr.ts')
+  const { method, args } = input<{ method: string; args: unknown[] }>()
+  const fn: unknown = Reflect.get(cliWakeHerdr, method)
+  if (typeof fn !== 'function') throw new Error(`No such wake herdr call: ${method}`)
+  const out: unknown = await Reflect.apply(fn, cliWakeHerdr, args)
+  console.log(JSON.stringify(out ?? null))
 } else {
   throw new Error(`Unknown test mode: ${mode}`)
 }
