@@ -88,18 +88,36 @@ async function snapshotTried(deps: StartDeps): Promise<HerdrSnapshot> {
 /** The panes of a tab. */
 const panesOf = (snap: HerdrSnapshot, tab: string) => snap.panes.filter(p => p.tab_id === tab)
 /** The workspace a pane is in, by its own field or its tab's. */
-const workspaceOf = (snap: HerdrSnapshot, pane: HerdrPane): string | undefined =>
+export const workspaceOf = (snap: HerdrSnapshot, pane: HerdrPane): string | undefined =>
   pane.workspace_id ?? snap.tabs.find(t => t.tab_id === pane.tab_id)?.workspace_id
 /** herdr-sidebar's pane, which that plugin adds to every tab (as entrypoints/open.ts orphanTabs reads it). */
 const isSidebar = (p: HerdrPane): boolean =>
   !p.agent && Object.keys(p.tokens ?? {}).some(k => k.startsWith('herdr-sidebar'))
 
 /**
+ * Whether a pane is what wake leaves behind: herdr-sidebar's, or one with no agent in the plugin's
+ * folder (a wake pane's restored shell). Anything else (an agent, an editor or a server in another
+ * folder, a pane herdr says no folder of) is the user's. The start's leftover tabs and the board's
+ * close of wake's workspace (control.ts) both go by it.
+ */
+export const wakeLeftover = (p: HerdrPane, root: string): boolean => isSidebar(p) || (!p.agent && sameDir(p.cwd, root))
+
+/**
+ * What closes wake's pane: its whole tab when nothing but herdr-sidebar's panes is beside it, as that
+ * plugin adds its pane to every tab; else only the pane (something of the user's is in that tab).
+ */
+export function closeOfPane(snap: HerdrSnapshot, pane: HerdrPane): string[] {
+  const tab = pane.tab_id
+  const alone = tab !== undefined && panesOf(snap, tab).every(p => p.pane_id === pane.pane_id || isSidebar(p))
+  return alone ? ['tab', 'close', tab] : ['pane', 'close', pane.pane_id]
+}
+
+/**
  * The recorded pane when it can be wake's: in a workspace labelled wake's, with no agent in it, not
  * the board's. Null otherwise, and when it is gone: herdr gives a pane's id out again after it
  * starts over, so such a pane is somebody else's now.
  */
-function recordedPane(
+export function recordedPane(
   snap: HerdrSnapshot,
   pane: string | undefined,
   label: string,
@@ -122,19 +140,14 @@ function stale(deps: StartDeps, status: WakeStatusFile): boolean {
   return deps.now() - status.at > STARTING_MS
 }
 
-/**
- * Tabs of the workspace with only wake's leftovers in them: panes with no agent in the plugin's
- * folder (a wake pane's restored shell) and herdr-sidebar's. A tab with anything else (an agent, an
- * editor or a server in another folder, a pane herdr says no folder of) is the user's.
- */
+/** Tabs of the workspace with only wake's leftovers in them (wakeLeftover); a tab with anything else is the user's. */
 function spareTabs(snap: HerdrSnapshot, workspace: string, root: string): string[] {
-  const wakes = (p: HerdrPane): boolean => isSidebar(p) || (!p.agent && sameDir(p.cwd, root))
   return snap.tabs
     .filter(tab => tab.workspace_id === workspace)
     .map(tab => tab.tab_id)
     .filter(id => {
       const panes = panesOf(snap, id)
-      return panes.length > 0 && panes.every(wakes)
+      return panes.length > 0 && panes.every(p => wakeLeftover(p, root))
     })
 }
 
@@ -182,12 +195,7 @@ export async function startWake(
     }
     if (last && status && !stale(deps, status) && !o.again) return 'present'
     if (last) {
-      // Its whole tab when nothing but herdr-sidebar's panes is beside it, as that plugin adds its
-      // pane to every tab; else only the pane (something of the user's is in that tab).
-      const tab = last.tab_id
-      const alone = tab !== undefined && panesOf(snap, tab).every(p => p.pane_id === last.pane_id || isSidebar(p))
-      const close = alone ? ['tab', 'close', tab] : ['pane', 'close', last.pane_id]
-      await deps.herdr(close).catch(err => deps.log(`closing ${last.pane_id}: ${firstLine(err)}`))
+      await deps.herdr(closeOfPane(snap, last)).catch(err => deps.log(`closing ${last.pane_id}: ${firstLine(err)}`))
       keep = false
       snap = await snapshotTried(deps)
     }

@@ -4,16 +4,17 @@
 // on its own. config.json's kill switch is read before anything: off, or a config.json that does not
 // parse, it ends at once with no herdr call. It always ends with 0, within its deadline
 // (START_DEADLINE_MS; BOARD_WAKE_START_DEADLINE_MS in tests), whatever herdr does; errors go to
-// wake.log and the status file.
-import { existsSync, readFileSync } from 'node:fs'
+// wake.log and the status file. One start runs at a time (herdr's startup entry, the board's start
+// and a second click may come together): it holds `wake-start.lock` until it ends, and a start that
+// finds another one's lock leaves it the work and ends with `present`.
+import { existsSync } from 'node:fs'
 import { uptime } from 'node:os'
 import { configFile, readConfigFile } from '../adapters/config-file.ts'
 import { herdr } from '../adapters/herdr.ts'
-import { boardFile, ROOT } from '../adapters/paths.ts'
+import { ROOT } from '../adapters/paths.ts'
 import { isAlive } from '../adapters/process.ts'
 import { wakeAnswers } from '../adapters/wake-api.ts'
-import { readWakeStatus, wakeLog, writeWakeStatus } from '../adapters/wake-files.ts'
-import { asSavedBoard } from '../core/board-pane.ts'
+import { boardPaneNow, readWakeStatus, takeWakeStartLock, wakeLog, writeWakeStatus } from '../adapters/wake-files.ts'
 import { wakeConfig, wakeSwitch } from '../core/wake/config.ts'
 import { type BoardPlace, START_DEADLINE_MS, startWake } from '../services/wake/start.ts'
 
@@ -44,6 +45,23 @@ function giveUp(text: string): never {
 process.on('uncaughtException', err => giveUp(`unexpected: ${messageOf(err)}`))
 process.on('unhandledRejection', err => giveUp(`unexpected: ${messageOf(err)}`))
 
+// One start at a time: the lock is given back however this process ends (its end, an error, the
+// deadline), as every way out goes through process.exit. A lock that cannot be made at all (the
+// state folder not writable) is logged, and the start goes on as it did before there was one.
+let release: (() => void) | null
+try {
+  release = takeWakeStartLock({ pid: process.pid, now: Date.now(), maxAgeMs: deadlineMs, alive: isAlive })
+} catch (err) {
+  log(`no lock: ${messageOf(err)}`)
+  release = () => {}
+}
+if (!release) {
+  log('another start is under way: left to it')
+  console.log("wake's start: present")
+  process.exit(0)
+}
+process.on('exit', release)
+
 // The deadline: herdr hanging (or anything else) never keeps this entry, and one of herdr's places
 // for plugin commands, for long. The status keeps the pane and supervisor it names.
 setTimeout(() => {
@@ -65,11 +83,7 @@ setTimeout(() => {
 /** The board's workspace (config.json's `workspace`, else Board, as entrypoints/open.ts names it) and the pane board.json names. */
 function boardPlace(): BoardPlace {
   const raw = readConfigFile()
-  let pane: string | null = null
-  try {
-    pane = asSavedBoard(JSON.parse(readFileSync(boardFile(), 'utf8')))?.pane ?? null
-  } catch {}
-  return { label: typeof raw?.workspace === 'string' && raw.workspace ? raw.workspace : 'Board', pane }
+  return { label: typeof raw?.workspace === 'string' && raw.workspace ? raw.workspace : 'Board', pane: boardPaneNow() }
 }
 
 const result = await startWake(
