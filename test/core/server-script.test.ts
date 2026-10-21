@@ -118,9 +118,15 @@ describe('the run script: one plan, the same lines as "Do it myself"', () => {
         expect(block.commands).toBe(s.commands.join('\n'))
         expect(block.check).toBe(s.check.join('\n'))
         expect(block.undo).toBe(s.undo.join('\n'))
+        // Undo's last step is the owner's to run by hand: the run only says it skipped, its lines
+        // (userdel…) are not even in it
+        const byHand = s.id === 'by-hand'
         for (const line of [...s.commands, ...s.check, ...s.undo])
-          expect([s.id, run.includes(`\n${line}\n`)]).toEqual([s.id, true])
+          expect([s.id, run.includes(`\n${line}\n`)]).toEqual([s.id, !byHand])
+        if (byHand) expect(run).toContain(`\necho '@@step ${i + 1} start'; echo '@@step ${i + 1} skip'\n`)
       })
+      if (p.kind === 'undo')
+        expect([name, p.steps.at(-1)?.id, run.includes('userdel')]).toEqual([name, 'by-hand', false])
       for (const b of BASHISMS) expect([name, b, run.includes(b)]).toEqual([name, b, false])
       expect(syntax(run)).toEqual({ code: 0, err: '' })
     })
@@ -667,6 +673,37 @@ describe.skipIf(!SH)('a run, for real', () => {
       { id: 'u1', removeDocker: false, removeEdited: false },
     )
   }
+
+  test('Undo’s by-hand step: said skipped and never run, even where a skip check fails (a fork failure, a TERM)', () => {
+    const root = `${dir}/by-hand`
+    // a `timeout` under which every skip check (its 60 s) fails, every other command runs
+    const stubs = `${dir}/failing-skip`
+    mkdirSync(stubs, { recursive: true })
+    writeFileSync(`${stubs}/timeout`, '#!/bin/sh\n[ "$3" = 60 ] && exit 1\nshift 3\nexec "$@"\n', { mode: 0o755 })
+    const SEP = process.platform === 'win32' ? ';' : ':'
+    const p = {
+      ...fake([
+        step('guard'),
+        step('forget'),
+        step('by-hand', { skipIf: ['true'], commands: ["echo 'did by-hand'", 'sudo userdel boardtunnel'] }),
+      ]),
+      kind: 'undo' as const,
+    }
+    const { out, code } = runIn(p, root, { PATH: `${stubs}${SEP}${env.PATH}` })
+    expect(markers(out)).toEqual([
+      '@@step 1 start',
+      'did guard',
+      '@@step 1 ok',
+      '@@step 2 start',
+      'did forget',
+      '@@step 2 ok',
+      '@@step 3 start',
+      '@@step 3 skip',
+      '@@result applied',
+    ])
+    expect(code).toBe(0)
+    expect(out).not.toContain('userdel')
+  })
 
   test('Undo of a run cut short before it recorded the line: the line comes out of their file all the same', () => {
     const root = `${dir}/interrupted`

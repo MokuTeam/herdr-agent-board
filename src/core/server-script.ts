@@ -5,7 +5,15 @@
 // The run's steps are the plan's own lines, verbatim; `sudo` is a function there, since the run is
 // root already. POSIX sh only, and only the coreutils flags GNU and Rust coreutils both take.
 // Pure, with no node: import: the page renders "Do it myself" from it.
-import { type Plan, type PlanStep, type RecordItem, type Text, type Wanted, wantedProblem } from './server-plan.ts'
+import {
+  byHand,
+  type Plan,
+  type PlanStep,
+  type RecordItem,
+  type Text,
+  type Wanted,
+  wantedProblem,
+} from './server-plan.ts'
 import { shQuote } from './server-shell.ts'
 import { BOARD_DIR, LOCK_FILE, RECORD_FILE, RUNS_DIR } from './server-texts.ts'
 
@@ -92,7 +100,7 @@ function aheadWord(i: RecordItem): string {
 /**
  * The script the board runs as root for a plan (Apply, an update or Undo). Each step: `@@step <n>
  * start`, then `skip` when its skipIf all hold, else its commands and check under `timeout`, `ok`
- * or `fail`. A failure runs the failed step's undo and the done steps', newest first (`@@undo <n>
+ * or `fail`; Undo's by-hand step is only said skipped, its commands left out. A failure runs the failed step's undo and the done steps', newest first (`@@undo <n>
  * ok|fail`), then `@@result rolled-back|rollback-failed`; all done gives `@@result applied`. The
  * first step (the guard) changes nothing: when it fails, nothing is rolled back or recorded and the
  * run exits 3. The record is written as `running` after it, before each step with what the step
@@ -209,6 +217,8 @@ export function runScript(p: Plan, w: Wanted, run: { id: string; at: string }): 
   ]
   p.steps.forEach((s, i) => {
     const k = i + 1
+    // the owner's commands (userdel…) are not in the run at all: no failed skip check can run them
+    if (byHand(s)) return
     out.push(`# ${k}: ${s.id}`, ...verbatim(`S${k}`, [...s.commands, ...s.check]))
     if (s.skipIf.length)
       out.push(
@@ -262,6 +272,10 @@ export function runScript(p: Plan, w: Wanted, run: { id: string; at: string }): 
     const k = i + 1
     // told to stop: no next step (after Undo's `forget` there is nothing left to roll back to)
     if (recording) out.push('halt')
+    if (byHand(s)) {
+      out.push(`echo '@@step ${k} start'; echo '@@step ${k} skip'`)
+      return
+    }
     // what the step will change, on the record before it runs (off it again when that cannot be written)
     const ahead = undo ? [] : vars.filter(v => v.step === k && !ranOnly(v.item))
     if (ahead.length)

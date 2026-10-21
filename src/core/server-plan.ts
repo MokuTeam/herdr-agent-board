@@ -175,6 +175,10 @@ const PLAIN_ID = /^[A-Za-z0-9._-]{1,64}$/
 const PLACEHOLDER = /^<[^<>\n]+>$/
 /** The step that only lists commands for the owner: the run always skips it. */
 const BY_HAND = ['true']
+const BY_HAND_ID = 'by-hand'
+
+/** Undo's last step, what the owner made by hand in step 1: theirs to run, never the run's (core/server-script.ts says it skipped). */
+export const byHand = (s: PlanStep): boolean => s.id === BY_HAND_ID
 /** How many of their hosts are fetched before and after a reload. */
 const FETCH_MOST = 20
 
@@ -1569,7 +1573,7 @@ export function undoPlan(
       touches: [{ kind: 'file', what: RECORD_FILE }],
       record: items,
     }),
-    mk('by-hand', {
+    mk(BY_HAND_ID, {
       commands: [
         '# what you made by hand in step 1, if you want it gone too:',
         `sudo rm -f ${q(keysFile(r.pair.user))}`,
