@@ -252,6 +252,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.warn.composeDown':
       'While the board’s helper is on your network {network}, docker compose down cannot remove that network and says so; your containers stop as usual.',
     'server.warn.noFetch': 'curl is missing: your sites are not fetched before and after the reload.',
+    'server.warn.someHosts':
+      'Your config names {all} sites: the board checks the first {n} before and after the reload, not the others.',
     'server.warn.groupMembers': 'The folder’s group {group} has members ({members}): only its reader should be in it.',
     'server.warn.caddyRoot': 'Your Caddy runs as root: it opens the socket with root’s rights.',
     'server.warn.interrupted': 'A run did not finish: this plan undoes what it left. Look again after it.',
@@ -534,6 +536,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.warn.composeDown':
       'Пока помощник доски в вашей сети {network}, docker compose down не может её удалить и сообщает об этом; ваши контейнеры останавливаются как обычно.',
     'server.warn.noFetch': 'Нет curl: ваши сайты не запрашиваются до и после перезагрузки.',
+    'server.warn.someHosts':
+      'Сайтов в вашей конфигурации: {all}. До и после перезагрузки доска проверяет первые {n}, остальные — нет.',
     'server.warn.groupMembers':
       'В группе папки {group} есть участники ({members}): в ней должен быть только тот, кто читает сокет.',
     'server.warn.caddyRoot': 'Ваш Caddy работает от root: сокет он открывает с правами root.',

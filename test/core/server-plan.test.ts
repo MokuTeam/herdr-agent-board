@@ -513,6 +513,69 @@ for (const distro of DISTROS) {
   })
 }
 
+describe('their sites fetched before and after a reload: as many as fit, the others named in a note', () => {
+  /** Host names of 253 characters (the most a name has), each its own. */
+  const long = (n: number): string[] =>
+    Array.from(
+      { length: n },
+      (_, i) =>
+        `${String(i).padStart(2, '0')}${'a'.repeat(59)}.${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(59)}.org`,
+    )
+  const fetched = (s: PlanStep): string[] => [...text(s).matchAll(/'([a-z0-9.-]+\.org)'/g)].map(m => m[1] ?? '')
+  const note = (p: Plan) => p.warnings.find(w => w.key === 'server.warn.someHosts')
+
+  test('a few: all of them, no note', () => {
+    const p = plan(factsFor('2'))
+    expect(fetched(step(p, 'fetch-before'))).toEqual(['blog.example.org', 'shop.example.org'])
+    expect(note(p)).toBeUndefined()
+  })
+  test('long names: the first that fit in 1,500 characters; the note says how many of how many', () => {
+    const hosts = long(20)
+    expect(hosts[0]).toHaveLength(253)
+    for (const c of ['2', '3a', '3b'] as const) {
+      const f = factsFor(c)
+      // a wildcard or an address is no name to fetch, nor counted
+      const p = plan({ ...f, caddy: f.caddy && { ...f.caddy, hosts: [...hosts, '*.example.org', '192.0.2.4'] } })
+      expect([c, fetched(step(p, 'fetch-before'))]).toEqual([c, hosts.slice(0, 5)])
+      expect([c, note(p)]).toEqual([c, { key: 'server.warn.someHosts', params: { n: '5', all: '20' } }])
+    }
+    const f4 = factsFor('4b')
+    const p4 = plan({ ...f4, nginx: f4.nginx && { ...f4.nginx, serverNames: hosts } })
+    expect(fetched(step(p4, 'nginx-reload'))).toEqual(hosts.slice(0, 5))
+    expect(note(p4)).toEqual({ key: 'server.warn.someHosts', params: { n: '5', all: '20' } })
+    // Undo fetches the same, with the same note, once
+    const r = recordFor('4b', {
+      items: [
+        { kind: 'file', path: '/etc/nginx/conf.d/agent-board.conf', sha256: 'cd'.repeat(32) },
+        { kind: 'container', name: 'agent-board-caddy', setup: 'r0' },
+      ],
+    })
+    const u = undoPlan(
+      r,
+      { ...f4, nginx: f4.nginx && { ...f4.nginx, serverNames: hosts }, record: r },
+      { id: 'u1', removeDocker: false, removeEdited: false },
+    )
+    expect(fetched(step(u, 'drop-nginx-file'))).toEqual(hosts.slice(0, 5))
+    expect(u.warnings.filter(w => w.key === 'server.warn.someHosts')).toEqual([
+      { key: 'server.warn.someHosts', params: { n: '5', all: '20' } },
+    ])
+  })
+  test('more than 20 short ones: the first 20, and the note', () => {
+    const many = Array.from({ length: 25 }, (_, i) => `site-${i}.example.org`)
+    const f = factsFor('2')
+    const p = plan({ ...f, caddy: f.caddy && { ...f.caddy, hosts: many } })
+    expect(fetched(step(p, 'fetch-before'))).toEqual(many.slice(0, 20))
+    expect(note(p)).toEqual({ key: 'server.warn.someHosts', params: { n: '20', all: '25' } })
+  })
+  test('the note in English and Russian', () => {
+    const params = { n: '5', all: '20' }
+    expect(translator('en')('server.warn.someHosts', params)).toBe(
+      'Your config names 20 sites: the board checks the first 5 before and after the reload, not the others.',
+    )
+    expect(translator('ru')('server.warn.someHosts', params)).toContain('20')
+  })
+})
+
 describe('what the panel wants is checked before anything is planned: their Caddy or nginx loads it as config', () => {
   const bad: [string, Wanted][] = [
     ['a domain that ends the site block', { ...W, domain: 'a.com;\n}' }],
