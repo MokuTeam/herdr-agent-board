@@ -1,0 +1,367 @@
+// A plan (core/server-plan.ts) as what runs on the server and as "Do it myself": the run script
+// (the steps under the server's lock, each with its timeout, a failure rolled back newest first,
+// the record written as it goes), the launch that starts it detached and follows its log (calls 8
+// and 10), the progress the board reads from the run's `@@` lines, and the blocks the owner copies.
+// The run's steps are the plan's own lines, verbatim; `sudo` is a function there, since the run is
+// root already. POSIX sh only, and only the coreutils flags GNU and Rust coreutils both take.
+// Pure, with no node: import: the page renders "Do it myself" from it.
+import type { Plan, PlanStep, RecordItem, Text, Wanted } from './server-plan.ts'
+import { shQuote } from './server-shell.ts'
+import { BOARD_DIR, LOCK_FILE, RECORD_FILE, RUNS_DIR } from './server-texts.ts'
+
+const PLAIN_ID = /^[A-Za-z0-9._-]{1,64}$/
+/** A run at most 20 minutes; a skip check at most a minute. */
+const RUN_MOST_S = 1200
+const SKIP_S = 60
+/** A step's output kept for the panel. */
+const OUT_MOST = 200
+/** Ends each step's text in the run, and the run in the launch: lines no step has. */
+const END = 'AGENT_BOARD_END'
+const RUN_END = 'AGENT_BOARD_RUN'
+
+function checkId(id: string): void {
+  if (!PLAIN_ID.test(id)) throw new Error(`not a plain id: ${JSON.stringify(id)}`)
+}
+
+/** A variable holding text verbatim: a quoted here-document, so nothing in it is expanded. */
+const verbatim = (name: string, lines: readonly string[]): string[] => [`${name}=$(cat <<'${END}'`, ...lines, END, ')']
+
+/** Items of a step the run records only when the step ran: a group changed, a backup made, Docker installed. */
+const ranOnly = (i: RecordItem): boolean => i.kind === 'group' || i.kind === 'backup' || i.kind === 'docker'
+
+const keyOf = (i: RecordItem): string =>
+  i.kind === 'file'
+    ? `file ${i.path}`
+    : i.kind === 'line' || i.kind === 'block'
+      ? `${i.kind} ${i.file}`
+      : i.kind === 'backup'
+        ? `backup ${i.path}`
+        : i.kind === 'group'
+          ? `group ${i.path}`
+          : i.kind === 'container' || i.kind === 'volume'
+            ? `${i.kind} ${i.name}`
+            : i.kind === 'image'
+              ? `image ${i.ref}`
+              : 'docker'
+
+/**
+ * An item as the shell word that makes its JSON. What only the server knows is filled in there: a
+ * file's sha256 as written, whether an image was there before (the step that pulls it skipped), the
+ * run a container was made by.
+ */
+function itemWord(i: RecordItem, live: boolean): string {
+  const json = JSON.stringify(i)
+  if (!live) return shQuote(json)
+  if (i.kind === 'file') {
+    const head = JSON.stringify({ kind: 'file', path: i.path, sha256: '' }).slice(0, -2)
+    return `${shQuote(head)}"$(sudo cat ${shQuote(i.path)} | sha256sum | cut -c1-64)"${shQuote('"}')}`
+  }
+  if (i.kind === 'image') {
+    const head = JSON.stringify({ kind: 'image', ref: i.ref, before: false }).slice(0, -6)
+    return `${shQuote(head)}"$SKIP"'}'`
+  }
+  if (i.kind === 'container') {
+    const head = JSON.stringify({ kind: 'container', name: i.name, setup: '' }).slice(0, -2)
+    const setup = `$(sudo docker inspect -f '{{index .Config.Labels "agent-board.setup"}}' ${shQuote(i.name)} 2>/dev/null)`
+    return `${shQuote(head)}"${setup}"${shQuote('"}')}`
+  }
+  return shQuote(json)
+}
+
+/**
+ * The script the board runs as root for a plan (Apply, an update or Undo). Each step: `@@step <n>
+ * start`, then `skip` when its skipIf all hold, else its commands and check under `timeout`, `ok`
+ * or `fail`. A failure runs the failed step's undo and the done steps', newest first (`@@undo <n>
+ * ok|fail`), then `@@result rolled-back|rollback-failed`; all done gives `@@result applied`. The
+ * first step (the guard) changes nothing: when it fails, nothing is rolled back or recorded and the
+ * run exits 3. The record is written as `running` after it and after each step; a trap writes the
+ * run's exit status beside its log.
+ */
+export function runScript(p: Plan, w: Wanted, run: { id: string; at: string }): string {
+  checkId(p.id)
+  checkId(run.id)
+  const undo = p.kind === 'undo'
+  const n = p.steps.length
+  const exitFile = `${RUNS_DIR}/${run.id}.exit`
+  const backups = `${BOARD_DIR}/backups/${p.id}`
+  // The record's items: the first step's carried over (I1…), then each later step's own.
+  const vars: { step: number; item: RecordItem; name: string }[] = []
+  p.steps.forEach((s, i) => {
+    if (undo && i > 0) return
+    for (const item of s.record) vars.push({ step: i + 1, item, name: `I${vars.length + 1}` })
+  })
+  const carried = vars.filter(v => v.step === 1)
+  /** The carried items a later step names: superseded by it (Apply) or taken off by it (Undo). */
+  const named = (step: PlanStep): string[] => {
+    const keys = new Set(step.record.map(keyOf))
+    return carried.filter(v => keys.has(keyOf(v.item))).map(v => v.name)
+  }
+  const domain = new URL(p.address).hostname
+  const head = `${JSON.stringify({ v: 1, id: run.id, at: run.at }).slice(0, -1)},"state":"`
+  const mid = `${JSON.stringify({
+    case: p.case,
+    pair: { user: w.user, socket: w.socket },
+    domain,
+    publicPort: p.publicPort,
+    address: p.address,
+  }).slice(1, -1)},"items":[`
+  const recordFn = [
+    'record() {',
+    "  it=''",
+    ...(vars.length
+      ? [`  for x in ${vars.map(v => `"$${v.name}"`).join(' ')}; do if [ -n "$x" ]; then it="$it,$x"; fi; done`]
+      : []),
+    `  printf '%s%s%s%s%s\\n' ${shQuote(head)} "$1" ${shQuote(`",${mid}`)} "\${it#,}" ']}' > ${RECORD_FILE}.new`,
+    `  chmod 644 ${RECORD_FILE}.new`,
+    `  mv -f ${RECORD_FILE}.new ${RECORD_FILE}`,
+    '}',
+  ]
+  // An Apply over an earlier setup that rolls back leaves the server as that setup was: its record back.
+  const restoresOld = !undo
+  const superseded = undo ? [] : [...new Set(p.steps.slice(1).flatMap(named))]
+  const finishFn = [
+    'finish() {',
+    '  case $1 in',
+    `  applied) ${[...superseded.map(v => `${v}=''`), undo ? `rm -f ${RECORD_FILE}` : 'record applied'].join('; ')} ;;`,
+    restoresOld
+      ? `  rolled-back) if [ -f ${shQuote(`${backups}/setup.json`)} ]; then cp -p ${shQuote(`${backups}/setup.json`)} ${RECORD_FILE}; else record rolled-back; fi ;;`
+      : '  rolled-back) record rolled-back ;;',
+    '  *) record "$1" ;;',
+    '  esac',
+    '  echo "@@result $1"',
+    '  case $1 in applied) exit 0 ;; rolled-back) exit 1 ;; *) exit 2 ;; esac',
+    '}',
+  ]
+  // Rollback, newest first: a step that ran (the failed one too) has its undo run; its items come
+  // off the record when that works (Docker's stays: a finished install is kept, call 20).
+  const backLines: string[] = []
+  for (let i = n - 1; i >= 1; i--) {
+    const s = p.steps[i] as PlanStep
+    const k = i + 1
+    const own = vars.filter(v => v.step === k && v.item.kind !== 'docker').map(v => `${v.name}=''`)
+    const back = undo
+      ? named(s).map(name => `${name}=${itemWord(carried.find(v => v.name === name)?.item as RecordItem, false)}`)
+      : own
+    if (s.undo.length) {
+      const ok = back.length ? `${back.join('; ')}; ` : ''
+      backLines.push(
+        `  if [ "$D${k}" = 1 ]; then if undo ${k} ${s.timeoutS} "$U${k}"; then ${ok}:; else R=rollback-failed; fi; fi`,
+      )
+    } else if (!undo && own.length) backLines.push(`  if [ "$D${k}" = 1 ]; then ${own.join('; ')}; fi`)
+  }
+  const out: string[] = [
+    'exec </dev/null',
+    '# agent-board: run',
+    'set -u',
+    'umask 077',
+    'sudo() { "$@"; }',
+    'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH',
+    'LC_ALL=C; export LC_ALL',
+    `trap 'echo "$?" > ${exitFile}' EXIT`,
+    "trap 'exit 143' HUP INT TERM",
+    `exec 9>${LOCK_FILE}`,
+    "flock -n 9 || { echo '@@busy'; exit 75; }",
+    "P='set -e",
+    'sudo() { "$@"; }',
+    "'",
+    'SKIP=false',
+    ...(vars.length ? [vars.map(v => `${v.name}=''`).join(' ')] : []),
+    ...(n > 1
+      ? [
+          p.steps
+            .slice(1)
+            .map((_, i) => `D${i + 2}=0`)
+            .join(' '),
+        ]
+      : []),
+  ]
+  p.steps.forEach((s, i) => {
+    const k = i + 1
+    out.push(`# ${k}: ${s.id}`, ...verbatim(`S${k}`, [...s.commands, ...s.check]))
+    if (s.skipIf.length)
+      out.push(
+        ...verbatim(
+          `K${k}`,
+          s.skipIf.map(l => `${l} || exit 1`),
+        ),
+      )
+    if (s.undo.length) out.push(...verbatim(`U${k}`, s.undo))
+  })
+  out.push(
+    ...recordFn,
+    'run() {',
+    '  echo "@@step $1 start"',
+    `  if [ -n "$3" ] && timeout -k 5 ${SKIP_S} sh -c "$P$3" >/dev/null 2>&1 9>&-; then echo "@@step $1 skip"; SKIP=true; return 0; fi`,
+    '  if timeout -k 5 "$2" sh -c "$P$4" 9>&-; then echo "@@step $1 ok"; SKIP=false; return 0; fi',
+    '  echo "@@step $1 fail"',
+    '  return 1',
+    '}',
+    'undo() {',
+    '  if timeout -k 5 "$2" sh -c "$P$3" 9>&-; then echo "@@undo $1 ok"; return 0; fi',
+    '  echo "@@undo $1 fail"',
+    '  return 1',
+    '}',
+    ...finishFn,
+    'back() {',
+    '  R=rolled-back',
+    ...backLines,
+    '  finish "$R"',
+    '}',
+  )
+  // The guard: nothing done yet, so nothing to roll back or record.
+  const guard = p.steps[0]
+  if (guard) {
+    out.push(`run 1 ${guard.timeoutS} '' "$S1" || exit 3`)
+    out.push(
+      `if [ -f ${RECORD_FILE} ]; then install -d -m 700 ${shQuote(backups)} && cp -p ${RECORD_FILE} ${shQuote(`${backups}/setup.json`)}; fi`,
+    )
+    for (const v of carried) out.push(`${v.name}=${itemWord(v.item, false)}`)
+    out.push('record running')
+  }
+  let recording = true
+  p.steps.forEach((s, i) => {
+    if (i === 0) return
+    const k = i + 1
+    out.push(`D${k}=1; run ${k} ${s.timeoutS} ${s.skipIf.length ? `"$K${k}"` : "''"} "$S${k}" || back`)
+    out.push(`if [ "$SKIP" = true ]; then D${k}=0; fi`)
+    if (undo) {
+      const off = named(s)
+      if (off.length) out.push(off.map(name => `${name}=''`).join('; '))
+    } else {
+      for (const v of vars.filter(x => x.step === k)) {
+        const set = `${v.name}=${itemWord(v.item, true)}`
+        out.push(ranOnly(v.item) ? `if [ "$SKIP" = false ]; then ${set}; fi` : set)
+      }
+    }
+    // Undo's last steps take the record away with the rest of the board's files.
+    if (undo && s.id === 'forget') recording = false
+    if (recording) out.push('record running')
+  })
+  out.push('finish applied', '')
+  return out.join('\n')
+}
+
+/**
+ * What the admin line runs for Apply or Undo (as root): the run written to runs/<id>.sh (0600),
+ * started with setsid apart from the connection (output to runs/<id>.log, at most 20 minutes, its
+ * exit status in runs/<id>.exit), then its log followed once a second, POSIX only, until that file
+ * is there; then `@@exit <code>`. The newest five runs are kept. When a run leaves no record and no
+ * backups (an Undo done, or a run that stopped before changing anything), /etc/agent-board goes,
+ * under the lock.
+ *
+ * The run travels in a quoted here-document, verbatim, not in base64 again: the admin line sends
+ * this script in base64 already, and twice base64 makes the biggest plans' command longer than a
+ * Windows command line takes (32,767 characters).
+ */
+export function launchScript(runId: string, run: string): string {
+  checkId(runId)
+  if (run.split('\n').includes(RUN_END)) throw new Error('the run holds its own end line')
+  const r = `${RUNS_DIR}/${runId}`
+  return [
+    'exec </dev/null',
+    '# agent-board: launch',
+    'set -u',
+    'umask 077',
+    'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH',
+    `R=${r}`,
+    `mkdir -p ${RUNS_DIR}`,
+    'rm -f "$R.log" "$R.exit"',
+    `cat > "$R.sh" <<'${RUN_END}'`,
+    ...run.replace(/\n$/, '').split('\n'),
+    RUN_END,
+    'chmod 600 "$R.sh"',
+    `for f in $(ls -t ${RUNS_DIR} | grep '\\.sh$' | sed -n '6,$p'); do rm -f "${RUNS_DIR}/\${f%.sh}".*; done`,
+    `setsid -w sh -c 'timeout -k 10 ${RUN_MOST_S} sh "$1.sh"; c=$?; [ -s "$1.exit" ] || echo "$c" > "$1.exit"' sh "$R" >"$R.log" 2>&1 </dev/null &`,
+    'n=0; s=0',
+    `while [ ! -s "$R.exit" ] && [ "$s" -lt ${RUN_MOST_S + 60} ]; do`,
+    '  t=$(wc -l < "$R.log")',
+    '  if [ "$t" -gt "$n" ]; then sed -n "$((n + 1)),$((t))p" "$R.log"; n=$t; fi',
+    '  sleep 1; s=$((s + 1))',
+    'done',
+    'sed -n "$((n + 1)),\\$p" "$R.log"',
+    'c=$(cat "$R.exit" 2>/dev/null || true)',
+    `if [ ! -e ${RECORD_FILE} ] && [ ! -e ${BOARD_DIR}/backups ]; then flock -n ${LOCK_FILE} rm -rf ${BOARD_DIR}; fi`,
+    'if [ -z "$c" ]; then c=124; fi',
+    'echo "@@exit $c"',
+    '',
+  ].join('\n')
+}
+
+export interface StepProgress {
+  n: number
+  id: string
+  state: 'waiting' | 'running' | 'ok' | 'fail' | 'skipped'
+  since: number | null
+  out: string[]
+}
+export interface Progress {
+  steps: StepProgress[]
+  undo: { n: number; ok: boolean }[]
+  result: 'applied' | 'rolled-back' | 'rollback-failed' | 'busy' | 'changed' | null
+  exit: number | null
+}
+
+/** Every step waiting. */
+export function startProgress(p: Plan): Progress {
+  return {
+    steps: p.steps.map((s, i) => ({ n: i + 1, id: s.id, state: 'waiting', since: null, out: [] })),
+    undo: [],
+    result: null,
+    exit: null,
+  }
+}
+
+const STEP = /^@@step (\d+) (start|ok|fail|skip)$/
+const UNDO = /^@@undo (\d+) (ok|fail)$/
+const RESULT = /^@@result (applied|rolled-back|rollback-failed)$/
+const EXIT = /^@@exit (-?\d+)$/
+const STATE = { start: 'running', ok: 'ok', fail: 'fail', skip: 'skipped' } as const
+
+/** The progress after one line of the run (a new value; the old one is left as it was). */
+export function readProgress(pr: Progress, line: string, now: number): Progress {
+  const text = line.replace(/\r$/, '')
+  const step = STEP.exec(text)
+  if (step) {
+    const n = Number(step[1])
+    const state = STATE[step[2] as keyof typeof STATE]
+    return {
+      ...pr,
+      steps: pr.steps.map(s => (s.n === n ? { ...s, state, since: state === 'running' ? now : s.since } : s)),
+    }
+  }
+  const undo = UNDO.exec(text)
+  if (undo) return { ...pr, undo: [...pr.undo, { n: Number(undo[1]), ok: undo[2] === 'ok' }] }
+  const result = RESULT.exec(text)
+  if (result) return { ...pr, result: result[1] as Progress['result'] }
+  const exit = EXIT.exec(text)
+  if (exit) return { ...pr, exit: Number(exit[1]) }
+  if (text === '@@busy') return { ...pr, result: 'busy' }
+  if (text.startsWith('@@changed ')) return { ...pr, result: 'changed' }
+  // Output: the step started last has it (during a rollback, the step that failed).
+  const current = [...pr.steps].reverse().find(s => s.since !== null)
+  if (!current) return pr
+  return {
+    ...pr,
+    steps: pr.steps.map(s => (s === current ? { ...s, out: [...s.out, text].slice(-OUT_MOST) } : s)),
+  }
+}
+
+/** A step as the owner runs it by hand: its title, why, commands, what to check after, how to undo it. */
+export interface ManualBlock {
+  title: Text
+  why: Text
+  commands: string
+  check: string
+  undo: string
+}
+
+/** "Do it myself": one block per step, the same lines the run has. */
+export function doItMyself(p: Plan): ManualBlock[] {
+  return p.steps.map(s => ({
+    title: s.title,
+    why: s.why,
+    commands: s.commands.join('\n'),
+    check: s.check.join('\n'),
+    undo: s.undo.join('\n'),
+  }))
+}

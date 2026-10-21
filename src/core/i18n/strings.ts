@@ -13,6 +13,7 @@ import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
 import { PROFILE_STRINGS } from './profile-strings.ts'
 import { REMOTE_STRINGS } from './remote-strings.ts'
+import { SERVER_STRINGS } from './server-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
 
@@ -1172,3 +1173,5 @@ for (const code of Object.keys(FORK_STRINGS) as Lang[]) Object.assign(STRINGS[co
 for (const code of Object.keys(ASIDE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ASIDE_STRINGS[code])
 // And the board through the owner's own domain: the tunnel and its login.
 for (const code of Object.keys(ACCESS_STRINGS) as Lang[]) Object.assign(STRINGS[code], ACCESS_STRINGS[code])
+// And setting up the server's web server from the board.
+for (const code of Object.keys(SERVER_STRINGS) as Lang[]) Object.assign(STRINGS[code], SERVER_STRINGS[code])

@@ -149,10 +149,30 @@ const VIEW = {
     },
   ],
   attempts: [{ at: 1, address: '203.0.113.9', label: 'A browser', method: 'password', reason: 'wrong' }],
+  server: null,
+}
+
+/** The server's part of the view while a plan is shown. */
+const SERVER = {
+  admin: { user: 'ubuntu', key: '' },
+  sudo: 'password',
+  phase: 'plan',
+  facts: { distro: { id: 'debian' } },
+  choice: { case: '1', why: { key: 'server.case.1' } },
+  plan: { id: 'r1', kind: 'apply', case: '1', address: 'https://board.example.com', steps: [], ticks: [] },
+  progress: null,
+  hint: null,
+  error: null,
+  setup: { case: '1', address: 'https://board.example.com', at: '2026-10-21T10:04:00.000Z' },
+  testAfter: null,
 }
 
 test('a Remote access view as the board answers it, narrowed for the page and the command', () => {
   expect(isAccessView(VIEW)).toBe(true)
+  expect(isAccessView({ ...VIEW, server: SERVER })).toBe(true)
+  expect(
+    isAccessView({ ...VIEW, server: { ...SERVER, choice: { case: null, why: ['otherSetup'] }, plan: null } }),
+  ).toBe(true)
   // what a board with nothing set up answers
   const bare = {
     ...VIEW,
@@ -191,6 +211,14 @@ test('a Remote access view as the board answers it, narrowed for the page and th
     { ...VIEW, logins: [{ ...VIEW.logins[0], method: 'magic' }] },
     { ...VIEW, attempts: [{ ...VIEW.attempts[0], reason: 'bored' }] },
     { ...VIEW, attempts: null },
+    // the server's part: null or a view of it, never missing or half
+    { ...VIEW, server: undefined },
+    { ...VIEW, server: { ...SERVER, phase: 'dancing' } },
+    { ...VIEW, server: { ...SERVER, admin: null } },
+    { ...VIEW, server: { ...SERVER, sudo: 'maybe' } },
+    { ...VIEW, server: { ...SERVER, hint: 'shrug' } },
+    { ...VIEW, server: { ...SERVER, setup: { case: '5', address: 'x', at: 'y' } } },
+    { ...VIEW, server: { ...SERVER, plan: { id: 'r1' } } },
   ]
   for (const v of broken) expect([v, isAccessView(v)]).toEqual([v, false])
 })

@@ -184,6 +184,7 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
         login,
         logins,
         attempts,
+        server: null,
       }
     },
 

@@ -59,6 +59,7 @@ const VIEW: AccessView = {
   login: { password: false, totp: false, passkeys: [], lockout: null },
   logins: [],
   attempts: [],
+  server: null,
 }
 
 /** Set up and on: the key made, the server's key pinned. */
