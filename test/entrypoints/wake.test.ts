@@ -358,6 +358,45 @@ test('turned off while the reaper’s sleep is under way: it keeps its port and 
   expect(paneGets(box)).toEqual(['w1:p1'])
 })
 
+test('asked to restart (a code change): new sleeps and wakes get 503, the sleep under way finishes, no other starts, then it ends with 75', async () => {
+  const box = await wakeSandbox()
+  const gate = join(box.dir, 'gate')
+  runningSession(claudeDir(box), { id: SID, name: 'Billing', cwd: PROJECT })
+  runningSession(claudeDir(box), { id: SID2, name: 'Ledger', cwd: PROJECT })
+  herdrShows(box, [claudePane('w1:p1', SID), claudePane('w1:p3', SID2)], {
+    'pane get': { waitFor: gate, result: { pane: claudePane('w1:p1', SID, 'working') } },
+  })
+  const port = await unusedPort()
+  const wake = await startWakeProcess(box, {
+    port,
+    wake: { reaper: { enabled: true, idleMinutes: 1 } },
+    env: { PATH: withBoard(box) },
+  })
+  await until(() => paneGets(box).includes('w1:p1'), 10_000)
+
+  wake.proc.send('restart')
+  await until(() => wakeLogText(box).includes(' restarting for a code change'))
+  expect((await fetch(`${wake.url}/status`)).status).toBe(200)
+  for (const path of ['/sleep', '/wake']) {
+    const res = await post(`${wake.url}${path}`, JSON.stringify({ target: 'Ledger' }))
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({ ok: false, error: 'wake is restarting' })
+  }
+  expect(wake.proc.exitCode).toBeNull()
+
+  writeFileSync(gate, '')
+  expect(await exitWithin(wake.proc, 10_000)).toBe(75)
+  expect(paneGets(box)).toEqual(['w1:p1'])
+})
+
+test('asked to restart with nothing under way: it ends with 75 at once', async () => {
+  const box = await wakeSandbox()
+  idleAndAsleep(box)
+  const wake = await startWakeProcess(box, { port: await unusedPort() })
+  wake.proc.send('restart')
+  expect(await exitWithin(wake.proc, 10_000)).toBe(75)
+})
+
 /** The status line of what the server answers to these raw bytes. */
 function rawStatusLine(port: number, request: string): Promise<string> {
   return new Promise((resolve, reject) => {

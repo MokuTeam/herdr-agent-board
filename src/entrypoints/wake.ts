@@ -14,7 +14,8 @@
 // is a session name, a pane id or a session id. Programs on this computer only: a request with an
 // Origin, or a Host other than 127.0.0.1:<port> or localhost:<port> (a web page, DNS rebinding), is
 // refused with 403. Once it listens it says { up: <port> } over its IPC channel, when it has one
-// (the supervisor's).
+// (the supervisor's, services/wake/supervisor.ts); told 'restart' there (a code change), it ends
+// with 75 once no wake or sleep is under way, answering new ones 503 meanwhile.
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -28,6 +29,7 @@ import { scheduledJobs } from '../adapters/wake-transcripts.ts'
 import { telegramTarget, type WakeConfig, wakeConfig, wakeSwitch } from '../core/wake/config.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { createWakeEngine, type WakeEngine } from '../services/wake/engine.ts'
+import { RESTART_EXIT } from '../services/wake/supervisor.ts'
 
 const reapDry = process.argv[2] === '--reap-dry'
 
@@ -268,3 +270,8 @@ process.send?.({ up: start.port })
 log(`wake up: ${telegramSaid(start)}, ${reaperSaid(start)}, state ${stateDir()}, API http://127.0.0.1:${start.port}`)
 seen = every(roundMs() ?? SEEN_EVERY_MS, 'sessions seen', () => engine.remember())
 if (start.reaper.enabled) reaper = reaperLoop()
+// A code change (the supervisor, over IPC): no new sleep nor wake, and 75 once those under way are
+// done; the supervisor starts it again at once. Turned off meanwhile, it ends with 0 all the same.
+process.on('message', m => {
+  if (m === 'restart' && !leaving) leave(RESTART_EXIT, 'wake is restarting', 'restarting for a code change')
+})
