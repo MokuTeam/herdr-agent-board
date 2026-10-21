@@ -1,0 +1,54 @@
+/* The Remote access panel (web/src/components/access, Settings → Remote access… on the local
+   board): built from the Phones panel's pieces (profiles.css), its sections spaced as that panel's
+   and its fields laid out as the Profiles panel's (.profile-command); what is wrong in the danger
+   color the sheets use (--red); the server's snippets in monospace, wrapped, and scrolling when
+   long. Every rule here selects by class: the other sheets are upstream's, rule for rule. */
+
+.access-tunnel { max-width: 760px; }
+.access-head { margin: 16px 0 6px; font-size: 13px; }
+.access-reach, .access-status, .access-ssh, .access-why, .access-sure, .access-note, .access-line {
+  margin: 0 0 8px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.access-reach { color: var(--label-2); font-size: 12.5px; }
+.access-status { font-weight: 600; }
+.access-ssh, .access-why { color: var(--label-2); font-size: 12px; }
+.access-warn, .access-problem { color: var(--red); }
+.access-problem { margin: 0 0 4px; padding-left: 6px; font-size: 12px; line-height: 1.4; }
+.access-hint { margin: 2px 0 8px; color: var(--label-2); font-size: 12px; line-height: 1.4; }
+.access-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; }
+.access-actions .button:disabled { opacity: 0.5; }
+
+/* Test connection's steps: a line each, the hint under the one that failed. */
+.access-steps { margin: 0 0 8px; padding: 0; list-style: none; }
+.access-step { font-size: 12.5px; overflow-wrap: anywhere; }
+
+/* The settings: a label and its field on a line, as the Profiles panel's start command. */
+.access-fields { display: flex; flex-direction: column; gap: 2px; }
+.access-field { display: flex; align-items: center; gap: 8px; padding: 4px 6px; color: var(--label-2); font-size: 12px; }
+.access-field > span { flex: none; width: 150px; font-weight: 600; }
+.access-field .path-add:disabled { opacity: 0.5; }
+.access-ask { padding: 4px 6px 0; }
+
+/* The key: its path, its public key and the keys file's line, the server's key. */
+.access-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; }
+.access-line > span { flex: none; color: var(--label-2); font-weight: 600; }
+.access-code { min-width: 0; padding: 1px 5px; border-radius: 5px; background: var(--fill-2); font: 11.5px var(--mono); overflow-wrap: anywhere; }
+.access-sure { font-size: 12.5px; }
+
+/* The server's snippets: each folds, its text scrolls when long and wraps, Copy under it. */
+.access-snippet { margin: 0 0 8px; }
+.access-summary { cursor: pointer; font-size: 12.5px; font-weight: 600; }
+.access-note { margin-top: 6px; color: var(--label-2); font-size: 12px; }
+.access-pre {
+  max-height: 320px;
+  margin: 6px 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--fill-2);
+  font: 11.5px/1.5 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

@@ -2,8 +2,8 @@
 // and what its items do — light or dark (models/theme.ts), the board's language for every board,
 // the panels' place and default size (components/panel/place.ts), whether sleeping sessions show,
 // with more than one profile folder the Profiles panel, and how sessions asleep in "Waiting" fold,
-// for every board; on a page signed in through the owner's domain, Sign out. The items are
-// models/settings-menu.ts.
+// for every board; on the local board, Remote access…; on a page signed in through the owner's
+// domain, Sign out. The items are models/settings-menu.ts.
 import { useEffect, useState } from 'react'
 import type { FoldMode } from '../../../src/core/fold-mode.ts'
 import { LANGUAGES, translator } from '../../../src/core/i18n/translator.ts'
@@ -48,6 +48,9 @@ export interface SettingsDeps {
   /** The remote mode is on: Phones… is offered. */
   phones?(): boolean
   openPhones?(): void
+  /** The local board's page (not one through Tailscale or the domain): Remote access… is offered. */
+  access?(): boolean
+  openAccess?(): void
   /** This page signed in through the owner's domain: Sign out is offered. */
   signOut?(): boolean
   endLogin?(): void
@@ -68,6 +71,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       profiles: deps.profiles(),
       fold: deps.fold(),
       phones: deps.phones?.() ?? false,
+      access: deps.access?.() ?? false,
       signOut: deps.signOut?.() ?? false,
     })
     const source: MenuSource = keyboard ? 'keyboard' : deps.coarse() ? 'touch' : 'mouse'
@@ -87,6 +91,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'profiles') deps.openProfiles()
         else if (pick?.kind === 'fold') deps.chooseFold(pick.value)
         else if (pick?.kind === 'phones') deps.openPhones?.()
+        else if (pick?.kind === 'access') deps.openAccess?.()
         else if (pick?.kind === 'signout') deps.endLogin?.()
       },
     })
@@ -186,17 +191,19 @@ export function settingsGear(
 
 /**
  * Settings for the page: `menu` is the board's one menu (hooks/useContextMenus.ts);
- * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel.
+ * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel, `openAccess` the Remote
+ * access panel.
  */
 export function useSettingsMenu(
   menu: MenuEngine,
   openProfiles: () => void,
   openPhones: () => void = () => {},
+  openAccess: () => void = () => {},
 ): SettingsMenu {
   const { t, choose } = useLanguage()
   const board = useBoardContext()
   const place = usePanelPlace()
-  const latest = useLatest({ t, choose, board, openProfiles, openPhones })
+  const latest = useLatest({ t, choose, board, openProfiles, openPhones, openAccess })
   const [expanded, setExpanded] = useState(false)
   const [gear] = useState(() => {
     const open = settingsMenuFrom({
@@ -245,6 +252,8 @@ export function useSettingsMenu(
       },
       phones: () => !!latest.current.board.data?.remote,
       openPhones: () => latest.current.openPhones(),
+      access: () => !remotePage(),
+      openAccess: () => latest.current.openAccess(),
       signOut: () => remotePage() && keptAuth() === 'login',
       endLogin: () => void endLogin(),
     })
