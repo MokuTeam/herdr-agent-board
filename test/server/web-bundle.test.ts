@@ -172,6 +172,36 @@ test('the board’s own: theme.js puts only a kept light or dark on <html>, and 
   expect(map.sources.some(s => s.endsWith('web/src/components/ErrorBoundary.tsx'))).toBe(true)
 })
 
+test('theme.js puts the style on <html> only for a kept Terminal, beside the theme, and never throws (#161)', async () => {
+  const root = join(import.meta.dir, '..', '..')
+  const bundle = await createWebBundle({
+    root,
+    entry: join(root, 'web', 'src', 'main.tsx'),
+    early: join(root, 'web', 'src', 'theme.ts'),
+    log: () => {},
+  })
+  const run = (theme: string | null, look: string | null, broken = false) => {
+    const dataset: Record<string, string> = {}
+    const kept: Record<string, string | null> = { 'board.theme': theme, 'board.look': look }
+    const localStorage = {
+      getItem: (key: string) => {
+        if (broken) throw new Error('denied')
+        return kept[key] ?? null
+      },
+    }
+    new Function('localStorage', 'document', bundle.early())(localStorage, { documentElement: { dataset } })
+    return dataset
+  }
+  expect([
+    run(null, 'terminal'),
+    run('light', 'terminal'),
+    run('dark', 'classic'),
+    run(null, 'sepia'),
+    run(null, null),
+    run('dark', 'terminal', true),
+  ]).toEqual([{ look: 'terminal' }, { theme: 'light', look: 'terminal' }, { theme: 'dark' }, {}, {}, {}])
+})
+
 test('rebuilds run one at a time, so the newest bundle is the one kept', async () => {
   const root = site({ 'app.js': "import { b } from './b.js'\nconsole.log(b)\n", 'b.js': "export const b = 'one'\n" })
   const real = Bun.build

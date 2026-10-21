@@ -1,8 +1,9 @@
 // Settings (the gear) against upstream's own, at the compact toolbar's merge (#43): the menu
 // web/app.js opens out of #settings (its items, where and how it opens, what each pick does),
 // its setTheme and its chooseLanguage, picked out of app.js there and run with the same state;
-// then the look kept in this browser before the page paints (web/src/theme.ts, as theme.js); and
-// what the gear says of its menu (aria-expanded) as menus come and go, on each side's own menu.
+// then the look kept in this browser before the page paints (web/src/theme.ts, as theme.js); the
+// board's own style, Classic or Terminal (#161), which upstream did not have; and what the gear
+// says of its menu (aria-expanded) as menus come and go, on each side's own menu.
 import { describe, expect, test } from 'bun:test'
 import { createRef } from 'react'
 import { LANGUAGES, translator } from '../../src/core/i18n/translator.ts'
@@ -17,7 +18,8 @@ import {
   settingsGear,
   settingsMenuFrom,
 } from '../../web/src/hooks/useSettingsMenu.ts'
-import type { MenuEntry } from '../../web/src/models/menu-model.ts'
+import { isLook, keptLook, LOOKS, lookNow, setLook } from '../../web/src/models/look.ts'
+import type { MenuEntry, MenuItem } from '../../web/src/models/menu-model.ts'
 import type { Dock } from '../../web/src/models/panel-layout.ts'
 import { offersProfiles } from '../../web/src/models/profiles.ts'
 import { settingPicked, settingsMenu } from '../../web/src/models/settings-menu.ts'
@@ -421,6 +423,138 @@ describe('light or dark', () => {
 
   test('before the page paints, only light or dark kept in this browser set the look', () => {
     expect(['light', 'dark', 'auto', 'sepia', null].map(keptTheme)).toEqual(['light', 'dark', null, null, null])
+  })
+})
+
+describe('Classic or Terminal (#161)', () => {
+  const now = {
+    t: translator('en'),
+    theme: 'auto',
+    languages: { en: 'English' },
+    canEdit: true,
+    dock: 'right' as const,
+    sleepers: true,
+    profiles: false,
+  }
+  const ids = (items: readonly MenuEntry[]) => items.map(i => ('id' in i ? i.id : '—'))
+
+  test('the Style item comes after Appearance, the style on show checked; none without one, as upstream’s menu', () => {
+    expect(ids(settingsMenu(now))).toEqual(['theme', 'lang', 'panel', '—', 'sleepers'])
+    expect(ids(settingsMenu({ ...now, look: 'classic' }))).toEqual(['theme', 'look', 'lang', 'panel', '—', 'sleepers'])
+    expect(settingsMenu({ ...now, look: 'terminal' })[1]).toEqual({
+      id: 'look',
+      label: 'Style',
+      submenu: [
+        { id: 'look:classic', label: 'Classic', checked: false },
+        { id: 'look:terminal', label: 'Terminal', checked: true },
+      ],
+    })
+    expect(settingsMenu({ ...now, t: translator('ru'), look: 'classic' })[1]).toEqual({
+      id: 'look',
+      label: 'Стиль',
+      submenu: [
+        { id: 'look:classic', label: 'Классический', checked: true },
+        { id: 'look:terminal', label: 'Терминал', checked: false },
+      ],
+    })
+    expect(settingPicked('look:terminal')).toEqual({ kind: 'look', value: 'terminal' })
+    expect(settingPicked('look:classic')).toEqual({ kind: 'look', value: 'classic' })
+    expect(settingPicked('look:sepia')).toBeNull()
+    expect(settingPicked('look')).toBeNull()
+    expect(LOOKS.filter(isLook)).toEqual(['classic', 'terminal'])
+  })
+
+  test('out of the gear: the style the page shows checked, a pick sets it; a page without one offers none', () => {
+    for (const shown of ['classic', 'terminal', undefined]) {
+      const calls: Call[] = []
+      let opened: readonly MenuEntry[] = []
+      let pick = (_id: string): void => {}
+      settingsMenuFrom({
+        menu: {
+          open: (items, options) => {
+            opened = items
+            pick = id => options.onPick?.(id, { id, label: '' })
+          },
+        },
+        t: () => translator('en'),
+        canEdit: () => true,
+        languages: () => ({ en: 'English' }),
+        dock: () => 'right',
+        sleepers: () => true,
+        root: () => ({ dataset: {} }),
+        coarse: () => false,
+        setTheme: theme => void calls.push(['theme', theme]),
+        ...(shown && { look: () => shown, setLook: (look: string) => void calls.push(['look', look]) }),
+        chooseLanguage() {},
+        placePanels() {},
+        resetPanelSize() {},
+        toggleSleepers() {},
+        profiles: () => false,
+        openProfiles() {},
+        fold: () => null,
+        chooseFold() {},
+      })({ getBoundingClientRect: () => RECT } as unknown as HTMLElement, false)
+      const look = opened.find((i): i is MenuItem => 'id' in i && i.id === 'look')
+      const checked = look?.submenu?.flatMap(i => ('checked' in i && i.checked ? [i.id] : [])) ?? null
+      expect(checked).toEqual(shown ? [`look:${shown}`] : null)
+      pick('look:terminal')
+      pick('look:sepia')
+      pick('theme:dark')
+      expect(calls).toEqual(
+        shown
+          ? [
+              ['look', 'terminal'],
+              ['theme', 'dark'],
+            ]
+          : [['theme', 'dark']],
+      )
+    }
+  })
+
+  /** setLook on a page showing `shown`: what it kept, what <html> says after, whether it faded. */
+  function picked(shown: string, look: string, transition: boolean, reduced: boolean) {
+    const dataset: Record<string, string> = shown === 'classic' ? {} : { look: shown }
+    const kept: string[] = []
+    const faded: string[] = []
+    setLook(look, {
+      root: { dataset },
+      keep: value => void kept.push(value),
+      transition:
+        transition && !reduced
+          ? apply => {
+              faded.push(look)
+              apply()
+            }
+          : undefined,
+    })
+    return { dataset: { ...dataset }, kept, faded }
+  }
+
+  test('picked: kept in this browser and on the page, in a cross-fade when it can; the same again changes nothing', () => {
+    for (const shown of ['classic', 'terminal'])
+      for (const look of ['classic', 'terminal'])
+        for (const transition of [false, true])
+          for (const reduced of [false, true]) {
+            const same = shown === look
+            expect([shown, look, transition, reduced, picked(shown, look, transition, reduced)]).toEqual([
+              shown,
+              look,
+              transition,
+              reduced,
+              {
+                // Classic is no data-look at all: the page as it always was.
+                dataset: look === 'classic' ? {} : { look },
+                kept: same ? [] : [look],
+                faded: !same && transition && !reduced ? [look] : [],
+              },
+            ])
+          }
+    expect(lookNow({ dataset: {} })).toBe('classic')
+    expect(lookNow({ dataset: { look: 'terminal' } })).toBe('terminal')
+  })
+
+  test('before the page paints, only Terminal kept in this browser sets a style', () => {
+    expect(['terminal', 'classic', 'dark', '', null].map(keptLook)).toEqual(['terminal', null, null, null, null])
   })
 })
 

@@ -195,7 +195,9 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   on show with its count; it opens every lane, with its count, in a menu. The profile switch
   folds the same way, on its own.
 - Settings (the gear): appearance (as the system has it, light or dark; kept in this browser),
-  language, where the session panel sits, and whether sleeping sessions show.
+  style (Classic, the board's own, or Terminal: a terminal-style look with a One Dark palette,
+  One Light in the light theme, monospace and 1px outlines; kept in this browser too), language,
+  where the session panel sits, and whether sleeping sessions show.
 - A card says what the session works on (its own `board doing`, else Claude's title of the
   session, else "You: <your last request>"), its last words, the tool it runs now, the question
   it is stuck on, what it waits for.
