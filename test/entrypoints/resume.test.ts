@@ -285,3 +285,18 @@ test('no card and no profile named: the transcript is looked for in the folder t
   expect(set.claude).toEqual({ args: ['--resume', work], configDir: s.work, cwd: realpathSync(project) })
   expect(box.calls()).toEqual([])
 })
+
+test('a profile folder named from the pane’s folder (a relative CLAUDE_CONFIG_DIR) keeps Claude there, as today', async () => {
+  const box = await sandbox()
+  const s = setUp(box)
+  const home = box.env.USERPROFILE as string
+  const project = join(box.dir, 'a b')
+  mkdirSync(project)
+  // `.claude-work` from home is Work, where the transcript is; from the project it is no folder.
+  const session = randomUUID()
+  putTranscript(s.work, projectFolderName(project), session, project)
+  const r = await resumeIn(box, s, [session], home, { CLAUDE_CONFIG_DIR: '.claude-work' })
+  expect(r.code).toBe(7)
+  expect(r.claude).toEqual({ args: ['--resume', session], configDir: '.claude-work', cwd: realpathSync(home) })
+  expect(box.calls()).toEqual([])
+})

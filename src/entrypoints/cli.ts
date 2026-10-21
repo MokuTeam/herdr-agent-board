@@ -44,7 +44,7 @@
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { readArchiveLog } from '../adapters/archive-store.ts'
 import {
   enqueueReport,
@@ -641,21 +641,26 @@ async function resume(): Promise<void> {
  * Where `board resume` runs Claude (core/resume.ts resumeDir, spec call 29): null, this folder,
  * when the session's transcript is under the profile's projects/ for it (a pane herdr restored);
  * else the folder the transcript recorded, found in the profile `dir`'s projects/, when it still
- * is one. Found nowhere, or not to be read: null, as before.
+ * is one. Found nowhere, not to be read, or a profile folder that would be another one there:
+ * null, as before.
  */
 async function resumeFolder(session: string, dir: string): Promise<string | null> {
   try {
     const cwd = process.cwd()
     const here = join(dir, 'projects', projectFolderName(cwd), `${session}.jsonl`)
-    // This folder's first, else the first projects/*/<id>.jsonl.
-    const file = createClaudeHome(dir).transcriptPath(session, cwd)
-    const recorded = file && file !== here ? await cwdOf(file) : null
-    return resumeDir({
+    const transcriptHere = !!statSync(here, { throwIfNoEntry: false })?.isFile()
+    // Else the first projects/*/<id>.jsonl.
+    const file = transcriptHere ? null : createClaudeHome(dir).transcriptPath(session, cwd)
+    const recorded = file ? await cwdOf(file) : null
+    const to = resumeDir({
       cwd,
-      transcriptHere: file === here,
+      transcriptHere,
       recorded,
       recordedExists: !!recorded && !!statSync(recorded, { throwIfNoEntry: false })?.isDirectory(),
     })
+    // Claude reads its profile folder from the folder it starts in: one named from this folder (a
+    // relative CLAUDE_CONFIG_DIR, or on Windows `\…` without its drive) may be another one there.
+    return to && resolve(to, dir) === resolve(cwd, dir) ? to : null
   } catch {
     return null
   }
