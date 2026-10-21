@@ -248,6 +248,19 @@ const running = (pid: number): boolean => {
 }
 
 /**
+ * Whether a command line carries `forward` as an argument of its own: after a space, a quote or
+ * the start, and before a space, a quote or the end (port 1242 is not 12420, nor /a.sock /x/a.sock).
+ */
+function hasArgument(line: string, forward: string): boolean {
+  for (let at = line.indexOf(forward); at >= 0; at = line.indexOf(forward, at + 1)) {
+    const before = at === 0 ? '' : (line[at - 1] ?? '')
+    const after = line[at + forward.length] ?? ''
+    if (/^[\s"']?$/.test(before) && /^[\s"']?$/.test(after)) return true
+  }
+  return false
+}
+
+/**
  * Ends a recorded ssh that still runs with this forward (its tree), waiting up to `waitMs` for it
  * to go. True: no ssh of ours runs under the pid (it is gone, or another program has the pid).
  * False: ours still runs, or something runs under the pid and its command line could not be read.
@@ -260,7 +273,7 @@ export async function endStraySsh(
   const { kill = killTreePid, commandLine = commandLineOf, waitMs = 5000 } = o
   const line = await commandLine(r.pid)
   if (line === null) return !running(r.pid)
-  if (!line.includes(r.forward)) return true
+  if (!hasArgument(line, r.forward)) return true
   kill(r.pid)
   for (const deadline = Date.now() + waitMs; running(r.pid) && Date.now() < deadline; )
     await new Promise(resolve => setTimeout(resolve, 50))

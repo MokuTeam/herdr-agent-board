@@ -305,6 +305,30 @@ test('endStraySsh says false for a pid that runs but whose command line cannot b
   expect(killed).toEqual([])
 })
 
+test('endStraySsh takes the recorded forward as a whole argument: a longer port or socket path is another ssh', async () => {
+  // Our own pid stands in for a process that runs; the kill is only noted, never done.
+  const forward = forwardSpec(TUNNEL_SOCKET, 1242)
+  const tried = async (line: string): Promise<number[]> => {
+    const killed: number[] = []
+    await endStraySsh(
+      { pid: process.pid, forward, at: Date.now() },
+      { commandLine: async () => line, kill: pid => killed.push(pid), waitMs: 0 },
+    )
+    return killed
+  }
+  const ssh = 'C:\\Windows\\System32\\OpenSSH\\ssh.exe -v -N'
+  const at = 'boardtunnel@ssh.example.com'
+  // Another port that starts with the recorded one, and a socket path that ends with the recorded one.
+  expect(await tried(`${ssh} -R ${forwardSpec(TUNNEL_SOCKET, 12420)} ${at}`)).toEqual([])
+  expect(await tried(`${ssh} -R /srv${forward} ${at}`)).toEqual([])
+  expect(await tried(`${ssh} -R ${forward}0`)).toEqual([])
+  // The forward itself: in the middle, last, quoted (Windows' command line), as /proc gives it.
+  expect(await tried(`${ssh} -R ${forward} ${at}`)).toEqual([process.pid])
+  expect(await tried(`${ssh} ${at} -R ${forward}`)).toEqual([process.pid])
+  expect(await tried(`"${ssh}" "-R" "${forward}" "${at}"`)).toEqual([process.pid])
+  expect(await tried(`ssh\t-R\t${forward}\t${at}`)).toEqual([process.pid])
+})
+
 test('endStraySsh says false when the recorded ssh still runs after its wait', async () => {
   const fake = await useFakeSsh()
   fake.state({ ssh: { mode: 'hang' } })
