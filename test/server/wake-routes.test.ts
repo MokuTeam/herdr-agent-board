@@ -1,6 +1,7 @@
 // Settings → Sleep and wake… end to end (#119): the panel's switches edit config.json, Start and
 // Start again call wake's start (a recorder here: runner.ts), and the payload carries the state
-// line. With wake off and no wake file the payload has no wake field and nothing is started.
+// line. With wake off nothing is started; with no wake file either, the payload says only that it is
+// off (before wake shipped it had no wake field then).
 import { setDefaultTimeout, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -177,17 +178,43 @@ test('wake on in config.json when the board starts, not running: started once', 
   assert.deepEqual(starts(proc), [[]])
 })
 
-test('with wake off ("wake": false) and no wake file the payload has no wake field and nothing is started', async () => {
-  const box = await sandbox()
-  box.state({ 'api snapshot': EMPTY })
-  const { url, proc } = await serveBoard(box, { language: 'en', wake: false })
-  const board = await payload(url)
-  await Bun.sleep(200)
-  assert.equal('wake' in board, false)
-  assert.equal('wake' in (await payload(url)), false)
-  assert.deepEqual(starts(proc), [])
-  assert.ok(!proc.messages.some(m => (m as BoardMessage).log?.includes('wake')))
-})
+test.skipIf(WAKE_SHIPPED)(
+  'with wake off ("wake": false) and no wake file the payload has no wake field and nothing is started',
+  async () => {
+    const box = await sandbox()
+    box.state({ 'api snapshot': EMPTY })
+    const { url, proc } = await serveBoard(box, { language: 'en', wake: false })
+    const board = await payload(url)
+    await Bun.sleep(200)
+    assert.equal('wake' in board, false)
+    assert.equal('wake' in (await payload(url)), false)
+    assert.deepEqual(starts(proc), [])
+    assert.ok(!proc.messages.some(m => (m as BoardMessage).log?.includes('wake')))
+  },
+)
+
+// Once wake ships, its Settings item is there whatever the switch says: off, the payload says so.
+test.skipIf(!WAKE_SHIPPED)(
+  'with wake off ("wake": false) and no wake file the payload says it is off, and nothing is started or asked',
+  async () => {
+    const box = await sandbox()
+    box.state({ 'api snapshot': EMPTY })
+    const { url, proc } = await serveBoard(box, { language: 'en', wake: false })
+    await eventually(async () => (await wakeOf(url))?.state === 'off')
+    await Bun.sleep(200)
+    assert.deepEqual(await wakeOf(url), {
+      on: false,
+      state: 'off',
+      since: null,
+      asleep: 0,
+      port: 12421,
+      downSince: null,
+    })
+    assert.deepEqual(starts(proc), [])
+    assert.ok(!proc.messages.some(m => (m as BoardMessage).log?.includes('wake')))
+    assert.deepEqual([...new Set(box.calls().map(c => c.join(' ')))], ['api snapshot'])
+  },
+)
 
 test('with wake off ("wake": false) and sessions asleep in its file, the payload says it is off and how many', async () => {
   const box = await sandbox()

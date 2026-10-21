@@ -1,12 +1,13 @@
 // Wake's settings: config.json's `wake` section over the defaults (#119). The section is `true`,
-// `false` or an object; a value of the wrong type is its default. The reaper and the Telegram
-// router are off unless the section turns them on, so wake does nothing by itself. Telegram
-// takes tg-mcp's url and token from the section, else from the `<server>` MCP server in
-// ~/.claude.json, as the old herdr-wake plugin did. There is no `wakeCommand`: every wake is
-// `board resume`.
+// `false` or an object; a setting of the wrong type is its default, but for the switch itself: a
+// `wake`, or its `enabled`, of the wrong type is off (a kill switch that cannot be read fails
+// closed). The reaper and the Telegram router are off unless the section turns them on, so wake
+// does nothing by itself. Telegram takes tg-mcp's url and token from the section, else from the
+// `<server>` MCP server in ~/.claude.json, as the old herdr-wake plugin did. There is no
+// `wakeCommand`: every wake is `board resume`.
 
-/** Whether wake is on without a `wake` section. False until wake ships with the manifest's entries. */
-export const WAKE_SHIPPED: boolean = false
+/** Whether wake is on without a `wake` section: it starts with the board on every install. */
+export const WAKE_SHIPPED: boolean = true
 /** Wake's port on 127.0.0.1: its API, and what keeps it to one process. */
 export const WAKE_PORT = 12421
 
@@ -53,10 +54,23 @@ function reaperConfig(value: unknown): ReaperConfig {
   }
 }
 
-/** config.json's `wake` (undefined, true, false or an object) with the defaults; a wrong type is the default. */
+/**
+ * Whether wake is on: `true`/`false`, else the section's `enabled`; no section, or one without
+ * `enabled`, is the default. Anything else (a string, a number, a list, null) is off, never on.
+ */
+function switchOf(section: unknown): boolean {
+  if (section === undefined) return WAKE_SHIPPED
+  if (typeof section === 'boolean') return section
+  const w = record(section)
+  if (!w) return false
+  if (w.enabled === undefined) return WAKE_SHIPPED
+  return w.enabled === true
+}
+
+/** config.json's `wake` (undefined, true, false or an object) with the defaults; a wrong type is the default, but a wrong switch is off. */
 export function wakeConfig(section: unknown): WakeConfig {
   const w = record(section) ?? {}
-  const enabled = typeof section === 'boolean' ? section : typeof w.enabled === 'boolean' ? w.enabled : WAKE_SHIPPED
+  const enabled = switchOf(section)
   return {
     enabled,
     reaper: reaperConfig(w.reaper),

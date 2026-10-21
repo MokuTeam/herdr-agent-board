@@ -20,10 +20,11 @@ function homeOf(box: Sandbox): string {
 }
 
 /**
- * The board's config in the sandbox, unless the test wrote one: no herdr-wake, so the check that
- * ends the install asks no port on this computer.
+ * The board's config in the sandbox, unless the test wrote one: no herdr-wake and the board's own
+ * wake off (#119), so the install writes no wake hook and the check that ends it asks no port on
+ * this computer. The tests of wake's hooks turn it on with a port of their own.
  */
-function boardConfig(box: Sandbox, cfg: Record<string, unknown> = { language: 'en', wakeUrl: '' }): void {
+function boardConfig(box: Sandbox, cfg: Record<string, unknown> = { language: 'en', wakeUrl: '', wake: false }): void {
   const dir = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board')
   if (existsSync(join(dir, 'config.json'))) return
   mkdirSync(dir, { recursive: true })
@@ -156,7 +157,7 @@ test('install in a sandbox: the commands, the hooks once, a backup, and notifica
   assert.equal(after.hooks.SessionStart.length, 1)
   assert.deepEqual(after.hooks.Stop, [{ hooks: [{ type: 'command', command: 'theirs' }] }])
   assert.match(first.out, /commands: board, spawn-agent/)
-  assert.match(first.out, /herdr-wake is off/) // and what that costs, from the check
+  assert.match(first.out, /Sleep and wake is off/) // and how to turn it on, from the check
   assert.match(first.out, /things? need/)
   const second = await run(windows ? '--toast' : '--no-toast')
   assert.equal(second.code, 0, second.out)
@@ -205,7 +206,7 @@ function profilesIn(box: Sandbox, folders: Record<string, string | null>, hidden
     const title = id === 'default' ? 'Private' : id.charAt(0).toUpperCase() + id.slice(1)
     return { id, title, dir, color: ['indigo', 'teal', 'pink'][i], hidden: hidden.includes(id) }
   })
-  boardConfig(box, { language: 'en', wakeUrl: '', profiles })
+  boardConfig(box, { language: 'en', wakeUrl: '', wake: false, profiles })
   return home
 }
 
@@ -518,12 +519,33 @@ async function noWakeHook(wake: unknown): Promise<void> {
 test('with wake off, no wake hook is written', async () => {
   await noWakeHook(false)
   await noWakeHook({ enabled: false, port: 9 })
-}, 60_000)
+  // A switch that cannot be read is off (it fails closed).
+  await noWakeHook('off')
+}, 90_000)
 
 test.skipIf(WAKE_SHIPPED)(
   'with no wake section (wake not shipped yet), no wake hook is written',
   async () => {
     await noWakeHook(undefined)
+  },
+  30_000,
+)
+
+// On by default: a section without the switch (only a port of the test's, so the check that ends
+// the install asks none of this computer's) is wake on, and the install writes its hooks.
+test.skipIf(!WAKE_SHIPPED)(
+  'with no switch in the wake section, wake is on: the install writes its hooks into every shown profile',
+  async () => {
+    const box = await sandbox()
+    const home = profilesIn(box, { '.claude': '{}', '.claude-work': '{}' })
+    wakeIs(box, { port: await unusedPort() })
+    const { code, stdout, stderr } = await install(box)
+    expect([code, stderr]).toEqual([0, ''])
+    for (const p of ['.claude', '.claude-work']) {
+      expect(stdout).toContain(wakeAdded(home, p))
+      const hooks = hooksIn(home, p)
+      expect([wakeOf(hooks, 'PreToolUse'), hooks.PostToolUse]).toEqual([[SEND], [LIST]])
+    }
   },
   30_000,
 )

@@ -48,12 +48,12 @@ const homeOf = (box: Sandbox): string => {
 const binOf = (box: Sandbox): string => join(homeOf(box), '.local', 'bin')
 const read = (file: string): string | null => (existsSync(file) ? readFileSync(file, 'utf8') : null)
 
-/** The install action in the sandbox's home, with no herdr-wake for its check to ask. */
+/** The install action in the sandbox's home, with no herdr-wake and wake off, so its check asks no port. */
 async function install(box: Sandbox) {
   const dir = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board')
   mkdirSync(dir, { recursive: true })
   if (!existsSync(join(dir, 'config.json')))
-    writeFileSync(join(dir, 'config.json'), JSON.stringify({ language: 'en', wakeUrl: '' }))
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ language: 'en', wakeUrl: '', wake: false }))
   const proc = Bun.spawn([process.execPath, join(root, 'src', 'entrypoints', 'install.ts')], {
     cwd: root,
     env: box.env,

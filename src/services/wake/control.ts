@@ -344,7 +344,9 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
     ensure,
     configChanged() {
       const on = settingsNow().enabled
-      if (on !== wasOn) cache = null
+      // A view taken with the switch as it was (a refresh between the panel's On and the board
+      // reading config.json again) is asked again, not kept until it ages.
+      if (on !== wasOn || (cache && cache.view.on !== on)) cache = null
       const turnedOn = on && !wasOn
       wasOn = on
       if (turnedOn) void ensure()
