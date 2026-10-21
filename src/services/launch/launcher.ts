@@ -19,6 +19,8 @@
 // It starts in the Claude profile the launch was checked for (request.ts): in the board's own one
 // with the env exactly as inherited; in any other with CLAUDE_CONFIG_DIR set, by herdr's --env on
 // the tab (spawn-agent's --config-dir; herdr's launcher), or in a launcher command's process env.
+// A start that asks for pi (core/launch/agents.ts) is the board's own launcher's: spawn-agent is
+// run with --agent pi and types `launch.pi` in place of the profile's start command and arguments.
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -28,6 +30,7 @@ import { launchDir, ROOT } from '../../adapters/paths.ts'
 import { runTree } from '../../adapters/process.ts'
 import { forgetProfilePane, recordProfilePane } from '../../adapters/profile-panes.ts'
 import { t } from '../../core/lang.ts'
+import { CLAUDE_AGENT, piCommand } from '../../core/launch/agents.ts'
 import {
   commandArgs,
   failureKind,
@@ -73,6 +76,8 @@ export interface LaunchContext {
    * null: none, `launch.claude` is typed). spawn-agent reads it from config.json itself.
    */
   readonly profileCommand: readonly string[] | null
+  /** The agent the board's own launcher starts (core/launch/agents.ts): `claude` unless the request asked for pi. */
+  readonly agent: string
   /** A new workspace's first pane and tab: herdr's launcher starts the agent there, not in a new tab. */
   readonly rootPane: string | null
   readonly rootTab: string | null
@@ -327,13 +332,14 @@ export function spawnAgentLauncher(spec: LaunchSpec): Launcher {
     describe: () => ({ kind: 'herdr', agent: 'claude' }),
     async start(l, on) {
       // A line that picks its own session (--resume, in the profile's start command, launch.claude
-      // or the profile's arguments) gets no id from the board; a resumed session has its own. A
-      // fork gets one (spawn-agent refuses a line that picks its own session for it).
+      // or the profile's arguments; in launch.pi for pi) gets no id from the board; a resumed
+      // session has its own. A fork gets one (spawn-agent refuses a line that picks its own session for it).
+      const pi = l.agent !== CLAUDE_AGENT
+      const line = pi
+        ? piCommand(spec.pi)
+        : [...(l.profileCommand ?? claudeCommand(spec.claude, spec.args)), ...l.profileArgs]
       let sessionId: string | null = l.resume
-      if (
-        !l.resume &&
-        (l.fork || !choosesSession([...(l.profileCommand ?? claudeCommand(spec.claude, spec.args)), ...l.profileArgs]))
-      ) {
+      if (!l.resume && (l.fork || !choosesSession(line))) {
         sessionId = randomUUID()
         on.session(sessionId)
       }
@@ -342,6 +348,7 @@ export function spawnAgentLauncher(spec: LaunchSpec): Launcher {
       args.push('--timeout-sec', String(readySec), ...where)
       // The profile: the env as herdr makes it, or the folder the board checked.
       args.push(...(l.configDir === null ? ['--keep-env'] : ['--config-dir', l.configDir]))
+      if (pi) args.push('--agent', l.agent)
       return runLauncher(l, on, {
         command: messageFile => ({
           file: process.execPath,

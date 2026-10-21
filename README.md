@@ -509,6 +509,18 @@ account. herdr says which agent came up: the board names a pi session with `/nam
 first message, and puts the lane and the profile it is meant for on pi's card. spawn-agent adds
 ` kind=pi` to the line it prints.
 
+**pi or Claude Code, start by start.** With the board's own launcher (no `launch.command` or
+`launch.agent`), a launch request may name the agent it starts as: `"agent": "pi"` in
+`POST /api/launch`, which the phone app's "New session" sends when you pick pi. The board offers pi
+(`agents` in `GET /api/launch/options`) when `launch.pi` is set in config.json or `pi` is on the
+board's PATH. `launch.pi` is what it types for such a start: a program, or a list of the program and
+its arguments (`["pi", "--model", "claude-bridge/claude-opus-5-5"]`), `pi` when unset; the profile's
+start command and `args` are Claude's, so they are left out, while the profile's env is kept (pi's
+claude-bridge runs in that profile's account). The session id, the name, the first message, the lane
+and the card go as above. A start that names no agent (the web board's window, "New here", Return,
+Fork) is Claude Code's, or the profile's start command, as before. `spawn-agent --agent pi` does the
+same for an agent.
+
 Not for pi (yet): the archive and Return, herdr-wake's sleep, wake and restart, the session's own
 name from the board's rename (the card's name works), question forms (pi has none: answer in a
 message), MokuPilot calls, and the status line's context percentage and usage windows.
@@ -553,7 +565,7 @@ How it starts, by `launch` in config.json:
   (from before the board had its own launcher) are `claude`'s arguments. `launch.timeoutSec`
   (120) is how long it waits for Claude to be ready. When Claude stops at a dialog before that, the card
   says so: the folder trust as below, any other in herdr; the board then names the session and
-  sends the first message.
+  sends the first message. A start that asks for pi types `launch.pi` instead ([pi](#pi)).
 - `launch.agent`: through herdr itself. A tab in the chosen workspace (or a new workspace),
   `herdr agent start <name> --kind <agent> --pane <tab's pane> -- --session-id <id>` (the id for
   `claude` only), then `/rename <name>` and the first message. When Claude stops at a dialog, the
@@ -625,11 +637,13 @@ puts it on PATH; it is `bun src/entrypoints/spawn-agent.ts`):
 spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
             [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
             [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>]
-            [--pane <herdr pane id>] [--profile <id>]
+            [--pane <herdr pane id>] [--profile <id>] [--agent claude|pi]
 ```
 
 PowerShell's spelling works too: `-Name`, `-Cwd`, `-Label`, `-BriefFile`, `-Brief`, `-Workspace`,
-`-TimeoutSec`, `-Profile`. It opens a tab in the workspace (inside herdr the current one, from
+`-TimeoutSec`, `-Profile`, `-Agent`. `--agent pi` types `launch.pi` (default `pi`) instead of the
+profile's `command` and `args` or `launch.claude`, for a new session only (no `--resume` or
+`--fork`); see [pi](#pi). It opens a tab in the workspace (inside herdr the current one, from
 `HERDR_WORKSPACE_ID`), labelled with `--label` or the name, and types the profile's `command`, or
 `launch.claude`, into it (with `--session-id` when given). Once herdr sees Claude ready, it gives
 the agent a herdr name to address it by (the name in `[a-z0-9_-]`, Cyrillic spelled in Latin, `-2`
@@ -1465,9 +1479,11 @@ board payload, new on every start, which only the board's own page can read. Tex
 raw, and raw responses carry a CSP that runs no script.
 
 New sessions (`src/services/launch/`, `web/src/components/launch/`): `GET /api/launch/options` (herdr's workspaces,
-recent folders, the launcher), `POST /api/fs/dirs` (the subfolders of a folder, or the drives),
-`POST /api/launch` (starts one in the background; its progress is `launches` in the board
-payload), `POST /api/launch/<id>/dismiss` and `/focus`. `POST /api/launch` also needs the page's
+recent folders, the launcher, and `agents`: the agents a start may name, `[{ id, title }]` with
+`claude` first and `pi` when it is offered, none with `launch.command` or `launch.agent`; `agent`:
+the one a start that names none starts as), `POST /api/fs/dirs` (the subfolders of a folder, or the drives),
+`POST /api/launch` (starts one in the background; `agent`, optional, one of `agents`, else refused
+with `field: "agent"`; its progress is `launches` in the board payload, each with its `agent`), `POST /api/launch/<id>/dismiss` and `/focus`. `POST /api/launch` also needs the page's
 own `Origin` when the browser sends one, and fresh herdr data like every action through herdr.
 Renaming: `POST /api/session/<key>/rename` with `{ name, claude }`. Restarting:
 `POST /api/session/<key>/restart` (a schedule entry, see [Restart](#restart); `{ id, again }`).

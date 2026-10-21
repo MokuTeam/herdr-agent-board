@@ -65,6 +65,7 @@ test('a launch request is checked before anything runs', async () => {
       parent: null,
       profileArgs: [],
       profileCommand: null,
+      agent: 'claude',
     },
   )
   assert.equal((await launchOf({ name: 'A', cwd: dir, workspace: { create: 'Fresh' } })).newWorkspace, true)
@@ -155,6 +156,56 @@ test('a launch request is checked before anything runs', async () => {
   assert.deepEqual([chosen.launch.profile, chosen.launch.parent], ['work', 's4'])
 })
 
+test('a launch request names the agent it starts as: one the board offers, asked for only when it names one', async () => {
+  const box = await sandbox()
+  const home = join(box.dir, 'home folder')
+  const profiles = profileSet(mergeProfiles([], [], home).list, defaultProfileDir(home))
+  const body = { name: 'A', cwd: box.dir, workspace: { id: 'w2' } }
+  const claude = { id: 'claude', title: 'Claude Code' } as const
+  const pi = { id: 'pi', title: 'pi' } as const
+  let asked = 0
+  const both = () => {
+    asked++
+    return [claude, pi]
+  }
+  const agentOf = async (b: unknown, pi?: unknown) => {
+    const r = await checkRequest(b, { profiles, agents: both, pi })
+    assert.ok(r.ok, JSON.stringify(r))
+    return r.launch.agent
+  }
+  // None named: Claude Code, as before, and what the board offers is not looked up.
+  for (const agent of [undefined, null, '']) assert.equal(await agentOf({ ...body, agent }), 'claude', String(agent))
+  assert.equal(asked, 0)
+  assert.equal(await agentOf({ ...body, agent: 'pi' }), 'pi')
+  assert.equal(await agentOf({ ...body, agent: 'claude' }), 'claude')
+  assert.equal(asked, 2)
+  // One the board does not offer, here or at all.
+  assert.deepEqual(await checkRequest({ ...body, agent: 'codex' }, { profiles, agents: both }), {
+    ok: false,
+    field: 'agent',
+    error: 'The board does not start codex here',
+  })
+  assert.deepEqual(await checkRequest({ ...body, agent: 'pi' }, { profiles, agents: () => [claude] }), {
+    ok: false,
+    field: 'agent',
+    error: 'The board does not start pi here',
+  })
+  // A launcher of the config's own (launch.command, launch.agent) offers none: it starts what it starts.
+  assert.deepEqual(await checkRequest({ ...body, agent: 'claude' }, { profiles, agents: () => [] }), {
+    ok: false,
+    field: 'agent',
+    error: 'The board starts sessions with launch.command or launch.agent, which pick the agent themselves',
+  })
+  // launch.pi is read for a pi start only: one the tab's shell cannot type refuses it before anything runs.
+  assert.equal(await agentOf({ ...body, agent: 'pi' }, ['pi', '--model', 'sonnet']), 'pi')
+  const bad = await checkRequest({ ...body, agent: 'pi' }, { profiles, agents: both, pi: ['pi', "it's"] })
+  assert.ok(!bad.ok)
+  assert.equal(bad.field, 'agent')
+  assert.match(bad.error, /^launch\.pi: “it's” cannot be typed/)
+  assert.equal(await agentOf({ ...body, agent: 'claude' }, ['pi', "it's"]), 'claude')
+  assert.equal(await agentOf(body, 5), 'claude')
+})
+
 // ---------------------------------------------------------------- through the server
 async function unusedPort(): Promise<number> {
   const server = http.createServer()
@@ -180,6 +231,7 @@ type LaunchView = {
   newWorkspace: boolean
   profile?: string
   parent?: string | null
+  agent?: string
 }
 type BoardPayload = {
   stale: boolean
@@ -1335,6 +1387,92 @@ test('pi held by a dialog before it was ready: once answered in herdr, the board
     box.calls().some(a => a[0] === 'agent' && a[1] === 'read'),
     false,
   )
+}, 40_000)
+
+/** A folder for the board's PATH, with a `pi` in it or not (nothing else the board runs needs PATH). */
+const binWith = (box: Sandbox, pi: boolean) => {
+  const dir = join(box.dir, pi ? 'bin-pi' : 'bin')
+  mkdirSync(dir, { recursive: true })
+  if (pi) writeFileSync(join(dir, 'pi'), '#!/bin/sh\n', { mode: 0o755 })
+  return { PATH: dir }
+}
+
+test('the new-session window is told the agents a start may pick: pi when launch.pi is set or pi is on PATH, none with a launcher of the config’s own', async () => {
+  const claude = { id: 'claude', title: 'Claude Code' }
+  const pi = { id: 'pi', title: 'pi' }
+  const cases: [string, Record<string, unknown>, boolean, unknown[]][] = [
+    ['no pi', {}, false, [claude]],
+    ['pi on PATH', {}, true, [claude, pi]],
+    ['launch.pi', { launch: { pi: ['pi', '--model', 'sonnet'] } }, false, [claude, pi]],
+    ['launch.agent', VIA_HERDR, true, []],
+    ['launch.command', { launch: { command: [process.execPath, launcher] } }, true, []],
+  ]
+  for (const [what, cfg, onPath, agents] of cases) {
+    const { url } = await boardServer(cfg, box => binWith(box, onPath))
+    const options = (await (await fetch(`${url}/api/launch/options`)).json()) as { agents: unknown; agent: unknown }
+    assert.deepEqual(options.agents, agents, what)
+    assert.equal(options.agent, 'claude', what)
+  }
+}, 60_000)
+
+test('a start that asks for pi types launch.pi in place of the profile’s start command and arguments, in its env; one that names none is as before', async () => {
+  const cfg = (box: Sandbox) => ({
+    ...profilesWith(box, { work: { command: 'cld-work' } }),
+    launch: { pi: ['pi', '--thinking', 'high'] },
+  })
+  const { box, started, launched } = await boardServer(cfg)
+  writeConfig(box, cfg(box))
+  const piReady = { result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: 'pi', agent_status: 'idle' } } }
+  box.state({
+    ...HERDR,
+    ...OPENED,
+    'pane get': piReady,
+    'pane run': { result: null },
+    'pane read': { text: 'Session name set: Pi job' },
+  })
+  const job = { cwd: box.dir, category: 'acme', workspace: { id: 'wA' }, profile: 'work', message: 'Go.' }
+  const l = await launched(await started({ ...job, name: 'Pi job', agent: 'pi' }))
+  assert.equal(l.state, 'done', l.error)
+  assert.equal(l.agent, 'pi')
+  const runs = () =>
+    box
+      .calls()
+      .filter(a => a[0] === 'pane' && a[1] === 'run')
+      .map(a => a[3] ?? '')
+  assert.match(runs()[0] ?? '', /^pi --thinking high --session-id [0-9a-f-]{36}$/)
+  assert.deepEqual(callOf(box, 'tab', 'create').slice(-3), [
+    '--env',
+    `CLAUDE_CONFIG_DIR=${workDirOf(box)}`,
+    '--no-focus',
+  ])
+  assert.deepEqual(promptsSent(box), ['wA:p9 /name Pi job', 'wA:p9 Go.'])
+  assert.equal(cardOf(box.cards, runs()[0]?.split(' ').at(-1)).profileWant, 'work')
+  // The same start naming no agent: the profile's start command and its arguments, as before.
+  box.state({ ...HERDR, ...OPENED, 'pane get': PANE_READY, 'pane run': { result: null } })
+  const c = await launched(await started({ ...job, name: 'Claude job' }))
+  assert.equal(c.state, 'done', c.error)
+  assert.equal(c.agent, 'claude')
+  assert.equal(runs().length, 2)
+  assert.match(runs()[1] ?? '', /^cld-work --model sonnet --session-id [0-9a-f-]{36}$/)
+  assert.deepEqual(promptsSent(box).slice(2), ['wA:p9 /rename Claude job', 'wA:p9 Go.'])
+}, 60_000)
+
+test('pi on PATH and no launch.pi: a start in the board’s own profile that asks for pi types pi, with no --env', async () => {
+  const { box, started, launched } = await boardServer({}, box => binWith(box, true))
+  const piReady = { result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: 'pi', agent_status: 'idle' } } }
+  box.state({
+    ...HERDR,
+    'pane get': piReady,
+    'pane run': { result: null },
+    'pane read': { text: 'Session name set: Own pi' },
+  })
+  const l = await launched(
+    await started({ name: 'Own pi', cwd: box.dir, category: 'acme', workspace: { id: 'wA' }, agent: 'pi' }),
+  )
+  assert.equal(l.state, 'done', l.error)
+  assert.match(callOf(box, 'pane', 'run')[3] ?? '', /^pi --session-id [0-9a-f-]{36}$/)
+  assert.deepEqual(promptsSent(box), ['wA:p9 /name Own pi'])
+  noEnv(box)
 }, 40_000)
 
 test('a start command that picks its session itself gets no --session-id from the board', async () => {

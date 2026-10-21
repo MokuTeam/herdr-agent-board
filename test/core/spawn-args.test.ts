@@ -112,6 +112,35 @@ describe('spawn-agent options', () => {
     expect(() => parseArgs(['--name', 'A', '--cwd', 'x', '--profile'])).toThrow('--profile needs a value')
     expect(USAGE).toContain('[--profile <id>]')
   })
+
+  test('the agent: --agent pi for a new session; claude, or none, is as before', () => {
+    expect(parseArgs(['--name', 'A', '--cwd', 'x', '--agent', 'pi'])).toEqual({
+      name: 'A',
+      cwd: 'x',
+      timeoutSec: 120,
+      agent: 'pi',
+    })
+    expect(parseArgs(['-Name', 'A', '-Cwd', 'x', '-Agent', 'PI'])).toMatchObject({ agent: 'pi' })
+    // Claude is what it starts anyway: the options are those of a start that names none.
+    expect(parseArgs(['--name', 'A', '--cwd', 'x', '--agent', 'claude'])).toEqual({
+      name: 'A',
+      cwd: 'x',
+      timeoutSec: 120,
+    })
+    expect(() => parseArgs(['--name', 'A', '--cwd', 'x', '--agent', 'codex'])).toThrow(
+      '--agent must be claude or pi, not "codex"',
+    )
+    const id = '0f9c3b8e-1d2a-4c5b-9e8f-7a6b5c4d3e2f'
+    for (const picks of [
+      ['--resume', id],
+      ['--fork', id],
+    ])
+      expect(() => parseArgs(['--name', 'A', '--cwd', 'x', '--agent', 'pi', ...picks])).toThrow(
+        '--agent pi starts a new session: give it no --resume or --fork',
+      )
+    expect(parseArgs(['--name', 'A', '--cwd', 'x', '--agent', 'claude', '--resume', id])).toMatchObject({ resume: id })
+    expect(USAGE).toContain('[--agent claude|pi]')
+  })
 })
 
 describe('what spawn-agent types into the tab’s shell', () => {

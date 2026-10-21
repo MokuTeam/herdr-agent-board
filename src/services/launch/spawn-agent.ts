@@ -18,7 +18,8 @@
 // The start command may start pi instead of Claude (a profile's `command` of `pi`, or an alias
 // for it): herdr says which agent came up in the tab, and the session is named as that agent
 // names one (core/pi.ts namingOf: Claude's /rename, pi's /name). pi's session is keyed by its
-// file, which herdr reports once pi is up: the profile it is meant for goes on that card.
+// file, which herdr reports once pi is up: the profile it is meant for goes on that card. A start
+// asked for pi (--agent pi; the board's, when its request picks pi) types `launch.pi` instead.
 import { randomUUID } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -211,17 +212,26 @@ function movePiCard(carded: string, file: string, profile: string): void {
  * in herdr and in Claude, then type the brief. Throws with the reason when it cannot. The profile
  * comes from the options, else from `env` (the agent's own); `profiles` are the board's (default:
  * config.json's merged with the folders found in `home`). A profile's start command (its
- * `command`) is typed in place of `claude`, the profile's arguments after it.
+ * `command`) is typed in place of `claude`, the profile's arguments after it. With `agent` pi,
+ * `pi` (`launch.pi`, default: pi) is typed instead, without them: they are Claude's.
  */
 export async function spawnAgent(
   o: SpawnOptions,
   {
     claude = ['claude'],
+    pi = ['pi'],
     log = () => {},
     profiles,
     env = process.env,
     home = homedir(),
-  }: { claude?: string[]; log?: (text: string) => void; profiles?: Profile[]; env?: Env; home?: string } = {},
+  }: {
+    claude?: string[]
+    pi?: string[]
+    log?: (text: string) => void
+    profiles?: Profile[]
+    env?: Env
+    home?: string
+  } = {},
 ): Promise<SpawnResult> {
   const cwd = absoluteDir(o.cwd)
   let isDir = false
@@ -240,8 +250,9 @@ export async function spawnAgent(
           .replace(/^\uFEFF/, '')
           .trim()
       : (o.brief ?? '').trim()
-  // The profile's start command, else `claude`; a bad one throws here, before herdr is asked.
-  const program = [...(profileCommand(profile?.command) ?? claude), ...(profile?.args ?? [])]
+  // The profile's start command, else `claude`; a bad one throws here, before herdr is asked. pi's own when asked for.
+  const program =
+    o.agent === 'pi' ? [...pi] : [...(profileCommand(profile?.command) ?? claude), ...(profile?.args ?? [])]
   // A launch.claude that picks its own session (--resume, --continue) cannot resume another one.
   if (o.resume && choosesSession(program))
     throw new Error(`launch.claude picks its own session (${program.join(' ')}), so it cannot resume ${o.resume}`)

@@ -300,6 +300,8 @@ describe('routes', () => {
     const options = await fetch(`${url}/api/launch/options`)
     expect(options.status).toBe(200)
     expect(Object.keys((await options.json()) as object).sort()).toEqual([
+      'agent',
+      'agents',
       'board',
       'error',
       'focused',

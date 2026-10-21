@@ -68,6 +68,8 @@ export interface LaunchSpec {
   timeoutSec?: number
   /** What the board's own spawn-agent types into a new tab: a program, or the program and its arguments. */
   claude?: string | string[]
+  /** What it types for a start that asks for pi (core/launch/agents.ts): as `claude`; `pi` when unset. */
+  pi?: string | string[]
 }
 
 /** Where a launch from the board is: waiting for a dialog answered in herdr, or at the folder-trust one. */
@@ -117,6 +119,8 @@ export interface LaunchView {
   profile?: string
   /** The key of the card it was started from ("New here"): it runs in that session's profile. */
   parent?: string | null
+  /** The agent the request asked for (core/launch/agents.ts); `claude` when it named none. */
+  agent?: string
 }
 
 export interface Config {

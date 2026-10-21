@@ -6,7 +6,7 @@ import { t } from '../lang.ts'
 import { checkName } from './names.ts'
 
 export const USAGE =
-  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>] [--pane <pane id>] [--profile <id>]'
+  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>] [--pane <pane id>] [--profile <id>] [--agent claude|pi]'
 
 /** What spawn-agent was asked to start. */
 export interface SpawnOptions {
@@ -32,6 +32,8 @@ export interface SpawnOptions {
   configDir?: string
   /** The board's start: the tab's env as herdr makes it. */
   keepEnv?: boolean
+  /** pi: `launch.pi` is typed in place of the profile's start command and arguments (core/launch/agents.ts). */
+  agent?: 'pi'
   help?: never
 }
 
@@ -55,6 +57,7 @@ const OPTIONS: Record<string, Key> = {
   profile: 'profile',
   configdir: 'configDir',
   keepenv: 'keepEnv',
+  agent: 'agent',
   help: 'help',
   h: 'help',
 }
@@ -117,6 +120,13 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
   const { label, briefFile, brief, workspace, sessionId, resume, fork, pane, profile, configDir } = out
   if ([profile !== undefined, configDir !== undefined, keepEnv].filter(Boolean).length > 1)
     throw new Error('give one of --profile, --config-dir and --keep-env')
+  // Claude is what it starts anyway; pi only as a new session (its --resume and --fork are not Claude's).
+  const agent = out.agent?.trim().toLowerCase()
+  if (agent !== undefined && agent !== 'claude' && agent !== 'pi')
+    throw new Error(`--agent must be claude or pi, not "${out.agent}"`)
+  const pi = agent === 'pi'
+  if (pi && (resume !== undefined || fork !== undefined))
+    throw new Error('--agent pi starts a new session: give it no --resume or --fork')
   return {
     name,
     cwd: out.cwd,
@@ -132,6 +142,7 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     ...(profile !== undefined && { profile }),
     ...(configDir !== undefined && { configDir }),
     ...(keepEnv && { keepEnv }),
+    ...(pi && { agent: 'pi' as const }),
   }
 }
 
