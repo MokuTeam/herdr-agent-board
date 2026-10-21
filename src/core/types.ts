@@ -49,7 +49,20 @@ export interface Card {
   forkAt?: number
   /** The user keeps it in sight: first in its column, whole, left out of a tidy-up. */
   favorite?: boolean
+  /** The last question form its PreToolUse hook reported (core/held-question.ts). */
+  asking?: HeldQuestion
   [extra: string]: unknown
+}
+
+/** An AskUserQuestion call as the board's PreToolUse hook reported it, before its dialog opened. */
+export interface HeldQuestion {
+  id: string
+  /** Its first question, as a transcript's call gives it (core/transcript.ts toolDetail). */
+  detail: string
+  /** Its questions as questionsOf read them (null: the board cannot answer it). */
+  questions: FormQuestion[] | null
+  /** When the hook reported it. */
+  at: number
 }
 
 export interface Category {
@@ -157,6 +170,8 @@ export interface ToolCall {
   pending?: boolean
   /** An AskUserQuestion call's questions as questionsOf read them (null: the board cannot answer it). */
   questions?: FormQuestion[] | null
+  /** A call the transcript does not have yet: when the hook reported it (core/held-question.ts). */
+  reported?: number
 }
 
 export interface TranscriptInfo {
@@ -166,6 +181,8 @@ export interface TranscriptInfo {
   tool?: ToolCall | null
   question?: string
   replied?: boolean
+  /** The time of its newest user or assistant line. */
+  lastAt?: number
   activity?: number
   tokens?: number
   context?: number | null

@@ -6,6 +6,7 @@
 // session, another dialog, or a question already answered; anything unexpected stops it and the
 // user is told where it stopped.
 
+import { readCard } from '../adapters/cards.ts'
 import { agentGet, herdr, herdrText } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { inputDraft } from '../core/dialogs/input-box.ts'
@@ -30,6 +31,7 @@ import {
   screenIndex,
   typedOther,
 } from '../core/dialogs/questions.ts'
+import { answeredIn, waitingTool } from '../core/held-question.ts'
 import { t } from '../core/lang.ts'
 import { isPiItem, PI_AGENT } from '../core/pi.ts'
 import type { Item } from '../core/types.ts'
@@ -536,7 +538,8 @@ function failure(item: Item, r: DriveFailure): AnswerResult {
 /**
  * Answer the question form the session waits in. `body`: { toolUseId, answers } where answers
  * holds one { options: [labels], other } per question. The questions come from the transcript,
- * not from the page: the page only says which labels it picked.
+ * or from the card while Claude Code holds them back from it (core/held-question.ts), not from
+ * the page: the page only says which labels it picked.
  */
 export async function answerQuestions(
   deps: Pick<Deps, 'claude'>,
@@ -547,7 +550,8 @@ export async function answerQuestions(
   const body = bodyOf(rawBody)
   const bad = await checkPane(item)
   if (bad) return bad
-  const tool = deps.claude.transcriptInfo(item.transcript ?? null)?.tool
+  // checkPane found it waiting for the user.
+  const tool = waitingTool('blocked', deps.claude.transcriptInfo(item.transcript ?? null), readCard(item.key)?.asking)
   if (tool?.name !== 'AskUserQuestion' || !tool.pending || tool.id !== body.toolUseId)
     return { ok: false, gone: true, error: t('err.qa.answered', { name: item.name }) }
   const questions = tool.questions
@@ -556,10 +560,7 @@ export async function answerQuestions(
   if ('error' in resolved) return { ok: false, error: t(resolved.error) }
   const { picks } = resolved
   // The transcript holds the answer once Claude Code took it: proof the form is done.
-  const answered = (): boolean => {
-    const now = deps.claude.transcriptInfo(item.transcript ?? null)?.tool
-    return !!now && (now.id !== tool.id || !now.pending)
-  }
+  const answered = (): boolean => answeredIn(deps.claude.transcriptInfo(item.transcript ?? null), tool)
   const r = await driveQuestions({ questions, picks, io: { ...io, answered } })
   if (!r.ok) return failure(item, r)
   return {
