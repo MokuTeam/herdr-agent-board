@@ -81,7 +81,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.ran': 'What ran on the server',
     'server.panel.failedAt': 'Step {n} failed: {title}',
     'server.panel.rolledBack': 'Rolled back:',
-    'server.panel.result.rolled-back': 'Everything was rolled back: the server is as it was.',
+    'server.panel.result.rolled-back':
+      'Everything the run changed was rolled back; a Docker install that had finished stays.',
     'server.panel.result.rollback-failed':
       'The rollback did not finish: what is left is named in the output; Do it myself shows the rest.',
     'server.panel.result.busy': 'Another run of the board is going on there: look again in a minute.',
@@ -98,7 +99,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.caseName.4b': "the board's own Caddy on 8443, nginx on 80",
     'server.panel.fail.validate':
       "Your Caddy refused the config with the board's block (the line it names). Nothing was reloaded; your file is as it was. A site without braces as the last block is a usual cause.",
-    'server.panel.fail.reload': 'Your Caddy kept its running config; the file was put back and reloaded.',
+    'server.panel.fail.reload':
+      'The reload did not go through: your file was put back as it was. Your Caddy was reloaded again only if that reload had taken; otherwise it kept its running config.',
     'server.panel.fail.fetch-after':
       'One of your sites answered differently after the reload (its line is in the output): everything was rolled back.',
     'server.panel.pickCase': 'What holds 80 and 443 on your server?',
@@ -366,7 +368,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.ran': 'Что выполнилось на сервере',
     'server.panel.failedAt': 'Шаг {n} не удался: {title}',
     'server.panel.rolledBack': 'Откачено:',
-    'server.panel.result.rolled-back': 'Всё откачено: сервер такой, каким был.',
+    'server.panel.result.rolled-back': 'Всё, что изменил запуск, откачено; законченная установка Docker остаётся.',
     'server.panel.result.rollback-failed':
       'Откат не завершился: что осталось, названо в выводе; остальное — в «Сделаю сам».',
     'server.panel.result.busy': 'Там идёт другой запуск доски: осмотрите сервер снова через минуту.',
@@ -383,7 +385,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.caseName.4b': 'собственный Caddy доски на 8443, nginx на 80',
     'server.panel.fail.validate':
       'Ваш Caddy не принял конфигурацию с блоком доски (строку он называет). Ничего не перезагружалось; ваш файл такой, каким был. Частая причина — сайт без фигурных скобок последним блоком.',
-    'server.panel.fail.reload': 'Ваш Caddy остался на прежней конфигурации; файл возвращён и перезагружен.',
+    'server.panel.fail.reload':
+      'Перезагрузка не прошла: ваш файл возвращён как был. Ваш Caddy перезагружен снова, только если та перезагрузка успела примениться; иначе он остался на прежней конфигурации.',
     'server.panel.fail.fetch-after':
       'Один из ваших сайтов после перезагрузки ответил иначе (его строка в выводе): всё откачено.',
     'server.panel.pickCase': 'Что на вашем сервере занимает 80 и 443?',

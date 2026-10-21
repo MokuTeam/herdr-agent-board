@@ -648,7 +648,15 @@ test('a failure: the step and its lines, the hint, what was rolled back with ✓
     `✓ ${title(plan, validate - 1)}`,
     `✓ ${title(plan, validate - 3)}`,
   ])
-  expect(textsOf([failure], 'access-result')).toEqual(['Everything was rolled back: the server is as it was.'])
+  // a Docker install that finished stays after a rollback (call 20): the line does not say the server is as it was
+  expect(textsOf([failure], 'access-result')).toEqual([
+    'Everything the run changed was rolled back; a Docker install that had finished stays.',
+  ])
+  // a failed reload leaves no mark, so the rollback reloads only a reload that took
+  expect(t('server.panel.fail.reload')).toBe(
+    'The reload did not go through: your file was put back as it was. Your Caddy was reloaded again only if that reload had taken; otherwise it kept its running config.',
+  )
+  expect(ru('server.panel.fail.reload')).not.toContain('перезагружен.')
   expect(buttonsIn([failure]).map(textOf)).toEqual(['Look again', 'Do it myself'])
   // The failed step's output, open.
   const out = find(part, el => el.tag === 'details' && hasClass(el, 'access-out'))
