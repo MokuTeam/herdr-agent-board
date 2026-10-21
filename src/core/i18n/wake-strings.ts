@@ -64,6 +64,15 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.wake.portTaken': 'Port {port} is taken by another program',
     'setup.wake.portTakenFix': 'Set another "port" in the wake section of the board\'s config.json',
     'setup.wake.urlUnused': 'wakeUrl in config.json is not used while Sleep and wake is on',
+    'setup.wake.starting': 'Sleep and wake is starting',
+    // wake's ListAgents and SendMessage hooks in each shown profile, while it is on and not held
+    'setup.wake.hooks.ok': 'Sleep and wake’s hooks',
+    'setup.wake.hooks.okDetail': 'ListAgents and SendMessage in {file}',
+    'setup.wake.hooks.missing': 'Sleep and wake’s hooks are not in place',
+    'setup.wake.hooks.without':
+      'Without them, sessions do not see sleeping sessions in ListAgents, and a SendMessage to one does not wake it.',
+    'setup.wake.hooks.old': 'The separate herdr-wake plugin’s hooks are in place',
+    'setup.wake.hooks.oldDetail': 'Sessions here ask the separate plugin, not the board’s wake.',
     // Task 6.2: claude-tg
     // Task 7.2: Switch over…
   },
@@ -138,6 +147,14 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.wake.portTaken': 'Порт {port} занят другой программой',
     'setup.wake.portTakenFix': 'Задай другой "port" в разделе wake в config.json доски',
     'setup.wake.urlUnused': 'wakeUrl в config.json не используется, пока сон и пробуждение включены',
+    'setup.wake.starting': 'Сон и пробуждение запускаются',
+    // wake's ListAgents and SendMessage hooks in each shown profile, while it is on and not held
+    'setup.wake.hooks.ok': 'Хуки сна и пробуждения',
+    'setup.wake.hooks.okDetail': 'ListAgents и SendMessage в {file}',
+    'setup.wake.hooks.missing': 'Хуков сна и пробуждения нет',
+    'setup.wake.hooks.without': 'Без них сессии не видят спящих в ListAgents, а SendMessage спящей сессии её не будит.',
+    'setup.wake.hooks.old': 'Стоят хуки отдельного плагина herdr-wake',
+    'setup.wake.hooks.oldDetail': 'Сессии здесь спрашивают отдельный плагин, а не пробуждение доски.',
     // Task 6.2: claude-tg
     // Task 7.2: Switch over…
   },

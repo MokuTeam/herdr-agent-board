@@ -8,9 +8,10 @@
 import { join } from 'node:path'
 import type { CardStore } from './card-store.ts'
 import { translator } from './i18n/translator.ts'
-import { BOARD_EVENTS, commandsOf, normPath, ourCommands, TOAST_EVENTS } from './install-plan.ts'
+import { BOARD_EVENTS, commandsOf, normPath, ourCommands, TOAST_EVENTS, wakeHooksState } from './install-plan.ts'
 import type { MokupilotLauncher } from './mokupilot.ts'
 import type { Translator } from './types.ts'
+import type { WakeState } from './wake/status.ts'
 
 /** herdr-wake from this repository (herdr-wake/README.md): install, its Claude Code hooks, start. */
 export const WAKE_INSTALL = [
@@ -199,6 +200,12 @@ export interface SetupFacts {
   herdrConfig: string | null
   wakeUrl: string | null
   wake: { ok: boolean; status?: number; error?: string } | null
+  /**
+   * Sleep and wake (#119), once it ships or while config.json turns it on: its state
+   * (core/wake/status.ts), port, last error, sessions asleep, log file, and whether wakeUrl is set to
+   * another address than the default. Null or none: herdr-wake's line at wakeUrl, as before.
+   */
+  wakeNew?: { state: WakeState; port: number; error?: string; asleep: number; log: string; wakeUrlSet: boolean } | null
   launcher: LauncherFacts | null
   /** How the board would start MokuPilot (adapters/setup-facts.ts mokupilotCommand); none: not looked for. */
   mokupilot?: MokupilotLauncher | null
@@ -454,8 +461,56 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
       KEY_SNIPPET,
     )
 
-  // herdr-wake: putting sessions to sleep and waking them. Optional: no mark on the board for it.
-  if (!facts.wakeUrl)
+  // Sleep and wake: the board's own (#119) once it ships or while config.json turns it on; else
+  // herdr-wake's, as before. Optional: a mark on the board only when it is on and does not work.
+  const w = facts.wakeNew
+  if (w) {
+    const port = { port: w.port }
+    const log = { file: w.log }
+    if (w.state === 'running' || w.state === 'starting')
+      add(
+        'wake',
+        'ok',
+        t(w.state === 'running' ? 'setup.wake.running' : 'setup.wake.starting'),
+        t('setup.wake.runningDetail', { ...port, n: w.asleep }),
+      )
+    else if (w.state === 'off') add('wake', 'off', t('setup.wake.newOff'), '', t('setup.wake.newOffFix'))
+    else if (w.state === 'crashed')
+      add('wake', 'error', t('setup.wake.crashed'), w.error ?? '', t('setup.wake.crashedFix', log))
+    else if (w.state === 'held') add('wake', 'warn', t('setup.wake.held'), '', t('setup.wake.heldFix'))
+    else if (w.state === 'portTaken')
+      add('wake', 'error', t('setup.wake.portTaken', port), '', t('setup.wake.portTakenFix'))
+    else add('wake', 'warn', t('setup.wake.notAnswering', port), w.error ?? '', t('setup.wake.notAnsweringFix', log))
+    // On (and not held), the board talks to wake on its port, not at wakeUrl.
+    const on = w.state !== 'off' && w.state !== 'held'
+    if (on && w.wakeUrlSet) add('wakeUrl', 'na', t('setup.wake.urlUnused'))
+    // Its ListAgents and SendMessage hooks, in each shown profile (as the board's hooks are checked).
+    const wakeHooks = (
+      s: Pick<SetupFacts, 'settingsFile' | 'settings' | 'settingsError'>,
+      id = 'wakeHooks',
+      named: (title: string) => string = title => title,
+    ): void => {
+      if (s.settingsError) return // the hooks check says the file does not read
+      const state = wakeHooksState(s.settings, f.wakeHook)
+      if (state === 'in')
+        add(id, 'ok', named(t('setup.wake.hooks.ok')), t('setup.wake.hooks.okDetail', { file: s.settingsFile }))
+      else if (state === 'old')
+        add(id, 'warn', named(t('setup.wake.hooks.old')), t('setup.wake.hooks.oldDetail'), t('setup.wake.heldFix'))
+      else
+        add(
+          id,
+          'warn',
+          named(t('setup.wake.hooks.missing')),
+          t('setup.wake.hooks.without'),
+          t('setup.runInstall'),
+          INSTALL,
+        )
+    }
+    if (on && profiles.length <= 1) wakeHooks(facts)
+    else if (on)
+      for (const p of profiles)
+        if (p.exists) wakeHooks(p, `wakeHooks:${p.id}`, check => t('setup.inProfile', { profile: p.title, check }))
+  } else if (!facts.wakeUrl)
     add(
       'wake',
       'off',
