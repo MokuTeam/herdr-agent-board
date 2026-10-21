@@ -377,22 +377,32 @@ describe('the menu out of the gear', () => {
     }
 
     // Ending it: POST /api/logout with the board's header (the tunnel listener refuses a POST
-    // without it), then the gate asks hello again (UNPAIRED), also when the board did not answer.
-    const replies: Answer[] = [[200, { ok: true }], new TypeError('Failed to fetch')]
-    for (const answer of replies) {
+    // without it). Ended, or no login there any more (401): the gate asks hello again (UNPAIRED)
+    // and shows the login screen. Any other answer (Caddy's 502 while the board is closed) or none
+    // at all: the login may still hold on this device, so the board stays, saying so.
+    const cases: [Answer, string, string | null][] = [
+      [[200, { ok: true }], 'en', null],
+      [[401, { error: 'login' }], 'en', null],
+      [[502, {}], 'en', 'Not signed out: Error 502'],
+      [[500, { error: 'disk full' }], 'en', 'Not signed out: disk full'],
+      [new TypeError('Failed to fetch'), 'en', 'Not signed out: No connection to the board: Failed to fetch'],
+      [[502, {}], 'ru', 'Выход не выполнен: Ошибка 502'],
+    ]
+    for (const [answer, lang, note] of cases) {
       const posted = answers(answer)
+      const toasts: [string, boolean | undefined][] = []
       let asked = 0
       const again = () => void asked++
       addEventListener(UNPAIRED, again)
       try {
-        await endLogin()
+        await endLogin({ t: translator(lang), toast: (text, error) => void toasts.push([text, error]) })
       } finally {
         removeEventListener(UNPAIRED, again)
       }
       expect(sent(posted)).toEqual([['/api/logout', 'POST', '1', {}]])
       const headers = posted[0]?.init?.headers as Record<string, string> | undefined
       expect(headers?.['content-type']).toBe('application/json')
-      expect(asked).toBe(1)
+      expect([asked, toasts]).toEqual(note === null ? [1, []] : [0, [[note, true]]])
     }
   })
 

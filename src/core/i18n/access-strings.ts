@@ -204,6 +204,7 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'login.refused': 'This address does not reach the board.',
     'offline.aboutDomain': 'The computer may be asleep, or the board closed. This page tries again by itself.',
     'set.signOut': 'Sign out',
+    'set.signOutFailed': 'Not signed out: {why}',
   },
   ru: {
     'tunnel.field.host': 'Сервер',
@@ -400,5 +401,6 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'login.refused': 'По этому адресу доска недоступна.',
     'offline.aboutDomain': 'Возможно, компьютер спит или доска закрыта. Страница сама попробует ещё раз.',
     'set.signOut': 'Выйти',
+    'set.signOutFailed': 'Выход не выполнен: {why}',
   },
 }

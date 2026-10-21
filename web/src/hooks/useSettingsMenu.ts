@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react'
 import type { FoldMode } from '../../../src/core/fold-mode.ts'
 import { LANGUAGES, translator } from '../../../src/core/i18n/translator.ts'
 import type { Translator } from '../../../src/core/types.ts'
-import { api, errorText, postJson } from '../api/client.ts'
+import { ApiError, api, errorText, isReply, postJson, replyOf } from '../api/client.ts'
 import type { MenuEngine, MenuSource } from '../components/menu/menu-engine.ts'
 import { useLanguage } from '../i18n/I18nProvider.tsx'
 import { type Dock, isDock } from '../models/panel-layout.ts'
@@ -100,13 +100,20 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
 
 /**
  * Sign out: this page's own login ends (POST /api/logout, the tunnel listener's), then the gate asks
- * hello again (UNPAIRED) and shows the login screen; with no answer from the board, it says so.
+ * hello again (UNPAIRED) and shows the login screen; a 401 (no login there any more) too. Any other
+ * answer (Caddy's 502 while the board is closed), or none: the login may still hold on this device,
+ * so the board stays on show and a toast says it was not signed out (the gate asked again would
+ * keep the board on show all the same, #108, and say nothing).
  */
-export async function endLogin(): Promise<void> {
+export async function endLogin({ t, toast }: Pick<LanguageDeps, 't' | 'toast'>): Promise<void> {
   try {
-    await postJson('/api/logout', {})
-  } catch {
-    // No connection: the gate's hello finds none either and says so.
+    const res = await postJson('/api/logout', {})
+    if (!res.ok && res.status !== 401) {
+      const reply = await replyOf(res)
+      throw new ApiError(res.status, isReply(reply) ? reply : {})
+    }
+  } catch (err) {
+    return toast(t('set.signOutFailed', { why: errorText(err, t) }), true)
   }
   dispatchEvent(new Event(UNPAIRED))
 }
@@ -255,7 +262,10 @@ export function useSettingsMenu(
       access: () => !remotePage(),
       openAccess: () => latest.current.openAccess(),
       signOut: () => remotePage() && keptAuth() === 'login',
-      endLogin: () => void endLogin(),
+      endLogin: () => {
+        const { t, board } = latest.current
+        void endLogin({ t, toast: board.toast })
+      },
     })
     return settingsGear(menu, open, setExpanded)
   })
