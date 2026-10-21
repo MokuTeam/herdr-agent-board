@@ -1,0 +1,447 @@
+import { expect, test } from 'bun:test'
+import type { ReapEntry, ReapPane } from '../../../src/core/wake/reaper.ts'
+import {
+  asWakeSessions,
+  awakeOf,
+  findSession,
+  KEEP_GONE_MS,
+  markAwake,
+  rememberSeen,
+  type Seen,
+  type SeenSnapshot,
+  sleepingOf,
+  type WakeSessions,
+} from '../../../src/core/wake/sessions.ts'
+
+const now = Date.parse('2026-10-21T12:00:00Z')
+const min = (m: number) => now - m * 60_000
+const SID = '0f8fad5b-d9cb-469f-a165-70867728950e'
+const SID2 = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
+const SID3 = '16fd2706-8baf-433b-82eb-8c7fada847da'
+const WORK = 'C:\\h\\.claude-work'
+const PROJECT = 'C:\\Work\\Проект x 50%'
+const work: Seen = { name: 'Billing', profileDir: WORK, profile: 'work' }
+const workspaces = [{ workspace_id: 'w1', label: 'Счета 100%' }]
+
+const claude = (pane: string, session: string, more: Partial<ReapPane> = {}): ReapPane => ({
+  pane_id: pane,
+  workspace_id: 'w1',
+  agent: 'claude',
+  agent_status: 'idle',
+  agent_session: { value: session },
+  ...more,
+})
+const shell = (pane: string, more: Partial<ReapPane> = {}): ReapPane => ({
+  pane_id: pane,
+  workspace_id: 'w1',
+  agent: null,
+  ...more,
+})
+const view = (panes: ReapPane[], takenAt = now): SeenSnapshot => ({ workspaces, panes, takenAt })
+
+/** The previous sessions frozen through and through: a function that changes them throws. */
+function frozen(sessions: WakeSessions): WakeSessions {
+  for (const e of Object.values(sessions)) Object.freeze(e)
+  return Object.freeze(sessions)
+}
+
+test('a Claude seen in a pane is remembered with its name and its profile folder', () => {
+  const snap = view([claude('w1:p1', SID, { cwd: PROJECT, terminal_title_stripped: 'Billing work' })])
+  const r = rememberSeen(snap, frozen({}), new Map([[SID, work]]), now)
+  expect(r).toEqual({
+    sessions: {
+      'w1:p1': {
+        session: SID,
+        name: 'Billing',
+        cwd: PROJECT,
+        title: 'Billing work',
+        seen_at: now,
+        profileDir: WORK,
+        profile: 'work',
+      },
+    },
+    changed: true,
+    renames: [],
+    exited: [],
+  })
+  expect(Object.keys(r.sessions['w1:p1'] ?? {})).toEqual([
+    'session',
+    'name',
+    'cwd',
+    'title',
+    'seen_at',
+    'profileDir',
+    'profile',
+  ])
+
+  // The default folder has no listed id: the folder only.
+  const dflt = rememberSeen(snap, {}, new Map([[SID, { name: 'Billing', profileDir: 'C:\\h\\.claude' }]]), now)
+  expect(dflt.sessions['w1:p1']?.profileDir).toBe('C:\\h\\.claude')
+  expect('profile' in (dflt.sessions['w1:p1'] ?? {})).toBe(false)
+
+  // Seen again within a minute, unchanged: nothing to write.
+  expect(rememberSeen(snap, frozen(r.sessions), new Map([[SID, work]]), now + 30_000).changed).toBe(false)
+  // Renamed within that minute: written again under its new name.
+  const renamed = rememberSeen(snap, frozen(r.sessions), new Map([[SID, { ...work, name: 'Счета' }]]), now + 30_000)
+  expect(renamed.changed).toBe(true)
+  expect(renamed.sessions['w1:p1']).toMatchObject({ name: 'Счета', seen_at: now + 30_000, profile: 'work' })
+
+  // Out of the registries for a moment (e.g. on its way out): the name and folder it had are kept.
+  const later = rememberSeen(snap, frozen(r.sessions), new Map(), now + 90_000)
+  expect(later.changed).toBe(true)
+  expect(later.sessions['w1:p1']).toMatchObject({ name: 'Billing', seen_at: now + 90_000, profileDir: WORK })
+  expect(later.sessions['w1:p1']?.profile).toBe('work')
+  // What the registries show wins over what the entry had.
+  const moved = rememberSeen(snap, frozen(r.sessions), new Map([[SID, { profileDir: 'C:\\h\\.claude' }]]), now + 90_000)
+  expect(moved.sessions['w1:p1']).toMatchObject({ name: 'Billing', profileDir: 'C:\\h\\.claude' })
+  expect('profile' in (moved.sessions['w1:p1'] ?? {})).toBe(false)
+
+  // Another session in the pane: nothing of the one before but the title.
+  const other = rememberSeen(view([claude('w1:p1', SID2)]), frozen(r.sessions), new Map(), now + 90_000)
+  expect(other.sessions['w1:p1']).toEqual({ session: SID2, name: '', title: 'Billing work', seen_at: now + 90_000 })
+
+  // Not Claude, or no session id: not remembered.
+  const none = rememberSeen(view([{ ...claude('w1:p1', SID), agent: 'pi' }, shell('w1:p2')]), {}, new Map(), now)
+  expect(none).toEqual({ sessions: {}, changed: false, renames: [], exited: [] })
+})
+
+test('a session the user exited counts as asleep, its pane renamed 💤 <name>', () => {
+  const prev = frozen({
+    'w1:p2': {
+      session: SID,
+      name: 'Billing',
+      cwd: PROJECT,
+      title: 'Billing work',
+      seen_at: min(5),
+      profileDir: WORK,
+      profile: 'work',
+    },
+  })
+  const r = rememberSeen(view([shell('w1:p2')]), prev, new Map(), now)
+  const e = r.sessions['w1:p2']
+  expect(e?.slept_at).toBe(e?.seen_at ?? -1)
+  expect(e).toEqual({
+    ...prev['w1:p2'],
+    session: SID,
+    name: 'Billing',
+    seen_at: min(5),
+    slept_at: min(5),
+    exited: true,
+  })
+  expect(r.renames).toEqual([{ pane: 'w1:p2', label: '💤 Billing' }])
+  expect(r.exited).toEqual(['w1:p2'])
+  expect(r.changed).toBe(true)
+
+  // No name: the title it had.
+  const untitled = frozen({ 'w1:p2': { session: SID, name: '', title: 'Docs', seen_at: min(5) } })
+  expect(rememberSeen(view([shell('w1:p2')]), untitled, new Map(), now).renames).toEqual([
+    { pane: 'w1:p2', label: '💤 Docs' },
+  ])
+
+  // On its way to sleep (between /exit and the prompt): not an exit by hand.
+  const going = rememberSeen(view([shell('w1:p2')]), prev, new Map(), now, new Set(['w1:p2']))
+  expect(going).toEqual({ sessions: prev, changed: false, renames: [], exited: [] })
+
+  // Still in a registry: it runs somewhere, it was not exited.
+  const running = rememberSeen(view([shell('w1:p2')]), prev, new Map([[SID, work]]), now)
+  expect(running.exited).toEqual([])
+  expect(running.sessions['w1:p2']?.slept_at).toBeUndefined()
+})
+
+test('Claude back in a sleeping pane after the sleep is awake; a view older than the sleep is not', () => {
+  const prev = frozen({
+    'w1:p2': {
+      session: SID,
+      name: 'Billing',
+      title: 'Billing',
+      seen_at: now - 30_000,
+      slept_at: now - 10_000,
+      exited: true,
+      profileDir: WORK,
+      profile: 'work',
+    },
+  })
+  const panes = [claude('w1:p2', SID)]
+
+  const older = rememberSeen(view(panes, now - 20_000), prev, new Map(), now)
+  expect(older).toEqual({ sessions: prev, changed: false, renames: [], exited: [] })
+
+  const newer = rememberSeen(view(panes, now - 5_000), prev, new Map(), now)
+  expect(newer.renames).toEqual([{ pane: 'w1:p2', label: null }])
+  expect(newer.changed).toBe(true)
+  expect(newer.sessions['w1:p2']).toEqual({
+    session: SID,
+    name: 'Billing',
+    title: 'Billing',
+    seen_at: now - 30_000,
+    profileDir: WORK,
+    profile: 'work',
+  })
+
+  // A view without its time counts as older than any sleep.
+  expect(rememberSeen({ workspaces, panes }, prev, new Map(), now).renames).toEqual([])
+  // Still on its way to sleep: not awake, and the sleep is kept when the entry is written again.
+  const going = rememberSeen(view(panes, now - 5_000), prev, new Map(), now + 60_000, new Set(['w1:p2']))
+  expect(going.renames).toEqual([])
+  expect(going.sessions['w1:p2']).toMatchObject({ seen_at: now + 60_000, slept_at: now - 10_000, profileDir: WORK })
+})
+
+test('a session running in another pane is awake there; a pane gone for 7 days is forgotten, one gone for 6 is kept', () => {
+  const prev = frozen({
+    'w1:p2': { session: SID, name: 'Billing', title: 'Billing', seen_at: min(180), slept_at: min(180) },
+    'w2:p1': { session: SID2, name: 'Old', seen_at: now - KEEP_GONE_MS - 1 },
+    'w2:p2': { session: SID3, name: 'Six', seen_at: now - 6 * 86_400_000 },
+    'w2:p3': { session: SID3, name: 'Seven to the ms', seen_at: now - KEEP_GONE_MS },
+  })
+  const snap = view([shell('w1:p2'), claude('w1:p3', SID, { cwd: PROJECT })])
+  const r = rememberSeen(snap, prev, new Map([[SID, work]]), now)
+  expect(r.renames).toEqual([{ pane: 'w1:p2', label: null }])
+  expect(r.sessions['w1:p2']).toEqual({ session: SID, name: 'Billing', title: 'Billing', seen_at: min(180) })
+  expect(r.sessions['w1:p3']).toMatchObject({ session: SID, name: 'Billing', seen_at: now, profileDir: WORK })
+  expect(Object.keys(r.sessions).sort()).toEqual(['w1:p2', 'w1:p3', 'w2:p2', 'w2:p3'])
+  expect(r.changed).toBe(true)
+  expect(KEEP_GONE_MS).toBe(7 * 86_400_000)
+
+  // While its old pane is on its way to sleep, that pane stays asleep.
+  const going = rememberSeen(snap, prev, new Map([[SID, work]]), now, new Set(['w1:p2']))
+  expect(going.renames).toEqual([])
+  expect(going.sessions['w1:p2']?.slept_at).toBe(min(180))
+})
+
+test('markAwake: the pane’s entry without its sleep, the rest kept; nothing to do for one awake', () => {
+  const prev = frozen({
+    'w1:p2': { session: SID, name: 'Billing', seen_at: min(5), slept_at: min(5), exited: true, profileDir: WORK, x: 1 },
+    'w1:p3': { session: SID2, name: 'Docs', seen_at: min(1) },
+  })
+  expect(markAwake(prev, 'w1:p2')).toEqual({
+    'w1:p2': { session: SID, name: 'Billing', seen_at: min(5), profileDir: WORK, x: 1 },
+    'w1:p3': { session: SID2, name: 'Docs', seen_at: min(1) },
+  })
+  expect(markAwake(prev, 'w1:p3')).toBeNull()
+  expect(markAwake(prev, 'w9:p9')).toBeNull()
+})
+
+test('the sleeping list: field for field as the old router’s, plus each session’s profile', () => {
+  const at = Date.parse('2026-10-21T11:00:00Z')
+  const sessions: WakeSessions = {
+    'w1:p2': {
+      session: SID,
+      name: 'Billing',
+      title: 'Billing',
+      seen_at: at,
+      slept_at: at,
+      profileDir: WORK,
+      profile: 'work',
+    },
+    'w1:p3': { session: SID2, name: '', title: 'Docs', seen_at: at, slept_at: at, exited: true },
+    'w1:p4': { session: SID3, name: 'Running', seen_at: at, slept_at: at },
+    'w9:p1': { session: SID3, name: 'Gone', seen_at: at, slept_at: at },
+    'w1:p5': { session: SID3, name: 'Awake', seen_at: at },
+    'w1:p6': { session: SID3, name: 'No label', seen_at: at, slept_at: at, profileDir: 'C:\\h\\.claude' },
+  }
+  const snap: SeenSnapshot = {
+    workspaces,
+    panes: [
+      shell('w1:p2'),
+      shell('w1:p3'),
+      claude('w1:p4', SID3),
+      shell('w1:p5'),
+      shell('w1:p6', { workspace_id: 'w7' }),
+    ],
+  }
+  const list = sleepingOf(snap, sessions)
+  expect(list).toEqual([
+    {
+      name: 'Billing',
+      pane: 'w1:p2',
+      session: SID,
+      workspace: 'Счета 100%',
+      slept_at: '2026-10-21T11:00:00.000Z',
+      exited: false,
+      profile: { dir: 'C:\\h\\.claude-work', id: 'work' },
+    },
+    {
+      name: 'Docs',
+      pane: 'w1:p3',
+      session: SID2,
+      workspace: 'Счета 100%',
+      slept_at: '2026-10-21T11:00:00.000Z',
+      exited: true,
+    },
+    {
+      name: 'No label',
+      pane: 'w1:p6',
+      session: SID3,
+      workspace: '',
+      slept_at: '2026-10-21T11:00:00.000Z',
+      exited: false,
+      profile: { dir: 'C:\\h\\.claude' },
+    },
+  ])
+  expect(Object.keys(list[0] ?? {})).toEqual(['name', 'pane', 'session', 'workspace', 'slept_at', 'exited', 'profile'])
+  expect('profile' in (list[1] ?? {})).toBe(false)
+  expect(Object.keys(list[2]?.profile ?? {})).toEqual(['dir'])
+})
+
+test('the awake list: field for field as the old router’s, plus each session’s profile; a missing since does not throw', () => {
+  const ws = 'Счета 100%'
+  const plan: ReapEntry[] = [
+    {
+      pane: 'w1:p1',
+      name: 'Billing',
+      workspace: ws,
+      sleep: true,
+      reason: 'idle 75 min',
+      status: 'idle',
+      since: min(75),
+      idleMin: 75,
+      session: SID,
+    },
+    {
+      pane: 'w1:p3',
+      name: 'Docs',
+      workspace: ws,
+      sleep: false,
+      reason: 'idle 20 min',
+      waiting: true,
+      status: 'idle',
+      since: min(20),
+      idleMin: 20,
+    },
+    {
+      pane: 'w1:p4',
+      name: 'Build',
+      workspace: ws,
+      sleep: false,
+      reason: 'status busy',
+      status: 'busy',
+      since: min(2),
+      idleMin: 2,
+    },
+    { pane: 'w1:p5', name: 'w1:p5', workspace: ws, sleep: false, reason: 'not in the session registry' },
+    { pane: 'w1:p6', name: 'New', workspace: ws, sleep: false, reason: 'idle time unknown', status: 'idle' },
+  ]
+  const profiles = new Map([
+    ['w1:p1', { dir: WORK, id: 'work' }],
+    ['w1:p3', { dir: 'C:\\h\\.claude' }],
+  ])
+  const on = awakeOf(plan, { enabled: true, idleMinutes: 60 }, profiles)
+  expect(on).toEqual([
+    {
+      name: 'Billing',
+      pane: 'w1:p1',
+      workspace: ws,
+      status: 'idle',
+      since: '2026-10-21T10:45:00.000Z',
+      sleeps_in_min: 0,
+      kept: null,
+      profile: { dir: WORK, id: 'work' },
+    },
+    {
+      name: 'Docs',
+      pane: 'w1:p3',
+      workspace: ws,
+      status: 'idle',
+      since: '2026-10-21T11:40:00.000Z',
+      sleeps_in_min: 40,
+      kept: null,
+      profile: { dir: 'C:\\h\\.claude' },
+    },
+    {
+      name: 'Build',
+      pane: 'w1:p4',
+      workspace: ws,
+      status: 'busy',
+      since: '2026-10-21T11:58:00.000Z',
+      sleeps_in_min: null,
+      kept: 'status busy',
+    },
+    {
+      name: 'New',
+      pane: 'w1:p6',
+      workspace: ws,
+      status: 'idle',
+      since: '',
+      sleeps_in_min: null,
+      kept: 'idle time unknown',
+    },
+  ])
+  expect(Object.keys(on[0] ?? {})).toEqual([
+    'name',
+    'pane',
+    'workspace',
+    'status',
+    'since',
+    'sleeps_in_min',
+    'kept',
+    'profile',
+  ])
+  expect('profile' in (on[2] ?? {})).toBe(false)
+
+  const off = awakeOf(plan, { enabled: false, idleMinutes: 60 }, profiles)
+  expect(off.map(a => [a.sleeps_in_min, a.kept])).toEqual([
+    [null, 'reaper off'],
+    [null, 'reaper off'],
+    [null, 'reaper off'],
+    [null, 'reaper off'],
+  ])
+})
+
+test('findSession: by name with a [hex] suffix, by pane, by session id, any case; a pane herdr no longer has finds nothing', () => {
+  const sessions: WakeSessions = {
+    'w1:p2': { session: SID, name: 'Billing', seen_at: min(5), slept_at: min(5), profileDir: WORK, pane: 'w7:p7' },
+    'w1:p3': { session: SID2, name: 'Docs', seen_at: min(1) },
+    'w9:p1': { session: SID3, name: 'Gone', seen_at: min(1) },
+    'w1:p4': { session: 'x', name: '', seen_at: min(1) },
+  }
+  const snap = view([shell('w1:p2'), claude('w1:p3', SID2), shell('w1:p4')])
+
+  expect(findSession('billing [1a2b3c]', snap, sessions)).toEqual({
+    session: SID,
+    name: 'Billing',
+    seen_at: min(5),
+    slept_at: min(5),
+    profileDir: WORK,
+    pane: 'w1:p2',
+    live: false,
+  })
+  expect(findSession('  BILLING  ', snap, sessions)?.pane).toBe('w1:p2')
+  expect(findSession('W1:P3', snap, sessions)).toMatchObject({ pane: 'w1:p3', name: 'Docs', live: true })
+  expect(findSession(SID.toUpperCase(), snap, sessions)?.pane).toBe('w1:p2')
+  expect(findSession('w7:p7', snap, sessions)).toBeUndefined()
+  expect(findSession('Gone', snap, sessions)).toBeUndefined()
+  expect(findSession('w9:p1', snap, sessions)).toBeUndefined()
+  expect(findSession(SID3, snap, sessions)).toBeUndefined()
+  expect(findSession('', snap, sessions)).toBeUndefined()
+  expect(findSession(undefined, snap, sessions)).toBeUndefined()
+})
+
+test('asWakeSessions keeps unknown fields and drops what is not an entry', () => {
+  expect(asWakeSessions({ 'w1:p1': { session: 's', seen_at: 1, extra: 1 }, bad: 3, 'w1:p2': { session: 2 } })).toEqual({
+    'w1:p1': { session: 's', name: '', seen_at: 1, extra: 1 },
+  })
+  for (const v of [null, undefined, [], 'x', 3, true]) expect(asWakeSessions(v)).toBeNull()
+  expect(asWakeSessions({})).toEqual({})
+
+  // A known field of the wrong type is left out, so what the type says holds.
+  const odd = asWakeSessions({
+    'w1:p3': { session: SID, name: 5, seen_at: 1, slept_at: 'x', exited: 'yes', cwd: 3, profileDir: 7, profile: null },
+    'w1:p4': { session: SID, seen_at: '1' },
+    'w1:p5': { session: SID, seen_at: Number.POSITIVE_INFINITY },
+    'w1:p6': [SID],
+  })
+  expect(odd).toStrictEqual({ 'w1:p3': { session: SID, name: '', seen_at: 1 } })
+
+  const whole = {
+    session: SID,
+    name: 'Billing',
+    cwd: PROJECT,
+    title: 't',
+    seen_at: 1,
+    slept_at: 2,
+    exited: true,
+    profileDir: WORK,
+    profile: 'work',
+  }
+  expect(asWakeSessions(JSON.parse(JSON.stringify({ 'w1:p1': whole })))).toStrictEqual({ 'w1:p1': whole })
+})
