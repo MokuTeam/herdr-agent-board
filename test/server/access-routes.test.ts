@@ -475,17 +475,15 @@ describe('Remote access, set up from the local board', () => {
 })
 
 describe('the board restarts: never two ssh, and none left behind', () => {
+  /** The config of a board with the tunnel on, on these ports. */
+  const boardConfig = (ports: { web: number; tunnel: number }) => ({
+    language: 'en',
+    port: ports.web,
+    tunnel: { on: true, host: 'ssh.example.com', user: 'boardtunnel', domain: DOMAIN, port: ports.tunnel },
+  })
   /** A board with the tunnel on and the login set up, on these ports, with the fake as ssh. */
   async function startBoard(box: Sandbox, ports: { web: number; tunnel: number; proxy: number }) {
-    const { proc } = await serveBoard(
-      box,
-      {
-        language: 'en',
-        port: ports.web,
-        tunnel: { on: true, host: 'ssh.example.com', user: 'boardtunnel', domain: DOMAIN, port: ports.tunnel },
-      },
-      await fakeEnv(box, ports.proxy),
-    )
+    const { proc } = await serveBoard(box, boardConfig(ports), await fakeEnv(box, ports.proxy))
     return { proc, api: local(`http://127.0.0.1:${ports.web}`) }
   }
 
@@ -556,6 +554,108 @@ describe('the board restarts: never two ssh, and none left behind', () => {
     expect(alive(first)).toBe(false)
     expect(ssh.pids().filter(alive)).toHaveLength(1)
   }, 60_000)
+
+  test('a second board that cannot take the web port leaves the first one’s ssh and its record alone', async () => {
+    const box = await sandbox()
+    await seedAccess(box)
+    const at = await freePorts()
+    const ssh = fakeSsh(box, at.proxy)
+    const a = await startBoard(box, at)
+    await a.api.viewWhen(v => v.tunnel.status.state === 'connected', 30_000)
+    const recordFile = join(stateFolder(box), 'tunnel', 'ssh-pid.json')
+    const record = readFileSync(recordFile, 'utf8')
+    const pid = Number((JSON.parse(record) as Reply).pid)
+    const calls = ssh.sshCalls().length
+
+    // The same settings, state and web port: it cannot listen there, and ends.
+    const b = box.run(
+      'server',
+      {
+        categories: [{ id: 'other', title: 'Other', color: 'gray' }],
+        wakeUrl: null,
+        refreshSec: 3600,
+        ...boardConfig(at),
+      },
+      await fakeEnv(box, at.proxy),
+    )
+    onTestFinished(() => b.kill())
+    const ended = await Promise.race([b.exited, Bun.sleep(30_000).then(() => null)])
+    expect(ended?.code).not.toBe(0)
+    expect(b.messages.some(m => (m as { ready?: boolean }).ready)).toBe(false)
+    // Its ssh and its record are the first board's still; it started none of its own.
+    expect(alive(pid)).toBe(true)
+    expect(readFileSync(recordFile, 'utf8')).toBe(record)
+    expect(ssh.sshCalls()).toHaveLength(calls)
+    expect(ssh.pids().filter(alive)).toEqual([pid])
+    expect((await a.api.view()).tunnel.status.state).toBe('connected')
+  }, 60_000)
+})
+
+describe('config.json edited by hand while the tunnel is connected', () => {
+  test('a host that fails its checks ends the ssh, and no ssh gets it, Test connection’s neither', async () => {
+    const box = await sandbox()
+    await seedAccess(box)
+    const at = await freePorts()
+    const ssh = fakeSsh(box, at.proxy)
+    const settings = { on: true, host: 'ssh.example.com', user: 'boardtunnel', domain: DOMAIN, port: at.tunnel }
+    const good = {
+      language: 'en',
+      categories: [{ id: 'other', title: 'Other', color: 'gray' }],
+      wakeUrl: null,
+      refreshSec: 3600,
+      port: at.web,
+      tunnel: settings,
+    }
+    // The board reads config.json as it changes, as the real one does (TEST_LIVE_CONFIG).
+    const configPath = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
+    mkdirSync(join(configPath, '..'), { recursive: true })
+    writeFileSync(configPath, JSON.stringify(good, null, 2))
+    const { proc } = await serveBoard(box, good, { ...(await fakeEnv(box, at.proxy)), TEST_LIVE_CONFIG: '1' })
+    const api = local(`http://127.0.0.1:${at.web}`)
+    await api.viewWhen(v => v.tunnel.status.state === 'connected', 30_000)
+    // A key, so that Test connection gets past its first step.
+    expect((await api.op({ op: 'key-generate' }))[0]).toBe(200)
+    const recordFile = join(stateFolder(box), 'tunnel', 'ssh-pid.json')
+    const state = stateFolder(box)
+    const line = sshArgs({
+      conf: tunnelConfig(settings),
+      key: join(state, 'tunnel', 'id_ed25519'),
+      knownHosts: join(state, 'tunnel', 'known_hosts'),
+      target: at.tunnel,
+    })
+
+    for (const bad of ['-oProxyCommand=calc', 'a b', 'x@y']) {
+      const pid = Number((JSON.parse(readFileSync(recordFile, 'utf8')) as Reply).pid)
+      expect(alive(pid)).toBe(true)
+      const before = reloads(proc)
+      writeFileSync(configPath, JSON.stringify({ ...good, tunnel: { ...settings, host: bad } }, null, 2))
+      await until(() => reloads(proc) > before)
+      const v = await api.viewWhen(x => x.tunnel.status.state === 'off')
+      expect(v.tunnel.problems.map(p => p.field)).toEqual(['host'])
+      await until(() => !alive(pid))
+      await until(() => !existsSync(recordFile))
+      // Test connection takes the same settings (app.ts lineTo): no ssh of its own with them either.
+      const [status, answer] = await api.op({ op: 'test' })
+      expect(status).toBe(200)
+      const steps = answer.steps as { id: string; ok: boolean | null; detail: string }[]
+      expect(steps.map(s => [s.id, s.ok])).toEqual([
+        ['ssh', true],
+        ['forward', false],
+        ['domain', null],
+      ])
+      expect(steps[1]?.detail).toBe('the settings do not check out')
+      // A moment for an ssh that would start late.
+      await Bun.sleep(500)
+      expect(ssh.pids().filter(alive)).toEqual([])
+      expect(ssh.sshCalls().filter(args => args.some(arg => arg.includes(bad)))).toEqual([])
+      // Put right: the tunnel is back.
+      writeFileSync(configPath, JSON.stringify(good, null, 2))
+      await api.viewWhen(x => x.tunnel.status.state === 'connected', 30_000)
+    }
+    // Every ssh the board ran had the line that checks out.
+    expect([...new Set(ssh.sshCalls().map(args => JSON.stringify(args)))]).toEqual([JSON.stringify(line)])
+    expect(ssh.pids().filter(alive)).toHaveLength(1)
+  }, 120_000)
 })
 
 /** The local board's event stream: each payload it pushed, oldest first. */
