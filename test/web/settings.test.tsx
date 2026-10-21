@@ -239,6 +239,74 @@ describe('the menu out of the gear', () => {
     expect(settingPicked('phones')).toEqual({ kind: 'phones' })
   })
 
+  test('the local board offers Remote access…, after Phones…; picked, it opens its panel', () => {
+    const now = {
+      t: translator('en'),
+      theme: 'auto',
+      languages: { en: 'English' },
+      canEdit: true,
+      dock: 'right' as const,
+      sleepers: true,
+      profiles: false,
+    }
+    const ids = (items: readonly MenuEntry[]) => items.map(i => ('id' in i ? i.id : '—'))
+    // Not said (a page through Tailscale or the domain), or said no: today's list exactly.
+    expect(ids(settingsMenu(now))).toEqual(['theme', 'lang', 'panel', '—', 'sleepers'])
+    expect(ids(settingsMenu({ ...now, access: false }))).toEqual(['theme', 'lang', 'panel', '—', 'sleepers'])
+    expect(ids(settingsMenu({ ...now, profiles: true, phones: true, access: true }))).toEqual([
+      'theme',
+      'lang',
+      'panel',
+      'profiles',
+      'phones',
+      'access',
+      '—',
+      'sleepers',
+    ])
+    expect(settingsMenu({ ...now, access: true })[3]).toEqual({ id: 'access', label: 'Remote access…' })
+    expect(settingsMenu({ ...now, t: translator('ru'), access: true })[3]).toEqual({
+      id: 'access',
+      label: 'Удалённый доступ…',
+    })
+    expect(settingPicked('access')).toEqual({ kind: 'access' })
+
+    // From the gear: offered as the page says, and picked, it opens the panel.
+    for (const local of [false, true]) {
+      const calls: Call[] = []
+      let opened: readonly MenuEntry[] = []
+      let pick = (_id: string): void => {}
+      settingsMenuFrom({
+        menu: {
+          open: (items, options) => {
+            opened = items
+            pick = id => options.onPick?.(id, { id, label: '' })
+          },
+        },
+        t: () => translator('en'),
+        canEdit: () => true,
+        languages: () => ({ en: 'English' }),
+        dock: () => 'right',
+        sleepers: () => true,
+        root: () => ({ dataset: {} }),
+        coarse: () => false,
+        setTheme() {},
+        chooseLanguage() {},
+        placePanels() {},
+        resetPanelSize() {},
+        toggleSleepers() {},
+        profiles: () => false,
+        openProfiles() {},
+        fold: () => null,
+        chooseFold() {},
+        access: () => local,
+        openAccess: () => void calls.push(['access']),
+      })({ getBoundingClientRect: () => RECT } as unknown as HTMLElement, false)
+      expect(ids(opened).includes('access')).toBe(local)
+      pick('access')
+      expect(calls).toEqual([['access']])
+    }
+  })
+
   test('a page signed in through the domain offers Sign out, last after a separator; it ends that login', async () => {
     const now = {
       t: translator('en'),

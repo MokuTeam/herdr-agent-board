@@ -125,6 +125,7 @@ describe('routes', () => {
       'styles/cards.css',
       'styles/categories.css',
       'styles/segments.css',
+      'styles/access.css',
       'app.js',
     ])
     for (const link of links) expect([link, (await fetch(`${url}/${link}`)).status]).toEqual([link, 200])
@@ -151,6 +152,7 @@ describe('routes', () => {
       'favorites',
       'cards',
       'segments',
+      'access',
     ])
       expect((await fetch(`${url}/styles/${sheet}.css`)).headers.get('content-type')).toBe('text/css; charset=utf-8')
     expect((await fetch(`${url}/icon.svg`)).headers.get('content-type')).toBe('image/svg+xml')
