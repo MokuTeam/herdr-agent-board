@@ -102,3 +102,28 @@ describe('the server’s snippets, filled in', () => {
     expect(readFileSync('src/core/tunnel-snippets.ts', 'utf8')).not.toMatch(/from 'node:/)
   })
 })
+
+describe('the README’s server steps are the panel’s snippets', () => {
+  const readme = readFileSync('README.md', 'utf8').replaceAll('\r\n', '\n')
+  /** The text of every fenced block that opens at column 0, as a copy from the page would give it. */
+  const fences = [...readme.matchAll(/^```[^\n]*\n([\s\S]*?)\n```$/gm)].map(m => m[1] ?? '')
+  const heading = '## Another computer or a tablet, through your own domain'
+
+  test('its own section, after the phone’s browser and before Language', () => {
+    const lines = readme.split('\n')
+    const at = lines.indexOf(heading)
+    expect(at).toBeGreaterThan(lines.indexOf("### In a phone's browser"))
+    expect(at).toBeLessThan(lines.indexOf('## Language'))
+  })
+  test('the user and the socket’s folder: serverCommands’ lines in order, in one block', () => {
+    expect(fences.some(text => text.includes(serverCommands('boardtunnel', TUNNEL_SOCKET)))).toBe(true)
+  })
+  test('the keys file’s line, as the panel shows it before a key exists', () => {
+    expect(fences).toContain(keysLine('ssh-ed25519 AAAA… agent-board@<PC>'))
+    expect(fences).toContain('restrict,port-forwarding ssh-ed25519 AAAA… agent-board@<PC>')
+  })
+  test('the sshd block and the Caddyfile, word for word', () => {
+    expect(fences).toContain(sshdBlock('boardtunnel'))
+    expect(fences).toContain(caddyfile('board.example.com', TUNNEL_SOCKET))
+  })
+})

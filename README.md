@@ -1211,7 +1211,8 @@ Off unless you turn it on. With [Tailscale](https://tailscale.com) on this compu
 the phone can use the board: an app (such as
 [agent-board-android](https://github.com/MokuTeam/agent-board-android)) sees every session, sends
 messages, answers questions and permission prompts, wakes and starts sessions, and opens the
-terminal, as the web board does.
+terminal, as the web board does. Without Tailscale, from a tablet or another computer: see
+[through your own domain](#another-computer-or-a-tablet-through-your-own-domain).
 
 ```sh
 board remote on                  # or "remote": { "on": true } in config.json
@@ -1298,6 +1299,272 @@ Share → Add to Home Screen on an iPhone, ⋮ → Install app on Android.
 Code: `src/core/pwa.ts` (the rules), `src/services/pwa.ts` (serve), `src/core/qr.ts`,
 `web/src/components/remote/RemoteGate.tsx` (pairing, no connection), `web/sw.js`,
 `web/manifest.webmanifest`, `web/styles/pwa.css`.
+
+## Another computer or a tablet, through your own domain
+
+Off unless you turn it on. The board in any browser at `https://<domain>`, a domain of yours on a
+server of yours, live, wherever you are, and on the home screen as an app. No Tailscale and no
+other platform in the path: the board on this computer keeps a reverse SSH tunnel open to the
+server, Caddy there ends HTTPS for the domain and passes requests through the tunnel, and the
+board asks for a login of its own on every one of them. This computer opens no port and needs no
+public address: it only dials out over SSH. The server holds nothing of the board's: no code, no
+secret, no data.
+
+```
+tablet / other computer ──HTTPS──> Caddy, https://board.example.com (your server, :443)
+                                     │ reverse_proxy unix//var/lib/boardtunnel/board.sock
+                                     ▼
+                                   sshd ══ reverse tunnel, opened from the PC ══╗
+                                                                                ▼
+PC:  ssh -N -R <socket>:127.0.0.1:<tunnel port> boardtunnel@<server>
+PC:  the board's tunnel listener, 127.0.0.1:<tunnel port>: a login on every request
+PC:  the web board, 127.0.0.1:12422: as before, no login, never behind the tunnel
+```
+
+The forward ends in a Unix socket on the server, not in a port. While the tunnel is down, a port
+on the server's loopback is free for any program there to take, and whatever takes it gets what
+the tablet sends: the login's cookie, a password and a code. The socket sits in a folder only the
+tunnel's user and Caddy can enter, so only Caddy reaches it, tunnel up or down.
+
+**What a login reaches.** Read this before you turn it on.
+
+- **The board, as a phone has it**: cards, answers, messages, starting sessions, the terminal.
+  Not what acts on this computer's screen (opening files, links or windows, focus), nor what
+  Settings → Remote access… and Phones… do: those routes answer this computer's own board only.
+- **The terminal is a shell on this computer, with your rights.** Through it, or through a session
+  it starts (an agent runs commands too), a login can read and change anything you can, the
+  board's own files included: the password's hash, the code's secret, the tunnel's key,
+  config.json. A login is full access to this computer.
+- **The board's own files are not served through the domain.** The routes that read a file by a
+  path the request names (quick look, previews, the folder picker, a checkout's changes) refuse
+  the state folder (but its `uploads`, where attached pictures are), the config folder and the
+  folder of a key of your own. That is all they guarantee: they are fences on the board's routes,
+  not on the terminal.
+
+So treat a login like your own shell. That is why it is a passkey, or a password and a code from
+an authenticator app, with a lockout; why a login lasts 30 days at most; and why End and End all,
+on this computer, stop one at once: its next request is refused and its open streams, the
+terminal's too, end.
+
+**What a request through the domain needs.** The tunnel ends at a listener of the board's own on
+127.0.0.1 (by default the web board's port plus two), never at the web board's port, and there a
+login is needed whatever the request says: no header, setting or state turns it off. Without a
+login only what signing in needs answers (the page and its files, a hello that tells nothing of
+this computer, the sign-in routes, the board's probe); everything else is 401. Its Host must be
+the domain, Caddy must have had it over HTTPS, and a change needs the board's header and the
+domain's own Origin. The password's hash, the code's secret, the passkeys, the logins (only their
+tokens' hashes), the failed attempts, the tunnel's private key and the server's pinned key stay in
+the state folder: none of it goes into the board's payload, a log, a URL or to the server. Only
+the code's secret goes, once, to this computer's panel, for its QR code.
+
+### On the server
+
+The board never touches the server. These are the steps for the defaults: the user `boardtunnel`,
+the socket `/var/lib/boardtunnel/board.sock`, the domain `board.example.com`. Settings → Remote
+access… on the web board shows the same with your values, each with Copy. The server is yours
+alone (it ends HTTPS, so root there sees what passes), with Caddy and OpenSSH 7.8 or newer.
+
+**1. DNS.** An A (and AAAA) record for the domain points to the server.
+
+**2. A user for the tunnel, with no shell and no home, and the socket's folder:**
+
+```sh
+sudo useradd --system --no-create-home --home-dir /nonexistent \
+    --shell /usr/sbin/nologin boardtunnel
+# useradd leaves the account locked; an sshd with UsePAM no refuses a locked one, key or not
+sudo usermod -p '*' boardtunnel
+# the socket's folder: the tunnel user makes the socket, Caddy's group opens it, no one else
+sudo install -d -m 2750 -o boardtunnel -g caddy /var/lib/boardtunnel
+# the key's file belongs to root, out of the tunnel user's reach
+sudo install -d -m 755 /etc/ssh/authorized_keys
+# the line below goes into /etc/ssh/authorized_keys/boardtunnel (owner root, mode 644)
+```
+
+- The folder is the socket's own. `caddy` is the group Caddy's package runs as; if yours runs as
+  another, use that one.
+- The setgid bit (the `2` in `2750`) gives the socket the folder's group, so Caddy can open it;
+  the mask in step 4 makes it `srw-rw----`, its owner and that group only. The tunnel's user has
+  no home and no file of its own on the server.
+- `usermod -p '*'`: `useradd` leaves `!` as the password, which locks the account. `*` matches no
+  password either, but does not lock it. An sshd with `UsePAM yes` (Debian's and Ubuntu's
+  default) lets the key in anyway; one with `UsePAM no` refuses a locked account ("Permission
+  denied (publickey)").
+
+**3. The key, allowed to forward only**, in `/etc/ssh/authorized_keys/boardtunnel` (owner root,
+mode 644). Generate key in the panel (below) gives this line with your key:
+
+```
+restrict,port-forwarding ssh-ed25519 AAAA… agent-board@<PC>
+```
+
+There is no `permitlisten`: it limits TCP listens only and says nothing of a socket's path. The
+sshd block and the folder's permissions keep the key to the socket.
+
+**4. sshd, a second fence for that user.** At the end of `/etc/ssh/sshd_config` (a `Match` block
+runs to the next `Match` or the end of the file), then `sudo sshd -t` and reload sshd (`sudo
+systemctl reload ssh` on Debian and Ubuntu, `sshd` elsewhere):
+
+```
+Match User boardtunnel
+    AuthorizedKeysFile /etc/ssh/authorized_keys/boardtunnel
+    AuthenticationMethods publickey
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    AllowTcpForwarding remote
+    PermitListen none
+    AllowStreamLocalForwarding remote
+    StreamLocalBindUnlink yes
+    StreamLocalBindMask 0117
+    X11Forwarding no
+    AllowAgentForwarding no
+    PermitTunnel no
+    PermitTTY no
+    ForceCommand /bin/false
+    ClientAliveInterval 15
+    ClientAliveCountMax 2
+```
+
+- `AllowTcpForwarding remote` with `PermitListen none`: no TCP forward either way. sshd lets a
+  socket forward through only where remote forwards are allowed, so `AllowTcpForwarding no` would
+  refuse the board's own too. `remote` refuses every `-L` and `PermitListen none` every TCP
+  listen: the key reaches nothing on the server's network and listens on no port.
+- `AllowStreamLocalForwarding remote`: socket forwards from the server to this computer only.
+- `StreamLocalBindUnlink yes`: a new forward replaces the socket a dead connection left (after
+  sleep or a lost network), so the tunnel is back at once. Without it every new forward fails
+  with "remote port forwarding failed for listen path …" until someone removes the file.
+- `StreamLocalBindMask 0117`: the socket is `srw-rw----`.
+- `AuthorizedKeysFile`: the key lives in root's file, out of the tunnel user's reach.
+  `ForceCommand` and the nologin shell: it runs no command. `ClientAlive*`: a dead connection's
+  sshd ends within about 30 s.
+- `PermitListen` needs OpenSSH 7.8 or newer. `KbdInteractiveAuthentication` is 8.7's name; older
+  servers call it `ChallengeResponseAuthentication`.
+
+No sshd or `authorized_keys` option names the paths a socket forward may take; the folder does.
+Only the tunnel's user (and root) can make a socket in it and only Caddy's group can open it, so
+no other user on the server can take the path. Elsewhere the tunnel's user can make a socket only
+where anyone may write (`/tmp`), and nothing connects to it there. What is left is the key
+itself: whoever holds it can take the board's path. The board's probe through the domain then
+fails and says so (below); Generate key makes a new key (its line replaces the old one on the
+server), and End all ends every login a stand-in may have caught.
+
+**5. Caddy**, in `/etc/caddy/Caddyfile`, then `sudo systemctl reload caddy`:
+
+```
+board.example.com {
+    reverse_proxy unix//var/lib/boardtunnel/board.sock
+    header Strict-Transport-Security "max-age=31536000"
+}
+```
+
+Caddy gets and renews the certificate, keeps the Host header, sets `X-Forwarded-For` and
+`X-Forwarded-Proto` itself (over anything the caller sent), and passes event streams on at once.
+The board's live updates and the terminal are event streams: put no `encode` in front of the board
+unless you have checked that they still flow, since compression can hold them back.
+
+**6. Firewall.** Only 22, 80 and 443 open. The socket needs no rule: it is a file, not a port.
+
+**7. nginx instead of Caddy** gets this note only; Caddy is the one supported. The socket's folder
+then takes nginx's group (`-g nginx` in step 2, or `-g www-data` on Debian and Ubuntu), and the
+domain's `server` block passes everything to the socket,
+`proxy_pass http://unix:/var/lib/boardtunnel/board.sock:;`, without buffering the streams and
+with the headers the board needs: `proxy_buffering off;`, `proxy_http_version 1.1;`,
+`proxy_set_header Connection "";`, `proxy_read_timeout 1h;`, `proxy_set_header Host $host;`,
+`proxy_set_header X-Forwarded-For $remote_addr;`, `proxy_set_header X-Forwarded-Proto https;`.
+The panel has the whole `location` block under "With nginx instead of Caddy". The board sends
+`X-Accel-Buffering: no` on its event streams through the tunnel too.
+
+### On this computer
+
+Settings → **Remote access…** on the web board: on this computer's own board only, never through
+the domain or Tailscale. It has three parts: Tunnel, Login and Active logins.
+
+1. **The fields**: the server, the user (`boardtunnel`) and the domain; the SSH port (22), the
+   key, the socket and the local port have defaults (see [Settings](#settings)). Each is saved on
+   Enter or when you leave it, and checked first: a value ssh would read as an option (a leading
+   `-`), a socket right in a folder anyone could take its name in (`/tmp`, `/run` and the like),
+   or a port the board has already is refused, saying why. Changing the domain later removes the
+   passkeys (they belong to the old one) and ends every login; the panel asks first.
+2. **Generate key**: an Ed25519 key without a passphrase in the state folder (`tunnel/id_ed25519`),
+   that only you can read (on Windows the board sets its ACL), and its line for the keys file
+   (step 3 above), with Copy. Generated again, it replaces the old one, and the server needs the
+   new line; the panel asks first. A key of your own (`tunnel.key`) is used as it is: no
+   passphrase, its rights yours to set.
+3. **Test connection**, with the tunnel still off. Each step ✓ or ✗, with what to fix: ssh and the
+   key; the server takes the socket; the domain reaches this board (a fetch of
+   `https://<domain>/api/probe/<nonce>` from this computer). With the tunnel off it runs a short
+   ssh of its own to a listener that answers that one probe and nothing else, closed when the test
+   is over (within 40 s). With the tunnel on it runs no ssh of its own, since a second forward on
+   the same socket would take the tunnel's, and checks the running one.
+4. **The server's key.** The first connection pins it in the board's own `known_hosts` in the state
+   folder (never `~/.ssh`), and the panel shows its fingerprint: compare it with
+   `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the server. If it changes later, ssh
+   refuses and the status says so; **Forget the server's key** when you changed the server on
+   purpose.
+5. **Login**: the password (12 characters at least) and the code: a QR code for an authenticator
+   app, the key as text, and a code to check it with. The codes need this computer's clock right
+   to within about 30 s. Changing either later ends every login.
+6. **Turn on** (or `board tunnel on`), once the fields check out and the password and the code are
+   set up; until then the panel says what is missing.
+
+### On the tablet
+
+Open `https://<domain>`. The board's login screen offers **Sign in with a passkey** first; the
+first time on a device, **Use password and code**. Then the page offers **Add a passkey for this
+device**: it asks for the next code (the one you signed in with works once only, so wait for the
+next, up to 30 s), then Face ID, a fingerprint or the device's PIN. After that, signing in is one
+tap. A passkey is added on the device itself: it belongs to the domain, so this computer's board
+on 127.0.0.1 cannot make one. The panel lists them, each with Remove, which ends the logins made
+with it.
+
+Then Share → Add to Home Screen on an iPad or iPhone, Install app in Chrome or Edge. An app on the
+iOS home screen keeps its cookies apart from Safari's, so it signs in once on its own. **Sign out**
+is in the page's Settings menu. The domain opened on this computer itself asks for a login too:
+the request came through the server. While this computer sleeps or the board is closed, Caddy
+answers 502, and the page, kept by its service worker, says so and tries again by itself.
+
+### How it keeps itself up
+
+The board that holds the web port runs ssh: Windows' own (`%SystemRoot%\System32\OpenSSH\ssh.exe`)
+first, else `ssh` on PATH; without a shell, with `-F none` so that your `~/.ssh/config` cannot
+change it, and with keepalives.
+
+- An ssh that exits starts again after 1 s, then 2, 4 and on up to 60 s; a connection that stayed
+  up a minute starts the count over. Errors that do not heal by themselves (the key refused, the
+  key's rights, the server's key changed, the server refusing the socket) show as an error with
+  what to fix, and are tried again every 60 s.
+- After sleep, or when this computer's addresses change (another network), ssh starts again at
+  once.
+- When the board restarts (its code changed), the new one brings the tunnel back. Only one board
+  runs it, never two ssh at a time, and an ssh a killed board left behind is ended first.
+- A stale socket on the server is replaced by the next forward (`StreamLocalBindUnlink yes`), so
+  the tunnel is back as soon as the network is.
+
+How it stands: off, connecting, connected, reconnecting (the attempt and the next try), or an
+error with ssh's own last lines and the fix. While connected, the board fetches its probe through
+the domain a few seconds after it connects and every 5 minutes. When that fails (a 502, a TLS
+error, something else answering), the tunnel stays connected with a warning that the domain does
+not reach this board, and ssh is left alone; a forward on the same socket made with the tunnel's
+key would take its place, and this is how you would know.
+
+```sh
+board tunnel        # on or off, since when, an error or the warning, the domain, the socket, ssh
+board tunnel on     # or Turn on in Settings → Remote access…; refused, saying why, until it can run
+board tunnel off
+board tunnel test   # Test connection, a line for each step
+```
+
+`board doctor` checks it while it is on: ssh found, the key there and taken, the settings, the
+password and the code set up, the tunnel's state, and its last probe through the domain.
+
+**No recovery codes, no e-mail.** This computer's board is the way back: a new password, the code
+set up again, a lockout lifted. Five failed password-and-code sign-ins in a row lock that way in
+for a minute, each further one doubling the wait up to an hour; a passkey sign-in is never locked
+out, and every sign-in route is rate-limited. Active logins, in the panel, lists each login (the
+device, how it signed in, when, last active, from where) with End, then End all and the recent
+failed attempts.
+
+**One tunnel, one computer per domain.** The Android app stays on Tailscale ([Phones](#phones));
+the tunnel and the Tailscale listeners are independent, either on without the other.
 
 ## Language
 
@@ -1516,6 +1783,15 @@ with a fork of a session: `false` turns them off; `{ "dir": "<MokuPilot checkout
 and its first arguments, one per element, no shell, the board adding `call --claude-session <id>
 --cwd <folder>`, or the whole line when it has `{session}` or `{cwd}` in it).
 
+`tunnel` (the board [through your own domain](#another-computer-or-a-tablet-through-your-own-domain);
+Settings → Remote access… and `board tunnel on|off` set it): `on` (false), `host` (the server),
+`sshPort` (22), `user` (the tunnel's user on the server), `key` (the private key's path; empty:
+the one Generate key made, `tunnel/id_ed25519` in the state folder), `socket` (the Unix socket on
+the server, `/var/lib/boardtunnel/board.sock`), `domain` (a bare host name such as
+`board.example.com`), `port` (the tunnel listener's on 127.0.0.1; empty: the web board's port plus
+two). None of it is secret. The board checks every field before it uses it, and runs nothing
+while one does not check out.
+
 Cards: `%LOCALAPPDATA%\herdr\plugins\agent-board\cards\<session id>.json`. Sessions in the archive:
 `archive\<session id>.json` beside them (see [Archive](#archive)).
 
@@ -1546,3 +1822,20 @@ The code is in layers: `src/core` (pure rules, no I/O), `src/adapters` and `src/
 (files, processes, herdr, Claude's files, herdr-wake), `src/services` (what the board does with
 them), `src/server`, `src/tui` and `src/entrypoints` (the web server, the terminal board, the
 commands), `web/src` (the React page). Tests mirror them under `test/`.
+
+The board through your own domain: `src/core/tunnel.ts` (the `tunnel` settings and their checks,
+the ssh line, what ssh says, the doctor's checks), `src/core/tunnel-snippets.ts` (the server's
+snippets, which the panel shows and this README has word for word: a test keeps them the same),
+`src/core/totp.ts`, `src/core/access.ts` (the login's rules: cookie, lockout, rate limits, device
+labels), `src/core/webauthn.ts` (passkeys, without a library), `src/core/own-files.ts` and
+`src/adapters/own-files.ts` (the board's own files), `src/adapters/ssh.ts` (ssh and ssh-keygen,
+the key's rights, the pinned server key, the pid record), `src/adapters/access-store.ts` (the
+login's files), `src/adapters/probe.ts`, `src/services/access.ts` (the login),
+`src/services/tunnel.ts` (ssh kept up, the probe, Test connection), `src/services/remote-access.ts`
+and `src/server/routes/access.ts` (the panel's view and changes), `src/services/tunnel-facts.ts`
+(`board tunnel`, `board doctor`), `src/server/tunnel.ts` (the tunnel listener),
+`src/server/tunnel-probe.ts`, `src/server/streams.ts` (what the remote listeners share),
+`web/src/components/access/` (the panel), `web/src/components/remote/LoginScreen.tsx`. Tests never
+run the real ssh: `BOARD_SSH_BIN_PATH` and `BOARD_SSH_KEYGEN_BIN_PATH` name other binaries (a fake
+in `test/support`), and `BOARD_TUNNEL_PROBE_ORIGIN` another origin than `https://<domain>` for the
+probe.

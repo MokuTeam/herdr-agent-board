@@ -356,7 +356,7 @@ is a passkey or password + TOTP, with a lockout, and a login that is ended stops
      - Off, or with the login not yet set up: the short-lived ssh forwards to a **probe-only
        listener** on 127.0.0.1, on a free port. It answers that one nonce and gives 404 to
        everything else: no page, no login, no board route. It closes when the test ends, or
-       after about 30 s. It is not the tunnel listener of call 13, which still never runs
+       after 40 s at most. It is not the tunnel listener of call 13, which still never runs
        before the login is set up.
 
      This proves DNS, the certificate, Caddy, the socket's path and its permissions end to end,
