@@ -26,6 +26,7 @@ import {
   todo,
   tomlValue,
 } from '../../src/core/setup.ts'
+import type { WakeState } from '../../src/core/wake/status.ts'
 
 const ROOT_A = 'C:\\plugins\\agent-board'
 const ROOT_B = 'C:\\plugins\\mokuteam.herdr-agent-board-1a2b'
@@ -632,5 +633,158 @@ describe('the checks per profile', () => {
     )
     // Facts without it (an older gatherFacts): no check for it.
     expect(checkSetup(facts({ herdrHook: undefined })).some(c => c.id.startsWith('herdr'))).toBe(false)
+  })
+})
+
+describe('the wake line (#119)', () => {
+  const LOG = 'C:\\Users\\Иван Петров\\AppData\\Local\\herdr\\plugins\\agent-board\\wake.log'
+  const WITH_WAKE = planSettings({}, pathsOf(ROOT_A), { toast: true, wake: true }).settings
+  const wakeOn = (state: WakeState, over: Partial<NonNullable<SetupFacts['wakeNew']>> = {}) =>
+    facts({
+      settings: WITH_WAKE,
+      wakeNew: { state, port: 23456, asleep: 2, log: LOG, wakeUrlSet: false, ...over },
+    })
+  const wakeLine = (f: SetupFacts, t = translator('en')): SetupCheck => check(checkSetup(f, t), 'wake')
+
+  test('old mode: the line is today’s', () => {
+    for (const f of [facts(), facts({ wakeNew: null })]) {
+      expect(wakeLine(f)).toEqual({
+        id: 'wake',
+        level: 'ok',
+        title: 'herdr-wake',
+        detail: 'answers at http://127.0.0.1:12421',
+        fix: '',
+        code: '',
+      })
+      expect(checkSetup(f).some(c => c.id.startsWith('wakeHooks') || c.id === 'wakeUrl')).toBe(false)
+    }
+    expect(wakeLine(facts({ wakeUrl: null, wake: null })).fix).toMatch(/Node\.js 20/)
+  })
+
+  test('running', () => {
+    expect(wakeLine(wakeOn('running'))).toMatchObject({
+      level: 'ok',
+      title: 'Sleep and wake runs',
+      detail: 'on 127.0.0.1:23456, 2 asleep',
+    })
+    expect(wakeLine(wakeOn('running', { asleep: 1 }), translator('ru')).detail).toBe('на 127.0.0.1:23456, 1 спит')
+  })
+
+  test('off', () => {
+    expect(wakeLine(wakeOn('off'))).toMatchObject({
+      level: 'off',
+      title: 'Sleep and wake is off',
+      fix: 'Turn it on in Settings → Sleep and wake…, or set "wake": { "enabled": true } in the board\'s config.json',
+    })
+  })
+
+  test('crashed: its error and its log', () => {
+    expect(wakeLine(wakeOn('crashed', { error: 'TypeError: x is not a function' }))).toMatchObject({
+      level: 'error',
+      title: 'Sleep and wake crashed',
+      detail: 'TypeError: x is not a function',
+      fix: `Settings → Sleep and wake… → Start again. Its log: ${LOG}`,
+    })
+  })
+
+  test('held by the old plugin', () => {
+    expect(wakeLine(wakeOn('held'))).toMatchObject({
+      level: 'warn',
+      title: 'The separate herdr-wake plugin puts sessions to sleep',
+      fix: 'Settings → Sleep and wake… → Switch over…',
+    })
+  })
+
+  test('not answering, or starting past its time', () => {
+    expect(wakeLine(wakeOn('notRunning', { error: 'did not end within 20 s' }))).toMatchObject({
+      level: 'warn',
+      title: 'Sleep and wake is on but does not answer on port 23456',
+      detail: 'did not end within 20 s',
+      fix: `Settings → Sleep and wake… → Start. Its log: ${LOG}`,
+    })
+    // Within its time it is starting: nothing to fix yet.
+    expect(wakeLine(wakeOn('starting'))).toMatchObject({ level: 'ok', title: 'Sleep and wake is starting' })
+  })
+
+  test('port taken', () => {
+    expect(wakeLine(wakeOn('portTaken'))).toMatchObject({
+      level: 'error',
+      title: 'Port 23456 is taken by another program',
+      fix: 'Set another "port" in the wake section of the board\'s config.json',
+    })
+  })
+
+  test('wakeUrl set to something else than the default: a second line', () => {
+    const checks = checkSetup(wakeOn('running', { wakeUrlSet: true }))
+    const at = checks.findIndex(c => c.id === 'wake')
+    expect(checks.slice(at, at + 2).map(c => c.id)).toEqual(['wake', 'wakeUrl'])
+    expect(check(checks, 'wakeUrl')).toMatchObject({
+      level: 'na',
+      title: 'wakeUrl in config.json is not used while Sleep and wake is on',
+    })
+    expect(checkSetup(wakeOn('running')).some(c => c.id === 'wakeUrl')).toBe(false)
+  })
+
+  test('no Node.js 20 in any of it, in either language', () => {
+    for (const state of ['running', 'off', 'crashed', 'held', 'notRunning', 'starting', 'portTaken'] as const)
+      for (const t of [translator('en'), translator('ru')]) {
+        const said = checkSetup(wakeOn(state, { wakeUrlSet: true }), t).filter(c => c.id.startsWith('wake'))
+        expect(JSON.stringify(said)).not.toMatch(/Node|herdr plugin install/)
+      }
+  })
+
+  test('wake on and not held: each shown profile without wake’s hooks is flagged, the old plugin’s shown as theirs', () => {
+    const oldPlugin = {
+      hooks: {
+        PostToolUse: [
+          {
+            matcher: 'ListAgents',
+            hooks: [{ type: 'command', command: 'node "C:\\p\\herdr-wake\\src\\hook.mjs" post-list' }],
+          },
+        ],
+      },
+    }
+    // One profile: in its place, after the wake line.
+    const one = checkSetup(wakeOn('running'))
+    expect(
+      one
+        .map(c => c.id)
+        .slice(
+          one.findIndex(c => c.id === 'wake'),
+          one.findIndex(c => c.id === 'wake') + 2,
+        ),
+    ).toEqual(['wake', 'wakeHooks'])
+    expect(check(one, 'wakeHooks')).toMatchObject({
+      level: 'ok',
+      title: 'Sleep and wake’s hooks',
+      detail: 'ListAgents and SendMessage in C:\\Users\\u\\.claude\\settings.json',
+    })
+    expect(check(checkSetup({ ...wakeOn('running'), settings: facts().settings }), 'wakeHooks')).toMatchObject({
+      level: 'warn',
+      title: 'Sleep and wake’s hooks are not in place',
+      code: 'herdr plugin action invoke agent-board.install',
+    })
+    // Several: each by its name.
+    const at = (id: string, settings: unknown): ProfileSettings => ({
+      id,
+      title: id === 'default' ? 'Private' : 'Work',
+      dir: `C:\\Users\\u\\.claude-${id}`,
+      exists: true,
+      settingsFile: `C:\\Users\\u\\.claude-${id}\\settings.json`,
+      settings,
+      settingsError: '',
+    })
+    const checks = checkSetup({ ...wakeOn('notRunning'), profiles: [at('default', WITH_WAKE), at('work', oldPlugin)] })
+    expect(check(checks, 'wakeHooks:default')).toMatchObject({ level: 'ok', title: 'Private: Sleep and wake’s hooks' })
+    expect(check(checks, 'wakeHooks:work')).toMatchObject({
+      level: 'warn',
+      title: 'Work: The separate herdr-wake plugin’s hooks are in place',
+      fix: 'Settings → Sleep and wake… → Switch over…',
+    })
+    // Off, or held by the old plugin: no hook lines.
+    for (const state of ['off', 'held'] as const)
+      expect(checkSetup({ ...wakeOn(state), settings: facts().settings }).some(c => c.id.startsWith('wakeHooks'))).toBe(
+        false,
+      )
   })
 })

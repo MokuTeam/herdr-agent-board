@@ -112,8 +112,11 @@ function decoded(raw: string): string | null {
   }
 }
 
-/** Approving pairings and turning the remote mode on or off: for the board on this computer only. */
-const localOnly = (path: string): boolean => path === '/api/remote' || path.startsWith('/api/remote/')
+/**
+ * Approving pairings and turning the remote mode on or off, and wake's switches, Start and Log
+ * (#119): for the board on this computer only.
+ */
+const localOnly = (path: string): boolean => /^\/api\/(remote|wake)(\/|$)/.test(path)
 
 type Server = ReturnType<typeof Bun.serve>
 /** Which listener a request came to: the one on the Tailscale address, or the one for `tailscale serve`. */

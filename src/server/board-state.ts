@@ -21,6 +21,7 @@ import { DEFAULT_PROFILE, type Profile, profileLabel } from '../core/profiles.ts
 import type { RemoteView } from '../core/remote.ts'
 import type { SetupSummary } from '../core/setup.ts'
 import type { Item } from '../core/types.ts'
+import type { WakeView } from '../core/wake/view.ts'
 import { collect } from '../services/board.ts'
 import type { Deps } from '../services/deps.ts'
 import { canFork } from '../services/launch/fork.ts'
@@ -52,6 +53,8 @@ interface Options {
   push: (payload: string) => void
   /** The setup check's summary (services/setup-check.ts). */
   setup?: () => SetupSummary | null
+  /** Sleep and wake's state line at once (services/wake/control.ts current); null: none in the payload. */
+  wake?: () => WakeView | null
   /** Whether MokuPilot is here for calls with a fork of a session (services/mokupilot.ts). */
   mokupilot?: () => boolean
   /** The remote mode as the page shows it; null while it is off (server/remote.ts). */
@@ -112,6 +115,11 @@ function boardProfiles(deps: Deps, items: readonly Item[]): BoardProfile[] {
   }))
 }
 
+function wakeOf(wake: Options['wake']): { wake?: WakeView } {
+  const view = wake?.() ?? null
+  return view ? { wake: view } : {}
+}
+
 function remoteOf(remote: Options['remote']): { remote?: RemoteView } {
   const view = remote?.() ?? null
   return view ? { remote: view } : {}
@@ -124,6 +132,7 @@ export function createBoardState({
   version,
   push,
   setup,
+  wake,
   mokupilot,
   remote,
   aside,
@@ -190,6 +199,8 @@ export function createBoardState({
       // aside: whether a session's sheet offers a side question (Claude Code on PATH).
       aside: aside?.() ?? false,
       setup: setup?.() ?? null,
+      // wake: only once it ships, while it is on, or while its file has sleepers (dormant otherwise).
+      ...wakeOf(wake),
       profiles,
       // What a profile without a start command types: the Profiles panel's placeholder.
       claudeProgram: claudeProgram(cfg.launch?.claude, cfg.launch?.args),

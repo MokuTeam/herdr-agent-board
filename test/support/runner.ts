@@ -64,13 +64,24 @@ if (mode === 'open') {
   // TEST_LIVE_CONFIG: the config.json the test wrote, read again as it changes (as
   // entrypoints/server.ts has it); each reload is signalled. The port is still the one handed in.
   const live = !!process.env.TEST_LIVE_CONFIG
+  const { liveConfig, readConfigFile } = await import('../../src/adapters/config-file.ts')
+  // Wake stays off in the board's tests unless the test turns it on (with a port of its own): a
+  // config without a `wake` key takes the one in the config.json the test wrote, else `false`, so
+  // no test of the board ever asks 127.0.0.1:12421.
+  const wakeKept = (c: Config): void => {
+    if (Object.hasOwn(c, 'wake')) return
+    const onDisk = readConfigFile()
+    c.wake = onDisk && Object.hasOwn(onDisk, 'wake') ? onDisk.wake : false
+  }
   let refresh = (): void => {}
   const cfg = live
-    ? (await import('../../src/adapters/config-file.ts')).liveConfig(() => {
+    ? liveConfig(reloaded => {
+        wakeKept(reloaded)
         send({ reloaded: true })
         refresh()
       })
     : given
+  wakeKept(cfg)
   // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
   if (cfg.language) (await import('../../src/core/lang.ts')).useLanguage(cfg.language)
   // TEST_PROBE_MS: herdr-wake's /status may take that long in the setup check (1.5 s by default).
@@ -81,6 +92,8 @@ if (mode === 'open') {
     deps,
     ...(live && { port: Number(given.port) }),
     ...(probeMs && { gather: () => gatherFacts(deps.cfg, { probeMs }) }),
+    // Never a real wake start: each one is told to the test.
+    wakeStarter: (args = []) => send({ wakeStarted: args }),
   })
   refresh = () => void server.refresh()
   send({ ready: true })

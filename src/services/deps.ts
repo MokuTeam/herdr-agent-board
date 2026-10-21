@@ -1,13 +1,17 @@
 // What the services need from the outside, built once per process by the entrypoints.
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import type { ClaudeHome } from '../adapters/claude-home.ts'
 import { type CodexHome, createCodexHome } from '../adapters/codex-home.ts'
 import { createPiHome, type PiHome } from '../adapters/pi-home.ts'
 import { createProfileHomes, type ProfileHomes } from '../adapters/profile-homes.ts'
 import { findProfileDirs, inheritedProfileDir } from '../adapters/profiles.ts'
+import { wakeSessionsFile } from '../adapters/wake-files.ts'
 import { mergeProfiles, type ProfileSet, profileSet } from '../core/profiles.ts'
 import type { Config } from '../core/types.ts'
 import { type SleepProvider, sharedHerdrWake } from '../integrations/herdr-wake.ts'
+import { sharedBoardWake, sharedFileSleepers } from '../integrations/wake.ts'
+import { currentWakeMode } from './wake/mode.ts'
 
 export interface Deps {
   /** The live config object (liveConfig updates it in place), so read it at call time. */
@@ -22,7 +26,11 @@ export interface Deps {
   codex: CodexHome
   /** The profiles: config.json's merged with the folders found; read again when they change, or after a minute. */
   profiles(): ProfileSet
-  /** herdr-wake for the config's current wakeUrl. */
+  /**
+   * The wake the board talks to (services/wake/mode.ts): the new one (integrations/wake.ts) while it
+   * is on and its start ran; else herdr-wake at the config's current wakeUrl, as today, with the
+   * sleepers wake's session file still has while wake is off.
+   */
   wake: SleepProvider
   log: (text: string) => void
 }
@@ -47,9 +55,15 @@ export function defaultDeps(cfg: Config, log: (text: string) => void = () => {})
       }
       return profiles.set
     },
-    // A getter: a config reload that changes wakeUrl takes effect on the next call, as before.
+    // A getter: a config reload that changes wakeUrl or the wake section takes effect on the next
+    // call, as before. One provider per kind, url and file, so a forget() reaches the list every
+    // caller shares; with wake off and no wake file, today's own.
     get wake() {
-      return sharedHerdrWake(cfg.wakeUrl)
+      const mode = currentWakeMode(cfg)
+      if (mode.kind === 'new') return sharedBoardWake(mode.url, wakeSessionsFile())
+      const old = sharedHerdrWake(cfg.wakeUrl)
+      const file = wakeSessionsFile()
+      return !mode.on && existsSync(file) ? sharedFileSleepers(old, file) : old
     },
     log,
   }

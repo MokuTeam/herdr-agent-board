@@ -10,6 +10,10 @@ export interface SleepingSession {
   workspace?: string
   name?: string
   slept_at?: string
+  /** Read from the new wake's session file, not answered by a wake (integrations/wake.ts): the board checks its pane. */
+  fromFile?: true
+  /** The profile folder it ran in, and that folder's listed id (the new wake's answers and file). */
+  profile?: { dir: string; id?: string }
   [extra: string]: unknown
 }
 
