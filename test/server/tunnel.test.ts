@@ -4,13 +4,14 @@
 // probe; a login that ends or expires stops at once, its open streams too.
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
+import { connect } from 'node:net'
 import { join } from 'node:path'
 import type { Passkey } from '../../src/core/access.ts'
 import { REMOTE_API } from '../../src/core/remote.ts'
 import { base32Bytes, totpCode, totpStep } from '../../src/core/totp.ts'
 import { verifyRegistration } from '../../src/core/webauthn.ts'
 import { logged, sharedSandbox } from '../support/board-server.ts'
-import { type Sandbox, sandbox } from '../support/sandbox.ts'
+import { type Sandbox, sandbox, until } from '../support/sandbox.ts'
 import { type SoftAuthenticator, softAuthenticator } from '../support/soft-authenticator.ts'
 import {
   DOMAIN,
@@ -100,6 +101,34 @@ function oneSession(box: Sandbox): void {
     workspaces: [],
   }
   box.state({ 'api snapshot': { result: { snapshot } } })
+}
+
+/**
+ * A GET of `path` exactly as written, as Caddy could forward it: fetch would resolve `.` and `..`
+ * first. Its status and body.
+ */
+function rawGet(port: number, path: string, cookie?: string): Promise<[number, unknown]> {
+  const request = [
+    `GET ${path} HTTP/1.1`,
+    `Host: ${DOMAIN}`,
+    'X-Forwarded-Proto: https',
+    ...(cookie ? [`Cookie: ${cookie}`] : []),
+    'Connection: close',
+    '',
+    '',
+  ].join('\r\n')
+  return new Promise((resolve, reject) => {
+    let data = ''
+    const socket = connect(port, '127.0.0.1', () => socket.write(request))
+    socket.on('data', chunk => {
+      data += chunk.toString()
+    })
+    socket.on('end', () => {
+      const head = data.indexOf('\r\n\r\n')
+      resolve([Number(data.split(' ')[1]), JSON.parse(data.slice(head + 4))])
+    })
+    socket.on('error', reject)
+  })
 }
 
 /** Nothing takes a connection there. */
@@ -242,6 +271,27 @@ describe('the tunnel listener', () => {
     expect(await encoded.text()).not.toContain('items')
   })
 
+  test('before a login, another method or spelling of a board route is 401; no spelling reaches a file outside the page', async () => {
+    // HEAD is a read as GET is: no X-Board or Origin, and still a login.
+    const head = await caddy.send('HEAD', '/api/board', undefined, { 'x-board': '', origin: '' })
+    expect(head.status).toBe(401)
+    for (const method of ['OPTIONS', 'PUT'])
+      expect([method, ...(await answer(caddy.send(method, '/api/board')))]).toEqual([method, 401, { error: 'login' }])
+    // fetch resolves `..` as a browser does; `//` and the trailing slash reach the board as written.
+    for (const path of ['//api/board', '/api/board/', '/api/x/../board'])
+      expect([path, ...(await answer(caddy.get(path)))]).toEqual([path, 401, { error: 'login' }])
+    // The same, as written: the listener resolves them itself.
+    for (const path of ['/api/x/../board', '/api/./board', '/%2e%2e/api/board'])
+      expect([path, ...(await rawGet(tunnelPort, path))]).toEqual([path, 401, { error: 'login' }])
+    for (const path of [
+      '/%75ploads/2026-10-20/a.png',
+      '/..%2fpackage.json',
+      '/styles/..%2f..%2fpackage.json',
+      '/%5c..%5cpackage.json',
+    ])
+      expect([path, ...(await answer(caddy.get(path)))]).toEqual([path, 404, { error: 'not found' }])
+  })
+
   test('a sign-in with the password and the code: a login cookie of 30 days, then the board', async () => {
     const res = await caddy.post('/api/login/password', { password: PASSWORD, code: codeNow() })
     expect(await res.json()).toEqual({ ok: true, method: 'password' })
@@ -262,10 +312,26 @@ describe('the tunnel listener', () => {
         403,
         { error: 'desktop' },
       ])
-    for (const path of ['/api/access', '/api/%61ccess', '/api/remote', '/api/remote%2Fx', '/api/%72emote/x']) {
+    for (const path of [
+      '/api/access',
+      '/api/%61ccess',
+      '/api/access/',
+      '/api/./access',
+      '/api/%61ccess/',
+      '/api/remote',
+      '/api/remote%2Fx',
+      '/api/%72emote/x',
+    ]) {
       expect([path, ...(await answer(me.get(path)))]).toEqual([path, 403, { error: 'local' }])
       expect([path, ...(await answer(me.post(path, { op: 'off' })))]).toEqual([path, 403, { error: 'local' }])
     }
+    // fetch resolves `.` itself: as written too.
+    for (const path of ['/api/./access', '/api/x/../access/'])
+      expect([path, ...(await rawGet(tunnelPort, path, `${COOKIE}=${SEEDED}`))]).toEqual([
+        path,
+        403,
+        { error: 'local' },
+      ])
     expect((await me.get('/api/peers')).status).toBe(404)
     expect((await me.post('/api/remote/pair', { name: 'x' })).status).toBe(404)
     expect((await me.get('/api/remote/pair/abc')).status).toBe(404)
@@ -350,6 +416,33 @@ describe('the tunnel listener', () => {
       { ok: false, error: 'code' },
     ])
     expect(await answer(as(ADDER).post('/api/login/passkey/add', {}))).toEqual([400, { ok: false, error: 'shape' }])
+  })
+
+  test('a login route’s body that is no JSON, or over 192 KB, is 400 and no line in the log', async () => {
+    const from = proc.messages.length
+    const tooLarge = JSON.stringify({ password: 'x'.repeat(200 << 10), code: '000000' })
+    for (const text of ['{bad', tooLarge]) {
+      const size = text.length
+      for (const path of ['/api/login/password', '/api/login/passkey'])
+        expect([path, size, ...(await answer(caddy.send('POST', path, text)))]).toEqual([
+          path,
+          size,
+          400,
+          { ok: false, error: 'shape' },
+        ])
+      for (const path of ['/api/login/passkey/add/options', '/api/login/passkey/add'])
+        expect([path, size, ...(await answer(as(ADDER).send('POST', path, text)))]).toEqual([
+          path,
+          size,
+          400,
+          { ok: false, error: 'shape' },
+        ])
+    }
+    // A line the board logs after them: one of theirs would come before it.
+    expect((await as(SEEDED).post('/api/log', { text: 'after the bad bodies' })).status).toBe(200)
+    await until(() => logged(proc, 'page: after the bad bodies'))
+    const lines = proc.messages.slice(from).map(m => (m as { log?: string }).log ?? '')
+    expect(lines.filter(line => line.startsWith('tunnel'))).toEqual([])
   })
 
   test('the web board on 127.0.0.1 is as it was: its full hello, and no login', async () => {

@@ -13,9 +13,11 @@
 // The routes' own guards apply as for the web board, with the domain's origin as the board's own.
 // Without a login only what signing in needs: the page and its files (marked remote, as for a
 // phone's browser), a reduced hello, the login routes and the board's probe; anything else is 401,
-// and a cookie that is no login is cleared. The caller's address is the rightmost X-Forwarded-For
-// (Caddy's), for showing and rate limits only. A login's open event streams end, with the event a
-// phone's do, the moment it ends or expires. No answer from here may be shown in a frame.
+// and a cookie that is no login is cleared. A body that is no JSON or too large on the listener's
+// own routes is 400 and no line in the log, which anyone could otherwise grow. The caller's
+// address is the rightmost X-Forwarded-For (Caddy's), for showing and rate limits only. A login's
+// open event streams end, with the event a phone's do, the moment it ends or expires. No answer
+// from here may be shown in a frame.
 import { isRecord } from '../adapters/json-store.ts'
 import {
   clearLoginCookie,
@@ -119,10 +121,13 @@ function unframed(res: Response): Response {
   }
 }
 
-const fieldsOf = async (req: Request): Promise<Body> => {
-  const body = await readBody(req)
-  return isRecord(body) ? body : {}
-}
+/**
+ * The request's JSON body, or undefined when it is no JSON or over 192 KB (readBody): the caller's
+ * mistake, which anyone may make as often as they like, so a 400 and never a line in the log.
+ */
+const bodyOf = (req: Request): Promise<unknown> => readBody(req).catch(() => undefined)
+const badBody = (): Response => json(400, { ok: false, error: 'shape' })
+const fieldsOf = (body: unknown): Body => (isRecord(body) ? body : {})
 
 export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
   let server: Server | null = null
@@ -176,16 +181,22 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
       const nonce = probe[1] ?? ''
       return o.probes.answers(nonce) ? probeAnswer(nonce) : json(404, { error: 'not found' })
     }
-    if (req.method === 'POST' && raw === '/api/login/password')
-      return signInAnswer(await o.access.signInPassword(await fieldsOf(req), who))
+    if (req.method === 'POST' && raw === '/api/login/password') {
+      const body = await bodyOf(req)
+      return body === undefined ? badBody() : signInAnswer(await o.access.signInPassword(fieldsOf(body), who))
+    }
     if (req.method === 'POST' && raw === '/api/login/passkey/options') {
       const room = o.access.rate('passkey', who.address)
       if (!room.ok) return limited(room.retryAfterS)
       return json(200, o.access.passkeyLoginOptions(site))
     }
     // Its rate is taken by the sign-in itself.
-    if (req.method === 'POST' && raw === '/api/login/passkey')
-      return signInAnswer(await o.access.signInPasskey(await readBody(req), { origin, rpId: site }, who))
+    if (req.method === 'POST' && raw === '/api/login/passkey') {
+      const body = await bodyOf(req)
+      return body === undefined
+        ? badBody()
+        : signInAnswer(await o.access.signInPasskey(body, { origin, rpId: site }, who))
+    }
     // The page, its scripts, styles, icons, manifest and service worker: the login screen needs them.
     if (req.method === 'GET' && !raw.startsWith('/api/') && !raw.startsWith('/uploads/')) {
       const page = decoded(raw)
@@ -237,11 +248,15 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
       if (req.method === 'POST' && raw === '/api/login/passkey/add/options') {
         const room = addCodes.take(who.address, Date.now())
         if (!room.ok) return limited(room.retryAfterS)
-        const r = o.access.passkeyAddOptions(login.id, (await fieldsOf(req)).code, { id: site })
+        const body = await bodyOf(req)
+        if (body === undefined) return badBody()
+        const r = o.access.passkeyAddOptions(login.id, fieldsOf(body).code, { id: site })
         return r.ok ? json(200, r.options) : json(r.status, { ok: false, error: r.error })
       }
       if (req.method === 'POST' && raw === '/api/login/passkey/add') {
-        const r = o.access.addPasskey(login.id, await readBody(req), { origin, rpId: site }, who.userAgent)
+        const body = await bodyOf(req)
+        if (body === undefined) return badBody()
+        const r = o.access.addPasskey(login.id, body, { origin, rpId: site }, who.userAgent)
         return r.ok ? json(200, { ok: true, id: r.id }) : json(400, { ok: false, error: r.error })
       }
       const res = await dispatch(o.routes, req, url, path, { ...o.guards, origins: [origin] })

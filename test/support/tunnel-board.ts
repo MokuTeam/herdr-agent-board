@@ -90,7 +90,8 @@ export async function startTunnelBoard(
 
 /**
  * Requests as Caddy forwards them: Host DOMAIN, X-Forwarded-Proto https, X-Forwarded-For CALLER;
- * POSTs with X-Board and ORIGIN. `headers` go over these; one given as '' is left out.
+ * POSTs (and send's other methods) with X-Board and ORIGIN. `headers` go over these; one given as
+ * '' is left out.
  */
 export function viaCaddy(
   tunnel: string,
@@ -98,6 +99,8 @@ export function viaCaddy(
 ): {
   get(path: string, headers?: Record<string, string>): Promise<Response>
   post(path: string, body: unknown, headers?: Record<string, string>): Promise<Response>
+  /** Any method, with `text` as the body as it stands (JSON or not), or none. */
+  send(method: string, path: string, text?: string, headers?: Record<string, string>): Promise<Response>
 } {
   const headersOf = (more: Record<string, string>): Record<string, string> =>
     Object.fromEntries(
@@ -109,14 +112,16 @@ export function viaCaddy(
         ...more,
       }).filter(([, value]) => value !== ''),
     )
+  const send = (method: string, path: string, text?: string, headers: Record<string, string> = {}) =>
+    fetch(tunnel + path, {
+      method,
+      headers: headersOf({ 'content-type': 'application/json', 'x-board': '1', origin: ORIGIN, ...headers }),
+      ...(text === undefined ? {} : { body: text }),
+    })
   return {
     get: (path, headers = {}) => fetch(tunnel + path, { headers: headersOf(headers) }),
-    post: (path, body, headers = {}) =>
-      fetch(tunnel + path, {
-        method: 'POST',
-        headers: headersOf({ 'content-type': 'application/json', 'x-board': '1', origin: ORIGIN, ...headers }),
-        body: JSON.stringify(body),
-      }),
+    post: (path, body, headers = {}) => send('POST', path, JSON.stringify(body), headers),
+    send,
   }
 }
 
