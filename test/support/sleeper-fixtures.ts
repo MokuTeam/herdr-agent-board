@@ -162,5 +162,33 @@ export function herdrAsleep(
   })
 }
 
+/** herdr with the session running in p1, idle (as a wake through wake's API leaves it). */
+export function herdrAwake(box: Sandbox, cwd: string): void {
+  const pane = {
+    pane_id: 'p1',
+    workspace_id: 'w1',
+    tab_id: 't1',
+    cwd,
+    agent: 'claude',
+    agent_session: { value: SID },
+    agent_status: 'idle',
+    terminal_title_stripped: 'Report',
+  }
+  box.state({
+    'api snapshot': {
+      result: {
+        snapshot: {
+          workspaces: [{ workspace_id: 'w1', label: 'Отчёты 50%' }],
+          tabs: [{ tab_id: 't1', workspace_id: 'w1' }],
+          panes: [pane],
+        },
+      },
+    },
+    'agent get': { result: { agent: { agent: 'claude', agent_status: 'idle', agent_session: { value: SID } } } },
+    'agent read': { text: SCREEN },
+    'agent prompt': { result: {} },
+  })
+}
+
 /** herdr's calls on panes (not the reads of `pane get`), in order. */
 export const paneCalls = (box: Sandbox): string[][] => box.calls().filter(c => c[0] === 'pane' && c[1] !== 'get')
