@@ -47,6 +47,20 @@ test('a session in another profile than the default one comes back through board
   expect(resumeCommand(posix)).toEqual(['board', 'resume', SID, '--profile', 'work'])
 })
 
+test('a folder with spaces, another alphabet or % never goes into the command: only the profile’s id', () => {
+  const home = 'C:\\Users\\Имя Фамилия 100%'
+  const work: Profile = { ...WORK, dir: `${home}\\.claude-work` }
+  const facts = start(`${home}\\.claude-work`, { home, profiles: [{ ...DEFAULT, dir: `${home}\\.claude` }, work] })
+  expect(resumeCommand(facts)).toEqual(['board', 'resume', SID, '--profile', 'work'])
+  expect(resumeCommand({ ...facts, dir: `${home}\\.claude` })).toBeNull()
+  // An id that is not a plain word (config.json can name one so) stays out; the card has the folder.
+  for (const id of ['работа', 'work 2', '100%']) {
+    expect(resumeCommand({ ...facts, profiles: [{ ...work, id }] })).toEqual(['board', 'resume', SID])
+  }
+  // A board key that is no Claude session id (a bare pane's, pi's file) gets no command.
+  expect(resumeCommand({ ...facts, session: 'pane-w1:p2' })).toBeNull()
+})
+
 test('a folder no profile has: board resume finds it on the card, no --profile', () => {
   expect(resumeCommand(start('D:\\claude homes\\odd'))).toEqual(['board', 'resume', SID])
   // An id herdr would not take as a plain word stays out of the command.
@@ -186,6 +200,9 @@ test('board resume: without a card, the profile named; without either, the env a
   expect(plan({ card: null, profile: 'gone', env }).env).toBe(env)
   // A relative folder on the card is no folder to set.
   expect(plan({ card: { profileDir: '.claude-work' }, env }).env).toBe(env)
+  // A folder with spaces, another alphabet or % is set as it is: no shell reads it.
+  const odd = 'C:\\Users\\Имя Фамилия 100%\\.claude-work'
+  expect(plan({ card: { profileDir: odd }, env }).env).toEqual({ PATH: 'C:\\bin', CLAUDE_CONFIG_DIR: odd })
 })
 
 test('board resume: launch.claude unset is claude with launch.args; one that picks its session is refused', () => {
