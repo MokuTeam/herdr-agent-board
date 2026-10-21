@@ -20,11 +20,16 @@ import {
   hooksInstalled,
   installInto,
   readSettings,
+  wakeHooksIn,
 } from '../../src/adapters/hook-settings.ts'
 import type { InstallPaths } from '../../src/core/install-plan.ts'
 import { boardFiles } from '../../src/core/setup.ts'
 
-const paths = (root: string): InstallPaths => ({ bun: 'C:\\bun.exe', ...boardFiles(root), binDir: 'C:\\bin' })
+const paths = (root: string): InstallPaths & { wakeHook: string } => ({
+  bun: 'C:\\bun.exe',
+  ...boardFiles(root),
+  binDir: 'C:\\bin',
+})
 const A = paths('C:\\plugins\\agent-board')
 const B = paths('D:\\elsewhere\\agent-board')
 
@@ -157,4 +162,41 @@ test('herdr’s own hook: its SessionStart entry and the script it runs, both th
   // The script gone: missing at once, though settings.json did not change.
   rmSync(script)
   expect(herdrHookInstalled(dir)).toBe(false)
+})
+
+test('installInto with wake on: its hooks in, or none beside the old plugin’s; what a folder has of them, by mtime', () => {
+  const home = tempDir()
+  const dir = join(home, '.claude')
+  mkdirSync(dir)
+  const file = join(dir, 'settings.json')
+  let n = 0
+  const changed = (path = file): void => {
+    const at = new Date(Date.UTC(2026, 0, 1, 0, 0, ++n))
+    utimesSync(path, at, at)
+  }
+  expect(wakeHooksIn(dir, A.wakeHook)).toBe('missing') // no file
+  writeFileSync(file, '{}')
+  changed()
+  expect(wakeHooksIn(dir, A.wakeHook)).toBe('missing')
+  expect(installInto(dir, A, { wake: true })).toMatchObject({ ok: true, wakeHooks: 'added' })
+  changed()
+  expect(wakeHooksIn(dir, A.wakeHook)).toBe('in')
+  expect(wakeHooksIn(dir, B.wakeHook)).toBe('missing') // another copy's
+  // Without wake: no word of them, and they stay.
+  expect(installInto(dir, A)).not.toHaveProperty('wakeHooks')
+  changed()
+  expect(wakeHooksIn(dir, A.wakeHook)).toBe('in')
+
+  // The separate plugin's in the file: none of ours, and the install says so.
+  const old = join(home, '.claude-old')
+  mkdirSync(old)
+  const command = 'node "C:\\Users\\me\\AppData\\Roaming\\herdr\\plugins\\config\\herdr-wake\\hook.mjs" post-list'
+  const theirs = { hooks: { PostToolUse: [{ matcher: 'ListAgents', hooks: [{ type: 'command', command }] }] } }
+  writeFileSync(join(old, 'settings.json'), JSON.stringify(theirs))
+  expect(installInto(old, A, { wake: true })).toMatchObject({ ok: true, wakeHooks: 'old' })
+  changed(join(old, 'settings.json'))
+  expect(wakeHooksIn(old, A.wakeHook)).toBe('old')
+  expect(JSON.parse(readFileSync(join(old, 'settings.json'), 'utf8')).hooks.PostToolUse).toEqual(
+    theirs.hooks.PostToolUse,
+  )
 })

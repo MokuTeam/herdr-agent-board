@@ -27,6 +27,8 @@ export interface BoardFiles {
   hook: string
   statusline: string
   toast: string
+  /** Wake's ListAgents and SendMessage hooks (#119), which install writes while wake is on. */
+  wakeHook: string
   /** The agents' skill (skills/herdr-agents/SKILL.md), which install copies into each shown profile. */
   skill: string
 }
@@ -40,6 +42,7 @@ export function boardFiles(root: string): BoardFiles {
     hook: entrypoint('hook.ts'),
     statusline: entrypoint('statusline.ts'),
     toast: join(root, 'src', 'integrations', 'toast.ps1'),
+    wakeHook: entrypoint('wake-hook.ts'),
     skill: join(root, 'skills', SKILL, 'SKILL.md'),
   }
 }

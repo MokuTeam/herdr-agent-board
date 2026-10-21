@@ -1,14 +1,14 @@
-// Install from the Profiles panel: the board's hooks and status line into one profile's
-// settings.json, the agents' skill into its skills folder, and herdr's own Claude hook (herdr
-// writes it), as the install action puts them into every shown profile (adapters/hook-settings.ts,
-// adapters/agents-skill.ts, adapters/herdr.ts). Only into a shown profile, and only into a folder
-// that is there. The panel's edits go through here too: one that shows a hidden profile installs
-// into it at once.
-import { statSync } from 'node:fs'
+// Install from the Profiles panel: the board's hooks and status line (wake's too while wake is on)
+// into one profile's settings.json, the agents' skill into its skills folder, and herdr's own
+// Claude hook (herdr writes it), as the install action puts them into every shown profile
+// (adapters/hook-settings.ts, adapters/agents-skill.ts, adapters/herdr.ts). Only into a shown
+// profile, and only into a folder that is there. The panel's edits go through here too: one that
+// shows a hidden profile installs into it at once.
+import { existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { installSkill } from '../adapters/agents-skill.ts'
-import { type EditResult, editProfiles } from '../adapters/config-file.ts'
+import { configFile, type EditResult, editProfiles, readConfigFile } from '../adapters/config-file.ts'
 import { claudeIntegrationInstall } from '../adapters/herdr.ts'
 import { herdrHookInstalled, hooksInstalled, installInto } from '../adapters/hook-settings.ts'
 import { isRecord } from '../adapters/json-store.ts'
@@ -19,6 +19,7 @@ import type { InstallPaths } from '../core/install-plan.ts'
 import { t } from '../core/lang.ts'
 import type { Profile } from '../core/profiles.ts'
 import { boardFiles } from '../core/setup.ts'
+import { wakeSwitch } from '../core/wake/config.ts'
 import type { Deps } from './deps.ts'
 
 // The files of this copy of the board: a profile's settings.json has its hooks when they run these.
@@ -55,8 +56,14 @@ export async function installProfile(deps: Pick<Deps, 'profiles'>, id: string): 
 async function installShown(profile: Profile): Promise<EditResult> {
   if (!isFolder(profile.dir)) return { ok: false, error: t('err.profile.noFolder', { path: profile.dir }) }
   // The paths as the install action has them; the commands' folder is the install action's alone.
-  const paths: InstallPaths = { bun: process.execPath, ...FILES, binDir: join(homedir(), '.local', 'bin') }
-  const out = installInto(profile.dir, paths)
+  const paths: InstallPaths & { wakeHook: string } = {
+    bun: process.execPath,
+    ...FILES,
+    binDir: join(homedir(), '.local', 'bin'),
+  }
+  // Wake's hooks too while config.json says wake is on, as the install action reads it (#119).
+  const wake = wakeSwitch({ exists: existsSync(configFile()), raw: readConfigFile() })
+  const out = installInto(profile.dir, paths, { wake })
   if (!out.ok) return { ok: false, error: out.error }
   const skill = readText(FILES.skill)
   try {

@@ -1,16 +1,25 @@
 import { describe, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { type InstallPaths, isOurCommand, planSettings, planShims, quote } from '../../src/core/install-plan.ts'
+import {
+  type InstallPaths,
+  isOurCommand,
+  OLD_WAKE_HOOK,
+  planSettings,
+  planShims,
+  quote,
+  wakeHooksState,
+} from '../../src/core/install-plan.ts'
 
 // Where the plugin and Bun live on a Windows machine with a space and a Cyrillic user name in the paths.
 const plugin = 'C:\\Users\\Имя\\AppData\\Roaming\\herdr\\plugins\\agent-board'
-const paths: InstallPaths = {
+const paths: InstallPaths & { wakeHook: string } = {
   bun: 'C:\\Program Files\\Bun\\bun.exe',
   hook: `${plugin}\\src\\entrypoints\\hook.ts`,
   statusline: `${plugin}\\src\\entrypoints\\statusline.ts`,
   cli: `${plugin}\\src\\entrypoints\\cli.ts`,
   spawn: `${plugin}\\src\\entrypoints\\spawn-agent.ts`,
   toast: `${plugin}\\src\\integrations\\toast.ps1`,
+  wakeHook: `${plugin}\\src\\entrypoints\\wake-hook.ts`,
   binDir: 'C:\\Users\\Имя\\.local\\bin',
 }
 const hookCommand =
@@ -223,5 +232,146 @@ describe('isOurCommand', () => {
       '',
     ])
       assert.equal(isOurCommand(command), false, command)
+  })
+})
+
+describe('wake’s hooks (#119)', () => {
+  const wakeCommand = (mode: string): string =>
+    `"C:/Program Files/Bun/bun.exe" "C:/Users/Имя/AppData/Roaming/herdr/plugins/agent-board/src/entrypoints/wake-hook.ts" ${mode}`
+  const send = { matcher: 'SendMessage', hooks: [{ type: 'command', command: wakeCommand('pre-send'), timeout: 180 }] }
+  const list = { matcher: 'ListAgents', hooks: [{ type: 'command', command: wakeCommand('post-list'), timeout: 10 }] }
+  const theirs = { matcher: 'Bash', hooks: [{ type: 'command', command: 'theirs' }] }
+  // As herdr-wake's install-hooks.mjs writes them.
+  const oldHook = (mode: string) => ({
+    ...(mode === 'session-start' ? {} : { matcher: mode === 'pre-send' ? 'SendMessage' : 'ListAgents' }),
+    hooks: [
+      {
+        type: 'command',
+        command: `node "C:\\Users\\Имя\\AppData\\Roaming\\herdr\\plugins\\config\\herdr-wake\\hook.mjs" ${mode}`,
+        timeout: mode === 'pre-send' ? 180 : 10,
+      },
+    ],
+  })
+  const oldPlugin = {
+    hooks: {
+      PreToolUse: [theirs, oldHook('pre-send')],
+      PostToolUse: [oldHook('post-list')],
+      SessionStart: [oldHook('session-start')],
+    },
+  }
+  type Hooks = Record<string, unknown[] | undefined>
+  const hooksOf = (settings: Record<string, unknown>): Hooks => settings.hooks as Hooks
+  /** An entry that runs wake's hook, any copy's. */
+  const isWake = (e: unknown): boolean => JSON.stringify(e).includes('wake-hook.ts')
+  const wakeOf = (settings: Record<string, unknown>, event: string): unknown[] =>
+    (hooksOf(settings)[event] ?? []).filter(isWake)
+  /** The settings without wake's entries (an event left with none goes). */
+  const wakeFree = (settings: Record<string, unknown>): Record<string, unknown> => {
+    const hooks: Hooks = {}
+    for (const [event, list] of Object.entries(hooksOf(settings))) {
+      const left = (list ?? []).filter(e => !isWake(e))
+      if (left.length) hooks[event] = left
+    }
+    return { ...settings, hooks }
+  }
+  const wakeCommands = (replaced: string[]): string[] => replaced.filter(c => c.includes('wake-hook.ts'))
+
+  test('wake on: SendMessage and ListAgents once, everyone else’s left alone, the rest as without', () => {
+    const before = { model: 'opus', hooks: { PreToolUse: [theirs], Stop: [theirs] } }
+    const without = planSettings(before, paths)
+    const plan = planSettings(before, paths, { wake: true })
+    assert.deepEqual(wakeFree(plan.settings), without.settings)
+    assert.deepEqual(hooksOf(plan.settings).PreToolUse?.[0], theirs)
+    assert.deepEqual(hooksOf(plan.settings).PreToolUse?.at(-1), send)
+    assert.deepEqual(wakeOf(plan.settings, 'PreToolUse'), [send])
+    assert.deepEqual(hooksOf(plan.settings).PostToolUse, [list])
+    assert.deepEqual([plan.oldWake, plan.replaced, plan.statusLineSet], [false, without.replaced, true])
+    // Again: the same file, ours replaced by ours.
+    const again = planSettings(plan.settings, paths, { wake: true })
+    assert.deepEqual(again.settings, plan.settings)
+    assert.deepEqual(wakeCommands(again.replaced), [wakeCommand('pre-send'), wakeCommand('post-list')])
+    // With the notification hooks on too: each once in PreToolUse, wake's last.
+    const once = planSettings(plan.settings, paths, { wake: true, toast: true })
+    const twice = planSettings(once.settings, paths, { wake: true, toast: true })
+    assert.deepEqual(twice.settings, once.settings)
+    const pre = hooksOf(twice.settings).PreToolUse ?? []
+    assert.equal(pre.filter(e => JSON.stringify(e).includes('toast.ps1')).length, 1)
+    assert.deepEqual(wakeOf(twice.settings, 'PreToolUse'), [send])
+    assert.deepEqual(pre.at(-1), send)
+  })
+
+  test('a copy moved elsewhere: the earlier ones of ours replaced, also in an entry shared with someone else', () => {
+    const earlier = (mode: string) => ({
+      type: 'command',
+      command: `"D:/bun.exe" "D:/Tools/herdr-agent-board/src/entrypoints/wake-hook.ts" ${mode}`,
+      timeout: 5,
+    })
+    const shared = { matcher: 'SendMessage', hooks: [{ type: 'command', command: 'theirs' }, earlier('pre-send')] }
+    const before = {
+      hooks: { PreToolUse: [shared], PostToolUse: [{ matcher: 'ListAgents', hooks: [earlier('post-list')] }] },
+    }
+    const plan = planSettings(before, paths, { wake: true })
+    assert.deepEqual(hooksOf(plan.settings).PreToolUse?.[0], {
+      matcher: 'SendMessage',
+      hooks: [{ type: 'command', command: 'theirs' }],
+    })
+    assert.deepEqual(wakeOf(plan.settings, 'PreToolUse'), [send])
+    assert.deepEqual(hooksOf(plan.settings).PostToolUse, [list])
+    assert.deepEqual(wakeCommands(plan.replaced), [earlier('pre-send').command, earlier('post-list').command])
+  })
+
+  test('wake off, or not said: ours neither added nor taken out', () => {
+    for (const off of [{ wake: false }, {}]) {
+      const none = planSettings({ hooks: { PreToolUse: [theirs] } }, paths, off)
+      assert.deepEqual(none.settings, planSettings({ hooks: { PreToolUse: [theirs] } }, paths).settings)
+      assert.equal(JSON.stringify(none.settings).includes('wake-hook.ts'), false)
+      const had = planSettings({}, paths, { wake: true }).settings
+      const kept = planSettings(had, paths, off)
+      assert.deepEqual(kept.settings, had)
+      assert.equal(kept.oldWake, false)
+    }
+  })
+
+  test('never beside the old plugin’s hooks: none of ours added, earlier ones of ours taken out, its own left', () => {
+    const plan = planSettings(oldPlugin, paths, { wake: true })
+    assert.equal(plan.oldWake, true)
+    assert.deepEqual(plan.settings, planSettings(oldPlugin, paths).settings)
+    assert.deepEqual(hooksOf(plan.settings).PreToolUse?.slice(0, 2), oldPlugin.hooks.PreToolUse)
+    assert.deepEqual(hooksOf(plan.settings).PostToolUse, oldPlugin.hooks.PostToolUse)
+    assert.deepEqual(hooksOf(plan.settings).SessionStart, [oldHook('session-start'), ourHook])
+    const both = planSettings(
+      { hooks: { ...oldPlugin.hooks, PostToolUse: [oldHook('post-list'), list], PreToolUse: [send] } },
+      paths,
+      { wake: true },
+    )
+    assert.deepEqual(hooksOf(both.settings).PostToolUse, [oldHook('post-list')])
+    assert.equal(JSON.stringify(both.settings).includes('wake-hook.ts'), false)
+    assert.deepEqual(wakeCommands(both.replaced), [wakeCommand('pre-send'), wakeCommand('post-list')])
+    // Wake off: the old plugin's and ours as they were.
+    const off = planSettings({ hooks: { PostToolUse: [oldHook('post-list'), list] } }, paths, { wake: false })
+    assert.deepEqual(hooksOf(off.settings).PostToolUse, [oldHook('post-list'), list])
+    assert.equal(off.oldWake, true)
+  })
+
+  test('the old plugin’s commands as its install-hooks.mjs recognises them; ours are not the board’s every-prompt hook', () => {
+    for (const command of [
+      'node "C:\\Users\\Имя\\AppData\\Roaming\\herdr\\plugins\\config\\herdr-wake\\hook.mjs" pre-send',
+      'node "/home/me/.config/herdr/plugins/config/herdr-wake/hook.mjs" post-list',
+      'node /home/me/.config/herdr/plugins/config/herdr-wake/hook.mjs session-start',
+    ])
+      assert.equal(OLD_WAKE_HOOK.test(command), true, command)
+    for (const command of [wakeCommand('pre-send'), 'node "C:\\tools\\herdr-wake\\hook.mjs" report', 'theirs'])
+      assert.equal(OLD_WAKE_HOOK.test(command), false, command)
+    assert.equal(isOurCommand(wakeCommand('pre-send')), false)
+  })
+
+  test('what a settings.json has of wake’s hooks: both of this copy’s, the old plugin’s, or not both', () => {
+    const on = planSettings({}, paths, { wake: true }).settings
+    assert.equal(wakeHooksState(on, paths.wakeHook), 'in')
+    assert.equal(wakeHooksState(on, 'D:\\other\\agent-board\\src\\entrypoints\\wake-hook.ts'), 'missing')
+    assert.equal(wakeHooksState({ hooks: { PreToolUse: [send] } }, paths.wakeHook), 'missing')
+    assert.equal(wakeHooksState(oldPlugin, paths.wakeHook), 'old')
+    for (const settings of [undefined, null, {}, { hooks: [] }, 'text'])
+      assert.equal(wakeHooksState(settings, paths.wakeHook), 'missing')
   })
 })

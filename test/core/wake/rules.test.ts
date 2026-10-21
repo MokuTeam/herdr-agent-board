@@ -86,3 +86,16 @@ test('the hooks keep their own profile’s sleepers, the folder spelled any way'
     }),
   ).toHaveLength(1)
 })
+
+test('a sleeper whose profile names no folder anyone is in is no caller’s; only one without a profile is the default’s', () => {
+  const home = 'C:\\Users\\Иван Петров'
+  const list = [
+    { name: 'relative', profile: { dir: '.claude' } },
+    { name: 'blank', profile: { dir: '' } },
+    { name: 'none' },
+  ]
+  for (const configDir of [undefined, '', '~/.claude', 'C:\\Users\\Иван Петров\\.claude', '~/.claude-work'])
+    expect(ownSleepers(list, { configDir, home, platform: 'win32' }).map(e => e.name)).toEqual(
+      configDir?.includes('work') ? [] : ['none'],
+    )
+})
