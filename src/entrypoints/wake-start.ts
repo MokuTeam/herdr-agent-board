@@ -15,7 +15,7 @@ import { configFile, readConfigFile } from '../adapters/config-file.ts'
 import { herdr } from '../adapters/herdr.ts'
 import { ROOT } from '../adapters/paths.ts'
 import { isAlive } from '../adapters/process.ts'
-import { wakeAnswers } from '../adapters/wake-api.ts'
+import { wakeAlive } from '../adapters/wake-api.ts'
 import { boardPaneNow, readWakeStatus, takeWakeStartLock, wakeLog, writeWakeStatus } from '../adapters/wake-files.ts'
 import { wakeConfig, wakeSwitch } from '../core/wake/config.ts'
 import { type BoardPlace, START_DEADLINE_MS, startWake } from '../services/wake/start.ts'
@@ -23,7 +23,7 @@ import { takeOverAtFirstStart } from '../services/wake/takeover.ts'
 
 /** One herdr call waits this long at most (less when the deadline is nearer). */
 const CALL_MS = 8000
-/** How long a wake has to answer on its port (GET /alive, else the old router's /status). */
+/** How long a wake has to answer GET /alive on its port (the board's wake's own, never asking herdr). */
 const ANSWER_MS = 2000
 
 // The kill switch, before anything else: off, wake's start asks herdr nothing and writes nothing.
@@ -96,7 +96,7 @@ const herdrCall = <T = unknown>(args: string[], timeoutMs?: number): Promise<T> 
 const result = await startWake(
   {
     herdr: herdrCall,
-    answers: port => wakeAnswers(port, ANSWER_MS),
+    answers: port => wakeAlive(port, ANSWER_MS),
     readStatus: () => readWakeStatus(),
     writeStatus: s => writeWakeStatus(s),
     alive: isAlive,

@@ -28,7 +28,8 @@ import { dirname, join } from 'node:path'
 import { asSavedBoard } from '../core/board-pane.ts'
 import { asWakeSessions, type WakeSessions } from '../core/wake/sessions.ts'
 import { asWakeStatus, type WakeStatusFile } from '../core/wake/status.ts'
-import { renameWithRetry, replaceFile } from './json-store.ts'
+import type { Switched, SwitchSummary } from '../core/wake/view.ts'
+import { isRecord, renameWithRetry, replaceFile } from './json-store.ts'
 import { boardFile, stateDir } from './paths.ts'
 
 export const wakeSessionsFile = (): string => join(stateDir(), 'wake-sessions.json')
@@ -146,21 +147,52 @@ export function writeWakeStatus(status: WakeStatusFile, file = wakeStatusFile())
   replaceFile(file, `${JSON.stringify({ ...kept, ...status }, null, 1)}\n`)
 }
 
-/** The takeover's marker: when it ran, and what it did, line by line. */
+/**
+ * The takeover's marker: when it ran, what it did line by line, and what it took over (the summary,
+ * the launcher note and the key bindings, as Switch over… answers them). `unseen`: it ran at wake's
+ * first start, which nobody asked for, and the panel has not shown it yet; the panel and board
+ * doctor say what it did until then.
+ */
 export interface WakeTakeover {
   at: number
   did: string[]
+  summary?: SwitchSummary
+  launcher?: { old: string; now: string } | null
+  bindings?: { key: string; old: string; now: string }[]
+  unseen?: boolean
 }
 
-/** The takeover's marker; null when there is none or it does not read as one. */
+const isPair = (v: unknown): v is { old: string; now: string } =>
+  isRecord(v) && typeof v.old === 'string' && typeof v.now === 'string'
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+
+/** A summary as the marker has it; null when it does not read as one. */
+function asSummary(v: unknown): SwitchSummary | null {
+  if (!isRecord(v) || (v.reaper !== 'on' && v.reaper !== 'off') || typeof v.telegram !== 'boolean') return null
+  if (!isCount(v.minutes) || !isCount(v.excluded) || !isCount(v.asleep)) return null
+  return { reaper: v.reaper, minutes: v.minutes, excluded: v.excluded, telegram: v.telegram, asleep: v.asleep }
+}
+
+/** The takeover's marker; null when there is none or it does not read as one (its other fields only when of their type). */
 export function readWakeTakeover(file = wakeTakeoverFile()): WakeTakeover | null {
   try {
     const v = parsed(readText(file) ?? '')
-    if (!v || typeof v !== 'object' || Array.isArray(v)) return null
-    const { at, did } = v as Record<string, unknown>
-    return typeof at === 'number' && Number.isFinite(at) && Array.isArray(did)
-      ? { at, did: did.filter((line): line is string => typeof line === 'string') }
-      : null
+    if (!isRecord(v)) return null
+    const { at, did, launcher, bindings, unseen } = v
+    if (typeof at !== 'number' || !Number.isFinite(at) || !Array.isArray(did)) return null
+    const summary = asSummary(v.summary)
+    return {
+      at,
+      did: did.filter((line): line is string => typeof line === 'string'),
+      ...(summary && { summary }),
+      ...((launcher === null || isPair(launcher)) && { launcher }),
+      ...(Array.isArray(bindings) && {
+        bindings: bindings.filter(
+          (b): b is { key: string; old: string; now: string } => isRecord(b) && typeof b.key === 'string' && isPair(b),
+        ),
+      }),
+      ...(unseen === true && { unseen }),
+    }
   } catch {
     return null
   }
@@ -170,6 +202,24 @@ export function readWakeTakeover(file = wakeTakeoverFile()): WakeTakeover | null
 export function writeWakeTakeover(marker: WakeTakeover, file = wakeTakeoverFile()): void {
   mkdirSync(dirname(file), { recursive: true })
   replaceFile(file, `${JSON.stringify(marker, null, 1)}\n`)
+}
+
+/**
+ * What the takeover at wake's first start took over, while the panel has not shown it (the
+ * marker's `unseen`): its lines, summary, launcher note and key bindings; null otherwise.
+ */
+export function unseenWakeTakeover(file = wakeTakeoverFile()): Switched | null {
+  const m = readWakeTakeover(file)
+  if (!m?.unseen || !m.summary) return null
+  return { did: m.did, summary: m.summary, launcher: m.launcher ?? null, bindings: m.bindings ?? [] }
+}
+
+/** The panel showed what the first start's takeover did: `unseen` taken off the marker, its other fields kept. Throws when it cannot be written. */
+export function wakeTakeoverSeen(file = wakeTakeoverFile()): void {
+  const v = parsed(readText(file) ?? '')
+  if (!isRecord(v) || v.unseen === undefined) return
+  const { unseen: _seen, ...rest } = v
+  replaceFile(file, `${JSON.stringify(rest, null, 1)}\n`)
 }
 
 /** The pane board.json names (the board's own, which wake never closes); null when there is none. */

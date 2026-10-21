@@ -22,14 +22,16 @@
 // request with an Origin, or a Host other than 127.0.0.1:<port> or localhost:<port> (a web page, DNS
 // rebinding), is refused with 403. Once it listens it says { up: <port> } over its IPC channel, when it has one
 // (the supervisor's, services/wake/supervisor.ts); told 'restart' there (a code change), it ends
-// with 75 once no wake or sleep is under way, answering new ones 503 meanwhile. The port keeps wake
+// with 75 once no wake or sleep is under way, answering new ones 503 meanwhile; that channel closed
+// (the supervisor gone), it ends with 0 the same way, as when turned off. The port keeps wake
 // to one process: held by a wake of the board's, this one ends with 0 quietly; by another program
 // (the separate herdr-wake plugin's router too, named), the status file says portTaken and the
 // exit is 76.
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
 import { configFile, liveConfig, loadConfig, readConfigFile } from '../adapters/config-file.ts'
+import { followedJson } from '../adapters/followed-json.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { stateDir } from '../adapters/paths.ts'
 import { boardOnPath } from '../adapters/resume-report.ts'
@@ -85,14 +87,12 @@ function roundMs(): number | null {
   return Number.isInteger(ms) && ms >= 1 && ms <= MAX_TIMER_MS ? ms : null
 }
 
-/** ~/.claude.json, where tg-mcp's url and token are by default; null when there is none or it does not parse. */
-function claudeJson(): unknown {
-  try {
-    return JSON.parse(readFileSync(join(homedir(), '.claude.json'), 'utf8').replace(/^\uFEFF/, ''))
-  } catch {
-    return null
-  }
-}
+/**
+ * ~/.claude.json, where tg-mcp's url and token are by default: read again only when it changed, and
+ * caught in the middle of Claude Code's rewrite, as it last parsed (so Telegram does not go off and
+ * on with it); null when there is none.
+ */
+const claudeJson = followedJson(join(homedir(), '.claude.json'))
 
 const telegramSaid = (s: WakeConfig): string =>
   (s.telegram === 'auto' && telegramTarget(s, claudeJson())?.host) || 'Telegram off'
@@ -408,4 +408,10 @@ if (start.reaper.enabled) reaper = reaperLoop()
 // done; the supervisor starts it again at once. Turned off meanwhile, it ends with 0 all the same.
 process.on('message', m => {
   if (m === 'restart' && !leaving) leave(RESTART_EXIT, 'wake is restarting', 'restarting for a code change')
+})
+// Its supervisor gone (its pane closed, the process killed): nobody would start this one again
+// after a code change nor watch its health, so it leaves as when turned off, giving its port back
+// for the wake its next start opens.
+process.on('disconnect', () => {
+  if (leaving?.code !== 0) leave(0, 'wake is stopping', 'its supervisor is gone: stopping')
 })

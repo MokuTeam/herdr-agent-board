@@ -22,6 +22,7 @@ import {
   boardPaneNow,
   peekWakeSessions,
   readWakeStatus,
+  unseenWakeTakeover,
   wakeLog,
   wakeLogFile,
   wakeLogTail,
@@ -163,7 +164,7 @@ export async function closeWakeWorkspace(
     await herdr(['workspace', 'close', ws.workspace_id])
     return 'workspace'
   }
-  const wakes = recordedPane(snap, place.wakePane ?? undefined, label, place.board)
+  const wakes = recordedPane(snap, place.wakePane ?? undefined, label, place.board, place.root)
   if (!wakes || boards(wakes.pane_id)) return null
   const close = closeOfPane(snap, wakes)
   await herdr(close)
@@ -272,13 +273,16 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
   /**
    * Wake's start unless it is held, a start is under way (its record says starting, for at most a
    * minute: herdr's startup entry, or an earlier Start), or it answers. Start again goes past this.
+   * `anew` (the panel's Start): while not running, its pane is made anew (--again), past a record
+   * whose pid another process may have now.
    */
-  async function launch(): Promise<EditResult> {
+  async function launch(anew = false): Promise<EditResult> {
     const file = readWakeStatus()
     if (file?.state === 'held') return { ok: false, error: t('wake.state.held') }
-    if (wakeState({ on: true, status: file, answers: false, now: now() }) === 'starting') return { ok: true }
+    const state = wakeState({ on: true, status: file, answers: false, now: now() })
+    if (state === 'starting') return { ok: true }
     if (await answering()) return { ok: true }
-    return starts()
+    return starts(anew && state === 'notRunning' ? ['--again'] : undefined)
   }
 
   const pause = (ms: number): Promise<void> =>
@@ -323,6 +327,8 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
       const s = settingsNow()
       const target = telegramTarget(s, (o.claudeJson ?? readClaudeJson)())
       const answer = s.enabled ? record(await status().catch(() => null)) : null
+      // What the takeover at wake's first start did, until the panel has shown it.
+      const takenOver = unseenWakeTakeover()
       return {
         reaper: s.reaper,
         telegram: s.telegram,
@@ -330,6 +336,7 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
         lastError: typeof answer?.lastError === 'string' ? answer.lastError : null,
         log: wakeLogFile(),
         hooks: o.hooks?.() ?? [],
+        ...(takenOver && { takenOver }),
       }
     },
     async turn(on) {
@@ -362,7 +369,7 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
       return r
     },
     async start() {
-      return settingsNow().enabled ? launch() : refused()
+      return settingsNow().enabled ? launch(true) : refused()
     },
     async again() {
       return settingsNow().enabled ? starts(['--again']) : refused()

@@ -2,12 +2,14 @@
 // (entrypoints/wake-start.ts) and the board's "Start" and "Start again": makes sure one wake pane
 // runs, in a workspace of its own (`Wake`), never in the board's. Off: nothing at all. The old
 // herdr-wake plugin installed: held, nothing opened. A wake answering on its port, or its pane there
-// with its supervisor's process alive: nothing to do. Otherwise a pane herdr restored as a bare
+// with its supervisor's process alive and either parked (crashed, port taken) or started within a
+// start's time: nothing to do (a pid alive after that, with nothing answering, is another
+// process's: herdr's restart, Fast Startup). Otherwise a pane herdr restored as a bare
 // shell (its process gone) is closed, with its tab when nothing but herdr-sidebar's panes is beside
 // it, the workspace's leftover tabs too (only wake's shells or sidebar panes in them), and a new
 // wake pane opened. herdr gives a pane's id out again after it starts over: the recorded pane is
-// taken for wake's only in wake's workspace with no agent in it, and never the board's; else it is
-// left alone. The old plugin removed by hand: its takeover runs once, before the new pane opens
+// taken for wake's only in wake's workspace with no agent in it, in the plugin's folder, and never
+// the board's; else it is left alone. The old plugin removed by hand: its takeover runs once, before the new pane opens
 // (takeover.ts). An error is logged and recorded in the status file, never thrown.
 import { asSnapshot, type HerdrPane, type HerdrSnapshot, type HerdrWorkspace } from '../../adapters/herdr.ts'
 import { sameDir } from '../../core/launch/names.ts'
@@ -16,7 +18,7 @@ import { STARTING_MS, type WakeStatusFile } from '../../core/wake/status.ts'
 
 export interface StartDeps {
   herdr<T = unknown>(args: string[], timeoutMs?: number): Promise<T>
-  /** Whether a wake answers on the port (adapters/wake-api.ts wakeAnswers). */
+  /** Whether the board's wake answers GET /alive on the port (adapters/wake-api.ts wakeAlive); the old router never does. */
   answers(port: number): Promise<boolean>
   readStatus(): WakeStatusFile | null
   writeStatus(s: WakeStatusFile): void
@@ -120,31 +122,42 @@ export function closeOfPane(snap: HerdrSnapshot, pane: HerdrPane): string[] {
 }
 
 /**
- * The recorded pane when it can be wake's: in a workspace labelled wake's, with no agent in it, not
- * the board's. Null otherwise, and when it is gone: herdr gives a pane's id out again after it
- * starts over, so such a pane is somebody else's now.
+ * The recorded pane when it can be wake's: in a workspace labelled wake's, with no agent in it, in
+ * the plugin's folder (`root`), not the board's. Null otherwise, and when it is gone: herdr gives a
+ * pane's id out again after it starts over, so such a pane is somebody else's now (an editor or a
+ * server of the user's in another folder, say).
  */
 export function recordedPane(
   snap: HerdrSnapshot,
   pane: string | undefined,
   label: string,
   board: BoardPlace,
+  root: string,
 ): HerdrPane | null {
   const p = pane === undefined ? undefined : snap.panes.find(x => x.pane_id === pane)
-  if (!p || p.agent || p.pane_id === board.pane) return null
+  if (!p || p.agent || p.pane_id === board.pane || !sameDir(p.cwd, root)) return null
   const ws = workspaceOf(snap, p)
   return snap.workspaces.some(w => w.workspace_id === ws && w.label === label) ? p : null
 }
 
+/** States in which the supervisor waits on purpose (crashed five times, or its port another program's): nothing answers, yet it runs. */
+const PARKED: ReadonlySet<WakeStatusFile['state']> = new Set(['crashed', 'portTaken'])
+
 /**
- * Whether the record is of a wake that no longer runs: written before this boot (its pid may be
- * another process's now), its supervisor's process gone, or with no process for longer than a start
- * takes (the supervisor writes its own as it starts).
+ * Whether the record is of a wake that no longer runs (asked only once nothing answers on its
+ * port): written before this boot (its pid may be another process's now), its supervisor's process
+ * gone, or with no process for longer than a start takes (the supervisor writes its own as it
+ * starts). With its process alive, only a parked supervisor, or one that started within a start's
+ * time (a healthy one's wake answers within its grace), is still wake's: herdr's restart, or a
+ * Windows "Shut down" with Fast Startup that keeps the uptime, gives a dead supervisor's pid to
+ * another process.
  */
 function stale(deps: StartDeps, status: WakeStatusFile): boolean {
   if (status.at < deps.bootedAt) return true
-  if (status.pid !== undefined) return !deps.alive(status.pid)
-  return deps.now() - status.at > STARTING_MS
+  const age = deps.now() - status.at
+  if (status.pid === undefined) return age > STARTING_MS
+  if (!deps.alive(status.pid)) return true
+  return !PARKED.has(status.state) && age >= STARTING_MS
 }
 
 /** Tabs of the workspace with only wake's leftovers in them (wakeLeftover); a tab with anything else is the user's. */
@@ -195,10 +208,10 @@ export async function startWake(
 
     let label = o.settings.workspace
     let snap = await snapshotTried(deps)
-    const last = recordedPane(snap, status?.pane, label, o.board)
+    const last = recordedPane(snap, status?.pane, label, o.board, deps.root)
     if (status?.pane !== undefined && !last && snap.panes.some(p => p.pane_id === status.pane)) {
       keep = false
-      deps.log(`pane ${status.pane} is no wake's now (another workspace, an agent, or the board): left alone`)
+      deps.log(`pane ${status.pane} is no wake's now (another workspace or folder, an agent, or the board): left alone`)
     }
     if (last && status && !stale(deps, status) && !o.again) return 'present'
     if (last) {

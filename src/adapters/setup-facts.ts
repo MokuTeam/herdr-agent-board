@@ -30,7 +30,7 @@ import { herdrHookOf, readSettings } from './hook-settings.ts'
 import { ROOT } from './paths.ts'
 import { findProfileDirs, inheritedProfileDir } from './profiles.ts'
 import { oldRouterAt, wakeAlive } from './wake-api.ts'
-import { peekWakeSessions, readWakeStatus, wakeLogFile } from './wake-files.ts'
+import { peekWakeSessions, readWakeStatus, unseenWakeTakeover, wakeLogFile } from './wake-files.ts'
 
 type Env = Record<string, string | undefined>
 
@@ -261,8 +261,9 @@ export function mokupilotCommand(
  * state line asks (never waiting on herdr; not asked while off or held; the separate plugin's
  * router left there has no /alive), the sessions asleep (its /status answer's while it runs, else
  * its session file's, only read), and, while another program holds the port, whether that is the
- * separate plugin's router (its pid); null: the line is herdr-wake's at wakeUrl, as before (wake
- * off before it ships is today's setup).
+ * separate plugin's router (its pid), and what the takeover at wake's first start took over while
+ * the panel has not shown it (its marker); null: the line is herdr-wake's at wakeUrl, as before
+ * (wake off before it ships is today's setup).
  */
 async function wakeFacts(cfg: Partial<Config> | null | undefined, probeMs = PROBE_MS): Promise<SetupFacts['wakeNew']> {
   const s = wakeConfig(cfg?.wake)
@@ -275,6 +276,7 @@ async function wakeFacts(cfg: Partial<Config> | null | undefined, probeMs = PROB
   const sleeping = Array.isArray(body?.sleeping) ? body.sleeping.length : null
   const router = state === 'portTaken' ? await oldRouterAt(s.port, probeMs) : null
   const wakeUrl = typeof cfg?.wakeUrl === 'string' ? cfg.wakeUrl.trim().replace(/\/+$/, '') : ''
+  const takenOver = unseenWakeTakeover()
   return {
     state,
     port: s.port,
@@ -283,6 +285,7 @@ async function wakeFacts(cfg: Partial<Config> | null | undefined, probeMs = PROB
     asleep: sleeping ?? Object.values(peekWakeSessions()).filter(e => e.slept_at !== undefined).length,
     log: wakeLogFile(),
     wakeUrlSet: wakeUrl !== '' && wakeUrl !== DEFAULT_CONFIG.wakeUrl,
+    ...(takenOver && { takenOver: takenOver.summary.asleep }),
   }
 }
 

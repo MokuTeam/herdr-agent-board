@@ -128,9 +128,10 @@ for (const profile of profiles) {
 }
 
 /**
- * claude-tg (#119): a herdr-wake (or the board's) claude-tg already in the commands' folder is
- * replaced by the board's, which needs no Node; where there is none, none is written (the panel's
- * Install claude-tg does that), and someone else's is left alone. Said only when one was written.
+ * claude-tg (#119), while wake is on: a herdr-wake (or the board's) claude-tg already in the
+ * commands' folder is replaced by the board's, which needs no Node; where there is none, none is
+ * written (the panel's Install claude-tg does that), and someone else's is left alone. Said only
+ * when one was written.
  */
 function refreshLaunchers(): void {
   try {
@@ -143,7 +144,8 @@ function refreshLaunchers(): void {
 
 try {
   installShims()
-  refreshLaunchers()
+  // claude-tg is wake's Telegram's: with wake off, a herdr-wake one stays as it was.
+  if (wake) refreshLaunchers()
   // --- the agents' skill (how sessions in herdr work with each other), read by Claude on demand
   const skillText = readText(files.skill)
   if (skillText === null) console.log(`skill: ${files.skill} is missing from this copy of the board`)

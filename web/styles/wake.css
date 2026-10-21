@@ -84,12 +84,15 @@
 .wake-launcher { align-self: flex-start; }
 .wake-launcher:disabled { opacity: 0.5; }
 
-/* Switch over… (the separate herdr-wake plugin holds wake): its question, then what it took over,
+/* Switch over… (the separate herdr-wake plugin holds wake): its question, then what it took over
+   (or what the takeover at wake's first start did, until seen),
    each a note on the accent's tint, the lines one under the other. */
 .wake-confirm,
-.wake-switched { --lane: var(--accent); flex-direction: column; align-items: flex-start; gap: 8px; }
+.wake-switched,
+.wake-taken-over { --lane: var(--accent); flex-direction: column; align-items: flex-start; gap: 8px; }
 .wake-confirm p,
-.wake-switched p { align-self: stretch; overflow-wrap: anywhere; }
+.wake-switched p,
+.wake-taken-over p { align-self: stretch; overflow-wrap: anywhere; }
 
 /* What the Telegram router does while wake runs. */
 .wake-router { margin: 0; overflow-wrap: anywhere; }

@@ -164,6 +164,10 @@ test('off: the Wake workspace is closed only when nothing but wake’s shells an
   ])
   // The recorded pane is no wake's now (an agent in it): nothing.
   expect(await closing([{ ...shell, agent: 'claude' }, editor], { wakePane: 'w5:p1' })).toEqual([null, [snap]])
+  // Its id given to a program of the user's after herdr started over (no agent, another folder): nothing.
+  expect(
+    await closing([{ ...editor, tab_id: 't5', pane_id: 'w5:p1' }, sidebar, claude], { wakePane: 'w5:p1' }),
+  ).toEqual([null, [snap]])
 
   // The board's pane (board.json) in it: the workspace stays, though that pane reads as a shell in the
   // plugin's folder; wake's own pane still goes, never the board's.
@@ -422,15 +426,22 @@ test('Start and Start again: refused while off or held, nothing to do while it a
   expect(await up.c.again()).toEqual({ ok: true })
   expect(up.started).toEqual([['--again']])
 
+  // Not running: Start makes its pane anew (--again), past a record whose pid another process may
+  // have now (herdr's restart, Fast Startup).
   const down = control(on())
   expect(await down.c.start()).toEqual({ ok: true })
   // Wake's start is under way: it recorded its new pane as starting. A second Start starts nothing.
   writeWakeStatus({ state: 'starting', at: Date.now(), pane: 'wW:p9' })
   expect(await down.c.start()).toEqual({ ok: true })
-  expect(down.started).toEqual([[]])
+  expect(down.started).toEqual([['--again']])
   // Start again still makes the pane anew.
   expect(await down.c.again()).toEqual({ ok: true })
-  expect(down.started).toEqual([[], ['--again']])
+  expect(down.started).toEqual([['--again'], ['--again']])
+  // The board's own start once on (ensure, the switch) is the plain one: a wake pane there is kept.
+  writeWakeStatus({ state: 'running', at: Date.now() - 300_000, pane: 'wW:p9', pid: process.pid })
+  const plain = control(on())
+  await plain.c.ensure()
+  expect(plain.started).toEqual([[]])
 
   writeWakeStatus({ state: 'held', at: 1 })
   const held = control(on())

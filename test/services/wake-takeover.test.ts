@@ -10,7 +10,13 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { dirname, join } from 'node:path'
 import { configFile } from '../../src/adapters/config-file.ts'
 import { ROOT } from '../../src/adapters/paths.ts'
-import { readWakeTakeover, wakeSessionsFile, wakeTakeoverFile } from '../../src/adapters/wake-files.ts'
+import {
+  readWakeTakeover,
+  unseenWakeTakeover,
+  wakeSessionsFile,
+  wakeTakeoverFile,
+  wakeTakeoverSeen,
+} from '../../src/adapters/wake-files.ts'
 import { quote } from '../../src/core/install-plan.ts'
 import { useLanguage } from '../../src/core/lang.ts'
 import { boardFiles } from '../../src/core/setup.ts'
@@ -88,6 +94,9 @@ const oldSessions = (): Record<string, unknown> => ({
   'w2:p4': { session: SIDS[3], name: 'ops', seen_at: T0, slept_at: T0 + 4000 },
   'w1:p1': { session: SIDS[4], name: 'Live', seen_at: T0 },
 })
+
+/** An entry the old router last saw and put to sleep months ago: its pane id may be another pane's now. */
+const STALE = { session: SIDS[0], name: 'long gone', seen_at: T0 - 90 * 86_400_000, slept_at: T0 - 90 * 86_400_000 }
 
 /** The old router's config.json, on a port nothing listens on here (never wake's own 12421). */
 const OLD_CONFIG = {
@@ -332,6 +341,62 @@ test('what it did is said, with the launcher note and the bindings', async () =>
   expect(out.did.some(line => line.includes('secret'))).toBe(false)
 })
 
+test('Switch over… carries the reaper and Telegram over and is said at once, never as a note left unseen; sessions not seen for 7 days are left out', async () => {
+  const w = world()
+  writeJson(join(w.oldStateDir, 'sessions.json'), { ...oldSessions(), 'w9:p9': STALE })
+  const { herdr } = fakeHerdr()
+  const out = await switchOver({
+    uninstall: true,
+    herdr,
+    home: w.home,
+    env: process.env,
+    log: () => {},
+    oldRouter: async () => null,
+    start: () => ({ ok: true }),
+  })
+  expect(out).toMatchObject({ ok: true, summary: { reaper: 'on', telegram: true, asleep: 4 } })
+  expect((boardConfig().wake as Record<string, unknown>).telegram).toBe('auto')
+  expect(Object.keys(readJsonFile(wakeSessionsFile()) as object).sort()).toEqual(Object.keys(oldSessions()).sort())
+  expect(readWakeTakeover()?.unseen).toBeUndefined()
+  expect(unseenWakeTakeover()).toBeNull()
+  if (out.ok)
+    expect(out.did).toContain(
+      `sleeping sessions: 5 taken over (4 asleep) from ${join(w.oldStateDir, 'sessions.json')}; 1 not seen for 7 days left out`,
+    )
+})
+
+test('the first start’s takeover (nobody asked): the reaper and Telegram left off, its note unseen until the panel shows it', async () => {
+  const w = world()
+  writeJson(join(w.oldStateDir, 'sessions.json'), { ...oldSessions(), 'w9:p9': STALE })
+  const { herdr } = fakeHerdr({ installed: false })
+  const o = { herdr, home: w.home, env: process.env, log: () => {} }
+  const taken = await takeOverAtFirstStart(o)
+  expect([taken?.reaper.enabled, taken?.telegram]).toEqual([false, 'off'])
+  expect(boardConfig().wake).toEqual({
+    enabled: true,
+    port: 23457,
+    wakeTimeoutSec: 90,
+    reaper: { enabled: false, idleMinutes: 60, exclude: ['Billing', '/^ops-/'], maxPerRound: 3 },
+  })
+  expect(Object.keys(readJsonFile(wakeSessionsFile()) as object).sort()).toEqual(Object.keys(oldSessions()).sort())
+  const note = unseenWakeTakeover()
+  expect(note).toMatchObject({
+    summary: { reaper: 'off', minutes: 60, excluded: 2, telegram: false, asleep: 4 },
+    launcher: { old: 'claude-tg', now: 'claude' },
+    bindings: [{ key: 'ctrl+s', old: 'herdr-wake.sleep', now: 'agent-board.sleep' }],
+  })
+  expect(note?.did).toContain(
+    'reaper and Telegram: left off at wake’s first start; turn them on in Settings → Sleep and wake…',
+  )
+  // Seen in the panel: no note any more; the marker keeps the rest, and still stops a second takeover.
+  const before = readWakeTakeover()
+  wakeTakeoverSeen()
+  expect(unseenWakeTakeover()).toBeNull()
+  const { unseen: _unseen, ...rest } = before ?? { at: 0, did: [] }
+  expect(readWakeTakeover()).toEqual(rest)
+  expect(await takeOverAtFirstStart(o)).toBeNull()
+})
+
 test('uninstalled by hand: the takeover runs once at the first start, without the uninstall; the marker stops a second', async () => {
   const box = await wakeSandbox()
   const home = box.env.HOME as string
@@ -339,7 +404,9 @@ test('uninstalled by hand: the takeover runs once at the first start, without th
   const oldStateDir = join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'herdr-wake')
   const port = await unusedPort()
   writeJson(join(oldConfigDir, 'config.json'), { ...OLD_CONFIG, port })
-  writeJson(join(oldStateDir, 'sessions.json'), oldSessions())
+  // With an entry the old router last saw months ago, and tg-mcp in ~/.claude.json.
+  writeJson(join(oldStateDir, 'sessions.json'), { ...oldSessions(), 'w9:p9': STALE })
+  writeJson(join(home, '.claude.json'), CLAUDE_JSON)
   writeJson(join(home, '.claude', 'settings.json'), settingsWithOld(oldConfigDir))
   writeBoardConfig(box, wakeOnConfig(port))
   box.state({
@@ -357,19 +424,31 @@ test('uninstalled by hand: the takeover runs once at the first start, without th
   expect(calls).toContainEqual(['workspace', 'close', 'wT'])
   const boardFile = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board', 'config.json')
   const stateDir = join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board')
+  // Nobody asked: its settings taken over with the reaper and Telegram left off.
   const wake = (readJsonFile(boardFile) as { wake: Record<string, unknown> }).wake
   expect(wake).toEqual({
     enabled: true,
     port,
     wakeTimeoutSec: 90,
-    reaper: { enabled: true, idleMinutes: 60, exclude: ['Billing', '/^ops-/'], maxPerRound: 3 },
+    reaper: { enabled: false, idleMinutes: 60, exclude: ['Billing', '/^ops-/'], maxPerRound: 3 },
   })
-  expect(Object.keys(readJsonFile(join(stateDir, 'wake-sessions.json')) as object)).toHaveLength(5)
+  // Only the sessions of the last 7 days.
+  expect(Object.keys(readJsonFile(join(stateDir, 'wake-sessions.json')) as object).sort()).toEqual(
+    Object.keys(oldSessions()).sort(),
+  )
   expect(readJsonFile(join(home, '.claude', 'settings.json'))).toEqual(settingsMoved())
   const marker = readFileSync(join(stateDir, 'wake-takeover.json'), 'utf8')
-  expect(readFileSync(join(stateDir, 'wake.log'), 'utf8')).toContain(
-    'takeover: herdr-wake: not installed (removed by hand)',
-  )
+  // Said once, until the panel shows it: the marker is unseen, with what it took over.
+  expect(JSON.parse(marker)).toMatchObject({
+    unseen: true,
+    summary: { reaper: 'off', minutes: 60, excluded: 2, telegram: false, asleep: 4 },
+    launcher: { old: 'claude-tg', now: 'claude' },
+    bindings: [],
+  })
+  const log = readFileSync(join(stateDir, 'wake.log'), 'utf8')
+  expect(log).toContain('takeover: herdr-wake: not installed (removed by hand)')
+  expect(log).toContain('takeover: reaper and Telegram: left off at wake’s first start')
+  expect(log).toContain('1 not seen for 7 days left out')
 
   // The second start: nothing taken over again, even from an old config.json changed since.
   writeJson(join(oldConfigDir, 'config.json'), { ...OLD_CONFIG, port, reaper: { enabled: false } })

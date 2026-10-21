@@ -111,6 +111,23 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'wake.router.polling': 'Receiving messages from {host}',
     'wake.router.error': 'Not receiving messages: {error}',
     'wake.router.off': 'Not receiving messages',
+    // the board's own wake named where herdr-wake was before (err.wakeDown, err.sleep.unknown, rename.alsoClaudeHint)
+    'err.boardWakeDown': 'Wake did not answer: {why}',
+    'err.sleep.unknownToWake': 'wake does not know it',
+    'rename.alsoClaudeHintWake': 'Types /rename into the session; other sessions and the board’s wake see the new name',
+    // the takeover at wake's first start (the old plugin removed by hand): said until seen in the panel
+    'wake.takenOver': [
+      'At its first start, wake took over the separate herdr-wake plugin’s settings and {n} sleeping session. The reaper and Telegram were left off: turn them on below when you want them.',
+      'At its first start, wake took over the separate herdr-wake plugin’s settings and {n} sleeping sessions. The reaper and Telegram were left off: turn them on below when you want them.',
+    ],
+    'wake.takenOverSeen': 'Got it',
+    'setup.wake.takenOver': 'Sleep and wake took over the separate herdr-wake plugin at its first start',
+    'setup.wake.takenOverDetail': [
+      'Its settings and {n} sleeping session were taken over; the reaper and Telegram were left off.',
+      'Its settings and {n} sleeping sessions were taken over; the reaper and Telegram were left off.',
+    ],
+    'setup.wake.takenOverFix':
+      'Turn them on in Settings → Sleep and wake… when you want them; this note goes once it was seen there.',
   },
   ru: {
     // Task 4.1: Settings → Sleep and wake…, its state and switches
@@ -229,5 +246,24 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'wake.router.polling': 'Получает сообщения от {host}',
     'wake.router.error': 'Сообщения не приходят: {error}',
     'wake.router.off': 'Сообщения не получает',
+    // the board's own wake named where herdr-wake was before (err.wakeDown, err.sleep.unknown, rename.alsoClaudeHint)
+    'err.boardWakeDown': 'Пробуждение не ответило: {why}',
+    'err.sleep.unknownToWake': 'пробуждение её не знает',
+    'rename.alsoClaudeHintWake': 'Наберёт /rename в сессии; новое имя увидят другие сессии и пробуждение доски',
+    // the takeover at wake's first start (the old plugin removed by hand): said until seen in the panel
+    'wake.takenOver': [
+      'При первом запуске пробуждение перенесло настройки отдельного плагина herdr-wake и {n} спящую сессию. Усыпление и Телеграм оставлены выключенными: включи их ниже, когда понадобятся.',
+      'При первом запуске пробуждение перенесло настройки отдельного плагина herdr-wake и {n} спящие сессии. Усыпление и Телеграм оставлены выключенными: включи их ниже, когда понадобятся.',
+      'При первом запуске пробуждение перенесло настройки отдельного плагина herdr-wake и {n} спящих сессий. Усыпление и Телеграм оставлены выключенными: включи их ниже, когда понадобятся.',
+    ],
+    'wake.takenOverSeen': 'Понятно',
+    'setup.wake.takenOver': 'При первом запуске сон и пробуждение перенесли отдельный плагин herdr-wake',
+    'setup.wake.takenOverDetail': [
+      'Перенесены его настройки и {n} спящая сессия; усыпление и Телеграм оставлены выключенными.',
+      'Перенесены его настройки и {n} спящие сессии; усыпление и Телеграм оставлены выключенными.',
+      'Перенесены его настройки и {n} спящих сессий; усыпление и Телеграм оставлены выключенными.',
+    ],
+    'setup.wake.takenOverFix':
+      'Включи их в Настройки → Сон и пробуждение…, когда понадобятся; это сообщение пропадёт, когда его там увидят.',
   },
 }

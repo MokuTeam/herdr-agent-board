@@ -1,5 +1,6 @@
 // claude-tg without Node (#119), on disk and as it runs. The install refreshes the launchers only
-// where a herdr-wake (or the board's) claude-tg is already there, and never one without the mark;
+// while wake is on, only where a herdr-wake (or the board's) claude-tg is already there, and never
+// one without the mark;
 // the panel's "Install claude-tg" (POST /api/wake { op: 'launcher' }) writes both into
 // ~/.local/bin, and nothing over someone else's. As they run: a stand-in claude says what it got;
 // the key comes from the board's own `board` command (the install's shim, running this copy's
@@ -13,7 +14,7 @@ import { installLaunchers } from '../../src/adapters/launchers.ts'
 import { planShims } from '../../src/core/install-plan.ts'
 import { boardFiles } from '../../src/core/setup.ts'
 import { launcherFiles } from '../../src/core/wake/launchers.ts'
-import { serveBoard } from '../support/board-server.ts'
+import { serveBoard, unusedPort } from '../support/board-server.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 
 setDefaultTimeout(60_000)
@@ -48,12 +49,18 @@ const homeOf = (box: Sandbox): string => {
 const binOf = (box: Sandbox): string => join(homeOf(box), '.local', 'bin')
 const read = (file: string): string | null => (existsSync(file) ? readFileSync(file, 'utf8') : null)
 
-/** The install action in the sandbox's home, with no herdr-wake and wake off, so its check asks no port. */
-async function install(box: Sandbox) {
+/**
+ * The install action in the sandbox's home, with no herdr-wake; wake as `wake` says (on by default,
+ * at a port nothing listens on, so its check finds nothing there), written when no config.json is.
+ */
+async function install(box: Sandbox, wake?: unknown) {
   const dir = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board')
   mkdirSync(dir, { recursive: true })
   if (!existsSync(join(dir, 'config.json')))
-    writeFileSync(join(dir, 'config.json'), JSON.stringify({ language: 'en', wakeUrl: '', wake: false }))
+    writeFileSync(
+      join(dir, 'config.json'),
+      JSON.stringify({ language: 'en', wakeUrl: '', wake: wake ?? { enabled: true, port: await unusedPort() } }),
+    )
   const proc = Bun.spawn([process.execPath, join(root, 'src', 'entrypoints', 'install.ts')], {
     cwd: root,
     env: box.env,
@@ -85,6 +92,18 @@ test('the install refreshes a herdr-wake claude-tg and writes none where there i
   // Again: nothing left to refresh.
   const third = await install(box)
   expect(third.stdout).not.toContain('claude-tg')
+})
+
+test('"wake": false: the install leaves herdr-wake’s claude-tg as it is and says nothing of it', async () => {
+  const box = await sandbox()
+  box.state({ 'integration install claude': { claudeHook: true } })
+  const bin = binOf(box)
+  mkdirSync(bin, { recursive: true })
+  for (const [name, text] of Object.entries(OLD)) writeFileSync(join(bin, name), text)
+  const out = await install(box, false)
+  expect(out.code).toBe(0)
+  for (const [name, text] of Object.entries(OLD)) expect(read(join(bin, name))).toBe(text)
+  expect(out.stdout).not.toContain('claude-tg')
 })
 
 test('someone else’s claude-tg is never replaced', async () => {

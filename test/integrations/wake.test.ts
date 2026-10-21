@@ -6,7 +6,7 @@ import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Item } from '../../src/core/types.ts'
-import type { SleepingSession, SleepProvider } from '../../src/integrations/herdr-wake.ts'
+import { createHerdrWake, type SleepingSession, type SleepProvider } from '../../src/integrations/herdr-wake.ts'
 import { createBoardWake, sharedBoardWake, withFileSleepers } from '../../src/integrations/wake.ts'
 
 const URL = 'http://127.0.0.1:23456'
@@ -246,4 +246,36 @@ test("wake off: the old provider's list, completed by the file's sleepers it doe
   expect(await w.wake(item)).toEqual({ ok: true })
   expect(await w.sleep(item)).toEqual({ ok: true })
   expect(asked).toEqual(['forget', 'wake w1:p4', 'sleep w1:p4'])
+})
+
+test('what wake and Put to sleep say names the board’s wake; the separate plugin’s router keeps herdr-wake', async () => {
+  const item = { name: 'Billing', pane: 'w1:p2', session: 's-bill' } as Item
+  const down = (async () => {
+    throw refused()
+  }) as unknown as typeof fetch
+  /** /alive answers; a sleep is refused for a session it does not know. */
+  const unknown = (async (input: string | URL | Request) =>
+    Response.json(
+      String(input).endsWith('/alive') ? { pid: 4242 } : { ok: false, error: 'no running session in w1:p2' },
+    )) as unknown as typeof fetch
+  const board = (fetchFn: typeof fetch) => createBoardWake({ url: URL, sessionsFile: sessionsFile({}), fetch: fetchFn })
+
+  expect(await board(down).wake(item)).toEqual({ ok: false, error: 'Wake did not answer: Unable to connect' })
+  expect(await board(unknown).sleep(item)).toEqual({
+    ok: false,
+    error: 'Could not put Billing to sleep: wake does not know it',
+  })
+  // The old path's own texts, as before.
+  expect(await createHerdrWake(URL, down).wake(item)).toEqual({
+    ok: false,
+    error: 'herdr-wake did not answer: Unable to connect',
+  })
+  expect(await createHerdrWake(URL, down).sleep(item)).toEqual({
+    ok: false,
+    error: 'herdr-wake did not answer: Unable to connect',
+  })
+  expect(await createHerdrWake(URL, unknown).sleep(item)).toEqual({
+    ok: false,
+    error: 'Could not put Billing to sleep: herdr-wake does not know it',
+  })
 })

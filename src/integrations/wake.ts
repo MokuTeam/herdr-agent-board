@@ -88,8 +88,9 @@ export function createBoardWake(o: {
       asking = false
     }
   }
-  // The answers' own wake and sleep (POST /wake, /sleep { target: pane }), as herdr-wake's.
-  const api = createHerdrWake(o.url, fetchFn, now)
+  // The answers' own wake and sleep (POST /wake, /sleep { target: pane }), as herdr-wake's, their
+  // texts naming the board's wake.
+  const api = createHerdrWake(o.url, fetchFn, now, 'wake')
   /**
    * Whether the board's wake answers GET /alive (`{ pid }`, never waiting on herdr, unlike its
    * /status); the separate plugin's router left on the port has no /alive and is `down`.

@@ -68,4 +68,6 @@ export interface WakeSettingsView {
   /** wake.log's path. */
   log: string
   hooks: WakeHooksView[]
+  /** What the takeover at wake's first start (nobody asked) took over, until the panel has shown it; none or null otherwise. */
+  takenOver?: Switched | null
 }

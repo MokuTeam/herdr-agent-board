@@ -120,10 +120,10 @@ test('the panel’s switches edit config.json; Start and Start again call the st
   assert.deepEqual(starts(proc), [])
   assert.deepEqual(await (await post({ op: 'again' })).json(), { ok: true })
   assert.deepEqual(starts(proc), [['--again']])
-  // Down: Start starts it.
+  // Down (not running): Start starts it, its pane made anew.
   wake.down()
   assert.deepEqual(await (await post({ op: 'start' })).json(), { ok: true })
-  assert.deepEqual(starts(proc), [['--again'], []])
+  assert.deepEqual(starts(proc), [['--again'], ['--again']])
 
   // Log.
   assert.deepEqual(await (await post({ op: 'log' })).json(), { ok: true, text: 'one\ntwo' })
@@ -139,7 +139,7 @@ test('the panel’s switches edit config.json; Start and Start again call the st
   assert.deepEqual(await (await post({ op: 'off' })).json(), { ok: true })
   assert.equal((configOf(box).wake as { enabled: boolean }).enabled, false)
   await until(() => reloaded() > seen)
-  assert.deepEqual(starts(proc), [['--again'], []])
+  assert.deepEqual(starts(proc), [['--again'], ['--again']])
   // None of it asked herdr for more than the board's own snapshot.
   assert.deepEqual([...new Set(box.calls().map(c => c.join(' ')))], ['api snapshot'])
 })
@@ -256,7 +256,15 @@ test('with wake off ("wake": false) and sessions asleep in its file, the payload
   stateFile(
     box,
     'wake-sessions.json',
-    JSON.stringify({ 'w1:p2': { session: 's-bill', name: 'Billing', seen_at: 1, slept_at: 2 } }),
+    // Seen and put to sleep an hour ago: within the 7 days a takeover takes.
+    JSON.stringify({
+      'w1:p2': {
+        session: 's-bill',
+        name: 'Billing',
+        seen_at: Date.now() - 3_600_000,
+        slept_at: Date.now() - 3_600_000,
+      },
+    }),
   )
   const { url, proc } = await serveBoard(box, { language: 'en', wake: false })
   await eventually(async () => (await wakeOf(url))?.asleep === 1)
@@ -314,7 +322,15 @@ test('Switch over, while the old plugin holds wake: taken over, uninstalled, wak
   )
   writeFileSync(
     join(oldStateDir, 'sessions.json'),
-    JSON.stringify({ 'w1:p2': { session: 's-bill', name: 'Billing', seen_at: 1, slept_at: 2 } }),
+    // Seen and put to sleep an hour ago: within the 7 days a takeover takes.
+    JSON.stringify({
+      'w1:p2': {
+        session: 's-bill',
+        name: 'Billing',
+        seen_at: Date.now() - 3_600_000,
+        slept_at: Date.now() - 3_600_000,
+      },
+    }),
   )
   const profile = join(box.env.HOME as string, '.claude')
   const hook = (mode: string) => `node "${join(oldConfigDir, 'hook.mjs')}" ${mode}`
@@ -394,4 +410,39 @@ test('Switch over, while the old plugin holds wake: taken over, uninstalled, wak
   await until(() => starts(proc).length > 0)
   await Bun.sleep(200)
   assert.deepEqual(starts(proc), [[]])
+})
+
+test('what the takeover at wake’s first start did: in GET /api/wake until the panel says it was seen, the marker kept', async () => {
+  const box = await sandbox()
+  box.state({ 'api snapshot': EMPTY })
+  const summary = { reaper: 'off', minutes: 60, excluded: 2, telegram: false, asleep: 4 }
+  const marker = {
+    at: 1,
+    did: ['reaper and Telegram: left off at wake’s first start; turn them on in Settings → Sleep and wake…'],
+    summary,
+    launcher: null,
+    bindings: [],
+    unseen: true,
+    newer: 'kept',
+  }
+  stateFile(box, 'wake-takeover.json', JSON.stringify(marker))
+  config(box, { wakeUrl: null, refreshSec: 3600, wake: { enabled: true, port: await unusedPort() } })
+  const { url } = await serveBoard(box)
+  const settings = async () =>
+    ((await (await fetch(`${url}/api/wake`)).json()) as { settings: Record<string, unknown> }).settings
+  assert.deepEqual((await settings()).takenOver, { did: marker.did, summary, launcher: null, bindings: [] })
+  const post = (body: unknown, headers: Record<string, string> = { 'x-board': '1' }) =>
+    fetch(`${url}/api/wake`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    })
+  // Only from the board's own page.
+  assert.equal((await post({ op: 'seen' }, {})).status, 403)
+  assert.equal((await settings()).takenOver !== undefined, true)
+  const seen = await post({ op: 'seen' })
+  assert.deepEqual([seen.status, await seen.json()], [200, { ok: true }])
+  assert.equal((await settings()).takenOver, undefined)
+  const { unseen: _unseen, ...rest } = marker
+  assert.deepEqual(JSON.parse(readFileSync(join(stateDir(box), 'wake-takeover.json'), 'utf8')), rest)
 })

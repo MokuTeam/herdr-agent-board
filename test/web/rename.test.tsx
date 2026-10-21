@@ -6,6 +6,7 @@
 import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { Item } from '../../src/core/types.ts'
+import { claudeRenameHint } from '../../web/src/models/rename.ts'
 import { reducedMotion } from '../../web/src/models/spring.ts'
 import { item } from './support/board.tsx'
 import type { EventFields } from './support/fake-dom.ts'
@@ -334,4 +335,17 @@ describe('renaming a session’s workspace in place', () => {
     expect(shots[1]).toContain('Переименует его в herdr — для всех сессий в нём')
     expect(shots.at(-1)).toContain('toast Workspace переименован: Счета')
   })
+})
+
+test('who sees a name renamed in Claude too: the board’s wake while it is on and not held, else herdr-wake as before', () => {
+  const wake = (on: boolean, state: string) => ({ on, state, since: null, asleep: 0, port: 23456 })
+  const ours = 'Types /rename into the session; other sessions and the board’s wake see the new name'
+  const old = 'Types /rename into the session; other sessions and herdr-wake see the new name'
+  for (const state of ['running', 'starting', 'notRunning', 'crashed', 'portTaken'])
+    expect([state, claudeRenameHint(wake(true, state), t)]).toEqual([state, ours])
+  for (const shown of [undefined, null, wake(false, 'off'), wake(true, 'held'), { on: true }])
+    expect(claudeRenameHint(shown, t)).toBe(old)
+  expect(claudeRenameHint(wake(true, 'running'), translator('ru'))).toBe(
+    'Наберёт /rename в сессии; новое имя увидят другие сессии и пробуждение доски',
+  )
 })

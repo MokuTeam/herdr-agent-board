@@ -1,13 +1,14 @@
 // The takeover's rules (#119, Migration): what the board's wake takes over from the separate
-// herdr-wake plugin. Its config.json becomes the `wake` section (Telegram set to Auto when the old
-// router had tg-mcp's url and token, so it goes on routing), its sleeping list wake's session file
-// (every entry the default folder's: the old router read ~/.claude only), its hooks come out of a
+// herdr-wake plugin. Its config.json becomes the `wake` section (on Switch over…, Telegram set to
+// Auto when the old router had tg-mcp's url and token, so it goes on routing; at wake's first start,
+// which nobody asked for, the reaper and Telegram left off), its sleeping list of the last 7 days
+// wake's session file (every entry the default folder's: the old router read ~/.claude only), its hooks come out of a
 // settings.json (the entries its install-hooks.mjs recognises), and what it does not change is
 // named: a wakeCommand whose program is not launch.claude's (call 25), and herdr key bindings that
 // call its sleep and wake actions (call 26). Pure: the caller reads and writes the files.
 import { OLD_WAKE_HOOK } from '../install-plan.ts'
 import { claudeProgram } from '../launch/spawn-args.ts'
-import { asWakeSessions, type WakeSessions } from './sessions.ts'
+import { asWakeSessions, KEEP_GONE_MS, type WakeSessions } from './sessions.ts'
 
 /** The old router's wakeCommand when its config.json had none: herdr's own resume. */
 const DEFAULT_WAKE_COMMAND = 'claude --resume {session}'
@@ -45,28 +46,39 @@ function hadTelegram(old: Record<string, unknown>, claudeJson: unknown): boolean
  * authorization, server, port, wakeTimeoutSec, pollTimeoutSec, listSleepingDays, workspace only when
  * not 'tg-router'; telegram 'auto' when the old router had a url and token (its own or
  * ~/.claude.json's); keys it does not know kept as they are; wakeCommand dropped (every wake is
- * `board resume`). A config that is not an object is none: the old router's defaults.
+ * `board resume`). A config that is not an object is none: the old router's defaults. Without
+ * `switches` (the takeover at wake's first start, which nobody asked for), the reaper and Telegram
+ * are left off: the reaper's settings go over with it off, and Telegram is not set.
  */
-export function takeOverConfig(old: unknown, claudeJson: unknown): Record<string, unknown> {
+export function takeOverConfig(
+  old: unknown,
+  claudeJson: unknown,
+  { switches = true }: { switches?: boolean } = {},
+): Record<string, unknown> {
   const o = record(old) ?? {}
-  const { wakeCommand: _command, telegram: _telegram, workspace, ...rest } = o
+  const { wakeCommand: _command, telegram: _telegram, workspace, reaper, ...rest } = o
+  const reaperOf = record(reaper)
   return {
     ...rest,
+    ...(reaper !== undefined && { reaper: !switches && reaperOf ? { ...reaperOf, enabled: false } : reaper }),
     ...(workspace !== undefined && workspace !== OLD_WORKSPACE && { workspace }),
-    ...(hadTelegram(o, claudeJson) && { telegram: 'auto' }),
+    ...(switches && hadTelegram(o, claudeJson) && { telegram: 'auto' }),
   }
 }
 
 /**
  * The old sessions.json → wake's entries, each with the default folder as profileDir (the old
- * router knew ~/.claude only); entries that do not read as sessions are left out, a file that does
- * not read is none.
+ * router knew ~/.claude only); only those the old router saw or put to sleep within KEEP_GONE_MS
+ * (7 days) of `now`, as wake forgets a pane gone that long: an older one's pane id may be another
+ * pane's by now. Entries that do not read as sessions are left out, a file that does not read is none.
  */
-export function takeOverSessions(old: unknown, defaultDir: string): WakeSessions {
-  const entries = Object.entries(asWakeSessions(old) ?? {}).map(([pane, entry]) => {
-    const { profileDir: _dir, profile: _id, ...rest } = entry
-    return [pane, { ...rest, profileDir: defaultDir }] as const
-  })
+export function takeOverSessions(old: unknown, defaultDir: string, now: number): WakeSessions {
+  const entries = Object.entries(asWakeSessions(old) ?? {})
+    .filter(([, entry]) => now - Math.max(entry.seen_at, entry.slept_at ?? 0) <= KEEP_GONE_MS)
+    .map(([pane, entry]) => {
+      const { profileDir: _dir, profile: _id, ...rest } = entry
+      return [pane, { ...rest, profileDir: defaultDir }] as const
+    })
   return Object.fromEntries(entries)
 }
 

@@ -4,7 +4,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { findCommand, gatherFacts, herdrConfigFile, readText } from '../../src/adapters/setup-facts.ts'
-import { wakeSessionsFile, writeWakeStatus } from '../../src/adapters/wake-files.ts'
+import {
+  wakeSessionsFile,
+  wakeTakeoverSeen,
+  writeWakeStatus,
+  writeWakeTakeover,
+} from '../../src/adapters/wake-files.ts'
 import { type InstallPaths, planShims } from '../../src/core/install-plan.ts'
 import { boardFiles } from '../../src/core/setup.ts'
 import { WAKE_SHIPPED } from '../../src/core/wake/config.ts'
@@ -399,6 +404,20 @@ describe('gatherFacts', () => {
     } finally {
       await wake.stop()
     }
+  })
+
+  test('the takeover at wake’s first start: its sleeping sessions while its marker is unseen; none once seen, or for Switch over…', async () => {
+    const dir = isolatedHome()
+    const options = { root: ROOT_A, env: { PATH: join(dir, 'bin') }, platform: 'win32', home: join(dir, 'home') }
+    const cfg = { wakeUrl: null, wake: { enabled: true, port: 9 } }
+    const summary = { reaper: 'off', minutes: 60, excluded: 2, telegram: false, asleep: 4 } as const
+    writeWakeTakeover({ at: 1, did: ['config: reaper'], summary, launcher: null, bindings: [], unseen: true })
+    assert.equal((await gatherFacts(cfg, options)).wakeNew?.takenOver, 4)
+    wakeTakeoverSeen()
+    assert.equal((await gatherFacts(cfg, options)).wakeNew?.takenOver, undefined)
+    // Switch over… (said in the panel at once): no unseen mark, no line.
+    writeWakeTakeover({ at: 1, did: [], summary, launcher: null, bindings: [] })
+    assert.equal((await gatherFacts(cfg, options)).wakeNew?.takenOver, undefined)
   })
 
   test('herdr’s config.toml under %APPDATA%, else ~/.config; a text file without its BOM', () => {

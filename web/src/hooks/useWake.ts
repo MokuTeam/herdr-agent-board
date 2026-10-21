@@ -36,6 +36,8 @@ export interface WakeActions {
   launcher(): Promise<boolean>
   /** Switch over… from the separate herdr-wake plugin, once confirmed; what it took over is shown. */
   switchOver(): Promise<boolean>
+  /** What the takeover at wake's first start did was seen: not said again (GET /api/wake asked again). */
+  seen(): Promise<boolean>
 }
 
 export interface WakeActionDeps {
@@ -113,6 +115,11 @@ export function wakeActions(deps: WakeActionDeps): WakeActions {
         const { did, summary, launcher, bindings } = reply
         deps.showSwitched?.({ did, summary, launcher, bindings })
       }
+      return true
+    },
+    async seen() {
+      if (!(await ask('/api/wake', { op: 'seen' }))) return false
+      deps.reload()
       return true
     },
   }

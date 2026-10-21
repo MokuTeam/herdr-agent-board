@@ -774,6 +774,26 @@ describe('the wake line (#119)', () => {
     expect(checkSetup(wakeOn('running')).some(c => c.id === 'wakeUrl')).toBe(false)
   })
 
+  test('the takeover at wake’s first start, until the panel showed it: a line of what it did, not counted as to do', () => {
+    const checks = checkSetup(wakeOn('running', { takenOver: 4 }))
+    expect(check(checks, 'wakeTakeover')).toEqual({
+      id: 'wakeTakeover',
+      level: 'off',
+      title: 'Sleep and wake took over the separate herdr-wake plugin at its first start',
+      detail: 'Its settings and 4 sleeping sessions were taken over; the reaper and Telegram were left off.',
+      fix: 'Turn them on in Settings → Sleep and wake… when you want them; this note goes once it was seen there.',
+      code: '',
+    })
+    expect(todo(checks).some(c => c.id === 'wakeTakeover')).toBe(false)
+    const ru = check(checkSetup(wakeOn('running', { takenOver: 1 }), translator('ru')), 'wakeTakeover')
+    expect([ru.title, ru.detail]).toEqual([
+      'При первом запуске сон и пробуждение перенесли отдельный плагин herdr-wake',
+      'Перенесены его настройки и 1 спящая сессия; усыпление и Телеграм оставлены выключенными.',
+    ])
+    // Seen, or Switch over… (said in the panel at once): no line.
+    expect(checkSetup(wakeOn('running')).some(c => c.id === 'wakeTakeover')).toBe(false)
+  })
+
   test('no Node.js 20 in any of it, in either language', () => {
     for (const state of ['running', 'off', 'crashed', 'held', 'notRunning', 'starting', 'portTaken'] as const)
       for (const t of [translator('en'), translator('ru')]) {
