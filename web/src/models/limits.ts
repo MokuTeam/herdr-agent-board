@@ -69,6 +69,26 @@ export function profileUsage(
   })
 }
 
+/**
+ * Where a window is heading at the pace it has averaged since it started (its reset minus its
+ * length): `out` when that pace uses it up before the reset, at `at`; `lasts` when it does not.
+ * Null while the reading cannot tell: no reset time, already used up, or the first tenth of the
+ * window, where an average is noise.
+ */
+export type Forecast = { kind: 'out'; at: number; resetsAt: number } | { kind: 'lasts'; resetsAt: number }
+
+export function forecast(w: LimitReading, observedAt: number | null): Forecast | null {
+  const { resetsAt } = fields(w)
+  if (observedAt === null || typeof resetsAt !== 'number' || !Number.isFinite(resetsAt)) return null
+  const length = w.minutes * 60_000
+  const start = resetsAt - length
+  const elapsed = observedAt - start
+  if (elapsed < length / 10 || elapsed > length || w.usedPercentage >= 100) return null
+  if (w.usedPercentage <= 0) return { kind: 'lasts', resetsAt }
+  const at = start + (elapsed * 100) / w.usedPercentage
+  return at < resetsAt ? { kind: 'out', at, resetsAt } : { kind: 'lasts', resetsAt }
+}
+
 /** "5h" or "7d". */
 export const windowLabel = (w: LimitReading, t: Translator): string => t(w.minutes === 300 ? 'limits.5h' : 'limits.7d')
 

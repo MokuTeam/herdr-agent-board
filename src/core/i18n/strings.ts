@@ -64,6 +64,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'limits.hintUsagebar':
       'Claude usage, {time}. From the usagebar cache of the default profile; the board does not check it is the account of these sessions.',
     'limits.stale': 'Claude usage, {time}: an old reading, the windows may have reset since.',
+    'limits.forecastOut': '{window}: at this pace it runs out {at}, before the reset {reset}.',
+    'limits.forecastLasts': '{window}: at this pace it lasts until the reset {reset}.',
 
     'mobile.readOnly': 'No fresh data from herdr: sending and going to sessions wait until it is back',
     'attention.unseen': 'Not viewed',
@@ -637,6 +639,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'limits.hintUsagebar':
       'Расход Claude, {time}. Из кэша usagebar профиля по умолчанию; доска не проверяет, что это аккаунт этих сессий.',
     'limits.stale': 'Расход Claude, {time}: старые данные, окна могли уже обнулиться.',
+    'limits.forecastOut': '{window}: в таком темпе кончится {at}, раньше сброса ({reset}).',
+    'limits.forecastLasts': '{window}: в таком темпе хватит до сброса ({reset}).',
 
     'mobile.readOnly': 'Нет свежих данных от herdr: отправка и переход к сессиям подождут, пока они вернутся',
     'attention.unseen': 'Не просмотрено',
