@@ -2,7 +2,8 @@
 // always, and pi when config.json says how to start it (`launch.pi`) or `pi` is on the board's
 // PATH. Only the board's own launcher (spawn-agent) picks one: `launch.command` and `launch.agent`
 // start what they start, so with either set nothing is offered. A start that names no agent is
-// Claude Code's, as it was before there was a choice.
+// the board's default: `launch.default` when the board offers that agent, else Claude Code, as it
+// was before there was a choice.
 import { t } from '../lang.ts'
 import { PI_AGENT } from '../pi.ts'
 import type { LaunchSpec } from '../types.ts'
@@ -29,13 +30,24 @@ export const piConfigured = (spec: LaunchSpec | undefined): boolean => {
 }
 
 /**
- * The agents a start may pick, the board's default first; none when the config's own launcher
+ * The agents a start may pick, Claude Code first; none when the config's own launcher
  * (`launch.command`, `launch.agent`) starts sessions. `piFound`: `pi` is on the board's PATH; asked
  * only when the config does not say how to start it.
  */
 export function launchAgents(spec: LaunchSpec | undefined, piFound: () => boolean): LaunchAgent[] {
   if (spec?.command || spec?.agent) return []
   return piConfigured(spec) || piFound() ? [CLAUDE_CODE, PI] : [CLAUDE_CODE]
+}
+
+/**
+ * The agent a start that names none starts as: the one `launch.default` names (`claude` or `pi`,
+ * in any case) when `offered` has it, else Claude Code. `offered` (launchAgents) is asked only
+ * when the setting names another agent than Claude Code, so a board without it looks nothing up.
+ */
+export function defaultAgent(spec: LaunchSpec | undefined, offered: () => readonly LaunchAgent[]): LaunchAgentId {
+  const wanted = typeof spec?.default === 'string' ? spec.default.trim().toLowerCase() : ''
+  if (!wanted || wanted === CLAUDE_AGENT) return CLAUDE_AGENT
+  return offered().find(a => a.id === wanted)?.id ?? CLAUDE_AGENT
 }
 
 /**

@@ -8,7 +8,7 @@ import { herdr, paneTab, workspaceList } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { findCommand } from '../../adapters/setup-facts.ts'
 import { t } from '../../core/lang.ts'
-import { CLAUDE_AGENT, type LaunchAgent, type LaunchAgentId, launchAgents } from '../../core/launch/agents.ts'
+import { defaultAgent, type LaunchAgent, type LaunchAgentId, launchAgents } from '../../core/launch/agents.ts'
 import { failureKind } from '../../core/launch/launcher-command.ts'
 import { sameDir } from '../../core/launch/names.ts'
 import { isPiItem, piSessionId } from '../../core/pi.ts'
@@ -24,7 +24,7 @@ export interface LaunchOptions {
   launcher: LauncherInfo
   /** The agents a start may name (its `agent`), the default first; none when the config's launcher picks it. */
   agents: LaunchAgent[]
-  /** The one a start that names none starts as. */
+  /** The one a start that names none starts as: `launch.default` when offered, else Claude Code. */
   agent: LaunchAgentId
   workspaces: { id: string; label: string | undefined }[]
   focused: string
@@ -134,8 +134,9 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
       items,
       typesCommand: launcher.kind === 'builtin',
       ...(parent && { parent }),
-      // A start of the server's own (a return, a fork) picks no agent.
+      // A start of the server's own (a return, a fork) picks no agent: Claude Code's, whatever the default.
       agents: () => (resume || fork ? [] : launchAgents(deps.cfg.launch, piOnPath)),
+      standard: offered => defaultAgent(deps.cfg.launch, offered),
       pi: deps.cfg.launch?.pi,
     })
     if (!r.ok) return r
@@ -300,10 +301,11 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
       error = messageOf(err)
     }
     const cfg = deps.cfg
+    const agents = launchAgents(cfg.launch, piOnPath)
     return {
       launcher: launcherFor(cfg.launch).describe(),
-      agents: launchAgents(cfg.launch, piOnPath),
-      agent: CLAUDE_AGENT,
+      agents,
+      agent: defaultAgent(cfg.launch, () => agents),
       workspaces,
       focused,
       board: (cfg.placement ?? 'workspace') === 'workspace' ? (cfg.workspace ?? 'Board') : '',

@@ -23,6 +23,8 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.folderPlaceholder': 'C:\\path\\to\\folder or ~/project',
     'launch.browse': 'Browse',
     'launch.where': 'Open in',
+    // the agent choice, when the board offers Claude Code and pi (web/src/models/launch-agent.ts)
+    'launch.agent': 'Agent',
     'launch.newWorkspace': 'New workspace…',
     'launch.workspaceName': 'Workspace name',
     'launch.workspaceDefault': 'Sessions',
@@ -192,6 +194,7 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.folderPlaceholder': 'C:\\путь\\к\\папке или ~/project',
     'launch.browse': 'Обзор',
     'launch.where': 'Где открыть',
+    'launch.agent': 'Агент',
     'launch.newWorkspace': 'Новый workspace…',
     'launch.workspaceName': 'Имя workspace',
     'launch.workspaceDefault': 'Сессии',

@@ -70,6 +70,8 @@ export interface LaunchSpec {
   claude?: string | string[]
   /** What it types for a start that asks for pi (core/launch/agents.ts): as `claude`; `pi` when unset. */
   pi?: string | string[]
+  /** The agent a start that names none starts as (core/launch/agents.ts): `claude` or `pi`; Claude Code when unset. */
+  default?: string
 }
 
 /** Where a launch from the board is: waiting for a dialog answered in herdr, or at the folder-trust one. */
