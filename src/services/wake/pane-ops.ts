@@ -40,7 +40,8 @@ const ERRORS = {
   blocked: 'it waits for an answer in its terminal',
 } as const
 const NOT_A_SESSION = 'it is not a Claude session that board resume can wake'
-const PROFILE_NOT_PLAIN = 'its profile id is not a plain word: board resume would wake it in the default profile'
+/** Why a session whose profile id the wake line cannot carry is not woken (and, in the engine, not put to sleep). */
+export const PROFILE_NOT_PLAIN = 'its profile id is not a plain word'
 
 function clock(t: Timing = {}): Required<Timing> {
   return {
@@ -52,8 +53,8 @@ function clock(t: Timing = {}): Required<Timing> {
 
 /**
  * The line that wakes the session, or why there is none: not a session id (pi's and Codex's
- * `pane-<id>` keys), or a profile id that `--profile` cannot carry, which would wake the session
- * in the default profile instead of its own.
+ * `pane-<id>` keys), or a profile id that `--profile` cannot carry: without it the session would
+ * wake in its card's or the pane's shell's profile, not surely its own.
  */
 function lineFor(session: string, profile: string | null | undefined): { line: string } | { error: string } {
   const line = wakeLine(session, profile)

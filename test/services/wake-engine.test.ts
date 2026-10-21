@@ -4,9 +4,10 @@
 // `board resume <id> --profile <id>`, never one it could not wake, and nothing but a Claude session.
 import { expect, test } from 'bun:test'
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { readConfigFile } from '../../src/adapters/config-file.ts'
-import { createProfileHomes } from '../../src/adapters/profile-homes.ts'
+import { createProfileHomes, type ProfileHomes } from '../../src/adapters/profile-homes.ts'
 import { findProfileDirs } from '../../src/adapters/profiles.ts'
 import { scheduledJobs } from '../../src/adapters/wake-transcripts.ts'
 import { mergeProfiles, type ProfileSet, profileSet } from '../../src/core/profiles.ts'
@@ -18,6 +19,17 @@ import { createWakeEngine, type WakeEngineDeps } from '../../src/services/wake/e
 import { isolatedHome } from '../support/env.ts'
 import { type FakePane, type FakeWakeHerdr, fakeWakeHerdr } from '../support/fake-wake-herdr.ts'
 import { profilesConfig, runningSession, SID, SID2 } from '../support/wake-fixtures.ts'
+
+/** The home and folders the tests run with, as this file loads: every test gives them back. */
+const outside = () => ({
+  HOME: process.env.HOME,
+  USERPROFILE: process.env.USERPROFILE,
+  APPDATA: process.env.APPDATA,
+  LOCALAPPDATA: process.env.LOCALAPPDATA,
+  CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+  homedir: homedir(),
+})
+const OUTSIDE = outside()
 
 const SID3 = '1b2c3d4e-5f60-4718-8a9b-c0d1e2f3a4b5'
 const SID4 = '2c3d4e5f-6071-4829-9bac-d1e2f3a4b5c6'
@@ -173,8 +185,9 @@ test('#151: a sleeping Work session wakes through board resume --profile work, w
       'w1:p1': { session: SID, name: 'Billing', seen_at: at, slept_at: at, profileDir: f.work, profile: 'work' },
     }),
   })
-  // The pane's shell, like the board, is in the Default profile.
-  process.env.CLAUDE_CONFIG_DIR = w.claude
+  // The board's own profile is Default: only the typed line names Work, so whatever profile the
+  // pane's shell would fall back to, Work is the one the session comes back in.
+  expect(w.set.inheritedDir).toBe(w.claude)
   startsOnRun(w.io, pane, w.work, { id: SID, name: 'Billing', n: 1 })
   const engine = createWakeEngine(w.deps)
 
@@ -213,18 +226,32 @@ test('the Telegram router’s wake: the pane’s known session, in its profile; 
   expect(typed(w.io)).toHaveLength(2)
 })
 
-test('a sleeper without a profile (the old plugin’s) wakes without --profile', async () => {
+// The old plugin read only ~/.claude: its sleepers are the default folder's, and wake in the
+// default profile even without a card, wherever the pane's shell's profile points (#151).
+test.each([
+  ['wakes in the default profile: --profile with the default folder’s listed id', undefined, ' --profile default'],
+  [
+    'whose default folder’s listed id is not a plain word wakes without --profile',
+    (f: Folders): ProfileSet =>
+      profileSet(
+        mergeProfiles([{ id: 'личный', dir: f.claude }], findProfileDirs(f.home), f.home, f.claude).list,
+        f.claude,
+      ),
+    '',
+  ],
+])('a sleeper without a profile (the old plugin’s) %s', async (_, profiles, flag) => {
   const pane = shellPane('w1:p1')
   const at = Date.now() - HOUR
   const w = world({
     panes: [pane],
     sessions: () => ({ 'w1:p1': { session: SID, name: 'Old', seen_at: at, slept_at: at } }),
+    ...(profiles && { profiles }),
   })
   startsOnRun(w.io, pane, w.claude, { id: SID, name: 'Old', n: 1 })
   const engine = createWakeEngine(w.deps)
 
   expect(await engine.wake('Old')).toEqual({ ok: true, pane: 'w1:p1', name: 'Old' })
-  expect(w.io.calls).toContainEqual(['pane', 'run', 'w1:p1', `board resume ${SID}`])
+  expect(w.io.calls.filter(c => c[1] === 'run')).toEqual([['pane', 'run', 'w1:p1', `board resume ${SID}${flag}`]])
 })
 
 test('a profile folder with spaces, Cyrillic and %: the line carries its id only', async () => {
@@ -280,38 +307,82 @@ test('a folder no listed profile has: board resume without --profile', async () 
   expect(w.io.calls).toContainEqual(['pane', 'run', 'w1:p1', `board resume ${SID}`])
 })
 
-test('no board on PATH, an unknown profile folder, no transcript: not put to sleep, and the reason said', async () => {
-  /** Refused on request with the reason, kept up by the reaper with it, and /exit never typed. */
-  async function refused(w: ReturnType<typeof world>, why: string): Promise<void> {
-    const engine = createWakeEngine(w.deps)
-    expect(await engine.sleep(SID)).toEqual({ ok: false, error: `Billing cannot be put to sleep: ${why}` })
-    expect((await engine.plan()).find(p => p.pane === 'w1:p1')).toMatchObject({
-      sleep: false,
-      reason: `cannot wake: ${why}`,
-    })
-    w.settings.reaper.enabled = true
-    await engine.reapRound()
-    expect(w.io.calls.filter(c => c[0] === 'agent' && c[1] === 'prompt')).toEqual([])
-    expect(typed(w.io)).toEqual([])
+/** Profile homes whose transcript lookup throws, as a stat Windows refuses (EPERM) does. */
+function unreadableTranscripts(homes: ProfileHomes): ProfileHomes {
+  const refuse = (): never => {
+    throw Object.assign(new Error('EPERM: operation not permitted, stat'), { code: 'EPERM' })
   }
+  return {
+    ...homes,
+    liveSessions: dirs =>
+      new Map(
+        [...homes.liveSessions(dirs)].map(([id, hit]) => [
+          id,
+          { ...hit, home: { ...hit.home, transcriptPath: refuse } },
+        ]),
+      ),
+  }
+}
 
-  const noBoard = world({ panes: [claudePane('w1:p1', SID)], boardOnPath: false })
-  runningSession(noBoard.work, { id: SID, name: 'Billing', cwd: PROJECT })
-  await refused(noBoard, CANNOT_WAKE.board)
+// One world (one temp home) per test: each test's cleanup gives back the home it found.
+test.each([
+  [
+    'no board on PATH',
+    CANNOT_WAKE.board,
+    () => {
+      const w = world({ panes: [claudePane('w1:p1', SID)], boardOnPath: false })
+      runningSession(w.work, { id: SID, name: 'Billing', cwd: PROJECT })
+      return w
+    },
+  ],
+  [
+    'an unknown profile folder',
+    CANNOT_WAKE.profile,
+    () => {
+      // The board's own profile named relative to wherever it runs: no profile's folder.
+      const w = world({
+        panes: [claudePane('w1:p1', SID)],
+        profiles: f => ({ list: [], inheritedDir: relative(process.cwd(), join(f.home, 'here')), inherited: null }),
+      })
+      expect(isAbsolute(w.set.inheritedDir)).toBe(false)
+      runningSession(join(w.home, 'here'), { id: SID, name: 'Billing', cwd: PROJECT })
+      return w
+    },
+  ],
+  [
+    'no transcript',
+    CANNOT_WAKE.transcript,
+    () => {
+      const w = world({ panes: [claudePane('w1:p1', SID)] })
+      runningSession(w.work, { id: SID, name: 'Billing', cwd: PROJECT })
+      rmSync(join(w.work, 'projects'), { recursive: true })
+      return w
+    },
+  ],
+  [
+    'a transcript that cannot be read',
+    'its transcript cannot be read: EPERM: operation not permitted, stat',
+    () => {
+      const w = world({ panes: [claudePane('w1:p1', SID)] })
+      runningSession(w.work, { id: SID, name: 'Billing', cwd: PROJECT })
+      return { ...w, deps: { ...w.deps, homes: unreadableTranscripts(w.deps.homes) } }
+    },
+  ],
+])('%s: not put to sleep, and the reason said', async (_, why, make) => {
+  const w = make()
+  const engine = createWakeEngine(w.deps)
 
-  // The board's own profile named relative to wherever it runs: no profile's folder.
-  const unknown = world({
-    panes: [claudePane('w1:p1', SID)],
-    profiles: f => ({ list: [], inheritedDir: relative(process.cwd(), join(f.home, 'here')), inherited: null }),
+  // Refused on request with the reason, kept up by the reaper with it, and /exit never typed.
+  expect(await engine.sleep(SID)).toEqual({ ok: false, error: `Billing cannot be put to sleep: ${why}` })
+  expect((await engine.plan()).find(p => p.pane === 'w1:p1')).toMatchObject({
+    sleep: false,
+    reason: `cannot wake: ${why}`,
   })
-  expect(isAbsolute(unknown.set.inheritedDir)).toBe(false)
-  runningSession(join(unknown.home, 'here'), { id: SID, name: 'Billing', cwd: PROJECT })
-  await refused(unknown, CANNOT_WAKE.profile)
-
-  const noTranscript = world({ panes: [claudePane('w1:p1', SID)] })
-  runningSession(noTranscript.work, { id: SID, name: 'Billing', cwd: PROJECT })
-  rmSync(join(noTranscript.work, 'projects'), { recursive: true })
-  await refused(noTranscript, CANNOT_WAKE.transcript)
+  w.settings.reaper.enabled = true
+  expect(await engine.awake()).toMatchObject([{ pane: 'w1:p1', kept: `cannot wake: ${why}` }])
+  await engine.reapRound()
+  expect(w.io.calls.filter(c => c[0] === 'agent' && c[1] === 'prompt')).toEqual([])
+  expect(typed(w.io)).toEqual([])
 })
 
 test('the reaper puts nobody to sleep while it is off; on, at most maxPerRound, never a session it could not wake', async () => {
@@ -583,4 +654,10 @@ test('busy() counts a sleep under way', async () => {
   open()
   expect(await sleeping).toMatchObject({ ok: true })
   expect(engine.busy()).toBe(0)
+})
+
+// Last in the file: the files bun runs after this one in the same process find the home and the
+// folders as they were, not a temp folder a test has deleted.
+test('every test gives back the home and folders it found', () => {
+  expect(outside()).toEqual(OUTSIDE)
 })

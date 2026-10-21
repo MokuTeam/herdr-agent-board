@@ -36,7 +36,14 @@ import {
   type WakeEntry,
   type WakeSessions,
 } from '../../core/wake/sessions.ts'
-import { putToSleep, type SleepMarks, type Timing, type WakeOutcome, wakeInPane } from './pane-ops.ts'
+import {
+  PROFILE_NOT_PLAIN,
+  putToSleep,
+  type SleepMarks,
+  type Timing,
+  type WakeOutcome,
+  wakeInPane,
+} from './pane-ops.ts'
 
 export interface WakeEngineDeps {
   herdr: WakeHerdr
@@ -92,8 +99,8 @@ export interface WakeEngine {
 /** How long a woken session has to show in a registry before wake answers anyway. */
 const REGISTER_WAIT_MS = 20_000
 const REGISTER_POLL_MS = 1000
-/** Why a session in a folder other than the default one cannot wake: the line would drop --profile. */
-const NOT_PLAIN = 'its profile id is not a plain word'
+/** Why a session whose transcript lookup threw (a stat Windows refuses: EPERM) stays up. */
+const TRANSCRIPT_UNREADABLE = 'its transcript cannot be read'
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -131,6 +138,21 @@ function asRunning(s: LiveSession): Running {
 }
 
 const cwdOf = (s: LiveSession): string => (typeof s.cwd === 'string' ? s.cwd : '')
+
+/** A session's transcript as found in its folder; `unreadable` when the lookup threw, with why. */
+interface Transcript {
+  path: string | null
+  unreadable?: string
+}
+
+/** The session's transcript in the folder whose registry has it; a lookup that throws keeps the session up. */
+function transcriptIn(hit: LiveHit, id: string): Transcript {
+  try {
+    return { path: hit.home.transcriptPath(id, cwdOf(hit.session)) }
+  } catch (err) {
+    return { path: null, unreadable: `${TRANSCRIPT_UNREADABLE}: ${messageOf(err)}` }
+  }
+}
 
 /** The id of the listed profile that has the folder, if one has it. */
 const listedId = (set: ProfileSet, dir: string | undefined): string | undefined =>
@@ -235,9 +257,9 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
   /**
    * The id `board resume --profile` gets for a session in `dir`: the listed profile's. None for a
    * folder no listed profile has, and none for the default folder when its id is not a plain word:
-   * without --profile, `board resume` takes the folder from the session's card, else the shell's
-   * profile, the default one. In another folder such an id is kept, and refused by pane-ops (and by
-   * the "can wake" rule before it): without --profile it would wake in the default profile.
+   * without --profile, `board resume` takes the folder from the session's card, else the pane's
+   * shell's profile, which can be any (#151). In another folder such an id is kept, and refused by
+   * pane-ops (and by the "can wake" rule before it): without --profile it would not wake in its own.
    */
   function lineProfile(set: ProfileSet, dir: string | undefined): string | null {
     const id = listedId(set, dir)
@@ -246,12 +268,12 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
   }
 
   /** Why the session could not be woken again once asleep (call 9), or null. */
-  function cannotWake(hit: LiveHit, set: ProfileSet, onPath: boolean, transcript: string | null): string | null {
+  function cannotWake(hit: LiveHit, set: ProfileSet, onPath: boolean, transcript: Transcript): string | null {
     const dir = absoluteProfileDir(hit.home.root, homedir(), platform)
-    const why = canWake({ boardOnPath: onPath, profileDir: dir, transcript })
-    if (why) return CANNOT_WAKE[why]
+    const why = canWake({ boardOnPath: onPath, profileDir: dir, transcript: transcript.path })
+    if (why) return why === 'transcript' && transcript.unreadable ? transcript.unreadable : CANNOT_WAKE[why]
     const id = lineProfile(set, hit.home.root)
-    return id !== null && !plainProfile(id) ? NOT_PLAIN : null
+    return id !== null && !plainProfile(id) ? PROFILE_NOT_PLAIN : null
   }
 
   /** The reaper's plan: the scheduled jobs of each idle session read first, from its own folder. */
@@ -259,19 +281,21 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     const { reaper } = deps.settings()
     const live = new Map<string, Running>()
     for (const [id, hit] of hits) if (SESSION_ID.test(id)) live.set(id, asRunning(hit.session))
-    const transcripts = new Map<string, string | null>()
-    const transcriptOf = (id: string): string | null => {
-      if (!transcripts.has(id)) {
+    const transcripts = new Map<string, Transcript>()
+    const transcriptOf = (id: string): Transcript => {
+      let found = transcripts.get(id)
+      if (!found) {
         const hit = hits.get(id)
-        transcripts.set(id, hit ? hit.home.transcriptPath(id, cwdOf(hit.session)) : null)
+        found = hit ? transcriptIn(hit, id) : { path: null }
+        transcripts.set(id, found)
       }
-      return transcripts.get(id) ?? null
+      return found
     }
     const scheduled = new Set<string>()
     for (const p of snap.panes) {
       const id = p.agent === 'claude' ? p.agent_session?.value : undefined
       if (!id || live.get(id)?.status !== 'idle' || scheduled.has(id)) continue
-      if (await deps.scheduled(transcriptOf(id)).catch(() => true)) scheduled.add(id)
+      if (await deps.scheduled(transcriptOf(id).path).catch(() => true)) scheduled.add(id)
     }
     const onPath = deps.boardOnPath()
     return reapPlan(snap, live, {
@@ -342,9 +366,14 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     await deps.herdr.rename(pane, null).catch(() => {})
   }
 
-  /** Wakes the entry's session in its pane (pane-ops wakeInPane), in its folder's profile. */
+  /**
+   * Wakes the entry's session in its pane (pane-ops wakeInPane), in its folder's profile. An entry
+   * without a folder is the old plugin's, which read only the default folder: woken in that one's
+   * profile, so it comes back there even without a card, whatever the pane's shell's profile.
+   */
   async function wakeIn(pane: string, entry: WakeEntry, set: ProfileSet): Promise<WakeOutcome> {
-    const target = { pane, session: entry.session, profile: lineProfile(set, entry.profileDir) }
+    const dir = entry.profileDir ?? defaultProfileDir(homedir(), platform)
+    const target = { pane, session: entry.session, profile: lineProfile(set, dir) }
     const timeoutMs = deps.settings().wakeTimeoutSec * 1000
     const outcome = await wakeInPane(deps.herdr, target, { ...timing, timeoutMs, platform })
     if (outcome.ok) await awaken(pane)
@@ -419,8 +448,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
         const hit = seen.hits.get(s.session)
         if (hit?.session.status !== 'idle') return { ok: false, error: `${s.name} is not idle` }
         const cwd = typeof hit.session.cwd === 'string' ? hit.session.cwd : undefined
-        const transcript = hit.home.transcriptPath(s.session, cwd ?? '')
-        const why = cannotWake(hit, seen.set, deps.boardOnPath(), transcript)
+        const why = cannotWake(hit, seen.set, deps.boardOnPath(), transcriptIn(hit, s.session))
         if (why) return { ok: false, error: `${s.name} cannot be put to sleep: ${why}` }
         const slept = await putDown(s.pane, { session: s.session, name: s.name, cwd, dir: hit.home.root }, seen.set)
         return slept
