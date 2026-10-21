@@ -7,6 +7,8 @@ import { normalizeConfig } from '../../src/core/categories.ts'
 import { useLanguage } from '../../src/core/lang.ts'
 import { sameDir } from '../../src/core/launch/names.ts'
 import { promptOf } from '../../src/core/schedule-rules.ts'
+import { WAKE_SHIPPED } from '../../src/core/wake/config.ts'
+import { unusedPort } from '../support/board-server.ts'
 import { root, type Sandbox, sandbox, until } from '../support/sandbox.ts'
 import { notification } from '../support/task-notification.ts'
 
@@ -421,4 +423,87 @@ test("every other session keeps herdr's own claude --resume: no reporter, no her
   // A reporter would have asked herdr by now (its first try is a second after the start).
   await Bun.sleep(1800)
   expect(box.calls()).toEqual([])
+})
+
+// Call 21: a session in ~/.claude is reported with board resume while wake's Telegram router is on
+// and launch.claude is a launcher (claude-tg), as herdr-wake's own hook did with its wakeCommand.
+/** The board's config.json in the sandbox, as given (a string as it is, broken or not). */
+function writeConfig(box: Sandbox, config: unknown): void {
+  mkdirSync(join(configFile(box), '..'), { recursive: true })
+  writeFileSync(configFile(box), typeof config === 'string' ? config : JSON.stringify(config))
+}
+const LAUNCHER = { claude: ['claude-tg', '--dangerously-skip-permissions'] }
+
+test('SessionStart in ~/.claude with claude-tg and Telegram on: the reporter starts with board resume <id>', async () => {
+  const box = await sandbox()
+  const port = await unusedPort()
+  writeConfig(box, { language: 'en', launch: LAUNCHER, wake: { enabled: true, port, telegram: 'auto' } })
+  box.state(claudeIn(SID))
+  const before = Date.now()
+  const out = await runInHerdr(box, { PATH: boardOnPath(box) })
+  expect(out).toContain('"hookEventName":"SessionStart"')
+  await until(() => reported(box), 8000)
+  const sent = reported(box) ?? []
+  expect(sent.slice(0, 8)).toEqual([
+    'pane',
+    'report-agent-session',
+    'w1:p1',
+    '--source',
+    'herdr:claude',
+    '--agent',
+    'claude',
+    '--seq',
+  ])
+  expect(Number(sent[8])).toBeGreaterThan(before)
+  expect(sent.slice(9)).toEqual(['--agent-session-id', SID, '--', 'board', 'resume', SID])
+})
+
+test("in ~/.claude, Telegram off, plain claude or herdr-wake's own hook: herdr's own claude --resume, no reporter", async () => {
+  const box = await sandbox()
+  const home = box.env.USERPROFILE as string
+  const port = await unusedPort()
+  const PATH = boardOnPath(box)
+  box.state(claudeIn(SID))
+  const tgOn = { enabled: true, port, telegram: 'auto' }
+  const configs: unknown[] = [
+    // Telegram off: no wake section (it is off by default), wake off, or Telegram not turned on.
+    { language: 'en', launch: LAUNCHER },
+    { language: 'en', launch: LAUNCHER, wake: false },
+    { language: 'en', launch: LAUNCHER, wake: { enabled: false, port, telegram: 'auto' } },
+    { language: 'en', launch: LAUNCHER, wake: { enabled: true, port, telegram: 'off' } },
+    { language: 'en', launch: LAUNCHER, wake: { enabled: true, port } },
+    // A config.json that does not parse: wake off.
+    '{ "launch": { "claude": ["claude-tg"] }, "wake": { "enabled": true, "telegram": "auto" ',
+    // Telegram on, and Claude itself.
+    { language: 'en', wake: tgOn },
+    { language: 'en', launch: { claude: ['claude', '--model', 'opus'] }, wake: tgOn },
+    { language: 'en', launch: { claude: join(home, '.local', 'bin', 'claude.exe') }, wake: tgOn },
+  ]
+  for (const config of configs) {
+    writeConfig(box, config)
+    await runInHerdr(box, { PATH })
+  }
+  // herdr-wake's SessionStart hook in ~/.claude with claude-tg as its wakeCommand: it reports that.
+  writeConfig(box, { language: 'en', launch: LAUNCHER, wake: tgOn })
+  herdrWake(box, profileFolder(box, '.claude'), 'claude-tg --resume {session}')
+  await runInHerdr(box, { PATH })
+  // No board on PATH: herdr could not run the command in the restored shell.
+  writeFileSync(join(home, '.claude', 'settings.json'), '{}')
+  await runInHerdr(box, {})
+  await Bun.sleep(1800)
+  expect(box.calls()).toEqual([])
+})
+
+test('a wake section with Telegram on but no enabled: reported as wake is by default', async () => {
+  const box = await sandbox()
+  writeConfig(box, { language: 'en', launch: LAUNCHER, wake: { port: await unusedPort(), telegram: 'auto' } })
+  box.state(claudeIn(SID))
+  await runInHerdr(box, { PATH: boardOnPath(box) })
+  if (WAKE_SHIPPED) {
+    await until(() => reported(box), 8000)
+    expect(reported(box)?.slice(-3)).toEqual(['board', 'resume', SID])
+  } else {
+    await Bun.sleep(1800)
+    expect(box.calls()).toEqual([])
+  }
 })
