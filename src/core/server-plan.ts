@@ -5,6 +5,7 @@
 // the owner would paste it, `sudo` in front of what needs root and their values one shell word
 // each; the board's run (core/server-script.ts) runs the same lines as root.
 // Pure, with no node: import: the page renders "Do it myself" from it.
+import { t } from './lang.ts'
 import type { Container, Holder, Port, ServerFacts } from './server-facts.ts'
 import { isContainerId, isPlainPath, shQuote } from './server-shell.ts'
 import {
@@ -42,6 +43,7 @@ import {
   socatRunArgs,
   VOLUMES,
 } from './server-texts.ts'
+import { fieldProblem, type TunnelField } from './tunnel.ts'
 import { keysFile, socketFolder } from './tunnel-snippets.ts'
 
 export type SetupCase = '1' | '1b' | '2' | '3a' | '3b' | '4a' | '4b'
@@ -250,6 +252,8 @@ export function setupRecord(json: unknown): SetupRecord | null {
     return null
   if (!isLine(domain) || domain === '' || !isLine(address)) return null
   if (publicPort !== null && !isPort(publicPort)) return null
+  // a pair or domain the panel would refuse was not written by a board
+  if (wantedProblem({ user: pair.user, socket: pair.socket, domain, publicPort })) return null
   if (!Array.isArray(items)) return null
   const folder = socketFolder(pair.socket)
   const read = items.map(i => recordItem(i, folder))
@@ -266,6 +270,36 @@ export function setupRecord(json: unknown): SetupRecord | null {
     address,
     items: read as RecordItem[],
   }
+}
+
+/**
+ * What is wrong with what the panel wants, as the tunnel's settings are checked (core/tunnel.ts);
+ * null when nothing is. Its values reach root's shell quoted, but also text their Caddy or nginx
+ * loads as config (a site's address, `server_name`, the socket's path), where no quoting helps: a
+ * `;`, a brace or a newline there is a directive of the board's in their proxy.
+ */
+export function wantedProblem(w: Wanted): string | null {
+  const fields: [TunnelField, unknown][] = [
+    ['user', w.user],
+    ['socket', w.socket],
+    ['domain', w.domain],
+    ['publicPort', w.publicPort],
+  ]
+  for (const [field, value] of fields) {
+    if (value === '') return t('tunnel.err.required', { field: t(`tunnel.field.${field}`) })
+    const problem = fieldProblem(field, value)
+    if (problem) return problem
+  }
+  // a test CA only (BOARD_SETUP_ACME_CA…): a URL and a file, one word each in the board's Caddyfile
+  if (w.acme && !(/^https?:\/\/[^\s{}]+$/.test(w.acme.ca) && /^\/[\w./-]+$/.test(w.acme.root)))
+    return 'The test CA is a URL and an absolute path'
+  return null
+}
+
+/** Refuses what the panel wants unless it checks out: nothing is planned or run from it then. */
+function checkWanted(w: Wanted): void {
+  const problem = wantedProblem(w)
+  if (problem) throw new Error(problem)
 }
 
 /** 'same': pair, domain and public port the panel's; 'update': the pair the same; 'other': another pair (Call 30). */
@@ -449,6 +483,7 @@ function byHolders(f: ServerFacts, w: Wanted): Choice {
 
 /** The case for the facts Look found (the spec's table, then its "anything else" list). */
 export function chooseCase(f: ServerFacts, w: Wanted): Choice {
+  checkWanted(w)
   const limits = hostLimits(f)
   if (limits.length) return manual(limits)
   if (f.record !== null && f.record !== undefined) {
@@ -478,8 +513,18 @@ const appendTo = (path: string, text: string): string =>
 const sameText = (path: string, text: string): string =>
   `[ "$(printf '%s\\n' ${lines(text)} | sha256sum)" = "$(sudo cat ${q(path)} 2>/dev/null | sha256sum)" ]`
 const hashOf = (path: string): string => `$(sudo cat ${q(path)} | sha256sum | cut -c1-64)`
-/** Written in place (the same file, so a file bind mount sees it, call 14). */
-const inPlace = (from: string, to: string): string => `sudo sh -c ${shQuote(`cat ${q(from)} > ${q(to)}`)}`
+/**
+ * Written in place (the same file, so a file bind mount sees it, call 14), and only from a file
+ * that is there and not empty: `>` empties the file before cat reads a thing.
+ */
+const inPlace = (from: string, to: string): string =>
+  `sudo sh -c ${shQuote(`test -s ${q(from)} && cat ${q(from)} > ${q(to)}`)}`
+/** A file of the board's written beside itself and moved in: one that is cut short is never the file. */
+const copyWhole = (from: string, to: string): string =>
+  `sudo cp -p ${q(from)} ${q(`${to}.part`)}; sudo mv -f ${q(`${to}.part`)} ${q(to)}`
+/** A line that imports the board's site file: the board's own, or one written by hand. */
+const IMPORTS_SITE = `^[[:space:]]*import[[:space:]]+${SITE_FILE.replaceAll('.', '\\.')}([[:space:]]|$)`
+const importsSite = (files: string[]): string => `sudo grep -Eqs ${shQuote(IMPORTS_SITE)} ${files.map(q).join(' ')}`
 const dirOf = (path: string): string => path.slice(0, path.lastIndexOf('/')) || '/'
 const label = (name: string, key: string): string =>
   `$(sudo docker inspect -f '{{index .Config.Labels "${key}"}}' ${q(name)} 2>/dev/null)`
@@ -606,7 +651,11 @@ function pullStep(id: string, image: string): PlanStep {
   )
 }
 
-/** One of the board's own files: the earlier one kept for the rollback, written, its mode set. */
+/**
+ * One of the board's own files: the earlier one kept whole for the rollback (else a mark that this
+ * run made it), the new text written beside it and moved in (their Caddy may import it), its mode
+ * set. The rollback puts the earlier one back, or removes the file only when this run made it.
+ */
 function ownFile(
   id: string,
   path: string,
@@ -616,20 +665,25 @@ function ownFile(
 ) {
   const name = path.slice(path.lastIndexOf('/') + 1)
   const saved = `${b}/${name}.board`
+  const made = `${b}/${name}.new`
+  const part = `${path}.part`
   return mk(
     id,
     {
       commands: [
         `sudo install -d -m 755 ${q(dirOf(path))}`,
-        `if sudo test -f ${q(path)}; then sudo install -d -m 700 ${q(b)} && sudo cp -p ${q(path)} ${q(saved)}; fi`,
-        writeTo(path, text),
-        `sudo chmod 644 ${q(path)}`,
+        `sudo install -d -m 700 ${q(b)}`,
+        `if sudo test -f ${q(path)}; then ${copyWhole(path, saved)}; else sudo touch ${q(made)}; fi`,
+        writeTo(part, text),
+        `sudo chmod 644 ${q(part)}`,
+        `sudo mv -f ${q(part)} ${q(path)}`,
         ...(more.commands ?? []),
       ],
       skipIf: [sameText(path, text)],
       check: [`sudo test -s ${q(path)}`],
       undo: [
-        `if sudo test -f ${q(saved)}; then sudo cp ${q(saved)} ${q(path)}; else sudo rm -f ${q(path)}; fi`,
+        `sudo rm -f ${q(part)}`,
+        `if sudo test -f ${q(saved)}; then ${copyWhole(saved, path)}; elif sudo test -f ${q(made)}; then sudo rm -f ${q(path)}; fi`,
         ...(more.undo ?? []),
       ],
       touches: [{ kind: 'file', what: path }],
@@ -837,7 +891,8 @@ function chain(
       params,
     ),
   ]
-  const restore = inPlace(backup, t.file)
+  // their file back as it was: never one that imports the board's site while that site is not there
+  const restore = `if ${importsSite([backup])} && ! sudo test -s ${SITE_FILE}; then echo ${q(`${t.file} is left as it is: its backup imports ${SITE_FILE}, which is not there.`)}; false; else ${inPlace(backup, t.file)}; fi`
   const reloaded = `${b}/reloaded`
   const validate = mk(
     'validate',
@@ -902,7 +957,7 @@ function chain(
           restore,
           ...(o.restoreSite
             ? [
-                `if sudo test -f ${q(`${b}/board.caddy.board`)}; then sudo cp ${q(`${b}/board.caddy.board`)} ${SITE_FILE}; fi`,
+                `if sudo test -f ${q(`${b}/board.caddy.board`)}; then ${copyWhole(`${b}/board.caddy.board`, SITE_FILE)}; fi`,
               ]
             : []),
           `if sudo test -f ${q(reloaded)}; then ${t.reload.join('; ')}; fi`,
@@ -1213,6 +1268,7 @@ export function buildPlan(
   w: Wanted,
   o: { id: string; docker: boolean },
 ): Plan | { case: null; why: Manual[] } {
+  checkWanted(w)
   checkId(o.id)
   const choice = chooseCase(f, w)
   const raw = f.record !== null && f.record !== undefined ? setupRecord(f.record) : null
@@ -1301,8 +1357,9 @@ export function undoPlan(
   f: ServerFacts,
   o: { id: string; removeDocker: boolean; removeEdited: boolean },
 ): Plan {
+  checkWanted({ user: r.pair.user, socket: r.pair.socket, domain: r.domain, publicPort: r.publicPort })
   checkId(o.id)
-  const items = dedupe(r.items)
+  const items = withEdit(r, f, dedupe(r.items))
   const b = `${BACKUPS_DIR}/${o.id}`
   const relies: Rely[] = []
   const warnings: Text[] = []
@@ -1312,6 +1369,7 @@ export function undoPlan(
   const onlyOurs = (f.docker?.containers ?? []).every(c => c.labels[ROLE_LABEL] !== undefined)
   const offerDocker = dockerItem !== undefined && onlyOurs
   const files = items.filter(i => i.kind === 'file')
+  const theirFile = theirCaddy(f)?.file
   for (const item of [...items].reverse()) {
     switch (item.kind) {
       case 'line':
@@ -1349,21 +1407,31 @@ export function undoPlan(
           item.path === NGINX_FILE ? 'drop-nginx-file' : item.path === SITE_FILE ? 'drop-site-file' : 'drop-caddyfile'
         const dir = item.path === SITE_FILE ? SITE_DIR : item.path === CADDY_FILE ? CADDY_DIR : null
         const nginx = item.path === NGINX_FILE
-        const saved = `${b}/agent-board.conf`
+        // a copy first, which the rollback puts back (only where the file is gone)
+        const saved = `${b}/${item.path.slice(item.path.lastIndexOf('/') + 1)}.dropped`
         const hosts = nginx && f.host.fetch === 'curl' ? fetchHosts(f.nginx?.serverNames ?? [], r.domain) : []
+        // board.caddy stays while a Caddyfile imports it: their Caddy would not start without it
+        const importers = [
+          ...new Set([
+            ...items.flatMap(i => (i.kind === 'line' ? [i.file] : [])),
+            ...(theirFile && isPlainPath(theirFile) ? [theirFile] : []),
+          ]),
+        ]
         steps.push(
           mk(
             id,
             {
               commands: [
-                ...(nginx
+                ...(item.path === SITE_FILE && importers.length
                   ? [
-                      `sudo install -d -m 700 ${q(b)}`,
-                      `if sudo test -f ${NGINX_FILE}; then sudo cp -p ${NGINX_FILE} ${q(saved)}; fi`,
-                      ...(hosts.length ? fetchInto(hosts, `${b}/nginx-before`, '127.0.0.1', true) : []),
+                      `if ${importsSite(importers)}; then echo ${q(`${SITE_FILE} stays: a Caddyfile still imports it.`)}; false; fi`,
                     ]
                   : []),
+                `sudo install -d -m 700 ${q(b)}`,
+                `if sudo test -f ${q(item.path)}; then sudo cp -p ${q(item.path)} ${q(saved)}; fi`,
+                ...(hosts.length ? fetchInto(hosts, `${b}/nginx-before`, '127.0.0.1', true) : []),
                 `if sudo test -e ${q(item.path)}; then ${dropFile(item.path, item.sha256, o.removeEdited)}; fi`,
+                `sudo rm -f ${q(`${item.path}.part`)}`,
                 ...(dir ? [`sudo rmdir ${q(dir)} 2>/dev/null || true`] : []),
                 ...(nginx
                   ? [
@@ -1376,12 +1444,10 @@ export function undoPlan(
                   : []),
               ],
               skipIf: nginx ? [] : [`! sudo test -e ${q(item.path)}`],
-              undo: nginx
-                ? [
-                    `if sudo test -f ${q(saved)} && ! sudo test -e ${NGINX_FILE}; then sudo cp -p ${q(saved)} ${NGINX_FILE}; fi`,
-                    'if sudo nginx -t 2>/dev/null; then sudo systemctl reload nginx; fi',
-                  ]
-                : [],
+              undo: [
+                `if sudo test -f ${q(saved)} && ! sudo test -e ${q(item.path)}; then ${dir ? `sudo install -d -m 755 ${q(dir)}; ` : ''}${copyWhole(saved, item.path)}; fi`,
+                ...(nginx ? ['if sudo nginx -t 2>/dev/null; then sudo systemctl reload nginx; fi'] : []),
+              ],
               touches: [
                 { kind: 'file', what: item.path },
                 ...(nginx ? [{ kind: 'reload' as const, what: 'nginx' }] : []),
@@ -1519,6 +1585,26 @@ export function undoPlan(
     warnings,
     ticks,
   }
+}
+
+/**
+ * A record of case 2 or 3 with the line or block in their file named, even when its run was cut
+ * short before it recorded it (a run of an earlier board, or one stopped between its backup and its
+ * write): the file its backup is of, else the Caddyfile Look found. Undo takes it out only where it
+ * is there (its backup step skips when it is not), so naming it once too often changes nothing.
+ */
+function withEdit(r: SetupRecord, f: ServerFacts, items: RecordItem[]): RecordItem[] {
+  const kind = r.case === '2' ? 'line' : r.case === '3a' || r.case === '3b' ? 'block' : null
+  if (kind === null || items.some(i => i.kind === kind)) return items
+  const backup = items.find((i): i is Extract<RecordItem, { kind: 'backup' }> => i.kind === 'backup')
+  const file = backup?.of ?? theirCaddy(f)?.file
+  if (file === undefined || !isPlainPath(file)) return items
+  return [
+    ...items,
+    kind === 'line'
+      ? { kind: 'line', file, line: IMPORT_LINE }
+      : { kind: 'block', file, begin: BLOCK_BEGIN, end: BLOCK_END },
+  ]
 }
 
 /** Their file when Look found no Caddy using it: the line or block comes out, nothing is reloaded. */

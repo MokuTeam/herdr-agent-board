@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ServerFacts } from '../../src/core/server-facts.ts'
@@ -14,7 +15,7 @@ import {
   type Wanted,
 } from '../../src/core/server-plan.ts'
 import { doItMyself, launchScript, readProgress, runScript, startProgress } from '../../src/core/server-script.ts'
-import { CADDY_FILE, CADDY_IMAGE, IMPORT_LINE } from '../../src/core/server-texts.ts'
+import { CADDY_FILE, CADDY_IMAGE, IMPORT_LINE, SITE_FILE } from '../../src/core/server-texts.ts'
 import { factsFor, recordFor } from '../support/server-facts.ts'
 
 const W: Wanted = {
@@ -87,7 +88,8 @@ function everyPlan(): [string, Plan][] {
 }
 
 const PLANS = everyPlan()
-const BASHISMS = ['tail -f', '--pid', '[[', 'function ', 'local ', 'echo -e']
+// `[[ ` is bash's test; `[[:space:]]` is a POSIX class and fine
+const BASHISMS = ['tail -f', '--pid', '[[ ', 'function ', 'local ', 'echo -e']
 
 /** The shell to check and run the scripts with: dash when there is one (the stricter POSIX one), else sh. */
 const SH = Bun.which('dash') ?? Bun.which('sh')
@@ -143,6 +145,11 @@ describe('the launch: the run written, started detached, its log followed', () =
   test('a run id that is not plain is refused', () => {
     expect(() => launchScript('a b', run)).toThrow()
     expect(() => launchScript('../x', run)).toThrow()
+  })
+  test('a run without its last line is refused: the launch checks its copy ends with it', () => {
+    expect(run.trimEnd().split('\n').at(-1)).toBe('# agent-board: end')
+    expect(() => launchScript('r1', run.replace('# agent-board: end\n', ''))).toThrow()
+    expect(launch).toContain(`[ "$(tail -n 1 "$R.sh")" = '# agent-board: end' ] || { echo '@@exit 70'; exit 70; }`)
   })
   test('the biggest plans still fit a Windows command line in base64, with 20 of their hosts', () => {
     const f = factsFor('4b')
@@ -224,6 +231,13 @@ test('the module has no node: import', () => {
   expect(readFileSync('src/core/server-script.ts', 'utf8')).not.toMatch(/from 'node:/)
 })
 
+test('what the panel wants is checked before a script is made: a domain that would end their site block gives none', () => {
+  const p = planOf(factsFor('2'))
+  for (const domain of ['a.com;\n}', 'a{b.example.com', 'x.com; include /etc/x', 'a.com\nimport /etc/x'])
+    expect(() => runScript(p, { ...W, domain }, RUN)).toThrow()
+  expect(() => runScript(p, { ...W, socket: '/var/lib/board tunnel/board.sock' }, RUN)).toThrow()
+})
+
 // The run's own logic, run for real by a POSIX shell: the steps in a sandbox folder instead of
 // /etc/agent-board, flock and setsid stubbed, commands that only echo.
 describe.skipIf(!SH)('a run, for real', () => {
@@ -232,8 +246,17 @@ describe.skipIf(!SH)('a run, for real', () => {
   mkdirSync(bin)
   writeFileSync(`${bin}/flock`, '#!/bin/sh\n[ -z "$FLOCK_BUSY" ]\n', { mode: 0o755 })
   writeFileSync(`${bin}/setsid`, '#!/bin/sh\n[ "$1" = -w ] && shift\nexec "$@"\n', { mode: 0o755 })
+  // `install -d -m MODE DIR`: the folder without its mode (Windows' ACLs refuse some modes Git's install sets)
+  writeFileSync(
+    `${bin}/install`,
+    '#!/bin/sh\n[ "$1" = -d ] || exit 1\nshift\n[ "$1" = -m ] && shift 2\nmkdir -p "$@"\n',
+    {
+      mode: 0o755,
+    },
+  )
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
-  const env = { ...process.env, PATH: `${bin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}` }
+  const SEP = process.platform === 'win32' ? ';' : ':'
+  const env = { ...process.env, PATH: `${bin}${SEP}${process.env.PATH ?? ''}` }
 
   const step = (id: string, over: Partial<PlanStep> = {}): PlanStep => ({
     id,
@@ -271,9 +294,43 @@ describe.skipIf(!SH)('a run, for real', () => {
     })
     return { out: r.stdout.toString() + r.stderr.toString(), code: r.exitCode }
   }
-  /** The script on this PC: the sandbox folder for /etc/agent-board, this PATH (with the stubs) for the server's. */
+  /** The script on this PC: sandbox folders for /etc/agent-board and /etc/caddy, this PATH (with the stubs) for the server's. */
   const sandboxed = (script: string, root: string): string =>
-    script.replaceAll('/etc/agent-board', root).replace(/^PATH=.*\n/gm, '')
+    script
+      .replaceAll('/etc/agent-board', root)
+      .replaceAll('/etc/caddy/', `${root}/etc-caddy/`)
+      .replace(/^PATH=.*\n/gm, '')
+  /** A step of the real case-2 plan (their Caddy as a service): its lines, run here on the sandbox's files. */
+  const case2 = planOf(factsFor('2'))
+  const real = (id: string): PlanStep => {
+    const s = case2.steps.find(x => x.id === id)
+    if (!s) throw new Error(`no step ${id}`)
+    return s
+  }
+  /**
+   * The run started in the background; once its log has the line `at`, a TERM sent to it, as the
+   * overall timeout or a shutdown would. Its log, and how it ended.
+   */
+  const runAndTerm = (p: Plan, root: string, at: string): { out: string; code: number } => {
+    mkdirSync(`${root}/runs`, { recursive: true })
+    writeFileSync(`${root}/runs/r1.sh`, sandboxed(runScript(p, W, RUN), root))
+    const wrapper = [
+      'sh=$(command -v dash || command -v sh)',
+      '"$sh" "$1" > "$2" 2>&1 &',
+      'p=$!',
+      'i=0',
+      'until grep -qx -e "$3" "$2" || [ "$i" -ge 300 ]; do sleep 0.1; i=$((i + 1)); done',
+      'kill -TERM "$p"',
+      'wait "$p"',
+    ].join('\n')
+    const r = Bun.spawnSync([SH ?? 'sh', '-c', wrapper, 'sh', `${root}/runs/r1.sh`, `${root}/out`, at], {
+      env,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      timeout: 60_000,
+    })
+    return { out: readFileSync(`${root}/out`, 'utf8'), code: r.exitCode }
+  }
   const markers = (out: string): string[] =>
     out.split('\n').filter(l => l.startsWith('@@') || l.startsWith('did ') || l.startsWith('undid '))
   /** The record the run wrote, its sandbox folder read back as /etc/agent-board. */
@@ -413,4 +470,210 @@ describe.skipIf(!SH)('a run, for real', () => {
     ])
     expect(r.exitCode).toBe(0)
   }, 30_000)
+
+  test('a launch whose runs folder cannot be made, or whose copy of the run is cut, says @@exit 70 at once', () => {
+    const root = `${dir}/nofolder`
+    writeFileSync(root, 'a file where the folder would be')
+    const run = (at: string): { out: string; code: number } => {
+      const launch = sandboxed(launchScript('r1', runScript(fake([step('guard')]), W, RUN)), at)
+      const r = Bun.spawnSync([SH ?? 'sh', '-c', launch], { env, stdout: 'pipe', stderr: 'pipe', timeout: 15_000 })
+      return { out: r.stdout.toString(), code: r.exitCode }
+    }
+    const started = Date.now()
+    expect(run(root)).toEqual({ out: '@@exit 70\n', code: 70 })
+    // the run's own file taken by a folder: what is there does not end with the run's last line
+    const cut = `${dir}/cut`
+    mkdirSync(`${cut}/runs/r1.sh`, { recursive: true })
+    expect(run(cut)).toEqual({ out: '@@exit 70\n', code: 70 })
+    expect(existsSync(`${cut}/runs/r1.log`)).toBe(false)
+    expect(Date.now() - started).toBeLessThan(10_000)
+  }, 40_000)
+
+  test('a step’s items are on the record before it runs: a run cut short names what it was changing', () => {
+    const root = `${dir}/ahead`
+    const p = fake([
+      step('guard'),
+      step('write', {
+        commands: ['cat /etc/agent-board/setup.json'],
+        record: [
+          { kind: 'line', file: '/etc/caddy/Caddyfile', line: IMPORT_LINE },
+          { kind: 'image', ref: CADDY_IMAGE, before: false },
+        ],
+      }),
+    ])
+    const { out, code } = runIn(p, root)
+    expect(code).toBe(0)
+    const during = JSON.parse(out.split('\n').find(l => l.startsWith('{')) ?? 'null')
+    // an image as if there before while its step runs (an Undo after a cut keeps it), what the step found after
+    expect(during).toMatchObject({
+      state: 'running',
+      items: [{ kind: 'line' }, { kind: 'image', ref: CADDY_IMAGE, before: true }],
+    })
+    expect(record(root)).toMatchObject({
+      state: 'applied',
+      items: [{ kind: 'line' }, { kind: 'image', ref: CADDY_IMAGE, before: false }],
+    })
+  })
+
+  test('a TERM during a step: the step ends, then what the run did is rolled back; their file is its backup again', () => {
+    const root = `${dir}/term`
+    const theirs = `${root}/etc-caddy/Caddyfile`
+    mkdirSync(`${root}/etc-caddy`, { recursive: true })
+    const original = 'a.example.org {\n\trespond "a"\n}\n'
+    writeFileSync(theirs, original)
+    const p = fake([
+      step('guard'),
+      step('backup', {
+        commands: [
+          'sudo install -d -m 700 /etc/agent-board/backups/r1',
+          'sudo cp -p /etc/caddy/Caddyfile /etc/agent-board/backups/r1/Caddyfile',
+        ],
+        record: [{ kind: 'backup', of: '/etc/caddy/Caddyfile', path: '/etc/agent-board/backups/r1/Caddyfile' }],
+      }),
+      step('write', {
+        commands: [`printf '%s\\n' '${IMPORT_LINE}' >> /etc/caddy/Caddyfile`, 'sleep 2'],
+        undo: real('write').undo,
+        record: real('write').record,
+      }),
+      step('reload'),
+    ])
+    const { out, code } = runAndTerm(p, root, '@@step 3 start')
+    expect(markers(out)).toEqual([
+      '@@step 1 start',
+      'did guard',
+      '@@step 1 ok',
+      '@@step 2 start',
+      '@@step 2 ok',
+      '@@step 3 start',
+      '@@step 3 ok',
+      '@@undo 3 ok',
+      '@@result rolled-back',
+    ])
+    expect(code).toBe(1)
+    expect(readFileSync(theirs, 'utf8')).toBe(original)
+    expect(readFileSync(`${root}/backups/r1/Caddyfile`, 'utf8')).toBe(original)
+    expect(JSON.parse(readFileSync(`${root}/setup.json`, 'utf8'))).toMatchObject({ state: 'rolled-back', items: [] })
+  }, 60_000)
+
+  test('a record that cannot be written: nothing after the guard; after a step, that step rolled back', () => {
+    const root = `${dir}/norecord`
+    // the record's new copy cannot be made where a folder has its name
+    mkdirSync(`${root}/setup.json.new`, { recursive: true })
+    const first = runIn(fake([step('guard'), step('caddyfile')]), root)
+    expect(markers(first.out)).toEqual(['@@step 1 start', 'did guard', '@@step 1 ok'])
+    expect(first.code).toBe(3)
+    const later = runIn(
+      fake([
+        step('guard'),
+        step('caddyfile', {
+          commands: ["echo 'did caddyfile'", 'mkdir /etc/agent-board/setup.json.new'],
+          undo: ["echo 'undid caddyfile'"],
+        }),
+        step('volumes'),
+      ]),
+      `${dir}/norecord-later`,
+    )
+    expect(markers(later.out)).toEqual([
+      '@@step 1 start',
+      'did guard',
+      '@@step 1 ok',
+      '@@step 2 start',
+      'did caddyfile',
+      '@@step 2 ok',
+      'undid caddyfile',
+      '@@undo 2 ok',
+      '@@result rollback-failed',
+    ])
+    expect(later.code).toBe(2)
+  })
+
+  test('their file put back from a backup that is not there: it stays as it is, and the rollback says it failed', () => {
+    const root = `${dir}/nobackup`
+    const theirs = `${root}/etc-caddy/Caddyfile`
+    mkdirSync(`${root}/etc-caddy`, { recursive: true })
+    writeFileSync(theirs, 'theirs\n')
+    const { out, code } = runIn(
+      fake([step('guard'), step('write', { commands: ['false'], undo: real('write').undo })]),
+      root,
+    )
+    expect(markers(out).slice(-2)).toEqual(['@@undo 2 fail', '@@result rollback-failed'])
+    expect(code).toBe(2)
+    expect(readFileSync(theirs, 'utf8')).toBe('theirs\n')
+  })
+
+  test('the board’s own file whose copy cannot be made: the step fails and the board.caddy there stays', () => {
+    const root = `${dir}/owncopy`
+    const site = `${root}/etc-caddy/agent-board/board.caddy`
+    mkdirSync(`${root}/etc-caddy/agent-board`, { recursive: true })
+    writeFileSync(site, 'old site\n')
+    const failing = `${root}/bin`
+    mkdirSync(failing)
+    writeFileSync(`${failing}/cp`, '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    const { out, code } = runIn(fake([step('guard'), real('site-file')]), root, {
+      PATH: `${failing}${SEP}${env.PATH}`,
+    })
+    expect(markers(out)).toEqual([
+      '@@step 1 start',
+      'did guard',
+      '@@step 1 ok',
+      '@@step 2 start',
+      '@@step 2 fail',
+      '@@undo 2 ok',
+      '@@result rolled-back',
+    ])
+    expect(code).toBe(1)
+    expect(readFileSync(site, 'utf8')).toBe('old site\n')
+  })
+
+  /** Case 2 on the sandbox: their Caddyfile with their site and the board's line, the board's site file. */
+  const setUpCase2 = (root: string, line: string): { theirs: string; site: string; sha: string; mine: string } => {
+    mkdirSync(`${root}/etc-caddy/agent-board`, { recursive: true })
+    const theirs = `${root}/etc-caddy/Caddyfile`
+    const mine = 'a.example.org {\n\trespond "a"\n}\n'
+    writeFileSync(theirs, `${mine}${line.replaceAll('/etc/caddy/', `${root}/etc-caddy/`)}\n`)
+    const site = `${root}/etc-caddy/agent-board/board.caddy`
+    const text = 'board.example.com {\n\treverse_proxy unix//var/lib/boardtunnel/board.sock\n}\n'
+    writeFileSync(site, text)
+    return { theirs, site, sha: createHash('sha256').update(text).digest('hex'), mine }
+  }
+  const undoOf = (items: RecordItem[]): Plan => {
+    const r = recordFor('2', { state: 'running', items })
+    // no Caddy Look could read: the line comes out of the file, nothing reloaded
+    return undoPlan(
+      r,
+      { ...factsFor('2'), caddy: null, record: r },
+      { id: 'u1', removeDocker: false, removeEdited: false },
+    )
+  }
+
+  test('Undo of a run cut short before it recorded the line: the line comes out of their file all the same', () => {
+    const root = `${dir}/interrupted`
+    const { theirs, site, sha, mine } = setUpCase2(root, IMPORT_LINE)
+    const p = undoOf([
+      { kind: 'file', path: SITE_FILE, sha256: sha },
+      { kind: 'backup', of: '/etc/caddy/Caddyfile', path: '/etc/agent-board/backups/r0/Caddyfile' },
+    ])
+    const { out, code } = runIn(p, root)
+    expect(markers(out).at(-1)).toBe('@@result applied')
+    expect(code).toBe(0)
+    expect(readFileSync(theirs, 'utf8')).toBe(mine)
+    expect(existsSync(site)).toBe(false)
+    expect(existsSync(`${root}/setup.json`)).toBe(false)
+  })
+
+  test('Undo keeps board.caddy while a Caddyfile still imports it (a line of their own): rolled back, nothing removed', () => {
+    const root = `${dir}/imported`
+    const own = `import ${SITE_FILE}`
+    const { theirs, site, sha, mine } = setUpCase2(root, own)
+    const p = undoOf([
+      { kind: 'file', path: SITE_FILE, sha256: sha },
+      { kind: 'line', file: '/etc/caddy/Caddyfile', line: IMPORT_LINE },
+    ])
+    const { out, code } = runIn(p, root)
+    const n = p.steps.findIndex(s => s.id === 'drop-site-file') + 1
+    expect(markers(out).slice(-3)).toEqual([`@@step ${n} fail`, `@@undo ${n} ok`, '@@result rolled-back'])
+    expect(code).toBe(1)
+    expect(readFileSync(site, 'utf8')).toContain('board.example.com {')
+    expect(readFileSync(theirs, 'utf8')).toBe(`${mine}${own.replaceAll('/etc/caddy/', `${root}/etc-caddy/`)}\n`)
+  })
 })

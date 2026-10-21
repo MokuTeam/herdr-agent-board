@@ -16,9 +16,17 @@ import {
   setupRecord,
   undoPlan,
   type Wanted,
+  wantedProblem,
   whose,
 } from '../../src/core/server-plan.ts'
-import { CADDY_IMAGE, caddyRunArgs, IMPORT_LINE, SOCAT_IMAGE, socatRunArgs } from '../../src/core/server-texts.ts'
+import {
+  CADDY_IMAGE,
+  caddyRunArgs,
+  IMPORT_LINE,
+  SITE_FILE,
+  SOCAT_IMAGE,
+  socatRunArgs,
+} from '../../src/core/server-texts.ts'
 import { factsFor, GID, recordFor, type TestDistro, THEIR_ID, THEIR_SHA } from '../support/server-facts.ts'
 
 const W: Wanted = {
@@ -332,7 +340,7 @@ for (const distro of DISTROS) {
 
     test('case 2: the site file, Caddy’s group, the import line written in place, checked as caddy', () => {
       const p = plan(factsFor('2', distro))
-      expect(text(step(p, 'site-file'))).toContain('| sudo tee /etc/caddy/agent-board/board.caddy >/dev/null')
+      expect(text(step(p, 'site-file'))).toContain('| sudo tee /etc/caddy/agent-board/board.caddy.part >/dev/null')
       expect(text(step(p, 'folder-group'))).toContain('sudo chgrp caddy /var/lib/boardtunnel')
       expect(step(p, 'folder-group').record).toEqual([
         { kind: 'group', path: '/var/lib/boardtunnel', from: 'boardtunnel', to: 'caddy' },
@@ -345,12 +353,12 @@ for (const distro of DISTROS) {
         'sudo runuser -u caddy -- /usr/bin/caddy validate --config /etc/caddy/.Caddyfile.agent-board --adapter caddyfile',
       )
       expect(text(step(p, 'write'))).toContain(
-        `sudo sh -c 'cat /etc/caddy/.Caddyfile.agent-board > /etc/caddy/Caddyfile'`,
+        `sudo sh -c 'test -s /etc/caddy/.Caddyfile.agent-board && cat /etc/caddy/.Caddyfile.agent-board > /etc/caddy/Caddyfile'`,
       )
       expect(text(step(p, 'reload'))).toContain('sudo systemctl reload caddy.service')
       expect(text(step(p, 'fetch-before'))).toContain("'blog.example.org' 'shop.example.org'")
       expect(step(p, 'write').undo.join('\n')).toContain(
-        `sudo sh -c 'cat /etc/agent-board/backups/r1/Caddyfile > /etc/caddy/Caddyfile'`,
+        `sudo sh -c 'test -s /etc/agent-board/backups/r1/Caddyfile && cat /etc/agent-board/backups/r1/Caddyfile > /etc/caddy/Caddyfile'`,
       )
       // the group already Caddy's (a folder made the old way), or Caddy as root: no group step
       const f = factsFor('2', distro)
@@ -363,7 +371,7 @@ for (const distro of DISTROS) {
 
     test('case 4b: nginx’s file, checked, reloaded, the check path through it', () => {
       const p = plan(factsFor('4b', distro))
-      expect(text(step(p, 'nginx-file'))).toContain('| sudo tee /etc/nginx/conf.d/agent-board.conf >/dev/null')
+      expect(text(step(p, 'nginx-file'))).toContain('| sudo tee /etc/nginx/conf.d/agent-board.conf.part >/dev/null')
       expect(text(step(p, 'nginx-check'))).toBe('sudo nginx -t')
       expect(text(step(p, 'nginx-reload'))).toContain('sudo systemctl reload nginx')
       expect(text(step(p, 'acme-path'))).toContain('/.well-known/acme-challenge/agent-board-check')
@@ -491,6 +499,98 @@ for (const distro of DISTROS) {
     })
   })
 }
+
+describe('what the panel wants is checked before anything is planned: their Caddy or nginx loads it as config', () => {
+  const bad: [string, Wanted][] = [
+    ['a domain that ends the site block', { ...W, domain: 'a.com;\n}' }],
+    ['a domain with a brace', { ...W, domain: 'a{b.example.com' }],
+    ['a domain with a space', { ...W, domain: 'x.com; include /etc/x' }],
+    ['a domain with a newline', { ...W, domain: 'a.com\nimport /etc/x' }],
+    ['no domain', { ...W, domain: '' }],
+    ['a socket with a space', { ...W, socket: '/var/lib/board tunnel/board.sock' }],
+    ['a socket with a brace', { ...W, socket: '/var/lib/boardtunnel/b}.sock' }],
+    ['a user like an option', { ...W, user: '-l' }],
+    ['no user', { ...W, user: '' }],
+    ['a public port that is none', { ...W, publicPort: 70000 }],
+  ]
+  for (const [name, w] of bad)
+    test(name, () => {
+      expect(wantedProblem(w)).toEqual(expect.any(String))
+      for (const c of ['bare', '2', '3a', '3b', '4b'] as const) {
+        expect(() => chooseCase(factsFor(c), w)).toThrow()
+        expect(() => buildPlan(factsFor(c), w, O)).toThrow()
+      }
+      expect(() => buildPlan(manualFacts('2', 'debian'), w, O)).toThrow()
+    })
+  test('the tunnel’s defaults and a public port pass', () => {
+    expect(wantedProblem(W)).toBeNull()
+    expect(wantedProblem({ ...W, publicPort: 8443 })).toBeNull()
+  })
+  test('a record whose domain or pair fails the same checks is not the board’s, and has no Undo', () => {
+    for (const r of [
+      recordFor('2', { domain: 'x.com; include /etc/x', items: CASE2_ITEMS }),
+      recordFor('2', { domain: 'a{b.example.com', items: CASE2_ITEMS }),
+      recordFor('2', { pair: { user: '-l', socket: '/var/lib/boardtunnel/board.sock' }, items: CASE2_ITEMS }),
+    ]) {
+      expect(setupRecord(JSON.parse(JSON.stringify(r)))).toBeNull()
+      expect(() => undoPlan(r, factsFor('2'), { id: 'u1', removeDocker: false, removeEdited: false })).toThrow()
+    }
+  })
+})
+
+describe('nothing the board does leaves their Caddy a file it cannot load', () => {
+  test('their file is written back only from a backup that is there (else it stays as it is)', () => {
+    const p = plan(factsFor('2'))
+    for (const s of [step(p, 'write'), step(p, 'reload')])
+      expect(s.undo.join('\n')).toContain(
+        `sudo sh -c 'test -s /etc/agent-board/backups/r1/Caddyfile && cat /etc/agent-board/backups/r1/Caddyfile > /etc/caddy/Caddyfile'`,
+      )
+    // and never a file that imports the board's site while that site is not there
+    expect(step(p, 'write').undo.join('\n')).toContain(`! sudo test -s ${SITE_FILE}`)
+  })
+  test('the board’s own files: written beside and moved, an earlier one kept whole, removed by the rollback only when this run made it', () => {
+    const s = step(plan(factsFor('2')), 'site-file')
+    expect(text(s)).toContain(`| sudo tee ${SITE_FILE}.part >/dev/null`)
+    expect(text(s)).toContain(`sudo mv -f ${SITE_FILE}.part ${SITE_FILE}`)
+    expect(text(s)).toContain('sudo touch /etc/agent-board/backups/r1/board.caddy.new')
+    const undo = s.undo.join('\n')
+    expect(undo).toContain(
+      `elif sudo test -f /etc/agent-board/backups/r1/board.caddy.new; then sudo rm -f ${SITE_FILE}; fi`,
+    )
+    expect(undo).not.toMatch(/else sudo rm -f/)
+  })
+  test('Undo: each file of the board’s is copied first and put back by the rollback; board.caddy stays while a Caddyfile imports it', () => {
+    const r = recordFor('2', { items: CASE2_ITEMS })
+    const p = undoPlan(r, setUp2('debian13', r), { id: 'u1', removeDocker: false, removeEdited: false })
+    const drop = step(p, 'drop-site-file')
+    expect(text(drop)).toContain(`sudo cp -p ${SITE_FILE} /etc/agent-board/backups/u1/board.caddy.dropped`)
+    expect(text(drop)).toMatch(/if sudo grep -Eqs '\^\[\[:space:\]\]\*import.*' \/etc\/caddy\/Caddyfile; then/)
+    expect(drop.undo.join('\n')).toContain(
+      `sudo cp -p /etc/agent-board/backups/u1/board.caddy.dropped ${SITE_FILE}.part; sudo mv -f ${SITE_FILE}.part ${SITE_FILE}`,
+    )
+    const own: RecordItem[] = [
+      { kind: 'file', path: '/etc/agent-board/caddy/Caddyfile', sha256: 'ab'.repeat(32) },
+      { kind: 'file', path: '/etc/nginx/conf.d/agent-board.conf', sha256: 'cd'.repeat(32) },
+    ]
+    const r4 = recordFor('4b', { items: own })
+    const p4 = undoPlan(r4, { ...factsFor('4b'), record: r4 }, { id: 'u1', removeDocker: false, removeEdited: false })
+    for (const id of ['drop-caddyfile', 'drop-nginx-file'])
+      expect([id, step(p4, id).undo.length > 0]).toEqual([id, true])
+  })
+  test('a record of a run cut short before it recorded the line: Undo takes the line out all the same', () => {
+    const r = recordFor('2', {
+      state: 'running',
+      items: [
+        { kind: 'file', path: SITE_FILE, sha256: 'ab'.repeat(32) },
+        { kind: 'backup', of: '/etc/caddy/Caddyfile', path: '/etc/agent-board/backups/r0/Caddyfile' },
+      ],
+    })
+    const p = undoPlan(r, { ...factsFor('2'), record: r }, { id: 'u1', removeDocker: false, removeEdited: false })
+    expect(ids(p).slice(0, 3)).toEqual(['guard', 'backup', 'unedit'])
+    expect(text(step(p, 'unedit'))).toContain(IMPORT_LINE)
+    expect(ids(p).indexOf('reload')).toBeLessThan(ids(p).indexOf('drop-site-file'))
+  })
+})
 
 describe('the record on the server', () => {
   const good = { ...recordFor('2', { items: CASE2_ITEMS }), extra: 'kept?' }
