@@ -33,6 +33,8 @@
 //   board fork [--name <Name>] [note]   a fork of this session (or --session's): a new session in
 //                            a new tab with a copy of its conversation, started by the web board as
 //                            its Fork does (services/launch/fork.ts); the note is its first message
+//   board tunnel [on|off|test]   the board through the owner's own domain (core/tunnel.ts): where
+//                            the tunnel stands; on and off in config.json; test runs Test connection
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync } from 'node:fs'
@@ -46,7 +48,7 @@ import {
   reportIdentity,
 } from '../adapters/call-receipts.ts'
 import { readCard, writeCard } from '../adapters/cards.ts'
-import { configFile, editCategories, loadConfig, setRemoteOn } from '../adapters/config-file.ts'
+import { configFile, editCategories, loadConfig, setRemoteOn, setTunnelOn } from '../adapters/config-file.ts'
 import { type HerdrPane, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { boardFile } from '../adapters/paths.ts'
@@ -55,10 +57,11 @@ import { addEntry, askRestart, listEntries, type NewEntry, removeEntry } from '.
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
 import { translator } from '../core/i18n/translator.ts'
-import { t } from '../core/lang.ts'
+import { t, useLanguage } from '../core/lang.ts'
 import { type ProfileSet, profileSet, sessionProfile } from '../core/profiles.ts'
 import { type RemoteView, remoteConfig } from '../core/remote.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
+import { boardPorts, type TestStep, tunnelChecks, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
 import type { Item } from '../core/types.ts'
 import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
 import { shortWhen } from '../core/when-format.ts'
@@ -68,7 +71,7 @@ import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sleepMany } from '../services/sleep.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | doctor] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -337,11 +340,17 @@ async function main(): Promise<void> {
     const { gatherFacts } = await import('../adapters/setup-facts.ts')
     const { checkSetup, report } = await import('../core/setup.ts')
     const checks = checkSetup(await gatherFacts(cfg), t)
+    const webPort = Number(cfg.port) || 12422
     // The remote mode's own checks, only while it is on: off, Tailscale is never asked.
     if (remoteConfig(cfg.remote).on) {
       const { phoneChecks } = await import('../core/pwa.ts')
       const { phoneFacts } = await import('../services/pwa.ts')
-      checks.push(...phoneChecks(await phoneFacts(cfg, Number(cfg.port) || 12422), t))
+      checks.push(...phoneChecks(await phoneFacts(cfg, webPort), t))
+    }
+    // The tunnel's, likewise: off, neither ssh-keygen nor the running board is asked.
+    if (tunnelConfig(cfg.tunnel).on) {
+      const { tunnelFacts } = await import('../services/tunnel-facts.ts')
+      checks.push(...tunnelChecks(await tunnelFacts(cfg, webPort), t))
     }
     return console.log(report(checks, t))
   }
@@ -362,6 +371,7 @@ async function main(): Promise<void> {
   }
   if (cmd === 'call-report') return callReport()
   if (cmd === 'remote') return remote()
+  if (cmd === 'tunnel') return tunnel()
   if (cmd === 'archive') return archive()
   if (cmd === 'sleep') return sleep()
   if (cmd === 'fork') return fork()
@@ -756,6 +766,113 @@ async function remote(): Promise<void> {
     console.log(
       `paired: ${d.id} "${d.name}"${d.kind === 'browser' ? ' (browser)' : ''} on ${d.device} (${d.login})${d.seenAt ? `, seen ${stamp(d.seenAt)}` : ''}`,
     )
+}
+
+const NO_BOARD = 'the board does not run: open it first (herdr plugin action invoke agent-board.open)'
+const TUNNEL_OFF = 'tunnel off · Settings → Remote access… on the web board sets it up'
+/** A time of today for the tunnel's lines: 14:02, or 14:02:07. */
+const clock = (ms: number, seconds = false): string => {
+  const d = new Date(ms)
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}${seconds ? `:${pad(d.getSeconds())}` : ''}`
+}
+
+const STEP_IDS: ReadonlySet<unknown> = new Set(['ssh', 'forward', 'domain'])
+const isStep = (v: unknown): v is TestStep =>
+  isRecord(v) &&
+  STEP_IDS.has(v.id) &&
+  (v.ok === null || typeof v.ok === 'boolean') &&
+  typeof v.detail === 'string' &&
+  (v.hint === null || typeof v.hint === 'string')
+
+/**
+ * `board tunnel [on | off | test]`: the board through the owner's own domain (core/tunnel.ts). On
+ * and off edit config.json, and the running board follows; on refuses while the settings do not
+ * check out or the password and the code are not set up (that needs a screen: the web board's
+ * Remote access…). Test runs Test connection on the running board. Without an argument: where the
+ * tunnel stands, as the running board says. In English, whatever language the board speaks.
+ */
+async function tunnel(): Promise<void> {
+  const [op = 'status'] = rest
+  const webPort = Number(cfg.port) || 12422
+  // The settings' checks speak the board's language; this command speaks English.
+  // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
+  useLanguage('en')
+  const conf = tunnelConfig(cfg.tunnel)
+  /** Why the tunnel cannot run now: the first setting that does not check out, or the login not set up; null when it can. */
+  const blocked = async (): Promise<string | null> => {
+    const problem = tunnelProblems(conf, boardPorts(cfg.remote, webPort))[0]
+    if (problem) return problem.message
+    const { accessReady } = await import('../adapters/access-store.ts')
+    return accessReady() ? null : 'Set up the password and the code first: Settings → Remote access… on the web board'
+  }
+  if (op === 'on') {
+    const why = await blocked()
+    if (why) throw new Error(why)
+    const r = setTunnelOn(true)
+    if (!r.ok) throw new Error(r.error)
+    return console.log('ok · tunnel on: the board opens it in a few seconds; `board tunnel` says how it stands')
+  }
+  if (op === 'off') {
+    const r = setTunnelOn(false)
+    if (!r.ok) throw new Error(r.error)
+    return console.log('ok · tunnel off')
+  }
+  if (op === 'test') return tunnelTest(webPort, conf.domain)
+  if (op !== 'status') throw new Error('usage: board tunnel [on | off | test]')
+  const { boardAccessView } = await import('../services/tunnel-facts.ts')
+  const view = await boardAccessView(webPort)
+  if (!view) return console.log(conf.on ? 'tunnel on · the board does not run' : TUNNEL_OFF)
+  const { settings, status: s, ssh } = view.tunnel
+  if (!settings.on) return console.log(TUNNEL_OFF)
+  const lines = [`tunnel ${s.state} since ${clock(s.since)}${settings.domain ? ` · https://${settings.domain}` : ''}`]
+  // on, and the board has not started it: what holds it, as `board tunnel on` would say
+  const why = s.state === 'off' ? await blocked() : null
+  if (why) lines.push(`not started: ${why}`)
+  if (s.state === 'reconnecting')
+    lines.push(`attempt ${s.attempt ?? 1}, next try ${clock(s.nextAt ?? s.since, true)}: ${s.error ?? ''}`)
+  if (s.state === 'error') {
+    lines.push(`error: ${s.error ?? ''}`)
+    if (s.hint) lines.push(`fix: ${t(`tunnel.hint.${s.hint}`)}`)
+  }
+  if (s.probe && !s.probe.ok) lines.push(`warning: the domain did not reach this board: ${s.probe.detail}`)
+  lines.push(`socket ${settings.socket} · ssh ${ssh ?? 'not found'}`)
+  console.log(lines.join('\n'))
+}
+
+/** `board tunnel test`: Test connection on the running board, a line for each step; one that failed exits with 1. */
+async function tunnelTest(webPort: number, domain: string): Promise<void> {
+  let res: Response
+  try {
+    res = await fetch(`http://127.0.0.1:${webPort}/api/access`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify({ op: 'test' }),
+      signal: AbortSignal.timeout(60_000),
+    })
+  } catch (err) {
+    if (err instanceof Error && err.name === 'TimeoutError') throw new Error('Test connection took longer than 60 s')
+    throw new Error(NO_BOARD)
+  }
+  const body: unknown = await res.json().catch(() => null)
+  const given: unknown[] = isRecord(body) && body.ok === true && Array.isArray(body.steps) ? body.steps : []
+  const steps = given.filter(isStep)
+  if (!steps.length || steps.length !== given.length)
+    throw new Error(String((isRecord(body) && body.error) || `the web board answered ${res.status}`))
+  const label: Record<TestStep['id'], string> = {
+    ssh: 'ssh and the key',
+    forward: 'the server takes the forward',
+    domain: domain ? `through https://${domain}` : 'through the domain',
+  }
+  const lines: string[] = []
+  for (const step of steps) {
+    const mark = step.ok === true ? '✓' : step.ok === false ? '✗' : '–'
+    // a detail the label says already (the domain) is left out
+    const detail = step.detail && !label[step.id].endsWith(step.detail) ? `: ${step.detail}` : ''
+    lines.push(`${mark} ${label[step.id]}${detail}`)
+    if (step.ok === false && step.hint) lines.push(`  ${t(`tunnel.hint.${step.hint}`)}`)
+  }
+  console.log(lines.join('\n'))
+  if (steps.some(step => step.ok === false)) process.exitCode = 1
 }
 
 /**

@@ -67,6 +67,24 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'access.err.notReady': 'Set up the password and the code first',
 
     // Task 15: board tunnel
+    'tunnel.check.ssh': 'ssh for the tunnel',
+    'tunnel.check.noSsh': 'No ssh for the tunnel',
+    'tunnel.check.key': "The tunnel's key",
+    'tunnel.check.keyBad': "ssh does not take the tunnel's key",
+    'tunnel.check.fields': "The tunnel's settings",
+    'tunnel.check.fieldsBad': "The tunnel's settings do not check out",
+    'tunnel.check.login': 'Password and code for the domain',
+    'tunnel.check.noLogin': 'Password and code for the domain are not set up',
+    'tunnel.check.noLoginFix': 'Set up the password and the code: Settings → Remote access…',
+    'tunnel.check.connected': 'The tunnel is connected',
+    'tunnel.check.connecting': 'The tunnel is connecting',
+    'tunnel.check.reconnecting': 'The tunnel is reconnecting',
+    'tunnel.check.error': 'The tunnel does not connect',
+    'tunnel.check.off': 'The board has not started the tunnel',
+    'tunnel.check.offFix': 'It starts it once the settings and the login check out.',
+    'tunnel.check.noBoard': 'The board does not run, so neither does the tunnel',
+    'tunnel.check.probe': 'The domain reaches this board',
+    'tunnel.check.probeBad': 'The domain did not reach this board',
 
     // Task 16: the panel's Tunnel part
 
@@ -153,6 +171,24 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'access.err.notReady': 'Сначала настройте пароль и код',
 
     // Task 15: board tunnel
+    'tunnel.check.ssh': 'ssh для туннеля',
+    'tunnel.check.noSsh': 'Нет ssh для туннеля',
+    'tunnel.check.key': 'Ключ туннеля',
+    'tunnel.check.keyBad': 'ssh не принимает ключ туннеля',
+    'tunnel.check.fields': 'Настройки туннеля',
+    'tunnel.check.fieldsBad': 'Настройки туннеля не проходят проверку',
+    'tunnel.check.login': 'Пароль и код для домена',
+    'tunnel.check.noLogin': 'Пароль и код для домена не настроены',
+    'tunnel.check.noLoginFix': 'Настройте пароль и код: Настройки → Удалённый доступ…',
+    'tunnel.check.connected': 'Туннель подключён',
+    'tunnel.check.connecting': 'Туннель подключается',
+    'tunnel.check.reconnecting': 'Туннель переподключается',
+    'tunnel.check.error': 'Туннель не подключается',
+    'tunnel.check.off': 'Доска не запустила туннель',
+    'tunnel.check.offFix': 'Она запустит его, как только настройки и вход пройдут проверку.',
+    'tunnel.check.noBoard': 'Доска не запущена, а значит, и туннель',
+    'tunnel.check.probe': 'Домен доходит до этой доски',
+    'tunnel.check.probeBad': 'Домен не дошёл до этой доски',
 
     // Task 16: the panel's Tunnel part
 
