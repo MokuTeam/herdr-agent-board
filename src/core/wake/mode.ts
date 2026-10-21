@@ -11,6 +11,15 @@ export type WakeMode =
   | { kind: 'new'; url: string; settings: WakeConfig }
   | { kind: 'old'; url: string | null; on: boolean; held: boolean }
 
+/**
+ * Whether config.json turns wake off with a `wake` key of its own: `"wake": false`, or a section
+ * that is off. Only then does a refusal of the old path say wake is off (preflight H1); without the
+ * key the old path keeps today's texts.
+ */
+export function wakeOffByKey(cfg: Pick<Config, 'wake'>): boolean {
+  return cfg.wake !== undefined && !wakeConfig(cfg.wake).enabled
+}
+
 /** Call 4: new only while on and the status file exists with a state other than held. */
 export function wakeMode(cfg: Pick<Config, 'wake' | 'wakeUrl'>, status: WakeStatusFile | null): WakeMode {
   const settings = wakeConfig(cfg.wake)

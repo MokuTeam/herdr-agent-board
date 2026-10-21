@@ -28,6 +28,12 @@
 // a reminder does (`scheduleWaitMin`); herdr-wake refusing is tried RESTART_TRIES times, then the
 // log says it did not happen. Asleep by other means meanwhile (the reaper, the user), it is done.
 //
+// A run for a sleeping session waits for wake while wake is slow to answer (it may be waking that
+// session), or while the board's own wake of one from wake's session file cannot reach herdr
+// (#119, safeguard 14): tried again on every tick, without counting the wait and without counting
+// the session as gone, so no reminder is missed and no cron entry dropped for it; once wake answers,
+// or the session is awake, it goes as usual.
+//
 // It also closes the panes of sessions put in the archive once their time to come back from the
 // page's toast is over (archive.ts closeDue): a board that restarts meanwhile does it on start.
 import { type FSWatcher, mkdirSync, watch } from 'node:fs'
@@ -41,11 +47,13 @@ import { callTitle } from '../core/notices.ts'
 import { profileLabel, sessionProfile } from '../core/profiles.ts'
 import { cleanText, promptOf, type ScheduleEntry, targetOf } from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
+import { wakeOffByKey } from '../core/wake/mode.ts'
 import { nextRun } from '../core/when.ts'
-import { checkWake, readyToSleep, send, sleepSession, wake } from './actions.ts'
+import { type ActionResult, checkWake, readyToSleep, send, sleepSession, wake } from './actions.ts'
 import { closeDue, listArchive } from './archive.ts'
 import { collect } from './board.ts'
 import type { Deps } from './deps.ts'
+import { currentWakeMode } from './wake/mode.ts'
 
 // A run on its way (waking a session takes up to three minutes) holds its claim this long.
 const CLAIM_MS = 5 * 60_000
@@ -63,6 +71,13 @@ const TASKS_WAIT_MS = 10 * 60_000
 
 const positive = (v: unknown, fallback: number): number => (Number(v) > 0 ? Number(v) : fallback)
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+/**
+ * A wake refused in a way the run waits for (safeguard 14): wake slow to answer, or the board's own
+ * wake of a sleeper from wake's session file that could not reach herdr.
+ */
+const waitsForWake = (item: Item, r: ActionResult): boolean =>
+  !r.ok && (r.wakeBusy === true || (item.fromFile === true && r.herdrDown === true))
 
 /** A number an entry keeps (the scheduler's own fields), else undefined. */
 const numberOf = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined)
@@ -176,6 +191,7 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
         })
         // Cancelled while the session woke up: nothing to send.
         if (r.ok && !getEntry(entry.id)) return
+        if (waitsForWake(item, r)) return hold(entry, now)
       }
       if (r.ok && entry.receipt) {
         const state = beginReport(entry)
@@ -228,7 +244,9 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
     const slept = entry.step === 'wake' || entry.step === 'note'
     if (!entry.failed && !item.sleeping && !slept) {
       if (!item.session) return giveUp(entry, t('err.notClaude', { name: item.name }))
-      if (!cfg.wakeUrl) return giveUp(entry, t('err.restart.noWake'))
+      // The new wake has no wakeUrl; the old path needs it, as today (wake off in config.json says so).
+      if (!cfg.wakeUrl && currentWakeMode(cfg).kind !== 'new')
+        return giveUp(entry, wakeOffByKey(cfg) ? t('err.wakeOff') : t('err.restart.noWake'))
       // Before anything is put to sleep: the wake that ends the restart must be one the board
       // makes (its profile guard). One it refuses is refused now; herdr not answering waits.
       const guard = await checkWake(deps, item)
@@ -265,7 +283,7 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
         waking--
         deps.wake.forget()
       })
-      if (!woke.ok) return retry(entry, woke.error, true)
+      if (!woke.ok) return waitsForWake(item, woke) ? hold(entry, now) : retry(entry, woke.error, true)
       const noted = updateEntry(entry.id, e => ({
         ...e,
         step: 'note',
@@ -443,6 +461,20 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
       ...record(entry, now, entry.cron && drop ? 'dropped' : 'missed', why),
       ...(entry.cron && drop && { n: goneRuns }),
     })
+  }
+
+  /**
+   * Waiting for wake (safeguard 14): tried again on the next tick, the wait not counted and the
+   * session not gone, so it is never missed nor dropped for this; a restart keeps its step.
+   */
+  function hold(entry: ScheduleEntry, now: number): void {
+    updateEntry(entry.id, e => ({
+      ...e,
+      pendingSince: e.pendingSince ?? now,
+      tried: now,
+      why: 'wake',
+      claim: undefined,
+    }))
   }
 
   /** A cron entry after a run: its next time, the waiting fields cleared. */

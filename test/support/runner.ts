@@ -66,12 +66,15 @@ if (mode === 'open') {
   const live = !!process.env.TEST_LIVE_CONFIG
   const { liveConfig, readConfigFile } = await import('../../src/adapters/config-file.ts')
   // Wake stays off in the board's tests unless the test turns it on (with a port of its own): a
-  // config without a `wake` key takes the one in the config.json the test wrote, else `false`, so
-  // no test of the board ever asks 127.0.0.1:12421.
+  // config without a `wake` key takes the one in the config.json the test wrote, else `false` once
+  // wake ships, so no test of the board ever asks 127.0.0.1:12421. Before that no key is off
+  // already, and stays no key: the old path's refusals keep today's texts without one (H1).
+  const { WAKE_SHIPPED } = await import('../../src/core/wake/config.ts')
   const wakeKept = (c: Config): void => {
     if (Object.hasOwn(c, 'wake')) return
     const onDisk = readConfigFile()
-    c.wake = onDisk && Object.hasOwn(onDisk, 'wake') ? onDisk.wake : false
+    if (onDisk && Object.hasOwn(onDisk, 'wake')) c.wake = onDisk.wake
+    else if (WAKE_SHIPPED) c.wake = false
   }
   let refresh = (): void => {}
   const cfg = live
