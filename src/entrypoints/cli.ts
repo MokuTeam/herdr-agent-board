@@ -38,10 +38,13 @@
 //   board resume <session id> [--profile <id>]   resumes that session here, in the profile its
 //                            card says it ran in (else the one named): what herdr types into a
 //                            restored pane for a session in another profile than the default one
-//                            (core/resume.ts); runs Claude in the foreground, exits with its code
+//                            (core/resume.ts); runs Claude in the foreground, exits with its code;
+//                            in the session's project folder, found from its transcript, when
+//                            this folder is not it
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { readArchiveLog } from '../adapters/archive-store.ts'
 import {
   enqueueReport,
@@ -52,6 +55,7 @@ import {
   reportIdentity,
 } from '../adapters/call-receipts.ts'
 import { readCard, writeCard } from '../adapters/cards.ts'
+import { createClaudeHome, cwdOf } from '../adapters/claude-home.ts'
 import { configFile, editCategories, loadConfig, setRemoteOn } from '../adapters/config-file.ts'
 import { type HerdrPane, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
@@ -65,9 +69,9 @@ import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
 import { CODEX_AGENT } from '../core/codex.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t } from '../core/lang.ts'
-import { type ProfileSet, profileSet, sessionProfile } from '../core/profiles.ts'
+import { type ProfileSet, profileSet, resolveProfileDir, sessionProfile } from '../core/profiles.ts'
 import { type RemoteView, remoteConfig } from '../core/remote.ts'
-import { parseResume, resumePlan } from '../core/resume.ts'
+import { parseResume, projectFolderName, resumeDir, resumePlan } from '../core/resume.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
 import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
@@ -613,7 +617,8 @@ async function fork(): Promise<void> {
 /**
  * `board resume <session id> [--profile <id>]`: the session resumed in this terminal, in its own
  * profile (core/resume.ts resumePlan), with Claude in the foreground; exits with Claude's code.
- * herdr types it into a restored pane, so it asks herdr nothing.
+ * herdr types it into a restored pane, so it asks herdr nothing. Claude runs in the session's
+ * project folder (resumeFolder), so a wake into a pane in another folder types no `cd`.
  */
 async function resume(): Promise<void> {
   const o = parseResume(rest)
@@ -626,9 +631,34 @@ async function resume(): Promise<void> {
     home: homedir(),
   })
   const [file = 'claude', ...argv] = plan.argv
-  const ran = await runHere(file, argv, plan.env)
+  const dir = plan.dir ?? resolveProfileDir(process.env.CLAUDE_CONFIG_DIR, homedir())
+  const ran = await runHere(file, argv, plan.env, (await resumeFolder(o.session, dir)) ?? undefined)
   if (ran.error) throw new Error(`${file} did not start: ${messageOf(ran.error)}`)
   process.exit(ran.code)
+}
+
+/**
+ * Where `board resume` runs Claude (core/resume.ts resumeDir, spec call 29): null, this folder,
+ * when the session's transcript is under the profile's projects/ for it (a pane herdr restored);
+ * else the folder the transcript recorded, found in the profile `dir`'s projects/, when it still
+ * is one. Found nowhere, or not to be read: null, as before.
+ */
+async function resumeFolder(session: string, dir: string): Promise<string | null> {
+  try {
+    const cwd = process.cwd()
+    const here = join(dir, 'projects', projectFolderName(cwd), `${session}.jsonl`)
+    // This folder's first, else the first projects/*/<id>.jsonl.
+    const file = createClaudeHome(dir).transcriptPath(session, cwd)
+    const recorded = file && file !== here ? await cwdOf(file) : null
+    return resumeDir({
+      cwd,
+      transcriptHere: file === here,
+      recorded,
+      recordedExists: !!recorded && !!statSync(recorded, { throwIfNoEntry: false })?.isDirectory(),
+    })
+  } catch {
+    return null
+  }
 }
 
 /**

@@ -12,6 +12,7 @@ import { onLanguage } from '../core/lang.ts'
 import { normDir, sameDir } from '../core/launch/names.ts'
 import { type Limits, parseLimits } from '../core/limits.ts'
 import { type QueuedPrompt, type QueueWindow, queuedPrompts } from '../core/queue.ts'
+import { projectFolderName } from '../core/resume.ts'
 import {
   type ConversationOptions,
   type ConversationTurn,
@@ -173,9 +174,6 @@ function readThread(
   return { items: items.slice(-limit), text }
 }
 
-/** Folder name Claude gives a project: the cwd without trailing slashes, non-alphanumerics as dashes. */
-const projectFolder = (cwd: string): string => cwd.replace(/[\\/]+$/, '').replace(/[^a-zA-Z0-9]/g, '-')
-
 /** The folder a Claude session started in, from its transcript (its first "cwd"); null when it cannot be read. */
 export async function cwdOf(file: string): Promise<string | null> {
   let fh: Awaited<ReturnType<typeof open>> | undefined
@@ -229,7 +227,7 @@ export function createClaudeHome(root: string): ClaudeHome {
     if (cached && statSync(cached, { throwIfNoEntry: false })) return cached
     let found: string | null = null
     if (cwd) {
-      const guess = join(projects, projectFolder(cwd), `${sessionId}.jsonl`)
+      const guess = join(projects, projectFolderName(cwd), `${sessionId}.jsonl`)
       if (statSync(guess, { throwIfNoEntry: false })) found = guess
     }
     if (!found && Date.now() - (missCache.get(sessionId) ?? 0) > 60_000) {
@@ -278,7 +276,7 @@ export function createClaudeHome(root: string): ClaudeHome {
   ): Promise<HistoryResult> {
     const query = String(rawQuery ?? '').trim()
     if (!cwd || query.length < 2 || query.length > 100) return { results: [], invalid: true }
-    const encoded = projectFolder(cwd)
+    const encoded = projectFolderName(cwd)
     const results: HistoryHit[] = []
     let truncated = false
     let bytesRead = 0

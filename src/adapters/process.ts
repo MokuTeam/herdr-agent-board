@@ -113,13 +113,15 @@ function killTree(child: ChildProcess): void {
 
 /**
  * Run a program in this terminal, in the foreground, no shell: its input and output are this
- * process's, and a Ctrl+C that reaches this process too leaves it waiting for the program. What
- * the program exited with (1 when a signal ended it), or the error that kept it from starting.
+ * process's, and a Ctrl+C that reaches this process too leaves it waiting for the program. In
+ * `cwd` when given, else in this process's folder. What the program exited with (1 when a signal
+ * ended it), or the error that kept it from starting.
  */
 export function runHere(
   file: string,
   args: string[],
   env?: Record<string, string | undefined>,
+  cwd?: string,
 ): Promise<{ code: number; error: (Error & { code?: unknown }) | null }> {
   return new Promise(res => {
     const wait = (): void => {}
@@ -129,7 +131,7 @@ export function runHere(
       res({ code, error })
     }
     try {
-      const child = spawn(file, args, { stdio: 'inherit', ...(env ? { env } : {}) })
+      const child = spawn(file, args, { stdio: 'inherit', ...(env ? { env } : {}), ...(cwd ? { cwd } : {}) })
       child.on('error', err => done(127, err))
       child.on('exit', code => done(code ?? 1))
     } catch (err) {

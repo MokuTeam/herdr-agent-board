@@ -1,6 +1,8 @@
 import { expect, setDefaultTimeout, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
+import { projectFolderName } from '../../src/core/resume.ts'
 import { fakeClaudeOn } from '../support/fake-claude.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 
@@ -99,9 +101,10 @@ async function boardResume(
   args: string[],
   { bin, log }: { bin: string; log: string },
   env: Record<string, string> = {},
+  cwd: string = box.dir,
 ): Promise<{ code: number; out: string; claude: { args: string[]; configDir: string | null; cwd: string } | null }> {
   const proc = Bun.spawn([process.execPath, join(root, 'src/entrypoints/cli.ts'), 'resume', ...args], {
-    cwd: box.dir,
+    cwd,
     env: { ...box.env, PATH: `${bin}${delimiter}${box.env.PATH}`, FAKE_CLAUDE_LOG: log, FAKE_CLAUDE_EXIT: '7', ...env },
     stdout: 'pipe',
     stderr: 'pipe',
@@ -155,4 +158,130 @@ test('board resume refuses what is not a session id, and says so', async () => {
   expect(r.code).toBe(1)
   expect(r.out).toMatch(/^board: "nope" is not a session id/)
   expect(r.claude).toBeNull()
+})
+
+// Which folder Claude resumes in (spec call 29): herdr restores a pane in its folder, where the
+// session's transcript is; a wake may type `board resume` into a pane in another folder.
+
+/** The session's transcript under the profile's projects/<folder>, its first line recording `cwd`. */
+function putTranscript(profileDir: string, folder: string, session: string, cwd: string): void {
+  const dir = join(profileDir, 'projects', folder)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, `${session}.jsonl`), `${JSON.stringify({ cwd })}\n{"type":"user"}\n`)
+}
+
+/** `board resume` started in `cwd`; what Claude saw, never a log left from an earlier run. */
+function resumeIn(
+  box: Sandbox,
+  s: { bin: string; log: string },
+  args: string[],
+  cwd: string,
+  env: Record<string, string> = {},
+) {
+  rmSync(s.log, { force: true })
+  return boardResume(box, args, s, env, cwd)
+}
+
+test('board resume stays in the pane’s folder when the transcript is there (a restored pane)', async () => {
+  const box = await sandbox()
+  const s = setUp(box)
+  putTranscript(s.work, projectFolderName(box.dir), SID, box.dir)
+  const r = await resumeIn(box, s, [SID, '--profile', 'work'], box.dir)
+  expect(r.code).toBe(7)
+  expect(r.claude).toEqual({ args: ['--resume', SID], configDir: s.work, cwd: realpathSync(box.dir) })
+  // Nothing printed, herdr asked nothing.
+  expect(r.out).toBe('')
+  expect(box.calls()).toEqual([])
+})
+
+test('in a folder that is not the project, it goes to the folder the transcript recorded', async () => {
+  const box = await sandbox()
+  const s = setUp(box)
+  const home = box.env.USERPROFILE as string
+  // A Windows path on Windows; other alphabets, spaces and `%` everywhere.
+  for (const project of [join(box.dir, 'Проект x 50%'), join(box.dir, 'a b')]) {
+    mkdirSync(project, { recursive: true })
+    const session = randomUUID()
+    putTranscript(s.work, projectFolderName(project), session, project)
+    const r = await resumeIn(box, s, [session, '--profile', 'work'], home)
+    expect(r.code).toBe(7)
+    expect(r.claude).toEqual({ args: ['--resume', session], configDir: s.work, cwd: realpathSync(project) })
+    expect(r.out).toBe('')
+  }
+  expect(box.calls()).toEqual([])
+})
+
+test('found nowhere, or that folder gone: the current folder, as today', async () => {
+  const box = await sandbox()
+  const s = setUp(box)
+  const home = box.env.USERPROFILE as string
+  const stays = async (session: string): Promise<void> => {
+    const r = await resumeIn(box, s, [session, '--profile', 'work'], home)
+    expect(r.code).toBe(7)
+    expect(r.claude).toEqual({ args: ['--resume', session], configDir: s.work, cwd: realpathSync(home) })
+  }
+  // No transcript at all.
+  await stays(SID)
+  // The folder it recorded is gone.
+  const gone = randomUUID()
+  putTranscript(s.work, projectFolderName(join(box.dir, 'gone')), gone, join(box.dir, 'gone'))
+  await stays(gone)
+  // It recorded no folder.
+  const blank = randomUUID()
+  mkdirSync(join(s.work, 'projects', 'x'), { recursive: true })
+  writeFileSync(join(s.work, 'projects', 'x', `${blank}.jsonl`), '{"type":"user"}\n')
+  await stays(blank)
+  // Only in another profile than the session's: not this session's transcript.
+  const elsewhere = randomUUID()
+  const project = join(box.dir, 'project')
+  mkdirSync(project)
+  putTranscript(join(home, '.claude'), projectFolderName(project), elsewhere, project)
+  await stays(elsewhere)
+  expect(box.calls()).toEqual([])
+})
+
+test('the same in every profile: the default one, Work, and a listed profile with spaces and Cyrillic in its folder', async () => {
+  const box = await sandbox()
+  const home = box.env.USERPROFILE as string
+  const listed = join(box.dir, 'Иван Петров', '.claude-work 100%')
+  mkdirSync(listed, { recursive: true })
+  writeFileSync(join(listed, 'settings.json'), '{}')
+  const s = setUp(box, { profiles: [{ id: 'ivan', title: 'Иван', dir: listed }] })
+  const project = join(box.dir, 'Проект x 50%')
+  mkdirSync(project)
+  const profiles: [id: string, dir: string, configDir: string | null][] = [
+    ['default', join(home, '.claude'), null],
+    ['work', s.work, s.work],
+    ['ivan', listed, listed],
+  ]
+  for (const [id, dir, configDir] of profiles) {
+    const session = randomUUID()
+    putCard(box, session, { profileDir: dir })
+    putTranscript(dir, projectFolderName(project), session, project)
+    // The pane herdr restored, in the project: it stays.
+    const here = await resumeIn(box, s, [session, '--profile', id], project)
+    expect(here.claude).toEqual({ args: ['--resume', session], configDir, cwd: realpathSync(project) })
+    // A pane in another folder: it goes to the project.
+    const away = await resumeIn(box, s, [session, '--profile', id], home)
+    expect(away.code).toBe(7)
+    expect(away.claude).toEqual({ args: ['--resume', session], configDir, cwd: realpathSync(project) })
+  }
+  expect(box.calls()).toEqual([])
+})
+
+test('no card and no profile named: the transcript is looked for in the folder the env gives (unset: the default one)', async () => {
+  const box = await sandbox()
+  const s = setUp(box)
+  const home = box.env.USERPROFILE as string
+  const project = join(box.dir, 'a b')
+  mkdirSync(project)
+  const plain = randomUUID()
+  putTranscript(join(home, '.claude'), projectFolderName(project), plain, project)
+  const unset = await resumeIn(box, s, [plain], home)
+  expect(unset.claude).toEqual({ args: ['--resume', plain], configDir: null, cwd: realpathSync(project) })
+  const work = randomUUID()
+  putTranscript(s.work, projectFolderName(project), work, project)
+  const set = await resumeIn(box, s, [work], home, { CLAUDE_CONFIG_DIR: s.work })
+  expect(set.claude).toEqual({ args: ['--resume', work], configDir: s.work, cwd: realpathSync(project) })
+  expect(box.calls()).toEqual([])
 })
