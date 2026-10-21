@@ -15,7 +15,9 @@
 // Origin, or a Host other than 127.0.0.1:<port> or localhost:<port> (a web page, DNS rebinding), is
 // refused with 403. Once it listens it says { up: <port> } over its IPC channel, when it has one
 // (the supervisor's, services/wake/supervisor.ts); told 'restart' there (a code change), it ends
-// with 75 once no wake or sleep is under way, answering new ones 503 meanwhile.
+// with 75 once no wake or sleep is under way, answering new ones 503 meanwhile. The port keeps wake
+// to one process: held by a wake, this one ends with 0 quietly; by another program, the status
+// file says portTaken and the exit is 76.
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -23,13 +25,14 @@ import { configFile, liveConfig, loadConfig, readConfigFile } from '../adapters/
 import { isRecord } from '../adapters/json-store.ts'
 import { stateDir } from '../adapters/paths.ts'
 import { boardOnPath } from '../adapters/resume-report.ts'
-import { wakeLog, wakeSessionsFile } from '../adapters/wake-files.ts'
+import { readWakeStatus, wakeLog, wakeSessionsFile, writeWakeStatus } from '../adapters/wake-files.ts'
 import { cliWakeHerdr } from '../adapters/wake-herdr.ts'
 import { scheduledJobs } from '../adapters/wake-transcripts.ts'
 import { telegramTarget, type WakeConfig, wakeConfig, wakeSwitch } from '../core/wake/config.ts'
+import { isWakeStatus } from '../core/wake/status.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { createWakeEngine, type WakeEngine } from '../services/wake/engine.ts'
-import { RESTART_EXIT } from '../services/wake/supervisor.ts'
+import { PORT_TAKEN_EXIT, RESTART_EXIT } from '../services/wake/supervisor.ts'
 
 const reapDry = process.argv[2] === '--reap-dry'
 
@@ -49,6 +52,8 @@ const OFF_GRACE_MS = 180_000
 const WAKE_GRACE_MS = 30_000
 /** Once nothing is under way: how long the last answers have to go out before the process ends. */
 const ANSWERS_OUT_MS = 5000
+/** Its port taken: how long what holds it has to answer as a wake. */
+const PORT_ASK_MS = 5000
 const JSON_HEADERS = { 'content-type': 'application/json' }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -241,6 +246,46 @@ async function answer(req: Request, port: number): Promise<Response> {
   }
 }
 
+/** Whether a wake (the old router or another new one) answers GET /status on the port. */
+async function wakeAnswers(port: number): Promise<boolean> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/status`, { signal: AbortSignal.timeout(PORT_ASK_MS) })
+    return res.ok && isWakeStatus(await res.json())
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The port is taken (one wake per machine, held by its port). By a wake: this one ends with 0,
+ * quietly, a line in wake.log. By another program: the status says portTaken (the pane and the
+ * supervisor it names kept), the error goes to stderr for the supervisor, and the exit is 76, which
+ * the supervisor does not start again.
+ */
+async function portTaken(port: number): Promise<never> {
+  if (await wakeAnswers(port)) {
+    wakeLog(`another wake answers on 127.0.0.1:${port}: this one ends`)
+    process.exit(0)
+  }
+  const error = `Port ${port} is taken by another program`
+  try {
+    const now = readWakeStatus()
+    writeWakeStatus({
+      state: 'portTaken',
+      at: Date.now(),
+      ...(now?.pane !== undefined && { pane: now.pane }),
+      ...(now?.pid !== undefined && { pid: now.pid }),
+      port,
+      error,
+    })
+  } catch (err) {
+    wakeLog(`could not write wake's status: ${messageOf(err)}`)
+  }
+  wakeLog(error)
+  console.error(error)
+  process.exit(PORT_TAKEN_EXIT)
+}
+
 // A stray rejection is logged, never the end of wake.
 process.on('unhandledRejection', err => log(`unhandled: ${err instanceof Error ? (err.stack ?? err.message) : err}`))
 
@@ -263,6 +308,7 @@ try {
     fetch: req => answer(req, start.port),
   })
 } catch (err) {
+  if (isRecord(err) && err.code === 'EADDRINUSE') await portTaken(start.port)
   log(`local API on 127.0.0.1:${start.port}: ${messageOf(err)}`)
   process.exit(1)
 }

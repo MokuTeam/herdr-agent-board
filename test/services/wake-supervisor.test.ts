@@ -8,6 +8,7 @@ import {
   createSupervisor,
   HEALTH_EVERY_MS,
   HEALTH_MISSES,
+  PORT_TAKEN_EXIT,
   RESTART_EXIT,
   type SupervisorDeps,
   UP_GRACE_MS,
@@ -243,6 +244,21 @@ test('a code change asks the child to restart, which it does at once with 75; cr
   expect(s.children).toHaveLength(4)
   s.child(4).exit(1)
   expect(s.printed.at(-1)).toBe('wake stopped (exit 1). It starts again in 2 s.')
+})
+
+test('a port another program holds is final: no start again, the status left as wake wrote it, the error on screen; a code change tries again', async () => {
+  const s = supervised()
+  s.supervisor.start()
+  s.child(1).stderr('Port 40123 is taken by another program')
+  s.child(1).exit(PORT_TAKEN_EXIT)
+  const written = s.statuses.length
+  await s.advance(10 * MINUTE)
+  expect(s.children).toHaveLength(1)
+  expect(s.statuses).toHaveLength(written)
+  expect(s.printed.at(-1)).toBe('Port 40123 is taken by another program')
+  expect(s.exits).toEqual([])
+  s.supervisor.codeChanged()
+  expect(s.children).toHaveLength(2)
 })
 
 test('a code change starts a crashed wake at once, and one waiting to start again', async () => {

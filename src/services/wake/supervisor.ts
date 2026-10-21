@@ -4,7 +4,8 @@
 // on screen and in wake's status file, until the next code change or "Start again". A process whose
 // API stops answering is ended, which counts as a crash. Wake turned off: the process ends with 0
 // and the supervisor with it. A code change asks the process to restart; it ends with 75 once
-// nothing is under way and starts again at once.
+// nothing is under way and starts again at once. A port another program holds (76, status
+// portTaken) is final too, until a code change or "Start again".
 // The status file records the pane and this process, as board.json does the board's.
 import { afterCrash } from '../../core/crash-policy.ts'
 import type { WakeStatusFile } from '../../core/wake/status.ts'
@@ -47,6 +48,8 @@ export const HEALTH_MISSES = 3
 export const UP_GRACE_MS = 30_000
 /** The wake process's exit for a restart (a code change): started again at once. */
 export const RESTART_EXIT = 75
+/** The wake process's exit when another program holds its port (status portTaken): not started again. */
+export const PORT_TAKEN_EXIT = 76
 
 /** The port in the wake process's `{ up: <port> }`, or null for another message. */
 function upPort(m: unknown): number | null {
@@ -63,7 +66,7 @@ export function createSupervisor(deps: SupervisorDeps): { start(): void; codeCha
   let retry: unknown = null
   /** The next health check. */
   let check: unknown = null
-  /** Crashed five times: no start until a code change. */
+  /** Crashed five times, or its port taken: no start until a code change. */
   let parked = false
   /** A restart was asked for: the exit that follows is no crash. */
   let wanted = false
@@ -136,6 +139,11 @@ export function createSupervisor(deps: SupervisorDeps): { start(): void; codeCha
       if (hung) return crashed(code, `no answer to ${HEALTH_MISSES} health checks in a row`)
       if (code === 0) return void turnedOff()
       if (code === RESTART_EXIT || wanted) return start()
+      if (code === PORT_TAKEN_EXIT) {
+        // The wake process wrote portTaken itself: so it stays, until a code change or Start again.
+        parked = true
+        return say(lastError || 'wake ended: another program holds its port')
+      }
       crashed(code, lastError)
     })
     checkIn(UP_GRACE_MS)
