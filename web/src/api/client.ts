@@ -77,7 +77,9 @@ export const isBoardPayload: Guard<BoardPayload> = (value): value is BoardPayloa
   // The Claude profiles (a board before them sent none).
   isListOf(value.profiles, isBoardProfile) &&
   // The program launch.claude types (a board before start commands did not say).
-  (value.claudeProgram === undefined || typeof value.claudeProgram === 'string')
+  (value.claudeProgram === undefined || typeof value.claudeProgram === 'string') &&
+  // The Remote access view's revision (a board before it did not send one).
+  (value.accessRev === undefined || typeof value.accessRev === 'number')
 
 /** One session as GET /api/session/<key> answers it (src/server/routes/session.ts). */
 export interface SessionDetail {

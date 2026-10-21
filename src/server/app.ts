@@ -11,10 +11,22 @@ import { saveFoundProfiles } from '../adapters/config-file.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
 import { archiveDir, cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
+import { fetchProbe, probeOrigin } from '../adapters/probe.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
+import {
+  endStraySsh,
+  keyPath,
+  knownHostsFile,
+  publicKeyOf,
+  readPidRecord,
+  spawnSsh,
+  sshBin,
+  writePidRecord,
+} from '../adapters/ssh.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { pwaPage } from '../core/pwa.ts'
 import type { SetupFacts } from '../core/setup.ts'
+import { boardPorts, forwardSpec, sshArgs, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
 import { createAccess } from '../services/access.ts'
 import { asideCheck } from '../services/aside.ts'
 import type { Deps } from '../services/deps.ts'
@@ -22,13 +34,15 @@ import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
 import { editProfile, installProfile } from '../services/profiles.ts'
 import { createRemote } from '../services/remote.ts'
+import { createRemoteAccess } from '../services/remote-access.ts'
 import { startScheduler } from '../services/scheduler.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
-import { createProbes } from '../services/tunnel.ts'
+import { createProbes, createSupervisor, networkSignature, realClock, type TunnelPlan } from '../services/tunnel.ts'
 import { createBoardState } from './board-state.ts'
 import { dispatch, json, type Route } from './http.ts'
 import { createRemoteListener } from './remote.ts'
+import { accessRoutes } from './routes/access.ts'
 import { archiveRoutes } from './routes/archive.ts'
 import { boardRoutes } from './routes/board.ts'
 import { fsRoutes } from './routes/fs.ts'
@@ -45,6 +59,7 @@ import { staticRoute } from './routes/static.ts'
 import { terminalRoute } from './routes/terminal.ts'
 import { createBroadcaster } from './sse.ts'
 import { createTunnelListener } from './tunnel.ts'
+import { openProbeListener } from './tunnel-probe.ts'
 import { pruneUploads, uploadRoutes } from './uploads.ts'
 import { createWebBundle } from './web-bundle.ts'
 
@@ -159,10 +174,19 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
   // The board through the owner's domain (core/tunnel.ts): the login (services/access.ts), the
   // nonces the board's probe answers, and the tunnel listener on 127.0.0.1 while the tunnel is on
   // and the login set up. Off, it reads the config and nothing else.
+  //
+  // The Remote access view's revision (the payload's accessRev): a change of the login, of the
+  // tunnel's status or of its settings counts one, and the board goes out again; the panel then
+  // fetches the view, which never goes out with the board.
+  let accessRev = 0
+  const accessChanged = (): void => {
+    accessRev += 1
+    board.publish()
+  }
   const access = createAccess({
     onChange: () => {
-      board.publish()
-      void tunnel.sync()
+      accessChanged()
+      void tunnel.sync().then(() => supervisor.sync())
     },
     log,
   })
@@ -177,7 +201,54 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     probes,
     ownFiles: ownFileCheck(cfg),
     log,
-    onChange: () => board.publish(),
+    onChange: () => {
+      accessChanged()
+      void supervisor.sync()
+    },
+  })
+  // The tunnel's ssh (services/tunnel.ts). It starts nothing until this board holds the web port
+  // (below). Its line goes to the tunnel listener's port while that listens, the tunnel is on and
+  // the settings check out: checked here too, since the listener follows a config change a moment
+  // later, and a hand edit that fails its checks must never reach ssh meanwhile.
+  const tunnelConf = () => tunnelConfig(cfg.tunnel)
+  const lineTo = (target: number): TunnelPlan | null => {
+    const conf = tunnelConf()
+    if (tunnelProblems(conf, boardPorts(cfg.remote, port)).length) return null
+    return {
+      conf,
+      // No ssh found: this one fails to start, which shows as noSsh.
+      bin: sshBin() ?? 'ssh',
+      args: sshArgs({ conf, key: keyPath(conf), knownHosts: knownHostsFile(), target }),
+      forward: forwardSpec(conf.socket, target),
+    }
+  }
+  const supervisor = createSupervisor({
+    plan: () => {
+      const at = tunnel.listening()
+      return at !== null && tunnelConf().on ? lineTo(at) : null
+    },
+    spawn: spawnSsh,
+    stray: { read: readPidRecord, write: writePidRecord, end: endStraySsh },
+    clock: realClock,
+    network: networkSignature,
+    probes,
+    probe: nonce => fetchProbe(probeOrigin(tunnelConf().domain), nonce),
+    // Test's own line, whether the tunnel is on or not.
+    testPlan: lineTo,
+    checkKey: () => publicKeyOf(keyPath(tunnelConf())),
+    sshFound: () => sshBin(),
+    openProbeListener,
+    onChange: accessChanged,
+    log,
+  })
+  // The "Remote access…" panel's view and changes (/api/access, the local board's only).
+  const remoteAccess = createRemoteAccess({
+    cfg,
+    webPort: port,
+    access,
+    supervisor,
+    tunnel,
+    onChange: accessChanged,
   })
   const board = createBoardState({
     deps,
@@ -189,6 +260,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     mokupilot,
     remote: listener.view,
     aside,
+    accessRev: () => accessRev,
   })
   board.publish()
   const refresh = (): void => void board.refresh()
@@ -204,6 +276,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
   routes.push(
     setupRoute(setup),
     ...remoteRoutes(listener, remote, cfg, port),
+    ...accessRoutes(remoteAccess),
     ...boardRoutes(board, events),
     ...fsRoutes(),
     ...uploadRoutes(),
@@ -272,11 +345,16 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     })
   } catch (err) {
     // The port is taken (EADDRINUSE, which the terminal board retries): nothing may keep running.
-    // The tunnel is the web port's board's: this one never listens for it.
+    // The tunnel is the web port's board's: this one never listens for it, and never touches its
+    // ssh (the supervisor, which started nothing, is left alone: closing it would end the
+    // recorded ssh, the other board's).
     events.close()
     void tunnel.close()
     throw err
   }
+  // The tunnel is this board's now. Its ssh dies with it, also on an exit that skips close():
+  // run.ts restarts the board by process.exit(75).
+  process.on('exit', supervisor.killNow)
 
   const poll = setInterval(refresh, Math.max(1, cfg.refreshSec ?? 2) * 1000)
   const watchers = [
@@ -295,16 +373,37 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
   if (terminalOn(cfg)) void terminals.prune()
   setup.start()
   void listener.sync()
-  void tunnel.sync()
+  // The listener first: ssh forwards to it, so it starts only once that listens (a stray ssh a
+  // board before left is ended first).
+  void tunnel.sync().then(() => supervisor.sync())
+
+  // What the Remote access view reads of config.json, and the tunnel's own settings in it, as of
+  // the last config change.
+  const viewConfig = (): string => JSON.stringify([cfg.tunnel ?? null, cfg.remote ?? null, cfg.language])
+  const tunnelSettings = (): string => JSON.stringify(cfg.tunnel ?? null)
+  let lastView = viewConfig()
+  let lastSettings = tunnelSettings()
 
   return {
     port,
     url: `http://127.0.0.1:${port}/`,
     routes,
-    // Called when config.json changes, too: the remote mode and the tunnel follow it.
+    // Called when config.json changes, too: the remote mode and the tunnel follow it. The panel
+    // fetches its view again when what it reads changed; the tunnel's ssh follows its settings
+    // (a new host, say) here, and the listener's port through its onChange.
     async refresh() {
       listener.configChanged()
       tunnel.configChanged()
+      const view = viewConfig()
+      if (view !== lastView) {
+        lastView = view
+        accessChanged()
+      }
+      const settings = tunnelSettings()
+      if (settings !== lastSettings) {
+        lastSettings = settings
+        void supervisor.sync()
+      }
       await board.refresh()
     },
     async close() {
@@ -315,6 +414,9 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
       setup.stop()
       events.close()
       await listener.close()
+      // ssh before the listener it forwards to.
+      await supervisor.close()
+      process.off('exit', supervisor.killNow)
       await tunnel.close()
       await server.stop(true)
     },

@@ -4,6 +4,7 @@ import {
   clearLoginCookie,
   deviceLabel,
   forwardedAddress,
+  isAccessView,
   LOGIN_MS,
   lockWaitMs,
   loginCookie,
@@ -98,6 +99,100 @@ test("the caller's address: X-Forwarded-For's rightmost entry, an address only",
   expect(forwardedAddress('::ffff:203.0.113.9')).toBe('203.0.113.9')
   expect(forwardedAddress('2001:db8::5')).toBe('2001:db8::5')
   for (const none of ['', null, 'evil']) expect(forwardedAddress(none)).toBe('')
+})
+
+/** A view as GET /api/access answers it, with something in every list. */
+const VIEW = {
+  tunnel: {
+    settings: {
+      on: true,
+      host: 'ssh.example.com',
+      sshPort: 22,
+      user: 'boardtunnel',
+      key: '',
+      socket: '/var/lib/boardtunnel/board.sock',
+      domain: 'board.example.com',
+      port: null,
+    },
+    problems: [{ field: 'host', message: 'Server: needed' }],
+    blocked: 'Server: needed',
+    listenPort: 12424,
+    status: {
+      state: 'reconnecting',
+      since: 1,
+      attempt: 2,
+      nextAt: 3,
+      error: 'ssh exited',
+      hint: 'network',
+      probe: { ok: false, at: 2, detail: '502' },
+    },
+    ssh: 'C:\\Windows\\System32\\OpenSSH\\ssh.exe',
+    key: { path: 'C:\\k', generated: true, exists: true, publicKey: 'ssh-ed25519 AAAA a@b', error: null },
+    hostKey: 'SHA256:x (ED25519)',
+  },
+  login: {
+    password: true,
+    totp: true,
+    passkeys: [{ id: 'pk1', label: 'Safari on iPad', addedAt: 1, usedAt: null }],
+    lockout: { until: 5 },
+  },
+  logins: [
+    {
+      id: 'l1',
+      method: 'passkey',
+      passkeyId: 'pk1',
+      label: 'Safari on iPad',
+      address: '203.0.113.9',
+      signedInAt: 1,
+      expiresAt: 2,
+      seenAt: null,
+    },
+  ],
+  attempts: [{ at: 1, address: '203.0.113.9', label: 'A browser', method: 'password', reason: 'wrong' }],
+}
+
+test('a Remote access view as the board answers it, narrowed for the page and the command', () => {
+  expect(isAccessView(VIEW)).toBe(true)
+  // what a board with nothing set up answers
+  const bare = {
+    ...VIEW,
+    tunnel: {
+      ...VIEW.tunnel,
+      settings: { ...VIEW.tunnel.settings, on: false, port: 12500 },
+      status: { state: 'off', since: 1 },
+      ssh: null,
+      key: { path: 'C:\\k', generated: true, exists: false, publicKey: null, error: null },
+      hostKey: null,
+      blocked: null,
+      problems: [],
+    },
+    login: { password: false, totp: false, passkeys: [], lockout: null },
+    logins: [],
+    attempts: [],
+  }
+  expect(isAccessView(bare)).toBe(true)
+  const broken: unknown[] = [
+    null,
+    [],
+    { ...VIEW, tunnel: null },
+    { ...VIEW, tunnel: { ...VIEW.tunnel, settings: { ...VIEW.tunnel.settings, on: 'yes' } } },
+    { ...VIEW, tunnel: { ...VIEW.tunnel, settings: { ...VIEW.tunnel.settings, sshPort: '22' } } },
+    { ...VIEW, tunnel: { ...VIEW.tunnel, problems: [{ field: 'host' }] } },
+    { ...VIEW, tunnel: { ...VIEW.tunnel, blocked: 1 } },
+    { ...VIEW, tunnel: { ...VIEW.tunnel, listenPort: '12424' } },
+    { ...VIEW, tunnel: { ...VIEW.tunnel, status: { state: 'sideways', since: 1 } } },
+    { ...VIEW, tunnel: { ...VIEW.tunnel, status: { state: 'off' } } },
+    { ...VIEW, tunnel: { ...VIEW.tunnel, status: { ...VIEW.tunnel.status, probe: { ok: 'no' } } } },
+    { ...VIEW, tunnel: { ...VIEW.tunnel, key: { ...VIEW.tunnel.key, exists: 1 } } },
+    { ...VIEW, tunnel: { ...VIEW.tunnel, hostKey: 3 } },
+    { ...VIEW, login: { ...VIEW.login, password: 'yes' } },
+    { ...VIEW, login: { ...VIEW.login, passkeys: [{ id: 'pk1' }] } },
+    { ...VIEW, login: { ...VIEW.login, lockout: { until: 'later' } } },
+    { ...VIEW, logins: [{ ...VIEW.logins[0], method: 'magic' }] },
+    { ...VIEW, attempts: [{ ...VIEW.attempts[0], reason: 'bored' }] },
+    { ...VIEW, attempts: null },
+  ]
+  for (const v of broken) expect([v, isAccessView(v)]).toEqual([v, false])
 })
 
 test('the page can import it: no node: import', () => {
