@@ -19,6 +19,7 @@ const DEADLINE_MS = 8000
 
 const stateOf = (box: Sandbox): string => join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board')
 const statusFile = (box: Sandbox): string => join(stateOf(box), 'wake-status.json')
+const lockFile = (box: Sandbox): string => join(stateOf(box), 'wake-start.lock')
 function statusOf(box: Sandbox): Record<string, unknown> | null {
   try {
     return JSON.parse(readFileSync(statusFile(box), 'utf8'))
@@ -118,8 +119,73 @@ test('wake off, by "wake": false or a config.json that does not parse: exits 0 a
     expect(out.code).toBe(0)
     expect(box.calls()).toEqual([])
     expect(existsSync(statusFile(box))).toBe(false)
+    expect(existsSync(lockFile(box))).toBe(false)
     expect(wakeLogText(box)).toBe('')
   }
+})
+
+const noWakeYet = {
+  ...noOldPlugin,
+  'api snapshot': { result: { snapshot: { workspaces: [main.workspace], tabs: [main.tab], panes: [main.agent] } } },
+  'workspace create': { result: { workspace: { workspace_id: 'wN', label: 'Wake' }, tab: { tab_id: 'first-tab' } } },
+  'tab close': { result: {} },
+  ...opensIn('wN:p2'),
+}
+
+test('two starts at once (herdr’s startup entry and the board’s): one Wake workspace, one wake pane; the other start leaves it the work', async () => {
+  const box = await wakeSandbox()
+  await wakeOn(box)
+  const gate = join(box.dir, 'gate')
+  // herdr answers its first question only once the test opens the gate: both starts are under way together.
+  box.state({ ...noWakeYet, 'plugin list': { ...noOldPlugin['plugin list'], waitFor: gate } })
+  const runs = [runStart(box), runStart(box)]
+  // One of them finds the other's lock and ends at once (without a lock both would wait: the gate opens after 2 s).
+  await Promise.race([...runs, Bun.sleep(2000)])
+  writeFileSync(gate, '')
+  const outs = await Promise.all(runs)
+  expect(outs.map(o => o.code)).toEqual([0, 0])
+  expect(outs.map(o => o.stdout.trim()).sort()).toEqual(["wake's start: opened", "wake's start: present"])
+  expect(box.calls()).toEqual([
+    ['plugin', 'list', '--json'],
+    ['api', 'snapshot'],
+    ['workspace', 'create', '--label', 'Wake', '--cwd', ROOT, '--no-focus'],
+    openCall('wN'),
+    ['tab', 'close', 'first-tab'],
+  ])
+  expect(wakeLogText(box)).toContain('another start is under way')
+  // Given back as the start ended.
+  expect(existsSync(lockFile(box))).toBe(false)
+})
+
+test('a start’s lock left behind (its process gone, or older than the deadline) is taken over; a live one is left alone', async () => {
+  const at = Date.now()
+  for (const lock of [
+    { pid: await deadPid(), at },
+    // Its process runs (a pid given out again), but no start takes that long.
+    { pid: process.pid, at: at - DEADLINE_MS - 1000 },
+  ]) {
+    const box = await wakeSandbox()
+    await wakeOn(box)
+    mkdirSync(stateOf(box), { recursive: true })
+    writeFileSync(lockFile(box), JSON.stringify(lock))
+    box.state(noWakeYet)
+    const out = await runStart(box)
+    expect([out.code, out.stdout.trim()]).toEqual([0, "wake's start: opened"])
+    expect(box.calls().filter(c => c[1] === 'pane')).toEqual([openCall('wN')])
+    expect(existsSync(lockFile(box))).toBe(false)
+  }
+
+  // A start under way (this test's process, a moment ago): nothing asked of herdr, its lock kept.
+  const box = await wakeSandbox()
+  await wakeOn(box)
+  mkdirSync(stateOf(box), { recursive: true })
+  const live = JSON.stringify({ pid: process.pid, at: Date.now() })
+  writeFileSync(lockFile(box), live)
+  box.state(noWakeYet)
+  const out = await runStart(box)
+  expect([out.code, out.stdout.trim()]).toEqual([0, "wake's start: present"])
+  expect(box.calls()).toEqual([])
+  expect(readFileSync(lockFile(box), 'utf8')).toBe(live)
 })
 
 test('the old plugin installed: one herdr plugin list, status held, nothing opened', async () => {
@@ -550,4 +616,6 @@ test('herdr hangs: exits 0 at the deadline', async () => {
   // The fake herdr gives up after 5 s: the deadline ended it well before.
   expect(out.ms).toBeLessThan(4000)
   expect(statusOf(box)).toMatchObject({ state: 'failed', error: expect.stringContaining('1.5 s') })
+  // Its lock given back at the deadline too: the next start is not held up.
+  expect(existsSync(lockFile(box))).toBe(false)
 })

@@ -4,7 +4,8 @@
 // process: it saves it atomically, and sets a file that does not read as sessions aside instead of
 // overwriting it (a copy of it, when only some entries do not read). The board only peeks at it.
 // The status file is written atomically too, its unknown fields kept. The log is rotated to
-// `wake.log.1` past 2 MB. Paths are computed at call time, as paths.ts does.
+// `wake.log.1` past 2 MB. Wake's start holds `wake-start.lock` while it runs, so two starts never
+// open two panes. Paths are computed at call time, as paths.ts does.
 import {
   appendFileSync,
   closeSync,
@@ -17,17 +18,21 @@ import {
   readFileSync,
   readSync,
   renameSync,
+  rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { asSavedBoard } from '../core/board-pane.ts'
 import { asWakeSessions, type WakeSessions } from '../core/wake/sessions.ts'
 import { asWakeStatus, type WakeStatusFile } from '../core/wake/status.ts'
 import { renameWithRetry, replaceFile } from './json-store.ts'
-import { stateDir } from './paths.ts'
+import { boardFile, stateDir } from './paths.ts'
 
 export const wakeSessionsFile = (): string => join(stateDir(), 'wake-sessions.json')
 export const wakeLogFile = (): string => join(stateDir(), 'wake.log')
 export const wakeStatusFile = (): string => join(stateDir(), 'wake-status.json')
+export const wakeStartLockFile = (): string => join(stateDir(), 'wake-start.lock')
 
 /** Past this size the log becomes `wake.log.1` before the next line. */
 const LOG_MAX_BYTES = 2_000_000
@@ -136,6 +141,81 @@ export function writeWakeStatus(status: WakeStatusFile, file = wakeStatusFile())
   } catch {}
   mkdirSync(dirname(file), { recursive: true })
   replaceFile(file, `${JSON.stringify({ ...kept, ...status }, null, 1)}\n`)
+}
+
+/** The pane board.json names (the board's own, which wake never closes); null when there is none. */
+export function boardPaneNow(file = boardFile()): string | null {
+  try {
+    return asSavedBoard(parsed(readText(file) ?? ''))?.pane ?? null
+  } catch {
+    return null
+  }
+}
+
+interface StartLock {
+  pid: number
+  at: number
+}
+const asStartLock = (v: unknown): StartLock | null => {
+  const r = v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+  return r && Number.isInteger(r.pid) && Number(r.pid) > 0 && typeof r.at === 'number' && Number.isFinite(r.at)
+    ? { pid: Number(r.pid), at: r.at }
+    : null
+}
+
+/**
+ * Wake's start's lock: `wake-start.lock` beside the status file, made exclusively ('wx') with
+ * `{ pid, at }`. Gives the function that removes it (only while it is still this one's; once), or
+ * null while another start holds it. A lock is taken over when its process is gone or it is older
+ * than `maxAgeMs` (a start ends by its deadline); one that does not read as a lock (being written,
+ * say) only once its file is that old. A stale lock is first moved aside under a name of this
+ * process's: when what was moved is not what was judged stale (another start took it over meanwhile),
+ * it is put back and that start keeps it.
+ */
+export function takeWakeStartLock(
+  o: { pid: number; now: number; maxAgeMs: number; alive: (pid: number) => boolean },
+  file = wakeStartLockFile(),
+): (() => void) | null {
+  mkdirSync(dirname(file), { recursive: true })
+  const mine = `${JSON.stringify({ pid: o.pid, at: o.now })}\n`
+  for (let tries = 0; tries < 3; tries++) {
+    try {
+      writeFileSync(file, mine, { flag: 'wx' })
+      let held = true
+      return () => {
+        if (!held) return
+        held = false
+        try {
+          if (readText(file) === mine) rmSync(file, { force: true })
+        } catch {}
+      }
+    } catch (err) {
+      if (errorCode(err) !== 'EEXIST') throw err
+    }
+    const text = readText(file)
+    if (text === null) continue
+    const lock = asStartLock(parsed(text))
+    const fresh = lock
+      ? o.alive(lock.pid) && o.now - lock.at < o.maxAgeMs
+      : o.now - (statSync(file, { throwIfNoEntry: false })?.mtimeMs ?? 0) < o.maxAgeMs
+    if (fresh) return null
+    const aside = `${file}.${o.pid}-${tries}`
+    try {
+      renameSync(file, aside)
+    } catch (err) {
+      if (errorCode(err) === 'ENOENT') continue
+      throw err
+    }
+    const moved = readText(aside)
+    rmSync(aside, { force: true })
+    if (moved !== text) {
+      try {
+        if (moved !== null) writeFileSync(file, moved, { flag: 'wx' })
+      } catch {}
+      return null
+    }
+  }
+  return null
 }
 
 /** Atomic: a temporary file, then a rename (json-store.ts replaceFile). */

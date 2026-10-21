@@ -2,8 +2,9 @@
 // Start again and Log, and starting it once when it is on but not running (safeguard 3).
 import { expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { configFile } from '../../src/adapters/config-file.ts'
-import { configDir } from '../../src/adapters/paths.ts'
+import { boardFile, configDir, ROOT } from '../../src/adapters/paths.ts'
 import { wakeLogFile, wakeStatusFile, writeWakeStatus } from '../../src/adapters/wake-files.ts'
 import { normalizeConfig } from '../../src/core/categories.ts'
 import { useLanguage } from '../../src/core/lang.ts'
@@ -62,8 +63,19 @@ test('ensure starts wake once when it is on, not held and not answering; never w
   const held = control(on())
   await held.c.ensure()
   expect([held.started, held.asked.answers]).toEqual([[], 0])
+
+  // herdr's startup entry started wake a moment ago (its record says starting): the board leaves it
+  // the work; a record of a start that never came up (older than a minute) is started again.
+  writeWakeStatus({ state: 'starting', at: Date.now(), pane: 'wW:p9' })
+  const underWay = control(on())
+  await underWay.c.ensure()
+  expect(underWay.started).toEqual([])
+  writeWakeStatus({ state: 'starting', at: Date.now() - 61_000, pane: 'wW:p9' })
+  const never = control(on())
+  await never.c.ensure()
+  expect(never.started).toEqual([[]])
   // None of it asked herdr anything.
-  expect([down, up, wakeOff, held].flatMap(x => x.herdrCalls)).toEqual([])
+  expect([down, up, wakeOff, held, underWay, never].flatMap(x => x.herdrCalls)).toEqual([])
 })
 
 test('turned on in config.json by hand: started at once', async () => {
@@ -84,13 +96,29 @@ test('turned on in config.json by hand: started at once', async () => {
 })
 
 const snapshot = (panes: Record<string, unknown>[], workspaces = [{ workspace_id: 'w5', label: 'Wake' }]) => ({
-  snapshot: { workspaces, tabs: [{ tab_id: 't5', workspace_id: 'w5' }], panes },
+  snapshot: {
+    workspaces,
+    tabs: [
+      { tab_id: 't5', workspace_id: 'w5' },
+      { tab_id: 't6', workspace_id: 'w5' },
+    ],
+    panes,
+  },
 })
-const shell = { pane_id: 'w5:p1', tab_id: 't5', workspace_id: 'w5' }
+/** A folder of the user's, with spaces, Cyrillic and %. */
+const OTHER_DIR = process.platform === 'win32' ? 'C:\\Work\\Проект x 50%' : '/work/Проект x 50%'
+/** Wake's pane, a bare shell in the plugin's folder once wake ended. */
+const shell = { pane_id: 'w5:p1', tab_id: 't5', workspace_id: 'w5', cwd: ROOT }
 const sidebar = { pane_id: 'w5:p2', tab_id: 't5', workspace_id: 'w5', tokens: { 'herdr-sidebar.width': 30 } }
 const claude = { pane_id: 'w5:p3', tab_id: 't5', workspace_id: 'w5', agent: 'claude' }
+/** No agent, in a folder of the user's: an editor, a dev server, a log tail. */
+const editor = { pane_id: 'w5:p4', tab_id: 't6', workspace_id: 'w5', cwd: OTHER_DIR, terminal_title_stripped: 'vim' }
+/** A pane herdr says no folder of: not known to be wake's. */
+const unknown = { pane_id: 'w5:p5', tab_id: 't6', workspace_id: 'w5', terminal_title_stripped: 'node' }
+/** The board's own pane (board.json): no agent, in the plugin's folder. */
+const boardPane = { pane_id: 'w5:p6', tab_id: 't6', workspace_id: 'w5', cwd: ROOT, terminal_title_stripped: 'bun' }
 
-test('off: the Wake workspace is closed only when nothing but shells and sidebar panes is in it', async () => {
+test('off: the Wake workspace is closed only when nothing but wake’s shells and sidebar panes is in it', async () => {
   const calls: string[][] = []
   const herdr = (panes: Record<string, unknown>[], workspaces?: { workspace_id: string; label: string }[]) =>
     (async <T>(args: string[]): Promise<T> => {
@@ -98,22 +126,60 @@ test('off: the Wake workspace is closed only when nothing but shells and sidebar
       return (args[0] === 'api' ? snapshot(panes, workspaces) : null) as T
     }) as <T = unknown>(args: string[], timeoutMs?: number) => Promise<T>
   const settings = { workspace: 'Wake' }
+  const place = (o: { pane?: string | null; label?: string; wakePane?: string | null } = {}) => ({
+    board: { label: o.label ?? 'Board', pane: o.pane ?? null },
+    root: ROOT,
+    wakePane: o.wakePane ?? null,
+  })
+  const closing = async (
+    panes: Record<string, unknown>[],
+    o: Parameters<typeof place>[0] = {},
+    workspaces?: { workspace_id: string; label: string }[],
+  ) => {
+    calls.length = 0
+    return [await closeWakeWorkspace(herdr(panes, workspaces), settings, place(o)), [...calls]]
+  }
+  const snap = ['api', 'snapshot']
 
-  expect(await closeWakeWorkspace(herdr([shell, sidebar]), settings, 'Board')).toBe(true)
-  expect(calls).toEqual([
-    ['api', 'snapshot'],
-    ['workspace', 'close', 'w5'],
+  // Wake's shell (its folder spelled as herdr may: another case, a trailing separator) and sidebar panes.
+  expect(await closing([shell, sidebar])).toEqual(['workspace', [snap, ['workspace', 'close', 'w5']]])
+  const spelled = { ...shell, cwd: `${process.platform === 'win32' ? ROOT.toUpperCase() : ROOT}/` }
+  expect(await closing([spelled, sidebar])).toEqual(['workspace', [snap, ['workspace', 'close', 'w5']]])
+
+  // A pane of the user's beside it (an agent, an editor in another folder, one of no known folder):
+  // the workspace stays; only wake's own pane goes, with its tab when nothing but sidebar panes is beside it.
+  for (const user of [claude, editor, unknown]) {
+    expect(await closing([shell, sidebar, user])).toEqual([null, [snap]])
+    const alone = user.tab_id === 't6'
+    expect(await closing([shell, sidebar, user], { wakePane: 'w5:p1' })).toEqual(
+      alone ? ['tab', [snap, ['tab', 'close', 't5']]] : ['pane', [snap, ['pane', 'close', 'w5:p1']]],
+    )
+  }
+  // An editor in wake's own tab: only wake's pane.
+  expect(await closing([shell, sidebar, { ...editor, tab_id: 't5' }], { wakePane: 'w5:p1' })).toEqual([
+    'pane',
+    [snap, ['pane', 'close', 'w5:p1']],
   ])
-  calls.length = 0
-  expect(await closeWakeWorkspace(herdr([shell, claude]), settings, 'Board')).toBe(false)
-  expect(calls).toEqual([['api', 'snapshot']])
-  calls.length = 0
-  // No workspace of that name; or it is the board's own.
-  expect(await closeWakeWorkspace(herdr([shell], [{ workspace_id: 'w5', label: 'Other' }]), settings, 'Board')).toBe(
-    false,
-  )
-  expect(await closeWakeWorkspace(herdr([shell]), settings, 'Wake')).toBe(false)
-  expect(calls).toEqual([['api', 'snapshot']])
+  // The recorded pane is no wake's now (an agent in it): nothing.
+  expect(await closing([{ ...shell, agent: 'claude' }, editor], { wakePane: 'w5:p1' })).toEqual([null, [snap]])
+
+  // The board's pane (board.json) in it: the workspace stays, though that pane reads as a shell in the
+  // plugin's folder; wake's own pane still goes, never the board's.
+  expect(await closing([shell, sidebar, boardPane], { pane: 'w5:p6' })).toEqual([null, [snap]])
+  expect(await closing([shell, sidebar, boardPane], { pane: 'w5:p6', wakePane: 'w5:p1' })).toEqual([
+    'tab',
+    [snap, ['tab', 'close', 't5']],
+  ])
+  expect(await closing([shell, sidebar, boardPane], { pane: 'w5:p6', wakePane: 'w5:p6' })).toEqual([null, [snap]])
+
+  // No workspace of that name; or it is the board's own (by its label), with no wake pane recorded.
+  expect(await closing([shell], {}, [{ workspace_id: 'w5', label: 'Other' }])).toEqual([null, [snap]])
+  expect(await closing([shell], { label: 'Wake' })).toEqual([null, []])
+  // Wake's workspace is the board's: only wake's recorded pane, never the workspace.
+  expect(await closing([shell, sidebar, boardPane], { label: 'Wake', wakePane: 'w5:p1' })).toEqual([
+    'tab',
+    [snap, ['tab', 'close', 't5']],
+  ])
 
   // Turned off from the panel: config.json says so, and once wake no longer answers its workspace goes.
   isolatedHome()
@@ -142,6 +208,40 @@ test('off: the Wake workspace is closed only when nothing but shells and sidebar
     ['workspace', 'close', 'w5'],
   ])
   c.stop()
+})
+
+test('turned off from the panel with a pane of the user’s or the board’s in Wake: only wake’s recorded pane goes', async () => {
+  for (const { panes, wakePane, closed } of [
+    // An editor beside it: wake's tab (its pane and a sidebar pane) goes, the editor's stays.
+    { panes: [shell, sidebar, editor], wakePane: 'w5:p1', closed: [['tab', 'close', 't5']] },
+    // The board's pane (board.json), with no wake pane recorded: nothing goes.
+    { panes: [shell, sidebar, boardPane], wakePane: undefined, closed: [] },
+  ]) {
+    isolatedHome()
+    mkdirSync(configDir(), { recursive: true })
+    writeFileSync(configFile(), JSON.stringify({ language: 'en', wake: { enabled: true, port: PORT } }))
+    mkdirSync(dirname(boardFile()), { recursive: true })
+    writeFileSync(boardFile(), JSON.stringify({ pane: 'w5:p6', pid: process.pid }))
+    writeWakeStatus({ state: 'stopped', at: Date.now(), ...(wakePane && { pane: wakePane }) })
+    let answers = true
+    const herdrCalls: string[][] = []
+    const c = createWakeControl({
+      cfg: on(),
+      answers: async () => answers,
+      starter: () => {},
+      herdr: async <T>(args: string[]) => {
+        herdrCalls.push(args)
+        return (args[0] === 'api' ? snapshot(panes) : null) as T
+      },
+      pollMs: 10,
+    })
+    expect(await c.turn(false)).toEqual({ ok: true })
+    answers = false
+    await until(() => herdrCalls.length >= 1 + closed.length)
+    await Bun.sleep(30)
+    expect(herdrCalls).toEqual([['api', 'snapshot'], ...closed])
+    c.stop()
+  }
 })
 
 test('turned on again before wake ended: its workspace stays', async () => {
@@ -293,8 +393,13 @@ test('Start and Start again: refused while off or held, nothing to do while it a
 
   const down = control(on())
   expect(await down.c.start()).toEqual({ ok: true })
+  // Wake's start is under way: it recorded its new pane as starting. A second Start starts nothing.
+  writeWakeStatus({ state: 'starting', at: Date.now(), pane: 'wW:p9' })
   expect(await down.c.start()).toEqual({ ok: true })
-  expect(down.started).toEqual([[], []])
+  expect(down.started).toEqual([[]])
+  // Start again still makes the pane anew.
+  expect(await down.c.again()).toEqual({ ok: true })
+  expect(down.started).toEqual([[], ['--again']])
 
   writeWakeStatus({ state: 'held', at: 1 })
   const held = control(on())

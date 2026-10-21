@@ -4,8 +4,9 @@
 // never waits on wake here: the payload takes the last state at once, asked again in the background
 // at most every 2 s, and with wake off and no wake file there is no state, no question and no start.
 // Turned off, wake ends by itself (it reads config.json); its workspace is then closed when nothing
-// but shells and sidebar panes is in it. Starting is wake's start's (entrypoints/wake-start.ts),
-// spawned on its own.
+// but wake's leftovers (start.ts wakeLeftover) is in it, else only wake's own pane. Starting is
+// wake's start's (entrypoints/wake-start.ts), spawned on its own, never while its record says a
+// start is under way (herdr's startup entry may have started it a moment ago).
 import { spawn } from 'node:child_process'
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -14,6 +15,7 @@ import { type EditResult, editWake } from '../../adapters/config-file.ts'
 import { asSnapshot, herdr as herdrCli } from '../../adapters/herdr.ts'
 import { ROOT } from '../../adapters/paths.ts'
 import {
+  boardPaneNow,
   peekWakeSessions,
   readWakeStatus,
   wakeLogFile,
@@ -25,6 +27,7 @@ import type { Config } from '../../core/types.ts'
 import { telegramTarget, WAKE_SHIPPED, type WakeConfig, wakeConfig } from '../../core/wake/config.ts'
 import { isWakeStatus, STARTING_MS, wakeState } from '../../core/wake/status.ts'
 import type { WakeHooksView, WakeSettingsView, WakeView } from '../../core/wake/view.ts'
+import { type BoardPlace, closeOfPane, recordedPane, wakeLeftover, workspaceOf } from './start.ts'
 
 type Herdr = <T = unknown>(args: string[], timeoutMs?: number) => Promise<T>
 
@@ -73,6 +76,8 @@ export interface WakeControlOptions {
   log?: (text: string) => void
   /** How often a wake turned off is asked whether it ended (tests: a few ms). */
   pollMs?: number
+  /** The pane board.json names, which closing wake's workspace never touches (adapters/wake-files.ts by default). */
+  boardPane?: () => string | null
 }
 
 /** How long a view holds. */
@@ -117,24 +122,35 @@ export function startWakeStart(args: string[] = []): void {
 }
 
 /**
- * Closes wake's workspace (its label: the section's `workspace`) when nothing but shells and
- * sidebar panes is in it: never one with an agent, never the board's own (its label, or this pane).
- * Whether it closed it.
+ * Once wake ended: closes wake's workspace (its label: the section's `workspace`) when every pane in
+ * it is wake's leftover (start.ts wakeLeftover: herdr-sidebar's, or no agent in the plugin's
+ * folder), never the board's own (its label, board.json's pane, or this process's pane). Otherwise
+ * only wake's recorded pane, while it is still wake's (start.ts recordedPane), with its tab when
+ * nothing but sidebar panes is beside it; or nothing. What it closed.
  */
 export async function closeWakeWorkspace(
   herdr: Herdr,
   settings: Pick<WakeConfig, 'workspace'>,
-  boardWorkspace: string,
-): Promise<boolean> {
-  if (settings.workspace === boardWorkspace) return false
+  place: { board: BoardPlace; root: string; wakePane: string | null },
+): Promise<'workspace' | 'tab' | 'pane' | null> {
+  const label = settings.workspace
+  const boardsLabel = label === place.board.label
+  if (boardsLabel && place.wakePane === null) return null
   const snap = asSnapshot(await herdr(['api', 'snapshot']))
-  const ws = snap.workspaces.find(w => w.label === settings.workspace)
-  if (!ws) return false
+  const ws = snap.workspaces.find(w => w.label === label)
+  if (!ws) return null
   const own = process.env.HERDR_PANE_ID
-  const panes = snap.panes.filter(p => p.workspace_id === ws.workspace_id)
-  if (panes.some(p => p.agent || (own && p.pane_id === own))) return false
-  await herdr(['workspace', 'close', ws.workspace_id])
-  return true
+  const boards = (id: string): boolean => id === place.board.pane || (!!own && id === own)
+  const panes = snap.panes.filter(p => workspaceOf(snap, p) === ws.workspace_id)
+  if (!boardsLabel && !panes.some(p => boards(p.pane_id)) && panes.every(p => wakeLeftover(p, place.root))) {
+    await herdr(['workspace', 'close', ws.workspace_id])
+    return 'workspace'
+  }
+  const wakes = recordedPane(snap, place.wakePane ?? undefined, label, place.board)
+  if (!wakes || boards(wakes.pane_id)) return null
+  const close = closeOfPane(snap, wakes)
+  await herdr(close)
+  return close[0] === 'tab' ? 'tab' : 'pane'
 }
 
 export function createWakeControl(o: WakeControlOptions): WakeControl {
@@ -226,9 +242,14 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
     }
   }
 
-  /** Wake's start unless it is held or answers. */
+  /**
+   * Wake's start unless it is held, a start is under way (its record says starting, for at most a
+   * minute: herdr's startup entry, or an earlier Start), or it answers. Start again goes past this.
+   */
   async function launch(): Promise<EditResult> {
-    if (readWakeStatus()?.state === 'held') return { ok: false, error: t('wake.state.held') }
+    const file = readWakeStatus()
+    if (file?.state === 'held') return { ok: false, error: t('wake.state.held') }
+    if (wakeState({ on: true, status: file, answers: false, now: now() }) === 'starting') return { ok: true }
     if (await answering()) return { ok: true }
     return starts()
   }
@@ -302,7 +323,11 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
       void whenEnded(turn, async () => {
         offPending = false
         try {
-          await closeWakeWorkspace(herdr, settings, o.cfg.workspace)
+          await closeWakeWorkspace(herdr, settings, {
+            board: { label: o.cfg.workspace, pane: (o.boardPane ?? boardPaneNow)() },
+            root: ROOT,
+            wakePane: readWakeStatus()?.pane ?? null,
+          })
         } catch (err) {
           log(`closing wake's workspace: ${messageOf(err)}`)
         }

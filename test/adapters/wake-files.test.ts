@@ -9,6 +9,7 @@ import {
   readWakeSessions,
   readWakeStatus,
   saveWakeSessions,
+  takeWakeStartLock,
   wakeLog,
   wakeLogFile,
   wakeLogTail,
@@ -307,4 +308,43 @@ test('the status file: none or one that does not read is null; written atomicall
   expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ newer: { x: 1 }, state: 'stopped', at: 7 })
   expect(readdirSync(join(dir, 'state'))).toEqual(['wake-status.json'])
   expect(wakeStatusFile()).toMatch(/[\\/]wake-status\.json$/)
+})
+
+test('wake’s start lock: one holder at a time; taken over when its process is gone or past the deadline; given back once, only while it is its own', () => {
+  const dir = join(folder(), 'state')
+  const file = join(dir, 'wake-start.lock')
+  const NOW = 1_800_000_000_000
+  const alive = (pid: number): boolean => pid !== 404
+  const take = (pid: number, now = NOW) => takeWakeStartLock({ pid, now, maxAgeMs: 20_000, alive }, file)
+
+  const first = take(11)
+  expect(first).toBeFunction()
+  expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ pid: 11, at: NOW })
+  // Another start while it is held: refused, the lock as it was.
+  expect(take(12, NOW + 19_000)).toBeNull()
+  expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ pid: 11, at: NOW })
+  first?.()
+  expect(existsSync(file)).toBe(false)
+  first?.()
+
+  // Its process gone: taken over.
+  writeFileSync(file, JSON.stringify({ pid: 404, at: NOW }))
+  const afterDead = take(13)
+  expect(afterDead).toBeFunction()
+  expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ pid: 13, at: NOW })
+  // Older than the deadline (its process alive, or a pid given out again): taken over.
+  const afterOld = take(14, NOW + 20_000)
+  expect(afterOld).toBeFunction()
+  expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ pid: 14, at: NOW + 20_000 })
+  // The one taken over gives back nothing of the new holder's.
+  afterDead?.()
+  expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ pid: 14, at: NOW + 20_000 })
+  afterOld?.()
+  expect(readdirSync(dir)).toEqual([])
+
+  // A lock that does not read as one (being written): held while its file is fresh.
+  writeFileSync(file, '')
+  expect(take(15, Date.now())).toBeNull()
+  expect(take(15, Date.now() + 21_000)).toBeFunction()
+  expect(readdirSync(dir)).toEqual(['wake-start.lock'])
 })
