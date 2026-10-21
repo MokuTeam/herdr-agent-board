@@ -1,0 +1,219 @@
+// Waking a sleeping session in its pane and putting a running one to sleep there: what the wake
+// process and the board's own wake both do, ported from herdr-wake's router.mjs (wake, waitReady,
+// putToSleep, withPane). The one line typed is `board resume <id> --profile <id>`, which goes to
+// the session's folder itself, so there is no `cd` (call 17); the prompt line is cleared first by
+// the pane's shell, not by this process's OS (call 18). Nothing is typed into a pane whose
+// foreground or input box cannot be read, and no session is woken where the line would lose its
+// profile.
+import type { WakeHerdr } from '../../adapters/wake-herdr.ts'
+import { inputDraft } from '../../core/dialogs/input-box.ts'
+import { clearKeyFor, wakeLine } from '../../core/wake/rules.ts'
+import { isChannelsWarning, isExitTasksDialog, isTrustDialog } from '../../core/wake/screens.ts'
+
+export type WakeOutcome =
+  | { ok: true }
+  | { ok: false; why: 'busy' | 'timeout' | 'trust' | 'blocked' | 'line'; error: string }
+
+/** The clock and the log, for tests; the real ones by default. */
+export interface Timing {
+  sleep?(ms: number): Promise<void>
+  now?(): number
+  log?(text: string): void
+}
+
+/** How often a waking pane is looked at. */
+const READY_POLL_MS = 1500
+/** The development-channels warning gets Enter at most this often, this far apart. */
+const MAX_CONFIRMS = 3
+const CONFIRM_GAP_MS = 5000
+/** How long Claude has to leave after /exit, looked at each second. */
+const EXIT_WAIT_MS = 30_000
+const EXIT_POLL_MS = 1000
+/** The 💤 label before the wake line is typed at the prompt. */
+const TYPE_AFTER_RENAME_MS = 500
+
+const ERRORS = {
+  busy: 'its pane runs another program',
+  timeout: 'it did not start in time',
+  trust: 'it asks whether to trust the folder: answer in its terminal',
+  blocked: 'it waits for an answer in its terminal',
+} as const
+const NOT_A_SESSION = 'it is not a Claude session that board resume can wake'
+const PROFILE_NOT_PLAIN = 'its profile id is not a plain word: board resume would wake it in the default profile'
+
+function clock(t: Timing = {}): Required<Timing> {
+  return {
+    sleep: ms => (t.sleep ? t.sleep(ms) : new Promise(resolve => setTimeout(resolve, ms))),
+    now: () => (t.now ? t.now() : Date.now()),
+    log: text => t.log?.(text),
+  }
+}
+
+/**
+ * The line that wakes the session, or why there is none: not a session id (pi's and Codex's
+ * `pane-<id>` keys), or a profile id that `--profile` cannot carry, which would wake the session
+ * in the default profile instead of its own.
+ */
+function lineFor(session: string, profile: string | null | undefined): { line: string } | { error: string } {
+  const line = wakeLine(session, profile)
+  if (line === null) return { error: NOT_A_SESSION }
+  if (typeof profile === 'string' && line === wakeLine(session)) return { error: PROFILE_NOT_PLAIN }
+  return { line }
+}
+
+/** The pane is at its shell's prompt: herdr shows the shell, and nothing else in the foreground. */
+async function atPrompt(io: WakeHerdr, pane: string): Promise<{ shell: string | null } | null> {
+  const info = await io.processInfo(pane)
+  if (info.shellPid === null || info.foreground.some(p => p.pid !== info.shellPid)) return null
+  return { shell: info.shell }
+}
+
+const locks = new Map<string, Promise<void>>()
+
+/**
+ * One operation per pane at a time, in this process: `fn` starts once the pane's earlier ones
+ * have ended, whether they failed or not.
+ */
+export function withPane<T>(pane: string, fn: () => Promise<T>): Promise<T> {
+  const next = (locks.get(pane) ?? Promise.resolve()).then(() => fn())
+  const ended = next.then(
+    () => {},
+    () => {},
+  )
+  locks.set(pane, ended)
+  void ended.then(() => {
+    if (locks.get(pane) === ended) locks.delete(pane)
+  })
+  return next
+}
+
+/**
+ * Waits until the pane's Claude is ready for input: 'ready', 'trust', 'blocked' or 'timeout'.
+ * Sessions started with development channels first ask for a confirmation; that one dialog gets
+ * Enter here. The folder trust question, and any other, is left to the user.
+ */
+export async function waitReady(
+  io: WakeHerdr,
+  pane: string,
+  timeoutMs: number,
+  t?: Timing,
+): Promise<'ready' | 'trust' | 'blocked' | 'timeout'> {
+  const { sleep, now, log } = clock(t)
+  let confirms = 0
+  let lastConfirm: number | null = null
+  for (const deadline = now() + timeoutMs; now() < deadline; await sleep(READY_POLL_MS)) {
+    const p = await io.pane(pane)
+    if (p?.agent !== 'claude') continue
+    if (p.agent_status === 'idle' || p.agent_status === 'done') return 'ready'
+    if (p.agent_status !== 'blocked' || (lastConfirm !== null && now() - lastConfirm < CONFIRM_GAP_MS)) continue
+    const screen = await io.screen(pane)
+    if (isTrustDialog(screen)) return 'trust'
+    if (confirms >= MAX_CONFIRMS || !isChannelsWarning(screen)) return 'blocked'
+    log(`confirming the development channels warning in ${pane}`)
+    await io.sendKeys(pane, 'enter')
+    confirms++
+    lastConfirm = now()
+  }
+  return 'timeout'
+}
+
+/**
+ * Resumes the pane's sleeping session with `board resume` in its profile and waits until Claude
+ * is ready for input. Only into a pane at its shell's prompt: the line is cleared by that shell's
+ * key, then the one line run; herdr's errors are thrown. It does not hold the pane: the caller runs
+ * it inside withPane, with whatever it does in the pane next (the Telegram router types its message).
+ */
+export async function wakeInPane(
+  io: WakeHerdr,
+  target: { pane: string; session: string; profile?: string | null },
+  o: Timing & { timeoutMs: number; platform?: string },
+): Promise<WakeOutcome> {
+  const found = lineFor(target.session, target.profile)
+  if ('error' in found) return { ok: false, why: 'line', error: found.error }
+  const prompt = await atPrompt(io, target.pane)
+  if (!prompt) return { ok: false, why: 'busy', error: ERRORS.busy }
+  clock(o).log(`waking ${target.session} in ${target.pane}`)
+  await io.sendKeys(target.pane, clearKeyFor(prompt.shell, o.platform))
+  await io.run(target.pane, found.line)
+  const state = await waitReady(io, target.pane, o.timeoutMs, o)
+  return state === 'ready' ? { ok: true } : { ok: false, why: state, error: ERRORS[state] }
+}
+
+/** What putToSleep tells its caller on the way, for the session file. */
+export interface SleepMarks {
+  /** /exit is about to be typed. */
+  going(now: number): void
+  /** Claude left the pane: asleep. */
+  slept(now: number): void
+  /** It stays up (background tasks, did not exit in time, herdr failed on the way). */
+  stayed(): void
+}
+
+/** Types /exit and waits for Claude to leave: 'slept', 'tasks' (Esc pressed on that dialog) or 'up'. */
+async function exitClaude(
+  io: WakeHerdr,
+  pane: string,
+  { sleep, now }: Required<Timing>,
+): Promise<'slept' | 'tasks' | 'up'> {
+  await io.prompt(pane, '/exit')
+  for (const deadline = now() + EXIT_WAIT_MS; now() < deadline; await sleep(EXIT_POLL_MS)) {
+    const after = await io.pane(pane)
+    if (!after) return 'up'
+    // "The following will stop when you exit": it runs background work after all. Stay.
+    if (after.agent === 'claude' && after.agent_status === 'blocked' && isExitTasksDialog(await io.screen(pane))) {
+      await io.sendKeys(pane, 'esc')
+      return 'tasks'
+    }
+    if (!after.agent) return 'slept'
+  }
+  return 'up'
+}
+
+/**
+ * /exit an idle session and leave its pane marked `💤 <name>`, with the wake line typed at its
+ * prompt, not run. Holds the pane (withPane) itself. Refuses (false, no /exit) unless the session
+ * could be woken by that line, and the pane holds Claude with this session, idle or done, with an
+ * empty input box it can read. After `going`, `slept` or `stayed` follows, even when herdr fails.
+ */
+export async function putToSleep(
+  io: WakeHerdr,
+  target: { pane: string; session: string; name: string; profile?: string | null },
+  marks: SleepMarks,
+  t?: Timing,
+): Promise<boolean> {
+  const found = lineFor(target.session, target.profile)
+  if ('error' in found) return false
+  const c = clock(t)
+  const { pane, name } = target
+  return withPane(pane, async () => {
+    const cur = await io.pane(pane)
+    if (cur?.agent !== 'claude' || cur.agent_session?.value !== target.session) return false
+    if (cur.agent_status !== 'idle' && cur.agent_status !== 'done') return false
+    if (inputDraft(await io.inputBox(pane)) !== '') return false
+    marks.going(c.now())
+    let end: 'slept' | 'tasks' | 'up'
+    try {
+      end = await exitClaude(io, pane, c)
+    } catch (err) {
+      marks.stayed()
+      throw err
+    }
+    if (end !== 'slept') {
+      marks.stayed()
+      c.log(
+        end === 'tasks'
+          ? `${name} in ${pane} has background tasks, left it running`
+          : `${name} in ${pane} did not exit`,
+      )
+      return false
+    }
+    marks.slept(c.now())
+    await io.rename(pane, `💤 ${name}`).catch(() => {})
+    await c.sleep(TYPE_AFTER_RENAME_MS)
+    // Typed for the user to run, only at the shell's prompt (nothing else took the pane meanwhile).
+    const prompt = await atPrompt(io, pane).catch(() => null)
+    if (prompt) await io.sendText(pane, found.line).catch(() => {})
+    c.log(`put ${name} to sleep in ${pane}`)
+    return true
+  })
+}
