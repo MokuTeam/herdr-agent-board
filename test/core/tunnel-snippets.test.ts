@@ -52,7 +52,7 @@ describe('the server’s snippets, filled in', () => {
       "echo 'restrict,port-forwarding ssh-ed25519 AAAA k' | sudo tee /etc/ssh/authorized_keys/boardtunnel >/dev/null",
       `grep -qx 'Match User boardtunnel' /etc/ssh/sshd_config || printf '\\n%s\\n' '${sshdBlock('boardtunnel')}' | sudo tee -a /etc/ssh/sshd_config >/dev/null`,
       'sudo sshd -t',
-      '{ sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd; }',
+      '{ sudo systemctl try-reload-or-restart ssh 2>/dev/null || sudo systemctl try-reload-or-restart sshd; }',
       ')',
     ]
     expect(stepOnePaste('boardtunnel', TUNNEL_SOCKET, 'ssh-ed25519 AAAA k')).toBe(lines.join('\n'))

@@ -22,7 +22,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.case.update': 'Set up for {domain} before: the plan moves the setup to the new domain or port.',
     // why the board leaves it to you ("Do it myself")
     'server.manual.os':
-      'The server is not Debian 12 or 13 or Ubuntu 22.04 to 26.04, or lacks flock, setsid or timeout.',
+      'The server is not Debian 12 or 13 or Ubuntu 22.04 to 26.04, or lacks flock, setsid, timeout, sha256sum or ss.',
     'server.manual.selinux': 'SELinux enforces its policy here.',
     'server.manual.podman': 'Docker here is Podman.',
     'server.manual.rootless': 'Docker runs rootless here.',
@@ -157,7 +157,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'Порт 443 занят ({holder}), 80 — у nginx: собственный Caddy доски ответит на 8443, а nginx передаст ему только проверки сертификата.',
     'server.case.same': 'Уже настроено для {domain}: план проверит каждую часть и вернёт недостающее.',
     'server.case.update': 'Раньше было настроено для {domain}: план перенесёт настройку на новый домен или порт.',
-    'server.manual.os': 'Сервер не Debian 12 или 13 и не Ubuntu 22.04–26.04, или на нём нет flock, setsid или timeout.',
+    'server.manual.os':
+      'Сервер не Debian 12 или 13 и не Ubuntu 22.04–26.04, или на нём нет flock, setsid, timeout, sha256sum или ss.',
     'server.manual.selinux': 'Здесь SELinux в режиме enforcing.',
     'server.manual.podman': 'Docker здесь — это Podman.',
     'server.manual.rootless': 'Docker здесь работает без root (rootless).',

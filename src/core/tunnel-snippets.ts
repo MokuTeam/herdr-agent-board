@@ -36,6 +36,15 @@ export function keysLine(publicKey: string): string {
 }
 
 /**
+ * sshd reads its config again: Debian and Ubuntu name the unit `ssh`, others `sshd`. A
+ * socket-activated sshd (Ubuntu 26.04) whose service has not run yet refuses a `reload` (exit 1,
+ * which ends a `set -e` paste); this reloads a running one and leaves one that is not running to
+ * read the config when it starts (the spike).
+ */
+export const SSHD_RELOAD =
+  '{ sudo systemctl try-reload-or-restart ssh 2>/dev/null || sudo systemctl try-reload-or-restart sshd; }'
+
+/**
  * The user and its folder, the keys file and sshd's block in one paste: a subshell that stops at
  * the first error, and is safe to paste twice (what is there is left; the keys file is written
  * anew; the `Match` block is added only when sshd_config has none for `user`). No comments in it:
@@ -53,7 +62,7 @@ export function stepOnePaste(user: string, socket: string, publicKey: string): s
     `echo ${word(keysLine(publicKey))} | sudo tee ${keysFile(user)} >/dev/null`,
     `grep -qx ${word(`Match User ${user}`)} ${config} || printf '\\n%s\\n' ${word(sshdBlock(user))} | sudo tee -a ${config} >/dev/null`,
     'sudo sshd -t',
-    '{ sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd; }',
+    SSHD_RELOAD,
     ')',
   ].join('\n')
 }

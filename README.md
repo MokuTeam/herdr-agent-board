@@ -1554,7 +1554,8 @@ sshd block and the folder's permissions keep the key to the socket.
 
 **4. sshd, a second fence for that user.** At the end of `/etc/ssh/sshd_config` (a `Match` block
 runs to the next `Match` or the end of the file), then `sudo sshd -t` and reload sshd (`sudo
-systemctl reload ssh` on Debian and Ubuntu, `sshd` elsewhere):
+systemctl try-reload-or-restart ssh` on Debian and Ubuntu, `sshd` elsewhere; a plain `reload` fails
+on Ubuntu 26.04 while its socket-activated sshd has not started yet):
 
 ```
 Match User boardtunnel
