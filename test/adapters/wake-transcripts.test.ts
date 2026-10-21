@@ -54,6 +54,15 @@ test('a CronCreate within 7 days keeps it up; read once until the file changes',
   expect(await scheduledJobs(file, NOW)).toBe(true)
 })
 
+test('the week is counted at every look, not when the transcript was read', async () => {
+  const file = join(folder(), 'six-days.jsonl')
+  writeFileSync(file, `${toolCall('CronCreate', new Date(NOW - 6 * 86_400_000).toISOString())}\n`)
+  expect(await scheduledJobs(file, NOW)).toBe(true)
+  expect(await scheduledJobs(file, NOW + 12 * 3_600_000)).toBe(true)
+  // Two days on, the transcript untouched: the cron has expired, the session may sleep.
+  expect(await scheduledJobs(file, NOW + 2 * 86_400_000)).toBe(false)
+})
+
 test('a schedule older than 7 days, or none, lets it sleep; no transcript is nothing scheduled', async () => {
   const file = join(folder(), 'old.jsonl')
   writeFileSync(file, `${toolCall('CronCreate', '2026-10-14T11:59:59.000Z')}\n`)

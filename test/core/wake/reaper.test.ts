@@ -2,11 +2,13 @@ import { expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import {
   exitedPanes,
+  lastScheduledAt,
   matchesAny,
   type ReapSnapshot,
   type Running,
   reapPlan,
   scheduledIn,
+  scheduleLive,
 } from '../../../src/core/wake/reaper.ts'
 
 const now = Date.parse('2026-10-13T21:00:00Z')
@@ -141,6 +143,28 @@ test('scheduled jobs are found by recent CronCreate or ScheduleWakeup calls only
 
   const wakeup = [tools, line('ScheduleWakeup', '2026-10-13T20:00:00Z')]
   assert.equal(scheduledIn(wakeup.join('\r\n'), now), true)
+})
+
+test('the last schedule call is the newest CronCreate or ScheduleWakeup, whatever the order', () => {
+  const line = (name: string, ts: unknown) =>
+    JSON.stringify({ timestamp: ts, message: { content: [{ type: 'tool_use', id: 'toolu_1', name, input: {} }] } })
+  const text = [
+    line('CronCreate', '2026-10-05T10:00:00Z'),
+    line('ScheduleWakeup', '2026-10-12T08:30:00Z'),
+    line('Bash', '2026-10-13T10:00:00Z'),
+    line('CronCreate', '2026-10-09T10:00:00Z'),
+    line('CronCreate', 'not a time'),
+    line('ScheduleWakeup', 1_800_000_000_000), // a number, newer: not a transcript's time, ignored
+  ].join('\r\n')
+  assert.equal(lastScheduledAt(text), Date.parse('2026-10-12T08:30:00Z'))
+  assert.equal(lastScheduledAt(line('Bash', '2026-10-13T10:00:00Z')), null)
+  assert.equal(lastScheduledAt(''), null)
+
+  // Kept up for a week from it.
+  const at = Date.parse('2026-10-12T08:30:00Z')
+  assert.equal(scheduleLive(at, at + 7 * 86_400_000 - 1), true)
+  assert.equal(scheduleLive(at, at + 7 * 86_400_000), false)
+  assert.equal(scheduleLive(null, at), false)
 })
 
 test('a session the board could not wake again is kept up, with the reason, and never counts down', () => {

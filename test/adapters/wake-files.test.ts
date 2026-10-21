@@ -129,6 +129,66 @@ test('a broken session file is set aside, never overwritten, and said', () => {
   expect(texts).toContain('{')
 })
 
+// Entries 2.1's narrowing drops: a seen_at written as text, a profile id without its folder.
+const BAD_ENTRIES = {
+  'w1:p2': { session: SID, name: 'x', seen_at: '2026-10-21T10:00:00Z', slept_at: 1 },
+  'w2:p1': { session: SID, name: 'y', seen_at: 5, slept_at: 6, profile: 'work' },
+}
+
+test('entries that do not read as sessions are dropped, the file kept as it was beside it, and said', () => {
+  const dir = folder()
+  const file = join(dir, 'wake-sessions.json')
+  const text = JSON.stringify({ ...SESSIONS, ...BAD_ENTRIES }, null, 1)
+  writeFileSync(file, text)
+  const said: string[] = []
+  expect(readWakeSessions(file, line => said.push(line))).toEqual(SESSIONS)
+  // The file stays where it is (wake goes on with the entries kept); a copy holds it as it was.
+  expect(readFileSync(file, 'utf8')).toBe(text)
+  const [copy] = brokenCopies(dir)
+  expect(brokenCopies(dir)).toHaveLength(1)
+  expect(readFileSync(join(dir, copy ?? ''), 'utf8')).toBe(text)
+  expect(said).toHaveLength(1)
+  expect(said[0]).toContain('w1:p2')
+  expect(said[0]).toContain('w2:p1')
+  expect(said[0]).not.toContain('w1:p1')
+  expect(said[0]).toContain(join(dir, copy ?? ''))
+
+  // The next save writes what was kept and leaves the copy; read again, nothing more is dropped.
+  saveWakeSessions(SESSIONS, file)
+  expect(readFileSync(join(dir, copy ?? ''), 'utf8')).toBe(text)
+  expect(readWakeSessions(file, line => said.push(line))).toEqual(SESSIONS)
+  expect(brokenCopies(dir)).toHaveLength(1)
+  expect(said).toHaveLength(1)
+})
+
+test('a file whose entries all fail is none to wake, with a copy and a line; an empty one is none, quietly', () => {
+  const dir = folder()
+  const file = join(dir, 'wake-sessions.json')
+  const text = JSON.stringify(BAD_ENTRIES)
+  writeFileSync(file, text)
+  const said: string[] = []
+  expect(readWakeSessions(file, line => said.push(line))).toEqual({})
+  const copies = brokenCopies(dir)
+  expect(copies).toHaveLength(1)
+  expect(readFileSync(join(dir, copies[0] ?? ''), 'utf8')).toBe(text)
+  expect(said).toHaveLength(1)
+  expect(said[0]).toContain('w1:p2')
+  expect(said[0]).toContain('w2:p1')
+
+  // The save that follows ({} over the file) leaves the copy whole.
+  saveWakeSessions({}, file)
+  expect(readFileSync(join(dir, copies[0] ?? ''), 'utf8')).toBe(text)
+
+  // {} drops nothing: no copy, nothing said.
+  const empty = folder()
+  const emptyFile = join(empty, 'wake-sessions.json')
+  writeFileSync(emptyFile, '{}')
+  const quiet: string[] = []
+  expect(readWakeSessions(emptyFile, line => quiet.push(line))).toEqual({})
+  expect(readdirSync(empty)).toEqual(['wake-sessions.json'])
+  expect(quiet).toEqual([])
+})
+
 test('the board peeks at the session file: a broken one is none to it, and is left where it is', () => {
   const dir = folder()
   const file = join(dir, 'wake-sessions.json')
@@ -138,6 +198,12 @@ test('the board peeks at the session file: a broken one is none to it, and is le
     expect(readdirSync(dir)).toEqual(['wake-sessions.json'])
     expect(readFileSync(file, 'utf8')).toBe(text)
   }
+  // Entries it cannot read are left out for the board, with no copy made.
+  const mixed = JSON.stringify({ ...SESSIONS, ...BAD_ENTRIES })
+  writeFileSync(file, mixed)
+  expect(peekWakeSessions(file)).toEqual(SESSIONS)
+  expect(readdirSync(dir)).toEqual(['wake-sessions.json'])
+  expect(readFileSync(file, 'utf8')).toBe(mixed)
   // A folder in the file's place is none too.
   rmSync(file)
   const nested = join(dir, 'nested')

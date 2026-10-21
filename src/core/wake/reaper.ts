@@ -173,18 +173,34 @@ export function reapPlan(
 const SCHEDULE_CALL = /"type":"tool_use","id":"[^"]+","name":"(CronCreate|ScheduleWakeup)"/
 
 /**
- * A transcript's text calls CronCreate or ScheduleWakeup within 7 days of `now` (herdr-wake's
- * hasSchedules on the text). Such jobs live only in the session's memory and die with it, so
- * the session must stay up. Recurring cron jobs expire after 7 days, hence the window.
+ * The time (ms) of the newest CronCreate or ScheduleWakeup call in a transcript's text, from its
+ * line's `timestamp`; null when it has none. A line whose time does not parse is left out.
  */
-export function scheduledIn(text: string, now: number): boolean {
+export function lastScheduledAt(text: string): number | null {
+  let last: number | null = null
   for (const line of text.split('\n')) {
     if (!SCHEDULE_CALL.test(line)) continue
     try {
       const row: unknown = JSON.parse(line)
       const ts = typeof row === 'object' && row !== null && 'timestamp' in row ? row.timestamp : undefined
-      if (typeof ts === 'string' && now - Date.parse(ts) < WEEK_MS) return true
+      const at = typeof ts === 'string' ? Date.parse(ts) : Number.NaN
+      if (!Number.isNaN(at) && (last === null || at > last)) last = at
     } catch {}
   }
-  return false
+  return last
+}
+
+/**
+ * Jobs scheduled at `at` may still be alive at `now`. Such jobs live only in the session's memory
+ * and die with it, so the session must stay up. Recurring cron jobs expire after 7 days, hence the
+ * window.
+ */
+export const scheduleLive = (at: number | null, now: number): boolean => at !== null && now - at < WEEK_MS
+
+/**
+ * A transcript's text calls CronCreate or ScheduleWakeup within 7 days of `now` (herdr-wake's
+ * hasSchedules on the text).
+ */
+export function scheduledIn(text: string, now: number): boolean {
+  return scheduleLive(lastScheduledAt(text), now)
 }

@@ -1,11 +1,14 @@
 // Wake's files in the board's state folder: the session file (`wake-sessions.json`, the last Claude
 // session seen in each pane, core/wake/sessions.ts) and wake's log (`wake.log`). The session file
 // has one writer, the wake process: it saves it atomically, and sets a file that does not read as
-// sessions aside instead of overwriting it. The board only peeks at it. The log is rotated to
-// `wake.log.1` past 2 MB. Paths are computed at call time, as paths.ts does.
+// sessions aside instead of overwriting it (a copy of it, when only some entries do not read). The
+// board only peeks at it. The log is rotated to `wake.log.1` past 2 MB. Paths are computed at call
+// time, as paths.ts does.
 import {
   appendFileSync,
   closeSync,
+  constants,
+  copyFileSync,
   existsSync,
   fstatSync,
   mkdirSync,
@@ -41,12 +44,12 @@ function readText(file: string): string | null {
   }
 }
 
-/** The text as sessions (core's narrowing), or null when it is not JSON or not sessions. */
-function asSessions(text: string): WakeSessions | null {
+/** The text as JSON; undefined (which JSON never gives) when it is not JSON. */
+function parsed(text: string): unknown {
   try {
-    return asWakeSessions(JSON.parse(text))
+    return JSON.parse(text)
   } catch {
-    return null
+    return undefined
   }
 }
 
@@ -60,30 +63,47 @@ function brokenName(file: string): string {
 
 /**
  * The wake process's read of its session file. {} when there is none; a file that does not read as
- * sessions is renamed `<file>.broken-<ms>` (never overwritten) and {} returned; `log` hears it. A
- * file that cannot be read at all, or set aside, is an error: taken for none, the next save would
- * overwrite it.
+ * sessions is renamed `<file>.broken-<ms>` (never overwritten) and {} returned; `log` hears it.
+ * Entries that do not read as sessions (core's narrowing drops them) are left out, and the file as
+ * it was is first copied to `<file>.broken-<ms>`, so the next save loses nothing for good; `log`
+ * hears which panes and where the copy is. A file that cannot be read at all, set aside or copied
+ * is an error: taken for none, the next save would overwrite it.
  */
 export function readWakeSessions(file = wakeSessionsFile(), log: (text: string) => void = () => {}): WakeSessions {
   const text = readText(file)
   if (text === null) return {}
-  const sessions = asSessions(text)
-  if (sessions) return sessions
-  const aside = brokenName(file)
+  const raw = parsed(text)
+  const sessions = asWakeSessions(raw)
+  if (!sessions) {
+    const aside = brokenName(file)
+    try {
+      renameWithRetry(file, aside)
+    } catch (err) {
+      log(`${file} does not read as sessions and could not be set aside: ${messageOf(err)}`)
+      throw err
+    }
+    log(`${file} did not read as sessions: set aside as ${aside}, wake starts with none`)
+    return {}
+  }
+  const panes = raw && typeof raw === 'object' ? Object.keys(raw) : []
+  const dropped = panes.filter(pane => !Object.hasOwn(sessions, pane))
+  if (dropped.length === 0) return sessions
+  const panesSaid = dropped.join(', ')
+  const copy = brokenName(file)
   try {
-    renameWithRetry(file, aside)
+    copyFileSync(file, copy, constants.COPYFILE_EXCL)
   } catch (err) {
-    log(`${file} does not read as sessions and could not be set aside: ${messageOf(err)}`)
+    log(`${file}: ${panesSaid} do not read as sessions, and the file could not be copied aside: ${messageOf(err)}`)
     throw err
   }
-  log(`${file} did not read as sessions: set aside as ${aside}, wake starts with none`)
-  return {}
+  log(`${file}: ${panesSaid} did not read as sessions and are left out; the file as it was is kept as ${copy}`)
+  return sessions
 }
 
-/** The board's read of wake's session file: {} for a missing or broken one; never renames, writes or logs. */
+/** The board's read of wake's session file: {} for a missing or broken one; never renames, copies, writes or logs. */
 export function peekWakeSessions(file = wakeSessionsFile()): WakeSessions {
   try {
-    return asSessions(readText(file) ?? '{}') ?? {}
+    return asWakeSessions(parsed(readText(file) ?? '{}')) ?? {}
   } catch {
     return {}
   }
