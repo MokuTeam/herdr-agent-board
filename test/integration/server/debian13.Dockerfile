@@ -12,11 +12,12 @@ FROM debian:trixie
 ARG DOCKER=1
 ENV container=docker LANG=C.UTF-8
 
-# apt tries again when a mirror answers 502 (the PC's network can be flaky)
+# apt tries again when a mirror answers 502 (the PC's network can be flaky). libpam-systemd, which
+# systemd recommends and a server has: an SSH login is a logind session (KillUserProcesses applies)
 RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries \
  && apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      systemd systemd-sysv dbus openssh-server sudo curl ca-certificates iproute2 procps \
+      systemd systemd-sysv dbus libpam-systemd openssh-server sudo curl ca-certificates iproute2 procps \
  && rm -rf /var/lib/apt/lists/*
 
 # Docker CE, by the steps Docker documents (the board's own install is checked on a DOCKER=0 image)

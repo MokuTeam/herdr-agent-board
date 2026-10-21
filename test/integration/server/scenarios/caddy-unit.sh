@@ -1,24 +1,36 @@
 #!/bin/sh
 # caddy-unit: Caddy from the distribution's package as a systemd unit, two sites (case 2). As root,
-# on a DOCKER=1 test server. local_certs: their Caddy never asks a public CA in tests.
+# on a DOCKER=1 test server. Their Caddy never asks a public CA in tests.
 set -eu
 export DEBIAN_FRONTEND=noninteractive
 # a mirror can answer 502 now and then: apt tries again, three times
 apt_get() { for _ in 1 2 3; do apt-get "$@" && return 0; sleep 3; done; return 1; }
 apt_get update -qq
 apt_get install -y -qq --no-install-recommends caddy >/dev/null
-cat > /etc/caddy/Caddyfile <<'EOF'
+# Their certificates: their own sites' from Caddy's local CA. With THEIR_ACME (the integration
+# tests' Pebble) any other site, the board's once added, gets its certificate from that CA, whose
+# HTTPS root is THEIR_ACME_ROOT; else from the local CA too, as their sites'.
+if [ -n "${THEIR_ACME:-}" ]; then
+  global="	acme_ca $THEIR_ACME
+	acme_ca_root $THEIR_ACME_ROOT"
+  tls='	tls internal
+'
+else
+  global='	local_certs'
+  tls=''
+fi
+cat > /etc/caddy/Caddyfile <<EOF
 {
-	local_certs
+$global
 	skip_install_trust
 }
 
 a.example.com {
-	respond "site a"
+${tls}	respond "site a"
 }
 
 b.example.com {
-	respond "site b"
+${tls}	respond "site b"
 }
 EOF
 systemctl restart caddy

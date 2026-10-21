@@ -1507,16 +1507,23 @@ computer's panel, for its QR code.
 
 ### On the server
 
-What gives the tunnel its rights on the server (DNS, the tunnel's user, the socket's folder, the
-key, sshd) is yours to set up, by hand: the board runs none of it. These are the steps for the
-defaults: the user `boardtunnel`, the socket `/var/lib/boardtunnel/board.sock`, the domain
-`board.example.com`. Settings → Remote access… on the web board shows the same with your values,
-each with Copy. The server is yours alone (it ends HTTPS, so root there sees what passes), with
-Caddy and OpenSSH 7.8 or newer.
+Three steps, as Settings → Remote access… on the web board has them under **On the server**: the
+tunnel's own rights, by hand, once; Test connection; then the web server in front of the tunnel,
+which the board sets up over SSH when you click Apply on a plan it showed first, or which you set
+up by hand with the same commands. These are the steps for the defaults: the user `boardtunnel`,
+the socket `/var/lib/boardtunnel/board.sock`, the domain `board.example.com`. The panel shows the
+same with your values, each with Copy. The server is yours alone (it ends HTTPS, so root there
+sees what passes), with OpenSSH 7.8 or newer.
 
-**1. DNS.** An A (and AAAA) record for the domain points to the server.
+#### 1. By hand, once
 
-**2. A user for the tunnel, with no shell and no home, and the socket's folder:**
+What gives the tunnel its rights on the server stays yours: the board never makes the tunnel's
+user, its folder or its key, and never edits sshd's settings. A mistake in sshd_config can lock you
+out of your own server, and its `Match` block is the tunnel's fence: you see it and paste it.
+
+**DNS.** An A (and AAAA) record for the domain points to the server.
+
+**A user for the tunnel, with no shell and no home, and the socket's folder:**
 
 ```sh
 sudo useradd --system --user-group --no-create-home --home-dir /nonexistent \
@@ -1531,18 +1538,18 @@ sudo install -d -m 755 /etc/ssh/authorized_keys
 ```
 
 - The folder is the socket's own. It takes the tunnel user's own group, so this step works before
-  any web server is there; until the web server gets the folder's group (step 5), only root and
-  the tunnel's user can open the socket. A folder made with `-g caddy`, as these steps once said,
+  any web server is there; until the web server can read the folder (step 3), only root and the
+  tunnel's user can open the socket. A folder made with `-g caddy`, as these steps once said,
   works as it is.
-- The setgid bit (the `2` in `2750`) gives the socket the folder's group, so the web server can
-  open it once it has that group; the mask in step 4 makes it `srw-rw----`, its owner and that
+- The setgid bit (the `2` in `2750`) gives the socket the folder's group, so a web server with that
+  group can open it; the mask in sshd's block below makes it `srw-rw----`, its owner and that
   group only. The tunnel's user has no home and no file of its own on the server.
 - `usermod -p '*'`: `useradd` leaves `!` as the password, which locks the account. `*` matches no
   password either, but does not lock it. An sshd with `UsePAM yes` (Debian's and Ubuntu's
   default) lets the key in anyway; one with `UsePAM no` refuses a locked account ("Permission
   denied (publickey)").
 
-**3. The key, allowed to forward only**, in `/etc/ssh/authorized_keys/boardtunnel` (owner root,
+**The key, allowed to forward only**, in `/etc/ssh/authorized_keys/boardtunnel` (owner root,
 mode 644). Generate key in the panel (below) gives this line with your key:
 
 ```
@@ -1552,7 +1559,7 @@ restrict,port-forwarding ssh-ed25519 AAAA… agent-board@<PC>
 There is no `permitlisten`: it limits TCP listens only and says nothing of a socket's path. The
 sshd block and the folder's permissions keep the key to the socket.
 
-**4. sshd, a second fence for that user.** At the end of `/etc/ssh/sshd_config` (a `Match` block
+**sshd, a second fence for that user.** At the end of `/etc/ssh/sshd_config` (a `Match` block
 runs to the next `Match` or the end of the file), then `sudo sshd -t` and reload sshd (`sudo
 systemctl try-reload-or-restart ssh` on Debian and Ubuntu, `sshd` elsewhere; a plain `reload` fails
 on Ubuntu 26.04 while its socket-activated sshd has not started yet):
@@ -1593,20 +1600,128 @@ Match User boardtunnel
   `KbdInteractiveAuthentication`: before 8.7, sshd refuses `ChallengeResponseAuthentication` in a
   `Match` block.
 
-Steps 2 to 4 are also in the panel as one script, **All of step 1 in one paste**, once Generate key
+All of this is also in the panel as one script, **All of step 1 in one paste**, once Generate key
 has made the key: it stops at its first error, makes only what is missing, writes the keys file
 with your key, adds the `Match` block only when sshd_config has none for the tunnel's user, then
-runs `sshd -t` and reloads sshd. Pasting it twice changes nothing more.
+runs `sshd -t` and reloads sshd. Pasting it twice changes nothing more. Paste it over SSH, as an
+admin: on Ubuntu 24.04 an sshd that no one has connected to yet (a fresh server's web console)
+has no `/run/sshd`, and `sshd -t` stops there ("Missing privilege separation directory").
 
 No sshd or `authorized_keys` option names the paths a socket forward may take; the folder does.
-Only the tunnel's user (and root) can make a socket in it and only Caddy's group can open it, so
-no other user on the server can take the path. Elsewhere the tunnel's user can make a socket only
-where anyone may write (`/tmp`), and nothing connects to it there. What is left is the key
-itself: whoever holds it can take the board's path. The board's probe through the domain then
-fails and says so (below); Generate key makes a new key (its line replaces the old one on the
+Only the tunnel's user (and root) can make a socket in it and only the folder's group can open
+it, so no other user on the server can take the path. Elsewhere the tunnel's user can make a
+socket only where anyone may write (`/tmp`), and nothing connects to it there. What is left is
+the key itself: whoever holds it can take the board's path. The board's probe through the domain
+then fails and says so (below); Generate key makes a new key (its line replaces the old one on the
 server), and End all ends every login a stand-in may have caught.
 
-**5. Caddy**, in `/etc/caddy/Caddyfile`, then `sudo systemctl reload caddy`:
+**Firewall.** 22, 80 and 443 open (and 8443 when the board ends up there, case 4 below). The socket
+needs no rule: it is a file, not a port.
+
+#### 2. Test connection
+
+On this computer (below): ssh and the key ✓, the server takes the socket ✓, and the domain ✗
+until step 3 is done; while no setup is recorded the panel says so. It also pins the server's
+key, which step 3 needs: the admin connection takes only that key, and never pins one itself.
+
+#### 3. The web server
+
+The board connects as an **admin** of the server, a user with sudo you already use (or root), with
+the **admin key**: empty is what ssh does by default (the ssh agent, the usual `~/.ssh` keys), or a
+key file you name. It never asks for a key's passphrase (put such a key in the agent), never logs
+in with a password, and never makes, copies or keeps an admin key. The tunnel's own key is never
+used for this: it can run no command.
+
+- **Look at the server** reads and changes nothing: who holds 80 and 443 (a systemd unit, a
+  container, Docker's proxy), Docker (its version, Podman, rootless, user namespaces), the
+  distribution, the config of the web server it would touch (its path, how it is mounted, its
+  host names, its hash), sshd's settings for the tunnel's user and the socket folder's mode and
+  group (as step 1 should have made them), the domain's DNS, and an earlier setup's record. Your
+  config's text never leaves the server: only its host names and a few facts do.
+- **The plan.** The case Look found, the address the board will have, and numbered steps, each
+  with what it touches: files, the one line or block in a file of yours, backups, containers,
+  volumes, images, packages, the folder's group, reloads; then what Undo will remove. A plan that
+  installs Docker has a tick, "Install Docker from Docker's own repository", and Apply stays off
+  until it is ticked.
+- **Apply** runs the plan on the server as one script, detached from the connection, under a
+  lock, at most 20 minutes; the panel follows it step by step. Every step checks before it acts,
+  so Apply twice changes nothing ("Nothing to change"). The run first checks that the server is as
+  Look saw it (who holds the ports, your config's hash, your container): if not, it stops before
+  any change ("Look again"). A step that fails rolls back everything the run did, newest first,
+  and the panel says what was put back. A lost connection (the PC asleep) neither stops nor
+  half-finishes a run: it ends on the server by itself, and the next Look reads how. A run told to
+  stop (TERM: the 20 minutes, a shutdown) lets its step end, then rolls back; one killed outright
+  (a power cut) leaves a record that names what it was changing, and the next Look offers its Undo.
+  Where systemd-logind has `KillUserProcesses=yes` (off by default on Debian and Ubuntu), a lost
+  connection ends the run with your login session: on Debian 13 the step going on is ended and the
+  run rolls back; on Ubuntu 26.04 the run is killed outright, and the next Look offers its Undo,
+  which puts your files back as they were. After Apply, Test connection runs again, up to 2
+  minutes, while the certificate comes.
+- **Undo** (two clicks) looks again first, then shows its own plan: your line or block taken out
+  of your file as it is now (not the backup: your edits since stay), your web server checked and
+  reloaded, the board's containers and volumes removed (by name and label: one with the name but
+  not the label is not the board's), its images only when it pulled them and nothing else uses
+  them, the folder's group back, a file of the board's you edited only when you tick it, Docker
+  only when the board installed it, nothing else uses it and you tick it, and last
+  `/etc/agent-board`. What you made by hand in step 1 stays; the Undo plan ends with the commands
+  to remove it, to copy if you want to.
+- **sudo.** Root needs none; sudo without a password is used as it is (`sudo -n`); otherwise the
+  panel asks for the password once and keeps it while the panel is open. The board writes it,
+  for one Look, Apply or Undo, to ssh's stdin for `env LC_ALL=C sudo -S -p '' -- sh -c 'eval
+  "$(echo <the script in base64> | base64 -d)"'`, and drops it. One attempt per click: a wrong
+  one is not tried again (some servers lock sudo after a few). sudo and sudo-rs (Ubuntu 25.10's and
+  26.04's) alike; `requiretty` (classic sudo) and an admin without sudo get "Do it myself".
+- **What is kept, and what never is.** On the server, `/etc/agent-board`: the record
+  (`setup.json`: the case, the tunnel's user and socket, the domain and port, and each thing the
+  board added), backups of your files (for a run's own rollback only), the last five runs'
+  scripts and logs, the lock. In config.json, `tunnel.admin` and a summary, `tunnel.setup`. No
+  secret is in any of it: the sudo password is never on disk on either side, nor in a log, a URL,
+  an answer or a command line; a run's output goes to the panel, and `web.log` gets one line per
+  step (its name, ✓ or ✗, how long). The record on the server is what Undo follows, so a
+  reinstalled board or another PC with the same tunnel user and socket can undo the setup.
+- **Which servers.** Debian 12 and 13; Ubuntu 22.04, 24.04, 25.10 and 26.04; with sudo, sudo-rs or
+  root, and systemd. Docker, when the board installs it, comes from Docker's own apt repository by
+  the steps Docker documents, its key checked by fingerprint. Anything else, and what the board
+  does not do by itself (below), gets "Do it myself".
+
+| On 443 | On 80 | Case | The board's address |
+|---|---|---|---|
+| nothing | nothing | 1: the board's own Caddy in a container on 80 and 443 | `https://<domain>` |
+| nothing | something else | 1b: the board's Caddy on 443 alone (certificate by TLS-ALPN) | `https://<domain>` |
+| Caddy as a systemd service | any | 2: a site file of the board's and one `import` line in your Caddyfile | `https://<domain>` |
+| Caddy in Docker on a user network, or the host network | any | 3a, 3b: a marked block in your Caddyfile and a small helper container | `https://<domain>` |
+| something else | nothing | 4a: the board's Caddy on 8443, and on 80 for the certificate | `https://<domain>:8443` |
+| something else | nginx as a service, including `conf.d` | 4b: as 4a; a file of the board's in nginx's `conf.d` passes on the certificate checks | `https://<domain>:8443` |
+| anything else | | Do it myself | |
+
+"Anything else": Caddy in Docker on the default bridge only, Apache or Traefik on 80 with 443
+taken, two programs on one port; the domain already in your config; Podman, rootless Docker,
+Docker with user namespaces, SELinux enforcing; another board's setup on the server. A Caddy the
+board does not edit (run from JSON or `--resume`, its admin endpoint or automatic HTTPS off, its
+Caddyfile baked into its image, Caddy 1) is left alone: case 4 when 80 allows it, else "Do it
+myself". Case 4 sets `tunnel.publicPort` to 8443 and its Undo back; open 8443 at your provider.
+
+#### Do it myself
+
+**Do it myself** in the panel gives the plan of the case Look found as commands, step by step,
+each with why, Copy, what to check after and how to undo it; without Look, pick the case and the
+commands keep `<placeholders>` for what Look would have filled in, each with the command that
+finds it. In short, for the defaults:
+
+- **Nothing on 80 and 443 (1, 1b).** Docker, then the board's Caddy in a container of its own:
+  `--cap-drop ALL` (it keeps `NET_BIND_SERVICE`), `no-new-privileges`, the socket's folder (not the
+  socket) mounted read-only, `--group-add` the folder's group, its config folder
+  `/etc/agent-board/caddy` read-only, its certificates in volumes of its own, the images pinned by
+  tag and digest.
+- **Caddy as a service (2).** The board's site in `/etc/caddy/agent-board/board.caddy`, this one
+  line at the end of your Caddyfile, `caddy validate` as Caddy's user, then
+  `sudo systemctl reload caddy`:
+
+  ```
+  import /etc/caddy/agent-board/board.caddy # agent-board
+  ```
+
+  The site is this block (the board's file has it with a comment line first):
 
 ```
 board.example.com {
@@ -1615,29 +1730,55 @@ board.example.com {
 }
 ```
 
-Caddy from its package runs as the user `caddy`: give its group the socket's folder (`chmod` puts
-back the setgid bit `chgrp` may clear). If yours runs as another, use that group.
+  and the folder takes Caddy's group (its package runs it as `caddy`; `chmod` puts back the setgid
+  bit `chgrp` may clear):
 
 ```sh
 sudo chgrp caddy /var/lib/boardtunnel && sudo chmod 2750 /var/lib/boardtunnel
 ```
 
+- **Caddy in Docker (3a, 3b).** This block at the end of your Caddyfile, written in place (a file
+  bind mount keeps the file it had: an editor's save-and-rename would never reach your
+  container), validated inside your container, then `caddy reload` there (no restart):
+
+```
+# >>> agent-board: the board through its tunnel. Added by "Set up the server"; its Undo removes it.
+board.example.com {
+	reverse_proxy agent-board-socket:8080
+	header Strict-Transport-Security "max-age=31536000"
+}
+# <<< agent-board
+```
+
+  and the board's helper, `alpine/socat` as nobody with the folder's group, read-only, on your
+  Caddy's network (3a) or listening on the host's 127.0.0.1:8481 (3b, with `127.0.0.1:8481` in the
+  block instead).
+- **nginx or something else (4a, 4b).** The board's Caddy on 8443; on 80 too when 80 is free (4a),
+  or behind your nginx for `/.well-known/acme-challenge/` of the domain only, through a file of
+  its own in `conf.d` (4b). Nothing of yours changes. nginx as the board's own proxy (no Caddy)
+  gets this note only: the socket's folder then takes nginx's group (`www-data` on Debian and
+  Ubuntu), and the domain's `server` block passes everything to
+  `proxy_pass http://unix:/var/lib/boardtunnel/board.sock:;` with `proxy_buffering off;`,
+  `proxy_http_version 1.1;`, `proxy_set_header Connection "";`, `proxy_read_timeout 1h;`,
+  `proxy_set_header Host $host;`, `proxy_set_header X-Forwarded-For $remote_addr;`,
+  `proxy_set_header X-Forwarded-Proto https;`.
+
 Caddy gets and renews the certificate, keeps the Host header, sets `X-Forwarded-For` and
 `X-Forwarded-Proto` itself (over anything the caller sent), and passes event streams on at once.
 The board's live updates and the terminal are event streams: put no `encode` in front of the board
-unless you have checked that they still flow, since compression can hold them back.
+unless you have checked that they still flow, since compression can hold them back. The board
+sends `X-Accel-Buffering: no` on its event streams through the tunnel too.
 
-**6. Firewall.** Only 22, 80 and 443 open. The socket needs no rule: it is a file, not a port.
-
-**7. nginx instead of Caddy** gets this note only; Caddy is the one supported. The socket's folder
-then takes nginx's group (`chgrp` as in step 5, with `www-data` on Debian and Ubuntu, `nginx`
-elsewhere), and the domain's `server` block passes everything to the socket,
-`proxy_pass http://unix:/var/lib/boardtunnel/board.sock:;`, without buffering the streams and
-with the headers the board needs: `proxy_buffering off;`, `proxy_http_version 1.1;`,
-`proxy_set_header Connection "";`, `proxy_read_timeout 1h;`, `proxy_set_header Host $host;`,
-`proxy_set_header X-Forwarded-For $remote_addr;`, `proxy_set_header X-Forwarded-Proto https;`.
-The panel has the whole `location` block under "With nginx instead of Caddy". The board sends
-`X-Accel-Buffering: no` on its event streams through the tunnel too.
+**Case 3 turns the socket into a TCP port again, inside your Docker.** Your Caddy cannot see the
+host's socket, and giving it a mount would mean recreating your container, so the board's helper
+passes bytes from a TCP port to the socket. In 3a that port lives in the helper's own network
+namespace, on your Caddy's network, not on any of the host's addresses; in 3b it is on the
+host's loopback, free while the helper is down. What can connect around your Caddy (your other
+containers on that network in 3a, any process on the host in 3b, root) still meets the board's
+login on every board route, and can send its own `X-Forwarded-*`, which the board uses only to
+show addresses and group its rate limits. While the helper is on your network, `docker compose
+down` cannot remove that network and says so ("Resource is still in use"); your containers stop
+as usual, and `up` works.
 
 ### On this computer
 
@@ -1653,7 +1794,7 @@ the domain or Tailscale. It has three parts: Tunnel, Login and Active logins.
    ends every login; the panel asks first. Changing the public port keeps both.
 2. **Generate key**: an Ed25519 key without a passphrase in the state folder (`tunnel/id_ed25519`),
    that only you can read (on Windows the board sets its ACL), and its line for the keys file
-   (step 3 above), with Copy. Generated again, it replaces the old one, and the server needs the
+   (step 1 above), with Copy. Generated again, it replaces the old one, and the server needs the
    new line; the panel asks first. A key of your own (`tunnel.key`) is used as it is: no
    passphrase, its rights yours to set.
 3. **Test connection**, with the tunnel still off. Each step ✓ or ✗, with what to fix: ssh and the
@@ -1962,9 +2103,14 @@ the one Generate key made, `tunnel/id_ed25519` in the state folder), `socket` (t
 the server, `/var/lib/boardtunnel/board.sock`), `domain` (a bare host name such as
 `board.example.com`), `publicPort` (the port the server serves the domain on; empty: 443. Another
 one makes the board's address `https://<domain>:<publicPort>`: the Host and Origin it takes, the
-passkeys' origin and the probe follow it; the passkeys and logins stay), `port` (the tunnel
-listener's on 127.0.0.1; empty: the web board's port plus two). None of it is secret. The board
-checks every field before it uses it, and runs nothing while one does not check out.
+passkeys' origin and the probe follow it; the passkeys and logins stay; case 4 of the web
+server's setup sets it to 8443 and its Undo back), `port` (the tunnel listener's on 127.0.0.1;
+empty: the web board's port plus two), `admin` (`{ "user", "key" }`: who the board connects as to
+set up the web server, [step 3](#3-the-web-server); `key` empty: the ssh agent and the usual
+`~/.ssh` keys), `setup` (`{ "case", "address", "at" }`: what Apply set up, a summary of the
+server's own record, filled in from it when missing; Undo removes it). None of it is secret: the
+sudo password is never in it. The board checks every field before it uses it, and runs nothing
+while one does not check out.
 
 Cards: `%LOCALAPPDATA%\herdr\plugins\agent-board\cards\<session id>.json`. Sessions in the archive:
 `archive\<session id>.json` beside them (see [Archive](#archive)).
@@ -2034,6 +2180,31 @@ and `src/server/routes/access.ts` (the panel's view and changes), `src/services/
 run the real ssh: `BOARD_SSH_BIN_PATH` and `BOARD_SSH_KEYGEN_BIN_PATH` name other binaries (a fake
 in `test/support`), and `BOARD_TUNNEL_PROBE_ORIGIN` another origin than `https://<domain>` for the
 probe.
+
+Setting up the web server on the server: `src/core/server-look.ts` (Look's two scripts and their
+parsers, into `src/core/server-facts.ts`'s types), `src/core/server-plan.ts` (the case, the plan per
+case, the record and whose it is, Undo, the facts "Do it myself" fills with placeholders),
+`src/core/server-texts.ts` (what the board puts on the server: its Caddyfile, the site, the line,
+the marked block, nginx's file, its containers' argv, Docker's install, the pinned images),
+`src/core/server-script.ts` (the run, its launch and follower, the progress, "Do it myself"'s
+blocks), `src/core/server-shell.ts` (shell words), `src/core/server-admin.ts` (the admin's ssh line,
+sudo's probe, the remote command, the hints), `src/core/server-view.ts`,
+`src/services/server-setup.ts` (Look, Apply, Undo over the admin connection),
+`web/src/components/access/ServerSetup.tsx` and `DoItMyself.tsx`, `web/src/models/server-setup.ts`.
+`BOARD_SETUP_ACME_CA` (a directory URL) and `BOARD_SETUP_ACME_CA_ROOT` (a PEM's path on the
+server), both set, give the board's own Caddy a test CA (tests only; without them its Caddyfile
+names no CA).
+
+The integration tests run on Docker Desktop, never on a server of yours, and only when asked:
+`BOARD_SERVER_IT=1 bun test test/integration/server-setup.test.ts --timeout 3600000` builds the
+test servers of `test/integration/server/` (systemd, sshd, sudo, Docker inside) and runs every
+scenario on Debian 13 and Ubuntu 26.04 side by side, and three on Ubuntu 24.04 (with
+`BOARD_SERVER_IT_ALL=1` also on Debian 12 and Ubuntu 22.04): a sandboxed board with Windows' own
+ssh, Pebble as the CA, a stand-in board at the tunnel's end, about an hour.
+`BOARD_DOCKER_IT=1 bun test test/integration/two-proxies.test.ts` proves that their proxy and the
+board's serve side by side, with the board's own images, flags and texts (a few minutes).
+`BOARD_IT_KEEP=1` keeps the built images and the Docker Hub mirror for the next run. Without these
+variables `bun test` skips them and starts no container.
 
 `herdr-wake/` is a herdr plugin of its own, on Node.js rather than Bun: `bun test`, `bun run check`
 and tsc leave it out (their roots are `test`, `src`, `web/src`), and its tests run with

@@ -325,3 +325,23 @@ describe('installing Docker from Docker’s own repository', () => {
 test('the page can import it: no node: import', () => {
   expect(readFileSync('src/core/server-texts.ts', 'utf8')).not.toMatch(/from 'node:/)
 })
+
+describe('the README describes the server setup with the board’s own texts', () => {
+  const readme = readFileSync('README.md', 'utf8').replaceAll('\r\n', '\n')
+  const lines = readme.split('\n')
+  /** The text of every fenced block that opens at column 0, as a copy from the page would give it. */
+  const fences = [...readme.matchAll(/^```[^\n]*\n([\s\S]*?)\n```$/gm)].map(m => m[1] ?? '')
+
+  test('case 2’s import line and case 3’s marked block for the defaults, word for word', () => {
+    expect(lines.map(l => l.trim())).toContain(IMPORT_LINE)
+    expect(fences).toContain(markedBlock(W, 'agent-board-socket:8080'))
+  })
+
+  test('On the server in the panel’s three steps, in order', () => {
+    const at = (heading: string): number => lines.indexOf(heading)
+    const steps = ['#### 1. By hand, once', '#### 2. Test connection', '#### 3. The web server'].map(at)
+    expect(steps.every(n => n > at('### On the server'))).toBe(true)
+    expect(steps).toEqual([...steps].sort((a, b) => a - b))
+    expect(steps.every(n => n < at('### On this computer'))).toBe(true)
+  })
+})
