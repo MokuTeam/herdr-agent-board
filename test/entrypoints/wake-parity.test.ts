@@ -118,7 +118,7 @@ async function statusOnceSeen(url: string): Promise<Record<string, unknown>> {
 }
 
 test.skipIf(!node)(
-  'the new wake answers /sleeping, /awake and /status field for field as the old router, but each session’s profile',
+  'the new wake answers /sleeping, /awake and /status field for field as the old router, but each session’s profile and Telegram’s state',
   async () => {
     const box = await wakeSandbox()
     runningSession(join(box.env.HOME as string, '.claude'), {
@@ -145,7 +145,9 @@ test.skipIf(!node)(
     expect(withoutProfile(newAwake)).toEqual(awake)
 
     const was = await statusOnceSeen(old)
-    const is = await statusOnceSeen(now)
+    // Telegram's state is the one field /status adds: off, as the old router's was without tg-mcp.
+    const { telegram, ...is } = await statusOnceSeen(now)
+    expect(telegram).toEqual({ state: 'off' })
     expect(Object.keys(is)).toEqual(Object.keys(was))
     expect(Object.values(is).map(kind)).toEqual(Object.values(was).map(kind))
     // pid and started are each process's own; the rest is the same.
