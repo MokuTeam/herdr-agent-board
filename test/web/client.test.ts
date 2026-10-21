@@ -42,6 +42,13 @@ test('a board payload has its lists, version and staleness', () => {
   expect(isBoardPayload(null)).toBe(false)
 })
 
+test("the Remote access view's revision: a number, or none from a board before it", () => {
+  expect(isBoardPayload({ ...payload(), accessRev: 3 })).toBe(true)
+  expect(isBoardPayload({ ...payload(), accessRev: undefined })).toBe(true)
+  expect(isBoardPayload({ ...payload(), accessRev: '3' })).toBe(false)
+  expect(isBoardPayload({ ...payload(), accessRev: null })).toBe(false)
+})
+
 const PROFILE = {
   id: 'default',
   title: 'Private',

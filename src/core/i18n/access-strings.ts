@@ -59,6 +59,11 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     // Task 13: the board's own files
 
     // Task 14: Remote access on the local board
+    'access.domainSure':
+      'Changing the domain removes every passkey (they belong to the old one) and ends every login. Change it?',
+    'access.keySure':
+      'A new key replaces this one: the server needs its public key before the tunnel works again. Replace it?',
+    'access.err.notReady': 'Set up the password and the code first',
 
     // Task 15: board tunnel
 
@@ -139,6 +144,11 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     // Task 13: the board's own files
 
     // Task 14: Remote access on the local board
+    'access.domainSure':
+      'Смена домена удалит все ключи доступа (они принадлежат старому) и завершит все входы. Сменить?',
+    'access.keySure':
+      'Новый ключ заменит этот: прежде чем туннель снова заработает, серверу нужен его открытый ключ. Заменить?',
+    'access.err.notReady': 'Сначала настройте пароль и код',
 
     // Task 15: board tunnel
 

@@ -23,6 +23,7 @@ import {
   resolveProfileDir,
   shownProfiles,
 } from '../core/profiles.ts'
+import type { TunnelField } from '../core/tunnel.ts'
 import type { Category, Config } from '../core/types.ts'
 import { allCards, writeCard } from './cards.ts'
 import { isRecord, readJson, replaceFile } from './json-store.ts'
@@ -75,6 +76,35 @@ export function setPwaOn(on: boolean): EditResult {
   const remote = isRecord(raw.remote) ? raw.remote : raw.remote === true ? { on: true } : {}
   const pwa = isRecord(remote.pwa) ? remote.pwa : {}
   raw.remote = { ...remote, ...(on ? { on: true } : {}), pwa: { ...pwa, on } }
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/** config.json's `tunnel` object as it is on disk (core/tunnel.ts reads it), or a new one. */
+const tunnelOf = (raw: Raw): Raw => (isRecord(raw.tunnel) ? { ...raw.tunnel } : {})
+
+/**
+ * Change the tunnel's settings (core/tunnel.ts) in config.json, keeping its other fields (and the
+ * file's): each field given is set, a null or '' value removes it (its default then), and one left
+ * out or undefined stays as it is. Checking them is the caller's (fieldProblem).
+ */
+export function editTunnel(fields: Partial<Record<TunnelField, unknown>>): EditResult {
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  const tunnel = tunnelOf(raw)
+  for (const [field, value] of Object.entries(fields)) {
+    if (value === undefined) continue
+    if (value === null || value === '') delete tunnel[field]
+    else tunnel[field] = value
+  }
+  raw.tunnel = tunnel
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/** Turn the tunnel on or off in config.json, keeping its other fields; the running board follows (liveConfig). */
+export function setTunnelOn(on: boolean): EditResult {
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  raw.tunnel = { ...tunnelOf(raw), on }
   writeRaw(raw)
   return { ok: true }
 }

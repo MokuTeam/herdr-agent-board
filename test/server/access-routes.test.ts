@@ -1,0 +1,521 @@
+// Remote access on the local board (services/remote-access.ts, server/routes/access.ts): the panel's
+// view from GET /api/access and every change through POST /api/access, both on the web board on
+// 127.0.0.1 only; and the tunnel's ssh, run by the board that holds the web port. ssh and
+// ssh-keygen are the fake (test/support/fake-ssh.ts), which also stands in for Caddy: with
+// `ssh.proxyPort` in its state, it passes what comes to that port on to its -R target, as Caddy
+// passes the domain on through the socket. The probe through the domain goes there too
+// (BOARD_TUNNEL_PROBE_ORIGIN).
+import { beforeAll, describe, expect, onTestFinished, test } from 'bun:test'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { hostname } from 'node:os'
+import { join } from 'node:path'
+import { type AccessView, isAccessView } from '../../src/core/access.ts'
+import { REMOTE_API } from '../../src/core/remote.ts'
+import { base32Bytes, totpCode, totpStep } from '../../src/core/totp.ts'
+import { forwardSpec, sshArgs, tunnelConfig } from '../../src/core/tunnel.ts'
+import { logged, serveBoard, sharedSandbox, unusedPort } from '../support/board-server.ts'
+import { fakeSshBin } from '../support/fake-ssh-bin.ts'
+import { type Child, type Sandbox, sandbox, until } from '../support/sandbox.ts'
+import {
+  DOMAIN,
+  PASSWORD,
+  seedAccess,
+  seededLogin,
+  stateFolder,
+  viaCaddy,
+  writeState,
+} from '../support/tunnel-board.ts'
+
+const PUBLIC_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKEKEY'
+const FINGERPRINT = 'SHA256:FAKEfingerprint (ED25519)'
+const LOGIN = 'L'.repeat(43)
+
+type Reply = Record<string, unknown>
+
+/** A sandbox's fake ssh: its state, its log (one argv per line) and the pids of the ssh it ran (fake-ssh.ts). */
+function fakeSsh(box: Sandbox, proxyPort: number) {
+  const stateFile = join(box.dir, 'ssh-state.json')
+  const log = join(box.dir, 'ssh-calls.jsonl')
+  writeFileSync(stateFile, JSON.stringify({ ssh: { proxyPort, domain: DOMAIN } }))
+  const lines = (file: string): string[] =>
+    existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : []
+  return {
+    stateFile,
+    log,
+    /** The ssh calls (an argument list with -R), oldest first; ssh-keygen's are left out. */
+    sshCalls: (): string[][] =>
+      lines(log)
+        .map(line => JSON.parse(line) as string[])
+        .filter(a => a.includes('-R')),
+    /** Each ssh the fake ran, by its pid. */
+    pids: (): number[] => lines(`${log}.pids`).map(Number),
+  }
+}
+
+/** The environment a board needs for the fake as both programs, and the probe through its proxy. */
+async function fakeEnv(box: Sandbox, proxyPort: number): Promise<Record<string, string>> {
+  const bin = await fakeSshBin()
+  const { stateFile, log } = fakeSsh(box, proxyPort)
+  return {
+    BOARD_SSH_BIN_PATH: bin,
+    BOARD_SSH_KEYGEN_BIN_PATH: bin,
+    FAKE_SSH_STATE: stateFile,
+    FAKE_SSH_LOG: log,
+    BOARD_TUNNEL_PROBE_ORIGIN: `http://127.0.0.1:${proxyPort}`,
+  }
+}
+
+/** A process of ours runs under the pid. */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Nothing listens on `base` (the connection is refused). */
+const refuses = (base: string): Promise<boolean> =>
+  fetch(`${base}/api/hello`, { headers: { host: DOMAIN, 'x-forwarded-proto': 'https' } }).then(
+    () => false,
+    () => true,
+  )
+
+/** Waits until `ok` resolves true, within `ms`. */
+async function eventually(ok: () => Promise<boolean>, ms = 5000): Promise<void> {
+  const deadline = Date.now() + ms
+  while (!(await ok())) {
+    if (Date.now() > deadline) throw new Error('Timed out waiting')
+    await Bun.sleep(25)
+  }
+}
+
+/** The local board's Remote access, through `url`. */
+function local(url: string) {
+  const view = async (): Promise<AccessView> => {
+    const v: unknown = await (await fetch(`${url}/api/access`)).json()
+    if (!isAccessView(v)) throw new Error(`not a view: ${JSON.stringify(v)}`)
+    return v
+  }
+  return {
+    view,
+    /** POST /api/access as the panel sends it: its status and its JSON. */
+    async op(body: unknown): Promise<[number, Reply]> {
+      const res = await fetch(`${url}/api/access`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-board': '1' },
+        body: JSON.stringify(body),
+      })
+      return [res.status, (await res.json()) as Reply]
+    },
+    /** The view once `ok` holds for it, within `ms`. */
+    async viewWhen(ok: (v: AccessView) => boolean, ms = 15_000): Promise<AccessView> {
+      const deadline = Date.now() + ms
+      for (;;) {
+        const v = await view()
+        if (ok(v)) return v
+        if (Date.now() > deadline) throw new Error(`the view never got there: ${JSON.stringify(v.tunnel.status)}`)
+        await Bun.sleep(50)
+      }
+    },
+    accessRev: async (): Promise<unknown> => ((await (await fetch(`${url}/api/board`)).json()) as Reply).accessRev,
+  }
+}
+
+/**
+ * Free ports for the web board, the tunnel listener and the fake's proxy. The tunnel's is never
+ * one the board takes itself (the web port, the phone's browser's next to it): the OS may hand
+ * out free ports one after the other.
+ */
+async function freePorts(): Promise<{ web: number; tunnel: number; proxy: number }> {
+  const web = await unusedPort()
+  let tunnel = await unusedPort()
+  while (tunnel === web || tunnel === web + 1) tunnel = await unusedPort()
+  return { web, tunnel, proxy: await unusedPort() }
+}
+
+/** The number of times the board read config.json again (runner.ts with TEST_LIVE_CONFIG). */
+const reloads = (proc: Child): number => proc.messages.filter(m => (m as { reloaded?: boolean }).reloaded).length
+
+describe('Remote access, set up from the local board', () => {
+  const shared = sharedSandbox()
+  let box: Sandbox
+  let proc: Child
+  let url = ''
+  let webPort = 0
+  let tunnelPort = 0
+  let proxyPort = 0
+  let bin = ''
+  let ssh: ReturnType<typeof fakeSsh>
+  let configPath = ''
+  let api: ReturnType<typeof local>
+  let state = ''
+  /** The tunnel's settings that check out, as the panel saves them. */
+  let settings: Record<string, unknown> = {}
+
+  /** config.json written by hand, then read again by the board. */
+  async function writeConfig(value: unknown): Promise<void> {
+    const before = reloads(proc)
+    writeFileSync(configPath, JSON.stringify(value, null, 2))
+    await until(() => reloads(proc) > before)
+  }
+  /** An op that writes config.json, and the board reading it again. */
+  async function opReloaded(body: unknown): Promise<[number, Reply]> {
+    const before = reloads(proc)
+    const answer = await api.op(body)
+    await until(() => reloads(proc) > before)
+    return answer
+  }
+
+  beforeAll(async () => {
+    box = await shared()
+    ;({ web: webPort, tunnel: tunnelPort, proxy: proxyPort } = await freePorts())
+    bin = await fakeSshBin()
+    ssh = fakeSsh(box, proxyPort)
+    state = stateFolder(box)
+    settings = { host: 'ssh.example.com', user: 'boardtunnel', domain: DOMAIN, port: tunnelPort }
+    // The board reads config.json as it changes, as the real one does (TEST_LIVE_CONFIG).
+    const cfg = {
+      language: 'en',
+      categories: [{ id: 'other', title: 'Other', color: 'gray' }],
+      wakeUrl: null,
+      refreshSec: 3600,
+      port: webPort,
+    }
+    configPath = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
+    mkdirSync(join(configPath, '..'), { recursive: true })
+    writeFileSync(configPath, JSON.stringify(cfg, null, 2))
+    ;({ proc } = await serveBoard(box, cfg, { ...(await fakeEnv(box, proxyPort)), TEST_LIVE_CONFIG: '1' }))
+    url = `http://127.0.0.1:${webPort}`
+    api = local(url)
+  }, 30_000)
+
+  test('nothing set up: the default settings, what is missing, and On refused with the reason', async () => {
+    const v = await api.view()
+    expect(v.tunnel.settings).toEqual(tunnelConfig(undefined))
+    expect(v.tunnel.problems.map(p => p.field)).toEqual(['host', 'user', 'domain'])
+    expect(v.tunnel.blocked).toBe('Server: needed')
+    expect(v.tunnel.listenPort).toBe(webPort + 2)
+    expect(v.tunnel.status.state).toBe('off')
+    expect(v.tunnel.ssh).toBe(bin)
+    expect(v.tunnel.key).toEqual({
+      path: join(state, 'tunnel', 'id_ed25519'),
+      generated: true,
+      exists: false,
+      publicKey: null,
+      error: null,
+    })
+    expect(v.tunnel.hostKey).toBeNull()
+    expect(v.login).toEqual({ password: false, totp: false, passkeys: [], lockout: null })
+    expect([v.logins, v.attempts]).toEqual([[], []])
+    expect(await api.op({ op: 'on' })).toEqual([409, { ok: false, error: 'Server: needed' }])
+    expect(await api.op({ op: 'sideways' })).toEqual([400, { ok: false, error: 'unknown op sideways' }])
+    // A change needs the board's own page, as every POST on the web board.
+    const bare = await fetch(`${url}/api/access`, { method: 'POST', body: JSON.stringify({ op: 'off' }) })
+    expect(bare.status).toBe(403)
+    expect(typeof (await api.accessRev())).toBe('number')
+    expect(ssh.sshCalls()).toEqual([])
+  })
+
+  test('a field that fails its check is refused and nothing is written; the ones that check out are saved', async () => {
+    const before = readFileSync(configPath, 'utf8')
+    expect(await api.op({ op: 'tunnel', fields: { host: '-oProxyCommand=calc' } })).toEqual([
+      409,
+      {
+        ok: false,
+        field: 'host',
+        error: 'The server is a host name or an address, without spaces, @ or a leading dash',
+      },
+    ])
+    // the whole edit, the good fields with it
+    const [status, refused] = await api.op({ op: 'tunnel', fields: { user: 'boardtunnel', socket: '/tmp/b.sock' } })
+    expect([status, refused.field]).toEqual([409, 'socket'])
+    // only the tunnel's fields: never `on` past its checks
+    expect((await api.op({ op: 'tunnel', fields: { on: true } }))[0]).toBe(400)
+    expect(readFileSync(configPath, 'utf8')).toBe(before)
+
+    expect(await opReloaded({ op: 'tunnel', fields: { ...settings, domain: ' Board.Example.COM ' } })).toEqual([
+      200,
+      { ok: true },
+    ])
+    expect((JSON.parse(readFileSync(configPath, 'utf8')) as Reply).tunnel).toEqual(settings)
+    const v = await api.view()
+    expect(v.tunnel.settings).toEqual(tunnelConfig(settings))
+    expect(v.tunnel.problems).toEqual([])
+    expect(v.tunnel.listenPort).toBe(tunnelPort)
+    // the settings check out; the login is not set up yet
+    expect(v.tunnel.blocked).toBe('Set up the password and the code first')
+    expect(await api.op({ op: 'on' })).toEqual([409, { ok: false, error: 'Set up the password and the code first' }])
+  })
+
+  test('the code and the password, set up here: the secret goes out once, in its own answer only', async () => {
+    const [status, begun] = await api.op({ op: 'totp-begin' })
+    expect(status).toBe(200)
+    expect(begun).toEqual({ ok: true, secret: expect.stringMatching(/^[A-Z2-7]{32}$/), uri: expect.any(String) })
+    const secret = String(begun.secret)
+    expect(String(begun.uri)).toStartWith('otpauth://totp/')
+    expect(String(begun.uri)).toContain(`secret=${secret}`)
+    expect(decodeURIComponent(String(begun.uri))).toContain(DOMAIN)
+    expect(await (await fetch(`${url}/api/access`)).text()).not.toContain(secret)
+    expect(await (await fetch(`${url}/api/board`)).text()).not.toContain(secret)
+    const code = totpCode(base32Bytes(secret) ?? new Uint8Array(), totpStep(Date.now()))
+    expect(await api.op({ op: 'totp-confirm', code })).toEqual([200, { ok: true }])
+    expect((await api.view()).login).toMatchObject({ password: false, totp: true })
+    // saved now, and still never shown
+    expect(await (await fetch(`${url}/api/access`)).text()).not.toContain(secret)
+    expect(await (await fetch(`${url}/api/board`)).text()).not.toContain(secret)
+
+    expect(await api.op({ op: 'password', password: 'too short' })).toEqual([
+      409,
+      { ok: false, error: 'A password has at least 12 characters' },
+    ])
+    expect(await api.op({ op: 'password', password: PASSWORD })).toEqual([200, { ok: true }])
+    const v = await api.view()
+    expect(v.login).toMatchObject({ password: true, totp: true })
+    expect(v.tunnel.blocked).toBeNull()
+  })
+
+  test('config.json edited by hand with a host that would reach ssh as an option: no ssh, no listener', async () => {
+    const good = JSON.parse(readFileSync(configPath, 'utf8')) as Reply
+    await writeConfig({ ...good, tunnel: { ...settings, on: true, host: '-oProxyCommand=calc' } })
+    const v = await api.viewWhen(x => x.tunnel.settings.on)
+    expect(v.tunnel.problems.map(p => p.field)).toEqual(['host'])
+    expect(v.tunnel.blocked).toBe('The server is a host name or an address, without spaces, @ or a leading dash')
+    await Bun.sleep(500)
+    expect(await refuses(`http://127.0.0.1:${tunnelPort}`)).toBe(true)
+    expect(ssh.sshCalls()).toEqual([])
+    expect((await api.view()).tunnel.status.state).toBe('off')
+    await writeConfig(good)
+  })
+
+  test('Generate key: the board’s own key, made once unless replaced', async () => {
+    const publicKey = `${PUBLIC_KEY} agent-board@${hostname()}`
+    expect(await api.op({ op: 'key-generate' })).toEqual([200, { ok: true, publicKey }])
+    const v = await api.view()
+    expect(v.tunnel.key).toEqual({
+      path: join(state, 'tunnel', 'id_ed25519'),
+      generated: true,
+      exists: true,
+      publicKey,
+      error: null,
+    })
+    expect(await api.op({ op: 'key-generate' })).toEqual([
+      409,
+      {
+        ok: false,
+        confirm: 'key',
+        error:
+          'A new key replaces this one: the server needs its public key before the tunnel works again. Replace it?',
+      },
+    ])
+    expect(await api.op({ op: 'key-generate', replace: true })).toEqual([200, { ok: true, publicKey }])
+  })
+
+  test('Test connection with the tunnel off: an ssh of its own, to a listener for its probe only, ended after', async () => {
+    const before = ssh.sshCalls().length
+    const pidsBefore = ssh.pids().length
+    const [status, answer] = await api.op({ op: 'test' })
+    expect(status).toBe(200)
+    expect(answer.ok).toBe(true)
+    const steps = answer.steps as { id: string; ok: boolean | null }[]
+    expect(steps.map(s => [s.id, s.ok])).toEqual([
+      ['ssh', true],
+      ['forward', true],
+      ['domain', true],
+    ])
+    expect(ssh.sshCalls().length - before).toBe(1)
+    const ran = ssh.pids().slice(pidsBefore)
+    expect(ran).toHaveLength(1)
+    await until(() => !alive(ran[0] as number))
+    expect(existsSync(join(state, 'tunnel', 'ssh-pid.json'))).toBe(false)
+    // its first connection pinned the server's key
+    expect((await api.view()).tunnel.hostKey).toBe(FINGERPRINT)
+  }, 60_000)
+
+  test('On: the board runs the tunnel’s ssh, the domain reaches it, and Test runs no ssh of its own', async () => {
+    const rev = await api.accessRev()
+    const before = ssh.sshCalls().length
+    expect(await opReloaded({ op: 'on' })).toEqual([200, { ok: true }])
+    const v = await api.viewWhen(x => x.tunnel.status.state === 'connected')
+    expect(v.tunnel.settings.on).toBe(true)
+    expect(v.tunnel.hostKey).toBe(FINGERPRINT)
+    expect(await api.accessRev()).not.toBe(rev)
+    const conf = tunnelConfig({ ...settings, on: true })
+    const line = sshArgs({
+      conf,
+      key: join(state, 'tunnel', 'id_ed25519'),
+      knownHosts: join(state, 'tunnel', 'known_hosts'),
+      target: tunnelPort,
+    })
+    expect(line).toContain(`/var/lib/boardtunnel/board.sock:127.0.0.1:${tunnelPort}`)
+    expect(ssh.sshCalls().slice(before)).toEqual([line])
+    const record = JSON.parse(readFileSync(join(state, 'tunnel', 'ssh-pid.json'), 'utf8')) as Reply
+    expect(record).toMatchObject({ forward: forwardSpec(conf.socket, tunnelPort) })
+    expect(alive(Number(record.pid))).toBe(true)
+
+    // Through the fake's proxy (Caddy), the tunnel listener: the reduced hello before a login.
+    const hello = await fetch(`http://127.0.0.1:${proxyPort}/api/hello`)
+    expect(await hello.json()).toEqual({
+      board: 'agent-board',
+      api: REMOTE_API,
+      auth: 'login',
+      signedIn: false,
+      language: 'en',
+    })
+
+    const [status, answer] = await api.op({ op: 'test' })
+    expect(status).toBe(200)
+    expect((answer.steps as { id: string; ok: boolean | null }[]).map(s => [s.id, s.ok])).toEqual([
+      ['ssh', true],
+      ['forward', true],
+      ['domain', true],
+    ])
+    expect(ssh.sshCalls().slice(before)).toEqual([line])
+  }, 60_000)
+
+  test('the domain changed while passkeys or logins exist: asked first, then they all go', async () => {
+    writeState(box, 'access-logins.json', [seededLogin({ token: LOGIN })])
+    const passkey = {
+      id: 'pk1',
+      jwk: { kty: 'EC' },
+      alg: -7,
+      counter: 0,
+      transports: [],
+      label: 'Safari on iPad',
+      addedAt: Date.now(),
+      usedAt: null,
+    }
+    writeState(box, 'access-passkeys.json', [passkey])
+    const tunnel = `http://127.0.0.1:${tunnelPort}`
+    const cookie = `__Host-board-login=${LOGIN}`
+    expect((await viaCaddy(tunnel, cookie).get('/api/board')).status).toBe(200)
+    const before = readFileSync(configPath, 'utf8')
+    expect(await api.op({ op: 'tunnel', fields: { domain: 'other.example.com' } })).toEqual([
+      409,
+      {
+        ok: false,
+        confirm: 'domain',
+        error:
+          'Changing the domain removes every passkey (they belong to the old one) and ends every login. Change it?',
+      },
+    ])
+    expect(readFileSync(configPath, 'utf8')).toBe(before)
+    expect((await api.view()).login.passkeys).toHaveLength(1)
+    // The same domain again changes nothing that needs asking.
+    expect(await api.op({ op: 'tunnel', fields: { domain: DOMAIN } })).toEqual([200, { ok: true }])
+
+    expect(await opReloaded({ op: 'tunnel', fields: { domain: 'other.example.com' }, confirm: true })).toEqual([
+      200,
+      { ok: true },
+    ])
+    const v = await api.view()
+    expect(v.tunnel.settings.domain).toBe('other.example.com')
+    expect([v.login.passkeys, v.logins]).toEqual([[], []])
+    // Once the listener answers for the new domain: the login ended with the old one.
+    const asNew = () =>
+      fetch(`${tunnel}/api/board`, { headers: { host: 'other.example.com', 'x-forwarded-proto': 'https', cookie } })
+    await eventually(async () => (await asNew()).status !== 403)
+    expect((await asNew()).status).toBe(401)
+    expect(await opReloaded({ op: 'tunnel', fields: { domain: DOMAIN } })).toEqual([200, { ok: true }])
+  })
+
+  test("Off: the tunnel's ssh ends, nothing listens; Forget the server's key", async () => {
+    const record = JSON.parse(readFileSync(join(state, 'tunnel', 'ssh-pid.json'), 'utf8')) as Reply
+    const pid = Number(record.pid)
+    expect(alive(pid)).toBe(true)
+    expect(await opReloaded({ op: 'off' })).toEqual([200, { ok: true }])
+    const v = await api.viewWhen(x => x.tunnel.status.state === 'off')
+    expect(v.tunnel.settings.on).toBe(false)
+    await until(() => !alive(pid))
+    await eventually(() => refuses(`http://127.0.0.1:${tunnelPort}`))
+    expect(existsSync(join(state, 'tunnel', 'ssh-pid.json'))).toBe(false)
+
+    expect(await api.op({ op: 'hostkey-forget' })).toEqual([200, { ok: true }])
+    expect((await api.view()).tunnel.hostKey).toBeNull()
+  })
+})
+
+describe('the board restarts: never two ssh, and none left behind', () => {
+  /** A board with the tunnel on and the login set up, on these ports, with the fake as ssh. */
+  async function startBoard(box: Sandbox, ports: { web: number; tunnel: number; proxy: number }) {
+    const { proc } = await serveBoard(
+      box,
+      {
+        language: 'en',
+        port: ports.web,
+        tunnel: { on: true, host: 'ssh.example.com', user: 'boardtunnel', domain: DOMAIN, port: ports.tunnel },
+      },
+      await fakeEnv(box, ports.proxy),
+    )
+    return { proc, api: local(`http://127.0.0.1:${ports.web}`) }
+  }
+
+  test('a stray ssh a board before left (its pid recorded) is ended before the tunnel starts', async () => {
+    const box = await sandbox()
+    await seedAccess(box)
+    const at = await freePorts()
+    const ssh = fakeSsh(box, at.proxy)
+    const state = stateFolder(box)
+    const conf = tunnelConfig({ host: 'ssh.example.com', user: 'boardtunnel', domain: DOMAIN, port: at.tunnel })
+    const line = sshArgs({
+      conf,
+      key: join(state, 'tunnel', 'id_ed25519'),
+      knownHosts: join(state, 'tunnel', 'known_hosts'),
+      target: at.tunnel,
+    })
+    // The stray, planted: the tunnel's line, started by this test with an environment that would
+    // not end it with its parent, so only the board can.
+    const { BUN_FEATURE_FLAG_NO_ORPHANS: _, ...env } = box.env
+    const stray = Bun.spawn([await fakeSshBin(), ...line], {
+      env: { ...env, FAKE_SSH_STATE: ssh.stateFile, FAKE_SSH_LOG: ssh.log },
+      stdin: 'ignore',
+      stdout: 'ignore',
+      stderr: 'pipe',
+    })
+    onTestFinished(() => {
+      if (alive(stray.pid)) stray.kill()
+    })
+    let said = ''
+    void (async () => {
+      for await (const chunk of stray.stderr) said += new TextDecoder().decode(chunk)
+    })()
+    await until(() => said.includes('remote forward success'), 10_000)
+    mkdirSync(join(state, 'tunnel'), { recursive: true })
+    writeFileSync(
+      join(state, 'tunnel', 'ssh-pid.json'),
+      JSON.stringify({ pid: stray.pid, forward: forwardSpec(conf.socket, at.tunnel), at: Date.now() }),
+    )
+
+    const { api, proc } = await startBoard(box, at)
+    await api.viewWhen(v => v.tunnel.status.state === 'connected', 30_000)
+    expect(alive(stray.pid)).toBe(false)
+    expect(logged(proc, `tunnel: no ssh a board before left runs any more (pid ${stray.pid})`)).toBe(true)
+    const running = ssh.pids().filter(alive)
+    expect(running).toHaveLength(1)
+    const record = JSON.parse(readFileSync(join(state, 'tunnel', 'ssh-pid.json'), 'utf8')) as Reply
+    expect(running).toEqual([Number(record.pid)])
+    expect(ssh.sshCalls()).toEqual([line, line])
+  }, 60_000)
+
+  test('a board killed hard, then another on the same ports and state: one ssh, the first one’s gone', async () => {
+    // The sandbox's no-orphans flag alone ends board A's fake ssh with A; the planted stray above
+    // is what shows the board ending one itself.
+    const box = await sandbox()
+    await seedAccess(box)
+    const at = await freePorts()
+    const ssh = fakeSsh(box, at.proxy)
+    const a = await startBoard(box, at)
+    await a.api.viewWhen(v => v.tunnel.status.state === 'connected', 30_000)
+    const record = JSON.parse(readFileSync(join(stateFolder(box), 'tunnel', 'ssh-pid.json'), 'utf8')) as Reply
+    const first = Number(record.pid)
+    a.proc.kill()
+    await a.proc.exited
+
+    const b = await startBoard(box, at)
+    const v = await b.api.viewWhen(x => x.tunnel.status.state === 'connected', 30_000)
+    expect(v.tunnel.status.state).toBe('connected')
+    expect(alive(first)).toBe(false)
+    expect(ssh.pids().filter(alive)).toHaveLength(1)
+  }, 60_000)
+})

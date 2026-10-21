@@ -58,6 +58,8 @@ interface Options {
   remote?: () => RemoteView | null
   /** Whether the board can ask a session a side question (services/aside.ts asideCheck). */
   aside?: () => boolean
+  /** The Remote access view's revision (app.ts counts its changes). */
+  accessRev?: () => number
 }
 
 // The colors the category editor offers (aliases left out).
@@ -127,6 +129,7 @@ export function createBoardState({
   mokupilot,
   remote,
   aside,
+  accessRev,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -196,6 +199,8 @@ export function createBoardState({
       foldWaiting: foldModeOf(cfg.foldWaiting),
       // remote: only while the remote mode is on; a board without it sends none.
       ...remoteOf(remote),
+      // accessRev: the panel's cue to fetch the Remote access view again (never the view itself).
+      accessRev: accessRev?.() ?? 0,
     }
   }
 

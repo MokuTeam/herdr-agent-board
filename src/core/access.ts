@@ -203,3 +203,84 @@ export interface AccessView {
   logins: PublicLogin[]
   attempts: Attempt[]
 }
+
+type Fields = Record<string, unknown>
+const isFields = (v: unknown): v is Fields => typeof v === 'object' && v !== null && !Array.isArray(v)
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+const isText = (v: unknown): v is string => typeof v === 'string'
+const textOrNull = (v: unknown): boolean => v === null || isText(v)
+const numOrNull = (v: unknown): boolean => v === null || isNum(v)
+const listOf = (v: unknown, each: (x: unknown) => boolean): boolean => Array.isArray(v) && v.every(each)
+const STATES: ReadonlySet<unknown> = new Set(['off', 'connecting', 'connected', 'reconnecting', 'error'])
+const METHODS: ReadonlySet<unknown> = new Set(['password', 'passkey'])
+const REASONS: ReadonlySet<unknown> = new Set(['wrong', 'locked', 'limited'])
+
+const isSettings = (v: unknown): boolean =>
+  isFields(v) &&
+  typeof v.on === 'boolean' &&
+  ['host', 'user', 'key', 'socket', 'domain'].every(k => isText(v[k])) &&
+  isNum(v.sshPort) &&
+  numOrNull(v.port)
+
+const isStatus = (v: unknown): boolean =>
+  isFields(v) &&
+  STATES.has(v.state) &&
+  isNum(v.since) &&
+  (v.attempt === undefined || isNum(v.attempt)) &&
+  (v.nextAt === undefined || isNum(v.nextAt)) &&
+  (v.error === undefined || isText(v.error)) &&
+  (v.hint === undefined || textOrNull(v.hint)) &&
+  (v.probe === undefined ||
+    v.probe === null ||
+    (isFields(v.probe) && typeof v.probe.ok === 'boolean' && isNum(v.probe.at) && isText(v.probe.detail)))
+
+const isKey = (v: unknown): boolean =>
+  isFields(v) &&
+  isText(v.path) &&
+  typeof v.generated === 'boolean' &&
+  typeof v.exists === 'boolean' &&
+  textOrNull(v.publicKey) &&
+  textOrNull(v.error)
+
+const isTunnelView = (v: unknown): boolean =>
+  isFields(v) &&
+  isSettings(v.settings) &&
+  listOf(v.problems, p => isFields(p) && isText(p.field) && isText(p.message)) &&
+  textOrNull(v.blocked) &&
+  isNum(v.listenPort) &&
+  isStatus(v.status) &&
+  textOrNull(v.ssh) &&
+  isKey(v.key) &&
+  textOrNull(v.hostKey)
+
+const isLoginView = (v: unknown): boolean =>
+  isFields(v) &&
+  typeof v.password === 'boolean' &&
+  typeof v.totp === 'boolean' &&
+  listOf(v.passkeys, p => isFields(p) && isText(p.id) && isText(p.label) && isNum(p.addedAt) && numOrNull(p.usedAt)) &&
+  (v.lockout === null || (isFields(v.lockout) && isNum(v.lockout.until)))
+
+const isPublicLogin = (v: unknown): boolean =>
+  isFields(v) &&
+  isText(v.id) &&
+  METHODS.has(v.method) &&
+  (v.passkeyId === undefined || isText(v.passkeyId)) &&
+  isText(v.label) &&
+  isText(v.address) &&
+  isNum(v.signedInAt) &&
+  isNum(v.expiresAt) &&
+  numOrNull(v.seenAt)
+
+const isAttempt = (v: unknown): boolean =>
+  isFields(v) && isNum(v.at) && isText(v.address) && isText(v.label) && METHODS.has(v.method) && REASONS.has(v.reason)
+
+/** GET /api/access's answer, as far as the panel and `board tunnel` rely on it. */
+export function isAccessView(v: unknown): v is AccessView {
+  return (
+    isFields(v) &&
+    isTunnelView(v.tunnel) &&
+    isLoginView(v.login) &&
+    listOf(v.logins, isPublicLogin) &&
+    listOf(v.attempts, isAttempt)
+  )
+}

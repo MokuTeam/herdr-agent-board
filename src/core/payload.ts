@@ -106,4 +106,10 @@ export interface BoardPayload {
   foldWaiting?: FoldMode
   /** The remote mode (core/remote.ts), only while it is on. */
   remote?: RemoteView
+  /**
+   * The Remote access view's revision (GET /api/access, local only): it changes when the view does,
+   * and the panel fetches the view again then; the view itself never goes out with the board. The
+   * server always sends it; a board before it sent none.
+   */
+  accessRev?: number
 }
