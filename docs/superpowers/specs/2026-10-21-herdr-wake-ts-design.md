@@ -619,6 +619,56 @@ takeover: the change to `open.ts` is built and tested on fakes, and the owner is
   and nothing more with it off; the PR names it with decision 8's difference. This touches
   `open.ts`, so it is tested against #144's cases.
 
+**Read in herdr's documentation and source (2026-10-21):**
+
+- *Sources.* The plugin page at both tags, section "Startup hooks"
+  ([v0.9.2](https://github.com/herdrdev/herdr/blob/v0.9.2/docs/next/website/src/content/docs/plugins.mdx),
+  [v0.9.5](https://github.com/herdrdev/herdr/blob/v0.9.5/docs/next/website/src/content/docs/plugins.mdx),
+  the section is word for word the same), found through `https://herdr.dev/llms.txt` (stable
+  0.9.5); and herdr's source at the same tags (v0.9.2 `48292af`, v0.9.5 `2ecf19a`; the installed
+  binary says `herdr 0.9.5`). `herdr --skill` and the CLI help say nothing about startup entries.
+- *The documentation* says startup commands "run once for each enabled plugin after Herdr restores
+  the session and its API socket is ready", again when a new server takes over in a live handoff,
+  not on attach, config reload, link or enable; "Herdr starts them asynchronously and records their
+  completion in the normal plugin command log. A startup failure does not stop the server." It
+  does not say how several entries of one plugin run.
+- *The source* answers it, the same in both versions. `run_plugin_startup_hooks`
+  ([v0.9.5 runtime.rs L161–201](https://github.com/herdrdev/herdr/blob/v0.9.5/src/app/api/plugins/runtime.rs#L161-L201),
+  [v0.9.2 L183–216](https://github.com/herdrdev/herdr/blob/v0.9.2/src/app/api/plugins/runtime.rs#L183-L216))
+  takes the enabled plugins sorted by id, and each plugin's entries in manifest order, and calls
+  `start_plugin_command` for each, dropping its result (`let _ =`). `start_plugin_command` starts a
+  thread that spawns the command and waits for it, and returns at once. So every entry is started
+  in the same moment, each on its own thread; nothing waits for any of them; one that cannot be
+  spawned, exits 1 or hangs changes nothing for the next. It is called once the server is ready,
+  just before its loop runs
+  ([v0.9.5 bootstrap.rs L93, L206](https://github.com/herdrdev/herdr/blob/v0.9.5/src/server/headless/bootstrap.rs#L93),
+  [v0.9.2 L88, L197](https://github.com/herdrdev/herdr/blob/v0.9.2/src/server/headless/bootstrap.rs#L88)).
+- *Two limits*, both versions: no timeout, so a hanging entry stays "running" in the command log
+  until it exits; and at most 32 plugin commands at once across all plugins (actions, event hooks
+  and startup entries together), one more is refused with `plugin_command_limit_reached`
+  ([v0.9.5 runtime.rs L82–102](https://github.com/herdrdev/herdr/blob/v0.9.5/src/app/api/plugins/runtime.rs#L82-L102)).
+  A command keeps its place until its stdout and stderr close, so a child it leaves with them open
+  keeps it too.
+- *The answer:* **independent, in parallel**: as designed. The processes start in manifest order
+  but run side by side, so which one gets anywhere first is not fixed. The design relies on no
+  order (wake has its own workspace for exactly that race), so the last fallback is not needed.
+- *For the build:* wake's start runs again on a live handoff (`herdr update`); "/status answers →
+  exit 0" covers it. Its deadline keeps it from holding one of the 32 places for long. Should the
+  last fallback ever be built, `open.ts` must give wake's start no stdout or stderr of its own
+  ("its output not kept"), or the board's entry stays "running" until wake's start ends.
+- *Left for the live check:* only that the installed Windows binary does what its tag's source
+  says. Expected: A, B, C and D start within a second of each other, D does not wait for B, C's
+  exit 1 changes nothing, and the same with B and C first.
+- *An action and a pane with the same id* (the manifest's `wake`): allowed in both versions. The
+  plugin page: "Each id type must be unique inside a plugin." The parser checks action ids among
+  actions and pane ids among panes, nothing across
+  ([v0.9.5 manifest.rs L171, L191, L320–355](https://github.com/herdrdev/herdr/blob/v0.9.5/src/app/api/plugins/manifest.rs#L320-L355));
+  an action is looked up among the actions, a pane entrypoint among the panes, and keybindings
+  name actions only. Herdr's own test `plugin_launch_survives_executable_replacement` (Linux)
+  declares action `probe` and pane `probe` in one manifest and launches both
+  ([v0.9.5 mod.rs L1835–1843](https://github.com/herdrdev/herdr/blob/v0.9.5/src/app/api/plugins/mod.rs#L1835-L1843)).
+  So the pane stays `wake` (`--entrypoint wake`); it is not renamed `wake-run`.
+
 ## Proposed PRs
 
 Each starts from an issue under #119, has tests that fail on `main` and pass with it, shows the
