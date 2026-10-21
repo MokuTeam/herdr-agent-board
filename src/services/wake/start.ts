@@ -7,7 +7,8 @@
 // it, the workspace's leftover tabs too (only wake's shells or sidebar panes in them), and a new
 // wake pane opened. herdr gives a pane's id out again after it starts over: the recorded pane is
 // taken for wake's only in wake's workspace with no agent in it, and never the board's; else it is
-// left alone. An error is logged and recorded in the status file, never thrown.
+// left alone. The old plugin removed by hand: its takeover runs once, before the new pane opens
+// (takeover.ts). An error is logged and recorded in the status file, never thrown.
 import { asSnapshot, type HerdrPane, type HerdrSnapshot, type HerdrWorkspace } from '../../adapters/herdr.ts'
 import { sameDir } from '../../core/launch/names.ts'
 import type { WakeConfig } from '../../core/wake/config.ts'
@@ -27,6 +28,12 @@ export interface StartDeps {
   bootedAt: number
   /** The plugin's folder: the new workspace's and the pane's cwd. */
   root: string
+  /**
+   * The takeover at wake's first start after the old plugin was removed by hand (takeover.ts
+   * takeOverAtFirstStart), run once no wake runs and before its new pane opens; the wake section
+   * as it is after it, or null when it did not run. Never throws.
+   */
+  takeOver?(): Promise<WakeConfig | null>
 }
 
 /** The board's own workspace and pane, which wake's start never closes anything of. */
@@ -62,7 +69,7 @@ interface Opened {
 }
 
 /** `herdr plugin list --json`: whether herdr-wake is among the plugins (any answer naming it, when it has no list). */
-async function oldPluginInstalled(deps: StartDeps): Promise<boolean> {
+export async function oldPluginInstalled(deps: Pick<StartDeps, 'herdr'>): Promise<boolean> {
   const answer = await deps.herdr(['plugin', 'list', '--json'])
   const plugins = record(answer)?.plugins
   if (Array.isArray(plugins)) return plugins.some(p => record(p)?.plugin_id === OLD_PLUGIN)
@@ -186,7 +193,7 @@ export async function startWake(
     }
     if (!o.again && (await deps.answers(o.settings.port))) return 'answers'
 
-    const label = o.settings.workspace
+    let label = o.settings.workspace
     let snap = await snapshotTried(deps)
     const last = recordedPane(snap, status?.pane, label, o.board)
     if (status?.pane !== undefined && !last && snap.panes.some(p => p.pane_id === status.pane)) {
@@ -199,6 +206,11 @@ export async function startWake(
       keep = false
       snap = await snapshotTried(deps)
     }
+
+    // The old plugin removed by hand: its config and sleeping list taken over once, now that no wake
+    // runs to write its session file, and before the pane that reads them opens.
+    const taken = (await deps.takeOver?.()) ?? null
+    if (taken) label = taken.workspace
 
     // A workspace of its own; a new one comes with a shell tab, closed once wake's tab is in. The
     // board's workspace (wake.workspace set to its label, or holding the board's pane) keeps its tabs.

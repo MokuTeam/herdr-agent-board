@@ -144,6 +144,7 @@ describe('sleep and wake from a phone', () => {
           {},
           { method: 'POST', body: JSON.stringify({ op: 'off' }) },
           { method: 'POST', body: '{"op":"again"}' },
+          { method: 'POST', body: '{"op":"switch"}' },
         ]) {
           const res = await ask(path, init)
           expect([name, path, init.method ?? 'GET', res.status, await res.json()]).toEqual([

@@ -2,7 +2,8 @@
 // UserPromptSubmit hooks, the question form's PreToolUse hook, the status line, (on request) the
 // desktop notification hooks and (while wake is on) wake's ListAgents / SendMessage hooks in Claude
 // Code's settings.json, and the `board` and `spawn-agent` shims for ~/.local/bin. The entrypoint
-// (entrypoints/install.ts) reads, backs up and writes; core/setup.ts checks the result.
+// (entrypoints/install.ts) reads, backs up and writes; core/setup.ts checks the result. The
+// takeover of the separate herdr-wake plugin puts wake's hooks in place of its own (withWakeHooks).
 
 export interface InstallPaths {
   bun: string
@@ -227,6 +228,23 @@ export function planSettings(
     next.statusLine = { type: 'command', command: bunCommand(paths.bun, paths.statusline) }
   }
   return { settings: next, replaced, statusLineSet, toast: withToast, oldWake }
+}
+
+/**
+ * settings.json (an object) with wake's hooks (WAKE_HOOKS) running `wakeHook` with `bun`, in place
+ * of earlier ones of ours; nothing else in it changed (the takeover's move of the old plugin's
+ * hooks, services/wake/takeover.ts). The input is not changed.
+ */
+export function withWakeHooks(settings: Record<string, unknown>, paths: { bun: string; wakeHook: string }): Settings {
+  const next: Settings = structuredClone(settings)
+  const hooks = isRecord(next.hooks) ? next.hooks : {}
+  next.hooks = hooks
+  const isOurs = ourWakeCommands(paths.wakeHook)
+  for (const [event, matcher, mode, timeout] of WAKE_HOOKS) {
+    const command = `${bunCommand(paths.bun, paths.wakeHook)} ${mode}`
+    hooks[event] = withOurHook(hooks[event], { matcher, hooks: [{ type: 'command', command, timeout }] }, isOurs, [])
+  }
+  return next
 }
 
 const MARK = 'agent-board'

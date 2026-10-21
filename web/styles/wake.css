@@ -2,7 +2,8 @@
    Phones panels from their pieces (.profile-note for a profile's hooks, .profile-shown for
    Telegram's Auto / Off, .path-add for the fields): a row per switch, its label left and the
    switch right; the state line under the main switch, the buttons its state offers, the log; then
-   the reaper and Telegram. The toolbar's "Wake stopped" (components/wake/WakeNote.tsx) is drawn
+   the reaper and Telegram (its router's line while wake runs); Switch over…'s question and what it
+   took over. The toolbar's "Wake stopped" (components/wake/WakeNote.tsx) is drawn
    as "Setup incomplete" (setup.css). Every rule here selects by class: the other sheets are
    upstream's, rule for rule. */
 
@@ -82,3 +83,13 @@
 .wake-telegram-line { overflow-wrap: anywhere; }
 .wake-launcher { align-self: flex-start; }
 .wake-launcher:disabled { opacity: 0.5; }
+
+/* Switch over… (the separate herdr-wake plugin holds wake): its question, then what it took over,
+   each a note on the accent's tint, the lines one under the other. */
+.wake-confirm,
+.wake-switched { --lane: var(--accent); flex-direction: column; align-items: flex-start; gap: 8px; }
+.wake-confirm p,
+.wake-switched p { align-self: stretch; overflow-wrap: anywhere; }
+
+/* What the Telegram router does while wake runs. */
+.wake-router { margin: 0; overflow-wrap: anywhere; }

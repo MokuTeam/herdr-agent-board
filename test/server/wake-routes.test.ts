@@ -3,7 +3,7 @@
 // line. With wake off and no wake file the payload has no wake field and nothing is started.
 import { setDefaultTimeout, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { WAKE_SHIPPED } from '../../src/core/wake/config.ts'
 import { type BoardMessage, serveBoard, unusedPort } from '../support/board-server.ts'
@@ -239,3 +239,102 @@ test.skipIf(WAKE_SHIPPED)(
     }
   },
 )
+
+test('Switch over, while the old plugin holds wake: taken over, uninstalled, wake started past the held record; only from the board’s own page', async () => {
+  const box = await sandbox()
+  const port = await unusedPort()
+  const oldConfigDir = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'herdr-wake')
+  const oldStateDir = join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'herdr-wake')
+  mkdirSync(oldConfigDir, { recursive: true })
+  mkdirSync(oldStateDir, { recursive: true })
+  writeFileSync(
+    join(oldConfigDir, 'config.json'),
+    JSON.stringify({
+      port,
+      wakeCommand: 'claude-tg --resume {session}',
+      reaper: { enabled: true, idleMinutes: 60, exclude: ['Billing', 'Проект x 50%'] },
+    }),
+  )
+  writeFileSync(
+    join(oldStateDir, 'sessions.json'),
+    JSON.stringify({ 'w1:p2': { session: 's-bill', name: 'Billing', seen_at: 1, slept_at: 2 } }),
+  )
+  const profile = join(box.env.HOME as string, '.claude')
+  const hook = (mode: string) => `node "${join(oldConfigDir, 'hook.mjs')}" ${mode}`
+  mkdirSync(profile, { recursive: true })
+  writeFileSync(
+    join(profile, 'settings.json'),
+    JSON.stringify({
+      hooks: { PreToolUse: [{ matcher: 'SendMessage', hooks: [{ type: 'command', command: hook('pre-send') }] }] },
+    }),
+  )
+  stateFile(box, 'wake-status.json', JSON.stringify({ state: 'held', at: Date.now() }))
+  config(box, { wakeUrl: null, refreshSec: 3600, wake: { enabled: true, port } })
+  const listed = (ids: string[]) => ({
+    result: { type: 'plugin_list', plugins: ids.map(plugin_id => ({ plugin_id })) },
+  })
+  box.state({
+    'api snapshot': {
+      result: {
+        snapshot: {
+          workspaces: [{ workspace_id: 'wT', label: 'tg-router' }],
+          tabs: [{ tab_id: 'tT', workspace_id: 'wT' }],
+          panes: [{ pane_id: 'wT:p1', tab_id: 'tT', workspace_id: 'wT', cwd: box.dir }],
+        },
+      },
+    },
+    'plugin list': {
+      ...listed(['agent-board', 'herdr-wake']),
+      until: ['plugin uninstall'],
+      // biome-ignore lint/suspicious/noThenProperty: the fake herdr's reply after the uninstall (test/support/fake-herdr.ts)
+      then: listed(['agent-board']),
+    },
+    'plugin uninstall': { result: null },
+    'workspace close': { result: null },
+  })
+  const { url, proc } = await serveBoard(box, {}, { TEST_LIVE_CONFIG: '1' })
+  await eventually(async () => (await wakeOf(url))?.state === 'held')
+  const post = (body: unknown, headers: Record<string, string> = { 'x-board': '1' }) =>
+    fetch(`${url}/api/wake`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    })
+
+  // Not from another page: nothing asked, nothing changed.
+  assert.equal((await post({ op: 'switch' }, {})).status, 403)
+  assert.equal((await post({ op: 'switch' }, { 'x-board': '1', origin: 'https://evil.example' })).status, 403)
+  assert.deepEqual([...new Set(box.calls().map(c => c.join(' ')))], ['api snapshot'])
+
+  const res = await post({ op: 'switch' })
+  const body = (await res.json()) as Record<string, unknown>
+  assert.equal(res.status, 200)
+  assert.deepEqual(
+    { ...body, did: undefined },
+    {
+      ok: true,
+      did: undefined,
+      summary: { reaper: 'on', minutes: 60, excluded: 2, telegram: false, asleep: 1 },
+      launcher: { old: 'claude-tg', now: 'claude' },
+      bindings: [],
+    },
+  )
+  assert.deepEqual(
+    box
+      .calls()
+      .map(c => c.join(' '))
+      .filter(c => c !== 'api snapshot'),
+    ['plugin list --json', 'plugin uninstall herdr-wake', 'plugin list --json', 'workspace close wT'],
+  )
+  assert.deepEqual(configOf(box).wake, {
+    enabled: true,
+    port,
+    reaper: { enabled: true, idleMinutes: 60, exclude: ['Billing', 'Проект x 50%'] },
+  })
+  assert.ok(readFileSync(join(profile, 'settings.json'), 'utf8').includes('wake-hook.ts'))
+  assert.ok(existsSync(join(profile, 'settings.json.bak-wake-takeover')))
+  // Wake's start, once, though its record still said held.
+  await until(() => starts(proc).length > 0)
+  await Bun.sleep(200)
+  assert.deepEqual(starts(proc), [[]])
+})

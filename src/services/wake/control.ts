@@ -6,7 +6,9 @@
 // Turned off, wake ends by itself (it reads config.json); its workspace is then closed when nothing
 // but wake's leftovers (start.ts wakeLeftover) is in it, else only wake's own pane. Starting is
 // wake's start's (entrypoints/wake-start.ts), spawned on its own, never while its record says a
-// start is under way (herdr's startup entry may have started it a moment ago).
+// start is under way (herdr's startup entry may have started it a moment ago). "Switch over…"
+// takes the separate herdr-wake plugin over (takeover.ts), then starts wake past its held record.
+// The payload's state line carries the Telegram router's state while wake runs.
 import { spawn } from 'node:child_process'
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -18,6 +20,7 @@ import {
   boardPaneNow,
   peekWakeSessions,
   readWakeStatus,
+  wakeLog,
   wakeLogFile,
   wakeLogTail,
   wakeSessionsFile,
@@ -25,9 +28,10 @@ import {
 import { t } from '../../core/lang.ts'
 import type { Config } from '../../core/types.ts'
 import { telegramTarget, WAKE_SHIPPED, type WakeConfig, wakeConfig } from '../../core/wake/config.ts'
-import { isWakeStatus, STARTING_MS, wakeState } from '../../core/wake/status.ts'
-import type { WakeHooksView, WakeSettingsView, WakeView } from '../../core/wake/view.ts'
+import { isBoardWakeStatus, STARTING_MS, wakeState } from '../../core/wake/status.ts'
+import type { SwitchResult, WakeHooksView, WakeSettingsView, WakeView } from '../../core/wake/view.ts'
 import { type BoardPlace, closeOfPane, recordedPane, wakeLeftover, workspaceOf } from './start.ts'
+import { switchOver as takeOver } from './takeover.ts'
 
 type Herdr = <T = unknown>(args: string[], timeoutMs?: number) => Promise<T>
 
@@ -46,6 +50,12 @@ export interface WakeControl {
   again(): Promise<EditResult>
   /** The last 200 lines of wake.log. */
   logTail(): string
+  /**
+   * "Switch over…": the separate herdr-wake plugin taken over and uninstalled, its hooks moved in
+   * every profile, wake started past the held record (takeover.ts); one at a time, a second click
+   * joins the first. What it did, or why it stopped.
+   */
+  switchOver(): Promise<SwitchResult>
   /** Safeguard 3: started when on, not held and not answering (not again within a minute of its last start). */
   ensure(): Promise<void>
   /** The config was read again: started at once when it turned wake on. */
@@ -60,7 +70,7 @@ export interface WakeControlOptions {
   starter: (args?: string[]) => void
   /** Wake's GET /status answer within 2 s, or null; by default asked on 127.0.0.1 at the wake section's port. */
   status?: () => Promise<unknown>
-  /** Whether wake answers now; by default whether `status` reads as a wake's. */
+  /** Whether wake answers now; by default whether `status` reads as the board's wake's (never the old plugin's router). */
   answers?: () => Promise<boolean>
   /** herdr, for closing wake's workspace once it is turned off (adapters/herdr.ts by default). */
   herdr?: Herdr
@@ -160,7 +170,7 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
   const pollMs = o.pollMs ?? POLL_MS
   const settingsNow = (): WakeConfig => wakeConfig(o.cfg.wake)
   const status = o.status ?? (() => askWake(settingsNow().port))
-  const answers = o.answers ?? (async () => isWakeStatus(await status()))
+  const answers = o.answers ?? (async () => isBoardWakeStatus(await status()))
   const answering = (): Promise<boolean> => answers().catch(() => false)
   const asleep =
     o.asleep ?? ((): number => Object.values(peekWakeSessions()).filter(s => s.slept_at !== undefined).length)
@@ -178,6 +188,8 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
   let offPending = false
   let stopped = false
   let fileSeen: { file: string; mtimeMs: number; has: boolean } | null = null
+  /** A Switch over under way. */
+  let switching: Promise<SwitchResult> | null = null
 
   /** Whether wake's session file has a sleeper; read again only when it changed. */
   function fileHasSleepers(): boolean {
@@ -204,6 +216,8 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
     const down = state !== 'running' && state !== 'off' && state !== 'held'
     downSince = down ? (downSince ?? at) : null
     const error = down ? file?.error : undefined
+    // The router's state as the wake process last wrote it: said only while that process answers.
+    const telegram = state === 'running' ? file?.telegram : undefined
     const view: Omit<WakeView, 'asleep'> = {
       on: s.enabled,
       state,
@@ -212,6 +226,7 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
       ...(error !== undefined && { error }),
       ...(state === 'crashed' && { crashes: file?.crashes?.length ?? 0 }),
       downSince,
+      ...(telegram && { telegram }),
     }
     const before = cache ? JSON.stringify(cache.view) : null
     cache = { at, view }
@@ -341,6 +356,27 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
       return settingsNow().enabled ? starts(['--again']) : refused()
     },
     logTail: () => wakeLogTail(LOG_LINES),
+    switchOver() {
+      switching ??= takeOver({
+        uninstall: true,
+        herdr,
+        home: homedir(),
+        env: process.env,
+        log: text => {
+          wakeLog(`switch over: ${text}`)
+          log(text)
+        },
+        // Its record says held until wake's start reads the plugin list again: started past it.
+        start: () => starts(),
+      })
+        .catch((err): SwitchResult => ({ ok: false, error: messageOf(err) }))
+        .finally(() => {
+          switching = null
+          cache = null
+          o.onChange?.()
+        })
+      return switching
+    },
     ensure,
     configChanged() {
       const on = settingsNow().enabled

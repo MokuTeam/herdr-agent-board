@@ -152,6 +152,31 @@ export function editWake(body: unknown): EditResult {
 }
 
 /**
+ * The takeover's write of the `wake` section (#119, Migration: services/wake/takeover.ts): `fields`
+ * over the section's own (a section that is `true` or `false` read as its `enabled`), every other
+ * key of config.json kept. A config.json that is there but does not read as an object is left as it
+ * is, and said; none there is made from the defaults, as editWake does.
+ */
+export function takeOverWake(fields: Raw): EditResult {
+  const raw = readConfigFile()
+  if (!raw && existsSync(configFile()))
+    return { ok: false, error: `${configFile()} does not read as JSON; nothing was taken over` }
+  const next = raw ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  const section: Raw = isRecord(next.wake)
+    ? { ...next.wake }
+    : next.wake === undefined
+      ? {}
+      : { enabled: wakeConfig(next.wake).enabled }
+  next.wake = { ...section, ...fields }
+  try {
+    writeRaw(next)
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+  return { ok: true }
+}
+
+/**
  * The config, kept current: the returned object is updated in place whenever config.json
  * changes (by hand or from the web board), then `onChange` runs. One watcher per process.
  */

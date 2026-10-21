@@ -406,3 +406,30 @@ test('Start and Start again: refused while off or held, nothing to do while it a
   expect(await held.c.start()).toEqual({ ok: false, error: 'The separate herdr-wake plugin does this now' })
   expect(held.started).toEqual([])
 })
+
+test('view: the Telegram router’s state while wake runs, never from a status file a crash left behind', async () => {
+  isolatedHome()
+  const polling = { state: 'polling', host: '127.0.0.1:8787' } as const
+  writeWakeStatus({ state: 'running', at: 5, pid: 4242, telegram: polling })
+  expect((await control(on(), { answers: true }).c.view()).telegram).toEqual(polling)
+  writeWakeStatus({ state: 'running', at: 5, pid: 4242, telegram: { state: 'error', error: 'tg-mcp: 401' } })
+  expect((await control(on(), { answers: true }).c.view()).telegram).toEqual({ state: 'error', error: 'tg-mcp: 401' })
+  // Crashed, not answering, or off: the file's Telegram is the dead process's, not said.
+  writeWakeStatus({ state: 'crashed', at: 5, crashes: [1, 2, 3, 4, 5], telegram: polling })
+  expect('telegram' in (await control(on()).c.view())).toBe(false)
+  writeWakeStatus({ state: 'running', at: 5, pid: 4242, telegram: polling })
+  expect('telegram' in (await control(on(), { answers: false }).c.view())).toBe(false)
+  expect('telegram' in (await control(off(), { answers: true }).c.view())).toBe(false)
+  // No Telegram in the file (Telegram never on): the view as it was.
+  rmSync(wakeStatusFile(), { force: true })
+  writeWakeStatus({ state: 'running', at: 5, pid: 4242 })
+  expect('telegram' in (await control(on(), { answers: true }).c.view())).toBe(false)
+})
+
+test('view: the separate plugin’s router left on wake’s port is not wake running', async () => {
+  isolatedHome()
+  writeWakeStatus({ state: 'stopped', at: Date.now() })
+  const status = (answer: unknown) => createWakeControl({ cfg: on(), status: async () => answer, starter: () => {} })
+  expect((await status({ pid: 4242, sessions: {} }).view()).state).toBe('notRunning')
+  expect((await status({ pid: 4242, sessions: {}, telegram: { state: 'off' } }).view()).state).toBe('running')
+})

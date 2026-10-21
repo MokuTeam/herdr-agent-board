@@ -1,5 +1,5 @@
-// Settings → Sleep and wake… (#119): wake's state and settings, its switches, Start, Start again
-// and Log (services/wake/control.ts), and Install claude-tg (adapters/launchers.ts). For the board
+// Settings → Sleep and wake… (#119): wake's state and settings, its switches, Start, Start again,
+// Log and Switch over… (services/wake/control.ts), and Install claude-tg (adapters/launchers.ts). For the board
 // on this computer only: every remote listener refuses these routes (server/remote.ts localOnly);
 // a phone reads the state line in the payload.
 import { homedir } from 'node:os'
@@ -41,9 +41,10 @@ export function wakeRoutes(wake: WakeControl): Route[] {
       },
     },
     {
-      // { op: 'on' | 'off' | 'reaper' | 'telegram' | 'start' | 'again' | 'log' | 'launcher', … }:
-      // they change config.json, start programs and write claude-tg, so a page of another origin is
-      // refused, as for Install.
+      // { op: 'on' | 'off' | 'reaper' | 'telegram' | 'start' | 'again' | 'log' | 'launcher' | 'switch', … }:
+      // they change config.json, start programs, write claude-tg and (Switch over…) uninstall the
+      // separate herdr-wake plugin and move its hooks, so a page of another origin is refused, as
+      // for Install.
       method: 'POST',
       path: '/api/wake',
       guard: ['board-header', 'origin'],
@@ -72,6 +73,10 @@ export function wakeRoutes(wake: WakeControl): Route[] {
             return json(200, { ok: true, text: wake.logTail() })
           case 'launcher':
             return launcher()
+          case 'switch': {
+            const switched = await wake.switchOver()
+            return json(switched.ok ? 200 : 409, switched)
+          }
           default:
             r = { ok: false, error: `unknown op ${String(body.op)}` }
         }

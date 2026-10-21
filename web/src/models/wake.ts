@@ -1,12 +1,13 @@
 // Settings → Sleep and wake… (#119), its rules on their own: wake's state in one line, in the
 // board's words and time format; when the toolbar's quiet "Wake stopped" note shows; the buttons
-// each state offers; Telegram's line; what an edit of the reaper's fields sends; and the switches
-// shown as sent until the board says the same (its config watcher reads config.json a moment later).
-// The payload's `wake` and GET /api/wake's answer are read through their guards.
+// each state offers; Telegram's line and its router's while wake runs; what Switch over… took over;
+// what an edit of the reaper's fields sends; and the switches shown as sent until the board says the
+// same (its config watcher reads config.json a moment later). The payload's `wake`, GET /api/wake's
+// answer and Switch over's are read through their guards.
 import type { Translator } from '../../../src/core/types.ts'
 import type { ReaperConfig, TelegramMode } from '../../../src/core/wake/config.ts'
 import type { WakeState } from '../../../src/core/wake/status.ts'
-import type { WakeSettingsView, WakeView } from '../../../src/core/wake/view.ts'
+import type { Switched, WakeSettingsView, WakeView } from '../../../src/core/wake/view.ts'
 import { shortWhen } from '../../../src/core/when-format.ts'
 
 /** How long wake is on but not running before the toolbar says so. */
@@ -23,6 +24,7 @@ const STATES: Record<WakeState, true> = {
 }
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const isNumberOrNull = (v: unknown): boolean => v === null || typeof v === 'number'
+const ROUTER_STATES: ReadonlySet<unknown> = new Set(['off', 'polling', 'error'])
 
 /** The payload's `wake` (src/core/wake/view.ts WakeView), as far as the page relies on it. */
 export const isWakeView = (v: unknown): v is WakeView =>
@@ -35,7 +37,26 @@ export const isWakeView = (v: unknown): v is WakeView =>
   typeof v.port === 'number' &&
   (v.error === undefined || typeof v.error === 'string') &&
   (v.crashes === undefined || typeof v.crashes === 'number') &&
-  (v.downSince === undefined || isNumberOrNull(v.downSince))
+  (v.downSince === undefined || isNumberOrNull(v.downSince)) &&
+  (v.telegram === undefined || (isRecord(v.telegram) && ROUTER_STATES.has(v.telegram.state)))
+
+const isPair = (v: unknown): v is { old: string; now: string } =>
+  isRecord(v) && typeof v.old === 'string' && typeof v.now === 'string'
+
+/** POST /api/wake { op: 'switch' }'s answer once it went through (src/core/wake/view.ts Switched). */
+export const isSwitched = (v: unknown): v is Switched =>
+  isRecord(v) &&
+  Array.isArray(v.did) &&
+  v.did.every(line => typeof line === 'string') &&
+  isRecord(v.summary) &&
+  (v.summary.reaper === 'on' || v.summary.reaper === 'off') &&
+  typeof v.summary.minutes === 'number' &&
+  typeof v.summary.excluded === 'number' &&
+  typeof v.summary.telegram === 'boolean' &&
+  typeof v.summary.asleep === 'number' &&
+  (v.launcher === null || isPair(v.launcher)) &&
+  Array.isArray(v.bindings) &&
+  v.bindings.every(b => isRecord(b) && typeof b.key === 'string' && isPair(b))
 
 const isSettings = (v: unknown): v is WakeSettingsView =>
   isRecord(v) &&
@@ -100,6 +121,50 @@ export function wakeButtons(view: WakeView): WakeButton[] {
   if (view.state === 'notRunning') return ['start']
   if (view.state === 'crashed') return ['again', 'log']
   return []
+}
+
+/** "Switch over…" is offered while the separate herdr-wake plugin holds wake. */
+export const switchOffered = (view: WakeView): boolean => view.state === 'held'
+
+/**
+ * What Switch over… took over, in the board's words: "reaper on, 60 min, 2 excluded; Telegram;
+ * 4 sleeping sessions"; the launcher note (call 25) and the key bindings to rename (call 26), when
+ * there are any.
+ */
+export function switchedLines(
+  s: Switched,
+  t: Translator,
+): { taken: string; launcher: string | null; bindings: string | null } {
+  const { reaper, minutes, excluded, telegram, asleep } = s.summary
+  const parts = [
+    reaper === 'on'
+      ? [
+          t('wake.summary.reaperOn', { min: minutes }),
+          ...(excluded > 0 ? [t('wake.summary.excluded', { n: excluded })] : []),
+        ].join(', ')
+      : t('wake.summary.reaperOff'),
+    ...(telegram ? [t('wake.summary.telegram')] : []),
+    t('wake.summary.asleep', { n: asleep }),
+  ]
+  const list = s.bindings.map(b => `${b.key ? `${b.key} ` : ''}${b.old} → ${b.now}`).join(', ')
+  return {
+    taken: t('wake.switched', { summary: parts.join('; ') }),
+    launcher: s.launcher ? t('wake.launcherNote', { old: s.launcher.old, now: s.launcher.now }) : null,
+    bindings: list ? t('wake.bindings', { list }) : null,
+  }
+}
+
+/**
+ * The Telegram router's state while wake runs: receiving from tg-mcp's host, its last poll's
+ * error, or not receiving; nothing while wake does not run (the status file keeps the last state
+ * after a crash) or has none to say.
+ */
+export function routerLine(view: WakeView, t: Translator): string | null {
+  const r = view.telegram
+  if (view.state !== 'running' || !r) return null
+  if (r.state === 'polling') return t('wake.router.polling', { host: r.host ?? '' })
+  if (r.state === 'error') return t('wake.router.error', { error: firstLine(r.error ?? '') })
+  return t('wake.router.off')
 }
 
 /** Under Telegram's Auto / Off: the last poll's error, the host it found, or that there is none; off and found: nothing. */

@@ -3,10 +3,11 @@
 // switch, the state line and the buttons its state offers (Start; Start again and Log), the shown
 // profiles that lack wake's hooks with Install (or have the separate plugin's), the reaper (on or
 // off, the minutes idle, the names never put to sleep, each saved when its field is left) and
-// Telegram (Auto or Off, what it found; Install claude-tg once it is Auto and found tg-mcp).
-// Every change goes to the board at once
+// Telegram (Auto or Off, what it found, what its router does while wake runs; Install claude-tg
+// once it is Auto and found tg-mcp). While the separate herdr-wake plugin holds wake: Switch over…,
+// asked once, then what it took over. Every change goes to the board at once
 // (hooks/useWake.ts) and comes back over the live stream. On a phone: the state line, read only.
-import type { WakeSettingsView, WakeView } from '../../../../src/core/wake/view.ts'
+import type { Switched, WakeSettingsView, WakeView } from '../../../../src/core/wake/view.ts'
 import { useWake, type WakeActions } from '../../hooks/useWake.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { remotePage } from '../../models/remote-page.ts'
@@ -15,7 +16,10 @@ import {
   hookNotes,
   isWakeView,
   minutesEdited,
+  routerLine,
   stateLine,
+  switchedLines,
+  switchOffered,
   telegramLine,
   type WakeButton,
   wakeButtons,
@@ -53,6 +57,9 @@ export function WakePanel({ open, onClose }: WakePanelProps) {
         view={view}
         settings={settings}
         log={wake.log}
+        switched={wake.switched}
+        asking={wake.asking}
+        onAsking={wake.ask}
         phone={phone}
         canEdit={canEdit}
         now={now}
@@ -68,6 +75,11 @@ export interface WakeBodyProps {
   settings: WakeSettingsView | null
   /** wake.log's last lines, once Log was pressed. */
   log: string | null
+  /** What Switch over… took over, once it went through. */
+  switched?: Switched | null
+  /** Switch over… asks before it goes: its question is up. */
+  asking?: boolean
+  onAsking?(asking: boolean): void
   /** The board in a phone's browser: the state line only. */
   phone: boolean
   canEdit: boolean
@@ -78,7 +90,8 @@ export interface WakeBodyProps {
 const BUTTON: Record<WakeButton, string> = { start: 'wake.start', again: 'wake.again', log: 'wake.log' }
 
 /** The panel's content, as drawn for wake's state and settings. */
-export function WakeBody({ view, settings, log, phone, canEdit, now, act }: WakeBodyProps) {
+export function WakeBody(props: WakeBodyProps) {
+  const { view, settings, log, switched = null, asking = false, onAsking = () => {}, phone, canEdit, now, act } = props
   const t = useT()
   const line = (
     <p className="wake-state" data-state={view.state}>
@@ -94,6 +107,7 @@ export function WakeBody({ view, settings, log, phone, canEdit, now, act }: Wake
     )
   const off = !canEdit
   const buttons = wakeButtons(view)
+  const offered = switchOffered(view)
   return (
     <div className="sheet-body cats-body wake-body">
       <div className="wake-row">
@@ -101,7 +115,7 @@ export function WakeBody({ view, settings, log, phone, canEdit, now, act }: Wake
         <Switch name="wake" label={t('wake.switch')} on={view.on} disabled={off} onFlip={on => void act.turn(on)} />
       </div>
       {line}
-      {buttons.length > 0 && (
+      {(buttons.length > 0 || offered) && (
         <div className="wake-actions">
           {buttons.map(b => (
             <button
@@ -114,8 +128,40 @@ export function WakeBody({ view, settings, log, phone, canEdit, now, act }: Wake
               {t(BUTTON[b])}
             </button>
           ))}
+          {offered && (
+            <button
+              type="button"
+              className="button primary wake-switch-over"
+              disabled={off || asking}
+              onClick={() => onAsking(true)}
+            >
+              {t('wake.switchOver')}
+            </button>
+          )}
         </div>
       )}
+      {offered && asking && (
+        <div className="profile-note wake-confirm">
+          <p>{t('wake.switchConfirm')}</p>
+          <div className="wake-actions">
+            <button
+              type="button"
+              className="button primary wake-switch-go"
+              disabled={off}
+              onClick={() => {
+                onAsking(false)
+                void act.switchOver()
+              }}
+            >
+              {t('wake.switchGo')}
+            </button>
+            <button type="button" className="button wake-cancel" onClick={() => onAsking(false)}>
+              {t('cancel')}
+            </button>
+          </div>
+        </div>
+      )}
+      {switched && <SwitchedNote switched={switched} />}
       {log !== null && <pre className="wake-log">{log}</pre>}
       {hookNotes(view, settings).map(h => (
         <div className="profile-note wake-hooks" key={h.id} data-id={h.id}>
@@ -128,7 +174,20 @@ export function WakeBody({ view, settings, log, phone, canEdit, now, act }: Wake
         </div>
       ))}
       {settings && <Reaper settings={settings} disabled={off} act={act} />}
-      {settings && <Telegram settings={settings} disabled={off} act={act} />}
+      {settings && <Telegram settings={settings} router={routerLine(view, t)} disabled={off} act={act} />}
+    </div>
+  )
+}
+
+/** What Switch over… took over, the launcher it leaves as it is, and the key bindings to rename. */
+function SwitchedNote({ switched }: { switched: Switched }) {
+  const t = useT()
+  const { taken, launcher, bindings } = switchedLines(switched, t)
+  return (
+    <div className="profile-note wake-switched">
+      <p>{taken}</p>
+      {launcher && <p>{launcher}</p>}
+      {bindings && <p>{bindings}</p>}
     </div>
   )
 }
@@ -256,8 +315,8 @@ function Reaper({ settings, disabled, act }: SectionProps) {
 
 const MODES = ['auto', 'off'] as const
 
-/** Telegram messages through tg-mcp: Auto or Off, and what it found. */
-function Telegram({ settings, disabled, act }: SectionProps) {
+/** Telegram messages through tg-mcp: Auto or Off, what it found, and what its router does while wake runs. */
+function Telegram({ settings, router, disabled, act }: SectionProps & { router: string | null }) {
   const t = useT()
   const line = telegramLine(settings, t)
   return (
@@ -283,6 +342,7 @@ function Telegram({ settings, disabled, act }: SectionProps) {
           ))}
         </span>
       </div>
+      {router && <p className="sheet-meta wake-router">{router}</p>}
       {settings.telegram === 'auto' && settings.found && (
         <button type="button" className="button wake-launcher" disabled={disabled} onClick={() => void act.launcher()}>
           {t('wake.launcher')}
