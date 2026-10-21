@@ -2,11 +2,13 @@
 // the background (run.ts) and is reported in the board payload (`launches`), so the page shows a
 // starting card at once and a clear reason when it fails. This keeps them: starting one, linking
 // it to the session it started, the card's buttons (dismiss, go to it, trust, close its tab) and
-// what the new-session window offers.
+// what the new-session window offers, the agents a start may pick among it (core/launch/agents.ts).
 import { readCard, removeCard, writeCard } from '../../adapters/cards.ts'
 import { herdr, paneTab, workspaceList } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
+import { findCommand } from '../../adapters/setup-facts.ts'
 import { t } from '../../core/lang.ts'
+import { defaultAgent, type LaunchAgent, type LaunchAgentId, launchAgents } from '../../core/launch/agents.ts'
 import { failureKind } from '../../core/launch/launcher-command.ts'
 import { sameDir } from '../../core/launch/names.ts'
 import { isPiItem, piSessionId } from '../../core/pi.ts'
@@ -20,6 +22,10 @@ import { type Launch, launchRunner, newLaunch } from './run.ts'
 
 export interface LaunchOptions {
   launcher: LauncherInfo
+  /** The agents a start may name (its `agent`), the default first; none when the config's launcher picks it. */
+  agents: LaunchAgent[]
+  /** The one a start that names none starts as: `launch.default` when offered, else Claude Code. */
+  agent: LaunchAgentId
   workspaces: { id: string; label: string | undefined }[]
   focused: string
   board: string
@@ -92,7 +98,14 @@ const view = (l: Launch): LaunchView => ({
   newWorkspace: l.newWorkspace && !l.workspaceId,
   profile: l.profile,
   parent: l.parent,
+  agent: l.agent,
 })
+
+/** Whether `pi` is a command on the board's PATH (a .ps1 or .cmd on Windows too). */
+function piOnPath(): boolean {
+  const found = findCommand('pi')
+  return !!(found.ps ?? found.sh)
+}
 
 /** The launches of this board process; `onChange` publishes the board again. */
 export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onChange?: () => void }): Launches {
@@ -121,6 +134,10 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
       items,
       typesCommand: launcher.kind === 'builtin',
       ...(parent && { parent }),
+      // A start of the server's own (a return, a fork) picks no agent: Claude Code's, whatever the default.
+      agents: () => (resume || fork ? [] : launchAgents(deps.cfg.launch, piOnPath)),
+      standard: offered => defaultAgent(deps.cfg.launch, offered),
+      pi: deps.cfg.launch?.pi,
     })
     if (!r.ok) return r
     // launch.agent whose arguments pick the session cannot resume one: refused before anything runs.
@@ -284,8 +301,11 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
       error = messageOf(err)
     }
     const cfg = deps.cfg
+    const agents = launchAgents(cfg.launch, piOnPath)
     return {
       launcher: launcherFor(cfg.launch).describe(),
+      agents,
+      agent: defaultAgent(cfg.launch, () => agents),
       workspaces,
       focused,
       board: (cfg.placement ?? 'workspace') === 'workspace' ? (cfg.workspace ?? 'Board') : '',

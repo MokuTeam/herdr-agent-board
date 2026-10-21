@@ -104,6 +104,35 @@ test('the script before the page paints is built beside the entry, on its own, a
   }
 })
 
+test('the source map apart, which the script names; the names stay for component stacks', async () => {
+  const root = site({
+    'app.js': [
+      "import { Lane } from './lane.js'",
+      'function SessionCard() { return null }',
+      'class Boundary {}',
+      'const Wrapped = (f => f)(function MenuItem() { return null })',
+      'globalThis.names = [SessionCard.name, Lane.name, Boundary.name, Wrapped.name]',
+      '',
+    ].join('\n'),
+    'lane.js': 'export const Lane = () => null\n',
+  })
+  try {
+    const bundle = await createWebBundle({ root, entry: join(root, 'web', 'app.js'), log: () => {} })
+    expect(bundle.js()).not.toContain('sourceMappingURL=data:')
+    expect(bundle.js().trimEnd().endsWith('//# sourceMappingURL=app.js.map')).toBe(true)
+    const map = JSON.parse(bundle.map()) as { sources: string[]; sourcesContent: string[] }
+    expect(map.sources.map(s => s.split(/[\\/]/).pop())).toEqual(['lane.js', 'app.js'])
+    expect(map.sourcesContent.join('')).toContain('function SessionCard()')
+    // Minified (no indentation, no line per statement), yet every component keeps its name.
+    expect(bundle.js()).not.toContain('\n  ')
+    const scope: { names?: string[] } = {}
+    new Function('globalThis', bundle.js())(scope)
+    expect(scope.names).toEqual(['SessionCard', 'Lane', 'Boundary', 'MenuItem'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('the board’s own: theme.js puts only a kept light or dark on <html>, and never throws', async () => {
   const root = join(import.meta.dir, '..', '..')
   const bundle = await createWebBundle({
@@ -136,6 +165,11 @@ test('the board’s own: theme.js puts only a kept light or dark on <html>, and 
   runInContext(bundle.early(), page)
   expect(dataset.theme).toBe('dark')
   expect(Object.keys(page).sort()).toEqual(['document', 'localStorage'])
+  // The page's own script: the boundary that reports a component stack by its name, and the map
+  // with the TypeScript sources for devtools.
+  expect(bundle.js()).toMatch(/\bclass ErrorBoundary\b/)
+  const map = JSON.parse(bundle.map()) as { sources: string[] }
+  expect(map.sources.some(s => s.endsWith('web/src/components/ErrorBoundary.tsx'))).toBe(true)
 })
 
 test('rebuilds run one at a time, so the newest bundle is the one kept', async () => {

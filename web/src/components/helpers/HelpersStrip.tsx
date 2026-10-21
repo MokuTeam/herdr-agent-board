@@ -1,6 +1,6 @@
 // The session's helpers above its conversation in the sheet (the old page's app.js
 // renderHelpersStrip): the ones at work with what each does now and a running clock, else the
-// newest one in a line. A row opens the helper's conversation, "All" the whole list (the helpers
+// newest one in a line, which says how and when it ended if it did. A row opens the helper's conversation, "All" the whole list (the helpers
 // window, hooks/useHelpers.ts). A redraw keeps the focus on what opens the same thing
 // (hooks/useKeepFocus.ts).
 import type { MouseEvent, ReactNode } from 'react'
@@ -8,7 +8,7 @@ import type { PublicHelper, WorkflowRun } from '../../../../src/core/helpers.ts'
 import { useKeepFocus } from '../../hooks/useKeepFocus.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { ago } from '../../models/card.ts'
-import { helperTitle } from '../../models/helper-model.ts'
+import { endedLine, helperTitle } from '../../models/helper-model.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { ChevGlyph } from '../icons.tsx'
 import { HelperRow, KindIcon, RunRow, StatusMark } from './HelperRows.tsx'
@@ -77,22 +77,21 @@ function Strip({
       (a, b) => (b.endedAt ?? b.activity ?? 0) - (a.endedAt ?? a.activity ?? 0),
     )[0]
     const helper = last && 'kind' in last ? last : null
+    const title = helper ? helperTitle(helper) : last ? last.name || last.id : ''
+    // One that ended says how and when where its mark was: a stop mark read as a stop button (#113).
+    const ended = last ? endedLine(last, now, t) : null
     rows = last && (
       <button
         type="button"
-        className="helper-last"
+        className={ended ? 'helper-last past' : 'helper-last'}
         data-helper={helper ? last.id : undefined}
         data-run-open={helper ? undefined : last.id}
+        title={ended ? `${title} · ${ended}` : undefined}
         onClick={from(el => (helper ? onHelper(last.id, el) : onList(last.id, el)))}
       >
         <KindIcon kind={helper ? helper.kind : 'workflow'} color={helper?.color} />
-        <span>
-          {t('helpers.last', {
-            title: helper ? helperTitle(helper) : last.name || last.id,
-            when: ago(last.endedAt ?? last.activity, now, t),
-          })}
-        </span>
-        <StatusMark status={last.status} />
+        <span>{ended ? title : t('helpers.last', { title, when: ago(last.endedAt ?? last.activity, now, t) })}</span>
+        {ended ? <span className="h-time">{ended}</span> : <StatusMark status={last.status} />}
       </button>
     )
   }

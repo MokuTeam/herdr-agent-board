@@ -1,13 +1,13 @@
 import { expect, setDefaultTimeout, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join, sep } from 'node:path'
+import { delimiter, join, sep } from 'node:path'
 import { BRIEF_VERSION, brief, waitReminder } from '../../src/core/brief.ts'
 import { normalizeConfig } from '../../src/core/categories.ts'
 import { useLanguage } from '../../src/core/lang.ts'
 import { sameDir } from '../../src/core/launch/names.ts'
 import { promptOf } from '../../src/core/schedule-rules.ts'
-import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
+import { root, type Sandbox, sandbox, until } from '../support/sandbox.ts'
 import { notification } from '../support/task-notification.ts'
 
 setDefaultTimeout(15_000)
@@ -308,4 +308,117 @@ test('outside a herdr pane nothing is written; an unchanged profile is not writt
   expect(cardOf(box, 's1')).toEqual(first)
   // The profiles are only read: config.json is written where it was before (a first brief), not here.
   expect(existsSync(configFile(box))).toBe(false)
+})
+
+// After a herdr restart, herdr types each pane's resume command into a new shell, which has the
+// default profile: a session in another profile has its SessionStart tell herdr `board resume …`
+// instead (core/resume.ts), by a reporter of its own (test/entrypoints/resume.test.ts). Claude Code
+// runs hooks without the sandbox's no-orphans flag, so these do too: the reporter outlives the hook.
+const SID = '0f8fad5b-d9cb-469f-a165-70867728950e'
+const claudeIn = (session: string) => ({
+  'agent get': { result: { agent: { agent: 'claude', agent_status: 'idle', agent_session: { value: session } } } },
+  'pane report-agent-session': { result: null },
+})
+
+/** `board` on PATH, as install puts it there (the shims are never run here); the PATH with it. */
+function boardOnPath(box: Sandbox): string {
+  const bin = join(box.dir, 'bin')
+  mkdirSync(bin, { recursive: true })
+  writeFileSync(join(bin, 'board'), '#!/bin/sh\n# agent-board\nexit 0\n', { mode: 0o755 })
+  writeFileSync(join(bin, 'board.cmd'), '@rem agent-board\r\n@exit /b 0\r\n')
+  return `${bin}${delimiter}${box.env.PATH}`
+}
+
+/** The hook as Claude Code runs it in herdr pane w1:p1; `input` on top of a SessionStart of SID. */
+async function runInHerdr(box: Sandbox, env: Record<string, string>, input: Record<string, unknown> = {}) {
+  const { BUN_FEATURE_FLAG_NO_ORPHANS: _, ...plain } = box.env
+  const proc = Bun.spawn([process.execPath, join(root, 'src', 'entrypoints', 'hook.ts')], {
+    cwd: root,
+    env: { ...plain, HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1', ...env },
+    stdin: new TextEncoder().encode(JSON.stringify({ ...sessionStart(box, SID), ...input })),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+  assert.equal(await proc.exited, 0, stderr)
+  assert.equal(stderr, '')
+  return stdout
+}
+const reported = (box: Sandbox): string[] | undefined => box.calls().find(c => c[1] === 'report-agent-session')
+
+/** herdr-wake's SessionStart hook in the profile folder `dir`, and its config.json with `wakeCommand`. */
+function herdrWake(box: Sandbox, dir: string, wakeCommand: string): void {
+  const wakeDir = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'herdr-wake')
+  const command = `node "${join(wakeDir, 'hook.mjs')}" session-start`
+  writeFileSync(
+    join(dir, 'settings.json'),
+    JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command, timeout: 10 }] }] } }),
+  )
+  mkdirSync(wakeDir, { recursive: true })
+  writeFileSync(join(wakeDir, 'config.json'), JSON.stringify({ wakeCommand }))
+}
+
+test('SessionStart of a work session in herdr: herdr is told to resume it with board resume, in work', async () => {
+  const box = await sandbox()
+  englishConfig(box)
+  const work = profileFolder(box, '.claude-work')
+  box.state(claudeIn(SID))
+  const before = Date.now()
+  const out = await runInHerdr(box, { CLAUDE_CONFIG_DIR: work, PATH: boardOnPath(box) })
+  // The brief as ever, and the card says the folder board resume finds the session in.
+  expect(out).toContain('"hookEventName":"SessionStart"')
+  expect(cardOf(box, SID)).toMatchObject({ profile: 'work', profileDir: work })
+  await until(() => reported(box), 8000)
+  expect(box.calls()[0]).toEqual(['agent', 'get', 'w1:p1'])
+  const sent = reported(box) ?? []
+  expect(sent.slice(0, 8)).toEqual([
+    'pane',
+    'report-agent-session',
+    'w1:p1',
+    '--source',
+    'herdr:claude',
+    '--agent',
+    'claude',
+    '--seq',
+  ])
+  expect(Number(sent[8])).toBeGreaterThan(before)
+  expect(sent.slice(9)).toEqual(['--agent-session-id', SID, '--', 'board', 'resume', SID, '--profile', 'work'])
+})
+
+test("herdr-wake with its default wakeCommand reports nothing, so the board's report goes", async () => {
+  const box = await sandbox()
+  const work = profileFolder(box, '.claude-work')
+  herdrWake(box, work, 'claude --resume {session}')
+  box.state(claudeIn(SID))
+  await runInHerdr(box, { CLAUDE_CONFIG_DIR: work, PATH: boardOnPath(box) })
+  await until(() => reported(box), 8000)
+  expect(reported(box)?.slice(-5)).toEqual(['board', 'resume', SID, '--profile', 'work'])
+})
+
+test("every other session keeps herdr's own claude --resume: no reporter, no herdr call", async () => {
+  const box = await sandbox()
+  const home = box.env.USERPROFILE as string
+  const work = profileFolder(box, '.claude-work')
+  const PATH = boardOnPath(box)
+  box.state(claudeIn(SID))
+  // The default profile: unset, or spelled out as the owner's .bashrc exports it.
+  await runInHerdr(box, { PATH })
+  await runInHerdr(box, { PATH, CLAUDE_CONFIG_DIR: join(home, '.claude') })
+  await runInHerdr(box, { PATH, CLAUDE_CONFIG_DIR: '~/.claude/' })
+  // Not in herdr: no pane, or herdr does not say it is the host.
+  await runInHerdr(box, { PATH, CLAUDE_CONFIG_DIR: work, HERDR_PANE_ID: '' })
+  await runInHerdr(box, { PATH, CLAUDE_CONFIG_DIR: work, HERDR_ENV: '' })
+  // A subagent's start, pi's bridge (pi reports its own), and every prompt.
+  await runInHerdr(box, { PATH, CLAUDE_CONFIG_DIR: work }, { agent_id: 'agent-1' })
+  await runInHerdr(box, { PATH, CLAUDE_CONFIG_DIR: work, PI_CODING_AGENT: 'true' })
+  await runInHerdr(box, { PATH, CLAUDE_CONFIG_DIR: work }, { hook_event_name: 'UserPromptSubmit', prompt: 'go on' })
+  // No board on PATH: herdr could not run the command in the restored shell.
+  await runInHerdr(box, { CLAUDE_CONFIG_DIR: work })
+  // herdr-wake's SessionStart hook in the profile, with a wakeCommand of its own: it reports that.
+  const team = profileFolder(box, '.claude-team')
+  herdrWake(box, team, 'claude-tg --resume {session}')
+  await runInHerdr(box, { PATH, CLAUDE_CONFIG_DIR: team })
+  // A reporter would have asked herdr by now (its first try is a second after the start).
+  await Bun.sleep(1800)
+  expect(box.calls()).toEqual([])
 })

@@ -1,6 +1,6 @@
 // Questions a session asks in its terminal, answered from the board: the rules of what the sheet
-// shows — which form or permission prompt, a form's state, its send button, its hint and its
-// preview — without the DOM. The page's desk (models/question-desk.ts) reads them from here.
+// shows — which form, permission prompt or pi dialog, a form's state, its send button, its hint
+// and its preview — without the DOM. The page's desk (models/question-desk.ts) reads them from here.
 import type { FormQuestion } from '../../../src/core/dialogs/question-form.ts'
 import type { PublicDialog } from '../../../src/core/dialogs/questions.ts'
 import type { Item, Translator } from '../../../src/core/types.ts'
@@ -15,11 +15,19 @@ import {
 } from './question-model.ts'
 
 export type PermissionDialog = Extract<PublicDialog, { kind: 'permission' }>
+/** pi's menu (src/core/dialogs/pi-dialogs.ts): an option picked by its number, as a permission prompt's is. */
+export type SelectDialog = Extract<PublicDialog, { kind: 'select' }>
+/** pi's text input: one line of text. */
+export type InputDialog = Extract<PublicDialog, { kind: 'input' }>
 
-/** What the sheet shows: a question form or a permission prompt, by its form key. */
+/**
+ * What the sheet shows, by its form key: a question form, a permission prompt or pi's menu (both
+ * answered with an option's number), or pi's text input.
+ */
 export type Shown =
   | { kind: 'question'; key: string; it: Item; questions: FormQuestion[] }
-  | { kind: 'permission'; key: string; it: Item; dialog: PermissionDialog }
+  | { kind: 'permission'; key: string; it: Item; dialog: PermissionDialog | SelectDialog }
+  | { kind: 'input'; key: string; it: Item; dialog: InputDialog }
 
 /** The last answer that went through, until herdr sees the session move on. */
 export interface Answered {
@@ -36,11 +44,16 @@ export interface DialogDetail {
 /** A finished form gives way after this long even when herdr still says the session is held. */
 export const ANSWERED_MS = 10_000
 
+/** A dialog on the screen known by its fingerprint: a permission prompt, pi's menu or text input. */
+const onScreen = (d: PublicDialog | null): d is PermissionDialog | SelectDialog | InputDialog =>
+  d?.kind === 'permission' || d?.kind === 'select' || d?.kind === 'input'
+
 /**
  * What the sheet should show for this session: its question form, the form just answered (the
- * transcript knows at once, herdr's status follows a refresh later; a new permission prompt on the
- * screen takes over), a permission prompt, or null. `expired`: the answered form is over (the
- * session moved on, or is still held long after), so the same prompt asked again is a new one.
+ * transcript knows at once, herdr's status follows a refresh later; a new prompt on the screen
+ * takes over), a permission prompt, pi's menu or text input, or null. `expired`: the answered form
+ * is over (the session moved on, or is still held long after), so the same prompt asked again is
+ * a new one.
  */
 export function dialogFor(
   it: Item,
@@ -53,14 +66,15 @@ export function dialogFor(
   const dialog = detail?.item?.key === it.key ? (detail.dialog ?? null) : null
   let expired = false
   if (answered?.shown.it.key === it.key) {
-    const was = answered.shown.kind === 'permission' ? answered.shown.dialog.fingerprint : undefined
+    const was = answered.shown.kind === 'question' ? undefined : answered.shown.dialog.fingerprint
     if (it.status !== 'blocked' || now - answered.at > ANSWERED_MS) expired = true
-    else if (!(dialog?.kind === 'permission' && dialog.fingerprint !== was))
+    else if (!(onScreen(dialog) && dialog.fingerprint !== was))
       return { shown: { ...answered.shown, it }, expired: false }
   }
-  if (it.status === 'blocked' && dialog?.kind === 'permission')
-    return { shown: { kind: 'permission', key: `${it.key}|${dialog.fingerprint}`, it, dialog }, expired }
-  return { shown: null, expired }
+  if (it.status !== 'blocked' || !onScreen(dialog)) return { shown: null, expired }
+  const key = `${it.key}|${dialog.fingerprint}`
+  if (dialog.kind === 'input') return { shown: { kind: 'input', key, it, dialog }, expired }
+  return { shown: { kind: 'permission', key, it, dialog }, expired }
 }
 
 // ---------------------------------------------------------------- one form's state
@@ -77,6 +91,8 @@ export interface FormState {
   screen: string
   /** The permission option on its way. */
   chosen: number | null
+  /** What is typed for pi's text input. */
+  text: string
 }
 
 /** The form takes no picks: read only, or its answer is on its way or through. */

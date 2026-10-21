@@ -9,6 +9,9 @@ import type { Translator } from '../../../../src/core/types.ts'
 import { useLanguage, useT } from '../../i18n/I18nProvider.tsx'
 import { passkeysHere } from '../../models/passkey.ts'
 import {
+  type CheckResult,
+  type Gate,
+  gateAfter,
   helloOf,
   keepAuth,
   keepLanguage,
@@ -22,8 +25,6 @@ import {
 } from '../../models/remote-page.ts'
 import { Store, useStore } from '../../state/store.ts'
 import { LoginCard, type LoginDeps, type LoginFlow, type LoginState, loginFlow } from './LoginScreen.tsx'
-
-export type Gate = 'checking' | 'offline' | 'refused' | 'pair' | 'login' | 'board'
 
 /** Where the gate stands, and what the last hello said. */
 export interface GateNow {
@@ -62,16 +63,25 @@ export function gateFlow(deps: { follow(lang: string): void; credentials?: Login
     return login.offering() ? 'login' : 'board'
   }
 
+  // While started: the board on show stays through a check that got no answer or a refusal, and
+  // the next check comes by itself (gateAfter, #108).
+  let started = false
+  let retry: ReturnType<typeof setTimeout> | undefined
+
   const check = async (): Promise<void> => {
-    let res: Response
-    let h: PhoneHello | null
+    let res: Response | null = null
+    let h: PhoneHello | null = null
     try {
       res = await fetch('/api/hello', { cache: 'no-store' })
       h = helloOf(await res.json().catch(() => null))
-    } catch {
-      return view.set({ gate: 'offline', hello: view.get().hello })
+    } catch {}
+    clearTimeout(retry)
+    if (!h) {
+      const result: CheckResult = res?.status === 403 ? 'refused' : 'unreachable'
+      const next = gateAfter(view.get().gate, result)
+      if (next === 'board' && started) retry = setTimeout(() => void check(), RETRY_MS / 3)
+      return view.set({ gate: next, hello: view.get().hello })
     }
-    if (!h) return view.set({ gate: res.status === 403 ? 'refused' : 'offline', hello: view.get().hello })
     if (h.language) {
       keepLanguage(h.language)
       deps.follow(h.language)
@@ -85,6 +95,7 @@ export function gateFlow(deps: { follow(lang: string): void; credentials?: Login
     login,
     check,
     start() {
+      started = true
       void check()
       // Unpaired on the computer while the page was away, the stream said so, or Sign out: ask again.
       const visible = () => {
@@ -99,6 +110,8 @@ export function gateFlow(deps: { follow(lang: string): void; credentials?: Login
         if (view.get().gate === 'offline') void check()
       }, RETRY_MS)
       return () => {
+        started = false
+        clearTimeout(retry)
         removeEventListener(UNPAIRED, again)
         removeEventListener('online', again)
         removeEventListener('pageshow', again)

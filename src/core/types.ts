@@ -42,6 +42,8 @@ export interface Card {
   profileDir?: string
   /** The profile a start asked for (the board's launch or spawn-agent). */
   profileWant?: string
+  /** The Claude id inherited by the root Codex hook, false when none. A Claude child has its own id. */
+  codexParentClaude?: string | false
   /** A fork's: the id of the session it is a fork of, and when it started (its copied lines are older). */
   forkOf?: string
   forkAt?: number
@@ -66,6 +68,10 @@ export interface LaunchSpec {
   timeoutSec?: number
   /** What the board's own spawn-agent types into a new tab: a program, or the program and its arguments. */
   claude?: string | string[]
+  /** What it types for a start that asks for pi (core/launch/agents.ts): as `claude`; `pi` when unset. */
+  pi?: string | string[]
+  /** The agent a start that names none starts as (core/launch/agents.ts): `claude` or `pi`; Claude Code when unset. */
+  default?: string
 }
 
 /** Where a launch from the board is: waiting for a dialog answered in herdr, or at the folder-trust one. */
@@ -115,6 +121,8 @@ export interface LaunchView {
   profile?: string
   /** The key of the card it was started from ("New here"): it runs in that session's profile. */
   parent?: string | null
+  /** The agent the request asked for (core/launch/agents.ts); `claude` when it named none. */
+  agent?: string
 }
 
 export interface Config {

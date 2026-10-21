@@ -3,7 +3,7 @@
 // it came from. The form keeps the values the user set apart from those that follow the folder;
 // a closed form stays as a draft of the place it was opened for. What it draws is a
 // LaunchWindowView (LaunchDialog.tsx); the folder field is folder-field.ts, the Claude profile it
-// starts in models/launch-profile.ts.
+// starts in models/launch-profile.ts, the agent it starts as (Claude Code or pi) models/launch-agent.ts.
 import {
   baseName,
   categoryForDir,
@@ -17,6 +17,15 @@ import { type LaunchApi, type LaunchOptions, NO_OPTIONS } from '../../api/launch
 import type { MenuOrigin } from '../../models/board-menus.ts'
 import { FROM_BELOW, type GrowFrom, paintWindow } from '../../models/grow.ts'
 import { type Box, growFrom, LAUNCH_MOTION, type LauncherInfo, suggestionItems } from '../../models/launch.ts'
+import {
+  type AgentRow,
+  agentBody,
+  agentRow,
+  agentStart,
+  launcherFor,
+  NO_AGENT_ROW,
+  offersAgents,
+} from '../../models/launch-agent.ts'
 import { launchContext, launchDraftBook } from '../../models/launch-drafts.ts'
 import {
   draftOf,
@@ -65,6 +74,8 @@ export interface LaunchWindowView {
   cats: CategoryChip[]
   /** The profile choice (only when offered) and the profile beside Start. */
   profile: ProfileRow
+  /** The agent choice, only when the board offers more than one. */
+  agent: AgentRow
   /** The worktree row shows: the folder is in a git checkout. */
   worktree: boolean
   branchHidden: boolean
@@ -85,6 +96,7 @@ export const CLOSED_VIEW: LaunchWindowView = {
   newWorkspaceHidden: true,
   cats: [],
   profile: { offered: false, options: [], chosen: null },
+  agent: NO_AGENT_ROW,
   worktree: false,
   branchHidden: true,
   notes: { name: NO_NOTE, cwd: NO_NOTE, profile: NO_NOTE, workspace: NO_NOTE, worktree: NO_NOTE },
@@ -133,6 +145,12 @@ interface Opening {
   /** The profile it starts in; `profileSet`: the user picked one, or the server asked for one. */
   profile: ProfilePick
   profileSet: boolean
+  /** The agent it starts as (null: no choice offered); `agentAgain`: a failed launch's or a draft's; `agentSet`: the user picked one. */
+  agent: string | null
+  agentAgain: string | null
+  agentSet: boolean
+  /** The error under the form is the server's refusal of the agent. */
+  agentRefused: boolean
 }
 
 /** The key the last workspace started in is kept under. */
@@ -250,6 +268,10 @@ export function launchWindow(deps: LaunchWindowDeps) {
       sending: false,
       profile: { picked: null, locked: false, offered: false },
       profileSet: false,
+      agent: null,
+      agentAgain: null,
+      agentSet: false,
+      agentRefused: false,
     }
     folder.reset()
     growing = { focus: fromEl instanceof Element ? fromEl : document.activeElement }
@@ -266,6 +288,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
     if (!opts || !s || s.ctx !== ctx) return
     options = opts
     launcher.set(opts.launcher)
+    followAgent()
     renderWorkspaces()
     if (!s.set.cwd && !cwd()) applyFolder(suggestions()[0]?.path ?? '', false)
   }
@@ -295,11 +318,18 @@ export function launchWindow(deps: LaunchWindowDeps) {
   // ---------------------------------------------------------------- values
   const catTitle = (id: string) => d().categories.find(c => c.id === id)?.title ?? id
   const labelOf = (id: string) => view.get().workspaces.find(w => w.id === id)?.label ?? ''
-  const draftForm = () => draftOf(fields(), s?.category ?? 'other', labelOf(view.get().fields.workspace))
+  const draftForm = () =>
+    draftOf(
+      fields(),
+      s?.category ?? 'other',
+      labelOf(view.get().fields.workspace),
+      s?.agentSet && s.agent !== null ? s.agent : undefined,
+    )
 
   function fill(ctx: LaunchContext): void {
     if (!s) return
-    const start = formStart(ctx, ctx.retry ? null : drafts.read(s.draftKey), { items: d().items, filter: d().filter })
+    const draft = ctx.retry ? null : drafts.read(s.draftKey)
+    const start = formStart(ctx, draft, { items: d().items, filter: d().filter })
     s.category = start.category
     s.set = start.set
     s.workspace = start.workspace
@@ -307,6 +337,10 @@ export function launchWindow(deps: LaunchWindowDeps) {
     setFields({ name: start.name, message: start.message, wt: start.wt, branch: start.branch })
     s.profile = startingProfile(s)
     patch({ profile: profileRow(s.profile, d().profiles) })
+    // A failed launch's agent, or one picked in the draft, counts as picked; the rest follows the board's default.
+    s.agentAgain = ctx.retry?.agent ?? draft?.agent ?? null
+    s.agentSet = !!draft?.agent
+    followAgent()
     const notes = view.get().notes
     patch({
       notes: {
@@ -395,6 +429,21 @@ export function launchWindow(deps: LaunchWindowDeps) {
     s.profile = { picked: null, locked: false, offered: true }
     s.profileSet = true
     renderProfile()
+  }
+
+  // ---------------------------------------------------------------- the agent
+  /** Until the user picks one, the agent is the one asked for again, else the board's default. */
+  function followAgent(): void {
+    if (!s) return
+    if (!s.agentSet || s.agent === null || !options.agents.some(a => a.id === s?.agent))
+      s.agent = agentStart(s.agentAgain, options.agents, options.agent)
+    renderAgent()
+  }
+
+  function renderAgent(): void {
+    if (!s) return
+    patch({ agent: agentRow(s.agent, options.agents) })
+    launcher.set(launcherFor(options.launcher, s.agent))
   }
 
   /** The card a start comes from, whose profile the server holds it to. */
@@ -490,6 +539,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
       category: st.category,
       label: labelOf(view.get().fields.workspace),
       ...profileBody(st.profile, d().profiles, parentOf(st.ctx)),
+      ...agentBody(st.agent, options.agents),
     })
     const draftVersion = drafts.write(st.draftKey, draftForm())
     st.sending = true
@@ -507,6 +557,12 @@ export function launchWindow(deps: LaunchWindowDeps) {
         askProfile()
         noteFor(field, r.error)
         later(() => $('[name="profile"]')?.focus())
+      } else if (field === 'agent') {
+        // Not an agent the board starts (any more), or pi's command is wrong: said under the form,
+        // the agent picked takes the focus, and another pick clears it.
+        st.agentRefused = true
+        patch({ error: { text: r.error, hidden: false } })
+        $('[name="agent"][aria-pressed="true"]')?.focus()
       } else if (field) {
         noteFor(field, r.error)
         $(`[name="${fieldOf(field)}"]`)?.focus()
@@ -561,6 +617,15 @@ export function launchWindow(deps: LaunchWindowDeps) {
       if (!s.set.workspace) renderWorkspaces()
       else followWorkspaceName()
       followProfile()
+    },
+    /** An agent picked (the choice is offered): it stops following the board's default. */
+    pickAgent(id: string): void {
+      if (!s || !offersAgents(options.agents) || !options.agents.some(a => a.id === id)) return
+      s.agent = id
+      s.agentSet = true
+      if (s.agentRefused) patch({ error: { ...view.get().error, hidden: true } })
+      s.agentRefused = false
+      renderAgent()
     },
     /** A profile picked (the choice is offered): it stops following the lane and the folder. */
     pickProfile(id: string): void {

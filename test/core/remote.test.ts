@@ -1,5 +1,13 @@
 import { expect, test } from 'bun:test'
-import { allowedLogin, bearerOf, desktopOnly, localOnly, remoteConfig } from '../../src/core/remote.ts'
+import {
+  allowedLogin,
+  bearerOf,
+  desktopOnly,
+  localOnly,
+  remoteConfig,
+  STATUS_RETRY_MS,
+  statusVerdict,
+} from '../../src/core/remote.ts'
 
 const PWA_OFF = { on: false, https: 443, port: null }
 
@@ -84,4 +92,14 @@ test("the board in a phone's browser is off unless remote.pwa turns it on", () =
     port: null,
   })
   expect(remoteConfig({ on: true, pwa: 'yes' }).pwa).toEqual(PWA_OFF)
+})
+
+test('a look at Tailscale that failed keeps the listeners; only failures in a row take them down (#108)', () => {
+  expect(statusVerdict(1)).toEqual({ down: false, retryMs: 5_000 })
+  expect(statusVerdict(2)).toEqual({ down: false, retryMs: 15_000 })
+  expect(statusVerdict(3)).toEqual({ down: false, retryMs: 30_000 })
+  expect(statusVerdict(4)).toEqual({ down: true })
+  expect(statusVerdict(0)).toEqual({ down: true })
+  // About fifty seconds of no answer: longer than a relay switch (24 s in the log that found it).
+  expect(STATUS_RETRY_MS.reduce((a, b) => a + b, 0)).toBe(50_000)
 })

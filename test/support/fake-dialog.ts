@@ -7,7 +7,8 @@ const RULE = '─'.repeat(60)
 
 export type Option = { label: string; description?: string }
 export type Question = { header: string; question: string; options: Option[]; multiSelect?: boolean; preview?: boolean }
-export type DialogOptions = { lag?: number; ignore?: boolean }
+/** bar: the question drawn with "│ " before each of its lines, as Claude Code 2.1.303 does. */
+export type DialogOptions = { lag?: number; ignore?: boolean; bar?: boolean }
 type QuestionState = {
   cursor: number
   checked: Set<number>
@@ -20,6 +21,7 @@ export class FakeDialog {
   questions: Question[]
   lag: number
   ignore: boolean // a terminal that takes no keys at all
+  bar: boolean
   tab = 0
   state: QuestionState[]
   submitted: (string | null)[] | null = null
@@ -28,10 +30,11 @@ export class FakeDialog {
   stale = 0
   shown: string
 
-  constructor(questions: Question[], { lag = 0, ignore = false }: DialogOptions = {}) {
+  constructor(questions: Question[], { lag = 0, ignore = false, bar = false }: DialogOptions = {}) {
     this.questions = questions
     this.lag = lag
     this.ignore = ignore
+    this.bar = bar
     this.state = questions.map(() => ({ cursor: 1, checked: new Set<number>(), other: '', answer: null }))
     this.shown = this.render()
   }
@@ -203,7 +206,7 @@ export class FakeDialog {
     }
     const q = this.q
     const s = this.s
-    out.push(q.question, '')
+    out.push(this.bar ? `│ ${q.question}` : q.question, '')
     const n = q.options.length
     const mark = (i: number) => (q.multiSelect ? `[${s.checked.has(i) ? '✔' : ' '}] ` : '')
     const pad = q.multiSelect ? '         ' : '     '

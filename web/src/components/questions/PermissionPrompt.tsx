@@ -1,6 +1,8 @@
 // A permission prompt answered from the sheet (the old page's questions.js permissionHTML and
 // sync): what the tool will do, the terminal's own choices by their tone (allow, allow for good,
 // refuse), and how the choice went. The prompt is known by its fingerprint (models/questions.ts).
+// pi's menu (an extension's ctx.ui.select, the git guard's approval) is drawn the same way, under
+// its own heading and without the question line Claude's prompts end in.
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { permissionTone } from '../../models/question-model.ts'
 import { type FormState, formBusy, formLocked, type Shown } from '../../models/questions.ts'
@@ -19,16 +21,18 @@ export function PermissionPrompt({ shown, form, canMutate, on = { click() {} } }
   const d = shown.dialog
   const body = d.body.join('\n').trim()
   const locked = formLocked(form, canMutate)
+  const pi = d.kind === 'select'
   return (
     <div
       className={classNames('asked', 'qa', 'perm', formBusy(form) && 'busy', !canMutate && 'read-only')}
       aria-busy={form.status === 'sending'}
     >
-      <b>{t('why.permission')}</b>
+      <b>{t(pi ? 'why.select' : 'why.permission')}</b>
+      {pi && d.cut && <div className="perm-more">{t('qa.cut')}</div>}
       {d.title && <div className="perm-title">{d.title}</div>}
       {body && <pre className="perm-body">{body}</pre>}
       {d.more ? <div className="perm-more">{t('qa.perm.more', { n: d.more })}</div> : null}
-      <p className="qa-text">{d.prompt}</p>
+      {!pi && <p className="qa-text">{d.prompt}</p>}
       <div className="qa-opts">
         {d.options.map(o => {
           const chosen = form.chosen === o.n

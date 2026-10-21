@@ -3,8 +3,10 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 
 export interface WebBundle {
-  /** Last good bundle of the web entry. */
+  /** Last good bundle of the web entry, naming its source map (served beside it as app.js.map). */
   js(): string
+  /** The source map of that bundle: devtools load it, the page does not. */
+  map(): string
   /** Last good bundle of the script the page runs before it paints (`early`), empty without one. */
   early(): string
   /** Hash of the bundle and every other file under web/ the page loads: changes whenever the page does. */
@@ -22,6 +24,10 @@ interface Options {
 }
 
 const stem = (file: string): string => basename(file, extname(file))
+
+// The page's script names its map, served beside it (routes/static.ts), rather than carrying it:
+// the map is twice the size of the script, and a phone would download it with every new build.
+const MAP_LINK = '\n//# sourceMappingURL=app.js.map\n'
 
 // What the page loads besides the bundle (the static route serves these types).
 const ASSETS = new Set(['.html', '.css', '.svg', '.png', '.webmanifest'])
@@ -50,15 +56,25 @@ function hashOf(js: string, webDir: string): string {
 
 /**
  * One entry bundled in memory: a module for the page's own script, or (`iife`) a classic script
- * whose names stay inside it, nothing put on `window`. Null when it did not build (logged).
+ * whose names stay inside it, nothing put on `window`. Its source map apart, or (`inline`) in it.
+ * Null when it did not build (logged).
  */
-async function bundle(entry: string, format: 'esm' | 'iife', log: (text: string) => void): Promise<string | null> {
+async function bundle(
+  entry: string,
+  format: 'esm' | 'iife',
+  sourcemap: 'external' | 'inline',
+  log: (text: string) => void,
+): Promise<{ js: string; map: string } | null> {
   const result = await Bun.build({
     entrypoints: [entry],
     target: 'browser',
     format,
-    minify: false,
-    sourcemap: 'inline',
+    // Spaces and syntax only, and the names kept (syntax alone drops a function expression's,
+    // memo(function Card…)): the component stacks a phone sends to the board's log
+    // (ErrorBoundary.tsx) still say which component failed. Identifiers stay as they are: renamed,
+    // they lose the names even with keepNames.
+    minify: { whitespace: true, syntax: true, identifiers: false, keepNames: true },
+    sourcemap,
     // React's production build: without it the page gets the development one (slower, larger,
     // and with its warnings in the console).
     define: { 'process.env.NODE_ENV': '"production"' },
@@ -69,24 +85,28 @@ async function bundle(entry: string, format: 'esm' | 'iife', log: (text: string)
     log(`web bundle: ${result.logs[0]?.message ?? 'build failed'}`)
     return null
   }
-  return output.text()
+  const map = result.outputs.find(o => o.kind === 'sourcemap')
+  return { js: await output.text(), map: map ? await map.text() : '' }
 }
 
 /** Bundles the web entry in memory with Bun.build; a failed build keeps the previous bundle. */
 export async function createWebBundle(opts: Options): Promise<WebBundle> {
   const webDir = join(opts.root, 'web')
   let js = ''
+  let map = ''
   let early = ''
   let version = ''
 
   async function build(): Promise<void> {
     try {
-      const main = await bundle(opts.entry, 'esm', opts.log)
+      const main = await bundle(opts.entry, 'esm', 'external', opts.log)
       if (main === null) return
-      const before = opts.early ? await bundle(opts.early, 'iife', opts.log) : ''
+      // A few kilobytes: its map stays in it.
+      const before = opts.early ? await bundle(opts.early, 'iife', 'inline', opts.log) : { js: '' }
       if (before === null) return
-      js = main
-      early = before
+      js = main.js + MAP_LINK
+      map = main.map
+      early = before.js
     } catch (err) {
       // Bun.build throws an AggregateError of the build messages when it fails.
       const first = err instanceof AggregateError ? err.errors[0] : err
@@ -109,6 +129,7 @@ export async function createWebBundle(opts: Options): Promise<WebBundle> {
   let queue = Promise.resolve()
   return {
     js: () => js,
+    map: () => map,
     early: () => early,
     version: () => version,
     rebuild() {

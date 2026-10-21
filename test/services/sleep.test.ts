@@ -52,8 +52,11 @@ const RULE = '─'.repeat(40)
 const screen = (typed = '', dim = ''): string =>
   ['● done', RULE, `❯ ${typed}${dim ? `\x1b[2m${dim}\x1b[0m` : ''}`, RULE, '  ⏵⏵ bypass permissions on'].join('\n')
 
-/** A pane: Claude session `session` named `name` in herdr's status, or (status null) the shell left after it exited. */
-type Pane = { id: string; session: string; name: string; status: string | null; typed?: string }
+/**
+ * A pane: Claude session `session` named `name` in herdr's status, or (status null) the shell left after it exited;
+ * `agent` another agent, whose session herdr does not name when `session` is empty.
+ */
+type Pane = { id: string; session: string; name: string; status: string | null; typed?: string; agent?: string }
 
 /** herdr with these panes, each answering `agent get` and `agent read` for itself. */
 function herdrWith(box: Sandbox, panes: Pane[]): void {
@@ -65,8 +68,8 @@ function herdrWith(box: Sandbox, panes: Pane[]): void {
             p.status
               ? {
                   pane_id: p.id,
-                  agent: 'claude',
-                  agent_session: { value: p.session },
+                  agent: p.agent ?? 'claude',
+                  ...(p.session && { agent_session: { value: p.session } }),
                   agent_status: p.status,
                   cwd: box.dir,
                   terminal_title_stripped: p.name,
@@ -83,7 +86,13 @@ function herdrWith(box: Sandbox, panes: Pane[]): void {
   for (const p of panes) {
     state[`agent get ${p.id}`] = {
       result: {
-        agent: p.status ? { agent: 'claude', agent_status: p.status, agent_session: { value: p.session } } : null,
+        agent: p.status
+          ? {
+              agent: p.agent ?? 'claude',
+              agent_status: p.status,
+              ...(p.session && { agent_session: { value: p.session } }),
+            }
+          : null,
       },
     }
     state[`agent read ${p.id}`] = { text: screen(p.typed ?? '', 'try: run the tests') }
@@ -307,6 +316,81 @@ test('board sleep --when-free: the free ones now, the busy ones once they are fr
   assert.equal(stored(box).length, 1)
   const list = await agentCli(box, ['schedule', '--all'])
   assert.match(list.out, new RegExp(`^${e.id} · sleep, asked .+ · once the session is free · Two$`))
+})
+
+test('board sleep --self: the session running it, once its turn is over, found as board doing finds it (#130)', async () => {
+  const box = await sandbox()
+  const panes = [
+    pane('p1', 'One', 'idle'),
+    pane('p2', 'Two', 'working'),
+    pane('p3', 'Lead', 'working'),
+    { id: 'p4', session: '', name: 'Pi', status: 'idle', agent: 'pi' },
+  ]
+  herdrWith(box, panes)
+  const wake = await fakeWake(box, panes)
+  config(box, { wakeUrl: wake.url })
+  // Without --when-free the others are as before (--session's one among them): the free one now, the
+  // busy one kept up; itself once it is free, named by a target too but one line, an entry of its own
+  // that names no other session as its setter.
+  const r = await agentCli(box, ['sleep', 'Two', 'Lead', '--self', '--session', 'One'], {
+    CLAUDE_CODE_SESSION_ID: 's-p3',
+    HERDR_PANE_ID: 'p3',
+  })
+  assert.equal(r.code, 0, r.out)
+  const [e] = stored(box)
+  assert.ok(e)
+  assert.deepEqual(
+    [e.kind, e.idle, e.by, e.key, e.pane, e.text, e.from],
+    ['sleep', true, 'agent', 's-p3', 'p3', '', undefined],
+  )
+  const lines = r.out.split('\n')
+  assert.match(
+    lines[0] ?? '',
+    /^ok · 1 put to sleep, 1 once free, 1 kept up · with --when-free the busy ones go to sleep once they are free · note: no board with the scheduler/,
+  )
+  assert.deepEqual(lines.slice(1), [
+    'Two (p2): kept up, working',
+    'One (p1): asleep',
+    `Lead (p3): working; goes to sleep once it is free · cancel: board unschedule ${e.id}`,
+  ])
+  assert.deepEqual(wake.targets(), ['p1'])
+
+  // From a pane whose session herdr names (no CLAUDE_CODE_SESSION_ID), itself by name too: asked
+  // again, one entry, one line, no word about --when-free.
+  const again = await agentCli(box, ['sleep', 'Lead', '--self'], { HERDR_PANE_ID: 'p3' })
+  assert.equal(again.code, 0, again.out)
+  assert.deepEqual(again.out.split('\n').slice(1), [
+    `Lead (p3): working; goes to sleep once it is free (asked before) · cancel: board unschedule ${e.id}`,
+  ])
+  assert.match(again.out, /^ok · 0 put to sleep, 1 once free · note: /)
+  assert.equal(stored(box).length, 1)
+
+  // A pane whose agent herdr names no session for (a pane-<id> key): not a Claude session, as when named.
+  const pi = await agentCli(box, ['sleep', '--self'], { HERDR_PANE_ID: 'p4' })
+  assert.equal(pi.code, 0, pi.out)
+  assert.deepEqual(pi.out.split('\n'), [
+    'ok · 0 put to sleep, 1 kept up',
+    'Pi (p4): kept up, not a Claude session, and herdr-wake puts only those to sleep',
+  ])
+
+  // A session id the board does not know: refused, the others named with it left alone too.
+  const stranger = await agentCli(box, ['sleep', 'Two', '--self', '--when-free'], { CLAUDE_CODE_SESSION_ID: 's-x' })
+  assert.equal(stranger.code, 1)
+  assert.match(stranger.out, /board sleep --self: this session \(s-x\) is not on the board; nothing was put to sleep/)
+  assert.equal(stored(box).length, 1)
+
+  // Outside a session there is none to put to sleep, and nothing is.
+  const none = await agentCli(box, ['sleep', '--self'])
+  assert.equal(none.code, 1)
+  assert.match(
+    none.out,
+    /board sleep --self is for the session running it, and this is none: .+; nothing was put to sleep/,
+  )
+  assert.deepEqual(wake.targets(), ['p1'])
+  assert.equal(stored(box).length, 1)
+  // The word is sleep's only: in another command's text it stays.
+  const doing = await agentCli(box, ['doing', 'try', '--self'], { CLAUDE_CODE_SESSION_ID: 's-p3' })
+  assert.match(doing.out, /doing: try --self$/)
 })
 
 test('the scheduler puts a busy one to sleep once it is free, and nothing more: no wake, nothing typed', async () => {

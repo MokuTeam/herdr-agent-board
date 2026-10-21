@@ -15,7 +15,7 @@ import { markPasskeyMade, passkeyMade } from '../../web/src/models/passkey.ts'
 import { keptAuth, UNPAIRED } from '../../web/src/models/remote-page.ts'
 import { board, renderInBoard } from './support/board.tsx'
 import { type FakeElement, FakeWorld } from './support/fake-dom.ts'
-import { answers, type Call, restoreFetch, sent } from './support/fetch-answers.ts'
+import { type Answer, answers, type Call, restoreFetch, sent } from './support/fetch-answers.ts'
 import { type Element, find, findAll, hasClass, type Node } from './support/markup.ts'
 import { clone, commit, first } from './support/react-commit.ts'
 import { type Host, hostElements, listenLikeReact } from './support/react-events.ts'
@@ -517,10 +517,6 @@ test('the gate: through the domain, the login screen until signed in, then the b
     expect(shown()).toContain('Sign in to the board')
     expect(keptAuth()).toBe('login')
 
-    answers([200, hello(true)])
-    await gate.check()
-    expect(shown()).toBe('The board')
-
     // The computer away (Caddy answers 502), or no network at all: the domain's own text.
     for (const reply of [[502, 'Bad Gateway'] as [number, unknown], new TypeError('Failed to fetch')]) {
       answers(reply)
@@ -535,6 +531,16 @@ test('the gate: through the domain, the login screen until signed in, then the b
     expect(gate.view.get().gate).toBe('refused')
     expect(shown()).toContain('This address does not reach the board.')
     expect(shown()).not.toContain('Tailscale')
+
+    answers([200, hello(true)])
+    await gate.check()
+    expect(shown()).toBe('The board')
+    // The board on show stays through a check with no answer or a refusal (gateAfter, #108).
+    for (const reply of [[502, 'Bad Gateway'], new TypeError('Failed to fetch'), [403, {}]] as Answer[]) {
+      answers(reply)
+      await gate.check()
+      expect(shown()).toBe('The board')
+    }
 
     // Through Tailscale (hello without auth): pairing, and its own texts, as today.
     answers([200, { board: 'agent-board', host: 'BOX', paired: false }])

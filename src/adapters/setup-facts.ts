@@ -5,6 +5,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, posix, resolve, win32 } from 'node:path'
+import { cardStore } from '../core/card-store.ts'
 import { shimTarget } from '../core/install-plan.ts'
 import { t } from '../core/lang.ts'
 import { isRefusedProgram, launcherLabel } from '../core/launch/launcher-command.ts'
@@ -291,9 +292,16 @@ export async function gatherFacts(
   const first = profiles[0] ?? settingsIn(defaultProfileDir(home))
   const configFile = herdrConfigFile(env, home)
   const wakeUrl = typeof cfg?.wakeUrl === 'string' && cfg.wakeUrl ? cfg.wakeUrl : null
+  let storage: SetupFacts['cardStore']
+  try {
+    storage = cardStore(env, home, platform)
+  } catch (err) {
+    storage = { error: err instanceof Error ? err.message : String(err) }
+  }
   return {
     platform,
     root,
+    cardStore: storage,
     node: process.versions.node ?? '',
     binDir: join(home, '.local', 'bin'),
     path: String(env.PATH ?? env.Path ?? ''),

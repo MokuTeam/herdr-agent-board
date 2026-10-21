@@ -274,6 +274,33 @@ test('not on show, a refusal says why in a toast', async () => {
   expect(p.log.at(-1)).toBe('error: no herdr')
 })
 
+test('a dialog refusal preserves text, attachments and request id without retrying by itself', async () => {
+  const p = page([a])
+  p.open('a')
+  p.box.input('keep this unsent text')
+  const file = done(1, '/u/1.png', 'blob:1')
+  p.state.files = [file]
+  const id = p.draft('sa').id
+  const sent = p.box.send()
+  await p.box.send() // a second click while the request is in flight
+  p.answer({ ok: false, error: 'Test waits for a dialog' })
+  await sent
+  expect(p.posts).toHaveLength(1)
+  expect(p.waiting('a')).toMatchObject([
+    { id, text: 'keep this unsent text', attached: [file], state: 'failed', error: 'Test waits for a dialog' },
+  ])
+  expect(p.draft('sa')).toEqual({ id, text: 'keep this unsent text' })
+  expect(p.timers).toEqual([]) // no background resend
+  const reloaded = page([a], p.storage)
+  reloaded.open('a')
+  expect(reloaded.state.text).toBe('keep this unsent text')
+  p.box.edit(id)
+  expect(p.state.text).toBe('keep this unsent text')
+  expect(p.state.files).toEqual([file])
+  expect(p.waiting('a')).toEqual([])
+  expect(p.posts).toHaveLength(1)
+})
+
 test('Edit puts a message not sent back into the box, before what was typed since, files and all', async () => {
   const p = page([a])
   p.open('a')

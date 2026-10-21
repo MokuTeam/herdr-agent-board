@@ -501,6 +501,9 @@ describe("the server's answers, narrowed", () => {
       }),
     ).toEqual({
       launcher: { kind: 'herdr', agent: 'claude' },
+      // A board from before the agent choice: none to pick, Claude Code's start.
+      agents: [],
+      agent: 'claude',
       workspaces: [
         { id: 'w1', label: 'A' },
         { id: 'w2', label: undefined },
@@ -508,6 +511,21 @@ describe("the server's answers, narrowed", () => {
       focused: '',
       board: '',
       recent: [],
+    })
+    // The agents a start may pick, and the board's default; what is not an agent is left out.
+    expect(
+      asOptions({
+        launcher: { kind: 'herdr', agent: 'claude' },
+        agents: [{ id: 'claude', title: 'Claude Code' }, { id: 'pi', title: 'pi', extra: 1 }, { id: '' }, 'pi', null],
+        agent: 'pi',
+        workspaces: [],
+      }),
+    ).toMatchObject({
+      agents: [
+        { id: 'claude', title: 'Claude Code' },
+        { id: 'pi', title: 'pi' },
+      ],
+      agent: 'pi',
     })
     expect(
       asOptions({ launcher: { kind: 'command', name: 'my-cli' }, workspaces: [], recent: ['/a', 3] }),

@@ -1,6 +1,6 @@
 // The "new session" window as drawn: over the dimmed board, its title and how sessions start, the
-// form (name, folder, category, the Claude profile when there is a choice, where it opens, a
-// worktree, the first message) and its buttons, the profile it starts in beside Start.
+// form (name, folder, category, the agent and the Claude profile when there is a choice, where it
+// opens, a worktree, the first message) and its buttons, the profile it starts in beside Start.
 // It lives in <body> itself, beside the page (hooks/useModalFocus.ts); its motion, focus, keys
 // and what the form does are launch-window.ts's (and folder-field.ts's for the folder).
 import { type RefObject, useLayoutEffect, useMemo } from 'react'
@@ -34,6 +34,7 @@ export type LaunchHandlers = Pick<
   | 'branch'
   | 'message'
   | 'pickCategory'
+  | 'pickAgent'
   | 'pickProfile'
 > & { folder: FolderHandlers }
 
@@ -48,6 +49,7 @@ export const launchHandlers = (w: LaunchWindow): LaunchHandlers => ({
   branch: w.branch,
   message: w.message,
   pickCategory: w.pickCategory,
+  pickAgent: w.pickAgent,
   pickProfile: w.pickProfile,
   folder: w.folder,
 })
@@ -148,6 +150,25 @@ export function LaunchDialogView({ view, folder, launcher, t, on, refs }: Launch
                 ))}
               </div>
             </div>
+            {view.agent.offered && (
+              <div className="row agent-row">
+                <span className="row-label">{t('launch.agent')}</span>
+                <div className="row-value chips launch-agents">
+                  {view.agent.options.map(a => (
+                    <button
+                      type="button"
+                      key={a.id}
+                      name="agent"
+                      data-agent={a.id}
+                      aria-pressed={a.pressed}
+                      onClick={() => on.pickAgent(a.id)}
+                    >
+                      {a.title}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {view.profile.offered && (
               <>
                 <div className="row profile-row">

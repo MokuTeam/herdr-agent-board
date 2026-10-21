@@ -165,3 +165,19 @@ export function bearerOf(header: string | null): string | null {
   const m = /^Bearer\s+([\w-]{20,200})$/i.exec(header?.trim() ?? '')
   return m?.[1] ?? null
 }
+
+/**
+ * When to look at Tailscale again after a look that failed (`tailscale status` did not answer, or
+ * it said it was starting): the listeners stay up meanwhile. A relay switch or a busy tailscaled
+ * passes within these; failures for all of them, about fifty seconds, take the listeners down (#108).
+ */
+export const STATUS_RETRY_MS: readonly number[] = [5_000, 15_000, 30_000]
+
+/** After `failures` failed looks in a row: keep the listeners and look again in `retryMs`, or take them down. */
+export function statusVerdict(failures: number): { down: false; retryMs: number } | { down: true } {
+  const retryMs = STATUS_RETRY_MS[failures - 1]
+  return failures >= 1 && retryMs !== undefined ? { down: false, retryMs } : { down: true }
+}
+
+/** How long a caller Tailscale vouched for keeps its word while `tailscale whois` does not answer. */
+export const WHOIS_GRACE_MS = 10 * 60_000

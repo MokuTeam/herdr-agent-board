@@ -6,12 +6,18 @@
 //
 // Pure: adapters/setup-facts.ts reads this computer into SetupFacts, and tests hand in fixtures.
 import { join } from 'node:path'
+import type { CardStore } from './card-store.ts'
 import { translator } from './i18n/translator.ts'
 import { BOARD_EVENTS, commandsOf, normPath, ourCommands, TOAST_EVENTS } from './install-plan.ts'
 import type { MokupilotLauncher } from './mokupilot.ts'
 import type { Translator } from './types.ts'
 
-export const WAKE_REPO = 'https://github.com/Eithery-rc/tg-mcp/tree/main/herdr-wake'
+/** herdr-wake from this repository (herdr-wake/README.md): install, its Claude Code hooks, start. */
+export const WAKE_INSTALL = [
+  'herdr plugin install MokuTeam/herdr-agent-board/herdr-wake',
+  'herdr plugin action invoke herdr-wake.install-hooks',
+  'herdr plugin action invoke herdr-wake.start',
+].join('\n')
 const english = translator('en')
 
 /** The files of a copy of the board that other programs run, and the skill install copies. */
@@ -167,6 +173,8 @@ export interface ProfileSettings {
 export interface SetupFacts {
   platform: string
   root: string
+  /** Effective paths of this process; other writers' environments are not guessed. */
+  cardStore?: CardStore | { error: string }
   /** The Node version the runtime reports (Bun: the Node version it is compatible with). */
   node: string
   binDir: string
@@ -234,6 +242,25 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
 
   const major = Number(String(facts.node ?? '').split('.')[0])
   if (major && major < 20) add('node', 'error', t('setup.node', { version: facts.node }), t('setup.node.detail'))
+
+  const store = facts.cardStore
+  if (store) {
+    if ('error' in store) add('cards', 'error', t('setup.cards.invalid'), store.error, t('setup.cards.fix'))
+    else {
+      const uncertain = store.customState && !store.explicit
+      add(
+        'cards',
+        uncertain ? 'warn' : 'ok',
+        t(uncertain ? 'setup.cards.check' : 'setup.cards.title'),
+        t('setup.cards.detail', {
+          cards: store.cards,
+          schedule: store.schedule,
+          source: store.explicit ? 'HERDR_BOARD_CARDS_DIR' : 'LOCALAPPDATA / ~/.local/state',
+        }),
+        t(uncertain ? 'setup.cards.preview' : 'setup.cards.writers'),
+      )
+    }
+  }
 
   // A command: where each shell finds it, and whether that is this copy's.
   const command = (name: 'board' | 'spawn-agent', file: string, level: SetupLevel, without: string) => {
@@ -432,7 +459,7 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
       t('setup.wake.off'),
       both(t('setup.wake.offDetail'), t('setup.wake.without')),
       t('setup.wake.fix'),
-      WAKE_REPO,
+      WAKE_INSTALL,
     )
   else if (facts.wake?.ok) add('wake', 'ok', t('setup.wake.ok'), t('setup.wake.okDetail', { url: facts.wakeUrl }))
   else
@@ -442,7 +469,7 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
       t('setup.wake.down', { url: facts.wakeUrl }),
       t('setup.wake.without'),
       t('setup.wake.fix'),
-      WAKE_REPO,
+      WAKE_INSTALL,
     )
 
   // How new sessions start.

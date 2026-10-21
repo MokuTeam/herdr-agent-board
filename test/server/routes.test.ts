@@ -3,6 +3,7 @@
 // chain matched (prefix routes, a missing session before any guard).
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { connect } from 'node:net'
+import { brotliDecompressSync, gunzipSync } from 'node:zlib'
 import { serveBoard, sharedSandbox } from '../support/board-server.ts'
 
 const PAGE_CSP =
@@ -126,6 +127,8 @@ describe('routes', () => {
       'styles/categories.css',
       'styles/segments.css',
       'styles/access.css',
+      'styles/motion.css',
+      'styles/errors.css',
       'app.js',
     ])
     for (const link of links) expect([link, (await fetch(`${url}/${link}`)).status]).toEqual([link, 200])
@@ -169,6 +172,79 @@ describe('routes', () => {
       '/api/nothing',
     ])
       expect([path, ...(await answer(fetch(url + path)))]).toEqual([path, 404, { error: 'not found' }])
+  })
+
+  test('the page goes out compressed when the browser takes it (br, else gzip), its source map apart', async () => {
+    const plain = await fetch(`${url}/app.js`, { headers: { 'accept-encoding': 'identity' } })
+    expect(plain.headers.get('content-encoding')).toBe(null)
+    expect(plain.headers.get('vary')).toBe('accept-encoding')
+    const script = await plain.text()
+    // The script names its map, which devtools load and the page does not.
+    expect(script).not.toContain('sourceMappingURL=data:')
+    expect(script.trimEnd().endsWith('//# sourceMappingURL=app.js.map')).toBe(true)
+    const map = await fetch(`${url}/app.js.map`)
+    expect(map.headers.get('content-type')).toBe('application/json; charset=utf-8')
+    const { sources } = (await map.json()) as { sources: string[] }
+    expect(sources.some(s => s.endsWith('web/src/main.tsx'))).toBe(true)
+    // As the bytes go: a fraction of the script, the same script once decoded.
+    const raw = (path: string, accept: string) =>
+      fetch(url + path, { headers: { 'accept-encoding': accept }, decompress: false } as RequestInit)
+    for (const [accept, encoding] of [
+      ['gzip, deflate, br, zstd', 'br'],
+      ['gzip, deflate', 'gzip'],
+      ['br;q=0, gzip', 'gzip'],
+      ['*', 'br'],
+    ] as const) {
+      const res = await raw('/app.js', accept)
+      expect([accept, res.headers.get('content-encoding'), res.headers.get('vary')]).toEqual([
+        accept,
+        encoding,
+        'accept-encoding',
+      ])
+      const bytes = Buffer.from(await res.arrayBuffer())
+      expect(bytes.length).toBeLessThan(script.length / 3)
+      expect((encoding === 'br' ? brotliDecompressSync(bytes) : gunzipSync(bytes)).toString()).toBe(script)
+    }
+    // The page's other text too; the PNG icons as they are.
+    for (const path of ['/', '/theme.js', '/styles/app.css', '/icon.svg', '/app.js.map'])
+      expect([path, (await raw(path, 'gzip')).headers.get('content-encoding')]).toEqual([path, 'gzip'])
+    const png = await raw('/icon-192.png', 'gzip, br')
+    expect([png.headers.get('content-encoding'), png.headers.get('vary')]).toEqual([null, null])
+  })
+
+  test('a file the browser already has, by its ETag: a 304 with no body', async () => {
+    const get = (path: string, headers: Record<string, string> = {}) =>
+      fetch(url + path, { headers: { 'accept-encoding': 'br', ...headers }, decompress: false } as RequestInit)
+    for (const path of ['/', '/app.js', '/app.js.map', '/theme.js', '/styles/app.css', '/icon-192.png']) {
+      const first = await get(path)
+      const etag = first.headers.get('etag') ?? ''
+      expect([path, etag]).toEqual([path, expect.stringMatching(/^"[\w-]+"$/)])
+      expect(first.headers.get('cache-control')).toBe('no-cache')
+      // The same file: the same tag, and with it a 304 that carries nothing.
+      expect((await get(path)).headers.get('etag')).toBe(etag)
+      for (const ask of [etag, `W/${etag}`, `"other", ${etag}`, '*']) {
+        const again = await get(path, { 'if-none-match': ask })
+        expect([path, ask, again.status, again.headers.get('etag'), (await again.arrayBuffer()).byteLength]).toEqual([
+          path,
+          ask,
+          304,
+          etag,
+          0,
+        ])
+      }
+      // Another tag: the whole file.
+      const other = await get(path, { 'if-none-match': '"other"' })
+      expect([path, other.status]).toEqual([path, 200])
+      expect((await other.arrayBuffer()).byteLength).toBeGreaterThan(0)
+    }
+    // The compressed and the plain answer are different bytes: different tags, neither stands for the other.
+    const br = (await get('/app.js')).headers.get('etag') ?? ''
+    const plain = (await get('/app.js', { 'accept-encoding': 'identity' })).headers.get('etag') ?? ''
+    const gzip = (await get('/app.js', { 'accept-encoding': 'gzip' })).headers.get('etag') ?? ''
+    expect(new Set([br, plain, gzip]).size).toBe(3)
+    expect((await get('/app.js', { 'accept-encoding': 'identity', 'if-none-match': br })).status).toBe(200)
+    // Files of their own, tags of their own.
+    expect((await get('/theme.js')).headers.get('etag')).not.toBe(br)
   })
 
   test('anything else that matches no route: 405', async () => {
@@ -226,6 +302,8 @@ describe('routes', () => {
     const options = await fetch(`${url}/api/launch/options`)
     expect(options.status).toBe(200)
     expect(Object.keys((await options.json()) as object).sort()).toEqual([
+      'agent',
+      'agents',
       'board',
       'error',
       'focused',

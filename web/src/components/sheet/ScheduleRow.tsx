@@ -10,7 +10,7 @@ import { restartView } from '../../models/restart.ts'
 import { entryText, overdue } from '../../models/schedule.ts'
 import type { Held } from '../../models/schedule-desk.ts'
 import { classNames } from '../class-names.ts'
-import { AlarmGlyph, RepeatGlyph, RestartGlyph } from '../icons.tsx'
+import { AlarmGlyph, RepeatGlyph, RestartGlyph, Turn } from '../icons.tsx'
 import { CancelButton, ModeButton } from '../schedule/ScheduleButtons.tsx'
 
 export interface ScheduleActions {
@@ -93,7 +93,9 @@ function RestartRow({
   return (
     <div className="sched-mini restart" data-id={entry.id}>
       <span className={classNames('when', view.on && 'on')} title={view.title}>
-        <RestartGlyph />
+        <Turn>
+          <RestartGlyph />
+        </Turn>
         {view.badge}
       </span>
       <span className="text" title={view.title}>

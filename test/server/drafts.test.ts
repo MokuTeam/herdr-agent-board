@@ -1,14 +1,14 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { serveBoard } from '../support/board-server.ts'
 import { sandbox, until } from '../support/sandbox.ts'
 
 type Board = { stale: boolean; items: { session?: string | null; key?: string }[] }
-type Result = { ok: boolean }
+type Result = { ok: boolean; busy?: boolean; dialog?: boolean }
 
-test('HTTP messages recheck a fresh snapshot and reject replaced sessions/offline without prompt', async () => {
+test('HTTP messages reject replacement sessions, dialogs and offline; an explicit retry sends once', async () => {
   const box = await sandbox()
   const snapshot = (session: string) => ({
     panes: [{ pane_id: 'p', agent: 'claude', agent_session: { value: session }, agent_status: 'idle' }],
@@ -17,7 +17,8 @@ test('HTTP messages recheck a fresh snapshot and reject replaced sessions/offlin
   })
   const state = (session: string): Record<string, Record<string, unknown>> => ({
     'api snapshot': { result: { snapshot: snapshot(session) } },
-    'agent get': { result: { agent: { agent_session: { value: session }, agent_status: 'idle' } } },
+    'agent get': { result: { agent: { agent: 'claude', agent_session: { value: session }, agent_status: 'idle' } } },
+    'agent read': { text: `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  ? for shortcuts` },
     'agent prompt': { result: {} },
   })
   box.state(state('a'))
@@ -47,6 +48,18 @@ test('HTTP messages recheck a fresh snapshot and reject replaced sessions/offlin
   box.state(state('a'))
   proc.send('refresh')
   await fresh()
+  const dialog = state('a')
+  dialog['agent read'] = {
+    text: readFileSync(new URL('../support/screens/teach-auto-mode.txt', import.meta.url), 'utf8'),
+  }
+  box.state(dialog)
+  const refused = await post('duplicate')
+  assert.equal(refused.ok, false)
+  assert.equal(refused.busy, true)
+  assert.equal(refused.dialog, true)
+  assert.equal(prompts(), 0)
+  // A rejected request is retryable after the user resolves the dialog. Duplicate clicks and
+  // HTTP replays of that successful retry still share the original request id and send once.
   const release = join(box.dir, 'release-prompt')
   const delayed = state('a')
   ;(delayed['agent prompt'] as Record<string, unknown>).waitFor = release

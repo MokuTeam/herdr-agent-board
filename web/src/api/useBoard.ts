@@ -2,7 +2,7 @@
 // while the page is hidden or offline and resumed when it is back.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { boardConnection } from '../models/lifecycle.ts'
-import { remotePage, UNPAIRED } from '../models/remote-page.ts'
+import { nextRetryMs, remotePage, UNPAIRED } from '../models/remote-page.ts'
 import { listenForReveals, type Reveal } from '../models/reveal.ts'
 import { api, type BoardPayload, isBoardPayload } from './client.ts'
 
@@ -35,6 +35,18 @@ export function useBoard(): LiveBoard {
 
   useEffect(() => {
     let started = false
+    // In a phone's browser: an answer that was not the stream (a 502 from serve while the board's
+    // listener is down) closes it for good, so it is opened again here, waiting longer each time (#108).
+    let retry: ReturnType<typeof setTimeout> | undefined
+    let wait: number | null = null
+    const reopen = () => {
+      if (retry) return
+      wait = nextRetryMs(wait)
+      retry = setTimeout(() => {
+        retry = undefined
+        resumeRef.current()
+      }, wait)
+    }
     // The board as it came last, before React draws it: a `reveal` right after it goes by it.
     let latest: BoardPayload | null = null
     const connection = boardConnection({
@@ -43,7 +55,12 @@ export function useBoard(): LiveBoard {
         // A notification clicked while this page is open (entrypoints/web-open.ts through /api/reveal).
         listenForReveals(stream, () => latest, setReveal)
         // In a phone's browser: unpaired on the computer, the board says so as it ends the stream.
-        if (remotePage()) stream.addEventListener('unpaired', () => dispatchEvent(new Event(UNPAIRED)))
+        if (remotePage()) {
+          stream.addEventListener('unpaired', () => dispatchEvent(new Event(UNPAIRED)))
+          stream.addEventListener('error', () => {
+            if (stream.readyState === EventSource.CLOSED) reopen()
+          })
+        }
         return stream
       },
       snapshot: signal => api.board(signal),
@@ -57,6 +74,7 @@ export function useBoard(): LiveBoard {
       },
       connected(value) {
         setConnected(value)
+        if (value) wait = null
         // The first resume closes a stream that never was: that is no drop.
         if (!value && started) setDropped(true)
       },
@@ -79,6 +97,7 @@ export function useBoard(): LiveBoard {
       removeEventListener('offline', suspend)
       document.removeEventListener('visibilitychange', visibility)
       started = false
+      clearTimeout(retry)
       suspend()
     }
   }, [])

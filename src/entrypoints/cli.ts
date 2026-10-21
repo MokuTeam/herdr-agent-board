@@ -29,15 +29,21 @@
 //                            closes, the user can bring it back from the board's archive (services/archive.ts)
 //   board sleep <id|name|pane>...   puts those sessions to sleep at once through herdr-wake, a line
 //                            for each: asleep, or kept up and why (services/sleep.ts); with
-//                            --when-free the busy ones go to sleep once they are free
+//                            --when-free the busy ones go to sleep once they are free; --self
+//                            puts this session to sleep too, once its turn is over
 //   board fork [--name <Name>] [note]   a fork of this session (or --session's): a new session in
 //                            a new tab with a copy of its conversation, started by the web board as
 //                            its Fork does (services/launch/fork.ts); the note is its first message
 //   board tunnel [on|off|test]   the board through the owner's own domain (core/tunnel.ts): where
 //                            the tunnel stands; on and off in config.json; test runs Test connection
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
+//   board resume <session id> [--profile <id>]   resumes that session here, in the profile its
+//                            card says it ran in (else the one named): what herdr types into a
+//                            restored pane for a session in another profile than the default one
+//                            (core/resume.ts); runs Claude in the foreground, exits with its code
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { readArchiveLog } from '../adapters/archive-store.ts'
 import {
   enqueueReport,
@@ -52,14 +58,18 @@ import { configFile, editCategories, loadConfig, setRemoteOn, setTunnelOn } from
 import { type HerdrPane, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { boardFile } from '../adapters/paths.ts'
+import { runHere } from '../adapters/process.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
+import { loadProfiles } from '../adapters/profiles.ts'
 import { addEntry, askRestart, listEntries, type NewEntry, removeEntry } from '../adapters/schedule-store.ts'
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
+import { CODEX_AGENT } from '../core/codex.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
 import { type ProfileSet, profileSet, sessionProfile } from '../core/profiles.ts'
 import { type RemoteView, remoteConfig } from '../core/remote.ts'
+import { parseResume, resumePlan } from '../core/resume.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
 import { boardPorts, type TestStep, tunnelChecks, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
 import type { Item } from '../core/types.ts'
@@ -69,9 +79,9 @@ import { checkWake, wakeAnswers } from '../services/actions.ts'
 import { askArchive, closeDue, getArchived, profileDoubt } from '../services/archive.ts'
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
-import { type SleepOutcome, sleepMany } from '../services/sleep.ts'
+import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | resume <session id> [--profile <id>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -98,6 +108,10 @@ const mode = (): { idle?: true } => (idle ? { idle: true } : {})
 const wi = args.indexOf('--when-free')
 const whenFree = wi >= 0
 if (whenFree) args.splice(wi, 1)
+// sleep: this session too, once it is free; a word of any other command's text stays.
+const mi = args[0] === 'sleep' ? args.indexOf('--self') : -1
+const self = mi >= 0
+if (self) args.splice(mi, 1)
 const modeText = (): string => (idle ? ', when the session is free' : '')
 const [cmd = 'show', ...rest] = args
 const text = rest.join(' ').replace(/\s+/g, ' ').trim()
@@ -117,6 +131,24 @@ interface Session {
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const paneOf = async (pane: string): Promise<HerdrPane | undefined> =>
   (await snapshot()).panes.find(x => x.pane_id === pane)
+
+/** A real Claude child has a new id; a root Codex can carry the Claude id its hook recorded. */
+function codexCaller(): boolean {
+  const codex = process.env.CODEX_THREAD_ID
+  if (!codex) return false
+  const claude = process.env.CLAUDE_CODE_SESSION_ID
+  return !claude || readCard(codex)?.codexParentClaude === claude
+}
+
+/** A Codex child inherits its parent's pane env; only the reported root session owns its card. */
+function codexSession(p: HerdrPane | undefined): (Session & { name: string }) | null {
+  if (p?.agent !== CODEX_AGENT) return null
+  const own = process.env.CODEX_THREAD_ID
+  const pane = process.env.HERDR_PANE_ID
+  if (own && p.agent_session?.value === own)
+    return { key: own, cwd: p.cwd ?? '', pane, name: p.terminal_title_stripped || own.slice(0, 8) }
+  throw new Error('cannot tell which Codex session this is: use its herdr pane, or pass --session')
+}
 /**
  * The sessions running in every profile listed, hidden ones too, this env's own folder first (its
  * answer wins), as the board reads them (services/board.ts collect).
@@ -137,6 +169,14 @@ async function resolveSession(): Promise<Session> {
     if (!item) throw new Error(`no session "${target}" on the board`)
     return { key: item.key, cwd: item.cwd, name: item.name, pane: item.pane }
   }
+  const pane = process.env.HERDR_PANE_ID
+  const fromCodex = codexCaller()
+  let reported: HerdrPane | undefined
+  if (fromCodex && pane) {
+    reported = await paneOf(pane)
+    const codex = codexSession(reported)
+    if (codex) return codex
+  }
   const own = process.env.CLAUDE_CODE_SESSION_ID
   if (own) {
     return {
@@ -146,9 +186,8 @@ async function resolveSession(): Promise<Session> {
       pane: process.env.HERDR_PANE_ID,
     }
   }
-  const pane = process.env.HERDR_PANE_ID
   if (pane) {
-    const p = await paneOf(pane)
+    const p = fromCodex ? reported : await paneOf(pane)
     if (p?.agent) return { key: p.agent_session?.value ?? `pane-${pane}`, cwd: p.cwd ?? '', pane }
   }
   throw new Error('cannot tell which session this is: run it from a Claude session, or pass --session')
@@ -162,6 +201,15 @@ async function ownSession(): Promise<SessionRef | null> {
   try {
     if (pane) p = await paneOf(pane)
   } catch {}
+  if (codexCaller()) {
+    try {
+      const codex = codexSession(p)
+      if (codex) return { key: codex.key, name: codex.name }
+      if (!p) return null
+    } catch {
+      return null
+    }
+  }
   const key = own || (p?.agent ? (p.agent_session?.value ?? `pane-${pane}`) : null)
   if (!key) return null
   const name = (own && liveSessions().get(own)?.session.name) || p?.terminal_title_stripped || key.slice(0, 8)
@@ -375,6 +423,7 @@ async function main(): Promise<void> {
   if (cmd === 'archive') return archive()
   if (cmd === 'sleep') return sleep()
   if (cmd === 'fork') return fork()
+  if (cmd === 'resume') return resume()
 
   const s = await resolveSession()
   const now = Date.now()
@@ -572,6 +621,27 @@ async function fork(): Promise<void> {
 }
 
 /**
+ * `board resume <session id> [--profile <id>]`: the session resumed in this terminal, in its own
+ * profile (core/resume.ts resumePlan), with Claude in the foreground; exits with Claude's code.
+ * herdr types it into a restored pane, so it asks herdr nothing.
+ */
+async function resume(): Promise<void> {
+  const o = parseResume(rest)
+  const plan = resumePlan({
+    ...o,
+    card: readCard(o.session),
+    profiles: loadProfiles(),
+    launch: cfg.launch,
+    env: process.env,
+    home: homedir(),
+  })
+  const [file = 'claude', ...argv] = plan.argv
+  const ran = await runHere(file, argv, plan.env)
+  if (ran.error) throw new Error(`${file} did not start: ${messageOf(ran.error)}`)
+  process.exit(ran.code)
+}
+
+/**
  * `board archive --session <id|name|pane>`: another session off the board, by the same rules as
  * the web board's "Archive" (free: no turn, no dialog, no text in its input box, no background
  * command; its profile one the board can tell, its registry read in that profile), its pane
@@ -654,16 +724,17 @@ function sleepLine(o: SleepOutcome): string {
 }
 
 /**
- * `board sleep <id|name|pane>... [--when-free]`: several sessions put to sleep at once
- * (services/sleep.ts), for a session that coordinates others; a line for each. Refused at once
- * without herdr-wake, which puts them to sleep. In English for agents, whatever language the board
- * speaks (but for what herdr-wake and the profile guard say).
+ * `board sleep <id|name|pane>... [--when-free] [--self]`: several sessions put to sleep at once
+ * (services/sleep.ts), for a session that coordinates others; a line for each. `--self` adds the
+ * session running it, found as `board doing` finds it, always once it is free: it is in a turn
+ * now. Refused at once without herdr-wake, which puts them to sleep. In English for agents,
+ * whatever language the board speaks (but for what herdr-wake and the profile guard say).
  */
 async function sleep(): Promise<void> {
   const targets = [...rest, ...(target ? [target] : [])]
-  if (!targets.length)
+  if (!targets.length && !self)
     throw new Error(
-      'usage: board sleep <id|name|pane>... [--when-free]: the sessions to put to sleep (a name with spaces in quotes)',
+      'usage: board sleep <id|name|pane>... [--when-free] [--self]: the sessions to put to sleep (a name with spaces in quotes; --self: this one, once its turn is over)',
     )
   const up = await wakeAnswers(deps)
   if (!up.ok) {
@@ -673,11 +744,27 @@ async function sleep(): Promise<void> {
     throw new Error(`putting sessions to sleep needs ${what}; nothing was put to sleep`)
   }
   const from = await ownSession()
-  const results = await sleepMany(deps, await collect(deps), targets, {
-    whenFree,
-    by: 'agent',
-    ...(from && { from }),
-  })
+  if (self && !from)
+    throw new Error(
+      'board sleep --self is for the session running it, and this is none: run it from a Claude session in herdr; nothing was put to sleep',
+    )
+  const items = await collect(deps)
+  let others = targets
+  if (self && from) {
+    const me = sessionsFor(items, from.key)
+    if (!me.length)
+      throw new Error(`board sleep --self: this session (${from.key}) is not on the board; nothing was put to sleep`)
+    // A target that names it too goes with --self, once it is free, not as one more line.
+    others = targets.filter(t => {
+      const fits = sessionsFor(items, t)
+      return !(fits.length === 1 && me.some(m => m.key === fits[0]?.key))
+    })
+  }
+  const results = [
+    ...(others.length ? await sleepMany(deps, items, others, { whenFree, by: 'agent', ...(from && { from }) }) : []),
+    // Itself last, so the others go first; its entry is its own, set by no other session.
+    ...(self && from ? await sleepMany(deps, items, [from.key], { whenFree: true, by: 'agent' }) : []),
+  ]
   // A session two targets name counts once.
   const each = [...new Map(results.map(o => [o.key ?? o.target, o.result])).values()]
   const count = (result: SleepOutcome['result']): number => each.filter(r => r === result).length

@@ -1,10 +1,10 @@
 # agent-board
 
 A [herdr](https://herdr.dev) plugin: a kanban of the Claude Code sessions running in herdr, and
-of the [pi](#pi) ones.
+of the [pi](#pi) and [Codex](#codex) ones.
 Lanes are categories (one per client, say, plus Personal and Other), columns are Working /
 Needs me / Waiting on others / Done / Idle. Sessions
-[herdr-wake](https://github.com/Eithery-rc/tg-mcp/tree/main/herdr-wake) put to sleep are on it
+[herdr-wake](herdr-wake/) put to sleep are on it
 too (one line, `z`). In English and Russian; see [Language](#language).
 
 No model runs for the board. It reads herdr's snapshot, Claude's session registry and the tail
@@ -76,14 +76,25 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
    `["claude", "--dangerously-skip-permissions"]` (your call: Claude then runs every tool without
    asking), a model, or a launcher of your own, such as tg-mcp's
    [`claude-tg`](https://github.com/Eithery-rc/tg-mcp#herdr-launcher), which gives each herdr tab
-   its own Telegram topic. See [New sessions](#new-sessions).
-4. **[herdr-wake](https://github.com/Eithery-rc/tg-mcp/tree/main/herdr-wake)** (optional, worth it
-   with many sessions). It puts sessions that sat idle for an hour to sleep and wakes them for a
-   message, a reminder or a click; with [tg-mcp](https://github.com/Eithery-rc/tg-mcp) it also
-   brings your Telegram messages to them. Without it the board has no "Put to sleep", "Wake" and
-   "Restart", agents cannot restart themselves (`board restart`, see [Restart](#restart)), the
-   board shows no sleeping sessions, and a reminder cannot wake one. The board finds it at
-   `wakeUrl` (`http://127.0.0.1:12421`).
+   its own Telegram topic. See [New sessions](#new-sessions). Working in [pi](#pi)? With `pi` on
+   the board's PATH the "New session" window offers Claude Code or pi; `"default": "pi"` in
+   `launch` makes pi the one it starts on.
+4. **[herdr-wake](herdr-wake/)** (optional, worth it with many sessions; a plugin of its own in
+   this repository, on Node.js 20 or newer). It puts sessions that sat idle for an hour to sleep
+   and wakes them for a message, a reminder or a click; with
+   [tg-mcp](https://github.com/Eithery-rc/tg-mcp) it also brings your Telegram messages to them.
+   Without it the board has no "Put to sleep", "Wake" and "Restart", agents cannot restart
+   themselves (`board restart`, see [Restart](#restart)), the board shows no sleeping sessions,
+   and a reminder cannot wake one. The board finds it at `wakeUrl` (`http://127.0.0.1:12421`).
+
+   ```bash
+   herdr plugin install MokuTeam/herdr-agent-board/herdr-wake
+   herdr plugin action invoke herdr-wake.install-hooks
+   herdr plugin action invoke herdr-wake.start
+   ```
+
+   Its own settings (the idle hour, sessions never to put to sleep, the wake command) are in
+   [herdr-wake/README.md](herdr-wake/README.md).
 5. **Desktop notifications** (optional, Windows): `herdr plugin action invoke
    agent-board.notifications`. See [Notifications](#notifications).
 6. **Lanes**: "Categories" on the web board (titles, colors, the folders that sort sessions into
@@ -105,6 +116,59 @@ would leave them beside its own. First take them out of `~/.claude/settings.json
 `statusLine` that runs `src/entrypoints/statusline.ts`, and the notification hooks that run
 `src/integrations/toast.ps1`. Then put `main` in the plugin's folder and run its install action
 again, which writes its own `node "…/src/hook.mjs"` hooks, status line and commands.
+
+## Codex
+
+For panes herdr reports as `codex`, the board reads the rollout in
+`~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<session-id>.jsonl` (`CODEX_HOME` changes the
+Codex folder). The card shows the last prompt, the agent's last words, its last tool and its
+request's input tokens; the session panel shows the conversation and tool calls. Duplicate
+events, instructions, reasoning and tool outputs are left out. A missing or unreadable rollout
+leaves the card and live terminal available. The board reads bounded tails and caches card data
+until the file changes.
+
+To install the board's Codex hooks and the `board` command, run from this checkout:
+
+```sh
+bun src/entrypoints/install.ts --codex
+```
+
+This adds SessionStart and UserPromptSubmit to Codex's `hooks.json`, preserving herdr's and other
+hooks, with the first `hooks.json.bak-agent-board` kept beside it. It also asks herdr to install its Codex identity
+hook. Hook commands use `bun` from PATH (including on Windows); keep Bun on PATH. Empty hooks files
+are treated as new configurations; malformed JSON stops the install before anything is written. The ordinary install
+without `--codex` keeps managing Claude only.
+
+New hook commands carry `--herdr-agent-board-hook`, so reinstalling after moving the checkout
+replaces the board's previous hooks even when the folder has another name. Older unmarked hooks
+at unknown paths are preserved because ownership cannot be proved; review those old commands
+when moving an installation. Unrelated hooks and shell wrappers are never replaced just because
+their text mentions the board's script.
+
+Enable hooks if disabled (`codex features enable hooks`) and review and trust the new definitions
+in Codex's `/hooks`. The board does not change Codex's configuration or hook trust. In a pane herdr
+reports as this Codex session, SessionStart supplies the card brief; UserPromptSubmit clears a
+question the user answered and a pinned column, and reminds the agent when its card says it waits.
+A board reminder preserves the question. A start that races herdr's identity hook receives its
+brief on its first prompt instead. A Codex child or a session outside herdr gets no brief or card
+write from these hooks. The brief names `board --session <id>` so a tool's shell can update the
+correct card even without the pane environment. Without an explicit target, `board doing`,
+`ask`, `wait`, `done` and `cat` use the pane's reported Codex identity, even
+when the environment still carries a parent Claude session id.
+
+For mixed environments the root Codex hook records the Claude id it inherited. A Claude child
+has a different id and keeps its own Claude card, even in the same Codex pane and while herdr is
+offline. Before that hook record exists, mixed environments keep Claude priority: use the
+explicit `board --session <id>` form for Codex. A Codex child under a Claude root still inherits
+that root's card as before; it must use an explicit target when coordinating a different card.
+
+To remove these hooks, delete only the command handlers running `src/entrypoints/codex-hook.ts`
+from SessionStart and UserPromptSubmit in Codex's `hooks.json`; remove an enclosing matcher group
+only if it is then empty. Keep herdr's and other handlers. Do not restore the whole backup over
+hooks installed later. The shared `board` and `spawn-agent` commands can stay for Claude.
+
+Codex session actions follow separately under [#126](https://github.com/MokuTeam/herdr-agent-board/issues/126).
+Claude Code and pi keep their existing hooks, brief and readers.
 
 ## Web board
 
@@ -200,6 +264,10 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   back to the input box in the terminal goes. The queue is read from the transcript (Claude
   Code logs it there), so messages typed in the terminal show too, and a reload keeps them. A
   message that could not be sent stays with the reason, "Retry" and "Edit".
+  Before sending to Claude, the board checks for its input box on the visible terminal screen,
+  even when herdr reports idle or done. A dialog or an unrecognized screen refuses the send;
+  the text stays in the failed message and its saved draft. Resolve the dialog in the terminal,
+  then retry explicitly. The board does not dismiss it or resend automatically.
 - Files, folders and links in the thread. A path an agent writes (absolute, `~/...`, a
   `herdr-reveal:` or `file:` link, or relative to the session's folder in `code`, with an
   optional `:line`) becomes a chip once the board finds it on disk; file tool calls in the
@@ -397,6 +465,23 @@ Claude finds no such session in `~/.claude`; wake it in its pane yourself with `
 A session the board starts with `"command": "cld-work"` still opens its tab with work's
 `CLAUDE_CONFIG_DIR`, so waking it stays in work.
 
+**After a restart of herdr (or of the computer).** herdr brings each pane back with a new shell in
+its folder and types the session's resume command into it, by default `claude --resume <id>`. That
+shell has neither the `CLAUDE_CONFIG_DIR` the board gave a profile's tab nor the one an alias set,
+so a work session would not be found there. So when a session starts in a herdr pane in another
+folder than `~/.claude`, the board's SessionStart hook tells herdr to resume it with
+`board resume <id> --profile <id>` instead (`herdr pane report-agent-session … -- board resume …`,
+from a process of its own a second or so later, once herdr holds the session). `board resume`
+takes the folder from the session's card (else the profile named), sets `CLAUDE_CONFIG_DIR` to it
+(a shell that points there already keeps its own), and runs `launch.claude` with the profile's
+`args` and `--resume <id>`, in the foreground; the profile's start command is not run, as an alias
+is only known to a shell. herdr types only a command on PATH: the board reports nothing when
+`board` is not on PATH (see [Setup](#setup)). Sessions in `~/.claude`, outside herdr, pi's and
+Codex's are left to herdr as before: no report, no call to herdr. Where herdr-wake's SessionStart
+hook is in the profile (it installs it into `~/.claude` only) and its `wakeCommand` is one of its
+own, herdr-wake reports that command and the board reports nothing; `"wakeCommand": "board resume
+{session}"` resumes in the session's profile both after a restart and on its own wakes.
+
 ## pi
 
 [pi](https://pi.dev) sessions in herdr are on the board too. herdr reports a pi pane's session by
@@ -425,6 +510,35 @@ alias for it. The board's launches in that profile (the new-session window, "New
 account. herdr says which agent came up: the board names a pi session with `/name`, types the
 first message, and puts the lane and the profile it is meant for on pi's card. spawn-agent adds
 ` kind=pi` to the line it prints.
+
+**pi or Claude Code, start by start.** With the board's own launcher (no `launch.command` or
+`launch.agent`), a launch request may name the agent it starts as: `"agent": "pi"` in
+`POST /api/launch`, which the "New session" window (the web board's and the phone app's) sends when
+you pick pi in its Agent row. The board offers pi (`agents` in `GET /api/launch/options`; the row
+shows only then) when `launch.pi` is set in config.json or `pi` is on the board's PATH. `launch.pi`
+is what it types for such a start: a program, or a list of the program and its arguments
+(`["pi", "--model", "claude-bridge/claude-opus-5-5"]`), `pi` when unset; the profile's start command
+and `args` are Claude's, so they are left out, while the profile's env is kept (pi's claude-bridge
+runs in that profile's account). The session id, the name, the first message, the lane and the card
+go as above. `spawn-agent --agent pi` does the same for an agent.
+
+Which one the window starts on is `launch.default`: `"pi"` or `"claude"` (Claude Code when unset,
+or when the board does not offer the agent it names). `GET /api/launch/options` answers it as
+`agent`, and a request that names no agent starts as it. A failed launch started again keeps its own
+agent. Return and Fork are Claude Code's whatever the default (pi resumes and forks no Claude
+session), and so is `spawn-agent` without `--agent`. What each agent is started with:
+
+```json
+"launch": {
+  "default": "pi",
+  "claude": ["claude", "--dangerously-skip-permissions"],
+  "pi": ["pi", "--model", "claude-bridge/claude-opus-5-5"]
+}
+```
+
+`launch.claude` is for profiles without a start command of their own; a profile's start command
+(the Profiles panel's "Start command") wins over it for its starts, `claude --dangerously-skip-permissions`
+too.
 
 Not for pi (yet): the archive and Return, herdr-wake's sleep, wake and restart, the session's own
 name from the board's rename (the card's name works), question forms (pi has none: answer in a
@@ -470,7 +584,8 @@ How it starts, by `launch` in config.json:
   (from before the board had its own launcher) are `claude`'s arguments. `launch.timeoutSec`
   (120) is how long it waits for Claude to be ready. When Claude stops at a dialog before that, the card
   says so: the folder trust as below, any other in herdr; the board then names the session and
-  sends the first message.
+  sends the first message. A start that asks for pi types `launch.pi` instead, and
+  `launch.default` says which of the two a start that names none is ([pi](#pi)).
 - `launch.agent`: through herdr itself. A tab in the chosen workspace (or a new workspace),
   `herdr agent start <name> --kind <agent> --pane <tab's pane> -- --session-id <id>` (the id for
   `claude` only), then `/rename <name>` and the first message. When Claude stops at a dialog, the
@@ -542,11 +657,13 @@ puts it on PATH; it is `bun src/entrypoints/spawn-agent.ts`):
 spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
             [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
             [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>]
-            [--pane <herdr pane id>] [--profile <id>]
+            [--pane <herdr pane id>] [--profile <id>] [--agent claude|pi]
 ```
 
 PowerShell's spelling works too: `-Name`, `-Cwd`, `-Label`, `-BriefFile`, `-Brief`, `-Workspace`,
-`-TimeoutSec`, `-Profile`. It opens a tab in the workspace (inside herdr the current one, from
+`-TimeoutSec`, `-Profile`, `-Agent`. `--agent pi` types `launch.pi` (default `pi`) instead of the
+profile's `command` and `args` or `launch.claude`, for a new session only (no `--resume` or
+`--fork`); see [pi](#pi). It opens a tab in the workspace (inside herdr the current one, from
 `HERDR_WORKSPACE_ID`), labelled with `--label` or the name, and types the profile's `command`, or
 `launch.claude`, into it (with `--session-id` when given). Once herdr sees Claude ready, it gives
 the agent a herdr name to address it by (the name in `[a-z0-9_-]`, Cyrillic spelled in Latin, `-2`
@@ -655,10 +772,11 @@ board payload's `fork`. Code: `src/services/launch/fork.ts`, `web/src/hooks/useF
 
 ## When a card is under "Needs me"
 
-1. A dialog holds the session in the terminal (permission prompt, question form, MCP input):
-   herdr reports `blocked` from its own screen rules. The card shows the question or the
-   permission asked; the sheet shows the screen, and a question form or a permission prompt can
-   be answered from it.
+1. A dialog holds the session in the terminal (permission prompt, question form, MCP input, a pi
+   extension's menu or text input): herdr reports `blocked` from its own screen rules, or from pi
+   when an extension says so (`herdr:blocked`). The card shows the question or the permission
+   asked; the sheet shows the screen, and a question form, a permission prompt or pi's menu or
+   text input can be answered from it.
 2. The agent ran `board ask "<question>"` before ending its turn. Cleared by the hook as soon as
    you write to that session.
 3. Its last message ends with a question and you have not written since. "No reply needed" on
@@ -686,6 +804,18 @@ A permission prompt ("Do you want to proceed?") shows its title, what the tool w
 terminal's own choices (Yes, Yes and don't ask again, No...), read from the screen as drawn; one
 click or digit picks one. A very long prompt is cut on the board with a mark ("12 more lines: see
 the terminal screen"), never silently.
+
+In a pane herdr says runs [pi](https://pi.dev), the board reads pi's dialogs instead
+(`src/core/dialogs/pi-dialogs.ts`, pi 1.3): the menu an extension asks with `ctx.ui.select` or
+`ctx.ui.confirm` (a git guard's "Approve / Reject / Reject with a note"), and its text input
+(`ctx.ui.input`). The sheet shows the menu like a permission prompt, its title and text as drawn
+and its options; a click or a digit picks one. No digit picks in pi's menu, so the board moves the
+cursor one row at a time with the arrow keys, waits after each until the screen shows the same
+menu with the cursor there, and presses Enter only on the option picked. The text input gets a
+field: the board clears pi's field (End, Ctrl+U), types the line and presses Enter once the field
+shows it (its end, for a line longer than the field). A dialog taller than the pane shows only
+its end on the screen; the sheet says its start is above the terminal screen. Claude Code's
+dialogs are never looked for in a pi pane, nor pi's in any other.
 
 The board answers by pressing keys in the pane through herdr (`herdr agent send-keys` with the
 pane id, and `herdr pane send-text` for an own answer: `agent prompt` refuses a pane in a
@@ -721,10 +851,13 @@ What keeps it from pressing keys in the wrong place:
 - The review screen must list exactly the board's answers, with "Submit answers" as its first
   choice, before that is pressed.
 - Done needs proof, which a blank or half-drawn screen is not: the transcript holds the answer,
-  or two reads in a row show Claude's input box without the dialog, or a whole other dialog.
+  or two reads in a row show the agent's input box without the dialog (for pi: its two rules at
+  the bottom of the screen, a short footer under them), or a whole other dialog.
 - A permission prompt is pressed only while the screen shows the prompt the user saw: a
   fingerprint of its title, text, question and choices exactly as drawn, every character and
-  space (`rm -rf build_*` is not `rm -rf build`); where the cursor stands does not count.
+  space (`rm -rf build_*` is not `rm -rf build`); where the cursor stands does not count. The
+  same for pi's menu and text input, before every key; neither does what pi's field holds, nor a
+  timed dialog's countdown ("(12s)").
 - On the page, a click or a digit in the first half second after another dialog took the place
   of the one on show is not taken (permission prompts can come back to back), nor is a held key.
   A form that went through stays as "Answered" until herdr sees the session move on (at most 10
@@ -735,10 +868,15 @@ What keeps it from pressing keys in the wrong place:
 
 `POST /api/session/<key>/answer` with `{ session, toolUseId, answers: [{ options: [labels],
 other }] }` and `POST /api/session/<key>/permit` with `{ session, fingerprint, option }` (the
-fingerprint comes with the sheet's data); both need the `X-Board` header. Code:
-`src/core/dialogs/questions.ts` (the questions, the screen, the keys), `src/services/answer.ts` (the
-steps through herdr), `web/src/components/questions/` and `web/src/models/question-model.ts` (the
-form).
+fingerprint comes with the sheet's data), or `{ session, fingerprint, text }` for pi's text
+input; both need the `X-Board` header. The session's detail (`GET /api/session/<key>`) has the
+dialog on its screen as `dialog`: `{ kind: 'permission', title, body, more, prompt, options: [{ n,
+label }], fingerprint }`, `{ kind: 'select', title, body, more, cut, options, fingerprint }` (pi's
+menu), `{ kind: 'input', title, body, more, cut, value, fingerprint }` (pi's text input),
+`{ kind: 'question', question }`, `{ kind: 'review' }`, or null. Code:
+`src/core/dialogs/questions.ts` (the questions, the screen, the keys), `src/core/dialogs/pi-dialogs.ts`
+(pi's), `src/services/answer.ts` (the steps through herdr), `web/src/components/questions/` and
+`web/src/models/question-model.ts` (the form).
 
 ## Side questions
 
@@ -1076,6 +1214,7 @@ the ones it is done with to sleep in one call, instead of one herdr-wake `POST /
 ```sh
 board sleep Report-north Report-south w2:p7 3f2a9c1e-...   # names, panes or session ids
 board sleep --when-free Report-north Report-south           # the busy ones once they are free
+board sleep --when-free Report-north --self                 # and this session, once its turn is over
 ```
 
 - Every session that is free now goes to sleep at once through herdr-wake (four at a time), by
@@ -1093,6 +1232,14 @@ board sleep --when-free Report-north Report-south           # the busy ones once
   did not happen. Nothing is typed into the session, and nothing wakes it: one asleep by other
   means meanwhile counts as done. Like a restart, it is for that session only (not the one after
   `/clear` in its pane), and archiving the session drops it.
+- `--self`: the session running the command too, found as `board doing` finds it (its
+  `CLAUDE_CODE_SESSION_ID`, else the session herdr sees in its pane), so it need not know its own
+  name. It is in a turn then, so it always goes as with `--when-free`, last; the others named with
+  it only when `--when-free` is given; a target that names it too goes with `--self`, one line.
+  End the turn after it: the session goes to sleep once it is free, its entry waiting as any
+  `--when-free` one does; a new turn meanwhile does not cancel it. The skill tells agents to do it
+  only when the user asks or a coordinating session's run is over, not by default. Outside a
+  session, or for one the board does not know, it refuses and puts nothing to sleep.
 - Without herdr-wake, or when it does not answer, it refuses at once and puts nothing to sleep.
 - For agents that talk to the board over HTTP: `POST /api/sleep` with header `X-Board: 1` and
   `{"targets": ["<id|name|pane>", ...], "whenFree": true}` answers `{ ok, results }`, one per
@@ -1619,9 +1766,11 @@ board payload, new on every start, which only the board's own page can read. Tex
 raw, and raw responses carry a CSP that runs no script.
 
 New sessions (`src/services/launch/`, `web/src/components/launch/`): `GET /api/launch/options` (herdr's workspaces,
-recent folders, the launcher), `POST /api/fs/dirs` (the subfolders of a folder, or the drives),
-`POST /api/launch` (starts one in the background; its progress is `launches` in the board
-payload), `POST /api/launch/<id>/dismiss` and `/focus`. `POST /api/launch` also needs the page's
+recent folders, the launcher, and `agents`: the agents a start may name, `[{ id, title }]` with
+`claude` first and `pi` when it is offered, none with `launch.command` or `launch.agent`; `agent`:
+the one a start that names none starts as, `launch.default` when offered), `POST /api/fs/dirs` (the subfolders of a folder, or the drives),
+`POST /api/launch` (starts one in the background; `agent`, optional, one of `agents`, else refused
+with `field: "agent"`; its progress is `launches` in the board payload, each with its `agent`), `POST /api/launch/<id>/dismiss` and `/focus`. `POST /api/launch` also needs the page's
 own `Origin` when the browser sends one, and fresh herdr data like every action through herdr.
 Renaming: `POST /api/session/<key>/rename` with `{ name, claude }`. Restarting:
 `POST /api/session/<key>/restart` (a schedule entry, see [Restart](#restart); `{ id, again }`).
@@ -1681,15 +1830,18 @@ board archive --session <id|name|pane>
                           another session off the board, its pane closed (a one-off one you
                           started, or one the user asked you to); the user brings it back from
                           the board's archive; see Archive
-board sleep <id|name|pane>... [--when-free]
+board sleep <id|name|pane>... [--when-free] [--self]
                           several sessions to sleep at once, a line for each: asleep, or kept
-                          up and why; --when-free: the busy ones once they are free; see
-                          Several to sleep at once
+                          up and why; --when-free: the busy ones once they are free; --self:
+                          this session too, once its turn is over; see Several to sleep at once
 board fork [--name "<Name>"] ["<note>"]
                           a fork of this session in a new tab, with a copy of its conversation
                           (the web board starts it; the note is its first message); see Fork
 --session <id|name|pane>  for another session's card
 board doctor              what is set up on this computer, and what is missing
+board resume <session id> [--profile <id>]
+                          resumes that session here, in its own Claude profile (what herdr types
+                          into a restored pane); see Claude profiles
 spawn-agent --name <Name> --cwd <folder> [--brief-file <file>]   a new session in a herdr tab
 ```
 
@@ -1697,7 +1849,7 @@ Agents in herdr also get a skill, [`herdr-agents`](skills/herdr-agents/SKILL.md)
 install puts into `~/.claude/skills` (with more than one profile, into the `skills` folder of
 each one the board shows). Claude Code keeps only its one-line description in a session's
 context and reads the rest when it is needed: how to start another session, message or wake one,
-put the sessions it coordinates to sleep in one call (`board sleep`), do something later (`board remind` rather than CronCreate, which dies when the session sleeps),
+put the sessions it coordinates to sleep in one call, itself too once its run is over (`board sleep`), do something later (`board remind` rather than CronCreate, which dies when the session sleeps),
 restart itself when an MCP server dropped or its settings, hooks or skills changed
 (`board restart`), and run a server or an interactive login in a pane of its own. herdr puts the
 pane's ids into its environment (`HERDR_ENV=1`, `HERDR_PANE_ID`, `HERDR_TAB_ID`,
@@ -1795,6 +1947,27 @@ while one does not check out.
 Cards: `%LOCALAPPDATA%\herdr\plugins\agent-board\cards\<session id>.json`. Sessions in the archive:
 `archive\<session id>.json` beside them (see [Archive](#archive)).
 
+**Sharing cards with an isolated preview (#71).** `HERDR_BOARD_CARDS_DIR` selects an absolute
+cards directory for this process. Unset or empty, the layout above is unchanged. Set the preview
+to the authoritative cards folder already used by its `board` CLI and Claude hooks, or explicitly
+set the same folder for every writer. Paths with spaces, other alphabets and `%` are literal
+paths; relative paths and `~` are refused, because processes can have different working folders.
+This does not change config, schedules, archives, uploads or the rest of runtime state.
+
+For example, on macOS/Linux, a preview with its own `APPDATA` and `LOCALAPPDATA` can use:
+
+```sh
+export HERDR_BOARD_CARDS_DIR="$HOME/.local/state/herdr/plugins/agent-board/cards"
+```
+
+Choose the authoritative folder before starting it. There is no copying, merging, migration or
+clearing of old asks. Do not share the whole `LOCALAPPDATA` between running previews: separate
+schedulers must keep separate schedules. `board doctor` and Setup show this process's effective
+cards folder, its source, and its schedule folder. A Unix preview with a custom `LOCALAPPDATA`
+and no explicit cards folder warns that outside writers may use another store. These diagnostics
+cannot infer another process's environment; compare its own `board doctor` output. Installing a
+hook from a different checkout alone does not choose its store or propagate this variable.
+
 Writes to the same card use a per-card directory lock (`<session id>.json.lock`) around the
 read/merge/rename. Contention waits at most two seconds, then reports an error without replacing
 the card. Locks are released on ordinary errors. A writer killed mid-write leaves its lock
@@ -1839,3 +2012,7 @@ and `src/server/routes/access.ts` (the panel's view and changes), `src/services/
 run the real ssh: `BOARD_SSH_BIN_PATH` and `BOARD_SSH_KEYGEN_BIN_PATH` name other binaries (a fake
 in `test/support`), and `BOARD_TUNNEL_PROBE_ORIGIN` another origin than `https://<domain>` for the
 probe.
+
+`herdr-wake/` is a herdr plugin of its own, on Node.js rather than Bun: `bun test`, `bun run check`
+and tsc leave it out (their roots are `test`, `src`, `web/src`), and its tests run with
+`node --test herdr-wake/test/*.test.mjs` (Node.js 20 or newer).

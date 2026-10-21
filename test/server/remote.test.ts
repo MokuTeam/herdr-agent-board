@@ -1,10 +1,10 @@
 // The remote mode end to end: a board with it on, a fake `tailscale` that says this computer's
 // Tailscale address is 127.0.0.1 and who calls from it, and a phone that pairs and drives the board.
 import { beforeAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { join } from 'node:path'
-import { serveBoard, sharedSandbox, unusedPort } from '../support/board-server.ts'
+import { logged, serveBoard, sharedSandbox, unusedPort } from '../support/board-server.ts'
 import type { Sandbox } from '../support/sandbox.ts'
 
 const PI_KEY = '/home/me/.pi/agent/sessions/--home-me--/2026-10-20T05-10-02-695Z_01a1.jsonl'
@@ -312,5 +312,52 @@ describe('board remote, from the command', () => {
     expect(await board('off')).toBe('ok · remote off')
     await listening(false)
     expect(await board('sideways')).toContain('usage: board remote')
+  }, 40_000)
+})
+
+describe('Tailscale that does not answer for a moment (#108)', () => {
+  const sandbox = sharedSandbox()
+
+  test('one failed `tailscale status` keeps the listener and its callers; the next look comes sooner', async () => {
+    const box = await sandbox()
+    tailscaleState(box, 'me@example.com')
+    const webPort = await unusedPort()
+    const remotePort = await unusedPort()
+    const cfg = {
+      language: 'en',
+      categories: [{ id: 'other', title: 'Other', color: 'gray' }],
+      wakeUrl: null,
+      refreshSec: 3600,
+      port: webPort,
+      remote: { on: true, port: remotePort },
+    }
+    const file = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
+    mkdirSync(join(file, '..'), { recursive: true })
+    writeFileSync(file, JSON.stringify(cfg))
+    const { proc } = await serveBoard(box, cfg, {
+      TAILSCALE_BIN_PATH: box.env.HERDR_BIN_PATH as string,
+      TEST_LIVE_CONFIG: '1',
+    })
+    const phone = `http://127.0.0.1:${remotePort}`
+    const up = () =>
+      fetch(`${phone}/api/hello`).then(
+        r => r.status,
+        () => 0,
+      )
+    const deadline = Date.now() + 8000
+    while ((await up()) !== 200 && Date.now() < deadline) await Bun.sleep(50)
+    expect(await up()).toBe(200)
+
+    // Tailscale stops answering `status` (whois still answers from the cache), and the board looks
+    // again: a change to the remote mode's config makes it look at once.
+    const state = JSON.parse(readFileSync(box.env.FAKE_HERDR_STATE as string, 'utf8'))
+    box.state({ ...state, 'status --json': { error: 'failed to connect to local tailscaled' } })
+    writeFileSync(file, JSON.stringify({ ...cfg, remote: { ...cfg.remote, allow: ['someone@example.com'] } }))
+    const said = Date.now() + 8000
+    while (!logged(proc, 'Tailscale did not answer') && Date.now() < said) await Bun.sleep(50)
+    expect(logged(proc, 'Tailscale did not answer')).toBe(true)
+    expect(await up()).toBe(200)
+    const view = (await (await fetch(`http://127.0.0.1:${webPort}/api/remote`)).json()) as { error: string | null }
+    expect(view.error).toBeNull()
   }, 40_000)
 })

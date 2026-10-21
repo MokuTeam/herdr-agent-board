@@ -5,6 +5,15 @@ import type { Lang } from '../types.ts'
 
 export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
   en: {
+    'setup.cards.title': 'Card store',
+    'setup.cards.check': 'Check the card store used by this preview',
+    'setup.cards.invalid': 'The explicit card-store path is invalid',
+    'setup.cards.detail': 'Cards: {cards} ({source}). Schedules: {schedule}.',
+    'setup.cards.fix': 'Set HERDR_BOARD_CARDS_DIR to an absolute folder, or unset it to use the normal state layout.',
+    'setup.cards.writers':
+      'The dashboard, board CLI and hooks must resolve the same cards folder. These paths describe this process; other processes may have different environments.',
+    'setup.cards.preview':
+      'LOCALAPPDATA changes this process’s cards and schedules. Writers outside this preview may still use the ordinary cards. Set HERDR_BOARD_CARDS_DIR to the intended authoritative cards folder to share cards only; keep preview schedules separate. No files are copied or merged.',
     'setup.title': 'Setup',
     'setup.incomplete': 'Setup incomplete',
     'setup.incompleteHint': 'Some of the board is not set up on this computer',
@@ -108,7 +117,8 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.wake.down': 'herdr-wake does not answer at {url}',
     'setup.wake.without':
       'Without it there is no “Put to sleep”, “Wake” or “Restart”, agents cannot restart themselves (board restart, the way to get a dropped MCP server back), no sleeping sessions show on the board, and reminders cannot wake a session that sleeps.',
-    'setup.wake.fix': 'Install and start it, then set wakeUrl if it runs elsewhere:',
+    'setup.wake.fix':
+      'It needs Node.js 20 or newer. Install it, add its hooks and start it (herdr-wake/README.md in the board’s repository), then set wakeUrl if it runs elsewhere:',
 
     'setup.launch.command': 'New sessions: your launch.command ({name})',
     'setup.launch.commandBad': 'New sessions: launch.command ({name}) cannot run',
@@ -146,6 +156,15 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.toast.okDetail': 'when a session finishes, asks or needs a permission, except in the pane you look at',
   },
   ru: {
+    'setup.cards.title': 'Хранилище карточек',
+    'setup.cards.check': 'Проверь хранилище карточек этого preview',
+    'setup.cards.invalid': 'Неверный явный путь к карточкам',
+    'setup.cards.detail': 'Карточки: {cards} ({source}). Расписания: {schedule}.',
+    'setup.cards.fix': 'Задай в HERDR_BOARD_CARDS_DIR абсолютный путь или убери переменную для обычного расположения.',
+    'setup.cards.writers':
+      'Доска, команда board и хуки должны использовать одну папку карточек. Здесь показаны пути этого процесса; у других процессов окружение может отличаться.',
+    'setup.cards.preview':
+      'LOCALAPPDATA меняет карточки и расписания этого процесса. Команды и хуки вне preview могут писать в обычную папку. Для общих карточек задай HERDR_BOARD_CARDS_DIR, оставив расписания preview отдельно. Файлы не копируются и не объединяются.',
     'setup.title': 'Настройка',
     'setup.incomplete': 'Настроено не всё',
     'setup.incompleteHint': 'Часть доски на этом компьютере не настроена',
@@ -246,7 +265,8 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.wake.down': 'herdr-wake не отвечает на {url}',
     'setup.wake.without':
       'Без него нет «Усыпить», «Разбудить» и «Перезапустить», агенты не могут перезапустить себя (board restart, способ вернуть отвалившийся MCP-сервер), спящих сессий на доске не видно, и напоминания не будят спящую сессию.',
-    'setup.wake.fix': 'Поставь и запусти его, потом задай wakeUrl, если он работает не по умолчанию:',
+    'setup.wake.fix':
+      'Ему нужен Node.js 20 или новее. Поставь его, добавь его хуки и запусти (herdr-wake/README.md в репозитории доски), потом задай wakeUrl, если он работает не по умолчанию:',
 
     'setup.launch.command': 'Новые сессии: твой launch.command ({name})',
     'setup.launch.commandBad': 'Новые сессии: launch.command ({name}) не запустится',

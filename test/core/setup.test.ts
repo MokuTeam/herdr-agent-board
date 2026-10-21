@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
+import { cardStore } from '../../src/core/card-store.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
 import {
   type InstallPaths,
@@ -219,6 +220,42 @@ const check = (checks: SetupCheck[], id: string): SetupCheck => {
   return c
 }
 
+describe('card-store diagnostics', () => {
+  test('explicit shared cards report their folder and the separate schedule folder', () => {
+    const store = cardStore(
+      { LOCALAPPDATA: '/tmp/preview', HERDR_BOARD_CARDS_DIR: '/srv/Team 100%/cards' },
+      '/home/u',
+      'linux',
+    )
+    const item = check(checkSetup(facts({ cardStore: store })), 'cards')
+    expect(item.level).toBe('ok')
+    expect(item.detail).toContain('/srv/Team 100%/cards')
+    expect(item.detail).toContain('/tmp/preview/herdr/plugins/agent-board/schedule')
+    expect(item.detail).toContain('HERDR_BOARD_CARDS_DIR')
+    expect(item.fix).toContain('other processes may have different environments')
+  })
+
+  test('a custom Unix state without an explicit card store warns, without claiming a proven mismatch', () => {
+    const store = cardStore({ LOCALAPPDATA: '/tmp/preview' }, '/home/u', 'darwin')
+    const item = check(checkSetup(facts({ cardStore: store })), 'cards')
+    expect(item.level).toBe('warn')
+    expect(item.fix).toContain('may still use')
+    expect(item.fix).toContain('No files are copied or merged')
+    expect(check(checkSetup(facts({ cardStore: cardStore({}, '/home/u', 'linux') })), 'cards').level).toBe('ok')
+    const win = cardStore({ LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local' }, 'C:\\Users\\u', 'win32')
+    expect(check(checkSetup(facts({ cardStore: win })), 'cards').level).toBe('ok')
+  })
+
+  test('an invalid store is an error; Russian diagnostics preserve the literal paths', () => {
+    const error = 'HERDR_BOARD_CARDS_DIR must be an absolute directory path'
+    expect(check(checkSetup(facts({ cardStore: { error } })), 'cards')).toMatchObject({ level: 'error', detail: error })
+    const store = cardStore({ HERDR_BOARD_CARDS_DIR: '/srv/Работа 100%/cards' }, '/home/u', 'linux')
+    const ru = check(checkSetup(facts({ cardStore: store }), translator('ru')), 'cards')
+    expect(ru.title).toBe('Хранилище карточек')
+    expect(ru.detail).toContain('/srv/Работа 100%/cards')
+  })
+})
+
 describe('doctor', () => {
   test('a computer set up all the way', () => {
     const checks = checkSetup(facts())
@@ -309,6 +346,16 @@ describe('doctor', () => {
     assert.match(check(rest, 'key').code, /command = "agent-board\.open"/)
     assert.equal(level(rest, 'wake'), 'off')
     assert.match(check(rest, 'wake').detail, /Put to sleep/)
+    // herdr-wake lives in this repository: the commands to copy, and what it runs on (#118).
+    assert.equal(
+      check(rest, 'wake').code,
+      [
+        'herdr plugin install MokuTeam/herdr-agent-board/herdr-wake',
+        'herdr plugin action invoke herdr-wake.install-hooks',
+        'herdr plugin action invoke herdr-wake.start',
+      ].join('\n'),
+    )
+    assert.match(check(rest, 'wake').fix, /Node\.js 20/)
     assert.equal(level(rest, 'launch'), 'warn')
     assert.equal(level(rest, 'toast'), 'warn') // herdr's own notifications on top of the board's
     assert.deepEqual(

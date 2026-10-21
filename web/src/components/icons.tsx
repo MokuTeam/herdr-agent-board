@@ -287,10 +287,21 @@ export const ClockGlyph = () => (
   </Glyph>
 )
 
+/**
+ * A glyph that turns, in a box that does the turning (web/styles/motion.css): Chromium animates an
+ * SVG element on the main thread, the page styled and committed again on every frame, where an HTML
+ * box turns on the compositor (#109). `spinning`: all the time; else while the sheet says so.
+ */
+export function Turn({ spinning, children }: { spinning?: boolean; children: ReactNode }) {
+  return <span className={spinning ? 'turn spinning' : 'turn'}>{children}</span>
+}
+
 export const SpinGlyph = () => (
-  <Glyph className="spin">
-    <path d="M10 3a7 7 0 1 1-7 7" />
-  </Glyph>
+  <Turn spinning>
+    <Glyph className="spin">
+      <path d="M10 3a7 7 0 1 1-7 7" />
+    </Glyph>
+  </Turn>
 )
 
 export const CheckGlyph = () => (

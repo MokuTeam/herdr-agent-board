@@ -67,6 +67,8 @@ export interface TailscaleNode {
 export interface TailscaleStatus {
   /** Logged in and connected. */
   running: boolean
+  /** tailscaled's own word (Running, Starting, NeedsLogin, Stopped...). */
+  backend: string
   self: TailscaleNode | null
   peers: TailscaleNode[]
   /** The names this computer can have an HTTPS certificate for: none while the tailnet has them off. */
@@ -90,11 +92,12 @@ function nodeOf(raw: unknown, users: Record<string, unknown>): TailscaleNode | n
 /** `tailscale status --json` as the board reads it. */
 export function parseStatus(text: string): TailscaleStatus {
   const raw: unknown = JSON.parse(text)
-  if (!isRecord(raw)) return { running: false, self: null, peers: [], certDomains: [] }
+  if (!isRecord(raw)) return { running: false, backend: '', self: null, peers: [], certDomains: [] }
   const users = isRecord(raw.User) ? raw.User : {}
   const peers = isRecord(raw.Peer) ? Object.values(raw.Peer) : []
   return {
     running: raw.BackendState === 'Running',
+    backend: str(raw.BackendState),
     self: nodeOf(raw.Self, users),
     peers: peers.map(p => nodeOf(p, users)).filter((p): p is TailscaleNode => !!p),
     certDomains: strings(raw.CertDomains).map(bare),
