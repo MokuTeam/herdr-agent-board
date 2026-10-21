@@ -5,7 +5,7 @@
 // The run's steps are the plan's own lines, verbatim; `sudo` is a function there, since the run is
 // root already. POSIX sh only, and only the coreutils flags GNU and Rust coreutils both take.
 // Pure, with no node: import: the page renders "Do it myself" from it.
-import type { Plan, PlanStep, RecordItem, Text, Wanted } from './server-plan.ts'
+import { type Plan, type PlanStep, type RecordItem, type Text, type Wanted, wantedProblem } from './server-plan.ts'
 import { shQuote } from './server-shell.ts'
 import { BOARD_DIR, LOCK_FILE, RECORD_FILE, RUNS_DIR } from './server-texts.ts'
 
@@ -13,6 +13,12 @@ const PLAIN_ID = /^[A-Za-z0-9._-]{1,64}$/
 /** A run at most 20 minutes; a skip check at most a minute. */
 const RUN_MOST_S = 1200
 const SKIP_S = 60
+/** A run past its 20 minutes is told to stop (TERM) and rolls back; it is killed only this much later. */
+const KILL_AFTER_S = 300
+/** The run's last line: the launch starts only a copy of the run that ends with it (not one cut short). */
+const LAST_LINE = '# agent-board: end'
+/** What the launch says, at once, when it cannot write the run or its copy is not whole (70: sysexits' EX_SOFTWARE). */
+const LAUNCH_FAILED = "{ echo '@@exit 70'; exit 70; }"
 /** A step's output kept for the panel. */
 const OUT_MOST = 200
 /** Ends each step's text in the run, and the run in the launch: lines no step has. */
@@ -69,15 +75,35 @@ function itemWord(i: RecordItem, live: boolean): string {
 }
 
 /**
+ * An item as recorded before its step runs, so a run cut short (killed, a reboot) leaves a record
+ * that names what it was changing: a file's hash as it is before the step (Undo removes it only
+ * when the step did not get to change it), an image as if there before (an Undo after a pull cut
+ * short keeps it), the rest as the plan has it. The step's own values replace these after it.
+ */
+function aheadWord(i: RecordItem): string {
+  if (i.kind === 'file') {
+    const head = JSON.stringify({ kind: 'file', path: i.path, sha256: '' }).slice(0, -2)
+    return `${shQuote(head)}"$(sudo cat ${shQuote(i.path)} 2>/dev/null | sha256sum | cut -c1-64)"${shQuote('"}')}`
+  }
+  if (i.kind === 'image') return shQuote(JSON.stringify({ ...i, before: true }))
+  return itemWord(i, false)
+}
+
+/**
  * The script the board runs as root for a plan (Apply, an update or Undo). Each step: `@@step <n>
  * start`, then `skip` when its skipIf all hold, else its commands and check under `timeout`, `ok`
  * or `fail`. A failure runs the failed step's undo and the done steps', newest first (`@@undo <n>
  * ok|fail`), then `@@result rolled-back|rollback-failed`; all done gives `@@result applied`. The
  * first step (the guard) changes nothing: when it fails, nothing is rolled back or recorded and the
- * run exits 3. The record is written as `running` after it and after each step; a trap writes the
- * run's exit status beside its log.
+ * run exits 3. The record is written as `running` after it, before each step with what the step
+ * will change, and after each step with what it did; a record that cannot be written rolls the run
+ * back (right after the guard: exits 3, nothing changed). HUP, INT or TERM (the overall timeout, a
+ * shutdown) let the current step end, then roll back. A trap writes the run's exit status beside its
+ * log. What the panel wants is checked first: nothing is made from values that fail their checks.
  */
 export function runScript(p: Plan, w: Wanted, run: { id: string; at: string }): string {
+  const problem = wantedProblem(w)
+  if (problem) throw new Error(problem)
   checkId(p.id)
   checkId(run.id)
   const undo = p.kind === 'undo'
@@ -105,28 +131,32 @@ export function runScript(p: Plan, w: Wanted, run: { id: string; at: string }): 
     publicPort: p.publicPort,
     address: p.address,
   }).slice(1, -1)},"items":[`
+  // The record, written whole or not at all: non-zero when any part fails (a full disk, /etc read-only).
   const recordFn = [
     'record() {',
     "  it=''",
     ...(vars.length
       ? [`  for x in ${vars.map(v => `"$${v.name}"`).join(' ')}; do if [ -n "$x" ]; then it="$it,$x"; fi; done`]
       : []),
-    `  printf '%s%s%s%s%s\\n' ${shQuote(head)} "$1" ${shQuote(`",${mid}`)} "\${it#,}" ']}' > ${RECORD_FILE}.new`,
-    `  chmod 644 ${RECORD_FILE}.new`,
-    `  mv -f ${RECORD_FILE}.new ${RECORD_FILE}`,
+    `  printf '%s%s%s%s%s\\n' ${shQuote(head)} "$1" ${shQuote(`",${mid}`)} "\${it#,}" ']}' > ${RECORD_FILE}.new &&`,
+    `    [ "$(tail -c 3 ${RECORD_FILE}.new)" = ']}' ] && chmod 644 ${RECORD_FILE}.new && mv -f ${RECORD_FILE}.new ${RECORD_FILE}`,
     '}',
   ]
+  const unrecorded = `echo ${shQuote(`The record ${RECORD_FILE} could not be written.`)}`
   // An Apply over an earlier setup that rolls back leaves the server as that setup was: its record back.
   const restoresOld = !undo
   const superseded = undo ? [] : [...new Set(p.steps.slice(1).flatMap(named))]
+  const old = shQuote(`${backups}/setup.json`)
+  // A record that cannot say how the run ended: the rollback is reported failed (Look finds the run
+  // interrupted, and its Undo is safe to run again); an Apply that cannot record it was applied rolls back.
   const finishFn = [
     'finish() {',
     '  case $1 in',
-    `  applied) ${[...superseded.map(v => `${v}=''`), undo ? `rm -f ${RECORD_FILE}` : 'record applied'].join('; ')} ;;`,
+    `  applied) ${[...superseded.map(v => `${v}=''`), undo ? `rm -f ${RECORD_FILE}` : `record applied || { ${unrecorded}; back; }`].join('; ')} ;;`,
     restoresOld
-      ? `  rolled-back) if [ -f ${shQuote(`${backups}/setup.json`)} ]; then cp -p ${shQuote(`${backups}/setup.json`)} ${RECORD_FILE}; else record rolled-back; fi ;;`
-      : '  rolled-back) record rolled-back ;;',
-    '  *) record "$1" ;;',
+      ? `  rolled-back) { if [ -f ${old} ]; then cp -p ${old} ${RECORD_FILE}.new && mv -f ${RECORD_FILE}.new ${RECORD_FILE}; else record rolled-back; fi; } || { ${unrecorded}; set -- rollback-failed; } ;;`
+      : `  rolled-back) record rolled-back || { ${unrecorded}; set -- rollback-failed; } ;;`,
+    `  *) record "$1" || ${unrecorded} ;;`,
     '  esac',
     '  echo "@@result $1"',
     '  case $1 in applied) exit 0 ;; rolled-back) exit 1 ;; *) exit 2 ;; esac',
@@ -158,7 +188,9 @@ export function runScript(p: Plan, w: Wanted, run: { id: string; at: string }): 
     'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH',
     'LC_ALL=C; export LC_ALL',
     `trap 'echo "$?" > ${exitFile}' EXIT`,
-    "trap 'exit 143' HUP INT TERM",
+    // told to stop: the step going on ends first (sh waits for it), then everything rolls back
+    'STOP=0',
+    "trap 'STOP=1' HUP INT TERM",
     `exec 9>${LOCK_FILE}`,
     "flock -n 9 || { echo '@@busy'; exit 75; }",
     "P='set -e",
@@ -207,21 +239,36 @@ export function runScript(p: Plan, w: Wanted, run: { id: string; at: string }): 
     ...backLines,
     '  finish "$R"',
     '}',
+    'halt() {',
+    `  if [ "$STOP" = 1 ]; then echo ${shQuote('The run was told to stop: what it did is rolled back.')}; back; fi`,
+    '}',
   )
-  // The guard: nothing done yet, so nothing to roll back or record.
+  // The guard: nothing done yet, so nothing to roll back or record (a stop or a record that cannot
+  // be written ends the run here, with nothing changed).
   const guard = p.steps[0]
   if (guard) {
+    const unchanged = (why: string): string => `{ echo ${shQuote(`${why}: nothing was changed.`)}; exit 3; }`
     out.push(`run 1 ${guard.timeoutS} '' "$S1" || exit 3`)
+    out.push('if [ "$STOP" = 1 ]; then exit 143; fi')
     out.push(
-      `if [ -f ${RECORD_FILE} ]; then install -d -m 700 ${shQuote(backups)} && cp -p ${RECORD_FILE} ${shQuote(`${backups}/setup.json`)}; fi`,
+      `if [ -f ${RECORD_FILE} ]; then { install -d -m 700 ${shQuote(backups)} && cp -p ${RECORD_FILE} ${old}; } || ${unchanged(`The record ${RECORD_FILE} could not be copied`)}; fi`,
     )
     for (const v of carried) out.push(`${v.name}=${itemWord(v.item, false)}`)
-    out.push('record running')
+    out.push(`record running || ${unchanged(`The record ${RECORD_FILE} could not be written`)}`)
   }
   let recording = true
   p.steps.forEach((s, i) => {
     if (i === 0) return
     const k = i + 1
+    // told to stop: no next step (after Undo's `forget` there is nothing left to roll back to)
+    if (recording) out.push('halt')
+    // what the step will change, on the record before it runs (off it again when that cannot be written)
+    const ahead = undo ? [] : vars.filter(v => v.step === k && !ranOnly(v.item))
+    if (ahead.length)
+      out.push(
+        ahead.map(v => `${v.name}=${aheadWord(v.item)}`).join('; '),
+        `record running || { ${ahead.map(v => `${v.name}=''`).join('; ')}; back; }`,
+      )
     out.push(`D${k}=1; run ${k} ${s.timeoutS} ${s.skipIf.length ? `"$K${k}"` : "''"} "$S${k}" || back`)
     out.push(`if [ "$SKIP" = true ]; then D${k}=0; fi`)
     if (undo) {
@@ -235,17 +282,19 @@ export function runScript(p: Plan, w: Wanted, run: { id: string; at: string }): 
     }
     // Undo's last steps take the record away with the rest of the board's files.
     if (undo && s.id === 'forget') recording = false
-    if (recording) out.push('record running')
+    if (recording) out.push('record running || back')
   })
-  out.push('finish applied', '')
+  out.push(...(recording ? ['halt'] : []), 'finish applied', LAST_LINE, '')
   return out.join('\n')
 }
 
 /**
- * What the admin line runs for Apply or Undo (as root): the run written to runs/<id>.sh (0600),
- * started with setsid apart from the connection (output to runs/<id>.log, at most 20 minutes, its
- * exit status in runs/<id>.exit), then its log followed once a second, POSIX only, until that file
- * is there; then `@@exit <code>`. The newest five runs are kept. When a run leaves no record and no
+ * What the admin line runs for Apply or Undo (as root): the run written to runs/<id>.sh (0600) and
+ * started only when that copy ends with the run's last line, else `@@exit 70` at once; started with
+ * setsid apart from the connection (output to runs/<id>.log; after 20 minutes told to stop, so it
+ * rolls back, and killed 5 minutes later; its exit status in runs/<id>.exit), then its log followed
+ * once a second, POSIX only, until that file is there; then `@@exit <code>` (at most 26 minutes
+ * after the start). The newest five runs are kept. When a run leaves no record and no
  * backups (an Undo done, or a run that stopped before changing anything), /etc/agent-board goes,
  * under the lock.
  *
@@ -255,7 +304,9 @@ export function runScript(p: Plan, w: Wanted, run: { id: string; at: string }): 
  */
 export function launchScript(runId: string, run: string): string {
   checkId(runId)
-  if (run.split('\n').includes(RUN_END)) throw new Error('the run holds its own end line')
+  const lines = run.replace(/\n$/, '').split('\n')
+  if (lines.includes(RUN_END)) throw new Error('the run holds its own end line')
+  if (lines.at(-1) !== LAST_LINE) throw new Error('the run does not end with its last line')
   const r = `${RUNS_DIR}/${runId}`
   return [
     'exec </dev/null',
@@ -264,16 +315,19 @@ export function launchScript(runId: string, run: string): string {
     'umask 077',
     'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH',
     `R=${r}`,
-    `mkdir -p ${RUNS_DIR}`,
+    // nothing to follow unless the run is written whole: `@@exit 70` at once, not after 26 minutes
+    `mkdir -p ${RUNS_DIR} || ${LAUNCH_FAILED}`,
     'rm -f "$R.log" "$R.exit"',
     `cat > "$R.sh" <<'${RUN_END}'`,
-    ...run.replace(/\n$/, '').split('\n'),
+    ...lines,
     RUN_END,
-    'chmod 600 "$R.sh"',
+    `[ "$(tail -n 1 "$R.sh")" = ${shQuote(LAST_LINE)} ] || ${LAUNCH_FAILED}`,
+    `chmod 600 "$R.sh" || ${LAUNCH_FAILED}`,
+    `: > "$R.log" || ${LAUNCH_FAILED}`,
     `for f in $(ls -t ${RUNS_DIR} | grep '\\.sh$' | sed -n '6,$p'); do rm -f "${RUNS_DIR}/\${f%.sh}".*; done`,
-    `setsid -w sh -c 'timeout -k 10 ${RUN_MOST_S} sh "$1.sh"; c=$?; [ -s "$1.exit" ] || echo "$c" > "$1.exit"' sh "$R" >"$R.log" 2>&1 </dev/null &`,
+    `setsid -w sh -c 'timeout -k ${KILL_AFTER_S} ${RUN_MOST_S} sh "$1.sh"; c=$?; [ -s "$1.exit" ] || echo "$c" > "$1.exit"' sh "$R" >"$R.log" 2>&1 </dev/null &`,
     'n=0; s=0',
-    `while [ ! -s "$R.exit" ] && [ "$s" -lt ${RUN_MOST_S + 60} ]; do`,
+    `while [ ! -s "$R.exit" ] && [ "$s" -lt ${RUN_MOST_S + KILL_AFTER_S + 60} ]; do`,
     '  t=$(wc -l < "$R.log")',
     '  if [ "$t" -gt "$n" ]; then sed -n "$((n + 1)),$((t))p" "$R.log"; n=$t; fi',
     '  sleep 1; s=$((s + 1))',
