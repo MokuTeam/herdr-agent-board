@@ -71,7 +71,11 @@ test('board doctor with wake on: running on its port, how many asleep, and wakeU
   // The sandbox's profile has no settings.json: wake's hooks are flagged, with the install to run.
   assert.match(out.stdout, /^! {2}Sleep and wake’s hooks are not in place$/m)
   assert.doesNotMatch(out.stdout, /herdr-wake|Node\.js/)
-  assert.deepEqual(wake.requests(), [{ method: 'GET', path: '/status', body: null }])
+  // Whether it runs by its /alive (never waiting on herdr), then how many asleep by its /status.
+  assert.deepEqual(wake.requests(), [
+    { method: 'GET', path: '/alive', body: null },
+    { method: 'GET', path: '/status', body: null },
+  ])
 }, 20_000)
 
 test('board doctor with wake on but not answering: what to do, and where its log is', async () => {

@@ -746,6 +746,23 @@ describe('the wake line (#119)', () => {
     })
   })
 
+  test('port taken by the separate plugin’s router: closing its pane, never another port (two wakes)', () => {
+    const error = 'Port 23456 is held by the separate herdr-wake plugin’s router (process 4242)'
+    expect(wakeLine(wakeOn('portTaken', { router: 4242, error }))).toMatchObject({
+      level: 'error',
+      title: 'Port 23456 is held by the separate herdr-wake plugin’s router (process 4242)',
+      detail: '',
+      fix: 'Close the pane of the herdr-wake router (process 4242), then Settings → Sleep and wake… → Start again',
+    })
+    const ru = wakeLine(wakeOn('portTaken', { router: 4242, error }), translator('ru'))
+    expect(ru.title).toBe('Порт 23456 держит роутер отдельного плагина herdr-wake (процесс 4242)')
+    expect(ru.fix).toBe(
+      'Закрой панель роутера herdr-wake (процесс 4242), затем Настройки → Сон и пробуждение… → Запустить заново',
+    )
+    for (const t of [translator('en'), translator('ru')])
+      expect(wakeLine(wakeOn('portTaken', { router: 4242 }), t).fix).not.toMatch(/port"|"port/)
+  })
+
   test('wakeUrl set to something else than the default: a second line', () => {
     const checks = checkSetup(wakeOn('running', { wakeUrlSet: true }))
     const at = checks.findIndex(c => c.id === 'wake')

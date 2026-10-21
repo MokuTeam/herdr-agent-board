@@ -2,8 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { findCommand, gatherFacts, herdrConfigFile, readText } from '../../src/adapters/setup-facts.ts'
+import { wakeSessionsFile, writeWakeStatus } from '../../src/adapters/wake-files.ts'
 import { type InstallPaths, planShims } from '../../src/core/install-plan.ts'
 import { boardFiles } from '../../src/core/setup.ts'
 import { WAKE_SHIPPED } from '../../src/core/wake/config.ts'
@@ -312,6 +313,91 @@ describe('gatherFacts', () => {
       assert.ok(performance.now() - started < 1000)
     } finally {
       await wake.stop(true)
+    }
+  })
+
+  /** A wake on a port of the test's own answering `answer` per path; the paths asked, in order. */
+  function wakeOnPort(answer: (path: string) => Response | Promise<Response>) {
+    const asked: string[] = []
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch: req => {
+        const path = new URL(req.url).pathname
+        asked.push(path)
+        return answer(path)
+      },
+    })
+    return { port: Number(server.port), asked, stop: () => server.stop(true) }
+  }
+  /** The separate herdr-wake plugin's router: /status only (no Telegram state), a 404 for the rest. */
+  const oldRouter = (path: string): Response =>
+    path === '/status' ? Response.json({ pid: 4242, sessions: {} }) : new Response(null, { status: 404 })
+
+  test('wake that answers its /alive runs though its /status (a herdr snapshot) hangs; the old router on its port does not', async () => {
+    const dir = isolatedHome()
+    writeWakeStatus({ state: 'running', at: Date.now(), pid: 4242 })
+    mkdirSync(dirname(wakeSessionsFile()), { recursive: true })
+    writeFileSync(
+      wakeSessionsFile(),
+      JSON.stringify({ 'w1:p2': { session: 's-bill', name: 'Billing', seen_at: 1, slept_at: 2 } }),
+    )
+    const options = { root: ROOT_A, env: { PATH: join(dir, 'bin') }, platform: 'win32', home: join(dir, 'home') }
+    const board = wakeOnPort(path =>
+      path === '/alive' ? Response.json({ pid: 4242 }) : new Promise<Response>(() => {}),
+    )
+    const router = wakeOnPort(oldRouter)
+    try {
+      const up = await gatherFacts(
+        { wakeUrl: null, wake: { enabled: true, port: board.port } },
+        { ...options, probeMs: 300 },
+      )
+      // Its sleepers from its session file, as /status gave none in time.
+      assert.deepEqual([up.wakeNew?.state, up.wakeNew?.asleep], ['running', 1])
+      assert.equal(board.asked[0], '/alive')
+      writeWakeStatus({ state: 'stopped', at: Date.now() })
+      const old = await gatherFacts({ wakeUrl: null, wake: { enabled: true, port: router.port } }, options)
+      assert.equal(old.wakeNew?.state, 'notRunning')
+      assert.deepEqual(router.asked, ['/alive'])
+    } finally {
+      await board.stop()
+      await router.stop()
+    }
+  })
+
+  test('port taken: by the separate plugin’s router, its process named; by another program, none', async () => {
+    const dir = isolatedHome()
+    const options = { root: ROOT_A, env: { PATH: join(dir, 'bin') }, platform: 'win32', home: join(dir, 'home') }
+    const router = wakeOnPort(oldRouter)
+    const other = wakeOnPort(() => new Response('<html>not wake</html>'))
+    try {
+      const taken = (port: number) => {
+        writeWakeStatus({ state: 'portTaken', at: Date.now(), port, error: `Port ${port} is taken` })
+        return gatherFacts({ wakeUrl: null, wake: { enabled: true, port } }, options)
+      }
+      const byRouter = (await taken(router.port)).wakeNew
+      assert.deepEqual([byRouter?.state, byRouter?.router], ['portTaken', 4242])
+      const byOther = (await taken(other.port)).wakeNew
+      assert.deepEqual([byOther?.state, byOther?.router], ['portTaken', undefined])
+    } finally {
+      await router.stop()
+      await other.stop()
+    }
+  })
+
+  test('wake off ("wake": false, or off with a port): no question on its port', async () => {
+    const dir = isolatedHome()
+    writeWakeStatus({ state: 'running', at: Date.now(), pid: 4242 })
+    const options = { root: ROOT_A, env: { PATH: join(dir, 'bin') }, platform: 'win32', home: join(dir, 'home') }
+    const wake = wakeOnPort(() => Response.json({ pid: 4242, sessions: {}, telegram: { state: 'off' } }))
+    try {
+      for (const off of [false, { enabled: false, port: wake.port }]) {
+        const facts = await gatherFacts({ wakeUrl: null, wake: off }, options)
+        assert.equal(facts.wakeNew?.state ?? null, WAKE_SHIPPED ? 'off' : null)
+      }
+      assert.deepEqual(wake.asked, [])
+    } finally {
+      await wake.stop()
     }
   })
 

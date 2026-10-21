@@ -107,7 +107,7 @@ test('a reminder for a sleeper waits while wake is slow, and is not counted miss
     { wake: { enabled: true, port: wake.port }, profiles: list, scheduleWaitMin: 0.001 },
     boardOnPath(box),
   )
-  const asked = (): number => wake.requests().filter(q => q.method === 'GET' && q.path === '/status').length
+  const asked = (): number => wake.requests().filter(q => q.method === 'GET' && q.path === '/alive').length
   await until(() => asked() >= 3 && read(box, 'eeee01')?.why === 'wake', 30_000)
   const held = read(box, 'eeee01')
   assert.ok(held, 'the reminder is still there')
@@ -138,7 +138,7 @@ test('a restart in its wake step waits while wake is slow, its tries not counted
   wakeRuns(box)
   put(box, { id: 'eeee06', kind: 'restart', idle: true, by: 'agent', text: 'my note', step: 'wake' })
   await scheduler(box, { wake: { enabled: true, port: wake.port }, profiles: list }, boardOnPath(box))
-  const asked = (): number => wake.requests().filter(q => q.method === 'GET' && q.path === '/status').length
+  const asked = (): number => wake.requests().filter(q => q.method === 'GET' && q.path === '/alive').length
   // More than RESTART_TRIES (3) times: a counted retry would have given up by now.
   await until(() => asked() >= 4 && read(box, 'eeee06')?.why === 'wake', 30_000)
   const held = read(box, 'eeee06')

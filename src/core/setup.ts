@@ -205,9 +205,18 @@ export interface SetupFacts {
   /**
    * Sleep and wake (#119), once it ships or while config.json turns it on: its state
    * (core/wake/status.ts), port, last error, sessions asleep, log file, and whether wakeUrl is set to
-   * another address than the default. Null or none: herdr-wake's line at wakeUrl, as before.
+   * another address than the default; `router`: its port is held by the separate herdr-wake
+   * plugin's router, this process. Null or none: herdr-wake's line at wakeUrl, as before.
    */
-  wakeNew?: { state: WakeState; port: number; error?: string; asleep: number; log: string; wakeUrlSet: boolean } | null
+  wakeNew?: {
+    state: WakeState
+    port: number
+    error?: string
+    router?: number
+    asleep: number
+    log: string
+    wakeUrlSet: boolean
+  } | null
   launcher: LauncherFacts | null
   /** How the board would start MokuPilot (adapters/setup-facts.ts mokupilotCommand); none: not looked for. */
   mokupilot?: MokupilotLauncher | null
@@ -494,6 +503,15 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
     else if (w.state === 'crashed')
       add('wake', 'error', t('setup.wake.crashed'), w.error ?? '', t('setup.wake.crashedFix', log))
     else if (w.state === 'held') add('wake', 'warn', t('setup.wake.held'), '', t('setup.wake.heldFix'))
+    else if (w.state === 'portTaken' && w.router !== undefined)
+      // Another port would run two wakes: the router goes, and wake takes its port again.
+      add(
+        'wake',
+        'error',
+        t('setup.wake.portRouter', { ...port, pid: w.router }),
+        '',
+        t('setup.wake.portRouterFix', { pid: w.router }),
+      )
     else if (w.state === 'portTaken')
       add('wake', 'error', t('setup.wake.portTaken', port), '', t('setup.wake.portTakenFix'))
     else add('wake', 'warn', t('setup.wake.notAnswering', port), w.error ?? '', t('setup.wake.notAnsweringFix', log))

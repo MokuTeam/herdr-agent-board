@@ -178,6 +178,36 @@ test('wake on in config.json when the board starts, not running: started once', 
   assert.deepEqual(starts(proc), [[]])
 })
 
+test('wake’s state changes: "Setup incomplete" follows at once, not at the next check in 10 minutes', async () => {
+  const box = await sandbox()
+  box.state({ 'api snapshot': EMPTY })
+  // Wake on, not running yet (nothing on its port, no status file): the first check counts it.
+  const wake = await fakeWake()
+  wake.down()
+  const { url, proc } = await serveBoard(box, {
+    language: 'en',
+    wakeUrl: null,
+    wake: { enabled: true, port: wake.port },
+  })
+  /** The setup note's wake line, after a refresh of the board (its payload asks wake's state again once 2 s old). */
+  const wakeLine = async (): Promise<string | undefined> => {
+    proc.send('refresh')
+    await Bun.sleep(200)
+    const setup = (await payload(url)).setup as { sig?: string } | null
+    return setup?.sig?.split('|').find(s => s.startsWith('wake:'))
+  }
+  await eventually(async () => (await wakeLine())?.startsWith('wake:warn:') === true, 10_000)
+  // Wake comes up: its state line says it runs, and the setup note drops it.
+  stateFile(box, 'wake-status.json', JSON.stringify({ state: 'running', at: Date.now(), pid: 4242, port: wake.port }))
+  wake.up()
+  await eventually(async () => {
+    proc.send('refresh')
+    await Bun.sleep(200)
+    return (await wakeOf(url))?.state === 'running'
+  }, 10_000)
+  await eventually(async () => (await wakeLine()) === undefined, 5000)
+})
+
 test.skipIf(WAKE_SHIPPED)(
   'with wake off ("wake": false) and no wake file the payload has no wake field and nothing is started',
   async () => {
