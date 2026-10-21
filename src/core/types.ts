@@ -189,6 +189,8 @@ export interface Item {
   column: ColumnId
   attention: Attention
   sleeping?: boolean
+  /** A sleeper read from the new wake's session file, not answered by a wake (integrations/wake.ts); absent for the others. */
+  fromFile?: true
   agent?: string
   focused?: boolean
   doing?: string
