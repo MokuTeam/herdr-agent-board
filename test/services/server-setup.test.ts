@@ -9,6 +9,7 @@ import { configFile, loadConfig } from '../../src/adapters/config-file.ts'
 import { configDir, stateDir } from '../../src/adapters/paths.ts'
 import { hostKeyPinned, knownHostsFile, spawnRemote, tunnelDir } from '../../src/adapters/ssh.ts'
 import type { Plan, SetupRecord } from '../../src/core/server-plan.ts'
+import type { Acme } from '../../src/core/server-texts.ts'
 import type { ServerPhase } from '../../src/core/server-view.ts'
 import type { TestStep } from '../../src/core/tunnel.ts'
 import { createServerSetup } from '../../src/services/server-setup.ts'
@@ -22,6 +23,13 @@ const SENTINEL = `S3cr3t%$'"\`Ж`
 const DISTROS = ['debian13', 'ubuntu2604'] as const
 const FLAVOR = { debian13: 'sudo', ubuntu2604: 'sudo-rs' } as const
 const PAIR = { user: 'boardtunnel', socket: '/var/lib/boardtunnel/board.sock' }
+/** A wrong password's lines from a sudo that speaks Russian (none of the English ones the hints know). */
+const WRONG_RU = [
+  'Извините, попробуйте ещё раз.',
+  '',
+  'sudo: пароль не был указан',
+  'sudo: 1 неверная попытка ввода пароля',
+]
 const DOMAIN_OK: TestStep[] = [
   { id: 'ssh', ok: true, detail: '', hint: null },
   { id: 'forward', ok: true, detail: '', hint: null },
@@ -36,12 +44,13 @@ interface AdminState {
   publickey?: boolean
   fixture?: string
   run?: { lines: string[]; dropAfter?: number }
+  wrong?: string[]
 }
 
 type Fields = Record<string, unknown>
 
-/** A board whose config.json has the tunnel's settings and the admin user, the fake as its ssh. */
-async function useBoard(admin: AdminState, o: { pinned?: boolean } = {}) {
+/** A board whose config.json has the tunnel's settings (and `tunnel`'s more) and the admin user, the fake as its ssh. */
+async function useBoard(admin: AdminState, o: { pinned?: boolean; tunnel?: Fields; acme?: Acme } = {}) {
   const fake = await useFakeSsh()
   if (o.pinned !== false) {
     mkdirSync(tunnelDir(), { recursive: true })
@@ -54,12 +63,20 @@ async function useBoard(admin: AdminState, o: { pinned?: boolean } = {}) {
     configFile(),
     JSON.stringify({
       language: 'en',
-      tunnel: { host: 'ssh.example.com', user: 'boardtunnel', domain: 'board.example.com', admin: { user: 'admin' } },
+      tunnel: {
+        host: 'ssh.example.com',
+        user: 'boardtunnel',
+        domain: 'board.example.com',
+        admin: { user: 'admin' },
+        ...o.tunnel,
+      },
     }),
   )
   const cfg = loadConfig()
   const logs: string[] = []
   const answers: unknown[] = []
+  /** How long the board let each ssh take, oldest first. */
+  const deadlines: number[] = []
   let ids = 0
   let tests = 0
   let changes = 0
@@ -69,7 +86,10 @@ async function useBoard(admin: AdminState, o: { pinned?: boolean } = {}) {
     ssh: () => fake.bin,
     knownHosts: knownHostsFile,
     hostKeyPinned: () => hostKeyPinned('ssh.example.com', 22),
-    spawn: spawnRemote,
+    spawn: (bin, args, stdin, ms) => {
+      deadlines.push(ms)
+      return spawnRemote(bin, args, stdin, ms)
+    },
     test: async () => {
       tests++
       return DOMAIN_OK
@@ -80,6 +100,7 @@ async function useBoard(admin: AdminState, o: { pinned?: boolean } = {}) {
     log: line => logs.push(line),
     now: () => Date.now(),
     newId: () => `r${++ids}`,
+    ...(o.acme && { acme: o.acme }),
   })
   const stdinLog = join(fake.dir, 'ssh-calls.jsonl.stdin')
   const keep = <T>(a: T): T => {
@@ -91,6 +112,7 @@ async function useBoard(admin: AdminState, o: { pinned?: boolean } = {}) {
     fake,
     logs,
     answers,
+    deadlines,
     tests: () => tests,
     changes: () => changes,
     /** Another answer from the server from now on. */
@@ -124,8 +146,14 @@ async function useBoard(admin: AdminState, o: { pinned?: boolean } = {}) {
 
 const fixture = (distro: string, scenario: string): string => join(FIXTURES, distro, scenario)
 
-/** A scenario's Look with a record of the board's on the server (setup.json). */
-function withRecord(into: string, distro: string, scenario: string, record: Partial<SetupRecord>): string {
+/** A scenario's Look with a record of the board's on the server (setup.json), and its lock file when `lock` says so. */
+function withRecord(
+  into: string,
+  distro: string,
+  scenario: string,
+  record: Partial<SetupRecord>,
+  lock?: 'held' | 'free',
+): string {
   const dir = mkdtempSync(join(into, `${scenario}-`))
   const one = readFileSync(join(fixture(distro, scenario), 'round1.txt'), 'utf8')
   const full: SetupRecord = {
@@ -145,7 +173,7 @@ function withRecord(into: string, distro: string, scenario: string, record: Part
     join(dir, 'round1.txt'),
     one.replace(
       /@@section record\n[\s\S]*?@@section host\n/,
-      `@@section record\n@@file\n${JSON.stringify(full)}\n\n@@section host\n`,
+      `@@section record\n@@file\n${JSON.stringify(full)}\n\n${lock ? `@@lock ${lock}\n` : ''}@@section host\n`,
     ),
   )
   const two = join(fixture(distro, scenario), 'round2.txt')
@@ -223,7 +251,7 @@ for (const distro of DISTROS) {
       const [probe, ...rounds] = b.commands()
       expect(probe?.startsWith('sh -c ')).toBe(true)
       expect(rounds).toHaveLength(2)
-      for (const c of rounds) expect(c.startsWith('sudo -n -- sh -c ')).toBe(true)
+      for (const c of rounds) expect(c.startsWith('env LC_ALL=C sudo -n -- sh -c ')).toBe(true)
       expect(b.stdins()).toEqual([])
       expect(b.setup.view()).toMatchObject({ sudo: 'nopasswd', choice: { case: '2' } })
       expect(b.setup.view().plan?.steps[0]?.id).toBe('guard')
@@ -244,7 +272,7 @@ for (const distro of DISTROS) {
       const b = await useBoard({ sudo: 'password', password: SENTINEL, flavor, fixture: fixture(distro, 'caddy-unit') })
       expect(await b.look({ password: SENTINEL })).toEqual(OK)
       expect(b.stdins()).toEqual([`${SENTINEL}\n`, `${SENTINEL}\n`])
-      for (const c of b.commands().slice(1)) expect(c.startsWith("sudo -S -p '' -- sh -c ")).toBe(true)
+      for (const c of b.commands().slice(1)) expect(c.startsWith("env LC_ALL=C sudo -S -p '' -- sh -c ")).toBe(true)
       // a run, with a line that holds it (it never should): kept as ••••
       const p = planOf(b.setup)
       b.server({ run: { lines: goesThrough(p, [`echo ${SENTINEL}`]) } })
@@ -336,6 +364,8 @@ for (const distro of DISTROS) {
       const p = planOf(b.setup)
       expect(p.ticks).toEqual(['docker'])
       expect(await b.apply({ plan: 'r0' })).toMatchObject({ status: 409, body: { hint: 'lookAgain' } })
+      // an Apply's plan is no Undo's
+      expect(await b.undo({ plan: p.id })).toMatchObject({ status: 409, body: { hint: 'lookAgain' } })
       expect(await b.apply({ plan: p.id })).toMatchObject({ status: 409, body: { ok: false, hint: null } })
       b.server({ run: { lines: goesThrough(p) } })
       const [first, second] = await Promise.all([
@@ -381,7 +411,7 @@ for (const distro of DISTROS) {
       // the panel heard of each marker
       expect(b.changes() - before).toBeGreaterThanOrEqual(p.steps.length * 2)
       // the run went with sudo -n, as Look did
-      expect(b.commands().at(-1)?.startsWith('sudo -n -- sh -c ')).toBe(true)
+      expect(b.commands().at(-1)?.startsWith('env LC_ALL=C sudo -n -- sh -c ')).toBe(true)
     })
 
     test('case 4a: the public port 8443 after Apply; the Undo of that record takes it away', async () => {
@@ -443,8 +473,122 @@ for (const distro of DISTROS) {
       expect(b.setup.view()).toMatchObject({ phase: 'failed', hint: 'changed' })
       expect(b.logs).toEqual([expect.stringMatching(/^server setup guard fail \d+s$/)])
     })
+
+    test('a run cut short (its record running, no lock held): Look offers its Undo, which runs; Apply refuses it', async () => {
+      const at = '2026-10-21T10:04:00.000Z'
+      const b = await useBoard(
+        { uid: 0, flavor },
+        { tunnel: { setup: { case: '1', address: 'https://board.example.com', at } } },
+      )
+      const cut = withRecord(
+        b.fake.dir,
+        distro,
+        'bare',
+        { state: 'running', items: [{ kind: 'container', name: 'agent-board-caddy', setup: 'r0' }] },
+        'free',
+      )
+      b.server({ fixture: cut })
+      expect(await b.look()).toEqual(OK)
+      expect(b.setup.view().choice).toEqual({ case: null, why: ['interrupted'] })
+      const u = planOf(b.setup)
+      expect(u.kind).toBe('undo')
+      expect(u.warnings[0]).toEqual({ key: 'server.warn.interrupted' })
+      expect(await b.apply({ plan: u.id })).toMatchObject({ status: 409, body: { hint: 'lookAgain' } })
+      b.server({ run: { lines: goesThrough(u) } })
+      expect(await b.undo({ plan: u.id })).toEqual(OK)
+      expect(b.setup.view().phase).toBe('undoing')
+      await b.until(['done', 'failed'])
+      expect(b.setup.view().phase).toBe('done')
+      expect(b.tunnel().setup).toBeUndefined()
+      expect(b.setup.view().setup).toBeNull()
+      expect(b.tests()).toBe(0)
+    })
+
+    test('a wrong password at Apply, from a sudo in another language: failed with its lines, not “connection lost”', async () => {
+      const b = await useBoard({
+        sudo: 'password',
+        password: SENTINEL,
+        flavor,
+        fixture: fixture(distro, 'caddy-unit'),
+        wrong: WRONG_RU,
+      })
+      expect(await b.look({ password: SENTINEL })).toEqual(OK)
+      const p = planOf(b.setup)
+      b.server({ run: { lines: goesThrough(p) } })
+      expect(await b.apply({ plan: p.id, password: 'wrong one' })).toEqual(OK)
+      await b.until(['done', 'failed'])
+      const v = b.setup.view()
+      expect(v.phase).toBe('failed')
+      expect(v.hint).not.toBe('lost')
+      expect(v.hint).toBeNull()
+      expect(v.error).toBe(WRONG_RU.filter(Boolean).join('\n'))
+      expect(v.progress?.steps.map(s => s.state)).toEqual(p.steps.map(() => 'waiting'))
+      expect(b.tunnel().setup).toBeUndefined()
+      expect(b.tests()).toBe(0)
+    })
   })
 }
+
+describe('a run’s ssh', () => {
+  test('lasts longer than the run on the server can: its timeout, the rollback after it, the follower', async () => {
+    const b = await useBoard({ uid: 0, fixture: fixture('debian13', 'bare') })
+    expect(await b.look()).toEqual(OK)
+    const p = planOf(b.setup)
+    b.server({ run: { lines: goesThrough(p) } })
+    expect(await b.apply({ plan: p.id })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    const b64 = /echo ([A-Za-z0-9+/=]+) \| base64 -d/.exec(b.commands().at(-1) ?? '')?.[1] ?? ''
+    const launch = Buffer.from(b64, 'base64').toString('utf8')
+    const [, kill = '', most = ''] = /timeout -k (\d+) (\d+) sh /.exec(launch) ?? []
+    const [, follower = ''] = /\[ "\$s" -lt (\d+) \]/.exec(launch) ?? []
+    const serverS = Math.max(Number(most) + Number(kill), Number(follower))
+    expect(serverS).toBeGreaterThanOrEqual(1200)
+    // the follower counts its turns (a second's sleep and a look at the log each): two minutes more
+    expect(b.deadlines.at(-1)).toBeGreaterThanOrEqual((serverS + 120) * 1000)
+  })
+
+  test('a launch that could not write the run (@@exit 70): failed, saying it never started', async () => {
+    const b = await useBoard({ uid: 0, fixture: fixture('debian13', 'bare') })
+    expect(await b.look()).toEqual(OK)
+    const p = planOf(b.setup)
+    b.server({ run: { lines: ['@@exit 70'] } })
+    expect(await b.apply({ plan: p.id })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    const v = b.setup.view()
+    expect(v).toMatchObject({ phase: 'failed', hint: null })
+    expect(v.error).toBe(
+      'The server could not write the run to /etc/agent-board/runs (a full disk, or /etc read-only?): it did not start, nothing was changed.',
+    )
+    expect(v.progress?.steps.map(s => s.state)).toEqual(p.steps.map(() => 'waiting'))
+    expect(b.tunnel().setup).toBeUndefined()
+    expect(b.tests()).toBe(0)
+  })
+})
+
+describe('what the panel wants, refused by the plan’s own check', () => {
+  test('Look answers 409 with the check’s words, keeps nothing half made, and is not left busy', async () => {
+    const b = await useBoard(
+      { uid: 0, fixture: fixture('debian13', 'bare') },
+      { acme: { ca: 'https://ca.example/dir; x', root: 'relative/root.pem' } },
+    )
+    const answer = await b.look()
+    expect(answer).toEqual({
+      status: 409,
+      body: { ok: false, hint: null, error: 'The test CA is a URL and an absolute path' },
+    })
+    expect(b.setup.view()).toMatchObject({
+      phase: 'idle',
+      hint: null,
+      error: 'The test CA is a URL and an absolute path',
+      facts: null,
+      choice: null,
+      plan: null,
+    })
+    expect(await b.apply({ plan: 'r1' })).toMatchObject({ status: 409, body: { hint: 'lookAgain' } })
+    // not stuck: the next Look runs (and is refused the same way)
+    expect(await b.look()).toMatchObject({ status: 409, body: { hint: null } })
+  })
+})
 
 describe('the admin’s fields and Cancel', () => {
   test('saved in config.json’s tunnel.admin, checked first; Cancel drops the plan', async () => {

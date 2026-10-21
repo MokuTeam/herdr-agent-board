@@ -107,11 +107,13 @@ describe('the remote command: fixed text and the script in base64, behind the su
     expect(root).toMatch(/^sh -c 'eval "\$\(echo [A-Za-z0-9+/=]+ \| base64 -d\)"'$/)
     expect(decode(root)).toBe(script)
   })
-  test('NOPASSWD: sudo -n, nothing on stdin', () => {
-    expect(remoteCommand(script, 'nopasswd')).toBe(`sudo -n -- ${root}`)
+  // sudo speaks the admin's login locale (pam_env's /etc/default/locale): LC_ALL=C makes its lines
+  // the English ones the hints know; `env` is a program, so any login shell runs it alike
+  test('NOPASSWD: sudo -n, nothing on stdin, its lines in English', () => {
+    expect(remoteCommand(script, 'nopasswd')).toBe(`env LC_ALL=C sudo -n -- ${root}`)
   })
-  test("a password: sudo -S -p '' reads it on stdin, prints no prompt", () => {
-    expect(remoteCommand(script, 'password')).toBe(`sudo -S -p '' -- ${root}`)
+  test("a password: sudo -S -p '' reads it on stdin, prints no prompt, its lines in English", () => {
+    expect(remoteCommand(script, 'password')).toBe(`env LC_ALL=C sudo -S -p '' -- ${root}`)
   })
   test('requiretty and no sudo: no way to run the script', () => {
     expect(() => remoteCommand(script, 'requiretty')).toThrow()

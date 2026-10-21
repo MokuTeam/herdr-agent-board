@@ -129,7 +129,9 @@ function base64(s: string): string {
  * The remote command: fixed text and the script in base64, so no value and no quoting reaches the
  * admin's login shell (bash, zsh and fish read the single quotes alike). Root runs it with sh;
  * NOPASSWD behind `sudo -n`; a password behind `sudo -S -p ''`, which reads it from stdin and
- * prints no prompt. requiretty and no sudo: no way to run it (throws).
+ * prints no prompt. sudo speaks the admin's login locale (pam_env's /etc/default/locale), so it
+ * runs under `env LC_ALL=C` (a program: any login shell runs it alike), and its lines are the
+ * English ones the hints know. requiretty and no sudo: no way to run it (throws).
  */
 export function remoteCommand(script: string, mode: SudoMode): string {
   const sh = `sh -c 'eval "$(echo ${base64(script)} | base64 -d)"'`
@@ -137,9 +139,9 @@ export function remoteCommand(script: string, mode: SudoMode): string {
     case 'root':
       return sh
     case 'nopasswd':
-      return `sudo -n -- ${sh}`
+      return `env LC_ALL=C sudo -n -- ${sh}`
     case 'password':
-      return `sudo -S -p '' -- ${sh}`
+      return `env LC_ALL=C sudo -S -p '' -- ${sh}`
     default:
       throw new Error(`the admin cannot run a script as root (${mode})`)
   }
