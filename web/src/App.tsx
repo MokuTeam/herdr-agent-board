@@ -31,6 +31,7 @@ import { useHelpers } from './hooks/useHelpers.ts'
 import { useLaunch } from './hooks/useLaunch.ts'
 import { laneContext, useNewSession } from './hooks/useNewSession.ts'
 import { useNextAttention } from './hooks/useNextAttention.ts'
+import { useOmarchyTheme } from './hooks/useOmarchyTheme.ts'
 import { usePanelLayout } from './hooks/usePanelLayout.ts'
 import { useQuestions } from './hooks/useQuestions.ts'
 import { useQuickLook } from './hooks/useQuickLook.ts'
@@ -42,12 +43,13 @@ import { useSegmentPicks } from './hooks/useSegmentPicks.ts'
 import { useSettingsMenu } from './hooks/useSettingsMenu.ts'
 import { useSetupNote } from './hooks/useSetupNote.ts'
 import { useTerminal } from './hooks/useTerminal.ts'
+import { useTerminalKeys } from './hooks/useTerminalKeys.ts'
 import { pageLayers } from './models/lifecycle.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
 
 export function App() {
   const limitsAnchor = useRef<HTMLButtonElement>(null)
-  const { ui, dispatch } = useBoardContext()
+  const { ui, dispatch, data } = useBoardContext()
   const panels = usePanelLayout()
   // The categories and schedule panels, each opened at a lane or a session when asked.
   const [categories, setCategories] = useState(false)
@@ -117,6 +119,8 @@ export function App() {
   )
   // The lanes control and the profile switch folded into pills: their choices as menus.
   const picks = useSegmentPicks(menus.menu)
+  const terminalKeys = useTerminalKeys(menus)
+  useOmarchyTheme(data?.omarchy)
   useBoardKeys({
     openNextAttention,
     newSession,
@@ -130,6 +134,7 @@ export function App() {
     pickOption: questions.pickOption,
     openTerminal: terminal.openTerminal,
     archive,
+    terminal: terminalKeys,
   })
   // Layers above the board, topmost first (models/lifecycle.ts PAGE_LAYERS): Back on a phone
   // closes them one at a time (the quick look and the helpers window a step at a time).

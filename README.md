@@ -195,7 +195,14 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   on show with its count; it opens every lane, with its count, in a menu. The profile switch
   folds the same way, on its own.
 - Settings (the gear): appearance (as the system has it, light or dark; kept in this browser),
-  language, where the session panel sits, and whether sleeping sessions show.
+  style (Classic, the board's own, or Terminal: a terminal-style look with a One Dark palette,
+  One Light in the light theme, monospace and 1px outlines, and the terminal board's keys, see
+  [Board keys](#board-keys); kept in this browser too, and config.json's `look` makes it the
+  one a browser starts in), language, where the session panel sits, and whether sleeping sessions
+  show. On a computer with [Omarchy](https://omarchy.org), the Terminal style takes the colors of
+  the Omarchy theme on now (mixed from its `colors.toml` as Omarchy's own apps take theirs) and the
+  system's monospace font, and follows a theme switch while the page is open; in the theme's other
+  mode (a light page for a dark theme) it keeps One Light / One Dark.
 - A card says what the session works on (its own `board doing`, else Claude's title of the
   session, else "You: <your last request>"), its last words, the tool it runs now, the question
   it is stuck on, what it waits for.
@@ -1521,6 +1528,7 @@ Setup (`src/core/setup.ts`, `src/adapters/setup-facts.ts`, `src/services/setup-c
 | Key | Action |
 | --- | --- |
 | arrows / hjkl, mouse click | select |
+| g / G (Home / End) | the first / the last card |
 | Enter, double click | go to the session (wakes it if it sleeps) |
 | m | send the session a message (typed into its prompt) |
 | w | set what it waits for (empty clears) |
@@ -1529,11 +1537,27 @@ Setup (`src/core/setup.ts`, `src/adapters/setup-facts.ts`, `src/services/setup-c
 | f | a favorite, or not any more (see [Favorites](#favorites)) |
 | c | change its category (n: a new one) |
 | 1-9 / 0 | show one lane / all |
+| W M O D I | show one column alone: Working, Needs me (me), Waiting on others, Done, Idle; the same again shows all |
+| / | search as you type: names, what sessions do, wait for, said or ask, lanes (Enter keeps it, Esc takes it off) |
 | o | open the web board |
-| q, Esc, the board key again | back to where you were |
+| q, Esc, the board key again | back to where you were (with a column alone or a search on, Esc ends those first) |
 | Ctrl+C | close the board |
 
 The same keys work on a Russian keyboard layout.
+
+**The Terminal style.** With `"look": "terminal"` in config.json (see [Settings](#settings)) the
+terminal board draws each card as a rounded box (its name, age and profile; what it does, waits for
+or asks; what it is at), the column heads over a heavy rule in their colors, and lanes as
+`▾ name count` over a thin rule in cyan and magenta in turn; a session asleep in Idle stays one
+line. It draws in the terminal's own sixteen colors, so a terminal theme (Omarchy's included) is
+the board's too. The keys stay the same.
+
+The web board takes these keys too in its Terminal style (Settings → Style → Terminal): h j k l and
+the arrows move between cards, g / G go to the first / the last, Enter opens the session, m writes
+to it, w sets what it waits for, x clears its card, z puts it to sleep, f makes it a favorite or not,
+c picks its lane, r refreshes, q closes the panel, 1-9 / 0 show one lane / all, W M O D I one
+column alone (Esc shows them all again), and / searches, as always. The board's own keys (n, Shift+N,
+F2, digits answering a question) come first. In the Classic style the page's keys are as they were.
 
 ## Agents
 
@@ -1654,6 +1678,8 @@ categories (id, title, color, folders that guess the category, the usual Claude 
 `profiles` (the Claude profiles: id, title, folder, color, hidden, args; see
 [Claude profiles](#claude-profiles)), `placement` (`workspace`
 default: the board lives in a workspace of its own and stays open; `tab`; `overlay`),
+`look` (`terminal`: the terminal board in its Terminal style, and the web board in it in a browser
+that has not picked a style in Settings; Classic otherwise, and without it),
 `refreshSec`, `wakeUrl` (herdr-wake router), `scheduleWaitMin` (how long a due entry waits for a
 busy session, 240), `port` (web board, 12422), `web` (false turns the
 web board off), `terminal` (false turns the web board's [terminal](#terminal) off), `browser`

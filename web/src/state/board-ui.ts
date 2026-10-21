@@ -50,6 +50,8 @@ export interface BoardUi {
    */
   profile: string
   query: string
+  /** The one column shown, by the Terminal style's keys (W M O D I: models/terminal-keys.ts), or null for all. */
+  column: ColumnId | null
   /** Show sessions asleep in the idle column (board.sleepers). */
   sleepers: boolean
   /** Results viewed in this browser (board.viewed). */
@@ -81,6 +83,7 @@ export type BoardAction =
   | { type: 'filter'; id: string }
   | { type: 'profile'; id: string }
   | { type: 'query'; text: string }
+  | { type: 'column'; id: ColumnId | null }
   | { type: 'toggleSleepers' }
   | { type: 'open'; key: string | null; compose?: boolean }
   | { type: 'viewed'; item: AttentionItem }
@@ -116,6 +119,7 @@ export function initialUi(read: (key: string, fallback: string) => string): Boar
     filter: read('board.filter', 'all'),
     profile: read('board.profile', 'all'),
     query: '',
+    column: null,
     sleepers: read('board.sleepers', '1') === '1',
     viewed: parseSeen(read('board.viewed', '{}')),
     open: null,
@@ -148,6 +152,8 @@ export function boardUi(state: BoardUi, action: BoardAction): BoardUi {
       return { ...state, profile: action.id }
     case 'query':
       return { ...state, query: action.text }
+    case 'column':
+      return action.id === state.column ? state : { ...state, column: action.id }
     case 'toggleSleepers':
       return { ...state, sleepers: !state.sleepers }
     case 'open':

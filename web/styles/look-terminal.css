@@ -1,0 +1,562 @@
+/* The Terminal style (Settings → Style; web/src/models/look.ts): the board as a terminal draws it.
+   A One Dark palette (One Light in the light theme), monospace throughout, 1px rounded outlines on
+   a bare background: no fills, shadows or blur. Column heads in their column's color over a heavy
+   rule, lanes as "▾ name count" with a thin rule, cards cut to one line per field, markers as
+   glyphs. Appearance only, and only while <html> has data-look="terminal": every rule here starts
+   with that, so the Classic page renders as it always did. Linked last (web/index.html), so its
+   variables win the ties with the other sheets' (:root[data-theme="dark"] and the like). */
+
+/* ---------------------------------------------------------------- palette */
+:root[data-look="terminal"] {
+  --t-bg: #fafafa;
+  --t-text: #383a42;
+  --t-dim: #696c77;
+  --t-faint: #a0a1a7;
+  --t-edge: #cfd0d5;
+  --t-accent: #4078f2;
+  --t-green: #50a14f;
+  --t-amber: #c18401;
+  --t-red: #e45649;
+  --t-purple: #a626a4;
+  --t-cyan: #0184bc;
+  --term-bg: #282c34;
+  --term-edge: transparent;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-look="terminal"]:not([data-theme="light"]) {
+    --t-bg: #282c34;
+    --t-text: #abb2bf;
+    --t-dim: #7f848e;
+    --t-faint: #5c6370;
+    --t-edge: #4b5263;
+    --t-accent: #61afef;
+    --t-green: #98c379;
+    --t-amber: #e5c07b;
+    --t-red: #e06c75;
+    --t-purple: #c678dd;
+    --t-cyan: #56b6c2;
+    --term-bg: #21252b;
+    --term-edge: #4b5263;
+  }
+}
+:root[data-look="terminal"][data-theme="dark"] {
+  --t-bg: #282c34;
+  --t-text: #abb2bf;
+  --t-dim: #7f848e;
+  --t-faint: #5c6370;
+  --t-edge: #4b5263;
+  --t-accent: #61afef;
+  --t-green: #98c379;
+  --t-amber: #e5c07b;
+  --t-red: #e06c75;
+  --t-purple: #c678dd;
+  --t-cyan: #56b6c2;
+  --term-bg: #21252b;
+  --term-edge: #4b5263;
+}
+
+/* The board's own variables, pointed at the palette: every surface is the background, every
+   shadow a 1px outline (a lifted thing's in the accent, as the terminal's popups are). */
+:root[data-look="terminal"] {
+  --t-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --font: var(--t-mono);
+  --font-display: var(--t-mono);
+  --mono: var(--t-mono);
+
+  --bg: var(--t-bg);
+  --surface: var(--t-bg);
+  --fill: color-mix(in srgb, var(--t-edge) 40%, transparent);
+  --fill-2: color-mix(in srgb, var(--t-edge) 22%, transparent);
+  --label: var(--t-text);
+  --label-2: var(--t-dim);
+  --label-3: var(--t-faint);
+  --separator: var(--t-edge);
+  --material: var(--t-bg);
+  --material-thick: var(--t-bg);
+  --panel: var(--t-bg);
+  --panel-float: var(--t-bg);
+  --scroll: var(--t-edge);
+  --edge: transparent;
+  --shadow-card: 0 0 0 1px var(--t-edge);
+  --shadow-lift: 0 0 0 1px var(--t-accent);
+  --shadow-sheet: 0 0 0 1px var(--t-edge);
+  --menu-bg: var(--t-bg);
+  --menu-edge: var(--t-accent);
+
+  --green: var(--t-green);
+  --orange: var(--t-amber);
+  --purple: var(--t-purple);
+  --blue: var(--t-accent);
+  --gray: var(--t-dim);
+  --red: var(--t-red);
+  --accent: var(--t-accent);
+  --teal: var(--t-cyan);
+  --pink: var(--t-red);
+  --yellow: var(--t-amber);
+
+  --radius: 6px;
+  --gap: 9px;
+}
+
+/* ---------------------------------------------------------------- type */
+/* One monospace size for the page; tracking made for a proportional face would only crowd it, and
+   there is no glass to blur through. */
+:root[data-look="terminal"] body { font: 13px/1.45 var(--font); -webkit-font-smoothing: auto; }
+:root[data-look="terminal"] *,
+:root[data-look="terminal"] *::before,
+:root[data-look="terminal"] *::after {
+  letter-spacing: 0 !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* ---------------------------------------------------------------- toolbar */
+:root[data-look="terminal"] .toolbar { background: var(--bg); }
+:root[data-look="terminal"] .toolbar.scrolled { box-shadow: 0 1px 0 var(--t-edge); }
+:root[data-look="terminal"] h1 { font: 700 15px/1.2 var(--font); color: var(--accent); text-transform: uppercase; }
+:root[data-look="terminal"] .summary b { font-weight: 700; }
+
+/* Buttons: an outline, quiet text that brightens when pointed at. */
+:root[data-look="terminal"] .pill-toggle,
+:root[data-look="terminal"] .setup-note {
+  border-radius: var(--radius);
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--t-edge);
+  color: var(--label-2);
+  font-weight: 400;
+}
+:root[data-look="terminal"] .pill-toggle:hover:not(:disabled),
+:root[data-look="terminal"] .setup-note:hover { color: var(--label); box-shadow: inset 0 0 0 1px var(--t-dim); }
+:root[data-look="terminal"] .pill-toggle[aria-expanded="true"],
+:root[data-look="terminal"] .setup-note[aria-expanded="true"] { color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .pill-toggle.new-session,
+:root[data-look="terminal"] .pill-toggle.new-session:hover { background: none; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .pill-toggle .n { min-width: 0; padding: 0; background: none; color: inherit; font-size: 12px; }
+:root[data-look="terminal"] .pill-toggle.due .n { background: none; color: var(--orange); font-weight: 700; }
+:root[data-look="terminal"] .pill-toggle:active,
+:root[data-look="terminal"] .button:active,
+:root[data-look="terminal"] .icon-button:active,
+:root[data-look="terminal"] .card-actions button:active { transform: none; }
+
+/* The lanes control: options as words, the one on show in the accent between brackets. The
+   brackets are always there, unseen, so picking one moves nothing. */
+:root[data-look="terminal"] .segmented { padding: 0; background: none; }
+:root[data-look="terminal"] .segmented .thumb { display: none; }
+:root[data-look="terminal"] .segmented button { padding: 4px 2px; border-radius: var(--radius); color: var(--label-2); font-size: 12.5px; font-weight: 400; }
+:root[data-look="terminal"] .segmented button::before { content: "["; content: "[" / ""; color: transparent; }
+:root[data-look="terminal"] .segmented button::after { content: "]"; content: "]" / ""; color: transparent; }
+:root[data-look="terminal"] .segmented button:hover { color: var(--label); }
+:root[data-look="terminal"] .segmented button[aria-selected="true"] { color: var(--accent); font-weight: 700; }
+:root[data-look="terminal"] .segmented button[aria-selected="true"]::before,
+:root[data-look="terminal"] .segmented button[aria-selected="true"]::after { color: var(--accent); }
+:root[data-look="terminal"] .segmented button .n { margin-left: 1ch; color: inherit; opacity: 0.7; }
+:root[data-look="terminal"] .segmented.profiles .n { color: var(--c, inherit); opacity: 1; }
+:root[data-look="terminal"] .segmented button:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+
+:root[data-look="terminal"] .search { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .search:focus-within { box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .limits { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .limits b { font-weight: 700; }
+:root[data-look="terminal"] .live.on { box-shadow: none; }
+
+/* ---------------------------------------------------------------- column heads */
+/* Each in its column's color, bold, over a heavy rule of that color. Waiting on others is purple,
+   as its cards' dots are: a cyan would pass for Done's blue. */
+:root[data-look="terminal"] .col-head,
+:root[data-look="terminal"] .col { --hc: var(--label-2); }
+:root[data-look="terminal"] [data-col="work"] { --hc: var(--green); }
+:root[data-look="terminal"] [data-col="me"] { --hc: var(--orange); }
+:root[data-look="terminal"] [data-col="ext"] { --hc: var(--purple); }
+:root[data-look="terminal"] [data-col="done"] { --hc: var(--accent); }
+:root[data-look="terminal"] [data-col="idle"] { --hc: var(--label-2); }
+:root[data-look="terminal"] .columns-head { padding: 10px 0 9px; }
+:root[data-look="terminal"] .col-head { gap: 1ch; padding-bottom: 4px; border-bottom: 2px solid var(--hc); color: var(--hc); font-size: 12.5px; font-weight: 700; }
+:root[data-look="terminal"] .col-head .dot { display: none; }
+:root[data-look="terminal"] .col-head .n { color: inherit; font-weight: 400; }
+:root[data-look="terminal"] .col-head.vacant { opacity: 0.5; }
+/* One column shown alone (W M O D I, web/src/models/terminal-keys.ts): its head in brackets, the others quiet. */
+:root[data-look="terminal"] .col-head[data-only] .t::before { content: "["; content: "[" / ""; }
+:root[data-look="terminal"] .col-head[data-only] .n::after { content: "]"; content: "]" / ""; }
+:root[data-look="terminal"] .columns-head:has(> [data-only]) .col-head:not([data-only]) { opacity: 0.4; }
+
+/* ---------------------------------------------------------------- lanes */
+/* "▾ name count" and a thin rule to the edge, cyan and purple in turn down the lanes on show. */
+:root[data-look="terminal"] .lane { --lc: var(--t-cyan); margin-top: 16px; }
+:root[data-look="terminal"] .lane:nth-child(even of .lane:not(.filtered, .empty-lane)) { --lc: var(--t-purple); }
+:root[data-look="terminal"] .lane-bar { position: relative; gap: 1ch; margin: 0 0 8px; }
+:root[data-look="terminal"] .lane-bar::after { content: ""; flex: 1 1 auto; min-width: 16px; border-top: 1px solid var(--lc); opacity: 0.6; }
+:root[data-look="terminal"] .lane-head { margin: 0; padding: 0 2px; border-radius: 3px; color: var(--lc); }
+:root[data-look="terminal"] .lane-head:hover { background: none; }
+:root[data-look="terminal"] .lane-head:hover .lane-tag { text-decoration: underline; }
+:root[data-look="terminal"] .lane-tag { gap: 1ch; font: 700 13px/1.3 var(--font); }
+:root[data-look="terminal"] .lane-tag::before { content: "▾"; content: "▾" / ""; width: auto; height: auto; border-radius: 0; background: none; font-size: 15px; line-height: 1; }
+:root[data-look="terminal"] .lane-count { margin-left: 1ch; color: inherit; font-size: 13px; opacity: 0.75; }
+/* The lane's "new session here" over the rule's end, so the rule runs from the count to the edge. */
+:root[data-look="terminal"] .lane-new { position: absolute; right: 0; width: 22px; height: 20px; border-radius: 3px; background: var(--bg); }
+:root[data-look="terminal"] .lane-new:hover { background: var(--bg); color: var(--lc); box-shadow: inset 0 0 0 1px var(--lc); }
+:root[data-look="terminal"] .lane-grid { border-radius: var(--radius); }
+:root[data-look="terminal"] .col { gap: 10px; }
+
+/* Where a dragged card would land: a dashed outline, nothing filled. */
+:root[data-look="terminal"] .lane.drop .lane-grid { background: none; box-shadow: none; outline: 1px dashed var(--accent); outline-offset: -1px; }
+:root[data-look="terminal"] .col.drop { background: none; box-shadow: none; outline: 1px dashed var(--accent); outline-offset: 3px; }
+
+/* ---------------------------------------------------------------- cards */
+/* An outlined box on the bare background (opaque, for the dragged ghost and a card that unfolds
+   over others), each field one line cut with an ellipsis, so rows line up across the columns. */
+:root[data-look="terminal"] .card {
+  padding: 6px 10px 7px;
+  border-radius: var(--radius);
+  background: var(--bg);
+  box-shadow: inset 0 0 0 1px var(--t-edge);
+  font-size: 12.5px;
+}
+:root[data-look="terminal"] .card:active { transform: none; }
+/* Moved to by keys (h j k l): it comes into view clear of the toolbar and of a panel docked below. */
+:root[data-look="terminal"] .card { scroll-margin: 150px 0 calc(var(--room-bottom, 0px) + 24px); }
+/* At least the head and two lines, so cards with less to say still line up with their neighbours. */
+:root[data-look="terminal"] .card:not(.compact, .folds) { min-height: 74px; }
+:root[data-look="terminal"] .card[data-col="me"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--orange) 65%, var(--t-edge)); }
+:root[data-look="terminal"] .card.launch-card[data-col="work"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 65%, var(--t-edge)); }
+:root[data-look="terminal"] .card.related { box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .card:focus-visible,
+:root[data-look="terminal"] .card.selected,
+:root[data-look="terminal"] .card.related.selected { box-shadow: inset 0 0 0 2px var(--accent); }
+:root[data-look="terminal"] .card.folds { padding: 6px 10px 7px; }
+:root[data-look="terminal"] .card.folds[data-fold="over"] { box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .card.folds[data-fold="over"]:focus-visible,
+:root[data-look="terminal"] .card.folds[data-fold="over"].selected { box-shadow: inset 0 0 0 2px var(--accent); }
+:root[data-look="terminal"] .card.ghost { box-shadow: inset 0 0 0 2px var(--accent); }
+
+/* The head: state glyph, name (› when it is the one open), markers, age. */
+:root[data-look="terminal"] .card-top { gap: 1ch; height: 19px; }
+:root[data-look="terminal"] .card-top > .dot {
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 19px;
+  margin: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--c, var(--gray));
+  font-size: 11px;
+}
+:root[data-look="terminal"] .card-top > .dot::before { content: "●"; content: "●" / ""; }
+:root[data-look="terminal"] .card-top > .dot.idle::before { content: "○"; content: "○" / ""; }
+:root[data-look="terminal"] .card-top > .dot::after { display: none; }
+:root[data-look="terminal"] .name { font-size: 13px; font-weight: 700; }
+:root[data-look="terminal"] .card.selected .name::before { content: "› "; content: "› " / ""; color: var(--accent); }
+:root[data-look="terminal"] .age { color: var(--label-2); font-size: 12px; }
+:root[data-look="terminal"] .moon { color: var(--label-2); }
+:root[data-look="terminal"] .card-top .favorite svg { display: none; }
+:root[data-look="terminal"] .card-top .favorite::before { content: "★"; content: "★" / ""; font-size: 12px; line-height: 1; }
+:root[data-look="terminal"] .unseen-dot { width: auto; height: auto; border-radius: 0; background: none; box-shadow: none; color: var(--accent); font-size: 10px; line-height: 1; }
+:root[data-look="terminal"] .unseen-dot::before { content: "◆"; content: "◆" / ""; }
+:root[data-look="terminal"] .pinned { color: var(--label-2); }
+:root[data-look="terminal"] .alarm { height: auto; padding: 0; background: none; color: var(--purple); font-size: 12px; font-weight: 400; }
+:root[data-look="terminal"] .alarm.due { background: none; color: var(--orange); font-weight: 700; }
+
+/* The profile badge: its name in its color between brackets; a wrong one in red, marked. */
+:root[data-look="terminal"] .profile-tag { padding: 0; border-radius: 0; background: none; box-shadow: none; font-size: 12px; font-weight: 700; line-height: inherit; }
+:root[data-look="terminal"] .profile-tag::before { content: "["; content: "[" / ""; }
+:root[data-look="terminal"] .profile-tag::after { content: "]"; content: "]" / ""; }
+:root[data-look="terminal"] .profile-tag.unknown { background: none; box-shadow: none; }
+:root[data-look="terminal"] .profile-tag.wrong { background: none; color: var(--red); }
+:root[data-look="terminal"] .profile-tag.wrong::before { content: "!["; content: "![" / ""; }
+
+/* The body: one line each. What it does in the text color, what it said dim, the rest in color. */
+:root[data-look="terminal"] .what,
+:root[data-look="terminal"] .said,
+:root[data-look="terminal"] .ask,
+:root[data-look="terminal"] .qa-card-q { -webkit-line-clamp: 1; overflow-wrap: anywhere; }
+:root[data-look="terminal"] .what { margin-top: 3px; font-size: 12.5px; font-weight: 400; line-height: 1.45; }
+:root[data-look="terminal"] .what .you { color: var(--label-2); font-weight: 400; }
+:root[data-look="terminal"] .said { margin-top: 2px; font-size: 12.5px; line-height: 1.45; }
+:root[data-look="terminal"] .now { gap: 1ch; margin-top: 3px; font-size: 12px; }
+:root[data-look="terminal"] .now .tool { font-weight: 700; }
+:root[data-look="terminal"] .ask { margin-top: 3px; padding: 0; border-radius: 0; background: none; font-size: 12.5px; line-height: 1.45; }
+:root[data-look="terminal"] .ask b { font-weight: 700; }
+:root[data-look="terminal"] .qa-card .qa-tag { padding: 0; margin-right: 1ch; background: none; color: var(--orange); font-size: inherit; }
+:root[data-look="terminal"] .qa-card .qa-tag::before { content: "["; content: "[" / ""; }
+:root[data-look="terminal"] .qa-card .qa-tag::after { content: "]"; content: "]" / ""; }
+:root[data-look="terminal"] .qa-card-opts { margin-top: 1px; }
+:root[data-look="terminal"] .chip { gap: 1ch; margin-top: 3px; padding: 0; border-radius: 0; background: none; color: var(--purple); font-size: 12.5px; font-weight: 400; }
+:root[data-look="terminal"] .helpers-row { margin-top: 3px; }
+:root[data-look="terminal"] .helpers-chip { padding: 0; border-radius: 0; background: none; color: var(--label-2); }
+:root[data-look="terminal"] .helpers-chip:hover { background: none; }
+:root[data-look="terminal"] .helpers-chip:hover .n { text-decoration: underline; }
+:root[data-look="terminal"] .helpers-chip .n { color: var(--green); font-weight: 700; }
+:root[data-look="terminal"] .rels { margin-top: 3px; }
+:root[data-look="terminal"] .launch-note { margin-top: 3px; }
+
+/* Its buttons, over the head while pointed at: opaque, outlined. */
+:root[data-look="terminal"] .card-actions { top: 4px; right: 5px; }
+:root[data-look="terminal"] .card-actions button { width: 24px; height: 22px; border-radius: 4px; background: var(--bg); box-shadow: inset 0 0 0 1px var(--t-edge); color: var(--label-2); }
+:root[data-look="terminal"] .card-actions button:hover { background: var(--bg); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+
+/* Asleep in Idle: one dashed line. */
+:root[data-look="terminal"] .card.compact { padding: 3px 10px; background: var(--bg); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--t-edge) 70%, transparent); }
+:root[data-look="terminal"] .card.compact.selected { box-shadow: inset 0 0 0 2px var(--accent); }
+:root[data-look="terminal"] .card.compact .name { color: var(--label-2); font-size: 12.5px; font-weight: 400; }
+:root[data-look="terminal"] .card.compact .card-actions { top: 1px; }
+:root[data-look="terminal"] .card.compact .card-actions button { height: 20px; }
+:root[data-look="terminal"] .card.busy::after { background: color-mix(in srgb, var(--bg) 85%, transparent); color: var(--label); font-weight: 700; }
+
+/* ---------------------------------------------------------------- the session panel */
+:root[data-look="terminal"] .sheet { border-radius: 8px; background: var(--bg); box-shadow: 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .sheet[data-dock="right"],
+:root[data-look="terminal"] .sheet.over[data-dock="right"] { border-radius: 0; box-shadow: -1px 0 0 var(--t-edge); }
+:root[data-look="terminal"] .sheet[data-dock="left"],
+:root[data-look="terminal"] .sheet.over[data-dock="left"] { border-radius: 0; box-shadow: 1px 0 0 var(--t-edge); }
+:root[data-look="terminal"] .sheet[data-dock="bottom"] { border-radius: 0; box-shadow: 0 -1px 0 var(--t-edge); }
+:root[data-look="terminal"] .sheet.dropping { box-shadow: inset 0 0 0 2px var(--accent); }
+:root[data-look="terminal"] .sheet-title h2 { font: 700 17px/1.25 var(--font); }
+:root[data-look="terminal"] .dock-preview { background: none; box-shadow: inset 0 0 0 1px var(--accent); }
+
+:root[data-look="terminal"] .icon-button { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .icon-button:hover:not(:disabled) { color: var(--label); box-shadow: inset 0 0 0 1px var(--t-dim); }
+:root[data-look="terminal"] .sheet-tools [data-layout][aria-expanded="true"] { background: none; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .status-pill { padding: 0; border-radius: 0; background: none; font-size: 12px; font-weight: 700; }
+:root[data-look="terminal"] .sheet-pills .status-pill[aria-expanded="true"] { background: none; text-decoration: underline; }
+:root[data-look="terminal"] .lane-pill { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .lane-pill:not(:disabled):hover,
+:root[data-look="terminal"] .lane-pill[aria-expanded="true"] { background: none; box-shadow: inset 0 0 0 1px var(--lane); }
+:root[data-look="terminal"] #sheet .sheet-properties-toggle[aria-expanded="true"] { background: none; box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .sheet-properties-toggle { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+
+:root[data-look="terminal"] .group { border-radius: var(--radius); }
+:root[data-look="terminal"] .row + .row { box-shadow: inset 0 1px 0 var(--fill); }
+:root[data-look="terminal"] .chips button { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); font-weight: 400; }
+:root[data-look="terminal"] .chips button[aria-pressed="true"] { background: none; box-shadow: inset 0 0 0 1px var(--lane); font-weight: 700; }
+:root[data-look="terminal"] .chips button.auto { background: none; box-shadow: inset 0 0 0 1px var(--fill); }
+:root[data-look="terminal"] .chips button:active { transform: none; }
+:root[data-look="terminal"] .section-title { font-weight: 700; }
+:root[data-look="terminal"] .asked { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--orange); }
+:root[data-look="terminal"] .asked-dismiss { background: none; }
+:root[data-look="terminal"] .detail-status { border-radius: var(--radius); background: var(--bg); box-shadow: inset 0 0 0 1px var(--orange); }
+:root[data-look="terminal"] .screen { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+
+/* The conversation: outlined boxes, the user's in the accent; nothing filled. */
+:root[data-look="terminal"] .msg { border-radius: var(--radius); font-size: 13px; }
+:root[data-look="terminal"] .msg.user { border-bottom-right-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--accent); color: var(--label); }
+:root[data-look="terminal"] .msg.assistant { border-bottom-left-radius: var(--radius); }
+:root[data-look="terminal"] .msg.user .md a { color: var(--accent); text-decoration: none; }
+:root[data-look="terminal"] .msg.user code,
+:root[data-look="terminal"] .msg.user .md pre { background: var(--fill-2); }
+:root[data-look="terminal"] .msg.user .fs-chip,
+:root[data-look="terminal"] .msg.user code.fs-chip,
+:root[data-look="terminal"] .msg.user.waiting .fs-chip,
+:root[data-look="terminal"] .msg.user.waiting code.fs-chip { background: none; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); color: var(--accent); }
+:root[data-look="terminal"] .msg.user.waiting { background: none; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+:root[data-look="terminal"] .msg.waiting.failed { box-shadow: inset 0 0 0 1px var(--red); }
+:root[data-look="terminal"] .msg.peer { border-bottom-left-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--purple) 60%, transparent); }
+:root[data-look="terminal"] .msg.peer.team { background: none; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 60%, transparent); }
+:root[data-look="terminal"] .md pre { border-radius: 4px; background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .md h3,
+:root[data-look="terminal"] .md h4,
+:root[data-look="terminal"] .md h5,
+:root[data-look="terminal"] .md h6 { font-weight: 700; }
+:root[data-look="terminal"] .fs-chip,
+:root[data-look="terminal"] .msg code.fs-chip { border-radius: 4px; background: none; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+:root[data-look="terminal"] .fs-chip:hover,
+:root[data-look="terminal"] .msg code.fs-chip:hover { background: var(--fill-2); }
+:root[data-look="terminal"] .notice-mark,
+:root[data-look="terminal"] .notice.ok .notice-mark,
+:root[data-look="terminal"] .notice.fail .notice-mark,
+:root[data-look="terminal"] .notice.info .notice-mark { background: none; }
+:root[data-look="terminal"] .notice-mark { color: var(--gray); }
+:root[data-look="terminal"] .notice.ok .notice-mark { color: var(--green); }
+:root[data-look="terminal"] .notice.fail .notice-mark { color: var(--red); }
+:root[data-look="terminal"] .notice.info .notice-mark { color: var(--purple); }
+:root[data-look="terminal"] .notice-body { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .attachment { border-radius: var(--radius); }
+:root[data-look="terminal"] .attachment.error { box-shadow: inset 0 0 0 1px var(--red); }
+:root[data-look="terminal"] .out-actions button { border-radius: 4px; background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+
+/* The message box and the buttons around it. */
+:root[data-look="terminal"] .composer-box { border-radius: var(--radius); }
+:root[data-look="terminal"] .composer-box:focus-within { box-shadow: 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .sheet.dropping .composer-box { box-shadow: 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .composer textarea { font-size: 13px; }
+:root[data-look="terminal"] .button { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); font-weight: 400; }
+:root[data-look="terminal"] .button:not(.primary):hover:not(:disabled) { box-shadow: inset 0 0 0 1px var(--t-dim); }
+:root[data-look="terminal"] .button.primary,
+:root[data-look="terminal"] .ln-actions .button.primary,
+:root[data-look="terminal"] .error-button.primary { background: none; box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); font-weight: 700; }
+:root[data-look="terminal"] .send { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
+:root[data-look="terminal"] .aside-toggle.on { background: none; box-shadow: inset 0 0 0 1px var(--purple); }
+:root[data-look="terminal"] .composer-box.aside { box-shadow: 0 0 0 1px var(--purple); }
+:root[data-look="terminal"] .composer-box.aside .send { background: none; box-shadow: inset 0 0 0 1px var(--purple); color: var(--purple); }
+:root[data-look="terminal"] .aside-card { border-radius: var(--radius); background: var(--bg); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--purple) 55%, transparent); }
+
+/* ---------------------------------------------------------------- menus and popovers */
+/* A menu: an accent-bordered box over the board, › at the row the pointer or the keys are on. */
+:root[data-look="terminal"] .menu { border-radius: var(--radius); background: var(--bg); box-shadow: 0 0 0 1px var(--accent); font: 12.5px/1.35 var(--font); }
+:root[data-look="terminal"] .menu-item { gap: 6px; border-radius: 3px; }
+:root[data-look="terminal"] .menu-item::before { content: "›"; content: "›" / ""; flex: none; width: 1ch; color: var(--accent); visibility: hidden; }
+:root[data-look="terminal"] .menu.no-checks .menu-item { padding-left: 4px; }
+:root[data-look="terminal"] .menu-item.active { background: none; color: var(--accent); }
+:root[data-look="terminal"] .menu-item.active::before { visibility: visible; }
+:root[data-look="terminal"] .menu-item.danger.active { background: none; color: var(--red); }
+:root[data-look="terminal"] .menu-item.danger.active::before { color: var(--red); }
+:root[data-look="terminal"] .menu-item[aria-expanded="true"]:not(.active) { background: none; color: var(--accent); }
+:root[data-look="terminal"] .menu.touch { border-radius: var(--radius); }
+:root[data-look="terminal"] .menu.touch .menu-item { border-radius: 4px; font-size: 14px; }
+:root[data-look="terminal"] .menu.touch.no-checks .menu-item { padding-left: 6px; }
+
+:root[data-look="terminal"] .layout-menu,
+:root[data-look="terminal"] .limits-pop,
+:root[data-look="terminal"] .setup-pop,
+:root[data-look="terminal"] .fork-pop { border-radius: var(--radius); }
+:root[data-look="terminal"] .layout-menu button { border-radius: 3px; }
+:root[data-look="terminal"] .layout-menu button:hover,
+:root[data-look="terminal"] .layout-menu button:focus-visible { background: none; color: var(--accent); }
+:root[data-look="terminal"] .layout-menu button:hover svg,
+:root[data-look="terminal"] .layout-menu button:focus-visible svg { color: var(--accent); }
+:root[data-look="terminal"] .fork-glyph { background: none; box-shadow: inset 0 0 0 1px var(--purple); }
+:root[data-look="terminal"] .setup-code pre { border-radius: 4px; background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .folder-pop,
+:root[data-look="terminal"] .rename-more { border-radius: var(--radius); box-shadow: 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .rename-field { background: var(--bg); box-shadow: 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .pop-item.active { background: none; color: var(--accent); }
+
+/* ---------------------------------------------------------------- questions and permissions */
+:root[data-look="terminal"] .qa-tag { border-radius: 0; padding: 0; background: none; color: var(--orange); font-size: 12px; }
+:root[data-look="terminal"] .qa-tag::before { content: "["; content: "[" / ""; }
+:root[data-look="terminal"] .qa-tag::after { content: "]"; content: "]" / ""; }
+:root[data-look="terminal"] .qa-text { font: 700 14px/1.4 var(--font); }
+:root[data-look="terminal"] .qa-opts { border-radius: var(--radius); }
+:root[data-look="terminal"] .qa-opt + .qa-opt { box-shadow: inset 0 1px 0 var(--fill); }
+:root[data-look="terminal"] .qa-opt.on,
+:root[data-look="terminal"] .perm-opt.chosen { background: none; }
+:root[data-look="terminal"] .qa-opt.on .qa-label { color: var(--accent); font-weight: 700; }
+:root[data-look="terminal"] .qa-opt:focus-visible,
+:root[data-look="terminal"] .qa-other:focus-within { border-radius: var(--radius); box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .qa-n { display: flex; justify-content: flex-end; width: auto; min-width: 2ch; border-radius: 0; background: none; color: var(--label-2); font-weight: 400; }
+:root[data-look="terminal"] .qa-n::after { content: "."; content: "." / ""; }
+/* The marks as the terminal draws them: ( ) and (•) to pick one, [ ] and [x] to pick any. */
+:root[data-look="terminal"] .qa-mark { width: 3ch; height: auto; border-radius: 0; background: none; box-shadow: none; color: var(--label-2); line-height: 1.2; }
+:root[data-look="terminal"] .qa-mark::before { content: "( )"; content: "( )" / ""; white-space: pre; }
+:root[data-look="terminal"] .qa-opt.on .qa-mark { background: none; box-shadow: none; color: var(--accent); }
+:root[data-look="terminal"] .qa-opt.on .qa-mark::before { content: "(•)"; content: "(•)" / ""; }
+:root[data-look="terminal"] .qa-opt.on .qa-mark::after { display: none; }
+:root[data-look="terminal"] .qa-opt[role="checkbox"] .qa-mark::before,
+:root[data-look="terminal"] .qa-opts[role="group"] .qa-other .qa-mark::before { content: "[ ]"; content: "[ ]" / ""; }
+:root[data-look="terminal"] .qa-opt[role="checkbox"].on .qa-mark::before,
+:root[data-look="terminal"] .qa-opts[role="group"] .qa-other.on .qa-mark::before { content: "[x]"; content: "[x]" / ""; }
+:root[data-look="terminal"] .qa-preview { border-radius: 4px; background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .qa-status.error { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--red); }
+:root[data-look="terminal"] .perm-body { border-radius: var(--radius); }
+
+/* ---------------------------------------------------------------- helpers */
+:root[data-look="terminal"] .h-icon { background: none; }
+:root[data-look="terminal"] .h-mark,
+:root[data-look="terminal"] .h-mark.ok,
+:root[data-look="terminal"] .h-mark.fail { background: none; color: var(--gray); }
+:root[data-look="terminal"] .h-mark.ok { color: var(--green); }
+:root[data-look="terminal"] .h-mark.fail { color: var(--red); }
+:root[data-look="terminal"] .helper-rows { border-radius: var(--radius); }
+:root[data-look="terminal"] .helper-row + .helper-row,
+:root[data-look="terminal"] .helper-row + .helper-more,
+:root[data-look="terminal"] .helper-run + .helper-row { box-shadow: inset 0 1px 0 var(--fill); }
+:root[data-look="terminal"] .helper-state { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .rel-chip { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); font-weight: 400; }
+:root[data-look="terminal"] .rel-chip:hover { background: none; box-shadow: inset 0 0 0 1px var(--t-dim); }
+:root[data-look="terminal"] .rel-chip:active { transform: none; }
+
+/* ---------------------------------------------------------------- new sessions, profiles, categories */
+:root[data-look="terminal"] .launch-win { border-radius: 8px; }
+:root[data-look="terminal"] .launch-titles h3 { font: 700 17px/1.25 var(--font); }
+:root[data-look="terminal"] .folder-browse { border-radius: 4px; background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .folder-browse[aria-expanded="true"] { background: none; box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .where select,
+:root[data-look="terminal"] .cat-profile select { border-radius: 4px; background-color: transparent; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .col-list:focus-within .col-row.on,
+:root[data-look="terminal"] .col-row:focus-visible { background: none; box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
+:root[data-look="terminal"] .launch-note.failed,
+:root[data-look="terminal"] .launch-note.waiting { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--red); }
+:root[data-look="terminal"] .launch-note.waiting { box-shadow: inset 0 0 0 1px var(--orange); }
+:root[data-look="terminal"] .ln-actions .button { background: none; }
+:root[data-look="terminal"] .ln-actions .button.plain { box-shadow: none; }
+:root[data-look="terminal"] .profile-note { border-radius: var(--radius); background: none; }
+:root[data-look="terminal"] .profile-shown { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .profile-shown [aria-pressed="true"] { background: none; box-shadow: none; color: var(--accent); }
+:root[data-look="terminal"] .cat-row { border-radius: var(--radius); }
+:root[data-look="terminal"] .cat-title { font: 700 13.5px/1.3 var(--font); }
+:root[data-look="terminal"] .path { border-radius: 4px; background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .sheet-workspace:hover,
+:root[data-look="terminal"] .sheet-workspace:focus-visible { background: none; text-decoration: underline; }
+
+/* ---------------------------------------------------------------- schedule and archive */
+/* A destructive confirmation in red: outlined, its words red. */
+:root[data-look="terminal"] .sched-x[data-confirm],
+:root[data-look="terminal"] .cat-row[data-confirm] .cat-del { background: none; box-shadow: inset 0 0 0 1px var(--red); color: var(--red); }
+:root[data-look="terminal"] .sched-x:hover,
+:root[data-look="terminal"] .cat-del:hover { background: none; }
+:root[data-look="terminal"] .sched-mode { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent); }
+:root[data-look="terminal"] .sched-mode.idle { background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .sched-mode:hover,
+:root[data-look="terminal"] .sched-mode.idle:hover { background: none; }
+:root[data-look="terminal"] .sched-time b { font: 700 14px/1.2 var(--font); }
+:root[data-look="terminal"] .sched-stats code { background: none; }
+:root[data-look="terminal"] .log-row.sent .log-icon,
+:root[data-look="terminal"] .log-row.missed .log-icon,
+:root[data-look="terminal"] .log-row.failed .log-icon,
+:root[data-look="terminal"] .log-row.dropped .log-icon { background: none; }
+:root[data-look="terminal"] .arch-name { font: 700 13.5px/1.3 var(--font); }
+:root[data-look="terminal"] .arch-return,
+:root[data-look="terminal"] .arch-return:hover:not(:disabled) { background: none; box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .arch-row.returning .arch-return { background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .arch-tidy { border-radius: var(--radius); }
+:root[data-look="terminal"] .drop-archive { border-radius: var(--radius); }
+:root[data-look="terminal"] .drop-archive.over { background: var(--bg); box-shadow: 0 0 0 2px var(--accent); color: var(--accent); }
+:root[data-look="terminal"] .drop-archive.blocked.over { background: var(--bg); box-shadow: 0 0 0 2px var(--red); color: var(--red); }
+
+/* ---------------------------------------------------------------- toasts, the quick look, errors */
+:root[data-look="terminal"] .toast { border-radius: var(--radius); }
+:root[data-look="terminal"] .toast-action { border-radius: 4px; background: none; box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .toast-action:hover { background: none; }
+@media (max-width: 760px) {
+  :root[data-look="terminal"] .toast.with-action { border-radius: var(--radius); }
+}
+:root[data-look="terminal"] .ql-win { border-radius: 8px; }
+:root[data-look="terminal"] .ql-titles h3 { font: 700 14px/1.3 var(--font); }
+:root[data-look="terminal"] .ql-mode { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .ql-mode button[aria-pressed="true"] { background: none; box-shadow: none; color: var(--accent); font-weight: 700; }
+:root[data-look="terminal"] .ql-hit { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .ql-hit:hover { background: none; box-shadow: inset 0 0 0 1px var(--t-dim); }
+:root[data-look="terminal"] .ql-search input { border-radius: 4px; background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .ql-search input:focus { box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .st,
+:root[data-look="terminal"] .st-N { background: none; box-shadow: none; }
+:root[data-look="terminal"] .st-M { color: var(--orange); }
+:root[data-look="terminal"] .st-A,
+:root[data-look="terminal"] .st-N { color: var(--green); }
+:root[data-look="terminal"] .st-D,
+:root[data-look="terminal"] .st-U { color: var(--red); }
+:root[data-look="terminal"] .st-R { color: var(--blue); }
+:root[data-look="terminal"] .term-screen { border-radius: var(--radius); box-shadow: inset 0 0 0 1px var(--term-edge); }
+:root[data-look="terminal"] .term-screen.typing { box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .error-screen.panel .error-note { border-radius: 8px; }
+:root[data-look="terminal"] .error-title { font-weight: 700; }
+:root[data-look="terminal"] .error-detail { border-radius: 4px; background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .error-button { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+
+/* ---------------------------------------------------------------- narrow pages */
+/* The columns stack: each one's name, in its color, heads its cards in the lane. */
+@container page (max-width: 960px) {
+  :root[data-look="terminal"] .col-label { gap: 1ch; color: var(--hc); font-weight: 700; }
+  :root[data-look="terminal"] .col-label .dot { display: none; }
+}
+@media (max-width: 760px) {
+  :root[data-look="terminal"] #sheet .sheet-title h2 { font-size: 16px; }
+  :root[data-look="terminal"] .ql-win { border-radius: 8px; }
+}
+
+/* ---------------------------------------------------------------- accessibility */
+/* More contrast: outlines and quiet text a step up. The selector is doubled to outrank the dark
+   palette's (:root[data-look="terminal"]:not([data-theme="light"])). */
+@media (prefers-contrast: more) {
+  :root[data-look="terminal"][data-look="terminal"] { --t-edge: var(--t-dim); --label-2: var(--t-text); --label-3: var(--t-dim); }
+}

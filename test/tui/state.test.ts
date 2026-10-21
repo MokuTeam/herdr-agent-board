@@ -104,3 +104,44 @@ describe('move', () => {
     expect(state.sel).toBe('a')
   })
 })
+
+describe('a column alone and the search (#161)', () => {
+  test('a column alone keeps only its cards, and its lanes; the lanes stay numbered by every card', () => {
+    const state = board()
+    state.column = 'me'
+    build(state)
+    expect(state.lanes.map(l => [l.cat, l.cols.flat().map(i => i.key)])).toEqual([['work', ['b', 'c']]])
+    expect(state.allCats).toEqual(['work', 'personal'])
+    // The selection was on a card gone from view: it goes to the first one left.
+    expect(state.sel).toBe('b')
+    state.column = null
+    build(state)
+    expect(state.lanes.map(l => l.cat)).toEqual(['work', 'personal'])
+  })
+
+  test('the search keeps the cards whose name, notes or lane say it, case aside', () => {
+    const state = board()
+    const d = state.items.find(i => i.key === 'd')
+    if (d) d.doing = 'Refactoring the AUTH middleware'
+    state.query = 'auth'
+    build(state)
+    expect(state.lanes.flatMap(l => l.cols.flat().map(i => i.key))).toEqual(['d'])
+    state.query = 'personal'
+    build(state)
+    expect(state.lanes.flatMap(l => l.cols.flat().map(i => i.key))).toEqual(['d'])
+    state.query = 'nothing like it'
+    build(state)
+    expect(state.lanes).toEqual([])
+    expect(state.sel).toBeNull()
+  })
+
+  test('G goes to the last card, g to the first, in both layouts', () => {
+    const state = board()
+    expect(move(state, 'last', true)).toBe(true)
+    expect(state.sel).toBe('d')
+    expect(move(state, 'home', true)).toBe(true)
+    expect(state.sel).toBe('a')
+    move(state, 'last', false)
+    expect(state.sel).toBe('d')
+  })
+})

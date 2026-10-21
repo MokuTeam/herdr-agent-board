@@ -106,4 +106,9 @@ export interface BoardPayload {
   foldWaiting?: FoldMode
   /** The remote mode (core/remote.ts), only while it is on. */
   remote?: RemoteView
+  /**
+   * The Omarchy theme the Terminal style takes its colors from (src/adapters/omarchy.ts): a stamp
+   * that changes with it, only on a computer with Omarchy. The page loads omarchy-theme.css again.
+   */
+  omarchy?: string
 }

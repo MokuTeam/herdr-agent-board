@@ -128,9 +128,16 @@ describe('routes', () => {
       'styles/segments.css',
       'styles/motion.css',
       'styles/errors.css',
+      'styles/look-terminal.css',
       'app.js',
     ])
     for (const link of links) expect([link, (await fetch(`${url}/${link}`)).status]).toEqual([link, 200])
+    // No Omarchy here (the sandbox's HOME) and no look in config.json: the page as web/index.html
+    // has it, no theme of Omarchy's to serve, none in the board (#161).
+    expect(html).toContain('<html lang="en">')
+    expect((await fetch(`${url}/omarchy-theme.css`)).status).toBe(404)
+    const payload = (await (await fetch(`${url}/api/board`)).json()) as object
+    expect(['items' in payload, 'omarchy' in payload]).toEqual([true, false])
     const script = await fetch(`${url}/app.js`)
     expect(script.headers.get('content-type')).toBe('text/javascript; charset=utf-8')
     expect(script.headers.get('content-security-policy')).toBe(null)
