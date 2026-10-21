@@ -66,6 +66,9 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.hooks.missing': 'Claude Code hooks are missing: {events}',
     'setup.hooks.without':
       'Without them sessions do not learn about the board: agents do not set their lanes, and a question an agent asked is not cleared when you answer.',
+    'setup.hooks.question': 'Claude Code hooks of an older install: no question hook',
+    'setup.hooks.questionDetail':
+      'Without the PreToolUse hook on AskUserQuestion in {file}, a question asked in auto or plan mode is answered in the terminal only: Claude Code writes it into the transcript once it is answered.',
 
     'setup.line.ok': 'Status line',
     'setup.line.okDetail': 'usage windows and context fill for the board',
@@ -216,6 +219,9 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.hooks.missing': 'Нет хуков Claude Code: {events}',
     'setup.hooks.without':
       'Без них сессии не узнают о доске: агенты не ставят себе дорожку, а вопрос агента не снимается, когда ты ответил.',
+    'setup.hooks.question': 'Хуки Claude Code от прежней установки: нет хука вопросов',
+    'setup.hooks.questionDetail':
+      'Без хука PreToolUse на AskUserQuestion в {file} на вопрос в режиме auto или plan отвечают только в терминале: Claude Code пишет его в переписку, лишь когда на него ответили.',
 
     'setup.line.ok': 'Строка статуса',
     'setup.line.okDetail': 'окна лимитов и заполнение контекста для доски',

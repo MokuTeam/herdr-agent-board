@@ -1,6 +1,13 @@
 import { describe, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { type InstallPaths, isOurCommand, planSettings, planShims, quote } from '../../src/core/install-plan.ts'
+import {
+  type InstallPaths,
+  isOurCommand,
+  planSettings,
+  planShims,
+  quote,
+  toastCommand,
+} from '../../src/core/install-plan.ts'
 
 // Where the plugin and Bun live on a Windows machine with a space and a Cyrillic user name in the paths.
 const plugin = 'C:\\Users\\Имя\\AppData\\Roaming\\herdr\\plugins\\agent-board'
@@ -18,6 +25,9 @@ const hookCommand =
 const statusCommand =
   '"C:/Program Files/Bun/bun.exe" "C:/Users/Имя/AppData/Roaming/herdr/plugins/agent-board/src/entrypoints/statusline.ts"'
 const ourHook = { hooks: [{ type: 'command', command: hookCommand, timeout: 10 }] }
+// The same hook on a question form, before its dialog opens (core/held-question.ts).
+const ourAsk = { matcher: 'AskUserQuestion', ...ourHook }
+const settingsOf = (settings: Record<string, unknown>) => settings.hooks as Record<string, unknown>
 const ourStatusLine = { type: 'command', command: statusCommand }
 
 // What main's install wrote: `node "<hook>"` with the path as it is, the status line with forward slashes.
@@ -37,7 +47,7 @@ describe('planSettings', () => {
     const { settings, replaced, statusLineSet } = planSettings(before, paths)
     assert.deepEqual(settings, {
       model: 'opus',
-      hooks: { SessionStart: [ourHook], UserPromptSubmit: [ourHook] },
+      hooks: { SessionStart: [ourHook], UserPromptSubmit: [ourHook], PreToolUse: [ourAsk] },
       statusLine: ourStatusLine,
     })
     assert.deepEqual(replaced, [mainHook, mainHook, mainStatusLine])
@@ -50,7 +60,7 @@ describe('planSettings', () => {
     const before = { hooks: { SessionStart: [own], Stop: [own] }, statusLine: ownLine }
     const { settings, replaced, statusLineSet } = planSettings(structuredClone(before), paths)
     assert.deepEqual(settings, {
-      hooks: { SessionStart: [own, ourHook], Stop: [own], UserPromptSubmit: [ourHook] },
+      hooks: { SessionStart: [own, ourHook], Stop: [own], UserPromptSubmit: [ourHook], PreToolUse: [ourAsk] },
       statusLine: ownLine,
     })
     assert.deepEqual(replaced, [])
@@ -81,13 +91,36 @@ describe('planSettings', () => {
     assert.deepEqual(settings.hooks, {
       SessionStart: [{ hooks: [{ type: 'command', command: 'echo hi' }] }, ourHook],
       UserPromptSubmit: [ourHook],
+      PreToolUse: [ourAsk],
     })
+  })
+
+  test("the question hook: an entry of its own in PreToolUse, beside the user's and the notifications'", () => {
+    const guard = { matcher: 'Bash', hooks: [{ type: 'command', command: 'bash ~/.claude/hooks/git-guard.sh' }] }
+    const notify = { type: 'command', command: toastCommand(paths.toast), timeout: 30, async: true }
+    const toast = { matcher: 'AskUserQuestion', hooks: [notify] }
+    const { settings } = planSettings({ hooks: { PreToolUse: [guard] } }, paths, { toast: true })
+    assert.deepEqual(settings.hooks, {
+      SessionStart: [ourHook],
+      UserPromptSubmit: [ourHook],
+      PreToolUse: [guard, ourAsk, toast],
+      Stop: [{ hooks: [notify] }],
+      Notification: [{ matcher: 'permission_prompt|elicitation_dialog', hooks: [notify] }],
+    })
+    // main's hook under PreToolUse, or ours from another copy: one entry of ours, this copy's.
+    const older = { matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: mainHook }] }
+    const moved = planSettings({ hooks: { PreToolUse: [older, guard] } }, paths)
+    assert.deepEqual(settingsOf(moved.settings).PreToolUse, [guard, ourAsk])
+    assert.deepEqual(moved.replaced, [mainHook])
+    // Notifications off again: the question hook stays.
+    const off = planSettings(settings, paths, { toast: false }).settings
+    assert.deepEqual(settingsOf(off).PreToolUse, [guard, ourAsk])
   })
 
   test('no settings.json yet: hooks and status line from nothing', () => {
     const { settings, replaced, statusLineSet } = planSettings(undefined, paths)
     assert.deepEqual(settings, {
-      hooks: { SessionStart: [ourHook], UserPromptSubmit: [ourHook] },
+      hooks: { SessionStart: [ourHook], UserPromptSubmit: [ourHook], PreToolUse: [ourAsk] },
       statusLine: ourStatusLine,
     })
     assert.deepEqual(replaced, [])
@@ -99,7 +132,7 @@ describe('planSettings', () => {
     const first = planSettings({ hooks: { SessionStart: [own] } }, paths).settings
     const second = planSettings(first, paths)
     assert.deepEqual(second.settings, first)
-    assert.deepEqual(second.replaced, [hookCommand, hookCommand, statusCommand])
+    assert.deepEqual(second.replaced, [hookCommand, hookCommand, hookCommand, statusCommand])
     assert.equal(second.statusLineSet, true)
   })
 
@@ -119,22 +152,28 @@ describe('planSettings', () => {
       assert.deepEqual(planSettings({ hooks }, paths).settings.hooks, {
         SessionStart: [ourHook],
         UserPromptSubmit: [ourHook],
+        PreToolUse: [ourAsk],
       })
-    assert.deepEqual(planSettings({ hooks: { SessionStart: {} } }, paths).settings.hooks, {
+    assert.deepEqual(planSettings({ hooks: { SessionStart: {}, PreToolUse: 5 } }, paths).settings.hooks, {
       SessionStart: [ourHook],
       UserPromptSubmit: [ourHook],
+      PreToolUse: [ourAsk],
     })
   })
 
   test('entries not shaped like hook entries are left alone; ones with no hooks go, as on main', () => {
     const odd = ['text', { hooks: 'not a list' }, null]
     const { settings } = planSettings({ hooks: { SessionStart: [...odd, { matcher: 'x' }, { hooks: null }] } }, paths)
-    assert.deepEqual(settings.hooks, { SessionStart: [...odd, ourHook], UserPromptSubmit: [ourHook] })
+    assert.deepEqual(settings.hooks, {
+      SessionStart: [...odd, ourHook],
+      UserPromptSubmit: [ourHook],
+      PreToolUse: [ourAsk],
+    })
   })
 
   test('the command quotes Bun and the hook with forward slashes (spaces, Cyrillic)', () => {
     const { settings } = planSettings({}, paths)
-    assert.deepEqual(settings.hooks, { SessionStart: [ourHook], UserPromptSubmit: [ourHook] })
+    assert.deepEqual(settings.hooks, { SessionStart: [ourHook], UserPromptSubmit: [ourHook], PreToolUse: [ourAsk] })
     assert.equal(quote('C:\\Program Files\\Bun\\bun.exe'), '"C:/Program Files/Bun/bun.exe"')
     assert.equal(quote('/home/имя/.bun/bin/bun'), '"/home/имя/.bun/bin/bun"')
   })
