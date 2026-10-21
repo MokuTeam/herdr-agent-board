@@ -3,29 +3,35 @@ import { readFileSync } from 'node:fs'
 import { TUNNEL_SOCKET } from '../../src/core/tunnel.ts'
 import {
   caddyfile,
+  caddyGroupLine,
   keysFile,
   keysLine,
   nginxNote,
   serverCommands,
   socketFolder,
   sshdBlock,
+  stepOnePaste,
 } from '../../src/core/tunnel-snippets.ts'
 import { PUBLIC_KEY_EXAMPLE } from '../../web/src/models/access.ts'
 
 describe('the server’s snippets, filled in', () => {
-  test('the user, its account unlocked, the socket’s folder and the keys’ folder', () => {
+  test('the user with a group of its own, its account unlocked, the socket’s folder in that group, the keys’ folder', () => {
     expect(serverCommands('boardtunnel', TUNNEL_SOCKET)).toBe(
       [
-        'sudo useradd --system --no-create-home --home-dir /nonexistent \\',
+        'sudo useradd --system --user-group --no-create-home --home-dir /nonexistent \\',
         '    --shell /usr/sbin/nologin boardtunnel',
         '# useradd leaves the account locked; an sshd with UsePAM no refuses a locked one, key or not',
         "sudo usermod -p '*' boardtunnel",
-        "# the socket's folder: the tunnel user makes the socket, Caddy's group opens it, no one else",
-        'sudo install -d -m 2750 -o boardtunnel -g caddy /var/lib/boardtunnel',
+        "# the socket's folder: the tunnel user makes the socket; its group is the reader's (step 3)",
+        'sudo install -d -m 2750 -o boardtunnel -g boardtunnel /var/lib/boardtunnel',
         "# the key's file belongs to root, out of the tunnel user's reach",
         'sudo install -d -m 755 /etc/ssh/authorized_keys',
       ].join('\n'),
     )
+    // A group given: the folder takes it, the rest stays.
+    const caddy = serverCommands('boardtunnel', TUNNEL_SOCKET, 'caddy')
+    expect(caddy).toContain('\nsudo install -d -m 2750 -o boardtunnel -g caddy /var/lib/boardtunnel\n')
+    expect(caddy.replace('-g caddy', '-g boardtunnel')).toBe(serverCommands('boardtunnel', TUNNEL_SOCKET))
   })
   test('another user, group and socket change the user, the group and the folder', () => {
     const text = serverCommands('tun', '/srv/b/x.sock', 'www-data')
@@ -34,6 +40,37 @@ describe('the server’s snippets, filled in', () => {
     expect(text).toContain('sudo install -d -m 2750 -o tun -g www-data /srv/b\n')
     expect(text).not.toContain('boardtunnel')
     expect(text).not.toContain('caddy')
+    expect(serverCommands('tun', '/srv/b/x.sock')).toContain('sudo install -d -m 2750 -o tun -g tun /srv/b\n')
+  })
+  test('all of step 1 in one paste: one subshell that stops at the first error, safe to paste twice', () => {
+    const lines = [
+      '( set -e',
+      'id -u boardtunnel >/dev/null 2>&1 || sudo useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin boardtunnel',
+      "sudo usermod -p '*' boardtunnel",
+      '[ -d /var/lib/boardtunnel ] || sudo install -d -m 2750 -o boardtunnel -g boardtunnel /var/lib/boardtunnel',
+      'sudo install -d -m 755 /etc/ssh/authorized_keys',
+      "echo 'restrict,port-forwarding ssh-ed25519 AAAA k' | sudo tee /etc/ssh/authorized_keys/boardtunnel >/dev/null",
+      `grep -qx 'Match User boardtunnel' /etc/ssh/sshd_config || printf '\\n%s\\n' '${sshdBlock('boardtunnel')}' | sudo tee -a /etc/ssh/sshd_config >/dev/null`,
+      'sudo sshd -t',
+      '{ sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd; }',
+      ')',
+    ]
+    expect(stepOnePaste('boardtunnel', TUNNEL_SOCKET, 'ssh-ed25519 AAAA k')).toBe(lines.join('\n'))
+    // Another user and socket; the key trimmed, a quote in its comment kept inside one shell word.
+    const other = stepOnePaste('tun', '/srv/b/x.sock', " ssh-ed25519 AAAA it's mine\n")
+    expect(other).toContain("\nsudo usermod -p '*' tun\n")
+    expect(other).toContain('\n[ -d /srv/b ] || sudo install -d -m 2750 -o tun -g tun /srv/b\n')
+    expect(other).toContain(
+      "\necho 'restrict,port-forwarding ssh-ed25519 AAAA it'\\''s mine' | sudo tee /etc/ssh/authorized_keys/tun >/dev/null\n",
+    )
+    expect(other).toContain("grep -qx 'Match User tun' /etc/ssh/sshd_config ||")
+    expect(other).not.toContain('boardtunnel')
+  })
+  test('a host Caddy gets the socket’s folder by its group', () => {
+    expect(caddyGroupLine(TUNNEL_SOCKET)).toBe(
+      'sudo chgrp caddy /var/lib/boardtunnel && sudo chmod 2750 /var/lib/boardtunnel',
+    )
+    expect(caddyGroupLine('/srv/b/x.sock')).toBe('sudo chgrp caddy /srv/b && sudo chmod 2750 /srv/b')
   })
   test('the keys file’s line: the key trimmed, allowed to forward only', () => {
     expect(keysLine(' ssh-ed25519 AAAA agent-board@PC \n')).toBe(
@@ -127,5 +164,11 @@ describe('the README’s server steps are the panel’s snippets', () => {
   test('the sshd block and the Caddyfile, word for word', () => {
     expect(fences).toContain(sshdBlock('boardtunnel'))
     expect(fences).toContain(caddyfile('board.example.com', TUNNEL_SOCKET))
+  })
+  test('the folder’s group for a host Caddy, word for word', () => {
+    expect(fences).toContain(caddyGroupLine(TUNNEL_SOCKET))
+  })
+  test('the server is no longer said to be untouched by the board', () => {
+    expect(readme).not.toContain('The board never touches the server')
   })
 })

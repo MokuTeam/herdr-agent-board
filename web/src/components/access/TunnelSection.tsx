@@ -9,7 +9,15 @@ import { type TestStep, TUNNEL_SOCKET, type TunnelField } from '../../../../src/
 import { keysLine } from '../../../../src/core/tunnel-snippets.ts'
 import type { AccessSend } from '../../hooks/useAccess.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { fieldEdit, hintText, statusLine, stepLine, TUNNEL_FIELDS, type TunnelAsk } from '../../models/access.ts'
+import {
+  fieldEdit,
+  hintText,
+  PORT_FIELDS,
+  statusLine,
+  stepLine,
+  TUNNEL_FIELDS,
+  type TunnelAsk,
+} from '../../models/access.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { CopyButton, Snippets } from './Snippets.tsx'
@@ -40,6 +48,7 @@ export function TunnelSection({ view, send, steps, testing, ask, onAsk }: Tunnel
     key: t('access.key.own'),
     socket: TUNNEL_SOCKET,
     domain: 'board.example.com',
+    publicPort: '443',
     port: String(listenPort),
   }
 
@@ -142,7 +151,7 @@ export function TunnelSection({ view, send, steps, testing, ask, onAsk }: Tunnel
                   defaultValue={value}
                   spellCheck={false}
                   autoComplete="off"
-                  inputMode={field === 'sshPort' || field === 'port' ? 'numeric' : undefined}
+                  inputMode={PORT_FIELDS.has(field) ? 'numeric' : undefined}
                   disabled={!canEdit}
                   onKeyDown={keyDown(field)}
                   onBlur={(e: FocusEvent<HTMLInputElement>) => void save(field, e.currentTarget)}

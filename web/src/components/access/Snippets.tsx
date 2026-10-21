@@ -1,7 +1,9 @@
 // What the owner sets up on the server, filled in from the tunnel's settings (models/access.ts
-// serverSnippets, core/tunnel-snippets.ts), each with Copy: the tunnel's user and the socket's
-// folder, the keys file's line, the sshd Match block and the Caddyfile; nginx folded away. The
-// board never touches the server itself.
+// serverSnippets, core/tunnel-snippets.ts), each with Copy: all of step 1 in one paste (folded,
+// once there is a key to write), the tunnel's user and the socket's folder, the keys file's line,
+// the sshd Match block, and the Caddyfile with the folder's group for a host Caddy under it; nginx
+// folded away. What gives the tunnel its rights on the server stays the owner's to paste: the board
+// never runs these itself.
 import type { TunnelConfig } from '../../../../src/core/tunnel.ts'
 import type { Translator } from '../../../../src/core/types.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
@@ -29,23 +31,41 @@ export function CopyButton({ text }: { text: string }) {
   )
 }
 
-interface SnippetProps {
-  title: string
-  text: string
-  open: boolean
-  /** A line before the text. */
-  note?: string
-}
-
-function Snippet({ title, text, open, note }: SnippetProps) {
+/** A text to paste, with its Copy. */
+function Paste({ text }: { text: string }) {
   return (
-    <details className="access-snippet" open={open}>
-      <summary className="access-summary">{title}</summary>
-      {note && <p className="access-note">{note}</p>}
+    <>
       <pre className="access-pre">
         <code>{text}</code>
       </pre>
       <CopyButton text={text} />
+    </>
+  )
+}
+
+interface SnippetProps {
+  title: string
+  /** null: nothing to paste yet (the note says why). */
+  text: string | null
+  open: boolean
+  /** A line before the text. */
+  note?: string
+  /** A second text under the first, with its own line before it. */
+  then?: { note: string; text: string }
+}
+
+function Snippet({ title, text, open, note, then }: SnippetProps) {
+  return (
+    <details className="access-snippet" open={open}>
+      <summary className="access-summary">{title}</summary>
+      {note && <p className="access-note">{note}</p>}
+      {text !== null && <Paste text={text} />}
+      {then && (
+        <>
+          <p className="access-note">{then.note}</p>
+          <Paste text={then.text} />
+        </>
+      )}
     </details>
   )
 }
@@ -56,10 +76,21 @@ export function Snippets({ settings, publicKey }: { settings: TunnelConfig; publ
   return (
     <div className="access-snippets">
       <h3 className="access-head">{t('access.snippets')}</h3>
+      <Snippet
+        title={t('access.snip.paste')}
+        text={s.paste}
+        open={false}
+        note={s.paste === null ? t('access.snip.pasteNoKey') : t('access.snip.pasteNote')}
+      />
       <Snippet title={t('access.snip.commands')} text={s.commands} open />
       <Snippet title={t('access.snip.keys', { file: s.keysFile })} text={s.keysLine} open />
       <Snippet title={t('access.snip.sshd')} text={s.sshd} open />
-      <Snippet title={t('access.snip.caddy')} text={s.caddy} open />
+      <Snippet
+        title={t('access.snip.caddy')}
+        text={s.caddy}
+        open
+        then={{ note: t('access.snip.caddyGroup'), text: s.caddyGroup }}
+      />
       <Snippet title={t('access.snip.nginx')} text={s.nginx} open={false} note={t('access.snip.nginxNote')} />
     </div>
   )

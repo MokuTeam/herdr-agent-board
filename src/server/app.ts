@@ -271,7 +271,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     clock: realClock,
     network: networkSignature,
     probes,
-    probe: nonce => fetchProbe(probeOrigin(tunnelConf().domain), nonce),
+    probe: nonce => fetchProbe(probeOrigin(tunnelConf()), nonce),
     // Test's own line, whether the tunnel is on or not.
     testPlan: lineTo,
     checkKey: () => publicKeyOf(keyPath(tunnelConf())),

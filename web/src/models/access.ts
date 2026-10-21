@@ -7,6 +7,7 @@
 import { type Attempt, isAccessView, type PublicLogin, type PublicPasskey } from '../../../src/core/access.ts'
 import {
   fieldProblem,
+  publicOrigin,
   type StepHint,
   type TestStep,
   TUNNEL_SOCKET,
@@ -16,11 +17,13 @@ import {
 } from '../../../src/core/tunnel.ts'
 import {
   caddyfile,
+  caddyGroupLine,
   keysFile,
   keysLine,
   nginxNote,
   serverCommands,
   sshdBlock,
+  stepOnePaste,
 } from '../../../src/core/tunnel-snippets.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import { longWhen, shortWhen } from '../../../src/core/when-format.ts'
@@ -29,7 +32,19 @@ import { ago } from './card.ts'
 export { isAccessView }
 
 /** The settings, in the order the panel has them. */
-export const TUNNEL_FIELDS: readonly TunnelField[] = ['host', 'sshPort', 'user', 'key', 'socket', 'domain', 'port']
+export const TUNNEL_FIELDS: readonly TunnelField[] = [
+  'host',
+  'sshPort',
+  'user',
+  'key',
+  'socket',
+  'domain',
+  'publicPort',
+  'port',
+]
+
+/** The fields that hold a port: their edits are sent as numbers. */
+export const PORT_FIELDS: ReadonlySet<TunnelField> = new Set(['sshPort', 'publicPort', 'port'])
 
 /** What the Tunnel part asks before it sends: replacing the key there, or a new domain the board warned about. */
 export type TunnelAsk = { kind: 'key' } | { kind: 'domain'; domain: string } | null
@@ -88,9 +103,13 @@ export function attemptLine(a: Attempt, t: Translator, now: number): string {
   return [shortWhen(a.at, t, now), a.address, a.label, t(`access.reason.${a.reason}`)].filter(Boolean).join(' · ')
 }
 
-/** Where passkeys are added: through the domain, when it checks out; its placeholder until then. */
-export function passkeyHint(domain: string, t: Translator): string {
-  const shown = domain !== '' && fieldProblem('domain', domain) === null ? domain : '<domain>'
+/** Where passkeys are added: through the domain (with its public port, when not 443), when it checks out; its placeholder until then. */
+export function passkeyHint(settings: TunnelConfig, t: Translator): string {
+  const { domain } = settings
+  const shown =
+    domain !== '' && fieldProblem('domain', domain) === null
+      ? publicOrigin(settings).slice('https://'.length)
+      : '<domain>'
   return t('access.passkeysHint', { domain: shown })
 }
 
@@ -156,16 +175,17 @@ export function hintText(hint: StepHint | null | undefined, t: Translator): stri
 const DEFAULTS: Partial<Record<TunnelField, string | number | null>> = {
   sshPort: 22,
   socket: TUNNEL_SOCKET,
+  publicPort: null,
   port: null,
 }
 
-/** What a field's edit sends: null when unchanged; else { value }: numbers for the ports ('' gives null for `port`, clearing it), the domain lowercased, strings trimmed. */
+/** What a field's edit sends: null when unchanged; else { value }: numbers for the ports ('' gives null for `port` and `publicPort`, clearing them), the domain lowercased, strings trimmed. */
 export function fieldEdit(field: TunnelField, now: string | number | null, typed: string): { value: unknown } | null {
   const text = typed.trim()
   let value: string | number | null
   if (text === '' && field in DEFAULTS) value = null
   // Not a number is sent as typed, for the board to say why: NaN would go as JSON's null, clearing it.
-  else if (field === 'sshPort' || field === 'port') value = /^\d+$/.test(text) ? Number(text) : text
+  else if (PORT_FIELDS.has(field)) value = /^\d+$/.test(text) ? Number(text) : text
   else value = field === 'domain' ? text.toLowerCase() : text
   const meant = value === null ? DEFAULTS[field] : value
   return meant === now ? null : { value }
@@ -179,6 +199,8 @@ export interface ServerSnippets {
   user: string
   socket: string
   domain: string
+  /** All of step 1 in one paste; null until there is a key whose line it can write. */
+  paste: string | null
   /** The tunnel's user and the socket's folder. */
   commands: string
   /** The keys file's path, and its line. */
@@ -186,6 +208,8 @@ export interface ServerSnippets {
   keysLine: string
   sshd: string
   caddy: string
+  /** The socket's folder given to a host Caddy's group. */
+  caddyGroup: string
   nginx: string
 }
 
@@ -205,11 +229,13 @@ export function serverSnippets(settings: TunnelConfig, publicKey: string | null)
     user,
     socket,
     domain,
+    paste: publicKey ? stepOnePaste(user, socket, publicKey) : null,
     commands: serverCommands(user, socket),
     keysFile: keysFile(user),
     keysLine: keysLine(publicKey ?? PUBLIC_KEY_EXAMPLE),
     sshd: sshdBlock(user),
     caddy: caddyfile(domain, socket),
+    caddyGroup: caddyGroupLine(socket),
     nginx: nginxNote(socket),
   }
 }

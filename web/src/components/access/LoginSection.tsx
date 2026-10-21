@@ -215,7 +215,7 @@ export function LoginSection({ view, send, ask, onAsk }: LoginPartProps) {
           ))}
         </ul>
       )}
-      <p className="access-tip">{passkeyHint(view.tunnel.settings.domain, t)}</p>
+      <p className="access-tip">{passkeyHint(view.tunnel.settings, t)}</p>
 
       {lockout && (
         <div className="access-lockout">

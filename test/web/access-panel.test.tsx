@@ -8,6 +8,7 @@ import { afterEach, expect, spyOn, test } from 'bun:test'
 import type { AccessView } from '../../src/core/access.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { type TestStep, TUNNEL_SOCKET, type TunnelStatus } from '../../src/core/tunnel.ts'
+import { caddyGroupLine, stepOnePaste } from '../../src/core/tunnel-snippets.ts'
 import { timeOf } from '../../src/core/when-format.ts'
 import { AccessBody } from '../../web/src/components/access/AccessPanel.tsx'
 import { TunnelSection } from '../../web/src/components/access/TunnelSection.tsx'
@@ -43,7 +44,17 @@ const PUBLIC_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeFakeFake agent-boar
 /** Nothing set up yet: the board's own key not made, the login not set up. */
 const VIEW: AccessView = {
   tunnel: {
-    settings: { on: false, host: '', sshPort: 22, user: '', key: '', socket: TUNNEL_SOCKET, domain: '', port: null },
+    settings: {
+      on: false,
+      host: '',
+      sshPort: 22,
+      user: '',
+      key: '',
+      socket: TUNNEL_SOCKET,
+      domain: '',
+      port: null,
+      publicPort: null,
+    },
     problems: [
       { field: 'host', message: 'Server: needed' },
       { field: 'user', message: 'User: needed' },
@@ -127,11 +138,12 @@ test('nothing set up: what is needed under its field, On off with the reason, th
     ['Key', []],
     ['Socket on the server', []],
     ['Domain', ['Domain: needed']],
+    ['Public port', []],
     ['Local port', []],
   ])
   // A label each, its input named by it; the board's values, and what an empty one means.
   const fields = byClass([tunnel], 'access-field')
-  expect(fields.map(f => f.tag)).toEqual(Array(7).fill('label'))
+  expect(fields.map(f => f.tag)).toEqual(Array(8).fill('label'))
   const inputs = findAll(fields, el => el.tag === 'input')
   expect(inputs.map(el => ['name', 'aria-label', 'value', 'placeholder'].map(a => el.attrs.get(a) ?? ''))).toEqual([
     ['host', 'Server', '', 'ssh.example.com'],
@@ -140,6 +152,7 @@ test('nothing set up: what is needed under its field, On off with the reason, th
     ['key', 'Key', '', "The board's own key"],
     ['socket', 'Socket on the server', TUNNEL_SOCKET, TUNNEL_SOCKET],
     ['domain', 'Domain', '', 'board.example.com'],
+    ['publicPort', 'Public port', '', '443'],
     ['port', 'Local port', '', '12424'],
   ])
   // On, off for now, and why; the status.
@@ -267,31 +280,62 @@ test('the key: its public key and the keys file’s line with Copy, the server�
   expect(textsOf([ownKey], 'access-problem')).toEqual(['bad passphrase'])
 })
 
-test('the server’s snippets, filled in: the user and folder commands, the keys file, sshd, Caddy; nginx folded away', () => {
+test('the server’s snippets, filled in: all of step 1 in one paste, the user and folder commands, the keys file, sshd, Caddy with its group; nginx folded away', () => {
   const view = { ...READY, tunnel: { ...READY.tunnel, settings: { ...READY.tunnel.settings, user: '' } } }
   const body = bodyOf(view)
   const snippets = find(body, el => hasClass(el, 'access-snippets'))
   const details = findAll([snippets], el => el.tag === 'details')
   expect(details.map(d => [textOf(find([d], el => el.tag === 'summary')), d.attrs.has('open')])).toEqual([
+    ['All of step 1 in one paste', false],
     ["The tunnel's user and the socket's folder", true],
     ['The keys file, /etc/ssh/authorized_keys/boardtunnel', true],
     ['At the end of /etc/ssh/sshd_config', true],
     ['The Caddyfile', true],
     ['With nginx instead of Caddy', false],
   ])
-  const code = details.map(d => textOf(find([d], el => el.tag === 'pre')))
-  expect(code[0]).toContain('sudo install -d -m 2750 -o boardtunnel -g caddy /var/lib/boardtunnel')
-  expect(code[1]).toBe(`restrict,port-forwarding ${PUBLIC_KEY}`)
-  expect(code[2]).toStartWith('Match User boardtunnel\n    AuthorizedKeysFile /etc/ssh/authorized_keys/boardtunnel')
-  expect(code[3]).toBe(
-    'board.example.com {\n    reverse_proxy unix//var/lib/boardtunnel/board.sock\n    header Strict-Transport-Security "max-age=31536000"\n}',
+  const code = details.map(d => findAll([d], el => el.tag === 'pre').map(textOf))
+  expect(code[0]).toEqual([stepOnePaste('boardtunnel', TUNNEL_SOCKET, PUBLIC_KEY)])
+  expect(code[0]?.[0]).toContain(`echo 'restrict,port-forwarding ${PUBLIC_KEY}' | sudo tee`)
+  // The socket's folder in the tunnel user's own group: no caddy group needed before Caddy is there.
+  expect(code[1]?.[0]).toContain('sudo install -d -m 2750 -o boardtunnel -g boardtunnel /var/lib/boardtunnel')
+  expect(code[1]?.[0]).not.toContain('-g caddy')
+  expect(code[2]).toEqual([`restrict,port-forwarding ${PUBLIC_KEY}`])
+  expect(code[3]?.[0]).toStartWith(
+    'Match User boardtunnel\n    AuthorizedKeysFile /etc/ssh/authorized_keys/boardtunnel',
   )
-  expect(code[4]).toContain('proxy_pass http://unix:/var/lib/boardtunnel/board.sock:;')
-  const nginx = details[4]
+  // The Caddyfile, and under it the group a host Caddy opens the socket with.
+  expect(code[4]).toEqual([
+    'board.example.com {\n    reverse_proxy unix//var/lib/boardtunnel/board.sock\n    header Strict-Transport-Security "max-age=31536000"\n}',
+    'sudo chgrp caddy /var/lib/boardtunnel && sudo chmod 2750 /var/lib/boardtunnel',
+  ])
+  expect(textsOf([details[4] as Element], 'access-note')).toEqual([t('access.snip.caddyGroup')])
+  expect(code[5]?.[0]).toContain('proxy_pass http://unix:/var/lib/boardtunnel/board.sock:;')
+  const nginx = details[5]
   if (!nginx) throw new Error('no nginx')
   expect(textOf(nginx)).toContain("nginx's group")
-  // A Copy for each.
-  expect(details.map(d => buttonsIn([d]).map(textOf))).toEqual(Array(5).fill(['Copy']))
+  // A Copy for each text.
+  expect(details.map(d => buttonsIn([d]).map(textOf))).toEqual([
+    ['Copy'],
+    ['Copy'],
+    ['Copy'],
+    ['Copy'],
+    ['Copy', 'Copy'],
+    ['Copy'],
+  ])
+  // In Russian, the one paste has a title of its own.
+  const ru = find(bodyOf(view, { lang: 'ru' }), el => hasClass(el, 'access-snippets'))
+  const ruTitle = textOf(find([ru], el => el.tag === 'summary'))
+  expect(ruTitle).not.toBe('All of step 1 in one paste')
+  expect(ruTitle).toBe(translator('ru')('access.snip.paste'))
+
+  // No key yet: the one paste would write no key's line, so it says to make the key first, with nothing to copy.
+  const keyless = find(bodyOf(VIEW), el => hasClass(el, 'access-snippets'))
+  const first = find([keyless], el => el.tag === 'details')
+  expect(textOf(find([first], el => el.tag === 'summary'))).toBe('All of step 1 in one paste')
+  expect(findAll([first], el => el.tag === 'pre')).toEqual([])
+  expect(buttonsIn([first])).toEqual([])
+  expect(textsOf([first], 'access-note')).toEqual([t('access.snip.pasteNoKey')])
+  expect(serverSnippets(VIEW.tunnel.settings, null).paste).toBeNull()
 
   // No key yet: an example line in its place.
   expect(serverSnippets(VIEW.tunnel.settings, null).keysLine).toBe(
@@ -302,7 +346,9 @@ test('the server’s snippets, filled in: the user and folder commands, the keys
     { ...READY.tunnel.settings, user: 'tun', socket: '/srv/tun/board.sock', domain: 'b.example.org' },
     PUBLIC_KEY,
   )
-  expect(mine.commands).toContain('sudo install -d -m 2750 -o tun -g caddy /srv/tun')
+  expect(mine.commands).toContain('sudo install -d -m 2750 -o tun -g tun /srv/tun')
+  expect(mine.paste).toBe(stepOnePaste('tun', '/srv/tun/board.sock', PUBLIC_KEY))
+  expect(mine.caddyGroup).toBe('sudo chgrp caddy /srv/tun && sudo chmod 2750 /srv/tun')
   expect(mine.keysFile).toBe('/etc/ssh/authorized_keys/tun')
   expect(mine.sshd).toStartWith('Match User tun\n')
   expect(mine.caddy).toStartWith('b.example.org {\n    reverse_proxy unix//srv/tun/board.sock\n')
@@ -319,7 +365,9 @@ test('the server’s snippets, filled in: the user and folder commands, the keys
   )
   expect(bad.commands).not.toContain('-l\n')
   expect(bad.commands).toContain('--shell /usr/sbin/nologin boardtunnel')
-  expect(bad.commands).toContain('-o boardtunnel -g caddy /var/lib/boardtunnel')
+  expect(bad.commands).toContain('-o boardtunnel -g boardtunnel /var/lib/boardtunnel')
+  expect(bad.paste).toBe(stepOnePaste('boardtunnel', TUNNEL_SOCKET, PUBLIC_KEY))
+  expect(bad.caddyGroup).toBe(caddyGroupLine(TUNNEL_SOCKET))
   expect(bad.keysFile).toBe('/etc/ssh/authorized_keys/boardtunnel')
   expect(bad.sshd).toStartWith('Match User boardtunnel\n')
   expect(bad.caddy).toStartWith('board.example.com {\n    reverse_proxy unix//var/lib/boardtunnel/board.sock\n')
@@ -386,6 +434,12 @@ test('what a field sends: numbers for the ports, the domain lowercased, text tri
   // Not a number: as typed, for the board to refuse with its reason (never NaN, which JSON makes null).
   expect(fieldEdit('sshPort', 22, '22x')).toEqual({ value: '22x' })
   expect(fieldEdit('key', '', ' D:\\keys\\board ')).toEqual({ value: 'D:\\keys\\board' })
+  // The public port: a number; emptied, 443 again (null).
+  expect(fieldEdit('publicPort', null, '8443')).toEqual({ value: 8443 })
+  expect(fieldEdit('publicPort', 8443, '')).toEqual({ value: null })
+  expect(fieldEdit('publicPort', null, ' ')).toBeNull()
+  expect(fieldEdit('publicPort', 8443, '8443')).toBeNull()
+  expect(fieldEdit('publicPort', null, '8443x')).toEqual({ value: '8443x' })
 })
 
 // ---------------------------------------------------------------- live, with React's handlers

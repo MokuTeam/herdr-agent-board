@@ -109,8 +109,10 @@ is a passkey or password + TOTP, with a lockout, and a login that is ended stops
     `StreamLocalBindUnlink yes` (a dead tunnel's socket is replaced) and a `StreamLocalBindMask`.
     Neither `permitlisten` nor `PermitListen` names a socket's path, so neither keeps the key to
     one socket path; what does, and what is left, is in "The server" below **(call 31)**.
-  - **The board does not set up the server.** The README gives ready Caddy and sshd snippets,
-    and the panel shows them filled in, with Copy.
+  - **The board sets up the web server on the owner's click** (changed 2026-10-21 by
+    `2026-10-21-remote-tunnel-server-setup-design.md`); DNS, the tunnel user, the socket's
+    folder, the key and sshd stay by hand. The README gives ready Caddy and sshd snippets, and the
+    panel shows them filled in, with Copy.
 - **Where a login is needed: decided by the listener, never by headers.**
   - The web board on `127.0.0.1:<port>` stays as it is, with no login.
   - A separate local listener, the tunnel's target, requires a login for every request.
@@ -377,7 +379,7 @@ is a passkey or password + TOTP, with a lockout, and a login that is ended stops
     (the folder's group or setgid bit, `StreamLocalBindMask`).
   - A TLS error: DNS, or Caddy has no certificate yet.
 
-### The server (README and panel snippets; the board never touches the server)
+### The server (README and panel snippets; by hand, but for the web server the board can set up on the owner's click)
 
 The README gets a section after "Phones": "Another computer or a tablet, through your own domain".
 The panel shows the same snippets with the owner's values filled in, each with Copy. Steps:
@@ -386,21 +388,24 @@ The panel shows the same snippets with the owner's values filled in, each with C
 2. **A user for the tunnel, with no shell and no home, and the socket's folder (call 31):**
 
    ```sh
-   sudo useradd --system --no-create-home --home-dir /nonexistent \
+   sudo useradd --system --user-group --no-create-home --home-dir /nonexistent \
        --shell /usr/sbin/nologin boardtunnel
    # useradd leaves the account locked; an sshd with UsePAM no refuses a locked one, key or not
    sudo usermod -p '*' boardtunnel
-   # the socket's folder: the tunnel user makes the socket, Caddy's group opens it, no one else
-   sudo install -d -m 2750 -o boardtunnel -g caddy /var/lib/boardtunnel
+   # the socket's folder: the tunnel user makes the socket; its group is the reader's (step 3)
+   sudo install -d -m 2750 -o boardtunnel -g boardtunnel /var/lib/boardtunnel
    # the key's file belongs to root, out of the tunnel user's reach
    sudo install -d -m 755 /etc/ssh/authorized_keys
    # the line below goes into /etc/ssh/authorized_keys/boardtunnel (owner root, mode 644)
    ```
 
    - The folder is the socket path's own folder; the panel fills in the owner's path.
-   - `caddy` is the group Caddy's package runs as. Use Caddy's own group if it runs as another.
-   - The setgid bit (the `2` in `2750`) gives the socket the folder's group, so Caddy can open it.
-     The mask in the sshd block makes it `srw-rw----`: its owner and that group only.
+   - The socket's folder takes the tunnel user's own group, not `caddy` (changed 2026-10-21, the
+     server-setup spec's call 2): this step comes before anything knows whether a `caddy` group
+     exists. The reader gets the group later: a host Caddy by `chgrp` (step 5), a container by
+     `--group-add`. A folder made the old way, with `-g caddy`, works too.
+   - The setgid bit (the `2` in `2750`) gives the socket the folder's group, so its reader can
+     open it. The mask in the sshd block makes it `srw-rw----`: its owner and that group only.
    - The tunnel user has no home and no file of its own on the server.
    - `usermod -p '*'`: `useradd` leaves `!` as the password, which locks the account. `*` matches
      no password either, but does not lock it. An sshd with `UsePAM yes` (Debian's default) lets
@@ -480,6 +485,14 @@ The panel shows the same snippets with the owner's values filled in, each with C
        reverse_proxy unix//var/lib/boardtunnel/board.sock
        header Strict-Transport-Security "max-age=31536000"
    }
+   ```
+
+   Caddy from its package runs as `caddy`; it gets the socket's folder by its group (changed
+   2026-10-21, the server-setup spec's call 2), `chmod` putting back the setgid bit `chgrp` may
+   clear:
+
+   ```sh
+   sudo chgrp caddy /var/lib/boardtunnel && sudo chmod 2750 /var/lib/boardtunnel
    ```
 
    Caddy gets and renews the certificate. It keeps the Host header, sets `X-Forwarded-For` and
@@ -842,8 +855,9 @@ New:
 
 ## Non-goals
 
-- Setting up the server (DNS, Caddy, sshd, the user). The README and the panel give snippets
-  only.
+- Setting up DNS, sshd and the tunnel user (changed 2026-10-21: the board sets up the web server
+  on the owner's click, `2026-10-21-remote-tunnel-server-setup-design.md`). The README and the
+  panel give snippets only.
 - Several tunnels; several PCs on one domain; a hub.
 - Several users, accounts, roles or user names. One owner.
 - The Android app through the domain (it pairs over Tailscale and uses a bearer token).
@@ -877,7 +891,9 @@ New:
   full access to the PC, these files included. That is why the login is the boundary that matters
   (anti-goal no. 1), and why it is a passkey or password + TOTP, with a lockout and logins that
   end at once. Claiming more than this, in the panel, the README or here, is itself a failure.
-- The board running anything on the server beyond holding its one forward.
+- The board running anything on the server beyond holding its one forward, except Look (it only
+  reads) and a plan the owner applied or undid with a click, over the owner's admin connection
+  (changed 2026-10-21, the server-setup spec).
 - The forward ending where anything but Caddy can connect to it, or where another user on the
   server can take its place: a TCP port, or a socket in a shared folder.
 - Two ssh processes for the tunnel at once (they would take the socket from each other), or a
@@ -1178,8 +1194,10 @@ Made in this document; the owner can overturn any of them.
 2. **The cookie works like the PWA's**: `__Host-`, Secure, HttpOnly, SameSite=Strict. It has its
    own name, `__Host-board-login`, so the two token stores never mix.
 3. **WebAuthn relying party = the domain; expected origin = `https://<domain>`.** HTTPS on 443
-   only; another port is the builder's to add if wanted (the origin then has the port, the rpId
-   never does).
+   by default; another public port becomes possible (changed 2026-10-21, the server-setup spec's
+   call 17): `tunnel.publicPort`, set by the setup in its case 4, makes the origin
+   `https://<domain>:<port>` for the Host and Origin checks, WebAuthn and the probe; the rpId
+   never has the port.
 4. **Secrets stay on the PC in the state folder**, never sent to the page or logged. They are
    protected by file permissions, not encrypted. The password is hashed with `Bun.password`
    (argon2id).
@@ -1238,7 +1256,8 @@ Made in this document; the owner can overturn any of them.
     Windows; `stat` answers "missing"; `changes` refused for a card in those folders; the phone
     listeners unchanged.
 31. **The socket's place and fence**: `/var/lib/boardtunnel/board.sock` by default, in a folder
-    `boardtunnel:caddy`, mode `2750`, with `StreamLocalBindMask 0117`; a tunnel user with no home
+    `boardtunnel:boardtunnel` (its reader gets the group in step 5; `boardtunnel:caddy` until
+    2026-10-21), mode `2750`, with `StreamLocalBindMask 0117`; a tunnel user with no home
     and its key in a root-owned file. The path is held by the folder's permissions, not by
     `ChrootDirectory`; a stolen key is what is left.
 32. **A periodic probe through the domain while connected**, since a forward on the same path can

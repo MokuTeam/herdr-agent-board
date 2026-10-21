@@ -5,13 +5,16 @@
 //
 // Every request here came from the internet: whether a login is needed depends on this listener
 // alone, never on a header, and no setting turns it off. A request gets to a board route only when:
-// - its Host is the domain (or <domain>:443) and Caddy says it came over HTTPS;
-// - anything but GET or HEAD carries X-Board: 1 and the domain's own Origin, which must be there;
+// - its Host is the domain (or <domain>:443; with `tunnel.publicPort` set to another port, exactly
+//   <domain>:<publicPort>) and Caddy says it came over HTTPS;
+// - anything but GET or HEAD carries X-Board: 1 and the domain's own Origin (publicOrigin), which
+//   must be there;
 // - it carries the cookie of a live login;
 // - it does not act on this computer's screen (desktopOnly), nor manage the remote mode or Remote
 //   access (localOnly), in either spelling of its path; pairing and peers are not here at all.
 // The routes' own guards apply as for the web board, with the domain's origin as the board's own,
-// and the routes that read by a path refuse the board's own files (ownFiles).
+// and the routes that read by a path refuse the board's own files (ownFiles). WebAuthn expects
+// that origin too; its relying party is the domain alone, so passkeys outlive a port change.
 // Without a login only what signing in needs: the page and its files (marked remote, as for a
 // phone's browser), a reduced hello, the login routes and the board's probe; anything else is 401,
 // and a cookie that is no login is cleared. A body that is no JSON or too large on the listener's
@@ -30,7 +33,7 @@ import {
   RateLimiter,
 } from '../core/access.ts'
 import { REMOTE_API } from '../core/remote.ts'
-import { boardPorts, tunnelConfig, tunnelPort, tunnelProblems } from '../core/tunnel.ts'
+import { boardPorts, publicHosts, publicOrigin, tunnelConfig, tunnelPort, tunnelProblems } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
 import type { Access, SignIn, Who } from '../services/access.ts'
 import type { Probes } from '../services/tunnel.ts'
@@ -132,11 +135,18 @@ const bodyOf = (req: Request): Promise<unknown> => readBody(req).catch(() => und
 const badBody = (): Response => json(400, { ok: false, error: 'shape' })
 const fieldsOf = (body: unknown): Body => (isRecord(body) ? body : {})
 
+/** Where the board is reached: the domain (WebAuthn's relying party), the Hosts it answers to, its origin. */
+interface Site {
+  domain: string
+  hosts: string[]
+  origin: string
+}
+
 export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
   let server: Server | null = null
   let bound: number | null = null
-  /** The domain it answers for, as of the last sync. */
-  let domain = ''
+  /** The site it answers for, as of the last sync. */
+  let site: Site = { domain: '', hosts: [], origin: '' }
   let error: string | null = null
   let closed = false
   let syncing: Promise<void> | null = null
@@ -152,16 +162,16 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
     return c.on && !tunnelProblems(c, boardPorts(o.cfg.remote, o.webPort)).length && o.access.ready()
   }
 
-  /** What anyone may ask without a login, of the board at `site`; undefined for the rest. */
+  /** What anyone may ask without a login, of the board at `here`; undefined for the rest. */
   async function open(
     req: Request,
     url: URL,
-    site: string,
+    here: Site,
     who: Who,
     cookie: string | null,
   ): Promise<Response | undefined> {
     const raw = url.pathname
-    const origin = `https://${site}`
+    const { domain, origin } = here
     if (req.method === 'GET' && raw === '/api/hello') {
       const room = o.access.rate('open', who.address)
       if (!room.ok) return limited(room.retryAfterS)
@@ -191,14 +201,14 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
     if (req.method === 'POST' && raw === '/api/login/passkey/options') {
       const room = o.access.rate('passkey', who.address)
       if (!room.ok) return limited(room.retryAfterS)
-      return json(200, o.access.passkeyLoginOptions(site))
+      return json(200, o.access.passkeyLoginOptions(domain))
     }
     // Its rate is taken by the sign-in itself.
     if (req.method === 'POST' && raw === '/api/login/passkey') {
       const body = await bodyOf(req)
       return body === undefined
         ? badBody()
-        : signInAnswer(await o.access.signInPasskey(body, { origin, rpId: site }, who))
+        : signInAnswer(await o.access.signInPasskey(body, { origin, rpId: domain }, who))
     }
     // The page, its scripts, styles, icons, manifest and service worker: the login screen needs them.
     if (req.method === 'GET' && !raw.startsWith('/api/') && !raw.startsWith('/uploads/')) {
@@ -209,12 +219,12 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
   }
 
   async function answer(req: Request): Promise<Response> {
-    // The domain as this request found it, should a sync change it meanwhile.
-    const site = domain
+    // The site as this request found it, should a sync change it meanwhile.
+    const here = site
     const host = (req.headers.get('host') ?? '').toLowerCase()
-    if (!site || (host !== site && host !== `${site}:443`)) return json(403, { error: 'host' })
+    if (!here.domain || !here.hosts.includes(host)) return json(403, { error: 'host' })
     if (req.headers.get('x-forwarded-proto') !== 'https') return json(403, { error: 'https' })
-    const origin = `https://${site}`
+    const { domain, origin } = here
     // A browser sends the cookie by itself: what changes anything must come from the board's own page.
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       if (req.headers.get('x-board') !== '1' || req.headers.get('origin') !== origin)
@@ -230,7 +240,7 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
     try {
       url = new URL(req.url)
       const raw = url.pathname
-      const pub = await open(req, url, site, who, cookie)
+      const pub = await open(req, url, here, who, cookie)
       if (pub) return pub
       const token = loginToken(cookie)
       const login = token ? o.access.verify(token) : null
@@ -253,13 +263,13 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
         if (!room.ok) return limited(room.retryAfterS)
         const body = await bodyOf(req)
         if (body === undefined) return badBody()
-        const r = o.access.passkeyAddOptions(login.id, fieldsOf(body).code, { id: site })
+        const r = o.access.passkeyAddOptions(login.id, fieldsOf(body).code, { id: domain })
         return r.ok ? json(200, r.options) : json(r.status, { ok: false, error: r.error })
       }
       if (req.method === 'POST' && raw === '/api/login/passkey/add') {
         const body = await bodyOf(req)
         if (body === undefined) return badBody()
-        const r = o.access.addPasskey(login.id, body, { origin, rpId: site }, who.userAgent)
+        const r = o.access.addPasskey(login.id, body, { origin, rpId: domain }, who.userAgent)
         return r.ok ? json(200, { ok: true, id: r.id }) : json(400, { ok: false, error: r.error })
       }
       const res = await dispatch(o.routes, req, url, path, { ...o.guards, origins: [origin], ownFiles: o.ownFiles })
@@ -292,7 +302,7 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
       })
       bound = port
       error = null
-      o.log(`tunnel: listening on 127.0.0.1:${port} for https://${domain}/`)
+      o.log(`tunnel: listening on 127.0.0.1:${port} for ${site.origin}/`)
     } catch (err) {
       const next = `Cannot listen on 127.0.0.1:${port}: ${messageOf(err)}`
       if (next !== error) o.log(`tunnel: ${next}`)
@@ -309,7 +319,7 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
         error = null
       } else {
         const c = conf()
-        domain = c.domain
+        site = { domain: c.domain, hosts: publicHosts(c), origin: publicOrigin(c) }
         const port = tunnelPort(c, o.webPort)
         if (!server || bound !== port) {
           // Nothing awaited on the way to the first listen: it listens once sync() has had its turn.

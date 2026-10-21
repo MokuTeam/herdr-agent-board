@@ -28,6 +28,8 @@ export interface TunnelConfig {
   domain: string
   /** The tunnel listener's port on 127.0.0.1; null: the board's default (tunnelPort). */
   port: number | null
+  /** The port the domain is served on, on the server (https://<domain>:<publicPort>); null: 443. */
+  publicPort: number | null
 }
 
 const isPort = (v: unknown): v is number => Number.isInteger(v) && Number(v) > 0 && Number(v) < 65536
@@ -48,10 +50,21 @@ export function tunnelConfig(value: unknown): TunnelConfig {
     socket: text(c.socket, TUNNEL_SOCKET),
     domain: text(c.domain, ''),
     port: isPort(c.port) ? c.port : null,
+    publicPort: isPort(c.publicPort) ? c.publicPort : null,
   }
 }
 
-export type TunnelField = 'host' | 'sshPort' | 'user' | 'key' | 'socket' | 'domain' | 'port'
+/** The domain's own origin: 'https://<domain>', with ':<publicPort>' unless it is null or 443. */
+export function publicOrigin(c: TunnelConfig): string {
+  return c.publicPort === null || c.publicPort === 443 ? `https://${c.domain}` : `https://${c.domain}:${c.publicPort}`
+}
+
+/** The Host the tunnel listener accepts: '<domain>' (and '<domain>:443'), or exactly '<domain>:<publicPort>'. */
+export function publicHosts(c: TunnelConfig): string[] {
+  return c.publicPort === null || c.publicPort === 443 ? [c.domain, `${c.domain}:443`] : [`${c.domain}:${c.publicPort}`]
+}
+
+export type TunnelField = 'host' | 'sshPort' | 'user' | 'key' | 'socket' | 'domain' | 'publicPort' | 'port'
 export interface TunnelProblem {
   field: TunnelField
   message: string
@@ -115,6 +128,9 @@ export function fieldProblem(field: TunnelField, value: unknown, ports?: Ports):
       return value === '' || (typeof value === 'string' && value.length <= 253 && DOMAIN.test(value))
         ? null
         : t('tunnel.err.domain')
+    // The server's port, not this computer's: none of the board's own ports is in its way.
+    case 'publicPort':
+      return value === null || isPort(value) ? null : t('tunnel.err.port', { field: fieldName(field) })
     case 'port':
       if (value === null) return null
       if (!isPort(value)) return t('tunnel.err.port', { field: fieldName(field) })
@@ -124,7 +140,7 @@ export function fieldProblem(field: TunnelField, value: unknown, ports?: Ports):
   }
 }
 
-const FIELDS: readonly TunnelField[] = ['host', 'sshPort', 'user', 'key', 'socket', 'domain', 'port']
+const FIELDS: readonly TunnelField[] = ['host', 'sshPort', 'user', 'key', 'socket', 'domain', 'publicPort', 'port']
 const NEEDED: ReadonlySet<TunnelField> = new Set(['host', 'user', 'domain'])
 
 /**
