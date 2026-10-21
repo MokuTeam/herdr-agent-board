@@ -59,6 +59,19 @@ the key, sshd's fence) stays in the owner's hands.
   the board's behind it; the board's on 8443). With real containers: Docker Desktop on the owner's
   PC. Tests never touch the owner's real server.
 - **All of it lands in the remote-tunnel pull request.**
+- **Which servers (owner, the same day).** The owner's server runs Debian 13. The automation is
+  written and tested for **Debian and Ubuntu together from the start**, not one after the other:
+  the spike and the integration tests run on **Debian 13 and Ubuntu 26.04 LTS** side by side, and
+  the integration tests also on **Ubuntu 24.04** (classic sudo). Ubuntu 25.10 and 26.04 ship
+  `sudo-rs` and the Rust coreutils (uutils) by default, so sudo's lines are matched for both sudo
+  and sudo-rs, and the server's scripts use only POSIX forms, or flags that GNU and Rust coreutils
+  both have (no `tail -f --pid`); where a tool may differ, the script detects it. Every part that
+  reads or runs on the server (Look's parsers, sudo's lines, the Docker install) covers both
+  distributions, with fixtures from both. Debian 12 and Ubuntu 22.04 stay supported through the
+  same code paths (an integration image for each if cheap). Supported in all: Debian 12, 13;
+  Ubuntu 22.04, 24.04, 25.10, 26.04. **Any other OS: "Do it myself"**, with the commands.
+- **Tests on the owner's PC:** Docker Desktop runs the spike's and the integration tests'
+  containers; the controller starts it.
 
 ## What this changes in the tunnel spec
 
@@ -103,7 +116,8 @@ The builder edits these lines of `2026-10-20-remote-tunnel-design.md` in the sam
   systemd for the cases that need it (call 25). These get "Do it myself".
 - Keeping Docker or Caddy up to date. The board's containers move to the board's pinned images
   when the owner applies again.
-- Two boards set up on one server (call 30). One tunnel, one PC per domain, as in the tunnel spec.
+- Two boards' setups on one server (call 30). One tunnel, one PC per domain, as in the tunnel spec;
+  a setup is one tunnel's, named by its tunnel user and socket.
 - A `board` command for the setup (call 29).
 - Watching the server afterwards, beyond the tunnel's probe through the domain.
 
@@ -255,7 +269,7 @@ Docker, call 20). Undo is a two-click button, as Unpair is.
 | admin: `Too many authentication failures` | The agent offered too many keys: choose the admin key's file. |
 | no pinned host key | Run Test connection first: it pins the server's key. |
 | `Host key verification failed` | The server's key changed since it was pinned (as for the tunnel). |
-| `sudo: a password is required` | Type `<admin>`'s sudo password. |
+| sudo or sudo-rs: a password is required | Type `<admin>`'s sudo password. |
 | wrong sudo password | The password was refused. The board tries once per click: some servers lock sudo after a few failures. |
 | `sudo: … must have a tty` | The server's sudoers has `requiretty`: remove it for `<admin>`, or Do it myself. |
 | not in sudoers | `<admin>` cannot use sudo: use an admin who can, or root. |
@@ -324,8 +338,10 @@ rounds (below) then run as root.
 - **Once per click.** A wrong password is not retried: sudo counts failures and some servers
   (`pam_faillock`) lock the account after three.
 - **`requiretty`, not in sudoers, no sudo**: stop with the hint; "Do it myself" stays.
-- `sudo-rs` (Ubuntu 25.10's default) is not tested; Look names it and the spike checks it if it
-  can (call 25).
+- **sudo and sudo-rs** (Ubuntu 25.10's and 26.04's default) both. Look names which one runs
+  (`sudo --version`'s first line). `-n`, `-S`, `-p ''` and `--` are used as both take them; each
+  one's own lines (a password required, a wrong password, not in sudoers, `requiretty`) are
+  matched, as the spike recorded them on Debian 13 (sudo) and Ubuntu 26.04 (sudo-rs).
 
 Why typed and passed on stdin: a key or agent proves who connects, but most admins' sudo asks for a
 password, and the owner wants nothing stored. `sudo -S` is sudo's own way to read a password from
@@ -359,10 +375,13 @@ a command as another user is `sudo runuser -u caddy -- …`, which works both wa
 
 **Apply and Undo run detached** (call 10). The decoded script:
 
-1. takes a lock (`flock -n /etc/agent-board/lock`; held: "another run is going on");
-2. writes the run's script to `/etc/agent-board/runs/<id>.sh` (root, `0600`);
-3. starts it with `setsid`, stdin `/dev/null`, output to `runs/<id>.log`;
-4. follows the log (`tail -f --pid=<pid>`) until the run ends, then prints its exit status.
+1. writes the run's script to `/etc/agent-board/runs/<id>.sh` (root, `0600`);
+2. starts it with `setsid`, stdin `/dev/null`, output to `runs/<id>.log`; the run itself takes
+   the lock first (`flock -n` on `/etc/agent-board/lock`, held for its whole length; held by
+   another: "another run is going on") and writes `runs/<id>.exit` when it ends;
+3. follows the log until that file is there, then prints the exit status. The follower is POSIX:
+   once a second it prints the log's new complete lines (`wc -l`, `sed -n '<from>,<to>p'`), not
+   `tail -f --pid`, which Rust coreutils may not take.
 
 A run prints `@@step <n> start|ok|fail`, `@@undo <n> ok|fail`, `@@result applied|rolled-back|
 rollback-failed`; the board turns these into the panel's progress, and the lines between them
@@ -396,14 +415,14 @@ path has no newline) and quoted.
 
 | Section | Command (the gist) | For |
 |---|---|---|
-| `os` | `/etc/os-release`; `uname -m` | the distribution, the Docker install |
+| `os` | `/etc/os-release`; `uname -m` | the distribution (supported or "Do it myself"), the Docker install |
 | `ports` | `ss -H -ltnp` for 80, 443, 8443, 8480; for each pid its `/proc/<pid>/cgroup` | who holds each port: a unit (`…/caddy.service`), a container (`docker-<id>.scope`, `/docker/<id>`), `docker-proxy` |
 | `docker` | `docker version`, `docker info` (security options), `docker ps`, `docker inspect` of the containers on those ports or on the host network | Docker or not, Podman, rootless, user namespaces; port bindings (with `userland-proxy` off nothing shows in `ss`), networks, mounts, command line, image, labels |
 | `systemd` | `systemctl show caddy.service nginx.service -p ExecStart,ExecReload,User,Group,ActiveState,WorkingDirectory` | case 2, case 4's nginx |
 | `fence` | `sshd -T -C user=<tunnel user>,host=localhost,addr=127.0.0.1`, only the lines the `Match` block sets | step 1 as the panel has it |
 | `folder` | `stat` of the socket's folder and of the socket | mode, owner, group, gid |
 | `record` | `/etc/agent-board/setup.json` | an earlier setup, a run that did not finish |
-| `host` | `getenforce`; `ip_forward`; `lxd`, `libvirtd`, `wg` present; `curl`/`wget`, `flock`, `runuser`, GNU `tail` | the limits (call 25), the Docker warning (call 27), the smoke check (call 21) |
+| `host` | `getenforce`; `ip_forward`; `lxd`, `libvirtd`, `wg` present; `curl`/`wget`, `flock`, `setsid`, `runuser`, `timeout`; `sudo --version` (sudo or sudo-rs); `ls --version` (GNU or Rust coreutils, shown only) | the limits (call 25), the Docker warning (call 27), the smoke check (call 21) |
 | `dns` | `getent ahosts <domain>`; `ip -o addr` | a warning when the domain points elsewhere (on a provider with 1:1 NAT the public address is not on the interface, so only a warning) |
 
 **Round two**, for the holder of 443 (and of 80 when case 4 needs it):
@@ -449,10 +468,10 @@ HAProxy, an unknown program, a container that does not run Caddy.
 - Caddy in a container only on Docker's default bridge (3c) or on macvlan (call 13).
 - The domain already in their config (call 26).
 - 443 or 80 held by two different programs (IPv4 and IPv6, say).
-- The limits of call 25: SELinux enforcing; Podman; rootless Docker; Docker with user namespaces;
-  `requiretty`; no systemd where the case needs it; Docker missing on a distribution other than
-  Debian or Ubuntu.
-- A record of another setup on this server for another domain (call 30).
+- The limits of call 25: a distribution outside the supported list (Debian 12, 13; Ubuntu 22.04,
+  24.04, 25.10, 26.04); SELinux enforcing; Podman; rootless Docker; Docker with user namespaces;
+  `requiretty`; no systemd where the case needs it.
+- A record of another tunnel's setup on this server: another tunnel user or socket (call 30).
 
 ## The cases
 
@@ -769,8 +788,11 @@ move here.
 
 ## Installing Docker (call 19)
 
-**Only on Debian (12, 13) and Ubuntu (22.04, 24.04 LTS), from Docker's own apt repository, by the
-steps Docker documents.** In the plan, with its tick:
+**Only on Debian (12, 13) and Ubuntu (22.04, 24.04, 25.10, 26.04), from Docker's own apt
+repository, by the steps Docker documents**, one code path for both, tested on Debian 13, Ubuntu
+26.04 and 24.04. The board knows the codenames Docker's repository serves (`bookworm`, `trixie`,
+`jammy`, `noble`, `questing`, `resolute`; the spike checks each is there); another codename is
+"Do it myself". In the plan, with its tick:
 
 ```sh
 sudo apt-get update
@@ -807,9 +829,8 @@ its own and may set the kernel's forwarding policy to drop: on a server that for
 others (LXD, libvirt, a WireGuard gateway) that can cut them off. Look checks for those and the
 plan warns, next to the tick (call 27).
 
-Other distributions: with Docker already there, cases 1, 3 and 4 work the same (they need only
-Docker and the usual tools); without it, "Install Docker yourself, then Look again", with a link to
-Docker's page for that distribution.
+Other distributions, with Docker or without: "Do it myself", with the commands for the case Look
+found (owner, 2026-10-21).
 
 **Undo and Docker (call 20).** Undo does not remove Docker by default. It offers to, as a separate
 tick, only when the record says the board installed it and Docker holds no container, volume or
@@ -839,10 +860,25 @@ builder's to spell; their set is not.
 
 **The record (call 23)** lives on the server, so Undo works from a reinstalled board or another
 PC with the same settings. It names: the run's id and time; the state (`running`, `applied`,
-`rolled-back`, `rollback-failed`); the case; the domain, socket and address; and each item above
-with what Undo needs (a file's `sha256` as written; a line or block and its file; a backup's path;
-a group's old value; an image's "there before"). config.json keeps a summary for the panel,
-`tunnel.setup: { case, address, at }`.
+`rolled-back`, `rollback-failed`); the case; **the pair** (the tunnel user and the socket path),
+the domain, the public port and the address; and each item above with what Undo needs (a file's
+`sha256` as written; a line or block and its file; a backup's path; a group's old value; an image's
+"there before"). config.json keeps a summary for the panel, `tunnel.setup: { case, address, at }`.
+
+**Whose setup it is (call 30).** The pair identifies "this board's" setup: a record whose tunnel
+user and socket are the panel's is this board's, whatever its domain. Look then plans:
+
+- same pair, same domain and public port: already set up; Apply checks each item and says
+  "nothing to change" (or repairs what is missing);
+- same pair, another domain or public port: an **update** (below), not a stop;
+- another pair: a stop, "Another board's setup is on this server (tunnel user `<u>`, socket `<s>`,
+  `<domain>`): Undo it from that board, or with those settings here", with "Do it myself" (the
+  Undo's commands from that record).
+
+**Undo from a reinstalled board or another PC.** Nothing on the PC is needed but the same tunnel
+user and socket in the panel, the admin user (typed again), and the server's key pinned by Test
+connection. Undo's Look reads `/etc/agent-board/setup.json`, finds the pair is the panel's, and
+plans from the record; a missing `tunnel.setup` in config.json is filled in from it.
 
 **What Undo does (call 22).**
 
@@ -917,11 +953,15 @@ new socket file (`StreamLocalBindUnlink`).
 
 - **Every step checks before it acts** (call 10): a line or block that is there already, a
   container with the right label and the same settings (a hash of them in a label), a volume, an
-  image, a group already Caddy's: left as they are. So Apply twice changes nothing the second time
-  and says "nothing to change".
-- **A changed setting** (domain, socket, public port) after a setup: Look sees the record differ
-  and plans an update. The board's own files and blocks are rewritten, its containers recreated
+  image, a group already Caddy's: left as they are. So Apply twice (the record's pair, domain and
+  public port all the panel's, call 30) changes nothing the second time and says "nothing to
+  change".
+- **A changed domain or public port** after a setup (the record's pair is the panel's, call 30):
+  Look plans an update. The board's own files and blocks are rewritten, its containers recreated
   when their settings changed; their Caddy reloaded once.
+- **A changed tunnel user or socket** makes another pair: the record is no longer this board's
+  and Look stops, as for another board's (call 30). To move the setup: put the old pair back in
+  the panel, Undo, then set the new pair and Apply.
 - **A run that did not finish** (the server rebooted mid-run: the record says `running` and no lock
   is held): Look says so; the plan first undoes what the record names, then applies.
 - **`rollback-failed`**: the panel shows exactly which items are left, each with its command;
@@ -959,10 +999,11 @@ new socket file (`StreamLocalBindUnlink`).
 
 ## Constraints
 
-- **The server**: Linux; `sh`, `ss` (iproute2), `base64`, `flock`, GNU `tail`, `stat`, `getent`,
-  `runuser`; sudo or root. Case 2 needs systemd. Docker 20.10 or newer when it is there. Their
-  Caddy 2. Apply's Docker install: Debian 12/13, Ubuntu 22.04/24.04 (call 19). The rest, and what
-  call 25 names, goes to "Do it myself".
+- **The server**: Debian 12, 13 or Ubuntu 22.04, 24.04, 25.10, 26.04; POSIX `sh`, `ss`
+  (iproute2), `flock`, `setsid`, `runuser` (util-linux), `getent`, coreutils GNU or Rust (only
+  flags both take: `base64 -d`, `sha256sum`, `stat -c`, `install`, `timeout`; no `tail -f
+  --pid`); sudo, sudo-rs or root. Case 2 needs systemd. Docker 20.10 or newer when it is there.
+  Their Caddy 2. Any other OS, and what call 25 names, goes to "Do it myself".
 - **Look is read-only** (call 9); Apply and Undo change only what their plan lists.
 - **Idempotent**: Apply twice is safe; Undo twice is safe (the second finds nothing).
 - **The PC**: Windows' own OpenSSH by full path, no shell, no prompt, stdin a pipe, paths with
@@ -995,7 +1036,10 @@ new socket file (`StreamLocalBindUnlink`).
   again and again; Let's Encrypt allows a few failures an hour. Look's DNS warning comes first; the
   integration tests use Pebble, never Let's Encrypt (call 31).
 - **sudo variants**: `requiretty`, `pam_faillock`, `sudo-rs`, a lecture on first use. Covered by
-  the hints and the spike.
+  the hints and the spike, with each one's lines recorded on Debian 13 and Ubuntu 26.04.
+- **Rust coreutils** (Ubuntu 25.10, 26.04) differ from GNU's in some flags. The scripts keep to
+  POSIX forms and the flags the spike found in both; the integration tests run every script on
+  Debian 13 and Ubuntu 26.04.
 - **Windows' ssh and a pipe on stdin**: older Windows builds of OpenSSH did not pass a closed stdin
   on. The spike checks 9.5p2 with sudo reading the password.
 - **Two people press Apply** (two tabs, two boards): the server's lock lets one run.
@@ -1010,7 +1054,8 @@ new socket file (`StreamLocalBindUnlink`).
 ### Unit (pure, fast)
 
 - **Look's parsers**, section by section, against outputs recorded from the integration images
-  (Debian 12 and Ubuntu 24.04, each scenario below), kept as fixtures: `ss` with `docker-proxy`
+  (Debian 13 and Ubuntu 26.04 for every section, Ubuntu 24.04 where its output differs), kept as
+  fixtures: `ss` with `docker-proxy`
   and without (userland proxy off), cgroup lines of both cgroup drivers, `systemctl show`'s
   `argv[]`, `docker inspect` (file, folder and volume mounts; user-defined, default and host
   networks; compose labels), `sshd -T`, `stat`, the record; Podman's and rootless Docker's
@@ -1054,10 +1099,13 @@ is ticked; a run in progress; a failure with its rollback list; done, with Undo;
 
 Off unless `BOARD_SERVER_IT=1`; minutes long; never in the default `bun test`.
 
-- **The image** (`test/integration/server/`): Debian 12 with systemd as PID 1, sshd, sudo,
-  `ca-certificates`, and Docker inside it (Docker in Docker, privileged), an admin user with a key
-  in three variants (sudo with a password, NOPASSWD, root), and step 1 done as the panel's paste.
-  An Ubuntu 24.04 twin without Docker for the install path.
+- **The images** (`test/integration/server/`), one Dockerfile per distribution, run side by side:
+  **Debian 13** (sudo, GNU coreutils), **Ubuntu 26.04** (sudo-rs, Rust coreutils) and **Ubuntu
+  24.04** (classic sudo); Debian 12 and Ubuntu 22.04 if cheap. Each: systemd as PID 1, sshd, sudo,
+  `ca-certificates`, Docker inside it (Docker in Docker, privileged) or none for the install path,
+  an admin user with a key in three variants (sudo with a password, NOPASSWD, root), and step 1
+  done as the panel's paste. Every scenario runs on Debian 13 and Ubuntu 26.04; Ubuntu 24.04 runs
+  the install path, case 1 and case 2.
 - **Certificates without the internet's CA**: Pebble (Let's Encrypt's test CA) and its challenge
   DNS server in the same Docker network; the board's plan names Pebble's directory only through a
   test-only `BOARD_SETUP_ACME_CA` (as `BOARD_TUNNEL_PROBE_ORIGIN` does for the probe). So 1's,
@@ -1114,95 +1162,31 @@ document as a "Checked by" block, as the tunnel spec's spike did.
 
 ### Manual (the owner)
 
-On a throwaway VPS first (not the owner's real server): Debian 12 fresh (case 1 with the Docker
-install), then with Caddy from its package (2), then compose Caddy (3a). Then, if the owner wants,
+On a throwaway VPS first (not the owner's real server): Debian 13 fresh (case 1 with the Docker
+install), then with Caddy from its package (2), then compose Caddy (3a); an Ubuntu 26.04 VPS the
+same if at hand. Then, if the owner wants,
 the real server: Look only, the plan read together, then Apply.
 
 ## Tasks
 
-They continue the remote-tunnel plan's numbering (`docs/superpowers/plans/2026-10-20-remote-tunnel.md`,
-Tasks 1–19) and keep its "Global Constraints": the worktree, sandboxes only, the layers, texts in
-both languages, green before each commit, commit messages plain sentences with no prefix or
-trailer. Each is written out in the plan, TDD steps and all, by the planner; here, what each
-produces and needs, so that a fresh subagent can take one on its own. Before Task 20, a comment on
-issue #154 says that this addition is being built, and by whom (AGENTS.md, "An issue first").
+Written out in the plan, `docs/superpowers/plans/2026-10-20-remote-tunnel.md`, "Part 2: Setting up
+the server from the board", as Tasks 20–25 with that part's own constraints (the owner asked for
+fewer, bigger tasks, at least two at a time, each verified by its own test files only). Before
+Task 20, a comment on issue #154 says that this addition is being built, and by whom (AGENTS.md,
+"An issue first").
 
-- **Task 20: Spike, the server's facts** (no product code). On Docker Desktop, in a Debian 12
-  systemd container with sshd, sudo and Docker inside, and plain containers:
-  - a container root with `--cap-drop ALL` and `--group-add <gid>` opens the host's socket through
-    a read-only folder mount, and sees the socket a new tunnel makes (new inode); `nobody` without
-    the gid cannot;
-  - `useradd --system --user-group` on Debian 12 and Ubuntu 24.04; `chgrp` keeps the folder's
-    setgid bit;
-  - `caddy adapt` and `validate` take `import … # agent-board`; appended after a brace-less site
-    they fail;
-  - a file bind mount: `cat new > file` reaches the container, `mv` does not; `caddy reload`
-    through `docker exec` in the official image;
-  - `alpine/socat` with `--user 65534:<gid> --read-only`; what `docker compose down` prints and
-    returns with the helper on its network;
-  - Windows' ssh: the admin line, the agent and `-i`; `StrictHostKeyChecking=yes` against the
-    board's `known_hosts` entry `[host]:port`; the remote command reaching the server unchanged;
-    stdin with the password then closed; `sudo -S -p ''` reading it; a wrong password's lines and
-    exit code; `requiretty`'s; `sudo-rs` if an Ubuntu 25.10 image is at hand;
-  - `ss -H -ltnp` with and without Docker's userland proxy; a host-network container's pid to its
-    container id through its cgroup;
-  - Pebble with Caddy for 1b (TLS-ALPN only) and 4b (HTTP-01 through nginx, with 4b's fixed
-    check path in an `http://` site beside the solver).
-
-  Writes a "Checked by the spike" block at the end of "Risks and things to watch" here. Depends on
-  nothing. Commit: "Record what a trial server showed about the board's containers, their Caddy's
-  files and sudo over Windows' ssh".
-- **Task 21: The board's address on another port (`tunnel.publicPort`).** `src/core/tunnel.ts`
-  (field, check), `src/server/tunnel.ts` (Host, Origin), the WebAuthn origin in
-  `src/services/access.ts`, `src/adapters/probe.ts`, the panel field, texts. Tests: 8443 through
-  the listener, a passkey made on 443 accepted on 8443, every existing tunnel test unchanged with
-  the field unset. Depends on nothing. Commit: "Let the board be reached through the domain on
-  another port than 443".
-- **Task 22: Step 1 without Caddy's group, and in one paste.** `src/core/tunnel-snippets.ts`
-  (`serverCommands` with `--user-group` and `-g <user>`, the one-paste block, the `chgrp` line for
-  a host Caddy), `web/src/models/access.ts`, `Snippets.tsx`, README step 2 and 5, the README test,
-  texts; Test connection's extra line (call 4). Depends on Task 20 (the `useradd` facts). Commit:
-  "Make the tunnel's folder on the server independent of Caddy, and offer step 1 as one paste".
-- **Task 23: Look: its scripts and their parsers (core).** `src/core/server-look.ts`: the two
-  rounds' scripts, the parsers into `ServerFacts`, the fixtures from Task 20 in
-  `test/fixtures/server-look/`. Depends on Task 20. Commit: "Read what a server runs on its web
-  ports, its Docker and its Caddy, without changing anything there".
-- **Task 24: The per-case texts (core).** `src/core/server-texts.ts`: the board's Caddyfiles (1,
-  1b, 4a, 4b), `board.caddy`, the marked block, the import line, the nginx file, the containers'
-  flags, the Docker install commands, the host-set check from `caddy adapt` JSON. Depends on Task
-  20. Commit: "Write the board's web server configs for each kind of server".
-- **Task 25: Choosing the case, the plan and its scripts (core).** `src/core/server-plan.ts`:
-  `chooseCase`, `buildPlan`, `undoPlan`, the update plan, the run script (lock, markers, rollback,
-  `sudo()`), "Do it myself"'s text with and without Look, the remote command, shell quoting.
-  Depends on Tasks 23, 24. Commit: "Plan a server's setup from what Look found, with its rollback,
-  its Undo and the same steps to do by hand".
-- **Task 26: The admin connection (adapter).** `src/adapters/ssh.ts`: the admin argument list, a
-  run with stdin (the password) and stdout and stderr by line, timeouts; the fake ssh's server in
-  `test/support`. Depends on Task 20 (the spike's ssh facts). Commit: "Run a script on the server
-  over the owner's admin connection, with sudo's password on stdin only".
-- **Task 27: The setup service and its ops.** `src/services/server-setup.ts`: Look, the plan kept
-  with what it relies on, Apply and Undo followed through their log, progress, one at a time, a lost
-  connection; the ops in `src/services/remote-access.ts`; `AccessView.server` in
-  `src/core/access.ts`; config.json's `tunnel.admin` and `tunnel.setup` in
-  `src/adapters/config-file.ts`; `web.log` lines. Depends on Tasks 21, 25, 26. Commit: "Look at the
-  server, apply the plan and undo it from the Remote access panel's routes".
-- **Task 28: The panel's "On the server" (web).** `web/src/components/access/ServerSetup.tsx` (and
-  its parts), `web/src/models/server-setup.ts`, `useAccess`, `web/styles/access.css`, texts. The
-  password in the panel's state only. Depends on Tasks 22, 27. Commit: "Set up the server's web
-  server from Settings → Remote access…, or show how to do it by hand".
-- **Task 29: The two-proxies proof.** `test/integration/two-proxies.test.ts` and its stand-in;
-  results into this document. Depends on Task 24 (it uses the board's own texts and flags).
-  Commit: "Prove that the board's proxy and the owner's serve side by side in containers".
-- **Task 30: The test server and the end-to-end setup tests.** `test/integration/server/`
-  (images, scenarios, Pebble), `test/integration/server-setup.test.ts`. Depends on Task 27.
-  Commit: "Test the server setup end to end against a server in containers, case by case".
-- **Task 31: The README and the tunnel spec.** The README's "On the server", "Do it myself"'s cases,
-  the case-3 paragraph, Settings' new fields; the tunnel spec's lines listed above. Depends on Task
-  28. Commit: "Describe setting up the server from the board in the README, and update the tunnel's
-  design to match".
-
-Order: 20 and 21 first (independent); then 22, 23, 24, 26 in parallel; 25; 29 (any time after 24);
-27; 28; 30; 31.
+- **20** Spike on Debian 13 and Ubuntu 26.04 side by side, and Look's scripts and parsers, with
+  fixtures from both.
+- **21** `tunnel.publicPort`, and step 1 without Caddy's group, in one paste; the tunnel spec's
+  lines.
+- **22** Apply and Undo for every case (core): the texts, the case, the plan, the record and its
+  owner (the pair), Undo, update, the run script, the follower and "Do it myself".
+- **23** The admin connection (sudo and sudo-rs), and Look, Apply and Undo through it (service,
+  ops, config.json).
+- **24** The panel's "On the server".
+- **25** The test servers end to end (Debian 13 and Ubuntu 26.04 side by side, Ubuntu 24.04), the
+  two-proxies proof, the README.
+- Waves: 20, 21, 22 → 23, 24 → 25.
 
 ## Calls
 
@@ -1226,7 +1210,7 @@ Made in this document; the owner can overturn any of them.
 7. **sudo**: none for root; `sudo -n` for NOPASSWD; otherwise the password typed in the panel,
    kept by the page while the panel is open, sent with each Look, Apply or Undo, written once to
    ssh's stdin for `sudo -S -p ''`; one attempt per click; `requiretty` and no sudo go to "Do it
-   myself".
+   myself". The same for sudo and sudo-rs, each one's lines matched.
 8. **The script travels base64 in a fixed remote command**; stdin carries only the password; the
    script starts with `exec </dev/null`; `sudo` is a function that runs its arguments in the
    board's root script, so the same lines serve the board and "Do it myself".
@@ -1260,9 +1244,9 @@ Made in this document; the owner can overturn any of them.
 18. **The board's containers**: `--cap-drop ALL` (Caddy keeps `NET_BIND_SERVICE`),
     `no-new-privileges`, the socket's folder (not the socket) mounted read-only, `--group-add
     <gid>`, `--restart unless-stopped`, labels; the helper as `nobody`, read-only.
-19. **Docker's own apt repository by its documented steps**, on Debian 12/13 and Ubuntu 22.04/24.04
-    only, the key's fingerprint checked, with its own tick in the plan; never the convenience
-    script, not the distribution's packages.
+19. **Docker's own apt repository by its documented steps**, on Debian 12/13 and Ubuntu
+    22.04/24.04/25.10/26.04 only (owner), the key's fingerprint checked, with its own tick in the
+    plan; never the convenience script, not the distribution's packages.
 20. **Undo keeps Docker** unless the owner ticks its removal, offered only when the board installed
     it and nothing else uses it; a failed Apply keeps a finished Docker install.
 21. **"Their sites still answer"**: the config validates, the served host names are the old ones
@@ -1274,9 +1258,9 @@ Made in this document; the owner can overturn any of them.
     config.json keeps a summary.
 24. **Apply ends with Test connection**, up to 2 minutes for the certificate; a failure there is
     reported, not rolled back.
-25. **Where Apply stops and "Do it myself" takes over**: Docker missing outside Debian/Ubuntu;
+25. **Where Apply stops and "Do it myself" takes over**: any OS outside the supported list (owner);
     SELinux enforcing; Podman; rootless Docker; Docker with user namespaces; `requiretty`; no
-    systemd for case 2; conflicting Docker packages. `sudo-rs` is untested.
+    systemd for case 2; conflicting Docker packages. `sudo-rs` is supported (owner).
 26. **A domain their proxy already serves** stops Look's plan, with the reason.
 27. **A plan that installs Docker warns** when the server forwards traffic for others (LXD,
     libvirt, WireGuard, forwarding on).
@@ -1284,7 +1268,10 @@ Made in this document; the owner can overturn any of them.
     stays as placeholders, each with the command that finds it.
 29. **A run's output goes to the panel only**; `web.log` gets one line per step. No `board`
     command for the setup.
-30. **One board per server**: a record for another domain stops Apply.
+30. **One setup per server, named by its pair**: the record's tunnel user and socket path identify
+    "this board's" setup. The same pair with another domain or public port is an update; another
+    pair stops Look's plan and says another board's setup is there. Undo from a reinstalled board
+    or another PC finds its record by the pair.
 31. **The integration tests use Pebble** through a test-only `BOARD_SETUP_ACME_CA`; the board's
     real plan never names a CA.
 32. **Undo leaves what the owner made by hand** (the tunnel user, the folder, the keys file, the
