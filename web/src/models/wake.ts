@@ -1,7 +1,7 @@
 // Settings → Sleep and wake… (#119), its rules on their own: wake's state in one line, in the
 // board's words and time format; when the toolbar's quiet "Wake stopped" note shows; the buttons
-// each state offers; Telegram's line and its router's while wake runs; what Switch over… took over;
-// what an edit of the reaper's fields sends; and the switches shown as sent until the board says the
+// each state offers; Telegram's line and its router's while wake runs; what Switch over… took over,
+// and what the takeover at wake's first start did; what an edit of the reaper's fields sends; and the switches shown as sent until the board says the
 // same (its config watcher reads config.json a moment later). The payload's `wake`, GET /api/wake's
 // answer and Switch over's are read through their guards.
 import type { Translator } from '../../../src/core/types.ts'
@@ -76,7 +76,8 @@ const isSettings = (v: unknown): v is WakeSettingsView =>
       typeof h.id === 'string' &&
       typeof h.title === 'string' &&
       (h.state === 'in' || h.state === 'old' || h.state === 'missing'),
-  )
+  ) &&
+  (v.takenOver === undefined || v.takenOver === null || isSwitched(v.takenOver))
 
 export interface WakeReply {
   view: WakeView
@@ -153,12 +154,28 @@ export function switchedLines(
     ...(telegram ? [t('wake.summary.telegram')] : []),
     t('wake.summary.asleep', { n: asleep }),
   ]
+  return { taken: t('wake.switched', { summary: parts.join('; ') }), ...notesOf(s, t) }
+}
+
+/** The launcher note (call 25) and the key bindings to rename (call 26) of a takeover, when there are any. */
+function notesOf(s: Switched, t: Translator): { launcher: string | null; bindings: string | null } {
   const list = s.bindings.map(b => `${b.key ? `${b.key} ` : ''}${b.old} → ${b.now}`).join(', ')
   return {
-    taken: t('wake.switched', { summary: parts.join('; ') }),
     launcher: s.launcher ? t('wake.launcherNote', { old: s.launcher.old, now: s.launcher.now }) : null,
     bindings: list ? t('wake.bindings', { list }) : null,
   }
+}
+
+/**
+ * What the takeover at wake's first start took over (nobody asked: the reaper and Telegram left
+ * off), said in the panel until it was seen there: its settings and sleeping sessions, and the
+ * launcher note and the key bindings, as Switch over… says them.
+ */
+export function takenOverLines(
+  s: Switched,
+  t: Translator,
+): { taken: string; launcher: string | null; bindings: string | null } {
+  return { taken: t('wake.takenOver', { n: s.summary.asleep }), ...notesOf(s, t) }
 }
 
 /**

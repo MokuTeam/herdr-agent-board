@@ -206,7 +206,9 @@ export interface SetupFacts {
    * Sleep and wake (#119), once it ships or while config.json turns it on: its state
    * (core/wake/status.ts), port, last error, sessions asleep, log file, and whether wakeUrl is set to
    * another address than the default; `router`: its port is held by the separate herdr-wake
-   * plugin's router, this process. Null or none: herdr-wake's line at wakeUrl, as before.
+   * plugin's router, this process; `takenOver`: the takeover at wake's first start (nobody asked)
+   * took that many sleeping sessions over, and the panel has not shown it yet. Null or none:
+   * herdr-wake's line at wakeUrl, as before.
    */
   wakeNew?: {
     state: WakeState
@@ -216,6 +218,7 @@ export interface SetupFacts {
     asleep: number
     log: string
     wakeUrlSet: boolean
+    takenOver?: number
   } | null
   launcher: LauncherFacts | null
   /** How the board would start MokuPilot (adapters/setup-facts.ts mokupilotCommand); none: not looked for. */
@@ -518,6 +521,15 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
     // On (and not held), the board talks to wake on its port, not at wakeUrl.
     const on = w.state !== 'off' && w.state !== 'held'
     if (on && w.wakeUrlSet) add('wakeUrl', 'na', t('setup.wake.urlUnused'))
+    // The takeover at wake's first start, which nobody asked for: said until the panel has shown it.
+    if (w.takenOver !== undefined)
+      add(
+        'wakeTakeover',
+        'off',
+        t('setup.wake.takenOver'),
+        t('setup.wake.takenOverDetail', { n: w.takenOver }),
+        t('setup.wake.takenOverFix'),
+      )
     // Its ListAgents and SendMessage hooks, in each shown profile (as the board's hooks are checked).
     const wakeHooks = (
       s: Pick<SetupFacts, 'settingsFile' | 'settings' | 'settingsError'>,

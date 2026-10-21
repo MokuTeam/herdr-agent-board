@@ -1,5 +1,6 @@
 // Settings → Sleep and wake… (#119): wake's state and settings, its switches, Start, Start again,
-// Log and Switch over… (services/wake/control.ts), and Install claude-tg (adapters/launchers.ts). For the board
+// Log and Switch over… (services/wake/control.ts), Install claude-tg (adapters/launchers.ts), and
+// the note of what the takeover at wake's first start did, seen (adapters/wake-files.ts). For the board
 // on this computer only: every remote listener refuses these routes (server/remote.ts localOnly);
 // a phone reads the state line in the payload.
 import { homedir } from 'node:os'
@@ -7,6 +8,7 @@ import { join } from 'node:path'
 import { type EditResult, editWake } from '../../adapters/config-file.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { installLaunchers } from '../../adapters/launchers.ts'
+import { wakeTakeoverSeen } from '../../adapters/wake-files.ts'
 import { t } from '../../core/lang.ts'
 import type { WakeControl } from '../../services/wake/control.ts'
 import { json, type Route } from '../http.ts'
@@ -41,7 +43,7 @@ export function wakeRoutes(wake: WakeControl): Route[] {
       },
     },
     {
-      // { op: 'on' | 'off' | 'reaper' | 'telegram' | 'start' | 'again' | 'log' | 'launcher' | 'switch', … }:
+      // { op: 'on' | 'off' | 'reaper' | 'telegram' | 'start' | 'again' | 'log' | 'launcher' | 'switch' | 'seen', … }:
       // they change config.json, start programs, write claude-tg and (Switch over…) uninstall the
       // separate herdr-wake plugin and move its hooks, so a page of another origin is refused, as
       // for Install.
@@ -77,6 +79,15 @@ export function wakeRoutes(wake: WakeControl): Route[] {
             const switched = await wake.switchOver()
             return json(switched.ok ? 200 : 409, switched)
           }
+          case 'seen':
+            // The panel showed what the takeover at wake's first start did: not said again.
+            try {
+              wakeTakeoverSeen()
+              r = { ok: true }
+            } catch (err) {
+              r = { ok: false, error: messageOf(err) }
+            }
+            break
           default:
             r = { ok: false, error: `unknown op ${String(body.op)}` }
         }

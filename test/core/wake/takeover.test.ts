@@ -16,6 +16,9 @@ const PROJECT = 'C:\\Work\\Проект x 50%'
 const TELEGRAM = {
   mcpServers: { telegram: { url: 'http://127.0.0.1:8787/mcp', headers: { Authorization: 'Bearer t' } } },
 }
+/** Now, for the sleeping list's age: a moment after the old router's entries below. */
+const NOW = 10_000
+const DAY = 86_400_000
 
 test('the old config: reaper on with 2 excluded, Telegram from ~/.claude.json → auto; tg-router not carried; an unknown key kept; wakeCommand dropped', () => {
   const old = {
@@ -59,6 +62,43 @@ test('no Telegram where the old router had none: a url without a token, nothing 
   )
 })
 
+test('at wake’s first start (the old plugin removed by hand, nobody asked): the reaper and Telegram left off, the rest taken over', () => {
+  const old = {
+    port: 12421,
+    wakeTimeoutSec: 90,
+    reaper: { enabled: true, idleMinutes: 45, exclude: ['Billing', '/^ops-/'], maxPerRound: 2 },
+  }
+  expect(takeOverConfig(old, TELEGRAM, { switches: false })).toEqual({
+    port: 12421,
+    wakeTimeoutSec: 90,
+    reaper: { enabled: false, idleMinutes: 45, exclude: ['Billing', '/^ops-/'], maxPerRound: 2 },
+  })
+  expect(old.reaper.enabled).toBe(true)
+  // Its own url and token go over, Telegram still off; a reaper that is no object is left as it was.
+  expect(
+    takeOverConfig({ url: 'http://box:1', authorization: 'Bearer own', reaper: 'x' }, {}, { switches: false }),
+  ).toEqual({ url: 'http://box:1', authorization: 'Bearer own', reaper: 'x' })
+  // Switch over… carries them over, as it always did.
+  expect(takeOverConfig(old, TELEGRAM, { switches: true })).toEqual({ ...old, telegram: 'auto' })
+})
+
+test('the old sleeping list: only what the old router saw or put to sleep within 7 days', () => {
+  const now = 100 * DAY
+  const old = {
+    'w1:p1': { session: SID, name: 'seen today', seen_at: now - 1000 },
+    'w1:p2': { session: SID, name: 'seen 6 days ago', seen_at: now - 6 * DAY },
+    'w1:p3': {
+      session: SID,
+      name: 'seen long ago, put to sleep 2 days ago',
+      seen_at: now - 30 * DAY,
+      slept_at: now - 2 * DAY,
+    },
+    'w1:p4': { session: SID, name: 'months old', seen_at: now - 90 * DAY, slept_at: now - 90 * DAY },
+    'w1:p5': { session: SID, name: 'just past 7 days', seen_at: now - 7 * DAY - 1 },
+  }
+  expect(Object.keys(takeOverSessions(old, DEFAULT_DIR, now))).toEqual(['w1:p1', 'w1:p2', 'w1:p3'])
+})
+
 test('no old config, or one that does not read: the defaults, Telegram as ~/.claude.json gave it to the old router', () => {
   for (const old of [undefined, null, [], 'x', 42]) {
     expect(takeOverConfig(old, TELEGRAM)).toEqual({ telegram: 'auto' })
@@ -82,7 +122,7 @@ test('the old sleeping list: each entry in the default folder, the ones that do 
     'w1:p4': { name: 'no session', seen_at: 1 },
     'w1:p5': 'broken',
   }
-  expect(takeOverSessions(old, DEFAULT_DIR)).toEqual({
+  expect(takeOverSessions(old, DEFAULT_DIR, NOW)).toEqual({
     'w1:p2': {
       session: SID,
       name: 'Ledger',
@@ -96,12 +136,12 @@ test('the old sleeping list: each entry in the default folder, the ones that do 
     },
     'w1:p3': { session: SID2, name: 'Billing', seen_at: 3000, profileDir: DEFAULT_DIR },
   })
-  for (const broken of [null, [], 'x', undefined]) expect(takeOverSessions(broken, DEFAULT_DIR)).toEqual({})
+  for (const broken of [null, [], 'x', undefined]) expect(takeOverSessions(broken, DEFAULT_DIR, NOW)).toEqual({})
 })
 
 test('an entry that names a profile already is the default folder’s all the same: the old router knew ~/.claude only', () => {
   const old = { 'w1:p1': { session: SID, name: 'x', seen_at: 1, profileDir: 'C:\\h\\.claude-work', profile: 'work' } }
-  expect(takeOverSessions(old, DEFAULT_DIR)).toEqual({
+  expect(takeOverSessions(old, DEFAULT_DIR, NOW)).toEqual({
     'w1:p1': { session: SID, name: 'x', seen_at: 1, profileDir: DEFAULT_DIR },
   })
 })

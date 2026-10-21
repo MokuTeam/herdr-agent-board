@@ -5,7 +5,8 @@
 // off, the minutes idle, the names never put to sleep, each saved when its field is left) and
 // Telegram (Auto or Off, what it found, what its router does while wake runs; Install claude-tg
 // once it is Auto and found tg-mcp). While the separate herdr-wake plugin holds wake: Switch over…,
-// asked once, then what it took over. Every change goes to the board at once
+// asked once, then what it took over. What the takeover at wake's first start did (nobody asked:
+// the reaper and Telegram left off), until "Got it". Every change goes to the board at once
 // (hooks/useWake.ts) and comes back over the live stream. On a phone: the state line, read only.
 import type { Switched, WakeSettingsView, WakeView } from '../../../../src/core/wake/view.ts'
 import { useWake, type WakeActions } from '../../hooks/useWake.ts'
@@ -20,6 +21,7 @@ import {
   stateLine,
   switchedLines,
   switchOffered,
+  takenOverLines,
   telegramLine,
   type WakeButton,
   wakeButtons,
@@ -162,6 +164,9 @@ export function WakeBody(props: WakeBodyProps) {
         </div>
       )}
       {switched && <SwitchedNote switched={switched} />}
+      {settings?.takenOver && !switched && (
+        <TakenOverNote taken={settings.takenOver} disabled={off} onSeen={() => void act.seen()} />
+      )}
       {log !== null && <pre className="wake-log">{log}</pre>}
       {hookNotes(view, settings).map(h => (
         <div className="profile-note wake-hooks" key={h.id} data-id={h.id}>
@@ -188,6 +193,27 @@ function SwitchedNote({ switched }: { switched: Switched }) {
       <p>{taken}</p>
       {launcher && <p>{launcher}</p>}
       {bindings && <p>{bindings}</p>}
+    </div>
+  )
+}
+
+/**
+ * What the takeover at wake's first start did (nobody asked: the reaper and Telegram left off),
+ * until it was seen: "Got it" says so to the board, which does not say it again.
+ */
+function TakenOverNote({ taken, disabled, onSeen }: { taken: Switched; disabled: boolean; onSeen(): void }) {
+  const t = useT()
+  const { taken: line, launcher, bindings } = takenOverLines(taken, t)
+  return (
+    <div className="profile-note wake-taken-over">
+      <p>{line}</p>
+      {launcher && <p>{launcher}</p>}
+      {bindings && <p>{bindings}</p>}
+      <div className="wake-actions">
+        <button type="button" className="button wake-seen" disabled={disabled} onClick={onSeen}>
+          {t('wake.takenOverSeen')}
+        </button>
+      </div>
     </div>
   )
 }

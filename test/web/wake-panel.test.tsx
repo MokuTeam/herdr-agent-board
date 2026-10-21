@@ -15,7 +15,7 @@ import { Toolbar } from '../../web/src/components/Toolbar.tsx'
 import { WakeNote } from '../../web/src/components/wake/WakeNote.tsx'
 import { WakeBody, WakePanel } from '../../web/src/components/wake/WakePanel.tsx'
 import { type WakeActions, wakeActions } from '../../web/src/hooks/useWake.ts'
-import { isWakeView } from '../../web/src/models/wake.ts'
+import { isWakeReply, isWakeView } from '../../web/src/models/wake.ts'
 import type { Board } from '../../web/src/state/BoardProvider.tsx'
 import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
 import { board, payload, renderInBoard } from './support/board.tsx'
@@ -87,6 +87,7 @@ function recorder(): { act: WakeActions; asked: unknown[][] } {
       install: rec('install'),
       launcher: rec('launcher'),
       switchOver: rec('switchOver'),
+      seen: rec('seen'),
     },
   }
 }
@@ -750,5 +751,76 @@ describe('the Telegram router’s line', () => {
   test('the payload’s state line with the router’s state reads as one; a broken one does not', () => {
     expect(isWakeView({ ...RUNNING, telegram: { state: 'polling', host: 'h:1' } })).toBe(true)
     expect(isWakeView({ ...RUNNING, telegram: { state: 'sometimes' } })).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------- the takeover at wake's first start
+
+const TAKEN: Switched = {
+  did: ['reaper and Telegram: left off at wake’s first start; turn them on in Settings → Sleep and wake…'],
+  summary: { reaper: 'off', minutes: 60, excluded: 2, telegram: false, asleep: 4 },
+  launcher: { old: 'claude-tg', now: 'claude' },
+  bindings: [{ key: 'ctrl+s', old: 'herdr-wake.sleep', now: 'agent-board.sleep' }],
+}
+
+describe('the takeover at wake’s first start (nobody asked)', () => {
+  const lines = (settings: WakeSettingsView, lang = 'en') =>
+    findAll([bodyOf({ view: RUNNING, settings }, lang)], el => hasClass(el, 'wake-taken-over')).flatMap(box =>
+      texts(findAll([box], el => el.tag === 'p')),
+    )
+
+  test('said in the panel until seen: what it took over, the reaper and Telegram left off', () => {
+    expect(lines({ ...SETTINGS, takenOver: TAKEN })).toEqual([
+      'At its first start, wake took over the separate herdr-wake plugin’s settings and 4 sleeping sessions. The reaper and Telegram were left off: turn them on below when you want them.',
+      "herdr-wake woke sessions with claude-tg; the board starts them with claude. Set launch.claude in the board's config.json to keep claude-tg.",
+      "Rename in herdr's config.toml: ctrl+s herdr-wake.sleep → agent-board.sleep",
+    ])
+    expect(lines({ ...SETTINGS, takenOver: { ...TAKEN, launcher: null, bindings: [] } }, 'ru')).toEqual([
+      'При первом запуске пробуждение перенесло настройки отдельного плагина herdr-wake и 4 спящие сессии. Усыпление и Телеграм оставлены выключенными: включи их ниже, когда понадобятся.',
+    ])
+    // Seen, or no takeover at the first start: nothing.
+    expect(lines(SETTINGS)).toEqual([])
+    expect(lines({ ...SETTINGS, takenOver: null })).toEqual([])
+  })
+
+  test('Got it says it was seen', async () => {
+    const { act, asked } = recorder()
+    const box = live(
+      <WakeBody
+        view={RUNNING}
+        settings={{ ...SETTINGS, takenOver: TAKEN }}
+        log={null}
+        phone={false}
+        canEdit
+        now={NOW}
+        act={act}
+      />,
+      board(),
+    )
+    expect(box.pick('.wake-taken-over .wake-seen').textContent).toBe('Got it')
+    await box.world.fire(box.pick('.wake-taken-over .wake-seen'), 'click')
+    expect(asked).toEqual([['seen']])
+  })
+
+  test('the action: POST { op: "seen" }, then GET /api/wake again; GET /api/wake’s answer read with it', async () => {
+    const posts: unknown[][] = []
+    let reloads = 0
+    const act = wakeActions({
+      post: async (path, body) => {
+        posts.push([path, body])
+        return { ok: true }
+      },
+      t: () => translator('en'),
+      canEdit: () => true,
+      toast: () => {},
+      sent: () => {},
+      reload: () => void reloads++,
+      showLog: () => {},
+    })
+    expect(await act.seen()).toBe(true)
+    expect([posts, reloads]).toEqual([[['/api/wake', { op: 'seen' }]], 1])
+    expect(isWakeReply({ view: RUNNING, settings: { ...SETTINGS, takenOver: TAKEN } })).toBe(true)
+    expect(isWakeReply({ view: RUNNING, settings: { ...SETTINGS, takenOver: null } })).toBe(true)
+    expect(isWakeReply({ view: RUNNING, settings: { ...SETTINGS, takenOver: { did: [] } } })).toBe(false)
   })
 })

@@ -1,17 +1,20 @@
 // The takeover of the separate herdr-wake plugin (#119, Migration): "Switch over…" on the board,
 // and the same once at wake's first start after the plugin was removed by hand (no uninstall then).
 // In this order: its config.json and sleeping list copied into the board's state folder (herdr's
-// uninstall may take its folders), (1) its config taken over into the `wake` section, (2) its
-// sleeping list into wake's session file (wake's own entries kept), (3) its wakeCommand's launcher
+// uninstall may take its folders), (1) its config taken over into the `wake` section (at the first
+// start, which nobody asked for, the reaper and Telegram left off), (2) its sleeping list of the last
+// 7 days into wake's session file (wake's own entries kept), (3) its wakeCommand's launcher
 // named when it is not launch.claude's (call 25), (4) the plugin uninstalled (removed already counts
 // as done), (5) its hooks moved to wake's in every profile that has them (each settings.json backed
 // up first, under a name no backup has; core/wake/takeover.ts, adapters/hook-settings.ts), (6) its
 // tg-router workspace closed when nothing but shells and sidebar panes is in it, (7) wake turned on
 // and started, unless its router still holds the port (said instead: the new wake could not take
 // it), (8) herdr key bindings to its actions named with their new names (call 26). Its config and
-// state folders are left as they are. The marker (`wake-takeover.json`) is written
-// before the start, so the start it makes takes nothing over again; with a marker there, only
-// sessions the old plugin saw since are taken over. Each step is a line of `did` and of the log.
+// state folders are left as they are. The marker (`wake-takeover.json`: what it did and took over)
+// is written before the start, so the start it makes takes nothing over again; with a marker there,
+// only sessions the old plugin saw since are taken over. At the first start it is marked unseen:
+// the panel and board doctor say what it did until the panel has shown it. Each step is a line of
+// `did` and of the log.
 import { constants, copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { configFile, type EditResult, readConfigFile, takeOverWake } from '../../adapters/config-file.ts'
@@ -36,9 +39,9 @@ import { sameDir } from '../../core/launch/names.ts'
 import { defaultProfileDir } from '../../core/profiles.ts'
 import { boardFiles } from '../../core/setup.ts'
 import { type WakeConfig, wakeConfig } from '../../core/wake/config.ts'
-import type { WakeSessions } from '../../core/wake/sessions.ts'
+import { asWakeSessions, type WakeSessions } from '../../core/wake/sessions.ts'
 import { launcherNote, oldActionBindings, takeOverConfig, takeOverSessions } from '../../core/wake/takeover.ts'
-import type { SwitchResult } from '../../core/wake/view.ts'
+import type { Switched, SwitchResult, SwitchSummary } from '../../core/wake/view.ts'
 import { oldPluginInstalled, workspaceOf } from './start.ts'
 
 type Herdr = <T = unknown>(args: string[], timeoutMs?: number) => Promise<T>
@@ -56,6 +59,11 @@ export interface TakeoverOptions {
 export interface SwitchOptions extends TakeoverOptions {
   /** `herdr plugin uninstall herdr-wake` (Switch over…); not at wake's first start, where it is gone already. */
   uninstall: boolean
+  /**
+   * The takeover at wake's first start, which nobody asked for: the reaper and Telegram left off,
+   * and the marker says it is unseen, so the panel and board doctor tell what it did.
+   */
+  firstStart?: boolean
   /** Step 7's start: the board's wake's start, past the held record. None at wake's first start, which goes on itself. */
   start?: () => EditResult | Promise<EditResult>
   /** The old plugin's router on a port: its pid, or null (adapters/wake-api.ts oldRouterAt by default). */
@@ -202,9 +210,21 @@ export async function switchOver(o: SwitchOptions): Promise<SwitchResult> {
     o.log(`takeover: stopped: ${error}`)
     return { ok: false, error: said ? error : t('err.switchOver', { error }) }
   }
-  const mark = (): void => {
+  /** What it took over, as the wake section has it now, with the sleeping sessions it took over. */
+  const summaryOf = (asleep: number): SwitchSummary => {
+    const now = wakeConfig(readConfigFile()?.wake)
+    return {
+      reaper: now.reaper.enabled ? 'on' : 'off',
+      minutes: now.reaper.idleMinutes,
+      excluded: now.reaper.exclude.length,
+      telegram: now.telegram === 'auto',
+      asleep,
+    }
+  }
+  /** The marker: what it did so far and took over; at the first start, unseen until the panel shows it. */
+  const mark = (taken: Omit<Switched, 'did'>): void => {
     try {
-      writeWakeTakeover({ at, did: [...did] })
+      writeWakeTakeover({ at, did: [...did], ...taken, ...(o.firstStart && { unseen: true }) })
     } catch (err) {
       o.log(`takeover: its marker could not be written: ${firstLine(err)}`)
     }
@@ -227,11 +247,16 @@ export async function switchOver(o: SwitchOptions): Promise<SwitchResult> {
     )
   }
 
-  // 1. Its config into the wake section. The switch stays the board's: an `enabled` of its own is not taken.
+  // 1. Its config into the wake section. The switch stays the board's: an `enabled` of its own is not
+  // taken. At the first start (nobody asked) the reaper and Telegram are left off.
   const old = readJsonFile(oldConfigFile)
   if (old.broken) say(`config: ${oldConfigFile} does not read as JSON; left where it is, not taken over`)
   else {
-    const { enabled: _switch, ...fields } = takeOverConfig(old.value, readJsonFile(join(o.home, '.claude.json')).value)
+    const { enabled: _switch, ...fields } = takeOverConfig(
+      old.value,
+      readJsonFile(join(o.home, '.claude.json')).value,
+      { switches: !o.firstStart },
+    )
     if (!Object.keys(fields).length) say('config: nothing to take over')
     else {
       const r = takeOverWake(fields)
@@ -239,9 +264,12 @@ export async function switchOver(o: SwitchOptions): Promise<SwitchResult> {
       say(`config: ${Object.keys(fields).join(', ')} into the wake section of ${configFile()}`)
     }
   }
+  if (o.firstStart)
+    say('reaper and Telegram: left off at wake’s first start; turn them on in Settings → Sleep and wake…')
 
-  // 2. Its sleeping list into wake's session file: wake's own entry for a pane stays; after an
-  // earlier takeover, only the sessions the old plugin saw or put to sleep since.
+  // 2. Its sleeping list into wake's session file, only what the old plugin saw or put to sleep
+  // within 7 days (an older entry's pane id may be another pane's now): wake's own entry for a pane
+  // stays; after an earlier takeover, only the sessions the old plugin saw or put to sleep since.
   const theirs = readJsonFile(oldSessionsFile)
   let ours: WakeSessions
   try {
@@ -249,7 +277,9 @@ export async function switchOver(o: SwitchOptions): Promise<SwitchResult> {
   } catch (err) {
     return failed(`${wakeSessionsFile()}: ${firstLine(err)}`)
   }
-  const added = Object.entries(takeOverSessions(theirs.value, defaultProfileDir(o.home))).filter(
+  const recent = takeOverSessions(theirs.value, defaultProfileDir(o.home), at)
+  const older = Object.keys(asWakeSessions(theirs.value) ?? {}).length - Object.keys(recent).length
+  const added = Object.entries(recent).filter(
     ([pane, e]) => !Object.hasOwn(ours, pane) && (!marker || Math.max(e.seen_at, e.slept_at ?? 0) > marker.at),
   )
   if (added.length) {
@@ -263,7 +293,7 @@ export async function switchOver(o: SwitchOptions): Promise<SwitchResult> {
   say(
     theirs.broken
       ? `sleeping sessions: ${oldSessionsFile} does not read as JSON; left where it is, none taken over`
-      : `sleeping sessions: ${added.length} taken over (${asleep} asleep)${added.length ? ` from ${oldSessionsFile}` : ''}`,
+      : `sleeping sessions: ${added.length} taken over (${asleep} asleep)${added.length ? ` from ${oldSessionsFile}` : ''}${older > 0 ? `; ${older} not seen for 7 days left out` : ''}`,
   )
 
   // 3. Its launcher, when it is not the board's: said, launch.claude not changed.
@@ -321,36 +351,25 @@ export async function switchOver(o: SwitchOptions): Promise<SwitchResult> {
     const left = await oldRouterLeft(o, [...new Set(ports)])
     if (left) return failed(t('err.oldRouter', left), true)
   }
-  mark()
+  // herdr key bindings to its actions (step 8), read now for the marker; config.toml not changed.
+  const bindings = oldActionBindings(readText(herdrConfigFile(o.env, o.home)))
+  mark({ summary: summaryOf(asleep), launcher, bindings })
   if (o.start) {
     const r = await o.start()
     say(r.ok ? 'wake: started' : `wake: not started: ${r.error}`)
   }
 
-  // 8. herdr key bindings to its actions, with their new names; config.toml not changed.
-  const bindings = oldActionBindings(readText(herdrConfigFile(o.env, o.home)))
+  // 8. herdr key bindings to its actions, with their new names.
   for (const b of bindings) say(`key binding: ${b.key ? `${b.key} ` : ''}${b.old} → ${b.now}`)
-  mark()
-
-  const now = wakeConfig(readConfigFile()?.wake)
-  return {
-    ok: true,
-    did,
-    summary: {
-      reaper: now.reaper.enabled ? 'on' : 'off',
-      minutes: now.reaper.idleMinutes,
-      excluded: now.reaper.exclude.length,
-      telegram: now.telegram === 'auto',
-      asleep,
-    },
-    launcher,
-    bindings,
-  }
+  const taken = { summary: summaryOf(asleep), launcher, bindings }
+  mark(taken)
+  return { ok: true, did, ...taken }
 }
 
 /**
  * Wake's first start after the old plugin was removed by hand (not held): the takeover without the
- * uninstall, once (no marker yet) and only when the old plugin's config or state folder is there.
+ * uninstall, with the reaper and Telegram left off and its marker unseen (switchOver firstStart),
+ * once (no marker yet) and only when the old plugin's config or state folder is there.
  * Nothing of it there: no herdr call, no file read but those two looks. Never throws; a takeover
  * that stops is logged and the start goes on. The wake section as it is after it, or null when it
  * did not run.
@@ -360,7 +379,7 @@ export async function takeOverAtFirstStart(o: TakeoverOptions): Promise<WakeConf
   const folders = oldWakeFolders(o.env, o.home)
   if (!existsSync(folders.config) && !existsSync(folders.state)) return null
   try {
-    if (!(await switchOver({ ...o, uninstall: false })).ok) return null
+    if (!(await switchOver({ ...o, uninstall: false, firstStart: true })).ok) return null
   } catch (err) {
     o.log(`takeover: stopped: ${firstLine(err)}`)
     return null

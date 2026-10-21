@@ -22,6 +22,7 @@ import {
   boardPaneNow,
   peekWakeSessions,
   readWakeStatus,
+  unseenWakeTakeover,
   wakeLog,
   wakeLogFile,
   wakeLogTail,
@@ -326,6 +327,8 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
       const s = settingsNow()
       const target = telegramTarget(s, (o.claudeJson ?? readClaudeJson)())
       const answer = s.enabled ? record(await status().catch(() => null)) : null
+      // What the takeover at wake's first start did, until the panel has shown it.
+      const takenOver = unseenWakeTakeover()
       return {
         reaper: s.reaper,
         telegram: s.telegram,
@@ -333,6 +336,7 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
         lastError: typeof answer?.lastError === 'string' ? answer.lastError : null,
         log: wakeLogFile(),
         hooks: o.hooks?.() ?? [],
+        ...(takenOver && { takenOver }),
       }
     },
     async turn(on) {
