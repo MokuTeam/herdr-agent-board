@@ -549,13 +549,23 @@ test('the sleeping list carries each session’s profile; /awake too', async () 
     },
   ])
   const status = await engine.status()
-  expect(Object.keys(status)).toEqual(['pid', 'started', 'lastPoll', 'lastError', 'reaper', 'sleeping', 'sessions'])
+  expect(Object.keys(status)).toEqual([
+    'pid',
+    'started',
+    'lastPoll',
+    'lastError',
+    'reaper',
+    'sleeping',
+    'sessions',
+    'telegram',
+  ])
   expect(status).toMatchObject({
     pid: process.pid,
     lastPoll: null,
     lastError: null,
     reaper: w.settings.reaper,
     sleeping,
+    telegram: { state: 'off' },
   })
   expect(Object.keys(status.sessions)).toEqual(['w1:p1', 'w1:p2'])
 })

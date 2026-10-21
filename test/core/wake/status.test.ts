@@ -1,6 +1,7 @@
 // Wake's status file and the state the board shows (src/core/wake/status.ts).
 import { expect, test } from 'bun:test'
 import {
+  asTelegramStatus,
   asWakeStatus,
   isWakeStatus,
   STARTING_MS,
@@ -76,4 +77,19 @@ test('asWakeStatus: a state and a time; the other fields only when of their type
   })
   for (const not of [null, [], {}, { state: 'asleep', at: NOW }, { state: 'running' }, { state: 'running', at: '1' }])
     expect(asWakeStatus(not)).toBeNull()
+})
+
+test('asWakeStatus: the Telegram router’s state the wake process writes, its host and error only when strings', () => {
+  const telegram = { state: 'error', host: '127.0.0.1:8787', error: 'HTTP 401', extra: 'dropped' }
+  expect(asWakeStatus({ state: 'running', at: NOW, telegram })).toEqual({
+    state: 'running',
+    at: NOW,
+    telegram: { state: 'error', host: '127.0.0.1:8787', error: 'HTTP 401' },
+  })
+  expect(asTelegramStatus({ state: 'polling', host: 'box:1', error: 5 })).toEqual({ state: 'polling', host: 'box:1' })
+  expect(asTelegramStatus({ state: 'off' })).toEqual({ state: 'off' })
+  for (const not of [null, 'polling', [], {}, { state: 'on' }, { host: 'box:1' }]) {
+    expect(asTelegramStatus(not)).toBeNull()
+    expect(asWakeStatus({ state: 'running', at: NOW, telegram: not })).toEqual({ state: 'running', at: NOW })
+  }
 })

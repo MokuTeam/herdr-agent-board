@@ -3,12 +3,18 @@
 // profile), the sessions seen every 15 s, and the reaper every 60 s while it is on. config.json's
 // kill switch is read before anything: wake off, or a config.json that does not parse, ends it
 // with 0 and no herdr call. The settings are followed live (liveConfig): turned off, it starts no
-// other sleep, keeps its port while the wakes and sleeps under way end, then ends with 0; the
-// reaper's switch starts or stops its loop.
+// other sleep, keeps its port while the wakes, sleeps and deliveries under way end, then ends with
+// 0; the reaper's switch starts or stops its loop, and Telegram's (Auto, with tg-mcp's url and token
+// found: services/wake/telegram.ts) its poll. Telegram's state goes into /status and into the
+// status file, whose other fields are kept.
 //
-//   bun src/entrypoints/wake.ts              the process
-//   bun src/entrypoints/wake.ts --reap-dry   the reaper's verdict for every Claude pane, one line each
-//                                            (the session file only read, never written)
+//   bun src/entrypoints/wake.ts                          the process
+//   bun src/entrypoints/wake.ts --reap-dry               the reaper's verdict for every Claude pane,
+//                                                        one line each
+//   bun src/entrypoints/wake.ts --deliver <key> <text>   one message routed by hand as the Telegram
+//                                                        router would, tg-mcp not asked; prints the
+//                                                        result, exits 0 once it is typed in
+// Both only read the session file, never write it: the wake process is its one writer.
 //
 // API: GET /status, GET /sleeping, GET /awake, POST /wake { target }, POST /sleep { target }; target
 // is a session name, a pane id or a session id. GET /alive answers { pid } without asking herdr (the
@@ -20,7 +26,7 @@
 // to one process: held by a wake, this one ends with 0 quietly; by another program, the status
 // file says portTaken and the exit is 76.
 import { existsSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
 import { configFile, liveConfig, loadConfig, readConfigFile } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
@@ -30,17 +36,22 @@ import { wakeAnswers } from '../adapters/wake-api.ts'
 import { readWakeStatus, wakeLog, wakeSessionsFile, writeWakeStatus } from '../adapters/wake-files.ts'
 import { cliWakeHerdr } from '../adapters/wake-herdr.ts'
 import { scheduledJobs } from '../adapters/wake-transcripts.ts'
-import { telegramTarget, type WakeConfig, wakeConfig, wakeSwitch } from '../core/wake/config.ts'
+import { type TelegramTarget, telegramTarget, type WakeConfig, wakeConfig, wakeSwitch } from '../core/wake/config.ts'
+import type { RouteItem } from '../core/wake/route.ts'
+import type { TelegramStatus } from '../core/wake/status.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { createWakeEngine, type WakeEngine } from '../services/wake/engine.ts'
 import { PORT_TAKEN_EXIT, RESTART_EXIT } from '../services/wake/supervisor.ts'
+import { createTelegram, type Telegram } from '../services/wake/telegram.ts'
 
 const reapDry = process.argv[2] === '--reap-dry'
+/** --deliver's key and words. */
+const deliverArgs = process.argv[2] === '--deliver' ? process.argv.slice(3) : null
 
 // The kill switch, before anything else: off, wake asks herdr nothing.
 if (!wakeSwitch({ exists: existsSync(configFile()), raw: readConfigFile() })) {
-  if (reapDry) console.error('wake is off in config.json')
-  process.exit(0)
+  if (reapDry || deliverArgs) console.error('wake is off in config.json')
+  process.exit(deliverArgs ? 1 : 0)
 }
 
 const SEEN_EVERY_MS = 15_000
@@ -55,6 +66,8 @@ const WAKE_GRACE_MS = 30_000
 const ANSWERS_OUT_MS = 5000
 /** Its port taken: how long what holds it has to answer as a wake. */
 const PORT_ASK_MS = 5000
+/** This computer's name, as sessions put it before their pane id in X-Herdr-Pane (the old router's). */
+const MACHINE = process.env.COMPUTERNAME || hostname()
 const JSON_HEADERS = { 'content-type': 'application/json' }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -117,10 +130,11 @@ function every(ms: number, name: string, fn: () => Promise<void>): Loop {
 let server: ReturnType<typeof Bun.serve> | undefined
 let seen: Loop | null = null
 let reaper: Loop | null = null
+let telegram: Telegram | null = null
 /** Set once the process is on its way out: the code it ends with, and what new sleeps and wakes are told. */
 let leaving: { code: number; why: string } | null = null
 
-const cfg = reapDry ? loadConfig() : liveConfig(followSettings)
+const cfg = reapDry || deliverArgs ? loadConfig() : liveConfig(followSettings)
 /** Wake's settings as config.json has them now. */
 const settings = (): WakeConfig => wakeConfig(cfg.wake)
 const deps = defaultDeps(cfg, log)
@@ -137,8 +151,8 @@ try {
     boardOnPath: () => boardOnPath(),
     scheduled: path => scheduledJobs(path),
     log,
-    // --reap-dry only looks: the session file is peeked at, never set aside nor written.
-    readOnly: reapDry,
+    // --reap-dry and --deliver: the session file is peeked at, never set aside nor written.
+    readOnly: reapDry || deliverArgs !== null,
   })
 } catch (err) {
   // The session file could not be read, nor set aside: started with none, the next save would lose it.
@@ -149,6 +163,49 @@ try {
 /** The reaper's loop: every 60 s, a round that puts the sessions due to sleep. */
 const reaperLoop = (): Loop => every(roundMs() ?? REAP_EVERY_MS, 'reaper', () => engine.reapRound())
 
+/** tg-mcp's url and token while Telegram is Auto (~/.claude.json read only then) and wake not on its way out. */
+function telegramNow(): TelegramTarget | null {
+  const s = settings()
+  return !leaving && s.telegram === 'auto' ? telegramTarget(s, claudeJson()) : null
+}
+
+/** The Telegram router over the engine: `target` gives tg-mcp's url and token, `onState` hears its state. */
+const telegramRouter = (target: () => TelegramTarget | null, onState?: (s: TelegramStatus) => void): Telegram =>
+  createTelegram({
+    engine,
+    herdr: cliWakeHerdr,
+    target,
+    machine: MACHINE,
+    pollTimeoutSec: () => settings().pollTimeoutSec,
+    log,
+    ...(onState && { onState }),
+  })
+
+/** Telegram's poll on while Telegram is on and tg-mcp's url and token are found, off otherwise. */
+function followTelegram(): void {
+  if (!telegram) return
+  if (telegramNow()) telegram.start()
+  else telegram.stop()
+}
+
+/** Whether the file already says `b`; a file without Telegram's state says off. */
+const sameTelegram = (a: TelegramStatus | undefined, b: TelegramStatus): boolean =>
+  (a?.state ?? 'off') === b.state && a?.host === b.host && a?.error === b.error
+
+/**
+ * Telegram's state into wake's status file, its other fields as they are (its time too: the board
+ * reads since when wake runs from it); not written when the file says so already, so with Telegram
+ * off the file is as it was. No file, no write: nothing outside this process wrote one.
+ */
+function telegramToFile(state: TelegramStatus): void {
+  try {
+    const now = readWakeStatus()
+    if (now && !sameTelegram(now.telegram, state)) writeWakeStatus({ ...now, telegram: state })
+  } catch (err) {
+    wakeLog(`could not write wake's status: ${messageOf(err)}`)
+  }
+}
+
 /** config.json changed: turned off, the process ends with 0 (leave); the reaper's loop follows its switch. */
 function followSettings(): void {
   if (leaving?.code === 0) return
@@ -158,6 +215,7 @@ function followSettings(): void {
     return
   }
   if (leaving) return
+  followTelegram()
   if (s.reaper.enabled && !reaper) {
     reaper = reaperLoop()
     log(reaperSaid(s))
@@ -181,6 +239,7 @@ function leave(code: number, why: string, said: string): void {
   seen?.stop()
   reaper?.stop()
   reaper = null
+  telegram?.stop()
   void drainAndExit()
 }
 
@@ -290,6 +349,25 @@ if (reapDry) {
   process.exit(0)
 }
 
+if (deliverArgs) {
+  const [key, ...words] = deliverArgs
+  if (!key) {
+    console.error('usage: bun src/entrypoints/wake.ts --deliver <key> <text>')
+    process.exit(1)
+  }
+  const item: RouteItem = {
+    id: 0,
+    key,
+    topic: key,
+    text: words.join(' '),
+    meta: { message_id: 'test' },
+    queued_at: new Date().toISOString(),
+  }
+  const r = await telegramRouter(() => null).route([item])
+  console.log(JSON.stringify(r))
+  process.exit('ok' in r ? 0 : 1)
+}
+
 const start = settings()
 // No idle timeout: a wake can take its wakeTimeoutSec and more. No port reuse: the port keeps wake
 // to one process. Not development: a throw must never serve Bun's error page.
@@ -307,9 +385,17 @@ try {
   log(`local API on 127.0.0.1:${start.port}: ${messageOf(err)}`)
   process.exit(1)
 }
-process.send?.({ up: start.port })
 log(`wake up: ${telegramSaid(start)}, ${reaperSaid(start)}, state ${stateDir()}, API http://127.0.0.1:${start.port}`)
-seen = every(roundMs() ?? SEEN_EVERY_MS, 'sessions seen', () => engine.remember())
+// Telegram's state in the status file before the supervisor hears wake is up (it writes the file then).
+telegram = telegramRouter(telegramNow, telegramToFile)
+followTelegram()
+telegramToFile(engine.telegram.status)
+process.send?.({ up: start.port })
+// Each round also follows tg-mcp's url and token in ~/.claude.json while Telegram is on.
+seen = every(roundMs() ?? SEEN_EVERY_MS, 'sessions seen', async () => {
+  followTelegram()
+  await engine.remember()
+})
 if (start.reaper.enabled) reaper = reaperLoop()
 // A code change (the supervisor, over IPC): no new sleep nor wake, and 75 once those under way are
 // done; the supervisor starts it again at once. Turned off meanwhile, it ends with 0 all the same.

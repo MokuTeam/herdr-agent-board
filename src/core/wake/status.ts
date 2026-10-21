@@ -3,8 +3,23 @@
 // stopped), as do wake's start (held, failed, stopped, starting) and the wake process when its
 // port is another program's (portTaken). `pane` and `pid` are wake's pane and its supervisor's
 // process, as board.json records the board's: a pane whose process is gone is a restored bare shell.
+// The wake process also writes its Telegram router's state there (`telegram`), which every other
+// writer keeps as it is.
 
 export type WakeStatusState = 'starting' | 'running' | 'crashed' | 'stopped' | 'held' | 'portTaken' | 'failed'
+
+/**
+ * The Telegram router's state, in wake's /status and its status file: off (Telegram off, no tg-mcp
+ * url and token found, or wake on its way out), polling tg-mcp at `host`, or its last poll failed,
+ * with why. Never the token.
+ */
+export interface TelegramStatus {
+  state: 'off' | 'polling' | 'error'
+  /** tg-mcp's host and port, while on. */
+  host?: string
+  /** Why the last poll failed, in state error. */
+  error?: string
+}
 
 export interface WakeStatusFile {
   state: WakeStatusState
@@ -20,6 +35,8 @@ export interface WakeStatusFile {
   crashes?: number[]
   /** The port the wake process listens on, or the one another program holds. */
   port?: number
+  /** The Telegram router's state, as the wake process last wrote it (stale once that process is gone). */
+  telegram?: TelegramStatus
 }
 
 const STATES: readonly string[] = ['starting', 'running', 'crashed', 'stopped', 'held', 'portTaken', 'failed']
@@ -29,12 +46,27 @@ const record = (v: unknown): Record<string, unknown> | null =>
 const isState = (v: unknown): v is WakeStatusState => typeof v === 'string' && STATES.includes(v)
 const isTime = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 const isId = (v: unknown): v is number => Number.isInteger(v) && Number(v) > 0
+const TELEGRAM_STATES: readonly string[] = ['off', 'polling', 'error']
+const isTelegramState = (v: unknown): v is TelegramStatus['state'] =>
+  typeof v === 'string' && TELEGRAM_STATES.includes(v)
+
+/** The Telegram router's state as read: a known state, `host` and `error` only when strings; null otherwise. */
+export function asTelegramStatus(value: unknown): TelegramStatus | null {
+  const v = record(value)
+  if (!v || !isTelegramState(v.state)) return null
+  return {
+    state: v.state,
+    ...(typeof v.host === 'string' && { host: v.host }),
+    ...(typeof v.error === 'string' && { error: v.error }),
+  }
+}
 
 /** The file's content as the board reads it: a state and a time, the other fields only when of their type; null otherwise. */
 export function asWakeStatus(value: unknown): WakeStatusFile | null {
   const v = record(value)
   if (!v || !isState(v.state) || !isTime(v.at)) return null
   const crashes = Array.isArray(v.crashes) ? v.crashes.filter(isTime) : null
+  const telegram = asTelegramStatus(v.telegram)
   return {
     state: v.state,
     at: v.at,
@@ -43,6 +75,7 @@ export function asWakeStatus(value: unknown): WakeStatusFile | null {
     ...(typeof v.error === 'string' && { error: v.error }),
     ...(crashes && { crashes }),
     ...(isId(v.port) && Number(v.port) <= 65535 && { port: v.port }),
+    ...(telegram && { telegram }),
   }
 }
 

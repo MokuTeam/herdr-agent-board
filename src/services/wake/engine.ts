@@ -36,6 +36,7 @@ import {
   type WakeEntry,
   type WakeSessions,
 } from '../../core/wake/sessions.ts'
+import type { TelegramStatus } from '../../core/wake/status.ts'
 import {
   PROFILE_NOT_PLAIN,
   putToSleep,
@@ -62,7 +63,10 @@ export interface WakeEngineDeps {
   now?(): number
   platform?: string
   sleep?(ms: number): Promise<void>
-  /** Only looks (--reap-dry): the session file peeked at, never set aside nor written. */
+  /**
+   * Not the wake process (--reap-dry, --deliver): the session file peeked at, never set aside nor
+   * written, so the wake process stays its one writer.
+   */
   readOnly?: boolean
 }
 
@@ -76,6 +80,23 @@ export interface StatusAnswer {
   reaper: ReaperConfig
   sleeping: SleepingAnswer[]
   sessions: WakeSessions
+  /** The Telegram router's state: the one field more than the old router's /status. */
+  telegram: TelegramStatus
+}
+
+/** What the Telegram router picks a pane from: herdr's snapshot just taken, and the Claude sessions last seen in each pane. */
+export interface DeliveryLook {
+  snap: HerdrSnapshot
+  sessions: WakeSessions
+}
+
+/** The Telegram router's state (Task 6.1): written by the router, answered by /status. */
+export interface TelegramNow {
+  /** When tg-mcp last answered a poll (ISO), as the old router's /status says. */
+  lastPoll: string | null
+  /** Why the last poll failed, while it fails. */
+  lastError: string | null
+  status: TelegramStatus
 }
 
 export interface WakeEngine {
@@ -94,8 +115,15 @@ export interface WakeEngine {
   busy(): number
   /** For the Telegram router (Task 6.1): the pane's known session woken in it. */
   wakePane(pane: string): Promise<WakeOutcome>
+  /** For the Telegram router (Task 6.1): a look at herdr that keeps who runs where, as remember does, and what it saw. */
+  seen(): Promise<DeliveryLook>
+  /**
+   * A Telegram delivery (Task 6.1, and --deliver): `fn` counted under way (busy) until it ends, so a
+   * code change or wake turned off waits for it, its acks included.
+   */
+  deliver<T>(fn: () => Promise<T>): Promise<T>
   /** Written by the Telegram router (Task 6.1). */
-  telegram: { lastPoll: string | null; lastError: string | null }
+  telegram: TelegramNow
 }
 
 /** How long a woken session has to show in a registry before wake answers anyway. */
@@ -108,7 +136,7 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 
 /** What one look at herdr and the registries saw. */
 interface Look {
-  snap: SeenSnapshot
+  snap: HerdrSnapshot & SeenSnapshot
   /** Running sessions by id, each with the home (profile folder) whose registry has it. */
   hits: Map<string, LiveHit>
   set: ProfileSet
@@ -119,7 +147,7 @@ interface Look {
  * session is not a Claude session id (a `pane-<id>` key) shows none: wake neither records nor
  * reaps it.
  */
-function seenSnapshot(snap: HerdrSnapshot, takenAt: number): SeenSnapshot {
+function seenSnapshot(snap: HerdrSnapshot, takenAt: number): HerdrSnapshot & SeenSnapshot {
   const panes = snap.panes.map(p => {
     const id = p.agent_session?.value
     return p.agent === 'claude' && id && !SESSION_ID.test(id) ? { ...p, agent_session: null } : p
@@ -166,7 +194,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
   const platform = deps.platform ?? process.platform
   const timing: Timing = { sleep, now, log: text => deps.log(text) }
   const started = new Date(now()).toISOString()
-  const telegram: WakeEngine['telegram'] = { lastPoll: null, lastError: null }
+  const telegram: TelegramNow = { lastPoll: null, lastError: null, status: { state: 'off' } }
   /** Panes between /exit and the shell's prompt. */
   const going = new Set<string>()
   let underWay = 0
@@ -217,7 +245,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
   const liveIn = (set: ProfileSet): Map<string, LiveHit> =>
     deps.homes.liveSessions([set.inheritedDir, ...set.list.map(p => p.dir)])
 
-  async function snapshotNow(): Promise<SeenSnapshot> {
+  async function snapshotNow(): Promise<HerdrSnapshot & SeenSnapshot> {
     const takenAt = now()
     return seenSnapshot(await deps.herdr.snapshot(), takenAt)
   }
@@ -253,14 +281,17 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     return seen
   }
 
+  /** Wake's entries whose session is a Claude session id (never a `pane-<id>` key). */
+  const claudeSessions = (): WakeSessions =>
+    Object.fromEntries(Object.entries(sessions).filter(([, s]) => SESSION_ID.test(s.session)))
+
   /**
    * A session of wake's in a pane herdr still has, by name, pane or session id: a Claude session id
    * (never a `pane-<id>` key), in a pane at a shell or running Claude (never another agent's).
    */
   function find(target: unknown, snap: SeenSnapshot): Found | undefined {
     const panes = snap.panes.filter(p => !p.agent || p.agent === 'claude')
-    const claude = Object.fromEntries(Object.entries(sessions).filter(([, s]) => SESSION_ID.test(s.session)))
-    return findSession(target, { ...snap, panes }, claude)
+    return findSession(target, { ...snap, panes }, claudeSessions())
   }
 
   const isDefault = (dir: string): boolean => sameDir(dir, defaultProfileDir(homedir(), platform))
@@ -432,6 +463,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
         reaper: deps.settings().reaper,
         sleeping: list,
         sessions,
+        telegram: telegram.status,
       }
     },
 
@@ -496,5 +528,12 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
           return { ok: false, why: 'line', error: `no Claude session is known in ${pane}` }
         return wakeIn(pane, entry, deps.profiles())
       }),
+
+    async seen() {
+      const { snap } = await look()
+      return { snap, sessions: claudeSessions() }
+    },
+
+    deliver: fn => during(fn),
   }
 }

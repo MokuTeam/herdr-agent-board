@@ -3,7 +3,7 @@
 // answers, plus each session's profile) on 127.0.0.1 only, the kill switch read before anything,
 // the settings followed live, and nothing done by itself while the reaper and Telegram are off.
 import { expect, setDefaultTimeout, test } from 'bun:test'
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { networkInterfaces } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
@@ -117,10 +117,21 @@ test('the API answers today’s paths, plus each session’s profile', async () 
   const body = JSON.parse(text)
   // Pretty-printed with a one-space indent, as the old router's.
   expect(text).toBe(JSON.stringify(body, null, 1))
-  expect(Object.keys(body)).toEqual(['pid', 'started', 'lastPoll', 'lastError', 'reaper', 'sleeping', 'sessions'])
+  // The old router's fields in its order, then Telegram's state, the one field more.
+  expect(Object.keys(body)).toEqual([
+    'pid',
+    'started',
+    'lastPoll',
+    'lastError',
+    'reaper',
+    'sleeping',
+    'sessions',
+    'telegram',
+  ])
   expect(body.pid).toBe(wake.proc.pid)
   expect(body.reaper).toEqual({ enabled: false, idleMinutes: 60, exclude: [], maxPerRound: 3 })
   expect([body.lastPoll, body.lastError]).toEqual([null, null])
+  expect(body.telegram).toEqual({ state: 'off' })
 
   const sleeper = {
     name: 'Ledger',
@@ -220,6 +231,10 @@ test('on by default doing nothing by itself: idle sessions past idleMinutes and 
         mcpServers: { telegram: { url: `${tg.url.origin}/mcp`, headers: { Authorization: 'Bearer secret' } } },
       }),
     )
+    // Wake's status file, as its supervisor wrote it: Telegram off leaves it as it is.
+    mkdirSync(stateOf(box), { recursive: true })
+    const status = JSON.stringify({ state: 'running', at: Date.now(), pane: 'w9:p1', pid: 77 })
+    writeFileSync(join(stateOf(box), 'wake-status.json'), status)
     const port = await unusedPort()
     await startWakeProcess(box, {
       port,
@@ -227,6 +242,7 @@ test('on by default doing nothing by itself: idle sessions past idleMinutes and 
       env: { BOARD_WAKE_ROUND_MS: '50' },
     })
     await Bun.sleep(1000)
+    expect(readFileSync(join(stateOf(box), 'wake-status.json'), 'utf8')).toBe(status)
     const calls = box.calls().map(c => c.slice(0, 2).join(' '))
     // Many rounds of looking…
     expect(calls.filter(c => c === 'api snapshot').length).toBeGreaterThanOrEqual(3)
@@ -237,6 +253,98 @@ test('on by default doing nothing by itself: idle sessions past idleMinutes and 
   } finally {
     await tg.stop(true)
   }
+})
+
+/** A stub tg-mcp: /router/wait answers no items after 200 ms, each request's Authorization recorded. */
+function tgMcp(): { url: string; host: string; waits: (string | null)[]; stop(): Promise<void> } {
+  const waits: (string | null)[] = []
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: async req => {
+      if (new URL(req.url).pathname !== '/router/wait') return new Response(null, { status: 404 })
+      waits.push(req.headers.get('authorization'))
+      await Bun.sleep(200)
+      return Response.json({ items: [] })
+    },
+  })
+  return { url: server.url.origin, host: server.url.host, waits, stop: () => server.stop(true) }
+}
+
+const TG_TOKEN = 'Bearer tg-secret-5d1e'
+/** Resolves once `fn` gives true (5 s at most). */
+async function untilAnswer(fn: () => Promise<boolean>): Promise<void> {
+  for (const deadline = Date.now() + 5000; !(await fn()); await Bun.sleep(25))
+    if (Date.now() > deadline) throw new Error('Timed out waiting for wake')
+}
+/** The JSON on the last line of what `--deliver` printed (its log lines come first). */
+const lastJson = (stdout: string): unknown => JSON.parse(stdout.trimEnd().split('\n').at(-1) ?? '')
+const statusFile = (box: Sandbox): string => join(stateOf(box), 'wake-status.json')
+
+test('Telegram on: tg-mcp polled with its token, its state in /status and in the status file (the file’s other fields kept); switched off live, the poll stops', async () => {
+  const box = await wakeSandbox()
+  idleAndAsleep(box)
+  const tg = tgMcp()
+  try {
+    writeFileSync(
+      join(home(box), '.claude.json'),
+      JSON.stringify({ mcpServers: { telegram: { url: `${tg.url}/mcp`, headers: { Authorization: TG_TOKEN } } } }),
+    )
+    // As the supervisor wrote it, with a field of a newer board's.
+    const at = Date.now() - 5000
+    mkdirSync(stateOf(box), { recursive: true })
+    writeFileSync(statusFile(box), JSON.stringify({ state: 'running', at, pane: 'w9:p1', pid: 77, newer: 'kept' }))
+    const port = await unusedPort()
+    const wake = await startWakeProcess(box, { port, wake: { telegram: 'auto' } })
+    await until(() => tg.waits.length >= 1)
+    expect(tg.waits[0]).toBe(TG_TOKEN)
+    expect((await (await fetch(`${wake.url}/status`)).json()).telegram).toEqual({ state: 'polling', host: tg.host })
+    expect(JSON.parse(readFileSync(statusFile(box), 'utf8'))).toEqual({
+      state: 'running',
+      at,
+      pane: 'w9:p1',
+      pid: 77,
+      newer: 'kept',
+      telegram: { state: 'polling', host: tg.host },
+    })
+
+    writeBoardConfig(box, wakeOnConfig(port, { wake: { telegram: 'off' } }))
+    await untilAnswer(async () => (await (await fetch(`${wake.url}/status`)).json()).telegram.state === 'off')
+    const polls = tg.waits.length
+    await Bun.sleep(800)
+    expect(tg.waits.length).toBe(polls)
+    expect(JSON.parse(readFileSync(statusFile(box), 'utf8')).telegram).toEqual({ state: 'off' })
+    expect(wake.proc.exitCode).toBeNull()
+    expect(wakeLogText(box)).toContain(` Telegram on: polling tg-mcp at ${tg.host}\n`)
+    expect(wakeLogText(box)).toContain(' Telegram off\n')
+    expect(wakeLogText(box)).not.toContain('tg-secret')
+  } finally {
+    await tg.stop()
+  }
+})
+
+test('--deliver <key> <text> routes one message by hand: typed into the running session, tg-mcp never asked, the session file not written', async () => {
+  const box = await wakeSandbox()
+  herdrShows(box, [claudePane('w1:p1', SID)], {
+    'agent get': { result: { agent: { pane_id: 'w1:p1', agent: 'claude', agent_status: 'idle' } } },
+    'agent read': { text: `● done\n\n${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n` },
+    'agent prompt': { result: {} },
+  })
+  writeBoardConfig(box, wakeOnConfig(await unusedPort()))
+  const { proc, output } = spawnWake(box, ['--deliver', PROJECT, 'hello', 'there'])
+  expect(await exitWithin(proc, 10_000)).toBe(0)
+  expect(lastJson(output().stdout)).toEqual({ ok: true })
+  expect(box.calls()).toContainEqual(['agent', 'prompt', 'w1:p1', '[telegram message_id=test]\nhello there'])
+  const files = existsSync(stateOf(box)) ? readdirSync(stateOf(box)) : []
+  expect(files.filter(f => f.startsWith('wake-sessions'))).toEqual([])
+
+  // No pane for the key: the note, and 1.
+  const missed = spawnWake(box, ['--deliver', 'topic:Nowhere', 'hi'])
+  expect(await exitWithin(missed.proc, 10_000)).toBe(1)
+  expect(lastJson(missed.output().stdout)).toEqual({
+    skip: true,
+    note: '🤷 Не нашёл в herdr сессию для «topic:Nowhere». Сообщение ждёт в очереди: агент получит его, когда подключится.',
+  })
 })
 
 /** The first IPv4 address of this machine that is not a loopback one. */
