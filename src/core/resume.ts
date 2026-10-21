@@ -169,3 +169,29 @@ export function resumePlan(o: ResumeInput): { argv: string[]; env: Env; dir: str
   else env.CLAUDE_CONFIG_DIR = dir
   return { argv, env, dir }
 }
+
+/**
+ * The folder Claude keeps a project's transcripts in under projects/: the cwd without trailing
+ * separators, every other character than A-Z a-z 0-9 a dash.
+ */
+export const projectFolderName = (cwd: string): string => cwd.replace(/[\\/]+$/, '').replace(/[^a-zA-Z0-9]/g, '-')
+
+/** Where `board resume` looks for the project folder to resume the session in. */
+export interface ResumeDirFacts {
+  /** The pane's current folder: herdr restores it. */
+  cwd: string
+  /** The session's transcript is under the profile's projects/ folder for `cwd`. */
+  transcriptHere: boolean
+  /** The cwd recorded in the session's transcript (`<id>.jsonl`), if one was found. */
+  recorded: string | null
+  recordedExists: boolean
+}
+
+/**
+ * Call 29: null stays in `cwd` (its transcript is there, or nothing better is found); else the
+ * folder the transcript recorded, when it still exists and is another folder than `cwd`.
+ */
+export function resumeDir(f: ResumeDirFacts): string | null {
+  if (f.transcriptHere) return null
+  return f.recorded && f.recordedExists && !sameDir(f.recorded, f.cwd) ? f.recorded : null
+}

@@ -3,9 +3,11 @@ import type { Profile } from '../../src/core/profiles.ts'
 import {
   herdrWakeResumes,
   parseResume,
+  projectFolderName,
   type ResumeFacts,
   reportArgs,
   resumeCommand,
+  resumeDir,
   resumePlan,
 } from '../../src/core/resume.ts'
 
@@ -231,4 +233,26 @@ test('board resume on Linux and macOS', () => {
     env: { HOME: '/home/me', CLAUDE_CONFIG_DIR: '/home/me/.claude-work' },
     dir: '/home/me/.claude-work',
   })
+})
+
+test('board resume’s folder: the pane’s when the transcript is there, else the one the transcript recorded, else as today', () => {
+  expect(projectFolderName('C:\\Work\\Проект x 50%\\')).toBe('C--Work--------x-50-')
+  expect(
+    resumeDir({ cwd: 'C:\\Work\\Acme', transcriptHere: true, recorded: 'C:\\Elsewhere', recordedExists: true }),
+  ).toBeNull()
+  expect(
+    resumeDir({
+      cwd: 'C:\\Users\\me',
+      transcriptHere: false,
+      recorded: 'C:\\Work\\Проект x 50%',
+      recordedExists: true,
+    }),
+  ).toBe('C:\\Work\\Проект x 50%')
+  expect(
+    resumeDir({ cwd: 'C:\\Users\\me', transcriptHere: false, recorded: 'C:\\Gone', recordedExists: false }),
+  ).toBeNull()
+  expect(resumeDir({ cwd: 'C:\\Users\\me', transcriptHere: false, recorded: null, recordedExists: false })).toBeNull()
+  expect(
+    resumeDir({ cwd: 'c:/work/acme/', transcriptHere: false, recorded: 'C:\\Work\\Acme', recordedExists: true }),
+  ).toBeNull()
 })
