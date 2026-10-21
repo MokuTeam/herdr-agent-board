@@ -24,7 +24,7 @@ import {
 } from '../core/setup.ts'
 import type { Config } from '../core/types.ts'
 import { WAKE_SHIPPED, wakeConfig } from '../core/wake/config.ts'
-import { isWakeStatus, wakeState } from '../core/wake/status.ts'
+import { isBoardWakeStatus, wakeState } from '../core/wake/status.ts'
 import { skillIn } from './agents-skill.ts'
 import { herdrHookOf, readSettings } from './hook-settings.ts'
 import { ROOT } from './paths.ts'
@@ -254,7 +254,7 @@ export function mokupilotCommand(
 /**
  * The board's own wake for `board doctor` (#119), once it ships or while config.json turns it on:
  * the kill switch, the status file, whether wake answers GET /status on its port (not asked while
- * off or held), the sessions asleep (its answer's, else its session file's, only read); null: the
+ * off or held; the separate plugin's router left there is no answer of wake's), the sessions asleep (its answer's, else its session file's, only read); null: the
  * line is herdr-wake's at wakeUrl, as before (wake off before it ships is today's setup).
  */
 async function wakeFacts(
@@ -266,7 +266,7 @@ async function wakeFacts(
   const status = s.enabled ? readWakeStatus() : null
   const answer =
     s.enabled && status?.state !== 'held' ? await probe(`http://127.0.0.1:${s.port}/status`, probeMs, true) : null
-  const body = answer?.ok && isWakeStatus(answer.body) ? (answer.body as Record<string, unknown>) : null
+  const body = answer?.ok && isBoardWakeStatus(answer.body) ? (answer.body as Record<string, unknown>) : null
   const state = wakeState({ on: s.enabled, status, answers: !!body, now: Date.now() })
   const sleeping = Array.isArray(body?.sleeping) ? body.sleeping.length : null
   const wakeUrl = typeof cfg?.wakeUrl === 'string' ? cfg.wakeUrl.trim().replace(/\/+$/, '') : ''

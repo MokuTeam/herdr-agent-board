@@ -1,16 +1,21 @@
 // The board's side of the new wake (#119): the sleeping sessions without ever waiting on it (call
 // 10, safeguard 14), whether it answers now, and, with wake off, the sleepers its session file still
 // has (call 28). The session file is only read here: the wake process is its one writer. Wake and
-// sleep go to wake's API as they go to herdr-wake's (integrations/herdr-wake.ts).
+// sleep go to wake's API as they go to herdr-wake's (integrations/herdr-wake.ts), never to the
+// separate plugin's router should it still hold the port.
 import { peekWakeSessions } from '../adapters/wake-files.ts'
-import { isWakeStatus } from '../core/wake/status.ts'
+import { t } from '../core/lang.ts'
+import { isBoardWakeStatus } from '../core/wake/status.ts'
 import { createHerdrWake, type SleepingSession, type SleepProvider } from './herdr-wake.ts'
 
-/** down: nothing listens (ECONNREFUSED), wake is off or another program answers; slow: it took the connection but did not answer in time. */
+/**
+ * down: nothing listens (ECONNREFUSED), wake is off, or another program answers (the separate
+ * herdr-wake plugin's router too); slow: it took the connection but did not answer in time.
+ */
 export type Reach = 'up' | 'down' | 'slow'
 
 export interface BoardWake extends SleepProvider {
-  /** Whether wake answers now (GET /status, 2 s). */
+  /** Whether the board's wake answers now (GET /status, 2 s); the separate plugin's router left on its port does not count. */
   reach(): Promise<Reach>
   readonly mode: 'new'
 }
@@ -21,6 +26,14 @@ const ASK_EVERY_MS = 5000
 const ANSWER_MS = 2000
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+/** The port of wake's url, for what the board says. */
+const portOf = (url: string): string => {
+  try {
+    return new URL(url).port
+  } catch {
+    return url
+  }
+}
 /** A fetch that gave up waiting (AbortSignal.timeout), as opposed to one that could not connect. */
 const isTimeout = (err: unknown): boolean =>
   typeof err === 'object' && err !== null && 'name' in err && (err.name === 'TimeoutError' || err.name === 'AbortError')
@@ -78,6 +91,15 @@ export function createBoardWake(o: {
   }
   // The answers' own wake and sleep (POST /wake, /sleep { target: pane }), as herdr-wake's.
   const api = createHerdrWake(o.url, fetchFn, now)
+  /** Whether the board's wake answers GET /status; the separate plugin's router left on the port is `down`. */
+  async function reach(): Promise<Reach> {
+    try {
+      const res = await fetchFn(`${o.url}/status`, { signal: AbortSignal.timeout(ANSWER_MS) })
+      return res.ok && isBoardWakeStatus(await res.json()) ? 'up' : 'down'
+    } catch (err) {
+      return isTimeout(err) ? 'slow' : 'down'
+    }
+  }
 
   return {
     mode: 'new',
@@ -89,15 +111,13 @@ export function createBoardWake(o: {
       askedAt = Number.NEGATIVE_INFINITY
     },
     wake: item => api.wake(item),
-    sleep: item => api.sleep(item),
-    async reach() {
-      try {
-        const res = await fetchFn(`${o.url}/status`, { signal: AbortSignal.timeout(ANSWER_MS) })
-        return res.ok && isWakeStatus(await res.json()) ? 'up' : 'down'
-      } catch (err) {
-        return isTimeout(err) ? 'slow' : 'down'
-      }
+    // Only to the board's wake: the separate plugin's router, left on the port, would put it to
+    // sleep in its own list, to be woken in the pane's profile.
+    async sleep(item) {
+      if ((await reach()) !== 'up') return { ok: false, error: t('err.wakeNoAnswer', { port: portOf(o.url) }) }
+      return api.sleep(item)
     },
+    reach,
   }
 }
 

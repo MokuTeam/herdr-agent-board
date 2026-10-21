@@ -5,6 +5,7 @@ import { expect, onTestFinished, test } from 'bun:test'
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { Item } from '../../src/core/types.ts'
 import type { SleepingSession, SleepProvider } from '../../src/integrations/herdr-wake.ts'
 import { createBoardWake, sharedBoardWake, withFileSleepers } from '../../src/integrations/wake.ts'
 
@@ -164,8 +165,11 @@ test('reach: up, down (ECONNREFUSED), slow (timeout)', async () => {
     settleWith()
     return r
   }
-  expect(await reach(() => f.answer({ pid: 4242, started: 'x', sessions: {} }))).toBe('up')
+  expect(await reach(() => f.answer({ pid: 4242, started: 'x', sessions: {}, telegram: { state: 'off' } }))).toBe('up')
   expect(f.calls.at(-1)?.url).toBe(`${URL}/status`)
+  // The separate herdr-wake plugin's router, still on the port after it was uninstalled: no wake of
+  // the board's (its /status has no Telegram state), so the board wakes the session itself.
+  expect(await reach(() => f.answer({ pid: 4242, started: 'x', sessions: {} }))).toBe('down')
   expect(f.calls.at(-1)?.signal).toBeInstanceOf(AbortSignal)
   expect(await reach(() => f.fail(refused()))).toBe('down')
   expect(await reach(() => f.fail(new DOMException('The operation timed out.', 'TimeoutError')))).toBe('slow')
@@ -173,6 +177,26 @@ test('reach: up, down (ECONNREFUSED), slow (timeout)', async () => {
   expect(await reach(() => f.answer({ hello: 'world' }))).toBe('down')
   expect(await reach(() => f.answer({ ok: false }, 503))).toBe('down')
   expect(await reach(() => f.answer({ pid: '1', sessions: {} }))).toBe('down')
+})
+
+test('Put to sleep goes to the board’s wake only: never to the separate plugin’s router left on the port', async () => {
+  const f = fakeFetch()
+  const w = createBoardWake({ url: URL, sessionsFile: sessionsFile({}), fetch: f.fn })
+  const item = { name: 'Billing', pane: 'w1:p2', session: 's-bill' } as Item
+  // The old router answers /status: refused, nothing posted.
+  const refusedNow = w.sleep(item)
+  await settle()
+  f.answer({ pid: 4242, sessions: {} })
+  expect(await refusedNow).toEqual({ ok: false, error: 'Sleep and wake is on but does not answer on port 23456' })
+  expect(f.calls.map(c => c.url)).toEqual([`${URL}/status`])
+  // The board's wake: its /status, then the sleep.
+  const slept = w.sleep(item)
+  await settle()
+  f.answer({ pid: 4242, sessions: {}, telegram: { state: 'off' } })
+  await settle()
+  f.answer({ ok: true })
+  expect(await slept).toEqual({ ok: true })
+  expect(f.calls.map(c => c.url)).toEqual([`${URL}/status`, `${URL}/status`, `${URL}/sleep`])
 })
 
 test('one provider per url and file, so a forget() reaches the list the server and the scheduler share', () => {

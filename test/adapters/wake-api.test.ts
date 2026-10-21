@@ -1,7 +1,8 @@
 // Whether a wake answers on its port: GET /alive for the supervisor's health check (never waits on
-// herdr), and /alive then /status for the one-wake-per-machine probe (the old router has only /status).
+// herdr), /alive then /status for the one-wake-per-machine probe, and the separate plugin's old router
+// told apart by its /status, which has no Telegram state (and no /alive).
 import { afterEach, expect, test } from 'bun:test'
-import { wakeAlive, wakeAnswers } from '../../src/adapters/wake-api.ts'
+import { oldRouterAt, wakeAlive, wakeAnswers } from '../../src/adapters/wake-api.ts'
 
 const servers: ReturnType<typeof Bun.serve>[] = []
 afterEach(async () => {
@@ -54,10 +55,31 @@ test('wakeAnswers: the new wake by its /alive, never waiting on /status', async 
   expect(wake.asked).toEqual(['/alive'])
 })
 
-test('wakeAnswers: the old router by its /status after the 404 on /alive', async () => {
+test('wakeAnswers: the separate plugin’s old router is no wake of the board’s (its /status has no Telegram state)', async () => {
   const router = serve(oldRouter)
-  expect(await wakeAnswers(router.port, 1000)).toBe(true)
+  expect(await wakeAnswers(router.port, 1000)).toBe(false)
   expect(router.asked).toEqual(['/alive', '/status'])
+  // The board's wake by its /status too, when /alive is not there (a 404 from a proxy, say).
+  const status = serve(path =>
+    path === '/status'
+      ? Response.json({ pid: 4242, sessions: {}, telegram: { state: 'off' } })
+      : new Response(null, { status: 404 }),
+  )
+  expect(await wakeAnswers(status.port, 1000)).toBe(true)
+})
+
+test('oldRouterAt: the separate plugin’s router by its /status (its pid); the board’s wake, another program or none is not', async () => {
+  expect(await oldRouterAt(serve(oldRouter).port, 1000)).toBe(4242)
+  expect(await oldRouterAt(serve(newWakeWithHerdrHanging).port, 300)).toBeNull()
+  expect(await oldRouterAt(serve(foreign).port, 1000)).toBeNull()
+  const wake = serve(path =>
+    path === '/alive' ? Response.json({ pid: 7 }) : Response.json({ pid: 7, sessions: {}, telegram: { state: 'off' } }),
+  )
+  expect(await oldRouterAt(wake.port, 1000)).toBeNull()
+  const hung = serve(() => new Promise<Response>(() => {}))
+  const started = Date.now()
+  expect(await oldRouterAt(hung.port, 300)).toBeNull()
+  expect(Date.now() - started).toBeLessThan(2000)
 })
 
 test('wakeAnswers: another program, or nothing answering within the time in all, is no wake', async () => {

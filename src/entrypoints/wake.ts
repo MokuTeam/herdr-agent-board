@@ -23,8 +23,9 @@
 // rebinding), is refused with 403. Once it listens it says { up: <port> } over its IPC channel, when it has one
 // (the supervisor's, services/wake/supervisor.ts); told 'restart' there (a code change), it ends
 // with 75 once no wake or sleep is under way, answering new ones 503 meanwhile. The port keeps wake
-// to one process: held by a wake, this one ends with 0 quietly; by another program, the status
-// file says portTaken and the exit is 76.
+// to one process: held by a wake of the board's, this one ends with 0 quietly; by another program
+// (the separate herdr-wake plugin's router too, named), the status file says portTaken and the
+// exit is 76.
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
@@ -32,7 +33,7 @@ import { configFile, liveConfig, loadConfig, readConfigFile } from '../adapters/
 import { isRecord } from '../adapters/json-store.ts'
 import { stateDir } from '../adapters/paths.ts'
 import { boardOnPath } from '../adapters/resume-report.ts'
-import { wakeAnswers } from '../adapters/wake-api.ts'
+import { oldRouterAt, wakeAnswers } from '../adapters/wake-api.ts'
 import { readWakeStatus, wakeLog, wakeSessionsFile, writeWakeStatus } from '../adapters/wake-files.ts'
 import { cliWakeHerdr } from '../adapters/wake-herdr.ts'
 import { scheduledJobs } from '../adapters/wake-transcripts.ts'
@@ -310,18 +311,24 @@ async function answer(req: Request, port: number): Promise<Response> {
 }
 
 /**
- * The port is taken (one wake per machine, held by its port). By a wake (its /alive, or the old
- * router's /status, within 5 s, so a wake whose herdr is slow is still one): this one ends with 0,
- * quietly, a line in wake.log. By another program: the status says portTaken (the pane and the
- * supervisor it names kept), the error goes to stderr for the supervisor, and the exit is 76, which
- * the supervisor does not start again.
+ * The port is taken (one wake per machine, held by its port). By a wake of the board's (its /alive,
+ * within 5 s, so a wake whose herdr is slow is still one): this one ends with 0, quietly, a line in
+ * wake.log. By another program, the separate herdr-wake plugin's router included (named, with its
+ * process): the status says portTaken (the pane and the supervisor it names kept), the error goes
+ * to stderr for the supervisor, and the exit is 76, which the supervisor does not start again.
  */
 async function portTaken(port: number): Promise<never> {
   if (await wakeAnswers(port, PORT_ASK_MS)) {
     wakeLog(`another wake answers on 127.0.0.1:${port}: this one ends`)
     process.exit(0)
   }
-  const error = `Port ${port} is taken by another program`
+  // The separate herdr-wake plugin's router, uninstalled but its pane left open, is no wake of the
+  // board's: the board must not take it for one, so it is said.
+  const router = await oldRouterAt(port, PORT_ASK_MS)
+  const error =
+    router === null
+      ? `Port ${port} is taken by another program`
+      : `Port ${port} is held by the separate herdr-wake plugin’s router (process ${router})`
   try {
     const now = readWakeStatus()
     writeWakeStatus({

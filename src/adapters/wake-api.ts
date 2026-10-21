@@ -1,8 +1,10 @@
 // Whether a wake answers on its port of 127.0.0.1 (#119). GET /alive is the new wake process's own
 // answer, `{ pid }`, which never waits on herdr: the supervisor's health check asks it, so a slow
-// herdr never gets wake ended. GET /status asks herdr, and the old herdr-wake router has only that:
-// whether the port is held by a wake at all asks /alive first, then /status.
-import { isWakeStatus } from '../core/wake/status.ts'
+// herdr never gets wake ended. GET /status asks herdr. The separate herdr-wake plugin's router has
+// only /status, without the Telegram router's state the board's wake has there (isBoardWakeStatus):
+// after the plugin is uninstalled its router may still hold the port, and it is never taken for
+// the board's wake (oldRouterAt tells it apart).
+import { isBoardWakeStatus, isWakeStatus } from '../core/wake/status.ts'
 import { isRecord } from './json-store.ts'
 
 /** The JSON GET <path> answers with a 200, or null (another status, or no JSON). Throws when no answer comes. */
@@ -27,12 +29,28 @@ export async function wakeAlive(port: number, timeoutMs: number): Promise<boolea
   }
 }
 
-/** Whether a wake, the new one or the old router, answers on the port within `timeoutMs` in all: /alive, else /status. */
+/** Whether the board's wake answers on the port within `timeoutMs` in all: /alive, else its /status; never the old router. */
 export async function wakeAnswers(port: number, timeoutMs: number): Promise<boolean> {
   const signal = AbortSignal.timeout(timeoutMs)
   try {
-    return isAlive(await answerOf(port, '/alive', signal)) || isWakeStatus(await answerOf(port, '/status', signal))
+    return isAlive(await answerOf(port, '/alive', signal)) || isBoardWakeStatus(await answerOf(port, '/status', signal))
   } catch {
     return false
+  }
+}
+
+/**
+ * The separate herdr-wake plugin's router on the port, within `timeoutMs`: its pid, as its /status
+ * gives it (a wake's /status, not the board's wake's); null for the board's wake, another program,
+ * or nothing answering in time.
+ */
+export async function oldRouterAt(port: number, timeoutMs: number): Promise<number | null> {
+  try {
+    const status = await answerOf(port, '/status', AbortSignal.timeout(timeoutMs))
+    return isWakeStatus(status) && !isBoardWakeStatus(status) && isRecord(status) && typeof status.pid === 'number'
+      ? status.pid
+      : null
+  } catch {
+    return null
   }
 }

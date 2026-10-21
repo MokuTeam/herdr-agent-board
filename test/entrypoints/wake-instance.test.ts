@@ -133,3 +133,30 @@ test('under its supervisor: a port another program holds stays portTaken, and wa
     await other.stop(true)
   }
 })
+
+test('a port the separate herdr-wake plugin’s router still holds (uninstalled, its pane left open): no quiet end, status portTaken naming it, exit 76', async () => {
+  const box = await wakeSandbox()
+  emptyHerdr(box)
+  const port = await unusedPort()
+  writeBoardConfig(box, wakeOnConfig(port))
+  // The old router: /status with its pid and sessions, no Telegram state; a 404 for /alive.
+  const router = Bun.serve({
+    hostname: '127.0.0.1',
+    port,
+    fetch: req =>
+      new URL(req.url).pathname === '/status'
+        ? Response.json({ pid: 4242, started: 'x', lastPoll: null, lastError: null, sessions: {} })
+        : new Response(null, { status: 404 }),
+  })
+  const error = `Port ${port} is held by the separate herdr-wake plugin’s router (process 4242)`
+  try {
+    const wake = spawnWake(box)
+    endWithSandbox(wake.proc)
+    expect(await exitWithin(wake.proc, 15_000)).toBe(76)
+    expect(wake.output().stderr).toContain(error)
+  } finally {
+    await router.stop(true)
+  }
+  expect(statusOf(box)).toEqual({ state: 'portTaken', at: expect.any(Number), port, error })
+  expect(wakeLogText(box)).not.toContain('another wake answers')
+})
