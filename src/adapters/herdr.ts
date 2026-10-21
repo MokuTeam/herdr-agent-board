@@ -111,7 +111,8 @@ const PANE_STRINGS = [
   'terminal_id',
 ]
 
-function asPane(v: unknown): HerdrPane | null {
+/** A pane in herdr's answers as the board reads it (asSnapshot's); null without a `pane_id`. */
+export function asPane(v: unknown): HerdrPane | null {
   if (!isRecord(v) || typeof v.pane_id !== 'string') return null
   const pane: HerdrPane = stringsOnly({ ...v, pane_id: v.pane_id }, PANE_STRINGS)
   const session = pane.agent_session
