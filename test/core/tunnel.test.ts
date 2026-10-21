@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
+import { translator } from '../../src/core/i18n/translator.ts'
 import { useLanguage } from '../../src/core/lang.ts'
+import type { SetupCheck } from '../../src/core/setup.ts'
 import {
   backoffMs,
   boardPorts,
@@ -11,7 +13,9 @@ import {
   sshHint,
   sshPathArg,
   TUNNEL_SOCKET,
+  type TunnelFacts,
   type TunnelProblem,
+  tunnelChecks,
   tunnelConfig,
   tunnelPort,
   tunnelProblems,
@@ -289,5 +293,106 @@ describe('the ssh line', () => {
   })
   test('the page can import it: no node: import', () => {
     expect(readFileSync('src/core/tunnel.ts', 'utf8')).not.toMatch(/from 'node:/)
+  })
+})
+
+describe('board doctor’s checks of the tunnel', () => {
+  const en = translator('en')
+  const ru = translator('ru')
+  const SSH = 'C:\\Windows\\System32\\OpenSSH\\ssh.exe'
+  const FINE: TunnelFacts = {
+    ssh: SSH,
+    key: { ok: true },
+    problems: [],
+    ready: true,
+    status: { state: 'connected', since: 1, probe: { ok: true, at: 2, detail: '' } },
+  }
+  const levels = (checks: SetupCheck[]): string[] => checks.map(c => `${c.id}:${c.level}`)
+  const byId = (checks: SetupCheck[], id: string): SetupCheck => {
+    const found = checks.find(c => c.id === id)
+    if (!found) throw new Error(`no check ${id}`)
+    return found
+  }
+
+  test('all fine, connected, the probe through the domain reached the board: six ok', () => {
+    const checks = tunnelChecks(FINE, en)
+    expect(levels(checks)).toEqual([
+      'tunnel-ssh:ok',
+      'tunnel-key:ok',
+      'tunnel-fields:ok',
+      'tunnel-login:ok',
+      'tunnel-state:ok',
+      'tunnel-probe:ok',
+    ])
+    expect(byId(checks, 'tunnel-ssh').detail).toBe(SSH)
+  })
+  test('no ssh: an error with how to get one', () => {
+    const c = byId(tunnelChecks({ ...FINE, ssh: null }, en), 'tunnel-ssh')
+    expect(c.level).toBe('error')
+    expect(c.fix).toBe(en('tunnel.hint.noSsh'))
+  })
+  test('a key ssh refuses for its rights: ssh’s words and the hint', () => {
+    const error = "Permissions for 'C:/k' are too open.\nUNPROTECTED PRIVATE KEY FILE!"
+    const c = byId(tunnelChecks({ ...FINE, key: { ok: false, error, hint: 'keyPermissions' } }, en), 'tunnel-key')
+    expect(c.level).toBe('error')
+    expect(c.detail).toBe(error)
+    expect(c.fix).toBe(en('tunnel.hint.keyPermissions'))
+  })
+  test('settings that do not check out: each problem’s message', () => {
+    const problems: TunnelProblem[] = [
+      { field: 'host', message: en('tunnel.err.host') },
+      { field: 'socket', message: en('tunnel.err.socketShared', { folder: '/tmp' }) },
+    ]
+    const c = byId(tunnelChecks({ ...FINE, problems }, en), 'tunnel-fields')
+    expect(c.level).toBe('error')
+    expect(c.detail.split('\n')).toEqual(problems.map(p => p.message))
+  })
+  test('the login not set up: where to set it up', () => {
+    const c = byId(tunnelChecks({ ...FINE, ready: false }, en), 'tunnel-login')
+    expect(c.level).toBe('error')
+    expect(c.fix).toBe('Set up the password and the code: Settings → Remote access…')
+  })
+  test('reconnecting: a warning with ssh’s last words; no probe without one', () => {
+    const error = 'ssh: connect to host ssh.example.com port 22: Connection timed out'
+    const checks = tunnelChecks(
+      { ...FINE, status: { state: 'reconnecting', since: 1, attempt: 3, nextAt: 9, error, hint: 'network' } },
+      en,
+    )
+    expect(levels(checks).slice(4)).toEqual(['tunnel-state:warn'])
+    expect(byId(checks, 'tunnel-state').detail).toBe(error)
+    expect(byId(checks, 'tunnel-state').fix).toBe(en('tunnel.hint.network'))
+    expect(byId(tunnelChecks({ ...FINE, status: { state: 'connecting', since: 1 } }, en), 'tunnel-state').level).toBe(
+      'warn',
+    )
+  })
+  test('an error that does not heal by itself: an error with its hint', () => {
+    const error = 'boardtunnel@ssh.example.com: Permission denied (publickey).'
+    const c = byId(
+      tunnelChecks({ ...FINE, status: { state: 'error', since: 1, error, hint: 'publickey', nextAt: 9 } }, en),
+      'tunnel-state',
+    )
+    expect(c.level).toBe('error')
+    expect(c.detail).toBe(error)
+    expect(c.fix).toBe(en('tunnel.hint.publickey'))
+  })
+  test('no board answering: a warning, and nothing to say of the probe', () => {
+    const checks = tunnelChecks({ ...FINE, status: null }, en)
+    expect(levels(checks).slice(4)).toEqual(['tunnel-state:warn'])
+    expect(byId(checks, 'tunnel-state').title).toBe(en('tunnel.check.noBoard'))
+  })
+  test('a probe through the domain that failed: a warning with what came back', () => {
+    const checks = tunnelChecks(
+      { ...FINE, status: { state: 'connected', since: 1, probe: { ok: false, at: 2, detail: 'HTTP 502' } } },
+      en,
+    )
+    expect(levels(checks).slice(4)).toEqual(['tunnel-state:ok', 'tunnel-probe:warn'])
+    expect(byId(checks, 'tunnel-probe').detail).toContain('502')
+  })
+  test('the titles follow the language', () => {
+    const facts: TunnelFacts = { ...FINE, ssh: null, key: { ok: false, error: 'x', hint: null }, ready: false }
+    const a = tunnelChecks(facts, en)
+    const b = tunnelChecks(facts, ru)
+    expect(b.map(c => c.id)).toEqual(a.map(c => c.id))
+    for (const [i, c] of a.entries()) expect(b[i]?.title).not.toBe(c.title)
   })
 })

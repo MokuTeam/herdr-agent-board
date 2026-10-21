@@ -6,6 +6,8 @@
 import { t } from './lang.ts'
 import { pwaPort } from './pwa.ts'
 import { remoteConfig } from './remote.ts'
+import type { SetupCheck } from './setup.ts'
+import type { Translator } from './types.ts'
 
 /** The socket on the server by default, in a folder only the tunnel's user and Caddy reach. */
 export const TUNNEL_SOCKET = '/var/lib/boardtunnel/board.sock'
@@ -282,4 +284,78 @@ export interface TestStep {
   ok: boolean | null
   detail: string
   hint: StepHint | null
+}
+
+/** What `board doctor` finds of the tunnel on this computer (services/tunnel-facts.ts), while it is on. */
+export interface TunnelFacts {
+  ssh: string | null
+  key: { ok: true } | { ok: false; error: string; hint: TunnelHint | null }
+  problems: TunnelProblem[]
+  ready: boolean
+  /** From the running board's GET /api/access; null when no board answers. */
+  status: TunnelStatus | null
+}
+
+/**
+ * `board doctor`'s checks of the tunnel, the shape of phoneChecks: ssh found, the key there and
+ * taken, the settings, the login set up, the state the running board has it in, and its last
+ * probe through the domain.
+ */
+export function tunnelChecks(f: TunnelFacts, t: Translator): SetupCheck[] {
+  const check = (c: Partial<SetupCheck> & Pick<SetupCheck, 'id' | 'level' | 'title'>): SetupCheck => ({
+    detail: '',
+    fix: '',
+    code: '',
+    ...c,
+  })
+  const hintText = (hint: TunnelHint | null | undefined): string => (hint ? t(`tunnel.hint.${hint}`) : '')
+  const checks = [
+    f.ssh
+      ? check({ id: 'tunnel-ssh', level: 'ok', title: t('tunnel.check.ssh'), detail: f.ssh })
+      : check({ id: 'tunnel-ssh', level: 'error', title: t('tunnel.check.noSsh'), fix: hintText('noSsh') }),
+    f.key.ok
+      ? check({ id: 'tunnel-key', level: 'ok', title: t('tunnel.check.key') })
+      : check({
+          id: 'tunnel-key',
+          level: 'error',
+          title: t('tunnel.check.keyBad'),
+          detail: f.key.error,
+          fix: hintText(f.key.hint),
+        }),
+    f.problems.length
+      ? check({
+          id: 'tunnel-fields',
+          level: 'error',
+          title: t('tunnel.check.fieldsBad'),
+          detail: f.problems.map(p => p.message).join('\n'),
+        })
+      : check({ id: 'tunnel-fields', level: 'ok', title: t('tunnel.check.fields') }),
+    f.ready
+      ? check({ id: 'tunnel-login', level: 'ok', title: t('tunnel.check.login') })
+      : check({
+          id: 'tunnel-login',
+          level: 'error',
+          title: t('tunnel.check.noLogin'),
+          fix: t('tunnel.check.noLoginFix'),
+        }),
+  ]
+  const s = f.status
+  if (!s) return [...checks, check({ id: 'tunnel-state', level: 'warn', title: t('tunnel.check.noBoard') })]
+  const why = { detail: s.error ?? '', fix: hintText(s.hint) }
+  checks.push(
+    s.state === 'connected'
+      ? check({ id: 'tunnel-state', level: 'ok', title: t('tunnel.check.connected') })
+      : s.state === 'error'
+        ? check({ id: 'tunnel-state', level: 'error', title: t('tunnel.check.error'), ...why })
+        : s.state === 'off'
+          ? check({ id: 'tunnel-state', level: 'warn', title: t('tunnel.check.off'), fix: t('tunnel.check.offFix') })
+          : check({ id: 'tunnel-state', level: 'warn', title: t(`tunnel.check.${s.state}`), ...why }),
+  )
+  if (s.probe)
+    checks.push(
+      s.probe.ok
+        ? check({ id: 'tunnel-probe', level: 'ok', title: t('tunnel.check.probe') })
+        : check({ id: 'tunnel-probe', level: 'warn', title: t('tunnel.check.probeBad'), detail: s.probe.detail }),
+    )
+  return checks
 }
