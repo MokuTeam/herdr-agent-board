@@ -656,6 +656,62 @@ test('busy() counts a sleep under way', async () => {
   expect(engine.busy()).toBe(0)
 })
 
+test('wake turned off with its reaper still on: no round starts, and a round under way finishes its sleep and starts no other', async () => {
+  const panes = [claudePane('w1:p1', SID), claudePane('w1:p2', SID2)]
+  const w = world({ panes, reaper: { enabled: true, maxPerRound: 3 } })
+  for (const [i, id] of [SID, SID2].entries()) {
+    runningSession(w.claude, { id, name: `s${i + 1}`, cwd: PROJECT, n: i + 1 })
+    const pane = panes[i]
+    if (pane) exitsOnPrompt(w.io, pane, join(w.claude, 'sessions', `${i + 1}.json`))
+  }
+  let reached = () => {}
+  const atExit = new Promise<void>(resolve => {
+    reached = resolve
+  })
+  let open = () => {}
+  const opened = new Promise<void>(resolve => {
+    open = resolve
+  })
+  const engine = createWakeEngine({
+    ...w.deps,
+    herdr: {
+      ...w.io,
+      prompt: async (p, text) => {
+        reached()
+        await opened
+        await w.io.prompt(p, text)
+      },
+    },
+  })
+
+  // Off from the start: the round looks at nothing.
+  w.settings.enabled = false
+  await engine.reapRound()
+  expect(w.io.calls).toEqual([])
+
+  // On: the first sleep is under way when wake goes off.
+  w.settings.enabled = true
+  const round = engine.reapRound()
+  await atExit
+  w.settings.enabled = false
+  expect(engine.busy()).toBe(1)
+  open()
+  await round
+  expect(exits(w.io)).toEqual(['w1:p1'])
+  expect(engine.busy()).toBe(0)
+  expect(w.io.calls.filter(c => c[2] === 'w1:p2')).toEqual([])
+})
+
+test('read only (--reap-dry): a session file that does not read is neither set aside nor written', async () => {
+  const w = world({ panes: [claudePane('w1:p1', SID)], sessions: () => '{ "w1:p1": { "session": ' })
+  runningSession(w.claude, { id: SID, name: 'Billing', cwd: PROJECT, n: 1 })
+  const engine = createWakeEngine({ ...w.deps, readOnly: true })
+  expect((await engine.plan()).map(p => p.pane)).toEqual(['w1:p1'])
+  expect(readdirSync(dirname(w.file))).toEqual(['wake-sessions.json'])
+  expect(readFileSync(w.file, 'utf8')).toBe('{ "w1:p1": { "session": ')
+  expect(w.log).toEqual([])
+})
+
 // Last in the file: the files bun runs after this one in the same process find the home and the
 // folders as they were, not a temp folder a test has deleted.
 test('every test gives back the home and folders it found', () => {

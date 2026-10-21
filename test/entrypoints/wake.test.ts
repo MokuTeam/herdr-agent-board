@@ -3,9 +3,10 @@
 // answers, plus each session's profile) on 127.0.0.1 only, the kill switch read before anything,
 // the settings followed live, and nothing done by itself while the reaper and Telegram are off.
 import { expect, setDefaultTimeout, test } from 'bun:test'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { connect } from 'node:net'
 import { networkInterfaces } from 'node:os'
-import { dirname, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { unusedPort } from '../support/board-server.ts'
 import { type Sandbox, until } from '../support/sandbox.ts'
 import { runningSession, SID, SID2 } from '../support/wake-fixtures.ts'
@@ -295,4 +296,106 @@ test('--reap-dry prints one line per Claude pane', async () => {
   expect(lines[1]).toBe(`keep   w1:p3   ${'claude'.padEnd(34)} not in the session registry`)
   // Only looked: herdr was asked for its snapshot, nothing else.
   expect(box.calls()).toEqual([['api', 'snapshot']])
+})
+
+test('--reap-dry only looks: a session file that does not read is neither set aside nor written', async () => {
+  const box = await wakeSandbox()
+  runningSession(claudeDir(box), { id: SID, name: 'Billing', cwd: PROJECT })
+  herdrShows(box, [claudePane('w1:p1', SID)])
+  const broken = '{ "w1:p2": { "session": '
+  mkdirSync(stateOf(box), { recursive: true })
+  writeFileSync(join(stateOf(box), 'wake-sessions.json'), broken)
+  writeBoardConfig(box, wakeOnConfig(await unusedPort()))
+  const { proc } = spawnWake(box, ['--reap-dry'])
+  expect(await exitWithin(proc, 10_000)).toBe(0)
+  expect(readdirSync(stateOf(box)).filter(f => f.startsWith('wake-sessions'))).toEqual(['wake-sessions.json'])
+  expect(readFileSync(join(stateOf(box), 'wake-sessions.json'), 'utf8')).toBe(broken)
+})
+
+/** `board` on PATH (a stub, never run): the PATH with it, so sessions here can be woken again. */
+function withBoard(box: Sandbox): string {
+  const bin = join(box.dir, 'bin')
+  mkdirSync(bin, { recursive: true })
+  writeFileSync(join(bin, 'board'), '#!/bin/sh\n# agent-board\nexit 0\n', { mode: 0o755 })
+  writeFileSync(join(bin, 'board.cmd'), '@rem agent-board\r\n@exit /b 0\r\n')
+  return `${bin}${delimiter}${box.env.PATH}`
+}
+
+const paneGets = (box: Sandbox): string[] =>
+  box
+    .calls()
+    .filter(c => c[0] === 'pane' && c[1] === 'get')
+    .map(c => c[2] ?? '')
+
+test('turned off while the reaper’s sleep is under way: it keeps its port and answers 503 to new sleeps and wakes, starts no other sleep, and ends with 0 once that one is done', async () => {
+  const box = await wakeSandbox()
+  const gate = join(box.dir, 'gate')
+  runningSession(claudeDir(box), { id: SID, name: 'Billing', cwd: PROJECT })
+  runningSession(claudeDir(box), { id: SID2, name: 'Ledger', cwd: PROJECT })
+  herdrShows(box, [claudePane('w1:p1', SID), claudePane('w1:p3', SID2)], {
+    // The first sleep waits here until the test opens the gate; Claude is busy then, so it stays up.
+    'pane get': { waitFor: gate, result: { pane: claudePane('w1:p1', SID, 'working') } },
+  })
+  const port = await unusedPort()
+  const reaper = { enabled: true, idleMinutes: 1 }
+  const wake = await startWakeProcess(box, { port, wake: { reaper }, env: { PATH: withBoard(box) } })
+  await until(() => paneGets(box).includes('w1:p1'), 10_000)
+
+  // Wake off, its reaper still on.
+  writeBoardConfig(box, wakeOnConfig(port, { wake: { enabled: false, reaper } }))
+  await until(() => wakeLogText(box).includes(' wake turned off in config.json'))
+  // It still holds its port, so no second wake starts beside it while it waits.
+  expect((await fetch(`${wake.url}/status`)).status).toBe(200)
+  for (const path of ['/sleep', '/wake']) {
+    const res = await post(`${wake.url}${path}`, JSON.stringify({ target: 'Ledger' }))
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({ ok: false, error: 'wake is stopping' })
+  }
+  expect(wake.proc.exitCode).toBeNull()
+
+  writeFileSync(gate, '')
+  expect(await exitWithin(wake.proc, 10_000)).toBe(0)
+  expect(paneGets(box)).toEqual(['w1:p1'])
+})
+
+/** The status line of what the server answers to these raw bytes. */
+function rawStatusLine(port: number, request: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let got = ''
+    const socket = connect(port, '127.0.0.1', () => socket.write(request))
+    socket.on('data', chunk => {
+      got += chunk.toString()
+    })
+    socket.on('close', () => resolve(got.split('\r\n')[0] ?? ''))
+    socket.on('error', reject)
+    setTimeout(() => socket.destroy(), 5000)
+  })
+}
+
+test('a web page cannot drive it: 403 for a request with an Origin, or a Host other than 127.0.0.1 or localhost with its port; no Host is a 403, not a 500', async () => {
+  const box = await wakeSandbox()
+  idleAndAsleep(box)
+  const port = await unusedPort()
+  const wake = await startWakeProcess(box, { port })
+
+  // A page's simple POST (text/plain, no preflight), its Origin with it.
+  const simple = await fetch(`${wake.url}/wake`, {
+    method: 'POST',
+    headers: { 'content-type': 'text/plain', origin: 'http://evil.example' },
+    body: JSON.stringify({ target: 'Ledger' }),
+  })
+  expect(simple.status).toBe(403)
+  expect((await fetch(`${wake.url}/status`, { headers: { origin: wake.url } })).status).toBe(403)
+  // DNS rebinding: the page's own name in Host.
+  const other = port === 65535 ? port - 1 : port + 1
+  for (const host of [`evil.example:${port}`, `localhost.evil.example:${port}`, `127.0.0.1:${other}`, '127.0.0.1'])
+    expect((await fetch(`${wake.url}/sleeping`, { headers: { host } })).status).toBe(403)
+  // No Host at all (HTTP/1.0).
+  expect(await rawStatusLine(port, 'GET /status HTTP/1.0\r\n\r\n')).toBe('HTTP/1.1 403 Forbidden')
+
+  // What the board, the hooks and a terminal send.
+  expect((await fetch(`${wake.url}/status`)).status).toBe(200)
+  expect((await fetch(`${wake.url}/status`, { headers: { host: `localhost:${port}` } })).status).toBe(200)
+  // Nothing was woken: no herdr call but its looks.
+  expect(box.calls().filter(c => c.join(' ') !== 'api snapshot')).toEqual([])
 })
