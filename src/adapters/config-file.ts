@@ -24,6 +24,7 @@ import {
   shownProfiles,
 } from '../core/profiles.ts'
 import type { Category, Config } from '../core/types.ts'
+import { wakeConfig } from '../core/wake/config.ts'
 import { allCards, writeCard } from './cards.ts'
 import { isRecord, readJson, replaceFile } from './json-store.ts'
 import { configDir } from './paths.ts'
@@ -95,6 +96,57 @@ export function editSettings(body: unknown): EditResult {
     if (!isFoldMode(fold)) return { ok: false, error: t('err.foldWaiting', { mode: String(fold) }) }
     raw.foldWaiting = fold
   }
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/** Why a wake switch's value is refused, in the panel's words (err.wakeSetting). */
+const wakeRefusal = (field: string, why: string): EditResult => ({
+  ok: false,
+  error: t('err.wakeSetting', { field: t(field), why: t(why) }),
+})
+
+/**
+ * Change the Sleep and wake panel's switches in config.json's `wake` section (#119): { on?: boolean;
+ * reaper?: { enabled?: boolean; idleMinutes?: number; exclude?: string[] }; telegram?: 'auto' |
+ * 'off' }, merged into the section, its other fields (and the reaper's) kept. `"wake": true` or
+ * `false`, or a section of another type, first becomes { enabled } as it reads now. A value of the
+ * wrong kind refuses the whole edit, and config.json stays as it was. The running board and wake
+ * pick the change up as any edit (liveConfig).
+ */
+export function editWake(body: unknown): EditResult {
+  const b: Raw = isRecord(body) ? body : {}
+  if (b.on !== undefined && typeof b.on !== 'boolean') return wakeRefusal('wake.switch', 'wake.why.onOff')
+  let reaper: Raw | undefined
+  if (b.reaper !== undefined) {
+    if (!isRecord(b.reaper)) return wakeRefusal('wake.reaper', 'wake.why.onOff')
+    const r = b.reaper
+    if (r.enabled !== undefined && typeof r.enabled !== 'boolean') return wakeRefusal('wake.reaper', 'wake.why.onOff')
+    if (r.idleMinutes !== undefined && !(Number.isInteger(r.idleMinutes) && Number(r.idleMinutes) >= 1))
+      return wakeRefusal('wake.reaper.minutes', 'wake.why.minutes')
+    if (r.exclude !== undefined && !(Array.isArray(r.exclude) && r.exclude.every(e => typeof e === 'string')))
+      return wakeRefusal('wake.reaper.exclude', 'wake.why.names')
+    reaper = {
+      ...(r.enabled !== undefined && { enabled: r.enabled }),
+      ...(r.idleMinutes !== undefined && { idleMinutes: r.idleMinutes }),
+      ...(Array.isArray(r.exclude) && {
+        exclude: r.exclude.map(e => String(e).trim()).filter(Boolean),
+      }),
+    }
+  }
+  if (b.telegram !== undefined && b.telegram !== 'auto' && b.telegram !== 'off')
+    return wakeRefusal('wake.telegram', 'wake.why.mode')
+
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  const section: Raw = isRecord(raw.wake)
+    ? { ...raw.wake }
+    : raw.wake === undefined
+      ? {}
+      : { enabled: wakeConfig(raw.wake).enabled }
+  if (typeof b.on === 'boolean') section.enabled = b.on
+  if (reaper) section.reaper = { ...(isRecord(section.reaper) ? section.reaper : {}), ...reaper }
+  if (b.telegram !== undefined) section.telegram = b.telegram
+  raw.wake = section
   writeRaw(raw)
   return { ok: true }
 }
