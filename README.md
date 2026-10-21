@@ -1398,7 +1398,7 @@ this now", with **"Switch over…"**, which asks once, listing what it will do, 
 
 1. takes over the old `config.json` into the `wake` section (the reaper, its list, Telegram's url,
    token and server, the port and timeouts; Telegram Auto when the old router had a url and
-   token), and its sleeping sessions into `wake-sessions.json`, so none is lost;
+   token), and its sleeping sessions of the last 7 days into `wake-sessions.json`;
 2. compares the old `wakeCommand` with `launch.claude` and, when they start different programs
    (`claude-tg --resume {session}` against `claude`), says how to keep yours in `launch.claude`;
 3. uninstalls the plugin (`herdr plugin uninstall herdr-wake`);
@@ -1410,10 +1410,12 @@ this now", with **"Switch over…"**, which asks once, listing what it will do, 
    names (`agent-board.sleep`, `agent-board.wake`); herdr's `config.toml` is not changed.
 
 The panel then says what it took over ("reaper on, 60 min, 2 excluded; Telegram; 4 sleeping
-sessions"). Removed by hand instead (`herdr plugin uninstall herdr-wake`), the same takeover, but
-for the uninstall, runs once at wake's next start. The old plugin's config and state folders are
-left where they are. Back to it: `"wake": false`, the plugin installed again, and each
-`settings.json` from its backup.
+sessions"). Both take over only sessions seen or put to sleep in the last 7 days. Removed by hand
+instead (`herdr plugin uninstall herdr-wake`), the same takeover, but for the uninstall, runs once
+at wake's next start, without a click: it leaves the reaper and Telegram off (turn them on in the
+panel), and the panel and `board doctor` say so until you dismiss it. The old plugin's config and
+state folders are left where they are. Back to it: `"wake": false`, the plugin installed again,
+and each `settings.json` from its backup.
 
 ### The `wake` section
 
