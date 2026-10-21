@@ -42,7 +42,7 @@ import {
   socatRunArgs,
   VOLUMES,
 } from './server-texts.ts'
-import { keysFile, socketFolder } from './tunnel-snippets.ts'
+import { keysFile, SSHD_RELOAD, socketFolder } from './tunnel-snippets.ts'
 
 export type SetupCase = '1' | '1b' | '2' | '3a' | '3b' | '4a' | '4b'
 /**
@@ -345,10 +345,13 @@ function isCaddy(f: ServerFacts, h: Holder): boolean {
   return /(^|\/)caddy([:@]|$)/.test(containerOf(f, h.id)?.image ?? '')
 }
 
+/** What every run needs on the server, by the names Look's `@@missing` lines give (runuser: case 2's alone). */
+const RUN_TOOLS = ['flock', 'setsid', 'timeout', 'sha256sum', 'ss']
+
 /** The limits of call 25 and step 1 not done: none of the cases is done by the board then. */
 function hostLimits(f: ServerFacts): Manual[] {
   const why: Manual[] = []
-  if (!f.distro.supported || ['flock', 'setsid', 'timeout'].some(t => f.host.missing.includes(t))) why.push('os')
+  if (!f.distro.supported || RUN_TOOLS.some(t => f.host.missing.includes(t))) why.push('os')
   if (f.host.selinux === 'enforcing') why.push('selinux')
   if (f.docker?.podman) why.push('podman')
   if (f.docker?.rootless) why.push('rootless')
@@ -724,8 +727,10 @@ function theirCaddy(f: ServerFacts): TheirCaddy | null {
   if (!c || c.hostPath === null) return null
   const file = c.hostPath
   if (!isLine(file) || !(isPlainPath(file) || PLACEHOLDER.test(file))) return null
-  // their proxy's address (an IP) and their config's hash reach the scripts as they are: checked here
-  const address = /^[0-9A-Fa-f.:]+$/.test(c.address) ? c.address : '127.0.0.1'
+  // their proxy's address (an IP) and their config's hash reach the scripts as they are: checked
+  // here. ss prints an IPv6 address in brackets, and one bound to an interface with `%<name>`.
+  const ip = c.address.replace(/^\[(.*)\]$/, '$1').replace(/%[^%]*$/, '')
+  const address = /^[0-9A-Fa-f.:]+$/.test(ip) ? ip : '127.0.0.1'
   const sha = /^[0-9a-f]{64}$/.test(c.sha256) ? c.sha256 : PLACEHOLDER.test(file) ? '' : null
   if (sha === null) return null
   const fetch = f.host.fetch === 'curl'
@@ -736,6 +741,10 @@ function theirCaddy(f: ServerFacts): TheirCaddy | null {
     const bin = unit?.execStart[0] && isPlainPath(unit.execStart[0]) ? unit.execStart[0] : 'caddy'
     const user = unit?.user && unit.user !== '' ? unit.user : 'root'
     const candidate = `${dirOf(file)}/.Caddyfile.agent-board`
+    // STEPPATH=/: Caddy 2.6 makes $HOME/.step on any run (/root/.step as root), which no record
+    // names; pointed at a folder that is there, it makes nothing (the spike). `env`, since a
+    // `sudo VAR=x …` line would not run in the board's script, where sudo is a function.
+    const caddy = `env STEPPATH=/ ${q(bin)}`
     return {
       live: true,
       file,
@@ -743,8 +752,8 @@ function theirCaddy(f: ServerFacts): TheirCaddy | null {
       candidate,
       candidateCfg: candidate,
       cfg: file,
-      validate: cfg => `sudo runuser -u ${q(user)} -- ${q(bin)} validate --config ${q(cfg)} --adapter caddyfile`,
-      adapt: `sudo ${q(bin)} adapt`,
+      validate: cfg => `sudo runuser -u ${q(user)} -- ${caddy} validate --config ${q(cfg)} --adapter caddyfile`,
+      adapt: `sudo ${caddy} adapt`,
       reload: [`sudo systemctl reload ${q(name)}`],
       isUp: `systemctl is-active --quiet ${q(name)}`,
       address,
@@ -753,7 +762,8 @@ function theirCaddy(f: ServerFacts): TheirCaddy | null {
   }
   const id = c.container
   if (id === null || !(isContainerId(id) || PLACEHOLDER.test(id)) || !isLine(c.config)) return null
-  const exec = `sudo docker exec ${q(id)} caddy`
+  // as Look runs it: an older Caddy in their image would make $HOME/.step in their container
+  const exec = `sudo docker exec -e STEPPATH=/ ${q(id)} caddy`
   const inFolder = c.mount === 'folder' || c.mount === 'volume'
   return {
     live: true,
@@ -1498,7 +1508,7 @@ export function undoPlan(
         `sudo rm -rf ${q(folder)}`,
         `sudo userdel ${q(r.pair.user)}`,
         `# and the "Match User ${r.pair.user}" block at the end of /etc/ssh/sshd_config, by hand; then:`,
-        'sudo sshd -t && { sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd; }',
+        `sudo sshd -t && ${SSHD_RELOAD}`,
       ],
       skipIf: BY_HAND,
     }),

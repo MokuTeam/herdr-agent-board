@@ -19,13 +19,41 @@
 // `X-Forwarded-Proto: https` and the caller's address in X-Forwarded-For; 502 while nothing answers
 // there. It listens before it says the forward is taken. A port still taken (a stray fake about to
 // be ended) is tried again for 2 s; after that the forward goes on without it.
+//
+// The admin's line (StrictHostKeyChecking=yes and no -R; core/server-admin.ts) is a server of its
+// own, `admin` in the state:
+//   { uid?: number,                                 0: root (default 1000)
+//     sudo?: 'nopasswd' | 'password' | 'requiretty' | 'notSudoer',   default nopasswd
+//     flavor?: 'sudo' | 'sudo-rs',                  whose lines it prints (default sudo)
+//     password?: string,                            sudo -S takes this one only (none set: any)
+//     publickey?: boolean,                          the admin's key refused
+//     fixture?: string,                             a folder: look-1 prints its round1.txt, look-2 its round2.txt
+//     run?: { lines: string[], dropAfter?: number } a launch prints these, cut after dropAfter (exit 255) }
+// No line for its server key in the quoted UserKnownHostsFile: `Host key verification failed.`, 255.
+// It decodes the script in the remote command, reads its `# agent-board: <kind>` line and answers
+// as the server would: `probe` (no sudo) the `@@` lines PROBE_SCRIPT prints; the others behind the
+// sudo the admin's mode needs, exactly (`sh -c '…'` for root, `sudo -n -- ` NOPASSWD, `sudo -S -p ''
+// -- ` with a password), else `fake: unexpected command`, 2. It reads stdin to its end first (a
+// stdin left open keeps it waiting); sudo -S's is appended to `<FAKE_SSH_LOG>.stdin` as a JSON line,
+// and a wrong one gets the flavour's recorded lines and exit 1 (spec, "Checked by the spike").
+// `hang` stays up silent.
 import { appendFileSync, existsSync, readFileSync, writeFileSync, writeSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 
 type Mode = 'forward' | 'refuse' | 'publickey' | 'hostkey' | 'hang'
+type Admin = {
+  uid?: number
+  sudo?: 'nopasswd' | 'password' | 'requiretty' | 'notSudoer'
+  flavor?: 'sudo' | 'sudo-rs'
+  password?: string
+  publickey?: boolean
+  fixture?: string
+  run?: { lines: string[]; dropAfter?: number }
+}
 type State = {
   keygen?: 'unprotected' | 'passphrase'
   ssh?: { mode?: Mode; seq?: Mode[]; exitAfterMs?: number; proxyPort?: number; domain?: string }
+  admin?: Admin
 }
 
 const HOST = 'ssh.example.com'
@@ -212,5 +240,134 @@ async function ssh(): Promise<void> {
   stayUp()
 }
 
+/** What sudo (Debian 13, 1.9.16p2) and sudo-rs (Ubuntu 26.04, 0.2.13) print, as the spike recorded it. */
+const SUDO = {
+  sudo: {
+    version: 'Sudo version 1.9.16p2',
+    need: ['sudo: a password is required'],
+    wrong: ['Sorry, try again.', '', 'sudo: no password was provided', 'sudo: 1 incorrect password attempt'],
+    notSudoer: (user: string) => [`${user} is not in the sudoers file.`],
+    // -n says a password is required before it knows
+    notSudoerN: (_user: string) => ['sudo: a password is required'],
+    tty: ['sudo: sorry, you must have a tty to run sudo'],
+    right: [] as string[],
+  },
+  'sudo-rs': {
+    version: 'sudo-rs 0.2.13-0ubuntu1.2',
+    need: ['sudo: interactive authentication is required'],
+    wrong: ['', 'sudo: Authentication failed, try again.', '', 'sudo: Authentication required but not attempted'],
+    notSudoer: (user: string) => [`sudo: I'm sorry ${user}. I'm afraid I can't do that`],
+    notSudoerN: (user: string) => [`sudo: I'm sorry ${user}. I'm afraid I can't do that`],
+    // sudo-rs only warns of requiretty, then goes on
+    tty: ["/etc/sudoers.d/admin:1:10: unknown setting: 'requiretty'", 'Defaults requiretty', '         ^~~~~~~~~~'],
+    right: [''],
+  },
+}
+
+/** All of it to stdout before the fake exits: a pipe can take part of a write. */
+function writeAll(text: string): void {
+  const bytes = Buffer.from(text, 'utf8')
+  for (let at = 0; at < bytes.length; ) at += writeSync(1, bytes, at)
+}
+const out = (...lines: string[]): void => {
+  for (const line of lines) writeAll(`${line}\n`)
+}
+
+async function admin(): Promise<void> {
+  const a = state.admin ?? {}
+  const file = knownHosts()
+  if (!file || !existsSync(file) || !readFileSync(file, 'utf8').includes(HOST_LINE)) {
+    say('Host key verification failed.')
+    end(255)
+  }
+  const target = args.at(-2) ?? ''
+  const user = target.slice(0, target.indexOf('@'))
+  if (a.publickey) {
+    say(`${target}: Permission denied (publickey).`)
+    end(255)
+  }
+  // a stdin the board left open keeps this waiting, as it would keep sudo -S
+  const input = await Bun.stdin.text()
+  const m = /^(sudo -n -- |sudo -S -p '' -- )?sh -c 'eval "\$\(echo ([A-Za-z0-9+/=]+) \| base64 -d\)"'$/.exec(
+    args.at(-1) ?? '',
+  )
+  const unexpected = (): never => {
+    say('fake: unexpected command')
+    return end(2)
+  }
+  if (!m) return unexpected()
+  const prefix = m[1] ?? ''
+  const script = Buffer.from(m[2] ?? '', 'base64').toString('utf8')
+  const kind = /^# agent-board: (\S+)$/m.exec(script)?.[1] ?? ''
+  const words = SUDO[a.flavor ?? 'sudo']
+  const uid = a.uid ?? 1000
+  const mode = uid === 0 ? 'root' : (a.sudo ?? 'nopasswd')
+  if (kind === 'probe') {
+    if (prefix) return unexpected()
+    out(`@@uid ${uid}`)
+    const sudoSays =
+      mode === 'root' || mode === 'nopasswd'
+        ? ['ok']
+        : mode === 'password'
+          ? words.need
+          : mode === 'notSudoer'
+            ? words.notSudoerN(user)
+            : a.flavor === 'sudo-rs'
+              ? [...words.tty, ...SUDO['sudo-rs'].need]
+              : words.tty
+    out(...sudoSays.filter(Boolean).map(l => `@@sudo ${l}`), `@@flavor ${words.version}`)
+    return end(0)
+  }
+  const wanted = mode === 'root' ? '' : mode === 'nopasswd' ? 'sudo -n -- ' : "sudo -S -p '' -- "
+  if (prefix !== wanted) return unexpected()
+  if (prefix.startsWith('sudo -S')) {
+    if (logPath) appendFileSync(`${logPath}.stdin`, `${JSON.stringify(input)}\n`)
+    if (a.password !== undefined && input !== `${a.password}\n`) {
+      say(...words.wrong)
+      end(1)
+    }
+    if (mode === 'notSudoer') {
+      say(...words.notSudoer(user))
+      end(1)
+    }
+    if (mode === 'requiretty') {
+      say(...words.tty)
+      if (a.flavor !== 'sudo-rs') end(1)
+    }
+    say(...words.right)
+  }
+  const print = (name: string): void => {
+    const path = join(a.fixture ?? '', name)
+    if (existsSync(path)) writeAll(readFileSync(path, 'utf8'))
+  }
+  switch (kind) {
+    case 'look-1':
+      print('round1.txt')
+      return end(0)
+    case 'look-2':
+      print('round2.txt')
+      return end(0)
+    case 'launch': {
+      const lines = a.run?.lines ?? []
+      const drop = a.run?.dropAfter
+      for (const [n, line] of lines.entries()) {
+        if (drop !== undefined && n >= drop) {
+          say(`Connection to ${HOST} closed by remote host.`)
+          end(255)
+        }
+        out(line)
+        await Bun.sleep(10)
+      }
+      return end(0)
+    }
+    case 'hang':
+      setInterval(() => {}, 1 << 30)
+      return
+    default:
+      return unexpected()
+  }
+}
+
 if (args.includes('-R')) await ssh()
+else if (options.includes('StrictHostKeyChecking=yes')) await admin()
 else keygen()

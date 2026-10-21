@@ -5,6 +5,7 @@
 // Only loopback, only the Host it was asked for, and every POST needs an X-Board header: a page
 // on another site cannot send that without a CORS preflight, which this server never grants, so
 // it cannot type into a session.
+import { randomBytes } from 'node:crypto'
 import { type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
 import { join } from 'node:path'
 import { saveFoundProfiles } from '../adapters/config-file.ts'
@@ -15,10 +16,12 @@ import { fetchProbe, probeOrigin } from '../adapters/probe.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
 import {
   endStraySsh,
+  hostKeyPinned,
   keyPath,
   knownHostsFile,
   publicKeyOf,
   readPidRecord,
+  spawnRemote,
   spawnSsh,
   sshBin,
   writePidRecord,
@@ -36,6 +39,7 @@ import { editProfile, installProfile } from '../services/profiles.ts'
 import { createRemote } from '../services/remote.ts'
 import { createRemoteAccess } from '../services/remote-access.ts'
 import { startScheduler } from '../services/scheduler.ts'
+import { createServerSetup } from '../services/server-setup.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
 import { createProbes, createSupervisor, networkSignature, realClock, type TunnelPlan } from '../services/tunnel.ts'
@@ -83,6 +87,10 @@ export interface BoardServer {
 }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+/** A plan's or a run's id on the server: when (UTC) and a little chance, `20261021-100400-3f9a`. */
+const setupId = (): string =>
+  `${new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)}-${randomBytes(2).toString('hex')}`
 
 /**
  * A folder watched with a debounce. An error (a deleted folder on Windows: EPERM), unhandled,
@@ -280,6 +288,28 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     onChange: accessChanged,
     log,
   })
+  // Setting up the server's web server through the owner's admin connection (services/server-setup.ts):
+  // the tunnel's ssh binary, host and pinned key; a test CA for the board's Caddy only when both
+  // test-only variables name one.
+  const acmeCa = process.env.BOARD_SETUP_ACME_CA
+  const acmeRoot = process.env.BOARD_SETUP_ACME_CA_ROOT
+  const serverSetup = createServerSetup({
+    cfg,
+    webPort: port,
+    ssh: () => sshBin(),
+    knownHosts: knownHostsFile,
+    hostKeyPinned: () => {
+      const conf = tunnelConf()
+      return hostKeyPinned(conf.host, conf.sshPort)
+    },
+    spawn: spawnRemote,
+    test: () => supervisor.test(),
+    onChange: accessChanged,
+    log,
+    now: () => Date.now(),
+    newId: setupId,
+    ...(acmeCa && acmeRoot && { acme: { ca: acmeCa, root: acmeRoot } }),
+  })
   // The "Remote access…" panel's view and changes (/api/access, the local board's only).
   const remoteAccess = createRemoteAccess({
     cfg,
@@ -288,6 +318,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     supervisor,
     tunnel,
     onChange: accessChanged,
+    server: serverSetup,
   })
   const board = createBoardState({
     deps,

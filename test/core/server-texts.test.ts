@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { Wanted } from '../../src/core/server-plan.ts'
 import {
   argsHash,
@@ -269,6 +272,53 @@ describe('installing Docker from Docker’s own repository', () => {
   test('the documented steps, the distribution in the URLs, apt’s lock waited for, the key’s fingerprint checked', () => {
     expect(dockerInstall('debian')).toEqual(lines('debian'))
     expect(dockerInstall('ubuntu')).toEqual(lines('ubuntu'))
+  })
+
+  // The check where gpg is missing (neither trial server had it): a v4 key's fingerprint is the
+  // SHA-1 of its first packet (99 02 0d: 3 + 525 bytes for Docker's), which the armored file holds
+  // after its header lines and before its checksum line. Run here on an armored key of that shape,
+  // with sh, od and this computer's coreutils.
+  const SH = Bun.which('dash') ?? Bun.which('sh')
+  test.skipIf(!SH)('the fingerprint line takes the first packet’s SHA-1 out of the armored file', () => {
+    const packet = new Uint8Array(528 + 40)
+    packet.set([0x99, 0x02, 0x0d])
+    for (let i = 3; i < packet.length; i++) packet[i] = (i * 31 + 7) % 256
+    const b64 = Buffer.from(packet).toString('base64')
+    const body = b64.match(/.{1,64}/g) ?? []
+    const dir = mkdtempSync(join(tmpdir(), 'docker-key-'))
+    const file = join(dir, 'docker.asc').replaceAll('\\', '/')
+    writeFileSync(
+      file,
+      [
+        '-----BEGIN PGP PUBLIC KEY BLOCK-----',
+        'Comment: a test key',
+        '',
+        ...body,
+        '=AbCd',
+        '-----END PGP PUBLIC KEY BLOCK-----',
+        '',
+      ].join('\n'),
+    )
+    const own = createHash('sha1').update(packet.subarray(0, 528)).digest('hex')
+    const install = dockerInstall('debian')
+    const from = install.findIndex(l => l.startsWith('k=$('))
+    const line = install.slice(from, install.findIndex(l => l.includes('sha1sum')) + 1).join('\n')
+    expect(line.split('\n')).toHaveLength(3)
+    const run = (text: string) =>
+      Bun.spawnSync([SH ?? 'sh', '-c', `sudo() { "$@"; }\n${text.replaceAll('/etc/apt/keyrings/docker.asc', file)}`], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+    try {
+      // not Docker's key: refused
+      const refused = run(line)
+      expect(refused.exitCode).toBe(1)
+      expect(refused.stdout.toString()).toContain("This is not Docker's key")
+      // the same line with this key's fingerprint: passes
+      expect(run(line.replace('9dc858229fc7dd38854ae2d88d81803c0ebfcd88', own)).exitCode).toBe(0)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

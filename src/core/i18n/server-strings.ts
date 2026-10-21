@@ -136,7 +136,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.case.update': 'Set up for {domain} before: the plan moves the setup to the new domain or port.',
     // why the board leaves it to you ("Do it myself")
     'server.manual.os':
-      'The server is not Debian 12 or 13 or Ubuntu 22.04 to 26.04, or lacks flock, setsid or timeout.',
+      'The server is not Debian 12 or 13 or Ubuntu 22.04 to 26.04, or lacks flock, setsid, timeout, sha256sum or ss.',
     'server.manual.selinux': 'SELinux enforces its policy here.',
     'server.manual.podman': 'Docker here is Podman.',
     'server.manual.rootless': 'Docker runs rootless here.',
@@ -256,6 +256,32 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.warn.caddyRoot': 'Your Caddy runs as root: it opens the socket with root’s rights.',
     'server.warn.interrupted': 'A run did not finish: this plan undoes what it left. Look again after it.',
     'server.warn.notTheirConfig': 'No Caddy Look found uses {file}: the board’s part comes out of it without a reload.',
+    // the admin connection: its fields, and why Look, Apply or Undo stopped (the spec's hints)
+    'server.field.adminUser': 'Admin user',
+    'server.field.adminKey': 'Admin key',
+    'server.hint.publickey':
+      'The server refused the admin key: add it to {admin}’s ~/.ssh/authorized_keys (ssh-copy-id), or load it into the ssh agent if it has a passphrase.',
+    'server.hint.tooMany': 'The agent offered too many keys: choose the admin key’s file.',
+    'server.hint.noHostKey': 'Run Test connection first: it pins the server’s key.',
+    'server.hint.hostKey':
+      'The server’s key changed since it was pinned. If you changed the server on purpose, Forget the server’s key and run Test connection; otherwise find out why first.',
+    'server.hint.needPassword': 'Type {admin}’s sudo password.',
+    'server.hint.wrongPassword':
+      'The password was refused. The board tries once per click: some servers lock sudo after a few failures.',
+    'server.hint.requiretty': 'The server’s sudoers has requiretty: remove it for {admin}, or Do it myself.',
+    'server.hint.notSudoer': '{admin} cannot use sudo: use an admin who can, or root.',
+    'server.hint.network': 'No answer from the server: check the host, the SSH port and the firewall.',
+    'server.hint.noSsh': 'No OpenSSH client found. On Windows, add the optional feature "OpenSSH Client".',
+    'server.hint.aptLock': 'Another package manager (often unattended-upgrades) is running. Try again later.',
+    'server.hint.pullLimit': 'Docker Hub’s pull limit. Try again later.',
+    'server.hint.changed': 'The server changed since Look: Look again.',
+    'server.hint.busy': 'Another run is going on: wait for it to end.',
+    'server.hint.lost': 'The connection was lost: the server finishes or rolls back by itself. Look again in a minute.',
+    'server.hint.unreadable': 'Look could not read the server.',
+    'server.hint.lookAgain': 'This plan is not from the last Look (or the board started anew since): Look again.',
+    'server.err.docker': 'Tick “Install Docker from Docker’s own repository” first.',
+    'server.err.noRecord': 'Nothing of the board’s is set up on this server.',
+    'server.err.cancelled': 'Cancelled.',
   },
   ru: {
     // ---- «На сервере» в панели
@@ -384,7 +410,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'Порт 443 занят ({holder}), 80 — у nginx: собственный Caddy доски ответит на 8443, а nginx передаст ему только проверки сертификата.',
     'server.case.same': 'Уже настроено для {domain}: план проверит каждую часть и вернёт недостающее.',
     'server.case.update': 'Раньше было настроено для {domain}: план перенесёт настройку на новый домен или порт.',
-    'server.manual.os': 'Сервер не Debian 12 или 13 и не Ubuntu 22.04–26.04, или на нём нет flock, setsid или timeout.',
+    'server.manual.os':
+      'Сервер не Debian 12 или 13 и не Ubuntu 22.04–26.04, или на нём нет flock, setsid, timeout, sha256sum или ss.',
     'server.manual.selinux': 'Здесь SELinux в режиме enforcing.',
     'server.manual.podman': 'Docker здесь — это Podman.',
     'server.manual.rootless': 'Docker здесь работает без root (rootless).',
@@ -509,5 +536,34 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'Запуск не завершился: этот план отменяет то, что он оставил. После него осмотрите сервер снова.',
     'server.warn.notTheirConfig':
       'Ни один найденный осмотром Caddy не использует {file}: часть доски убирается из него без перезагрузки.',
+    // подключение администратора: его поля и почему осмотр, применение или отмена остановились
+    'server.field.adminUser': 'Администратор',
+    'server.field.adminKey': 'Ключ администратора',
+    'server.hint.publickey':
+      'Сервер отклонил ключ администратора: добавьте его в ~/.ssh/authorized_keys пользователя {admin} (ssh-copy-id) или, если у ключа есть пароль, загрузите его в ssh-агент.',
+    'server.hint.tooMany': 'Агент предложил слишком много ключей: укажите файл ключа администратора.',
+    'server.hint.noHostKey': 'Сначала нажмите «Проверить соединение»: при проверке запоминается ключ сервера.',
+    'server.hint.hostKey':
+      'Ключ сервера изменился с тех пор, как его запомнили. Если вы меняли сервер намеренно, нажмите «Забыть ключ сервера», затем «Проверить соединение»; иначе сначала выясните почему.',
+    'server.hint.needPassword': 'Введите пароль sudo пользователя {admin}.',
+    'server.hint.wrongPassword':
+      'Пароль не подошёл. Доска пробует один раз на нажатие: некоторые серверы блокируют sudo после нескольких ошибок.',
+    'server.hint.requiretty':
+      'В sudoers сервера стоит requiretty: уберите его для {admin} или настройте сервер вручную.',
+    'server.hint.notSudoer': '{admin} не может пользоваться sudo: возьмите администратора, который может, или root.',
+    'server.hint.network': 'Сервер не отвечает: проверьте адрес, порт SSH и брандмауэр.',
+    'server.hint.noSsh': 'Клиент OpenSSH не найден. В Windows добавьте дополнительный компонент «Клиент OpenSSH».',
+    'server.hint.aptLock': 'Работает другой менеджер пакетов (часто unattended-upgrades). Попробуйте позже.',
+    'server.hint.pullLimit': 'Лимит загрузок Docker Hub. Попробуйте позже.',
+    'server.hint.changed': 'Сервер изменился после осмотра: осмотрите его снова.',
+    'server.hint.busy': 'Идёт другой запуск: дождитесь его конца.',
+    'server.hint.lost':
+      'Соединение прервалось: сервер сам доведёт запуск до конца или откатит его. Осмотрите сервер снова через минуту.',
+    'server.hint.unreadable': 'Осмотр не смог прочитать ответ сервера.',
+    'server.hint.lookAgain':
+      'Этот план не от последнего осмотра (или доска с тех пор перезапускалась): осмотрите сервер снова.',
+    'server.err.docker': 'Сначала отметьте «Установить Docker из собственного репозитория Docker».',
+    'server.err.noRecord': 'На этом сервере ничего от доски не настроено.',
+    'server.err.cancelled': 'Отменено.',
   },
 }

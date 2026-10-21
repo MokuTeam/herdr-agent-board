@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { ServerFacts } from '../../src/core/server-facts.ts'
+import { readRoundOne, readServerFacts } from '../../src/core/server-look.ts'
 import {
   buildPlan,
   chooseCase,
@@ -323,10 +324,10 @@ for (const distro of DISTROS) {
         `sudo docker pull ${SOCAT_IMAGE}\nsudo docker image inspect ${SOCAT_IMAGE} >/dev/null`,
       )
       expect(text(step(p, 'validate'))).toContain(
-        `sudo docker exec ${THEIR_ID} caddy validate --config /etc/caddy/.Caddyfile.agent-board --adapter caddyfile`,
+        `sudo docker exec -e STEPPATH=/ ${THEIR_ID} caddy validate --config /etc/caddy/.Caddyfile.agent-board --adapter caddyfile`,
       )
       expect(text(step(p, 'reload'))).toContain(
-        `sudo docker exec ${THEIR_ID} caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile`,
+        `sudo docker exec -e STEPPATH=/ ${THEIR_ID} caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile`,
       )
     })
 
@@ -342,7 +343,7 @@ for (const distro of DISTROS) {
         `printf '%s\\n' '${IMPORT_LINE}' | sudo tee -a /etc/caddy/.Caddyfile.agent-board >/dev/null`,
       )
       expect(text(step(p, 'validate'))).toContain(
-        'sudo runuser -u caddy -- /usr/bin/caddy validate --config /etc/caddy/.Caddyfile.agent-board --adapter caddyfile',
+        'sudo runuser -u caddy -- env STEPPATH=/ /usr/bin/caddy validate --config /etc/caddy/.Caddyfile.agent-board --adapter caddyfile',
       )
       expect(text(step(p, 'write'))).toContain(
         `sudo sh -c 'cat /etc/caddy/.Caddyfile.agent-board > /etc/caddy/Caddyfile'`,
@@ -536,6 +537,111 @@ describe('Do it myself without Look (call 28)', () => {
     }
     expect(all(plan(manualFacts('2', 'debian')))).toContain('<your Caddyfile>')
     expect(all(plan(manualFacts('1', 'debian')))).toContain("'<gid>'")
+  })
+})
+
+/** The facts Look read on a trial server (Task 20's fixtures, through its own parsers). */
+function lookedAt(distro: TestDistro, scenario: string): ServerFacts {
+  const dir = `test/fixtures/server-look/${distro}/${scenario}`
+  const r = readRoundOne(readFileSync(`${dir}/round1.txt`, 'utf8'))
+  if (!r) throw new Error(`round one of ${dir}`)
+  const two = existsSync(`${dir}/round2.txt`) ? readFileSync(`${dir}/round2.txt`, 'utf8') : ''
+  const f = readServerFacts(r, two)
+  if (!f) throw new Error(`round two of ${dir}`)
+  return f
+}
+
+/** Their sites' fetch at an address, as the plan's status function writes it. */
+const fetchAt = (address: string): string => `--resolve "$1:\${2:-443}:${address}"`
+
+describe('planned from what Look read on the trial servers (not from shapes guessed)', () => {
+  for (const distro of DISTROS) {
+    test(`every scenario on ${distro}: its case, and the plan's first step the guard`, () => {
+      const cases: Record<string, SetupCase | Manual> = {
+        bare: '1',
+        nodocker: '1',
+        dummy80: '1b',
+        'caddy-unit': '2',
+        'compose-folder': '3a',
+        'compose-file': '3a',
+        'caddy-host': '3b',
+        'caddy-bridge': 'bridge',
+        'nginx-443': '4a',
+        'nginx-80-443': '4b',
+        apache: 'other80',
+      }
+      for (const [scenario, want] of Object.entries(cases)) {
+        const choice = chooseCase(lookedAt(distro, scenario), W)
+        expect([scenario, choice.case ?? choice.why[0]]).toEqual([scenario, want])
+        if (choice.case !== null)
+          expect([scenario, ids(plan(lookedAt(distro, scenario)))[0]]).toEqual([scenario, 'guard'])
+      }
+    })
+
+    test(`case 2 on ${distro}: every run of their Caddy with STEPPATH=/, so Caddy 2.6 makes no $HOME/.step`, () => {
+      const p = plan(lookedAt(distro, 'caddy-unit'))
+      expect(text(step(p, 'validate'))).toContain(
+        'sudo runuser -u caddy -- env STEPPATH=/ /usr/bin/caddy validate --config /etc/caddy/.Caddyfile.agent-board --adapter caddyfile',
+      )
+      expect(all(p)).toContain('hosts() { sudo env STEPPATH=/ /usr/bin/caddy adapt --config "$1" --adapter caddyfile')
+      const runs = all(p)
+        .split('\n')
+        .filter(l => /\/usr\/bin\/caddy (adapt|validate)/.test(l))
+      expect(runs.length).toBeGreaterThan(0)
+      for (const l of runs) expect(l).toContain('STEPPATH=/ /usr/bin/caddy')
+    })
+
+    test(`case 3 on ${distro}: the container's name as Docker gives it, and their Caddy run with STEPPATH=/`, () => {
+      const f = lookedAt(distro, 'compose-folder')
+      expect(chooseCase(f, W)).toEqual({
+        case: '3a',
+        why: { key: 'server.case.3a', params: { container: 'web-caddy-1', network: 'web_default' } },
+      })
+      const p = plan(f)
+      const execs = all(p)
+        .split('\n')
+        .filter(l => l.includes('docker exec') && / caddy (adapt|validate|reload) /.test(l))
+      expect(execs.length).toBeGreaterThan(0)
+      for (const l of execs) expect(l).toContain(`docker exec -e STEPPATH=/ ${f.caddy?.container} caddy `)
+      // their sites fetched where Look found their Caddy listening
+      expect(text(step(p, 'fetch-before'))).toContain(fetchAt('127.0.0.1'))
+    })
+
+    test(`case 4b on ${distro}: the board's nginx file listens where theirs does on 80`, () => {
+      const f = lookedAt(distro, 'nginx-80-443')
+      expect(f.nginx?.listen80).toEqual(['80', '[::]:80'])
+      const p = plan(f)
+      const file = text(step(p, 'nginx-file'))
+      expect(file).toContain("'    listen 80;'")
+      expect(file).toContain("'    listen [::]:80;'")
+      expect(text(step(p, 'acme-path'))).toContain('--resolve board.example.com:80:127.0.0.1 ')
+    })
+  }
+
+  test('their Caddy on an IPv6 address (as ss prints it, in brackets): fetched there, bracketed once', () => {
+    const f = lookedAt('debian13', 'caddy-unit')
+    if (!f.caddy) throw new Error('caddy')
+    for (const address of ['[::1]', '::1']) {
+      const p = plan({ ...f, caddy: { ...f.caddy, address } })
+      expect(text(step(p, 'fetch-before'))).toContain(fetchAt('[::1]'))
+    }
+    const bound = plan({ ...f, caddy: { ...f.caddy, address: '192.0.2.4%eth0' } })
+    expect(text(step(bound, 'fetch-before'))).toContain(fetchAt('192.0.2.4'))
+  })
+
+  test('a tool the run needs missing (as Look names it): Do it myself', () => {
+    const f = lookedAt('ubuntu2604', 'bare')
+    for (const tool of ['flock', 'setsid', 'timeout', 'sha256sum', 'ss'])
+      expect(chooseCase({ ...f, host: { ...f.host, missing: [tool] } }, W)).toEqual(why('os'))
+    expect(chooseCase({ ...f, host: { ...f.host, missing: ['getent'] } }, W).case).toBe('1')
+  })
+
+  test('Undo’s commands for what was made by hand reload sshd as on a socket-activated Ubuntu 26.04', () => {
+    const r = recordFor('1', { items: [] })
+    const p = undoPlan(r, lookedAt('ubuntu2604', 'bare'), { id: 'u1', removeDocker: false, removeEdited: false })
+    expect(text(step(p, 'by-hand'))).toContain(
+      'sudo sshd -t && { sudo systemctl try-reload-or-restart ssh 2>/dev/null || sudo systemctl try-reload-or-restart sshd; }',
+    )
   })
 })
 
