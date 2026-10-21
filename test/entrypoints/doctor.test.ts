@@ -7,11 +7,12 @@ import { unusedPort } from '../support/board-server.ts'
 import { fakeWake } from '../support/fake-wake.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 
-// `board doctor` in a sandbox's fresh home: nothing installed, no herdr-wake asked.
+// `board doctor` in a sandbox's fresh home: nothing installed, wake off and no herdr-wake, so no port
+// of this computer is asked.
 async function doctor(box: Sandbox, language: string) {
   const dir = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board')
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, 'config.json'), JSON.stringify({ language, wakeUrl: '', port: 9 }))
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({ language, wakeUrl: '', port: 9, wake: false }))
   const proc = Bun.spawn([process.execPath, join(root, 'src', 'entrypoints', 'cli.ts'), 'doctor'], {
     cwd: root,
     env: box.env,
@@ -30,7 +31,7 @@ test('board doctor: what is missing, what it costs and how to fix it, in the boa
   assert.match(en.stdout, /^!! board command is not on PATH$/m)
   assert.match(en.stdout, /^!! Claude Code hooks are missing: SessionStart, UserPromptSubmit$/m)
   assert.match(en.stdout, /^ {5}herdr plugin action invoke agent-board\.install$/m)
-  assert.match(en.stdout, /^- {2}herdr-wake is off$/m)
+  assert.match(en.stdout, /^- {2}Sleep and wake is off$/m)
   assert.match(en.stdout, /\d+ things need a look\.\n$/)
   const box2 = await sandbox()
   const ru = await doctor(box2, 'ru')

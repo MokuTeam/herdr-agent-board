@@ -5,11 +5,15 @@ import { join } from 'node:path'
 import { unusedPort } from '../support/board-server.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 
-// `bun src/entrypoints/server.ts`: the web board alone, against the sandbox's fake herdr.
+// `bun src/entrypoints/server.ts`: the web board alone, against the sandbox's fake herdr. Wake off:
+// with it on (the default) the board would start wake's start and ask 127.0.0.1:12421.
 function config(box: Sandbox, port: number): void {
   const dir = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board')
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, 'config.json'), JSON.stringify({ language: 'en', port, wakeUrl: null, refreshSec: 3600 }))
+  writeFileSync(
+    join(dir, 'config.json'),
+    JSON.stringify({ language: 'en', port, wakeUrl: null, refreshSec: 3600, wake: false }),
+  )
 }
 
 function startServer(box: Sandbox) {

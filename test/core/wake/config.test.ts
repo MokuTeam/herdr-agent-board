@@ -68,6 +68,22 @@ test('the kill switch: no config.json is the default, one that does not parse is
   expect(wakeSwitch({ exists: true, raw: {} })).toBe(WAKE_SHIPPED)
 })
 
+test('the kill switch fails closed: a wake value or an enabled of the wrong type is off, never on', () => {
+  // Wake is on by default: a switch written wrong ("off", 0, …) must not leave it on.
+  expect(WAKE_SHIPPED).toBe(true)
+  for (const wake of ['off', 'false', 'true', 0, 1, [], [true], null]) {
+    expect([wake, wakeConfig(wake).enabled]).toEqual([wake, false])
+    expect([wake, wakeSwitch({ exists: true, raw: { wake } })]).toEqual([wake, false])
+  }
+  for (const enabled of ['off', 'false', 'true', 0, 1, [], {}, null]) {
+    expect([enabled, wakeConfig({ enabled }).enabled]).toEqual([enabled, false])
+    expect([enabled, wakeSwitch({ exists: true, raw: { wake: { enabled } } })]).toEqual([enabled, false])
+  }
+  // A section without the switch, or no section: the default.
+  expect([wakeConfig(undefined).enabled, wakeConfig({ port: 2000 }).enabled]).toEqual([true, true])
+  expect(wakeSwitch({ exists: true, raw: { wake: { reaper: { enabled: true } } } })).toBe(true)
+})
+
 test('Telegram off ignores a url and token of its own; an invalid url or a port past 65535 is no setting', () => {
   expect(telegramTarget(wakeConfig({ url: 'http://box:1', authorization: 'Bearer own' }), TELEGRAM)).toBeNull()
   expect(telegramTarget(wakeConfig({ telegram: 'auto', url: 'not a url', authorization: 'Bearer own' }), {})).toBeNull()

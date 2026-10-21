@@ -384,16 +384,9 @@ describe('doctor', () => {
     assert.match(check(rest, 'key').code, /command = "agent-board\.open"/)
     assert.equal(level(rest, 'wake'), 'off')
     assert.match(check(rest, 'wake').detail, /Put to sleep/)
-    // herdr-wake lives in this repository: the commands to copy, and what it runs on (#118).
-    assert.equal(
-      check(rest, 'wake').code,
-      [
-        'herdr plugin install MokuTeam/herdr-agent-board/herdr-wake',
-        'herdr plugin action invoke herdr-wake.install-hooks',
-        'herdr plugin action invoke herdr-wake.start',
-      ].join('\n'),
-    )
-    assert.match(check(rest, 'wake').fix, /Node\.js 20/)
+    // The board puts sessions to sleep itself now (#119): nothing of herdr-wake to install, no Node.
+    assert.equal(check(rest, 'wake').code, '')
+    assert.equal(check(rest, 'wake').fix, 'Settings → Sleep and wake… → Switch over…')
     assert.equal(level(rest, 'launch'), 'warn')
     assert.equal(level(rest, 'toast'), 'warn') // herdr's own notifications on top of the board's
     assert.deepEqual(
@@ -691,7 +684,13 @@ describe('the wake line (#119)', () => {
       })
       expect(checkSetup(f).some(c => c.id.startsWith('wakeHooks') || c.id === 'wakeUrl')).toBe(false)
     }
-    expect(wakeLine(facts({ wakeUrl: null, wake: null })).fix).toMatch(/Node\.js 20/)
+    // Its fix is the board's Sleep and wake, in either language: no Node, nothing of herdr-wake to install.
+    for (const t of [translator('en'), translator('ru')])
+      for (const f of [facts({ wakeUrl: null, wake: null }), facts({ wake: { ok: false, error: 'ECONNREFUSED' } })]) {
+        const line = wakeLine(f, t)
+        expect(line.fix).toBe(t(f.wakeUrl ? 'setup.wake.heldFix' : 'setup.wake.newOffFix'))
+        expect(`${line.fix}${line.code}`).not.toMatch(/Node|herdr plugin/)
+      }
   })
 
   test('running', () => {

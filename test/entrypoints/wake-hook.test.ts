@@ -230,6 +230,8 @@ test('wake off, or config.json broken: no HTTP call at all', async () => {
   const fake = await fakeWake(twoProfiles(w))
   const configs: (Record<string, unknown> | string)[] = [
     { language: 'en', wake: { enabled: false, port: fake.port } },
+    // A switch that cannot be read is off (it fails closed).
+    { language: 'en', wake: { enabled: 'yes', port: fake.port } },
     `{ "language": "en", "wake": { "enabled": true, "port": ${fake.port} `,
     '',
   ]

@@ -9,6 +9,8 @@ import { wakeLogFile, wakeStatusFile, writeWakeStatus } from '../../src/adapters
 import { normalizeConfig } from '../../src/core/categories.ts'
 import { useLanguage } from '../../src/core/lang.ts'
 import type { Config } from '../../src/core/types.ts'
+import { WAKE_PORT, WAKE_SHIPPED } from '../../src/core/wake/config.ts'
+import type { WakeView } from '../../src/core/wake/view.ts'
 import { closeWakeWorkspace, createWakeControl } from '../../src/services/wake/control.ts'
 import { isolatedHome } from '../support/env.ts'
 import { until } from '../support/sandbox.ts'
@@ -319,18 +321,27 @@ test('view: each WakeState from the status file and reach', async () => {
   expect(asked.answers).toBe(2)
 })
 
-test('current(): what the payload carries, without waiting; nothing while off with no wake file', async () => {
+test('current(): what the payload carries, without waiting; while off with no wake file, that it is off (nothing before it ships)', async () => {
   isolatedHome()
   let changed = 0
+  let asked = 0
   const quiet = createWakeControl({
     cfg: off(),
-    answers: async () => true,
+    answers: async () => {
+      asked++
+      return true
+    },
     starter: () => {},
     onChange: () => changed++,
   })
-  expect(quiet.current()).toBeNull()
+  // Once wake ships the Settings item is there whatever the switch says, so the payload says it is off.
+  const offView: WakeView | null = WAKE_SHIPPED
+    ? { on: false, state: 'off', since: null, asleep: 0, port: WAKE_PORT, downSince: null }
+    : null
+  expect(quiet.current()).toEqual(offView)
   await Bun.sleep(10)
-  expect([quiet.current(), changed]).toEqual([null, 0])
+  expect([quiet.current(), changed, asked]).toEqual([offView, WAKE_SHIPPED ? 1 : 0, 0])
+  changed = 0
 
   writeWakeStatus({ state: 'running', at: 5 })
   const c = createWakeControl({
@@ -343,6 +354,26 @@ test('current(): what the payload carries, without waiting; nothing while off wi
   expect(c.current()).toBeNull() // asked in the background
   await until(() => changed > 0)
   expect(c.current()).toMatchObject({ on: true, state: 'running', since: 5, asleep: 1 })
+})
+
+test('the state line follows the switch: a view of the switch before is asked again once config.json changes', async () => {
+  isolatedHome()
+  writeWakeStatus({ state: 'running', at: 5 })
+  // The panel's On writes config.json, and the board reads it a moment later: the board refreshed
+  // in between and kept "off" (the config it had then).
+  const cfg = off()
+  let changed = 0
+  const c = createWakeControl({ cfg, answers: async () => true, starter: () => {}, onChange: () => changed++ })
+  expect(await c.turn(true)).toEqual({ ok: true })
+  await c.view()
+  expect(c.current()?.state).toBe('off')
+  // config.json read again: the next refresh says it runs, without waiting for the view to age.
+  Object.assign(cfg, on())
+  c.configChanged()
+  changed = 0
+  c.current()
+  await until(() => changed > 0)
+  expect(c.current()).toMatchObject({ on: true, state: 'running' })
 })
 
 test('Log: the tail of wake.log', () => {

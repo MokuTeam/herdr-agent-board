@@ -11,18 +11,26 @@ type Board = { setup?: unknown }
 const boardOf = async (url: string): Promise<Board> => (await (await fetch(`${url}/api/board`)).json()) as Board
 
 test('before its first check ends the board goes out with setup: null, which the page takes for no note', async () => {
-  // A herdr-wake in this test that holds its /status answer: the first check cannot end before
-  // the test lets it (its probe waits a minute here, not 1.5 s, so a slow board answer is no race).
+  // A wake in this test that holds its /status answers (the board's own, #119, on a port of the
+  // test's): the first check cannot end before the test lets it (its probe waits a minute here, not
+  // 1.5 s, so a slow board answer is no race). The board asks it too as it starts, so every answer
+  // held is given at once, and every later one straight away.
   let asked = false
-  let answer: (res: Response) => void = () => {}
+  let released = false
+  const held: (() => void)[] = []
+  const answer = (): void => {
+    released = true
+    for (const give of held.splice(0)) give()
+  }
   const wake = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
     fetch: req => {
       if (new URL(req.url).pathname !== '/status') return new Response('', { status: 404 })
       asked = true
+      if (released) return Response.json({ ok: true })
       return new Promise<Response>(resolve => {
-        answer = resolve
+        held.push(() => resolve(Response.json({ ok: true })))
       })
     },
   })
@@ -31,7 +39,7 @@ test('before its first check ends the board goes out with setup: null, which the
     box.state({ 'api snapshot': { result: { snapshot: { panes: [], tabs: [], workspaces: [] } } } })
     const { url } = await serveBoard(
       box,
-      { language: 'en', wakeUrl: `http://127.0.0.1:${wake.port}` },
+      { language: 'en', wake: { enabled: true, port: wake.port } },
       { TEST_PROBE_MS: '60000' },
     )
     await until(() => asked)
@@ -42,7 +50,7 @@ test('before its first check ends the board goes out with setup: null, which the
     assert.equal(isSetupSummary(before.setup), false)
     assert.equal(isSetupSummary({ todo: '1', sig: '' }), false)
     // The check ends: the board goes out with its summary.
-    answer(Response.json({ ok: true }))
+    answer()
     let after = before
     const deadline = Date.now() + 5000
     while (!isSetupSummary(after.setup) && Date.now() < deadline) {

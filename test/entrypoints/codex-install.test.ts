@@ -95,7 +95,7 @@ test('the normal Claude install leaves an invalid Codex configuration alone', as
   writeFileSync(join(dir, 'hooks.json'), '{broken')
   const config = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
   mkdirSync(dirname(config), { recursive: true })
-  writeFileSync(config, '{"language":"en","wakeUrl":""}')
+  writeFileSync(config, '{"language":"en","wakeUrl":"","wake":false}')
   const result = await install(box, [])
   expect(result.code).toBe(0)
   expect(readFileSync(join(dir, 'hooks.json'), 'utf8')).toBe('{broken')

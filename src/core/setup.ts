@@ -2,7 +2,7 @@
 // and spawn-agent commands on PATH, the Claude Code hooks, the status line, desktop notifications
 // on Windows; core/install-plan.ts; the agents' skill and herdr's own Claude hook, below) and what
 // `board doctor`, the install action and the web board check (those, herdr's key for the board,
-// herdr-wake, how new sessions start).
+// sleep and wake, how new sessions start).
 //
 // Pure: adapters/setup-facts.ts reads this computer into SetupFacts, and tests hand in fixtures.
 import { join } from 'node:path'
@@ -21,12 +21,6 @@ import type { MokupilotLauncher } from './mokupilot.ts'
 import type { Translator } from './types.ts'
 import type { WakeState } from './wake/status.ts'
 
-/** herdr-wake from this repository (herdr-wake/README.md): install, its Claude Code hooks, start. */
-export const WAKE_INSTALL = [
-  'herdr plugin install MokuTeam/herdr-agent-board/herdr-wake',
-  'herdr plugin action invoke herdr-wake.install-hooks',
-  'herdr plugin action invoke herdr-wake.start',
-].join('\n')
 const english = translator('en')
 
 /** The files of a copy of the board that other programs run, and the skill install copies. */
@@ -483,8 +477,8 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
       KEY_SNIPPET,
     )
 
-  // Sleep and wake: the board's own (#119) once it ships or while config.json turns it on; else
-  // herdr-wake's, as before. Optional: a mark on the board only when it is on and does not work.
+  // Sleep and wake: the board's own (#119), on, off or held by the old plugin; herdr-wake's line
+  // only for facts without it. Optional: a mark on the board only when it is on and does not work.
   const w = facts.wakeNew
   if (w) {
     const port = { port: w.port }
@@ -533,24 +527,18 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
       for (const p of profiles)
         if (p.exists) wakeHooks(p, `wakeHooks:${p.id}`, check => t('setup.inProfile', { profile: p.title, check }))
   } else if (!facts.wakeUrl)
+    // Facts without the board's own wake (an older gatherFacts): herdr-wake's line, its fix the
+    // board's Sleep and wake, with nothing to install and no Node.
     add(
       'wake',
       'off',
       t('setup.wake.off'),
       both(t('setup.wake.offDetail'), t('setup.wake.without')),
-      t('setup.wake.fix'),
-      WAKE_INSTALL,
+      t('setup.wake.newOffFix'),
     )
   else if (facts.wake?.ok) add('wake', 'ok', t('setup.wake.ok'), t('setup.wake.okDetail', { url: facts.wakeUrl }))
   else
-    add(
-      'wake',
-      'off',
-      t('setup.wake.down', { url: facts.wakeUrl }),
-      t('setup.wake.without'),
-      t('setup.wake.fix'),
-      WAKE_INSTALL,
-    )
+    add('wake', 'off', t('setup.wake.down', { url: facts.wakeUrl }), t('setup.wake.without'), t('setup.wake.heldFix'))
 
   // How new sessions start.
   const l = facts.launcher

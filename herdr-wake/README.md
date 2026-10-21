@@ -1,5 +1,14 @@
 # herdr-wake
 
+**Deprecated: the agent board does this now.** The [agent board](../README.md#sleep-and-wake)
+puts sessions to sleep and wakes them itself, on Bun, with no Node.js, in every Claude profile,
+and starts with the board: nothing to install. While this plugin is installed the board leaves the
+work to it. To move over, open the board's Settings → "Sleep and wake…" and click
+"Switch over…": it takes over this plugin's settings and sleeping sessions, uninstalls it, puts
+the board's hooks in place of its own in every profile, closes its `tg-router` workspace and starts
+the board's wake. The board's `board doctor` says the same. This folder stays one release for
+those who still run it; what follows is how it worked.
+
 A [herdr](https://herdr.dev) plugin that lets idle Claude Code sessions sleep and wakes them
 when there is work for them. The [agent board](../README.md) uses it for "Put to sleep",
 "Wake" and "Restart", `board restart`, sleeping sessions on the board and reminders that wake
