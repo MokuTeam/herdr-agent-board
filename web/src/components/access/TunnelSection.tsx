@@ -1,8 +1,10 @@
 // The Remote access panel's Tunnel part: what a login reaches, where the tunnel stands (with since
 // when, a failed probe through the domain, the ssh it runs), On or Off, Test connection and its
 // steps, the settings (saved when a field is left or on Enter, as the Profiles panel's; Escape
-// puts the board's value back), the key, and the server's snippets. A new domain while passkeys or
-// logins exist, and a new key over the one there, are asked first (`ask`, kept by the panel).
+// puts the board's value back), the key, and "On the server" in three steps: 1 by hand, once (the
+// snippets, Snippets.tsx), 2 Test connection, 3 the web server (ServerSetup.tsx). A new domain
+// while passkeys or logins exist, and a new key over the one there, are asked first (`ask`, kept by
+// the panel).
 import type { FocusEvent, KeyboardEvent } from 'react'
 import type { AccessView } from '../../../../src/core/access.ts'
 import { type TestStep, TUNNEL_SOCKET, type TunnelField } from '../../../../src/core/tunnel.ts'
@@ -12,14 +14,17 @@ import { useT } from '../../i18n/I18nProvider.tsx'
 import {
   fieldEdit,
   hintText,
+  notSetUpLine,
   PORT_FIELDS,
   statusLine,
   stepLine,
+  stepMarks,
   TUNNEL_FIELDS,
   type TunnelAsk,
 } from '../../models/access.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
+import { ServerSetup } from './ServerSetup.tsx'
 import { CopyButton, Snippets } from './Snippets.tsx'
 
 export interface TunnelSectionProps {
@@ -127,6 +132,7 @@ export function TunnelSection({ view, send, steps, testing, ask, onAsk }: Tunnel
             <li key={s.id}>
               <span className="access-step">{stepLine(s, t)}</span>
               {s.ok === false && s.hint && <p className="access-hint">{hintText(s.hint, t)}</p>}
+              {notSetUpLine(s, view, t) && <p className="access-hint">{notSetUpLine(s, view, t)}</p>}
             </li>
           ))}
         </ul>
@@ -236,7 +242,36 @@ export function TunnelSection({ view, send, steps, testing, ask, onAsk }: Tunnel
         )}
       </div>
 
-      <Snippets settings={settings} publicKey={key.publicKey} />
+      <div className="access-server">
+        <h3 className="access-head">{t('access.snippets')}</h3>
+        <div className="access-stage">
+          <h4 className="access-stage-head">
+            <span className="access-num">1</span>
+            <span className="access-stage-title">{t('server.panel.byHand')}</span>
+          </h4>
+          <Snippets settings={settings} publicKey={key.publicKey} />
+        </div>
+        <div className="access-stage">
+          <h4 className="access-stage-head">
+            <span className="access-num">2</span>
+            <span className="access-stage-title">{t('access.test')}</span>
+          </h4>
+          <p className="access-note">{t('server.panel.testNote')}</p>
+          <div className="access-actions">
+            <button type="button" className="button" disabled={!canEdit || testing} onClick={() => void send('test')}>
+              {testing ? t('access.testing') : t('access.test')}
+            </button>
+          </div>
+          {steps && <p className="access-marks">{stepMarks(steps, t)}</p>}
+        </div>
+        <div className="access-stage">
+          <h4 className="access-stage-head">
+            <span className="access-num">3</span>
+            <span className="access-stage-title">{t('server.panel.web')}</span>
+          </h4>
+          <ServerSetup view={view} send={send} />
+        </div>
+      </div>
     </section>
   )
 }

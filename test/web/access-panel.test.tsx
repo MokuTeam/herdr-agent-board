@@ -1,14 +1,15 @@
 // The Remote access panel (Settings → Remote access…, on the local board only): its Tunnel part
 // (components/access/TunnelSection.tsx) — what a login reaches, where the tunnel stands, On or
-// Off, Test connection and its steps, the settings saved as they are left, the key, and the
-// server's snippets filled in from settings that check out. The view is GET /api/access's
+// Off, Test connection and its steps, the settings saved as they are left, the key, and step 1 of
+// "On the server": the snippets filled in from settings that check out (step 3,
+// ServerSetup.tsx, is test/web/server-setup.test.tsx's). The view is GET /api/access's
 // (hooks/useAccess.ts), fetched on opening and again on each new `accessRev`; every change is a
 // POST /api/access `{ op, … }` with the board's header, and what the board refuses is toasted.
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import type { AccessView } from '../../src/core/access.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { type TestStep, TUNNEL_SOCKET, type TunnelStatus } from '../../src/core/tunnel.ts'
-import { caddyGroupLine, stepOnePaste } from '../../src/core/tunnel-snippets.ts'
+import { stepOnePaste } from '../../src/core/tunnel-snippets.ts'
 import { timeOf } from '../../src/core/when-format.ts'
 import { AccessBody } from '../../web/src/components/access/AccessPanel.tsx'
 import { TunnelSection } from '../../web/src/components/access/TunnelSection.tsx'
@@ -142,8 +143,9 @@ test('nothing set up: what is needed under its field, On off with the reason, th
     ['Public port', []],
     ['Local port', []],
   ])
-  // A label each, its input named by it; the board's values, and what an empty one means.
-  const fields = byClass([tunnel], 'access-field')
+  // A label each, its input named by it; the board's values, and what an empty one means (the
+  // tunnel's settings: step 3's admin fields are server-setup.test.tsx's).
+  const fields = byClass([find([tunnel], el => hasClass(el, 'access-fields'))], 'access-field')
   expect(fields.map(f => f.tag)).toEqual(Array(8).fill('label'))
   const inputs = findAll(fields, el => el.tag === 'input')
   expect(inputs.map(el => ['name', 'aria-label', 'value', 'placeholder'].map(a => el.attrs.get(a) ?? ''))).toEqual([
@@ -174,7 +176,15 @@ test('nothing set up: what is needed under its field, On off with the reason, th
   expect(textOf(key)).toContain('No key there yet.')
   expect(buttonsIn([key]).map(textOf)).toEqual(['Generate key'])
   // The parts in the order the panel has them.
-  const order = ['access-reach', 'access-status', 'access-actions', 'access-fields', 'access-key', 'access-snippets']
+  const order = [
+    'access-reach',
+    'access-status',
+    'access-actions',
+    'access-fields',
+    'access-key',
+    'access-server',
+    'access-snippets',
+  ]
   const seen = findAll([tunnel], el => order.some(c => hasClass(el, c))).map(el => order.find(c => hasClass(el, c)))
   expect([...new Set(seen)]).toEqual(order)
 
@@ -281,7 +291,7 @@ test('the key: its public key and the keys file’s line with Copy, the server�
   expect(textsOf([ownKey], 'access-problem')).toEqual(['bad passphrase'])
 })
 
-test('the server’s snippets, filled in: all of step 1 in one paste, the user and folder commands, the keys file, sshd, Caddy with its group; nginx folded away', () => {
+test('step 1’s snippets, filled in: all of step 1 in one paste, the user and folder commands, the keys file, sshd', () => {
   const view = { ...READY, tunnel: { ...READY.tunnel, settings: { ...READY.tunnel.settings, user: '' } } }
   const body = bodyOf(view)
   const snippets = find(body, el => hasClass(el, 'access-snippets'))
@@ -291,8 +301,6 @@ test('the server’s snippets, filled in: all of step 1 in one paste, the user a
     ["The tunnel's user and the socket's folder", true],
     ['The keys file, /etc/ssh/authorized_keys/boardtunnel', true],
     ['At the end of /etc/ssh/sshd_config', true],
-    ['The Caddyfile', true],
-    ['With nginx instead of Caddy', false],
   ])
   const code = details.map(d => findAll([d], el => el.tag === 'pre').map(textOf))
   expect(code[0]).toEqual([stepOnePaste('boardtunnel', TUNNEL_SOCKET, PUBLIC_KEY)])
@@ -304,25 +312,10 @@ test('the server’s snippets, filled in: all of step 1 in one paste, the user a
   expect(code[3]?.[0]).toStartWith(
     'Match User boardtunnel\n    AuthorizedKeysFile /etc/ssh/authorized_keys/boardtunnel',
   )
-  // The Caddyfile, and under it the group a host Caddy opens the socket with.
-  expect(code[4]).toEqual([
-    'board.example.com {\n    reverse_proxy unix//var/lib/boardtunnel/board.sock\n    header Strict-Transport-Security "max-age=31536000"\n}',
-    'sudo chgrp caddy /var/lib/boardtunnel && sudo chmod 2750 /var/lib/boardtunnel',
-  ])
-  expect(textsOf([details[4] as Element], 'access-note')).toEqual([t('access.snip.caddyGroup')])
-  expect(code[5]?.[0]).toContain('proxy_pass http://unix:/var/lib/boardtunnel/board.sock:;')
-  const nginx = details[5]
-  if (!nginx) throw new Error('no nginx')
-  expect(textOf(nginx)).toContain("nginx's group")
+  // The web server is step 3's (its plan, or Do it myself for a case): no Caddy or nginx here.
+  expect(textOf(snippets)).not.toContain('reverse_proxy')
   // A Copy for each text.
-  expect(details.map(d => buttonsIn([d]).map(textOf))).toEqual([
-    ['Copy'],
-    ['Copy'],
-    ['Copy'],
-    ['Copy'],
-    ['Copy', 'Copy'],
-    ['Copy'],
-  ])
+  expect(details.map(d => buttonsIn([d]).map(textOf))).toEqual([['Copy'], ['Copy'], ['Copy'], ['Copy']])
   // In Russian, the one paste has a title of its own.
   const ru = find(bodyOf(view, { lang: 'ru' }), el => hasClass(el, 'access-snippets'))
   const ruTitle = textOf(find([ru], el => el.tag === 'summary'))
@@ -349,10 +342,8 @@ test('the server’s snippets, filled in: all of step 1 in one paste, the user a
   )
   expect(mine.commands).toContain('sudo install -d -m 2750 -o tun -g tun /srv/tun')
   expect(mine.paste).toBe(stepOnePaste('tun', '/srv/tun/board.sock', PUBLIC_KEY))
-  expect(mine.caddyGroup).toBe('sudo chgrp caddy /srv/tun && sudo chmod 2750 /srv/tun')
   expect(mine.keysFile).toBe('/etc/ssh/authorized_keys/tun')
   expect(mine.sshd).toStartWith('Match User tun\n')
-  expect(mine.caddy).toStartWith('b.example.org {\n    reverse_proxy unix//srv/tun/board.sock\n')
   // config.json edited by hand: a value that fails its check never reaches a snippet pasted into a
   // root shell; its default stands in.
   const bad = serverSnippets(
@@ -368,11 +359,8 @@ test('the server’s snippets, filled in: all of step 1 in one paste, the user a
   expect(bad.commands).toContain('--shell /usr/sbin/nologin boardtunnel')
   expect(bad.commands).toContain('-o boardtunnel -g boardtunnel /var/lib/boardtunnel')
   expect(bad.paste).toBe(stepOnePaste('boardtunnel', TUNNEL_SOCKET, PUBLIC_KEY))
-  expect(bad.caddyGroup).toBe(caddyGroupLine(TUNNEL_SOCKET))
   expect(bad.keysFile).toBe('/etc/ssh/authorized_keys/boardtunnel')
   expect(bad.sshd).toStartWith('Match User boardtunnel\n')
-  expect(bad.caddy).toStartWith('board.example.com {\n    reverse_proxy unix//var/lib/boardtunnel/board.sock\n')
-  expect(bad.nginx).toContain('unix:/var/lib/boardtunnel/board.sock:')
   for (const text of Object.values(bad)) expect(text).not.toMatch(/rm -rf|curl|-oProxy/)
   expect(serverSnippets({ ...READY.tunnel.settings, user: 'x;id' }, null).user).toBe('boardtunnel')
 })
