@@ -505,6 +505,15 @@ test('asked to restart with nothing under way: it ends with 75 at once', async (
   expect(await exitWithin(wake.proc, 10_000)).toBe(75)
 })
 
+test('its supervisor gone (the IPC channel closed): it leaves, its port given back', async () => {
+  const box = await wakeSandbox()
+  idleAndAsleep(box)
+  const wake = await startWakeProcess(box, { port: await unusedPort() })
+  wake.proc.disconnect()
+  expect(await exitWithin(wake.proc, 10_000)).toBe(0)
+  expect(wakeLogText(box)).toContain('its supervisor is gone: stopping')
+})
+
 /** The status line of what the server answers to these raw bytes. */
 function rawStatusLine(port: number, request: string): Promise<string> {
   return new Promise((resolve, reject) => {

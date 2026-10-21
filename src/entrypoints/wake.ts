@@ -22,7 +22,8 @@
 // request with an Origin, or a Host other than 127.0.0.1:<port> or localhost:<port> (a web page, DNS
 // rebinding), is refused with 403. Once it listens it says { up: <port> } over its IPC channel, when it has one
 // (the supervisor's, services/wake/supervisor.ts); told 'restart' there (a code change), it ends
-// with 75 once no wake or sleep is under way, answering new ones 503 meanwhile. The port keeps wake
+// with 75 once no wake or sleep is under way, answering new ones 503 meanwhile; that channel closed
+// (the supervisor gone), it ends with 0 the same way, as when turned off. The port keeps wake
 // to one process: held by a wake of the board's, this one ends with 0 quietly; by another program
 // (the separate herdr-wake plugin's router too, named), the status file says portTaken and the
 // exit is 76.
@@ -408,4 +409,10 @@ if (start.reaper.enabled) reaper = reaperLoop()
 // done; the supervisor starts it again at once. Turned off meanwhile, it ends with 0 all the same.
 process.on('message', m => {
   if (m === 'restart' && !leaving) leave(RESTART_EXIT, 'wake is restarting', 'restarting for a code change')
+})
+// Its supervisor gone (its pane closed, the process killed): nobody would start this one again
+// after a code change nor watch its health, so it leaves as when turned off, giving its port back
+// for the wake its next start opens.
+process.on('disconnect', () => {
+  if (leaving?.code !== 0) leave(0, 'wake is stopping', 'its supervisor is gone: stopping')
 })
