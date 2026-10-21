@@ -1,0 +1,11 @@
+@@section caddy
+@@version 2.6.2
+@@part adapt
+"host":["a.example.com"]
+"host":["b.example.com"]
+@@adapt-exit 0
+@@sha256 59b53eb9334d48e813db5914dc865a663b8f8cbe721b4d83ff9cbec5d7b62b45  -
+@@newline 1
+@@part listen
+LISTEN 0      4096   *:443 *:*
+@@end

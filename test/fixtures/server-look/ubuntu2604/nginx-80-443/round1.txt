@@ -1,0 +1,88 @@
+@@section os
+PRETTY_NAME="Ubuntu 26.04.1 LTS"
+NAME="Ubuntu"
+VERSION_ID="26.04"
+VERSION="26.04.1 LTS (Resolute Raccoon)"
+VERSION_CODENAME=resolute
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=resolute
+LOGO=ubuntu-logo
+@@arch x86_64
+@@section ports
+LISTEN 0      511    0.0.0.0:80  0.0.0.0:* users:(("nginx",pid=815,fd=5),("nginx",pid=814,fd=5),("nginx",pid=813,fd=5),("nginx",pid=812,fd=5),("nginx",pid=811,fd=5),("nginx",pid=810,fd=5),("nginx",pid=809,fd=5),("nginx",pid=808,fd=5),("nginx",pid=807,fd=5),("nginx",pid=806,fd=5),("nginx",pid=805,fd=5),("nginx",pid=804,fd=5),("nginx",pid=801,fd=5),("nginx",pid=800,fd=5),("nginx",pid=799,fd=5),("nginx",pid=798,fd=5),("nginx",pid=797,fd=5),("nginx",pid=796,fd=5),("nginx",pid=795,fd=5),("nginx",pid=794,fd=5),("nginx",pid=793,fd=5),("nginx",pid=791,fd=5),("nginx",pid=789,fd=5),("nginx",pid=788,fd=5),("nginx",pid=787,fd=5),("nginx",pid=786,fd=5),("nginx",pid=785,fd=5),("nginx",pid=783,fd=5),("nginx",pid=782,fd=5),("nginx",pid=781,fd=5),("nginx",pid=780,fd=5),("nginx",pid=779,fd=5),("nginx",pid=778,fd=5))
+LISTEN 0      511    0.0.0.0:443 0.0.0.0:* users:(("nginx",pid=815,fd=7),("nginx",pid=814,fd=7),("nginx",pid=813,fd=7),("nginx",pid=812,fd=7),("nginx",pid=811,fd=7),("nginx",pid=810,fd=7),("nginx",pid=809,fd=7),("nginx",pid=808,fd=7),("nginx",pid=807,fd=7),("nginx",pid=806,fd=7),("nginx",pid=805,fd=7),("nginx",pid=804,fd=7),("nginx",pid=801,fd=7),("nginx",pid=800,fd=7),("nginx",pid=799,fd=7),("nginx",pid=798,fd=7),("nginx",pid=797,fd=7),("nginx",pid=796,fd=7),("nginx",pid=795,fd=7),("nginx",pid=794,fd=7),("nginx",pid=793,fd=7),("nginx",pid=791,fd=7),("nginx",pid=789,fd=7),("nginx",pid=788,fd=7),("nginx",pid=787,fd=7),("nginx",pid=786,fd=7),("nginx",pid=785,fd=7),("nginx",pid=783,fd=7),("nginx",pid=782,fd=7),("nginx",pid=781,fd=7),("nginx",pid=780,fd=7),("nginx",pid=779,fd=7),("nginx",pid=778,fd=7))
+LISTEN 0      511       [::]:80     [::]:* users:(("nginx",pid=815,fd=6),("nginx",pid=814,fd=6),("nginx",pid=813,fd=6),("nginx",pid=812,fd=6),("nginx",pid=811,fd=6),("nginx",pid=810,fd=6),("nginx",pid=809,fd=6),("nginx",pid=808,fd=6),("nginx",pid=807,fd=6),("nginx",pid=806,fd=6),("nginx",pid=805,fd=6),("nginx",pid=804,fd=6),("nginx",pid=801,fd=6),("nginx",pid=800,fd=6),("nginx",pid=799,fd=6),("nginx",pid=798,fd=6),("nginx",pid=797,fd=6),("nginx",pid=796,fd=6),("nginx",pid=795,fd=6),("nginx",pid=794,fd=6),("nginx",pid=793,fd=6),("nginx",pid=791,fd=6),("nginx",pid=789,fd=6),("nginx",pid=788,fd=6),("nginx",pid=787,fd=6),("nginx",pid=786,fd=6),("nginx",pid=785,fd=6),("nginx",pid=783,fd=6),("nginx",pid=782,fd=6),("nginx",pid=781,fd=6),("nginx",pid=780,fd=6),("nginx",pid=779,fd=6),("nginx",pid=778,fd=6))
+LISTEN 0      511       [::]:443    [::]:* users:(("nginx",pid=815,fd=8),("nginx",pid=814,fd=8),("nginx",pid=813,fd=8),("nginx",pid=812,fd=8),("nginx",pid=811,fd=8),("nginx",pid=810,fd=8),("nginx",pid=809,fd=8),("nginx",pid=808,fd=8),("nginx",pid=807,fd=8),("nginx",pid=806,fd=8),("nginx",pid=805,fd=8),("nginx",pid=804,fd=8),("nginx",pid=801,fd=8),("nginx",pid=800,fd=8),("nginx",pid=799,fd=8),("nginx",pid=798,fd=8),("nginx",pid=797,fd=8),("nginx",pid=796,fd=8),("nginx",pid=795,fd=8),("nginx",pid=794,fd=8),("nginx",pid=793,fd=8),("nginx",pid=791,fd=8),("nginx",pid=789,fd=8),("nginx",pid=788,fd=8),("nginx",pid=787,fd=8),("nginx",pid=786,fd=8),("nginx",pid=785,fd=8),("nginx",pid=783,fd=8),("nginx",pid=782,fd=8),("nginx",pid=781,fd=8),("nginx",pid=780,fd=8),("nginx",pid=779,fd=8),("nginx",pid=778,fd=8))
+@@pid 815
+0::/docker/da0c276d6e7a9bce29aaed1e5598183ee618f1be5654c99d1c769eb80c9f41f0/system.slice/nginx.service
+@@section docker
+@@cli Docker version 29.9.2, build a82e528
+@@server 29.9.2
+@@security ["name=seccomp,profile=builtin","name=cgroupns"]
+@@network "bridge" "bridge"
+@@network "host" "host"
+@@network "none" "null"
+@@section systemd
+@@running
+Id=caddy.service
+LoadState=not-found
+ActiveState=inactive
+WorkingDirectory=
+User=
+Group=
+
+Id=nginx.service
+LoadState=loaded
+ActiveState=active
+ExecStart={ path=/usr/sbin/nginx ; argv[]=/usr/sbin/nginx -g daemon on; master_process on; ; ignore_errors=no ; start_time=[Wed 2026-10-21 13:18:44 UTC] ; stop_time=[Wed 2026-10-21 13:18:44 UTC] ; pid=777 ; code=exited ; status=0 }
+ExecReload={ path=/usr/sbin/nginx ; argv[]=/usr/sbin/nginx -g daemon on; master_process on; -s reload ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }
+WorkingDirectory=
+User=
+Group=
+@@section fence
+clientaliveinterval 15
+clientalivecountmax 2
+streamlocalbindmask 0117
+passwordauthentication no
+kbdinteractiveauthentication no
+x11forwarding no
+permittty no
+allowtcpforwarding remote
+allowagentforwarding no
+allowstreamlocalforwarding remote
+streamlocalbindunlink yes
+forcecommand /bin/false
+authorizedkeysfile /etc/ssh/authorized_keys/boardtunnel
+authenticationmethods publickey
+permittunnel no
+permitlisten none
+@@section folder
+@@dir 2750 boardtunnel boardtunnel 995
+@@group boardtunnel:x:995:
+@@socket 660 boardtunnel boardtunnel socket
+@@section record
+@@section host
+@@selinux 
+@@forward 1
+@@fetch curl
+@@sudo sudo-rs 0.2.13-0ubuntu1.2
+@@ls ls (uutils coreutils) 0.10.0
+@@package containerd not-installed
+@@package docker.io not-installed
+@@package runc not-installed
+@@section dns
+@@part domain
+203.0.113.10    STREAM board.example.com
+203.0.113.10    DGRAM  
+203.0.113.10    RAW    
+@@part local
+1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+1: lo    inet6 ::1/128 scope host proto kernel_lo \       valid_lft forever preferred_lft forever
+2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0\       valid_lft forever preferred_lft forever
+3: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\       valid_lft forever preferred_lft forever
+@@end
