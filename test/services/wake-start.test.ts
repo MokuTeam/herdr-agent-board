@@ -164,9 +164,48 @@ test('a record from before this boot is stale though its pid runs now; one of th
     opened(),
   ])
 
-  const since = await start({ status: { state: 'running', at: BOOTED_AT + 1, pane: 'wW:p1', pid: LIVE } })
+  const since = await start({ status: { state: 'running', at: NOW - 1000, pane: 'wW:p1', pid: LIVE } })
   expect(since.result).toBe('present')
   expect(since.written).toEqual([])
+})
+
+// herdr's restart (or a Windows "Shut down" with Fast Startup, which keeps the uptime) ends the
+// supervisor; its pid goes to another process. Nothing answers on the port, so a record older than
+// a start's time is no wake running, whatever process has its pid now.
+test('a record of this boot whose pid runs, older than a start’s time with nothing answering: the restored pane replaced', async () => {
+  for (const state of ['running', 'starting', 'stopped', 'failed'] as const) {
+    const out = await start({ status: { state, at: NOW - 5 * 60_000, pane: 'wW:p1', pid: LIVE } })
+    expect([state, out.result]).toEqual([state, 'opened'])
+    expect(out.calls).toEqual([
+      ['plugin', 'list', '--json'],
+      ['api', 'snapshot'],
+      ['tab', 'close', 'wake-tab'],
+      ['api', 'snapshot'],
+      opened(),
+    ])
+    expect(out.file).toEqual({ state: 'starting', at: NOW, pane: NEW_PANE })
+  }
+  // Parked (crashed five times, or its port another program's): its supervisor waits, the pane is wake's.
+  for (const state of ['crashed', 'portTaken'] as const) {
+    const out = await start({ status: { state, at: NOW - 5 * 60_000, pane: 'wW:p1', pid: LIVE } })
+    expect([state, out.result]).toEqual([state, 'present'])
+    expect(out.written).toEqual([])
+  }
+})
+
+test('the recorded pane is a program of the user’s in Wake now (no agent, another folder): never closed, a new wake pane opened', async () => {
+  const other = process.platform === 'win32' ? 'C:\\Work\\Проект x 50%' : '/work/Проект x 50%'
+  const snap = wakeTab()
+  snap.panes = snap.panes.map(p => (p.pane_id === 'wW:p1' ? { ...p, cwd: other, terminal_title_stripped: 'vim' } : p))
+  for (const status of [
+    { state: 'running', at: NOW - 1000, pane: 'wW:p1', pid: LIVE },
+    { state: 'running', at: NOW - 1000, pane: 'wW:p1', pid: 999_999 },
+  ] as const) {
+    const out = await start({ status, snap: structuredClone(snap) })
+    expect(out.result).toBe('opened')
+    expect(out.calls).toEqual([['plugin', 'list', '--json'], ['api', 'snapshot'], opened()])
+    expect(out.file).toEqual({ state: 'starting', at: NOW, pane: NEW_PANE })
+  }
 })
 
 test('a record from before this boot names no pane nor process in what the start writes', async () => {

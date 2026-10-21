@@ -120,10 +120,10 @@ test('the panel’s switches edit config.json; Start and Start again call the st
   assert.deepEqual(starts(proc), [])
   assert.deepEqual(await (await post({ op: 'again' })).json(), { ok: true })
   assert.deepEqual(starts(proc), [['--again']])
-  // Down: Start starts it.
+  // Down (not running): Start starts it, its pane made anew.
   wake.down()
   assert.deepEqual(await (await post({ op: 'start' })).json(), { ok: true })
-  assert.deepEqual(starts(proc), [['--again'], []])
+  assert.deepEqual(starts(proc), [['--again'], ['--again']])
 
   // Log.
   assert.deepEqual(await (await post({ op: 'log' })).json(), { ok: true, text: 'one\ntwo' })
@@ -139,7 +139,7 @@ test('the panel’s switches edit config.json; Start and Start again call the st
   assert.deepEqual(await (await post({ op: 'off' })).json(), { ok: true })
   assert.equal((configOf(box).wake as { enabled: boolean }).enabled, false)
   await until(() => reloaded() > seen)
-  assert.deepEqual(starts(proc), [['--again'], []])
+  assert.deepEqual(starts(proc), [['--again'], ['--again']])
   // None of it asked herdr for more than the board's own snapshot.
   assert.deepEqual([...new Set(box.calls().map(c => c.join(' ')))], ['api snapshot'])
 })

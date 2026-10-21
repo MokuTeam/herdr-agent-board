@@ -232,7 +232,7 @@ test('its pane is there with its supervisor running: nothing opened, nothing clo
         snapshot: {
           workspaces: [{ workspace_id: 'wW', label: 'Wake' }],
           tabs: [{ tab_id: 'wake-tab', workspace_id: 'wW' }],
-          panes: [{ pane_id: 'wW:p1', tab_id: 'wake-tab', workspace_id: 'wW' }],
+          panes: [{ pane_id: 'wW:p1', tab_id: 'wake-tab', workspace_id: 'wW', cwd: ROOT }],
         },
       },
     },
@@ -246,13 +246,43 @@ test('its pane is there with its supervisor running: nothing opened, nothing clo
   expect(statusOf(box)).toEqual(status)
 })
 
+// herdr's restart, or a Windows "Shut down" with Fast Startup (the uptime kept), ends the
+// supervisor and gives its pid to another process (here: the test's own).
+test('a running record of this boot minutes old whose pid runs, nothing answering: its pane replaced', async () => {
+  const box = await wakeSandbox()
+  await wakeOn(box)
+  writeStatus(box, { state: 'running', at: Date.now() - 5 * 60_000, pane: 'wW:p1', pid: process.pid, port: 40000 })
+  box.state({
+    ...noOldPlugin,
+    'api snapshot': {
+      result: { snapshot: restored },
+      until: ['tab close'],
+      // biome-ignore lint/suspicious/noThenProperty: the fake herdr's reply after the close (test/support/fake-herdr.ts)
+      then: { result: { snapshot: wakeTabClosed } },
+    },
+    'tab close': { result: {} },
+    ...opensIn('wW:p9'),
+  })
+  const out = await runStart(box)
+  expect([out.code, out.stdout.trim()]).toEqual([0, "wake's start: opened"])
+  expect(box.calls()).toEqual([
+    ['plugin', 'list', '--json'],
+    ['api', 'snapshot'],
+    ['tab', 'close', 'wake-tab'],
+    ['api', 'snapshot'],
+    openCall('wW'),
+  ])
+  expect(statusOf(box)).toEqual({ state: 'starting', at: expect.any(Number), pane: 'wW:p9' })
+})
+
 // After a restart herdr brings wake's tab back under the same pane id, a shell in it in place of
-// the supervisor, while the status file still names that pane and the supervisor's process.
+// the supervisor (in the plugin's folder, where wake's pane was opened), while the status file
+// still names that pane and the supervisor's process.
 const restored = {
   workspaces: [{ workspace_id: 'wW', label: 'Wake' }, main.workspace],
   tabs: [{ tab_id: 'wake-tab', workspace_id: 'wW' }, main.tab],
   panes: [
-    { pane_id: 'wW:p1', tab_id: 'wake-tab', workspace_id: 'wW', terminal_title_stripped: 'pwsh' },
+    { pane_id: 'wW:p1', tab_id: 'wake-tab', workspace_id: 'wW', cwd: ROOT, terminal_title_stripped: 'pwsh' },
     { pane_id: 'wW:p2', tab_id: 'wake-tab', workspace_id: 'wW', tokens: sidebar },
     main.agent,
   ],
