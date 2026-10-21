@@ -62,7 +62,6 @@ import { isRecord } from '../adapters/json-store.ts'
 import { boardFile } from '../adapters/paths.ts'
 import { runHere } from '../adapters/process.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
-import { loadProfiles } from '../adapters/profiles.ts'
 import { addEntry, askRestart, listEntries, type NewEntry, removeEntry } from '../adapters/schedule-store.ts'
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
@@ -625,7 +624,9 @@ async function resume(): Promise<void> {
   const plan = resumePlan({
     ...o,
     card: readCard(o.session),
-    profiles: loadProfiles(),
+    // The list the wake process reads too (services/deps.ts profiles): the listed and found
+    // folders, and the one this env points to.
+    profiles: deps.profiles().list,
     launch: cfg.launch,
     env: process.env,
     home: homedir(),
