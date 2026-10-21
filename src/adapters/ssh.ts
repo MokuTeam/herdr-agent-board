@@ -5,7 +5,9 @@
 // through a shell; System32's programs are run by their full path.
 import { type ChildProcess, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { join, win32 } from 'node:path'
+import { pinnedIn } from '../core/server-admin.ts'
 import { sshHint, type TunnelConfig, type TunnelHint } from '../core/tunnel.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
 import { stateDir } from './paths.ts'
@@ -185,6 +187,94 @@ export function spawnSsh(bin: string, args: string[]): SshChild {
         process.kill(pid)
       } catch {}
     },
+  }
+}
+
+/** The admin connection's ssh (core/server-admin.ts): its lines as they come, how it ended, and ending it. */
+export interface RemoteRun {
+  /**
+   * Each line as it comes: from stdout ('out'), all of them, empty ones too (a script's output is
+   * data), or from stderr ('err': ssh's and sudo's words), empty ones left out.
+   */
+  onLine(fn: (line: string, from: 'out' | 'err') => void): void
+  /** Its exit code (null when a signal ended it), or why it did not run ('ENOENT'…) or was ended ('timeout'). */
+  done: Promise<{ code: number | null; error: string | null }>
+  /** It and everything it started. */
+  kill(): void
+}
+
+/**
+ * ssh with this argument list, no shell: stdout and stderr read by line; `stdin` written, then
+ * closed (null: closed at once), so the sudo password is on ssh's stdin and nowhere else; ended
+ * after `timeoutMs`.
+ */
+export function spawnRemote(bin: string, args: string[], stdin: string | null, timeoutMs: number): RemoteRun {
+  const listeners: ((line: string, from: 'out' | 'err') => void)[] = []
+  let done = false
+  let why: string | null = null
+  let deadline: ReturnType<typeof setTimeout> | undefined
+  let settle: (result: { code: number | null; error: string | null }) => void = () => {}
+  const ended = new Promise<{ code: number | null; error: string | null }>(resolve => {
+    settle = result => {
+      if (done) return
+      done = true
+      clearTimeout(deadline)
+      resolve(result)
+    }
+  })
+  let child: ChildProcess
+  try {
+    child = spawn(bin, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+  } catch (err) {
+    settle({ code: null, error: String((err as NodeJS.ErrnoException).code ?? (err as Error).message) })
+    return { onLine: () => {}, done: ended, kill: () => {} }
+  }
+  const pid = child.pid ?? 0
+  const kill = (): void => {
+    if (!done && pid) killTreePid(pid)
+  }
+  deadline = setTimeout(() => {
+    why = 'timeout'
+    kill()
+  }, timeoutMs)
+  const rest = { out: '', err: '' }
+  const emit = (line: string, from: 'out' | 'err'): void => {
+    if (line || from === 'out') for (const fn of listeners) fn(line, from)
+  }
+  const read = (from: 'out' | 'err') => (chunk: string) => {
+    const lines = (rest[from] + chunk).split(/\r?\n/)
+    rest[from] = lines.pop() ?? ''
+    for (const line of lines) emit(line, from)
+  }
+  child.stdout?.setEncoding('utf8').on('data', read('out'))
+  child.stderr?.setEncoding('utf8').on('data', read('err'))
+  // ssh may end before it reads stdin (a refused key): that write's EPIPE is no error of ours
+  child.stdin?.on('error', () => {})
+  if (stdin !== null) child.stdin?.write(stdin)
+  child.stdin?.end()
+  const finish = (code: number | null): void => {
+    if (done) return
+    // what came after the last line break is a line too, when there is any
+    for (const from of ['out', 'err'] as const) {
+      const tail = rest[from].replace(/\r$/, '')
+      rest[from] = ''
+      if (tail) emit(tail, from)
+    }
+    settle({ code, error: why })
+  }
+  child.on('error', err => settle({ code: null, error: String((err as NodeJS.ErrnoException).code ?? err.message) }))
+  // Once its output is read to the end; a pipe something else holds open does not keep it waiting.
+  child.on('exit', code => setTimeout(() => finish(code), 300).unref?.())
+  child.on('close', code => finish(code))
+  return { onLine: fn => listeners.push(fn), done: ended, kill }
+}
+
+/** Whether the board's known_hosts pins the server's key for this host and port (Test connection pinned it). */
+export async function hostKeyPinned(host: string, port: number): Promise<boolean> {
+  try {
+    return pinnedIn(await readFile(knownHostsFile(), 'utf8'), host, port)
+  } catch {
+    return false
   }
 }
 

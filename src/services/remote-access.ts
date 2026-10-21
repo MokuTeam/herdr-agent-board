@@ -38,6 +38,7 @@ import {
 } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
 import type { Access } from './access.ts'
+import type { ServerSetup } from './server-setup.ts'
 import type { Supervisor } from './tunnel.ts'
 
 export interface RemoteAccess {
@@ -58,6 +59,8 @@ export interface RemoteAccessDeps {
   tunnel: { listening(): number | null }
   /** A change of the view nothing else tells of: a key made, the server's key forgotten, or pinned by a Test. */
   onChange?: () => void
+  /** Setting up the server's web server through the admin connection (services/server-setup.ts). */
+  server: ServerSetup
 }
 
 type Answer = { status: number; body: unknown }
@@ -193,7 +196,7 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
         login,
         logins,
         attempts,
-        server: null,
+        server: d.server.view(),
       }
     },
 
@@ -243,6 +246,19 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
         case 'lockout-lift':
           access.liftLockout()
           return ok()
+        // Setting up the server: answers that never hold the body (the sudo password)
+        case 'server-admin':
+          return d.server.admin(b)
+        case 'server-look':
+          return d.server.look(b)
+        case 'server-apply':
+          return d.server.apply(b)
+        case 'server-undo-look':
+          return d.server.undoLook(b)
+        case 'server-undo':
+          return d.server.undo(b)
+        case 'server-cancel':
+          return d.server.cancel()
         default:
           return malformed(`unknown op ${String(b.op)}`)
       }

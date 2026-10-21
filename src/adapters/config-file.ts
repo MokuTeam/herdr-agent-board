@@ -23,6 +23,8 @@ import {
   resolveProfileDir,
   shownProfiles,
 } from '../core/profiles.ts'
+import type { Admin } from '../core/server-admin.ts'
+import type { SetupCase } from '../core/server-plan.ts'
 import type { TunnelField } from '../core/tunnel.ts'
 import type { Category, Config } from '../core/types.ts'
 import { allCards, writeCard } from './cards.ts'
@@ -96,6 +98,38 @@ export function editTunnel(fields: Partial<Record<TunnelField, unknown>>): EditR
     if (value === null || value === '') delete tunnel[field]
     else tunnel[field] = value
   }
+  raw.tunnel = tunnel
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/**
+ * The admin connection's fields (`tunnel.admin`, core/server-admin.ts) in config.json, keeping its
+ * other fields: each given is set, '' removes it; none left removes `admin`. Checking them is the
+ * caller's (adminProblems).
+ */
+export function editTunnelAdmin(a: Partial<Admin>): EditResult {
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  const tunnel = tunnelOf(raw)
+  const admin: Raw = isRecord(tunnel.admin) ? { ...tunnel.admin } : {}
+  for (const [field, value] of Object.entries(a)) {
+    if (value === undefined) continue
+    if (value === '') delete admin[field]
+    else admin[field] = value
+  }
+  if (Object.keys(admin).length) tunnel.admin = admin
+  else delete tunnel.admin
+  raw.tunnel = tunnel
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/** The setup on record, as the panel shows it (`tunnel.setup`: its case, address and when), or none (null). */
+export function setTunnelSetup(s: { case: SetupCase; address: string; at: string } | null): EditResult {
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  const tunnel = tunnelOf(raw)
+  if (s) tunnel.setup = { ...(isRecord(tunnel.setup) ? tunnel.setup : {}), ...s }
+  else delete tunnel.setup
   raw.tunnel = tunnel
   writeRaw(raw)
   return { ok: true }

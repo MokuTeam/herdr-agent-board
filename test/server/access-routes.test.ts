@@ -485,6 +485,25 @@ describe('Remote access, set up from the local board', () => {
     expect(await api.op({ op: 'hostkey-forget' })).toEqual([200, { ok: true }])
     expect((await api.view()).tunnel.hostKey).toBeNull()
   })
+
+  test("setting up the server: the admin's fields checked as the tunnel's, and Look needs the server's key pinned first", async () => {
+    const before = readFileSync(configPath, 'utf8')
+    expect(await api.op({ op: 'server-admin', user: '-l' })).toEqual([
+      409,
+      { ok: false, hint: null, field: 'user', error: 'The user is a plain user name, without a leading dash' },
+    ])
+    expect(readFileSync(configPath, 'utf8')).toBe(before)
+    expect(await opReloaded({ op: 'server-admin', user: 'admin' })).toEqual([200, { ok: true }])
+    expect(((JSON.parse(readFileSync(configPath, 'utf8')) as Reply).tunnel as Reply).admin).toEqual({ user: 'admin' })
+    expect((await api.view()).server).toMatchObject({ admin: { user: 'admin', key: '' }, phase: 'idle', plan: null })
+    // the key was forgotten above: nothing is spawned, the answer says why
+    const [status, refused] = await api.op({ op: 'server-look' })
+    expect([status, refused.ok, refused.hint]).toEqual([409, false, 'noHostKey'])
+    // the admin's line is the one with StrictHostKeyChecking=yes and no -R: none ran
+    expect(ssh.keygenCalls().filter(a => a.includes('StrictHostKeyChecking=yes'))).toEqual([])
+    expect(await api.op({ op: 'server-apply', plan: 'r1' })).toMatchObject([409, { ok: false, hint: 'lookAgain' }])
+    expect(await api.op({ op: 'server-look', password: 'a\nb' })).toEqual([400, { ok: false, error: 'password' }])
+  })
 })
 
 describe('the board restarts: never two ssh, and none left behind', () => {
