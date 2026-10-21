@@ -3,8 +3,10 @@
 //   lanes = categories, columns = Working / Needs me / Waiting on others / Done / Idle
 //   Enter or double click: go to the session (waking it if it sleeps); m: send it a message;
 //   w: set what it waits for; x: clear its card; c: change its category; f: a favorite or not;
-//   1-9 / 0: filter lanes;
-//   q / Esc: back to where you were (an overlay board closes instead); Ctrl+C: close the board.
+//   1-9 / 0: filter lanes; W M O D I: one column alone (again: all); /: search as you type;
+//   g / G: the first / last card;
+//   q / Esc: back to where you were (an overlay board closes instead; with a column alone or a
+//   search on, Esc ends those first); Ctrl+C: close the board.
 // This module owns stdin, stdout and the process; render.ts only turns state into text.
 import { mkdirSync, readFileSync, unlinkSync, watch, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -12,8 +14,9 @@ import { writeCard } from '../adapters/cards.ts'
 import { liveConfig } from '../adapters/config-file.ts'
 import { boardFile, cardsDir, stateDir } from '../adapters/paths.ts'
 import { listEntries } from '../adapters/schedule-store.ts'
+import { columnKey, toggledColumn } from '../core/board-keys.ts'
 import { t } from '../core/lang.ts'
-import type { Item } from '../core/types.ts'
+import type { ColumnId, Item } from '../core/types.ts'
 import { type BoardServer, startServer } from '../server/app.ts'
 import * as actions from '../services/actions.ts'
 import { collect } from '../services/board.ts'
@@ -22,7 +25,7 @@ import { goBack } from '../services/nav.ts'
 import { startScheduler } from '../services/scheduler.ts'
 import { openWeb } from '../services/web-open.ts'
 import { ACTION, hitAt, parseMouse, tokens } from './input.ts'
-import { HEADER_ROWS, isWide, render, type Size } from './render.ts'
+import { headerRows, isWide, render, type Size } from './render.ts'
 import { build, byKey, createState, type Dir, move, selected } from './state.ts'
 import { charWidth } from './terminal.ts'
 
@@ -170,12 +173,55 @@ function setFilter(n: number): void {
   draw()
 }
 
-const DIRS: readonly string[] = ['up', 'down', 'left', 'right', 'home']
+const DIRS: readonly string[] = ['up', 'down', 'left', 'right', 'home', 'last']
+
+/** The column shown alone and the search apply anew, from the top. */
+function refilter(): void {
+  state.scroll = 0
+  state.follow = true
+  build(state)
+  draw()
+}
+
+function showColumn(picked: ColumnId): void {
+  state.column = toggledColumn(state.column, picked)
+  refilter()
+}
+
+/** Search as you type; Enter keeps it, Escape takes it off. */
+function search(): void {
+  const before = state.query
+  state.mode = 'input'
+  state.input = {
+    label: t('tui.search'),
+    text: before,
+    submit: text => {
+      state.query = text
+      refilter()
+    },
+    change: text => {
+      state.query = text
+      refilter()
+    },
+    cancel: () => {
+      state.query = ''
+      refilter()
+    },
+  }
+  draw()
+}
 
 function onAction(name: string): void {
   const it = selected(state)
   switch (name) {
     case 'quit':
+      // A column shown alone or a search goes first, the board after.
+      if (state.column || state.query) {
+        state.column = null
+        state.query = ''
+        refilter()
+        return
+      }
       if (OVERLAY || !PANE) quit()
       else void goBack()
       return
@@ -216,6 +262,9 @@ function onAction(name: string): void {
         draw()
       }
       return
+    case 'search':
+      search()
+      return
     default:
       if (name.startsWith('filter:')) setFilter(Number(name.slice(7)))
       else if (DIRS.includes(name) && move(state, name as Dir, isWide(size().columns))) draw()
@@ -233,6 +282,7 @@ function onData(data: string): void {
     else if (state.mode === 'input') onInputKey(tok)
     else if (state.mode === 'category') onCategoryKey(tok)
     else if (/^[0-9]$/.test(tok)) onAction(`filter:${tok}`)
+    else if (columnKey(tok)) showColumn(columnKey(tok) as ColumnId)
     else {
       const action = ACTION.get(tok)
       if (action) onAction(action)
@@ -254,10 +304,16 @@ function onInputKey(tok: string): void {
   if (tok === '\x1b' || tok === '\x03') {
     state.mode = 'board'
     state.input = null
-  } else if (tok === '\x7f' || tok === '\b') input.text = [...input.text].slice(0, -1).join('')
+    input.cancel?.()
+    draw()
+    return
+  }
+  const before = input.text
+  if (tok === '\x7f' || tok === '\b') input.text = [...input.text].slice(0, -1).join('')
   else if (tok === '\x15') input.text = ''
   else if (tok === '\x17') input.text = input.text.replace(/\S*\s*$/, '')
   else if (!tok.startsWith('\x1b') && charWidth(tok.codePointAt(0) ?? 0) > 0) input.text += tok
+  if (input.text !== before) input.change?.(input.text)
   draw()
 }
 
@@ -295,7 +351,7 @@ function onMouse(tok: string): void {
     return
   }
   if (m.button !== 0) return
-  const hit = hitAt(state.hits, state.scroll + (m.y - 1 - HEADER_ROWS), m.x)
+  const hit = hitAt(state.hits, state.scroll + (m.y - 1 - headerRows(state, size())), m.x)
   if (!hit) return
   const now = Date.now()
   if (state.lastClick.key === hit.key && now - state.lastClick.at < 450) {

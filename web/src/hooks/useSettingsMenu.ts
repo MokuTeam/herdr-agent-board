@@ -1,8 +1,9 @@
 // Settings (the gear in the toolbar; the old page's app.js #settings): the menu out of the button,
-// and what its items do — light or dark (models/theme.ts), the board's language for every board,
-// the panels' place and default size (components/panel/place.ts), whether sleeping sessions show,
-// with more than one profile folder the Profiles panel, while wake's state line is in the payload
-// Sleep and wake…, and how sessions asleep in "Waiting" fold, for every board. The items are models/settings-menu.ts.
+// and what its items do — light or dark (models/theme.ts), Classic or Terminal (models/look.ts),
+// the board's language for every board, the panels' place and default size
+// (components/panel/place.ts), whether sleeping sessions show, with more than one profile folder
+// the Profiles panel, while wake's state line is in the payload Sleep and wake…, and how sessions
+// asleep in "Waiting" fold, for every board. The items are models/settings-menu.ts.
 import { useEffect, useState } from 'react'
 import type { FoldMode } from '../../../src/core/fold-mode.ts'
 import { LANGUAGES, translator } from '../../../src/core/i18n/translator.ts'
@@ -10,6 +11,7 @@ import type { Translator } from '../../../src/core/types.ts'
 import { api, errorText } from '../api/client.ts'
 import type { MenuEngine, MenuSource } from '../components/menu/menu-engine.ts'
 import { useLanguage } from '../i18n/I18nProvider.tsx'
+import { LOOK_KEY, lookNow, setLook } from '../models/look.ts'
 import { type Dock, isDock } from '../models/panel-layout.ts'
 import { offersProfiles } from '../models/profiles.ts'
 import { settingPicked, settingsMenu } from '../models/settings-menu.ts'
@@ -34,6 +36,9 @@ export interface SettingsDeps {
   /** The pointer is a finger. */
   coarse(): boolean
   setTheme(theme: string): void
+  /** The style on show (data-look on <html>, else 'classic'); none: no Style item. */
+  look?(): string
+  setLook?(look: string): void
   chooseLanguage(lang: string): void
   placePanels(dock: string): void
   resetPanelSize(): void
@@ -60,6 +65,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
     const items = settingsMenu({
       t,
       theme: themeNow(deps.root()),
+      look: deps.look?.(),
       languages: deps.languages(),
       canEdit: deps.canEdit(),
       dock: deps.dock(),
@@ -79,6 +85,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       onPick: id => {
         const pick = settingPicked(id)
         if (pick?.kind === 'theme') deps.setTheme(pick.value)
+        else if (pick?.kind === 'look') deps.setLook?.(pick.value)
         else if (pick?.kind === 'lang') deps.chooseLanguage(pick.value)
         else if (pick?.kind === 'dock') deps.placePanels(pick.value)
         else if (pick?.kind === 'reset') deps.resetPanelSize()
@@ -170,6 +177,12 @@ export function settingsGear(
   }
 }
 
+/** The page's cross-fade into another theme or style, when the browser has it and motion is not reduced. */
+const crossFade = (): ((apply: () => void) => unknown) | undefined =>
+  typeof document.startViewTransition === 'function' && !reducedMotion.matches
+    ? apply => document.startViewTransition(apply)
+    : undefined
+
 /**
  * Settings for the page: `menu` is the board's one menu (hooks/useContextMenus.ts);
  * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel, `openWake` Sleep and wake.
@@ -200,11 +213,18 @@ export function useSettingsMenu(
           root: document.documentElement,
           keep: value => storage.set(THEME_KEY, value),
           // A cross-fade, not a flash from one brightness to the other.
-          transition:
-            typeof document.startViewTransition === 'function' && !reducedMotion.matches
-              ? apply => document.startViewTransition(apply)
-              : undefined,
+          transition: crossFade(),
         }),
+      look: () => lookNow(document.documentElement),
+      setLook: look => {
+        setLook(look, {
+          root: document.documentElement,
+          keep: value => storage.set(LOOK_KEY, value),
+          transition: crossFade(),
+        })
+        // A column shown alone is the Terminal style's (its keys): Classic shows them all.
+        if (look !== 'terminal') latest.current.board.dispatch({ type: 'column', id: null })
+      },
       chooseLanguage: lang => {
         const { t, choose, board } = latest.current
         void chooseLanguage(lang, {

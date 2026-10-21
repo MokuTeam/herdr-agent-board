@@ -61,6 +61,8 @@ interface Options {
   remote?: () => RemoteView | null
   /** Whether the board can ask a session a side question (services/aside.ts asideCheck). */
   aside?: () => boolean
+  /** The Omarchy theme's stamp (adapters/omarchy.ts), on a computer with Omarchy only. */
+  omarchy?: () => string | null
 }
 
 // The colors the category editor offers (aliases left out).
@@ -120,6 +122,11 @@ function wakeOf(wake: Options['wake']): { wake?: WakeView } {
   return view ? { wake: view } : {}
 }
 
+function omarchyOf(omarchy: Options['omarchy']): { omarchy?: string } {
+  const stamp = omarchy?.() ?? null
+  return stamp ? { omarchy: stamp } : {}
+}
+
 function remoteOf(remote: Options['remote']): { remote?: RemoteView } {
   const view = remote?.() ?? null
   return view ? { remote: view } : {}
@@ -136,6 +143,7 @@ export function createBoardState({
   mokupilot,
   remote,
   aside,
+  omarchy,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -207,6 +215,8 @@ export function createBoardState({
       foldWaiting: foldModeOf(cfg.foldWaiting),
       // remote: only while the remote mode is on; a board without it sends none.
       ...remoteOf(remote),
+      // omarchy: only on a computer with Omarchy, the theme the Terminal style follows.
+      ...omarchyOf(omarchy),
     }
   }
 

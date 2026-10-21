@@ -3,11 +3,13 @@
 // field, closes the panel or clears the search, digits answer the open question; while the quick
 // look is open, N, F2 and the digits do nothing; Ctrl+` opens the terminal of the session in the
 // sheet; Ctrl+Z brings back what went to the archive while its toast shows. An open menu, the launch window or the terminal window takes the keys first.
+// A key none of these takes goes to the Terminal style's keys (hooks/useTerminalKeys.ts), which act only while the page shows that style.
 import { useEffect } from 'react'
 import { boardKey, type KeyScene, stopsNativeClear } from '../models/board-keys.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { useLatest } from './useLatest.ts'
 import { laneContext, type OpenLaunch } from './useNewSession.ts'
+import type { LeftKey } from './useTerminalKeys.ts'
 
 export interface BoardKeysOptions {
   openNextAttention(): void
@@ -30,6 +32,8 @@ export interface BoardKeysOptions {
   openTerminal?: (key: string, from: Element | null) => void
   /** What went to the archive last, while its toast offers Return (hooks/useArchive.ts). */
   archive?: { canUndo(): boolean; undo(): void }
+  /** A key the board's own keys leave: the Terminal style's (hooks/useTerminalKeys.ts); true when it took it. */
+  terminal?: (e: KeyboardEvent, left: LeftKey) => boolean
 }
 
 const cardOf = (el: Element | null): HTMLElement | null => el?.closest<HTMLElement>('.card[data-key]') ?? null
@@ -61,6 +65,10 @@ export function useBoardKeys(opts: BoardKeysOptions): void {
         undo: o.archive?.canUndo() ?? false,
       }
       const action = boardKey(e, scene)
+      if (action === null) {
+        o.terminal?.(e, { typing, quickLook: scene.quickLook })
+        return
+      }
       switch (action) {
         case 'blur':
           // Leave the field, keep the filter: the second Escape clears the search.

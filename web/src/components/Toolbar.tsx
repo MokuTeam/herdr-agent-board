@@ -185,7 +185,7 @@ export function Toolbar({
       <p id="connection-state" role="status" hidden={canMutate}>
         {t(canEdit ? 'mobile.readOnly' : 'live.off')}
       </p>
-      <ColumnsHead heads={heads} />
+      <ColumnsHead heads={heads} only={ui.column} />
     </header>
   )
 }

@@ -2,13 +2,14 @@
 // draws it.
 import { COLUMNS } from '../core/board.ts'
 import { categoryInfo, laneRank } from '../core/categories.ts'
+import { type Dir, gridStep, listStep } from '../core/grid-nav.ts'
 import type { Profile } from '../core/profiles.ts'
 import type { ScheduleEntry } from '../core/schedule-rules.ts'
 import type { Category, ColumnId, Config, Item } from '../core/types.ts'
 import type { Hit } from './input.ts'
 
 export type Mode = 'board' | 'input' | 'category'
-export type Dir = 'up' | 'down' | 'left' | 'right' | 'home'
+export type { Dir }
 
 /** A category's row of cards: one list per column, after the filter. */
 export interface Lane {
@@ -23,6 +24,10 @@ export interface InputPrompt {
   label: string
   text: string
   submit: (text: string) => void
+  /** Each change of the text, as it is typed (the search filters as you type). */
+  change?: (text: string) => void
+  /** Escape: what it does besides closing the prompt. */
+  cancel?: () => void
 }
 
 export interface Flash {
@@ -50,6 +55,10 @@ export interface TuiState {
   /** Key of the selected item. */
   sel: string | null
   filter: string | null
+  /** The one column shown (W, M, O, D, I; core/board-keys.ts), or null for all. */
+  column: ColumnId | null
+  /** What the search (/) keeps: cards whose name, notes or lane say it. */
+  query: string
   mode: Mode
   input: InputPrompt | null
   flash: Flash | null
@@ -79,6 +88,8 @@ export function createState(cfg: Config, closesOnQuit: boolean): TuiState {
     allCats: [],
     sel: null,
     filter: null,
+    column: null,
+    query: '',
     mode: 'board',
     input: null,
     flash: null,
@@ -115,10 +126,34 @@ export function laneOrder(lane: Lane): Item[] {
 /** Every visible item in the narrow layout's order. */
 export const narrowOrder = (state: TuiState): Item[] => state.lanes.flatMap(laneOrder)
 
-/** Groups the items into lanes (after the filter) and keeps the selection on something visible. */
+/** Whether the search's text is in the card: its name, what it does, waits for, said or asks, its lane. */
+export function matches(it: Item, query: string, laneTitle: string): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  return [
+    it.name,
+    it.autoName,
+    it.doing,
+    it.wait,
+    it.title,
+    it.lastText,
+    it.prompt,
+    it.question,
+    it.workspace,
+    laneTitle,
+  ].some(v => v && String(v).toLowerCase().includes(q))
+}
+
+/** Groups the items into lanes (after the filters) and keeps the selection on something visible. */
 export function build(state: TuiState): void {
-  const { cfg, items } = state
-  state.allCats = [...new Set(items.map(i => i.category))].sort(
+  const { cfg } = state
+  // The column shown alone and the search take cards off; the lanes stay those of every card.
+  const items = state.items.filter(
+    i =>
+      (!state.column || i.column === state.column) &&
+      (!state.query || matches(i, state.query, categoryInfo(cfg, i.category).title)),
+  )
+  state.allCats = [...new Set(state.items.map(i => i.category))].sort(
     (a, b) => laneRank(cfg, a) - laneRank(cfg, b) || a.localeCompare(b),
   )
   if (state.filter && !state.allCats.includes(state.filter)) state.filter = null
@@ -132,7 +167,7 @@ export function build(state: TuiState): void {
         cols: COLUMNS.map(col => items.filter(i => i.category === cat && i.column === col.id)),
       }),
     )
-    .filter(l => !filter || l.cat === filter)
+    .filter(l => (!filter || l.cat === filter) && (l.cols.some(c => c.length) || (!state.column && !state.query)))
   const visible = flat(state)
   if (!visible.some(i => i.key === state.sel)) {
     state.sel = visible[0]?.key ?? null
@@ -140,73 +175,19 @@ export function build(state: TuiState): void {
   }
 }
 
-/** Where the selected item sits in the wide grid. */
-function positionOf(state: TuiState): { li: number; ci: number; ii: number } | null {
-  for (const [li, lane] of state.lanes.entries()) {
-    for (const [ci, col] of lane.cols.entries()) {
-      const ii = col.findIndex(x => x.key === state.sel)
-      if (ii >= 0) return { li, ci, ii }
-    }
-  }
-  return null
-}
-
-/**
- * The card of a lane in the column nearest to `ci` (the left one first on a tie): its last one
- * going up, its first going down. So up and down reach a lane with nothing in this column.
- */
-function nearestIn(lane: Lane | undefined, ci: number, last: boolean): Item | null {
-  if (!lane) return null
-  for (let d = 0; d < COLUMNS.length; d++) {
-    for (const c of d ? [ci - d, ci + d] : [ci]) {
-      const col = lane.cols[c]
-      if (col?.length) return (last ? col.at(-1) : col[0]) ?? null
-    }
-  }
-  return null
-}
-
-/** The neighbour of the selected item in the wide grid, or null at the edge. */
-function neighbour(state: TuiState, dir: Exclude<Dir, 'home'>): Item | null {
-  const pos = positionOf(state)
-  if (!pos) return null
-  const { li, ci, ii } = pos
-  const { lanes } = state
-  const col = lanes[li]?.cols[ci] ?? []
-  let next: Item | null = null
-  if (dir === 'up') {
-    if (ii > 0) next = col[ii - 1] ?? null
-    else for (let l = li - 1; l >= 0 && !next; l--) next = nearestIn(lanes[l], ci, true)
-  } else if (dir === 'down') {
-    if (ii < col.length - 1) next = col[ii + 1] ?? null
-    else for (let l = li + 1; l < lanes.length && !next; l++) next = nearestIn(lanes[l], ci, false)
-  } else {
-    const step = dir === 'right' ? 1 : -1
-    for (let c = ci + step; c >= 0 && c < COLUMNS.length && !next; c += step) {
-      const other = lanes[li]?.cols[c] ?? []
-      if (other.length) next = other[Math.min(ii, other.length - 1)] ?? null
-    }
-  }
-  return next
-}
-
 /**
  * Moves the selection. The wide layout is a grid (lanes x columns); the narrow one a plain list.
  * Returns whether the screen needs redrawing.
  */
 export function move(state: TuiState, dir: Dir, wide: boolean): boolean {
-  if (!wide || dir === 'home') {
-    const list = narrowOrder(state)
-    const i = list.findIndex(x => x.key === state.sel)
-    if (dir === 'home') state.sel = list[0]?.key ?? state.sel
-    else if (dir === 'up' || dir === 'left') state.sel = list[Math.max(0, i - 1)]?.key ?? state.sel
-    else state.sel = list[Math.min(list.length - 1, i + 1)]?.key ?? state.sel
+  if (!wide || dir === 'home' || dir === 'last') {
+    state.sel = listStep(narrowOrder(state), state.sel, dir) ?? state.sel
     state.follow = true
     return true
   }
-  const next = neighbour(state, dir)
+  const next = gridStep(state.lanes, state.sel, dir)
   if (!next) return false
-  state.sel = next.key
+  state.sel = next
   state.follow = true
   return true
 }

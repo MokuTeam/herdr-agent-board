@@ -3,7 +3,7 @@
 // focus — a card, the open session's head, a lane, the board, a starting session, a file chip —
 // and the sheet's More lists the buttons its row hides. Which menu, and what its items
 // do, is models/board-menus.ts; one menu is open at a time (components/menu/menu-engine.ts).
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ColumnId, Item, Translator } from '../../../src/core/types.ts'
 import { filesApi } from '../api/files.ts'
 import { focusLaunch } from '../api/launch.ts'
@@ -396,6 +396,19 @@ export interface ContextMenus {
   pickOpen: SheetPick | null
   /** A pill in the sheet's head: its choices as a menu. */
   sheetPick(kind: SheetPick, button: HTMLElement, keyboard: boolean): void
+  /**
+   * A session's menu as a right click on its card would open it (else on the sheet's head, where
+   * it is open), and where: the Terminal style's keys pick from it (hooks/useTerminalKeys.ts).
+   */
+  cardMenu(key: string): CardMenu | null
+}
+
+export interface CardMenu {
+  menu: BoardMenu
+  /** Where it would open: at the card's top left, inside it. */
+  at: Point
+  /** What it was asked from (the card, or the sheet's name), for the focus to go back to. */
+  origin: HTMLElement
 }
 
 export function useContextMenus(options: ContextMenusOptions): ContextMenus {
@@ -416,6 +429,8 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
     return engine
   })
   const open = useStore(menu.openNow)
+  // The menus' page, once the listeners have it: a card's menu by its key (cardMenu).
+  const menuDeps = useRef<BoardMenuDeps | null>(null)
 
   // Before the page's own keys (capture on the window); after the quick look's, as before.
   useEffect(() => menu.start(), [menu])
@@ -474,6 +489,7 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
         },
       }),
     }
+    menuDeps.current = deps
     return boardMenuListeners({ menu, menuFor: (target, at) => menuFor(target, at, deps) })
   }, [menu, latest])
 
@@ -526,6 +542,18 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
       sheetPick(kind, button, keyboard)
       setMoreOpen(false)
       setPickOpen(kind)
+    },
+    cardMenu(key) {
+      const deps = menuDeps.current
+      if (!deps) return null
+      const card = document.querySelector<HTMLElement>(`#board .card[data-key="${CSS.escape(key)}"]`)
+      const name = latest.current.board.ui.open === key ? document.getElementById('sheet-name') : null
+      const origin = card ?? name
+      if (!origin) return null
+      const r = origin.getBoundingClientRect()
+      const at = { x: r.left + 16, y: r.top + 16 }
+      const m = menuFor(origin, at, deps)
+      return m ? { menu: m, at, origin } : null
     },
   }
 }

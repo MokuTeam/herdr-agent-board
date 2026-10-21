@@ -9,9 +9,11 @@ import { type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
 import { join } from 'node:path'
 import { saveFoundProfiles } from '../adapters/config-file.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
+import { omarchyTheme } from '../adapters/omarchy.ts'
 import { archiveDir, cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
 import { messageGate } from '../core/message-gate.ts'
+import { pageWithLook } from '../core/omarchy-theme.ts'
 import { shownProfiles } from '../core/profiles.ts'
 import { pwaPage } from '../core/pwa.ts'
 import type { SetupFacts } from '../core/setup.ts'
@@ -157,6 +159,10 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
   })
   const routes: Route[] = []
   const guards = { port, token: FILE_TOKEN, stale: () => board.stale() }
+  // Omarchy here: the Terminal style takes the colors of its theme on now, and follows a switch.
+  const omarchy = omarchyTheme(() => board.publish())
+  // The page as config.json's `look` and Omarchy have it (core/omarchy-theme.ts); else as it is.
+  const page = (html: string): string => pageWithLook(html, { look: cfg.look, omarchy: !!omarchy })
   const listener = createRemoteListener({
     cfg,
     webPort: port,
@@ -164,7 +170,7 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
     routes,
     guards,
     // The page for a phone's browser through `tailscale serve`, while remote.pwa is on.
-    page: staticRoute(WEB, bundle, html => pwaPage(html, bundle.version())),
+    page: staticRoute(WEB, bundle, html => pwaPage(page(html), bundle.version())),
     remote,
     log,
     onChange: () => board.publish(),
@@ -180,6 +186,7 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
     mokupilot,
     remote: listener.view,
     aside,
+    ...(omarchy && { omarchy: omarchy.stamp }),
   })
   board.publish()
   const refresh = (): void => void board.refresh()
@@ -230,7 +237,23 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
       gate: messageGate(),
       answering: new Set(),
     }),
-    staticRoute(WEB, bundle),
+    // The Omarchy theme's colors for the Terminal style, on a computer with Omarchy.
+    {
+      method: 'GET',
+      path: '/omarchy-theme.css',
+      handle: () => {
+        const css = omarchy?.css()
+        if (!css) return json(404, { error: 'not found' })
+        return new Response(css, {
+          headers: {
+            'content-type': 'text/css; charset=utf-8',
+            'cache-control': 'no-cache',
+            'x-content-type-options': 'nosniff',
+          },
+        })
+      },
+    },
+    staticRoute(WEB, bundle, page),
   )
   const host = new RegExp(`^(127\\.0\\.0\\.1|localhost):${port}$`)
 
@@ -302,6 +325,7 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
     async close() {
       clearInterval(poll)
       for (const watcher of watchers) watcher.close()
+      omarchy?.close()
       scheduler.stop()
       wake.stop()
       terminals.stopAll()

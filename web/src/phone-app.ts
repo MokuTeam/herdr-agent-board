@@ -30,7 +30,7 @@ function noteStart(): void {
     pageLog(`started over (${discarded ? 'discarded by the system' : 'reloaded'}), build ${pageBuild()}`)
 }
 
-/** One theme-color, the board's background as it is now: the system's, or the one picked in Settings. */
+/** One theme-color, the board's background as it is now: the system's, or the one picked in Settings (with the style's). */
 function followThemeColor(): void {
   const metas = [...document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')]
   const [meta, ...rest] = metas
@@ -42,6 +42,9 @@ function followThemeColor(): void {
     if (color) meta.content = color
   }
   sync()
-  new MutationObserver(sync).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+  new MutationObserver(sync).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme', 'data-look'],
+  })
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', sync)
 }
