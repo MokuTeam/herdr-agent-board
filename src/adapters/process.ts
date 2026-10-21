@@ -111,6 +111,33 @@ function killTree(child: ChildProcess): void {
   }
 }
 
+/**
+ * Run a program in this terminal, in the foreground, no shell: its input and output are this
+ * process's, and a Ctrl+C that reaches this process too leaves it waiting for the program. What
+ * the program exited with (1 when a signal ended it), or the error that kept it from starting.
+ */
+export function runHere(
+  file: string,
+  args: string[],
+  env?: Record<string, string | undefined>,
+): Promise<{ code: number; error: (Error & { code?: unknown }) | null }> {
+  return new Promise(res => {
+    const wait = (): void => {}
+    process.on('SIGINT', wait)
+    const done = (code: number, error: (Error & { code?: unknown }) | null = null): void => {
+      process.off('SIGINT', wait)
+      res({ code, error })
+    }
+    try {
+      const child = spawn(file, args, { stdio: 'inherit', ...(env ? { env } : {}) })
+      child.on('error', err => done(127, err))
+      child.on('exit', code => done(code ?? 1))
+    } catch (err) {
+      done(127, err as Error)
+    }
+  })
+}
+
 /** Run a program to its end (no tree kill) with a 15 s default timeout. */
 export function run(file: string, args: string[], { timeout = 15_000, env, cwd }: RunOptions = {}): Promise<RunResult> {
   return new Promise(res => {
