@@ -78,7 +78,7 @@ describe('install: the settings it writes', () => {
     assert.equal(hooks.PreToolUse?.[0]?.matcher, 'AskUserQuestion')
     const kept = planSettings(on, pathsOf(ROOT_A))
     assert.equal(kept.toast, true)
-    assert.deepEqual(commands(kept.settings, 'PreToolUse'), [toastCommand(files.toast)])
+    assert.deepEqual(commands(kept.settings, 'PreToolUse'), [hookCommand(files), toastCommand(files.toast)])
     assert.deepEqual(commands(kept.settings, 'Stop'), ['python ingest.py', toastCommand(files.toast)])
     const off = planSettings(kept.settings, pathsOf(ROOT_A), { toast: false }).settings
     assert.deepEqual(commands(off, 'Stop'), ['python ingest.py'])
@@ -95,6 +95,7 @@ describe('install: the settings it writes', () => {
     assert.deepEqual(Object.keys((planSettings({ hooks: [] }, pathsOf(ROOT_A)).settings as Settings).hooks), [
       'SessionStart',
       'UserPromptSubmit',
+      'PreToolUse',
     ])
   })
 
@@ -109,6 +110,7 @@ describe('install: the settings it writes', () => {
 
   test('a hook event that is not a list is taken for an empty one, as upstream does', () => {
     const ourHook = { hooks: [{ type: 'command', command: hookCommand(files), timeout: 10 }] }
+    const ourAsk = { matcher: 'AskUserQuestion', ...ourHook }
     const notify = { type: 'command', command: toastCommand(files.toast), timeout: 30, async: true }
     const odd = { hooks: { SessionStart: 'text', Stop: { not: 'a list' }, PreToolUse: 5 } }
     // The board's events get its entry; a notification event with nothing to add goes.
@@ -116,6 +118,7 @@ describe('install: the settings it writes', () => {
       assert.deepEqual(planSettings(odd, pathsOf(ROOT_A), { toast }).settings.hooks, {
         SessionStart: [ourHook],
         UserPromptSubmit: [ourHook],
+        PreToolUse: [ourAsk],
       })
     // Notifications going in: the board's entry in its place.
     const on = planSettings(odd, pathsOf(ROOT_A), { toast: true })
@@ -123,7 +126,7 @@ describe('install: the settings it writes', () => {
     assert.deepEqual(on.settings.hooks, {
       SessionStart: [ourHook],
       Stop: [{ hooks: [notify] }],
-      PreToolUse: [{ matcher: 'AskUserQuestion', hooks: [notify] }],
+      PreToolUse: [ourAsk, { matcher: 'AskUserQuestion', hooks: [notify] }],
       UserPromptSubmit: [ourHook],
       Notification: [{ matcher: 'permission_prompt|elicitation_dialog', hooks: [notify] }],
     })
@@ -283,6 +286,36 @@ describe('doctor', () => {
     assert.deepEqual(todo(checks), [])
     assert.match(report(checks), /Everything the board needs is set up\.$/)
     assert.deepEqual(setupSummary(checks), { todo: 0, sig: '' })
+  })
+
+  test('hooks from before the question hook: a warning to run the install again, every other check as it was', () => {
+    const withAsk = (root: string) => {
+      const settings = structuredClone(facts().settings) as Settings
+      const ask = { matcher: 'AskUserQuestion', hooks: [{ command: hookCommand(boardFiles(root)) }] }
+      settings.hooks.PreToolUse = [ask, ...(settings.hooks.PreToolUse ?? []).slice(1)]
+      return settings
+    }
+    const without = structuredClone(facts().settings) as Settings
+    without.hooks.PreToolUse = without.hooks.PreToolUse?.slice(1)
+    assert.deepEqual(commands(without, 'PreToolUse'), [toastCommand(files.toast)])
+    for (const settings of [without, withAsk(ROOT_B)]) {
+      const checks = checkSetup(facts({ settings }))
+      const hooks = check(checks, 'hooks')
+      assert.equal(hooks.level, 'warn')
+      assert.equal(hooks.title, 'Claude Code hooks of an older install: no question hook')
+      assert.match(hooks.detail, /auto or plan mode/)
+      assert.equal(hooks.code, 'herdr plugin action invoke agent-board.install')
+      assert.deepEqual(
+        checks.filter(c => c.id !== 'hooks'),
+        checkSetup(facts()).filter(c => c.id !== 'hooks'),
+      )
+    }
+    assert.equal(level(checkSetup(facts({ settings: withAsk(ROOT_A) })), 'hooks'), 'ok')
+    // The board's own events missing still say so first.
+    assert.equal(
+      level(checkSetup(facts({ settings: { hooks: { PreToolUse: withAsk(ROOT_A).hooks.PreToolUse } } })), 'hooks'),
+      'error',
+    )
   })
 
   test('MokuPilot is optional; only one config.json names and is not there gets a mark', () => {

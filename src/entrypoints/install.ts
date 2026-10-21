@@ -1,8 +1,9 @@
 // The "install" action: puts the `board` and `spawn-agent` commands on PATH (~/.local/bin, a sh
 // script for Git Bash, Linux and macOS and a .cmd for PowerShell), copies the agents' skill
 // (skills/herdr-agents) into the skills folder of every shown Claude profile and registers the
-// SessionStart / UserPromptSubmit hooks and the status line in its settings.json (~/.claude, and
-// each CLAUDE_CONFIG_DIR folder the board shows; a hidden one is left alone), has herdr put its
+// SessionStart / UserPromptSubmit hooks, the PreToolUse hook on AskUserQuestion and the status
+// line in its settings.json (~/.claude, and each CLAUDE_CONFIG_DIR folder the board shows; a
+// hidden one is left alone), has herdr put its
 // own Claude hook there too (herdr integration install claude, from which herdr learns the session
 // a pane runs), and while wake is on adds wake's ListAgents / SendMessage hooks (never beside the
 // separate herdr-wake plugin's), refreshes a claude-tg launcher of herdr-wake's to one that needs no
@@ -164,7 +165,7 @@ try {
     }
     const out = installInto(profile.dir, paths, { toast, create, wake })
     if (!out.ok) throw new Error(out.error)
-    console.log(`hooks: SessionStart, UserPromptSubmit -> ${paths.hook} in ${out.file}`)
+    console.log(`hooks: SessionStart, UserPromptSubmit, PreToolUse (AskUserQuestion) -> ${paths.hook} in ${out.file}`)
     console.log(
       out.statusLineSet ? `status line: ${paths.statusline}` : `status line in ${out.file}: left as it was (not ours)`,
     )

@@ -14,6 +14,7 @@ import type { LiveHit } from '../adapters/profile-homes.ts'
 import { attentionOf, busy, columnOf, isAgentStatus, PINS } from '../core/board.ts'
 import { categoryFor } from '../core/categories.ts'
 import { isCodexItem } from '../core/codex.ts'
+import { waitingTool } from '../core/held-question.ts'
 import { type HelperSummary, summarize } from '../core/helpers.ts'
 import { t } from '../core/lang.ts'
 import { relate } from '../core/links.ts'
@@ -213,7 +214,8 @@ export async function collect(
     // The name given to a pi session (/name) is what herdr and pi know it by, as a Claude's /rename.
     const autoName = pi?.name || base.name
     const guess = categoryFor(cfg, base.cwd)
-    const tool = info.tool ?? null
+    // A Claude session's question form can be the hook's still (core/held-question.ts).
+    const tool = pi || codex ? (info.tool ?? null) : waitingTool(base.status, info, card.asking)
     const attention = attentionOf(base.status, card, info)
     let own: HelperSummary | null = null
     if (helpers && path) {

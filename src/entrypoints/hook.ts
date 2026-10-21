@@ -5,6 +5,9 @@
 //   install; after that a one-line reminder only while the card says it waits for something.
 //   Every event: the card says which Claude profile the session runs in (its CLAUDE_CONFIG_DIR,
 //   unset: ~/.claude), written only when that changed.
+//   PreToolUse (AskUserQuestion only): the call's id and questions go on the card (card.asking),
+//   for when Claude Code holds them back from the transcript (core/held-question.ts); nothing
+//   else, and the call goes on as it would without the hook.
 // Only sessions in a herdr pane are briefed: `claude -p` runs and other terminals are not on the board.
 // A pi session that runs Claude Code through its bridge (PI_CODING_AGENT) has two cards: the
 // bridge's own Claude session, which the hook is told, and pi's, which the board shows and `board`
@@ -23,6 +26,7 @@ import { isRecord } from '../adapters/json-store.ts'
 import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
+import { heldQuestionOf } from '../core/held-question.ts'
 import { isNotice } from '../core/notices.ts'
 import { type Profile, profileReport } from '../core/profiles.ts'
 import type { Config } from '../core/types.ts'
@@ -90,6 +94,11 @@ async function main(): Promise<void> {
   const sid = input.session_id
   const pane = process.env.HERDR_PANE_ID
   if (!sid || typeof sid !== 'string' || !pane) return
+  if (event === 'PreToolUse') {
+    const asking = heldQuestionOf(input, Date.now())
+    if (asking) writeCard(sid, { asking })
+    return
+  }
   const card = readCard(sid)
   // What changes on the card, written at once. First the session's folder and its profile, where
   // the card says otherwise.

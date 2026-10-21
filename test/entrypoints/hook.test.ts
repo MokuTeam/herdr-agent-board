@@ -226,6 +226,71 @@ test('herdr failing or slow to answer leaves the hook as it was', async () => {
   expect(cardOf(box, 'cc1')?.ask).toBeUndefined()
 })
 
+// As Claude Code 2.1.303 hands it over, in auto mode, before the dialog opens.
+const QUESTIONS = {
+  questions: [
+    {
+      question: 'Archive the 13 finished sessions?',
+      header: 'Cleanup',
+      multiSelect: false,
+      options: [
+        { label: 'Archive the 13 (Recommended)', description: 'Their tabs close; the board can bring any back.' },
+        { label: 'Let me pick', description: 'Tell me which ones to keep.' },
+      ],
+    },
+  ],
+}
+const preToolUse = (box: Sandbox, tool: string, input: unknown = QUESTIONS) => ({
+  hook_event_name: 'PreToolUse',
+  session_id: 's1',
+  transcript_path: join(box.dir, 's1.jsonl'),
+  cwd: box.dir,
+  permission_mode: 'auto',
+  tool_name: tool,
+  tool_input: input,
+  tool_use_id: 'toolu_01Ks',
+})
+
+test('PreToolUse on AskUserQuestion: the call goes on the card, nothing is said, nothing else is written', async () => {
+  const box = await sandbox()
+  putCard(box, { key: 's1', category: 'acme', ask: 'Ship it?', askSince: 1, briefV: BRIEF_VERSION })
+  const before = Date.now()
+  expect(await runHook(box, preToolUse(box, 'AskUserQuestion'))).toBe('')
+  const card = cardOf(box, 's1')
+  const asking = card?.asking as Record<string, unknown>
+  expect(asking).toEqual({
+    id: 'toolu_01Ks',
+    detail: 'Archive the 13 finished sessions?',
+    questions: [{ ...QUESTIONS.questions[0], preview: false }],
+    at: asking.at,
+  })
+  expect(asking.at).toBeGreaterThanOrEqual(before)
+  // The rest of the card as it was: no profile report, no brief, the ask stays.
+  expect(Object.keys(card ?? {}).sort()).toEqual([
+    'ask',
+    'askSince',
+    'asking',
+    'briefV',
+    'category',
+    'key',
+    'updatedAt',
+  ])
+  expect(box.calls()).toEqual([])
+
+  // A form the board cannot answer (no options) still names its question.
+  await runHook(box, preToolUse(box, 'AskUserQuestion', { questions: [{ question: 'Which?', options: [] }] }))
+  expect(cardOf(box, 's1')?.asking).toMatchObject({ id: 'toolu_01Ks', detail: 'Which?', questions: null })
+})
+
+test('PreToolUse of another tool, outside a herdr pane or without a call id: no card written', async () => {
+  const box = await sandbox()
+  expect(await runHook(box, preToolUse(box, 'Bash', { command: 'ls' }))).toBe('')
+  expect(await runHook(box, preToolUse(box, 'AskUserQuestion'), null)).toBe('')
+  expect(await runHook(box, { ...preToolUse(box, 'AskUserQuestion'), tool_use_id: '' })).toBe('')
+  expect(cardOf(box, 's1')).toBeNull()
+  expect(box.calls()).toEqual([])
+})
+
 test('a Claude session of its own asks herdr nothing', async () => {
   const box = await sandbox()
   putCard(box, { key: 's1', ask: 'Send it?', askSince: 1, briefV: BRIEF_VERSION })

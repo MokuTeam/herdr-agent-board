@@ -342,10 +342,12 @@ const SNAPSHOT = {
   },
 }
 
-async function board(state: unknown) {
+/** The server against the fake herdr; `prepare` sets up files before it first reads them. */
+async function board(state: unknown, prepare: (box: Sandbox) => void = () => {}) {
   const box = await sandbox()
   mkdirSync(join(box.env.HOME as string, '.claude', 'projects', 'p'), { recursive: true })
   box.state(state)
+  prepare(box)
   const port = await unusedPort()
   const proc = box.run('server', {
     port,
@@ -466,4 +468,109 @@ test("the route: a pi pane's detail has its menu, a Claude pane's is read as bef
   })
   assert.deepEqual([permit.status, await permit.json()], [200, { ok: true }])
   assert.deepEqual(keysSent(box), [['agent', 'send-keys', 'p2', 'enter']])
+}, 40_000)
+
+// ---------------------------------------------------------------- a question Claude Code holds back
+
+// In auto and plan mode Claude Code 2.1.303 writes the response that asks only once it is answered:
+// while the dialog is open, the transcript ends with the call before it. The board's PreToolUse
+// hook put the question on the card (core/held-question.ts).
+const line = (o: Record<string, unknown>): string => `${JSON.stringify(o)}\n`
+const bashCall = line({
+  type: 'assistant',
+  timestamp: '2026-10-21T08:53:33.724Z',
+  message: {
+    role: 'assistant',
+    content: [{ type: 'tool_use', id: 'toolu_bash', name: 'Bash', input: { command: 'ls' } }],
+  },
+})
+const bashResult = line({
+  type: 'user',
+  timestamp: '2026-10-21T08:53:38.887Z',
+  message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_bash', content: 'denied' }] },
+})
+const REPORTED = Date.parse('2026-10-21T08:53:44.700Z')
+const ASKING = {
+  id: 'toolu_1',
+  detail: QUESTION,
+  questions: [{ ...COLOR.questions[0], preview: false }],
+  at: REPORTED,
+}
+/** What Claude Code writes once the question is answered: the call (from before the report) and the answer. */
+const heldLines = (id = 'toolu_1') =>
+  line({
+    type: 'assistant',
+    timestamp: '2026-10-21T08:53:44.667Z',
+    message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'AskUserQuestion', input: COLOR }] },
+  }) +
+  line({
+    type: 'user',
+    timestamp: '2026-10-21T08:57:53.973Z',
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'answered' }] },
+    toolUseResult: { answers: { [QUESTION]: 'Blue' } },
+  })
+type BoardItem = { key: string; attention: string; question: string; tool: Record<string, unknown> | null }
+const itemOf = async (port: number): Promise<BoardItem | undefined> =>
+  ((await fetch(`http://127.0.0.1:${port}/api/board`).then(r => r.json())) as { items: BoardItem[] }).items.find(
+    i => i.key === 's1',
+  )
+
+test('a question Claude Code holds back: the hook’s copy on the board, answered from it; an old one is not', async () => {
+  const transcriptOf = (box: Sandbox) => join(box.env.HOME as string, '.claude', 'projects', 'p', 's1.jsonl')
+  const { box, proc, port, post } = await board(
+    {
+      'api snapshot': SNAPSHOT,
+      'agent get': agent(),
+      'agent read': { text: screen('question-single') },
+      'agent send-keys': { result: null },
+    },
+    box => writeFileSync(transcriptOf(box), bashCall + bashResult),
+  )
+  const path = transcriptOf(box)
+  const refresh = async () => {
+    const n = proc.messages.filter(m => (m as { refreshed?: boolean }).refreshed).length
+    proc.send('refresh')
+    await until(() => proc.messages.filter(m => (m as { refreshed?: boolean }).refreshed).length > n)
+  }
+  const card = (extra: Record<string, unknown>) => {
+    mkdirSync(box.cards, { recursive: true })
+    writeFileSync(join(box.cards, 's1.json'), JSON.stringify({ key: 's1', category: 'other', ...extra }))
+  }
+
+  // Without the hook's copy (an install from before it, or any other setup): as before.
+  card({})
+  await refresh()
+  const before = await itemOf(port)
+  assert.equal(before?.attention, 'decision')
+  assert.equal(before?.question, '')
+  assert.deepEqual(before?.tool, { id: 'toolu_bash', name: 'Bash', label: 'Bash', detail: 'ls', pending: false })
+
+  // With it: the question and its form, as if the transcript had the call.
+  card({ asking: ASKING })
+  await refresh()
+  const held = await itemOf(port)
+  assert.equal(held?.question, QUESTION)
+  assert.equal(held?.tool?.id, 'toolu_1')
+  assert.equal(held?.tool?.pending, true)
+  assert.deepEqual(held?.tool?.questions, ASKING.questions)
+
+  // Answered from the board: the keys go in, and it is done once Claude Code writes call and answer.
+  const answering = post('answer', { session: 's1', toolUseId: 'toolu_1', answers: [{ options: ['Blue'] }] })
+  await until(() => keysSent(box).length > 0, 10_000)
+  writeFileSync(path, bashCall + bashResult + heldLines())
+  const done = await answering
+  assert.deepEqual([done.status, done.body], [200, { ok: true, answers: [{ question: QUESTION, answer: 'Blue' }] }])
+  assert.deepEqual(keysSent(box), [['agent', 'send-keys', 'p1', '3']])
+
+  // The transcript has it now: the transcript's, answered; the card's copy is not shown again.
+  await refresh()
+  assert.equal((await itemOf(port))?.tool?.pending, false)
+  // A copy older than the transcript's last line (the session went on without it): not shown, not answered.
+  writeFileSync(path, bashCall + bashResult)
+  card({ asking: { ...ASKING, at: Date.parse('2026-10-21T08:50:00.000Z') } })
+  await refresh()
+  assert.equal((await itemOf(port))?.question, '')
+  const old = await post('answer', { session: 's1', toolUseId: 'toolu_1', answers: [{ options: ['Blue'] }] })
+  assert.match(old.body.error, /no longer open/)
+  assert.equal(keysSent(box).length, 1)
 }, 40_000)

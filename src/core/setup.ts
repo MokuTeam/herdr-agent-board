@@ -8,7 +8,15 @@
 import { join } from 'node:path'
 import type { CardStore } from './card-store.ts'
 import { translator } from './i18n/translator.ts'
-import { BOARD_EVENTS, commandsOf, normPath, ourCommands, TOAST_EVENTS, wakeHooksState } from './install-plan.ts'
+import {
+  BOARD_EVENTS,
+  commandsOf,
+  normPath,
+  ourCommands,
+  QUESTION_HOOK,
+  TOAST_EVENTS,
+  wakeHooksState,
+} from './install-plan.ts'
 import type { MokupilotLauncher } from './mokupilot.ts'
 import type { Translator } from './types.ts'
 import type { WakeState } from './wake/status.ts'
@@ -352,7 +360,21 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
       return { event, here: hooks.some(here), other: hooks.find(c => !here(c))?.command }
     })
     const missing = per.filter(p => !p.here)
-    if (!missing.length)
+    // The question form's hook came later: hooks of an install from before it work as they did.
+    const [asked, matcher] = QUESTION_HOOK
+    const asks = commandsOf(s.settings, asked).some(
+      c => c.matcher === matcher && ours.hook(c.command) && normPath(c.command).includes(normPath(f.hook)),
+    )
+    if (!missing.length && !asks)
+      own(
+        'hooks',
+        'warn',
+        t('setup.hooks.question'),
+        t('setup.hooks.questionDetail', { file: s.settingsFile }),
+        t('setup.runInstall'),
+        INSTALL,
+      )
+    else if (!missing.length)
       own(
         'hooks',
         'ok',
