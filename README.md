@@ -1603,9 +1603,10 @@ Match User boardtunnel
 All of this is also in the panel as one script, **All of step 1 in one paste**, once Generate key
 has made the key: it stops at its first error, makes only what is missing, writes the keys file
 with your key, adds the `Match` block only when sshd_config has none for the tunnel's user, then
-runs `sshd -t` and reloads sshd. Pasting it twice changes nothing more. Paste it over SSH, as an
-admin: on Ubuntu 24.04 an sshd that no one has connected to yet (a fresh server's web console)
-has no `/run/sshd`, and `sshd -t` stops there ("Missing privilege separation directory").
+runs `sshd -t` and reloads sshd. Pasting it twice changes nothing more. It also makes `/run/sshd`
+when there is none, so it works from a fresh server's web console too: on Ubuntu 24.04 an sshd
+that no one has connected to yet has no `/run/sshd`, and `sshd -t` would stop there ("Missing
+privilege separation directory"). Where the folder is there already, it is left as it is.
 
 No sshd or `authorized_keys` option names the paths a socket forward may take; the folder does.
 Only the tunnel's user (and root) can make a socket in it and only the folder's group can open

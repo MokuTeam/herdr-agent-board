@@ -51,6 +51,9 @@ describe('the server’s snippets, filled in', () => {
       'sudo install -d -m 755 /etc/ssh/authorized_keys',
       "echo 'restrict,port-forwarding ssh-ed25519 AAAA k' | sudo tee /etc/ssh/authorized_keys/boardtunnel >/dev/null",
       `grep -qx 'Match User boardtunnel' /etc/ssh/sshd_config || printf '\\n%s\\n' '${sshdBlock('boardtunnel')}' | sudo tee -a /etc/ssh/sshd_config >/dev/null`,
+      // an sshd no one has connected to yet (Ubuntu 24.04, from the web console) has no /run/sshd,
+      // and `sshd -t` stops without it; one that has it keeps it as it is
+      '[ -d /run/sshd ] || sudo install -d -m 755 /run/sshd',
       'sudo sshd -t',
       '{ sudo systemctl try-reload-or-restart ssh 2>/dev/null || sudo systemctl try-reload-or-restart sshd; }',
       ')',

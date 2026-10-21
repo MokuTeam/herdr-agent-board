@@ -28,6 +28,7 @@ grep -qx 'Match User boardtunnel' /etc/ssh/sshd_config || printf '\n%s\n' 'Match
     ForceCommand /bin/false
     ClientAliveInterval 15
     ClientAliveCountMax 2' | sudo tee -a /etc/ssh/sshd_config >/dev/null
+[ -d /run/sshd ] || sudo install -d -m 755 /run/sshd
 sudo sshd -t
 { sudo systemctl try-reload-or-restart ssh 2>/dev/null || sudo systemctl try-reload-or-restart sshd; }
 )
