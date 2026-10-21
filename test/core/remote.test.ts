@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { allowedLogin, bearerOf, desktopOnly, remoteConfig } from '../../src/core/remote.ts'
+import { allowedLogin, bearerOf, desktopOnly, localOnly, remoteConfig } from '../../src/core/remote.ts'
 
 const PWA_OFF = { on: false, https: 443, port: null }
 
@@ -52,6 +52,13 @@ test("what acts on this computer's screen is not for a phone", () => {
     '/api/launch',
   ])
     expect(desktopOnly(path)).toBe(false)
+})
+
+test("the remote mode's and Remote access's management are for the board on this computer only", () => {
+  for (const path of ['/api/remote', '/api/remote/x', '/api/access', '/api/access/x'])
+    expect(localOnly(path)).toBe(true)
+  for (const path of ['/api/accessories', '/api/remotes', '/api/probe/x', '/api/login/password'])
+    expect(localOnly(path)).toBe(false)
 })
 
 test('the token comes as Authorization: Bearer', () => {

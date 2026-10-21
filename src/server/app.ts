@@ -14,6 +14,7 @@ import { inheritedProfileDir } from '../adapters/profiles.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { pwaPage } from '../core/pwa.ts'
 import type { SetupFacts } from '../core/setup.ts'
+import { createAccess } from '../services/access.ts'
 import { asideCheck } from '../services/aside.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
@@ -23,6 +24,7 @@ import { createRemote } from '../services/remote.ts'
 import { startScheduler } from '../services/scheduler.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
+import { createProbes } from '../services/tunnel.ts'
 import { createBoardState } from './board-state.ts'
 import { dispatch, json, type Route } from './http.ts'
 import { createRemoteListener } from './remote.ts'
@@ -41,6 +43,7 @@ import { sleepRoute } from './routes/sleep.ts'
 import { staticRoute } from './routes/static.ts'
 import { terminalRoute } from './routes/terminal.ts'
 import { createBroadcaster } from './sse.ts'
+import { createTunnelListener } from './tunnel.ts'
 import { pruneUploads, uploadRoutes } from './uploads.ts'
 import { createWebBundle } from './web-bundle.ts'
 
@@ -57,6 +60,8 @@ const PLUGIN_VERSION = (() => {
 export interface BoardServer {
   port: number
   url: string
+  /** The route table, in its order (the tests check every route against the tunnel listener). */
+  routes: readonly Route[]
   refresh(): Promise<void>
   close(): Promise<void>
 }
@@ -136,15 +141,39 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
   const remote = createRemote({ onChange: () => board.publish() })
   const routes: Route[] = []
   const guards = { port, token: FILE_TOKEN, stale: () => board.stale() }
+  // The page for a phone's browser through `tailscale serve`, while remote.pwa is on, and through
+  // the owner's domain: marked remote, with what installs it.
+  const page = staticRoute(WEB, bundle, pwaPage)
   const listener = createRemoteListener({
     cfg,
     webPort: port,
     version: PLUGIN_VERSION,
     routes,
     guards,
-    // The page for a phone's browser through `tailscale serve`, while remote.pwa is on.
-    page: staticRoute(WEB, bundle, pwaPage),
+    page,
     remote,
+    log,
+    onChange: () => board.publish(),
+  })
+  // The board through the owner's domain (core/tunnel.ts): the login (services/access.ts), the
+  // nonces the board's probe answers, and the tunnel listener on 127.0.0.1 while the tunnel is on
+  // and the login set up. Off, it reads the config and nothing else.
+  const access = createAccess({
+    onChange: () => {
+      board.publish()
+      void tunnel.sync()
+    },
+    log,
+  })
+  const probes = createProbes()
+  const tunnel = createTunnelListener({
+    cfg,
+    webPort: port,
+    routes,
+    guards,
+    page,
+    access,
+    probes,
     log,
     onChange: () => board.publish(),
   })
@@ -241,7 +270,9 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     })
   } catch (err) {
     // The port is taken (EADDRINUSE, which the terminal board retries): nothing may keep running.
+    // The tunnel is the web port's board's: this one never listens for it.
     events.close()
+    void tunnel.close()
     throw err
   }
 
@@ -262,13 +293,16 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
   if (terminalOn(cfg)) void terminals.prune()
   setup.start()
   void listener.sync()
+  void tunnel.sync()
 
   return {
     port,
     url: `http://127.0.0.1:${port}/`,
-    // Called when config.json changes, too: the remote mode follows it.
+    routes,
+    // Called when config.json changes, too: the remote mode and the tunnel follow it.
     async refresh() {
       listener.configChanged()
+      tunnel.configChanged()
       await board.refresh()
     },
     async close() {
@@ -279,6 +313,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
       setup.stop()
       events.close()
       await listener.close()
+      await tunnel.close()
       await server.stop(true)
     },
   }
