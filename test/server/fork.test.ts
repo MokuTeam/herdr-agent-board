@@ -104,11 +104,10 @@ test('Fork starts a new session in a new tab with a copy of the conversation, in
   const dir = project(box)
   herdrWith(box, dir)
   mkdirSync(join(configFile(box), '..'), { recursive: true })
-  writeFileSync(
-    configFile(box),
-    JSON.stringify({ launch: { claude: ['claude-tg', '--dangerously-skip-permissions'] } }),
-  )
-  const b = await board(box, { launch: { claude: ['claude-tg', '--dangerously-skip-permissions'] } })
+  // pi as the default for new sessions changes nothing here: a fork is Claude Code's.
+  const launch = { claude: ['claude-tg', '--dangerously-skip-permissions'], default: 'pi', pi: 'pi' }
+  writeFileSync(configFile(box), JSON.stringify({ launch }))
+  const b = await board(box, { launch })
   assert.equal((await b.payload()).fork, true)
   const r = await b.post(`/api/session/${S}/fork`, { name: 'Probe card · fork', message: 'Try the other way.' })
   assert.equal(r.status, 200, JSON.stringify(r.body))

@@ -45,7 +45,7 @@ export interface LaunchRequest {
   profileArgs: string[]
   /** The profile's start command, typed instead of `launch.claude`; null for none, or a launcher that types none. */
   profileCommand: string[] | null
-  /** The agent the board's own launcher starts: the one the request picked, else Claude Code. */
+  /** The agent the board's own launcher starts: the one the request picked, else the board's default. */
   agent: LaunchAgentId
 }
 
@@ -61,8 +61,9 @@ export type ParentFacts = { key: string } & Pick<Item, 'name' | 'profile' | 'pro
  * profile's start command is read and checked; other launchers never read it. `parent`: the card
  * the start keeps the profile of, given by the server in place of the body's (a session coming
  * back from the archive, which is not among the board's items). `agents`: the agents a start may
- * pick (core/launch/agents.ts launchAgents), asked only when the request names one; `pi`: config's
- * `launch.pi`, checked when pi is picked.
+ * pick (core/launch/agents.ts launchAgents), asked only when the request names one or `standard`
+ * asks; `standard`: the agent of a request that names none (agents.ts defaultAgent), Claude Code
+ * when not given; `pi`: config's `launch.pi`, checked when pi is the one.
  */
 export async function checkRequest(
   body: unknown,
@@ -73,6 +74,7 @@ export async function checkRequest(
     typesCommand = false,
     parent: heldTo,
     agents = () => [],
+    standard = () => CLAUDE_AGENT,
     pi,
   }: {
     categories?: Set<string> | null
@@ -81,6 +83,7 @@ export async function checkRequest(
     typesCommand?: boolean
     parent?: ParentFacts
     agents?: () => readonly LaunchAgent[]
+    standard?: (offered: () => readonly LaunchAgent[]) => LaunchAgentId
     pi?: unknown
   },
 ): Promise<CheckResult> {
@@ -148,21 +151,22 @@ export async function checkRequest(
       return { ok: false, field: 'profile', error: err instanceof Error ? err.message : String(err) }
     }
   }
-  // The agent, when the request names one: one the board offers, and pi's command one it can type.
-  let agent: LaunchAgentId = CLAUDE_AGENT
+  // The agent: the one the request names, which the board must offer; else the board's default.
+  // pi's command must be one the tab's shell can type.
+  let agent: LaunchAgentId
   const asked = given(b.agent)
   if (asked !== undefined) {
     const offered = agents()
     const pick = offered.find(a => a.id === asked)
     if (!pick) return fail('agent', offered.length ? 'launch.err.agent' : 'launch.err.agentLauncher', { id: asked })
     agent = pick.id
-    if (agent !== CLAUDE_AGENT)
-      try {
-        piCommand(pi)
-      } catch (err) {
-        return { ok: false, field: 'agent', error: err instanceof Error ? err.message : String(err) }
-      }
-  }
+  } else agent = standard(agents)
+  if (agent !== CLAUDE_AGENT)
+    try {
+      piCommand(pi)
+    } catch (err) {
+      return { ok: false, field: 'agent', error: err instanceof Error ? err.message : String(err) }
+    }
   return {
     ok: true,
     launch: {

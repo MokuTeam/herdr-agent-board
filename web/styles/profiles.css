@@ -4,7 +4,7 @@
    usual profile in the categories panel. Red says a session runs in another profile than its
    start asked for. The new-session window (components/launch/LaunchDialog.tsx) offers the shown
    profiles as chips, as its lanes (.chips, by --lane), and names the profile it starts in beside
-   Start. The Profiles panel (components/profiles) comes last. With one profile shown the page has
+   Start; its agent choice (Claude Code, pi) is at the end. The Profiles panel (components/profiles) comes last. With one profile shown the page has
    none of it, as before profiles. The lists of the selects, a lane's profile and the window's
    workspace, are in the theme's colors. Every rule here selects by class: the other sheets are
    upstream's, rule for rule. */
@@ -209,3 +209,8 @@
   border-radius: 12px;
   box-shadow: 0 0 0 0.5px var(--separator);
 }
+
+/* The new-session window's agent choice (Claude Code, pi; web/src/models/launch-agent.ts): the
+   lanes' chips in the accent, without a lane's square. */
+.launch-agents button { --lane: var(--accent); }
+.launch-agents button::before { display: none; }

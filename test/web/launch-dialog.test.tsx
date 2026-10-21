@@ -18,6 +18,7 @@ import {
   type From,
   type LaunchScene,
   type LaunchSide,
+  OPTIONS,
   oldLaunchSide,
   pointRect,
   reactLaunchSide,
@@ -833,6 +834,152 @@ describe('the profile', () => {
     expect(sent[0]).not.toContain('"profile"')
     expect(sent[0]).not.toContain('"parent"')
     expect(sent[1]).toContain('"profile":"default","parent":"s1"}')
+  })
+})
+
+// ---------------------------------------------------------------- the agent (the old page had no choice)
+
+const CLAUDE_CODE = { id: 'claude', title: 'Claude Code' }
+const PI = { id: 'pi', title: 'pi' }
+/** The board offers these agents, `standard` the one a start that names none starts as. */
+const offer =
+  (agents: unknown[], standard = 'claude'): Step =>
+  async side => {
+    side.server.options = { ...OPTIONS, agents, agent: standard }
+  }
+const AGENT_ROW = '<div class="agent-row row">\n          <span class="row-label">Agent</span>'
+const subLine = (shot: string | undefined) => shot?.match(/<p class="launch-sub">[^<]*<\/p>/)?.[0] ?? ''
+const sentBodies = (shot: string | undefined) =>
+  logLine(shot)
+    .split(' | ')
+    .filter(line => line.startsWith('POST /api/launch {'))
+    .map(line => line.slice('POST /api/launch '.length))
+
+describe('the agent', () => {
+  test('one agent offered (Claude Code alone, or a launcher of the config’s own): the window and the body are the old page’s', async () => {
+    for (const agents of [[CLAUDE_CODE], []]) {
+      const shots = await compare([
+        offer(agents),
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        key('Enter', { ctrlKey: true }),
+        settle,
+      ])
+      expect(shots.at(-2)).not.toContain('agent-row')
+      expect(startBodyOf(shots.at(-1))).not.toContain('"agent"')
+    }
+  })
+
+  test('Claude Code and pi offered, pi the default: the row with pi pressed and named under the title; a pick goes in the body', async () => {
+    const shots = await react(
+      [
+        offer([CLAUDE_CODE, PI], 'pi'),
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        click(inWindow('[data-agent="claude"]')),
+        key('Enter', { ctrlKey: true }),
+        settle,
+      ],
+      board,
+    )
+    const shown = shots[4]
+    expect(shown).toContain(AGENT_ROW)
+    expect(shown).toContain('aria-pressed="false" data-agent="claude"')
+    expect(shown).toContain('aria-pressed="true" data-agent="pi"')
+    expect(subLine(shown)).toBe('<p class="launch-sub">Opens pi in a new herdr tab, named, with your first message</p>')
+    // Claude Code picked: pressed, and named under the title.
+    expect(shots[5]).toContain('aria-pressed="true" data-agent="claude"')
+    expect(subLine(shots[5])).toContain('Opens Claude in a new herdr tab')
+    expect(startBodyOf(shots.at(-1))).toBe(
+      '{"name":"acme 2","cwd":"C:\\\\Work\\\\acme","category":"acme","workspace":{"id":"w2","label":"Acme"},"message":"","agent":"claude"}',
+    )
+  })
+
+  test('Claude Code the default: pressed and sent as it is; pi picked, pi is sent', async () => {
+    const shots = await react(
+      [
+        offer([CLAUDE_CODE, PI]),
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        key('Enter', { ctrlKey: true }),
+        settle,
+        ...openAndSettle({ category: 'web' }, 'lane-new'),
+        click(inWindow('[data-agent="pi"]')),
+        key('Enter', { ctrlKey: true }),
+        settle,
+      ],
+      board,
+    )
+    expect(shots[4]).toContain('aria-pressed="true" data-agent="claude"')
+    expect(subLine(shots[4])).toContain('Opens Claude in a new herdr tab')
+    const sent = sentBodies(shots.at(-1))
+    expect(sent).toHaveLength(2)
+    expect(sent[0]).toEndWith(',"agent":"claude"}')
+    expect(sent[1]).toEndWith(',"agent":"pi"}')
+  })
+
+  test('a failed pi launch started again starts on pi, whatever the default; one from before the choice on the default', async () => {
+    const shots = await react(
+      [
+        offer([CLAUDE_CODE, PI]),
+        ...openAndSettle({ retry: { ...FAILED, agent: 'pi' } }, 'card'),
+        key('Enter', { ctrlKey: true }),
+        settle,
+      ],
+      () => board({ launches: [FAILED] }),
+    )
+    expect(shots[4]).toContain('aria-pressed="true" data-agent="pi"')
+    expect(startBodyOf(shots.at(-1))).toEndWith(',"agent":"pi"}')
+    const before = await react([offer([CLAUDE_CODE, PI], 'pi'), ...openAndSettle({ retry: FAILED }, 'card')], () =>
+      board({ launches: [FAILED] }),
+    )
+    expect(before.at(-1)).toContain('aria-pressed="true" data-agent="pi"')
+  })
+
+  test('a draft keeps the agent picked in it; one that was not picked follows the default', async () => {
+    const shots = await react(
+      [
+        offer([CLAUDE_CODE, PI]),
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        click(inWindow('[data-agent="pi"]')),
+        key('Escape'),
+        settle,
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        key('Escape'),
+        settle,
+        ...openAndSettle({ category: 'web' }, 'lane-new'),
+        type('message', 'keep me'),
+        key('Escape'),
+        settle,
+        offer([CLAUDE_CODE, PI], 'pi'),
+        ...openAndSettle({ category: 'web' }, 'lane-new'),
+      ],
+      board,
+    )
+    // Opened again for the same lane: pi, as picked.
+    expect(shots[10]).toContain('aria-pressed="true" data-agent="pi"')
+    // The web draft had none picked: the board's new default.
+    expect(fieldsLine(shots.at(-1))).toContain('message="keep me"')
+    expect(shots.at(-1)).toContain('aria-pressed="true" data-agent="pi"')
+  })
+
+  test('refused about the agent: the reason under the form, the agent picked has the focus; another pick clears it', async () => {
+    const refuse: Step = async side => {
+      side.server.start = {
+        status: 400,
+        body: { ok: false, field: 'agent', error: 'The board does not start pi here' },
+      }
+    }
+    const shots = await react(
+      [
+        offer([CLAUDE_CODE, PI], 'pi'),
+        ...openAndSettle({ category: 'acme' }, 'lane-new'),
+        refuse,
+        key('Enter', { ctrlKey: true }),
+        click(inWindow('[data-agent="claude"]')),
+      ],
+      board,
+    )
+    expect(shots[6]).toContain('<p class="launch-error" role="alert">The board does not start pi here</p>')
+    expect(focusLine(shots[6])).toBe('focus: button[name=agent]')
+    expect(shots[7]).toContain('<p class="launch-error" hidden="" role="alert">')
   })
 })
 

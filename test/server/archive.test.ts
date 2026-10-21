@@ -333,9 +333,11 @@ test('Return after the tab closed resumes it by its id in a new tab, in its fold
   const dir = project(box)
   herdrWith(box, dir)
   schedule(box)
-  // spawn-agent reads how Claude starts from the board's config.json.
-  boardConfig(box, { launch: { claude: ['claude-tg', '--dangerously-skip-permissions'] } })
-  const b = await board(box, { archiveUndoSec: 0.2 })
+  // spawn-agent reads how Claude starts from the board's config.json. pi as the default for new
+  // sessions changes nothing here: a session comes back as the Claude session it was.
+  const spec = { claude: ['claude-tg', '--dangerously-skip-permissions'], default: 'pi', pi: 'pi' }
+  boardConfig(box, { launch: spec })
+  const b = await board(box, { archiveUndoSec: 0.2, launch: spec })
   assert.equal((await b.archive()).body.ok, true)
   await until(() => record(box)?.state === 'archived', 10_000)
   resumable(box, dir)

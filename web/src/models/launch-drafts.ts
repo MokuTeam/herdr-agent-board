@@ -32,6 +32,8 @@ export interface LaunchDraft {
   workspace: string
   newWorkspace: boolean
   worktree: { branch: string } | null
+  /** The agent picked in it (models/launch-agent.ts); none while it followed the board's default. */
+  agent?: string
 }
 
 export interface DraftBookOptions {

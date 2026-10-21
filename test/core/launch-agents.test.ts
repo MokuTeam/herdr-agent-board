@@ -1,13 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { useLanguage } from '../../src/core/lang.ts'
-import { launchAgents, piCommand, piConfigured } from '../../src/core/launch/agents.ts'
+import { defaultAgent, launchAgents, piCommand, piConfigured } from '../../src/core/launch/agents.ts'
 
 // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
 useLanguage('en')
 
-const CLAUDE = { id: 'claude', title: 'Claude Code' }
-const PI = { id: 'pi', title: 'pi' }
+const CLAUDE = { id: 'claude', title: 'Claude Code' } as const
+const PI = { id: 'pi', title: 'pi' } as const
 
 describe('the agents a start may pick', () => {
   test('Claude Code always, pi when launch.pi is set or pi is on PATH', () => {
@@ -49,6 +49,41 @@ describe('the agents a start may pick', () => {
   test('launch.pi counts as set unless it is blank', () => {
     for (const pi of [undefined, null, '', '  ']) assert.equal(piConfigured({ pi } as never), false, String(pi))
     for (const pi of ['pi', ['pi'], 5]) assert.equal(piConfigured({ pi } as never), true, String(pi))
+  })
+})
+
+describe('the agent a start that names none starts as (launch.default)', () => {
+  const both = () => [CLAUDE, PI]
+  test('Claude Code unless launch.default names an agent the board offers', () => {
+    for (const standard of [undefined, null, '', ' ', 'claude', 'Claude', 5, ['pi']])
+      assert.equal(defaultAgent({ default: standard } as never, both), 'claude', String(standard))
+    assert.equal(defaultAgent(undefined, both), 'claude')
+    for (const standard of ['pi', 'PI', ' pi ']) assert.equal(defaultAgent({ default: standard }, both), 'pi', standard)
+    // pi not offered (not on PATH, no launch.pi; a launcher of the config's own), or an agent the board has none of.
+    assert.equal(
+      defaultAgent({ default: 'pi' }, () => [CLAUDE]),
+      'claude',
+    )
+    assert.equal(
+      defaultAgent({ default: 'pi' }, () => []),
+      'claude',
+    )
+    assert.equal(defaultAgent({ default: 'codex' }, both), 'claude')
+  })
+
+  test('what the board offers is looked up only when launch.default names another agent than Claude Code', () => {
+    let asked = 0
+    const look = () => {
+      asked++
+      return [CLAUDE, PI]
+    }
+    defaultAgent(undefined, look)
+    defaultAgent({}, look)
+    defaultAgent({ default: 'claude' }, look)
+    defaultAgent({ claude: ['claude', '--dangerously-skip-permissions'] }, look)
+    assert.equal(asked, 0)
+    defaultAgent({ default: 'pi' }, look)
+    assert.equal(asked, 1)
   })
 })
 
