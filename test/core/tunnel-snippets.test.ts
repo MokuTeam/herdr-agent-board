@@ -10,6 +10,7 @@ import {
   socketFolder,
   sshdBlock,
 } from '../../src/core/tunnel-snippets.ts'
+import { PUBLIC_KEY_EXAMPLE } from '../../web/src/models/access.ts'
 
 describe('the server’s snippets, filled in', () => {
   test('the user, its account unlocked, the socket’s folder and the keys’ folder', () => {
@@ -115,12 +116,13 @@ describe('the README’s server steps are the panel’s snippets', () => {
     expect(at).toBeGreaterThan(lines.indexOf("### In a phone's browser"))
     expect(at).toBeLessThan(lines.indexOf('## Language'))
   })
-  test('the user and the socket’s folder: serverCommands’ lines in order, in one block', () => {
-    expect(fences.some(text => text.includes(serverCommands('boardtunnel', TUNNEL_SOCKET)))).toBe(true)
+  test('the user and the socket’s folder: serverCommands’ lines in order, whole, in one block', () => {
+    // Whole lines: a README line with more before or after one of them is not that line.
+    const lines = `\n${serverCommands('boardtunnel', TUNNEL_SOCKET)}\n`
+    expect(fences.some(text => `\n${text}\n`.includes(lines))).toBe(true)
   })
   test('the keys file’s line, as the panel shows it before a key exists', () => {
-    expect(fences).toContain(keysLine('ssh-ed25519 AAAA… agent-board@<PC>'))
-    expect(fences).toContain('restrict,port-forwarding ssh-ed25519 AAAA… agent-board@<PC>')
+    expect(fences).toContain(keysLine(PUBLIC_KEY_EXAMPLE))
   })
   test('the sshd block and the Caddyfile, word for word', () => {
     expect(fences).toContain(sshdBlock('boardtunnel'))
