@@ -323,6 +323,36 @@ test('Telegram on: tg-mcp polled with its token, its state in /status and in the
   }
 })
 
+test('~/.claude.json caught in the middle of Claude Code’s rewrite: Telegram keeps polling with the last url and token; a new token is followed', async () => {
+  const box = await wakeSandbox()
+  idleAndAsleep(box)
+  const tg = tgMcp()
+  try {
+    const file = join(home(box), '.claude.json')
+    const mcp = (token: string): string =>
+      JSON.stringify({ mcpServers: { telegram: { url: `${tg.url}/mcp`, headers: { Authorization: token } } } })
+    writeFileSync(file, mcp(TG_TOKEN))
+    const wake = await startWakeProcess(box, {
+      port: await unusedPort(),
+      wake: { telegram: 'auto' },
+      env: { BOARD_WAKE_ROUND_MS: '50' },
+    })
+    await until(() => tg.waits.length >= 1)
+    // Half written, for many of wake's rounds.
+    writeFileSync(file, mcp(TG_TOKEN).slice(0, 25))
+    const polls = tg.waits.length
+    await Bun.sleep(1000)
+    expect(tg.waits.length).toBeGreaterThan(polls)
+    expect((await (await fetch(`${wake.url}/status`)).json()).telegram).toEqual({ state: 'polling', host: tg.host })
+    expect(wakeLogText(box)).not.toContain(' Telegram off\n')
+    // Written whole again, with a new token: the next poll takes it.
+    writeFileSync(file, mcp('Bearer tg-new'))
+    await until(() => tg.waits.includes('Bearer tg-new'))
+  } finally {
+    await tg.stop()
+  }
+})
+
 test('--deliver <key> <text> routes one message by hand: typed into the running session, tg-mcp never asked, the session file not written', async () => {
   const box = await wakeSandbox()
   herdrShows(box, [claudePane('w1:p1', SID)], {
