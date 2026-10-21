@@ -5,9 +5,10 @@
 // the pane's shell, not by this process's OS (call 18). Nothing is typed into a pane whose
 // foreground or input box cannot be read, and no session is woken where the line would lose its
 // profile.
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { WakeHerdr } from '../../adapters/wake-herdr.ts'
 import { inputDraft } from '../../core/dialogs/input-box.ts'
-import { clearKeyFor, wakeLine } from '../../core/wake/rules.ts'
+import { clearKeyFor, plainProfile, wakeLine } from '../../core/wake/rules.ts'
 import { isChannelsWarning, isExitTasksDialog, isTrustDialog } from '../../core/wake/screens.ts'
 
 export type WakeOutcome =
@@ -57,25 +58,46 @@ function clock(t: Timing = {}): Required<Timing> {
 function lineFor(session: string, profile: string | null | undefined): { line: string } | { error: string } {
   const line = wakeLine(session, profile)
   if (line === null) return { error: NOT_A_SESSION }
-  if (typeof profile === 'string' && line === wakeLine(session)) return { error: PROFILE_NOT_PLAIN }
+  if (typeof profile === 'string' && !plainProfile(profile)) return { error: PROFILE_NOT_PLAIN }
   return { line }
 }
 
-/** The pane is at its shell's prompt: herdr shows the shell, and nothing else in the foreground. */
+/**
+ * The pane is at its shell's prompt: herdr gives the shell's pid, and every foreground process it
+ * lists, named or not, has that pid. An empty list passes, as in router.mjs: herdr then shows no
+ * program in front of the shell. The shell's name, for its clear key.
+ */
 async function atPrompt(io: WakeHerdr, pane: string): Promise<{ shell: string | null } | null> {
   const info = await io.processInfo(pane)
   if (info.shellPid === null || info.foreground.some(p => p.pid !== info.shellPid)) return null
   return { shell: info.shell }
 }
 
+/** A pane held by a withPane call, until its `fn` has ended. */
+interface Hold {
+  readonly pane: string
+  over: boolean
+}
+/** The holds of the withPane calls the current async context runs inside. */
+const holding = new AsyncLocalStorage<readonly Hold[]>()
+/** Pane → the end of its last queued operation. */
 const locks = new Map<string, Promise<void>>()
 
 /**
  * One operation per pane at a time, in this process: `fn` starts once the pane's earlier ones
- * have ended, whether they failed or not.
+ * have ended, whether they failed or not. A call inside an operation that holds the pane already
+ * (wakeInPane or putToSleep inside the caller's own withPane) runs `fn` at once, as part of it;
+ * work that operation leaves running after it ends queues like any other.
  */
 export function withPane<T>(pane: string, fn: () => Promise<T>): Promise<T> {
-  const next = (locks.get(pane) ?? Promise.resolve()).then(() => fn())
+  const outer = holding.getStore()?.filter(h => !h.over) ?? []
+  if (outer.some(h => h.pane === pane)) return fn()
+  const hold: Hold = { pane, over: false }
+  const next = (locks.get(pane) ?? Promise.resolve())
+    .then(() => holding.run([...outer, hold], fn))
+    .finally(() => {
+      hold.over = true
+    })
   const ended = next.then(
     () => {},
     () => {},
@@ -88,7 +110,8 @@ export function withPane<T>(pane: string, fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Waits until the pane's Claude is ready for input: 'ready', 'trust', 'blocked' or 'timeout'.
+ * Waits until the pane's Claude is ready for input: 'ready', 'trust', 'blocked' or 'timeout'
+ * ('timeout' at once when herdr no longer has the pane: it will not start there).
  * Sessions started with development channels first ask for a confirmation; that one dialog gets
  * Enter here. The folder trust question, and any other, is left to the user.
  */
@@ -103,7 +126,8 @@ export async function waitReady(
   let lastConfirm: number | null = null
   for (const deadline = now() + timeoutMs; now() < deadline; await sleep(READY_POLL_MS)) {
     const p = await io.pane(pane)
-    if (p?.agent !== 'claude') continue
+    if (!p) return 'timeout'
+    if (p.agent !== 'claude') continue
     if (p.agent_status === 'idle' || p.agent_status === 'done') return 'ready'
     if (p.agent_status !== 'blocked' || (lastConfirm !== null && now() - lastConfirm < CONFIRM_GAP_MS)) continue
     const screen = await io.screen(pane)
@@ -120,8 +144,9 @@ export async function waitReady(
 /**
  * Resumes the pane's sleeping session with `board resume` in its profile and waits until Claude
  * is ready for input. Only into a pane at its shell's prompt: the line is cleared by that shell's
- * key, then the one line run; herdr's errors are thrown. It does not hold the pane: the caller runs
- * it inside withPane, with whatever it does in the pane next (the Telegram router types its message).
+ * key, then the one line run; herdr's errors are thrown. Holds the pane (withPane) itself; a caller
+ * that does more in the pane right after (the Telegram router types its message) runs both inside
+ * its own withPane, which this joins.
  */
 export async function wakeInPane(
   io: WakeHerdr,
@@ -130,13 +155,15 @@ export async function wakeInPane(
 ): Promise<WakeOutcome> {
   const found = lineFor(target.session, target.profile)
   if ('error' in found) return { ok: false, why: 'line', error: found.error }
-  const prompt = await atPrompt(io, target.pane)
-  if (!prompt) return { ok: false, why: 'busy', error: ERRORS.busy }
-  clock(o).log(`waking ${target.session} in ${target.pane}`)
-  await io.sendKeys(target.pane, clearKeyFor(prompt.shell, o.platform))
-  await io.run(target.pane, found.line)
-  const state = await waitReady(io, target.pane, o.timeoutMs, o)
-  return state === 'ready' ? { ok: true } : { ok: false, why: state, error: ERRORS[state] }
+  return withPane(target.pane, async () => {
+    const prompt = await atPrompt(io, target.pane)
+    if (!prompt) return { ok: false, why: 'busy', error: ERRORS.busy }
+    clock(o).log(`waking ${target.session} in ${target.pane}`)
+    await io.sendKeys(target.pane, clearKeyFor(prompt.shell, o.platform))
+    await io.run(target.pane, found.line)
+    const state = await waitReady(io, target.pane, o.timeoutMs, o)
+    return state === 'ready' ? { ok: true } : { ok: false, why: state, error: ERRORS[state] }
+  })
 }
 
 /** What putToSleep tells its caller on the way, for the session file. */
@@ -171,9 +198,10 @@ async function exitClaude(
 
 /**
  * /exit an idle session and leave its pane marked `💤 <name>`, with the wake line typed at its
- * prompt, not run. Holds the pane (withPane) itself. Refuses (false, no /exit) unless the session
- * could be woken by that line, and the pane holds Claude with this session, idle or done, with an
- * empty input box it can read. After `going`, `slept` or `stayed` follows, even when herdr fails.
+ * prompt, not run. Holds the pane (withPane) itself, or joins its caller's hold of it. Refuses
+ * (false, no /exit) unless the session could be woken by that line, and the pane holds Claude with
+ * this session, idle or done, with an empty input box it can read. After `going`, `slept` or
+ * `stayed` follows, even when herdr fails.
  */
 export async function putToSleep(
   io: WakeHerdr,

@@ -27,7 +27,11 @@ export interface FakeWakeHerdr extends WakeHerdr {
   panes: FakePane[]
   workspaces: { workspace_id: string; label?: string }[]
   tabs: { tab_id: string; workspace_id: string; label?: string; number?: number }[]
-  /** Pane → its shell's process name as herdr reports it (`pwsh.exe`, `-bash`, a path); none: herdr names no shell. */
+  /**
+   * Pane → its shell's process name as herdr reports it (`pwsh.exe`, `-bash`, a path); none: herdr
+   * lists no foreground process, so a pane with no entry and not in `busy` counts as at the prompt
+   * (cleared by the OS's key).
+   */
   shells: Record<string, string>
   /** Panes whose foreground runs another program than their shell. */
   busy: Set<string>

@@ -3,6 +3,7 @@
 // profile, no cd), the key that clears the prompt first by the pane's shell, the dialogs answered
 // or left to the user, and the panes never typed into.
 import { describe, expect, test } from 'bun:test'
+import { asProcessInfo } from '../../src/adapters/wake-herdr.ts'
 import { putToSleep, type SleepMarks, waitReady, wakeInPane, withPane } from '../../src/services/wake/pane-ops.ts'
 import { type FakePane, type FakeWakeHerdr, fakeWakeHerdr } from '../support/fake-wake-herdr.ts'
 
@@ -57,14 +58,35 @@ const indexOf = (io: FakeWakeHerdr, argv: string[]): number =>
 const typed = (io: FakeWakeHerdr): string[][] =>
   io.calls.filter(c => ['run', 'send-keys', 'send-text', 'prompt'].includes(c[1] ?? ''))
 
-/** Claude comes up in the pane once the line is run, `status` at first. */
+/** Claude comes up in the pane once the line is run there, `status` at first: a program in its foreground. */
 function startsOnRun(io: FakeWakeHerdr, pane: FakePane, status = 'idle', screen = ''): void {
-  io.on(is('pane', 'run'), () => {
+  io.on(is('pane', 'run', pane.pane_id), () => {
     pane.agent = 'claude'
     pane.agent_status = status
     pane.agent_session = { value: SID }
     io.screens[pane.pane_id] = screen
+    io.busy.add(pane.pane_id)
   })
+}
+
+/** The fake's process-info for p1, answered as herdr would with these foreground processes (its shell is 4000). */
+function foregroundOf(io: FakeWakeHerdr, foreground: unknown[]): FakeWakeHerdr {
+  return {
+    ...io,
+    processInfo: async pane => {
+      await io.processInfo(pane)
+      return asProcessInfo({ process_info: { shell_pid: 4000, foreground_processes: foreground } })
+    },
+  }
+}
+
+/** A promise and the function that resolves it. */
+function gate(): { open: () => void; wait: Promise<void> } {
+  let open = () => {}
+  const wait = new Promise<void>(resolve => {
+    open = resolve
+  })
+  return { open, wait }
 }
 
 function recorder() {
@@ -149,6 +171,35 @@ describe('waking in a pane', () => {
     const out = await wakeInPane(unknown, { pane: 'p1', session: SID }, { ...fakeClock(), timeoutMs: 1000 })
     expect(out).toMatchObject({ ok: false, why: 'busy' })
     expect(typed(io)).toEqual([])
+  })
+
+  test('a program herdr gives no name is a program all the same: its pane is not typed into', async () => {
+    for (const nameless of [{ pid: 4001 }, { pid: 4001, name: null }, { pid: 4001, name: 7 }]) {
+      const io = fakeWakeHerdr({ panes: [shellPane()] })
+      const out = await wakeInPane(
+        foregroundOf(io, [{ pid: 4000, name: 'bash' }, nameless]),
+        { pane: 'p1', session: SID, profile: 'work' },
+        { ...fakeClock(), timeoutMs: 1000 },
+      )
+      expect(out).toEqual({ ok: false, why: 'busy', error: 'its pane runs another program' })
+      expect(typed(io)).toEqual([])
+    }
+  })
+
+  test('a pane closed while it wakes ends the wait at once, with the not-started result', async () => {
+    const io = fakeWakeHerdr({ panes: [shellPane()], shells: { p1: 'pwsh' } })
+    io.on(is('pane', 'get', 'p1'), () => {
+      io.panes.splice(0)
+    })
+    const c = fakeClock()
+    const start = c.at
+    const out = await wakeInPane(io, { pane: 'p1', session: SID }, { ...c, timeoutMs: 120_000 })
+    expect(out).toEqual({ ok: false, why: 'timeout', error: 'it did not start in time' })
+    expect(c.at - start).toBe(0)
+    expect(io.calls.filter(is('pane', 'get', 'p1'))).toHaveLength(1)
+    // Waiting on a pane herdr does not have (a delivery's wait) ends at once too.
+    expect(await waitReady(io, 'p9', 30_000, c)).toBe('timeout')
+    expect(c.at - start).toBe(0)
   })
 
   test('pi’s and Codex’s keys never reach board resume', async () => {
@@ -272,6 +323,19 @@ describe('putting to sleep in a pane', () => {
     expect(await putToSleep(io, { pane: 'p1', session: SID, name: NAME }, marks, fakeClock())).toBe(true)
     expect(io.calls.filter(is('pane', 'send-text'))).toEqual([])
     expect(seen.map(s => s.split(' ')[0])).toEqual(['going', 'slept'])
+
+    // A program herdr gives no name, there after /exit: not typed into either.
+    const pane2 = claudePane()
+    const io2 = fakeWakeHerdr({ panes: [pane2], inputBoxes: { p1: EMPTY_BOX } })
+    io2.on(is('agent', 'prompt'), () => {
+      pane2.agent = null
+    })
+    const nameless = foregroundOf(io2, [{ pid: 4000, name: 'bash' }, { pid: 4001 }])
+    expect(await putToSleep(nameless, { pane: 'p1', session: SID, name: NAME }, recorder().marks, fakeClock())).toBe(
+      true,
+    )
+    expect(io2.calls.filter(is('pane', 'process-info'))).toHaveLength(1)
+    expect(io2.calls.filter(is('pane', 'send-text'))).toEqual([])
   })
 
   test('a draft, a busy session, or another session in the pane is never put to sleep', async () => {
@@ -396,5 +460,90 @@ describe('one operation per pane', () => {
     await held
     expect(await sleeping).toBe(false) // Claude never leaves in this fake: what matters is that it ran after
     expect(io.calls[0]).toEqual(['pane', 'get', 'p1'])
+  })
+
+  test('waking holds the pane too: two wakes at once type one line', async () => {
+    const pane = shellPane()
+    const io = fakeWakeHerdr({ panes: [pane], shells: { p1: 'bash' } })
+    startsOnRun(io, pane)
+    const target = { pane: 'p1', session: SID, profile: 'work' }
+    const outs = await Promise.all([
+      wakeInPane(io, target, { ...fakeClock(), timeoutMs: 10_000 }),
+      wakeInPane(io, target, { ...fakeClock(), timeoutMs: 10_000 }),
+    ])
+    expect(outs).toEqual([{ ok: true }, { ok: false, why: 'busy', error: 'its pane runs another program' }])
+    expect(io.calls.filter(is('pane', 'run'))).toEqual([['pane', 'run', 'p1', `board resume ${SID} --profile work`]])
+  })
+
+  test('a wake waits while another operation holds its pane; a wake in another pane does not', async () => {
+    const p1 = shellPane()
+    const p2 = { ...shellPane(), pane_id: 'p2' }
+    const io = fakeWakeHerdr({ panes: [p1, p2], shells: { p1: 'bash', p2: 'bash' } })
+    startsOnRun(io, p1)
+    startsOnRun(io, p2)
+    const held = gate()
+    const holding = withPane('p1', () => held.wait)
+    const first = wakeInPane(io, { pane: 'p1', session: SID }, { ...fakeClock(), timeoutMs: 10_000 })
+    expect(await wakeInPane(io, { pane: 'p2', session: SID }, { ...fakeClock(), timeoutMs: 10_000 })).toEqual({
+      ok: true,
+    })
+    expect(io.calls.some(argv => argv.includes('p1'))).toBe(false)
+    held.open()
+    await holding
+    expect(await first).toEqual({ ok: true })
+    expect(io.calls.filter(is('pane', 'run')).map(argv => argv[2])).toEqual(['p2', 'p1'])
+  })
+
+  test('a wake or a sleep inside its caller’s own hold of the pane runs, never waits for itself', async () => {
+    // The Telegram router's way: wake, then type the message, in one hold of the pane.
+    const pane = shellPane()
+    const io = fakeWakeHerdr({ panes: [pane], shells: { p1: 'bash' }, inputBoxes: { p1: EMPTY_BOX } })
+    startsOnRun(io, pane)
+    const woke = await withPane('p1', async () => {
+      await io.pane('p1') // after an await in the hold, too
+      const out = await wakeInPane(io, { pane: 'p1', session: SID }, { ...fakeClock(), timeoutMs: 10_000 })
+      await io.prompt('p1', 'hello')
+      return out
+    })
+    expect(woke).toEqual({ ok: true })
+    expect(typed(io).map(argv => argv[1])).toEqual(['send-keys', 'run', 'prompt'])
+
+    // Putting to sleep in a hold of the pane.
+    io.on(is('agent', 'prompt', 'p1', '/exit'), () => {
+      pane.agent = null
+      io.busy.delete('p1')
+    })
+    const { seen, marks } = recorder()
+    const target = { pane: 'p1', session: SID, name: NAME }
+    expect(await withPane('p1', () => putToSleep(io, target, marks, fakeClock()))).toBe(true)
+    expect(seen.map(s => s.split(' ')[0])).toEqual(['going', 'slept'])
+    expect(io.calls.at(-1)).toEqual(['pane', 'send-text', 'p1', `board resume ${SID}`])
+  }, 2000)
+
+  test('work that outlives its hold of the pane waits its turn like any other', async () => {
+    const order: string[] = []
+    let late: Promise<void> = Promise.resolve()
+    const fired = gate()
+    await withPane('lock-c', async () => {
+      // Started inside the hold, it asks for the pane once the hold has ended.
+      void Bun.sleep(20).then(() => {
+        late = withPane('lock-c', async () => {
+          order.push('late')
+        })
+        fired.open()
+      })
+    })
+    const next = gate()
+    const holding = withPane('lock-c', async () => {
+      order.push('next in')
+      await next.wait
+      order.push('next out')
+    })
+    await fired.wait
+    expect(order).toEqual(['next in'])
+    next.open()
+    await holding
+    await late
+    expect(order).toEqual(['next in', 'next out', 'late'])
   })
 })
