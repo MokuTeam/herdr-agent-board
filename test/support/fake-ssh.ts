@@ -28,14 +28,16 @@
 //     password?: string,                            sudo -S takes this one only (none set: any)
 //     publickey?: boolean,                          the admin's key refused
 //     fixture?: string,                             a folder: look-1 prints its round1.txt, look-2 its round2.txt
-//     run?: { lines: string[], dropAfter?: number } a launch prints these, cut after dropAfter (exit 255) }
+//     run?: { lines: string[], dropAfter?: number } a launch prints these, cut after dropAfter (exit 255)
+//     wrong?: string[] }                            a wrong password's lines instead of the flavour's (a sudo in another language)
 // No line for its server key in the quoted UserKnownHostsFile: `Host key verification failed.`, 255.
 // It decodes the script in the remote command, reads its `# agent-board: <kind>` line and answers
 // as the server would: `probe` (no sudo) the `@@` lines PROBE_SCRIPT prints; the others behind the
-// sudo the admin's mode needs, exactly (`sh -c '…'` for root, `sudo -n -- ` NOPASSWD, `sudo -S -p ''
-// -- ` with a password), else `fake: unexpected command`, 2. It reads stdin to its end first (a
-// stdin left open keeps it waiting); sudo -S's is appended to `<FAKE_SSH_LOG>.stdin` as a JSON line,
-// and a wrong one gets the flavour's recorded lines and exit 1 (spec, "Checked by the spike").
+// sudo the admin's mode needs, exactly (`sh -c '…'` for root, `env LC_ALL=C sudo -n -- ` NOPASSWD,
+// `env LC_ALL=C sudo -S -p '' -- ` with a password), else `fake: unexpected command`, 2. It reads
+// stdin to its end first (a stdin left open keeps it waiting); sudo -S's is appended to
+// `<FAKE_SSH_LOG>.stdin` as a JSON line, and a wrong one gets the flavour's recorded lines (or
+// `wrong`) and exit 1 (spec, "Checked by the spike").
 // `hang` stays up silent.
 import { appendFileSync, existsSync, readFileSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -49,6 +51,7 @@ type Admin = {
   publickey?: boolean
   fixture?: string
   run?: { lines: string[]; dropAfter?: number }
+  wrong?: string[]
 }
 type State = {
   keygen?: 'unprotected' | 'passphrase'
@@ -288,9 +291,10 @@ async function admin(): Promise<void> {
   }
   // a stdin the board left open keeps this waiting, as it would keep sudo -S
   const input = await Bun.stdin.text()
-  const m = /^(sudo -n -- |sudo -S -p '' -- )?sh -c 'eval "\$\(echo ([A-Za-z0-9+/=]+) \| base64 -d\)"'$/.exec(
-    args.at(-1) ?? '',
-  )
+  const m =
+    /^(env LC_ALL=C sudo -n -- |env LC_ALL=C sudo -S -p '' -- )?sh -c 'eval "\$\(echo ([A-Za-z0-9+/=]+) \| base64 -d\)"'$/.exec(
+      args.at(-1) ?? '',
+    )
   const unexpected = (): never => {
     say('fake: unexpected command')
     return end(2)
@@ -318,12 +322,13 @@ async function admin(): Promise<void> {
     out(...sudoSays.filter(Boolean).map(l => `@@sudo ${l}`), `@@flavor ${words.version}`)
     return end(0)
   }
-  const wanted = mode === 'root' ? '' : mode === 'nopasswd' ? 'sudo -n -- ' : "sudo -S -p '' -- "
+  const wanted =
+    mode === 'root' ? '' : mode === 'nopasswd' ? 'env LC_ALL=C sudo -n -- ' : "env LC_ALL=C sudo -S -p '' -- "
   if (prefix !== wanted) return unexpected()
-  if (prefix.startsWith('sudo -S')) {
+  if (prefix.includes('sudo -S')) {
     if (logPath) appendFileSync(`${logPath}.stdin`, `${JSON.stringify(input)}\n`)
     if (a.password !== undefined && input !== `${a.password}\n`) {
-      say(...words.wrong)
+      say(...(a.wrong ?? words.wrong))
       end(1)
     }
     if (mode === 'notSudoer') {
