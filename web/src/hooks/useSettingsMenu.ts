@@ -1,9 +1,10 @@
 // Settings (the gear in the toolbar; the old page's app.js #settings): the menu out of the button,
-// and what its items do — light or dark (models/theme.ts), the board's language for every board,
-// the panels' place and default size (components/panel/place.ts), whether sleeping sessions show,
-// with more than one profile folder the Profiles panel, and how sessions asleep in "Waiting" fold,
-// for every board; on the local board, Remote access…; on a page signed in through the owner's
-// domain, Sign out. The items are models/settings-menu.ts.
+// and what its items do — light or dark (models/theme.ts), Classic or Terminal (models/look.ts),
+// the board's language for every board, the panels' place and default size
+// (components/panel/place.ts), whether sleeping sessions show, with more than one profile folder
+// the Profiles panel, while wake's state line is in the payload Sleep and wake…, and how sessions
+// asleep in "Waiting" fold, for every board; on the local board, Remote access…; on a page
+// signed in through the owner's domain, Sign out. The items are models/settings-menu.ts.
 import { useEffect, useState } from 'react'
 import type { FoldMode } from '../../../src/core/fold-mode.ts'
 import { LANGUAGES, translator } from '../../../src/core/i18n/translator.ts'
@@ -11,12 +12,14 @@ import type { Translator } from '../../../src/core/types.ts'
 import { ApiError, api, errorText, isReply, postJson, replyOf } from '../api/client.ts'
 import type { MenuEngine, MenuSource } from '../components/menu/menu-engine.ts'
 import { useLanguage } from '../i18n/I18nProvider.tsx'
+import { LOOK_KEY, lookNow, setLook } from '../models/look.ts'
 import { type Dock, isDock } from '../models/panel-layout.ts'
 import { offersProfiles } from '../models/profiles.ts'
 import { keptAuth, remotePage, UNPAIRED } from '../models/remote-page.ts'
 import { settingPicked, settingsMenu } from '../models/settings-menu.ts'
 import { reducedMotion } from '../models/spring.ts'
 import { setTheme, THEME_KEY, themeNow } from '../models/theme.ts'
+import { isWakeView } from '../models/wake.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { storage } from '../state/storage.ts'
 import { useLatest } from './useLatest.ts'
@@ -35,6 +38,9 @@ export interface SettingsDeps {
   /** The pointer is a finger. */
   coarse(): boolean
   setTheme(theme: string): void
+  /** The style on show (data-look on <html>, else 'classic'); none: no Style item. */
+  look?(): string
+  setLook?(look: string): void
   chooseLanguage(lang: string): void
   placePanels(dock: string): void
   resetPanelSize(): void
@@ -45,6 +51,9 @@ export interface SettingsDeps {
   /** How sessions asleep in "Waiting" fold, as the board says (null: it does not, none offered). */
   fold(): FoldMode | null
   chooseFold(mode: FoldMode): void
+  /** The payload carries wake's state line: Sleep and wake… is offered. */
+  wake?(): boolean
+  openWake?(): void
   /** The remote mode is on: Phones… is offered. */
   phones?(): boolean
   openPhones?(): void
@@ -64,12 +73,14 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
     const items = settingsMenu({
       t,
       theme: themeNow(deps.root()),
+      look: deps.look?.(),
       languages: deps.languages(),
       canEdit: deps.canEdit(),
       dock: deps.dock(),
       sleepers: deps.sleepers(),
       profiles: deps.profiles(),
       fold: deps.fold(),
+      wake: deps.wake?.() ?? false,
       phones: deps.phones?.() ?? false,
       access: deps.access?.() ?? false,
       signOut: deps.signOut?.() ?? false,
@@ -84,11 +95,13 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       onPick: id => {
         const pick = settingPicked(id)
         if (pick?.kind === 'theme') deps.setTheme(pick.value)
+        else if (pick?.kind === 'look') deps.setLook?.(pick.value)
         else if (pick?.kind === 'lang') deps.chooseLanguage(pick.value)
         else if (pick?.kind === 'dock') deps.placePanels(pick.value)
         else if (pick?.kind === 'reset') deps.resetPanelSize()
         else if (pick?.kind === 'sleepers') deps.toggleSleepers()
         else if (pick?.kind === 'profiles') deps.openProfiles()
+        else if (pick?.kind === 'wake') deps.openWake?.()
         else if (pick?.kind === 'fold') deps.chooseFold(pick.value)
         else if (pick?.kind === 'phones') deps.openPhones?.()
         else if (pick?.kind === 'access') deps.openAccess?.()
@@ -196,21 +209,28 @@ export function settingsGear(
   }
 }
 
+/** The page's cross-fade into another theme or style, when the browser has it and motion is not reduced. */
+const crossFade = (): ((apply: () => void) => unknown) | undefined =>
+  typeof document.startViewTransition === 'function' && !reducedMotion.matches
+    ? apply => document.startViewTransition(apply)
+    : undefined
+
 /**
  * Settings for the page: `menu` is the board's one menu (hooks/useContextMenus.ts);
- * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel, `openAccess` the Remote
- * access panel.
+ * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel, `openWake` Sleep and wake,
+ * `openAccess` the Remote access panel.
  */
 export function useSettingsMenu(
   menu: MenuEngine,
   openProfiles: () => void,
   openPhones: () => void = () => {},
+  openWake: () => void = () => {},
   openAccess: () => void = () => {},
 ): SettingsMenu {
   const { t, choose } = useLanguage()
   const board = useBoardContext()
   const place = usePanelPlace()
-  const latest = useLatest({ t, choose, board, openProfiles, openPhones, openAccess })
+  const latest = useLatest({ t, choose, board, openProfiles, openPhones, openWake, openAccess })
   const [expanded, setExpanded] = useState(false)
   const [gear] = useState(() => {
     const open = settingsMenuFrom({
@@ -227,11 +247,18 @@ export function useSettingsMenu(
           root: document.documentElement,
           keep: value => storage.set(THEME_KEY, value),
           // A cross-fade, not a flash from one brightness to the other.
-          transition:
-            typeof document.startViewTransition === 'function' && !reducedMotion.matches
-              ? apply => document.startViewTransition(apply)
-              : undefined,
+          transition: crossFade(),
         }),
+      look: () => lookNow(document.documentElement),
+      setLook: look => {
+        setLook(look, {
+          root: document.documentElement,
+          keep: value => storage.set(LOOK_KEY, value),
+          transition: crossFade(),
+        })
+        // A column shown alone is the Terminal style's (its keys): Classic shows them all.
+        if (look !== 'terminal') latest.current.board.dispatch({ type: 'column', id: null })
+      },
       chooseLanguage: lang => {
         const { t, choose, board } = latest.current
         void chooseLanguage(lang, {
@@ -257,6 +284,8 @@ export function useSettingsMenu(
           toast: board.toast,
         })
       },
+      wake: () => isWakeView(latest.current.board.data?.wake),
+      openWake: () => latest.current.openWake(),
       phones: () => !!latest.current.board.data?.remote,
       openPhones: () => latest.current.openPhones(),
       access: () => !remotePage(),

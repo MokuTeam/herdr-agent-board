@@ -8,8 +8,9 @@
 //   config.json allows;
 // - it carries the token of a device paired from that very Tailscale device, for anything but
 //   /api/hello and the pairing itself;
-// - it does not act on this computer's screen (desktopOnly), nor approve pairings or set up
-//   Remote access (localOnly: /api/remote, /api/access, for the board on this computer only).
+// - it does not act on this computer's screen (desktopOnly), nor approve pairings, set up Remote
+//   access or work wake (localOnly: /api/remote, /api/access, /api/wake, for the board on this
+//   computer only).
 // The routes' own guards apply as for the web board (X-Board on POSTs, fresh herdr data, the file
 // token).
 //

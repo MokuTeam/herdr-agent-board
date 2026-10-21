@@ -10,6 +10,10 @@ export interface SleepingSession {
   workspace?: string
   name?: string
   slept_at?: string
+  /** Read from the new wake's session file, not answered by a wake (integrations/wake.ts): the board checks its pane. */
+  fromFile?: true
+  /** The profile folder it ran in, and that folder's listed id (the new wake's answers and file). */
+  profile?: { dir: string; id?: string }
   [extra: string]: unknown
 }
 
@@ -36,11 +40,20 @@ const SLEEP_TIMEOUT_MS = 60_000
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
+/** Which wake answers at the url: the separate herdr-wake plugin's router, or the board's own (#119), each named so. */
+export type WakeName = 'herdr-wake' | 'wake'
+
+/** The texts that name the wake that answers. */
+const NAMED: Record<WakeName, { down: string; unknown: string }> = {
+  'herdr-wake': { down: 'err.wakeDown', unknown: 'err.sleep.unknown' },
+  wake: { down: 'err.boardWakeDown', unknown: 'err.sleep.unknownToWake' },
+}
+
 /** Why herdr-wake refused to sleep a session, in the user's words. */
-function sleepRefusal(why: string): string {
+function sleepRefusal(why: string, who: WakeName): string {
   if (/not idle/.test(why)) return t('err.sleep.busy')
   if (/did not go to sleep/.test(why)) return t('err.sleep.stayed')
-  if (/no running session/.test(why)) return t('err.sleep.unknown')
+  if (/no running session/.test(why)) return t(NAMED[who].unknown)
   return why || t('err.noAnswer')
 }
 
@@ -48,6 +61,7 @@ export function createHerdrWake(
   url: string | null,
   fetchFn: typeof fetch = fetch,
   now: () => number = Date.now,
+  who: WakeName = 'herdr-wake',
 ): SleepProvider {
   let cache: { at: number; list: SleepingSession[] } = { at: 0, list: [] }
 
@@ -86,7 +100,7 @@ export function createHerdrWake(
           ? { ok: true }
           : { ok: false, error: t('err.wake', { name: item.name, why: String(r.error ?? t('err.noAnswer')) }) }
       } catch (err) {
-        return { ok: false, error: t('err.wakeDown', { why: messageOf(err) }) }
+        return { ok: false, error: t(NAMED[who].down, { why: messageOf(err) }) }
       }
     },
 
@@ -94,9 +108,9 @@ export function createHerdrWake(
       try {
         const r = await post('/sleep', item, SLEEP_TIMEOUT_MS)
         if (r.ok) return { ok: true }
-        return { ok: false, error: t('err.sleep', { name: item.name, why: sleepRefusal(String(r.error ?? '')) }) }
+        return { ok: false, error: t('err.sleep', { name: item.name, why: sleepRefusal(String(r.error ?? ''), who) }) }
       } catch (err) {
-        return { ok: false, error: t('err.wakeDown', { why: messageOf(err) }) }
+        return { ok: false, error: t(NAMED[who].down, { why: messageOf(err) }) }
       }
     },
   }

@@ -16,6 +16,7 @@ import { REMOTE_STRINGS } from './remote-strings.ts'
 import { SERVER_STRINGS } from './server-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
+import { WAKE_STRINGS } from './wake-strings.ts'
 
 export type Entry = string | string[]
 export type Dictionary = Record<string, Entry>
@@ -302,6 +303,10 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'set.theme.auto': 'Match the system',
     'set.theme.light': 'Light',
     'set.theme.dark': 'Dark',
+    // the board's style (web/src/models/look.ts): its own, or a terminal-style look
+    'set.look': 'Style',
+    'set.look.classic': 'Classic',
+    'set.look.terminal': 'Terminal',
     'set.lang': 'Language',
     'set.panel': 'Session panel',
     'set.fold': 'Sleeping in Waiting',
@@ -565,6 +570,9 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'tui.asleep': ['{n} asleep', '{n} asleep'],
     'tui.sched': ['{n} scheduled', '{n} scheduled'],
     'tui.filter': 'filter: {title} (0 all)',
+    // a column shown alone (W M O D I) and the search (/), on the terminal board
+    'tui.only': 'only: {title}',
+    'tui.search': 'Search',
     'tui.inputHint': 'Enter ok · Esc cancel',
     'tui.catFor': 'Category for {name}:',
     'tui.new': 'new',
@@ -578,6 +586,9 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'key.z': 'sleep',
     'key.f': 'favorite',
     'key.filter': 'filter',
+    'key.move': 'move',
+    'key.search': 'search',
+    'key.only': 'one column',
     'key.o': 'web',
     'key.r': 'refresh',
     'key.close': 'close',
@@ -864,6 +875,9 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'set.theme.auto': 'Как в системе',
     'set.theme.light': 'Светлое',
     'set.theme.dark': 'Тёмное',
+    'set.look': 'Стиль',
+    'set.look.classic': 'Классический',
+    'set.look.terminal': 'Терминал',
     'set.lang': 'Язык',
     'set.panel': 'Панель сессии',
     'set.fold': 'Спящие в «Ждёт внешнего»',
@@ -1134,6 +1148,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'tui.asleep': ['{n} спит', '{n} спят', '{n} спят'],
     'tui.sched': ['{n} в расписании', '{n} в расписании', '{n} в расписании'],
     'tui.filter': 'фильтр: {title} (0 все)',
+    'tui.only': 'только: {title}',
+    'tui.search': 'Поиск',
     'tui.inputHint': 'Enter ок · Esc отмена',
     'tui.catFor': 'Категория для {name}:',
     'tui.new': 'новая',
@@ -1147,6 +1163,9 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'key.z': 'усыпить',
     'key.f': 'избранное',
     'key.filter': 'фильтр',
+    'key.move': 'ходить',
+    'key.search': 'поиск',
+    'key.only': 'одна колонка',
     'key.o': 'веб',
     'key.r': 'обновить',
     'key.close': 'закрыть',
@@ -1164,6 +1183,8 @@ for (const code of Object.keys(HELPER_STRINGS) as Lang[]) Object.assign(STRINGS[
 for (const code of Object.keys(SETUP_STRINGS) as Lang[]) Object.assign(STRINGS[code], SETUP_STRINGS[code])
 // And the Claude profiles.
 for (const code of Object.keys(PROFILE_STRINGS) as Lang[]) Object.assign(STRINGS[code], PROFILE_STRINGS[code])
+// And sleep and wake (#119).
+for (const code of Object.keys(WAKE_STRINGS) as Lang[]) Object.assign(STRINGS[code], WAKE_STRINGS[code])
 for (const code of Object.keys(REMOTE_STRINGS) as Lang[]) Object.assign(STRINGS[code], REMOTE_STRINGS[code])
 // The archive's too.
 for (const code of Object.keys(ARCHIVE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ARCHIVE_STRINGS[code])

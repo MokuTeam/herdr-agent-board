@@ -138,6 +138,14 @@ const refuses = (base: string): Promise<boolean> =>
     () => true,
   )
 
+/**
+ * A GET of the page's own files (not '/', /api/ or /uploads/), which the tunnel hands to the page
+ * route with or without a login, as `tailscale serve`'s listener does: a table route there (the
+ * Omarchy theme's stylesheet) is not reached, and its path is no file of the page's (404).
+ */
+const pageFile = (method: string, raw: string): boolean =>
+  method === 'GET' && raw !== '/' && !raw.startsWith('/api/') && !raw.startsWith('/uploads/')
+
 describe('the tunnel listener', () => {
   const shared = sharedSandbox()
   let box: Sandbox
@@ -178,7 +186,7 @@ describe('the tunnel listener', () => {
       for (const method of r.method === 'ANY' ? ['GET', 'POST'] : [r.method]) {
         const res = method === 'GET' ? await caddy.get(raw) : await caddy.post(raw, {})
         const open = method === 'GET' && (raw === '/' || raw === '/api/hello')
-        expect([method, raw, res.status]).toEqual([method, raw, open ? 200 : 401])
+        expect([method, raw, res.status]).toEqual([method, raw, open ? 200 : pageFile(method, raw) ? 404 : 401])
         await res.body?.cancel()
       }
     }
@@ -192,12 +200,13 @@ describe('the tunnel listener', () => {
         const res = method === 'GET' ? await ended.get(raw) : await ended.post(raw, {})
         const page = method === 'GET' && raw === '/'
         const hello = method === 'GET' && raw === '/api/hello'
+        const file = pageFile(method, raw)
         const cookie = CLEARED.test(res.headers.get('set-cookie') ?? '') ? 'cleared' : 'kept'
         expect([method, raw, res.status, cookie]).toEqual([
           method,
           raw,
-          page || hello ? 200 : 401,
-          page ? 'kept' : 'cleared',
+          page || hello ? 200 : file ? 404 : 401,
+          page || file ? 'kept' : 'cleared',
         ])
         if (hello) expect(await res.json()).toMatchObject({ signedIn: false })
         else await res.body?.cancel()
@@ -321,6 +330,8 @@ describe('the tunnel listener', () => {
       '/api/remote',
       '/api/remote%2Fx',
       '/api/%72emote/x',
+      '/api/wake',
+      '/api/wak%65',
     ]) {
       expect([path, ...(await answer(me.get(path)))]).toEqual([path, 403, { error: 'local' }])
       expect([path, ...(await answer(me.post(path, { op: 'off' })))]).toEqual([path, 403, { error: 'local' }])

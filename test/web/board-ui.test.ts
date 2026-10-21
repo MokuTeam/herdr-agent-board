@@ -12,6 +12,7 @@ test('the page state starts from localStorage: lane, sleepers and view receipts,
     filter: 'all',
     profile: 'all',
     query: '',
+    column: null,
     sleepers: true,
     viewed: {},
     open: null,
@@ -98,4 +99,15 @@ test('a result read in the sheet is recorded as viewed', () => {
   const done = item({ key: 'a', column: 'done', result: 'Fixed', activity: 5 })
   const ui = boardUi(initialUi(stored({})), { type: 'viewed', item: done })
   expect(ui.viewed).toEqual({ a: resultToken(done) })
+})
+
+test('a column shown alone (the Terminal style’s W M O D I, #161): set, changed, taken off', () => {
+  let ui: BoardUi = initialUi(stored({}))
+  expect(ui.column).toBeNull()
+  ui = boardUi(ui, { type: 'column', id: 'work' })
+  expect(ui.column).toBe('work')
+  const same = boardUi(ui, { type: 'column', id: 'work' })
+  expect(same).toBe(ui)
+  ui = boardUi(ui, { type: 'column', id: null })
+  expect(ui.column).toBeNull()
 })

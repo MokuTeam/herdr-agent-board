@@ -2,22 +2,25 @@
 // and spawn-agent commands on PATH, the Claude Code hooks, the status line, desktop notifications
 // on Windows; core/install-plan.ts; the agents' skill and herdr's own Claude hook, below) and what
 // `board doctor`, the install action and the web board check (those, herdr's key for the board,
-// herdr-wake, how new sessions start).
+// sleep and wake, how new sessions start).
 //
 // Pure: adapters/setup-facts.ts reads this computer into SetupFacts, and tests hand in fixtures.
 import { join } from 'node:path'
 import type { CardStore } from './card-store.ts'
 import { translator } from './i18n/translator.ts'
-import { BOARD_EVENTS, commandsOf, normPath, ourCommands, QUESTION_HOOK, TOAST_EVENTS } from './install-plan.ts'
+import {
+  BOARD_EVENTS,
+  commandsOf,
+  normPath,
+  ourCommands,
+  QUESTION_HOOK,
+  TOAST_EVENTS,
+  wakeHooksState,
+} from './install-plan.ts'
 import type { MokupilotLauncher } from './mokupilot.ts'
 import type { Translator } from './types.ts'
+import type { WakeState } from './wake/status.ts'
 
-/** herdr-wake from this repository (herdr-wake/README.md): install, its Claude Code hooks, start. */
-export const WAKE_INSTALL = [
-  'herdr plugin install MokuTeam/herdr-agent-board/herdr-wake',
-  'herdr plugin action invoke herdr-wake.install-hooks',
-  'herdr plugin action invoke herdr-wake.start',
-].join('\n')
 const english = translator('en')
 
 /** The files of a copy of the board that other programs run, and the skill install copies. */
@@ -27,6 +30,8 @@ export interface BoardFiles {
   hook: string
   statusline: string
   toast: string
+  /** Wake's ListAgents and SendMessage hooks (#119), which install writes while wake is on. */
+  wakeHook: string
   /** The agents' skill (skills/herdr-agents/SKILL.md), which install copies into each shown profile. */
   skill: string
 }
@@ -40,6 +45,7 @@ export function boardFiles(root: string): BoardFiles {
     hook: entrypoint('hook.ts'),
     statusline: entrypoint('statusline.ts'),
     toast: join(root, 'src', 'integrations', 'toast.ps1'),
+    wakeHook: entrypoint('wake-hook.ts'),
     skill: join(root, 'skills', SKILL, 'SKILL.md'),
   }
 }
@@ -196,6 +202,24 @@ export interface SetupFacts {
   herdrConfig: string | null
   wakeUrl: string | null
   wake: { ok: boolean; status?: number; error?: string } | null
+  /**
+   * Sleep and wake (#119), once it ships or while config.json turns it on: its state
+   * (core/wake/status.ts), port, last error, sessions asleep, log file, and whether wakeUrl is set to
+   * another address than the default; `router`: its port is held by the separate herdr-wake
+   * plugin's router, this process; `takenOver`: the takeover at wake's first start (nobody asked)
+   * took that many sleeping sessions over, and the panel has not shown it yet. Null or none:
+   * herdr-wake's line at wakeUrl, as before.
+   */
+  wakeNew?: {
+    state: WakeState
+    port: number
+    error?: string
+    router?: number
+    asleep: number
+    log: string
+    wakeUrlSet: boolean
+    takenOver?: number
+  } | null
   launcher: LauncherFacts | null
   /** How the board would start MokuPilot (adapters/setup-facts.ts mokupilotCommand); none: not looked for. */
   mokupilot?: MokupilotLauncher | null
@@ -465,26 +489,86 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
       KEY_SNIPPET,
     )
 
-  // herdr-wake: putting sessions to sleep and waking them. Optional: no mark on the board for it.
-  if (!facts.wakeUrl)
+  // Sleep and wake: the board's own (#119), on, off or held by the old plugin; herdr-wake's line
+  // only for facts without it. Optional: a mark on the board only when it is on and does not work.
+  const w = facts.wakeNew
+  if (w) {
+    const port = { port: w.port }
+    const log = { file: w.log }
+    if (w.state === 'running' || w.state === 'starting')
+      add(
+        'wake',
+        'ok',
+        t(w.state === 'running' ? 'setup.wake.running' : 'setup.wake.starting'),
+        t('setup.wake.runningDetail', { ...port, n: w.asleep }),
+      )
+    else if (w.state === 'off') add('wake', 'off', t('setup.wake.newOff'), '', t('setup.wake.newOffFix'))
+    else if (w.state === 'crashed')
+      add('wake', 'error', t('setup.wake.crashed'), w.error ?? '', t('setup.wake.crashedFix', log))
+    else if (w.state === 'held') add('wake', 'warn', t('setup.wake.held'), '', t('setup.wake.heldFix'))
+    else if (w.state === 'portTaken' && w.router !== undefined)
+      // Another port would run two wakes: the router goes, and wake takes its port again.
+      add(
+        'wake',
+        'error',
+        t('setup.wake.portRouter', { ...port, pid: w.router }),
+        '',
+        t('setup.wake.portRouterFix', { pid: w.router }),
+      )
+    else if (w.state === 'portTaken')
+      add('wake', 'error', t('setup.wake.portTaken', port), '', t('setup.wake.portTakenFix'))
+    else add('wake', 'warn', t('setup.wake.notAnswering', port), w.error ?? '', t('setup.wake.notAnsweringFix', log))
+    // On (and not held), the board talks to wake on its port, not at wakeUrl.
+    const on = w.state !== 'off' && w.state !== 'held'
+    if (on && w.wakeUrlSet) add('wakeUrl', 'na', t('setup.wake.urlUnused'))
+    // The takeover at wake's first start, which nobody asked for: said until the panel has shown it.
+    if (w.takenOver !== undefined)
+      add(
+        'wakeTakeover',
+        'off',
+        t('setup.wake.takenOver'),
+        t('setup.wake.takenOverDetail', { n: w.takenOver }),
+        t('setup.wake.takenOverFix'),
+      )
+    // Its ListAgents and SendMessage hooks, in each shown profile (as the board's hooks are checked).
+    const wakeHooks = (
+      s: Pick<SetupFacts, 'settingsFile' | 'settings' | 'settingsError'>,
+      id = 'wakeHooks',
+      named: (title: string) => string = title => title,
+    ): void => {
+      if (s.settingsError) return // the hooks check says the file does not read
+      const state = wakeHooksState(s.settings, f.wakeHook)
+      if (state === 'in')
+        add(id, 'ok', named(t('setup.wake.hooks.ok')), t('setup.wake.hooks.okDetail', { file: s.settingsFile }))
+      else if (state === 'old')
+        add(id, 'warn', named(t('setup.wake.hooks.old')), t('setup.wake.hooks.oldDetail'), t('setup.wake.heldFix'))
+      else
+        add(
+          id,
+          'warn',
+          named(t('setup.wake.hooks.missing')),
+          t('setup.wake.hooks.without'),
+          t('setup.runInstall'),
+          INSTALL,
+        )
+    }
+    if (on && profiles.length <= 1) wakeHooks(facts)
+    else if (on)
+      for (const p of profiles)
+        if (p.exists) wakeHooks(p, `wakeHooks:${p.id}`, check => t('setup.inProfile', { profile: p.title, check }))
+  } else if (!facts.wakeUrl)
+    // Facts without the board's own wake (an older gatherFacts): herdr-wake's line, its fix the
+    // board's Sleep and wake, with nothing to install and no Node.
     add(
       'wake',
       'off',
       t('setup.wake.off'),
       both(t('setup.wake.offDetail'), t('setup.wake.without')),
-      t('setup.wake.fix'),
-      WAKE_INSTALL,
+      t('setup.wake.newOffFix'),
     )
   else if (facts.wake?.ok) add('wake', 'ok', t('setup.wake.ok'), t('setup.wake.okDetail', { url: facts.wakeUrl }))
   else
-    add(
-      'wake',
-      'off',
-      t('setup.wake.down', { url: facts.wakeUrl }),
-      t('setup.wake.without'),
-      t('setup.wake.fix'),
-      WAKE_INSTALL,
-    )
+    add('wake', 'off', t('setup.wake.down', { url: facts.wakeUrl }), t('setup.wake.without'), t('setup.wake.heldFix'))
 
   // How new sessions start.
   const l = facts.launcher

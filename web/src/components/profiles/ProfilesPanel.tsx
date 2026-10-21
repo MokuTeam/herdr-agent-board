@@ -3,7 +3,8 @@
 // command does, then a folder a session reported that no profile has, a folder added from
 // somewhere else, and Install for a shown profile whose settings.json lacks the board's hooks.
 // Every change goes to config.json at once (POST /api/profiles) and comes back over the live
-// stream; what the board refuses is toasted.
+// stream; what the board refuses is toasted, and an Install that left wake's hooks out beside the
+// separate herdr-wake plugin's says so (#119).
 import { useCallback, useState } from 'react'
 import { api, errorText } from '../../api/client.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
@@ -21,15 +22,19 @@ export interface ProfilesPanelProps {
 export function ProfilesPanel({ open, onClose }: ProfilesPanelProps) {
   const t = useT()
   const { data, canEdit, toast } = useBoardContext()
-  const latest = useLatest({ canEdit, t, toast })
+  const latest = useLatest({ canEdit, t, toast, profiles: data?.profiles })
 
   const edit: ProfileEdit = useCallback(
     async body => {
-      const { canEdit, t, toast } = latest.current
+      const { canEdit, t, toast, profiles } = latest.current
       // The panel's controls are off while the board cannot edit.
       if (!canEdit) return false
       try {
-        await api.post('/api/profiles', body)
+        const reply = await api.post('/api/profiles', body)
+        if (reply.wakeHooks === 'old') {
+          const title = profiles?.find(p => p.id === body.id)?.title ?? String(body.id)
+          toast(t('wake.installOld', { title }))
+        }
         return true
       } catch (err) {
         toast(errorText(err, t), true)

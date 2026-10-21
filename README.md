@@ -3,12 +3,12 @@
 A [herdr](https://herdr.dev) plugin: a kanban of the Claude Code sessions running in herdr, and
 of the [pi](#pi) and [Codex](#codex) ones.
 Lanes are categories (one per client, say, plus Personal and Other), columns are Working /
-Needs me / Waiting on others / Done / Idle. Sessions
-[herdr-wake](herdr-wake/) put to sleep are on it
-too (one line, `z`). In English and Russian; see [Language](#language).
+Needs me / Waiting on others / Done / Idle. Sessions put to sleep
+([Sleep and wake](#sleep-and-wake)) are on it too (one line, `z`). In English and Russian; see
+[Language](#language).
 
 No model runs for the board. It reads herdr's snapshot, Claude's session registry and the tail
-of each transcript (ai-title, last prompt), herdr-wake's `/sleeping`, and the cards. A card is
+of each transcript (ai-title, last prompt), wake's `/sleeping`, and the cards. A card is
 what only the agent knows: its category, what it works on, what it waits for. Agents keep it
 current with the `board` command; a SessionStart / UserPromptSubmit hook tells each session how.
 
@@ -79,22 +79,18 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
    its own Telegram topic. See [New sessions](#new-sessions). Working in [pi](#pi)? With `pi` on
    the board's PATH the "New session" window offers Claude Code or pi; `"default": "pi"` in
    `launch` makes pi the one it starts on.
-4. **[herdr-wake](herdr-wake/)** (optional, worth it with many sessions; a plugin of its own in
-   this repository, on Node.js 20 or newer). It puts sessions that sat idle for an hour to sleep
-   and wakes them for a message, a reminder or a click; with
-   [tg-mcp](https://github.com/Eithery-rc/tg-mcp) it also brings your Telegram messages to them.
-   Without it the board has no "Put to sleep", "Wake" and "Restart", agents cannot restart
-   themselves (`board restart`, see [Restart](#restart)), the board shows no sleeping sessions,
-   and a reminder cannot wake one. The board finds it at `wakeUrl` (`http://127.0.0.1:12421`).
-
-   ```bash
-   herdr plugin install MokuTeam/herdr-agent-board/herdr-wake
-   herdr plugin action invoke herdr-wake.install-hooks
-   herdr plugin action invoke herdr-wake.start
-   ```
-
-   Its own settings (the idle hour, sessions never to put to sleep, the wake command) are in
-   [herdr-wake/README.md](herdr-wake/README.md).
+4. **Sleep and wake starts with the board** (nothing to install or run). It puts sessions to sleep
+   and wakes them: "Put to sleep", "Wake" and "Restart" on the board, `board sleep` and
+   `board restart` (agents restart themselves with it, see [Restart](#restart)), sleeping sessions
+   on the board, and reminders that wake a session, in every Claude profile. It runs on Bun in a
+   pane of its own, in a `Wake` workspace, and listens on 127.0.0.1 only. By itself it does
+   nothing: no session is put to sleep, woken or typed into until someone acts. Putting sessions
+   that sat idle for an hour to sleep, and bringing your Telegram messages to them with
+   [tg-mcp](https://github.com/Eithery-rc/tg-mcp), are switches in Settings → "Sleep and wake…",
+   off until you turn them on. The install puts its two Claude Code hooks (ListAgents and
+   SendMessage) into each shown profile. `"wake": false` in the board's config.json turns all of
+   it off. With the separate herdr-wake plugin installed, the board leaves the work to it until
+   you click "Switch over…". See [Sleep and wake](#sleep-and-wake).
 5. **Desktop notifications** (optional, Windows): `herdr plugin action invoke
    agent-board.notifications`. See [Notifications](#notifications).
 6. **Lanes**: "Categories" on the web board (titles, colors, the folders that sort sessions into
@@ -105,10 +101,10 @@ is not, what each missing piece costs and how to fix it: the commands (and wheth
 Git Bash finds someone else's of that name first), the hooks and the status line (and whether they
 run this copy of the plugin; with more than one profile shown, in each, by its name), herdr's own
 Claude hook (in each shown profile too: without it a session's card has no conversation and no
-profile), the key,
-herdr-wake, how new sessions start, MokuPilot, the notifications. The
-web board says it too, quietly: "Setup incomplete" in its toolbar while something the board needs
-does not work (see [Web board](#web-board)).
+profile), the key, sleep and wake (running, off, crashed with its error, held by the separate
+herdr-wake plugin, or not answering, and its hooks in each shown profile), how new sessions start,
+MokuPilot, the notifications. The web board says it too, quietly: "Setup incomplete" in its
+toolbar while something the board needs does not work (see [Web board](#web-board)).
 
 Back to `main` (the Node version): its install action does not know this one's entries and
 would leave them beside its own. First take them out of `~/.claude/settings.json`: the
@@ -195,7 +191,15 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   on show with its count; it opens every lane, with its count, in a menu. The profile switch
   folds the same way, on its own.
 - Settings (the gear): appearance (as the system has it, light or dark; kept in this browser),
-  language, where the session panel sits, and whether sleeping sessions show.
+  style (Classic, the board's own, or Terminal: a terminal-style look with a One Dark palette,
+  One Light in the light theme, monospace and 1px outlines, and the terminal board's keys, see
+  [Board keys](#board-keys); kept in this browser too, and config.json's `look` makes it the
+  one a browser starts in), language, where the session panel sits, whether sleeping sessions
+  show, and "Sleep and wake…" ([Sleep and wake](#sleep-and-wake); read only on a phone). On a
+  computer with [Omarchy](https://omarchy.org), the Terminal style takes the colors of
+  the Omarchy theme on now (mixed from its `colors.toml` as Omarchy's own apps take theirs) and the
+  system's monospace font, and follows a theme switch while the page is open; in the theme's other
+  mode (a light page for a dark theme) it keeps One Light / One Dark.
 - A card says what the session works on (its own `board doing`, else Claude's title of the
   session, else "You: <your last request>"), its last words, the tool it runs now, the question
   it is stuck on, what it waits for.
@@ -211,7 +215,7 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   quiet line of their own, not your message: an agent's report opens from it, a command's
   "Output" opens its output file), a message box under a row of actions (as many as the panel's
   width holds, the most used first, the rest under "⋯"): "Go to herdr" (focuses the pane and
-  brings the terminal window up), "Put to sleep" (through herdr-wake, idle sessions only; also
+  brings the terminal window up), "Put to sleep" (through wake, idle sessions only; also
   the moon on a card), "Wake" for sleeping sessions, "Restart" (also in a card's menu) for one
   that lost an MCP server or acts up, see [Restart](#restart). To close: click the board beside
   it, flick it out the way it came, or Esc. Another card switches it to that session.
@@ -251,9 +255,10 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
 - "Setup incomplete" in the toolbar, quietly, while something the board needs does not work on
   this computer (the checks of `board doctor`, run when the board starts and every 10 minutes).
   It opens the list: what is set up, what is not, what each missing piece costs and how to fix
-  it, with the commands to copy. Optional parts that are off (herdr-wake, notifications) are
-  listed but never raise it. "Hide until something changes" puts it away until the problems are
-  other ones.
+  it, with the commands to copy. Optional parts that are off (sleep and wake turned off,
+  notifications) are listed but never raise it. "Hide until something changes" puts it away until
+  the problems are other ones. Sleep and wake on but not running for more than a minute has a
+  quiet note of its own, "Wake stopped", which opens Settings → "Sleep and wake…".
 - The sheet's thread renders Markdown (headings, lists, tables, code, quotes, links; escaped,
   links http(s) only). Files and screenshots go with a message: the clip, Ctrl+V, or a drop on
   the panel. They upload to `%LOCALAPPDATA%\herdr\plugins\agent-board\uploads\<day>\` (kept 14
@@ -317,7 +322,7 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   name in the sheet's head. Enter keeps it, Esc puts it back, an empty name gives the automatic
   one back. The name is the board's (`name` on the card), shown on both boards and found by the
   search. "Rename in Claude and herdr too" also types `/rename <name>` into the session and
-  gives its herdr agent the same name, so other sessions and herdr-wake see it: only when ticked,
+  gives its herdr agent the same name, so other sessions and wake see it: only when ticked,
   and only while the session is idle (not working, not asleep).
 
 ## Claude profiles
@@ -440,30 +445,27 @@ only from a session in the board's own profile, since a running MokuPilot takes 
 its own env and a fork from another profile would run in its account. The board refuses the call
 from any other profile before anything starts (see [Web board](#web-board)).
 
-**Waking stays in the profile.** herdr-wake resumes a sleeping session in its pane, with the env of
-that pane's shell. So the board wakes (the Wake button, Enter on the terminal board, a message, a
-reminder) only a session in its own profile, or one in a pane the board opened with that session's
-profile; any other it refuses, saying why. The rules are under [Schedule](#schedule). herdr-wake
-also wakes sessions by itself (after its idle hour put one to sleep, or for a Telegram message),
-which the board cannot stop. So start a work session where its pane carries the profile:
+**Waking stays in the profile.** Every wake, whoever asks for it (the Wake button, Enter on the
+terminal board, a message, a reminder, a restart, another session's SendMessage, a Telegram
+message), types one line into the session's pane: `board resume <id> --profile <id>`. That sets the
+session's profile folder itself, whatever the pane's shell has, and goes back to the session's
+project folder (below). So a work session wakes in work however it was started: from the board, by
+`spawn-agent`, with an alias like `cld-work`, or in a shell with `CLAUDE_CONFIG_DIR` exported. A
+session is put to sleep (by you, an agent or the reaper) only when it can be woken again that way:
+`board` is on PATH, its profile folder is known (its card, a listed profile, or the default
+folder), and its conversation is in that folder; else it stays up, and "Put to sleep" says why. A
+session's own ListAgents and SendMessage see and wake only the sleeping sessions of its profile, so
+a name used in two profiles never wakes the other one; the board shows and wakes all of them. See
+[Sleep and wake](#sleep-and-wake).
 
-- From the board: the new-session window or "New here" on a work card, with the default launcher
-  or `launch.agent`, or `spawn-agent` (a work agent's helpers too). The new tab has
-  `CLAUDE_CONFIG_DIR`, so every wake resumes in work, and the board, which records the pane, wakes
-  it too (while herdr shows the pane still holds the terminal it opened). The panes a
-  `launch.command` opens itself are not recorded (only the first pane of a new workspace, which the
-  board makes with `--env`, is), so the board does not wake a session there, and herdr-wake
-  resumes in work only if your command puts the variable in the pane's shell.
-- Or in a pane whose shell has the variable exported (`export CLAUDE_CONFIG_DIR=~/.claude-work`,
-  then `claude`): herdr-wake's own wakes resume there in work. The board cannot see a shell's env,
-  so it does not wake such a session itself: wake it in herdr.
-
-An alias like `cld-work` (`CLAUDE_CONFIG_DIR=$HOME/.claude-work claude …`) sets the variable for
-that one Claude, not for the pane's shell, so a resume in that pane would start in `~/.claude`. The
-board refuses to wake those sessions. herdr-wake resuming one by itself is expected to fail, as
-Claude finds no such session in `~/.claude`; wake it in its pane yourself with `cld-work --resume`.
-A session the board starts with `"command": "cld-work"` still opens its tab with work's
-`CLAUDE_CONFIG_DIR`, so waking it stays in work.
+While the separate herdr-wake plugin does the waking (installed, and not switched over yet), it
+resumes a session with the env of its pane's shell, as before, and the board keeps its old rule:
+it wakes only a session in its own profile, or one in a pane the board opened with that session's
+profile (while herdr shows the pane still holds the terminal it opened); any other it refuses,
+saying why ([Schedule](#schedule)). A session in a pane whose shell has `CLAUDE_CONFIG_DIR`
+exported is then woken in its profile by herdr-wake, not by the board; one started with an alias
+like `cld-work` would be resumed by herdr-wake in `~/.claude`, where Claude finds no such session.
+"Switch over…" ends that.
 
 **After a restart of herdr (or of the computer).** herdr brings each pane back with a new shell in
 its folder and types the session's resume command into it, by default `claude --resume <id>`. That
@@ -474,13 +476,18 @@ folder than `~/.claude`, the board's SessionStart hook tells herdr to resume it 
 from a process of its own a second or so later, once herdr holds the session). `board resume`
 takes the folder from the session's card (else the profile named), sets `CLAUDE_CONFIG_DIR` to it
 (a shell that points there already keeps its own), and runs `launch.claude` with the profile's
-`args` and `--resume <id>`, in the foreground; the profile's start command is not run, as an alias
-is only known to a shell. herdr types only a command on PATH: the board reports nothing when
+`args` and `--resume <id>`, in the foreground, in the session's project folder: the folder it runs
+in when the session's conversation is there (a pane herdr restored), else the folder its
+conversation records, else the folder it runs in; the profile's start command is not run, as an
+alias is only known to a shell. herdr types only a command on PATH: the board reports nothing when
 `board` is not on PATH (see [Setup](#setup)). Sessions in `~/.claude`, outside herdr, pi's and
-Codex's are left to herdr as before: no report, no call to herdr. Where herdr-wake's SessionStart
-hook is in the profile (it installs it into `~/.claude` only) and its `wakeCommand` is one of its
-own, herdr-wake reports that command and the board reports nothing; `"wakeCommand": "board resume
-{session}"` resumes in the session's profile both after a restart and on its own wakes.
+Codex's are left to herdr as before: no report, no call to herdr. One exception keeps what
+herdr-wake's own SessionStart hook did for a launcher: with wake's Telegram router on and
+`launch.claude` starting a command of yours by its name rather than `claude` (claude-tg, say), a
+session in `~/.claude` is reported as `board resume <id>`, so herdr resumes it through your
+launcher. Where the separate herdr-wake plugin's SessionStart hook is in the profile (it installs
+it into `~/.claude` only) and its `wakeCommand` is one of its own, herdr-wake reports that command
+and the board reports nothing.
 
 ## pi
 
@@ -540,7 +547,7 @@ session), and so is `spawn-agent` without `--agent`. What each agent is started 
 (the Profiles panel's "Start command") wins over it for its starts, `claude --dangerously-skip-permissions`
 too.
 
-Not for pi (yet): the archive and Return, herdr-wake's sleep, wake and restart, the session's own
+Not for pi (yet): the archive and Return, sleep, wake and restart, the session's own
 name from the board's rename (the card's name works), question forms (pi has none: answer in a
 message), MokuPilot calls, and the status line's context percentage and usage windows.
 
@@ -1080,12 +1087,12 @@ works as for any other. It sleeps and wakes as before. It is `favorite` in the c
 An agent can ask the board to come back to it later: `board remind in 2h "check the CI run"`,
 or on a cron schedule, `board every "0 9 * * 1-5" "go through the inbox"`. When an entry is due,
 the board types `[board reminder] <text>` into that session as a prompt (`[board schedule <id>:
-<cron>] <text>` for a repeating one), waking it through herdr-wake first when it sleeps. The
-agent wrote the text for itself, so it knows what to do.
+<cron>] <text>` for a repeating one), waking it first when it sleeps
+([Sleep and wake](#sleep-and-wake)). The agent wrote the text for itself, so it knows what to do.
 
 This is what Claude Code's own CronCreate and ScheduleWakeup cannot do here: they live inside
-the Claude process, and herdr-wake ends that process after an idle hour. The board's entries
-are files, and the board keeps running.
+the Claude process, and a sleep ends that process (wake's reaper puts a session that sat idle for
+an hour to sleep, when it is on). The board's entries are files, and the board keeps running.
 
 - Times are local: `in 30m`, `in 1h30m`, `at 15:30` (the next 15:30), `tomorrow 9:00`,
   `fri 17:00`, `2026-10-20 14:00`, or an ISO time with a zone. A date alone means 9:00.
@@ -1098,7 +1105,7 @@ are files, and the board keeps running.
   into the running turn the way your own mid-turn messages arrive. With `--idle` (or the switch
   on the entry in the panel or the sheet) it waits until the session is free instead.
 - Either way, a session that waits on a dialog (typing would answer it) or has text the user
-  started typing in its input box (read from the screen as herdr-wake does: dim suggestions do
+  started typing in its input box (read from the screen as wake does: dim suggestions do
   not count) is not touched: the scheduler tries again every tick (15 s) and sends once it can.
   After `scheduleWaitMin` (240) minutes of trying, the run is logged as missed: a one-off entry
   goes, a cron one moves to its next time.
@@ -1114,19 +1121,25 @@ are files, and the board keeps running.
 - With no board running the scheduler, `board remind` says so; the entry goes out once one runs.
 - At most two sleeping sessions are woken at once. An entry cancelled while its session wakes
   up is not sent.
-- With more than one Claude profile, a sleeping session is woken only where it resumes in its own
-  profile: herdr-wake restarts Claude in the session's pane, with that pane's env. So the board
-  wakes a session of its own profile (the one its `CLAUDE_CONFIG_DIR` points to), or one in a pane
-  the board opened with that session's profile, while herdr shows the pane still holds the
-  terminal it opened. A session started outside the board in another profile is not woken: a
-  reminder for it is held, its reason "Started outside the board in profile …, so waking could
-  resume it in the wrong account; wake it in herdr where you started it", and tried again every
-  tick like any held one. Nor is a session in a pane the board opened with another profile's env,
-  the board's own profile included, unless herdr shows the pane now holds another terminal: its
-  reason "Its pane was opened in profile …". A session whose card names no profile yet is in the
-  one profile shown, when one is. The Wake button, "Go to herdr" and a message refuse alike.
-  The board forgets a pane it opened once herdr no longer has it, or gave its id to another
-  terminal.
+- A run for a sleeping session waits while wake is slow to answer, or down and herdr cannot be
+  reached, without the wait counting against `scheduleWaitMin` and without the session counting as
+  gone: no reminder is lost, and no cron entry dropped, because wake was down. With wake turned off
+  the board wakes the session itself and sends the reminder.
+- With more than one Claude profile, every wake resumes a session in its own profile
+  (`board resume <id> --profile <id>`, see [Claude profiles](#claude-profiles)), so a reminder
+  wakes a session of any profile. While the separate herdr-wake plugin does the waking, a sleeping
+  session is woken only where it resumes in its own profile: herdr-wake restarts Claude in the
+  session's pane, with that pane's env. So the board then wakes a session of its own profile (the
+  one its `CLAUDE_CONFIG_DIR` points to), or one in a pane the board opened with that session's
+  profile, while herdr shows the pane still holds the terminal it opened. A session started
+  outside the board in another profile is not woken: a reminder for it is held, its reason
+  "Started outside the board in profile …, so waking could resume it in the wrong account; wake it
+  in herdr where you started it", and tried again every tick like any held one. Nor is a session
+  in a pane the board opened with another profile's env, the board's own profile included, unless
+  herdr shows the pane now holds another terminal: its reason "Its pane was opened in profile …".
+  A session whose card names no profile yet is in the one profile shown, when one is. The Wake
+  button, "Go to herdr" and a message refuse alike. The board forgets a pane it opened once herdr
+  no longer has it, or gave its id to another terminal.
 - Runs that came due while the board was off: a one-off is sent once, saying how late it is; a
   cron entry sends one prompt for all the runs it missed, saying how many. Time the board was
   off does not count against the wait.
@@ -1151,7 +1164,8 @@ are files, and the board keeps running.
 ## Restart
 
 A Claude session that restarts stays the same session: Claude exits and resumes in its pane
-(herdr-wake's `wakeCommand`, `claude --resume <id>` by default), with the same session id and
+(`board resume <id> --profile <id>`, which runs `launch.claude` with `--resume <id>` in the
+session's profile; see [Sleep and wake](#sleep-and-wake)), with the same session id and
 conversation, and on the way it starts every MCP server again and reads settings.json, hooks,
 skills and CLAUDE.md anew. That is the reliable way to get a dropped MCP server back, which an
 agent cannot reconnect from inside its own turn (`/mcp` is a menu in its own terminal).
@@ -1168,7 +1182,7 @@ agent cannot reconnect from inside its own turn (`/mcp` is a menu in its own ter
   old one).
 - The scheduler (`src/services/scheduler.ts`) waits until the session is free: its turn over
   (for herdr and in Claude's own session registry), no dialog, no text you started typing, no
-  background command or Monitor running (that for 10 minutes at most). Then herdr-wake puts it
+  background command or Monitor running (that for 10 minutes at most). Then wake puts it
   to sleep (`POST /sleep`, which types `/exit`) and wakes it (`POST /wake`). 8 seconds later, so
   that its MCP servers have a moment to connect, the board types
   `[board reminder; restarted as you asked] <note>` into it (`Carry on.` without a note). After
@@ -1176,7 +1190,7 @@ agent cannot reconnect from inside its own turn (`/mcp` is a menu in its own ter
   skills and CLAUDE.md are loaded anew.
 - How far it got is kept in the entry (`step`): a board that stops halfway leaves the session
   asleep at worst, and the next one wakes it and types the note.
-- herdr-wake refusing or failing is tried again, three times in all. Then an agent hears
+- Wake refusing or failing is tried again, three times in all. Then an agent hears
   `[board reminder] restart did not happen: <why>. Your note for after it: <note>` once it is
   free; so it does when background tasks held it for 10 minutes. Asked again meanwhile, the new
   restart replaces that note. A restart you asked for types nothing then: a toast says it, and
@@ -1186,16 +1200,18 @@ agent cannot reconnect from inside its own turn (`/mcp` is a menu in its own ter
   with turning arrows while Claude exits and comes back. The card stays whole meanwhile, also
   while the session is asleep for that moment. The sheet lists it under "Schedule" with its
   trash can; the terminal board shows `↻`.
-- `board restart` refuses at once, and schedules nothing, without herdr-wake or when it does not
-  answer (it says how to restart by hand instead), and outside a herdr pane. The web board's
-  "Restart" needs fresh herdr data, as "Put to sleep" does.
+- `board restart` refuses at once, and schedules nothing, while wake is off or does not answer (it
+  says how to restart by hand instead), and outside a herdr pane. The web board's "Restart" refuses
+  alike, and needs fresh herdr data, as "Put to sleep" does.
 - A restart ends whatever lives in that Claude process: background agents and workflows,
   teammates, CronCreate and ScheduleWakeup jobs. A background command or a Monitor holds it
   instead (above). The [`herdr-agents`](skills/herdr-agents/SKILL.md) skill tells agents to
   finish or stop them first and to put what is due later into `board remind`.
 - A restart is for the session that asked: after `/clear` (a new session id in that pane), or
   with another Claude started there, it waits as for a session that is gone, unlike a reminder.
-- With more than one Claude profile, a restart ends in a wake, so it follows the wake rule
+- With more than one Claude profile, a restart ends in a wake in the session's own profile
+  ([Claude profiles](#claude-profiles)), so a work session restarts in work. While the separate
+  herdr-wake plugin does the waking, it follows that plugin's wake rule
   ([Schedule](#schedule)): a session the board could not wake again in its own profile (started
   outside the board in another profile than the board's, or in a pane the board opened with
   another profile's env) is refused before anything is put to sleep, with that rule's reason.
@@ -1209,7 +1225,7 @@ agent cannot reconnect from inside its own turn (`/mcp` is a menu in its own ter
 ## Several to sleep at once
 
 A session that coordinates others (one that polls every session at the end of the day, say) puts
-the ones it is done with to sleep in one call, instead of one herdr-wake `POST /sleep` each:
+the ones it is done with to sleep in one call, instead of one wake `POST /sleep` each:
 
 ```sh
 board sleep Report-north Report-south w2:p7 3f2a9c1e-...   # names, panes or session ids
@@ -1217,18 +1233,18 @@ board sleep --when-free Report-north Report-south           # the busy ones once
 board sleep --when-free Report-north --self                 # and this session, once its turn is over
 ```
 
-- Every session that is free now goes to sleep at once through herdr-wake (four at a time), by
+- Every session that is free now goes to sleep at once through wake (four at a time), by
   the checks a restart makes: its turn over (for herdr and in Claude's own registry), no dialog,
   no text the user started typing, no background command or Monitor. The command prints a line
   for each: asleep, asleep already, or kept up and why (working, a dialog, unsent text in its
-  input box, background tasks, herdr-wake refused, not a Claude session, no such session on the
+  input box, background tasks, wake refused, not a Claude session, no such session on the
   board, a name several sessions go by). A session id or a pane names one exactly; a name two
   sessions go by takes neither, and says so.
-- `--when-free`: one held by its turn, a dialog, a draft or background tasks (or that herdr-wake
+- `--when-free`: one held by its turn, a dialog, a draft or background tasks (or that wake
   refused just now) gets a schedule entry of kind `sleep` instead, due at once, and goes to sleep
   once it is free; its line gives the entry's id (`board unschedule <id>` cancels it). Asked again,
   it stays one entry. The scheduler waits for it as for a reminder (`scheduleWaitMin`, 240
-  minutes), then logs it as missed; herdr-wake refusing is tried three times, then the log says it
+  minutes), then logs it as missed; wake refusing is tried three times, then the log says it
   did not happen. Nothing is typed into the session, and nothing wakes it: one asleep by other
   means meanwhile counts as done. Like a restart, it is for that session only (not the one after
   `/clear` in its pane), and archiving the session drops it.
@@ -1240,13 +1256,196 @@ board sleep --when-free Report-north --self                 # and this session, 
   `--when-free` one does; a new turn meanwhile does not cancel it. The skill tells agents to do it
   only when the user asks or a coordinating session's run is over, not by default. Outside a
   session, or for one the board does not know, it refuses and puts nothing to sleep.
-- Without herdr-wake, or when it does not answer, it refuses at once and puts nothing to sleep.
+- With wake off, or when it does not answer, it refuses at once and puts nothing to sleep.
 - For agents that talk to the board over HTTP: `POST /api/sleep` with header `X-Board: 1` and
   `{"targets": ["<id|name|pane>", ...], "whenFree": true}` answers `{ ok, results }`, one per
   target: `result` (`asleep`, `already`, `scheduled`, `kept`), `why` (`busy`, `dialog`, `draft`,
   `tasks`, `gone`, `unknown`, `ambiguous`, `notClaude`, `profile`, `refused`, `error`), `detail`,
   and the session's `key`, `name`, `pane`, and `id` of a scheduled one. It needs fresh herdr data,
   as "Put to sleep" does (`src/services/sleep.ts`, `src/server/routes/sleep.ts`).
+
+## Sleep and wake
+
+A sleeping session costs nothing: its Claude has exited, its pane stays, labelled `💤 <name>`, and
+it comes back in that pane with the same session id and conversation. The board does this itself,
+on every install, with nothing to install or run (it did it through the separate
+[herdr-wake](herdr-wake/) plugin before, on Node.js). By itself it does nothing: no session is put
+to sleep, woken or typed into until someone clicks "Put to sleep", "Wake" or "Restart", runs
+`board sleep` or `board restart`, sends a sleeping session a message or a reminder, or turns the
+reaper or the Telegram router on.
+
+**How it runs.** herdr starts it with the board: a startup entry of its own
+(`src/entrypoints/wake-start.ts`), which the board's start never waits for, so the board opens
+whatever wake does. It opens one pane in a workspace of its own, `Wake`, which shows its log. In
+that pane a supervisor (`src/entrypoints/wake-run.ts`) runs the wake process
+(`src/entrypoints/wake.ts`), which listens on `127.0.0.1:12421` only: the API the board, the hooks
+and herdr's actions use, and what keeps it to one per computer. The supervisor starts it again after
+a crash (after 2, 10, then 30 seconds), ends it when its API stops answering, and stops after 5
+crashes in 10 minutes, the last error on screen, in Settings and in `board doctor`. After a restart
+of herdr, a wake pane brought back as a bare shell is closed and a new one opened. When wake is on
+and does not answer, the board starts it once more itself; "Start" in Settings does too. Wake
+reads the sessions of every Claude profile, every 15 seconds; its files are in the board's state
+folder (`%LOCALAPPDATA%\herdr\plugins\agent-board` on Windows): `wake-sessions.json` (the sessions
+it knows, by pane), `wake-status.json` (its state), `wake.log` (kept to 2 MB, the one before as
+`wake.log.1`).
+
+**Settings → "Sleep and wake…"** (its switches and buttons on the computer's own board only; a
+phone sees it read only):
+
+- **Sleep and wake**, on or off. On from the install; on starts it at once. Off stops it, closes
+  its pane, and the `Wake` workspace when nothing else is in it; nothing of wake runs then, no
+  herdr call, and its hooks ask nothing. Sessions asleep when it goes off stay on the board and
+  wake from their cards: the board types the resume line into the pane itself, as wake would. "Put
+  to sleep", `board sleep` and a new restart say wake is off. `"wake": false` in config.json turns
+  it off as the switch does; so does a config.json that does not parse, a `wake` that is not
+  `true`, `false` or a section, or an `enabled` that is not `true` or `false` (`"enabled": "yes"`,
+  say): a switch that cannot be read is off.
+- **Its state**: Off (and how many still sleep), Starting…, Running since when and how many are
+  asleep, Crashed with its last error ("Start again" closes its pane and opens a new one, "Log"
+  shows the end of `wake.log`), Not running (its pane was closed by hand, say; "Start"), "The
+  separate herdr-wake plugin does this now" (below), or "Port 12421 is taken by another program"
+  (set another `port` in the `wake` section). On but not running for more than a minute, the
+  toolbar has a quiet "Wake stopped" note that opens the panel.
+- **Put idle sessions to sleep** (the reaper), off by default, after 60 minutes, and the sessions
+  never to put to sleep: names, workspace labels or titles, exact in any case, or `/regex/`, one
+  per line.
+- **Telegram messages (tg-mcp)**: Auto or Off, Off by default. While wake runs it says what it
+  found: "connected to <host>", "no tg-mcp set up", or the last poll's error.
+- **Install claude-tg**: the launcher below.
+- A shown profile whose `settings.json` lacks wake's hooks is named, with Install (as the Profiles
+  panel's), and so is one that has the separate herdr-wake plugin's.
+
+Each of these is in config.json's `wake` section too (below), and a change made there by hand
+takes effect the same way, without a restart.
+
+**The reaper.** Every minute, with it on, a session goes to sleep (`/exit` typed into it) when all
+of these hold: Claude reports it idle for at least the minutes set (a busy one, or one with a
+background command or a Monitor, stays up); herdr sees it idle too, not on a question; its pane is
+not the focused one and its input box holds no draft; it is not in the list never to put to sleep;
+its conversation shows no CronCreate or ScheduleWakeup call in the last 7 days (such jobs live in
+the session and would stop with it); and it could be woken again in its profile
+([Claude profiles](#claude-profiles)). When `/exit` asks whether to stop background tasks, wake
+cancels and leaves it running. At most `maxPerRound` (3) go to sleep a minute.
+`bun src/entrypoints/wake.ts --reap-dry`, in the plugin's folder, prints the verdict for every
+Claude pane without putting anything to sleep.
+
+**A session you `/exit` yourself** counts as asleep too while its pane stays open, reaper on or
+not: within 15 seconds its pane is marked `💤` and its card offers Wake, and ListAgents,
+SendMessage and Telegram take it for asleep. Only sessions seen running in the last 10 minutes
+count, so an old shell stays a shell. Close the pane to be done with a session for good.
+
+**Waking** types `board resume <id> --profile <id>` into the session's pane, after clearing what is
+at its prompt (Esc for PowerShell and cmd, Ctrl+U for bash, zsh, fish and sh, by the shell herdr
+says runs there), and waits for Claude to come up (`wakeTimeoutSec`, 120), answering the
+development-channels confirmation if it asks. So a session wakes in its own profile and its
+project folder, whatever the pane's shell has ([Claude profiles](#claude-profiles)). A Wake while
+wake is slow to answer types nothing (wake may be waking that very session): the board says so.
+
+**Its hooks.** The install puts two Claude Code hooks into each shown profile while wake is on
+(`src/entrypoints/wake-hook.ts`, run with the Bun the install ran): after `ListAgents`, the
+sleeping sessions of the caller's own profile (those asleep for less than `listSleepingDays`, 7,
+at most 15; the rest only counted, all of them wakeable by name) and how long its running ones have
+been idle or busy and when they go to sleep; before `SendMessage` to a sleeping session of its own
+profile, a wake first, by its session id (refused: the message is not sent, and the agent hears
+why). A name only another profile has is left to Claude Code. Neither runs on any other tool, nor
+on every prompt, and neither asks anything while wake is off. The install does not write them
+beside the separate herdr-wake plugin's: it says so, and "Switch over…" moves them.
+
+**herdr's actions** for the focused pane, as herdr-wake's were: `agent-board.sleep` and
+`agent-board.wake`. Bind them to keys as the board's key is bound ([Setup](#setup)), with
+`command = "agent-board.sleep"`.
+
+**The API**, for programs on this computer: `GET /status`, `GET /sleeping`, `GET /awake` (running
+sessions: status, since when, minutes until sleep or why they stay up), `POST /wake {"target": …}`,
+`POST /sleep {"target": …}`, a target being a session name, a pane id or a session id; herdr-wake's
+paths and answers, plus each session's `profile` (`{ dir, id }`). A request from a web page (an
+`Origin`, or a `Host` other than `127.0.0.1:<port>` or `localhost:<port>`) is refused.
+
+### Telegram
+
+With [tg-mcp](https://github.com/Eithery-rc/tg-mcp) in router mode (`ROUTER=1` in its `.env`, tg-mcp
+0.2.0 or newer) and Telegram set to Auto, your Telegram messages reach sessions without Claude
+Code channels: wake long-polls tg-mcp, finds the pane a message is for, wakes the session there if
+it sleeps, and types the message in, starting with `[telegram message_id=… ]` (tg-mcp tells agents
+to answer such prompts with `send`). Sessions can then drop
+`--dangerously-load-development-channels` and `X-Channel`. tg-mcp's url and token are the `wake`
+section's `url` and `authorization`, else those of the `telegram` MCP server in `~/.claude.json`
+(`server` names another). The routing is herdr-wake's:
+
+1. The pane behind the bot message you replied to, the panes connected to tg-mcp for the topic,
+   then the panes the topic's key names: `topic:<workspace>` or `topic:<workspace> / <tab>` names a
+   herdr tab (what claude-tg sends), any other key is matched against the panes' folders.
+2. A pane running Claude wins; else a pane whose last Claude session wake has seen is woken there.
+3. Delivered: 👀 (and a note when it woke the session). A session waiting on a decision, or with
+   text you are typing in its input box, gets it later, said once. No pane fits: the message goes
+   back to tg-mcp's queue with a note. The folder trust question is left to you.
+
+For exact routing, let sessions tell tg-mcp their pane: a header on the `telegram` MCP server in
+`~/.claude.json`, next to `X-Cwd`, `X-Herdr-Pane: ${COMPUTERNAME:-}:${HERDR_PANE_ID:-}` on Windows,
+`X-Herdr-Pane: ${HERDR_PANE_ID:-}` elsewhere. `bun src/entrypoints/wake.ts --deliver "<key>"
+"<text>"` routes one message by hand, tg-mcp not asked.
+
+**claude-tg**, a Telegram topic per herdr tab: a launcher that starts Claude Code with `TG_KEY` set
+to the tab's topic (`topic:<workspace>` for a workspace's first tab, `topic:<workspace> / <tab>`
+for the others, non-ASCII dropped; the folder outside herdr), which the `telegram` MCP server sends
+as `X-Cwd: ${TG_KEY:-}`. "Install claude-tg" in the panel puts `claude-tg` and `claude-tg.cmd` into
+`~/.local/bin`, beside `board`; they take the key from `board tg-key` and need no Node. One that
+is not the board's (nor herdr-wake's) is left alone, and said. The install refreshes herdr-wake's
+old ones. Then `"launch": { "claude": ["claude-tg", "--dangerously-skip-permissions"] }` in the
+board's config.json (without the flag if you run Claude with permission prompts). See
+[tg-mcp's README](https://github.com/Eithery-rc/tg-mcp#herdr-launcher) for the server side.
+
+### Switching over from herdr-wake
+
+While the separate herdr-wake plugin is installed, nothing changes: the board talks to it at
+`wakeUrl` as before, with its old profile rule ([Claude profiles](#claude-profiles)); the board's
+own wake holds back (its start asks herdr for the plugin list once and ends), and the install
+writes no hook of its own beside the old ones. The panel says "The separate herdr-wake plugin does
+this now", with **"Switch over…"**, which asks once, listing what it will do, then:
+
+1. takes over the old `config.json` into the `wake` section (the reaper, its list, Telegram's url,
+   token and server, the port and timeouts; Telegram Auto when the old router had a url and
+   token), and its sleeping sessions of the last 7 days into `wake-sessions.json`;
+2. compares the old `wakeCommand` with `launch.claude` and, when they start different programs
+   (`claude-tg --resume {session}` against `claude`), says how to keep yours in `launch.claude`;
+3. uninstalls the plugin (`herdr plugin uninstall herdr-wake`);
+4. takes its hooks out of every profile's `settings.json` and puts the board's in, each file
+   backed up first (`settings.json.bak-wake-takeover`, then `-1`, `-2`…);
+5. closes its `tg-router` workspace when nothing but shells and sidebar panes is in it;
+6. turns wake on, if it was off, and starts it;
+7. names herdr key bindings that call `herdr-wake.sleep` or `herdr-wake.wake`, with their new
+   names (`agent-board.sleep`, `agent-board.wake`); herdr's `config.toml` is not changed.
+
+The panel then says what it took over ("reaper on, 60 min, 2 excluded; Telegram; 4 sleeping
+sessions"). Both take over only sessions seen or put to sleep in the last 7 days. Removed by hand
+instead (`herdr plugin uninstall herdr-wake`), the same takeover, but for the uninstall, runs once
+at wake's next start, without a click: it leaves the reaper and Telegram off (turn them on in the
+panel), and the panel and `board doctor` say so until you dismiss it. The old plugin's config and
+state folders are left where they are. Back to it: `"wake": false`, the plugin installed again,
+and each `settings.json` from its backup.
+
+### The `wake` section
+
+In the board's config.json, every key optional; no section is all the defaults (on):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | wake on; `"wake": false` is `enabled: false` |
+| `reaper.enabled` | `false` | put idle sessions to sleep |
+| `reaper.idleMinutes` | `60` | how long a session must sit idle |
+| `reaper.exclude` | `[]` | names, workspace labels or titles never to put to sleep; exact (any case) or `"/regex/"` |
+| `reaper.maxPerRound` | `3` | sessions put to sleep per minute at most |
+| `telegram` | `"off"` | `"auto"`: the Telegram router, when tg-mcp's url and token are found |
+| `url`, `authorization` | from `~/.claude.json` | tg-mcp's base url (without `/mcp`) and its `Authorization` header |
+| `server` | `telegram` | the MCP server in `~/.claude.json` to take them from |
+| `port` | `12421` | the API on 127.0.0.1, and what keeps wake to one process |
+| `workspace` | `Wake` | the herdr workspace of wake's pane |
+| `wakeTimeoutSec` | `120` | how long a wake waits for the session |
+| `pollTimeoutSec` | `25` | the Telegram long poll |
+| `listSleepingDays` | `7` | ListAgents lists sessions asleep for less than this |
+
+There is no `wakeCommand`: every wake is `board resume`, and `launch.claude` says how Claude
+starts. `wakeUrl` is used only while wake is off or held by the separate plugin.
 
 ## Archive
 
@@ -1269,7 +1468,7 @@ it); Claude keeps the conversation on disk, so it can come back.
   typing in its input box, a background command or Monitor) and again right before the pane
   closes: a session that got to work meanwhile (a Telegram message, another session) stays on the
   board, and a toast says why. A sleeping session goes as it is: its pane with the 💤 closes. A
-  shell with no Claude in it is closed only as herdr-wake left it, marked 💤 with nothing running
+  shell with no Claude in it is closed only as wake left it, marked 💤 with nothing running
   in it but the shell; a Claude that exited by itself, or a program started there, keeps the pane.
 - Its reminders and repeating pings wait in the record and come back with it: under their old
   ids, a repeating one from its next run, a one-off that came due meanwhile late (the prompt says
@@ -1300,8 +1499,8 @@ it); Claude keeps the conversation on disk, so it can come back.
   pane names one exactly; a name two sessions go by takes neither, and says so. A session cannot
   archive itself: its turn is on while it asks. The [`herdr-agents`](skills/herdr-agents/SKILL.md)
   skill allows it for a one-off session the agent started, or when the user asks.
-- herdr-wake takes a closed pane for a session that is over; Return starts it again in a new pane,
-  which herdr-wake then treats like any other.
+- Wake takes a closed pane for a session that is over; Return starts it again in a new pane,
+  which wake then treats like any other.
 - With more than one Claude profile, a session goes to the archive with its profile, and Return
   resumes it in that profile or not at all: one whose profile the board cannot be sure of is not
   archived, and Return refuses one it cannot place, with the reason (resume it yourself in its
@@ -1952,19 +2151,36 @@ Setup (`src/core/setup.ts`, `src/adapters/setup-facts.ts`, `src/services/setup-c
 | Key | Action |
 | --- | --- |
 | arrows / hjkl, mouse click | select |
+| g / G (Home / End) | the first / the last card |
 | Enter, double click | go to the session (wakes it if it sleeps) |
 | m | send the session a message (typed into its prompt) |
 | w | set what it waits for (empty clears) |
 | x | clear its card (doing, wait, result, a column set by hand) |
-| z | put the session to sleep (herdr-wake; idle sessions only) |
+| z | put the session to sleep (wake; idle sessions only) |
 | f | a favorite, or not any more (see [Favorites](#favorites)) |
 | c | change its category (n: a new one) |
 | 1-9 / 0 | show one lane / all |
+| W M O D I | show one column alone: Working, Needs me (me), Waiting on others, Done, Idle; the same again shows all |
+| / | search as you type: names, what sessions do, wait for, said or ask, lanes (Enter keeps it, Esc takes it off) |
 | o | open the web board |
-| q, Esc, the board key again | back to where you were |
+| q, Esc, the board key again | back to where you were (with a column alone or a search on, Esc ends those first) |
 | Ctrl+C | close the board |
 
 The same keys work on a Russian keyboard layout.
+
+**The Terminal style.** With `"look": "terminal"` in config.json (see [Settings](#settings)) the
+terminal board draws each card as a rounded box (its name, age and profile; what it does, waits for
+or asks; what it is at), the column heads over a heavy rule in their colors, and lanes as
+`▾ name count` over a thin rule in cyan and magenta in turn; a session asleep in Idle stays one
+line. It draws in the terminal's own sixteen colors, so a terminal theme (Omarchy's included) is
+the board's too. The keys stay the same.
+
+The web board takes these keys too in its Terminal style (Settings → Style → Terminal): h j k l and
+the arrows move between cards, g / G go to the first / the last, Enter opens the session, m writes
+to it, w sets what it waits for, x clears its card, z puts it to sleep, f makes it a favorite or not,
+c picks its lane, r refreshes, q closes the panel, 1-9 / 0 show one lane / all, W M O D I one
+column alone (Esc shows them all again), and / searches, as always. The board's own keys (n, Shift+N,
+F2, digits answering a question) come first. In the Classic style the page's keys are as they were.
 
 ## Agents
 
@@ -2085,7 +2301,12 @@ categories (id, title, color, folders that guess the category, the usual Claude 
 `profiles` (the Claude profiles: id, title, folder, color, hidden, args; see
 [Claude profiles](#claude-profiles)), `placement` (`workspace`
 default: the board lives in a workspace of its own and stays open; `tab`; `overlay`),
-`refreshSec`, `wakeUrl` (herdr-wake router), `scheduleWaitMin` (how long a due entry waits for a
+`look` (`terminal`: the terminal board in its Terminal style, and the web board in it in a browser
+that has not picked a style in Settings; Classic otherwise, and without it),
+`refreshSec`, `wake` (sleep and wake: `false` turns it off; its section is under
+[The `wake` section](#the-wake-section), and Settings → "Sleep and wake…" sets it), `wakeUrl` (the
+separate herdr-wake plugin's router, used only while wake is off or held by that plugin),
+`scheduleWaitMin` (how long a due entry waits for a
 busy session, 240), `port` (web board, 12422), `web` (false turns the
 web board off), `terminal` (false turns the web board's [terminal](#terminal) off), `browser`
 (path for the app window), `foldWaiting` (how the web board folds a session asleep in
@@ -2163,9 +2384,20 @@ tests): a shallow clone (`--depth`), a tarball or a fork without that history fa
 `git clone -c core.autocrlf=input …` (or turn `core.autocrlf` off) so `bun run check` passes.
 
 The code is in layers: `src/core` (pure rules, no I/O), `src/adapters` and `src/integrations`
-(files, processes, herdr, Claude's files, herdr-wake), `src/services` (what the board does with
-them), `src/server`, `src/tui` and `src/entrypoints` (the web server, the terminal board, the
-commands), `web/src` (the React page). Tests mirror them under `test/`.
+(files, processes, herdr, Claude's files, wake's API and herdr-wake's), `src/services` (what the
+board does with them), `src/server`, `src/tui` and `src/entrypoints` (the web server, the terminal
+board, the commands), `web/src` (the React page). Tests mirror them under `test/`.
+
+Sleep and wake has its rules in `src/core/wake`, its engine, supervisor, start, Telegram router
+and takeover in `src/services/wake`, and five entrypoints: `wake-start.ts` (herdr's startup entry,
+and the board's Start), `wake-run.ts` (the wake pane: the supervisor), `wake.ts` (the wake process
+and its API; `--reap-dry`, `--deliver`), `wake-hook.ts` (the ListAgents and SendMessage hooks) and
+`wake-action.ts` (herdr's `agent-board.sleep` and `agent-board.wake`). `bun test` covers it on
+fakes and sandboxes only: a compiled fake herdr or an in-memory one, temp folders, ports of the
+test's own. No test asks this computer's herdr, its Claude folders, or `127.0.0.1:12421` (wake's
+port) or `12422` (the web board's): every test that starts a wake gives it a port of its own, and
+the board's tests run with `"wake": false` unless they turn it on so. The tests that compare
+wake's API and hooks with herdr-wake's run that plugin's code with Node.js, and skip without it.
 
 The board through your own domain: `src/core/tunnel.ts` (the `tunnel` settings and their checks,
 the ssh line, what ssh says, the doctor's checks), `src/core/tunnel-snippets.ts` (the server's
@@ -2209,6 +2441,7 @@ board's serve side by side, with the board's own images, flags and texts (a few 
 `BOARD_IT_KEEP=1` keeps the built images and the Docker Hub mirror for the next run. Without these
 variables `bun test` skips them and starts no container.
 
-`herdr-wake/` is a herdr plugin of its own, on Node.js rather than Bun: `bun test`, `bun run check`
-and tsc leave it out (their roots are `test`, `src`, `web/src`), and its tests run with
+`herdr-wake/` is the separate plugin, deprecated (the board does this now) and kept one release
+for those who still run it, on Node.js rather than Bun: `bun test`, `bun run check` and tsc leave
+it out (their roots are `test`, `src`, `web/src`), and its tests run with
 `node --test herdr-wake/test/*.test.mjs` (Node.js 20 or newer).

@@ -155,6 +155,7 @@ type Base = Pick<
   | 'alive'
   | 'since'
   | 'pipe'
+  | 'fromFile'
 >
 
 export interface CollectOptions {
@@ -284,19 +285,24 @@ export async function collect(
   const panes = new Map(snap.panes.map(p => [p.pane_id, p]))
   for (const s of asleep) {
     if (!s.session || seen.has(s.session)) continue
+    const pane = panes.get(s.pane ?? '')
+    // One from wake's session file only where herdr shows its pane as a shell: not one whose pane
+    // runs Claude (or another agent) again, nor one whose pane is gone. Its workspace is herdr's.
+    if (s.fromFile && (!pane || pane.agent)) continue
     seen.add(s.session)
     add({
       key: s.session,
       session: s.session,
       pane: s.pane ?? null,
-      workspace: s.workspace ?? '',
+      workspace: s.fromFile ? (labels.get(pane?.workspace_id ?? '') ?? '') : (s.workspace ?? ''),
       agent: 'claude',
       name: s.name || s.session.slice(0, 8),
-      cwd: panes.get(s.pane ?? '')?.cwd ?? '',
+      cwd: pane?.cwd ?? '',
       status: 'sleeping',
       sleeping: true,
       focused: false,
       activity: Date.parse(s.slept_at ?? '') || 0,
+      ...(s.fromFile && { fromFile: true }),
     })
   }
 

@@ -1,9 +1,10 @@
 // The board page: the toolbar over the board, the side panels, the usage popover, the quick look
 // and the toasts, the keys and the Back button; the chat's files and links, the question forms, the
 // context menus, renaming in place, the "new session" window and the terminal window; the
-// session's helpers in their window; the Claude profiles' panel from Settings; the archive (its
-// panel, sessions off the board and back, Ctrl+Z); a fork of a session in a new tab; Remote access
-// from Settings on the local board.
+// session's helpers in their window; the Claude profiles' panel and sleep and wake's from Settings
+// (wake's also from the toolbar's "Wake stopped"); the archive (its panel, sessions off the board
+// and back, Ctrl+Z); a fork of a session in a new tab; Remote access from Settings on the local
+// board.
 import { useEffect, useRef, useState } from 'react'
 import { Board } from './components/Board.tsx'
 import { FileChips } from './components/files/FileChip.tsx'
@@ -32,6 +33,7 @@ import { useHelpers } from './hooks/useHelpers.ts'
 import { useLaunch } from './hooks/useLaunch.ts'
 import { laneContext, useNewSession } from './hooks/useNewSession.ts'
 import { useNextAttention } from './hooks/useNextAttention.ts'
+import { useOmarchyTheme } from './hooks/useOmarchyTheme.ts'
 import { usePanelLayout } from './hooks/usePanelLayout.ts'
 import { useQuestions } from './hooks/useQuestions.ts'
 import { useQuickLook } from './hooks/useQuickLook.ts'
@@ -43,13 +45,14 @@ import { useSegmentPicks } from './hooks/useSegmentPicks.ts'
 import { useSettingsMenu } from './hooks/useSettingsMenu.ts'
 import { useSetupNote } from './hooks/useSetupNote.ts'
 import { useTerminal } from './hooks/useTerminal.ts'
+import { useTerminalKeys } from './hooks/useTerminalKeys.ts'
 import { pageLayers } from './models/lifecycle.ts'
 import { remotePage } from './models/remote-page.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
 
 export function App() {
   const limitsAnchor = useRef<HTMLButtonElement>(null)
-  const { ui, dispatch } = useBoardContext()
+  const { ui, dispatch, data } = useBoardContext()
   const panels = usePanelLayout()
   // The categories and schedule panels, each opened at a lane or a session when asked.
   const [categories, setCategories] = useState(false)
@@ -66,6 +69,8 @@ export function App() {
   }
   // Settings → Profiles…, with more than one profile folder found.
   const [profiles, setProfiles] = useState(false)
+  // Settings → Sleep and wake…, while the payload carries wake's state line; the toolbar's note opens it too.
+  const [wake, setWake] = useState(false)
   // Settings → Phones…, while the remote mode is on; a phone that asks to pair opens it.
   const [phones, setPhones] = usePhonesPanel()
   // Settings → Remote access…, on the local board only: its panel is mounted at its first opening,
@@ -124,10 +129,13 @@ export function App() {
     menus.menu,
     () => setProfiles(true),
     () => setPhones(true),
+    () => setWake(true),
     openAccess,
   )
   // The lanes control and the profile switch folded into pills: their choices as menus.
   const picks = useSegmentPicks(menus.menu)
+  const terminalKeys = useTerminalKeys(menus)
+  useOmarchyTheme(data?.omarchy)
   useBoardKeys({
     openNextAttention,
     newSession,
@@ -141,6 +149,7 @@ export function App() {
     pickOption: questions.pickOption,
     openTerminal: terminal.openTerminal,
     archive,
+    terminal: terminalKeys,
   })
   // Layers above the board, topmost first (models/lifecycle.ts PAGE_LAYERS): Back on a phone
   // closes them one at a time (the quick look and the helpers window a step at a time).
@@ -170,6 +179,7 @@ export function App() {
           onSchedule={() => (schedule ? setSchedule(false) : openSchedule())}
           onArchive={archive.togglePanel}
           setup={setup}
+          onWake={() => setWake(true)}
           settings={settings}
           picks={picks}
         />
@@ -186,6 +196,7 @@ export function App() {
         categories={{ open: categories, focus: lane, onClose: () => setCategories(false), onOpen: openCategories }}
         schedule={{ open: schedule, focus: session, onClose: () => setSchedule(false), schedule: reminders }}
         profiles={{ open: profiles, onClose: () => setProfiles(false) }}
+        wake={{ open: wake, onClose: () => setWake(false) }}
         phones={{ open: phones, onClose: () => setPhones(false) }}
         {...(accessMounted && !remotePage() ? { access: { open: access, onClose: () => setAccess(false) } } : {})}
         archive={archive}

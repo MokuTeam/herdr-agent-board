@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net'
 import { dirname, join } from 'node:path'
 import { useLanguage } from '../../src/core/lang.ts'
 import { promptOf, type ScheduleEntry } from '../../src/core/schedule-rules.ts'
+import { WAKE_SHIPPED } from '../../src/core/wake/config.ts'
 import { unusedPort } from '../support/board-server.ts'
 import { type Sandbox, sandbox, until } from '../support/sandbox.ts'
 
@@ -550,7 +551,7 @@ async function webBoard(box: Sandbox, cfg: Record<string, unknown>) {
   return { post, port }
 }
 
-test('the web board asks for a restart for the user, says when one is on its way, refuses one without herdr-wake, and keeps its mode', async () => {
+test('the web board asks for a restart for the user, says when one is on its way, refuses one without wake, and keeps its mode', async () => {
   const box = await sandbox()
   // Working: the scheduler leaves the restart waiting for the turn to end.
   herdrWith(box, 'working')
@@ -575,7 +576,12 @@ test('the web board asks for a restart for the user, says when one is on its way
   const { post: post2 } = await webBoard(lone, { wakeUrl: null })
   const no = await post2('/api/session/s1/restart')
   assert.equal(no.status, 409)
-  assert.match(((await no.json()) as { error: string }).error, /needs herdr-wake/)
+  // Once wake ships the board's tests run with it off (runner.ts): it says so. Before, with no wake
+  // key, today's text.
+  assert.match(
+    ((await no.json()) as { error: string }).error,
+    WAKE_SHIPPED ? /^Sleep and wake is off \(Settings → Sleep and wake…\)$/ : /needs herdr-wake/,
+  )
   assert.equal(entries(lone).length, 0)
 })
 
