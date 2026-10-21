@@ -14,7 +14,7 @@ import { homedir } from 'node:os'
 import type { LiveSession } from '../../adapters/claude-home.ts'
 import type { HerdrSnapshot } from '../../adapters/herdr.ts'
 import type { LiveHit, ProfileHomes } from '../../adapters/profile-homes.ts'
-import { readWakeSessions, saveWakeSessions } from '../../adapters/wake-files.ts'
+import { peekWakeSessions, readWakeSessions, saveWakeSessions } from '../../adapters/wake-files.ts'
 import type { WakeHerdr } from '../../adapters/wake-herdr.ts'
 import { sameDir } from '../../core/launch/names.ts'
 import { absoluteProfileDir, defaultProfileDir, type ProfileSet, profileForDir } from '../../core/profiles.ts'
@@ -62,6 +62,8 @@ export interface WakeEngineDeps {
   now?(): number
   platform?: string
   sleep?(ms: number): Promise<void>
+  /** Only looks (--reap-dry): the session file peeked at, never set aside nor written. */
+  readOnly?: boolean
 }
 
 export type TargetAnswer = { ok: true; pane: string; name: string; already?: true } | { ok: false; error: string }
@@ -84,7 +86,7 @@ export interface WakeEngine {
   status(): Promise<StatusAnswer>
   wake(target: unknown): Promise<TargetAnswer>
   sleep(target: unknown): Promise<TargetAnswer>
-  /** Puts the idle sessions due to sleep, at most maxPerRound, while the reaper is on. */
+  /** Puts the idle sessions due to sleep, at most maxPerRound, while wake and its reaper are on. */
   reapRound(): Promise<void>
   /** The reaper's verdict for every Claude pane (--reap-dry). */
   plan(): Promise<ReapEntry[]>
@@ -173,14 +175,17 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
   // tells its log only when it set the file, or the entries it left out, aside: saved at once then,
   // so the next start does not set the same entries aside again.
   let setAside = false
-  let sessions: WakeSessions = readWakeSessions(deps.sessionsFile, text => {
-    setAside = true
-    deps.log(text)
-  })
+  let sessions: WakeSessions = deps.readOnly
+    ? peekWakeSessions(deps.sessionsFile)
+    : readWakeSessions(deps.sessionsFile, text => {
+        setAside = true
+        deps.log(text)
+      })
   if (setAside) save()
 
-  /** A failed save is logged: what wake holds stays, and the next change saves it again. */
+  /** A failed save is logged: what wake holds stays, and the next change saves it again. Read only, nothing is saved. */
   function save(): void {
+    if (deps.readOnly) return
     try {
       saveWakeSessions(sessions, deps.sessionsFile)
     } catch (err) {
@@ -191,6 +196,12 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
   function put(pane: string, entry: WakeEntry): void {
     sessions = { ...sessions, [pane]: entry }
     save()
+  }
+
+  /** Whether the reaper may put a session to sleep now: it counts as off whenever wake is. */
+  const reaping = (): boolean => {
+    const s = deps.settings()
+    return s.enabled && s.reaper.enabled
   }
 
   async function during<T>(fn: () => Promise<T>): Promise<T> {
@@ -457,11 +468,12 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       }),
 
     async reapRound() {
-      if (!deps.settings().reaper.enabled) return
+      if (!reaping()) return
       const seen = await look()
       const due = (await planOf(seen)).filter(p => p.sleep).slice(0, deps.settings().reaper.maxPerRound)
+      // Wake or its reaper turned off meanwhile: the sleep under way finishes, no other starts.
       for (const p of due) {
-        if (!deps.settings().reaper.enabled) break
+        if (!reaping()) break
         const hit = p.session ? seen.hits.get(p.session) : undefined
         if (!p.session || !hit) continue
         const s = { session: p.session, name: p.name, cwd: p.cwd, dir: hit.home.root }

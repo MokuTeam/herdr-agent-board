@@ -7,11 +7,14 @@ import { join } from 'node:path'
 import {
   peekWakeSessions,
   readWakeSessions,
+  readWakeStatus,
   saveWakeSessions,
   wakeLog,
   wakeLogFile,
   wakeLogTail,
   wakeSessionsFile,
+  wakeStatusFile,
+  writeWakeStatus,
 } from '../../src/adapters/wake-files.ts'
 import type { WakeSessions } from '../../src/core/wake/sessions.ts'
 
@@ -277,4 +280,31 @@ test('the log’s tail: its last lines, none from a log there is not', () => {
   writeFileSync(log, `first\n${'x'.repeat(70_000)}\nend\n`)
   expect(wakeLogTail(2, log)).toBe(`${'x'.repeat(70_000)}\nend`)
   expect(wakeLogTail(3, log)).toBe(`first\n${'x'.repeat(70_000)}\nend`)
+})
+
+test('the status file: none or one that does not read is null; written atomically with the fields this code does not know kept', () => {
+  const dir = folder()
+  const file = join(dir, 'state', 'wake-status.json')
+  expect(readWakeStatus(file)).toBeNull()
+  mkdirSync(join(dir, 'state'))
+  writeFileSync(file, '{ "state": "runn')
+  expect(readWakeStatus(file)).toBeNull()
+  writeFileSync(file, '\uFEFF{ "state": "crashed", "at": 5, "error": "boom", "newer": { "x": 1 } }')
+  expect(readWakeStatus(file)).toEqual({ state: 'crashed', at: 5, error: 'boom' })
+
+  writeWakeStatus({ state: 'running', at: 6, pane: 'w9:p1', pid: 77, port: 40000 }, file)
+  expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({
+    newer: { x: 1 },
+    state: 'running',
+    at: 6,
+    pane: 'w9:p1',
+    pid: 77,
+    port: 40000,
+  })
+  expect(readWakeStatus(file)).toEqual({ state: 'running', at: 6, pane: 'w9:p1', pid: 77, port: 40000 })
+  // A known field the new status leaves out is gone.
+  writeWakeStatus({ state: 'stopped', at: 7 }, file)
+  expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ newer: { x: 1 }, state: 'stopped', at: 7 })
+  expect(readdirSync(join(dir, 'state'))).toEqual(['wake-status.json'])
+  expect(wakeStatusFile()).toMatch(/[\\/]wake-status\.json$/)
 })

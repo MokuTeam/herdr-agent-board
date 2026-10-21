@@ -2,15 +2,22 @@
 // 127.0.0.1:<wake.port> (the old herdr-wake router's paths and answers, plus each session's
 // profile), the sessions seen every 15 s, and the reaper every 60 s while it is on. config.json's
 // kill switch is read before anything: wake off, or a config.json that does not parse, ends it
-// with 0 and no herdr call. The settings are followed live (liveConfig): turned off, the API closes
-// and it ends with 0; the reaper's switch starts or stops its loop.
+// with 0 and no herdr call. The settings are followed live (liveConfig): turned off, it starts no
+// other sleep, keeps its port while the wakes and sleeps under way end, then ends with 0; the
+// reaper's switch starts or stops its loop.
 //
 //   bun src/entrypoints/wake.ts              the process
 //   bun src/entrypoints/wake.ts --reap-dry   the reaper's verdict for every Claude pane, one line each
+//                                            (the session file only read, never written)
 //
 // API: GET /status, GET /sleeping, GET /awake, POST /wake { target }, POST /sleep { target }; target
-// is a session name, a pane id or a session id. Once it listens it says { up: <port> } over its IPC
-// channel, when it has one (the supervisor's).
+// is a session name, a pane id or a session id. Programs on this computer only: a request with an
+// Origin, or a Host other than 127.0.0.1:<port> or localhost:<port> (a web page, DNS rebinding), is
+// refused with 403. Once it listens it says { up: <port> } over its IPC channel, when it has one
+// (the supervisor's, services/wake/supervisor.ts); told 'restart' there (a code change), it ends
+// with 75 once no wake or sleep is under way, answering new ones 503 meanwhile. The port keeps wake
+// to one process: held by a wake, this one ends with 0 quietly; by another program, the status
+// file says portTaken and the exit is 76.
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -18,12 +25,14 @@ import { configFile, liveConfig, loadConfig, readConfigFile } from '../adapters/
 import { isRecord } from '../adapters/json-store.ts'
 import { stateDir } from '../adapters/paths.ts'
 import { boardOnPath } from '../adapters/resume-report.ts'
-import { wakeLog, wakeSessionsFile } from '../adapters/wake-files.ts'
+import { readWakeStatus, wakeLog, wakeSessionsFile, writeWakeStatus } from '../adapters/wake-files.ts'
 import { cliWakeHerdr } from '../adapters/wake-herdr.ts'
 import { scheduledJobs } from '../adapters/wake-transcripts.ts'
 import { telegramTarget, type WakeConfig, wakeConfig, wakeSwitch } from '../core/wake/config.ts'
+import { isWakeStatus } from '../core/wake/status.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { createWakeEngine, type WakeEngine } from '../services/wake/engine.ts'
+import { PORT_TAKEN_EXIT, RESTART_EXIT } from '../services/wake/supervisor.ts'
 
 const reapDry = process.argv[2] === '--reap-dry'
 
@@ -37,8 +46,14 @@ const SEEN_EVERY_MS = 15_000
 const REAP_EVERY_MS = 60_000
 /** What a timer can wait at most. */
 const MAX_TIMER_MS = 2 ** 31 - 1
-/** Turned off: how long wakes and sleeps under way have to end before the process does. */
+/** Turned off: how long wakes and sleeps under way have at least to end before the process does. */
 const OFF_GRACE_MS = 180_000
+/** A wake's own wait (wakeTimeoutSec) and this much more: the grace when that is longer. */
+const WAKE_GRACE_MS = 30_000
+/** Once nothing is under way: how long the last answers have to go out before the process ends. */
+const ANSWERS_OUT_MS = 5000
+/** Its port taken: how long what holds it has to answer as a wake. */
+const PORT_ASK_MS = 5000
 const JSON_HEADERS = { 'content-type': 'application/json' }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -101,7 +116,8 @@ function every(ms: number, name: string, fn: () => Promise<void>): Loop {
 let server: ReturnType<typeof Bun.serve> | undefined
 let seen: Loop | null = null
 let reaper: Loop | null = null
-let stopping = false
+/** Set once the process is on its way out: the code it ends with, and what new sleeps and wakes are told. */
+let leaving: { code: number; why: string } | null = null
 
 const cfg = reapDry ? loadConfig() : liveConfig(followSettings)
 /** Wake's settings as config.json has them now. */
@@ -114,11 +130,14 @@ try {
     homes: deps.homes,
     // The board's profiles with the folder this process's env points to, as `board resume` reads them.
     profiles: () => deps.profiles(),
-    settings,
+    // On its way out, wake counts as off for the engine: its reaper starts no other sleep.
+    settings: () => (leaving ? { ...settings(), enabled: false } : settings()),
     sessionsFile: wakeSessionsFile(),
     boardOnPath: () => boardOnPath(),
     scheduled: path => scheduledJobs(path),
     log,
+    // --reap-dry only looks: the session file is peeked at, never set aside nor written.
+    readOnly: reapDry,
   })
 } catch (err) {
   // The session file could not be read, nor set aside: started with none, the next save would lose it.
@@ -129,14 +148,15 @@ try {
 /** The reaper's loop: every 60 s, a round that puts the sessions due to sleep. */
 const reaperLoop = (): Loop => every(roundMs() ?? REAP_EVERY_MS, 'reaper', () => engine.reapRound())
 
-/** config.json changed: turned off, the API closes and the process ends with 0; the reaper's loop follows its switch. */
+/** config.json changed: turned off, the process ends with 0 (leave); the reaper's loop follows its switch. */
 function followSettings(): void {
-  if (stopping) return
+  if (leaving?.code === 0) return
   const s = settings()
   if (!s.enabled) {
-    void stop()
+    leave(0, 'wake is stopping', 'wake turned off in config.json: stopping')
     return
   }
+  if (leaving) return
   if (s.reaper.enabled && !reaper) {
     reaper = reaperLoop()
     log(reaperSaid(s))
@@ -147,16 +167,32 @@ function followSettings(): void {
   }
 }
 
-/** Wake turned off: no more requests nor rounds; ends with 0 once the wakes and sleeps under way are done (180 s at most). */
-async function stop(): Promise<void> {
-  if (stopping) return
-  stopping = true
-  log('wake turned off in config.json: stopping')
+/**
+ * On the way out with `code`: no more rounds, new sleeps and wakes answered 503 `why`; the port
+ * kept meanwhile, so no second wake starts beside this one. Called again (turned off while
+ * restarting, say), only the code and the answer change.
+ */
+function leave(code: number, why: string, said: string): void {
+  const first = leaving === null
+  leaving = { code, why }
+  log(said)
+  if (!first) return
   seen?.stop()
   reaper?.stop()
-  void server?.stop(true)
-  for (const deadline = Date.now() + OFF_GRACE_MS; engine.busy() > 0 && Date.now() < deadline; ) await Bun.sleep(100)
-  process.exit(0)
+  reaper = null
+  void drainAndExit()
+}
+
+/**
+ * Ends with leaving's code once the wakes and sleeps under way are done, at most the longer of
+ * 180 s and a wake's own wait and 30 s; the server is stopped gently first, so the answer of a call
+ * that was waited for still goes out.
+ */
+async function drainAndExit(): Promise<void> {
+  const graceMs = Math.max(OFF_GRACE_MS, settings().wakeTimeoutSec * 1000 + WAKE_GRACE_MS)
+  for (const deadline = Date.now() + graceMs; engine.busy() > 0 && Date.now() < deadline; ) await Bun.sleep(100)
+  await Promise.race([server?.stop(), Bun.sleep(ANSWERS_OUT_MS)])
+  process.exit(leaving?.code ?? 0)
 }
 
 /** POST's `{ target }`; a body that does not parse is {}. */
@@ -171,8 +207,7 @@ async function targetOf(req: Request): Promise<unknown> {
 }
 
 /** The old router's paths, each with its answer; null for anything else. */
-async function api(req: Request): Promise<unknown> {
-  const path = new URL(req.url).pathname
+async function api(req: Request, path: string): Promise<unknown> {
   if (req.method === 'GET' && path === '/status') return engine.status()
   if (req.method === 'GET' && path === '/sleeping') return engine.sleeping()
   if (req.method === 'GET' && path === '/awake') return engine.awake()
@@ -181,15 +216,74 @@ async function api(req: Request): Promise<unknown> {
   return null
 }
 
-/** 200 with the answer pretty-printed (a one-space indent, as the old router's), 404 with an empty body, 500 { ok: false, error }. */
-async function answer(req: Request): Promise<Response> {
+/**
+ * Whether the request comes from a program on this computer, not from a web page: a page's request
+ * carries an Origin, and one through DNS rebinding the page's own name as Host. The board, the
+ * hooks, the old plugin's clients and a terminal send no Origin, and Host as their URL has it.
+ */
+function fromHere(req: Request, port: number): boolean {
+  const host = req.headers.get('host')
+  return !req.headers.has('origin') && (host === `127.0.0.1:${port}` || host === `localhost:${port}`)
+}
+
+const failed = (status: number, error: string): Response =>
+  new Response(JSON.stringify({ ok: false, error }), { status, headers: JSON_HEADERS })
+
+/**
+ * 200 with the answer pretty-printed (a one-space indent, as the old router's), 404 with an empty
+ * body, 500 { ok: false, error }; 403 for a web page, 503 for a new sleep or wake on the way out.
+ */
+async function answer(req: Request, port: number): Promise<Response> {
+  if (!fromHere(req, port)) return failed(403, 'only programs on this computer may use wake, not web pages')
   try {
-    const out = await api(req)
+    const path = new URL(req.url).pathname
+    if (leaving && req.method === 'POST' && (path === '/wake' || path === '/sleep')) return failed(503, leaving.why)
+    const out = await api(req, path)
     if (out === null) return new Response(null, { status: 404 })
     return new Response(JSON.stringify(out, null, 1), { headers: JSON_HEADERS })
   } catch (err) {
-    return new Response(JSON.stringify({ ok: false, error: messageOf(err) }), { status: 500, headers: JSON_HEADERS })
+    return failed(500, messageOf(err))
   }
+}
+
+/** Whether a wake (the old router or another new one) answers GET /status on the port. */
+async function wakeAnswers(port: number): Promise<boolean> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/status`, { signal: AbortSignal.timeout(PORT_ASK_MS) })
+    return res.ok && isWakeStatus(await res.json())
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The port is taken (one wake per machine, held by its port). By a wake: this one ends with 0,
+ * quietly, a line in wake.log. By another program: the status says portTaken (the pane and the
+ * supervisor it names kept), the error goes to stderr for the supervisor, and the exit is 76, which
+ * the supervisor does not start again.
+ */
+async function portTaken(port: number): Promise<never> {
+  if (await wakeAnswers(port)) {
+    wakeLog(`another wake answers on 127.0.0.1:${port}: this one ends`)
+    process.exit(0)
+  }
+  const error = `Port ${port} is taken by another program`
+  try {
+    const now = readWakeStatus()
+    writeWakeStatus({
+      state: 'portTaken',
+      at: Date.now(),
+      ...(now?.pane !== undefined && { pane: now.pane }),
+      ...(now?.pid !== undefined && { pid: now.pid }),
+      port,
+      error,
+    })
+  } catch (err) {
+    wakeLog(`could not write wake's status: ${messageOf(err)}`)
+  }
+  wakeLog(error)
+  console.error(error)
+  process.exit(PORT_TAKEN_EXIT)
 }
 
 // A stray rejection is logged, never the end of wake.
@@ -211,9 +305,10 @@ try {
     idleTimeout: 0,
     development: false,
     reusePort: false,
-    fetch: answer,
+    fetch: req => answer(req, start.port),
   })
 } catch (err) {
+  if (isRecord(err) && err.code === 'EADDRINUSE') await portTaken(start.port)
   log(`local API on 127.0.0.1:${start.port}: ${messageOf(err)}`)
   process.exit(1)
 }
@@ -221,3 +316,8 @@ process.send?.({ up: start.port })
 log(`wake up: ${telegramSaid(start)}, ${reaperSaid(start)}, state ${stateDir()}, API http://127.0.0.1:${start.port}`)
 seen = every(roundMs() ?? SEEN_EVERY_MS, 'sessions seen', () => engine.remember())
 if (start.reaper.enabled) reaper = reaperLoop()
+// A code change (the supervisor, over IPC): no new sleep nor wake, and 75 once those under way are
+// done; the supervisor starts it again at once. Turned off meanwhile, it ends with 0 all the same.
+process.on('message', m => {
+  if (m === 'restart' && !leaving) leave(RESTART_EXIT, 'wake is restarting', 'restarting for a code change')
+})

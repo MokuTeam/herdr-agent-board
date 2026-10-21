@@ -1,9 +1,10 @@
 // Wake's files in the board's state folder: the session file (`wake-sessions.json`, the last Claude
-// session seen in each pane, core/wake/sessions.ts) and wake's log (`wake.log`). The session file
-// has one writer, the wake process: it saves it atomically, and sets a file that does not read as
-// sessions aside instead of overwriting it (a copy of it, when only some entries do not read). The
-// board only peeks at it. The log is rotated to `wake.log.1` past 2 MB. Paths are computed at call
-// time, as paths.ts does.
+// session seen in each pane, core/wake/sessions.ts), wake's status (`wake-status.json`,
+// core/wake/status.ts) and wake's log (`wake.log`). The session file has one writer, the wake
+// process: it saves it atomically, and sets a file that does not read as sessions aside instead of
+// overwriting it (a copy of it, when only some entries do not read). The board only peeks at it.
+// The status file is written atomically too, its unknown fields kept. The log is rotated to
+// `wake.log.1` past 2 MB. Paths are computed at call time, as paths.ts does.
 import {
   appendFileSync,
   closeSync,
@@ -20,11 +21,13 @@ import {
 } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { asWakeSessions, type WakeSessions } from '../core/wake/sessions.ts'
+import { asWakeStatus, type WakeStatusFile } from '../core/wake/status.ts'
 import { renameWithRetry, replaceFile } from './json-store.ts'
 import { stateDir } from './paths.ts'
 
 export const wakeSessionsFile = (): string => join(stateDir(), 'wake-sessions.json')
 export const wakeLogFile = (): string => join(stateDir(), 'wake.log')
+export const wakeStatusFile = (): string => join(stateDir(), 'wake-status.json')
 
 /** Past this size the log becomes `wake.log.1` before the next line. */
 const LOG_MAX_BYTES = 2_000_000
@@ -107,6 +110,32 @@ export function peekWakeSessions(file = wakeSessionsFile()): WakeSessions {
   } catch {
     return {}
   }
+}
+
+/** Wake's status file (core/wake/status.ts) as it is: null when there is none or it does not read as one. */
+export function readWakeStatus(file = wakeStatusFile()): WakeStatusFile | null {
+  try {
+    return asWakeStatus(parsed(readText(file) ?? ''))
+  } catch {
+    return null
+  }
+}
+
+const STATUS_FIELDS = ['state', 'at', 'pane', 'pid', 'error', 'crashes', 'port']
+
+/**
+ * Atomic (json-store.ts replaceFile): the status as given, with the fields of the file on disk this
+ * code does not know kept (a newer board's). Throws when it cannot be written.
+ */
+export function writeWakeStatus(status: WakeStatusFile, file = wakeStatusFile()): void {
+  let kept: Record<string, unknown> = {}
+  try {
+    const raw = parsed(readText(file) ?? '')
+    if (raw && typeof raw === 'object' && !Array.isArray(raw))
+      kept = Object.fromEntries(Object.entries(raw).filter(([key]) => !STATUS_FIELDS.includes(key)))
+  } catch {}
+  mkdirSync(dirname(file), { recursive: true })
+  replaceFile(file, `${JSON.stringify({ ...kept, ...status }, null, 1)}\n`)
 }
 
 /** Atomic: a temporary file, then a rename (json-store.ts replaceFile). */

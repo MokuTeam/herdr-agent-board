@@ -1,8 +1,10 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { type Sandbox, sandbox } from '../support/sandbox.ts'
+import { unusedPort } from '../support/board-server.ts'
+import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
+import { endWithSandbox, wakeOnConfig, wakeSandbox, writeBoardConfig } from '../support/wake-process.ts'
 
 for (const background of [false, true]) {
   for (const existing of [false, true]) {
@@ -262,3 +264,89 @@ for (const background of [false, true]) {
     )
   }, 10_000)
 }
+
+// Wake (#119) has a startup entry of its own beside the board's: herdr runs them side by side and
+// waits for neither. The board's start must not know wake, nor wait for it, whatever it does.
+test('the board opens whatever wake’s start does: failing, hanging, or missing', async () => {
+  const source = readFileSync(join(root, 'src', 'entrypoints', 'open.ts'), 'utf8')
+  const imports = [...source.matchAll(/^import [^;]*? from '([^']+)'/gm)].map(m => m[1] ?? '')
+  assert.ok(imports.length > 0)
+  assert.deepEqual(
+    imports.filter(path => /wake/i.test(path)),
+    [],
+  )
+
+  // The state of `open: existing=true, background=true, result=ok`, wake on in config.json.
+  async function boardBox(pluginList: Record<string, unknown> | null): Promise<Sandbox> {
+    const box = await wakeSandbox()
+    const stateDir = join(box.env.LOCALAPPDATA as string, 'herdr/plugins/agent-board')
+    mkdirSync(stateDir, { recursive: true })
+    writeFileSync(join(stateDir, 'board.json'), JSON.stringify({ pane: 'gone' }))
+    writeBoardConfig(box, wakeOnConfig(await unusedPort()))
+    box.state({
+      'api snapshot': {
+        result: {
+          snapshot: {
+            panes: [
+              { pane_id: 'shell', tab_id: 'user-tab', workspace_id: 'w1' },
+              { pane_id: 'sb1', tab_id: 'user-tab', workspace_id: 'w1', tokens: { 'herdr-sidebar-git': '1' } },
+              { pane_id: 'sb2', tab_id: 'orphan-tab', workspace_id: 'w1', tokens: { 'herdr-sidebar-git': '1' } },
+            ],
+            workspaces: [{ label: 'Board', workspace_id: 'w1' }],
+            tabs: [
+              { tab_id: 'user-tab', workspace_id: 'w1' },
+              { tab_id: 'other-user-tab', workspace_id: 'w1' },
+              { tab_id: 'orphan-tab', workspace_id: 'w1' },
+            ],
+          },
+        },
+      },
+      'plugin pane open': { result: { plugin_pane: { pane: { pane_id: 'new-board' } } } },
+      'tab close': { result: {} },
+      'pane zoom': { result: {} },
+      ...(pluginList && { 'plugin list': pluginList }),
+    })
+    return box
+  }
+  const board = (box: Sandbox): string[][] => box.calls().filter(c => c.slice(0, 2).join(' ') !== 'plugin list')
+
+  // Missing: the board alone, as herdr runs it when wake has no entry.
+  const alone = await boardBox(null)
+  let started = Date.now()
+  const out = await alone.open(true).exited
+  const aloneMs = Date.now() - started
+  assert.equal(out.code, 0, out.stderr)
+  const expected = board(alone)
+  assert.deepEqual(
+    expected.filter(c => c[0] === 'tab' && c[1] === 'close'),
+    [['tab', 'close', 'orphan-tab']],
+  )
+
+  for (const how of ['hanging', 'failing'] as const) {
+    const box = await boardBox(
+      how === 'hanging'
+        ? // A gate that never opens: the fake herdr gives up after 5 s, wake's start at its deadline.
+          { waitFor: join(alone.dir, 'never') }
+        : { error: 'plugin list failed', code: 'internal' },
+    )
+    const wake = Bun.spawn([process.execPath, join(root, 'src', 'entrypoints', 'wake-start.ts')], {
+      cwd: root,
+      env: { ...box.env, BOARD_WAKE_START_DEADLINE_MS: '4000' },
+      stdin: 'ignore',
+      stdout: 'ignore',
+      stderr: 'ignore',
+    })
+    endWithSandbox(wake)
+    // Wake's start is under way first: it asks herdr for its plugins.
+    while (!box.calls().some(c => c.slice(0, 2).join(' ') === 'plugin list')) await Bun.sleep(10)
+    started = Date.now()
+    const opened = await box.open(true).exited
+    const ms = Date.now() - started
+    assert.equal(opened.code, 0, `${how}: ${opened.stderr}`)
+    assert.ok(ms < aloneMs + 2000, `${how}: the board took ${ms} ms, ${aloneMs} ms alone`)
+    if (how === 'hanging') assert.equal(wake.exitCode, null, 'the board did not wait for wake’s start')
+    assert.equal(await wake.exited, 0)
+    // Wake's start made no other call once its plugin list failed; the board's calls are as alone.
+    assert.deepEqual(board(box), expected, how)
+  }
+}, 30_000)
