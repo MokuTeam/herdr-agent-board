@@ -1403,7 +1403,7 @@ this now", with **"Switch over…"**, which asks once, listing what it will do, 
    (`claude-tg --resume {session}` against `claude`), says how to keep yours in `launch.claude`;
 3. uninstalls the plugin (`herdr plugin uninstall herdr-wake`);
 4. takes its hooks out of every profile's `settings.json` and puts the board's in, each file
-   backed up first (`settings.json.bak-herdr-wake`);
+   backed up first (`settings.json.bak-wake-takeover`, then `-1`, `-2`…);
 5. closes its `tg-router` workspace when nothing but shells and sidebar panes is in it;
 6. turns wake on, if it was off, and starts it;
 7. names herdr key bindings that call `herdr-wake.sleep` or `herdr-wake.wake`, with their new
