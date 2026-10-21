@@ -49,6 +49,13 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'wake.stopped': 'Wake stopped',
     'wake.stoppedHint': 'Sleep and wake is on but not running: open its settings',
     'wake.readOnly': 'Changed on the computer only',
+    // wake's hooks in a shown profile (the panel's Install), and the Profiles panel's Install beside the old plugin's
+    'wake.hooks.missing':
+      'Sleep and wake’s hooks are not in {title}’s settings.json: its sessions do not see sleeping sessions, and a message to one does not wake it',
+    'wake.hooks.old':
+      '{title}’s settings.json has the separate herdr-wake plugin’s hooks: its sessions ask that plugin, not the board’s wake',
+    'wake.installOld':
+      'Sleep and wake’s hooks were not added to {title}: its settings.json has the separate herdr-wake plugin’s hooks',
     // Task 4.7: board doctor's wake line
     'setup.wake.running': 'Sleep and wake runs',
     'setup.wake.runningDetail': 'on 127.0.0.1:{port}, {n} asleep',
@@ -128,6 +135,13 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'wake.stopped': 'Пробуждение остановлено',
     'wake.stoppedHint': 'Сон и пробуждение включены, но не работают: открой их настройки',
     'wake.readOnly': 'Меняется только на компьютере',
+    // wake's hooks in a shown profile (the panel's Install), and the Profiles panel's Install beside the old plugin's
+    'wake.hooks.missing':
+      'Хуков сна и пробуждения нет в settings.json профиля {title}: его сессии не видят спящих, а сообщение спящей сессии её не будит',
+    'wake.hooks.old':
+      'В settings.json профиля {title} стоят хуки отдельного плагина herdr-wake: его сессии спрашивают этот плагин, а не пробуждение доски',
+    'wake.installOld':
+      'Хуки сна и пробуждения не добавлены в профиль {title}: в его settings.json стоят хуки отдельного плагина herdr-wake',
     // Task 4.7: board doctor's wake line
     'setup.wake.running': 'Сон и пробуждение работают',
     'setup.wake.runningDetail': [

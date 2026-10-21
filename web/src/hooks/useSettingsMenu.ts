@@ -1,8 +1,8 @@
 // Settings (the gear in the toolbar; the old page's app.js #settings): the menu out of the button,
 // and what its items do — light or dark (models/theme.ts), the board's language for every board,
 // the panels' place and default size (components/panel/place.ts), whether sleeping sessions show,
-// with more than one profile folder the Profiles panel, and how sessions asleep in "Waiting" fold,
-// for every board. The items are models/settings-menu.ts.
+// with more than one profile folder the Profiles panel, while wake's state line is in the payload
+// Sleep and wake…, and how sessions asleep in "Waiting" fold, for every board. The items are models/settings-menu.ts.
 import { useEffect, useState } from 'react'
 import type { FoldMode } from '../../../src/core/fold-mode.ts'
 import { LANGUAGES, translator } from '../../../src/core/i18n/translator.ts'
@@ -15,6 +15,7 @@ import { offersProfiles } from '../models/profiles.ts'
 import { settingPicked, settingsMenu } from '../models/settings-menu.ts'
 import { reducedMotion } from '../models/spring.ts'
 import { setTheme, THEME_KEY, themeNow } from '../models/theme.ts'
+import { isWakeView } from '../models/wake.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { storage } from '../state/storage.ts'
 import { useLatest } from './useLatest.ts'
@@ -43,6 +44,9 @@ export interface SettingsDeps {
   /** How sessions asleep in "Waiting" fold, as the board says (null: it does not, none offered). */
   fold(): FoldMode | null
   chooseFold(mode: FoldMode): void
+  /** The payload carries wake's state line: Sleep and wake… is offered. */
+  wake?(): boolean
+  openWake?(): void
   /** The remote mode is on: Phones… is offered. */
   phones?(): boolean
   openPhones?(): void
@@ -62,6 +66,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       sleepers: deps.sleepers(),
       profiles: deps.profiles(),
       fold: deps.fold(),
+      wake: deps.wake?.() ?? false,
       phones: deps.phones?.() ?? false,
     })
     const source: MenuSource = keyboard ? 'keyboard' : deps.coarse() ? 'touch' : 'mouse'
@@ -79,6 +84,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'reset') deps.resetPanelSize()
         else if (pick?.kind === 'sleepers') deps.toggleSleepers()
         else if (pick?.kind === 'profiles') deps.openProfiles()
+        else if (pick?.kind === 'wake') deps.openWake?.()
         else if (pick?.kind === 'fold') deps.chooseFold(pick.value)
         else if (pick?.kind === 'phones') deps.openPhones?.()
       },
@@ -166,17 +172,18 @@ export function settingsGear(
 
 /**
  * Settings for the page: `menu` is the board's one menu (hooks/useContextMenus.ts);
- * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel.
+ * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel, `openWake` Sleep and wake.
  */
 export function useSettingsMenu(
   menu: MenuEngine,
   openProfiles: () => void,
   openPhones: () => void = () => {},
+  openWake: () => void = () => {},
 ): SettingsMenu {
   const { t, choose } = useLanguage()
   const board = useBoardContext()
   const place = usePanelPlace()
-  const latest = useLatest({ t, choose, board, openProfiles, openPhones })
+  const latest = useLatest({ t, choose, board, openProfiles, openPhones, openWake })
   const [expanded, setExpanded] = useState(false)
   const [gear] = useState(() => {
     const open = settingsMenuFrom({
@@ -223,6 +230,8 @@ export function useSettingsMenu(
           toast: board.toast,
         })
       },
+      wake: () => isWakeView(latest.current.board.data?.wake),
+      openWake: () => latest.current.openWake(),
       phones: () => !!latest.current.board.data?.remote,
       openPhones: () => latest.current.openPhones(),
     })

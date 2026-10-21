@@ -44,11 +44,17 @@ export const hooksInPlace = (dir: string): boolean => hooksInstalled(dir, FILES)
 export const wakeHooksInPlace = (dir: string): WakeHooksState => wakeHooksIn(dir, FILES.wakeHook)
 
 /**
+ * What Install answers: done, with `wakeHooks: 'old'` when wake is on and its hooks were left out
+ * beside the separate herdr-wake plugin's (the panel says so); or why not.
+ */
+export type InstallResult = EditResult & { wakeHooks?: 'old' }
+
+/**
  * The board's hooks and status line into the shown profile `id`, running the Bun that runs the
  * board, then the agents' skill (someone else's of that name stays), then herdr's own Claude hook:
  * a herdr that cannot write it leaves the rest in, and the answer says so.
  */
-export async function installProfile(deps: Pick<Deps, 'profiles'>, id: string): Promise<EditResult> {
+export async function installProfile(deps: Pick<Deps, 'profiles'>, id: string): Promise<InstallResult> {
   const profile = deps.profiles().list.find(p => p.id === id)
   if (!profile) return { ok: false, error: t('err.profile.missing', { id }) }
   if (profile.hidden) return { ok: false, error: t('err.profile.hiddenInstall', { title: profile.title }) }
@@ -56,7 +62,7 @@ export async function installProfile(deps: Pick<Deps, 'profiles'>, id: string): 
 }
 
 /** installProfile's install, into a profile that is shown. */
-async function installShown(profile: Profile): Promise<EditResult> {
+async function installShown(profile: Profile): Promise<InstallResult> {
   if (!isFolder(profile.dir)) return { ok: false, error: t('err.profile.noFolder', { path: profile.dir }) }
   // The paths as the install action has them; the commands' folder is the install action's alone.
   const paths: InstallPaths & { wakeHook: string } = {
@@ -79,7 +85,7 @@ async function installShown(profile: Profile): Promise<EditResult> {
   } catch (err) {
     return { ok: false, error: t('err.profile.herdrHook', { title: profile.title, error: firstLine(messageOf(err)) }) }
   }
-  return { ok: true }
+  return out.wakeHooks === 'old' ? { ok: true, wakeHooks: 'old' } : { ok: true }
 }
 
 /**
@@ -88,7 +94,7 @@ async function installShown(profile: Profile): Promise<EditResult> {
  * `installed` runs after that install. The show stays saved whatever the install answers; what
  * the install could not do is the answer, as Install's own.
  */
-export async function editProfile(body: unknown, installed: () => void): Promise<EditResult> {
+export async function editProfile(body: unknown, installed: () => void): Promise<InstallResult> {
   const showing = isRecord(body) && body.op === 'update' && body.hidden === false ? body.id : undefined
   // Hidden or not as config.json has it, which the edit reads and writes; the live config
   // (deps.profiles) follows it only when its watcher has read it again.
