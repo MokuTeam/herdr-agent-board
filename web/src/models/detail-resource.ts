@@ -1,5 +1,6 @@
 // A selected session's read-only detail request. Old replies never replace a
-// new selection or resurrect a session removed by a newer board snapshot.
+// new selection or resurrect a session removed by a newer board snapshot. A quick read again of
+// what is already shown is heard only once it is done (`quietMs`).
 
 export type DetailStatus = 'idle' | 'loading' | 'ready' | 'error' | 'missing'
 
@@ -18,6 +19,13 @@ export interface DetailOptions<T> {
   changed(value: DetailValue<T>): void
   now?: () => number
   timeoutMs?: number
+  /**
+   * How long a read again of a detail that was read fine goes before `changed` hears it is loading;
+   * one done sooner is heard only as done. A working session's detail is read again at each of its
+   * steps, most times in a few ms, and a "loading" heard each time flashed the sheet's note under
+   * its head (#169). Default 0: at once.
+   */
+  quietMs?: number
 }
 
 export interface DetailResource<T> {
@@ -32,6 +40,8 @@ interface Pending {
   controller: AbortController
   promise: Promise<void>
   timer: ReturnType<typeof setTimeout> | undefined
+  /** Until `changed` hears it is loading (a quiet read again). */
+  quiet: ReturnType<typeof setTimeout> | undefined
 }
 
 const fresh = <T>(key: string | null): DetailValue<T> => ({ key, data: null, status: 'idle', error: '', at: null })
@@ -49,6 +59,7 @@ export function detailResource<T>({
   changed,
   now = Date.now,
   timeoutMs = 15_000,
+  quietMs = 0,
 }: DetailOptions<T>): DetailResource<T> {
   let value: DetailValue<T> = fresh(null)
   let epoch = 0
@@ -58,6 +69,7 @@ export function detailResource<T>({
     ++epoch
     pending?.controller.abort()
     clearTimeout(pending?.timer)
+    clearTimeout(pending?.quiet)
     pending = null
   }
   return {
@@ -81,8 +93,11 @@ export function detailResource<T>({
       if (pending) return pending.promise
       const id = ++epoch
       const controller = new AbortController()
+      // Read fine before: what is shown stays as it is, unless the read takes a while.
+      const quiet = value.status === 'ready' && quietMs > 0
       value = { ...value, status: 'loading', error: '' }
-      notify()
+      const hold = quiet ? setTimeout(() => id === epoch && notify(), quietMs) : undefined
+      if (!quiet) notify()
       let timer: ReturnType<typeof setTimeout> | undefined
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
@@ -103,12 +118,13 @@ export function detailResource<T>({
         )
         .finally(() => {
           clearTimeout(timer)
+          clearTimeout(hold)
           if (id === epoch) {
             pending = null
             notify()
           }
         })
-      pending = { controller, promise, timer }
+      pending = { controller, promise, timer, quiet: hold }
       return promise
     },
   }

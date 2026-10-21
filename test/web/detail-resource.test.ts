@@ -105,3 +105,57 @@ test('a missing response can be read again when the selected session returns', a
   await resource.load('a')
   assert.equal(resource.snapshot().status, 'ready')
 })
+
+test('a read again of what was read fine is heard only once done, unless it takes quietMs (#169)', async () => {
+  const pause = (ms: number) => new Promise(r => setTimeout(r, ms))
+  let mode = 'ok'
+  let resolve: Resolve = () => {}
+  const heard: string[] = []
+  const resource = detailResource<Detail>({
+    read: () =>
+      mode === 'ok'
+        ? Promise.resolve({ conversation: [mode] })
+        : mode === 'error'
+          ? Promise.reject(new Error('failed'))
+          : new Promise<Detail>(r => {
+              resolve = r
+            }),
+    changed: v => heard.push(v.status),
+    quietMs: 40,
+  })
+  // The first read says it loads, at once.
+  await resource.load('a')
+  assert.deepEqual(heard.splice(0), ['loading', 'ready'])
+  // A quick one again: only done.
+  mode = 'wait'
+  const quick = resource.load('a')
+  await pause(5)
+  resolve({ conversation: ['quick'] })
+  await quick
+  assert.deepEqual(heard.splice(0), ['ready'])
+  // A slow one says it loads once it took quietMs.
+  const slow = resource.load('a')
+  await pause(10)
+  assert.deepEqual(heard, [])
+  await pause(60)
+  assert.deepEqual(heard.splice(0), ['loading'])
+  resolve({ conversation: ['slow'] })
+  await slow
+  assert.deepEqual(heard.splice(0), ['ready'])
+  // After an error (Retry), at once.
+  mode = 'error'
+  await resource.load('a')
+  heard.length = 0
+  mode = 'wait'
+  const retry = resource.load('a')
+  assert.deepEqual(heard.splice(0), ['loading'])
+  await Promise.resolve()
+  resolve({ conversation: ['back'] })
+  await retry
+  assert.deepEqual(heard.splice(0), ['ready'])
+  // Another session opened while one waits: the old read says nothing later.
+  void resource.load('a')
+  resource.reset('b')
+  await pause(60)
+  assert.deepEqual(heard, [])
+})
