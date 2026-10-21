@@ -325,9 +325,12 @@ for (const distro of DISTROS) {
       expect(text(step(p, 'write'))).toContain(String.raw`'/srv/it'\''s web/Caddyfile'`)
       expect(text(step(p, 'candidate'))).toContain(String.raw`'/srv/it'\''s web/.Caddyfile.agent-board'`)
       expect(all(p)).not.toContain("/srv/it's web")
+      // the argv after `docker`, `run` its first word: once
       expect(text(step(p, 'run-socat'))).toContain(
-        `sudo docker run ${socatRunArgs({ network: 'web_default' }, W, GID, 'r1').join(' ')}`,
+        `sudo docker ${socatRunArgs({ network: 'web_default' }, W, GID, 'r1').join(' ')}`,
       )
+      expect(all(p)).not.toContain('docker run run')
+      expect(all(plan(factsFor('bare', distro)))).not.toContain('docker run run')
       expect(text(step(p, 'pull-socat'))).toBe(
         `sudo docker pull ${SOCAT_IMAGE}\nsudo docker image inspect ${SOCAT_IMAGE} >/dev/null`,
       )
@@ -377,6 +380,15 @@ for (const distro of DISTROS) {
       expect(text(step(p, 'nginx-reload'))).toContain('sudo systemctl reload nginx')
       expect(text(step(p, 'acme-path'))).toContain('/.well-known/acme-challenge/agent-board-check')
       expect(text(step(p, 'run-caddy'))).toContain('-p 127.0.0.1:8480:80 -p 8443:8443')
+    })
+
+    test('a folder of theirs the board writes into keeps its mode: made only when missing', () => {
+      // `install -d -m 755` on a folder that is there sets its mode (GNU and uutils alike)
+      const nginx = step(plan(factsFor('4b', distro)), 'nginx-file').commands
+      expect(nginx).toContain('sudo test -d /etc/nginx/conf.d || sudo install -d -m 755 /etc/nginx/conf.d')
+      expect(nginx).not.toContain('sudo install -d -m 755 /etc/nginx/conf.d')
+      const site = step(plan(factsFor('2', distro)), 'site-file').commands
+      expect(site).toContain('sudo test -d /etc/caddy/agent-board || sudo install -d -m 755 /etc/caddy/agent-board')
     })
 
     test('the record each step leaves, and what Undo will remove', () => {

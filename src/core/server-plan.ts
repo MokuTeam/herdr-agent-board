@@ -674,7 +674,8 @@ function ownFile(
     id,
     {
       commands: [
-        `sudo install -d -m 755 ${q(dirOf(path))}`,
+        // made only when missing: `install -d -m` sets the mode of a folder that is there (their conf.d)
+        `sudo test -d ${q(dirOf(path))} || sudo install -d -m 755 ${q(dirOf(path))}`,
         `sudo install -d -m 700 ${q(b)}`,
         `if sudo test -f ${q(path)}; then ${copyWhole(path, saved)}; else sudo touch ${q(made)}; fi`,
         writeTo(part, text),
@@ -705,7 +706,8 @@ function runStep(id: string, name: string, role: string, args: string[], setup: 
     {
       commands: [
         `if ${ours}; then sudo docker rm -f ${name} >/dev/null; fi`,
-        `sudo docker run ${args.map(q).join(' ')}`,
+        // the argv after `docker` (caddyRunArgs, socatRunArgs): `run` is its first word
+        `sudo docker ${args.map(q).join(' ')}`,
       ],
       skipIf: [
         `[ "$(sudo docker inspect -f '{{index .Config.Labels "${ARGS_LABEL}"}} {{.State.Running}}' ${name} 2>/dev/null)" = '${hash} true' ]`,

@@ -277,7 +277,21 @@ export function runScript(p: Plan, w: Wanted, run: { id: string; at: string }): 
     } else {
       for (const v of vars.filter(x => x.step === k)) {
         const set = `${v.name}=${itemWord(v.item, true)}`
-        out.push(ranOnly(v.item) ? `if [ "$SKIP" = false ]; then ${set}; fi` : set)
+        // A step that skips because an earlier run of the board did its work (Apply again) keeps
+        // that run's item: an image it pulled stays the board's (Undo removes it), not "there
+        // before"; the folder's group keeps what it was before the board (Undo puts that back).
+        const earlier =
+          v.item.kind === 'image' || ranOnly(v.item)
+            ? carried.find(c => keyOf(c.item) === keyOf(v.item) && c.step !== k)
+            : undefined
+        const keep = earlier ? `elif [ -n "$${earlier.name}" ]; then ${v.name}=$${earlier.name}; ` : ''
+        out.push(
+          ranOnly(v.item)
+            ? `if [ "$SKIP" = false ]; then ${set}; ${keep}fi`
+            : earlier
+              ? `if [ "$SKIP" = false ]; then ${set}; ${keep}else ${set}; fi`
+              : set,
+        )
       }
     }
     // Undo's last steps take the record away with the rest of the board's files.

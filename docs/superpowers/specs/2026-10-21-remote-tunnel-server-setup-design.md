@@ -1231,6 +1231,108 @@ both servers unless it names one. Look's outputs from every scenario on both are
   as on a fresh server. Ubuntu 24.04's image (sudo 1.9.15p5, GNU coreutils 9.4) builds and takes
   the admin line with a password the same way; its scenarios are Task 25's.
 
+**Checked by the integration tests (2026-10-21, `test/integration/`, Docker Desktop 29.7.2,
+OpenSSH_for_Windows_9.5p2):** the test servers of `test/integration/server/` (now with
+`libpam-systemd`, so that an SSH login is a logind session, as on a server): Debian 13 (sudo
+1.9.16p2, OpenSSH 10.0p2), Ubuntu 26.04.1 (sudo-rs 0.2.13, OpenSSH 10.2p1), Ubuntu 24.04.5 (sudo
+1.9.15p5, OpenSSH 9.6p1), Debian 12 (sudo 1.9.13p3, OpenSSH 9.2p1) and Ubuntu 22.04.5 (sudo 1.9.9,
+OpenSSH 8.9p1), each with Docker CE 29.9.2 on containerd's image store
+(`io.containerd.snapshotter.v1`), a fresh server per scenario. A sandboxed board does what the
+panel does, through `POST /api/access` and Windows' own `ssh.exe`: Generate key, step 1 as the one
+paste (twice), Test connection (it pins the server's key), Look, Apply, Look and Apply again,
+Undo's Look and Undo. The admin is `admin` with the sentinel ``S3cr3t%$'"`Ж`` as its sudo password,
+`nopw` (NOPASSWD) on `bare` and root on `dummy80`. Each distribution has its own Pebble, challenge
+DNS and client container; the board's Caddy names Pebble through `BOARD_SETUP_ACME_CA*`, their
+Caddy (cases 2, 3) through its own `acme_ca`; the board's probe reaches `https://board.example.com`
+from the PC through a CONNECT proxy, trusting Pebble's root. The domain is then fetched from the
+client through the tunnel's own ssh line (`sshArgs`) to a stand-in board, its certificate checked
+against Pebble's root; a watcher in the client fetches their sites twice a second from before Apply
+to the end of Undo. Every row below held on both Debian 13 and Ubuntu 26.04 unless it names others.
+
+- **bare** (case 1; Debian 12, 13, Ubuntu 22.04, 24.04, 26.04): Look 1; Apply applied, Test
+  connection's domain ✓; the domain → the stand-in with `Host: board.example.com`,
+  `X-Forwarded-Proto: https`, the client's own address rightmost in `X-Forwarded-For` (Docker's
+  DNAT keeps it), a certificate from Pebble; Apply again "nothing to change" (their files' hashes
+  and every container's id the same); Undo: nothing of the board's left (containers, volumes,
+  `/etc/agent-board`, lines), the folder's group `boardtunnel`, the board's image gone (`docker
+  image inspect` and `docker image rm caddy:2.11.7@sha256:…` by tag and digest work on
+  containerd's store, where the pull shows as `caddy <none> sha256:685ae3d7…`), Docker kept.
+- **nodocker** (case 1 with Docker's install; all five): the Docker tick; Docker CE from Docker's
+  repository, the key checked without gpg; then as `bare`; Undo keeps Docker.
+- **dummy80** (1b, root): certificate by TLS-ALPN, python3's site on 80 answering throughout.
+- **caddy-unit** (2; Debian 12, 13, Ubuntu 24.04, 26.04; Ubuntu 22.04 has no caddy package): their
+  Caddy 2.6.2 from the package; its file's hash back exactly after Undo, the folder's group back,
+  their two sites answering throughout. Their 2.6.2 cannot read Pebble's Retry-After (an HTTP date)
+  when Pebble's finalize answers "processing", and tries again a minute later: now and then after
+  the board's 2 minutes of Test (the test then waits longer from the client); a CA's seconds it
+  reads, and Caddy 2.11.7 reads both.
+- **compose-folder**, **compose-file** (3a, `/srv/my web`, network `web_default`): the helper on
+  their network; their Caddy reloaded inside its container, the same container id after; Undo's
+  hashes as before. (Their Caddy on a user network asks Docker's embedded DNS, which passes no
+  single-label name on: the tests give it the CA's address with `extra_hosts`.)
+- **caddy-host** (3b): the helper on the host's 127.0.0.1:8481.
+- **nginx-443** (4a) and **nginx-80-443** (4b): `https://board.example.com:8443`,
+  `tunnel.publicPort` 8443 after Apply and gone after Undo; 4b's certificate by HTTP-01 through
+  their nginx; their `conf.d` at mode 750 keeps it (Apply's `install -d` now runs only when the
+  folder is missing).
+- **caddy-bridge** (3c), **apache** (4c), Podman, rootless Docker, SELinux (faked where Look reads
+  them: Docker's `--version` and security options, `getenforce`): Look's `Manual` reason (`bridge`,
+  `other80`, `podman`, `rootless`, `selinux`), no plan, their sites answering.
+- **The sudo password**: in no file under `/etc/agent-board` or `/var/log` on any server (`grep
+  -r`, after Apply and after Undo) and none under the board's sandbox. A wrong one: 409
+  `wrongPassword`, one `pam_unix(sudo:auth): authentication failure` in the journal, sudo's lines
+  as the error (`Sorry, try again.` …; sudo-rs `sudo: Authentication failed, try again.` …). With
+  the admin's logins in `ru_RU.UTF-8` (Debian 13; sudo itself says `Попробуйте ещё раз.`) the hint
+  is the same: the board runs sudo with `LC_ALL=C`.
+- **Failures on case 2**: their file changed between Look and Apply → `changed`, nothing done or
+  recorded; a brace-less last site → rolled back at `validate` (`unrecognized directive:
+  board.example.com`), no reload (systemd logged none), hash as before; their reload failing
+  (`ExecReload=/bin/false`) → rolled back at `reload`, their Caddy active on its old config; a site
+  answering otherwise after the reload (`b.example.com` 404) → rolled back, reloaded back, hash as
+  before; TERM during the reload → the step ends, then everything rolls back, their file valid
+  (`caddy validate`) and as before; KILL after the write → the record says `running`, Look offers
+  its Undo (`interrupted`), Undo puts their file back byte for byte and the folder's group back; the
+  board's ssh killed mid-run (Windows side) → the board says `lost`, the run ends on the server by
+  itself (`applied`), the next Look reads it ("nothing to change").
+- **logind's `KillUserProcesses=yes`** (the connection cut on the server's side during an 8 s
+  reload; the run is in the admin's `session-*.scope`): Debian 13 (systemd 257) ends the step's
+  processes, and the run rolls back (`rolled-back`); Ubuntu 26.04 (systemd 259) kills the run
+  outright, its record left `running`; the next Look offers its Undo, which puts their file back.
+  Cut before the follower has printed a line, the board shows ssh's own `Connection to … closed by
+  remote host.` with no hint (the `lost` hint needs a line from the run first).
+- **Case 3a, a single-file mount, a brace-less last site**: written in place, refused by `caddy
+  validate` inside their container, put back at once (hash as before), their Caddy never reloaded
+  (no `load complete` in its log), the same container.
+- **Step 1 from a console on Ubuntu 24.04**: until someone has logged in over SSH, its
+  socket-activated sshd has no `/run/sshd`, and `sudo sshd -t` stops the paste with `Missing
+  privilege separation directory: /run/sshd` (the README says to paste it over SSH).
+- **What the board fixed on the way** (each with a unit test): its containers were started with
+  `docker run run …` (`caddyRunArgs`/`socatRunArgs` are the argv after `docker`); Apply again
+  recorded an image the board had pulled as "there before" and dropped the folder's group from the
+  record (Undo then kept the image and Caddy's group); `install -d -m 755` changed the mode of
+  their `conf.d`.
+
+**The two-proxies proof (2026-10-21, `test/integration/two-proxies.test.ts`):** plain containers on
+Docker Desktop with `CADDY_IMAGE`, `SOCAT_IMAGE`, `caddyRunArgs`, `socatRunArgs`, `markedBlock` and
+`boardCaddyfile` as the board has them (ports on 127.0.0.1 of the PC, the socket's folder a volume
+at `2750`, group 999; `local_certs` added, 4b's ACME issuer as `tls internal`); the tunnel's end a
+socat container making the socket `srw-rw---- 999 999` (backlog 128, as sshd's) on to the stand-in
+board on the PC.
+
+- **A, 3a** (their Caddy on a user network, the marked block, the helper): `board.test` → the
+  stand-in with `Host: board.test`, `X-Forwarded-Proto: https`, `X-Forwarded-For` the caller as
+  their Caddy saw it; an event stream's first event after 2 ms, 60 ticks in 30 s, the longest gap
+  502 ms; 200 requests at once, interleaved with their site's, all right; `caddy reload` in their
+  container during a board stream: their site answered every fetch (100 ms apart), the stream went
+  on ticking; the tunnel down → the board 502, their site 200; up on a new socket file → the board
+  answers, neither proxy restarted.
+- **B, 4** (their nginx on 443 and 80, the board's Caddy on 8443): the same, with `Host:
+  board.test:8443`; their nginx restarted during a board stream: their site down for 9 fetches
+  (about 1 s), the board's stream untouched (longest gap 506 ms).
+- **C, 1** (the board's Caddy alone on 443): the same for the board.
+- With socat's own listen backlog (5) as the tunnel's end, 200 requests at once gave the board's
+  Caddy 502s; sshd listens with 128 and the proof uses that.
+
 ## Testing
 
 ### Unit (pure, fast)
