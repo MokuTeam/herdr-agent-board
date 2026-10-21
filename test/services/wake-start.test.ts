@@ -48,6 +48,8 @@ async function start(o: {
   snap?: Snap
   /** What happens while `plugin pane open` runs (the new pane's supervisor writing its record, say). */
   duringOpen?: (status: { file: WakeStatusFile | null }) => void
+  /** The board's pane (board.json's); none by default. */
+  boardPane?: string
 }): Promise<{ result: string; calls: string[][]; written: WakeStatusFile[]; file: WakeStatusFile | null }> {
   const snap = o.snap ?? wakeTab()
   const status = { file: o.status }
@@ -91,7 +93,7 @@ async function start(o: {
   const result = await startWake(deps, {
     on: true,
     settings: wakeConfig({ enabled: true, port: 40000 }),
-    board: { label: 'Board', pane: null },
+    board: { label: 'Board', pane: o.boardPane ?? null },
   })
   return { result, calls, written, file: status.file }
 }
@@ -190,6 +192,17 @@ test('a record of this boot whose pid runs, older than a start’s time with not
     const out = await start({ status: { state, at: NOW - 5 * 60_000, pane: 'wW:p1', pid: LIVE } })
     expect([state, out.result]).toEqual([state, 'present'])
     expect(out.written).toEqual([])
+  }
+})
+
+test('a stale record naming the board’s own pane: neither it nor its tab is closed', async () => {
+  for (const pid of [LIVE, 999_999]) {
+    const out = await start({
+      status: { state: 'running', at: NOW - 5 * 60_000, pane: 'wW:p1', pid },
+      boardPane: 'wW:p1',
+    })
+    expect(out.result).toBe('opened')
+    expect(out.calls).toEqual([['plugin', 'list', '--json'], ['api', 'snapshot'], opened()])
   }
 })
 
