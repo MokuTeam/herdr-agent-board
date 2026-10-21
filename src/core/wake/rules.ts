@@ -79,7 +79,8 @@ export function clearKeyFor(shell: string | null | undefined, platform: string =
 
 /**
  * Decision 9: the entries of the caller's own profile (CLAUDE_CONFIG_DIR; unset: the default
- * folder), the folder spelled any way. An entry without a profile is the default folder's.
+ * folder), the folder spelled any way. An entry without a profile is the default folder's; one
+ * whose profile names no absolute folder is no caller's.
  */
 export function ownSleepers<T extends { profile?: WakeProfile | undefined }>(
   list: readonly T[],
@@ -88,5 +89,7 @@ export function ownSleepers<T extends { profile?: WakeProfile | undefined }>(
   const platform = o.platform ?? process.platform
   const own = resolveProfileDir(o.configDir, o.home, platform)
   const fallback = defaultProfileDir(o.home, platform)
-  return list.filter(e => sameDir(absoluteProfileDir(e.profile?.dir, o.home, platform) ?? fallback, own))
+  return list.filter(e =>
+    sameDir(e.profile === undefined ? fallback : absoluteProfileDir(e.profile.dir, o.home, platform), own),
+  )
 }
