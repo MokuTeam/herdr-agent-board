@@ -78,10 +78,23 @@ export interface ServerSetup {
   cancel(): Answer
 }
 
-/** How long each ssh may take: the probe, a round of Look, a run (20 minutes on the server, its follower a minute more). */
+/** How long each ssh may take: the probe, a round of Look, a run. */
 const PROBE_MS = 30_000
 const ROUND_MS = 60_000
-const RUN_MS = 23 * 60_000
+/**
+ * A run's ssh outlasts the run on the server, so the board never stops following first: its
+ * overall timeout (core/server-script.ts RUN_MOST_S, 20 minutes), then the rollback a TERM lets
+ * it do before the kill (`timeout -k`, KILL_AFTER_S: 5 minutes), the follower's minute past
+ * those (its give-up count), and 2 minutes for ssh, sudo and the follower's own turns. Those
+ * constants are not exported, so they are repeated here: a change there needs one here ("a run's
+ * ssh" in the service's test reads them from the launch script and holds this to them).
+ */
+const RUN_MOST_S = 1200
+const KILL_AFTER_S = 300
+const FOLLOWER_MORE_S = 60
+const RUN_MS = (RUN_MOST_S + KILL_AFTER_S + FOLLOWER_MORE_S + 120) * 1000
+/** The launch's exit when it could not write the run, so never started it (core/server-script.ts LAUNCH_FAILED). */
+const LAUNCH_FAILED = 70
 /** After Apply, Test connection this often until the domain answers, for at most this long (the certificate, call 24). */
 const TEST_EVERY_MS = 10_000
 const TEST_MOST_MS = 120_000
@@ -114,9 +127,8 @@ const detailOf = (lines: readonly string[]): string | null =>
     .slice(-DETAIL_LINES)
     .join('\n') || null
 
-/** What a Look leaves for its Apply or Undo: the plan and what it was made from. */
+/** What a Look leaves for its Apply or Undo (the plan's kind says which): the plan and what it was made from. */
 interface Looked {
-  kind: 'look' | 'undo'
   plan: Plan
   facts: ServerFacts
   /** The record of this board's pair, when the server has one. */
@@ -314,7 +326,13 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       if (!f) return stopLook('unreadable', null)
       return planFrom(f, c, to.a, read.mode, kind)
     } catch (err) {
-      return gone() ? cancelled() : stopLook(null, messageOf(err))
+      // a plan refused (what the panel wants failed its check in core/server-plan.ts): nothing
+      // half made stays in the view, the check's own words are the error
+      if (gone()) return cancelled()
+      facts = null
+      choice = null
+      plan = null
+      return stopLook(null, messageOf(err))
     } finally {
       if (!gone()) busy = false
     }
@@ -345,7 +363,7 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       choice = null
     }
     phase = 'plan'
-    last = plan ? { kind, plan, facts: f, record: ours, wanted: w, admin: a, mode } : null
+    last = plan ? { plan, facts: f, record: ours, wanted: w, admin: a, mode } : null
     changed()
     return ok()
   }
@@ -396,13 +414,19 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
         phase = 'done'
       } else {
         phase = 'failed'
+        error = detailOf(heard.err)
         if (result === 'busy' || result === 'changed') hint = result
         else if (result === null && progress?.exit === null) {
-          // no end from the server: ssh could not start, was refused, or the connection went
+          // no end from the server: ssh could not start, was refused, or the connection went. Lost
+          // only once the run printed something; before that (ssh or sudo refused, in words the
+          // hints do not know) their own lines are the error.
           const why = stopped(heard)
-          hint = why.hint ?? (heard.out.length || heard.code !== 0 ? 'lost' : null)
+          hint = why.hint ?? (heard.out.length ? 'lost' : null)
+        } else if (result === null && progress?.exit === LAUNCH_FAILED) {
+          // the launch could not write the run: it never started
+          hint = null
+          error = [t('server.err.launch'), error].filter(Boolean).join('\n')
         } else hint = adminHint([...heard.err, ...heard.out])
-        error = detailOf(heard.err)
       }
     } catch (err) {
       phase = 'failed'
@@ -417,7 +441,10 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     if (password === false) return malformed('password')
     if (busy) return refused('busy', null)
     const l = last
-    if (!l || l.kind !== kind || typeof o.plan !== 'string' || o.plan !== l.plan.id) return refused('lookAgain', null)
+    // Undo runs an Undo plan, Apply any other: the plan's kind, whichever Look made it (Look offers
+    // the Undo of a run cut short)
+    if (!l || typeof o.plan !== 'string' || o.plan !== l.plan.id || (l.plan.kind === 'undo') !== (kind === 'undo'))
+      return refused('lookAgain', null)
     if (kind === 'look' && l.plan.ticks.includes('docker') && o.docker !== true)
       return refused(null, t('server.err.docker'))
     const to = ready()
@@ -429,10 +456,15 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     if (l.mode === 'password' && password === null) return refused('needPassword', null, { need: 'password' })
     const removeDocker = o.removeDocker === true
     const removeEdited = o.removeEdited === true
-    const p =
-      kind === 'undo' && l.record && (removeDocker || removeEdited)
-        ? undoPlan(l.record, l.facts, { id: l.plan.id, removeDocker, removeEdited })
-        : l.plan
+    let p: Plan
+    try {
+      p =
+        kind === 'undo' && l.record && (removeDocker || removeEdited)
+          ? undoPlan(l.record, l.facts, { id: l.plan.id, removeDocker, removeEdited })
+          : l.plan
+    } catch (err) {
+      return refused(null, messageOf(err))
+    }
     busy = true
     const gen = generation
     const pinned = await d.hostKeyPinned()

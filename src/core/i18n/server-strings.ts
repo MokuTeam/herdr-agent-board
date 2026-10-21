@@ -282,6 +282,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.err.docker': 'Tick “Install Docker from Docker’s own repository” first.',
     'server.err.noRecord': 'Nothing of the board’s is set up on this server.',
     'server.err.cancelled': 'Cancelled.',
+    'server.err.launch':
+      'The server could not write the run to /etc/agent-board/runs (a full disk, or /etc read-only?): it did not start, nothing was changed.',
   },
   ru: {
     // ---- «На сервере» в панели
@@ -565,5 +567,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.err.docker': 'Сначала отметьте «Установить Docker из собственного репозитория Docker».',
     'server.err.noRecord': 'На этом сервере ничего от доски не настроено.',
     'server.err.cancelled': 'Отменено.',
+    'server.err.launch':
+      'Сервер не смог записать запуск в /etc/agent-board/runs (диск заполнен или /etc только для чтения?): запуск не начался, ничего не изменено.',
   },
 }
