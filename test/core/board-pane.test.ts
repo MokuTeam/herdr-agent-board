@@ -31,6 +31,16 @@ test('a board.json without a pid (an older board) trusts the pane, as before', (
   assert.deepEqual(lastBoard({ pane: 'wZ:p2' }, panes, none), { pane: 'wZ:p2', stale: false })
 })
 
+test('pane ids are matched whole, whatever they hold', () => {
+  const odd = [{ pane_id: 'pane-7 a%b' }, { pane_id: 'панель:2' }, { pane_id: 'C:\\x y' }]
+  for (const { pane_id } of odd) {
+    assert.deepEqual(lastBoard({ pane: pane_id, pid: 31804 }, odd, alive), { pane: pane_id, stale: true })
+    assert.deepEqual(lastBoard({ pane: pane_id, pid: 100 }, odd, alive), { pane: pane_id, stale: false })
+  }
+  assert.equal(lastBoard({ pane: 'pane-7', pid: 31804 }, odd, none), null)
+  assert.equal(lastBoard({ pane: 'ПАНЕЛЬ:2', pid: 31804 }, odd, none), null)
+})
+
 test('no board.json, or a pane that is gone: no board, and no process looked for', () => {
   assert.equal(lastBoard(null, panes, none), null)
   assert.equal(lastBoard({ pane: 'gone', pid: 100 }, panes, none), null)
