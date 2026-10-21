@@ -1,8 +1,10 @@
-// The Remote access panel's Tunnel part in words (components/access/TunnelSection.tsx): where the
+// The Remote access panel in words. Its Tunnel part (components/access/TunnelSection.tsx): where the
 // tunnel stands, Test connection's steps and their hints, what a field's edit sends, and the
-// server's snippets filled in from the settings (core/tunnel-snippets.ts). The view itself is
-// GET /api/access's, checked by core/access.ts.
-import { isAccessView } from '../../../src/core/access.ts'
+// server's snippets filled in from the settings (core/tunnel-snippets.ts). Its Login parts
+// (LoginSection.tsx, LoginsSection.tsx): the TOTP key in groups, a passkey's, a login's and a
+// failed attempt's line, where passkeys are added. What the panel asks or has open, one thing at a
+// time. The view itself is GET /api/access's, checked by core/access.ts.
+import { type Attempt, isAccessView, type PublicLogin, type PublicPasskey } from '../../../src/core/access.ts'
 import {
   fieldProblem,
   type StepHint,
@@ -21,7 +23,8 @@ import {
   sshdBlock,
 } from '../../../src/core/tunnel-snippets.ts'
 import type { Translator } from '../../../src/core/types.ts'
-import { longWhen } from '../../../src/core/when-format.ts'
+import { longWhen, shortWhen } from '../../../src/core/when-format.ts'
+import { ago } from './card.ts'
 
 export { isAccessView }
 
@@ -30,6 +33,70 @@ export const TUNNEL_FIELDS: readonly TunnelField[] = ['host', 'sshPort', 'user',
 
 /** What the Tunnel part asks before it sends: replacing the key there, or a new domain the board warned about. */
 export type TunnelAsk = { kind: 'key' } | { kind: 'domain'; domain: string } | null
+
+/**
+ * What the Login parts have open or ask before they send: the password form and what is typed in
+ * it; the code's setup with the secret and URI from totp-begin, until it is checked or closed; a
+ * passkey to remove, a login to end, or all of them, clicked once.
+ */
+export type LoginAsk =
+  | { kind: 'password'; typed: string }
+  | { kind: 'totp'; secret: string; uri: string; code: string }
+  | { kind: 'passkey'; id: string }
+  | { kind: 'login'; id: string }
+  | { kind: 'logins' }
+  | null
+
+/** What the panel asks or has open, one thing at a time: the Tunnel part's or the Login parts'. */
+export type AccessAsk = TunnelAsk | LoginAsk
+
+/** The Tunnel part's share of what the panel asks; null while it is the Login parts'. */
+export const tunnelAsk = (ask: AccessAsk): TunnelAsk => (ask?.kind === 'key' || ask?.kind === 'domain' ? ask : null)
+
+/** The Login parts' share of what the panel asks; null while it is the Tunnel part's. */
+export const loginAsk = (ask: AccessAsk): LoginAsk => (ask?.kind === 'key' || ask?.kind === 'domain' ? null : ask)
+
+/** A TOTP key as the panel shows it, in groups of four for typing into an app: `ABCD EFGH …`. */
+export const groupKey = (secret: string): string => secret.match(/.{1,4}/g)?.join(' ') ?? ''
+
+/** "last used 5 min ago", or its word for a moment ago (`key` and `${key}Now`), through the board's `ago`. */
+function agoLine(ms: number, now: number, t: Translator, key: 'access.used' | 'access.active'): string {
+  const when = ago(ms, now, t)
+  return when === t('ago.now') ? t(`${key}Now`) : t(key, { when })
+}
+
+/** A passkey's line: when it was added, when it was last used ("not used yet"). */
+export function passkeyLine(p: PublicPasskey, t: Translator, now: number): string {
+  const used = p.usedAt === null ? t('access.unused') : agoLine(p.usedAt, now, t, 'access.used')
+  return `${t('access.added', { when: shortWhen(p.addedAt, t, now) })} · ${used}`
+}
+
+/** A login's line: its method, when it signed in, when it was last active (signing in is), from where. */
+export function loginLine(l: PublicLogin, t: Translator, now: number): string {
+  return [
+    t(`access.method.${l.method}`),
+    t('access.signedIn', { when: shortWhen(l.signedInAt, t, now) }),
+    agoLine(l.seenAt ?? l.signedInAt, now, t, 'access.active'),
+    l.address,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/** A failed sign-in: when, from where (when the proxy said), the browser, and why in words. */
+export function attemptLine(a: Attempt, t: Translator, now: number): string {
+  return [shortWhen(a.at, t, now), a.address, a.label, t(`access.reason.${a.reason}`)].filter(Boolean).join(' · ')
+}
+
+/** Where passkeys are added: through the domain, when it checks out; its placeholder until then. */
+export function passkeyHint(domain: string, t: Translator): string {
+  const shown = domain !== '' && fieldProblem('domain', domain) === null ? domain : '<domain>'
+  return t('access.passkeysHint', { domain: shown })
+}
+
+/** While sign-in with password and code is locked: until when. */
+export const lockoutLine = (until: number, t: Translator, now: number): string =>
+  t('access.locked', { when: longWhen(until, t, now) })
 
 const STEP_IDS: ReadonlySet<unknown> = new Set(['ssh', 'forward', 'domain'])
 
