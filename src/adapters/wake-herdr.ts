@@ -16,6 +16,7 @@ import { isRecord } from './json-store.ts'
 /** A pane's processes: its shell's pid, the foreground ones, and the shell's name (null when herdr does not show it). */
 export interface ProcessInfo {
   shellPid: number | null
+  /** Each with its name as herdr gives it, '' when herdr gives none. */
   foreground: { pid: number; name: string }[]
   shell: string | null
 }
@@ -36,9 +37,10 @@ function shellName(name: string): string | null {
 
 /**
  * `herdr pane process-info --pane <id>`'s answer: `process_info.shell_pid` (a number, else null),
- * the `foreground_processes` with a number `pid` and a string `name`, and the shell, the foreground
- * process whose pid is the shell's. An answer without `process_info` is an error: a pane whose
- * processes are not known is not one to type into.
+ * the `foreground_processes` with a number `pid` (one without a string `name` is kept, named '':
+ * a program in the foreground all the same), and the shell, the foreground process whose pid is
+ * the shell's. An answer without `process_info` is an error: a pane whose processes are not known
+ * is not one to type into.
  */
 export function asProcessInfo(answer: unknown): ProcessInfo {
   const info = isRecord(answer) ? answer.process_info : null
@@ -46,7 +48,7 @@ export function asProcessInfo(answer: unknown): ProcessInfo {
   const shellPid = isNumber(info.shell_pid) ? info.shell_pid : null
   const list = Array.isArray(info.foreground_processes) ? info.foreground_processes : []
   const foreground = list.flatMap(p =>
-    isRecord(p) && isNumber(p.pid) && typeof p.name === 'string' ? [{ pid: p.pid, name: p.name }] : [],
+    isRecord(p) && isNumber(p.pid) ? [{ pid: p.pid, name: typeof p.name === 'string' ? p.name : '' }] : [],
   )
   const shell = shellPid === null ? undefined : foreground.find(p => p.pid === shellPid)
   return { shellPid, foreground, shell: shell ? shellName(shell.name) : null }

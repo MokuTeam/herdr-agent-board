@@ -41,8 +41,12 @@ export function canWake(f: {
   return null
 }
 
-// A profile id the line may carry as it is: herdr and every shell take it without quotes.
 const PLAIN = /^[A-Za-z0-9_.-]+$/
+
+/** A profile id the wake line may carry as it is (herdr and every shell take it without quotes); '' is not one. */
+export function plainProfile(id: string): boolean {
+  return PLAIN.test(id)
+}
 
 /**
  * The one line typed into a pane to wake a session; null for what is not a session id (pi's and
@@ -51,7 +55,7 @@ const PLAIN = /^[A-Za-z0-9_.-]+$/
  */
 export function wakeLine(session: string, profile?: string | null): string | null {
   if (!SESSION_ID.test(session)) return null
-  return `board resume ${session}${profile && PLAIN.test(profile) ? ` --profile ${profile}` : ''}`
+  return `board resume ${session}${profile && plainProfile(profile) ? ` --profile ${profile}` : ''}`
 }
 
 /** The key that clears the prompt line before the wake line is typed. */

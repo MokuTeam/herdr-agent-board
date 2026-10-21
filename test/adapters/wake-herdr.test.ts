@@ -46,7 +46,7 @@ describe('the pane’s shell', () => {
     expect(clearKeyFor(shellOf('C:\\Windows\\System32\\cmd.exe'), 'linux')).toBe('esc')
   })
 
-  test('foreground processes without a number pid and a string name are left out; extra fields too', () => {
+  test('foreground processes without a number pid are left out, extra fields too; one without a name is kept as ""', () => {
     const info = asProcessInfo({
       process_info: {
         shell_pid: '10',
@@ -54,13 +54,42 @@ describe('the pane’s shell', () => {
           { pid: 10, name: 'bash', cmdline: 'bash -l' },
           { pid: '11', name: 'x' },
           { pid: 12 },
+          { pid: 13, name: null },
           null,
         ],
         extra: true,
       },
     })
-    expect(info).toEqual({ shellPid: null, foreground: [{ pid: 10, name: 'bash' }], shell: null })
+    expect(info).toEqual({
+      shellPid: null,
+      foreground: [
+        { pid: 10, name: 'bash' },
+        { pid: 12, name: '' },
+        { pid: 13, name: '' },
+      ],
+      shell: null,
+    })
     expect(asProcessInfo({ process_info: {} })).toEqual({ shellPid: null, foreground: [], shell: null })
+  })
+
+  test('a program herdr gives no name is still a program in the foreground, beside the shell', () => {
+    const info = asProcessInfo({
+      process_info: { shell_pid: 10, foreground_processes: [{ pid: 10, name: 'bash' }, { pid: 11 }] },
+    })
+    expect(info).toEqual({
+      shellPid: 10,
+      foreground: [
+        { pid: 10, name: 'bash' },
+        { pid: 11, name: '' },
+      ],
+      shell: 'bash',
+    })
+    // The shell itself without a name: its pid is still the shell's, its name not known.
+    expect(asProcessInfo({ process_info: { shell_pid: 10, foreground_processes: [{ pid: 10 }] } })).toEqual({
+      shellPid: 10,
+      foreground: [{ pid: 10, name: '' }],
+      shell: null,
+    })
   })
 
   test('an answer without process_info is an error, never a pane taken for free', () => {

@@ -4,6 +4,7 @@ import {
   canWake,
   clearKeyFor,
   ownSleepers,
+  plainProfile,
   type WakeProfile,
   wakeLine,
 } from '../../../src/core/wake/rules.ts'
@@ -30,6 +31,17 @@ test('the wake line: one command every shell runs, no folder, no quotes; the pro
   expect(wakeLine(SID)).toBe(`board resume ${SID}`)
   for (const id of ['Иван', 'a b', '100%', "o'k"]) expect(wakeLine(SID, id)).toBe(`board resume ${SID}`)
   for (const key of ['pane-w1:p2', 'pi-session-file.jsonl', '']) expect(wakeLine(key, 'work')).toBeNull()
+})
+
+test('a plain profile id is the one the wake line carries as --profile', () => {
+  for (const id of ['work', 'a.b-c_1', 'Work2']) {
+    expect(plainProfile(id)).toBe(true)
+    expect(wakeLine(SID, id)).toBe(`board resume ${SID} --profile ${id}`)
+  }
+  for (const id of ['', 'Иван', 'a b', '100%', "o'k", 'work;rm', 'C:\\Users\\a\\.claude-work']) {
+    expect(plainProfile(id)).toBe(false)
+    expect(wakeLine(SID, id)).toBe(`board resume ${SID}`)
+  }
 })
 
 test('the prompt line is cleared by the pane’s shell; an unknown one by the OS', () => {
