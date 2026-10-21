@@ -417,7 +417,9 @@ switch, so it tags as "All profiles" does.
   lanes do; a session in the wrong profile or in a folder no profile has shows under every pick,
   so you always see it. This browser keeps the pick.
 - Usage per profile: the pill shows each profile with a reading of the last half hour, the popover
-  every shown profile's windows (5h, 7d) or "No session lately". The status line keeps each
+  every shown profile's windows (5h, 7d) or "No session lately". With a reset time in the reading,
+  each window gets a forecast line: at the pace averaged since the window started, it runs out at
+  a given time before the reset (in orange) or lasts until the reset. The status line keeps each
   profile's windows apart in the state folder (`claude-limits-latest.json` for `default`, as
   before; `claude-limits-profile-<id>.json` for another), and without it the board reads the
   usagebar cache in the profile's own folder (`herdr-usagebar/`). With one profile shown the pill

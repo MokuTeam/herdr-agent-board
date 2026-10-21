@@ -1,4 +1,5 @@
 // The usage popover's text: what is used, where the reading comes from and how old it is.
+import { shortWhen } from '../../../src/core/when-format.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { forecast, type LimitInfo, windowLabel } from '../models/limits.ts'
 
@@ -11,18 +12,24 @@ export function LimitsReport({ lim }: { lim: LimitInfo }) {
     ? new Date(lim.observedAt).toLocaleString(t.lang, { dateStyle: 'medium', timeStyle: 'short' })
     : t('limits.unknownTime')
   const used = lim.windows.map(w => `${windowLabel(w, t)}: ${Math.round(w.usedPercentage)}%`).join(' · ')
-  const at = (ms: number) =>
-    new Date(ms).toLocaleString(t.lang, { weekday: 'short', hour: '2-digit', minute: '2-digit' })
+  const now = Date.now()
+  const at = (ms: number) => shortWhen(ms, t, now)
   // An old reading predicts nothing: the pace may have changed or the window reset since.
   const ahead = lim.stale
     ? []
     : lim.windows.flatMap(w => {
-        const f = forecast(w, lim.observedAt)
+        const f = forecast(w, lim.observedAt, now)
         if (!f) return []
         const window = windowLabel(w, t)
         return f.kind === 'out'
-          ? [{ out: true, text: t('limits.forecastOut', { window, at: at(f.at), reset: at(f.resetsAt) }) }]
-          : [{ out: false, text: t('limits.forecastLasts', { window, reset: at(f.resetsAt) }) }]
+          ? [
+              {
+                key: w.minutes,
+                out: true,
+                text: t('limits.forecastOut', { window, at: at(f.at), reset: at(f.resetsAt) }),
+              },
+            ]
+          : [{ key: w.minutes, out: false, text: t('limits.forecastLasts', { window, reset: at(f.resetsAt) }) }]
       })
   return (
     <>
@@ -30,7 +37,7 @@ export function LimitsReport({ lim }: { lim: LimitInfo }) {
         <b>{t('limits.used')}</b> {used}
       </p>
       {ahead.map(f => (
-        <p key={f.text} className={f.out ? 'limits-warning' : ''}>
+        <p key={f.key} className={f.out ? 'limits-warning' : ''}>
           {f.text}
         </p>
       ))}

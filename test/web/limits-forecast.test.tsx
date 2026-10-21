@@ -4,6 +4,7 @@ import { expect, test } from 'bun:test'
 import { createRef } from 'react'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { BoardPayload } from '../../src/core/payload.ts'
+import { shortWhen } from '../../src/core/when-format.ts'
 import { LimitsPop } from '../../web/src/components/LimitsPop.tsx'
 import { forecast, type LimitReading } from '../../web/src/models/limits.ts'
 import { board, payload, renderInBoard } from './support/board.tsx'
@@ -39,6 +40,20 @@ test('nothing used yet lasts; nothing forecast where the reading cannot tell', (
   expect(forecast(week(60, NOW + 200 * H), NOW)).toBeNull()
 })
 
+test('an aging reading never shows a run-out already past', () => {
+  // 5h at 95%, read 29 min ago, 2 h into the window: the pace ran it out 23 min after the reading.
+  const read = NOW - 29 * 60_000
+  const w = { minutes: 300, usedPercentage: 95, resetsAt: read + 3 * H } as LimitReading
+  expect(forecast(w, read, read)).toMatchObject({ kind: 'out' })
+  expect(forecast(w, read, NOW)).toBeNull()
+})
+
+test('a pace exactly on budget lasts, not out the same minute as the reset', () => {
+  // 3 of 5 hours gone at a hair over 60%: the run-out lands milliseconds before the reset.
+  const w = { minutes: 300, usedPercentage: 60.0001, resetsAt: NOW + 2 * H } as LimitReading
+  expect(forecast(w, NOW, NOW)).toEqual({ kind: 'lasts', resetsAt: NOW + 2 * H })
+})
+
 const reading = (fields: Partial<NonNullable<BoardPayload['limits']>> = {}): BoardPayload['limits'] => ({
   source: 'statusline',
   observedAt: NOW,
@@ -50,18 +65,16 @@ const render = (limits: BoardPayload['limits'], lang = 'en') =>
   canonical(
     renderInBoard(<LimitsPop anchor={createRef<HTMLButtonElement>()} />, board({ data: payload({ limits }) }), lang),
   )
-const at = (ms: number, lang: string) =>
-  new Date(ms).toLocaleString(lang, { weekday: 'short', hour: '2-digit', minute: '2-digit' })
 
 test('the popover says it per window, the one that runs out as a warning', () => {
   for (const lang of ['en', 'ru']) {
     const t = translator(lang)
     const html = render(reading(), lang)
     expect(html).toContain(
-      `<p class="">${t('limits.forecastLasts', { window: t('limits.5h'), reset: at(NOW + 3 * H, lang) })}</p>`,
+      `<p class="">${t('limits.forecastLasts', { window: t('limits.5h'), reset: shortWhen(NOW + 3 * H, t) })}</p>`,
     )
     expect(html).toContain(
-      `<p class="limits-warning">${t('limits.forecastOut', { window: t('limits.7d'), at: at(NOW + 48 * H, lang), reset: at(NOW + 96 * H, lang) })}</p>`,
+      `<p class="limits-warning">${t('limits.forecastOut', { window: t('limits.7d'), at: shortWhen(NOW + 48 * H, t), reset: shortWhen(NOW + 96 * H, t) })}</p>`,
     )
   }
 })
