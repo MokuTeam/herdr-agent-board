@@ -1,5 +1,6 @@
 // Draws the board: state and screen size in, one string of cursor moves and text out. render() reads
-// the clock from state.now and touches no stdout; it updates the state's scroll and click map.
+// the clock from state.now and touches no stdout; it updates the state's scroll and click map. With
+// "look": "terminal" in config.json it draws the Terminal style (render-terminal.ts) instead.
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { categoryInfo } from '../core/categories.ts'
 import { t } from '../core/lang.ts'
@@ -7,11 +8,22 @@ import { profileTag } from '../core/profile-tag.ts'
 import type { Item } from '../core/types.ts'
 import { shortWhen } from '../core/when-format.ts'
 import type { Hit } from './input.ts'
+import {
+  bodyTerminal,
+  footerTerminal,
+  headerTerminal,
+  isTerminalLook,
+  TERMINAL_HEADER_ROWS,
+} from './render-terminal.ts'
 import { colOf, type Lane, laneOrder, selected, type TuiState } from './state.ts'
 import { age, CSI, fit, paint, width } from './terminal.ts'
 
 export const HEADER_ROWS = 2
 export const FOOTER_ROWS = 2
+
+/** The rows above the body: the Terminal style's wide board has its column heads' rule too. */
+export const headerRows = (state: TuiState, size: Size): number =>
+  isTerminalLook(state.cfg) && isWide(size.columns || 80) ? TERMINAL_HEADER_ROWS : HEADER_ROWS
 
 export interface Size {
   columns: number
@@ -32,7 +44,7 @@ export interface Body {
 export const isWide = (columns: number): boolean => columns >= 100
 
 /** "⏰15:30 " when the session has something scheduled; ⏳ when it waits until the session is free; ↻ a restart on its way. */
-function alarm(state: TuiState, it: Item): string {
+export function alarm(state: TuiState, it: Item): string {
   const e = state.alarms.get(it.key)
   if (e?.kind === 'restart') return '↻ '
   return e ? `${e.idle ? '⏳' : '⏰'}${shortWhen(e.next, t, state.now)} ` : ''
@@ -49,7 +61,7 @@ const TAG_COLORS: Readonly<Record<string, string>> = {
   yellow: 'yellow',
 }
 
-interface Tag {
+export interface Tag {
   /** Cut to the room it has. */
   text: string
   color: string
@@ -61,7 +73,7 @@ interface Tag {
  * folder no profile has as "unknown profile" in gray, a session in another profile than its start
  * asked for as "wrong profile" in red. Null for none, or no room.
  */
-function tagOf(state: TuiState, it: Item, max: number): Tag | null {
+export function tagOf(state: TuiState, it: Item, max: number): Tag | null {
   const tag = profileTag(it, state.profiles)
   if (!tag || max < 1) return null
   const [text, color] =
@@ -195,7 +207,7 @@ export function header(state: TuiState, W: number, colW: number): string[] {
       )
     : COLUMNS.map(c => `${paint(c.icon, c.color)} ${items.filter(i => i.column === c.id).length}`).join('  ')
   const time = new Date(state.now).toTimeString().slice(0, 5)
-  const filt = filter ? paint(`  ${t('tui.filter', { title: categoryInfo(cfg, filter).title })}`, 'yellow') : ''
+  const filt = `${filter ? paint(`  ${t('tui.filter', { title: categoryInfo(cfg, filter).title })}`, 'yellow') : ''}${filtersOn(state)}`
   const left = `${paint(' Agent board ', 'bold')} ${counts}${filt}`
   // biome-ignore lint/suspicious/noControlCharactersInRegex: strips the escape sequences it measures around
   const plain = left.replace(/\x1b\[[0-9;]*m/g, '')
@@ -208,8 +220,15 @@ export function header(state: TuiState, W: number, colW: number): string[] {
   return [top, ` ${titles.join(' ')}`]
 }
 
+/** The column shown alone and the search, while they are on: "  only: Working  /api". */
+export function filtersOn(state: TuiState): string {
+  const only = state.column ? paint(`  ${t('tui.only', { title: colOf(state.column).title })}`, 'yellow') : ''
+  const query = state.query ? paint(`  /${state.query}`, 'yellow') : ''
+  return only + query
+}
+
 /** The keys line for the text prompt: the label, the tail of what is typed that fits, a cursor. */
-function inputKeys(label: string, text: string, W: number): string {
+export function inputKeys(label: string, text: string, W: number): string {
   const shownLabel = fit(` ${label}: `, Math.min(width(` ${label}: `), Math.floor(W / 2)))
   const room = Math.max(1, W - 1 - width(shownLabel) - 1 - 24)
   const chars = [...text]
@@ -272,8 +291,13 @@ export function footer(state: TuiState, W: number): string[] {
 export function render(state: TuiState, size: Size): string {
   const W = size.columns || 80
   const H = size.rows || 24
-  const bodyH = Math.max(1, H - HEADER_ROWS - FOOTER_ROWS)
-  const { lines, tops, heights, colW } = isWide(W) ? bodyWide(state, W) : bodyNarrow(state, W)
+  const terminal = isTerminalLook(state.cfg)
+  const bodyH = Math.max(1, H - headerRows(state, size) - FOOTER_ROWS)
+  const { lines, tops, heights, colW } = terminal
+    ? bodyTerminal(state, W)
+    : isWide(W)
+      ? bodyWide(state, W)
+      : bodyNarrow(state, W)
   if (state.loading) lines.splice(0, lines.length, paint(` ${t('loading')}`, 'gray'))
   else if (!state.items.length) lines.splice(0, lines.length, paint(` ${t('tui.noAgents')}`, 'gray'))
   const top = state.sel === null ? undefined : tops.get(state.sel)
@@ -285,9 +309,9 @@ export function render(state: TuiState, size: Size): string {
   }
   state.scroll = Math.max(0, Math.min(state.scroll, Math.max(0, lines.length - bodyH)))
   const rows = [
-    ...header(state, W, colW),
+    ...(terminal ? headerTerminal(state, W, colW) : header(state, W, colW)),
     ...Array.from({ length: bodyH }, (_, i) => lines[state.scroll + i] ?? ''),
-    ...footer(state, W),
+    ...(terminal ? footerTerminal(state, W) : footer(state, W)),
   ]
   return `\x1b[?2026h${rows.map((r, i) => `${CSI}${i + 1};1H${r}${CSI}0m${CSI}K`).join('')}\x1b[?2026l`
 }

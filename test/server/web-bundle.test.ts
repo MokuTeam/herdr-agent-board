@@ -180,8 +180,8 @@ test('theme.js puts the style on <html> only for a kept Terminal, beside the the
     early: join(root, 'web', 'src', 'theme.ts'),
     log: () => {},
   })
-  const run = (theme: string | null, look: string | null, broken = false) => {
-    const dataset: Record<string, string> = {}
+  const run = (theme: string | null, look: string | null, broken = false, lookDefault?: string) => {
+    const dataset: Record<string, string> = lookDefault ? { lookDefault } : {}
     const kept: Record<string, string | null> = { 'board.theme': theme, 'board.look': look }
     const localStorage = {
       getItem: (key: string) => {
@@ -200,6 +200,20 @@ test('theme.js puts the style on <html> only for a kept Terminal, beside the the
     run(null, null),
     run('dark', 'terminal', true),
   ]).toEqual([{ look: 'terminal' }, { theme: 'light', look: 'terminal' }, { theme: 'dark' }, {}, {}, {}])
+  // config.json's look (data-look-default on <html>): Terminal, unless this browser picked Classic;
+  // also where the browser keeps nothing it will say.
+  const start = { lookDefault: 'terminal' }
+  expect([
+    run(null, null, false, 'terminal'),
+    run(null, 'classic', false, 'terminal'),
+    run('dark', 'terminal', false, 'terminal'),
+    run(null, null, true, 'terminal'),
+  ]).toEqual([
+    { ...start, look: 'terminal' },
+    start,
+    { ...start, theme: 'dark', look: 'terminal' },
+    { ...start, look: 'terminal' },
+  ])
 })
 
 test('rebuilds run one at a time, so the newest bundle is the one kept', async () => {

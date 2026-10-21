@@ -553,8 +553,22 @@ describe('Classic or Terminal (#161)', () => {
     expect(lookNow({ dataset: { look: 'terminal' } })).toBe('terminal')
   })
 
-  test('before the page paints, only Terminal kept in this browser sets a style', () => {
-    expect(['terminal', 'classic', 'dark', '', null].map(keptLook)).toEqual(['terminal', null, null, null, null])
+  test('before the page paints, only Terminal sets a style: kept in this browser, or the board’s with none kept', () => {
+    expect(['terminal', 'classic', 'dark', '', null].map(raw => keptLook(raw))).toEqual([
+      'terminal',
+      null,
+      null,
+      null,
+      null,
+    ])
+    // config.json's look: Terminal, unless this browser picked Classic.
+    expect(['terminal', 'classic', 'dark', null].map(raw => keptLook(raw, 'terminal'))).toEqual([
+      'terminal',
+      null,
+      'terminal',
+      'terminal',
+    ])
+    expect(keptLook(null, 'classic')).toBeNull()
   })
 })
 

@@ -158,6 +158,12 @@ export interface Config {
   archiveUndoSec?: unknown
   /** How the web board folds a session asleep in "Waiting" (core/fold-mode.ts), as config.json has it. */
   foldWaiting?: unknown
+  /**
+   * "terminal": the terminal board in its Terminal style (src/tui/render-terminal.ts), and the web
+   * board starting in it in a browser that has not picked a style (core/omarchy-theme.ts
+   * pageWithLook); else Classic.
+   */
+  look?: unknown
   [extra: string]: unknown
 }
 

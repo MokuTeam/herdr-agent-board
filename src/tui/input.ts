@@ -1,23 +1,27 @@
 // What the terminal sends: keys to board actions, the stream split into tokens, mouse reports.
+import { LETTER_KEYS } from '../core/board-keys.ts'
 
-// Each action also takes the letter on the same key of a Russian layout (k = л, m = ь, ...).
+// Each action also takes the letter on the same key of a Russian layout (k = л, m = ь, ...); the
+// letters are the web board's too, in its Terminal style (core/board-keys.ts).
 export const KEYMAP: Readonly<Record<string, readonly string[]>> = {
-  up: ['\x1b[A', '\x1bOA', 'k', 'л'],
-  down: ['\x1b[B', '\x1bOB', 'j', 'о'],
-  right: ['\x1b[C', '\x1bOC', 'l', 'д', '\t'],
-  left: ['\x1b[D', '\x1bOD', 'h', 'р', '\x1b[Z'],
-  home: ['\x1b[H', '\x1b[1~', 'g', 'п'],
+  up: ['\x1b[A', '\x1bOA', ...LETTER_KEYS.up],
+  down: ['\x1b[B', '\x1bOB', ...LETTER_KEYS.down],
+  right: ['\x1b[C', '\x1bOC', ...LETTER_KEYS.right, '\t'],
+  left: ['\x1b[D', '\x1bOD', ...LETTER_KEYS.left, '\x1b[Z'],
+  home: ['\x1b[H', '\x1b[1~', ...LETTER_KEYS.home],
+  last: ['\x1b[F', '\x1b[4~', ...LETTER_KEYS.last],
   enter: ['\r', '\n'],
-  quit: ['q', 'й', '\x1b'],
+  quit: [...LETTER_KEYS.quit, '\x1b'],
   exit: ['\x03'],
-  message: ['m', 'ь'],
-  wait: ['w', 'ц'],
-  clear: ['x', 'ч'],
-  sleep: ['z', 'я'],
-  favorite: ['f', 'а'],
-  category: ['c', 'с'],
-  refresh: ['r', 'к'],
-  web: ['o', 'щ'],
+  message: LETTER_KEYS.message,
+  wait: LETTER_KEYS.wait,
+  clear: LETTER_KEYS.clear,
+  sleep: LETTER_KEYS.sleep,
+  favorite: LETTER_KEYS.favorite,
+  category: LETTER_KEYS.category,
+  refresh: LETTER_KEYS.refresh,
+  web: LETTER_KEYS.web,
+  search: LETTER_KEYS.search,
 }
 
 /** A key (or escape sequence) to the name of its action. */

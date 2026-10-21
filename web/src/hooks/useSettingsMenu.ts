@@ -209,12 +209,15 @@ export function useSettingsMenu(
           transition: crossFade(),
         }),
       look: () => lookNow(document.documentElement),
-      setLook: look =>
+      setLook: look => {
         setLook(look, {
           root: document.documentElement,
           keep: value => storage.set(LOOK_KEY, value),
           transition: crossFade(),
-        }),
+        })
+        // A column shown alone is the Terminal style's (its keys): Classic shows them all.
+        if (look !== 'terminal') latest.current.board.dispatch({ type: 'column', id: null })
+      },
       chooseLanguage: lang => {
         const { t, choose, board } = latest.current
         void chooseLanguage(lang, {

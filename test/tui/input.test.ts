@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { COLUMN_KEYS, LETTER_KEYS } from '../../src/core/board-keys.ts'
 import { ACTION, hitAt, KEYMAP, parseMouse, tokens } from '../../src/tui/input.ts'
 
 describe('tokens', () => {
@@ -61,5 +62,39 @@ describe('mouse', () => {
     expect(hitAt(hits, 1, 1)).toBeUndefined()
     expect(hitAt(hits, 0, 5)).toBeUndefined()
     expect(hitAt(hits, -3, 5)).toBeUndefined()
+  })
+})
+
+describe('the keys the web board shares (#161)', () => {
+  test('every letter is the action it is in core/board-keys.ts, and the new ones come with nothing taken from an old one', () => {
+    for (const [name, keys] of Object.entries(LETTER_KEYS))
+      for (const k of keys) expect([k, ACTION.get(k)]).toEqual([k, name])
+    // G and End go to the last card, / searches; on a Russian layout П and the . on the / key.
+    expect(['G', 'П', '\x1b[F', '\x1b[4~'].map(k => ACTION.get(k))).toEqual(['last', 'last', 'last', 'last'])
+    expect(['/', '.'].map(k => ACTION.get(k))).toEqual(['search', 'search'])
+    // A capital shows one column alone: none of them is an action of its own.
+    for (const keys of Object.values(COLUMN_KEYS)) for (const k of keys) expect(ACTION.get(k)).toBeUndefined()
+  })
+
+  test('the keys the board had before stay as they were', () => {
+    const before: Record<string, readonly string[]> = {
+      up: ['\x1b[A', '\x1bOA', 'k', 'л'],
+      down: ['\x1b[B', '\x1bOB', 'j', 'о'],
+      right: ['\x1b[C', '\x1bOC', 'l', 'д', '\t'],
+      left: ['\x1b[D', '\x1bOD', 'h', 'р', '\x1b[Z'],
+      home: ['\x1b[H', '\x1b[1~', 'g', 'п'],
+      enter: ['\r', '\n'],
+      quit: ['q', 'й', '\x1b'],
+      exit: ['\x03'],
+      message: ['m', 'ь'],
+      wait: ['w', 'ц'],
+      clear: ['x', 'ч'],
+      sleep: ['z', 'я'],
+      favorite: ['f', 'а'],
+      category: ['c', 'с'],
+      refresh: ['r', 'к'],
+      web: ['o', 'щ'],
+    }
+    for (const [name, keys] of Object.entries(before)) expect([name, KEYMAP[name]]).toEqual([name, keys])
   })
 })
