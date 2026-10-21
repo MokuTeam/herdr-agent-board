@@ -4,7 +4,7 @@
    color the sheets use (--red); the server's snippets in monospace, wrapped, and scrolling when
    long. Every rule here selects by class: the other sheets are upstream's, rule for rule. */
 
-.access-tunnel { max-width: 760px; }
+.access-tunnel, .access-login, .access-logins { max-width: 760px; }
 .access-head { margin: 16px 0 6px; font-size: 13px; }
 .access-reach, .access-status, .access-ssh, .access-why, .access-sure, .access-note, .access-line {
   margin: 0 0 8px;
@@ -52,3 +52,37 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* The Login part: the password and the code each on a line (named as the settings are), the form
+   one opens under it; the code's QR code black on white in either theme, as the Phones panel's,
+   its key in monospace. */
+.access-setting { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0 0 8px; padding: 0 6px; font-size: 12.5px; }
+.access-name { flex: none; width: 150px; color: var(--label-2); font-size: 12px; font-weight: 600; }
+.access-setting .button:disabled, .access-row .button:disabled, .access-lockout .button:disabled { opacity: 0.5; }
+.access-form { margin: 0 0 12px; padding: 0 6px; }
+.access-input { background: var(--fill-2); font-family: var(--font); }
+.access-input:disabled { opacity: 0.5; }
+.access-tip { margin: 0 0 8px; color: var(--label-2); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.access-qr {
+  display: block;
+  width: 176px;
+  height: 176px;
+  margin: 0 0 8px;
+  border-radius: 12px;
+  box-shadow: 0 0 0 0.5px var(--separator);
+}
+.access-secret { font-size: 13px; letter-spacing: 0.04em; user-select: all; }
+
+/* The passkeys and the logins: a row each, its label over its line, its button at the end, as the
+   Phones panel's paired devices; a lockout in the danger color with Lift beside it. */
+.access-rows, .access-attempts { margin: 0 0 8px; padding: 0; list-style: none; }
+.access-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px; }
+.access-about { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 12.5px; }
+.access-meta { color: var(--label-2); font-size: 12px; overflow-wrap: anywhere; }
+.access-row .button { flex: none; }
+.access-none { margin: 0 0 8px; padding: 0 6px; }
+.access-lockout { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
+.access-lock { margin: 0; color: var(--red); font-size: 12.5px; line-height: 1.4; }
+
+/* The recent failed attempts: a line each. */
+.access-attempt { padding: 2px 6px; color: var(--label-2); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
