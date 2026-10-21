@@ -1,10 +1,29 @@
 // Settings → Sleep and wake… (#119): wake's state and settings, its switches, Start, Start again
-// and Log (services/wake/control.ts). For the board on this computer only: every remote listener
-// refuses these routes (server/remote.ts localOnly); a phone reads the state line in the payload.
+// and Log (services/wake/control.ts), and Install claude-tg (adapters/launchers.ts). For the board
+// on this computer only: every remote listener refuses these routes (server/remote.ts localOnly);
+// a phone reads the state line in the payload.
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { type EditResult, editWake } from '../../adapters/config-file.ts'
 import { isRecord } from '../../adapters/json-store.ts'
+import { installLaunchers } from '../../adapters/launchers.ts'
+import { t } from '../../core/lang.ts'
 import type { WakeControl } from '../../services/wake/control.ts'
 import { json, type Route } from '../http.ts'
+
+const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+/** claude-tg into ~/.local/bin, beside `board`: the folder, or why not (someone else's is never written over). */
+function launcher(): Response {
+  const dir = join(homedir(), '.local', 'bin')
+  try {
+    const { foreign } = installLaunchers(dir, { onlyWhereThere: false })
+    if (foreign.length) return json(409, { ok: false, error: t('err.launcherForeign', { files: foreign.join(', ') }) })
+    return json(200, { ok: true, dir })
+  } catch (err) {
+    return json(409, { ok: false, error: messageOf(err) })
+  }
+}
 
 /** The reaper's fields the panel sends, those it sent only. */
 function reaperOf(body: Record<string, unknown>): Record<string, unknown> {
@@ -22,8 +41,9 @@ export function wakeRoutes(wake: WakeControl): Route[] {
       },
     },
     {
-      // { op: 'on' | 'off' | 'reaper' | 'telegram' | 'start' | 'again' | 'log', … }: they change
-      // config.json and start programs, so a page of another origin is refused, as for Install.
+      // { op: 'on' | 'off' | 'reaper' | 'telegram' | 'start' | 'again' | 'log' | 'launcher', … }:
+      // they change config.json, start programs and write claude-tg, so a page of another origin is
+      // refused, as for Install.
       method: 'POST',
       path: '/api/wake',
       guard: ['board-header', 'origin'],
@@ -50,6 +70,8 @@ export function wakeRoutes(wake: WakeControl): Route[] {
             break
           case 'log':
             return json(200, { ok: true, text: wake.logTail() })
+          case 'launcher':
+            return launcher()
           default:
             r = { ok: false, error: `unknown op ${String(body.op)}` }
         }

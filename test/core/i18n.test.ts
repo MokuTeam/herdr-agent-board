@@ -88,6 +88,9 @@ describe('sleep and wake (#119)', () => {
     'setup.wake.portTaken': 'Port {port} is taken by another program',
     'setup.wake.portTakenFix': 'Set another "port" in the wake section of the board\'s config.json',
     'setup.wake.urlUnused': 'wakeUrl in config.json is not used while Sleep and wake is on',
+    // Task 6.2: claude-tg
+    'wake.launcher': 'Install claude-tg',
+    'wake.launcherDone': 'claude-tg is in {dir}',
   }
 
   test('every text in English and Russian, merged into the dictionaries', () => {
