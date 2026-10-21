@@ -10,7 +10,11 @@
 // bridge's own Claude session, which the hook is told, and pi's, which the board shows and `board`
 // writes (herdr's agent_session of the pane: the session's file). The user's answer clears pi's,
 // and pi's is told the profile of the folder this Claude runs in: the account of pi's turn.
+// SessionStart of a session in another profile than the default one: herdr is told to bring it back
+// with `board resume …` after a restart (core/resume.ts), by a process of its own; every other
+// session is left to herdr's own `claude --resume <id>`, and nothing more is read or started for it.
 // Claude Code waits for it: an empty or broken input ends it at once, silently, with exit code 0.
+import { homedir } from 'node:os'
 import { type CardPatch, readCard, writeCard } from '../adapters/cards.ts'
 import { loadConfig } from '../adapters/config-file.ts'
 import { agentGet } from '../adapters/herdr.ts'
@@ -19,9 +23,39 @@ import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
 import { isNotice } from '../core/notices.ts'
-import { profileReport } from '../core/profiles.ts'
+import { type Profile, profileReport } from '../core/profiles.ts'
 
 const text = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
+
+/**
+ * At SessionStart: the reporter of `board resume …` for a session herdr would resume in the wrong
+ * profile after a restart (resumeCommand), unless herdr-wake reports a command of its own in that
+ * profile or `board` is not on PATH. Anything that goes wrong leaves the session as it was.
+ */
+async function reportResume(
+  input: Record<string, unknown>,
+  sid: string,
+  pane: string,
+  dir: string,
+  profiles: Profile[],
+): Promise<void> {
+  try {
+    const { resumeCommand } = await import('../core/resume.ts')
+    const command = resumeCommand({
+      event: 'SessionStart',
+      session: sid,
+      agentId: input.agent_id,
+      dir,
+      home: homedir(),
+      profiles,
+      env: process.env,
+    })
+    if (!command) return
+    const { boardOnPath, herdrWakeResumesIn, startResumeReport } = await import('../adapters/resume-report.ts')
+    if (herdrWakeResumesIn(dir) || !boardOnPath()) return
+    startResumeReport(pane, sid, command)
+  } catch {}
+}
 
 /**
  * The key the board shows this pane's session by, when the pane runs pi and that is not the hook's
@@ -80,6 +114,7 @@ async function main(): Promise<void> {
     context = waitReminder(boardCard)
   }
   if (Object.keys(patch).length) writeCard(sid, patch)
+  if (event === 'SessionStart') await reportResume(input, sid, pane, dir, profiles)
   if (context) console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }))
 }
 

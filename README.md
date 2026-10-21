@@ -463,6 +463,23 @@ Claude finds no such session in `~/.claude`; wake it in its pane yourself with `
 A session the board starts with `"command": "cld-work"` still opens its tab with work's
 `CLAUDE_CONFIG_DIR`, so waking it stays in work.
 
+**After a restart of herdr (or of the computer).** herdr brings each pane back with a new shell in
+its folder and types the session's resume command into it, by default `claude --resume <id>`. That
+shell has neither the `CLAUDE_CONFIG_DIR` the board gave a profile's tab nor the one an alias set,
+so a work session would not be found there. So when a session starts in a herdr pane in another
+folder than `~/.claude`, the board's SessionStart hook tells herdr to resume it with
+`board resume <id> --profile <id>` instead (`herdr pane report-agent-session … -- board resume …`,
+from a process of its own a second or so later, once herdr holds the session). `board resume`
+takes the folder from the session's card (else the profile named), sets `CLAUDE_CONFIG_DIR` to it
+(a shell that points there already keeps its own), and runs `launch.claude` with the profile's
+`args` and `--resume <id>`, in the foreground; the profile's start command is not run, as an alias
+is only known to a shell. herdr types only a command on PATH: the board reports nothing when
+`board` is not on PATH (see [Setup](#setup)). Sessions in `~/.claude`, outside herdr, pi's and
+Codex's are left to herdr as before: no report, no call to herdr. Where herdr-wake's SessionStart
+hook is in the profile (it installs it into `~/.claude` only) and its `wakeCommand` is one of its
+own, herdr-wake reports that command and the board reports nothing; `"wakeCommand": "board resume
+{session}"` resumes in the session's profile both after a restart and on its own wakes.
+
 ## pi
 
 [pi](https://pi.dev) sessions in herdr are on the board too. herdr reports a pi pane's session by
@@ -1498,6 +1515,9 @@ board fork [--name "<Name>"] ["<note>"]
                           (the web board starts it; the note is its first message); see Fork
 --session <id|name|pane>  for another session's card
 board doctor              what is set up on this computer, and what is missing
+board resume <session id> [--profile <id>]
+                          resumes that session here, in its own Claude profile (what herdr types
+                          into a restored pane); see Claude profiles
 spawn-agent --name <Name> --cwd <folder> [--brief-file <file>]   a new session in a herdr tab
 ```
 

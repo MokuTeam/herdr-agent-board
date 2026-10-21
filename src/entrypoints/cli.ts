@@ -35,8 +35,13 @@
 //                            a new tab with a copy of its conversation, started by the web board as
 //                            its Fork does (services/launch/fork.ts); the note is its first message
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
+//   board resume <session id> [--profile <id>]   resumes that session here, in the profile its
+//                            card says it ran in (else the one named): what herdr types into a
+//                            restored pane for a session in another profile than the default one
+//                            (core/resume.ts); runs Claude in the foreground, exits with its code
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { readArchiveLog } from '../adapters/archive-store.ts'
 import {
   enqueueReport,
@@ -51,7 +56,9 @@ import { configFile, editCategories, loadConfig, setRemoteOn } from '../adapters
 import { type HerdrPane, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { boardFile } from '../adapters/paths.ts'
+import { runHere } from '../adapters/process.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
+import { loadProfiles } from '../adapters/profiles.ts'
 import { addEntry, askRestart, listEntries, type NewEntry, removeEntry } from '../adapters/schedule-store.ts'
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
@@ -60,6 +67,7 @@ import { translator } from '../core/i18n/translator.ts'
 import { t } from '../core/lang.ts'
 import { type ProfileSet, profileSet, sessionProfile } from '../core/profiles.ts'
 import { type RemoteView, remoteConfig } from '../core/remote.ts'
+import { parseResume, resumePlan } from '../core/resume.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
 import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
@@ -70,7 +78,7 @@ import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | doctor] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | doctor | resume <session id> [--profile <id>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -405,6 +413,7 @@ async function main(): Promise<void> {
   if (cmd === 'archive') return archive()
   if (cmd === 'sleep') return sleep()
   if (cmd === 'fork') return fork()
+  if (cmd === 'resume') return resume()
 
   const s = await resolveSession()
   const now = Date.now()
@@ -599,6 +608,27 @@ async function fork(): Promise<void> {
   console.log(
     `ok · fork "${String(body.name)}" of ${s.name || s.key.slice(0, 8)} starts in a new tab with a copy of the conversation; its card is on the board`,
   )
+}
+
+/**
+ * `board resume <session id> [--profile <id>]`: the session resumed in this terminal, in its own
+ * profile (core/resume.ts resumePlan), with Claude in the foreground; exits with Claude's code.
+ * herdr types it into a restored pane, so it asks herdr nothing.
+ */
+async function resume(): Promise<void> {
+  const o = parseResume(rest)
+  const plan = resumePlan({
+    ...o,
+    card: readCard(o.session),
+    profiles: loadProfiles(),
+    launch: cfg.launch,
+    env: process.env,
+    home: homedir(),
+  })
+  const [file = 'claude', ...argv] = plan.argv
+  const ran = await runHere(file, argv, plan.env)
+  if (ran.error) throw new Error(`${file} did not start: ${messageOf(ran.error)}`)
+  process.exit(ran.code)
 }
 
 /**
