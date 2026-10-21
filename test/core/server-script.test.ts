@@ -15,7 +15,7 @@ import {
   type Wanted,
 } from '../../src/core/server-plan.ts'
 import { doItMyself, launchScript, readProgress, runScript, startProgress } from '../../src/core/server-script.ts'
-import { CADDY_FILE, CADDY_IMAGE, IMPORT_LINE, SITE_FILE } from '../../src/core/server-texts.ts'
+import { CADDY_FILE, CADDY_IMAGE, IMPORT_LINE, SITE_FILE, SOCAT_IMAGE } from '../../src/core/server-texts.ts'
 import { factsFor, recordFor } from '../support/server-facts.ts'
 
 const W: Wanted = {
@@ -372,6 +372,28 @@ describe.skipIf(!SH)('a run, for real', () => {
       { kind: 'volume', name: 'agent-board-caddy-data' },
     ])
     expect(readFileSync(`${root}/runs/r1.exit`, 'utf8').trim()).toBe('0')
+  })
+
+  test('Apply again: what the board did stays on the record, though the steps that did it skip now', () => {
+    const root = `${dir}/again`
+    const pulled: RecordItem = { kind: 'image', ref: CADDY_IMAGE, before: false }
+    const there: RecordItem = { kind: 'image', ref: SOCAT_IMAGE, before: true }
+    const group: RecordItem = { kind: 'group', path: '/var/lib/boardtunnel', from: 'boardtunnel', to: 'caddy' }
+    const p = {
+      ...fake([
+        // the guard carries the earlier record's items, as buildPlan's for a setup already there
+        step('guard', { record: [pulled, there, group] }),
+        step('pull-caddy', { skipIf: ['true'], record: [{ kind: 'image', ref: CADDY_IMAGE, before: false }] }),
+        step('pull-socat', { skipIf: ['true'], record: [{ kind: 'image', ref: SOCAT_IMAGE, before: false }] }),
+        step('folder-group', { skipIf: ['true'], record: [{ ...group, from: 'caddy' }] }),
+      ]),
+      kind: 'nothing' as const,
+    }
+    const { code } = runIn(p, root)
+    expect(code).toBe(0)
+    // Undo removes an image only when the board pulled it, and puts the folder's group back from
+    // what the record says it was: Apply again keeps both as the first Apply recorded them
+    expect(setupRecord(record(root))?.items).toEqual([pulled, there, group])
   })
 
   test('a failure: its own undo and the done steps’, newest first, the skipped ones not; the record says rolled-back', () => {
