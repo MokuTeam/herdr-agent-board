@@ -51,3 +51,26 @@ title = "Agent board"
 placement = "overlay"
 # run.ts restarts the board when the plugin's code changes.
 command = ["bun", "src/entrypoints/run.ts"]
+
+# Wake: puts sessions to sleep and wakes them (src/entrypoints/wake-start.ts). Never awaited by the board's own start.
+[[startup]]
+command = ["bun", "src/entrypoints/wake-start.ts"]
+
+[[actions]]
+id = "sleep"
+title = "Put this Claude session to sleep"
+contexts = ["pane"]
+command = ["bun", "src/entrypoints/wake-action.ts", "sleep"]
+
+[[actions]]
+id = "wake"
+title = "Wake the Claude session in this pane"
+contexts = ["pane"]
+command = ["bun", "src/entrypoints/wake-action.ts", "wake"]
+
+# The wake process under its supervisor (src/entrypoints/wake-run.ts), in a tab of the Wake workspace.
+[[panes]]
+id = "wake"
+title = "Wake"
+placement = "tab"
+command = ["bun", "src/entrypoints/wake-run.ts"]

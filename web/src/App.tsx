@@ -1,7 +1,8 @@
 // The board page: the toolbar over the board, the side panels, the usage popover, the quick look
 // and the toasts, the keys and the Back button; the chat's files and links, the question forms, the
 // context menus, renaming in place, the "new session" window and the terminal window; the
-// session's helpers in their window; the Claude profiles' panel from Settings; the archive (its
+// session's helpers in their window; the Claude profiles' panel and sleep and wake's from Settings
+// (wake's also from the toolbar's "Wake stopped"); the archive (its
 // panel, sessions off the board and back, Ctrl+Z); a fork of a session in a new tab.
 import { useEffect, useRef, useState } from 'react'
 import { Board } from './components/Board.tsx'
@@ -66,6 +67,8 @@ export function App() {
   }
   // Settings → Profiles…, with more than one profile folder found.
   const [profiles, setProfiles] = useState(false)
+  // Settings → Sleep and wake…, while the payload carries wake's state line; the toolbar's note opens it too.
+  const [wake, setWake] = useState(false)
   // Settings → Phones…, while the remote mode is on; a phone that asks to pair opens it.
   const [phones, setPhones] = usePhonesPanel()
   // The reminders' buttons, shared by the schedule panel and the sheet.
@@ -116,6 +119,7 @@ export function App() {
     menus.menu,
     () => setProfiles(true),
     () => setPhones(true),
+    () => setWake(true),
   )
   // The lanes control and the profile switch folded into pills: their choices as menus.
   const picks = useSegmentPicks(menus.menu)
@@ -164,6 +168,7 @@ export function App() {
           onSchedule={() => (schedule ? setSchedule(false) : openSchedule())}
           onArchive={archive.togglePanel}
           setup={setup}
+          onWake={() => setWake(true)}
           settings={settings}
           picks={picks}
         />
@@ -180,6 +185,7 @@ export function App() {
         categories={{ open: categories, focus: lane, onClose: () => setCategories(false), onOpen: openCategories }}
         schedule={{ open: schedule, focus: session, onClose: () => setSchedule(false), schedule: reminders }}
         profiles={{ open: profiles, onClose: () => setProfiles(false) }}
+        wake={{ open: wake, onClose: () => setWake(false) }}
         phones={{ open: phones, onClose: () => setPhones(false) }}
         archive={archive}
         sheet={{

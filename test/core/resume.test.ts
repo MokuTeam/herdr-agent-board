@@ -1,11 +1,14 @@
 import { expect, test } from 'bun:test'
+import { claudeProgram } from '../../src/core/launch/spawn-args.ts'
 import type { Profile } from '../../src/core/profiles.ts'
 import {
   herdrWakeResumes,
   parseResume,
+  projectFolderName,
   type ResumeFacts,
   reportArgs,
   resumeCommand,
+  resumeDir,
   resumePlan,
 } from '../../src/core/resume.ts'
 
@@ -231,4 +234,85 @@ test('board resume on Linux and macOS', () => {
     env: { HOME: '/home/me', CLAUDE_CONFIG_DIR: '/home/me/.claude-work' },
     dir: '/home/me/.claude-work',
   })
+})
+
+test('board resume’s folder: the pane’s when the transcript is there, else the one the transcript recorded, else as today', () => {
+  expect(projectFolderName('C:\\Work\\Проект x 50%\\')).toBe('C--Work--------x-50-')
+  expect(
+    resumeDir({ cwd: 'C:\\Work\\Acme', transcriptHere: true, recorded: 'C:\\Elsewhere', recordedExists: true }),
+  ).toBeNull()
+  expect(
+    resumeDir({
+      cwd: 'C:\\Users\\me',
+      transcriptHere: false,
+      recorded: 'C:\\Work\\Проект x 50%',
+      recordedExists: true,
+    }),
+  ).toBe('C:\\Work\\Проект x 50%')
+  expect(
+    resumeDir({ cwd: 'C:\\Users\\me', transcriptHere: false, recorded: 'C:\\Gone', recordedExists: false }),
+  ).toBeNull()
+  expect(resumeDir({ cwd: 'C:\\Users\\me', transcriptHere: false, recorded: null, recordedExists: false })).toBeNull()
+  expect(
+    resumeDir({ cwd: 'c:/work/acme/', transcriptHere: false, recorded: 'C:\\Work\\Acme', recordedExists: true }),
+  ).toBeNull()
+})
+
+// Call 21: one SessionStart report. herdr-wake's own hook reported its wakeCommand for sessions in
+// ~/.claude when that was a launcher (claude-tg); the board's report takes that over while wake's
+// Telegram router is on and launch.claude's program is a launcher. Everything else is main's.
+const DEFAULT_SPELLINGS = [DEFAULT.dir, `${H}\\.claude\\`, 'c:/users/me/.claude', 'C:/Users/me/.claude/']
+
+test('with Telegram off, every setup’s report is main’s', () => {
+  for (const wakeTelegram of [undefined, false]) {
+    for (const launchProgram of [undefined, 'claude', 'claude-tg']) {
+      const off = { ...(wakeTelegram !== undefined && { wakeTelegram }), ...(launchProgram && { launchProgram }) }
+      for (const dir of DEFAULT_SPELLINGS) expect(resumeCommand(start(dir, off))).toBeNull()
+      expect(resumeCommand(start(WORK.dir, off))).toEqual(['board', 'resume', SID, '--profile', 'work'])
+      expect(resumeCommand(start('D:\\claude homes\\odd', off))).toEqual(['board', 'resume', SID])
+    }
+  }
+})
+
+test('Telegram on and a launcher in launch.claude: board resume in the default folder', () => {
+  const on: Partial<ResumeFacts> = { wakeTelegram: true, launchProgram: 'claude-tg' }
+  for (const dir of DEFAULT_SPELLINGS) expect(resumeCommand(start(dir, on))).toEqual(['board', 'resume', SID])
+  // On Linux and macOS too, and in a home with spaces, another alphabet or %: no folder in the command.
+  const posix = start('/home/me/.claude', { ...on, home: '/home/me', platform: 'linux' })
+  expect(resumeCommand(posix)).toEqual(['board', 'resume', SID])
+  const home = 'C:\\Users\\Имя Фамилия 100%'
+  expect(resumeCommand(start(`${home}\\.claude`, { ...on, home }))).toEqual(['board', 'resume', SID])
+  // Other folders as ever.
+  expect(resumeCommand(start(WORK.dir, on))).toEqual(['board', 'resume', SID, '--profile', 'work'])
+  expect(resumeCommand(start('D:\\claude homes\\odd', on))).toEqual(['board', 'resume', SID])
+  // Only a SessionStart of a pane's own Claude session in herdr, as ever.
+  expect(resumeCommand(start(DEFAULT.dir, { ...on, event: 'UserPromptSubmit' }))).toBeNull()
+  expect(resumeCommand(start(DEFAULT.dir, { ...on, env: {} }))).toBeNull()
+  expect(resumeCommand(start(DEFAULT.dir, { ...on, agentId: 'agent-1' }))).toBeNull()
+  expect(resumeCommand(start(DEFAULT.dir, { ...on, env: { HERDR_ENV: '1', PI_CODING_AGENT: 'true' } }))).toBeNull()
+  expect(resumeCommand(start(DEFAULT.dir, { ...on, session: 'pane-w1:p2' }))).toBeNull()
+})
+
+test('Telegram on and plain claude: nothing', () => {
+  for (const launchProgram of [undefined, 'claude', 'Claude', 'claude.exe', 'CLAUDE.CMD']) {
+    const facts = start(DEFAULT.dir, { wakeTelegram: true, ...(launchProgram && { launchProgram }) })
+    expect(resumeCommand(facts)).toBeNull()
+  }
+})
+
+// herdr-wake's resumeArgs test (herdr-wake/test/launcher.test.mjs), as launch.claude's program.
+// The command is board resume now, which runs launch.claude itself, so only whether one is
+// reported is ported: a launcher by its name; never claude, nor what herdr-wake did not take.
+test('after a herdr restart, a session in ~/.claude comes back through launch.claude when that is a launcher', () => {
+  const tg = (claude: unknown) =>
+    resumeCommand(start(DEFAULT.dir, { wakeTelegram: true, launchProgram: claudeProgram(claude) }))
+  expect(tg(['claude-tg', '--dangerously-skip-permissions'])).toEqual(['board', 'resume', SID])
+  expect(tg('claude-tg')).toEqual(['board', 'resume', SID])
+  expect(tg('claude')).toBeNull() // herdr does that already
+  expect(tg(undefined)).toBeNull()
+  expect(tg(42)).toBeNull() // not valid: board resume could not run it
+  expect(tg('cd x; claude')).toBeNull() // shell syntax: not a plain command
+  expect(tg('"C:\\Program Files\\c.exe"')).toBeNull()
+  // A path, as herdr-wake did not take one: herdr resumes with its own claude, as before.
+  for (const path of ['./claude-tg', 'C:\\bin\\claude-tg', '~/bin/claude-tg']) expect(tg(path)).toBeNull()
 })

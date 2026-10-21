@@ -4,6 +4,7 @@
 // components/RenameField.tsx (the old page's rename.js).
 import type { Item, Translator } from '../../../src/core/types.ts'
 import { inTurn } from './card.ts'
+import { isWakeView } from './wake.ts'
 
 export interface RenameBox {
   left: number
@@ -37,6 +38,15 @@ export function renameBox(
  */
 export const renameChanges = (name: string, value: string, claudeToo: boolean, auto = true): boolean =>
   (name !== value || claudeToo) && (auto || name !== '')
+
+/**
+ * What renaming in Claude too gives, under that choice: who sees the new name. The board's own
+ * wake (#119) while it is on and not held by the separate herdr-wake plugin, else herdr-wake as before.
+ */
+export function claudeRenameHint(wake: unknown, t: Translator): string {
+  const ours = isWakeView(wake) && wake.on && wake.state !== 'held'
+  return t(ours ? 'rename.alsoClaudeHintWake' : 'rename.alsoClaudeHint')
+}
 
 /**
  * The choice to rename it in Claude and herdr too: only for a Claude session in a pane (null

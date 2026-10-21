@@ -10,7 +10,7 @@ const root = join(import.meta.dir, '..')
 describe('herdr-plugin.toml', () => {
   test('every startup, action and pane command runs an existing Bun entrypoint', () => {
     const all = [...entries('startup'), ...entries('actions'), ...entries('panes')]
-    expect(all.length).toBe(7)
+    expect(all.length).toBe(11)
     for (const { command } of all) {
       expect(command[0]).toBe('bun')
       expect(command[1]).toMatch(/^src\/entrypoints\/[\w-]+\.ts$/)
@@ -22,9 +22,17 @@ describe('herdr-plugin.toml', () => {
     expect(entries('build').map(b => b.command)).toEqual([['bun', 'install', '--production']])
   })
 
-  test('platforms and ids are unchanged', () => {
+  test('platforms, and the ids: the board’s, then wake’s (#119)', () => {
     expect(manifest.platforms).toEqual(['windows', 'linux', 'macos'])
-    expect(entries('actions').map(a => a.id)).toEqual(['open', 'web', 'install', 'notifications', 'doctor'])
-    expect(entries('panes').map(p => p.id)).toEqual(['board'])
+    expect(entries('actions').map(a => a.id)).toEqual([
+      'open',
+      'web',
+      'install',
+      'notifications',
+      'doctor',
+      'sleep',
+      'wake',
+    ])
+    expect(entries('panes').map(p => p.id)).toEqual(['board', 'wake'])
   })
 })

@@ -1,10 +1,10 @@
 import { expect, setDefaultTimeout, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { run, runTree } from '../../src/adapters/process.ts'
-import { until } from '../support/sandbox.ts'
+import { run, runHere, runTree } from '../../src/adapters/process.ts'
+import { root, until } from '../support/sandbox.ts'
 
 setDefaultTimeout(20_000)
 
@@ -78,4 +78,28 @@ test('runTree hands the program its input on stdin and closes it; a signal ends 
   // Without them, as before: the program runs to its end.
   const plain = await runTree(process.execPath, ['-e', 'console.log("done")'], { timeout: 10_000 })
   expect([plain.stdout.trim(), plain.killed]).toEqual(['done', false])
+})
+
+test('runHere starts the program in this folder when the one it is given is gone by then; one that starts nowhere, its error', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'board-here-'))
+  try {
+    // The fake claude (test/support/fake-claude.ts) writes down the folder it runs in.
+    const log = join(dir, 'claude.json')
+    const claude = [join(root, 'test/support/fake-claude.ts'), '--resume', 'x']
+    const env = { ...process.env, FAKE_CLAUDE_LOG: log, FAKE_CLAUDE_EXIT: '7' }
+    const ranIn = (): string => realpathSync(JSON.parse(readFileSync(log, 'utf8')).cwd)
+    // A folder that is there: it runs there.
+    expect(await runHere(process.execPath, claude, env, dir)).toEqual({ code: 7, error: null })
+    expect(ranIn()).toBe(realpathSync(dir))
+    // One removed since it was looked at: here, as without one.
+    rmSync(log)
+    expect(await runHere(process.execPath, claude, env, join(dir, 'gone'))).toEqual({ code: 7, error: null })
+    expect(ranIn()).toBe(realpathSync(process.cwd()))
+    // A program that starts in neither: the error, as without a folder.
+    const none = await runHere('board-no-such-program', [], env, join(dir, 'gone'))
+    expect(none.code).toBe(127)
+    expect(none.error?.code).toBe('ENOENT')
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
 })

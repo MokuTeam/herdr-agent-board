@@ -5,8 +5,10 @@
 // line in its settings.json (~/.claude, and each CLAUDE_CONFIG_DIR folder the board shows; a
 // hidden one is left alone), has herdr put its
 // own Claude hook there too (herdr integration install claude, from which herdr learns the session
-// a pane runs), then says what else is set up and what is not (core/setup.ts). Idempotent;
-// replaces its own earlier entries and keeps a backup of each settings.json next to it. A
+// a pane runs), and while wake is on adds wake's ListAgents / SendMessage hooks (never beside the
+// separate herdr-wake plugin's), refreshes a claude-tg launcher of herdr-wake's to one that needs no
+// Node (only where one is there), then says what else is set up and what is not (core/setup.ts).
+// Idempotent; replaces its own earlier entries and keeps a backup of each settings.json next to it. A
 // settings.json that does not parse stops it before anything is written. Run it again after
 // moving or updating the plugin or Bun: the hooks, the status line and the shims run the Bun that
 // ran this (an absolute path, no PATH lookup).
@@ -21,9 +23,10 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { installSkill } from '../adapters/agents-skill.ts'
 import { codexHooksPlan, installCodexHooks } from '../adapters/codex-hooks.ts'
-import { loadConfig } from '../adapters/config-file.ts'
+import { configFile, loadConfig, readConfigFile } from '../adapters/config-file.ts'
 import { claudeIntegrationInstall, codexIntegrationInstall } from '../adapters/herdr.ts'
 import { installInto, readSettings } from '../adapters/hook-settings.ts'
+import { installLaunchers } from '../adapters/launchers.ts'
 import { ROOT } from '../adapters/paths.ts'
 import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { gatherFacts, herdrConfigFile, readText } from '../adapters/setup-facts.ts'
@@ -31,6 +34,7 @@ import { type InstallPaths, planSettings, planShims } from '../core/install-plan
 import { t } from '../core/lang.ts'
 import { DEFAULT_PROFILE, shownProfiles } from '../core/profiles.ts'
 import { boardFiles, checkSetup, report, tomlValue } from '../core/setup.ts'
+import { wakeSwitch } from '../core/wake/config.ts'
 
 const args = process.argv.slice(2)
 for (const a of args.filter(a => a !== '--toast' && a !== '--no-toast' && a !== '--codex'))
@@ -44,7 +48,14 @@ if (toast && process.platform !== 'win32') {
 }
 
 const files = boardFiles(ROOT)
-const paths: InstallPaths = { bun: process.execPath, ...files, binDir: join(homedir(), '.local', 'bin') }
+const paths: InstallPaths & { wakeHook: string } = {
+  bun: process.execPath,
+  ...files,
+  binDir: join(homedir(), '.local', 'bin'),
+}
+// Wake's hooks go in only while wake is on (#119), as config.json says now; read as the hooks read
+// it, so a config.json that does not parse is off, and none is written when there is none.
+const wake = wakeSwitch({ exists: existsSync(configFile()), raw: readConfigFile() })
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const isFolder = (path: string): boolean => {
   try {
@@ -109,15 +120,32 @@ for (const profile of profiles) {
     process.exit(1)
   }
   try {
-    planSettings(read.text === null ? undefined : read.settings, paths, { toast })
+    planSettings(read.text === null ? undefined : read.settings, paths, { toast, wake })
   } catch (err) {
     console.error(`agent-board install: ${profiles.length > 1 ? `${read.file}: ` : ''}${messageOf(err)}`)
     process.exit(1)
   }
 }
 
+/**
+ * claude-tg (#119), while wake is on: a herdr-wake (or the board's) claude-tg already in the
+ * commands' folder is replaced by the board's, which needs no Node; where there is none, none is
+ * written (the panel's Install claude-tg does that), and someone else's is left alone. Said only
+ * when one was written.
+ */
+function refreshLaunchers(): void {
+  try {
+    const { written } = installLaunchers(paths.binDir, { onlyWhereThere: true })
+    if (written.length) console.log(`claude-tg: ${written.join(', ')} take the Telegram key from board tg-key now`)
+  } catch (err) {
+    console.log(`claude-tg: not refreshed: ${messageOf(err)}`)
+  }
+}
+
 try {
   installShims()
+  // claude-tg is wake's Telegram's: with wake off, a herdr-wake one stays as it was.
+  if (wake) refreshLaunchers()
   // --- the agents' skill (how sessions in herdr work with each other), read by Claude on demand
   const skillText = readText(files.skill)
   if (skillText === null) console.log(`skill: ${files.skill} is missing from this copy of the board`)
@@ -137,7 +165,7 @@ try {
           : `skill: ${skill.file}`,
       )
     }
-    const out = installInto(profile.dir, paths, { toast, create })
+    const out = installInto(profile.dir, paths, { toast, create, wake })
     if (!out.ok) throw new Error(out.error)
     console.log(`hooks: SessionStart, UserPromptSubmit, PreToolUse (AskUserQuestion) -> ${paths.hook} in ${out.file}`)
     console.log(
@@ -158,6 +186,13 @@ try {
     } catch (err) {
       console.log(`herdr's hook in ${profile.dir}: not installed: ${messageOf(err).split(/\r?\n/)[0]}`)
     }
+    // Wake's hooks: said only while wake is on; never beside the separate herdr-wake plugin's.
+    if (out.wakeHooks === 'added')
+      console.log(`wake hooks: ListAgents, SendMessage -> ${paths.wakeHook} in ${out.file}`)
+    else if (out.wakeHooks === 'old')
+      console.log(
+        "wake hooks: not added: the separate herdr-wake plugin's are there (Settings → Sleep and wake… → Switch over…)",
+      )
   }
   if (process.platform === 'win32') {
     const delivery = tomlValue(readText(herdrConfigFile()), 'ui.toast', 'delivery') ?? 'off'

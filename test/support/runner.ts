@@ -4,7 +4,7 @@ import { appendFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { Config, Item } from '../../src/core/types.ts'
 
-export type RunnerMode = 'open' | 'send' | 'answer' | 'server' | 'cli' | 'scheduler' | 'write' | 'detached'
+export type RunnerMode = 'open' | 'send' | 'answer' | 'server' | 'cli' | 'scheduler' | 'write' | 'detached' | 'wake-io'
 
 // The input a test handed over: each mode reads the fields its test wrote.
 type RunnerInput = {
@@ -64,13 +64,27 @@ if (mode === 'open') {
   // TEST_LIVE_CONFIG: the config.json the test wrote, read again as it changes (as
   // entrypoints/server.ts has it); each reload is signalled. The port is still the one handed in.
   const live = !!process.env.TEST_LIVE_CONFIG
+  const { liveConfig, readConfigFile } = await import('../../src/adapters/config-file.ts')
+  // Wake stays off in the board's tests unless the test turns it on (with a port of its own): a
+  // config without a `wake` key takes the one in the config.json the test wrote, else `false` once
+  // wake ships, so no test of the board ever asks 127.0.0.1:12421. Before that no key is off
+  // already, and stays no key: the old path's refusals keep today's texts without one (H1).
+  const { WAKE_SHIPPED } = await import('../../src/core/wake/config.ts')
+  const wakeKept = (c: Config): void => {
+    if (Object.hasOwn(c, 'wake')) return
+    const onDisk = readConfigFile()
+    if (onDisk && Object.hasOwn(onDisk, 'wake')) c.wake = onDisk.wake
+    else if (WAKE_SHIPPED) c.wake = false
+  }
   let refresh = (): void => {}
   const cfg = live
-    ? (await import('../../src/adapters/config-file.ts')).liveConfig(() => {
+    ? liveConfig(reloaded => {
+        wakeKept(reloaded)
         send({ reloaded: true })
         refresh()
       })
     : given
+  wakeKept(cfg)
   // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
   if (cfg.language) (await import('../../src/core/lang.ts')).useLanguage(cfg.language)
   // TEST_PROBE_MS: herdr-wake's /status may take that long in the setup check (1.5 s by default).
@@ -81,6 +95,8 @@ if (mode === 'open') {
     deps,
     ...(live && { port: Number(given.port) }),
     ...(probeMs && { gather: () => gatherFacts(deps.cfg, { probeMs }) }),
+    // Never a real wake start: each one is told to the test.
+    wakeStarter: (args = []) => send({ wakeStarted: args }),
   })
   refresh = () => void server.refresh()
   send({ ready: true })
@@ -150,6 +166,14 @@ if (mode === 'open') {
   const forever = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })
   send({ child: process.pid, detached: forever.pid })
   setInterval(() => {}, 1000)
+} else if (mode === 'wake-io') {
+  // One of wake's herdr calls (adapters/wake-herdr.ts) against the fake herdr; its result printed.
+  const { cliWakeHerdr } = await import('../../src/adapters/wake-herdr.ts')
+  const { method, args } = input<{ method: string; args: unknown[] }>()
+  const fn: unknown = Reflect.get(cliWakeHerdr, method)
+  if (typeof fn !== 'function') throw new Error(`No such wake herdr call: ${method}`)
+  const out: unknown = await Reflect.apply(fn, cliWakeHerdr, args)
+  console.log(JSON.stringify(out ?? null))
 } else {
   throw new Error(`Unknown test mode: ${mode}`)
 }

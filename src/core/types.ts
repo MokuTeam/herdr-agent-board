@@ -158,6 +158,8 @@ export interface Config {
   archiveUndoSec?: unknown
   /** How the web board folds a session asleep in "Waiting" (core/fold-mode.ts), as config.json has it. */
   foldWaiting?: unknown
+  /** Wake's section (`true`, `false` or an object), as config.json has it: read through core/wake/config.ts wakeConfig. */
+  wake?: unknown
   /**
    * "terminal": the terminal board in its Terminal style (src/tui/render-terminal.ts), and the web
    * board starting in it in a browser that has not picked a style (core/omarchy-theme.ts
@@ -210,6 +212,8 @@ export interface Item {
   column: ColumnId
   attention: Attention
   sleeping?: boolean
+  /** A sleeper read from the new wake's session file, not answered by a wake (integrations/wake.ts); absent for the others. */
+  fromFile?: true
   agent?: string
   focused?: boolean
   doing?: string

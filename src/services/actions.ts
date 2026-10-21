@@ -1,22 +1,150 @@
 // What the board can do to a session, shared by the terminal board and the web board. Each
 // returns { ok: true } or { ok: false, error } with a message for the user.
+import { homedir } from 'node:os'
 import { agentGet, type HerdrAgent, herdr, herdrText, paneTerminals, snapshot } from '../adapters/herdr.ts'
 import { possibleProfilePanes, provenProfilePanes } from '../adapters/profile-panes.ts'
+import { boardOnPath } from '../adapters/resume-report.ts'
+import { peekWakeSessions } from '../adapters/wake-files.ts'
+import { cliWakeHerdr } from '../adapters/wake-herdr.ts'
 import { inputDraft } from '../core/dialogs/input-box.ts'
 import { itemProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
-import { mayWake, type ProfileSet, profileLabel } from '../core/profiles.ts'
-import type { AgentStatus, Item } from '../core/types.ts'
-import { herdrWakeAnswers } from '../integrations/herdr-wake.ts'
+import { sameDir } from '../core/launch/names.ts'
+import {
+  absoluteProfileDir,
+  defaultProfileDir,
+  mayWake,
+  type ProfileSet,
+  profileForDir,
+  profileLabel,
+} from '../core/profiles.ts'
+import type { AgentStatus, Config, Item } from '../core/types.ts'
+import { wakeConfig } from '../core/wake/config.ts'
+import { wakeOffByKey } from '../core/wake/mode.ts'
+import { canWake, plainProfile } from '../core/wake/rules.ts'
+import { herdrWakeAnswers, type SleepProvider } from '../integrations/herdr-wake.ts'
 import { raiseTerminal } from '../integrations/terminal-window.ts'
+import type { BoardWake } from '../integrations/wake.ts'
 import type { Deps } from './deps.ts'
+import { PROFILE_NOT_PLAIN, type WakeOutcome, wakeInPane } from './wake/pane-ops.ts'
 
-/** `busy` (plus `dialog` or `draft`) says send refused because the session is occupied, not broken. */
+/**
+ * `busy` (plus `dialog` or `draft`) says send refused because the session is occupied, not broken.
+ * A wake refused because wake is slow to answer (it may be waking that very session: nothing was
+ * typed) says `wakeBusy`; the board's own wake that failed on a herdr call says `herdrDown`. A
+ * reminder waits for either without counting the wait (services/scheduler.ts).
+ */
 export type ActionResult =
   | { ok: true }
-  | { ok: false; error: string; busy?: boolean; dialog?: boolean; draft?: boolean }
+  | {
+      ok: false
+      error: string
+      busy?: boolean
+      dialog?: boolean
+      draft?: boolean
+      wakeBusy?: boolean
+      herdrDown?: boolean
+    }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+/** The new wake (integrations/wake.ts), which says whether it answers; herdr-wake's provider does not. */
+const isBoardWake = (w: SleepProvider): w is BoardWake => 'reach' in w
+
+/**
+ * The new wake while the board talks to it (call 4: on, and its start ran), else null: the old
+ * path. With wake off nothing is looked at, so the old path asks nothing new.
+ */
+function newWake(deps: Pick<Deps, 'cfg' | 'wake'>): BoardWake | null {
+  if (!wakeConfig(deps.cfg.wake).enabled) return null
+  const w = deps.wake
+  return isBoardWake(w) ? w : null
+}
+
+/** A sleeper from wake's session file while wake is off: the board wakes it itself (call 28, H1). */
+const offFileSleeper = (cfg: Config, item: Partial<Pick<Item, 'fromFile'>>): boolean =>
+  item.fromFile === true && !wakeConfig(cfg.wake).enabled
+
+/**
+ * The folder and the `--profile` id the board's own wake, and its guard, take for a session: its
+ * profile as the board knows it (core/item-profile.ts), else as wake's session file has it for its
+ * pane (read only: the wake process is the file's one writer); an entry without a folder is the
+ * default folder's, as the old plugin read only that one (services/wake/engine.ts). As the wake
+ * process does, a default folder's id that is not a plain word stays off the line: `board resume`
+ * then takes the folder from the session's card.
+ */
+function wakeTarget(
+  item: Pick<Item, 'pane' | 'profile' | 'profileFolder'> & Partial<Pick<Item, 'session'>>,
+  set: ProfileSet,
+): { dir: string | null; profile: string | null } {
+  const line = (dir: string, id: string | null) => ({
+    dir,
+    profile: id && !plainProfile(id) && sameDir(dir, defaultProfileDir(homedir())) ? null : id,
+  })
+  const own = itemProfile(item, set.list)
+  if (own) return line(own.dir, own.id)
+  if (item.profileFolder) return line(item.profileFolder, profileForDir(set.list, item.profileFolder)?.id ?? null)
+  const entry = item.pane ? peekWakeSessions()[item.pane] : undefined
+  if (!entry || entry.session !== item.session) return { dir: null, profile: null }
+  const dir = entry.profileDir ?? defaultProfileDir(homedir())
+  return line(dir, entry.profile ?? profileForDir(set.list, dir)?.id ?? null)
+}
+
+/**
+ * Call 19 with the board's own or the new wake, which set the session's profile themselves: the
+ * "can wake" rule (safeguard 10): `board` on PATH, the session's profile folder known, its
+ * transcript in that folder; and a profile id the wake line can carry.
+ */
+function canWakeAgain(
+  deps: Deps,
+  item: Pick<Item, 'name' | 'pane' | 'profile' | 'profileFolder'> & Partial<Pick<Item, 'session' | 'cwd'>>,
+  set: ProfileSet,
+): WakeGuard {
+  const { dir, profile } = wakeTarget(item, set)
+  const folder = absoluteProfileDir(dir, homedir())
+  let found: string | null = null
+  try {
+    if (folder && item.session) found = deps.homes.forDir(folder).transcriptPath(item.session, item.cwd ?? '')
+  } catch {} // a folder Windows refuses to read (EPERM) has no transcript the wake could use
+  const why = canWake({ boardOnPath: boardOnPath(), profileDir: folder, transcript: found })
+  if (why) return { ok: false, refused: true, error: t(`err.canWake.${why}`, { name: item.name }) }
+  if (profile !== null && !plainProfile(profile))
+    return { ok: false, refused: true, error: t('err.wake', { name: item.name, why: PROFILE_NOT_PLAIN }) }
+  return { ok: true }
+}
+
+/**
+ * Call 28: the board wakes the session itself, as wake does (services/wake/pane-ops.ts): the
+ * prompt line cleared by the pane's shell, `board resume <id> --profile <id>` run in it, the
+ * development-channels warning confirmed, until Claude is ready; then its 💤 label cleared. The
+ * board does not write wake's session file: `collect` leaves the sleeper out once its pane runs
+ * Claude again, and wake's next round marks it awake. A second wake of it, waiting on the first
+ * (withPane), finds it up: done, as the old router answers `already`.
+ */
+async function wakeHere(deps: Deps, item: Item): Promise<ActionResult> {
+  if (!item.pane) return { ok: false, error: t('err.noPane') }
+  const { pane } = item
+  const { profile } = wakeTarget(item, deps.profiles())
+  const target = { pane, session: item.session ?? '', profile }
+  const timeoutMs = wakeConfig(deps.cfg.wake).wakeTimeoutSec * 1000
+  let outcome: WakeOutcome
+  try {
+    outcome = await wakeInPane(cliWakeHerdr, target, { timeoutMs, log: text => deps.log(`wake: ${text}`) })
+    if (!outcome.ok && outcome.why === 'busy') {
+      const now = await cliWakeHerdr.pane(pane)
+      if (now?.agent === 'claude' && now.agent_session?.value === target.session) return { ok: true }
+    }
+  } catch (err) {
+    return { ok: false, herdrDown: true, error: t('err.wake', { name: item.name, why: messageOf(err) }) }
+  }
+  if (!outcome.ok) return { ok: false, error: t('err.wake', { name: item.name, why: outcome.error }) }
+  await cliWakeHerdr.rename(item.pane, null).catch(() => {})
+  deps.log(`wake: woke ${item.name} in ${item.pane} from the board`)
+  return { ok: true }
+}
+
+/** Wake turned off in config.json, where today's path would refuse too (H1). */
+const wakeIsOff = (): { ok: false; why: string; error: string } => ({ ok: false, why: 'off', error: t('err.wakeOff') })
 
 /**
  * Whether the board may have herdr-wake wake a session, by core/profiles.ts mayWake: the board's
@@ -24,14 +152,18 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
  * pane the board opened in another one. `refused`: the profile guard said no (the reason in
  * `error`); without it herdr did not answer the question. `set`: the profiles with the board's own
  * (the CLI asks for a board in another process: its own env may be the session's, not the board's).
+ * Where the new wake or the board itself does the waking (a sleeper from wake's file while wake is
+ * off, or the new wake on), each sets the profile itself: the guard is the "can wake" rule then
+ * (call 19), which needs the session's id and folder.
  */
 export type WakeGuard = { ok: true } | { ok: false; error: string; refused: boolean }
 
 export async function checkWake(
   deps: Deps,
-  item: Pick<Item, 'name' | 'pane' | 'profile' | 'profileFolder'>,
+  item: Pick<Item, 'name' | 'pane' | 'profile' | 'profileFolder'> & Partial<Pick<Item, 'session' | 'cwd' | 'fromFile'>>,
   set: ProfileSet = deps.profiles(),
 ): Promise<WakeGuard> {
+  if (offFileSleeper(deps.cfg, item) || newWake(deps)) return canWakeAgain(deps, item, set)
   // The board's records first, without asking herdr: the board's own profile in a pane no record
   // puts in another one wakes with the same herdr calls as before profiles.
   let check = mayWake(item, set, new Map(), item.pane ? possibleProfilePanes(new Map([[item.pane, null]])) : new Map())
@@ -56,25 +188,45 @@ export async function checkWake(
 /**
  * Wake a session herdr-wake put to sleep (takes 10 to 30 s), only where it resumes in the
  * session's own profile (checkWake). Focus, a message, a reminder and a restart wake through
- * here, so they are refused alike.
+ * here, so they are refused alike. On the old path herdr-wake at wakeUrl wakes it, as today; the
+ * new wake wakes it while it answers. The board wakes it itself (call 28) when it is a sleeper
+ * from wake's session file and wake is off, or when the new wake is on but nothing listens on its
+ * port; never while the new wake took the question but is slow to answer: it may be waking that
+ * very session, so nothing is typed (`wakeBusy`).
  */
 export async function wake(deps: Deps, item: Item): Promise<ActionResult> {
   const check = await checkWake(deps, item)
   if (!check.ok) return { ok: false, error: check.error }
-  return deps.wake.wake(item)
+  if (offFileSleeper(deps.cfg, item)) return wakeHere(deps, item)
+  const fresh = newWake(deps)
+  if (!fresh) return deps.wake.wake(item)
+  const reach = await fresh.reach()
+  if (reach === 'slow') return { ok: false, wakeBusy: true, error: t('err.wakeBusy', { name: item.name }) }
+  return reach === 'up' ? fresh.wake(item) : wakeHere(deps, item)
 }
 
 /**
- * Whether herdr-wake answers, which a restart needs: { ok } or { ok: false, why, error }, why the
- * reason as it came (empty when wakeUrl is not set) and error a message for the user.
+ * Whether the wake that puts sessions to sleep answers, which a sleep and a restart need: { ok }
+ * or { ok: false, why, error }, error a message for the user. The new wake while the board talks
+ * to it: why 'down' or 'slow'. Else herdr-wake at wakeUrl, as today: why the reason as it came
+ * (empty when wakeUrl is not set); but 'off' when config.json's own `wake` key turns wake off (H1).
  */
 export async function wakeAnswers(
-  deps: Pick<Deps, 'cfg'>,
+  deps: Pick<Deps, 'cfg' | 'wake'>,
 ): Promise<{ ok: true } | { ok: false; why: string; error: string }> {
+  const fresh = newWake(deps)
+  if (fresh) {
+    const reach = await fresh.reach()
+    if (reach === 'up') return { ok: true }
+    return { ok: false, why: reach, error: t('err.wakeNoAnswer', { port: wakeConfig(deps.cfg.wake).port }) }
+  }
   const url = deps.cfg.wakeUrl
-  if (!url) return { ok: false, why: '', error: t('err.restart.noWake') }
+  if (!url) return wakeOffByKey(deps.cfg) ? wakeIsOff() : { ok: false, why: '', error: t('err.restart.noWake') }
   const r = await herdrWakeAnswers(String(url))
-  return r.ok ? r : { ok: false, why: r.why, error: t('err.restart.wakeDown', { url, why: r.why }) }
+  if (r.ok) return r
+  return wakeOffByKey(deps.cfg)
+    ? wakeIsOff()
+    : { ok: false, why: r.why, error: t('err.restart.wakeDown', { url, why: r.why }) }
 }
 
 /**
@@ -115,7 +267,8 @@ export async function readyToSleep(
 /**
  * Put a session to sleep through herdr-wake, as its reaper does after an idle hour: Claude exits,
  * the pane stays as "💤 <name>". Only an idle session; herdr-wake refuses one that works, has
- * background tasks or text in its input box.
+ * background tasks or text in its input box. Refused as wake being off when config.json turns it
+ * off and herdr-wake does not answer at wakeUrl (H1; wakeAnswers).
  */
 export async function sleepSession(deps: Deps, item: Item): Promise<ActionResult> {
   if (item.sleeping) return { ok: true }
@@ -125,6 +278,10 @@ export async function sleepSession(deps: Deps, item: Item): Promise<ActionResult
       ok: false,
       error: t(item.status === 'working' ? 'err.sleepWorking' : 'err.sleepBlocked', { name: item.name }),
     }
+  }
+  if (wakeOffByKey(deps.cfg)) {
+    const up = await wakeAnswers(deps)
+    if (!up.ok) return { ok: false, error: up.error }
   }
   return deps.wake.sleep(item)
 }

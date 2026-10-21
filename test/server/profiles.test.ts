@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { quote } from '../../src/core/install-plan.ts'
 import type { BoardPayload } from '../../src/core/payload.ts'
 import { isBoardPayload } from '../../web/src/api/client.ts'
-import { serveBoard } from '../support/board-server.ts'
+import { serveBoard, unusedPort } from '../support/board-server.ts'
 import { type Child, root, type Sandbox, sandbox, until } from '../support/sandbox.ts'
 
 /** The sandbox's config.json, where the board keeps its settings. */
@@ -783,4 +783,98 @@ test('the board sends each profile’s start command ("" for none) and launch.cl
   expect(profilesIn(box).find(p => p.id === 'work')?.command).toEqual(['cld-work', '--verbose'])
   expect((await post({ op: 'update', id: 'work', command: 'cld-work' })).status).toBe(200)
   expect(profilesIn(box).find(p => p.id === 'work')?.command).toBe('cld-work')
+}, 20_000)
+
+test('the Profiles panel’s Install adds wake’s hooks to that profile only, while wake is on', async () => {
+  const box = await boardWith({ '.claude': 'settings.json', '.claude-work': 'settings.json' })
+  box.state({ 'api snapshot': EMPTY, 'integration install claude': { claudeHook: true } })
+  const dir = (name: string): string => join(box.dir, 'home', name)
+  const profiles = [
+    { id: 'default', title: 'Private', dir: dir('.claude'), color: 'indigo', hidden: false },
+    { id: 'work', title: 'Work', dir: dir('.claude-work'), color: 'teal', hidden: false },
+  ]
+  // Install reads wake's switch from config.json, as the install action does.
+  const writeConfig = (wake: unknown): void => {
+    mkdirSync(join(configOf(box), '..'), { recursive: true })
+    const was = existsSync(configOf(box)) ? JSON.parse(readFileSync(configOf(box), 'utf8')) : {}
+    writeFileSync(configOf(box), JSON.stringify({ ...was, language: 'en', profiles, wake }))
+  }
+  writeConfig({ enabled: true, port: await unusedPort() })
+  const { url } = await serveBoard(box, { language: 'en', profiles })
+  const install = async (id: string): Promise<unknown> =>
+    (
+      await fetch(`${url}/api/profiles`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-board': '1' },
+        body: JSON.stringify({ op: 'install', id }),
+      })
+    ).json()
+  const wakeEntry = (matcher: string, mode: string, timeout: number) => ({
+    matcher,
+    hooks: [
+      {
+        type: 'command',
+        command: `${quote(process.execPath)} ${quote(join(root, 'src', 'entrypoints', 'wake-hook.ts'))} ${mode}`,
+        timeout,
+      },
+    ],
+  })
+  const hooksOf = (name: string): Record<string, unknown[] | undefined> =>
+    JSON.parse(readFileSync(join(dir(name), 'settings.json'), 'utf8')).hooks
+  const isWake = (e: unknown): boolean => JSON.stringify(e).includes('wake-hook.ts')
+
+  expect(await install('work')).toEqual({ ok: true })
+  expect(hooksOf('.claude-work').PreToolUse?.filter(isWake)).toEqual([wakeEntry('SendMessage', 'pre-send', 180)])
+  expect(hooksOf('.claude-work').PostToolUse).toEqual([wakeEntry('ListAgents', 'post-list', 10)])
+  // Only that profile's folder.
+  expect(readdirSync(dir('.claude'))).toEqual(['settings.json'])
+  expect(readFileSync(join(dir('.claude'), 'settings.json'), 'utf8')).toBe('{}')
+
+  // Wake off: Install writes the board's hooks there, no wake hook.
+  writeConfig(false)
+  expect(await install('default')).toEqual({ ok: true })
+  expect(hooksOf('.claude').SessionStart).toBeDefined()
+  expect(readFileSync(join(dir('.claude'), 'settings.json'), 'utf8')).not.toContain('wake-hook.ts')
+  expect(hooksOf('.claude').PostToolUse).toBeUndefined()
+}, 20_000)
+
+test('Install says when it left wake’s hooks out beside the old plugin’s; otherwise its answer is as before', async () => {
+  const box = await boardWith({ '.claude': 'settings.json', '.claude-work 100%': 'settings.json' })
+  box.state({ 'api snapshot': EMPTY, 'integration install claude': { claudeHook: true } })
+  const dir = (name: string): string => join(box.dir, 'home', name)
+  // The separate herdr-wake plugin's hook in the work profile (its install-hooks.mjs wrote it so).
+  const old = `node "${join(box.dir, 'home', '.herdr', 'plugins', 'herdr-wake', 'src', 'hook.mjs')}" pre-send`
+  const oldSettings = {
+    hooks: { PreToolUse: [{ matcher: 'SendMessage', hooks: [{ type: 'command', command: old }] }] },
+  }
+  writeFileSync(join(dir('.claude-work 100%'), 'settings.json'), JSON.stringify(oldSettings))
+  const profiles = [
+    { id: 'default', title: 'Private', dir: dir('.claude'), color: 'indigo', hidden: false },
+    { id: 'work', title: 'Работа 100%', dir: dir('.claude-work 100%'), color: 'teal', hidden: false },
+  ]
+  const writeConfig = (wake: unknown): void => {
+    mkdirSync(join(configOf(box), '..'), { recursive: true })
+    writeFileSync(configOf(box), JSON.stringify({ language: 'en', profiles, wake }))
+  }
+  writeConfig({ enabled: true, port: await unusedPort() })
+  const { url } = await serveBoard(box, { language: 'en', profiles })
+  const install = async (id: string): Promise<unknown> =>
+    (
+      await fetch(`${url}/api/profiles`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-board': '1' },
+        body: JSON.stringify({ op: 'install', id }),
+      })
+    ).json()
+
+  expect(await install('work')).toEqual({ ok: true, wakeHooks: 'old' })
+  // The old hook stays, none of ours beside it.
+  const work = readFileSync(join(dir('.claude-work 100%'), 'settings.json'), 'utf8')
+  expect(work).toContain('hook.mjs')
+  expect(work).not.toContain('wake-hook.ts')
+  // A profile without the old plugin's hooks: as before.
+  expect(await install('default')).toEqual({ ok: true })
+  // Wake off: as before, whatever is there.
+  writeConfig(false)
+  expect(await install('work')).toEqual({ ok: true })
 }, 20_000)

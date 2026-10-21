@@ -38,10 +38,17 @@
 //   board resume <session id> [--profile <id>]   resumes that session here, in the profile its
 //                            card says it ran in (else the one named): what herdr types into a
 //                            restored pane for a session in another profile than the default one
-//                            (core/resume.ts); runs Claude in the foreground, exits with its code
+//                            (core/resume.ts); runs Claude in the foreground, exits with its code;
+//                            in the session's project folder, found from its transcript, when
+//                            this folder is not it
+//   board tg-key             the Telegram topic of this pane's herdr tab, which claude-tg puts in
+//                            TG_KEY (core/wake/topics.ts keyFor); outside herdr, or with a herdr
+//                            that does not answer within 5 s, the folder; always exits 0. For the
+//                            launchers (core/wake/launchers.ts), so not in the usage line
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { readArchiveLog } from '../adapters/archive-store.ts'
 import {
   enqueueReport,
@@ -52,24 +59,25 @@ import {
   reportIdentity,
 } from '../adapters/call-receipts.ts'
 import { readCard, writeCard } from '../adapters/cards.ts'
+import { createClaudeHome, cwdOf } from '../adapters/claude-home.ts'
 import { configFile, editCategories, loadConfig, setRemoteOn } from '../adapters/config-file.ts'
-import { type HerdrPane, snapshot } from '../adapters/herdr.ts'
+import { asSnapshot, type HerdrPane, herdr, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { boardFile } from '../adapters/paths.ts'
 import { runHere } from '../adapters/process.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
-import { loadProfiles } from '../adapters/profiles.ts'
 import { addEntry, askRestart, listEntries, type NewEntry, removeEntry } from '../adapters/schedule-store.ts'
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
 import { CODEX_AGENT } from '../core/codex.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t } from '../core/lang.ts'
-import { type ProfileSet, profileSet, sessionProfile } from '../core/profiles.ts'
+import { type ProfileSet, profileSet, resolveProfileDir, sessionProfile } from '../core/profiles.ts'
 import { type RemoteView, remoteConfig } from '../core/remote.ts'
-import { parseResume, resumePlan } from '../core/resume.ts'
+import { parseResume, projectFolderName, resumeDir, resumePlan } from '../core/resume.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
+import { keyFor, type TopicSnapshot } from '../core/wake/topics.ts'
 import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
 import { shortWhen } from '../core/when-format.ts'
 import { checkWake, wakeAnswers } from '../services/actions.ts'
@@ -77,6 +85,7 @@ import { askArchive, closeDue, getArchived, profileDoubt } from '../services/arc
 import { collect } from '../services/board.ts'
 import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
+import { currentWakeMode } from '../services/wake/mode.ts'
 
 const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | doctor | resume <session id> [--profile <id>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
@@ -317,9 +326,12 @@ function restartState(e: ScheduleEntry): string {
   }
   const why = typeof e.why === 'string' ? e.why : ''
   const held = Object.hasOwn(HELD, why) ? HELD[why] : undefined
-  const refused = e.attempts && why && why !== 'busy' ? ` (herdr-wake refused, tries again: ${why})` : ''
+  const refused = e.attempts && why && why !== 'busy' ? ` (${wakeName()} refused, tries again: ${why})` : ''
   return `once the session is free${held ? ` (waits: ${held})` : refused}`
 }
+
+/** The wake the board talks to, as its lines name it: the board's own (#119), else the separate herdr-wake plugin, as before. */
+const wakeName = (): string => (currentWakeMode(cfg).kind === 'new' ? 'wake' : 'herdr-wake')
 
 function entryLine(e: ScheduleEntry, now: number, withSession: boolean): string {
   const parts =
@@ -414,6 +426,7 @@ async function main(): Promise<void> {
   if (cmd === 'sleep') return sleep()
   if (cmd === 'fork') return fork()
   if (cmd === 'resume') return resume()
+  if (cmd === 'tg-key') return tgKey()
 
   const s = await resolveSession()
   const now = Date.now()
@@ -531,6 +544,19 @@ async function main(): Promise<void> {
 }
 
 /**
+ * What `board restart` and `board sleep` need and do not have, from wakeAnswers: wake, turned off
+ * in config.json (#119), or not answering; else herdr-wake at wakeUrl, as before.
+ */
+function wakeMissing(up: { why: string }): string {
+  if (up.why === 'off') return 'wake, and it is off (Settings → Sleep and wake…)'
+  const mode = currentWakeMode(cfg)
+  if (mode.kind === 'new') return `wake, which does not answer at ${mode.url} (${up.why})`
+  return up.why
+    ? `herdr-wake, which does not answer at ${cfg.wakeUrl} (${up.why})`
+    : "herdr-wake, and wakeUrl in the board's config.json is empty"
+}
+
+/**
  * `board restart [note]`: the session restarted once it is free, a schedule entry of kind
  * 'restart' (services/scheduler.ts). Refused at once without herdr-wake, which does the restart,
  * outside herdr, and when the board would not wake the session again (its profile guard,
@@ -552,14 +578,10 @@ async function restart(s: Session): Promise<void> {
       `board restart works for a session in a herdr pane, and ${target ? `herdr has none for "${target}"` : 'this one runs outside herdr'}; nothing was scheduled`,
     )
   const up = await wakeAnswers(deps)
-  if (!up.ok) {
-    const what = up.why
-      ? `herdr-wake, which does not answer at ${cfg.wakeUrl} (${up.why})`
-      : "herdr-wake, and wakeUrl in the board's config.json is empty"
+  if (!up.ok)
     throw new Error(
-      `a restart needs ${what}; nothing was scheduled. Ask the user to restart this session by hand: /exit in it, then claude --resume ${s.key} in the same pane`,
+      `a restart needs ${wakeMissing(up)}; nothing was scheduled. Ask the user to restart this session by hand: /exit in it, then claude --resume ${s.key} in the same pane`,
     )
-  }
   // The restart ends in a wake: one the board would refuse (another profile than herdr-wake would
   // resume it in, or one not known) is refused now, before anything is scheduled. The session as
   // the board shows it, else as its card says.
@@ -567,7 +589,13 @@ async function restart(s: Session): Promise<void> {
   const shown = await find(s.key)
   const guard = await checkWake(
     deps,
-    shown ?? { name: s.name || s.key.slice(0, 8), pane: s.pane, ...sessionProfile(readCard(s.key), set.list) },
+    shown ?? {
+      name: s.name || s.key.slice(0, 8),
+      pane: s.pane,
+      session: s.key,
+      cwd: s.cwd,
+      ...sessionProfile(readCard(s.key), set.list),
+    },
     set,
   )
   if (!guard.ok) throw new Error(`${guard.error}; nothing was scheduled`)
@@ -613,22 +641,71 @@ async function fork(): Promise<void> {
 /**
  * `board resume <session id> [--profile <id>]`: the session resumed in this terminal, in its own
  * profile (core/resume.ts resumePlan), with Claude in the foreground; exits with Claude's code.
- * herdr types it into a restored pane, so it asks herdr nothing.
+ * herdr types it into a restored pane, so it asks herdr nothing. Claude runs in the session's
+ * project folder (resumeFolder), so a wake into a pane in another folder types no `cd`.
  */
 async function resume(): Promise<void> {
   const o = parseResume(rest)
   const plan = resumePlan({
     ...o,
     card: readCard(o.session),
-    profiles: loadProfiles(),
+    // The list the wake process reads too (services/deps.ts profiles): the listed and found
+    // folders, and the one this env points to.
+    profiles: deps.profiles().list,
     launch: cfg.launch,
     env: process.env,
     home: homedir(),
   })
   const [file = 'claude', ...argv] = plan.argv
-  const ran = await runHere(file, argv, plan.env)
+  const dir = plan.dir ?? resolveProfileDir(process.env.CLAUDE_CONFIG_DIR, homedir())
+  const ran = await runHere(file, argv, plan.env, (await resumeFolder(o.session, dir)) ?? undefined)
   if (ran.error) throw new Error(`${file} did not start: ${messageOf(ran.error)}`)
   process.exit(ran.code)
+}
+
+/**
+ * `board tg-key`: the key claude-tg puts in TG_KEY (#119), as herdr-wake's tg-key.mjs printed it:
+ * the Telegram topic of this pane's tab from one `herdr api snapshot` (5 s at most) when
+ * HERDR_PANE_ID is set, else, or when herdr does not answer, this folder. Prints it; never fails.
+ */
+async function tgKey(): Promise<void> {
+  const pane = process.env.HERDR_PANE_ID || undefined
+  let snap: TopicSnapshot | null = null
+  if (pane) {
+    try {
+      snap = asSnapshot(await herdr(['api', 'snapshot'], 5000))
+    } catch {}
+  }
+  console.log(keyFor(snap, pane, process.cwd()))
+}
+
+/**
+ * Where `board resume` runs Claude (core/resume.ts resumeDir, spec call 29): null, this folder,
+ * when the session's transcript is under the profile's projects/ for it (a pane herdr restored);
+ * else the folder the transcript recorded, found in the profile `dir`'s projects/, when it still
+ * is one. Found nowhere, not to be read, or a profile folder that would be another one there:
+ * null, as before.
+ */
+async function resumeFolder(session: string, dir: string): Promise<string | null> {
+  try {
+    const cwd = process.cwd()
+    const here = join(dir, 'projects', projectFolderName(cwd), `${session}.jsonl`)
+    const transcriptHere = !!statSync(here, { throwIfNoEntry: false })?.isFile()
+    // Else the first projects/*/<id>.jsonl.
+    const file = transcriptHere ? null : createClaudeHome(dir).transcriptPath(session, cwd)
+    const recorded = file ? await cwdOf(file) : null
+    const to = resumeDir({
+      cwd,
+      transcriptHere,
+      recorded,
+      recordedExists: !!recorded && !!statSync(recorded, { throwIfNoEntry: false })?.isDirectory(),
+    })
+    // Claude reads its profile folder from the folder it starts in: one named from this folder (a
+    // relative CLAUDE_CONFIG_DIR, or on Windows `\…` without its drive) may be another one there.
+    return to && resolve(to, dir) === resolve(cwd, dir) ? to : null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -697,13 +774,19 @@ const KEPT: Record<string, string> = {
   draft: 'unsent text in its input box',
   tasks: 'background tasks run',
   gone: 'another session is in its pane now',
-  notClaude: 'not a Claude session, and herdr-wake puts only those to sleep',
+}
+
+/** Why a session stays up, naming the wake that puts sessions to sleep where it is the reason. */
+function keptBy(o: SleepOutcome): string {
+  if (o.why === 'refused') return `${wakeName()} refused: ${o.detail ?? ''}`
+  if (o.why === 'notClaude') return `not a Claude session, and ${wakeName()} puts only those to sleep`
+  return KEPT[o.why ?? ''] ?? o.detail ?? ''
 }
 
 /** One session's line: who, then asleep, or why it stays up. */
 function sleepLine(o: SleepOutcome): string {
   const who = o.name ? `${o.name}${o.pane ? ` (${o.pane})` : ''}` : `"${o.target}"`
-  const held = o.why === 'refused' ? `herdr-wake refused: ${o.detail ?? ''}` : (KEPT[o.why ?? ''] ?? o.detail ?? '')
+  const held = keptBy(o)
   if (o.result === 'asleep') return `${who}: asleep`
   if (o.result === 'already') return `${who}: asleep already`
   if (o.result === 'scheduled')
@@ -727,12 +810,7 @@ async function sleep(): Promise<void> {
       'usage: board sleep <id|name|pane>... [--when-free] [--self]: the sessions to put to sleep (a name with spaces in quotes; --self: this one, once its turn is over)',
     )
   const up = await wakeAnswers(deps)
-  if (!up.ok) {
-    const what = up.why
-      ? `herdr-wake, which does not answer at ${cfg.wakeUrl} (${up.why})`
-      : "herdr-wake, and wakeUrl in the board's config.json is empty"
-    throw new Error(`putting sessions to sleep needs ${what}; nothing was put to sleep`)
-  }
+  if (!up.ok) throw new Error(`putting sessions to sleep needs ${wakeMissing(up)}; nothing was put to sleep`)
   const from = await ownSession()
   if (self && !from)
     throw new Error(

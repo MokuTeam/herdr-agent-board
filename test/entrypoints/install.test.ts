@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import { copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, sep } from 'node:path'
 import { planShims, quote } from '../../src/core/install-plan.ts'
+import { WAKE_SHIPPED } from '../../src/core/wake/config.ts'
+import { unusedPort } from '../support/board-server.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 import { oldSource } from '../web/support/old-app.ts'
 
@@ -18,10 +20,11 @@ function homeOf(box: Sandbox): string {
 }
 
 /**
- * The board's config in the sandbox, unless the test wrote one: no herdr-wake, so the check that
- * ends the install asks no port on this computer.
+ * The board's config in the sandbox, unless the test wrote one: no herdr-wake and the board's own
+ * wake off (#119), so the install writes no wake hook and the check that ends it asks no port on
+ * this computer. The tests of wake's hooks turn it on with a port of their own.
  */
-function boardConfig(box: Sandbox, cfg: Record<string, unknown> = { language: 'en', wakeUrl: '' }): void {
+function boardConfig(box: Sandbox, cfg: Record<string, unknown> = { language: 'en', wakeUrl: '', wake: false }): void {
   const dir = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board')
   if (existsSync(join(dir, 'config.json'))) return
   mkdirSync(dir, { recursive: true })
@@ -154,7 +157,7 @@ test('install in a sandbox: the commands, the hooks once, a backup, and notifica
   assert.equal(after.hooks.SessionStart.length, 1)
   assert.deepEqual(after.hooks.Stop, [{ hooks: [{ type: 'command', command: 'theirs' }] }])
   assert.match(first.out, /commands: board, spawn-agent/)
-  assert.match(first.out, /herdr-wake is off/) // and what that costs, from the check
+  assert.match(first.out, /Sleep and wake is off/) // and how to turn it on, from the check
   assert.match(first.out, /things? need/)
   const second = await run(windows ? '--toast' : '--no-toast')
   assert.equal(second.code, 0, second.out)
@@ -203,7 +206,7 @@ function profilesIn(box: Sandbox, folders: Record<string, string | null>, hidden
     const title = id === 'default' ? 'Private' : id.charAt(0).toUpperCase() + id.slice(1)
     return { id, title, dir, color: ['indigo', 'teal', 'pink'][i], hidden: hidden.includes(id) }
   })
-  boardConfig(box, { language: 'en', wakeUrl: '', profiles })
+  boardConfig(box, { language: 'en', wakeUrl: '', wake: false, profiles })
   return home
 }
 
@@ -442,3 +445,177 @@ test.skipIf(!windows)(
   },
   20_000,
 )
+
+// ------------------------------------------------------------------ wake's hooks (#119)
+
+const wakeEntry = (matcher: string, mode: string, timeout: number) => ({
+  matcher,
+  hooks: [{ type: 'command', command: `${quote(process.execPath)} ${quote(entry('wake-hook.ts'))} ${mode}`, timeout }],
+})
+const SEND = wakeEntry('SendMessage', 'pre-send', 180)
+const LIST = wakeEntry('ListAgents', 'post-list', 10)
+const THEIRS = { hooks: [{ type: 'command', command: 'theirs' }] }
+const THEIR_BASH = { matcher: 'Bash', hooks: [{ type: 'command', command: 'mine' }] }
+const wakeAdded = (home: string, p: string): string =>
+  `wake hooks: ListAgents, SendMessage -> ${entry('wake-hook.ts')} in ${join(home, p, 'settings.json')}\n`
+const WAKE_HELD =
+  "wake hooks: not added: the separate herdr-wake plugin's are there (Settings → Sleep and wake… → Switch over…)\n"
+
+/** config.json's `wake` (undefined: no such key) on top of what profilesIn wrote. */
+function wakeIs(box: Sandbox, wake: unknown): void {
+  const file = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board', 'config.json')
+  const { wake: _, ...cfg } = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+  writeFileSync(file, JSON.stringify(wake === undefined ? cfg : { ...cfg, wake }))
+}
+const wakeOn = async (): Promise<Record<string, unknown>> => ({ enabled: true, port: await unusedPort() })
+type Hooks = Record<string, unknown[] | undefined>
+const hooksIn = (home: string, p: string): Hooks => JSON.parse(read(home, p, 'settings.json')).hooks as Hooks
+/** An entry that runs wake's hook, any copy's. */
+const isWake = (e: unknown): boolean => JSON.stringify(e).includes('wake-hook.ts')
+const wakeOf = (hooks: Hooks, event: string): unknown[] => (hooks[event] ?? []).filter(isWake)
+const othersOf = (hooks: Hooks, event: string): unknown[] => (hooks[event] ?? []).filter(e => !isWake(e))
+
+test('install with wake on writes the two hooks into every shown profile, once, with a backup', async () => {
+  const box = await sandbox()
+  const before = `${JSON.stringify({ hooks: { SessionStart: [THEIRS], PreToolUse: [THEIR_BASH] } }, null, 2)}\n`
+  const home = profilesIn(box, { '.claude': before, '.claude-work': before, '.claude-gamedev': before }, ['gamedev'])
+  wakeIs(box, await wakeOn())
+  const first = await install(box)
+  expect([first.code, first.stderr]).toEqual([0, ''])
+  for (const p of ['.claude', '.claude-work']) {
+    expect(read(home, p, 'settings.json.bak-agent-board')).toBe(before)
+    expect(first.stdout).toContain(wakeAdded(home, p))
+  }
+  const again = await install(box)
+  expect([again.code, again.stderr]).toEqual([0, ''])
+  for (const p of ['.claude', '.claude-work']) {
+    const hooks = hooksIn(home, p)
+    expect(wakeOf(hooks, 'PreToolUse')).toEqual([SEND])
+    expect(othersOf(hooks, 'PreToolUse')[0]).toEqual(THEIR_BASH)
+    expect(hooks.PostToolUse).toEqual([LIST])
+    expect(hooks.SessionStart).toEqual([THEIRS, ours()])
+    expect(again.stdout).toContain(wakeAdded(home, p))
+  }
+  // The hidden profile: nothing.
+  expect(read(home, '.claude-gamedev', 'settings.json')).toBe(before)
+  expect(readdirSync(join(home, '.claude-gamedev'))).toEqual(['settings.json'])
+}, 30_000)
+
+/** Install with config.json's `wake` as given: no wake hook goes in, and ours from before stay as they were. */
+async function noWakeHook(wake: unknown): Promise<void> {
+  const box = await sandbox()
+  const earlier = `${JSON.stringify({ hooks: { PreToolUse: [SEND], PostToolUse: [LIST] } })}\n`
+  const home = profilesIn(box, { '.claude': '{}', '.claude-work': earlier })
+  wakeIs(box, wake)
+  const { code, stdout, stderr } = await install(box)
+  expect([code, stderr]).toEqual([0, ''])
+  expect(stdout).not.toContain('wake hooks')
+  expect(read(home, '.claude', 'settings.json')).not.toContain('wake-hook.ts')
+  expect(hooksIn(home, '.claude').PostToolUse).toBeUndefined()
+  const kept = hooksIn(home, '.claude-work')
+  expect([wakeOf(kept, 'PreToolUse'), kept.PostToolUse]).toEqual([[SEND], [LIST]])
+}
+
+test('with wake off, no wake hook is written', async () => {
+  await noWakeHook(false)
+  await noWakeHook({ enabled: false, port: 9 })
+  // A switch that cannot be read is off (it fails closed).
+  await noWakeHook('off')
+}, 90_000)
+
+test.skipIf(WAKE_SHIPPED)(
+  'with no wake section (wake not shipped yet), no wake hook is written',
+  async () => {
+    await noWakeHook(undefined)
+  },
+  30_000,
+)
+
+// On by default: a section without the switch (only a port of the test's, so the check that ends
+// the install asks none of this computer's) is wake on, and the install writes its hooks.
+test.skipIf(!WAKE_SHIPPED)(
+  'with no switch in the wake section, wake is on: the install writes its hooks into every shown profile',
+  async () => {
+    const box = await sandbox()
+    const home = profilesIn(box, { '.claude': '{}', '.claude-work': '{}' })
+    wakeIs(box, { port: await unusedPort() })
+    const { code, stdout, stderr } = await install(box)
+    expect([code, stderr]).toEqual([0, ''])
+    for (const p of ['.claude', '.claude-work']) {
+      expect(stdout).toContain(wakeAdded(home, p))
+      const hooks = hooksIn(home, p)
+      expect([wakeOf(hooks, 'PreToolUse'), hooks.PostToolUse]).toEqual([[SEND], [LIST]])
+    }
+  },
+  30_000,
+)
+
+test('never beside the old plugin’s hooks', async () => {
+  const box = await sandbox()
+  // As herdr-wake's install-hooks.mjs writes them into ~/.claude/settings.json.
+  const hookMjs = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'herdr-wake', 'hook.mjs')
+  const old = (matcher: string | null, mode: string, timeout: number) => ({
+    ...(matcher && { matcher }),
+    hooks: [{ type: 'command', command: `node "${hookMjs}" ${mode}`, timeout }],
+  })
+  const plugin = {
+    hooks: {
+      PreToolUse: [old('SendMessage', 'pre-send', 180)],
+      PostToolUse: [old('ListAgents', 'post-list', 10)],
+      SessionStart: [old(null, 'session-start', 10)],
+    },
+  }
+  const home = profilesIn(box, { '.claude': JSON.stringify(plugin), '.claude-work': '{}' })
+  wakeIs(box, await wakeOn())
+  const { code, stdout, stderr } = await install(box)
+  expect([code, stderr]).toEqual([0, ''])
+  const hooks = hooksIn(home, '.claude')
+  expect(hooks.PreToolUse?.[0]).toEqual(plugin.hooks.PreToolUse[0])
+  expect(hooks.PostToolUse).toEqual(plugin.hooks.PostToolUse)
+  expect(hooks.SessionStart).toEqual([...plugin.hooks.SessionStart, ours()])
+  expect(read(home, '.claude', 'settings.json')).not.toContain('wake-hook.ts')
+  expect(stdout).toContain(WAKE_HELD)
+  expect(stdout).not.toContain(wakeAdded(home, '.claude'))
+  // Another profile, without them: ours.
+  expect(wakeOf(hooksIn(home, '.claude-work'), 'PreToolUse')).toEqual([SEND])
+  expect(stdout).toContain(wakeAdded(home, '.claude-work'))
+}, 30_000)
+
+test('the every-prompt hook and SessionStart entries are as on main', async () => {
+  // What main's install writes for these events and the status line (run against main's files: the same).
+  const main = () => ({
+    SessionStart: [THEIRS, ours()],
+    UserPromptSubmit: [ours()],
+    statusLine: { type: 'command', command: `${quote(process.execPath)} ${quote(entry('statusline.ts'))}` },
+  })
+  const installed: Record<string, Record<string, unknown>>[] = []
+  for (const wake of [await wakeOn(), false]) {
+    const box = await sandbox()
+    const home = profilesIn(box, {
+      '.claude': JSON.stringify({ hooks: { SessionStart: [THEIRS], UserPromptSubmit: [ours()] } }),
+      '.claude-work': JSON.stringify({ hooks: { SessionStart: [THEIRS] } }),
+    })
+    wakeIs(box, wake)
+    const { code, stderr } = await install(box)
+    expect([code, stderr]).toEqual([0, ''])
+    const each: Record<string, Record<string, unknown>> = {}
+    for (const p of ['.claude', '.claude-work']) {
+      const settings = JSON.parse(read(home, p, 'settings.json'))
+      expect({
+        SessionStart: settings.hooks.SessionStart,
+        UserPromptSubmit: settings.hooks.UserPromptSubmit,
+        statusLine: settings.statusLine,
+      }).toEqual(main())
+      // Everything but wake's entries, to compare wake on with wake off.
+      const hooks: Hooks = {}
+      for (const [event, list] of Object.entries(settings.hooks as Hooks)) {
+        const left = (list ?? []).filter(e => !isWake(e))
+        if (left.length) hooks[event] = left
+      }
+      each[p] = { ...settings, hooks }
+    }
+    installed.push(each)
+  }
+  // With wake on, settings.json is wake off's plus wake's two entries.
+  expect(installed[0]).toEqual(installed[1] as Record<string, Record<string, unknown>>)
+}, 60_000)

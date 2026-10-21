@@ -117,6 +117,7 @@ describe('routes', () => {
       'styles/terminal.css',
       'styles/helpers.css',
       'styles/profiles.css',
+      'styles/wake.css',
       'styles/workspaces.css',
       'styles/fold.css',
       'styles/session-head.css',

@@ -1,8 +1,9 @@
 // The toolbar, one compact row: the title with the board's summary under it while the row has
 // room (else in the title's tooltip), the lanes control, the profile switch (two or more profiles
 // shown), search, categories, the schedule and the archive as small buttons named by their tooltips, Settings
-// (the gear), the usage pill and the live dot; the read-only banner and the column heads under
-// it. A narrower window takes two rows, a phone three (the stylesheet). The lanes control and the
+// (the gear), "Wake stopped" beside "Setup incomplete" when it is so, the usage pill and the live
+// dot; the read-only banner and the column heads under it. A narrower window takes two rows, a
+// phone three (the stylesheet). The lanes control and the
 // profile switch each fold into a pill where the row has no room for all of their segments
 // (hooks/useSegmentFolds.ts). The icon-only buttons' labels carry their text keys (`data-i18n`,
 // as upstream's page wrote them): the stylesheet hides a label beside its icon by that, leaving
@@ -28,6 +29,7 @@ import { NextAttention } from './NextAttention.tsx'
 import { ProfileSwitch } from './ProfileSwitch.tsx'
 import { SetupNote } from './SetupNote.tsx'
 import { Summary } from './Summary.tsx'
+import { WakeNote } from './wake/WakeNote.tsx'
 
 export interface ToolbarProps {
   /** The usage pill, which the popover is placed under and gives the focus back to. */
@@ -39,6 +41,8 @@ export interface ToolbarProps {
   onArchive?: () => void
   /** The quiet "Setup incomplete" note (hooks/useSetupNote.ts). */
   setup?: SetupNoteState
+  /** Opens Settings → Sleep and wake…, from the quiet "Wake stopped" note (components/wake/WakeNote.tsx). */
+  onWake?: () => void
   /** Settings, the gear's menu (hooks/useSettingsMenu.ts). */
   settings?: SettingsMenu
   /** The menus of the lanes control and the profile switch folded into pills (hooks/useSegmentPicks.ts). */
@@ -52,6 +56,7 @@ export function Toolbar({
   onSchedule,
   onArchive,
   setup,
+  onWake,
   settings,
   picks,
 }: ToolbarProps) {
@@ -171,6 +176,7 @@ export function Toolbar({
             </button>
             <NextAttention />
             {setup && <SetupNote setup={setup} />}
+            {onWake && <WakeNote onOpen={onWake} />}
             <Limits anchor={limitsAnchor} />
             <LiveDot />
           </div>
