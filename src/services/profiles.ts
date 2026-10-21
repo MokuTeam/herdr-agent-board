@@ -10,12 +10,12 @@ import { join } from 'node:path'
 import { installSkill } from '../adapters/agents-skill.ts'
 import { configFile, type EditResult, editProfiles, readConfigFile } from '../adapters/config-file.ts'
 import { claudeIntegrationInstall } from '../adapters/herdr.ts'
-import { herdrHookInstalled, hooksInstalled, installInto } from '../adapters/hook-settings.ts'
+import { herdrHookInstalled, hooksInstalled, installInto, wakeHooksIn } from '../adapters/hook-settings.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { ROOT } from '../adapters/paths.ts'
 import { loadProfiles } from '../adapters/profiles.ts'
 import { readText } from '../adapters/setup-facts.ts'
-import type { InstallPaths } from '../core/install-plan.ts'
+import type { InstallPaths, WakeHooksState } from '../core/install-plan.ts'
 import { t } from '../core/lang.ts'
 import type { Profile } from '../core/profiles.ts'
 import { boardFiles } from '../core/setup.ts'
@@ -39,6 +39,9 @@ const isFolder = (path: string): boolean => {
  * Profiles panel offers no Install for it.
  */
 export const hooksInPlace = (dir: string): boolean => hooksInstalled(dir, FILES) && herdrHookInstalled(dir)
+
+/** Wake's hooks in the profile folder <dir> (#119): this copy's both, the old plugin's, or missing; for the Sleep and wake panel's Install. */
+export const wakeHooksInPlace = (dir: string): WakeHooksState => wakeHooksIn(dir, FILES.wakeHook)
 
 /**
  * The board's hooks and status line into the shown profile `id`, running the Bun that runs the

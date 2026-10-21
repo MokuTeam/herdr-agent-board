@@ -12,17 +12,19 @@ import { FILE_TOKEN } from '../adapters/files.ts'
 import { archiveDir, cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
 import { messageGate } from '../core/message-gate.ts'
+import { shownProfiles } from '../core/profiles.ts'
 import { pwaPage } from '../core/pwa.ts'
 import type { SetupFacts } from '../core/setup.ts'
 import { asideCheck } from '../services/aside.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
-import { editProfile, installProfile } from '../services/profiles.ts'
+import { editProfile, installProfile, wakeHooksInPlace } from '../services/profiles.ts'
 import { createRemote } from '../services/remote.ts'
 import { startScheduler } from '../services/scheduler.ts'
 import { createSetupChecks } from '../services/setup-check.ts'
 import { createTerminals, terminalOn } from '../services/terminals.ts'
+import { createWakeControl, startWakeStart } from '../services/wake/control.ts'
 import { createBoardState } from './board-state.ts'
 import { dispatch, json, type Route } from './http.ts'
 import { createRemoteListener } from './remote.ts'
@@ -40,6 +42,7 @@ import { setupRoute } from './routes/setup.ts'
 import { sleepRoute } from './routes/sleep.ts'
 import { staticRoute } from './routes/static.ts'
 import { terminalRoute } from './routes/terminal.ts'
+import { wakeRoutes } from './routes/wake.ts'
 import { createBroadcaster } from './sse.ts'
 import { pruneUploads, uploadRoutes } from './uploads.ts'
 import { createWebBundle } from './web-bundle.ts'
@@ -94,10 +97,12 @@ export interface ServerOptions {
   port?: number
   /** What the setup check reads of this computer (services/setup-check.ts; tests hand in their own). */
   gather?: () => Promise<SetupFacts>
+  /** Starts wake's start (entrypoints/wake-start.ts, with `--again` for Start again); tests hand in a recorder. */
+  wakeStarter?: (args?: string[]) => void
 }
 
 /** `deps.cfg` is the live config (liveConfig): call the returned refresh from its onChange. */
-export async function startServer({ deps, port: asked, gather }: ServerOptions): Promise<BoardServer> {
+export async function startServer({ deps, port: asked, gather, wakeStarter }: ServerOptions): Promise<BoardServer> {
   const { cfg, log } = deps
   // Validate before starting a scheduler or changing any state.
   const cards = cardsDir()
@@ -136,6 +141,17 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
   // The remote mode (core/remote.ts): pairing, and the listener on the Tailscale address while it
   // is on. Off, it reads the config and nothing else.
   const remote = createRemote({ onChange: () => board.publish() })
+  // Sleep and wake (#119): its state line, the panel's switches, and starting wake when it is on but
+  // not running. Off, with no wake file, it asks nothing and starts nothing.
+  const wake = createWakeControl({
+    cfg,
+    starter: wakeStarter ?? startWakeStart,
+    asleep: () => board.items().filter(i => i.sleeping).length,
+    hooks: () =>
+      shownProfiles(deps.profiles().list).map(p => ({ id: p.id, title: p.title, state: wakeHooksInPlace(p.dir) })),
+    onChange: () => board.publish(),
+    log,
+  })
   const routes: Route[] = []
   const guards = { port, token: FILE_TOKEN, stale: () => board.stale() }
   const listener = createRemoteListener({
@@ -157,6 +173,7 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     version: bundle.version,
     push: payload => events.send(payload),
     setup: setup.summary,
+    wake: wake.current,
     mokupilot,
     remote: listener.view,
     aside,
@@ -185,6 +202,8 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     scheduleRoute(refresh),
     // Several sessions put to sleep at once, for agents (services/sleep.ts).
     sleepRoute({ deps, items: board.items, refresh }),
+    // Settings → Sleep and wake… (services/wake/control.ts), for this computer only.
+    ...wakeRoutes(wake),
     // The archive: its list, and archiving, bringing back or removing sessions (services/archive.ts).
     ...archiveRoutes({ deps, launches, items: board.items, find: board.find, refresh }),
     categoriesRoute(),
@@ -264,6 +283,8 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
   if (terminalOn(cfg)) void terminals.prune()
   setup.start()
   void listener.sync()
+  // Wake on but not running (its startup entry did not run, or it ended): started once.
+  void wake.ensure()
 
   return {
     port,
@@ -271,12 +292,15 @@ export async function startServer({ deps, port: asked, gather }: ServerOptions):
     // Called when config.json changes, too: the remote mode follows it.
     async refresh() {
       listener.configChanged()
+      // Turned on in config.json (by hand, or from the panel): started at once.
+      wake.configChanged()
       await board.refresh()
     },
     async close() {
       clearInterval(poll)
       for (const watcher of watchers) watcher.close()
       scheduler.stop()
+      wake.stop()
       terminals.stopAll()
       setup.stop()
       events.close()

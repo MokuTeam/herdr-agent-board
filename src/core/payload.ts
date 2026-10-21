@@ -7,6 +7,7 @@ import type { RemoteView } from './remote.ts'
 import type { ScheduleEntry } from './schedule-rules.ts'
 import type { SetupSummary } from './setup.ts'
 import type { ColumnId, Item, Lang, LaunchView } from './types.ts'
+import type { WakeView } from './wake/view.ts'
 
 /** A lane as the page shows it: the configured category or one a session picked. */
 export interface BoardCategory {
@@ -98,6 +99,8 @@ export interface BoardPayload {
   aside?: boolean
   /** What of the board is not set up on this computer (core/setup.ts); null before the first check. */
   setup?: SetupSummary | null
+  /** Sleep and wake's state line (#119), once wake ships, while it is on, or while its file has sleepers; phones read it too. */
+  wake?: WakeView
   /** Every profile, shown and hidden, in the list's order (core/profiles.ts); a board before profiles sent none. */
   profiles?: BoardProfile[]
   /** The program `launch.claude` types (`claude` when it is unset or not valid): what a profile without a start command types. */
