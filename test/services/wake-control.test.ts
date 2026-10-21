@@ -1,6 +1,6 @@
 // Wake's control on the board (#119): its state for the panel and the payload, its switches, Start,
 // Start again and Log, and starting it once when it is on but not running (safeguard 3).
-import { expect, test } from 'bun:test'
+import { expect, onTestFinished, test } from 'bun:test'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { configFile } from '../../src/adapters/config-file.ts'
@@ -457,10 +457,146 @@ test('view: the Telegram router’s state while wake runs, never from a status f
   expect('telegram' in (await control(on(), { answers: true }).c.view())).toBe(false)
 })
 
-test('view: the separate plugin’s router left on wake’s port is not wake running', async () => {
+/**
+ * A wake on a port of the test's own: the board's (GET /alive answers at once; GET /status, a herdr
+ * snapshot in the wake process, never answers here), or the separate plugin's router (/status
+ * only, a 404 for the rest). The paths asked, in order.
+ */
+function wakeOnPort(kind: 'board' | 'router'): { port: number; asked: string[] } {
+  const asked: string[] = []
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: req => {
+      const path = new URL(req.url).pathname
+      asked.push(path)
+      if (kind === 'board') return path === '/alive' ? Response.json({ pid: 4242 }) : new Promise<Response>(() => {})
+      return path === '/status' ? Response.json({ pid: 4242, sessions: {} }) : new Response(null, { status: 404 })
+    },
+  })
+  onTestFinished(() => server.stop(true))
+  return { port: server.port as number, asked }
+}
+
+test('view: whether wake answers by its /alive, never its /status (a herdr snapshot in the wake process)', async () => {
+  isolatedHome()
+  writeWakeStatus({ state: 'running', at: 5, pid: 4242 })
+  const wake = wakeOnPort('board')
+  let now = 10_000_000
+  const c = createWakeControl({ cfg: on({ port: wake.port }), starter: () => {}, now: () => now })
+  const started = performance.now()
+  expect((await c.view()).state).toBe('running')
+  expect(performance.now() - started).toBeLessThan(1500)
+  // The payload's poll: asked again in the background each time the view is 2 s old.
+  for (let i = 2; i <= 4; i++) {
+    now += 2000
+    c.current()
+    await until(() => wake.asked.length === i)
+  }
+  await until(() => c.current()?.state === 'running')
+  expect(wake.asked).toEqual(['/alive', '/alive', '/alive', '/alive'])
+})
+
+test('view: the separate plugin’s router left on wake’s port is not wake running, and is not asked its /status', async () => {
   isolatedHome()
   writeWakeStatus({ state: 'stopped', at: Date.now() })
-  const status = (answer: unknown) => createWakeControl({ cfg: on(), status: async () => answer, starter: () => {} })
-  expect((await status({ pid: 4242, sessions: {} }).view()).state).toBe('notRunning')
-  expect((await status({ pid: 4242, sessions: {}, telegram: { state: 'off' } }).view()).state).toBe('running')
+  const router = wakeOnPort('router')
+  const c = createWakeControl({ cfg: on({ port: router.port }), starter: () => {} })
+  expect((await c.view()).state).toBe('notRunning')
+  expect(router.asked).toEqual(['/alive'])
+})
+
+test('wake off ("wake": false): no question on any port and no herdr call, whatever the panel asks', async () => {
+  isolatedHome()
+  writeWakeStatus({ state: 'running', at: 5, pid: 4242 })
+  const fetched: string[] = []
+  const realFetch = globalThis.fetch
+  globalThis.fetch = Object.assign(
+    (input: string | URL | Request, init?: RequestInit) => {
+      fetched.push(String(input))
+      return realFetch(input, init)
+    },
+    { preconnect: realFetch.preconnect },
+  )
+  onTestFinished(() => {
+    globalThis.fetch = realFetch
+  })
+  const herdrCalls: string[][] = []
+  const c = createWakeControl({
+    cfg: off(),
+    starter: () => {},
+    herdr: async <T>(args: string[]) => {
+      herdrCalls.push(args)
+      return null as T
+    },
+  })
+  expect((await c.view()).state).toBe('off')
+  c.current()
+  await c.settings()
+  await c.ensure()
+  await c.start()
+  await Bun.sleep(20)
+  expect([fetched, herdrCalls]).toEqual([[], []])
+})
+
+test('onState: when the view’s state changes, never for the same one; and once Switch over ends', async () => {
+  isolatedHome()
+  let answers = false
+  let now = 10_000_000
+  let states = 0
+  const c = createWakeControl({
+    cfg: on(),
+    answers: async () => answers,
+    starter: () => {},
+    now: () => now,
+    onState: () => states++,
+  })
+  // The first look: nothing changed yet.
+  expect((await c.view()).state).toBe('notRunning')
+  now += 2000
+  expect((await c.view()).state).toBe('notRunning')
+  expect(states).toBe(0)
+  answers = true
+  now += 2000
+  expect((await c.view()).state).toBe('running')
+  expect(states).toBe(1)
+  now += 2000
+  await c.view()
+  expect(states).toBe(1)
+  writeWakeStatus({ state: 'held', at: now })
+  now += 2000
+  expect((await c.view()).state).toBe('held')
+  expect(states).toBe(2)
+  // Switch over, even one that stops at once (the board's config.json does not read): once it ended.
+  mkdirSync(configDir(), { recursive: true })
+  writeFileSync(configFile(), '{"wake": ')
+  expect((await c.switchOver()).ok).toBe(false)
+  expect(states).toBe(3)
+})
+
+test('current(): a view that fails is logged, never an unhandled rejection', async () => {
+  isolatedHome()
+  const logged: string[] = []
+  const c = createWakeControl({
+    cfg: on(),
+    answers: async () => true,
+    starter: () => {},
+    onChange: () => {
+      throw new Error('publish failed')
+    },
+    log: text => logged.push(text),
+  })
+  const unhandled: unknown[] = []
+  const seen = (err: unknown): void => {
+    unhandled.push(err)
+  }
+  process.on('unhandledRejection', seen)
+  onTestFinished(() => {
+    process.off('unhandledRejection', seen)
+  })
+  c.current()
+  await until(() => logged.length > 0)
+  await Bun.sleep(10)
+  expect(unhandled).toEqual([])
+  expect(logged[0]).toContain('publish failed')
 })

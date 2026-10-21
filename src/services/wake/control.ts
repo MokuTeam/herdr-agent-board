@@ -2,7 +2,8 @@
 // settings, the switch, Start, Start again and Log, and starting wake once when it is on but not
 // running (safeguard 3): once after the server is up, and when config.json turns it on. The board
 // never waits on wake here: the payload takes the last state at once, asked again in the background
-// at most every 2 s, and with wake off and no wake file there is no state, no question and no start.
+// at most every 2 s (wake's GET /alive, which never waits on herdr, unlike its /status), and with
+// wake off and no wake file there is no state, no question and no start.
 // Turned off, wake ends by itself (it reads config.json); its workspace is then closed when nothing
 // but wake's leftovers (start.ts wakeLeftover) is in it, else only wake's own pane. Starting is
 // wake's start's (entrypoints/wake-start.ts), spawned on its own, never while its record says a
@@ -16,6 +17,7 @@ import { join } from 'node:path'
 import { type EditResult, editWake } from '../../adapters/config-file.ts'
 import { asSnapshot, herdr as herdrCli } from '../../adapters/herdr.ts'
 import { ROOT } from '../../adapters/paths.ts'
+import { wakeAlive } from '../../adapters/wake-api.ts'
 import {
   boardPaneNow,
   peekWakeSessions,
@@ -28,7 +30,7 @@ import {
 import { t } from '../../core/lang.ts'
 import type { Config } from '../../core/types.ts'
 import { telegramTarget, WAKE_SHIPPED, type WakeConfig, wakeConfig } from '../../core/wake/config.ts'
-import { isBoardWakeStatus, STARTING_MS, wakeState } from '../../core/wake/status.ts'
+import { STARTING_MS, type WakeState, wakeState } from '../../core/wake/status.ts'
 import type { SwitchResult, WakeHooksView, WakeSettingsView, WakeView } from '../../core/wake/view.ts'
 import { type BoardPlace, closeOfPane, recordedPane, wakeLeftover, workspaceOf } from './start.ts'
 import { switchOver as takeOver } from './takeover.ts'
@@ -68,9 +70,12 @@ export interface WakeControlOptions {
   cfg: Config
   /** Wake's start; tests hand in a recorder. */
   starter: (args?: string[]) => void
-  /** Wake's GET /status answer within 2 s, or null; by default asked on 127.0.0.1 at the wake section's port. */
+  /** Wake's GET /status answer within 2 s, or null, for the panel's last Telegram error only (it waits on herdr); by default asked on 127.0.0.1 at the wake section's port. */
   status?: () => Promise<unknown>
-  /** Whether wake answers now; by default whether `status` reads as the board's wake's (never the old plugin's router). */
+  /**
+   * Whether wake answers now; by default its GET /alive within 2 s on 127.0.0.1 at the wake
+   * section's port (never waits on herdr; the old plugin's router has no /alive).
+   */
   answers?: () => Promise<boolean>
   /** herdr, for closing wake's workspace once it is turned off (adapters/herdr.ts by default). */
   herdr?: Herdr
@@ -83,6 +88,8 @@ export interface WakeControlOptions {
   claudeJson?: () => unknown
   /** The view changed: the board publishes it. */
   onChange?: () => void
+  /** Wake's state changed from the last view's, or a Switch over ended: the board checks its setup again. */
+  onState?: () => void
   log?: (text: string) => void
   /** How often a wake turned off is asked whether it ended (tests: a few ms). */
   pollMs?: number
@@ -92,7 +99,7 @@ export interface WakeControlOptions {
 
 /** How long a view holds. */
 const VIEW_MS = 2000
-/** How long wake has to answer GET /status. */
+/** How long wake has to answer GET /alive or GET /status. */
 const ANSWER_MS = 2000
 const LOG_LINES = 200
 const POLL_MS = 1000
@@ -170,13 +177,15 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
   const pollMs = o.pollMs ?? POLL_MS
   const settingsNow = (): WakeConfig => wakeConfig(o.cfg.wake)
   const status = o.status ?? (() => askWake(settingsNow().port))
-  const answers = o.answers ?? (async () => isBoardWakeStatus(await status()))
+  const answers = o.answers ?? (() => wakeAlive(settingsNow().port, ANSWER_MS))
   const answering = (): Promise<boolean> => answers().catch(() => false)
   const asleep =
     o.asleep ?? ((): number => Object.values(peekWakeSessions()).filter(s => s.slept_at !== undefined).length)
 
   /** The last view but for its sleepers' count, which follows the board's items at once. */
   let cache: { at: number; view: Omit<WakeView, 'asleep'> } | null = null
+  /** The last view's state, kept when the cache is dropped: a change of it is told (onState). */
+  let lastState: WakeState | null = null
   let computing: Promise<WakeView> | null = null
   let downSince: number | null = null
   let startedAt = Number.NEGATIVE_INFINITY
@@ -229,8 +238,11 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
       ...(telegram && { telegram }),
     }
     const before = cache ? JSON.stringify(cache.view) : null
+    const moved = lastState !== null && lastState !== state
     cache = { at, view }
+    lastState = state
     if (before !== JSON.stringify(view)) o.onChange?.()
+    if (moved) o.onState?.()
     return withAsleep(view)
   }
 
@@ -304,7 +316,7 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
     view,
     current() {
       if (!shown()) return null
-      if (!cache || now() - cache.at >= VIEW_MS) void view()
+      if (!cache || now() - cache.at >= VIEW_MS) view().catch(err => log(`wake's state: ${messageOf(err)}`))
       return cache ? withAsleep(cache.view) : null
     },
     async settings() {
@@ -374,6 +386,7 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
           switching = null
           cache = null
           o.onChange?.()
+          o.onState?.()
         })
       return switching
     },

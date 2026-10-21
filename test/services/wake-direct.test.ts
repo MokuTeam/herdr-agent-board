@@ -151,7 +151,7 @@ test('wake slow to answer: no second wake is typed, and the user is told why', a
   assert.equal(r.body.error, 'Wake is slow to answer and may be waking Report already; try again in a minute')
   assert.equal(r.body.wakeBusy, true)
   assert.deepEqual(paneCalls(box), [])
-  assert.ok(wake.requests().some(q => q.method === 'GET' && q.path === '/status'))
+  assert.ok(wake.requests().some(q => q.method === 'GET' && q.path === '/alive'))
   assert.ok(!wake.requests().some(q => q.method === 'POST'))
 })
 

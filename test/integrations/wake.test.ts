@@ -156,7 +156,7 @@ test("down or off: the file's sleepers, marked fromFile", async () => {
   expect(await w.sleepers()).toEqual([])
 })
 
-test('reach: up, down (ECONNREFUSED), slow (timeout)', async () => {
+test('reach: GET /alive only (never /status, which waits on herdr): up, down (ECONNREFUSED), slow (timeout)', async () => {
   const f = fakeFetch()
   const w = createBoardWake({ url: URL, sessionsFile: sessionsFile({}), fetch: f.fn })
   const reach = async (settleWith: () => void) => {
@@ -165,38 +165,58 @@ test('reach: up, down (ECONNREFUSED), slow (timeout)', async () => {
     settleWith()
     return r
   }
-  expect(await reach(() => f.answer({ pid: 4242, started: 'x', sessions: {}, telegram: { state: 'off' } }))).toBe('up')
-  expect(f.calls.at(-1)?.url).toBe(`${URL}/status`)
-  // The separate herdr-wake plugin's router, still on the port after it was uninstalled: no wake of
-  // the board's (its /status has no Telegram state), so the board wakes the session itself.
-  expect(await reach(() => f.answer({ pid: 4242, started: 'x', sessions: {} }))).toBe('down')
+  expect(await reach(() => f.answer({ pid: 4242 }))).toBe('up')
+  expect(f.calls.at(-1)?.url).toBe(`${URL}/alive`)
   expect(f.calls.at(-1)?.signal).toBeInstanceOf(AbortSignal)
+  // The separate herdr-wake plugin's router, still on the port after it was uninstalled: it has no
+  // /alive (a 404), so it is no wake of the board's, and the board wakes the session itself.
+  expect(await reach(() => f.answer(null, 404))).toBe('down')
   expect(await reach(() => f.fail(refused()))).toBe('down')
   expect(await reach(() => f.fail(new DOMException('The operation timed out.', 'TimeoutError')))).toBe('slow')
   // Another program on the port, or wake stopping: not wake answering.
   expect(await reach(() => f.answer({ hello: 'world' }))).toBe('down')
   expect(await reach(() => f.answer({ ok: false }, 503))).toBe('down')
-  expect(await reach(() => f.answer({ pid: '1', sessions: {} }))).toBe('down')
+  expect(await reach(() => f.answer({ pid: '1' }))).toBe('down')
+  expect(f.calls.map(c => c.url)).toEqual(Array(f.calls.length).fill(`${URL}/alive`))
+})
+
+test('reach: a wake whose /status hangs on herdr while its /alive answers is up at once', async () => {
+  const asked: string[] = []
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: req => {
+      const path = new globalThis.URL(req.url).pathname
+      asked.push(path)
+      return path === '/alive' ? Response.json({ pid: 4242 }) : new Promise<Response>(() => {})
+    },
+  })
+  onTestFinished(() => server.stop(true))
+  const w = createBoardWake({ url: `http://127.0.0.1:${server.port}`, sessionsFile: sessionsFile({}) })
+  const started = performance.now()
+  expect(await w.reach()).toBe('up')
+  expect(performance.now() - started).toBeLessThan(1000)
+  expect(asked).toEqual(['/alive'])
 })
 
 test('Put to sleep goes to the board’s wake only: never to the separate plugin’s router left on the port', async () => {
   const f = fakeFetch()
   const w = createBoardWake({ url: URL, sessionsFile: sessionsFile({}), fetch: f.fn })
   const item = { name: 'Billing', pane: 'w1:p2', session: 's-bill' } as Item
-  // The old router answers /status: refused, nothing posted.
+  // The old router has no /alive: refused, nothing posted.
   const refusedNow = w.sleep(item)
   await settle()
-  f.answer({ pid: 4242, sessions: {} })
+  f.answer(null, 404)
   expect(await refusedNow).toEqual({ ok: false, error: 'Sleep and wake is on but does not answer on port 23456' })
-  expect(f.calls.map(c => c.url)).toEqual([`${URL}/status`])
-  // The board's wake: its /status, then the sleep.
+  expect(f.calls.map(c => c.url)).toEqual([`${URL}/alive`])
+  // The board's wake: its /alive, then the sleep; its /status (a herdr snapshot) never.
   const slept = w.sleep(item)
   await settle()
-  f.answer({ pid: 4242, sessions: {}, telegram: { state: 'off' } })
+  f.answer({ pid: 4242 })
   await settle()
   f.answer({ ok: true })
   expect(await slept).toEqual({ ok: true })
-  expect(f.calls.map(c => c.url)).toEqual([`${URL}/status`, `${URL}/status`, `${URL}/sleep`])
+  expect(f.calls.map(c => c.url)).toEqual([`${URL}/alive`, `${URL}/alive`, `${URL}/sleep`])
 })
 
 test('one provider per url and file, so a forget() reaches the list the server and the scheduler share', () => {

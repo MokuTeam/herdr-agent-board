@@ -71,6 +71,9 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.wake.notAnsweringFix': 'Settings → Sleep and wake… → Start. Its log: {file}',
     'setup.wake.portTaken': 'Port {port} is taken by another program',
     'setup.wake.portTakenFix': 'Set another "port" in the wake section of the board\'s config.json',
+    'setup.wake.portRouter': 'Port {port} is held by the separate herdr-wake plugin’s router (process {pid})',
+    'setup.wake.portRouterFix':
+      'Close the pane of the herdr-wake router (process {pid}), then Settings → Sleep and wake… → Start again',
     'setup.wake.urlUnused': 'wakeUrl in config.json is not used while Sleep and wake is on',
     'setup.wake.starting': 'Sleep and wake is starting',
     // wake's ListAgents and SendMessage hooks in each shown profile, while it is on and not held
@@ -187,6 +190,9 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.wake.notAnsweringFix': 'Настройки → Сон и пробуждение… → Запустить. Журнал: {file}',
     'setup.wake.portTaken': 'Порт {port} занят другой программой',
     'setup.wake.portTakenFix': 'Задай другой "port" в разделе wake в config.json доски',
+    'setup.wake.portRouter': 'Порт {port} держит роутер отдельного плагина herdr-wake (процесс {pid})',
+    'setup.wake.portRouterFix':
+      'Закрой панель роутера herdr-wake (процесс {pid}), затем Настройки → Сон и пробуждение… → Запустить заново',
     'setup.wake.urlUnused': 'wakeUrl в config.json не используется, пока сон и пробуждение включены',
     'setup.wake.starting': 'Сон и пробуждение запускаются',
     // wake's ListAgents and SendMessage hooks in each shown profile, while it is on and not held

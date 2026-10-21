@@ -97,8 +97,12 @@ export function stateLine(view: WakeView, t: Translator, now: number): string {
       return t('wake.state.running', { time: shortWhen(view.since ?? now, t, now), n: view.asleep })
     case 'crashed':
       return t('wake.state.crashed', { n: view.crashes ?? 0, error: firstLine(view.error ?? '') }).trim()
-    case 'portTaken':
-      return t('wake.state.portTaken', { port: view.port })
+    case 'portTaken': {
+      // The separate herdr-wake plugin's router on the port: what wake said of it, which names it
+      // (another port would run two wakes); any other program, the line in the board's language.
+      const said = firstLine(view.error ?? '')
+      return /herdr-wake/.test(said) ? said : t('wake.state.portTaken', { port: view.port })
+    }
     default:
       return t(`wake.state.${view.state}`)
   }
@@ -116,10 +120,13 @@ export function noteShown(view: WakeView | undefined, now: number): boolean {
 
 export type WakeButton = 'start' | 'again' | 'log'
 
-/** The buttons under the state line: Start when not running; Start again and Log once crashed. */
+/**
+ * The buttons under the state line: Start when not running; Start again and Log once crashed or
+ * its port taken (its pane made anew takes the port once what held it is gone).
+ */
 export function wakeButtons(view: WakeView): WakeButton[] {
   if (view.state === 'notRunning') return ['start']
-  if (view.state === 'crashed') return ['again', 'log']
+  if (view.state === 'crashed' || view.state === 'portTaken') return ['again', 'log']
   return []
 }
 

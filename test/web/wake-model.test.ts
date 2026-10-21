@@ -89,6 +89,19 @@ describe('the state line', () => {
     expect(stateLine(view({ state: 'portTaken', since: null, port: 12500 }), en, NOW)).toBe(
       'Port 12500 is taken by another program',
     )
+    // What wake said of it when it names the separate plugin's router; any other program in the
+    // board's language.
+    const router = 'Port 12500 is held by the separate herdr-wake plugin’s router (process 4242)'
+    expect(stateLine(view({ state: 'portTaken', since: null, port: 12500, error: `${router}\nmore` }), en, NOW)).toBe(
+      router,
+    )
+    const other = view({
+      state: 'portTaken',
+      since: null,
+      port: 12500,
+      error: 'Port 12500 is taken by another program',
+    })
+    expect(stateLine(other, ru, NOW)).toBe('Порт 12500 занят другой программой')
     expect(stateLine(view({ state: 'notRunning', since: null }), ru, NOW)).toBe('Не работает')
   })
 })
@@ -115,11 +128,12 @@ describe('the toolbar’s note', () => {
   })
 })
 
-test('the buttons each state offers: Start when not running; Start again and Log once crashed; none otherwise', () => {
+test('the buttons each state offers: Start when not running; Start again and Log once crashed or its port taken; none otherwise', () => {
   expect(wakeButtons(view({ state: 'notRunning' }))).toEqual(['start'])
   expect(wakeButtons(view({ state: 'crashed' }))).toEqual(['again', 'log'])
-  for (const state of ['running', 'starting', 'held', 'portTaken'] as const)
-    expect(wakeButtons(view({ state }))).toEqual([])
+  // Its port taken (by the old plugin's router, say): once that is gone, Start again takes it.
+  expect(wakeButtons(view({ state: 'portTaken' }))).toEqual(['again', 'log'])
+  for (const state of ['running', 'starting', 'held'] as const) expect(wakeButtons(view({ state }))).toEqual([])
   expect(wakeButtons(view({ on: false, state: 'off' }))).toEqual([])
 })
 

@@ -150,6 +150,9 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
     hooks: () =>
       shownProfiles(deps.profiles().list).map(p => ({ id: p.id, title: p.title, state: wakeHooksInPlace(p.dir) })),
     onChange: () => board.publish(),
+    // "Setup incomplete" follows wake's state (held, not running, running) at once, not at the next
+    // check in up to 10 minutes.
+    onState: () => void setup.again().catch(err => log(`setup check: ${messageOf(err)}`)),
     log,
   })
   const routes: Route[] = []

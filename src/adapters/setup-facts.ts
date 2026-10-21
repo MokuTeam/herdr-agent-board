@@ -24,14 +24,18 @@ import {
 } from '../core/setup.ts'
 import type { Config } from '../core/types.ts'
 import { WAKE_SHIPPED, wakeConfig } from '../core/wake/config.ts'
-import { isBoardWakeStatus, wakeState } from '../core/wake/status.ts'
+import { wakeState } from '../core/wake/status.ts'
 import { skillIn } from './agents-skill.ts'
 import { herdrHookOf, readSettings } from './hook-settings.ts'
 import { ROOT } from './paths.ts'
 import { findProfileDirs, inheritedProfileDir } from './profiles.ts'
+import { oldRouterAt, wakeAlive } from './wake-api.ts'
 import { peekWakeSessions, readWakeStatus, wakeLogFile } from './wake-files.ts'
 
 type Env = Record<string, string | undefined>
+
+/** How long a probe waits for an answer by default. */
+const PROBE_MS = 1500
 
 /** herdr's config.toml: under %APPDATA% on Windows, ~/.config elsewhere (as the plugin config). */
 export const herdrConfigFile = (env: Env = process.env, home = homedir()): string =>
@@ -117,7 +121,7 @@ export function findCommand(
 /** GET `url` within `timeoutMs`: whether it answered 2xx, its status, why not; with `withBody`, the JSON it answered (null: none). */
 async function probe(
   url: string,
-  timeoutMs = 1500,
+  timeoutMs = PROBE_MS,
   withBody = false,
 ): Promise<{ ok: boolean; status?: number; error?: string; body?: unknown }> {
   try {
@@ -253,27 +257,29 @@ export function mokupilotCommand(
 
 /**
  * The board's own wake for `board doctor` (#119), once it ships or while config.json turns it on:
- * the kill switch, the status file, whether wake answers GET /status on its port (not asked while
- * off or held; the separate plugin's router left there is no answer of wake's), the sessions asleep (its answer's, else its session file's, only read); null: the
- * line is herdr-wake's at wakeUrl, as before (wake off before it ships is today's setup).
+ * the kill switch, the status file, whether wake answers GET /alive on its port, as the board's
+ * state line asks (never waiting on herdr; not asked while off or held; the separate plugin's
+ * router left there has no /alive), the sessions asleep (its /status answer's while it runs, else
+ * its session file's, only read), and, while another program holds the port, whether that is the
+ * separate plugin's router (its pid); null: the line is herdr-wake's at wakeUrl, as before (wake
+ * off before it ships is today's setup).
  */
-async function wakeFacts(
-  cfg: Partial<Config> | null | undefined,
-  probeMs: number | undefined,
-): Promise<SetupFacts['wakeNew']> {
+async function wakeFacts(cfg: Partial<Config> | null | undefined, probeMs = PROBE_MS): Promise<SetupFacts['wakeNew']> {
   const s = wakeConfig(cfg?.wake)
   if (!WAKE_SHIPPED && !s.enabled) return null
   const status = s.enabled ? readWakeStatus() : null
-  const answer =
-    s.enabled && status?.state !== 'held' ? await probe(`http://127.0.0.1:${s.port}/status`, probeMs, true) : null
-  const body = answer?.ok && isBoardWakeStatus(answer.body) ? (answer.body as Record<string, unknown>) : null
-  const state = wakeState({ on: s.enabled, status, answers: !!body, now: Date.now() })
+  const up = s.enabled && status?.state !== 'held' ? await wakeAlive(s.port, probeMs) : false
+  const state = wakeState({ on: s.enabled, status, answers: up, now: Date.now() })
+  const answer = up ? await probe(`http://127.0.0.1:${s.port}/status`, probeMs, true) : null
+  const body = answer?.ok && isRecord(answer.body) ? answer.body : null
   const sleeping = Array.isArray(body?.sleeping) ? body.sleeping.length : null
+  const router = state === 'portTaken' ? await oldRouterAt(s.port, probeMs) : null
   const wakeUrl = typeof cfg?.wakeUrl === 'string' ? cfg.wakeUrl.trim().replace(/\/+$/, '') : ''
   return {
     state,
     port: s.port,
     ...(state !== 'running' && status?.error !== undefined && { error: status.error }),
+    ...(router !== null && { router }),
     asleep: sleeping ?? Object.values(peekWakeSessions()).filter(e => e.slept_at !== undefined).length,
     log: wakeLogFile(),
     wakeUrlSet: wakeUrl !== '' && wakeUrl !== DEFAULT_CONFIG.wakeUrl,
@@ -285,7 +291,7 @@ export interface GatherOptions {
   env?: Env
   platform?: string
   home?: string
-  /** How long herdr-wake's /status (or the board's wake's) may take before it counts as down. */
+  /** How long herdr-wake's /status (or the board's wake's /alive) may take before it counts as down. */
   probeMs?: number
   /** The profiles whose settings.json is checked; by default the shown ones (config.json's, with the folders found). */
   profiles?: Profile[]
