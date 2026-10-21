@@ -57,6 +57,7 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     // Task 12: the tunnel listener
 
     // Task 13: the board's own files
+    'err.fs.own': 'This file is the board’s own: it is not shown through the domain',
 
     // Task 14: Remote access on the local board
 
@@ -137,6 +138,7 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     // Task 12: the tunnel listener
 
     // Task 13: the board's own files
+    'err.fs.own': 'Это собственный файл доски: через домен он не показывается',
 
     // Task 14: Remote access on the local board
 
