@@ -316,6 +316,98 @@ describe('a permission prompt', () => {
   })
 })
 
+// pi's menu and text input (src/core/dialogs/pi-dialogs.ts): the old page never had them, so the
+// React side alone.
+const PI_MENU: PublicDialog = {
+  kind: 'select',
+  title: 'Git approval needed: git commit',
+  body: ['', 'Why (from Lobster):', 'Commit the fix on its branch', '', 'Command:', 'git commit -m "Fix"'],
+  more: 0,
+  cut: false,
+  options: [
+    { n: 1, label: 'Approve' },
+    { n: 2, label: 'Reject' },
+    { n: 3, label: 'Reject with a note' },
+  ],
+  fingerprint: 'pi1',
+}
+const PI_NOTE: PublicDialog = {
+  kind: 'input',
+  title: 'Note for Lobster',
+  body: [],
+  more: 0,
+  cut: false,
+  value: '',
+  fingerprint: 'pi2',
+}
+
+describe("pi's menu and text input", () => {
+  test('the menu: its own heading, its words, no question line; a click or a digit picks by number', async () => {
+    const react = new NewQuestions({ pointerFine: true })
+    expect(react.mount(held, onScreen(PI_MENU))).toBe(true)
+    const html = serializeNodes(react.markup())
+    expect(html).toContain(translator('en')('why.select'))
+    expect(html).not.toContain(translator('en')('why.permission'))
+    expect(html).toContain('Why (from Lobster):')
+    expect(html).toContain('git commit -m "Fix"')
+    // Approve and Reject by their tone, as Claude's Yes and No.
+    expect(html).toContain('class="qa-opt perm-opt yes" data-perm="1"')
+    expect(html).toContain('class="qa-opt perm-opt no" data-perm="2"')
+    expect(html).toContain('class="qa-opt perm-opt no" data-perm="3"')
+    expect(html).not.toContain('qa-text')
+    expect(html).toContain('data-perm="3"')
+    react.clock += 600
+    await react.click({ kind: 'permit', n: 2 })
+    expect(react.posted).toEqual([
+      { key: 'k2', action: 'permit', body: { session: 'k2', fingerprint: 'pi1', option: 2 } },
+    ])
+    react.answer({ ok: true })
+    await Promise.resolve()
+    expect(react.toasts).toEqual([['Build: Reject', false]])
+    // "Reject with a note": the note's input that comes up next takes over at once.
+    expect(react.mount(held, onScreen(PI_NOTE))).toBe(true)
+    expect(react.desk.view()?.shown.kind).toBe('input')
+    // A menu taller than the terminal says its start is above the screen.
+    const cut = new NewQuestions()
+    cut.mount(held, onScreen({ ...PI_MENU, title: '', cut: true }))
+    expect(serializeNodes(cut.markup())).toContain(translator('en')('qa.cut'))
+    cut.clock += 600
+    expect(await cut.key('1')).toBe(true)
+    expect(cut.posted.at(-1)?.body).toEqual({ session: 'k2', fingerprint: 'pi1', option: 1 })
+  })
+
+  test('the text input: typed, sent with Enter or the button once there is text; digits are text', async () => {
+    const react = new NewQuestions()
+    expect(react.mount(held, onScreen(PI_NOTE))).toBe(true)
+    expect(serializeNodes(react.markup())).toContain(translator('en')('why.input'))
+    react.clock += 600
+    react.desk.enter()
+    await react.click({ kind: 'reply' })
+    expect(react.posted).toEqual([]) // nothing typed yet
+    expect(await react.key('2')).toBe(false)
+    react.desk.write('  use a branch  ')
+    expect(serializeNodes(react.markup())).toContain('value="  use a branch  "')
+    react.desk.enter()
+    await Promise.resolve()
+    expect(react.posted).toEqual([
+      { key: 'k2', action: 'permit', body: { session: 'k2', fingerprint: 'pi2', text: 'use a branch' } },
+    ])
+    // On its way: no second one, and the field holds still.
+    await react.click({ kind: 'reply' })
+    react.desk.write('other')
+    expect(react.posted.length).toBe(1)
+    react.answer({ ok: false, error: 'The input changed' })
+    await Promise.resolve()
+    expect(serializeNodes(react.markup())).toContain('The input changed')
+    // Read only: nothing goes.
+    const read = new NewQuestions({ canMutate: false })
+    read.mount(held, onScreen(PI_NOTE))
+    read.desk.write('x')
+    read.desk.enter()
+    expect(read.posted).toEqual([])
+  })
+})
+
 test('the form in the sheet, with the terminal screen folded away under it', () => {
   const it = asking(THREE)
   const old = new OldQuestions({ pointerFine: false })

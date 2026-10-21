@@ -738,10 +738,11 @@ board payload's `fork`. Code: `src/services/launch/fork.ts`, `web/src/hooks/useF
 
 ## When a card is under "Needs me"
 
-1. A dialog holds the session in the terminal (permission prompt, question form, MCP input):
-   herdr reports `blocked` from its own screen rules. The card shows the question or the
-   permission asked; the sheet shows the screen, and a question form or a permission prompt can
-   be answered from it.
+1. A dialog holds the session in the terminal (permission prompt, question form, MCP input, a pi
+   extension's menu or text input): herdr reports `blocked` from its own screen rules, or from pi
+   when an extension says so (`herdr:blocked`). The card shows the question or the permission
+   asked; the sheet shows the screen, and a question form, a permission prompt or pi's menu or
+   text input can be answered from it.
 2. The agent ran `board ask "<question>"` before ending its turn. Cleared by the hook as soon as
    you write to that session.
 3. Its last message ends with a question and you have not written since. "No reply needed" on
@@ -769,6 +770,18 @@ A permission prompt ("Do you want to proceed?") shows its title, what the tool w
 terminal's own choices (Yes, Yes and don't ask again, No...), read from the screen as drawn; one
 click or digit picks one. A very long prompt is cut on the board with a mark ("12 more lines: see
 the terminal screen"), never silently.
+
+In a pane herdr says runs [pi](https://pi.dev), the board reads pi's dialogs instead
+(`src/core/dialogs/pi-dialogs.ts`, pi 1.3): the menu an extension asks with `ctx.ui.select` or
+`ctx.ui.confirm` (a git guard's "Approve / Reject / Reject with a note"), and its text input
+(`ctx.ui.input`). The sheet shows the menu like a permission prompt, its title and text as drawn
+and its options; a click or a digit picks one. No digit picks in pi's menu, so the board moves the
+cursor one row at a time with the arrow keys, waits after each until the screen shows the same
+menu with the cursor there, and presses Enter only on the option picked. The text input gets a
+field: the board clears pi's field (End, Ctrl+U), types the line and presses Enter once the field
+shows it (its end, for a line longer than the field). A dialog taller than the pane shows only
+its end on the screen; the sheet says its start is above the terminal screen. Claude Code's
+dialogs are never looked for in a pi pane, nor pi's in any other.
 
 The board answers by pressing keys in the pane through herdr (`herdr agent send-keys` with the
 pane id, and `herdr pane send-text` for an own answer: `agent prompt` refuses a pane in a
@@ -804,10 +817,13 @@ What keeps it from pressing keys in the wrong place:
 - The review screen must list exactly the board's answers, with "Submit answers" as its first
   choice, before that is pressed.
 - Done needs proof, which a blank or half-drawn screen is not: the transcript holds the answer,
-  or two reads in a row show Claude's input box without the dialog, or a whole other dialog.
+  or two reads in a row show the agent's input box without the dialog (for pi: its two rules at
+  the bottom of the screen, a short footer under them), or a whole other dialog.
 - A permission prompt is pressed only while the screen shows the prompt the user saw: a
   fingerprint of its title, text, question and choices exactly as drawn, every character and
-  space (`rm -rf build_*` is not `rm -rf build`); where the cursor stands does not count.
+  space (`rm -rf build_*` is not `rm -rf build`); where the cursor stands does not count. The
+  same for pi's menu and text input, before every key; neither does what pi's field holds, nor a
+  timed dialog's countdown ("(12s)").
 - On the page, a click or a digit in the first half second after another dialog took the place
   of the one on show is not taken (permission prompts can come back to back), nor is a held key.
   A form that went through stays as "Answered" until herdr sees the session move on (at most 10
@@ -818,10 +834,15 @@ What keeps it from pressing keys in the wrong place:
 
 `POST /api/session/<key>/answer` with `{ session, toolUseId, answers: [{ options: [labels],
 other }] }` and `POST /api/session/<key>/permit` with `{ session, fingerprint, option }` (the
-fingerprint comes with the sheet's data); both need the `X-Board` header. Code:
-`src/core/dialogs/questions.ts` (the questions, the screen, the keys), `src/services/answer.ts` (the
-steps through herdr), `web/src/components/questions/` and `web/src/models/question-model.ts` (the
-form).
+fingerprint comes with the sheet's data), or `{ session, fingerprint, text }` for pi's text
+input; both need the `X-Board` header. The session's detail (`GET /api/session/<key>`) has the
+dialog on its screen as `dialog`: `{ kind: 'permission', title, body, more, prompt, options: [{ n,
+label }], fingerprint }`, `{ kind: 'select', title, body, more, cut, options, fingerprint }` (pi's
+menu), `{ kind: 'input', title, body, more, cut, value, fingerprint }` (pi's text input),
+`{ kind: 'question', question }`, `{ kind: 'review' }`, or null. Code:
+`src/core/dialogs/questions.ts` (the questions, the screen, the keys), `src/core/dialogs/pi-dialogs.ts`
+(pi's), `src/services/answer.ts` (the steps through herdr), `web/src/components/questions/` and
+`web/src/models/question-model.ts` (the form).
 
 ## Side questions
 
