@@ -1,10 +1,12 @@
 // A launch request from the new-session window, checked before anything runs: the name, a folder
-// that is there, a lane the board has, a workspace herdr takes, the first message, a branch, and
-// the Claude profile it starts in, refused when the board cannot be sure of it.
+// that is there, a lane the board has, a workspace herdr takes, the first message, a branch, the
+// Claude profile it starts in, refused when the board cannot be sure of it, and the agent it
+// starts as (core/launch/agents.ts), one the board offers.
 import { resolvePath } from '../../adapters/files.ts'
 import { SLOW, statOf } from '../../adapters/folders.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
+import { CLAUDE_AGENT, type LaunchAgent, type LaunchAgentId, piCommand } from '../../core/launch/agents.ts'
 import { checkBranch, checkName, NAME_MAX, UNSAFE_CHARS } from '../../core/launch/names.ts'
 import { profileCommand } from '../../core/launch/spawn-args.ts'
 import { type LaunchTarget, launchTarget, type ProfileSet } from '../../core/profiles.ts'
@@ -43,6 +45,8 @@ export interface LaunchRequest {
   profileArgs: string[]
   /** The profile's start command, typed instead of `launch.claude`; null for none, or a launcher that types none. */
   profileCommand: string[] | null
+  /** The agent the board's own launcher starts: the one the request picked, else the board's default. */
+  agent: LaunchAgentId
 }
 
 export type CheckResult = { ok: true; launch: LaunchRequest } | { ok: false; field: string; error: string }
@@ -56,7 +60,10 @@ export type ParentFacts = { key: string } & Pick<Item, 'name' | 'profile' | 'pro
  * `typesCommand`: the launcher types a command into the tab (the board's own spawn-agent), so the
  * profile's start command is read and checked; other launchers never read it. `parent`: the card
  * the start keeps the profile of, given by the server in place of the body's (a session coming
- * back from the archive, which is not among the board's items).
+ * back from the archive, which is not among the board's items). `agents`: the agents a start may
+ * pick (core/launch/agents.ts launchAgents), asked only when the request names one or `standard`
+ * asks; `standard`: the agent of a request that names none (agents.ts defaultAgent), Claude Code
+ * when not given; `pi`: config's `launch.pi`, checked when pi is the one.
  */
 export async function checkRequest(
   body: unknown,
@@ -66,12 +73,18 @@ export async function checkRequest(
     items = [],
     typesCommand = false,
     parent: heldTo,
+    agents = () => [],
+    standard = () => CLAUDE_AGENT,
+    pi,
   }: {
     categories?: Set<string> | null
     profiles: ProfileSet
     items?: Item[]
     typesCommand?: boolean
     parent?: ParentFacts
+    agents?: () => readonly LaunchAgent[]
+    standard?: (offered: () => readonly LaunchAgent[]) => LaunchAgentId
+    pi?: unknown
   },
 ): Promise<CheckResult> {
   const fail = (field: string, key: string, vars?: Vars): CheckResult => ({ ok: false, field, error: t(key, vars) })
@@ -138,6 +151,22 @@ export async function checkRequest(
       return { ok: false, field: 'profile', error: err instanceof Error ? err.message : String(err) }
     }
   }
+  // The agent: the one the request names, which the board must offer; else the board's default.
+  // pi's command must be one the tab's shell can type.
+  let agent: LaunchAgentId
+  const asked = given(b.agent)
+  if (asked !== undefined) {
+    const offered = agents()
+    const pick = offered.find(a => a.id === asked)
+    if (!pick) return fail('agent', offered.length ? 'launch.err.agent' : 'launch.err.agentLauncher', { id: asked })
+    agent = pick.id
+  } else agent = standard(agents)
+  if (agent !== CLAUDE_AGENT)
+    try {
+      piCommand(pi)
+    } catch (err) {
+      return { ok: false, field: 'agent', error: err instanceof Error ? err.message : String(err) }
+    }
   return {
     ok: true,
     launch: {
@@ -156,6 +185,7 @@ export async function checkRequest(
       parent,
       profileArgs: (profile.args ?? []).filter((a): a is string => typeof a === 'string'),
       profileCommand: profileCommandWords,
+      agent,
     },
   }
 }

@@ -76,7 +76,9 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
    `["claude", "--dangerously-skip-permissions"]` (your call: Claude then runs every tool without
    asking), a model, or a launcher of your own, such as tg-mcp's
    [`claude-tg`](https://github.com/Eithery-rc/tg-mcp#herdr-launcher), which gives each herdr tab
-   its own Telegram topic. See [New sessions](#new-sessions).
+   its own Telegram topic. See [New sessions](#new-sessions). Working in [pi](#pi)? With `pi` on
+   the board's PATH the "New session" window offers Claude Code or pi; `"default": "pi"` in
+   `launch` makes pi the one it starts on.
 4. **[herdr-wake](herdr-wake/)** (optional, worth it with many sessions; a plugin of its own in
    this repository, on Node.js 20 or newer). It puts sessions that sat idle for an hour to sleep
    and wakes them for a message, a reminder or a click; with
@@ -509,6 +511,35 @@ account. herdr says which agent came up: the board names a pi session with `/nam
 first message, and puts the lane and the profile it is meant for on pi's card. spawn-agent adds
 ` kind=pi` to the line it prints.
 
+**pi or Claude Code, start by start.** With the board's own launcher (no `launch.command` or
+`launch.agent`), a launch request may name the agent it starts as: `"agent": "pi"` in
+`POST /api/launch`, which the "New session" window (the web board's and the phone app's) sends when
+you pick pi in its Agent row. The board offers pi (`agents` in `GET /api/launch/options`; the row
+shows only then) when `launch.pi` is set in config.json or `pi` is on the board's PATH. `launch.pi`
+is what it types for such a start: a program, or a list of the program and its arguments
+(`["pi", "--model", "claude-bridge/claude-opus-5-5"]`), `pi` when unset; the profile's start command
+and `args` are Claude's, so they are left out, while the profile's env is kept (pi's claude-bridge
+runs in that profile's account). The session id, the name, the first message, the lane and the card
+go as above. `spawn-agent --agent pi` does the same for an agent.
+
+Which one the window starts on is `launch.default`: `"pi"` or `"claude"` (Claude Code when unset,
+or when the board does not offer the agent it names). `GET /api/launch/options` answers it as
+`agent`, and a request that names no agent starts as it. A failed launch started again keeps its own
+agent. Return and Fork are Claude Code's whatever the default (pi resumes and forks no Claude
+session), and so is `spawn-agent` without `--agent`. What each agent is started with:
+
+```json
+"launch": {
+  "default": "pi",
+  "claude": ["claude", "--dangerously-skip-permissions"],
+  "pi": ["pi", "--model", "claude-bridge/claude-opus-5-5"]
+}
+```
+
+`launch.claude` is for profiles without a start command of their own; a profile's start command
+(the Profiles panel's "Start command") wins over it for its starts, `claude --dangerously-skip-permissions`
+too.
+
 Not for pi (yet): the archive and Return, herdr-wake's sleep, wake and restart, the session's own
 name from the board's rename (the card's name works), question forms (pi has none: answer in a
 message), MokuPilot calls, and the status line's context percentage and usage windows.
@@ -553,7 +584,8 @@ How it starts, by `launch` in config.json:
   (from before the board had its own launcher) are `claude`'s arguments. `launch.timeoutSec`
   (120) is how long it waits for Claude to be ready. When Claude stops at a dialog before that, the card
   says so: the folder trust as below, any other in herdr; the board then names the session and
-  sends the first message.
+  sends the first message. A start that asks for pi types `launch.pi` instead, and
+  `launch.default` says which of the two a start that names none is ([pi](#pi)).
 - `launch.agent`: through herdr itself. A tab in the chosen workspace (or a new workspace),
   `herdr agent start <name> --kind <agent> --pane <tab's pane> -- --session-id <id>` (the id for
   `claude` only), then `/rename <name>` and the first message. When Claude stops at a dialog, the
@@ -625,11 +657,13 @@ puts it on PATH; it is `bun src/entrypoints/spawn-agent.ts`):
 spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
             [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
             [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>]
-            [--pane <herdr pane id>] [--profile <id>]
+            [--pane <herdr pane id>] [--profile <id>] [--agent claude|pi]
 ```
 
 PowerShell's spelling works too: `-Name`, `-Cwd`, `-Label`, `-BriefFile`, `-Brief`, `-Workspace`,
-`-TimeoutSec`, `-Profile`. It opens a tab in the workspace (inside herdr the current one, from
+`-TimeoutSec`, `-Profile`, `-Agent`. `--agent pi` types `launch.pi` (default `pi`) instead of the
+profile's `command` and `args` or `launch.claude`, for a new session only (no `--resume` or
+`--fork`); see [pi](#pi). It opens a tab in the workspace (inside herdr the current one, from
 `HERDR_WORKSPACE_ID`), labelled with `--label` or the name, and types the profile's `command`, or
 `launch.claude`, into it (with `--session-id` when given). Once herdr sees Claude ready, it gives
 the agent a herdr name to address it by (the name in `[a-z0-9_-]`, Cyrillic spelled in Latin, `-2`
@@ -738,10 +772,11 @@ board payload's `fork`. Code: `src/services/launch/fork.ts`, `web/src/hooks/useF
 
 ## When a card is under "Needs me"
 
-1. A dialog holds the session in the terminal (permission prompt, question form, MCP input):
-   herdr reports `blocked` from its own screen rules. The card shows the question or the
-   permission asked; the sheet shows the screen, and a question form or a permission prompt can
-   be answered from it.
+1. A dialog holds the session in the terminal (permission prompt, question form, MCP input, a pi
+   extension's menu or text input): herdr reports `blocked` from its own screen rules, or from pi
+   when an extension says so (`herdr:blocked`). The card shows the question or the permission
+   asked; the sheet shows the screen, and a question form, a permission prompt or pi's menu or
+   text input can be answered from it.
 2. The agent ran `board ask "<question>"` before ending its turn. Cleared by the hook as soon as
    you write to that session.
 3. Its last message ends with a question and you have not written since. "No reply needed" on
@@ -769,6 +804,18 @@ A permission prompt ("Do you want to proceed?") shows its title, what the tool w
 terminal's own choices (Yes, Yes and don't ask again, No...), read from the screen as drawn; one
 click or digit picks one. A very long prompt is cut on the board with a mark ("12 more lines: see
 the terminal screen"), never silently.
+
+In a pane herdr says runs [pi](https://pi.dev), the board reads pi's dialogs instead
+(`src/core/dialogs/pi-dialogs.ts`, pi 1.3): the menu an extension asks with `ctx.ui.select` or
+`ctx.ui.confirm` (a git guard's "Approve / Reject / Reject with a note"), and its text input
+(`ctx.ui.input`). The sheet shows the menu like a permission prompt, its title and text as drawn
+and its options; a click or a digit picks one. No digit picks in pi's menu, so the board moves the
+cursor one row at a time with the arrow keys, waits after each until the screen shows the same
+menu with the cursor there, and presses Enter only on the option picked. The text input gets a
+field: the board clears pi's field (End, Ctrl+U), types the line and presses Enter once the field
+shows it (its end, for a line longer than the field). A dialog taller than the pane shows only
+its end on the screen; the sheet says its start is above the terminal screen. Claude Code's
+dialogs are never looked for in a pi pane, nor pi's in any other.
 
 The board answers by pressing keys in the pane through herdr (`herdr agent send-keys` with the
 pane id, and `herdr pane send-text` for an own answer: `agent prompt` refuses a pane in a
@@ -804,10 +851,13 @@ What keeps it from pressing keys in the wrong place:
 - The review screen must list exactly the board's answers, with "Submit answers" as its first
   choice, before that is pressed.
 - Done needs proof, which a blank or half-drawn screen is not: the transcript holds the answer,
-  or two reads in a row show Claude's input box without the dialog, or a whole other dialog.
+  or two reads in a row show the agent's input box without the dialog (for pi: its two rules at
+  the bottom of the screen, a short footer under them), or a whole other dialog.
 - A permission prompt is pressed only while the screen shows the prompt the user saw: a
   fingerprint of its title, text, question and choices exactly as drawn, every character and
-  space (`rm -rf build_*` is not `rm -rf build`); where the cursor stands does not count.
+  space (`rm -rf build_*` is not `rm -rf build`); where the cursor stands does not count. The
+  same for pi's menu and text input, before every key; neither does what pi's field holds, nor a
+  timed dialog's countdown ("(12s)").
 - On the page, a click or a digit in the first half second after another dialog took the place
   of the one on show is not taken (permission prompts can come back to back), nor is a held key.
   A form that went through stays as "Answered" until herdr sees the session move on (at most 10
@@ -818,10 +868,15 @@ What keeps it from pressing keys in the wrong place:
 
 `POST /api/session/<key>/answer` with `{ session, toolUseId, answers: [{ options: [labels],
 other }] }` and `POST /api/session/<key>/permit` with `{ session, fingerprint, option }` (the
-fingerprint comes with the sheet's data); both need the `X-Board` header. Code:
-`src/core/dialogs/questions.ts` (the questions, the screen, the keys), `src/services/answer.ts` (the
-steps through herdr), `web/src/components/questions/` and `web/src/models/question-model.ts` (the
-form).
+fingerprint comes with the sheet's data), or `{ session, fingerprint, text }` for pi's text
+input; both need the `X-Board` header. The session's detail (`GET /api/session/<key>`) has the
+dialog on its screen as `dialog`: `{ kind: 'permission', title, body, more, prompt, options: [{ n,
+label }], fingerprint }`, `{ kind: 'select', title, body, more, cut, options, fingerprint }` (pi's
+menu), `{ kind: 'input', title, body, more, cut, value, fingerprint }` (pi's text input),
+`{ kind: 'question', question }`, `{ kind: 'review' }`, or null. Code:
+`src/core/dialogs/questions.ts` (the questions, the screen, the keys), `src/core/dialogs/pi-dialogs.ts`
+(pi's), `src/services/answer.ts` (the steps through herdr), `web/src/components/questions/` and
+`web/src/models/question-model.ts` (the form).
 
 ## Side questions
 
@@ -1444,9 +1499,11 @@ board payload, new on every start, which only the board's own page can read. Tex
 raw, and raw responses carry a CSP that runs no script.
 
 New sessions (`src/services/launch/`, `web/src/components/launch/`): `GET /api/launch/options` (herdr's workspaces,
-recent folders, the launcher), `POST /api/fs/dirs` (the subfolders of a folder, or the drives),
-`POST /api/launch` (starts one in the background; its progress is `launches` in the board
-payload), `POST /api/launch/<id>/dismiss` and `/focus`. `POST /api/launch` also needs the page's
+recent folders, the launcher, and `agents`: the agents a start may name, `[{ id, title }]` with
+`claude` first and `pi` when it is offered, none with `launch.command` or `launch.agent`; `agent`:
+the one a start that names none starts as, `launch.default` when offered), `POST /api/fs/dirs` (the subfolders of a folder, or the drives),
+`POST /api/launch` (starts one in the background; `agent`, optional, one of `agents`, else refused
+with `field: "agent"`; its progress is `launches` in the board payload, each with its `agent`), `POST /api/launch/<id>/dismiss` and `/focus`. `POST /api/launch` also needs the page's
 own `Origin` when the browser sends one, and fresh herdr data like every action through herdr.
 Renaming: `POST /api/session/<key>/rename` with `{ name, claude }`. Restarting:
 `POST /api/session/<key>/restart` (a schedule entry, see [Restart](#restart); `{ id, again }`).

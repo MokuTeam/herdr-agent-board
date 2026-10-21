@@ -3,12 +3,17 @@
 // before use; the folder picker and the options read any answer's body, as the old page did.
 import type { Translator } from '../../../src/core/types.ts'
 import type { DirListing, LauncherInfo } from '../models/launch.ts'
+import type { AgentOption } from '../models/launch-agent.ts'
 import type { StartBody, WorkspaceOption } from '../models/launch-form.ts'
 import { ApiError, api, errorText, isReply, postJson } from './client.ts'
 
 /** What the window offers (GET /api/launch/options). */
 export interface LaunchOptions {
   launcher: LauncherInfo
+  /** The agents a start may pick (Claude Code first); none from a board before the choice, or a launcher of the config's own. */
+  agents: AgentOption[]
+  /** The one a start that names none starts as: the board's default. */
+  agent: string
   workspaces: WorkspaceOption[]
   /** The workspace herdr has the focus in. */
   focused: string
@@ -21,6 +26,8 @@ export interface LaunchOptions {
 /** What the window offers before the server said: herdr opening Claude, nothing else. */
 export const NO_OPTIONS: LaunchOptions = {
   launcher: { kind: 'herdr', agent: 'claude' },
+  agents: [],
+  agent: 'claude',
   workspaces: [],
   focused: '',
   board: '',
@@ -37,12 +44,17 @@ function launcherOf(value: unknown): LauncherInfo | null {
   return agent === undefined ? null : { kind: 'herdr', agent }
 }
 
+const isAgent = (value: unknown): value is AgentOption =>
+  isReply(value) && typeof value.id === 'string' && !!value.id && typeof value.title === 'string'
+
 export function asOptions(value: unknown): LaunchOptions | null {
   if (!isReply(value) || !Array.isArray(value.workspaces)) return null
   const launcher = launcherOf(value.launcher)
   if (!launcher) return null
   return {
     launcher,
+    agents: Array.isArray(value.agents) ? value.agents.filter(isAgent).map(a => ({ id: a.id, title: a.title })) : [],
+    agent: text(value.agent) ?? 'claude',
     workspaces: value.workspaces.filter(isReply).map(w => ({ id: String(w.id ?? ''), label: text(w.label) })),
     focused: text(value.focused) ?? '',
     board: text(value.board) ?? '',

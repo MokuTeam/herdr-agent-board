@@ -1,31 +1,37 @@
 // Answers a dialog that holds a session in its terminal, from the board: a question form
-// (AskUserQuestion) or a permission prompt. The choice becomes key presses in the pane through
-// herdr, one step at a time, and every step waits until the screen shows what that key should
-// have done (core/dialogs/questions.ts says how the dialog behaves). Nothing is pressed into a pane that
-// shows another session, another dialog, or a question already answered; anything unexpected
-// stops it and the user is told where it stopped.
+// (AskUserQuestion) or a permission prompt in Claude Code, a menu or a text input in pi. The
+// choice becomes key presses in the pane through herdr, one step at a time, and every step waits
+// until the screen shows what that key should have done (core/dialogs/questions.ts and
+// pi-dialogs.ts say how the dialogs behave). Nothing is pressed into a pane that shows another
+// session, another dialog, or a question already answered; anything unexpected stops it and the
+// user is told where it stopped.
 
 import { agentGet, herdr, herdrText } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { inputDraft } from '../core/dialogs/input-box.ts'
+import { piEditor } from '../core/dialogs/pi-dialogs.ts'
 import type { FormQuestion } from '../core/dialogs/question-form.ts'
 import {
   type AnswerPick,
   answerText,
   arrows,
+  cleanOther,
   cursorRow,
   type Dialog,
+  type InputDialog,
   onQuestion,
   type PermissionDialog,
   parseDialog,
   type QuestionDialog,
   resolveAnswers,
   reviewMatches,
+  type SelectDialog,
   sameText,
   screenIndex,
   typedOther,
 } from '../core/dialogs/questions.ts'
 import { t } from '../core/lang.ts'
+import { isPiItem, PI_AGENT } from '../core/pi.ts'
 import type { Item } from '../core/types.ts'
 import type { Deps } from './deps.ts'
 
@@ -65,7 +71,10 @@ export interface DriveFailure {
 }
 export type DriveResult = { ok: true } | DriveFailure
 
-/** What the page sends: `toolUseId` and `answers` for a question form, `option` and `fingerprint` for a prompt. */
+/**
+ * What the page sends: `toolUseId` and `answers` for a question form, `option` and `fingerprint`
+ * for a prompt or pi's menu, `text` and `fingerprint` for pi's text input.
+ */
 export type AnswerBody = Record<string, unknown>
 
 const bodyOf = (body: unknown): AnswerBody => (isRecord(body) ? body : {})
@@ -146,36 +155,47 @@ async function until(
   ok: (d: Dialog | null) => boolean,
   step: Step,
   { timeout = 3000, every = 100 }: Timing = {},
+  parse: (screen: string) => Dialog | null = parseDialog,
 ): Promise<Dialog | null> {
   const end = Date.now() + timeout
   for (;;) {
     const screen = await io.read()
-    const d = parseDialog(screen)
+    const d = parse(screen)
     if (ok(d)) return d
     if (Date.now() > end) throw new Stop('stuck', step, screen)
     await sleep(every)
   }
 }
 
+/** How a run reads one agent's screen: its dialogs, and its input box with no dialog in its place. */
+interface Reader {
+  parse: (screen: string) => Dialog | null
+  idle: (screen: string) => boolean
+}
+
+const CLAUDE_SCREEN: Reader = { parse: parseDialog, idle: screen => inputDraft(screen) !== null }
+const PI_SCREEN: Reader = { parse: screen => parseDialog(screen, PI_AGENT), idle: piEditor }
+
 /**
  * Waits until the dialog is surely gone, which a blank or half-drawn screen does not prove: the
  * transcript has the answer (io.answered, when the caller can tell), or two reads in a row show
- * Claude's input box with no dialog, or a whole other dialog. `ours(dialog)`: the dialog is still
- * the one answered. Throws Stop('unconfirmed') after `timeout` ms.
+ * the agent's input box with no dialog, or a whole other dialog. `ours(dialog)`: the dialog is
+ * still the one answered. Throws Stop('unconfirmed') after `timeout` ms.
  */
 async function settled(
   io: DriveIO,
   ours: (d: Dialog | null) => boolean,
   step: Step,
   { timeout = 5000, every = 100 }: Timing = {},
+  { parse, idle }: Reader = CLAUDE_SCREEN,
 ): Promise<void> {
   const end = Date.now() + timeout
   let streak = 0
   for (;;) {
     if (io.answered && (await io.answered())) return
     const screen = await io.read()
-    const d = parseDialog(screen)
-    streak = !ours(d) && (d || inputDraft(screen) !== null) ? streak + 1 : 0
+    const d = parse(screen)
+    streak = !ours(d) && (d || idle(screen)) ? streak + 1 : 0
     if (streak >= 2) return
     if (Date.now() > end) throw new Stop('unconfirmed', step, screen)
     await sleep(every)
@@ -333,7 +353,7 @@ export async function driveQuestions({
     // A lone single-choice question is submitted by its answer; the others end on the review.
     if (questions.length > 1 || questions[0]?.multiSelect) {
       d = await wait(x => x?.kind === 'review', { what: 'review' })
-      if (!reviewMatches(d, questions, picks) || d?.options[0]?.text !== 'Submit answers')
+      if (d?.kind !== 'review' || !reviewMatches(d, questions, picks) || d.options[0]?.text !== 'Submit answers')
         throw new Stop('review', { what: 'review' }, seen.screen)
       await io.keys('1')
     }
@@ -370,6 +390,87 @@ export async function drivePermission({
   }
 }
 
+/**
+ * Picks option `n` of pi's menu whose fingerprint the user saw: no digit picks there, so the
+ * cursor goes one row at a time, and every key waits for the screen to show the same menu with
+ * the cursor where the last key put it. Enter only on option `n`. Results as driveQuestions.
+ */
+export async function driveSelect({
+  fingerprint,
+  n,
+  io: raw,
+  timing,
+}: {
+  fingerprint: string
+  n: number
+  io: DriveIO
+  timing?: Timing | undefined
+}): Promise<DriveResult> {
+  const { io, seen } = counted(raw)
+  const ours = (x: Dialog | null): x is SelectDialog => x?.kind === 'select' && x.fingerprint === fingerprint
+  const step = { what: 'option', n }
+  try {
+    let d = PI_SCREEN.parse(await io.read())
+    if (!ours(d) || d.cursor === null || !d.options.some(o => o.n === n))
+      return { ok: false, reason: 'changed', step: { what: 'start' }, screen: seen.screen, sent: 0 }
+    let at: number = d.cursor
+    while (at !== n) {
+      const to = at < n ? at + 1 : at - 1
+      await io.keys(to > at ? 'down' : 'up')
+      d = await until(io, x => ours(x) && x.cursor === to, step, timing, PI_SCREEN.parse)
+      at = to
+    }
+    await io.keys('enter')
+    await settled(io, ours, step, timing, PI_SCREEN)
+    return { ok: true }
+  } catch (err) {
+    return err instanceof Stop ? stopped(err, seen) : broken(err, seen)
+  }
+}
+
+/** The field shows `text`: all of it, or the end of a long one it scrolled to (read flat). */
+function fieldHolds(value: string, text: string): boolean {
+  const shown = value.replace(/\s+/g, '')
+  const wanted = text.replace(/\s+/g, '')
+  return shown === wanted || (shown.length >= 20 && wanted.endsWith(shown))
+}
+
+/**
+ * Types `text` (one line, cleanOther) into pi's text input whose fingerprint the user saw, and
+ * submits it once the field shows it. What the field held before is cleared first. Results as
+ * driveQuestions.
+ */
+export async function driveInput({
+  fingerprint,
+  text,
+  io: raw,
+  timing,
+}: {
+  fingerprint: string
+  text: string
+  io: DriveIO
+  timing?: Timing | undefined
+}): Promise<DriveResult> {
+  const { io, seen } = counted(raw)
+  const ours = (x: Dialog | null): x is InputDialog => x?.kind === 'input' && x.fingerprint === fingerprint
+  const step = { what: 'text' }
+  try {
+    const d = PI_SCREEN.parse(await io.read())
+    if (!ours(d)) return { ok: false, reason: 'changed', step: { what: 'start' }, screen: seen.screen, sent: 0 }
+    if (d.value.trim()) {
+      await io.keys('end', 'ctrl+u')
+      await until(io, x => ours(x) && !x.value.trim(), step, timing, PI_SCREEN.parse)
+    }
+    await io.text(text)
+    await until(io, x => ours(x) && fieldHolds(x.value, text), step, timing, PI_SCREEN.parse)
+    await io.keys('enter')
+    await settled(io, ours, step, timing, PI_SCREEN)
+    return { ok: true }
+  } catch (err) {
+    return err instanceof Stop ? stopped(err, seen) : broken(err, seen)
+  }
+}
+
 /** The last lines of a screen, for the user to see where it stopped. */
 const tail = (screen: unknown): string =>
   String(screen ?? '')
@@ -383,12 +484,14 @@ const tail = (screen: unknown): string =>
     .join('\n')
 
 /**
- * The pane still holds this Claude session, waiting in a dialog. Returns an error result or null.
- * gone: the dialog is no longer there to answer.
+ * The pane still holds this session, waiting in a dialog: a Claude session, or with `agent` 'pi'
+ * a pi one (pi's menu and text input). Returns an error result or null. gone: the dialog is no
+ * longer there to answer.
  */
-export async function checkPane(item: Item): Promise<PaneCheck> {
+export async function checkPane(item: Item, agent: 'claude' | 'pi' = 'claude'): Promise<PaneCheck> {
   if (!item?.pane) return { ok: false, error: t('err.noPane') }
-  if (item.agent !== 'claude' || !item.session) return { ok: false, error: t('err.qa.notClaude', { name: item.name }) }
+  const known = agent === PI_AGENT ? isPiItem(item) : item.agent === 'claude' && !!item.session
+  if (!known) return { ok: false, error: t('err.qa.notClaude', { name: item.name }) }
   if (item.sleeping) return { ok: false, gone: true, error: t('err.qa.notWaiting', { name: item.name }) }
   try {
     const agent = await agentGet(item.pane)
@@ -465,13 +568,37 @@ export async function answerQuestions(
   }
 }
 
-/** Pick option `n` of the permission prompt the user saw (its fingerprint, from the screen). */
+/** Most options a pi menu is answered for: the cursor goes one row per key. */
+const PI_OPTIONS = 50
+
+/**
+ * pi's menu or text input, by the fingerprint the user saw: `option` picks a menu's option,
+ * `text` answers the input. Which one the screen shows decides; the other is refused there.
+ */
+async function answerPi(item: Item, body: AnswerBody, io: PaneIO): Promise<AnswerResult> {
+  if (typeof body.fingerprint !== 'string') return { ok: false, error: t('err.qa.invalid') }
+  const fingerprint = body.fingerprint
+  const typed = typeof body.text === 'string'
+  const text = typed ? cleanOther(body.text) : ''
+  const n = Number(body.option)
+  if (typed ? !text : !Number.isInteger(n) || n < 1 || n > PI_OPTIONS) return { ok: false, error: t('err.qa.invalid') }
+  const bad = await checkPane(item, 'pi')
+  if (bad) return bad
+  const r = typed ? await driveInput({ fingerprint, text, io }) : await driveSelect({ fingerprint, n, io })
+  return r.ok ? { ok: true } : failure(item, r)
+}
+
+/**
+ * Pick option `n` of the permission prompt the user saw (its fingerprint, from the screen). In a
+ * pi pane: pi's menu, or its text input with `text` (answerPi).
+ */
 export async function answerPermission(
   item: Item,
   rawBody: unknown,
   io: PaneIO = paneIO(item?.pane ?? ''),
 ): Promise<AnswerResult> {
   const body = bodyOf(rawBody)
+  if (isPiItem(item)) return answerPi(item, body, io)
   const n = Number(body.option)
   if (!Number.isInteger(n) || n < 1 || n > 9 || typeof body.fingerprint !== 'string')
     return { ok: false, error: t('err.qa.invalid') }

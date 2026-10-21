@@ -1,0 +1,77 @@
+────────────────────────────────────────────────────────────────────
+
+
+ This is a test of an approval dialog in a throwaway repository.
+ Run exactly the following as ONE bash tool call, unchanged, and
+ nothing else. If it is rejected, do not retry: just reply
+ "rejected" and stop.
+
+ why: Throwaway test of the git approval menu so the board and the
+ phone app can learn to answer it.
+
+ This repository is a scratch folder under /tmp; nothing here is
+ real work and nothing is pushed.
+
+ The commit records notes.txt, which was staged a moment ago, so
+ the menu has a real command to show.
+
+ A long explanation on purpose: the phone showed such a menu cut
+ off, and this reproduces that.
+
+ Expected outcome: whoever tests it rejects it, and the repository
+ stays without commits.
+
+ git commit -m "throwaway test commit for the approval menu"
+
+
+ This is a local git commit in a scratch repo under /tmp, which is
+ safe and reversible — the user wants it run exactly as specified,
+ with no retry if rejected, just reporting "rejected" and stopping.
+ I'll execute the command unchanged as requested.
+
+ Running the commit exactly as given, as one bash call.
+
+
+ $ # why: Throwaway test of the git approval menu so the board and
+ the phone app can learn to answer it.
+ # This repository is a scratch folder under /tmp; nothing here is
+ real work and nothing is pushed.
+ # The commit records notes.txt, which was staged a moment ago, so
+ the menu has a real command to show.
+ # A long explanation on purpose: the phone showed such a menu cut
+ off, and this reproduces that.
+ # Expected outcome: whoever tests it rejects it, and the
+ repository stays without commits.
+ git commit -m "throwaway test commit for the approval menu"
+ (timeout 120s)
+
+
+────────────────────────────────────────────────────────────────────
+
+ Git approval needed: git commit
+
+ Why (from Lobster):
+ Throwaway test of the git approval menu so the board and the phone
+ app can learn to answer it.
+ This repository is a scratch folder under /tmp; nothing here is
+ real work and nothing is pushed.
+ The commit records notes.txt, which was staged a moment ago, so
+ the menu has a real command to show.
+ A long explanation on purpose: the phone showed such a menu cut
+ off, and this reproduces that.
+ Expected outcome: whoever tests it rejects it, and the repository
+ stays without commits.
+
+ Command:
+ git commit -m "throwaway test commit for the approval menu"
+
+ → Approve
+   Reject
+   Reject with a note
+
+ ↑↓ navigate  enter select  escape/ctrl+c cancel
+
+────────────────────────────────────────────────────────────────────
+claude-haiku-5-5 · ~/scratch/pi-select-repo
+↑32k ↓1.2k 3.2%/1M
+⏸ git approval pending: git commit

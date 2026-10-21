@@ -23,6 +23,8 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.folderPlaceholder': 'C:\\path\\to\\folder or ~/project',
     'launch.browse': 'Browse',
     'launch.where': 'Open in',
+    // the agent choice, when the board offers Claude Code and pi (web/src/models/launch-agent.ts)
+    'launch.agent': 'Agent',
     'launch.newWorkspace': 'New workspace…',
     'launch.workspaceName': 'Workspace name',
     'launch.workspaceDefault': 'Sessions',
@@ -111,6 +113,13 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.err.commandShell':
       'launch.command: cmd, .bat and .cmd are not run as launchers (cmd.exe would read the values as commands); use a program, or a script run by one such as pwsh -File',
     'launch.err.category': 'The board has no lane {id}',
+    'launch.err.agent': 'The board does not start {id} here',
+    'launch.err.agentLauncher':
+      'The board starts sessions with launch.command or launch.agent, which pick the agent themselves',
+    'launch.err.piCommand':
+      'launch.pi in config.json must be a program, or a list of the program and its arguments: ["pi", "--model", "sonnet"]',
+    'launch.err.piTyping':
+      'launch.pi: “{word}” cannot be typed at the tab’s shell prompt (the program a name on PATH or a path without spaces, no quotes or control characters)',
     'launch.err.gone': 'That start is no longer on the board',
 
     // menus
@@ -185,6 +194,7 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.folderPlaceholder': 'C:\\путь\\к\\папке или ~/project',
     'launch.browse': 'Обзор',
     'launch.where': 'Где открыть',
+    'launch.agent': 'Агент',
     'launch.newWorkspace': 'Новый workspace…',
     'launch.workspaceName': 'Имя workspace',
     'launch.workspaceDefault': 'Сессии',
@@ -270,6 +280,13 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.err.commandShell':
       'launch.command: cmd, .bat и .cmd запускателями не бывают (cmd.exe прочтёт значения как команды); нужна программа или скрипт, который она запускает, например pwsh -File',
     'launch.err.category': 'На доске нет дорожки {id}',
+    'launch.err.agent': 'Доска не запускает здесь {id}',
+    'launch.err.agentLauncher':
+      'Доска запускает сессии через launch.command или launch.agent, а они сами выбирают агента',
+    'launch.err.piCommand':
+      'launch.pi в config.json должен быть программой или списком: программа, потом её аргументы: ["pi", "--model", "sonnet"]',
+    'launch.err.piTyping':
+      'launch.pi: «{word}» не набрать в командной строке вкладки (программа — имя из PATH или путь без пробелов, без кавычек и управляющих символов)',
     'launch.err.gone': 'Этого запуска на доске уже нет',
 
     'menu.open': 'Открыть',

@@ -249,7 +249,8 @@ export function goButton(
 export const fieldOf = (problem: string): string => (problem === 'worktree' ? 'branch' : problem)
 
 /** The whole form as a draft: the workspace by its label (`label`, the picked one's), or a new one's name. */
-export const draftOf = (f: LaunchFields, category: string, label: string): LaunchDraft => ({
+/** `agent`: the agent the user picked in the form, kept with it; none while it follows the board's default. */
+export const draftOf = (f: LaunchFields, category: string, label: string, agent?: string): LaunchDraft => ({
   name: f.name,
   cwd: f.cwd,
   category,
@@ -257,6 +258,7 @@ export const draftOf = (f: LaunchFields, category: string, label: string): Launc
   workspace: f.workspace ? label : f.newWorkspace,
   newWorkspace: !f.workspace,
   worktree: f.wt ? { branch: f.branch } : null,
+  ...(agent === undefined ? {} : { agent }),
 })
 
 /** The workspace a start goes to: the picked one (by id, with its label), or a new one. */
@@ -276,6 +278,8 @@ export interface StartBody {
   worktree?: { branch: string }
   profile?: string
   parent?: string
+  /** The agent picked, while the board offers a choice (models/launch-agent.ts). */
+  agent?: string
 }
 
 /**
@@ -292,6 +296,7 @@ export function startBody(
     label: string
     profile?: string
     parent?: string
+    agent?: string
   },
 ): StartBody {
   const cwd = f.cwd.trim()
@@ -307,6 +312,7 @@ export function startBody(
     ...(s.git && f.wt ? { worktree: { branch: f.branch.trim() } } : {}),
     ...(s.profile === undefined ? {} : { profile: s.profile }),
     ...(s.parent === undefined ? {} : { parent: s.parent }),
+    ...(s.agent === undefined ? {} : { agent: s.agent }),
   }
 }
 
@@ -333,5 +339,6 @@ export function startedLaunch(id: string, body: StartBody, now: number): LaunchV
     key: null,
     ...(body.profile === undefined ? {} : { profile: body.profile }),
     ...(body.parent === undefined ? {} : { parent: body.parent }),
+    ...(body.agent === undefined ? {} : { agent: body.agent }),
   }
 }

@@ -87,8 +87,9 @@ async function detail(app: SessionApp, item: Item) {
         .split('\n')
         .slice(-30)
         .join('\n')
-      // The dialog on it, for the sheet to answer: a permission prompt goes by its fingerprint.
-      dialog = publicDialog(parseDialog(text))
+      // The dialog on it, for the sheet to answer: a permission prompt, or pi's menu or text
+      // input in a pane herdr says runs pi, goes by its fingerprint.
+      dialog = publicDialog(parseDialog(text, item.agent))
     } catch {}
   }
   const helpers = own.helpers.map(publicHelper)
@@ -115,7 +116,8 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
   })
 }
 
-// A question form or a permission prompt, answered with keys in the pane (services/answer.ts).
+// A question form, a permission prompt or pi's menu or text input, answered with keys in the pane
+// (services/answer.ts).
 async function answer(app: SessionApp, item: Item, action: 'answer' | 'permit', body: Body): Promise<Result> {
   const { deps, answering } = app
   if ((body.session ?? null) !== (item.session ?? null)) return changed(item)
