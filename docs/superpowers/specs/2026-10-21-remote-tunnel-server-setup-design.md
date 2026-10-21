@@ -1049,6 +1049,188 @@ new socket file (`StreamLocalBindUnlink`).
   server differently than from the internet; the fetches compare before with after on the server,
   so they stay comparable.
 
+**Checked by the spike (2026-10-21, Debian 13 sudo 1.9.16p2, Ubuntu 26.04 sudo-rs 0.2.13,
+OpenSSH_for_Windows_9.5p2, Docker 29.9.2):** the test servers of `test/integration/server/` side
+by side in Docker Desktop 29.7.2: Debian 13.7 (OpenSSH_10.0p2 Debian-7+deb13u4, GNU coreutils 9.7,
+systemd 257) and Ubuntu 26.04.1 (OpenSSH_10.2p1 Ubuntu-2ubuntu3.8, uutils coreutils 0.10.0,
+systemd 259, sshd by socket activation), each with Docker CE 29.9.2 and Compose v5.6.1 inside;
+Windows' own `ssh.exe` spawned from Bun as an argument list; Pebble and challtestsrv on a Docker
+network. A code block holds whole lines as printed; `<…>` marks what varies. Each point held on
+both servers unless it names one. Look's outputs from every scenario on both are the fixtures in
+`test/fixtures/server-look/`.
+
+- **Look writes nothing** (both rounds through the admin line, every scenario on both servers,
+  then `find / -xdev -newer <marker>` outside `/proc`, `/sys`, `/run`, `/dev`): what changed is
+  the login's and sudo's own (`/home/admin/.sudo_as_admin_successful` on Debian 13,
+  `/home/admin/.cache/motd.legal-displayed` on Ubuntu 26.04, the journal) and, where round two
+  runs `docker exec`, `/tmp`'s time (Docker's runtime passes the exec through a file there). **Caddy
+  2.6.2 makes `$HOME/.step`** (an empty folder; its smallstep part) on any run, `caddy version`
+  included; Look runs Caddy with `STEPPATH=/`, a folder that exists, and then nothing is made.
+  Caddy 2.11.7 makes nothing either way. Apply's own `caddy adapt` as root (case 2) needs the
+  same, or it leaves `/root/.step` behind that no record names.
+- **Step 1** (`test/integration/server/step1.sh`, the one paste) run twice: no error the second
+  time. The folder is `drwxr-s--- boardtunnel boardtunnel` (`2750`), the account `boardtunnel:*`; a
+  Windows `ssh -R` makes the socket `srw-rw---- boardtunnel boardtunnel`. `sshd -t` passes, and
+  `sshd -T -C user=boardtunnel,host=localhost,addr=127.0.0.1` prints the `Match` block's 16
+  settings with the keys lowercased and the values exactly as `sshdBlock` writes them
+  (`allowtcpforwarding remote`, `permitlisten none`, `streamlocalbindmask 0117`,
+  `forcecommand /bin/false`, …).
+- **The reload line changes (Task 21).** On Ubuntu 26.04 `ssh.socket` is enabled and `ssh.service`
+  runs only once someone has connected. While it runs (an admin pasting over SSH) `systemctl
+  reload ssh` and `systemctl reload sshd` both work, on both. When it does not (step 1 from a
+  console), both print `ssh.service is not active, cannot reload.` and exit 1, which ends the
+  `set -e` paste. `systemctl try-reload-or-restart ssh` exits 0 either way: it reloads a running
+  sshd and leaves a socket-activated one to read the new config at the next connection; for a
+  unit that does not exist it prints `Failed to reload-or-try-restart <unit>: Unit <unit> not
+  found.` and exits 5. So the paste ends with
+  `{ sudo systemctl try-reload-or-restart ssh 2>/dev/null || sudo systemctl try-reload-or-restart sshd; }`
+  (step1.sh has it).
+- **The socket from containers** (`alpine/socat`, the folder mounted `:ro`): root with
+  `--cap-drop ALL --group-add <gid>` opens it; without `--group-add`:
+
+  ```
+  <time> socat[1] E connect(, AF=1 "/var/lib/boardtunnel/board.sock", 33): Permission denied
+  ```
+
+  `--user 65534:<gid> --read-only --cap-drop ALL --security-opt no-new-privileges` opens it,
+  `--user 65534:65534` gets the same `Permission denied`; root with Docker's default capabilities
+  opens it without the group (`CAP_DAC_OVERRIDE`), which is why the board's containers drop them
+  all. After the tunnel reconnects the socket is a new file (a new birth time; the filesystem
+  reused the inode number), and a running helper with the folder mounted opens it unchanged.
+- **The folder to Caddy's group:** `chgrp caddy` on the folder and the socket, then `chmod 2750`:
+  `drwxr-s--- 2750 caddy`, the setgid bit kept; the socket `srw-rw---- … caddy`.
+- **Host Caddy** (2.6.2 from the package on both; `ExecStart` `/usr/bin/caddy run --environ
+  --config /etc/caddy/Caddyfile`, `ExecReload` `/usr/bin/caddy reload --config
+  /etc/caddy/Caddyfile --force`, `User=caddy`, `Group=caddy`, `WorkingDirectory=` empty): the
+  candidate ending in `import /etc/caddy/agent-board/board.caddy # agent-board` passes `caddy adapt`
+  (the host set: theirs plus `board.example.com`) and `runuser -u caddy -- caddy validate`
+  (`Valid configuration`); after `systemctl reload caddy` (exit 0, still active) it serves the
+  board through the socket with `X-Forwarded-Proto: https`, and their two sites as before. Appended
+  after a brace-less last site, `caddy adapt` and `caddy validate` both refuse it (exit 1):
+
+  ```
+  Error: /etc/caddy/agent-board/board.caddy:2: unrecognized directive: board.example.com
+  Did you mean to define a second site? If so, you must use curly braces around each site to separate their configurations.
+  ```
+
+  A reload of a broken file prints `Job for caddy.service failed.` and exits 1; Caddy stays active
+  on its running config and the sites answer. The reductions, on 2.6.2 and 2.11.7 alike:
+  `caddy adapt … | grep -oE '"host":\[[^]]*\]|"admin":\{"disabled":true|"automatic_https":\{"disable":true'`
+  prints `"host":["a.example.com"]` per site (`"host":["x.example.com","y.example.com"]` for one
+  site with two names), `"admin":{"disabled":true` for `admin off`,
+  `"automatic_https":{"disable":true` for `auto_https off`, nothing else.
+- **Caddy in Docker** (compose, official image 2.11.7): `cat new > Caddyfile` reaches the
+  file-mounted container (the same inode inside and out); `mv new Caddyfile` does not (the
+  container keeps the old inode until it is recreated). `docker exec <id> caddy validate` and
+  `docker exec <id> caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile` exit 0, the
+  container the same. The helper with the design's flags on `web_default`: their container
+  reaches `http://agent-board-socket:8080/` (busybox `wget` and `nc` are in the official image),
+  their Caddy proxies the marked block's site there, and the board gets `Host:
+  board.example.com`, `X-Forwarded-Proto: https`, and as `X-Forwarded-For` the network's gateway
+  (`172.19.0.1`) for a request from the server itself through Docker's proxy. `docker compose
+  down` with the helper on the network exits 0 and prints:
+
+  ```
+   Container web-caddy-1 Stopping 
+   Container web-caddy-1 Stopped 
+   Container web-caddy-1 Removing 
+   Container web-caddy-1 Removed 
+   Network web_default Removing 
+   Network web_default Resource is still in use 
+  ```
+
+  The network and the helper stay; `docker compose up -d` puts their Caddy back on it, and it
+  reaches the helper again.
+- **Who holds a port.** A host-network container's process is in
+  `…/system.slice/docker-<id>.scope` (systemd's cgroup driver, Docker's default on both), `<id>`
+  its full id. With Docker's userland proxy (the default) `ss -H -ltnp` shows `docker-proxy` (in
+  `docker.service`) on `0.0.0.0:<port>` and `[::]:<port>`. **With `"userland-proxy": false`,
+  `dockerd` itself holds each published port (IPv4 only): not nothing, as "Look" says.** Look
+  maps `docker-proxy` and `dockerd` alike to the container through its port bindings. In the test
+  servers, being containers, every cgroup path starts with `/docker/<server's id>/`; Look reads the
+  deepest part.
+- **Certificates through Pebble** (the board's flags, `acme_ca https://pebble:14000/dir`,
+  `acme_ca_root` mounted read-only): case 1 gets `certificate obtained successfully` by `http-01`;
+  1b (`disable_http_challenge`, only 443 published, 80 held by python3) by `tls-alpn-01`; 4b
+  (`-p 127.0.0.1:8480:80 -p 8443:8443`, the design's `conf.d/agent-board.conf`, `nginx -t` and
+  the reload clean) by `http-01` through nginx, whose check path answers `agent-board` and other
+  paths `301 https://board.example.com:8443/x`, their site on 80 and 443 as before. The issuer is
+  `CN=Pebble Intermediate CA <…>`. Containers inside a test server do not resolve the outer Docker
+  network's names (inner Docker replaces the server's `127.0.0.11` resolver with public DNS): the
+  spike gave the board's Caddy `--add-host pebble:<ip>`, and Task 25's harness needs the same or
+  another way. challtestsrv's `add-a` adds to its earlier answer: `clear-a` first.
+- **Two proxies at once:** their Caddy on 443 with the marked block and the helper served their two
+  sites and the board side by side; their nginx on 443 and the board's Caddy on 8443 (Pebble's
+  certificate) answered interleaved requests at once, the board with `Host: board.example.com:8443`.
+- **sudo over the admin line** (`ssh -F none -T … -o BatchMode=yes -o StrictHostKeyChecking=yes`,
+  the remote command `sudo -S -p '' -- sh -c 'eval "$(echo <b64> | base64 -d)"'`): a script
+  printing ``it's $ ` % Ж "q"`` arrives and prints it unchanged; the password on stdin, stdin then
+  closed (Windows' ssh passes the close on), is read; `sudo -n --` (NOPASSWD) and `sh -c` (root)
+  work. stderr, exit 1 each, Debian 13's sudo | Ubuntu 26.04's sudo-rs (which names itself `sudo`,
+  as it runs as `sudo`):
+  - `sudo -n` without NOPASSWD: `sudo: a password is required` |
+    `sudo: interactive authentication is required`;
+  - a wrong password: `Sorry, try again.`, an empty line, `sudo: no password was provided`,
+    `sudo: 1 incorrect password attempt` | an empty line, `sudo: Authentication failed, try
+    again.`, an empty line, `sudo: Authentication required but not attempted`;
+  - nothing on stdin: an empty line, `sudo: no password was provided`, `sudo: a password is
+    required` | an empty line, `sudo: Authentication required but not attempted`;
+  - not in sudoers, with its right password: `nosudo is not in the sudoers file.` |
+    `sudo: I'm sorry nosudo. I'm afraid I can't do that`; with `sudo -n`: `sudo: a password is
+    required` | `sudo: I'm sorry nosudo. I'm afraid I can't do that`;
+  - `Defaults requiretty`: `sudo: sorry, you must have a tty to run sudo` (with a password, `-n`
+    and NOPASSWD alike) | sudo-rs runs anyway (exit 0) after printing
+    `/etc/sudoers.d/<file>:1:10: unknown setting: 'requiretty'`, `Defaults requiretty` and
+    `         ^~~~~~~~~~`: **`requiretty` stops classic sudo only**;
+  - the right password: nothing | an empty line;
+  - `sudo --version`'s first line: `Sudo version 1.9.16p2` | `sudo-rs 0.2.13-0ubuntu1.2`;
+  - three wrong passwords in three connections, then the right one: accepted on both (these
+    images have no `pam_faillock`); no lecture on first use on either.
+
+  Windows' ssh to a changed host key prints the `@@@…` banner, `WARNING: REMOTE HOST
+  IDENTIFICATION HAS CHANGED!`, …, `Host key verification failed.` and exits 255.
+- **coreutils:** on Ubuntu 26.04 (uutils 0.10.0) `stat -c '%a %U %G %g'` (`2750 nopw nopw 1002`)
+  and its error (`stat: cannot statx '<path>': No such file or directory`), `base64 -d` (also of
+  one long line), `sha256sum` of a file and of stdin (`<hash>  -`), `install -d -m 2750 -o -g`,
+  `timeout -k 1 1` (124; 137 when the command ignores TERM), `wc -l` (of stdin: the number
+  alone), `tail -c 1 | wc -l` (1, 0, 0: a final newline, none, an empty file), `comm -12/-23/-13`,
+  `sort -u`, `cut -d ' ' -f 1`, `head -n 1` print what GNU's do on Debian 13; `sed` is GNU sed 4.9
+  on both. `tail -f --pid=<pid>` ends with the pid on both (uutils 0.10.0 takes it); the scripts do
+  without it all the same. `ls --version`: `ls (GNU coreutils) 9.7` | `ls (uutils coreutils)
+  0.10.0`.
+- **Docker's repository:** `https://download.docker.com/linux/<distro>/dists/<codename>/Release`
+  answers 200 for `debian` `bookworm`, `trixie` and `ubuntu` `jammy`, `noble`, `questing`,
+  `resolute` (`debian/dists/sid`: 404). The design's commands on the `nodocker` servers install
+  Docker 29.9.2, active right after; `docker.io`, `containerd` and `runc` stay `not-installed`
+  (`containerd.io` is not `containerd`), so Look's conflict check stays empty after the board's
+  own install. **Neither server has `gpg`** (Debian 13 has `sqv`, Ubuntu 26.04 `gpgv`): the
+  design's fingerprint line exits 1 there. Without gpg, the key's v4 fingerprint is the SHA-1 of
+  its first packet (`99 02 0d`: 3 + 525 bytes):
+  `sed -e '/^-----/d' -e '/^=/d' -e '/:/d' -e '/^$/d' /etc/apt/keyrings/docker.asc | base64 -d | head -c 528 | sha1sum`
+  prints `9dc858229fc7dd38854ae2d88d81803c0ebfcd88  -` on both (GNU and uutils); the file's sha256
+  is `1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570`. With `gnupg` installed,
+  `gpg --show-keys --with-fingerprint` prints `      9DC8 5822 9FC7 DD38 854A  E2D8 8D81 803C 0EBF
+  CD88` under `pub   rsa4096 2017-02-22 [SCEA]`, and the design's grep matches.
+- **The pins** (`docker buildx imagetools inspect`):
+  `caddy:2.11.7@sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa0c16bd8ca328fb7af` (what
+  `caddy:2` points at today) and
+  `alpine/socat:1.8.1.3@sha256:22d77becaeeea8ef56b8c4bb2312323acafe85354be6a85714ff5050e3537842`
+  (socat 1.8.1.3); `alpine/socat` does the job as designed.
+- **Podman, user namespaces, rootless** (Look's outputs in `test/fixtures/server-look/hand/`): with
+  `podman-docker` (Podman 5.4.2) `docker --version` prints `Emulate Docker CLI using podman. Create
+  /etc/containers/nodocker to quiet msg.` and `podman version 5.4.2`, `docker version --format
+  '{{.Server.Version}}'` prints `5.4.2` and `SecurityOptions` nothing; `podman-docker` is an
+  installed conflict. `"userns-remap": "default"` adds `name=userns` to `SecurityOptions`.
+  Rootless Docker was not installed: its fixture is written by hand. A rootless daemon is not the
+  one root's `docker` talks to, so besides `name=rootless` in `SecurityOptions` Look also counts a
+  daemon socket under `/run/user/<uid>/` with no system daemon as rootless.
+- **The test images:** the distributions' images ship `/usr/sbin/policy-rc.d` (`exit 101`), which
+  keeps an installed service from starting (`invoke-rc.d: policy-rc.d denied execution of
+  start.`); the test images remove it, as a server has none. Ubuntu 26.04's image installs
+  `sudo-rs` by name (`sudo` without its recommends is classic sudo 1.9.17p2), so `sudo` is sudo-rs
+  as on a fresh server. Ubuntu 24.04's image (sudo 1.9.15p5, GNU coreutils 9.4) builds and takes
+  the admin line with a password the same way; its scenarios are Task 25's.
+
 ## Testing
 
 ### Unit (pure, fast)

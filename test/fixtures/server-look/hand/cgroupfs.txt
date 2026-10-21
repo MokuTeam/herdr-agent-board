@@ -1,0 +1,104 @@
+@@section os
+PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
+NAME="Debian GNU/Linux"
+VERSION_ID="13"
+VERSION="13 (trixie)"
+VERSION_CODENAME=trixie
+DEBIAN_VERSION_FULL=13.7
+ID=debian
+HOME_URL="https://www.debian.org/"
+SUPPORT_URL="https://www.debian.org/support"
+BUG_REPORT_URL="https://bugs.debian.org/"
+@@arch x86_64
+@@section ports
+LISTEN 0      4096   *:80  *:* users:(("caddy",pid=528,fd=9))
+LISTEN 0      4096   *:443 *:* users:(("caddy",pid=528,fd=7))
+@@pid 528
+12:pids:/docker/d4da6107b0282d6b0246baabac0a3e81204731c9badddf15a65d0db181b0246f
+4:memory:/docker/d4da6107b0282d6b0246baabac0a3e81204731c9badddf15a65d0db181b0246f
+1:name=systemd:/docker/d4da6107b0282d6b0246baabac0a3e81204731c9badddf15a65d0db181b0246f
+0::/docker/d4da6107b0282d6b0246baabac0a3e81204731c9badddf15a65d0db181b0246f
+@@section docker
+@@cli Docker version 29.9.2, build a82e528
+@@server 29.9.2
+@@security ["name=seccomp,profile=builtin","name=cgroupns"]
+@@network "bridge" "bridge"
+@@network "host" "host"
+@@network "none" "null"
+@@container d4da6107b0282d6b0246baabac0a3e81204731c9badddf15a65d0db181b0246f
+name "/web-caddy-1"
+image "caddy:2"
+path "caddy"
+args ["run","--config","/etc/caddy/Caddyfile","--adapter","caddyfile"]
+netmode "host"
+network "host"
+mounts [{"Destination":"/config","Driver":"local","Mode":"rw","Name":"web_caddy_config","Propagation":"","RW":true,"Source":"/var/lib/docker/volumes/web_caddy_config/_data","Type":"volume"},{"Destination":"/data","Driver":"local","Mode":"rw","Name":"web_caddy_data","Propagation":"","RW":true,"Source":"/var/lib/docker/volumes/web_caddy_data/_data","Type":"volume"},{"Destination":"/etc/caddy/Caddyfile","Mode":"rw","Propagation":"rprivate","RW":true,"Source":"/srv/my web/Caddyfile","Type":"bind"}]
+ports {}
+label "com.docker.compose.config-hash" "29d51b4644f429d8e9df7066da42fcb8702f271f5e3f9233f818253e0504ed84"
+label "com.docker.compose.container-number" "1"
+label "com.docker.compose.depends_on" ""
+label "com.docker.compose.image" "sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229"
+label "com.docker.compose.oneoff" "False"
+label "com.docker.compose.project" "web"
+label "com.docker.compose.project.config_files" "/srv/my web/compose.yaml"
+label "com.docker.compose.project.working_dir" "/srv/my web"
+label "com.docker.compose.service" "caddy"
+label "com.docker.compose.version" "5.6.1"
+
+@@section systemd
+@@running
+WorkingDirectory=
+User=
+Group=
+Id=caddy.service
+LoadState=not-found
+ActiveState=inactive
+
+WorkingDirectory=
+User=
+Group=
+Id=nginx.service
+LoadState=not-found
+ActiveState=inactive
+@@section fence
+clientaliveinterval 15
+clientalivecountmax 2
+streamlocalbindmask 0117
+passwordauthentication no
+kbdinteractiveauthentication no
+x11forwarding no
+permittty no
+allowtcpforwarding remote
+allowagentforwarding no
+allowstreamlocalforwarding remote
+streamlocalbindunlink yes
+forcecommand /bin/false
+authorizedkeysfile /etc/ssh/authorized_keys/boardtunnel
+authenticationmethods publickey
+permittunnel no
+permitlisten none
+@@section folder
+@@dir 2750 boardtunnel boardtunnel 995
+@@group boardtunnel:x:995:
+@@socket 660 boardtunnel boardtunnel socket
+@@section record
+@@section host
+@@selinux 
+@@forward 1
+@@fetch curl
+@@sudo Sudo version 1.9.16p2
+@@ls ls (GNU coreutils) 9.7
+@@package containerd not-installed
+@@package docker.io not-installed
+@@package runc not-installed
+@@section dns
+@@part domain
+203.0.113.10    STREAM board.example.com
+203.0.113.10    DGRAM  
+203.0.113.10    RAW    
+@@part local
+1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+1: lo    inet6 ::1/128 scope host proto kernel_lo \       valid_lft forever preferred_lft forever
+2: eth0    inet 172.18.0.3/16 brd 172.18.255.255 scope global eth0\       valid_lft forever preferred_lft forever
+3: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\       valid_lft forever preferred_lft forever
+@@end
