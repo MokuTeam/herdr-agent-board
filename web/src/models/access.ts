@@ -1,10 +1,17 @@
 // The Remote access panel in words. Its Tunnel part (components/access/TunnelSection.tsx): where the
-// tunnel stands, Test connection's steps and their hints, what a field's edit sends, and the
-// server's snippets filled in from the settings (core/tunnel-snippets.ts). Its Login parts
+// tunnel stands, Test connection's steps and their hints (the domain's while the web server is not
+// set up, Call 4), what a field's edit sends, and step 1 of "On the server": the snippets filled in
+// from the settings (core/tunnel-snippets.ts); step 3 is models/server-setup.ts's. Its Login parts
 // (LoginSection.tsx, LoginsSection.tsx): the TOTP key in groups, a passkey's, a login's and a
 // failed attempt's line, where passkeys are added. What the panel asks or has open, one thing at a
 // time. The view itself is GET /api/access's, checked by core/access.ts.
-import { type Attempt, isAccessView, type PublicLogin, type PublicPasskey } from '../../../src/core/access.ts'
+import {
+  type AccessView,
+  type Attempt,
+  isAccessView,
+  type PublicLogin,
+  type PublicPasskey,
+} from '../../../src/core/access.ts'
 import {
   fieldProblem,
   publicOrigin,
@@ -15,16 +22,7 @@ import {
   type TunnelField,
   type TunnelStatus,
 } from '../../../src/core/tunnel.ts'
-import {
-  caddyfile,
-  caddyGroupLine,
-  keysFile,
-  keysLine,
-  nginxNote,
-  serverCommands,
-  sshdBlock,
-  stepOnePaste,
-} from '../../../src/core/tunnel-snippets.ts'
+import { keysFile, keysLine, serverCommands, sshdBlock, stepOnePaste } from '../../../src/core/tunnel-snippets.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import { longWhen, shortWhen } from '../../../src/core/when-format.ts'
 import { ago } from './card.ts'
@@ -166,6 +164,17 @@ export function stepLine(s: TestStep, t: Translator): string {
   return s.ok === false && s.detail ? `${line}: ${s.detail}` : line
 }
 
+/** Test connection's steps in one line, as "On the server" sums them up: "✓ SSH to the server · ✗ …". */
+export const stepMarks = (steps: readonly TestStep[], t: Translator): string =>
+  steps.map(s => `${MARKS[`${s.ok}`]} ${t(`access.step.${s.id}`)}`).join(' · ')
+
+/**
+ * Call 4: the domain's step failed while no setup of the web server is on record, so it says that
+ * it fails until step 3 is done; '' otherwise.
+ */
+export const notSetUpLine = (s: TestStep, view: AccessView, t: Translator): string =>
+  s.id === 'domain' && s.ok === false && !view.server?.setup ? t('server.panel.domainNotSetUp') : ''
+
 /** What a hint says to do; '' for none. */
 export function hintText(hint: StepHint | null | undefined, t: Translator): string {
   return hint ? t(`tunnel.hint.${hint}`) : ''
@@ -207,10 +216,6 @@ export interface ServerSnippets {
   keysFile: string
   keysLine: string
   sshd: string
-  caddy: string
-  /** The socket's folder given to a host Caddy's group. */
-  caddyGroup: string
-  nginx: string
 }
 
 /** A value that passes its field's own check; else its default (these go into a root shell on the server). */
@@ -234,8 +239,5 @@ export function serverSnippets(settings: TunnelConfig, publicKey: string | null)
     keysFile: keysFile(user),
     keysLine: keysLine(publicKey ?? PUBLIC_KEY_EXAMPLE),
     sshd: sshdBlock(user),
-    caddy: caddyfile(domain, socket),
-    caddyGroup: caddyGroupLine(socket),
-    nginx: nginxNote(socket),
   }
 }

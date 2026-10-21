@@ -132,11 +132,6 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'access.snip.commands': "The tunnel's user and the socket's folder",
     'access.snip.keys': 'The keys file, {file}',
     'access.snip.sshd': 'At the end of /etc/ssh/sshd_config',
-    'access.snip.caddy': 'The Caddyfile',
-    'access.snip.caddyGroup': "With Caddy from its package (it runs as caddy), give it the socket's folder:",
-    'access.snip.nginx': 'With nginx instead of Caddy',
-    'access.snip.nginxNote':
-      "The socket's folder then takes nginx's group instead (chgrp as for Caddy above, with www-data on Debian and Ubuntu, nginx elsewhere), and this goes in the domain's server block:",
 
     // Task 17: the panel's Login parts
     'access.login': 'Login',
@@ -335,11 +330,6 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'access.snip.commands': 'Пользователь туннеля и папка сокета',
     'access.snip.keys': 'Файл ключей, {file}',
     'access.snip.sshd': 'В конец /etc/ssh/sshd_config',
-    'access.snip.caddy': 'Caddyfile',
-    'access.snip.caddyGroup': 'С Caddy из пакета (он работает как caddy) отдайте ему папку сокета:',
-    'access.snip.nginx': 'С nginx вместо Caddy',
-    'access.snip.nginxNote':
-      'Тогда папка сокета получает группу nginx (chgrp, как для Caddy выше, с www-data в Debian и Ubuntu, nginx в остальных), а это идёт в блок server домена:',
 
     // Task 17: the panel's Login parts
     'access.login': 'Вход',

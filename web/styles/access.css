@@ -13,7 +13,8 @@
 }
 .access-reach { color: var(--label-2); font-size: 12.5px; }
 .access-status { font-weight: 600; }
-.access-ssh, .access-why { color: var(--label-2); font-size: 12px; }
+.access-ssh, .access-why, .access-look-why { color: var(--label-2); font-size: 12px; }
+.access-look-why { margin: 0 0 8px; line-height: 1.4; overflow-wrap: anywhere; }
 .access-warn, .access-problem { color: var(--red); }
 .access-problem { margin: 0 0 4px; padding-left: 6px; font-size: 12px; line-height: 1.4; }
 .access-hint { margin: 2px 0 8px; color: var(--label-2); font-size: 12px; line-height: 1.4; }
@@ -86,3 +87,69 @@
 
 /* The recent failed attempts: a line each. */
 .access-attempt { padding: 2px 6px; color: var(--label-2); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+
+/* "On the server" (TunnelSection.tsx): three numbered steps, each under its number in a small
+   round badge, its body indented beside a hairline, as the setup note's steps read. */
+.access-server { margin-top: 8px; }
+.access-stage { margin: 0 0 12px; padding: 0 0 0 12px; border-left: 1px solid var(--separator); }
+.access-stage-head { display: flex; align-items: center; gap: 8px; margin: 10px 0 6px; font-size: 13px; }
+.access-num {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--fill-2);
+  color: var(--label-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+.access-marks { margin: 0 0 8px; font-size: 12.5px; overflow-wrap: anywhere; }
+
+/* Step 3, the web server (ServerSetup.tsx): the admin fields as the settings', the password on a
+   line with Continue, what Look found and the plan as lists, a run's state at the end of each
+   step's line, what failed and was rolled back, "Do it myself" (DoItMyself.tsx) as the snippets. */
+.access-web { max-width: 760px; }
+.access-sudo, .access-setup, .access-found, .access-plan, .access-failure, .access-test-after, .access-myself {
+  margin: 0 0 10px;
+}
+.access-done { margin: 0 0 6px; font-size: 12.5px; font-weight: 600; }
+.access-sub { margin: 10px 0 4px; font-size: 12.5px; font-weight: 600; }
+.access-facts, .access-finders { margin: 0 0 6px; padding: 0; list-style: none; }
+.access-fact, .access-reason, .access-rolled {
+  padding: 1px 0;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.access-case, .access-address, .access-nothing, .access-result {
+  margin: 4px 0 6px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.access-address { font-weight: 600; }
+.access-relies, .access-undo-line, .access-why-step, .access-touches, .access-block-why {
+  margin: 0 0 4px;
+  color: var(--label-2);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.access-touches { font: 11.5px/1.4 var(--mono); }
+.access-plan-steps, .access-blocks { margin: 0 0 6px; padding: 0; list-style: none; }
+.access-plan-step, .access-block { padding: 4px 0; }
+.access-step-line { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.access-title { min-width: 0; overflow-wrap: anywhere; }
+.access-state { flex: none; margin-left: auto; color: var(--label-2); font-size: 12px; }
+.access-bad { color: var(--red); }
+.access-caution { margin: 0 0 6px; color: var(--orange); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.access-out { margin: 2px 0 0; }
+.access-tick { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-size: 12.5px; }
+.access-sudo .access-input { min-width: 0; }
+.access-picker { margin: 0 0 6px; }
+.access-finder { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 2px 0; font-size: 12px; }
+.access-block-title { margin: 0 0 2px; font-size: 12.5px; font-weight: 600; }
