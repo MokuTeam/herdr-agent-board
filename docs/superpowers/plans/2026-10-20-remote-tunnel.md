@@ -1485,3 +1485,526 @@ The spec's "Manual run on the owner's machine and server", in this order:
 6. Sleep and wake the PC; switch networks; change the board's code while a tablet is open.
 7. End and End all while the terminal is open on the tablet; a lockout, then Lift on the PC.
 8. Phones over Tailscale still working beside it.
+
+---
+
+# Part 2: Setting up the server from the board (Tasks 20–25)
+
+**Goal:** From a server with the tunnel user in place and Test connection passing, one Look, one plan and one Apply give `https://<domain>` serving the board, on Debian and Ubuntu, with Undo and "Do it myself" as the full alternative.
+
+**Architecture:** Pure core: Look's scripts and parsers (`server-look.ts`), the per-case texts (`server-texts.ts`), the case, plan, record and Undo (`server-plan.ts`), the run script and "Do it myself" rendered from one plan (`server-script.ts`), the admin ssh line and sudo (`server-admin.ts`). One adapter function runs a remote command with the sudo password on stdin. One service (`services/server-setup.ts`) does Look, Apply and Undo behind local-only ops of `POST /api/access`. The panel's "On the server" draws it.
+
+**Spec:** `docs/superpowers/specs/2026-10-21-remote-tunnel-server-setup-design.md` (its numbered Calls are part of it; "Decided with the owner" overrides the Calls).
+
+## Constraints for Tasks 20–25 (on top of the Global Constraints above)
+
+- **Worktree:** `C:/migo/development/projects/external/mokuhub/herdr-agent-board/.claude/worktrees/rt-setup`, branch `rt/setup` (replaces the Global Constraints' worktree line for this part). Commit locally, never push.
+- **Never the owner's real server.** No ssh, HTTP or DNS lookup to any host but containers on this PC's Docker Desktop (`127.0.0.1` ports, Docker networks). The Global Constraints' "never run the real ssh" holds for unit, service and web tests; only Task 20 and the integration tests of Task 25 run Windows' real `ssh.exe`, and only at those containers.
+- **Docker Desktop** is started by the controller. A task that finds `docker info` failing stops and reports NEEDS_CONTEXT.
+- **Certificates:** Pebble (with `pebble-challtestsrv`) in Docker only, never Let's Encrypt or another public CA. The board's Caddyfile names a CA only through the test-only env `BOARD_SETUP_ACME_CA` (directory URL) and `BOARD_SETUP_ACME_CA_ROOT` (a PEM path on the server, mounted read-only into the board's Caddy). Unset: no `acme_ca` line at all.
+- **Debian and Ubuntu together, from the start.** Every task that reads, runs on or matches output from the server covers **Debian 13** (sudo, GNU coreutils) and **Ubuntu 26.04** (sudo-rs, Rust coreutils) side by side, with fixtures from both; the integration tests add **Ubuntu 24.04** (classic sudo). Debian 12 and Ubuntu 22.04 go through the same code paths (images only if cheap). Supported list: Debian 12, 13; Ubuntu 22.04, 24.04, 25.10, 26.04. Anything else is "Do it myself".
+- **Server scripts:** POSIX `sh`, no bashisms; only coreutils flags GNU and Rust coreutils both take (`base64 -d`, `sha256sum`, `stat -c`, `install`, `timeout`, `wc -l`, `sed -n`, `sort`, `comm`), plus util-linux `flock`, `setsid`, `runuser`; never `tail -f --pid`. Every script's first line is `exec </dev/null`; its second a marker comment `# agent-board: <kind>` (`probe`, `look-1`, `look-2`, `launch`, `run`). Task 20's record wins where it lists other flags.
+- **The sudo password** reaches only ssh's stdin, once per request. Never argv, env, a file, `web.log`, the view, the payload, an answer or an error text, on the PC or the server. Tests use the sentinel ``S3cr3t%$'"`Ж`` and assert it appears nowhere but the fake's stdin log, exactly once.
+- **Layers:** `src/core/server-*.ts` have no `node:` import (the page renders "Do it myself" from them). Web code imports core only.
+- **Texts:** new keys in English and Russian in `src/core/i18n/server-strings.ts` (Task 22 creates it and merges it in `strings.ts` after `ACCESS_STRINGS`); later tasks append. Commands and the server's files are English only.
+- **Integration tests** run only with `BOARD_SERVER_IT=1` (test servers) or `BOARD_DOCKER_IT=1` (two proxies); otherwise each file's `describe` is skipped and plain `bun test` starts no container.
+- **Verify per task:** only that task's own test files (listed in its last step) and `bun run check`. No full `bun test` per task; the controller runs the whole suite once after Task 25.
+- **Parallel tasks:** tasks in one wave may run in separate worktrees. Shared files are named in each task's "Shared" line; edits there are additive (append keys, add a field), so merges stay trivial. `src/core/server-facts.ts` and `src/core/server-shell.ts` are created by Task 20 and by Task 22 with the identical text below, so either order merges cleanly.
+
+### Shared files (verbatim; Tasks 20 and 22 both create them)
+
+`src/core/server-shell.ts`:
+
+```ts
+// Shell words for the server's scripts. No node: import.
+/** One shell word: '…' with ' as '\''. Throws on a newline or NUL: callers check values first. */
+export function shQuote(s: string): string {
+  if (/[\n\r\0]/.test(s)) throw new Error('a newline or NUL cannot reach the server')
+  return `'${s.replaceAll("'", `'\\''`)}'`
+}
+export const isContainerId = (s: string): boolean => /^[0-9a-f]{64}$/.test(s)
+/** Absolute, with no newline, NUL or `..` part. */
+export const isPlainPath = (s: string): boolean =>
+  s.startsWith('/') && !/[\n\r\0]/.test(s) && !s.split('/').includes('..')
+export const isUnitName = (s: string): boolean => /^[A-Za-z0-9@._-]+\.service$/.test(s)
+```
+
+`src/core/server-facts.ts`:
+
+```ts
+// What Look found on a server. Types only, no node: import: Task 20 parses into these, Task 22 plans from them.
+export type Port = 80 | 443 | 8443 | 8480 | 8481
+export type Holder =
+  | { kind: 'free' }
+  | { kind: 'unit'; unit: string; program: string }
+  | { kind: 'container'; id: string; program: string }
+  | { kind: 'process'; program: string }
+  | { kind: 'split'; programs: string[] }
+export interface Distro { id: string; version: string; codename: string; arch: string; supported: boolean }
+export interface Network { name: string; driver: string; userDefined: boolean }
+export interface Mount { type: 'bind' | 'volume'; source: string; destination: string }
+export interface Container {
+  id: string
+  name: string
+  image: string
+  cmd: string[]
+  hostNetwork: boolean
+  networks: Network[]
+  mounts: Mount[]
+  ports: { private: number; public: number; ip: string }[]
+  labels: Record<string, string>
+}
+export interface Unit { execStart: string[]; execReload: string[]; user: string; group: string; active: string; workingDirectory: string }
+export interface DockerFacts { version: string; podman: boolean; rootless: boolean; userns: boolean; containers: Container[] }
+export interface HostFacts {
+  selinux: 'enforcing' | 'permissive' | 'disabled' | null
+  forwarding: boolean
+  forwarders: string[]
+  fetch: 'curl' | 'wget' | null
+  missing: string[]
+  sudo: 'sudo' | 'sudo-rs' | null
+  coreutils: 'gnu' | 'rust' | null
+  conflicts: string[]
+}
+export interface RoundOne {
+  distro: Distro
+  ports: Record<Port, Holder>
+  docker: DockerFacts | null
+  systemd: boolean
+  units: { caddy: Unit | null; nginx: Unit | null }
+  fence: Record<string, string>
+  folder: { mode: string; owner: string; group: string; gid: number; members: string[] } | null
+  socket: { mode: string; owner: string; group: string } | null
+  record: unknown
+  lockHeld: boolean
+  host: HostFacts
+  dns: { domain: string[]; local: string[] }
+}
+export interface CaddyFacts {
+  where: 'unit' | 'container'
+  container: string | null
+  config: string
+  hostPath: string | null
+  mount: 'file' | 'folder' | 'volume' | null
+  adapter: string
+  resume: boolean
+  version: string
+  hosts: string[]
+  adminOff: boolean
+  autoHttpsOff: boolean
+  sha256: string
+  endsWithNewline: boolean
+  address: string
+}
+export interface NginxFacts { confD: boolean; listen80: string[]; serverNames: string[] }
+export interface ServerFacts extends RoundOne { caddy: CaddyFacts | null; nginx: NginxFacts | null }
+```
+
+## Review Focus (Tasks 20–25)
+
+1. **sudo-rs on Ubuntu 26.04 with a wrong password:** one attempt, its own lines give the `wrongPassword` hint, no retry, the password in no output. → Task 23 (both flavours' recorded lines), Task 25 (Ubuntu 26.04 image).
+2. **Their Caddyfile ending in a brace-less site, or mounted as a single file:** validate fails, nothing reloaded, their file's hash as before; a file mount sees the in-place write. → Task 22 (script order), Task 25 (scenarios).
+3. **The PC loses the connection mid-Apply:** the run finishes or rolls back on the server; the panel says "Look again"; the next Look reads the result. → Task 23 (service), Task 25 (cut ssh).
+4. **Their paths and names with spaces, quotes, `$`, `%` or Cyrillic** (a compose folder `/srv/my web/`, a network `web_default`): one shell word each in every script. → Task 20 (`shQuote`), Task 22 (scripts use it).
+5. **Another board's record on the server vs this board's with a new domain:** the first stops with that record's pair; the second plans an update. → Task 22 (`whose`), Task 23 (Look's answer).
+
+## Waves
+
+| Wave | Tasks (parallel) | Needs merged |
+|---|---|---|
+| 1 | 20 Spike and Look's parsers · 21 Public port and step 1 · 22 Apply and Undo, every case (core) | nothing |
+| 2 | 23 The admin connection, Look, Apply and Undo (service) · 24 The panel's "On the server" | 20, 21, 22 |
+| 3 | 25 Test servers end to end, the two-proxies proof, the README | 23, 24 (its images, Pebble harness and two-proxies proof may start after 22) |
+
+Before Task 20, a comment on issue #154 says this part is being built, and by whom (AGENTS.md).
+
+---
+
+### Task 20: Spike on Debian 13 and Ubuntu 26.04, and Look's scripts and parsers (core)
+
+**Spec:** "Look: what the board reads" (both rounds, Call 9), "Choosing the case" (the facts it needs), "The socket's permissions", "sudo", "Installing Docker", "Risks"; the owner's OS decision.
+
+**Files:**
+- Create: `test/integration/server/debian13.Dockerfile`, `ubuntu2604.Dockerfile`, `ubuntu2404.Dockerfile` (systemd as PID 1, openssh-server, sudo, curl, ca-certificates; users `admin` (sudo with password `admin-pw`), `nopw` (NOPASSWD), key login for both and for root; build arg `DOCKER=1|0` installs Docker CE from Docker's repository or not); `test/integration/server/scenarios/<name>.sh` (each prepares one scenario inside a running server, as root; names below); `src/core/server-facts.ts` and `src/core/server-shell.ts` (the shared files, verbatim); `src/core/server-look.ts`; `test/fixtures/server-look/{debian13,ubuntu2604}/<scenario>/{round1,round2}.txt`; `test/fixtures/server-look/hand/*.txt` (Podman, rootless, userns `docker info`; garbled outputs); `test/core/server-shell.test.ts`; `test/core/server-look.test.ts`
+- Modify: the spec (a "Checked by the spike" block at the end of "Risks and things to watch")
+- Shared: none.
+
+**Scenarios** (all on both distributions): `bare` (Docker, nothing on the ports), `nodocker`, `dummy80` (a `python3 -m http.server 80` unit), `caddy-unit` (Caddy from the distribution's package, two sites), `compose-folder` and `compose-file` (official Caddy image in compose on a user network `web_default`, a folder and a single-file mount of the Caddyfile, compose folder `/srv/my web`), `caddy-host` (`network_mode: host`), `caddy-bridge` (default bridge only), `nginx-443` (nginx on 443 alone), `nginx-80-443` (host nginx with `conf.d` included), `apache` (Apache on 80 and 443). Step 1 is done in each as the design's "By hand" commands.
+
+**Interfaces:**
+- Produces:
+  ```ts
+  // src/core/server-shell.ts: the shared file (shQuote, isContainerId, isPlainPath, isUnitName)
+  // src/core/server-look.ts
+  export const SUPPORTED: Record<'debian' | 'ubuntu', string[]>   // { debian: ['12','13'], ubuntu: ['22.04','24.04','25.10','26.04'] }
+  export const DOCKER_CODENAMES: string[]                          // bookworm, trixie, jammy, noble, questing, resolute
+  export interface LookInput { user: string; socket: string; domain: string }
+  export function lookScript1(i: LookInput): string
+  /** null: garbled, cut, a section missing or twice ("Look could not read the server"). */
+  export function readRoundOne(out: string): RoundOne | null
+  /** The second round for 443's (and 80's) holder; null when nothing needs it. Values from round one narrowed and shQuoted. */
+  export function lookScript2(r: RoundOne, i: LookInput): string | null
+  export function readServerFacts(r: RoundOne, out: string): ServerFacts | null
+  /** The sshd -T keys the tunnel spec's Match block sets that differ from sshdBlock(user)'s. */
+  export function fenceDiff(fence: Record<string, string>, user: string): string[]
+  ```
+- Output format of both rounds: `@@section <name>` lines (`os`, `ports`, `docker`, `systemd`, `fence`, `folder`, `record`, `host`, `dns`; round two `caddy`, `nginx`), each section's raw lines under it, `@@end` last. Their config's text never leaves the server: `caddy adapt`'s JSON is reduced on the server with `grep -o` to the `"host":[…]` arrays, `"admin":{"disabled":true}` and `"automatic_https":{"disable":true}`; `nginx -T` to `include`, `listen`, `server_name` lines.
+
+- [ ] **Step 1: Docker.** `docker info`; failing → NEEDS_CONTEXT (Constraints).
+- [ ] **Step 2: Build and start** the Debian 13 and Ubuntu 26.04 images side by side (`--privileged --cgroupns=host`, sshd on `127.0.0.1:2213` and `127.0.0.1:2226`), and each scenario in turn. Windows' `C:\Windows\System32\OpenSSH\ssh.exe` with a scratch key and a scratch `known_hosts` (pinned as `[127.0.0.1]:<port>`).
+- [ ] **Step 3: Check the facts, on both**, and note each result (exact lines, exit codes):
+  - the tunnel's folder with the tunnel user's own group (`useradd --system --user-group`, `usermod -p '*'`, `install -d -m 2750 -o boardtunnel -g boardtunnel`): a Windows `ssh -R` socket is `srw-rw---- boardtunnel boardtunnel`; a container root with `--cap-drop ALL --group-add <gid>` and the folder mounted `:ro` opens it, without `--group-add` it cannot; after a reconnect (new inode) it opens the new one; `chgrp caddy` + `chmod 2750` keeps setgid; the design's step-1 commands pasted twice give no error the second time; `sshd -t` and `systemctl reload ssh` (or `sshd`) work;
+  - host Caddy (`caddy-unit`): `import /etc/caddy/agent-board/board.caddy # agent-board` passes `caddy adapt` and `runuser -u caddy -- caddy validate`; appended after a brace-less last site it fails (the lines); `systemctl reload caddy`; the `grep -o` reductions of `caddy adapt` on the distribution's Caddy version;
+  - Caddy in Docker: `cat new > Caddyfile` reaches a file-mounted container, `mv` does not; `docker exec <id> caddy reload --config … --adapter caddyfile`; `alpine/socat` with `--user 65534:<gid> --read-only --cap-drop ALL` on `web_default` reaches the socket and their Caddy reaches it by name; `docker compose down` with the helper on the network: its output and exit code; a host-network container's pid → its id through `/proc/<pid>/cgroup`; `ss -H -ltnp` with Docker's userland proxy on and off;
+  - ACME through Pebble on a Docker network (challtestsrv resolving the test domain to the server): the board's Caddy for case 1 (HTTP-01), 1b (`disable_http_challenge`, TLS-ALPN only), 4b (HTTP-01 through host nginx's `conf.d/agent-board.conf`, with 4b's check path) get certificates with `acme_ca` and `acme_ca_root` set;
+  - the two proxies, quickly: their Caddy on 443 with the marked block to the helper, and their nginx on 443 with the board's Caddy on 8443, both answering at once (`curl --resolve`); the full proof is Task 25;
+  - sudo over the admin line (design "The ssh line", `-T`, `StrictHostKeyChecking=yes`): the remote command `sudo -S -p '' -- sh -c 'eval "$(echo <b64> | base64 -d)"'` arrives unchanged; the password on stdin, then stdin closed, is read; the lines and exit codes of `sudo -n true` without NOPASSWD, a wrong password, `requiretty` (Debian 13's sudo only; note sudo-rs's answer), not in sudoers; `sudo --version`'s first line. **sudo-rs on Ubuntu 26.04 and sudo on Debian 13, each verbatim**;
+  - coreutils: on Ubuntu 26.04, that `stat -c '%a %U %G %g'`, `base64 -d`, `sha256sum`, `install -d -m 2750 -o -g`, `timeout -k`, `wc -l`, `sed -n`, `comm`, `sort -u` behave as GNU's; what `tail -f --pid` does there (recorded only); `ls --version`'s first line on each;
+  - Docker's repository: `https://download.docker.com/linux/{debian,ubuntu}/dists/<codename>/Release` exists for each of `DOCKER_CODENAMES`; the design's install commands on the `nodocker` server of each distribution, the fingerprint line included (and how to check it without `gpg`);
+  - the pins: the current Caddy 2 release and `alpine/socat`, each as `tag@sha256:…` (`docker buildx imagetools inspect`).
+  Anything that contradicts the design: record it, and say so in the report.
+- [ ] **Step 4: Write the two shared files verbatim and `test/core/server-shell.test.ts`**: `shQuote("it's")` → `'it'\''s'`; ``shQuote('a b%$`"Ж')`` → ``'a b%$`"Ж'``; `shQuote('a\nb')` throws; `isContainerId` true for 64 hex, false for 63, uppercase, or `abc;rm`; `isPlainPath('/srv/my web/Caddyfile')` true, `'srv/x'`, `'/a/../b'`, `'/a\nb'` false. Run `bun test test/core/server-shell.test.ts`: PASS.
+- [ ] **Step 5: Write Look's two scripts**, run them over the admin line (`sudo -S`) in every scenario on both servers, and save each output as `test/fixtures/server-look/<distro>/<scenario>/round1.txt` (and `round2.txt` when `lookScript2` is not null). Write the hand fixtures (Podman's, rootless', userns' `docker info`; a round one cut in half; one with `@@section ports` twice).
+- [ ] **Step 6: Write the failing parser tests** `test/core/server-look.test.ts`, each on both distributions unless named:
+  - `bare`: `distro` `{ id: 'debian', version: '13', codename: 'trixie', supported: true }` / `{ id: 'ubuntu', version: '26.04', codename: 'resolute', supported: true }`; every port `free`; `docker` not null; `host.sudo` `'sudo'` / `'sudo-rs'`; `host.coreutils` `'gnu'` / `'rust'`; `fenceDiff(fence, 'boardtunnel')` `[]`; `folder` `{ mode: '2750', owner: 'boardtunnel', group: 'boardtunnel' }` with a numeric gid; `record` null; `host.missing` `[]`;
+  - `nodocker`: `docker` null; `caddy-unit`: `ports[443]` `{ kind: 'unit', unit: 'caddy.service', program: 'caddy' }`, `units.caddy.execStart` holds `--config` and `/etc/caddy/Caddyfile`, `caddy` `{ where: 'unit', config: '/etc/caddy/Caddyfile', hostPath: '/etc/caddy/Caddyfile', hosts: [the two sites], adminOff: false, autoHttpsOff: false }`, `sha256` 64 hex;
+  - `compose-file` / `compose-folder`: `ports[443].kind` `container` with a 64-hex id; `caddy.mount` `file` / `folder`, `hostPath` `/srv/my web/Caddyfile`; a network `{ name: 'web_default', userDefined: true }`; compose labels kept;
+  - `caddy-host`: `hostNetwork` true, the holder found through the cgroup; `caddy-bridge`: only `{ name: 'bridge', userDefined: false }`; `nginx-80-443`: both ports `nginx.service`, `nginx` `{ confD: true }` with its `listen80`; `apache`: 443's program `apache2`; `dummy80`: 80 `process` or `unit` with program `python3`, 443 `free`;
+  - hand: Podman, rootless, userns each set its flag; the cut and the doubled outputs → `readRoundOne` null; `''` → null;
+  - `lookScript2` for a `compose-file` round one whose container id was edited to `abc` → null; with a config path `/srv/it's/Caddyfile` → the script holds `'/srv/it'\''s/Caddyfile'`;
+  - `lookScript1` and every `lookScript2` write nothing: no match for `/\btee\b|\bmkdir\b|\binstall\b|\brm\b|\bmv\b|\bcp\b|docker (run|pull|start|stop|rm)|caddy validate|systemctl (reload|restart|start|stop)|>\s*\/(?!dev\/null)/`; first line `exec </dev/null`; second `# agent-board: look-1` / `look-2`;
+  - `src/core/server-look.ts`, `server-shell.ts`, `server-facts.ts` have no `from 'node:`.
+- [ ] **Step 7: Run** `bun test test/core/server-look.test.ts`: FAIL. Implement the parsers. Run `bun test test/core/server-look.test.ts test/core/server-shell.test.ts`: PASS. `bun run check`: clean.
+- [ ] **Step 8: Record** in the spec, at the end of "Risks and things to watch": `**Checked by the spike (<date>, Debian 13 <sudo version>, Ubuntu 26.04 <sudo-rs version>, OpenSSH_for_Windows_<version>, Docker <version>):**`, one line per check of Step 3 with the exact lines (sudo's and sudo-rs's side by side), the pins, and anything that changes the design. Stop and remove the containers; keep the Dockerfiles and scenario scripts.
+- [ ] **Step 9: Commit**
+  ```bash
+  git add test/integration/server src/core/server-facts.ts src/core/server-shell.ts src/core/server-look.ts test/fixtures/server-look test/core/server-shell.test.ts test/core/server-look.test.ts docs/superpowers/specs/2026-10-21-remote-tunnel-server-setup-design.md
+  git commit -m "Read what a Debian or Ubuntu server runs on its web ports, its Docker and its Caddy without changing anything, as a trial server showed"
+  ```
+
+---
+
+### Task 21: The board on another public port, and step 1 without Caddy's group
+
+**Spec:** "Changes elsewhere in the board" (`tunnel.publicPort`, Call 17), "Step 1: by hand, once" (Calls 2, 3), "What this changes in the tunnel spec", "Nobody else notices".
+
+**Files:**
+- Modify: `src/core/tunnel.ts`, `src/server/tunnel.ts`, `src/adapters/probe.ts`, `src/server/app.ts` (the probe's origin), `src/services/remote-access.ts` (`FIELDS`), `src/core/access.ts` (the settings' narrowing), `web/src/models/access.ts` (`fieldEdit`), `web/src/components/access/TunnelSection.tsx` (the field), `src/core/tunnel-snippets.ts` (and its header comment), `web/src/components/access/Snippets.tsx` (header comment, the one-paste block, the `chgrp` line), `src/core/i18n/access-strings.ts`, `README.md` (step 2's commands, the `tunnel.publicPort` setting, "The board never touches the server"), `docs/superpowers/specs/2026-10-20-remote-tunnel-design.md` (the lines the server-setup spec lists)
+- Test: `test/core/tunnel.test.ts`, `test/server/tunnel.test.ts`, `test/adapters/probe.test.ts`, `test/core/tunnel-snippets.test.ts`, `test/web/access-panel.test.tsx`
+- Shared: `src/core/access.ts`, `src/services/remote-access.ts`, `src/core/i18n/access-strings.ts`, `README.md`, `web/src/components/access/*` (Task 24 edits them after).
+
+**Interfaces:**
+- Produces:
+  ```ts
+  // core/tunnel.ts: TunnelConfig gains publicPort: number | null (null: 443); TunnelField gains 'publicPort' (checked as sshPort)
+  /** 'https://<domain>', or 'https://<domain>:<publicPort>' unless it is null or 443. */
+  export function publicOrigin(c: TunnelConfig): string
+  /** The Host the tunnel listener accepts: '<domain>' (and '<domain>:443'), or exactly '<domain>:<publicPort>'. */
+  export function publicHosts(c: TunnelConfig): string[]
+  // adapters/probe.ts
+  export const probeOrigin = (c: TunnelConfig, env?: Record<string, string | undefined>): string   // BOARD_TUNNEL_PROBE_ORIGIN or publicOrigin(c)
+  // core/tunnel-snippets.ts
+  export function serverCommands(user: string, socket: string, group?: string): string            // group default: user
+  export function stepOnePaste(user: string, socket: string, publicKey: string): string
+  export function caddyGroupLine(socket: string): string   // 'sudo chgrp caddy <folder> && sudo chmod 2750 <folder>'
+  ```
+
+- [ ] **Step 1: Write the failing tests.**
+  - `test/core/tunnel.test.ts`: `tunnelConfig(undefined).publicPort` null; `{ publicPort: 8443 }` kept, `'8443'` → null; `fieldProblem('publicPort', 0)` → `Public port is a whole number from 1 to 65535` (`tunnel.field.publicPort` en `Public port`); `publicOrigin` with null, 443, 8443 → `https://board.example.com`, `https://board.example.com`, `https://board.example.com:8443`; `publicHosts` → `['board.example.com', 'board.example.com:443']` / `['board.example.com:8443']`. The existing expectations of `tunnelConfig(undefined)` gain `publicPort: null` and nothing else.
+  - `test/server/tunnel.test.ts` (new cases; the file's existing ones unchanged): with `publicPort: 8443`, Host `board.example.com:8443` and Origin `https://board.example.com:8443` reach `/api/hello` and a board route after login; Host `board.example.com` → 403 `{ error: 'host' }`; Origin `https://board.example.com` on a POST → 403 `origin`; a passkey registered through Host `board.example.com` (443) signs in through `:8443`.
+  - `test/adapters/probe.test.ts`: `probeOrigin(conf8443, {})` → `https://board.example.com:8443`; with `BOARD_TUNNEL_PROBE_ORIGIN` → that.
+  - `test/core/tunnel-snippets.test.ts`: `serverCommands('boardtunnel', TUNNEL_SOCKET)` is exactly
+    ```
+    sudo useradd --system --user-group --no-create-home --home-dir /nonexistent \
+        --shell /usr/sbin/nologin boardtunnel
+    # useradd leaves the account locked; an sshd with UsePAM no refuses a locked one, key or not
+    sudo usermod -p '*' boardtunnel
+    # the socket's folder: the tunnel user makes the socket; its group is the reader's (step 3)
+    sudo install -d -m 2750 -o boardtunnel -g boardtunnel /var/lib/boardtunnel
+    # the key's file belongs to root, out of the tunnel user's reach
+    sudo install -d -m 755 /etc/ssh/authorized_keys
+    ```
+    and with `group 'caddy'` the install line says `-g caddy`; `stepOnePaste('boardtunnel', TUNNEL_SOCKET, 'ssh-ed25519 AAAA k')` is one `( set -e … )` block holding, in order: `id -u boardtunnel >/dev/null 2>&1 || sudo useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin boardtunnel`, `sudo usermod -p '*' boardtunnel`, `[ -d /var/lib/boardtunnel ] || sudo install -d -m 2750 -o boardtunnel -g boardtunnel /var/lib/boardtunnel`, `sudo install -d -m 755 /etc/ssh/authorized_keys`, `echo 'restrict,port-forwarding ssh-ed25519 AAAA k' | sudo tee /etc/ssh/authorized_keys/boardtunnel >/dev/null`, `grep -qx 'Match User boardtunnel' /etc/ssh/sshd_config || printf '\n%s\n' '<sshdBlock>' | sudo tee -a /etc/ssh/sshd_config >/dev/null`, `sudo sshd -t`, `{ sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd; }` (Task 20's record wins on the reload line); `caddyGroupLine(TUNNEL_SOCKET)` → `sudo chgrp caddy /var/lib/boardtunnel && sudo chmod 2750 /var/lib/boardtunnel`; the README check updated to the new `serverCommands`; the README no longer holds `The board never touches the server`.
+  - `test/web/access-panel.test.tsx`: the Public port field is drawn; `fieldEdit('publicPort', null, '8443')` → `{ value: 8443 }`, `fieldEdit('publicPort', 8443, '')` → `{ value: null }`; the snippets show "All of step 1 in one paste" with `stepOnePaste`'s text and the `chgrp` line under the Caddy snippet; `-g boardtunnel` where `-g caddy` was.
+- [ ] **Step 2: Run** `bun test test/core/tunnel.test.ts test/server/tunnel.test.ts test/adapters/probe.test.ts test/core/tunnel-snippets.test.ts test/web/access-panel.test.tsx`. Expected: FAIL on the new cases.
+- [ ] **Step 3: Implement** the field, its check and texts (Russian yours), `publicOrigin`/`publicHosts` in the listener's Host and Origin checks and WebAuthn's expected origin (rpId stays the domain), `probeOrigin(conf)` in `app.ts`, the snippets, the panel's field and blocks, the README lines and the tunnel spec's lines (verbatim from the server-setup spec's list).
+- [ ] **Step 4: Run** the same files: PASS. `bun run check`: clean.
+- [ ] **Step 5: Commit**
+  ```bash
+  git add src/core/tunnel.ts src/server/tunnel.ts src/adapters/probe.ts src/server/app.ts src/services/remote-access.ts src/core/access.ts web/src/models/access.ts web/src/components/access src/core/tunnel-snippets.ts src/core/i18n/access-strings.ts README.md docs/superpowers/specs/2026-10-20-remote-tunnel-design.md test/core/tunnel.test.ts test/server/tunnel.test.ts test/adapters/probe.test.ts test/core/tunnel-snippets.test.ts test/web/access-panel.test.tsx
+  git commit -m "Let the board be reached through the domain on another port, and make step 1 on the server independent of Caddy and pastable at once"
+  ```
+
+---
+
+### Task 22: Apply and Undo for every case (core)
+
+**Spec:** "The cases" (1, 1b, 2, 3a, 3b, 4a, 4b, 5), "Choosing the case", "What the board owns on the server", "Whose setup it is" (Call 30), "Validation and rollback, per case", "Apply twice, changes, and interrupted runs", "How a script runs on the server" (detached run, markers, the POSIX follower), "Installing Docker", Calls 8, 10–22, 26–28, 31–33.
+
+**Files:**
+- Create: `src/core/server-facts.ts` and `src/core/server-shell.ts` (the shared files, verbatim, if not there), `src/core/server-view.ts`, `src/core/server-texts.ts`, `src/core/server-plan.ts`, `src/core/server-script.ts`, `src/core/i18n/server-strings.ts`, `test/support/server-facts.ts` (builders: `factsFor(c: SetupCase | 'bare' | 'nodocker', distro?: 'debian13' | 'ubuntu2604'): ServerFacts`), `test/core/server-texts.test.ts`, `test/core/server-plan.test.ts`, `test/core/server-script.test.ts`
+- Modify: `src/core/i18n/strings.ts` (merge `SERVER_STRINGS`), `src/core/access.ts` (`AccessView.server: ServerView | null`, its narrowing), `src/services/remote-access.ts` (`view()` sends `server: null`), `web/src/models/access.ts` (`isAccessView` takes `server` null or an object)
+- Shared: `src/core/access.ts`, `src/services/remote-access.ts`, `web/src/models/access.ts` (one field each).
+
+**Interfaces:**
+- Consumes: `ServerFacts`, `shQuote` (the shared files), `sshdBlock`, `socketFolder` (tunnel-snippets).
+- Produces:
+  ```ts
+  // core/server-view.ts
+  export type SudoMode = 'root' | 'nopasswd' | 'password' | 'requiretty' | 'none'
+  export type AdminHint = 'publickey' | 'tooMany' | 'noHostKey' | 'hostKey' | 'needPassword' | 'wrongPassword' | 'requiretty' | 'notSudoer' | 'network' | 'noSsh' | 'aptLock' | 'pullLimit' | 'changed' | 'busy' | 'lost' | 'unreadable' | 'lookAgain'
+  export type ServerPhase = 'idle' | 'looking' | 'plan' | 'applying' | 'undoing' | 'done' | 'failed'
+  export interface ServerView {
+    admin: { user: string; key: string }
+    sudo: SudoMode | null
+    phase: ServerPhase
+    facts: ServerFacts | null
+    choice: Choice | null
+    plan: Plan | null
+    progress: Progress | null
+    hint: AdminHint | null
+    error: string | null
+    setup: { case: SetupCase; address: string; at: string } | null
+    testAfter: TestStep[] | null
+  }
+  // core/server-texts.ts
+  export const CADDY_IMAGE: string   // 'caddy:<2.x.y>@sha256:…' (Task 20's pin, else the current release's)
+  export const SOCAT_IMAGE: string   // 'alpine/socat:<v>@sha256:…'
+  export interface Acme { ca: string; root: string }   // BOARD_SETUP_ACME_CA, BOARD_SETUP_ACME_CA_ROOT
+  export type OwnCaddy = '1' | '1b' | '4a' | '4b'
+  export function boardCaddyfile(c: OwnCaddy, w: Wanted, acme?: Acme): string
+  export function siteFile(w: Wanted): string                       // /etc/caddy/agent-board/board.caddy
+  export const IMPORT_LINE = 'import /etc/caddy/agent-board/board.caddy # agent-board'
+  export function markedBlock(w: Wanted, upstream: string): string   // 'agent-board-socket:8080' (3a) | '127.0.0.1:8481' (3b)
+  export function nginxFile(w: Wanted, listen80: string[]): string
+  export function caddyRunArgs(c: OwnCaddy, w: Wanted, gid: number, runId: string, acme?: Acme): string[]   // argv after `docker`
+  export function socatRunArgs(on: { network: string } | { host: true }, w: Wanted, gid: number, runId: string): string[]
+  export function dockerInstall(distro: 'debian' | 'ubuntu'): string[]
+  // core/server-plan.ts
+  export type SetupCase = '1' | '1b' | '2' | '3a' | '3b' | '4a' | '4b'
+  export type Manual = 'os' | 'selinux' | 'podman' | 'rootless' | 'userns' | 'requiretty' | 'noSystemd' | 'dockerConflicts'
+    | 'caddyJson' | 'caddyResume' | 'adminOff' | 'autoHttpsOff' | 'caddyBaked' | 'caddy1' | 'twoConfigs' | 'bridge' | 'macvlan'
+    | 'domainServed' | 'split' | 'other80' | 'otherSetup' | 'interrupted'
+  export interface Pair { user: string; socket: string }
+  export interface Wanted extends Pair { domain: string; publicPort: number | null; acme?: Acme }
+  export type Choice = { case: SetupCase; why: Text } | { case: null; why: Manual[] }
+  export interface Text { key: string; params?: Record<string, string> }
+  export interface Touch { kind: 'file' | 'line' | 'block' | 'backup' | 'container' | 'volume' | 'image' | 'package' | 'group' | 'reload' | 'network'; what: string }
+  export type RecordItem =
+    | { kind: 'file'; path: string; sha256: string }
+    | { kind: 'line'; file: string; line: string }
+    | { kind: 'block'; file: string; begin: string; end: string }
+    | { kind: 'backup'; of: string; path: string }
+    | { kind: 'group'; path: string; from: string; to: string }
+    | { kind: 'container'; name: string; setup: string }
+    | { kind: 'volume'; name: string }
+    | { kind: 'image'; ref: string; before: boolean }
+    | { kind: 'docker'; packages: string[]; files: string[] }
+  export interface SetupRecord { v: 1; id: string; at: string; state: 'running' | 'applied' | 'rolled-back' | 'rollback-failed'; case: SetupCase; pair: Pair; domain: string; publicPort: number | null; address: string; items: RecordItem[] }
+  export interface PlanStep { id: string; title: Text; why: Text; skipIf: string[]; commands: string[]; check: string[]; undo: string[]; touches: Touch[]; record: RecordItem[]; timeoutS: number }
+  export interface Plan { id: string; kind: 'apply' | 'update' | 'undo' | 'nothing'; case: SetupCase; address: string; publicPort: number | null; relies: string[]; steps: PlanStep[]; undoTouches: Touch[]; warnings: Text[]; ticks: ('docker' | 'removeDocker' | 'removeEdited')[] }
+  export function setupRecord(json: unknown): SetupRecord | null
+  /** 'same': pair, domain and public port the panel's; 'update': the pair the same; 'other': another pair (Call 30). */
+  export function whose(r: SetupRecord, w: Wanted): 'same' | 'update' | 'other'
+  export function chooseCase(f: ServerFacts, w: Wanted): Choice
+  export function buildPlan(f: ServerFacts, w: Wanted, o: { id: string; docker: boolean }): Plan | { case: null; why: Manual[] }
+  export function undoPlan(r: SetupRecord, f: ServerFacts, o: { id: string; removeDocker: boolean; removeEdited: boolean }): Plan
+  /** For "Do it myself" without Look (Call 28): facts whose unknowns are `<placeholders>`. */
+  export function manualFacts(c: SetupCase, distro: 'debian' | 'ubuntu'): ServerFacts
+  export function placeholderFinders(c: SetupCase): { placeholder: string; command: string }[]
+  // core/server-script.ts
+  export function runScript(p: Plan, w: Wanted, run: { id: string; at: string }): string
+  /** What the admin line runs for Apply or Undo: writes runs/<id>.sh (0600) from base64, starts it with setsid, follows its log (POSIX), prints `@@exit <code>`. */
+  export function launchScript(runId: string, run: string): string
+  export interface StepProgress { n: number; id: string; state: 'waiting' | 'running' | 'ok' | 'fail' | 'skipped'; since: number | null; out: string[] }
+  export interface Progress { steps: StepProgress[]; undo: { n: number; ok: boolean }[]; result: 'applied' | 'rolled-back' | 'rollback-failed' | 'busy' | 'changed' | null; exit: number | null }
+  export function startProgress(p: Plan): Progress
+  export function readProgress(pr: Progress, line: string, now: number): Progress
+  export interface ManualBlock { title: Text; why: Text; commands: string; check: string; undo: string }
+  export function doItMyself(p: Plan): ManualBlock[]
+  ```
+
+**Rules:**
+- **`chooseCase`**: the spec's table and its "anything else" list, in that order of checks: `os` (not in `SUPPORTED`), the host limits, `interrupted` (record `running`, lock not held → the plan starts with the record's Undo), `otherSetup` (`whose` = `other`), then the holder of 443, then of 80. A record with `whose` = `same` or `update` gives its own case.
+- **Steps per case** (ids; each step's `commands` are the spec's commands with `sudo` in front of what needs root, values shQuoted; file writes `printf '%s\n' <text> | sudo tee <path> >/dev/null`; backups `sudo cp -p`; in-place writes `sudo sh -c 'cat <candidate> > <file>'`): first always `guard` (the `relies`: 443's and 80's holders, their config's `sha256`, their container's id; prints `@@changed <what>` and exits 3 when one differs). 1/1b/4a/4b: `docker-install` (only when `docker` is null; `ticks: ['docker']`), `pull-caddy`, `caddyfile`, `volumes`, `run-caddy`, `caddy-up`; 4b adds `nginx-file`, `nginx-check`, `nginx-reload`, `acme-path`. 2: `site-file`, `folder-group` (skipped when the group is Caddy's or Caddy runs as root), `backup`, `candidate`, `validate` (host set = old + domain; `runuser -u caddy -- caddy validate`), `write`, `fetch-before`, `reload`, `fetch-after`. 3a/3b: `pull-socat`, `run-socat`, `reach-helper`, `backup`, `candidate` (folder or volume mount) or none (file mount), `validate` (inside their container), `write`, `fetch-before`, `reload` (`docker exec … caddy reload`), `fetch-after`. Every step's `skipIf` makes Apply twice "nothing to change": a plan whose every step is skipped on the facts gets `kind: 'nothing'`.
+- **`update`** (`whose` = `update`): the board's file or block rewritten for the new domain, its container recreated only when its argv's hash (label `agent-board.args`) changed, their Caddy reloaded once; `publicPort` changes with case 4.
+- **`undoPlan`**: from the record's items, newest first: a line or block removed **from the file as it is now** (never the backup), then validate, fetch, reload, fetch; containers and volumes by name **and** label; images only with `before: false` and unused; the group back; Docker only with `removeDocker` (offered only when the record installed it and Docker holds nothing else); a file of ours whose `sha256` differs stays unless `removeEdited`; `/etc/agent-board` last. Its last block lists the commands to remove the hand-made parts (Call 32), not run.
+- **`runScript`**: line 1 `exec </dev/null`, line 2 `# agent-board: run`, then `set -u`, `umask 077`, `sudo() { "$@"; }`, `exec 9>/etc/agent-board/lock; flock -n 9 || { echo '@@busy'; exit 75; }`, the record written as `running` before step 1 and after each step (items of the steps done; file hashes by `sha256sum` on the server), each step `@@step <n> start`, `skipIf` → `@@step <n> skip`, else `timeout -k 5 <timeoutS> sh -c <shQuote(prelude + commands + check)>` → `@@step <n> ok|fail`; a failure runs the done steps' `undo` newest first, each `@@undo <n> ok|fail`, then `@@result rolled-back|rollback-failed`; all ok → `@@result applied`; a trap writes `runs/<id>.exit`. 20 minutes overall (`timeout` around the whole run in `launchScript`). `BOARD_SETUP_ACME_CA*` reach it only through `w.acme`.
+- **`launchScript`**: `mkdir -p /etc/agent-board/runs`, the run written by `base64 -d` to `runs/<id>.sh` (0600), `setsid sh runs/<id>.sh >runs/<id>.log 2>&1 </dev/null &`, then the follower: once a second, the log's new complete lines (`wc -l`, `sed -n "<from>,<to>p"`), until `runs/<id>.exit` exists, then the rest and `@@exit <code>`; runs older than the newest five removed.
+- **`doItMyself`**: one block per step, `commands` joined by `\n` exactly as in `runScript`, `check` as commands, `undo`; titles and whys are `server.step.<id>.title|why` keys (English yours, short; Russian yours).
+
+- [ ] **Step 1: Write the failing tests.**
+  - `test/core/server-texts.test.ts`: `boardCaddyfile('1', W)` is exactly the spec's case-1 block (tabs); `'1b'` the spec's 1b text; `'4a'` the spec's 4a text; `'4b'` 4a's plus `http://board.example.com {\n\trespond /.well-known/acme-challenge/agent-board-check "agent-board"\n}`; with `acme` each starts with a global block holding `acme_ca <ca>` and `acme_ca_root <root>` (merged into 1b's and 4a's own); `siteFile`, `markedBlock(W, 'agent-board-socket:8080')` and `nginxFile(W, ['80', '[::]:80'])` exactly the spec's; `caddyRunArgs('1', W, 997, 'r1')` equals the spec's `docker run` argv (`--cap-drop ALL --cap-add NET_BIND_SERVICE --security-opt no-new-privileges --group-add 997`, both mounts `:ro` for the socket's folder, volumes, labels, `CADDY_IMAGE`), `'1b'` without `-p 80:80`, `'4a'` `-p 80:80 -p 8443:8443`, `'4b'` `-p 127.0.0.1:8480:80 -p 8443:8443`; `socatRunArgs({ network: 'web_default' }, W, 997, 'r1')` the spec's, `{ host: true }` with `--network host` and `TCP-LISTEN:8481,bind=127.0.0.1,fork,reuseaddr`; `dockerInstall('debian')` and `('ubuntu')` the spec's lines with the distro in the URLs; the images match `/@sha256:[0-9a-f]{64}$/`.
+  - `test/core/server-plan.test.ts` (facts from `factsFor`, **each on `debian13` and `ubuntu2604`**): `chooseCase` gives `1` (bare), `1b` (dummy80), `2`, `3a`, `3b`, `4a`, `4b` and `null` with `bridge`, `other80` (apache), `os` (`distro.supported` false), `selinux`, `podman`, `rootless`, `userns`, `domainServed`, `caddyJson`, `adminOff`, `split`; a record with another pair → `otherSetup`; the same pair, another domain → `buildPlan(...).kind` `update`; the same everything with every `skipIf` met → `nothing`; `buildPlan` for each case lists the step ids above in order, `ticks: ['docker']` only for `nodocker`, `address` `https://board.example.com` or `https://board.example.com:8443` (4a, 4b, `publicPort` 8443); values with a space or `'` (`/srv/it's web/Caddyfile`) reach `commands` shQuoted; `undoPlan` of a case-2 record removes the import line from the file as it is now (its command holds `IMPORT_LINE` and no backup path), keeps an edited `board.caddy` unless `removeEdited`, leaves a container named `agent-board-caddy` without the label, keeps an image with `before: true`, offers `removeDocker` only when the record installed Docker; `setupRecord` refuses a wrong `v`, a missing pair, an unknown item kind; `manualFacts('3a', 'ubuntu')` gives a plan whose commands hold `<your Caddyfile>`, and `placeholderFinders('3a')` names `docker ps` and `docker inspect`.
+  - `test/core/server-script.test.ts`: `runScript` starts with `exec </dev/null\n# agent-board: run\n`, holds `sudo() { "$@"; }` and `flock -n 9`; every line of every step's `commands` occurs in it and in `doItMyself`'s block for that step; it passes `sh -n` (spawn `sh` from PATH when present, else skip that assertion); it holds none of `tail -f`, `--pid`, `[[`, `function `, `local `, `echo -e`; `launchScript` the same checks and `@@exit`; `readProgress` over `@@step 1 start`, two output lines, `@@step 1 ok`, `@@step 2 start`, `@@step 2 fail`, `@@undo 1 ok`, `@@result rolled-back`, `@@exit 1` → step 1 ok with its two lines, step 2 fail, undo `[{ n: 1, ok: true }]`, result `rolled-back`, exit 1; a step's output keeps its last 200 lines; `@@busy` → result `busy`; `@@changed holder443` → `changed`.
+  - The three files and `server-view.ts` have no `from 'node:`; `bun test test/core/i18n.test.ts`'s missing keys stay `[]`.
+- [ ] **Step 2: Run** `bun test test/core/server-texts.test.ts test/core/server-plan.test.ts test/core/server-script.test.ts`. Expected: FAIL (modules not found).
+- [ ] **Step 3: Implement** the shared types, the view type and its narrowing, the texts, the plan, the scripts and the keys.
+- [ ] **Step 4: Run** the three files and `bun test test/core/i18n.test.ts test/web/access-panel.test.tsx`: PASS. `bun run check`: clean.
+- [ ] **Step 5: Commit**
+  ```bash
+  git add src/core/server-facts.ts src/core/server-shell.ts src/core/server-view.ts src/core/server-texts.ts src/core/server-plan.ts src/core/server-script.ts src/core/i18n/server-strings.ts src/core/i18n/strings.ts src/core/access.ts src/services/remote-access.ts web/src/models/access.ts test/support/server-facts.ts test/core/server-texts.test.ts test/core/server-plan.test.ts test/core/server-script.test.ts
+  git commit -m "Plan a server's setup for each case from what Look found, with its rollback, its Undo and the same steps to do by hand"
+  ```
+
+---
+
+### Task 23: The admin connection, and Look, Apply and Undo through it (service)
+
+**Spec:** "The admin connection" (who and which key, the ssh line, sudo, how a script runs, output and logs), "Look", "Apply", "Undo", the hints table, "Changes elsewhere in the board" (ops, config.json, `AccessView.server`), Calls 5–11, 20, 23, 24, 29, 30.
+
+**Files:**
+- Create: `src/core/server-admin.ts`, `src/services/server-setup.ts`, `test/core/server-admin.test.ts`, `test/adapters/ssh-admin.test.ts`, `test/services/server-setup.test.ts`
+- Modify: `src/adapters/ssh.ts` (`spawnRemote`), `test/support/fake-ssh.ts` (the admin server), `src/adapters/config-file.ts` (`editTunnelAdmin`, `setTunnelSetup`), `src/services/remote-access.ts` (the `server-*` ops, `view().server`), `src/server/app.ts` (wiring), `src/core/i18n/server-strings.ts` (hint texts)
+- Shared: `src/services/remote-access.ts`, `src/core/i18n/server-strings.ts` (Task 24 appends its keys there too).
+
+**Interfaces:**
+- Consumes: Task 20 (`lookScript1`, `readRoundOne`, `lookScript2`, `readServerFacts`), Task 21 (`publicOrigin`, `TunnelConfig.publicPort`), Task 22 (everything in `server-plan.ts`, `server-script.ts`, `ServerView`), `sshBin`, `knownHostsFile`, `fieldProblem`, the supervisor's `test()`.
+- Produces:
+  ```ts
+  // core/server-admin.ts (no node: import)
+  export interface Admin { user: string; key: string }
+  export function adminConfig(v: unknown): Admin                      // config.json tunnel.admin; '' for missing
+  export function adminProblems(a: Admin): { field: 'user' | 'key'; message: string }[]   // fieldProblem('user'|'key') rules; empty user → needed
+  export function adminSshArgs(o: { conf: TunnelConfig; admin: Admin; knownHosts: string; command: string; platform?: string }): string[]
+  export const PROBE_SCRIPT: string                                   // as the admin, no sudo: '@@uid <n>', then '@@sudo ok' or '@@sudo <sudo -n's first line>', '@@flavor <sudo --version first line>'
+  export function readProbe(lines: readonly string[]): { mode: SudoMode; flavor: 'sudo' | 'sudo-rs' | null } | null
+  export function remoteCommand(script: string, mode: SudoMode): string
+  export function adminHint(lines: readonly string[]): AdminHint | null
+  // adapters/ssh.ts
+  export interface RemoteRun { onLine(fn: (line: string) => void): void; done: Promise<{ code: number | null; error: string | null }>; kill(): void }
+  /** stdout and stderr by line; `stdin` written then closed (null: closed at once); killed after timeoutMs. No shell. */
+  export function spawnRemote(bin: string, args: string[], stdin: string | null, timeoutMs: number): RemoteRun
+  // adapters/config-file.ts
+  export function editTunnelAdmin(a: Partial<Admin>): EditResult
+  export function setTunnelSetup(s: { case: SetupCase; address: string; at: string } | null): EditResult
+  // services/server-setup.ts
+  export interface ServerSetupDeps {
+    cfg: Config
+    webPort: number
+    ssh(): string | null
+    knownHosts(): string
+    hostKeyPinned(): Promise<boolean>
+    spawn: typeof spawnRemote
+    test(): Promise<TestStep[]>
+    onChange(): void
+    log(text: string): void
+    now(): number
+    newId(): string
+    acme?: Acme
+  }
+  export type Answer = { status: number; body: unknown }
+  export interface ServerSetup {
+    view(): ServerView
+    admin(body: { user?: unknown; key?: unknown }): Answer
+    look(o: { password?: unknown }): Promise<Answer>
+    apply(o: { plan?: unknown; docker?: unknown; password?: unknown }): Promise<Answer>
+    undoLook(o: { password?: unknown }): Promise<Answer>
+    undo(o: { plan?: unknown; removeDocker?: unknown; removeEdited?: unknown; password?: unknown }): Promise<Answer>
+    cancel(): Answer
+  }
+  export function createServerSetup(d: ServerSetupDeps): ServerSetup
+  ```
+- **Ops** (`POST /api/access`, local-only already): `server-admin { user, key }`, `server-look { password? }`, `server-apply { plan, docker?, password? }`, `server-undo-look { password? }`, `server-undo { plan, removeDocker?, removeEdited?, password? }`, `server-cancel`. 200 `{ ok: true }`; refused 409 `{ ok: false, hint, error, need? }` (`need: 'password'` when sudo asks one and none came); 400 for a malformed body. No answer echoes its body.
+
+**Rules:**
+- **`adminSshArgs`**, in order: `-F none -T`, `-i <sshPathArg(key)> -o IdentitiesOnly=yes` only when `key` is set, `-o BatchMode=yes`, `-o StrictHostKeyChecking=yes`, `-o UserKnownHostsFile="<sshPathArg(knownHosts)>"`, `-o ConnectTimeout=15`, `-o ServerAliveInterval=15`, `-o ServerAliveCountMax=4`, `-o ForwardAgent=no`, `-o ForwardX11=no`, `-o ClearAllForwardings=yes`, `-p <sshPort>`, `<admin>@<host>`, `<command>`.
+- **`remoteCommand`**: `root` → `sh -c 'eval "$(echo <b64> | base64 -d)"'`; `nopasswd` → `sudo -n -- ` + that; `password` → `sudo -S -p '' -- ` + that; `requiretty` and `none` throw. `<b64>` is standard base64 of the UTF-8 script, no line breaks.
+- **`adminHint`** (first match): `Permission denied (publickey` → `publickey`; `Too many authentication failures` → `tooMany`; `Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED` → `hostKey`; sudo's and sudo-rs's own lines as Task 20 recorded them for a password required → `needPassword`, a wrong password → `wrongPassword`, `requiretty` → `requiretty`, not in sudoers → `notSudoer`; `Could not get lock|Waiting for cache lock` → `aptLock`; `toomanyrequests` → `pullLimit`; `@@changed` → `changed`; `@@busy` → `busy`; the tunnel's network lines → `network`.
+- **Look:** admin fields, tunnel host and SSH port, ssh found, a pinned host key (`noHostKey` otherwise, nothing spawned). A password with `\n` or `\r` → 400, nothing spawned. The probe (no sudo, nothing on stdin) → mode and flavour; `password` without one → 409 `need: 'password'`; `requiretty`/`none` → 409 with that hint. Then round one and round two with `remoteCommand(script, mode)`, the password on stdin when `mode` is `password` (`password + '\n'`, once per spawn), each 60 s at most. Unreadable → `unreadable`. Then `chooseCase`/`buildPlan` (or `undoPlan` for `undoLook`), `Wanted` from the tunnel settings (`publicPort`) and `acme` from deps; phase `plan`; a `tunnel.setup` missing from config.json is filled from a record whose `whose` is not `other`.
+- **Apply / Undo:** the plan's id must be the last Look's (kept in memory: a board restart → 409 `lookAgain`); `docker` must be true when `plan.ticks` has `docker`; one run at a time (409 `busy`). Spawn `remoteCommand(launchScript(runId, runScript(plan, w, run)), mode)`; answer 200 at once; each line → `readProgress`, a line holding the password replaced by `••••` before it is kept; `onChange` per marker; `web.log` one line per step (`server setup <step id> ok|fail <seconds>s`), never output. `@@result applied` → `setTunnelSetup`, case 4 → `editTunnel({ publicPort: 8443 })`, then `test()` every 10 s until the domain step passes or 120 s (`testAfter`), phase `done`; Undo applied → `setTunnelSetup(null)`, `publicPort` back to null when the record had 8443. ssh ending without `@@exit` → phase `failed`, hint `lost`.
+- **The fake admin server** (`test/support/fake-ssh.ts`): argv with `StrictHostKeyChecking=yes` and no `-R` is the admin shape. No line in the quoted `UserKnownHostsFile` → `Host key verification failed.`, 255. State `admin: { uid?: number; sudo?: 'nopasswd' | 'password' | 'requiretty' | 'notSudoer'; flavor?: 'sudo' | 'sudo-rs'; password?: string; publickey?: boolean; fixture?: string; run?: { lines: string[]; dropAfter?: number } }`. It decodes the base64 in the last argument, reads the `# agent-board: <kind>` line and answers: `probe` the `@@` lines for `uid`/`sudo`/`flavor`; `look-1`/`look-2` `<fixture>/round1.txt`/`round2.txt`; `launch` the `run.lines`, cut after `dropAfter` (exit 255). For `sudo -S`: reads stdin to EOF, appends it as a JSON line to `<FAKE_SSH_LOG>.stdin`, a wrong one prints the flavour's recorded wrong-password lines and exits 1. A command that does not start with the mode's exact prefix exits 2 (`fake: unexpected command`).
+
+- [ ] **Step 1: Write the failing tests.**
+  - `test/core/server-admin.test.ts`: `adminSshArgs` POSIX and Windows (a key in `C:\Users\Иван Петров\keys\a b%c` → one `-i` value, forward slashes, `%%`); no key → no `-i`, no `IdentitiesOnly`; `remoteCommand` for each mode exactly as above, and decoding its base64 gives the script back; `requiretty` throws; `readProbe` for root, NOPASSWD, password-needed and requiretty lines **of both flavours** (Task 20's lines); `adminHint` for each row above with sudo's and sudo-rs's recorded lines; `adminProblems({ user: '-l', key: '' })` names `user`.
+  - `test/adapters/ssh-admin.test.ts` (fake ssh): `spawnRemote` with stdin `pw\n` → the fake's stdin log holds `pw\n` once; with null → stdin closed (the fake reads EOF at once); lines arrive one by one; `timeoutMs` 300 on a `hang` → killed, `done` resolves; the argv log has `-T` and the remote command as one argument.
+  - `test/services/server-setup.test.ts` (sandbox, `isolatedHome()`, the fake ssh, fixtures from Task 20, **every Look case on `debian13` and `ubuntu2604`**): root → the commands start `sh -c`, the stdin log empty; NOPASSWD → `sudo -n --`, stdin empty; password needed and none given → 409 `need: 'password'`, only the probe spawned; with the sentinel password → `look` 200, the stdin log has it once per sudo spawn, and the sentinel occurs in no argv, no view (`JSON.stringify(view())`), no answer, no `log` call, no file under the sandbox's state folder; a wrong password (sudo and sudo-rs) → 409 `wrongPassword` after exactly one sudo spawn; no pinned key → `noHostKey`, nothing spawned; `publickey` → that hint; `caddy-unit` → `choice.case` `'2'`, `plan.steps[0].id` `guard`; `compose-folder` → `'3a'`; a fixture record of another pair → `choice` `{ case: null, why: ['otherSetup'] }`; the same pair with another domain → `plan.kind` `update`; apply with a stale plan id → 409 `lookAgain`; `docker` missing for a `nodocker` plan → 409; apply with `run.lines` `@@step 1 start … @@result applied`, `@@exit 0` → phase `done`, config.json `tunnel.setup` written with the case, `testAfter` set; a 4a run → config.json `tunnel.publicPort` 8443, its Undo → removed; `run.dropAfter` mid-run → phase `failed`, hint `lost`; a second apply while one runs → 409 `busy`; `log` got one line per step and no output line.
+  - `test/server/access-routes.test.ts` (one new case): `server-look` without a pinned key → 409 `noHostKey`; `server-admin { user: '-l' }` → 409 `field: 'user'`, config.json unchanged.
+- [ ] **Step 2: Run** `bun test test/core/server-admin.test.ts test/adapters/ssh-admin.test.ts test/services/server-setup.test.ts test/server/access-routes.test.ts`. Expected: FAIL.
+- [ ] **Step 3: Implement** the core module, `spawnRemote`, the fake's admin server, the config edits, the service, the ops, the wiring (`createServerSetup` in `app.ts` with `acme` from `BOARD_SETUP_ACME_CA` and `BOARD_SETUP_ACME_CA_ROOT` when both are set) and the hint texts (`server.hint.<hint>`, the spec's hints table, English as there, Russian yours).
+- [ ] **Step 4: Run** the same files: PASS. `bun run check`: clean.
+- [ ] **Step 5: Commit**
+  ```bash
+  git add src/core/server-admin.ts src/services/server-setup.ts src/adapters/ssh.ts src/adapters/config-file.ts src/services/remote-access.ts src/server/app.ts src/core/i18n/server-strings.ts test/support/fake-ssh.ts test/core/server-admin.test.ts test/adapters/ssh-admin.test.ts test/services/server-setup.test.ts test/server/access-routes.test.ts
+  git commit -m "Look at the server, apply the plan and undo it over the owner's admin connection, with sudo's password on stdin only"
+  ```
+
+---
+
+### Task 24: The panel's "On the server" (web)
+
+**Spec:** "The flow, as the owner sees it" (steps 1–3, the panel sketch, Look, the plan, Apply, Do it myself, Undo), the hints table, Call 4, Call 28, "Testing / Web".
+
+**Files:**
+- Create: `web/src/components/access/ServerSetup.tsx` (and parts in the same folder as needed), `web/src/models/server-setup.ts`, `test/web/server-setup.test.tsx`
+- Modify: `web/src/components/access/TunnelSection.tsx` ("Snippets" become "On the server": 1 By hand, 2 Test connection, 3 The web server), `web/src/components/access/Snippets.tsx`, `web/src/models/access.ts` (Call 4's line), `web/styles/access.css`, `src/core/i18n/server-strings.ts`
+- Shared: `src/core/i18n/server-strings.ts` (append), `web/src/models/access.ts`.
+
+**Interfaces:**
+- Consumes: `ServerView` (Task 22), `doItMyself`, `manualFacts`, `placeholderFinders`, `buildPlan` (Task 22), the ops contract of Task 23 (`send('server-look', { password })`, …), `useAccess`'s `send`.
+- Produces:
+  ```ts
+  // web/src/models/server-setup.ts
+  export function foundLines(f: ServerFacts, t: Translator): string[]        // distro · Docker · who holds 443 and 80; the fence; the folder
+  export function stepState(p: Progress, n: number, now: number, t: Translator): string   // 'waiting' | 'running 12 s' | '✓' | '✗'
+  export function manualPlan(c: SetupCase, w: Wanted, distro: 'debian' | 'ubuntu'): Plan
+  export function hintLine(h: AdminHint | null, t: Translator, admin: string): string
+  // web/src/components/access/ServerSetup.tsx
+  export function ServerSetup(p: { view: AccessView; send: AccessSend }): JSX.Element
+  ```
+
+**Rules:**
+- The sudo password: an `<input type="password" autocomplete="off">` shown when `view.server.sudo === 'password'` or an answer had `need: 'password'`; kept in the component's state only, sent with each Look, Apply, Undo; gone when the panel closes; never in `localStorage`, the URL or a toast. The note under it (**exact** en `kept by this panel while it is open; never saved`).
+- Look's findings (`foundLines`), the case line, the address; the plan's numbered steps with what each touches; the Undo line; Docker's tick ("Install Docker from Docker's own repository") keeps Apply off until ticked; a `Manual` choice shows its reasons and "Do it myself" in place of Apply.
+- A run: each step waiting / running (with seconds) / ✓ / ✗, output under a `<details>`; a failure: the step, its hint (`hintLine`), the rollback list with ✓, "Look again" and "Do it myself".
+- Done: "Set up on <date>: <case>" with Undo (two clicks), then the Undo plan with its ticks (`removeDocker`, `removeEdited`).
+- "Do it myself": from the plan when there is one; else a case picker (Nothing on 80 and 443, Caddy as a service, Caddy in Docker, nginx or something else) and `manualPlan`; each block with Copy; placeholders with their finding command.
+- Call 4: while `view.server.setup` is null, the domain step's hint gets **exact** en `If the web server is not set up yet, this step fails until it is: Set up the server below.`
+
+- [ ] **Step 1: Write the failing test** `test/web/server-setup.test.tsx` (views built from `factsFor` and Task 22's functions): nothing looked at (fields, Look, Do it myself); password asked (input `type="password"`, `autocomplete="off"`, the exact note; after typing, `localStorage` has no key holding it); findings for case 2 on Debian 13 and case 3a on Ubuntu 26.04; a `Manual` choice (`otherSetup`) with its reason and no Apply; a `nodocker` plan with Apply disabled until the tick, then `send('server-apply', { plan, docker: true, password })`; a run in progress (one ✓, one running); a failure with its hint and two rollback ✓; done with Undo, two clicks → `send('server-undo-look', …)`; Do it myself without Look for "Caddy in Docker" shows `<your Caddyfile>` and `docker ps`; the 8443 address; Call 4's line present while `setup` is null and absent after; the texts in Russian differ.
+- [ ] **Step 2: Run** `bun test test/web/server-setup.test.tsx test/web/access-panel.test.tsx`. Expected: FAIL.
+- [ ] **Step 3: Implement** the model, the component, the three steps in `TunnelSection`, the CSS (class selectors only) and the keys.
+- [ ] **Step 4: Run** the same files and `bun test test/web/styles.test.ts test/web/style-attributes.test.ts`: PASS. `bun run check`: clean.
+- [ ] **Step 5: Commit**
+  ```bash
+  git add web/src/components/access web/src/models/server-setup.ts web/src/models/access.ts web/styles/access.css src/core/i18n/server-strings.ts test/web/server-setup.test.tsx
+  git commit -m "Set up the server's web server from Settings → Remote access…, or show how to do it by hand"
+  ```
+
+---
+
+### Task 25: The test servers end to end, the two-proxies proof, and the README
+
+**Spec:** "Testing" (Integration, The two-proxies proof), "Changes elsewhere in the board" (README), "What this changes in the tunnel spec" (README lines), the owner's OS decision.
+
+**Files:**
+- Create: `test/integration/server/harness.ts` (build the images, start a server with a scenario, Pebble + challtestsrv + a `client` container on one Docker network, the server's ssh on a free `127.0.0.1` port, stop and remove everything, also on failure), `test/integration/standin.ts` (the stand-in board: a Unix socket in a folder with the tunnel's mode, answering with the Host and `X-Forwarded-*` it got, an event every 500 ms), `test/integration/server-setup.test.ts`, `test/integration/two-proxies.test.ts`
+- Modify: `test/integration/server/*` (fixes the runs need), `README.md`, the spec (a "Checked by the integration tests" block after the spike's; the two-proxies results), `test/core/server-texts.test.ts` (the README check)
+- Shared: `README.md`.
+
+**Interfaces:**
+- Consumes: everything from Tasks 20–24; a sandboxed board (`sandbox()`, `serveBoard`) with `BOARD_SSH_BIN_PATH` = Windows' `ssh.exe`, `BOARD_SETUP_ACME_CA`, `BOARD_SETUP_ACME_CA_ROOT`, config.json pointing the tunnel at the test server.
+
+- [ ] **Step 1: Write `two-proxies.test.ts`** (`BOARD_DOCKER_IT=1`), plain containers, the board's own texts and flags (`caddyRunArgs`, `socatRunArgs`, `markedBlock`, `boardCaddyfile` plus a `local_certs` global option), their proxies with `tls internal` or a self-signed certificate, the test trusting those roots: topology A (their Caddy on a user network, 443 and 80 on loopback ports, `site.test` and the marked block to `agent-board-socket:8080`), B (their nginx on 443 and 80, the board's Caddy on 8443), C (the board's Caddy alone on 443). For each, both at once: `site.test` answers its page and `board.test` the stand-in with `Host: board.test`, `X-Forwarded-Proto: https`, the test's address rightmost in `X-Forwarded-For`; an event stream's first event within 1 s and ticks for 30 s; 200 interleaved concurrent requests all right; their proxy reloaded (A) or restarted (B) during an open board stream: their site keeps answering, B's board stream untouched; the stand-in stopped → `board.test` 502, `site.test` fine; started again on a new socket file → `board.test` answers with no change to either proxy.
+- [ ] **Step 2: Write `server-setup.test.ts`** (`BOARD_SERVER_IT=1`). **Debian 13 and Ubuntu 26.04 run side by side** (one server each at a time, the two in parallel); Ubuntu 24.04 runs `nodocker` (the install path), `bare` and `caddy-unit`; Debian 12 and Ubuntu 22.04 the same three when `BOARD_SERVER_IT_ALL=1`. For each scenario of Task 20 on each server, through the board's ops with the admin `admin` (sudo with a password; `nopw` and root once each per distribution):
+  - Look gives the scenario's case (3c, 4c and the faked Podman/rootless/SELinux give their `Manual` reasons and no Apply);
+  - Apply → `@@result applied`; their sites answer as before (the test's own fetches from the `client` container, not only the board's); `https://board.test` (or `:8443`) reaches the stand-in through the board's real tunnel with `X-Forwarded-Proto: https` and the caller's address, its certificate from Pebble;
+  - Apply again → nothing to change: their files' hashes and the containers' ids the same;
+  - Undo → their files' hashes as before Apply; no `agent-board` container, volume, file, line or block left; Docker kept;
+  - failures (on both distributions): a broken line put into their Caddyfile before Apply (validate fails, nothing reloaded, hash unchanged); the board's ssh killed mid-Apply (the run finishes or rolls back; the next Look reads the record); their reload made to fail (rollback, their Caddy on its old config); a host made to answer differently after the reload (rollback); their file changed between Look and Apply (`changed`, nothing changed); a wrong sudo password (`wrongPassword`, one attempt, sudo's and sudo-rs's lines);
+  - the sentinel password appears in no file under the sandbox and in no file under `/etc/agent-board` or `/var/log` on the server (`grep -r`).
+- [ ] **Step 3: Run** `BOARD_DOCKER_IT=1 bun test test/integration/two-proxies.test.ts` and `BOARD_SERVER_IT=1 bun test test/integration/server-setup.test.ts` (long; `--timeout` as needed). Fix what fails in the task that owns the code (core, service or scripts), each fix with a unit test that fails without it. Then `bun test test/integration` without the env: every `describe` skipped, no container started (`docker ps` before and after the same).
+- [ ] **Step 4: Write the README** in the voice of the sections around it: "On the server" as the three steps (by hand with the one paste; Test connection; The web server: Look, the plan, Apply, Undo, what is stored and what never is); "Do it myself" with each case's summary (the panel has the commands); the case-3 trade-off in one paragraph; which servers (Debian 12, 13; Ubuntu 22.04–26.04; sudo or sudo-rs; anything else by hand); Settings: `tunnel.admin`, `tunnel.setup`; Development: the new modules and `BOARD_SETUP_ACME_CA`, `BOARD_SETUP_ACME_CA_ROOT`, `BOARD_SERVER_IT`, `BOARD_DOCKER_IT`. In `test/core/server-texts.test.ts`: the README holds `IMPORT_LINE` and `markedBlock` for the defaults verbatim, and the three step headings.
+- [ ] **Step 5: Record** in the spec: the two-proxies results and one line per scenario and distribution (case, Apply, again, Undo, failures). Run `bun test test/core/server-texts.test.ts`: PASS. `bun run check`: clean.
+- [ ] **Step 6: Commit**
+  ```bash
+  git add test/integration README.md test/core/server-texts.test.ts docs/superpowers/specs/2026-10-21-remote-tunnel-server-setup-design.md
+  git commit -m "Test the server setup end to end on Debian and Ubuntu test servers and prove two proxies serve side by side, and describe it in the README"
+  ```
+  (Fixes from Step 3 are committed as they come, each with its own plain sentence.)
+
+---
+
+## After Task 25 (the owner, by hand)
+
+The spec's "Manual (the owner)": a throwaway Debian 13 VPS (and Ubuntu 26.04 if at hand) through cases 1, 2 and 3a; then, if the owner wants, the real server: Look only, the plan read together, then Apply.
