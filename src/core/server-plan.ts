@@ -674,7 +674,8 @@ function ownFile(
     id,
     {
       commands: [
-        `sudo install -d -m 755 ${q(dirOf(path))}`,
+        // made only when missing: `install -d -m` sets the mode of a folder that is there (their conf.d)
+        `sudo test -d ${q(dirOf(path))} || sudo install -d -m 755 ${q(dirOf(path))}`,
         `sudo install -d -m 700 ${q(b)}`,
         `if sudo test -f ${q(path)}; then ${copyWhole(path, saved)}; else sudo touch ${q(made)}; fi`,
         writeTo(part, text),

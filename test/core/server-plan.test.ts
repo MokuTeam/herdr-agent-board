@@ -379,6 +379,15 @@ for (const distro of DISTROS) {
       expect(text(step(p, 'run-caddy'))).toContain('-p 127.0.0.1:8480:80 -p 8443:8443')
     })
 
+    test('a folder of theirs the board writes into keeps its mode: made only when missing', () => {
+      // `install -d -m 755` on a folder that is there sets its mode (GNU and uutils alike)
+      const nginx = step(plan(factsFor('4b', distro)), 'nginx-file').commands
+      expect(nginx).toContain('sudo test -d /etc/nginx/conf.d || sudo install -d -m 755 /etc/nginx/conf.d')
+      expect(nginx).not.toContain('sudo install -d -m 755 /etc/nginx/conf.d')
+      const site = step(plan(factsFor('2', distro)), 'site-file').commands
+      expect(site).toContain('sudo test -d /etc/caddy/agent-board || sudo install -d -m 755 /etc/caddy/agent-board')
+    })
+
     test('the record each step leaves, and what Undo will remove', () => {
       const p = plan(factsFor('nodocker', distro))
       expect(step(p, 'docker-install').record).toEqual([
