@@ -25,6 +25,7 @@ import {
   SID,
   SLEPT,
   scheduleDir,
+  stateDir,
   transcript,
   twoProfiles,
   wakeFileText,
@@ -339,6 +340,39 @@ for (const [name, wake] of [
       assert.equal(entries(box).length, 1)
     },
   )
+
+test('wake on and running: board sleep and board schedule name it wake, never herdr-wake', async () => {
+  const box = await sandbox()
+  running(box)
+  const wake = await fakeWake({ sleep: () => ({ ok: false, error: 'no running session in p1' }) })
+  config(box, { wake: { enabled: true, port: wake.port } })
+  mkdirSync(stateDir(box), { recursive: true })
+  writeFileSync(
+    join(stateDir(box), 'wake-status.json'),
+    JSON.stringify({ state: 'running', at: Date.now(), port: wake.port }),
+  )
+  const sleep = await cli(box, ['sleep', SID])
+  assert.equal(sleep.code, 0, sleep.out)
+  assert.match(sleep.out, /kept up, wake refused: Could not put .+ to sleep: wake does not know it$/)
+  // A restart the board's wake refused, as `board schedule --all` lists it.
+  mkdirSync(scheduleDir(box), { recursive: true })
+  const at = Date.now()
+  writeFileSync(
+    join(scheduleDir(box), 'abc123.json'),
+    JSON.stringify({
+      id: 'abc123',
+      key: SID,
+      kind: 'restart',
+      next: at,
+      created: at,
+      attempts: 1,
+      why: 'it stayed up',
+    }),
+  )
+  const listed = await cli(box, ['schedule', '--all'])
+  assert.match(listed.out, /\(wake refused, tries again: it stayed up\)/)
+  assert.doesNotMatch(`${sleep.out}\n${listed.out}`, /herdr-wake/)
+})
 
 // ---------------------------------------------------------------- a restart in its wake step
 

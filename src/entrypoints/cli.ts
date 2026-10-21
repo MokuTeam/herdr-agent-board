@@ -326,9 +326,12 @@ function restartState(e: ScheduleEntry): string {
   }
   const why = typeof e.why === 'string' ? e.why : ''
   const held = Object.hasOwn(HELD, why) ? HELD[why] : undefined
-  const refused = e.attempts && why && why !== 'busy' ? ` (herdr-wake refused, tries again: ${why})` : ''
+  const refused = e.attempts && why && why !== 'busy' ? ` (${wakeName()} refused, tries again: ${why})` : ''
   return `once the session is free${held ? ` (waits: ${held})` : refused}`
 }
+
+/** The wake the board talks to, as its lines name it: the board's own (#119), else the separate herdr-wake plugin, as before. */
+const wakeName = (): string => (currentWakeMode(cfg).kind === 'new' ? 'wake' : 'herdr-wake')
 
 function entryLine(e: ScheduleEntry, now: number, withSession: boolean): string {
   const parts =
@@ -771,13 +774,19 @@ const KEPT: Record<string, string> = {
   draft: 'unsent text in its input box',
   tasks: 'background tasks run',
   gone: 'another session is in its pane now',
-  notClaude: 'not a Claude session, and herdr-wake puts only those to sleep',
+}
+
+/** Why a session stays up, naming the wake that puts sessions to sleep where it is the reason. */
+function keptBy(o: SleepOutcome): string {
+  if (o.why === 'refused') return `${wakeName()} refused: ${o.detail ?? ''}`
+  if (o.why === 'notClaude') return `not a Claude session, and ${wakeName()} puts only those to sleep`
+  return KEPT[o.why ?? ''] ?? o.detail ?? ''
 }
 
 /** One session's line: who, then asleep, or why it stays up. */
 function sleepLine(o: SleepOutcome): string {
   const who = o.name ? `${o.name}${o.pane ? ` (${o.pane})` : ''}` : `"${o.target}"`
-  const held = o.why === 'refused' ? `herdr-wake refused: ${o.detail ?? ''}` : (KEPT[o.why ?? ''] ?? o.detail ?? '')
+  const held = keptBy(o)
   if (o.result === 'asleep') return `${who}: asleep`
   if (o.result === 'already') return `${who}: asleep already`
   if (o.result === 'scheduled')

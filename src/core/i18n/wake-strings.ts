@@ -111,6 +111,10 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'wake.router.polling': 'Receiving messages from {host}',
     'wake.router.error': 'Not receiving messages: {error}',
     'wake.router.off': 'Not receiving messages',
+    // the board's own wake named where herdr-wake was before (err.wakeDown, err.sleep.unknown, rename.alsoClaudeHint)
+    'err.boardWakeDown': 'Wake did not answer: {why}',
+    'err.sleep.unknownToWake': 'wake does not know it',
+    'rename.alsoClaudeHintWake': 'Types /rename into the session; other sessions and the board’s wake see the new name',
   },
   ru: {
     // Task 4.1: Settings → Sleep and wake…, its state and switches
@@ -229,5 +233,9 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'wake.router.polling': 'Получает сообщения от {host}',
     'wake.router.error': 'Сообщения не приходят: {error}',
     'wake.router.off': 'Сообщения не получает',
+    // the board's own wake named where herdr-wake was before (err.wakeDown, err.sleep.unknown, rename.alsoClaudeHint)
+    'err.boardWakeDown': 'Пробуждение не ответило: {why}',
+    'err.sleep.unknownToWake': 'пробуждение её не знает',
+    'rename.alsoClaudeHintWake': 'Наберёт /rename в сессии; новое имя увидят другие сессии и пробуждение доски',
   },
 }
