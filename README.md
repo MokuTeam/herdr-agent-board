@@ -194,8 +194,11 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   style (Classic, the board's own, or Terminal: a terminal-style look with a One Dark palette,
   One Light in the light theme, monospace and 1px outlines, and the terminal board's keys, see
   [Board keys](#board-keys); kept in this browser too, and config.json's `look` makes it the
-  one a browser starts in), language, where the session panel sits, whether sleeping sessions
-  show, and "Sleep and wake…" ([Sleep and wake](#sleep-and-wake); read only on a phone). On a
+  one a browser starts in), card text ("Cut short", as it always was, or "Wrap" for a narrow
+  column or a phone: a card's name shows whole on as many lines as it takes, its profile, clock
+  and age going under it when there is no room beside it, and what it does, asks, waits for and
+  said last gets up to three lines; in either style, kept in this browser), language, where the
+  session panel sits, whether sleeping sessions show, and "Sleep and wake…" ([Sleep and wake](#sleep-and-wake); read only on a phone). On a
   computer with [Omarchy](https://omarchy.org), the Terminal style takes the colors of
   the Omarchy theme on now (mixed from its `colors.toml` as Omarchy's own apps take theirs) and the
   system's monospace font, and follows a theme switch while the page is open; in the theme's other
