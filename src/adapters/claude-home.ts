@@ -16,6 +16,7 @@ import { projectFolderName } from '../core/resume.ts'
 import {
   type ConversationOptions,
   type ConversationTurn,
+  fitThread,
   parseConversation,
   parseTranscriptTail,
   saidIn,
@@ -155,7 +156,7 @@ export function readSessionThread(path: string, limit = 40, queue: QueueWindow =
   return { conversation: items, queued: queuedPrompts(text, queue) }
 }
 
-/** The last `limit` turns of a transcript, and the end of it they were read from. */
+/** The last `limit` turns of a transcript (within the thread's budget, fitThread), and the end of it they were read from. */
 function readThread(
   path: string,
   limit: number,
@@ -171,7 +172,7 @@ function readThread(
     items = parseConversation(text.split('\n'), Number.POSITIVE_INFINITY, opts)
     if (items.filter(i => i.role !== 'tool').length >= limit / 3 || bytes >= st.size) break
   }
-  return { items: items.slice(-limit), text }
+  return { items: fitThread(items.slice(-limit)), text }
 }
 
 /** The folder a Claude session started in, from its transcript (its first "cwd"); null when it cannot be read. */

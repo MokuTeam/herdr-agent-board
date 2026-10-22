@@ -130,6 +130,7 @@ describe('routes', () => {
       'styles/segments.css',
       'styles/motion.css',
       'styles/errors.css',
+      'styles/messages.css',
       'styles/look-terminal.css',
       'app.js',
     ])

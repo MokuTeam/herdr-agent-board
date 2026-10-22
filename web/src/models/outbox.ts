@@ -7,8 +7,8 @@ import type { QueuedPrompt } from '../../../src/core/queue.ts'
  * A message's words, to find what the board sent in what the transcript shows. On its way
  * Claude Code wraps pasted text in <pasted_content id="…"> tags, turns an image's path into
  * "[Image #1]", drops blank lines and can change a path (a pasted "\a" or "\t" is read as a
- * control character); a long message comes clipped. So: no tags, no image marks, no paths, one
- * space between words.
+ * control character); a queued one, or one the thread's budget cut, comes clipped. So: no tags,
+ * no image marks, no paths, one space between words.
  */
 export function messageKey(text: unknown): string {
   return String(text ?? '')
