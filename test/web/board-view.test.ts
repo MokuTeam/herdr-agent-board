@@ -17,7 +17,6 @@ import {
   dropLit,
   dropTarget,
   edgeScroll,
-  laneShown,
   lanesOf,
   mayDrag,
   NO_MOVES,
@@ -27,6 +26,7 @@ import {
   withMove,
   withoutMove,
 } from '../../web/src/models/board-view.ts'
+import { laneShown } from '../../web/src/models/lane-picks.ts'
 import { item } from './support/board.tsx'
 
 const category = (id: string, title: string, color: string): BoardCategory => ({
@@ -86,9 +86,10 @@ describe('visibleItems', () => {
   })
 
   test('lanes on show and the look of a lane the payload does not list', () => {
-    expect(laneShown('all', 'x')).toBe(true)
-    expect(laneShown('x', 'x')).toBe(true)
-    expect(laneShown('y', 'x')).toBe(false)
+    expect(laneShown([], 'x')).toBe(true)
+    expect(laneShown(['x'], 'x')).toBe(true)
+    expect(laneShown(['y'], 'x')).toBe(false)
+    expect(laneShown(['y', 'x'], 'x')).toBe(true)
     expect(categoryInfo(categories, 'proj').title).toBe('Client Work')
     expect(categoryInfo(categories, 'new')).toEqual({ id: 'new', title: 'new', color: 'var(--gray)' })
   })
@@ -160,7 +161,7 @@ describe('lanesOf', () => {
   ]
 
   test('one lane per category in the payload order, its cards per column in board order', () => {
-    const lanes = lanesOf(board, visible, 'all', NO_MOVES)
+    const lanes = lanesOf(board, visible, [], NO_MOVES)
     expect(lanes.map(l => [l.id, l.title, l.color, keys(l.items), l.shown])).toEqual([
       ['proj', 'Project', '#007AFF', ['b', 'c', 'e'], true],
       ['other', 'Other', '#8E8E93', ['a'], true],
@@ -177,16 +178,28 @@ describe('lanesOf', () => {
   })
 
   test('the lanes control hides the other lanes; nothing on show when the picked lane is empty', () => {
-    const lanes = lanesOf(board, visible, 'other', NO_MOVES)
+    const lanes = lanesOf(board, visible, ['other'], NO_MOVES)
     expect(lanes.map(l => l.shown)).toEqual([false, true, false])
     expect(anyShown(lanes)).toBe(true)
-    expect(anyShown(lanesOf(board, visible, 'x', NO_MOVES))).toBe(false)
-    expect(anyShown(lanesOf(board, [], 'all', NO_MOVES))).toBe(false)
+    expect(anyShown(lanesOf(board, visible, ['x'], NO_MOVES))).toBe(false)
+    expect(anyShown(lanesOf(board, [], [], NO_MOVES))).toBe(false)
+  })
+
+  test('several lanes picked: each of them on show, in category order whatever the order picked', () => {
+    const lanes = lanesOf(board, visible, ['x', 'proj'], NO_MOVES)
+    expect(lanes.map(l => [l.id, l.shown])).toEqual([
+      ['proj', true],
+      ['other', false],
+      ['x', true],
+    ])
+    expect(anyShown(lanes)).toBe(true)
+    // Two empty lanes picked: nothing on show, so the board says why.
+    expect(anyShown(lanesOf(board, visible, ['x', 'gone'], NO_MOVES))).toBe(false)
   })
 
   test('pending moves place the card in its new lane and column', () => {
     const moves = withMove(NO_MOVES, 'a', { cat: 'proj', column: 'me', at: 0 })
-    const proj = lanesOf(board, visible, 'all', moves)[0]
+    const proj = lanesOf(board, visible, [], moves)[0]
     expect(keys(proj?.items ?? [])).toEqual(['a', 'b', 'c', 'e'])
     expect(proj?.columns.find(c => c.id === 'me')?.items.map(i => i.key)).toEqual(['a'])
   })

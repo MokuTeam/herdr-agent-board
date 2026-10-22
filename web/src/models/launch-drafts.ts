@@ -1,5 +1,6 @@
 // A launch draft is one whole form, scoped to the place that opened it. Nothing
 // is persisted to disk or sent by restoring it; drafts live in this page for ten minutes.
+import { ALL_LANES, type LanePicks } from './lane-picks.ts'
 
 /** Where the window was opened: a card's folder and lane, else the folder or lane it was asked for. */
 export interface DraftPlace {
@@ -9,8 +10,11 @@ export interface DraftPlace {
   newWorkspace?: boolean | null | undefined
 }
 
-/** The key of the drafts of a place: its folder (case folded for Windows paths), its lane, a new workspace. */
-export function launchContext(ctx: DraftPlace, filter = 'all'): string {
+/**
+ * The key of the drafts of a place: its folder (case folded for Windows paths), its lane (else the
+ * lanes picked on the board: one by its id, several as they were picked), a new workspace.
+ */
+export function launchContext(ctx: DraftPlace, filter: LanePicks = ALL_LANES): string {
   let path = String(ctx.item?.cwd ?? ctx.cwd ?? '')
     .trim()
     .replace(/\\/g, '/')
@@ -18,7 +22,7 @@ export function launchContext(ctx: DraftPlace, filter = 'all'): string {
   if (/^[A-Za-z]:\//.test(path) || path.startsWith('//')) path = path.toLowerCase()
   return JSON.stringify([
     path,
-    ctx.item?.category ?? ctx.category ?? (filter === 'all' ? '' : filter),
+    ctx.item?.category ?? ctx.category ?? (filter.length > 1 ? filter : (filter[0] ?? '')),
     !!ctx.newWorkspace,
   ])
 }

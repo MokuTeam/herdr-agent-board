@@ -57,19 +57,29 @@ test('attention: questions and unviewed results in the lanes on show, starting c
     done,
     item({ key: 'w', column: 'work', category: 'proj' }),
   ]
-  expect(attentionCount(visible, 'all', categoryOf, {})).toBe(2)
-  expect(attentionCount(visible, 'proj', categoryOf, {})).toBe(1)
-  expect(attentionCount(visible, 'all', categoryOf, { c: resultToken(done) })).toBe(1)
+  expect(attentionCount(visible, [], categoryOf, {})).toBe(2)
+  expect(attentionCount(visible, ['proj'], categoryOf, {})).toBe(1)
+  expect(attentionCount(visible, ['other'], categoryOf, {})).toBe(1)
+  expect(attentionCount(visible, ['proj', 'other'], categoryOf, {})).toBe(2)
+  expect(attentionCount(visible, ['unused', 'other'], categoryOf, {})).toBe(1)
+  expect(attentionCount(visible, [], categoryOf, { c: resultToken(done) })).toBe(1)
 })
 
-test('lanes control: All, then the categories with sessions on show and the picked one, in the board order', () => {
+test('lanes control: All, then the categories with sessions on show and those picked, in the board order', () => {
   const visible = [item({ key: 'a', category: 'other' }), item({ key: 'b', category: 'other' })]
-  expect(laneOptions(CATEGORIES, visible, 'all', categoryOf, t)).toEqual([
+  expect(laneOptions(CATEGORIES, visible, [], categoryOf, t)).toEqual([
     { id: 'all', title: 'All', n: 2 },
     { id: 'other', title: 'OTHER', n: 2 },
   ])
-  expect(laneOptions(CATEGORIES, visible, 'unused', categoryOf, t).map(o => [o.id, o.n])).toEqual([
+  expect(laneOptions(CATEGORIES, visible, ['unused'], categoryOf, t).map(o => [o.id, o.n])).toEqual([
     ['all', 2],
+    ['other', 2],
+    ['unused', 0],
+  ])
+  // Picked in another order, and one that is no category at all: the board's order, the unknown left out.
+  expect(laneOptions(CATEGORIES, visible, ['unused', 'gone', 'proj'], categoryOf, t).map(o => [o.id, o.n])).toEqual([
+    ['all', 2],
+    ['proj', 0],
     ['other', 2],
     ['unused', 0],
   ])
@@ -78,9 +88,34 @@ test('lanes control: All, then the categories with sessions on show and the pick
 test('column heads: the page dictionary titles, the column colors and counts in the lanes on show', () => {
   const columns = [{ id: 'work' as const }, { id: 'me' as const }]
   const visible = [item({ key: 'a', column: 'work', category: 'proj' }), item({ key: 'b', column: 'work' })]
-  expect(columnHeads(columns, visible, 'proj', categoryOf, translator('ru'), NO_MOVES)).toEqual([
+  expect(columnHeads(columns, visible, ['proj'], categoryOf, translator('ru'), NO_MOVES)).toEqual([
     { id: 'work', title: 'Работает', color: 'var(--green)', n: 1, vacant: false },
     { id: 'me', title: 'Ждёт меня', color: 'var(--orange)', n: 0, vacant: true },
+  ])
+  const counts = (filter: string[]) =>
+    columnHeads(
+      columns,
+      [...visible, item({ key: 'c', column: 'me', category: 'unused' })],
+      filter,
+      categoryOf,
+      t,
+      NO_MOVES,
+    ).map(h => [h.id, h.n, h.vacant])
+  expect(counts([])).toEqual([
+    ['work', 2, false],
+    ['me', 1, false],
+  ])
+  expect(counts(['proj', 'unused'])).toEqual([
+    ['work', 1, false],
+    ['me', 1, false],
+  ])
+  expect(counts(['other', 'unused'])).toEqual([
+    ['work', 1, false],
+    ['me', 1, false],
+  ])
+  expect(counts(['unused'])).toEqual([
+    ['work', 0, true],
+    ['me', 1, false],
   ])
 })
 
@@ -88,7 +123,7 @@ test('a column with no card on show narrows to its head; where a card was moved 
   const columns = [{ id: 'work' as const }, { id: 'me' as const }, { id: 'done' as const }]
   const visible = [item({ key: 'a', column: 'work', category: 'proj' })]
   const moved = withMove(NO_MOVES, 'a', { cat: null, column: 'done', at: 1 })
-  const heads = columnHeads(columns, visible, 'all', categoryOf, t, moved)
+  const heads = columnHeads(columns, visible, [], categoryOf, t, moved)
   expect(heads.map(h => [h.id, h.n, h.vacant])).toEqual([
     ['work', 1, true],
     ['me', 0, true],
@@ -96,7 +131,7 @@ test('a column with no card on show narrows to its head; where a card was moved 
   ])
   expect(columnShares(heads)).toEqual([0, 0, 1])
   // Nothing on show at all: the columns keep their even widths.
-  expect(columnShares(columnHeads(columns, [], 'all', categoryOf, t, NO_MOVES))).toEqual([1, 1, 1])
+  expect(columnShares(columnHeads(columns, [], [], categoryOf, t, NO_MOVES))).toEqual([1, 1, 1])
   expect(columnTracks([1, 0.4999, -0.01])).toBe(
     'minmax(var(--col-min), 1.000fr) minmax(var(--col-min), 0.500fr) minmax(var(--col-min), 0.000fr)',
   )

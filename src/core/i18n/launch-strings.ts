@@ -25,6 +25,8 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.where': 'Open in',
     // the agent choice, when the board offers Claude Code and pi (web/src/models/launch-agent.ts)
     'launch.agent': 'Agent',
+    // under Category, when several lanes are on show and the form starts in the first picked
+    'launch.lanesNote': 'Categories on show: {lanes}. It starts in {lane}, the first picked, unless you pick another.',
     'launch.newWorkspace': 'New workspace…',
     'launch.workspaceName': 'Workspace name',
     'launch.workspaceDefault': 'Sessions',
@@ -195,6 +197,8 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.browse': 'Обзор',
     'launch.where': 'Где открыть',
     'launch.agent': 'Агент',
+    'launch.lanesNote':
+      'На доске категории: {lanes}. Сессия начнётся в «{lane}», первой выбранной, если не выбрать другую.',
     'launch.newWorkspace': 'Новый workspace…',
     'launch.workspaceName': 'Имя workspace',
     'launch.workspaceDefault': 'Сессии',

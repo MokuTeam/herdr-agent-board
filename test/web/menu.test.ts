@@ -1,6 +1,7 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { translator } from '../../src/core/i18n/translator.ts'
+import { ALL_LANES, onlyLane } from '../../web/src/models/lane-picks.ts'
 import {
   boardMenu,
   cardMenu,
@@ -314,12 +315,12 @@ test('stale herdr data grays what goes through herdr, with the reason once; offl
 test('lanes, the board, starting sessions and file chips have menus of their own', () => {
   const [acme] = categories
   assert.ok(acme)
-  const lane = laneMenu(acme, { ...fresh, filter: 'all' })
+  const lane = laneMenu(acme, { ...fresh, filter: ALL_LANES })
   assert.deepEqual(ids(lane), ['new', 'newWorkspace', 'editCat', 'showOnly'])
   assert.match(find(lane, 'new')?.label ?? '', /Acme/)
-  assert.deepEqual(ids(laneMenu(acme, { ...fresh, filter: 'acme' })).at(-1), 'showAll')
-  assert.equal(find(laneMenu(acme, { ...fresh, canMutate: false, filter: 'all' }), 'new')?.disabled, true)
-  assert.deepEqual(ids(boardMenu({ ...fresh, filter: 'all', sleepers: true })), [
+  assert.deepEqual(ids(laneMenu(acme, { ...fresh, filter: ['acme'] })).at(-1), 'showAll')
+  assert.equal(find(laneMenu(acme, { ...fresh, canMutate: false, filter: ALL_LANES }), 'new')?.disabled, true)
+  assert.deepEqual(ids(boardMenu({ ...fresh, filter: ALL_LANES, sleepers: true })), [
     'new',
     'newWorkspace',
     'cats',
@@ -327,7 +328,7 @@ test('lanes, the board, starting sessions and file chips have menus of their own
     'sleepers',
     'search',
   ])
-  assert.equal(find(boardMenu({ ...fresh, filter: 'acme', sleepers: false }), 'sleepers')?.checked, false)
+  assert.equal(find(boardMenu({ ...fresh, filter: ['acme'], sleepers: false }), 'sleepers')?.checked, false)
   assert.deepEqual(ids(launchMenu({ state: 'failed', pane: 'w1:p3' }, fresh)), [
     'focus',
     'retry',
@@ -395,9 +396,11 @@ test('the model gives what the old page’s menu-model.js gave, case by case', (
           }
         for (const filter of ['all', 'acme', 'other'])
           for (const sleepers of [true, false]) {
+            // The old page's filter is one lane or 'all': the board's picks are that lane alone, or none.
             const c = { ...base, filter, sleepers }
-            for (const cat of categories) assert.deepEqual(laneMenu(cat, c), was('laneMenu', cat, c))
-            assert.deepEqual(boardMenu(c), boardNow(c))
+            const ours = { ...c, filter: onlyLane(filter) }
+            for (const cat of categories) assert.deepEqual(laneMenu(cat, ours), was('laneMenu', cat, c))
+            assert.deepEqual(boardMenu(ours), boardNow(c))
           }
         for (const state of ['starting', 'waiting', 'trust', 'done', 'failed'])
           for (const l of [

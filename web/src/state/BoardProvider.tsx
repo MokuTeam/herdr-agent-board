@@ -15,6 +15,7 @@ import {
 import { type LiveBoard, useBoard } from '../api/useBoard.ts'
 import { useLanguage } from '../i18n/I18nProvider.tsx'
 import { withEdits } from '../models/board-edits.ts'
+import { lanesText } from '../models/lane-picks.ts'
 import { type BoardAction, type BoardUi, boardUi, initialUi, type ToastOptions } from './board-ui.ts'
 import { storage } from './storage.ts'
 import { usePersisted } from './usePersisted.ts'
@@ -62,7 +63,7 @@ export function BoardProvider({ children }: { children: ReactNode }) {
   useLayoutEffect(() => {
     if (live.data) follow(live.data.lang)
   }, [live.data, follow])
-  usePersisted('board.filter', ui.filter)
+  usePersisted('board.filter', lanesText(ui.filter))
   usePersisted('board.profile', ui.profile)
   usePersisted('board.sleepers', ui.sleepers ? '1' : '0')
   usePersisted('board.viewed', JSON.stringify(ui.viewed))

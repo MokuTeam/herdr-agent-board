@@ -228,12 +228,12 @@ export function useLaunch({ onResume, onFork }: LaunchOptions = {}): Launch {
       focus: () => focusRef.current,
       store: localStore,
       onStarted: l => {
-        // The new card must be in sight: its lane and its profile shown, then drawn at once (the
-        // window folds into it).
+        // The new card must be in sight: its lane (joining the lanes picked) and its profile
+        // shown, then drawn at once (the window folds into it).
         const { data, ui, dispatch } = latest.current.board
         const pick = pickShowing(ui.profile, data?.profiles, l.profile)
         flushSync(() => {
-          if (ui.filter !== 'all' && ui.filter !== l.category) dispatch({ type: 'filter', id: l.category })
+          dispatch({ type: 'showLane', id: l.category })
           if (pick !== null) dispatch({ type: 'profile', id: pick })
           dispatch({ type: 'launched', launch: l })
         })

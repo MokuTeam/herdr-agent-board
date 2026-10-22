@@ -2,7 +2,7 @@
 import { useCallback } from 'react'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { nextAttention } from '../models/attention.ts'
-import { laneShown } from '../models/board-view.ts'
+import { laneShown } from '../models/lane-picks.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { useBoardView } from './useBoardView.ts'
 

@@ -3,10 +3,8 @@
 // pure parts of dragging a card and of cards appearing.
 import type { BoardCategory } from '../../../src/core/payload.ts'
 import type { ColumnId, Item } from '../../../src/core/types.ts'
+import { type LanePicks, laneShown } from './lane-picks.ts'
 import { profileShown } from './profiles.ts'
-
-/** Whether the lanes control (`filter`: a category id or 'all') shows lane `category`. */
-export const laneShown = (filter: string, category: string): boolean => filter === 'all' || filter === category
 
 export type CategoryLook = { id: string; title: string; color: string }
 
@@ -143,8 +141,8 @@ export interface BoardShape {
   columns: { id: ColumnId }[]
 }
 
-/** One lane per category in the payload's order, its cards split into the columns. */
-export function lanesOf(board: BoardShape, visible: Item[], filter: string, moves: PendingMoves): LaneView[] {
+/** One lane per category in the payload's order, its cards split into the columns; `filter`: the lanes picked. */
+export function lanesOf(board: BoardShape, visible: Item[], filter: LanePicks, moves: PendingMoves): LaneView[] {
   return board.categories.map(({ id, title, color }) => {
     const items = visible.filter(it => catOf(moves, it) === id)
     return {

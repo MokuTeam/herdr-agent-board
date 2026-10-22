@@ -117,11 +117,22 @@ function asReactRendersIt(toolbar: Node[]): string {
 
 const ui = (fields: Partial<BoardUi>) => fields
 
+/**
+ * The lanes control as this board draws it since #179, where the old page had a tab list with a
+ * thumb: a group of toggles, each lane on show pressed ("All" while none is picked).
+ */
+function asLanePicks(toolbar: Node[], buttons: string): void {
+  const lanes = byId(toolbar, 'lanes')
+  setAttr(lanes, 'class', 'segmented lane-picks')
+  setAttr(lanes, 'role', 'group')
+  setHtml(lanes, buttons)
+}
+
 describe('toolbar markup parity', () => {
   test('a fresh board in English: counts, lanes, attention, schedule badge, usage and the live dot', () => {
     const t = translator('en')
     const data = payload({ items: ITEMS, categories: CATEGORIES, limits: LIMITS, schedules: SCHEDULES })
-    const actual = renderToolbar(board({ data, ui: ui({ filter: 'all', sleepers: true }) }), 'en')
+    const actual = renderToolbar(board({ data, ui: ui({ filter: [], sleepers: true }) }), 'en')
 
     const old = oldToolbar(t)
     setHtml(
@@ -135,9 +146,9 @@ describe('toolbar markup parity', () => {
     )
     setAttr(next, 'title', t('attention.nextHint'))
     setAttr(next, 'aria-label', 'Next card needing attention, 2 in this view')
-    setHtml(
-      byId(old, 'lanes'),
-      '<span class="thumb"></span><button role="tab" data-id="all" aria-selected="true">All<span class="n">5</span></button><button role="tab" data-id="proj" aria-selected="false">Project<span class="n">3</span></button><button role="tab" data-id="other" aria-selected="false">Other<span class="n">2</span></button>',
+    asLanePicks(
+      old,
+      '<button data-id="all" aria-pressed="true">All<span class="n">5</span></button><button data-id="proj" aria-pressed="false">Project<span class="n">3</span></button><button data-id="other" aria-pressed="false">Other<span class="n">2</span></button>',
     )
     setHtml(
       byId(old, 'columns-head'),
@@ -175,7 +186,7 @@ describe('toolbar markup parity', () => {
       limits: { ...LIMITS, observedAt: old, stale: true },
     })
     const viewed = { c: resultToken(done) }
-    const actual = renderToolbar(board({ data, ui: ui({ filter: 'other', sleepers: false, viewed }) }), 'ru')
+    const actual = renderToolbar(board({ data, ui: ui({ filter: ['other'], sleepers: false, viewed }) }), 'ru')
 
     const page = oldToolbar(t)
     setHtml(
@@ -190,9 +201,9 @@ describe('toolbar markup parity', () => {
     )
     setAttr(next, 'title', t('attention.none'))
     setAttr(next, 'aria-label', t('attention.none'))
-    setHtml(
-      byId(page, 'lanes'),
-      '<span class="thumb"></span><button role="tab" data-id="all" aria-selected="false">Все<span class="n">4</span></button><button role="tab" data-id="proj" aria-selected="false">Project<span class="n">3</span></button><button role="tab" data-id="other" aria-selected="true">Other<span class="n">1</span></button>',
+    asLanePicks(
+      page,
+      '<button data-id="all" aria-pressed="false">Все<span class="n">4</span></button><button data-id="proj" aria-pressed="false">Project<span class="n">3</span></button><button data-id="other" aria-pressed="true">Other<span class="n">1</span></button>',
     )
     // Only Done has a card on show: the other columns narrow to their heads.
     setHtml(
@@ -225,6 +236,7 @@ describe('toolbar markup parity', () => {
     // The page as it starts: the connection reported "not connected" once (renderLimits,
     // updateLive, syncAvailability), the title of the dot put back by the second applyTexts().
     const old = oldToolbar(t)
+    asLanePicks(old, '')
     const limits = byId(old, 'limits')
     removeAttr(limits, 'hidden')
     setAttr(limits, 'aria-label', 'Claude usage')

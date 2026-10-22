@@ -16,6 +16,7 @@ import type { Item, LaunchView, Translator } from '../../../../src/core/types.ts
 import { type LaunchApi, type LaunchOptions, NO_OPTIONS } from '../../api/launch.ts'
 import type { MenuOrigin } from '../../models/board-menus.ts'
 import { FROM_BELOW, type GrowFrom, paintWindow } from '../../models/grow.ts'
+import type { LanePicks } from '../../models/lane-picks.ts'
 import { type Box, growFrom, LAUNCH_MOTION, type LauncherInfo, suggestionItems } from '../../models/launch.ts'
 import {
   type AgentRow,
@@ -80,6 +81,8 @@ export interface LaunchWindowView {
   worktree: boolean
   branchHidden: boolean
   notes: Record<ProblemField, FieldNote>
+  /** Under Category: several lanes on show, and the form starts in the first picked ('' for none). */
+  lanesNote: string
   /** What the server said when a start failed, not about a field. */
   error: { text: string; hidden: boolean }
   /** The Start button; null until it was first looked at. */
@@ -100,16 +103,18 @@ export const CLOSED_VIEW: LaunchWindowView = {
   worktree: false,
   branchHidden: true,
   notes: { name: NO_NOTE, cwd: NO_NOTE, profile: NO_NOTE, workspace: NO_NOTE, worktree: NO_NOTE },
+  lanesNote: '',
   error: { text: '', hidden: true },
   go: null,
   seq: 0,
 }
 
-/** The board as the window reads it, with the lane on show. */
+/** The board as the window reads it, with the lanes on show. */
 export interface LaunchBoard {
   categories: BoardCategory[]
   items: Item[]
-  filter: string
+  /** The lanes picked (models/lane-picks.ts). */
+  filter: LanePicks
   /** The Claude profiles (none from a board before them). */
   profiles: BoardProfile[]
 }
@@ -332,6 +337,8 @@ export function launchWindow(deps: LaunchWindowDeps) {
     const start = formStart(ctx, draft, { items: d().items, filter: d().filter })
     s.category = start.category
     s.set = start.set
+    const lanes = start.lanes.map(catTitle).join(', ')
+    patch({ lanesNote: lanes ? t()('launch.lanesNote', { lanes, lane: catTitle(start.category) }) : '' })
     s.workspace = start.workspace
     folder.setText(start.cwd)
     setFields({ name: start.name, message: start.message, wt: start.wt, branch: start.branch })
@@ -613,6 +620,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
       if (!s) return
       s.category = id
       s.set.category = true
+      if (view.get().lanesNote) patch({ lanesNote: '' })
       renderCats()
       if (!s.set.workspace) renderWorkspaces()
       else followWorkspaceName()

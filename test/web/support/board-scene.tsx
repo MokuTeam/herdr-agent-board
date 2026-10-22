@@ -8,6 +8,7 @@ import type { ColumnId, Item } from '../../../src/core/types.ts'
 import { Board } from '../../../web/src/components/Board.tsx'
 import type { Seen } from '../../../web/src/models/attention.ts'
 import { NO_MOVES, withMove } from '../../../web/src/models/board-view.ts'
+import { onlyLane } from '../../../web/src/models/lane-picks.ts'
 import { board, payload, renderInBoard } from './board.tsx'
 import { canonical, find, type Node } from './markup.ts'
 import { oldBoard } from './old-board.ts'
@@ -87,7 +88,16 @@ export function drawBoth(scene: Scene): { old: Node[]; react: Node[] } {
   })
   const pending = moves.reduce((all, m) => withMove(all, m.key, { ...m, at: now }), NO_MOVES)
   const archiving: ReadonlyMap<string, number> = new Map((scene.archiving ?? []).map(key => [key, now]))
-  const value = board({ data, connected: canEdit, canMutate, canEdit, now, ui: { ...ui, moves: pending, archiving } })
+  // The old page's filter is one lane or 'all'; the board's own state has it as its picks.
+  const picks = onlyLane(ui.filter)
+  const value = board({
+    data,
+    connected: canEdit,
+    canMutate,
+    canEdit,
+    now,
+    ui: { ...ui, filter: picks, moves: pending, archiving },
+  })
   return { old, react: renderInBoard(<Board />, value, lang) }
 }
 

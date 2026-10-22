@@ -46,7 +46,7 @@ export interface MenuOpen {
   source?: MenuSource
   /** Where the focus goes back to; what has it now by default. */
   origin?: Focusable | null
-  /** Runs after the menu closed, with the item picked. */
+  /** Runs after the menu closed, with the item picked; an item that keeps the menu open (`keep`), with it open. */
   onPick?: (id: string, item: MenuItem) => void
   /** Its name for screen readers. */
   label?: string
@@ -78,9 +78,10 @@ type Placing = { at: Point; up: boolean } | { parent: Layer; index: number }
 
 interface Layer {
   readonly id: string
-  readonly items: MenuEntry[]
-  readonly note: string
-  readonly checks: boolean
+  /** Its items, the same ones in the same order for as long as it is drawn; their checks may change (update). */
+  items: MenuEntry[]
+  note: string
+  checks: boolean
   readonly depth: number
   touch: boolean
   label: string
@@ -169,6 +170,21 @@ export class MenuEngine {
     if (source === 'keyboard') this.light(layer, firstIndex(layer.items))
     this.publish()
     this.onChange()
+  }
+
+  /**
+   * The open menu's items again, where they are, the lit one still lit: a check turned on or off
+   * in it by an item that keeps it open. The same items in the same order; a submenu open meanwhile
+   * stays as it is.
+   */
+  update(items: readonly MenuEntry[]): void {
+    const layer = this.layers[0]
+    if (!layer || items.length !== layer.items.length) return
+    const { items: next, note } = shareReasons(items)
+    layer.items = next
+    layer.note = note
+    layer.checks = next.some(it => !isSeparator(it) && it.checked !== undefined)
+    this.publish()
   }
 
   /** A level drawn (ContextMenu.tsx's layout effect): it goes in place, grows, and takes the pointer. */
@@ -399,6 +415,11 @@ export class MenuEngine {
     if (!it || isSeparator(it) || it.disabled) return
     if (it.submenu) {
       this.openSub(layer, i, true)
+      return
+    }
+    // A check turned on or off, the menu kept open for the next (the lanes' pill).
+    if (it.keep) {
+      this.pick(it.id, it)
       return
     }
     const run = this.pick

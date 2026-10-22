@@ -328,3 +328,53 @@ describe('the context menu', () => {
     }
   })
 })
+
+describe('checks that keep the menu open (the lanes’ pill: several lanes on show)', () => {
+  const CHECKS: MenuEntry[] = [
+    { id: 'all', label: 'All', checked: true },
+    { id: 'acme', label: 'Acme', checked: false, keep: true },
+    { id: 'other', label: 'Other', checked: false, keep: true },
+  ]
+  const checked = (side: MenuSide) =>
+    (side.levels()[0]?.querySelectorAll('.menu-item') ?? []).map(el => el.getAttribute('aria-checked'))
+
+  test('a pick by the pointer stays open; update() turns the checks where they are; the others close it', async () => {
+    const side = reactMenuSide()
+    try {
+      await side.open(CHECKS, at(100, 100, { origin: 'opener' }))
+      await side.world.tick(400)
+      await side.world.settle()
+      const menu = side.levels()[0]
+      for (const i of [1, 2]) {
+        await side.world.fire(item(side, 0, i), 'pointermove')
+        await side.world.fire(item(side, 0, i), 'pointerdown')
+        await side.world.fire(item(side, 0, i), 'pointerup')
+      }
+      await side.world.settle()
+      expect([side.log.filter(l => l.startsWith('picked')), side.isOpen()]).toEqual([
+        ['picked acme', 'picked other'],
+        true,
+      ])
+      // The same level, its checks drawn anew, the pointer's item still lit.
+      side.engine.update(CHECKS.map(it => (it.separator ? it : { ...it, checked: it.id !== 'all' })))
+      await side.world.flush()
+      expect(side.levels()[0]).toBe(menu)
+      expect(checked(side)).toEqual(['false', 'true', 'true'])
+      expect(menu?.getAttribute('aria-activedescendant')).toBe('menu-1-2')
+      // Other items than its own, or none open: nothing changes.
+      side.engine.update([{ id: 'x', label: 'X' }])
+      await side.world.flush()
+      expect(checked(side)).toEqual(['false', 'true', 'true'])
+      // "All" keeps nothing open: the menu goes, the focus back where it came from.
+      await side.world.fire(item(side, 0, 0), 'pointerdown')
+      await side.world.fire(item(side, 0, 0), 'pointerup')
+      await side.world.settle()
+      expect([side.log.at(-1), side.isOpen()]).toEqual(['picked all', false])
+      expect(side.world.document.activeElement).toBe(side.page('opener'))
+      side.engine.update(CHECKS)
+      expect(side.isOpen()).toBe(false)
+    } finally {
+      await side.dispose()
+    }
+  })
+})
