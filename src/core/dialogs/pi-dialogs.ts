@@ -185,6 +185,19 @@ const FOOTER_LINES = 10
  * What a dialog that went away leaves; a screen read halfway through drawing is not it.
  */
 export function piEditor(screen: unknown): boolean {
+  return piBox(screen) !== null
+}
+
+/**
+ * What the user has typed into pi's input box (#178): the lines between its two rules, trimmed;
+ * '' when it is empty, null when pi's own input box is not what the screen shows (piEditor).
+ */
+export function piDraft(screen: unknown): string | null {
+  return piBox(screen)?.join('\n').trim() ?? null
+}
+
+/** The lines inside pi's input box, when the screen shows it with no dialog in its place. */
+function piBox(screen: unknown): string[] | null {
   const lines = stripAnsi(String(screen ?? ''))
     .replace(/\r/g, '')
     .split('\n')
@@ -193,7 +206,8 @@ export function piEditor(screen: unknown): boolean {
   const rules: number[] = []
   for (let i = lines.length - 1; i >= 0 && rules.length < 2; i--) if (RULE.test(lines[i] ?? '')) rules.push(i)
   const [below, above] = rules
-  if (below === undefined || above === undefined) return false
-  if (below - above - 1 > BOX_LINES || lines.length - below - 1 > FOOTER_LINES) return false
-  return !lines.slice(above + 1).some(l => SELECT_HINT.test(l) || INPUT_HINT.test(l))
+  if (below === undefined || above === undefined) return null
+  if (below - above - 1 > BOX_LINES || lines.length - below - 1 > FOOTER_LINES) return null
+  if (lines.slice(above + 1).some(l => SELECT_HINT.test(l) || INPUT_HINT.test(l))) return null
+  return lines.slice(above + 1, below)
 }

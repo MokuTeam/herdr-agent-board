@@ -6,7 +6,7 @@ import { type CodexHome, createCodexHome } from '../adapters/codex-home.ts'
 import { createPiHome, type PiHome } from '../adapters/pi-home.ts'
 import { createProfileHomes, type ProfileHomes } from '../adapters/profile-homes.ts'
 import { findProfileDirs, inheritedProfileDir } from '../adapters/profiles.ts'
-import { wakeSessionsFile } from '../adapters/wake-files.ts'
+import { wakePiFile, wakeSessionsFile } from '../adapters/wake-files.ts'
 import { mergeProfiles, type ProfileSet, profileSet } from '../core/profiles.ts'
 import type { Config } from '../core/types.ts'
 import { type SleepProvider, sharedHerdrWake } from '../integrations/herdr-wake.ts'
@@ -63,7 +63,9 @@ export function defaultDeps(cfg: Config, log: (text: string) => void = () => {})
       if (mode.kind === 'new') return sharedBoardWake(mode.url, wakeSessionsFile())
       const old = sharedHerdrWake(cfg.wakeUrl)
       const file = wakeSessionsFile()
-      return !mode.on && existsSync(file) ? sharedFileSleepers(old, file) : old
+      // pi's sleepers keep their cards too (#178), from wake's pi file beside it.
+      const asleep = !mode.on && (existsSync(file) || existsSync(wakePiFile()))
+      return asleep ? sharedFileSleepers(old, file) : old
     },
     log,
   }

@@ -26,6 +26,7 @@ import {
 } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { asSavedBoard } from '../core/board-pane.ts'
+import { asPiSleepers, type PiSleepers } from '../core/wake/pi.ts'
 import { asWakeSessions, type WakeSessions } from '../core/wake/sessions.ts'
 import { asWakeStatus, type WakeStatusFile } from '../core/wake/status.ts'
 import type { Switched, SwitchSummary } from '../core/wake/view.ts'
@@ -33,6 +34,8 @@ import { isRecord, renameWithRetry, replaceFile } from './json-store.ts'
 import { boardFile, stateDir } from './paths.ts'
 
 export const wakeSessionsFile = (): string => join(stateDir(), 'wake-sessions.json')
+/** The pi sessions asleep (#178), beside the session file; one writer, the wake process, as it. */
+export const wakePiFile = (): string => join(stateDir(), 'wake-pi.json')
 export const wakeLogFile = (): string => join(stateDir(), 'wake.log')
 export const wakeStatusFile = (): string => join(stateDir(), 'wake-status.json')
 export const wakeStartLockFile = (): string => join(stateDir(), 'wake-start.lock')
@@ -110,6 +113,61 @@ export function readWakeSessions(file = wakeSessionsFile(), log: (text: string) 
   }
   log(`${file}: ${panesSaid} did not read as sessions and are left out; the file as it was is kept as ${copy}`)
   return sessions
+}
+
+/**
+ * The wake process's read of its pi sleepers (#178), as readWakeSessions reads the session file:
+ * {} when there is none; a file that does not read as sleepers is set aside, and one whose
+ * entries do not all read is copied aside first, `log` hearing it; one that cannot be read or set
+ * aside is an error.
+ */
+export function readPiSleepers(file = wakePiFile(), log: (text: string) => void = () => {}): PiSleepers {
+  const text = readText(file)
+  if (text === null) return {}
+  const raw = parsed(text)
+  const sleepers = asPiSleepers(raw)
+  if (!sleepers) {
+    const aside = brokenName(file)
+    try {
+      renameWithRetry(file, aside)
+    } catch (err) {
+      log(`${file} does not read as pi sleepers and could not be set aside: ${messageOf(err)}`)
+      throw err
+    }
+    log(`${file} did not read as pi sleepers: set aside as ${aside}, wake starts with none`)
+    return {}
+  }
+  const keys = raw && typeof raw === 'object' ? Object.keys(raw) : []
+  const dropped = keys.filter(key => !Object.hasOwn(sleepers, key))
+  if (dropped.length === 0) return sleepers
+  const copy = brokenName(file)
+  try {
+    copyFileSync(file, copy, constants.COPYFILE_EXCL)
+  } catch (err) {
+    log(
+      `${file}: ${dropped.join(', ')} do not read as pi sleepers, and the file could not be copied aside: ${messageOf(err)}`,
+    )
+    throw err
+  }
+  log(
+    `${file}: ${dropped.join(', ')} did not read as pi sleepers and are left out; the file as it was is kept as ${copy}`,
+  )
+  return sleepers
+}
+
+/** The board's and `board resume --pi`'s read of the pi sleepers: {} for a missing or broken file; never writes. */
+export function peekPiSleepers(file = wakePiFile()): PiSleepers {
+  try {
+    return asPiSleepers(parsed(readText(file) ?? '{}')) ?? {}
+  } catch {
+    return {}
+  }
+}
+
+/** Atomic, as saveWakeSessions. */
+export function savePiSleepers(sleepers: PiSleepers, file = wakePiFile()): void {
+  mkdirSync(dirname(file), { recursive: true })
+  replaceFile(file, `${JSON.stringify(sleepers, null, 1)}\n`)
 }
 
 /** The board's read of wake's session file: {} for a missing or broken one; never renames, copies, writes or logs. */

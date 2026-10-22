@@ -1,6 +1,7 @@
 // herdr-wake: the router that puts idle Claude sessions to sleep and wakes them, spoken to over
 // HTTP. Kept behind SleepProvider so another sleep/wake backend can take its place later.
 import { t } from '../core/lang.ts'
+import { isPiItem } from '../core/pi.ts'
 import type { Item } from '../core/types.ts'
 
 /** A session herdr-wake put to sleep, as GET /sleeping lists it. */
@@ -14,12 +15,19 @@ export interface SleepingSession {
   fromFile?: true
   /** The profile folder it ran in, and that folder's listed id (the new wake's answers and file). */
   profile?: { dir: string; id?: string }
+  /** 'pi' for a pi session (#178), keyed by its session file; none: Claude. */
+  agent?: string
+  /** The folder a pi session ran in. */
+  cwd?: string
   [extra: string]: unknown
 }
 
-/** `{ ok: true }`, or `{ ok: false, error }` with a message for the user. */
-export type WakeResult = { ok: true } | { ok: false; error: string }
-export type SleepResult = WakeResult
+/**
+ * `{ ok: true }`, or `{ ok: false, error }` with a message for the user. A pi session woken in
+ * another pane than its own (a new tab, #178) says where.
+ */
+export type WakeResult = { ok: true; pane?: string } | { ok: false; error: string }
+export type SleepResult = { ok: true } | { ok: false; error: string }
 
 export interface SleepProvider {
   /** Sessions put to sleep; `[]` on error, timeout (2 s) or no url. Cached for 5 s. */
@@ -69,7 +77,8 @@ export function createHerdrWake(
     const res = await fetchFn(`${url}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ target: item.pane }),
+      // A pi session by its session file (#178): its pane may be gone, or another session's now.
+      body: JSON.stringify({ target: isPiItem(item) ? item.session : item.pane }),
       signal: AbortSignal.timeout(timeoutMs),
     })
     const body: unknown = await res.json()
@@ -96,9 +105,9 @@ export function createHerdrWake(
     async wake(item) {
       try {
         const r = await post('/wake', item, WAKE_TIMEOUT_MS)
-        return r.ok
-          ? { ok: true }
-          : { ok: false, error: t('err.wake', { name: item.name, why: String(r.error ?? t('err.noAnswer')) }) }
+        if (!r.ok)
+          return { ok: false, error: t('err.wake', { name: item.name, why: String(r.error ?? t('err.noAnswer')) }) }
+        return isPiItem(item) && typeof r.pane === 'string' && r.pane ? { ok: true, pane: r.pane } : { ok: true }
       } catch (err) {
         return { ok: false, error: t(NAMED[who].down, { why: messageOf(err) }) }
       }

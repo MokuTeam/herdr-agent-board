@@ -60,6 +60,7 @@ board sleep --when-free Report-north Report-south
 - Only sessions you started, or that the user asked you to put to sleep. A session kept up by unsent text or a dialog is waiting on the user: leave it, or tell the user.
 - Yourself: `board sleep --self` (alone, or after the others' names), then end your turn. This session goes to sleep once the turn is over and it is free; a dialog, unsent text in its input box or a background task (a background command, a Monitor) keep it up meanwhile, for up to four hours, after which the entry is dropped without a word to you. A new turn (the user writes to you meanwhile) does not cancel it: you go to sleep once that turn is over. Its line gives the entry's id; `board unschedule <id>` cancels it. Not by default: only when the user asks, or when you coordinate others and your run is over, with nothing left that waits on you.
 - A sleeping session is not gone: `SendMessage` or a board reminder wakes it again.
+- pi sessions go to sleep the same way, by name, pane or session file, where the board's own wake runs: pi and everything it started stop, and its card stays on the board, sleeping. A message or a reminder from the board wakes it on the same conversation and account (in a new tab of its workspace if its pane is gone). With the separate herdr-wake plugin they stay up (`not a Claude session`).
 - Without herdr-wake, `board sleep` says so and puts nothing to sleep.
 
 ## Do something later

@@ -83,7 +83,8 @@ test("the first call gives the file's list at once and asks; the next gives the 
   const w = createBoardWake({ url: URL, sessionsFile: sessionsFile(FILE), fetch: f.fn, now: () => now })
   expect(w.mode).toBe('new')
   expect(await w.sleepers()).toEqual(FROM_FILE)
-  expect(f.calls.map(c => c.url)).toEqual([`${URL}/sleeping`])
+  // pi's sleepers with Claude's (#178); a wake without them answers as /sleeping.
+  expect(f.calls.map(c => c.url)).toEqual([`${URL}/sleeping?agents=all`])
   expect(f.calls[0]?.signal).toBeInstanceOf(AbortSignal)
   f.answer(ANSWER)
   await settle()

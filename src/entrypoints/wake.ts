@@ -256,24 +256,33 @@ async function drainAndExit(): Promise<void> {
   process.exit(leaving?.code ?? 0)
 }
 
-/** POST's `{ target }`; a body that does not parse is {}. */
-async function targetOf(req: Request): Promise<unknown> {
-  let body: unknown
+/** POST's body as an object; one that does not parse is {}. */
+async function bodyOf(req: Request): Promise<Record<string, unknown>> {
   try {
-    body = JSON.parse((await req.text()) || '{}')
+    const body: unknown = JSON.parse((await req.text()) || '{}')
+    return isRecord(body) ? body : {}
   } catch {
-    body = {}
+    return {}
   }
-  return isRecord(body) ? body.target : undefined
 }
 
-/** The old router's paths, each with its answer; null for anything else. */
-async function api(req: Request, path: string): Promise<unknown> {
+/**
+ * The old router's paths, each with its answer; null for anything else. Two more for pi (#178):
+ * `GET /sleeping?agents=all` lists pi's sleepers after Claude's (the board's list; /sleeping as it
+ * is stays Claude's, which the hooks read), and `POST /sleep` with `piSession` takes a pane where pi
+ * was stopped by hand as that session asleep there.
+ */
+async function api(req: Request, url: URL): Promise<unknown> {
+  const path = url.pathname
   if (req.method === 'GET' && path === '/status') return engine.status()
-  if (req.method === 'GET' && path === '/sleeping') return engine.sleeping()
+  if (req.method === 'GET' && path === '/sleeping')
+    return url.searchParams.get('agents') === 'all' ? engine.sleepingAll() : engine.sleeping()
   if (req.method === 'GET' && path === '/awake') return engine.awake()
-  if (req.method === 'POST' && path === '/wake') return engine.wake(await targetOf(req))
-  if (req.method === 'POST' && path === '/sleep') return engine.sleep(await targetOf(req))
+  if (req.method === 'POST' && path === '/wake') return engine.wake((await bodyOf(req)).target)
+  if (req.method === 'POST' && path === '/sleep') {
+    const body = await bodyOf(req)
+    return body.piSession === undefined ? engine.sleep(body.target) : engine.adoptPi(body.target, body.piSession)
+  }
   return null
 }
 
@@ -298,11 +307,12 @@ const failed = (status: number, error: string): Response =>
 async function answer(req: Request, port: number): Promise<Response> {
   if (!fromHere(req, port)) return failed(403, 'only programs on this computer may use wake, not web pages')
   try {
-    const path = new URL(req.url).pathname
+    const url = new URL(req.url)
+    const path = url.pathname
     if (req.method === 'GET' && path === '/alive')
       return new Response(JSON.stringify({ pid: process.pid }, null, 1), { headers: JSON_HEADERS })
     if (leaving && req.method === 'POST' && (path === '/wake' || path === '/sleep')) return failed(503, leaving.why)
-    const out = await api(req, path)
+    const out = await api(req, url)
     if (out === null) return new Response(null, { status: 404 })
     return new Response(JSON.stringify(out, null, 1), { headers: JSON_HEADERS })
   } catch (err) {

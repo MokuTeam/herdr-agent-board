@@ -30,7 +30,10 @@
 //   board sleep <id|name|pane>...   puts those sessions to sleep at once through herdr-wake, a line
 //                            for each: asleep, or kept up and why (services/sleep.ts); with
 //                            --when-free the busy ones go to sleep once they are free; --self
-//                            puts this session to sleep too, once its turn is over
+//                            puts this session to sleep too, once its turn is over; pi sessions
+//                            too, with the board's own wake (#178). `board sleep <pane>
+//                            --pi-session <file>`: a pane where pi was stopped by hand, a shell
+//                            now, taken as that pi session asleep there
 //   board fork [--name <Name>] [note]   a fork of this session (or --session's): a new session in
 //                            a new tab with a copy of its conversation, started by the web board as
 //                            its Fork does (services/launch/fork.ts); the note is its first message
@@ -41,6 +44,10 @@
 //                            (core/resume.ts); runs Claude in the foreground, exits with its code;
 //                            in the session's project folder, found from its transcript, when
 //                            this folder is not it
+//   board resume --pi <pi session id>   resumes a pi session wake put to sleep (#178) here: pi
+//                            on its session file with the command line it had, without what would
+//                            start another conversation, and the Claude account folder it had
+//                            (core/wake/pi.ts); what wake types into its pane to wake it
 //   board tg-key             the Telegram topic of this pane's herdr tab, which claude-tg puts in
 //                            TG_KEY (core/wake/topics.ts keyFor); outside herdr, or with a herdr
 //                            that does not answer within 5 s, the folder; always exits 0. For the
@@ -64,19 +71,24 @@ import { configFile, editCategories, loadConfig, setRemoteOn } from '../adapters
 import { asSnapshot, type HerdrPane, herdr, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { boardFile } from '../adapters/paths.ts'
+import { findPiSession } from '../adapters/pi-home.ts'
 import { runHere } from '../adapters/process.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
 import { addEntry, askRestart, listEntries, type NewEntry, removeEntry } from '../adapters/schedule-store.ts'
+import { peekPiSleepers } from '../adapters/wake-files.ts'
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
 import { CODEX_AGENT } from '../core/codex.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t } from '../core/lang.ts'
+import { isPiSessionFile, piSessionId } from '../core/pi.ts'
 import { type ProfileSet, profileSet, resolveProfileDir, sessionProfile } from '../core/profiles.ts'
 import { type RemoteView, remoteConfig } from '../core/remote.ts'
 import { parseResume, projectFolderName, resumeDir, resumePlan } from '../core/resume.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
+import { wakeConfig } from '../core/wake/config.ts'
+import { parsePiResume, piResumeArgv, piResumeEnv } from '../core/wake/pi.ts'
 import { keyFor, type TopicSnapshot } from '../core/wake/topics.ts'
 import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
 import { shortWhen } from '../core/when-format.ts'
@@ -87,7 +99,7 @@ import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | doctor | resume <session id> [--profile <id>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | doctor | resume <session id> [--profile <id>] | resume --pi <pi session id>] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -118,6 +130,13 @@ if (whenFree) args.splice(wi, 1)
 const mi = args[0] === 'sleep' ? args.indexOf('--self') : -1
 const self = mi >= 0
 if (self) args.splice(mi, 1)
+// sleep: a pane where pi was stopped by hand, taken as that session asleep there (#178).
+let piSessionFile: string | undefined
+const pi = args[0] === 'sleep' ? args.indexOf('--pi-session') : -1
+if (pi >= 0) {
+  piSessionFile = args[pi + 1] ?? ''
+  args.splice(pi, 2)
+}
 const modeText = (): string => (idle ? ', when the session is free' : '')
 const [cmd = 'show', ...rest] = args
 const text = rest.join(' ').replace(/\s+/g, ' ').trim()
@@ -425,7 +444,7 @@ async function main(): Promise<void> {
   if (cmd === 'archive') return archive()
   if (cmd === 'sleep') return sleep()
   if (cmd === 'fork') return fork()
-  if (cmd === 'resume') return resume()
+  if (cmd === 'resume') return rest.includes('--pi') ? resumePi() : resume()
   if (cmd === 'tg-key') return tgKey()
 
   const s = await resolveSession()
@@ -664,6 +683,28 @@ async function resume(): Promise<void> {
 }
 
 /**
+ * `board resume --pi <id>`: a pi session wake put to sleep resumed in this terminal (#178), as wake
+ * keeps it (its pi file, read only): pi with the command line it had, without what would start
+ * another conversation (core/wake/pi.ts piResumeArgv), on its session file, with the Claude account
+ * folder it slept with, in its folder. One wake does not know is found by its id among pi's
+ * session files and resumed with `pi --session <file>`. Asks herdr nothing; exits with pi's code.
+ */
+async function resumePi(): Promise<void> {
+  const id = parsePiResume(rest).toLowerCase()
+  const sleeper = Object.values(peekPiSleepers()).find(s => piSessionId(s.session).toLowerCase() === id)
+  const file = sleeper?.session ?? findPiSession(id)
+  if (!file) throw new Error(`no pi session ${id}: wake does not know it, and no pi session folder has its file`)
+  const plan = piResumeArgv(sleeper?.argv ?? [], file)
+  if ('error' in plan) console.error(`board resume --pi: ${plan.error}; pi starts with --session only`)
+  const [program = 'pi', ...argv] = 'argv' in plan ? plan.argv : ['pi', '--session', file]
+  const env = piResumeEnv(process.env, sleeper?.account, homedir())
+  const cwd = sleeper?.cwd && statSync(sleeper.cwd, { throwIfNoEntry: false })?.isDirectory() ? sleeper.cwd : undefined
+  const ran = await runHere(program, argv, env, cwd)
+  if (ran.error) throw new Error(`${program} did not start: ${messageOf(ran.error)}`)
+  process.exit(ran.code)
+}
+
+/**
  * `board tg-key`: the key claude-tg puts in TG_KEY (#119), as herdr-wake's tg-key.mjs printed it:
  * the Telegram topic of this pane's tab from one `herdr api snapshot` (5 s at most) when
  * HERDR_PANE_ID is set, else, or when herdr does not answer, this folder. Prints it; never fails.
@@ -804,6 +845,7 @@ function sleepLine(o: SleepOutcome): string {
  * whatever language the board speaks (but for what herdr-wake and the profile guard say).
  */
 async function sleep(): Promise<void> {
+  if (piSessionFile !== undefined) return adoptPi()
   const targets = [...rest, ...(target ? [target] : [])]
   if (!targets.length && !self)
     throw new Error(
@@ -850,6 +892,41 @@ async function sleep(): Promise<void> {
       : ''
   const note = count('scheduled') ? await schedulerNote() : ''
   console.log([`ok · ${head.filter(Boolean).join(', ')}${hint}${note}`, ...results.map(sleepLine)].join('\n'))
+}
+
+/**
+ * `board sleep <pane> --pi-session <file>` (#178): a pane at its shell where a pi session was
+ * stopped by hand, taken by the board's wake as that session asleep there: its card shows it
+ * sleeping and wakes it, as if wake had put it to sleep. Only through the board's own wake.
+ */
+async function adoptPi(): Promise<void> {
+  const pane = rest[0] ?? ''
+  const file = piSessionFile ?? ''
+  if (rest.length !== 1 || !pane || !isPiSessionFile(file))
+    throw new Error(
+      'usage: board sleep <pane> --pi-session <pi session file>: the pane, a shell now, and the file of the pi session that ran in it',
+    )
+  if (currentWakeMode(cfg).kind !== 'new')
+    throw new Error(
+      `taking a pi session as asleep needs the board's own wake, and ${wakeName()} answers here; nothing was done`,
+    )
+  const up = await wakeAnswers(deps)
+  if (!up.ok) throw new Error(`taking a pi session as asleep needs ${wakeMissing(up)}; nothing was done`)
+  const port = wakeConfig(cfg.wake).port
+  const res = await fetch(`http://127.0.0.1:${port}/sleep`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ target: pane, piSession: file }),
+    signal: AbortSignal.timeout(30_000),
+  })
+  const body: unknown = await res.json().catch(() => null)
+  if (!isRecord(body) || body.ok !== true)
+    throw new Error(
+      `${pane} stays as it is: ${String((isRecord(body) && body.error) || `wake answered ${res.status}`)}`,
+    )
+  console.log(
+    `ok · ${String(body.name)} (pi) is asleep in ${pane}${body.already ? ' already' : ''}: its card shows it sleeping; Wake, a message or a reminder wakes it`,
+  )
 }
 
 /**

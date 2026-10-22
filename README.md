@@ -547,8 +547,9 @@ session), and so is `spawn-agent` without `--agent`. What each agent is started 
 (the Profiles panel's "Start command") wins over it for its starts, `claude --dangerously-skip-permissions`
 too.
 
-Not for pi (yet): the archive and Return, sleep, wake and restart, the session's own
-name from the board's rename (the card's name works), question forms (pi has none: answer in a
+Sleep and wake work for pi with the board's own wake ([Sleep and wake](#sleep-and-wake), "pi
+sessions"). Not for pi (yet): the archive and Return, restart, the reaper, the session's own name
+from the board's rename (the card's name works), question forms (pi has none: answer in a
 message), MokuPilot calls, and the status line's context percentage and usage windows.
 
 ## New sessions
@@ -1286,8 +1287,8 @@ of herdr, a wake pane brought back as a bare shell is closed and a new one opene
 and does not answer, the board starts it once more itself; "Start" in Settings does too. Wake
 reads the sessions of every Claude profile, every 15 seconds; its files are in the board's state
 folder (`%LOCALAPPDATA%\herdr\plugins\agent-board` on Windows): `wake-sessions.json` (the sessions
-it knows, by pane), `wake-status.json` (its state), `wake.log` (kept to 2 MB, the one before as
-`wake.log.1`).
+it knows, by pane), `wake-pi.json` (the pi sessions asleep, below), `wake-status.json` (its state),
+`wake.log` (kept to 2 MB, the one before as `wake.log.1`).
 
 **Settings → "Sleep and wake…"** (its switches and buttons on the computer's own board only; a
 phone sees it read only):
@@ -1351,6 +1352,40 @@ why). A name only another profile has is left to Claude Code. Neither runs on an
 on every prompt, and neither asks anything while wake is off. The install does not write them
 beside the separate herdr-wake plugin's: it says so, and "Switch over…" moves them.
 
+**pi sessions** sleep and wake too, when asked: "Put to sleep" on a pi card, `board sleep` (several
+at once, `--when-free`), and Wake, a message or a reminder for a sleeping one, or a Telegram
+message to its tab. The reaper leaves them alone, and so does the separate herdr-wake plugin. Only a
+pi that is free goes to sleep: herdr says it is idle, nothing is typed in its input box, and in its
+session file the last turn is over (its last message is pi's own and calls no tool; what pi writes
+after a turn, such as its name or a model change, does not count). Wake keeps what brings it back
+in `wake-pi.json` beside `wake-sessions.json`, by the session file: the pane, its workspace, the
+folder, pi's command line as `herdr pane process-info` shows it, the provider in the session file,
+and the Claude account folder pi's bridge ran with (pi's `CLAUDE_CONFIG_DIR`, read from the process
+on Linux; elsewhere the profile its card was last told). Then it stops pi and every process pi
+started (its MCP servers hold most of its memory): pi gets SIGTERM and 15 seconds, the rest what
+pi left of them. The pane is labelled `💤 <name>`, with `board resume --pi <id>` typed at its
+prompt, not run.
+
+Its card stays on the board, in its lane, under its session file's key, and keeps showing after wake,
+herdr or the computer restarts: wake lists it from its file, the board reads that file itself while
+wake does not answer. Its pane counts as its own while herdr has it as a shell in its folder or with
+its label; otherwise the card shows no pane. Waking runs `board resume --pi <id>` in that pane,
+after clearing its prompt; when it has none, in a new tab of the same workspace, in its folder (a
+new workspace of that name when that is gone too). Where it woke is where a message or a reminder
+then goes. `board resume --pi <id>` runs pi on the same session file with the command line it had,
+less what would start another conversation or set its model (a message, `@files`, `--session`,
+`--name`, `--model`, `--provider`, `--thinking`, `--continue`, `--resume`, `--fork`, `--print`), and
+with the account folder it had (as `board resume` does for a Claude session's profile). pi takes
+the model and provider back from the session file itself, so a session on `claude-bridge-work`, or
+on the bridge with Work's folder, comes back on Work, never on the personal account. A pi started
+with an option pi does not list, in its `--name value` form (an extension's), is not put to sleep:
+whether the next word is its value or a message cannot be told. Woken by hand (Enter on the typed
+line), it is awake at wake's next look; one whose session file is gone is forgotten.
+
+A pane where pi was stopped by hand, a shell now, is taken as that session asleep there with
+`board sleep <pane> --pi-session <session file>`: its card comes back as a sleeping one, with the
+account its card was last told.
+
 **herdr's actions** for the focused pane, as herdr-wake's were: `agent-board.sleep` and
 `agent-board.wake`. Bind them to keys as the board's key is bound ([Setup](#setup)), with
 `command = "agent-board.sleep"`.
@@ -1358,7 +1393,11 @@ beside the separate herdr-wake plugin's: it says so, and "Switch over…" moves 
 **The API**, for programs on this computer: `GET /status`, `GET /sleeping`, `GET /awake` (running
 sessions: status, since when, minutes until sleep or why they stay up), `POST /wake {"target": …}`,
 `POST /sleep {"target": …}`, a target being a session name, a pane id or a session id; herdr-wake's
-paths and answers, plus each session's `profile` (`{ dir, id }`). A request from a web page (an
+paths and answers, plus each session's `profile` (`{ dir, id }`). pi's sleepers are listed by
+`GET /sleeping?agents=all` only, after Claude's, each with `agent: "pi"` and its `cwd` (`pane` empty
+when it would wake in a new tab); `/sleeping` stays Claude's, which the hooks read. A pi session's
+target is its session file, its id or its pane; `POST /sleep {"target": <pane>, "piSession": <file>}`
+takes a pane where pi was stopped by hand as that session asleep. A request from a web page (an
 `Origin`, or a `Host` other than `127.0.0.1:<port>` or `localhost:<port>`) is refused.
 
 ### Telegram
@@ -1782,7 +1821,10 @@ board archive --session <id|name|pane>
 board sleep <id|name|pane>... [--when-free] [--self]
                           several sessions to sleep at once, a line for each: asleep, or kept
                           up and why; --when-free: the busy ones once they are free; --self:
-                          this session too, once its turn is over; see Several to sleep at once
+                          this session too, once its turn is over; see Several to sleep at once.
+                          pi sessions too, with the board's own wake; `board sleep <pane>
+                          --pi-session <file>` takes a pane where pi was stopped by hand as that
+                          session asleep (see Sleep and wake)
 board fork [--name "<Name>"] ["<note>"]
                           a fork of this session in a new tab, with a copy of its conversation
                           (the web board starts it; the note is its first message); see Fork
@@ -1791,6 +1833,9 @@ board doctor              what is set up on this computer, and what is missing
 board resume <session id> [--profile <id>]
                           resumes that session here, in its own Claude profile (what herdr types
                           into a restored pane); see Claude profiles
+board resume --pi <pi session id>
+                          resumes a pi session wake put to sleep here, with the command line and
+                          the account it had (what wake types into its pane); see Sleep and wake
 spawn-agent --name <Name> --cwd <folder> [--brief-file <file>]   a new session in a herdr tab
 ```
 
