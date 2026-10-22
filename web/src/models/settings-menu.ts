@@ -1,7 +1,8 @@
 // Settings (the gear in the toolbar) as a menu: how the board looks (as the system has it, light or
-// dark), its style (Classic or Terminal), its language, where the session panel sits, and whether
-// sleeping sessions show. Light or dark is this browser's (models/theme.ts), and so is the style
-// (models/look.ts); the language is the board's, for every board; the panel's place is this
+// dark), its style (Classic or Terminal), whether card text is cut short or wraps, its language,
+// where the session panel sits, and whether sleeping sessions show. Light or dark is this browser's
+// (models/theme.ts), and so are the style (models/look.ts) and the card text (models/card-text.ts);
+// the language is the board's, for every board; the panel's place is this
 // browser's too (components/panel/place.ts). With more than one Claude
 // profile folder found, Profiles… opens their panel (components/profiles/ProfilesPanel.tsx). While
 // the remote mode is on (core/remote.ts), Phones… opens theirs (components/phones/PhonesPanel.tsx).
@@ -9,6 +10,7 @@
 // How sessions asleep in "Waiting" fold is the board's, for every board (src/core/fold-mode.ts).
 import { FOLD_MODES, type FoldMode, isFoldMode } from '../../../src/core/fold-mode.ts'
 import type { Translator } from '../../../src/core/types.ts'
+import { CARD_TEXTS, type CardText, isCardText } from './card-text.ts'
 import { isLook, LOOKS } from './look.ts'
 import type { MenuEntry } from './menu-model.ts'
 import { DOCKS, type Dock } from './panel-layout.ts'
@@ -21,6 +23,8 @@ export interface SettingsNow {
   theme: string
   /** data-look on <html>, else 'classic'; none given: no Style item (upstream's menu). */
   look?: string | undefined
+  /** data-card-text on <html>, else 'cut'; none given: no Card text item (upstream's menu). */
+  cardText?: string | undefined
   /** The board's languages by code ({ en: 'English', … }). */
   languages: Record<string, string>
   /** The language can only be switched with the board there. */
@@ -52,6 +56,19 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
             id: 'look',
             label: t('set.look'),
             submenu: LOOKS.map(id => ({ id: `look:${id}`, label: t(`set.look.${id}`), checked: now.look === id })),
+          },
+        ]
+      : []),
+    ...(now.cardText
+      ? [
+          {
+            id: 'cardText',
+            label: t('set.cardText'),
+            submenu: CARD_TEXTS.map(id => ({
+              id: `cardText:${id}`,
+              label: t(`set.cardText.${id}`),
+              checked: now.cardText === id,
+            })),
           },
         ]
       : []),
@@ -96,6 +113,7 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
 export type SettingPick =
   | { kind: 'theme'; value: string }
   | { kind: 'look'; value: string }
+  | { kind: 'cardText'; value: CardText }
   | { kind: 'lang'; value: string }
   | { kind: 'dock'; value: string }
   | { kind: 'reset' }
@@ -110,6 +128,7 @@ export function settingPicked(id: string): SettingPick {
   const [kind, value = ''] = id.split(':')
   if (kind === 'theme' || kind === 'lang') return { kind, value }
   if (kind === 'look' && isLook(value)) return { kind, value }
+  if (kind === 'cardText' && isCardText(value)) return { kind, value }
   if (kind === 'dock') return value === 'reset' ? { kind: 'reset' } : { kind: 'dock', value }
   if (id === 'sleepers') return { kind: 'sleepers' }
   if (id === 'profiles') return { kind: 'profiles' }

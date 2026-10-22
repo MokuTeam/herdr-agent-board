@@ -216,6 +216,42 @@ test('theme.js puts the style on <html> only for a kept Terminal, beside the the
   ])
 })
 
+test('theme.js wraps card text on <html> only for a kept Wrap, beside the theme and the style, and never throws (#183)', async () => {
+  const root = join(import.meta.dir, '..', '..')
+  const bundle = await createWebBundle({
+    root,
+    entry: join(root, 'web', 'src', 'main.tsx'),
+    early: join(root, 'web', 'src', 'theme.ts'),
+    log: () => {},
+  })
+  const run = (kept: Record<string, string | null>, broken = false) => {
+    const dataset: Record<string, string> = {}
+    const localStorage = {
+      getItem: (key: string) => {
+        if (broken) throw new Error('denied')
+        return kept[key] ?? null
+      },
+    }
+    new Function('localStorage', 'document', bundle.early())(localStorage, { documentElement: { dataset } })
+    return dataset
+  }
+  expect([
+    run({ 'board.cardText': 'wrap' }),
+    run({ 'board.cardText': 'wrap', 'board.theme': 'light', 'board.look': 'terminal' }),
+    run({ 'board.cardText': 'cut', 'board.theme': 'dark' }),
+    run({ 'board.cardText': 'ellipsis' }),
+    run({}),
+    run({ 'board.cardText': 'wrap' }, true),
+  ]).toEqual([
+    { cardText: 'wrap' },
+    { theme: 'light', look: 'terminal', cardText: 'wrap' },
+    { theme: 'dark' },
+    {},
+    {},
+    {},
+  ])
+})
+
 test('rebuilds run one at a time, so the newest bundle is the one kept', async () => {
   const root = site({ 'app.js': "import { b } from './b.js'\nconsole.log(b)\n", 'b.js': "export const b = 'one'\n" })
   const real = Bun.build

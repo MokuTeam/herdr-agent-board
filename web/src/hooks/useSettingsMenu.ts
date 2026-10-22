@@ -1,6 +1,6 @@
 // Settings (the gear in the toolbar; the old page's app.js #settings): the menu out of the button,
 // and what its items do — light or dark (models/theme.ts), Classic or Terminal (models/look.ts),
-// the board's language for every board, the panels' place and default size
+// card text cut short or wrapped (models/card-text.ts), the board's language for every board, the panels' place and default size
 // (components/panel/place.ts), whether sleeping sessions show, with more than one profile folder
 // the Profiles panel, while wake's state line is in the payload Sleep and wake…, and how sessions
 // asleep in "Waiting" fold, for every board. The items are models/settings-menu.ts.
@@ -11,6 +11,7 @@ import type { Translator } from '../../../src/core/types.ts'
 import { api, errorText } from '../api/client.ts'
 import type { MenuEngine, MenuSource } from '../components/menu/menu-engine.ts'
 import { useLanguage } from '../i18n/I18nProvider.tsx'
+import { CARD_TEXT_KEY, cardTextNow, setCardText } from '../models/card-text.ts'
 import { LOOK_KEY, lookNow, setLook } from '../models/look.ts'
 import { type Dock, isDock } from '../models/panel-layout.ts'
 import { offersProfiles } from '../models/profiles.ts'
@@ -39,6 +40,9 @@ export interface SettingsDeps {
   /** The style on show (data-look on <html>, else 'classic'); none: no Style item. */
   look?(): string
   setLook?(look: string): void
+  /** Card text on show (data-card-text on <html>, else 'cut'); none: no Card text item. */
+  cardText?(): string
+  setCardText?(value: string): void
   chooseLanguage(lang: string): void
   placePanels(dock: string): void
   resetPanelSize(): void
@@ -66,6 +70,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       t,
       theme: themeNow(deps.root()),
       look: deps.look?.(),
+      cardText: deps.cardText?.(),
       languages: deps.languages(),
       canEdit: deps.canEdit(),
       dock: deps.dock(),
@@ -86,6 +91,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         const pick = settingPicked(id)
         if (pick?.kind === 'theme') deps.setTheme(pick.value)
         else if (pick?.kind === 'look') deps.setLook?.(pick.value)
+        else if (pick?.kind === 'cardText') deps.setCardText?.(pick.value)
         else if (pick?.kind === 'lang') deps.chooseLanguage(pick.value)
         else if (pick?.kind === 'dock') deps.placePanels(pick.value)
         else if (pick?.kind === 'reset') deps.resetPanelSize()
@@ -225,6 +231,13 @@ export function useSettingsMenu(
         // A column shown alone is the Terminal style's (its keys): Classic shows them all.
         if (look !== 'terminal') latest.current.board.dispatch({ type: 'column', id: null })
       },
+      cardText: () => cardTextNow(document.documentElement),
+      setCardText: value =>
+        setCardText(value, {
+          root: document.documentElement,
+          keep: kept => storage.set(CARD_TEXT_KEY, kept),
+          transition: crossFade(),
+        }),
       chooseLanguage: lang => {
         const { t, choose, board } = latest.current
         void chooseLanguage(lang, {
