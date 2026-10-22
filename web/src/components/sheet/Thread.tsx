@@ -2,14 +2,15 @@
 // board), runs of tool calls folded into one line that opens to show them, the question forms
 // the session asked with their answers, and background tasks reporting back and board reminders
 // as quiet lines. A call that works with others is a line of its own, and another session's or a
-// teammate's message a bubble with their name (ThreadLinks.tsx). Paths in it are candidates the
-// file chips take up (data-path; components/sheet/Sheet.tsx hands them over after every draw).
+// teammate's message a bubble with their name (ThreadLinks.tsx). A very long message folds at a few
+// screens until "Show all". Paths in it are candidates the file chips take up (data-path;
+// components/sheet/Sheet.tsx hands them over after every draw).
 // The helpers window draws a helper's own conversation with it too. At its foot (Waiting): the
 // user's messages Claude has not taken in yet, and the board's own on their way or not sent.
-import { type ReactNode, useLayoutEffect, useRef } from 'react'
+import { type ReactNode, useLayoutEffect, useRef, useState } from 'react'
 import { isCall, isReminder, isTask } from '../../../../src/core/notices.ts'
 import type { QueuedPrompt } from '../../../../src/core/queue.ts'
-import type { ConversationTurn, NoticeTurn } from '../../../../src/core/transcript.ts'
+import type { AssistantTurn, ConversationTurn, NoticeTurn, UserTurn } from '../../../../src/core/transcript.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import type { OutboxEntry } from '../../models/composer-session.ts'
@@ -17,7 +18,7 @@ import { markdown } from '../../models/markdown.ts'
 import { noticeLine } from '../../models/notice.ts'
 import { clockText } from '../../models/sheet.ts'
 import { reducedMotion } from '../../models/spring.ts'
-import { type AskTurn, askState, type ThreadPart, threadParts, uploadThumbs } from '../../models/thread.ts'
+import { type AskTurn, askState, folds, type ThreadPart, threadParts, uploadThumbs } from '../../models/thread.ts'
 import { classNames } from '../class-names.ts'
 import {
   AlarmGlyph,
@@ -64,12 +65,14 @@ export function Thread({ conversation, item, links = NO_LINKS, helper = null }: 
 
 /**
  * A fold keeps its place among the folds, a notice that opens its task and time (a redraw leaves
- * the one open that was), a line that works with others its call; the rest go by order.
+ * the one open that was), a line that works with others its call, a message its side and time (one
+ * opened stays open as the thread moves on); the rest go by order.
  */
 function keyOf(part: ThreadPart, n: number): string {
   if (part.kind === 'tools') return `tools-${part.i}`
   if (part.kind === 'notice') return noticeId(part.turn) ?? `notice-${n}`
   if (part.kind === 'link') return `link-${part.turn.id ?? n}`
+  if (part.kind === 'message') return `message-${part.turn.role}-${part.turn.at}`
   return `${part.kind}-${n}`
 }
 
@@ -85,22 +88,11 @@ interface TurnProps {
 }
 
 function ThreadTurn({ part, item, links, helper }: TurnProps) {
-  const t = useT()
   if (part.kind === 'ask') return <AskedTurn turn={part.turn} live={part.live} />
   if (part.kind === 'link') return <LinkLine turn={part.turn} item={item} helper={helper} links={links} />
   if (part.kind === 'peer') return <PeerBubble turn={part.turn} item={item} helper={helper} links={links} />
   if (part.kind === 'notice') return <Notice turn={part.turn} links={links} />
-  if (part.kind === 'message') {
-    const { role, text, at } = part.turn
-    return (
-      <div className={`msg ${role}`}>
-        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: markdown() escapes every piece of text itself and makes only known tags */}
-        <div className="md" dangerouslySetInnerHTML={{ __html: markdown(text) }} />
-        <Thumbs text={text} />
-        <span className="when">{clockText(at, t)}</span>
-      </div>
-    )
-  }
+  if (part.kind === 'message') return <Message turn={part.turn} onGrow={links.onGrow} />
   return (
     <details className="tools" data-i={part.i}>
       <summary>
@@ -117,6 +109,49 @@ function ThreadTurn({ part, item, links, helper }: TurnProps) {
         </div>
       ))}
     </details>
+  )
+}
+
+/**
+ * A prompt or an answer, whole. One taller than a few screens (models/thread.ts folds) folds there
+ * until "Show all": what is folded away is drawn all the same, for a selection to copy and for its
+ * file chips. Measured again when its text changes or its box does (a narrower panel, a resize).
+ */
+function Message({ turn, onGrow }: { turn: UserTurn | AssistantTurn; onGrow: (() => void) | undefined }) {
+  const t = useT()
+  const { role, text, at } = turn
+  const body = useRef<HTMLDivElement>(null)
+  const [open, setOpen] = useState(false)
+  const [long, setLong] = useState(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: new text is when to measure, not what it reads
+  useLayoutEffect(() => {
+    const el = body.current
+    if (!el || open) return
+    const measure = () => setLong(folds(el.scrollHeight, window.innerHeight))
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const watch = new ResizeObserver(measure)
+    watch.observe(el)
+    return () => watch.disconnect()
+  }, [open, text])
+  // Opened, it grew under the reader: the next read keeps their place instead of going to the foot.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: opening is when to say so; onGrow is new every draw
+  useLayoutEffect(() => {
+    if (open) onGrow?.()
+  }, [open])
+  const folded = long && !open
+  return (
+    <div className={classNames('msg', role, folded && 'folded')}>
+      {/* biome-ignore lint/security/noDangerouslySetInnerHtml: markdown() escapes every piece of text itself and makes only known tags */}
+      <div ref={body} className="md" dangerouslySetInnerHTML={{ __html: markdown(text) }} />
+      {folded && (
+        <button type="button" className="unfold" onClick={() => setOpen(true)}>
+          {t('thread.whole')}
+        </button>
+      )}
+      <Thumbs text={text} />
+      <span className="when">{clockText(at, t)}</span>
+    </div>
   )
 }
 

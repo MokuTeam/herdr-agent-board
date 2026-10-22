@@ -291,6 +291,35 @@ export type NoticeTurn = Notice & { role: 'notice'; at: number }
 export type PeerTurn = Peer & { role: 'peer'; at: number }
 export type ConversationTurn = UserTurn | AssistantTurn | ToolTurn | NoticeTurn | PeerTurn
 
+/**
+ * The most message text (prompts and answers, in characters) a thread carries (#174). Messages come
+ * whole; a thread over it, as one with a pasted log of hundreds of KB, has its longest messages cut
+ * to one length until it fits (fitThread), so the detail read on every step stays small. The longest
+ * real message measured was under 20,000 characters, the most in one real thread about 60,000.
+ */
+export const THREAD_TEXT_BUDGET = 100_000
+
+/** `turns` with their messages within `budget` (THREAD_TEXT_BUDGET): only the longest are cut, all to the same length. */
+export function fitThread(turns: ConversationTurn[], budget = THREAD_TEXT_BUDGET): ConversationTurn[] {
+  const sizes = turns.flatMap(t => (t.role === 'user' || t.role === 'assistant' ? [t.text.length] : []))
+  if (sizes.reduce((a, b) => a + b, 0) <= budget) return turns
+  // Shortest first: a message that fits in its share of what is left stays whole.
+  sizes.sort((a, b) => a - b)
+  let left = budget
+  let cap = 0
+  for (const [i, size] of sizes.entries()) {
+    const share = Math.floor(left / (sizes.length - i))
+    if (size > share) {
+      cap = share
+      break
+    }
+    left -= size
+  }
+  return turns.map(t =>
+    (t.role === 'user' || t.role === 'assistant') && t.text.length > cap ? { ...t, text: clip(t.text, cap) } : t,
+  )
+}
+
 export interface ConversationOptions {
   /** A helper's own transcript (adapters/helpers.ts), whose lines are all sidechain lines. */
   sidechain?: boolean
@@ -421,8 +450,7 @@ export function parseConversation(
       const reminder = boardNotice(text)
       const prev = items.at(-1)
       if (reminder) notice(reminder, when)
-      else if (text && !(prev?.role === 'user' && prev.text === clip(text, 3000)))
-        items.push({ role: 'user', text: clip(text, 3000), at: when })
+      else if (text && !(prev?.role === 'user' && prev.text === text)) items.push({ role: 'user', text, at: when })
       continue
     }
     if (o.type === 'user') {
@@ -462,7 +490,7 @@ export function parseConversation(
       const n = taskNotice(text) ?? boardNotice(text)
       if (n) notice(n, at)
       else if (text) {
-        const item: UserTurn = { role: 'user', text: clip(text, 3000), at }
+        const item: UserTurn = { role: 'user', text, at }
         items.push(item)
         const ids = Array.isArray(o.imagePasteIds) ? o.imagePasteIds.filter(n => typeof n === 'number') : []
         lastUser = { prompt: str(o.promptId), ids, item }
@@ -472,7 +500,7 @@ export function parseConversation(
         const b = rec(raw)
         if (!b) continue
         const said = saidIn(o, b)
-        if (said) items.push({ role: 'assistant', text: clip(said, 4000), at })
+        if (said) items.push({ role: 'assistant', text: said, at })
         else if (b.type === 'tool_use') {
           const name = str(b.name)
           const turn: ToolTurn = {

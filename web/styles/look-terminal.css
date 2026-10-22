@@ -376,7 +376,10 @@
 :root[data-look="terminal"] .notice-body { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
 :root[data-look="terminal"] .attachment { border-radius: var(--radius); }
 :root[data-look="terminal"] .attachment.error { box-shadow: inset 0 0 0 1px var(--red); }
-:root[data-look="terminal"] .out-actions button { border-radius: 4px; background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .out-actions button,
+:root[data-look="terminal"] .msg .unfold { border-radius: 4px; background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .msg.user .unfold { color: var(--accent); }
+:root[data-look="terminal"] .msg.user .unfold:hover { background: var(--fill-2); }
 
 /* The message box and the buttons around it. */
 :root[data-look="terminal"] .composer-box { border-radius: var(--radius); }

@@ -2,7 +2,7 @@
 import { expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { ConversationTurn, ToolTurn } from '../../src/core/transcript.ts'
-import { askState, threadParts, uploadThumbs } from '../../web/src/models/thread.ts'
+import { askState, FOLD_SCREENS, folds, threadParts, uploadThumbs } from '../../web/src/models/thread.ts'
 
 const t = translator('en')
 const tool = (label: string, done = true): ToolTurn => ({
@@ -74,4 +74,11 @@ test('images sent from the board preview under the message, Windows and POSIX pa
     { path: 'C:/b/agent-board/uploads/2026-10-17/c.webp', url: '/uploads/2026-10-17/c.webp' },
   ])
   expect(uploadThumbs(undefined)).toEqual([])
+})
+
+test('a message folds once it is taller than two screens; nothing folds before the window has a height', () => {
+  expect(FOLD_SCREENS).toBe(2)
+  expect(folds(1600, 800)).toBe(false)
+  expect(folds(1601, 800)).toBe(true)
+  expect(folds(5000, 0)).toBe(false)
 })

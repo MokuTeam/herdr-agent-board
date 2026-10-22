@@ -2,7 +2,9 @@ import { test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { DEFAULT_PROMPT_FILTERS, telegramEnvelope } from '../../src/core/prompt-filters.ts'
 import {
+  type ConversationTurn,
   cleanPrompt,
+  fitThread,
   parseConversation,
   parseTranscriptTail,
   saidIn,
@@ -369,4 +371,19 @@ test('images sent with a message: their paths back under it from the meta line t
   assert.deepEqual(thread([clipboard, { ...sources, message: { role: 'user', content: [] } }]), [
     { role: 'user', text: '[Image #3] look', at: Date.parse(at) },
   ])
+})
+
+test('a thread over its budget cuts only its longest messages, all to one length; one within it is left as it is', () => {
+  const turn = (role: 'user' | 'assistant', n: number): ConversationTurn => ({ role, text: 'x'.repeat(n), at: n })
+  const tool: ConversationTurn = { role: 'tool', label: 'Read', detail: 'a.ts', path: 'a.ts', done: true, at: 0 }
+  const within = [turn('user', 60), tool, turn('assistant', 40)]
+  assert.equal(fitThread(within, 100), within)
+  const sizes = (turns: ConversationTurn[]) => turns.map(t => ('text' in t ? t.text.length : t.role))
+  // One pasted log: the others stay whole, the log gets what is left.
+  const log = fitThread([turn('user', 10), tool, turn('user', 5000), turn('assistant', 20)], 100)
+  assert.deepEqual(sizes(log), [10, 'tool', 70, 20])
+  assert.ok(log[2] && 'text' in log[2] && log[2].text.endsWith('…'))
+  assert.equal(log[1], tool)
+  // Two long ones share what is left alike.
+  assert.deepEqual(sizes(fitThread([turn('user', 10), turn('assistant', 300), turn('user', 900)], 100)), [10, 45, 45])
 })

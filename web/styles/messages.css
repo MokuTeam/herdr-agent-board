@@ -1,0 +1,9 @@
+/* A very long message in the thread (web/src/components/sheet/Thread.tsx Message): taller than two
+   screens (models/thread.ts FOLD_SCREENS), it folds there, its end fading out above "Show all", a
+   pill like the board's own message actions (.out-actions). */
+.msg.folded .md { max-height: 200vh; overflow: hidden; mask-image: linear-gradient(to bottom, #000 calc(100% - 72px), transparent); }
+.msg .unfold { display: block; margin-top: 6px; padding: 3px 10px; border: 0; border-radius: 999px; background: var(--fill); color: var(--accent); font: 500 12px/1.3 var(--font); transition: transform 100ms ease-out, background 120ms ease; }
+.msg .unfold:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.msg .unfold:active { transform: scale(0.96); }
+.msg.user .unfold { background: rgba(255, 255, 255, 0.2); color: #fff; }
+.msg.user .unfold:hover { background: rgba(255, 255, 255, 0.3); }

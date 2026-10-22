@@ -166,3 +166,11 @@ test('the sheet: prompts, words and tool calls in order, a reminder as a notice,
   // The newest turns when there are more than asked for.
   expect(parsePiConversation(lines, 2).map(t => t.role)).toEqual(['tool', 'notice'])
 })
+
+test('the sheet has every message whole; the card keeps its short preview (#174)', () => {
+  const prompt = `${'please read this '.repeat(300)}end`
+  const answer = `${'here is what I found '.repeat(300)}end`
+  const lines = [header(), user(prompt), said([text(answer)])]
+  expect(parsePiConversation(lines).map(t => ('text' in t ? t.text : t.role))).toEqual([prompt, answer])
+  expect(parsePiTail(lines).lastText).toBe(`${answer.slice(0, 699)}…`)
+})

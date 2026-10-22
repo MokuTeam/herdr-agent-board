@@ -30,6 +30,8 @@ export interface ThreadLinks {
   onRun?: (id: string, el: HTMLElement) => void
   /** Another session. */
   onSession?: (key: string) => void
+  /** A message opened whole: the thread grew where the reader is, who is no longer at its foot. */
+  onGrow?: (() => void) | undefined
 }
 
 export const NO_LINKS: ThreadLinks = { helpers: [], workflows: [], items: [] }

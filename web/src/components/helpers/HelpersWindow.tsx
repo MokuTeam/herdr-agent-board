@@ -258,6 +258,7 @@ function HelperBody({ view, kind, item, items, detail, on }: HelperBodyProps) {
     onHelper: id => on.helper?.(id),
     onRun: id => on.run?.(id),
     onSession: key => on.session?.(key),
+    onGrow: () => on.scrolled?.(),
   }
   return (
     <div className="thread helper-thread">

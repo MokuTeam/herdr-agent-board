@@ -99,3 +99,9 @@ export function uploadThumbs(text: unknown): Thumb[] {
     url: `/uploads/${m[2]}/${encodeURIComponent(m[3] ?? '')}`,
   }))
 }
+
+/** A message taller than this many screens folds there until "Show all" (web/styles/app.css .msg.folded). */
+export const FOLD_SCREENS = 2
+
+/** Whether a message `height` px tall folds in a window `screen` px tall. */
+export const folds = (height: number, screen: number): boolean => screen > 0 && height > FOLD_SCREENS * screen

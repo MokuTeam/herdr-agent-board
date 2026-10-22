@@ -10,7 +10,14 @@
 // is now; a branch left behind with /tree is not read.
 import { posix, win32 } from 'node:path'
 import { boardNotice } from './notices.ts'
-import { type ConversationTurn, cleanPrompt, type ToolTurn, toolLabel, trailingQuestion } from './transcript.ts'
+import {
+  type ConversationTurn,
+  cleanPrompt,
+  fitThread,
+  type ToolTurn,
+  toolLabel,
+  trailingQuestion,
+} from './transcript.ts'
 import type { ToolCall, TranscriptInfo } from './types.ts'
 
 export const PI_AGENT = 'pi'
@@ -315,8 +322,9 @@ export function piSessionCwd(firstLine: string): string {
 /**
  * The last `limit` turns of a pi session for its sheet, oldest first: the user's prompts, the
  * agent's texts and its tool calls in a line each (done: the call has a result). A board reminder
- * typed into the session is a notice (core/notices.ts). Thinking, the system prompt and what
- * extensions put into the context are left out.
+ * typed into the session is a notice (core/notices.ts). Messages come whole, within the thread's
+ * budget (fitThread). Thinking, the system prompt and what extensions put into the context are left
+ * out.
  */
 export function parsePiConversation(lines: readonly string[], limit = 40): ConversationTurn[] {
   const newest: ConversationTurn[] = [] // newest first while the branch is walked back
@@ -337,7 +345,7 @@ export function parsePiConversation(lines: readonly string[], limit = 40): Conve
         const text = textOf(message?.content).trim()
         const notice = boardNotice(text)
         if (notice) newest.push({ role: 'notice', ...notice, at })
-        else if (text) newest.push({ role: 'user', text: clip(text, 3000), at })
+        else if (text) newest.push({ role: 'user', text, at })
         return
       }
       if (role !== 'assistant') return
@@ -346,7 +354,7 @@ export function parsePiConversation(lines: readonly string[], limit = 40): Conve
         const b = rec(content[j])
         if (!b) continue
         if (b.type === 'text' && str(b.text).trim()) {
-          newest.push({ role: 'assistant', text: clip(str(b.text).trim(), 4000), at })
+          newest.push({ role: 'assistant', text: str(b.text).trim(), at })
         } else if (b.type === 'toolCall') {
           const name = str(b.name)
           const turn: ToolTurn = {
@@ -363,5 +371,5 @@ export function parsePiConversation(lines: readonly string[], limit = 40): Conve
     },
     () => newest.filter(t => t.role !== 'tool').length >= limit,
   )
-  return newest.slice(0, limit).reverse()
+  return fitThread(newest.slice(0, limit).reverse())
 }
