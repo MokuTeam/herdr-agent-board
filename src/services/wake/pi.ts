@@ -6,7 +6,7 @@
 // typed at its prompt. To wake, that line is run in the sleeper's own pane while it is a shell as
 // it was left, else in a new tab of its workspace (a new workspace when that is gone too), until
 // herdr shows pi back on that session, free.
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { readTail } from '../../adapters/claude-home.ts'
 import { tabCreateRoot, workspaceCreate } from '../../adapters/herdr.ts'
@@ -20,7 +20,7 @@ import {
 } from '../../adapters/pi-processes.ts'
 import { cliWakeHerdr, type WakeHerdr } from '../../adapters/wake-herdr.ts'
 import { piDraft } from '../../core/dialogs/pi-dialogs.ts'
-import { piProvider, piTurnOver } from '../../core/pi.ts'
+import { piProvider, piSessionName, piTurnOver } from '../../core/pi.ts'
 import {
   accountOf,
   type PiSleeper,
@@ -43,6 +43,8 @@ export interface PiOps {
   configDir(pid: number): string | null
   /** The end of the session file, as lines; null when there is no file. */
   tail(file: string): string[] | null
+  /** The session's name in its whole file (core/pi.ts piSessionName); '' for none or no file. */
+  sessionName(file: string): string
   /** When the file was last written (ms); null when there is none. */
   writtenAt(file: string): number | null
   /** Whether the file or folder is there. */
@@ -266,6 +268,13 @@ export function defaultPiOps(herdr: WakeHerdr = cliWakeHerdr): PiOps {
     piProcess: pane => piProcessIn(pane),
     configDir: pid => claudeConfigDirOf(pid),
     tail: file => readPiTail(file),
+    sessionName(file) {
+      try {
+        return piSessionName(readFileSync(file, 'utf8'))
+      } catch {
+        return ''
+      }
+    },
     writtenAt(file) {
       try {
         return statSync(file, { throwIfNoEntry: false })?.mtimeMs ?? null

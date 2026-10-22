@@ -291,6 +291,21 @@ export function piProvider(lines: readonly string[]): string {
   return provider
 }
 
+/**
+ * The session's name in its whole file (`text`): its latest session_info entry, '' for none. pi
+ * writes the one `--name` gives right after the header, so in a long session it is far above the
+ * end the card reads (#178).
+ */
+export function piSessionName(text: string): string {
+  let name = ''
+  for (const line of text.split('\n')) {
+    if (!line.includes('"type":"session_info"')) continue
+    const o = parse(line)
+    if (o?.type === 'session_info') name = str(o.name).trim()
+  }
+  return name
+}
+
 /** The folder a pi session started in, from its file's first line (the session header); '' when it has none. */
 export function piSessionCwd(firstLine: string): string {
   const head = parse(firstLine)

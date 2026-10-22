@@ -391,15 +391,16 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     })
   }
 
-  /** The name a pi session is put to sleep under: its card's, else its own (/name), else herdr's title. */
-  function piName(file: string, pane: HerdrSnapshot['panes'][number], lines: string[] | null): string {
-    return (
-      piCard(file).name ||
-      (lines ? parsePiTail(lines).name : '') ||
-      pane.terminal_title_stripped ||
-      pane.label ||
-      pane.pane_id
-    )
+  /**
+   * The name a pi session is put to sleep under: its card's, else its own (/name, --name: at the end
+   * of its file, else anywhere in it), else pi's title in its pane. A pane taken over is a shell,
+   * whose title is the shell's: `π - <folder>` then, as pi's own title reads without a name.
+   */
+  function piName(file: string, pane: HerdrSnapshot['panes'][number], lines: string[] | null, shell = false): string {
+    const own = piCard(file).name || (lines ? parsePiTail(lines).name : '') || piOps.sessionName(file)
+    if (own) return own
+    if (shell) return `π - ${(pane.cwd ?? '').split(/[\\/]/).filter(Boolean).pop() ?? ''}`.trim()
+    return pane.terminal_title_stripped || pane.label || pane.pane_id
   }
 
   const workspaceLabel = (snap: HerdrSnapshot, id: string | undefined): string | undefined =>
@@ -644,7 +645,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
         if (!deps.boardOnPath()) return { ok: false, error: `it cannot be woken: ${CANNOT_WAKE.board}` }
         const lines = piOps.tail(file)
         const card = piCard(file)
-        const name = piName(file, pane, lines)
+        const name = piName(file, pane, lines, true)
         const label = workspaceLabel(seen.snap, pane.workspace_id)
         const provider = lines ? piProvider(lines) : ''
         let started = ''

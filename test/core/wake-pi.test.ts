@@ -4,7 +4,7 @@
 import { expect, test } from 'bun:test'
 import { join } from 'node:path'
 import { piDraft, piEditor } from '../../src/core/dialogs/pi-dialogs.ts'
-import { piProvider, piSessionCwd, piTurnOver } from '../../src/core/pi.ts'
+import { piProvider, piSessionCwd, piSessionName, piTurnOver } from '../../src/core/pi.ts'
 import {
   accountOf,
   asPiSleepers,
@@ -94,6 +94,16 @@ test('the provider: the latest model change, else the latest answer’s', () => 
   )
   expect(piProvider(session(user, answer('stop', 'openai')))).toBe('openai')
   expect(piProvider(session(user))).toBe('')
+})
+
+test('the session’s name anywhere in its file: the latest session_info, none for none', () => {
+  const text = session(named, user, answer('stop')).join('\n')
+  expect(piSessionName(text)).toBe('drop-teaching-tips')
+  const renamed = `${text}\n${entry('session_info', { name: 'drop-tips' })}`
+  expect(piSessionName(renamed)).toBe('drop-tips')
+  expect(piSessionName(session(user, answer('stop')).join('\n'))).toBe('')
+  // A message that quotes the words is no name.
+  expect(piSessionName('{"type":"message","message":{"content":"\\"type\\":\\"session_info\\""}}')).toBe('')
 })
 
 test('the folder a session started in is in its header', () => {
