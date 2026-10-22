@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path'
 import type { ProcRow, ProcSys } from '../../src/adapters/pi-processes.ts'
 import { createProfileHomes } from '../../src/adapters/profile-homes.ts'
+import { piSessionName } from '../../src/core/pi.ts'
 import { profileSet } from '../../src/core/profiles.ts'
 import { wakeConfig } from '../../src/core/wake/config.ts'
 import type { PiSleepers } from '../../src/core/wake/pi.ts'
@@ -149,6 +150,7 @@ function world(
         : null,
     configDir: () => (o.configDir === undefined ? join(home, '.claude-work') : o.configDir),
     tail: f => (existsSync(f) ? readFileSync(f, 'utf8').split('\n') : null),
+    sessionName: f => (existsSync(f) ? piSessionName(readFileSync(f, 'utf8')) : ''),
     writtenAt: () => 0,
     exists: p => existsSync(p),
     async newTab(workspace, cwd, label) {
@@ -474,4 +476,51 @@ test('a second sleeper by another id wakes on its own file', async () => {
   expect(await fresh.wake(ID2)).toMatchObject({ ok: true, name: 'git-guard' })
   expect(w.tabs).toEqual([['tab', 'w1', w.project, 'git-guard']])
   expect(w.pane.agent_session).toEqual({ value: w.file })
+})
+
+test('a pane taken over is named by its session, never by the shell’s title; one with no name by its folder', async () => {
+  const w = world()
+  w.pane.agent = null
+  w.pane.agent_session = null
+  delete w.pane.agent_status
+  w.io.busy.delete('w1:p1')
+  // The shell's title, as herdr shows a bare shell.
+  w.pane.terminal_title_stripped = 'nicholas@laptop:~/Проект x 50%'
+  w.deps.piCard = () => ({})
+  // No name anywhere in the file: pi's own title without one.
+  expect(await createWakeEngine(w.deps).adoptPi('w1:p1', w.file)).toEqual({
+    ok: true,
+    pane: 'w1:p1',
+    name: 'π - Проект x 50%',
+  })
+  expect(w.pane.label).toBe('💤 π - Проект x 50%')
+  // A name `--name` gave, right after the header, far above the end that is read for the turn.
+  const named = world()
+  Object.assign(named.pane, { agent: null, agent_session: null, terminal_title_stripped: 'nicholas@laptop:~' })
+  delete named.pane.agent_status
+  named.io.busy.delete('w1:p1')
+  named.deps.piCard = () => ({})
+  const lines = readFileSync(named.file, 'utf8').split('\n')
+  const info = JSON.stringify({ type: 'session_info', id: 'n0', parentId: null, name: 'board-ask-form-missing' })
+  named.ops.tail = f => (f === named.file ? lines.slice(-3) : null)
+  writeFileSync(named.file, [lines[0], info, ...lines.slice(1)].join('\n'))
+  expect(await createWakeEngine(named.deps).adoptPi('w1:p1', named.file)).toMatchObject({
+    name: 'board-ask-form-missing',
+  })
+})
+
+test('a running pi whose name is only near the top of its file sleeps under that name', async () => {
+  const w = world()
+  w.deps.piCard = () => ({})
+  const lines = readFileSync(w.file, 'utf8').split('\n')
+  writeFileSync(
+    w.file,
+    [
+      lines[0],
+      JSON.stringify({ type: 'session_info', id: 'n0', parentId: null, name: 'pricing-sync' }),
+      ...lines.slice(1),
+    ].join('\n'),
+  )
+  w.ops.tail = f => (f === w.file ? readFileSync(f, 'utf8').split('\n').slice(-4) : null)
+  expect(await createWakeEngine(w.deps).sleep('w1:p1')).toEqual({ ok: true, pane: 'w1:p1', name: 'pricing-sync' })
 })
