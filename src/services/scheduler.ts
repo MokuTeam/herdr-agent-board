@@ -203,7 +203,9 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
       }
       if (r.ok) {
         try {
-          r = await send(deps, { ...item, sleeping: false }, promptOf(entry, Date.now()), {
+          // Woken in another pane (a pi session whose own was gone, #178): the message goes there.
+          const pane = r.ok && r.pane ? r.pane : item.pane
+          r = await send(deps, { ...item, sleeping: false, pane }, promptOf(entry, Date.now()), {
             free: !!entry.idle,
             draft: true,
           })

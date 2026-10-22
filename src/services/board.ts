@@ -1,4 +1,4 @@
-// The board's data: every agent pane in herdr plus the sessions herdr-wake put to sleep, each
+// The board's data: every agent pane in herdr plus the sessions wake put to sleep (Claude's, and pi's, #178), each
 // merged with its card and with what Claude recorded about it in its own profile's folder, and
 // sorted into a column. Sessions in the archive are left out (services/archive.ts).
 import { readFileSync, statSync } from 'node:fs'
@@ -18,9 +18,10 @@ import { waitingTool } from '../core/held-question.ts'
 import { type HelperSummary, summarize } from '../core/helpers.ts'
 import { t } from '../core/lang.ts'
 import { relate } from '../core/links.ts'
-import { isPiItem } from '../core/pi.ts'
+import { isPiItem, isPiSessionFile, PI_AGENT, piSessionId } from '../core/pi.ts'
 import { sessionProfile } from '../core/profiles.ts'
 import type { AgentStatus, Attention, Card, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
+import { piSleeperPane } from '../core/wake/pi.ts'
 import { archivedFiles, getArchived, hides, isArchived, settleReturned } from './archive.ts'
 import type { Deps } from './deps.ts'
 
@@ -285,6 +286,31 @@ export async function collect(
   const panes = new Map(snap.panes.map(p => [p.pane_id, p]))
   for (const s of asleep) {
     if (!s.session || seen.has(s.session)) continue
+    if (s.agent === PI_AGENT) {
+      // A pi session asleep (#178), from wake's answer or its file: shown whether its pane is
+      // still its own (then with it) or not (it wakes in a new tab), under its session file's key.
+      if (!isPiSessionFile(s.session)) continue
+      seen.add(s.session)
+      const name = s.name ?? ''
+      const cwd = s.cwd ?? ''
+      const own = s.fromFile ? piSleeperPane(snap, { pane: s.pane ?? '', name, cwd })?.pane_id : s.pane
+      const ws = own ? panes.get(own)?.workspace_id : undefined
+      add({
+        key: s.session,
+        session: s.session,
+        pane: own || null,
+        workspace: (ws === undefined ? undefined : labels.get(ws)) ?? s.workspace ?? '',
+        agent: PI_AGENT,
+        name: name || piSessionId(s.session).slice(0, 8),
+        cwd,
+        status: 'sleeping',
+        sleeping: true,
+        focused: false,
+        activity: Date.parse(s.slept_at ?? '') || 0,
+        ...(s.fromFile && { fromFile: true }),
+      })
+      continue
+    }
     const pane = panes.get(s.pane ?? '')
     // One from wake's session file only where herdr shows its pane as a shell: not one whose pane
     // runs Claude (or another agent) again, nor one whose pane is gone. Its workspace is herdr's.

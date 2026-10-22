@@ -13,6 +13,7 @@ import type { HerdrSnapshot } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import type { WakeHerdr } from '../../adapters/wake-herdr.ts'
 import { inputDraft } from '../../core/dialogs/input-box.ts'
+import { piDraft } from '../../core/dialogs/pi-dialogs.ts'
 import type { TelegramTarget } from '../../core/wake/config.ts'
 import { formatPrompt, type RouteItem, resolve } from '../../core/wake/route.ts'
 import type { TelegramStatus } from '../../core/wake/status.ts'
@@ -185,6 +186,15 @@ export function createTelegram(o: TelegramDeps): Telegram {
   async function deliverLive(pane: string, text: string): Promise<RouteResult> {
     const agent = await o.herdr.agent(pane)
     if (!agent) throw new Error(`no agent runs in ${pane}`)
+    // A pi session only ever gets here woken from its sleep (#178): its own input box.
+    if (agent.kind === 'pi') {
+      if (agent.status === 'blocked') return BLOCKED
+      const draft = piDraft(await o.herdr.screen(pane))
+      if (draft === null) return DIALOG
+      if (draft) return DRAFT
+      await o.herdr.prompt(pane, text)
+      return { ok: true }
+    }
     if (agent.status === 'blocked') {
       const state = await waitReady(o.herdr, pane, BLOCKED_WAIT_MS, timing)
       if (state !== 'ready') return state === 'trust' ? TRUST : BLOCKED

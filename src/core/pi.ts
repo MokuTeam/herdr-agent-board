@@ -237,6 +237,66 @@ export function parsePiTail(lines: readonly string[]): PiInfo {
   return info
 }
 
+// What pi writes beside the conversation, after a turn as well as in one: they say nothing about
+// whether the turn is over.
+const BOOKKEEPING: ReadonlySet<string> = new Set([
+  'custom',
+  'model_change',
+  'thinking_level_change',
+  'session_info',
+  'label',
+  'usage',
+])
+
+/**
+ * Whether the session's last turn is over, by the end of its file (#178): on the branch as it is
+ * now, the last message (bookkeeping entries and system messages passed over) is the assistant's,
+ * and it does not call a tool (stopped, aborted, or failed). A user's message, a tool's result, an
+ * extension's message, or no message at all in the lines: not over.
+ */
+export function piTurnOver(lines: readonly string[]): boolean {
+  let over = null as boolean | null
+  walkBranch(
+    lines,
+    (head, line) => {
+      if (BOOKKEEPING.has(head.type)) return
+      const message = head.type === 'message' ? rec(parse(line)?.message) : null
+      const role = str(message?.role)
+      if (role === 'system') return
+      over = role === 'assistant' && str(message?.stopReason) !== 'toolUse'
+    },
+    () => over !== null,
+  )
+  return over === true
+}
+
+/**
+ * The provider the session goes on with (#178): its latest model_change on the branch, else the
+ * provider of its latest answer; '' when the lines name none. pi takes it back from the file when
+ * the session is resumed.
+ */
+export function piProvider(lines: readonly string[]): string {
+  let provider = ''
+  walkBranch(
+    lines,
+    (head, line) => {
+      if (head.type === 'model_change') provider = str(parse(line)?.provider)
+      else if (head.type === 'message') {
+        const message = rec(parse(line)?.message)
+        if (str(message?.role) === 'assistant') provider = str(message?.provider)
+      }
+    },
+    () => provider !== '',
+  )
+  return provider
+}
+
+/** The folder a pi session started in, from its file's first line (the session header); '' when it has none. */
+export function piSessionCwd(firstLine: string): string {
+  const head = parse(firstLine)
+  return head?.type === 'session' ? str(head.cwd) : ''
+}
+
 /**
  * The last `limit` turns of a pi session for its sheet, oldest first: the user's prompts, the
  * agent's texts and its tool calls in a line each (done: the call has a result). A board reminder

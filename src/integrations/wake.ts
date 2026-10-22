@@ -3,7 +3,8 @@
 // has (call 28). The session file is only read here: the wake process is its one writer. Wake and
 // sleep go to wake's API as they go to herdr-wake's (integrations/herdr-wake.ts), never to the
 // separate plugin's router should it still hold the port.
-import { peekWakeSessions } from '../adapters/wake-files.ts'
+import { dirname, join } from 'node:path'
+import { peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
 import { t } from '../core/lang.ts'
 import { createHerdrWake, type SleepingSession, type SleepProvider } from './herdr-wake.ts'
 
@@ -37,7 +38,11 @@ const portOf = (url: string): string => {
 const isTimeout = (err: unknown): boolean =>
   typeof err === 'object' && err !== null && 'name' in err && (err.name === 'TimeoutError' || err.name === 'AbortError')
 
-/** The sessions asleep in wake's session file, as GET /sleeping lists them, each marked fromFile; the board checks their panes. */
+/**
+ * The sessions asleep in wake's session file, as GET /sleeping lists them, each marked fromFile;
+ * the board checks their panes. Then pi's, from `wake-pi.json` beside it (#178), with the pane
+ * they slept in: the board checks whether it is still theirs.
+ */
 function fileSleepers(sessionsFile: string): SleepingSession[] {
   const list: SleepingSession[] = []
   for (const [pane, s] of Object.entries(peekWakeSessions(sessionsFile))) {
@@ -53,6 +58,18 @@ function fileSleepers(sessionsFile: string): SleepingSession[] {
       fromFile: true,
     })
   }
+  for (const s of Object.values(peekPiSleepers(join(dirname(sessionsFile), 'wake-pi.json'))))
+    list.push({
+      name: s.name,
+      pane: s.pane,
+      session: s.session,
+      workspace: s.workspaceLabel ?? '',
+      slept_at: new Date(s.slept_at).toISOString(),
+      exited: false,
+      agent: 'pi',
+      cwd: s.cwd,
+      fromFile: true,
+    })
   return list
 }
 
@@ -79,7 +96,8 @@ export function createBoardWake(o: {
     asking = true
     askedAt = now()
     try {
-      const res = await fetchFn(`${o.url}/sleeping`, { signal: AbortSignal.timeout(ANSWER_MS) })
+      // pi's sleepers too (#178); a wake without them answers /sleeping as before.
+      const res = await fetchFn(`${o.url}/sleeping?agents=all`, { signal: AbortSignal.timeout(ANSWER_MS) })
       const list: unknown = res.ok ? await res.json() : null
       answer = Array.isArray(list) ? list.filter(isObject) : null
     } catch {

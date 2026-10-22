@@ -5,11 +5,12 @@
 // test is over.
 import { onTestFinished } from 'bun:test'
 
-/** A request as the stand-in took it: its method, path and parsed body (null for none). */
+/** A request as the stand-in took it: its method, path and parsed body (null for none), and its query when it had one. */
 export interface WakeRequest {
   method: string
   path: string
   body: unknown
+  query?: string
 }
 
 export interface FakeWakeOptions {
@@ -67,7 +68,7 @@ export async function fakeWake(o: FakeWakeOptions = {}): Promise<FakeWake> {
   const json = (value: unknown): Response =>
     new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } })
   async function answer(req: Request): Promise<Response> {
-    const path = new URL(req.url).pathname
+    const { pathname: path, search } = new URL(req.url)
     const text = await req.text()
     let body: unknown = null
     try {
@@ -75,7 +76,7 @@ export async function fakeWake(o: FakeWakeOptions = {}): Promise<FakeWake> {
     } catch {
       body = text
     }
-    requests.push({ method: req.method, path, body })
+    requests.push({ method: req.method, path, body, ...(search && { query: search.slice(1) }) })
     while (fake.slow) await Bun.sleep(10)
     const target = body && typeof body === 'object' ? (body as { target?: unknown }).target : undefined
     if (req.method === 'GET' && path === '/status')

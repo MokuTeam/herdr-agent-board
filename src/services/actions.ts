@@ -1,15 +1,19 @@
 // What the board can do to a session, shared by the terminal board and the web board. Each
 // returns { ok: true } or { ok: false, error } with a message for the user.
+
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { agentGet, type HerdrAgent, herdr, herdrText, paneTerminals, snapshot } from '../adapters/herdr.ts'
 import { possibleProfilePanes, provenProfilePanes } from '../adapters/profile-panes.ts'
 import { boardOnPath } from '../adapters/resume-report.ts'
-import { peekWakeSessions } from '../adapters/wake-files.ts'
+import { peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
 import { cliWakeHerdr } from '../adapters/wake-herdr.ts'
 import { inputDraft } from '../core/dialogs/input-box.ts'
+import { piDraft } from '../core/dialogs/pi-dialogs.ts'
 import { itemProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
 import { sameDir } from '../core/launch/names.ts'
+import { isPiItem, piTurnOver } from '../core/pi.ts'
 import {
   absoluteProfileDir,
   defaultProfileDir,
@@ -27,6 +31,7 @@ import { raiseTerminal } from '../integrations/terminal-window.ts'
 import type { BoardWake } from '../integrations/wake.ts'
 import type { Deps } from './deps.ts'
 import { PROFILE_NOT_PLAIN, type WakeOutcome, wakeInPane } from './wake/pane-ops.ts'
+import { defaultPiOps, readPiTail, wakePi } from './wake/pi.ts'
 
 /**
  * `busy` (plus `dialog` or `draft`) says send refused because the session is occupied, not broken.
@@ -35,7 +40,7 @@ import { PROFILE_NOT_PLAIN, type WakeOutcome, wakeInPane } from './wake/pane-ops
  * reminder waits for either without counting the wait (services/scheduler.ts).
  */
 export type ActionResult =
-  | { ok: true }
+  | { ok: true; pane?: string }
   | {
       ok: false
       error: string
@@ -59,6 +64,42 @@ function newWake(deps: Pick<Deps, 'cfg' | 'wake'>): BoardWake | null {
   if (!wakeConfig(deps.cfg.wake).enabled) return null
   const w = deps.wake
   return isBoardWake(w) ? w : null
+}
+
+/** Whether the wake the board talks to puts pi sessions to sleep (#178): the board's own; the separate plugin does not. */
+export const wakeSleepsPi = (deps: Pick<Deps, 'cfg' | 'wake'>): boolean => newWake(deps) !== null
+
+/**
+ * A sleeping pi session can be woken (#178): `board` on PATH, which the wake line runs, and its
+ * session file still there.
+ */
+function canWakePi(item: Pick<Item, 'name'> & Partial<Pick<Item, 'session'>>): WakeGuard {
+  if (!boardOnPath()) return { ok: false, refused: true, error: t('err.canWake.board', { name: item.name }) }
+  if (!item.session || !existsSync(item.session))
+    return { ok: false, refused: true, error: t('err.piFileGone', { name: item.name }) }
+  return { ok: true }
+}
+
+/**
+ * The board wakes a sleeping pi session itself, as wake does (services/wake/pi.ts), while wake
+ * does not answer: from wake's pi file (read only), in its own pane or a new tab. Where it woke is
+ * in the answer; wake's next round, once it answers, forgets the sleeper.
+ */
+async function wakePiHere(deps: Deps, item: Item): Promise<ActionResult> {
+  const sleeper = item.session ? peekPiSleepers()[item.session] : undefined
+  if (!sleeper) return { ok: false, error: t('err.wake', { name: item.name, why: t('err.sleep.unknownToWake') }) }
+  const timeoutMs = wakeConfig(deps.cfg.wake).wakeTimeoutSec * 1000
+  try {
+    const outcome = await wakePi(defaultPiOps(cliWakeHerdr), sleeper, await snapshot(), {
+      timeoutMs,
+      log: text => deps.log(`wake: ${text}`),
+    })
+    if (!outcome.ok) return { ok: false, error: t('err.wake', { name: item.name, why: outcome.error }) }
+    deps.log(`wake: woke ${item.name} (pi) in ${outcome.pane} from the board`)
+    return { ok: true, pane: outcome.pane }
+  } catch (err) {
+    return { ok: false, herdrDown: true, error: t('err.wake', { name: item.name, why: messageOf(err) }) }
+  }
 }
 
 /** A sleeper from wake's session file while wake is off: the board wakes it itself (call 28, H1). */
@@ -160,9 +201,12 @@ export type WakeGuard = { ok: true } | { ok: false; error: string; refused: bool
 
 export async function checkWake(
   deps: Deps,
-  item: Pick<Item, 'name' | 'pane' | 'profile' | 'profileFolder'> & Partial<Pick<Item, 'session' | 'cwd' | 'fromFile'>>,
+  item: Pick<Item, 'name' | 'pane' | 'profile' | 'profileFolder'> &
+    Partial<Pick<Item, 'session' | 'cwd' | 'fromFile' | 'agent' | 'sleeping'>>,
   set: ProfileSet = deps.profiles(),
 ): Promise<WakeGuard> {
+  // A sleeping pi session wakes in the account it slept with, which wake kept (#178).
+  if (item.sleeping && isPiItem(item)) return canWakePi(item)
   if (offFileSleeper(deps.cfg, item) || newWake(deps)) return canWakeAgain(deps, item, set)
   // The board's records first, without asking herdr: the board's own profile in a pane no record
   // puts in another one wakes with the same herdr calls as before profiles.
@@ -197,12 +241,28 @@ export async function checkWake(
 export async function wake(deps: Deps, item: Item): Promise<ActionResult> {
   const check = await checkWake(deps, item)
   if (!check.ok) return { ok: false, error: check.error }
+  if (isPiItem(item)) return wakePiItem(deps, item)
   if (offFileSleeper(deps.cfg, item)) return wakeHere(deps, item)
   const fresh = newWake(deps)
   if (!fresh) return deps.wake.wake(item)
   const reach = await fresh.reach()
   if (reach === 'slow') return { ok: false, wakeBusy: true, error: t('err.wakeBusy', { name: item.name }) }
   return reach === 'up' ? fresh.wake(item) : wakeHere(deps, item)
+}
+
+/**
+ * A sleeping pi session woken (#178): by the board's wake while it answers, else by the board
+ * itself (wakePiHere); never while wake took the question but is slow to answer. Where it woke is
+ * in the answer: a new tab when its pane was not as it was left.
+ */
+async function wakePiItem(deps: Deps, item: Item): Promise<ActionResult> {
+  const fresh = newWake(deps)
+  if (fresh) {
+    const reach = await fresh.reach()
+    if (reach === 'slow') return { ok: false, wakeBusy: true, error: t('err.wakeBusy', { name: item.name }) }
+    if (reach === 'up') return fresh.wake(item)
+  }
+  return wakePiHere(deps, item)
 }
 
 /**
@@ -243,6 +303,7 @@ export async function readyToSleep(
   deps: Deps,
   item: Pick<Item, 'pane' | 'session' | 'profile' | 'profileFolder'>,
 ): Promise<{ ok: true; status: AgentStatus } | { ok: false; why: string; profile?: true }> {
+  if (isPiItem(item)) return readyPiToSleep(item)
   const set = deps.profiles()
   const dir = itemProfile(item, set.list)?.dir ?? item.profileFolder
   if (!dir) return { ok: false, why: t('err.wakeProfile', { profile: profileLabel(item, set) }), profile: true }
@@ -257,6 +318,29 @@ export async function readyToSleep(
     const draft = inputDraft(
       await herdrText(['agent', 'read', item.pane ?? '', '--source', 'recent', '--lines', '40', '--ansi'], 10_000),
     )
+    if (draft === null) return { ok: false, why: 'dialog' }
+    return draft === '' ? { ok: true, status: agent.status } : { ok: false, why: 'draft' }
+  } catch (err) {
+    return { ok: false, why: t('err.restart.herdr', { why: messageOf(err) }) }
+  }
+}
+
+/**
+ * readyToSleep for a pi session (#178), as wake checks it before it stops pi: herdr shows it in its
+ * pane on its session file and not at work nor in a dialog, its last turn is over in its file, and
+ * nothing is typed in its input box. Its account is wake's to keep, so its profile is not asked.
+ */
+async function readyPiToSleep(
+  item: Pick<Item, 'pane' | 'session'>,
+): Promise<{ ok: true; status: AgentStatus } | { ok: false; why: string }> {
+  try {
+    const agent = item.pane ? await agentGet(item.pane) : null
+    if (!agent || agent.session !== (item.session ?? null)) return { ok: false, why: 'gone' }
+    if (agent.status === 'blocked') return { ok: false, why: 'dialog' }
+    if (agent.status === 'working') return { ok: false, why: 'busy' }
+    const lines = item.session ? readPiTail(item.session) : null
+    if (!lines || !piTurnOver(lines)) return { ok: false, why: 'busy' }
+    const draft = piDraft(await herdrText(['pane', 'read', item.pane ?? '', '--source', 'visible'], 10_000))
     if (draft === null) return { ok: false, why: 'dialog' }
     return draft === '' ? { ok: true, status: agent.status } : { ok: false, why: 'draft' }
   } catch (err) {
@@ -292,13 +376,17 @@ export async function focus(
   item: Item,
   { raise = false }: { raise?: boolean } = {},
 ): Promise<ActionResult> {
-  if (!item?.pane) return { ok: false, error: t('err.noPane') }
+  // A sleeping pi session whose pane is gone wakes in a new tab (#178).
+  if (!item?.pane && !(item?.sleeping && isPiItem(item))) return { ok: false, error: t('err.noPane') }
+  let pane = item.pane
   if (item.sleeping) {
     const r = await wake(deps, item)
     if (!r.ok) return r
+    pane = r.pane ?? pane
   }
+  if (!pane) return { ok: false, error: t('err.noPane') }
   try {
-    await herdr(['agent', 'focus', item.pane])
+    await herdr(['agent', 'focus', pane])
   } catch (err) {
     return { ok: false, error: t('err.focus', { name: item.name, why: messageOf(err) }) }
   }
@@ -321,7 +409,8 @@ export async function send(
 ): Promise<ActionResult> {
   const text = String(message ?? '').trim()
   if (!text) return { ok: false, error: t('err.emptyMessage') }
-  if (!item?.pane) return { ok: false, error: t('err.noPane') }
+  // A sleeping pi session whose pane is gone wakes in a new tab (#178).
+  if (!item?.pane && !(item?.sleeping && isPiItem(item))) return { ok: false, error: t('err.noPane') }
   const expectedSession = item.session ?? null
   const refused = (agent: HerdrAgent | null): ActionResult | null => {
     if (!agent || agent.session !== expectedSession)
@@ -332,12 +421,15 @@ export async function send(
       return { ok: false, busy: true, error: t('err.working', { name: item.name }) }
     return null
   }
+  let pane = item.pane
   if (item.sleeping) {
     const r = await wake(deps, item)
     if (!r.ok) return r
+    pane = r.pane ?? pane
   }
+  if (!pane) return { ok: false, error: t('err.noPane') }
   try {
-    const agent = await agentGet(item.pane)
+    const agent = await agentGet(pane)
     // Recheck after wake too: the pane may now host a different session.
     const before = refused(agent)
     if (before) return before
@@ -345,7 +437,7 @@ export async function send(
       // Herdr can miss a dialog (e.g. Teach auto mode). Require the visible prompt for every
       // send; recent scrollback could still contain an old input box. Only scheduled messages
       // also refuse a draft: Enter would send both it and the reminder.
-      const draft = inputDraft(await herdrText(['agent', 'read', item.pane, '--source', 'visible', '--ansi'], 10_000))
+      const draft = inputDraft(await herdrText(['agent', 'read', pane, '--source', 'visible', '--ansi'], 10_000))
       if (draft === null || (guardDraft && draft !== '')) {
         return {
           ok: false,
@@ -357,14 +449,14 @@ export async function send(
       }
       // The screen read can take time. Do not send to a replacement session, or one herdr now
       // knows is blocked (or working, for an idle-only reminder).
-      const fresh = await agentGet(item.pane)
+      const fresh = await agentGet(pane)
       const after = refused(fresh)
       if (after) return after
       if (fresh?.kind !== agent?.kind) return { ok: false, error: t('err.sessionChanged', { name: item.name }) }
     }
     // This read and prompt are separate CLI calls, not an atomic identity check and send.
     // A leading dash would be read as an option by the herdr CLI.
-    await herdr(['agent', 'prompt', item.pane, /^-/.test(text) ? ` ${text}` : text])
+    await herdr(['agent', 'prompt', pane, /^-/.test(text) ? ` ${text}` : text])
     return { ok: true }
   } catch (err) {
     return { ok: false, error: t('err.send', { name: item.name, why: messageOf(err) }) }

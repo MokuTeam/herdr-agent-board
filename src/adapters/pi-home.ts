@@ -2,7 +2,9 @@
 // reports as the pane's agent_session (core/pi.ts reads the lines). The end of it for a card,
 // cached by the file's size and time; the last turns for the session's sheet. pi writes the file
 // only once the session has something in it, so a file that is not there yet is an empty session.
-import { statSync } from 'node:fs'
+import { readdirSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { type PiInfo, parsePiConversation, parsePiTail } from '../core/pi.ts'
 import { readTail, type SessionThread } from './claude-home.ts'
 
@@ -53,4 +55,34 @@ export function createPiHome(): PiHome {
   }
 
   return { transcriptInfo, sessionThread }
+}
+
+/**
+ * A pi session's file by its id (`<time>_<id>.jsonl`) in pi's session folders: the one
+ * PI_CODING_AGENT_SESSION_DIR names, and `sessions` in pi's own folder (PI_CODING_AGENT_DIR, else
+ * ~/.pi/agent), each with a folder per project in it; null when none has it (#178).
+ */
+export function findPiSession(id: string, env: Record<string, string | undefined> = process.env): string | null {
+  const roots = [
+    env.PI_CODING_AGENT_SESSION_DIR,
+    join(env.PI_CODING_AGENT_DIR || join(homedir(), '.pi', 'agent'), 'sessions'),
+  ]
+  const end = `_${id}.jsonl`.toLowerCase()
+  const list = (dir: string) => {
+    try {
+      return readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return []
+    }
+  }
+  for (const root of roots) {
+    if (!root) continue
+    for (const e of list(root)) {
+      if (e.isFile() && e.name.toLowerCase().endsWith(end)) return join(root, e.name)
+      if (!e.isDirectory()) continue
+      const hit = list(join(root, e.name)).find(f => f.isFile() && f.name.toLowerCase().endsWith(end))
+      if (hit) return join(root, e.name, hit.name)
+    }
+  }
+  return null
 }
