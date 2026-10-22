@@ -6,6 +6,7 @@
 // board-menus.js at MERGE (support/board-menu-sides.ts).
 import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
+import { ALL_LANES, onlyLane } from '../../web/src/models/lane-picks.ts'
 import { cardMenu, columnMenu, laneMenu, type MenuEntry, type MenuItem } from '../../web/src/models/menu-model.ts'
 import { item } from './support/board.tsx'
 import { type BoardScene, type MenuSide, oldBoardMenus, reactBoardMenus, scene } from './support/board-menu-sides.ts'
@@ -53,7 +54,7 @@ test('menus: Archive on a Claude session’s card, gray with the reason; "Idle" 
   expect(find(columnMenu('idle', { ...ctx, canMutate: false, tidyCount: () => 3 }), 'tidy')?.disabled).toBe(true)
   expect(
     find(
-      laneMenu({ id: 'acme', title: 'Acme', color: '' }, { ...ctx, filter: 'all', tidyCount: d => counts[d] ?? 0 }),
+      laneMenu({ id: 'acme', title: 'Acme', color: '' }, { ...ctx, filter: ALL_LANES, tidyCount: d => counts[d] ?? 0 }),
       'tidy',
     )?.submenu,
   ).toBeTruthy()
@@ -76,13 +77,16 @@ test('the column’s and the lane’s menus are upstream’s columnMenu and lane
           const c = { t: tr, canMutate, canEdit, tidyCount }
           for (const col of ['work', 'me', 'ext', 'done', 'idle', undefined])
             expect<unknown>(columnMenu(col, c)).toEqual(oldFunction(old, 'columnMenu')(col, c))
+          // The old page's filter is one lane or 'all': the board's picks are that lane alone, or none.
           for (const filter of ['all', 'acme']) {
-            expect<unknown>(laneMenu(lane, { ...c, filter })).toEqual(
+            expect<unknown>(laneMenu(lane, { ...c, filter: onlyLane(filter) })).toEqual(
               oldFunction(old, 'laneMenu')(lane, { ...c, filter }),
             )
             // Without a count (the board's own lanes before #56): no tidy-up.
             const plain = { t: tr, canMutate, canEdit, filter }
-            expect<unknown>(laneMenu(lane, plain)).toEqual(oldFunction(old, 'laneMenu')(lane, plain))
+            expect<unknown>(laneMenu(lane, { ...plain, filter: onlyLane(filter) })).toEqual(
+              oldFunction(old, 'laneMenu')(lane, plain),
+            )
           }
         }
 })

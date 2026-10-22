@@ -228,7 +228,7 @@ const ok: FolderCheck = { input: 'C:\\Work\\acme', path: 'C:\\Work\\acme', exist
 
 describe('what the form starts with', () => {
   const card = item({ key: 's1', name: 'acme', cwd: 'C:\\Work\\acme', category: 'acme', workspace: 'Acme' })
-  const board = { items: [card], filter: 'all' }
+  const board = { items: [card], filter: [] as string[] }
 
   test('a card: its folder, a free name, its lane and workspace; set, they stop following the folder', () => {
     expect(formStart({ item: card }, null, board)).toEqual({
@@ -240,12 +240,17 @@ describe('what the form starts with', () => {
       branch: '',
       workspace: { label: 'Acme' },
       set: { category: true, cwd: true, name: false, branch: false, workspace: true, newWorkspace: true },
+      lanes: [],
     })
   })
 
   test('a lane, the lane on show, a new workspace, nothing at all', () => {
     expect(formStart({ category: 'web' }, null, board).category).toBe('web')
-    expect(formStart({}, null, { ...board, filter: 'ops' }).category).toBe('ops')
+    expect(formStart({}, null, { ...board, filter: ['ops'] })).toMatchObject({
+      category: 'ops',
+      set: { category: true },
+      lanes: [],
+    })
     expect(formStart({ newWorkspace: true }, null, board)).toMatchObject({
       workspace: { create: '' },
       set: { workspace: true, newWorkspace: false },
@@ -257,6 +262,26 @@ describe('what the form starts with', () => {
       workspace: null,
       set: { category: false, cwd: false, name: false, workspace: false, newWorkspace: false },
     })
+  })
+
+  test('several lanes on show: the first picked, said in the form, unless the place names a lane', () => {
+    const several = { ...board, filter: ['ops', 'web'] }
+    // The first picked, not the first in the board's order; set, so the folder does not move it.
+    expect(formStart({}, null, several)).toMatchObject({
+      category: 'ops',
+      set: { category: true },
+      lanes: ['ops', 'web'],
+    })
+    expect(formStart({}, null, { ...board, filter: ['web', 'ops'] })).toMatchObject({
+      category: 'web',
+      lanes: ['web', 'ops'],
+    })
+    // A lane's +, a card, a draft or a failed launch name the lane: nothing to say.
+    expect(formStart({ category: 'acme' }, null, several)).toMatchObject({ category: 'acme', lanes: [] })
+    expect(formStart({ item: card }, null, several)).toMatchObject({ category: 'acme', lanes: [] })
+    expect(formStart({}, { category: 'web' }, several)).toMatchObject({ category: 'web', lanes: [] })
+    // A new workspace from the board's menu names none: the first picked too.
+    expect(formStart({ newWorkspace: true }, null, several)).toMatchObject({ category: 'ops', lanes: ['ops', 'web'] })
   })
 
   test('a draft of the place, or a failed launch, gives every value back', () => {

@@ -55,7 +55,7 @@ export function ProfileSwitch({ options, picked, onPick, folded = false, picks }
         <SegmentPick
           of="profiles"
           name="tb.profilesPick"
-          choices={{ label: t('tb.profiles'), options, picked, tint: true, onPick }}
+          choices={{ label: t('tb.profiles'), options, picked: [picked], tint: true, onPick }}
           picks={picks}
         />
       )}

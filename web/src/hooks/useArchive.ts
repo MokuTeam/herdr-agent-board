@@ -19,7 +19,8 @@ import {
   returnToastMs,
   UNDO_MS,
 } from '../models/archive-view.ts'
-import { catOf, laneShown } from '../models/board-view.ts'
+import { catOf } from '../models/board-view.ts'
+import { laneShown } from '../models/lane-picks.ts'
 import { pickedProfile, profileShown } from '../models/profiles.ts'
 import { reducedMotion, Spring } from '../models/spring.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'

@@ -291,6 +291,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'tb.lanes': 'Categories',
     // the lanes control folded into one pill (web/src/components/SegmentPick.tsx)
     'tb.lanesPick': 'Category: {title}',
+    // the same with several lanes on show, {title} their names
+    'tb.lanesPicked': 'Categories: {title}',
     'tb.search': 'Search',
     'tb.sleepersTitle': 'Show sleeping sessions',
     'tb.cats': 'Categories',
@@ -863,6 +865,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'tb.lanes': 'Категории',
     // the lanes control folded into one pill (web/src/components/SegmentPick.tsx)
     'tb.lanesPick': 'Категория: {title}',
+    'tb.lanesPicked': 'Категории: {title}',
     'tb.search': 'Поиск',
     'tb.sleepersTitle': 'Показывать спящие сессии',
     'tb.cats': 'Категории',

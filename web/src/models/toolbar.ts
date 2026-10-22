@@ -5,8 +5,9 @@ import type { BoardCategory } from '../../../src/core/payload.ts'
 import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { ColumnId, Item, Translator } from '../../../src/core/types.ts'
 import { type Seen, unseenResult } from './attention.ts'
-import { colOf, laneShown, type PendingMoves } from './board-view.ts'
+import { colOf, type PendingMoves } from './board-view.ts'
 import { liveCount } from './helper-model.ts'
+import { type LanePicks, laneShown } from './lane-picks.ts'
 
 type CategoryOf = (item: Item) => string
 
@@ -39,7 +40,7 @@ export function summaryParts(items: Item[], t: Translator): SummaryPart[] {
 export const summaryText = (parts: SummaryPart[]): string => parts.map(p => `${p.n} ${p.text}`).join(' · ')
 
 /** Cards on show that need the user: questions, and results not viewed yet. */
-export function attentionCount(visible: Item[], filter: string, categoryOf: CategoryOf, viewed: Seen): number {
+export function attentionCount(visible: Item[], filter: LanePicks, categoryOf: CategoryOf, viewed: Seen): number {
   return visible.filter(
     it => !it.launchOnly && laneShown(filter, categoryOf(it)) && (it.column === 'me' || unseenResult(it, viewed)),
   ).length
@@ -47,15 +48,15 @@ export function attentionCount(visible: Item[], filter: string, categoryOf: Cate
 
 export type LaneOption = { id: string; title: string; n: number }
 
-/** The lanes control: "All", then the categories with sessions on show and the one picked. */
+/** The lanes control: "All", then the categories with sessions on show and those picked. */
 export function laneOptions(
   categories: BoardCategory[],
   visible: Item[],
-  filter: string,
+  filter: LanePicks,
   categoryOf: CategoryOf,
   t: Translator,
 ): LaneOption[] {
-  const used = categories.filter(c => visible.some(i => categoryOf(i) === c.id) || c.id === filter)
+  const used = categories.filter(c => visible.some(i => categoryOf(i) === c.id) || filter.includes(c.id))
   return [
     { id: 'all', title: t('all'), n: visible.length },
     ...used.map(c => ({ id: c.id, title: c.title, n: visible.filter(i => categoryOf(i) === c.id).length })),
@@ -77,7 +78,7 @@ export type ColumnHead = { id: ColumnId; title: string; color: string; n: number
 export function columnHeads(
   columns: { id: ColumnId }[],
   visible: Item[],
-  filter: string,
+  filter: LanePicks,
   categoryOf: CategoryOf,
   t: Translator,
   moves: PendingMoves,

@@ -674,6 +674,42 @@ const startBodyOf = (shot: string | undefined) =>
     .find(line => line.startsWith('POST /api/launch {'))
     ?.slice('POST /api/launch '.length) ?? ''
 
+describe('several lanes on show', () => {
+  const NOTE =
+    'data-for="category">Categories on show: Web, Acme. It starts in Web, the first picked, unless you pick another.</p>'
+
+  test('from the toolbar: the first picked, and the form says so under Category until a lane is picked', async () => {
+    const shots = await react([...openAndSettle(), click(inWindow('[data-cat="acme"]'))], () =>
+      board({ filter: 'all', lanes: ['web', 'acme'] }),
+    )
+    const shown = shots[3]
+    expect(shown).toContain('aria-pressed="true" data-cat="web"')
+    expect(shown).toContain('aria-pressed="false" data-cat="acme"')
+    expect(shown).toContain(NOTE)
+    // Acme picked: pressed, the note gone.
+    expect(shots[4]).toContain('aria-pressed="true" data-cat="acme"')
+    expect(shots[4]).not.toContain('data-for="category"')
+  })
+
+  test('the folder does not move it; a lane’s +, a card or one lane on show: no note', async () => {
+    const several = () => board({ filter: 'all', lanes: ['web', 'acme'] })
+    // C:\Work\acme is Acme's folder: the lane stays the first picked.
+    const typed = await react([...openAndSettle(), type('cwd', 'C:\\Work\\acme'), tick(300), settle], several)
+    expect(typed.at(-1)).toContain('aria-pressed="true" data-cat="web"')
+    expect(typed.at(-1)).toContain(NOTE)
+    for (const [ctx, from] of [
+      [{ category: 'acme' }, 'lane-new'],
+      [{ item: SITE }, 'card'],
+    ] as const) {
+      const shots = await react(openAndSettle(ctx, from), several)
+      expect(shots.at(-1)).not.toContain('data-for="category"')
+    }
+    const one = await react(openAndSettle(), () => board({ filter: 'web' }))
+    expect(one.at(-1)).toContain('aria-pressed="true" data-cat="web"')
+    expect(one.at(-1)).not.toContain('data-for="category"')
+  })
+})
+
 describe('the profile', () => {
   test('two shown: Start waits for a profile; a pick enables it, shows it beside Start, and goes in the body', async () => {
     const shots = await react([

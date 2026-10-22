@@ -14,6 +14,7 @@ import { launchWindow } from '../../../web/src/components/launch/launch-window.t
 import { localStore, windowKeys } from '../../../web/src/hooks/useLaunch.ts'
 import { scopeOfElements } from '../../../web/src/hooks/useModalFocus.ts'
 import { type MenuOrigin, type PointRect, pointRect } from '../../../web/src/models/board-menus.ts'
+import { onlyLane } from '../../../web/src/models/lane-picks.ts'
 import type { LaunchContext } from '../../../web/src/models/launch-form.ts'
 import { modalFocusManager } from '../../../web/src/models/modal-focus.ts'
 import { reducedMotion, Spring } from '../../../web/src/models/spring.ts'
@@ -34,7 +35,10 @@ export interface LaunchScene {
   categories: BoardCategory[]
   items: Item[]
   launches: LaunchView[]
+  /** The old page's filter: one lane, or 'all'. */
   filter: string
+  /** Several lanes picked, as only this board can (the React window alone); else `filter`'s. */
+  lanes?: string[]
   canMutate: boolean
   /** The Claude profiles (the old page had none; a board before them sends none). */
   profiles?: BoardProfile[]
@@ -457,7 +461,7 @@ export function reactLaunchSide(scene: LaunchScene): LaunchSide {
     data: () => ({
       categories: scene.categories,
       items: scene.items,
-      filter: scene.filter,
+      filter: scene.lanes ?? onlyLane(scene.filter),
       profiles: scene.profiles ?? [],
     }),
     toast: page.toast,

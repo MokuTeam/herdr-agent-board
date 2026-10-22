@@ -7,6 +7,8 @@
 
 .pill-toggle.segment-pick { gap: 0; max-width: 100%; color: var(--label); }
 .segment-pick-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Several lanes on show, named one after another: the pill leaves the row room for search. */
+.pill-toggle.segment-pick.many { max-width: min(100%, 240px); }
 /* Its count as a segment's (app.css .segmented button .n), not a button's badge (.pill-toggle .n). */
 .pill-toggle.segment-pick .n {
   display: inline;
@@ -31,3 +33,15 @@
 .mi-count { flex: none; margin-left: 18px; color: var(--label-3); font-variant-numeric: tabular-nums; }
 .mi-count.tint { color: var(--c, var(--label-3)); font-weight: 600; }
 .menu-item.active .mi-count { color: inherit; opacity: 0.8; }
+
+/* The lanes control lights every lane on show (web/src/components/Lanes.tsx), "All" while none is
+   picked: each lit segment raised as the profile switch's thumb is (app.css .segmented .thumb). */
+.segmented.lane-picks { gap: 2px; }
+.segmented.lane-picks button { transition: background-color 160ms ease, box-shadow 160ms ease; }
+.segmented.lane-picks button[aria-pressed="true"] {
+  background: var(--surface);
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.04), 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .segmented.lane-picks button[aria-pressed="true"] { background: #636366; } }
+:root[data-theme="dark"] .segmented.lane-picks button[aria-pressed="true"] { background: #636366; }
+@media (prefers-reduced-motion: reduce) { .segmented.lane-picks button { transition: none; } }

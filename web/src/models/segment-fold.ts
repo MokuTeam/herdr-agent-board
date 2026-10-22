@@ -65,20 +65,32 @@ export function withFold(folded: ReadonlySet<string>, id: string, on: boolean): 
 /** A segment: a lane (models/toolbar.ts LaneOption) or a profile with its color (models/profiles.ts ProfileOption). */
 export type SegmentOption = { id: string; title: string; n: number; color?: string }
 
-/** The choice the pill names: the one picked, else the first, as the segments' thumb has it. */
-export const pickedOption = <T extends SegmentOption>(options: readonly T[], picked: string): T | null =>
-  options.find(o => o.id === picked) ?? options[0] ?? null
+/**
+ * The choices the pill names, in the segments' order: those lit (`picked`: the one picked, or
+ * every lane on show), else the first, as the segments light it.
+ */
+export function pickedOptions<T extends SegmentOption>(options: readonly T[], picked: readonly string[]): T[] {
+  const lit = options.filter(o => picked.includes(o.id))
+  return lit.length ? lit : options.slice(0, 1)
+}
 
 /**
- * The pill's menu: every choice with its count, the one on show checked; `tint`, each count in
- * its choice's color as a profile's segment has it ('' for none, "All profiles").
+ * The pill's menu: every choice with its count, those on show checked; `tint`, each count in its
+ * choice's color as a profile's segment has it ('' for none, "All profiles"). `several`: a choice
+ * checks on or off and keeps the menu open for the next, but for "All" ('all'), which closes it.
  */
-export function segmentMenu(options: readonly SegmentOption[], picked: string, tint: boolean): MenuItem[] {
+export function segmentMenu(
+  options: readonly SegmentOption[],
+  picked: readonly string[],
+  tint: boolean,
+  several = false,
+): MenuItem[] {
   return options.map(o => ({
     id: o.id,
     label: o.title,
-    checked: o.id === picked,
+    checked: picked.includes(o.id),
     count: o.n,
     ...(tint && { tint: o.color ?? '' }),
+    ...(several && o.id !== 'all' && { keep: true }),
   }))
 }

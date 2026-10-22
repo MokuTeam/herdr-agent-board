@@ -1,19 +1,26 @@
 // A folded toolbar control's pill (components/SegmentPick.tsx; the lanes control, the profile
-// switch): its choices as a menu out of it, downward, the one on show checked
-// (models/segment-fold.ts segmentMenu); a pick does what that segment's click does. The pill's
+// switch): its choices as a menu out of it, downward, those on show checked
+// (models/segment-fold.ts segmentMenu); a pick does what that segment's click does. The lanes'
+// menu stays open while lanes are checked on and off, its checks following. The pill's
 // aria-expanded kept with the menu, as the gear's is (hooks/useSettingsMenu.ts settingsGear).
 import { useEffect, useState } from 'react'
 import type { MenuEngine } from '../components/menu/menu-engine.ts'
 import { type SegmentOption, segmentMenu } from '../models/segment-fold.ts'
 
-/** What a folded control offers: its name, its choices, the one on show, and what a pick does. */
+/** What a folded control offers: its name, its choices, those on show, and what a pick does. */
 export interface SegmentChoices {
   /** The menu's name: the control's ("Categories", "Profiles"). */
   label: string
   options: readonly SegmentOption[]
-  picked: string
+  /** The choices lit: the one picked, or (`toggled`) all on show. */
+  picked: readonly string[]
   /** Each count in its choice's color, as the profile switch has them. */
   tint: boolean
+  /**
+   * A control that shows several choices at once (the lanes): the choices lit after a pick of
+   * `id`, as that segment's click leaves them. Its menu stays open for the next pick, but for "All".
+   */
+  toggled?: (lit: readonly string[], id: string) => readonly string[]
   /** What a click on that segment does. */
   onPick(id: string): void
 }
@@ -26,7 +33,7 @@ export interface SegmentPicks {
 }
 
 export interface SegmentPickDeps {
-  menu: Pick<MenuEngine, 'open' | 'openNow' | 'isOpen'>
+  menu: Pick<MenuEngine, 'open' | 'update' | 'openNow' | 'isOpen'>
   /** The pointer is a finger. */
   coarse(): boolean
   /** The control whose menu is up now, null once none is. */
@@ -47,14 +54,23 @@ export function segmentPickMenus(deps: SegmentPickDeps): SegmentPickMenus {
   return {
     open(id, button, keyboard, choices) {
       const rect = button.getBoundingClientRect()
+      const { toggled } = choices
+      let lit = choices.picked
+      const items = () => segmentMenu(choices.options, lit, choices.tint, !!toggled)
       deps.expanded(id)
-      deps.menu.open(segmentMenu(choices.options, choices.picked, choices.tint), {
+      deps.menu.open(items(), {
         x: rect.left,
         y: rect.bottom + 4,
         source: keyboard ? 'keyboard' : deps.coarse() ? 'touch' : 'mouse',
         origin: button,
         label: choices.label,
-        onPick: pick => choices.onPick(pick),
+        onPick: pick => {
+          choices.onPick(pick)
+          // Still open (a lane checked on or off): its checks follow.
+          if (!toggled) return
+          lit = toggled(lit, pick)
+          deps.menu.update(items())
+        },
       })
     },
     watch: () =>

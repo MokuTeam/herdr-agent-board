@@ -104,7 +104,7 @@ export function Toolbar({
             <Lanes
               options={lanes}
               picked={ui.filter}
-              onPick={id => dispatch({ type: 'filter', id })}
+              onPick={id => dispatch({ type: 'toggleLane', id })}
               folded={folded.has('lanes')}
               picks={picks}
             />

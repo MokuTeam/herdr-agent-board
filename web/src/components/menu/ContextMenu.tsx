@@ -37,7 +37,7 @@ export function MenuLayer({ layer, menuRef }: { layer: LayerView; menuRef?: Ref<
       aria-activedescendant={layer.active >= 0 ? `${layer.id}-${layer.active}` : undefined}
       ref={menuRef}
     >
-      {/* A level's items never change; ids may repeat (a pinned card's Auto is a column too). */}
+      {/* A level's items never change but for their checks; ids may repeat (a pinned card's Auto is a column too). */}
       {layer.items.map((it, i) =>
         isSeparator(it) ? (
           // biome-ignore lint/suspicious/noArrayIndexKey: as above

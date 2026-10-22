@@ -12,6 +12,7 @@ import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
 import type { MenuOpen } from '../../../web/src/components/menu/menu-engine.ts'
 import { boardMenuListeners } from '../../../web/src/hooks/useContextMenus.ts'
 import { type BoardMenuDeps, menuFor } from '../../../web/src/models/board-menus.ts'
+import { onlyLane } from '../../../web/src/models/lane-picks.ts'
 import type { MenuEntry } from '../../../web/src/models/menu-model.ts'
 import { box, type EventFields, type FakeElement, FakeWorld, type RectBox } from './fake-dom.ts'
 import { parseHtml } from './markup.ts'
@@ -81,6 +82,7 @@ export interface BoardScene {
   canMutate: boolean
   canEdit: boolean
   open: string | null
+  /** The old page's filter: one lane, or 'all' (the board's own state gets it as its picks). */
   filter: string
   sleepers: boolean
   t: Translator
@@ -172,7 +174,7 @@ function boardOf(s: BoardScene, log: string[], menu: unknown): BoardMenuDeps & {
     tidyCount: (days, lane) => s.tidy?.[`${lane ?? 'shown'}:${days}`] ?? 0,
     state: () => ({
       open: s.open,
-      filter: s.filter,
+      filter: onlyLane(s.filter),
       sleepers: s.sleepers,
       data: {
         categories,
@@ -307,7 +309,9 @@ export function oldBoardMenus(s: BoardScene): MenuSide {
     { ...baselineModel(), performance: { now: () => world.now } },
     MENUS_MERGE,
   )
-  oldFunction(code, 'initBoardMenus')(boardOf(s, log, menu))
+  const board = boardOf(s, log, menu)
+  // The old page's filter: one lane or 'all', as the scene has it.
+  oldFunction(code, 'initBoardMenus')({ ...board, state: () => ({ ...board.state(), filter: s.filter }) })
   return side(world, log, recorder)
 }
 

@@ -16,6 +16,7 @@ import { SidePanels } from '../../web/src/components/SidePanels.tsx'
 import { Toolbar } from '../../web/src/components/Toolbar.tsx'
 import type { Schedule } from '../../web/src/hooks/useSchedule.ts'
 import { settingsMenuFrom } from '../../web/src/hooks/useSettingsMenu.ts'
+import { ALL_LANES } from '../../web/src/models/lane-picks.ts'
 import type { LaunchContext } from '../../web/src/models/launch-form.ts'
 import { LAUNCH_PROFILES } from '../../web/src/models/launch-profile.ts'
 import type { MenuEntry } from '../../web/src/models/menu-model.ts'
@@ -109,7 +110,7 @@ const board = (data: BoardPayload, more: Partial<BoardUi> = {}): string =>
   canonical(
     renderInBoard(
       <Board />,
-      boardContext({ data, now: NOW, ui: ui({ filter: 'all', query: '', sleepers: true, open: null, ...more }) }),
+      boardContext({ data, now: NOW, ui: ui({ filter: ALL_LANES, query: '', sleepers: true, open: null, ...more }) }),
     ),
     { spaces: true },
   )
@@ -119,7 +120,7 @@ const toolbar = (data: BoardPayload, more: Partial<BoardUi> = {}): string =>
   canonical(
     renderInBoard(
       <Toolbar limitsAnchor={createRef<HTMLButtonElement>()} />,
-      boardContext({ data, now: NOW, ui: ui({ filter: 'all', sleepers: true, ...more }) }),
+      boardContext({ data, now: NOW, ui: ui({ filter: ALL_LANES, sleepers: true, ...more }) }),
     ),
   )
 
