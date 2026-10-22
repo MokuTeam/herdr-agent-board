@@ -386,4 +386,27 @@ test('a thread over its budget cuts only its longest messages, all to one length
   assert.equal(log[1], tool)
   // Two long ones share what is left alike.
   assert.deepEqual(sizes(fitThread([turn('user', 10), turn('assistant', 300), turn('user', 900)], 100)), [10, 45, 45])
+  // Only a cut one says so.
+  assert.deepEqual(
+    log.map(t => 'cut' in t),
+    [false, false, true, false],
+  )
+})
+
+test("another session's message counts toward the budget and is cut like the rest; a cut never splits an emoji", () => {
+  const peer: ConversationTurn = { role: 'peer', from: 'Master', text: 'p'.repeat(500), at: 1 }
+  const [user, cut] = fitThread([{ role: 'user', text: 'u'.repeat(30), at: 0 }, peer], 100)
+  assert.deepEqual(user, { role: 'user', text: 'u'.repeat(30), at: 0 })
+  assert.deepEqual(cut, { ...peer, text: `${'p'.repeat(69)}…`, cut: true })
+  // 😀 is two UTF-16 units: a cut that would end between them keeps one unit less.
+  const [face] = fitThread([{ role: 'assistant', text: '😀'.repeat(50), at: 0 }], 10)
+  assert.ok(face && 'text' in face)
+  assert.equal(face.text, `${'😀'.repeat(4)}…`)
+  assert.ok(face.text.isWellFormed())
+  // A budget under one character a message: each keeps only the "…", nothing is left whole.
+  const tiny = fitThread([{ role: 'user', text: 'abc', at: 0 }, { role: 'assistant', text: 'def', at: 1 }, peer], 2)
+  assert.deepEqual(
+    tiny.map(t => ('text' in t ? t.text : '')),
+    ['…', '…', '…'],
+  )
 })

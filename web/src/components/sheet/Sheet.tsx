@@ -344,7 +344,7 @@ export function SheetView(props: SheetViewProps) {
                 item={item}
                 links={props.links}
                 composer={composer}
-                onGrow={props.onBodyScroll}
+                onResize={props.onBodyScroll}
               />
             </div>
           </>
@@ -385,11 +385,11 @@ interface ConversationProps {
   links?: SheetLinks | undefined
   /** The board's own messages at the thread's foot. */
   composer: ComposerControls
-  /** A message opened whole: where the reader is counts again (the body's scroll). */
-  onGrow?: (() => void) | undefined
+  /** A long message opened or folded again: where the reader is counts again (the body's scroll). */
+  onResize?: (() => void) | undefined
 }
 
-function Conversation({ detail, item, links, composer, onGrow }: ConversationProps) {
+function Conversation({ detail, item, links, composer, onResize }: ConversationProps) {
   const t = useT()
   const { data } = useBoardContext()
   const conversation = detail.data?.conversation
@@ -409,7 +409,7 @@ function Conversation({ detail, item, links, composer, onGrow }: ConversationPro
     onHelper: (id, el) => links?.onHelper(id, el),
     onRun: (id, el) => links?.onList(id, el),
     onSession: key => links?.onSession(key),
-    onGrow,
+    onResize,
   }
   return (
     <>

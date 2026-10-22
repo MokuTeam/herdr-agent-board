@@ -267,11 +267,15 @@ export interface UserTurn {
   role: 'user'
   text: string
   at: number
+  /** Only when the thread's budget cut its text (fitThread). */
+  cut?: true
 }
 export interface AssistantTurn {
   role: 'assistant'
   text: string
   at: number
+  /** Only when the thread's budget cut its text (fitThread). */
+  cut?: true
 }
 /** A tool call; one that works with others carries what it is about (core/transcript-links.ts). */
 export interface ToolTurn extends CallLinks {
@@ -287,21 +291,37 @@ export interface ToolTurn extends CallLinks {
 }
 /** A background task reporting back or a board reminder (core/notices.ts), at its time. */
 export type NoticeTurn = Notice & { role: 'notice'; at: number }
-/** Another session's or a teammate's message. */
-export type PeerTurn = Peer & { role: 'peer'; at: number }
+/** Another session's or a teammate's message; `cut` only when the thread's budget cut it (fitThread). */
+export type PeerTurn = Peer & { role: 'peer'; at: number; cut?: true }
 export type ConversationTurn = UserTurn | AssistantTurn | ToolTurn | NoticeTurn | PeerTurn
 
 /**
- * The most message text (prompts and answers, in characters) a thread carries (#174). Messages come
- * whole; a thread over it, as one with a pasted log of hundreds of KB, has its longest messages cut
- * to one length until it fits (fitThread), so the detail read on every step stays small. The longest
- * real message measured was under 20,000 characters, the most in one real thread about 60,000.
+ * The most message text (prompts, answers and other sessions' messages, in characters) a thread
+ * carries (#174). Messages come whole; a thread over it, as one with a pasted log of hundreds of
+ * KB, has its longest messages cut to one length until it fits (fitThread), so the detail read on
+ * every step stays small. The longest real message measured was under 20,000 characters, the most
+ * in one real thread about 60,000.
  */
 export const THREAD_TEXT_BUDGET = 100_000
 
-/** `turns` with their messages within `budget` (THREAD_TEXT_BUDGET): only the longest are cut, all to the same length. */
+type MessageTurn = UserTurn | AssistantTurn | PeerTurn
+const isMessage = (t: ConversationTurn): t is MessageTurn =>
+  t.role === 'user' || t.role === 'assistant' || t.role === 'peer'
+
+/** `s` cut to `n` characters with "…" at the end, never between the halves of a character (an emoji). */
+function clipWhole(s: string, n: number): string {
+  let end = Math.max(n - 1, 0)
+  const last = s.charCodeAt(end - 1)
+  if (last >= 0xd800 && last <= 0xdbff) end--
+  return `${s.slice(0, end)}…`
+}
+
+/**
+ * `turns` with their messages within `budget` (THREAD_TEXT_BUDGET): only the longest are cut, all
+ * to the same length, and say so (`cut`).
+ */
 export function fitThread(turns: ConversationTurn[], budget = THREAD_TEXT_BUDGET): ConversationTurn[] {
-  const sizes = turns.flatMap(t => (t.role === 'user' || t.role === 'assistant' ? [t.text.length] : []))
+  const sizes = turns.flatMap(t => (isMessage(t) ? [t.text.length] : []))
   if (sizes.reduce((a, b) => a + b, 0) <= budget) return turns
   // Shortest first: a message that fits in its share of what is left stays whole.
   sizes.sort((a, b) => a - b)
@@ -310,14 +330,13 @@ export function fitThread(turns: ConversationTurn[], budget = THREAD_TEXT_BUDGET
   for (const [i, size] of sizes.entries()) {
     const share = Math.floor(left / (sizes.length - i))
     if (size > share) {
-      cap = share
+      // At least the "…": a budget under one character a message cannot be kept anyway.
+      cap = Math.max(share, 1)
       break
     }
     left -= size
   }
-  return turns.map(t =>
-    (t.role === 'user' || t.role === 'assistant') && t.text.length > cap ? { ...t, text: clip(t.text, cap) } : t,
-  )
+  return turns.map(t => (isMessage(t) && t.text.length > cap ? { ...t, text: clipWhole(t.text, cap), cut: true } : t))
 }
 
 export interface ConversationOptions {

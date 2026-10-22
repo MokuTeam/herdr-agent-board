@@ -16,6 +16,7 @@ import { clockText } from '../../models/sheet.ts'
 import { HelperIcon, OutGlyph, PeerGlyph, SpawnedGlyph } from '../helpers/glyphs.tsx'
 import { HelperTime, KindIcon, StatusMark } from '../helpers/HelperRows.tsx'
 import { ChevGlyph } from '../icons.tsx'
+import { MessageText } from './MessageText.tsx'
 
 /** What the lines that work with others lead to, and where a click on one goes. */
 export interface ThreadLinks {
@@ -30,8 +31,8 @@ export interface ThreadLinks {
   onRun?: (id: string, el: HTMLElement) => void
   /** Another session. */
   onSession?: (key: string) => void
-  /** A message opened whole: the thread grew where the reader is, who is no longer at its foot. */
-  onGrow?: (() => void) | undefined
+  /** A long message opened or folded again: the thread changed height where the reader is. */
+  onResize?: (() => void) | undefined
 }
 
 export const NO_LINKS: ThreadLinks = { helpers: [], workflows: [], items: [] }
@@ -327,8 +328,7 @@ export function PeerBubble({ turn: m, item, helper, links }: PeerBubbleProps) {
         </span>
         {peer?.summary && <small>{peer.summary}</small>}
       </div>
-      {/* biome-ignore lint/security/noDangerouslySetInnerHtml: markdown() escapes every piece of text itself and makes only known tags */}
-      <div className="md" dangerouslySetInnerHTML={{ __html: markdown(m.text) }} />
+      <MessageText text={m.text} cut={m.cut} onResize={links.onResize} />
       <span className="when">{clockText(m.at, t)}</span>
     </div>
   )
