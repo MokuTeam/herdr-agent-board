@@ -5,7 +5,7 @@ import type { BoardProfile } from '../api/client.ts'
 
 export type LimitSource = 'usagebar' | 'statusline' | 'unknown'
 /** A usage window that passed the checks (the reading's own object, other fields untouched). */
-export type LimitReading = { minutes: number; usedPercentage: number }
+export type LimitReading = { minutes: number; usedPercentage: number; resetsAt?: number | null }
 export interface LimitInfo {
   windows: LimitReading[]
   observedAt: number | null
@@ -67,6 +67,29 @@ export function profileUsage(
     const lim = limitInfo(p.limits, { connected, now })
     return { id: p.id, title: p.title, color: p.color, lim, recent: lim.windows.length > 0 && !lim.stale }
   })
+}
+
+/**
+ * Where a window is heading at the pace it has averaged since it started (its reset minus its
+ * length): `out` when that pace uses it up before the reset, at `at`; `lasts` when it does not, or
+ * misses the reset by under a minute. Null while the reading cannot tell: no reading time, no reset
+ * time, a reading from before the window started (it has reset since), already used up, the first
+ * tenth of the window, where an average is noise, or a run-out already past at `now` (the reading
+ * aged while the session sat at the limit).
+ */
+export type Forecast = { kind: 'out'; at: number; resetsAt: number } | { kind: 'lasts'; resetsAt: number }
+
+export function forecast(w: LimitReading, observedAt: number | null, now = Date.now()): Forecast | null {
+  const { resetsAt } = w
+  if (observedAt === null || typeof resetsAt !== 'number' || !Number.isFinite(resetsAt)) return null
+  const length = w.minutes * 60_000
+  const start = resetsAt - length
+  const elapsed = observedAt - start
+  if (elapsed < length / 10 || elapsed > length || w.usedPercentage >= 100) return null
+  if (w.usedPercentage <= 0) return { kind: 'lasts', resetsAt }
+  const at = start + (elapsed * 100) / w.usedPercentage
+  if (resetsAt - at < 60_000) return { kind: 'lasts', resetsAt }
+  return at > now ? { kind: 'out', at, resetsAt } : null
 }
 
 /** "5h" or "7d". */
