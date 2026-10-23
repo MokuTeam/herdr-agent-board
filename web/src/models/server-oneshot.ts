@@ -31,9 +31,13 @@ export const isOneshot = (v: unknown): v is Oneshot => {
   )
 }
 
-/** The command as the panel has it: not asked yet, on its way, made (for these settings), or why not (for these). */
+/**
+ * The command as the panel has it: not asked yet, waiting for the board's address (the fold opened
+ * before it was typed), on its way, made (for these settings), or why not (for these).
+ */
 export type OneshotGot =
   | { state: 'idle' }
+  | { state: 'address' }
   | { state: 'loading' }
   | { state: 'ok'; oneshot: Oneshot; stamp: string }
   | { state: 'error'; error: string; stamp: string }
@@ -42,10 +46,23 @@ export const ONESHOT_IDLE: OneshotGot = { state: 'idle' }
 
 /**
  * What the command is made of on the board's side (its address, its login on the server, the
- * socket, the public port, the board's key): a command made for other values is made again.
+ * socket, the public port, the board's key, and the board's language, which its words are in): a
+ * command made for other values is made again.
  */
-export const oneshotStamp = (settings: TunnelConfig, publicKey: string | null): string =>
-  JSON.stringify([settings.domain, settings.user, settings.socket, settings.publicPort, publicKey])
+export const oneshotStamp = (settings: TunnelConfig, publicKey: string | null, lang: string): string =>
+  JSON.stringify([settings.domain, settings.user, settings.socket, settings.publicPort, publicKey, lang])
+
+/**
+ * The fold, open, waited for the board's address, and it is there now: what the command needs is
+ * filled in and the command asked for, as when the fold opens. Left idle (refused for another
+ * reason), it is not asked for again by itself.
+ */
+export const oneshotWaited = (open: boolean, got: OneshotGot, domain: string): boolean =>
+  open && got.state === 'address' && domain !== ''
+
+/** The fold, open, holds a command (or why not) made for other values than these: asked for again. */
+export const oneshotStale = (open: boolean, got: OneshotGot, stamp: string): boolean =>
+  open && (got.state === 'ok' || got.state === 'error') && got.stamp !== stamp
 
 /** The command from the board, or the words it was refused in. */
 export async function loadOneshot(t: Translator, stamp: string): Promise<OneshotGot> {

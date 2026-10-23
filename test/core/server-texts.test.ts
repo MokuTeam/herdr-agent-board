@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { translator } from '../../src/core/i18n/translator.ts'
 import type { Wanted } from '../../src/core/server-plan.ts'
 import {
   argsHash,
@@ -382,11 +383,77 @@ describe('the README describes the server setup with the board’s own texts', (
     expect(fences).toContain(markedBlock(W, 'agent-board-socket:8080'))
   })
 
-  test('On the server in the panel’s three steps, in order', () => {
+  const en = translator('en')
+  /** "On the server", each run of spaces one (a README line wraps where it likes, the panel's words do not). */
+  const onServer = readme
+    .slice(readme.indexOf('\n### On the server\n'), readme.indexOf('\n### On this computer\n'))
+    .replace(/\s+/g, ' ')
+
+  test('On the server: Set up the server, what it makes, how a run goes, the steps by hand, the one command, in order', () => {
     const at = (heading: string): number => lines.indexOf(heading)
-    const steps = ['#### 1. By hand, once', '#### 2. Test connection', '#### 3. The web server'].map(at)
-    expect(steps.every(n => n > at('### On the server'))).toBe(true)
-    expect(steps).toEqual([...steps].sort((a, b) => a - b))
-    expect(steps.every(n => n < at('### On this computer'))).toBe(true)
+    const parts = [
+      `#### ${en('server.panel.setUpServer')}`,
+      '#### What the board makes on the server',
+      '#### How a run goes',
+      `#### ${en('server.panel.byHandFold')}`,
+      `#### ${en('server.panel.oneshot')}`,
+    ].map(at)
+    expect(parts.every(n => n > at('### On the server'))).toBe(true)
+    expect(parts).toEqual([...parts].sort((a, b) => a - b))
+    expect(parts.every(n => n < at('### On this computer'))).toBe(true)
+  })
+
+  test('the panel’s fields, folds and buttons in the panel’s own words; what it says, as it says it', () => {
+    const named = [
+      'server.panel.signin',
+      'server.panel.domain',
+      'server.panel.host',
+      'server.panel.sshPort',
+      'server.panel.login',
+      'server.panel.password',
+      'server.panel.keyFold',
+      'server.panel.setUpServer',
+      'server.panel.details',
+      'server.panel.dockerOk',
+      'server.panel.apply',
+      'server.panel.undo',
+      'server.panel.undoSure',
+      'server.panel.byHandFold',
+      'server.panel.pickCase',
+      'server.panel.pick.none',
+      'server.panel.pick.service',
+      'server.panel.pick.docker',
+      'server.panel.pick.other',
+      'server.panel.manualEnd',
+      'server.panel.oneshot',
+      'access.copy',
+      'server.panel.oneshotUndo',
+      'server.panel.oneshotInside',
+      'access.test',
+    ]
+    // in bold, as a step's lead too ("**Apply.**")
+    const bold = (words: string): boolean => onServer.includes(`**${words}**`) || onServer.includes(`**${words}.**`)
+    expect(named.filter(key => !bold(en(key)))).toEqual([])
+    const said = [
+      en('server.plain.docker'),
+      en('server.panel.undoAsks', { admin: 'root' }),
+      en('server.panel.needDomain'),
+      en('server.panel.setUp', { when: 'Oct 23, 10:04 AM', case: en('server.panel.caseName.3a') }),
+    ]
+    expect(said.filter(words => !onServer.includes(`"${words}"`))).toEqual([])
+  })
+
+  test('the plan in plain words, line for line as the panel draws it', () => {
+    const from = lines.findIndex(l => l.trim() === en('server.panel.plainFound'))
+    const sites = en('server.plain.sites', { sites: 'a.example.com, b.example.com' })
+    const who = en('server.plain.who.docker', { name: 'Caddy' })
+    expect(lines.slice(from, from + 6).map(l => l.trim())).toEqual([
+      en('server.panel.plainFound'),
+      en('server.plain.found', { system: 'Debian 13', web: en('server.plain.web.both', { who, sites }) }),
+      en('server.panel.plainWill'),
+      en('server.plain.will.login', { user: W.user }),
+      en('server.plain.will.case.3a', { domain: W.domain }),
+      en('server.plain.untouched.sitesChecked'),
+    ])
   })
 })

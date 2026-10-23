@@ -41,7 +41,11 @@ import {
   byHandAddress,
   foundPort,
   isOneshot,
+  ONESHOT_IDLE,
+  oneshotStale,
+  oneshotStamp,
   oneshotTest,
+  oneshotWaited,
   SERVER_COMMAND_PATH,
 } from '../../web/src/models/server-oneshot.ts'
 import {
@@ -222,6 +226,14 @@ function partOf(view: AccessView, more: { lang?: string; canEdit?: boolean } = {
     <ServerSetup view={view} send={async () => null} />,
     board({ now: NOW, ...(more.canEdit === false && { connected: false, canEdit: false }) }),
     more.lang ?? 'en',
+  )
+}
+
+/** The part as drawn for a view with what it keeps (a state the owner's clicks led to). */
+function partWith(view: AccessView, state: SetupState): Node[] {
+  return renderInBoard(
+    <ServerSetupBody view={view} send={async () => null} state={state} onState={() => {}} now={NOW} />,
+    board({ now: NOW }),
   )
 }
 
@@ -462,9 +474,14 @@ test('an admin field left goes to the board as server-admin, trimmed; the same v
   await same.type('admin-user', 'admin ')
   await same.leave('admin-user')
   expect(same.calls).toEqual([])
-  // None saved: the field says root, and root left as it is sends root; emptied, root shows again.
+  // None saved: the field says root; tabbed through, or root typed, nothing is written (Set up the
+  // server saves root itself); emptied, root shows again.
   const none = liveServer({ ...READY, server: null })
   expect(none.pick('input[name="admin-user"]').value).toBe('root')
+  await none.leave('admin-user')
+  await none.type('admin-user', ' root ')
+  await none.leave('admin-user')
+  expect(none.calls).toEqual([])
   await none.type('admin-user', '')
   await none.leave('admin-user')
   expect(none.calls).toEqual([])
@@ -584,7 +601,12 @@ test('the passwords: the login’s with Look, sudo’s own only when asked; a fi
     asks: 1,
     again: 'server-look',
   })
-  expect(answerPatch({ ok: true }, 'server-look', SETUP_START)).toEqual({ need: null })
+  expect(answerPatch({ ok: true }, 'server-look', SETUP_START)).toEqual({ need: null, again: 'server-look' })
+  // Continue goes on with Undo's Look only while Undo's ask stands.
+  expect(answerPatch({ ok: true }, 'server-undo-look', { ...SETUP_START, again: 'server-undo-look' })).toEqual({
+    need: null,
+    again: 'server-look',
+  })
   expect(withPassword(SETUP_START)).toEqual({})
   expect(withPassword({ ...SETUP_START, sudoPassword: 'x' })).toEqual({ sudoPassword: 'x' })
   // The board's hint alone (a view drawn anew) shows sudo's field too, by needFor.
@@ -809,6 +831,8 @@ test('a plan that installs Docker: said in plain words, Apply off until its OK, 
   expect(live.disabled('Apply')).toBe(false)
   await live.click('Apply')
   expect(live.calls).toEqual([['server-apply', { plan: 'p1', docker: true, password: SENTINEL }]])
+  // The board took it for this run: the panel keeps it no longer, Undo asks again (call 9).
+  expect([live.state().password, live.state().sudoPassword]).toEqual(['', ''])
   // Ticked off again: off again.
   await live.tick('tick-docker')
   expect(live.disabled('Apply')).toBe(true)
@@ -819,10 +843,16 @@ test('a plan that installs Docker: said in plain words, Apply off until its OK, 
   const plain = liveServer(planned('2'))
   await plain.click('Apply')
   expect(plain.calls).toEqual([['server-apply', { plan: 'p1' }]])
-  // Apply refused for want of the password: its field asked for.
-  const asked = liveServer(planned('2'), () => ({ ok: false, hint: 'needPassword', need: 'password' }))
+  // Apply refused for want of the password (the page reloaded since Look): its field asked for.
+  const asked = liveServer(planned('2'), () => ({ ok: false, hint: 'loginPassword', need: 'password' }))
   await asked.click('Apply')
   expect(asked.state().need).toBe('password')
+  expect(asked.has('.access-asked input[name="login-password"]')).toBe(true)
+  // Refused for another reason: the password stays for the next try.
+  const again = liveServer(planned('2'), () => ({ ok: false, hint: 'lookAgain' }))
+  await again.type('login-password', 'pw')
+  await again.click('Apply')
+  expect(again.state().password).toBe('pw')
   // Cancel drops the plan.
   await plain.click('Cancel')
   expect(plain.calls.at(-1)).toEqual(['server-cancel', {}])
@@ -1048,7 +1078,7 @@ test('a failure: the step and its lines, the hint, what was rolled back with ✓
 
 // ---------------------------------------------------------------- done, and Undo
 
-test('done: set up on a date, the login folded away; Undo takes two clicks, asks for the password again, then the Undo plan', async () => {
+test('done: set up on a date, the login folded away; Undo takes two clicks, logs in with the keys or asks for the password again, then the Undo plan', async () => {
   const setup = { case: '3a' as const, address: 'https://board.example.com', at: '2026-10-21T10:04:00.000Z' }
   const testAfter: TestStep[] = [
     { id: 'ssh', ok: true, detail: '', hint: null },
@@ -1062,15 +1092,21 @@ test('done: set up on a date, the login folded away; Undo takes two clicks, asks
   expect(fold(part, 'access-signin').attrs.has('open')).toBe(false)
   // Before setup, open.
   expect(fold(partOf(withServer({ phase: 'done' })), 'access-signin').attrs.has('open')).toBe(true)
-  const live = liveServer(view)
+  // The server takes no key of theirs: the board asks for the password (services/server-setup.ts).
+  const live = liveServer(view, (op, body) =>
+    op === 'server-undo-look' && body.password === undefined
+      ? { ok: false, hint: 'loginPassword', need: 'password' }
+      : { ok: true },
+  )
   expect(live.text('.access-done')).toEqual([setupLine(setup, t)])
   expect(live.text('.access-after .access-step')).toEqual(testAfter.map(s => stepLine(s, t)))
   await live.click('Undo')
   expect(live.calls).toEqual([])
   expect(live.buttons()).toContain('Undo? Click again')
   await live.click('Undo? Click again')
-  // The password is not kept: Undo asks for it, the login's fields open, nothing sent yet.
-  expect(live.calls).toEqual([])
+  // Undo logs in at once, as Set up the server does: the keys first (a login by the ssh agent or
+  // ~/.ssh asks nothing). The password is not kept: the board asks for it, the login's fields open.
+  expect(live.calls).toEqual([['server-undo-look', {}]])
   expect(live.state().need).toBe('password')
   expect(live.pick('details.access-signin').hasAttribute('open')).toBe(true)
   expect(live.text('.access-ask .access-sure')).toEqual([
@@ -1078,8 +1114,12 @@ test('done: set up on a date, the login folded away; Undo takes two clicks, asks
   ])
   await live.type('login-password', SENTINEL)
   await live.click('Continue')
-  expect(live.calls).toEqual([['server-undo-look', { password: SENTINEL }]])
+  expect(live.calls.at(-1)).toEqual(['server-undo-look', { password: SENTINEL }])
   expect(live.buttons()).toContain('Undo')
+  // Undo's Look answered: Enter in the password field is Set up the server's Look again, not Undo's.
+  expect(live.state()).toMatchObject({ need: null, again: 'server-look' })
+  await live.type('login-password', SENTINEL, 'Enter')
+  expect(live.calls.at(-1)).toEqual(['server-look', { password: SENTINEL }])
   // A password typed already in this panel: Undo's Look at once.
   const typed = liveServer(view)
   await typed.type('login-password', 'pw')
@@ -1123,6 +1163,7 @@ test('the Undo plan: in plain words, Docker and edited files only when ticked, U
   await live.tick('tick-removeDocker')
   await live.click('Undo')
   expect(live.calls).toEqual([['server-undo', { plan: 'u1', removeDocker: true, removeEdited: false, password: 'pw' }]])
+  expect(live.state().password).toBe('')
 })
 
 // ---------------------------------------------------------------- Do it myself (one command)
@@ -1256,6 +1297,46 @@ test('Do it myself (one command) from an empty panel fills in what the command n
   expect(none).toEqual([])
   expect(blank.calls).toEqual([])
   expect(blank.text('.access-oneshot-body .access-look-why')).toEqual(['Type the board’s address first.'])
+})
+
+test('Do it myself (one command) opened before the board’s address: asked for once the address is there; made again in the board’s new language', async () => {
+  const none = answers()
+  const empty = { ...FRESH, tunnel: { ...FRESH.tunnel, settings: { ...FRESH.tunnel.settings, domain: '' } } }
+  const blank = liveServer({ ...empty, server: null })
+  await blank.toggle('details.access-oneshot')
+  expect(none).toEqual([])
+  // The fold waits for the address, and says so.
+  expect(blank.state().got).toEqual({ state: 'address' })
+  expect(blank.text('.access-oneshot-body .access-look-why')).toEqual(['Type the board’s address first.'])
+  expect(oneshotWaited(true, blank.state().got, '')).toBe(false)
+  // The address typed (the view comes back with it): no word of it any more, under the fold or
+  // the button, and the fold goes on as it does when it opens (ServerSetup.tsx: what the command
+  // needs filled in, then the command).
+  const typed = partWith({ ...FRESH, server: null }, blank.state())
+  expect(textsOf(typed, 'access-look-why')).toEqual([])
+  expect(oneshotWaited(true, blank.state().got, 'board.example.com')).toBe(true)
+  // Closed, or refused for another reason (left idle): not asked for again by itself.
+  expect(oneshotWaited(false, blank.state().got, 'board.example.com')).toBe(false)
+  expect(oneshotWaited(true, ONESHOT_IDLE, 'board.example.com')).toBe(false)
+  expect(oneshotWaited(true, { state: 'loading' }, 'board.example.com')).toBe(false)
+  // Set up the server clicked without it: said under the button until it is there.
+  const clicked = liveServer({ ...empty, server: null })
+  await clicked.click('Set up the server')
+  expect(clicked.text('.access-look-why')).toEqual(['Type the board’s address first.'])
+  expect(textsOf(partWith({ ...FRESH, server: null }, clicked.state()), 'access-look-why')).toEqual([])
+
+  // The command carries the board's words: the board's language switched, it is made again.
+  const settings = READY.tunnel.settings
+  const en = oneshotStamp(settings, PUBLIC_KEY, 'en')
+  const ru = oneshotStamp(settings, PUBLIC_KEY, 'ru')
+  expect(en).not.toBe(ru)
+  const got = { state: 'ok' as const, oneshot: ONESHOT, stamp: en }
+  expect(oneshotStale(true, got, en)).toBe(false)
+  expect(oneshotStale(true, got, ru)).toBe(true)
+  expect(oneshotStale(false, got, ru)).toBe(false)
+  expect(oneshotStale(true, { state: 'error', error: 'x', stamp: en }, ru)).toBe(true)
+  for (const waiting of [ONESHOT_IDLE, { state: 'loading' as const }, { state: 'address' as const }])
+    expect(oneshotStale(true, waiting, ru)).toBe(false)
 })
 
 // ---------------------------------------------------------------- around the flow
