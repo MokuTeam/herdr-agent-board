@@ -395,10 +395,11 @@ for (const distro of DISTROS) {
   })
 
   describe(`Undo of step 1 on ${distro}`, () => {
-    test('what the board made goes, newest first, after the case’s parts: the fence, the keys file, the folder, the user', () => {
+    test('what the board made goes, newest first, after the case’s parts: the keys file, the fence, the folder, the user', () => {
       const r = recordFor('1', { items: [...MADE, { kind: 'container', name: 'agent-board-caddy', setup: 'r0' }] })
       const p = undo(r, factsFor('bare', distro))
-      expect(ids(p)).toEqual(['guard', 'drop-caddy', 'drop-fence', 'drop-keys', 'drop-folder', 'drop-user', 'forget'])
+      // the board's key goes before the fence: an Undo cut short between them leaves no key that logs in unfenced
+      expect(ids(p)).toEqual(['guard', 'drop-caddy', 'drop-keys', 'drop-fence', 'drop-folder', 'drop-user', 'forget'])
       const fence = step(p, 'drop-fence')
       expect(text(fence)).toContain(`sudo rm -f ${FENCE_FILE}`)
       expect(text(fence)).toContain('sudo sshd -t')
@@ -430,11 +431,11 @@ for (const distro of DISTROS) {
       })
       const got = ids(undo(r, factsFor('2', distro)))
       const at = (id: string): number => got.indexOf(id)
-      expect(at('group-back')).toBeLessThan(at('drop-fence'))
-      expect(at('reload')).toBeLessThan(at('drop-fence'))
-      expect(got.slice(at('drop-fence'), at('drop-fence') + 4)).toEqual([
-        'drop-fence',
+      expect(at('group-back')).toBeLessThan(at('drop-keys'))
+      expect(at('reload')).toBeLessThan(at('drop-keys'))
+      expect(got.slice(at('drop-keys'), at('drop-keys') + 4)).toEqual([
         'drop-keys',
+        'drop-fence',
         'drop-folder',
         'drop-user',
       ])

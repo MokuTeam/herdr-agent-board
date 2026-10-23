@@ -1792,8 +1792,8 @@ function main_undo(    i, j, k, codes, code, edit, tc, theirs, cand, fetch, nfet
   addguard()
   n = split(SHAPE[key], S, " ")
   for (i = 1; i <= n; i++) addstep(S[i])
-  # step 1's parts the board made, after the case's: the fence, the keys file, the folder, the user
-  split("fence keys folder user", KN, " ")
+  # step 1's parts the board made, after the case's: the keys file, the fence, the folder, the user
+  split("keys fence folder user", KN, " ")
   for (j = 1; j <= 4; j++) for (i = DDN; i >= 1; i--) {
     k = DD[i]
     if (RI_kind[k] != KN[j]) continue

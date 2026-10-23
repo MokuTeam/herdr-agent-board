@@ -1831,8 +1831,9 @@ export function undoPlan(
   const files = items.filter(i => i.kind === 'file')
   const theirFile = theirCaddy(f)?.file
   // newest first; step 1's parts last whatever run made them (the case's parts use the user and
-  // its folder), the fence first of them and the user last
-  const last = ['fence', 'keys', 'folder', 'user']
+  // its folder): the keys file first of them, so an Undo cut short never leaves the board's key
+  // able to log in without the fence; the user last
+  const last = ['keys', 'fence', 'folder', 'user']
   const order = (i: RecordItem): number => last.indexOf(i.kind) + 1
   for (const item of [...items].reverse().sort((a, b) => order(a) - order(b))) {
     switch (item.kind) {
