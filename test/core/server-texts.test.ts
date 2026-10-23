@@ -10,6 +10,9 @@ import {
   CADDY_IMAGE,
   caddyRunArgs,
   dockerInstall,
+  FENCE_FILE,
+  fenceBlock,
+  fenceFile,
   IMPORT_LINE,
   markedBlock,
   nginxFile,
@@ -17,6 +20,7 @@ import {
   siteFile,
   socatRunArgs,
 } from '../../src/core/server-texts.ts'
+import { sshdBlock } from '../../src/core/tunnel-snippets.ts'
 
 const W: Wanted = {
   user: 'boardtunnel',
@@ -163,6 +167,8 @@ describe('the board’s containers', () => {
     'agent-board.setup=r1',
     '--label',
     'agent-board.args=H',
+    '--label',
+    'agent-board.gid=997',
     '-p',
     '80:80',
     '-p',
@@ -200,15 +206,32 @@ describe('the board’s containers', () => {
     expect(args).toContain('/etc/agent-board/pebble.pem:/etc/agent-board/pebble.pem:ro')
     expect(args.at(-1)).toBe(CADDY_IMAGE)
   })
-  test('its settings’ hash: the same for another run, another for another gid, case or test CA', () => {
+  test('its settings’ hash: the same for another run, another for another case or test CA', () => {
     const label = (args: string[]): string | undefined => args.find(a => a.startsWith('agent-board.args='))
     const h = label(caddyRunArgs('1', W, 997, 'r1'))
     expect(h).toMatch(/^agent-board\.args=[0-9a-f]{16}$/)
     expect(label(caddyRunArgs('1', W, 997, 'r2'))).toBe(h)
-    expect(label(caddyRunArgs('1', W, 998, 'r1'))).not.toBe(h)
     expect(label(caddyRunArgs('1b', W, 997, 'r1'))).not.toBe(h)
     expect(label(caddyRunArgs('1', W, 997, 'r1', ACME))).not.toBe(h)
     expect(argsHash(['a', 'b'])).not.toBe(argsHash(['ab']))
+  })
+  test('the folder’s gid in a label of its own, out of the hash: a run that makes the folder knows it only on the server', () => {
+    const label = (args: string[], key: string): string | undefined =>
+      args.find(a => a.startsWith(`${key}=`))?.slice(key.length + 1)
+    for (const make of [
+      (gid: number | string) => caddyRunArgs('1', W, gid, 'r1'),
+      (gid: number | string) => socatRunArgs({ network: 'web_default' }, W, gid, 'r1'),
+    ]) {
+      const [a, b, run] = [make(997), make(998), make('$G')]
+      expect(label(b, 'agent-board.args')).toBe(label(a, 'agent-board.args'))
+      expect(label(run, 'agent-board.args')).toBe(label(a, 'agent-board.args'))
+      expect([label(a, 'agent-board.gid'), label(b, 'agent-board.gid'), label(run, 'agent-board.gid')]).toEqual([
+        '997',
+        '998',
+        '$G',
+      ])
+      expect(run.some(x => x === '$G' || x === '65534:$G')).toBe(true)
+    }
   })
   test('the helper on their network, as nobody with the folder’s group, read-only (3a)', () => {
     expect(hashless(socatRunArgs({ network: 'web_default' }, W, 997, 'r1'))).toEqual([
@@ -224,6 +247,8 @@ describe('the board’s containers', () => {
       'agent-board.setup=r1',
       '--label',
       'agent-board.args=H',
+      '--label',
+      'agent-board.gid=997',
       '--network',
       'web_default',
       '--network-alias',
@@ -251,6 +276,26 @@ describe('the board’s containers', () => {
   test('the images are pinned by tag and digest', () => {
     expect(CADDY_IMAGE).toMatch(/^caddy:2\.\d+\.\d+@sha256:[0-9a-f]{64}$/)
     expect(SOCAT_IMAGE).toMatch(/^alpine\/socat:[\d.]+@sha256:[0-9a-f]{64}$/)
+  })
+})
+
+describe('sshd’s fence for the tunnel user, as the board puts it in place', () => {
+  test('in a file of its own: the Match block unchanged, after one comment line', () => {
+    const text = fenceFile('boardtunnel')
+    expect(FENCE_FILE).toBe('/etc/ssh/sshd_config.d/00-agent-board.conf')
+    expect(text.split('\n')[0]).toMatch(/^# agent-board: /)
+    expect(text.split('\n').slice(1).join('\n')).toBe(sshdBlock('boardtunnel'))
+    // nothing else: a line outside the Match block would be a setting for every user
+    expect(text.split('\n').filter(l => !l.startsWith('#') && !l.startsWith('    '))).toEqual([
+      'Match User boardtunnel',
+    ])
+  })
+  test('at the end of sshd_config, between markers, `Match all` after it: what is added later is for everyone again', () => {
+    const lines = fenceBlock('boardtunnel').split('\n')
+    expect(lines[0]).toMatch(/^# >>> agent-board: /)
+    expect(lines.at(-1)).toBe('# <<< agent-board')
+    expect(lines.at(-2)).toBe('Match all')
+    expect(lines.slice(1, -2).join('\n')).toBe(sshdBlock('boardtunnel'))
   })
 })
 

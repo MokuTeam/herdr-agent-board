@@ -8,6 +8,11 @@
 // The sudo password is the page's: it comes with each Look, Apply or Undo, goes to ssh's stdin,
 // once per spawn, and is kept in memory only while that request (or that run, to mask a line that
 // would hold it) lasts; never in config.json, web.log, the view, an answer or a command line.
+//
+// With the board's own public key, Look reads step 1's parts too and Apply makes what the server
+// lacks of them (the tunnel user, the socket's folder, the keys file, sshd's fence). A run travels
+// packed (gzip, then base64): the plans that make step 1 too are past a Windows command line else.
+import { gzipSync } from 'node:zlib'
 import { editTunnel, editTunnelAdmin, setTunnelSetup } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import type { RemoteRun, spawnRemote } from '../adapters/ssh.ts'
@@ -65,6 +70,8 @@ export interface ServerSetupDeps {
   newId(): string
   /** A test CA for the board's own Caddy (BOARD_SETUP_ACME_CA and BOARD_SETUP_ACME_CA_ROOT). */
   acme?: Acme
+  /** The board's public key (its tunnel key's), which Apply puts in place; null while there is none. */
+  publicKey?(): Promise<string | null>
 }
 
 export type Answer = { status: number; body: unknown }
@@ -105,6 +112,8 @@ const DETAIL_LINES = 6
 const OUT_KEPT = 400
 /** What a line holding the password shows instead. */
 const MASK = '••••'
+/** How a run travels in its launch (core/server-script.ts launchScript): gzip, then base64. */
+const PACK = (text: string): string => gzipSync(text).toString('base64')
 const CASES: readonly SetupCase[] = ['1', '1b', '2', '3a', '3b', '4a', '4b']
 
 type Fields = Record<string, unknown>
@@ -204,13 +213,23 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     })
   }
 
-  const wanted = (c: TunnelConfig): Wanted => ({
+  const wanted = (c: TunnelConfig, key: string | null): Wanted => ({
     user: c.user,
     socket: c.socket,
     domain: c.domain,
     publicPort: c.publicPort,
+    ...(key !== null && { publicKey: key }),
     ...(d.acme && { acme: d.acme }),
   })
+
+  /** The board's public key; null without one (step 1 is then the owner's, as before). */
+  async function boardKey(): Promise<string | null> {
+    try {
+      return d.publicKey ? await d.publicKey() : null
+    } catch {
+      return null
+    }
+  }
 
   /** A refusal: its hint, and as its error the lines that matter or else the hint's own words. */
   function refused(h: AdminHint | null, detail: string | null, more: Fields = {}): Answer {
@@ -317,7 +336,14 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       if (read.mode === 'none') return stopLook(adminHint(probe.out) ?? 'notSudoer', null)
       if (read.mode === 'password' && password === null) return stopLook('needPassword', null, { need: 'password' })
       const stdin = read.mode === 'password' ? `${password}\n` : null
-      const input: LookInput = { user: c.user, socket: c.socket, domain: c.domain }
+      const key = await boardKey()
+      if (gone()) return cancelled()
+      const input: LookInput = {
+        user: c.user,
+        socket: c.socket,
+        domain: c.domain,
+        ...(key !== null && { publicKey: key }),
+      }
       // each round as root, the password (when sudo asks one) on stdin once
       const round = async (script: string): Promise<string | Answer> => {
         const h = await hear(to, remoteCommand(script, read.mode), stdin, ROUND_MS, password || null)
@@ -335,7 +361,7 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       if (typeof two !== 'string') return two
       const f = readServerFacts(r1, two)
       if (!f) return stopLook('unreadable', null)
-      return planFrom(f, c, to.a, read.mode, kind)
+      return planFrom(f, c, to.a, read.mode, kind, key)
     } catch (err) {
       // a plan refused (what the panel wants failed its check in core/server-plan.ts): nothing
       // half made stays in the view, the check's own words are the error
@@ -350,8 +376,15 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
   }
 
   /** The plan for what Look found (Apply's, or the Undo of this board's record). */
-  function planFrom(f: ServerFacts, c: TunnelConfig, a: Admin, mode: SudoMode, kind: 'look' | 'undo'): Answer {
-    const w = wanted(c)
+  function planFrom(
+    f: ServerFacts,
+    c: TunnelConfig,
+    a: Admin,
+    mode: SudoMode,
+    kind: 'look' | 'undo',
+    key: string | null,
+  ): Answer {
+    const w = wanted(c, key)
     const record = f.record === null || f.record === undefined ? null : setupRecord(f.record)
     const ours = record && whose(record, w) !== 'other' ? record : null
     // set up from another PC or before a reinstall: the panel's summary from the server's record
@@ -464,8 +497,10 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     const to = ready()
     if ('status' in to) return to
     // the settings or the admin changed since Look: its plan is not theirs
+    const lookedKey = l.wanted.publicKey ?? null
     const same =
-      JSON.stringify(wanted(to.c)) === JSON.stringify(l.wanted) && JSON.stringify(to.a) === JSON.stringify(l.admin)
+      JSON.stringify(wanted(to.c, lookedKey)) === JSON.stringify(l.wanted) &&
+      JSON.stringify(to.a) === JSON.stringify(l.admin)
     if (!same) return refused('lookAgain', null)
     if (l.mode === 'password' && password === null) return refused('needPassword', null, { need: 'password' })
     const removeDocker = o.removeDocker === true
@@ -482,16 +517,22 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     busy = true
     const gen = generation
     const pinned = await d.hostKeyPinned()
+    const key = await boardKey()
     if (gen !== generation) return cancelled()
     if (!pinned) {
       busy = false
       return refused('noHostKey', null)
     }
+    // the board's key made anew since Look: its plan would put the old one in place
+    if (key !== lookedKey) {
+      busy = false
+      return refused('lookAgain', null)
+    }
     const runId = d.newId()
     const at = new Date(d.now()).toISOString()
     let script: string
     try {
-      script = launchScript(runId, runScript(p, l.wanted, { id: runId, at }))
+      script = launchScript(runId, runScript(p, l.wanted, { id: runId, at }), PACK)
     } catch (err) {
       busy = false
       return refused(null, messageOf(err))

@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import type { RoundOne, ServerFacts } from '../../src/core/server-facts.ts'
 import { fenceDiff, lookScript1, lookScript2, readRoundOne, readServerFacts } from '../../src/core/server-look.ts'
+import { shQuote } from '../../src/core/server-shell.ts'
+import { keysLine } from '../../src/core/tunnel-snippets.ts'
 
 const INPUT = { user: 'boardtunnel', socket: '/var/lib/boardtunnel/board.sock', domain: 'board.example.com' }
 const WRITES =
@@ -135,6 +137,9 @@ describe('Look’s scripts write nothing', () => {
     expect(text).toContain("stat -c '@@dir %a %U %G %g' '/srv/it'\\''s Ж' ")
     expect(text).toContain("stat -c '@@socket %a %U %G %F' '/srv/it'\\''s Ж/b.sock' ")
     expect(text).toContain("getent ahosts 'b$`%'\\''.example.com' ")
+  })
+  test('round one names the tools a run needs that are missing, gzip among them (a packed run)', () => {
+    expect(lookScript1(INPUT)).toMatch(/for c in [a-z0-9 ]*gzip[a-z0-9 ]*; do/)
   })
   test('a value with a newline never becomes a script', () => {
     expect(() => lookScript1({ ...INPUT, domain: 'a\nb' })).toThrow()
@@ -474,5 +479,66 @@ describe('the fence', () => {
       'permitlisten',
     ])
     expect(fenceDiff(fence, 'other')).toEqual(['authorizedkeysfile'])
+  })
+})
+
+describe('step 1 as Look reads it: what the board makes itself (the simple-setup spec)', () => {
+  const KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGQ2Ym9hcmRrZXlleGFtcGxlZXhhbXBsZWV4YW1wbGU board@pc'
+  test('round one reads the tunnel user, its keys file against the board’s key line, sshd’s Include', () => {
+    const text = lookScript1({ ...INPUT, publicKey: KEY })
+    expect(text).not.toMatch(WRITES)
+    expect(text).toContain("getent passwd 'boardtunnel'")
+    expect(text).toContain(`= ${shQuote(keysLine(KEY))} ]`)
+    expect(text).toContain("'/etc/ssh/authorized_keys/boardtunnel'")
+    expect(text).toContain('/etc/ssh/sshd_config.d/*.conf')
+    // all of it in the fence section, which older parsers read past
+    const fence = text.slice(text.indexOf("echo '@@section fence'"), text.indexOf("echo '@@section folder'"))
+    for (const marker of ['@@user', '@@keys', '@@keys-dir', '@@include'])
+      expect([marker, fence.includes(marker)]).toEqual([marker, true])
+    // no key to compare with: the file is only said to be there
+    const without = lookScript1(INPUT)
+    expect(without).not.toContain('restrict,port-forwarding')
+    expect(without).toContain("echo '@@keys other'")
+  })
+  test('read from the fence section; a Look that did not read them has none (step 1 taken as done by hand)', () => {
+    const base = fixture('debian13/bare/round1.txt')
+    const add = (lines: string[]): string => base.replace('@@section folder', `${lines.join('\n')}\n@@section folder`)
+    expect(readRoundOne(base)?.stepOne).toBeUndefined()
+    expect(readRoundOne(add(['@@user 995 boardtunnel', '@@keys same', '@@keys-dir', '@@include']))?.stepOne).toEqual({
+      user: { uid: 995, group: 'boardtunnel' },
+      keys: 'same',
+      keysDir: true,
+      include: true,
+    })
+    expect(readRoundOne(add(['@@user none', '@@keys none']))?.stepOne).toEqual({
+      user: null,
+      keys: 'none',
+      keysDir: false,
+      include: false,
+    })
+    // a user whose group has no name, and a keys line Look did not give: there, not the board's
+    expect(readRoundOne(add(['@@user 1001 ']))?.stepOne).toEqual({
+      user: { uid: 1001, group: '' },
+      keys: 'other',
+      keysDir: false,
+      include: false,
+    })
+    // the fence's own keys are read as before
+    expect(fenceDiff(readRoundOne(add(['@@user none']))?.fence ?? {}, 'boardtunnel')).toEqual([])
+  })
+  test('the Include check: before any Match line, the board’s folder or its relative name (run by a real awk)', () => {
+    const awk = Bun.which('awk')
+    if (!awk) return
+    const program = lookScript1(INPUT).match(/awk '(tolower[^']*)'/)?.[1]
+    expect(program).toBeDefined()
+    const run = (config: string): number =>
+      Bun.spawnSync([awk, program ?? '', '-'], { stdin: new TextEncoder().encode(config) }).exitCode
+    expect(run('# a comment\nInclude /etc/ssh/sshd_config.d/*.conf\nPort 22\n')).toBe(0)
+    expect(run('include sshd_config.d/*.conf\n')).toBe(0)
+    expect(run('  Include /etc/ssh/sshd_config.d/*.conf\n')).toBe(0)
+    expect(run('#Include /etc/ssh/sshd_config.d/*.conf\n')).toBe(1)
+    expect(run('Port 22\n')).toBe(1)
+    expect(run('Match User x\n  Include /etc/ssh/sshd_config.d/*.conf\n')).toBe(1)
+    expect(run('Include /etc/ssh/other.d/*.conf\n')).toBe(1)
   })
 })

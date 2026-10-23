@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import { adminSshArgs, remoteCommand } from '../../src/core/server-admin.ts'
 import type { ServerFacts } from '../../src/core/server-facts.ts'
 import {
@@ -16,9 +17,17 @@ import {
   type Wanted,
 } from '../../src/core/server-plan.ts'
 import { doItMyself, launchScript, readProgress, runScript, startProgress } from '../../src/core/server-script.ts'
-import { CADDY_FILE, CADDY_IMAGE, IMPORT_LINE, SITE_FILE, SOCAT_IMAGE } from '../../src/core/server-texts.ts'
+import {
+  CADDY_FILE,
+  CADDY_IMAGE,
+  FENCE_FILE,
+  IMPORT_LINE,
+  SITE_FILE,
+  SOCAT_IMAGE,
+  SSHD_CONFIG,
+} from '../../src/core/server-texts.ts'
 import { tunnelConfig } from '../../src/core/tunnel.ts'
-import { factsFor, recordFor } from '../support/server-facts.ts'
+import { BOARD_KEY, factsFor, recordFor, stepOneMissing } from '../support/server-facts.ts'
 
 const W: Wanted = {
   user: 'boardtunnel',
@@ -27,6 +36,15 @@ const W: Wanted = {
   publicPort: null,
 }
 const RUN = { id: 'r1', at: '2026-10-21T10:04:00.000Z' }
+/** With the board's key: Apply makes what step 1 lacks. */
+const WK: Wanted = { ...W, publicKey: BOARD_KEY }
+/** Step 1's parts as the board makes them, on the record. */
+const STEP1_ITEMS: RecordItem[] = [
+  { kind: 'user', name: 'boardtunnel' },
+  { kind: 'folder', path: '/var/lib/boardtunnel' },
+  { kind: 'keys', path: '/etc/ssh/authorized_keys/boardtunnel', dir: true },
+  { kind: 'fence', path: FENCE_FILE },
+]
 
 const planOf = (f: ServerFacts, w: Wanted = W): Plan => {
   const p = buildPlan(f, w, { id: 'r1', docker: true })
@@ -72,6 +90,19 @@ function everyPlan(): [string, Plan][] {
     'undo 3a',
     undoPlan(r3, { ...factsFor('3a'), record: r3 }, { id: 'u1', removeDocker: false, removeEdited: false }),
   ])
+  // step 1 by the board: on an empty server, its fence in a file of its own or at sshd_config's end; and its Undo
+  for (const c of ['bare', '2', '3a'] as const) out.push([`step 1 and ${c}`, planOf(stepOneMissing(c), WK)])
+  out.push(['step 1 without Include', planOf(stepOneMissing('bare', 'ubuntu2604', { include: false }), WK)])
+  const r1 = recordFor('1', { items: [...STEP1_ITEMS, { kind: 'container', name: 'agent-board-caddy', setup: 'r0' }] })
+  out.push([
+    'undo step 1',
+    undoPlan(r1, { ...factsFor('bare'), record: r1 }, { id: 'u1', removeDocker: false, removeEdited: false }),
+  ])
+  const rb = recordFor('1', { items: [{ kind: 'fence', path: SSHD_CONFIG }] })
+  out.push([
+    'undo a fence block',
+    undoPlan(rb, { ...factsFor('bare'), record: rb }, { id: 'u1', removeDocker: false, removeEdited: false }),
+  ])
   out.push([
     'update 2',
     planOf(
@@ -90,6 +121,8 @@ function everyPlan(): [string, Plan][] {
 }
 
 const PLANS = everyPlan()
+/** The run packed as the board's service packs it: gzip, then base64. */
+const PACK = (text: string): string => gzipSync(text).toString('base64')
 // `[[ ` is bash's test; `[[:space:]]` is a POSIX class and fine
 const BASHISMS = ['tail -f', '--pid', '[[ ', 'function ', 'local ', 'echo -e']
 
@@ -127,8 +160,12 @@ describe('the run script: one plan, the same lines as "Do it myself"', () => {
           expect([s.id, run.includes(`\n${line}\n`)]).toEqual([s.id, !byHand])
         if (byHand) expect(run).toContain(`\necho '@@step ${i + 1} start'; echo '@@step ${i + 1} skip'\n`)
       })
-      if (p.kind === 'undo')
-        expect([name, p.steps.at(-1)?.id, run.includes('userdel')]).toEqual([name, 'by-hand', false])
+      // userdel runs only for the user the board made (drop-user); the by-hand step's never reaches the run
+      if (p.kind === 'undo') {
+        const made = p.steps.some(s => s.id === 'drop-user')
+        expect([name, run.includes('userdel')]).toEqual([name, made])
+        if (!p.steps.some(s => s.id === 'by-hand')) expect([name, made]).toEqual([name, true])
+      }
       for (const b of BASHISMS) expect([name, b, run.includes(b)]).toEqual([name, b, false])
       expect(syntax(run)).toEqual({ code: 0, err: '' })
     })
@@ -149,6 +186,19 @@ describe('the launch: the run written, started detached, its log followed', () =
     const body = launch.match(/<<'AGENT_BOARD_RUN'\n([\s\S]*?)\nAGENT_BOARD_RUN\n/)?.[1]
     expect(`${body}\n`).toBe(run)
     expect(syntax(launch)).toEqual({ code: 0, err: '' })
+  })
+  test('the run packed (gzip, base64) when the board gives a packer: one line, unpacked there, its copy checked as before', () => {
+    const packed = launchScript('r1', run, PACK)
+    expect(packed.startsWith('exec </dev/null\n# agent-board: launch\n')).toBe(true)
+    expect(packed).not.toContain('AGENT_BOARD_RUN')
+    expect(packed).not.toContain('# agent-board: run')
+    const data = packed.match(/printf '%s\\n' '([A-Za-z0-9+/=]+)' \| base64 -d \| gunzip > "\$R\.sh"/)?.[1] ?? ''
+    expect(gunzipSync(Buffer.from(data, 'base64')).toString('utf8')).toBe(run)
+    expect(packed).toContain(`[ "$(tail -n 1 "$R.sh")" = '# agent-board: end' ] || { echo '@@exit 70'; exit 70; }`)
+    for (const b of BASHISMS) expect([b, packed.includes(b)]).toEqual([b, false])
+    expect(syntax(packed)).toEqual({ code: 0, err: '' })
+    // a packer that gives anything but base64 makes no launch
+    expect(() => launchScript('r1', run, () => "AAAA' ; rm -rf / ; '")).toThrow()
   })
   test('a run id that is not plain is refused', () => {
     expect(() => launchScript('a b', run)).toThrow()
@@ -180,6 +230,11 @@ describe('the launch: the run written, started detached, its log followed', () =
           const f = long(factsFor(c, distro))
           const built = buildPlan(install ? { ...f, docker: null } : f, W, { id: 'r1', docker: true })
           if ('steps' in built) plans.push([`${c} on ${distro}${install ? ', Docker to install' : ''}`, built])
+          // and with all of step 1 to make first, its fence at sshd_config's end (the longer one)
+          const empty = long(stepOneMissing(c, distro, { include: false }))
+          const first = buildPlan(install ? { ...empty, docker: null } : empty, WK, { id: 'r1', docker: true })
+          if ('steps' in first)
+            plans.push([`step 1 and ${c} on ${distro}${install ? ', Docker to install' : ''}`, first])
         }
       const undoOf = (c: '2' | '3a' | '4b', items: RecordItem[]): Plan => {
         const r = recordFor(c, { items })
@@ -221,22 +276,41 @@ describe('the launch: the run written, started detached, its log followed', () =
             { kind: 'container', name: 'agent-board-caddy', setup: 'r0' },
           ]),
         ],
+        [
+          `undo 2 and step 1 on ${distro}`,
+          undoOf('2', [
+            ...STEP1_ITEMS.slice(0, 3),
+            { kind: 'fence', path: SSHD_CONFIG },
+            { kind: 'line', file: '/etc/caddy/Caddyfile', line: IMPORT_LINE },
+          ]),
+        ],
       )
     }
-    expect(plans.length).toBeGreaterThan(30)
+    expect(plans.length).toBeGreaterThan(60)
     // Windows' ssh, the admin's key and the board's known_hosts under a user name with a space, Cyrillic and %
     const conf = tunnelConfig({ host: 'ssh.example.com', user: 'boardtunnel', domain: 'board.example.com' })
     const home = 'C:\\Users\\Иван Петров%a b'
+    const lineOf = (command: string): string =>
+      windowsLine([
+        'C:\\Windows\\System32\\OpenSSH\\ssh.exe',
+        ...adminSshArgs({
+          conf,
+          admin: { user: 'administrator', key: `${home}\\.ssh\\id_ed25519 admin` },
+          knownHosts: `${home}\\AppData\\Local\\agent-board\\state\\tunnel\\known_hosts`,
+          command,
+          platform: 'win32',
+        }),
+      ])
     for (const [name, p] of plans) {
-      const args = adminSshArgs({
-        conf,
-        admin: { user: 'administrator', key: `${home}\\.ssh\\id_ed25519 admin` },
-        knownHosts: `${home}\\AppData\\Local\\agent-board\\state\\tunnel\\known_hosts`,
-        command: remoteCommand(launchScript('r1', runScript(p, W, RUN)), 'password'),
-        platform: 'win32',
-      })
-      const line = windowsLine(['C:\\Windows\\System32\\OpenSSH\\ssh.exe', ...args])
-      expect([name, line.length < 30_000]).toEqual([name, true])
+      const run = runScript(p, W, RUN)
+      // packed, as the board sends every run: far within, step 1 and Docker's install and all
+      expect([name, lineOf(remoteCommand(launchScript('r1', run, PACK), 'password')).length < 20_000]).toEqual([
+        name,
+        true,
+      ])
+      // and every plan without step 1 unpacked too, as before
+      if (!name.startsWith('step 1'))
+        expect([name, lineOf(remoteCommand(launchScript('r1', run), 'password')).length < 30_000]).toEqual([name, true])
     }
   })
 })
@@ -589,6 +663,37 @@ describe.skipIf(!SH)('a run, for real', () => {
     expect(r.exitCode).toBe(0)
   }, 30_000)
 
+  test('a packed run: the launch unpacks it on the server and follows it the same', () => {
+    const root = `${dir}/launch-packed`
+    mkdirSync(root, { recursive: true })
+    const p = fake([step('guard'), step('caddyfile'), step('volumes')])
+    const launch = sandboxed(launchScript('r1', sandboxed(runScript(p, W, RUN), root), PACK), root)
+    const r = Bun.spawnSync([SH ?? 'sh', '-c', launch], { env, stdout: 'pipe', stderr: 'pipe', timeout: 30_000 })
+    expect(markers(r.stdout.toString())).toEqual([
+      '@@step 1 start',
+      'did guard',
+      '@@step 1 ok',
+      '@@step 2 start',
+      'did caddyfile',
+      '@@step 2 ok',
+      '@@step 3 start',
+      'did volumes',
+      '@@step 3 ok',
+      '@@result applied',
+      '@@exit 0',
+    ])
+    expect(r.exitCode).toBe(0)
+    // a packed copy that does not unpack whole: @@exit 70 at once, nothing run
+    const cut = launchScript('r1', sandboxed(runScript(p, W, RUN), root), t => PACK(t).slice(0, 40))
+    const c = Bun.spawnSync([SH ?? 'sh', '-c', sandboxed(cut, `${dir}/launch-cut`)], {
+      env,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      timeout: 15_000,
+    })
+    expect(c.stdout.toString()).toBe('@@exit 70\n')
+  }, 40_000)
+
   test('a launch whose runs folder cannot be made, or whose copy of the run is cut, says @@exit 70 at once', () => {
     const root = `${dir}/nofolder`
     writeFileSync(root, 'a file where the folder would be')
@@ -631,6 +736,55 @@ describe.skipIf(!SH)('a run, for real', () => {
       state: 'applied',
       items: [{ kind: 'line' }, { kind: 'image', ref: CADDY_IMAGE, before: false }],
     })
+  })
+
+  test('step 1’s parts: on the record before their step runs, off it when the step finds the part there (not the board’s)', () => {
+    const root = `${dir}/step1`
+    const user: RecordItem = { kind: 'user', name: 'boardtunnel' }
+    const folder: RecordItem = { kind: 'folder', path: '/var/lib/boardtunnel' }
+    const keys: RecordItem = { kind: 'keys', path: '/etc/ssh/authorized_keys/boardtunnel', dir: false }
+    const fence: RecordItem = { kind: 'fence', path: '/etc/ssh/sshd_config.d/00-agent-board.conf' }
+    const p = fake([
+      step('guard'),
+      // the user made, the record read while its step runs
+      step('tunnel-user', { commands: ['cat /etc/agent-board/setup.json'], record: [user] }),
+      // a folder that turns out to be there: used, never named as the board's
+      step('socket-folder', { skipIf: ['true'], record: [folder] }),
+      step('keys-file', { record: [keys] }),
+      step('sshd-fence', { skipIf: ['true'], record: [fence] }),
+    ])
+    const { out, code } = runIn(p, root)
+    expect(code).toBe(0)
+    const during = JSON.parse(out.split('\n').find(l => l.startsWith('{')) ?? 'null')
+    expect(during).toMatchObject({ state: 'running', items: [user] })
+    expect(setupRecord(record(root))?.items).toEqual([user, keys])
+  })
+
+  test('Apply again: step 1’s parts the board made stay on the record, though their steps skip now', () => {
+    const root = `${dir}/step1-again`
+    const user: RecordItem = { kind: 'user', name: 'boardtunnel' }
+    const fence: RecordItem = { kind: 'fence', path: '/etc/ssh/sshd_config.d/00-agent-board.conf' }
+    const p = fake([
+      step('guard', { record: [user, fence] }),
+      step('tunnel-user', { skipIf: ['true'], record: [user] }),
+      step('sshd-fence', { skipIf: ['true'], record: [fence] }),
+    ])
+    expect(runIn(p, root).code).toBe(0)
+    expect(setupRecord(record(root))?.items).toEqual([user, fence])
+  })
+
+  test('step 1’s parts rolled back come off the record: a later step failing leaves nothing of them named', () => {
+    const root = `${dir}/step1-back`
+    const user: RecordItem = { kind: 'user', name: 'boardtunnel' }
+    const p = fake([
+      step('guard'),
+      step('tunnel-user', { record: [user], undo: ["echo 'undid tunnel-user'"] }),
+      step('pull-caddy', { commands: ['false'] }),
+    ])
+    const { out, code } = runIn(p, root)
+    expect(code).toBe(1)
+    expect(markers(out)).toContain('undid tunnel-user')
+    expect(record(root)).toMatchObject({ state: 'rolled-back', items: [] })
   })
 
   test('a TERM during a step: the step ends, then what the run did is rolled back; their file is its backup again', () => {

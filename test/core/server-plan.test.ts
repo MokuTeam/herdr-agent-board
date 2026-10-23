@@ -817,7 +817,7 @@ describe('planned from what Look read on the trial servers (not from shapes gues
 
   test('a tool the run needs missing (as Look names it): Do it myself', () => {
     const f = lookedAt('ubuntu2604', 'bare')
-    for (const tool of ['flock', 'setsid', 'timeout', 'sha256sum', 'ss'])
+    for (const tool of ['flock', 'setsid', 'timeout', 'sha256sum', 'ss', 'gzip'])
       expect(chooseCase({ ...f, host: { ...f.host, missing: [tool] } }, W)).toEqual(why('os'))
     expect(chooseCase({ ...f, host: { ...f.host, missing: ['getent'] } }, W).case).toBe('1')
   })

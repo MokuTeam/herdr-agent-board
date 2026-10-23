@@ -1,10 +1,12 @@
 // What the board puts on the server when it sets up the web server in front of the tunnel, per
 // case (the server-setup spec's "The cases"): its own Caddy's config, the site its owner's Caddy
 // imports, the marked block, nginx's file for the certificate checks, the argv of its two
-// containers and Docker's install. The plan (core/server-plan.ts) and "Do it myself" take them from
-// here, as do the integration tests. Pure, with no node: import: the page imports it.
+// containers and Docker's install; and step 1's (the simple-setup spec's "Step 1 by the board"):
+// the tunnel user's marker, its keys file, sshd's fence in a file of its own or at the end of
+// sshd_config. The plan (core/server-plan.ts) and "Do it myself" take them from here, as do the
+// integration tests. Pure, with no node: import: the page imports it.
 import type { Wanted } from './server-plan.ts'
-import { socketFolder } from './tunnel-snippets.ts'
+import { socketFolder, sshdBlock } from './tunnel-snippets.ts'
 
 /** The board's Caddy: the Caddy 2 release current when this was written, by tag and digest. */
 export const CADDY_IMAGE = 'caddy:2.11.7@sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa0c16bd8ca328fb7af'
@@ -36,6 +38,21 @@ export const SITE_FILE = `${SITE_DIR}/board.caddy`
 /** Case 4b: the board's file in a folder their nginx includes. */
 export const NGINX_FILE = '/etc/nginx/conf.d/agent-board.conf'
 
+/** sshd's own config, and the folder its `Include` reads on Debian 12+ and Ubuntu 22.04+. */
+export const SSHD_CONFIG = '/etc/ssh/sshd_config'
+export const SSHD_DIR = '/etc/ssh/sshd_config.d'
+/**
+ * sshd's fence in a file of its own. sshd ends a Match block at the end of the included file it is
+ * in (it puts the including file's Match state back after each file: OpenSSH 8.9p1, 10.0p2 and
+ * 10.2p1 checked), so it captures nothing after it. First by name: among Match blocks for the
+ * tunnel user, the first one sshd reads sets each setting.
+ */
+export const FENCE_FILE = `${SSHD_DIR}/00-agent-board.conf`
+/** The tunnel users' keys files' folder (tunnel-snippets.ts keysFile). */
+export const KEYS_DIR = '/etc/ssh/authorized_keys'
+/** The tunnel user's comment (GECOS) when the board made it: Undo removes only a user that has it. */
+export const USER_COMMENT = 'agent-board tunnel'
+
 export const CADDY_NAME = 'agent-board-caddy'
 export const SOCKET_NAME = 'agent-board-socket'
 export const VOLUMES = ['agent-board-caddy-data', 'agent-board-caddy-config'] as const
@@ -43,6 +60,7 @@ export const VOLUMES = ['agent-board-caddy-data', 'agent-board-caddy-config'] as
 export const ROLE_LABEL = 'agent-board.role'
 export const SETUP_LABEL = 'agent-board.setup'
 export const ARGS_LABEL = 'agent-board.args'
+export const GID_LABEL = 'agent-board.gid'
 
 /** Case 4's public port; where 4b's Caddy takes the checks nginx forwards; 3b's helper on the loopback; 3a's helper inside its network. */
 export const PORT_4 = 8443
@@ -106,6 +124,22 @@ export function markedBlock(w: Wanted, upstream: string): string {
   return [`${BLOCK_BEGIN}: ${ADDED}`, ...site(w.domain, upstream), BLOCK_END].join('\n')
 }
 
+const FENCE_NOTE = `sshd's fence for the board's tunnel user. Added by "Set up the server"; its Undo removes it.`
+
+/** sshd's fence in its own file under sshd_config.d: one comment line, then the Match block as it is. */
+export function fenceFile(user: string): string {
+  return [`# agent-board: ${FENCE_NOTE}`, sshdBlock(user)].join('\n')
+}
+
+/**
+ * sshd's fence at the end of sshd_config (no Include there), between the board's markers. A Match
+ * block runs to the next Match line or the end of the file: `Match all` after it makes what someone
+ * adds below it later a setting for everyone again, not one for the tunnel user alone.
+ */
+export function fenceBlock(user: string): string {
+  return [`${BLOCK_BEGIN}: ${FENCE_NOTE}`, sshdBlock(user), 'Match all', BLOCK_END].join('\n')
+}
+
 /**
  * Case 4b: their nginx sends the certificate checks for the domain, and nothing else, to the
  * board's Caddy. It listens where their own port-80 servers do (the address only: no
@@ -145,16 +179,24 @@ export function argsHash(args: readonly string[]): string {
   return h.toString(16).padStart(16, '0')
 }
 
-/** `docker run`'s argv with the board's labels: the settings' hash is of everything but the run's id. */
+/** The word for the folder's gid in the settings the hash is of. */
+const ANY_GID = '<gid>'
+
+/**
+ * `docker run`'s argv with the board's labels. The settings' hash is of everything but the run's id
+ * and the socket folder's gid, which has a label of its own: a run that makes the folder learns its
+ * gid only on the server, and its settings must hash as a later Look's do.
+ */
 function labelled(
   name: string,
   role: string,
   runId: string,
-  settings: string[],
+  gid: number | string,
+  settings: (gid: string) => string[],
   image: string,
   cmd: string[],
 ): string[] {
-  const hash = argsHash([name, role, ...settings, image, ...cmd])
+  const hash = argsHash([name, role, ...settings(ANY_GID), image, ...cmd])
   return [
     'run',
     '-d',
@@ -168,7 +210,9 @@ function labelled(
     `${SETUP_LABEL}=${runId}`,
     '--label',
     `${ARGS_LABEL}=${hash}`,
-    ...settings,
+    '--label',
+    `${GID_LABEL}=${gid}`,
+    ...settings(String(gid)),
     image,
     ...cmd,
   ]
@@ -189,10 +233,10 @@ function caddyPorts(c: OwnCaddy): string[] {
  */
 export function caddyRunArgs(c: OwnCaddy, w: Wanted, gid: number | string, runId: string, acme?: Acme): string[] {
   const folder = socketFolder(w.socket)
-  const settings = [
+  const settings = (g: string): string[] => [
     ...caddyPorts(c).flatMap(p => ['-p', p]),
     '--group-add',
-    String(gid),
+    g,
     '--cap-drop',
     'ALL',
     '--cap-add',
@@ -209,7 +253,7 @@ export function caddyRunArgs(c: OwnCaddy, w: Wanted, gid: number | string, runId
     '-v',
     `${VOLUMES[1]}:/config`,
   ]
-  return labelled(CADDY_NAME, 'caddy', runId, settings, CADDY_IMAGE, [])
+  return labelled(CADDY_NAME, 'caddy', runId, gid, settings, CADDY_IMAGE, [])
 }
 
 /**
@@ -225,10 +269,10 @@ export function socatRunArgs(
 ): string[] {
   const folder = socketFolder(w.socket)
   const network = 'network' in on ? ['--network', on.network, '--network-alias', SOCKET_NAME] : ['--network', 'host']
-  const settings = [
+  const settings = (g: string): string[] => [
     ...network,
     '--user',
-    `65534:${gid}`,
+    `65534:${g}`,
     '--read-only',
     '--cap-drop',
     'ALL',
@@ -239,7 +283,7 @@ export function socatRunArgs(
   ]
   const listen =
     'network' in on ? `TCP-LISTEN:${PORT_3A},fork,reuseaddr` : `TCP-LISTEN:${PORT_3B},bind=127.0.0.1,fork,reuseaddr`
-  return labelled(SOCKET_NAME, 'socket', runId, settings, SOCAT_IMAGE, [listen, `UNIX-CONNECT:${w.socket}`])
+  return labelled(SOCKET_NAME, 'socket', runId, gid, settings, SOCAT_IMAGE, [listen, `UNIX-CONNECT:${w.socket}`])
 }
 
 /** Docker's key, as Docker publishes its fingerprint. */

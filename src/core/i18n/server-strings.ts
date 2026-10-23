@@ -66,6 +66,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.touch.group': 'the group of {what}',
     'server.panel.touch.reload': 'a reload of {what}',
     'server.panel.touch.network': 'network {what}',
+    'server.panel.touch.user': 'user {what}',
+    'server.panel.touch.folder': 'folder {what}',
     'server.panel.tick.docker': "Install Docker from Docker's own repository",
     'server.panel.tick.removeDocker': 'Remove Docker too (the board installed it, and it holds nothing else)',
     'server.panel.tick.removeEdited': "Remove the board's files you changed since, too",
@@ -138,7 +140,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.case.update': 'Set up for {domain} before: the plan moves the setup to the new domain or port.',
     // why the board leaves it to you ("Do it myself")
     'server.manual.os':
-      'The server is not Debian 12 or 13 or Ubuntu 22.04 to 26.04, or lacks flock, setsid, timeout, sha256sum or ss.',
+      'The server is not Debian 12 or 13 or Ubuntu 22.04 to 26.04, or lacks flock, setsid, timeout, sha256sum, ss or gzip.',
     'server.manual.selinux': 'SELinux enforces its policy here.',
     'server.manual.podman': 'Docker here is Podman.',
     'server.manual.rootless': 'Docker runs rootless here.',
@@ -240,9 +242,31 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.step.drop-docker.why': 'The board installed it and it holds nothing else.',
     'server.step.forget.title': 'Remove the board’s record and backups',
     'server.step.forget.why': '/etc/agent-board goes last.',
-    'server.step.by-hand.title': 'What you made by hand',
+    'server.step.by-hand.title': 'What was there before the board',
     'server.step.by-hand.why':
-      'The tunnel’s user, its folder, the key’s file and sshd’s block stay: here is how to remove them, if you want.',
+      'The parts of the tunnel’s login that were there before the board stay: here is how to remove them, if you want.',
+    // step 1 by the board: the tunnel's login on the server, and its Undo
+    'server.step.tunnel-user.title': 'Make the tunnel’s user ({user})',
+    'server.step.tunnel-user.why':
+      'The board’s own login on the server: no password, no shell, no home; allowed only to hold the tunnel.',
+    'server.step.socket-folder.title': 'Make the socket’s folder ({folder})',
+    'server.step.socket-folder.why':
+      'Where the tunnel’s user makes the socket: 2750, its own and its group’s, so only the web server you choose can open it.',
+    'server.step.keys-file.title': 'Put the board’s key in place ({file})',
+    'server.step.keys-file.why':
+      'Root’s file, out of the tunnel user’s reach; the key may only forward. A file that was there is put back if a later step fails.',
+    'server.step.sshd-fence.title': 'Fence the tunnel’s user in sshd ({file})',
+    'server.step.sshd-fence.why':
+      'A Match block for that user alone. sshd checks it, it must be in force for the tunnel’s user and leave root’s and your own settings as they were; then sshd reloads (no restart: open sessions stay).',
+    'server.step.drop-fence.title': 'Remove the tunnel’s fence from sshd ({file})',
+    'server.step.drop-fence.why':
+      'sshd checks the result, root’s and your own settings must stay as they are; then sshd reloads.',
+    'server.step.drop-keys.title': 'Remove the board’s key ({file})',
+    'server.step.drop-keys.why': 'The board made this file.',
+    'server.step.drop-folder.title': 'Remove the socket’s folder ({folder})',
+    'server.step.drop-folder.why': 'With the socket in it; kept if anything else is there.',
+    'server.step.drop-user.title': 'Remove the tunnel’s user ({user})',
+    'server.step.drop-user.why': 'Only the user the board made; its tunnel, if connected, ends first.',
     // warnings with the plan
     'server.warn.noDns': '{domain} has no DNS record yet: the certificate needs one pointing to this server.',
     'server.warn.dns': '{domain} points to {addresses}, not to an address of this server (fine behind 1:1 NAT).',
@@ -285,6 +309,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.hint.lookAgain': 'This plan is not from the last Look (or the board started anew since): Look again.',
     'server.err.docker': 'Tick “Install Docker from Docker’s own repository” first.',
     'server.err.noRecord': 'Nothing of the board’s is set up on this server.',
+    'server.err.publicKey': 'The board’s public key is not one OpenSSH public key on one line.',
     'server.err.cancelled': 'Cancelled.',
     'server.err.spawn': 'ssh could not start ({code}).',
     'server.err.timeout':
@@ -353,6 +378,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.touch.group': 'группа {what}',
     'server.panel.touch.reload': 'перезагрузка {what}',
     'server.panel.touch.network': 'сеть {what}',
+    'server.panel.touch.user': 'пользователь {what}',
+    'server.panel.touch.folder': 'папка {what}',
     'server.panel.tick.docker': 'Установить Docker из собственного репозитория Docker',
     'server.panel.tick.removeDocker': 'Удалить и Docker (его установила доска, и в нём больше ничего нет)',
     'server.panel.tick.removeEdited': 'Удалить и файлы доски, которые вы с тех пор меняли',
@@ -421,7 +448,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.case.same': 'Уже настроено для {domain}: план проверит каждую часть и вернёт недостающее.',
     'server.case.update': 'Раньше было настроено для {domain}: план перенесёт настройку на новый домен или порт.',
     'server.manual.os':
-      'Сервер не Debian 12 или 13 и не Ubuntu 22.04–26.04, или на нём нет flock, setsid, timeout, sha256sum или ss.',
+      'Сервер не Debian 12 или 13 и не Ubuntu 22.04–26.04, или на нём нет flock, setsid, timeout, sha256sum, ss или gzip.',
     'server.manual.selinux': 'Здесь SELinux в режиме enforcing.',
     'server.manual.podman': 'Docker здесь — это Podman.',
     'server.manual.rootless': 'Docker здесь работает без root (rootless).',
@@ -525,9 +552,30 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.step.drop-docker.why': 'Его установила доска, и в нём больше ничего нет.',
     'server.step.forget.title': 'Убрать запись и резервные копии доски',
     'server.step.forget.why': '/etc/agent-board уходит последней.',
-    'server.step.by-hand.title': 'То, что вы сделали вручную',
-    'server.step.by-hand.why':
-      'Пользователь туннеля, его папка, файл ключа и блок sshd остаются: вот как их убрать, если хотите.',
+    'server.step.by-hand.title': 'То, что было до доски',
+    'server.step.by-hand.why': 'Части входа туннеля, которые были до доски, остаются: вот как их убрать, если хотите.',
+    'server.step.tunnel-user.title': 'Создать пользователя туннеля ({user})',
+    'server.step.tunnel-user.why':
+      'Собственный вход доски на сервер: без пароля, без оболочки, без домашней папки; ему можно только держать туннель.',
+    'server.step.socket-folder.title': 'Создать папку сокета ({folder})',
+    'server.step.socket-folder.why':
+      'Здесь пользователь туннеля создаёт сокет: 2750, его и его группы, так что открыть сокет сможет только выбранный веб-сервер.',
+    'server.step.keys-file.title': 'Положить ключ доски ({file})',
+    'server.step.keys-file.why':
+      'Файл принадлежит root, пользователь туннеля его не изменит; ключу можно только пробрасывать. Если файл уже был, он вернётся, когда следующий шаг не удастся.',
+    'server.step.sshd-fence.title': 'Оградить пользователя туннеля в sshd ({file})',
+    'server.step.sshd-fence.why':
+      'Блок Match только для этого пользователя. sshd проверяет его, он должен действовать для пользователя туннеля, а настройки root и ваши должны остаться прежними; затем sshd перечитывает настройки (без перезапуска: открытые сеансы остаются).',
+    'server.step.drop-fence.title': 'Убрать ограду туннеля из sshd ({file})',
+    'server.step.drop-fence.why':
+      'sshd проверяет результат, настройки root и ваши должны остаться прежними; затем sshd перечитывает настройки.',
+    'server.step.drop-keys.title': 'Убрать ключ доски ({file})',
+    'server.step.drop-keys.why': 'Этот файл создала доска.',
+    'server.step.drop-folder.title': 'Убрать папку сокета ({folder})',
+    'server.step.drop-folder.why': 'Вместе с сокетом; если в ней есть что-то ещё, она остаётся.',
+    'server.step.drop-user.title': 'Убрать пользователя туннеля ({user})',
+    'server.step.drop-user.why':
+      'Только пользователя, созданного доской; его туннель, если подключён, сначала закрывается.',
     'server.warn.noDns': 'У {domain} ещё нет записи DNS: для сертификата нужна запись, указывающая на этот сервер.',
     'server.warn.dns': '{domain} указывает на {addresses}, а не на адрес этого сервера (за 1:1 NAT это нормально).',
     'server.warn.forwarding':
@@ -576,6 +624,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'Этот план не от последнего осмотра (или доска с тех пор перезапускалась): осмотрите сервер снова.',
     'server.err.docker': 'Сначала отметьте «Установить Docker из собственного репозитория Docker».',
     'server.err.noRecord': 'На этом сервере ничего от доски не настроено.',
+    'server.err.publicKey': 'Открытый ключ доски — не один открытый ключ OpenSSH в одну строку.',
     'server.err.cancelled': 'Отменено.',
     'server.err.spawn': 'ssh не запустился ({code}).',
     'server.err.timeout': 'Сервер слишком долго не отвечал (частая причина — зависший демон Docker): попробуйте позже.',

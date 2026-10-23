@@ -16,10 +16,12 @@ import type {
   Port,
   RoundOne,
   ServerFacts,
+  StepOneFacts,
   Unit,
 } from './server-facts.ts'
 import { isContainerId, isPlainPath, shQuote } from './server-shell.ts'
-import { socketFolder, sshdBlock } from './tunnel-snippets.ts'
+import { KEYS_DIR, SSHD_CONFIG, SSHD_DIR } from './server-texts.ts'
+import { keysFile, keysLine, socketFolder, sshdBlock } from './tunnel-snippets.ts'
 
 /** The distributions Apply works on (owner, 2026-10-21); anything else is "Do it myself". */
 export const SUPPORTED: Record<'debian' | 'ubuntu', string[]> = {
@@ -34,6 +36,8 @@ export interface LookInput {
   user: string
   socket: string
   domain: string
+  /** The board's public key: Look says whether the tunnel user's keys file holds it alone. */
+  publicKey?: string
 }
 
 const PORTS = [80, 443, 8443, 8480, 8481] as const
@@ -49,7 +53,7 @@ function prelude(kind: 'look-1' | 'look-2'): string[] {
 }
 
 /** The sshd -T keys the tunnel spec's Match block sets, lowercased as sshd -T prints them, with their values. */
-function fenceWanted(user: string): Record<string, string> {
+export function fenceWanted(user: string): Record<string, string> {
   const wanted: Record<string, string> = {}
   for (const line of sshdBlock(user).split('\n').slice(1)) {
     const [key = '', ...value] = line.trim().split(/\s+/)
@@ -75,6 +79,27 @@ const INSPECT = [
 
 const SS_PORTS = `'( ${PORTS.map(p => `sport = :${p}`).join(' or ')} )'`
 const PORTS_ALT = PORTS.join('|')
+
+/**
+ * Step 1's parts besides the fence and the folder, at the end of the fence section (a parser of
+ * before reads past `@@` lines there): the tunnel user (`@@user <uid> <group>` or `@@user none`),
+ * its keys file against the board's key line (`@@keys none|same|other`), /etc/ssh/authorized_keys
+ * (`@@keys-dir`), and whether sshd_config includes sshd_config.d/*.conf before any Match line
+ * (`@@include`), where sshd's fence goes in a file of its own.
+ */
+function stepOneLines(i: LookInput): string[] {
+  const user = shQuote(i.user)
+  const keys = shQuote(keysFile(i.user))
+  const include = `tolower($1) == "match" { exit } tolower($1) == "include" { for (i = 2; i <= NF; i++) if ($i == "${SSHD_DIR}/*.conf" || $i == "sshd_config.d/*.conf") f = 1 } END { exit !f }`
+  return [
+    `if p=$(getent passwd ${user}); then echo "@@user $(printf '%s\\n' "$p" | cut -d: -f3) $(getent group "$(printf '%s\\n' "$p" | cut -d: -f4)" | cut -d: -f1)"; else echo '@@user none'; fi`,
+    i.publicKey === undefined
+      ? `if [ -e ${keys} ]; then echo '@@keys other'; else echo '@@keys none'; fi`
+      : `if [ ! -e ${keys} ]; then echo '@@keys none'; elif [ "$(cat ${keys})" = ${shQuote(keysLine(i.publicKey))} ]; then echo '@@keys same'; else echo '@@keys other'; fi`,
+    `if [ -d ${KEYS_DIR} ]; then echo '@@keys-dir'; fi`,
+    `if [ -d ${SSHD_DIR} ] && awk '${include}' ${SSHD_CONFIG} 2>/dev/null; then echo '@@include'; fi`,
+  ]
+}
 
 /** Round one: the distribution, who holds the web ports, Docker, the units, step 1 as the server has it. */
 export function lookScript1(i: LookInput): string {
@@ -119,6 +144,7 @@ export function lookScript1(i: LookInput): string {
     'fi',
     "echo '@@section fence'",
     `sshd -T -C ${shQuote(`user=${i.user},host=localhost,addr=127.0.0.1`)} 2>&1 | grep -E '^(${fenceKeys}) '`,
+    ...stepOneLines(i),
     "echo '@@section folder'",
     `stat -c '@@dir %a %U %G %g' ${folder} 2>&1`,
     `g=$(stat -c %g ${folder} 2>/dev/null) && getent group "$g" | sed 's/^/@@group /'`,
@@ -138,7 +164,7 @@ export function lookScript1(i: LookInput): string {
     'echo "@@forward $(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)"',
     'for c in lxd libvirtd wg; do command -v "$c" >/dev/null 2>&1 && echo "@@forwarder $c"; done',
     'for c in curl wget; do command -v "$c" >/dev/null 2>&1 && echo "@@fetch $c"; done',
-    'for c in flock setsid runuser timeout base64 sha256sum ss getent; do',
+    'for c in flock setsid runuser timeout base64 sha256sum ss getent gzip; do',
     '  command -v "$c" >/dev/null 2>&1 || echo "@@missing $c"',
     'done',
     'echo "@@sudo $(sudo --version 2>/dev/null | head -n 1)"',
@@ -626,6 +652,20 @@ function readFence(ls: readonly string[]): Record<string, string> {
   return fence
 }
 
+/** Step 1's parts from the fence section; undefined when Look did not read them (no `@@user` line). */
+function readStepOne(ls: readonly string[]): StepOneFacts | undefined {
+  const user = at(ls, 'user')
+  if (user === null) return undefined
+  const m = /^(\d+)(?:\s+(\S+))?\s*$/.exec(user)
+  const keys = at(ls, 'keys')
+  return {
+    user: m ? { uid: Number(m[1]), group: m[2] ?? '' } : null,
+    keys: keys === 'none' || keys === 'same' ? keys : 'other',
+    keysDir: ls.includes('@@keys-dir'),
+    include: ls.includes('@@include'),
+  }
+}
+
 function readFolder(ls: readonly string[]): Pick<RoundOne, 'folder' | 'socket'> {
   const dir = /^(\d+) (\S+) (\S+) (\d+)$/.exec(at(ls, 'dir') ?? '')
   const members = (at(ls, 'group') ?? '').split(':')[3] ?? ''
@@ -703,6 +743,7 @@ export function readRoundOne(out: string): RoundOne | null {
     const holders = {} as Record<Port, Holder>
     for (const port of PORTS) holders[port] = holderOf(port, listens, pids, docker)
     const systemd = lines(s, 'systemd')
+    const stepOne = readStepOne(lines(s, 'fence'))
     return {
       distro: readDistro(lines(s, 'os')),
       ports: holders,
@@ -711,6 +752,7 @@ export function readRoundOne(out: string): RoundOne | null {
       units: readUnits(systemd),
       fence: readFence(lines(s, 'fence')),
       ...readFolder(lines(s, 'folder')),
+      ...(stepOne && { stepOne }),
       ...readRecord(lines(s, 'record')),
       host: readHost(lines(s, 'host')),
       dns: readDns(lines(s, 'dns')),

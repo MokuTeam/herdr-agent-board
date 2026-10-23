@@ -1,4 +1,4 @@
-// What Look found on a server. Types only, no node: import: Task 20 parses into these, Task 22 plans from them.
+// What Look found on a server. Types only, no node: import: core/server-look.ts parses into these, core/server-plan.ts plans from them.
 export type Port = 80 | 443 | 8443 | 8480 | 8481
 export type Holder =
   | { kind: 'free' }
@@ -59,6 +59,20 @@ export interface HostFacts {
   coreutils: 'gnu' | 'rust' | null
   conflicts: string[]
 }
+/**
+ * Step 1's parts as Look found them, besides the fence (`fence`, sshd's settings for the tunnel
+ * user) and the socket's folder (`folder`): what tells the plan which of them the board makes.
+ */
+export interface StepOneFacts {
+  /** The tunnel user: its uid and its group's name; null when there is none. */
+  user: { uid: number; group: string } | null
+  /** Its keys file: none, the board's key line alone, or anything else (also when Look had no key to compare with). */
+  keys: 'none' | 'same' | 'other'
+  /** /etc/ssh/authorized_keys is there. */
+  keysDir: boolean
+  /** sshd_config includes sshd_config.d/*.conf before any Match line, and that folder is there. */
+  include: boolean
+}
 export interface RoundOne {
   distro: Distro
   ports: Record<Port, Holder>
@@ -68,6 +82,8 @@ export interface RoundOne {
   fence: Record<string, string>
   folder: { mode: string; owner: string; group: string; gid: number; members: string[] } | null
   socket: { mode: string; owner: string; group: string } | null
+  /** Absent from a Look that did not read them (its output has no `@@user` line): step 1 taken as done by hand. */
+  stepOne?: StepOneFacts
   record: unknown
   lockHeld: boolean
   host: HostFacts

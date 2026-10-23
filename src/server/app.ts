@@ -334,6 +334,11 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
     now: () => Date.now(),
     newId: setupId,
     ...(acmeCa && acmeRoot && { acme: { ca: acmeCa, root: acmeRoot } }),
+    // the tunnel key's public half, which Apply puts in place on the server (none before Generate key)
+    publicKey: async () => {
+      const r = await publicKeyOf(keyPath(tunnelConf()))
+      return r.ok ? r.publicKey : null
+    },
   })
   // The "Remote access…" panel's view and changes (/api/access, the local board's only).
   const remoteAccess = createRemoteAccess({

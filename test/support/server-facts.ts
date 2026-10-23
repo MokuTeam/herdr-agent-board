@@ -2,7 +2,7 @@
 // 26.04 (sudo-rs, Rust coreutils): the facts the plan's tests build from. The shapes are
 // core/server-facts.ts's; the values those of Task 20's scenarios (a Caddy unit with two sites,
 // compose Caddy on `web_default` from `/srv/my web`, nginx with conf.d, …).
-import type { Container, Holder, ServerFacts } from '../../src/core/server-facts.ts'
+import type { Container, Holder, ServerFacts, StepOneFacts } from '../../src/core/server-facts.ts'
 import type { SetupCase, SetupRecord } from '../../src/core/server-plan.ts'
 
 export type TestDistro = 'debian13' | 'ubuntu2604'
@@ -202,5 +202,26 @@ export function recordFor(c: SetupCase, over: Partial<SetupRecord> = {}): SetupR
     address: four ? 'https://board.example.com:8443' : 'https://board.example.com',
     items: [],
     ...over,
+  }
+}
+
+/** The board's public key, as ssh-keygen -y gives it. */
+export const BOARD_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGQ2Ym9hcmRrZXlleGFtcGxlZXhhbXBsZWV4YW1wbGU board@pc'
+
+/**
+ * A server with none of step 1 (the simple-setup spec): no tunnel user, socket folder, keys file
+ * or fence; sshd includes sshd_config.d. `over` says what Look found otherwise.
+ */
+export function stepOneMissing(
+  c: Parameters<typeof factsFor>[0],
+  distro: TestDistro = 'debian13',
+  over: Partial<StepOneFacts> = {},
+): ServerFacts {
+  return {
+    ...factsFor(c, distro),
+    fence: {},
+    folder: null,
+    socket: null,
+    stepOne: { user: null, keys: 'none', keysDir: false, include: true, ...over },
   }
 }
