@@ -290,8 +290,9 @@ function common(i: OneshotInput, mode: 'apply' | 'undo'): string[] {
     '  F=$(said pfound)',
     `  [ -z "$F" ] || { say '' ${shQuote(t('server.oneshot.found'))}; printf '  %s\\n' "$F"; }`,
     '}',
-    '# asked once, on the terminal: a paste never changes anything without a yes',
+    '# asked once, on the terminal: a paste never changes anything without a yes; 2: no terminal',
     'ask() {',
+    '  if ! { true >/dev/tty; } 2>/dev/null; then return 2; fi',
     `  printf '%s' ${shQuote(t('server.oneshot.ask'))} >/dev/tty 2>/dev/null || return 1`,
     '  a=',
     '  read -r a </dev/tty 2>/dev/null || return 1',
@@ -315,11 +316,19 @@ function common(i: OneshotInput, mode: 'apply' | 'undo'): string[] {
     `  2) ${say('server.oneshot.rollbackFailed')} ;;`,
     `  3) ${say('server.oneshot.busy')} ;;`,
     `  4) ${say('server.oneshot.changed')} ;;`,
+    `  6) ${say('server.oneshot.stoppedFirst')} ;;`,
     `  *) ${say('server.oneshot.lost')} ;;`,
     '  esac',
     '}',
   ]
 }
+
+/** The question, and what its answer does: a yes goes on; a no, or no terminal to ask on, stops there. */
+const asked = (): string[] => [
+  '  ask; a=$?',
+  `  if [ "$a" = 2 ]; then say '' ${shQuote(t('server.oneshot.noTerminal'))}; exit 1; fi`,
+  `  if [ "$a" != 0 ]; then say '' ${shQuote(t('server.oneshot.no'))}; exit 1; fi`,
+]
 
 /** The one command's script ("What is inside"). */
 export function applyScript(i: OneshotInput): string {
@@ -362,7 +371,7 @@ export function applyScript(i: OneshotInput): string {
     "  N=$(said warn | sed 's/^/  - /')",
     `  [ -z "$N" ] || { say '' ${shQuote(t('server.oneshot.notes'))}; printf '%s\\n' "$N"; }`,
     `  say '' ${shQuote(t('server.oneshot.unchanged'))}`,
-    `  ask || { say '' ${shQuote(t('server.oneshot.no'))}; exit 1; }`,
+    ...asked(),
     '  runit',
     '  r=$?',
     `  if [ "$r" = 0 ]; then say ''; m_done "$ADDRESS"; ${say('server.oneshot.test')}; else ended "$r"; fi`,
@@ -407,7 +416,7 @@ export function undoScriptOf(i: OneshotInput): string {
     "  said pwill | sed 's/^/  - /'",
     "  said puntouched | sed 's/^/  /'",
     `  say '' ${shQuote(t('server.oneshot.undo.kept'))} ${shQuote(t('server.oneshot.unchanged'))}`,
-    `  ask || { say '' ${shQuote(t('server.oneshot.no'))}; exit 1; }`,
+    ...asked(),
     '  runit',
     '  r=$?',
     `  if [ "$r" = 0 ]; then say ''; ${say('server.oneshot.undo.done')}; else ended "$r"; fi`,

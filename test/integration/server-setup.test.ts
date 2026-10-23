@@ -1090,6 +1090,14 @@ async function commandPath(
   const logins = await ownerLogins(s)
   const files = await s.hashes(sc.files)
 
+  // without a terminal (as root): said so, nothing changed, nothing of sh's own about /dev/tty
+  const notty = await s.exec(['sh', `${COMMAND_FILE}-apply`], { check: false })
+  expect(notty.code, notty.stdout.slice(-2000)).not.toBe(0)
+  expect(notty.stdout).toContain('there is no terminal here to ask on')
+  expect(`${notty.stdout}${notty.stderr}`).not.toContain('cannot create')
+  expect(await stepOne(s)).toEqual(empty)
+  expect(await tmpLeft(s)).toBe('')
+
   // "no": the plan said, nothing changed
   const no = await paste(s, 'apply', as, 'n')
   expect(no.code, no.stdout.slice(-2000)).not.toBe(0)

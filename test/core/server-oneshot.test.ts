@@ -384,6 +384,19 @@ function mutations(): Scenario[] {
       ),
     ),
     m('set up already', folder, withRecord(folder, { case: '3a', items: blockItems('/srv/my web/Caddyfile') })),
+    // the record's case over whoever holds the ports now (an update): the guard relies on each as it is
+    ...['dummy80', 'apache', 'caddy-bridge', 'nginx-443', 'compose-folder', 'caddy-unit'].flatMap(name => {
+      const s = byName(`debian13/${name}`)
+      const old = { domain: 'old.example.com', items: OWN_ITEMS }
+      return [
+        m('set up for another domain in case 1', s, withRecord(s, { ...old, address: 'https://old.example.com' })),
+        m(
+          'set up for another domain in case 4a',
+          s,
+          withRecord(s, { ...old, case: '4a', publicPort: 8443, address: 'https://old.example.com:8443' }),
+        ),
+      ]
+    }),
     m('set up already', file, withRecord(file, { case: '3a', items: blockItems('/srv/web/Caddyfile') })),
     m('set up already', host, withRecord(host, { case: '3b', items: blockItems('/srv/caddy/Caddyfile') })),
     m(
@@ -928,6 +941,19 @@ describe('the command', () => {
     }
   })
 
+  test('without a terminal to ask on, it says so, and stops before any change', () => {
+    for (const { name, script } of both) {
+      // the terminal tried quietly first (sh's own "cannot create /dev/tty" not shown)
+      expect([name, script]).toEqual([
+        name,
+        expect.stringContaining('if ! { true >/dev/tty; } 2>/dev/null; then return 2; fi'),
+      ])
+      expect([name, script]).toEqual([name, expect.stringContaining('if [ "$a" = 2 ]; then say \'\' ')])
+    }
+    expect(scripts.script).toContain(t('server.oneshot.noTerminal'))
+    expect(scripts.undoScript).toContain(t('server.oneshot.noTerminal'))
+  })
+
   test('it carries what the board knows', () => {
     for (const script of [scripts.script, scripts.undoScript]) {
       expect(script).toContain(`W_DOMAIN = "${W.domain}"`)
@@ -996,6 +1022,18 @@ describe('the run’s progress, as the owner reads it', () => {
     )
     expect(awk('progress', '@@busy\n@@exit 75', { AB_TITLES: titles }).code).toBe(3)
     expect(awk('progress', '', { AB_TITLES: titles }).code).toBe(5)
+    // stopped before any change, with no result said: the guard failed (3), told to stop right
+    // after it (143), the launch could not write the run (70): nothing was changed, not lost
+    for (const exit of [3, 143, 70])
+      expect([
+        exit,
+        awk('progress', `@@step 1 start\n@@step 1 fail\n@@exit ${exit}`, { AB_TITLES: titles }).code,
+      ]).toEqual([exit, 6])
+    expect(awk('progress', '@@exit 70', { AB_TITLES: titles }).code).toBe(6)
+    // a run that ended some other way without a result: lost, as before
+    expect(awk('progress', '@@step 1 start\n@@step 1 ok\n@@step 2 start\n@@exit 137', { AB_TITLES: titles }).code).toBe(
+      5,
+    )
   })
 
   test('Undo’s by-hand step said to stay, not “in place already”', () => {

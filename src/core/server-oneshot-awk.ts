@@ -1179,17 +1179,18 @@ function need(name) { if (!((name in VAL) || (name in VISLIST))) MISSING = name 
 # the guard's lines (core/server-plan.ts relyOn, relyLine), in RELIES
 function relyon(p) {
   if (isours(p)) return
-  if (HK[p] == "free") addrely("r.free." p ".d" (DOCKER ? 1 : 0), "")
-  else if (HK[p] == "container") addrely("r.container." p, HI[p])
-  else if (HK[p] == "unit" || HK[p] == "process") addrely("r.program." p "." HP[p], "")
+  if (HK[p] == "free") addrely("r.free." p ".d" (DOCKER ? 1 : 0), "", "")
+  else if (HK[p] == "container") addrely("r.container." p, HI[p], "")
+  else if (HK[p] == "unit" || HK[p] == "process") addrely("r.program." p, "", HP[p])
 }
-function relyconfig() { addrely("r.config", "") }
-function addrely(key, cid,    t, n, i, NAMES, had, was) {
+function relyconfig() { addrely("r.config", "", "") }
+function addrely(key, cid, program,    t, n, i, NAMES, had, was) {
   if (!(key in RELY)) { INTERNAL = INTERNAL " " key; return }
+  if (!safe(program)) REFUSE = REFUSE " program"
   # filled with its own values; the template's own stay as they were
-  n = split("cid file sha", NAMES, " ")
+  n = split("cid file sha program", NAMES, " ")
   for (i = 1; i <= n; i++) { had[i] = (NAMES[i] in VAL); was[i] = VAL[NAMES[i]] }
-  VAL["cid"] = cid; VAL["file"] = TC_file; VAL["sha"] = TC_sha
+  VAL["cid"] = cid; VAL["file"] = TC_file; VAL["sha"] = TC_sha; VAL["program"] = program
   t = filltext(RELY[key])
   for (i = 1; i <= n; i++) { if (had[i]) VAL[NAMES[i]] = was[i]; else delete VAL[NAMES[i]] }
   RELIES = RELIES (RELIES == "" ? "" : "\n") t
@@ -1669,9 +1670,9 @@ function main_apply(    c, mine, old, who, docker, fetch, group, cand, update, r
   docker = own(c) ? DOCKER : 1
   fetch = 0; group = 0; cand = 0
   # step 1's parts still missing come first in the guard (core/server-plan.ts stepOneSteps)
-  if (NEED_user) addrely("r.none.user", "")
-  if (NEED_folder) addrely("r.none.folder", "")
-  if (NEED_keys == "make") addrely("r.none.keys", "")
+  if (NEED_user) addrely("r.none.user", "", "")
+  if (NEED_folder) addrely("r.none.folder", "", "")
+  if (NEED_keys == "make") addrely("r.none.keys", "", "")
   if (c == "4b" && H_fetch == "curl") { nh = fetchhosts(NX_n, NX_nn, W_DOMAIN, NH); fetch = nh > 0; if (fetch) setlist("nhosts", NH, nh) }
   if (c == "2" || c == "3a" || c == "3b") {
     nh = fetchhosts(CA_host, CA_hostn, W_DOMAIN, HH)
@@ -1695,7 +1696,7 @@ function main_apply(    c, mine, old, who, docker, fetch, group, cand, update, r
     setv("cid", TC_cid); setv("config", CA_config); setv("config_candidate", dirof(CA_config) "/.Caddyfile.agent-board")
     if (c == "3a") setv("network", NETWORK)
     setv("socat_hash", fnv(filltext(HASH["h.socat." (c == "3b" ? "host" : "net")])))
-    relyon(443); addrely("r.container.none", TC_cid); relyconfig()
+    relyon(443); addrely("r.container.none", TC_cid, ""); relyconfig()
     if (c == "3b") relyon(8481)
   }
   if (own(c)) {
@@ -1940,6 +1941,9 @@ END {
     if (RESULT == "rollback-failed") exit 2
     if (RESULT == "busy") exit 3
     if (RESULT == "changed") exit 4
+    # no result: stopped before any change (the guard failed, told to stop right after it, the
+    # launch could not write the run; core/server-script.ts runScript, launchScript), or lost
+    if (EXITC == 3 || EXITC == 143 || EXITC == 70) exit 6
     exit 5
   }
 }

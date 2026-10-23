@@ -17,7 +17,7 @@
 // The guard's lines (who holds which port, their config's hash, step 1's parts still missing) are
 // filled in from rely lines of their own. Pure, with no node: import.
 import { t } from './lang.ts'
-import type { Container, Holder, RoundOne, ServerFacts, StepOneFacts } from './server-facts.ts'
+import type { Container, Holder, Port, RoundOne, ServerFacts, StepOneFacts } from './server-facts.ts'
 import { type LookInput, lookScript2 } from './server-look.ts'
 import {
   buildPlan,
@@ -125,6 +125,8 @@ export const INPUTS: Inputs = {
       { sentinel: `zqimg${'abcdefgh'[k]}zq`, alt: `registry.example.org/caddy:2.${k}.1` },
     ]),
   ),
+  // the guard: the program that holds a port, as ss names it
+  program: { sentinel: 'zqprogzq', alt: 'caddy', probe: 'my prog' },
   // round two of Look
   cr_bin: { sentinel: '/zqcrbin/caddy', alt: '/usr/bin/caddy', probe: '/opt/my caddy/caddy' },
   cr_cid: { sentinel: 'deadbeef'.repeat(8), alt: `7f3c${'0a'.repeat(30)}` },
@@ -148,7 +150,9 @@ const candidateOf = (name: string): Place => ({
 /** The places every template may have; those a rendering lacks are simply not there. */
 function places(w: Wanted, c: SetupCase | null): Place[] {
   return [
-    ...['plan_id', 'run_id', 'gid', 'sha', 'cid', 'network', 'bin', 'user', 'group', 'oldgroup', 'old'].map(scalar),
+    ...['plan_id', 'run_id', 'gid', 'sha', 'cid', 'network', 'bin', 'user', 'group', 'oldgroup', 'old', 'program'].map(
+      scalar,
+    ),
     ...['rec_domain', 'sha_caddyfile', 'sha_site', 'sha_nginx', 'setup_caddy', 'setup_socket'].map(scalar),
     ...['group_from', 'group_to', 'file', 'config', 'ufile', 'tfile', 'packed'].map(scalar),
     ...['cr_bin', 'cr_cid', 'cr_cmd0', 'cr_cfg', 'cr_rel', 'cr_host', 'nx_bin', 'nx_conf'].map(scalar),
@@ -555,11 +559,14 @@ export function stepOneTemplates(w: Wanted): Record<string, string> {
 // ---------------------------------------------------------------------------------------------
 // The guard's lines
 
-/** A rely line's shape: what it checks, at which port. */
+/**
+ * A rely line's shape: what it checks, at which port. Every holder the board relies on has one at
+ * every port a plan looks at (a record's case is planned over whoever holds its ports now).
+ */
 export type RelyShape =
-  | { kind: 'free'; port: 80 | 443 | 8443 | 8480 | 8481; docker: boolean }
-  | { kind: 'program'; port: 80 | 443; program: 'caddy' | 'nginx' }
-  | { kind: 'container'; port: 443 | null }
+  | { kind: 'free'; port: Port; docker: boolean }
+  | { kind: 'program'; port: Port }
+  | { kind: 'container'; port: Port | null }
   | { kind: 'config' }
   | { kind: 'none'; what: 'user' | 'folder' | 'keys' }
 
@@ -567,38 +574,43 @@ export const relyKey = (r: RelyShape): string =>
   r.kind === 'free'
     ? `r.free.${r.port}.d${+r.docker}`
     : r.kind === 'program'
-      ? `r.program.${r.port}.${r.program}`
+      ? `r.program.${r.port}`
       : r.kind === 'container'
         ? `r.container.${r.port ?? 'none'}`
         : r.kind === 'none'
           ? `r.none.${r.what}`
           : 'r.config'
 
+const PORTS: readonly Port[] = [80, 443, 8443, 8480, 8481]
+
 export function relyShapes(): RelyShape[] {
   const out: RelyShape[] = []
-  for (const port of [80, 443, 8443, 8480, 8481] as const)
+  for (const port of PORTS) {
     for (const docker of [true, false]) out.push({ kind: 'free', port, docker })
-  out.push({ kind: 'program', port: 443, program: 'caddy' }, { kind: 'program', port: 80, program: 'nginx' })
-  out.push({ kind: 'container', port: 443 }, { kind: 'container', port: null }, { kind: 'config' })
+    out.push({ kind: 'program', port }, { kind: 'container', port })
+  }
+  out.push({ kind: 'container', port: null }, { kind: 'config' })
   for (const what of ['user', 'folder', 'keys'] as const) out.push({ kind: 'none', what })
   return out
 }
 
-/** One guard line's template (the board's relyLine), with its places: their container, their Caddyfile and its hash. */
+/** One guard line's template (the board's relyLine), with its places: the program or container that holds the port, their Caddyfile and its hash. */
 export function relyTemplate(r: RelyShape, w: Wanted): string {
   const render = (v: Record<string, Value>): string => {
     const rely: Rely =
       r.kind === 'container'
         ? { kind: 'container', port: r.port, id: str(v.cid) }
-        : r.kind === 'config'
-          ? { kind: 'config', path: str(v.file), sha: str(v.sha) }
-          : r.kind === 'none'
-            ? {
-                kind: 'none',
-                what: r.what,
-                name: r.what === 'user' ? w.user : r.what === 'folder' ? socketFolder(w.socket) : keysFile(w.user),
-              }
-            : r
+        : r.kind === 'program'
+          ? { kind: 'program', port: r.port, program: str(v.program) }
+          : r.kind === 'config'
+            ? { kind: 'config', path: str(v.file), sha: str(v.sha) }
+            : r.kind === 'none'
+              ? {
+                  kind: 'none',
+                  what: r.what,
+                  name: r.what === 'user' ? w.user : r.what === 'folder' ? socketFolder(w.socket) : keysFile(w.user),
+                }
+              : r
     return relyLine(rely).command
   }
   return templateOf(render, INPUTS, places(w, null))
