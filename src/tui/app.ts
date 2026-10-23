@@ -393,7 +393,9 @@ async function serve(tries = 8): Promise<void> {
 
 mkdirSync(cardsDir(), { recursive: true })
 mkdirSync(stateDir(), { recursive: true })
-writeFileSync(boardFile(), JSON.stringify({ pane: PANE, pid: process.pid, overlay: OVERLAY }))
+// host: the process that runs this board in its pane (run.ts, the pane's own), which outlives a
+// restart of this one; open.ts asks herdr whether it (or this process) is still in the pane.
+writeFileSync(boardFile(), JSON.stringify({ pane: PANE, pid: process.pid, host: process.ppid, overlay: OVERLAY }))
 process.on('SIGINT', () => quit())
 process.on('SIGTERM', () => quit())
 process.on('SIGHUP', () => quit())

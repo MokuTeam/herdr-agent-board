@@ -2,6 +2,7 @@
 // (Unix socket or Windows named pipe), so plugins should call herdr through it.
 import { execFile } from 'node:child_process'
 import { isAgentStatus } from '../core/board.ts'
+import type { PaneProcesses } from '../core/board-pane.ts'
 import type { AgentStatus } from '../core/types.ts'
 import { isRecord } from './json-store.ts'
 
@@ -195,6 +196,31 @@ export function asAgent(answer: unknown): HerdrAgent | null {
 /** The agent in a pane, or null when the pane has none. */
 export async function agentGet(pane: string, timeoutMs = 30_000): Promise<HerdrAgent | null> {
   return asAgent(await herdr(['agent', 'get', pane], timeoutMs))
+}
+
+const isPid = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0
+
+/**
+ * herdr's `pane process-info` answer as the board reads it: the pane's own process (`shell_pid`) and
+ * the foreground ones with a pid, each with its argv (its `cmdline` when there is no argv, else
+ * nothing). Null without the pane's own process: nothing to go by.
+ */
+export function asPaneProcesses(answer: unknown): PaneProcesses | null {
+  const info = isRecord(answer) ? answer.process_info : null
+  if (!isRecord(info) || !isPid(info.shell_pid)) return null
+  const list = Array.isArray(info.foreground_processes) ? info.foreground_processes : []
+  const foreground = list.flatMap(p => {
+    if (!isRecord(p) || !isPid(p.pid)) return []
+    const argv = Array.isArray(p.argv) ? p.argv.filter((a): a is string => typeof a === 'string') : []
+    const args = argv.length ? argv : typeof p.cmdline === 'string' && p.cmdline ? [p.cmdline] : []
+    return [{ pid: p.pid, args }]
+  })
+  return { shell: info.shell_pid, foreground }
+}
+
+/** What runs in a pane (herdr 0.9.5 and newer); null when herdr's answer says nothing to go by. */
+export async function paneProcesses(pane: string, timeoutMs = 10_000): Promise<PaneProcesses | null> {
+  return asPaneProcesses(await herdr(['pane', 'process-info', '--pane', pane], timeoutMs))
 }
 
 /** The names herdr's agents go by. */

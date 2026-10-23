@@ -26,8 +26,10 @@ const statePath = process.env.FAKE_HERDR_STATE ?? ''
 const args = process.argv.slice(2)
 appendFileSync(logPath, `${JSON.stringify(args)}\n`)
 const state = JSON.parse(readFileSync(statePath, 'utf8')) as Record<string, Reply | undefined>
+// The reply for the first four words (one pane's: `pane process-info --pane <id>`), else three, else two.
+const four = args.slice(0, 4).join(' ')
 const three = args.slice(0, 3).join(' ')
-const key = state[three] ? three : args.slice(0, 2).join(' ')
+const key = state[four] ? four : state[three] ? three : args.slice(0, 2).join(' ')
 let reply = state[key]
 if (!reply) throw new Error(`Unexpected fake command: ${args.join(' ')}`)
 // { until: ['tab close', ...], then: <reply> }: this reply until one of those commands was
