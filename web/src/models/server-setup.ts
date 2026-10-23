@@ -68,6 +68,8 @@ export interface SetupState {
   /** "Do it myself (one command)" open, and the command as the board made it. */
   oneshot: boolean
   got: OneshotGot
+  /** The public port Test connection found the board on after the command (443 or 8443); null before it did. */
+  byHand: number | null
   /** The steps by hand, for a server the board does not do: the case picked and the distribution (null: Look's, else Debian). */
   pick: SetupCase
   distro: Distro | null
@@ -87,6 +89,7 @@ export const SETUP_START: SetupState = {
   undoArmed: false,
   oneshot: false,
   got: ONESHOT_IDLE,
+  byHand: null,
   pick: '1',
   distro: null,
 }

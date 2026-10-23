@@ -145,6 +145,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.oneshotThen': 'Then:',
     'server.panel.oneshotMaking': 'Making the command…',
     'server.panel.oneshotFailed': 'The board could not make the command: {error}',
+    'server.panel.byHandDone': 'Set up by hand: the board answers at {address}',
     // ---- end of the panel's texts
     // the case Look found, in one line
     'server.case.1': "Nothing listens on 80 and 443: the board's own Caddy takes them, in Docker.",
@@ -541,6 +542,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.oneshotThen': 'Затем:',
     'server.panel.oneshotMaking': 'Готовлю команду…',
     'server.panel.oneshotFailed': 'Доска не смогла собрать команду: {error}',
+    'server.panel.byHandDone': 'Настроено вручную: доска отвечает по адресу {address}',
     // ---- конец текстов панели
     'server.case.1': 'На 80 и 443 никого: их займёт собственный Caddy доски в Docker.',
     'server.case.1b':

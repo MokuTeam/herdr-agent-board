@@ -21,7 +21,7 @@ import type { TestStep, TunnelConfig } from '../../../../src/core/tunnel.ts'
 import type { AccessSend } from '../../hooks/useAccess.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { hintText, stepLine } from '../../models/access.ts'
-import { loadOneshot, oneshotStamp, oneshotTest } from '../../models/server-oneshot.ts'
+import { foundPort, loadOneshot, oneshotStamp, oneshotTest } from '../../models/server-oneshot.ts'
 import {
   adminEdit,
   answerPatch,
@@ -258,6 +258,15 @@ export function ServerSetupBody({
     onState({ got: await loadOneshot(t, oneshotStamp(settings, view.tunnel.key.publicKey)) })
   }
 
+  /**
+   * "Do it myself"'s Test connection: with no setup on record, the board finds the public port
+   * the command set up and keeps it; where it answered, the part says the server was set up by hand.
+   */
+  async function testOneshot(): Promise<void> {
+    const reply = await send('test', oneshotTest(view))
+    onState({ byHand: foundPort(reply) })
+  }
+
   /** An admin field left: what changed goes to the board; refused or the same, the board's value shows again. */
   async function saveAdmin(field: 'user' | 'key', input: HTMLInputElement): Promise<void> {
     const before = s.admin[field]
@@ -427,7 +436,9 @@ export function ServerSetupBody({
         got={state.got}
         why={state.missing ? t('server.panel.needDomain') : ''}
         onToggle={open => void toggleOneshot(open)}
-        onTest={() => void send('test', oneshotTest(view))}
+        onTest={() => void testOneshot()}
+        byHand={state.byHand}
+        domain={view.tunnel.settings.domain}
         steps={steps}
         testing={testing}
       />

@@ -21,6 +21,7 @@ import {
   fieldEdit,
   hintText,
   isAccessView,
+  isTestStep,
   serverSnippets,
   statusLine,
   stepLine,
@@ -422,6 +423,24 @@ test('Test connection’s steps: a line each, the hint under the one that failed
   expect(stepLine({ id: 'forward', ok: true, detail: '', hint: null }, translator('ru'))).toBe(
     '✓ Сервер принимает сокет',
   )
+})
+
+test('a Test that found the public port ("Do it myself"): its domain step names the port, and is taken as a step', async () => {
+  const domain: TestStep = { id: 'domain', ok: true, detail: 'board.example.com:8443', hint: null, port: 8443 }
+  expect(isTestStep(domain)).toBe(true)
+  expect(isTestStep({ ...domain, port: '8443' })).toBe(false)
+  expect(isTestStep({ id: 'domain', ok: true, detail: '', hint: null })).toBe(true)
+  const steps: TestStep[] = [
+    { id: 'ssh', ok: true, detail: '', hint: null },
+    { id: 'forward', ok: true, detail: '', hint: null },
+    domain,
+  ]
+  const fetched = answers([200, { ok: true, steps, publicPort: 8443 }], [200, READY])
+  const source = accessSource({ t: () => t, toast: () => {} })
+  const reply = await source.send('test', { findPort: true })
+  expect(sent(fetched)[0]?.[3]).toEqual({ op: 'test', findPort: true })
+  expect(reply?.publicPort).toBe(8443)
+  expect(source.now.get().steps).toEqual(steps)
 })
 
 test('what a field sends: numbers for the ports, the domain lowercased, text trimmed; the same, nothing', () => {

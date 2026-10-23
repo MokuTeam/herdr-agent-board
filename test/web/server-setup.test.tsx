@@ -37,7 +37,13 @@ import { AccessBody } from '../../web/src/components/access/AccessPanel.tsx'
 import { ServerSetup, ServerSetupBody } from '../../web/src/components/access/ServerSetup.tsx'
 import { type AccessSend, accessSource } from '../../web/src/hooks/useAccess.ts'
 import { stepLine } from '../../web/src/models/access.ts'
-import { isOneshot, ONESHOT_PATH, oneshotTest } from '../../web/src/models/server-oneshot.ts'
+import {
+  byHandAddress,
+  foundPort,
+  isOneshot,
+  oneshotTest,
+  SERVER_COMMAND_PATH,
+} from '../../web/src/models/server-oneshot.ts'
 import {
   answerPatch,
   flowFill,
@@ -1121,10 +1127,13 @@ test('the Undo plan: in plain words, Docker and edited files only when ticked, U
 
 // ---------------------------------------------------------------- Do it myself (one command)
 
+// As GET /api/access/server-command answers (services/server-setup.ts oneshot).
 const ONESHOT = {
+  ok: true,
   command: 'echo H4sIAAAAAAAAA+1YbW/bNhD+7k== | base64 -d | gunzip | sh',
   script: '#!/bin/sh\n# agent-board: "Do it myself" as one command.\nset -eu\n',
   undoCommand: 'echo H4sIUNDO== | base64 -d | gunzip | sh',
+  undoScript: '#!/bin/sh\n# agent-board: Undo as one command.\nset -eu\n',
 }
 
 test('Do it myself (one command): folded; opened, the board’s command with Copy, what is inside, its Undo, then Test connection finding the port', async () => {
@@ -1132,15 +1141,23 @@ test('Do it myself (one command): folded; opened, the board’s command with Cop
   const steps: TestStep[] = [
     { id: 'ssh', ok: true, detail: '', hint: null },
     { id: 'forward', ok: true, detail: '', hint: null },
-    { id: 'domain', ok: true, detail: '', hint: null },
+    { id: 'domain', ok: true, detail: 'board.example.com:8443', hint: null, port: 8443 },
   ]
-  const live = liveServer(withServer({}), undefined, { steps })
+  // The board's answer to a Test that found the public port (services/remote-access.ts 'test').
+  const live = liveServer(
+    withServer({}),
+    op => (op === 'test' ? { ok: true, steps, publicPort: 8443 } : { ok: true }),
+    {
+      steps,
+    },
+  )
   expect(live.has('.access-oneshot-body')).toBe(false)
   expect(fetched).toEqual([])
   await live.toggle('details.access-oneshot')
   expect(live.state().oneshot).toBe(true)
-  // Asked for once, by the provisional route, with nothing else sent (everything is there already).
-  expect(sent(fetched)).toEqual([[ONESHOT_PATH, undefined, undefined, undefined]])
+  // Asked for once, by the board's route, with nothing else sent (everything is there already).
+  expect(SERVER_COMMAND_PATH).toBe('/api/access/server-command')
+  expect(sent(fetched)).toEqual([[SERVER_COMMAND_PATH, undefined, undefined, undefined]])
   expect(live.calls).toEqual([])
   expect(live.text('.access-oneshot-body .access-note')).toEqual([
     'Paste this into an ssh session on your server, as root (or a user with sudo).',
@@ -1150,25 +1167,67 @@ test('Do it myself (one command): folded; opened, the board’s command with Cop
   // One command to copy (the Undo command folded apart), what is inside readable.
   expect(live.text('.access-command .access-pre')).toEqual([ONESHOT.command, ONESHOT.undoCommand])
   expect(live.text('.access-command .access-copy')).toEqual(['Copy', 'Copy'])
-  expect(live.text('.access-inside summary')).toEqual(['What is inside (the script, readable)'])
-  expect(live.text('.access-inside .access-pre')).toEqual([ONESHOT.script])
-  expect(live.text('.access-undo-command summary')).toEqual(['To undo it later (one command too)'])
-  expect(live.text('.access-undo-command .access-pre')).toEqual([ONESHOT.undoCommand])
+  // What is inside: the command's script, and under its Undo command, Undo's.
+  expect(live.text('.access-inside summary')).toEqual([
+    'What is inside (the script, readable)',
+    'What is inside (the script, readable)',
+  ])
+  expect(live.text('.access-inside .access-pre')).toEqual([ONESHOT.script, ONESHOT.undoScript])
+  expect(live.text('.access-undo-command summary')).toEqual([
+    'To undo it later (one command too)',
+    'What is inside (the script, readable)',
+  ])
+  expect(live.text('.access-undo-command .access-pre')).toEqual([ONESHOT.undoCommand, ONESHOT.undoScript])
   expect(live.pick('details.access-inside').hasAttribute('open')).toBe(false)
-  // Then Test connection: with no setup on record, it asks the board to find the port.
+  expect(live.has('.access-oneshot-body .access-done')).toBe(false)
+  // Then Test connection: with no setup on record, it asks the board to find the port, and says
+  // where the board answered.
   await live.click('Test connection')
   expect(live.calls).toEqual([['test', { findPort: true }]])
   expect(live.text('.access-oneshot-body .access-marks')).toEqual([
     '✓ SSH to the server · ✓ The server takes the socket · ✓ The domain reaches this board',
   ])
+  expect(live.state().byHand).toBe(8443)
+  expect(live.text('.access-oneshot-body .access-done')).toEqual([
+    'Set up by hand: the board answers at https://board.example.com:8443',
+  ])
   expect(oneshotTest(withServer({}))).toEqual({ findPort: true })
   expect(oneshotTest(withServer({ setup: { case: '1', address: 'https://b', at: '2026-10-21' } }))).toEqual({})
+  expect(foundPort({ ok: true, steps, publicPort: 443 })).toBe(443)
+  expect(foundPort({ ok: true, steps, publicPort: null })).toBeNull()
+  expect(foundPort({ ok: true, steps })).toBeNull()
+  expect(foundPort(null)).toBeNull()
+  expect(byHandAddress('board.example.com', 443)).toBe('https://board.example.com')
   // Closed again: folded, nothing asked.
   await live.toggle('details.access-oneshot')
   expect(live.has('.access-oneshot-body')).toBe(false)
   expect(fetched).toHaveLength(1)
   expect(isOneshot(ONESHOT)).toBe(true)
   expect(isOneshot({ command: 'x', script: 'y' })).toBe(false)
+  expect(isOneshot({ command: 'x', script: 'y', undoCommand: 'z' })).toBe(false)
+})
+
+test('Do it myself (one command): a Test the board found nothing on says nothing of a setup by hand; one with a setup on record does not ask', async () => {
+  answers([200, ONESHOT])
+  const steps: TestStep[] = [
+    { id: 'ssh', ok: true, detail: '', hint: null },
+    { id: 'forward', ok: true, detail: '', hint: null },
+    { id: 'domain', ok: false, detail: '443: refused; 8443: refused', hint: 'tls' },
+  ]
+  const none = liveServer(withServer({}), op => (op === 'test' ? { ok: true, steps, publicPort: null } : { ok: true }))
+  await none.toggle('details.access-oneshot')
+  await none.click('Test connection')
+  expect(none.calls).toEqual([['test', { findPort: true }]])
+  expect(none.state().byHand).toBeNull()
+  expect(none.has('.access-oneshot-body .access-done')).toBe(false)
+
+  answers([200, ONESHOT])
+  const setup = { case: '1' as const, address: 'https://board.example.com', at: '2026-10-21T10:04:00.000Z' }
+  const recorded = liveServer(withServer({ setup }), () => ({ ok: true, steps }))
+  await recorded.toggle('details.access-oneshot')
+  await recorded.click('Test connection')
+  expect(recorded.calls).toEqual([['test', {}]])
+  expect(recorded.state().byHand).toBeNull()
 })
 
 test('Do it myself (one command) from an empty panel fills in what the command needs first; refused, it says why; no address, no command', async () => {
@@ -1179,7 +1238,7 @@ test('Do it myself (one command) from an empty panel fills in what the command n
     ['tunnel', { fields: { host: 'board.example.com', user: 'boardtunnel' } }],
     ['key-generate', {}],
   ])
-  expect(sent(fetched)).toEqual([[ONESHOT_PATH, undefined, undefined, undefined]])
+  expect(sent(fetched)).toEqual([[SERVER_COMMAND_PATH, undefined, undefined, undefined]])
   expect(live.text('.access-command .access-pre')[0]).toBe(ONESHOT.command)
 
   answers([409, { ok: false, error: 'The board’s key is missing' }])

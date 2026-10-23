@@ -131,7 +131,9 @@ export function isTestStep(v: unknown): v is TestStep {
     STEP_IDS.has(s.id) &&
     (typeof s.ok === 'boolean' || s.ok === null) &&
     typeof s.detail === 'string' &&
-    (typeof s.hint === 'string' || s.hint === null)
+    (typeof s.hint === 'string' || s.hint === null) &&
+    // the domain's step of a Test that found the public port ("Do it myself") names it
+    (s.port === undefined || typeof s.port === 'number')
   )
 }
 
