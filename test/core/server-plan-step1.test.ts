@@ -305,14 +305,23 @@ for (const distro of DISTROS) {
           { kind: 'group', path: '/var/lib/boardtunnel', from: 'boardtunnel', to: 'caddy' },
           { kind: 'keys', path: KEYS, dir: false },
           { kind: 'folder', path: '/var/lib/boardtunnel' },
-          { kind: 'line', file: '/etc/caddy/Caddyfile', line: 'import /etc/caddy/agent-board/board.caddy # agent-board' },
+          {
+            kind: 'line',
+            file: '/etc/caddy/Caddyfile',
+            line: 'import /etc/caddy/agent-board/board.caddy # agent-board',
+          },
         ],
       })
       const got = ids(undo(r, factsFor('2', distro)))
       const at = (id: string): number => got.indexOf(id)
       expect(at('group-back')).toBeLessThan(at('drop-fence'))
       expect(at('reload')).toBeLessThan(at('drop-fence'))
-      expect(got.slice(at('drop-fence'), at('drop-fence') + 4)).toEqual(['drop-fence', 'drop-keys', 'drop-folder', 'drop-user'])
+      expect(got.slice(at('drop-fence'), at('drop-fence') + 4)).toEqual([
+        'drop-fence',
+        'drop-keys',
+        'drop-folder',
+        'drop-user',
+      ])
     })
 
     test('what was there before the board stays: only that is left to the owner, by hand', () => {
