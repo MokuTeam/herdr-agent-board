@@ -29,6 +29,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { gunzipSync } from 'node:zlib'
 import { openAskpass, protectKey } from '../../src/adapters/ssh.ts'
 import { type AccessView, isAccessView } from '../../src/core/access.ts'
 import { fenceWanted } from '../../src/core/server-look.ts'
@@ -1041,6 +1042,12 @@ function paste(s: TestServer, which: 'apply' | 'undo', as: Login, answer: 'y' | 
   })
 }
 
+/** What the one command keeps in /tmp while it runs (its awk program, for awk -f): gone however it ended. */
+async function tmpLeft(s: TestServer): Promise<string> {
+  const out = await s.sh('ls -A /tmp | grep "^agent-board\\." || true')
+  return out.stdout.trim()
+}
+
 /** The one command and its Undo from the board (GET /api/access/server-command), put on the server as the owner pastes them. */
 async function commandsOnServer(b: Board, s: TestServer): Promise<string> {
   const [status, body] = await b.get('/api/access/server-command')
@@ -1076,6 +1083,9 @@ async function commandPath(
   const address = addressOf(want, o.domain)
   const four = address.endsWith(':8443')
   const command = await commandsOnServer(b, s)
+  // made before Test connection found the board's port: it holds none
+  const script = gunzipSync(Buffer.from(command.split(' ')[1] ?? '', 'base64')).toString('utf8')
+  expect(script).toContain(`# The board's address: https://${o.domain}\n`)
   const publicKey = (await b.view()).tunnel.key.publicKey
   if (!publicKey) throw new Error('no public key')
   const asks = (...more: string[]): string[] => [...(as === 'admin' ? ['sudo'] : []), ...more]
@@ -1084,12 +1094,21 @@ async function commandPath(
   const logins = await ownerLogins(s)
   const files = await s.hashes(sc.files)
 
+  // without a terminal (as root): said so, nothing changed, nothing of sh's own about /dev/tty
+  const notty = await s.exec(['sh', `${COMMAND_FILE}-apply`], { check: false })
+  expect(notty.code, notty.stdout.slice(-2000)).not.toBe(0)
+  expect(notty.stdout).toContain('there is no terminal here to ask on')
+  expect(`${notty.stdout}${notty.stderr}`).not.toContain('cannot create')
+  expect(await stepOne(s)).toEqual(empty)
+  expect(await tmpLeft(s)).toBe('')
+
   // "no": the plan said, nothing changed
   const no = await paste(s, 'apply', as, 'n')
   expect(no.code, no.stdout.slice(-2000)).not.toBe(0)
   expect(no.asked).toEqual(asks('ask'))
   expect(no.stdout).toContain('The plan:')
   expect(no.stdout).toContain('Stopped: nothing was changed.')
+  expect(await tmpLeft(s)).toBe('')
   expect(await stepOne(s)).toEqual(empty)
   expect(await leftovers(s, sc.files)).toBe('')
 
@@ -1098,6 +1117,7 @@ async function commandPath(
   expect(yes.code, yes.stdout.slice(-3000)).toBe(0)
   expect(yes.asked).toEqual(asks('ask'))
   expect(yes.stdout).toContain(`done: ${address}`)
+  expect(await tmpLeft(s)).toBe('')
   stepOneMade(await stepOne(s), empty, publicKey, o.include)
   if (!o.include) expect(await blockAtEnd(s)).toBe(true)
   expect(await ownerLogins(s)).toEqual(logins)
@@ -1134,6 +1154,14 @@ async function commandPath(
   expect(seen.plan?.kind).toBe('nothing')
   expect(seen.setup?.case).toBe(want)
 
+  // the command made before Test connection found the port, pasted again: set up already (case 4's
+  // 8443 is the record's own port, not a move there), nothing asked
+  const before = await paste(s, 'apply', as, null)
+  expect(before.code, before.stdout.slice(-2000)).toBe(0)
+  expect(before.asked).toEqual(asks())
+  expect(before.stdout).toContain(`Set up already: ${address}`)
+  expect(await tmpLeft(s)).toBe('')
+
   // pasted again, as the panel has it now (the public port Test found in it: case 4's 8443): set
   // up already, nothing asked
   await commandsOnServer(b, s)
@@ -1141,19 +1169,21 @@ async function commandPath(
   expect(again.code, again.stdout.slice(-2000)).toBe(0)
   expect(again.asked).toEqual(asks())
   expect(again.stdout).toContain(`Set up already: ${address}`)
+  expect(await tmpLeft(s)).toBe('')
 
   // the Undo command
   const undone = await paste(s, 'undo', as, 'y')
   expect(undone.code, undone.stdout.slice(-3000)).toBe(0)
   expect(undone.asked).toEqual(asks('ask'))
   expect(undone.stdout).toContain("undone: the board's setup is off this server.")
+  expect(await tmpLeft(s)).toBe('')
   expect(await stepOne(s)).toEqual(empty)
   expect(await leftovers(s, sc.files)).toBe('')
   expect(await s.hashes(sc.files)).toEqual(files)
   expect(await ownerLogins(s)).toEqual(logins)
   expect(await sitesAnswer(l, s, sc.sites)).toEqual([])
   expect(await sentinelOnServer(s)).toBe('')
-  return `the one command (${Math.round(command.length / 1024)} KB) as ${as} on a terminal${as === 'admin' ? ' (sudo asked its password there)' : ''}: "n" changed nothing; "y": done: ${address}; Test connection found ${String(found)}; the board's Look: nothing to change (case ${want} on record); again: set up already, nothing asked; the Undo command: step 1's parts gone, their files as before; sshd -T and the owner's logins as before`
+  return `the one command (${Math.round(command.length / 1024)} KB) as ${as} on a terminal${as === 'admin' ? ' (sudo asked its password there)' : ''}: with no terminal, said so; "n" changed nothing; "y": done: ${address}; Test connection found ${String(found)}; the board's Look: nothing to change (case ${want} on record); the command made before Test, and again as the panel has it now: set up already, nothing asked; the Undo command: step 1's parts gone, their files as before; sshd -T and the owner's logins as before`
 }
 
 /** One case on one distribution, from an empty server: the password path, then the one command. */

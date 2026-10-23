@@ -886,11 +886,16 @@ function record_item(p, folder,    kind, k, a, j, ok, m) {
   }
   return 0
 }
-function whose(    port, wport) {
+# no public port wanted: the one the record's case gives (its address that case's for the domain)
+function whose(    port) {
   if (REC_user != W_USER || REC_socket != W_SOCKET) return "other"
-  port = REC_port == "" ? 443 : REC_port; wport = W_PORT == "" ? 443 : W_PORT
-  return (REC_domain == W_DOMAIN && port + 0 == wport + 0) ? "same" : "update"
+  if (REC_domain != W_DOMAIN) return "update"
+  if (W_PORT == "") return REC_address == caseaddress(REC_case) ? "same" : "update"
+  port = REC_port == "" ? 443 : REC_port
+  return port + 0 == W_PORT + 0 ? "same" : "update"
 }
+# the board's address for a case (core/server-plan.ts ADDRESS)
+function caseaddress(c) { return "https://" W_DOMAIN (c == "4a" || c == "4b" ? ":8443" : "") }
 function holds_setup(    k) {
   if (REC_state != "rolled-back") return 1
   for (k = 1; k <= REC_n; k++) if (RI_kind[k] != "docker" && !(RI_kind[k] == "image" && RI_before[k])) return 1
@@ -1174,17 +1179,18 @@ function need(name) { if (!((name in VAL) || (name in VISLIST))) MISSING = name 
 # the guard's lines (core/server-plan.ts relyOn, relyLine), in RELIES
 function relyon(p) {
   if (isours(p)) return
-  if (HK[p] == "free") addrely("r.free." p ".d" (DOCKER ? 1 : 0), "")
-  else if (HK[p] == "container") addrely("r.container." p, HI[p])
-  else if (HK[p] == "unit" || HK[p] == "process") addrely("r.program." p "." HP[p], "")
+  if (HK[p] == "free") addrely("r.free." p ".d" (DOCKER ? 1 : 0), "", "")
+  else if (HK[p] == "container") addrely("r.container." p, HI[p], "")
+  else if (HK[p] == "unit" || HK[p] == "process") addrely("r.program." p, "", HP[p])
 }
-function relyconfig() { addrely("r.config", "") }
-function addrely(key, cid,    t, n, i, NAMES, had, was) {
+function relyconfig() { addrely("r.config", "", "") }
+function addrely(key, cid, program,    t, n, i, NAMES, had, was) {
   if (!(key in RELY)) { INTERNAL = INTERNAL " " key; return }
+  if (!safe(program)) REFUSE = REFUSE " program"
   # filled with its own values; the template's own stay as they were
-  n = split("cid file sha", NAMES, " ")
+  n = split("cid file sha program", NAMES, " ")
   for (i = 1; i <= n; i++) { had[i] = (NAMES[i] in VAL); was[i] = VAL[NAMES[i]] }
-  VAL["cid"] = cid; VAL["file"] = TC_file; VAL["sha"] = TC_sha
+  VAL["cid"] = cid; VAL["file"] = TC_file; VAL["sha"] = TC_sha; VAL["program"] = program
   t = filltext(RELY[key])
   for (i = 1; i <= n; i++) { if (had[i]) VAL[NAMES[i]] = was[i]; else delete VAL[NAMES[i]] }
   RELIES = RELIES (RELIES == "" ? "" : "\n") t
@@ -1362,11 +1368,14 @@ function dictline(l,    k) {
   if (startswith(l, "@@shape ")) { l = substr(l, 9); k = index(l " ", " "); SHAPE[substr(l, 1, k - 1)] = substr(l, k + 1); return }
   if (DCUR != "") TPL[DCUR, ++TPLN[DCUR]] = l
 }
-# the guard: the rely lines, nothing of its own on the record (core/server-plan.ts guard)
-function addguard(    n, L, i) {
+# the guard: the rely lines (guardlines, once they are all said), nothing of its own on the record
+# (core/server-plan.ts guard)
+function addguard() {
   NS = 1
   ST_id[1] = "guard"; ST_to[1] = 60; ST_bh[1] = 0; ST_nb[1] = 0; ST_title[1] = tx("server.step.guard.title")
   ST_sn[1] = 0; ST_kn[1] = 0; ST_un[1] = 0; ST_rn[1] = 0
+}
+function guardlines(    n, L, i) {
   if (RELIES != "") { n = split(RELIES, L, "\n"); for (i = 1; i <= n; i++) ST_s[1, ++ST_sn[1]] = L[i] }
 }
 # the next step: a template by its name, filled in
@@ -1590,16 +1599,6 @@ function main_r2(    key, adapt) {
   print "r2 " key
   printvalues()
 }
-function codeof(k) {
-  if (RI_kind[k] == "image") return RI_before[k] ? "" : (RI_ref[k] == CADDY_IMAGE ? "I1" : RI_ref[k] == SOCAT_IMAGE ? "I2" : "I?")
-  if (RI_kind[k] == "file") return RI_path[k] == CADDY_FILE ? "F1" : RI_path[k] == SITE_FILE ? "F2" : "F3"
-  if (RI_kind[k] == "volume") return RI_name[k] == VOLUME1 ? "V1" : "V2"
-  if (RI_kind[k] == "container") return RI_name[k] == CADDY_NAME ? "K1" : "K2"
-  if (RI_kind[k] == "group") return "G"
-  if (RI_kind[k] == "line") return "L"
-  if (RI_kind[k] == "block") return "B"
-  return ""
-}
 function own(c) { return c == "1" || c == "1b" || c == "4a" || c == "4b" }
 # the addresses of nginx's own port-80 listen lines, as the board's nginx file has them (core/server-texts.ts nginxFile)
 function nginxlisten(OUT,    i, F, nf, a, n, seen) {
@@ -1671,9 +1670,9 @@ function main_apply(    c, mine, old, who, docker, fetch, group, cand, update, r
   docker = own(c) ? DOCKER : 1
   fetch = 0; group = 0; cand = 0
   # step 1's parts still missing come first in the guard (core/server-plan.ts stepOneSteps)
-  if (NEED_user) addrely("r.none.user", "")
-  if (NEED_folder) addrely("r.none.folder", "")
-  if (NEED_keys == "make") addrely("r.none.keys", "")
+  if (NEED_user) addrely("r.none.user", "", "")
+  if (NEED_folder) addrely("r.none.folder", "", "")
+  if (NEED_keys == "make") addrely("r.none.keys", "", "")
   if (c == "4b" && H_fetch == "curl") { nh = fetchhosts(NX_n, NX_nn, W_DOMAIN, NH); fetch = nh > 0; if (fetch) setlist("nhosts", NH, nh) }
   if (c == "2" || c == "3a" || c == "3b") {
     nh = fetchhosts(CA_host, CA_hostn, W_DOMAIN, HH)
@@ -1697,7 +1696,7 @@ function main_apply(    c, mine, old, who, docker, fetch, group, cand, update, r
     setv("cid", TC_cid); setv("config", CA_config); setv("config_candidate", dirof(CA_config) "/.Caddyfile.agent-board")
     if (c == "3a") setv("network", NETWORK)
     setv("socat_hash", fnv(filltext(HASH["h.socat." (c == "3b" ? "host" : "net")])))
-    relyon(443); addrely("r.container.none", TC_cid); relyconfig()
+    relyon(443); addrely("r.container.none", TC_cid, ""); relyconfig()
     if (c == "3b") relyon(8481)
   }
   if (own(c)) {
@@ -1716,7 +1715,7 @@ function main_apply(    c, mine, old, who, docker, fetch, group, cand, update, r
   setv("plan_id", PLAN_ID); setv("run_id", RUN_ID)
   key = "a." c ".d" docker ".f" fetch ".g" group ".c" cand ".u" update ".r" rgid
   if (!(key in SHAPE)) { print "internal " key; return }
-  addguard()
+  addguard(); guardlines()
   if (NEED_user) addstep("x.user")
   if (NEED_folder) addstep("x.folder")
   if (NEED_keys == "make") addstep(S1_keysdir ? "x.keys.make" : "x.keys.makedir")
@@ -1725,7 +1724,7 @@ function main_apply(    c, mine, old, who, docker, fetch, group, cand, update, r
   n = split(SHAPE[key], S, " ")
   for (i = 1; i <= n; i++) addstep(S[i])
   if (broken()) return
-  address = c == "4a" || c == "4b" ? "https://" W_DOMAIN ":8443" : "https://" W_DOMAIN
+  address = caseaddress(c)
   warnings(c, hasstep("docker-install"), hasstep("fetch-before"))
   pplan(update ? "update" : "apply", c, address)
   print "plan " key
@@ -1746,7 +1745,61 @@ function withedit(    kind, i, k, file) {
   if (file == NUL || !isplainpath(file)) return
   k = ++REC_n; RI_kind[k] = kind; RI_file[k] = file; DD[++DDN] = k
 }
-function main_undo(    i, j, k, codes, code, edit, tc, theirs, cand, fetch, nfetch, HH, NH, nh, key, n, S, KN, made) {
+# Undo's steps for one item of the record, or its volumes, or the images the board pulled
+# (core/server-oneshot-templates.ts undoParts): a part's templates by its name, filled in
+function undopart(key,    n, S, i) {
+  if (!(key in SHAPE)) { if (UNKNOWN == "") UNKNOWN = key; return }
+  n = split(SHAPE[key], S, " ")
+  for (i = 1; i <= n; i++) addstep(S[i])
+}
+# their Caddyfile's line or block taken out, by what Look finds of their Caddy now (theirs: the
+# guard relies on it as it is)
+function undoedit(k, tc,    theirs, cand, fetch, nh, HH) {
+  setv("ufile", RI_file[k]); setv("ufile_candidate", dirof(RI_file[k]) "/.Caddyfile.agent-board")
+  theirs = "none"; cand = 0; fetch = 0
+  if (tc && TC_file == RI_file[k]) {
+    theirs = CA_where
+    cand = CA_where == "container" && TC_cand
+    nh = fetchhosts(CA_host, CA_hostn, REC_domain, HH)
+    fetch = TC_fetch && nh > 0
+    if (fetch) setlist("hosts", HH, nh)
+    setv("sha", TC_sha); setv("addr_r", resolveat(TC_address))
+    if (CA_where == "unit") { setv("bin", TC_bin); setv("user", TC_user) }
+    else { setv("cid", TC_cid); setv("config", CA_config); setv("config_candidate", dirof(CA_config) "/.Caddyfile.agent-board") }
+    relyconfig(); relyon(443)
+  } else if (tc) { theirs = "other"; setv("tfile", TC_file) }
+  undopart("u." (RI_kind[k] == "line" ? "L" : "B") ".t" theirs ".c" cand ".f" fetch)
+}
+# a file of the board's: Caddy's, nginx's (its sites fetched around it), or the site file, which
+# stays while a Caddyfile imports it (the record's lines' files, their Caddy's)
+function undofile(k, tc,    nh, NH, n, i, IMP, seen) {
+  if (RI_path[k] == CADDY_FILE) { setv("sha_caddyfile", RI_sha[k]); undopart("u.F1"); return }
+  if (RI_path[k] == NGINX_FILE) {
+    setv("sha_nginx", RI_sha[k])
+    nh = H_fetch == "curl" ? fetchhosts(NX_n, NX_nn, REC_domain, NH) : 0
+    if (nh) setlist("nhosts", NH, nh)
+    undopart("u.F3.n" (nh > 0 ? 1 : 0)); return
+  }
+  setv("sha_site", RI_sha[k])
+  n = 0
+  for (i = 1; i <= DDN; i++) if (RI_kind[DD[i]] == "line" && !(RI_file[DD[i]] in seen)) { seen[RI_file[DD[i]]] = 1; IMP[++n] = RI_file[DD[i]] }
+  if (tc && !(TC_file in seen)) IMP[++n] = TC_file
+  if (n) setlist("importers", IMP, n)
+  undopart("u.F2.i" (n ? 1 : 0))
+}
+# the record's volumes in one step, in its order
+function undovolumes(    i, codes) {
+  codes = ""
+  for (i = 1; i <= DDN; i++) if (RI_kind[DD[i]] == "volume") codes = codes (RI_name[DD[i]] == VOLUME1 ? "V1" : "V2")
+  undopart("u.V." codes)
+}
+# the images the board pulled in one step (none: no step), in the record's order
+function undoimages(    i, n) {
+  n = 0
+  for (i = 1; i <= DDN; i++) if (RI_kind[DD[i]] == "image" && !RI_before[DD[i]]) setv("img" (++n), RI_ref[DD[i]])
+  if (n) undopart("u.I." n)
+}
+function main_undo(    i, j, k, kind, tc, n, KN, made, done) {
   if (!round_one()) { print "unreadable"; return }
   caddy_target(); nginx_target()
   if (!round_two()) { print "unreadable"; return }
@@ -1755,45 +1808,28 @@ function main_undo(    i, j, k, codes, code, edit, tc, theirs, cand, fetch, nfet
   if (!setup_record() || whose() == "other") { stop("otherSetup"); return }
   if (REC_state == "running" && LOCK_held) { print "busy"; return }
   dedupe(); withedit()
-  codes = ""; edit = 0
-  for (i = 1; i <= DDN; i++) {
-    k = DD[i]; code = codeof(k)
-    if (code == "") continue
-    codes = codes code
-    if (code == "F1") setv("sha_caddyfile", RI_sha[k])
-    if (code == "F2") setv("sha_site", RI_sha[k])
-    if (code == "F3") setv("sha_nginx", RI_sha[k])
-    if (code == "K1") setv("setup_caddy", RI_setup[k])
-    if (code == "K2") setv("setup_socket", RI_setup[k])
-    if (code == "G") { setv("group_from", RI_from[k]); setv("group_to", RI_to[k]) }
-    if (code == "L" || code == "B") { edit = k; setv("ufile", RI_file[k]); setv("ufile_candidate", dirof(RI_file[k]) "/.Caddyfile.agent-board") }
-  }
-  tc = theircaddy(); theirs = "none"; cand = 0; fetch = 0
-  if (edit && tc) {
-    if (TC_file == RI_file[edit]) {
-      theirs = CA_where
-      cand = CA_where == "container" && TC_cand
-      nh = fetchhosts(CA_host, CA_hostn, REC_domain, HH)
-      fetch = TC_fetch && nh > 0
-      if (fetch) setlist("hosts", HH, nh)
-      setv("sha", TC_sha); setv("addr_r", resolveat(TC_address))
-      if (CA_where == "unit") { setv("bin", TC_bin); setv("user", TC_user) }
-      else { setv("cid", TC_cid); setv("config", CA_config); setv("config_candidate", dirof(CA_config) "/.Caddyfile.agent-board") }
-      relyconfig(); relyon(443)
-    } else { theirs = "other"; setv("tfile", TC_file) }
-  }
-  nfetch = 0
-  if (index(codes, "F3") && H_fetch == "curl") { nh = fetchhosts(NX_n, NX_nn, REC_domain, NH); nfetch = nh > 0; if (nfetch) setlist("nhosts", NH, nh) }
+  tc = theircaddy()
   setv("rec_domain", REC_domain)
   k = REC_address; sub(/^[a-z]+:\/\//, "", k); sub(/[:\/].*$/, "", k); RECHOST = k
   setv("plan_id", PLAN_ID); setv("run_id", RUN_ID)
-  key = "u." (codes == "" ? "0" : codes) ".t" theirs ".c" cand ".f" fetch ".n" nfetch
-  if (!(key in SHAPE)) { print "unknown " key; return }
+  # the guard first, its lines once the items' parts have said what they rely on
   addguard()
-  n = split(SHAPE[key], S, " ")
-  for (i = 1; i <= n; i++) addstep(S[i])
-  # step 1's parts the board made, after the case's: the fence, the keys file, the folder, the user
-  split("fence keys folder user", KN, " ")
+  # the record's items newest first, each its own steps (core/server-plan.ts undoPlan); step 1's
+  # parts after them all
+  for (i = DDN; i >= 1; i--) {
+    k = DD[i]; kind = RI_kind[k]
+    if (kind == "line" || kind == "block") undoedit(k, tc)
+    else if (kind == "file") undofile(k, tc)
+    else if (kind == "container") undopart(RI_name[k] == CADDY_NAME ? "u.K1" : "u.K2")
+    else if (kind == "group") { setv("group_from", RI_from[k]); setv("group_to", RI_to[k]); undopart("u.G") }
+    else if ((kind == "volume" || kind == "image") && !(kind in done)) {
+      done[kind] = 1
+      if (kind == "volume") undovolumes(); else undoimages()
+    }
+  }
+  guardlines()
+  # step 1's parts the board made, after the case's: the keys file, the fence, the folder, the user
+  split("keys fence folder user", KN, " ")
   for (j = 1; j <= 4; j++) for (i = DDN; i >= 1; i--) {
     k = DD[i]
     if (RI_kind[k] != KN[j]) continue
@@ -1805,9 +1841,10 @@ function main_undo(    i, j, k, codes, code, edit, tc, theirs, cand, fetch, nfet
   addstep("y.forget")
   # what was there before the board made anything of step 1 is the owner's to remove
   if (!(("fence" in made) && ("keys" in made) && ("folder" in made) && ("user" in made))) addstep("y.byhand")
+  if (UNKNOWN != "") { print "unknown " UNKNOWN; return }
   if (broken()) return
   pplan("undo")
-  print "plan " key
+  print "plan undo"
   print "address " REC_address
   titles()
   carryall()
@@ -1904,6 +1941,9 @@ END {
     if (RESULT == "rollback-failed") exit 2
     if (RESULT == "busy") exit 3
     if (RESULT == "changed") exit 4
+    # no result: stopped before any change (the guard failed, told to stop right after it, the
+    # launch could not write the run; core/server-script.ts runScript, launchScript), or lost
+    if (EXITC == 3 || EXITC == 143 || EXITC == 70) exit 6
     exit 5
   }
 }

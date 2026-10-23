@@ -13,7 +13,7 @@ import { gunzipSync, gzipSync } from 'node:zlib'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { useLanguage as switchLanguage, t } from '../../src/core/lang.ts'
 import type { ServerFacts } from '../../src/core/server-facts.ts'
-import { lookScript2, readRoundOne, readServerFacts } from '../../src/core/server-look.ts'
+import { lookScript1, lookScript2, readRoundOne, readServerFacts } from '../../src/core/server-look.ts'
 import { oneLine, oneshotAwk, oneshotDictionary, oneshotScripts } from '../../src/core/server-oneshot.ts'
 import { launchTemplate, lookKey, lookShapes, lookTemplate } from '../../src/core/server-oneshot-templates.ts'
 import { type PlainPlan, plainPlan } from '../../src/core/server-plain.ts'
@@ -270,6 +270,19 @@ function mutations(): Scenario[] {
       unit.r1.replace(/^@@dir 2750 boardtunnel boardtunnel /m, '@@dir 2750 boardtunnel caddy '),
     ),
     m('members', bare, bare.r1.replace(/^@@group boardtunnel:x:(\d+):$/m, '@@group boardtunnel:x:$1:alice,bob')),
+    // their names reach the steps as the board's own scripts have them: one shell word, quoted
+    m('a unit group that needs quoting', unit, unit.r1.replace(/^Group=caddy$/m, 'Group=web;id')),
+    m(
+      'a unit user that needs quoting',
+      unit,
+      unit.r1.replace(/^User=caddy$/m, 'User=web user').replace(/^Group=caddy$/m, 'Group='),
+    ),
+    m(
+      'a folder group that needs quoting',
+      unit,
+      unit.r1.replace(/^@@dir 2750 boardtunnel boardtunnel /m, '@@dir 2750 boardtunnel old;grp '),
+    ),
+    m('a network that needs quoting', folder, folder.r1.replaceAll('web_default', 'web;id')),
     m('domain served', unit, unit.r1, unit.r2.replace('"host":["a.example.com"]', '"host":["board.example.com"]')),
     m(
       'their sites on a v6 address',
@@ -371,6 +384,19 @@ function mutations(): Scenario[] {
       ),
     ),
     m('set up already', folder, withRecord(folder, { case: '3a', items: blockItems('/srv/my web/Caddyfile') })),
+    // the record's case over whoever holds the ports now (an update): the guard relies on each as it is
+    ...['dummy80', 'apache', 'caddy-bridge', 'nginx-443', 'compose-folder', 'caddy-unit'].flatMap(name => {
+      const s = byName(`debian13/${name}`)
+      const old = { domain: 'old.example.com', items: OWN_ITEMS }
+      return [
+        m('set up for another domain in case 1', s, withRecord(s, { ...old, address: 'https://old.example.com' })),
+        m(
+          'set up for another domain in case 4a',
+          s,
+          withRecord(s, { ...old, case: '4a', publicPort: 8443, address: 'https://old.example.com:8443' }),
+        ),
+      ]
+    }),
     m('set up already', file, withRecord(file, { case: '3a', items: blockItems('/srv/web/Caddyfile') })),
     m('set up already', host, withRecord(host, { case: '3b', items: blockItems('/srv/caddy/Caddyfile') })),
     m(
@@ -694,28 +720,112 @@ describe('Apply: the case, the reasons, the plan in plain words and the run the 
   }
 })
 
+/** The Undo command on a scenario: the run, the titles and the plain words of the board's Undo. */
+function sameUndo(s: Scenario) {
+  const r1 = readRoundOne(s.r1)
+  if (!r1) return
+  const r2 = lookScript2(r1, LOOK) === null ? '' : s.r2
+  const facts = readServerFacts(r1, r2)
+  if (!facts) return
+  const a = awk('undo', looked(s.r1, r2))
+  expect(a.err).toBe('')
+  const d = decision(a.out)
+  if (facts.record === null || facts.record === undefined) return expect(d).toBe('nothing')
+  const r = setupRecord(facts.record)
+  if (!r || whose(r, W) === 'other') return expect(d).toBe('stop otherSetup')
+  if (r.state === 'running' && facts.lockHeld) return expect(d).toBe('busy')
+  expect(d.startsWith('plan ')).toBe(true)
+  const p = undoPlan(r, facts, { id: IDS.plan, removeDocker: false, removeEdited: false })
+  expect(parts(a.out).run).toBe(runScript(p, W, { id: IDS.run, at: IDS.at }))
+  expect(said(a.out, 'title')).toEqual(titles(p))
+  expect(plainOf(a.out)).toEqual(plainPlan(facts, p, W, t))
+}
+
 describe('Undo: the run the board’s Undo would make, and what it says', () => {
-  for (const s of SCENARIOS) {
-    test(s.name, () => {
-      const r1 = readRoundOne(s.r1)
-      if (!r1) return
-      const r2 = lookScript2(r1, LOOK) === null ? '' : s.r2
-      const facts = readServerFacts(r1, r2)
-      if (!facts) return
-      const a = awk('undo', looked(s.r1, r2))
-      expect(a.err).toBe('')
-      const d = decision(a.out)
-      if (facts.record === null || facts.record === undefined) return expect(d).toBe('nothing')
-      const r = setupRecord(facts.record)
-      if (!r || whose(r, W) === 'other') return expect(d).toBe('stop otherSetup')
-      if (r.state === 'running' && facts.lockHeld) return expect(d).toBe('busy')
-      expect(d.startsWith('plan ')).toBe(true)
-      const p = undoPlan(r, facts, { id: IDS.plan, removeDocker: false, removeEdited: false })
-      expect(parts(a.out).run).toBe(runScript(p, W, { id: IDS.run, at: IDS.at }))
-      expect(said(a.out, 'title')).toEqual(titles(p))
-      expect(plainOf(a.out)).toEqual(plainPlan(facts, p, W, t))
-    })
+  for (const s of SCENARIOS) test(s.name, () => sameUndo(s))
+})
+
+// ---------------------------------------------------------------------------------------------
+// Records no whole run leaves, which the board's Undo plans all the same
+
+const NGINX_FILE_ITEM: RecordItem = {
+  kind: 'file',
+  path: '/etc/nginx/conf.d/agent-board.conf',
+  sha256: 'ef'.repeat(32),
+}
+/** An image an older board pulled (another release of Caddy): the board's own to remove. */
+const OLDER_IMAGE: Extract<RecordItem, { kind: 'image' }> = { kind: 'image', ref: 'caddy:2.10.2', before: false }
+
+/** Each subset of the items, by the bits of its number. */
+const subsets = (items: readonly RecordItem[]): RecordItem[][] =>
+  Array.from({ length: 1 << items.length }, (_, mask) => items.filter((_x, i) => mask & (1 << i)))
+
+function leftRecords(): Scenario[] {
+  const bare = byName('debian13/bare')
+  const unit = byName('debian13/caddy-unit')
+  const folder = byName('debian13/compose-folder')
+  const host = byName('debian13/caddy-host')
+  const nginx = byName('debian13/nginx-80-443')
+  const out: Scenario[] = []
+  const add = (name: string, s: Scenario, r: Partial<SetupRecord> & { items: RecordItem[] }): void => {
+    out.push({ name: `${s.name} ${name}`, r1: withRecord(s, r), r2: s.r2 })
   }
+  const four = { case: '4b', publicPort: 8443, address: `https://${W.domain}:8443` } as const
+  const sets: [Scenario, Partial<SetupRecord>, RecordItem[]][] = [
+    [bare, {}, OWN_ITEMS],
+    [unit, { case: '2' }, UNIT_ITEMS],
+    [folder, { case: '3a' }, blockItems('/srv/my web/Caddyfile')],
+    [host, { case: '3b' }, blockItems('/srv/caddy/Caddyfile')],
+    [nginx, four, [...OWN_ITEMS.slice(1), NGINX_FILE_ITEM]],
+  ]
+  for (const [s, head, items] of sets) {
+    // a rollback that did not finish: any of its run's items left
+    subsets(items).forEach((left, k) => {
+      add(`rollback failed, items ${k}`, s, { ...head, state: 'rollback-failed', items: left })
+    })
+    // an update cut short after each of its steps: the old items, then the new ones made again so far
+    for (let k = 1; k <= items.length; k++) {
+      add(`update cut short after ${k}`, s, { ...head, state: 'running', items: [...items, ...items.slice(0, k)] })
+      add(`update rolled back half after ${k}`, s, {
+        ...head,
+        state: 'rollback-failed',
+        items: [...items, ...items.slice(0, k).reverse()],
+      })
+    }
+    // runs of several boards, in another order
+    add('items in another order', s, { ...head, items: [...items].reverse() })
+  }
+  // step 1's parts among them, and images an older board pulled
+  add('rollback failed, step 1 and two pulled images', bare, {
+    state: 'rollback-failed',
+    items: [STEP_ONE_ITEMS[2] as RecordItem, OLDER_IMAGE, ...OWN_ITEMS.slice(1, 3), STEP_ONE_ITEMS[3] as RecordItem],
+  })
+  add('an older board’s image there before, then pulled', bare, {
+    items: [{ ...OLDER_IMAGE, before: true }, ...OWN_ITEMS, OLDER_IMAGE],
+  })
+  add('the socket helper’s image, then Caddy’s', folder, {
+    case: '3a',
+    state: 'rollback-failed',
+    items: [blockItems('/srv/my web/Caddyfile')[0] as RecordItem, CADDY_IMAGE_ITEM, OLDER_IMAGE],
+  })
+  // a line in another Caddyfile than the one Look finds now, and one in theirs
+  add('lines in two Caddyfiles', unit, {
+    case: '2',
+    state: 'rollback-failed',
+    items: [
+      ...UNIT_ITEMS,
+      { kind: 'line', file: '/srv/old/Caddyfile', line: 'import /etc/caddy/agent-board/board.caddy # agent-board' },
+    ],
+  })
+  add('a block and a line', folder, {
+    case: '3a',
+    items: [...UNIT_ITEMS.slice(0, 1), ...blockItems('/srv/my web/Caddyfile'), ...UNIT_ITEMS.slice(3)],
+  })
+  return out
+}
+
+describe('Undo of a record no whole run leaves (a rollback that did not finish, an update cut short)', () => {
+  for (const s of leftRecords()) test(s.name, () => sameUndo(s))
 })
 
 describe('the plan in plain words, in the board’s language', () => {
@@ -770,6 +880,20 @@ describe('a tunnel user that is a login people use', () => {
   })
 })
 
+describe('a case-4 command made before Test connection found the board’s port', () => {
+  test('pasted again after its setup: set up already at 8443, as the board says, not a move there', () => {
+    expect(W.publicPort).toBeNull()
+    for (const name of ['ubuntu2604/nginx-443 set up already', 'debian13/nginx-80-443 set up already']) {
+      const s = SCENARIOS.find(x => x.name === name)
+      if (!s) throw new Error(`no scenario ${name}`)
+      const facts = readServerFacts(readRoundOne(s.r1) as NonNullable<ReturnType<typeof readRoundOne>>, s.r2)
+      const r = setupRecord(facts?.record) as SetupRecord
+      expect([name, whose(r, W)]).toEqual([name, 'same'])
+      expect([name, decision(awk('apply', looked(s.r1, s.r2)).out)]).toEqual([name, `same https://${W.domain}:8443`])
+    }
+  })
+})
+
 describe('without the board’s key', () => {
   test('no step 1, as the board: a server without the socket’s folder is the owner’s', () => {
     const { publicKey: _, ...noKey } = W
@@ -797,15 +921,37 @@ describe('the command', () => {
   const scripts = oneshotScripts(INPUT)
   const gzip = (b: Uint8Array): Uint8Array => gzipSync(b, { level: 9 })
 
-  test('one line, base64 behind a fixed pipe, that decodes to the script', () => {
-    for (const script of [scripts.script, scripts.undoScript]) {
+  /** Both scripts, in each of the board's languages. */
+  const both = (['en', 'ru'] as const).flatMap(lang => {
+    const s = inLanguage(lang, () => oneshotScripts(INPUT))
+    return [
+      { name: `${lang} apply`, script: s.script },
+      { name: `${lang} undo`, script: s.undoScript },
+    ]
+  })
+
+  test('one line, base64 behind a fixed pipe, that decodes to the script, in each language', () => {
+    for (const { name, script } of both) {
       const line = oneLine(script, gzip)
       expect(line).toMatch(/^echo [A-Za-z0-9+/=]+ \| base64 -d \| gunzip \| sh$/)
       const b64 = line.split(' ')[1] ?? ''
       expect(gunzipSync(Buffer.from(b64, 'base64')).toString('utf8')).toBe(script)
       // tens of KB paste into a terminal; hundreds do not
-      expect(line.length).toBeLessThan(80_000)
+      expect([name, line.length < 80_000]).toEqual([name, true])
     }
+  })
+
+  test('without a terminal to ask on, it says so, and stops before any change', () => {
+    for (const { name, script } of both) {
+      // the terminal tried quietly first (sh's own "cannot create /dev/tty" not shown)
+      expect([name, script]).toEqual([
+        name,
+        expect.stringContaining('if ! { true >/dev/tty; } 2>/dev/null; then return 2; fi'),
+      ])
+      expect([name, script]).toEqual([name, expect.stringContaining('if [ "$a" = 2 ]; then say \'\' ')])
+    }
+    expect(scripts.script).toContain(t('server.oneshot.noTerminal'))
+    expect(scripts.undoScript).toContain(t('server.oneshot.noTerminal'))
   })
 
   test('it carries what the board knows', () => {
@@ -820,16 +966,30 @@ describe('the command', () => {
     }
   })
 
-  test('POSIX sh, and the awk program fits one argument of a command line', () => {
+  test('POSIX sh; the awk program in a file of its own, gone when the script ends; no argument near Linux’s 128 KiB', () => {
     const SH = Bun.which('dash') ?? Bun.which('sh')
-    if (SH)
-      for (const script of [scripts.script, scripts.undoScript]) {
+    const bytes = (text: string): number => new TextEncoder().encode(text).length
+    for (const { name, script } of both) {
+      if (SH) {
         const r = Bun.spawnSync([SH, '-n'], { stdin: new TextEncoder().encode(script), stderr: 'pipe' })
-        expect(r.stderr.toString()).toBe('')
-        expect(r.exitCode).toBe(0)
+        expect([name, r.stderr.toString(), r.exitCode]).toEqual([name, '', 0])
       }
-    // Linux takes 128 KiB in one argument
-    expect(new TextEncoder().encode(oneshotAwk(INPUT)).length).toBeLessThan(120_000)
+      // the program (100 KB and more, too close to Linux's 128 KiB for one argument) is awk's -f
+      expect(script).toContain(`AWKF=$(mktemp "\${TMPDIR:-/tmp}/agent-board.XXXXXXXX")`)
+      expect(script).toContain(`trap 'rm -f "$AWKF"' EXIT`)
+      expect(script).toContain(`cat > "$AWKF" <<'AGENT_BOARD_AWK'`)
+      expect(script).not.toContain('"$AWKP"')
+      for (const l of script.split('\n').filter(x => /(^|[ (|])awk -v mode=/.test(x)))
+        expect([name, l]).toEqual([name, expect.stringContaining('-f "$AWKF"')])
+    }
+    // what does go as one argument (sh -c): Look's rounds, the launch (whose run is packed)
+    for (const lang of ['en', 'ru'] as const) {
+      const program = inLanguage(lang, () => oneshotAwk(INPUT))
+      expect(bytes(program)).toBeGreaterThan(64_000)
+      expect(bytes(lookScript1({ ...LOOK, publicKey: KEY }))).toBeLessThan(64_000)
+      for (const s of lookShapes()) expect(bytes(lookTemplate(s, LOOK))).toBeLessThan(64_000)
+      expect(bytes(LAUNCH)).toBeLessThan(16_000)
+    }
   })
 })
 
@@ -862,6 +1022,18 @@ describe('the run’s progress, as the owner reads it', () => {
     )
     expect(awk('progress', '@@busy\n@@exit 75', { AB_TITLES: titles }).code).toBe(3)
     expect(awk('progress', '', { AB_TITLES: titles }).code).toBe(5)
+    // stopped before any change, with no result said: the guard failed (3), told to stop right
+    // after it (143), the launch could not write the run (70): nothing was changed, not lost
+    for (const exit of [3, 143, 70])
+      expect([
+        exit,
+        awk('progress', `@@step 1 start\n@@step 1 fail\n@@exit ${exit}`, { AB_TITLES: titles }).code,
+      ]).toEqual([exit, 6])
+    expect(awk('progress', '@@exit 70', { AB_TITLES: titles }).code).toBe(6)
+    // a run that ended some other way without a result: lost, as before
+    expect(awk('progress', '@@step 1 start\n@@step 1 ok\n@@step 2 start\n@@exit 137', { AB_TITLES: titles }).code).toBe(
+      5,
+    )
   })
 
   test('Undo’s by-hand step said to stay, not “in place already”', () => {
@@ -885,12 +1057,17 @@ describe('where the command stops where the board would go on', () => {
     expect(parts(a.out).run).toBeNull()
   })
 
-  test('a record whose items no run of the board leaves: the Undo command has no plan for it', () => {
+  test('more images the board pulled than the command takes off in one step: it has no plan, and changes nothing', () => {
     const s = byName('debian13/bare')
-    const r1 = withRecord(s, { items: [{ kind: 'volume', name: 'agent-board-caddy-data' }] })
+    const images: RecordItem[] = Array.from({ length: 7 }, (_, k) => ({
+      kind: 'image',
+      ref: `caddy:2.${k}.0`,
+      before: false,
+    }))
+    const r1 = withRecord(s, { state: 'rollback-failed', items: images })
     const a = awk('undo', looked(r1, ''))
     // the script says so (server.oneshot.undo.unknown) and changes nothing
-    expect(decision(a.out)).toBe('unknown u.V1.tnone.c0.f0.n0')
+    expect(decision(a.out)).toBe('unknown u.I.7')
     expect(parts(a.out).run).toBeNull()
   })
 })

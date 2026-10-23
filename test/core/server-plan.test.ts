@@ -212,7 +212,14 @@ for (const distro of DISTROS) {
       expect(whose(r, W)).toBe('same')
       expect(whose(r, { ...W, domain: 'new.example.com' })).toBe('update')
       expect(whose(recordFor('4a'), { ...W, publicPort: 8443 })).toBe('same')
-      expect(whose(recordFor('4a'), W)).toBe('update')
+      // no public port wanted (the panel's before Test connection found it, a command copied then):
+      // the one the record's case gives, its address the record's own
+      expect(whose(recordFor('4a'), W)).toBe('same')
+      expect(whose(recordFor('4b'), W)).toBe('same')
+      expect(whose(recordFor('4a', { address: 'https://board.example.com' }), W)).toBe('update')
+      // a public port wanted that the record does not have
+      expect(whose(recordFor('4a'), { ...W, publicPort: 443 })).toBe('update')
+      expect(whose(r, { ...W, publicPort: 8443 })).toBe('update')
       expect(whose(r, { ...W, user: 'other' })).toBe('other')
       expect(whose(r, { ...W, socket: '/var/lib/other/board.sock' })).toBe('other')
     })

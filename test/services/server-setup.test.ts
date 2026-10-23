@@ -476,6 +476,28 @@ for (const distro of DISTROS) {
     })
   })
 
+  describe(`a case-4 setup the panel has no public port for, on ${distro} (${flavor})`, () => {
+    test('set up from another PC or by the one command: set up already, not a move to 8443; the port taken from the record', async () => {
+      const b = await useBoard({ uid: 0, flavor })
+      expect(b.tunnel().publicPort).toBeUndefined()
+      const set = withRecord(b.fake.dir, distro, 'nginx-443', {
+        case: '4a',
+        publicPort: 8443,
+        address: 'https://board.example.com:8443',
+        items: [{ kind: 'container', name: 'agent-board-caddy', setup: 'r1' }],
+      })
+      b.server({ fixture: set })
+      expect(await b.look()).toEqual(OK)
+      expect(planOf(b.setup)).toMatchObject({ kind: 'apply', case: '4a', address: 'https://board.example.com:8443' })
+      expect(b.tunnel().setup).toEqual({
+        case: '4a',
+        address: 'https://board.example.com:8443',
+        at: '2026-10-21T10:04:00.000Z',
+      })
+      expect(b.tunnel().publicPort).toBe(8443)
+    })
+  })
+
   describe(`Apply and Undo on ${distro} (${flavor})`, () => {
     test('a plan from before (or another board’s life), Docker not ticked, one run at a time', async () => {
       const b = await useBoard({ uid: 0, flavor, fixture: fixture(distro, 'nodocker') })
@@ -1206,6 +1228,36 @@ describe('the admin’s login by password (the simple-setup spec)', () => {
     await b.until(['done', 'failed'])
     expect(b.setup.view()).toMatchObject({ phase: 'failed', hint: 'sudoPassword' })
     expect(b.setup.view().progress?.steps.every(s => s.state === 'waiting')).toBe(true)
+  })
+
+  test('a login password that is a word Look prints (debian): Look reads the server’s lines as they are; the run’s output shown masked', async () => {
+    const b = await useBoard(
+      { uid: 0, publickey: true, login: { password: 'debian' }, fixture: fixture('debian13', 'caddy-unit') },
+      ROOT,
+    )
+    expect(await b.look({ password: 'debian' })).toEqual(OK)
+    expect(b.setup.view()).toMatchObject({ phase: 'plan', hint: null, choice: { case: '2' } })
+    expect(b.setup.view().facts?.distro).toMatchObject({ id: 'debian', supported: true })
+    const p = planOf(b.setup)
+    b.server({ run: { lines: goesThrough(p, ['echo debian']) } })
+    expect(await b.apply({ plan: p.id, password: 'debian' })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    expect(b.setup.view().phase).toBe('done')
+    expect(b.setup.view().progress?.steps[1]?.out).toContain('echo ••••')
+  })
+
+  test('a sudo password that is a word the run prints (1): its steps read as they are (@@step 1 ok); its output shown masked', async () => {
+    const b = await useBoard({ sudo: 'password', password: '1', fixture: fixture('debian13', 'caddy-unit') })
+    expect(await b.look({ password: '1' })).toEqual(OK)
+    expect(b.setup.view()).toMatchObject({ phase: 'plan', hint: null, choice: { case: '2' } })
+    const p = planOf(b.setup)
+    b.server({ run: { lines: goesThrough(p, ['echo 1']) } })
+    expect(await b.apply({ plan: p.id, password: '1' })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    expect(b.setup.view().phase).toBe('done')
+    expect(b.setup.view().progress?.steps.map(s => s.state)).toEqual(p.steps.map(() => 'ok'))
+    expect(b.setup.view().progress?.steps[1]?.out).toContain('echo ••••')
+    expect(b.logs).toEqual(p.steps.map(s => expect.stringMatching(new RegExp(`^server setup ${s.id} ok \\d+s$`))))
   })
 
   test('an ssh too old for the askpass (Windows 10’s 8.1): the keys alone, as before; refused, it says why', async () => {

@@ -15,6 +15,8 @@ export const ONESHOT_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'server.oneshot.unchanged': 'Nothing has changed on this server yet.',
     'server.oneshot.ask': 'Go ahead? [y/N] ',
     'server.oneshot.no': 'Stopped: nothing was changed.',
+    'server.oneshot.noTerminal':
+      'This command asks before it changes anything, and there is no terminal here to ask on: nothing was changed. Paste it into a terminal on the server (an ssh session).',
     'server.oneshot.running': 'Running (if this window closes, the run goes on by itself on the server):',
     'server.oneshot.done': 'done: {address}',
     'server.oneshot.test': 'Now press Test connection on the board.',
@@ -24,6 +26,7 @@ export const ONESHOT_STRINGS: Record<Lang, Record<string, string | string[]>> = 
       'Stopped: a step failed and the rollback did not finish: what is left is named above. Paste the Undo command to remove it.',
     'server.oneshot.busy': 'Another run of the board is going on here: paste this again in a minute.',
     'server.oneshot.changed': 'The server changed after it was looked at: nothing was changed. Paste this again.',
+    'server.oneshot.stoppedFirst': 'The run stopped before it changed anything (why is above): nothing was changed.',
     'server.oneshot.lost':
       'The run did not say how it ended: paste this again in a minute (it sees what the run left).',
     'server.oneshot.stopHint': 'On the board, "Your server needs steps by hand" has the commands for such a server.',
@@ -60,6 +63,8 @@ export const ONESHOT_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'server.oneshot.unchanged': 'На сервере пока ничего не изменено.',
     'server.oneshot.ask': 'Продолжить? [y/N] ',
     'server.oneshot.no': 'Остановлено: ничего не изменено.',
+    'server.oneshot.noTerminal':
+      'Команда спрашивает, прежде чем что-то менять, а терминала, где спросить, здесь нет: ничего не изменено. Вставьте её в терминал на сервере (сеанс ssh).',
     'server.oneshot.running': 'Выполняется (если это окно закроется, запуск продолжится на сервере сам):',
     'server.oneshot.done': 'готово: {address}',
     'server.oneshot.test': 'Теперь нажмите на доске «Проверить соединение».',
@@ -69,6 +74,7 @@ export const ONESHOT_STRINGS: Record<Lang, Record<string, string | string[]>> = 
       'Остановлено: шаг не удался, и откат не завершился: что осталось, названо выше. Вставьте команду отмены, чтобы убрать это.',
     'server.oneshot.busy': 'Здесь идёт другой запуск доски: вставьте это снова через минуту.',
     'server.oneshot.changed': 'Сервер изменился после осмотра: ничего не изменено. Вставьте это снова.',
+    'server.oneshot.stoppedFirst': 'Запуск остановился, ничего не изменив (почему — выше): ничего не изменено.',
     'server.oneshot.lost':
       'Запуск не сообщил, чем закончился: вставьте это снова через минуту (команда увидит, что он оставил).',
     'server.oneshot.stopHint': 'На доске в «Вашему серверу нужны шаги вручную» есть команды для такого сервера.',

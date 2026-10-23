@@ -415,6 +415,19 @@ const RESULT = /^@@result (applied|rolled-back|rollback-failed)$/
 const EXIT = /^@@exit (-?\d+)$/
 const STATE = { start: 'running', ok: 'ok', fail: 'fail', skip: 'skipped' } as const
 
+/** A line the run itself prints (a step's state, an undo, its result, its exit, busy, a change found), as against a step's output. */
+export function runLine(line: string): boolean {
+  const text = line.replace(/\r$/, '')
+  return (
+    STEP.test(text) ||
+    UNDO.test(text) ||
+    RESULT.test(text) ||
+    EXIT.test(text) ||
+    text === '@@busy' ||
+    text.startsWith('@@changed ')
+  )
+}
+
 /** The progress after one line of the run (a new value; the old one is left as it was). */
 export function readProgress(pr: Progress, line: string, now: number): Progress {
   const text = line.replace(/\r$/, '')
