@@ -60,7 +60,10 @@ describe('a line for the board’s log', () => {
   })
 
   test('a long message is cut, so the build and the browser still fit', () => {
-    const line = pageErrorLine('error', new Error('x'.repeat(2000)), facts())
+    // Thrown in the bundle, as on a phone: a stack Bun makes here would name this file by the
+    // checkout's own path, as long as the folder it is in.
+    const line = pageErrorLine('error', thrown('x'.repeat(2000)), facts())
+    expect(line).toContain(' · at SheetHead (app.js:48211:31) · ')
     expect(line.length).toBeLessThan(500)
     expect(line).toContain('build a1b2c3d4e5f6')
     expect(line.endsWith(ANDROID)).toBe(true)
