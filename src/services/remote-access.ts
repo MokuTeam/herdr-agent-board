@@ -194,8 +194,9 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
           status: supervisor.status(),
           ssh: sshBin(),
           key: await keyView(c),
-          hostKey: await hostKeyRead.get(JSON.stringify([sshKeygenBin(), stampOf(knownHostsFile())]), () =>
-            hostKeyFingerprint(),
+          hostKey: await hostKeyRead.get(
+            JSON.stringify([sshKeygenBin(), stampOf(knownHostsFile()), c.host, c.sshPort]),
+            () => hostKeyFingerprint(c.host, c.sshPort),
           ),
         },
         login,

@@ -1,4 +1,5 @@
 import { expect, setDefaultTimeout, test } from 'bun:test'
+import { createHmac } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { stateDir } from '../../src/adapters/paths.ts'
@@ -105,6 +106,53 @@ for (const [find, name, variable] of [
   })
 }
 
+// Real keys and their fingerprints (ssh-keygen -l), for known_hosts lines a real ssh-keygen reads.
+const PINNED = {
+  other: [
+    'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDuETipp9IbUjER7VK34Uj0C5eo3D09vl/vmi9C/c6vT',
+    'SHA256:KRNrLyeVP4ZZ7K5ZndLF0YRWZ0gsCYuX1d2bGMwg/wA',
+  ],
+  port: [
+    'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKL1dGYOTRP48yQqrM3HkepN1J+NFxGgPOg8lzkL4SCF',
+    'SHA256:33SIdqAIgs3GD/7ukP0zxPzShDH7OFPQnPSN9tRDjY0',
+  ],
+  ours: [
+    'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC5VpUoDKt8tav3IU1WGcMIhUE+OnFRHYJicrpjElT7d',
+    'SHA256:wr7JwRu0IgTi4MrGFVIWZO0VCDrXGXemWzvoSY6p9jo',
+  ],
+} as const
+/** A host's name hashed as ssh's HashKnownHosts writes it: |1|salt|HMAC-SHA1(salt, name), the salt 20 bytes. */
+const hashedName = (name: string, salt: string): string =>
+  `|1|${Buffer.from(salt).toString('base64')}|${createHmac('sha1', Buffer.from(salt)).update(name).digest('base64')}`
+
+test('hostKeyFingerprint: the key pinned for this server and port, whatever other servers the file holds, plain or hashed (a real ssh-keygen)', async () => {
+  const real = Bun.which('ssh-keygen')
+  if (!real) return
+  isolatedHome()
+  process.env.BOARD_SSH_KEYGEN_BIN_PATH = real
+  mkdirSync(tunnelDir(), { recursive: true })
+  const lines = (names: [string, string, string]): string =>
+    [`${names[0]} ${PINNED.other[0]}`, `${names[1]} ${PINNED.port[0]}`, `${names[2]} ${PINNED.ours[0]}`, ''].join('\n')
+  const plain = lines(['other.example.com', '[ssh.example.com]:2222', 'ssh.example.com,203.0.113.7'])
+  const hashed = lines([
+    hashedName('other.example.com', 'salt-one-twenty-byte'),
+    hashedName('[ssh.example.com]:2222', 'salt-two-twenty-byte'),
+    hashedName('ssh.example.com', 'salt-three-twenty-by'),
+  ])
+  for (const text of [plain, hashed]) {
+    writeFileSync(knownHostsFile(), text)
+    // not the first line's: the one for this name, port 22 bare, another port in brackets
+    expect(await hostKeyFingerprint('ssh.example.com', 22)).toBe(`${PINNED.ours[1]} (ED25519)`)
+    expect(await hostKeyFingerprint('SSH.example.com', 22)).toBe(`${PINNED.ours[1]} (ED25519)`)
+    expect(await hostKeyFingerprint('ssh.example.com', 2222)).toBe(`${PINNED.port[1]} (ED25519)`)
+    expect(await hostKeyFingerprint('other.example.com', 22)).toBe(`${PINNED.other[1]} (ED25519)`)
+    // a server the file does not pin, or a port it does not
+    expect(await hostKeyFingerprint('board.example.com', 22)).toBeNull()
+    expect(await hostKeyFingerprint('ssh.example.com', 2200)).toBeNull()
+    expect(await hostKeyFingerprint('', 22)).toBeNull()
+  }
+})
+
 test('isolatedHome() and sandbox() point ssh and ssh-keygen at files that do not exist: nothing real is reached', async () => {
   const dir = isolatedHome()
   for (const bin of [sshBin(), sshKeygenBin()]) {
@@ -115,7 +163,7 @@ test('isolatedHome() and sandbox() point ssh and ssh-keygen at files that do not
   expect(await ssh.exited).toEqual({ code: null, error: 'ENOENT' })
   expect(await publicKeyOf(join(dir, 'key'))).toMatchObject({ ok: false, hint: 'noSsh' })
   expect(await generateKey('agent-board@PC')).toMatchObject({ ok: false })
-  expect(await hostKeyFingerprint()).toBeNull()
+  expect(await hostKeyFingerprint('ssh.example.com', 22)).toBeNull()
   const box = await sandbox()
   for (const bin of [box.env.BOARD_SSH_BIN_PATH, box.env.BOARD_SSH_KEYGEN_BIN_PATH]) {
     expect(bin?.startsWith(box.dir)).toBe(true)
@@ -164,14 +212,18 @@ test('generateKey makes the pair with ssh-keygen and replaces an old one; public
 
 test("the server's key: none before the first connection, the pinned one's fingerprint, then forgotten", async () => {
   const fake = await useFakeSsh()
-  expect(await hostKeyFingerprint()).toBeNull()
+  expect(await hostKeyFingerprint('ssh.example.com', 22)).toBeNull()
   mkdirSync(tunnelDir(), { recursive: true })
   writeFileSync(knownHostsFile(), 'ssh.example.com ssh-ed25519 AAAAFAKEHOST\n')
-  expect(await hostKeyFingerprint()).toBe('SHA256:FAKEfingerprint (ED25519)')
-  expect(fake.calls().at(-1)).toEqual(['-l', '-f', knownHostsFile()])
+  expect(await hostKeyFingerprint('ssh.example.com', 22)).toBe('SHA256:FAKEfingerprint (ED25519)')
+  expect(fake.calls().at(-1)).toEqual(['-l', '-F', 'ssh.example.com', '-f', knownHostsFile()])
+  // another server, or another port: not pinned
+  expect(await hostKeyFingerprint('other.example.com', 22)).toBeNull()
+  expect(await hostKeyFingerprint('ssh.example.com', 2222)).toBeNull()
+  expect(fake.calls().at(-1)).toEqual(['-l', '-F', '[ssh.example.com]:2222', '-f', knownHostsFile()])
   forgetHostKey()
   expect(existsSync(knownHostsFile())).toBe(false)
-  expect(await hostKeyFingerprint()).toBeNull()
+  expect(await hostKeyFingerprint('ssh.example.com', 22)).toBeNull()
   forgetHostKey()
 })
 

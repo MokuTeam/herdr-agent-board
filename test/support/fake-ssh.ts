@@ -48,6 +48,7 @@
 // `<FAKE_SSH_LOG>.stdin` as a JSON line, and a wrong one gets the flavour's recorded lines (or
 // `wrong`) and exit 1 (spec, "Checked by the spike").
 // `hang` stays up silent.
+import { createHmac } from 'node:crypto'
 import { appendFileSync, existsSync, readFileSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
@@ -96,6 +97,18 @@ const argAfter = (flag: string): string | undefined => {
 }
 const options = args.flatMap((arg, i) => (arg === '-o' && args[i + 1] !== undefined ? [args[i + 1] as string] : []))
 
+/** A known_hosts line's names field names the host: one of its names, or its hash (`|1|salt|hash`, HMAC-SHA1). */
+function namesHost(names: string, host: string): boolean {
+  const hashed = /^\|1\|([^|]+)\|([^|]+)$/.exec(names)
+  if (hashed)
+    return (
+      createHmac('sha1', Buffer.from(hashed[1] ?? '', 'base64'))
+        .update(host)
+        .digest('base64') === hashed[2]
+    )
+  return names.toLowerCase().split(',').includes(host.toLowerCase())
+}
+
 function keygen(): void {
   const file = argAfter('-f') ?? ''
   if (args.includes('-t')) {
@@ -135,8 +148,17 @@ function keygen(): void {
       say(`${file}: No such file or directory`)
       end(1)
     }
-    process.stdout.write(`256 SHA256:FAKEfingerprint ${HOST} (ED25519)\n`)
-    end(0)
+    const name = argAfter('-F')
+    if (name === undefined) {
+      process.stdout.write(`256 SHA256:FAKEfingerprint ${HOST} (ED25519)\n`)
+      end(0)
+    }
+    // -F: the lines that name the host, plain or hashed, as ssh-keygen prints them; none, 1
+    const found = readFileSync(file, 'utf8')
+      .split(/\r?\n/)
+      .flatMap((line, i) => (namesHost(line.trim().split(/\s+/)[0] ?? '', name ?? '') ? [i + 1] : []))
+    for (const n of found) out(`# Host ${name} found: line ${n} `, `${name} ED25519 SHA256:FAKEfingerprint`)
+    end(found.length ? 0 : 1)
   }
   say(`fake ssh-keygen: unexpected arguments ${JSON.stringify(args)}`)
   end(1)

@@ -112,16 +112,24 @@ export async function publicKeyOf(
   return { ok: false, error: failure(r), hint: sshHint(r.stderr.split(/\r?\n/)) }
 }
 
-/** The pinned server key's fingerprint and type, 'SHA256:… (ED25519)'; null before the first connection. */
-export async function hostKeyFingerprint(): Promise<string | null> {
+/**
+ * The fingerprint and type of the key the board's known_hosts pins for this server, 'SHA256:…
+ * (ED25519)': the first line ssh-keygen finds for its name (`-F`, plain or hashed: `[host]:port`
+ * off port 22, as ssh writes it), whatever other servers the file holds; null when none pins it.
+ */
+export async function hostKeyFingerprint(host: string, port: number): Promise<string | null> {
   const bin = sshKeygenBin()
-  if (!bin || !existsSync(knownHostsFile())) return null
-  const r = await run(bin, ['-l', '-f', knownHostsFile()])
+  if (!bin || host === '' || !existsSync(knownHostsFile())) return null
+  const name = (port === 22 ? host : `[${host}]:${port}`).toLowerCase()
+  const r = await run(bin, ['-l', '-F', name, '-f', knownHostsFile()])
   if (r.code !== 0) return null
-  // 256 SHA256:… ssh.example.com (ED25519)
-  const first = r.stdout.split(/\r?\n/).find(line => line.trim())
-  const m = first && /(SHA256:\S+)\s.*\((\w+)\)\s*$/.exec(first)
-  return m ? `${m[1]} (${m[2]})` : null
+  // # Host ssh.example.com found: line 3
+  // ssh.example.com ED25519 SHA256:…
+  for (const line of r.stdout.split(/\r?\n/)) {
+    const m = /^\S+\s+(\w+)\s+(SHA256:\S+)\s*$/.exec(line.trim())
+    if (m) return `${m[2]} (${m[1]})`
+  }
+  return null
 }
 
 /** "Forget the server's key": the next connection pins the one it meets. */

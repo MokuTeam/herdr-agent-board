@@ -336,7 +336,10 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
       const conf = tunnelConf()
       return hostKeyPinned(conf.host, conf.sshPort)
     },
-    hostKeyFingerprint,
+    hostKeyFingerprint: () => {
+      const conf = tunnelConf()
+      return hostKeyFingerprint(conf.host, conf.sshPort)
+    },
     spawn: spawnRemote,
     test: () => supervisor.test(),
     onChange: accessChanged,

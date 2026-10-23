@@ -116,7 +116,7 @@ async function useBoard(
     },
     knownHosts: knownHostsReady,
     hostKeyPinned: () => hostKeyPinned('ssh.example.com', 22),
-    hostKeyFingerprint,
+    hostKeyFingerprint: () => hostKeyFingerprint('ssh.example.com', 22),
     spawn: (bin, args, stdin, ms, login) => {
       deadlines.push(ms)
       return (o.spawn ?? spawnRemote)(bin, args, stdin, ms, login)
