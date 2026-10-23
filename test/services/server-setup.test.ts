@@ -706,6 +706,106 @@ describe('step 1 by the board (the simple-setup spec)', () => {
   })
 })
 
+describe('the login by password and step 1 by the board, together (the simple-setup spec)', () => {
+  const ROOT = { tunnel: { admin: { user: 'root' } } }
+  const PASSWORD_LINE = 'PreferredAuthentications=publickey,keyboard-interactive,password'
+  const STEP_ONE = ['guard', 'tunnel-user', 'socket-folder', 'keys-file', 'sshd-fence']
+  const lookOne = (b: { commands(): string[] }): string =>
+    b
+      .commands()
+      .map(carried)
+      .find(s => s.includes('# agent-board: look-1')) ?? ''
+  /** The run the last launch carried, unpacked (gunzip after base64). */
+  const launched = (b: { commands(): string[] }): string => {
+    const launch = carried(b.commands().at(-1) ?? '')
+    const data = /printf '%s\\n' '([A-Za-z0-9+/=]+)' \| base64 -d \| gunzip > "\$R\.sh"/.exec(launch)?.[1] ?? ''
+    return gunzipSync(Buffer.from(data, 'base64')).toString('utf8')
+  }
+
+  test('the owner’s path: an empty server, root by password, no key pinned yet; Look pins it and reads step 1 with the board’s key, Apply makes it in a packed run; the password nowhere', async () => {
+    const b = await useBoard(
+      { uid: 0, publickey: true, login: { password: SENTINEL } },
+      { ...ROOT, pinned: false, key: () => KEY },
+    )
+    b.server({ fixture: withoutStepOne(b.fake.dir, 'debian13', 'bare') })
+    expect(await b.look({ password: SENTINEL })).toEqual(OK)
+    expect(b.setup.view()).toMatchObject({
+      phase: 'plan',
+      sudo: 'root',
+      hint: null,
+      hostKey: { fingerprint: 'SHA256:FAKEfingerprint (ED25519)', pinnedNow: true },
+    })
+    expect(lookOne(b)).toContain(`= 'restrict,port-forwarding ${KEY}' ]`)
+    for (const a of b.logins()) {
+      expect(a).not.toContain('BatchMode=yes')
+      expect(a).toContain(PASSWORD_LINE)
+    }
+    const looked = b.logins().length
+    expect(b.prompts()).toHaveLength(looked)
+    const p = planOf(b.setup)
+    expect(p.steps.map(s => s.id).slice(0, 5)).toEqual(STEP_ONE)
+    b.server({ run: { lines: goesThrough(p, [`echo ${SENTINEL}`]) } })
+    expect(await b.apply({ plan: p.id, password: SENTINEL })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    expect(b.setup.view().phase).toBe('done')
+    // the run's own login: by the askpass too, its one prompt
+    expect(b.logins()).toHaveLength(looked + 1)
+    expect(b.logins().at(-1)).toContain(PASSWORD_LINE)
+    expect(b.prompts()).toHaveLength(looked + 1)
+    const run = launched(b)
+    expect(run).toContain("--comment 'agent-board tunnel' boardtunnel")
+    expect(run).toContain(`restrict,port-forwarding ${KEY}`)
+    expect(b.stdins()).toEqual([])
+    expect(b.setup.view().progress?.steps[1]?.out).toContain('echo ••••')
+    const nowhere = (what: string, text: string): void => expect([what, text.includes(SENTINEL)]).toEqual([what, false])
+    nowhere('argv', JSON.stringify(b.fake.calls()))
+    nowhere('ssh’s environment', JSON.stringify(b.leads()))
+    nowhere('the run', run)
+    nowhere('view', JSON.stringify(b.setup.view()))
+    nowhere('answers', JSON.stringify(b.answers))
+    nowhere('log', JSON.stringify(b.logs))
+    for (const [path, text] of [...files(stateDir()), ...files(configDir())]) nowhere(path, text)
+  })
+
+  test('a sudo user by password whose sudo has its own: asked for, then the key carried; the key made anew: Look again before any ssh; Apply packed, sudo’s own on stdin', async () => {
+    let key = KEY
+    const b = await useBoard(
+      { publickey: true, login: { password: 'login pw' }, sudo: 'password', password: 'sudo pw' },
+      { key: () => key },
+    )
+    b.server({ fixture: withoutStepOne(b.fake.dir, 'debian13', 'bare') })
+    expect(await b.look({ password: 'login pw' })).toMatchObject({
+      status: 409,
+      body: { ok: false, hint: 'sudoPassword', need: 'sudoPassword' },
+    })
+    expect(await b.look({ password: 'login pw', sudoPassword: 'sudo pw' })).toEqual(OK)
+    expect(lookOne(b)).toContain(`= 'restrict,port-forwarding ${KEY}' ]`)
+    expect(b.stdins()[0]).toBe('login pw\n')
+    expect(b.stdins().slice(1).length).toBeGreaterThan(0)
+    for (const s of b.stdins().slice(1)) expect(s).toBe('sudo pw\n')
+    const p = planOf(b.setup)
+    expect(p.steps.map(s => s.id).slice(0, 5)).toEqual(STEP_ONE)
+    // Generate key between Look and Apply: refused before ssh -V or any login, no password field asked for
+    key = KEY.replace('board@pc', 'board@new')
+    const logins = b.logins().length
+    const versions = b.versions()
+    const refusal = await b.apply({ plan: p.id, password: 'login pw', sudoPassword: 'sudo pw' })
+    expect(refusal).toMatchObject({ status: 409, body: { ok: false, hint: 'lookAgain' } })
+    expect((refusal.body as Fields).need).toBeUndefined()
+    expect(b.logins()).toHaveLength(logins)
+    expect(b.versions()).toBe(versions)
+    expect(await b.look({ password: 'login pw', sudoPassword: 'sudo pw' })).toEqual(OK)
+    const q = planOf(b.setup)
+    b.server({ run: { lines: goesThrough(q) } })
+    expect(await b.apply({ plan: q.id, password: 'login pw', sudoPassword: 'sudo pw' })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    expect(b.setup.view().phase).toBe('done')
+    expect(b.logins().at(-1)).toContain(PASSWORD_LINE)
+    expect(b.stdins().at(-1)).toBe('sudo pw\n')
+    expect(launched(b)).toContain(`restrict,port-forwarding ${key}`)
+  })
+})
+
 describe('a run’s ssh', () => {
   test('lasts longer than the run on the server can: its timeout, the rollback after it, the follower', async () => {
     const b = await useBoard({ uid: 0, fixture: fixture('debian13', 'bare') })
