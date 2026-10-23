@@ -12,7 +12,6 @@ export const ONESHOT_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'server.oneshot.found': 'Found:',
     'server.oneshot.plan': 'The plan:',
     'server.oneshot.notes': 'Good to know:',
-    'server.oneshot.docker': "Docker is not installed: the plan installs it from Docker's own repository.",
     'server.oneshot.unchanged': 'Nothing has changed on this server yet.',
     'server.oneshot.ask': 'Go ahead? [y/N] ',
     'server.oneshot.no': 'Stopped: nothing was changed.',
@@ -27,7 +26,6 @@ export const ONESHOT_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'server.oneshot.changed': 'The server changed after it was looked at: nothing was changed. Paste this again.',
     'server.oneshot.lost':
       'The run did not say how it ended: paste this again in a minute (it sees what the run left).',
-    'server.oneshot.stop': 'The board does not set up this server by itself, so nothing was changed:',
     'server.oneshot.stopHint': 'On the board, "Your server needs steps by hand" has the commands for such a server.',
     'server.oneshot.unreadable': 'Looking at this server did not work: nothing was changed.',
     'server.oneshot.refuse':
@@ -44,7 +42,6 @@ export const ONESHOT_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'server.oneshot.undid': 'rolled back',
     'server.oneshot.undoFailed': 'could not roll back',
     'server.oneshot.undo.looking': 'agent-board: looking at this server before Undo. Nothing changes until you say so.',
-    'server.oneshot.undo.what': "Undo the board's setup of {address}:",
     'server.oneshot.undo.kept': 'Docker, and files of the board you changed since, stay.',
     'server.oneshot.undo.nothing': "Nothing of the board's is on this server.",
     'server.oneshot.undo.done': "undone: the board's setup is off this server.",
@@ -60,7 +57,6 @@ export const ONESHOT_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'server.oneshot.found': 'Найдено:',
     'server.oneshot.plan': 'План:',
     'server.oneshot.notes': 'Полезно знать:',
-    'server.oneshot.docker': 'Docker не установлен: план установит его из собственного репозитория Docker.',
     'server.oneshot.unchanged': 'На сервере пока ничего не изменено.',
     'server.oneshot.ask': 'Продолжить? [y/N] ',
     'server.oneshot.no': 'Остановлено: ничего не изменено.',
@@ -75,7 +71,6 @@ export const ONESHOT_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'server.oneshot.changed': 'Сервер изменился после осмотра: ничего не изменено. Вставьте это снова.',
     'server.oneshot.lost':
       'Запуск не сообщил, чем закончился: вставьте это снова через минуту (команда увидит, что он оставил).',
-    'server.oneshot.stop': 'Этот сервер доска сама не настраивает, поэтому ничего не изменено:',
     'server.oneshot.stopHint': 'На доске в «Вашему серверу нужны шаги вручную» есть команды для такого сервера.',
     'server.oneshot.unreadable': 'Осмотреть сервер не удалось: ничего не изменено.',
     'server.oneshot.refuse':
@@ -92,7 +87,6 @@ export const ONESHOT_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'server.oneshot.undoFailed': 'не удалось откатить',
     'server.oneshot.undo.looking':
       'agent-board: осматриваю сервер перед отменой. Ничего не меняется, пока вы не скажете.',
-    'server.oneshot.undo.what': 'Отменить настройку доски для {address}:',
     'server.oneshot.undo.kept': 'Docker и файлы доски, которые вы с тех пор меняли, остаются.',
     'server.oneshot.undo.nothing': 'Ничего от доски на этом сервере нет.',
     'server.oneshot.undo.done': 'отменено: настройки доски на сервере больше нет.',

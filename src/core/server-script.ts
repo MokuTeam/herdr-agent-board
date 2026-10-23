@@ -20,17 +20,17 @@ import { BOARD_DIR, LOCK_FILE, RECORD_FILE, RUNS_DIR } from './server-texts.ts'
 const PLAIN_ID = /^[A-Za-z0-9._-]{1,64}$/
 /** A run at most 20 minutes; a skip check at most a minute. */
 const RUN_MOST_S = 1200
-const SKIP_S = 60
+export const SKIP_S = 60
 /** A run past its 20 minutes is told to stop (TERM) and rolls back; it is killed only this much later. */
 const KILL_AFTER_S = 300
 /** The run's last line: the launch starts only a copy of the run that ends with it (not one cut short). */
-const LAST_LINE = '# agent-board: end'
+export const LAST_LINE = '# agent-board: end'
 /** What the launch says, at once, when it cannot write the run or its copy is not whole (70: sysexits' EX_SOFTWARE). */
 const LAUNCH_FAILED = "{ echo '@@exit 70'; exit 70; }"
 /** A step's output kept for the panel. */
 const OUT_MOST = 200
 /** Ends each step's text in the run, and the run in the launch: lines no step has. */
-const END = 'AGENT_BOARD_END'
+export const END = 'AGENT_BOARD_END'
 const RUN_END = 'AGENT_BOARD_RUN'
 
 function checkId(id: string): void {
@@ -50,7 +50,8 @@ const ranOnly = (i: RecordItem): boolean => i.kind === 'group' || i.kind === 'ba
 const madeOnly = (i: RecordItem): boolean =>
   i.kind === 'user' || i.kind === 'folder' || i.kind === 'keys' || i.kind === 'fence'
 
-const keyOf = (i: RecordItem): string =>
+/** What identifies a record item: a later step's item with the same key supersedes (or, in Undo, takes off) it. */
+export const keyOf = (i: RecordItem): string =>
   i.kind === 'file'
     ? `file ${i.path}`
     : i.kind === 'line' || i.kind === 'block'
@@ -68,7 +69,7 @@ const keyOf = (i: RecordItem): string =>
  * file's sha256 as written, whether an image was there before (the step that pulls it skipped), the
  * run a container was made by.
  */
-function itemWord(i: RecordItem, live: boolean): string {
+export function itemWord(i: RecordItem, live: boolean): string {
   const json = JSON.stringify(i)
   if (!live) return shQuote(json)
   if (i.kind === 'file') {
@@ -93,7 +94,7 @@ function itemWord(i: RecordItem, live: boolean): string {
  * when the step did not get to change it), an image as if there before (an Undo after a pull cut
  * short keeps it), the rest as the plan has it. The step's own values replace these after it.
  */
-function aheadWord(i: RecordItem): string {
+export function aheadWord(i: RecordItem): string {
   if (i.kind === 'file') {
     const head = JSON.stringify({ kind: 'file', path: i.path, sha256: '' }).slice(0, -2)
     return `${shQuote(head)}"$(sudo cat ${shQuote(i.path)} 2>/dev/null | sha256sum | cut -c1-64)"${shQuote('"}')}`

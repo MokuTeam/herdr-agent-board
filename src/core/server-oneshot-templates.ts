@@ -1,22 +1,26 @@
 // What the one command ("Do it myself", the simple-setup spec's "'Do it myself': one command")
 // carries of the board's own scripts: rendered by the board's own functions (lookScript2,
-// buildPlan, undoPlan, runScript, launchScript, relyLine) for every shape a server can give them,
-// each with stand-ins where the server's own values go, then made templates (core/server-template.ts).
-// The command reads Look's output on the server, picks the template the board would have rendered
-// and fills it in; core/server-oneshot.ts puts it all together.
+// buildPlan, undoPlan, relyLine, launchScript, and runScript's words for the record's items) for
+// every shape a server can give them, each with stand-ins where the server's own values go, then
+// made templates (core/server-template.ts). The command reads Look's output on the server, picks
+// the steps the board would have planned, fills them in and puts the run together around them as
+// core/server-script.ts runScript does (core/server-oneshot-awk.ts); core/server-oneshot.ts puts
+// it all together.
 //
-// A shape is what changes a script's lines, not only its values: the case; Docker there or not;
-// their sites fetched or not; the socket folder's group to change or not; their Caddyfile checked
-// beside itself or in place; a first setup or an update. The guard's lines (who holds which port,
-// their config's hash) are filled in from rely lines of their own; a record's earlier items ride in
-// the record line of the run (`it=…`), which the board writes from the plan.
-// Pure, with no node: import.
+// A plan's steps come in parts, each a list of step templates: step 1's parts the server lacks
+// (one template each, the same in every plan); the case's own steps, by the case's shape (what
+// changes their lines, not only their values: the case; Docker there or not; their sites fetched
+// or not; the socket folder's group to change or not; their Caddyfile checked beside itself or in
+// place; a first setup or an update; the folder's gid read by the run, when the run makes the
+// folder); and for Undo, after the case's, step 1's parts the record names and the record's end.
+// The guard's lines (who holds which port, their config's hash, step 1's parts still missing) are
+// filled in from rely lines of their own. Pure, with no node: import.
 import { t } from './lang.ts'
-import type { Container, Holder, RoundOne, ServerFacts } from './server-facts.ts'
+import type { Container, Holder, RoundOne, ServerFacts, StepOneFacts } from './server-facts.ts'
 import { type LookInput, lookScript2 } from './server-look.ts'
 import {
   buildPlan,
-  chooseCase,
+  byHand,
   nginxAddress,
   type Plan,
   type PlanStep,
@@ -25,11 +29,10 @@ import {
   relyLine,
   type SetupCase,
   type SetupRecord,
-  type Text,
   undoPlan,
   type Wanted,
 } from './server-plan.ts'
-import { launchScript, runScript } from './server-script.ts'
+import { aheadWord, itemWord, keyOf, LAST_LINE, launchScript } from './server-script.ts'
 import { type Inputs, type Place, templateOf, type Value } from './server-template.ts'
 import {
   argsHash,
@@ -38,20 +41,18 @@ import {
   CADDY_FILE,
   CADDY_IMAGE,
   CADDY_NAME,
-  caddyRunArgs,
+  FENCE_FILE,
   IMPORT_LINE,
   NGINX_FILE,
-  type OwnCaddy,
   SITE_FILE,
   SOCAT_IMAGE,
   SOCKET_NAME,
+  SSHD_CONFIG,
   socatRunArgs,
   VOLUMES,
 } from './server-texts.ts'
-import { sshdBlock } from './tunnel-snippets.ts'
+import { keysFile, socketFolder, sshdBlock } from './tunnel-snippets.ts'
 
-/** The run's last line (core/server-script.ts LAST_LINE). */
-const LAST_LINE = '# agent-board: end'
 /** Their Caddyfile's candidate beside it (core/server-plan.ts theirCaddy). */
 const CANDIDATE = '.Caddyfile.agent-board'
 const dirOf = (path: string): string => path.slice(0, path.lastIndexOf('/')) || '/'
@@ -69,21 +70,17 @@ const list = (v: Value | undefined): string[] => {
 // The server's values: a stand-in each, another plain value, and a probe where it may need quoting
 
 const HEX_A = 'abcdef0123456789'.repeat(4)
-const HEX_B = '0123456789abcdef'.repeat(4)
 
 /** Every value the command fills in, by the name its templates and its awk give it. */
 export const INPUTS: Inputs = {
   plan_id: { sentinel: 'zqplanzq', alt: '20261023-100400-3f9a' },
   run_id: { sentinel: 'zqrunzq', alt: '20261023-100401-0b1c' },
-  at: { sentinel: 'zqatzq', alt: '2026-10-23T10:04:00.000Z' },
   gid: { sentinel: '7654321', alt: '995' },
   distro: { sentinel: 'debian', alt: 'ubuntu' },
-  relies: { sentinel: '#zqrelieszq', alt: 'echo one\necho two' },
-  carried: { sentinel: 'zqcarriedzq', alt: "''" },
   // their Caddy
   file: { sentinel: '/zqfdir/zqfile', alt: '/etc/caddy/Caddyfile', probe: '/srv/my web/Caddy file' },
   config: { sentinel: '/zqcdir/zqconfig', alt: '/etc/caddy/Caddyfile', probe: '/etc/my caddy/Caddyfile' },
-  sha: { sentinel: HEX_A, alt: HEX_B },
+  sha: { sentinel: HEX_A, alt: '0123456789abcdef'.repeat(4) },
   addr: { sentinel: '10.123.45.67', alt: '127.0.0.1', probe: 'fd00::1' },
   hosts: { sentinel: ['zqhost.example.org'], alt: ['shop.example.org'], probe: ['a.example.com', 'b.example.org'] },
   cid: { sentinel: 'c0ffee00'.repeat(8), alt: `7f3c${'0a'.repeat(30)}` },
@@ -98,10 +95,7 @@ export const INPUTS: Inputs = {
   // an update: the domain set up before
   old: { sentinel: 'zqold.example.org', alt: 'old.example.com' },
   // Undo: the record's own values
-  rec_case: { sentinel: 'zqcase', alt: '3a' },
   rec_domain: { sentinel: 'zqrecdom.example.org', alt: 'board.example.com' },
-  rec_address: { sentinel: 'https://zqrecaddr.example.org', alt: 'https://board.example.com:8443' },
-  rec_port: { sentinel: '61234', alt: 'null' },
   sha_caddyfile: { sentinel: 'fedcba9876543210'.repeat(4), alt: 'ab'.repeat(32) },
   sha_site: { sentinel: '13579bdf02468ace'.repeat(4), alt: 'cd'.repeat(32) },
   sha_nginx: { sentinel: '02468ace13579bdf'.repeat(4), alt: 'ef'.repeat(32) },
@@ -120,8 +114,8 @@ export const INPUTS: Inputs = {
   cr_host: { sentinel: '/zqcrhost/zqcrhfile', alt: '/srv/web/Caddyfile', probe: '/srv/my web/Caddyfile' },
   nx_bin: { sentinel: '/zqnxbin/nginx', alt: '/usr/sbin/nginx', probe: '/opt/my nginx/nginx' },
   nx_conf: { sentinel: '/zqnxconf/nginx.conf', alt: '/etc/nginx/nginx.conf', probe: '/etc/my nginx/nginx.conf' },
-  // the launch
-  run: { sentinel: `#zqrunlinezq\n${LAST_LINE}`, alt: `echo run\n${LAST_LINE}` },
+  // the launch: the run packed (gzip, then base64), as the board's service packs it
+  packed: { sentinel: 'zqpackedzq', alt: 'H4sIAAAAAAAAAwMAAAAAAAAAAAA=' },
 }
 
 const scalar = (name: string): Place => ({ name, from: [name], text: v => str(v[name]) })
@@ -133,23 +127,15 @@ const candidateOf = (name: string): Place => ({
 
 /** The places every template may have; those a rendering lacks are simply not there. */
 function places(w: Wanted, c: SetupCase | null): Place[] {
-  const own = c === '1' || c === '1b' || c === '4a' || c === '4b' ? c : null
   return [
-    ...['plan_id', 'run_id', 'at', 'gid', 'carried', 'sha', 'cid', 'network', 'bin', 'user', 'group', 'oldgroup'].map(
-      scalar,
-    ),
-    ...['old', 'rec_case', 'rec_domain', 'rec_address', 'rec_port', 'sha_caddyfile', 'sha_site', 'sha_nginx'].map(
-      scalar,
-    ),
-    ...['setup_caddy', 'setup_socket', 'group_from', 'group_to', 'file', 'config', 'ufile', 'tfile'].map(scalar),
+    ...['plan_id', 'run_id', 'gid', 'sha', 'cid', 'network', 'bin', 'user', 'group', 'oldgroup', 'old'].map(scalar),
+    ...['rec_domain', 'sha_caddyfile', 'sha_site', 'sha_nginx', 'setup_caddy', 'setup_socket'].map(scalar),
+    ...['group_from', 'group_to', 'file', 'config', 'ufile', 'tfile', 'packed'].map(scalar),
     ...['cr_bin', 'cr_cid', 'cr_cmd0', 'cr_cfg', 'cr_rel', 'cr_host', 'nx_bin', 'nx_conf'].map(scalar),
     candidateOf('file'),
     candidateOf('config'),
     candidateOf('ufile'),
-    { name: 'rec_host', from: ['rec_address'], text: v => new URL(str(v.rec_address)).hostname },
     { name: 'docker_repo', from: ['distro'], text: v => `https://download.docker.com/linux/${str(v.distro)}` },
-    { name: 'relies', from: ['relies'], text: v => str(v.relies), spelling: 'lines' },
-    { name: 'run', from: ['run'], text: v => str(v.run), spelling: 'lines' },
     { name: 'addr_r', from: ['addr'], text: v => resolveAt(str(v.addr)) },
     { name: 'hosts', from: ['hosts'], text: v => list(v.hosts), spelling: 'sqwords' },
     { name: 'nhosts', from: ['nhosts'], text: v => list(v.nhosts), spelling: 'sqwords' },
@@ -159,25 +145,22 @@ function places(w: Wanted, c: SetupCase | null): Place[] {
       from: ['listen'],
       text: v => `${w.domain}:80:${resolveAt(nginxAddress(list(v.listen)))}`,
     },
-    ...(own ? [{ name: 'caddy_hash', from: ['gid'], text: (v: Record<string, Value>) => caddyHash(own, w, v) }] : []),
     {
       name: 'socat_hash',
-      from: ['gid', 'network'],
+      from: ['network'],
       text: v => argsHash(hashInput(socatArgs(c === '3b', w, v))),
     },
   ]
 }
 
-const caddyArgs = (c: OwnCaddy, w: Wanted, v: Record<string, Value>): string[] =>
-  caddyRunArgs(c, w, str(v.gid), str(v.plan_id), w.acme)
 const socatArgs = (host: boolean, w: Wanted, v: Record<string, Value>): string[] =>
   socatRunArgs(host ? { host: true } : { network: str(v.network) }, w, str(v.gid), str(v.plan_id))
-const caddyHash = (c: OwnCaddy, w: Wanted, v: Record<string, Value>): string => argsHash(hashInput(caddyArgs(c, w, v)))
 
 /**
  * What a container's settings hash is taken of (core/server-texts.ts `labelled`): its name, role,
- * settings, image and command, without the run's id. Read back from its `docker run` argv, and
- * checked against the hash in its label.
+ * settings with `<gid>` for the folder's gid (which has a label of its own), image and command,
+ * without the run's id. Read back from its `docker run` argv, and checked against the hash in its
+ * label.
  */
 export function hashInput(args: readonly string[]): string[] {
   const image = args.findIndex(a => a === CADDY_IMAGE || a === SOCAT_IMAGE)
@@ -194,7 +177,11 @@ export function hashInput(args: readonly string[]): string[] {
 // ---------------------------------------------------------------------------------------------
 // The facts each shape is rendered from
 
-/** A shape of Apply's run: what changes its lines. Dimensions a case does not have are false (Docker: true for 2, 3a, 3b). */
+/**
+ * A shape of the case's steps in Apply: what changes their lines. Dimensions a case does not have
+ * are false (Docker: true for 2, 3a, 3b). `rgid`: the run makes the socket's folder and reads its
+ * gid there (the cases with a container of the board's).
+ */
 export interface ApplyShape {
   c: SetupCase
   docker: boolean
@@ -202,24 +189,29 @@ export interface ApplyShape {
   group: boolean
   cand: boolean
   update: boolean
+  rgid: boolean
 }
 
 /** The shape's name, as the command's awk spells it too. */
 export const applyKey = (s: ApplyShape): string =>
-  `a.${s.c}.d${+s.docker}.f${+s.fetch}.g${+s.group}.c${+s.cand}.u${+s.update}`
+  `a.${s.c}.d${+s.docker}.f${+s.fetch}.g${+s.group}.c${+s.cand}.u${+s.update}.r${+s.rgid}`
 
 /** Every shape the board's buildPlan has for the cases it does. */
 export function applyShapes(): ApplyShape[] {
   const out: ApplyShape[] = []
   const add = (s: Partial<ApplyShape> & { c: SetupCase }): void => {
-    out.push({ docker: true, fetch: false, group: false, cand: false, update: false, ...s })
+    out.push({ docker: true, fetch: false, group: false, cand: false, update: false, rgid: false, ...s })
   }
   for (const update of [false, true]) {
-    for (const c of ['1', '1b', '4a'] as const) for (const docker of [true, false]) add({ c, docker, update })
-    for (const docker of [true, false]) for (const fetch of [true, false]) add({ c: '4b', docker, fetch, update })
+    for (const rgid of [false, true]) {
+      for (const c of ['1', '1b', '4a'] as const) for (const docker of [true, false]) add({ c, docker, update, rgid })
+      for (const docker of [true, false])
+        for (const fetch of [true, false]) add({ c: '4b', docker, fetch, update, rgid })
+      for (const c of ['3a', '3b'] as const)
+        for (const cand of [true, false]) for (const fetch of [true, false]) add({ c, cand, fetch, update, rgid })
+    }
+    // case 2 has no container of the board's: the folder's gid is never in its lines
     for (const group of [true, false]) for (const fetch of [true, false]) add({ c: '2', fetch, group, update })
-    for (const c of ['3a', '3b'] as const)
-      for (const cand of [true, false]) for (const fetch of [true, false]) add({ c, cand, fetch, update })
   }
   return out
 }
@@ -236,7 +228,7 @@ function fenceOf(user: string): Record<string, string> {
   return fence
 }
 
-/** What every shape starts from: Docker there, nothing on the web ports, the socket's folder and sshd's fence as step 1 makes them. */
+/** What every shape starts from: Docker there, nothing on the web ports, step 1 done (the folder, sshd's fence). */
 function baseFacts(w: Wanted, v: Record<string, Value>): ServerFacts {
   return {
     distro: { id: str(v.distro), version: '13', codename: 'trixie', arch: 'x86_64', supported: true },
@@ -266,7 +258,7 @@ function baseFacts(w: Wanted, v: Record<string, Value>): ServerFacts {
   }
 }
 
-/** A stand-in for what the plain texts name only (a holder, a container's name): never in a script. */
+/** A stand-in for what the plain texts name only (a holder, a container's name): never in a step. */
 const SHOWN = { holder: 'zqshownholder', container: 'zqshowncontainer' }
 
 function theirCaddyUnit(f: ServerFacts, v: Record<string, Value>, fetch: boolean): ServerFacts {
@@ -366,6 +358,14 @@ function earlierRecord(c: SetupCase, w: Wanted, v: Record<string, Value>): Setup
   }
 }
 
+/** Step 1 as Look reads it when all of it is there but the socket's folder (the run makes it). */
+const FOLDER_ONLY: StepOneFacts = {
+  user: { uid: 990, group: 'zqusergroup' },
+  keys: 'same',
+  keysDir: true,
+  include: true,
+}
+
 /** The facts that make buildPlan give this shape. */
 export function applyFacts(s: ApplyShape, w: Wanted, v: Record<string, Value>): ServerFacts {
   let f = baseFacts(w, v)
@@ -397,29 +397,86 @@ export function applyFacts(s: ApplyShape, w: Wanted, v: Record<string, Value>): 
       f = theirCaddyContainer(f, v, { host: s.c === '3b', cand: s.cand, fetch: s.fetch })
       break
   }
+  if (s.rgid) f = { ...f, folder: null, stepOne: FOLDER_ONLY }
   return s.update ? { ...f, record: earlierRecord(s.c, w, v) } : f
 }
 
 // ---------------------------------------------------------------------------------------------
-// Rendering
+// Steps as the command's awk takes them
+
+/** Step 1's steps in Apply (core/server-plan.ts stepOneSteps). */
+const STEP_ONE_IDS: ReadonlySet<string> = new Set(['tunnel-user', 'socket-folder', 'keys-file', 'sshd-fence'])
+
+/** A record item's class, as runScript treats it: Docker's (d), a group or a backup (g: recorded only when its step ran), step 1's (m), an image (i), any other (o). */
+function itemClass(i: RecordItem): string {
+  if (i.kind === 'docker') return 'd'
+  if (i.kind === 'group' || i.kind === 'backup') return 'g'
+  if (i.kind === 'user' || i.kind === 'folder' || i.kind === 'keys' || i.kind === 'fence') return 'm'
+  return i.kind === 'image' ? 'i' : 'o'
+}
 
 /**
- * The board's run of a plan, with the guard's lines as the command fills them in, and the record's
- * items the plan does not name (an Apply's earlier items; Undo's Docker, backups and images that
- * were there before) in the record line, `it=…`. Undo's own items stay the guard's, as the board has
- * them: its steps take each off the record as they go.
+ * Undo's steps that take off the record more than items of their own: the record's end (all of it),
+ * and the images and volumes (each of that kind the record has; core/server-plan.ts undoPlan).
  */
-function asTemplate(p: Plan, w: Wanted, v: Record<string, Value>): string {
-  const relies = str(v.relies)
-  const [guard, ...rest] = p.steps
-  if (guard?.id !== 'guard') throw new Error('a plan starts with its guard')
-  const record = p.kind === 'undo' ? guard.record : []
-  const steps: PlanStep[] = [{ ...guard, commands: relies === '' ? [] : relies.split('\n'), record }, ...rest]
-  const run = runScript({ ...p, steps }, w, { id: str(v.run_id), at: str(v.at) })
-  const empty = "\n  it=''\n"
-  if (run.split(empty).length !== 2) throw new Error('the run writes its record as it did')
-  return run.replace(empty, `\n  it=${str(v.carried)}\n`)
+const TAKES: Record<string, string> = { forget: 'all', 'drop-images': 'image', 'drop-volumes': 'volume' }
+
+/**
+ * One step as the command's awk puts it into a run (core/server-script.ts runScript): a header
+ * (id, timeout, the owner's by hand or not, fetching through nginx or not), its title (T), its
+ * commands and check (S), skip checks (K), undo (U), and its record items (R: class and key; for
+ * Apply each item's words: W0 as carried, W1 after the step ran, WA before it runs). Undo's items
+ * are only named by key: its run's items are the record's, which the awk reads on the server.
+ */
+function stepLines(s: PlanStep, undo: boolean): string[] {
+  const nginx = s.commands.some(c => c.includes('nginx-before'))
+  const head = [
+    `@@step ${s.id} ${s.timeoutS} ${byHand(s) ? 1 : 0} ${nginx ? 1 : 0}`,
+    `T ${t(s.title.key, s.title.params)}`,
+  ]
+  // the owner's by-hand step is not in the run at all, only said skipped
+  if (byHand(s)) return head
+  const takes = undo ? TAKES[s.id] : undefined
+  return [
+    ...head,
+    ...[...s.commands, ...s.check].map(l => `S ${l}`),
+    ...s.skipIf.map(l => `K ${l}`),
+    ...s.undo.map(l => `U ${l}`),
+    ...(takes
+      ? [`R * ${takes}`]
+      : s.record.flatMap(i => [
+          `R ${itemClass(i)} ${keyOf(i)}`,
+          ...(undo ? [] : [`W0 ${itemWord(i, false)}`, `W1 ${itemWord(i, true)}`, `WA ${aheadWord(i)}`]),
+        ])),
+  ]
 }
+
+/** The template of some steps, cut into one per step. */
+function stepTemplates(
+  render: (v: Record<string, Value>) => PlanStep[],
+  undo: boolean,
+  w: Wanted,
+  c: SetupCase | null,
+): string[] {
+  const text = templateOf(
+    v =>
+      render(v)
+        .flatMap(s => stepLines(s, undo))
+        .join('\n'),
+    INPUTS,
+    places(w, c),
+  )
+  const out: string[] = []
+  if (text === '') return out
+  for (const line of text.split('\n')) {
+    if (line.startsWith('@@step ')) out.push(line)
+    else if (out.length) out[out.length - 1] += `\n${line}`
+    else throw new Error('a step template starts with its header')
+  }
+  return out
+}
+
+const SENTINELS: Record<string, Value> = Object.fromEntries(Object.entries(INPUTS).map(([k, i]) => [k, i.sentinel]))
 
 /** A plan made from facts, refused unless it is a plan of the case wanted. */
 function planOf(f: ServerFacts, w: Wanted, v: Record<string, Value>, c: SetupCase): Plan {
@@ -429,48 +486,48 @@ function planOf(f: ServerFacts, w: Wanted, v: Record<string, Value>, c: SetupCas
   return p
 }
 
-/** One Apply template: its run, and what the panel's plan says of it (step titles, why), with places for what is shown. */
-export interface ApplyTemplate {
+/** One shape's steps: the case's own, after the guard and step 1's. */
+export interface ShapeTemplate {
   key: string
-  shape: ApplyShape
-  run: string
-  steps: { id: string; title: string }[]
-  why: string
-  docker: boolean
+  steps: string[]
 }
 
-/** A text of the plan in the board's language, its stand-ins as places (what the command shows, never runs). */
-function shown(text: Text): string {
-  let out = t(text.key, text.params)
-  const marks: [string, string][] = [
-    [SHOWN.holder, '@{d_holder}@'],
-    [SHOWN.container, '@{d_container}@'],
+export function applyTemplate(s: ApplyShape, w: Wanted): ShapeTemplate {
+  const steps = (v: Record<string, Value>): PlanStep[] =>
+    planOf(applyFacts(s, w, v), w, v, s.c).steps.filter((x, k) => k > 0 && !STEP_ONE_IDS.has(x.id))
+  return { key: applyKey(s), steps: stepTemplates(steps, false, w, s.c) }
+}
+
+/** Step 1's steps, by the name the command's awk gives each (`x.…`): one template each. */
+export function stepOneTemplates(w: Wanted): Record<string, string> {
+  const out: Record<string, string> = {}
+  const variants: { s: StepOneFacts; names: Record<string, string> }[] = [
+    {
+      s: { user: null, keys: 'none', keysDir: true, include: true },
+      names: {
+        'tunnel-user': 'x.user',
+        'socket-folder': 'x.folder',
+        'keys-file': 'x.keys.make',
+        'sshd-fence': 'x.fence.file',
+      },
+    },
+    {
+      s: { user: null, keys: 'none', keysDir: false, include: false },
+      names: { 'keys-file': 'x.keys.makedir', 'sshd-fence': 'x.fence.block' },
+    },
+    { s: { user: null, keys: 'other', keysDir: true, include: true }, names: { 'keys-file': 'x.keys.write' } },
   ]
-  for (const [name, input] of Object.entries(INPUTS)) {
-    if (typeof input.sentinel === 'string' && !input.sentinel.includes('\n'))
-      marks.push([input.sentinel, `@{${name}}@`])
+  for (const { s, names } of variants) {
+    const steps = (v: Record<string, Value>): PlanStep[] => {
+      const f: ServerFacts = { ...baseFacts(w, v), folder: null, fence: {}, stepOne: s }
+      return planOf(f, w, v, '1').steps.filter(x => x.id in names)
+    }
+    const ids = steps(SENTINELS).map(x => x.id)
+    stepTemplates(steps, false, w, null).forEach((text, k) => {
+      out[names[ids[k] ?? ''] ?? ''] = text
+    })
   }
-  marks.sort((a, b) => b[0].length - a[0].length)
-  for (const [from, to] of marks) out = out.replaceAll(from, to)
   return out
-}
-
-export function applyTemplate(s: ApplyShape, w: Wanted): ApplyTemplate {
-  const render = (v: Record<string, Value>): string => asTemplate(planOf(applyFacts(s, w, v), w, v, s.c), w, v)
-  const run = templateOf(render, INPUTS, places(w, s.c))
-  const sentinels = Object.fromEntries(Object.entries(INPUTS).map(([k, i]) => [k, i.sentinel]))
-  const f = applyFacts(s, w, sentinels)
-  const p = planOf(f, w, sentinels, s.c)
-  const choice = chooseCase(f, w)
-  if (choice.case === null) throw new Error(`no case for ${applyKey(s)}`)
-  return {
-    key: applyKey(s),
-    shape: s,
-    run,
-    steps: p.steps.map(x => ({ id: x.id, title: shown(x.title) })),
-    why: shown(choice.why),
-    docker: p.steps.some(x => x.id === 'docker-install'),
-  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -482,6 +539,7 @@ export type RelyShape =
   | { kind: 'program'; port: 80 | 443; program: 'caddy' | 'nginx' }
   | { kind: 'container'; port: 443 | null }
   | { kind: 'config' }
+  | { kind: 'none'; what: 'user' | 'folder' | 'keys' }
 
 export const relyKey = (r: RelyShape): string =>
   r.kind === 'free'
@@ -490,7 +548,9 @@ export const relyKey = (r: RelyShape): string =>
       ? `r.program.${r.port}.${r.program}`
       : r.kind === 'container'
         ? `r.container.${r.port ?? 'none'}`
-        : 'r.config'
+        : r.kind === 'none'
+          ? `r.none.${r.what}`
+          : 'r.config'
 
 export function relyShapes(): RelyShape[] {
   const out: RelyShape[] = []
@@ -498,6 +558,7 @@ export function relyShapes(): RelyShape[] {
     for (const docker of [true, false]) out.push({ kind: 'free', port, docker })
   out.push({ kind: 'program', port: 443, program: 'caddy' }, { kind: 'program', port: 80, program: 'nginx' })
   out.push({ kind: 'container', port: 443 }, { kind: 'container', port: null }, { kind: 'config' })
+  for (const what of ['user', 'folder', 'keys'] as const) out.push({ kind: 'none', what })
   return out
 }
 
@@ -509,7 +570,13 @@ export function relyTemplate(r: RelyShape, w: Wanted): string {
         ? { kind: 'container', port: r.port, id: str(v.cid) }
         : r.kind === 'config'
           ? { kind: 'config', path: str(v.file), sha: str(v.sha) }
-          : r
+          : r.kind === 'none'
+            ? {
+                kind: 'none',
+                what: r.what,
+                name: r.what === 'user' ? w.user : r.what === 'folder' ? socketFolder(w.socket) : keysFile(w.user),
+              }
+            : r
     return relyLine(rely).command
   }
   return templateOf(render, INPUTS, places(w, null))
@@ -518,11 +585,9 @@ export function relyTemplate(r: RelyShape, w: Wanted): string {
 // ---------------------------------------------------------------------------------------------
 // Settings hashes, round two of Look, the launch
 
-/** What the board's containers' settings hashes are taken of, as JSON, with places for the folder's gid and their network. */
+/** What the helper's settings hash is taken of, as JSON, with a place for their network (3a). */
 export function hashTemplates(w: Wanted): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const c of ['1', '1b', '4a', '4b'] as const)
-    out[`h.caddy.${c}`] = templateOf(v => JSON.stringify(hashInput(caddyArgs(c, w, v))), INPUTS, places(w, null))
   for (const host of [false, true])
     out[`h.socat.${host ? 'host' : 'net'}`] = templateOf(
       v => JSON.stringify(hashInput(socatArgs(host, w, v))),
@@ -624,9 +689,13 @@ export function lookTemplate(s: LookShape, input: LookInput): string {
   return templateOf(render, INPUTS, places({ ...input, publicPort: null }, null))
 }
 
-/** The launch (core/server-script.ts launchScript), with places for the run's id and the whole run. */
+/** The launch (core/server-script.ts launchScript) of a packed run, with places for the run's id and the packed run. */
 export function launchTemplate(w: Wanted): string {
-  return templateOf(v => launchScript(str(v.run_id), str(v.run)), INPUTS, places(w, null))
+  return templateOf(
+    v => launchScript(str(v.run_id), `# run\n${LAST_LINE}`, () => str(v.packed)),
+    INPUTS,
+    places(w, null),
+  )
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -676,24 +745,25 @@ function undoItem(i: UndoItem, v: Record<string, Value>): RecordItem {
   }
 }
 
-/** The record an Undo shape is rendered from: its items in order, its head the record's own values. */
-function undoRecord(s: UndoShape, w: Wanted, v: Record<string, Value>): SetupRecord {
-  const folder = w.socket.slice(0, w.socket.lastIndexOf('/')) || '/'
-  const port = str(v.rec_port)
+/** A record of these items: its head the record's own values (its case as the items make it). */
+function undoRecord(items: RecordItem[], w: Wanted, v: Record<string, Value>): SetupRecord {
+  // the record's case as its items make it: Undo names a missing line (2) or block (3a, 3b) by it
+  const c = items.some(i => i.kind === 'line' || (i.kind === 'file' && i.path === SITE_FILE))
+    ? '2'
+    : items.some(i => i.kind === 'block' || (i.kind === 'container' && i.name === SOCKET_NAME))
+      ? '3a'
+      : '1'
   return {
     v: 1,
     id: 'r0',
     at: '2026-10-21T10:04:00.000Z',
     state: 'applied',
-    case: str(v.rec_case) as SetupCase,
+    case: c,
     pair: { user: w.user, socket: w.socket },
     domain: str(v.rec_domain),
-    publicPort: port === 'null' ? null : Number(port),
-    address: str(v.rec_address),
-    items: s.items.map(i => {
-      const item = undoItem(i, v)
-      return item.kind === 'group' ? { ...item, path: folder } : item
-    }),
+    publicPort: null,
+    address: `https://${str(v.rec_domain)}`,
+    items,
   }
 }
 
@@ -715,38 +785,71 @@ function undoFacts(s: UndoShape, w: Wanted, v: Record<string, Value>): ServerFac
   return f
 }
 
-/** One Undo template: its run, and its steps' titles. */
-export interface UndoTemplate {
-  key: string
-  shape: UndoShape
-  run: string
-  steps: { id: string; title: string }[]
+const UNDO_OPTIONS = (v: Record<string, Value>) => ({ id: str(v.plan_id), removeDocker: false, removeEdited: false })
+
+/** The steps of an Undo plan before the record's end (`forget`): the case's own. */
+function untilForget(p: Plan): PlanStep[] {
+  const end = p.steps.findIndex(x => x.id === 'forget')
+  if (end < 0) throw new Error('an Undo plan ends with forget')
+  return p.steps.slice(1, end)
 }
 
-export function undoTemplate(s: UndoShape, w: Wanted): UndoTemplate {
-  const plan = (v: Record<string, Value>): Plan => {
-    const r = undoRecord(s, w, v)
-    return undoPlan(
-      r,
-      { ...undoFacts(s, w, v), record: r },
-      { id: str(v.plan_id), removeDocker: false, removeEdited: false },
-    )
+/** One Undo shape's steps: the case's own, before step 1's and the record's end. */
+export function undoTemplate(s: UndoShape, w: Wanted): ShapeTemplate {
+  const folder = socketFolder(w.socket)
+  const steps = (v: Record<string, Value>): PlanStep[] => {
+    const items = s.items.map(i => {
+      const item = undoItem(i, v)
+      return item.kind === 'group' ? { ...item, path: folder } : item
+    })
+    const r = undoRecord(items, w, v)
+    return untilForget(undoPlan(r, { ...undoFacts(s, w, v), record: r }, UNDO_OPTIONS(v)))
   }
-  // the record's case as its items make it: Undo names a missing line (2) or block (3a, 3b) by it
-  const family =
-    s.items.includes('L') || s.items.includes('F2') ? '2' : s.items.includes('B') || s.items.includes('K2') ? '3a' : '1'
-  const inputs: Inputs = { ...INPUTS, rec_case: { sentinel: 'zqcase', alt: family } }
-  const run = templateOf(v => asTemplate(plan(v), w, v), inputs, places(w, null))
-  const sentinels = Object.fromEntries(Object.entries(INPUTS).map(([k, i]) => [k, i.sentinel]))
-  return {
-    key: undoKey(s),
-    shape: s,
-    run,
-    steps: plan(sentinels).steps.map(x => ({ id: x.id, title: shown(x.title) })),
-  }
+  return { key: undoKey(s), steps: stepTemplates(steps, true, w, null) }
 }
 
-/** An item of a record as Undo's shape names it; null for those the run's record line carries (Docker, backups). */
+/** Undo's steps for step 1's parts the record names, the record's end, and the by-hand step (`y.…`). */
+export function stepOneUndoTemplates(w: Wanted): Record<string, string> {
+  const out: Record<string, string> = {}
+  const keys = keysFile(w.user)
+  const variants: { items: RecordItem[]; names: Record<string, string> }[] = [
+    {
+      items: [
+        { kind: 'user', name: w.user },
+        { kind: 'folder', path: socketFolder(w.socket) },
+        { kind: 'keys', path: keys, dir: true },
+        { kind: 'fence', path: FENCE_FILE },
+      ],
+      names: {
+        'drop-fence': 'y.fence.file',
+        'drop-keys': 'y.keys.dir',
+        'drop-folder': 'y.folder',
+        'drop-user': 'y.user',
+        forget: 'y.forget',
+      },
+    },
+    {
+      items: [
+        { kind: 'keys', path: keys, dir: false },
+        { kind: 'fence', path: SSHD_CONFIG },
+      ],
+      names: { 'drop-fence': 'y.fence.block', 'drop-keys': 'y.keys', 'by-hand': 'y.byhand' },
+    },
+  ]
+  for (const { items, names } of variants) {
+    const steps = (v: Record<string, Value>): PlanStep[] => {
+      const r = undoRecord(items, w, v)
+      return undoPlan(r, { ...baseFacts(w, v), record: r }, UNDO_OPTIONS(v)).steps.filter(x => x.id in names)
+    }
+    const ids = steps(SENTINELS).map(x => x.id)
+    stepTemplates(steps, true, w, null).forEach((text, k) => {
+      out[names[ids[k] ?? ''] ?? ''] = text
+    })
+  }
+  return out
+}
+
+/** An item of a record as Undo's shape names it; null for those its shape leaves to the run's record (Docker, backups, step 1's). */
 export function undoCode(i: RecordItem): UndoItem | null {
   switch (i.kind) {
     case 'image':
@@ -786,14 +889,13 @@ function dedupeCodes(codes: readonly UndoItem[]): UndoItem[] {
  * named at its end (Undo names it when the record does not), and what Look finds of their Caddy now.
  */
 export function undoShapes(w: Wanted): UndoShape[] {
-  const sentinels = Object.fromEntries(Object.entries(INPUTS).map(([k, i]) => [k, i.sentinel]))
   const seqs = new Map<string, UndoItem[]>()
   const add = (items: UndoItem[]): void => {
     seqs.set(items.join(''), items)
   }
   for (const s of applyShapes()) {
-    if (s.update) continue
-    const p = planOf(applyFacts(s, w, sentinels), w, sentinels, s.c)
+    if (s.update || s.rgid) continue
+    const p = planOf(applyFacts(s, w, SENTINELS), w, SENTINELS, s.c)
     const steps = p.steps.slice(1).map(x => x.record.map(undoCode).filter((c): c is UndoItem => c !== null))
     for (const image of [true, false]) {
       const per = steps.map(codes => codes.filter(c => image || (c !== 'I1' && c !== 'I2')))
@@ -819,4 +921,41 @@ export function undoShapes(w: Wanted): UndoShape[] {
             out.push({ items, theirs: th, cand, fetch, nfetch })
   }
   return out
+}
+
+// ---------------------------------------------------------------------------------------------
+// The dictionary the command carries
+
+/**
+ * Every step template the command may need, each once (`@@t <name>`, then its lines), and every
+ * shape's list of them (`@@shape <key> <name>…`): what the awk reads before Look's output.
+ */
+export function dictionary(w: Wanted): string {
+  const named = new Map<string, string>()
+  const out: string[] = []
+  const add = (text: string): string => {
+    let name = named.get(text)
+    if (!name) {
+      name = `s${named.size + 1}`
+      named.set(text, name)
+      out.push(`@@t ${name}`, text)
+    }
+    return name
+  }
+  // without the board's key the board makes no step 1 (core/server-plan.ts stepOneNeeds), nor does
+  // the command; Undo removes what a record names of it all the same
+  const key = w.publicKey !== undefined
+  const made = [...(key ? Object.entries(stepOneTemplates(w)) : []), ...Object.entries(stepOneUndoTemplates(w))]
+  for (const [name, text] of made) out.push(`@@t ${name}`, text)
+  const shapes: string[] = []
+  for (const s of applyShapes()) {
+    if (s.rgid && !key) continue
+    const x = applyTemplate(s, w)
+    shapes.push(`@@shape ${[x.key, ...x.steps.map(add)].join(' ')}`)
+  }
+  for (const s of undoShapes(w)) {
+    const x = undoTemplate(s, w)
+    shapes.push(`@@shape ${[x.key, ...x.steps.map(add)].join(' ')}`)
+  }
+  return [...out, ...shapes].join('\n')
 }

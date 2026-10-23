@@ -1,16 +1,20 @@
 // The one command's reader and chooser, in awk: on the server there is no TypeScript and no
-// round trip to the board, so what the board does between Look and its plan (core/server-look.ts
-// readRoundOne, readServerFacts; core/server-plan.ts chooseCase and the parts of buildPlan and
-// undoPlan that pick a shape and its values) runs here, written once more. Kept equal to the board's
-// by test/core/server-oneshot.test.ts, which runs both on every Look fixture and on changed copies of
-// them and compares the case, the reasons and the filled-in run script byte for byte. Everything
-// else the command runs is the board's own text (core/server-oneshot-templates.ts).
+// round trip to the board, so what the board does between Look and its run (core/server-look.ts
+// readRoundOne, readServerFacts; core/server-plan.ts chooseCase, stepOneNeeds and the parts of
+// buildPlan and undoPlan that pick the steps and their values; core/server-plain.ts plainPlan;
+// core/server-script.ts runScript, which puts the steps into a run) runs here, written once more.
+// Kept equal to the board's by test/core/server-oneshot.test.ts, which runs both on every Look
+// fixture and on changed copies of them and compares the case, the reasons, the plan in plain words
+// and the run byte for byte. The steps themselves are the board's own text
+// (core/server-oneshot-templates.ts), filled in here.
 //
 // POSIX awk only (mawk on Debian and Ubuntu): no gawk extensions, no regex intervals, no
 // length() of an array; bytes, with LC_ALL=C. Modes (-v mode=…), reading stdin:
 //   r2       round one's output → the shape of round two and its values, or none
-//   apply    round one, `@@ab-round2`, round two → `plan <key>` and its values, or why not
-//   undo     the same → the Undo shape of the record and its values, or why not
+//   apply    the step templates (`@@ab-dict` … ), `@@ab-round1`, round one, `@@ab-round2`, round
+//            two (-v plan_id, run_id, at) → what was found and the plan, in plain words; `plan
+//            <key>`, its address and its steps' titles, then `@@ab-run` and the run; or why not
+//   undo     the same for the record's Undo
 //   bind     value lines, `@@ab-template`, a template → the template filled in
 //   progress a run's output → its steps as they go, one line each (titles in ENVIRON AB_TITLES)
 // Values go out as `v <name> <value>`, a list as `e <name>` then `w <name> <item>` lines, many lines
@@ -552,6 +556,25 @@ function read_folder(    d, g, m, P, M, i, s) {
   m = split(P[4], M, ",")
   for (i = 1; i <= m; i++) if (M[i] != "") FO_members = FO_members (FO_members == "" ? "" : ", ") M[i]
 }
+# sshd's settings for the tunnel user (FENCE), and step 1's parts besides (core/server-look.ts
+# readFence, readStepOne): S1 when Look read them (an "@@user" line); S1_user, S1_group, S1_keys
+# (none, same or other), S1_keysdir, S1_include
+function read_stepone(    i, n, l, u, F, k) {
+  n = SN[1, "fence"]
+  for (i = 1; i <= n; i++) {
+    l = SL[1, "fence", i]
+    if (l ~ /^[a-z0-9]+ /) { k = index(l, " "); FENCE[substr(l, 1, k - 1)] = substr(l, k + 1) }
+  }
+  u = at(1, "fence", "user")
+  S1 = u != NUL
+  if (!S1) return
+  S1_user = u ~ /^[0-9]+([ \t\n\r\f\v]+[^ \t\n\r\f\v]+)?[ \t\n\r\f\v]*$/
+  S1_group = (S1_user && fields(u, F) >= 2) ? F[2] : ""
+  k = at(1, "fence", "keys")
+  S1_keys = (k == "none" || k == "same") ? k : "other"
+  S1_keysdir = hasline(1, "fence", "@@keys-dir")
+  S1_include = hasline(1, "fence", "@@include")
+}
 function read_record(    n, i, start, body, l) {
   n = SN[1, "record"]; start = 0
   for (i = 1; i <= n; i++) if (SL[1, "record", i] == "@@file") { start = i; break }
@@ -599,7 +622,7 @@ function round_one(    i) {
   read_listens(1, "ports", "ss", "")
   read_pids()
   for (i = 1; i <= NPORTS; i++) holder(PORTS[i])
-  read_distro(); read_units(); read_folder(); read_record(); read_host(); read_dns()
+  read_distro(); read_units(); read_folder(); read_stepone(); read_record(); read_host(); read_dns()
   return !UNREADABLE
 }
 
@@ -834,6 +857,18 @@ function record_item(p, folder,    kind, k, a, j, ok, m) {
     if (a == NUL || !isimageref(a) || JT[p SUBSEP "before"] != "b") return 0
     RI_ref[k] = a; RI_before[k] = JV[p SUBSEP "before"] == "true"; return 1
   }
+  # step 1's parts, the board's only when it made them
+  if (kind == "user") { if (rs(p, "name") != REC_user) return 0; RI_name[k] = REC_user; return 1 }
+  if (kind == "folder") { if (rs(p, "path") != folder) return 0; RI_path[k] = folder; return 1 }
+  if (kind == "keys") {
+    if (rs(p, "path") != KEYS_DIR "/" REC_user || JT[p SUBSEP "dir"] != "b") return 0
+    RI_path[k] = KEYS_DIR "/" REC_user; RI_dir[k] = JV[p SUBSEP "dir"] == "true"; return 1
+  }
+  if (kind == "fence") {
+    a = rs(p, "path")
+    if (a != FENCE_FILE && a != SSHD_CONFIG) return 0
+    RI_path[k] = a; return 1
+  }
   if (kind == "docker") {
     a = p SUBSEP "packages"; m = p SUBSEP "files"
     if (JT[a] != "a" || JT[m] != "a") return 0
@@ -855,10 +890,11 @@ function holds_setup(    k) {
   for (k = 1; k <= REC_n; k++) if (RI_kind[k] != "docker" && !(RI_kind[k] == "image" && RI_before[k])) return 1
   return 0
 }
-function itemkey(k) {
-  if (RI_kind[k] == "file" || RI_kind[k] == "backup" || RI_kind[k] == "group") return RI_kind[k] " " RI_path[k]
-  if (RI_kind[k] == "line" || RI_kind[k] == "block") return RI_kind[k] " " RI_file[k]
-  if (RI_kind[k] == "container" || RI_kind[k] == "volume") return RI_kind[k] " " RI_name[k]
+function itemkey(k,    kind) {
+  kind = RI_kind[k]
+  if (kind == "file" || kind == "backup" || kind == "group" || kind == "folder" || kind == "keys" || kind == "fence") return kind " " RI_path[k]
+  if (kind == "line" || kind == "block") return kind " " RI_file[k]
+  if (kind == "container" || kind == "volume" || kind == "user") return kind " " RI_name[k]
   if (RI_kind[k] == "image") return "image " RI_ref[k]
   return "docker"
 }
@@ -885,6 +921,9 @@ function itemjson(k,    s, n, P, i) {
   if (RI_kind[k] == "container") return "{\"kind\":\"container\",\"name\":" jstr(RI_name[k]) ",\"setup\":" jstr(RI_setup[k]) "}"
   if (RI_kind[k] == "volume") return "{\"kind\":\"volume\",\"name\":" jstr(RI_name[k]) "}"
   if (RI_kind[k] == "image") return "{\"kind\":\"image\",\"ref\":" jstr(RI_ref[k]) ",\"before\":" (RI_before[k] ? "true" : "false") "}"
+  if (RI_kind[k] == "user") return "{\"kind\":\"user\",\"name\":" jstr(RI_name[k]) "}"
+  if (RI_kind[k] == "folder" || RI_kind[k] == "fence") return "{\"kind\":\"" RI_kind[k] "\",\"path\":" jstr(RI_path[k]) "}"
+  if (RI_kind[k] == "keys") return "{\"kind\":\"keys\",\"path\":" jstr(RI_path[k]) ",\"dir\":" (RI_dir[k] ? "true" : "false") "}"
   s = "{\"kind\":\"docker\",\"packages\":["
   n = split(RI_pk[k], P, SUBSEP); for (i = 1; i <= RI_pkn[k]; i++) s = s (i > 1 ? "," : "") jstr(P[i])
   s = s "],\"files\":["
@@ -915,15 +954,28 @@ function manual(why) { CHOICE = ""; WHY = why; return 1 }
 function chose(c, key, a, b, va, vb) { CHOICE = c; WHYKEY = key; WP1 = a; WV1 = va; WP2 = b; WV2 = vb; return 1 }
 function hostlimits(    why, i, n, T) {
   why = ""
-  n = split("flock setsid timeout sha256sum ss", T, " ")
+  n = split("flock setsid timeout sha256sum ss gzip", T, " ")
   if (!DI_supported) why = why " os"
   else for (i = 1; i <= n; i++) if (T[i] in H_missing) { why = why " os"; break }
   if (H_selinux == "enforcing") why = why " selinux"
   if (DOCKER && D_podman) why = why " podman"
   if (DOCKER && D_rootless) why = why " rootless"
   if (DOCKER && D_userns) why = why " userns"
-  if (!FOLDER) why = why " folder"
+  needs()
+  if (!FOLDER && !NEED) why = why " folder"
   return substr(why, 2)
+}
+# what step 1 lacks, which Apply makes first (core/server-plan.ts stepOneNeeds): NEED when the
+# board makes any of it (Look read step 1, and the board has its key); NEED_user, NEED_folder,
+# NEED_keys (make, write or none), NEED_fence (a setting of the fence not in force)
+function needs(    k) {
+  NEED = S1 && W_KEY != ""
+  NEED_user = 0; NEED_folder = 0; NEED_keys = ""; NEED_fence = 0
+  if (!NEED) return
+  NEED_user = !S1_user
+  NEED_folder = !FOLDER
+  NEED_keys = S1_keys == "none" ? "make" : S1_keys == "other" ? "write" : ""
+  for (k in FENCEW) if (!(k in FENCE) || FENCE[k] != FENCEW[k]) NEED_fence = 1
 }
 function portsfree(list,    n, P, i) {
   n = split(list, P, " ")
@@ -1149,35 +1201,22 @@ function fnv(s,    H, T, U, i, j, m, carry, out) {
 # ---------------------------------------------------------------------------------------------
 # Texts (in the board's language)
 
-function repl(s, a, b,    out, k) {
-  out = ""
-  while ((k = index(s, a)) > 0) { out = out substr(s, 1, k - 1) b; s = substr(s, k + length(a)) }
-  return out s
-}
-function tx(key, n1, v1, n2, v2, n3, v3,    s) {
+# a text by its key, each {name} of the values given replaced once over (the board's translator)
+function tx(key, n1, v1, n2, v2, n3, v3,    s, out, k, e, name) {
   s = (key in TXT) ? TXT[key] : key
-  if (n1 != "") s = repl(s, "{" n1 "}", shownv(v1))
-  if (n2 != "") s = repl(s, "{" n2 "}", shownv(v2))
-  if (n3 != "") s = repl(s, "{" n3 "}", shownv(v3))
-  return s
-}
-function holdershown(p,    c, proj) {
-  if (HK[p] == "free") return tx("server.panel.holder.free")
-  if (HK[p] == "container") {
-    c = containerof(HI[p])
-    if (!c) return substr(HI[p], 1, 12)
-    proj = ((c, "com.docker.compose.project") in C_haslabel) ? C_label[c, "com.docker.compose.project"] : ""
-    if (proj != "") return tx("server.panel.holder.compose", "name", C_name[c], "image", C_image[c], "project", proj)
-    return tx("server.panel.holder.container", "name", C_name[c], "image", C_image[c])
+  out = ""
+  while ((k = index(s, "{")) > 0) {
+    e = index(substr(s, k + 1), "}")
+    name = e ? substr(s, k + 1, e - 1) : ""
+    if (name ~ /^[A-Za-z0-9_]+$/ && (name == n1 || name == n2 || name == n3)) {
+      out = out substr(s, 1, k - 1) shownv(name == n1 ? v1 : name == n2 ? v2 : v3)
+      s = substr(s, k + e + 1)
+    } else {
+      out = out substr(s, 1, k)
+      s = substr(s, k + 1)
+    }
   }
-  return holdername(p)
-}
-function sayfound(    d, h) {
-  d = ("PRETTY_NAME" in OSHAS) ? OS["PRETTY_NAME"] : (DI_id " " DI_version)
-  d = d " " DOT " " (DOCKER ? tx("server.panel.docker", "version", D_version) : tx("server.panel.noDocker"))
-  if (HK[80] == HK[443] && HU[80] == HU[443] && HI[80] == HI[443] && HP[80] == HP[443]) h = tx("server.panel.ports.both", "holder", holdershown(443))
-  else h = tx("server.panel.ports.each", "h443", holdershown(443), "h80", holdershown(80))
-  print "found " shownv(d " " DOT " " h)
+  return out s
 }
 function saywhy(list,    n, W, i) {
   n = split(list, W, " ")
@@ -1210,6 +1249,306 @@ function warnings(c, dockerstep, fetchstep,    i, j, found, list) {
   if (c == "4b" && H_fetch == "curl") somehosts(NX_n, NX_nn, W_DOMAIN)
   if (FOLDER && FO_members != "") warn("groupMembers", "group", FO_group, "members", FO_members)
   if (c == "2" && (!U_has["caddy.service"] || U_user["caddy.service"] == "" || U_user["caddy.service"] == "root")) warn("caddyRoot")
+}
+
+# ---------------------------------------------------------------------------------------------
+# The plan in plain words (core/server-plain.ts plainPlan): "pfound", "pwill" lines, "pdocker",
+# "puntouched", "pstop"
+
+# who answers on a port, in a few words: Caddy, Caddy in Docker, nginx, the board's own, a program
+function whoon(p,    c, img, name, k) {
+  if (HK[p] == "free") return ""
+  if (HK[p] == "split") return HS[p]
+  if (HK[p] != "container") return HP[p] == "caddy" ? "Caddy" : HP[p]
+  c = containerof(HI[p])
+  if (c && C_label[c, ROLE_LABEL] != "") return tx("server.plain.who.board")
+  img = c ? C_image[c] : ""
+  if (HP[p] == "caddy" || img ~ /(^|\/)caddy([:@]|$)/) name = "Caddy"
+  else {
+    name = HP[p]
+    if (c) {
+      k = match(img, /[:@]/); name = k ? substr(img, 1, k - 1) : img
+      name = substr(name, lastindex(name, "/") + 1)
+    }
+    if (name == "") name = HP[p]
+  }
+  return tx("server.plain.who.docker", "name", name)
+}
+# their sites: the names their Caddy (or else their nginx) serves, the board's domain apart
+function sites(    A, n, i, E, m, list, seen) {
+  n = 0
+  if (CADDY && CA_hostn > 0) for (i = 1; i <= CA_hostn; i++) A[++n] = CA_host[i]
+  else if (NGINX) for (i = 1; i <= NX_nn; i++) A[++n] = NX_n[i]
+  m = 0
+  for (i = 1; i <= n; i++) if (!(A[i] in seen) && (seen[A[i]] = 1) && hostname_ok(A[i]) && A[i] != W_DOMAIN) E[++m] = A[i]
+  if (m == 0) return ""
+  list = ""
+  for (i = 1; i <= m && i <= 3; i++) list = list (i > 1 ? ", " : "") E[i]
+  return m > 3 ? tx("server.plain.sitesMore", "sites", list, "more", m - 3) : tx("server.plain.sites", "sites", list)
+}
+function capitalize(s) { return toupper(substr(s, 1, 1)) substr(s, 2) }
+# what was found: the system and what answers on 443 and 80, one line
+function pfound(    name, sys, w443, w80, s, web) {
+  name = trim(capitalize(DI_id) " " DI_version)
+  sys = DI_supported ? name : tx("server.plain.unsupported", "system", name)
+  w443 = whoon(443); w80 = whoon(80); s = sites()
+  if (w443 == "" && w80 == "") web = tx("server.plain.web.none")
+  else if (w443 == w80) web = tx("server.plain.web.both", "who", w443, "sites", s)
+  else if (w80 == "") web = tx("server.plain.web.only443", "who", w443, "sites", s)
+  else if (w443 == "") web = tx("server.plain.web.only80", "who", w80)
+  else web = tx("server.plain.web.each", "who443", w443, "who80", w80, "sites", s)
+  print "pfound " tx("server.plain.found", "system", sys, "web", web)
+}
+function stopkind(w) {
+  if (w == "os") return "os"
+  if (w == "selinux" || w == "podman" || w == "rootless" || w == "userns" || w == "requiretty" || w == "noSystemd" || w == "dockerConflicts") return "system"
+  if (w == "domainServed" || w == "otherSetup" || w == "interrupted" || w == "folder") return w
+  return "web"
+}
+# the board does not do this server: why, in plain words and then each reason; the decision line
+function stop(why,    W) {
+  split(why, W, " ")
+  print "pstop " tx("server.plain.stop", "reason", tx("server.plain.stop." stopkind(W[1] == "" ? "os" : W[1]), "domain", W_DOMAIN))
+  print "puntouched " tx("server.plain.untouched.nothing")
+  saywhy(why)
+  print "stop " why
+}
+function hasstep(id,    k) { for (k = 1; k <= NS; k++) if (ST_id[k] == id) return 1; return 0 }
+# what the steps ST 1..NS will do (kind: apply, update or undo), what they leave alone
+function pplan(kind, c, address,    k, login, checked) {
+  login = 0; checked = 0
+  for (k = 1; k <= NS; k++) {
+    if (ST_id[k] == "tunnel-user" || ST_id[k] == "socket-folder" || ST_id[k] == "sshd-fence" || ST_id[k] == "drop-user" || ST_id[k] == "drop-fence") login = 1
+    if (ST_id[k] == "fetch-before" || ST_nb[k]) checked = 1
+  }
+  if (kind == "undo") {
+    print "pwill " tx(login ? "server.plain.will.undoLogin" : "server.plain.will.undo", "domain", RECHOST, "user", W_USER)
+    print "puntouched " tx(checked ? "server.plain.untouched.undoChecked" : "server.plain.untouched.undo")
+    return
+  }
+  if (login) print "pwill " tx("server.plain.will.login", "user", W_USER)
+  else if (hasstep("keys-file")) print "pwill " tx("server.plain.will.key", "user", W_USER)
+  print "pwill " tx(kind == "update" ? "server.plain.will.update" : "server.plain.will.case." c, "domain", W_DOMAIN, "address", address)
+  if (hasstep("docker-install")) print "pdocker " tx("server.plain.docker")
+  if (c == "1") print "puntouched " tx("server.plain.untouched.all")
+  else if (c == "1b") print "puntouched " tx("server.plain.untouched.port", "who", whoon(80), "port", "80")
+  else if (c == "4a") print "puntouched " tx("server.plain.untouched.port", "who", whoon(443), "port", "443")
+  else print "puntouched " tx(checked ? "server.plain.untouched.sitesChecked" : "server.plain.untouched.sites")
+}
+
+# ---------------------------------------------------------------------------------------------
+# The plan's steps, from the step templates (core/server-oneshot-templates.ts dictionary): ST_*[k]
+# of step k, 1 the guard; the record's items as the run's variables I<n> (V_*[n]), the first
+# CARRIED of them the guard's (the record's items carried over)
+
+# a line of the templates: "@@t <name>" and its lines, or "@@shape <key> <name>…"
+function dictline(l,    k) {
+  if (startswith(l, "@@t ")) { DCUR = substr(l, 5); TPLN[DCUR] = 0; return }
+  if (startswith(l, "@@shape ")) { l = substr(l, 9); k = index(l " ", " "); SHAPE[substr(l, 1, k - 1)] = substr(l, k + 1); return }
+  if (DCUR != "") TPL[DCUR, ++TPLN[DCUR]] = l
+}
+# the guard: the rely lines, nothing of its own on the record (core/server-plan.ts guard)
+function addguard(    n, L, i) {
+  NS = 1
+  ST_id[1] = "guard"; ST_to[1] = 60; ST_bh[1] = 0; ST_nb[1] = 0; ST_title[1] = tx("server.step.guard.title")
+  ST_sn[1] = 0; ST_kn[1] = 0; ST_un[1] = 0; ST_rn[1] = 0
+  if (RELIES != "") { n = split(RELIES, L, "\n"); for (i = 1; i <= n; i++) ST_s[1, ++ST_sn[1]] = L[i] }
+}
+# the next step: a template by its name, filled in
+function addstep(name,    k, i, l, n, tag, rest, P) {
+  if (!(name in TPLN)) { INTERNAL = INTERNAL " " name; return }
+  k = ++NS
+  ST_sn[k] = 0; ST_kn[k] = 0; ST_un[k] = 0; ST_rn[k] = 0; ST_title[k] = ""
+  for (i = 1; i <= TPLN[name]; i++) {
+    l = filltext(TPL[name, i])
+    n = index(l, " "); tag = n ? substr(l, 1, n - 1) : l; rest = n ? substr(l, n + 1) : ""
+    if (tag == "@@step") { split(rest, P, " "); ST_id[k] = P[1]; ST_to[k] = P[2]; ST_bh[k] = P[3] + 0; ST_nb[k] = P[4] + 0 }
+    else if (tag == "T") ST_title[k] = rest
+    else if (tag == "S") ST_s[k, ++ST_sn[k]] = rest
+    else if (tag == "K") ST_k[k, ++ST_kn[k]] = rest
+    else if (tag == "U") ST_u[k, ++ST_un[k]] = rest
+    else if (tag == "R") { n = ++ST_rn[k]; ST_rc[k, n] = substr(rest, 1, 1); ST_rk[k, n] = substr(rest, 3) }
+    else if (tag == "W0") ST_w0[k, ST_rn[k]] = rest
+    else if (tag == "W1") ST_w1[k, ST_rn[k]] = rest
+    else if (tag == "WA") ST_wa[k, ST_rn[k]] = rest
+  }
+}
+# the record's items the run carries over (DD's, as the board writes them), then each step's own (Apply)
+function carryall(    i, k) {
+  VN = 0
+  for (i = 1; i <= DDN; i++) {
+    k = DD[i]; VN++
+    V_step[VN] = 1; V_kind[VN] = RI_kind[k]; V_key[VN] = itemkey(k); V_w0[VN] = shquote(itemjson(k))
+  }
+  CARRIED = VN
+}
+function stepvars(    k, j) {
+  for (k = 2; k <= NS; k++) for (j = 1; j <= ST_rn[k]; j++) {
+    VN++; V_step[VN] = k; V_cls[VN] = ST_rc[k, j]; V_key[VN] = ST_rk[k, j]
+    V_w0[VN] = ST_w0[k, j]; V_w1[VN] = ST_w1[k, j]; V_wa[VN] = ST_wa[k, j]
+  }
+}
+# the carried items step k names (its items' keys; "*": all of them, or all of a kind): "I<n> …"
+function takenby(k,    n, j, out, hit) {
+  out = ""
+  for (n = 1; n <= CARRIED; n++) {
+    hit = 0
+    for (j = 1; j <= ST_rn[k] && !hit; j++)
+      if (ST_rc[k, j] == "*") hit = ST_rk[k, j] == "all" || ST_rk[k, j] == V_kind[n]
+      else hit = ST_rk[k, j] == V_key[n]
+    if (hit) out = out " I" n
+  }
+  return substr(out, 2)
+}
+# the carried item with the key of variable n
+function earlier(n,    m) { for (m = 1; m <= CARRIED; m++) if (V_key[m] == V_key[n]) return m; return 0 }
+
+# ---------------------------------------------------------------------------------------------
+# The run (core/server-script.ts runScript): the steps under the server's lock, the record written
+# as they go, a failure rolled back newest first
+
+function unchanged(why) { return "{ echo " shquote(why ": nothing was changed.") "; exit 3; }" }
+# a step's text in a variable, verbatim: S its commands and check, K its skip checks, U its undo
+function verbatim(k, part,    i, n) {
+  print toupper(part) k "=$(cat <<'" STEP_END "'"
+  n = part == "s" ? ST_sn[k] : part == "k" ? ST_kn[k] : ST_un[k]
+  for (i = 1; i <= n; i++) print (part == "s" ? ST_s[k, i] : part == "k" ? ST_k[k, i] " || exit 1" : ST_u[k, i])
+  print STEP_END
+  print ")"
+}
+function assemble(undo, kase, domain, port, address,    k, n, m, i, line, head, mid, unrec, old, sup, SEEN, W, drop, bk, recording, set, cls, e, keep, ahead, off) {
+  head = "{\"v\":1,\"id\":" jstr(RUN_ID) ",\"at\":" jstr(RUN_AT) ",\"state\":\""
+  mid = "\"case\":" jstr(kase) ",\"pair\":{\"user\":" jstr(W_USER) ",\"socket\":" jstr(W_SOCKET) "},\"domain\":" jstr(domain) ",\"publicPort\":" (port == "" ? "null" : port) ",\"address\":" jstr(address) ",\"items\":["
+  unrec = "echo " shquote("The record " RECORD_FILE " could not be written.")
+  old = shquote(BOARD_DIR "/backups/" PLAN_ID "/setup.json")
+  print "exec </dev/null"
+  print "# agent-board: run"
+  print "set -u"
+  print "umask 077"
+  print "sudo() { \"$@\"; }"
+  print "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH"
+  print "LC_ALL=C; export LC_ALL"
+  print "trap 'echo \"$?\" > " RUNS_DIR "/" RUN_ID ".exit' EXIT"
+  print "STOP=0"
+  print "trap 'STOP=1' HUP INT TERM"
+  print "exec 9>" LOCK_FILE
+  print "flock -n 9 || { echo '@@busy'; exit 75; }"
+  print "P='set -e"
+  print "sudo() { \"$@\"; }"
+  print "'"
+  print "SKIP=false"
+  if (VN) { line = ""; for (n = 1; n <= VN; n++) line = line (n > 1 ? " " : "") "I" n "=''"; print line }
+  if (NS > 1) { line = ""; for (k = 2; k <= NS; k++) line = line (k > 2 ? " " : "") "D" k "=0"; print line }
+  for (k = 1; k <= NS; k++) {
+    if (ST_bh[k]) continue
+    print "# " k ": " ST_id[k]
+    verbatim(k, "s")
+    if (ST_kn[k]) verbatim(k, "k")
+    if (ST_un[k]) verbatim(k, "u")
+  }
+  # record(): written whole or not at all
+  print "record() {"
+  print "  it=''"
+  if (VN) {
+    line = "  for x in"
+    for (n = 1; n <= VN; n++) line = line " \"$I" n "\""
+    print line "; do if [ -n \"$x\" ]; then it=\"$it,$x\"; fi; done"
+  }
+  print "  printf '%s%s%s%s%s\\n' " shquote(head) " \"$1\" " shquote("\"," mid) " \"$" "{it#,}\" ']}' > " RECORD_FILE ".new &&"
+  print "    [ \"$(tail -c 3 " RECORD_FILE ".new)\" = ']}' ] && chmod 644 " RECORD_FILE ".new && mv -f " RECORD_FILE ".new " RECORD_FILE
+  print "}"
+  print "run() {"
+  print "  echo \"@@step $1 start\""
+  print "  if [ -n \"$3\" ] && timeout -k 5 " SKIP_S " sh -c \"$P$3\" >/dev/null 2>&1 9>&-; then echo \"@@step $1 skip\"; SKIP=true; return 0; fi"
+  print "  if timeout -k 5 \"$2\" sh -c \"$P$4\" 9>&-; then echo \"@@step $1 ok\"; SKIP=false; return 0; fi"
+  print "  echo \"@@step $1 fail\""
+  print "  return 1"
+  print "}"
+  print "undo() {"
+  print "  if timeout -k 5 \"$2\" sh -c \"$P$3\" 9>&-; then echo \"@@undo $1 ok\"; return 0; fi"
+  print "  echo \"@@undo $1 fail\""
+  print "  return 1"
+  print "}"
+  # finish(): an Apply's carried items a step superseded come off the record
+  sup = ""
+  if (!undo) for (k = 2; k <= NS; k++) {
+    m = split(takenby(k), W, " ")
+    for (i = 1; i <= m; i++) if (!(W[i] in SEEN)) { SEEN[W[i]] = 1; sup = sup W[i] "=''; " }
+  }
+  print "finish() {"
+  print "  case $1 in"
+  print "  applied) " sup (undo ? "rm -f " RECORD_FILE : "record applied || { " unrec "; back; }") " ;;"
+  if (undo) print "  rolled-back) record rolled-back || { " unrec "; set -- rollback-failed; } ;;"
+  else print "  rolled-back) { if [ -f " old " ]; then cp -p " old " " RECORD_FILE ".new && mv -f " RECORD_FILE ".new " RECORD_FILE "; else record rolled-back; fi; } || { " unrec "; set -- rollback-failed; } ;;"
+  print "  *) record \"$1\" || " unrec " ;;"
+  print "  esac"
+  print "  echo \"@@result $1\""
+  print "  case $1 in applied) exit 0 ;; rolled-back) exit 1 ;; *) exit 2 ;; esac"
+  print "}"
+  # back(): newest first, a step that ran has its undo run; its items come off the record when that works
+  print "back() {"
+  print "  R=rolled-back"
+  for (k = NS; k >= 2; k--) {
+    drop = ""; bk = ""
+    if (undo) {
+      m = split(takenby(k), W, " ")
+      for (i = 1; i <= m; i++) bk = bk (bk == "" ? "" : "; ") W[i] "=" V_w0[substr(W[i], 2) + 0]
+    } else {
+      for (n = CARRIED + 1; n <= VN; n++) if (V_step[n] == k && V_cls[n] != "d") drop = drop (drop == "" ? "" : "; ") "I" n "=''"
+      bk = drop
+    }
+    if (ST_un[k]) print "  if [ \"$D" k "\" = 1 ]; then if undo " k " " ST_to[k] " \"$U" k "\"; then " (bk == "" ? "" : bk "; ") ":; else R=rollback-failed; fi; fi"
+    else if (!undo && drop != "") print "  if [ \"$D" k "\" = 1 ]; then " drop "; fi"
+  }
+  print "  finish \"$R\""
+  print "}"
+  print "halt() {"
+  print "  if [ \"$STOP\" = 1 ]; then echo " shquote("The run was told to stop: what it did is rolled back.") "; back; fi"
+  print "}"
+  # the guard: nothing done yet, nothing to roll back or record
+  print "run 1 " ST_to[1] " '' \"$S1\" || exit 3"
+  print "if [ \"$STOP\" = 1 ]; then exit 143; fi"
+  print "if [ -f " RECORD_FILE " ]; then { install -d -m 700 " shquote(BOARD_DIR "/backups/" PLAN_ID) " && cp -p " RECORD_FILE " " old "; } || " unchanged("The record " RECORD_FILE " could not be copied") "; fi"
+  for (n = 1; n <= CARRIED; n++) print "I" n "=" V_w0[n]
+  print "record running || " unchanged("The record " RECORD_FILE " could not be written")
+  recording = 1
+  for (k = 2; k <= NS; k++) {
+    if (recording) print "halt"
+    if (ST_bh[k]) { print "echo '@@step " k " start'; echo '@@step " k " skip'"; continue }
+    if (!undo) {
+      # what the step will change, on the record before it runs
+      ahead = ""; off = ""
+      for (n = CARRIED + 1; n <= VN; n++) if (V_step[n] == k && V_cls[n] != "g" && V_cls[n] != "d") {
+        ahead = ahead (ahead == "" ? "" : "; ") "I" n "=" V_wa[n]
+        off = off (off == "" ? "" : "; ") "I" n "=''"
+      }
+      if (ahead != "") { print ahead; print "record running || { " off "; back; }" }
+    }
+    print "D" k "=1; run " k " " ST_to[k] " " (ST_kn[k] ? "\"$K" k "\"" : "''") " \"$S" k "\" || back"
+    print "if [ \"$SKIP\" = true ]; then D" k "=0; fi"
+    if (undo) {
+      m = split(takenby(k), W, " ")
+      line = ""
+      for (i = 1; i <= m; i++) line = line (i > 1 ? "; " : "") W[i] "=''"
+      if (line != "") print line
+    } else for (n = CARRIED + 1; n <= VN; n++) {
+      if (V_step[n] != k) continue
+      set = "I" n "=" V_w1[n]; cls = V_cls[n]
+      # a step that skips because an earlier run of the board did its work keeps that run's item
+      e = (cls == "i" || cls == "g" || cls == "d" || cls == "m") ? earlier(n) : 0
+      keep = e ? "elif [ -n \"$I" e "\" ]; then I" n "=$I" e "; " : ""
+      if (cls == "g" || cls == "d") print "if [ \"$SKIP\" = false ]; then " set "; " keep "fi"
+      else if (cls == "m") print "if [ \"$SKIP\" = false ]; then " set "; " keep "else I" n "=''; fi"
+      else if (e) print "if [ \"$SKIP\" = false ]; then " set "; " keep "else " set "; fi"
+      else print set
+    }
+    # Undo's last steps take the record away with the rest of the board's files
+    if (undo && ST_id[k] == "forget") recording = 0
+    if (recording) print "record running || back"
+  }
+  if (recording) print "halt"
+  print "finish applied"
+  print LAST_LINE
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1246,12 +1585,6 @@ function codeof(k) {
   if (RI_kind[k] == "block") return "B"
   return ""
 }
-# the record's items as the run carries them: ",{...},{...}" quoted, or '' for none; "only": those Undo's shape leaves out
-function carried(only,    i, k, s) {
-  s = ""
-  for (i = 1; i <= DDN; i++) { k = DD[i]; if (!only || codeof(k) == "") s = s "," itemjson(k) }
-  return s == "" ? SQ SQ : shquote(s)
-}
 function own(c) { return c == "1" || c == "1b" || c == "4a" || c == "4b" }
 # the addresses of nginx's own port-80 listen lines, as the board's nginx file has them (core/server-texts.ts nginxFile)
 function nginxlisten(OUT,    i, F, nf, a, n, seen) {
@@ -1277,40 +1610,55 @@ function nginxaddress(    i, F, nf, a, ip, any6) {
   sub(/:[0-9]+$/, "", ip); sub(/^\[/, "", ip); sub(/\]$/, "", ip)
   return (ip != "" && ip !~ /[^0-9a-fA-F.:]/) ? ip : "127.0.0.1"
 }
-function main_apply(    c, mine, old, who, docker, fetch, group, cand, update, key, HH, NH, nh, L, n, ug, asroot, cc) {
+# what went wrong putting the plan together, if anything (said, and 1)
+function broken() {
+  if (INTERNAL != "") { print "internal" INTERNAL; return 1 }
+  if (MISSING != "") { print "internal " MISSING; return 1 }
+  if (REFUSE != "") { print "refuse" REFUSE; return 1 }
+  return 0
+}
+function titles(    k) { for (k = 1; k <= NS; k++) print "title " ST_title[k] }
+function main_apply(    c, mine, old, who, docker, fetch, group, cand, update, rgid, key, HH, NH, nh, L, n, ug, was, asroot, cc, S, i, address) {
   if (!round_one()) { print "unreadable"; return }
   caddy_target(); nginx_target()
   if (!round_two()) { print "unreadable"; return }
-  sayfound()
+  pfound()
   choose()
   if (CHOICE == "") {
     if (WHY == "interrupted" && RECORD) { print "interrupted"; return }
-    saywhy(WHY); print "stop " WHY; return
+    stop(WHY); return
   }
   c = CHOICE
   mine = RECORD && whose() != "other"
   old = mine && holds_setup()
   who = old ? whose() : ""
   if (c == "2" || c == "3a" || c == "3b") {
-    if (!theircaddy()) { saywhy("twoConfigs"); print "stop twoConfigs"; return }
-    if (c == "2" && HK[443] != "unit") { saywhy("twoConfigs"); print "stop twoConfigs"; return }
+    if (!theircaddy()) { stop("twoConfigs"); return }
+    if (c == "2" && HK[443] != "unit") { stop("twoConfigs"); return }
     if (c != "2") {
       cc = containerof(CA_container)
       NETWORK = (c == "3a" && cc) ? helpernetwork(cc) : NUL
-      if (c == "3a" && NETWORK == NUL) { saywhy("bridge"); print "stop bridge"; return }
+      if (c == "3a" && NETWORK == NUL) { stop("bridge"); return }
     }
   }
-  if (c == "4b" && !NGINX) { saywhy("other80"); print "stop other80"; return }
+  if (c == "4b" && !NGINX) { stop("other80"); return }
   if (who == "same" || who == "update") {
     if (REC_state == "running" && LOCK_held) { print "busy"; return }
     if (REC_state != "applied") { print "unfinished " REC_state; return }
-    if (who == "same") { print "same " REC_address; return }
+    # set up already: said so, unless step 1 lacks a part, which the plan makes again
+    if (who == "same" && !NEED_user && !NEED_folder && NEED_keys == "" && !NEED_fence) { print "same " REC_address; return }
   }
   if (mine) dedupe(); else DDN = 0
   update = who == "update"
   if (update) MOVED = REC_domain
+  # the run reads the gid of the socket's folder it makes (the cases with a container of the board's)
+  rgid = NEED_folder && c != "2"
   docker = own(c) ? DOCKER : 1
   fetch = 0; group = 0; cand = 0
+  # step 1's parts still missing come first in the guard (core/server-plan.ts stepOneSteps)
+  if (NEED_user) addrely("r.none.user", "")
+  if (NEED_folder) addrely("r.none.folder", "")
+  if (NEED_keys == "make") addrely("r.none.keys", "")
   if (c == "4b" && H_fetch == "curl") { nh = fetchhosts(NX_n, NX_nn, W_DOMAIN, NH); fetch = nh > 0; if (fetch) setlist("nhosts", NH, nh) }
   if (c == "2" || c == "3a" || c == "3b") {
     nh = fetchhosts(CA_host, CA_hostn, W_DOMAIN, HH)
@@ -1322,23 +1670,22 @@ function main_apply(    c, mine, old, who, docker, fetch, group, cand, update, k
   if (c == "2") {
     ug = U_group["caddy.service"] != "" ? U_group["caddy.service"] : U_user["caddy.service"]
     asroot = !U_has["caddy.service"] || U_user["caddy.service"] == "" || U_user["caddy.service"] == "root"
-    group = !asroot && FOLDER && ug != "" && FO_group != ug
+    # the folder's group: Look's, or the tunnel user's own when the run makes the folder
+    was = FOLDER ? FO_group : NEED_folder ? (S1_group != "" ? S1_group : W_USER) : ""
+    group = !asroot && was != "" && ug != "" && was != ug
     setv("bin", TC_bin); setv("user", TC_user)
-    if (group) { setv("group", ug); setv("oldgroup", FO_group) }
+    if (group) { setv("group", ug); setv("oldgroup", was) }
     relyon(443); relyconfig()
   }
   if (c == "3a" || c == "3b") {
     cand = TC_cand
     setv("cid", TC_cid); setv("config", CA_config); setv("config_candidate", dirof(CA_config) "/.Caddyfile.agent-board")
     if (c == "3a") setv("network", NETWORK)
-    VAL["gid"] = FO_gid
     setv("socat_hash", fnv(filltext(HASH["h.socat." (c == "3b" ? "host" : "net")])))
     relyon(443); addrely("r.container.none", TC_cid); relyconfig()
     if (c == "3b") relyon(8481)
   }
   if (own(c)) {
-    VAL["gid"] = FO_gid
-    setv("caddy_hash", fnv(filltext(HASH["h.caddy." c])))
     setv("docker_repo", "https://download.docker.com/linux/" (DI_id == "ubuntu" ? "ubuntu" : "debian"))
     if (c == "1" || c == "4a") relyon(80)
     if (c == "1" || c == "1b") relyon(443)
@@ -1350,18 +1697,28 @@ function main_apply(    c, mine, old, who, docker, fetch, group, cand, update, k
     }
   }
   if (update) setv("old", REC_domain)
-  setv("gid", FO_gid)
-  VAL["relies"] = RELIES
-  VAL["carried"] = carried(0)
-  if (c == "1b" || c == "4a" || c == "4b") setd("d_holder", WV1)
-  if (c == "3a" || c == "3b") setd("d_container", WV1)
-  if (INTERNAL != "") { print "internal" INTERNAL; return }
-  if (REFUSE != "") { print "refuse" REFUSE; return }
-  warnings(c, own(c) && !DOCKER, fetch && (c == "2" || c == "3a" || c == "3b"))
-  key = "a." c ".d" docker ".f" fetch ".g" group ".c" cand ".u" update
+  if (FOLDER) setv("gid", FO_gid)
+  setv("plan_id", PLAN_ID); setv("run_id", RUN_ID)
+  key = "a." c ".d" docker ".f" fetch ".g" group ".c" cand ".u" update ".r" rgid
+  if (!(key in SHAPE)) { print "internal " key; return }
+  addguard()
+  if (NEED_user) addstep("x.user")
+  if (NEED_folder) addstep("x.folder")
+  if (NEED_keys == "make") addstep(S1_keysdir ? "x.keys.make" : "x.keys.makedir")
+  if (NEED_keys == "write") addstep("x.keys.write")
+  if (NEED_fence) addstep(S1_include ? "x.fence.file" : "x.fence.block")
+  n = split(SHAPE[key], S, " ")
+  for (i = 1; i <= n; i++) addstep(S[i])
+  if (broken()) return
+  address = c == "4a" || c == "4b" ? "https://" W_DOMAIN ":8443" : "https://" W_DOMAIN
+  warnings(c, hasstep("docker-install"), hasstep("fetch-before"))
+  pplan(update ? "update" : "apply", c, address)
   print "plan " key
-  print "address " (c == "4a" || c == "4b" ? "https://" W_DOMAIN ":8443" : "https://" W_DOMAIN)
-  printvalues()
+  print "address " address
+  titles()
+  carryall(); stepvars()
+  print "@@ab-run"
+  assemble(0, c, W_DOMAIN, c == "4a" || c == "4b" ? 8443 : "", address)
 }
 # Undo names their Caddyfile's line or block even when the record does not (core/server-plan.ts withEdit)
 function withedit(    kind, i, k, file) {
@@ -1374,13 +1731,13 @@ function withedit(    kind, i, k, file) {
   if (file == NUL || !isplainpath(file)) return
   k = ++REC_n; RI_kind[k] = kind; RI_file[k] = file; DD[++DDN] = k
 }
-function main_undo(    i, k, codes, code, edit, tc, theirs, cand, fetch, nfetch, HH, NH, nh, key) {
+function main_undo(    i, j, k, codes, code, edit, tc, theirs, cand, fetch, nfetch, HH, NH, nh, key, n, S, KN, made) {
   if (!round_one()) { print "unreadable"; return }
   caddy_target(); nginx_target()
   if (!round_two()) { print "unreadable"; return }
-  sayfound()
+  pfound()
   if (!REC_present) { print "nothing"; return }
-  if (!setup_record() || whose() == "other") { saywhy("otherSetup"); print "stop otherSetup"; return }
+  if (!setup_record() || whose() == "other") { stop("otherSetup"); return }
   if (REC_state == "running" && LOCK_held) { print "busy"; return }
   dedupe(); withedit()
   codes = ""; edit = 0
@@ -1412,17 +1769,35 @@ function main_undo(    i, k, codes, code, edit, tc, theirs, cand, fetch, nfetch,
   }
   nfetch = 0
   if (index(codes, "F3") && H_fetch == "curl") { nh = fetchhosts(NX_n, NX_nn, REC_domain, NH); nfetch = nh > 0; if (nfetch) setlist("nhosts", NH, nh) }
-  setv("rec_case", REC_case); setv("rec_domain", REC_domain); setv("rec_address", REC_address)
-  setv("rec_port", REC_port == "" ? "null" : REC_port)
-  k = REC_address; sub(/^[a-z]+:\/\//, "", k); sub(/[:\/].*$/, "", k); setv("rec_host", k)
-  VAL["relies"] = RELIES
-  VAL["carried"] = carried(1)
-  if (INTERNAL != "") { print "internal" INTERNAL; return }
-  if (REFUSE != "") { print "refuse" REFUSE; return }
+  setv("rec_domain", REC_domain)
+  k = REC_address; sub(/^[a-z]+:\/\//, "", k); sub(/[:\/].*$/, "", k); RECHOST = k
+  setv("plan_id", PLAN_ID); setv("run_id", RUN_ID)
   key = "u." (codes == "" ? "0" : codes) ".t" theirs ".c" cand ".f" fetch ".n" nfetch
+  if (!(key in SHAPE)) { print "unknown " key; return }
+  addguard()
+  n = split(SHAPE[key], S, " ")
+  for (i = 1; i <= n; i++) addstep(S[i])
+  # step 1's parts the board made, after the case's: the fence, the keys file, the folder, the user
+  split("fence keys folder user", KN, " ")
+  for (j = 1; j <= 4; j++) for (i = DDN; i >= 1; i--) {
+    k = DD[i]
+    if (RI_kind[k] != KN[j]) continue
+    made[KN[j]] = 1
+    if (KN[j] == "fence") addstep(RI_path[k] == SSHD_CONFIG ? "y.fence.block" : "y.fence.file")
+    else if (KN[j] == "keys") addstep(RI_dir[k] ? "y.keys.dir" : "y.keys")
+    else addstep("y." KN[j])
+  }
+  addstep("y.forget")
+  # what was there before the board made anything of step 1 is the owner's to remove
+  if (!(("fence" in made) && ("keys" in made) && ("folder" in made) && ("user" in made))) addstep("y.byhand")
+  if (broken()) return
+  pplan("undo")
   print "plan " key
   print "address " REC_address
-  printvalues()
+  titles()
+  carryall()
+  print "@@ab-run"
+  assemble(1, REC_case, RECHOST, REC_port, REC_address)
 }
 
 # a template filled in: the values, "@@ab-template", its lines
@@ -1496,6 +1871,9 @@ function title(n) {
   gsub(/\r/, "")
   if (mode == "bind") { bindline($0); next }
   if (mode == "progress") { progressline($0); next }
+  # the step templates, before Look's output
+  if (NR == 1 && $0 == "@@ab-dict") { part = 0; next }
+  if (part == 0) { if ($0 == "@@ab-round1") part = 1; else dictline($0); next }
   if ($0 == "@@ab-round2") { part = 2; next }
   if (part == 1) R1[++N1] = $0
   else R2[++N2] = $0

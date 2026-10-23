@@ -1,28 +1,22 @@
-// The one command ("Do it myself"): what it carries, and that its awk reads Look and chooses as the
-// board does. The awk runs on every Look fixture of both distributions and on changed copies of
-// them; its choice, its reasons, its warnings and the run script it fills in are compared with what
-// the board's own TypeScript makes of the same output (readRoundOne, readServerFacts, chooseCase,
-// buildPlan, undoPlan, lookScript2, runScript), byte for byte.
+// The one command ("Do it myself"): what it carries, and that its awk reads Look, chooses and puts
+// the run together as the board does. The awk runs on every Look fixture of both distributions and
+// on changed copies of them (step 1's parts missing in each way Look can find them among them); its
+// choice, its reasons, its warnings, the plan in plain words, its steps' titles and the run it
+// makes are compared with what the board's own TypeScript makes of the same output (readRoundOne,
+// readServerFacts, chooseCase, buildPlan, undoPlan, plainPlan, lookScript2, runScript), the run
+// byte for byte.
 import { afterAll, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gunzipSync, gzipSync } from 'node:zlib'
-import { t } from '../../src/core/lang.ts'
+import { translator } from '../../src/core/i18n/translator.ts'
+import { useLanguage as switchLanguage, t } from '../../src/core/lang.ts'
 import type { ServerFacts } from '../../src/core/server-facts.ts'
 import { lookScript2, readRoundOne, readServerFacts } from '../../src/core/server-look.ts'
-import { oneLine, oneshotAwk, oneshotScripts } from '../../src/core/server-oneshot.ts'
-import {
-  applyShapes,
-  applyTemplate,
-  launchTemplate,
-  lookKey,
-  lookShapes,
-  lookTemplate,
-  undoCode,
-  undoShapes,
-  undoTemplate,
-} from '../../src/core/server-oneshot-templates.ts'
+import { oneLine, oneshotAwk, oneshotDictionary, oneshotScripts } from '../../src/core/server-oneshot.ts'
+import { launchTemplate, lookKey, lookShapes, lookTemplate } from '../../src/core/server-oneshot-templates.ts'
+import { type PlainPlan, plainPlan } from '../../src/core/server-plain.ts'
 import {
   buildPlan,
   chooseCase,
@@ -35,35 +29,78 @@ import {
   whose,
 } from '../../src/core/server-plan.ts'
 import { launchScript, runScript } from '../../src/core/server-script.ts'
-import { shQuote } from '../../src/core/server-shell.ts'
 import { fill, type Value } from '../../src/core/server-template.ts'
+import type { Translator } from '../../src/core/types.ts'
 
+const KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGJvYXJkIGtleSBmb3IgdGVzdHM agent-board@pc'
 const W: Wanted = {
   user: 'boardtunnel',
   socket: '/var/lib/boardtunnel/board.sock',
   domain: 'board.example.com',
   publicPort: null,
+  publicKey: KEY,
 }
 const LOOK = { user: W.user, socket: W.socket, domain: W.domain }
-const INPUT = { wanted: W, publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGJvYXJkIGtleSBmb3IgdGVzdHM agent-board@pc' }
-const IDS = { plan_id: '20261023-100400-3f9a', run_id: '20261023-100401-0b1c', at: '2026-10-23T10:04:01.000Z' }
+const INPUT = { wanted: W, publicKey: KEY }
+const IDS = { plan: '20261023-100400-3f9a', run: '20261023-100401-0b1c', at: '2026-10-23T10:04:01.000Z' }
 
 const dir = mkdtempSync(join(tmpdir(), 'oneshot-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
-const PROGRAM = join(dir, 'oneshot.awk')
-writeFileSync(PROGRAM, oneshotAwk(INPUT))
+/** What the board makes in a language. */
+function inLanguage<T>(lang: 'en' | 'ru', make: () => T): T {
+  const was = t.lang
+  switchLanguage(lang)
+  try {
+    return make()
+  } finally {
+    switchLanguage(was)
+  }
+}
+/** The awk program as the command carries it, in a language. */
+function program(lang: 'en' | 'ru' = 'en'): string {
+  const file = join(dir, `oneshot-${lang}.awk`)
+  writeFileSync(
+    file,
+    inLanguage(lang, () => oneshotAwk(INPUT)),
+  )
+  return file
+}
+const PROGRAM = program()
+const DICT = inLanguage('en', () => oneshotDictionary(INPUT))
 /** mawk when there is one (Debian's and Ubuntu's awk), else this computer's. */
 const AWK = Bun.which('mawk') ?? Bun.which('awk') ?? 'awk'
 
-function awk(mode: string, input: string, env: Record<string, string> = {}): { out: string; code: number } {
-  const r = Bun.spawnSync([AWK, '-v', `mode=${mode}`, '-f', PROGRAM], {
-    stdin: new TextEncoder().encode(input),
-    env: { ...process.env, LC_ALL: 'C', ...env },
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
-  return { out: r.stdout.toString(), code: r.exitCode ?? -1 }
+function awk(
+  mode: string,
+  input: string,
+  env: Record<string, string> = {},
+  file = PROGRAM,
+): { out: string; code: number; err: string } {
+  const r = Bun.spawnSync(
+    [
+      AWK,
+      '-v',
+      `mode=${mode}`,
+      '-v',
+      `PLAN_ID=${IDS.plan}`,
+      '-v',
+      `RUN_ID=${IDS.run}`,
+      '-v',
+      `RUN_AT=${IDS.at}`,
+      '-f',
+      file,
+    ],
+    {
+      stdin: new TextEncoder().encode(input),
+      env: { ...process.env, LC_ALL: 'C', ...env },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  )
+  return { out: r.stdout.toString(), code: r.exitCode ?? -1, err: r.stderr.toString() }
 }
+/** What the apply and undo modes read: the step templates, then Look's two rounds. */
+const looked = (r1: string, r2: string, dict = DICT): string => `${dict}\n@@ab-round1\n${r1}\n@@ab-round2\n${r2}`
 
 /** The awk's value lines (v, e/w, l…@@ab-end-value) as values. */
 function valuesOf(out: string): Record<string, Value> {
@@ -90,40 +127,37 @@ function valuesOf(out: string): Record<string, Value> {
   }
   return v
 }
+/** What the awk says before its run, and the run. */
+function parts(out: string): { said: string; run: string | null } {
+  const at = out.indexOf('\n@@ab-run\n')
+  return at < 0 ? { said: out, run: null } : { said: out.slice(0, at + 1), run: out.slice(at + '\n@@ab-run\n'.length) }
+}
 const said = (out: string, what: string): string[] =>
-  out
-    .split('\n')
+  parts(out)
+    .said.split('\n')
     .filter(l => l.startsWith(`${what} `) || l === what)
     .map(l => l.slice(what.length + 1))
 const decision = (out: string): string =>
-  out
-    .split('\n')
-    .find(l => /^(plan|stop|same|busy|unfinished|interrupted|unreadable|refuse|internal|nothing)( |$)/.test(l)) ?? ''
-
-// the templates, as the scripts carry them
-const LOOK2 = new Map(lookShapes().map(s => [lookKey(s), lookTemplate(s, LOOK)]))
-const APPLY = new Map(applyShapes().map(s => [applyTemplate(s, W).key, applyTemplate(s, W)]))
-const UNDO = new Map(undoShapes(W).map(s => [undoTemplate(s, W).key, undoTemplate(s, W)]))
-const LAUNCH = launchTemplate(W)
-
-// ---------------------------------------------------------------------------------------------
-// What the board makes of the same output
-
-/** A record's item as the run writes it (its JSON, as JSON.stringify gives it). */
-const itemJson = (i: RecordItem): string => JSON.stringify(i)
-/** The record line's items: the plan's guard carried them; the command's run carries them in `it=`. */
-const carriedWord = (items: readonly RecordItem[]): string =>
-  items.length ? shQuote(`,${items.map(itemJson).join(',')}`) : "''"
-
-/** The board's run of a plan, with what its guard carries moved into the record line (as the command has it). */
-function boardRun(p: Plan, moved: (i: RecordItem) => boolean): string {
-  const [guard, ...rest] = p.steps
-  if (!guard) throw new Error('no guard')
-  const carry = guard.record.filter(moved)
-  const keep = guard.record.filter(i => !moved(i))
-  const run = runScript({ ...p, steps: [{ ...guard, record: keep }, ...rest] }, W, { id: IDS.run_id, at: IDS.at })
-  return run.replace("\n  it=''\n", `\n  it=${carriedWord(carry)}\n`)
+  parts(out)
+    .said.split('\n')
+    .find(l =>
+      /^(plan|stop|same|busy|unfinished|interrupted|unreadable|refuse|internal|nothing|unknown)( |$)/.test(l),
+    ) ?? ''
+/** The plan in plain words as the awk says it. */
+function plainOf(out: string): PlainPlan {
+  return {
+    found: said(out, 'pfound')[0] ?? '',
+    will: said(out, 'pwill'),
+    docker: said(out, 'pdocker')[0] ?? null,
+    untouched: said(out, 'puntouched')[0] ?? '',
+    stop: said(out, 'pstop')[0] ?? null,
+  }
 }
+
+const LOOK2 = new Map(lookShapes().map(s => [lookKey(s), lookTemplate(s, LOOK)]))
+const LAUNCH = launchTemplate(W)
+/** How the board's service packs a run for its launch (services/server-setup.ts). */
+const PACK = (text: string): string => gzipSync(text).toString('base64')
 
 /** Look's two rounds of a scenario: round one, and round two as the fixture has it (or none). */
 interface Scenario {
@@ -360,7 +394,162 @@ function mutations(): Scenario[] {
   ]
 }
 
-const SCENARIOS = [...fixtures(), ...mutations()]
+// ---------------------------------------------------------------------------------------------
+// Step 1 as Look reads it (core/server-look.ts stepOneLines): each way its parts can be missing
+
+const STEP_ONE_IDS = ['tunnel-user', 'socket-folder', 'keys-file', 'sshd-fence']
+const DONE = ['@@user 995 boardtunnel', '@@keys same', '@@keys-dir', '@@include']
+
+/**
+ * Round one with Look's step-1 lines at the end of the fence section; sshd's settings for the
+ * tunnel user as the fixture has them (the fence in force), changed, or none; the socket's folder
+ * there or not.
+ */
+function stepOne(r1: string, lines: string[], o: { fence?: 'none' | 'loose'; folder?: false } = {}): string {
+  const start = r1.indexOf('@@section fence\n') + '@@section fence\n'.length
+  const end = r1.indexOf('@@section folder\n')
+  let fence = r1.slice(start, end).split('\n').filter(Boolean)
+  if (o.fence === 'none') fence = []
+  if (o.fence === 'loose') fence = fence.map(l => (l === 'permittty no' ? 'permittty yes' : l))
+  let rest = r1.slice(end)
+  if (o.folder === false)
+    rest = rest
+      .replace(/^@@dir .*$/m, "stat: cannot statx '/var/lib/boardtunnel': No such file or directory")
+      .replace(/^@@group .*\n/m, '')
+      .replace(/^@@socket .*\n/m, '')
+  return `${r1.slice(0, start)}${[...fence, ...lines].join('\n')}\n${rest}`
+}
+
+const STEP_ONE_VARIANTS: { name: string; r1: (r1: string) => string }[] = [
+  { name: 'step 1 done', r1: r1 => stepOne(r1, DONE) },
+  {
+    name: 'step 1 not done',
+    r1: r1 => stepOne(r1, ['@@user none', '@@keys none', '@@include'], { fence: 'none', folder: false }),
+  },
+  {
+    name: 'step 1 not done, sshd_config without Include, no keys folder',
+    r1: r1 => stepOne(r1, ['@@user none', '@@keys none'], { fence: 'none', folder: false }),
+  },
+  {
+    name: 'step 1 not done, the keys folder there',
+    r1: r1 => stepOne(r1, ['@@user none', '@@keys none', '@@keys-dir', '@@include'], { fence: 'none', folder: false }),
+  },
+  {
+    name: 'an older key',
+    r1: r1 => stepOne(r1, ['@@user 995 boardtunnel', '@@keys other', '@@keys-dir', '@@include']),
+  },
+  { name: 'no tunnel user', r1: r1 => stepOne(r1, ['@@user none', '@@keys same', '@@keys-dir', '@@include']) },
+  { name: 'no socket folder', r1: r1 => stepOne(r1, DONE, { folder: false }) },
+  { name: 'the fence loosened', r1: r1 => stepOne(r1, DONE, { fence: 'loose' }) },
+  {
+    name: 'no socket folder, a tunnel user of another group',
+    r1: r1 => stepOne(r1, ['@@user 995 tunnels', '@@keys same', '@@keys-dir', '@@include'], { folder: false }),
+  },
+]
+
+const STEP_ONE_ITEMS: RecordItem[] = [
+  { kind: 'user', name: 'boardtunnel' },
+  { kind: 'folder', path: '/var/lib/boardtunnel' },
+  { kind: 'keys', path: '/etc/ssh/authorized_keys/boardtunnel', dir: true },
+  { kind: 'fence', path: '/etc/ssh/sshd_config.d/00-agent-board.conf' },
+]
+const STEP_ONE_BLOCK: RecordItem[] = [
+  { kind: 'user', name: 'boardtunnel' },
+  { kind: 'folder', path: '/var/lib/boardtunnel' },
+  { kind: 'keys', path: '/etc/ssh/authorized_keys/boardtunnel', dir: false },
+  { kind: 'fence', path: '/etc/ssh/sshd_config' },
+]
+
+function stepOneScenarios(): Scenario[] {
+  const out: Scenario[] = []
+  const all = ['bare', 'nodocker', 'caddy-unit', 'compose-folder', 'compose-file', 'caddy-host', 'nginx-80-443']
+  for (const name of [...all, 'nginx-443', 'dummy80', 'apache', 'caddy-bridge'])
+    for (const v of STEP_ONE_VARIANTS) {
+      const s = byName(`debian13/${name}`)
+      out.push({ name: `${s.name} ${v.name}`, r1: v.r1(s.r1), r2: s.r2 })
+    }
+  for (const name of all) {
+    const s = byName(`ubuntu2604/${name}`)
+    for (const v of STEP_ONE_VARIANTS.slice(1, 3)) out.push({ name: `${s.name} ${v.name}`, r1: v.r1(s.r1), r2: s.r2 })
+  }
+  // set up with step 1 made by the board: again, Undo, an update, a part of step 1 gone since
+  const bare = byName('debian13/bare')
+  const unit = byName('debian13/caddy-unit')
+  const folder = byName('debian13/compose-folder')
+  const nginx = byName('debian13/nginx-80-443')
+  const m = (name: string, s: Scenario, r1: string, r2 = s.r2): Scenario => ({ name: `${s.name} ${name}`, r1, r2 })
+  const done = (s: Scenario): Scenario => ({ ...s, r1: stepOne(s.r1, DONE) })
+  const old = { domain: 'old.example.com', address: 'https://old.example.com' }
+  out.push(
+    m('set up with step 1', bare, withRecord(done(bare), { items: [...STEP_ONE_ITEMS, ...OWN_ITEMS] })),
+    m('set up with step 1 in sshd_config', bare, withRecord(done(bare), { items: [...STEP_ONE_BLOCK, ...OWN_ITEMS] })),
+    m(
+      'set up with step 1 but the keys file (an older key written over)',
+      bare,
+      withRecord(done(bare), {
+        items: [STEP_ONE_ITEMS[0], STEP_ONE_ITEMS[1], STEP_ONE_ITEMS[3], ...OWN_ITEMS] as RecordItem[],
+      }),
+    ),
+    m(
+      'set up with step 1, the tunnel user gone since',
+      bare,
+      withRecord(
+        { ...bare, r1: stepOne(bare.r1, ['@@user none', '@@keys same', '@@keys-dir', '@@include']) },
+        { items: [...STEP_ONE_ITEMS, ...OWN_ITEMS] },
+      ),
+    ),
+    m(
+      'set up with step 1 for another domain',
+      bare,
+      withRecord(done(bare), { ...old, items: [...STEP_ONE_ITEMS, ...OWN_ITEMS] }),
+    ),
+    m(
+      'set up with step 1, cut short making it',
+      bare,
+      withRecord(done(bare), { state: 'running', items: STEP_ONE_ITEMS.slice(0, 2) }),
+    ),
+    m(
+      'set up with step 1, rolled back',
+      bare,
+      withRecord(
+        {
+          ...bare,
+          r1: stepOne(bare.r1, ['@@user none', '@@keys none', '@@include'], { fence: 'none', folder: false }),
+        },
+        { state: 'rolled-back', items: [] },
+      ),
+    ),
+    m('set up with step 1', unit, withRecord(done(unit), { case: '2', items: [...STEP_ONE_ITEMS, ...UNIT_ITEMS] })),
+    m(
+      'set up with step 1 for another domain',
+      unit,
+      withRecord(done(unit), { case: '2', ...old, items: [...STEP_ONE_ITEMS, ...UNIT_ITEMS] }),
+      unit.r2.replace('"host":["b.example.com"]', '"host":["b.example.com","old.example.com"]'),
+    ),
+    m(
+      'set up with step 1',
+      folder,
+      withRecord(done(folder), { case: '3a', items: [...STEP_ONE_BLOCK, ...blockItems('/srv/my web/Caddyfile')] }),
+    ),
+    m(
+      'set up with step 1',
+      nginx,
+      withRecord(done(nginx), {
+        case: '4b',
+        publicPort: 8443,
+        address: `https://${W.domain}:8443`,
+        items: [
+          ...STEP_ONE_ITEMS,
+          ...OWN_ITEMS.slice(1),
+          { kind: 'file', path: '/etc/nginx/conf.d/agent-board.conf', sha256: 'ef'.repeat(32) },
+        ],
+      }),
+    ),
+  )
+  return out
+}
+
+const SCENARIOS = [...fixtures(), ...mutations(), ...stepOneScenarios()]
 
 // ---------------------------------------------------------------------------------------------
 
@@ -387,43 +576,24 @@ function mine(f: ServerFacts): SetupRecord | null {
   return r && whose(r, W) !== 'other' ? r : null
 }
 
-/** The items each once, the newest of each (core/server-plan.ts dedupe, which is not exported). */
-function dedupe(items: readonly RecordItem[]): RecordItem[] {
-  const key = (i: RecordItem): string =>
-    i.kind === 'file' || i.kind === 'backup' || i.kind === 'group'
-      ? `${i.kind} ${i.path}`
-      : i.kind === 'line' || i.kind === 'block'
-        ? `${i.kind} ${i.file}`
-        : i.kind === 'container' || i.kind === 'volume'
-          ? `${i.kind} ${i.name}`
-          : i.kind === 'image'
-            ? `image ${i.ref}`
-            : 'docker'
-  const out = new Map<string, RecordItem>()
-  for (const i of items) {
-    const k = key(i)
-    const was = out.get(k)
-    if (was) out.delete(k)
-    if (i.kind === 'image' && was?.kind === 'image') out.set(k, { ...i, before: i.before && was.before })
-    else if (i.kind === 'docker' && was) out.set(k, was)
-    else out.set(k, i)
-  }
-  return [...out.values()]
-}
+/** What the board's run says of each step, in a language. */
+const titles = (p: Plan, tr: Translator = t): string[] => p.steps.map(x => tr(x.title.key, x.title.params))
 
-describe('Apply: the case, the reasons and the run the board would make', () => {
+describe('Apply: the case, the reasons, the plan in plain words and the run the board would make', () => {
   for (const s of SCENARIOS) {
     test(s.name, () => {
       const r1 = readRoundOne(s.r1)
       const r2 = r1 && lookScript2(r1, LOOK) !== null ? s.r2 : ''
       const facts = r1 ? readServerFacts(r1, r2) : null
-      const a = awk('apply', `${s.r1}\n@@ab-round2\n${r2}`)
+      const a = awk('apply', looked(s.r1, r2))
+      expect(a.err).toBe('')
       const d = decision(a.out)
       if (!facts) return expect(d).toBe('unreadable')
-      const p = buildPlan(facts, W, { id: IDS.plan_id, docker: true })
+      const p = buildPlan(facts, W, { id: IDS.plan, docker: true })
       if (!('steps' in p)) {
         expect(d).toBe(`stop ${p.why.join(' ')}`)
         expect(said(a.out, 'why')).toEqual(p.why.map(w => t(`server.manual.${w}`)))
+        expect(plainOf(a.out)).toEqual(plainPlan(facts, p, W, t))
         return
       }
       const choice = chooseCase(facts, W)
@@ -437,30 +607,24 @@ describe('Apply: the case, the reasons and the run the board would make', () => 
       if (holds && (who === 'same' || who === 'update')) {
         if (record.state === 'running' && facts.lockHeld) return expect(d).toBe('busy')
         if (record.state !== 'applied') return expect(d).toBe(`unfinished ${record.state}`)
-        if (who === 'same') return expect(d).toBe(`same ${record.address}`)
+        // set up already: said so, unless step 1 lacks a part, which the plan makes again
+        if (who === 'same' && !p.steps.some(x => STEP_ONE_IDS.includes(x.id)))
+          return expect(d).toBe(`same ${record.address}`)
       }
       expect(d.startsWith('plan ')).toBe(true)
-      const key = d.slice(5)
-      const template = APPLY.get(key)
-      if (!template) throw new Error(`no template ${key}`)
-      expect(template.shape.c).toBe(p.case)
-      const values = { ...valuesOf(a.out), ...IDS }
-      // the guard carries the record's items (dedupe(mine.items)); the command's run has them in its record line
-      expect(p.steps[0]?.record.map(itemJson)).toEqual((record ? dedupe(record.items) : []).map(itemJson))
-      expect(fill(template.run, values)).toBe(boardRun(p, () => true))
-      // what it says: why this plan, its steps, its warnings
-      const text = fill([template.why, ...template.steps.map(x => x.title)].join('\n'), values).split('\n')
-      expect(text).toEqual([t(choice.why.key, choice.why.params), ...p.steps.map(x => t(x.title.key, x.title.params))])
+      const run = parts(a.out).run ?? ''
+      expect(run).toBe(runScript(p, W, { id: IDS.run, at: IDS.at }))
+      expect(said(a.out, 'title')).toEqual(titles(p))
       expect(said(a.out, 'warn')).toEqual(p.warnings.map(w => t(w.key, w.params)))
       expect(said(a.out, 'address')).toEqual([p.address])
-      // and the launch around the run, as the board's
-      const run = fill(template.run, values)
-      expect(fill(LAUNCH, { run_id: IDS.run_id, run: run.replace(/\n$/, '') })).toBe(launchScript(IDS.run_id, run))
+      expect(plainOf(a.out)).toEqual(plainPlan(facts, p, W, t))
+      // and the launch of the packed run, as the board's
+      expect(fill(LAUNCH, { run_id: IDS.run, packed: PACK(run) })).toBe(launchScript(IDS.run, run, PACK))
     })
   }
 })
 
-describe('Undo: the record’s shape and the run the board’s Undo would make', () => {
+describe('Undo: the run the board’s Undo would make, and what it says', () => {
   for (const s of SCENARIOS) {
     test(s.name, () => {
       const r1 = readRoundOne(s.r1)
@@ -468,29 +632,70 @@ describe('Undo: the record’s shape and the run the board’s Undo would make',
       const r2 = lookScript2(r1, LOOK) === null ? '' : s.r2
       const facts = readServerFacts(r1, r2)
       if (!facts) return
-      const a = awk('undo', `${s.r1}\n@@ab-round2\n${r2}`)
+      const a = awk('undo', looked(s.r1, r2))
+      expect(a.err).toBe('')
       const d = decision(a.out)
       if (facts.record === null || facts.record === undefined) return expect(d).toBe('nothing')
       const r = setupRecord(facts.record)
       if (!r || whose(r, W) === 'other') return expect(d).toBe('stop otherSetup')
       if (r.state === 'running' && facts.lockHeld) return expect(d).toBe('busy')
       expect(d.startsWith('plan ')).toBe(true)
-      const template = UNDO.get(d.slice(5))
-      if (!template) throw new Error(`no Undo template ${d.slice(5)}`)
-      const o = { id: IDS.plan_id, removeDocker: false, removeEdited: false }
-      const p = undoPlan(r, facts, o)
-      // the record's items as Undo has them (each once, their line or block named); Docker, backups
-      // and images that were there before ride in the record line, the rest is what the template has
-      const all = p.steps[0]?.record ?? []
-      const moved = (i: RecordItem): boolean => undoCode(i) === null
-      const plan = undoPlan({ ...r, items: all.filter(i => !moved(i)) }, facts, o)
-      expect(plan.steps.map(x => x.id)).toEqual(p.steps.map(x => x.id))
-      const values = { ...valuesOf(a.out), ...IDS }
-      const [guard, ...rest] = plan.steps
-      const want = boardRun({ ...plan, steps: [{ ...(guard as Plan['steps'][0]), record: all }, ...rest] }, moved)
-      expect(fill(template.run, values)).toBe(want)
+      const p = undoPlan(r, facts, { id: IDS.plan, removeDocker: false, removeEdited: false })
+      expect(parts(a.out).run).toBe(runScript(p, W, { id: IDS.run, at: IDS.at }))
+      expect(said(a.out, 'title')).toEqual(titles(p))
+      expect(plainOf(a.out)).toEqual(plainPlan(facts, p, W, t))
     })
   }
+})
+
+describe('the plan in plain words, in the board’s language', () => {
+  test('Russian, as the panel says it', () => {
+    const ru = program('ru')
+    const dict = inLanguage('ru', () => oneshotDictionary(INPUT))
+    const tr = translator('ru')
+    for (const name of [
+      'debian13/bare step 1 not done',
+      'debian13/caddy-unit step 1 done',
+      'debian13/compose-folder an older key',
+      'debian13/nginx-80-443 step 1 not done',
+      'debian13/nginx-443 no tunnel user',
+      'debian13/apache step 1 done',
+      'debian13/bare set up with step 1 for another domain',
+    ]) {
+      const s = SCENARIOS.find(x => x.name === name)
+      if (!s) throw new Error(`no scenario ${name}`)
+      const r1 = readRoundOne(s.r1) as NonNullable<ReturnType<typeof readRoundOne>>
+      const r2 = lookScript2(r1, LOOK) === null ? '' : s.r2
+      const facts = readServerFacts(r1, r2) as ServerFacts
+      const p = buildPlan(facts, W, { id: IDS.plan, docker: true })
+      const a = awk('apply', looked(s.r1, r2, dict), {}, ru)
+      expect([name, plainOf(a.out)]).toEqual([name, plainPlan(facts, p, W, tr)])
+      if ('steps' in p) expect(said(a.out, 'title')).toEqual(titles(p, tr))
+    }
+  })
+})
+
+describe('without the board’s key', () => {
+  test('no step 1, as the board: a server without the socket’s folder is the owner’s', () => {
+    const { publicKey: _, ...noKey } = W
+    const input = { wanted: noKey, publicKey: null }
+    const file = join(dir, 'nokey.awk')
+    writeFileSync(file, oneshotAwk(input))
+    const dict = oneshotDictionary(input)
+    const variant = STEP_ONE_VARIANTS[1] as (typeof STEP_ONE_VARIANTS)[number]
+    const s = byName('debian13/bare')
+    const r1 = variant.r1(s.r1)
+    const facts = readServerFacts(readRoundOne(r1) as NonNullable<ReturnType<typeof readRoundOne>>, '') as ServerFacts
+    expect(buildPlan(facts, noKey, { id: IDS.plan, docker: true })).toEqual({ case: null, why: ['folder'] })
+    const a = awk('apply', `${dict}\n@@ab-round1\n${r1}\n@@ab-round2\n`, {}, file)
+    expect(decision(a.out)).toBe('stop folder')
+    // and with step 1 done by hand, the case's own steps, as before
+    const done = stepOne(s.r1, ['@@user 995 boardtunnel', '@@keys other', '@@keys-dir', '@@include'])
+    const f2 = readServerFacts(readRoundOne(done) as NonNullable<ReturnType<typeof readRoundOne>>, '') as ServerFacts
+    const p = buildPlan(f2, noKey, { id: IDS.plan, docker: true }) as Plan
+    const b = awk('apply', `${dict}\n@@ab-round1\n${done}\n@@ab-round2\n`, {}, file)
+    expect(parts(b.out).run).toBe(runScript(p, noKey, { id: IDS.run, at: IDS.at }))
+  })
 })
 
 describe('the command', () => {
@@ -513,8 +718,10 @@ describe('the command', () => {
       expect(script).toContain(`W_DOMAIN = "${W.domain}"`)
       expect(script).toContain(`W_USER = "${W.user}"`)
       expect(script).toContain(`W_SOCKET = "${W.socket}"`)
-      expect(script).toContain(`W_KEY = "${INPUT.publicKey}"`)
+      expect(script).toContain(`W_KEY = "${KEY}"`)
       expect(script).toContain("# The board's address: https://board.example.com")
+      // Look compares the tunnel user's keys file with the board's key line
+      expect(script).toContain(`restrict,port-forwarding ${KEY}`)
     }
   })
 
@@ -561,6 +768,14 @@ describe('the run’s progress, as the owner reads it', () => {
     expect(awk('progress', '@@busy\n@@exit 75', { AB_TITLES: titles }).code).toBe(3)
     expect(awk('progress', '', { AB_TITLES: titles }).code).toBe(5)
   })
+
+  test('Undo’s by-hand step said to stay, not “in place already”', () => {
+    const titles = `Check\n${t('server.step.by-hand.title')}`
+    const a = awk('progress', '@@step 1 start\n@@step 1 ok\n@@step 2 start\n@@step 2 skip\n@@result applied', {
+      AB_TITLES: titles,
+    })
+    expect(a.out.split('\n')[1]).toBe(`  [--] ${t('server.step.by-hand.title')} (${t('server.oneshot.byHand')})`)
+  })
 })
 
 describe('where the command stops where the board would go on', () => {
@@ -569,26 +784,18 @@ describe('where the command stops where the board would go on', () => {
     const r1 = s.r1.replace('"Source":"/srv/my web"', `"Source":"/srv/it's web"`)
     const facts = readServerFacts(readRoundOne(r1) as never, s.r2)
     // the board quotes it and goes on
-    expect('steps' in buildPlan(facts as ServerFacts, W, { id: IDS.plan_id, docker: true })).toBe(true)
-    const a = awk('apply', `${r1}\n@@ab-round2\n${s.r2}`)
+    expect('steps' in buildPlan(facts as ServerFacts, W, { id: IDS.plan, docker: true })).toBe(true)
+    const a = awk('apply', looked(r1, s.r2))
     expect(decision(a.out)).toBe('refuse file candidate')
-    expect(said(a.out, 'plan')).toEqual([])
+    expect(parts(a.out).run).toBeNull()
   })
 
-  test('a record whose items no run of the board leaves: the Undo command has no template for it', () => {
+  test('a record whose items no run of the board leaves: the Undo command has no plan for it', () => {
     const s = byName('debian13/bare')
     const r1 = withRecord(s, { items: [{ kind: 'volume', name: 'agent-board-caddy-data' }] })
-    const d = decision(awk('undo', `${r1}\n@@ab-round2\n`).out)
-    expect(d).toBe('plan u.V1.tnone.c0.f0.n0')
+    const a = awk('undo', looked(r1, ''))
     // the script says so (server.oneshot.undo.unknown) and changes nothing
-    expect(UNDO.has(d.slice(5))).toBe(false)
+    expect(decision(a.out)).toBe('unknown u.V1.tnone.c0.f0.n0')
+    expect(parts(a.out).run).toBeNull()
   })
-})
-
-test('the progress: Undo’s by-hand step said to stay, not “in place already”', () => {
-  const titles = `Check\n${t('server.step.by-hand.title')}`
-  const a = awk('progress', '@@step 1 start\n@@step 1 ok\n@@step 2 start\n@@step 2 skip\n@@result applied', {
-    AB_TITLES: titles,
-  })
-  expect(a.out.split('\n')[1]).toBe(`  [--] ${t('server.step.by-hand.title')} (${t('server.oneshot.byHand')})`)
 })
