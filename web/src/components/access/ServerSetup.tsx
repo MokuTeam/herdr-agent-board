@@ -5,8 +5,9 @@
 // the board's own login on the server, the board's key) and Looks. Then the plan in plain words:
 // what was found with the server's key, what will be done, Docker's install to tick, what is not
 // touched, the full plan under Details; Apply or Cancel; a run step by step, a failure with what
-// was rolled back; the setup on record with Undo, which asks for the password again, the login's
-// fields folded away. sudo's own field shows only when an answer asks for it. For a server the
+// was rolled back; the setup on record with Undo, which logs in as Set up does (the password,
+// forgotten once a run took it, asked for again when the keys will not do), the login's fields
+// folded away. sudo's own field shows only when an answer asks for it. For a server the
 // board does not do, why in one line, and the steps by hand folded (DoItMyself.tsx, Snippets.tsx).
 // "Do it myself (one command)" is OneCommand.tsx. Its words are models/server-setup.ts's. What it
 // keeps while the panel is open (SetupState: the passwords, the ticks, what is open) is
@@ -21,7 +22,15 @@ import type { TestStep, TunnelConfig } from '../../../../src/core/tunnel.ts'
 import type { AccessSend } from '../../hooks/useAccess.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { hintText, stepLine } from '../../models/access.ts'
-import { foundPort, loadOneshot, oneshotStamp, oneshotTest } from '../../models/server-oneshot.ts'
+import {
+  foundPort,
+  loadOneshot,
+  ONESHOT_IDLE,
+  oneshotStale,
+  oneshotStamp,
+  oneshotTest,
+  oneshotWaited,
+} from '../../models/server-oneshot.ts'
 import {
   adminEdit,
   answerPatch,
@@ -89,7 +98,7 @@ const RUN_TICK_MS = 1000
 
 export function ServerSetup(props: ServerSetupProps) {
   const t = useT()
-  const { now } = useBoardContext()
+  const { now, data } = useBoardContext()
   const [state, setState] = useState<SetupState>(SETUP_START)
   const [own] = useState(savesTracker)
   const [tick, setTick] = useState(0)
@@ -101,11 +110,12 @@ export function ServerSetup(props: ServerSetupProps) {
     const id = setInterval(() => setTick(Date.now()), RUN_TICK_MS)
     return () => clearInterval(id)
   }, [running])
-  // The one command made again when what it is made of changed while its fold is open.
-  const stamp = oneshotStamp(view.tunnel.settings, view.tunnel.key.publicKey)
+  // The one command made again when what it is made of changed while its fold is open (the board's
+  // language too, once the board has switched: its words are the board's).
+  const stamp = oneshotStamp(view.tunnel.settings, view.tunnel.key.publicKey, data?.lang ?? t.lang)
   const { oneshot, got } = state
   useEffect(() => {
-    if (!oneshot || got.state === 'idle' || got.state === 'loading' || got.stamp === stamp) return
+    if (!oneshotStale(oneshot, got, stamp)) return
     let live = true
     void loadOneshot(t, stamp).then(next => {
       if (live) setState(s => ({ ...s, got: next }))
@@ -141,13 +151,16 @@ export function ServerSetupBody({
   saves,
 }: ServerSetupBodyProps) {
   const t = useT()
-  const { canEdit } = useBoardContext()
+  const { canEdit, data } = useBoardContext()
   const s = view.server ?? SERVER_IDLE
   const { phase, plan, progress, facts, choice } = s
   const admin = s.admin.user || DEFAULT_LOGIN
   const running = phase === 'applying' || phase === 'undoing'
   const busy = running || phase === 'looking'
-  const lookWhy = !view.tunnel.ssh ? hintText('noSsh', t) : state.missing ? t('server.panel.needDomain') : ''
+  // Asked without the board's address: said until it is there.
+  const noDomain = view.tunnel.settings.domain === ''
+  const needDomain = t('server.panel.needDomain')
+  const lookWhy = !view.tunnel.ssh ? hintText('noSsh', t) : state.missing && noDomain ? needDomain : ''
   const canLook = canEdit && !busy && view.tunnel.ssh !== null
   const failed = failedOf(progress)
   const hint = hintLine(s.hint, t, admin) || (failed ? failHint(failed.id, t) : '')
@@ -156,7 +169,7 @@ export function ServerSetupBody({
   const plain = phase === 'plan' ? plainOf(s, view.tunnel.settings, t) : null
   const tracker = saves ?? savesTracker()
 
-  // A field asked for (an answer's `need`, or Undo's): emptied and focused, once per ask.
+  // A field an answer asked for (its `need`): emptied and focused, once per ask.
   const passwordRef = useRef<HTMLInputElement>(null)
   const sudoRef = useRef<HTMLInputElement>(null)
   const asked = state.need
@@ -171,15 +184,15 @@ export function ServerSetupBody({
 
   /**
    * What Look and the one command need first: the saves on their way ended; the board's address
-   * there (else said so); the server filled in from it and the board's own login on the server,
-   * when not set; the board's own key made, when there is none. What the board took, or null.
+   * there (else said so: 'address'); the server filled in from it and the board's own login on the
+   * server, when not set; the board's own key made, when there is none. What the board took, or null.
    */
-  async function prepare(): Promise<Took | null> {
+  async function prepare(): Promise<Took | 'address' | null> {
     const took = await tracker.settle()
     const c = { ...view.tunnel.settings, ...took.tunnel } as TunnelConfig
     if (c.domain === '') {
       onState({ missing: true })
-      return null
+      return 'address'
     }
     if (state.missing) onState({ missing: false })
     const fill = flowFill(c)
@@ -199,7 +212,7 @@ export function ServerSetupBody({
   /** Set up the server: what it needs filled in, the login saved (root when none is), then Look. */
   async function setUp(): Promise<void> {
     const took = await prepare()
-    if (!took) return
+    if (!took || took === 'address') return
     if ((took.admin.user ?? s.admin.user) === '') {
       const user = DEFAULT_LOGIN
       const reply = await tracker.track(send('server-admin', { user }), { admin: { user } })
@@ -214,11 +227,13 @@ export function ServerSetupBody({
     onState(answerPatch(reply, op, state))
   }
 
-  /** Undo's Look: the password is not kept from the setup, so Undo asks for it again (a key file logs in without one). */
+  /**
+   * Undo's Look, at once, as Set up's: with the password typed, else with the keys (the ssh agent,
+   * ~/.ssh, a key file) alone. The password is not kept from the setup: when the server wants it,
+   * the board's answer asks for it (`need`), and Continue goes on.
+   */
   function undo(): void {
-    if (state.password === '' && s.admin.key === '')
-      onState({ need: 'password', again: 'server-undo-look', asks: state.asks + 1 })
-    else void look('server-undo-look')
+    void look('server-undo-look')
   }
 
   /** Continue, or Enter in a password field: what was asked for goes on. */
@@ -240,11 +255,19 @@ export function ServerSetupBody({
       ...ticks,
       ...withPassword(state),
     })
+    // The board took the passwords for this run: the panel keeps them no longer (Undo asks again, call 9).
+    if (reply?.ok === true) forget()
     onState(answerPatch(reply, null, state))
   }
 
+  /** The passwords typed, gone from the part and its fields. */
+  function forget(): void {
+    for (const field of [passwordRef.current, sudoRef.current]) if (field) field.value = ''
+    onState({ password: '', sudoPassword: '' })
+  }
+
   function cancel(): void {
-    onState({ need: null })
+    onState({ need: null, again: 'server-look' })
     void send('server-cancel')
   }
 
@@ -253,10 +276,21 @@ export function ServerSetupBody({
     if (!open) return onState({ oneshot: false })
     onState({ oneshot: true, got: { state: 'loading' } })
     const took = canEdit ? await prepare() : { tunnel: {}, admin: {} }
-    if (!took) return onState({ got: { state: 'idle' } })
+    // no address yet: the fold waits for it (below); refused otherwise: left as it is
+    if (took === 'address') return onState({ got: { state: 'address' } })
+    if (!took) return onState({ got: ONESHOT_IDLE })
     const settings = { ...view.tunnel.settings, ...took.tunnel } as TunnelConfig
-    onState({ got: await loadOneshot(t, oneshotStamp(settings, view.tunnel.key.publicKey)) })
+    onState({ got: await loadOneshot(t, oneshotStamp(settings, view.tunnel.key.publicKey, data?.lang ?? t.lang)) })
   }
+
+  // "Do it myself" opened before the board's address was typed: once it is there, the fold goes on
+  // as it does when it opens (the latest toggle, for the view it was drawn with).
+  const reopen = useRef(toggleOneshot)
+  reopen.current = toggleOneshot
+  const waited = oneshotWaited(state.oneshot, state.got, view.tunnel.settings.domain)
+  useEffect(() => {
+    if (waited) void reopen.current(true)
+  }, [waited])
 
   /**
    * "Do it myself"'s Test connection: with no setup on record, the board finds the public port
@@ -269,8 +303,7 @@ export function ServerSetupBody({
 
   /** An admin field left: what changed goes to the board; refused or the same, the board's value shows again. */
   async function saveAdmin(field: 'user' | 'key', input: HTMLInputElement): Promise<void> {
-    const before = s.admin[field]
-    const edit = adminEdit(before, input.value)
+    const edit = adminEdit(s.admin[field], input.value, shownAdmin(field))
     if (edit === null) {
       input.value = shownAdmin(field)
       return
@@ -434,7 +467,7 @@ export function ServerSetupBody({
       <OneCommand
         open={state.oneshot}
         got={state.got}
-        why={state.missing ? t('server.panel.needDomain') : ''}
+        why={state.got.state === 'address' && noDomain ? needDomain : ''}
         onToggle={open => void toggleOneshot(open)}
         onTest={() => void testOneshot()}
         byHand={state.byHand}

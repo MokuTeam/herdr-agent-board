@@ -40,24 +40,27 @@ export { needFor }
 /** The distributions "Do it myself" without Look writes Docker's install for. */
 export type Distro = 'debian' | 'ubuntu'
 
-/** A password field an answer (or Undo) asks for: the login's, or sudo's own. */
+/** A password field an answer asks for: the login's, or sudo's own. */
 export type Need = 'password' | 'sudoPassword'
 
 /** What the part keeps while the panel is open: drawn anew (and so gone) as the panel closes. */
 export interface SetupState {
-  /** The login's password as typed (sudo's too, call 3): sent with each Look, Apply or Undo, kept nowhere else. */
+  /**
+   * The login's password as typed (sudo's too, call 3): sent with each Look, Apply or Undo, kept
+   * nowhere else, and forgotten once the board took it for a run (Undo asks for it again, call 9).
+   */
   password: string
   /** sudo's own password, once an answer asked for it: sent as the login's is. */
   sudoPassword: string
-  /** The field an answer asked for (`need`), or Undo did; null when none is asked. */
+  /** The field an answer asked for (`need`); null when none is asked. */
   need: Need | null
   /** sudo's own field shown: an answer asked for it once. */
   sudoAsked: boolean
   /** How many times a field was asked for: each time the field is emptied and focused. */
   asks: number
-  /** What Continue (and Enter in a password field) sends: Look, or Undo's Look. */
+  /** What Continue (and Enter in a password field) sends: Look, or Undo's Look while Undo's ask stands. */
   again: 'server-look' | 'server-undo-look'
-  /** Set up the server was clicked without the board's address. */
+  /** Set up the server was clicked without the board's address: said so until the address is there. */
   missing: boolean
   /** The plan's ticks. */
   docker: boolean
@@ -358,13 +361,13 @@ export const withPassword = (state: SetupState): { password?: string; sudoPasswo
 export const sudoField = (s: ServerView, state: SetupState): boolean =>
   state.sudoAsked || needFor(s.hint) === 'sudoPassword'
 
-/** The field the panel points at: the one an answer (or Undo) asked for, else the one the board's hint wants. */
+/** The field the panel points at: the one an answer asked for, else the one the board's hint wants. */
 export const neededField = (s: ServerView, state: SetupState): Need | null => state.need ?? needFor(s.hint)
 
 /**
  * What an answer to Look, Apply or Undo changes in the part: a field it asks for (`need`) emptied
  * (the password typed was refused, or none was) and pointed at, with `op` for Continue; any other
- * answer asks for nothing.
+ * answer asks for nothing, and Continue is Look again.
  */
 export function answerPatch(
   reply: Record<string, unknown> | null,
@@ -375,17 +378,20 @@ export function answerPatch(
   if (reply?.need === 'password') return { need: 'password', password: '', asks: state.asks + 1, ...again }
   if (reply?.need === 'sudoPassword')
     return { need: 'sudoPassword', sudoAsked: true, sudoPassword: '', asks: state.asks + 1, ...again }
-  return { need: null }
+  return { need: null, again: 'server-look' }
 }
 
 /** The login's fields fold away once a setup is on record, unless a password is asked for. */
 export const loginFolded = (s: ServerView, state: SetupState): boolean =>
   s.setup !== null && neededField(s, state) === null && !sudoField(s, state)
 
-/** A field of the admin connection as its edit goes to the board: trimmed; null when unchanged. */
-export function adminEdit(now: string, typed: string): string | null {
+/**
+ * A field of the admin connection as its edit goes to the board: trimmed; null when unchanged, or
+ * when it is what the field shows for none saved (root, for the login): tabbed through, it writes nothing.
+ */
+export function adminEdit(now: string, typed: string, shown = now): string | null {
   const text = typed.trim()
-  return text === now ? null : text
+  return text === now || text === shown ? null : text
 }
 
 /** The login the flow uses when none is saved (the one a rented server gives). */
