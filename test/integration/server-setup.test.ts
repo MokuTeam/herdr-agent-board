@@ -1041,6 +1041,12 @@ function paste(s: TestServer, which: 'apply' | 'undo', as: Login, answer: 'y' | 
   })
 }
 
+/** What the one command keeps in /tmp while it runs (its awk program, for awk -f): gone however it ended. */
+async function tmpLeft(s: TestServer): Promise<string> {
+  const out = await s.sh('ls -A /tmp | grep "^agent-board\\." || true')
+  return out.stdout.trim()
+}
+
 /** The one command and its Undo from the board (GET /api/access/server-command), put on the server as the owner pastes them. */
 async function commandsOnServer(b: Board, s: TestServer): Promise<string> {
   const [status, body] = await b.get('/api/access/server-command')
@@ -1090,6 +1096,7 @@ async function commandPath(
   expect(no.asked).toEqual(asks('ask'))
   expect(no.stdout).toContain('The plan:')
   expect(no.stdout).toContain('Stopped: nothing was changed.')
+  expect(await tmpLeft(s)).toBe('')
   expect(await stepOne(s)).toEqual(empty)
   expect(await leftovers(s, sc.files)).toBe('')
 
@@ -1098,6 +1105,7 @@ async function commandPath(
   expect(yes.code, yes.stdout.slice(-3000)).toBe(0)
   expect(yes.asked).toEqual(asks('ask'))
   expect(yes.stdout).toContain(`done: ${address}`)
+  expect(await tmpLeft(s)).toBe('')
   stepOneMade(await stepOne(s), empty, publicKey, o.include)
   if (!o.include) expect(await blockAtEnd(s)).toBe(true)
   expect(await ownerLogins(s)).toEqual(logins)
@@ -1141,12 +1149,14 @@ async function commandPath(
   expect(again.code, again.stdout.slice(-2000)).toBe(0)
   expect(again.asked).toEqual(asks())
   expect(again.stdout).toContain(`Set up already: ${address}`)
+  expect(await tmpLeft(s)).toBe('')
 
   // the Undo command
   const undone = await paste(s, 'undo', as, 'y')
   expect(undone.code, undone.stdout.slice(-3000)).toBe(0)
   expect(undone.asked).toEqual(asks('ask'))
   expect(undone.stdout).toContain("undone: the board's setup is off this server.")
+  expect(await tmpLeft(s)).toBe('')
   expect(await stepOne(s)).toEqual(empty)
   expect(await leftovers(s, sc.files)).toBe('')
   expect(await s.hashes(sc.files)).toEqual(files)

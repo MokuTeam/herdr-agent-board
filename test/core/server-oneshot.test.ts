@@ -13,7 +13,7 @@ import { gunzipSync, gzipSync } from 'node:zlib'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { useLanguage as switchLanguage, t } from '../../src/core/lang.ts'
 import type { ServerFacts } from '../../src/core/server-facts.ts'
-import { lookScript2, readRoundOne, readServerFacts } from '../../src/core/server-look.ts'
+import { lookScript1, lookScript2, readRoundOne, readServerFacts } from '../../src/core/server-look.ts'
 import { oneLine, oneshotAwk, oneshotDictionary, oneshotScripts } from '../../src/core/server-oneshot.ts'
 import { launchTemplate, lookKey, lookShapes, lookTemplate } from '../../src/core/server-oneshot-templates.ts'
 import { type PlainPlan, plainPlan } from '../../src/core/server-plain.ts'
@@ -908,14 +908,23 @@ describe('the command', () => {
   const scripts = oneshotScripts(INPUT)
   const gzip = (b: Uint8Array): Uint8Array => gzipSync(b, { level: 9 })
 
-  test('one line, base64 behind a fixed pipe, that decodes to the script', () => {
-    for (const script of [scripts.script, scripts.undoScript]) {
+  /** Both scripts, in each of the board's languages. */
+  const both = (['en', 'ru'] as const).flatMap(lang => {
+    const s = inLanguage(lang, () => oneshotScripts(INPUT))
+    return [
+      { name: `${lang} apply`, script: s.script },
+      { name: `${lang} undo`, script: s.undoScript },
+    ]
+  })
+
+  test('one line, base64 behind a fixed pipe, that decodes to the script, in each language', () => {
+    for (const { name, script } of both) {
       const line = oneLine(script, gzip)
       expect(line).toMatch(/^echo [A-Za-z0-9+/=]+ \| base64 -d \| gunzip \| sh$/)
       const b64 = line.split(' ')[1] ?? ''
       expect(gunzipSync(Buffer.from(b64, 'base64')).toString('utf8')).toBe(script)
       // tens of KB paste into a terminal; hundreds do not
-      expect(line.length).toBeLessThan(80_000)
+      expect([name, line.length < 80_000]).toEqual([name, true])
     }
   })
 
@@ -931,16 +940,30 @@ describe('the command', () => {
     }
   })
 
-  test('POSIX sh, and the awk program fits one argument of a command line', () => {
+  test('POSIX sh; the awk program in a file of its own, gone when the script ends; no argument near Linux’s 128 KiB', () => {
     const SH = Bun.which('dash') ?? Bun.which('sh')
-    if (SH)
-      for (const script of [scripts.script, scripts.undoScript]) {
+    const bytes = (text: string): number => new TextEncoder().encode(text).length
+    for (const { name, script } of both) {
+      if (SH) {
         const r = Bun.spawnSync([SH, '-n'], { stdin: new TextEncoder().encode(script), stderr: 'pipe' })
-        expect(r.stderr.toString()).toBe('')
-        expect(r.exitCode).toBe(0)
+        expect([name, r.stderr.toString(), r.exitCode]).toEqual([name, '', 0])
       }
-    // Linux takes 128 KiB in one argument
-    expect(new TextEncoder().encode(oneshotAwk(INPUT)).length).toBeLessThan(120_000)
+      // the program (100 KB and more, past one argument of a command line) is awk's -f
+      expect(script).toContain(`AWKF=$(mktemp "\${TMPDIR:-/tmp}/agent-board.XXXXXXXX")`)
+      expect(script).toContain(`trap 'rm -f "$AWKF"' EXIT`)
+      expect(script).toContain(`cat > "$AWKF" <<'AGENT_BOARD_AWK'`)
+      expect(script).not.toContain('"$AWKP"')
+      for (const l of script.split('\n').filter(x => /(^|[ (|])awk -v mode=/.test(x)))
+        expect([name, l]).toEqual([name, expect.stringContaining('-f "$AWKF"')])
+    }
+    // what does go as one argument (sh -c): Look's rounds, the launch (whose run is packed)
+    for (const lang of ['en', 'ru'] as const) {
+      const program = inLanguage(lang, () => oneshotAwk(INPUT))
+      expect(bytes(program)).toBeGreaterThan(64_000)
+      expect(bytes(lookScript1({ ...LOOK, publicKey: KEY }))).toBeLessThan(64_000)
+      for (const s of lookShapes()) expect(bytes(lookTemplate(s, LOOK))).toBeLessThan(64_000)
+      expect(bytes(LAUNCH)).toBeLessThan(16_000)
+    }
   })
 })
 
