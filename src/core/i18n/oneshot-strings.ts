@@ -40,6 +40,7 @@ export const ONESHOT_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'server.oneshot.unfinished':
       "The board's last run here ended as {state}: paste the Undo command first, then this one again.",
     'server.oneshot.inPlace': 'in place already',
+    'server.oneshot.byHand': 'it stays: yours to remove by hand, if you want it gone',
     'server.oneshot.undid': 'rolled back',
     'server.oneshot.undoFailed': 'could not roll back',
     'server.oneshot.undo.looking': 'agent-board: looking at this server before Undo. Nothing changes until you say so.',
@@ -86,6 +87,7 @@ export const ONESHOT_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'server.oneshot.unfinished':
       'Последний запуск доски здесь закончился как {state}: сначала вставьте команду отмены, потом снова эту.',
     'server.oneshot.inPlace': 'уже на месте',
+    'server.oneshot.byHand': 'остаётся: убрать это можно вручную, если нужно',
     'server.oneshot.undid': 'откачено',
     'server.oneshot.undoFailed': 'не удалось откатить',
     'server.oneshot.undo.looking':

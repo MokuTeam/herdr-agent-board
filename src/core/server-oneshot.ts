@@ -74,6 +74,8 @@ function texts(): Record<string, string> {
       k === 'server.panel.docker' ||
       k === 'server.panel.noDocker' ||
       k === 'server.oneshot.inPlace' ||
+      k === 'server.oneshot.byHand' ||
+      k === 'server.step.by-hand.title' ||
       k === 'server.oneshot.undid' ||
       k === 'server.oneshot.undoFailed',
   )

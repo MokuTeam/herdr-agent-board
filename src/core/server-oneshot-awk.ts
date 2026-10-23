@@ -1462,7 +1462,7 @@ function progressline(l,    P, n, st, k) {
     split(l, P, " "); n = P[2] + 0; st = P[3]
     if (st == "start") { CUR = n; OUTN[n] = 0; return }
     if (st == "ok") print "  [ok] " title(n)
-    else if (st == "skip") print "  [--] " title(n) " (" tx("server.oneshot.inPlace") ")"
+    else if (st == "skip") print "  [--] " title(n) " (" tx(title(n) == tx("server.step.by-hand.title") ? "server.oneshot.byHand" : "server.oneshot.inPlace") ")"
     else {
       print "  [!!] " title(n); FAILED = n
       for (k = 1; k <= OUTN[n]; k++) print "       " OUTL[n, k]

@@ -526,3 +526,33 @@ describe('the run’s progress, as the owner reads it', () => {
     expect(awk('progress', '', { AB_TITLES: titles }).code).toBe(5)
   })
 })
+
+describe('where the command stops where the board would go on', () => {
+  test('a path with a quote (or a backslash, $ or a backquote) is refused before anything changes', () => {
+    const s = byName('debian13/compose-folder')
+    const r1 = s.r1.replace('"Source":"/srv/my web"', `"Source":"/srv/it's web"`)
+    const facts = readServerFacts(readRoundOne(r1) as never, s.r2)
+    // the board quotes it and goes on
+    expect('steps' in buildPlan(facts as ServerFacts, W, { id: IDS.plan_id, docker: true })).toBe(true)
+    const a = awk('apply', `${r1}\n@@ab-round2\n${s.r2}`)
+    expect(decision(a.out)).toBe('refuse file candidate')
+    expect(said(a.out, 'plan')).toEqual([])
+  })
+
+  test('a record whose items no run of the board leaves: the Undo command has no template for it', () => {
+    const s = byName('debian13/bare')
+    const r1 = withRecord(s, { items: [{ kind: 'volume', name: 'agent-board-caddy-data' }] })
+    const d = decision(awk('undo', `${r1}\n@@ab-round2\n`).out)
+    expect(d).toBe('plan u.V1.tnone.c0.f0.n0')
+    // the script says so (server.oneshot.undo.unknown) and changes nothing
+    expect(UNDO.has(d.slice(5))).toBe(false)
+  })
+})
+
+test('the progress: Undo’s by-hand step said to stay, not “in place already”', () => {
+  const titles = `Check\n${t('server.step.by-hand.title')}`
+  const a = awk('progress', '@@step 1 start\n@@step 1 ok\n@@step 2 start\n@@step 2 skip\n@@result applied', {
+    AB_TITLES: titles,
+  })
+  expect(a.out.split('\n')[1]).toBe(`  [--] ${t('server.step.by-hand.title')} (${t('server.oneshot.byHand')})`)
+})

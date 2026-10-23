@@ -48,6 +48,7 @@ import {
   socatRunArgs,
   VOLUMES,
 } from './server-texts.ts'
+import { sshdBlock } from './tunnel-snippets.ts'
 
 /** The run's last line (core/server-script.ts LAST_LINE). */
 const LAST_LINE = '# agent-board: end'
@@ -222,7 +223,17 @@ export function applyShapes(): ApplyShape[] {
 
 const FREE: Holder = { kind: 'free' }
 
-/** What every shape starts from: Docker there, nothing on the web ports, the socket's folder as step 1 makes it. */
+/** The tunnel's `Match` block as `sshd -T` prints it back: its keys lowercased, its values as written. */
+function fenceOf(user: string): Record<string, string> {
+  const fence: Record<string, string> = {}
+  for (const line of sshdBlock(user).split('\n').slice(1)) {
+    const [key = '', ...value] = line.trim().split(/\s+/)
+    fence[key.toLowerCase()] = value.join(' ')
+  }
+  return fence
+}
+
+/** What every shape starts from: Docker there, nothing on the web ports, the socket's folder and sshd's fence as step 1 makes them. */
 function baseFacts(w: Wanted, v: Record<string, Value>): ServerFacts {
   return {
     distro: { id: str(v.distro), version: '13', codename: 'trixie', arch: 'x86_64', supported: true },
@@ -230,7 +241,8 @@ function baseFacts(w: Wanted, v: Record<string, Value>): ServerFacts {
     docker: { version: '29.0.0', podman: false, rootless: false, userns: false, containers: [] },
     systemd: true,
     units: { caddy: null, nginx: null },
-    fence: {},
+    // sshd's fence as step 1 makes it (core/server-look.ts reads it back so)
+    fence: fenceOf(w.user),
     folder: { mode: '2750', owner: w.user, group: w.user, gid: Number(str(v.gid)), members: [] },
     socket: null,
     record: null,
