@@ -1,8 +1,11 @@
-// "Do it myself" in step 3 of "On the server": the same steps the board would run, as commands the
-// owner pastes on the server, each with Copy, why, what to check after and how to undo it. From the
-// plan Look made; for another board's setup on the server, that setup's Undo; without Look (Call
-// 28), for the case the owner picks and the distribution, its unknowns as `<placeholders>`, each
-// with the command that finds it (models/server-setup.ts manualOf). It sends nothing.
+// The steps by hand, for a server the board does not do (the simple-setup spec's call 10), folded
+// in "On the server" under "Your server needs steps by hand" and never shown for a server the
+// board sets up itself: the web server's steps as commands the owner pastes on the server, each
+// with Copy, why, what to check after and how to undo it. For another board's setup on the
+// server, that setup's Undo; else (Call 28) for the case the owner picks and the distribution, its
+// unknowns as `<placeholders>`, each with the command that finds it (models/server-setup.ts
+// manualOf). The board's own login on the server comes first, as step 1's snippets (Snippets.tsx).
+// It sends nothing.
 import type { AccessView } from '../../../../src/core/access.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import {
@@ -36,7 +39,7 @@ export function DoItMyself({ view, state, onState }: DoItMyselfProps) {
   const group = PICKS.find(g => g.cases.includes(state.pick))
   return (
     <div className="access-myself">
-      <h4 className="access-sub">{t('server.panel.doItMyself')}</h4>
+      <h4 className="access-sub">{t('server.panel.web')}</h4>
       {manual.picker && (
         <div className="access-picker">
           <p className="access-note">{t('server.panel.pickCase')}</p>

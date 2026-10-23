@@ -1,8 +1,8 @@
 // The Remote access panel's view (GET /api/access, local only) and its changes (POST /api/access
 // `{ op, … }`). The board's payload carries only `accessRev`, never the view (Call 28): the view is
 // fetched when the panel opens and again whenever that number changes while it is open. A change
-// the board refuses is toasted; one it asks to be confirmed (`confirm`), or that needs sudo's
-// password (`need: 'password'`), is left to the panel.
+// the board refuses is toasted; one it asks to be confirmed (`confirm`), or that needs a password
+// (`need`: 'password', the login's; 'sudoPassword', sudo's own), is left to the panel.
 import { useEffect, useState } from 'react'
 import type { AccessView } from '../../../src/core/access.ts'
 import type { TestStep } from '../../../src/core/tunnel.ts'
@@ -65,8 +65,9 @@ export function accessSource(deps: AccessDeps): AccessSource {
       reply = await api.post('/api/access', { op, ...body })
     } catch (err) {
       reply = err instanceof ApiError ? err.reply : null
-      // A change the board asks to be confirmed, or sudo's password it needs, is asked by the panel, not toasted.
-      if (!reply?.confirm && reply?.need !== 'password') deps.toast(errorText(err, deps.t()), true)
+      // A change the board asks to be confirmed, or a password it needs (the login's, sudo's own), is asked by the panel, not toasted.
+      if (!reply?.confirm && reply?.need !== 'password' && reply?.need !== 'sudoPassword')
+        deps.toast(errorText(err, deps.t()), true)
     }
     if (test) now.set({ ...now.get(), steps: stepsOf(reply), testing: false })
     void load()

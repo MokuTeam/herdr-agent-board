@@ -41,6 +41,12 @@ export const TUNNEL_FIELDS: readonly TunnelField[] = [
   'port',
 ]
 
+/** The settings the one flow of "On the server" asks for: the board's address, the server and its SSH port. */
+export const FLOW_FIELDS: readonly TunnelField[] = ['domain', 'host', 'sshPort']
+
+/** The rest, folded under the tunnel's settings: the owner of a server the board sets up types none of them. */
+export const MORE_FIELDS: readonly TunnelField[] = TUNNEL_FIELDS.filter(f => !FLOW_FIELDS.includes(f))
+
 /** The fields that hold a port: their edits are sent as numbers. */
 export const PORT_FIELDS: ReadonlySet<TunnelField> = new Set(['sshPort', 'publicPort', 'port'])
 

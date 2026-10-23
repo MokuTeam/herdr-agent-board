@@ -1,10 +1,12 @@
 // The Remote access panel (Settings → Remote access…, on the local board only): its Tunnel part
 // (components/access/TunnelSection.tsx) — what a login reaches, where the tunnel stands, On or
-// Off, Test connection and its steps, the settings saved as they are left, the key, and step 1 of
-// "On the server": the snippets filled in from settings that check out (step 3,
-// ServerSetup.tsx, is test/web/server-setup.test.tsx's). The view is GET /api/access's
-// (hooks/useAccess.ts), fetched on opening and again on each new `accessRev`; every change is a
-// POST /api/access `{ op, … }` with the board's header, and what the board refuses is toasted.
+// Off, Test connection and its steps, the settings saved as they are left (the board's address,
+// the server and its port first, in "On the server"; the rest folded with the key), the board's
+// address filling in the server, and step 1's snippets filled in from settings that check out
+// (shown only among the steps by hand; "On the server" itself, ServerSetup.tsx, is
+// test/web/server-setup.test.tsx's). The view is GET /api/access's (hooks/useAccess.ts), fetched
+// on opening and again on each new `accessRev`; every change is a POST /api/access `{ op, … }`
+// with the board's header, and what the board refuses is toasted.
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import type { AccessView } from '../../src/core/access.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
@@ -12,6 +14,7 @@ import { type TestStep, TUNNEL_SOCKET, type TunnelStatus } from '../../src/core/
 import { stepOnePaste } from '../../src/core/tunnel-snippets.ts'
 import { timeOf } from '../../src/core/when-format.ts'
 import { AccessBody } from '../../web/src/components/access/AccessPanel.tsx'
+import { Snippets } from '../../web/src/components/access/Snippets.tsx'
 import { TunnelSection } from '../../web/src/components/access/TunnelSection.tsx'
 import { accessSource } from '../../web/src/hooks/useAccess.ts'
 import {
@@ -127,37 +130,53 @@ test('nothing set up: what is needed under its field, On off with the reason, th
   expect(isAccessView(READY)).toBe(true)
   const body = bodyOf(VIEW)
   const tunnel = find(body, el => hasClass(el, 'access-tunnel'))
-  expect(textsOf([tunnel], 'access-problem')).toEqual(['Server: needed', 'User: needed', 'Domain: needed'])
-  // Each problem under its own field.
+  expect(textsOf([tunnel], 'access-problem')).toEqual(['Domain: needed', 'Server: needed', 'User: needed'])
+  // Each problem under its own field: the flow's (the board's address, the server and its port,
+  // the login, its password, the key file), then the rest of the settings.
   const entries = byClass([tunnel], 'access-entry').map(entry => [
     textOf(find([entry], el => el.tag === 'span')),
     textsOf([entry], 'access-problem'),
   ])
   expect(entries).toEqual([
+    ['Address of the board', ['Domain: needed']],
     ['Server', ['Server: needed']],
-    ['SSH port', []],
+    ['port', []],
+    ['Login', []],
+    ['Password', []],
+    ['Key file', []],
     ['User', ['User: needed']],
     ['Key', []],
     ['Socket on the server', []],
-    ['Domain', ['Domain: needed']],
     ['Public port', []],
     ['Local port', []],
   ])
   // A label each, its input named by it; the board's values, and what an empty one means (the
-  // tunnel's settings: step 3's admin fields are server-setup.test.tsx's).
-  const fields = byClass([find([tunnel], el => hasClass(el, 'access-fields'))], 'access-field')
-  expect(fields.map(f => f.tag)).toEqual(Array(8).fill('label'))
-  const inputs = findAll(fields, el => el.tag === 'input')
-  expect(inputs.map(el => ['name', 'aria-label', 'value', 'placeholder'].map(a => el.attrs.get(a) ?? ''))).toEqual([
+  // tunnel's settings; the login's fields are server-setup.test.tsx's).
+  const named = (fields: Element[]) =>
+    findAll(fields, el => el.tag === 'input' && !/^(admin-|login-)/.test(el.attrs.get('name') ?? '')).map(el =>
+      ['name', 'aria-label', 'value', 'placeholder'].map(a => el.attrs.get(a) ?? ''),
+    )
+  const [flow, rest] = byClass([tunnel], 'access-fields')
+  expect(named(byClass(flow ? [flow] : [], 'access-field'))).toEqual([
+    ['domain', 'Address of the board', '', 'board.example.com'],
     ['host', 'Server', '', 'ssh.example.com'],
-    ['sshPort', 'SSH port', '22', '22'],
+    ['sshPort', 'port', '22', '22'],
+  ])
+  expect(named(byClass(rest ? [rest] : [], 'access-field'))).toEqual([
     ['user', 'User', '', 'boardtunnel'],
     ['key', 'Key', '', "The board's own key"],
     ['socket', 'Socket on the server', TUNNEL_SOCKET, TUNNEL_SOCKET],
-    ['domain', 'Domain', '', 'board.example.com'],
     ['publicPort', 'Public port', '', '443'],
     ['port', 'Local port', '', '12424'],
   ])
+  // The server's placeholder is the board's address once there is one.
+  const withDomain = {
+    ...VIEW,
+    tunnel: { ...VIEW.tunnel, settings: { ...VIEW.tunnel.settings, domain: 'b.example.org' } },
+  }
+  expect(
+    find(bodyOf(withDomain), el => el.tag === 'input' && el.attrs.get('name') === 'host').attrs.get('placeholder'),
+  ).toBe('b.example.org')
   // On, off for now, and why; the status.
   const on = button([tunnel], 'Turn on')
   expect(on.attrs.has('disabled')).toBe(true)
@@ -175,16 +194,8 @@ test('nothing set up: what is needed under its field, On off with the reason, th
   expect(textOf(key)).toContain(KEY_PATH)
   expect(textOf(key)).toContain('No key there yet.')
   expect(buttonsIn([key]).map(textOf)).toEqual(['Generate key'])
-  // The parts in the order the panel has them.
-  const order = [
-    'access-reach',
-    'access-status',
-    'access-actions',
-    'access-fields',
-    'access-key',
-    'access-server',
-    'access-snippets',
-  ]
+  // The parts in the order the panel has them: the tunnel, "On the server", then the rest folded.
+  const order = ['access-reach', 'access-status', 'access-actions', 'access-server', 'access-more', 'access-key']
   const seen = findAll([tunnel], el => order.some(c => hasClass(el, c))).map(el => order.find(c => hasClass(el, c)))
   expect([...new Set(seen)]).toEqual(order)
 
@@ -291,9 +302,17 @@ test('the key: its public key and the keys file’s line with Copy, the server�
   expect(textsOf([ownKey], 'access-problem')).toEqual(['bad passphrase'])
 })
 
+/** Step 1's snippets as the steps by hand draw them, for the tunnel's settings and the board's key. */
+const snippetsOf = (view: AccessView, lang = 'en'): Node[] =>
+  renderInBoard(
+    <Snippets settings={view.tunnel.settings} publicKey={view.tunnel.key.publicKey} />,
+    board({ now: NOW }),
+    lang,
+  )
+
 test('step 1’s snippets, filled in: all of step 1 in one paste, the user and folder commands, the keys file, sshd', () => {
   const view = { ...READY, tunnel: { ...READY.tunnel, settings: { ...READY.tunnel.settings, user: '' } } }
-  const body = bodyOf(view)
+  const body = snippetsOf(view)
   const snippets = find(body, el => hasClass(el, 'access-snippets'))
   const details = findAll([snippets], el => el.tag === 'details')
   expect(details.map(d => [textOf(find([d], el => el.tag === 'summary')), d.attrs.has('open')])).toEqual([
@@ -317,13 +336,13 @@ test('step 1’s snippets, filled in: all of step 1 in one paste, the user and f
   // A Copy for each text.
   expect(details.map(d => buttonsIn([d]).map(textOf))).toEqual([['Copy'], ['Copy'], ['Copy'], ['Copy']])
   // In Russian, the one paste has a title of its own.
-  const ru = find(bodyOf(view, { lang: 'ru' }), el => hasClass(el, 'access-snippets'))
+  const ru = find(snippetsOf(view, 'ru'), el => hasClass(el, 'access-snippets'))
   const ruTitle = textOf(find([ru], el => el.tag === 'summary'))
   expect(ruTitle).not.toBe('All of step 1 in one paste')
   expect(ruTitle).toBe(translator('ru')('access.snip.paste'))
 
   // No key yet: the one paste would write no key's line, so it says to make the key first, with nothing to copy.
-  const keyless = find(bodyOf(VIEW), el => hasClass(el, 'access-snippets'))
+  const keyless = find(snippetsOf(VIEW), el => hasClass(el, 'access-snippets'))
   const first = find([keyless], el => el.tag === 'details')
   expect(textOf(find([first], el => el.tag === 'summary'))).toBe('All of step 1 in one paste')
   expect(findAll([first], el => el.tag === 'pre')).toEqual([])
@@ -569,6 +588,20 @@ test('a field left goes to the board, which sends the view again; Escape and the
   await live.type('domain', '   ')
   expect(calls).toHaveLength(4)
   expect(live.toasts).toEqual([])
+})
+
+test('the board’s address fills in the server while none is set; with one set, the address alone', async () => {
+  const calls = answers([200, { ok: true }], [200, VIEW], [200, { ok: true }], [200, READY])
+  const live = liveTunnel(VIEW)
+  await live.type('domain', 'Board.Example.com')
+  expect(sent(calls).slice(0, 1)).toEqual([
+    post({ op: 'tunnel', fields: { domain: 'board.example.com', host: 'board.example.com' } }),
+  ])
+  // A server already set (another SSH host, or set by hand): left as it is.
+  const kept = answers([200, { ok: true }], [200, READY])
+  const set = liveTunnel({ ...READY, login: { ...READY.login, password: false, totp: false } })
+  await set.type('domain', 'new.example.com')
+  expect(sent(kept).slice(0, 1)).toEqual([post({ op: 'tunnel', fields: { domain: 'new.example.com' } })])
 })
 
 test('a field the board refuses is toasted, and the board’s value shows again', async () => {

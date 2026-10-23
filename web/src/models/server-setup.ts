@@ -1,14 +1,18 @@
-// The Remote access panel's "On the server", step 3 (components/access/ServerSetup.tsx), in words:
-// what Look found (the server, who holds 443 and 80, the tunnel's fence and folder, their Caddy's
-// config), the case or why the board leaves it to the owner, the plan's steps with what each
-// touches and what Undo takes back, a run's progress, why it stopped and what was rolled back, the
-// setup on record, and "Do it myself": the plan Look made, as commands, or without one the plan for
-// the case the owner picks (Call 28), its unknowns as `<placeholders>` with the commands that find
-// them. What the part keeps while the panel is open (SetupState, the sudo password among it) is
-// never stored: it goes to the board with Look, Apply and Undo only, and with the panel as it closes.
-// The board's side of it (ServerView, the `server-*` ops) is services/server-setup.ts's.
+// The Remote access panel's "On the server" (components/access/ServerSetup.tsx), in words: the
+// one flow (the board's address, the server, the login and its password, Set up the server), the
+// plan in plain words (core/server-plain.ts) with the full plan as its details (what Look found,
+// the case, the steps with what each touches and what Undo takes back), a run's progress, why it
+// stopped and what was rolled back, the setup on record; and for a server the board does not do,
+// the steps by hand: the plan Look made as commands, or the plan for the case the owner picks
+// (Call 28), its unknowns as `<placeholders>` with the commands that find them. What the part keeps
+// while the panel is open (SetupState, the passwords among it) is never stored: they go to the
+// board with Look, Apply and Undo only, and with the panel as it closes. The board's side of it
+// (ServerView, the `server-*` ops) is services/server-setup.ts's.
+
+import { needFor } from '../../../src/core/server-admin.ts'
 import type { Holder, ServerFacts } from '../../../src/core/server-facts.ts'
 import { fenceDiff } from '../../../src/core/server-look.ts'
+import { type PlainPlan, plainPlan } from '../../../src/core/server-plain.ts'
 import {
   buildPlan,
   type Choice,
@@ -28,38 +32,61 @@ import type { TunnelConfig } from '../../../src/core/tunnel.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import { timeOf } from '../../../src/core/when-format.ts'
 import { serverSnippets } from './access.ts'
+import { ONESHOT_IDLE, type OneshotGot } from './server-oneshot.ts'
+
+/** Which password field a hint of the board's asks for (core/server-admin.ts), for the page. */
+export { needFor }
 
 /** The distributions "Do it myself" without Look writes Docker's install for. */
 export type Distro = 'debian' | 'ubuntu'
 
+/** A password field an answer (or Undo) asks for: the login's, or sudo's own. */
+export type Need = 'password' | 'sudoPassword'
+
 /** What the part keeps while the panel is open: drawn anew (and so gone) as the panel closes. */
 export interface SetupState {
-  /** The sudo password as typed: sent with each Look, Apply or Undo, kept nowhere else. */
+  /** The login's password as typed (sudo's too, call 3): sent with each Look, Apply or Undo, kept nowhere else. */
   password: string
-  /** An answer said sudo needs a password (`need: 'password'`); `again` is what Continue sends. */
-  asked: boolean
+  /** sudo's own password, once an answer asked for it: sent as the login's is. */
+  sudoPassword: string
+  /** The field an answer asked for (`need`), or Undo did; null when none is asked. */
+  need: Need | null
+  /** sudo's own field shown: an answer asked for it once. */
+  sudoAsked: boolean
+  /** How many times a field was asked for: each time the field is emptied and focused. */
+  asks: number
+  /** What Continue (and Enter in a password field) sends: Look, or Undo's Look. */
   again: 'server-look' | 'server-undo-look'
+  /** Set up the server was clicked without the board's address. */
+  missing: boolean
   /** The plan's ticks. */
   docker: boolean
   removeDocker: boolean
   removeEdited: boolean
   /** Undo clicked once: the next click asks the board for the Undo plan. */
   undoArmed: boolean
-  /** "Do it myself" open; without a plan, the case picked and the distribution (null: Look's, else Debian). */
-  manual: boolean
+  /** "Do it myself (one command)" open, and the command as the board made it. */
+  oneshot: boolean
+  got: OneshotGot
+  /** The steps by hand, for a server the board does not do: the case picked and the distribution (null: Look's, else Debian). */
   pick: SetupCase
   distro: Distro | null
 }
 
 export const SETUP_START: SetupState = {
   password: '',
-  asked: false,
+  sudoPassword: '',
+  need: null,
+  sudoAsked: false,
+  asks: 0,
   again: 'server-look',
+  missing: false,
   docker: false,
   removeDocker: false,
   removeEdited: false,
   undoArmed: false,
-  manual: false,
+  oneshot: false,
+  got: ONESHOT_IDLE,
   pick: '1',
   distro: null,
 }
@@ -318,16 +345,126 @@ export function resultLine(p: Progress, t: Translator): string {
     : ''
 }
 
-/** The sudo password goes with a request only once typed. */
-export const withPassword = (state: SetupState): { password?: string } =>
-  state.password === '' ? {} : { password: state.password }
+/** The passwords go with Look, Apply and Undo, each only once typed: the login's, and sudo's own. */
+export const withPassword = (state: SetupState): { password?: string; sudoPassword?: string } => ({
+  ...(state.password !== '' && { password: state.password }),
+  ...(state.sudoPassword !== '' && { sudoPassword: state.sudoPassword }),
+})
 
-/** The password field shows once sudo is known to want one, or an answer or hint said so. */
-export const asksPassword = (s: ServerView, state: SetupState): boolean =>
-  s.sudo === 'password' || state.asked || s.hint === 'needPassword' || s.hint === 'wrongPassword'
+/** sudo's own field shows once an answer asked for it, or the board's hint says sudo wants its own (needFor). */
+export const sudoField = (s: ServerView, state: SetupState): boolean =>
+  state.sudoAsked || needFor(s.hint) === 'sudoPassword'
+
+/** The field the panel points at: the one an answer (or Undo) asked for, else the one the board's hint wants. */
+export const neededField = (s: ServerView, state: SetupState): Need | null => state.need ?? needFor(s.hint)
+
+/**
+ * What an answer to Look, Apply or Undo changes in the part: a field it asks for (`need`) emptied
+ * (the password typed was refused, or none was) and pointed at, with `op` for Continue; any other
+ * answer asks for nothing.
+ */
+export function answerPatch(
+  reply: Record<string, unknown> | null,
+  op: SetupState['again'] | null,
+  state: SetupState,
+): Partial<SetupState> {
+  const again = op ? { again: op } : {}
+  if (reply?.need === 'password') return { need: 'password', password: '', asks: state.asks + 1, ...again }
+  if (reply?.need === 'sudoPassword')
+    return { need: 'sudoPassword', sudoAsked: true, sudoPassword: '', asks: state.asks + 1, ...again }
+  return { need: null }
+}
+
+/** The login's fields fold away once a setup is on record, unless a password is asked for. */
+export const loginFolded = (s: ServerView, state: SetupState): boolean =>
+  s.setup !== null && neededField(s, state) === null && !sudoField(s, state)
 
 /** A field of the admin connection as its edit goes to the board: trimmed; null when unchanged. */
 export function adminEdit(now: string, typed: string): string | null {
   const text = typed.trim()
   return text === now ? null : text
 }
+
+/** The login the flow uses when none is saved (the one a rented server gives). */
+export const DEFAULT_LOGIN = 'root'
+/** The tunnel's user on the server when none is set (the board's own login there). */
+export const DEFAULT_TUNNEL_USER = 'boardtunnel'
+
+/**
+ * What Set up the server fills in before Look, so that only the address, the login and the
+ * password are typed: the server from the address, the board's own login on the server; null
+ * when nothing is missing (or there is no address to fill from).
+ */
+export function flowFill(c: TunnelConfig): { host?: string; user?: string } | null {
+  if (c.domain === '') return null
+  const fill = {
+    ...(c.host === '' && { host: c.domain }),
+    ...(c.user === '' && { user: DEFAULT_TUNNEL_USER }),
+  }
+  return Object.keys(fill).length > 0 ? fill : null
+}
+
+/** What the board took of the panel's saves since it opened: the tunnel's settings, the admin's fields. */
+export interface Took {
+  tunnel: Partial<Record<keyof TunnelConfig, unknown>>
+  admin: { user?: string; key?: string }
+}
+
+/**
+ * The saves on their way (a field left just before Set up the server was clicked): Set up waits
+ * for them, and goes on from what the board took, not from a view that has not come back yet.
+ */
+export interface Saves {
+  track(sending: Promise<Record<string, unknown> | null>, sent: Partial<Took>): Promise<Record<string, unknown> | null>
+  settle(): Promise<Took>
+}
+
+export function savesTracker(): Saves {
+  const going = new Set<Promise<unknown>>()
+  const took: Took = { tunnel: {}, admin: {} }
+  return {
+    track(sending, sent) {
+      const kept = sending.then(reply => {
+        if (reply?.ok === true) {
+          Object.assign(took.tunnel, sent.tunnel)
+          Object.assign(took.admin, sent.admin)
+        }
+        return reply
+      })
+      going.add(kept)
+      const done = () => void going.delete(kept)
+      kept.then(done, done)
+      return kept
+    },
+    async settle() {
+      while (going.size > 0) await Promise.allSettled([...going])
+      return { tunnel: { ...took.tunnel }, admin: { ...took.admin } }
+    },
+  }
+}
+
+/** The plan in plain words for what Look found (core/server-plain.ts); null before Look made one. */
+export function plainOf(s: ServerView, settings: TunnelConfig, t: Translator): PlainPlan | null {
+  const { facts, plan, choice } = s
+  if (!facts) return null
+  const made = plan ?? (choice?.case === null ? choice : null)
+  return made ? plainPlan(facts, made, wantedOf(settings), t) : null
+}
+
+/** The server's key the admin's login met, with whether that login remembered it ('' before one did). */
+export const hostKeyLine = (s: ServerView, t: Translator): string =>
+  s.hostKey
+    ? t(s.hostKey.pinnedNow ? 'server.panel.hostKeyPinned' : 'server.panel.hostKeySeen', {
+        fingerprint: s.hostKey.fingerprint,
+      })
+    : ''
+
+/** The plan's warnings the owner reads before Apply (the domain's DNS, the ports, an unfinished run); the rest are the details'. */
+const PLAIN_WARNINGS: ReadonlySet<string> = new Set([
+  'server.warn.noDns',
+  'server.warn.dns',
+  'server.warn.ports',
+  'server.warn.interrupted',
+])
+
+export const isPlainWarning = (w: Text): boolean => PLAIN_WARNINGS.has(w.key)

@@ -63,7 +63,7 @@
 .access-form { margin: 0 0 12px; padding: 0 6px; }
 .access-input { background: var(--fill-2); font-family: var(--font); }
 .access-input:disabled { opacity: 0.5; }
-.access-tip { margin: 0 0 8px; color: var(--label-2); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.access-tip, .access-kept { margin: 0 0 8px; color: var(--label-2); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
 .access-qr {
   display: block;
   width: 176px;
@@ -153,3 +153,34 @@
 .access-picker { margin: 0 0 6px; }
 .access-finder { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 2px 0; font-size: 12px; }
 .access-block-title { margin: 0 0 2px; font-size: 12.5px; font-weight: 600; }
+
+/* "On the server" as one flow (ServerSetup.tsx): the server and its login as the settings' fields
+   (folded away once a setup is on record), the server and its port on a line that wraps on a
+   phone, the field an answer asks for marked; the plan in plain words as short lines, what was
+   found first; the details, the steps by hand and "Do it myself (one command)" (OneCommand.tsx) as
+   folds; the one command's text in a short box that scrolls. */
+.access-signin, .access-keyfile, .access-details, .access-byhand, .access-oneshot, .access-more { margin: 0 0 10px; }
+.access-signin > .access-summary, .access-oneshot > .access-summary, .access-more > .access-summary { margin: 0 0 6px; }
+.access-keyfile { margin: 4px 6px 6px; }
+.access-pair { display: flex; flex-wrap: wrap; gap: 0 8px; }
+.access-pair > .access-entry-host { flex: 1 1 300px; min-width: 0; }
+.access-pair > .access-entry-sshPort { flex: 0 1 180px; }
+.access-entry-sshPort .access-field > span { width: auto; }
+.access-field .path-add { min-width: 0; }
+.access-asked > span { color: var(--red); }
+.access-plain { margin: 0 0 10px; }
+.access-found-line, .access-hostkey, .access-stop, .access-docker, .access-untouched {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.access-hostkey, .access-untouched { color: var(--label-2); font-size: 12px; }
+.access-entry > .access-kept { margin: 0 0 4px; padding-left: 6px; }
+.access-stop { font-weight: 600; }
+.access-will { margin: 0 0 6px; padding: 0 0 0 18px; }
+.access-will-line { padding: 1px 0; font-size: 12.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.access-oneshot-body { padding: 0 0 0 12px; border-left: 1px solid var(--separator); }
+.access-command .access-pre { max-height: 96px; }
+.access-inside, .access-undo-command { margin: 0 0 8px; }
+.access-then { color: var(--label-2); font-size: 12px; }

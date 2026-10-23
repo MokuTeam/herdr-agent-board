@@ -1,11 +1,12 @@
 // The Remote access panel's Tunnel part: what a login reaches, where the tunnel stands (with since
 // when, a failed probe through the domain, the ssh it runs), On or Off, Test connection and its
-// steps, the settings (saved when a field is left or on Enter, as the Profiles panel's; Escape
-// puts the board's value back), the key, and "On the server" in three steps: 1 by hand, once (the
-// snippets, Snippets.tsx), 2 Test connection, 3 the web server (ServerSetup.tsx). A new domain
-// while passkeys or logins exist, and a new key over the one there, are asked first (`ask`, kept by
-// the panel).
-import type { FocusEvent, KeyboardEvent } from 'react'
+// steps; "On the server" as one flow (ServerSetup.tsx) that starts with the settings it needs (the
+// board's address, the server and its port); then, folded, the rest of the settings and the key.
+// The settings are saved when a field is left or on Enter, as the Profiles panel's (Escape puts
+// the board's value back); the board's address, while no server is set, fills in the server too.
+// A new domain while passkeys or logins exist, and a new key over the one there, are asked first
+// (`ask`, kept by the panel).
+import { type FocusEvent, type KeyboardEvent, useState } from 'react'
 import type { AccessView } from '../../../../src/core/access.ts'
 import { type TestStep, TUNNEL_SOCKET, type TunnelField } from '../../../../src/core/tunnel.ts'
 import { keysLine } from '../../../../src/core/tunnel-snippets.ts'
@@ -14,18 +15,18 @@ import { useT } from '../../i18n/I18nProvider.tsx'
 import {
   fieldEdit,
   hintText,
+  MORE_FIELDS,
   notSetUpLine,
   PORT_FIELDS,
   statusLine,
   stepLine,
-  stepMarks,
-  TUNNEL_FIELDS,
   type TunnelAsk,
 } from '../../models/access.ts'
+import { savesTracker } from '../../models/server-setup.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { ServerSetup } from './ServerSetup.tsx'
-import { CopyButton, Snippets } from './Snippets.tsx'
+import { CopyButton } from './Snippets.tsx'
 
 export interface TunnelSectionProps {
   view: AccessView
@@ -43,11 +44,13 @@ export function TunnelSection({ view, send, steps, testing, ask, onAsk }: Tunnel
   const t = useT()
   const { canEdit, now } = useBoardContext()
   const { settings, problems, blocked, status, ssh, key, hostKey, listenPort } = view.tunnel
+  // The saves on their way, for Set up the server to wait for (models/server-setup.ts savesTracker).
+  const [saves] = useState(savesTracker)
   const probe = status.state === 'connected' && status.probe && !status.probe.ok ? status.probe : null
   const hint = status.state === 'error' || status.state === 'reconnecting' ? hintText(status.hint, t) : ''
 
   const placeholders: Record<TunnelField, string> = {
-    host: 'ssh.example.com',
+    host: settings.domain || 'ssh.example.com',
     sshPort: '22',
     user: 'boardtunnel',
     key: t('access.key.own'),
@@ -57,6 +60,12 @@ export function TunnelSection({ view, send, steps, testing, ask, onAsk }: Tunnel
     port: String(listenPort),
   }
 
+  /** The edit that goes with a field's: the board's address fills in the server while none is set (changeable after). */
+  const withServer = (field: TunnelField, value: unknown): Record<string, unknown> =>
+    field === 'domain' && settings.host === '' && typeof value === 'string' && value !== ''
+      ? { [field]: value, host: value }
+      : { [field]: value }
+
   /** A field left: what changed goes to the board; refused or the same, the board's value shows again. */
   async function save(field: TunnelField, input: HTMLInputElement): Promise<void> {
     const before = settings[field]
@@ -65,7 +74,8 @@ export function TunnelSection({ view, send, steps, testing, ask, onAsk }: Tunnel
       input.value = shown(before)
       return
     }
-    const reply = await send('tunnel', { fields: { [field]: edit.value } })
+    const fields = withServer(field, edit.value)
+    const reply = await saves.track(send('tunnel', { fields }), { tunnel: fields })
     if (reply?.ok === true) return
     input.value = shown(before)
     if (field === 'domain' && reply?.confirm === 'domain') onAsk({ kind: 'domain', domain: String(edit.value) })
@@ -93,8 +103,72 @@ export function TunnelSection({ view, send, steps, testing, ask, onAsk }: Tunnel
 
   async function changeDomain(domain: string): Promise<void> {
     onAsk(null)
-    await send('tunnel', { fields: { domain }, confirm: true })
+    const fields = withServer('domain', domain)
+    await saves.track(send('tunnel', { fields, confirm: true }), { tunnel: fields })
   }
+
+  /** A setting's line: its label and field, what is wrong with it under it, and the new domain's question. */
+  const entry = (field: TunnelField, label: string = t(`tunnel.field.${field}`)) => {
+    const value = shown(settings[field])
+    return (
+      <div className={classNames('access-entry', `access-entry-${field}`)} key={field}>
+        <label className="access-field">
+          <span>{label}</span>
+          <input
+            // Drawn again with the board's value once it changes (an uncontrolled field: what is typed stays until then).
+            key={value}
+            className="path-add"
+            name={field}
+            aria-label={label}
+            placeholder={placeholders[field]}
+            defaultValue={value}
+            spellCheck={false}
+            autoComplete="off"
+            inputMode={PORT_FIELDS.has(field) ? 'numeric' : undefined}
+            disabled={!canEdit}
+            onKeyDown={keyDown(field)}
+            onBlur={(e: FocusEvent<HTMLInputElement>) => void save(field, e.currentTarget)}
+          />
+        </label>
+        {problems
+          .filter(p => p.field === field)
+          .map(p => (
+            <p className="access-problem" key={p.message}>
+              {p.message}
+            </p>
+          ))}
+        {field === 'domain' && ask?.kind === 'domain' && (
+          <div className="access-ask">
+            <p className="access-sure">{t('access.domainSure')}</p>
+            <div className="access-actions">
+              <button
+                type="button"
+                className="button primary"
+                disabled={!canEdit}
+                onClick={() => void changeDomain(ask.domain)}
+              >
+                {t('access.domainChange', { domain: ask.domain })}
+              </button>
+              <button type="button" className="button" onClick={() => onAsk(null)}>
+                {t('access.cancel')}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  /** The flow's own settings: the board's address, then the server and its port on a line. */
+  const flowFields = (
+    <>
+      {entry('domain', t('server.panel.domain'))}
+      <div className="access-pair">
+        {entry('host', t('server.panel.host'))}
+        {entry('sshPort', t('server.panel.sshPort'))}
+      </div>
+    </>
+  )
 
   return (
     <section className="access-tunnel">
@@ -138,140 +212,65 @@ export function TunnelSection({ view, send, steps, testing, ask, onAsk }: Tunnel
         </ul>
       )}
 
-      <h3 className="access-head">{t('access.fields')}</h3>
-      <div className="access-fields">
-        {TUNNEL_FIELDS.map(field => {
-          const label = t(`tunnel.field.${field}`)
-          const value = shown(settings[field])
-          return (
-            <div className="access-entry" key={field}>
-              <label className="access-field">
-                <span>{label}</span>
-                <input
-                  // Drawn again with the board's value once it changes (an uncontrolled field: what is typed stays until then).
-                  key={value}
-                  className="path-add"
-                  name={field}
-                  aria-label={label}
-                  placeholder={placeholders[field]}
-                  defaultValue={value}
-                  spellCheck={false}
-                  autoComplete="off"
-                  inputMode={PORT_FIELDS.has(field) ? 'numeric' : undefined}
-                  disabled={!canEdit}
-                  onKeyDown={keyDown(field)}
-                  onBlur={(e: FocusEvent<HTMLInputElement>) => void save(field, e.currentTarget)}
-                />
-              </label>
-              {problems
-                .filter(p => p.field === field)
-                .map(p => (
-                  <p className="access-problem" key={p.message}>
-                    {p.message}
-                  </p>
-                ))}
-              {field === 'domain' && ask?.kind === 'domain' && (
-                <div className="access-ask">
-                  <p className="access-sure">{t('access.domainSure')}</p>
-                  <div className="access-actions">
-                    <button
-                      type="button"
-                      className="button primary"
-                      disabled={!canEdit}
-                      onClick={() => void changeDomain(ask.domain)}
-                    >
-                      {t('access.domainChange', { domain: ask.domain })}
-                    </button>
-                    <button type="button" className="button" onClick={() => onAsk(null)}>
-                      {t('access.cancel')}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
-
-      <div className="access-key">
-        <h3 className="access-head">{t('access.key')}</h3>
-        <p className="access-line">
-          <span>{key.generated ? t('access.key.own') : t('tunnel.field.key')}</span>
-          <code className="access-code">{key.path}</code>
-        </p>
-        {!key.exists && <p className="sheet-meta">{t('access.key.missing')}</p>}
-        {key.error && <p className="access-problem">{key.error}</p>}
-        {key.generated && (
-          <div className="access-actions">
-            <button
-              type="button"
-              className={classNames('button', ask?.kind === 'key' && 'primary')}
-              disabled={!canEdit}
-              onBlur={() => {
-                if (ask?.kind === 'key') onAsk(null)
-              }}
-              onClick={() => void generate()}
-            >
-              {ask?.kind === 'key' ? t('access.replace') : t('access.generate')}
-            </button>
-          </div>
-        )}
-        {ask?.kind === 'key' && <p className="access-sure">{t('access.keySure')}</p>}
-        {key.publicKey && (
-          <>
-            <p className="access-line">
-              <span>{t('access.publicKey')}</span>
-              <code className="access-code">{key.publicKey}</code>
-              <CopyButton text={key.publicKey} />
-            </p>
-            <p className="access-line">
-              <span>{t('access.keysLine')}</span>
-              <code className="access-code">{keysLine(key.publicKey)}</code>
-              <CopyButton text={keysLine(key.publicKey)} />
-            </p>
-          </>
-        )}
-        {hostKey && (
-          <p className="access-line">
-            <span>{t('access.hostKey')}</span>
-            <code className="access-code">{hostKey}</code>
-            <button type="button" className="button" disabled={!canEdit} onClick={() => void send('hostkey-forget')}>
-              {t('access.forget')}
-            </button>
-          </p>
-        )}
-      </div>
-
       <div className="access-server">
         <h3 className="access-head">{t('access.snippets')}</h3>
-        <div className="access-stage">
-          <h4 className="access-stage-head">
-            <span className="access-num">1</span>
-            <span className="access-stage-title">{t('server.panel.byHand')}</span>
-          </h4>
-          <Snippets settings={settings} publicKey={key.publicKey} />
-        </div>
-        <div className="access-stage">
-          <h4 className="access-stage-head">
-            <span className="access-num">2</span>
-            <span className="access-stage-title">{t('access.test')}</span>
-          </h4>
-          <p className="access-note">{t('server.panel.testNote')}</p>
-          <div className="access-actions">
-            <button type="button" className="button" disabled={!canEdit || testing} onClick={() => void send('test')}>
-              {testing ? t('access.testing') : t('access.test')}
-            </button>
-          </div>
-          {steps && <p className="access-marks">{stepMarks(steps, t)}</p>}
-        </div>
-        <div className="access-stage">
-          <h4 className="access-stage-head">
-            <span className="access-num">3</span>
-            <span className="access-stage-title">{t('server.panel.web')}</span>
-          </h4>
-          <ServerSetup view={view} send={send} />
-        </div>
+        <ServerSetup view={view} send={send} steps={steps} testing={testing} fields={flowFields} saves={saves} />
       </div>
+
+      <details className="access-more">
+        <summary className="access-summary">{t('access.more')}</summary>
+        <h3 className="access-head">{t('access.fields')}</h3>
+        <div className="access-fields">{MORE_FIELDS.map(field => entry(field))}</div>
+
+        <div className="access-key">
+          <h3 className="access-head">{t('access.key')}</h3>
+          <p className="access-line">
+            <span>{key.generated ? t('access.key.own') : t('tunnel.field.key')}</span>
+            <code className="access-code">{key.path}</code>
+          </p>
+          {!key.exists && <p className="sheet-meta">{t('access.key.missing')}</p>}
+          {key.error && <p className="access-problem">{key.error}</p>}
+          {key.generated && (
+            <div className="access-actions">
+              <button
+                type="button"
+                className={classNames('button', ask?.kind === 'key' && 'primary')}
+                disabled={!canEdit}
+                onBlur={() => {
+                  if (ask?.kind === 'key') onAsk(null)
+                }}
+                onClick={() => void generate()}
+              >
+                {ask?.kind === 'key' ? t('access.replace') : t('access.generate')}
+              </button>
+            </div>
+          )}
+          {ask?.kind === 'key' && <p className="access-sure">{t('access.keySure')}</p>}
+          {key.publicKey && (
+            <>
+              <p className="access-line">
+                <span>{t('access.publicKey')}</span>
+                <code className="access-code">{key.publicKey}</code>
+                <CopyButton text={key.publicKey} />
+              </p>
+              <p className="access-line">
+                <span>{t('access.keysLine')}</span>
+                <code className="access-code">{keysLine(key.publicKey)}</code>
+                <CopyButton text={keysLine(key.publicKey)} />
+              </p>
+            </>
+          )}
+          {hostKey && (
+            <p className="access-line">
+              <span>{t('access.hostKey')}</span>
+              <code className="access-code">{hostKey}</code>
+              <button type="button" className="button" disabled={!canEdit} onClick={() => void send('hostkey-forget')}>
+                {t('access.forget')}
+              </button>
+            </p>
+          )}
+        </div>
+      </details>
     </section>
   )
 }
