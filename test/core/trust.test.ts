@@ -2,8 +2,8 @@ import { test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { keyTowardYes, sameFolder, trustDialog } from '../../src/core/dialogs/trust.ts'
-import { trustScreen } from '../support/trust-screen.ts'
+import { importsDialog, keyTowardYes, ownImports, sameFolder, trustDialog } from '../../src/core/dialogs/trust.ts'
+import { importsScreen, trustScreen } from '../support/trust-screen.ts'
 
 const FOLDER = 'C:\\Users\\me\\AppData\\Local\\Temp\\work\\a-new-project-with-a-long-name'
 
@@ -48,4 +48,36 @@ test('the key toward "Yes" follows the cursor on screen', () => {
   assert.equal(keyTowardYes({ options: ['yes', 'no'], selected: 'no' }), 'up')
   assert.equal(keyTowardYes({ options: ['no', 'yes'], selected: null }), null)
   assert.equal(keyTowardYes(null), null)
+})
+
+test('the external imports dialog: its files and where the cursor is', () => {
+  const d = importsDialog(importsScreen())
+  assert.deepEqual(d, {
+    imports: ['/Users/me/.claude/PROTOCOL.md', '/Users/me/.claude/RTK.md'],
+    options: ['no', 'yes'],
+    selected: 'no',
+  })
+  assert.equal(keyTowardYes(d), 'down')
+  assert.equal(keyTowardYes(importsDialog(importsScreen({ selected: 'yes' }))), '')
+  assert.equal(importsDialog(`${importsScreen()}\r\n╭─ Claude Code ─╮\r\n ❯ Try "fix lint errors"\r\n`), null)
+  assert.equal(importsDialog('PS C:\\> claude\r\n'), null)
+})
+
+test("only imports from the user's own Claude folders count as theirs", () => {
+  assert.equal(ownImports(importsDialog(importsScreen()), ['/Users/me/.claude']), true)
+  assert.equal(
+    ownImports(importsDialog(importsScreen({ files: ['/Users/me/.claude/A.md', '/tmp/evil.md'] })), [
+      '/Users/me/.claude',
+    ]),
+    false,
+  )
+  assert.equal(
+    ownImports(importsDialog(importsScreen({ files: ['/Users/me/.claude/../x.md'] })), ['/Users/me/.claude']),
+    false,
+  )
+  assert.equal(
+    ownImports(importsDialog(importsScreen({ files: ['/Users/me/.claude-evil/x.md'] })), ['/Users/me/.claude']),
+    false,
+  )
+  assert.equal(ownImports(null, ['/Users/me/.claude']), false)
 })

@@ -113,6 +113,17 @@ describe('spawn-agent options', () => {
     expect(USAGE).toContain('[--profile <id>]')
   })
 
+  test('--trust answers the startup dialogs; it is a flag', () => {
+    expect(parseArgs(['--name', 'A', '--cwd', 'x', '--trust'])).toMatchObject({ trust: true })
+    expect(parseArgs(['--name', 'A', '--cwd', 'x', '-Trust'])).toMatchObject({ trust: true })
+    // No value: the next word is not one, and --trust=no is refused.
+    expect(parseArgs(['--name', 'A', '--trust', '--cwd', 'x'])).toMatchObject({ trust: true, cwd: 'x' })
+    expect(() => parseArgs(['--name', 'A', '--cwd', 'x', '--trust=no'])).toThrow('--trust takes no value')
+    // Without it, the options are as before.
+    expect(parseArgs(['--name', 'A', '--cwd', 'x'])).not.toMatchObject({ trust: true })
+    expect(USAGE).toContain('[--trust]')
+  })
+
   test('the agent: --agent pi for a new session; claude, or none, is as before', () => {
     expect(parseArgs(['--name', 'A', '--cwd', 'x', '--agent', 'pi'])).toEqual({
       name: 'A',
