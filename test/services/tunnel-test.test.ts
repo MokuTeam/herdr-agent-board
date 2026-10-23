@@ -543,3 +543,48 @@ test('every hint has its text in English and Russian; the English as given', () 
   expect(en('tunnel.hint.listenPath')).toContain('AllowTcpForwarding remote')
   expect(en('tunnel.hint.listenPath')).not.toContain('AllowTcpForwarding no')
 })
+
+test('Test is today’s without ports: the probe gets the nonce alone, the domain step no port', async () => {
+  const w = world()
+  await w.sup.sync()
+  w.child().line(success())
+  const steps = await w.sup.test()
+  expect(steps).toEqual([sshOk, step('forward', true, planTo(12424).forward), domainOk])
+  expect(w.probeArgs).toEqual([[w.probed[0]]])
+  expect('port' in (steps[2] ?? {})).toBe(false)
+})
+
+test('Test with ports ("Do it myself"): the domain tried on each in order until the board answers; the step names the port', async () => {
+  const w = world()
+  await w.sup.sync()
+  w.child().line(success())
+  w.probeWith = async (_nonce, port) =>
+    port === 8443 ? { ok: true } : { ok: false, kind: 'answer', detail: 'another site answered' }
+  const steps = await w.sup.test({ ports: [443, 8443] })
+  expect(steps[2]).toEqual({ ...step('domain', true, `${DOMAIN}:8443`), port: 8443 })
+  expect(w.probeArgs.map(a => a[1])).toEqual([443, 8443])
+  // one nonce for the Test, whichever port it is tried on
+  expect(new Set(w.probed).size).toBe(1)
+
+  w.probeWith = async () => ({ ok: true })
+  const first = await w.sup.test({ ports: [443, 8443] })
+  expect(first[2]).toEqual({ ...domainOk, port: 443 })
+})
+
+test('Test with ports, the board on none: the domain ✗ with the first port’s hint and what each said', async () => {
+  const w = world()
+  w.plan = null
+  await w.sup.sync()
+  w.probeWith = async (_nonce, port) =>
+    port === 443
+      ? { ok: false, kind: 'status', status: 502, detail: '502' }
+      : { ok: false, kind: 'network', detail: 'connect ECONNREFUSED' }
+  const run = w.sup.test({ ports: [443, 8443] })
+  await w.time.advance(0)
+  const l = w.listeners[0]
+  if (!l) throw new Error('no listener')
+  w.child().line(...HEALTHY, success(l.port))
+  const steps = await run
+  expect(steps[2]).toEqual(step('domain', false, '443: 502; 8443: connect ECONNREFUSED', 'caddy502'))
+  expect(w.probeArgs.map(a => a[1])).toEqual([443, 8443])
+})

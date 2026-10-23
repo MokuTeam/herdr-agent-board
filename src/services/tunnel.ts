@@ -95,8 +95,11 @@ export interface SupervisorDeps {
   log(text: string): void
   /** The nonces the probe answers, shared with the tunnel listener. */
   probes: Probes
-  /** The board's probe through the domain (adapters/probe.ts). */
-  probe(nonce: string): Promise<ProbeResult>
+  /**
+   * The board's probe through the domain (adapters/probe.ts); with a port, on that public port
+   * (a Test that finds the public port, "Do it myself").
+   */
+  probe(nonce: string, port?: number): Promise<ProbeResult>
   /** Test's line: the tunnel's, forwarded to `target`; null when the settings do not check out. */
   testPlan(target: number): TunnelPlan | null
   /** The key exists and ssh would take it (its rights, no passphrase). */
@@ -107,13 +110,21 @@ export interface SupervisorDeps {
   openProbeListener(nonce: string): Promise<{ port: number; close(): void }>
 }
 
+export interface TestOptions {
+  ports?: readonly number[]
+}
+
 export interface Supervisor {
   sync(): Promise<void>
   status(): TunnelStatus
   /** ssh runs (held by the supervisor). */
   running(): boolean
-  /** Test connection: ssh, the forward, the domain. One at a time: a second call gets the running one. */
-  test(): Promise<TestStep[]>
+  /**
+   * Test connection: ssh, the forward, the domain. One at a time: a second call gets the running
+   * one. With `ports`, the domain is tried on each in turn until the board answers (after "Do it
+   * myself": which public port the owner's server took), and its step names the port.
+   */
+  test(o?: TestOptions): Promise<TestStep[]>
   /** For an exit handler: the current ssh (and a running Test's) ended synchronously. */
   killNow(): void
   close(): Promise<void>
@@ -303,12 +314,30 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
   }
 
   /** d.probe, a throw read as no answer. */
-  async function probeDomain(nonce: string): Promise<ProbeResult> {
+  async function probeDomain(nonce: string, port?: number): Promise<ProbeResult> {
     try {
-      return await d.probe(nonce)
+      return await (port === undefined ? d.probe(nonce) : d.probe(nonce, port))
     } catch (err) {
       return { ok: false, kind: 'network', detail: messageOf(err) }
     }
+  }
+
+  /**
+   * Step 3: the probe through the domain; with ports, on each in turn until the board answers (the
+   * step names the port), else ✗ with the first port's hint and what each said.
+   */
+  async function domainOf(nonce: string, domain: string, o: TestOptions | undefined): Promise<TestStep> {
+    const ports = o?.ports ?? []
+    if (!ports.length) return domainStep(await probeDomain(nonce), domain)
+    const said: string[] = []
+    let first: ProbeResult | null = null
+    for (const port of ports) {
+      const r = await probeDomain(nonce, port)
+      if (r.ok) return { ...testStep('domain', true, port === 443 ? domain : `${domain}:${port}`), port }
+      first ??= r
+      said.push(`${port}: ${r.detail}`)
+    }
+    return { ...domainStep(first ?? { ok: false, kind: 'network', detail: '' }, domain), detail: said.join('; ') }
   }
 
   function probeOff(): void {
@@ -476,14 +505,14 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
   }
 
   /** Steps 2 and 3 while the tunnel is on: its own state, and the probe only while connected. */
-  async function tunnelSteps(): Promise<TestStep[]> {
+  async function tunnelSteps(o: TestOptions | undefined): Promise<TestStep[]> {
     if (!held || status.state !== 'connected')
       return [
         testStep('forward', false, status.error ?? `the tunnel is ${status.state}`, status.hint ?? null),
         testStep('domain', null, '', 'notConnected'),
       ]
     const { plan } = held
-    return [testStep('forward', true, plan.forward), domainStep(await probeDomain(d.probes.issue()), plan.conf.domain)]
+    return [testStep('forward', true, plan.forward), await domainOf(d.probes.issue(), plan.conf.domain, o)]
   }
 
   /** The Test's own ssh until the server takes its forward (✓), it exits, or FORWARD_WAIT_MS pass. */
@@ -516,7 +545,7 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
    * happened. Run one at a time with the tunnel's own work (never two ssh on the socket); null
    * when the tunnel has an ssh after all, or the supervisor closed.
    */
-  async function ownSteps(): Promise<TestStep[] | null> {
+  async function ownSteps(o: TestOptions | undefined): Promise<TestStep[] | null> {
     if (closed || held || d.plan()) return null
     // Before the listener opens: ending a stray may take a while, and the listener's life is short.
     const stray = await endStray()
@@ -535,7 +564,7 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
       try {
         const forward = await forwardStep(child, plan)
         if (!forward.ok) return [forward, notRun('domain')]
-        return [forward, domainStep(await probeDomain(nonce), plan.conf.domain)]
+        return [forward, await domainOf(nonce, plan.conf.domain, o)]
       } finally {
         child.kill()
         await child.exited
@@ -547,24 +576,24 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
     }
   }
 
-  async function runTest(): Promise<TestStep[]> {
+  async function runTest(o: TestOptions | undefined): Promise<TestStep[]> {
     const ssh = await sshStep()
     if (!ssh.ok) return [ssh, notRun('forward'), notRun('domain')]
     const own = d.plan()
       ? null
-      : await exclusive(ownSteps).catch((err: unknown) => [
+      : await exclusive(() => ownSteps(o)).catch((err: unknown) => [
           testStep('forward', false, messageOf(err)),
           notRun('domain'),
         ])
-    return [ssh, ...(own ?? (await tunnelSteps()))]
+    return [ssh, ...(own ?? (await tunnelSteps(o)))]
   }
 
   return {
     sync,
     status: () => ({ ...status }),
     running: () => held !== null,
-    test() {
-      testing ??= runTest().finally(() => {
+    test(o) {
+      testing ??= runTest(o).finally(() => {
         testing = null
       })
       return testing

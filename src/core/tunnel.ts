@@ -300,6 +300,8 @@ export interface TestStep {
   ok: boolean | null
   detail: string
   hint: StepHint | null
+  /** The domain step of a Test told to find the public port ("Do it myself"): the one the board answered on. */
+  port?: number
 }
 
 /** What `board doctor` finds of the tunnel on this computer (services/tunnel-facts.ts), while it is on. */

@@ -13,7 +13,7 @@ import { FILE_TOKEN } from '../adapters/files.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
 import { archiveDir, cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
-import { fetchProbe, probeOrigin } from '../adapters/probe.ts'
+import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
 import {
   endStraySsh,
@@ -35,7 +35,7 @@ import { pageWithLook } from '../core/omarchy-theme.ts'
 import { shownProfiles } from '../core/profiles.ts'
 import { pwaPage } from '../core/pwa.ts'
 import type { SetupFacts } from '../core/setup.ts'
-import { boardPorts, forwardSpec, sshArgs, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
+import { boardPorts, forwardSpec, publicHosts, sshArgs, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
 import { createAccess } from '../services/access.ts'
 import { asideCheck } from '../services/aside.ts'
 import type { Deps } from '../services/deps.ts'
@@ -307,7 +307,12 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
     clock: realClock,
     network: networkSignature,
     probes,
-    probe: nonce => fetchProbe(probeOrigin(tunnelConf()), nonce),
+    // with a port, a Test that finds the public port ("Do it myself"): sent with the Host the
+    // tunnel listener takes now, whichever port it came through
+    probe: (nonce, port) =>
+      port === undefined
+        ? fetchProbe(probeOrigin(tunnelConf()), nonce)
+        : fetchProbe(probeOriginAt(tunnelConf(), port), nonce, PROBE_TIMEOUT_MS, publicHosts(tunnelConf())[0]),
     // Test's own line, whether the tunnel is on or not.
     testPlan: lineTo,
     checkKey: () => publicKeyOf(keyPath(tunnelConf())),

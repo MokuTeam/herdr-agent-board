@@ -15,6 +15,16 @@ const DETAIL_CHARS = 200
 export const probeOrigin = (c: TunnelConfig, env: Record<string, string | undefined> = process.env): string =>
   env.BOARD_TUNNEL_PROBE_ORIGIN || publicOrigin(c)
 
+/**
+ * Where a Test that finds the public port ("Do it myself") probes on `port`: BOARD_TUNNEL_PROBE_ORIGIN
+ * as it is, else https://<domain>, with the port unless it is 443.
+ */
+export const probeOriginAt = (
+  c: TunnelConfig,
+  port: number,
+  env: Record<string, string | undefined> = process.env,
+): string => env.BOARD_TUNNEL_PROBE_ORIGIN || (port === 443 ? `https://${c.domain}` : `https://${c.domain}:${port}`)
+
 /** The body's first BODY_BYTES at most, as text. */
 async function bodyStart(res: Response): Promise<string> {
   if (!res.body) return ''
@@ -54,12 +64,22 @@ function errorDetail(err: unknown): string {
 /**
  * GET <origin>/api/probe/<nonce>, redirects not followed, within `timeoutMs`: ok when this board
  * answered with that nonce; else what came back (another status, another answer, a TLS error, or
- * none at all). Never throws.
+ * none at all). Never throws. `host`: the Host to send instead of the origin's (a probe on another
+ * port than the one the tunnel listener takes the domain on).
  */
-export async function fetchProbe(origin: string, nonce: string, timeoutMs = PROBE_TIMEOUT_MS): Promise<ProbeResult> {
+export async function fetchProbe(
+  origin: string,
+  nonce: string,
+  timeoutMs = PROBE_TIMEOUT_MS,
+  host?: string,
+): Promise<ProbeResult> {
   const url = `${origin.replace(/\/+$/, '')}/api/probe/${encodeURIComponent(nonce)}`
   try {
-    const res = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) })
+    const res = await fetch(url, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(timeoutMs),
+      ...(host !== undefined && { headers: { host } }),
+    })
     if (res.status !== 200) {
       void res.body?.cancel().catch(() => {})
       return { ok: false, kind: 'status', status: res.status, detail: String(res.status) }

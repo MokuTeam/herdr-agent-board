@@ -20,7 +20,7 @@ import { gzipSync } from 'node:zlib'
 import { editTunnel, editTunnelAdmin, setTunnelSetup } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import type { RemoteRun, spawnRemote } from '../adapters/ssh.ts'
-import { t } from '../core/lang.ts'
+import { lang, t } from '../core/lang.ts'
 import {
   type Admin,
   type AskpassReport,
@@ -38,6 +38,7 @@ import {
 } from '../core/server-admin.ts'
 import type { ServerFacts } from '../core/server-facts.ts'
 import { type LookInput, lookScript1, lookScript2, readRoundOne, readServerFacts } from '../core/server-look.ts'
+import { oneLine, oneshotScripts } from '../core/server-oneshot.ts'
 import {
   buildPlan,
   type Choice,
@@ -96,6 +97,12 @@ export interface ServerSetup {
   undoLook(o: Passwords): Promise<Answer>
   undo(o: Passwords & { plan?: unknown; removeDocker?: unknown; removeEdited?: unknown }): Promise<Answer>
   cancel(): Answer
+  /**
+   * "Do it myself" as one command (core/server-oneshot.ts) for the tunnel's settings and the
+   * board's public key: 200 `{ command, script, undoCommand, undoScript }`, or 409 when the
+   * settings do not check out. Made once per settings, key and language.
+   */
+  oneshot(publicKey: string | null): Answer
 }
 
 /** What Look, Apply and Undo carry of the passwords: the login's (sudo's too), and sudo's own. */
@@ -221,6 +228,8 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
   let current: RemoteRun | null = null
   /** Counts Cancel: a Look it cut short leaves the view alone. */
   let generation = 0
+  /** The one command last made, and what it was made from. */
+  let oneshot: { from: string; body: Fields } | null = null
 
   const tunnel = (): Fields => (isRecord(cfg.tunnel) ? cfg.tunnel : {})
   const conf = (): TunnelConfig => tunnelConfig(cfg.tunnel)
@@ -738,6 +747,32 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     undoLook: o => lookAt(o, 'undo'),
     apply: o => runPlan(o, 'look'),
     undo: o => runPlan(o, 'undo'),
+
+    oneshot(publicKey) {
+      const c = conf()
+      for (const field of ['user', 'socket', 'domain'] as const) {
+        const value = c[field]
+        const message =
+          value === '' ? t('tunnel.err.required', { field: t(`tunnel.field.${field}`) }) : fieldProblem(field, value)
+        if (message) return { status: 409, body: { ok: false, field, error: message } }
+      }
+      const w = wanted(c, publicKey)
+      const from = JSON.stringify([w, publicKey, lang()])
+      if (oneshot?.from !== from) {
+        const s = oneshotScripts({ wanted: w, publicKey })
+        const gzip = (bytes: Uint8Array): Uint8Array => gzipSync(bytes, { level: 9 })
+        oneshot = {
+          from,
+          body: {
+            command: oneLine(s.script, gzip),
+            script: s.script,
+            undoCommand: oneLine(s.undoScript, gzip),
+            undoScript: s.undoScript,
+          },
+        }
+      }
+      return { status: 200, body: { ok: true, ...oneshot.body } }
+    },
 
     cancel() {
       // a run goes on on the server whatever the board does: it is followed to its end
