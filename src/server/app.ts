@@ -16,6 +16,7 @@ import { archiveDir, cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
 import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
 import {
+  endLogins,
   endStraySsh,
   hostKeyFingerprint,
   hostKeyPinned,
@@ -489,6 +490,8 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
   // The tunnel is this board's now. Its ssh dies with it, also on an exit that skips close():
   // run.ts restarts the board by process.exit(75).
   process.on('exit', supervisor.killNow)
+  // A login by password's ssh runs in a session of its own: ended with the board too.
+  process.on('exit', endLogins)
 
   const poll = setInterval(refresh, Math.max(1, cfg.refreshSec ?? 2) * 1000)
   const watchers = [
@@ -558,6 +561,8 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
       // ssh before the listener it forwards to.
       await supervisor.close()
       process.off('exit', supervisor.killNow)
+      endLogins()
+      process.off('exit', endLogins)
       await tunnel.close()
       await server.stop(true)
     },

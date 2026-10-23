@@ -677,6 +677,12 @@ describe('step 1 by the board (the simple-setup spec)', () => {
     const run = gunzipSync(Buffer.from(data, 'base64')).toString('utf8')
     expect(run).toContain("--comment 'agent-board tunnel' boardtunnel")
     expect(run).toContain(`restrict,port-forwarding ${KEY}`)
+    // packed by the service as it sends it: well under half the run, and the whole ssh line
+    // (each argument quoted, as Windows' takes it) far within Windows' 32,767 characters
+    expect(data.length).toBeLessThan(run.length * 0.45)
+    const argv = b.fake.calls().at(-1) ?? []
+    const line = argv.reduce((n, a) => n + a.length + 3 + (a.match(/["\\]/g)?.length ?? 0), b.fake.bin.length + 2)
+    expect(line).toBeLessThan(20_000)
   })
 
   test('without a key of its own (not made yet): Look and the plan as before, step 1 left to the owner', async () => {

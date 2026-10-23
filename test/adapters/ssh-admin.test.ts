@@ -4,12 +4,14 @@
 // the fake (test/support/fake-ssh.ts), which answers the admin's line as a server would.
 import { describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { connect } from 'node:net'
 import { join } from 'node:path'
-import { openAskpass, spawnRemote, sshVersion } from '../../src/adapters/ssh.ts'
+import { endLogins, openAskpass, spawnRemote, sshVersion } from '../../src/adapters/ssh.ts'
 import { adminSshArgs, remoteCommand } from '../../src/core/server-admin.ts'
 import type { SudoMode } from '../../src/core/server-view.ts'
 import { tunnelConfig } from '../../src/core/tunnel.ts'
 import { useFakeSsh } from '../support/fake-ssh-bin.ts'
+import { until } from '../support/sandbox.ts'
 
 /** The fake's server key, as Test connection pinned it. */
 const HOST_LINE = 'ssh.example.com ssh-ed25519 AAAAFAKEHOST'
@@ -196,6 +198,33 @@ describe('the askpass: the board answers its helper on loopback, one-time token'
     }
   })
 
+  test('a prompt whose character comes cut between two chunks is read whole', async () => {
+    const a = openAskpass(PASSWORD, () => {})
+    try {
+      // "Пароль:" (a password prompt in Russian), its first letter's two bytes sent apart
+      const line = Buffer.from(`${JSON.stringify({ token: a.env.BOARD_ASKPASS_TOKEN, prompt: 'Пароль:' })}\n`)
+      const cut = line.indexOf(Buffer.from('П')) + 1
+      const got = await new Promise<string>((resolve, reject) => {
+        let text = ''
+        const socket = connect({ host: '127.0.0.1', port: Number(a.env.BOARD_ASKPASS_PORT) }, async () => {
+          socket.write(line.subarray(0, cut))
+          await Bun.sleep(200)
+          socket.write(line.subarray(cut))
+        })
+        socket.setEncoding('utf8')
+        socket.on('data', (chunk: string) => {
+          text += chunk
+        })
+        socket.on('error', reject)
+        socket.on('close', () => resolve(text))
+      })
+      expect(JSON.parse(got)).toEqual({ answer: PASSWORD })
+      expect(a.report()).toEqual({ answered: 1, refused: null })
+    } finally {
+      a.close()
+    }
+  })
+
   test('closed: the helper fails, nothing printed', async () => {
     const a = openAskpass(PASSWORD, () => {})
     a.close()
@@ -213,6 +242,27 @@ describe('spawnRemote with the login’s password', () => {
     expect(a.prompts()).toEqual(["admin@ssh.example.com's password: "])
     expect(JSON.stringify(a.fake.calls())).not.toContain('pw Ж')
     expect(JSON.stringify(a.leads())).not.toContain('pw Ж')
+  })
+
+  test('once logged in (the server’s first output), the askpass’s channel is closed while ssh runs on', async () => {
+    const lines = Array.from({ length: 30 }, (_, i) => `line ${i}`)
+    const a = await useAdmin({ sudo: 'nopasswd', publickey: true, login: { password: 'pw' }, run: { lines } })
+    const run = spawnRemote(a.fake.bin, a.args('launch', 'nopasswd', true), null, 20_000, { password: 'pw' })
+    let tried: Promise<string> | null = null
+    run.onLine((_, from) => {
+      if (from !== 'out' || tried) return
+      const port = Number((a.leads()[0] as Record<string, string>).BOARD_ASKPASS_PORT)
+      tried = new Promise(resolve => {
+        const socket = connect({ host: '127.0.0.1', port }, () => {
+          socket.destroy()
+          resolve('open')
+        })
+        socket.on('error', () => resolve('closed'))
+      })
+    })
+    const end = await run.done
+    expect(end).toEqual({ code: 0, error: null, askpass: { answered: 1, refused: null } })
+    expect(await (tried ?? Promise.resolve('no line'))).toBe('closed')
   })
 
   test('a wrong one: one try (NumberOfPasswordPrompts=1), refused', async () => {
@@ -239,6 +289,31 @@ describe('spawnRemote with the login’s password', () => {
     expect(end.askpass).toEqual({ answered: 1, refused: '(admin@ssh.example.com) Verification code: ' })
     expect(lines.filter(([, from]) => from === 'out')).toEqual([])
     expect(Date.now() - started).toBeLessThan(15_000)
+  })
+
+  test('the board stops (endLogins): a login by password’s ssh is ended with its helper; another ssh is left as before', async () => {
+    // a login by key, up first (the fake's state is read as each ssh starts)
+    const k = await useAdmin({ sudo: 'nopasswd' })
+    const keyed = spawnRemote(k.fake.bin, k.args('hang', 'nopasswd'), null, 30_000)
+    await until(() => k.fake.calls().length === 1)
+    const a = await useAdmin({ sudo: 'nopasswd', publickey: true, login: { password: 'pw' } })
+    const login = spawnRemote(a.fake.bin, a.args('hang', 'nopasswd', true), null, 30_000, { password: 'pw' })
+    // both up: the password answered
+    await until(() => a.prompts().length === 1)
+    await Bun.sleep(300)
+    const started = Date.now()
+    endLogins()
+    const end = await login.done
+    expect(end.error).toBeNull()
+    expect(end.code).not.toBe(0)
+    expect(end.askpass).toEqual({ answered: 1, refused: null })
+    expect(Date.now() - started).toBeLessThan(10_000)
+    const still = await Promise.race([keyed.done.then(() => 'ended'), Bun.sleep(500).then(() => 'running')])
+    expect(still).toBe('running')
+    keyed.kill()
+    await keyed.done
+    // nothing left to end: a second call does nothing
+    endLogins()
   })
 
   test('without a login: no askpass, ssh’s end as before', async () => {

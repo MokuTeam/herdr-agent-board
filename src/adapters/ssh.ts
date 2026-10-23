@@ -256,7 +256,8 @@ export function openAskpass(password: string, refuse: () => void, bun: string = 
   let answered = 0
   let refused: string | null = null
   let closed = false
-  const heard = new WeakMap<object, string>()
+  // what each helper sent so far, as bytes: a character cut between two chunks is read whole
+  const heard = new WeakMap<object, Buffer>()
   const theirs = (v: unknown): boolean => {
     if (typeof v !== 'string') return false
     const given = Buffer.from(v)
@@ -280,17 +281,17 @@ export function openAskpass(password: string, refuse: () => void, bun: string = 
     port: 0,
     socket: {
       data(socket, chunk) {
-        const text = (heard.get(socket) ?? '') + chunk.toString('utf8')
-        const at = text.indexOf('\n')
+        const bytes = Buffer.concat([heard.get(socket) ?? Buffer.alloc(0), chunk])
+        const at = bytes.indexOf(0x0a)
         if (at < 0) {
-          if (text.length > ASKPASS_MOST) socket.end()
-          else heard.set(socket, text)
+          if (bytes.length > ASKPASS_MOST) socket.end()
+          else heard.set(socket, bytes)
           return
         }
-        heard.set(socket, '')
+        heard.delete(socket)
         let ask: unknown
         try {
-          ask = JSON.parse(text.slice(0, at))
+          ask = JSON.parse(bytes.subarray(0, at).toString('utf8'))
         } catch {
           ask = null
         }
@@ -329,6 +330,21 @@ export async function sshVersion(bin: string): Promise<string> {
 }
 
 /**
+ * The ssh of each login by password now running: in a session of its own on POSIX (spawnRemote),
+ * so the board's end, or a Ctrl+C in its terminal, does not reach it by itself.
+ */
+const loginPids = new Set<number>()
+
+/**
+ * The board stops: the ssh of each login by password still running ended, its askpass helper with
+ * it (also from a process.on('exit') handler). Any other ssh is left as before.
+ */
+export function endLogins(): void {
+  for (const pid of loginPids) killTreePid(pid)
+  loginPids.clear()
+}
+
+/**
  * ssh with this argument list, no shell: stdout and stderr read by line; `stdin` written, then
  * closed (null: closed at once), so the sudo password is on ssh's stdin and nowhere else; ended
  * after `timeoutMs`. With `login`, its password goes to ssh through the board's askpass
@@ -354,6 +370,7 @@ export function spawnRemote(
       if (done) return
       done = true
       clearTimeout(deadline)
+      loginPids.delete(pid)
       askpass?.close()
       resolve(askpass ? { ...result, askpass: askpass.report() } : result)
     }
@@ -381,6 +398,7 @@ export function spawnRemote(
     return { onLine: () => {}, done: ended, kill: () => {} }
   }
   pid = child.pid ?? 0
+  if (askpass && pid && !done) loginPids.add(pid)
   const kill = (): void => {
     if (!done && pid) killTreePid(pid)
   }
@@ -397,7 +415,13 @@ export function spawnRemote(
     rest[from] = lines.pop() ?? ''
     for (const line of lines) emit(line, from)
   }
-  child.stdout?.setEncoding('utf8').on('data', read('out'))
+  const out = read('out')
+  child.stdout?.setEncoding('utf8').on('data', (chunk: string) => {
+    // the server's first output: ssh is logged in, no prompt is to come, so the askpass's channel
+    // closes now rather than at ssh's end (a run's ssh lasts minutes); what it did is kept
+    askpass?.close()
+    out(chunk)
+  })
   child.stderr?.setEncoding('utf8').on('data', read('err'))
   // ssh may end before it reads stdin (a refused key): that write's EPIPE is no error of ours
   child.stdin?.on('error', () => {})
