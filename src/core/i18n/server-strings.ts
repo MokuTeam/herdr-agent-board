@@ -7,23 +7,12 @@ import type { Lang } from '../types.ts'
 export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
   en: {
     // ---- the panel's "On the server" (web/src/components/access/ServerSetup.tsx, models/server-setup.ts)
-    'server.panel.byHand': 'By hand, once',
-    'server.panel.testNote':
-      "Checks step 1: SSH with the board's key, and the socket. The domain fails until step 3 is done. It also pins the server's key, which step 3 needs.",
     'server.panel.web': 'The web server',
     'server.panel.webNote':
-      'The board connects as an admin over SSH, looks at the server and shows its plan; nothing changes until you click Apply. Or run the same commands yourself.',
-    'server.panel.adminUser': 'Admin user',
-    'server.panel.adminKey': 'Admin key',
-    'server.panel.adminUserHint': 'a user with sudo, or root',
+      'The board logs in to your server once, looks at it and says what it will do; nothing changes until you click Apply.',
     'server.panel.adminKeyHint': 'the ssh agent and ~/.ssh keys',
-    'server.panel.look': 'Look at the server',
     'server.panel.looking': 'Looking…',
     'server.panel.lookAgain': 'Look again',
-    'server.panel.doItMyself': 'Do it myself',
-    'server.panel.needAdmin': 'Look needs the admin user.',
-    'server.panel.needHostKey': "Look needs the server's key: run Test connection first (step 2).",
-    'server.panel.sudoAsks': "sudo asks for {admin}'s password",
     'server.panel.sudoNote': 'kept by this panel while it is open; never saved',
     'server.panel.continue': 'Continue',
     'server.panel.found': 'What the board found',
@@ -119,10 +108,43 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.placeholders': 'Fill these in first; each command finds its value on the server:',
     'server.panel.check': 'Check after:',
     'server.panel.undoIt': 'To undo it:',
-    'server.panel.manualEnd': 'Then Test connection (step 2).',
+    'server.panel.manualEnd': 'Then Test connection.',
     // Call 4: Test connection's domain step while no setup is on record (exact)
     'server.panel.domainNotSetUp':
       'If the web server is not set up yet, this step fails until it is: Set up the server below.',
+    // the one flow (the simple-setup spec's "The flow, as the owner sees it"): plain words only
+    'server.panel.signin': 'The server and its login',
+    'server.panel.domain': 'Address of the board',
+    'server.panel.host': 'Server',
+    'server.panel.sshPort': 'port',
+    'server.panel.login': 'Login',
+    'server.panel.password': 'Password',
+    'server.panel.keyFold': 'Log in with a key file instead',
+    'server.panel.keyFile': 'Key file',
+    'server.panel.sudoOwn': 'sudo’s password',
+    'server.panel.setUpServer': 'Set up the server',
+    'server.panel.needDomain': 'Type the board’s address first.',
+    'server.panel.plainFound': 'What I found',
+    'server.panel.plainWill': 'What I will do',
+    'server.panel.hostKeySeen': 'The server’s key: {fingerprint}',
+    'server.panel.hostKeyPinned':
+      'The server’s key: {fingerprint} (remembered now: the board checks it at every login)',
+    'server.panel.dockerOk': 'OK, install Docker',
+    'server.panel.details': 'Details: every file and line, and how Undo removes them',
+    'server.panel.undoAsks': 'Undo logs in to the server again: type {admin}’s password, then Continue.',
+    'server.panel.byHandFold': 'Your server needs steps by hand',
+    'server.panel.byHandLogin': 'The board’s own login on the server',
+    // "Do it myself (one command)"
+    'server.panel.oneshot': 'Do it myself (one command)',
+    'server.panel.oneshotWhere': 'Paste this into an ssh session on your server, as root (or a user with sudo).',
+    'server.panel.oneshotWhat':
+      'It looks at the server, sets up the board’s address and its tunnel, and touches nothing of yours.',
+    'server.panel.oneshotEnd': 'It prints what it did, or why it stopped. Safe to paste again.',
+    'server.panel.oneshotInside': 'What is inside (the script, readable)',
+    'server.panel.oneshotUndo': 'To undo it later (one command too)',
+    'server.panel.oneshotThen': 'Then:',
+    'server.panel.oneshotMaking': 'Making the command…',
+    'server.panel.oneshotFailed': 'The board could not make the command: {error}',
     // ---- end of the panel's texts
     // the case Look found, in one line
     'server.case.1': "Nothing listens on 80 and 443: the board's own Caddy takes them, in Docker.",
@@ -382,23 +404,12 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
   },
   ru: {
     // ---- «На сервере» в панели
-    'server.panel.byHand': 'Вручную, один раз',
-    'server.panel.testNote':
-      'Проверяет шаг 1: SSH с ключом доски и сокет. Домен не пройдёт, пока не сделан шаг 3. Заодно запоминает ключ сервера, который нужен шагу 3.',
     'server.panel.web': 'Веб-сервер',
     'server.panel.webNote':
-      'Доска подключается по SSH как администратор, осматривает сервер и показывает план; ничего не меняется, пока вы не нажмёте «Применить». Или выполните те же команды сами.',
-    'server.panel.adminUser': 'Администратор',
-    'server.panel.adminKey': 'Ключ администратора',
-    'server.panel.adminUserHint': 'пользователь с sudo или root',
+      'Доска один раз заходит на ваш сервер, осматривает его и говорит, что сделает; ничего не меняется, пока вы не нажмёте «Применить».',
     'server.panel.adminKeyHint': 'ssh-агент и ключи из ~/.ssh',
-    'server.panel.look': 'Осмотреть сервер',
     'server.panel.looking': 'Осмотр…',
     'server.panel.lookAgain': 'Осмотреть снова',
-    'server.panel.doItMyself': 'Сделаю сам',
-    'server.panel.needAdmin': 'Для осмотра нужен администратор.',
-    'server.panel.needHostKey': 'Для осмотра нужен ключ сервера: сначала проверьте соединение (шаг 2).',
-    'server.panel.sudoAsks': 'sudo просит пароль пользователя {admin}',
     'server.panel.sudoNote': 'хранится в этой панели, пока она открыта; нигде не сохраняется',
     'server.panel.continue': 'Продолжить',
     'server.panel.found': 'Что доска нашла',
@@ -493,9 +504,43 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.placeholders': 'Сначала подставьте это; каждая команда находит значение на сервере:',
     'server.panel.check': 'Проверить после:',
     'server.panel.undoIt': 'Как отменить:',
-    'server.panel.manualEnd': 'Затем проверьте соединение (шаг 2).',
+    'server.panel.manualEnd': 'Затем проверьте соединение.',
     'server.panel.domainNotSetUp':
       'Если веб-сервер ещё не настроен, этот шаг не пройдёт, пока его не настроить: настройте сервер ниже.',
+    // один путь: только простые слова
+    'server.panel.signin': 'Сервер и вход на него',
+    'server.panel.domain': 'Адрес доски',
+    'server.panel.host': 'Сервер',
+    'server.panel.sshPort': 'порт',
+    'server.panel.login': 'Логин',
+    'server.panel.password': 'Пароль',
+    'server.panel.keyFold': 'Войти по файлу ключа',
+    'server.panel.keyFile': 'Файл ключа',
+    'server.panel.sudoOwn': 'Пароль sudo',
+    'server.panel.setUpServer': 'Настроить сервер',
+    'server.panel.needDomain': 'Сначала введите адрес доски.',
+    'server.panel.plainFound': 'Что на сервере',
+    'server.panel.plainWill': 'Что я сделаю',
+    'server.panel.hostKeySeen': 'Ключ сервера: {fingerprint}',
+    'server.panel.hostKeyPinned': 'Ключ сервера: {fingerprint} (запомнен сейчас: доска сверяет его при каждом входе)',
+    'server.panel.dockerOk': 'Да, установить Docker',
+    'server.panel.details': 'Подробно: каждый файл и каждая строка, и как их уберёт отмена',
+    'server.panel.undoAsks':
+      'Для отмены доска снова заходит на сервер: введите пароль пользователя {admin} и нажмите «Продолжить».',
+    'server.panel.byHandFold': 'Вашему серверу нужны шаги вручную',
+    'server.panel.byHandLogin': 'Собственный вход доски на сервер',
+    // «Сделаю сам (одна команда)»
+    'server.panel.oneshot': 'Сделаю сам (одна команда)',
+    'server.panel.oneshotWhere': 'Вставьте это в ssh-сессию на своём сервере — от root или от пользователя с sudo.',
+    'server.panel.oneshotWhat':
+      'Команда сама осмотрит сервер, настроит адрес доски и её туннель и ничего вашего не тронет.',
+    'server.panel.oneshotEnd':
+      'В конце она напишет, что сделала или почему остановилась. Вставлять повторно безопасно.',
+    'server.panel.oneshotInside': 'Что внутри (скрипт целиком)',
+    'server.panel.oneshotUndo': 'Как потом отменить (тоже одна команда)',
+    'server.panel.oneshotThen': 'Затем:',
+    'server.panel.oneshotMaking': 'Готовлю команду…',
+    'server.panel.oneshotFailed': 'Доска не смогла собрать команду: {error}',
     // ---- конец текстов панели
     'server.case.1': 'На 80 и 443 никого: их займёт собственный Caddy доски в Docker.',
     'server.case.1b':
