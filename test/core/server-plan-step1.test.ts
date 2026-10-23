@@ -297,6 +297,24 @@ for (const distro of DISTROS) {
       expect(user).toContain('sudo userdel boardtunnel')
     })
 
+    test('step 1’s parts always last, in that order, whatever order a record of several runs has them in', () => {
+      const r = recordFor('2', {
+        items: [
+          { kind: 'fence', path: FENCE_FILE },
+          { kind: 'user', name: 'boardtunnel' },
+          { kind: 'group', path: '/var/lib/boardtunnel', from: 'boardtunnel', to: 'caddy' },
+          { kind: 'keys', path: KEYS, dir: false },
+          { kind: 'folder', path: '/var/lib/boardtunnel' },
+          { kind: 'line', file: '/etc/caddy/Caddyfile', line: 'import /etc/caddy/agent-board/board.caddy # agent-board' },
+        ],
+      })
+      const got = ids(undo(r, factsFor('2', distro)))
+      const at = (id: string): number => got.indexOf(id)
+      expect(at('group-back')).toBeLessThan(at('drop-fence'))
+      expect(at('reload')).toBeLessThan(at('drop-fence'))
+      expect(got.slice(at('drop-fence'), at('drop-fence') + 4)).toEqual(['drop-fence', 'drop-keys', 'drop-folder', 'drop-user'])
+    })
+
     test('what was there before the board stays: only that is left to the owner, by hand', () => {
       const all = undo(recordFor('1', { items: MADE }), factsFor('bare', distro))
       expect(ids(all)).not.toContain('by-hand')

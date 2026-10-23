@@ -1794,7 +1794,11 @@ export function undoPlan(
   const offerDocker = dockerItem !== undefined && onlyOurs
   const files = items.filter(i => i.kind === 'file')
   const theirFile = theirCaddy(f)?.file
-  for (const item of [...items].reverse()) {
+  // newest first; step 1's parts last whatever run made them (the case's parts use the user and
+  // its folder), the fence first of them and the user last
+  const last = ['fence', 'keys', 'folder', 'user']
+  const order = (i: RecordItem): number => last.indexOf(i.kind) + 1
+  for (const item of [...items].reverse().sort((a, b) => order(a) - order(b))) {
     switch (item.kind) {
       case 'line':
       case 'block': {
