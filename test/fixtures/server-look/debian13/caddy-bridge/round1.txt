@@ -1,0 +1,101 @@
+@@section os
+PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
+NAME="Debian GNU/Linux"
+VERSION_ID="13"
+VERSION="13 (trixie)"
+VERSION_CODENAME=trixie
+DEBIAN_VERSION_FULL=13.7
+ID=debian
+HOME_URL="https://www.debian.org/"
+SUPPORT_URL="https://www.debian.org/support"
+BUG_REPORT_URL="https://bugs.debian.org/"
+@@arch x86_64
+@@section ports
+LISTEN 0      4096   0.0.0.0:443 0.0.0.0:* users:(("docker-proxy",pid=532,fd=8))
+LISTEN 0      4096   0.0.0.0:80  0.0.0.0:* users:(("docker-proxy",pid=509,fd=8))
+LISTEN 0      4096      [::]:443    [::]:* users:(("docker-proxy",pid=539,fd=8))
+LISTEN 0      4096      [::]:80     [::]:* users:(("docker-proxy",pid=517,fd=8))
+@@pid 509
+0::/docker/134f4fc0e7f37d8abdbd884498e97e68ad37d523209220ff66fb3ae39e4eb24c/system.slice/docker.service
+@@pid 517
+0::/docker/134f4fc0e7f37d8abdbd884498e97e68ad37d523209220ff66fb3ae39e4eb24c/system.slice/docker.service
+@@pid 532
+0::/docker/134f4fc0e7f37d8abdbd884498e97e68ad37d523209220ff66fb3ae39e4eb24c/system.slice/docker.service
+@@pid 539
+0::/docker/134f4fc0e7f37d8abdbd884498e97e68ad37d523209220ff66fb3ae39e4eb24c/system.slice/docker.service
+@@section docker
+@@cli Docker version 29.9.2, build a82e528
+@@server 29.9.2
+@@security ["name=seccomp,profile=builtin","name=cgroupns"]
+@@network "bridge" "bridge"
+@@network "host" "host"
+@@network "none" "null"
+@@container 6464f9d08a43efdf48e6e48f36710a5d3a3b12e223f39b515d06b10cda147bf2
+name "/their-caddy"
+image "caddy:2"
+path "caddy"
+args ["run","--config","/etc/caddy/Caddyfile","--adapter","caddyfile"]
+netmode "bridge"
+network "bridge"
+mounts [{"Destination":"/etc/caddy/Caddyfile","Mode":"","Propagation":"rprivate","RW":true,"Source":"/srv/bridge/Caddyfile","Type":"bind"}]
+ports {"2019/tcp":null,"443/tcp":[{"HostIp":"0.0.0.0","HostPort":"443"},{"HostIp":"::","HostPort":"443"}],"443/udp":null,"80/tcp":[{"HostIp":"0.0.0.0","HostPort":"80"},{"HostIp":"::","HostPort":"80"}]}
+
+@@section systemd
+@@running
+WorkingDirectory=
+User=
+Group=
+Id=caddy.service
+LoadState=not-found
+ActiveState=inactive
+
+WorkingDirectory=
+User=
+Group=
+Id=nginx.service
+LoadState=not-found
+ActiveState=inactive
+@@section fence
+clientaliveinterval 15
+clientalivecountmax 2
+streamlocalbindmask 0117
+passwordauthentication no
+kbdinteractiveauthentication no
+x11forwarding no
+permittty no
+allowtcpforwarding remote
+allowagentforwarding no
+allowstreamlocalforwarding remote
+streamlocalbindunlink yes
+forcecommand /bin/false
+authorizedkeysfile /etc/ssh/authorized_keys/boardtunnel
+authenticationmethods publickey
+permittunnel no
+permitlisten none
+@@section folder
+@@dir 2750 boardtunnel boardtunnel 995
+@@group boardtunnel:x:995:
+@@socket 660 boardtunnel boardtunnel socket
+@@section record
+@@section host
+@@selinux 
+@@forward 1
+@@fetch curl
+@@sudo Sudo version 1.9.16p2
+@@ls ls (GNU coreutils) 9.7
+@@package containerd not-installed
+@@package docker.io not-installed
+@@package runc not-installed
+@@section dns
+@@part domain
+203.0.113.10    STREAM board.example.com
+203.0.113.10    DGRAM  
+203.0.113.10    RAW    
+@@part local
+1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+1: lo    inet6 ::1/128 scope host proto kernel_lo \       valid_lft forever preferred_lft forever
+2: eth0    inet 172.18.0.3/16 brd 172.18.255.255 scope global eth0\       valid_lft forever preferred_lft forever
+3: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\       valid_lft forever preferred_lft forever
+3: docker0    inet6 fe80::2c3c:99ff:fe1c:140c/64 scope link proto kernel_ll \       valid_lft forever preferred_lft forever
+4: vethbc01e00    inet6 fe80::4fa:28ff:feff:fd30/64 scope link proto kernel_ll \       valid_lft forever preferred_lft forever
+@@end

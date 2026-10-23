@@ -110,6 +110,12 @@ export interface BoardPayload {
   /** The remote mode (core/remote.ts), only while it is on. */
   remote?: RemoteView
   /**
+   * The Remote access view's revision (GET /api/access, local only): it changes when the view does,
+   * and the panel fetches the view again then; the view itself never goes out with the board. The
+   * server always sends it; a board before it sent none.
+   */
+  accessRev?: number
+  /**
    * The Omarchy theme the Terminal style takes its colors from (src/adapters/omarchy.ts): a stamp
    * that changes with it, only on a computer with Omarchy. The page loads omarchy-theme.css again.
    */

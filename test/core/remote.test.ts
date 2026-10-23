@@ -3,6 +3,7 @@ import {
   allowedLogin,
   bearerOf,
   desktopOnly,
+  localOnly,
   remoteConfig,
   STATUS_RETRY_MS,
   statusVerdict,
@@ -59,6 +60,14 @@ test("what acts on this computer's screen is not for a phone", () => {
     '/api/launch',
   ])
     expect(desktopOnly(path)).toBe(false)
+})
+
+test("the remote mode's, Remote access's and wake's management are for the board on this computer only", () => {
+  for (const path of ['/api/remote', '/api/remote/x', '/api/access', '/api/access/x', '/api/wake', '/api/wake/x'])
+    expect(localOnly(path)).toBe(true)
+  for (const path of ['/api/accessories', '/api/remotes', '/api/wakes', '/api/session/s1/wake', '/api/probe/x'])
+    expect(localOnly(path)).toBe(false)
+  expect(localOnly('/api/login/password')).toBe(false)
 })
 
 test('the token comes as Authorization: Bearer', () => {

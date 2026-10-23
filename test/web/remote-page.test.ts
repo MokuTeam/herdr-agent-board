@@ -4,7 +4,17 @@
 import { expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { cardMenu, chipMenu, launchMenu, type MenuEntry, type MenuItem } from '../../web/src/models/menu-model.ts'
-import { gateAfter, helloOf, nextRetryMs, pairName, pollStep, remotePage } from '../../web/src/models/remote-page.ts'
+import {
+  gateAfter,
+  helloOf,
+  keepAuth,
+  keptAuth,
+  nextRetryMs,
+  pairName,
+  pollStep,
+  remotePage,
+} from '../../web/src/models/remote-page.ts'
+import { FakeWorld } from './support/fake-dom.ts'
 
 const t = translator('en')
 
@@ -39,14 +49,63 @@ test("pairing goes by the board's answers; hello says whether this browser is pa
     host: 'BOX',
     paired: true,
     language: 'ru',
+    auth: 'pair',
+    signedIn: false,
   })
   expect(helloOf({ board: 'agent-board', host: 'BOX' })).toEqual({
     name: null,
     host: 'BOX',
     paired: false,
     language: null,
+    auth: 'pair',
+    signedIn: false,
   })
   expect(helloOf({ error: 'user' })).toBeNull()
+})
+
+test("through the owner's domain hello says to sign in, and whether this browser is; the page keeps how it gets in", () => {
+  expect(helloOf({ board: 'agent-board', api: 3, auth: 'login', signedIn: true, language: 'ru' })).toEqual({
+    name: null,
+    host: '',
+    paired: false,
+    language: 'ru',
+    auth: 'login',
+    signedIn: true,
+  })
+  expect(helloOf({ board: 'agent-board', auth: 'login', signedIn: false, language: null })).toMatchObject({
+    auth: 'login',
+    signedIn: false,
+  })
+  // Without auth, or with one the page does not know: pairing, as today.
+  expect(helloOf({ board: 'agent-board', host: 'BOX', paired: true })).toMatchObject({ auth: 'pair', signedIn: false })
+  expect(helloOf({ board: 'agent-board', auth: 'passwordless', signedIn: 'yes' })).toMatchObject({
+    auth: 'pair',
+    signedIn: false,
+  })
+
+  const world = new FakeWorld({ viewport: { w: 390, h: 844 } })
+  world.install()
+  try {
+    expect(keptAuth()).toBeNull()
+    keepAuth('login')
+    expect(keptAuth()).toBe('login')
+    expect(world.storage.get('agent-board:phone-auth')).toBe('login')
+    keepAuth('pair')
+    expect(keptAuth()).toBe('pair')
+    world.storage.set('agent-board:phone-auth', 'magic')
+    expect(keptAuth()).toBeNull()
+    // A browser that refuses storage: nothing kept, and keeping throws nothing.
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      get() {
+        throw new Error('storage is off')
+      },
+    })
+    expect(keptAuth()).toBeNull()
+    keepAuth('login')
+  } finally {
+    world.uninstall()
+  }
 })
 
 const isItem = (i: MenuEntry): i is MenuItem => !i.separator

@@ -292,7 +292,10 @@ export function sessionRoutes(app: SessionApp): Route[] {
     {
       method: 'GET',
       path: /^\/api\/session\/([^/]+)\/changes$/,
-      handle: withItem(async item => json(200, await checkoutChanges(item.cwd))),
+      // Through the tunnel, not for a card working in the board's own files: a session starts anywhere.
+      handle: withItem(async (item, _req, ctx) =>
+        ctx.ownFile(item.cwd) ? json(403, { error: t('err.fs.own') }) : json(200, await checkoutChanges(item.cwd)),
+      ),
     },
     {
       method: 'GET',

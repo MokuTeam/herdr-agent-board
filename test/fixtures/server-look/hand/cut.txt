@@ -1,0 +1,39 @@
+@@section os
+PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
+NAME="Debian GNU/Linux"
+VERSION_ID="13"
+VERSION="13 (trixie)"
+VERSION_CODENAME=trixie
+DEBIAN_VERSION_FULL=13.7
+ID=debian
+HOME_URL="https://www.debian.org/"
+SUPPORT_URL="https://www.debian.org/support"
+BUG_REPORT_URL="https://bugs.debian.org/"
+@@arch x86_64
+@@section ports
+@@section docker
+@@cli Docker version 29.9.2, build a82e528
+@@server 29.9.2
+@@security ["name=seccomp,profile=builtin","name=cgroupns"]
+@@network "bridge" "bridge"
+@@network "host" "host"
+@@network "none" "null"
+@@section systemd
+@@running
+WorkingDirectory=
+User=
+Group=
+Id=caddy.service
+LoadState=not-found
+ActiveState=inactive
+
+WorkingDirectory=
+User=
+Group=
+Id=nginx.service
+LoadState=not-found
+ActiveState=inactive
+@@section fence
+clientaliveinterval 15
+clientalivecountmax 2
+streamlocalbindmask 0117
