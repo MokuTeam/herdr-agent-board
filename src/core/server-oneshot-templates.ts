@@ -91,11 +91,12 @@ export const INPUTS: Inputs = {
   addr: { sentinel: '10.123.45.67', alt: '127.0.0.1', probe: 'fd00::1' },
   hosts: { sentinel: ['zqhost.example.org'], alt: ['shop.example.org'], probe: ['a.example.com', 'b.example.org'] },
   cid: { sentinel: 'c0ffee00'.repeat(8), alt: `7f3c${'0a'.repeat(30)}` },
-  network: { sentinel: 'zqnet', alt: 'web_default' },
+  // names their unit or Docker gives: one shell word where the board's scripts make them one (quoted)
+  network: { sentinel: 'zqnet', alt: 'web_default', probe: 'my net' },
   bin: { sentinel: '/zqbin/caddy', alt: '/usr/bin/caddy', probe: '/opt/my caddy/caddy' },
-  user: { sentinel: 'zquser', alt: 'caddy' },
-  group: { sentinel: 'zqgroup', alt: 'caddy' },
-  oldgroup: { sentinel: 'zqoldgrp', alt: 'boardtunnel' },
+  user: { sentinel: 'zquser', alt: 'caddy', probe: 'my caddy' },
+  group: { sentinel: 'zqgroup', alt: 'caddy', probe: 'my web' },
+  oldgroup: { sentinel: 'zqoldgrp', alt: 'boardtunnel', probe: 'my old' },
   // their nginx (4b)
   listen: { sentinel: ['10.98.76.54:80'], alt: ['80'], probe: ['[::]:80', '127.0.0.1:80'] },
   nhosts: { sentinel: ['zqnhost.example.org'], alt: ['shop.example.org'], probe: ['a.example.com', 'b.example.org'] },

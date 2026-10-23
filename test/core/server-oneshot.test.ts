@@ -270,6 +270,19 @@ function mutations(): Scenario[] {
       unit.r1.replace(/^@@dir 2750 boardtunnel boardtunnel /m, '@@dir 2750 boardtunnel caddy '),
     ),
     m('members', bare, bare.r1.replace(/^@@group boardtunnel:x:(\d+):$/m, '@@group boardtunnel:x:$1:alice,bob')),
+    // their names reach the steps as the board's own scripts have them: one shell word, quoted
+    m('a unit group that needs quoting', unit, unit.r1.replace(/^Group=caddy$/m, 'Group=web;id')),
+    m(
+      'a unit user that needs quoting',
+      unit,
+      unit.r1.replace(/^User=caddy$/m, 'User=web user').replace(/^Group=caddy$/m, 'Group='),
+    ),
+    m(
+      'a folder group that needs quoting',
+      unit,
+      unit.r1.replace(/^@@dir 2750 boardtunnel boardtunnel /m, '@@dir 2750 boardtunnel old;grp '),
+    ),
+    m('a network that needs quoting', folder, folder.r1.replaceAll('web_default', 'web;id')),
     m('domain served', unit, unit.r1, unit.r2.replace('"host":["a.example.com"]', '"host":["board.example.com"]')),
     m(
       'their sites on a v6 address',
