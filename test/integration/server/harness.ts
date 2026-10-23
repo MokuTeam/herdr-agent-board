@@ -5,6 +5,8 @@
 // server per scenario, its sshd on a free port of 127.0.0.1; and everything removed again, also
 // after a failure. Never anything but containers on this PC: no host but these is ever reached.
 //
+// A command can also run in a terminal on a server (onTty), its prompts answered as a person would.
+//
 // Everything made here carries the label agent-board-it=<run>, and is removed by it. Scripts and
 // Dockerfiles go to Docker with their \r removed: a Windows checkout with core.autocrlf gives them
 // CRLF, which sh and the Dockerfile parser do not take.
@@ -572,4 +574,66 @@ printf '{"dns": ["%s"], "registry-mirrors": ["http://mirror:5000"]}\\n' "$D" > /
     },
   }
   return s
+}
+
+/** A prompt a person at the terminal answers: once the output since the last answer ends with it, the answer and Enter. */
+export interface TtyAnswer {
+  name: string
+  prompt: RegExp
+  answer: string
+}
+
+/**
+ * A command in a terminal of its own on the server, as a user (root by default): util-linux's
+ * `script` gives it one, as an ssh session would, so what it reads from /dev/tty comes from there.
+ * Each prompt is answered at most once, on the terminal and nowhere else (an answer is never in
+ * the log). Its output as the terminal showed it (\r removed), its exit code, and the prompts it
+ * asked, in order.
+ */
+export async function onTty(
+  s: TestServer,
+  command: string,
+  o: { user?: string; answers: TtyAnswer[]; timeoutMs?: number },
+): Promise<Out & { asked: string[] }> {
+  const argv = [
+    'docker',
+    'exec',
+    '-i',
+    ...(o.user ? ['-u', o.user] : []),
+    '-w',
+    '/tmp',
+    s.name,
+    'script',
+    '-qfec',
+    command,
+    '/dev/null',
+  ]
+  const proc = Bun.spawn(argv, { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe', windowsHide: true })
+  const timer = setTimeout(() => proc.kill(), o.timeoutMs ?? 20 * 60_000)
+  const asked: string[] = []
+  const decoder = new TextDecoder()
+  let out = ''
+  let since = 0
+  const reading = (async () => {
+    for await (const chunk of proc.stdout) {
+      out += decoder.decode(chunk, { stream: true })
+      const tail = noCr(out.slice(since))
+      const a = o.answers.find(x => !asked.includes(x.name) && x.prompt.test(tail))
+      if (!a) continue
+      asked.push(a.name)
+      since = out.length
+      proc.stdin.write(`${a.answer}\n`)
+      proc.stdin.flush()
+    }
+  })()
+  const stderr = new Response(proc.stderr).text()
+  const code = await proc.exited
+  await reading
+  clearTimeout(timer)
+  proc.stdin.end()
+  const result = { code, stdout: noCr(out), stderr: noCr(await stderr), asked }
+  note(
+    `$ ${argv.join(' ')} (on a terminal, asked: ${asked.join(', ') || 'nothing'}) → ${code}\n${result.stdout.slice(-4000)}`,
+  )
+  return result
 }

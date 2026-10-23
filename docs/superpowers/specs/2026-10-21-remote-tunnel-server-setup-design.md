@@ -6,6 +6,13 @@ pull request as the tunnel (issue #154). An addition to the approved
 conversation; not built yet. Calls made in this document (not the owner's) are numbered in
 "Calls" at the end and marked **(call N)** where they apply; the owner can overturn any of them.
 
+**Changed 2026-10-23** by `2026-10-23-remote-tunnel-simple-setup-design.md` ("the simple setup"),
+decided with the owner after they tried this on their Debian 13 server: one button, "Set up the
+server", with the server's address, the login (root by default) and its password; the board makes
+step 1 itself; "Do it myself" is one command to paste. The parts below that it overturns are
+marked **Changed 2026-10-23** and say in a line what holds now; where the two differ, the simple
+setup wins.
+
 ## Intent
 
 The owner tried the server steps of the tunnel spec. Copying every command from the panel into a
@@ -133,10 +140,14 @@ The builder edits these lines of `2026-10-20-remote-tunnel-design.md` in the sam
    pieces the record does not name; an Undo that leaves pieces.
 3. **Storing admin secrets.** The sudo password on disk anywhere (PC or server), in a log, the
    payload, a URL, an API answer or a process list; an admin key made, copied or kept by the board.
+   **Changed 2026-10-23:** the admin's login password too (the simple setup's anti-goal 1).
 4. Anything changing on the server without the owner's click on a plan that listed it. Look
    writes nothing.
 5. Weakening the tunnel's fences: the board editing sshd_config, giving the tunnel user any right,
    a socket folder looser than `2750`, or a socket group with members other than its reader.
+   **Changed 2026-10-23:** the board writes sshd's fence now (step 1 by the board); the anti-goal is
+   any sshd setting outside the tunnel user's `Match` block, a right for the tunnel user, a folder
+   looser than `2750`, or an sshd change not validated (`sshd -t`) and reloaded with a rollback.
 6. Undo removing anything the board did not add: their lines, their containers, a Docker the
    owner uses.
 7. The local web board, or a setup that never uses this, noticing any change.
@@ -154,6 +165,12 @@ tunnel's tests stay unchanged and pass.
 The Tunnel part of the panel keeps its fields, key, status and Test connection. Its "Snippets"
 become **"On the server"**, in three steps.
 
+**Changed 2026-10-23:** the three steps are one now (the simple setup's "The flow"): the address,
+the login and its password, **Set up the server** (this document's Look, which also pins the
+server's key), the plan in plain words with the full plan under "Details", **Apply** (step 1's
+parts first, then the case's steps, then Test connection), **Undo**. Steps 1 and 2 below leave the
+panel's order; what they say of step 1's parts and of Test connection still holds.
+
 ### Step 1: by hand, once
 
 The existing snippets, filled in: the user and the socket's folder, the keys file's line, sshd's
@@ -165,6 +182,13 @@ the keys file with the board's public key (`tee`), and appends the `Match` block
 sshd stays by hand **(call 1)**. A mistake in sshd_config can lock the admin out of their own
 server, and the `Match` block is the tunnel's fence; the owner sees and pastes it. Look reads it
 back (below) and says when it differs from the panel's.
+
+**Changed 2026-10-23:** Apply makes what the server lacks of step 1 (the simple setup's "Step 1 by
+the board"): the tunnel user, the folder, the keys file, and the same `Match` block in
+`/etc/ssh/sshd_config.d/00-agent-board.conf`, or between markers at the end of sshd_config when it
+has no `Include`; `sshd -t`, a reload (never a restart), the fence checked in force and root's and
+the admin's `sshd -T` checked unchanged, else a rollback. The snippets and the paste stay, folded,
+only for a server the board does not do.
 
 The socket's folder no longer depends on Caddy **(call 2)**. Step 1 runs before Look, so it cannot
 know whether a `caddy` group exists, and on a server without a host Caddy (cases 1, 3, 4)
@@ -191,7 +215,9 @@ As in the tunnel spec. Before step 3, steps 1 and 2 (ssh and the key; the server
 socket) pass and the domain step fails: nothing serves the domain yet. Its hint gets one line
 while no setup is recorded **(call 4)**: "If the web server is not set up yet, this step fails
 until it is: Set up the server below." Test connection also pins the server's host key, which the
-admin connection then requires (call 6).
+admin connection then requires (call 6). **Changed 2026-10-23:** the first admin login pins the
+key itself (trust on first use, its fingerprint shown with what Look found); Look no longer needs
+Test connection first.
 
 ### Step 3: the web server
 
@@ -226,7 +252,9 @@ On the server
 The layout is the builder's; what it says is not. Everything in it is filled in from Look.
 
 **Look at the server.** Needs the admin user, a pinned host key (Test connection) and, if sudo
-asks for one, the password. It reads; it changes nothing (call 9). Then it shows:
+asks for one, the password. (**Changed 2026-10-23:** the login's password when no key gets in,
+which is sudo's too; the first login pins the key.) It reads; it changes nothing (call 9). Then
+it shows:
 
 - what it found: the distribution, Docker (version, or none), who holds 80 and who holds 443, the
   config it would touch (path, how it is mounted), what Look checked of step 1 (sshd's effective
@@ -255,17 +283,20 @@ output under a fold. On a failure it shows:
 After the last step the board runs Test connection, waiting up to 2 minutes for the certificate
 (call 24). Then the step shows "Set up on 21 Oct, 10:04: Caddy in Docker" with **Undo**.
 
-**Do it myself.** The same plan, as commands (case 5 below).
+**Do it myself.** The same plan, as commands (case 5 below). **Changed 2026-10-23:** one command
+to paste into a root (or sudo) shell on the server (the simple setup's "'Do it myself': one
+command").
 
 **Undo.** Look again first (the server's record and what stands now), then an Undo plan in the
 same form: what will be removed or put back, and what stays (the parts made by hand, call 32;
-Docker, call 20). Undo is a two-click button, as Unpair is.
+Docker, call 20). Undo is a two-click button, as Unpair is. **Changed 2026-10-23:** Undo asks for
+the login's password again (it is not kept), and removes the parts of step 1 the board made.
 
 ### Hints
 
 | What happened | What the panel says |
 |---|---|
-| admin: `Permission denied (publickey)` | The server refused the admin key: add it to `<admin>`'s `~/.ssh/authorized_keys` (`ssh-copy-id`), or load it into the ssh agent if it has a passphrase. |
+| admin: `Permission denied (publickey)` | The server refused the admin key: add it to `<admin>`'s `~/.ssh/authorized_keys` (`ssh-copy-id`), or load it into the ssh agent if it has a passphrase. **Changed 2026-10-23:** with a password, the hints of the simple setup: the password refused (the server may lock the login after a few wrong ones), root's login refused (`PermitRootLogin`: log in as the host's sudo user), a server that takes keys only, a prompt that is not the password. |
 | admin: `Too many authentication failures` | The agent offered too many keys: choose the admin key's file. |
 | no pinned host key | Run Test connection first: it pins the server's key. |
 | `Host key verification failed` | The server's key changed since it was pinned (as for the tunnel). |
@@ -293,6 +324,8 @@ Docker, call 20). Undo is a two-click button, as Unpair is.
   Authentication Agent" service, when it runs) and the usual files (`~/.ssh/id_ed25519`, …). Or a
   key file the owner names, checked like `tunnel.key`. The board never asks for a key's
   passphrase: a key with one must be in the agent. SSH password login is not supported.
+  **Changed 2026-10-23:** it is (the simple setup's "The admin login by password"): the password
+  goes to ssh through the board's askpass helper, one try per click, never stored.
 - Both are kept in config.json, `tunnel.admin: { user, key }`. Neither is secret. They are what
   Undo needs to connect later.
 - The board never makes, copies or keeps an admin key. The tunnel's own key is never used for
@@ -315,7 +348,10 @@ ssh -F none -T
 ```
 
 - The tunnel's host and SSH port; the tunnel's pinned key, strictly: an unpinned or changed key
-  is refused, never pinned here **(call 6)**.
+  is refused, never pinned here **(call 6)**. **Changed 2026-10-23:** with no key pinned, the
+  first login pins the one it meets (`StrictHostKeyChecking=accept-new`); a login by password has
+  no `BatchMode`, and `PreferredAuthentications=publickey,keyboard-interactive,password`,
+  `NumberOfPasswordPrompts=1`.
 - `-F none`, `BatchMode`: no user config, no prompt, as for the tunnel. Paths through
   `sshPathArg` (forward slashes, `%` doubled, quoted).
 - stdin is a pipe (for the sudo password only), stdout and stderr are read line by line. The
@@ -770,6 +806,11 @@ with a certificate error.
 
 ### Case 5: Do it myself
 
+**Changed 2026-10-23:** "Do it myself" is one command (the simple setup) that runs this document's
+Look on the server, chooses the case and runs the board's own steps there, with the record, lock,
+rollback and checks. The per-step commands below stay, folded, only for a server the board does
+not do; "without Look" (call 28) is gone.
+
 The same plan, as the owner would run it, with no framework around it **(call 8)**:
 
 - each step: its title, one line on why, its commands (`sudo` in front of what needs root) with
@@ -857,6 +898,7 @@ builder's to spell; their set is not.
 | volumes | `agent-board-caddy-data`, `agent-board-caddy-config`, labelled | 1, 1b, 4a, 4b |
 | images | `caddy:2.x.y@sha256:…`, `alpine/socat:<v>@sha256:…`, each with whether it was there before | |
 | Docker | the packages, `/etc/apt/sources.list.d/docker.list`, `/etc/apt/keyrings/docker.asc`, when installed by the board | 1, 1b, 4 |
+| step 1's parts (**changed 2026-10-23**), each only when the board made it | the tunnel user (comment `agent-board tunnel`), its socket's folder, `/etc/ssh/authorized_keys/<user>` (and its folder when the board made it), sshd's fence (`/etc/ssh/sshd_config.d/00-agent-board.conf`, or the marked block at sshd_config's end) | all |
 
 **The record (call 23)** lives on the server, so Undo works from a reinstalled board or another
 PC with the same settings. It names: the run's id and time; the state (`running`, `applied`,
@@ -896,6 +938,9 @@ plans from the record; a missing `tunnel.setup` in config.json is filled in from
 - Last, `/etc/agent-board` goes, backups included.
 - What the owner made by hand stays (call 32): the tunnel user, the folder, the keys file, the
   `Match` block. The Undo plan ends with the commands to remove those, to copy if wanted.
+  **Changed 2026-10-23:** what the board made of step 1 goes, the fence first and the user last
+  (the fence's file removed, or its block taken out of sshd_config as it is now; checked and
+  reloaded as when it went in); what was there before stays.
 
 ## Validation and rollback, per case
 
@@ -1411,6 +1456,13 @@ Off unless `BOARD_SERVER_IT=1`; minutes long; never in the default `bun test`.
   Look reads the result); a reload made to fail (rollback, their Caddy on its old config); a host
   made to answer differently after the reload (rollback); their file changed between Look and
   Apply (stopped before any change).
+- **Changed 2026-10-23, the simple setup's lanes** (`-t simple`): each server started empty (no
+  tunnel user, no board key) and reached by password, as root or as the sudo user; per case (1,
+  2, 3a, 3b, 4a) on Debian 13, Ubuntu 26.04 and 24.04, the password path through the board's
+  `/api/access` and the one command on a terminal on the server, each with Apply and Undo; a wrong
+  password, root's login refused, a key-only server; an sshd_config without `Include`; after each
+  Apply and Undo, the owner's next logins (key and password) and root's and the admin's `sshd -T`
+  as before.
 
 ### The two-proxies proof (the owner's requirement)
 
@@ -1478,19 +1530,23 @@ Made in this document; the owner can overturn any of them.
 
 1. **sshd and the tunnel user stay by hand.** The board never edits sshd_config. Look reads back
    the tunnel user's effective sshd settings (`sshd -T`) and the folder, and says when they differ
-   from the panel's.
+   from the panel's. **Overturned 2026-10-23:** Apply makes step 1's parts, the fence included.
 2. **The socket's folder takes the tunnel user's own group** in step 1 (`useradd --user-group`,
    `install -g boardtunnel`), since step 1 comes before Look and `caddy` may not exist. Apply gives
    a host Caddy its group by `chgrp`; containers get it by `--group-add`. Changes the tunnel spec's
    step 2 and the README.
 3. **Step 1 also as one paste**, safe to paste twice, beside the separate snippets.
+   **Overturned 2026-10-23:** both paths make step 1; the paste stays, folded, for a server the
+   board does not do.
 4. **Test connection's domain step**, while nothing is recorded as set up, adds that it fails until
    step 3 is done.
 5. **The admin key**: the agent and the usual key files by default, or a file the owner names; a
    passphrase is never asked (put the key in the agent); no SSH password login. `tunnel.admin {
-   user, key }` kept in config.json.
+   user, key }` kept in config.json. **Overturned 2026-10-23:** a login by password too, tried
+   after the keys; the password is never kept.
 6. **The admin connection uses the tunnel's pinned host key strictly**, on the tunnel's host and
-   port: Look needs Test connection first.
+   port: Look needs Test connection first. **Overturned 2026-10-23:** the first admin login pins
+   it; strictly after that.
 7. **sudo**: none for root; `sudo -n` for NOPASSWD; otherwise the password typed in the panel,
    kept by the page while the panel is open, sent with each Look, Apply or Undo, written once to
    ssh's stdin for `sudo -S -p ''`; one attempt per click; `requiretty` and no sudo go to "Do it
@@ -1549,7 +1605,8 @@ Made in this document; the owner can overturn any of them.
 27. **A plan that installs Docker warns** when the server forwards traffic for others (LXD,
     libvirt, WireGuard, forwarding on).
 28. **"Do it myself" works without Look**: the owner picks the case, and what Look would fill in
-    stays as placeholders, each with the command that finds it.
+    stays as placeholders, each with the command that finds it. **Overturned 2026-10-23:** "Do it
+    myself" is one command that looks by itself.
 29. **A run's output goes to the panel only**; `web.log` gets one line per step. No `board`
     command for the setup.
 30. **One setup per server, named by its pair**: the record's tunnel user and socket path identify
@@ -1559,7 +1616,8 @@ Made in this document; the owner can overturn any of them.
 31. **The integration tests use Pebble** through a test-only `BOARD_SETUP_ACME_CA`; the board's
     real plan never names a CA.
 32. **Undo leaves what the owner made by hand** (the tunnel user, the folder, the keys file, the
-    `Match` block) and shows the commands to remove it.
+    `Match` block) and shows the commands to remove it. **Changed 2026-10-23:** what the board
+    made of step 1, Undo removes.
 33. **Case 3a joins their Caddy's first user-defined network by name**, and the plan says that
     `docker compose down` cannot remove that network while the helper is on it.
 

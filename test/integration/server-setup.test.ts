@@ -15,19 +15,38 @@
 // site, a failing reload, a site that answers otherwise, the run told to stop or killed, the board's
 // ssh killed, and logind's KillUserProcesses=yes.
 //
+// The simple setup (`-t simple`, the simple-setup spec's "Testing"): servers started empty (no
+// tunnel user, no board key), reached by password as root or a sudo user; per case the password
+// path through POST /api/access and the one command pasted on a terminal on the server (`script`),
+// each Apply and Undo, the owner's own logins and sshd's settings for root and admin checked
+// after each; the refusals of a login by password, and an sshd_config without Include. Those run
+// at once (BOARD_SERVER_IT_PARALLEL=<n>: at most n servers), in about 5 minutes.
+//
 // Long: BOARD_SERVER_IT=1 bun test test/integration/server-setup.test.ts --timeout 3600000 (about
-// an hour). `-t <name>` runs some tests, BOARD_SERVER_IT_LANES=debian13,… some distributions,
+// an hour; skipped, saying so, while Docker does not answer). `-t <name>` runs some tests, BOARD_SERVER_IT_LANES=debian13,… some distributions,
 // BOARD_IT_KEEP=1 keeps the images and the mirror for the next run, BOARD_IT_RESULTS=<file> writes
 // the results' lines there. The run's log is printed at the start (harness.ts's work()).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { protectKey } from '../../src/adapters/ssh.ts'
+import { openAskpass, protectKey } from '../../src/adapters/ssh.ts'
 import { type AccessView, isAccessView } from '../../src/core/access.ts'
+import { fenceWanted } from '../../src/core/server-look.ts'
 import type { Manual, Plan, SetupCase } from '../../src/core/server-plan.ts'
-import { CADDY_IMAGE, SOCAT_IMAGE } from '../../src/core/server-texts.ts'
-import type { ServerView } from '../../src/core/server-view.ts'
-import { forwardAccepted, sshArgs, tunnelConfig } from '../../src/core/tunnel.ts'
+import {
+  CADDY_IMAGE,
+  FENCE_FILE,
+  fenceBlock,
+  fenceFile,
+  KEYS_DIR,
+  SOCAT_IMAGE,
+  SSHD_CONFIG,
+  SSHD_DIR,
+  USER_COMMENT,
+} from '../../src/core/server-texts.ts'
+import type { AdminHint, ServerView } from '../../src/core/server-view.ts'
+import { forwardAccepted, sshArgs, sshPathArg, type TestStep, tunnelConfig } from '../../src/core/tunnel.ts'
+import { keysFile, keysLine } from '../../src/core/tunnel-snippets.ts'
 import { serveBoard, sharedSandbox, unusedPort } from '../support/board-server.ts'
 import type { Sandbox } from '../support/sandbox.ts'
 import { stateFolder } from '../support/tunnel-board.ts'
@@ -38,7 +57,9 @@ import {
   docker,
   dockerUp,
   type Lane,
+  noCr,
   note,
+  onTty,
   PEBBLE_DIR,
   PEBBLE_ROOT_ON_SERVER,
   removeRun,
@@ -56,6 +77,23 @@ import {
 import { readEcho, rightmost, startStandin } from './standin.ts'
 
 const ON = process.env.BOARD_SERVER_IT === '1'
+/** Docker answers (Desktop is running): asked only when the tests are on; without it they are skipped, saying so. */
+function dockerAnswers(): boolean {
+  try {
+    const r = Bun.spawnSync(['docker', 'info', '--format', '{{.ServerVersion}}'], {
+      stdout: 'ignore',
+      stderr: 'ignore',
+      timeout: 60_000,
+      windowsHide: true,
+    })
+    return r.exitCode === 0
+  } catch {
+    return false
+  }
+}
+const DOCKER = ON && dockerAnswers()
+if (ON && !DOCKER)
+  console.warn('server-setup: BOARD_SERVER_IT=1, but Docker does not answer: skipped (start Docker Desktop)')
 const ALL = process.env.BOARD_SERVER_IT_ALL === '1'
 const SYSTEM32 = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32')
 const SSH_EXE = join(SYSTEM32, 'OpenSSH', 'ssh.exe')
@@ -195,12 +233,27 @@ interface Board {
   view(): Promise<AccessView>
   server(): Promise<ServerView>
   op(body: Record<string, unknown>): Promise<[number, Reply]>
+  /** GET of one of the board's routes, as the panel fetches it. */
+  get(path: string): Promise<[number, Reply]>
   /** The server part of the view once `ok` holds, within `ms`. */
   serverWhen(ok: (v: ServerView) => boolean, ms: number, what: string): Promise<ServerView>
   tunnel(): Record<string, unknown>
 }
 
-async function startBoard(newBox: () => Promise<Sandbox>, l: Lane, s: TestServer, admin: Admin): Promise<Board> {
+/**
+ * A board for the server, its admin `admin` with the test's key in config.json; with `{ key:
+ * false }` no admin there at all (the panel's login fields are empty: the test sets the user
+ * through POST /api/access, and the login goes by password). `domain`: the board's, when several
+ * servers share the lane.
+ */
+async function startBoard(
+  newBox: () => Promise<Sandbox>,
+  l: Lane,
+  s: TestServer,
+  admin: Admin,
+  o: { domain?: string; key?: boolean } = {},
+): Promise<Board> {
+  const domain = o.domain ?? DOMAIN
   const box = await newBox()
   const web = await unusedPort()
   const configPath = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
@@ -214,14 +267,14 @@ async function startBoard(newBox: () => Promise<Sandbox>, l: Lane, s: TestServer
       host: '127.0.0.1',
       sshPort: s.sshPort,
       user: 'boardtunnel',
-      domain: DOMAIN,
-      admin: { user: admin, key: adminKey },
+      domain,
+      ...(o.key !== false && { admin: { user: admin, key: adminKey } }),
     },
   }
   mkdirSync(join(configPath, '..'), { recursive: true })
   writeFileSync(configPath, JSON.stringify(cfg, null, 2))
-  l.proxy.routes.set(`${DOMAIN}:443`, s.https)
-  l.proxy.routes.set(`${DOMAIN}:8443`, s.alt)
+  l.proxy.routes.set(`${domain}:443`, s.https)
+  l.proxy.routes.set(`${domain}:8443`, s.alt)
   // Windows' ssh and ssh-keygen end at once (255, not a word) without %ProgramData%, which the
   // sandbox's environment leaves out: a real board has the user's whole environment
   const windows = Object.fromEntries(
@@ -265,6 +318,12 @@ async function startBoard(newBox: () => Promise<Sandbox>, l: Lane, s: TestServer
       })
       const reply = (await res.json()) as Reply
       note(`board ${l.distro} ${String(body.op)} → ${res.status} ${JSON.stringify(reply).slice(0, 400)}`)
+      return [res.status, reply]
+    },
+    async get(path) {
+      const res = await fetch(`${url}${path}`)
+      const reply = (await res.json()) as Reply
+      note(`board ${l.distro} GET ${path} → ${res.status}`)
       return [res.status, reply]
     },
     async serverWhen(ok, ms, what) {
@@ -477,7 +536,7 @@ async function domainFromClient(
 
 // --- One scenario on one server --------------------------------------------------------------------------
 
-async function prepare(l: Lane, sc: Scenario, tag: string): Promise<TestServer> {
+async function prepare(l: Lane, sc: Scenario, tag: string, domain = DOMAIN): Promise<TestServer> {
   const s = await startServer(l, { tag, withDocker: sc.withDocker, adminKey, password: SENTINEL })
   if (sc.script !== 'bare') {
     if (sc.script === 'faked') await s.sh(scenarioScript('bare'))
@@ -487,7 +546,7 @@ async function prepare(l: Lane, sc: Scenario, tag: string): Promise<TestServer> 
     })
   }
   if (sc.after) await s.sh(sc.after)
-  await l.addA(DOMAIN, s.ip)
+  await l.addA(domain, s.ip)
   return s
 }
 
@@ -649,9 +708,551 @@ async function onLanes(all: Distro[], fn: (l: Lane) => Promise<void>): Promise<v
   if (failed.length) throw new Error(failed.join('\n\n'))
 }
 
+// --- The simple setup: an empty server, its admin's password, or one command -----------------------------
+
+/** Who the owner logs in as: root, or the sudo user `admin`, whose sudo takes the same password. */
+type Login = 'root' | 'admin'
+
+/**
+ * One server per case: the board logs in by password as `admin`, the one command runs as the
+ * other login. Each server's domain is its own, so that all of them share the lane at once.
+ */
+interface SimpleJob {
+  scenario: string
+  want: SetupCase
+  admin: Login
+  domain: string
+}
+const SIMPLE: SimpleJob[] = [
+  { scenario: 'bare', want: '1', admin: 'root', domain: 'case1.example.com' },
+  { scenario: 'caddy-unit', want: '2', admin: 'admin', domain: 'case2.example.com' },
+  { scenario: 'compose-folder', want: '3a', admin: 'root', domain: 'case3a.example.com' },
+  { scenario: 'caddy-host', want: '3b', admin: 'admin', domain: 'case3b.example.com' },
+  { scenario: 'nginx-443', want: '4a', admin: 'root', domain: 'case4a.example.com' },
+]
+const TUNNEL_USER = 'boardtunnel'
+const otherLogin = (l: Login): Login => (l === 'root' ? 'admin' : 'root')
+const scenarioNamed = (name: string): Scenario => SCENARIOS.find(x => x.name === name) as Scenario
+const addressOf = (want: SetupCase, domain: string): string =>
+  want === '4a' || want === '4b' ? `https://${domain}:8443` : `https://${domain}`
+
+/** At most BOARD_SERVER_IT_PARALLEL of these servers at once (default: all of them). */
+const PARALLEL = Number(process.env.BOARD_SERVER_IT_PARALLEL) || Number.POSITIVE_INFINITY
+let serversUp = 0
+const waitingForSlot: (() => void)[] = []
+async function slot(fn: () => Promise<void>): Promise<void> {
+  while (serversUp >= PARALLEL) await new Promise<void>(resolve => waitingForSlot.push(resolve))
+  serversUp++
+  try {
+    await fn()
+  } finally {
+    serversUp--
+    waitingForSlot.shift()?.()
+  }
+}
+
+/** sshd_config edited by a sed script, checked and reloaded. */
+async function sshdEdit(s: TestServer, sed: string): Promise<void> {
+  await s.sh(`sed -i "$E" ${SSHD_CONFIG} && sshd -t && systemctl try-reload-or-restart ssh`, { env: { E: sed } })
+}
+
+/** The server as a rented one often comes: root's login takes its password (PermitRootLogin yes), as admin's does; both SENTINEL. */
+async function byPasswordToo(s: TestServer): Promise<void> {
+  await s.exec(['chpasswd'], { stdin: `root:${SENTINEL}\n` })
+  await sshdEdit(s, 's/^#\\?PermitRootLogin .*/PermitRootLogin yes/')
+}
+
+const sshdT = (user: string): string => `sshd -T -C user=${user},host=localhost,addr=127.0.0.1`
+
+/** Step 1's parts on the server, and sshd's settings (`sshd -T`) for root, admin and the tunnel user. */
+interface StepOne {
+  account: string
+  folder: string
+  keys: string
+  keysDir: string
+  fence: string
+  sshdConfig: string
+  root: string
+  admin: string
+  tunnel: string
+}
+
+async function stepOne(s: TestServer): Promise<StepOne> {
+  const out = await s.sh(
+    `echo @@account; getent passwd ${TUNNEL_USER}; getent group ${TUNNEL_USER}
+echo @@folder; stat -c '%a %U' /var/lib/${TUNNEL_USER} 2>/dev/null
+echo @@keys; cat ${keysFile(TUNNEL_USER)} 2>/dev/null
+echo @@keysDir; [ -d ${KEYS_DIR} ] && echo there
+echo @@fence; cat ${FENCE_FILE} 2>/dev/null
+echo @@sshdConfig; sha256sum ${SSHD_CONFIG} | cut -d ' ' -f 1
+echo @@root; ${sshdT('root')}
+echo @@admin; ${sshdT('admin')}
+echo @@tunnel; ${sshdT(TUNNEL_USER)}
+true`,
+  )
+  const parts = new Map<string, string[]>()
+  let at = ''
+  for (const line of out.stdout.split('\n')) {
+    if (line.startsWith('@@')) {
+      at = line.slice(2)
+      parts.set(at, [])
+    } else parts.get(at)?.push(line)
+  }
+  const part = (k: keyof StepOne): string => (parts.get(k) ?? []).join('\n').trim()
+  return {
+    account: part('account'),
+    folder: part('folder'),
+    keys: part('keys'),
+    keysDir: part('keysDir'),
+    fence: part('fence'),
+    sshdConfig: part('sshdConfig'),
+    root: part('root'),
+    admin: part('admin'),
+    tunnel: part('tunnel'),
+  }
+}
+
+/** Step 1 as the board makes it: the user it made, the folder, the keys file with its key, the fence in force; root's and admin's sshd settings as they were. */
+function stepOneMade(made: StepOne, empty: StepOne, publicKey: string, include: boolean): void {
+  expect(made.account).toMatch(
+    new RegExp(`^${TUNNEL_USER}:x:\\d+:\\d+:${USER_COMMENT}:/nonexistent:/usr/sbin/nologin$`, 'm'),
+  )
+  expect(made.folder).toStartWith(`2750 ${TUNNEL_USER}`)
+  expect(made.keys).toBe(keysLine(publicKey))
+  expect(made.keysDir).toBe('there')
+  const lines = made.tunnel.split('\n')
+  const missing = Object.entries(fenceWanted(TUNNEL_USER))
+    .map(([k, v]) => `${k} ${v}`)
+    .filter(kv => !lines.includes(kv))
+  expect(missing).toEqual([])
+  expect(made.root).toBe(empty.root)
+  expect(made.admin).toBe(empty.admin)
+  if (include) {
+    expect(made.fence).toBe(fenceFile(TUNNEL_USER).trim())
+    expect(made.sshdConfig).toBe(empty.sshdConfig)
+  } else {
+    expect(made.fence).toBe('')
+    expect(made.sshdConfig).not.toBe(empty.sshdConfig)
+  }
+}
+
+/** sshd_config ends with the board's marked block (an sshd_config without Include). */
+async function blockAtEnd(s: TestServer): Promise<boolean> {
+  return (await s.sh(`cat ${SSHD_CONFIG}`)).stdout.trimEnd().endsWith(fenceBlock(TUNNEL_USER))
+}
+
+/** One login by password from this PC, through the board's askpass helper (the only way Windows' ssh takes one): whether it went in. */
+async function passwordLogin(s: TestServer, user: Login, common: string[]): Promise<boolean> {
+  let kill = (): void => {}
+  const askpass = openAskpass(SENTINEL, () => kill())
+  try {
+    const proc = Bun.spawn(
+      [
+        SSH_EXE,
+        ...common,
+        '-o',
+        'PubkeyAuthentication=no',
+        '-o',
+        'PreferredAuthentications=password,keyboard-interactive',
+        '-o',
+        'NumberOfPasswordPrompts=1',
+        `${user}@127.0.0.1`,
+        'echo @@in',
+      ],
+      {
+        env: { ...process.env, ...askpass.env },
+        cwd: work(),
+        stdin: 'ignore',
+        stdout: 'pipe',
+        stderr: 'pipe',
+        windowsHide: true,
+      },
+    )
+    kill = () => proc.kill()
+    const timer = setTimeout(kill, 60_000)
+    const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+    const code = await proc.exited
+    clearTimeout(timer)
+    note(`${s.name}: ${user}'s login by password → ${code} ${JSON.stringify(askpass.report())} ${noCr(err).trim()}`)
+    return code === 0 && out.includes('@@in') && askpass.report().answered === 1
+  } finally {
+    askpass.close()
+  }
+}
+
+/**
+ * The owner's own next logins, each a new connection from this PC: root and admin, each by key
+ * (the test's key) and by password. Which of them went in.
+ */
+async function ownerLogins(s: TestServer): Promise<Record<string, boolean>> {
+  const knownHosts = join(work(), `owner-${s.name}`)
+  const common = [
+    '-F',
+    'none',
+    '-T',
+    '-o',
+    'StrictHostKeyChecking=no',
+    '-o',
+    `UserKnownHostsFile="${sshPathArg(knownHosts)}"`,
+    '-o',
+    'ConnectTimeout=15',
+    '-p',
+    String(s.sshPort),
+  ]
+  const went: Record<string, boolean> = {}
+  for (const user of ['root', 'admin'] as const) {
+    const byKey = await run(
+      [
+        SSH_EXE,
+        ...common,
+        '-i',
+        sshPathArg(adminKey),
+        '-o',
+        'IdentitiesOnly=yes',
+        '-o',
+        'BatchMode=yes',
+        `${user}@127.0.0.1`,
+        'echo @@in',
+      ],
+      { check: false, timeoutMs: 60_000 },
+    )
+    went[`${user} by key`] = byKey.code === 0 && byKey.stdout.includes('@@in')
+    went[`${user} by password`] = await passwordLogin(s, user, common)
+  }
+  return went
+}
+
+/** Apply or Undo of a plan with the login's password (the board keeps none), followed to its end. */
+async function follow(b: Board, p: Plan, op: 'server-apply' | 'server-undo'): Promise<ServerView> {
+  const [status, reply] = await b.op({
+    op,
+    plan: p.id,
+    password: SENTINEL,
+    ...(p.ticks.includes('docker') ? { docker: true } : {}),
+  })
+  if (status !== 200) throw new Error(`${op}: ${status} ${JSON.stringify(reply)}`)
+  return b.serverWhen(v => v.phase === 'done' || v.phase === 'failed', 20 * MIN, `${op} ends`)
+}
+
+const okOf = (steps: readonly TestStep[] | null): Record<string, boolean | null> =>
+  Object.fromEntries((steps ?? []).map(x => [x.id, x.ok]))
+
+/**
+ * The password path as the panel drives it: the login, Set up the server (Look by password, the
+ * board's key made first), the plan, Apply, Look again, Undo. From an empty server to the setup
+ * and back to an empty server; the owner's own logins and sshd's settings for root and admin as
+ * they were all along. Its line for the results.
+ */
+async function passwordPath(
+  b: Board,
+  l: Lane,
+  s: TestServer,
+  o: { admin: Login; want: SetupCase; sc: Scenario; domain: string; include: boolean; fresh: boolean },
+): Promise<string> {
+  const { admin, want, sc } = o
+  const address = addressOf(want, o.domain)
+  const four = address.endsWith(':8443')
+  expect((await b.op({ op: 'server-admin', user: admin }))[0]).toBe(200)
+  if (!(await b.view()).tunnel.key.publicKey) expect((await b.op({ op: 'key-generate' }))[0]).toBe(200)
+  const publicKey = (await b.view()).tunnel.key.publicKey
+  if (!publicKey) throw new Error('no public key')
+  const empty = await stepOne(s)
+  expect(empty.account).toBe('')
+  expect(empty.keys).toBe('')
+  const logins = await ownerLogins(s)
+  expect(Object.values(logins).every(Boolean), JSON.stringify(logins)).toBe(true)
+  const files = await s.hashes(sc.files)
+
+  // Set up the server: Look by password; the first login pins the server's key, its fingerprint shown
+  const [status, reply] = await b.op({ op: 'server-look', password: SENTINEL })
+  expect(status, JSON.stringify(reply)).toBe(200)
+  const seen = await b.server()
+  expect(seen.sudo).toBe(admin === 'root' ? 'root' : 'password')
+  expect(seen.hostKey?.pinnedNow).toBe(o.fresh)
+  const fingerprint = seen.hostKey?.fingerprint.split(' ')[0] ?? '(none)'
+  expect((await s.sh('for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$f"; done')).stdout).toContain(
+    fingerprint,
+  )
+  expect(seen.choice?.case).toBe(want)
+  const p = seen.plan
+  if (!p) throw new Error('no plan')
+  expect(p.kind).toBe('apply')
+  expect(p.address).toBe(address)
+  const ids = p.steps.map(x => x.id)
+  for (const id of ['tunnel-user', 'socket-folder', 'keys-file', 'sshd-fence']) expect(ids).toContain(id)
+  expect(p.steps.find(x => x.id === 'sshd-fence')?.touches).toContainEqual(
+    o.include ? { kind: 'file', what: FENCE_FILE } : { kind: 'block', what: SSHD_CONFIG },
+  )
+
+  // Apply, the password sent again
+  const applied = await follow(b, p, 'server-apply')
+  if (applied.progress?.result !== 'applied') throw new Error(`Apply: ${story(applied)}\n${failedOutput(applied)}`)
+  expect(applied.setup?.case).toBe(want)
+  const tested = okOf(applied.testAfter)
+  expect(tested.ssh, JSON.stringify(applied.testAfter)).toBe(true)
+  expect(tested.forward, JSON.stringify(applied.testAfter)).toBe(true)
+  // case 2's Caddy 2.6.2 and Pebble's Retry-After (fullRun): its certificate may come after Test's 2 minutes
+  if (want !== '2') expect(tested.domain, JSON.stringify(applied.testAfter)).toBe(true)
+  expect(b.tunnel().publicPort).toBe(four ? 8443 : undefined)
+  stepOneMade(await stepOne(s), empty, publicKey, o.include)
+  if (!o.include) expect(await blockAtEnd(s)).toBe(true)
+  expect(await ownerLogins(s)).toEqual(logins)
+  expect(await sitesAnswer(l, s, sc.sites)).toEqual([])
+
+  // Look again: nothing to change; the key pinned before
+  const [againStatus, againReply] = await b.op({ op: 'server-look', password: SENTINEL })
+  expect(againStatus, JSON.stringify(againReply)).toBe(200)
+  const again = await b.server()
+  expect(again.plan?.kind).toBe('nothing')
+  expect(again.hostKey?.pinnedNow).toBe(false)
+
+  // Undo, the password asked again: step 1's parts the board made go too
+  const [undoStatus, undoReply] = await b.op({ op: 'server-undo-look', password: SENTINEL })
+  expect(undoStatus, JSON.stringify(undoReply)).toBe(200)
+  const u = (await b.server()).plan
+  if (u?.kind !== 'undo') throw new Error(`no Undo plan: ${u?.kind}`)
+  const undone = await follow(b, u, 'server-undo')
+  if (undone.progress?.result !== 'applied') throw new Error(`Undo: ${story(undone)}\n${failedOutput(undone)}`)
+  expect(undone.setup).toBeNull()
+  expect(b.tunnel().publicPort).toBeUndefined()
+  expect(await stepOne(s)).toEqual(empty)
+  expect(await leftovers(s, sc.files)).toBe('')
+  expect(await s.hashes(sc.files)).toEqual(files)
+  expect(await ownerLogins(s)).toEqual(logins)
+  expect(await sitesAnswer(l, s, sc.sites)).toEqual([])
+  expect(await sentinelOnServer(s)).toBe('')
+  expect(JSON.stringify(await b.view())).not.toContain(SENTINEL)
+  return `by password as ${admin}: Look (the key pinned, ${fingerprint}), case ${want}, ${p.steps.length} steps with step 1's four; Apply: applied, Test after: ssh ✓ forward ✓ domain ${tested.domain ? '✓' : '✗ (their Caddy 2.6.2 and Pebble)'}; ${o.include ? `the fence in ${FENCE_FILE}` : "the fence as a marked block at sshd_config's end"}; Look again: nothing to change; Undo: step 1's parts gone, their files as before; sshd -T for root and admin the same, the owner's logins (root, admin; key, password) as before after each`
+}
+
+const COMMAND_FILE = '/tmp/agent-board-command'
+/** sudo's prompt ("[sudo] password for admin: ", sudo-rs's "[sudo: authenticate] Password: "): the password typed. */
+const SUDO_PROMPT = { name: 'sudo', prompt: /\[sudo[^\]\n]*\][^\n]*: $/, answer: SENTINEL }
+const askedFor = (answer: 'y' | 'n') => ({ name: 'ask', prompt: /\[y\/N\] $/, answer })
+
+/**
+ * The one command (or its Undo) pasted into a terminal on the server as root or admin, sudo's
+ * password typed when sudo asks, the question answered (null: none expected; asked anyway, "n").
+ */
+function paste(s: TestServer, which: 'apply' | 'undo', as: Login, answer: 'y' | 'n' | null) {
+  return onTty(s, `sh ${COMMAND_FILE}-${which}`, {
+    ...(as === 'admin' && { user: 'admin' }),
+    answers: [SUDO_PROMPT, askedFor(answer ?? 'n')],
+  })
+}
+
+/** The one command and its Undo from the board (GET /api/access/server-command), put on the server as the owner pastes them. */
+async function commandsOnServer(b: Board, s: TestServer): Promise<string> {
+  const [status, body] = await b.get('/api/access/server-command')
+  expect(status, JSON.stringify(body)).toBe(200)
+  const command = String(body.command)
+  const undoCommand = String(body.undoCommand)
+  for (const line of [command, undoCommand])
+    expect(line).toMatch(/^echo [A-Za-z0-9+/]+=* \| base64 -d \| gunzip \| sh$/)
+  // the line as the owner pastes it, in a file the login reads (a paste of 60 KB is past a Windows command line)
+  for (const [which, line] of [
+    ['apply', command],
+    ['undo', undoCommand],
+  ] as const)
+    await s.exec(['sh', '-c', `cat > ${COMMAND_FILE}-${which} && chmod 644 ${COMMAND_FILE}-${which}`], {
+      stdin: `${line}\n`,
+    })
+  return command
+}
+
+/**
+ * "Do it myself": the one command from GET /api/access/server-command, pasted into a terminal on the
+ * server as `as` (admin: sudo asks for its password there): "no" changes nothing; "y" sets the case
+ * up; Test connection finds the public port; the board's own Look then sees the setup; pasted again,
+ * nothing to change; the Undo command takes all of it off. Its line for the results.
+ */
+async function commandPath(
+  b: Board,
+  l: Lane,
+  s: TestServer,
+  o: { as: Login; want: SetupCase; sc: Scenario; domain: string; include: boolean },
+): Promise<string> {
+  const { as, want, sc } = o
+  const address = addressOf(want, o.domain)
+  const four = address.endsWith(':8443')
+  const command = await commandsOnServer(b, s)
+  const publicKey = (await b.view()).tunnel.key.publicKey
+  if (!publicKey) throw new Error('no public key')
+  const asks = (...more: string[]): string[] => [...(as === 'admin' ? ['sudo'] : []), ...more]
+  const empty = await stepOne(s)
+  expect(empty.account).toBe('')
+  const logins = await ownerLogins(s)
+  const files = await s.hashes(sc.files)
+
+  // "no": the plan said, nothing changed
+  const no = await paste(s, 'apply', as, 'n')
+  expect(no.code, no.stdout.slice(-2000)).not.toBe(0)
+  expect(no.asked).toEqual(asks('ask'))
+  expect(no.stdout).toContain('The plan:')
+  expect(no.stdout).toContain('Stopped: nothing was changed.')
+  expect(await stepOne(s)).toEqual(empty)
+  expect(await leftovers(s, sc.files)).toBe('')
+
+  // "y": done
+  const yes = await paste(s, 'apply', as, 'y')
+  expect(yes.code, yes.stdout.slice(-3000)).toBe(0)
+  expect(yes.asked).toEqual(asks('ask'))
+  expect(yes.stdout).toContain(`done: ${address}`)
+  stepOneMade(await stepOne(s), empty, publicKey, o.include)
+  if (!o.include) expect(await blockAtEnd(s)).toBe(true)
+  expect(await ownerLogins(s)).toEqual(logins)
+  expect(await sitesAnswer(l, s, sc.sites)).toEqual([])
+
+  // Test connection, as the panel after the command, until the certificate is there: the public
+  // port found (443, else 8443). Case 2's Caddy 2.6.2 may take minutes with Pebble (fullRun).
+  let tested: Record<string, boolean | null> = {}
+  let found: unknown = null
+  const deadline = Date.now() + (want === '2' ? 8 : 3) * MIN
+  for (;;) {
+    const [testStatus, testReply] = await b.op({ op: 'test', findPort: true })
+    expect(testStatus).toBe(200)
+    tested = okOf(testReply.steps as TestStep[])
+    found = testReply.publicPort
+    if (tested.domain === true || Date.now() > deadline) break
+    await Bun.sleep(20_000)
+  }
+  expect(tested).toEqual({ ssh: true, forward: true, domain: true })
+  expect(found).toBe(four ? 8443 : 443)
+  expect(b.tunnel().publicPort).toBe(four ? 8443 : undefined)
+  // the port saved reaches the board's live settings when it reads config.json again (a moment later)
+  await until(
+    'the board reads the public port',
+    async () => (await b.view()).tunnel.settings.publicPort === (four ? 8443 : null),
+    10_000,
+    100,
+  )
+
+  // the board's own Look: the setup made by hand is on record, nothing to change
+  const [lookStatus, lookReply] = await b.op({ op: 'server-look', password: SENTINEL })
+  expect(lookStatus, JSON.stringify(lookReply)).toBe(200)
+  const seen = await b.server()
+  expect(seen.plan?.kind).toBe('nothing')
+  expect(seen.setup?.case).toBe(want)
+
+  // pasted again, as the panel has it now (the public port Test found in it: case 4's 8443): set
+  // up already, nothing asked
+  await commandsOnServer(b, s)
+  const again = await paste(s, 'apply', as, null)
+  expect(again.code, again.stdout.slice(-2000)).toBe(0)
+  expect(again.asked).toEqual(asks())
+  expect(again.stdout).toContain(`Set up already: ${address}`)
+
+  // the Undo command
+  const undone = await paste(s, 'undo', as, 'y')
+  expect(undone.code, undone.stdout.slice(-3000)).toBe(0)
+  expect(undone.asked).toEqual(asks('ask'))
+  expect(undone.stdout).toContain("undone: the board's setup is off this server.")
+  expect(await stepOne(s)).toEqual(empty)
+  expect(await leftovers(s, sc.files)).toBe('')
+  expect(await s.hashes(sc.files)).toEqual(files)
+  expect(await ownerLogins(s)).toEqual(logins)
+  expect(await sitesAnswer(l, s, sc.sites)).toEqual([])
+  expect(await sentinelOnServer(s)).toBe('')
+  return `the one command (${Math.round(command.length / 1024)} KB) as ${as} on a terminal${as === 'admin' ? ' (sudo asked its password there)' : ''}: "n" changed nothing; "y": done: ${address}; Test connection found ${String(found)}; the board's Look: nothing to change (case ${want} on record); again: set up already, nothing asked; the Undo command: step 1's parts gone, their files as before; sshd -T and the owner's logins as before`
+}
+
+/** One case on one distribution, from an empty server: the password path, then the one command. */
+async function simpleRun(newBox: () => Promise<Sandbox>, l: Lane, job: SimpleJob): Promise<void> {
+  const sc = scenarioNamed(job.scenario)
+  const started = Date.now()
+  const row = [`simple: case ${job.want} (${sc.name}) on ${l.distro}`]
+  const s = await prepare(l, sc, `simple-${sc.name}`, job.domain)
+  try {
+    await byPasswordToo(s)
+    const b = await startBoard(newBox, l, s, job.admin, { domain: job.domain, key: false })
+    row.push(await passwordPath(b, l, s, { ...job, sc, include: true, fresh: true }))
+    row.push(await commandPath(b, l, s, { ...job, as: otherLogin(job.admin), sc, include: true }))
+    expect(sentinelInSandbox(b.box.dir)).toEqual([])
+    row.push(`${Math.round((Date.now() - started) / 1000)} s`)
+  } catch (err) {
+    row.push(`FAILED: ${String(err).split('\n')[0]}`)
+    await diagnose(s)
+    throw err
+  } finally {
+    rows.push(row.join('; '))
+    await s.stop()
+  }
+}
+
+/**
+ * A login by password the server refuses, and why the board says it does: no password typed, a
+ * wrong one (one try, one failure in sshd's journal), root's refused (PermitRootLogin no), a
+ * server that takes keys only. Then, on the same server, an sshd_config without any Include (and
+ * no sshd_config.d): the password path and the one command put the fence at its end as a marked
+ * block, and their Undo takes it out, sshd_config as it was.
+ */
+async function refusalsRun(newBox: () => Promise<Sandbox>, l: Lane): Promise<void> {
+  const sc = scenarioNamed('bare')
+  const domain = 'fence.example.com'
+  const started = Date.now()
+  const row = [`simple: the refusals, and an sshd_config without Include, on ${l.distro}`]
+  const s = await prepare(l, sc, 'simple-refusals', domain)
+  try {
+    await byPasswordToo(s)
+    await s.sh(`cp -p ${SSHD_CONFIG} /root/sshd_config.given`)
+    const b = await startBoard(newBox, l, s, 'admin', { domain, key: false })
+    const said: string[] = []
+    async function refused(
+      user: Login,
+      password: string | null,
+      hint: AdminHint,
+    ): Promise<Reply & { failures: number }> {
+      expect((await b.op({ op: 'server-admin', user }))[0]).toBe(200)
+      const t = (await s.sh('date +%s')).stdout.trim()
+      const [status, reply] = await b.op({ op: 'server-look', ...(password === null ? {} : { password }) })
+      expect(status, JSON.stringify(reply)).toBe(409)
+      expect(reply.hint, JSON.stringify(reply)).toBe(hint)
+      expect(JSON.stringify(reply)).not.toContain(SENTINEL)
+      expect(JSON.stringify(reply)).not.toContain('not-the-password')
+      expect((await b.server()).phase).toBe('idle')
+      const failures = Number(
+        (await s.sh(`journalctl --since @${t} -o cat | grep -c 'Failed password for ${user} ' || true`)).stdout.trim(),
+      )
+      const what = password === null ? 'no password' : password === SENTINEL ? 'its password' : 'a wrong password'
+      said.push(
+        `${user}, ${what}: ${hint} (asks for ${String(reply.need ?? 'nothing')}; ${failures} in sshd's journal)`,
+      )
+      return { ...reply, failures }
+    }
+    expect((await refused('admin', null, 'loginPassword')).need).toBe('password')
+    const wrong = await refused('admin', 'not-the-password', 'wrongLogin')
+    expect(wrong.need).toBe('password')
+    expect(wrong.failures).toBe(1)
+    expect((await refused('root', 'not-the-password', 'rootLogin')).failures).toBe(1)
+    await sshdEdit(s, 's/^PermitRootLogin .*/PermitRootLogin no/')
+    await refused('root', SENTINEL, 'rootLogin')
+    await s.sh(`cp -p /root/sshd_config.given ${SSHD_CONFIG}`)
+    await sshdEdit(s, 's/^#\\?PasswordAuthentication .*/PasswordAuthentication no/')
+    await refused('admin', SENTINEL, 'keyOnly')
+    await s.sh(`cp -p /root/sshd_config.given ${SSHD_CONFIG} && systemctl try-reload-or-restart ssh`)
+    row.push(said.join('; '))
+
+    // no Include in sshd_config, no sshd_config.d
+    await s.sh(
+      `sed -i '/^Include /d' ${SSHD_CONFIG} && rm -rf ${SSHD_DIR} && sshd -t && systemctl try-reload-or-restart ssh`,
+    )
+    row.push(await passwordPath(b, l, s, { admin: 'admin', want: '1', sc, domain, include: false, fresh: false }))
+    row.push(await commandPath(b, l, s, { as: 'root', want: '1', sc, domain, include: false }))
+    expect(sentinelInSandbox(b.box.dir)).toEqual([])
+    row.push(`${Math.round((Date.now() - started) / 1000)} s`)
+  } catch (err) {
+    row.push(`FAILED: ${String(err).split('\n')[0]}`)
+    await diagnose(s)
+    throw err
+  } finally {
+    rows.push(row.join('; '))
+    await s.stop()
+  }
+}
+
 // --- The tests ------------------------------------------------------------------------------------------
 
-describe.skipIf(!ON)('the server setup on Debian and Ubuntu test servers', () => {
+describe.skipIf(!DOCKER)('the server setup on Debian and Ubuntu test servers', () => {
   const newBox = sharedSandbox()
 
   beforeAll(async () => {
@@ -1157,6 +1758,33 @@ pkill -KILL -f 'ssh[d][-a-z]*: admin'`,
           }
         }),
       30 * MIN,
+    )
+  })
+
+  /**
+   * The simple setup (the simple-setup spec's "Testing"): each server started empty (no tunnel
+   * user, no board key, nothing of step 1), its admin reached by password alone. Per case one
+   * server: the board by password as root or admin (Look, the plan, Apply, Look again, Undo),
+   * then the one command pasted on a terminal there as the other login, Apply and Undo. Then the
+   * refusals of a login by password, and an sshd_config without Include. All at once, each
+   * distribution's servers on its lane (a domain each), unless BOARD_SERVER_IT_PARALLEL says
+   * fewer: `-t simple` runs these alone.
+   */
+  describe('the simple setup: from an empty server, by password or by one command', () => {
+    for (const job of SIMPLE)
+      test.concurrent(
+        `simple: case ${job.want} (${job.scenario}) by password as ${job.admin}, then the one command as ${otherLogin(job.admin)}`,
+        () =>
+          onLanes(
+            LANES.filter(d => job.scenario !== 'caddy-unit' || d !== 'ubuntu2204'),
+            l => slot(() => simpleRun(newBox, l, job)),
+          ),
+        60 * MIN,
+      )
+    test.concurrent(
+      'simple: the refusals of a login by password, then an sshd_config without Include',
+      () => onLanes(LANES, l => slot(() => refusalsRun(newBox, l))),
+      60 * MIN,
     )
   })
 })
