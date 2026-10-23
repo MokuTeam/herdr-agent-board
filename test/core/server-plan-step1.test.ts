@@ -56,6 +56,51 @@ const empty = stepOneMissing
 /** sshd_config put in place whole from this file: a copy beside it written, then moved over it (through a link). */
 const movedOver = (from: string): string =>
   `sudo sh -c 'test -s ${from} && t=$(readlink -f ${SSHD_CONFIG}) && p="\${t%/*}/.\${t##*/}.agent-board" && cp -p "$t" "$p" && cat ${from} > "$p" && mv -f "$p" "$t"'`
+/**
+ * A step's check of sshd's whole config before the fence's change is in place, run by a real sh on
+ * a test's own folders (sshd_config, sshd_config.d with their drop-in and what `files` adds, the
+ * run's folder), sshd standing in: what sshd was given to check, and the copy of sshd_config.d it
+ * reads; null without a sh.
+ */
+function setChecked(
+  lines: string[],
+  files: Record<string, string>,
+): { given: string; set: Record<string, string>; real: string[]; root: string } | null {
+  const sh = Bun.which('sh')
+  if (!sh) return null
+  const first = lines.findIndex(l => l.startsWith('sudo rm -rf /etc/agent-board/backups/'))
+  const last = lines.findIndex(l => l.startsWith('sudo sshd -t -f '))
+  expect(first).toBeGreaterThanOrEqual(0)
+  expect(last).toBeGreaterThan(first)
+  const dir = mkdtempSync(join(tmpdir(), 'sshd-set-'))
+  try {
+    const root = dir.replaceAll('\\', '/')
+    const d = join(dir, 'etc-ssh', 'sshd_config.d')
+    mkdirSync(d, { recursive: true })
+    mkdirSync(join(dir, 'b'))
+    writeFileSync(join(dir, 'etc-ssh', 'sshd_config'), `Include ${root}/etc-ssh/sshd_config.d/*.conf\nPort 22\n`)
+    writeFileSync(join(d, '50-theirs.conf'), 'PasswordAuthentication no\n')
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(d, name), text)
+    const script = lines
+      .slice(first, last + 1)
+      .join('\n')
+      .replaceAll('/etc/ssh/', `${root}/etc-ssh/`)
+      .replace(/\/etc\/agent-board\/backups\/[a-z0-9]+/g, `${root}/b`)
+    const r = Bun.spawnSync([sh, '-c', `sudo() { "$@"; }\nsshd() { cp "$3" ${root}/given; }\n${script}`])
+    expect(r.stderr.toString()).toBe('')
+    expect(r.exitCode).toBe(0)
+    const copy = join(dir, 'b', 'sshd_config.d')
+    return {
+      given: readFileSync(join(dir, 'given'), 'utf8'),
+      set: Object.fromEntries(readdirSync(copy).map(n => [n, readFileSync(join(copy, n), 'utf8')])),
+      real: readdirSync(d).sort(),
+      root,
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 /** Step 1 done (by hand or by an earlier Apply): the fence in force, the folder, the user, the board's key. */
 function done(c: Parameters<typeof factsFor>[0], distro: TestDistro = 'debian13'): ServerFacts {
   const f = factsFor(c, distro)
@@ -249,8 +294,23 @@ for (const distro of DISTROS) {
       for (const l of fenceFile('boardtunnel').split('\n')) expect(text(s)).toContain(`'${l.replaceAll("'", `'\\''`)}'`)
       // the admin's settings read before anything is written, compared after; the reload last
       expect(at('admins()')).toBeLessThan(at(`${FENCE_FILE}.part`))
-      expect(at('sudo sshd -t')).toBeGreaterThan(at(`sudo mv -f ${FENCE_FILE}.part`))
-      expect(at('sudo sshd -t')).toBeLessThan(at(SSHD_RELOAD))
+      // sshd checks the whole config with the new fence before it is in place, and again after
+      expect(at('sudo sshd -t -f /etc/agent-board/backups/r1/sshd_config.checked')).toBeLessThan(
+        at(`sudo mv -f ${FENCE_FILE}.part`),
+      )
+      expect(
+        at(`sudo cp ${FENCE_FILE}.part /etc/agent-board/backups/r1/sshd_config.d/00-agent-board.conf`),
+      ).toBeGreaterThan(at(`| sudo tee ${FENCE_FILE}.part >/dev/null`))
+      expect(lines.indexOf('sudo sshd -t')).toBeGreaterThan(at(`sudo mv -f ${FENCE_FILE}.part`))
+      expect(lines.indexOf('sudo sshd -t')).toBeLessThan(at(SSHD_RELOAD))
+      const checked = setChecked(lines, { '00-agent-board.conf.part': fenceFile('boardtunnel') })
+      if (checked) {
+        expect(checked.given).toBe(`Include ${checked.root}/b/sshd_config.d/*.conf\nPort 22\n`)
+        expect(checked.set['00-agent-board.conf']).toBe(fenceFile('boardtunnel'))
+        expect(checked.set['50-theirs.conf']).toBe('PasswordAuthentication no\n')
+        // nothing in place yet
+        expect(checked.real).toEqual(['00-agent-board.conf.part', '50-theirs.conf'])
+      }
       expect(at('bad=$(for kv in')).toBeLessThan(at(SSHD_RELOAD))
       expect(lines.at(-2)).toBe(SSHD_RELOAD)
       // biome-ignore lint/suspicious/noTemplateCurlyInString: the shell's own ${…}
@@ -286,6 +346,10 @@ for (const distro of DISTROS) {
       for (const l of fenceBlock('boardtunnel').split('\n'))
         expect(text(s)).toContain(`'${l.replaceAll("'", `'\\''`)}'`)
       expect(text(s)).toContain(movedOver('/etc/agent-board/backups/r1/sshd_config.new'))
+      // sshd checks the new sshd_config before it is moved over the old one
+      expect(s.commands.indexOf('sudo sshd -t -f /etc/agent-board/backups/r1/sshd_config.new')).toBe(
+        s.commands.indexOf(movedOver('/etc/agent-board/backups/r1/sshd_config.new')) - 1,
+      )
       expect(text(s)).not.toContain(`> ${SSHD_CONFIG}`)
       expect(s.undo.join('\n')).toContain(movedOver('/etc/agent-board/backups/r1/sshd_config'))
       // run by a real sh on files of a test's own: the new text in place whole, its mode kept,
@@ -403,6 +467,17 @@ for (const distro of DISTROS) {
       const fence = step(p, 'drop-fence')
       expect(text(fence)).toContain(`sudo rm -f ${FENCE_FILE}`)
       expect(text(fence)).toContain('sudo sshd -t')
+      // sshd checks the whole config without the fence before it is removed
+      const removed = fence.commands.findIndex(l => l.startsWith(`sudo rm -f ${FENCE_FILE}`))
+      expect(fence.commands.indexOf('sudo sshd -t -f /etc/agent-board/backups/u1/sshd_config.checked')).toBe(
+        removed - 1,
+      )
+      const checked = setChecked(fence.commands, { '00-agent-board.conf': fenceFile('boardtunnel') })
+      if (checked) {
+        expect(checked.given).toBe(`Include ${checked.root}/b/sshd_config.d/*.conf\nPort 22\n`)
+        expect(checked.set).toEqual({ '50-theirs.conf': 'PasswordAuthentication no\n' })
+        expect(checked.real).toEqual(['00-agent-board.conf', '50-theirs.conf'])
+      }
       // biome-ignore lint/suspicious/noTemplateCurlyInString: the shell's own ${…}
       expect(text(fence)).toContain('for u in root ${SUDO_USER:-}; do')
       expect(fence.commands.at(-2)).toBe(SSHD_RELOAD)
@@ -461,6 +536,9 @@ for (const distro of DISTROS) {
       const s = step(p, 'drop-fence')
       expect(text(s)).toContain(`sudo cat ${SSHD_CONFIG} | B0='# >>> agent-board'`)
       expect(text(s)).toContain(movedOver('/etc/agent-board/backups/u1/sshd_config.new'))
+      expect(s.commands.indexOf('sudo sshd -t -f /etc/agent-board/backups/u1/sshd_config.new')).toBe(
+        s.commands.indexOf(movedOver('/etc/agent-board/backups/u1/sshd_config.new')) - 1,
+      )
       expect(s.undo.join('\n')).toContain(movedOver('/etc/agent-board/backups/u1/sshd_config'))
       expect(s.skipIf).toEqual([`! sudo grep -qx '# <<< agent-board' ${SSHD_CONFIG}`])
     })

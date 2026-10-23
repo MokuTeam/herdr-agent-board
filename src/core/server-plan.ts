@@ -48,6 +48,7 @@ import {
   SOCAT_IMAGE,
   SOCKET_NAME,
   SSHD_CONFIG,
+  SSHD_DIR,
   siteFile,
   socatRunArgs,
   USER_COMMENT,
@@ -788,15 +789,16 @@ function pullStep(id: string, image: string): PlanStep {
 
 /**
  * One of the board's own files: the earlier one kept whole for the rollback (else a mark that this
- * run made it), the new text written beside it and moved in (their Caddy may import it), its mode
- * set. The rollback puts the earlier one back, or removes the file only when this run made it.
+ * run made it), the new text written beside it (checked by `ready`, when given) and moved in (their
+ * Caddy may import it), its mode set. The rollback puts the earlier one back, or removes the file
+ * only when this run made it.
  */
 function ownFile(
   id: string,
   path: string,
   text: string,
   b: string,
-  more: { before?: string[]; commands?: string[]; undo?: string[]; name?: string } = {},
+  more: { before?: string[]; ready?: string[]; commands?: string[]; undo?: string[]; name?: string } = {},
 ) {
   // the earlier file's copy and the mark in the run's folder, by a name of the step's own when the
   // file's could be another step's (a keys file is named after the user)
@@ -815,6 +817,7 @@ function ownFile(
         `if sudo test -f ${q(path)}; then ${copyWhole(path, saved)}; else sudo touch ${q(made)}; fi`,
         writeTo(part, text),
         `sudo chmod 644 ${q(part)}`,
+        ...(more.ready ?? []),
         `sudo mv -f ${q(part)} ${q(path)}`,
         ...(more.commands ?? []),
       ],
@@ -1213,6 +1216,26 @@ const adminsSame = (file: string): string[] => [
   `if [ "$(printf '%s\\n' "$a" | sha256sum)" != "$(sudo cat ${q(file)} | sha256sum)" ]; then echo "sshd's settings for root or the admin are not what they were:"; sudo cat ${q(file)} | ${ADMIN_KEYS}; echo 'now:'; printf '%s\\n' "$a" | ${ADMIN_KEYS}; false; fi`,
 ]
 
+/**
+ * sshd's whole config as sshd will read it with the fence's file in sshd_config.d as `from` has it
+ * (null: without it), checked (`sshd -t -f`) before anything is in place: sshd_config.d copied into
+ * the run's folder, the fence's file there replaced (or removed), sshd_config's Include of
+ * sshd_config.d (as Look reads it, `@@include`) pointed at the copy.
+ */
+function sshdSetChecked(b: string, from: string | null): string[] {
+  const set = `${b}/sshd_config.d`
+  const main = `${b}/sshd_config.checked`
+  const fence = `${set}/${FENCE_FILE.slice(FENCE_FILE.lastIndexOf('/') + 1)}`
+  const include = `tolower($1) == "include" { for (i = 2; i <= NF; i++) if ($i == "${SSHD_DIR}/*.conf" || $i == "sshd_config.d/*.conf") $i = ENVIRON["D"] "/*.conf" } { print }`
+  return [
+    `sudo rm -rf ${q(set)}`,
+    `sudo cp -a ${SSHD_DIR} ${q(set)}`,
+    from === null ? `sudo rm -f ${q(fence)}` : `sudo cp ${q(from)} ${q(fence)}`,
+    `sudo cat ${SSHD_CONFIG} | D=${q(set)} awk ${shQuote(include)} | sudo tee ${q(main)} >/dev/null`,
+    `sudo sshd -t -f ${q(main)}`,
+  ]
+}
+
 /** The fence as `sshd -T` gives it for the tunnel user: `bad` holds each of its settings that is not in force. */
 function fenceBad(user: string): string[] {
   const kv = Object.entries(fenceWanted(user)).map(([k, v]) => shQuote(`${k} ${v}`))
@@ -1229,8 +1252,8 @@ const fenceInForce = (user: string): string[] => [
 /**
  * Undo of sshd's fence the board added: its file removed, or its block taken out of sshd_config as
  * the file is now (never a backup written back: the owner may have changed it since); sshd checks
- * the result, root's and the admin's settings must stay as they were, then a reload. Its rollback
- * puts the fence back as it was and reloads that.
+ * the result before it is in place and again after, root's and the admin's settings must stay as
+ * they were, then a reload. Its rollback puts the fence back as it was and reloads that.
  */
 function dropFence(path: string, b: string): PlanStep {
   const admins = `${b}/sshd-admins`
@@ -1254,6 +1277,7 @@ function dropFence(path: string, b: string): PlanStep {
           wholeBlock(SSHD_CONFIG),
           `sudo cp -p ${SSHD_CONFIG} ${q(backup)}`,
           `sudo cat ${SSHD_CONFIG} | ${STRIP_BLOCK} | sudo tee ${q(candidate)} >/dev/null`,
+          `sudo sshd -t -f ${q(candidate)}`,
           moveOver(candidate, SSHD_CONFIG),
           ...after,
         ],
@@ -1273,6 +1297,7 @@ function dropFence(path: string, b: string): PlanStep {
       commands: [
         ...before,
         `if sudo test -f ${q(path)}; then sudo cp -p ${q(path)} ${q(saved)}; fi`,
+        ...sshdSetChecked(b, null),
         `sudo rm -f ${q(path)} ${q(`${path}.part`)}`,
         ...after,
       ],
@@ -1295,8 +1320,9 @@ function dropFence(path: string, b: string): PlanStep {
  * Each is recorded only when the board made it, and the guard checks it is still missing when the
  * run starts; a part that is there is used and never removed. The fence goes in a file of its own
  * where sshd_config includes sshd_config.d, else between markers at sshd_config's end; sshd checks
- * it (`sshd -t`), it must be in force for the tunnel user and leave root's and the admin's settings
- * as they were, all before a reload (never a restart); its rollback reloads the config put back.
+ * the config with it before it is in place and again after (`sshd -t`), it must be in force for the
+ * tunnel user and leave root's and the admin's settings as they were, all before a reload (never a
+ * restart); its rollback reloads the config put back.
  */
 function stepOneSteps(x: Ctx, n: StepOneNeeds): { built: Built[]; relies: Rely[] } {
   const { f, w, b } = x
@@ -1382,6 +1408,7 @@ function stepOneSteps(x: Ctx, n: StepOneNeeds): { built: Built[]; relies: Rely[]
       const s = ownFile('sshd-fence', FENCE_FILE, fenceFile(user), b, {
         name: 'sshd-fence',
         before: [RUN_SSHD, `sudo install -d -m 700 ${q(b)}`, ...adminsBefore(admins)],
+        ready: sshdSetChecked(b, `${FENCE_FILE}.part`),
         commands: after,
         undo: [reloadBack],
       })
@@ -1410,6 +1437,7 @@ function stepOneSteps(x: Ctx, n: StepOneNeeds): { built: Built[]; relies: Rely[]
               `sudo cp -p ${SSHD_CONFIG} ${q(backup)}`,
               `sudo cat ${SSHD_CONFIG} | ${STRIP_BLOCK} | sudo tee ${q(candidate)} >/dev/null`,
               appendTo(candidate, fenceBlock(user)),
+              `sudo sshd -t -f ${q(candidate)}`,
               moveOver(candidate, SSHD_CONFIG),
               ...after,
             ],
