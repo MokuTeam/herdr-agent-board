@@ -1188,6 +1188,36 @@ describe('the admin’s login by password (the simple-setup spec)', () => {
     expect(b.setup.view().progress?.steps.every(s => s.state === 'waiting')).toBe(true)
   })
 
+  test('a login password that is a word Look prints (debian): Look reads the server’s lines as they are; the run’s output shown masked', async () => {
+    const b = await useBoard(
+      { uid: 0, publickey: true, login: { password: 'debian' }, fixture: fixture('debian13', 'caddy-unit') },
+      ROOT,
+    )
+    expect(await b.look({ password: 'debian' })).toEqual(OK)
+    expect(b.setup.view()).toMatchObject({ phase: 'plan', hint: null, choice: { case: '2' } })
+    expect(b.setup.view().facts?.distro).toMatchObject({ id: 'debian', supported: true })
+    const p = planOf(b.setup)
+    b.server({ run: { lines: goesThrough(p, ['echo debian']) } })
+    expect(await b.apply({ plan: p.id, password: 'debian' })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    expect(b.setup.view().phase).toBe('done')
+    expect(b.setup.view().progress?.steps[1]?.out).toContain('echo ••••')
+  })
+
+  test('a sudo password that is a word the run prints (1): its steps read as they are (@@step 1 ok); its output shown masked', async () => {
+    const b = await useBoard({ sudo: 'password', password: '1', fixture: fixture('debian13', 'caddy-unit') })
+    expect(await b.look({ password: '1' })).toEqual(OK)
+    expect(b.setup.view()).toMatchObject({ phase: 'plan', hint: null, choice: { case: '2' } })
+    const p = planOf(b.setup)
+    b.server({ run: { lines: goesThrough(p, ['echo 1']) } })
+    expect(await b.apply({ plan: p.id, password: '1' })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    expect(b.setup.view().phase).toBe('done')
+    expect(b.setup.view().progress?.steps.map(s => s.state)).toEqual(p.steps.map(() => 'ok'))
+    expect(b.setup.view().progress?.steps[1]?.out).toContain('echo ••••')
+    expect(b.logs).toEqual(p.steps.map(s => expect.stringMatching(new RegExp(`^server setup ${s.id} ok \\d+s$`))))
+  })
+
   test('an ssh too old for the askpass (Windows 10’s 8.1): the keys alone, as before; refused, it says why', async () => {
     const key = await useBoard(
       { sudo: 'password', password: 'pw', fixture: fixture('debian13', 'caddy-unit') },

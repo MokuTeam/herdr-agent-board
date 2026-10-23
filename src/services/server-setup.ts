@@ -10,8 +10,10 @@
 // come with each Look, Apply or Undo; the login's goes to ssh's askpass (adapters/ssh.ts), once
 // per ssh, sudo's to ssh's stdin, once per spawn. Kept in memory only while that request (or that
 // run, to mask a line that would hold one) lasts; never in config.json, web.log, the view, an
-// answer or a command line. Without a password the login is the keys' alone, its ssh line as
-// before the password login.
+// answer or a command line. ssh's lines are read as the server said them (a password like
+// `debian` or `1` is a word Look and the run print too); a line that is shown (a step's output, an
+// error) has it masked. Without a password the login is the keys' alone, its ssh line as before
+// the password login.
 //
 // With the board's own public key, Look reads step 1's parts too and Apply makes what the server
 // lacks of them (the tunnel user, the socket's folder, the keys file, sshd's fence). A run travels
@@ -51,7 +53,7 @@ import {
   type Wanted,
   whose,
 } from '../core/server-plan.ts'
-import { launchScript, type Progress, readProgress, runScript, startProgress } from '../core/server-script.ts'
+import { launchScript, type Progress, readProgress, runLine, runScript, startProgress } from '../core/server-script.ts'
 import { type Acme, PORT_4 } from '../core/server-texts.ts'
 import type { AdminHint, ServerPhase, ServerView, SudoMode } from '../core/server-view.ts'
 import { fieldProblem, type TestStep, type TunnelConfig, tunnelConfig } from '../core/tunnel.ts'
@@ -200,6 +202,7 @@ interface Looked {
   mode: SudoMode
 }
 
+/** An ssh's end, and its lines as the server said them (what is read); `secrets`, masked in any line that is shown. */
 interface Heard {
   code: number | null
   error: string | null
@@ -207,6 +210,7 @@ interface Heard {
   err: string[]
   /** What the askpass did, for a login by password. */
   askpass: AskpassReport | null
+  secrets: readonly string[]
 }
 
 export function createServerSetup(d: ServerSetupDeps): ServerSetup {
@@ -339,7 +343,7 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     return ok ? { password, typed: true, oldSsh: false } : { password: null, typed: true, oldSsh: true }
   }
 
-  /** One ssh to the admin, its lines kept (a line holding a password masked); with `pin`, this login pins the server's key (call 2). */
+  /** One ssh to the admin, its lines kept as they are (masked where shown); with `pin`, this login pins the server's key (call 2). */
   async function hear(
     to: { bin: string; c: TunnelConfig; a: Admin },
     command: string,
@@ -359,8 +363,8 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     })
     const run = d.spawn(to.bin, args, stdin, ms, login.password === null ? null : { password: login.password })
     current = run
-    const heard: Heard = { code: null, error: null, out: [], err: [], askpass: null }
-    run.onLine((line, from) => heard[from === 'err' ? 'err' : 'out'].push(mask(line, secrets)))
+    const heard: Heard = { code: null, error: null, out: [], err: [], askpass: null, secrets }
+    run.onLine((line, from) => heard[from === 'err' ? 'err' : 'out'].push(line))
     const end = await run.done
     if (current === run) current = null
     return { ...heard, code: end.code, error: end.error, askpass: end.askpass ?? null }
@@ -368,6 +372,8 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
 
   const mask = (line: string, secrets: readonly string[]): string =>
     secrets.reduce((l, secret) => (secret ? l.replaceAll(secret, MASK) : l), line)
+  /** ssh's lines as the view, an answer or an error shows them: a password in them masked. */
+  const shown = (h: Heard, lines: readonly string[]): string[] => lines.map(l => mask(l, h.secrets))
 
   /**
    * Why an ssh that did not give its answer stopped: ssh missing (noSsh), or not started for
@@ -382,7 +388,9 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
         ? { hint: 'noSsh', detail: h.error }
         : { hint: null, detail: t('server.err.spawn', { code: h.error }) }
     const asked = h.askpass?.refused ?? null
-    const detail = detailOf(asked === null ? h.err : [...h.err, t('server.err.prompt', { prompt: asked.trim() })])
+    const detail = detailOf(
+      shown(h, asked === null ? h.err : [...h.err, t('server.err.prompt', { prompt: asked.trim() })]),
+    )
     const said =
       loginHint({
         lines: h.err,
@@ -579,7 +587,7 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
         phase = 'done'
       } else {
         phase = 'failed'
-        error = detailOf(heard.err)
+        error = detailOf(shown(heard, heard.err))
         if (result === 'busy' || result === 'changed') hint = result
         else if (result === null && progress?.exit === null) {
           // no end from the server: ssh could not start, was refused, or the connection went. Lost
@@ -682,9 +690,8 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     const child = d.spawn(to.bin, args, stdin, RUN_MS, login.password === null ? null : { password: login.password })
     current = child
     const secrets = [password ?? '', sudoPassword ?? '']
-    const heard: Heard = { code: null, error: null, out: [], err: [], askpass: null }
-    child.onLine((raw, from) => {
-      const line = mask(raw, secrets)
+    const heard: Heard = { code: null, error: null, out: [], err: [], askpass: null, secrets }
+    child.onLine((line, from) => {
       if (from === 'err') {
         heard.err.push(line)
         return
@@ -694,7 +701,8 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       if (!progress) return
       const now = d.now()
       const was = progress
-      progress = readProgress(was, line, now)
+      // the run's own lines as it printed them; a step's output, which the view shows, masked
+      progress = readProgress(was, runLine(line) ? line : mask(line, secrets), now)
       logSteps(was, progress, now)
       if (line.startsWith('@@')) changed()
     })
