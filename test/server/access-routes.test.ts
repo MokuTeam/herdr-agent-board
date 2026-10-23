@@ -374,7 +374,11 @@ describe('Remote access, set up from the local board', () => {
       ['domain', true],
     ])
     expect(answer.publicPort).toBe(443)
-    expect(readFileSync(configPath, 'utf8')).toBe(before)
+    // 443 saves no port; the login is set up, so the board answering there turned the tunnel on
+    const was = JSON.parse(before) as { tunnel: Record<string, unknown> }
+    expect(was.tunnel.on).toBeFalsy()
+    expect(JSON.parse(readFileSync(configPath, 'utf8'))).toEqual({ ...was, tunnel: { ...was.tunnel, on: true } })
+    expect(await opReloaded({ op: 'off' })).toEqual([200, { ok: true }])
 
     // a setup recorded: Test as it always is, the flag left aside
     const cfg = JSON.parse(before) as Record<string, Record<string, unknown>>

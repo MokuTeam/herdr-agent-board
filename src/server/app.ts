@@ -353,6 +353,10 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
       const r = await publicKeyOf(keyPath(tunnelConf()))
       return r.ok ? r.publicKey : null
     },
+    // the panel's own On and Off, so a refusal (no login set up) is the button's
+    tunnel: async on => {
+      if (tunnelConf().on !== on) await remoteAccess.op({ op: on ? 'on' : 'off' })
+    },
   })
   // The "Remote access…" panel's view and changes (/api/access, the local board's only).
   const remoteAccess = createRemoteAccess({

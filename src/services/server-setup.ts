@@ -87,6 +87,11 @@ export interface ServerSetupDeps {
   acme?: Acme
   /** The board's public key (its tunnel key's), which Apply puts in place; null while there is none. */
   publicKey?(): Promise<string | null>
+  /**
+   * The tunnel on or off, as the panel's On and Off: on once Apply's domain answers, off after
+   * Undo. On is left to the panel's button while something blocks it (no login set up yet).
+   */
+  tunnel?(on: boolean): Promise<void>
 }
 
 export type Answer = { status: number; body: unknown }
@@ -565,7 +570,10 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
         return
       }
       changed()
-      if (testAfter.some(s => s.id === 'domain' && s.ok === true)) return
+      if (testAfter.some(s => s.id === 'domain' && s.ok === true)) {
+        await d.tunnel?.(true)
+        return
+      }
       if (d.now() - start + TEST_EVERY_MS > TEST_MOST_MS) return
       await new Promise(resolve => setTimeout(resolve, TEST_EVERY_MS))
     }
@@ -580,6 +588,7 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
         if (p.kind === 'undo') {
           writeSetup(null)
           if (l.record?.publicPort === PORT_4 && conf().publicPort === PORT_4) writePublicPort(null)
+          await d.tunnel?.(false)
         } else {
           const kept = p.kind === 'nothing' ? setupOf() : null
           writeSetup({ case: p.case, address: p.address, at: kept?.at ?? at })

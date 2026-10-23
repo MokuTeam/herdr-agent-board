@@ -106,6 +106,8 @@ async function useBoard(
   let tests = 0
   let changes = 0
   let versions = 0
+  /** Each time the setup turned the tunnel on (true) or off (false), oldest first. */
+  const turned: boolean[] = []
   const setup = createServerSetup({
     cfg,
     webPort: 12390,
@@ -133,6 +135,9 @@ async function useBoard(
     newId: () => `r${++ids}`,
     ...(o.acme && { acme: o.acme }),
     ...(o.key && { publicKey: async () => o.key?.() ?? null }),
+    tunnel: async on => {
+      turned.push(on)
+    },
   })
   const stdinLog = join(fake.dir, 'ssh-calls.jsonl.stdin')
   const logins = (): string[][] => fake.calls().filter(c => c.includes('-T'))
@@ -150,6 +155,7 @@ async function useBoard(
     changes: () => changes,
     /** How often the board asked `ssh -V`. */
     versions: () => versions,
+    turned: () => turned,
     /** Another answer from the server from now on. */
     server: (more: AdminState): void => {
       state = { ...state, ...more }
@@ -548,6 +554,8 @@ for (const distro of DISTROS) {
       expect(b.tunnel().publicPort).toBeUndefined()
       expect(v.testAfter).toEqual(DOMAIN_OK)
       expect(b.tests()).toBe(1)
+      // the domain answered: the tunnel on
+      expect(b.turned()).toEqual([true])
       expect(b.logs).toEqual(p.steps.map(s => expect.stringMatching(new RegExp(`^server setup ${s.id} ok \\d+s$`))))
       expect(b.logs.join('\n')).not.toContain('output of')
       // the panel heard of each marker
@@ -590,6 +598,8 @@ for (const distro of DISTROS) {
       expect(b.tunnel().setup).toBeUndefined()
       expect(b.tunnel().publicPort).toBeUndefined()
       expect(b.setup.view().setup).toBeNull()
+      // on once Apply's domain answered, off after Undo
+      expect(b.turned()).toEqual([true, false])
     })
 
     test('the connection lost mid-run: failed, the server finishes by itself, Look again', async () => {
