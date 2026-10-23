@@ -583,13 +583,13 @@ function mk(id: string, o: Partial<PlanStep> & { commands: string[] }, params?: 
 }
 
 /** What a plan relies on (call 11): who holds a port, their config's hash, their container. */
-type Rely =
+export type Rely =
   | { kind: 'free'; port: Port; docker: boolean }
   | { kind: 'program'; port: Port; program: string }
   | { kind: 'container'; port: Port | null; id: string }
   | { kind: 'config'; path: string; sha: string }
 
-function relyLine(r: Rely): { said: string; command: string } {
+export function relyLine(r: Rely): { said: string; command: string } {
   const changed = (what: string): string => `then echo '@@changed ${what}'; false; fi`
   switch (r.kind) {
     case 'free': {
@@ -1123,7 +1123,7 @@ function ownSteps(x: Ctx, c: OwnCaddy): { built: Built[]; relies: Rely[] } {
 }
 
 /** Where 4b fetches through nginx on 80: the loopback when nginx listens on all addresses, else its own. */
-function nginxAddress(listen80: string[]): string {
+export function nginxAddress(listen80: string[]): string {
   const addresses = listen80.map(l => l.trim().split(/\s+/)[0] ?? '')
   if (addresses.length === 0 || addresses.some(a => /^(\d+|\*:\d+|0\.0\.0\.0:\d+)$/.test(a))) return '127.0.0.1'
   if (addresses.some(a => a.startsWith('[::]'))) return '::1'
