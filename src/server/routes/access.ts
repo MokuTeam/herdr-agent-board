@@ -7,6 +7,15 @@ import { json, type Route } from '../http.ts'
 export function accessRoutes(r: RemoteAccess): Route[] {
   return [
     { method: 'GET', path: '/api/access', handle: async () => json(200, await r.view()) },
+    // "Do it myself" as one command: { command, script, undoCommand, undoScript } (services/server-setup.ts oneshot)
+    {
+      method: 'GET',
+      path: '/api/access/server-command',
+      async handle() {
+        const { status, body } = await r.command()
+        return json(status, body)
+      },
+    },
     {
       method: 'POST',
       path: '/api/access',

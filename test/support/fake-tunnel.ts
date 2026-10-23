@@ -179,7 +179,9 @@ export function world() {
     probes: createProbes(time.now),
     /** The probe through the domain: each nonce asked, and the answer. */
     probed: [] as string[],
-    probeWith: (async () => ({ ok: true })) as (nonce: string) => Promise<ProbeResult>,
+    probeWith: (async () => ({ ok: true })) as (nonce: string, port?: number) => Promise<ProbeResult>,
+    /** How many arguments each probe was given, and the port when there was one. */
+    probeArgs: [] as unknown[][],
     /** sshFound(). */
     sshPath: SSH as string | null,
     keyCheck: { ok: true } as KeyCheck,
@@ -216,9 +218,10 @@ export function world() {
     },
     log: () => {},
     probes: w.probes,
-    probe: nonce => {
-      w.probed.push(nonce)
-      return w.probeWith(nonce)
+    probe: (...args: [string, number?]) => {
+      w.probed.push(args[0])
+      w.probeArgs.push(args)
+      return w.probeWith(...args)
     },
     testPlan: target => (w.settingsBroken ? null : planTo(target)),
     checkKey: async () => {

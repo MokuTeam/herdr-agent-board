@@ -1,6 +1,6 @@
 // The probe through the domain, against a local Bun.serve standing in for the domain.
 import { expect, onTestFinished, test } from 'bun:test'
-import { fetchProbe, probeOrigin } from '../../src/adapters/probe.ts'
+import { fetchProbe, probeOrigin, probeOriginAt } from '../../src/adapters/probe.ts'
 import { tunnelConfig } from '../../src/core/tunnel.ts'
 
 const NONCE = '0123456789abcdef0123456789abcdef'
@@ -77,4 +77,24 @@ test('probeOrigin: https://<domain>, with the public port unless it is 443; or B
     expect(probeOrigin(c, { BOARD_TUNNEL_PROBE_ORIGIN: 'http://127.0.0.1:40123' })).toBe('http://127.0.0.1:40123')
     expect(probeOrigin(c, { BOARD_TUNNEL_PROBE_ORIGIN: '' })).toBe(probeOrigin(c, {}))
   }
+})
+
+test('probeOriginAt (a Test that finds the public port): https://<domain> on 443, with the port on another; or BOARD_TUNNEL_PROBE_ORIGIN', () => {
+  const conf = tunnelConfig({ domain: 'board.example.com', publicPort: 8443 })
+  expect(probeOriginAt(conf, 443, {})).toBe('https://board.example.com')
+  expect(probeOriginAt(conf, 8443, {})).toBe('https://board.example.com:8443')
+  expect(probeOriginAt(conf, 8443, { BOARD_TUNNEL_PROBE_ORIGIN: 'http://127.0.0.1:40123' })).toBe(
+    'http://127.0.0.1:40123',
+  )
+})
+
+test('with a Host given, that Host goes; without, the origin’s, as before', async () => {
+  const hosts: string[] = []
+  const port = serving(req => {
+    hosts.push(req.headers.get('host') ?? '')
+    return Response.json({ board: 'agent-board', probe: NONCE })
+  })
+  expect(await fetchProbe(origin(port), NONCE, 5000, 'board.example.com')).toEqual({ ok: true })
+  expect(await fetchProbe(origin(port), NONCE)).toEqual({ ok: true })
+  expect(hosts).toEqual(['board.example.com', `127.0.0.1:${port}`])
 })

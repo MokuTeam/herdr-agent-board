@@ -353,6 +353,40 @@ describe('Remote access, set up from the local board', () => {
     expect((await api.view()).tunnel.hostKey).toBe(FINGERPRINT)
   }, 60_000)
 
+  test('"Do it myself": its one command for these settings and the key, and Test finding the public port', async () => {
+    const res = await fetch(`${url}/api/access/server-command`)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Reply
+    expect(body.ok).toBe(true)
+    for (const line of [body.command, body.undoCommand])
+      expect(line).toMatch(/^echo [A-Za-z0-9+/=]+ \| base64 -d \| gunzip \| sh$/)
+    expect(body.script).toContain(`W_DOMAIN = "${DOMAIN}"`)
+    expect(body.script).toContain(`W_KEY = "${PUBLIC_KEY} agent-board@${hostname()}"`)
+    expect(body.undoScript).toContain(`W_DOMAIN = "${DOMAIN}"`)
+
+    // no setup recorded: the domain tried on 443 first; the board answers there (the fake's proxy)
+    const before = readFileSync(configPath, 'utf8')
+    const [status, answer] = await api.op({ op: 'test', findPort: true })
+    expect(status).toBe(200)
+    expect((answer.steps as { id: string; ok: boolean | null }[]).map(s => [s.id, s.ok])).toEqual([
+      ['ssh', true],
+      ['forward', true],
+      ['domain', true],
+    ])
+    expect(answer.publicPort).toBe(443)
+    expect(readFileSync(configPath, 'utf8')).toBe(before)
+
+    // a setup recorded: Test as it always is, the flag left aside
+    const cfg = JSON.parse(before) as Record<string, Record<string, unknown>>
+    await writeConfig({
+      ...cfg,
+      tunnel: { ...cfg.tunnel, setup: { case: '1', address: `https://${DOMAIN}`, at: 'x' } },
+    })
+    const [, plain] = await api.op({ op: 'test', findPort: true })
+    expect(Object.keys(plain).sort()).toEqual(['ok', 'steps'])
+    await writeConfig(cfg)
+  }, 60_000)
+
   test('the view asks ssh-keygen again only once the key’s or the server key’s file changed', async () => {
     // The panel fetches the view on every change of the board's access (a failed sign-in through
     // the domain, say): the key and the pinned server key are read once while their files stay.

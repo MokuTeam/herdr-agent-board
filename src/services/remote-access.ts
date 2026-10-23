@@ -26,6 +26,7 @@ import {
 } from '../adapters/ssh.ts'
 import type { AccessView } from '../core/access.ts'
 import { t } from '../core/lang.ts'
+import { PORT_4 } from '../core/server-texts.ts'
 import {
   boardPorts,
   fieldProblem,
@@ -46,6 +47,8 @@ export interface RemoteAccess {
   view(): Promise<AccessView>
   /** One change, `{ op, … }` (POST /api/access): 200 `{ ok: true, … }`, a refusal 409 `{ ok: false, error, … }`, an unknown op 400. */
   op(body: unknown): Promise<{ status: number; body: unknown }>
+  /** "Do it myself" as one command, for the tunnel's settings and key (GET /api/access/server-command). */
+  command(): Promise<{ status: number; body: unknown }>
 }
 
 export interface RemoteAccessDeps {
@@ -81,6 +84,8 @@ const FIELDS: ReadonlySet<string> = new Set<TunnelField>([
   'port',
 ])
 const isField = (name: string): name is TunnelField => FIELDS.has(name)
+/** Where "Do it myself" may have put the board: 443, else 8443 (case 4; simple-setup spec, call 11). */
+const FIND_PORTS = [443, PORT_4]
 
 /** A file as it stands (its size and times), '' when it is not there. */
 function stampOf(path: string): string {
@@ -200,6 +205,11 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
       }
     },
 
+    async command() {
+      const key = await keyView(conf())
+      return d.server.oneshot(key.publicKey)
+    },
+
     async op(body) {
       const b = isRecord(body) ? body : {}
       const id = typeof b.id === 'string' ? b.id : ''
@@ -220,12 +230,22 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
           changed()
           return ok()
         case 'test': {
-          const steps = await supervisor.test()
+          // After "Do it myself", with no setup recorded (call 11): the domain tried on 443, then
+          // 8443, and the public port saved where the board answers. Else Test as it always is.
+          const findPort = b.findPort === true && d.server.view().setup === null
+          const steps = await (findPort ? supervisor.test({ ports: FIND_PORTS }) : supervisor.test())
           // its own ssh may have pinned the server's key; the key's rights may have been put right
           keyRead.forget()
           hostKeyRead.forget()
+          if (!findPort) {
+            changed()
+            return ok({ steps })
+          }
+          const found = steps.find(s => s.id === 'domain' && s.ok === true)?.port ?? null
+          const port = found === 443 ? null : found
+          if (found !== null && conf().publicPort !== port) editTunnel({ publicPort: port })
           changed()
-          return ok({ steps })
+          return ok({ steps, publicPort: found })
         }
         case 'password':
           return edited(await access.setPassword(b.password))
