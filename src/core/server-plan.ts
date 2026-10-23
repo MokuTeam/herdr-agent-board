@@ -364,10 +364,17 @@ function checkWanted(w: Wanted): void {
   if (problem) throw new Error(problem)
 }
 
-/** 'same': pair, domain and public port the panel's; 'update': the pair the same; 'other': another pair (Call 30). */
+/**
+ * 'same': pair, domain and public port the panel's; 'update': the pair the same; 'other': another
+ * pair (Call 30). With no public port wanted (the panel's before Test connection found one, a one
+ * command copied then), the port is the one the record's case gives: the same when the record's
+ * address is that case's for the domain (case 4's 8443 is not a move).
+ */
 export function whose(r: SetupRecord, w: Wanted): 'same' | 'update' | 'other' {
   if (r.pair.user !== w.user || r.pair.socket !== w.socket) return 'other'
-  return r.domain === w.domain && (r.publicPort ?? 443) === (w.publicPort ?? 443) ? 'same' : 'update'
+  if (r.domain !== w.domain) return 'update'
+  if (w.publicPort === null) return r.address === ADDRESS(w, r.case) ? 'same' : 'update'
+  return (r.publicPort ?? 443) === w.publicPort ? 'same' : 'update'
 }
 
 /**

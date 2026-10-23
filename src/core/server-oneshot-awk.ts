@@ -886,11 +886,16 @@ function record_item(p, folder,    kind, k, a, j, ok, m) {
   }
   return 0
 }
-function whose(    port, wport) {
+# no public port wanted: the one the record's case gives (its address that case's for the domain)
+function whose(    port) {
   if (REC_user != W_USER || REC_socket != W_SOCKET) return "other"
-  port = REC_port == "" ? 443 : REC_port; wport = W_PORT == "" ? 443 : W_PORT
-  return (REC_domain == W_DOMAIN && port + 0 == wport + 0) ? "same" : "update"
+  if (REC_domain != W_DOMAIN) return "update"
+  if (W_PORT == "") return REC_address == caseaddress(REC_case) ? "same" : "update"
+  port = REC_port == "" ? 443 : REC_port
+  return port + 0 == W_PORT + 0 ? "same" : "update"
 }
+# the board's address for a case (core/server-plan.ts ADDRESS)
+function caseaddress(c) { return "https://" W_DOMAIN (c == "4a" || c == "4b" ? ":8443" : "") }
 function holds_setup(    k) {
   if (REC_state != "rolled-back") return 1
   for (k = 1; k <= REC_n; k++) if (RI_kind[k] != "docker" && !(RI_kind[k] == "image" && RI_before[k])) return 1
@@ -1718,7 +1723,7 @@ function main_apply(    c, mine, old, who, docker, fetch, group, cand, update, r
   n = split(SHAPE[key], S, " ")
   for (i = 1; i <= n; i++) addstep(S[i])
   if (broken()) return
-  address = c == "4a" || c == "4b" ? "https://" W_DOMAIN ":8443" : "https://" W_DOMAIN
+  address = caseaddress(c)
   warnings(c, hasstep("docker-install"), hasstep("fetch-before"))
   pplan(update ? "update" : "apply", c, address)
   print "plan " key

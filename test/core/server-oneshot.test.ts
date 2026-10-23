@@ -854,6 +854,20 @@ describe('a tunnel user that is a login people use', () => {
   })
 })
 
+describe('a case-4 command made before Test connection found the board’s port', () => {
+  test('pasted again after its setup: set up already at 8443, as the board says, not a move there', () => {
+    expect(W.publicPort).toBeNull()
+    for (const name of ['ubuntu2604/nginx-443 set up already', 'debian13/nginx-80-443 set up already']) {
+      const s = SCENARIOS.find(x => x.name === name)
+      if (!s) throw new Error(`no scenario ${name}`)
+      const facts = readServerFacts(readRoundOne(s.r1) as NonNullable<ReturnType<typeof readRoundOne>>, s.r2)
+      const r = setupRecord(facts?.record) as SetupRecord
+      expect([name, whose(r, W)]).toEqual([name, 'same'])
+      expect([name, decision(awk('apply', looked(s.r1, s.r2)).out)]).toEqual([name, `same https://${W.domain}:8443`])
+    }
+  })
+})
+
 describe('without the board’s key', () => {
   test('no step 1, as the board: a server without the socket’s folder is the owner’s', () => {
     const { publicKey: _, ...noKey } = W

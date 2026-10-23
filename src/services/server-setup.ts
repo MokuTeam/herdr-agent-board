@@ -502,8 +502,14 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     const w = wanted(c, key)
     const record = f.record === null || f.record === undefined ? null : setupRecord(f.record)
     const ours = record && whose(record, w) !== 'other' ? record : null
-    // set up from another PC or before a reinstall: the panel's summary from the server's record
-    if (ours?.state === 'applied' && !setupOf()) writeSetup({ case: ours.case, address: ours.address, at: ours.at })
+    // set up from another PC or before a reinstall: the panel's summary from the server's record,
+    // and case 4's public port with it when the panel has none (Test connection looks for the port
+    // only while there is no summary)
+    if (ours?.state === 'applied' && !setupOf()) {
+      writeSetup({ case: ours.case, address: ours.address, at: ours.at })
+      if (ours.publicPort !== null && c.publicPort === null && whose(ours, w) === 'same')
+        writePublicPort(ours.publicPort)
+    }
     const id = d.newId()
     facts = f
     if (kind === 'look') {

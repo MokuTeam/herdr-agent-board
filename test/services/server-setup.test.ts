@@ -476,6 +476,28 @@ for (const distro of DISTROS) {
     })
   })
 
+  describe(`a case-4 setup the panel has no public port for, on ${distro} (${flavor})`, () => {
+    test('set up from another PC or by the one command: set up already, not a move to 8443; the port taken from the record', async () => {
+      const b = await useBoard({ uid: 0, flavor })
+      expect(b.tunnel().publicPort).toBeUndefined()
+      const set = withRecord(b.fake.dir, distro, 'nginx-443', {
+        case: '4a',
+        publicPort: 8443,
+        address: 'https://board.example.com:8443',
+        items: [{ kind: 'container', name: 'agent-board-caddy', setup: 'r1' }],
+      })
+      b.server({ fixture: set })
+      expect(await b.look()).toEqual(OK)
+      expect(planOf(b.setup)).toMatchObject({ kind: 'apply', case: '4a', address: 'https://board.example.com:8443' })
+      expect(b.tunnel().setup).toEqual({
+        case: '4a',
+        address: 'https://board.example.com:8443',
+        at: '2026-10-21T10:04:00.000Z',
+      })
+      expect(b.tunnel().publicPort).toBe(8443)
+    })
+  })
+
   describe(`Apply and Undo on ${distro} (${flavor})`, () => {
     test('a plan from before (or another board’s life), Docker not ticked, one run at a time', async () => {
       const b = await useBoard({ uid: 0, flavor, fixture: fixture(distro, 'nodocker') })
