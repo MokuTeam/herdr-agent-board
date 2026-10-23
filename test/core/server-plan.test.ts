@@ -424,6 +424,54 @@ for (const distro of DISTROS) {
         'apply',
       )
     })
+
+    test('an update leaves the domain it moves away from out of their sites it checks around the reload', () => {
+      const to = { ...W, domain: 'new.example.com' }
+      const fetched = (p: Plan, id: string): string => step(p, id).commands.join('\n')
+      // case 2: their Caddy serves the old domain through the board's site until the reload moves it
+      const two = plan(setUp2(distro), to)
+      expect(two.kind).toBe('update')
+      const old = (p: Plan, id: string) => ({ id, old: fetched(p, id).includes('board.example.com') })
+      for (const id of ['fetch-before', 'fetch-after']) expect(old(two, id)).toEqual({ id, old: false })
+      expect(fetched(two, 'fetch-before')).toContain(`for h in 'blog.example.org' 'shop.example.org'; do`)
+      // case 3a and 3b: the old domain is the board's block in their Caddyfile
+      for (const c of ['3a', '3b'] as const) {
+        const f = factsFor(c, distro)
+        if (!f.caddy) throw new Error('case 3 facts')
+        const file = f.caddy.hostPath ?? ''
+        const r = recordFor(c, {
+          items: [
+            { kind: 'backup', of: file, path: '/etc/agent-board/backups/r0/Caddyfile' },
+            { kind: 'block', file, begin: '# >>> agent-board', end: '# <<< agent-board' },
+          ],
+        })
+        const p = plan({ ...f, caddy: { ...f.caddy, hosts: [...f.caddy.hosts, r.domain] }, record: r }, to)
+        expect([c, p.kind]).toEqual([c, 'update'])
+        expect([c, old(p, 'fetch-before')]).toEqual([c, { id: 'fetch-before', old: false }])
+        expect([c, fetched(p, 'fetch-before').includes(`for h in 'shop.example.org'; do`)]).toEqual([c, true])
+      }
+      // case 4b: nginx names the old domain in the board's own file until the reload moves it
+      const f4 = factsFor('4b', distro)
+      if (!f4.nginx) throw new Error('case 4b facts')
+      const r4 = recordFor('4b', {
+        items: [{ kind: 'file', path: '/etc/nginx/conf.d/agent-board.conf', sha256: 'ef'.repeat(32) }],
+      })
+      const p4 = plan(
+        { ...f4, nginx: { ...f4.nginx, serverNames: [...f4.nginx.serverNames, r4.domain] }, record: r4 },
+        to,
+      )
+      expect(p4.kind).toBe('update')
+      expect(old(p4, 'nginx-reload')).toEqual({ id: 'nginx-reload', old: false })
+      expect(fetched(p4, 'nginx-reload')).toContain(`for h in 'shop.example.org'; do`)
+      // nor is it counted among their sites some of which are left out
+      const many = Array.from({ length: 20 }, (_, i) => `site${i}.example.org`)
+      const f2 = setUp2(distro)
+      const crowded = plan(
+        { ...f2, caddy: { ...(f2.caddy as NonNullable<ServerFacts['caddy']>), hosts: [...many, 'board.example.com'] } },
+        to,
+      )
+      expect(crowded.warnings.filter(w => w.key === 'server.warn.someHosts')).toEqual([])
+    })
   })
 
   describe(`Undo on ${distro}`, () => {

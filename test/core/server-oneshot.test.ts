@@ -300,6 +300,42 @@ function mutations(): Scenario[] {
         items: blockItems('/srv/my web/Caddyfile'),
       }),
     ),
+    // an update: their proxy serves the old domain (the board's site) until the reload moves it
+    m(
+      'serving the old domain, set up for it',
+      unit,
+      withRecord(unit, { case: '2', domain: 'old.example.com', address: 'https://old.example.com', items: UNIT_ITEMS }),
+      unit.r2.replace('"host":["b.example.com"]', '"host":["b.example.com","old.example.com"]'),
+    ),
+    m(
+      'serving the old domain, set up for it',
+      folder,
+      withRecord(folder, {
+        case: '3a',
+        domain: 'old.example.com',
+        address: 'https://old.example.com',
+        items: blockItems('/srv/my web/Caddyfile'),
+      }),
+      folder.r2.replace('"host":["b.example.com"]', '"host":["b.example.com","old.example.com"]'),
+    ),
+    m(
+      'serving the old domain, set up for it',
+      nginx,
+      withRecord(nginx, {
+        case: '4b',
+        domain: 'old.example.com',
+        publicPort: 8443,
+        address: 'https://old.example.com:8443',
+        items: [
+          ...OWN_ITEMS.slice(1),
+          { kind: 'file', path: '/etc/nginx/conf.d/agent-board.conf', sha256: 'ef'.repeat(32) },
+        ],
+      }),
+      nginx.r2.replace(
+        'server_name site.example.com;',
+        'server_name site.example.com;\n    server_name old.example.com;',
+      ),
+    ),
     m('set up already', folder, withRecord(folder, { case: '3a', items: blockItems('/srv/my web/Caddyfile') })),
     m('set up already', file, withRecord(file, { case: '3a', items: blockItems('/srv/web/Caddyfile') })),
     m('set up already', host, withRecord(host, { case: '3b', items: blockItems('/srv/caddy/Caddyfile') })),

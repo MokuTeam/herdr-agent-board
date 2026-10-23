@@ -831,15 +831,18 @@ const reloadOwn = `if [ "$(sudo docker inspect -f '{{index .Config.Labels "${ROL
 
 const HOST_NAME = /^(?=.*[a-z])[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i
 
-/** Their exact host names (no wildcard, no address), not the board's domain, each once. */
-const exactHosts = (names: readonly string[], domain: string): string[] =>
-  [...new Set(names)].filter(h => HOST_NAME.test(h) && h !== domain)
+/**
+ * Their exact host names (no wildcard, no address), each once: not the board's domain, nor the one
+ * an update moves it away from (the board's own site until the reload, then no one's).
+ */
+const exactHosts = (names: readonly string[], domain: string, moved: string | null): string[] =>
+  [...new Set(names)].filter(h => HOST_NAME.test(h) && h !== domain && h !== moved)
 
 /** Their hosts to fetch: the first exact names, at most 20 and 1,500 characters of them. */
-function fetchHosts(names: readonly string[], domain: string): string[] {
+function fetchHosts(names: readonly string[], domain: string, moved: string | null = null): string[] {
   const out: string[] = []
   let chars = 0
-  for (const h of exactHosts(names, domain)) {
+  for (const h of exactHosts(names, domain, moved)) {
     if (out.length === FETCH_MOST || chars + h.length > FETCH_CHARS) break
     out.push(h)
     chars += h.length
@@ -848,9 +851,9 @@ function fetchHosts(names: readonly string[], domain: string): string[] {
 }
 
 /** A note for the plan when some of their exact host names are left out of the fetches. */
-function someHosts(names: readonly string[], domain: string): Text[] {
-  const all = exactHosts(names, domain).length
-  const n = fetchHosts(names, domain).length
+function someHosts(names: readonly string[], domain: string, moved: string | null = null): Text[] {
+  const all = exactHosts(names, domain, moved).length
+  const n = fetchHosts(names, domain, moved).length
   return n < all ? [{ key: 'server.warn.someHosts', params: { n: String(n), all: String(all) } }] : []
 }
 
@@ -1123,6 +1126,9 @@ interface Ctx {
   /** What the run makes of step 1 first; null when it makes none of it. */
   stepOne: StepOneNeeds | null
 }
+
+/** The domain an update moves the board away from; null for any other plan. */
+const movedFrom = (x: Ctx): string | null => (x.update && x.old ? x.old.domain : null)
 
 /** The tunnel user's own group: Look's, or the user's name when the run makes it (`useradd --user-group`). */
 const userGroup = (x: Ctx): string => x.f.stepOne?.user?.group || x.w.user
@@ -1444,7 +1450,7 @@ function ownSteps(x: Ctx, c: OwnCaddy): { built: Built[]; relies: Rely[] } {
   if (c === '4b') {
     const nginx = f.nginx
     const served = nginx?.serverNames.includes(w.domain) === true
-    const hosts = f.host.fetch === 'curl' ? fetchHosts(nginx?.serverNames ?? [], w.domain) : []
+    const hosts = f.host.fetch === 'curl' ? fetchHosts(nginx?.serverNames ?? [], w.domain, movedFrom(x)) : []
     const listen = nginx?.listen80 ?? []
     const at = nginxAddress(listen)
     const nginxDone = x.same && served
@@ -1537,12 +1543,12 @@ function caseTwo(x: Ctx, t: TheirCaddy): { built: Built[]; relies: Rely[] } | Ma
     edit: STRIP_LINE,
     add: IMPORT_LINE,
     present: x.update ? null : `sudo grep -qxF ${shQuote(IMPORT_LINE)} ${q(t.file)}`,
-    out: x.update && x.old ? x.old.domain : null,
+    out: movedFrom(x),
     into: w.domain,
     extraCheck: [],
     record: [{ kind: 'line', file: t.file, line: IMPORT_LINE }],
     touch: { kind: 'line', what: t.file },
-    hosts: fetchHosts(f.caddy?.hosts ?? [], w.domain),
+    hosts: fetchHosts(f.caddy?.hosts ?? [], w.domain, movedFrom(x)),
     restoreSite: true,
     undo: false,
   })
@@ -1590,12 +1596,12 @@ function caseThree(x: Ctx, t: TheirCaddy, host: boolean): { built: Built[]; reli
     present: x.update
       ? null
       : `[ "$(${blockText(t.file)} | sha256sum)" = "$(printf '%s\\n' ${lines(markedBlock(w, upstream))} | sha256sum)" ]`,
-    out: x.update && x.old ? x.old.domain : null,
+    out: movedFrom(x),
     into: w.domain,
     extraCheck: [wholeBlock(t.file)],
     record: [{ kind: 'block', file: t.file, begin: BLOCK_BEGIN, end: BLOCK_END }],
     touch: { kind: 'block', what: t.file },
-    hosts: fetchHosts(f.caddy?.hosts ?? [], w.domain),
+    hosts: fetchHosts(f.caddy?.hosts ?? [], w.domain, movedFrom(x)),
     restoreSite: false,
     undo: false,
   })
@@ -1627,8 +1633,8 @@ function warningsFor(x: Ctx, c: SetupCase, steps: PlanStep[]): Text[] {
   }
   if ((c === '2' || c === '3a' || c === '3b' || c === '4b') && f.host.fetch !== 'curl')
     out.push({ key: 'server.warn.noFetch' })
-  if (steps.some(s => s.id === 'fetch-before')) out.push(...someHosts(f.caddy?.hosts ?? [], w.domain))
-  if (c === '4b' && f.host.fetch === 'curl') out.push(...someHosts(f.nginx?.serverNames ?? [], w.domain))
+  if (steps.some(s => s.id === 'fetch-before')) out.push(...someHosts(f.caddy?.hosts ?? [], w.domain, movedFrom(x)))
+  if (c === '4b' && f.host.fetch === 'curl') out.push(...someHosts(f.nginx?.serverNames ?? [], w.domain, movedFrom(x)))
   if (f.folder && f.folder.members.length > 0)
     out.push({
       key: 'server.warn.groupMembers',

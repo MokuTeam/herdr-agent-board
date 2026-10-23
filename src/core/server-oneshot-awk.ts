@@ -1012,10 +1012,11 @@ function choose(    limits) {
 # What a plan is made of (core/server-plan.ts buildPlan's shapes, theirCaddy, fetchHosts, relies)
 
 function hostname_ok(h,    l) { l = tolower(h); return l ~ /[a-z]/ && l ~ /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/ }
-# their exact host names (no wildcard, no address, not the domain), each once, into OUT; how many
+# their exact host names (no wildcard, no address, not the domain, nor MOVED: the one an update moves
+# the board away from), each once, into OUT; how many
 function exacthosts(A, n, domain, OUT,    i, m, seen) {
   m = 0
-  for (i = 1; i <= n; i++) if (!((A[i]) in seen) && (seen[A[i]] = 1) && hostname_ok(A[i]) && A[i] != domain) OUT[++m] = A[i]
+  for (i = 1; i <= n; i++) if (!((A[i]) in seen) && (seen[A[i]] = 1) && hostname_ok(A[i]) && A[i] != domain && (MOVED == "" || A[i] != MOVED)) OUT[++m] = A[i]
   return m
 }
 # the first of them, at most 20 and 1,500 characters
@@ -1307,6 +1308,7 @@ function main_apply(    c, mine, old, who, docker, fetch, group, cand, update, k
   }
   if (mine) dedupe(); else DDN = 0
   update = who == "update"
+  if (update) MOVED = REC_domain
   docker = own(c) ? DOCKER : 1
   fetch = 0; group = 0; cand = 0
   if (c == "4b" && H_fetch == "curl") { nh = fetchhosts(NX_n, NX_nn, W_DOMAIN, NH); fetch = nh > 0; if (fetch) setlist("nhosts", NH, nh) }
