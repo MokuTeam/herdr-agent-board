@@ -493,32 +493,82 @@ describe('step 1 as Look reads it: what the board makes itself (the simple-setup
     expect(text).toContain('/etc/ssh/sshd_config.d/*.conf')
     // all of it in the fence section, which older parsers read past
     const fence = text.slice(text.indexOf("echo '@@section fence'"), text.indexOf("echo '@@section folder'"))
-    for (const marker of ['@@user', '@@keys', '@@keys-dir', '@@include'])
+    for (const marker of ['@@user', '@@user-shell', '@@user-ours', '@@user-admin', '@@keys', '@@keys-dir', '@@include'])
       expect([marker, fence.includes(marker)]).toEqual([marker, true])
     // no key to compare with: the file is only said to be there
     const without = lookScript1(INPUT)
     expect(without).not.toContain('restrict,port-forwarding')
     expect(without).toContain("echo '@@keys other'")
   })
+  test('the tunnel user’s lines, run by a real sh: its uid and group, its shell, the board’s or not, the admin’s or not', () => {
+    const sh = Bun.which('sh')
+    if (!sh) return
+    const text = lookScript1(INPUT)
+    const from = text.indexOf('if p=$(getent passwd')
+    const part = text.slice(
+      from,
+      text.indexOf("else echo '@@user none'; fi", from) + "else echo '@@user none'; fi".length,
+    )
+    // getent and id stand in for the server's: the passwd line given, its group by gid
+    const run = (passwd: string | null, o: { me?: string; sudo?: string } = {}): string[] => {
+      const stubs = [
+        `getent() { case "$1" in passwd) ${passwd === null ? 'return 2' : `printf '%s\\n' ${shQuote(passwd)}`} ;; group) echo "tunnelgroup:x:$2:" ;; esac; }`,
+        `id() { echo ${shQuote(o.me ?? 'root')}; }`,
+      ]
+      const r = Bun.spawnSync([sh, '-c', `${stubs.join('\n')}\n${part}`], {
+        env: { PATH: process.env.PATH ?? '', ...(o.sudo !== undefined && { SUDO_USER: o.sudo }) },
+      })
+      return r.stdout.toString().split('\n').filter(Boolean)
+    }
+    expect(run(null)).toEqual(['@@user none'])
+    expect(run('boardtunnel:x:995:995:agent-board tunnel:/nonexistent:/usr/sbin/nologin')).toEqual([
+      '@@user 995 tunnelgroup',
+      '@@user-shell /usr/sbin/nologin',
+      '@@user-ours',
+    ])
+    expect(run('boardtunnel:x:1000:1000:Migo,,,:/home/boardtunnel:/bin/bash', { me: 'admin' })).toEqual([
+      '@@user 1000 tunnelgroup',
+      '@@user-shell /bin/bash',
+    ])
+    // passwd's empty shell (/bin/sh), and the login sudo runs Look for
+    expect(run('boardtunnel:x:1000:1000::/home/boardtunnel:', { sudo: 'boardtunnel' })).toEqual([
+      '@@user 1000 tunnelgroup',
+      '@@user-shell ',
+      '@@user-admin',
+    ])
+    expect(run('boardtunnel:x:996:996::/home/boardtunnel:/bin/sh', { me: 'boardtunnel' })).toEqual([
+      '@@user 996 tunnelgroup',
+      '@@user-shell /bin/sh',
+      '@@user-admin',
+    ])
+  })
   test('read from the fence section; a Look that did not read them has none (step 1 taken as done by hand)', () => {
     const base = fixture('debian13/bare/round1.txt')
     const add = (lines: string[]): string => base.replace('@@section folder', `${lines.join('\n')}\n@@section folder`)
     expect(readRoundOne(base)?.stepOne).toBeUndefined()
-    expect(readRoundOne(add(['@@user 995 boardtunnel', '@@keys same', '@@keys-dir', '@@include']))?.stepOne).toEqual({
-      user: { uid: 995, group: 'boardtunnel' },
+    expect(
+      readRoundOne(
+        add(['@@user 995 boardtunnel', '@@user-shell /usr/sbin/nologin', '@@keys same', '@@keys-dir', '@@include']),
+      )?.stepOne,
+    ).toEqual({
+      user: { uid: 995, group: 'boardtunnel', shell: '/usr/sbin/nologin', ours: false, admin: false },
       keys: 'same',
       keysDir: true,
       include: true,
     })
+    expect(
+      readRoundOne(add(['@@user 1000 migo', '@@user-shell /bin/bash', '@@user-ours', '@@user-admin']))?.stepOne?.user,
+    ).toEqual({ uid: 1000, group: 'migo', shell: '/bin/bash', ours: true, admin: true })
     expect(readRoundOne(add(['@@user none', '@@keys none']))?.stepOne).toEqual({
       user: null,
       keys: 'none',
       keysDir: false,
       include: false,
     })
-    // a user whose group has no name, and a keys line Look did not give: there, not the board's
-    expect(readRoundOne(add(['@@user 1001 ']))?.stepOne).toEqual({
-      user: { uid: 1001, group: '' },
+    // a user whose group has no name, its shell passwd's empty one, and a keys line Look did not
+    // give: there, not the board's
+    expect(readRoundOne(add(['@@user 1001 ', '@@user-shell ']))?.stepOne).toEqual({
+      user: { uid: 1001, group: '', shell: '', ours: false, admin: false },
       keys: 'other',
       keysDir: false,
       include: false,

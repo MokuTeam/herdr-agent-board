@@ -42,6 +42,7 @@ function stopKind(why: Manual): string {
     case 'otherSetup':
     case 'interrupted':
     case 'folder':
+    case 'tunnelUser':
       return why
     default:
       return 'web'
@@ -111,7 +112,7 @@ export function plainPlan(
   const found = foundLine(f, w, t)
   if (!('steps' in made)) {
     const why = made.why[0] ?? 'os'
-    const reason = t(`server.plain.stop.${stopKind(why)}`, { domain: w.domain })
+    const reason = t(`server.plain.stop.${stopKind(why)}`, { domain: w.domain, user: w.user })
     return {
       found,
       will: [],

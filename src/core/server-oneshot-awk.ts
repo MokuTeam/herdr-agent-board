@@ -557,8 +557,9 @@ function read_folder(    d, g, m, P, M, i, s) {
   for (i = 1; i <= m; i++) if (M[i] != "") FO_members = FO_members (FO_members == "" ? "" : ", ") M[i]
 }
 # sshd's settings for the tunnel user (FENCE), and step 1's parts besides (core/server-look.ts
-# readFence, readStepOne): S1 when Look read them (an "@@user" line); S1_user, S1_group, S1_keys
-# (none, same or other), S1_keysdir, S1_include
+# readFence, readStepOne): S1 when Look read them (an "@@user" line); S1_user, S1_uid, S1_group,
+# S1_shell, S1_ours (the board made it), S1_admin (the login Look ran as), S1_keys (none, same or
+# other), S1_keysdir, S1_include
 function read_stepone(    i, n, l, u, F, k) {
   n = SN[1, "fence"]
   for (i = 1; i <= n; i++) {
@@ -569,7 +570,11 @@ function read_stepone(    i, n, l, u, F, k) {
   S1 = u != NUL
   if (!S1) return
   S1_user = u ~ /^[0-9]+([ \t\n\r\f\v]+[^ \t\n\r\f\v]+)?[ \t\n\r\f\v]*$/
+  S1_uid = S1_user && fields(u, F) >= 1 ? F[1] + 0 : 0
   S1_group = (S1_user && fields(u, F) >= 2) ? F[2] : ""
+  S1_shell = trim(nn(at(1, "fence", "user-shell")))
+  S1_ours = hasline(1, "fence", "@@user-ours")
+  S1_admin = hasline(1, "fence", "@@user-admin")
   k = at(1, "fence", "keys")
   S1_keys = (k == "none" || k == "same") ? k : "other"
   S1_keysdir = hasline(1, "fence", "@@keys-dir")
@@ -963,7 +968,14 @@ function hostlimits(    why, i, n, T) {
   if (DOCKER && D_userns) why = why " userns"
   needs()
   if (!FOLDER && !NEED) why = why " folder"
+  if (ownerslogin()) why = why " tunnelUser"
   return substr(why, 2)
+}
+# the tunnel's user is a login of the owner's (core/server-plan.ts ownersLogin): there, not made
+# by the board, and root, a person's, the admin's, or one with a shell to log in with
+function ownerslogin() {
+  if (!S1 || !S1_user || S1_ours) return 0
+  return S1_uid == 0 || S1_uid >= 1000 || S1_admin || S1_shell !~ /(^|\/)(nologin|false)$/
 }
 # what step 1 lacks, which Apply makes first (core/server-plan.ts stepOneNeeds): NEED when the
 # board makes any of it (Look read step 1, and the board has its key); NEED_user, NEED_folder,
@@ -1302,13 +1314,13 @@ function pfound(    name, sys, w443, w80, s, web) {
 function stopkind(w) {
   if (w == "os") return "os"
   if (w == "selinux" || w == "podman" || w == "rootless" || w == "userns" || w == "requiretty" || w == "noSystemd" || w == "dockerConflicts") return "system"
-  if (w == "domainServed" || w == "otherSetup" || w == "interrupted" || w == "folder") return w
+  if (w == "domainServed" || w == "otherSetup" || w == "interrupted" || w == "folder" || w == "tunnelUser") return w
   return "web"
 }
 # the board does not do this server: why, in plain words and then each reason; the decision line
 function stop(why,    W) {
   split(why, W, " ")
-  print "pstop " tx("server.plain.stop", "reason", tx("server.plain.stop." stopkind(W[1] == "" ? "os" : W[1]), "domain", W_DOMAIN))
+  print "pstop " tx("server.plain.stop", "reason", tx("server.plain.stop." stopkind(W[1] == "" ? "os" : W[1]), "domain", W_DOMAIN, "user", W_USER))
   print "puntouched " tx("server.plain.untouched.nothing")
   saywhy(why)
   print "stop " why

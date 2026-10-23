@@ -360,7 +360,7 @@ function earlierRecord(c: SetupCase, w: Wanted, v: Record<string, Value>): Setup
 
 /** Step 1 as Look reads it when all of it is there but the socket's folder (the run makes it). */
 const FOLDER_ONLY: StepOneFacts = {
-  user: { uid: 990, group: 'zqusergroup' },
+  user: { uid: 990, group: 'zqusergroup', shell: '/usr/sbin/nologin', ours: true, admin: false },
   keys: 'same',
   keysDir: true,
   include: true,

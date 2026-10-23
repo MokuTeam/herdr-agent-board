@@ -7,6 +7,7 @@ import type { ServerFacts, StepOneFacts } from '../../src/core/server-facts.ts'
 import { fenceWanted } from '../../src/core/server-look.ts'
 import {
   buildPlan,
+  type Choice,
   chooseCase,
   type Plan,
   type PlanStep,
@@ -44,7 +45,12 @@ function done(c: Parameters<typeof factsFor>[0], distro: TestDistro = 'debian13'
   return {
     ...f,
     fence: fenceWanted('boardtunnel'),
-    stepOne: { user: { uid: 995, group: 'boardtunnel' }, keys: 'same', keysDir: true, include: true },
+    stepOne: {
+      user: { uid: 995, group: 'boardtunnel', shell: '/usr/sbin/nologin', ours: false, admin: false },
+      keys: 'same',
+      keysDir: true,
+      include: true,
+    },
   }
 }
 
@@ -106,6 +112,50 @@ for (const distro of DISTROS) {
       // a folder there and the fence off, as before: the case's steps only
       expect(ids(plan(factsFor('bare', distro)))).toEqual(['guard', ...OWN])
       expect(ids(plan(factsFor('bare', distro), NO_KEY))).toEqual(['guard', ...OWN])
+    })
+
+    test('a tunnel user that is a login people use, not made by the board: refused before any change', () => {
+      const f = done('bare', distro)
+      const s1 = f.stepOne as StepOneFacts
+      const as = (
+        user: Partial<NonNullable<StepOneFacts['user']>>,
+        keys: StepOneFacts['keys'] = 'none',
+      ): ServerFacts => ({
+        ...f,
+        fence: {},
+        stepOne: { ...s1, keys, user: { ...(s1.user as NonNullable<StepOneFacts['user']>), ...user } },
+      })
+      const refused: Choice = { case: null, why: ['tunnelUser'] }
+      // root, a person's account, the admin's own, one with a shell (passwd's empty one is /bin/sh)
+      expect(chooseCase(as({ uid: 0, shell: '/bin/bash' }), W)).toEqual(refused)
+      expect(chooseCase(as({ uid: 0, shell: '/usr/sbin/nologin' }), W)).toEqual(refused)
+      expect(chooseCase(as({ uid: 1000 }), W)).toEqual(refused)
+      expect(chooseCase(as({ uid: 65534 }), W)).toEqual(refused)
+      expect(chooseCase(as({ admin: true }), W)).toEqual(refused)
+      expect(chooseCase(as({ shell: '/bin/sh' }), W)).toEqual(refused)
+      expect(chooseCase(as({ shell: '' }), W)).toEqual(refused)
+      // with all of step 1 in place too: the board leaves that login alone
+      expect(
+        chooseCase({ ...as({ uid: 1000, shell: '/bin/bash' }, 'same'), fence: fenceWanted('boardtunnel') }, W),
+      ).toEqual(refused)
+      expect(buildPlan(as({ uid: 1000, shell: '/bin/bash' }), W, O)).toEqual(refused)
+      // a system user with no shell to log in with, made by hand (the old step 1), or one the board made
+      expect(chooseCase(as({ shell: '/usr/sbin/nologin' }), W).case).toBe('1')
+      expect(chooseCase(as({ shell: '/bin/false' }), W).case).toBe('1')
+      expect(chooseCase(as({ uid: 1001, shell: '/bin/bash', ours: true }), W).case).toBe('1')
+      // no tunnel user yet, or a Look that did not read step 1: as before
+      expect(chooseCase(as({}), W).case).toBe('1')
+      expect(chooseCase({ ...f, stepOne: { ...s1, user: null } }, W).case).toBe('1')
+      const { stepOne: _s, ...older } = f
+      expect(chooseCase(older, W).case).toBe('1')
+      // after other limits, as its own reason
+      expect(chooseCase({ ...as({ uid: 0 }), host: { ...f.host, selinux: 'enforcing' } }, W)).toEqual({
+        case: null,
+        why: ['selinux', 'tunnelUser'],
+      })
+      // the reason in both languages
+      for (const lang of ['en', 'ru'] as const)
+        expect([lang, translator(lang)('server.manual.tunnelUser').startsWith('server.')]).toEqual([lang, false])
     })
 
     test('the tunnel user: as step 1 made it, with the board’s comment; never a user that is there', () => {

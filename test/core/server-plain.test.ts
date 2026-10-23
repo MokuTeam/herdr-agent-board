@@ -73,7 +73,12 @@ describe('the plan in plain words, per case', () => {
           'clientalivecountmax 2',
         ].map(l => [l.slice(0, l.indexOf(' ')), l.slice(l.indexOf(' ') + 1)]),
       ),
-      stepOne: { user: { uid: 995, group: 'boardtunnel' }, keys: 'other', keysDir: true, include: true },
+      stepOne: {
+        user: { uid: 995, group: 'boardtunnel', shell: '/usr/sbin/nologin', ours: true, admin: false },
+        keys: 'other',
+        keysDir: true,
+        include: true,
+      },
     })
     expect(p.will[0]).toBe('Put the board’s key in place for its login on the server (boardtunnel).')
   })
@@ -212,6 +217,22 @@ describe('a server the board does not do: why, in one line, and nothing done', (
     expect(stop(stepOneMissing('bare'), noKey).stop).toBe(
       'The board does not set this server up by itself: it has no key of its own yet for its login there.',
     )
+    // the tunnel's user a login people use: named, and what to do instead, in both languages
+    const s1 = stepOneMissing('bare')
+    const theirs = {
+      ...s1,
+      stepOne: {
+        ...(s1.stepOne as NonNullable<ServerFacts['stepOne']>),
+        user: { uid: 1000, group: 'migo', shell: '/bin/bash', ours: false, admin: false },
+      },
+    }
+    const migo = { ...W, user: 'migo' }
+    expect(stop(theirs, migo).stop).toBe(
+      'The board does not set this server up by itself: the login migo is already on the server and is one people use. Taken for the tunnel, it could no longer log in: choose another name for the tunnel’s user in the tunnel’s settings.',
+    )
+    expect(plain(theirs, ru, migo).stop).toBe(
+      'Доска не настраивает этот сервер сама: на сервере уже есть вход migo, и им пользуются люди. Отданный под туннель, он больше не сможет войти: выберите другое имя пользователя туннеля в настройках туннеля.',
+    )
   })
   test('each reason has its plain line', () => {
     const reasons: Manual[] = [
@@ -239,6 +260,7 @@ describe('a server the board does not do: why, in one line, and nothing done', (
       'interrupted',
       'portTaken',
       'folder',
+      'tunnelUser',
     ]
     for (const why of reasons) {
       const p = plainPlan(factsFor('bare'), { case: null, why: [why] }, W, en)
@@ -255,7 +277,7 @@ describe('plain words: no jargon, both languages, at most three lines of what wi
       out.push(lines(plain(factsFor(c), t)))
       out.push(lines(plain({ ...stepOneMissing(c), docker: c === 'nodocker' ? null : factsFor(c).docker }, t)))
     }
-    for (const why of ['os', 'bridge', 'otherSetup', 'folder', 'domainServed', 'podman'] as Manual[])
+    for (const why of ['os', 'bridge', 'otherSetup', 'folder', 'domainServed', 'podman', 'tunnelUser'] as Manual[])
       out.push(lines(plainPlan(factsFor('bare'), { case: null, why: [why] }, W, t)))
     return out
   }

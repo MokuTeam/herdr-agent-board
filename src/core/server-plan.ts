@@ -59,8 +59,9 @@ import { keysFile, keysLine, SSHD_RELOAD, socketFolder } from './tunnel-snippets
 export type SetupCase = '1' | '1b' | '2' | '3a' | '3b' | '4a' | '4b'
 /**
  * Why the board does not set up the server by itself ("Do it myself"). Beyond the spec's list:
- * `portTaken` (8443, 8480 or 8481, which the case needs, held by another program) and `folder`
- * (the socket's folder not found: step 1 not done).
+ * `portTaken` (8443, 8480 or 8481, which the case needs, held by another program), `folder`
+ * (the socket's folder not found: step 1 not done) and `tunnelUser` (the tunnel's user is a login
+ * of the owner's, which sshd's fence would lock out: ownersLogin).
  */
 export type Manual =
   | 'os'
@@ -87,6 +88,7 @@ export type Manual =
   | 'interrupted'
   | 'portTaken'
   | 'folder'
+  | 'tunnelUser'
 
 /** A setup is one tunnel's: its user and its socket. */
 export interface Pair {
@@ -463,6 +465,20 @@ export function stepOneNeeds(f: ServerFacts, w: Wanted): StepOneNeeds | null {
   }
 }
 
+/** A shell no one logs in with. */
+const NO_LOGIN = /(^|\/)(nologin|false)$/
+
+/**
+ * The tunnel's user is a login of the owner's, not one for the tunnel: there already, not made by
+ * the board (its comment), and root, a person's (uid 1000 and up), the admin's own, or one with a
+ * shell to log in with (passwd's empty one is /bin/sh). sshd's fence and the board's keys file
+ * would lock it out, so the board does not take it: the owner picks another tunnel user.
+ */
+export function ownersLogin(f: ServerFacts): boolean {
+  const u = f.stepOne?.user
+  return !!u && !u.ours && (u.uid === 0 || u.uid >= 1000 || u.admin || !NO_LOGIN.test(u.shell))
+}
+
 /** The limits of call 25, and step 1 not done where the board cannot do it: none of the cases is done by the board then. */
 function hostLimits(f: ServerFacts, w: Wanted): Manual[] {
   const why: Manual[] = []
@@ -472,6 +488,7 @@ function hostLimits(f: ServerFacts, w: Wanted): Manual[] {
   if (f.docker?.rootless) why.push('rootless')
   if (f.docker?.userns) why.push('userns')
   if (!f.folder && !stepOneNeeds(f, w)) why.push('folder')
+  if (ownersLogin(f)) why.push('tunnelUser')
   return why
 }
 

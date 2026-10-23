@@ -398,7 +398,9 @@ function mutations(): Scenario[] {
 // Step 1 as Look reads it (core/server-look.ts stepOneLines): each way its parts can be missing
 
 const STEP_ONE_IDS = ['tunnel-user', 'socket-folder', 'keys-file', 'sshd-fence']
-const DONE = ['@@user 995 boardtunnel', '@@keys same', '@@keys-dir', '@@include']
+/** A tunnel user made by hand as the old step 1 made it: a system user with no shell to log in with. */
+const NOLOGIN = '@@user-shell /usr/sbin/nologin'
+const DONE = ['@@user 995 boardtunnel', NOLOGIN, '@@keys same', '@@keys-dir', '@@include']
 
 /**
  * Round one with Look's step-1 lines at the end of the fence section; sshd's settings for the
@@ -436,14 +438,54 @@ const STEP_ONE_VARIANTS: { name: string; r1: (r1: string) => string }[] = [
   },
   {
     name: 'an older key',
-    r1: r1 => stepOne(r1, ['@@user 995 boardtunnel', '@@keys other', '@@keys-dir', '@@include']),
+    r1: r1 => stepOne(r1, ['@@user 995 boardtunnel', NOLOGIN, '@@keys other', '@@keys-dir', '@@include']),
   },
   { name: 'no tunnel user', r1: r1 => stepOne(r1, ['@@user none', '@@keys same', '@@keys-dir', '@@include']) },
   { name: 'no socket folder', r1: r1 => stepOne(r1, DONE, { folder: false }) },
   { name: 'the fence loosened', r1: r1 => stepOne(r1, DONE, { fence: 'loose' }) },
+  // a tunnel user that is a login people use, not the board's: refused (core/server-plan.ts ownersLogin)
+  {
+    name: 'the tunnel user a person’s login',
+    r1: r1 =>
+      stepOne(r1, ['@@user 1000 migo', '@@user-shell /bin/bash', '@@keys none', '@@keys-dir', '@@include'], {
+        fence: 'none',
+      }),
+  },
+  {
+    name: 'the tunnel user root, the admin',
+    r1: r1 =>
+      stepOne(r1, ['@@user 0 root', '@@user-shell /bin/bash', '@@user-admin', '@@keys none', '@@include'], {
+        fence: 'none',
+      }),
+  },
+  {
+    name: 'the tunnel user the admin’s own',
+    r1: r1 =>
+      stepOne(r1, ['@@user 995 boardtunnel', NOLOGIN, '@@user-admin', '@@keys same', '@@keys-dir', '@@include']),
+  },
+  {
+    name: 'the tunnel user with a shell',
+    r1: r1 => stepOne(r1, ['@@user 995 boardtunnel', '@@user-shell /bin/sh', '@@keys same', '@@keys-dir', '@@include']),
+  },
+  {
+    name: 'the tunnel user with passwd’s empty shell',
+    r1: r1 => stepOne(r1, ['@@user 995 boardtunnel', '@@user-shell ', '@@keys none', '@@include'], { fence: 'none' }),
+  },
+  {
+    name: 'the board’s own tunnel user, with a shell',
+    r1: r1 =>
+      stepOne(r1, [
+        '@@user 1001 boardtunnel',
+        '@@user-shell /bin/bash',
+        '@@user-ours',
+        '@@keys same',
+        '@@keys-dir',
+        '@@include',
+      ]),
+  },
   {
     name: 'no socket folder, a tunnel user of another group',
-    r1: r1 => stepOne(r1, ['@@user 995 tunnels', '@@keys same', '@@keys-dir', '@@include'], { folder: false }),
+    r1: r1 => stepOne(r1, ['@@user 995 tunnels', NOLOGIN, '@@keys same', '@@keys-dir', '@@include'], { folder: false }),
   },
 ]
 
@@ -502,6 +544,24 @@ function stepOneScenarios(): Scenario[] {
       'set up with step 1 for another domain',
       bare,
       withRecord(done(bare), { ...old, items: [...STEP_ONE_ITEMS, ...OWN_ITEMS] }),
+    ),
+    // Apply refuses a tunnel user that became a login people use; Undo still removes the setup
+    m(
+      'set up with step 1, the tunnel user a person’s login since',
+      bare,
+      withRecord(
+        {
+          ...bare,
+          r1: stepOne(bare.r1, [
+            '@@user 1000 boardtunnel',
+            '@@user-shell /bin/bash',
+            '@@keys same',
+            '@@keys-dir',
+            '@@include',
+          ]),
+        },
+        { items: [...STEP_ONE_ITEMS, ...OWN_ITEMS] },
+      ),
     ),
     m(
       'set up with step 1, cut short making it',
@@ -661,6 +721,8 @@ describe('the plan in plain words, in the board’s language', () => {
       'debian13/nginx-443 no tunnel user',
       'debian13/apache step 1 done',
       'debian13/bare set up with step 1 for another domain',
+      'debian13/bare the tunnel user a person’s login',
+      'debian13/caddy-unit the tunnel user with a shell',
     ]) {
       const s = SCENARIOS.find(x => x.name === name)
       if (!s) throw new Error(`no scenario ${name}`)
@@ -672,6 +734,28 @@ describe('the plan in plain words, in the board’s language', () => {
       expect([name, plainOf(a.out)]).toEqual([name, plainPlan(facts, p, W, tr)])
       if ('steps' in p) expect(said(a.out, 'title')).toEqual(titles(p, tr))
     }
+  })
+})
+
+describe('a tunnel user that is a login people use', () => {
+  test('stops before any change, as the board; the board’s own user, or one with no shell, goes on', () => {
+    const decided = (name: string): string => {
+      const s = SCENARIOS.find(x => x.name === name)
+      if (!s) throw new Error(`no scenario ${name}`)
+      return decision(awk('apply', looked(s.r1, s.r2)).out)
+    }
+    for (const v of [
+      'the tunnel user a person’s login',
+      'the tunnel user root, the admin',
+      'the tunnel user the admin’s own',
+      'the tunnel user with a shell',
+      'the tunnel user with passwd’s empty shell',
+    ])
+      expect([v, decided(`debian13/bare ${v}`)]).toEqual([v, 'stop tunnelUser'])
+    expect(decided('debian13/apache the tunnel user with a shell').split(' ')).toContain('tunnelUser')
+    for (const v of ['the board’s own tunnel user, with a shell', 'step 1 done', 'an older key'])
+      expect([v, decided(`debian13/bare ${v}`).startsWith('plan ')]).toEqual([v, true])
+    expect(decided('debian13/bare set up with step 1, the tunnel user a person’s login since')).toBe('stop tunnelUser')
   })
 })
 
@@ -690,7 +774,7 @@ describe('without the board’s key', () => {
     const a = awk('apply', `${dict}\n@@ab-round1\n${r1}\n@@ab-round2\n`, {}, file)
     expect(decision(a.out)).toBe('stop folder')
     // and with step 1 done by hand, the case's own steps, as before
-    const done = stepOne(s.r1, ['@@user 995 boardtunnel', '@@keys other', '@@keys-dir', '@@include'])
+    const done = stepOne(s.r1, ['@@user 995 boardtunnel', NOLOGIN, '@@keys other', '@@keys-dir', '@@include'])
     const f2 = readServerFacts(readRoundOne(done) as NonNullable<ReturnType<typeof readRoundOne>>, '') as ServerFacts
     const p = buildPlan(f2, noKey, { id: IDS.plan, docker: true }) as Plan
     const b = awk('apply', `${dict}\n@@ab-round1\n${done}\n@@ab-round2\n`, {}, file)

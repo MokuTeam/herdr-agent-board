@@ -64,8 +64,12 @@ export interface HostFacts {
  * user) and the socket's folder (`folder`): what tells the plan which of them the board makes.
  */
 export interface StepOneFacts {
-  /** The tunnel user: its uid and its group's name; null when there is none. */
-  user: { uid: number; group: string } | null
+  /**
+   * The tunnel user: its uid, its group's name, its shell, whether the board made it (its comment,
+   * core/server-texts.ts USER_COMMENT) and whether it is the login Look ran as (or sudo ran it
+   * for); null when there is none.
+   */
+  user: { uid: number; group: string; shell: string; ours: boolean; admin: boolean } | null
   /** Its keys file: none, the board's key line alone, or anything else (also when Look had no key to compare with). */
   keys: 'none' | 'same' | 'other'
   /** /etc/ssh/authorized_keys is there. */

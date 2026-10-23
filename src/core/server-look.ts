@@ -20,7 +20,7 @@ import type {
   Unit,
 } from './server-facts.ts'
 import { isContainerId, isPlainPath, shQuote } from './server-shell.ts'
-import { KEYS_DIR, SSHD_CONFIG, SSHD_DIR } from './server-texts.ts'
+import { KEYS_DIR, SSHD_CONFIG, SSHD_DIR, USER_COMMENT } from './server-texts.ts'
 import { keysFile, keysLine, socketFolder, sshdBlock } from './tunnel-snippets.ts'
 
 /** The distributions Apply works on (owner, 2026-10-21); anything else is "Do it myself". */
@@ -83,16 +83,24 @@ const PORTS_ALT = PORTS.join('|')
 /**
  * Step 1's parts besides the fence and the folder, at the end of the fence section (a parser of
  * before reads past `@@` lines there): the tunnel user (`@@user <uid> <group>` or `@@user none`),
- * its keys file against the board's key line (`@@keys none|same|other`), /etc/ssh/authorized_keys
- * (`@@keys-dir`), and whether sshd_config includes sshd_config.d/*.conf before any Match line
- * (`@@include`), where sshd's fence goes in a file of its own.
+ * with its shell (`@@user-shell`), whether the board made it (`@@user-ours`: its comment) and
+ * whether it is the login Look runs as, or sudo runs it for (`@@user-admin`); its keys file against
+ * the board's key line (`@@keys none|same|other`), /etc/ssh/authorized_keys (`@@keys-dir`), and
+ * whether sshd_config includes sshd_config.d/*.conf before any Match line (`@@include`), where
+ * sshd's fence goes in a file of its own.
  */
 function stepOneLines(i: LookInput): string[] {
   const user = shQuote(i.user)
   const keys = shQuote(keysFile(i.user))
   const include = `tolower($1) == "match" { exit } tolower($1) == "include" { for (i = 2; i <= NF; i++) if ($i == "${SSHD_DIR}/*.conf" || $i == "sshd_config.d/*.conf") f = 1 } END { exit !f }`
+  const field = (n: number): string => `$(printf '%s\\n' "$p" | cut -d: -f${n})`
   return [
-    `if p=$(getent passwd ${user}); then echo "@@user $(printf '%s\\n' "$p" | cut -d: -f3) $(getent group "$(printf '%s\\n' "$p" | cut -d: -f4)" | cut -d: -f1)"; else echo '@@user none'; fi`,
+    `if p=$(getent passwd ${user}); then`,
+    `  echo "@@user ${field(3)} $(getent group "${field(4)}" | cut -d: -f1)"`,
+    `  echo "@@user-shell ${field(7)}"`,
+    `  if [ "${field(5)}" = ${shQuote(USER_COMMENT)} ]; then echo '@@user-ours'; fi`,
+    `  if [ ${user} = "$(id -un)" ] || [ ${user} = "\${SUDO_USER:-}" ]; then echo '@@user-admin'; fi`,
+    `else echo '@@user none'; fi`,
     i.publicKey === undefined
       ? `if [ -e ${keys} ]; then echo '@@keys other'; else echo '@@keys none'; fi`
       : `if [ ! -e ${keys} ]; then echo '@@keys none'; elif [ "$(cat ${keys})" = ${shQuote(keysLine(i.publicKey))} ]; then echo '@@keys same'; else echo '@@keys other'; fi`,
@@ -659,7 +667,16 @@ function readStepOne(ls: readonly string[]): StepOneFacts | undefined {
   const m = /^(\d+)(?:\s+(\S+))?\s*$/.exec(user)
   const keys = at(ls, 'keys')
   return {
-    user: m ? { uid: Number(m[1]), group: m[2] ?? '' } : null,
+    // a shell Look did not give is passwd's empty one: /bin/sh
+    user: m
+      ? {
+          uid: Number(m[1]),
+          group: m[2] ?? '',
+          shell: (at(ls, 'user-shell') ?? '').trim(),
+          ours: ls.includes('@@user-ours'),
+          admin: ls.includes('@@user-admin'),
+        }
+      : null,
     keys: keys === 'none' || keys === 'same' ? keys : 'other',
     keysDir: ls.includes('@@keys-dir'),
     include: ls.includes('@@include'),

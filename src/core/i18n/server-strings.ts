@@ -192,6 +192,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.manual.portTaken': 'A port the board needs (8443, 8480 or 8481) is held by another program.',
     'server.manual.folder':
       'The socket’s folder is not there, and the board has no key of its own yet to set up its login: generate its key first.',
+    'server.manual.tunnelUser':
+      'The tunnel’s user is already on the server and is a login people use (root, a person’s account, the admin’s, or one with a shell), not made by the board: fenced in for the tunnel, it could no longer log in. Choose another tunnel user.',
     // the plan's steps
     'server.step.guard.title': 'Check that the server is as Look found it',
     'server.step.guard.why': 'If who holds the ports or your config changed since, nothing is changed: look again.',
@@ -354,6 +356,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.plain.stop.otherSetup': 'another board is set up on this server.',
     'server.plain.stop.interrupted': 'a run of the board did not finish here.',
     'server.plain.stop.folder': 'it has no key of its own yet for its login there.',
+    'server.plain.stop.tunnelUser':
+      'the login {user} is already on the server and is one people use. Taken for the tunnel, it could no longer log in: choose another name for the tunnel’s user in the tunnel’s settings.',
     // the admin connection: its fields, and why Look, Apply or Undo stopped (the spec's hints)
     'server.field.adminUser': 'Admin user',
     'server.field.adminKey': 'Admin key',
@@ -588,6 +592,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.manual.portTaken': 'Нужный доске порт (8443, 8480 или 8481) занят другой программой.',
     'server.manual.folder':
       'Папки сокета нет, а своего ключа, чтобы настроить свой вход, у доски ещё нет: сначала создайте её ключ.',
+    'server.manual.tunnelUser':
+      'Пользователь туннеля уже есть на сервере, и это вход, которым пользуются люди (root, чья-то учётная запись, администратор или пользователь с оболочкой), и сделала его не доска: запертый под туннель, он больше не сможет войти. Выберите другого пользователя туннеля.',
     'server.step.guard.title': 'Проверить, что сервер такой, каким его застал осмотр',
     'server.step.guard.why':
       'Если с тех пор сменились владельцы портов или ваша конфигурация, ничего не меняется: осмотрите снова.',
@@ -754,6 +760,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.plain.stop.otherSetup': 'на этом сервере настроена другая доска.',
     'server.plain.stop.interrupted': 'запуск доски здесь не завершился.',
     'server.plain.stop.folder': 'у неё ещё нет своего ключа для входа туда.',
+    'server.plain.stop.tunnelUser':
+      'на сервере уже есть вход {user}, и им пользуются люди. Отданный под туннель, он больше не сможет войти: выберите другое имя пользователя туннеля в настройках туннеля.',
     // подключение администратора: его поля и почему осмотр, применение или отмена остановились
     'server.field.adminUser': 'Администратор',
     'server.field.adminKey': 'Ключ администратора',
