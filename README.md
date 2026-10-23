@@ -211,7 +211,8 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
 - Click a card: a sheet with a compact head (two pills, where the card shows and its lane, each
   opening a menu to change it; the name; its workspace, last activity and context; then what it
   does, what it waits for, its reminders and the sessions it works with, each only when there is
-  one, and the pencil shows the empty ones to fill in), the question and screen when it waits for
+  one; the pencil offers empty fields as one quiet "Add" row, and the reminders show the next one
+  with a count that opens the rest in place), the question and screen when it waits for
   you (a question form or a permission prompt is answered right there, see
   [Answering from the board](#answering-from-the-board)), the conversation (tool calls folded;
   a background command, agent, monitor or MCP task reporting back and a board reminder are a

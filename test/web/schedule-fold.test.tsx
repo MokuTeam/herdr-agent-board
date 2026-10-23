@@ -237,14 +237,17 @@ describe('while a cancelled reminder folds away', () => {
     ]
     const old = await oldDraws(steps)
     const now = await newDraws(steps)
-    expect(now).toEqual(old)
-    // Armed, then held "Cancel?" and all through the board and the clock…
+    // Armed, then held "Cancel?" and all through the board and the clock: the rows stay.
+    expect(now.slice(0, 5)).toEqual(old.slice(0, 5))
     for (const i of [0, 1, 2, 3, 4]) expect(old[i]?.sheet).toContain('Cancel?')
     expect(old[3]).toEqual(old[0] as Drawn)
-    // …then drawn again: a1 gone, a5 counted, a2 waiting.
+    // …then drawn again: a1 gone, the rest counted under the next one, a2 waiting.
     expect(old[5]?.sheet).not.toContain('Cancel?')
     expect(old[5]?.sheet).toContain('+2 more')
     expect(old[5]?.panel).toContain('Due, waiting for the session')
+    expect(now[5]?.panel).toBe(old[5]?.panel)
+    expect(now[5]?.sheet).toContain('5 scheduled')
+    expect(now[5]?.sheet).not.toContain('+2 more')
   })
 
   test('refused: the rows come back as the board now is', async () => {
@@ -256,13 +259,20 @@ describe('while a cancelled reminder folds away', () => {
       'folded',
     ]
     const old = await oldDraws(steps)
-    expect(await newDraws(steps)).toEqual(old)
+    const now = await newDraws(steps)
+    expect(now.slice(0, 4)).toEqual(old.slice(0, 4))
     expect(old.at(-1)?.sheet).not.toContain('Cancel?')
+    expect(now.at(-1)?.sheet).toContain('4 scheduled')
+    expect(now.at(-1)?.sheet).not.toContain('Cancel?')
   })
 
   test('the rows gone before the server answers: still held until it does', async () => {
     const steps: Step[] = [{ cancel: 'b1' }, { cancel: 'b1' }, 'folded', AFTER_CANCEL, OK]
     const old = await oldDraws(steps)
-    expect(await newDraws(steps)).toEqual(old)
+    const now = await newDraws(steps)
+    // Beta's row folds; Alpha's own rows are kept while it does, then compact again.
+    expect(now.slice(0, 2)).toEqual(old.slice(0, 2))
+    expect(now[2]?.sheet).toContain('+1 more')
+    expect(now.at(-1)?.sheet).toContain('5 scheduled')
   })
 })
