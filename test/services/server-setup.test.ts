@@ -1146,6 +1146,48 @@ describe('the admin’s login by password (the simple-setup spec)', () => {
     expect(b.stdins()).toEqual(['pw\n', 'pw\n'])
   })
 
+  test('Apply or Undo without the password Look logged in with (the page reloaded): asked for, the plan kept; a key that logged in needs none', async () => {
+    const b = await useBoard(
+      { uid: 0, publickey: true, login: { password: SENTINEL }, fixture: fixture('debian13', 'caddy-unit') },
+      ROOT,
+    )
+    expect(await b.look({ password: SENTINEL })).toEqual(OK)
+    const p = planOf(b.setup)
+    const logins = b.logins().length
+    // refused before any ssh, the password's field asked for; the plan stays for the same Apply
+    expect(await b.apply({ plan: p.id })).toMatchObject({
+      status: 409,
+      body: { ok: false, hint: 'loginPassword', need: 'password' },
+    })
+    expect(b.logins()).toHaveLength(logins)
+    expect(b.setup.view()).toMatchObject({ phase: 'plan', plan: { id: p.id } })
+    b.server({ run: { lines: goesThrough(p) } })
+    expect(await b.apply({ plan: p.id, password: SENTINEL })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    expect(b.setup.view().phase).toBe('done')
+    // Undo the same way
+    b.server({ fixture: withRecord(b.fake.dir, 'debian13', 'caddy-unit', { case: '2' }) })
+    expect(await b.undoLook({ password: SENTINEL })).toEqual(OK)
+    const u = planOf(b.setup)
+    expect(u.kind).toBe('undo')
+    expect(await b.undo({ plan: u.id })).toMatchObject({ status: 409, body: { need: 'password' } })
+    expect(b.setup.view()).toMatchObject({ phase: 'plan', plan: { id: u.id } })
+    b.server({ run: { lines: goesThrough(u) } })
+    expect(await b.undo({ plan: u.id, password: SENTINEL })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    expect(b.setup.view().phase).toBe('done')
+
+    // A key that logged in, a password typed with it never asked: Apply needs none, as before.
+    const key = await useBoard({ uid: 0, fixture: fixture('debian13', 'caddy-unit') }, ROOT)
+    expect(await key.look({ password: 'pw' })).toEqual(OK)
+    expect(key.prompts()).toEqual([])
+    const q = planOf(key.setup)
+    key.server({ run: { lines: goesThrough(q) } })
+    expect(await key.apply({ plan: q.id })).toEqual(OK)
+    await key.until(['done', 'failed'])
+    expect(key.setup.view().phase).toBe('done')
+  })
+
   test('a sudo user by password whose sudo takes the same password (call 3)', async () => {
     const b = await useBoard({
       publickey: true,

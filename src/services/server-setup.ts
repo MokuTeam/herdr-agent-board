@@ -198,6 +198,8 @@ interface Looked {
   wanted: Wanted
   admin: Admin
   mode: SudoMode
+  /** Look's login took the password (its askpass answered): Apply and Undo log in with it again. */
+  password: boolean
 }
 
 interface Heard {
@@ -476,7 +478,7 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       if (typeof two !== 'string') return two
       const f = readServerFacts(r1, two)
       if (!f) return stopLook('unreadable', null)
-      return planFrom(f, c, to.a, read.mode, kind, key)
+      return planFrom(f, c, to.a, read.mode, kind, key, (probe.askpass?.answered ?? 0) > 0)
     } catch (err) {
       // a plan refused (what the panel wants failed its check in core/server-plan.ts): nothing
       // half made stays in the view, the check's own words are the error
@@ -498,6 +500,7 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     mode: SudoMode,
     kind: 'look' | 'undo',
     key: string | null,
+    password: boolean,
   ): Answer {
     const w = wanted(c, key)
     const record = f.record === null || f.record === undefined ? null : setupRecord(f.record)
@@ -522,7 +525,7 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       choice = null
     }
     phase = 'plan'
-    last = plan ? { plan, facts: f, record: ours, wanted: w, admin: a, mode } : null
+    last = plan ? { plan, facts: f, record: ours, wanted: w, admin: a, mode, password } : null
     changed()
     return ok()
   }
@@ -618,6 +621,9 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       JSON.stringify(wanted(to.c, lookedKey)) === JSON.stringify(l.wanted) &&
       JSON.stringify(to.a) === JSON.stringify(l.admin)
     if (!same) return refused('lookAgain', null)
+    // Look logged in with the password and none came (the page reloaded, the panel opened anew):
+    // the keys alone would be refused with the plan gone. Asked for, the plan kept for this Apply.
+    if (l.password && password === null) return refused('loginPassword', null)
     const sudoFrom = sudoFromOf(l.mode, password, sudoPassword)
     if (l.mode === 'password' && sudoFrom === null) return refused('needPassword', null)
     const removeDocker = o.removeDocker === true
