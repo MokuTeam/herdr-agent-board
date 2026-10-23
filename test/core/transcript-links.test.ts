@@ -1,6 +1,6 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { promptOf, spawnOf, spawnResult } from '../../src/core/transcript-links.ts'
+import { peerOf, promptOf, spawnOf, spawnResult, teammateMessages } from '../../src/core/transcript-links.ts'
 
 test('what a helper was asked: the prompt without the frames around it', () => {
   assert.deepEqual(promptOf('Review the diff.'), { prompt: 'Review the diff.', from: '' })
@@ -50,4 +50,14 @@ test('the board links a session to the one that started it with spawn-agent, eit
   assert.deepEqual(spawnOf('PowerShell', { command: 'Spawn-Agent -name Mixed -cwd .' }), { name: 'Mixed' })
   assert.equal(spawnOf('Bash', { command: 'spawn-agent --named x' }), null)
   assert.deepEqual(spawnResult('pane=wP:p3 name=Case 7 agent=case-7'), { pane: 'wP:p3', name: 'Case 7' })
+})
+
+test("another session's or a teammate's message comes whole (#174); its summary stays short", () => {
+  const long = `${'a long brief for the helper '.repeat(400)}end`
+  assert.equal(peerOf({ kind: 'peer', name: 'Master', body: long }, '')?.text, long)
+  const [mate] = teammateMessages(
+    `<teammate-message teammate_id="lead" summary="${'s'.repeat(300)}">${long}</teammate-message>`,
+  )
+  assert.equal(mate?.text, long)
+  assert.equal(mate?.summary?.length, 200)
 })

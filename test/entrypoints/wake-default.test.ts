@@ -129,15 +129,18 @@ test('with no wake section, wake starts: its start opens the pane', async () => 
   expect(box.calls()).toEqual(FIRST_START_CALLS)
 })
 
-// The newest main merged into this work. A later change to the board's own start moves the pin.
+// The newest main merged into this work: the board's manifest entries before wake's.
 const MAIN = '9296038'
+// The board's start (open.ts, run.ts) as of #188, which has open.ts read board.json's host. A later
+// change to the board's own start moves this pin.
+const START = 'b028e87'
 type Entry = { id?: string; command: string[] }
 type Manifest = Record<string, unknown> & Partial<Record<'build' | 'startup' | 'actions' | 'panes', Entry[]>>
 const LISTS = ['build', 'startup', 'actions', 'panes'] as const
 
 test('the board’s start is today’s: open.ts, run.ts, the board’s manifest entries', () => {
   for (const file of ['src/entrypoints/open.ts', 'src/entrypoints/run.ts'])
-    expect(readFileSync(join(root, file), 'utf8').replace(/\r\n/g, '\n')).toBe(oldSource(file, MAIN))
+    expect(readFileSync(join(root, file), 'utf8').replace(/\r\n/g, '\n')).toBe(oldSource(file, START))
 
   const before = Bun.TOML.parse(oldSource('herdr-plugin.toml', MAIN)) as Manifest
   const now = Bun.TOML.parse(readFileSync(join(root, 'herdr-plugin.toml'), 'utf8')) as Manifest

@@ -1,5 +1,6 @@
-// The lanes control's thumb under the picked lane: it springs to a newly picked one and jumps
-// when the lanes change or the window resizes.
+// A segmented control's thumb under its pick (the profile switch's; the lanes control lights each
+// lane on show instead): it springs to a newly picked one and jumps when the choices change or the
+// window resizes.
 import { type RefObject, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { useSpring } from './useSpring.ts'
 

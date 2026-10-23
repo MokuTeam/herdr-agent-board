@@ -11,6 +11,7 @@ import {
   worktreePath,
 } from '../../../src/core/launch/names.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
+import { firstPicked, type LanePicks } from './lane-picks.ts'
 import type { DirListing } from './launch.ts'
 import type { LaunchDraft } from './launch-drafts.ts'
 import type { ProfilePick } from './launch-profile.ts'
@@ -64,21 +65,29 @@ export interface FormStart {
   branch: string
   workspace: WorkspaceWant | null
   set: SetByUser
+  /**
+   * The lanes on show when several are and the form starts in the first of them for want of
+   * another: the form says so under Category, for the user to pick. Empty otherwise.
+   */
+  lanes: LanePicks
 }
 
 /** What a form was started again from: a draft of the same place, or a failed launch. */
 type Restored = Partial<LaunchDraft> & { workspaceId?: string | null }
 
-/** The form for `ctx`: a failed launch's or a draft's values first, else the card's, the context's, the lane on show. */
+/**
+ * The form for `ctx`: a failed launch's or a draft's values first, else the card's, the context's,
+ * the lane on show (the first picked, of several).
+ */
 export function formStart(
   ctx: LaunchContext,
   draft: Restored | null,
-  board: { items: readonly Item[]; filter: string },
+  board: { items: readonly Item[]; filter: LanePicks },
 ): FormStart {
   const r: Restored | null = ctx.retry ?? draft
   const card = ctx.item
-  const picked =
-    r?.category ?? card?.category ?? ctx.category ?? (board.filter && board.filter !== 'all' ? board.filter : null)
+  const asked = r?.category ?? card?.category ?? ctx.category ?? null
+  const picked = asked ?? firstPicked(board.filter)
   const cwd = r?.cwd ?? card?.cwd ?? ctx.cwd ?? ''
   const workspace: WorkspaceWant | null = r
     ? r.workspaceId
@@ -112,6 +121,7 @@ export function formStart(
       workspace: !!workspace,
       newWorkspace: named,
     },
+    lanes: asked === null && board.filter.length > 1 ? board.filter : [],
   }
 }
 

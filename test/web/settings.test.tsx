@@ -2,10 +2,12 @@
 // web/app.js opens out of #settings (its items, where and how it opens, what each pick does),
 // its setTheme and its chooseLanguage, picked out of app.js there and run with the same state;
 // then the look kept in this browser before the page paints (web/src/theme.ts, as theme.js); the
-// board's own style, Classic or Terminal (#161), which upstream did not have; and what the gear
-// says of its menu (aria-expanded) as menus come and go, on each side's own menu.
+// board's own style, Classic or Terminal (#161), and card text cut short or wrapped (#183), which
+// upstream did not have; and what the gear says of its menu (aria-expanded) as menus come and go,
+// on each side's own menu.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createRef } from 'react'
+import { STRINGS } from '../../src/core/i18n/strings.ts'
 import { LANGUAGES, translator } from '../../src/core/i18n/translator.ts'
 import type { BoardProfile } from '../../src/core/payload.ts'
 import type { Translator } from '../../src/core/types.ts'
@@ -19,6 +21,14 @@ import {
   settingsGear,
   settingsMenuFrom,
 } from '../../web/src/hooks/useSettingsMenu.ts'
+import {
+  CARD_TEXT_KEY,
+  CARD_TEXTS,
+  cardTextNow,
+  isCardText,
+  keptCardText,
+  setCardText,
+} from '../../web/src/models/card-text.ts'
 import { isLook, keptLook, LOOKS, lookNow, setLook } from '../../web/src/models/look.ts'
 import type { MenuEntry, MenuItem } from '../../web/src/models/menu-model.ts'
 import type { Dock } from '../../web/src/models/panel-layout.ts'
@@ -741,6 +751,178 @@ describe('Classic or Terminal (#161)', () => {
       'terminal',
     ])
     expect(keptLook(null, 'classic')).toBeNull()
+  })
+})
+
+describe('card text cut short or wrapped (#183)', () => {
+  const now = {
+    t: translator('en'),
+    theme: 'auto',
+    languages: { en: 'English' },
+    canEdit: true,
+    dock: 'right' as const,
+    sleepers: true,
+    profiles: false,
+  }
+  const ids = (items: readonly MenuEntry[]) => items.map(i => ('id' in i ? i.id : '—'))
+
+  test('the Card text item comes after Style, the one on show checked; none without one, as upstream’s menu', () => {
+    expect(ids(settingsMenu(now))).toEqual(['theme', 'lang', 'panel', '—', 'sleepers'])
+    expect(ids(settingsMenu({ ...now, look: 'classic', cardText: 'cut' }))).toEqual([
+      'theme',
+      'look',
+      'cardText',
+      'lang',
+      'panel',
+      '—',
+      'sleepers',
+    ])
+    // Without a style item it still comes right after Appearance.
+    expect(ids(settingsMenu({ ...now, cardText: 'cut' }))).toEqual([
+      'theme',
+      'cardText',
+      'lang',
+      'panel',
+      '—',
+      'sleepers',
+    ])
+    expect(settingsMenu({ ...now, look: 'terminal', cardText: 'wrap' })[2]).toEqual({
+      id: 'cardText',
+      label: 'Card text',
+      submenu: [
+        { id: 'cardText:cut', label: 'Cut short', checked: false },
+        { id: 'cardText:wrap', label: 'Wrap', checked: true },
+      ],
+    })
+    expect(settingsMenu({ ...now, t: translator('ru'), look: 'classic', cardText: 'cut' })[2]).toEqual({
+      id: 'cardText',
+      label: 'Текст карточек',
+      submenu: [
+        { id: 'cardText:cut', label: 'Обрезать', checked: true },
+        { id: 'cardText:wrap', label: 'Переносить', checked: false },
+      ],
+    })
+    // Every language the board has names the item and both choices.
+    for (const lang of Object.keys(LANGUAGES) as (keyof typeof STRINGS)[])
+      for (const key of ['set.cardText', 'set.cardText.cut', 'set.cardText.wrap'])
+        expect([lang, key, typeof STRINGS[lang][key]]).toEqual([lang, key, 'string'])
+    expect(settingPicked('cardText:wrap')).toEqual({ kind: 'cardText', value: 'wrap' })
+    expect(settingPicked('cardText:cut')).toEqual({ kind: 'cardText', value: 'cut' })
+    expect(settingPicked('cardText:ellipsis')).toBeNull()
+    expect(settingPicked('cardText')).toBeNull()
+    expect(CARD_TEXTS.filter(isCardText)).toEqual(['cut', 'wrap'])
+  })
+
+  test('out of the gear: the card text on show checked, a pick sets it; a page without one offers none', () => {
+    for (const shown of ['cut', 'wrap', undefined]) {
+      const calls: Call[] = []
+      let opened: readonly MenuEntry[] = []
+      let pick = (_id: string): void => {}
+      settingsMenuFrom({
+        menu: {
+          open: (items, options) => {
+            opened = items
+            pick = id => options.onPick?.(id, { id, label: '' })
+          },
+        },
+        t: () => translator('en'),
+        canEdit: () => true,
+        languages: () => ({ en: 'English' }),
+        dock: () => 'right',
+        sleepers: () => true,
+        root: () => ({ dataset: {} }),
+        coarse: () => false,
+        setTheme: theme => void calls.push(['theme', theme]),
+        look: () => 'terminal',
+        setLook: look => void calls.push(['look', look]),
+        ...(shown && {
+          cardText: () => shown,
+          setCardText: (value: string) => void calls.push(['cardText', value]),
+        }),
+        chooseLanguage() {},
+        placePanels() {},
+        resetPanelSize() {},
+        toggleSleepers() {},
+        profiles: () => false,
+        openProfiles() {},
+        fold: () => null,
+        chooseFold() {},
+      })({ getBoundingClientRect: () => RECT } as unknown as HTMLElement, false)
+      const item = opened.find((i): i is MenuItem => 'id' in i && i.id === 'cardText')
+      const checked = item?.submenu?.flatMap(i => ('checked' in i && i.checked ? [i.id] : [])) ?? null
+      expect(checked).toEqual(shown ? [`cardText:${shown}`] : null)
+      pick('cardText:wrap')
+      pick('cardText:ellipsis')
+      pick('look:classic')
+      expect(calls).toEqual(
+        shown
+          ? [
+              ['cardText', 'wrap'],
+              ['look', 'classic'],
+            ]
+          : [['look', 'classic']],
+      )
+    }
+  })
+
+  /** setCardText on a page showing `shown`: what it kept, what <html> says after, whether it faded. */
+  function picked(shown: string, value: string, transition: boolean, reduced: boolean) {
+    const dataset: Record<string, string> = shown === 'cut' ? {} : { cardText: shown }
+    const kept: string[] = []
+    const faded: string[] = []
+    setCardText(value, {
+      root: { dataset },
+      keep: v => void kept.push(v),
+      transition:
+        transition && !reduced
+          ? apply => {
+              faded.push(value)
+              apply()
+            }
+          : undefined,
+    })
+    return { dataset: { ...dataset }, kept, faded }
+  }
+
+  test('picked: kept in this browser and on the page, in a cross-fade when it can; the same again changes nothing', () => {
+    for (const shown of ['cut', 'wrap'])
+      for (const value of ['cut', 'wrap'])
+        for (const transition of [false, true])
+          for (const reduced of [false, true]) {
+            const same = shown === value
+            expect([shown, value, transition, reduced, picked(shown, value, transition, reduced)]).toEqual([
+              shown,
+              value,
+              transition,
+              reduced,
+              {
+                // Cut short is no data-card-text at all: the cards as they always were.
+                dataset: value === 'cut' ? {} : { cardText: value },
+                kept: same ? [] : [value],
+                faded: !same && transition && !reduced ? [value] : [],
+              },
+            ])
+          }
+    expect(CARD_TEXT_KEY).toBe('board.cardText')
+  })
+
+  test('by default the cards are cut short: nothing kept, or nothing on <html>', () => {
+    expect(cardTextNow({ dataset: {} })).toBe('cut')
+    expect(cardTextNow({ dataset: { cardText: 'wrap' } })).toBe('wrap')
+    // A page that has the style but no card text set is cut short; the style is no card text.
+    expect(cardTextNow({ dataset: { look: 'terminal' } })).toBe('cut')
+  })
+
+  test('before the page paints, only a kept Wrap wraps: a missing or unknown value is cut short', () => {
+    expect(['wrap', 'cut', 'Wrap', 'ellipsis', 'true', '', null].map(keptCardText)).toEqual([
+      'wrap',
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+    ])
   })
 })
 

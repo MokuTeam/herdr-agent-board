@@ -1,0 +1,39 @@
+/* Card text that wraps (Settings → Card text; web/src/models/card-text.ts), for a narrow column or
+   a small screen: the name whole, on as many lines as it takes, and what the session does, asks,
+   waits for and said last on up to three lines each. Only while <html> has data-card-text="wrap":
+   every rule here starts with that, so cards cut short are drawn as they always were. In the
+   Classic and the Terminal style alike: the rules name the card besides (.card, one class more
+   than look-terminal.css's), where that sheet sets the same thing.
+
+   The head: names keep starting at the same place, after the dot or the moon, which stays by the
+   first line. What follows the name (the star, the profile, the clock, the age) stays beside it
+   while there is room, as before; with none, it goes under the name rather than squeezing it,
+   the clock and the age to the right. Long words without spaces (a folder, a path) break inside
+   the card. The tool at work stays one line: it changes with every call, and the card would jump. */
+
+/* ---------------------------------------------------------------- the head */
+:root[data-card-text="wrap"] .card .card-top { flex-wrap: wrap; row-gap: 2px; height: auto; min-height: 20px; }
+/* The name fits beside the dot or the moon (13px, and a gap of up to 8px), so the two share its first line. */
+:root[data-card-text="wrap"] .card .name { max-width: calc(100% - 21px); line-height: 20px; white-space: normal; overflow-wrap: anywhere; }
+:root[data-card-text="wrap"] .card-top > .dot { align-self: flex-start; margin-top: 6px; }
+:root[data-card-text="wrap"] .card-top > .moon { align-self: flex-start; margin-top: 3.5px; }
+:root[data-card-text="wrap"] .card .profile-tag { max-width: 100%; }
+:root[data-card-text="wrap"] .card-top > .alarm,
+:root[data-card-text="wrap"] .card-top > .age { margin-inline-start: auto; }
+:root[data-card-text="wrap"] .card-top > .alarm ~ .age { margin-inline-start: 0; }
+
+/* Asleep in Idle: the same, on its lower line. */
+:root[data-card-text="wrap"] .card.compact .card-top { min-height: 18px; }
+:root[data-card-text="wrap"] .card.compact .name { line-height: 18px; }
+:root[data-card-text="wrap"] .card.compact .card-top > .moon { margin-top: 2.5px; }
+
+/* ---------------------------------------------------------------- the body */
+:root[data-card-text="wrap"] .card .what,
+:root[data-card-text="wrap"] .card .said,
+:root[data-card-text="wrap"] .card .ask:not(.qa-card),
+:root[data-card-text="wrap"] .card .qa-card-q { -webkit-line-clamp: 3; overflow-wrap: anywhere; }
+:root[data-card-text="wrap"] .card .qa-card-opts { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: normal; overflow-wrap: anywhere; }
+/* What it waits for: the clock by the first line, the chip's corners rounded to fit more than one. */
+:root[data-card-text="wrap"] .card .chip { align-items: flex-start; border-radius: 12px; }
+:root[data-card-text="wrap"] .card .chip svg { flex: none; margin-top: 2px; }
+:root[data-card-text="wrap"] .card .chip span { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: normal; overflow-wrap: anywhere; }

@@ -125,11 +125,13 @@ describe('routes', () => {
       'styles/aside.css',
       'styles/favorites.css',
       'styles/cards.css',
+      'styles/card-wrap.css',
       'styles/categories.css',
       'styles/segments.css',
       'styles/access.css',
       'styles/motion.css',
       'styles/errors.css',
+      'styles/messages.css',
       'styles/look-terminal.css',
       'app.js',
     ])

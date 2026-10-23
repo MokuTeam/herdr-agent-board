@@ -9,7 +9,7 @@ const stored = (values: Record<string, string>) => (key: string, fallback: strin
 
 test('the page state starts from localStorage: lane, sleepers and view receipts, with defaults', () => {
   expect(initialUi(stored({}))).toEqual({
-    filter: 'all',
+    filter: [],
     profile: 'all',
     query: '',
     column: null,
@@ -31,9 +31,18 @@ test('the page state starts from localStorage: lane, sleepers and view receipts,
   const ui = initialUi(
     stored({ 'board.filter': 'proj', 'board.sleepers': '0', 'board.viewed': '{"a":"[1,\\"\\",\\"x\\"]","b":5}' }),
   )
-  expect([ui.filter, ui.sleepers, ui.viewed]).toEqual(['proj', false, { a: '[1,"","x"]' }])
+  expect([ui.filter, ui.sleepers, ui.viewed]).toEqual([['proj'], false, { a: '[1,"","x"]' }])
   expect(parseSeen('not json')).toEqual({})
   expect(parseSeen('null')).toEqual({})
+})
+
+test('board.filter as an older page kept it (one lane, or all) and as this one keeps several', () => {
+  const filter = (text: string) => initialUi(stored({ 'board.filter': text })).filter
+  expect(filter('all')).toEqual([])
+  expect(filter('proj')).toEqual(['proj'])
+  expect(filter('["proj","other"]')).toEqual(['proj', 'other'])
+  // A lane whose id only looks like a list is still that one lane.
+  expect(filter('[wip]')).toEqual(['[wip]'])
 })
 
 test('actions: lane, search, sleepers, open session, usage popover and toasts', () => {
@@ -43,7 +52,7 @@ test('actions: lane, search, sleepers, open session, usage popover and toasts', 
   ui = boardUi(ui, { type: 'toggleSleepers' })
   ui = boardUi(ui, { type: 'open', key: 'a' })
   ui = boardUi(ui, { type: 'limits', open: true })
-  expect([ui.filter, ui.query, ui.sleepers, ui.open, ui.limitsOpen]).toEqual(['proj', 'login', false, 'a', true])
+  expect([ui.filter, ui.query, ui.sleepers, ui.open, ui.limitsOpen]).toEqual([['proj'], 'login', false, 'a', true])
   ui = boardUi(ui, { type: 'toast', text: 'one', error: false })
   ui = boardUi(ui, { type: 'toast', text: 'two', error: true })
   expect(ui.toasts).toEqual([
@@ -56,6 +65,34 @@ test('actions: lane, search, sleepers, open session, usage popover and toasts', 
     [2, 'two'],
     [3, 'three'],
   ])
+})
+
+test('lanes: the control picks any set of them, "Show only" one, a start shows its own', () => {
+  let ui: BoardUi = initialUi(stored({}))
+  const picks = (action: Parameters<typeof boardUi>[1]) => {
+    ui = boardUi(ui, action)
+    return ui.filter
+  }
+  // None picked, then two, in the order picked; one taken off again; the last off shows every lane.
+  expect(picks({ type: 'toggleLane', id: 'proj' })).toEqual(['proj'])
+  expect(picks({ type: 'toggleLane', id: 'other' })).toEqual(['proj', 'other'])
+  expect(picks({ type: 'toggleLane', id: 'proj' })).toEqual(['other'])
+  expect(picks({ type: 'toggleLane', id: 'other' })).toEqual([])
+  // "All" clears the picks; "Show only" (and a digit key) keeps that lane alone.
+  picks({ type: 'toggleLane', id: 'proj' })
+  picks({ type: 'toggleLane', id: 'other' })
+  expect(picks({ type: 'toggleLane', id: 'all' })).toEqual([])
+  picks({ type: 'toggleLane', id: 'proj' })
+  picks({ type: 'toggleLane', id: 'other' })
+  expect(picks({ type: 'filter', id: 'acme' })).toEqual(['acme'])
+  expect(picks({ type: 'filter', id: 'all' })).toEqual([])
+  // A session started in a lane off the picks: that lane joins them; on show already, nothing changes.
+  const all = ui
+  expect(boardUi(all, { type: 'showLane', id: 'proj' })).toBe(all)
+  picks({ type: 'toggleLane', id: 'proj' })
+  expect(picks({ type: 'showLane', id: 'other' })).toEqual(['proj', 'other'])
+  const both = ui
+  expect(boardUi(both, { type: 'showLane', id: 'proj' })).toBe(both)
 })
 
 test('moves: a drop shows at once, a failure takes it back, a board settles what the server agreed to', () => {

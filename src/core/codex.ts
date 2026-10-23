@@ -1,7 +1,14 @@
 // Codex rollouts contain response items and event copies of those same messages. Read the
 // response items only; system instructions, reasoning and tool outputs stay out of the thread.
 import { boardNotice } from './notices.ts'
-import { type ConversationTurn, cleanPrompt, type ToolTurn, toolLabel, trailingQuestion } from './transcript.ts'
+import {
+  type ConversationTurn,
+  cleanPrompt,
+  fitThread,
+  type ToolTurn,
+  toolLabel,
+  trailingQuestion,
+} from './transcript.ts'
 import type { ToolCall, TranscriptInfo } from './types.ts'
 
 export const CODEX_AGENT = 'codex'
@@ -135,13 +142,10 @@ export function parseCodexTail(lines: readonly string[]): TranscriptInfo {
   return { title: '', prompt, lastText, question, replied, tool, ...(context !== undefined && { context }) }
 }
 
-/** The last turns of a rollout, without its duplicate events or internal context. */
+/**
+ * The last turns of a rollout, without its duplicate events or internal context; messages whole,
+ * within the thread's budget (fitThread).
+ */
 export function parseCodexConversation(lines: readonly string[], limit = 40): ConversationTurn[] {
-  return readRollout(lines)
-    .conversation.slice(-limit)
-    .map(turn => {
-      if (turn.role === 'user' || turn.role === 'assistant')
-        return { ...turn, text: clip(turn.text, turn.role === 'user' ? 3000 : 4000) }
-      return turn
-    })
+  return fitThread(readRollout(lines).conversation.slice(-limit))
 }

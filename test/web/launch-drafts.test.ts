@@ -24,6 +24,16 @@ test('launch forms stay with their project and restore all choices together', ()
   assert.notEqual(a, launchContext({ item: { cwd: '/work/payments', category: 'payments' }, newWorkspace: true }))
   assert.notEqual(launchContext({ cwd: '/work/A' }), launchContext({ cwd: '/work/a' }))
   assert.equal(launchContext({ cwd: 'C:\\Work\\A\\' }), launchContext({ cwd: 'c:/work/a' }))
+  // The lanes picked on the board, for a place that names no lane: one keys as that lane always
+  // did; several by themselves, in the order picked (the form starts in the first).
+  assert.equal(launchContext({}, []), launchContext({}))
+  assert.equal(launchContext({}, ['payments']), launchContext({ category: 'payments' }))
+  assert.notEqual(launchContext({}, ['payments', 'platform']), launchContext({}, ['payments']))
+  assert.notEqual(launchContext({}, ['payments', 'platform']), launchContext({}, ['platform', 'payments']))
+  assert.equal(
+    launchContext({ category: 'payments' }, ['payments', 'platform']),
+    launchContext({ category: 'payments' }),
+  )
 })
 
 test('success clears its submitted form without erasing a newer edit or another project', () => {

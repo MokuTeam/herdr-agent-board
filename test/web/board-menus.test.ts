@@ -17,6 +17,7 @@ import {
   pressOpensMenu,
   typingIn,
 } from '../../web/src/models/board-menus.ts'
+import { ALL_LANES } from '../../web/src/models/lane-picks.ts'
 import { wantsNativeMenu } from '../../web/src/models/menu-model.ts'
 import { item } from './support/board.tsx'
 import { type BoardScene, type MenuSide, oldBoardMenus, reactBoardMenus, scene } from './support/board-menu-sides.ts'
@@ -440,7 +441,7 @@ describe('without the launch window', () => {
         item: none,
         column: () => 'idle',
         category: () => 'acme',
-        state: () => ({ open: null, filter: 'all', sleepers: true, data: { categories: [] } }),
+        state: () => ({ open: null, filter: ALL_LANES, sleepers: true, data: { categories: [] } }),
         launch: null,
         tidyCount: () => 0,
         do: {

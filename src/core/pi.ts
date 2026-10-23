@@ -10,7 +10,14 @@
 // is now; a branch left behind with /tree is not read.
 import { posix, win32 } from 'node:path'
 import { boardNotice } from './notices.ts'
-import { type ConversationTurn, cleanPrompt, type ToolTurn, toolLabel, trailingQuestion } from './transcript.ts'
+import {
+  type ConversationTurn,
+  cleanPrompt,
+  fitThread,
+  type ToolTurn,
+  toolLabel,
+  trailingQuestion,
+} from './transcript.ts'
 import type { ToolCall, TranscriptInfo } from './types.ts'
 
 export const PI_AGENT = 'pi'
@@ -237,11 +244,87 @@ export function parsePiTail(lines: readonly string[]): PiInfo {
   return info
 }
 
+// What pi writes beside the conversation, after a turn as well as in one: they say nothing about
+// whether the turn is over.
+const BOOKKEEPING: ReadonlySet<string> = new Set([
+  'custom',
+  'model_change',
+  'thinking_level_change',
+  'session_info',
+  'label',
+  'usage',
+])
+
+/**
+ * Whether the session's last turn is over, by the end of its file (#178): on the branch as it is
+ * now, the last message (bookkeeping entries and system messages passed over) is the assistant's,
+ * and it does not call a tool (stopped, aborted, or failed). A user's message, a tool's result, an
+ * extension's message, or no message at all in the lines: not over.
+ */
+export function piTurnOver(lines: readonly string[]): boolean {
+  let over = null as boolean | null
+  walkBranch(
+    lines,
+    (head, line) => {
+      if (BOOKKEEPING.has(head.type)) return
+      const message = head.type === 'message' ? rec(parse(line)?.message) : null
+      const role = str(message?.role)
+      if (role === 'system') return
+      over = role === 'assistant' && str(message?.stopReason) !== 'toolUse'
+    },
+    () => over !== null,
+  )
+  return over === true
+}
+
+/**
+ * The provider the session goes on with (#178): its latest model_change on the branch, else the
+ * provider of its latest answer; '' when the lines name none. pi takes it back from the file when
+ * the session is resumed.
+ */
+export function piProvider(lines: readonly string[]): string {
+  let provider = ''
+  walkBranch(
+    lines,
+    (head, line) => {
+      if (head.type === 'model_change') provider = str(parse(line)?.provider)
+      else if (head.type === 'message') {
+        const message = rec(parse(line)?.message)
+        if (str(message?.role) === 'assistant') provider = str(message?.provider)
+      }
+    },
+    () => provider !== '',
+  )
+  return provider
+}
+
+/**
+ * The session's name in its whole file (`text`): its latest session_info entry, '' for none. pi
+ * writes the one `--name` gives right after the header, so in a long session it is far above the
+ * end the card reads (#178).
+ */
+export function piSessionName(text: string): string {
+  let name = ''
+  for (const line of text.split('\n')) {
+    if (!line.includes('"type":"session_info"')) continue
+    const o = parse(line)
+    if (o?.type === 'session_info') name = str(o.name).trim()
+  }
+  return name
+}
+
+/** The folder a pi session started in, from its file's first line (the session header); '' when it has none. */
+export function piSessionCwd(firstLine: string): string {
+  const head = parse(firstLine)
+  return head?.type === 'session' ? str(head.cwd) : ''
+}
+
 /**
  * The last `limit` turns of a pi session for its sheet, oldest first: the user's prompts, the
  * agent's texts and its tool calls in a line each (done: the call has a result). A board reminder
- * typed into the session is a notice (core/notices.ts). Thinking, the system prompt and what
- * extensions put into the context are left out.
+ * typed into the session is a notice (core/notices.ts). Messages come whole, within the thread's
+ * budget (fitThread). Thinking, the system prompt and what extensions put into the context are left
+ * out.
  */
 export function parsePiConversation(lines: readonly string[], limit = 40): ConversationTurn[] {
   const newest: ConversationTurn[] = [] // newest first while the branch is walked back
@@ -262,7 +345,7 @@ export function parsePiConversation(lines: readonly string[], limit = 40): Conve
         const text = textOf(message?.content).trim()
         const notice = boardNotice(text)
         if (notice) newest.push({ role: 'notice', ...notice, at })
-        else if (text) newest.push({ role: 'user', text: clip(text, 3000), at })
+        else if (text) newest.push({ role: 'user', text, at })
         return
       }
       if (role !== 'assistant') return
@@ -271,7 +354,7 @@ export function parsePiConversation(lines: readonly string[], limit = 40): Conve
         const b = rec(content[j])
         if (!b) continue
         if (b.type === 'text' && str(b.text).trim()) {
-          newest.push({ role: 'assistant', text: clip(str(b.text).trim(), 4000), at })
+          newest.push({ role: 'assistant', text: str(b.text).trim(), at })
         } else if (b.type === 'toolCall') {
           const name = str(b.name)
           const turn: ToolTurn = {
@@ -288,5 +371,5 @@ export function parsePiConversation(lines: readonly string[], limit = 40): Conve
     },
     () => newest.filter(t => t.role !== 'tool').length >= limit,
   )
-  return newest.slice(0, limit).reverse()
+  return fitThread(newest.slice(0, limit).reverse())
 }

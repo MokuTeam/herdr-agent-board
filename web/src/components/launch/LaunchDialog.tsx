@@ -150,6 +150,12 @@ export function LaunchDialogView({ view, folder, launcher, t, on, refs }: Launch
                 ))}
               </div>
             </div>
+            {/* Several lanes on show: it starts in the first picked, and says so. */}
+            {view.lanesNote && (
+              <p className="field-note" data-for="category">
+                {view.lanesNote}
+              </p>
+            )}
             {view.agent.offered && (
               <div className="row agent-row">
                 <span className="row-label">{t('launch.agent')}</span>

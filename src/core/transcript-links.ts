@@ -95,7 +95,7 @@ export function teammateMessages(text: unknown): Peer[] {
     m => ({
       from: attr(m[1] ?? '', 'teammate_id'),
       summary: clip(attr(m[1] ?? '', 'summary'), 200),
-      text: clip(m[2] ?? '', 4000),
+      text: m[2] ?? '',
       team: true,
     }),
   )
@@ -111,7 +111,7 @@ export function peerOf(origin: unknown, text: unknown): Peer | null {
   return {
     from: from.slice(0, 120),
     pipe: String(o?.from ?? ''),
-    text: clip(body.trim(), 4000),
+    text: body.trim(),
     id: String(o?.msg_id ?? ''),
   }
 }

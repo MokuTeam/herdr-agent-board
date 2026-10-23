@@ -9,6 +9,7 @@ import type { BoardCategory, BoardPayload, BoardProfile } from '../../src/core/p
 import type { LaunchView } from '../../src/core/types.ts'
 import { Board } from '../../web/src/components/Board.tsx'
 import { Toolbar } from '../../web/src/components/Toolbar.tsx'
+import { ALL_LANES } from '../../web/src/models/lane-picks.ts'
 import { placeholderOf } from '../../web/src/models/launch.ts'
 import { pickedProfile, pickShowing, profileOptions, profileShown, tagView } from '../../web/src/models/profiles.ts'
 import { type BoardUi, boardUi, initialUi } from '../../web/src/state/board-ui.ts'
@@ -87,11 +88,11 @@ const DATA = payload({ items: ITEMS, categories: CATEGORIES, profiles: PROFILES 
 const toolbar = (data: BoardPayload, ui: Partial<BoardUi> = {}, lang = 'en'): Node[] =>
   renderInBoard(
     <Toolbar limitsAnchor={createRef<HTMLButtonElement>()} />,
-    boardContext({ data, ui: { filter: 'all', sleepers: true, ...ui } }),
+    boardContext({ data, ui: { filter: ALL_LANES, sleepers: true, ...ui } }),
     lang,
   )
 const boardOf = (data: BoardPayload, ui: Partial<BoardUi> = {}, lang = 'en'): Node[] =>
-  renderInBoard(<Board />, boardContext({ data, ui: { filter: 'all', query: '', sleepers: true, ...ui } }), lang)
+  renderInBoard(<Board />, boardContext({ data, ui: { filter: ALL_LANES, query: '', sleepers: true, ...ui } }), lang)
 
 const textOf = (n: Node): string => (n.kind === 'text' ? n.text : n.children.map(textOf).join(''))
 const elementsIn = (el: Element): Element[] => el.children.filter((c): c is Element => c.kind === 'element')

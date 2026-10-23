@@ -6,6 +6,7 @@ import type { ColumnId, Item, LaunchView } from '../../../src/core/types.ts'
 import { type AttentionItem, recordView, type Seen } from '../models/attention.ts'
 import { type BoardEdit, type BoardEdits, NO_EDITS, withEdit } from '../models/board-edits.ts'
 import { NO_MOVES, type PendingMoves, settleMoves, withMove, withoutMove } from '../models/board-view.ts'
+import { type LanePicks, onlyLane, parseLanes, toggledLane, withLane } from '../models/lane-picks.ts'
 import { keepsLocal } from '../models/launch.ts'
 
 /** A toast's button (Return, after an archive), which also closes it. */
@@ -42,8 +43,11 @@ export const ARCHIVING_MS = 20_000
 export const FLY_BACK_MS = 90_000
 
 export interface BoardUi {
-  /** The lane on show, or 'all' (kept in localStorage as board.filter). */
-  filter: string
+  /**
+   * The lanes on show, in the order they were picked; none: every lane (kept in localStorage as
+   * board.filter: models/lane-picks.ts).
+   */
+  filter: LanePicks
   /**
    * The profile switch's pick: 'all' or a profile's id (kept in localStorage as board.profile).
    * One hidden or gone since reads as 'all' (models/profiles.ts pickedProfile).
@@ -80,7 +84,12 @@ export interface BoardUi {
 }
 
 export type BoardAction =
+  /** That lane alone ('all': every lane): "Show only", a digit key. */
   | { type: 'filter'; id: string }
+  /** A click on the lanes control: the lane joins those on show or leaves them ('all': every lane). */
+  | { type: 'toggleLane'; id: string }
+  /** The lane joins those on show unless it is on show already (a session started there). */
+  | { type: 'showLane'; id: string }
   | { type: 'profile'; id: string }
   | { type: 'query'; text: string }
   | { type: 'column'; id: ColumnId | null }
@@ -116,7 +125,7 @@ export function parseSeen(text: string): Seen {
 
 export function initialUi(read: (key: string, fallback: string) => string): BoardUi {
   return {
-    filter: read('board.filter', 'all'),
+    filter: parseLanes(read('board.filter', 'all')),
     profile: read('board.profile', 'all'),
     query: '',
     column: null,
@@ -147,7 +156,13 @@ function withBusy(busy: ReadonlyMap<string, string>, key: string, label: string 
 export function boardUi(state: BoardUi, action: BoardAction): BoardUi {
   switch (action.type) {
     case 'filter':
-      return { ...state, filter: action.id }
+      return { ...state, filter: onlyLane(action.id) }
+    case 'toggleLane':
+      return { ...state, filter: toggledLane(state.filter, action.id) }
+    case 'showLane': {
+      const filter = withLane(state.filter, action.id)
+      return filter === state.filter ? state : { ...state, filter }
+    }
     case 'profile':
       return { ...state, profile: action.id }
     case 'query':

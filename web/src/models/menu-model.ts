@@ -7,6 +7,7 @@
 
 import { TIDY_DAYS } from '../../../src/core/archive.ts'
 import type { Translator } from '../../../src/core/types.ts'
+import type { LanePicks } from './lane-picks.ts'
 
 /** One item of a menu; `submenu` opens beside it (null: it would, but cannot now). */
 export interface MenuItem {
@@ -27,6 +28,8 @@ export interface MenuItem {
   count?: number
   /** Set: the count in this color, as a profile's segment has it ('' for none). */
   tint?: string
+  /** Picking it leaves the menu open: a check turned on or off, with more to come (the lanes' pill). */
+  keep?: boolean
   separator?: undefined
 }
 
@@ -432,17 +435,22 @@ export function columnMenu(col: string | undefined, ctx: TidyContext): MenuEntry
 }
 
 export interface LaneMenuContext extends MenuContext {
-  /** The lane on show, or 'all'. */
-  filter: string
+  /** The lanes picked (models/lane-picks.ts); none: every lane is on show. */
+  filter: LanePicks
   /** The lane's sleeping sessions a tidy-up takes (its menu then offers it). */
   tidyCount?: ((days: number) => number) | undefined
 }
 
-/** A lane's menu: new sessions there, its category, the filter, its sleeping sessions to the archive. */
+/**
+ * A lane's menu: new sessions there, its category, the filter, its sleeping sessions to the
+ * archive. The filter: "Show only" the lane unless it is on show alone, "Show all lanes" while it
+ * is one of the lanes picked.
+ */
 export function laneMenu(cat: MenuCategory, ctx: LaneMenuContext): MenuEntry[] {
   const { t } = ctx
   const herdr = ctx.canMutate ? {} : { disabled: true, reason: ctx.canEdit ? t('mobile.readOnly') : t('live.off') }
-  const only = ctx.filter === cat.id
+  const picked = ctx.filter.includes(cat.id)
+  const alone = picked && ctx.filter.length === 1
   return tidy<MenuEntry>([
     { id: 'new', label: t('menu.newIn', { lane: cat.title }), hint: 'Shift+N', ...herdr },
     { id: 'newWorkspace', label: t('menu.newWorkspace'), ...herdr },
@@ -452,9 +460,8 @@ export function laneMenu(cat: MenuCategory, ctx: LaneMenuContext): MenuEntry[] {
       label: t('menu.editCat', { lane: cat.title }),
       ...(ctx.canEdit ? {} : { disabled: true, reason: t('live.off') }),
     },
-    only
-      ? { id: 'showAll', label: t('menu.showAll') }
-      : { id: 'showOnly', label: t('menu.showOnly', { lane: cat.title }) },
+    !alone && { id: 'showOnly', label: t('menu.showOnly', { lane: cat.title }) },
+    picked && { id: 'showAll', label: t('menu.showAll') },
     ctx.tidyCount && SEP,
     ctx.tidyCount && tidyItem({ ...ctx, tidyCount: ctx.tidyCount }),
   ])
@@ -476,7 +483,7 @@ export function boardMenu(ctx: BoardMenuContext): MenuEntry[] {
     { id: 'cats', label: t('menu.cats') },
     { id: 'archiveOpen', label: t('archive.menuOpen') },
     { id: 'sleepers', label: t('tb.sleepersTitle'), checked: ctx.sleepers },
-    ctx.filter !== 'all' && { id: 'showAll', label: t('menu.showAll') },
+    ctx.filter.length > 0 && { id: 'showAll', label: t('menu.showAll') },
     { id: 'search', label: t('menu.search'), hint: '/' },
   ])
 }

@@ -68,7 +68,7 @@ function lineFor(session: string, profile: string | null | undefined): { line: s
  * lists, named or not, has that pid. An empty list passes, as in router.mjs: herdr then shows no
  * program in front of the shell. The shell's name, for its clear key.
  */
-async function atPrompt(io: WakeHerdr, pane: string): Promise<{ shell: string | null } | null> {
+export async function atPrompt(io: WakeHerdr, pane: string): Promise<{ shell: string | null } | null> {
   const info = await io.processInfo(pane)
   if (info.shellPid === null || info.foreground.some(p => p.pid !== info.shellPid)) return null
   return { shell: info.shell }

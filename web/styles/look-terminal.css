@@ -138,7 +138,7 @@
 :root[data-look="terminal"] .icon-button:active,
 :root[data-look="terminal"] .card-actions button:active { transform: none; }
 
-/* The lanes control: options as words, the one on show in the accent between brackets. The
+/* The lanes control: options as words, those on show in the accent between brackets. The
    brackets are always there, unseen, so picking one moves nothing. */
 :root[data-look="terminal"] .segmented { padding: 0; background: none; }
 :root[data-look="terminal"] .segmented .thumb { display: none; }
@@ -146,9 +146,13 @@
 :root[data-look="terminal"] .segmented button::before { content: "["; content: "[" / ""; color: transparent; }
 :root[data-look="terminal"] .segmented button::after { content: "]"; content: "]" / ""; color: transparent; }
 :root[data-look="terminal"] .segmented button:hover { color: var(--label); }
-:root[data-look="terminal"] .segmented button[aria-selected="true"] { color: var(--accent); font-weight: 700; }
+:root[data-look="terminal"] .segmented button[aria-selected="true"],
+:root[data-look="terminal"] .segmented button[aria-pressed="true"] { color: var(--accent); font-weight: 700; }
 :root[data-look="terminal"] .segmented button[aria-selected="true"]::before,
-:root[data-look="terminal"] .segmented button[aria-selected="true"]::after { color: var(--accent); }
+:root[data-look="terminal"] .segmented button[aria-selected="true"]::after,
+:root[data-look="terminal"] .segmented button[aria-pressed="true"]::before,
+:root[data-look="terminal"] .segmented button[aria-pressed="true"]::after { color: var(--accent); }
+:root[data-look="terminal"] .segmented.lane-picks button[aria-pressed="true"] { background: none; box-shadow: none; }
 :root[data-look="terminal"] .segmented button .n { margin-left: 1ch; color: inherit; opacity: 0.7; }
 :root[data-look="terminal"] .segmented.profiles .n { color: var(--c, inherit); opacity: 1; }
 :root[data-look="terminal"] .segmented button:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
@@ -372,7 +376,10 @@
 :root[data-look="terminal"] .notice-body { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
 :root[data-look="terminal"] .attachment { border-radius: var(--radius); }
 :root[data-look="terminal"] .attachment.error { box-shadow: inset 0 0 0 1px var(--red); }
-:root[data-look="terminal"] .out-actions button { border-radius: 4px; background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .out-actions button,
+:root[data-look="terminal"] .msg .unfold { border-radius: 4px; background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .msg.user .unfold { color: var(--accent); }
+:root[data-look="terminal"] .msg.user .unfold:hover { background: var(--fill-2); }
 
 /* The message box and the buttons around it. */
 :root[data-look="terminal"] .composer-box { border-radius: var(--radius); }

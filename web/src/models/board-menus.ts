@@ -9,6 +9,7 @@
 import { archiveBlock } from '../../../src/core/archive.ts'
 import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
+import type { LanePicks } from './lane-picks.ts'
 import {
   boardMenu,
   cardMenu,
@@ -93,6 +94,7 @@ export interface BoardMenuActions {
   newSession(ctx: MenuLaunchContext, from: MenuOrigin): unknown
   /** The categories panel, at a lane. */
   cats(id?: string): unknown
+  /** That lane alone on show ('all': every lane). */
   filter(id: string): unknown
   sleepers(): unknown
   search(): unknown
@@ -123,7 +125,8 @@ export interface BoardMenuDeps {
   category(it: Item): string
   state(): {
     open: string | null
-    filter: string
+    /** The lanes picked (models/lane-picks.ts). */
+    filter: LanePicks
     sleepers: boolean
     data: {
       categories: readonly MenuCategory[]

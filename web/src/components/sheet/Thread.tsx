@@ -2,8 +2,9 @@
 // board), runs of tool calls folded into one line that opens to show them, the question forms
 // the session asked with their answers, and background tasks reporting back and board reminders
 // as quiet lines. A call that works with others is a line of its own, and another session's or a
-// teammate's message a bubble with their name (ThreadLinks.tsx). Paths in it are candidates the
-// file chips take up (data-path; components/sheet/Sheet.tsx hands them over after every draw).
+// teammate's message a bubble with their name (ThreadLinks.tsx). A very long message folds at two
+// screens until "Show all" (MessageText.tsx). Paths in it are candidates the file chips take up
+// (data-path; components/sheet/Sheet.tsx hands them over after every draw).
 // The helpers window draws a helper's own conversation with it too. At its foot (Waiting): the
 // user's messages Claude has not taken in yet, and the board's own on their way or not sent.
 import { type ReactNode, useLayoutEffect, useRef } from 'react'
@@ -30,6 +31,7 @@ import {
   SpinGlyph,
   StopGlyph,
 } from '../icons.tsx'
+import { MessageText } from './MessageText.tsx'
 import {
   LinkLine,
   NO_LINKS,
@@ -53,9 +55,10 @@ export function Thread({ conversation, item, links = NO_LINKS, helper = null }: 
   const t = useT()
   const parts = threadParts(conversation, item, t, { helper })
   const used = new Set<string>()
+  const sameTime = sameTimeOrdinals(parts)
   return parts.map((part, n) => {
     // A task can report twice at one time under one id: the second keeps its own key.
-    const wanted = keyOf(part, n)
+    const wanted = keyOf(part, n, sameTime[n] ?? 0)
     const key = used.has(wanted) ? `${wanted}-${n}` : wanted
     used.add(key)
     return <ThreadTurn key={key} part={part} item={item} links={links} helper={helper} />
@@ -64,13 +67,34 @@ export function Thread({ conversation, item, links = NO_LINKS, helper = null }: 
 
 /**
  * A fold keeps its place among the folds, a notice that opens its task and time (a redraw leaves
- * the one open that was), a line that works with others its call; the rest go by order.
+ * the one open that was), a line that works with others its call, a message its side, its time and
+ * `same` (one opened stays open as the thread moves on); the rest go by order.
  */
-function keyOf(part: ThreadPart, n: number): string {
+function keyOf(part: ThreadPart, n: number, same: number): string {
   if (part.kind === 'tools') return `tools-${part.i}`
   if (part.kind === 'notice') return noticeId(part.turn) ?? `notice-${n}`
   if (part.kind === 'link') return `link-${part.turn.id ?? n}`
+  if (part.kind === 'message' || part.kind === 'peer')
+    return `${part.kind}-${part.turn.role}-${part.turn.at}${same ? `-${same}` : ''}`
   return `${part.kind}-${n}`
+}
+
+/**
+ * For each message, how many after it have its side and time (the text blocks of one pi message
+ * share its time): counted from the newest, as the window drops the oldest.
+ */
+function sameTimeOrdinals(parts: readonly ThreadPart[]): number[] {
+  const seen = new Map<string, number>()
+  const out = parts.map(() => 0)
+  for (let n = parts.length - 1; n >= 0; n--) {
+    const part = parts[n]
+    if (part?.kind !== 'message' && part?.kind !== 'peer') continue
+    const at = `${part.kind}-${part.turn.role}-${part.turn.at}`
+    const same = seen.get(at) ?? 0
+    out[n] = same
+    seen.set(at, same + 1)
+  }
+  return out
 }
 
 /** The key a notice with something to open is kept open by: a task can report several times under one id. */
@@ -91,11 +115,10 @@ function ThreadTurn({ part, item, links, helper }: TurnProps) {
   if (part.kind === 'peer') return <PeerBubble turn={part.turn} item={item} helper={helper} links={links} />
   if (part.kind === 'notice') return <Notice turn={part.turn} links={links} />
   if (part.kind === 'message') {
-    const { role, text, at } = part.turn
+    const { role, text, at, cut } = part.turn
     return (
       <div className={`msg ${role}`}>
-        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: markdown() escapes every piece of text itself and makes only known tags */}
-        <div className="md" dangerouslySetInnerHTML={{ __html: markdown(text) }} />
+        <MessageText text={text} cut={cut} onResize={links.onResize} />
         <Thumbs text={text} />
         <span className="when">{clockText(at, t)}</span>
       </div>

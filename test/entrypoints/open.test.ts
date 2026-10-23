@@ -265,6 +265,221 @@ for (const background of [false, true]) {
   }, 10_000)
 }
 
+// After a restart Windows may give the old board's pid to another program (an AMD driver's helper,
+// say): the pid lives, but the pane herdr restored holds a bare shell. board.json names the board's
+// host too (run.ts, the pane's own process), and herdr says what runs in the pane (#188).
+const HOST = 61104
+const label = 'Agent board'
+const withLabel = <T extends { pane_id: string }>(panes: T[], ids: string[]): (T & { label?: string })[] =>
+  panes.map(p => (ids.includes(p.pane_id) ? { ...p, label } : p))
+const labelled = { ...restored, panes: withLabel(restored.panes, ['wZ:p2']) }
+/** herdr 0.9.5's `pane process-info` answer for a pane whose own process is `pid`, idle in the foreground. */
+const processInfo = (pid: number, argv: string[]) => ({
+  result: {
+    type: 'pane_process_info',
+    process_info: {
+      shell_pid: pid,
+      foreground_process_group_id: pid,
+      foreground_processes: [{ name: 'x.exe', pid, argv, cmdline: argv.join(' '), cwd: root }],
+    },
+  },
+})
+const bareShell = (pid: number) => processInfo(pid, ['C:\\Program Files\\Git\\bin\\bash.exe', '-l'])
+const runningBoard = (pid: number) => processInfo(pid, [process.execPath, 'src/entrypoints/run.ts'])
+
+for (const pid of ['reused', 'dead'] as const) {
+  for (const background of [false, true]) {
+    test(`open: a restored pane, its pid ${pid}, is closed and a new board opens (background=${background})`, async () => {
+      const box = await boardBox({
+        pane: 'wZ:p2',
+        pid: pid === 'reused' ? process.pid : await deadPid(),
+        host: HOST,
+        overlay: false,
+      })
+      box.state({
+        'api snapshot': {
+          result: { snapshot: labelled },
+          until: ['pane close'],
+          // biome-ignore lint/suspicious/noThenProperty: the fake herdr's reply after the close (test/support/fake-herdr.ts)
+          then: { seq: [{ result: { snapshot: closed } }, { result: { snapshot: reopened } }] },
+        },
+        'pane process-info --pane wZ:p2': bareShell(13800),
+        'pane close': { result: {} },
+        'plugin pane open': { result: { plugin_pane: { pane: { pane_id: 'wZ:p9' } } } },
+        'plugin pane focus': notPlugin,
+        'plugin pane close': notPlugin,
+        'tab close': { result: {} },
+        'tab focus': { result: {} },
+        'pane zoom': { result: {} },
+      })
+      const out = await box.open(background).exited
+      assert.equal(out.code, 0, out.stderr)
+      // A dead pid needs no word from herdr, as before.
+      const asked = pid === 'reused' ? ['pane process-info --pane wZ:p2'] : []
+      assert.deepEqual(
+        said(box),
+        background
+          ? [
+              'api snapshot',
+              ...asked,
+              'pane close wZ:p2',
+              'api snapshot',
+              'plugin pane open --no-focus --placement tab --workspace wZ',
+              'tab close board-tab',
+            ]
+          : [
+              'api snapshot',
+              ...asked,
+              'pane close wZ:p2',
+              'api snapshot',
+              'plugin pane open --focus --placement tab --workspace wZ',
+              'tab close board-tab',
+              'api snapshot',
+              'tab focus new-tab',
+              'pane zoom wZ:p9 --on',
+            ],
+      )
+    }, 10_000)
+  }
+}
+
+// A board that runs, with its host in board.json: herdr is asked once, and the board is focused,
+// toggled back or left alone as before; so it is when herdr cannot answer (an older herdr).
+for (const answer of ['board', 'error'] as const) {
+  for (const focused of [false, true]) {
+    for (const background of [false, true]) {
+      test(`open: a running board with its host, process-info ${answer}, focused=${focused}, background=${background}`, async () => {
+        const box = await boardBox({ pane: 'wZ:p2', pid: process.pid, host: HOST, overlay: false })
+        box.state({
+          'api snapshot': { result: { snapshot: { ...labelled, focused_pane_id: focused ? 'wZ:p2' : 'w1:p1' } } },
+          'pane process-info --pane wZ:p2':
+            answer === 'board' ? runningBoard(HOST) : { error: "unrecognized subcommand 'process-info'" },
+          'plugin pane focus': { result: {} },
+          'plugin pane close': { result: {} },
+          'tab focus': { result: {} },
+          'pane zoom': { result: {} },
+        })
+        const out = await box.open(background).exited
+        assert.equal(out.code, 0, out.stderr)
+        const asked = ['api snapshot', 'pane process-info --pane wZ:p2']
+        assert.deepEqual(
+          said(box),
+          background
+            ? asked
+            : focused
+              ? [...asked, 'plugin pane close wZ:p2']
+              : [...asked, 'plugin pane focus wZ:p2', 'tab focus board-tab', 'pane zoom wZ:p2 --on'],
+        )
+      }, 10_000)
+    }
+  }
+}
+
+// Panes herdr restored from earlier boards stay beside the board that runs (two "Agent board" tabs).
+// Those with the board's label and nothing but an idle shell in them are closed, wherever they are;
+// a second board, a labelled pane that runs something else and the user's panes stay.
+const crowded = {
+  panes: [
+    ...withLabel(restored.panes, ['wZ:p2']),
+    { pane_id: 'wZ:p5', tab_id: 'old-tab', workspace_id: 'wZ', label },
+    { pane_id: 'wZ:p6', tab_id: 'old-tab', workspace_id: 'wZ', tokens: sidebar },
+    { pane_id: 'w1:p7', tab_id: 'user-tab', workspace_id: 'w1', label },
+    { pane_id: 'w1:p8', tab_id: 'tab-board', workspace_id: 'w1', label },
+  ],
+  workspaces: restored.workspaces,
+  tabs: [...restored.tabs, { tab_id: 'old-tab', workspace_id: 'wZ' }, { tab_id: 'tab-board', workspace_id: 'w1' }],
+  focused_pane_id: 'w1:p1',
+}
+const swept = {
+  ...crowded,
+  panes: crowded.panes.filter(p => p.tab_id !== 'old-tab'),
+  tabs: crowded.tabs.filter(t => t.tab_id !== 'old-tab'),
+}
+
+for (const background of [false, true]) {
+  test(`open: a restored board shell beside the running board is closed with its tab (background=${background})`, async () => {
+    const box = await boardBox({ pane: 'wZ:p2', pid: process.pid, host: HOST, overlay: false })
+    box.state({
+      'api snapshot': {
+        result: { snapshot: crowded },
+        until: ['tab close'],
+        // biome-ignore lint/suspicious/noThenProperty: the fake herdr's reply after the close (test/support/fake-herdr.ts)
+        then: { result: { snapshot: swept } },
+      },
+      'pane process-info --pane wZ:p2': runningBoard(HOST),
+      'pane process-info --pane wZ:p5': bareShell(13800),
+      'pane process-info --pane w1:p7': {
+        result: {
+          process_info: { shell_pid: 7000, foreground_processes: [{ pid: 7001, argv: ['vim', 'notes.md'] }] },
+        },
+      },
+      'pane process-info --pane w1:p8': runningBoard(8000),
+      'tab close': { result: {} },
+      'plugin pane focus': { result: {} },
+      'tab focus': { result: {} },
+      'pane zoom': { result: {} },
+    })
+    const out = await box.open(background).exited
+    assert.equal(out.code, 0, out.stderr)
+    const sweep = [
+      'api snapshot',
+      'pane process-info --pane wZ:p2',
+      'pane process-info --pane wZ:p5',
+      'pane process-info --pane w1:p7',
+      'pane process-info --pane w1:p8',
+      'tab close old-tab',
+      'api snapshot',
+    ]
+    assert.deepEqual(
+      said(box),
+      background ? sweep : [...sweep, 'plugin pane focus wZ:p2', 'tab focus board-tab', 'pane zoom wZ:p2 --on'],
+    )
+  }, 10_000)
+}
+
+// The start ran before herdr put the restored board pane back (or board.json named another pane):
+// with no board to go by, the restored shell is closed before a new board opens.
+for (const background of [false, true]) {
+  test(`open: a restored board shell with no board.json is closed before a new board opens (background=${background})`, async () => {
+    const box = await boardBox(undefined)
+    // The board's workspace goes with its only tab; a new one comes with a shell tab.
+    const gone = {
+      ...restored,
+      panes: restored.panes.filter(p => p.workspace_id !== 'wZ'),
+      workspaces: restored.workspaces.filter(w => w.workspace_id !== 'wZ'),
+      tabs: restored.tabs.filter(t => t.workspace_id !== 'wZ'),
+    }
+    box.state({
+      'api snapshot': {
+        result: { snapshot: labelled },
+        until: ['tab close'],
+        // biome-ignore lint/suspicious/noThenProperty: the fake herdr's reply after the close (test/support/fake-herdr.ts)
+        then: { result: { snapshot: gone } },
+      },
+      'pane process-info --pane wZ:p2': bareShell(13800),
+      'tab close': { result: {} },
+      'workspace create': { result: { workspace: { workspace_id: 'w2' }, tab: { tab_id: 'initial-shell' } } },
+      'plugin pane open': { result: { plugin_pane: { pane: { pane_id: 'w2:p2' } } } },
+      'tab focus': { result: {} },
+      'pane zoom': { result: {} },
+    })
+    const out = await box.open(background).exited
+    assert.equal(out.code, 0, out.stderr)
+    const calls = said(box)
+    assert.deepEqual(calls.slice(0, 4), [
+      'api snapshot',
+      'pane process-info --pane wZ:p2',
+      'tab close board-tab',
+      'api snapshot',
+    ])
+    assert.match(calls[4] ?? '', /^workspace create --label Board /)
+    assert.deepEqual(calls.slice(5, 7), [
+      `plugin pane open ${background ? '--no-focus' : '--focus'} --placement tab --workspace w2`,
+      'tab close initial-shell',
+    ])
+  }, 10_000)
+}
+
 // Wake (#119) has a startup entry of its own beside the board's: herdr runs them side by side and
 // waits for neither. The board's start must not know wake, nor wait for it, whatever it does.
 test('the board opens whatever wake’s start does: failing, hanging, or missing', async () => {

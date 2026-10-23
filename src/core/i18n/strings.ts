@@ -67,6 +67,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'limits.hintUsagebar':
       'Claude usage, {time}. From the usagebar cache of the default profile; the board does not check it is the account of these sessions.',
     'limits.stale': 'Claude usage, {time}: an old reading, the windows may have reset since.',
+    'limits.forecastOut': '{window}: at this pace it runs out at {at}, before the reset ({reset}).',
+    'limits.forecastLasts': '{window}: at this pace it lasts until the reset ({reset}).',
 
     'mobile.readOnly': 'No fresh data from herdr: sending and going to sessions wait until it is back',
     'attention.unseen': 'Not viewed',
@@ -294,6 +296,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'tb.lanes': 'Categories',
     // the lanes control folded into one pill (web/src/components/SegmentPick.tsx)
     'tb.lanesPick': 'Category: {title}',
+    // the same with several lanes on show, {title} their names
+    'tb.lanesPicked': 'Categories: {title}',
     'tb.search': 'Search',
     'tb.sleepersTitle': 'Show sleeping sessions',
     'tb.cats': 'Categories',
@@ -308,6 +312,10 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'set.look': 'Style',
     'set.look.classic': 'Classic',
     'set.look.terminal': 'Terminal',
+    // how a card shows text longer than its line (web/src/models/card-text.ts): cut short or wrapped
+    'set.cardText': 'Card text',
+    'set.cardText.cut': 'Cut short',
+    'set.cardText.wrap': 'Wrap',
     'set.lang': 'Language',
     'set.panel': 'Session panel',
     'set.fold': 'Sleeping in Waiting',
@@ -404,6 +412,9 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'asked.terminal': 'Answer in the terminal: Go to herdr',
     'thread.title': 'Conversation',
     'thread.empty': 'Nothing yet',
+    'thread.whole': 'Show all',
+    'thread.less': 'Show less',
+    'thread.cut': "Cut for length: the rest is in the session's file",
     'run.now': 'Now: {tool}',
     'run.actions': ['{n} action', '{n} actions'],
     'notice.line': '{kind} “{name}”: {status}',
@@ -640,6 +651,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'limits.hintUsagebar':
       'Расход Claude, {time}. Из кэша usagebar профиля по умолчанию; доска не проверяет, что это аккаунт этих сессий.',
     'limits.stale': 'Расход Claude, {time}: старые данные, окна могли уже обнулиться.',
+    'limits.forecastOut': '{window}: в таком темпе кончится в {at}, раньше сброса ({reset}).',
+    'limits.forecastLasts': '{window}: в таком темпе хватит до сброса ({reset}).',
 
     'mobile.readOnly': 'Нет свежих данных от herdr: отправка и переход к сессиям подождут, пока они вернутся',
     'attention.unseen': 'Не просмотрено',
@@ -866,6 +879,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'tb.lanes': 'Категории',
     // the lanes control folded into one pill (web/src/components/SegmentPick.tsx)
     'tb.lanesPick': 'Категория: {title}',
+    'tb.lanesPicked': 'Категории: {title}',
     'tb.search': 'Поиск',
     'tb.sleepersTitle': 'Показывать спящие сессии',
     'tb.cats': 'Категории',
@@ -879,6 +893,9 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'set.look': 'Стиль',
     'set.look.classic': 'Классический',
     'set.look.terminal': 'Терминал',
+    'set.cardText': 'Текст карточек',
+    'set.cardText.cut': 'Обрезать',
+    'set.cardText.wrap': 'Переносить',
     'set.lang': 'Язык',
     'set.panel': 'Панель сессии',
     'set.fold': 'Спящие в «Ждёт внешнего»',
@@ -974,6 +991,9 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'asked.terminal': 'Ответь в терминале: Перейти в herdr',
     'thread.title': 'Переписка',
     'thread.empty': 'Пока пусто',
+    'thread.whole': 'Показать всё',
+    'thread.less': 'Свернуть',
+    'thread.cut': 'Обрезано по длине: остальное в файле сессии',
     'run.now': 'Сейчас: {tool}',
     'run.actions': ['{n} действие', '{n} действия', '{n} действий'],
     'notice.line': '{kind} «{name}»: {status}',

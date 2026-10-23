@@ -7,7 +7,7 @@ import {
   type FoldControl,
   foldsNow,
   nextFold,
-  pickedOption,
+  pickedOptions,
   segmentMenu,
   withFold,
 } from '../../web/src/models/segment-fold.ts'
@@ -123,7 +123,7 @@ describe('the choices as a menu', () => {
   ]
 
   test('every choice with its count, the one on show checked', () => {
-    expect(segmentMenu(LANES, 'blu', false)).toEqual([
+    expect(segmentMenu(LANES, ['blu'], false)).toEqual([
       { id: 'all', label: 'Все', checked: false, count: 4 },
       { id: 'blu', label: 'bluBanyan', checked: true, count: 3 },
       { id: 'proj', label: 'Проекты', checked: false, count: 1 },
@@ -131,16 +131,31 @@ describe('the choices as a menu', () => {
   })
 
   test('a profile’s count in its color, as its segment has it; "All profiles" has none', () => {
-    expect(segmentMenu(PROFILES, 'default', true)).toEqual([
+    expect(segmentMenu(PROFILES, ['default'], true)).toEqual([
       { id: 'all', label: 'Все профили', checked: false, count: 4, tint: '' },
       { id: 'default', label: 'Private', checked: true, count: 1, tint: '#5856D6' },
       { id: 'work', label: 'Work', checked: false, count: 3, tint: '#30B0C7' },
     ])
   })
 
-  test('the choice the pill names: the one picked, else the first, as the thumb has it', () => {
-    expect(pickedOption(LANES, 'proj')).toEqual({ id: 'proj', title: 'Проекты', n: 1 })
-    expect(pickedOption(LANES, 'gone')).toEqual({ id: 'all', title: 'Все', n: 4 })
-    expect(pickedOption([], 'all')).toBe(null)
+  test('several on show (the lanes): each checked, and each keeps the menu open but "All"', () => {
+    expect(segmentMenu(LANES, ['proj', 'blu'], false, true)).toEqual([
+      { id: 'all', label: 'Все', checked: false, count: 4 },
+      { id: 'blu', label: 'bluBanyan', checked: true, count: 3, keep: true },
+      { id: 'proj', label: 'Проекты', checked: true, count: 1, keep: true },
+    ])
+    expect(segmentMenu(LANES, ['all'], false, true).map(i => [i.id, i.checked, !!i.keep])).toEqual([
+      ['all', true, false],
+      ['blu', false, true],
+      ['proj', false, true],
+    ])
+  })
+
+  test('the choices the pill names: those lit in the segments’ order, else the first', () => {
+    expect(pickedOptions(LANES, ['proj'])).toEqual([{ id: 'proj', title: 'Проекты', n: 1 }])
+    expect(pickedOptions(LANES, ['proj', 'blu']).map(o => o.id)).toEqual(['blu', 'proj'])
+    expect(pickedOptions(LANES, ['gone', 'proj']).map(o => o.id)).toEqual(['proj'])
+    expect(pickedOptions(LANES, ['gone'])).toEqual([{ id: 'all', title: 'Все', n: 4 }])
+    expect(pickedOptions([], ['all'])).toEqual([])
   })
 })

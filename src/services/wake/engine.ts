@@ -8,20 +8,44 @@
 // (call 9): a session is put to sleep only when the wake line could bring it back.
 //
 // A session's profile is its folder, the one whose registry has it; the listed profile's id only
-// names it on the wake line. Wake acts on Claude panes and Claude session ids only: never on pi's
-// panes, nor on a `pane-<id>` key.
+// names it on the wake line. The reaper, the session file and the old router's answers are about
+// Claude panes and Claude session ids only: never pi's panes, nor a `pane-<id>` key. A pi session
+// is put to sleep and woken only when asked (#178), kept in a file of its own (`wake-pi.json`, by
+// its session file) and listed by /sleeping?agents=all only (services/wake/pi.ts).
+import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { readCard } from '../../adapters/cards.ts'
 import type { LiveSession } from '../../adapters/claude-home.ts'
 import type { HerdrSnapshot } from '../../adapters/herdr.ts'
 import type { LiveHit, ProfileHomes } from '../../adapters/profile-homes.ts'
-import { peekWakeSessions, readWakeSessions, saveWakeSessions } from '../../adapters/wake-files.ts'
+import {
+  peekPiSleepers,
+  peekWakeSessions,
+  readPiSleepers,
+  readWakeSessions,
+  savePiSleepers,
+  saveWakeSessions,
+} from '../../adapters/wake-files.ts'
 import type { WakeHerdr } from '../../adapters/wake-herdr.ts'
 import { sameDir } from '../../core/launch/names.ts'
+import { isPiSessionFile, parsePiTail, piProvider, piSessionCwd, piSessionId } from '../../core/pi.ts'
 import { absoluteProfileDir, defaultProfileDir, type ProfileSet, profileForDir } from '../../core/profiles.ts'
 import { SESSION_ID } from '../../core/resume.ts'
 import type { ReaperConfig, WakeConfig } from '../../core/wake/config.ts'
+import {
+  findPiSleeper,
+  type PiSleeper,
+  type PiSleepers,
+  type PiSleepingAnswer,
+  piSleeperPane,
+  piSleepingOf,
+  piWakeLine,
+  piWoken,
+  sleepLabel,
+} from '../../core/wake/pi.ts'
 import { type ReapEntry, type Running, reapPlan } from '../../core/wake/reaper.ts'
-import { CANNOT_WAKE, canWake, plainProfile, type WakeProfile } from '../../core/wake/rules.ts'
+import { CANNOT_WAKE, canWake, clearKeyFor, plainProfile, type WakeProfile } from '../../core/wake/rules.ts'
 import {
   type AwakeAnswer,
   awakeOf,
@@ -38,6 +62,7 @@ import {
 } from '../../core/wake/sessions.ts'
 import type { TelegramStatus } from '../../core/wake/status.ts'
 import {
+  atPrompt,
   PROFILE_NOT_PLAIN,
   putToSleep,
   type SleepMarks,
@@ -45,6 +70,7 @@ import {
   type WakeOutcome,
   wakeInPane,
 } from './pane-ops.ts'
+import { defaultPiOps, type PiOps, putPiToSleep, wakePi } from './pi.ts'
 
 export interface WakeEngineDeps {
   herdr: WakeHerdr
@@ -68,9 +94,18 @@ export interface WakeEngineDeps {
    * written, so the wake process stays its one writer.
    */
   readOnly?: boolean
+  /** pi's sleepers (#178); default: `wake-pi.json` beside the session file. */
+  piFile?: string
+  /** What putting pi to sleep and waking it need (services/wake/pi.ts); default: the real ones over `herdr`. */
+  pi?: PiOps
+  /** A pi session's card: the name given on the board and the folder its bridge last reported; default: the card store. */
+  piCard?(session: string): { name?: string; account?: string }
 }
 
 export type TargetAnswer = { ok: true; pane: string; name: string; already?: true } | { ok: false; error: string }
+
+/** A sleeper as `GET /sleeping?agents=all` lists it: Claude's as /sleeping does, then pi's (#178). */
+export type AnySleepingAnswer = SleepingAnswer | PiSleepingAnswer
 
 export interface StatusAnswer {
   pid: number
@@ -103,6 +138,13 @@ export interface WakeEngine {
   /** Looks at herdr and the registries, and keeps who runs where in the session file. */
   remember(): Promise<void>
   sleeping(): Promise<SleepingAnswer[]>
+  /** Claude's sleepers, then pi's (#178): what the board shows. */
+  sleepingAll(): Promise<AnySleepingAnswer[]>
+  /**
+   * A pane at its shell where pi was stopped by hand taken as that pi session asleep there (#178):
+   * kept, labelled and given the wake line, as if wake had put it to sleep.
+   */
+  adoptPi(pane: unknown, session: unknown): Promise<TargetAnswer>
   awake(): Promise<AwakeAnswer[]>
   status(): Promise<StatusAnswer>
   wake(target: unknown): Promise<TargetAnswer>
@@ -211,6 +253,33 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       })
   if (setAside) save()
 
+  // pi's sleepers (#178): the same one writer, in a file of their own.
+  const piFile = deps.piFile ?? join(dirname(deps.sessionsFile), 'wake-pi.json')
+  const piOps = deps.pi ?? defaultPiOps(deps.herdr)
+  let pis: PiSleepers = deps.readOnly ? peekPiSleepers(piFile) : readPiSleepers(piFile, text => deps.log(text))
+  /** pi sessions between their record and their pane's shell: still running, not woken. */
+  const piGoing = new Set<string>()
+
+  function savePis(): void {
+    if (deps.readOnly) return
+    try {
+      savePiSleepers(pis, piFile)
+    } catch (err) {
+      deps.log(`could not save ${piFile}: ${messageOf(err)}`)
+    }
+  }
+
+  const piCard = (session: string): { name?: string; account?: string } => {
+    if (deps.piCard) return deps.piCard(session)
+    try {
+      const card = readCard(session)
+      const account = absoluteProfileDir(card?.profileDir, homedir(), platform) ?? undefined
+      return { ...(card?.name && { name: card.name }), ...(account && { account }) }
+    } catch {
+      return {}
+    }
+  }
+
   /** A failed save is logged: what wake holds stays, and the next change saves it again. Read only, nothing is saved. */
   function save(): void {
     if (deps.readOnly) return
@@ -278,7 +347,111 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       deps.log(`${s?.name || s?.title || ''} in ${pane} was exited, wakeable from now on`)
     }
     for (const { pane, label } of r.renames) await deps.herdr.rename(pane, label).catch(() => {})
+    await rememberPi(seen.snap)
     return seen
+  }
+
+  /**
+   * pi's sleepers after a look (#178): one whose session runs in a pane again is awake (its own
+   * pane's 💤 label cleared), one whose session file is gone is forgotten. Nothing is asked of
+   * herdr while there are none.
+   */
+  async function rememberPi(snap: HerdrSnapshot): Promise<void> {
+    if (!Object.keys(pis).length) return
+    const woken = piWoken(snap, pis).filter(file => !piGoing.has(file))
+    for (const file of woken) {
+      const s = pis[file]
+      if (s) await forgetPi(s, snap, 'is awake again')
+    }
+    for (const s of Object.values(pis))
+      if (!piGoing.has(s.session) && !piOps.exists(s.session)) await forgetPi(s, snap, 'has no session file any more')
+  }
+
+  /** The sleeper forgotten, saved, and its own pane's 💤 label cleared while it still has it. */
+  async function forgetPi(s: PiSleeper, snap: HerdrSnapshot | null, why: string): Promise<void> {
+    if (!pis[s.session]) return
+    const { [s.session]: _gone, ...rest } = pis
+    pis = rest
+    savePis()
+    deps.log(`${s.name || s.session} (pi) ${why}: no longer asleep in ${s.pane}`)
+    const pane = snap?.panes.find(p => p.pane_id === s.pane)
+    if (!snap || pane?.label === sleepLabel(s)) await deps.herdr.rename(s.pane, null).catch(() => {})
+  }
+
+  /**
+   * A pane herdr shows running pi on a session file, by its pane id, that file or the file's id; a
+   * pi pane whose session herdr does not name by its file (a `pane-<id>` key) is none.
+   */
+  function piPane(target: unknown, snap: HerdrSnapshot): HerdrSnapshot['panes'][number] | undefined {
+    const t = String(target ?? '').trim()
+    if (!t) return undefined
+    return snap.panes.find(p => {
+      const file = p.agent === 'pi' ? p.agent_session?.value : undefined
+      return isPiSessionFile(file) && (p.pane_id === t || file === t || piSessionId(file) === t)
+    })
+  }
+
+  /**
+   * The name a pi session is put to sleep under: its card's, else its own (/name, --name: at the end
+   * of its file, else anywhere in it), else pi's title in its pane. A pane taken over is a shell,
+   * whose title is the shell's: `π - <folder>` then, as pi's own title reads without a name.
+   */
+  function piName(file: string, pane: HerdrSnapshot['panes'][number], lines: string[] | null, shell = false): string {
+    const own = piCard(file).name || (lines ? parsePiTail(lines).name : '') || piOps.sessionName(file)
+    if (own) return own
+    if (shell) return `π - ${(pane.cwd ?? '').split(/[\\/]/).filter(Boolean).pop() ?? ''}`.trim()
+    return pane.terminal_title_stripped || pane.label || pane.pane_id
+  }
+
+  const workspaceLabel = (snap: HerdrSnapshot, id: string | undefined): string | undefined =>
+    id === undefined ? undefined : (snap.workspaces.find(w => w.workspace_id === id)?.label ?? undefined)
+
+  /** putPiToSleep for the pi pane, its sleeper kept from `going` on (#178). */
+  async function sleepPi(pane: HerdrSnapshot['panes'][number], snap: HerdrSnapshot): Promise<TargetAnswer> {
+    const file = pane.agent_session?.value ?? ''
+    const name = piName(file, pane, piOps.tail(file))
+    const label = workspaceLabel(snap, pane.workspace_id)
+    const account = piCard(file).account
+    const marks = {
+      going(s: PiSleeper) {
+        piGoing.add(file)
+        pis = { ...pis, [file]: s }
+        savePis()
+      },
+      stayed() {
+        const { [file]: _gone, ...rest } = pis
+        pis = rest
+        savePis()
+      },
+    }
+    try {
+      const r = await putPiToSleep(
+        piOps,
+        {
+          pane: pane.pane_id,
+          session: file,
+          name,
+          ...(label && { workspaceLabel: label }),
+          ...(account && { account }),
+        },
+        marks,
+        { ...timing, boardOnPath: deps.boardOnPath() },
+      )
+      return r.ok ? { ok: true, pane: pane.pane_id, name } : { ok: false, error: r.error }
+    } finally {
+      piGoing.delete(file)
+    }
+  }
+
+  /** wakePi for the sleeper, forgotten once it is up (#178). */
+  async function wakePiNow(s: PiSleeper, snap: HerdrSnapshot): Promise<TargetAnswer> {
+    const timeoutMs = deps.settings().wakeTimeoutSec * 1000
+    const outcome = await wakePi(piOps, s, snap, { ...timing, timeoutMs })
+    if (!outcome.ok) return { ok: false, error: outcome.error }
+    // Its old pane, when it woke elsewhere, keeps its label only while it is still a shell there.
+    await forgetPi(s, outcome.pane === s.pane ? null : await snapshotNow().catch(() => null), 'woke')
+    deps.log(`woke ${s.name} (pi) in ${outcome.pane} on request`)
+    return { ok: true, pane: outcome.pane, name: s.name }
   }
 
   /** Wake's entries whose session is a Claude session id (never a `pane-<id>` key). */
@@ -448,6 +621,62 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
 
     sleeping,
 
+    async sleepingAll() {
+      const snap = await snapshotNow()
+      const claude = sleepingOf(snap, sessions).filter(s => SESSION_ID.test(s.session))
+      return [...claude, ...piSleepingOf(snap, pis)]
+    },
+
+    adoptPi: (target, session) =>
+      during(async (): Promise<TargetAnswer> => {
+        const seen = await look()
+        const paneId = String(target ?? '').trim()
+        const file = String(session ?? '').trim()
+        const pane = seen.snap.panes.find(p => p.pane_id === paneId)
+        if (!pane) return { ok: false, error: `herdr has no pane ${paneId}` }
+        if (!isPiSessionFile(file) || !piOps.exists(file)) return { ok: false, error: `no pi session file ${file}` }
+        const running = piPane(file, seen.snap)
+        if (running) return { ok: false, error: `${file} runs in ${running.pane_id}: it is not asleep` }
+        const known = pis[file]
+        if (known) return { ok: true, pane: known.pane, name: known.name, already: true }
+        if (pane.agent) return { ok: false, error: `${paneId} runs ${pane.agent}, not a shell` }
+        const line = piWakeLine(file)
+        if (!line) return { ok: false, error: `${file}'s name has no id to wake it by` }
+        if (!deps.boardOnPath()) return { ok: false, error: `it cannot be woken: ${CANNOT_WAKE.board}` }
+        const lines = piOps.tail(file)
+        const card = piCard(file)
+        const name = piName(file, pane, lines, true)
+        const label = workspaceLabel(seen.snap, pane.workspace_id)
+        const provider = lines ? piProvider(lines) : ''
+        let started = ''
+        try {
+          started = piSessionCwd(readFileSync(file, 'utf8').split('\n', 1)[0] ?? '')
+        } catch {}
+        const sleeper: PiSleeper = {
+          session: file,
+          name,
+          pane: paneId,
+          ...(pane.workspace_id !== undefined && { workspace: pane.workspace_id }),
+          ...(label && { workspaceLabel: label }),
+          cwd: pane.cwd || started,
+          argv: [],
+          ...(card.account && { account: card.account }),
+          ...(provider && { provider }),
+          slept_at: now(),
+          adopted: true,
+        }
+        pis = { ...pis, [file]: sleeper }
+        savePis()
+        await deps.herdr.rename(paneId, sleepLabel(sleeper)).catch(() => {})
+        const prompt = await atPrompt(deps.herdr, paneId).catch(() => null)
+        if (prompt) {
+          await deps.herdr.sendKeys(paneId, clearKeyFor(prompt.shell, platform)).catch(() => {})
+          await deps.herdr.sendText(paneId, line).catch(() => {})
+        }
+        deps.log(`took ${name} (pi) as asleep in ${paneId}${card.account ? `, account ${card.account}` : ''}`)
+        return { ok: true, pane: paneId, name }
+      }),
+
     async awake() {
       const seen = await view()
       return awakeOf(await planOf(seen), deps.settings().reaper, profilesByPane(seen))
@@ -471,7 +700,14 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       during(async (): Promise<TargetAnswer> => {
         const seen = await look()
         const s = find(target, seen.snap)
-        if (!s) return { ok: false, error: `no session named ${String(target)} in herdr` }
+        if (!s) {
+          const p = findPiSleeper(target, pis)
+          if (p) return wakePiNow(p, seen.snap)
+          // Its session runs already (woken by hand, or the list the caller read was older).
+          const up = piPane(target, seen.snap)
+          if (up) return { ok: true, pane: up.pane_id, name: up.terminal_title_stripped ?? '', already: true }
+          return { ok: false, error: `no session named ${String(target)} in herdr` }
+        }
         if (s.live) return { ok: true, pane: s.pane, name: s.name, already: true }
         const outcome = await wakeIn(s.pane, s, seen.set)
         if (!outcome.ok) return { ok: false, error: outcome.error }
@@ -486,6 +722,10 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       during(async (): Promise<TargetAnswer> => {
         const seen = await look()
         const s = find(target, seen.snap)
+        if (!s) {
+          const pi = piPane(target, seen.snap)
+          if (pi) return sleepPi(pi, seen.snap)
+        }
         if (!s?.live) return { ok: false, error: `no running session named ${String(target)}` }
         // Idle in its own profile's registry (#150).
         const hit = seen.hits.get(s.session)
@@ -524,14 +764,26 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     wakePane: pane =>
       during(async (): Promise<WakeOutcome> => {
         const entry = sessions[pane]
-        if (!entry || !SESSION_ID.test(entry.session))
-          return { ok: false, why: 'line', error: `no Claude session is known in ${pane}` }
+        if (!entry || !SESSION_ID.test(entry.session)) {
+          // A pi sleeper whose own pane it is (#178): the Telegram router types its message there.
+          const snap = await snapshotNow()
+          const p = Object.values(pis).find(s => piSleeperPane(snap, s)?.pane_id === pane)
+          if (!p) return { ok: false, why: 'line', error: `no Claude session is known in ${pane}` }
+          const r = await wakePiNow(p, snap)
+          return r.ok ? { ok: true } : { ok: false, why: 'line', error: r.error }
+        }
         return wakeIn(pane, entry, deps.profiles())
       }),
 
     async seen() {
       const { snap } = await look()
-      return { snap, sessions: claudeSessions() }
+      // pi's sleepers in their own panes too (#178): the router wakes one like a Claude session.
+      const asleep: WakeSessions = {}
+      for (const s of Object.values(pis)) {
+        const own = piSleeperPane(snap, s)
+        if (own) asleep[own.pane_id] = { session: s.session, name: s.name, title: s.name, seen_at: s.slept_at }
+      }
+      return { snap, sessions: { ...asleep, ...claudeSessions() } }
     },
 
     deliver: fn => during(fn),

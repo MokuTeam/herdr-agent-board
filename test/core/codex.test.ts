@@ -135,3 +135,11 @@ test('explicit user.text and mixed classifications preserve real prompts; empty 
     })
   }
 })
+
+test('the sheet has every message whole; the card keeps its short preview (#174)', () => {
+  const prompt = `${'please read this '.repeat(300)}end`
+  const answer = `${'here is what I found '.repeat(300)}end`
+  const lines = [message('user', prompt), message('assistant', answer)]
+  expect(parseCodexConversation(lines).map(t => ('text' in t ? t.text : t.role))).toEqual([prompt, answer])
+  expect(parseCodexTail(lines).lastText).toBe(`${answer.slice(0, 699)}…`)
+})

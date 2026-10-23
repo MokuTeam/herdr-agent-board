@@ -3,12 +3,13 @@
 // checks a restart makes (actions.ts readyToSleep), and each says how it went: asleep, or kept up
 // and why. With `whenFree`, one held for a reason that passes (a turn, a dialog, the user's draft,
 // background tasks, herdr-wake refusing) gets a schedule entry of kind 'sleep' instead, which the
-// scheduler carries out once it is free (services/scheduler.ts). Only Claude sessions: herdr-wake
-// puts no other agent to sleep.
+// scheduler carries out once it is free (services/scheduler.ts). Claude sessions, and pi sessions
+// where the board's own wake runs (#178): herdr-wake puts no other agent to sleep.
 import { askSleep } from '../adapters/schedule-store.ts'
+import { isPiItem } from '../core/pi.ts'
 import type { SessionRef } from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
-import { readyToSleep, sleepSession } from './actions.ts'
+import { readyToSleep, sleepSession, wakeSleepsPi } from './actions.ts'
 import type { Deps } from './deps.ts'
 
 /**
@@ -110,7 +111,9 @@ async function sleepOne(
   opts: { whenFree: boolean; by: string; from?: SessionRef },
 ): Promise<Outcome> {
   if (item.sleeping) return { result: 'already' }
-  if (!item.session || !item.pane || item.agent !== 'claude') return { result: 'kept', why: 'notClaude' }
+  // pi too, where the board's own wake puts sessions to sleep (#178); the separate plugin does not.
+  const agentOk = item.agent === 'claude' || (isPiItem(item) && wakeSleepsPi(deps))
+  if (!item.session || !item.pane || !agentOk) return { result: 'kept', why: 'notClaude' }
   const ready = await readyToSleep(deps, item)
   if (!ready.ok) {
     const why: SleepWhy = PASSES.has(ready.why)

@@ -44,6 +44,7 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'err.canWake.board': '{name} could not be woken again: the board command is not on PATH',
     'err.canWake.profile': '{name} could not be woken again: its profile is not known',
     'err.canWake.transcript': "{name} could not be woken again: its conversation is not in its profile's folder",
+    'err.piFileGone': '{name} cannot be woken: its pi session file is gone',
     'err.wakeNoAnswer': 'Sleep and wake is on but does not answer on port {port}',
     'err.wakeSetting': '{field}: {why}',
     // Task 4.6: the panel and the toolbar note
@@ -176,6 +177,7 @@ export const WAKE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'err.canWake.board': '{name} не разбудить: команды board нет в PATH',
     'err.canWake.profile': '{name} не разбудить: её профиль неизвестен',
     'err.canWake.transcript': '{name} не разбудить: её разговора нет в папке её профиля',
+    'err.piFileGone': '{name} не разбудить: файла её сессии pi больше нет',
     'err.wakeNoAnswer': 'Сон и пробуждение включены, но не отвечают на порту {port}',
     'err.wakeSetting': '{field}: {why}',
     // Task 4.6: the panel and the toolbar note
