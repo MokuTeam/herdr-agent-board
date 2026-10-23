@@ -558,8 +558,8 @@ function read_folder(    d, g, m, P, M, i, s) {
 }
 # sshd's settings for the tunnel user (FENCE), and step 1's parts besides (core/server-look.ts
 # readFence, readStepOne): S1 when Look read them (an "@@user" line); S1_user, S1_uid, S1_group,
-# S1_shell, S1_ours (the board made it), S1_admin (the login Look ran as), S1_keys (none, same or
-# other), S1_keysdir, S1_include
+# S1_shell, S1_ours (the board made it), S1_admin (the login Look ran as), S1_groupleft (no user,
+# a group of its name left), S1_keys (none, same or other), S1_keysdir, S1_include
 function read_stepone(    i, n, l, u, F, k) {
   n = SN[1, "fence"]
   for (i = 1; i <= n; i++) {
@@ -575,6 +575,7 @@ function read_stepone(    i, n, l, u, F, k) {
   S1_shell = trim(nn(at(1, "fence", "user-shell")))
   S1_ours = hasline(1, "fence", "@@user-ours")
   S1_admin = hasline(1, "fence", "@@user-admin")
+  S1_groupleft = !S1_user && hasline(1, "fence", "@@user-group")
   k = at(1, "fence", "keys")
   S1_keys = (k == "none" || k == "same") ? k : "other"
   S1_keysdir = hasline(1, "fence", "@@keys-dir")
@@ -969,6 +970,7 @@ function hostlimits(    why, i, n, T) {
   needs()
   if (!FOLDER && !NEED) why = why " folder"
   if (ownerslogin()) why = why " tunnelUser"
+  if (NEED && NEED_user && S1_groupleft) why = why " tunnelGroup"
   return substr(why, 2)
 }
 # the tunnel's user is a login of the owner's (core/server-plan.ts ownersLogin): there, not made
@@ -1314,7 +1316,7 @@ function pfound(    name, sys, w443, w80, s, web) {
 function stopkind(w) {
   if (w == "os") return "os"
   if (w == "selinux" || w == "podman" || w == "rootless" || w == "userns" || w == "requiretty" || w == "noSystemd" || w == "dockerConflicts") return "system"
-  if (w == "domainServed" || w == "otherSetup" || w == "interrupted" || w == "folder" || w == "tunnelUser") return w
+  if (w == "domainServed" || w == "otherSetup" || w == "interrupted" || w == "folder" || w == "tunnelUser" || w == "tunnelGroup") return w
   return "web"
 }
 # the board does not do this server: why, in plain words and then each reason; the decision line
@@ -1330,7 +1332,7 @@ function hasstep(id,    k) { for (k = 1; k <= NS; k++) if (ST_id[k] == id) retur
 function pplan(kind, c, address,    k, login, checked) {
   login = 0; checked = 0
   for (k = 1; k <= NS; k++) {
-    if (ST_id[k] == "tunnel-user" || ST_id[k] == "socket-folder" || ST_id[k] == "sshd-fence" || ST_id[k] == "drop-user" || ST_id[k] == "drop-fence") login = 1
+    if (ST_id[k] == "tunnel-user" || ST_id[k] == "socket-folder" || ST_id[k] == "sshd-fence" || ST_id[k] == "drop-user" || ST_id[k] == "drop-fence" || ST_id[k] == "drop-keys" || ST_id[k] == "drop-folder") login = 1
     if (ST_id[k] == "fetch-before" || ST_nb[k]) checked = 1
   }
   if (kind == "undo") {
@@ -1340,6 +1342,7 @@ function pplan(kind, c, address,    k, login, checked) {
   }
   if (login) print "pwill " tx("server.plain.will.login", "user", W_USER)
   else if (hasstep("keys-file")) print "pwill " tx("server.plain.will.key", "user", W_USER)
+  if (hasstep("keys-file") && S1 && S1_keys == "other") print "pwill " tx("server.plain.will.keysReplaced", "user", W_USER)
   print "pwill " tx(kind == "update" ? "server.plain.will.update" : "server.plain.will.case." c, "domain", W_DOMAIN, "address", address)
   if (hasstep("docker-install")) print "pdocker " tx("server.plain.docker")
   if (c == "1") print "puntouched " tx("server.plain.untouched.all")

@@ -70,6 +70,8 @@ export interface StepOneFacts {
    * for); null when there is none.
    */
   user: { uid: number; group: string; shell: string; ours: boolean; admin: boolean } | null
+  /** No tunnel user, but a group of its name left (by a userdel, say): useradd cannot make it then. */
+  groupLeft?: true
   /** Its keys file: none, the board's key line alone, or anything else (also when Look had no key to compare with). */
   keys: 'none' | 'same' | 'other'
   /** /etc/ssh/authorized_keys is there. */

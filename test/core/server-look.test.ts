@@ -493,26 +493,34 @@ describe('step 1 as Look reads it: what the board makes itself (the simple-setup
     expect(text).toContain('/etc/ssh/sshd_config.d/*.conf')
     // all of it in the fence section, which older parsers read past
     const fence = text.slice(text.indexOf("echo '@@section fence'"), text.indexOf("echo '@@section folder'"))
-    for (const marker of ['@@user', '@@user-shell', '@@user-ours', '@@user-admin', '@@keys', '@@keys-dir', '@@include'])
+    for (const marker of [
+      '@@user',
+      '@@user-shell',
+      '@@user-ours',
+      '@@user-admin',
+      '@@user-group',
+      '@@keys',
+      '@@keys-dir',
+      '@@include',
+    ])
       expect([marker, fence.includes(marker)]).toEqual([marker, true])
     // no key to compare with: the file is only said to be there
     const without = lookScript1(INPUT)
     expect(without).not.toContain('restrict,port-forwarding')
     expect(without).toContain("echo '@@keys other'")
   })
-  test('the tunnel user’s lines, run by a real sh: its uid and group, its shell, the board’s or not, the admin’s or not', () => {
+  test('the tunnel user’s lines, run by a real sh: its uid and group, its shell, the board’s or not, the admin’s or not; none, a group of its name left', () => {
     const sh = Bun.which('sh')
     if (!sh) return
     const text = lookScript1(INPUT)
     const from = text.indexOf('if p=$(getent passwd')
-    const part = text.slice(
-      from,
-      text.indexOf("else echo '@@user none'; fi", from) + "else echo '@@user none'; fi".length,
-    )
-    // getent and id stand in for the server's: the passwd line given, its group by gid
-    const run = (passwd: string | null, o: { me?: string; sudo?: string } = {}): string[] => {
+    const part = text.slice(from, text.indexOf('\nfi\n', from) + '\nfi'.length)
+    // getent and id stand in for the server's: the passwd line given, a group by gid (by name only
+    // when one is left)
+    const run = (passwd: string | null, o: { me?: string; sudo?: string; left?: boolean } = {}): string[] => {
+      const group = `case "$2" in [0-9]*) echo "tunnelgroup:x:$2:" ;; *) ${o.left ? 'echo "$2:x:990:"' : 'return 2'} ;; esac`
       const stubs = [
-        `getent() { case "$1" in passwd) ${passwd === null ? 'return 2' : `printf '%s\\n' ${shQuote(passwd)}`} ;; group) echo "tunnelgroup:x:$2:" ;; esac; }`,
+        `getent() { case "$1" in passwd) ${passwd === null ? 'return 2' : `printf '%s\\n' ${shQuote(passwd)}`} ;; group) ${group} ;; esac; }`,
         `id() { echo ${shQuote(o.me ?? 'root')}; }`,
       ]
       const r = Bun.spawnSync([sh, '-c', `${stubs.join('\n')}\n${part}`], {
@@ -521,6 +529,7 @@ describe('step 1 as Look reads it: what the board makes itself (the simple-setup
       return r.stdout.toString().split('\n').filter(Boolean)
     }
     expect(run(null)).toEqual(['@@user none'])
+    expect(run(null, { left: true })).toEqual(['@@user none', '@@user-group'])
     expect(run('boardtunnel:x:995:995:agent-board tunnel:/nonexistent:/usr/sbin/nologin')).toEqual([
       '@@user 995 tunnelgroup',
       '@@user-shell /usr/sbin/nologin',
@@ -561,6 +570,14 @@ describe('step 1 as Look reads it: what the board makes itself (the simple-setup
     ).toEqual({ uid: 1000, group: 'migo', shell: '/bin/bash', ours: true, admin: true })
     expect(readRoundOne(add(['@@user none', '@@keys none']))?.stepOne).toEqual({
       user: null,
+      keys: 'none',
+      keysDir: false,
+      include: false,
+    })
+    // no user, a group of its name left
+    expect(readRoundOne(add(['@@user none', '@@user-group', '@@keys none']))?.stepOne).toEqual({
+      user: null,
+      groupLeft: true,
       keys: 'none',
       keysDir: false,
       include: false,

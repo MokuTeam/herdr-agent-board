@@ -84,9 +84,10 @@ const PORTS_ALT = PORTS.join('|')
  * Step 1's parts besides the fence and the folder, at the end of the fence section (a parser of
  * before reads past `@@` lines there): the tunnel user (`@@user <uid> <group>` or `@@user none`),
  * with its shell (`@@user-shell`), whether the board made it (`@@user-ours`: its comment) and
- * whether it is the login Look runs as, or sudo runs it for (`@@user-admin`); its keys file against
- * the board's key line (`@@keys none|same|other`), /etc/ssh/authorized_keys (`@@keys-dir`), and
- * whether sshd_config includes sshd_config.d/*.conf before any Match line (`@@include`), where
+ * whether it is the login Look runs as, or sudo runs it for (`@@user-admin`); with no such user, a
+ * group of its name left (`@@user-group`), which keeps useradd from making it; its keys file
+ * against the board's key line (`@@keys none|same|other`), /etc/ssh/authorized_keys (`@@keys-dir`),
+ * and whether sshd_config includes sshd_config.d/*.conf before any Match line (`@@include`), where
  * sshd's fence goes in a file of its own.
  */
 function stepOneLines(i: LookInput): string[] {
@@ -100,7 +101,10 @@ function stepOneLines(i: LookInput): string[] {
     `  echo "@@user-shell ${field(7)}"`,
     `  if [ "${field(5)}" = ${shQuote(USER_COMMENT)} ]; then echo '@@user-ours'; fi`,
     `  if [ ${user} = "$(id -un)" ] || [ ${user} = "\${SUDO_USER:-}" ]; then echo '@@user-admin'; fi`,
-    `else echo '@@user none'; fi`,
+    'else',
+    "  echo '@@user none'",
+    `  if getent group ${user} >/dev/null; then echo '@@user-group'; fi`,
+    'fi',
     i.publicKey === undefined
       ? `if [ -e ${keys} ]; then echo '@@keys other'; else echo '@@keys none'; fi`
       : `if [ ! -e ${keys} ]; then echo '@@keys none'; elif [ "$(cat ${keys})" = ${shQuote(keysLine(i.publicKey))} ]; then echo '@@keys same'; else echo '@@keys other'; fi`,
@@ -677,6 +681,7 @@ function readStepOne(ls: readonly string[]): StepOneFacts | undefined {
           admin: ls.includes('@@user-admin'),
         }
       : null,
+    ...(!m && ls.includes('@@user-group') && { groupLeft: true }),
     keys: keys === 'none' || keys === 'same' ? keys : 'other',
     keysDir: ls.includes('@@keys-dir'),
     include: ls.includes('@@include'),

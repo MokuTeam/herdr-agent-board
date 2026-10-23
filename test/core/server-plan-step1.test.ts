@@ -2,6 +2,20 @@
 // tunnel user, the socket's folder, the keys file and sshd's fence as Apply's first steps, recorded
 // and undone like the rest; what was there before is used and kept.
 import { describe, expect, test } from 'bun:test'
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { ServerFacts, StepOneFacts } from '../../src/core/server-facts.ts'
 import { fenceWanted } from '../../src/core/server-look.ts'
@@ -39,6 +53,9 @@ const KEYS = '/etc/ssh/authorized_keys/boardtunnel'
 const FENCE = Object.entries(fenceWanted('boardtunnel')).map(([k, v]) => `${k} ${v}`)
 
 const empty = stepOneMissing
+/** sshd_config put in place whole from this file: a copy beside it written, then moved over it (through a link). */
+const movedOver = (from: string): string =>
+  `sudo sh -c 'test -s ${from} && t=$(readlink -f ${SSHD_CONFIG}) && p="\${t%/*}/.\${t##*/}.agent-board" && cp -p "$t" "$p" && cat ${from} > "$p" && mv -f "$p" "$t"'`
 /** Step 1 done (by hand or by an earlier Apply): the fence in force, the folder, the user, the board's key. */
 function done(c: Parameters<typeof factsFor>[0], distro: TestDistro = 'debian13'): ServerFacts {
   const f = factsFor(c, distro)
@@ -158,6 +175,20 @@ for (const distro of DISTROS) {
         expect([lang, translator(lang)('server.manual.tunnelUser').startsWith('server.')]).toEqual([lang, false])
     })
 
+    test('no tunnel user but a group of its name left: refused before any change (useradd would fail on it)', () => {
+      const f = empty('bare', distro)
+      const left: ServerFacts = { ...f, stepOne: { ...(f.stepOne as StepOneFacts), groupLeft: true } }
+      expect(chooseCase(left, W)).toEqual({ case: null, why: ['tunnelGroup'] })
+      expect(buildPlan(left, W, O)).toEqual({ case: null, why: ['tunnelGroup'] })
+      // without the board's key it makes no user: as before
+      expect(chooseCase(left, NO_KEY)).toEqual({ case: null, why: ['folder'] })
+      expect(chooseCase({ ...left, folder: factsFor('bare', distro).folder }, NO_KEY).case).toBe('1')
+      // no group left: the user made as before
+      expect(ids(plan(f))).toContain('tunnel-user')
+      for (const lang of ['en', 'ru'] as const)
+        expect([lang, translator(lang)('server.manual.tunnelGroup').startsWith('server.')]).toEqual([lang, false])
+    })
+
     test('the tunnel user: as step 1 made it, with the board’s comment; never a user that is there', () => {
       const p = plan(empty('bare', distro))
       const s = step(p, 'tunnel-user')
@@ -248,18 +279,53 @@ for (const distro of DISTROS) {
       expect(all).toContain(SSHD_RELOAD)
     })
 
-    test('no Include in sshd_config: the fence between markers at its end, written in place, the backup back on a rollback', () => {
+    test('no Include in sshd_config: the fence between markers at its end, moved over it whole, the backup back on a rollback', () => {
       const s = step(plan(empty('bare', distro, { include: false })), 'sshd-fence')
       expect(text(s)).toContain(`sudo cp -p ${SSHD_CONFIG} /etc/agent-board/backups/r1/sshd_config`)
       expect(text(s)).toContain('awk \'index($0, ENVIRON["B0"]) == 1 { s = 1 } !s { print }')
       for (const l of fenceBlock('boardtunnel').split('\n'))
         expect(text(s)).toContain(`'${l.replaceAll("'", `'\\''`)}'`)
-      expect(text(s)).toContain(
-        `sudo sh -c 'test -s /etc/agent-board/backups/r1/sshd_config.new && cat /etc/agent-board/backups/r1/sshd_config.new > ${SSHD_CONFIG}'`,
-      )
-      expect(s.undo.join('\n')).toContain(
-        `sudo sh -c 'test -s /etc/agent-board/backups/r1/sshd_config && cat /etc/agent-board/backups/r1/sshd_config > ${SSHD_CONFIG}'`,
-      )
+      expect(text(s)).toContain(movedOver('/etc/agent-board/backups/r1/sshd_config.new'))
+      expect(text(s)).not.toContain(`> ${SSHD_CONFIG}`)
+      expect(s.undo.join('\n')).toContain(movedOver('/etc/agent-board/backups/r1/sshd_config'))
+      // run by a real sh on files of a test's own: the new text in place whole, its mode kept,
+      // no copy left beside it; through a link, the file it points to, the link kept
+      const sh = Bun.which('sh')
+      if (!sh) return
+      const dir = mkdtempSync(join(tmpdir(), 'sshd-config-'))
+      try {
+        const command = movedOver('/etc/agent-board/backups/r1/sshd_config.new')
+        const moved = (config: string, from: string): number =>
+          Bun.spawnSync([
+            sh,
+            '-c',
+            `sudo() { "$@"; }\n${command.replaceAll(SSHD_CONFIG, config).replaceAll('/etc/agent-board/backups/r1/sshd_config.new', from)}`,
+          ]).exitCode
+        const config = join(dir, 'sshd_config').replaceAll('\\', '/')
+        const from = join(dir, 'sshd_config.new').replaceAll('\\', '/')
+        writeFileSync(config, 'Port 22\n')
+        chmodSync(config, 0o640)
+        writeFileSync(from, 'Port 22\n# >>> agent-board\n')
+        expect(moved(config, from)).toBe(0)
+        expect(readFileSync(config, 'utf8')).toBe('Port 22\n# >>> agent-board\n')
+        if (process.platform !== 'win32') expect(statSync(config).mode & 0o777).toBe(0o640)
+        expect(readdirSync(dir).sort()).toEqual(['sshd_config', 'sshd_config.new'])
+        // an empty or missing text: nothing changes
+        writeFileSync(from, '')
+        expect(moved(config, from)).not.toBe(0)
+        expect(readFileSync(config, 'utf8')).toBe('Port 22\n# >>> agent-board\n')
+        if (process.platform === 'win32') return
+        mkdirSync(join(dir, 'real'))
+        writeFileSync(join(dir, 'real', 'sshd_config'), 'Port 22\n')
+        const link = join(dir, 'linked')
+        symlinkSync(join(dir, 'real', 'sshd_config'), link)
+        writeFileSync(from, 'Port 2222\n')
+        expect(moved(link, from)).toBe(0)
+        expect(lstatSync(link).isSymbolicLink()).toBe(true)
+        expect(readFileSync(join(dir, 'real', 'sshd_config'), 'utf8')).toBe('Port 2222\n')
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
       expect(s.record).toEqual([{ kind: 'fence', path: SSHD_CONFIG }])
       expect(text(s)).not.toContain(FENCE_FILE)
     })
@@ -393,9 +459,8 @@ for (const distro of DISTROS) {
       const p = undo(recordFor('1', { items: [{ kind: 'fence', path: SSHD_CONFIG }] }), factsFor('bare', distro))
       const s = step(p, 'drop-fence')
       expect(text(s)).toContain(`sudo cat ${SSHD_CONFIG} | B0='# >>> agent-board'`)
-      expect(text(s)).toContain(
-        `sudo sh -c 'test -s /etc/agent-board/backups/u1/sshd_config.new && cat /etc/agent-board/backups/u1/sshd_config.new > ${SSHD_CONFIG}'`,
-      )
+      expect(text(s)).toContain(movedOver('/etc/agent-board/backups/u1/sshd_config.new'))
+      expect(s.undo.join('\n')).toContain(movedOver('/etc/agent-board/backups/u1/sshd_config'))
       expect(s.skipIf).toEqual([`! sudo grep -qx '# <<< agent-board' ${SSHD_CONFIG}`])
     })
   })

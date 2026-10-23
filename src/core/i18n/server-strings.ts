@@ -194,6 +194,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'The socket’s folder is not there, and the board has no key of its own yet to set up its login: generate its key first.',
     'server.manual.tunnelUser':
       'The tunnel’s user is already on the server and is a login people use (root, a person’s account, the admin’s, or one with a shell), not made by the board: fenced in for the tunnel, it could no longer log in. Choose another tunnel user.',
+    'server.manual.tunnelGroup':
+      'There is no tunnel user yet, but a group of its name is on the server, so useradd cannot make it. Remove the group if nothing uses it (groupdel), or choose another tunnel user.',
     // the plan's steps
     'server.step.guard.title': 'Check that the server is as Look found it',
     'server.step.guard.why': 'If who holds the ports or your config changed since, nothing is changed: look again.',
@@ -324,6 +326,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.plain.sitesMore': ': {sites} and {more} more',
     'server.plain.will.login': 'Make the board’s own login on the server ({user}), allowed only to hold the tunnel.',
     'server.plain.will.key': 'Put the board’s key in place for its login on the server ({user}).',
+    'server.plain.will.keysReplaced':
+      'The keys file already there for {user} is replaced whole: only the board’s key stays in it.',
     'server.plain.will.case.1':
       'Run a web server of the board’s own for {domain} on 443 and 80; it gets its certificate by itself.',
     'server.plain.will.case.1b':
@@ -358,6 +362,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.plain.stop.folder': 'it has no key of its own yet for its login there.',
     'server.plain.stop.tunnelUser':
       'the login {user} is already on the server and is one people use. Taken for the tunnel, it could no longer log in: choose another name for the tunnel’s user in the tunnel’s settings.',
+    'server.plain.stop.tunnelGroup':
+      'a group named {user} is on the server, left without its user, and keeps the board from making its login. Remove that group if nothing uses it (groupdel {user}), or choose another name for the tunnel’s user in the tunnel’s settings.',
     // the admin connection: its fields, and why Look, Apply or Undo stopped (the spec's hints)
     'server.field.adminUser': 'Admin user',
     'server.field.adminKey': 'Admin key',
@@ -594,6 +600,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'Папки сокета нет, а своего ключа, чтобы настроить свой вход, у доски ещё нет: сначала создайте её ключ.',
     'server.manual.tunnelUser':
       'Пользователь туннеля уже есть на сервере, и это вход, которым пользуются люди (root, чья-то учётная запись, администратор или пользователь с оболочкой), и сделала его не доска: запертый под туннель, он больше не сможет войти. Выберите другого пользователя туннеля.',
+    'server.manual.tunnelGroup':
+      'Пользователя туннеля ещё нет, но на сервере есть группа с его именем, и useradd не может его создать. Удалите группу, если она ничему не нужна (groupdel), или выберите другого пользователя туннеля.',
     'server.step.guard.title': 'Проверить, что сервер такой, каким его застал осмотр',
     'server.step.guard.why':
       'Если с тех пор сменились владельцы портов или ваша конфигурация, ничего не меняется: осмотрите снова.',
@@ -728,6 +736,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.plain.will.login':
       'Создать на сервере собственный вход доски ({user}), которому можно только держать туннель.',
     'server.plain.will.key': 'Положить ключ доски для её входа на сервер ({user}).',
+    'server.plain.will.keysReplaced':
+      'Файл ключей, который уже есть для {user}, заменяется целиком: в нём останется только ключ доски.',
     'server.plain.will.case.1':
       'Запустить собственный веб-сервер доски для {domain} на 443 и 80; сертификат он получит сам.',
     'server.plain.will.case.1b':
@@ -762,6 +772,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.plain.stop.folder': 'у неё ещё нет своего ключа для входа туда.',
     'server.plain.stop.tunnelUser':
       'на сервере уже есть вход {user}, и им пользуются люди. Отданный под туннель, он больше не сможет войти: выберите другое имя пользователя туннеля в настройках туннеля.',
+    'server.plain.stop.tunnelGroup':
+      'на сервере осталась группа {user} без своего пользователя, и из-за неё доска не может создать свой вход. Удалите эту группу, если она ничему не нужна (groupdel {user}), или выберите другое имя пользователя туннеля в настройках туннеля.',
     // подключение администратора: его поля и почему осмотр, применение или отмена остановились
     'server.field.adminUser': 'Администратор',
     'server.field.adminKey': 'Ключ администратора',

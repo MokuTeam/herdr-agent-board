@@ -484,6 +484,11 @@ const STEP_ONE_VARIANTS: { name: string; r1: (r1: string) => string }[] = [
       ]),
   },
   {
+    name: 'no tunnel user, a group of its name left',
+    r1: r1 =>
+      stepOne(r1, ['@@user none', '@@user-group', '@@keys none', '@@include'], { fence: 'none', folder: false }),
+  },
+  {
     name: 'no socket folder, a tunnel user of another group',
     r1: r1 => stepOne(r1, ['@@user 995 tunnels', NOLOGIN, '@@keys same', '@@keys-dir', '@@include'], { folder: false }),
   },
@@ -539,6 +544,11 @@ function stepOneScenarios(): Scenario[] {
         { ...bare, r1: stepOne(bare.r1, ['@@user none', '@@keys same', '@@keys-dir', '@@include']) },
         { items: [...STEP_ONE_ITEMS, ...OWN_ITEMS] },
       ),
+    ),
+    m(
+      'set up with the folder and the keys file of step 1 alone (the user and the fence by hand)',
+      bare,
+      withRecord(done(bare), { items: [STEP_ONE_ITEMS[1], STEP_ONE_ITEMS[2], ...OWN_ITEMS] as RecordItem[] }),
     ),
     m(
       'set up with step 1 for another domain',
@@ -752,6 +762,7 @@ describe('a tunnel user that is a login people use', () => {
       'the tunnel user with passwd’s empty shell',
     ])
       expect([v, decided(`debian13/bare ${v}`)]).toEqual([v, 'stop tunnelUser'])
+    expect(decided('debian13/bare no tunnel user, a group of its name left')).toBe('stop tunnelGroup')
     expect(decided('debian13/apache the tunnel user with a shell').split(' ')).toContain('tunnelUser')
     for (const v of ['the board’s own tunnel user, with a shell', 'step 1 done', 'an older key'])
       expect([v, decided(`debian13/bare ${v}`).startsWith('plan ')]).toEqual([v, true])

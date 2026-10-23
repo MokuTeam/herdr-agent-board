@@ -60,8 +60,9 @@ export type SetupCase = '1' | '1b' | '2' | '3a' | '3b' | '4a' | '4b'
 /**
  * Why the board does not set up the server by itself ("Do it myself"). Beyond the spec's list:
  * `portTaken` (8443, 8480 or 8481, which the case needs, held by another program), `folder`
- * (the socket's folder not found: step 1 not done) and `tunnelUser` (the tunnel's user is a login
- * of the owner's, which sshd's fence would lock out: ownersLogin).
+ * (the socket's folder not found: step 1 not done), `tunnelUser` (the tunnel's user is a login
+ * of the owner's, which sshd's fence would lock out: ownersLogin) and `tunnelGroup` (no tunnel
+ * user, but a group of its name left, which keeps useradd from making it).
  */
 export type Manual =
   | 'os'
@@ -89,6 +90,7 @@ export type Manual =
   | 'portTaken'
   | 'folder'
   | 'tunnelUser'
+  | 'tunnelGroup'
 
 /** A setup is one tunnel's: its user and its socket. */
 export interface Pair {
@@ -489,6 +491,9 @@ function hostLimits(f: ServerFacts, w: Wanted): Manual[] {
   if (f.docker?.userns) why.push('userns')
   if (!f.folder && !stepOneNeeds(f, w)) why.push('folder')
   if (ownersLogin(f)) why.push('tunnelUser')
+  // useradd --user-group refuses a name a group has; the board neither joins that group (its
+  // members would reach the socket) nor removes it (Undo's userdel would take it along)
+  if (stepOneNeeds(f, w)?.user && f.stepOne?.groupLeft) why.push('tunnelGroup')
   return why
 }
 
@@ -620,6 +625,14 @@ const hashOf = (path: string): string => `$(sudo cat ${q(path)} | sha256sum | cu
  */
 const inPlace = (from: string, to: string): string =>
   `sudo sh -c ${shQuote(`test -s ${q(from)} && cat ${q(from)} > ${q(to)}`)}`
+/**
+ * A file of theirs put in place whole (sshd_config): a copy of it beside it in its folder (its
+ * mode and owner kept), the new text written into the copy, the copy moved over it, so a run cut
+ * short never leaves it half written; through a symbolic link, the file it points to. Only from a
+ * file that is there and not empty.
+ */
+const moveOver = (from: string, to: string): string =>
+  `sudo sh -c ${shQuote(`test -s ${q(from)} && t=$(readlink -f ${q(to)}) && p="\${t%/*}/.\${t##*/}.agent-board" && cp -p "$t" "$p" && cat ${q(from)} > "$p" && mv -f "$p" "$t"`)}`
 /** A file of the board's written beside itself and moved in: one that is cut short is never the file. */
 const copyWhole = (from: string, to: string): string =>
   `sudo cp -p ${q(from)} ${q(`${to}.part`)}; sudo mv -f ${q(`${to}.part`)} ${q(to)}`
@@ -1234,11 +1247,11 @@ function dropFence(path: string, b: string): PlanStep {
           wholeBlock(SSHD_CONFIG),
           `sudo cp -p ${SSHD_CONFIG} ${q(backup)}`,
           `sudo cat ${SSHD_CONFIG} | ${STRIP_BLOCK} | sudo tee ${q(candidate)} >/dev/null`,
-          inPlace(candidate, SSHD_CONFIG),
+          moveOver(candidate, SSHD_CONFIG),
           ...after,
         ],
         skipIf: [`! sudo grep -qx ${shQuote(BLOCK_END)} ${SSHD_CONFIG}`],
-        undo: [`if sudo test -s ${q(backup)}; then ${inPlace(backup, SSHD_CONFIG)}; fi`, reloadBack],
+        undo: [`if sudo test -s ${q(backup)}; then ${moveOver(backup, SSHD_CONFIG)}; fi`, reloadBack],
         touches,
         record,
         timeoutS: 120,
@@ -1390,10 +1403,10 @@ function stepOneSteps(x: Ctx, n: StepOneNeeds): { built: Built[]; relies: Rely[]
               `sudo cp -p ${SSHD_CONFIG} ${q(backup)}`,
               `sudo cat ${SSHD_CONFIG} | ${STRIP_BLOCK} | sudo tee ${q(candidate)} >/dev/null`,
               appendTo(candidate, fenceBlock(user)),
-              inPlace(candidate, SSHD_CONFIG),
+              moveOver(candidate, SSHD_CONFIG),
               ...after,
             ],
-            undo: [`if sudo test -s ${q(backup)}; then ${inPlace(backup, SSHD_CONFIG)}; fi`, reloadBack],
+            undo: [`if sudo test -s ${q(backup)}; then ${moveOver(backup, SSHD_CONFIG)}; fi`, reloadBack],
             touches: [
               { kind: 'block', what: SSHD_CONFIG },
               { kind: 'reload', what: 'sshd' },

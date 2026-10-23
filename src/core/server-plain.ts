@@ -23,7 +23,16 @@ export interface PlainPlan {
 /** How many of their sites the found line names; the rest are counted. */
 const SITES_NAMED = 3
 const HOST_NAME = /^(?=.*[a-z])[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i
-const LOGIN_STEPS = ['tunnel-user', 'socket-folder', 'sshd-fence', 'drop-user', 'drop-fence']
+/** The steps that make or remove the board's own login on the server (step 1's parts, the keys file's own apart in Apply). */
+const LOGIN_STEPS = [
+  'tunnel-user',
+  'socket-folder',
+  'sshd-fence',
+  'drop-user',
+  'drop-fence',
+  'drop-keys',
+  'drop-folder',
+]
 
 /** Why the board stops, in plain words: a few kinds for the many reasons (the details name each). */
 function stopKind(why: Manual): string {
@@ -43,6 +52,7 @@ function stopKind(why: Manual): string {
     case 'interrupted':
     case 'folder':
     case 'tunnelUser':
+    case 'tunnelGroup':
       return why
     default:
       return 'web'
@@ -140,6 +150,8 @@ export function plainPlan(
   const will: string[] = []
   if (login) will.push(t('server.plain.will.login', user))
   else if (has('keys-file')) will.push(t('server.plain.will.key', user))
+  // a keys file there already is written over whole: what it held goes
+  if (has('keys-file') && f.stepOne?.keys === 'other') will.push(t('server.plain.will.keysReplaced', user))
   if (made.kind === 'nothing' && will.length === 0)
     return {
       found,

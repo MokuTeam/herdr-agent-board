@@ -49,9 +49,9 @@ describe('the plan in plain words, per case', () => {
     expect(p.docker).toBe('Docker is not installed: I will install it from Docker’s own repository.')
   })
 
-  test('only the board’s key missing: put in place, said so', () => {
+  test('only the board’s key missing: put in place, said so; a keys file there already is said to be replaced whole', () => {
     const f = factsFor('bare')
-    const p = plain({
+    const facts: ServerFacts = {
       ...f,
       fence: Object.fromEntries(
         [
@@ -79,8 +79,30 @@ describe('the plan in plain words, per case', () => {
         keysDir: true,
         include: true,
       },
+    }
+    const p = plain(facts)
+    expect(p.will).toEqual([
+      'Put the board’s key in place for its login on the server (boardtunnel).',
+      'The keys file already there for boardtunnel is replaced whole: only the board’s key stays in it.',
+      'Run a web server of the board’s own for board.example.com on 443 and 80; it gets its certificate by itself.',
+    ])
+    expect(plain(facts, ru).will[1]).toBe(
+      'Файл ключей, который уже есть для boardtunnel, заменяется целиком: в нём останется только ключ доски.',
+    )
+    // no keys file yet: put in place, nothing said of replacing
+    const none = plain({
+      ...facts,
+      stepOne: { ...(facts.stepOne as NonNullable<ServerFacts['stepOne']>), keys: 'none' },
     })
-    expect(p.will[0]).toBe('Put the board’s key in place for its login on the server (boardtunnel).')
+    const [key, replaced, web] = p.will as [string, string, string]
+    expect(none.will).toEqual([key, web])
+    // with the login made too
+    const login = plain({ ...facts, fence: {} })
+    expect(login.will).toEqual([
+      'Make the board’s own login on the server (boardtunnel), allowed only to hold the tunnel.',
+      replaced,
+      web,
+    ])
   })
 
   test('Caddy as a service, Caddy in Docker: the domain added to their Caddy, their sites checked', () => {
@@ -172,6 +194,19 @@ describe('the plan in plain words, per case', () => {
     const u1 = undoPlan(r1, { ...factsFor('bare'), record: r1 }, { id: 'u1', removeDocker: false, removeEdited: false })
     expect(plainPlan(factsFor('bare'), u1, W, en).will).toEqual(['Remove what the board added for board.example.com.'])
     expect(plainPlan(factsFor('bare'), u1, W, en).untouched).toBe('Nothing of yours is removed.')
+    // the board made only the keys file or the socket's folder of its login: said too
+    for (const made of [
+      { kind: 'keys', path: '/etc/ssh/authorized_keys/boardtunnel', dir: false },
+      { kind: 'folder', path: '/var/lib/boardtunnel' },
+    ] as RecordItem[]) {
+      const r2 = recordFor('1', { items: [made, { kind: 'container', name: 'agent-board-caddy', setup: 'r0' }] })
+      const f2 = { ...factsFor('bare'), record: r2 }
+      const u2 = undoPlan(r2, f2, { id: 'u1', removeDocker: false, removeEdited: false })
+      expect([made.kind, plainPlan(f2, u2, W, en).will]).toEqual([
+        made.kind,
+        ['Remove what the board added for board.example.com, and its login on the server (boardtunnel).'],
+      ])
+    }
   })
 })
 
@@ -261,6 +296,7 @@ describe('a server the board does not do: why, in one line, and nothing done', (
       'portTaken',
       'folder',
       'tunnelUser',
+      'tunnelGroup',
     ]
     for (const why of reasons) {
       const p = plainPlan(factsFor('bare'), { case: null, why: [why] }, W, en)
@@ -277,7 +313,16 @@ describe('plain words: no jargon, both languages, at most three lines of what wi
       out.push(lines(plain(factsFor(c), t)))
       out.push(lines(plain({ ...stepOneMissing(c), docker: c === 'nodocker' ? null : factsFor(c).docker }, t)))
     }
-    for (const why of ['os', 'bridge', 'otherSetup', 'folder', 'domainServed', 'podman', 'tunnelUser'] as Manual[])
+    for (const why of [
+      'os',
+      'bridge',
+      'otherSetup',
+      'folder',
+      'domainServed',
+      'podman',
+      'tunnelUser',
+      'tunnelGroup',
+    ] as Manual[])
       out.push(lines(plainPlan(factsFor('bare'), { case: null, why: [why] }, W, t)))
     return out
   }
