@@ -974,7 +974,7 @@ describe('the command', () => {
         const r = Bun.spawnSync([SH, '-n'], { stdin: new TextEncoder().encode(script), stderr: 'pipe' })
         expect([name, r.stderr.toString(), r.exitCode]).toEqual([name, '', 0])
       }
-      // the program (100 KB and more, past one argument of a command line) is awk's -f
+      // the program (100 KB and more, too close to Linux's 128 KiB for one argument) is awk's -f
       expect(script).toContain(`AWKF=$(mktemp "\${TMPDIR:-/tmp}/agent-board.XXXXXXXX")`)
       expect(script).toContain(`trap 'rm -f "$AWKF"' EXIT`)
       expect(script).toContain(`cat > "$AWKF" <<'AGENT_BOARD_AWK'`)

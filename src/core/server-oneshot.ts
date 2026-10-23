@@ -226,7 +226,7 @@ function common(i: OneshotInput, mode: 'apply' | 'undo'): string[] {
     message('m_refuse', 'server.oneshot.refuse', 'what'),
     message('m_internal', 'server.oneshot.internal', 'what'),
     "# the reader and chooser (core/server-oneshot-awk.ts), with the board's values: in a file of its",
-    '# own for awk -f (100 KB and more is past one argument of a command line), gone when this ends',
+    "# own for awk -f (100 KB and more: too close to Linux's 128 KiB for one argument), gone when this ends",
     'command -v mktemp >/dev/null 2>&1 || { m_missing mktemp; exit 1; }',
     // biome-ignore lint/suspicious/noTemplateCurlyInString: the shell's own ${…}
     'AWKF=$(mktemp "${TMPDIR:-/tmp}/agent-board.XXXXXXXX") || exit 1',

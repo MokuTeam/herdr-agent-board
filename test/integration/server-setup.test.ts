@@ -29,6 +29,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { gunzipSync } from 'node:zlib'
 import { openAskpass, protectKey } from '../../src/adapters/ssh.ts'
 import { type AccessView, isAccessView } from '../../src/core/access.ts'
 import { fenceWanted } from '../../src/core/server-look.ts'
@@ -1082,6 +1083,9 @@ async function commandPath(
   const address = addressOf(want, o.domain)
   const four = address.endsWith(':8443')
   const command = await commandsOnServer(b, s)
+  // made before Test connection found the board's port: it holds none
+  const script = gunzipSync(Buffer.from(command.split(' ')[1] ?? '', 'base64')).toString('utf8')
+  expect(script).toContain(`# The board's address: https://${o.domain}\n`)
   const publicKey = (await b.view()).tunnel.key.publicKey
   if (!publicKey) throw new Error('no public key')
   const asks = (...more: string[]): string[] => [...(as === 'admin' ? ['sudo'] : []), ...more]
@@ -1150,6 +1154,14 @@ async function commandPath(
   expect(seen.plan?.kind).toBe('nothing')
   expect(seen.setup?.case).toBe(want)
 
+  // the command made before Test connection found the port, pasted again: set up already (case 4's
+  // 8443 is the record's own port, not a move there), nothing asked
+  const before = await paste(s, 'apply', as, null)
+  expect(before.code, before.stdout.slice(-2000)).toBe(0)
+  expect(before.asked).toEqual(asks())
+  expect(before.stdout).toContain(`Set up already: ${address}`)
+  expect(await tmpLeft(s)).toBe('')
+
   // pasted again, as the panel has it now (the public port Test found in it: case 4's 8443): set
   // up already, nothing asked
   await commandsOnServer(b, s)
@@ -1171,7 +1183,7 @@ async function commandPath(
   expect(await ownerLogins(s)).toEqual(logins)
   expect(await sitesAnswer(l, s, sc.sites)).toEqual([])
   expect(await sentinelOnServer(s)).toBe('')
-  return `the one command (${Math.round(command.length / 1024)} KB) as ${as} on a terminal${as === 'admin' ? ' (sudo asked its password there)' : ''}: "n" changed nothing; "y": done: ${address}; Test connection found ${String(found)}; the board's Look: nothing to change (case ${want} on record); again: set up already, nothing asked; the Undo command: step 1's parts gone, their files as before; sshd -T and the owner's logins as before`
+  return `the one command (${Math.round(command.length / 1024)} KB) as ${as} on a terminal${as === 'admin' ? ' (sudo asked its password there)' : ''}: with no terminal, said so; "n" changed nothing; "y": done: ${address}; Test connection found ${String(found)}; the board's Look: nothing to change (case ${want} on record); the command made before Test, and again as the panel has it now: set up already, nothing asked; the Undo command: step 1's parts gone, their files as before; sshd -T and the owner's logins as before`
 }
 
 /** One case on one distribution, from an empty server: the password path, then the one command. */
