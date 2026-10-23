@@ -1,9 +1,11 @@
 // The owner's admin connection to the server (the server-setup spec's "The admin connection"):
 // who and which key (config.json's `tunnel.admin`, checked as the tunnel's user and key), the ssh
-// line (the tunnel's host and port, its pinned server key strictly, no prompt), the remote command
-// that carries a script in base64 behind the sudo the admin needs, the probe that finds which, and
-// the hints for what ssh, sudo and sudo-rs say. The sudo password never reaches any of these: it
-// goes to ssh's stdin only (adapters/ssh.ts spawnRemote). Pure, with no node: import.
+// line (the tunnel's host and port, its pinned server key strictly or pinned by this first login,
+// no prompt but the password's), the remote command that carries a script in base64 behind the
+// sudo the admin needs, the probe that finds which, which of ssh's prompts the login's password
+// answers, and the hints for what ssh, sudo and sudo-rs say. No password reaches any of these:
+// sudo's goes to ssh's stdin, the login's to ssh's askpass (adapters/ssh.ts spawnRemote). Pure,
+// with no node: import.
 import { t } from './lang.ts'
 import type { AdminHint, SudoMode } from './server-view.ts'
 import { fieldProblem, sshHint, sshPathArg, type TunnelConfig } from './tunnel.ts'
@@ -33,10 +35,16 @@ export function adminProblems(a: Admin): { field: 'user' | 'key'; message: strin
   return problems
 }
 
+/** The password login's methods: a key first (the agent's, ~/.ssh's or the named file), then the password, one try (call 1). */
+const PASSWORD_LOGIN = ['PreferredAuthentications=publickey,keyboard-interactive,password', 'NumberOfPasswordPrompts=1']
+
 /**
- * The admin's ssh line, spawned without a shell: no user config and no prompt, as the tunnel's;
- * the tunnel's pinned server key strictly (an unpinned or changed one is refused, never pinned
- * here); the admin's key only when one is named; no forwarding of any kind; the command last.
+ * The admin's ssh line, spawned without a shell: no user config, as the tunnel's; the server's
+ * key strictly (a changed one is always refused), and with `pin` (none pinned yet: the first
+ * admin login, call 2) the one this login meets pinned; the admin's key only when one is named;
+ * no forwarding of any kind; the command last. Without `password` no prompt at all (BatchMode),
+ * as before the password login; with it the keys, then the password, one try (its askpass
+ * answers it, adapters/ssh.ts).
  */
 export function adminSshArgs(o: {
   conf: TunnelConfig
@@ -44,11 +52,13 @@ export function adminSshArgs(o: {
   knownHosts: string
   command: string
   platform?: string
+  password?: boolean
+  pin?: boolean
 }): string[] {
   const { conf, admin } = o
   const options = [
-    'BatchMode=yes',
-    'StrictHostKeyChecking=yes',
+    ...(o.password ? PASSWORD_LOGIN : ['BatchMode=yes']),
+    o.pin ? 'StrictHostKeyChecking=accept-new' : 'StrictHostKeyChecking=yes',
     `UserKnownHostsFile="${sshPathArg(o.knownHosts, o.platform)}"`,
     'ConnectTimeout=15',
     'ServerAliveInterval=15',
@@ -144,6 +154,101 @@ export function remoteCommand(script: string, mode: SudoMode): string {
       return `env LC_ALL=C sudo -S -p '' -- ${sh}`
     default:
       throw new Error(`the admin cannot run a script as root (${mode})`)
+  }
+}
+
+/**
+ * What one of ssh's prompts is, as the askpass hears it: the login's password (ssh's own
+ * `user@host's password: `, or the server's `(user@host) Password: ` by keyboard-interactive), a
+ * key's passphrase (no answer: ssh skips the key, as BatchMode does, and nothing reaches the
+ * server), or anything else, which ends the login: a one-time code, an expired password's change,
+ * a PIN, a question (call 4).
+ */
+export type PromptKind = 'password' | 'passphrase' | 'other'
+
+/** "Password for …:" that is not the login's own. */
+const NOT_THE_LOGIN = /\b(new|current|old|retype|re-enter|again|confirm|expired?|one-time|otp)\b/i
+
+export function promptKind(prompt: string): PromptKind {
+  const p = prompt.trim()
+  if (/^Enter passphrase( for (\w+ )?key '.*')?:$/.test(p)) return 'passphrase'
+  // keyboard-interactive's prompts come as `(user@host) <the server's prompt>`
+  const said = p.replace(/^\([^()\s]+@[^()\s]+\)\s*/, '')
+  if (/^[^\s@']+@[^\s@']+'s password:$/.test(said)) return 'password'
+  if (/^(password|пароль)( for [^:]+)?:$/i.test(said) && !NOT_THE_LOGIN.test(said)) return 'password'
+  return 'other'
+}
+
+/** What the askpass did for one ssh: the password prompts it answered, and the prompt it refused (and ended ssh for). */
+export interface AskpassReport {
+  answered: number
+  refused: string | null
+}
+
+/**
+ * Whether `ssh -V`'s line names an OpenSSH that takes SSH_ASKPASS_REQUIRE (8.4 and later), so the
+ * password reaches it from the askpass and never from a terminal; an ssh it does not know: no.
+ */
+export function takesAskpass(version: string): boolean {
+  const m = /OpenSSH_(?:for_Windows_)?(\d+)\.(\d+)/.exec(version)
+  if (!m) return false
+  const major = Number(m[1])
+  return major > 8 || (major === 8 && Number(m[2]) >= 4)
+}
+
+/** The methods ssh's refusal names (`Permission denied (publickey,password).`); null when it said none. */
+function deniedMethods(lines: readonly string[]): string[] | null {
+  let methods: string[] | null = null
+  for (const line of lines) {
+    const m = /Permission denied \(([\w,-]+)\)/.exec(line)
+    if (m) methods = (m[1] ?? '').split(',')
+  }
+  return methods
+}
+
+/**
+ * Why the admin's login itself failed, before ssh's other words (adminHint): a prompt the askpass
+ * refused (the password asked again, so it was wrong; or anything else, a one-time code); the
+ * password refused (root's, maybe by PermitRootLogin prohibit-password); a server that takes no
+ * password; one that wants a password and none was typed; an ssh too old to take one. Null when it
+ * was not the login, or ssh's other words say better (too many keys).
+ */
+export function loginHint(o: {
+  lines: readonly string[]
+  /** A password was typed for this login. */
+  typed: boolean
+  /** The askpass's report; null when none ran (no password, or an ssh too old). */
+  askpass: AskpassReport | null
+  /** A password was typed but ssh is too old for the askpass: the login went with the keys alone. */
+  oldSsh: boolean
+  root: boolean
+}): AdminHint | null {
+  const wrong: AdminHint = o.root ? 'rootLogin' : 'wrongLogin'
+  const answered = (o.askpass?.answered ?? 0) > 0
+  const refused = o.askpass?.refused ?? null
+  if (refused !== null) return answered && promptKind(refused) === 'password' ? wrong : 'otherPrompt'
+  const methods = deniedMethods(o.lines)
+  if (methods === null) return null
+  if (answered) return wrong
+  if (!methods.includes('password') && !methods.includes('keyboard-interactive'))
+    return o.typed ? 'keyOnly' : 'publickey'
+  if (o.oldSsh) return 'sshOld'
+  return o.typed ? null : 'loginPassword'
+}
+
+/** Which field a hint asks the panel for: the login's password (sudo's too), or sudo's own; null for none. */
+export function needFor(hint: AdminHint | null): 'password' | 'sudoPassword' | null {
+  switch (hint) {
+    case 'needPassword':
+    case 'loginPassword':
+    case 'wrongLogin':
+    case 'rootLogin':
+      return 'password'
+    case 'sudoPassword':
+    case 'wrongPassword':
+      return 'sudoPassword'
+    default:
+      return null
   }
 }
 

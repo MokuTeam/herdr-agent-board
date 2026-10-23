@@ -20,17 +20,26 @@
 // there. It listens before it says the forward is taken. A port still taken (a stray fake about to
 // be ended) is tried again for 2 s; after that the forward goes on without it.
 //
-// The admin's line (StrictHostKeyChecking=yes and no -R; core/server-admin.ts) is a server of its
-// own, `admin` in the state:
+// The admin's line (-T and no -R; core/server-admin.ts) is a server of its own, `admin` in the state:
 //   { uid?: number,                                 0: root (default 1000)
 //     sudo?: 'nopasswd' | 'password' | 'requiretty' | 'notSudoer',   default nopasswd
 //     flavor?: 'sudo' | 'sudo-rs',                  whose lines it prints (default sudo)
 //     password?: string,                            sudo -S takes this one only (none set: any)
 //     publickey?: boolean,                          the admin's key refused
+//     login?: { password: string,                   with the key refused: the login's password the server takes
+//               kbdint?: string[],                  asked by keyboard-interactive instead (the first is the
+//                                                   password's prompt, then more: a one-time code)
+//               alsoPassword?: boolean },           after keyboard-interactive failed, the password method too
 //     fixture?: string,                             a folder: look-1 prints its round1.txt, look-2 its round2.txt
 //     run?: { lines: string[], dropAfter?: number } a launch prints these, cut after dropAfter (exit 255)
 //     wrong?: string[] }                            a wrong password's lines instead of the flavour's (a sudo in another language)
-// No line for its server key in the quoted UserKnownHostsFile: `Host key verification failed.`, 255.
+// No line for its server key in the quoted UserKnownHostsFile: `Host key verification failed.`, 255;
+// with StrictHostKeyChecking=accept-new the key is pinned then (another key for the host there:
+// refused). The login's password is asked as ssh 8.4+ asks it with SSH_ASKPASS_REQUIRE=force: the
+// SSH_ASKPASS program run with the prompt as its one argument, its first line of output the
+// answer, a failure no answer; each prompt (never the answer) appended to `<FAKE_SSH_LOG>.askpass`
+// as a JSON line; BatchMode, or no askpass forced: refused as ssh would, or `fake: a prompt on the
+// terminal`, 254. `sshVersion` in the state is what `ssh -V` says (default Windows' 9.5).
 // It decodes the script in the remote command, reads its `# agent-board: <kind>` line and answers
 // as the server would: `probe` (no sudo) the `@@` lines PROBE_SCRIPT prints; the others behind the
 // sudo the admin's mode needs, exactly (`sh -c '…'` for root, `env LC_ALL=C sudo -n -- ` NOPASSWD,
@@ -49,6 +58,7 @@ type Admin = {
   flavor?: 'sudo' | 'sudo-rs'
   password?: string
   publickey?: boolean
+  login?: { password: string; kbdint?: string[]; alsoPassword?: boolean }
   fixture?: string
   run?: { lines: string[]; dropAfter?: number }
   wrong?: string[]
@@ -57,6 +67,7 @@ type State = {
   keygen?: 'unprotected' | 'passphrase'
   ssh?: { mode?: Mode; seq?: Mode[]; exitAfterMs?: number; proxyPort?: number; domain?: string }
   admin?: Admin
+  sshVersion?: string
 }
 
 const HOST = 'ssh.example.com'
@@ -276,19 +287,91 @@ const out = (...lines: string[]): void => {
   for (const line of lines) writeAll(`${line}\n`)
 }
 
-async function admin(): Promise<void> {
-  const a = state.admin ?? {}
+/** The server's key as the admin's line checks it: pinned, or pinned now with accept-new; else refused. */
+function adminHostKey(): void {
   const file = knownHosts()
-  if (!file || !existsSync(file) || !readFileSync(file, 'utf8').includes(HOST_LINE)) {
+  const text = file && existsSync(file) ? readFileSync(file, 'utf8') : ''
+  if (file && options.includes('StrictHostKeyChecking=accept-new')) {
+    if (text.split(/\r?\n/).some(l => l.startsWith(`${HOST} `) && l !== HOST_LINE)) {
+      say('@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@')
+      say('@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @')
+      say('Host key verification failed.')
+      end(255)
+    }
+    if (text.includes(HOST_LINE)) return
+    if (!existsSync(dirname(file))) say(`Failed to add the host to the list of known hosts (${file}).`)
+    else {
+      appendFileSync(file, `${HOST_LINE}\n`)
+      say(`Warning: Permanently added '${HOST}' (ED25519) to the list of known hosts.`)
+    }
+    return
+  }
+  if (!text.includes(HOST_LINE)) {
     say('Host key verification failed.')
     end(255)
   }
+}
+
+/** The SSH_ASKPASS program's answer to the prompt (its first line), null when it failed; the prompt logged. */
+async function askpass(prompt: string): Promise<string | null> {
+  if (logPath) appendFileSync(`${logPath}.askpass`, `${JSON.stringify(prompt)}\n`)
+  const p = Bun.spawn([process.env.SSH_ASKPASS ?? '', prompt], {
+    env: process.env,
+    stdin: 'ignore',
+    stdout: 'pipe',
+    stderr: 'inherit',
+  })
+  const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited])
+  return code === 0 ? (out.split(/\r?\n/)[0] ?? '') : null
+}
+
+/** The admin's key refused: the login's password, as ssh asks it and the server checks it; refused, as ssh says so. */
+async function passwordLogin(a: Admin, target: string): Promise<void> {
+  const l = a.login
+  const methods = [
+    'publickey',
+    ...(l?.kbdint ? ['keyboard-interactive'] : []),
+    ...(l && (!l.kbdint || l.alsoPassword) ? ['password'] : []),
+  ]
+  const denied = (): never => {
+    say(`${target}: Permission denied (${methods.join(',')}).`)
+    return end(255)
+  }
+  const preferred = options
+    .find(o => o.startsWith('PreferredAuthentications='))
+    ?.split('=')[1]
+    ?.split(',')
+  const offers = (method: string): boolean => methods.includes(method) && (!preferred || preferred.includes(method))
+  if (!l || options.includes('BatchMode=yes') || (!offers('password') && !offers('keyboard-interactive'))) denied()
+  if (!process.env.SSH_ASKPASS || process.env.SSH_ASKPASS_REQUIRE !== 'force') {
+    say('fake: a prompt on the terminal')
+    end(254)
+  }
+  // what leads ssh to the askpass, for the tests to look for the password in
+  const leads = Object.entries(process.env).filter(([k]) => /^(SSH_ASKPASS|BUN_OPTIONS$|BOARD_ASKPASS)/.test(k))
+  if (logPath) appendFileSync(`${logPath}.env`, `${JSON.stringify(Object.fromEntries(leads))}\n`)
+  const tries = Number(options.find(o => o.startsWith('NumberOfPasswordPrompts='))?.split('=')[1] ?? 3)
+  if (l?.kbdint && offers('keyboard-interactive')) {
+    const [first = 'Password: ', ...more] = l.kbdint
+    if ((await askpass(`(${target}) ${first}`)) === l.password) {
+      for (const p of more) if ((await askpass(`(${target}) ${p}`)) === null) denied()
+      return
+    }
+  }
+  if (!offers('password')) denied()
+  for (let n = 0; n < tries; n++) {
+    if (n > 0) say('Permission denied, please try again.')
+    if ((await askpass(`${target}'s password: `)) === l?.password) return
+  }
+  denied()
+}
+
+async function admin(): Promise<void> {
+  const a = state.admin ?? {}
+  adminHostKey()
   const target = args.at(-2) ?? ''
   const user = target.slice(0, target.indexOf('@'))
-  if (a.publickey) {
-    say(`${target}: Permission denied (publickey).`)
-    end(255)
-  }
+  if (a.publickey) await passwordLogin(a, target)
   // a stdin the board left open keeps this waiting, as it would keep sudo -S
   const input = await Bun.stdin.text()
   const m =
@@ -374,5 +457,8 @@ async function admin(): Promise<void> {
 }
 
 if (args.includes('-R')) await ssh()
-else if (options.includes('StrictHostKeyChecking=yes')) await admin()
+else if (args.includes('-V')) {
+  say(state.sshVersion ?? 'OpenSSH_for_Windows_9.5p2, LibreSSL 3.8.2')
+  end(0)
+} else if (args.includes('-T')) await admin()
 else keygen()

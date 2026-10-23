@@ -1,7 +1,7 @@
 // What the Remote access panel shows of setting up the server (AccessView.server): the admin
 // connection's fields, what sudo needs, where Look, Apply or Undo stands, what Look found, the
-// case, the plan, a run's progress, why something stopped, and the setup on record. Never the sudo
-// password. Pure, with no node: import: the page imports it.
+// case, the plan, a run's progress, why something stopped, the server's key the admin login met,
+// and the setup on record. Never a password. Pure, with no node: import: the page imports it.
 import type { ServerFacts } from './server-facts.ts'
 import type { Choice, Plan, SetupCase } from './server-plan.ts'
 import type { Progress } from './server-script.ts'
@@ -28,6 +28,14 @@ export type AdminHint =
   | 'lost'
   | 'unreadable'
   | 'lookAgain'
+  // the admin's login by password (the simple-setup spec's "The admin login by password")
+  | 'loginPassword'
+  | 'wrongLogin'
+  | 'rootLogin'
+  | 'keyOnly'
+  | 'otherPrompt'
+  | 'sshOld'
+  | 'sudoPassword'
 export type ServerPhase = 'idle' | 'looking' | 'plan' | 'applying' | 'undoing' | 'done' | 'failed'
 
 export interface ServerView {
@@ -42,6 +50,11 @@ export interface ServerView {
   error: string | null
   setup: { case: SetupCase; address: string; at: string } | null
   testAfter: TestStep[] | null
+  /**
+   * The server's key as the admin's login met it ('SHA256:… (ED25519)'), and whether that login
+   * pinned it (the first one does, call 2); null before a login went through.
+   */
+  hostKey: { fingerprint: string; pinnedNow: boolean } | null
 }
 
 const SUDO: ReadonlySet<unknown> = new Set(['root', 'nopasswd', 'password', 'requiretty', 'none'])
@@ -64,6 +77,13 @@ const HINTS: ReadonlySet<unknown> = new Set([
   'lost',
   'unreadable',
   'lookAgain',
+  'loginPassword',
+  'wrongLogin',
+  'rootLogin',
+  'keyOnly',
+  'otherPrompt',
+  'sshOld',
+  'sudoPassword',
 ])
 const CASES: ReadonlySet<unknown> = new Set(['1', '1b', '2', '3a', '3b', '4a', '4b'])
 
@@ -82,6 +102,8 @@ const isProgress = (v: unknown): boolean => isFields(v) && Array.isArray(v.steps
 
 const isSetup = (v: unknown): boolean => isFields(v) && CASES.has(v.case) && isText(v.address) && isText(v.at)
 
+const isHostKey = (v: unknown): boolean => isFields(v) && isText(v.fingerprint) && typeof v.pinnedNow === 'boolean'
+
 /** The view's `server` as the board sends it, as far as the panel relies on it. */
 export function isServerView(v: unknown): v is ServerView {
   return (
@@ -98,6 +120,7 @@ export function isServerView(v: unknown): v is ServerView {
     (v.hint === null || HINTS.has(v.hint)) &&
     (v.error === null || isText(v.error)) &&
     (v.setup === null || isSetup(v.setup)) &&
-    (v.testAfter === null || Array.isArray(v.testAfter))
+    (v.testAfter === null || Array.isArray(v.testAfter)) &&
+    (v.hostKey === null || isHostKey(v.hostKey))
   )
 }

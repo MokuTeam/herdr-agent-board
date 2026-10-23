@@ -17,14 +17,17 @@ import { fetchProbe, probeOrigin } from '../adapters/probe.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
 import {
   endStraySsh,
+  hostKeyFingerprint,
   hostKeyPinned,
   keyPath,
   knownHostsFile,
+  knownHostsReady,
   publicKeyOf,
   readPidRecord,
   spawnRemote,
   spawnSsh,
   sshBin,
+  sshVersion,
   writePidRecord,
 } from '../adapters/ssh.ts'
 import { messageGate } from '../core/message-gate.ts'
@@ -322,11 +325,13 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
     cfg,
     webPort: port,
     ssh: () => sshBin(),
-    knownHosts: knownHostsFile,
+    sshVersion,
+    knownHosts: knownHostsReady,
     hostKeyPinned: () => {
       const conf = tunnelConf()
       return hostKeyPinned(conf.host, conf.sshPort)
     },
+    hostKeyFingerprint,
     spawn: spawnRemote,
     test: () => supervisor.test(),
     onChange: accessChanged,

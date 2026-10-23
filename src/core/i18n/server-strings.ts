@@ -266,7 +266,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.hint.publickey':
       'The server refused the admin key: add it to {admin}’s ~/.ssh/authorized_keys (ssh-copy-id), or load it into the ssh agent if it has a passphrase.',
     'server.hint.tooMany': 'The agent offered too many keys: choose the admin key’s file.',
-    'server.hint.noHostKey': 'Run Test connection first: it pins the server’s key.',
+    'server.hint.noHostKey':
+      'The server’s key is not pinned: Look at the server again (its first login pins the key), or run Test connection.',
     'server.hint.hostKey':
       'The server’s key changed since it was pinned. If you changed the server on purpose, Forget the server’s key and run Test connection; otherwise find out why first.',
     'server.hint.needPassword': 'Type {admin}’s sudo password.',
@@ -283,6 +284,21 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.hint.lost': 'The connection was lost: the server finishes or rolls back by itself. Look again in a minute.',
     'server.hint.unreadable': 'Look could not read the server.',
     'server.hint.lookAgain': 'This plan is not from the last Look (or the board started anew since): Look again.',
+    // the admin's login by password
+    'server.hint.loginPassword': 'The server wants {admin}’s password (it took no key of yours): type it.',
+    'server.hint.wrongLogin':
+      'The server refused {admin}’s password. Check it: the board tries once per click, and the server may lock the login after a few wrong ones.',
+    'server.hint.rootLogin':
+      'The server refused root’s password. Either it is wrong (the server may lock the login after a few wrong ones), or the server lets root in only with a key (PermitRootLogin prohibit-password, usual on Ubuntu’s images): log in as the user your host gave you, the one with sudo.',
+    'server.hint.keyOnly':
+      'The server lets {admin} in only with a key, not a password: add your key to the server (ssh-copy-id), or Do it myself.',
+    'server.hint.otherPrompt':
+      'The server asked for more than the password (a one-time code, a new password): the board answers only the password. Log in with a key, or Do it myself.',
+    'server.hint.sshOld':
+      'This computer’s ssh cannot take a password from the board (it needs OpenSSH 8.4 or later): log in with a key, or Do it myself.',
+    'server.hint.sudoPassword':
+      'sudo needs its own password: it did not take the one typed for {admin}. Type sudo’s password (the board tries it once per click).',
+    'server.err.prompt': 'The server asked: {prompt}',
     'server.err.docker': 'Tick “Install Docker from Docker’s own repository” first.',
     'server.err.noRecord': 'Nothing of the board’s is set up on this server.',
     'server.err.cancelled': 'Cancelled.',
@@ -554,7 +570,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.hint.publickey':
       'Сервер отклонил ключ администратора: добавьте его в ~/.ssh/authorized_keys пользователя {admin} (ssh-copy-id) или, если у ключа есть пароль, загрузите его в ssh-агент.',
     'server.hint.tooMany': 'Агент предложил слишком много ключей: укажите файл ключа администратора.',
-    'server.hint.noHostKey': 'Сначала нажмите «Проверить соединение»: при проверке запоминается ключ сервера.',
+    'server.hint.noHostKey':
+      'Ключ сервера не запомнен: осмотрите сервер снова (первый вход запоминает ключ) или нажмите «Проверить соединение».',
     'server.hint.hostKey':
       'Ключ сервера изменился с тех пор, как его запомнили. Если вы меняли сервер намеренно, нажмите «Забыть ключ сервера», затем «Проверить соединение»; иначе сначала выясните почему.',
     'server.hint.needPassword': 'Введите пароль sudo пользователя {admin}.',
@@ -574,6 +591,21 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.hint.unreadable': 'Осмотр не смог прочитать ответ сервера.',
     'server.hint.lookAgain':
       'Этот план не от последнего осмотра (или доска с тех пор перезапускалась): осмотрите сервер снова.',
+    // вход администратора по паролю
+    'server.hint.loginPassword': 'Сервер ждёт пароль пользователя {admin} (ваш ключ он не принял): введите его.',
+    'server.hint.wrongLogin':
+      'Сервер не принял пароль пользователя {admin}. Проверьте его: доска пробует один раз на нажатие, а сервер может заблокировать вход после нескольких ошибок.',
+    'server.hint.rootLogin':
+      'Сервер не принял пароль root. Либо пароль неверный (после нескольких ошибок сервер может заблокировать вход), либо root пускают только по ключу (PermitRootLogin prohibit-password, обычно на образах Ubuntu): войдите пользователем, которого дал хостер, — тем, у кого есть sudo.',
+    'server.hint.keyOnly':
+      'Сервер пускает {admin} только по ключу, не по паролю: добавьте свой ключ на сервер (ssh-copy-id) или настройте сервер вручную.',
+    'server.hint.otherPrompt':
+      'Сервер спросил не только пароль (одноразовый код, новый пароль): доска отвечает только на пароль. Войдите по ключу или настройте сервер вручную.',
+    'server.hint.sshOld':
+      'ssh на этом компьютере не может получить пароль от доски (нужен OpenSSH 8.4 или новее): войдите по ключу или настройте сервер вручную.',
+    'server.hint.sudoPassword':
+      'sudo нужен свой пароль: введённый для {admin} он не принял. Введите пароль sudo (доска пробует его один раз на нажатие).',
+    'server.err.prompt': 'Сервер спросил: {prompt}',
     'server.err.docker': 'Сначала отметьте «Установить Docker из собственного репозитория Docker».',
     'server.err.noRecord': 'На этом сервере ничего от доски не настроено.',
     'server.err.cancelled': 'Отменено.',

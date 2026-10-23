@@ -77,6 +77,7 @@ export const SERVER_IDLE: ServerView = {
   error: null,
   setup: null,
   testAfter: null,
+  hostKey: null,
 }
 
 /** A text of the core's (its key and values) in the panel's language. */
