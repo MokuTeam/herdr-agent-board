@@ -1,16 +1,18 @@
 // ssh on this computer, for the tunnel (core/tunnel.ts builds its line): which ssh and ssh-keygen,
 // the key the board generates and its rights, the server's key pinned on first use, the ssh
-// process itself, and the record of its pid that lets a board end the ssh a killed one left.
-// BOARD_SSH_BIN_PATH and BOARD_SSH_KEYGEN_BIN_PATH name other binaries (tests). Nothing here runs
-// through a shell; System32's programs are run by their full path.
+// process itself, and the record of its pid that lets a board end the ssh a killed one left. And
+// the admin connection's ssh (core/server-admin.ts), with the login's password through an askpass
+// of the board's. BOARD_SSH_BIN_PATH and BOARD_SSH_KEYGEN_BIN_PATH name other binaries (tests).
+// Nothing here runs through a shell; System32's programs are run by their full path.
 import { type ChildProcess, spawn } from 'node:child_process'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, win32 } from 'node:path'
-import { pinnedIn } from '../core/server-admin.ts'
+import { type AskpassReport, pinnedIn, promptKind } from '../core/server-admin.ts'
 import { sshHint, type TunnelConfig, type TunnelHint } from '../core/tunnel.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
-import { stateDir } from './paths.ts'
+import { ROOT, stateDir } from './paths.ts'
 import { killTreePid, type RunResult, run } from './process.ts'
 
 export interface BinOptions {
@@ -43,6 +45,11 @@ export const tunnelDir = (): string => join(stateDir(), 'tunnel')
 export const generatedKey = (): string => join(tunnelDir(), 'id_ed25519')
 /** The board's own known_hosts, never the user's. */
 export const knownHostsFile = (): string => join(tunnelDir(), 'known_hosts')
+/** knownHostsFile, its folder made: ssh pins a key there only when the folder exists. */
+export function knownHostsReady(): string {
+  mkdirSync(tunnelDir(), { recursive: true })
+  return knownHostsFile()
+}
 export const sshPidFile = (): string => join(tunnelDir(), 'ssh-pid.json')
 /** The key the owner points to (config.json's `tunnel.key`), else the one the board generated. */
 export const keyPath = (conf: TunnelConfig): string => conf.key || generatedKey()
@@ -190,6 +197,14 @@ export function spawnSsh(bin: string, args: string[]): SshChild {
   }
 }
 
+/** How the admin connection's ssh ended: its exit code (null when a signal ended it), or why it did not run ('ENOENT'…) or was ended ('timeout'). */
+export interface RemoteEnd {
+  code: number | null
+  error: string | null
+  /** A login by password: what its askpass did. */
+  askpass?: AskpassReport
+}
+
 /** The admin connection's ssh (core/server-admin.ts): its lines as they come, how it ended, and ending it. */
 export interface RemoteRun {
   /**
@@ -197,39 +212,167 @@ export interface RemoteRun {
    * data), or from stderr ('err': ssh's and sudo's words), empty ones left out.
    */
   onLine(fn: (line: string, from: 'out' | 'err') => void): void
-  /** Its exit code (null when a signal ended it), or why it did not run ('ENOENT'…) or was ended ('timeout'). */
-  done: Promise<{ code: number | null; error: string | null }>
+  done: Promise<RemoteEnd>
   /** It and everything it started. */
   kill(): void
+}
+
+/** The askpass helper, run by this Bun (process.execPath): ssh runs SSH_ASKPASS with its prompt as the one argument. */
+const ASKPASS_MAIN = join(ROOT, 'src', 'entrypoints', 'askpass.ts')
+/**
+ * What makes that Bun import the helper: fixed text (the helper's path is in a variable of its
+ * own), and `--`, so a prompt is the helper's argument and never an option of Bun's, whatever the
+ * server puts in it (`--eval=…`).
+ */
+const ASKPASS_BUN_OPTIONS = '-e import(process.env.BOARD_ASKPASS_MAIN) --'
+/** The most a helper sends: one line, its token and ssh's prompt. */
+const ASKPASS_MOST = 16_384
+
+/** The askpass of one ssh: the variables that lead ssh's askpass to it, what it did, and its end. */
+export interface Askpass {
+  env: Record<string, string>
+  report(): AskpassReport
+  close(): void
+}
+
+/**
+ * The channel the askpass helper (entrypoints/askpass.ts) asks on: a listener on loopback that
+ * answers only a helper holding its one-time token, which ssh's environment carries to the helper
+ * and nowhere else. The login's password goes to the first password prompt only (core/server-admin.ts
+ * promptKind); a key's passphrase gets no answer (ssh skips that key); any other prompt, or a
+ * second password prompt, gets none either and `refuse` ends ssh before it can send anything for
+ * it (call 4). Nothing on disk, nothing in an argument.
+ */
+export function openAskpass(password: string, refuse: () => void, bun: string = process.execPath): Askpass {
+  const token = Buffer.from(randomBytes(32).toString('hex'))
+  let answered = 0
+  let refused: string | null = null
+  let closed = false
+  const heard = new WeakMap<object, string>()
+  const theirs = (v: unknown): boolean => {
+    if (typeof v !== 'string') return false
+    const given = Buffer.from(v)
+    return given.length === token.length && timingSafeEqual(given, token)
+  }
+  /** The answer: the password, null for none (the helper fails), undefined to say nothing (ssh is ended). */
+  const answer = (prompt: string): string | null | undefined => {
+    if (closed || refused !== null) return undefined
+    const kind = promptKind(prompt)
+    if (kind === 'passphrase') return null
+    if (kind === 'password' && answered === 0) {
+      answered++
+      return password
+    }
+    refused = prompt
+    refuse()
+    return undefined
+  }
+  const listener = Bun.listen({
+    hostname: '127.0.0.1',
+    port: 0,
+    socket: {
+      data(socket, chunk) {
+        const text = (heard.get(socket) ?? '') + chunk.toString('utf8')
+        const at = text.indexOf('\n')
+        if (at < 0) {
+          if (text.length > ASKPASS_MOST) socket.end()
+          else heard.set(socket, text)
+          return
+        }
+        heard.set(socket, '')
+        let ask: unknown
+        try {
+          ask = JSON.parse(text.slice(0, at))
+        } catch {
+          ask = null
+        }
+        if (!isRecord(ask) || !theirs(ask.token) || typeof ask.prompt !== 'string') {
+          socket.end()
+          return
+        }
+        const said = answer(ask.prompt)
+        if (said !== undefined) socket.end(`${JSON.stringify({ answer: said })}\n`)
+      },
+      error() {},
+    },
+  })
+  return {
+    env: {
+      SSH_ASKPASS: bun,
+      SSH_ASKPASS_REQUIRE: 'force',
+      BUN_OPTIONS: ASKPASS_BUN_OPTIONS,
+      BOARD_ASKPASS_MAIN: ASKPASS_MAIN,
+      BOARD_ASKPASS_PORT: String(listener.port),
+      BOARD_ASKPASS_TOKEN: token.toString(),
+    },
+    report: () => ({ answered, refused }),
+    close: () => {
+      if (closed) return
+      closed = true
+      listener.stop(true)
+    },
+  }
+}
+
+/** `ssh -V`'s line (ssh says it on stderr), or why it did not say it; asked each time (an ssh may be updated). */
+export async function sshVersion(bin: string): Promise<string> {
+  const r = await run(bin, ['-V'], { timeout: 10_000 })
+  return (r.stderr.trim() || r.stdout.trim() || r.error?.message || '').split(/\r?\n/)[0] ?? ''
 }
 
 /**
  * ssh with this argument list, no shell: stdout and stderr read by line; `stdin` written, then
  * closed (null: closed at once), so the sudo password is on ssh's stdin and nowhere else; ended
- * after `timeoutMs`.
+ * after `timeoutMs`. With `login`, its password goes to ssh through the board's askpass
+ * (openAskpass), and ssh runs in the board's tunnel folder (no .env or bunfig of another folder
+ * for the helper's Bun) and, on POSIX, in a session of its own: no terminal to prompt on, and its
+ * end ends the helper too.
  */
-export function spawnRemote(bin: string, args: string[], stdin: string | null, timeoutMs: number): RemoteRun {
+export function spawnRemote(
+  bin: string,
+  args: string[],
+  stdin: string | null,
+  timeoutMs: number,
+  login: { password: string } | null = null,
+): RemoteRun {
   const listeners: ((line: string, from: 'out' | 'err') => void)[] = []
   let done = false
   let why: string | null = null
   let deadline: ReturnType<typeof setTimeout> | undefined
-  let settle: (result: { code: number | null; error: string | null }) => void = () => {}
-  const ended = new Promise<{ code: number | null; error: string | null }>(resolve => {
+  let askpass: Askpass | null = null
+  let settle: (result: RemoteEnd) => void = () => {}
+  const ended = new Promise<RemoteEnd>(resolve => {
     settle = result => {
       if (done) return
       done = true
       clearTimeout(deadline)
-      resolve(result)
+      askpass?.close()
+      resolve(askpass ? { ...result, askpass: askpass.report() } : result)
     }
   })
   let child: ChildProcess
+  let pid = 0
   try {
-    child = spawn(bin, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    if (login) {
+      askpass = openAskpass(login.password, () => {
+        if (!done && pid) killTreePid(pid)
+      })
+      mkdirSync(tunnelDir(), { recursive: true })
+    }
+    child = spawn(bin, args, {
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      ...(askpass && {
+        env: { ...process.env, ...askpass.env },
+        cwd: tunnelDir(),
+        detached: process.platform !== 'win32',
+      }),
+    })
   } catch (err) {
     settle({ code: null, error: String((err as NodeJS.ErrnoException).code ?? (err as Error).message) })
     return { onLine: () => {}, done: ended, kill: () => {} }
   }
-  const pid = child.pid ?? 0
+  pid = child.pid ?? 0
   const kill = (): void => {
     if (!done && pid) killTreePid(pid)
   }

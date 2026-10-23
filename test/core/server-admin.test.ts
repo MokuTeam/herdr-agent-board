@@ -10,10 +10,14 @@ import {
   adminProblems,
   adminSshArgs,
   connectionLost,
+  loginHint,
+  needFor,
   PROBE_SCRIPT,
   pinnedIn,
+  promptKind,
   readProbe,
   remoteCommand,
+  takesAskpass,
 } from '../../src/core/server-admin.ts'
 import type { AdminHint } from '../../src/core/server-view.ts'
 import { tunnelConfig } from '../../src/core/tunnel.ts'
@@ -98,6 +102,185 @@ describe('the admin line', () => {
     expect(args).not.toContain('-i')
     expect(args).not.toContain('IdentitiesOnly=yes')
   })
+
+  test('a password typed: no BatchMode; the keys first, then the password, one try (call 1); the rest as without', () => {
+    const args = adminSshArgs({
+      conf,
+      admin: { user: 'ubuntu', key: '' },
+      knownHosts: '/k',
+      command: 'CMD',
+      password: true,
+    })
+    expect(args).toEqual([
+      '-F',
+      'none',
+      '-T',
+      '-o',
+      'PreferredAuthentications=publickey,keyboard-interactive,password',
+      '-o',
+      'NumberOfPasswordPrompts=1',
+      ...rest('/k').slice(2),
+    ])
+    // with a key named, that key is offered first
+    const keyed = adminSshArgs({
+      conf,
+      admin: { user: 'ubuntu', key: '/a' },
+      knownHosts: '/k',
+      command: 'CMD',
+      password: true,
+      platform: 'linux',
+    })
+    expect(keyed.slice(0, 9)).toEqual([
+      '-F',
+      'none',
+      '-T',
+      '-i',
+      '/a',
+      '-o',
+      'IdentitiesOnly=yes',
+      '-o',
+      'PreferredAuthentications=publickey,keyboard-interactive,password',
+    ])
+  })
+
+  test('no key pinned yet: this first login pins the one it meets (accept-new), a changed one still refused', () => {
+    const first = adminSshArgs({
+      conf,
+      admin: { user: 'ubuntu', key: '' },
+      knownHosts: '/k',
+      command: 'CMD',
+      pin: true,
+    })
+    expect(first).toEqual([
+      '-F',
+      'none',
+      '-T',
+      ...rest('/k').map(a => (a === 'StrictHostKeyChecking=yes' ? 'StrictHostKeyChecking=accept-new' : a)),
+    ])
+    expect(first).not.toContain('StrictHostKeyChecking=no')
+  })
+})
+
+describe('the login by password: which prompts its askpass answers (call 4)', () => {
+  const rows: [string, ReturnType<typeof promptKind>][] = [
+    // ssh's own, for the password method (Windows' and Linux' alike), and keyboard-interactive's
+    ["root@board.migontech.online's password: ", 'password'],
+    ["ubuntu@203.0.113.7's password: ", 'password'],
+    ["root@2001:db8::1's password: ", 'password'],
+    ['(root@board.migontech.online) Password: ', 'password'],
+    ['Password: ', 'password'],
+    ['(admin@ssh.example.com) Password for admin@EXAMPLE.COM: ', 'password'],
+    ['(admin@ssh.example.com) Пароль: ', 'password'],
+    // a key's passphrase: no answer, the key is skipped
+    ["Enter passphrase for key 'C:\\Users\\Иван/.ssh/id_ed25519': ", 'passphrase'],
+    ["Enter passphrase for key '/home/me/.ssh/id_rsa': ", 'passphrase'],
+    // ssh-keygen's own (Windows' 9.5 asks so through the askpass)
+    ['Enter passphrase: ', 'passphrase'],
+    // anything else ends the login
+    ['(admin@ssh.example.com) Verification code: ', 'other'],
+    ["(admin@ssh.example.com) One-time password (OATH) for `admin': ", 'other'],
+    ["Enter admin@ssh.example.com's old password: ", 'other'],
+    ['(admin@ssh.example.com) Current password: ', 'other'],
+    ['(admin@ssh.example.com) New password: ', 'other'],
+    ['(admin@ssh.example.com) Password for new user: ', 'other'],
+    ['Enter PIN for ED25519-SK key /home/me/.ssh/id_ed25519_sk: ', 'other'],
+    ['Are you sure you want to continue connecting (yes/no/[fingerprint])? ', 'other'],
+    ['--eval=console.log(1)', 'other'],
+    ['', 'other'],
+  ]
+  for (const [prompt, kind] of rows)
+    test(`${kind}: ${JSON.stringify(prompt)}`, () => expect(promptKind(prompt)).toBe(kind))
+})
+
+describe('an ssh that takes the askpass without a terminal: OpenSSH 8.4 and later (SSH_ASKPASS_REQUIRE)', () => {
+  const rows: [string, boolean][] = [
+    ['OpenSSH_for_Windows_9.5p2, LibreSSL 3.8.2', true],
+    ['OpenSSH_for_Windows_8.6p1, LibreSSL 3.4.3', true],
+    ['OpenSSH_for_Windows_8.1p1, LibreSSL 3.0.2', false],
+    ['OpenSSH_for_Windows_7.7p1, LibreSSL 2.6.5', false],
+    ['OpenSSH_9.6p1 Ubuntu-3ubuntu13.5, OpenSSL 3.0.13 30 Jan 2024', true],
+    ['OpenSSH_8.4p1 Debian-5+deb11u3, OpenSSL 1.1.1w  11 Sep 2023', true],
+    ['OpenSSH_8.3p1, OpenSSL 1.1.1g', false],
+    ['OpenSSH_10.0p2, LibreSSL 3.3.6', true],
+    ['', false],
+    ['spawn ENOENT', false],
+  ]
+  for (const [line, ok] of rows) test(`${ok}: ${line || '(nothing)'}`, () => expect(takesAskpass(line)).toBe(ok))
+})
+
+describe('why the login itself failed (before ssh’s other words)', () => {
+  const denied = (methods: string): string[] => [`admin@ssh.example.com: Permission denied (${methods}).`]
+  const base = { lines: [] as string[], typed: false, askpass: null, oldSsh: false, root: false }
+  const rows: [string, Parameters<typeof loginHint>[0], ReturnType<typeof loginHint>][] = [
+    ['no password typed, the server takes one', { ...base, lines: denied('publickey,password') }, 'loginPassword'],
+    ['… by keyboard-interactive', { ...base, lines: denied('publickey,keyboard-interactive') }, 'loginPassword'],
+    ['no password typed, keys only: as before', { ...base, lines: denied('publickey') }, 'publickey'],
+    ['typed, keys only', { ...base, typed: true, lines: denied('publickey') }, 'keyOnly'],
+    [
+      'typed and answered, refused',
+      { ...base, typed: true, askpass: { answered: 1, refused: null }, lines: denied('publickey,password') },
+      'wrongLogin',
+    ],
+    [
+      'root’s, refused (or PermitRootLogin prohibit-password)',
+      {
+        ...base,
+        typed: true,
+        root: true,
+        askpass: { answered: 1, refused: null },
+        lines: denied('publickey,password'),
+      },
+      'rootLogin',
+    ],
+    [
+      'the password asked again',
+      { ...base, typed: true, askpass: { answered: 1, refused: "admin@ssh.example.com's password: " } },
+      'wrongLogin',
+    ],
+    [
+      'a one-time code',
+      { ...base, typed: true, askpass: { answered: 1, refused: '(admin@ssh.example.com) Verification code: ' } },
+      'otherPrompt',
+    ],
+    [
+      'a new password asked',
+      { ...base, typed: true, askpass: { answered: 0, refused: '(admin@ssh.example.com) New password: ' } },
+      'otherPrompt',
+    ],
+    [
+      'typed, ssh too old, the server takes passwords',
+      { ...base, typed: true, oldSsh: true, lines: denied('publickey,password') },
+      'sshOld',
+    ],
+    ['typed, ssh too old, keys only', { ...base, typed: true, oldSsh: true, lines: denied('publickey') }, 'keyOnly'],
+    [
+      'logged in (sudo’s lines after)',
+      { ...base, typed: true, askpass: { answered: 1, refused: null }, lines: ['Sorry, try again.'] },
+      null,
+    ],
+    [
+      'too many keys: ssh’s own words say better',
+      {
+        ...base,
+        typed: true,
+        askpass: { answered: 0, refused: null },
+        lines: ['Received disconnect from 203.0.113.5 port 22:2: Too many authentication failures'],
+      },
+      null,
+    ],
+    ['a file a script could not read is no refusal', { ...base, lines: ['cat: /etc/shadow: Permission denied'] }, null],
+  ]
+  for (const [name, o, want] of rows) test(`${String(want)}: ${name}`, () => expect(loginHint(o)).toBe(want))
+})
+
+test('the field each hint asks for: the login’s password (sudo’s too), or sudo’s own', () => {
+  expect(['needPassword', 'loginPassword', 'wrongLogin', 'rootLogin'].map(h => needFor(h as AdminHint))).toEqual(
+    Array(4).fill('password'),
+  )
+  expect(needFor('sudoPassword')).toBe('sudoPassword')
+  expect(needFor('wrongPassword')).toBe('sudoPassword')
+  expect(needFor('otherPrompt')).toBeNull()
+  expect(needFor(null)).toBeNull()
 })
 
 describe('the remote command: fixed text and the script in base64, behind the sudo the admin needs', () => {

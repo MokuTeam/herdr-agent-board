@@ -166,6 +166,7 @@ const SERVER = {
   error: null,
   setup: { case: '1', address: 'https://board.example.com', at: '2026-10-21T10:04:00.000Z' },
   testAfter: null,
+  hostKey: null,
 }
 
 test('a Remote access view as the board answers it, narrowed for the page and the command', () => {

@@ -246,7 +246,7 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
         case 'lockout-lift':
           access.liftLockout()
           return ok()
-        // Setting up the server: answers that never hold the body (the sudo password)
+        // Setting up the server: answers that never hold the body (the passwords)
         case 'server-admin':
           return d.server.admin(b)
         case 'server-look':

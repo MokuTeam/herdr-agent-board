@@ -486,7 +486,7 @@ describe('Remote access, set up from the local board', () => {
     expect((await api.view()).tunnel.hostKey).toBeNull()
   })
 
-  test("setting up the server: the admin's fields checked as the tunnel's, and Look needs the server's key pinned first", async () => {
+  test("setting up the server: the admin's fields checked as the tunnel's, and the first Look pins the server's key", async () => {
     const before = readFileSync(configPath, 'utf8')
     expect(await api.op({ op: 'server-admin', user: '-l' })).toEqual([
       409,
@@ -496,11 +496,19 @@ describe('Remote access, set up from the local board', () => {
     expect(await opReloaded({ op: 'server-admin', user: 'admin' })).toEqual([200, { ok: true }])
     expect(((JSON.parse(readFileSync(configPath, 'utf8')) as Reply).tunnel as Reply).admin).toEqual({ user: 'admin' })
     expect((await api.view()).server).toMatchObject({ admin: { user: 'admin', key: '' }, phase: 'idle', plan: null })
-    // the key was forgotten above: nothing is spawned, the answer says why
+    // the key was forgotten above: the admin's first login pins the one it meets (the fake's server
+    // has nothing for Look to read)
     const [status, refused] = await api.op({ op: 'server-look' })
-    expect([status, refused.ok, refused.hint]).toEqual([409, false, 'noHostKey'])
-    // the admin's line is the one with StrictHostKeyChecking=yes and no -R: none ran
-    expect(ssh.keygenCalls().filter(a => a.includes('StrictHostKeyChecking=yes'))).toEqual([])
+    expect([status, refused.ok, refused.hint]).toEqual([409, false, 'unreadable'])
+    // the admin's line is the one with -T and no -R: the probe pinned the key, the round after held to it
+    const strictness = ssh
+      .keygenCalls()
+      .filter(a => a.includes('-T'))
+      .map(a => a.find(o => o.startsWith('StrictHostKeyChecking=')))
+    expect(strictness).toEqual(['StrictHostKeyChecking=accept-new', 'StrictHostKeyChecking=yes'])
+    const v = await api.view()
+    expect(v.tunnel.hostKey).toBe(FINGERPRINT)
+    expect(v.server).toMatchObject({ hostKey: { fingerprint: FINGERPRINT, pinnedNow: true }, hint: 'unreadable' })
     expect(await api.op({ op: 'server-apply', plan: 'r1' })).toMatchObject([409, { ok: false, hint: 'lookAgain' }])
     expect(await api.op({ op: 'server-look', password: 'a\nb' })).toEqual([400, { ok: false, error: 'password' }])
   })

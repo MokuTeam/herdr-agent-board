@@ -105,6 +105,7 @@ const IDLE: ServerView = {
   error: null,
   setup: null,
   testAfter: null,
+  hostKey: null,
 }
 
 const withServer = (over: Partial<ServerView>): AccessView => ({ ...READY, server: { ...IDLE, ...over } })

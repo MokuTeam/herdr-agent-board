@@ -3,11 +3,19 @@
 // whose admin server answers Look from what the trial servers printed (test/fixtures/server-look,
 // Debian 13 with sudo and Ubuntu 26.04 with sudo-rs) and a run with the lines a test gives it.
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { configFile, loadConfig } from '../../src/adapters/config-file.ts'
 import { configDir, stateDir } from '../../src/adapters/paths.ts'
-import { hostKeyPinned, knownHostsFile, spawnRemote, tunnelDir } from '../../src/adapters/ssh.ts'
+import {
+  hostKeyFingerprint,
+  hostKeyPinned,
+  knownHostsFile,
+  knownHostsReady,
+  spawnRemote,
+  sshVersion,
+  tunnelDir,
+} from '../../src/adapters/ssh.ts'
 import type { Plan, SetupRecord } from '../../src/core/server-plan.ts'
 import type { Acme } from '../../src/core/server-texts.ts'
 import type { ServerPhase } from '../../src/core/server-view.ts'
@@ -42,6 +50,7 @@ interface AdminState {
   flavor?: 'sudo' | 'sudo-rs'
   password?: string
   publickey?: boolean
+  login?: { password: string; kbdint?: string[]; alsoPassword?: boolean }
   fixture?: string
   run?: { lines: string[]; dropAfter?: number }
   wrong?: string[]
@@ -51,11 +60,12 @@ type Fields = Record<string, unknown>
 
 /**
  * A board whose config.json has the tunnel's settings (and `tunnel`'s more) and the admin user, the
- * fake as its ssh; `spawn` in place of the real spawnRemote, for an ssh that does not start or runs out of time.
+ * fake as its ssh (`sshVersion`: what its `ssh -V` says); `spawn` in place of the real spawnRemote,
+ * for an ssh that does not start or runs out of time.
  */
 async function useBoard(
   admin: AdminState,
-  o: { pinned?: boolean; tunnel?: Fields; acme?: Acme; spawn?: typeof spawnRemote } = {},
+  o: { pinned?: boolean; tunnel?: Fields; acme?: Acme; spawn?: typeof spawnRemote; sshVersion?: string } = {},
 ) {
   const fake = await useFakeSsh()
   if (o.pinned !== false) {
@@ -63,7 +73,8 @@ async function useBoard(
     writeFileSync(knownHostsFile(), `${HOST_LINE}\n`)
   }
   let state = admin
-  fake.state({ admin })
+  const top = o.sshVersion ? { sshVersion: o.sshVersion } : {}
+  fake.state({ ...top, admin })
   mkdirSync(configDir(), { recursive: true })
   writeFileSync(
     configFile(),
@@ -86,15 +97,21 @@ async function useBoard(
   let ids = 0
   let tests = 0
   let changes = 0
+  let versions = 0
   const setup = createServerSetup({
     cfg,
     webPort: 12390,
     ssh: () => fake.bin,
-    knownHosts: knownHostsFile,
+    sshVersion: bin => {
+      versions++
+      return sshVersion(bin)
+    },
+    knownHosts: knownHostsReady,
     hostKeyPinned: () => hostKeyPinned('ssh.example.com', 22),
-    spawn: (bin, args, stdin, ms) => {
+    hostKeyFingerprint,
+    spawn: (bin, args, stdin, ms, login) => {
       deadlines.push(ms)
-      return (o.spawn ?? spawnRemote)(bin, args, stdin, ms)
+      return (o.spawn ?? spawnRemote)(bin, args, stdin, ms, login)
     },
     test: async () => {
       tests++
@@ -109,6 +126,7 @@ async function useBoard(
     ...(o.acme && { acme: o.acme }),
   })
   const stdinLog = join(fake.dir, 'ssh-calls.jsonl.stdin')
+  const logins = (): string[][] => fake.calls().filter(c => c.includes('-T'))
   const keep = <T>(a: T): T => {
     answers.push(a)
     return a
@@ -121,24 +139,26 @@ async function useBoard(
     deadlines,
     tests: () => tests,
     changes: () => changes,
+    /** How often the board asked `ssh -V`. */
+    versions: () => versions,
     /** Another answer from the server from now on. */
     server: (more: AdminState): void => {
       state = { ...state, ...more }
-      fake.state({ admin: state })
+      fake.state({ ...top, admin: state })
     },
     look: async (body: Fields = {}) => keep(await setup.look(body)),
     undoLook: async (body: Fields = {}) => keep(await setup.undoLook(body)),
     apply: async (body: Fields) => keep(await setup.apply(body)),
     undo: async (body: Fields) => keep(await setup.undo(body)),
     /** The remote command of each ssh the board ran, oldest first. */
-    commands: (): string[] => fake.calls().map(c => c.at(-1) ?? ''),
-    stdins: (): string[] =>
-      existsSync(stdinLog)
-        ? readFileSync(stdinLog, 'utf8')
-            .split('\n')
-            .filter(Boolean)
-            .map(l => JSON.parse(l) as string)
-        : [],
+    commands: (): string[] => logins().map(c => c.at(-1) ?? ''),
+    /** The argument list of each ssh to the admin (-T), oldest first; ssh-keygen's and `ssh -V` left out. */
+    logins,
+    stdins: (): string[] => jsonLines(stdinLog) as string[],
+    /** Each prompt ssh gave its askpass, oldest first (never an answer). */
+    prompts: (): string[] => jsonLines(join(fake.dir, 'ssh-calls.jsonl.askpass')) as string[],
+    /** What led each ssh to its askpass: SSH_ASKPASS*, BUN_OPTIONS, BOARD_ASKPASS*. */
+    leads: (): Record<string, string>[] => jsonLines(join(fake.dir, 'ssh-calls.jsonl.env')) as Record<string, string>[],
     tunnel: (): Fields => (JSON.parse(readFileSync(configFile(), 'utf8')) as { tunnel: Fields }).tunnel,
     async until(phases: ServerPhase[], ms = 20_000): Promise<void> {
       const end = Date.now() + ms
@@ -151,6 +171,15 @@ async function useBoard(
 }
 
 const fixture = (distro: string, scenario: string): string => join(FIXTURES, distro, scenario)
+
+/** A file of JSON lines, each parsed; none when it is not there. */
+const jsonLines = (file: string): unknown[] =>
+  existsSync(file)
+    ? readFileSync(file, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map(l => JSON.parse(l) as unknown)
+    : []
 
 /** A scenario's Look with a record of the board's on the server (setup.json), and its lock file when `lock` says so. */
 function withRecord(
@@ -296,18 +325,41 @@ for (const distro of DISTROS) {
       for (const [path, text] of [...files(stateDir()), ...files(configDir())]) nowhere(path, text)
     })
 
-    test('a wrong password: refused after one sudo, never tried again', async () => {
+    test('sudo’s own password wrong: refused after one sudo, never tried again; its field asked for', async () => {
       const b = await useBoard({
         sudo: 'password',
         password: 'right one',
         flavor,
         fixture: fixture(distro, 'caddy-unit'),
       })
-      const answer = await b.look({ password: 'wrong one' })
-      expect(answer).toMatchObject({ status: 409, body: { ok: false, hint: 'wrongPassword' } })
+      const answer = await b.look({ sudoPassword: 'wrong one' })
+      expect(answer).toMatchObject({ status: 409, body: { ok: false, hint: 'wrongPassword', need: 'sudoPassword' } })
       expect(b.commands()).toHaveLength(2)
       expect(b.stdins()).toEqual(['wrong one\n'])
       expect(b.setup.view()).toMatchObject({ phase: 'idle', hint: 'wrongPassword', plan: null })
+    })
+
+    test('the login’s password not sudo’s (the login went with the key): “sudo needs its own password”, one sudo try', async () => {
+      const b = await useBoard({
+        sudo: 'password',
+        password: 'sudo’s own',
+        flavor,
+        fixture: fixture(distro, 'caddy-unit'),
+      })
+      const answer = await b.look({ password: 'the login’s' })
+      expect(answer).toMatchObject({ status: 409, body: { ok: false, hint: 'sudoPassword', need: 'sudoPassword' } })
+      expect(b.commands()).toHaveLength(2)
+      expect(b.stdins()).toEqual(['the login’s\n'])
+      expect(b.setup.view()).toMatchObject({ phase: 'idle', hint: 'sudoPassword', plan: null })
+      // the next click sends sudo's own: it goes to sudo -S, not the login's
+      expect(await b.look({ password: 'the login’s', sudoPassword: 'sudo’s own' })).toEqual(OK)
+      expect(b.stdins().slice(1)).toEqual(['sudo’s own\n', 'sudo’s own\n'])
+      const p = planOf(b.setup)
+      b.server({ run: { lines: goesThrough(p) } })
+      expect(await b.apply({ plan: p.id, password: 'the login’s', sudoPassword: 'sudo’s own' })).toEqual(OK)
+      await b.until(['done', 'failed'])
+      expect(b.setup.view().phase).toBe('done')
+      expect(b.stdins().at(-1)).toBe('sudo’s own\n')
     })
 
     test('requiretty (sudo) and not in sudoers: stopped with the hint after the probe', async () => {
@@ -320,10 +372,31 @@ for (const distro of DISTROS) {
       expect(none.stdins()).toEqual([])
     })
 
-    test('no pinned server key: Test connection first, nothing spawned', async () => {
+    test('no server key pinned: the first login pins the one it meets (the probe alone), its fingerprint in the view', async () => {
       const b = await useBoard({ uid: 0, flavor, fixture: fixture(distro, 'bare') }, { pinned: false })
-      expect(await b.look()).toMatchObject({ status: 409, body: { ok: false, hint: 'noHostKey' } })
-      expect(b.fake.calls()).toEqual([])
+      expect(await b.look()).toEqual(OK)
+      const strictness = (): string[] => b.logins().map(a => a.find(o => o.startsWith('StrictHostKeyChecking=')) ?? '')
+      expect(strictness()).toEqual(['StrictHostKeyChecking=accept-new', 'StrictHostKeyChecking=yes'])
+      expect(readFileSync(knownHostsFile(), 'utf8')).toBe(`${HOST_LINE}\n`)
+      expect(b.setup.view().hostKey).toEqual({ fingerprint: 'SHA256:FAKEfingerprint (ED25519)', pinnedNow: true })
+      // the next Look: strictly the pinned one
+      expect(await b.look()).toEqual(OK)
+      expect(strictness().slice(2)).toEqual(['StrictHostKeyChecking=yes', 'StrictHostKeyChecking=yes'])
+      expect(b.setup.view().hostKey).toEqual({ fingerprint: 'SHA256:FAKEfingerprint (ED25519)', pinnedNow: false })
+      // forgotten after Look: Apply pins nothing, it asks for a Look again
+      const p = planOf(b.setup)
+      rmSync(knownHostsFile())
+      expect(await b.apply({ plan: p.id })).toMatchObject({ status: 409, body: { ok: false, hint: 'noHostKey' } })
+      expect(b.logins()).toHaveLength(4)
+    })
+
+    test('a pinned key that changed: refused, never pinned over', async () => {
+      const b = await useBoard({ uid: 0, flavor, fixture: fixture(distro, 'bare') })
+      const other = 'ssh.example.com ssh-ed25519 AAAAOTHERKEY\n'
+      writeFileSync(knownHostsFile(), other)
+      expect(await b.look({ password: 'pw' })).toMatchObject({ status: 409, body: { ok: false, hint: 'hostKey' } })
+      expect(readFileSync(knownHostsFile(), 'utf8')).toBe(other)
+      expect(b.logins()).toHaveLength(1)
     })
 
     test('the admin key refused', async () => {
@@ -627,6 +700,12 @@ describe('the admin’s fields and Cancel', () => {
     expect(await b.look({ password: 'a\nb' })).toEqual({ status: 400, body: { ok: false, error: 'password' } })
     expect(await b.look({ password: 'a\rb' })).toEqual({ status: 400, body: { ok: false, error: 'password' } })
     expect(await b.look({ password: 5 })).toEqual({ status: 400, body: { ok: false, error: 'password' } })
+    expect(await b.look({ sudoPassword: 'a\nb' })).toEqual({ status: 400, body: { ok: false, error: 'sudoPassword' } })
+    expect(await b.undoLook({ sudoPassword: [] })).toEqual({ status: 400, body: { ok: false, error: 'sudoPassword' } })
+    expect(await b.apply({ plan: 'r1', sudoPassword: 7 })).toEqual({
+      status: 400,
+      body: { ok: false, error: 'sudoPassword' },
+    })
     expect(b.fake.calls()).toEqual([])
   })
 })
@@ -663,9 +742,6 @@ describe('why a Look or a run stopped, said once and as it was', () => {
     const tty = await useBoard({ sudo: 'requiretty', flavor: 'sudo', fixture: fixture('debian13', 'bare') })
     expect(await tty.look({ password: 'x' })).toMatchObject({ status: 409, body: { hint: 'requiretty' } })
     expect(tty.setup.view()).toMatchObject({ hint: 'requiretty', error: null })
-    const unpinned = await useBoard({ uid: 0, fixture: fixture('debian13', 'bare') }, { pinned: false })
-    expect(await unpinned.look()).toMatchObject({ status: 409, body: { hint: 'noHostKey' } })
-    expect(unpinned.setup.view()).toMatchObject({ hint: 'noHostKey', error: null })
     // a hint with lines of its own keeps them as the error
     const key = await useBoard({ publickey: true, fixture: fixture('debian13', 'bare') })
     expect(await key.look()).toMatchObject({ status: 409, body: { hint: 'publickey' } })
@@ -729,5 +805,175 @@ describe('why a Look or a run stopped, said once and as it was', () => {
     expect(await b.apply({ plan: planOf(b.setup).id })).toEqual(OK)
     await b.until(['done', 'failed'])
     expect(b.setup.view()).toMatchObject({ phase: 'failed', hint: 'publickey' })
+  })
+})
+
+describe('the admin’s login by password (the simple-setup spec)', () => {
+  const ROOT = { tunnel: { admin: { user: 'root' } } }
+  const OLD_SSH = 'OpenSSH_for_Windows_8.1p1, LibreSSL 3.0.2'
+  const PASSWORD_LINE = [
+    'PreferredAuthentications=publickey,keyboard-interactive,password',
+    'NumberOfPasswordPrompts=1',
+  ]
+
+  test('root by password, the owner’s case: each ssh’s one prompt answered, no BatchMode, one try; the password nowhere', async () => {
+    const b = await useBoard(
+      { uid: 0, publickey: true, login: { password: SENTINEL }, fixture: fixture('debian13', 'caddy-unit') },
+      ROOT,
+    )
+    expect(await b.look({ password: SENTINEL })).toEqual(OK)
+    expect(b.setup.view()).toMatchObject({ phase: 'plan', sudo: 'root', hint: null, choice: { case: '2' } })
+    expect(b.prompts()).toEqual(Array(3).fill("root@ssh.example.com's password: "))
+    for (const a of b.logins()) {
+      expect(a).not.toContain('BatchMode=yes')
+      expect(a).toEqual(expect.arrayContaining(PASSWORD_LINE))
+    }
+    // root: no sudo, nothing on stdin
+    expect(b.stdins()).toEqual([])
+    const p = planOf(b.setup)
+    b.server({ run: { lines: goesThrough(p, [`echo ${SENTINEL}`]) } })
+    expect(await b.apply({ plan: p.id, password: SENTINEL })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    expect(b.setup.view().phase).toBe('done')
+    expect(b.prompts()).toHaveLength(4)
+    expect(b.setup.view().progress?.steps[1]?.out).toContain('echo ••••')
+    // what led ssh to the askpass: fixed text, a port and a token; never the password
+    expect(b.leads()).toHaveLength(4)
+    for (const lead of b.leads()) {
+      expect(lead).toMatchObject({
+        SSH_ASKPASS: process.execPath,
+        SSH_ASKPASS_REQUIRE: 'force',
+        BUN_OPTIONS: '-e import(process.env.BOARD_ASKPASS_MAIN) --',
+        BOARD_ASKPASS_MAIN: expect.stringMatching(/askpass\.ts$/),
+        BOARD_ASKPASS_PORT: expect.stringMatching(/^\d+$/),
+        BOARD_ASKPASS_TOKEN: expect.stringMatching(/^[0-9a-f]{64}$/),
+      })
+    }
+    const tokens = new Set(b.leads().map(l => l.BOARD_ASKPASS_TOKEN))
+    expect(tokens.size).toBe(4)
+    const nowhere = (what: string, text: string): void => expect([what, text.includes(SENTINEL)]).toEqual([what, false])
+    nowhere('argv', JSON.stringify(b.fake.calls()))
+    nowhere('ssh’s environment', JSON.stringify(b.leads()))
+    nowhere('prompts', JSON.stringify(b.prompts()))
+    nowhere('view', JSON.stringify(b.setup.view()))
+    nowhere('answers', JSON.stringify(b.answers))
+    nowhere('log', JSON.stringify(b.logs))
+    for (const [path, text] of [...files(stateDir()), ...files(configDir())]) nowhere(path, text)
+  })
+
+  test('no password typed, the key refused, the server takes one: the password asked for; ssh’s line as before, no ssh -V', async () => {
+    const b = await useBoard({
+      uid: 0,
+      publickey: true,
+      login: { password: 'pw' },
+      fixture: fixture('debian13', 'bare'),
+    })
+    const answer = await b.look()
+    expect(answer).toMatchObject({ status: 409, body: { ok: false, hint: 'loginPassword', need: 'password' } })
+    expect(b.setup.view()).toMatchObject({ phase: 'idle', hint: 'loginPassword' })
+    expect(b.logins()).toHaveLength(1)
+    expect(b.logins()[0]).toContain('BatchMode=yes')
+    expect(b.logins()[0]).not.toContain(PASSWORD_LINE[0])
+    expect(b.versions()).toBe(0)
+    expect(b.prompts()).toEqual([])
+    expect(b.leads()).toEqual([])
+  })
+
+  test('a wrong password: one try, the login’s field asked for again; root’s says root may be refused a password', async () => {
+    const b = await useBoard({ publickey: true, login: { password: 'right' }, fixture: fixture('debian13', 'bare') })
+    expect(await b.look({ password: 'wrong' })).toMatchObject({
+      status: 409,
+      body: { ok: false, hint: 'wrongLogin', need: 'password' },
+    })
+    expect(b.prompts()).toEqual(["admin@ssh.example.com's password: "])
+    expect(b.logins()).toHaveLength(1)
+    const root = await useBoard({ uid: 0, publickey: true, login: { password: 'right' } }, ROOT)
+    expect(await root.look({ password: 'wrong' })).toMatchObject({
+      status: 409,
+      body: { ok: false, hint: 'rootLogin', need: 'password' },
+    })
+    expect(root.prompts()).toHaveLength(1)
+    // and at Apply: the run fails before it starts, with the same hint
+    root.server({ fixture: fixture('debian13', 'bare') })
+    expect(await root.look({ password: 'right' })).toEqual(OK)
+    const p = planOf(root.setup)
+    root.server({ run: { lines: goesThrough(p) } })
+    expect(await root.apply({ plan: p.id, password: 'wrong' })).toEqual(OK)
+    await root.until(['done', 'failed'])
+    expect(root.setup.view()).toMatchObject({ phase: 'failed', hint: 'rootLogin' })
+    expect(root.setup.view().progress?.steps.every(s => s.state === 'waiting')).toBe(true)
+  })
+
+  test('a one-time code after the password: ssh ended before any answer to it, the prompt named', async () => {
+    const b = await useBoard({
+      publickey: true,
+      login: { password: 'pw', kbdint: ['Password: ', 'Verification code: '] },
+      fixture: fixture('debian13', 'bare'),
+    })
+    const answer = await b.look({ password: 'pw' })
+    expect(answer).toMatchObject({ status: 409, body: { ok: false, hint: 'otherPrompt' } })
+    expect((answer.body as Fields).error).toContain('The server asked: (admin@ssh.example.com) Verification code:')
+    expect(b.prompts()).toEqual(['(admin@ssh.example.com) Password: ', '(admin@ssh.example.com) Verification code: '])
+    expect(b.setup.view()).toMatchObject({ phase: 'idle', hint: 'otherPrompt' })
+  })
+
+  test('keyboard-interactive, then the password method: a wrong password is never tried a second time', async () => {
+    const b = await useBoard({
+      publickey: true,
+      login: { password: 'right', kbdint: ['Password: '], alsoPassword: true },
+      fixture: fixture('debian13', 'bare'),
+    })
+    expect(await b.look({ password: 'wrong' })).toMatchObject({ status: 409, body: { hint: 'wrongLogin' } })
+    // ssh asked twice; the askpass answered the first and ended ssh at the second
+    expect(b.prompts()).toEqual(['(admin@ssh.example.com) Password: ', "admin@ssh.example.com's password: "])
+  })
+
+  test('a server that takes only keys, a password typed: it says so', async () => {
+    const b = await useBoard({ publickey: true, fixture: fixture('debian13', 'bare') })
+    expect(await b.look({ password: 'pw' })).toMatchObject({ status: 409, body: { ok: false, hint: 'keyOnly' } })
+    expect(b.prompts()).toEqual([])
+  })
+
+  test('a key the server takes, a password typed: the key first, the password never asked; sudo gets it', async () => {
+    const b = await useBoard({ sudo: 'password', password: 'pw', fixture: fixture('debian13', 'caddy-unit') })
+    expect(await b.look({ password: 'pw' })).toEqual(OK)
+    expect(b.prompts()).toEqual([])
+    for (const a of b.logins()) expect(a).toEqual(expect.arrayContaining(PASSWORD_LINE))
+    expect(b.stdins()).toEqual(['pw\n', 'pw\n'])
+  })
+
+  test('a sudo user by password whose sudo takes the same password (call 3)', async () => {
+    const b = await useBoard({
+      publickey: true,
+      login: { password: SENTINEL },
+      sudo: 'password',
+      password: SENTINEL,
+      fixture: fixture('debian13', 'caddy-unit'),
+    })
+    expect(await b.look({ password: SENTINEL })).toEqual(OK)
+    expect(b.prompts()).toHaveLength(3)
+    expect(b.stdins()).toEqual([`${SENTINEL}\n`, `${SENTINEL}\n`])
+    // at Apply sudo refuses it (its password changed since): sudo needs its own, nothing ran
+    const p = planOf(b.setup)
+    b.server({ password: 'changed', run: { lines: goesThrough(p) } })
+    expect(await b.apply({ plan: p.id, password: SENTINEL })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    expect(b.setup.view()).toMatchObject({ phase: 'failed', hint: 'sudoPassword' })
+    expect(b.setup.view().progress?.steps.every(s => s.state === 'waiting')).toBe(true)
+  })
+
+  test('an ssh too old for the askpass (Windows 10’s 8.1): the keys alone, as before; refused, it says why', async () => {
+    const key = await useBoard(
+      { sudo: 'password', password: 'pw', fixture: fixture('debian13', 'caddy-unit') },
+      { sshVersion: OLD_SSH },
+    )
+    expect(await key.look({ password: 'pw' })).toEqual(OK)
+    for (const a of key.logins()) expect(a).toContain('BatchMode=yes')
+    expect(key.stdins()).toEqual(['pw\n', 'pw\n'])
+    expect(key.versions()).toBe(1)
+    const pw = await useBoard({ uid: 0, publickey: true, login: { password: 'pw' } }, { ...ROOT, sshVersion: OLD_SSH })
+    expect(await pw.look({ password: 'pw' })).toMatchObject({ status: 409, body: { ok: false, hint: 'sshOld' } })
+    expect(pw.prompts()).toEqual([])
+    expect(pw.leads()).toEqual([])
   })
 })
