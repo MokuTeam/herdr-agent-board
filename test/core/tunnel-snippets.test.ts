@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
+import { translator } from '../../src/core/i18n/translator.ts'
 import { TUNNEL_SOCKET } from '../../src/core/tunnel.ts'
 import {
   caddyfile,
@@ -147,8 +148,19 @@ describe('the server’s snippets, filled in', () => {
 describe('the README’s server steps are the panel’s snippets', () => {
   const readme = readFileSync('README.md', 'utf8').replaceAll('\r\n', '\n')
   /** The text of every fenced block that opens at column 0, as a copy from the page would give it. */
-  const fences = [...readme.matchAll(/^```[^\n]*\n([\s\S]*?)\n```$/gm)].map(m => m[1] ?? '')
+  const fencesOf = (text: string): string[] => [...text.matchAll(/^```[^\n]*\n([\s\S]*?)\n```$/gm)].map(m => m[1] ?? '')
+  const fences = fencesOf(readme)
   const heading = '## Another computer or a tablet, through your own domain'
+  const en = translator('en')
+  /**
+   * "Your server needs steps by hand", where the panel keeps step 1's snippets (Snippets.tsx) for a
+   * server the board does not set up: from its heading, the panel fold's own words, to the next.
+   */
+  const byHand = ((): string => {
+    const from = readme.indexOf(`\n#### ${en('server.panel.byHandFold')}\n`)
+    const to = readme.indexOf('\n#### ', from + 1)
+    return from < 0 ? '' : readme.slice(from, to < 0 ? undefined : to)
+  })()
 
   test('its own section, after the phone’s browser and before Language', () => {
     const lines = readme.split('\n')
@@ -156,20 +168,30 @@ describe('the README’s server steps are the panel’s snippets', () => {
     expect(at).toBeGreaterThan(lines.indexOf("### In a phone's browser"))
     expect(at).toBeLessThan(lines.indexOf('## Language'))
   })
+  test('the steps by hand under the panel’s own titles, in the panel’s order', () => {
+    const titles = [
+      en('server.panel.byHandLogin'),
+      en('access.snip.paste'),
+      en('access.snip.commands'),
+      en('access.snip.keys', { file: keysFile('boardtunnel') }),
+      en('access.snip.sshd'),
+      en('server.panel.web'),
+    ].map(title => [title, byHand.indexOf(`**${title}**`)] as const)
+    expect(titles.filter(([, at]) => at < 0)).toEqual([])
+    const at = titles.map(([, n]) => n)
+    expect(at).toEqual([...at].sort((a, b) => a - b))
+  })
   test('the user and the socket’s folder: serverCommands’ lines in order, whole, in one block', () => {
     // Whole lines: a README line with more before or after one of them is not that line.
     const lines = `\n${serverCommands('boardtunnel', TUNNEL_SOCKET)}\n`
-    expect(fences.some(text => `\n${text}\n`.includes(lines))).toBe(true)
+    expect(fencesOf(byHand).some(text => `\n${text}\n`.includes(lines))).toBe(true)
   })
   test('the keys file’s line, as the panel shows it before a key exists', () => {
-    expect(fences).toContain(keysLine(PUBLIC_KEY_EXAMPLE))
+    expect(fencesOf(byHand)).toContain(keysLine(PUBLIC_KEY_EXAMPLE))
   })
   test('the sshd block and the Caddyfile, word for word', () => {
     expect(fences).toContain(sshdBlock('boardtunnel'))
     expect(fences).toContain(caddyfile('board.example.com', TUNNEL_SOCKET))
-  })
-  test('the folder’s group for a host Caddy, word for word', () => {
-    expect(fences).toContain(caddyGroupLine(TUNNEL_SOCKET))
   })
   test('the server is no longer said to be untouched by the board', () => {
     expect(readme).not.toContain('The board never touches the server')

@@ -1765,10 +1765,12 @@ no firewall rule: it is a file, not a port.
 
 #### Set up the server
 
-1. **The address of the board** (the domain). The **server** is filled in from it; change it, or
-   the SSH port, when you reach the server by another name.
-2. **The login and its password**, the same as for `ssh`: `root` by default, or the user your host
-   gave you, the one with sudo. A key works too (below).
+Under **The server and its login**:
+
+1. **Address of the board** (the domain). The **Server** is filled in from it; change it, or its
+   **port** (22), when you reach the server by another name or port.
+2. **Login** and **Password**, the same as for `ssh`: `root` by default, or the user your host
+   gave you, the one with sudo. A key works too: **Log in with a key file instead** (below).
 3. **Set up the server.** The board logs in once, looks at the server and shows what it found and
    what it will do, in a few lines:
 
@@ -1776,34 +1778,40 @@ no firewall rule: it is a file, not a port.
    What I found
      Debian 13 · Caddy in Docker serves 443 and 80: a.example.com, b.example.com
    What I will do
-     Make the board's own login on the server (boardtunnel), allowed only to hold the tunnel.
-     Add board.example.com to your Caddy and hand it the board's tunnel.
+     Make the board’s own login on the server (boardtunnel), allowed only to hold the tunnel.
+     Add board.example.com to your Caddy and hand it the board’s tunnel.
      Your sites are not touched; each is checked before and after.
    ```
 
    Every file, line, container and image it involves, and how Undo removes each, is under
-   **Details**. Nothing has changed yet. When the plan installs Docker, it says so with a tick to
-   confirm: "Docker is not installed: I will install it from Docker's own repository."
+   **Details: every file and line, and how Undo removes them**. Nothing has changed yet. When the
+   plan installs Docker, it says so ("Docker is not installed: I will install it from Docker’s own
+   repository."), and **Apply** waits for its tick, **OK, install Docker**.
 4. **Apply.** The board runs the plan on the server, step by step, and shows each as it goes.
    Then Test connection runs by itself, for up to 2 minutes while the certificate comes. After
-   that the panel shows the tunnel's status and "Set up on 23 Oct, 10:04" with **Undo**, and the
-   login's fields fold away.
-5. **Undo** asks for the password again (the board did not keep it), shows its own plan, and takes
-   off the server what the board put there.
+   that the panel shows the tunnel's status and "Set up on Oct 23, 10:04 AM: Caddy in Docker" with
+   **Undo**, and the login's fields fold away.
+5. **Undo**, then **Undo? Click again**, logs in as Set up does: a key that works is enough, else
+   it asks for the password again, since the board did not keep it ("Undo logs in to the server
+   again: type root’s password, then Continue."). Then it shows its own plan, and its **Undo**
+   takes off the server what the board put there.
 
 On a server the board does not set up, the plan says why in one line, and the panel keeps the
-commands for such a server, step by step, folded under "Your server needs steps by hand".
+commands for such a server, step by step, folded under **Your server needs steps by hand**
+(below).
 
 **The password.** The board uses it for that one click and keeps it nowhere: not in config.json,
 not in a log, not on the server, not on a command line. It reaches ssh through a small helper of
 the board's that answers ssh's password prompt and nothing else, and, when the login is not root
-and sudo asks, goes to sudo on its standard input. The panel keeps it in the page while it is open,
-so you type it once. The board tries it once per click: some servers lock a login after a few
-wrong ones. If sudo wants a password of its own, the panel then asks for that one too. What the
-board cannot answer stops with a hint: a one-time code or any other question, root's login refused
-by the server (`PermitRootLogin prohibit-password`, usual on Ubuntu's images: log in as the user
-with sudo), a server that takes keys only, or an ssh on this computer older than OpenSSH 8.4
-(Windows 11's is 9.x). Then use a key, or the one command.
+and sudo asks, goes to sudo on its standard input. The panel keeps it in the page while it is
+open, from Set up the server to Apply, so you type it once; once Apply or Undo has it, the panel
+forgets it too. Apply after the page was reloaded asks for it again, and runs the same plan. The
+board tries it once per click: some servers lock a login after a few wrong ones. If sudo wants a
+password of its own, the panel then asks for that one too. What the board cannot answer stops
+with a hint: a one-time code or any other question, root's login refused by the server
+(`PermitRootLogin prohibit-password`, usual on Ubuntu's images: log in as the user with sudo), a
+server that takes keys only, or an ssh on this computer older than OpenSSH 8.4 (Windows 11's is
+9.x). Then use a key, or the one command.
 
 **A key instead.** With no password typed, the board logs in with what ssh does by default (the
 ssh agent, the usual `~/.ssh` keys) or a key file you name. With a password typed, the keys are
@@ -1829,12 +1837,8 @@ First, what lets its tunnel in and nothing more, each part only where the server
   group. The setgid bit (the `2`) gives the socket the folder's group; the board's web server
   gets that group (case 2 gives the folder Caddy's group instead), and nobody else can open it.
 - **The keys file**, `/etc/ssh/authorized_keys/boardtunnel` (root's, mode `644`, out of the tunnel
-  user's reach), with the board's key allowed to forward only:
-
-  ```
-  restrict,port-forwarding ssh-ed25519 AAAA… agent-board@<PC>
-  ```
-
+  user's reach), with the board's key allowed to forward only: `restrict,port-forwarding` before
+  the key, on one line.
 - **sshd's fence** for that user, the block below, in a file of its own,
   `/etc/ssh/sshd_config.d/00-agent-board.conf`, where sshd_config includes that folder (Debian 12
   and later, Ubuntu 22.04 and later). Where it has no `Include`, the block goes at the end of
@@ -2022,10 +2026,52 @@ as usual, and `up` works.
   root, and systemd. Docker, when the board installs it, comes from Docker's own apt repository by
   the steps Docker documents, its key checked by fingerprint.
 
-#### Do it myself: one command
+#### Your server needs steps by hand
 
-For when you would rather not give the board a password. **Do it myself** in the panel has one
-line with Copy, about 60 KB:
+On a server the board does not set up ("anything else" above), nothing is changed: the plan says
+why in one line, and **Your server needs steps by hand**, folded, has the steps for you to paste,
+filled in with your values, each with Copy. A server the board does set up never shows them.
+
+**The board’s own login on the server** first, what the board would make (above):
+
+- **All of step 1 in one paste**, once Generate key has made the board's key: the parts below as
+  one script that stops at its first error, makes only what is missing, and is safe to paste
+  twice. It also makes `/run/sshd` when there is none (an Ubuntu 24.04 sshd no one has connected
+  to yet), since `sudo sshd -t` stops without it.
+- **The tunnel's user and the socket's folder**:
+
+```sh
+sudo useradd --system --user-group --no-create-home --home-dir /nonexistent \
+    --shell /usr/sbin/nologin boardtunnel
+# useradd leaves the account locked; an sshd with UsePAM no refuses a locked one, key or not
+sudo usermod -p '*' boardtunnel
+# the socket's folder: the tunnel user makes the socket; its group is the reader's (step 3)
+sudo install -d -m 2750 -o boardtunnel -g boardtunnel /var/lib/boardtunnel
+# the key's file belongs to root, out of the tunnel user's reach
+sudo install -d -m 755 /etc/ssh/authorized_keys
+```
+
+- **The keys file, /etc/ssh/authorized_keys/boardtunnel**: this line, with the board's key once
+  Generate key has made it:
+
+```
+restrict,port-forwarding ssh-ed25519 AAAA… agent-board@<PC>
+```
+
+- **At the end of /etc/ssh/sshd_config**: the `Match` block above. Then `sudo sshd -t` and a
+  reload (`sudo systemctl try-reload-or-restart ssh`, or `sshd`).
+
+Then **The web server**: for the case Look found, or the one you pick under **What holds 80 and 443
+on your server?** (**Nothing on 80 and 443**, **Caddy as a service**, **Caddy in Docker**, **nginx
+or something else**, on Debian or Ubuntu), its steps as commands, each with why, what to check
+after and how to undo it; what only the server knows is a `<placeholder>`, each with the command
+that finds it. For another board's setup on the server, that setup's Undo. **Then Test
+connection.**
+
+#### Do it myself (one command)
+
+For when you would rather not give the board a password. **Do it myself (one command)** in the
+panel has one line with **Copy**, about 60 KB:
 
 ```
 echo H4sIAAAA… | base64 -d | gunzip | sh
@@ -2046,10 +2092,13 @@ board does not set up, it stops before changing anything and says why.
   shell names what is missing) and nothing runs; the others it checks before anything else.
 - Then press **Test connection** on the board: it finds the board's address (on 443, else 8443)
   and keeps the port.
-- Copied again from the panel and pasted, it says "Set up already" and changes nothing. The panel
-  has the **Undo command** too, which follows the server's record as the board's Undo does; the board's own Set up the
-  server and Undo see a setup the command made, and the other way round.
-- **What is inside** shows the script, readable.
+- Copied again from the panel and pasted, it says "Set up already" and changes nothing. The
+  panel has the Undo command too, under **To undo it later (one command too)**, which follows the
+  server's record as the board's Undo does; the board's own Set up the server and Undo see a setup
+  the command made, and the other way round.
+- **What is inside (the script, readable)** shows the script.
+- Opened before the board's address is typed, it says "Type the board’s address first." and makes
+  the command once the address is there. The command is in the board's language.
 
 ### On this computer
 
