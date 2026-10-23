@@ -6,10 +6,17 @@
 // --background (the startup hook): make sure the workspace board runs, without focusing it.
 import { readFileSync } from 'node:fs'
 import { loadConfig } from '../adapters/config-file.ts'
-import { type HerdrPane, type HerdrWorkspace, herdr, snapshot } from '../adapters/herdr.ts'
+import { type HerdrWorkspace, herdr, paneProcesses, snapshot } from '../adapters/herdr.ts'
 import { boardFile, PLUGIN_ID, ROOT } from '../adapters/paths.ts'
 import { isAlive } from '../adapters/process.ts'
-import { asSavedBoard, lastBoard, type SavedBoard } from '../core/board-pane.ts'
+import {
+  asSavedBoard,
+  closeOfLeftover,
+  isSidebarPane,
+  lastBoardChecked,
+  leftoverBoards,
+  type SavedBoard,
+} from '../core/board-pane.ts'
 import { goBack, rememberReturn } from '../services/nav.ts'
 
 /** What `herdr workspace create` and `herdr plugin pane open` answer, as far as this reads them. */
@@ -37,13 +44,19 @@ const saved = savedBoard()
 let snap = await snapshot()
 const placement = cfg.placement === 'tab' || cfg.placement === 'overlay' ? cfg.placement : 'workspace'
 if (background && placement !== 'workspace') process.exit(0)
-const last = lastBoard(saved, snap.panes, isAlive)
+// One process-info call when board.json names a live board and its host, in a pane with the board's
+// label; none for an older board.json.
+const last = await lastBoardChecked(saved, snap.panes, isAlive, paneProcesses)
 if (last?.stale) {
   // herdr brought the board's pane back (after a restart) with a shell in it, not the board: it is
   // no plugin pane any more. Close it and open a board as if there were none.
   await herdr(['pane', 'close', last.pane]).catch(() => {})
-  snap = await snapshot()
 }
+// Other panes herdr brought back from earlier boards (the board's label, an idle shell in them):
+// herdr is asked only of panes with that label, so with none there is no call.
+const leftovers = await leftoverBoards(snap.panes, saved?.pane ?? null, paneProcesses)
+for (const pane of leftovers) await herdr(closeOfLeftover(snap.panes, pane)).catch(() => {})
+if (last?.stale || leftovers.length) snap = await snapshot()
 const board = last && !last.stale ? last.pane : null
 if (board) {
   if (background) process.exit(0)
@@ -113,14 +126,12 @@ async function show(tab: string | undefined): Promise<void> {
 
 /** Tabs of the workspace with panes, all of them herdr-sidebar panes: nothing of the user's in there. */
 function orphanTabs(workspace: string): string[] {
-  const sidebar = (p: HerdrPane): boolean =>
-    !p.agent && Object.keys(p.tokens ?? {}).some(k => k.startsWith('herdr-sidebar'))
   return snap.tabs
     .filter(tab => tab.workspace_id === workspace)
     .map(tab => tab.tab_id)
     .filter(id => {
       const panes = snap.panes.filter(p => p.tab_id === id)
-      return panes.length > 0 && panes.every(sidebar)
+      return panes.length > 0 && panes.every(isSidebarPane)
     })
 }
 

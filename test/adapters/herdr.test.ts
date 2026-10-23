@@ -1,6 +1,6 @@
 // herdr's JSON answers as the board reads them (src/adapters/herdr.ts): narrowed, never cast.
 import { expect, test } from 'bun:test'
-import { asAgent, asSnapshot } from '../../src/adapters/herdr.ts'
+import { asAgent, asPaneProcesses, asSnapshot } from '../../src/adapters/herdr.ts'
 import { isAgentStatus } from '../../src/core/board.ts'
 
 test('a snapshot keeps the workspaces, tabs and panes with an id, and the fields of the type the board takes', () => {
@@ -79,4 +79,58 @@ test('agent get: the kind, a status herdr may not know yet, the session and name
 test("herdr's agent statuses, and nothing else", () => {
   for (const s of ['idle', 'working', 'blocked', 'done', 'unknown', 'sleeping']) expect(isAgentStatus(s)).toBe(true)
   for (const s of ['thinking', '', 'Idle', null, undefined, 1, {}]) expect(isAgentStatus(s)).toBe(false)
+})
+
+test('pane process-info (herdr 0.9.5): the pane’s own process, and the foreground ones with their command line', () => {
+  // The board's pane on Windows, as herdr answers it.
+  expect(
+    asPaneProcesses({
+      type: 'pane_process_info',
+      process_info: {
+        foreground_process_group_id: 61104,
+        foreground_processes: [
+          {
+            argv: ['C:\\Users\\me\\.bun\\bin\\bun.EXE', 'src/entrypoints/run.ts'],
+            argv0: 'C:\\Users\\me\\.bun\\bin\\bun.EXE',
+            cmdline: 'C:\\Users\\me\\.bun\\bin\\bun.EXE src/entrypoints/run.ts',
+            cwd: 'C:\\Users\\me\\herdr-agent-board\\',
+            name: 'bun.exe',
+            pid: 61104,
+          },
+        ],
+        pane_id: 'w1C:p2',
+        shell_pid: 61104,
+      },
+    }),
+  ).toEqual({
+    shell: 61104,
+    foreground: [{ pid: 61104, args: ['C:\\Users\\me\\.bun\\bin\\bun.EXE', 'src/entrypoints/run.ts'] }],
+  })
+  // The command line when there is no argv; none when neither is there; a process without a pid dropped.
+  expect(
+    asPaneProcesses({
+      process_info: {
+        shell_pid: 13800,
+        foreground_processes: [
+          { pid: 13800, cmdline: 'bash.exe -l', argv: 'bash.exe' },
+          { pid: 13801, argv: [3, 'vim'] },
+          { pid: 13802 },
+          { pid: '13803', argv: ['x'] },
+          { pid: 0 },
+          null,
+        ],
+      },
+    }),
+  ).toEqual({
+    shell: 13800,
+    foreground: [
+      { pid: 13800, args: ['bash.exe -l'] },
+      { pid: 13801, args: ['vim'] },
+      { pid: 13802, args: [] },
+    ],
+  })
+  expect(asPaneProcesses({ process_info: { shell_pid: 13800 } })).toEqual({ shell: 13800, foreground: [] })
+  // Without the pane's own process herdr says nothing to go by.
+  for (const answer of [null, {}, { process_info: null }, { process_info: { shell_pid: null } }, 'x'])
+    expect(asPaneProcesses(answer)).toBe(null)
 })
