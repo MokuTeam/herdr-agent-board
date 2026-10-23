@@ -35,12 +35,12 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.holder.free': 'free',
     'server.panel.holder.container': '"{name}" in Docker ({image})',
     'server.panel.holder.compose': '"{name}" in Docker ({image}, compose "{project}")',
-    'server.panel.fence.ok': "The tunnel's fence in sshd: as the panel's ✓",
-    'server.panel.fence.differs': "The tunnel's fence in sshd differs from the panel's ({keys}) ✗",
+    // step 1's parts as Look found them: what is not in place, Apply makes (with the board's key)
+    'server.panel.fence.ok': "The tunnel's fence in sshd: in place ✓",
+    'server.panel.fence.differs': "The tunnel's fence in sshd: not in place ({keys})",
     'server.panel.folder.ok': "The socket's folder: {mode} {owner}:{group} ✓",
-    'server.panel.folder.off':
-      "The socket's folder: {mode} {owner}:{group} ✗ (step 1 makes it 2750, the tunnel user's)",
-    'server.panel.folder.none': "The socket's folder: not there ✗ (step 1)",
+    'server.panel.folder.off': "The socket's folder: {mode} {owner}:{group} ✗ (the board's is 2750, the tunnel user's)",
+    'server.panel.folder.none': "The socket's folder: not there yet",
     'server.panel.config': "Your Caddy's config: {path} ({how}), Caddy {version}",
     'server.panel.mount.unit': 'read by its service',
     'server.panel.mount.file': 'a file mounted into its container',
@@ -66,6 +66,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.touch.group': 'the group of {what}',
     'server.panel.touch.reload': 'a reload of {what}',
     'server.panel.touch.network': 'network {what}',
+    'server.panel.touch.user': 'user {what}',
+    'server.panel.touch.folder': 'folder {what}',
     'server.panel.tick.docker': "Install Docker from Docker's own repository",
     'server.panel.tick.removeDocker': 'Remove Docker too (the board installed it, and it holds nothing else)',
     'server.panel.tick.removeEdited': "Remove the board's files you changed since, too",
@@ -138,7 +140,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.case.update': 'Set up for {domain} before: the plan moves the setup to the new domain or port.',
     // why the board leaves it to you ("Do it myself")
     'server.manual.os':
-      'The server is not Debian 12 or 13 or Ubuntu 22.04 to 26.04, or lacks flock, setsid, timeout, sha256sum or ss.',
+      'The server is not Debian 12 or 13 or Ubuntu 22.04 to 26.04, or lacks flock, setsid, timeout, sha256sum, ss or gzip.',
     'server.manual.selinux': 'SELinux enforces its policy here.',
     'server.manual.podman': 'Docker here is Podman.',
     'server.manual.rootless': 'Docker runs rootless here.',
@@ -165,7 +167,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'Another board’s setup is on this server: Undo it from that board, or with its settings here.',
     'server.manual.interrupted': 'A run of the board did not finish here: undo it first, then look again.',
     'server.manual.portTaken': 'A port the board needs (8443, 8480 or 8481) is held by another program.',
-    'server.manual.folder': 'The socket’s folder is not there: do step 1 first.',
+    'server.manual.folder':
+      'The socket’s folder is not there, and the board has no key of its own yet to set up its login: generate its key first.',
     // the plan's steps
     'server.step.guard.title': 'Check that the server is as Look found it',
     'server.step.guard.why': 'If who holds the ports or your config changed since, nothing is changed: look again.',
@@ -240,9 +243,31 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.step.drop-docker.why': 'The board installed it and it holds nothing else.',
     'server.step.forget.title': 'Remove the board’s record and backups',
     'server.step.forget.why': '/etc/agent-board goes last.',
-    'server.step.by-hand.title': 'What you made by hand',
+    'server.step.by-hand.title': 'What was there before the board',
     'server.step.by-hand.why':
-      'The tunnel’s user, its folder, the key’s file and sshd’s block stay: here is how to remove them, if you want.',
+      'The parts of the tunnel’s login that were there before the board stay: here is how to remove them, if you want.',
+    // step 1 by the board: the tunnel's login on the server, and its Undo
+    'server.step.tunnel-user.title': 'Make the tunnel’s user ({user})',
+    'server.step.tunnel-user.why':
+      'The board’s own login on the server: no password, no shell, no home; allowed only to hold the tunnel.',
+    'server.step.socket-folder.title': 'Make the socket’s folder ({folder})',
+    'server.step.socket-folder.why':
+      'Where the tunnel’s user makes the socket: 2750, its own and its group’s, so only the web server you choose can open it.',
+    'server.step.keys-file.title': 'Put the board’s key in place ({file})',
+    'server.step.keys-file.why':
+      'Root’s file, out of the tunnel user’s reach; the key may only forward. A file that was there is put back if a later step fails.',
+    'server.step.sshd-fence.title': 'Fence the tunnel’s user in sshd ({file})',
+    'server.step.sshd-fence.why':
+      'A Match block for that user alone. sshd checks it, it must be in force for the tunnel’s user and leave root’s and your own settings as they were; then sshd reloads (no restart: open sessions stay).',
+    'server.step.drop-fence.title': 'Remove the tunnel’s fence from sshd ({file})',
+    'server.step.drop-fence.why':
+      'sshd checks the result, root’s and your own settings must stay as they are; then sshd reloads.',
+    'server.step.drop-keys.title': 'Remove the board’s key ({file})',
+    'server.step.drop-keys.why': 'The board made this file.',
+    'server.step.drop-folder.title': 'Remove the socket’s folder ({folder})',
+    'server.step.drop-folder.why': 'With the socket in it; kept if anything else is there.',
+    'server.step.drop-user.title': 'Remove the tunnel’s user ({user})',
+    'server.step.drop-user.why': 'Only the user the board made; its tunnel, if connected, ends first.',
     // warnings with the plan
     'server.warn.noDns': '{domain} has no DNS record yet: the certificate needs one pointing to this server.',
     'server.warn.dns': '{domain} points to {addresses}, not to an address of this server (fine behind 1:1 NAT).',
@@ -260,6 +285,52 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.warn.caddyRoot': 'Your Caddy runs as root: it opens the socket with root’s rights.',
     'server.warn.interrupted': 'A run did not finish: this plan undoes what it left. Look again after it.',
     'server.warn.notTheirConfig': 'No Caddy Look found uses {file}: the board’s part comes out of it without a reload.',
+    // the plan in plain words (core/server-plain.ts): no network, container or Caddyfile here
+    'server.plain.found': '{system} · {web}',
+    'server.plain.unsupported': '{system} (not a system the board sets up)',
+    'server.plain.web.none': 'nothing answers on 443 and 80',
+    'server.plain.web.both': '{who} serves 443 and 80{sites}',
+    'server.plain.web.only443': '{who} serves 443{sites}; 80 is free',
+    'server.plain.web.only80': '{who} answers on 80; 443 is free',
+    'server.plain.web.each': '{who443} serves 443{sites}; {who80} answers on 80',
+    'server.plain.who.docker': '{name} in Docker',
+    'server.plain.who.board': 'the board’s own web server',
+    'server.plain.sites': ': {sites}',
+    'server.plain.sitesMore': ': {sites} and {more} more',
+    'server.plain.will.login': 'Make the board’s own login on the server ({user}), allowed only to hold the tunnel.',
+    'server.plain.will.key': 'Put the board’s key in place for its login on the server ({user}).',
+    'server.plain.will.case.1':
+      'Run a web server of the board’s own for {domain} on 443 and 80; it gets its certificate by itself.',
+    'server.plain.will.case.1b':
+      'Run a web server of the board’s own for {domain} on 443; it gets its certificate there by itself.',
+    'server.plain.will.case.2': 'Add {domain} to your Caddy and hand it the board’s tunnel.',
+    'server.plain.will.case.3a': 'Add {domain} to your Caddy and hand it the board’s tunnel.',
+    'server.plain.will.case.3b': 'Add {domain} to your Caddy and hand it the board’s tunnel.',
+    'server.plain.will.case.4a':
+      'Run a web server of the board’s own for {domain} on port 8443 ({address}); it takes 80 only for its certificate.',
+    'server.plain.will.case.4b':
+      'Run a web server of the board’s own for {domain} on port 8443 ({address}); your nginx passes it only its certificate checks.',
+    'server.plain.will.update': 'Move the board’s address to {address}.',
+    'server.plain.will.nothing': 'Nothing to change: the board is set up here already.',
+    'server.plain.will.undo': 'Remove what the board added for {domain}.',
+    'server.plain.will.undoLogin': 'Remove what the board added for {domain}, and its login on the server ({user}).',
+    'server.plain.docker': 'Docker is not installed: I will install it from Docker’s own repository.',
+    'server.plain.untouched.all': 'Nothing else on the server is touched.',
+    'server.plain.untouched.port': '{who} on {port} is not touched.',
+    'server.plain.untouched.sites': 'Your sites are not touched.',
+    'server.plain.untouched.sitesChecked': 'Your sites are not touched; each is checked before and after.',
+    'server.plain.untouched.nothing': 'Nothing on the server is changed.',
+    'server.plain.untouched.undo': 'Nothing of yours is removed.',
+    'server.plain.untouched.undoChecked': 'Nothing of yours is removed; your sites are checked before and after.',
+    'server.plain.stop': 'The board does not set this server up by itself: {reason}',
+    'server.plain.stop.os':
+      'it sets up Debian 12 and 13 and Ubuntu 22.04 to 26.04 only, with the tools they come with.',
+    'server.plain.stop.system': 'the server is set up in a way it does not handle.',
+    'server.plain.stop.web': 'your web server is set up in a way it does not change.',
+    'server.plain.stop.domainServed': 'your web server serves {domain} already.',
+    'server.plain.stop.otherSetup': 'another board is set up on this server.',
+    'server.plain.stop.interrupted': 'a run of the board did not finish here.',
+    'server.plain.stop.folder': 'it has no key of its own yet for its login there.',
     // the admin connection: its fields, and why Look, Apply or Undo stopped (the spec's hints)
     'server.field.adminUser': 'Admin user',
     'server.field.adminKey': 'Admin key',
@@ -301,6 +372,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.err.prompt': 'The server asked: {prompt}',
     'server.err.docker': 'Tick “Install Docker from Docker’s own repository” first.',
     'server.err.noRecord': 'Nothing of the board’s is set up on this server.',
+    'server.err.publicKey': 'The board’s public key is not one OpenSSH public key on one line.',
     'server.err.cancelled': 'Cancelled.',
     'server.err.spawn': 'ssh could not start ({code}).',
     'server.err.timeout':
@@ -338,12 +410,12 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.holder.free': 'свободен',
     'server.panel.holder.container': '«{name}» в Docker ({image})',
     'server.panel.holder.compose': '«{name}» в Docker ({image}, compose «{project}»)',
-    'server.panel.fence.ok': 'Ограда туннеля в sshd: как в панели ✓',
-    'server.panel.fence.differs': 'Ограда туннеля в sshd не такая, как в панели ({keys}) ✗',
+    'server.panel.fence.ok': 'Ограда туннеля в sshd: на месте ✓',
+    'server.panel.fence.differs': 'Ограда туннеля в sshd: не на месте ({keys})',
     'server.panel.folder.ok': 'Папка сокета: {mode} {owner}:{group} ✓',
     'server.panel.folder.off':
-      'Папка сокета: {mode} {owner}:{group} ✗ (шаг 1 делает её 2750 и отдаёт пользователю туннеля)',
-    'server.panel.folder.none': 'Папка сокета: её нет ✗ (шаг 1)',
+      'Папка сокета: {mode} {owner}:{group} ✗ (у доски она 2750 и принадлежит пользователю туннеля)',
+    'server.panel.folder.none': 'Папки сокета ещё нет',
     'server.panel.config': 'Конфигурация вашего Caddy: {path} ({how}), Caddy {version}',
     'server.panel.mount.unit': 'её читает служба',
     'server.panel.mount.file': 'файл, смонтированный в контейнер',
@@ -369,6 +441,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.touch.group': 'группа {what}',
     'server.panel.touch.reload': 'перезагрузка {what}',
     'server.panel.touch.network': 'сеть {what}',
+    'server.panel.touch.user': 'пользователь {what}',
+    'server.panel.touch.folder': 'папка {what}',
     'server.panel.tick.docker': 'Установить Docker из собственного репозитория Docker',
     'server.panel.tick.removeDocker': 'Удалить и Docker (его установила доска, и в нём больше ничего нет)',
     'server.panel.tick.removeEdited': 'Удалить и файлы доски, которые вы с тех пор меняли',
@@ -437,7 +511,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.case.same': 'Уже настроено для {domain}: план проверит каждую часть и вернёт недостающее.',
     'server.case.update': 'Раньше было настроено для {domain}: план перенесёт настройку на новый домен или порт.',
     'server.manual.os':
-      'Сервер не Debian 12 или 13 и не Ubuntu 22.04–26.04, или на нём нет flock, setsid, timeout, sha256sum или ss.',
+      'Сервер не Debian 12 или 13 и не Ubuntu 22.04–26.04, или на нём нет flock, setsid, timeout, sha256sum, ss или gzip.',
     'server.manual.selinux': 'Здесь SELinux в режиме enforcing.',
     'server.manual.podman': 'Docker здесь — это Podman.',
     'server.manual.rootless': 'Docker здесь работает без root (rootless).',
@@ -465,7 +539,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.manual.interrupted':
       'Запуск доски здесь не завершился: сначала отмените его, потом осмотрите сервер снова.',
     'server.manual.portTaken': 'Нужный доске порт (8443, 8480 или 8481) занят другой программой.',
-    'server.manual.folder': 'Папки сокета нет: сначала сделайте шаг 1.',
+    'server.manual.folder':
+      'Папки сокета нет, а своего ключа, чтобы настроить свой вход, у доски ещё нет: сначала создайте её ключ.',
     'server.step.guard.title': 'Проверить, что сервер такой, каким его застал осмотр',
     'server.step.guard.why':
       'Если с тех пор сменились владельцы портов или ваша конфигурация, ничего не меняется: осмотрите снова.',
@@ -541,9 +616,30 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.step.drop-docker.why': 'Его установила доска, и в нём больше ничего нет.',
     'server.step.forget.title': 'Убрать запись и резервные копии доски',
     'server.step.forget.why': '/etc/agent-board уходит последней.',
-    'server.step.by-hand.title': 'То, что вы сделали вручную',
-    'server.step.by-hand.why':
-      'Пользователь туннеля, его папка, файл ключа и блок sshd остаются: вот как их убрать, если хотите.',
+    'server.step.by-hand.title': 'То, что было до доски',
+    'server.step.by-hand.why': 'Части входа туннеля, которые были до доски, остаются: вот как их убрать, если хотите.',
+    'server.step.tunnel-user.title': 'Создать пользователя туннеля ({user})',
+    'server.step.tunnel-user.why':
+      'Собственный вход доски на сервер: без пароля, без оболочки, без домашней папки; ему можно только держать туннель.',
+    'server.step.socket-folder.title': 'Создать папку сокета ({folder})',
+    'server.step.socket-folder.why':
+      'Здесь пользователь туннеля создаёт сокет: 2750, его и его группы, так что открыть сокет сможет только выбранный веб-сервер.',
+    'server.step.keys-file.title': 'Положить ключ доски ({file})',
+    'server.step.keys-file.why':
+      'Файл принадлежит root, пользователь туннеля его не изменит; ключу можно только пробрасывать. Если файл уже был, он вернётся, когда следующий шаг не удастся.',
+    'server.step.sshd-fence.title': 'Оградить пользователя туннеля в sshd ({file})',
+    'server.step.sshd-fence.why':
+      'Блок Match только для этого пользователя. sshd проверяет его, он должен действовать для пользователя туннеля, а настройки root и ваши должны остаться прежними; затем sshd перечитывает настройки (без перезапуска: открытые сеансы остаются).',
+    'server.step.drop-fence.title': 'Убрать ограду туннеля из sshd ({file})',
+    'server.step.drop-fence.why':
+      'sshd проверяет результат, настройки root и ваши должны остаться прежними; затем sshd перечитывает настройки.',
+    'server.step.drop-keys.title': 'Убрать ключ доски ({file})',
+    'server.step.drop-keys.why': 'Этот файл создала доска.',
+    'server.step.drop-folder.title': 'Убрать папку сокета ({folder})',
+    'server.step.drop-folder.why': 'Вместе с сокетом; если в ней есть что-то ещё, она остаётся.',
+    'server.step.drop-user.title': 'Убрать пользователя туннеля ({user})',
+    'server.step.drop-user.why':
+      'Только пользователя, созданного доской; его туннель, если подключён, сначала закрывается.',
     'server.warn.noDns': 'У {domain} ещё нет записи DNS: для сертификата нужна запись, указывающая на этот сервер.',
     'server.warn.dns': '{domain} указывает на {addresses}, а не на адрес этого сервера (за 1:1 NAT это нормально).',
     'server.warn.forwarding':
@@ -564,6 +660,53 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'Запуск не завершился: этот план отменяет то, что он оставил. После него осмотрите сервер снова.',
     'server.warn.notTheirConfig':
       'Ни один найденный осмотром Caddy не использует {file}: часть доски убирается из него без перезагрузки.',
+    // план простыми словами (core/server-plain.ts)
+    'server.plain.found': '{system} · {web}',
+    'server.plain.unsupported': '{system} (такую систему доска не настраивает)',
+    'server.plain.web.none': 'на 443 и 80 никто не отвечает',
+    'server.plain.web.both': '443 и 80 обслуживает {who}{sites}',
+    'server.plain.web.only443': '443 обслуживает {who}{sites}; 80 свободен',
+    'server.plain.web.only80': 'на 80 отвечает {who}; 443 свободен',
+    'server.plain.web.each': '443 обслуживает {who443}{sites}; на 80 отвечает {who80}',
+    'server.plain.who.docker': '{name} в Docker',
+    'server.plain.who.board': 'собственный веб-сервер доски',
+    'server.plain.sites': ': {sites}',
+    'server.plain.sitesMore': ': {sites} и ещё {more}',
+    'server.plain.will.login':
+      'Создать на сервере собственный вход доски ({user}), которому можно только держать туннель.',
+    'server.plain.will.key': 'Положить ключ доски для её входа на сервер ({user}).',
+    'server.plain.will.case.1':
+      'Запустить собственный веб-сервер доски для {domain} на 443 и 80; сертификат он получит сам.',
+    'server.plain.will.case.1b':
+      'Запустить собственный веб-сервер доски для {domain} на 443; сертификат он получит там сам.',
+    'server.plain.will.case.2': 'Добавить {domain} в ваш Caddy и передать ему туннель доски.',
+    'server.plain.will.case.3a': 'Добавить {domain} в ваш Caddy и передать ему туннель доски.',
+    'server.plain.will.case.3b': 'Добавить {domain} в ваш Caddy и передать ему туннель доски.',
+    'server.plain.will.case.4a':
+      'Запустить собственный веб-сервер доски для {domain} на порту 8443 ({address}); 80 он займёт только для сертификата.',
+    'server.plain.will.case.4b':
+      'Запустить собственный веб-сервер доски для {domain} на порту 8443 ({address}); ваш nginx передаст ему только проверки сертификата.',
+    'server.plain.will.update': 'Перенести адрес доски на {address}.',
+    'server.plain.will.nothing': 'Менять нечего: доска здесь уже настроена.',
+    'server.plain.will.undo': 'Убрать то, что доска добавила для {domain}.',
+    'server.plain.will.undoLogin': 'Убрать то, что доска добавила для {domain}, и её вход на сервер ({user}).',
+    'server.plain.docker': 'Docker не установлен: я установлю его из собственного репозитория Docker.',
+    'server.plain.untouched.all': 'Больше ничего на сервере не трогается.',
+    'server.plain.untouched.port': '{who} на {port} не трогается.',
+    'server.plain.untouched.sites': 'Ваши сайты не трогаются.',
+    'server.plain.untouched.sitesChecked': 'Ваши сайты не трогаются; каждый проверяется до и после.',
+    'server.plain.untouched.nothing': 'На сервере ничего не меняется.',
+    'server.plain.untouched.undo': 'Ничего вашего не удаляется.',
+    'server.plain.untouched.undoChecked': 'Ничего вашего не удаляется; ваши сайты проверяются до и после.',
+    'server.plain.stop': 'Доска не настраивает этот сервер сама: {reason}',
+    'server.plain.stop.os':
+      'она настраивает только Debian 12 и 13 и Ubuntu 22.04–26.04 с их собственными инструментами.',
+    'server.plain.stop.system': 'сервер устроен так, как она сама не умеет.',
+    'server.plain.stop.web': 'ваш веб-сервер устроен так, что она его не меняет.',
+    'server.plain.stop.domainServed': 'ваш веб-сервер уже обслуживает {domain}.',
+    'server.plain.stop.otherSetup': 'на этом сервере настроена другая доска.',
+    'server.plain.stop.interrupted': 'запуск доски здесь не завершился.',
+    'server.plain.stop.folder': 'у неё ещё нет своего ключа для входа туда.',
     // подключение администратора: его поля и почему осмотр, применение или отмена остановились
     'server.field.adminUser': 'Администратор',
     'server.field.adminKey': 'Ключ администратора',
@@ -608,6 +751,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.err.prompt': 'Сервер спросил: {prompt}',
     'server.err.docker': 'Сначала отметьте «Установить Docker из собственного репозитория Docker».',
     'server.err.noRecord': 'На этом сервере ничего от доски не настроено.',
+    'server.err.publicKey': 'Открытый ключ доски — не один открытый ключ OpenSSH в одну строку.',
     'server.err.cancelled': 'Отменено.',
     'server.err.spawn': 'ssh не запустился ({code}).',
     'server.err.timeout': 'Сервер слишком долго не отвечал (частая причина — зависший демон Docker): попробуйте позже.',

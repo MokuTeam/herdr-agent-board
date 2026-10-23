@@ -457,14 +457,14 @@ test('what Look found for case 2 on Debian 13: the server, the case, the address
   expect(textsOf(part, 'access-fact')).toEqual(foundLines(facts, t, 'boardtunnel'))
   expect(textsOf(part, 'access-fact')).toEqual([
     'Debian 13 · Docker 29.0.1 · 443 and 80: caddy (caddy.service)',
-    "The tunnel's fence in sshd differs from the panel's (authorizedkeysfile, authenticationmethods, passwordauthentication, kbdinteractiveauthentication, …) ✗",
+    "The tunnel's fence in sshd: not in place (authorizedkeysfile, authenticationmethods, passwordauthentication, kbdinteractiveauthentication, …)",
     "The socket's folder: 2750 boardtunnel:boardtunnel ✓",
     "Your Caddy's config: /etc/caddy/Caddyfile (read by its service), Caddy v2.6.2",
   ])
   // One key off: named.
   const oneOff = { ...fenceOf('boardtunnel'), permittty: 'yes' }
   expect(foundLines({ ...facts, fence: oneOff }, t, 'boardtunnel')[1]).toBe(
-    `The tunnel's fence in sshd differs from the panel's (${fenceDiff(oneOff, 'boardtunnel').join(', ')}) ✗`,
+    `The tunnel's fence in sshd: not in place (${fenceDiff(oneOff, 'boardtunnel').join(', ')})`,
   )
   expect(fenceDiff(oneOff, 'boardtunnel')).toEqual(['permittty'])
   expect(textsOf(part, 'access-case')).toEqual([t('server.case.2', { unit: 'caddy.service' })])
@@ -492,16 +492,16 @@ test('what Look found for case 2 on Debian 13: the server, the case, the address
   expect(button(part, 'Apply').attrs.has('disabled')).toBe(false)
   // The fence as the panel's: ✓.
   const fenced = foundLines({ ...facts, fence: fenceOf('boardtunnel') }, t, 'boardtunnel')
-  expect(fenced[1]).toBe("The tunnel's fence in sshd: as the panel's ✓")
-  // No folder (step 1 not done), or not the tunnel user's: ✗.
-  expect(foundLines({ ...facts, folder: null }, t, 'boardtunnel')[2]).toBe("The socket's folder: not there ✗ (step 1)")
+  expect(fenced[1]).toBe("The tunnel's fence in sshd: in place ✓")
+  // No folder yet (Apply makes it), or one that is not the tunnel user's: ✗.
+  expect(foundLines({ ...facts, folder: null }, t, 'boardtunnel')[2]).toBe("The socket's folder: not there yet")
   expect(
     foundLines(
       { ...facts, folder: { mode: '755', owner: 'root', group: 'root', gid: 0, members: [] } },
       t,
       'boardtunnel',
     )[2],
-  ).toBe("The socket's folder: 755 root:root ✗ (step 1 makes it 2750, the tunnel user's)")
+  ).toBe("The socket's folder: 755 root:root ✗ (the board's is 2750, the tunnel user's)")
 })
 
 test('what Look found for case 3a on Ubuntu 26.04: their Caddy in compose, its network, the warnings', () => {
@@ -509,7 +509,7 @@ test('what Look found for case 3a on Ubuntu 26.04: their Caddy in compose, its n
   const part = partOf(view)
   expect(textsOf(part, 'access-fact')).toEqual([
     'Ubuntu 26.04 · Docker 29.0.1 · 443 and 80: "web-caddy-1" in Docker (caddy:2, compose "web")',
-    expect.stringContaining("The tunnel's fence in sshd differs"),
+    expect.stringContaining("The tunnel's fence in sshd: not in place"),
     "The socket's folder: 2750 boardtunnel:boardtunnel ✓",
     "Your Caddy's config: /srv/my web/Caddyfile (in a folder mounted into its container), Caddy v2.10.2",
   ])

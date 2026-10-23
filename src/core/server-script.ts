@@ -42,21 +42,26 @@ const verbatim = (name: string, lines: readonly string[]): string[] => [`${name}
 
 /** Items of a step the run records only when the step ran: a group changed, a backup made, Docker installed. */
 const ranOnly = (i: RecordItem): boolean => i.kind === 'group' || i.kind === 'backup' || i.kind === 'docker'
+/**
+ * Step 1's parts: on the record before their step runs (a run cut short names what it was making;
+ * the guard saw each missing), and off it again when the step skips, finding the part there: one
+ * the board did not make is never the board's to remove (an earlier run's item stays).
+ */
+const madeOnly = (i: RecordItem): boolean =>
+  i.kind === 'user' || i.kind === 'folder' || i.kind === 'keys' || i.kind === 'fence'
 
 const keyOf = (i: RecordItem): string =>
   i.kind === 'file'
     ? `file ${i.path}`
     : i.kind === 'line' || i.kind === 'block'
       ? `${i.kind} ${i.file}`
-      : i.kind === 'backup'
-        ? `backup ${i.path}`
-        : i.kind === 'group'
-          ? `group ${i.path}`
-          : i.kind === 'container' || i.kind === 'volume'
-            ? `${i.kind} ${i.name}`
-            : i.kind === 'image'
-              ? `image ${i.ref}`
-              : 'docker'
+      : i.kind === 'backup' || i.kind === 'group' || i.kind === 'folder' || i.kind === 'keys' || i.kind === 'fence'
+        ? `${i.kind} ${i.path}`
+        : i.kind === 'container' || i.kind === 'volume' || i.kind === 'user'
+          ? `${i.kind} ${i.name}`
+          : i.kind === 'image'
+            ? `image ${i.ref}`
+            : 'docker'
 
 /**
  * An item as the shell word that makes its JSON. What only the server knows is filled in there: a
@@ -296,16 +301,18 @@ export function runScript(p: Plan, w: Wanted, run: { id: string; at: string }): 
         // that run's item: an image it pulled stays the board's (Undo removes it), not "there
         // before"; the folder's group keeps what it was before the board (Undo puts that back).
         const earlier =
-          v.item.kind === 'image' || ranOnly(v.item)
+          v.item.kind === 'image' || ranOnly(v.item) || madeOnly(v.item)
             ? carried.find(c => keyOf(c.item) === keyOf(v.item) && c.step !== k)
             : undefined
         const keep = earlier ? `elif [ -n "$${earlier.name}" ]; then ${v.name}=$${earlier.name}; ` : ''
         out.push(
           ranOnly(v.item)
             ? `if [ "$SKIP" = false ]; then ${set}; ${keep}fi`
-            : earlier
-              ? `if [ "$SKIP" = false ]; then ${set}; ${keep}else ${set}; fi`
-              : set,
+            : madeOnly(v.item)
+              ? `if [ "$SKIP" = false ]; then ${set}; ${keep}else ${v.name}=''; fi`
+              : earlier
+                ? `if [ "$SKIP" = false ]; then ${set}; ${keep}else ${set}; fi`
+                : set,
         )
       }
     }
@@ -329,13 +336,22 @@ export function runScript(p: Plan, w: Wanted, run: { id: string; at: string }): 
  *
  * The run travels in a quoted here-document, verbatim, not in base64 again: the admin line sends
  * this script in base64 already, and twice base64 makes the biggest plans' command longer than a
- * Windows command line takes (32,767 characters).
+ * Windows command line takes (32,767 characters). With `pack` (gzip, then base64: the board's
+ * service gives node's, as this module has no node: import) it travels packed on one line and is
+ * unpacked there (`base64 -d | gunzip`): a third of its size, which the plans that make step 1 too
+ * need. Either way the copy on the server runs only when it ends with the run's last line.
  */
-export function launchScript(runId: string, run: string): string {
+export function launchScript(runId: string, run: string, pack?: (text: string) => string): string {
   checkId(runId)
   const lines = run.replace(/\n$/, '').split('\n')
   if (lines.includes(RUN_END)) throw new Error('the run holds its own end line')
   if (lines.at(-1) !== LAST_LINE) throw new Error('the run does not end with its last line')
+  const packed = pack?.(`${lines.join('\n')}\n`)
+  if (packed !== undefined && !/^[A-Za-z0-9+/]+={0,2}$/.test(packed)) throw new Error('the packed run is not base64')
+  const copy =
+    packed === undefined
+      ? [`cat > "$R.sh" <<'${RUN_END}'`, ...lines, RUN_END]
+      : [`printf '%s\\n' '${packed}' | base64 -d | gunzip > "$R.sh" || ${LAUNCH_FAILED}`]
   const r = `${RUNS_DIR}/${runId}`
   return [
     'exec </dev/null',
@@ -347,9 +363,7 @@ export function launchScript(runId: string, run: string): string {
     // nothing to follow unless the run is written whole: `@@exit 70` at once, not after 26 minutes
     `mkdir -p ${RUNS_DIR} || ${LAUNCH_FAILED}`,
     'rm -f "$R.log" "$R.exit"',
-    `cat > "$R.sh" <<'${RUN_END}'`,
-    ...lines,
-    RUN_END,
+    ...copy,
     `[ "$(tail -n 1 "$R.sh")" = ${shQuote(LAST_LINE)} ] || ${LAUNCH_FAILED}`,
     `chmod 600 "$R.sh" || ${LAUNCH_FAILED}`,
     `: > "$R.log" || ${LAUNCH_FAILED}`,

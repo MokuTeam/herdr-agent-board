@@ -1,12 +1,15 @@
 // Setting up the server's web server, as a plan: which case Look's facts make (the server-setup
 // spec's "Choosing the case"), the steps that set it up with what each touches, checks and undoes,
 // the record the run leaves on the server and whose it is (the tunnel's user and socket, call 30),
-// the Undo of a record, and the facts for "Do it myself" without Look. Every command is written as
-// the owner would paste it, `sudo` in front of what needs root and their values one shell word
-// each; the board's run (core/server-script.ts) runs the same lines as root.
+// the Undo of a record, and the facts for "Do it myself" without Look. Step 1's parts the server
+// lacks (the tunnel user, the socket's folder, the keys file, sshd's fence) are Apply's first steps
+// when the board has its key to put in place (the simple-setup spec's "Step 1 by the board"). Every
+// command is written as the owner would paste it, `sudo` in front of what needs root and their
+// values one shell word each; the board's run (core/server-script.ts) runs the same lines as root.
 // Pure, with no node: import: the page renders "Do it myself" from it.
 import { t } from './lang.ts'
 import type { Container, Holder, Port, ServerFacts } from './server-facts.ts'
+import { fenceDiff, fenceWanted } from './server-look.ts'
 import { isContainerId, isPlainPath, shQuote } from './server-shell.ts'
 import {
   type Acme,
@@ -24,7 +27,12 @@ import {
   DOCKER_FILES,
   DOCKER_PACKAGES,
   dockerInstall,
+  FENCE_FILE,
+  fenceBlock,
+  fenceFile,
+  GID_LABEL,
   IMPORT_LINE,
+  KEYS_DIR,
   markedBlock,
   NGINX_FILE,
   nginxFile,
@@ -39,12 +47,14 @@ import {
   SITE_FILE,
   SOCAT_IMAGE,
   SOCKET_NAME,
+  SSHD_CONFIG,
   siteFile,
   socatRunArgs,
+  USER_COMMENT,
   VOLUMES,
 } from './server-texts.ts'
 import { fieldProblem, type TunnelField } from './tunnel.ts'
-import { keysFile, SSHD_RELOAD, socketFolder } from './tunnel-snippets.ts'
+import { keysFile, keysLine, SSHD_RELOAD, socketFolder } from './tunnel-snippets.ts'
 
 export type SetupCase = '1' | '1b' | '2' | '3a' | '3b' | '4a' | '4b'
 /**
@@ -83,11 +93,23 @@ export interface Pair {
   user: string
   socket: string
 }
-/** What the panel wants: the pair, the domain, the public port (null: 443) and, in tests only, a CA. */
+/**
+ * What the panel wants: the pair, the domain, the public port (null: 443), the board's public key
+ * and, in tests only, a CA. With the key, Apply makes what step 1 lacks on the server (the tunnel
+ * user, the socket's folder, the keys file, sshd's fence); without it, step 1 is the owner's.
+ */
 export interface Wanted extends Pair {
   domain: string
   publicPort: number | null
+  publicKey?: string
   acme?: Acme
+}
+/** Step 1's parts Apply makes (keys: `make` a file that is not there, `write` the board's line over one that is). */
+export interface StepOneNeeds {
+  user: boolean
+  folder: boolean
+  keys: 'make' | 'write' | null
+  fence: boolean
 }
 /** A text of the panel: its key in the dictionaries and its values. */
 export interface Text {
@@ -109,9 +131,15 @@ export interface Touch {
     | 'group'
     | 'reload'
     | 'network'
+    | 'user'
+    | 'folder'
   what: string
 }
-/** One thing of the board's on the server, with what Undo needs to remove it. */
+/**
+ * One thing of the board's on the server, with what Undo needs to remove it. Step 1's parts are
+ * here only when the board made them: the tunnel user, the socket's folder, the keys file (`dir`:
+ * and its folder), sshd's fence (its file, or sshd_config holding its block).
+ */
 export type RecordItem =
   | { kind: 'file'; path: string; sha256: string }
   | { kind: 'line'; file: string; line: string }
@@ -122,6 +150,10 @@ export type RecordItem =
   | { kind: 'volume'; name: string }
   | { kind: 'image'; ref: string; before: boolean }
   | { kind: 'docker'; packages: string[]; files: string[] }
+  | { kind: 'user'; name: string }
+  | { kind: 'folder'; path: string }
+  | { kind: 'keys'; path: string; dir: boolean }
+  | { kind: 'fence'; path: string }
 /** /etc/agent-board/setup.json: the board's setup on the server, written by its runs. */
 export interface SetupRecord {
   v: 1
@@ -202,10 +234,21 @@ const isPort = (v: unknown): v is number => typeof v === 'number' && Number.isIn
 const strings = (v: unknown, ok: (x: unknown) => x is string): string[] | null =>
   Array.isArray(v) && v.every(ok) ? [...v] : null
 
-/** One item of a record, when it names only what the board itself adds (its own names and paths). */
-function recordItem(v: unknown, folder: string): RecordItem | null {
+/** One item of a record, when it names only what the board itself adds (its own names and paths, the pair's). */
+function recordItem(v: unknown, pair: Pair): RecordItem | null {
   if (!isFields(v)) return null
+  const folder = socketFolder(pair.socket)
   switch (v.kind) {
+    case 'user':
+      return v.name === pair.user ? { kind: 'user', name: pair.user } : null
+    case 'folder':
+      return v.path === folder ? { kind: 'folder', path: folder } : null
+    case 'keys':
+      return v.path === keysFile(pair.user) && typeof v.dir === 'boolean'
+        ? { kind: 'keys', path: keysFile(pair.user), dir: v.dir }
+        : null
+    case 'fence':
+      return v.path === FENCE_FILE || v.path === SSHD_CONFIG ? { kind: 'fence', path: v.path } : null
     case 'file':
       return [CADDY_FILE, SITE_FILE, NGINX_FILE].includes(v.path as string) &&
         typeof v.sha256 === 'string' &&
@@ -264,8 +307,8 @@ export function setupRecord(json: unknown): SetupRecord | null {
   // a pair or domain the panel would refuse was not written by a board
   if (wantedProblem({ user: pair.user, socket: pair.socket, domain, publicPort })) return null
   if (!Array.isArray(items)) return null
-  const folder = socketFolder(pair.socket)
-  const read = items.map(i => recordItem(i, folder))
+  const own: Pair = { user: pair.user, socket: pair.socket }
+  const read = items.map(i => recordItem(i, own))
   if (read.some(i => i === null)) return null
   return {
     v: 1,
@@ -299,11 +342,17 @@ export function wantedProblem(w: Wanted): string | null {
     const problem = fieldProblem(field, value)
     if (problem) return problem
   }
+  // the board's key becomes a line of the tunnel user's keys file: one key, no options of its own
+  if (w.publicKey !== undefined && !PUBLIC_KEY.test(w.publicKey)) return t('server.err.publicKey')
   // a test CA only (BOARD_SETUP_ACME_CA…): a URL and a file, one word each in the board's Caddyfile
   if (w.acme && !(/^https?:\/\/[^\s{}]+$/.test(w.acme.ca) && /^\/[\w./-]+$/.test(w.acme.root)))
     return 'The test CA is a URL and an absolute path'
   return null
 }
+
+/** One OpenSSH public key on one line: its type, its base64, a comment without control characters. */
+const PUBLIC_KEY =
+  /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/]+={0,3}( [^\p{Cc}]+)?$/u
 
 /** Refuses what the panel wants unless it checks out: nothing is planned or run from it then. */
 function checkWanted(w: Wanted): void {
@@ -347,6 +396,12 @@ function itemKey(i: RecordItem): string {
       return `image ${i.ref}`
     case 'docker':
       return 'docker'
+    case 'user':
+      return `user ${i.name}`
+    case 'folder':
+    case 'keys':
+    case 'fence':
+      return `${i.kind} ${i.path}`
   }
 }
 
@@ -388,18 +443,35 @@ function isCaddy(f: ServerFacts, h: Holder): boolean {
   return /(^|\/)caddy([:@]|$)/.test(containerOf(f, h.id)?.image ?? '')
 }
 
-/** What every run needs on the server, by the names Look's `@@missing` lines give (runuser: case 2's alone). */
-const RUN_TOOLS = ['flock', 'setsid', 'timeout', 'sha256sum', 'ss']
+/** What every run needs on the server, by the names Look's `@@missing` lines give (runuser: case 2's alone; gzip: the packed run). */
+const RUN_TOOLS = ['flock', 'setsid', 'timeout', 'sha256sum', 'ss', 'gzip']
 
-/** The limits of call 25 and step 1 not done: none of the cases is done by the board then. */
-function hostLimits(f: ServerFacts): Manual[] {
+/**
+ * What step 1 lacks on the server, which Apply makes first: null when the board makes none of it
+ * (no key of its own to put in place, or a Look that did not read step 1's parts). A part that is
+ * there, made by hand or by an earlier Apply, is used as it is: a fence in force, a folder, a user,
+ * a keys file holding the board's line alone.
+ */
+export function stepOneNeeds(f: ServerFacts, w: Wanted): StepOneNeeds | null {
+  const s = f.stepOne
+  if (!s || w.publicKey === undefined) return null
+  return {
+    user: s.user === null,
+    folder: f.folder === null,
+    keys: s.keys === 'none' ? 'make' : s.keys === 'other' ? 'write' : null,
+    fence: fenceDiff(f.fence, w.user).length > 0,
+  }
+}
+
+/** The limits of call 25, and step 1 not done where the board cannot do it: none of the cases is done by the board then. */
+function hostLimits(f: ServerFacts, w: Wanted): Manual[] {
   const why: Manual[] = []
   if (!f.distro.supported || RUN_TOOLS.some(t => f.host.missing.includes(t))) why.push('os')
   if (f.host.selinux === 'enforcing') why.push('selinux')
   if (f.docker?.podman) why.push('podman')
   if (f.docker?.rootless) why.push('rootless')
   if (f.docker?.userns) why.push('userns')
-  if (!f.folder) why.push('folder')
+  if (!f.folder && !stepOneNeeds(f, w)) why.push('folder')
   return why
 }
 
@@ -496,7 +568,7 @@ function byHolders(f: ServerFacts, w: Wanted): Choice {
 /** The case for the facts Look found (the spec's table, then its "anything else" list). */
 export function chooseCase(f: ServerFacts, w: Wanted): Choice {
   checkWanted(w)
-  const limits = hostLimits(f)
+  const limits = hostLimits(f, w)
   if (limits.length) return manual(limits)
   if (f.record !== null && f.record !== undefined) {
     const r = setupRecord(f.record)
@@ -557,6 +629,12 @@ const gidWord = (f: ServerFacts): string => {
   const gid = f.folder?.gid
   return gid !== undefined && Number.isInteger(gid) && gid >= 0 ? String(gid) : '<gid>'
 }
+/** The socket folder's gid as the run reads it on the server, when it makes the folder itself (Look could not know it). */
+const RUN_GID = '$G'
+/** A word of `docker run`'s argv: the run's gid expanded in double quotes, anything else one shell word. */
+const argWord = (a: string): string => (a.includes(RUN_GID) ? `"${a}"` : q(a))
+const labelOf = (args: readonly string[], key: string): string =>
+  args.find(a => a.startsWith(`${key}=`))?.slice(key.length + 1) ?? ''
 
 // ---------------------------------------------------------------------------------------------
 // Steps
@@ -582,16 +660,24 @@ function mk(id: string, o: Partial<PlanStep> & { commands: string[] }, params?: 
   }
 }
 
-/** What a plan relies on (call 11): who holds a port, their config's hash, their container. */
+/**
+ * What a plan relies on (call 11): who holds a port, their config's hash, their container; and that
+ * a part of step 1 the run makes is still missing (so what the record names as the board's is).
+ */
 type Rely =
   | { kind: 'free'; port: Port; docker: boolean }
   | { kind: 'program'; port: Port; program: string }
   | { kind: 'container'; port: Port | null; id: string }
   | { kind: 'config'; path: string; sha: string }
+  | { kind: 'none'; what: 'user' | 'folder' | 'keys'; name: string }
 
 function relyLine(r: Rely): { said: string; command: string } {
   const changed = (what: string): string => `then echo '@@changed ${what}'; false; fi`
   switch (r.kind) {
+    case 'none':
+      return r.what === 'user'
+        ? { said: `user ${r.name}: none`, command: `if getent passwd ${q(r.name)} >/dev/null; ${changed('user')}` }
+        : { said: `${r.name}: none`, command: `if sudo test -e ${q(r.name)}; ${changed(r.what)}` }
     case 'free': {
       const docker = r.docker ? ` sudo docker ps --format '{{.Ports}}' 2>/dev/null | grep -F ':${r.port}->';` : ''
       return {
@@ -673,9 +759,11 @@ function ownFile(
   path: string,
   text: string,
   b: string,
-  more: { commands?: string[]; undo?: string[] } = {},
+  more: { before?: string[]; commands?: string[]; undo?: string[]; name?: string } = {},
 ) {
-  const name = path.slice(path.lastIndexOf('/') + 1)
+  // the earlier file's copy and the mark in the run's folder, by a name of the step's own when the
+  // file's could be another step's (a keys file is named after the user)
+  const name = more.name ?? path.slice(path.lastIndexOf('/') + 1)
   const saved = `${b}/${name}.board`
   const made = `${b}/${name}.new`
   const part = `${path}.part`
@@ -683,6 +771,7 @@ function ownFile(
     id,
     {
       commands: [
+        ...(more.before ?? []),
         // made only when missing: `install -d -m` sets the mode of a folder that is there (their conf.d)
         `sudo test -d ${q(dirOf(path))} || sudo install -d -m 755 ${q(dirOf(path))}`,
         `sudo install -d -m 700 ${q(b)}`,
@@ -706,20 +795,27 @@ function ownFile(
   )
 }
 
-/** A container of the board's: recreated only when its settings' hash changed, else left running. */
-function runStep(id: string, name: string, role: string, args: string[], setup: string): PlanStep {
-  const hash = args.find(a => a.startsWith(`${ARGS_LABEL}=`))?.slice(ARGS_LABEL.length + 1) ?? ''
+/**
+ * A container of the board's: recreated only when its settings' hash or the socket folder's gid
+ * changed, else left running. A run that makes the folder reads its gid there first (`G`).
+ */
+function runStep(id: string, name: string, role: string, args: string[], setup: string, folder: string): PlanStep {
+  const hash = labelOf(args, ARGS_LABEL)
+  const gid = labelOf(args, GID_LABEL)
+  const readGid = gid === RUN_GID ? [`G=$(stat -c %g ${q(folder)})`] : []
   const ours = isOursCmd(name, role)
   return mk(
     id,
     {
       commands: [
         `if ${ours}; then sudo docker rm -f ${name} >/dev/null; fi`,
+        ...readGid,
         // the argv after `docker` (caddyRunArgs, socatRunArgs): `run` is its first word
-        `sudo docker ${args.map(q).join(' ')}`,
+        `sudo docker ${args.map(argWord).join(' ')}`,
       ],
       skipIf: [
-        `[ "$(sudo docker inspect -f '{{index .Config.Labels "${ARGS_LABEL}"}} {{.State.Running}}' ${name} 2>/dev/null)" = '${hash} true' ]`,
+        ...readGid,
+        `[ "$(sudo docker inspect -f '{{index .Config.Labels "${ARGS_LABEL}"}} {{index .Config.Labels "${GID_LABEL}"}} {{.State.Running}}' ${name} 2>/dev/null)" = "${hash} ${gid} true" ]`,
       ],
       check: [`[ "${running(name)}" = true ]`],
       undo: [`if ${ours}; then sudo docker rm -f ${name} >/dev/null; fi`],
@@ -1024,17 +1120,286 @@ interface Ctx {
   old: SetupRecord | null
   update: boolean
   same: boolean
+  /** What the run makes of step 1 first; null when it makes none of it. */
+  stepOne: StepOneNeeds | null
+}
+
+/** The tunnel user's own group: Look's, or the user's name when the run makes it (`useradd --user-group`). */
+const userGroup = (x: Ctx): string => x.f.stepOne?.user?.group || x.w.user
+
+/** The tunnel user's processes ended (its tunnel's session: userdel refuses a user that has any). */
+const endProcesses = (u: string): string =>
+  `uid=$(getent passwd ${u} | cut -d: -f3); for s in /proc/[0-9]*/status; do if [ "$(awk '/^Uid:/ { print $2; exit }' "$s" 2>/dev/null)" = "$uid" ]; then p=\${s%/status}; sudo kill "\${p#/proc/}" 2>/dev/null || true; fi; done`
+
+/** The board's tunnel user removed: only one with the board's comment, which no user made by hand has. */
+function dropUser(user: string): string[] {
+  const u = q(user)
+  const ours = `[ "$(getent passwd ${u} | cut -d: -f5)" = ${q(USER_COMMENT)} ]`
+  return [
+    `if getent passwd ${u} >/dev/null && ! ${ours}; then echo ${q(`The user ${user} was not made by the board: kept.`)}; fi`,
+    `if ${ours}; then for i in 1 2 3 4 5; do ${endProcesses(u)}; if sudo userdel ${u}; then break; fi; sleep 1; done; fi`,
+    `if ${ours}; then echo ${q(`The user ${user} could not be removed.`)}; false; fi`,
+  ]
+}
+
+/** The socket's folder removed with the socket in it; anything else in it keeps it. */
+const dropFolder = (folder: string, socket: string): string[] => [
+  `if sudo test -d ${q(folder)}; then sudo rm -f ${q(socket)}; sudo rmdir ${q(folder)} 2>/dev/null || echo ${q(`${folder} is not empty: kept.`)}; fi`,
+]
+
+/** sshd runs its checks only with its privilege separation folder, which a socket-activated sshd makes only on a first connection. */
+const RUN_SSHD = '[ -d /run/sshd ] || sudo install -d -m 755 /run/sshd'
+
+/**
+ * sshd's settings for root and for the admin sudo runs for (SUDO_USER): the whole of `sshd -T`
+ * for each, kept in a file before the change and compared after it (anti-goal 2: the owner's own
+ * login, its permitrootlogin, passwordauthentication and pubkeyauthentication among them, stays as it was).
+ */
+const ADMINS =
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: the shell's own ${…}
+  'admins() { for u in root ${SUDO_USER:-}; do echo "@@ $u"; sudo sshd -T -C "user=$u,host=localhost,addr=127.0.0.1" || return 1; done; }'
+const adminsBefore = (file: string): string[] => [
+  ADMINS,
+  'a=$(admins)',
+  `printf '%s\\n' "$a" | sudo tee ${q(file)} >/dev/null`,
+]
+const ADMIN_KEYS = `grep -E '^(@@ |permitrootlogin |passwordauthentication |pubkeyauthentication )'`
+const adminsSame = (file: string): string[] => [
+  ADMINS,
+  'a=$(admins)',
+  `if [ "$(printf '%s\\n' "$a" | sha256sum)" != "$(sudo cat ${q(file)} | sha256sum)" ]; then echo "sshd's settings for root or the admin are not what they were:"; sudo cat ${q(file)} | ${ADMIN_KEYS}; echo 'now:'; printf '%s\\n' "$a" | ${ADMIN_KEYS}; false; fi`,
+]
+
+/** The fence as `sshd -T` gives it for the tunnel user: `bad` holds each of its settings that is not in force. */
+function fenceBad(user: string): string[] {
+  const kv = Object.entries(fenceWanted(user)).map(([k, v]) => shQuote(`${k} ${v}`))
+  return [
+    `t=$(sudo sshd -T -C ${q(`user=${user},host=localhost,addr=127.0.0.1`)})`,
+    `bad=$(for kv in ${kv.join(' ')}; do printf '%s\\n' "$t" | grep -qxF "$kv" || echo "$kv"; done)`,
+  ]
+}
+const fenceInForce = (user: string): string[] => [
+  ...fenceBad(user),
+  `if [ -n "$bad" ]; then echo ${q(`sshd's fence for ${user} is not in force:`)}; echo "$bad"; false; fi`,
+]
+
+/**
+ * Undo of sshd's fence the board added: its file removed, or its block taken out of sshd_config as
+ * the file is now (never a backup written back: the owner may have changed it since); sshd checks
+ * the result, root's and the admin's settings must stay as they were, then a reload. Its rollback
+ * puts the fence back as it was and reloads that.
+ */
+function dropFence(path: string, b: string): PlanStep {
+  const admins = `${b}/sshd-admins`
+  const reloaded = `${b}/sshd-reloaded`
+  const before = [RUN_SSHD, `sudo install -d -m 700 ${q(b)}`, ...adminsBefore(admins)]
+  const after = ['sudo sshd -t', ...adminsSame(admins), SSHD_RELOAD, `sudo touch ${q(reloaded)}`]
+  const reloadBack = `if sudo test -f ${q(reloaded)} && sudo sshd -t; then ${SSHD_RELOAD}; fi`
+  const touches: Touch[] = [
+    { kind: path === SSHD_CONFIG ? 'block' : 'file', what: path },
+    { kind: 'reload', what: 'sshd' },
+  ]
+  const record: RecordItem[] = [{ kind: 'fence', path }]
+  if (path === SSHD_CONFIG) {
+    const backup = `${b}/sshd_config`
+    const candidate = `${b}/sshd_config.new`
+    return mk(
+      'drop-fence',
+      {
+        commands: [
+          ...before,
+          wholeBlock(SSHD_CONFIG),
+          `sudo cp -p ${SSHD_CONFIG} ${q(backup)}`,
+          `sudo cat ${SSHD_CONFIG} | ${STRIP_BLOCK} | sudo tee ${q(candidate)} >/dev/null`,
+          inPlace(candidate, SSHD_CONFIG),
+          ...after,
+        ],
+        skipIf: [`! sudo grep -qx ${shQuote(BLOCK_END)} ${SSHD_CONFIG}`],
+        undo: [`if sudo test -s ${q(backup)}; then ${inPlace(backup, SSHD_CONFIG)}; fi`, reloadBack],
+        touches,
+        record,
+        timeoutS: 120,
+      },
+      { file: path },
+    )
+  }
+  const saved = `${b}/sshd-fence.dropped`
+  return mk(
+    'drop-fence',
+    {
+      commands: [
+        ...before,
+        `if sudo test -f ${q(path)}; then sudo cp -p ${q(path)} ${q(saved)}; fi`,
+        `sudo rm -f ${q(path)} ${q(`${path}.part`)}`,
+        ...after,
+      ],
+      skipIf: [`! sudo test -e ${q(path)}`],
+      undo: [
+        `if sudo test -f ${q(saved)} && ! sudo test -e ${q(path)}; then ${copyWhole(saved, path)}; fi`,
+        reloadBack,
+      ],
+      touches,
+      record,
+      timeoutS: 120,
+    },
+    { file: path },
+  )
+}
+
+/**
+ * Step 1's parts the server lacks, as Apply's first steps (the simple-setup spec's "Step 1 by the
+ * board"): the tunnel user, the socket's folder, the keys file with the board's key, sshd's fence.
+ * Each is recorded only when the board made it, and the guard checks it is still missing when the
+ * run starts; a part that is there is used and never removed. The fence goes in a file of its own
+ * where sshd_config includes sshd_config.d, else between markers at sshd_config's end; sshd checks
+ * it (`sshd -t`), it must be in force for the tunnel user and leave root's and the admin's settings
+ * as they were, all before a reload (never a restart); its rollback reloads the config put back.
+ */
+function stepOneSteps(x: Ctx, n: StepOneNeeds): { built: Built[]; relies: Rely[] } {
+  const { f, w, b } = x
+  const user = w.user
+  const u = q(user)
+  const folder = socketFolder(w.socket)
+  const keys = keysFile(user)
+  const built: Built[] = []
+  const relies: Rely[] = []
+  const add = (step: PlanStep): void => {
+    built.push({ step, done: false })
+  }
+  if (n.user) {
+    add(
+      mk(
+        'tunnel-user',
+        {
+          commands: [
+            `sudo useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin --comment ${q(USER_COMMENT)} ${u}`,
+            // useradd leaves the account locked; an sshd with UsePAM no refuses a locked one, key or not
+            `sudo usermod -p '*' ${u}`,
+          ],
+          skipIf: [`getent passwd ${u} >/dev/null`],
+          check: [`getent passwd ${u} >/dev/null`],
+          undo: dropUser(user),
+          touches: [{ kind: 'user', what: user }],
+          record: [{ kind: 'user', name: user }],
+        },
+        { user },
+      ),
+    )
+    relies.push({ kind: 'none', what: 'user', name: user })
+  }
+  if (n.folder) {
+    const parent = dirOf(folder)
+    add(
+      mk(
+        'socket-folder',
+        {
+          commands: [
+            `if ! sudo test -d ${q(parent)}; then echo ${q(`${parent} is not there: make it first, or choose a socket in a folder that is there.`)}; false; fi`,
+            `sudo install -d -m 2750 -o ${u} -g "$(id -gn ${u})" ${q(folder)}`,
+          ],
+          skipIf: [`sudo test -d ${q(folder)}`],
+          check: [`[ "$(stat -c '%a %U' ${q(folder)})" = ${q(`2750 ${user}`)} ]`],
+          undo: dropFolder(folder, w.socket),
+          touches: [{ kind: 'folder', what: folder }],
+          record: [{ kind: 'folder', path: folder }],
+        },
+        { folder },
+      ),
+    )
+    relies.push({ kind: 'none', what: 'folder', name: folder })
+  }
+  if (n.keys && w.publicKey !== undefined) {
+    const madeDir = n.keys === 'make' && f.stepOne?.keysDir === false
+    const s = ownFile('keys-file', keys, keysLine(w.publicKey), b, {
+      name: 'keys',
+      undo: madeDir ? [`sudo rmdir ${KEYS_DIR} 2>/dev/null || true`] : [],
+    })
+    // a keys file that was there (an older key of the board's, or anything else) gets the board's
+    // line; a rollback puts it back, and Undo leaves it
+    add({ ...s, record: n.keys === 'make' ? [{ kind: 'keys', path: keys, dir: madeDir }] : [] })
+    if (n.keys === 'make') relies.push({ kind: 'none', what: 'keys', name: keys })
+  }
+  if (n.fence) {
+    const admins = `${b}/sshd-admins`
+    const reloaded = `${b}/sshd-reloaded`
+    const after = [
+      'sudo sshd -t',
+      ...fenceInForce(user),
+      ...adminsSame(admins),
+      SSHD_RELOAD,
+      `sudo touch ${q(reloaded)}`,
+    ]
+    const reloadBack = `if sudo test -f ${q(reloaded)} && sudo sshd -t; then ${SSHD_RELOAD}; fi`
+    const common = {
+      skipIf: [...fenceBad(user), '[ -z "$bad" ]'],
+      check: fenceInForce(user),
+      timeoutS: 120,
+    }
+    if (f.stepOne?.include) {
+      const s = ownFile('sshd-fence', FENCE_FILE, fenceFile(user), b, {
+        name: 'sshd-fence',
+        before: [RUN_SSHD, `sudo install -d -m 700 ${q(b)}`, ...adminsBefore(admins)],
+        commands: after,
+        undo: [reloadBack],
+      })
+      add({
+        ...s,
+        ...common,
+        touches: [
+          { kind: 'file', what: FENCE_FILE },
+          { kind: 'reload', what: 'sshd' },
+        ],
+        record: [{ kind: 'fence', path: FENCE_FILE }],
+      })
+    } else {
+      const backup = `${b}/sshd_config`
+      const candidate = `${b}/sshd_config.new`
+      add(
+        mk(
+          'sshd-fence',
+          {
+            ...common,
+            commands: [
+              RUN_SSHD,
+              `sudo install -d -m 700 ${q(b)}`,
+              ...adminsBefore(admins),
+              wholeBlock(SSHD_CONFIG),
+              `sudo cp -p ${SSHD_CONFIG} ${q(backup)}`,
+              `sudo cat ${SSHD_CONFIG} | ${STRIP_BLOCK} | sudo tee ${q(candidate)} >/dev/null`,
+              appendTo(candidate, fenceBlock(user)),
+              inPlace(candidate, SSHD_CONFIG),
+              ...after,
+            ],
+            undo: [`if sudo test -s ${q(backup)}; then ${inPlace(backup, SSHD_CONFIG)}; fi`, reloadBack],
+            touches: [
+              { kind: 'block', what: SSHD_CONFIG },
+              { kind: 'reload', what: 'sshd' },
+            ],
+            record: [{ kind: 'fence', path: SSHD_CONFIG }],
+          },
+          { file: SSHD_CONFIG },
+        ),
+      )
+    }
+  }
+  return { built, relies }
 }
 
 const ADDRESS = (w: Wanted, c: SetupCase): string =>
   c === '4a' || c === '4b' ? `https://${w.domain}:${PORT_4}` : `https://${w.domain}`
 
+/** The board's container there already with these settings and this gid (a gid the run reads on the server: not yet). */
+const runs = (mine: Container | undefined, args: readonly string[]): boolean =>
+  mine !== undefined &&
+  mine.labels[ARGS_LABEL] === labelOf(args, ARGS_LABEL) &&
+  labelOf(args, GID_LABEL) !== RUN_GID &&
+  mine.labels[GID_LABEL] === labelOf(args, GID_LABEL)
+
 function ownSteps(x: Ctx, c: OwnCaddy): { built: Built[]; relies: Rely[] } {
   const { f, w } = x
   const args = caddyRunArgs(c, w, x.gid, x.id, w.acme)
-  const hash = args.find(a => a.startsWith(`${ARGS_LABEL}=`))?.slice(ARGS_LABEL.length + 1)
   const mine = ownContainer(f, CADDY_NAME, 'caddy')
-  const up = mine !== undefined && mine.labels[ARGS_LABEL] === hash
+  const up = runs(mine, args)
   const kept = x.same && up
   const built: Built[] = []
   if (!f.docker) built.push({ step: dockerStep(f), done: false })
@@ -1058,7 +1423,7 @@ function ownSteps(x: Ctx, c: OwnCaddy): { built: Built[]; relies: Rely[] } {
       }),
       done: kept,
     },
-    { step: runStep('run-caddy', CADDY_NAME, 'caddy', args, x.id), done: up },
+    { step: runStep('run-caddy', CADDY_NAME, 'caddy', args, x.id, socketFolder(w.socket)), done: up },
     {
       step: mk('caddy-up', {
         commands: [
@@ -1148,7 +1513,9 @@ function caseTwo(x: Ctx, t: TheirCaddy): { built: Built[]; relies: Rely[] } | Ma
       done,
     },
   ]
-  if (!asRoot && f.folder && group !== '' && f.folder.group !== group) {
+  // the folder's group: Look's, or the tunnel user's own when the run makes the folder
+  const was = f.folder ? f.folder.group : x.stepOne?.folder ? userGroup(x) : ''
+  if (!asRoot && was !== '' && group !== '' && was !== group) {
     const socket = (g: string): string => `if sudo test -S ${q(w.socket)}; then sudo chgrp ${q(g)} ${q(w.socket)}; fi`
     built.push({
       step: mk(
@@ -1157,13 +1524,9 @@ function caseTwo(x: Ctx, t: TheirCaddy): { built: Built[]; relies: Rely[] } | Ma
           commands: [`sudo chgrp ${q(group)} ${q(folder)}`, socket(group), `sudo chmod 2750 ${q(folder)}`],
           skipIf: [`[ "$(stat -c %G ${q(folder)})" = ${q(group)} ]`],
           check: [`[ "$(stat -c %G ${q(folder)})" = ${q(group)} ]`],
-          undo: [
-            `sudo chgrp ${q(f.folder.group)} ${q(folder)}`,
-            socket(f.folder.group),
-            `sudo chmod 2750 ${q(folder)}`,
-          ],
+          undo: [`sudo chgrp ${q(was)} ${q(folder)}`, socket(was), `sudo chmod 2750 ${q(folder)}`],
           touches: [{ kind: 'group', what: folder }],
-          record: [{ kind: 'group', path: folder, from: f.folder.group, to: group }],
+          record: [{ kind: 'group', path: folder, from: was, to: group }],
         },
         { folder, group },
       ),
@@ -1198,13 +1561,12 @@ function caseThree(x: Ctx, t: TheirCaddy, host: boolean): { built: Built[]; reli
   const network = host ? null : container ? helperNetwork(container) : null
   if (!host && network === null) return ['bridge']
   const args = socatRunArgs(network === null ? { host: true } : { network }, w, x.gid, x.id)
-  const hash = args.find(a => a.startsWith(`${ARGS_LABEL}=`))?.slice(ARGS_LABEL.length + 1)
   const mine = ownContainer(f, SOCKET_NAME, 'socket')
-  const up = mine !== undefined && mine.labels[ARGS_LABEL] === hash
+  const up = runs(mine, args)
   const url = host ? `http://127.0.0.1:${PORT_3B}/` : `http://${SOCKET_NAME}:${PORT_3A}/`
   const failed = 'bad address|refused|timed out|unable to resolve'
   const probe = `command -v wget >/dev/null || exit 0; wget -q -T 3 -O /dev/null ${url} 2>&1`
-  const run = runStep('run-socat', SOCKET_NAME, 'socket', args, x.id)
+  const run = runStep('run-socat', SOCKET_NAME, 'socket', args, x.id, socketFolder(w.socket))
   if (network) run.touches.push({ kind: 'network', what: network })
   const upstream = host ? `127.0.0.1:${PORT_3B}` : `${SOCKET_NAME}:${PORT_3A}`
   const done = servedByThem(x)
@@ -1297,6 +1659,14 @@ const touchOf = (i: RecordItem): Touch => {
       return { kind: 'image', what: i.ref }
     case 'docker':
       return { kind: 'package', what: i.packages.join(' ') }
+    case 'user':
+      return { kind: 'user', what: i.name }
+    case 'folder':
+      return { kind: 'folder', what: i.path }
+    case 'keys':
+      return { kind: 'file', what: i.path }
+    case 'fence':
+      return i.path === SSHD_CONFIG ? { kind: 'block', what: i.path } : { kind: 'file', what: i.path }
   }
 }
 
@@ -1326,15 +1696,18 @@ export function buildPlan(
   const mine = raw && whose(raw, w) !== 'other' ? raw : null
   const old = mine && holdsSetup(mine) ? mine : null
   const who = old ? whose(old, w) : null
+  const needs = stepOneNeeds(f, w)
   const x: Ctx = {
     f,
     w,
     id: o.id,
     b: `${BACKUPS_DIR}/${o.id}`,
-    gid: gidWord(f),
+    // a folder the run makes has its gid only on the server
+    gid: needs?.folder ? RUN_GID : gidWord(f),
     old,
     update: who === 'update',
     same: who === 'same',
+    stepOne: needs,
   }
   let made: { built: Built[]; relies: Rely[] } | Manual[]
   if (c === '2' || c === '3a' || c === '3b') {
@@ -1347,8 +1720,12 @@ export function buildPlan(
   }
   if (Array.isArray(made)) return manual(made)
   const carried = mine ? dedupe(mine.items) : []
-  const steps = [guard(made.relies, carried), ...made.built.map(b => b.step)]
-  const nothing = x.same && made.built.every(b => b.done)
+  // step 1's parts the server lacks come first: the case's steps need the user and its folder
+  const first = needs ? stepOneSteps(x, needs) : { built: [], relies: [] }
+  const relies = [...first.relies, ...made.relies]
+  const built = [...first.built, ...made.built]
+  const steps = [guard(relies, carried), ...built.map(b => b.step)]
+  const nothing = x.same && built.every(b => b.done)
   const four = c === '4a' || c === '4b'
   const ticks: Plan['ticks'] = steps.some(s => s.id === 'docker-install') && !o.docker ? ['docker'] : []
   return {
@@ -1357,10 +1734,11 @@ export function buildPlan(
     case: c,
     address: ADDRESS(w, c),
     publicPort: four ? PORT_4 : null,
-    relies: made.relies.map(r => relyLine(r).said),
+    relies: relies.map(r => relyLine(r).said),
     steps,
     undoTouches: dedupeTouches([
       ...steps.slice(1).flatMap(s => s.record.map(touchOf)),
+      ...(steps.some(s => s.id === 'sshd-fence') ? [{ kind: 'reload' as const, what: 'sshd' }] : []),
       ...(c === '2' || c === '3a' || c === '3b' ? [{ kind: 'reload' as const, what: f.caddy?.hostPath ?? '' }] : []),
       ...(c === '4b' ? [{ kind: 'reload' as const, what: 'nginx' }] : []),
     ]),
@@ -1416,7 +1794,11 @@ export function undoPlan(
   const offerDocker = dockerItem !== undefined && onlyOurs
   const files = items.filter(i => i.kind === 'file')
   const theirFile = theirCaddy(f)?.file
-  for (const item of [...items].reverse()) {
+  // newest first; step 1's parts last whatever run made them (the case's parts use the user and
+  // its folder), the fence first of them and the user last
+  const last = ['fence', 'keys', 'folder', 'user']
+  const order = (i: RecordItem): number => last.indexOf(i.kind) + 1
+  for (const item of [...items].reverse().sort((a, b) => order(a) - order(b))) {
     switch (item.kind) {
       case 'line':
       case 'block': {
@@ -1593,9 +1975,81 @@ export function undoPlan(
       }
       case 'backup':
         break
+      case 'fence':
+        steps.push(dropFence(item.path, b))
+        break
+      case 'keys':
+        steps.push(
+          mk(
+            'drop-keys',
+            {
+              commands: [
+                `sudo install -d -m 700 ${q(b)}`,
+                `if sudo test -f ${q(item.path)}; then sudo cp -p ${q(item.path)} ${q(`${b}/keys.dropped`)}; fi`,
+                `sudo rm -f ${q(item.path)} ${q(`${item.path}.part`)}`,
+                ...(item.dir ? [`sudo rmdir ${KEYS_DIR} 2>/dev/null || true`] : []),
+              ],
+              skipIf: [`! sudo test -e ${q(item.path)}`],
+              undo: [
+                `if sudo test -f ${q(`${b}/keys.dropped`)} && ! sudo test -e ${q(item.path)}; then sudo test -d ${KEYS_DIR} || sudo install -d -m 755 ${KEYS_DIR}; ${copyWhole(`${b}/keys.dropped`, item.path)}; fi`,
+              ],
+              touches: [{ kind: 'file', what: item.path }],
+              record: [item],
+            },
+            { file: item.path },
+          ),
+        )
+        break
+      case 'folder': {
+        const u = q(r.pair.user)
+        steps.push(
+          mk(
+            'drop-folder',
+            {
+              commands: dropFolder(item.path, r.pair.socket),
+              skipIf: [`! sudo test -d ${q(item.path)}`],
+              // its rollback (a later step of this Undo failing): the folder again, for the user still there
+              undo: [
+                `if ! sudo test -d ${q(item.path)} && getent passwd ${u} >/dev/null; then sudo install -d -m 2750 -o ${u} -g "$(id -gn ${u})" ${q(item.path)}; fi`,
+              ],
+              touches: [{ kind: 'folder', what: item.path }],
+              record: [item],
+            },
+            { folder: item.path },
+          ),
+        )
+        break
+      }
+      case 'user':
+        steps.push(
+          mk(
+            'drop-user',
+            {
+              commands: dropUser(item.name),
+              skipIf: [`! getent passwd ${q(item.name)} >/dev/null`],
+              touches: [{ kind: 'user', what: item.name }],
+              record: [item],
+            },
+            { user: item.name },
+          ),
+        )
+        break
     }
   }
   const folder = socketFolder(r.pair.socket)
+  const made = (kind: RecordItem['kind']): boolean => items.some(i => i.kind === kind)
+  // what was there before the board made anything of step 1 (by hand, or an older board's paste)
+  const byHand = [
+    ...(made('keys') ? [] : [`sudo rm -f ${q(keysFile(r.pair.user))}`]),
+    ...(made('folder') ? [] : [`sudo rm -rf ${q(folder)}`]),
+    ...(made('user') ? [] : [`sudo userdel ${q(r.pair.user)}`]),
+    ...(made('fence')
+      ? []
+      : [
+          `# and the "Match User ${r.pair.user}" block at the end of /etc/ssh/sshd_config, by hand; then:`,
+          `sudo sshd -t && ${SSHD_RELOAD}`,
+        ]),
+  ]
   steps.push(
     mk('forget', {
       commands: [
@@ -1605,17 +2059,14 @@ export function undoPlan(
       touches: [{ kind: 'file', what: RECORD_FILE }],
       record: items,
     }),
-    mk(BY_HAND_ID, {
-      commands: [
-        '# what you made by hand in step 1, if you want it gone too:',
-        `sudo rm -f ${q(keysFile(r.pair.user))}`,
-        `sudo rm -rf ${q(folder)}`,
-        `sudo userdel ${q(r.pair.user)}`,
-        `# and the "Match User ${r.pair.user}" block at the end of /etc/ssh/sshd_config, by hand; then:`,
-        `sudo sshd -t && ${SSHD_RELOAD}`,
-      ],
-      skipIf: BY_HAND,
-    }),
+    ...(byHand.length
+      ? [
+          mk(BY_HAND_ID, {
+            commands: ['# what was there before the board, if you want it gone too:', ...byHand],
+            skipIf: BY_HAND,
+          }),
+        ]
+      : []),
   )
   const ticks: Plan['ticks'] = [
     ...(offerDocker ? ['removeDocker' as const] : []),

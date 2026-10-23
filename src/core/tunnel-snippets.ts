@@ -1,7 +1,9 @@
-// What the owner sets up on the server, with the tunnel's settings filled in: the panel shows these
-// with Copy, and the README has the same text for the defaults. What gives the tunnel its rights
-// there (the user, the socket's folder, the key, sshd's fence) stays in the owner's hands: the
-// board never runs these itself. Pure, with no node: import: the page imports it.
+// What the owner sets up on the server by hand, with the tunnel's settings filled in: the panel
+// shows these with Copy, and the README has the same text for the defaults. What gives the tunnel
+// its rights there (the user, the socket's folder, the key, sshd's fence) Apply also makes itself
+// when the server lacks it, the same parts by the same names (core/server-plan.ts, "Step 1 by the
+// board"); these lines are for a server the board does not set up. Pure, with no node: import:
+// the page imports it.
 
 /** The socket path's own folder: the tunnel's user makes the socket there, its reader opens it by the folder's group. */
 export const socketFolder = (socket: string): string => socket.slice(0, socket.lastIndexOf('/')) || '/'

@@ -5,6 +5,7 @@
 import { describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { gunzipSync } from 'node:zlib'
 import { configFile, loadConfig } from '../../src/adapters/config-file.ts'
 import { configDir, stateDir } from '../../src/adapters/paths.ts'
 import {
@@ -61,11 +62,18 @@ type Fields = Record<string, unknown>
 /**
  * A board whose config.json has the tunnel's settings (and `tunnel`'s more) and the admin user, the
  * fake as its ssh (`sshVersion`: what its `ssh -V` says); `spawn` in place of the real spawnRemote,
- * for an ssh that does not start or runs out of time.
+ * for an ssh that does not start or runs out of time; `key`, the board's public key (none without).
  */
 async function useBoard(
   admin: AdminState,
-  o: { pinned?: boolean; tunnel?: Fields; acme?: Acme; spawn?: typeof spawnRemote; sshVersion?: string } = {},
+  o: {
+    pinned?: boolean
+    tunnel?: Fields
+    acme?: Acme
+    spawn?: typeof spawnRemote
+    sshVersion?: string
+    key?: () => string | null
+  } = {},
 ) {
   const fake = await useFakeSsh()
   if (o.pinned !== false) {
@@ -124,6 +132,7 @@ async function useBoard(
     now: () => Date.now(),
     newId: () => `r${++ids}`,
     ...(o.acme && { acme: o.acme }),
+    ...(o.key && { publicKey: async () => o.key?.() ?? null }),
   })
   const stdinLog = join(fake.dir, 'ssh-calls.jsonl.stdin')
   const logins = (): string[][] => fake.calls().filter(c => c.includes('-T'))
@@ -239,6 +248,38 @@ function files(dir: string): [string, string][] {
 }
 
 const OK = { status: 200, body: { ok: true } }
+
+/** The board's public key, as ssh-keygen -y gives it. */
+const KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGQ2Ym9hcmRrZXlleGFtcGxlZXhhbXBsZWV4YW1wbGU board@pc'
+
+/** A scenario's Look on a server with none of step 1: no tunnel user, folder, keys file or fence. */
+function withoutStepOne(into: string, distro: string, scenario: string): string {
+  const dir = mkdtempSync(join(into, `${scenario}-`))
+  const one = readFileSync(join(fixture(distro, scenario), 'round1.txt'), 'utf8')
+  writeFileSync(
+    join(dir, 'round1.txt'),
+    one.replace(
+      /@@section fence\n[\s\S]*?@@section record\n/,
+      [
+        '@@section fence',
+        '@@user none',
+        '@@keys none',
+        '@@include',
+        '@@section folder',
+        "stat: cannot statx '/var/lib/boardtunnel': No such file or directory",
+        '@@section record',
+        '',
+      ].join('\n'),
+    ),
+  )
+  const two = join(fixture(distro, scenario), 'round2.txt')
+  if (existsSync(two)) writeFileSync(join(dir, 'round2.txt'), readFileSync(two))
+  return dir
+}
+
+/** The script a remote command carries (base64 in the fixed text). */
+const carried = (command: string): string =>
+  Buffer.from(/echo ([A-Za-z0-9+/=]+) \| base64 -d/.exec(command)?.[1] ?? '', 'base64').toString('utf8')
 
 for (const distro of DISTROS) {
   const flavor = FLAVOR[distro]
@@ -607,6 +648,63 @@ for (const distro of DISTROS) {
     })
   })
 }
+
+describe('step 1 by the board (the simple-setup spec)', () => {
+  test('with the board’s key: Look compares the keys file with it, the plan makes what step 1 lacks, the run travels packed', async () => {
+    const b = await useBoard({ uid: 0 }, { key: () => KEY })
+    b.server({ fixture: withoutStepOne(b.fake.dir, 'debian13', 'bare') })
+    expect(await b.look()).toEqual(OK)
+    const look1 =
+      b
+        .commands()
+        .map(carried)
+        .find(s => s.includes('# agent-board: look-1')) ?? ''
+    expect(look1).toContain(`= 'restrict,port-forwarding ${KEY}' ]`)
+    const p = planOf(b.setup)
+    expect(p.steps.map(s => s.id).slice(0, 5)).toEqual([
+      'guard',
+      'tunnel-user',
+      'socket-folder',
+      'keys-file',
+      'sshd-fence',
+    ])
+    b.server({ run: { lines: goesThrough(p) } })
+    expect(await b.apply({ plan: p.id })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    expect(b.setup.view().phase).toBe('done')
+    const launch = carried(b.commands().at(-1) ?? '')
+    const data = /printf '%s\\n' '([A-Za-z0-9+/=]+)' \| base64 -d \| gunzip > "\$R\.sh"/.exec(launch)?.[1] ?? ''
+    const run = gunzipSync(Buffer.from(data, 'base64')).toString('utf8')
+    expect(run).toContain("--comment 'agent-board tunnel' boardtunnel")
+    expect(run).toContain(`restrict,port-forwarding ${KEY}`)
+  })
+
+  test('without a key of its own (not made yet): Look and the plan as before, step 1 left to the owner', async () => {
+    const b = await useBoard({ uid: 0 }, { key: () => null })
+    b.server({ fixture: withoutStepOne(b.fake.dir, 'debian13', 'bare') })
+    expect(await b.look()).toEqual(OK)
+    expect(b.setup.view().choice).toEqual({ case: null, why: ['folder'] })
+    const look1 =
+      b
+        .commands()
+        .map(carried)
+        .find(s => s.includes('# agent-board: look-1')) ?? ''
+    expect(look1).not.toContain('restrict,port-forwarding')
+  })
+
+  test('the board’s key made anew between Look and Apply: Look again (the plan would put the old one in place)', async () => {
+    let key = KEY
+    const b = await useBoard({ uid: 0 }, { key: () => key })
+    b.server({ fixture: withoutStepOne(b.fake.dir, 'debian13', 'bare') })
+    expect(await b.look()).toEqual(OK)
+    const p = planOf(b.setup)
+    key = KEY.replace('board@pc', 'board@new')
+    const calls = b.commands().length
+    expect(await b.apply({ plan: p.id })).toMatchObject({ status: 409, body: { hint: 'lookAgain' } })
+    expect(b.commands().length).toBe(calls)
+    expect(b.setup.view().phase).toBe('plan')
+  })
+})
 
 describe('a run’s ssh', () => {
   test('lasts longer than the run on the server can: its timeout, the rollback after it, the follower', async () => {
