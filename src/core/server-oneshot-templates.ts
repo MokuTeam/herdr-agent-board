@@ -12,7 +12,8 @@
 // changes their lines, not only their values: the case; Docker there or not; their sites fetched
 // or not; the socket folder's group to change or not; their Caddyfile checked beside itself or in
 // place; a first setup or an update; the folder's gid read by the run, when the run makes the
-// folder); and for Undo, after the case's, step 1's parts the record names and the record's end.
+// folder). Undo's come by the record's items, each item's own (undoParts), then step 1's parts the
+// record names and the record's end.
 // The guard's lines (who holds which port, their config's hash, step 1's parts still missing) are
 // filled in from rely lines of their own. Pure, with no node: import.
 import { t } from './lang.ts'
@@ -70,6 +71,12 @@ const list = (v: Value | undefined): string[] => {
 // The server's values: a stand-in each, another plain value, and a probe where it may need quoting
 
 const HEX_A = 'abcdef0123456789'.repeat(4)
+/**
+ * The most images the board pulled that one Undo step takes off (an older board's release among
+ * them): a template for each number of them. A record with more is the board's to undo.
+ */
+export const IMAGES_MOST = 6
+const IMAGE_NAMES = Array.from({ length: IMAGES_MOST }, (_, k) => `img${k + 1}`)
 
 /** Every value the command fills in, by the name its templates and its awk give it. */
 export const INPUTS: Inputs = {
@@ -105,6 +112,18 @@ export const INPUTS: Inputs = {
   group_to: { sentinel: 'zqgto', alt: 'caddy' },
   ufile: { sentinel: '/zqudir/zqufile', alt: '/etc/caddy/Caddyfile', probe: '/srv/my web/Caddy file' },
   tfile: { sentinel: '/zqtdir/zqtfile', alt: '/srv/caddy/Caddyfile', probe: '/srv/our web/Caddyfile' },
+  // Undo: the Caddyfiles that import the board's site file; the images the board pulled
+  importers: {
+    sentinel: ['/zqimpdir/zqimpfile'],
+    alt: ['/etc/caddy/Caddyfile'],
+    probe: ['/srv/my web/Caddyfile', '/etc/caddy/Caddyfile'],
+  },
+  ...Object.fromEntries(
+    IMAGE_NAMES.map((name, k) => [
+      name,
+      { sentinel: `zqimg${'abcdefgh'[k]}zq`, alt: `registry.example.org/caddy:2.${k}.1` },
+    ]),
+  ),
   // round two of Look
   cr_bin: { sentinel: '/zqcrbin/caddy', alt: '/usr/bin/caddy', probe: '/opt/my caddy/caddy' },
   cr_cid: { sentinel: 'deadbeef'.repeat(8), alt: `7f3c${'0a'.repeat(30)}` },
@@ -139,6 +158,8 @@ function places(w: Wanted, c: SetupCase | null): Place[] {
     { name: 'addr_r', from: ['addr'], text: v => resolveAt(str(v.addr)) },
     { name: 'hosts', from: ['hosts'], text: v => list(v.hosts), spelling: 'sqwords' },
     { name: 'nhosts', from: ['nhosts'], text: v => list(v.nhosts), spelling: 'sqwords' },
+    { name: 'importers', from: ['importers'], text: v => list(v.importers), spelling: 'qwords' },
+    ...IMAGE_NAMES.map(scalar),
     { name: 'listen', from: ['listen'], text: v => list(v.listen), spelling: 'listen' },
     {
       name: 'nginx_resolve',
@@ -701,49 +722,30 @@ export function launchTemplate(w: Wanted): string {
 // ---------------------------------------------------------------------------------------------
 // Undo
 
-/** One item of a record as Undo's shape names it (no value): what kind, of which of the board's things. */
-export type UndoItem = 'I1' | 'I2' | 'F1' | 'F2' | 'F3' | 'V1' | 'V2' | 'K1' | 'K2' | 'G' | 'L' | 'B'
+/** One item of a record, of the kinds Undo takes off one by one (their values stand-ins). */
+type UndoItem = 'F1' | 'F2' | 'F3' | 'K1' | 'K2' | 'G' | 'L' | 'B'
 
-/** What Undo finds of their Caddy now: none; another config than the record's; or theirs, as a unit or a container. */
-export interface UndoShape {
-  items: UndoItem[]
-  theirs: 'none' | 'other' | 'unit' | 'container'
-  cand: boolean
-  fetch: boolean
-  nfetch: boolean
-}
-export const undoKey = (s: UndoShape): string =>
-  `u.${s.items.join('') || '0'}.t${s.theirs}.c${+s.cand}.f${+s.fetch}.n${+s.nfetch}`
-
-/** The items of a record, by kind, as the run writes them (their values stand-ins). */
-function undoItem(i: UndoItem, v: Record<string, Value>): RecordItem {
+function undoItem(i: UndoItem, v: Record<string, Value>, w: Wanted): RecordItem {
   switch (i) {
-    case 'I1':
-      return { kind: 'image', ref: CADDY_IMAGE, before: false }
-    case 'I2':
-      return { kind: 'image', ref: SOCAT_IMAGE, before: false }
     case 'F1':
       return { kind: 'file', path: CADDY_FILE, sha256: str(v.sha_caddyfile) }
     case 'F2':
       return { kind: 'file', path: SITE_FILE, sha256: str(v.sha_site) }
     case 'F3':
       return { kind: 'file', path: NGINX_FILE, sha256: str(v.sha_nginx) }
-    case 'V1':
-      return { kind: 'volume', name: VOLUMES[0] }
-    case 'V2':
-      return { kind: 'volume', name: VOLUMES[1] }
     case 'K1':
       return { kind: 'container', name: CADDY_NAME, setup: str(v.setup_caddy) }
     case 'K2':
       return { kind: 'container', name: SOCKET_NAME, setup: str(v.setup_socket) }
     case 'G':
-      return { kind: 'group', path: '', from: str(v.group_from), to: str(v.group_to) }
+      return { kind: 'group', path: socketFolder(w.socket), from: str(v.group_from), to: str(v.group_to) }
     case 'L':
-      return { kind: 'line', file: str(v.ufile), line: IMPORT_LINE }
+      return lineIn(str(v.ufile))
     case 'B':
       return { kind: 'block', file: str(v.ufile), begin: BLOCK_BEGIN, end: BLOCK_END }
   }
 }
+const lineIn = (file: string): RecordItem => ({ kind: 'line', file, line: IMPORT_LINE })
 
 /** A record of these items: its head the record's own values (its case as the items make it). */
 function undoRecord(items: RecordItem[], w: Wanted, v: Record<string, Value>): SetupRecord {
@@ -767,45 +769,102 @@ function undoRecord(items: RecordItem[], w: Wanted, v: Record<string, Value>): S
   }
 }
 
-/** What Look finds now, for an Undo shape: their Caddy (with the record's file, or another), their nginx for its fetch. */
-function undoFacts(s: UndoShape, w: Wanted, v: Record<string, Value>): ServerFacts {
-  let f = baseFacts(w, v)
-  if (s.theirs === 'unit') f = theirCaddyUnit({ ...f }, { ...v, file: str(v.ufile) }, s.fetch)
-  else if (s.theirs === 'container')
-    f = theirCaddyContainer(f, v, { host: false, cand: s.cand, fetch: s.fetch, file: str(v.ufile) })
-  else if (s.theirs === 'other') f = theirCaddyUnit({ ...f }, { ...v, file: str(v.tfile) }, false)
-  if (s.items.includes('F3')) {
-    const nginx: Holder = { kind: 'unit', unit: 'nginx.service', program: 'nginx' }
-    f = {
-      ...f,
-      ports: { ...f.ports, 80: nginx },
-      nginx: { confD: true, listen80: ['80'], serverNames: s.nfetch ? list(v.nhosts) : [] },
-    }
-  }
+/** What Look finds of their Caddy now, for their Caddyfile's line or block: none; another Caddyfile than the record's; theirs, as a unit or a container. */
+type Theirs = 'none' | 'other' | 'unit' | 'container'
+
+function theirsFacts(
+  theirs: Theirs,
+  o: { cand: boolean; fetch: boolean },
+  w: Wanted,
+  v: Record<string, Value>,
+): ServerFacts {
+  const f = baseFacts(w, v)
+  if (theirs === 'unit') return theirCaddyUnit(f, { ...v, file: str(v.ufile) }, o.fetch)
+  if (theirs === 'container')
+    return theirCaddyContainer(f, v, { host: false, cand: o.cand, fetch: o.fetch, file: str(v.ufile) })
+  if (theirs === 'other') return theirCaddyUnit(f, { ...v, file: str(v.tfile) }, false)
   return f
+}
+
+/** Their nginx, for the fetches around the removal of the board's nginx file (its sites, or none). */
+function nginxFacts(nfetch: boolean, w: Wanted, v: Record<string, Value>): ServerFacts {
+  const f = baseFacts(w, v)
+  const nginx: Holder = { kind: 'unit', unit: 'nginx.service', program: 'nginx' }
+  return {
+    ...f,
+    ports: { ...f.ports, 80: nginx },
+    nginx: { confD: true, listen80: ['80'], serverNames: nfetch ? list(v.nhosts) : [] },
+  }
 }
 
 const UNDO_OPTIONS = (v: Record<string, Value>) => ({ id: str(v.plan_id), removeDocker: false, removeEdited: false })
 
-/** The steps of an Undo plan before the record's end (`forget`): the case's own. */
+/** The steps of an Undo plan between its guard and the record's end (`forget`). */
 function untilForget(p: Plan): PlanStep[] {
   const end = p.steps.findIndex(x => x.id === 'forget')
   if (end < 0) throw new Error('an Undo plan ends with forget')
   return p.steps.slice(1, end)
 }
 
-/** One Undo shape's steps: the case's own, before step 1's and the record's end. */
-export function undoTemplate(s: UndoShape, w: Wanted): ShapeTemplate {
-  const folder = socketFolder(w.socket)
-  const steps = (v: Record<string, Value>): PlanStep[] => {
-    const items = s.items.map(i => {
-      const item = undoItem(i, v)
-      return item.kind === 'group' ? { ...item, path: folder } : item
-    })
+/**
+ * Undo's steps for each item of a record (core/server-plan.ts undoPlan takes them newest first, one
+ * at a time), by the name the command's awk gives them: their Caddyfile's line or block (`u.L…`,
+ * `u.B…`, by what Look finds of their Caddy now), the board's files (`u.F1`, the site file with or
+ * without Caddyfiles that import it `u.F2.i…`, nginx's file with its sites fetched or not
+ * `u.F3.n…`), its containers (`u.K1`, `u.K2`), the folder's group (`u.G`); the volumes in one step,
+ * in the order the record has them (`u.V…`); the images the board pulled in one, by their number
+ * (`u.I.<n>`). The awk puts them together in undoPlan's order, so any record the board's Undo
+ * plans, the command plans as well, whatever run left it: a whole one, one cut short, one whose
+ * rollback did not finish, an update.
+ */
+export function undoParts(w: Wanted): { key: string; steps: (v: Record<string, Value>) => PlanStep[] }[] {
+  const plan = (items: RecordItem[], f: ServerFacts, v: Record<string, Value>): PlanStep[] => {
     const r = undoRecord(items, w, v)
-    return untilForget(undoPlan(r, { ...undoFacts(s, w, v), record: r }, UNDO_OPTIONS(v)))
+    return untilForget(undoPlan(r, { ...f, record: r }, UNDO_OPTIONS(v)))
   }
-  return { key: undoKey(s), steps: stepTemplates(steps, true, w, null) }
+  const out: { key: string; steps: (v: Record<string, Value>) => PlanStep[] }[] = []
+  for (const item of ['L', 'B'] as const)
+    for (const theirs of ['none', 'other', 'unit', 'container'] as const)
+      for (const cand of theirs === 'container' ? [true, false] : [false])
+        for (const fetch of theirs === 'unit' || theirs === 'container' ? [true, false] : [false])
+          out.push({
+            key: `u.${item}.t${theirs}.c${+cand}.f${+fetch}`,
+            steps: v => plan([undoItem(item, v, w)], theirsFacts(theirs, { cand, fetch }, w, v), v),
+          })
+  for (const item of ['F1', 'K1', 'K2', 'G'] as const)
+    out.push({ key: `u.${item}`, steps: v => plan([undoItem(item, v, w)], baseFacts(w, v), v) })
+  // the site file stays while a Caddyfile imports it: the record's lines' files, their Caddy's
+  out.push({ key: 'u.F2.i0', steps: v => plan([undoItem('F2', v, w)], baseFacts(w, v), v) })
+  out.push({
+    key: 'u.F2.i1',
+    steps: v =>
+      plan([...list(v.importers).map(lineIn), undoItem('F2', v, w)], baseFacts(w, v), v).filter(
+        x => x.id === 'drop-site-file',
+      ),
+  })
+  for (const nfetch of [true, false])
+    out.push({ key: `u.F3.n${+nfetch}`, steps: v => plan([undoItem('F3', v, w)], nginxFacts(nfetch, w, v), v) })
+  for (const order of [['V1'], ['V2'], ['V1', 'V2'], ['V2', 'V1']])
+    out.push({
+      key: `u.V.${order.join('')}`,
+      steps: v =>
+        plan(
+          order.map(c => ({ kind: 'volume', name: c === 'V1' ? VOLUMES[0] : VOLUMES[1] })),
+          baseFacts(w, v),
+          v,
+        ),
+    })
+  for (let n = 1; n <= IMAGES_MOST; n++)
+    out.push({
+      key: `u.I.${n}`,
+      steps: v =>
+        plan(
+          IMAGE_NAMES.slice(0, n).map(name => ({ kind: 'image', ref: str(v[name]), before: false })),
+          baseFacts(w, v),
+          v,
+        ),
+    })
+  return out
 }
 
 /** Undo's steps for step 1's parts the record names, the record's end, and the by-hand step (`y.…`). */
@@ -849,80 +908,6 @@ export function stepOneUndoTemplates(w: Wanted): Record<string, string> {
   return out
 }
 
-/** An item of a record as Undo's shape names it; null for those its shape leaves to the run's record (Docker, backups, step 1's). */
-export function undoCode(i: RecordItem): UndoItem | null {
-  switch (i.kind) {
-    case 'image':
-      return i.before ? null : i.ref === CADDY_IMAGE ? 'I1' : 'I2'
-    case 'file':
-      return i.path === CADDY_FILE ? 'F1' : i.path === SITE_FILE ? 'F2' : 'F3'
-    case 'volume':
-      return i.name === VOLUMES[0] ? 'V1' : 'V2'
-    case 'container':
-      return i.name === CADDY_NAME ? 'K1' : 'K2'
-    case 'group':
-      return 'G'
-    case 'line':
-      return 'L'
-    case 'block':
-      return 'B'
-    default:
-      return null
-  }
-}
-
-/** A record's items each once, the newest of each (core/server-plan.ts dedupe, for Undo's shapes). */
-function dedupeCodes(codes: readonly UndoItem[]): UndoItem[] {
-  const out: UndoItem[] = []
-  for (const c of codes) {
-    const at = out.indexOf(c)
-    if (at >= 0) out.splice(at, 1)
-    out.push(c)
-  }
-  return out
-}
-
-/**
- * Every record Undo may meet from the board's runs, by its items: a whole setup of each Apply
- * shape (with the image the board pulled, or one that was there before), a run cut short after
- * any of its steps, and the record an update leaves; with the line or block their Caddyfile has
- * named at its end (Undo names it when the record does not), and what Look finds of their Caddy now.
- */
-export function undoShapes(w: Wanted): UndoShape[] {
-  const seqs = new Map<string, UndoItem[]>()
-  const add = (items: UndoItem[]): void => {
-    seqs.set(items.join(''), items)
-  }
-  for (const s of applyShapes()) {
-    if (s.update || s.rgid) continue
-    const p = planOf(applyFacts(s, w, SENTINELS), w, SENTINELS, s.c)
-    const steps = p.steps.slice(1).map(x => x.record.map(undoCode).filter((c): c is UndoItem => c !== null))
-    for (const image of [true, false]) {
-      const per = steps.map(codes => codes.filter(c => image || (c !== 'I1' && c !== 'I2')))
-      const full = per.flat()
-      const edit: UndoItem | null = s.c === '2' ? 'L' : s.c === '3a' || s.c === '3b' ? 'B' : null
-      for (let k = 0; k <= per.length; k++) {
-        const prefix = per.slice(0, k).flat()
-        add(prefix)
-        if (edit && !prefix.includes(edit)) add([...prefix, edit])
-      }
-      // an update re-records each item but the folder's group, whose step finds it done
-      add(dedupeCodes([...full, ...full.filter(c => c !== 'G')]))
-    }
-  }
-  const out: UndoShape[] = []
-  for (const items of seqs.values()) {
-    const edits = items.includes('L') || items.includes('B')
-    const theirs: UndoShape['theirs'][] = edits ? ['none', 'other', 'unit', 'container'] : ['none']
-    for (const th of theirs)
-      for (const cand of th === 'container' ? [true, false] : [false])
-        for (const fetch of th === 'unit' || th === 'container' ? [true, false] : [false])
-          for (const nfetch of items.includes('F3') ? [true, false] : [false])
-            out.push({ items, theirs: th, cand, fetch, nfetch })
-  }
-  return out
-}
-
 // ---------------------------------------------------------------------------------------------
 // The dictionary the command carries
 
@@ -953,9 +938,7 @@ export function dictionary(w: Wanted): string {
     const x = applyTemplate(s, w)
     shapes.push(`@@shape ${[x.key, ...x.steps.map(add)].join(' ')}`)
   }
-  for (const s of undoShapes(w)) {
-    const x = undoTemplate(s, w)
-    shapes.push(`@@shape ${[x.key, ...x.steps.map(add)].join(' ')}`)
-  }
+  for (const x of undoParts(w))
+    shapes.push(`@@shape ${[x.key, ...stepTemplates(x.steps, true, w, null).map(add)].join(' ')}`)
   return [...out, ...shapes].join('\n')
 }

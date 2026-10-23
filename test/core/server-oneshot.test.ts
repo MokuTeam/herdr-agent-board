@@ -694,28 +694,112 @@ describe('Apply: the case, the reasons, the plan in plain words and the run the 
   }
 })
 
+/** The Undo command on a scenario: the run, the titles and the plain words of the board's Undo. */
+function sameUndo(s: Scenario) {
+  const r1 = readRoundOne(s.r1)
+  if (!r1) return
+  const r2 = lookScript2(r1, LOOK) === null ? '' : s.r2
+  const facts = readServerFacts(r1, r2)
+  if (!facts) return
+  const a = awk('undo', looked(s.r1, r2))
+  expect(a.err).toBe('')
+  const d = decision(a.out)
+  if (facts.record === null || facts.record === undefined) return expect(d).toBe('nothing')
+  const r = setupRecord(facts.record)
+  if (!r || whose(r, W) === 'other') return expect(d).toBe('stop otherSetup')
+  if (r.state === 'running' && facts.lockHeld) return expect(d).toBe('busy')
+  expect(d.startsWith('plan ')).toBe(true)
+  const p = undoPlan(r, facts, { id: IDS.plan, removeDocker: false, removeEdited: false })
+  expect(parts(a.out).run).toBe(runScript(p, W, { id: IDS.run, at: IDS.at }))
+  expect(said(a.out, 'title')).toEqual(titles(p))
+  expect(plainOf(a.out)).toEqual(plainPlan(facts, p, W, t))
+}
+
 describe('Undo: the run the board’s Undo would make, and what it says', () => {
-  for (const s of SCENARIOS) {
-    test(s.name, () => {
-      const r1 = readRoundOne(s.r1)
-      if (!r1) return
-      const r2 = lookScript2(r1, LOOK) === null ? '' : s.r2
-      const facts = readServerFacts(r1, r2)
-      if (!facts) return
-      const a = awk('undo', looked(s.r1, r2))
-      expect(a.err).toBe('')
-      const d = decision(a.out)
-      if (facts.record === null || facts.record === undefined) return expect(d).toBe('nothing')
-      const r = setupRecord(facts.record)
-      if (!r || whose(r, W) === 'other') return expect(d).toBe('stop otherSetup')
-      if (r.state === 'running' && facts.lockHeld) return expect(d).toBe('busy')
-      expect(d.startsWith('plan ')).toBe(true)
-      const p = undoPlan(r, facts, { id: IDS.plan, removeDocker: false, removeEdited: false })
-      expect(parts(a.out).run).toBe(runScript(p, W, { id: IDS.run, at: IDS.at }))
-      expect(said(a.out, 'title')).toEqual(titles(p))
-      expect(plainOf(a.out)).toEqual(plainPlan(facts, p, W, t))
-    })
+  for (const s of SCENARIOS) test(s.name, () => sameUndo(s))
+})
+
+// ---------------------------------------------------------------------------------------------
+// Records no whole run leaves, which the board's Undo plans all the same
+
+const NGINX_FILE_ITEM: RecordItem = {
+  kind: 'file',
+  path: '/etc/nginx/conf.d/agent-board.conf',
+  sha256: 'ef'.repeat(32),
+}
+/** An image an older board pulled (another release of Caddy): the board's own to remove. */
+const OLDER_IMAGE: Extract<RecordItem, { kind: 'image' }> = { kind: 'image', ref: 'caddy:2.10.2', before: false }
+
+/** Each subset of the items, by the bits of its number. */
+const subsets = (items: readonly RecordItem[]): RecordItem[][] =>
+  Array.from({ length: 1 << items.length }, (_, mask) => items.filter((_x, i) => mask & (1 << i)))
+
+function leftRecords(): Scenario[] {
+  const bare = byName('debian13/bare')
+  const unit = byName('debian13/caddy-unit')
+  const folder = byName('debian13/compose-folder')
+  const host = byName('debian13/caddy-host')
+  const nginx = byName('debian13/nginx-80-443')
+  const out: Scenario[] = []
+  const add = (name: string, s: Scenario, r: Partial<SetupRecord> & { items: RecordItem[] }): void => {
+    out.push({ name: `${s.name} ${name}`, r1: withRecord(s, r), r2: s.r2 })
   }
+  const four = { case: '4b', publicPort: 8443, address: `https://${W.domain}:8443` } as const
+  const sets: [Scenario, Partial<SetupRecord>, RecordItem[]][] = [
+    [bare, {}, OWN_ITEMS],
+    [unit, { case: '2' }, UNIT_ITEMS],
+    [folder, { case: '3a' }, blockItems('/srv/my web/Caddyfile')],
+    [host, { case: '3b' }, blockItems('/srv/caddy/Caddyfile')],
+    [nginx, four, [...OWN_ITEMS.slice(1), NGINX_FILE_ITEM]],
+  ]
+  for (const [s, head, items] of sets) {
+    // a rollback that did not finish: any of its run's items left
+    subsets(items).forEach((left, k) => {
+      add(`rollback failed, items ${k}`, s, { ...head, state: 'rollback-failed', items: left })
+    })
+    // an update cut short after each of its steps: the old items, then the new ones made again so far
+    for (let k = 1; k <= items.length; k++) {
+      add(`update cut short after ${k}`, s, { ...head, state: 'running', items: [...items, ...items.slice(0, k)] })
+      add(`update rolled back half after ${k}`, s, {
+        ...head,
+        state: 'rollback-failed',
+        items: [...items, ...items.slice(0, k).reverse()],
+      })
+    }
+    // runs of several boards, in another order
+    add('items in another order', s, { ...head, items: [...items].reverse() })
+  }
+  // step 1's parts among them, and images an older board pulled
+  add('rollback failed, step 1 and two pulled images', bare, {
+    state: 'rollback-failed',
+    items: [STEP_ONE_ITEMS[2] as RecordItem, OLDER_IMAGE, ...OWN_ITEMS.slice(1, 3), STEP_ONE_ITEMS[3] as RecordItem],
+  })
+  add('an older board’s image there before, then pulled', bare, {
+    items: [{ ...OLDER_IMAGE, before: true }, ...OWN_ITEMS, OLDER_IMAGE],
+  })
+  add('the socket helper’s image, then Caddy’s', folder, {
+    case: '3a',
+    state: 'rollback-failed',
+    items: [blockItems('/srv/my web/Caddyfile')[0] as RecordItem, CADDY_IMAGE_ITEM, OLDER_IMAGE],
+  })
+  // a line in another Caddyfile than the one Look finds now, and one in theirs
+  add('lines in two Caddyfiles', unit, {
+    case: '2',
+    state: 'rollback-failed',
+    items: [
+      ...UNIT_ITEMS,
+      { kind: 'line', file: '/srv/old/Caddyfile', line: 'import /etc/caddy/agent-board/board.caddy # agent-board' },
+    ],
+  })
+  add('a block and a line', folder, {
+    case: '3a',
+    items: [...UNIT_ITEMS.slice(0, 1), ...blockItems('/srv/my web/Caddyfile'), ...UNIT_ITEMS.slice(3)],
+  })
+  return out
+}
+
+describe('Undo of a record no whole run leaves (a rollback that did not finish, an update cut short)', () => {
+  for (const s of leftRecords()) test(s.name, () => sameUndo(s))
 })
 
 describe('the plan in plain words, in the board’s language', () => {
@@ -885,12 +969,17 @@ describe('where the command stops where the board would go on', () => {
     expect(parts(a.out).run).toBeNull()
   })
 
-  test('a record whose items no run of the board leaves: the Undo command has no plan for it', () => {
+  test('more images the board pulled than the command takes off in one step: it has no plan, and changes nothing', () => {
     const s = byName('debian13/bare')
-    const r1 = withRecord(s, { items: [{ kind: 'volume', name: 'agent-board-caddy-data' }] })
+    const images: RecordItem[] = Array.from({ length: 7 }, (_, k) => ({
+      kind: 'image',
+      ref: `caddy:2.${k}.0`,
+      before: false,
+    }))
+    const r1 = withRecord(s, { state: 'rollback-failed', items: images })
     const a = awk('undo', looked(r1, ''))
     // the script says so (server.oneshot.undo.unknown) and changes nothing
-    expect(decision(a.out)).toBe('unknown u.V1.tnone.c0.f0.n0')
+    expect(decision(a.out)).toBe('unknown u.I.7')
     expect(parts(a.out).run).toBeNull()
   })
 })
