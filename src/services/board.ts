@@ -90,6 +90,7 @@ interface ContextFill {
   contextPct: number | null
   contextSize: number | null
   model: string | null
+  effort: string | null
 }
 
 function contextOf(session: string | null, info: TranscriptInfo): ContextFill {
@@ -98,6 +99,7 @@ function contextOf(session: string | null, info: TranscriptInfo): ContextFill {
     contextPct: null,
     contextSize: null,
     model: info.model ?? null,
+    effort: info.effort ?? null,
   }
   if (!session) return own
   const file = join(contextDir(), `${session.replace(/[^A-Za-z0-9_-]/g, '_')}.json`)
@@ -120,6 +122,7 @@ function contextOf(session: string | null, info: TranscriptInfo): ContextFill {
     contextPct: fresh ? (d.usedPercentage ?? null) : null,
     contextSize: d.size ?? null,
     model: d.model ?? own.model,
+    effort: own.effort,
   }
 }
 

@@ -430,7 +430,6 @@ body.dragging { cursor: grabbing; }
 
 /* Its status, by the name: the column in words, in its color. */
 .card-status { flex: none; max-width: 92px; overflow: hidden; color: var(--c, var(--label-3)); font-size: 11px; font-weight: 500; white-space: nowrap; text-overflow: ellipsis; }
-@container card (max-width: 230px) { .card-status { display: none; } }
 
 /* Under the message box: context fill, model and effort, read only. */
 .session-meter { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 2px 0; color: var(--label-3); font-size: 11.5px; }

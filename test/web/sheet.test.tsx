@@ -419,6 +419,7 @@ describe('the mounted sheet', () => {
       context: 84_000,
       contextPct: 42,
       model: 'Opus 4.5',
+      effort: 'medium',
     })
     const react = mounted('a', payload({ items: [sized], categories: CATEGORIES }))
     const meter = byClass(react, 'session-meter')
@@ -426,7 +427,7 @@ describe('the mounted sheet', () => {
     expect(text).toContain('ctx 42%')
     expect(text).toContain('Opus 4.5')
     expect(text).toContain('Model: Opus 4.5')
-    expect(text).toContain('Effort: —')
+    expect(text).toContain('Effort: medium')
     // Read only for now: no menus.
     expect(text).not.toContain('<select')
   })
