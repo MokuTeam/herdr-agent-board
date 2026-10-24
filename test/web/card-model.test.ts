@@ -9,7 +9,6 @@ import {
   alarmOf,
   askLine,
   cardAge,
-  cardFacts,
   cardWords,
   compact,
   dismissable,
@@ -46,20 +45,6 @@ test('ago: now, minutes, hours, days; nothing for no time', () => {
   expect(ago(NOW - 60 * MIN, NOW, t)).toBe(t('ago.h', { n: 1 }))
   expect(ago(NOW - 23 * 60 * MIN - 59 * MIN, NOW, t)).toBe(t('ago.h', { n: 23 }))
   expect(ago(NOW - 49 * 60 * MIN, NOW, t)).toBe(t('ago.d', { n: 2 }))
-})
-
-describe('card facts', () => {
-  test('status, context (percent, else tokens) and model', () => {
-    expect(
-      cardFacts(item({ key: 'a', column: 'work', context: 84_000, contextPct: 42, model: 'Opus 4.5' }), t),
-    ).toEqual({ status: 'Working', context: 'ctx 42%', model: 'Opus 4.5' })
-    expect(cardFacts(item({ key: 'a', column: 'me', context: 84_000 }), t)).toEqual({
-      status: 'Needs me',
-      context: 'ctx 84k',
-      model: '',
-    })
-    expect(cardFacts(item({ key: 'a', column: 'idle' }), t)).toEqual({ status: 'Idle', context: '', model: '' })
-  })
 })
 
 describe('card states', () => {

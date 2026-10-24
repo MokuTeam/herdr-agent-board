@@ -393,11 +393,14 @@ describe('the mounted sheet', () => {
 
   test('on its first draw for a session, its detail not asked for yet', () => {
     const data = payload({ items: [working], categories: CATEGORIES })
+    const withoutMeter = (html: string) => html.replace(/[ \t]*<div class="session-meter">[\s\S]*?<\/div>\n?/g, '')
     const react = mounted('a', data)
-    expect(inner(react, true)).toBe(
-      inner(
-        [oldSheet({ data, open: 'a', detail: { key: 'a', data: null, status: 'idle', error: '', at: null } })],
-        true,
+    expect(withoutMeter(inner(react, true))).toBe(
+      withoutMeter(
+        inner(
+          [oldSheet({ data, open: 'a', detail: { key: 'a', data: null, status: 'idle', error: '', at: null } })],
+          true,
+        ),
       ),
     )
     // The head's title is #62's: the card's fields in it, nothing of them under it.
@@ -405,6 +408,28 @@ describe('the mounted sheet', () => {
     const aside = byId(react, 'sheet')
     expect(hasClass(aside, 'sheet')).toBe(true)
     expect(find([aside], el => el.attrs.get('id') === 'sheet-close').tag).toBe('button')
+  })
+
+  test('the session meter: context, model and effort beside the message box', () => {
+    const sized = item({
+      key: 'a',
+      name: 'Alpha',
+      status: 'working',
+      column: 'work',
+      context: 84_000,
+      contextPct: 42,
+      model: 'Opus 4.5',
+    })
+    const react = mounted('a', payload({ items: [sized], categories: CATEGORIES }))
+    const meter = byClass(react, 'session-meter')
+    const text = canonical([meter])
+    expect(text).toContain('ctx 42%')
+    expect(text).toContain('Opus 4.5')
+    expect(text).toContain('>Model<')
+    expect(text).toContain('>Effort<')
+    // The model and effort menus offer the aliases and the levels Claude takes.
+    expect(text).toContain('value="opus"')
+    expect(text).toContain('value="high"')
   })
 
   test('the slot for a question form fills #sheet-question in place of what the session asks', () => {

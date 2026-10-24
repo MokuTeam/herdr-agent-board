@@ -12,7 +12,6 @@ import { unseenResult } from '../models/attention.ts'
 import {
   askLine,
   cardAge,
-  cardFacts,
   cardWords,
   compact,
   dismissable,
@@ -135,28 +134,8 @@ function CardContent({ item, launch, folding }: { item: Item; launch: LaunchSlot
     <>
       <CardTop item={item} />
       {!oneLine && <CardBody item={item} launch={launch} folding={folding} />}
-      {!oneLine && <CardFacts item={item} />}
       <CardActions item={item} />
     </>
-  )
-}
-
-/** Its status, context fill and model, quietly at the card's foot. */
-function CardFacts({ item }: { item: Item }) {
-  const t = useT()
-  const facts = cardFacts(item, t)
-  return (
-    <div className="card-facts">
-      <span className="fact fact-status" style={{ '--c': COLUMN_COLORS[item.column] }}>
-        {facts.status}
-      </span>
-      {facts.context && <span className="fact">{facts.context}</span>}
-      {facts.model && (
-        <span className="fact fact-model" title={facts.model}>
-          {facts.model}
-        </span>
-      )}
-    </div>
   )
 }
 
@@ -174,6 +153,9 @@ function CardTop({ item }: { item: Item }) {
       )}
       <span className="name" title={renamed ? t('rename.was', { name: item.autoName }) : undefined}>
         {item.name}
+      </span>
+      <span className="card-status" style={{ '--c': COLUMN_COLORS[item.column] }} title={t(`col.${item.column}`)}>
+        {t(`col.${item.column}`)}
       </span>
       {/* A favorite: a quiet star by the name. */}
       {item.favorite && (

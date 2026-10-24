@@ -17,31 +17,6 @@ export const plain = (s: unknown): string =>
     .replace(/\s+/g, ' ')
     .trim()
 
-export interface CardFacts {
-  /** The column it shows in, in words ("Working", "Needs me"). */
-  status: string
-  /** "ctx 42%" or "ctx 85k"; '' when the board does not know. */
-  context: string
-  /** The model it runs; '' when Claude's status line has not said. */
-  model: string
-}
-
-/** The card's quiet facts: its status, context fill and model. */
-export function cardFacts(it: Pick<Item, 'column' | 'context' | 'contextPct' | 'model'>, t: Translator): CardFacts {
-  const tokens =
-    it.context != null ? (it.context >= 1000 ? `${Math.round(it.context / 1000)}k` : String(it.context)) : ''
-  return {
-    status: t(`col.${it.column}`),
-    context:
-      it.contextPct != null
-        ? t('card.ctxPct', { pct: Math.round(it.contextPct) })
-        : tokens
-          ? t('card.ctx', { tokens })
-          : '',
-    model: it.model ?? '',
-  }
-}
-
 /** "5 min ago" and the like, against the board's clock `now`; nothing for no time. */
 export function ago(ms: number | null | undefined, now: number, t: Translator): string {
   if (!ms) return ''

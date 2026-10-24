@@ -21,12 +21,12 @@ const ITEMS = [
   item({ key: 'f', name: 'Phi', column: 'done', status: 'done', category: 'proj', activity: ago(2) }),
 ]
 
-/** The card's new quiet facts are not in the old page's markup: compare the rest. */
-const withoutFacts = (html: string) => html.replace(/[ \t]*<div class="card-facts">[\s\S]*?<\/div>\n/g, '')
+/** The card's new status label is not in the old page's markup: compare the rest. */
+const withoutStatus = (html: string) => html.replace(/[ \t]*<span class="card-status"[^>]*>[^<]*<\/span>\n?/g, '')
 
 function same(scene: Scene) {
   const { old, react } = bothBoards(scene)
-  expect(withoutFacts(react)).toBe(withoutFacts(old))
+  expect(withoutStatus(react)).toBe(withoutStatus(old))
 }
 
 describe('board markup parity', () => {
