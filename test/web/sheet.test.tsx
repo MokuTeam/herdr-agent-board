@@ -425,11 +425,10 @@ describe('the mounted sheet', () => {
     const text = canonical([meter])
     expect(text).toContain('ctx 42%')
     expect(text).toContain('Opus 4.5')
-    expect(text).toContain('>Model<')
-    expect(text).toContain('>Effort<')
-    // The model and effort menus offer the aliases and the levels Claude takes.
-    expect(text).toContain('value="opus"')
-    expect(text).toContain('value="high"')
+    expect(text).toContain('Model: Opus 4.5')
+    expect(text).toContain('Effort: —')
+    // Read only for now: no menus.
+    expect(text).not.toContain('<select')
   })
 
   test('the slot for a question form fills #sheet-question in place of what the session asks', () => {

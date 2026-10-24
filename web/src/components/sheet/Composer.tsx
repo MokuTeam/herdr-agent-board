@@ -288,7 +288,6 @@ export function Composer({
           <MoreIcon />
         </button>
       </div>
-      {item && <SessionMeter key={item.key} item={item} disabled={!canMutate} />}
       {aside.deck}
       <Attachments list={attachments} onRemove={composer.removeFile} />
       <form
@@ -376,6 +375,7 @@ export function Composer({
           <SendIcon />
         </button>
       </form>
+      {item && <SessionMeter key={item.key} item={item} />}
     </footer>
   )
 }
