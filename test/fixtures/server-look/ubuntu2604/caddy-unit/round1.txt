@@ -1,0 +1,86 @@
+@@section os
+PRETTY_NAME="Ubuntu 26.04.1 LTS"
+NAME="Ubuntu"
+VERSION_ID="26.04"
+VERSION="26.04.1 LTS (Resolute Raccoon)"
+VERSION_CODENAME=resolute
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=resolute
+LOGO=ubuntu-logo
+@@arch x86_64
+@@section ports
+LISTEN 0      4096   *:443 *:* users:(("caddy",pid=568,fd=6))
+LISTEN 0      4096   *:80  *:* users:(("caddy",pid=568,fd=8))
+@@pid 568
+0::/docker/24d23dabef9def234dad8510fe904e90202d9f9736227ad38a01bd7a1e794410/system.slice/caddy.service
+@@section docker
+@@cli Docker version 29.9.2, build a82e528
+@@server 29.9.2
+@@security ["name=seccomp,profile=builtin","name=cgroupns"]
+@@network "bridge" "bridge"
+@@network "host" "host"
+@@network "none" "null"
+@@section systemd
+@@running
+Id=caddy.service
+LoadState=loaded
+ActiveState=active
+ExecStart={ path=/usr/bin/caddy ; argv[]=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile ; ignore_errors=no ; start_time=[Wed 2026-10-21 13:15:56 UTC] ; stop_time=[n/a] ; pid=568 ; code=(null) ; status=0/0 }
+ExecReload={ path=/usr/bin/caddy ; argv[]=/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }
+WorkingDirectory=
+User=caddy
+Group=caddy
+
+Id=nginx.service
+LoadState=not-found
+ActiveState=inactive
+WorkingDirectory=
+User=
+Group=
+@@section fence
+clientaliveinterval 15
+clientalivecountmax 2
+streamlocalbindmask 0117
+passwordauthentication no
+kbdinteractiveauthentication no
+x11forwarding no
+permittty no
+allowtcpforwarding remote
+allowagentforwarding no
+allowstreamlocalforwarding remote
+streamlocalbindunlink yes
+forcecommand /bin/false
+authorizedkeysfile /etc/ssh/authorized_keys/boardtunnel
+authenticationmethods publickey
+permittunnel no
+permitlisten none
+@@section folder
+@@dir 2750 boardtunnel boardtunnel 995
+@@group boardtunnel:x:995:
+@@socket 660 boardtunnel boardtunnel socket
+@@section record
+@@section host
+@@selinux 
+@@forward 1
+@@fetch curl
+@@sudo sudo-rs 0.2.13-0ubuntu1.2
+@@ls ls (uutils coreutils) 0.10.0
+@@package containerd not-installed
+@@package docker.io not-installed
+@@package runc not-installed
+@@section dns
+@@part domain
+203.0.113.10    STREAM board.example.com
+203.0.113.10    DGRAM  
+203.0.113.10    RAW    
+@@part local
+1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+1: lo    inet6 ::1/128 scope host proto kernel_lo \       valid_lft forever preferred_lft forever
+2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0\       valid_lft forever preferred_lft forever
+3: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\       valid_lft forever preferred_lft forever
+@@end

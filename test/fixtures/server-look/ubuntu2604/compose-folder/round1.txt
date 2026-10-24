@@ -1,0 +1,116 @@
+@@section os
+PRETTY_NAME="Ubuntu 26.04.1 LTS"
+NAME="Ubuntu"
+VERSION_ID="26.04"
+VERSION="26.04.1 LTS (Resolute Raccoon)"
+VERSION_CODENAME=resolute
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=resolute
+LOGO=ubuntu-logo
+@@arch x86_64
+@@section ports
+LISTEN 0      4096   0.0.0.0:443 0.0.0.0:* users:(("docker-proxy",pid=575,fd=8))
+LISTEN 0      4096   0.0.0.0:80  0.0.0.0:* users:(("docker-proxy",pid=553,fd=8))
+LISTEN 0      4096      [::]:443    [::]:* users:(("docker-proxy",pid=582,fd=8))
+LISTEN 0      4096      [::]:80     [::]:* users:(("docker-proxy",pid=560,fd=8))
+@@pid 553
+0::/docker/a28a517e0843bc1b5b4f4c2c60e8a7d5c841a5e463fcd79ee70da8712609a233/system.slice/docker.service
+@@pid 560
+0::/docker/a28a517e0843bc1b5b4f4c2c60e8a7d5c841a5e463fcd79ee70da8712609a233/system.slice/docker.service
+@@pid 575
+0::/docker/a28a517e0843bc1b5b4f4c2c60e8a7d5c841a5e463fcd79ee70da8712609a233/system.slice/docker.service
+@@pid 582
+0::/docker/a28a517e0843bc1b5b4f4c2c60e8a7d5c841a5e463fcd79ee70da8712609a233/system.slice/docker.service
+@@section docker
+@@cli Docker version 29.9.2, build a82e528
+@@server 29.9.2
+@@security ["name=seccomp,profile=builtin","name=cgroupns"]
+@@network "bridge" "bridge"
+@@network "host" "host"
+@@network "none" "null"
+@@network "web_default" "bridge"
+@@container 1d81482ba7eeb056d91ce6ac1e0dd8f2c1768e363d8cdc9dbc1508c55482699a
+name "/web-caddy-1"
+image "caddy:2"
+path "caddy"
+args ["run","--config","/etc/caddy/Caddyfile","--adapter","caddyfile"]
+netmode "web_default"
+network "web_default"
+mounts [{"Destination":"/config","Driver":"local","Mode":"rw","Name":"web_caddy_config","Propagation":"","RW":true,"Source":"/var/lib/docker/volumes/web_caddy_config/_data","Type":"volume"},{"Destination":"/data","Driver":"local","Mode":"rw","Name":"web_caddy_data","Propagation":"","RW":true,"Source":"/var/lib/docker/volumes/web_caddy_data/_data","Type":"volume"},{"Destination":"/etc/caddy","Mode":"rw","Propagation":"rprivate","RW":true,"Source":"/srv/my web","Type":"bind"}]
+ports {"2019/tcp":null,"443/tcp":[{"HostIp":"0.0.0.0","HostPort":"443"},{"HostIp":"::","HostPort":"443"}],"443/udp":null,"80/tcp":[{"HostIp":"0.0.0.0","HostPort":"80"},{"HostIp":"::","HostPort":"80"}]}
+label "com.docker.compose.config-hash" "33a2431f445822425b076c1f64bc57bddc163f1ed25cc16fbd6f7e0e2e226555"
+label "com.docker.compose.container-number" "1"
+label "com.docker.compose.depends_on" ""
+label "com.docker.compose.image" "sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229"
+label "com.docker.compose.oneoff" "False"
+label "com.docker.compose.project" "web"
+label "com.docker.compose.project.config_files" "/srv/my web/compose.yaml"
+label "com.docker.compose.project.working_dir" "/srv/my web"
+label "com.docker.compose.service" "caddy"
+label "com.docker.compose.version" "5.6.1"
+
+@@section systemd
+@@running
+Id=caddy.service
+LoadState=not-found
+ActiveState=inactive
+WorkingDirectory=
+User=
+Group=
+
+Id=nginx.service
+LoadState=not-found
+ActiveState=inactive
+WorkingDirectory=
+User=
+Group=
+@@section fence
+clientaliveinterval 15
+clientalivecountmax 2
+streamlocalbindmask 0117
+passwordauthentication no
+kbdinteractiveauthentication no
+x11forwarding no
+permittty no
+allowtcpforwarding remote
+allowagentforwarding no
+allowstreamlocalforwarding remote
+streamlocalbindunlink yes
+forcecommand /bin/false
+authorizedkeysfile /etc/ssh/authorized_keys/boardtunnel
+authenticationmethods publickey
+permittunnel no
+permitlisten none
+@@section folder
+@@dir 2750 boardtunnel boardtunnel 995
+@@group boardtunnel:x:995:
+@@socket 660 boardtunnel boardtunnel socket
+@@section record
+@@section host
+@@selinux 
+@@forward 1
+@@fetch curl
+@@sudo sudo-rs 0.2.13-0ubuntu1.2
+@@ls ls (uutils coreutils) 0.10.0
+@@package containerd not-installed
+@@package docker.io not-installed
+@@package runc not-installed
+@@section dns
+@@part domain
+203.0.113.10    STREAM board.example.com
+203.0.113.10    DGRAM  
+203.0.113.10    RAW    
+@@part local
+1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+1: lo    inet6 ::1/128 scope host proto kernel_lo \       valid_lft forever preferred_lft forever
+2: eth0    inet 172.18.0.2/16 brd 172.18.255.255 scope global eth0\       valid_lft forever preferred_lft forever
+3: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\       valid_lft forever preferred_lft forever
+4: br-f3e71bb62f70    inet 172.19.0.1/16 brd 172.19.255.255 scope global br-f3e71bb62f70\       valid_lft forever preferred_lft forever
+4: br-f3e71bb62f70    inet6 fe80::305d:4eff:fe65:cba7/64 scope link proto kernel_ll \       valid_lft forever preferred_lft forever
+5: vethed72d58    inet6 fe80::f86e:6fff:fec9:6430/64 scope link proto kernel_ll \       valid_lft forever preferred_lft forever
+@@end

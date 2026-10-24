@@ -5,13 +5,16 @@
 // (English: one, other; Russian: one, few, many). A key missing in a language falls back to English.
 
 import type { Lang } from '../types.ts'
+import { ACCESS_STRINGS } from './access-strings.ts'
 import { ARCHIVE_STRINGS } from './archive-strings.ts'
 import { ASIDE_STRINGS } from './aside-strings.ts'
 import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
+import { ONESHOT_STRINGS } from './oneshot-strings.ts'
 import { PROFILE_STRINGS } from './profile-strings.ts'
 import { REMOTE_STRINGS } from './remote-strings.ts'
+import { SERVER_STRINGS } from './server-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
 import { WAKE_STRINGS } from './wake-strings.ts'
@@ -1220,3 +1223,9 @@ for (const code of Object.keys(ARCHIVE_STRINGS) as Lang[]) Object.assign(STRINGS
 for (const code of Object.keys(FORK_STRINGS) as Lang[]) Object.assign(STRINGS[code], FORK_STRINGS[code])
 // And a side question to a session.
 for (const code of Object.keys(ASIDE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ASIDE_STRINGS[code])
+// And the board through the owner's own domain: the tunnel and its login.
+for (const code of Object.keys(ACCESS_STRINGS) as Lang[]) Object.assign(STRINGS[code], ACCESS_STRINGS[code])
+// And setting up the server's web server from the board.
+for (const code of Object.keys(SERVER_STRINGS) as Lang[]) Object.assign(STRINGS[code], SERVER_STRINGS[code])
+// And what the one command says on the server ("Do it myself").
+for (const code of Object.keys(ONESHOT_STRINGS) as Lang[]) Object.assign(STRINGS[code], ONESHOT_STRINGS[code])

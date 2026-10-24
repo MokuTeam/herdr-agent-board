@@ -29,6 +29,11 @@ export interface RouteContext {
   body(): Promise<Body>
   /** A guard's refusal, or null: for the routes that check one after reading the body, as main did. */
   refuse(guard: Guard): Response | null
+  /**
+   * Whether `target`, a path the request named, is one of the board's own files that this
+   * listener does not read (GuardState.ownFiles): asked with the very path the route then reads.
+   */
+  ownFile(target: string): boolean
 }
 
 /** Answers, or returns undefined to let the next route in the table answer. */
@@ -55,6 +60,11 @@ export interface GuardState {
   token: string
   /** True when the data is too old for actions that go through herdr. */
   stale(): boolean
+  /**
+   * The board's own files (adapters/own-files.ts), which the routes that read by a path refuse.
+   * Set by the tunnel listener only: on the others every path reads as before.
+   */
+  ownFiles?: (target: string) => boolean
 }
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
@@ -147,6 +157,7 @@ export async function dispatch(routes: Route[], req: Request, url: URL, path: st
       rawBody,
       body: async () => fieldsOf(await rawBody()),
       refuse: guard => check(guard, req, url, state),
+      ownFile: target => !!state.ownFiles?.(target),
     }
     for (const guard of route.guard ?? []) {
       const refused = ctx.refuse(guard)

@@ -3,18 +3,20 @@
 // card text cut short or wrapped (models/card-text.ts), the board's language for every board, the panels' place and default size
 // (components/panel/place.ts), whether sleeping sessions show, with more than one profile folder
 // the Profiles panel, while wake's state line is in the payload Sleep and wake…, and how sessions
-// asleep in "Waiting" fold, for every board. The items are models/settings-menu.ts.
+// asleep in "Waiting" fold, for every board; on the local board, Remote access…; on a page
+// signed in through the owner's domain, Sign out. The items are models/settings-menu.ts.
 import { useEffect, useState } from 'react'
 import type { FoldMode } from '../../../src/core/fold-mode.ts'
 import { LANGUAGES, translator } from '../../../src/core/i18n/translator.ts'
 import type { Translator } from '../../../src/core/types.ts'
-import { api, errorText } from '../api/client.ts'
+import { ApiError, api, errorText, isReply, postJson, replyOf } from '../api/client.ts'
 import type { MenuEngine, MenuSource } from '../components/menu/menu-engine.ts'
 import { useLanguage } from '../i18n/I18nProvider.tsx'
 import { CARD_TEXT_KEY, cardTextNow, setCardText } from '../models/card-text.ts'
 import { LOOK_KEY, lookNow, setLook } from '../models/look.ts'
 import { type Dock, isDock } from '../models/panel-layout.ts'
 import { offersProfiles } from '../models/profiles.ts'
+import { keptAuth, remotePage, UNPAIRED } from '../models/remote-page.ts'
 import { settingPicked, settingsMenu } from '../models/settings-menu.ts'
 import { reducedMotion } from '../models/spring.ts'
 import { setTheme, THEME_KEY, themeNow } from '../models/theme.ts'
@@ -59,6 +61,12 @@ export interface SettingsDeps {
   /** The remote mode is on: Phones… is offered. */
   phones?(): boolean
   openPhones?(): void
+  /** The local board's page (not one through Tailscale or the domain): Remote access… is offered. */
+  access?(): boolean
+  openAccess?(): void
+  /** This page signed in through the owner's domain: Sign out is offered. */
+  signOut?(): boolean
+  endLogin?(): void
 }
 
 /** The menu out of the gear (`keyboard`: opened from the keyboard, the first item lit). */
@@ -79,6 +87,8 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       fold: deps.fold(),
       wake: deps.wake?.() ?? false,
       phones: deps.phones?.() ?? false,
+      access: deps.access?.() ?? false,
+      signOut: deps.signOut?.() ?? false,
     })
     const source: MenuSource = keyboard ? 'keyboard' : deps.coarse() ? 'touch' : 'mouse'
     deps.menu.open(items, {
@@ -100,9 +110,31 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'wake') deps.openWake?.()
         else if (pick?.kind === 'fold') deps.chooseFold(pick.value)
         else if (pick?.kind === 'phones') deps.openPhones?.()
+        else if (pick?.kind === 'access') deps.openAccess?.()
+        else if (pick?.kind === 'signout') deps.endLogin?.()
       },
     })
   }
+}
+
+/**
+ * Sign out: this page's own login ends (POST /api/logout, the tunnel listener's), then the gate asks
+ * hello again (UNPAIRED) and shows the login screen; a 401 (no login there any more) too. Any other
+ * answer (Caddy's 502 while the board is closed), or none: the login may still hold on this device,
+ * so the board stays on show and a toast says it was not signed out (the gate asked again would
+ * keep the board on show all the same, #108, and say nothing).
+ */
+export async function endLogin({ t, toast }: Pick<LanguageDeps, 't' | 'toast'>): Promise<void> {
+  try {
+    const res = await postJson('/api/logout', {})
+    if (!res.ok && res.status !== 401) {
+      const reply = await replyOf(res)
+      throw new ApiError(res.status, isReply(reply) ? reply : {})
+    }
+  } catch (err) {
+    return toast(t('set.signOutFailed', { why: errorText(err, t) }), true)
+  }
+  dispatchEvent(new Event(UNPAIRED))
 }
 
 export interface LanguageDeps {
@@ -191,18 +223,20 @@ const crossFade = (): ((apply: () => void) => unknown) | undefined =>
 
 /**
  * Settings for the page: `menu` is the board's one menu (hooks/useContextMenus.ts);
- * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel, `openWake` Sleep and wake.
+ * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel, `openWake` Sleep and wake,
+ * `openAccess` the Remote access panel.
  */
 export function useSettingsMenu(
   menu: MenuEngine,
   openProfiles: () => void,
   openPhones: () => void = () => {},
   openWake: () => void = () => {},
+  openAccess: () => void = () => {},
 ): SettingsMenu {
   const { t, choose } = useLanguage()
   const board = useBoardContext()
   const place = usePanelPlace()
-  const latest = useLatest({ t, choose, board, openProfiles, openPhones, openWake })
+  const latest = useLatest({ t, choose, board, openProfiles, openPhones, openWake, openAccess })
   const [expanded, setExpanded] = useState(false)
   const [gear] = useState(() => {
     const open = settingsMenuFrom({
@@ -267,6 +301,13 @@ export function useSettingsMenu(
       openWake: () => latest.current.openWake(),
       phones: () => !!latest.current.board.data?.remote,
       openPhones: () => latest.current.openPhones(),
+      access: () => !remotePage(),
+      openAccess: () => latest.current.openAccess(),
+      signOut: () => remotePage() && keptAuth() === 'login',
+      endLogin: () => {
+        const { t, board } = latest.current
+        void endLogin({ t, toast: board.toast })
+      },
     })
     return settingsGear(menu, open, setExpanded)
   })

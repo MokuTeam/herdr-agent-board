@@ -1,0 +1,13 @@
+@@section nginx
+# configuration file /etc/nginx/nginx.conf:
+include /etc/nginx/modules-enabled/*.conf;
+	include /etc/nginx/mime.types;
+	include /etc/nginx/conf.d/*.conf;
+	include /etc/nginx/sites-enabled/*;
+# configuration file /etc/nginx/mime.types:
+# configuration file /etc/nginx/conf.d/site.conf:
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name site.example.com;
+@@nginx-exit 0
+@@end

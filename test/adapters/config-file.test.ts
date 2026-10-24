@@ -9,8 +9,10 @@ import {
   editCategories,
   editProfiles,
   editSettings,
+  editTunnel,
   loadConfig,
   saveFoundProfiles,
+  setTunnelOn,
 } from '../../src/adapters/config-file.ts'
 import { isRecord, renameWithRetry, replaceFile } from '../../src/adapters/json-store.ts'
 import { configDir } from '../../src/adapters/paths.ts'
@@ -488,4 +490,56 @@ test('a lane’s usual profile: set, cleared, a bad id ignored', () => {
   expect(acme()?.profile).toBe('work')
   ok(editCategories({ op: 'update', id: 'acme', profile: '' }))
   expect(acme()).toEqual({ id: 'acme', color: 'blue', paths: [] })
+})
+
+test("editTunnel sets the tunnel's fields given, keeping the others, a hand-written note and the file's other keys", () => {
+  isolatedHome()
+  seed({ language: 'en', futureKey: 1, tunnel: { on: true, user: 'boardtunnel', sshPort: 2222, note: 'mine' } })
+  expect(editTunnel({ host: 'ssh.example.com' })).toEqual({ ok: true })
+  expect(saved()).toEqual({
+    language: 'en',
+    futureKey: 1,
+    tunnel: { on: true, user: 'boardtunnel', sshPort: 2222, note: 'mine', host: 'ssh.example.com' },
+  })
+  expect(editTunnel({ domain: 'board.example.com', port: 12500 })).toEqual({ ok: true })
+  expect(saved().tunnel).toEqual({
+    on: true,
+    user: 'boardtunnel',
+    sshPort: 2222,
+    note: 'mine',
+    host: 'ssh.example.com',
+    domain: 'board.example.com',
+    port: 12500,
+  })
+})
+
+test('editTunnel: a null or empty value removes the field (its default then), a field not given stays', () => {
+  isolatedHome()
+  seed({ language: 'en', tunnel: { host: 'h', user: 'u', socket: '/srv/x/b.sock', port: 12500, note: 'mine' } })
+  expect(editTunnel({ socket: '', port: null, user: undefined })).toEqual({ ok: true })
+  expect(saved().tunnel).toEqual({ host: 'h', user: 'u', note: 'mine' })
+})
+
+test('editTunnel and setTunnelOn make the tunnel object where there is none, or none that is an object', () => {
+  isolatedHome()
+  seed({ language: 'en', tunnel: 'on' })
+  expect(editTunnel({ host: 'ssh.example.com' })).toEqual({ ok: true })
+  expect(saved()).toEqual({ language: 'en', tunnel: { host: 'ssh.example.com' } })
+  isolatedHome()
+  seed({ language: 'en' })
+  expect(setTunnelOn(true)).toEqual({ ok: true })
+  expect(saved()).toEqual({ language: 'en', tunnel: { on: true } })
+})
+
+test('setTunnelOn turns the tunnel on and off, keeping its other fields and the file', () => {
+  isolatedHome()
+  seed({ language: 'en', futureKey: 1, tunnel: { host: 'ssh.example.com', user: 'boardtunnel', note: 'mine' } })
+  expect(setTunnelOn(true)).toEqual({ ok: true })
+  expect(saved()).toEqual({
+    language: 'en',
+    futureKey: 1,
+    tunnel: { host: 'ssh.example.com', user: 'boardtunnel', note: 'mine', on: true },
+  })
+  expect(setTunnelOn(false)).toEqual({ ok: true })
+  expect(saved().tunnel).toEqual({ host: 'ssh.example.com', user: 'boardtunnel', note: 'mine', on: false })
 })

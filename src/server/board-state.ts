@@ -61,6 +61,8 @@ interface Options {
   remote?: () => RemoteView | null
   /** Whether the board can ask a session a side question (services/aside.ts asideCheck). */
   aside?: () => boolean
+  /** The Remote access view's revision (app.ts counts its changes). */
+  accessRev?: () => number
   /** The Omarchy theme's stamp (adapters/omarchy.ts), on a computer with Omarchy only. */
   omarchy?: () => string | null
 }
@@ -143,6 +145,7 @@ export function createBoardState({
   mokupilot,
   remote,
   aside,
+  accessRev,
   omarchy,
 }: Options): BoardState {
   const { cfg, log } = deps
@@ -215,6 +218,8 @@ export function createBoardState({
       foldWaiting: foldModeOf(cfg.foldWaiting),
       // remote: only while the remote mode is on; a board without it sends none.
       ...remoteOf(remote),
+      // accessRev: the panel's cue to fetch the Remote access view again (never the view itself).
+      accessRev: accessRev?.() ?? 0,
       // omarchy: only on a computer with Omarchy, the theme the Terminal style follows.
       ...omarchyOf(omarchy),
     }
