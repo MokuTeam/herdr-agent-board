@@ -1,6 +1,7 @@
 // Compiled to an executable (see fake-herdr-bin.ts) and used as HERDR_BIN_PATH.
 // Only file-backed canned replies (and herdr's Claude hook, written where herdr writes it); never
 // loads or contacts Herdr.
+import { execFileSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -32,6 +33,25 @@ const three = args.slice(0, 3).join(' ')
 const key = state[four] ? four : state[three] ? three : args.slice(0, 2).join(' ')
 let reply = state[key]
 if (!reply) throw new Error(`Unexpected fake command: ${args.join(' ')}`)
+// `herdr worktree create` also makes the worktree on disk, as herdr does: a test's git sees it.
+if (key === 'worktree create') {
+  const value = (flag: string): string => {
+    const i = args.indexOf(flag)
+    return i >= 0 ? (args[i + 1] ?? '') : ''
+  }
+  const cwd = value('--cwd')
+  const branch = value('--branch')
+  const base = value('--base')
+  const path = value('--path')
+  if (cwd && branch && path) {
+    mkdirSync(dirname(path), { recursive: true })
+    try {
+      execFileSync('git', ['-C', cwd, 'worktree', 'add', '-b', branch, path, ...(base ? [base] : [])], {
+        stdio: 'ignore',
+      })
+    } catch {}
+  }
+}
 // { until: ['tab close', ...], then: <reply> }: this reply until one of those commands was
 // called, the other one after (a pane that a close took away).
 if (reply.until) {

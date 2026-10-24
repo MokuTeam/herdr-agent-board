@@ -256,6 +256,63 @@ export async function workspaceCreate(
   }
 }
 
+/** A worktree herdr opened: the workspace it links, its first tab and pane, and whether it was already open. */
+export interface HerdrWorktree {
+  id: string
+  tab: string | null
+  pane: string | null
+  terminal: string | null
+  alreadyOpen: boolean
+  label: string
+}
+
+function asWorktree(answer: unknown, args: string[]): HerdrWorktree {
+  const record = isRecord(answer) ? answer : null
+  const workspace = record && isRecord(record.workspace) ? record.workspace : null
+  const id = workspace ? stringAt(workspace, 'workspace_id') : null
+  if (!workspace || !id) throw new HerdrError(args, undefined, 'no workspace in its answer')
+  return {
+    id,
+    tab: stringAt(record?.tab, 'tab_id'),
+    pane: stringAt(record?.root_pane, 'pane_id'),
+    terminal: stringAt(record?.root_pane, 'terminal_id'),
+    alreadyOpen: record?.already_open === true,
+    label: stringAt(workspace, 'label') ?? '',
+  }
+}
+
+/** Open the workspace of an existing checkout, linked to its repository (no --env). */
+export async function worktreeOpen(cwd: string, path: string, label: string): Promise<HerdrWorktree> {
+  const args = ['worktree', 'open', '--cwd', cwd, '--path', path, '--label', label, '--no-focus']
+  return asWorktree(await herdr(args), args)
+}
+
+/** Create a worktree and open its linked workspace (no --env), based on `base`. */
+export async function worktreeCreate(
+  cwd: string,
+  branch: string,
+  base: string,
+  path: string,
+  label: string,
+): Promise<HerdrWorktree> {
+  const args = [
+    'worktree',
+    'create',
+    '--cwd',
+    cwd,
+    '--branch',
+    branch,
+    '--base',
+    base,
+    '--path',
+    path,
+    '--label',
+    label,
+    '--no-focus',
+  ]
+  return asWorktree(await herdr(args), args)
+}
+
 /** A workspace's new name, in herdr's sidebar and for every pane in it. */
 export async function workspaceRename(workspace: string, label: string): Promise<void> {
   await herdr(['workspace', 'rename', workspace, label])

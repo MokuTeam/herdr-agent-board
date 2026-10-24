@@ -398,10 +398,10 @@ describe('the workspace it offers', () => {
 describe('the worktree, what the form lacks, the Start button', () => {
   test('where a new branch goes, either kind of path; a bad branch says why', () => {
     expect(worktreeNote({ root: 'C:\\Work\\acme', branch: 'main' }, true, ' fix/x ', t)).toEqual({
-      text: t('launch.worktreeAt', { path: 'C:\\Work\\acme-fix-x', branch: 'main' }),
+      text: t('launch.worktreeAt', { path: 'C:\\Work\\acme-wt\\fix-x', branch: 'main' }),
       error: false,
     })
-    expect(worktreeNote({ root: '/srv/web/', branch: 'trunk' }, true, 'next', t).text).toContain('/srv/web-next')
+    expect(worktreeNote({ root: '/srv/web/', branch: 'trunk' }, true, 'next', t).text).toContain('/srv/web-wt/next')
     expect(worktreeNote({ root: '/srv/web', branch: 'trunk' }, true, 'a..b', t)).toEqual({
       text: t('launch.err.branch'),
       error: true,
