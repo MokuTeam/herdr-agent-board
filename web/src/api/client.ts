@@ -91,6 +91,8 @@ export interface SessionDetail {
   /** The terminal's screen while a dialog holds the session. */
   screen: string
   dialog: PublicDialog | null
+  /** The effort its latest /effort line says, when that line is on screen. */
+  effort?: string
   /** Its folder is in a git checkout: the sheet offers its changes. */
   checkout: boolean
   /** Its subagents, forks, workflow agents and teammates, newest first, and its workflow runs. */
@@ -198,6 +200,21 @@ function session(key: string, signal: AbortSignal): Promise<SessionDetail> {
   return get(`/api/session/${encodeURIComponent(key)}`, isSessionDetail, { signal, cache: 'no-store' })
 }
 
+/** The effort the session's screen says now (GET /api/session/<key>/effort). */
+export interface SessionEffort {
+  effort: string
+}
+
+const isSessionEffort: Guard<SessionEffort> = (value): value is SessionEffort & Reply =>
+  isReply(value) && typeof value.effort === 'string'
+
+function sessionEffort(key: string, signal: AbortSignal): Promise<SessionEffort> {
+  return get(`/api/session/${encodeURIComponent(key)}/effort`, isSessionEffort, {
+    signal,
+    cache: 'no-store',
+  })
+}
+
 /** A file into the board's uploads folder, under its own name; resolves where it was saved. */
 async function upload(name: string, file: Blob): Promise<string> {
   const res = await fetch('/api/upload', {
@@ -220,7 +237,7 @@ export function pageLog(text: string): void {
   void postJson('/api/log', { text }).catch(() => {})
 }
 
-export const api = { board, get, post, session, upload }
+export const api = { board, get, post, session, sessionEffort, upload }
 
 // ---------------------------------------------------------------- the archive
 

@@ -11,6 +11,7 @@ import { askRestart } from '../../adapters/schedule-store.ts'
 import { busy, PINS } from '../../core/board.ts'
 import { isCodexItem } from '../../core/codex.ts'
 import { type PublicDialog, parseDialog, publicDialog } from '../../core/dialogs/questions.ts'
+import { effortFromScreen } from '../../core/effort.ts'
 import { publicHelper } from '../../core/helpers.ts'
 import { t } from '../../core/lang.ts'
 import { checkName } from '../../core/launch/names.ts'
@@ -75,9 +76,11 @@ async function detail(app: SessionApp, item: Item) {
   const checkout = await isCheckout(item.cwd)
   let screen = ''
   let dialog: PublicDialog | null = null
-  if (item.status === 'blocked' && item.pane) {
+  let effort = ''
+  if (item.pane && item.agent !== 'pi') {
     try {
       const text = await herdrText(['agent', 'read', item.pane, '--source', 'visible'], 5000)
+      effort = effortFromScreen(text)
       screen = text
         .split('\n')
         .map(l => l.trimEnd())
@@ -92,9 +95,24 @@ async function detail(app: SessionApp, item: Item) {
       dialog = publicDialog(parseDialog(text, item.agent))
     } catch {}
   }
+  // The screen is what a blocked session asks; an idle one is read only for its effort line.
+  if (item.status !== 'blocked') {
+    screen = ''
+    dialog = null
+  }
   const helpers = own.helpers.map(publicHelper)
   const queued = alive ? thread.queued : []
-  return { item: shown, conversation, queued, helpers, workflows: own.workflows, screen, dialog, checkout }
+  return {
+    item: shown,
+    conversation,
+    queued,
+    helpers,
+    workflows: own.workflows,
+    screen,
+    dialog,
+    checkout,
+    ...(effort ? { effort } : {}),
+  }
 }
 
 function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
@@ -304,6 +322,18 @@ export function sessionRoutes(app: SessionApp): Route[] {
       handle: withItem(async (item, _req, ctx) => {
         const home = app.deps.homes.forDir(item.claudeRoot ?? app.deps.claude.root)
         return json(200, await home.searchHistory(item.cwd, ctx.url.searchParams.get('q'), item.session))
+      }),
+    },
+    {
+      method: 'GET',
+      path: /^\/api\/session\/([^/]+)\/effort$/,
+      // The effort the session is on now: the /effort line on its screen changes before a turn.
+      handle: withItem(async item => {
+        const text =
+          item.pane && item.agent !== 'pi'
+            ? await herdrText(['agent', 'read', item.pane, '--source', 'visible'], 5000).catch(() => '')
+            : ''
+        return json(200, { effort: effortFromScreen(text) })
       }),
     },
     {

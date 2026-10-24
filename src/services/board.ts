@@ -125,7 +125,7 @@ function contextOf(session: string | null, info: TranscriptInfo, settingsDir: st
     contextPct: null,
     contextSize: null,
     model: info.model ?? null,
-    effort: effortFromSettings(settingsDir, info.model ?? null) ?? info.effort ?? null,
+    effort: info.effort ?? effortFromSettings(settingsDir, info.model ?? null),
   }
   if (!session) return own
   const file = join(contextDir(), `${session.replace(/[^A-Za-z0-9_-]/g, '_')}.json`)
