@@ -200,16 +200,17 @@ function session(key: string, signal: AbortSignal): Promise<SessionDetail> {
   return get(`/api/session/${encodeURIComponent(key)}`, isSessionDetail, { signal, cache: 'no-store' })
 }
 
-/** The effort the session's screen says now (GET /api/session/<key>/effort). */
-export interface SessionEffort {
+/** The model and effort the session's screen says now (GET /api/session/<key>/meter). */
+export interface SessionMeterInfo {
   effort: string
+  model: string
 }
 
-const isSessionEffort: Guard<SessionEffort> = (value): value is SessionEffort & Reply =>
-  isReply(value) && typeof value.effort === 'string'
+const isSessionMeterInfo: Guard<SessionMeterInfo> = (value): value is SessionMeterInfo & Reply =>
+  isReply(value) && typeof value.effort === 'string' && typeof value.model === 'string'
 
-function sessionEffort(key: string, signal: AbortSignal): Promise<SessionEffort> {
-  return get(`/api/session/${encodeURIComponent(key)}/effort`, isSessionEffort, {
+function sessionMeter(key: string, signal: AbortSignal): Promise<SessionMeterInfo> {
+  return get(`/api/session/${encodeURIComponent(key)}/meter`, isSessionMeterInfo, {
     signal,
     cache: 'no-store',
   })
@@ -237,7 +238,7 @@ export function pageLog(text: string): void {
   void postJson('/api/log', { text }).catch(() => {})
 }
 
-export const api = { board, get, post, session, sessionEffort, upload }
+export const api = { board, get, post, session, sessionMeter, upload }
 
 // ---------------------------------------------------------------- the archive
 

@@ -8,15 +8,19 @@ import { useT } from '../../i18n/I18nProvider.tsx'
 
 export function SessionMeter({ item, effort = '' }: { item: Item; effort?: string }) {
   const t = useT()
-  // A /effort changes only the screen, and only for this session: read it while the sheet is open.
+  // /model and /effort change only the screen, and only for this session: read it while open.
   const [live, setLive] = useState('')
+  const [liveModel, setLiveModel] = useState('')
   useEffect(() => {
     let stopped = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const read = async () => {
       try {
-        const r = await api.sessionEffort(item.key, AbortSignal.timeout(4000))
-        if (!stopped && r.effort) setLive(r.effort)
+        const r = await api.sessionMeter(item.key, AbortSignal.timeout(4000))
+        if (!stopped) {
+          if (r.effort) setLive(r.effort)
+          if (r.model) setLiveModel(r.model)
+        }
       } catch {}
       if (!stopped) {
         timer = setTimeout(() => void read(), 2000)
@@ -41,7 +45,7 @@ export function SessionMeter({ item, effort = '' }: { item: Item; effort?: strin
         {context ? t('meter.ctx', { value: context }) : t('meter.ctxNone')}
       </span>
       <span className="meter-fact" title={item.model ?? undefined}>
-        {t('meter.model')}: {item.model || t('meter.unknown')}
+        {t('meter.model')}: {liveModel || item.model || t('meter.unknown')}
       </span>
       <span className="meter-fact" title={t('meter.effortHint')}>
         {t('meter.effort')}: {live || effort || item.effort || t('meter.unknown')}
