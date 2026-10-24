@@ -33,7 +33,8 @@ describe(`the stylesheets are upstream’s at ${STYLES_REF}`, () => {
       const rest = theirs
         .filter(line => !isSetupRule(line) && line !== '  .setup-pop { transition: opacity 160ms ease; }')
         .map(line => line.replace(', .setup-pop {', ' {'))
-      expect(ours(sheet)).toEqual(rest)
+      // The card's quiet facts are the board's own rule, not upstream's: compared apart.
+      expect(ours(sheet).filter(line => !line.startsWith('.card-facts'))).toEqual(rest)
       expect(ours('setup.css').filter(isSetupRule)).toEqual(theirs.filter(isSetupRule))
     })
 })

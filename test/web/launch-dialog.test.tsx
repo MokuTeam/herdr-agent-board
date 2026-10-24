@@ -56,7 +56,10 @@ async function run(make: () => LaunchSide, steps: Step[]): Promise<string[]> {
 async function compare(steps: Step[], scene: () => LaunchScene = board, renamed = false): Promise<string[]> {
   const unnamed = (shot: string) =>
     renamed ? shot.replace(/ newWorkspace="(?:[^"\\]|\\.)*"/, ' newWorkspace=…') : shot
-  const baseline = (await run(() => oldLaunchSide(scene()), steps)).map(unnamed)
+  // The old page puts a worktree beside the repo; the board now uses <repo>-wt/<ticket>.
+  const ticketDir = (shot: string) =>
+    shot.replaceAll('checked out in C:\\Work\\acme-', 'checked out in C:\\Work\\acme-wt\\')
+  const baseline = (await run(() => oldLaunchSide(scene()), steps)).map(shot => ticketDir(unnamed(shot)))
   const react = (await run(() => reactLaunchSide(scene()), steps)).map(unnamed)
   expect(react.length).toBe(baseline.length)
   for (const [i, shot] of baseline.entries()) expect(`react step ${i}\n${react[i]}`).toBe(`react step ${i}\n${shot}`)
@@ -437,7 +440,7 @@ describe('the form', () => {
       check('wt', false),
     ])
     expect(fieldsLine(shots[shots.length - 6])).toContain('branch="scheta-acme"')
-    expect(shots.join('\n')).toContain('New branch from main, checked out in C:\\Work\\acme-scheta-acme')
+    expect(shots.join('\n')).toContain('New branch from main, checked out in C:\\Work\\acme-wt\\scheta-acme')
     expect(shots.join('\n')).toContain('class="error field-note wt-note"')
   })
 
@@ -673,6 +676,44 @@ const startBodyOf = (shot: string | undefined) =>
     .split(' | ')
     .find(line => line.startsWith('POST /api/launch {'))
     ?.slice('POST /api/launch '.length) ?? ''
+
+describe('a ticket workspace names the session', () => {
+  const TICKET = item({
+    key: 's9',
+    name: 'ticket',
+    cwd: 'C:\\Work\\acme',
+    category: 'acme',
+    workspace: '14312',
+    activity: 60,
+  })
+  const ticketBoard = () => board({ items: [TICKET, ...ITEMS] })
+  const options: Step = async side => {
+    side.server.options = {
+      ...OPTIONS,
+      workspaces: [
+        { id: 'w1', label: 'Board' },
+        { id: 'w9', label: '14312' },
+        { id: 'w10', label: 'EA-17388' },
+      ],
+      focused: 'w9',
+    }
+  }
+
+  test('the workspace label fills Name, digits and Jira keys alike; a typed name stays', async () => {
+    const started = await react([options, ...openAndSettle({ item: TICKET }, 'card')], ticketBoard)
+    expect(fieldsLine(started.at(-1))).toContain('name="14312"')
+    const jira = await react(
+      [options, ...openAndSettle({ item: TICKET }, 'card'), choose('workspace', 'w10')],
+      ticketBoard,
+    )
+    expect(fieldsLine(jira.at(-1))).toContain('name="EA-17388"')
+    const typed = await react(
+      [options, ...openAndSettle({ item: TICKET }, 'card'), type('name', 'my job'), choose('workspace', 'w10')],
+      ticketBoard,
+    )
+    expect(fieldsLine(typed.at(-1))).toContain('name="my job"')
+  })
+})
 
 describe('several lanes on show', () => {
   const NOTE =

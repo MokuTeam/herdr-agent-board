@@ -65,6 +65,7 @@ interface ContextFile {
   tokens: number | undefined
   usedPercentage: number | undefined
   size: number | undefined
+  model: string | undefined
 }
 
 const contextCache = new Map<string, { mtimeMs: number; data: ContextFile }>() // session -> file
@@ -76,6 +77,7 @@ function asContextFile(value: unknown): ContextFile {
     tokens: numberOf(d.tokens),
     usedPercentage: numberOf(d.usedPercentage),
     size: numberOf(d.size),
+    model: typeof d.model === 'string' && d.model ? d.model : undefined,
   }
 }
 
@@ -87,10 +89,16 @@ interface ContextFill {
   context: number | null
   contextPct: number | null
   contextSize: number | null
+  model: string | null
 }
 
 function contextOf(session: string | null, info: TranscriptInfo): ContextFill {
-  const own: ContextFill = { context: info.context ?? null, contextPct: null, contextSize: null }
+  const own: ContextFill = {
+    context: info.context ?? null,
+    contextPct: null,
+    contextSize: null,
+    model: info.model ?? null,
+  }
   if (!session) return own
   const file = join(contextDir(), `${session.replace(/[^A-Za-z0-9_-]/g, '_')}.json`)
   const st = statSync(file, { throwIfNoEntry: false })
@@ -111,6 +119,7 @@ function contextOf(session: string | null, info: TranscriptInfo): ContextFill {
     context: (fresh && d.tokens) || own.context,
     contextPct: fresh ? (d.usedPercentage ?? null) : null,
     contextSize: d.size ?? null,
+    model: d.model ?? own.model,
   }
 }
 

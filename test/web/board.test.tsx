@@ -21,9 +21,12 @@ const ITEMS = [
   item({ key: 'f', name: 'Phi', column: 'done', status: 'done', category: 'proj', activity: ago(2) }),
 ]
 
+/** The card's new quiet facts are not in the old page's markup: compare the rest. */
+const withoutFacts = (html: string) => html.replace(/[ \t]*<div class="card-facts">[\s\S]*?<\/div>\n/g, '')
+
 function same(scene: Scene) {
   const { old, react } = bothBoards(scene)
-  expect(react).toBe(old)
+  expect(withoutFacts(react)).toBe(withoutFacts(old))
 }
 
 describe('board markup parity', () => {

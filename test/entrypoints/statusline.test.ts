@@ -10,6 +10,7 @@ import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 const plain = (s: string): string => s.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '')
 const input = {
   session_id: 'abc-123',
+  model: { id: 'claude-opus-4-5', display_name: 'Opus 4.5' },
   context_window: {
     context_window_size: 200000,
     used_percentage: 8,
@@ -37,7 +38,9 @@ test('as the command Claude runs: files for the board, the line on stdout, old w
   const state = join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board')
   const usage = JSON.parse(readFileSync(join(state, 'claude-limits-latest.json'), 'utf8'))
   assert.equal(usage.fiveHour.usedPercentage, 23.5)
-  assert.equal(JSON.parse(readFileSync(join(state, 'context', 'abc-123.json'), 'utf8')).usedPercentage, 8)
+  const contextFile = JSON.parse(readFileSync(join(state, 'context', 'abc-123.json'), 'utf8'))
+  assert.equal(contextFile.usedPercentage, 8)
+  assert.equal(contextFile.model, 'Opus 4.5')
   assert.equal(run({}).status, 0)
   assert.equal(JSON.parse(readFileSync(join(state, 'claude-limits-latest.json'), 'utf8')).fiveHour.usedPercentage, 23.5)
   assert.equal(run('not json').stdout, '') // a bad input leaves the line blank, no error

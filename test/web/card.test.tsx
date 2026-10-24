@@ -11,10 +11,34 @@ const MIN = 60_000
 // Half minutes: the two sides read the clock a few ms apart and must not straddle a minute.
 const ago = (minutes: number) => Date.now() - (minutes + 0.5) * MIN
 
+/** The card's new quiet facts are not in the old page's markup: compare the rest. */
+const withoutFacts = (html: string) => html.replace(/[ \t]*<div class="card-facts">[\s\S]*?<\/div>\n/, '')
+
 function same(scene: Scene, key: string) {
   const { old, react } = bothCards(scene, key)
-  expect(react).toBe(old)
+  expect(withoutFacts(react)).toBe(withoutFacts(old))
 }
+
+test('the card’s facts: status, context and model, quietly at its foot', () => {
+  const a = item({
+    key: 'a',
+    name: 'Alpha',
+    status: 'working',
+    column: 'work',
+    context: 84_000,
+    contextPct: 42,
+    model: 'Opus 4.5',
+  })
+  const { react } = bothCards({ items: [a] }, 'a')
+  expect(react).toContain('class="card-facts"')
+  expect(react).toContain('>Working<')
+  expect(react).toContain('>ctx 42%<')
+  expect(react).toContain('>Opus 4.5<')
+  // Unknown context and model: the status still shows.
+  const bare = bothCards({ items: [item({ key: 'b', column: 'me', name: 'B' })] }, 'b').react
+  expect(bare).toContain('>Needs me<')
+  expect(bare).not.toContain('ctx ')
+})
 
 const question = (header: string, multiSelect: boolean) => ({
   question: 'Which **one** goes first?',
