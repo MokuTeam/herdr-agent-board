@@ -4,6 +4,7 @@ import { type CardPatch, readCard, writeCard } from '../adapters/cards.ts'
 import { loadConfig } from '../adapters/config-file.ts'
 import { agentGet } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
+import { presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
 import { CODEX_AGENT, isCodexSession } from '../core/codex.ts'
@@ -31,12 +32,23 @@ async function main(): Promise<void> {
   }
   let context: string | null = null
   if (event === 'SessionStart' || Number(card?.briefV ?? 0) < BRIEF_VERSION) {
+    const cfg = loadConfig()
+    const presence = presenceForBrief(cfg)
     context = [
-      brief(loadConfig(), card, typeof input.cwd === 'string' ? input.cwd : '', process.env, 'Codex'),
+      brief(cfg, card, typeof input.cwd === 'string' ? input.cwd : '', process.env, 'Codex', presence),
       `Use \`board --session ${sid} <command>\` for the commands above, so a tool's shell targets this session even when it does not inherit the pane environment.`,
     ].join('\n')
     Object.assign(patch, { briefedAt: Date.now(), briefV: BRIEF_VERSION })
-  } else if (card?.wait) context = waitReminder(card)
+    if (presence) patch.presenceSeen = presence.since
+    else if (card?.presenceSeen !== undefined) patch.presenceSeen = ''
+  } else {
+    if (card?.wait) context = waitReminder(card)
+    const news = presenceNews(card)
+    if (news) {
+      context = context ? `${context}\n${news.line}` : news.line
+      patch.presenceSeen = news.seen
+    }
+  }
   if (Object.keys(patch).length) writeCard(sid, patch)
   if (context) console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }))
 }

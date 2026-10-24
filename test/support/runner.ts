@@ -1,6 +1,6 @@
 // Invoked only by tests with an explicit temporary HOME and the compiled fake herdr
 // (HERDR_BIN_PATH, set by the sandbox).
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { Config, Item } from '../../src/core/types.ts'
 
@@ -97,6 +97,13 @@ if (mode === 'open') {
     ...(probeMs && { gather: () => gatherFacts(deps.cfg, { probeMs }) }),
     // Never a real wake start: each one is told to the test.
     wakeStarter: (args = []) => send({ wakeStarted: args }),
+    // Never this computer's idle time: presence detection hears nothing unless a test says so
+    // (TEST_PRESENCE_OBS: a file with the observation), every TEST_PRESENCE_MS when given.
+    ...(Number(process.env.TEST_PRESENCE_MS) > 0 && { presenceIntervalMs: Number(process.env.TEST_PRESENCE_MS) }),
+    presenceObserve: async () => {
+      const file = process.env.TEST_PRESENCE_OBS
+      return file && existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : { idleSec: null, locked: null }
+    },
   })
   refresh = () => void server.refresh()
   // TEST_ROUTE_TABLE: the board's routes, each RegExp path by its source (test/support/tunnel-board.ts).
