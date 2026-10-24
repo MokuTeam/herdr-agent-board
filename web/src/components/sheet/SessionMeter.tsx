@@ -21,7 +21,7 @@ export function SessionMeter({ item }: { item: Item }) {
         {t('meter.model')}: {item.model || t('meter.unknown')}
       </span>
       <span className="meter-fact" title={t('meter.effortHint')}>
-        {t('meter.effort')}: {t('meter.unknown')}
+        {t('meter.effort')}: {item.effort || t('meter.unknown')}
       </span>
     </div>
   )
