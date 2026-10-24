@@ -8,8 +8,9 @@
 //   config.json allows;
 // - it carries the token of a device paired from that very Tailscale device, for anything but
 //   /api/hello and the pairing itself;
-// - it does not act on this computer's screen (desktopOnly), nor approve pairings (/api/remote,
-//   for the board on this computer only).
+// - it does not act on this computer's screen (desktopOnly), nor approve pairings, set up Remote
+//   access or work wake (localOnly: /api/remote, /api/access, /api/wake, for the board on this
+//   computer only).
 // The routes' own guards apply as for the web board (X-Board on POSTs, fresh herdr data, the file
 // token).
 //
@@ -33,11 +34,9 @@ import {
 import {
   allowedLogin,
   bearerOf,
-  desktopOnly,
   type PwaView,
   REMOTE_API,
   type RemoteConfig,
-  type RemoteDevice,
   type RemoteView,
   remoteConfig,
   type ServeUse,
@@ -47,7 +46,7 @@ import {
 import type { Config } from '../core/types.ts'
 import type { Remote } from '../services/remote.ts'
 import { dispatch, type GuardState, json, type Route, readBody } from './http.ts'
-import { namedEvent } from './sse.ts'
+import { decoded, endsWhenGone, remoteRefusal } from './streams.ts'
 
 export interface Hello {
   board: 'agent-board'
@@ -103,64 +102,9 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 const isV4 = (ip: string): boolean => /^\d+\.\d+\.\d+\.\d+$/.test(ip)
 const urlHost = (ip: string): string => (ip.includes(':') ? `[${ip}]` : ip)
 const WHOIS_MS = 60_000
-/** The path decoded; null when it does not decode (a 400). */
-function decoded(raw: string): string | null {
-  try {
-    return decodeURIComponent(raw)
-  } catch {
-    return null
-  }
-}
-
-/**
- * Approving pairings and turning the remote mode on or off, and wake's switches, Start and Log
- * (#119): for the board on this computer only.
- */
-const localOnly = (path: string): boolean => /^\/api\/(remote|wake)(\/|$)/.test(path)
-
 type Server = ReturnType<typeof Bun.serve>
 /** Which listener a request came to: the one on the Tailscale address, or the one for `tailscale serve`. */
 type Via = 'tailnet' | 'serve'
-
-/**
- * `res` as it is, unless it is a stream (the board's events, a terminal): then one that ends,
- * after an `unpaired` event, once the device is unpaired.
- */
-function endsWhenUnpaired(res: Response, device: RemoteDevice, remote: Remote): Response {
-  if (!res.body || !(res.headers.get('content-type') ?? '').startsWith('text/event-stream')) return res
-  const reader = res.body.getReader()
-  let unwatch = (): void => {}
-  let done = false
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      unwatch = remote.watch(device.id, () => {
-        if (done) return
-        done = true
-        try {
-          controller.enqueue(new TextEncoder().encode(namedEvent('unpaired', {})))
-          controller.close()
-        } catch {}
-        void reader.cancel().catch(() => {})
-      })
-    },
-    async pull(controller) {
-      const next = await reader.read().catch(() => ({ done: true as const, value: undefined }))
-      if (done) return
-      if (next.done) {
-        done = true
-        unwatch()
-        return controller.close()
-      }
-      controller.enqueue(next.value)
-    },
-    cancel() {
-      done = true
-      unwatch()
-      return reader.cancel()
-    },
-  })
-  return new Response(stream, { status: res.status, headers: res.headers })
-}
 
 /** Serve's own word for the user, when it gives one in plain text, must be Tailscale's. */
 const sameUser = (header: string | null, who: Caller): boolean =>
@@ -296,13 +240,13 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
       // computer is refused in both spellings, or an encoded letter (/api/fs/%6Fpen) would get by.
       const path = decoded(raw)
       if (path === null) return json(400, { error: 'path' })
-      if (desktopOnly(raw) || desktopOnly(path)) return json(403, { error: 'desktop' })
-      if (localOnly(raw) || localOnly(path)) return json(403, { error: 'local' })
+      const refused = remoteRefusal(raw, path)
+      if (refused) return refused
       if (req.method === 'GET' && raw === '/api/peers') return json(200, { peers: await peers() })
       // The board's page is for the computer's own browser; a phone has its app.
       if (!raw.startsWith('/api/') && !raw.startsWith('/uploads/')) return json(404, { error: 'not found' })
       const guards = fromServe ? { ...o.guards, origins: [pwaOrigin] } : o.guards
-      return endsWhenUnpaired(await dispatch(o.routes, req, url, path, guards), device, o.remote)
+      return endsWhenGone(await dispatch(o.routes, req, url, path, guards), gone => o.remote.watch(device.id, gone))
     } catch (err) {
       o.log(`remote ${req.method} ${url ? url.pathname : ''}: ${messageOf(err)}`)
       return json(500, { error: messageOf(err) })

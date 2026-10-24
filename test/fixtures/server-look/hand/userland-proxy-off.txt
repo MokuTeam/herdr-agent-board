@@ -1,0 +1,105 @@
+@@section os
+PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
+NAME="Debian GNU/Linux"
+VERSION_ID="13"
+VERSION="13 (trixie)"
+VERSION_CODENAME=trixie
+DEBIAN_VERSION_FULL=13.7
+ID=debian
+HOME_URL="https://www.debian.org/"
+SUPPORT_URL="https://www.debian.org/support"
+BUG_REPORT_URL="https://bugs.debian.org/"
+@@arch x86_64
+@@section ports
+LISTEN 0      4096   0.0.0.0:443 0.0.0.0:* users:(("dockerd",pid=3702,fd=31))
+LISTEN 0      4096   0.0.0.0:80  0.0.0.0:* users:(("dockerd",pid=3702,fd=30))
+@@pid 3702
+0::/system.slice/docker.service
+@@section docker
+@@cli Docker version 29.9.2, build a82e528
+@@server 29.9.2
+@@security ["name=seccomp,profile=builtin","name=cgroupns"]
+@@network "bridge" "bridge"
+@@network "host" "host"
+@@network "none" "null"
+@@network "web_default" "bridge"
+@@container 714c4575b806ae0a873862f597d39566a2c799eb3ac327771506a784cc5d3faa
+name "/web-caddy-1"
+image "caddy:2"
+path "caddy"
+args ["run","--config","/etc/caddy/Caddyfile","--adapter","caddyfile"]
+netmode "web_default"
+network "web_default"
+mounts [{"Destination":"/config","Driver":"local","Mode":"rw","Name":"web_caddy_config","Propagation":"","RW":true,"Source":"/var/lib/docker/volumes/web_caddy_config/_data","Type":"volume"},{"Destination":"/data","Driver":"local","Mode":"rw","Name":"web_caddy_data","Propagation":"","RW":true,"Source":"/var/lib/docker/volumes/web_caddy_data/_data","Type":"volume"},{"Destination":"/etc/caddy/Caddyfile","Mode":"rw","Propagation":"rprivate","RW":true,"Source":"/srv/my web/Caddyfile","Type":"bind"}]
+ports {"2019/tcp":null,"443/tcp":[{"HostIp":"0.0.0.0","HostPort":"443"}],"443/udp":null,"80/tcp":[{"HostIp":"0.0.0.0","HostPort":"80"}]}
+label "com.docker.compose.config-hash" "4cf9fdaced2e1040c68a3f83364e6137fcded8a31ad1225ad5f2eda40036fcd0"
+label "com.docker.compose.container-number" "1"
+label "com.docker.compose.depends_on" ""
+label "com.docker.compose.image" "sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229"
+label "com.docker.compose.oneoff" "False"
+label "com.docker.compose.project" "web"
+label "com.docker.compose.project.config_files" "/srv/my web/compose.yaml"
+label "com.docker.compose.project.working_dir" "/srv/my web"
+label "com.docker.compose.service" "caddy"
+label "com.docker.compose.version" "5.6.1"
+
+@@section systemd
+@@running
+WorkingDirectory=
+User=
+Group=
+Id=caddy.service
+LoadState=not-found
+ActiveState=inactive
+
+WorkingDirectory=
+User=
+Group=
+Id=nginx.service
+LoadState=not-found
+ActiveState=inactive
+@@section fence
+clientaliveinterval 15
+clientalivecountmax 2
+streamlocalbindmask 0117
+passwordauthentication no
+kbdinteractiveauthentication no
+x11forwarding no
+permittty no
+allowtcpforwarding remote
+allowagentforwarding no
+allowstreamlocalforwarding remote
+streamlocalbindunlink yes
+forcecommand /bin/false
+authorizedkeysfile /etc/ssh/authorized_keys/boardtunnel
+authenticationmethods publickey
+permittunnel no
+permitlisten none
+@@section folder
+@@dir 2750 boardtunnel boardtunnel 995
+@@group boardtunnel:x:995:
+@@socket 660 boardtunnel boardtunnel socket
+@@section record
+@@section host
+@@selinux 
+@@forward 1
+@@fetch curl
+@@sudo Sudo version 1.9.16p2
+@@ls ls (GNU coreutils) 9.7
+@@package containerd not-installed
+@@package docker.io not-installed
+@@package runc not-installed
+@@section dns
+@@part domain
+203.0.113.10    STREAM board.example.com
+203.0.113.10    DGRAM  
+203.0.113.10    RAW    
+@@part local
+1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+1: lo    inet6 ::1/128 scope host proto kernel_lo \       valid_lft forever preferred_lft forever
+2: eth0    inet 172.18.0.3/16 brd 172.18.255.255 scope global eth0\       valid_lft forever preferred_lft forever
+3: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\       valid_lft forever preferred_lft forever
+4: br-fb4b0d0dc1be    inet 172.19.0.1/16 brd 172.19.255.255 scope global br-fb4b0d0dc1be\       valid_lft forever preferred_lft forever
+4: br-fb4b0d0dc1be    inet6 fe80::6855:71ff:fee1:aa60/64 scope link proto kernel_ll \       valid_lft forever preferred_lft forever
+5: vethfb86459    inet6 fe80::94b2:9cff:fe7f:1f2d/64 scope link proto kernel_ll \       valid_lft forever preferred_lft forever
+@@end

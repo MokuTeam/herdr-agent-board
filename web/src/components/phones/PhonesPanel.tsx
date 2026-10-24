@@ -4,9 +4,8 @@
 // The board in a phone's browser too (src/core/pwa.ts): setting its HTTPS address up, the address
 // as a QR code, what Tailscale still needs. Every answer goes to the board at once
 // (POST /api/remote) and comes back over the live stream.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ADMIN_DNS } from '../../../../src/core/pwa.ts'
-import { qrMatrix, qrPath } from '../../../../src/core/qr.ts'
 import type { PwaView } from '../../../../src/core/remote.ts'
 import { api, errorText } from '../../api/client.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
@@ -14,6 +13,7 @@ import { useT } from '../../i18n/I18nProvider.tsx'
 import { ago } from '../../models/card.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { Panel } from '../panel/Panel.tsx'
+import { Qr } from '../Qr.tsx'
 
 export interface PhonesPanelProps {
   open: boolean
@@ -136,24 +136,13 @@ export function PhonesPanel({ open, onClose }: PhonesPanelProps) {
   )
 }
 
-/** The address as a QR code, black on white whatever the theme, for the phone's camera. */
-function Qr({ text }: { text: string }) {
-  const { d, size } = useMemo(() => qrPath(qrMatrix(text)), [text])
-  return (
-    <svg className="phones-qr" viewBox={`0 0 ${size} ${size}`} role="img" aria-label={text} shapeRendering="crispEdges">
-      <rect width={size} height={size} fill="#fff" />
-      <path d={d} fill="#000" />
-    </svg>
-  )
-}
-
 /** The board in a phone's browser: its address and QR code once serve forwards it, else what it needs. */
 function PwaSection({ pwa, canEdit, send }: { pwa: PwaView; canEdit: boolean; send: (op: string) => Promise<void> }) {
   const t = useT()
   if (pwa.on && pwa.url)
     return (
       <div className="phones-pwa">
-        <Qr text={pwa.url} />
+        <Qr text={pwa.url} className="phones-qr" />
         <p>{t('pwa.scan', { url: pwa.url })}</p>
         <button type="button" className="button" disabled={!canEdit} onClick={() => void send('pwa-off')}>
           {t('pwa.turnOff')}

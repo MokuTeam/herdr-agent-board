@@ -76,12 +76,25 @@ function handlersFor(type: string, el: FakeElement): string[] {
       return ['onPointerDown']
     case 'submit':
       return ['onSubmit']
+    case 'toggle':
+      return el.node.tag === 'details' ? ['onToggle'] : []
     default:
       return []
   }
 }
 
-const REACT_EVENTS = ['click', 'dblclick', 'keydown', 'input', 'change', 'focusin', 'focusout', 'pointerdown', 'submit']
+const REACT_EVENTS = [
+  'click',
+  'dblclick',
+  'keydown',
+  'input',
+  'change',
+  'focusin',
+  'focusout',
+  'pointerdown',
+  'submit',
+  'toggle',
+]
 
 /** A synthetic event as React hands it to a handler. */
 function synthetic(native: FakeEvent, currentTarget: FakeElement, stop: () => void) {

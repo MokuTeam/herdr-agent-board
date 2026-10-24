@@ -1,12 +1,17 @@
-// The board in a phone's browser, through `tailscale serve` (src/core/pwa.ts): the server marks
-// that page (`data-remote` on <html>). The page on 127.0.0.1 has no mark, and none of what reads
-// it runs there.
+// The board in a phone's browser, through `tailscale serve` (src/core/pwa.ts) or through the
+// owner's own domain (src/core/tunnel.ts): the server marks that page (`data-remote` on <html>).
+// The page on 127.0.0.1 has no mark, and none of what reads it runs there.
 
 /** Whether this page is the board in a phone's browser. */
 export const remotePage = (): boolean =>
   typeof document !== 'undefined' && document.documentElement.hasAttribute('data-remote')
 
+/** The page runs as an app from the home screen, not in a browser's tab. */
+export const standalone = (): boolean =>
+  matchMedia('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone === true
+
 const LANG_KEY = 'agent-board:phone-language'
+const AUTH_KEY = 'agent-board:phone-auth'
 
 /** The board's language as hello said it last: the screens before the board use it with no connection too. */
 export function keptLanguage(): string | null {
@@ -23,15 +28,38 @@ export function keepLanguage(lang: string): void {
   } catch {}
 }
 
-/** The page's own event when the board says this browser is no longer paired. */
+/**
+ * How the last hello said this browser gets in: the offline and refused screens word themselves by
+ * it (the domain's say nothing of Tailscale), and Settings offers Sign out by it.
+ */
+export function keptAuth(): 'pair' | 'login' | null {
+  try {
+    const auth = localStorage.getItem(AUTH_KEY)
+    return auth === 'pair' || auth === 'login' ? auth : null
+  } catch {
+    return null
+  }
+}
+
+export function keepAuth(auth: 'pair' | 'login'): void {
+  try {
+    localStorage.setItem(AUTH_KEY, auth)
+  } catch {}
+}
+
+/** The page's own event when the board says this browser is no longer paired, or its login ended. */
 export const UNPAIRED = 'board:unpaired'
 
-/** What `/api/hello` says to a phone's browser (src/server/remote.ts). */
+/** What `/api/hello` says to a phone's browser (src/server/remote.ts, src/server/tunnel.ts). */
 export interface PhoneHello {
   name: string | null
   host: string
   paired: boolean
   language: string | null
+  /** How this browser gets in: 'pair', a phone approved on the computer (Tailscale); 'login', through the owner's domain. */
+  auth: 'pair' | 'login'
+  /** Through the domain: this browser's login is valid. */
+  signedIn: boolean
 }
 
 export function helloOf(value: unknown): PhoneHello | null {
@@ -43,6 +71,8 @@ export function helloOf(value: unknown): PhoneHello | null {
     host: typeof v.host === 'string' ? v.host : '',
     paired: v.paired === true,
     language: typeof v.language === 'string' ? v.language : null,
+    auth: v.auth === 'login' ? 'login' : 'pair',
+    signedIn: v.signedIn === true,
   }
 }
 
@@ -82,8 +112,8 @@ export function pollStep(answer: unknown): PairStep | null {
   return null
 }
 
-/** What the page shows: a check under way, no connection, refused, pairing, or the board. */
-export type Gate = 'checking' | 'offline' | 'refused' | 'pair' | 'board'
+/** What the page shows: a check under way, no connection, refused, pairing, the login, or the board. */
+export type Gate = 'checking' | 'offline' | 'refused' | 'pair' | 'login' | 'board'
 
 /** What a check of /api/hello came to: paired or not, refused (403), or no answer (a 5xx, the network). */
 export type CheckResult = 'paired' | 'unpaired' | 'refused' | 'unreachable'

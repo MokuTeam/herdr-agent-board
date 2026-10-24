@@ -128,6 +128,7 @@ describe('routes', () => {
       'styles/card-wrap.css',
       'styles/categories.css',
       'styles/segments.css',
+      'styles/access.css',
       'styles/motion.css',
       'styles/errors.css',
       'styles/messages.css',
@@ -164,6 +165,7 @@ describe('routes', () => {
       'favorites',
       'cards',
       'segments',
+      'access',
     ])
       expect((await fetch(`${url}/styles/${sheet}.css`)).headers.get('content-type')).toBe('text/css; charset=utf-8')
     expect((await fetch(`${url}/icon.svg`)).headers.get('content-type')).toBe('image/svg+xml')

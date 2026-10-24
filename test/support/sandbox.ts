@@ -55,6 +55,9 @@ export async function sandbox(t?: Registrar): Promise<Sandbox> {
     HERDR_BIN_PATH: herdr,
     FAKE_HERDR_STATE: join(dir, 'fake.json'),
     FAKE_HERDR_LOG: join(dir, 'calls.jsonl'),
+    // Files that do not exist: a test that forgets the fake ssh (fake-ssh-bin.ts) reaches no real one.
+    BOARD_SSH_BIN_PATH: join(dir, 'no-ssh.exe'),
+    BOARD_SSH_KEYGEN_BIN_PATH: join(dir, 'no-ssh-keygen.exe'),
     // A test run that is cut off (Ctrl+C, a stop button, a kill) runs no cleanup: every Bun started
     // with this env ends as soon as the process that started it is gone, and ends all it started
     // with it, detached ones included (a launcher's process group, a MokuPilot call).

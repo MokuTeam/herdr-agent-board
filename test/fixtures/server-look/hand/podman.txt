@@ -1,0 +1,75 @@
+@@section os
+PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
+NAME="Debian GNU/Linux"
+VERSION_ID="13"
+VERSION="13 (trixie)"
+VERSION_CODENAME=trixie
+DEBIAN_VERSION_FULL=13.7
+ID=debian
+HOME_URL="https://www.debian.org/"
+SUPPORT_URL="https://www.debian.org/support"
+BUG_REPORT_URL="https://bugs.debian.org/"
+@@arch x86_64
+@@section ports
+@@section docker
+@@cli Emulate Docker CLI using podman. Create /etc/containers/nodocker to quiet msg.
+@@cli podman version 5.4.2
+@@server 5.4.2
+@@security 
+@@network "podman" "bridge"
+@@section systemd
+@@running
+WorkingDirectory=
+User=
+Group=
+Id=caddy.service
+LoadState=not-found
+ActiveState=inactive
+
+WorkingDirectory=
+User=
+Group=
+Id=nginx.service
+LoadState=not-found
+ActiveState=inactive
+@@section fence
+clientaliveinterval 15
+clientalivecountmax 2
+streamlocalbindmask 0117
+passwordauthentication no
+kbdinteractiveauthentication no
+x11forwarding no
+permittty no
+allowtcpforwarding remote
+allowagentforwarding no
+allowstreamlocalforwarding remote
+streamlocalbindunlink yes
+forcecommand /bin/false
+authorizedkeysfile /etc/ssh/authorized_keys/boardtunnel
+authenticationmethods publickey
+permittunnel no
+permitlisten none
+@@section folder
+@@dir 2750 boardtunnel boardtunnel 995
+@@group boardtunnel:x:995:
+stat: cannot statx '/var/lib/boardtunnel/board.sock': No such file or directory
+@@section record
+@@section host
+@@selinux 
+@@forward 1
+@@fetch curl
+@@sudo Sudo version 1.9.16p2
+@@ls ls (GNU coreutils) 9.7
+@@package docker.io not-installed
+@@package podman-docker installed
+@@package runc not-installed
+@@section dns
+@@part domain
+198.18.0.71     STREAM board.example.com
+198.18.0.71     DGRAM  
+198.18.0.71     RAW    
+@@part local
+1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+1: lo    inet6 ::1/128 scope host proto kernel_lo \       valid_lft forever preferred_lft forever
+2: eth0    inet 172.17.0.2/16 brd 172.17.255.255 scope global eth0\       valid_lft forever preferred_lft forever
+@@end

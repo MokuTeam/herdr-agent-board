@@ -2,8 +2,9 @@
 // and the toasts, the keys and the Back button; the chat's files and links, the question forms, the
 // context menus, renaming in place, the "new session" window and the terminal window; the
 // session's helpers in their window; the Claude profiles' panel and sleep and wake's from Settings
-// (wake's also from the toolbar's "Wake stopped"); the archive (its
-// panel, sessions off the board and back, Ctrl+Z); a fork of a session in a new tab.
+// (wake's also from the toolbar's "Wake stopped"); the archive (its panel, sessions off the board
+// and back, Ctrl+Z); a fork of a session in a new tab; Remote access from Settings on the local
+// board.
 import { useEffect, useRef, useState } from 'react'
 import { Board } from './components/Board.tsx'
 import { FileChips } from './components/files/FileChip.tsx'
@@ -46,6 +47,7 @@ import { useSetupNote } from './hooks/useSetupNote.ts'
 import { useTerminal } from './hooks/useTerminal.ts'
 import { useTerminalKeys } from './hooks/useTerminalKeys.ts'
 import { pageLayers } from './models/lifecycle.ts'
+import { remotePage } from './models/remote-page.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
 
 export function App() {
@@ -71,6 +73,14 @@ export function App() {
   const [wake, setWake] = useState(false)
   // Settings → Phones…, while the remote mode is on; a phone that asks to pair opens it.
   const [phones, setPhones] = usePhonesPanel()
+  // Settings → Remote access…, on the local board only: its panel is mounted at its first opening,
+  // so until then the page is as it was.
+  const [access, setAccess] = useState(false)
+  const [accessMounted, setAccessMounted] = useState(false)
+  const openAccess = () => {
+    setAccess(true)
+    setAccessMounted(true)
+  }
   // The reminders' buttons, shared by the schedule panel and the sheet.
   const reminders = useSchedule()
   // Sessions off the board and back, the archive's panel; Retry on a session back from it is its Return again.
@@ -120,6 +130,7 @@ export function App() {
     () => setProfiles(true),
     () => setPhones(true),
     () => setWake(true),
+    openAccess,
   )
   // The lanes control and the profile switch folded into pills: their choices as menus.
   const picks = useSegmentPicks(menus.menu)
@@ -187,6 +198,7 @@ export function App() {
         profiles={{ open: profiles, onClose: () => setProfiles(false) }}
         wake={{ open: wake, onClose: () => setWake(false) }}
         phones={{ open: phones, onClose: () => setPhones(false) }}
+        {...(accessMounted && !remotePage() ? { access: { open: access, onClose: () => setAccess(false) } } : {})}
         archive={archive}
         sheet={{
           onNewSession: newSession,

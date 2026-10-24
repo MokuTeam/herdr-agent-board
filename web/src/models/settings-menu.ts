@@ -7,7 +7,10 @@
 // profile folder found, Profiles… opens their panel (components/profiles/ProfilesPanel.tsx). While
 // the remote mode is on (core/remote.ts), Phones… opens theirs (components/phones/PhonesPanel.tsx).
 // While the payload carries wake's state line, Sleep and wake… opens its panel (components/wake).
+// On the local board, Remote access… opens the board-through-your-domain panel
+// (components/access/AccessPanel.tsx).
 // How sessions asleep in "Waiting" fold is the board's, for every board (src/core/fold-mode.ts).
+// On a page signed in through the owner's domain, Sign out ends this browser's own login (Call 15).
 import { FOLD_MODES, type FoldMode, isFoldMode } from '../../../src/core/fold-mode.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import { CARD_TEXTS, type CardText, isCardText } from './card-text.ts'
@@ -39,6 +42,10 @@ export interface SettingsNow {
   wake?: boolean
   /** The remote mode is on (the payload's `remote`): Phones… is offered. */
   phones?: boolean
+  /** The local board's page (not one through Tailscale or the domain): Remote access… is offered. */
+  access?: boolean
+  /** This page signed in through the owner's domain: Sign out is offered, last. */
+  signOut?: boolean
 }
 
 export function settingsMenu(now: SettingsNow): MenuEntry[] {
@@ -94,6 +101,7 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
     ...(now.profiles ? [{ id: 'profiles', label: t('set.profiles') }] : []),
     ...(now.wake ? [{ id: 'wake', label: t('set.wake') }] : []),
     ...(now.phones ? [{ id: 'phones', label: t('set.phones') }] : []),
+    ...(now.access ? [{ id: 'access', label: t('set.access') }] : []),
     { separator: true },
     { id: 'sleepers', label: t('tb.sleepersTitle'), checked: now.sleepers },
     ...(now.fold
@@ -106,6 +114,7 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
           },
         ]
       : []),
+    ...(now.signOut ? [{ separator: true as const }, { id: 'signout', label: t('set.signOut') }] : []),
   ]
 }
 
@@ -122,6 +131,8 @@ export type SettingPick =
   | { kind: 'wake' }
   | { kind: 'fold'; value: FoldMode }
   | { kind: 'phones' }
+  | { kind: 'access' }
+  | { kind: 'signout' }
   | null
 
 export function settingPicked(id: string): SettingPick {
@@ -135,5 +146,7 @@ export function settingPicked(id: string): SettingPick {
   if (id === 'wake') return { kind: 'wake' }
   if (kind === 'fold' && isFoldMode(value)) return { kind, value }
   if (id === 'phones') return { kind: 'phones' }
+  if (id === 'access') return { kind: 'access' }
+  if (id === 'signout') return { kind: 'signout' }
   return null
 }
