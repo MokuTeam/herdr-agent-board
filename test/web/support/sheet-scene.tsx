@@ -188,8 +188,12 @@ export function withoutPreloads(nodes: Node[]): Node[] {
  */
 export function bothSheets(scene: SheetScene): { old: string; react: string } {
   const sides = drawSheet(scene)
+  // The session meter beside the message box is the board's own: the old page has none.
+  const withoutMeter = (html: string) => html.replace(/[ \t]*<div class="session-meter">[\s\S]*?<\/div>\n?/g, '')
   return {
-    old: `${sides.session ? sides.schedule : sides.title}\n${sides.body}`,
-    react: `${canonical(sides.session ? sides.reactSchedule : sides.reactTitle)}\n${canonical(sides.reactBody)}`,
+    old: withoutMeter(`${sides.session ? sides.schedule : sides.title}\n${sides.body}`),
+    react: withoutMeter(
+      `${canonical(sides.session ? sides.reactSchedule : sides.reactTitle)}\n${canonical(sides.reactBody)}`,
+    ),
   }
 }

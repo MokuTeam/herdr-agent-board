@@ -428,11 +428,16 @@ body.dragging { cursor: grabbing; }
 .card:hover .card-actions, .card:focus-visible .card-actions { opacity: 1; transform: none; pointer-events: auto; }
 .card:hover .age { opacity: 0; }
 
-/* The card's quiet facts: its status, context fill and model. */
-.card-facts { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: 4px; color: var(--label-3); font-size: 11.5px; line-height: 16px; }
-.card-facts .fact { flex: none; white-space: nowrap; }
-.card-facts .fact-status { color: var(--c, var(--label-3)); font-weight: 500; }
-.card-facts .fact-model { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Its status, by the name: the column in words, in its color. */
+.card-status { flex: none; max-width: 92px; overflow: hidden; color: var(--c, var(--label-3)); font-size: 11px; font-weight: 500; white-space: nowrap; text-overflow: ellipsis; }
+@container card (max-width: 230px) { .card-status { display: none; } }
+
+/* Beside the message box: context fill, model and effort, the last two changeable. */
+.session-meter { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 0 2px 6px; color: var(--label-3); font-size: 11.5px; }
+.session-meter .meter-ctx { flex: none; font-variant-numeric: tabular-nums; }
+.session-meter .meter-pick { display: inline-flex; align-items: center; gap: 4px; }
+.session-meter select { max-width: 120px; padding: 2px 4px; border: 0; border-radius: 6px; background: var(--fill-2); color: var(--label-2); font: inherit; font-size: 11.5px; }
+.session-meter select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .card.compact { padding: 7px 12px; background: var(--fill-2); box-shadow: none; }
 .card.compact .name { font-size: 12.5px; font-weight: 500; color: var(--label-2); }
 .card.compact .card-top { height: 18px; }
