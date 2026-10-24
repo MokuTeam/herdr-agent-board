@@ -17,6 +17,7 @@ import { lang, t } from '../core/lang.ts'
 import { claudeProgram, commandText } from '../core/launch/spawn-args.ts'
 import type { Limits } from '../core/limits.ts'
 import type { BoardLimits, BoardPayload, BoardProfile } from '../core/payload.ts'
+import type { PresenceView } from '../core/presence.ts'
 import { DEFAULT_PROFILE, type Profile, profileLabel } from '../core/profiles.ts'
 import type { RemoteView } from '../core/remote.ts'
 import type { SetupSummary } from '../core/setup.ts'
@@ -65,6 +66,8 @@ interface Options {
   accessRev?: () => number
   /** The Omarchy theme's stamp (adapters/omarchy.ts), on a computer with Omarchy only. */
   omarchy?: () => string | null
+  /** The user's presence (services/presence.ts); null while it is not on. */
+  presence?: () => PresenceView | null
 }
 
 // The colors the category editor offers (aliases left out).
@@ -129,6 +132,11 @@ function omarchyOf(omarchy: Options['omarchy']): { omarchy?: string } {
   return stamp ? { omarchy: stamp } : {}
 }
 
+function presenceOf(presence: Options['presence']): { presence?: PresenceView } {
+  const view = presence?.() ?? null
+  return view ? { presence: view } : {}
+}
+
 function remoteOf(remote: Options['remote']): { remote?: RemoteView } {
   const view = remote?.() ?? null
   return view ? { remote: view } : {}
@@ -147,6 +155,7 @@ export function createBoardState({
   aside,
   accessRev,
   omarchy,
+  presence,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -218,6 +227,8 @@ export function createBoardState({
       foldWaiting: foldModeOf(cfg.foldWaiting),
       // remote: only while the remote mode is on; a board without it sends none.
       ...remoteOf(remote),
+      // presence: only while config.json turns it on (#172).
+      ...presenceOf(presence),
       // accessRev: the panel's cue to fetch the Remote access view again (never the view itself).
       accessRev: accessRev?.() ?? 0,
       // omarchy: only on a computer with Omarchy, the theme the Terminal style follows.

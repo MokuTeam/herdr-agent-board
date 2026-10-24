@@ -1,7 +1,7 @@
 // The toolbar, one compact row: the title with the board's summary under it while the row has
 // room (else in the title's tooltip), the lanes control, the profile switch (two or more profiles
 // shown), search, categories, the schedule and the archive as small buttons named by their tooltips, Settings
-// (the gear), "Wake stopped" beside "Setup incomplete" when it is so, the usage pill and the live
+// (the gear), the presence switch while presence is on (#172), "Wake stopped" beside "Setup incomplete" when it is so, the usage pill and the live
 // dot; the read-only banner and the column heads under it. A narrower window takes two rows, a
 // phone three (the stylesheet). The lanes control and the
 // profile switch each fold into a pill where the row has no room for all of their segments
@@ -26,6 +26,7 @@ import { Lanes } from './Lanes.tsx'
 import { Limits } from './Limits.tsx'
 import { LiveDot } from './LiveDot.tsx'
 import { NextAttention } from './NextAttention.tsx'
+import { PresenceSwitch } from './PresenceSwitch.tsx'
 import { ProfileSwitch } from './ProfileSwitch.tsx'
 import { SetupNote } from './SetupNote.tsx'
 import { Summary } from './Summary.tsx'
@@ -175,6 +176,7 @@ export function Toolbar({
               <span data-i18n="set.title">{t('set.title')}</span>
             </button>
             <NextAttention />
+            <PresenceSwitch />
             {setup && <SetupNote setup={setup} />}
             {onWake && <WakeNote onOpen={onWake} />}
             <Limits anchor={limitsAnchor} />

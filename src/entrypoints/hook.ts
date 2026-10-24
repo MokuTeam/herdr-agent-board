@@ -2,7 +2,9 @@
 //   SessionStart (new, resume, clear, compact): the full brief, since the context is fresh.
 //   UserPromptSubmit: clears the card's `pin`, and its `ask` (the user answered) unless the prompt
 //   is a board reminder, a MokuPilot call's results or a task notification (core/notices.ts); the brief once for sessions that were running before the
-//   install; after that a one-line reminder only while the card says it waits for something.
+//   install; after that a one-line reminder only while the card says it waits for something, and
+//   one line when the user's presence changed since the session was told (core/presence.ts; only
+//   a card that heard of presence reads it, so a setup that never turned it on reads nothing).
 //   Every event: the card says which Claude profile the session runs in (its CLAUDE_CONFIG_DIR,
 //   unset: ~/.claude), written only when that changed.
 //   PreToolUse (AskUserQuestion only): the call's id and questions go on the card (card.asking),
@@ -23,6 +25,7 @@ import { type CardPatch, readCard, writeCard } from '../adapters/cards.ts'
 import { loadConfig } from '../adapters/config-file.ts'
 import { agentGet } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
+import { presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
 import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
@@ -130,10 +133,20 @@ async function main(): Promise<void> {
   const briefed = card?.briefV ?? (card?.briefedAt ? 1 : 0)
   if (event === 'SessionStart' || (event === 'UserPromptSubmit' && Number(briefed) < BRIEF_VERSION)) {
     cfg = loadConfig()
-    context = brief(cfg, card, text(input.cwd) ?? '')
+    // The user's presence (#172), only where config.json turned it on.
+    const presence = presenceForBrief(cfg)
+    context = brief(cfg, card, text(input.cwd) ?? '', process.env, 'Claude', presence)
     Object.assign(patch, { briefedAt: Date.now(), briefV: BRIEF_VERSION })
-  } else if (event === 'UserPromptSubmit' && boardCard?.wait) {
-    context = waitReminder(boardCard)
+    if (presence) patch.presenceSeen = presence.since
+    else if (card?.presenceSeen !== undefined) patch.presenceSeen = ''
+  } else if (event === 'UserPromptSubmit') {
+    if (boardCard?.wait) context = waitReminder(boardCard)
+    // Presence changed since this session was told: one line. A card that never heard of it reads nothing.
+    const news = presenceNews(card)
+    if (news) {
+      context = context ? `${context}\n${news.line}` : news.line
+      patch.presenceSeen = news.seen
+    }
   }
   if (Object.keys(patch).length) writeCard(sid, patch)
   if (event === 'SessionStart') await reportResume(input, sid, pane, dir, profiles, cfg)
