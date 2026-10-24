@@ -1,7 +1,8 @@
 // The card's own fields, in the sheet's head under its name (its lane and column are the head's
-// pills): what it does and what it waits for, when they say something or are opened to be filled
-// (Enter saves a field, Escape puts it back), its reminders, and the sessions it works with. A
-// field being edited keeps what is typed while the board moves on.
+// pills): what it does and what it waits for when they say something (Enter saves a field,
+// Escape puts it back), its reminders, and the sessions it works with. Opened, the empty fields
+// are one quiet Add row, so they do not cost two rows until they are asked for. A field being
+// edited keeps what is typed while the board moves on.
 import { type KeyboardEvent, useState } from 'react'
 import type { Item } from '../../../../src/core/types.ts'
 import { useSessionActions } from '../../hooks/useSessionActions.ts'
@@ -26,10 +27,16 @@ export interface SheetCardProps {
 export function SheetCard({ item, open, disabled, schedule, onSession }: SheetCardProps) {
   const t = useT()
   const fromTitle = item.title && item.title !== item.name ? item.title : ''
-  // What it does and what it waits for show when they say something, or to be filled.
+  // Empty fields stay out of the way even when the card's details are open: one quiet "Add"
+  // row offers the ones that can still be filled, and only the one asked for opens.
+  const [revealed, setRevealed] = useState<{ doing?: boolean; wait?: boolean }>({})
+  const showDoing = !!item.doing || (open && !!revealed.doing)
+  const showWait = !!item.wait || (open && !!revealed.wait)
+  const addDoing = open && !item.doing && !revealed.doing
+  const addWait = open && !item.wait && !revealed.wait
   return (
     <div className="group">
-      {(open || !!item.doing) && (
+      {showDoing && (
         <div className="row">
           <span className="row-label">{doingLabel(item, t)}</span>
           <CardField
@@ -40,10 +47,37 @@ export function SheetCard({ item, open, disabled, schedule, onSession }: SheetCa
           />
         </div>
       )}
-      {(open || !!item.wait) && (
+      {showWait && (
         <div className="row">
           <span className="row-label">{t('row.wait')}</span>
           <CardField item={item} field="wait" placeholder={t('row.waitNone')} disabled={disabled} />
+        </div>
+      )}
+      {(addDoing || addWait) && (
+        <div className="row add-row">
+          <span className="row-label">{t('row.add')}</span>
+          <div className="row-value add-fields">
+            {addDoing && (
+              <button
+                type="button"
+                className="add-field"
+                disabled={disabled}
+                onClick={() => setRevealed(shown => ({ ...shown, doing: true }))}
+              >
+                {t('row.addDoing')}
+              </button>
+            )}
+            {addWait && (
+              <button
+                type="button"
+                className="add-field"
+                disabled={disabled}
+                onClick={() => setRevealed(shown => ({ ...shown, wait: true }))}
+              >
+                {t('row.addWait')}
+              </button>
+            )}
+          </div>
         </div>
       )}
       <Reminders item={item} disabled={disabled} schedule={schedule} />
@@ -63,6 +97,7 @@ function Reminders({ item, disabled, schedule = {} }: Pick<SheetCardProps, 'item
       now={shown.now}
       disabled={disabled}
       armed={shown.armed}
+      forceExpanded={!!held}
       {...actions}
     />
   )
