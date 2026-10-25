@@ -341,6 +341,8 @@ const HERDR = {
 
 // herdr's own `agent start`: the board's path when launch.agent is set.
 const VIA_HERDR = { launch: { agent: 'claude' } }
+// The setup that turns on the ticket conventions (launch.linkedWorkspaces).
+const LINKED = { launch: { agent: 'claude', linkedWorkspaces: true } }
 
 // The Claude profiles of the sandbox's home folder as config.json lists them: default and work
 // shown (work with arguments of its own), gamedev hidden.
@@ -677,7 +679,7 @@ test('renaming a workspace: the one the session’s pane is in now, never the bo
 }, 30_000)
 
 test('a launch into a checkout links its workspace with worktree open, and reuses it when already open', async () => {
-  const { box, started, launched } = await boardServer(VIA_HERDR, { PATH: process.env.PATH ?? '' })
+  const { box, started, launched } = await boardServer(LINKED, { PATH: process.env.PATH ?? '' })
   const repo = join(box.dir, 'Genetix')
   mkdirSync(repo, { recursive: true })
   writeFileSync(join(repo, 'a.txt'), 'a')
@@ -716,7 +718,7 @@ test('a launch into a checkout links its workspace with worktree open, and reuse
 }, 30_000)
 
 test('a new ticket worktree is made by herdr under <repo>-wt/<ticket>, linked from the start', async () => {
-  const { box, started, launched } = await boardServer(VIA_HERDR, { PATH: process.env.PATH ?? '' })
+  const { box, started, launched } = await boardServer(LINKED, { PATH: process.env.PATH ?? '' })
   const repo = join(box.dir, 'BrillianEarth')
   mkdirSync(repo, { recursive: true })
   writeFileSync(join(repo, 'a.txt'), 'a')
@@ -747,8 +749,48 @@ test('a new ticket worktree is made by herdr under <repo>-wt/<ticket>, linked fr
   assert.ok(sameDir(l.cwd, realpathSync(join(box.dir, 'BrillianEarth-wt', 'EA-17388'))), l.cwd)
 }, 30_000)
 
-test('a retry starts in the worktree and the workspace the failed launch made, not new ones', async () => {
+test('without linkedWorkspaces a checkout keeps workspace create and the sibling worktree', async () => {
   const { box, started, launched } = await boardServer(VIA_HERDR, { PATH: process.env.PATH ?? '' })
+  const repo = join(box.dir, 'OldRepo')
+  mkdirSync(repo, { recursive: true })
+  writeFileSync(join(repo, 'a.txt'), 'a')
+  const git = (...args: string[]) =>
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: repo, stdio: 'pipe' })
+  git('init', '-q', '-b', 'main')
+  git('add', '.')
+  git('commit', '-q', '-m', 'init')
+  const plain = await launched(
+    await started({ name: 'Old plain', cwd: repo, category: 'acme', workspace: { create: 'Fresh' } }),
+  )
+  assert.equal(plain.state, 'done')
+  assert.equal(
+    box.calls().some(a => a[0] === 'workspace' && a[1] === 'create'),
+    true,
+  )
+  assert.equal(
+    box.calls().some(a => a[0] === 'worktree'),
+    false,
+  )
+  const wt = await launched(
+    await started({
+      name: 'Old wt',
+      cwd: repo,
+      category: 'acme',
+      workspace: { id: 'wA' },
+      worktree: { branch: 'feature-x' },
+    }),
+  )
+  assert.equal(wt.state, 'done')
+  assert.ok(sameDir(wt.cwd, realpathSync(join(box.dir, 'OldRepo-feature-x'))), wt.cwd)
+  assert.equal(
+    box.calls().some(a => a[0] === 'worktree'),
+    false,
+  )
+  assert.equal(existsSync(join(box.dir, 'OldRepo-feature-x')), true)
+}, 30_000)
+
+test('a retry starts in the worktree and the workspace the failed launch made, not new ones', async () => {
+  const { box, started, launched } = await boardServer(LINKED, { PATH: process.env.PATH ?? '' })
   const repo = join(box.dir, 'repo')
   mkdirSync(join(repo, 'src'), { recursive: true })
   writeFileSync(join(repo, 'src', 'a.txt'), 'a')
@@ -793,7 +835,7 @@ test('a retry starts in the worktree and the workspace the failed launch made, n
 }, 40_000)
 
 test('a launch through a symlink preserves the selected subfolder in its new worktree', async () => {
-  const { box, started, launched } = await boardServer(VIA_HERDR, { PATH: process.env.PATH ?? '' })
+  const { box, started, launched } = await boardServer(LINKED, { PATH: process.env.PATH ?? '' })
   const repo = join(box.dir, 'real-repo')
   mkdirSync(join(repo, 'src'), { recursive: true })
   writeFileSync(join(repo, 'src', 'a.txt'), 'a')

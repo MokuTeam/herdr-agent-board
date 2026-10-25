@@ -19,6 +19,7 @@ import {
   slugName,
   splitPathInput,
   suggestName,
+  ticketSlugName,
   uniqueSlug,
   worktreePath,
 } from '../../src/core/launch/names.ts'
@@ -41,8 +42,9 @@ test('session names: what a name may be, and herdr’s name for it', () => {
   assert.equal(slugName('Acme-Invoices'), 'acme-invoices')
   assert.equal(slugName('Ромашка: счета'), 'romashka-scheta')
   assert.equal(slugName('2026 plan'), 's-2026-plan')
-  assert.equal(slugName('14404'), 'case-14404')
-  assert.equal(slugName('EA-17388'), 'ea-17388')
+  assert.equal(slugName('14404'), 's-14404')
+  assert.equal(ticketSlugName('14404'), 'case-14404')
+  assert.equal(ticketSlugName('EA-17388'), 'ea-17388')
   assert.equal(slugName('!!!'), 'session')
   assert.match(slugName('a'.repeat(50)), /^[a-z][a-z0-9_-]{0,31}$/)
   assert.equal(uniqueSlug('job', new Set()), 'job')
@@ -165,10 +167,12 @@ test('worktrees: branch names git takes, and the ticket folder they go to', () =
   assert.equal(checkBranch(''), 'launch.err.branchEmpty')
   for (const bad of ['-x', 'a..b', 'a b', 'x.lock', 'a/', '.hidden', 'a@{1}'])
     assert.equal(checkBranch(bad), 'launch.err.branch', bad)
-  assert.equal(worktreePath('C:\\Work\\agent-board', 'new-session'), 'C:\\Work\\agent-board-wt\\new-session')
-  assert.equal(worktreePath('/src/app/', 'feature/menu'), '/src/app-wt/feature-menu')
-  assert.equal(worktreePath('/src/Genetix', 'case_14404'), '/src/Genetix-wt/14404')
-  assert.equal(worktreePath('/src/BrillianEarth', 'EA-17388'), '/src/BrillianEarth-wt/EA-17388')
+  assert.equal(worktreePath('C:\\Work\\agent-board', 'new-session'), 'C:\\Work\\agent-board-new-session')
+  assert.equal(worktreePath('/src/app/', 'feature/menu'), '/src/app-feature-menu')
+  assert.equal(worktreePath('C:\\Work\\agent-board', 'new-session', true), 'C:\\Work\\agent-board-wt\\new-session')
+  assert.equal(worktreePath('/src/app/', 'feature/menu', true), '/src/app-wt/feature-menu')
+  assert.equal(worktreePath('/src/Genetix', 'case_14404', true), '/src/Genetix-wt/14404')
+  assert.equal(worktreePath('/src/BrillianEarth', 'EA-17388', true), '/src/BrillianEarth-wt/EA-17388')
 })
 
 test('a fork’s name: the session’s with the mark after it, within the limit, without what a name may not start with', () => {

@@ -78,7 +78,10 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
    [`claude-tg`](https://github.com/Eithery-rc/tg-mcp#herdr-launcher), which gives each herdr tab
    its own Telegram topic. See [New sessions](#new-sessions). Working in [pi](#pi)? With `pi` on
    the board's PATH the "New session" window offers Claude Code or pi; `"default": "pi"` in
-   `launch` makes pi the one it starts on.
+   `launch` makes pi the one it starts on. `"linkedWorkspaces": true` in `launch` turns on the
+   ticket setup: a workspace is linked through `herdr worktree` for any git checkout, a new worktree
+   goes under `<parent>/<repo>-wt/<ticket>`, and a ticket's session is named `case-<n>` (Jira keys
+   lower-case). Off by default, so every other setup starts as it did.
 4. **Sleep and wake starts with the board** (nothing to install or run). It puts sessions to sleep
    and wakes them: "Put to sleep", "Wake" and "Restart" on the board, `board sleep` and
    `board restart` (agents restart themselves with it, see [Restart](#restart)), sleeping sessions

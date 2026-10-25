@@ -199,11 +199,14 @@ export function worktreeNote(
   wt: boolean,
   branch: string,
   t: Translator,
+  ticket = false,
 ): { text: string; error: boolean } {
   if (!wt) return { text: '', error: false }
   const why = checkBranch(branch)
   return {
-    text: why ? t(why) : t('launch.worktreeAt', { path: worktreePath(git.root, branch.trim()), branch: git.branch }),
+    text: why
+      ? t(why)
+      : t('launch.worktreeAt', { path: worktreePath(git.root, branch.trim(), ticket), branch: git.branch }),
     error: !!why,
   }
 }

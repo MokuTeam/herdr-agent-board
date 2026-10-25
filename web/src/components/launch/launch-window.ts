@@ -395,7 +395,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
 
   /** A ticket workspace names the session: 14312 (herdr addresses it case-14312), EA-17388. */
   function prefillTicketName(label: string): void {
-    if (!s || s.set.name || !isTicketLabel(label)) return
+    if (!s || !options.linkedWorkspaces || s.set.name || !isTicketLabel(label)) return
     setFields({ name: label })
   }
   const defaultWorkspaceName = () =>
@@ -504,7 +504,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
     const f = view.get().fields
     patch({ branchHidden: !f.wt })
     if (!s.set.branch) setFields({ branch: slugName(f.name || baseName(cwd())) })
-    const note = worktreeNote(git, f.wt, view.get().fields.branch, t())
+    const note = worktreeNote(git, f.wt, view.get().fields.branch, t(), options.linkedWorkspaces)
     noteFor('worktree', note.text, note.error)
     syncGo()
   }

@@ -101,6 +101,8 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.err.branch': 'Not a branch name git takes: letters, digits, . _ / -',
     'launch.err.notGit': 'Not in a git checkout: {path}',
     'launch.err.worktreeExists': 'Already there: {path}',
+    'launch.err.worktreeBranch':
+      'The worktree at {path} is on {found}, not {branch}: move it away or pick another branch',
     'launch.err.worktreeGit': 'git worktree: {why}',
     'launch.err.notReady': '{agent} did not get ready within {s} s',
     'launch.err.dialogTimeout': 'Gave up waiting for the dialog to be answered',
@@ -270,6 +272,7 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.err.branch': 'git не примет такое имя ветки: буквы, цифры, . _ / -',
     'launch.err.notGit': 'Не в git-репозитории: {path}',
     'launch.err.worktreeExists': 'Уже есть: {path}',
+    'launch.err.worktreeBranch': 'В worktree {path} сейчас {found}, а не {branch}: убери его или выбери другую ветку',
     'launch.err.worktreeGit': 'git worktree: {why}',
     'launch.err.notReady': '{agent} не был готов за {s} с',
     'launch.err.dialogTimeout': 'Не дождался ответа на диалог',
