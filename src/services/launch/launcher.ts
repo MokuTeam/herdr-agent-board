@@ -39,7 +39,7 @@ import {
   parseLauncherOutput,
   usesPlaceholder,
 } from '../../core/launch/launcher-command.ts'
-import { slugName, uniqueSlug } from '../../core/launch/names.ts'
+import { slugName, ticketSlugName, uniqueSlug } from '../../core/launch/names.ts'
 import { choosesSession, claudeCommand } from '../../core/launch/spawn-args.ts'
 import { envRejected } from '../../core/profiles.ts'
 import type { LaunchFailure, LaunchSpec, LaunchStep } from '../../core/types.ts'
@@ -64,6 +64,8 @@ export interface LaunchContext {
   readonly workspaceLabel: string
   readonly category: string
   readonly message: string
+  /** The setup's ticket convention for the agent's name (`case-14404`). */
+  readonly ticketNames?: boolean
   /** The id of the Claude profile it starts in, and its folder (set or inherited). */
   readonly profile: string
   readonly profileDir: string
@@ -234,7 +236,7 @@ export function herdrLauncher(spec: LaunchSpec): Launcher {
         on.session(sessionId)
         args.push('--session-id', sessionId)
       }
-      const name = uniqueSlug(slugName(l.name), await takenNames())
+      const name = uniqueSlug(l.ticketNames ? ticketSlugName(l.name) : slugName(l.name), await takenNames())
       on.step('agent')
       const ms = Math.max(10, Number(spec.timeoutSec) || 120) * 1000
       let dialog = false

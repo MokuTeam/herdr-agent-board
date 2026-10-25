@@ -90,6 +90,12 @@ export interface LaunchSpec {
   pi?: string | string[]
   /** The agent a start that names none starts as (core/launch/agents.ts): `claude` or `pi`; Claude Code when unset. */
   default?: string
+  /**
+   * The setup's ticket conventions: workspaces linked through herdr worktree for any checkout,
+   * new worktrees under `<parent>/<repo>-wt/<ticket>`, and ticket agent names (`case-14404`).
+   * Off (the default) leaves every setup as it was.
+   */
+  linkedWorkspaces?: boolean
 }
 
 /** Where a launch from the board is: waiting for a dialog answered in herdr, or at the folder-trust one. */

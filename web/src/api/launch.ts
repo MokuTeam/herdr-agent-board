@@ -21,6 +21,8 @@ export interface LaunchOptions {
   board: string
   /** Folders of recent Claude sessions. */
   recent: string[]
+  /** The setup's ticket conventions: linked workspaces, -wt/<ticket> paths, case- names. */
+  linkedWorkspaces: boolean
 }
 
 /** What the window offers before the server said: herdr opening Claude, nothing else. */
@@ -32,6 +34,7 @@ export const NO_OPTIONS: LaunchOptions = {
   focused: '',
   board: '',
   recent: [],
+  linkedWorkspaces: false,
 }
 
 const text = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined)
@@ -59,6 +62,7 @@ export function asOptions(value: unknown): LaunchOptions | null {
     focused: text(value.focused) ?? '',
     board: text(value.board) ?? '',
     recent: strings(value.recent),
+    linkedWorkspaces: value.linkedWorkspaces === true,
   }
 }
 

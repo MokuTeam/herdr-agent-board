@@ -154,9 +154,6 @@ function CardTop({ item }: { item: Item }) {
       <span className="name" title={renamed ? t('rename.was', { name: item.autoName }) : undefined}>
         {item.name}
       </span>
-      <span className="card-status" style={{ '--c': COLUMN_COLORS[item.column] }} title={t(`col.${item.column}`)}>
-        {t(`col.${item.column}`)}
-      </span>
       {/* A favorite: a quiet star by the name. */}
       {item.favorite && (
         <span className="favorite" title={t('card.favorite')}>
@@ -165,6 +162,9 @@ function CardTop({ item }: { item: Item }) {
       )}
       {/* Its profile, while the board shows more than one, or one hidden or not known. */}
       <ProfileTag item={item} />
+      <span className="card-status" style={{ '--c': COLUMN_COLORS[item.column] }} title={t(`col.${item.column}`)}>
+        {t(`col.${item.column}`)}
+      </span>
       {/* A result you have not opened yet: a dot by the name. */}
       {unseenResult(item, ui.viewed) && <span className="unseen-dot" title={t('attention.unseen')} />}
       {item.pin && item.pin === item.column && (

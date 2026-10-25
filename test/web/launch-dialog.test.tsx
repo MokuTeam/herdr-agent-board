@@ -56,10 +56,7 @@ async function run(make: () => LaunchSide, steps: Step[]): Promise<string[]> {
 async function compare(steps: Step[], scene: () => LaunchScene = board, renamed = false): Promise<string[]> {
   const unnamed = (shot: string) =>
     renamed ? shot.replace(/ newWorkspace="(?:[^"\\]|\\.)*"/, ' newWorkspace=…') : shot
-  // The old page puts a worktree beside the repo; the board now uses <repo>-wt/<ticket>.
-  const ticketDir = (shot: string) =>
-    shot.replaceAll('checked out in C:\\Work\\acme-', 'checked out in C:\\Work\\acme-wt\\')
-  const baseline = (await run(() => oldLaunchSide(scene()), steps)).map(shot => ticketDir(unnamed(shot)))
+  const baseline = (await run(() => oldLaunchSide(scene()), steps)).map(unnamed)
   const react = (await run(() => reactLaunchSide(scene()), steps)).map(unnamed)
   expect(react.length).toBe(baseline.length)
   for (const [i, shot] of baseline.entries()) expect(`react step ${i}\n${react[i]}`).toBe(`react step ${i}\n${shot}`)
@@ -440,7 +437,7 @@ describe('the form', () => {
       check('wt', false),
     ])
     expect(fieldsLine(shots[shots.length - 6])).toContain('branch="scheta-acme"')
-    expect(shots.join('\n')).toContain('New branch from main, checked out in C:\\Work\\acme-wt\\scheta-acme')
+    expect(shots.join('\n')).toContain('New branch from main, checked out in C:\\Work\\acme-scheta-acme')
     expect(shots.join('\n')).toContain('class="error field-note wt-note"')
   })
 
@@ -696,6 +693,7 @@ describe('a ticket workspace names the session', () => {
         { id: 'w10', label: 'EA-17388' },
       ],
       focused: 'w9',
+      linkedWorkspaces: true,
     }
   }
 

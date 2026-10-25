@@ -50,6 +50,7 @@ try {
       profiles: loadProfiles({ home }),
       env: process.env,
       home,
+      ticketNames: launch.linkedWorkspaces === true,
     })
     console.log(`pane=${r.pane} name=${r.name} agent=${r.agent}${r.kind === 'claude' ? '' : ` kind=${r.kind}`}`)
   }

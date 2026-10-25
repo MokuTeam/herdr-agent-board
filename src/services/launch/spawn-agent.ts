@@ -37,7 +37,7 @@ import {
 import { type Env, inheritedProfileDir, loadProfiles } from '../../adapters/profiles.ts'
 import { importsDialog, keyTowardYes, ownImports, sameFolder, trustDialog } from '../../core/dialogs/trust.ts'
 import { t } from '../../core/lang.ts'
-import { sameDir, slugName, uniqueSlug } from '../../core/launch/names.ts'
+import { sameDir, slugName, ticketSlugName, uniqueSlug } from '../../core/launch/names.ts'
 import {
   choosesSession,
   profileCommand,
@@ -114,13 +114,13 @@ async function paneInfo(pane: string, timeoutMs?: number) {
 const prompt = (pane: string, text: string) => herdr(['agent', 'prompt', pane, /^-/.test(text) ? ` ${text}` : text])
 
 /** herdr's own name for targeting: [a-z][a-z0-9_-]{0,31}, not one another agent has. */
-async function nameInHerdr(pane: string, name: string): Promise<string> {
+async function nameInHerdr(pane: string, name: string, ticketNames: boolean): Promise<string> {
   try {
     const answer = await herdr(['agent', 'list'])
     const agents = isRecord(answer) && Array.isArray(answer.agents) ? answer.agents : []
     const others = agents.filter(a => stringAt(a, 'pane_id') !== pane)
     const taken = others.map(a => stringAt(a, 'name')).filter((n): n is string => !!n)
-    const agent = uniqueSlug(slugName(name), new Set(taken))
+    const agent = uniqueSlug(ticketNames ? ticketSlugName(name) : slugName(name), new Set(taken))
     await herdr(['agent', 'rename', pane, agent])
     return agent
   } catch {
@@ -250,6 +250,7 @@ export async function spawnAgent(
     profiles,
     env = process.env,
     home = homedir(),
+    ticketNames = false,
   }: {
     claude?: string[]
     pi?: string[]
@@ -257,6 +258,8 @@ export async function spawnAgent(
     profiles?: Profile[]
     env?: Env
     home?: string
+    /** The setup's ticket convention: 14404 -> case-14404. */
+    ticketNames?: boolean
   } = {},
 ): Promise<SpawnResult> {
   const cwd = absoluteDir(o.cwd)
@@ -381,7 +384,7 @@ export async function spawnAgent(
   if (!ready) throw new Error(`Claude did not get ready in ${pane} within ${o.timeoutSec} s`)
   if (kind === PI_AGENT && profile && carded && isPiSessionFile(session)) movePiCard(carded, session, profile.id)
 
-  const agent = await nameInHerdr(pane, o.name)
+  const agent = await nameInHerdr(pane, o.name, ticketNames)
 
   // /rename runs locally, no turn: herdr never sees it working and calls the prompt stalled. The
   // name is cosmetic and Claude runs by now: no failure for it, or a retry would start a second one.
