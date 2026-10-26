@@ -238,6 +238,11 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   profile (the one its `CLAUDE_CONFIG_DIR` points to): a running MokuPilot takes the call over in
   its own env, so a fork of a session in another profile would run in the wrong account. The board
   refuses that call before anything starts, saying so.
+  With the board on a server and MokuPilot on the computer you open it from (MokuPilot's "remote
+  agent host" mode), `"mokupilot": { "link": true }` starts nothing on the server: the button
+  opens `mokupilot://call?claude-session=<id>&cwd=<folder>` in your browser, the MokuPilot there
+  asks you, takes the call and runs the fork on the server over ssh. A phone, or a computer
+  without that MokuPilot, has nothing for the link: the board stays as it was.
 - "Fork" (the sheet, a card's menu): a new session in a new tab that starts with a copy of this
   one's conversation, so it knows what this one knows while this one goes on as it was; see
   [Fork](#fork).
@@ -2443,7 +2448,9 @@ raise, default `<COMPUTERNAME>:*`), `raiseTerminal`, `launch` (how new sessions 
 with a fork of a session: `false` turns them off; `{ "dir": "<MokuPilot checkout>" }` runs its
 `.venv` Python with `run.py` on Windows, its `meet` elsewhere; `{ "command": [...] }` a program
 and its first arguments, one per element, no shell, the board adding `call --claude-session <id>
---cwd <folder>`, or the whole line when it has `{session}` or `{cwd}` in it).
+--cwd <folder>`, or the whole line when it has `{session}` or `{cwd}` in it; `{ "link": true }`
+a `mokupilot://` link the page opens for the MokuPilot on the viewer's computer, nothing started
+here, before `command` and `dir`).
 
 `tunnel` (the board [through your own domain](#another-computer-or-a-tablet-through-your-own-domain);
 Settings → Remote access… and `board tunnel on|off` set it): `on` (false), `host` (the server),
