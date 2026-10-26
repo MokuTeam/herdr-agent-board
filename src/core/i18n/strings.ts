@@ -352,6 +352,9 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'mokupilot.hint':
       'Start a MokuPilot call whose agent is a fork of this session: it knows what the session knows, and the session itself stays as it was',
     'mokupilot.started': 'MokuPilot launcher started for “{name}”. Call readiness is not confirmed.',
+    'mokupilot.opened':
+      'Opening MokuPilot on this computer for “{name}”. Nothing happens on a phone, or where MokuPilot is not set up as a remote agent host.',
+    'mokupilot.err.open': 'The browser did not open the MokuPilot link: {why}',
     'mokupilot.err.notClaude': 'Only a Claude Code session with an id can join a call',
     'mokupilot.err.off': 'MokuPilot is turned off in config.json ("mokupilot": false)',
     'mokupilot.err.missing':
@@ -931,6 +934,9 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'mokupilot.hint':
       'Начать звонок в MokuPilot, где агент: форк этой сессии. Он знает всё, что знает сессия, а сама сессия остаётся как была',
     'mokupilot.started': 'Запущен MokuPilot для «{name}». Готовность звонка ещё не подтверждена.',
+    'mokupilot.opened':
+      'Открываю MokuPilot на этом компьютере для «{name}». На телефоне и там, где MokuPilot не настроен как удалённый хост агента, ничего не произойдёт.',
+    'mokupilot.err.open': 'Браузер не открыл ссылку MokuPilot: {why}',
     'mokupilot.err.notClaude': 'В звонок можно взять только сессию Claude Code с id',
     'mokupilot.err.off': 'MokuPilot выключен в config.json ("mokupilot": false)',
     'mokupilot.err.missing':

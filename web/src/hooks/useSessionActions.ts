@@ -46,13 +46,31 @@ export interface CallDeps {
   itemOf(key: string): Item | undefined
   act(key: string, action: string): Promise<ActResult>
   toast(text: string, error?: boolean): void
+  /** Opens a mokupilot:// link in this browser (location.assign). */
+  open?: (url: string) => void
 }
 
-/** A MokuPilot call whose agent is a fork of the session (services/mokupilot.ts): the session goes on as it was. */
-export async function callMokuPilot(key: string, { t, itemOf, act, toast }: CallDeps): Promise<void> {
+const openHere = (url: string) => window.location.assign(url)
+
+/**
+ * A MokuPilot call whose agent is a fork of the session (services/mokupilot.ts): the session goes
+ * on as it was. In link mode the server starts nothing and gives a mokupilot:// link, opened here
+ * for the MokuPilot on this computer. A browser with nothing for the scheme stays on the board.
+ */
+export async function callMokuPilot(key: string, { t, itemOf, act, toast, open = openHere }: CallDeps): Promise<void> {
   const it = itemOf(key)
   if (!it) return
   const r = await act(key, 'mokupilot')
+  if (r.ok && r.state === 'link') {
+    const url = String(r.url ?? '')
+    if (!url.startsWith('mokupilot://')) return toast(t('mokupilot.err.open', { why: url || '?' }), true)
+    try {
+      open(url)
+    } catch (err) {
+      return toast(t('mokupilot.err.open', { why: err instanceof Error ? err.message : String(err) }), true)
+    }
+    return toast(t('mokupilot.opened', { name: it.name }))
+  }
   toast(r.ok ? t('mokupilot.started', { name: it.name }) : r.error, !r.ok)
 }
 
