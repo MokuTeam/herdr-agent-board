@@ -174,3 +174,26 @@ test('a .cmd or .bat found on PATH is not started either: a command by its name 
   const python = 'C:\\Python\\python.exe'
   assert.equal(found(win(repo, has(run, `${shims}\\pythonw.bat`, python), `${shims};C:\\Python`)).file, python)
 })
+
+test('{ link: true }: a link for the viewer’s browser, nothing looked for here, before command and dir', () => {
+  const nothing = () => false
+  for (const platform of ['linux', 'win32', 'darwin']) {
+    const opts = { platform, env: { PATH: '' }, exists: nothing }
+    assert.deepEqual(mokupilotCommand({ mokupilot: { link: true } }, opts), { state: 'link', configured: true })
+    assert.deepEqual(mokupilotCommand({ mokupilot: { link: true, command: ['/opt/mp/MokuPilot'] } }, opts), {
+      state: 'link',
+      configured: true,
+    })
+    assert.deepEqual(mokupilotCommand({ mokupilot: { link: true, dir: '/opt/mp' } }, opts), {
+      state: 'link',
+      configured: true,
+    })
+    // Anything but true is no link: the setting as it was without it.
+    for (const link of [false, 'true', 1, null])
+      assert.deepEqual(
+        mokupilotCommand({ mokupilot: { link, command: ['/opt/mp/MokuPilot'] } }, opts),
+        mokupilotCommand({ mokupilot: { command: ['/opt/mp/MokuPilot'] } }, opts),
+      )
+    assert.deepEqual(mokupilotCommand({ mokupilot: false }, opts), { state: 'off', configured: true })
+  }
+})

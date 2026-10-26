@@ -119,3 +119,44 @@ test('without MokuPilot the page offers no call, and asking for one says what is
   assert.equal(r.status, 409)
   assert.match(((await r.json()) as { error: string }).error, /MokuPilot not found/)
 }, 30_000)
+
+test('in link mode the page offers the call and the route gives the link, starting nothing', async () => {
+  const launcher = fileURLToPath(new URL('../support/fake-launcher.ts', import.meta.url))
+  const box = await sandbox()
+  const record = join(box.dir, 'call.json')
+  const project = join(box.dir, 'Acme project')
+  mkdirSync(project)
+  const panes = [
+    {
+      pane_id: 'p1',
+      agent: 'claude',
+      agent_session: { value: ID },
+      agent_status: 'idle',
+      cwd: project,
+      workspace_id: 'wA',
+    },
+    { pane_id: 'p3', agent: 'claude', agent_status: 'idle', cwd: project, workspace_id: 'wA' },
+  ]
+  // A launcher that would write down its start, beside the link: the link goes first.
+  const { board, post } = await boardServer(
+    box,
+    { mokupilot: { link: true, command: [process.execPath, launcher, record] } },
+    panes,
+  )
+  assert.equal((await board()).mokupilot, true)
+  assert.ok(isBoardPayload(await board()))
+  assert.equal((await post(`/api/session/${ID}/mokupilot`, { 'x-board': '' })).status, 403)
+
+  const res = await post(`/api/session/${ID}/mokupilot`)
+  assert.equal(res.status, 200)
+  assert.deepEqual(await res.json(), {
+    ok: true,
+    state: 'link',
+    url: `mokupilot://call?claude-session=${ID}&cwd=${encodeURIComponent(project)}`,
+  })
+  const r = await post('/api/session/pane-p3/mokupilot')
+  assert.equal(r.status, 409)
+  assert.match(((await r.json()) as { error: string }).error, /Claude Code session/)
+  await Bun.sleep(500)
+  assert.equal(existsSync(record), false)
+}, 30_000)

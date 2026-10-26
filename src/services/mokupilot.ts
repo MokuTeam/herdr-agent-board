@@ -1,6 +1,7 @@
 // Starting a MokuPilot call with a fork of a session (core/mokupilot.ts says what that is): the
 // launcher config.json names or the one found on this computer (adapters/setup-facts.ts), run on
-// its own past the board's lifetime, in the folder the session started in. And whether MokuPilot
+// its own past the board's lifetime, in the folder the session started in; with `{ link: true }`
+// nothing runs here, the page gets a mokupilot:// link for the viewer's own MokuPilot. And whether MokuPilot
 // is here at all, for the page: looked up again when its setting changes, and once a minute for
 // one installed or removed meanwhile.
 import { type SpawnOptions, spawn } from 'node:child_process'
@@ -8,7 +9,7 @@ import { statSync } from 'node:fs'
 import { cwdOf } from '../adapters/claude-home.ts'
 import { mokupilotCommand } from '../adapters/setup-facts.ts'
 import { t } from '../core/lang.ts'
-import { callable, callCommand } from '../core/mokupilot.ts'
+import { callable, callCommand, callLink } from '../core/mokupilot.ts'
 import { inBoardProfile, type ProfileSet, profileLabel } from '../core/profiles.ts'
 import type { Config, Item } from '../core/types.ts'
 
@@ -28,8 +29,14 @@ export interface CallOptions {
   profiles?: ProfileSet
 }
 
-/** `launched`: MokuPilot's launcher started, and no more (startCall). */
-export type CallResult = { ok: true; state: 'launched'; file: string } | { ok: false; error: string }
+/**
+ * `launched`: MokuPilot's launcher started, and no more; `link`: nothing started, the page opens
+ * `url` in the viewer's browser for their MokuPilot (startCall).
+ */
+export type CallResult =
+  | { ok: true; state: 'launched'; file: string }
+  | { ok: true; state: 'link'; url: string }
+  | { ok: false; error: string }
 
 const isDir = (dir: string): boolean => {
   try {
@@ -46,8 +53,8 @@ const reason = (err: unknown): string => {
 
 /**
  * Start a MokuPilot call with a fork of the session `item` (a board item with its transcript):
- * { ok, state: 'launched' } once MokuPilot's launcher started, { ok: false, error } when it could
- * not. It runs on its own, past the board's lifetime. This is NOT an application-ready,
+ * { ok, state: 'launched' } once MokuPilot's launcher started, { ok, state: 'link', url } in link
+ * mode (nothing runs here: the page opens the link), { ok: false, error } when it could not. It runs on its own, past the board's lifetime. This is NOT an application-ready,
  * call-started or recording-started acknowledgement: an IPC handshake is required for those. The
  * folder is the one the session started in. A running MokuPilot takes the call over in its own
  * env, so with `profiles` a session in another profile than the board's own is refused before
@@ -65,11 +72,20 @@ export async function startCall(
   }
   const launcher = mokupilotCommand(cfg, { platform, env })
   if (launcher.state === 'off') return { ok: false, error: t('mokupilot.err.off') }
-  if (launcher.state !== 'ok')
+  if (launcher.state === 'missing')
     return { ok: false, error: launcher.error ?? t('mokupilot.err.missing', { file: launcher.file }) }
   // --resume finds a session only from its own folder: the transcript says which that is.
   const recorded = (item.transcript && (await cwdOf(item.transcript))) || item.cwd || ''
   const cwd = recorded && isDir(recorded) ? recorded : ''
+  // The viewer's MokuPilot runs the fork here over ssh, from this folder: nothing starts here.
+  if (launcher.state === 'link') {
+    try {
+      const url = callLink(item, cwd)
+      return url ? { ok: true, state: 'link', url } : { ok: false, error: t('mokupilot.err.notClaude') }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
   let cmd: { file: string; args: string[] }
   try {
     cmd = callCommand(launcher, { session: String(item.session), cwd })
@@ -125,7 +141,8 @@ export function mokupilotCheck(
   let seen: { key: string | null; at: number; on: boolean } = { key: null, at: 0, on: false }
   return () => {
     const key = JSON.stringify(cfg.mokupilot ?? null)
-    if (key !== seen.key || now() - seen.at > 60_000) seen = { key, at: now(), on: find(cfg).state === 'ok' }
+    if (key !== seen.key || now() - seen.at > 60_000)
+      seen = { key, at: now(), on: ['ok', 'link'].includes(find(cfg).state) }
     return seen.on
   }
 }

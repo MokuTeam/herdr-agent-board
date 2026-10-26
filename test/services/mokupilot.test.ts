@@ -203,3 +203,61 @@ test('whether the page offers calls: looked up again when the setting changes, a
   on()
   assert.equal(asked.length, 3)
 })
+
+test('link mode starts nothing here: the page gets the link, the folder the session started in in it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'board-mokupilot-'))
+  try {
+    const project = join(dir, 'Acme project & co')
+    mkdirSync(project)
+    const transcript = join(dir, `${ID}.jsonl`)
+    writeFileSync(transcript, `${JSON.stringify({ type: 'user', cwd: project, sessionId: ID })}\n`)
+    const runs: string[] = []
+    const run: Run = file => {
+      runs.push(file)
+      throw new Error('link mode must not spawn')
+    }
+    // A command beside the link, one that would start: the link goes first all the same.
+    for (const cfg of [{ mokupilot: { link: true } }, { mokupilot: { link: true, command: [process.execPath] } }]) {
+      const opts = { platform: 'linux', env: { PATH: '' }, run }
+      const item = { key: ID, session: ID, agent: 'claude', cwd: join(dir, 'elsewhere'), transcript }
+      assert.deepEqual(await startCall(cfg, item, opts), {
+        ok: true,
+        state: 'link',
+        url: `mokupilot://call?claude-session=${ID}&cwd=${encodeURIComponent(project)}`,
+      })
+      // No folder on disk: no cwd.
+      assert.deepEqual(await startCall(cfg, { ...item, transcript: null, cwd: join(dir, 'gone') }, opts), {
+        ok: true,
+        state: 'link',
+        url: `mokupilot://call?claude-session=${ID}`,
+      })
+      for (const bad of [
+        { ...item, agent: 'codex' },
+        { ...item, session: null },
+        { ...item, session: 'pane-p1' },
+      ]) {
+        const out = await startCall(cfg, bad, opts)
+        assert.equal(out.ok, false)
+        assert.match(out.ok ? '' : out.error, /Claude Code session/)
+      }
+      // Another profile than the board's: refused before a link, as before a launch.
+      const profiles = profileSet(
+        [
+          { id: 'default', title: 'Default', dir: '/home/u/.claude', color: 'indigo', hidden: false },
+          { id: 'work', title: 'Work', dir: '/home/u/.claude-work', color: 'teal', hidden: false },
+        ],
+        '/home/u/.claude',
+      )
+      const other = await startCall(cfg, { ...item, profile: 'work' }, { ...opts, profiles })
+      assert.match(other.ok ? '' : other.error, /a call from Work would run in the wrong account/)
+    }
+    assert.deepEqual(runs, [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('link mode offers the call on the page, with nothing installed here', () => {
+  assert.equal(mokupilotCheck({ mokupilot: { link: true } })(), true)
+  assert.equal(mokupilotCheck({ mokupilot: false })(), false)
+})

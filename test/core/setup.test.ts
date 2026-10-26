@@ -334,6 +334,21 @@ describe('doctor', () => {
     )
   })
 
+  test('MokuPilot by a link: a call from the viewer’s computer, no file, nothing to fix', () => {
+    for (const platform of ['linux', 'win32']) {
+      const link = checkSetup(facts({ platform, mokupilot: { state: 'link', configured: true } }))
+      assert.equal(level(link, 'mokupilot'), 'ok')
+      assert.match(check(link, 'mokupilot').title, /mokupilot:\/\/ link/)
+      assert.match(
+        check(link, 'mokupilot').detail ?? '',
+        /"mokupilot": \{ "link": true \}.*Nothing starts on this computer/,
+      )
+      assert.doesNotMatch(check(link, 'mokupilot').title, /not found|not on this computer/)
+      assert.equal(check(link, 'mokupilot').code ?? '', '')
+      assert.ok(!todo(link).some(c => c.id === 'mokupilot'))
+    }
+  })
+
   test('each missing piece, what it costs and how to fix it', () => {
     const noHooks = checkSetup(facts({ settings: {} }))
     assert.equal(level(noHooks, 'hooks'), 'error')

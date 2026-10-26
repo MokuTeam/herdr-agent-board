@@ -103,6 +103,9 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.key.noneFix': 'Add this to {file}, then run herdr server reload-config:',
 
     'setup.mokupilot.ok': 'MokuPilot: calls with a fork of a session',
+    'setup.mokupilot.link': 'MokuPilot: calls from the viewer’s computer, by a mokupilot:// link',
+    'setup.mokupilot.linkDetail':
+      '"mokupilot": { "link": true } in the board’s config.json: the page opens the link, the MokuPilot on the computer the board is opened on takes the call and runs the fork here over ssh. Nothing starts on this computer.',
     'setup.mokupilot.off': 'MokuPilot is not on this computer',
     'setup.mokupilot.offDetail':
       'With MokuPilot, a session’s sheet starts a call whose agent is a fork of that session.',
@@ -253,6 +256,9 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.key.noneFix': 'Добавь это в {file}, потом выполни herdr server reload-config:',
 
     'setup.mokupilot.ok': 'MokuPilot: звонки с форком сессии',
+    'setup.mokupilot.link': 'MokuPilot: звонки с компьютера зрителя, по ссылке mokupilot://',
+    'setup.mokupilot.linkDetail':
+      '"mokupilot": { "link": true } в config.json доски: страница открывает ссылку, звонок берёт MokuPilot на компьютере, где открыта доска, и запускает форк здесь по ssh. На этом компьютере ничего не запускается.',
     'setup.mokupilot.off': 'MokuPilot на этом компьютере нет',
     'setup.mokupilot.offDetail': 'С MokuPilot панель сессии начинает звонок, где агент: форк этой сессии.',
     'setup.mokupilot.offFix': 'Установи MokuPilot или укажи его папку в config.json доски:',

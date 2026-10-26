@@ -612,6 +612,7 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
   if (mp) {
     const snippet = `"mokupilot": { "dir": "${win ? 'C:\\Users\\you\\MokuPilot' : '~/MokuPilot'}" }`
     if (mp.state === 'ok') add('mokupilot', 'ok', t('setup.mokupilot.ok'), [mp.file, ...(mp.args ?? [])].join(' '))
+    else if (mp.state === 'link') add('mokupilot', 'ok', t('setup.mokupilot.link'), t('setup.mokupilot.linkDetail'))
     else if (mp.state === 'off')
       add('mokupilot', 'off', t('setup.mokupilot.disabled'), t('setup.mokupilot.disabledDetail'))
     else if (mp.configured)

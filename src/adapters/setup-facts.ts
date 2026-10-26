@@ -181,7 +181,8 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 
 /**
  * How to start MokuPilot here (core/mokupilot.ts says what config.json's `mokupilot` may be): a
- * program and the arguments before the board's own, what was looked for and is not there, or off.
+ * program and the arguments before the board's own, what was looked for and is not there, a link
+ * for the viewer's browser, or off.
  */
 export function mokupilotCommand(
   cfg: Partial<Config> | null | undefined,
@@ -190,6 +191,8 @@ export function mokupilotCommand(
   const set = cfg?.mokupilot
   if (set === false) return { state: 'off', configured: true }
   const own = isRecord(set) ? set : {}
+  // A link the viewer's browser opens: nothing to find here.
+  if (own.link === true) return { state: 'link', configured: true }
   const win = platform === 'win32'
   const path = win ? win32 : posix
   const onPath = (name: string): string | null => {

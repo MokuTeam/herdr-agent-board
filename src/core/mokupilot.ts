@@ -13,6 +13,11 @@
 //                       launch.command. Without them the board adds its own arguments.
 //   { dir: "..." }      a MokuPilot checkout: its .venv's Python runs run.py on Windows (what
 //                       meet.cmd does: Bun runs no .cmd without a shell), its `meet` elsewhere
+//   { link: true }      a link for the viewer's browser instead: MokuPilot runs on the computer
+//                       the board is looked at from, not on the board's (a "remote agent host"
+//                       that runs the fork on this one over ssh). The board starts nothing; the
+//                       page opens callLink's mokupilot://call?claude-session=<id>[&cwd=<folder>],
+//                       which that MokuPilot registers. It goes before `command` and `dir`.
 //   unset               found on this computer: MokuPilot.exe where its installer puts it
 //                       (Windows), else `meet` on PATH, meet.cmd standing for its checkout
 // Finding it is adapters/setup-facts.ts mokupilotCommand; starting it, services/mokupilot.ts.
@@ -25,11 +30,13 @@ export type CommandPart = string | CommandPart[]
 /**
  * How to start MokuPilot here: { state: 'ok', configured, file, args, template } (args: what goes
  * before its own; template: a configured command line with placeholders), { state: 'missing',
- * configured, file } (what was looked for), or { state: 'off' }.
+ * configured, file } (what was looked for), { state: 'link' } (the viewer's browser opens a
+ * mokupilot:// link, nothing starts here), or { state: 'off' }.
  */
 export type MokupilotLauncher =
   | { state: 'ok'; configured: boolean; file: string; args: string[]; template?: CommandPart[] | null }
   | { state: 'missing'; configured: boolean; file: string; error?: string }
+  | { state: 'link'; configured: true }
   | { state: 'off'; configured: true }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
