@@ -42,6 +42,19 @@ export const placeholdersIn = (s: unknown): string[] => [...String(s).matchAll(/
 export const callable = (item: Pick<Item, 'agent' | 'session'> | null | undefined): boolean =>
   item?.agent === 'claude' && UUID.test(String(item?.session ?? ''))
 
+/**
+ * The link the viewer's MokuPilot takes a call from, for a fork of `item`'s session in `cwd` (its
+ * folder on the board's computer, as it is) when known: mokupilot://call?claude-session=<id>
+ * [&cwd=<folder>], those two keys and no other, each value percent-encoded. Null for a session a
+ * call cannot fork (callable).
+ */
+export function callLink(item: Pick<Item, 'agent' | 'session'> | null | undefined, cwd = ''): string | null {
+  if (!item || !callable(item)) return null
+  const query = [`claude-session=${encodeURIComponent(String(item.session))}`]
+  if (cwd) query.push(`cwd=${encodeURIComponent(cwd)}`)
+  return `mokupilot://call?${query.join('&')}`
+}
+
 /** The command line for a call with a fork of `session`, in `cwd` when known: { file, args }. */
 export function callCommand(
   launcher: { file: string; args: string[]; template?: CommandPart[] | null | undefined },
