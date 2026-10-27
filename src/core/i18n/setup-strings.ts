@@ -105,7 +105,13 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.mokupilot.ok': 'MokuPilot: calls with a fork of a session',
     'setup.mokupilot.link': 'MokuPilot: calls from the viewer’s computer, by a mokupilot:// link',
     'setup.mokupilot.linkDetail':
-      '"mokupilot": { "link": true } in the board’s config.json: the page opens the link, the MokuPilot on the computer the board is opened on takes the call and runs the fork here over ssh. Nothing starts on this computer.',
+      'Settings → MokuPilot… says “The computer you’re viewing from”: the page opens the link, the MokuPilot on the computer the board is opened on takes the call and runs the fork here over ssh. Nothing starts on this computer, and MokuPilot need not be installed here.',
+    'setup.mokupilot.autoDetail':
+      'Settings → MokuPilot… says “Auto”: a call asked from this computer starts here, one asked from another computer starts there, by a mokupilot:// link.',
+    'setup.mokupilot.localMissingDetail':
+      'Settings → MokuPilot… says “This machine”: calls start here, so MokuPilot must be installed here. Without it the “Call in MokuPilot” button stays hidden.',
+    'setup.mokupilot.linkHint':
+      'MokuPilot on the computer you open the board from instead: "mokupilot": { "mode": "link" } in the board’s config.json, or Settings → MokuPilot… once the button shows.',
     'setup.mokupilot.off': 'MokuPilot is not on this computer',
     'setup.mokupilot.offDetail':
       'With MokuPilot, a session’s sheet starts a call whose agent is a fork of that session.',
@@ -258,7 +264,13 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.mokupilot.ok': 'MokuPilot: звонки с форком сессии',
     'setup.mokupilot.link': 'MokuPilot: звонки с компьютера зрителя, по ссылке mokupilot://',
     'setup.mokupilot.linkDetail':
-      '"mokupilot": { "link": true } в config.json доски: страница открывает ссылку, звонок берёт MokuPilot на компьютере, где открыта доска, и запускает форк здесь по ssh. На этом компьютере ничего не запускается.',
+      'В Настройках → MokuPilot… выбрано «Компьютер, с которого ты смотришь»: страница открывает ссылку, звонок берёт MokuPilot на компьютере, где открыта доска, и запускает форк здесь по ssh. На этом компьютере ничего не запускается, ставить сюда MokuPilot не нужно.',
+    'setup.mokupilot.autoDetail':
+      'В Настройках → MokuPilot… выбрано «Авто»: звонок с этого компьютера начинается здесь, звонок с другого компьютера начинается там, по ссылке mokupilot://.',
+    'setup.mokupilot.localMissingDetail':
+      'В Настройках → MokuPilot… выбрано «Этот компьютер»: звонки начинаются здесь, и MokuPilot должен быть установлен здесь. Без него кнопки «Звонок в MokuPilot» не будет.',
+    'setup.mokupilot.linkHint':
+      'Или MokuPilot на компьютере, с которого открываешь доску: "mokupilot": { "mode": "link" } в config.json доски, или Настройки → MokuPilot…, когда кнопка появится.',
     'setup.mokupilot.off': 'MokuPilot на этом компьютере нет',
     'setup.mokupilot.offDetail': 'С MokuPilot панель сессии начинает звонок, где агент: форк этой сессии.',
     'setup.mokupilot.offFix': 'Установи MokuPilot или укажи его папку в config.json доски:',

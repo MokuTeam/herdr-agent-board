@@ -18,6 +18,7 @@ import {
   wakeHooksState,
 } from './install-plan.ts'
 import type { MokupilotLauncher } from './mokupilot.ts'
+import type { MokupilotMode } from './mokupilot-mode.ts'
 import type { Translator } from './types.ts'
 import type { WakeState } from './wake/status.ts'
 
@@ -223,6 +224,8 @@ export interface SetupFacts {
   launcher: LauncherFacts | null
   /** How the board would start MokuPilot (adapters/setup-facts.ts mokupilotCommand); none: not looked for. */
   mokupilot?: MokupilotLauncher | null
+  /** Where a call starts (core/mokupilot-mode.ts mokupilotMode); none: `auto`. */
+  mokupilotMode?: MokupilotMode
 }
 
 export type SetupLevel = 'ok' | 'error' | 'warn' | 'off' | 'na'
@@ -611,16 +614,27 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
   const mp = facts.mokupilot
   if (mp) {
     const snippet = `"mokupilot": { "dir": "${win ? 'C:\\Users\\you\\MokuPilot' : '~/MokuPilot'}" }`
-    if (mp.state === 'ok') add('mokupilot', 'ok', t('setup.mokupilot.ok'), [mp.file, ...(mp.args ?? [])].join(' '))
+    // Where a call starts (core/mokupilot-mode.ts): `link` needs nothing here, `local` MokuPilot here.
+    const mode = facts.mokupilotMode ?? 'auto'
+    if (mp.state === 'ok')
+      add(
+        'mokupilot',
+        'ok',
+        t('setup.mokupilot.ok'),
+        both([mp.file, ...(mp.args ?? [])].join(' '), mode === 'auto' ? t('setup.mokupilot.autoDetail') : ''),
+      )
     else if (mp.state === 'link') add('mokupilot', 'ok', t('setup.mokupilot.link'), t('setup.mokupilot.linkDetail'))
     else if (mp.state === 'off')
       add('mokupilot', 'off', t('setup.mokupilot.disabled'), t('setup.mokupilot.disabledDetail'))
-    else if (mp.configured)
+    else if (mp.configured || mode === 'local')
       add(
         'mokupilot',
         'warn',
         t('setup.mokupilot.missing', { file: mp.file || '?' }),
-        both(mp.error ?? '', t('setup.mokupilot.missingDetail')),
+        both(
+          mp.error ?? '',
+          t(mode === 'local' ? 'setup.mokupilot.localMissingDetail' : 'setup.mokupilot.missingDetail'),
+        ),
         t('setup.mokupilot.missingFix'),
         snippet,
       )
@@ -629,7 +643,7 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
         'mokupilot',
         'off',
         t('setup.mokupilot.off'),
-        t('setup.mokupilot.offDetail'),
+        both(t('setup.mokupilot.offDetail'), t('setup.mokupilot.linkHint')),
         t('setup.mokupilot.offFix'),
         snippet,
       )

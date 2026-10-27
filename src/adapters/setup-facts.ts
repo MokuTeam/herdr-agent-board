@@ -379,5 +379,6 @@ export async function gatherFacts(
     launcher: launcherFacts(cfg?.launch, env, platform),
     // MokuPilot for calls with a fork of a session: how the board would start it.
     mokupilot: mokupilotCommand(cfg, { platform, env }),
+    mokupilotMode: mokupilotMode(cfg?.mokupilot),
   }
 }

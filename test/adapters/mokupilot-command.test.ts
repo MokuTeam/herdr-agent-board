@@ -197,3 +197,28 @@ test('{ link: true }: a link for the viewer’s browser, nothing looked for here
     assert.deepEqual(mokupilotCommand({ mokupilot: false }, opts), { state: 'off', configured: true })
   }
 })
+
+test('mode: link is a link before command and dir; auto and local look here, `link: true` beside them or not', () => {
+  const nothing = () => false
+  for (const platform of ['linux', 'win32', 'darwin']) {
+    const opts = { platform, env: { PATH: '' }, exists: nothing }
+    const plain = mokupilotCommand({ mokupilot: { command: ['/opt/mp/MokuPilot'] } }, opts)
+    assert.equal(plain.state, 'missing')
+    for (const set of [{ mode: 'link' }, { mode: 'link', command: ['/opt/mp/MokuPilot'] }, { mode: 'link', dir: '/x' }])
+      assert.deepEqual(mokupilotCommand({ mokupilot: set }, opts), { state: 'link', configured: true })
+    // The panel's mode wins over the older key.
+    for (const mode of ['auto', 'local'])
+      for (const link of [true, false, undefined])
+        assert.deepEqual(
+          mokupilotCommand({ mokupilot: { mode, link, command: ['/opt/mp/MokuPilot'] } }, opts),
+          plain,
+          `${platform} ${mode} ${link}`,
+        )
+    // A mode the board does not know: as if none were written.
+    assert.deepEqual(mokupilotCommand({ mokupilot: { mode: 'remote', link: true } }, opts), {
+      state: 'link',
+      configured: true,
+    })
+    assert.deepEqual(mokupilotCommand({ mokupilot: { mode: 'remote', command: ['/opt/mp/MokuPilot'] } }, opts), plain)
+  }
+})
