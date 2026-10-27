@@ -13,3 +13,16 @@ export function modelFromScreen(screen: unknown): string {
   const matches = [...String(screen ?? '').matchAll(/Set model to ([^\n]+?)(?= and saved| \(this session only\)|$)/gim)]
   return matches.at(-1)?.[1]?.trim() ?? ''
 }
+
+/**
+ * Whether the meter reads the session's screen: a Claude session that is awake and has a pane. A
+ * sleeping one may keep a pane that holds a shell by now; other agents have no such lines.
+ */
+export const meterReads = (item: {
+  agent?: string | null | undefined
+  sleeping?: boolean | undefined
+  pane?: string | null | undefined
+}): boolean => item.agent === 'claude' && !item.sleeping && !!item.pane
+
+/** A message that changes what the meter shows: Claude's own /model or /effort. */
+export const changesMeter = (text: unknown): boolean => /^\/(model|effort)(\s|$)/i.test(String(text ?? '').trim())

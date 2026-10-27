@@ -11,7 +11,7 @@ import { askRestart } from '../../adapters/schedule-store.ts'
 import { busy, PINS } from '../../core/board.ts'
 import { isCodexItem } from '../../core/codex.ts'
 import { type PublicDialog, parseDialog, publicDialog } from '../../core/dialogs/questions.ts'
-import { effortFromScreen, modelFromScreen } from '../../core/effort.ts'
+import { effortFromScreen, meterReads, modelFromScreen } from '../../core/effort.ts'
 import { publicHelper } from '../../core/helpers.ts'
 import { t } from '../../core/lang.ts'
 import { checkName } from '../../core/launch/names.ts'
@@ -311,10 +311,10 @@ export function sessionRoutes(app: SessionApp): Route[] {
       method: 'GET',
       path: /^\/api\/session\/([^/]+)\/meter$/,
       // The model and effort the session is on now: their /model and /effort lines change before a turn.
-      // Only Claude's screen has them; any other agent answers empty without a read.
+      // Only an awake Claude's screen has them (core/effort.ts meterReads); any other answers empty, unread.
       handle: withItem(async item => {
         const text =
-          item.pane && item.agent === 'claude'
+          item.pane && meterReads(item)
             ? await herdrText(['agent', 'read', item.pane, '--source', 'visible'], 5000).catch(() => '')
             : ''
         return json(200, { effort: effortFromScreen(text), model: modelFromScreen(text) })
