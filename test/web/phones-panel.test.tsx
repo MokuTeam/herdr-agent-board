@@ -83,6 +83,25 @@ describe('Phones panel', () => {
     }
   })
 
+  test('a paired browser elsewhere names its own id in the command that makes it a desk', () => {
+    const doc = Object.getOwnPropertyDescriptor(globalThis, 'document')
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: {
+        documentElement: {
+          hasAttribute: (name: string) => name === 'data-remote',
+          getAttribute: (name: string) => (name === 'data-device' ? '2d240475327c' : null),
+        },
+      },
+    })
+    try {
+      expect(text([byId(render(REMOTE), 'phones-sheet')])).toContain('board remote desk 2d240475327c')
+    } finally {
+      if (doc) Object.defineProperty(globalThis, 'document', doc)
+      else Reflect.deleteProperty(globalThis, 'document')
+    }
+  })
+
   test("on the owner's desk elsewhere: Approve, Deny and Unpair; turning phones off stays with the computer", () => {
     const doc = Object.getOwnPropertyDescriptor(globalThis, 'document')
     Object.defineProperty(globalThis, 'document', {

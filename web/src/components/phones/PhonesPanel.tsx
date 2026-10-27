@@ -14,7 +14,7 @@ import { api, errorText } from '../../api/client.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { ago } from '../../models/card.ts'
-import { deskPage, remotePage } from '../../models/remote-page.ts'
+import { deskPage, deviceId, remotePage } from '../../models/remote-page.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { Panel } from '../panel/Panel.tsx'
 import { Qr } from '../Qr.tsx'
@@ -111,7 +111,15 @@ export function PhonesPanel({ open, onClose }: PhonesPanelProps) {
             )}
           </div>
         ))}
-        {!here && <p className="sheet-meta">{t(answers ? 'phones.onlyThereDesk' : 'phones.onlyThere')}</p>}
+        {!here && (
+          <p className="sheet-meta">
+            {answers
+              ? t('phones.onlyThereDesk')
+              : deviceId()
+                ? t('phones.onlyThereId', { id: deviceId() ?? '' })
+                : t('phones.onlyThere')}
+          </p>
+        )}
         <h3 className="phones-head">{t('pwa.head')}</h3>
         <PwaSection pwa={remote.pwa} canEdit={canEdit} send={send} />
         <h3 className="phones-head">{t('phones.paired')}</h3>
