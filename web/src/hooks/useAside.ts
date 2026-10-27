@@ -2,7 +2,7 @@
 // session and how each went, kept beside the page for as long as it is open (never in the
 // session's conversation, nor on the server), so the answers stay with their session while the
 // panel shows another one. Asking posts the question and waits for the answer; Cancel or Close
-// while it waits ends Claude on the server too.
+// while it waits closes the /btw overlay in the session too.
 import { useMemo } from 'react'
 import type { Translator } from '../../../src/core/types.ts'
 import { ApiError, errorText, postJson } from '../api/client.ts'
@@ -18,8 +18,6 @@ export interface Aside {
   state: 'asking' | 'answered' | 'failed'
   text: string
   error: string
-  costUsd: number | null
-  tokens: { context: number; cached: number; output: number } | null
   ms: number
 }
 
@@ -57,7 +55,7 @@ async function post(key: string, question: string, t: () => Translator): Promise
   const id = ++next
   const control = new AbortController()
   running.set(id, control)
-  const entry: Aside = { id, key, question, state: 'asking', text: '', error: '', costUsd: null, tokens: null, ms: 0 }
+  const entry: Aside = { id, key, question, state: 'asking', text: '', error: '', ms: 0 }
   change(key, list => [...list, entry])
   try {
     const res = await postJson(
@@ -68,14 +66,11 @@ async function post(key: string, question: string, t: () => Translator): Promise
     const r: unknown = await res.json().catch(() => null)
     const o = r && typeof r === 'object' ? (r as Record<string, unknown>) : {}
     if (!res.ok || o.ok !== true) throw new ApiError(res.status, o)
-    const tokens = o.tokens && typeof o.tokens === 'object' ? (o.tokens as Record<string, unknown>) : {}
     change(
       key,
       patch(id, {
         state: 'answered',
         text: String(o.text ?? ''),
-        costUsd: typeof o.costUsd === 'number' ? o.costUsd : null,
-        tokens: { context: num(tokens.context), cached: num(tokens.cached), output: num(tokens.output) },
         ms: num(o.ms),
       }),
     )

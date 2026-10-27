@@ -268,9 +268,9 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
 - "Fork" (the sheet, a card's menu): a new session in a new tab that starts with a copy of this
   one's conversation, so it knows what this one knows while this one goes on as it was; see
   [Fork](#fork).
-- A side question (the bubble in the message box, or a message that starts with `/btw`): asked of
-  a copy of the session's conversation, answered in a card over the box, while nothing goes into
-  the session's conversation; see [Side questions](#side-questions).
+- A side question (the bubble in the message box, or a message that starts with `/btw`): typed
+  into the session as Claude Code's own `/btw`, answered in a card over the box, while nothing
+  goes into the session's conversation; see [Side questions](#side-questions).
 - The sheet's place and size are the viewer's own (kept in this browser): docked right, left or
   at the bottom, flush with that edge like a sidebar, where the board makes room for it (a window
   too narrow for that keeps the board's columns and lays the sheet over them), or floating over
@@ -923,41 +923,45 @@ menu), `{ kind: 'input', title, body, more, cut, value, fingerprint }` (pi's tex
 
 ## Side questions
 
-Claude Code's own `/btw` asks a side question with the conversation's context and keeps it out of
-the conversation, but it answers in an overlay of the terminal, and under `-p` it says it "isn't
-available in this environment": the board could only read its answer off the screen, and only
-while the session runs. So the board asks a one-off copy of the conversation instead, which works
-whatever the session does (working, waiting, asleep):
+A side question is Claude Code's own `/btw`, typed into the session's pane through herdr as a
+message is sent (`herdr agent prompt <pane> "/btw <question>"`). Claude Code answers it in an
+overlay over its input box, from what the conversation holds and with no tools, and keeps it out
+of the conversation; it answers while a turn runs too. Claude Code does keep a session's `/btw`
+questions and answers among themselves: a later side question can draw on an earlier one, and the
+user's own `/btw` lists the board's. The board reads the answer off the screen
+(`herdr agent read --source visible`), pressing Down while more of it is below, and closes the
+overlay with Esc. A `/btw` that shows something other than an answer for a few seconds (an error)
+is reported with what it shows. The answer shows in a card over the message box: the question,
+the answer and how long it took. Close (×) forgets it; on its way the same button cancels it and
+closes the overlay. The cards stay with their session while the page is open, and never go to the
+server or the conversation.
 
-```
-claude -p --resume <id> --fork-session --no-session-persistence --tools "" \
-       --strict-mcp-config --settings '{"disableAllHooks":true}' --max-turns 1 --output-format json
-```
+It types only where the line lands as `/btw`, checked as before a message
+(`src/services/actions.ts`), and otherwise says why and types nothing:
 
-in the folder the session's conversation was recorded in, with `CLAUDE_CONFIG_DIR` of the profile
-that holds it (none in the board's own), the question on stdin. The copy is never written to disk
-(no new transcript, the session's own untouched), has no tools (it answers from what the
-conversation holds and cannot act), no MCP servers and no hooks (no card, no context, nothing
-ingested or notified). The answer shows in a card over the message box: the question, the answer,
-and that it went as a request of its own, with Claude Code's price for it at API rates and the
-context it read, the whole conversation. The copy's prompt is not the session's (no tools, no MCP
-servers), so the first side question to a session writes the conversation to the cache anew,
-about what the session's own next turn would cost without its cache; another one before the
-session has moved on reads that cache and costs a fraction (measured on a 34k-token session:
-$0.27 for the first, $0.008 for the next, $0.25 again once the session had worked on). Close (×)
-forgets it; on its way the same button cancels it and ends Claude. The cards stay with their
-session while the page is open, and never go to the server or the conversation.
+- the session asleep: `/btw` needs the running session, and the board does not wake one for it;
+- a dialog, a picker or an overlay open in the terminal (a permission question, `/model`, the
+  user's own `/btw`), or the session blocked on one: the line would go into it;
+- text in the input box: Enter would send it along;
+- another session in the pane by now, or a side question to it still on its way.
+
+Esc goes only to the overlay with this question in it: a key pressed into anything else would
+answer it. The answer comes back as the terminal showed it, lists and code as drawn and long lines
+wrapped at the pane's width. `/btw` runs no UserPromptSubmit hook, but herdr reports the session
+working while it answers: the card moves under "Working" for a few seconds and then back (a
+session under "Needs me" returns there); the board cannot keep it in place. A question is up to 790
+characters: Claude Code folds a longer paste into "[Pasted text #1]" and sends that to the
+conversation as a message.
 
 The switch in the message box (the bubble beside the clip, purple while on) sends the next
-message aside; a message that starts with `/btw` goes aside too. Both only where the board can ask
-one: a Claude session with an id, and `claude` on the board's PATH (`claude.exe` on Windows: an
-npm install's `claude.cmd` would need a shell, which the board never runs). Elsewhere the box is
-as it was, and `/btw` goes to the session as typed.
+message aside; a message that starts with `/btw` goes aside too. Both only in a Claude session
+with an id; elsewhere the box is as it was, and `/btw` goes to the session as typed.
 
-`POST /api/session/<key>/aside` with `{ question }` answers `{ ok, text, costUsd, tokens: {
-context, cached, output }, ms }` or `{ ok: false, error }` (the page only, like a launch); the
-board payload's `aside` says whether the board can ask. Code: `src/core/aside.ts`,
-`src/services/aside.ts`, `web/src/hooks/useAside.ts`, `web/src/components/sheet/Aside.tsx`.
+`POST /api/session/<key>/aside` with `{ question }` answers `{ ok, text, ms }` or `{ ok: false,
+error, busy? }` (the page only, with herdr's data recent enough to act on); the board payload's
+`aside` says whether the board can ask. Code: `src/core/aside.ts` (the overlay on the screen),
+`src/services/aside.ts` (the steps through herdr), `web/src/hooks/useAside.ts`,
+`web/src/components/sheet/Aside.tsx`.
 
 ## Terminal
 

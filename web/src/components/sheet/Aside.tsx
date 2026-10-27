@@ -1,19 +1,19 @@
 // Side questions in the session panel (hooks/useAside.ts): the switch in the message box that
 // sends the next question aside, and the answers in cards over the box, newest nearest to it.
 // A card says what was asked, the answer (or that it is on its way, or why there is none), and
-// that it went as a request of its own, with its price and its context; closing it forgets it.
-// Nothing of it goes into the session's conversation.
+// that it went as /btw in the session, and how long it took; closing it forgets it. Nothing of it
+// goes into the session's conversation.
 import { type ReactNode, useContext, useLayoutEffect, useRef, useState } from 'react'
 import { type Aside, type AsideControls, useAside } from '../../hooks/useAside.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { asideQuestion, dollars, kilo } from '../../models/aside.ts'
+import { asideQuestion } from '../../models/aside.ts'
 import { markdown } from '../../models/markdown.ts'
 import { BoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 
 /** What the message box does about side questions (components/sheet/Composer.tsx). */
 export interface AsideBox {
-  /** The board can ask the open session aside (a Claude session, Claude Code on its PATH). */
+  /** The board can ask the open session aside (a Claude session: /btw in its pane). */
   can: boolean
   /** The switch is on. */
   on: boolean
@@ -126,12 +126,9 @@ export function AsideDeck({
 function AsideCard({ aside: a, onClose, onAgain }: { aside: Aside; onClose: () => void; onAgain: () => void }) {
   const t = useT()
   const asking = a.state === 'asking'
-  const meta = [
-    a.costUsd === null ? t('aside.costNone') : t('aside.cost', { cost: `$${dollars(a.costUsd)}` }),
-    a.tokens?.context ? t('aside.tokens', { n: kilo(a.tokens.context) }) : '',
-    a.tokens?.cached ? t('aside.cached', { n: kilo(a.tokens.cached) }) : '',
-    a.ms ? t('aside.seconds', { s: Math.max(1, Math.round(a.ms / 1000)) }) : '',
-  ].filter(Boolean)
+  const meta = [t('aside.via'), a.ms ? t('aside.seconds', { s: Math.max(1, Math.round(a.ms / 1000)) }) : ''].filter(
+    Boolean,
+  )
   return (
     <article className="aside-card" data-state={a.state} aria-busy={asking}>
       <header className="aside-head">
@@ -163,7 +160,7 @@ function AsideCard({ aside: a, onClose, onAgain }: { aside: Aside; onClose: () =
         <>
           {/* biome-ignore lint/security/noDangerouslySetInnerHtml: markdown() escapes every piece of text itself and makes only known tags */}
           <div className="md aside-answer" dangerouslySetInnerHTML={{ __html: markdown(a.text) }} />
-          <footer className="aside-meta" title={t('aside.costHint')}>
+          <footer className="aside-meta" title={t('aside.viaHint')}>
             {meta.join(' · ')}
           </footer>
         </>

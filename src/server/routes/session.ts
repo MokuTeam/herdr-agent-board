@@ -352,12 +352,13 @@ export function sessionRoutes(app: SessionApp): Route[] {
       guard: ['board-header', 'origin'],
       handle: action,
     },
-    // A side question runs Claude once on a copy of the conversation (services/aside.ts): like a
-    // call, only from this page, no herdr; the page going away ends it.
+    // A side question types /btw into the session and reads its answer (services/aside.ts): it
+    // presses keys in a session, so only from this page and through a herdr the board reaches; the
+    // page going away closes the overlay.
     {
       method: 'POST',
       path: /^\/api\/session\/([^/]+)\/aside$/,
-      guard: ['board-header', 'origin'],
+      guard: ['board-header', 'origin', 'fresh-data'],
       handle: withItem(async (item, req, ctx) => {
         const r = await askAside(app.deps, item, (await ctx.body()).question, { signal: req.signal })
         return json(r.ok ? 200 : 409, r)
