@@ -60,7 +60,7 @@ interface Options {
   mokupilot?: () => boolean
   /** The remote mode as the page shows it; null while it is off (server/remote.ts). */
   remote?: () => RemoteView | null
-  /** Whether the board can ask a session a side question (services/aside.ts asideCheck). */
+  /** Whether the board can ask a session a side question (services/aside.ts: /btw in its pane). */
   aside?: () => boolean
   /** The Remote access view's revision (app.ts counts its changes). */
   accessRev?: () => number
@@ -216,7 +216,7 @@ export function createBoardState({
       mokupilot: mokupilot?.() ?? false,
       // fork: whether the board can fork a session into a new tab with its launcher.
       fork: canFork(cfg),
-      // aside: whether a session's sheet offers a side question (Claude Code on PATH).
+      // aside: whether a session's sheet offers a side question (/btw typed into the session).
       aside: aside?.() ?? false,
       setup: setup?.() ?? null,
       // wake: only once it ships, while it is on, or while its file has sleepers (dormant otherwise).

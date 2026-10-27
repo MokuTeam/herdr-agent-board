@@ -39,7 +39,6 @@ import { pwaPage } from '../core/pwa.ts'
 import type { SetupFacts } from '../core/setup.ts'
 import { boardPorts, forwardSpec, publicHosts, sshArgs, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
 import { createAccess } from '../services/access.ts'
-import { asideCheck } from '../services/aside.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
@@ -217,8 +216,8 @@ export async function startServer({
   // Whether MokuPilot is here for calls with a fork of a session: looked up again when its
   // setting changes, and once a minute for one installed or removed meanwhile.
   const mokupilot = mokupilotCheck(cfg)
-  // Whether Claude Code is here for side questions to a session: looked up again once a minute.
-  const aside = asideCheck()
+  // Side questions to a session go as Claude Code's /btw in its pane: nothing to look up here.
+  const aside = () => true
   // A notification click asks for a session: pages that connect right after are told it too.
   const reveals = revealState()
   const events = createBroadcaster(() => board.payload(), { greet: reveals.greet })
