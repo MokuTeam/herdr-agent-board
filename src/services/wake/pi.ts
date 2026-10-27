@@ -7,9 +7,7 @@
 // it was left, else in a new tab of its workspace (a new workspace when that is gone too), until
 // herdr shows pi back on that session, free.
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { readTail } from '../../adapters/claude-home.ts'
-import { tabCreateRoot, workspaceCreate } from '../../adapters/herdr.ts'
 import {
   claudeConfigDirOf,
   type PiProcess,
@@ -32,9 +30,10 @@ import {
 } from '../../core/wake/pi.ts'
 import { CANNOT_WAKE, clearKeyFor } from '../../core/wake/rules.ts'
 import { atPrompt, type Timing, type WakeOutcome, withPane } from './pane-ops.ts'
+import { defaultTabOps, openTab, type TabOps } from './tabs.ts'
 
 /** What putting pi to sleep and waking it need besides herdr: its process, its session file, new tabs. */
-export interface PiOps {
+export interface PiOps extends TabOps {
   herdr: WakeHerdr
   procs: ProcSys
   /** pi in the pane, from herdr's process-info; null when none runs in its foreground. */
@@ -47,13 +46,6 @@ export interface PiOps {
   sessionName(file: string): string
   /** When the file was last written (ms); null when there is none. */
   writtenAt(file: string): number | null
-  /** Whether the file or folder is there. */
-  exists(path: string): boolean
-  /** A new tab in the workspace, in `cwd`, labelled `label`: its pane. */
-  newTab(workspace: string, cwd: string, label: string): Promise<string>
-  /** A new workspace in `cwd`, labelled `label`: its pane. */
-  newWorkspace(cwd: string, label: string): Promise<string>
-  home: string
   platform?: string
 }
 
@@ -193,14 +185,6 @@ export async function waitPiReady(
   return 'timeout'
 }
 
-/** The workspace a new tab goes to: the sleeper's own by id and label, else by label, else by id; none: a new one. */
-function workspaceFor(snap: PiSnapshot, s: PiSleeper): string | null {
-  const byId = snap.workspaces.find(w => w.workspace_id === s.workspace)
-  const byLabel = s.workspaceLabel ? snap.workspaces.find(w => w.label === s.workspaceLabel) : undefined
-  if (byId && (!s.workspaceLabel || byId.label === s.workspaceLabel)) return byId.workspace_id
-  return (byLabel ?? byId)?.workspace_id ?? null
-}
-
 export type PiWakeOutcome = { ok: true; pane: string } | Exclude<WakeOutcome, { ok: true }>
 
 /**
@@ -233,11 +217,16 @@ export async function wakePi(
     })
   }
   if (!pane) {
-    const cwd = sleeper.cwd && ops.exists(sleeper.cwd) ? sleeper.cwd : ops.home
-    const workspace = workspaceFor(snap, sleeper)
-    const fresh = workspace
-      ? await ops.newTab(workspace, cwd, label)
-      : await ops.newWorkspace(cwd, sleeper.workspaceLabel || label)
+    const fresh = await openTab(
+      ops,
+      {
+        ...(sleeper.workspace !== undefined && { workspace: sleeper.workspace }),
+        ...(sleeper.workspaceLabel !== undefined && { workspaceLabel: sleeper.workspaceLabel }),
+        cwd: sleeper.cwd,
+        label,
+      },
+      snap,
+    )
     c.log(`waking ${label} (pi) in a new tab, ${fresh}: its pane ${sleeper.pane} is not as it was left`)
     await withPane(fresh, () => ops.herdr.run(fresh, line))
     pane = fresh
@@ -263,6 +252,7 @@ export function readPiTail(file: string): string[] | null {
 /** PiOps for real: herdr's CLI, the OS's processes, the files. */
 export function defaultPiOps(herdr: WakeHerdr = cliWakeHerdr): PiOps {
   return {
+    ...defaultTabOps(path => existsSync(path)),
     herdr,
     procs: realProcSys,
     piProcess: pane => piProcessIn(pane),
@@ -282,13 +272,5 @@ export function defaultPiOps(herdr: WakeHerdr = cliWakeHerdr): PiOps {
         return null
       }
     },
-    exists: path => existsSync(path),
-    newTab: async (workspace, cwd, label) => (await tabCreateRoot(workspace, cwd, label)).pane,
-    async newWorkspace(cwd, label) {
-      const ws = await workspaceCreate(cwd, label)
-      if (!ws.pane) throw new Error('herdr workspace create: no pane in its answer')
-      return ws.pane
-    },
-    home: homedir(),
   }
 }

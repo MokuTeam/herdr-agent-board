@@ -567,6 +567,51 @@ test('a topic key (claude-tg in herdr) reaches the Claude in the tab it names, n
   expect(typed(w.io).map(c => c[2])).toEqual(['w1:p1', 'w1:p2'])
 })
 
+test('#204: a message for a sleeper whose pane wake closed wakes it in a new tab of its workspace and goes there', async () => {
+  const at = Date.now() - HOUR
+  const w = world({
+    sessions: f => ({
+      [SID]: {
+        session: SID,
+        name: 'Billing',
+        title: 'Billing chat',
+        cwd: PROJECT,
+        seen_at: at,
+        slept_at: at,
+        profileDir: f.work,
+        profile: 'work',
+        freed: { pane: 'w1:p1', workspace: 'w1', tabLabel: 'Ledger', topic: 'topic:Main / Ledger', at },
+      },
+    }),
+  })
+  const fresh: FakePane = { pane_id: 'w1:p9', tab_id: 't9', workspace_id: 'w1', cwd: PROJECT }
+  const opened: string[][] = []
+  w.deps.tabs = {
+    async newTab(ws, cwd, label) {
+      opened.push([ws, cwd, label])
+      w.io.panes.push(fresh)
+      w.io.inputBoxes[fresh.pane_id] = EMPTY_BOX
+      return fresh.pane_id
+    },
+    newWorkspace: async () => {
+      throw new Error('its workspace is there')
+    },
+    exists: () => true,
+    home: w.home,
+  }
+  startsOnRun(w.io, fresh, w.work)
+  const { telegram } = router(w, { target: () => null })
+  expect(await telegram.route([item(5, { key: 'topic:Main / Ledger' })])).toEqual({
+    ok: true,
+    note: NOTES.woke('Billing chat'),
+  })
+  expect(opened).toEqual([['w1', PROJECT, 'Ledger']])
+  expect(typed(w.io)).toEqual([
+    ['pane', 'run', 'w1:p9', `board resume ${SID} --profile work`],
+    ['agent', 'prompt', 'w1:p9', '[telegram message_id=45]\nпроверь счёт'],
+  ])
+})
+
 // Last in the file: the files bun runs after this one in the same process find the home and the
 // folders as they were, not a temp folder a test has deleted.
 test('every test gives back the home and folders it found', () => {

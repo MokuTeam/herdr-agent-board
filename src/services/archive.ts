@@ -173,7 +173,9 @@ export type FreeToClose = { ok: true; pane: PaneFacts | null } | { ok: false; wh
 export async function freeToClose(deps: Deps, item: ArchiveSubject, tr: Translator = t): Promise<FreeToClose> {
   const doubt = profileDoubt(item, deps.profiles(), tr)
   if (doubt !== null) return { ok: false, why: 'archive.why.profile', detail: doubt }
-  const target = item.pane ?? ''
+  // A sleeper whose pane wake closed (#204): nothing to close.
+  if (!item.pane) return { ok: true, pane: null }
+  const target = item.pane
   let pane: PaneFacts | null
   try {
     pane = await paneGet(target)

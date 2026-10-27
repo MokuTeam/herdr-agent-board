@@ -1302,8 +1302,10 @@ board sleep --when-free Report-north --self                 # and this session, 
 
 ## Sleep and wake
 
-A sleeping session costs nothing: its Claude has exited, its pane stays, labelled `💤 <name>`, and
-it comes back in that pane with the same session id and conversation. The board does this itself,
+A sleeping session costs nothing: its Claude has exited, and its pane is closed, with its tab when
+nothing but herdr-sidebar's panes was beside it, so it holds no shell and no sidebar (below). It
+comes back in a new tab of its workspace with the same session id and conversation, its card,
+name, lane and reminders as they were. The board does this itself,
 on every install, with nothing to install or run (it did it through the separate
 [herdr-wake](herdr-wake/) plugin before, on Node.js). By itself it does nothing: no session is put
 to sleep, woken or typed into until someone clicks "Put to sleep", "Wake" or "Restart", runs
@@ -1370,10 +1372,43 @@ not: within 15 seconds its pane is marked `💤` and its card offers Wake, and L
 SendMessage and Telegram take it for asleep. Only sessions seen running in the last 10 minutes
 count, so an old shell stays a shell. Close the pane to be done with a session for good.
 
-**Waking** types `board resume <id> --profile <id>` into the session's pane, after clearing what is
-at its prompt (Esc for PowerShell and cmd, Ctrl+U for bash, zsh, fish and sh, by the shell herdr
-says runs there), and waits for Claude to come up (`wakeTimeoutSec`, 120), answering the
-development-channels confirmation if it asks. So a session wakes in its own profile and its
+**Its pane given back.** Once Claude has left, wake closes the pane where the session comes back
+in the same Telegram topic ([Telegram](#telegram): a workspace's first tab is `topic:<workspace>`,
+the others `topic:<workspace> / <tab>`, and herdr opens a new tab at the end of its workspace):
+
+- a tab that is not its workspace's first: the tab goes, sidebar and all, when only herdr-sidebar's
+  panes are beside the session; with a pane of yours beside it, only the session's pane goes and
+  the tab stays;
+- a workspace's only tab, nothing but sidebars beside the session: the tab goes, and the workspace
+  with it, unless another sleeper whose pane was closed comes back to that workspace (whichever woke
+  first would take its first tab and the other's topic);
+- the first tab of a workspace with other tabs, or one with a pane of yours beside the session,
+  keeps its pane as before, labelled `💤 <name>` with the wake line typed at its prompt: closing it
+  would move the session, and the tab after it, to other topics.
+
+Only a pane at its shell's prompt is closed: nothing started in it since Claude left, nothing
+typed at the last prompt on its screen but the session's own wake line (wake's, or the old
+plugin's, wrapped or not), and nothing in its tab focused (the tab you are looking at stays). A
+screen without a prompt, or with PowerShell's `>>` continuation prompt, keeps the pane. Sessions
+already asleep in a kept pane when this came in (labelled `💤 <name>` by wake) get it closed once
+by the same rule, at a look of wake's with this on that herdr answered; then `wake-tidy.json` in
+the state folder says it is done, and no later start does it again. One you `/exit` yourself
+keeps its pane (below). The session's card keeps the panes it had, so the board's
+links still find the session a `spawn-agent` started in one of them, and its reminders follow it
+to the pane it wakes in.
+
+What this changes for every setup: a woken session's tab comes back at the end of its workspace
+(a whole workspace at the end of herdr's list), not where it was, since herdr's command line cannot
+move a tab. `"closePanes": false` in the `wake` section keeps every pane, and the old behaviour, as
+before; the panes given back by then wake in new tabs all the same.
+
+**Waking** a session whose pane was given back opens a new tab in its workspace (while herdr has it
+under the label it had, else one of that label; a new workspace of its label when there is none),
+in its folder, under its tab's label, and runs `board resume <id> --profile <id>` there. One in a kept pane
+gets that line typed into its pane, after clearing what is at its prompt (Esc for PowerShell and
+cmd, Ctrl+U for bash, zsh, fish and sh, by the shell herdr says runs there). Either way wake waits
+for Claude to come up (`wakeTimeoutSec`, 120), answering the development-channels confirmation if
+it asks; one that does not come up in its new tab sleeps on there, `💤 <name>`, for the next wake. So a session wakes in its own profile and its
 project folder, whatever the pane's shell has ([Claude profiles](#claude-profiles)). A Wake while
 wake is slow to answer types nothing (wake may be waking that very session): the board says so.
 
@@ -1517,6 +1552,7 @@ In the board's config.json, every key optional; no section is all the defaults (
 | `wakeTimeoutSec` | `120` | how long a wake waits for the session |
 | `pollTimeoutSec` | `25` | the Telegram long poll |
 | `listSleepingDays` | `7` | ListAgents lists sessions asleep for less than this |
+| `closePanes` | `true` | a session put to sleep gives its pane back (and its tab, when only herdr-sidebar's panes are beside it) and wakes in a new tab; `false`: its pane stays, `💤 <name>` |
 
 There is no `wakeCommand`: every wake is `board resume`, and `launch.claude` says how Claude
 starts. `wakeUrl` is used only while wake is off or held by the separate plugin.
@@ -1541,9 +1577,10 @@ it); Claude keeps the conversation on disk, so it can come back.
   gray with the reason. What only herdr can tell is checked when you click (text you started
   typing in its input box, a background command or Monitor) and again right before the pane
   closes: a session that got to work meanwhile (a Telegram message, another session) stays on the
-  board, and a toast says why. A sleeping session goes as it is: its pane with the 💤 closes. A
-  shell with no Claude in it is closed only as wake left it, marked 💤 with nothing running
-  in it but the shell; a Claude that exited by itself, or a program started there, keeps the pane.
+  board, and a toast says why. A sleeping session goes as it is: its pane with the 💤 closes, or
+  none when wake closed it. A shell with no Claude in it is closed only as wake left it, marked 💤
+  with nothing running in it but the shell; a Claude that exited by itself, or a program started
+  there, keeps the pane.
 - Its reminders and repeating pings wait in the record and come back with it: under their old
   ids, a repeating one from its next run, a one-off that came due meanwhile late (the prompt says
   by how much). A restart on its way is dropped: a resume is one. A MokuPilot report with a

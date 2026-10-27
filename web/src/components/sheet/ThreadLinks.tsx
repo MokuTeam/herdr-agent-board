@@ -6,6 +6,7 @@
 // agent's or a workflow's report has "Conversation" beside it.
 import type { MouseEvent, ReactNode } from 'react'
 import type { PublicHelper, WorkflowRun } from '../../../../src/core/helpers.ts'
+import { inPane } from '../../../../src/core/links.ts'
 import type { TaskNotice } from '../../../../src/core/notices.ts'
 import type { PeerTurn, ToolTurn, UserTurn } from '../../../../src/core/transcript.ts'
 import type { Item } from '../../../../src/core/types.ts'
@@ -211,8 +212,7 @@ export function LinkLine({ turn: m, item, helper, links }: LinkLineProps) {
   }
   if (m.spawn) {
     const spawn = m.spawn
-    const target =
-      links.items.find(x => x.pane && x.pane === spawn.pane && [x.name, x.autoName].includes(spawn.name)) ?? null
+    const target = links.items.find(x => inPane(x, spawn.pane) && [x.name, x.autoName].includes(spawn.name)) ?? null
     const name = target ? <SessionButton session={target} links={links} /> : <b>{spawn.name || '…'}</b>
     return (
       <div className={spawn.failed ? 'link-line failed' : 'link-line'}>

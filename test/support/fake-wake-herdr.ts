@@ -42,6 +42,11 @@ export interface FakeWakeHerdr extends WakeHerdr {
   on(match: (argv: string[]) => boolean, effect: (argv: string[]) => void): void
 }
 
+/** Takes what matches out of the list itself, which the test may hold too. */
+function drop<T>(list: T[], gone: (x: T) => boolean): void {
+  for (let i = list.length - 1; i >= 0; i--) if (gone(list[i] as T)) list.splice(i, 1)
+}
+
 /** Every pane's shell pid; a busy pane's foreground program has the next one. */
 const SHELL_PID = 4000
 
@@ -153,6 +158,27 @@ export function fakeWakeHerdr(
       need(pane, argv)
       return fake.inputBoxes[pane] ?? ''
     },
+    async closePane(pane) {
+      const argv = ['pane', 'close', pane]
+      call(...argv)
+      const tab = need(pane, argv).tab_id
+      drop(fake.panes, p => p.pane_id === pane)
+      if (tab !== undefined && !fake.panes.some(p => p.tab_id === tab)) dropTab(tab)
+    },
+    async closeTab(tab) {
+      const argv = ['tab', 'close', tab]
+      call(...argv)
+      if (!fake.tabs.some(t => t.tab_id === tab)) throw new HerdrError(argv, 'tab_not_found', `tab ${tab} not found`)
+      drop(fake.panes, p => p.tab_id === tab)
+      dropTab(tab)
+    },
+  }
+  /** The tab gone, and its workspace with it when it was the last one there, as herdr does. */
+  const dropTab = (tab: string): void => {
+    const ws = fake.tabs.find(t => t.tab_id === tab)?.workspace_id
+    drop(fake.tabs, t => t.tab_id === tab)
+    if (ws !== undefined && !fake.tabs.some(t => t.workspace_id === ws))
+      drop(fake.workspaces, w => w.workspace_id === ws)
   }
   return fake
 }

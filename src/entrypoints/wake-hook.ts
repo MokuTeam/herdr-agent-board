@@ -110,7 +110,7 @@ function listContext(list: Entry[], running: Entry[] | null, port: number, days:
     }
     parts.push(
       `Sleeping sessions on this machine (not listed above): put to sleep by the board's wake after they sat idle, or ` +
-        `exited by the user; their pane is still open. ` +
+        `exited by the user; they wake in their pane, or in a new tab when wake closed it. ` +
         `SendMessage to one by name wakes it first (takes about 10 to 30 seconds), then delivers. ` +
         `A sleeping session is a normal target: do not reroute its work or call it gone because it sleeps; ` +
         `once woken it is the same session (id, name, transcript).\n${rows.join('\n')}`,

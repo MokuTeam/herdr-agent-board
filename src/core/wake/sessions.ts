@@ -3,13 +3,19 @@
 // what wake answers from it: the sleeping list, the awake list, a session found by name, pane or
 // id. A port of herdr-wake's router.mjs remember, markAwake, sleeping, awake and findSession.
 // Pure: the wake engine reads herdr and the registries, saves the file and renames the panes.
+//
+// A sleeper whose pane wake closed (#204, core/wake/freed.ts) is kept under its session id rather
+// than that pane's: herdr gives a pane's id out again after it starts over, and the session runs in
+// no pane until it wakes, in a new tab. It is asleep, listed and found without a pane.
 import type { ReaperConfig } from './config.ts'
+import { asFreedPlace, type FreedPlace } from './freed.ts'
 import { exitedPanes, type ReapEntry, type ReapSnapshot } from './reaper.ts'
 import type { WakeProfile } from './rules.ts'
 
 /**
  * The last Claude session seen in a pane. `slept_at` marks it asleep: put to sleep, or `exited` by
  * the user. `profileDir` is the folder whose registry had it, `profile` that folder's listed id.
+ * `freed`: put to sleep and its pane closed, where it comes back (#204).
  */
 export interface WakeEntry {
   session: string
@@ -21,11 +27,16 @@ export interface WakeEntry {
   exited?: boolean
   profileDir?: string
   profile?: string
+  freed?: FreedPlace
   [extra: string]: unknown
 }
 
-/** Pane id → its last Claude session. */
+/** Pane id → its last Claude session; a sleeper whose pane wake closed, by its session id (#204). */
 export type WakeSessions = Record<string, WakeEntry>
+
+/** A sleeper whose pane wake closed (#204): asleep, with where it comes back. */
+export const isFreed = (e: WakeEntry | undefined): e is WakeEntry & { freed: FreedPlace; slept_at: number } =>
+  !!e?.freed && e.slept_at !== undefined
 
 /** Panes herdr has not shown for this long are forgotten. */
 export const KEEP_GONE_MS = 7 * 86_400_000
@@ -59,16 +70,18 @@ const profileWhole = ({ profileDir: dir, profile: id }: Record<string, unknown>)
 function asEntry(value: unknown): WakeEntry | null {
   const e = record(value)
   if (!e || typeof e.session !== 'string' || !time(e.seen_at) || !profileWhole(e)) return null
-  const fields = Object.entries(e).filter(([key, v]) => OPTIONAL.get(key)?.(v) ?? true)
+  const fields = Object.entries(e).filter(([key, v]) => key !== 'freed' && (OPTIONAL.get(key)?.(v) ?? true))
+  const freed = e.freed === undefined ? null : asFreedPlace(e.freed)
   return {
     ...Object.fromEntries(fields),
     session: e.session,
     name: typeof e.name === 'string' ? e.name : '',
     seen_at: e.seen_at,
+    ...(freed && { freed }),
   }
 }
 
-/** null for what is not an object; entries without a string `session` and a number `seen_at`, or with a broken profile, dropped; unknown fields kept. */
+/** null for what is not an object; entries without a string `session` and a number `seen_at`, or with a broken profile, dropped; a `freed` that does not read as one left out; unknown fields kept. */
 export function asWakeSessions(value: unknown): WakeSessions | null {
   const all = record(value)
   if (!all) return null
@@ -186,14 +199,25 @@ export function rememberSeen(
     changed = true
   }
 
-  // A running session is awake wherever it runs, e.g. resumed by hand in another pane.
+  // A running session is awake wherever it runs, e.g. resumed by hand in another pane. One whose
+  // pane wake closed (#204) is forgotten then: its new pane has an entry of its own. Only once herdr
+  // shows it in a pane in a view taken after its pane was closed, or a registry still has it a
+  // minute after (an older view, or a registry slow to drop it, still has it before it went).
+  const inPanes = new Set(snap.panes.flatMap(p => (p.agent === 'claude' && p.agent_session?.value) || []))
   for (const [pane, s] of Object.entries(sessions)) {
-    if (s.slept_at && live.has(s.session) && !going.has(pane)) wake(pane)
+    if (isFreed(s)) {
+      const after = (snap.takenAt ?? 0) > s.freed.at
+      if ((inPanes.has(s.session) && after) || (live.has(s.session) && now - s.freed.at > SEEN_AGAIN_MS)) {
+        delete sessions[pane]
+        changed = true
+      }
+    } else if (s.slept_at && live.has(s.session) && !going.has(pane)) wake(pane)
   }
 
+  // Gone for 7 days: forgotten, but for a sleeper whose pane wake closed, which has none.
   const panes = new Set(snap.panes.map(p => p.pane_id))
   for (const [pane, s] of Object.entries(sessions)) {
-    if (!panes.has(pane) && now - s.seen_at > KEEP_GONE_MS) {
+    if (!panes.has(pane) && !isFreed(s) && now - s.seen_at > KEEP_GONE_MS) {
       delete sessions[pane]
       changed = true
     }
@@ -206,7 +230,10 @@ function profileOf(e: WakeEntry): WakeProfile | undefined {
   return e.profileDir ? { dir: e.profileDir, ...(e.profile ? { id: e.profile } : {}) } : undefined
 }
 
-/** A sleeping session as `GET /sleeping` lists it: the old router's fields, then its profile. */
+/**
+ * A sleeping session as `GET /sleeping` lists it: the old router's fields, then its profile. One
+ * whose pane wake closed (#204) has `pane` '' (it wakes in a new tab) and its folder in `cwd`.
+ */
 export interface SleepingAnswer {
   name: string
   pane: string
@@ -215,14 +242,34 @@ export interface SleepingAnswer {
   slept_at: string
   exited: boolean
   profile?: WakeProfile
+  cwd?: string
 }
 
-/** Sessions put to sleep by the reaper or exited by the user whose pane is still there at a shell prompt. */
+/**
+ * Sessions put to sleep by the reaper or exited by the user whose pane is still there at a shell
+ * prompt, and those put to sleep whose pane wake closed (#204), their workspace's label as herdr
+ * has it now, else as it was.
+ */
 export function sleepingOf(snap: SeenSnapshot, sessions: WakeSessions): SleepingAnswer[] {
   const panes = new Map(snap.panes.map(p => [p.pane_id, p]))
   const labels = new Map(snap.workspaces.map(w => [w.workspace_id, w.label]))
   const list: SleepingAnswer[] = []
   for (const [pane, s] of Object.entries(sessions)) {
+    if (isFreed(s)) {
+      const profile = profileOf(s)
+      list.push({
+        name: s.name || s.title || '',
+        pane: '',
+        session: s.session,
+        workspace:
+          (s.freed.workspace === undefined ? undefined : labels.get(s.freed.workspace)) ?? s.freed.workspaceLabel ?? '',
+        slept_at: iso(s.slept_at),
+        exited: false,
+        ...(profile ? { profile } : {}),
+        cwd: s.cwd ?? '',
+      })
+      continue
+    }
     const p = panes.get(pane)
     if (!s.slept_at || !p || p.agent) continue
     const profile = profileOf(s)
@@ -280,13 +327,20 @@ export function awakeOf(
     })
 }
 
-/** A session found in the file: its entry, its pane, and whether Claude runs there now. */
+/**
+ * A session found in the file: its entry, its pane, and whether Claude runs there now. For a
+ * sleeper whose pane wake closed (#204), `pane` is its entry's key, its session id.
+ */
 export interface Found extends WakeEntry {
   pane: string
   live: boolean
 }
 
-/** By name (a trailing " [hex]" dropped), pane id or session id, any case, among panes herdr still has. */
+/**
+ * By name (a trailing " [hex]" dropped), pane id or session id, any case, among panes herdr still
+ * has; else a sleeper whose pane wake closed (#204), by name or session id (its old pane's id may
+ * be another pane's after herdr starts over).
+ */
 export function findSession(target: unknown, snap: SeenSnapshot, sessions: WakeSessions): Found | undefined {
   const t = String(target ?? '')
     .replace(/\s*\[[0-9a-f]+\]\s*$/i, '')
@@ -295,8 +349,11 @@ export function findSession(target: unknown, snap: SeenSnapshot, sessions: WakeS
   const panes = new Map(snap.panes.map(p => [p.pane_id, p]))
   for (const [pane, s] of Object.entries(sessions)) {
     const p = panes.get(pane)
-    if (p && [s.name, pane, s.session].some(v => v && v.toLowerCase() === t))
+    if (p && !isFreed(s) && [s.name, pane, s.session].some(v => v && v.toLowerCase() === t))
       return { ...s, pane, live: p.agent === 'claude' }
+  }
+  for (const [key, s] of Object.entries(sessions)) {
+    if (isFreed(s) && [s.name, s.session].some(v => v && v.toLowerCase() === t)) return { ...s, pane: key, live: false }
   }
   return undefined
 }

@@ -77,8 +77,9 @@ export function createHerdrWake(
     const res = await fetchFn(`${url}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      // A pi session by its session file (#178): its pane may be gone, or another session's now.
-      body: JSON.stringify({ target: isPiItem(item) ? item.session : item.pane }),
+      // A pi session by its session file (#178): its pane may be gone, or another session's now. A
+      // Claude session without one sleeps where wake closed its pane (#204): by its session id.
+      body: JSON.stringify({ target: isPiItem(item) ? item.session : item.pane || item.session }),
       signal: AbortSignal.timeout(timeoutMs),
     })
     const body: unknown = await res.json()
@@ -107,7 +108,9 @@ export function createHerdrWake(
         const r = await post('/wake', item, WAKE_TIMEOUT_MS)
         if (!r.ok)
           return { ok: false, error: t('err.wake', { name: item.name, why: String(r.error ?? t('err.noAnswer')) }) }
-        return isPiItem(item) && typeof r.pane === 'string' && r.pane ? { ok: true, pane: r.pane } : { ok: true }
+        // Where it woke: a pi session's pane, or a new tab for one whose pane was gone (#178, #204).
+        const pane = typeof r.pane === 'string' && r.pane && (isPiItem(item) || r.pane !== item.pane) ? r.pane : null
+        return pane ? { ok: true, pane } : { ok: true }
       } catch (err) {
         return { ok: false, error: t(NAMED[who].down, { why: messageOf(err) }) }
       }

@@ -27,6 +27,14 @@ import type { Deps } from './deps.ts'
 
 const numberOf = (value: unknown): number | undefined => (typeof value === 'number' ? value : undefined)
 
+/** The panes its card says wake closed as it went to sleep (#204, services/wake/follow.ts), when it has any. */
+const formerPanes = (card: Card): { formerPanes?: string[] } => {
+  const panes = Array.isArray(card.panes)
+    ? card.panes.filter((p): p is string => typeof p === 'string' && p !== '')
+    : []
+  return panes.length ? { formerPanes: panes } : {}
+}
+
 /**
  * The column the user dragged the card to, or ''. It holds until the session works again (the
  * user or another session wrote to it); a card dragged during a turn (card.pinBusy) lands there
@@ -290,6 +298,7 @@ export async function collect(
       // a fork's card says whose fork it is, and when it started
       ...(typeof card.forkOf === 'string' && { fork: { of: card.forkOf, at: Number(card.forkAt) || 0 } }),
       transcript: path,
+      ...formerPanes(card), // panes wake closed as it went to sleep (#204), for the links
       ...sessionProfile(card, profiles.list), // its profile, as its hooks reported it
       claudeRoot: home?.root ?? null, // the folder its records were read from
     })
@@ -352,16 +361,17 @@ export async function collect(
     const pane = panes.get(s.pane ?? '')
     // One from wake's session file only where herdr shows its pane as a shell: not one whose pane
     // runs Claude (or another agent) again, nor one whose pane is gone. Its workspace is herdr's.
-    if (s.fromFile && (!pane || pane.agent)) continue
+    // One whose pane wake closed (#204) has none: it wakes in a new tab, its workspace the file's.
+    if (s.fromFile && s.pane && (!pane || pane.agent)) continue
     seen.add(s.session)
     add({
       key: s.session,
       session: s.session,
-      pane: s.pane ?? null,
-      workspace: s.fromFile ? (labels.get(pane?.workspace_id ?? '') ?? '') : (s.workspace ?? ''),
+      pane: s.pane || null,
+      workspace: s.fromFile && s.pane ? (labels.get(pane?.workspace_id ?? '') ?? '') : (s.workspace ?? ''),
       agent: 'claude',
       name: s.name || s.session.slice(0, 8),
-      cwd: pane?.cwd ?? '',
+      cwd: pane?.cwd ?? s.cwd ?? '',
       status: 'sleeping',
       sleeping: true,
       focused: false,

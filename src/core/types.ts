@@ -229,6 +229,8 @@ export interface Item {
   column: ColumnId
   attention: Attention
   sleeping?: boolean
+  /** Panes it had before, closed by wake as it went to sleep (#204), from its card: the board's links find it by them. */
+  formerPanes?: string[]
   /** A sleeper read from the new wake's session file, not answered by a wake (integrations/wake.ts); absent for the others. */
   fromFile?: true
   agent?: string

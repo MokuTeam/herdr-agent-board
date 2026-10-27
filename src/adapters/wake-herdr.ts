@@ -78,6 +78,10 @@ export interface WakeHerdr {
   screen(pane: string): Promise<string>
   /** `agent read <pane> --source recent --lines 40 --ansi`: the input box with its colours. */
   inputBox(pane: string): Promise<string>
+  /** `pane close <pane>`. */
+  closePane(pane: string): Promise<void>
+  /** `tab close <tab>`: its panes with it, and its workspace when it was the last one there. */
+  closeTab(tab: string): Promise<void>
 }
 
 const codeOf = (err: unknown): unknown => (isRecord(err) ? err.code : undefined)
@@ -119,4 +123,10 @@ export const cliWakeHerdr: WakeHerdr = {
   },
   screen: pane => herdrText(['pane', 'read', pane, '--source', 'visible']),
   inputBox: pane => herdrText(['agent', 'read', pane, '--source', 'recent', '--lines', '40', '--ansi']),
+  closePane: async pane => {
+    await herdr(['pane', 'close', pane])
+  },
+  closeTab: async tab => {
+    await herdr(['tab', 'close', tab])
+  },
 }
