@@ -1380,22 +1380,29 @@ the others `topic:<workspace> / <tab>`, and herdr opens a new tab at the end of 
   panes are beside the session; with a pane of yours beside it, only the session's pane goes and
   the tab stays;
 - a workspace's only tab, nothing but sidebars beside the session: the tab goes, and the workspace
-  with it;
+  with it, unless another sleeper whose pane was closed comes back to that workspace (whichever woke
+  first would take its first tab and the other's topic);
 - the first tab of a workspace with other tabs, or one with a pane of yours beside the session,
   keeps its pane as before, labelled `💤 <name>` with the wake line typed at its prompt: closing it
   would move the session, and the tab after it, to other topics.
 
-Only a pane at its shell's prompt is closed, nothing started in it since Claude left; a program
-there keeps it. Sessions already asleep in a kept pane when this came in (labelled `💤 <name>` by
-wake, at their prompt) get it closed once, at wake's first look after it starts, by the same rule;
-one you `/exit` yourself keeps its pane (below). `"closePanes": false` in the `wake` section keeps
-every pane as before. The session's card keeps the panes it had, so the board's links still find
-the session a `spawn-agent` started in one of them, and its reminders follow it to the pane it
-wakes in.
+Only a pane at its shell's prompt is closed: nothing started in it since Claude left, its screen's
+last line an empty prompt or the session's wake line, and nothing in its tab focused (the tab you
+are looking at stays). Sessions already asleep in a kept pane when this came in (labelled
+`💤 <name>` by wake) get it closed once by the same rule, at wake's first look with this on; then
+`wake-tidy.json` in the state folder says it is done, and no later start does it again. One you
+`/exit` yourself keeps its pane (below). The session's card keeps the panes it had, so the board's
+links still find the session a `spawn-agent` started in one of them, and its reminders follow it
+to the pane it wakes in.
 
-**Waking** a session whose pane was given back opens a new tab in its workspace (one of the same
-label when the workspace was renamed; a new workspace of its label when that is gone too), in its
-folder, under its tab's label, and runs `board resume <id> --profile <id>` there. One in a kept pane
+What this changes for every setup: a woken session's tab comes back at the end of its workspace
+(a whole workspace at the end of herdr's list), not where it was, since herdr's command line cannot
+move a tab. `"closePanes": false` in the `wake` section keeps every pane, and the old behaviour, as
+before; the panes given back by then wake in new tabs all the same.
+
+**Waking** a session whose pane was given back opens a new tab in its workspace (while herdr has it
+under the label it had, else one of that label; a new workspace of its label when there is none),
+in its folder, under its tab's label, and runs `board resume <id> --profile <id>` there. One in a kept pane
 gets that line typed into its pane, after clearing what is at its prompt (Esc for PowerShell and
 cmd, Ctrl+U for bash, zsh, fish and sh, by the shell herdr says runs there). Either way wake waits
 for Claude to come up (`wakeTimeoutSec`, 120), answering the development-channels confirmation if

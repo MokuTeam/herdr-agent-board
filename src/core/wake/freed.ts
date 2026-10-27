@@ -9,11 +9,14 @@
 // topic (core/wake/topics.ts): a workspace's first tab is `topic:<workspace>`, the others
 // `topic:<workspace> / <tab>`. A tab that is not its workspace's first comes back as another tab
 // under its label; a workspace's only tab, alone in it but for sidebars, comes back as a new
-// workspace's first. The first tab of a workspace with other tabs, or one with the user's panes
-// beside the sleeper, keeps its pane, as before: closing it would move its session, and the next
-// tab, to other topics.
+// workspace's first, unless another sleeper whose pane was closed comes back to that workspace
+// (whichever woke first would take its first tab, and the other's topic with it). The first tab of
+// a workspace with other tabs, or one with the user's panes beside the sleeper, keeps its pane, as
+// before: closing it would move its session, and the next tab, to other topics. Nor is anything
+// closed in the tab the user is looking at (herdr's focused pane).
 //
-// Pure: the caller hands in herdr's snapshot, and closes only a pane at its shell's prompt.
+// Pure: the caller hands in herdr's snapshot and what the screen shows, and closes only a pane at
+// its shell's prompt.
 import { isSidebarPane } from '../board-pane.ts'
 import { keyFor, type TopicSnapshot, workspaceTabs } from './topics.ts'
 
@@ -39,11 +42,14 @@ interface FreedPane {
   workspace_id?: string
   agent?: string
   cwd?: string
+  label?: string
+  focused?: boolean
   tokens?: Record<string, unknown>
 }
 
 export interface FreedSnapshot extends TopicSnapshot {
   panes: FreedPane[]
+  focused_pane_id?: string
 }
 
 /** What freeing a pane takes: herdr's close (the tab, or the pane alone), and what the sleeper keeps. */
@@ -52,21 +58,38 @@ export interface FreePlan {
   place: FreedPlace
 }
 
+/** What else freePlan goes by. */
+export interface FreeRules {
+  /** The label the pane must still have (a pane kept before, taken back: `💤 <name>`). */
+  label?: string
+  /** Whether a sleeper whose pane was closed comes back to this workspace (by its id or label). */
+  held?(workspace: { workspace_id: string; label?: string }): boolean
+}
+
+/**
+ * herdr-sidebar's pane: its metadata tokens, or, once they have expired, its label with no agent in
+ * it. That plugin adds one to every tab.
+ */
+const isSidebar = (p: FreedPane): boolean => isSidebarPane(p) || (!p.agent && p.label === 'Sidebar')
+
 /**
  * How to give the sleeper's pane back, or null to leave it as it is: herdr no longer has it, an
- * agent runs in it, herdr does not say which tab and workspace it is in, or it could not come back
- * in the same Telegram topic (see the top of the file).
+ * agent runs in it, its label is not `rules.label`, the user looks at its tab, herdr does not say
+ * which tab and workspace it is in, or it could not come back in the same Telegram topic (see the
+ * top of the file).
  */
-export function freePlan(snap: FreedSnapshot, pane: string, now: number): FreePlan | null {
+export function freePlan(snap: FreedSnapshot, pane: string, now: number, rules: FreeRules = {}): FreePlan | null {
   const p = snap.panes.find(x => x.pane_id === pane)
-  if (!p || p.agent) return null
+  if (!p || p.agent || (rules.label !== undefined && p.label !== rules.label)) return null
   const tab = snap.tabs.find(t => t.tab_id === p.tab_id)
   const ws = snap.workspaces.find(w => w.workspace_id === (tab?.workspace_id ?? p.workspace_id))
   if (!tab || !ws) return null
+  const inTab = snap.panes.filter(x => x.tab_id === tab.tab_id)
+  if (inTab.some(x => x.focused || x.pane_id === snap.focused_pane_id)) return null
   const tabs = workspaceTabs(snap, ws.workspace_id)
   const index = tabs.findIndex(t => t.tab_id === tab.tab_id)
-  const alone = snap.panes.filter(x => x.tab_id === tab.tab_id).every(x => x.pane_id === pane || isSidebarPane(x))
-  if (index < 0 || (index === 0 && !(alone && tabs.length === 1))) return null
+  const alone = inTab.every(x => x.pane_id === pane || isSidebar(x))
+  if (index < 0 || (index === 0 && !(alone && tabs.length === 1 && !rules.held?.(ws)))) return null
   return {
     close: alone ? { tab: tab.tab_id } : { pane },
     place: {
@@ -78,6 +101,24 @@ export function freePlan(snap: FreedSnapshot, pane: string, now: number): FreePl
       at: now,
     },
   }
+}
+
+/** The end of a shell prompt: PowerShell's and cmd's `>`, sh's `$` and `#`, zsh's `%`, themes' `❯` and `λ`. */
+const PROMPT_END = /[>$#%❯λ]\s*$/
+
+/**
+ * Whether a shell's visible screen (`herdr pane read`) shows it idle as a sleep leaves it: its last
+ * line an empty prompt, or one that holds the session's id (the wake line typed for it, wake's or
+ * the old plugin's). Anything else typed there is the user's, and the pane is left alone.
+ */
+export function promptIdle(screen: string, session: string): boolean {
+  const last = screen
+    .split('\n')
+    .map(l => l.trimEnd())
+    .filter(Boolean)
+    .pop()
+  if (last === undefined) return false
+  return (session !== '' && last.includes(session)) || PROMPT_END.test(last)
 }
 
 const record = (v: unknown): Record<string, unknown> | null =>

@@ -16,9 +16,10 @@
 // A Claude session put to sleep gives its pane back where it can (#204, core/wake/freed.ts): its
 // entry then goes under its session id, with where it comes back; a wake opens a new tab there and
 // moves the entry to that pane before it wakes it as in its own. Sessions asleep in a pane kept
-// before that get it closed once, at wake's first look after it starts (`tidy`), by the same rule.
-// One put in the archive meanwhile is forgotten.
-import { readFileSync } from 'node:fs'
+// before that get it closed once, at wake's first look with closePanes on (`tidy`, its marker
+// `wake-tidy.json` beside the session file), by the same rule. One put in the archive meanwhile is
+// forgotten.
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { archivedFiles, getArchived, isArchived } from '../../adapters/archive-store.ts'
@@ -120,6 +121,8 @@ export interface WakeEngineDeps {
   follow?: Follow
   /** Of these session ids, those in the board's archive; default: the archive's records. */
   archived?(sessions: readonly string[]): Set<string>
+  /** The marker of the sleepers in kept panes given them back once (#204); default: `wake-tidy.json` beside the session file. */
+  tidyFile?: string
 }
 
 export type TargetAnswer = { ok: true; pane: string; name: string; already?: true } | { ok: false; error: string }
@@ -281,8 +284,9 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
   const piGoing = new Set<string>()
   const tabOps: TabOps = deps.tabs ?? piOps
   const follow: Follow = deps.follow ?? followFiles
-  /** Sessions asleep in a pane kept before #204 are given it back once, at the first look (tidy). */
-  let tidied = false
+  /** Sessions asleep in a pane kept before #204 are given it back once (tidy), then this file says so. */
+  const tidyFile = deps.tidyFile ?? join(dirname(deps.sessionsFile), 'wake-tidy.json')
+  let tidied = existsSync(tidyFile)
 
   const archived = (ids: readonly string[]): Set<string> => {
     if (deps.archived) return deps.archived(ids)
@@ -402,7 +406,11 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     for (const id of gone) deps.log(`${id} is in the archive: no longer asleep`)
   }
 
-  /** The pane's sleeper given its pane back (#204): its entry under its session id, with where it comes back. */
+  /**
+   * The pane's sleeper about to be given its pane back (#204): its entry under its session id, with
+   * where it comes back, saved before the close; `unfreed` puts it back under its pane when the pane
+   * stays after all.
+   */
   function freed(pane: string, place: FreedPlace): void {
     const entry = sessions[pane]
     if (!entry) return
@@ -412,22 +420,60 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     followed(() => follow.paneClosed(entry.session, pane))
   }
 
+  function unfreed(pane: string, session: string): void {
+    const entry = sessions[session]
+    if (!isFreed(entry)) return
+    const { [session]: _gone, ...rest } = sessions
+    const { freed: _place, ...kept } = entry
+    sessions = { ...rest, [pane]: kept }
+    save()
+  }
+
+  /** Marks that move the pane's sleeper under its session id before the close, and back if the pane stays. */
+  const freeMarks = (pane: string, session: string) => ({
+    freeing: (place: FreedPlace) => freed(pane, place),
+    kept: () => unfreed(pane, session),
+  })
+
+  /**
+   * What freeing a pane goes by besides the snapshot: a workspace another sleeper whose pane was
+   * closed comes back to is not closed with its last tab (core/wake/freed.ts).
+   */
+  const held = (ws: { workspace_id: string; label?: string }): boolean =>
+    Object.values(sessions).some(
+      e => isFreed(e) && (e.freed.workspace === ws.workspace_id || (!!ws.label && e.freed.workspaceLabel === ws.label)),
+    )
+
   /**
    * Sessions asleep in a pane wake left them in before #204 (put to sleep, not exited by the user):
    * that pane closed, as a sleep closes it now, while it is as wake left it (labelled `💤 <name>`, at
-   * its shell's prompt) and core/wake/freed.ts allows it. Once per start, with closePanes on.
+   * its shell's prompt, nothing typed there but its wake line) and core/wake/freed.ts allows it.
+   * Once, at the first look with closePanes on: then its marker is written, and no wake start or
+   * switch does it again. Counted under way (busy) while it runs, so a code change waits for it.
    */
   async function tidy(snap: HerdrSnapshot): Promise<void> {
     if (tidied || deps.readOnly || !deps.settings().closePanes) return
     tidied = true
-    for (const [pane, s] of Object.entries(sessions)) {
-      if (!s.slept_at || s.exited || isFreed(s) || !SESSION_ID.test(s.session)) continue
-      const p = snap.panes.find(x => x.pane_id === pane)
-      if (!p || p.agent || p.label !== `💤 ${s.name}`) continue
-      const place = await withPane(pane, () => freePane(deps.herdr, pane, now())).catch(() => null)
-      if (!place) continue
-      freed(pane, place)
-      deps.log(`${s.name}: closed the pane ${pane} it slept in`)
+    await during(async () => {
+      for (const [pane, s] of Object.entries(sessions)) {
+        if (!s.slept_at || s.exited || isFreed(s) || !SESSION_ID.test(s.session)) continue
+        const p = snap.panes.find(x => x.pane_id === pane)
+        const label = `💤 ${s.name}`
+        if (!p || p.agent || p.label !== label) continue
+        const rules = { label, held, now: now(), log: deps.log }
+        const place = await withPane(pane, () =>
+          freePane(deps.herdr, { pane, session: s.session }, freeMarks(pane, s.session), rules),
+        ).catch(err => {
+          deps.log(`${s.name}: the pane ${pane} it slept in could not be closed: ${messageOf(err)}`)
+          return null
+        })
+        if (place) deps.log(`${s.name}: closed the pane ${pane} it slept in`)
+      }
+    })
+    try {
+      writeFileSync(tidyFile, `${JSON.stringify({ at: now() })}\n`)
+    } catch (err) {
+      deps.log(`could not save ${tidyFile}: ${messageOf(err)}`)
     }
   }
 
@@ -637,7 +683,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
         const entry = sessions[pane]
         if (entry) put(pane, { ...entry, slept_at: at })
       },
-      freed: place => freed(pane, place),
+      ...freeMarks(pane, s.session),
       stayed: () => {
         const entry = sessions[pane]
         if (!entry) return
@@ -649,7 +695,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       const profile = lineProfile(set, s.dir)
       return await putToSleep(deps.herdr, { pane, session: s.session, name: s.name, profile }, marks, {
         ...timing,
-        free: deps.settings().closePanes,
+        free: deps.settings().closePanes && { held },
       })
     } finally {
       going.delete(pane)

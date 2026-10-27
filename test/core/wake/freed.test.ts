@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { asFreedPlace, type FreedSnapshot, freePlan } from '../../../src/core/wake/freed.ts'
+import { asFreedPlace, type FreedSnapshot, freePlan, promptIdle } from '../../../src/core/wake/freed.ts'
 
 const now = Date.parse('2026-10-27T12:00:00Z')
 const PROJECT = 'C:\\Work\\Проект x 50%'
@@ -84,4 +84,50 @@ test('a place as the session file has it; what does not read as one is none', ()
   expect(asFreedPlace({ pane: 'w1:p2', topic: '', at: now })).toEqual({ pane: 'w1:p2', topic: '', at: now })
   for (const bad of [null, 'x', [], { ...place, pane: '' }, { ...place, at: 'now' }, { ...place, topic: 1 }])
     expect(asFreedPlace(bad)).toBeNull()
+})
+
+test('the tab the user looks at is left as it is, whichever of its panes has the focus', () => {
+  const focused = snap()
+  focused.focused_pane_id = 't2-side'
+  expect(freePlan(focused, 't2-claude', now)).toBeNull()
+  const flagged = snap()
+  flagged.panes = flagged.panes.map(p => (p.pane_id === 't2-claude' ? { ...p, focused: true } : p))
+  expect(freePlan(flagged, 't2-claude', now)).toBeNull()
+  // Another tab focused: this one goes.
+  const elsewhere = snap()
+  elsewhere.focused_pane_id = 't1-claude'
+  expect(freePlan(elsewhere, 't2-claude', now)?.close).toEqual({ tab: 't2' })
+})
+
+test('a pane taken back later must still have its 💤 label; a workspace another sleeper comes back to keeps its last tab', () => {
+  const s = snap({ tabs: ['t1'] })
+  s.panes = s.panes.map(p => (p.pane_id === 't1-claude' ? { ...p, label: '💤 Billing' } : p))
+  expect(freePlan(s, 't1-claude', now, { label: '💤 Billing' })?.close).toEqual({ tab: 't1' })
+  expect(freePlan(s, 't1-claude', now, { label: '💤 Other' })).toBeNull()
+  expect(freePlan(s, 't1-claude', now, { held: ws => ws.label === 'Main 100%' })).toBeNull()
+  // Not its last tab: the workspace stays whatever comes back to it.
+  expect(freePlan(snap(), 't2-claude', now, { held: () => true })?.close).toEqual({ tab: 't2' })
+})
+
+test('a sidebar whose tokens have expired, known by its label, is still nothing of the user’s', () => {
+  const s = snap()
+  s.panes = s.panes.map(p => (p.pane_id === 't2-side' ? { ...shell('t2-side', 't2'), label: 'Sidebar' } : p))
+  expect(freePlan(s, 't2-claude', now)?.close).toEqual({ tab: 't2' })
+})
+
+test('promptIdle: an empty prompt of any shell, or the wake line typed for this session; anything else is the user’s', () => {
+  const SID = '0f3c9a7e-1b2d-4e5f-8a9b-0c1d2e3f4a5b'
+  for (const screen of [
+    'PS C:WorkПроект x 50%> ',
+    'out\nuser@box:~/w$ ',
+    'C:Work>',
+    'host% ',
+    '~/w ❯ ',
+    `PS C:w> board resume ${SID} --profile work`,
+    `$ claude-tg --resume ${SID}`,
+    `claude --resume ${SID}\n\n`,
+  ])
+    expect(promptIdle(screen, SID)).toBe(true)
+  for (const screen of ['', '\n\n', 'PS C:w> cd ..', '$ ls -la', 'PS C:w> board resume 6a7b8c9d-0e1f'])
+    expect(promptIdle(screen, SID)).toBe(false)
 })

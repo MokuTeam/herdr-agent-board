@@ -10,7 +10,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { WakeHerdr } from '../../adapters/wake-herdr.ts'
 import { inputDraft } from '../../core/dialogs/input-box.ts'
-import { type FreedPlace, freePlan } from '../../core/wake/freed.ts'
+import { type FreedPlace, type FreeRules, freePlan, promptIdle } from '../../core/wake/freed.ts'
 import { clearKeyFor, plainProfile, wakeLine } from '../../core/wake/rules.ts'
 import { isChannelsWarning, isExitTasksDialog, isTrustDialog } from '../../core/wake/screens.ts'
 
@@ -180,21 +180,48 @@ export interface SleepMarks {
   slept(now: number): void
   /** It stays up (background tasks, did not exit in time, herdr failed on the way). */
   stayed(): void
-  /** Asleep, and its pane closed (#204): where it comes back. */
-  freed?(place: FreedPlace): void
+  /** Its pane is about to be closed (#204): keep it as asleep there, by its session id. */
+  freeing?(place: FreedPlace): void
+  /** Its pane is still there after the close: back under its pane. */
+  kept?(): void
 }
+
+/** What freePane tells its caller: the record moved before the close, and back if the pane stays. */
+export type FreeMarks = Required<Pick<SleepMarks, 'freeing' | 'kept'>>
 
 /**
  * Closes a sleeper's pane, or its tab when only herdr-sidebar's panes are beside it, where
- * core/wake/freed.ts freePlan allows: only while the pane is at its shell's prompt, nothing started
- * in it. Where it comes back, once herdr no longer has the pane; null when it is left as it is.
+ * core/wake/freed.ts freePlan allows on a snapshot taken right before the close: only while the
+ * pane is at its shell's prompt with nothing started in it, and its screen shows an empty prompt or
+ * the session's wake line (promptIdle). `freeing` comes before the close, so a wake that stops
+ * meanwhile keeps the sleeper; a close that fails may have closed all the same, so herdr is asked
+ * after it: the pane still there, `kept` follows and null comes back; gone, or herdr not saying,
+ * where it comes back.
  */
-export async function freePane(io: WakeHerdr, pane: string, now: number): Promise<FreedPlace | null> {
-  const plan = freePlan(await io.snapshot(), pane, now)
-  if (!plan || !(await atPrompt(io, pane))) return null
-  if ('tab' in plan.close) await io.closeTab(plan.close.tab)
-  else await io.closePane(plan.close.pane)
-  return (await io.pane(pane)) ? null : plan.place
+export async function freePane(
+  io: WakeHerdr,
+  target: { pane: string; session: string },
+  marks: FreeMarks,
+  o: FreeRules & { now: number; log(text: string): void },
+): Promise<FreedPlace | null> {
+  const { pane } = target
+  if (!(await atPrompt(io, pane)) || !promptIdle(await io.screen(pane), target.session)) return null
+  const plan = freePlan(await io.snapshot(), pane, o.now, o)
+  if (!plan) return null
+  marks.freeing(plan.place)
+  try {
+    if ('tab' in plan.close) await io.closeTab(plan.close.tab)
+    else await io.closePane(plan.close.pane)
+  } catch (err) {
+    o.log(`closing ${pane}: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  const still = await io.pane(pane).then(
+    p => p !== null,
+    () => false,
+  )
+  if (!still) return plan.place
+  marks.kept()
+  return null
 }
 
 /** Types /exit and waits for Claude to leave: 'slept', 'tasks' (Esc pressed on that dialog) or 'up'. */
@@ -218,8 +245,9 @@ async function exitClaude(
 }
 
 /**
- * /exit an idle session, then give its pane back (`free`, freePane: `freed` follows), or leave it
- * marked `💤 <name>` with the wake line typed at its prompt, not run. Holds the pane (withPane)
+ * /exit an idle session, then give its pane back (`free`, freePane: `freeing` follows, and `kept`
+ * when the pane stays), or leave it marked `💤 <name>` with the wake line typed at its prompt, not
+ * run. Holds the pane (withPane)
  * itself, or joins its caller's hold of it. Refuses (false, no /exit) unless the session could be
  * woken by that line, and the pane holds Claude with this session, idle or done, with an empty
  * input box it can read. After `going`, `slept` or `stayed` follows, even when herdr fails.
@@ -228,7 +256,7 @@ export async function putToSleep(
   io: WakeHerdr,
   target: { pane: string; session: string; name: string; profile?: string | null },
   marks: SleepMarks,
-  t?: Timing & { free?: boolean },
+  t?: Timing & { free?: FreeRules | false },
 ): Promise<boolean> {
   const found = lineFor(target.session, target.profile)
   if ('error' in found) return false
@@ -258,12 +286,16 @@ export async function putToSleep(
     }
     marks.slept(c.now())
     if (t?.free) {
-      const place = await freePane(io, pane, c.now()).catch(err => {
+      const free = { freeing: marks.freeing ?? (() => {}), kept: marks.kept ?? (() => {}) }
+      const place = await freePane(io, { pane, session: target.session }, free, {
+        ...t.free,
+        now: c.now(),
+        log: c.log,
+      }).catch(err => {
         c.log(`${name}: its pane ${pane} could not be closed: ${err instanceof Error ? err.message : String(err)}`)
         return null
       })
       if (place) {
-        marks.freed?.(place)
         c.log(`put ${name} to sleep, its pane ${pane} closed`)
         return true
       }

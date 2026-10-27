@@ -3,7 +3,7 @@
 // engine against the in-memory fake herdr, a fake clock, a temp home with a Work profile, and fake
 // new tabs; what follows the session from pane to pane recorded.
 import { expect, test } from 'bun:test'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createProfileHomes } from '../../src/adapters/profile-homes.ts'
 import { findProfileDirs } from '../../src/adapters/profiles.ts'
@@ -20,6 +20,8 @@ const PROJECT = process.platform === 'win32' ? 'C:\\Work\\Проект x 50%' : 
 const HOUR = 3_600_000
 const RULE = `\x1b[38;2;136;136;136m${'─'.repeat(60)}\x1b[0m`
 const EMPTY_BOX = ['● done', '', RULE, `❯ \x1b[2mTry "fix the tests"\x1b[0m`, RULE].join('\n')
+/** What a pane shows once Claude has left: its resume hint, then the shell's empty prompt. */
+const SHELL_SCREEN = `Resume this session with:\nclaude --resume ${SID}\nPS ${PROJECT}> `
 
 const sidebar = (pane: string, tab: string, ws = 'w1'): FakePane & { tokens: Record<string, string> } => ({
   pane_id: pane,
@@ -74,6 +76,7 @@ function world(o: { panes?: FakePane[]; sessions?: (work: string) => WakeSession
       { tab_id: 't2', workspace_id: 'w1', label: 'Billing', number: 2 },
     ],
     inputBoxes: Object.fromEntries(panes.map(p => [p.pane_id, EMPTY_BOX])),
+    screens: Object.fromEntries(panes.map(p => [p.pane_id, SHELL_SCREEN])),
   })
   const opened: string[][] = []
   let next = 1
@@ -101,6 +104,7 @@ function world(o: { panes?: FakePane[]; sessions?: (work: string) => WakeSession
   const follows: string[][] = []
   const set = profileSet(mergeProfiles(undefined, findProfileDirs(home), home, claude).list, claude)
   const settings = wakeConfig({ enabled: true, ...(o.closePanes === false && { closePanes: false }) })
+  const tidyFile = join(dir, 'state', 'wake-tidy.json')
   const clock = { at: Date.now() }
   const log: string[] = []
   const archivedIds = new Set<string>()
@@ -123,8 +127,9 @@ function world(o: { panes?: FakePane[]; sessions?: (work: string) => WakeSession
       paneOpened: (s, p) => void follows.push(['opened', s, p]),
     },
     archived: ids => new Set(ids.filter(id => archivedIds.has(id))),
+    tidyFile,
   }
-  return { dir, home, work, file, io, deps, opened, follows, log, clock, archivedIds }
+  return { dir, home, work, file, io, deps, opened, follows, log, clock, archivedIds, tidyFile, settings }
 }
 
 /** Claude leaves the pane on /exit, its registry entry with it. */
@@ -440,4 +445,130 @@ test('two wakes at once (the board and a SendMessage): one new tab, both told wh
   expect(both.map(r => r.ok && 'pane' in r && r.pane)).toEqual(['w1:new1', 'w1:new1', 'w1:new1'])
   expect(w.opened).toHaveLength(1)
   expect(typed(w.io).filter(c => c[1] === 'run')).toHaveLength(1)
+})
+
+/** A sleep of `pane`'s session, Claude leaving on /exit, its registry entry in Work. */
+async function sleepIn(w: ReturnType<typeof world>, pane: FakePane, session: string, name: string, n: number) {
+  runningSession(w.work, { id: session, name, cwd: PROJECT, n })
+  exitsOnPrompt(w.io, pane, join(w.work, 'sessions', `${n}.json`))
+  return createWakeEngine(w.deps).sleep(session)
+}
+
+test('review: a close that takes effect and then fails (a timeout) keeps the sleeper, by its session id', async () => {
+  const pane = claudePane('w1:p2', 't2', SID)
+  const w = world({ panes: [pane] })
+  const close = w.io.closeTab
+  w.io.closeTab = async tab => {
+    await close(tab)
+    throw new Error('herdr tab close: timed out')
+  }
+  expect(await sleepIn(w, pane, SID, 'Billing', 1)).toMatchObject({ ok: true })
+  expect(Object.keys(readSessions(w.file))).toEqual([SID])
+  expect(readSessions(w.file)[SID]?.freed?.pane).toBe('w1:p2')
+  expect(w.log.some(l => l.includes('timed out'))).toBe(true)
+})
+
+test('review: a close that fails with the pane still there: back under its pane, 💤, its line typed', async () => {
+  const pane = claudePane('w1:p2', 't2', SID)
+  const w = world({ panes: [pane] })
+  w.io.closeTab = async () => {
+    throw new Error('herdr tab close: refused')
+  }
+  expect(await sleepIn(w, pane, SID, 'Billing', 1)).toMatchObject({ ok: true })
+  const saved = readSessions(w.file)
+  expect(Object.keys(saved)).toEqual(['w1:p2'])
+  expect(saved['w1:p2']).not.toHaveProperty('freed')
+  expect(pane.label).toBe('💤 Billing')
+  expect(typed(w.io).at(-1)).toEqual(['pane', 'send-text', 'w1:p2', `board resume ${SID} --profile work`])
+})
+
+test('review: nothing is closed in the tab the user looks at', async () => {
+  const pane = claudePane('w1:p2', 't2', SID)
+  const w = world({ panes: [pane] })
+  const side = w.io.panes.find(p => p.pane_id === 'w1:s2')
+  if (side) side.focused = true
+  expect(await sleepIn(w, pane, SID, 'Billing', 1)).toMatchObject({ ok: true })
+  expect(closes(w.io)).toEqual([])
+  expect(pane.label).toBe('💤 Billing')
+})
+
+test('review: a workspace another sleeper comes back to is not closed with its last tab (the topics would swap)', async () => {
+  const master = claudePane('w1:p1', 't1', SID2)
+  const billing = claudePane('w1:p2', 't2', SID)
+  const w = world({ panes: [master, billing] })
+  // Billing's tab goes: Master's is the workspace's only tab now.
+  expect(await sleepIn(w, billing, SID, 'Billing', 1)).toMatchObject({ ok: true })
+  expect(closes(w.io)).toEqual([['tab', 'close', 't2']])
+  expect(await sleepIn(w, master, SID2, 'Master', 2)).toMatchObject({ ok: true })
+  expect(closes(w.io)).toHaveLength(1)
+  expect(master.label).toBe('💤 Master')
+  expect(Object.keys(readSessions(w.file)).sort()).toEqual([SID, 'w1:p1'].sort())
+})
+
+test('review: alone in its workspace, nobody else coming back there: the tab goes, and the workspace with it', async () => {
+  const pane = claudePane('w1:p1', 't1', SID)
+  const w = world({ panes: [pane] })
+  w.io.tabs.splice(1, 1)
+  w.io.panes.splice(
+    w.io.panes.findIndex(p => p.pane_id === 'w1:s2'),
+    1,
+  )
+  expect(await sleepIn(w, pane, SID, 'Solo', 1)).toMatchObject({ ok: true })
+  expect(closes(w.io)).toEqual([['tab', 'close', 't1']])
+  expect(w.io.workspaces).toEqual([])
+  expect(readSessions(w.file)[SID]?.freed).toMatchObject({ workspaceLabel: 'Main', topic: 'topic:Main' })
+})
+
+test('review: a sidebar whose tokens have expired is still a sidebar: the tab goes with it', async () => {
+  const pane = claudePane('w1:p2', 't2', SID)
+  const w = world({ panes: [pane] })
+  const side = w.io.panes.find(p => p.pane_id === 'w1:s2') as FakePane & { tokens?: unknown }
+  delete side.tokens
+  expect(await sleepIn(w, pane, SID, 'Billing', 1)).toMatchObject({ ok: true })
+  expect(closes(w.io)).toEqual([['tab', 'close', 't2']])
+})
+
+test('review: the tidy leaves a kept shell with something typed in it, runs under way, and is done once for good', async () => {
+  const at = Date.now() - HOUR
+  const typedIn = shellPane('w1:p2', 't2', '💤 Billing')
+  const waking = shellPane('w1:p4', 't4', '💤 Ledger')
+  const SID3 = '1b2c3d4e-5f60-4718-8a9b-c0d1e2f3a4b5'
+  const sessions = () => ({
+    'w1:p2': { session: SID, name: 'Billing', seen_at: at, slept_at: at },
+    'w1:p4': { session: SID3, name: 'Ledger', seen_at: at, slept_at: at },
+  })
+  const w = world({ panes: [typedIn, waking], sessions })
+  w.io.tabs.push({ tab_id: 't4', workspace_id: 'w1', label: 'Ledger', number: 4 })
+  w.io.screens['w1:p2'] = `PS ${PROJECT}> board resume ${SID}\nPS ${PROJECT}> cd ..`
+  w.io.screens['w1:p4'] = `PS ${PROJECT}> board resume ${SID3} --profile work`
+  const engine = createWakeEngine(w.deps)
+  const busy: number[] = []
+  w.io.on(
+    argv => argv[1] === 'close',
+    () => void busy.push(engine.busy()),
+  )
+
+  await engine.remember()
+  expect(closes(w.io)).toEqual([['tab', 'close', 't4']])
+  expect(busy).toEqual([1])
+  expect(existsSync(w.tidyFile)).toBe(true)
+  // Wake started again (a code change): not again, even for a pane that would go now.
+  w.io.screens['w1:p2'] = `PS ${PROJECT}> `
+  await createWakeEngine(w.deps).remember()
+  expect(closes(w.io)).toHaveLength(1)
+})
+
+test('review: with closePanes off the tidy waits, unmarked, until it is turned on', async () => {
+  const at = Date.now() - HOUR
+  const w = world({
+    closePanes: false,
+    panes: [shellPane('w1:p2', 't2', '💤 Billing')],
+    sessions: () => ({ 'w1:p2': { session: SID, name: 'Billing', seen_at: at, slept_at: at } }),
+  })
+  await createWakeEngine(w.deps).remember()
+  expect(existsSync(w.tidyFile)).toBe(false)
+  const on = { ...w.deps, settings: () => wakeConfig({ enabled: true }) }
+  await createWakeEngine(on).remember()
+  expect(closes(w.io)).toEqual([['tab', 'close', 't2']])
+  expect(existsSync(w.tidyFile)).toBe(true)
 })

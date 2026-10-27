@@ -32,12 +32,16 @@ export interface TabSnapshot {
   workspaces: { workspace_id: string; label?: string }[]
 }
 
-/** The workspace a new tab goes to: the sleeper's own by id and label, else by label, else by id; none: a new one. */
+/**
+ * The workspace a new tab goes to: the sleeper's own by id, while its label is the one it had (or
+ * either is not known: herdr gives an id out again after it starts over), else one of that label;
+ * none: a new one.
+ */
 export function workspaceFor(snap: TabSnapshot, s: Pick<TabPlace, 'workspace' | 'workspaceLabel'>): string | null {
   const byId = snap.workspaces.find(w => w.workspace_id === s.workspace)
+  if (byId && (!s.workspaceLabel || !byId.label || byId.label === s.workspaceLabel)) return byId.workspace_id
   const byLabel = s.workspaceLabel ? snap.workspaces.find(w => w.label === s.workspaceLabel) : undefined
-  if (byId && (!s.workspaceLabel || byId.label === s.workspaceLabel)) return byId.workspace_id
-  return (byLabel ?? byId)?.workspace_id ?? null
+  return byLabel?.workspace_id ?? null
 }
 
 /** The new tab's pane, where the sleeper was (see the top of the file). */
