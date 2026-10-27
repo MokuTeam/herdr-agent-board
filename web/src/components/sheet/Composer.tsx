@@ -5,6 +5,7 @@
 // files that go with the next message, and the message box: Enter sends, Shift+Enter breaks the
 // line, the box grows with the text; files come in through the clip or Ctrl+V (a screenshot).
 import { type ClipboardEvent, type KeyboardEvent, useLayoutEffect, useRef, useState } from 'react'
+import type { Item } from '../../../../src/core/types.ts'
 import { pageLog } from '../../api/client.ts'
 import { useActionRow } from '../../hooks/useActionRow.ts'
 import type { ComposerControls } from '../../hooks/useComposer.ts'
@@ -43,6 +44,7 @@ import {
 import { TermIcon } from '../terminal/Terminal.tsx'
 import { AsideToggle, useAsideBox } from './Aside.tsx'
 import { Attachments } from './Attachments.tsx'
+import { SessionMeter } from './SessionMeter.tsx'
 
 /** What the session's buttons do; each gets the button it was pressed on, for what opens from it. */
 export interface SessionButtons {
@@ -71,6 +73,8 @@ export interface SessionButtons {
 
 export interface ComposerProps {
   composer: ComposerControls
+  /** The open session: its context, model and effort show beside the message box. */
+  item?: Item | null
   availability: SheetAvailability
   buttons: HeadButtons
   /** The Terminal button: where the board offers one, with a dot while a shell is open. */
@@ -90,6 +94,7 @@ const MAX_HEIGHT = 180
 
 export function Composer({
   composer,
+  item = null,
   availability: av,
   buttons,
   term = { hidden: false, hasShell: false, title: '' },
@@ -370,6 +375,7 @@ export function Composer({
           <SendIcon />
         </button>
       </form>
+      {item && <SessionMeter key={item.key} item={item} />}
     </footer>
   )
 }

@@ -154,6 +154,7 @@ export const SAMPLES: Record<string, string> = Object.fromEntries(
       [/^\/api\/session\/([^/]+)(?:\/(\w+))?$/, '/api/session/s1/wake'],
       [/^\/api\/session\/([^/]+)\/changes$/, '/api/session/s1/changes'],
       [/^\/api\/session\/([^/]+)\/history$/, '/api/session/s1/history'],
+      [/^\/api\/session\/([^/]+)\/meter$/, '/api/session/s1/meter'],
       [/^\/api\/session\/([^/]+)$/, '/api/session/s1'],
       [/^\/api\/session\/([^/]+)\/helper\/([A-Za-z0-9-]{1,120})$/, '/api/session/s1/helper/h1'],
       [/^\/api\/session\/([^/]+)\/(answer|permit|archive|workspace|fork)$/, '/api/session/s1/permit'],

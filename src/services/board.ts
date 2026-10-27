@@ -65,6 +65,7 @@ interface ContextFile {
   tokens: number | undefined
   usedPercentage: number | undefined
   size: number | undefined
+  model: string | undefined
 }
 
 const contextCache = new Map<string, { mtimeMs: number; data: ContextFile }>() // session -> file
@@ -76,6 +77,7 @@ function asContextFile(value: unknown): ContextFile {
     tokens: numberOf(d.tokens),
     usedPercentage: numberOf(d.usedPercentage),
     size: numberOf(d.size),
+    model: typeof d.model === 'string' && d.model ? d.model : undefined,
   }
 }
 
@@ -87,10 +89,44 @@ interface ContextFill {
   context: number | null
   contextPct: number | null
   contextSize: number | null
+  model: string | null
+  effort: string | null
 }
 
-function contextOf(session: string | null, info: TranscriptInfo): ContextFill {
-  const own: ContextFill = { context: info.context ?? null, contextPct: null, contextSize: null }
+const effortCache = new Map<string, { mtimeMs: number; effort: string | null }>()
+
+/** The effort the session's profile settings give its model now (a /effort writes it there). */
+function effortFromSettings(dir: string | null, model: string | null): string | null {
+  if (!dir) return null
+  const file = join(dir, 'settings.json')
+  const st = statSync(file, { throwIfNoEntry: false })
+  if (!st) return null
+  const key = `${file}|${model ?? ''}`
+  const hit = effortCache.get(key)
+  if (hit && hit.mtimeMs === st.mtimeMs) return hit.effort
+  let effort: string | null = null
+  try {
+    const d = JSON.parse(readFileSync(file, 'utf8'))
+    if (isRecord(d)) {
+      const settings = isRecord(d.modelSettings) ? d.modelSettings : {}
+      const modelSettings = model ? settings[model] : undefined
+      const perModel = isRecord(modelSettings) ? modelSettings.effortLevel : undefined
+      if (typeof perModel === 'string' && perModel) effort = perModel
+      else if (typeof d.effortLevel === 'string' && d.effortLevel) effort = d.effortLevel
+    }
+  } catch {}
+  effortCache.set(key, { mtimeMs: st.mtimeMs, effort })
+  return effort
+}
+
+function contextOf(session: string | null, info: TranscriptInfo, settingsDir: string | null = null): ContextFill {
+  const own: ContextFill = {
+    context: info.context ?? null,
+    contextPct: null,
+    contextSize: null,
+    model: info.model ?? null,
+    effort: info.effort ?? effortFromSettings(settingsDir, info.model ?? null),
+  }
   if (!session) return own
   const file = join(contextDir(), `${session.replace(/[^A-Za-z0-9_-]/g, '_')}.json`)
   const st = statSync(file, { throwIfNoEntry: false })
@@ -111,6 +147,8 @@ function contextOf(session: string | null, info: TranscriptInfo): ContextFill {
     context: (fresh && d.tokens) || own.context,
     contextPct: fresh ? (d.usedPercentage ?? null) : null,
     contextSize: d.size ?? null,
+    model: d.model ?? own.model,
+    effort: own.effort,
   }
 }
 
@@ -238,7 +276,7 @@ export async function collect(
       title: info.title ?? '',
       prompt: info.prompt ?? '',
       lastText: info.lastText ?? '',
-      ...contextOf(codex ? null : base.session, info), // Codex has no Claude status line file.
+      ...contextOf(codex ? null : base.session, info, home?.root ?? null), // Codex has no Claude status line file.
       tool,
       attention,
       question: askedText(attention, card, info, tool),

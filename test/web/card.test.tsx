@@ -11,10 +11,24 @@ const MIN = 60_000
 // Half minutes: the two sides read the clock a few ms apart and must not straddle a minute.
 const ago = (minutes: number) => Date.now() - (minutes + 0.5) * MIN
 
+/** The card's new status label is not in the old page's markup: compare the rest. */
+const withoutStatus = (html: string) => html.replace(/[ \t]*<span class="card-status"[^>]*>[^<]*<\/span>\n?/, '')
+
 function same(scene: Scene, key: string) {
   const { old, react } = bothCards(scene, key)
-  expect(react).toBe(old)
+  expect(withoutStatus(react)).toBe(withoutStatus(old))
 }
+
+test('the card shows its status by the name', () => {
+  const a = item({ key: 'a', name: 'Alpha', status: 'working', column: 'work' })
+  const { react } = bothCards({ items: [a] }, 'a')
+  expect(react).toContain('class="card-status"')
+  expect(react).toContain('>Working<')
+  expect(react).not.toContain('card-facts')
+  // Another column: its own words.
+  const bare = bothCards({ items: [item({ key: 'b', column: 'me', name: 'B' })] }, 'b').react
+  expect(bare).toContain('>Needs me<')
+})
 
 const question = (header: string, multiSelect: boolean) => ({
   question: 'Which **one** goes first?',

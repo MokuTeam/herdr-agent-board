@@ -198,6 +198,22 @@ function session(key: string, signal: AbortSignal): Promise<SessionDetail> {
   return get(`/api/session/${encodeURIComponent(key)}`, isSessionDetail, { signal, cache: 'no-store' })
 }
 
+/** The model and effort the session's screen says now (GET /api/session/<key>/meter). */
+export interface SessionMeterInfo {
+  effort: string
+  model: string
+}
+
+const isSessionMeterInfo: Guard<SessionMeterInfo> = (value): value is SessionMeterInfo & Reply =>
+  isReply(value) && typeof value.effort === 'string' && typeof value.model === 'string'
+
+function sessionMeter(key: string, signal: AbortSignal): Promise<SessionMeterInfo> {
+  return get(`/api/session/${encodeURIComponent(key)}/meter`, isSessionMeterInfo, {
+    signal,
+    cache: 'no-store',
+  })
+}
+
 /** A file into the board's uploads folder, under its own name; resolves where it was saved. */
 async function upload(name: string, file: Blob): Promise<string> {
   const res = await fetch('/api/upload', {
@@ -220,7 +236,7 @@ export function pageLog(text: string): void {
   void postJson('/api/log', { text }).catch(() => {})
 }
 
-export const api = { board, get, post, session, upload }
+export const api = { board, get, post, session, sessionMeter, upload }
 
 // ---------------------------------------------------------------- the archive
 

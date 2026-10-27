@@ -3,8 +3,21 @@
 
 export type UsageWindow = { usedPercentage: number; resetsAt: number | null }
 export type UsageSnapshot = { fetchedAtMs: number; fiveHour?: UsageWindow; sevenDay?: UsageWindow }
-export type ContextFill = { usedPercentage: number | null; size: number | null; tokens: number | null; at: number }
-export type StatusDigest = { usage: UsageSnapshot | null; context: ContextFill | null; session: string | null }
+export type ContextFill = {
+  usedPercentage: number | null
+  size: number | null
+  tokens: number | null
+  at: number
+  /** The model the session runs, as the status line names it. */
+  model?: string | null
+}
+export type StatusDigest = {
+  usage: UsageSnapshot | null
+  context: ContextFill | null
+  session: string | null
+  /** The model the session runs, as the status line names it. */
+  model: string | null
+}
 
 const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 const pct = (v: unknown): v is number => num(v) && v >= 0 && v <= 100
@@ -38,10 +51,14 @@ export function digest(input: unknown, now = Date.now()): StatusDigest {
           at: now,
         }
       : null
+  const m = obj(root?.model)
+  const model =
+    (typeof m?.display_name === 'string' && m.display_name.trim()) || (typeof m?.id === 'string' && m.id.trim()) || ''
   return {
     usage: usage.fiveHour || usage.sevenDay ? usage : null,
     context,
     session: typeof root?.session_id === 'string' && root.session_id ? root.session_id : null,
+    model: model ? String(model).slice(0, 60) : null,
   }
 }
 

@@ -5,6 +5,7 @@ import { digest, statusText } from '../../src/core/statusline.ts'
 // The status line input as Claude Code documents it (trimmed to what the board reads).
 const input = {
   session_id: 'abc-123',
+  model: { id: 'claude-opus-4-5', display_name: 'Opus 4.5' },
   context_window: {
     context_window_size: 200000,
     used_percentage: 8,
@@ -32,12 +33,14 @@ test('status line input: usage windows, context fill and the session', () => {
   })
   assert.deepEqual(d.context, { usedPercentage: 8, size: 200000, tokens: 15500, at: 1000 }) // output tokens left out
   assert.equal(d.session, 'abc-123')
+  assert.equal(d.model, 'Opus 4.5')
   assert.equal(plain(statusText(d)), 'ctx 8% · 5h 24% · 7d 41%')
   // Before the first reply, or on a plan without windows: nothing to keep, nothing to show.
   assert.deepEqual(digest({ session_id: 'x', context_window: { used_percentage: null, current_usage: null } }), {
     usage: null,
     context: null,
     session: 'x',
+    model: null,
   })
   assert.equal(statusText(digest({})), '')
   assert.equal(digest({ rate_limits: { five_hour: { used_percentage: 120 } } }).usage, null)
@@ -53,5 +56,5 @@ test('the numbers turn yellow from 70% and red from 90%; tokens stand in for a m
 
 test('bad input shapes leave nothing', () => {
   for (const bad of [null, undefined, 'x', 7, []])
-    assert.deepEqual(digest(bad), { usage: null, context: null, session: null })
+    assert.deepEqual(digest(bad), { usage: null, context: null, session: null, model: null })
 })

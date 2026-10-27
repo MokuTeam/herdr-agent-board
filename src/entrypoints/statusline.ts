@@ -50,8 +50,11 @@ async function main(): Promise<void> {
     const id = sameDir(dir, defaultProfileDir(home)) ? DEFAULT_PROFILE : profileForDir(list(), dir)?.id
     if (id) save(usageFileFor(id), d.usage)
   }
-  if (d.context && d.session) {
-    save(join(contextDir(), `${safe(d.session)}.json`), d.context)
+  if (d.session && (d.context || d.model)) {
+    save(join(contextDir(), `${safe(d.session)}.json`), {
+      ...(d.context ?? {}),
+      ...(d.model ? { model: d.model } : {}),
+    })
     if (Math.random() < 0.02) prune(now)
   }
   // The card's profile, as the hooks write it: only what changed.

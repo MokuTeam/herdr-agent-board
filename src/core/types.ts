@@ -207,6 +207,10 @@ export interface TranscriptInfo {
   activity?: number
   tokens?: number
   context?: number | null
+  /** The model its last assistant message ran, when the status line has not said. */
+  model?: string | null
+  /** The effort its last assistant message was sent with (low, medium, high, xhigh, max). */
+  effort?: string | null
   [extra: string]: unknown
 }
 
@@ -239,6 +243,10 @@ export interface Item {
   context?: number | null
   contextPct?: number | null
   contextSize?: number | null
+  /** The model it runs, as Claude's status line names it. */
+  model?: string | null
+  /** The effort it thinks with (low, medium, high, xhigh, max), from its transcript. */
+  effort?: string | null
   tool?: ToolCall | null
   question?: string
   askSince?: number | null
