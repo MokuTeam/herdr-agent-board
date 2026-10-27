@@ -926,12 +926,15 @@ menu), `{ kind: 'input', title, body, more, cut, value, fingerprint }` (pi's tex
 A side question is Claude Code's own `/btw`, typed into the session's pane through herdr as a
 message is sent (`herdr agent prompt <pane> "/btw <question>"`). Claude Code answers it in an
 overlay over its input box, from what the conversation holds and with no tools, and keeps it out
-of the conversation; it answers while a turn runs too. The board reads the answer off the screen
+of the conversation; it answers while a turn runs too. Claude Code does keep a session's `/btw`
+questions and answers among themselves: a later side question can draw on an earlier one, and the
+user's own `/btw` lists the board's. The board reads the answer off the screen
 (`herdr agent read --source visible`), pressing Down while more of it is below, and closes the
-overlay with Esc. The answer shows in a card over the message box: the question, the answer and
-how long it took. Close (×) forgets it; on its way the same button cancels it and closes the
-overlay. The cards stay with their session while the page is open, and never go to the server or
-the conversation.
+overlay with Esc. A `/btw` that shows something other than an answer for a few seconds (an error)
+is reported with what it shows. The answer shows in a card over the message box: the question,
+the answer and how long it took. Close (×) forgets it; on its way the same button cancels it and
+closes the overlay. The cards stay with their session while the page is open, and never go to the
+server or the conversation.
 
 It types only where the line lands as `/btw`, checked as before a message
 (`src/services/actions.ts`), and otherwise says why and types nothing:
@@ -944,10 +947,11 @@ It types only where the line lands as `/btw`, checked as before a message
 
 Esc goes only to the overlay with this question in it: a key pressed into anything else would
 answer it. The answer comes back as the terminal showed it, lists and code as drawn and long lines
-wrapped at the pane's width. `/btw` runs no UserPromptSubmit hook, so a side question leaves the
-card where it was (a session under Needs me stays there). A question is up to 790 characters:
-Claude Code folds a longer paste into "[Pasted text #1]" and sends that to the conversation as a
-message.
+wrapped at the pane's width. `/btw` runs no UserPromptSubmit hook, but herdr reports the session
+working while it answers: the card moves under "Working" for a few seconds and then back (a
+session under "Needs me" returns there); the board cannot keep it in place. A question is up to 790
+characters: Claude Code folds a longer paste into "[Pasted text #1]" and sends that to the
+conversation as a message.
 
 The switch in the message box (the bubble beside the clip, purple while on) sends the next
 message aside; a message that starts with `/btw` goes aside too. Both only in a Claude session
