@@ -77,11 +77,13 @@ async function detail(app: SessionApp, item: Item) {
   let screen = ''
   let dialog: PublicDialog | null = null
   let effort = ''
-  // A blocked pi pane's menu is read as before; an idle non-pi one is read for its effort line.
-  if (item.pane && (item.status === 'blocked' || item.agent !== 'pi')) {
+  // Only Claude's screen has an effort line: pi and Codex are read when blocked, as before.
+  const claude = item.agent !== 'pi' && !isCodexItem(item)
+  // A blocked pane's dialog is read as before; an idle Claude one is read for its effort line.
+  if (item.pane && (item.status === 'blocked' || claude)) {
     try {
       const text = await herdrText(['agent', 'read', item.pane, '--source', 'visible'], 5000)
-      if (item.agent !== 'pi') effort = effortFromScreen(text)
+      if (claude) effort = effortFromScreen(text)
       screen = text
         .split('\n')
         .map(l => l.trimEnd())
