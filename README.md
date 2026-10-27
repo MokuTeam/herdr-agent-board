@@ -243,6 +243,28 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   profile (the one its `CLAUDE_CONFIG_DIR` points to): a running MokuPilot takes the call over in
   its own env, so a fork of a session in another profile would run in the wrong account. The board
   refuses that call before anything starts, saying so.
+  Where the call starts is Settings → MokuPilot… (shown while the board offers calls):
+  - **Auto** (the default): looking at the board on its own computer, the call starts there;
+    from any other computer (through `tailscale serve`, your own domain, the remote mode), on
+    the one you look from, by the link below. The board decides by the request: behind a proxy
+    on its own computer (the peer is 127.0.0.1) the caller is `X-Forwarded-For`'s last address,
+    else the peer; the board's own computer is a loopback address or one of its own (its LAN and
+    Tailscale ones). The panel says where a call from your browser would start right now, and
+    the call's answer says it too (`resolved`, `why`), so a wrong guess shows.
+  - **This machine**: the board starts MokuPilot on its own computer, whoever asks; MokuPilot
+    must be installed there (the setup check marks it when it is not).
+  - **The computer you're viewing from**: nothing starts on the board's computer, and MokuPilot
+    need not be installed there. The button opens
+    `mokupilot://call?claude-session=<id>&cwd=<folder>` in your browser; the MokuPilot there
+    (with "agents on another machine" turned on and this board's ssh address) asks you, takes
+    the call and runs the fork on the board's computer over ssh. A phone, or a computer without
+    that MokuPilot, has nothing for the link: the board stays as it was.
+
+  The button is offered under Auto and The computer you're viewing from whether MokuPilot is on
+  the board's computer or not (under Auto, a call asked at the board's computer without it says
+  so and points to the panel); under This machine only with MokuPilot found there. Settings →
+  MokuPilot… is always offered, so the mode can be changed in every case; with
+  `"mokupilot": false` the panel says calls are off.
 - "Fork" (the sheet, a card's menu): a new session in a new tab that starts with a copy of this
   one's conversation, so it knows what this one knows while this one goes on as it was; see
   [Fork](#fork).
@@ -2510,7 +2532,9 @@ raise, default `<COMPUTERNAME>:*`), `raiseTerminal`, `launch` (how new sessions 
 with a fork of a session: `false` turns them off; `{ "dir": "<MokuPilot checkout>" }` runs its
 `.venv` Python with `run.py` on Windows, its `meet` elsewhere; `{ "command": [...] }` a program
 and its first arguments, one per element, no shell, the board adding `call --claude-session <id>
---cwd <folder>`, or the whole line when it has `{session}` or `{cwd}` in it).
+--cwd <folder>`, or the whole line when it has `{session}` or `{cwd}` in it; `"mode"`:
+`"auto"`, `"local"` or `"link"`, where a call starts, set by Settings → MokuPilot…, the older
+`"link": true` read as `"link"`).
 
 `tunnel` (the board [through your own domain](#another-computer-or-a-tablet-through-your-own-domain);
 Settings → Remote access… and `board tunnel on|off` set it): `on` (false), `host` (the server),

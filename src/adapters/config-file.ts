@@ -12,6 +12,7 @@ import { isFoldMode } from '../core/fold-mode.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
 import { profileCommand } from '../core/launch/spawn-args.ts'
+import { isMokupilotMode } from '../core/mokupilot-mode.ts'
 import { isPresenceMode, MAX_IDLE_MINUTES, presenceConfig } from '../core/presence.ts'
 import {
   absoluteProfileDir,
@@ -161,6 +162,23 @@ export function editSettings(body: unknown): EditResult {
     if (!isFoldMode(fold)) return { ok: false, error: t('err.foldWaiting', { mode: String(fold) }) }
     raw.foldWaiting = fold
   }
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/**
+ * Where a MokuPilot call starts (core/mokupilot-mode.ts), from Settings → MokuPilot…: { mode:
+ * 'auto' | 'local' | 'link' } into config.json's `mokupilot`, its other fields (`dir`, `command`)
+ * kept. The older `link` goes: `mode` says it now. MokuPilot turned off (`"mokupilot": false`) is
+ * left as it is, and said. The running board picks the change up as any edit (liveConfig).
+ */
+export function editMokupilot(body: unknown): EditResult {
+  const mode = isRecord(body) ? body.mode : undefined
+  if (!isMokupilotMode(mode)) return { ok: false, error: t('mokupilot.err.mode', { mode: String(mode) }) }
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  if (raw.mokupilot === false) return { ok: false, error: t('mokupilot.err.off') }
+  const { link: _link, ...own } = isRecord(raw.mokupilot) ? raw.mokupilot : {}
+  raw.mokupilot = { ...own, mode }
   writeRaw(raw)
   return { ok: true }
 }

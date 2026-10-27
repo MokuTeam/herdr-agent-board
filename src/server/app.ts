@@ -54,13 +54,14 @@ import { createTerminals, terminalOn } from '../services/terminals.ts'
 import { createProbes, createSupervisor, networkSignature, realClock, type TunnelPlan } from '../services/tunnel.ts'
 import { createWakeControl, startWakeStart } from '../services/wake/control.ts'
 import { createBoardState } from './board-state.ts'
-import { dispatch, json, type Route } from './http.ts'
+import { dispatch, json, peerOf, type Route } from './http.ts'
 import { createRemoteListener } from './remote.ts'
 import { accessRoutes } from './routes/access.ts'
 import { archiveRoutes } from './routes/archive.ts'
 import { boardRoutes } from './routes/board.ts'
 import { fsRoutes } from './routes/fs.ts'
 import { launchRoutes } from './routes/launch.ts'
+import { mokupilotRoutes } from './routes/mokupilot.ts'
 import { pageLogRoute } from './routes/page-log.ts'
 import { presenceRoutes } from './routes/presence.ts'
 import { remoteRoutes } from './routes/remote.ts'
@@ -426,6 +427,8 @@ export async function startServer({
     ...uploadRoutes(),
     revealRoute(board, events, reveals),
     settingsRoute(),
+    // Settings → MokuPilot…: where a call starts, here or on the viewer's computer.
+    ...mokupilotRoutes(cfg),
     // The user's presence: read, switched and set (the page, the phone, the Android app).
     ...presenceRoutes(presence),
     // A line from the page for this log (a phone's browser says what it could not do there).
@@ -482,7 +485,7 @@ export async function startServer({
     return origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`
   }
 
-  async function answer(req: Request): Promise<Response> {
+  async function answer(req: Request, srv?: ReturnType<typeof Bun.serve>): Promise<Response> {
     // The header first: with an empty, invalid or missing Host, Bun's req.url is a bare path.
     if (!host.test(req.headers.get('host') ?? '')) return json(403, { error: 'host' })
     let url: URL | undefined
@@ -493,7 +496,7 @@ export async function startServer({
       // the CLI and agents send no Origin, and the presence switch itself says what it says.
       if (req.method !== 'GET' && path.startsWith('/api/') && path !== '/api/presence' && ownOrigin(req))
         presence.touch()
-      return await dispatch(routes, req, url, path, guards)
+      return await dispatch(routes, req, url, path, guards, () => peerOf(srv, req))
     } catch (err) {
       // The path only: a query can carry the page's token.
       log(`${req.method} ${url ? url.pathname : req.url.split('?')[0]}: ${messageOf(err)}`)

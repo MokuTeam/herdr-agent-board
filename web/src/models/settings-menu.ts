@@ -7,6 +7,7 @@
 // profile folder found, Profiles… opens their panel (components/profiles/ProfilesPanel.tsx). While
 // the remote mode is on (core/remote.ts), Phones… opens theirs (components/phones/PhonesPanel.tsx).
 // While the payload carries wake's state line, Sleep and wake… opens its panel (components/wake).
+// MokuPilot… opens where a call starts (components/mokupilot), on every board's page (offersMokupilot).
 // On the local board, Remote access… opens the board-through-your-domain panel
 // (components/access/AccessPanel.tsx).
 // How sessions asleep in "Waiting" fold is the board's, for every board (src/core/fold-mode.ts).
@@ -45,6 +46,8 @@ export interface SettingsNow {
   wake?: boolean
   /** The remote mode is on (the payload's `remote`): Phones… is offered. */
   phones?: boolean
+  /** MokuPilot… is offered (offersMokupilot: always, from the page). */
+  mokupilot?: boolean
   /** The local board's page (not one through Tailscale or the domain): Remote access… is offered. */
   access?: boolean
   /** This page signed in through the owner's domain: Sign out is offered, last. */
@@ -142,6 +145,7 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
     ...(now.profiles ? [{ id: 'profiles', label: t('set.profiles') }] : []),
     ...(now.wake ? [{ id: 'wake', label: t('set.wake') }] : []),
     ...(now.phones ? [{ id: 'phones', label: t('set.phones') }] : []),
+    ...(now.mokupilot ? [{ id: 'mokupilot', label: t('set.mokupilot') }] : []),
     ...(now.access ? [{ id: 'access', label: t('set.access') }] : []),
     { separator: true },
     { id: 'sleepers', label: t('tb.sleepersTitle'), checked: now.sleepers },
@@ -172,11 +176,19 @@ export type SettingPick =
   | { kind: 'wake' }
   | { kind: 'fold'; value: FoldMode }
   | { kind: 'phones' }
+  | { kind: 'mokupilot' }
   | { kind: 'access' }
   | { kind: 'signout' }
   | { kind: 'presence'; value: PresenceMode | 'none' }
   | { kind: 'presenceIdle'; value: number }
   | null
+
+/**
+ * Whether the page offers Settings → MokuPilot…: always, whatever the payload's `mokupilot` says,
+ * so the mode can be changed also while no call is offered (`local` with MokuPilot missing on the
+ * board's computer); the panel says when MokuPilot is turned off.
+ */
+export const offersMokupilot = (_payload?: { mokupilot?: boolean | undefined } | null): boolean => true
 
 export function settingPicked(id: string): SettingPick {
   const [kind, value = ''] = id.split(':')
@@ -189,6 +201,7 @@ export function settingPicked(id: string): SettingPick {
   if (id === 'wake') return { kind: 'wake' }
   if (kind === 'fold' && isFoldMode(value)) return { kind, value }
   if (id === 'phones') return { kind: 'phones' }
+  if (id === 'mokupilot') return { kind: 'mokupilot' }
   if (id === 'access') return { kind: 'access' }
   if (id === 'signout') return { kind: 'signout' }
   if (kind === 'presence' && (value === 'none' || isPresenceMode(value))) return { kind, value }

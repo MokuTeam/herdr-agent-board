@@ -16,6 +16,7 @@ import { publicHelper } from '../../core/helpers.ts'
 import { t } from '../../core/lang.ts'
 import { checkName } from '../../core/launch/names.ts'
 import type { MessageGate } from '../../core/message-gate.ts'
+import type { Viewer } from '../../core/mokupilot-mode.ts'
 import { isPiItem } from '../../core/pi.ts'
 import type { Item, Pin } from '../../core/types.ts'
 import { checkWake, focus, send, sleepSession, wake, wakeAnswers } from '../../services/actions.ts'
@@ -28,6 +29,7 @@ import { forkSession } from '../../services/launch/fork.ts'
 import type { Launches } from '../../services/launch/launches.ts'
 import { renameSession, renameWorkspace } from '../../services/launch/rename.ts'
 import { startCall } from '../../services/mokupilot.ts'
+import { ownAddresses } from '../../services/tunnel.ts'
 import { type Body, type Handler, json, type Route } from '../http.ts'
 import { helperRoute, withSessions } from './helpers.ts'
 
@@ -216,7 +218,13 @@ async function restart(deps: SessionApp['deps'], item: Item): Promise<Result> {
 }
 
 /** `body`: its fields, taken only by the actions that read them (as main's did, so a null body fails only there). */
-async function act(app: SessionApp, item: Item, action: string, body: () => Promise<Body>): Promise<Result> {
+async function act(
+  app: SessionApp,
+  item: Item,
+  action: string,
+  body: () => Promise<Body>,
+  viewer?: Viewer,
+): Promise<Result> {
   const { deps } = app
   switch (action) {
     case 'focus':
@@ -250,8 +258,9 @@ async function act(app: SessionApp, item: Item, action: string, body: () => Prom
       return { ok: true, held: r.held, dropped: r.dropped, closeAt: r.record.closeAt }
     }
     // A MokuPilot call whose agent is a fork of this session, only in the board's own profile; no herdr in it.
+    // Here or on the viewer's computer by the mode, and under `auto` by who asks (core/mokupilot-mode.ts).
     case 'mokupilot':
-      return startCall(deps.cfg, item, { profiles: deps.profiles() })
+      return startCall(deps.cfg, item, { profiles: deps.profiles(), viewer, own: ownAddresses })
     // A new session in a new tab with a copy of this one's conversation; this one stays as it is.
     case 'fork':
       return app.launches
@@ -272,7 +281,7 @@ export function sessionRoutes(app: SessionApp): Route[] {
       const item = app.find(ctx.params[0] ?? '')
       return item ? handle(item, req, ctx) : gone()
     }
-  const action = withItem(async (item, _req, ctx) => {
+  const action = withItem(async (item, req, ctx) => {
     const what = ctx.params[1] ?? ''
     // Read for every action (too large or not JSON is a 500), its fields only where they are used.
     await ctx.rawBody()
@@ -280,7 +289,9 @@ export function sessionRoutes(app: SessionApp): Route[] {
       const refused = ctx.refuse('fresh-data')
       if (refused) return refused
     }
-    const r = await act(app, item, what, ctx.body)
+    const viewer =
+      what === 'mokupilot' ? { peer: ctx.peer(), forwardedFor: req.headers.get('x-forwarded-for') } : undefined
+    const r = await act(app, item, what, ctx.body, viewer)
     app.refresh()
     return json(r.ok ? 200 : 409, r)
   })

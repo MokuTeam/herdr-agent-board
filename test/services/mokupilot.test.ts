@@ -46,10 +46,21 @@ test('a call starts MokuPilot on its own, in the folder the session started in, 
     const opts = { platform: 'linux', env, run }
     const missing = await startCall(cfg, item, opts)
     assert.equal(missing.ok, false)
-    assert.match(missing.ok ? '' : missing.error, /MokuPilot not found \(\/opt\/mp\/MokuPilot\)/)
+    // No mode: auto, and with no request the board's own computer, which has no MokuPilot.
+    assert.match(
+      missing.ok ? '' : missing.error,
+      /MokuPilot is not installed on this computer \(\/opt\/mp\/MokuPilot\)/,
+    )
 
     const real = { mokupilot: { command: [process.execPath] } }
-    assert.deepEqual(await startCall(real, item, opts), { ok: true, state: 'launched', file: process.execPath })
+    // No request to say who asks (a test, the CLI): the board's own computer, as before the modes.
+    assert.deepEqual(await startCall(real, item, opts), {
+      ok: true,
+      state: 'launched',
+      file: process.execPath,
+      resolved: 'local',
+      why: 'no-peer',
+    })
     const r = runs.at(-1)
     assert.ok(r)
     assert.deepEqual(r.args, ['call', '--claude-session', ID, '--cwd', project])
@@ -153,6 +164,8 @@ test('a call from a session in another profile than the board’s is refused bef
     ok: true,
     state: 'launched',
     file: process.execPath,
+    resolved: 'local',
+    why: 'no-peer',
   })
   assert.equal(started.length, 1)
   // One profile listed: a session that names none is in it.
@@ -168,6 +181,8 @@ test('a call from a session in another profile than the board’s is refused bef
     ok: true,
     state: 'launched',
     file: process.execPath,
+    resolved: 'local',
+    why: 'no-peer',
   })
   assert.equal(started.length, 3)
   const stray = await startCall(
@@ -182,12 +197,13 @@ test('a call from a session in another profile than the board’s is refused bef
 test('whether the page offers calls: looked up again when the setting changes, and once a minute', () => {
   let now = 1_000
   const asked: unknown[] = []
-  const cfg: Partial<Config> = { mokupilot: { command: ['/opt/mp/MokuPilot'] } }
+  // This machine: the mode that asks whether MokuPilot is here.
+  const cfg: Partial<Config> = { mokupilot: { command: ['/opt/mp/MokuPilot'], mode: 'local' } }
   const on = mokupilotCheck(cfg, {
     now: () => now,
     find: c => {
       asked.push(c.mokupilot)
-      return { state: c.mokupilot === false ? 'off' : 'ok' }
+      return { state: JSON.stringify(c.mokupilot).includes('/gone') ? 'missing' : 'ok' }
     },
   })
   assert.equal(on(), true)
@@ -195,11 +211,228 @@ test('whether the page offers calls: looked up again when the setting changes, a
   assert.equal(on(), true)
   assert.equal(asked.length, 1)
   // The live config changed: asked again at once.
-  cfg.mokupilot = false
+  cfg.mokupilot = { command: ['/gone/MokuPilot'], mode: 'local' }
   assert.equal(on(), false)
   assert.equal(asked.length, 2)
   // A minute on: asked again, for one installed or removed meanwhile.
   now += 60_001
   on()
   assert.equal(asked.length, 3)
+})
+
+test('link mode starts nothing here: the page gets the link, the folder the session started in in it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'board-mokupilot-'))
+  try {
+    const project = join(dir, 'Acme project & co')
+    mkdirSync(project)
+    const transcript = join(dir, `${ID}.jsonl`)
+    writeFileSync(transcript, `${JSON.stringify({ type: 'user', cwd: project, sessionId: ID })}\n`)
+    const runs: string[] = []
+    const run: Run = file => {
+      runs.push(file)
+      throw new Error('link mode must not spawn')
+    }
+    // A command beside the link, one that would start: the link goes first all the same.
+    for (const cfg of [{ mokupilot: { link: true } }, { mokupilot: { link: true, command: [process.execPath] } }]) {
+      const opts = { platform: 'linux', env: { PATH: '' }, run }
+      const item = { key: ID, session: ID, agent: 'claude', cwd: join(dir, 'elsewhere'), transcript }
+      assert.deepEqual(await startCall(cfg, item, opts), {
+        ok: true,
+        state: 'link',
+        url: `mokupilot://call?claude-session=${ID}&cwd=${encodeURIComponent(project)}`,
+        resolved: 'link',
+        why: 'mode-link',
+      })
+      // No folder on disk: no cwd.
+      assert.deepEqual(await startCall(cfg, { ...item, transcript: null, cwd: join(dir, 'gone') }, opts), {
+        ok: true,
+        state: 'link',
+        url: `mokupilot://call?claude-session=${ID}`,
+        resolved: 'link',
+        why: 'mode-link',
+      })
+      for (const bad of [
+        { ...item, agent: 'codex' },
+        { ...item, session: null },
+        { ...item, session: 'pane-p1' },
+      ]) {
+        const out = await startCall(cfg, bad, opts)
+        assert.equal(out.ok, false)
+        assert.match(out.ok ? '' : out.error, /Claude Code session/)
+      }
+      // Another profile than the board's: refused before a link, as before a launch.
+      const profiles = profileSet(
+        [
+          { id: 'default', title: 'Default', dir: '/home/u/.claude', color: 'indigo', hidden: false },
+          { id: 'work', title: 'Work', dir: '/home/u/.claude-work', color: 'teal', hidden: false },
+        ],
+        '/home/u/.claude',
+      )
+      const other = await startCall(cfg, { ...item, profile: 'work' }, { ...opts, profiles })
+      assert.match(other.ok ? '' : other.error, /a call from Work would run in the wrong account/)
+    }
+    assert.deepEqual(runs, [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('link mode offers the call on the page, with nothing installed here', () => {
+  assert.equal(mokupilotCheck({ mokupilot: { link: true } })(), true)
+  assert.equal(mokupilotCheck({ mokupilot: false })(), false)
+})
+
+test('the mode decides where a call starts; under auto, who asks: here or by the link, and why', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'board-mokupilot-'))
+  try {
+    const project = join(dir, 'Acme')
+    mkdirSync(project)
+    const runs: string[] = []
+    const run: Run = file => {
+      runs.push(file)
+      const child = new EventEmitter()
+      queueMicrotask(() => child.emit('spawn'))
+      return Object.assign(child, { unref() {} }) as unknown as CallChild
+    }
+    let asked = 0
+    const own = () => {
+      asked++
+      return ['192.168.1.20', '100.101.102.103']
+    }
+    const item = { key: ID, session: ID, agent: 'claude', cwd: project, transcript: null }
+    const link = `mokupilot://call?claude-session=${ID}&cwd=${encodeURIComponent(project)}`
+    const here = { platform: 'linux', env: { PATH: '' }, run, own }
+    const local = { viewer: { peer: '127.0.0.1', forwardedFor: null } }
+    const phone = { viewer: { peer: '127.0.0.1', forwardedFor: '100.64.0.7' } }
+    const self = { viewer: { peer: '::ffff:127.0.0.1', forwardedFor: '100.101.102.103' } }
+    const launched = { ok: true, state: 'launched', file: process.execPath }
+    const linked = { ok: true, state: 'link', url: link }
+
+    for (const set of [{ command: [process.execPath] }, { command: [process.execPath], mode: 'auto' }]) {
+      const cfg = { mokupilot: set }
+      assert.deepEqual(await startCall(cfg, item, { ...here, ...local }), {
+        ...launched,
+        resolved: 'local',
+        why: 'loopback-direct',
+        viewer: '127.0.0.1',
+      })
+      assert.deepEqual(await startCall(cfg, item, { ...here, ...phone }), {
+        ...linked,
+        resolved: 'link',
+        why: 'forwarded-other',
+        viewer: '100.64.0.7',
+      })
+      assert.deepEqual(await startCall(cfg, item, { ...here, ...self }), {
+        ...launched,
+        resolved: 'local',
+        why: 'forwarded-own',
+        viewer: '100.101.102.103',
+      })
+    }
+    assert.equal(runs.length, 4)
+
+    // local: here for everyone; link: the link for everyone. Neither asks for this computer's addresses.
+    asked = 0
+    const forLocal = { mokupilot: { command: [process.execPath], mode: 'local' } }
+    const forLink = { mokupilot: { command: [process.execPath], mode: 'link' } }
+    for (const who of [local, phone, self]) {
+      assert.deepEqual(await startCall(forLocal, item, { ...here, ...who }), {
+        ...launched,
+        resolved: 'local',
+        why: 'mode-local',
+      })
+      assert.deepEqual(await startCall(forLink, item, { ...here, ...who }), {
+        ...linked,
+        resolved: 'link',
+        why: 'mode-link',
+      })
+    }
+    assert.equal(asked, 0)
+    assert.equal(runs.length, 7)
+
+    // The older key, a `mode` beside it winning.
+    assert.equal((await startCall({ mokupilot: { link: true } }, item, { ...here, ...local })).ok, true)
+    assert.deepEqual(
+      await startCall({ mokupilot: { link: true, mode: 'local', command: [process.execPath] } }, item, {
+        ...here,
+        ...phone,
+      }),
+      { ...launched, resolved: 'local', why: 'mode-local' },
+    )
+    assert.equal(runs.length, 8)
+
+    // Nothing installed here: auto gives a viewer elsewhere the link all the same; at this computer
+    // and under local it is MokuPilot not found, saying where the call went.
+    const none = { mokupilot: { command: [join(dir, 'no-such-MokuPilot')] } }
+    assert.deepEqual(await startCall(none, item, { ...here, ...phone }), {
+      ...linked,
+      resolved: 'link',
+      why: 'forwarded-other',
+      viewer: '100.64.0.7',
+    })
+    const there = await startCall(none, item, { ...here, ...local })
+    assert.equal(there.ok, false)
+    assert.match(there.ok ? '' : there.error, /MokuPilot is not installed on this computer/)
+    assert.equal(there.resolved, 'local')
+    assert.equal(there.why, 'loopback-direct')
+    const forced = await startCall({ mokupilot: { ...none.mokupilot, mode: 'local' } }, item, { ...here, ...phone })
+    assert.equal(forced.ok, false)
+    assert.equal(forced.why, 'mode-local')
+    // Turned off: off for everyone, nothing resolved.
+    assert.deepEqual(await startCall({ mokupilot: false }, item, { ...here, ...phone }), {
+      ok: false,
+      error: 'MokuPilot is turned off in config.json ("mokupilot": false)',
+    })
+    assert.equal(runs.length, 8)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('whether the page offers calls, by the mode: off and This machine without MokuPilot hide it', () => {
+  const missing = () => ({ state: 'missing' })
+  const ok = () => ({ state: 'ok' })
+  const offered = (mokupilot: unknown, find = missing) => mokupilotCheck({ mokupilot }, { find })()
+  // Auto (said, unsaid, the default with nothing set): offered, MokuPilot here or not.
+  for (const set of [undefined, {}, { mode: 'auto' }, { command: ['/opt/mp/MokuPilot'] }, { mode: 'bogus' }])
+    assert.equal(offered(set), true, JSON.stringify(set))
+  // The link, the panel's or the older key: offered, nothing here needed.
+  assert.equal(offered({ mode: 'link' }), true)
+  assert.equal(offered({ link: true }), true)
+  // This machine: only with MokuPilot found here.
+  assert.equal(offered({ mode: 'local' }), false)
+  assert.equal(offered({ mode: 'local' }, ok), true)
+  assert.equal(offered({ link: true, mode: 'local' }), false)
+  // Off: never.
+  assert.equal(offered(false), false)
+  assert.equal(offered(false, ok), false)
+})
+
+test('under auto at this computer without MokuPilot: the error says it is not installed here, and where to switch', async () => {
+  for (const [lang, words] of [
+    [
+      'en',
+      /MokuPilot is not installed on this computer \(.*no-such\).*“The computer you’re viewing from” in Settings → MokuPilot…/,
+    ],
+    ['ru', /MokuPilot не установлен на этом компьютере.*«Компьютер, с которого ты смотришь» в Настройках → MokuPilot…/],
+  ] as const) {
+    // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
+    useLanguage(lang)
+    const item = { key: ID, session: ID, agent: 'claude', cwd: tmpdir(), transcript: null }
+    const r = await startCall({ mokupilot: { command: ['/opt/no-such'] } }, item, {
+      platform: 'linux',
+      env: { PATH: '' },
+      viewer: { peer: '127.0.0.1', forwardedFor: null },
+      own: () => [],
+    })
+    assert.equal(r.ok, false)
+    assert.match(r.ok ? '' : r.error, words)
+    // This machine keeps its own text.
+    const local = await startCall({ mokupilot: { command: ['/opt/no-such'], mode: 'local' } }, item, {
+      platform: 'linux',
+      env: { PATH: '' },
+    })
+    assert.doesNotMatch(local.ok ? '' : local.error, /Settings → MokuPilot|Настройках/)
+  }
+  useLanguage('en')
 })

@@ -19,7 +19,7 @@ import { LOOK_KEY, lookNow, setLook } from '../models/look.ts'
 import { type Dock, isDock } from '../models/panel-layout.ts'
 import { offersProfiles } from '../models/profiles.ts'
 import { keptAuth, remotePage, UNPAIRED } from '../models/remote-page.ts'
-import { settingPicked, settingsMenu } from '../models/settings-menu.ts'
+import { offersMokupilot, settingPicked, settingsMenu } from '../models/settings-menu.ts'
 import { reducedMotion } from '../models/spring.ts'
 import { setTheme, THEME_KEY, themeNow } from '../models/theme.ts'
 import { isWakeView } from '../models/wake.ts'
@@ -63,6 +63,9 @@ export interface SettingsDeps {
   /** The remote mode is on: Phones… is offered. */
   phones?(): boolean
   openPhones?(): void
+  /** The board offers MokuPilot calls: MokuPilot… is offered. */
+  mokupilot?(): boolean
+  openMokupilot?(): void
   /** The local board's page (not one through Tailscale or the domain): Remote access… is offered. */
   access?(): boolean
   openAccess?(): void
@@ -96,6 +99,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       fold: deps.fold(),
       wake: deps.wake?.() ?? false,
       phones: deps.phones?.() ?? false,
+      mokupilot: deps.mokupilot?.() ?? false,
       access: deps.access?.() ?? false,
       signOut: deps.signOut?.() ?? false,
       presence: deps.presence?.(),
@@ -121,6 +125,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'wake') deps.openWake?.()
         else if (pick?.kind === 'fold') deps.chooseFold(pick.value)
         else if (pick?.kind === 'phones') deps.openPhones?.()
+        else if (pick?.kind === 'mokupilot') deps.openMokupilot?.()
         else if (pick?.kind === 'access') deps.openAccess?.()
         else if (pick?.kind === 'signout') deps.endLogin?.()
         else if (pick?.kind === 'presence')
@@ -258,7 +263,7 @@ const crossFade = (): ((apply: () => void) => unknown) | undefined =>
 /**
  * Settings for the page: `menu` is the board's one menu (hooks/useContextMenus.ts);
  * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel, `openWake` Sleep and wake,
- * `openAccess` the Remote access panel.
+ * `openAccess` the Remote access panel, `openMokupilot` the MokuPilot panel.
  */
 export function useSettingsMenu(
   menu: MenuEngine,
@@ -266,11 +271,12 @@ export function useSettingsMenu(
   openPhones: () => void = () => {},
   openWake: () => void = () => {},
   openAccess: () => void = () => {},
+  openMokupilot: () => void = () => {},
 ): SettingsMenu {
   const { t, choose } = useLanguage()
   const board = useBoardContext()
   const place = usePanelPlace()
-  const latest = useLatest({ t, choose, board, openProfiles, openPhones, openWake, openAccess })
+  const latest = useLatest({ t, choose, board, openProfiles, openPhones, openWake, openAccess, openMokupilot })
   const [expanded, setExpanded] = useState(false)
   const [gear] = useState(() => {
     const open = settingsMenuFrom({
@@ -335,6 +341,8 @@ export function useSettingsMenu(
       openWake: () => latest.current.openWake(),
       phones: () => !!latest.current.board.data?.remote,
       openPhones: () => latest.current.openPhones(),
+      mokupilot: () => offersMokupilot(latest.current.board.data),
+      openMokupilot: () => latest.current.openMokupilot(),
       access: () => !remotePage(),
       openAccess: () => latest.current.openAccess(),
       signOut: () => remotePage() && keptAuth() === 'login',

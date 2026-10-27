@@ -7,6 +7,7 @@ import {
   configFile,
   type EditResult,
   editCategories,
+  editMokupilot,
   editProfiles,
   editSettings,
   editTunnel,
@@ -92,6 +93,41 @@ test('editSettings keeps keys it does not know', () => {
   assert.equal(saved().futureKey, 1)
   assert.equal(saved().language, 'ru')
   assert.equal(loadConfig().language, 'ru')
+})
+
+test('editMokupilot writes the mode, keeps the launcher and every other key, and drops the older link', () => {
+  isolatedHome()
+  seed({ language: 'en', futureKey: 1, mokupilot: { dir: '/opt/MokuPilot', link: true } })
+  // Reading never rewrites: loading the config leaves `link: true` where it is.
+  loadConfig()
+  assert.deepEqual(saved().mokupilot, { dir: '/opt/MokuPilot', link: true })
+  assert.deepEqual(editMokupilot({ mode: 'local' }), { ok: true })
+  assert.deepEqual(saved().mokupilot, { dir: '/opt/MokuPilot', mode: 'local' })
+  assert.equal(saved().futureKey, 1)
+  assert.deepEqual(editMokupilot({ mode: 'link' }), { ok: true })
+  assert.deepEqual(saved().mokupilot, { dir: '/opt/MokuPilot', mode: 'link' })
+  assert.deepEqual(editMokupilot({ mode: 'auto' }), { ok: true })
+  assert.deepEqual(saved().mokupilot, { dir: '/opt/MokuPilot', mode: 'auto' })
+  // None set before: a section of its own.
+  seed({ language: 'en' })
+  assert.deepEqual(editMokupilot({ mode: 'link' }), { ok: true })
+  assert.deepEqual(saved().mokupilot, { mode: 'link' })
+})
+
+test('editMokupilot refuses a mode it does not know, and MokuPilot turned off, leaving config.json as it was', () => {
+  isolatedHome()
+  useLanguage('en')
+  seed({ language: 'en', mokupilot: { link: true } })
+  for (const body of [{ mode: 'remote' }, { mode: 'LINK' }, {}, null, 'link', { mode: true }]) {
+    const r = editMokupilot(body)
+    assert.equal(r.ok, false)
+    assert.match(r.ok ? '' : r.error, /Unknown MokuPilot mode/)
+  }
+  assert.deepEqual(saved().mokupilot, { link: true })
+  seed({ language: 'en', mokupilot: false })
+  const off = editMokupilot({ mode: 'auto' })
+  assert.match(off.ok ? '' : off.error, /turned off/)
+  assert.equal(saved().mokupilot, false)
 })
 
 test('editSettings refuses an unknown language', () => {

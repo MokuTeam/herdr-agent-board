@@ -364,15 +364,43 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'mokupilot.hint':
       'Start a MokuPilot call whose agent is a fork of this session: it knows what the session knows, and the session itself stays as it was',
     'mokupilot.started': 'MokuPilot launcher started for “{name}”. Call readiness is not confirmed.',
+    'mokupilot.opened':
+      'Opening MokuPilot on this computer for “{name}”. Nothing happens on a phone, or where MokuPilot is not set up as a remote agent host.',
+    'mokupilot.err.open': 'The browser did not open the MokuPilot link: {why}',
     'mokupilot.err.notClaude': 'Only a Claude Code session with an id can join a call',
     'mokupilot.err.off': 'MokuPilot is turned off in config.json ("mokupilot": false)',
     'mokupilot.err.missing':
       'MokuPilot not found ({file}). Point config.json at it: "mokupilot": { "dir": "<MokuPilot folder>" }',
+    'mokupilot.err.missingAuto':
+      'MokuPilot is not installed on this computer ({file}). To start calls on the computer you’re viewing from instead, choose “The computer you’re viewing from” in Settings → MokuPilot….',
     'mokupilot.err.notFound': '{file} not found',
     'mokupilot.err.start': 'MokuPilot did not start: {why}',
     'mokupilot.err.command': 'mokupilot.command in config.json: a list, the program first',
     'mokupilot.err.commandShell': 'mokupilot.command in config.json: a program, not cmd or a .cmd or .bat file',
     'mokupilot.err.placeholder': 'mokupilot.command: {name} is not a value the board knows ({session} and {cwd} are)',
+    'mokupilot.err.mode': 'Unknown MokuPilot mode: {mode} (auto, local or link)',
+    'set.mokupilot': 'MokuPilot…',
+    'mokupilot.title': 'MokuPilot',
+    'mokupilot.about': 'Where “Call in MokuPilot” starts the call.',
+    'mokupilot.mode.auto': 'Auto',
+    'mokupilot.mode.autoLine':
+      'Viewing the board on its own computer, the call starts there; from any other computer, on the one you’re viewing from.',
+    'mokupilot.mode.local': 'This machine',
+    'mokupilot.mode.localLine':
+      'The board’s computer starts MokuPilot itself, whoever presses the button and wherever they are.',
+    'mokupilot.mode.link': 'The computer you’re viewing from',
+    'mokupilot.mode.linkLine':
+      'The page opens a mokupilot:// link and MokuPilot on that computer takes the call. Nothing starts on the board’s computer.',
+    'mokupilot.linkNote':
+      'MokuPilot on the computer you view from needs “agents on another machine” turned on, with this board’s ssh address.',
+    'mokupilot.now.local': 'Right now, from this browser: the call starts on the board’s computer.',
+    'mokupilot.now.link': 'Right now, from this browser: the call starts on this computer.',
+    'mokupilot.now.asking': 'Asking the board where a call from this browser would start…',
+    'mokupilot.now.why': 'Decided by: {why}',
+    'mokupilot.offNote': 'MokuPilot calls are turned off in the board’s config.json ("mokupilot": false).',
+    'mokupilot.hereMissing': 'MokuPilot is not installed on the board’s computer: a call cannot start there.',
+    'mokupilot.hereMissingFine':
+      'MokuPilot is not installed on the board’s computer. Nothing is wrong: calls from this browser start on the computer you view from.',
     'sheet.sleep': 'Put to sleep',
     'sheet.sleepHint': 'Claude exits, the pane stays. Wake it from here, from herdr or with a message',
     'sheet.sleepBusy': 'The session is working: it can sleep once it is done',
@@ -959,15 +987,42 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'mokupilot.hint':
       'Начать звонок в MokuPilot, где агент: форк этой сессии. Он знает всё, что знает сессия, а сама сессия остаётся как была',
     'mokupilot.started': 'Запущен MokuPilot для «{name}». Готовность звонка ещё не подтверждена.',
+    'mokupilot.opened':
+      'Открываю MokuPilot на этом компьютере для «{name}». На телефоне и там, где MokuPilot не настроен как удалённый хост агента, ничего не произойдёт.',
+    'mokupilot.err.open': 'Браузер не открыл ссылку MokuPilot: {why}',
     'mokupilot.err.notClaude': 'В звонок можно взять только сессию Claude Code с id',
     'mokupilot.err.off': 'MokuPilot выключен в config.json ("mokupilot": false)',
     'mokupilot.err.missing':
       'MokuPilot не найден ({file}). Укажи его в config.json: "mokupilot": { "dir": "<папка MokuPilot>" }',
+    'mokupilot.err.missingAuto':
+      'MokuPilot не установлен на этом компьютере ({file}). Чтобы звонки начинались на компьютере, с которого ты смотришь, выбери «Компьютер, с которого ты смотришь» в Настройках → MokuPilot….',
     'mokupilot.err.notFound': '{file} не найден',
     'mokupilot.err.start': 'MokuPilot не запустился: {why}',
     'mokupilot.err.command': 'mokupilot.command в config.json: список, первой идёт программа',
     'mokupilot.err.commandShell': 'mokupilot.command в config.json: программа, а не cmd и не файл .cmd или .bat',
     'mokupilot.err.placeholder': 'mokupilot.command: {name} доска не знает (знает {session} и {cwd})',
+    'mokupilot.err.mode': 'Неизвестный режим MokuPilot: {mode} (auto, local или link)',
+    'set.mokupilot': 'MokuPilot…',
+    'mokupilot.title': 'MokuPilot',
+    'mokupilot.about': 'Где кнопка «Звонок в MokuPilot» начинает звонок.',
+    'mokupilot.mode.auto': 'Авто',
+    'mokupilot.mode.autoLine':
+      'Если доска открыта на её собственном компьютере, звонок начинается там; с любого другого компьютера: на том, с которого ты смотришь.',
+    'mokupilot.mode.local': 'Этот компьютер',
+    'mokupilot.mode.localLine': 'Компьютер доски сам запускает MokuPilot, кто бы ни нажал кнопку и где бы он ни был.',
+    'mokupilot.mode.link': 'Компьютер, с которого ты смотришь',
+    'mokupilot.mode.linkLine':
+      'Страница открывает ссылку mokupilot://, и звонок берёт MokuPilot на том компьютере. На компьютере доски ничего не запускается.',
+    'mokupilot.linkNote':
+      'В MokuPilot на компьютере, с которого ты смотришь, должен быть включён режим «агенты на другой машине» с ssh-адресом этой доски.',
+    'mokupilot.now.local': 'Сейчас, из этого браузера: звонок начнётся на компьютере доски.',
+    'mokupilot.now.link': 'Сейчас, из этого браузера: звонок начнётся на этом компьютере.',
+    'mokupilot.now.asking': 'Спрашиваю доску, где начнётся звонок из этого браузера…',
+    'mokupilot.now.why': 'Решило: {why}',
+    'mokupilot.offNote': 'Звонки в MokuPilot выключены в config.json доски ("mokupilot": false).',
+    'mokupilot.hereMissing': 'На компьютере доски MokuPilot не установлен: звонок там не начнётся.',
+    'mokupilot.hereMissingFine':
+      'На компьютере доски MokuPilot не установлен. Всё в порядке: звонок из этого браузера начнётся на компьютере, с которого смотришь.',
     'sheet.sleep': 'Усыпить',
     'sheet.sleepHint': 'Claude выйдет, панель останется. Разбудить можно отсюда, из herdr или сообщением',
     'sheet.sleepBusy': 'Сессия работает: усыпить можно, когда закончит',

@@ -23,6 +23,8 @@ export interface RouteContext {
   rawPath: string
   /** The groups of a RegExp path, each decoded ('' for one that did not take part). */
   params: string[]
+  /** The TCP peer's address as the listener sees it ('' unknown), asked only by a route that needs it. */
+  peer(): string
   /** The JSON body as it parsed ({} when empty), read once: for code that takes any value. */
   rawBody(): Promise<unknown>
   /** The body's fields. main read them off the body, so null fails here (a 500); other non-objects have none. */
@@ -139,8 +141,24 @@ function matches(route: Route, method: string, path: string, rawPath: string): s
   return match?.map(group => (group === undefined ? '' : decodeURIComponent(group))) ?? null
 }
 
-/** The first route that answers; 405 when none does. */
-export async function dispatch(routes: Route[], req: Request, url: URL, path: string, state: GuardState) {
+/** The request's TCP peer as `srv` (Bun's server) sees it: '' with none, or one it cannot say. */
+export function peerOf(srv: { requestIP(req: Request): { address: string } | null } | undefined, req: Request): string {
+  try {
+    return srv?.requestIP(req)?.address ?? ''
+  } catch {
+    return ''
+  }
+}
+
+/** The first route that answers; 405 when none does. `peer`: the listener's requestIP for this request. */
+export async function dispatch(
+  routes: Route[],
+  req: Request,
+  url: URL,
+  path: string,
+  state: GuardState,
+  peer: () => string = () => '',
+) {
   let parsed: Promise<unknown> | undefined
   const rawBody = (): Promise<unknown> => {
     parsed ??= readBody(req)
@@ -154,6 +172,7 @@ export async function dispatch(routes: Route[], req: Request, url: URL, path: st
       path,
       rawPath: url.pathname,
       params: match.slice(1),
+      peer,
       rawBody,
       body: async () => fieldsOf(await rawBody()),
       refuse: guard => check(guard, req, url, state),
