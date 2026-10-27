@@ -75,8 +75,6 @@ export interface ComposerProps {
   composer: ComposerControls
   /** The open session: its context, model and effort show beside the message box. */
   item?: Item | null
-  /** The effort its screen says now, over the one its transcript or settings give. */
-  effort?: string
   availability: SheetAvailability
   buttons: HeadButtons
   /** The Terminal button: where the board offers one, with a dot while a shell is open. */
@@ -97,7 +95,6 @@ const MAX_HEIGHT = 180
 export function Composer({
   composer,
   item = null,
-  effort = '',
   availability: av,
   buttons,
   term = { hidden: false, hasShell: false, title: '' },
@@ -378,7 +375,7 @@ export function Composer({
           <SendIcon />
         </button>
       </form>
-      {item && <SessionMeter key={item.key} item={item} effort={effort} />}
+      {item && <SessionMeter key={item.key} item={item} />}
     </footer>
   )
 }

@@ -6,12 +6,15 @@ import type { Item } from '../../../../src/core/types.ts'
 import { api } from '../../api/client.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 
-export function SessionMeter({ item, effort = '' }: { item: Item; effort?: string }) {
+export function SessionMeter({ item }: { item: Item }) {
   const t = useT()
   // /model and /effort change only the screen, and only for this session: read it while open.
+  // Only Claude's screen has those lines: another agent's meter shows what the board knows.
+  const claude = item.agent === 'claude'
   const [live, setLive] = useState('')
   const [liveModel, setLiveModel] = useState('')
   useEffect(() => {
+    if (!claude) return
     let stopped = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const read = async () => {
@@ -32,7 +35,7 @@ export function SessionMeter({ item, effort = '' }: { item: Item; effort?: strin
       stopped = true
       if (timer) clearTimeout(timer)
     }
-  }, [item.key])
+  }, [item.key, claude])
   const context =
     item.contextPct != null
       ? `${Math.round(item.contextPct)}%`
@@ -48,7 +51,7 @@ export function SessionMeter({ item, effort = '' }: { item: Item; effort?: strin
         {t('meter.model')}: {liveModel || item.model || t('meter.unknown')}
       </span>
       <span className="meter-fact" title={t('meter.effortHint')}>
-        {t('meter.effort')}: {live || effort || item.effort || t('meter.unknown')}
+        {t('meter.effort')}: {live || item.effort || t('meter.unknown')}
       </span>
     </div>
   )

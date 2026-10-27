@@ -14,6 +14,7 @@ const message = (role: string, text: string) => ({ type: 'message', role, conten
 describe('Codex rollouts on the board, beside Claude, pi and unknown agents', () => {
   const sandbox = sharedSandbox()
   let url = ''
+  let box: Awaited<ReturnType<typeof sandbox>>
   let piFile = ''
   const board = async (): Promise<Item[]> =>
     ((await (await fetch(`${url}/api/board`)).json()) as { items: Item[] }).items
@@ -21,7 +22,7 @@ describe('Codex rollouts on the board, beside Claude, pi and unknown agents', ()
     (await (await fetch(`${url}/api/session/${encodeURIComponent(key)}`)).json()) as Detail
 
   beforeAll(async () => {
-    const box = await sandbox()
+    box = await sandbox()
     const codex = join(box.dir, 'Codex дом 100%', 'sessions', '2026', '10', '20')
     mkdirSync(codex, { recursive: true })
     writeFileSync(
@@ -133,6 +134,23 @@ describe('Codex rollouts on the board, beside Claude, pi and unknown agents', ()
       })
       expect((await detail(key)).conversation).toEqual([])
     }
+  })
+
+  test("the session meter reads only Claude's pane: Codex, pi and unknown agents answer empty", async () => {
+    const keyOf = async (pane: string) => String((await board()).find(i => i.pane === pane)?.key ?? '')
+    const reads = () =>
+      box
+        .calls()
+        .filter(a => a[0] === 'agent' && a[1] === 'read')
+        .map(a => a[2])
+    const before = reads().length
+    for (const pane of ['c1', 'c5', 'c6']) {
+      const r = await fetch(`${url}/api/session/${encodeURIComponent(await keyOf(pane))}/meter`)
+      expect([pane, r.status, await r.json()]).toEqual([pane, 200, { effort: '', model: '' }])
+    }
+    expect(reads().slice(before)).toEqual([])
+    expect((await fetch(`${url}/api/session/${encodeURIComponent(await keyOf('c4'))}/meter`)).status).toBe(200)
+    expect(reads().slice(before)).toEqual(['c4'])
   })
 
   test('Claude UUID and pi file keys keep their own readers, including spaces, Cyrillic and percent paths', async () => {

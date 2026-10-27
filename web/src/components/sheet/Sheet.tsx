@@ -353,7 +353,6 @@ export function SheetView(props: SheetViewProps) {
       <Composer
         composer={composer}
         item={item}
-        effort={detail.data?.effort ?? ''}
         availability={availability}
         buttons={item ? headButtons(item, t, !!data?.mokupilot, schedules, !!data?.fork) : NO_HEAD_BUTTONS}
         term={item ? termButton(item, data, t) : undefined}
