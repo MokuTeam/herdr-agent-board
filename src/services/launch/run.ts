@@ -254,18 +254,19 @@ export function launchRunner({
 
   /**
    * The launch's own tab in a workspace herdr opened: the first one when it leaves the env alone,
-   * else a tab of its own with the profile's env (worktree open/create take no --env).
+   * else a tab of its own with the profile's env (worktree open/create take no --env). A workspace
+   * that was already open keeps its first tab: its pane may hold a session already.
    */
   async function openLaunchTab(l: Launch, ws: HerdrWorktree, spareRootTab: boolean): Promise<void> {
-    l.rootTab = ws.tab
-    if (l.configDir === null) {
+    l.rootTab = ws.alreadyOpen ? null : ws.tab
+    if (l.configDir === null && !ws.alreadyOpen) {
       l.rootPane = ws.pane
       if (ws.pane) notePane(l, ws.pane, ws.terminal)
       return
     }
     const opened = await openInProfile(l, env => tabCreateRoot(ws.id, l.cwd, l.label, env))
     l.rootPane = opened.pane
-    if (spareRootTab && ws.tab) l.spareTab = ws.tab
+    if (spareRootTab && ws.tab && !ws.alreadyOpen) l.spareTab = ws.tab
     notePane(l, opened.pane, opened.terminal)
   }
 
@@ -280,7 +281,12 @@ export function launchRunner({
     const path = worktreePath(root, branch, linked)
     // The session works in the same place below the checkout as the folder that was picked.
     const inside = below ? join(path, below) : path
-    l.cwd = inside
+    // The session's folder once the worktree is there: below it as picked, else its root. Set only
+    // then, so a launch that fails before keeps the folder a retry makes the worktree from.
+    const into = async (): Promise<void> => {
+      const st = await statOf(inside)
+      l.cwd = st && st !== SLOW && st.isDirectory() ? inside : path
+    }
     if (!linked) {
       // As before: a plain git worktree beside the repo; the workspace is made after it.
       if (await statOf(path)) throw new LaunchError(t('launch.err.worktreeExists', { path }), 'worktree')
@@ -289,6 +295,7 @@ export function launchRunner({
         const why = launcherError(r.stdout, r.stderr).message || r.error?.message || ''
         throw new LaunchError(t('launch.err.worktreeGit', { why }), 'worktree')
       }
+      await into()
       l.worktreeMade = true
       return
     }
@@ -310,12 +317,11 @@ export function launchRunner({
     } catch (err) {
       throw new LaunchError(t('launch.err.worktreeGit', { why: messageOf(err) }), 'worktree')
     }
+    await into()
+    l.worktreeMade = true
     l.workspaceId = ws.id
     l.newWorkspace = false
     await openLaunchTab(l, ws, !existing)
-    const st = await statOf(inside)
-    if (!st || st === SLOW || !st.isDirectory()) l.cwd = path
-    l.worktreeMade = true
   }
 
   /** Claude's /rename and the first message, once the agent herdr started waits for input. */
