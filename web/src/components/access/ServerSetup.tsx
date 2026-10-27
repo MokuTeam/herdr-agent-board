@@ -15,9 +15,10 @@
 // of POST /api/access.
 import { type FocusEvent, type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import type { AccessView } from '../../../../src/core/access.ts'
+import { sourceLine } from '../../../../src/core/server-install.ts'
 import type { Plan } from '../../../../src/core/server-plan.ts'
 import type { Progress } from '../../../../src/core/server-script.ts'
-import type { ServerView } from '../../../../src/core/server-view.ts'
+import type { InstallView, ServerView } from '../../../../src/core/server-view.ts'
 import type { TestStep, TunnelConfig } from '../../../../src/core/tunnel.ts'
 import type { AccessSend } from '../../hooks/useAccess.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
@@ -104,6 +105,15 @@ export function ServerSetup(props: ServerSetupProps) {
   const [tick, setTick] = useState(0)
   const { view } = props
   const phase = view.server?.phase
+  // The install's setup link lives in the board's memory until the panel closes (path B, call 9).
+  const sendRef = useRef(props.send)
+  sendRef.current = props.send
+  useEffect(
+    () => () => {
+      void sendRef.current('server-install-forget')
+    },
+    [],
+  )
   const running = phase === 'applying' || phase === 'undoing'
   useEffect(() => {
     if (!running) return
@@ -157,6 +167,8 @@ export function ServerSetupBody({
   const admin = s.admin.user || DEFAULT_LOGIN
   const running = phase === 'applying' || phase === 'undoing'
   const busy = running || phase === 'looking'
+  // The last Look was "Install the board on this server" (path B): its plan, its run, its link.
+  const installing = s.target === 'install'
   // Asked without the board's address: said until it is there.
   const noDomain = view.tunnel.settings.domain === ''
   const needDomain = t('server.panel.needDomain')
@@ -187,7 +199,7 @@ export function ServerSetupBody({
    * there (else said so: 'address'); the server filled in from it and the board's own login on the
    * server, when not set; the board's own key made, when there is none. What the board took, or null.
    */
-  async function prepare(): Promise<Took | 'address' | null> {
+  async function prepare(withKey = true): Promise<Took | 'address' | null> {
     const took = await tracker.settle()
     const c = { ...view.tunnel.settings, ...took.tunnel } as TunnelConfig
     if (c.domain === '') {
@@ -201,7 +213,7 @@ export function ServerSetupBody({
       if (reply?.ok !== true) return null
     }
     const key = view.tunnel.key
-    if (key.generated && !key.exists) {
+    if (withKey && key.generated && !key.exists) {
       const reply = await send('key-generate')
       // `confirm`: the board has one already, which is what is needed
       if (reply?.ok !== true && reply?.confirm !== 'key') return null
@@ -219,6 +231,21 @@ export function ServerSetupBody({
       if (reply?.ok !== true) return
     }
     await look('server-look')
+  }
+
+  /**
+   * Install the board on this server (path B): the same address, login and password; no key of
+   * the board's needed (the server mode has no tunnel). Then the install's own Look.
+   */
+  async function installLook(): Promise<void> {
+    const took = await prepare(false)
+    if (!took || took === 'address') return
+    if ((took.admin.user ?? s.admin.user) === '') {
+      const user = DEFAULT_LOGIN
+      const reply = await tracker.track(send('server-admin', { user }), { admin: { user } })
+      if (reply?.ok !== true) return
+    }
+    await look('server-install-look')
   }
 
   /** Look (or Undo's Look) with the passwords typed; an answer that asks for one points at its field. */
@@ -239,6 +266,7 @@ export function ServerSetupBody({
   /** Continue, or Enter in a password field: what was asked for goes on. */
   function goOn(): void {
     if (state.again === 'server-undo-look') void look('server-undo-look')
+    else if (state.again === 'server-install-look') void installLook()
     else void setUp()
   }
 
@@ -250,7 +278,8 @@ export function ServerSetupBody({
             ...(p.ticks.includes('removeEdited') && { removeEdited: state.removeEdited }),
           }
         : { ...(p.ticks.includes('docker') && { docker: state.docker }) }
-    const reply = await send(p.kind === 'undo' ? 'server-undo' : 'server-apply', {
+    const op = installing ? 'server-install' : p.kind === 'undo' ? 'server-undo' : 'server-apply'
+    const reply = await send(op, {
       plan: p.id,
       ...ticks,
       ...withPassword(state),
@@ -457,7 +486,16 @@ export function ServerSetupBody({
               disabled={!canLook}
               onClick={() => void setUp()}
             >
-              {phase === 'looking' ? t('server.panel.looking') : t('server.panel.setUpServer')}
+              {phase === 'looking' && !installing ? t('server.panel.looking') : t('server.panel.setUpServer')}
+            </button>
+            <button
+              type="button"
+              className="button"
+              disabled={!canLook}
+              title={t('install.panel.intro')}
+              onClick={() => void installLook()}
+            >
+              {phase === 'looking' && installing ? t('server.panel.looking') : t('install.panel.look')}
             </button>
           </div>
           {lookWhyLine}
@@ -481,6 +519,14 @@ export function ServerSetupBody({
 
       {plain && (
         <div className="access-plain">
+          {installing && s.install && (
+            <>
+              <p className="access-note">{t('install.panel.intro')}</p>
+              <p className="access-note">
+                {t('install.panel.from', { from: sourceLine({ kind: 'archive', ...s.install.from }, t) })}
+              </p>
+            </>
+          )}
           <h4 className="access-sub">{t('server.panel.plainFound')}</h4>
           <p className="access-found-line">{plain.found}</p>
           {hostKey && <p className="access-hostkey">{hostKey}</p>}
@@ -562,7 +608,9 @@ export function ServerSetupBody({
               disabled={!canEdit || needs(plan)}
               onClick={() => void run(plan)}
             >
-              {t(plan.kind === 'undo' ? 'server.panel.undo' : 'server.panel.apply')}
+              {t(
+                installing ? 'install.panel.apply' : plan.kind === 'undo' ? 'server.panel.undo' : 'server.panel.apply',
+              )}
             </button>
           )}
           <button type="button" className="button" disabled={!canEdit} onClick={cancel}>
@@ -572,6 +620,10 @@ export function ServerSetupBody({
       )}
 
       {plan && ran && <PlanSteps plan={plan} progress={progress} phase={phase} now={now} />}
+
+      {installing && s.install && (running || phase === 'done' || phase === 'failed') && (
+        <InstallRun install={s.install} phase={phase} domain={view.tunnel.settings.domain} />
+      )}
 
       {phase === 'failed' && (
         <div className="access-failure">
@@ -596,7 +648,12 @@ export function ServerSetupBody({
           )}
           {progress && resultLine(progress, t) && <p className="access-result">{resultLine(progress, t)}</p>}
           <div className="access-actions">
-            <button type="button" className="button primary" disabled={!canLook} onClick={() => void setUp()}>
+            <button
+              type="button"
+              className="button primary"
+              disabled={!canLook}
+              onClick={() => void (installing ? installLook() : setUp())}
+            >
               {t('server.panel.lookAgain')}
             </button>
           </div>
@@ -618,6 +675,30 @@ export function ServerSetupBody({
           </ul>
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * "Install the board on this server"'s run: its output as the server prints it, the setup link
+ * apart (the board's memory only; the panel lets it go as it closes), and how it ended.
+ */
+function InstallRun({ install, phase, domain }: { install: InstallView; phase: ServerView['phase']; domain: string }) {
+  const t = useT()
+  return (
+    <div className="access-install">
+      {phase === 'applying' && <p className="access-sub">{t('install.panel.running')}</p>}
+      {install.out.length > 0 && <pre className="access-pre">{install.out.join('\n')}</pre>}
+      {install.link && (
+        <div className="access-install-link">
+          <p className="access-sub">{t('install.panel.link')}</p>
+          <a href={install.link} target="_blank" rel="noreferrer noopener">
+            {install.link}
+          </a>
+        </div>
+      )}
+      {phase === 'done' && <p className="access-result">{t('install.panel.done', { domain })}</p>}
+      {phase === 'failed' && <p className="access-warn">{t('install.panel.failed')}</p>}
     </div>
   )
 }

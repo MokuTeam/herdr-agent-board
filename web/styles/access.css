@@ -184,3 +184,7 @@
 .access-command .access-pre { max-height: 96px; }
 .access-inside, .access-undo-command { margin: 0 0 8px; }
 .access-then { color: var(--label-2); font-size: 12px; }
+/* "Install the board on this server": the install's output as it comes, the setup link apart. */
+.access-install { margin: 0 0 10px; }
+.access-install-link { margin: 8px 0; padding: 8px 10px; border-radius: 8px; background: var(--fill-2); font-size: 12.5px; }
+.access-install-link a { font: 11.5px/1.5 var(--mono); overflow-wrap: anywhere; }

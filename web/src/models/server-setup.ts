@@ -11,6 +11,7 @@
 
 import { needFor } from '../../../src/core/server-admin.ts'
 import type { Holder, ServerFacts } from '../../../src/core/server-facts.ts'
+import { BOARD_USER, installWill, serverWanted } from '../../../src/core/server-install.ts'
 import { fenceDiff } from '../../../src/core/server-look.ts'
 import { type PlainPlan, plainPlan } from '../../../src/core/server-plain.ts'
 import {
@@ -58,8 +59,11 @@ export interface SetupState {
   sudoAsked: boolean
   /** How many times a field was asked for: each time the field is emptied and focused. */
   asks: number
-  /** What Continue (and Enter in a password field) sends: Look, or Undo's Look while Undo's ask stands. */
-  again: 'server-look' | 'server-undo-look'
+  /**
+   * What Continue (and Enter in a password field) sends: Look, Undo's Look while Undo's ask stands,
+   * or the Look of "Install the board on this server" while its ask stands.
+   */
+  again: 'server-look' | 'server-undo-look' | 'server-install-look'
   /** Set up the server was clicked without the board's address: said so until the address is there. */
   missing: boolean
   /** The plan's ticks. */
@@ -457,7 +461,24 @@ export function plainOf(s: ServerView, settings: TunnelConfig, t: Translator): P
   const { facts, plan, choice } = s
   if (!facts) return null
   const made = plan ?? (choice?.case === null ? choice : null)
-  return made ? plainPlan(facts, made, wantedOf(settings), t) : null
+  if (!made) return null
+  if (s.target !== 'install' || !s.install) return plainPlan(facts, made, wantedOf(settings), t)
+  // the board installed on the server (path B): its own steps first, then the web server's for its socket
+  const plain = plainPlan(facts, made, serverWanted(settings.domain, BOARD_USER), t)
+  if (plain.stop) return plain
+  const own = installWill(
+    {
+      user: BOARD_USER,
+      // Look reads whether the user is there, not whose it is: the install stops on someone else's
+      userThere: facts.stepOne?.user !== null && facts.stepOne?.user !== undefined,
+      sudoThere: false,
+      sudo: false,
+      source: { kind: 'archive', ...s.install.from },
+      keysFrom: null,
+    },
+    t,
+  )
+  return { ...plain, will: [...own, ...plain.will] }
 }
 
 /** The server's key the admin's login met, with whether that login remembered it ('' before one did). */
