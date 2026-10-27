@@ -59,6 +59,7 @@ import { archiveRoutes } from './routes/archive.ts'
 import { boardRoutes } from './routes/board.ts'
 import { fsRoutes } from './routes/fs.ts'
 import { launchRoutes } from './routes/launch.ts'
+import { mokupilotRoutes } from './routes/mokupilot.ts'
 import { pageLogRoute } from './routes/page-log.ts'
 import { remoteRoutes } from './routes/remote.ts'
 import { revealRoute, revealState } from './routes/reveal.ts'
@@ -402,6 +403,8 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
     ...uploadRoutes(),
     revealRoute(board, events, reveals),
     settingsRoute(),
+    // Settings → MokuPilot…: where a call starts, here or on the viewer's computer.
+    ...mokupilotRoutes(cfg),
     // A line from the page for this log (a phone's browser says what it could not do there).
     pageLogRoute(log),
     scheduleRoute(refresh),
