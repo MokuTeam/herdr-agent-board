@@ -10,6 +10,7 @@ import { ARCHIVE_STRINGS } from './archive-strings.ts'
 import { ASIDE_STRINGS } from './aside-strings.ts'
 import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
+import { INSTALL_STRINGS } from './install-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
 import { ONESHOT_STRINGS } from './oneshot-strings.ts'
 import { PRESENCE_STRINGS } from './presence-strings.ts'
@@ -1309,3 +1310,5 @@ for (const code of Object.keys(ACCESS_STRINGS) as Lang[]) Object.assign(STRINGS[
 for (const code of Object.keys(SERVER_STRINGS) as Lang[]) Object.assign(STRINGS[code], SERVER_STRINGS[code])
 // And what the one command says on the server ("Do it myself").
 for (const code of Object.keys(ONESHOT_STRINGS) as Lang[]) Object.assign(STRINGS[code], ONESHOT_STRINGS[code])
+// And the board on a server of the owner's: its install, `board update`, the panel's path B.
+for (const code of Object.keys(INSTALL_STRINGS) as Lang[]) Object.assign(STRINGS[code], INSTALL_STRINGS[code])
