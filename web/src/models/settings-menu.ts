@@ -12,7 +12,10 @@
 // (components/access/AccessPanel.tsx).
 // How sessions asleep in "Waiting" fold is the board's, for every board (src/core/fold-mode.ts).
 // On a page signed in through the owner's domain, Sign out ends this browser's own login (Call 15).
+// Presence (#172, src/core/presence.ts) is the board's: Off, or on with how it notices the user
+// went away (by itself, only an offer, by hand only), and after how many idle minutes.
 import { FOLD_MODES, type FoldMode, isFoldMode } from '../../../src/core/fold-mode.ts'
+import { isPresenceMode, PRESENCE_MODES, type PresenceMode } from '../../../src/core/presence.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import { CARD_TEXTS, type CardText, isCardText } from './card-text.ts'
 import { isLook, LOOKS } from './look.ts'
@@ -49,6 +52,43 @@ export interface SettingsNow {
   access?: boolean
   /** This page signed in through the owner's domain: Sign out is offered, last. */
   signOut?: boolean
+  /** Presence as the board has it ('none': not on); none given: no Presence item (an older board). */
+  presence?: PresenceMode | 'none' | undefined
+  /** Presence's idle minutes, while it is on. */
+  idleMinutes?: number | undefined
+}
+
+/** The idle minutes Settings → Presence offers; config.json may hold any other. */
+export const PRESENCE_IDLE_CHOICES = [5, 10, 15, 30, 60] as const
+
+function presenceItem(now: SettingsNow, edit: { disabled?: boolean; reason?: string }): MenuEntry[] {
+  const { t, presence } = now
+  if (!presence) return []
+  const idle = now.idleMinutes
+  return [
+    {
+      id: 'presence',
+      label: t('set.presence'),
+      ...edit,
+      submenu: [
+        ...(['none', ...PRESENCE_MODES] as const).map(id => ({
+          id: `presence:${id}`,
+          label: t(`set.presence.${id}`),
+          checked: presence === id,
+        })),
+        ...(presence === 'none' || presence === 'off'
+          ? []
+          : [
+              { separator: true as const },
+              ...PRESENCE_IDLE_CHOICES.map(min => ({
+                id: `presenceIdle:${min}`,
+                label: t('set.presence.idle', { min }),
+                checked: idle === min,
+              })),
+            ]),
+      ],
+    },
+  ]
 }
 
 export function settingsMenu(now: SettingsNow): MenuEntry[] {
@@ -101,6 +141,7 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
         { id: 'dock:reset', label: t('panel.reset') },
       ],
     },
+    ...presenceItem(now, edit),
     ...(now.profiles ? [{ id: 'profiles', label: t('set.profiles') }] : []),
     ...(now.wake ? [{ id: 'wake', label: t('set.wake') }] : []),
     ...(now.phones ? [{ id: 'phones', label: t('set.phones') }] : []),
@@ -138,6 +179,8 @@ export type SettingPick =
   | { kind: 'mokupilot' }
   | { kind: 'access' }
   | { kind: 'signout' }
+  | { kind: 'presence'; value: PresenceMode | 'none' }
+  | { kind: 'presenceIdle'; value: number }
   | null
 
 /**
@@ -161,5 +204,7 @@ export function settingPicked(id: string): SettingPick {
   if (id === 'mokupilot') return { kind: 'mokupilot' }
   if (id === 'access') return { kind: 'access' }
   if (id === 'signout') return { kind: 'signout' }
+  if (kind === 'presence' && (value === 'none' || isPresenceMode(value))) return { kind, value }
+  if (kind === 'presenceIdle' && /^\d+$/.test(value)) return { kind, value: Number(value) }
   return null
 }

@@ -5,6 +5,8 @@
 // files that go with the next message, and the message box: Enter sends, Shift+Enter breaks the
 // line, the box grows with the text; files come in through the clip or Ctrl+V (a screenshot).
 import { type ClipboardEvent, type KeyboardEvent, useLayoutEffect, useRef, useState } from 'react'
+import { changesMeter } from '../../../../src/core/effort.ts'
+import type { Item } from '../../../../src/core/types.ts'
 import { pageLog } from '../../api/client.ts'
 import { useActionRow } from '../../hooks/useActionRow.ts'
 import type { ComposerControls } from '../../hooks/useComposer.ts'
@@ -43,6 +45,7 @@ import {
 import { TermIcon } from '../terminal/Terminal.tsx'
 import { AsideToggle, useAsideBox } from './Aside.tsx'
 import { Attachments } from './Attachments.tsx'
+import { SessionMeter } from './SessionMeter.tsx'
 
 /** What the session's buttons do; each gets the button it was pressed on, for what opens from it. */
 export interface SessionButtons {
@@ -71,6 +74,8 @@ export interface SessionButtons {
 
 export interface ComposerProps {
   composer: ComposerControls
+  /** The open session: its context, model and effort show beside the message box. */
+  item?: Item | null
   availability: SheetAvailability
   buttons: HeadButtons
   /** The Terminal button: where the board offers one, with a dot while a shell is open. */
@@ -90,6 +95,7 @@ const MAX_HEIGHT = 180
 
 export function Composer({
   composer,
+  item = null,
   availability: av,
   buttons,
   term = { hidden: false, hasShell: false, title: '' },
@@ -109,6 +115,8 @@ export function Composer({
   const view = composerView({ present, sending, canMutate, text, attachments }, t)
   // A side question (/btw) instead of a message, where the board can ask one: the box's switch, or "/btw …".
   const aside = useAsideBox(text, composer.input)
+  // The /model and /effort messages sent from here: the meter reads the screen after each.
+  const [asked, setAsked] = useState(0)
 
   // On every draw, as syncComposer ran on every one: the text, the language or the panel's width may have moved.
   useLayoutEffect(() => {
@@ -290,7 +298,9 @@ export function Composer({
         id="composer"
         onSubmit={e => {
           e.preventDefault()
-          if (!aside.submit()) composer.send()
+          if (aside.submit()) return
+          if (changesMeter(text)) setAsked(n => n + 1)
+          composer.send()
         }}
       >
         <button
@@ -370,6 +380,7 @@ export function Composer({
           <SendIcon />
         </button>
       </form>
+      {item && <SessionMeter key={item.key} item={item} asked={asked} />}
     </footer>
   )
 }

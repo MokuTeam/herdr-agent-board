@@ -21,9 +21,12 @@ const ITEMS = [
   item({ key: 'f', name: 'Phi', column: 'done', status: 'done', category: 'proj', activity: ago(2) }),
 ]
 
+/** The card's new status label is not in the old page's markup: compare the rest. */
+const withoutStatus = (html: string) => html.replace(/[ \t]*<span class="card-status"[^>]*>[^<]*<\/span>\n?/g, '')
+
 function same(scene: Scene) {
   const { old, react } = bothBoards(scene)
-  expect(react).toBe(old)
+  expect(withoutStatus(react)).toBe(withoutStatus(old))
 }
 
 describe('board markup parity', () => {

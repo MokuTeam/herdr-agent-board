@@ -319,6 +319,7 @@ describe('routes', () => {
       'error',
       'focused',
       'launcher',
+      'linkedWorkspaces',
       'recent',
       'workspaces',
     ])

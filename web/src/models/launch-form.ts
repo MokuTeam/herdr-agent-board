@@ -191,7 +191,8 @@ export const workspaceName = (name: string, category: string, title: string, cwd
   kebabName(name) || (category && category !== 'other' ? title : baseName(cwd) || t('launch.workspaceDefault'))
 
 /** A folder in a git checkout: its root and the branch it is on. */
-export type GitInfo = { root: string; branch: string }
+/** repo: the main checkout, when `root` is a linked worktree of it. */
+export type GitInfo = { root: string; branch: string; repo?: string }
 
 /** The line under the worktree choice: where the new branch goes, or why the branch name will not do. */
 export function worktreeNote(
@@ -199,11 +200,18 @@ export function worktreeNote(
   wt: boolean,
   branch: string,
   t: Translator,
+  ticket = false,
 ): { text: string; error: boolean } {
   if (!wt) return { text: '', error: false }
   const why = checkBranch(branch)
   return {
-    text: why ? t(why) : t('launch.worktreeAt', { path: worktreePath(git.root, branch.trim()), branch: git.branch }),
+    text: why
+      ? t(why)
+      : t('launch.worktreeAt', {
+          // A ticket worktree goes beside the main checkout, as the launch makes it.
+          path: worktreePath(ticket ? (git.repo ?? git.root) : git.root, branch.trim(), ticket),
+          branch: git.branch,
+        }),
     error: !!why,
   }
 }

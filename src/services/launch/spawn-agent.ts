@@ -35,8 +35,9 @@ import {
   recordProfilePane,
 } from '../../adapters/profile-panes.ts'
 import { type Env, inheritedProfileDir, loadProfiles } from '../../adapters/profiles.ts'
+import { importsDialog, keyTowardYes, ownImports, sameFolder, trustDialog } from '../../core/dialogs/trust.ts'
 import { t } from '../../core/lang.ts'
-import { sameDir, slugName, uniqueSlug } from '../../core/launch/names.ts'
+import { sameDir, slugName, ticketSlugName, uniqueSlug } from '../../core/launch/names.ts'
 import {
   choosesSession,
   profileCommand,
@@ -71,6 +72,31 @@ const screen = (pane: string): Promise<string> =>
 const stringAt = (value: unknown, key: string): string | null =>
   isRecord(value) && typeof value[key] === 'string' ? value[key] : null
 
+/**
+ * --trust: Yes on the dialog Claude stops at, when it is the trust dialog for `cwd` or the external
+ * imports dialog for the user's own files. The cursor moves one key at a time as the screen shows it.
+ * True when Enter went on Yes; false leaves the dialog to the user.
+ */
+async function answerStartup(pane: string, cwd: string, home: string, claudeDirs: readonly string[]): Promise<boolean> {
+  for (let i = 0; i < 4; i++) {
+    const shown = await screen(pane)
+    const trust = trustDialog(shown)
+    const imports = importsDialog(shown)
+    const d =
+      trust && sameFolder(trust.folder, cwd, home) ? trust : ownImports(imports, claudeDirs, home) ? imports : null
+    const key = keyTowardYes(d)
+    if (key === null) return false
+    if (key === '') {
+      await herdr(['pane', 'send-keys', pane, 'enter'])
+      await sleep(1500)
+      return true
+    }
+    await herdr(['pane', 'send-keys', pane, key])
+    await sleep(300)
+  }
+  return false
+}
+
 /** A pane as `herdr pane get` says: its agent, its status, its tab, the terminal it holds and its agent's session. */
 async function paneInfo(pane: string, timeoutMs?: number) {
   const answer = await herdr(['pane', 'get', pane], timeoutMs)
@@ -88,13 +114,13 @@ async function paneInfo(pane: string, timeoutMs?: number) {
 const prompt = (pane: string, text: string) => herdr(['agent', 'prompt', pane, /^-/.test(text) ? ` ${text}` : text])
 
 /** herdr's own name for targeting: [a-z][a-z0-9_-]{0,31}, not one another agent has. */
-async function nameInHerdr(pane: string, name: string): Promise<string> {
+async function nameInHerdr(pane: string, name: string, ticketNames: boolean): Promise<string> {
   try {
     const answer = await herdr(['agent', 'list'])
     const agents = isRecord(answer) && Array.isArray(answer.agents) ? answer.agents : []
     const others = agents.filter(a => stringAt(a, 'pane_id') !== pane)
     const taken = others.map(a => stringAt(a, 'name')).filter((n): n is string => !!n)
-    const agent = uniqueSlug(slugName(name), new Set(taken))
+    const agent = uniqueSlug(ticketNames ? ticketSlugName(name) : slugName(name), new Set(taken))
     await herdr(['agent', 'rename', pane, agent])
     return agent
   } catch {
@@ -224,6 +250,7 @@ export async function spawnAgent(
     profiles,
     env = process.env,
     home = homedir(),
+    ticketNames = false,
   }: {
     claude?: string[]
     pi?: string[]
@@ -231,6 +258,8 @@ export async function spawnAgent(
     profiles?: Profile[]
     env?: Env
     home?: string
+    /** The setup's ticket convention: 14404 -> case-14404. */
+    ticketNames?: boolean
   } = {},
 ): Promise<SpawnResult> {
   const cwd = absoluteDir(o.cwd)
@@ -241,8 +270,11 @@ export async function spawnAgent(
   if (!isDir) throw new Error(`No such folder: ${cwd}`)
   const workspace = o.workspace || process.env.HERDR_WORKSPACE_ID
   if (!o.pane && !workspace) throw new Error('No herdr workspace: run it inside herdr or pass --workspace')
-  const start = startProfile(o, { profiles: profiles ?? loadProfiles({ home }), env, home, cwd })
+  const known = profiles ?? loadProfiles({ home })
+  const start = startProfile(o, { profiles: known, env, home, cwd })
   const { configDir, profile } = start
+  // The user's own Claude folders: the profile of the agent that runs it, the default one, and the board's.
+  const claudeDirs = [...new Set([inheritedProfileDir(env, home), defaultProfileDir(home), ...known.map(p => p.dir)])]
   const label = o.label?.trim() || o.name
   const text =
     o.briefFile !== undefined
@@ -313,6 +345,7 @@ export async function spawnAgent(
 
   const deadline = Date.now() + o.timeoutSec * 1000
   let ready = false
+  let answered = 0
   // The agent that came up (herdr says): Claude, or pi for a start command that starts it.
   let naming: Naming = CLAUDE_NAMING
   let kind = 'claude'
@@ -337,6 +370,10 @@ export async function spawnAgent(
       break
     }
     if (p.status === 'blocked') {
+      if (o.trust && answered < 4 && (await answerStartup(pane, cwd, home, claudeDirs))) {
+        answered++
+        continue
+      }
       throw new Error(
         kind === PI_AGENT
           ? `pi in ${pane} waits for a dialog. Answer it in that tab, then: herdr agent prompt ${pane} "${naming.command(o.name)}" and send the brief.`
@@ -347,7 +384,7 @@ export async function spawnAgent(
   if (!ready) throw new Error(`Claude did not get ready in ${pane} within ${o.timeoutSec} s`)
   if (kind === PI_AGENT && profile && carded && isPiSessionFile(session)) movePiCard(carded, session, profile.id)
 
-  const agent = await nameInHerdr(pane, o.name)
+  const agent = await nameInHerdr(pane, o.name, ticketNames)
 
   // /rename runs locally, no turn: herdr never sees it working and calls the prompt stalled. The
   // name is cosmetic and Claude runs by now: no failure for it, or a retry would start a second one.

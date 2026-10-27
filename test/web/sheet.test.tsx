@@ -206,11 +206,19 @@ describe('session sheet markup parity', () => {
       at({ step: 'wake', text: 'go on with the review' }),
       at({ step: 'note' }),
       at({ failed: 'herdr-wake is down', text: 'the note' }),
-      [...at({ text: 'my <note>' }), { id: 's1', key: 'a', text: 'later', next: Date.now() + 60 * MIN }],
     ]) {
       same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), schedules })
       same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), schedules, lang: 'ru' })
     }
+    // A restart and a reminder: the restart shows, the rest count under it.
+    const many = bothSheets({
+      items: [claude],
+      open: 'a',
+      detail: ready(detailOf(claude)),
+      schedules: [...at({ text: 'my <note>' }), { id: 's1', key: 'a', text: 'later', next: Date.now() + 60 * MIN }],
+    })
+    expect(many.react).toContain('2 scheduled')
+    expect(many.react).not.toContain('later')
     same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), schedules: at(), armed: 'r1' })
     same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), stale: true })
     same({ items: [claude], open: 'a', detail: ready(detailOf(claude)), connected: false, schedules: at() })
@@ -247,7 +255,7 @@ describe('session sheet markup parity', () => {
     same({ lang: 'ru', items: [working], open: 'a', detail: ready(data, { status: 'loading' }) })
   })
 
-  test('the reminders: the first three (due, repeating, when free, one asking "Cancel?") and the rest in the panel', () => {
+  test('the reminders: the next one, the count opens the rest in place, the rest in the panel', () => {
     const now = Date.now()
     const schedules: ScheduleEntry[] = [
       { id: 's1', key: 'a', text: 'check the **build**', next: now - 60 * MIN },
@@ -257,10 +265,19 @@ describe('session sheet markup parity', () => {
       { id: 's5', key: 'a', text: 'fifth', next: now + 70 * 60 * MIN },
       { id: 'x', key: 'b', text: 'not this one', next: now },
     ]
+    // Cancelling asks on the row it belongs to: the rows stay while it does.
     same({ items: [working], open: 'a', schedules, armed: 's2' })
-    same({ lang: 'ru', items: [working], open: 'a', schedules: schedules.slice(1, 3) })
-    same({ items: [working], open: 'a', schedules, connected: false })
-    // A MokuPilot call's results on their way to the session: by their title.
+    // Otherwise: the next entry and how many there are; the rest open in place.
+    const folded = bothSheets({ items: [working], open: 'a', schedules })
+    expect(folded.react).toContain('check the')
+    expect(folded.react).toContain('5 scheduled')
+    expect(folded.react).not.toContain('every hour')
+    const ru = bothSheets({ lang: 'ru', items: [working], open: 'a', schedules: schedules.slice(1, 3) })
+    expect(ru.react).toContain('2 в расписании')
+    const offline = bothSheets({ items: [working], open: 'a', schedules, connected: false })
+    expect(offline.react).toContain('5 scheduled')
+    expect(offline.react).toContain('data-sched-toggle')
+    // A MokuPilot call's results on their way to the session: by their title, the rest counted.
     const call: ScheduleEntry = {
       id: 'c1',
       key: 'a',
@@ -270,8 +287,9 @@ describe('session sheet markup parity', () => {
       next: now,
     }
     const withCall = bothSheets({ items: [working], open: 'a', schedules: [call, ...schedules.slice(0, 2)] })
-    expect(withCall.react).toBe(withCall.old)
     expect(withCall.react).toContain('MokuPilot call results: Release call')
+    expect(withCall.react).toContain('3 scheduled')
+    expect(withCall.react).not.toContain('every hour')
     same({ lang: 'ru', items: [working], open: 'a', schedules: [call] })
   })
 
@@ -327,7 +345,10 @@ describe('text that runs inline keeps its spaces', () => {
     const react = [...spaced(sides.reactSchedule, inline), ...spaced(sides.reactBody, inline)]
     // Three reminders and "+1 more", the note, what it asks, the conversation, a file.
     expect(old.length).toBe(8)
-    expect(react).toEqual(old)
+    // The compact row keeps the first reminder and the count, with their spaces.
+    expect(react.length).toBe(6)
+    expect(react.join('\n')).toContain('reminder 1')
+    expect(react.join('\n')).toContain('4 scheduled')
   })
 })
 
@@ -393,11 +414,14 @@ describe('the mounted sheet', () => {
 
   test('on its first draw for a session, its detail not asked for yet', () => {
     const data = payload({ items: [working], categories: CATEGORIES })
+    const withoutMeter = (html: string) => html.replace(/[ \t]*<div class="session-meter">[\s\S]*?<\/div>\n?/g, '')
     const react = mounted('a', data)
-    expect(inner(react, true)).toBe(
-      inner(
-        [oldSheet({ data, open: 'a', detail: { key: 'a', data: null, status: 'idle', error: '', at: null } })],
-        true,
+    expect(withoutMeter(inner(react, true))).toBe(
+      withoutMeter(
+        inner(
+          [oldSheet({ data, open: 'a', detail: { key: 'a', data: null, status: 'idle', error: '', at: null } })],
+          true,
+        ),
       ),
     )
     // The head's title is #62's: the card's fields in it, nothing of them under it.
@@ -405,6 +429,28 @@ describe('the mounted sheet', () => {
     const aside = byId(react, 'sheet')
     expect(hasClass(aside, 'sheet')).toBe(true)
     expect(find([aside], el => el.attrs.get('id') === 'sheet-close').tag).toBe('button')
+  })
+
+  test('the session meter: context, model and effort beside the message box', () => {
+    const sized = item({
+      key: 'a',
+      name: 'Alpha',
+      status: 'working',
+      column: 'work',
+      context: 84_000,
+      contextPct: 42,
+      model: 'Opus 4.5',
+      effort: 'medium',
+    })
+    const react = mounted('a', payload({ items: [sized], categories: CATEGORIES }))
+    const meter = byClass(react, 'session-meter')
+    const text = canonical([meter])
+    expect(text).toContain('ctx 42%')
+    expect(text).toContain('Opus 4.5')
+    expect(text).toContain('Model: Opus 4.5')
+    expect(text).toContain('Effort: medium')
+    // Read only for now: no menus.
+    expect(text).not.toContain('<select')
   })
 
   test('the slot for a question form fills #sheet-question in place of what the session asks', () => {
@@ -553,12 +599,12 @@ describe('the compact head (#62)', () => {
     const waits = head(pinned)
     expect(findAll(waits, el => el.attrs.get('id') === 'doing')).toEqual([])
     expect(text(byId(waits, 'wait'))).toBe('review "now"')
-    // Opened: both, the empty one with its hint (what it does: Claude's title for it, in plain words).
+    // Opened: the filled field stays; the empty one is one quiet Add button, not a placeholder row.
     const opened = head(pinned, { card: { disabled: false, open: true } })
     expect(byId(opened, 'sheet-properties-toggle').attrs.get('aria-expanded')).toBe('true')
-    expect(byId(opened, 'doing').attrs.get('placeholder')).toBe('Claude title')
-    expect(byId(opened, 'doing').attrs.has('title')).toBe(false)
+    expect(findAll(opened, el => el.attrs.get('id') === 'doing')).toEqual([])
     expect(text(byId(opened, 'wait'))).toBe('review "now"')
+    expect(findAll(opened, el => hasClass(el, 'add-field')).map(text)).toContain('+ Doing')
     // Nothing to say: the fields' place folds away; the pencil or a reminder brings it back.
     const quiet = { ...working, doing: '' }
     expect(byId(head(quiet), 'sheet-card').attrs.has('hidden')).toBe(true)

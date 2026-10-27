@@ -12,6 +12,7 @@ import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
 import { ONESHOT_STRINGS } from './oneshot-strings.ts'
+import { PRESENCE_STRINGS } from './presence-strings.ts'
 import { PROFILE_STRINGS } from './profile-strings.ts'
 import { REMOTE_STRINGS } from './remote-strings.ts'
 import { SERVER_STRINGS } from './server-strings.ts'
@@ -154,6 +155,17 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'card.focus': 'Go to herdr',
     'card.pinned': 'You put it here. It goes back by itself once the session works again',
     'card.favorite': 'Favorite: first in its column and whole, however long it idles',
+    'card.ctx': 'ctx {tokens}',
+    'card.ctxPct': 'ctx {pct}%',
+    'meter.ctx': 'ctx {value}',
+    'meter.ctxNone': 'ctx —',
+    'meter.contextHint': 'How full the context its last request carried is',
+    'meter.model': 'Model',
+    'meter.modelHint': 'The model this session runs',
+    'meter.effort': 'Effort',
+    'meter.effortHint': 'The effort this session thinks with',
+    'meter.unknown': '—',
+    'meter.sent': 'Sent /{command}',
     'menu.favorite': 'Add to Favorites',
     'menu.unfavorite': 'Remove from Favorites',
     'tool.peer': '→ another session',
@@ -425,6 +437,9 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'row.doing': 'Doing',
     'row.task': 'Task',
     'row.wait': 'Waits for',
+    'row.add': 'Add',
+    'row.addDoing': '+ Doing',
+    'row.addWait': '+ Waits for',
     'row.doingNone': 'The agent did not say',
     'row.waitNone': 'Nothing. Type and press Enter',
     'chip.auto': 'Auto',
@@ -569,6 +584,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sched.runs': ['{n} run', '{n} runs'],
     'sched.missedN': ['{n} missed', '{n} missed'],
     'sched.more': ['+{n} more', '+{n} more'],
+    'sched.count': ['{n} scheduled', '{n} scheduled'],
+    'sched.collapse': 'Show less',
     'sched.badge': ['Scheduled {when}: {text}', '{n} scheduled, next {when}: {text}'],
     'sched.open': 'Open the session',
     'sched.err.gone': 'That entry is gone already',
@@ -763,6 +780,17 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'card.focus': 'Перейти в herdr',
     'card.pinned': 'Ты перенёс сюда. Вернётся само, когда сессия снова заработает',
     'card.favorite': 'Избранная: первая в своей колонке и целиком, сколько бы ни простаивала',
+    'card.ctx': 'ctx {tokens}',
+    'card.ctxPct': 'ctx {pct}%',
+    'meter.ctx': 'ctx {value}',
+    'meter.ctxNone': 'ctx —',
+    'meter.contextHint': 'Насколько заполнен контекст последнего запроса',
+    'meter.model': 'Модель',
+    'meter.modelHint': 'Модель этой сессии',
+    'meter.effort': 'Усилие',
+    'meter.effortHint': 'Усилие, с которым думает эта сессия',
+    'meter.unknown': '—',
+    'meter.sent': 'Отправлено /{command}',
     'menu.favorite': 'В избранное',
     'menu.unfavorite': 'Убрать из избранного',
     'tool.peer': '→ другой сессии',
@@ -1031,6 +1059,9 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'row.doing': 'Делает',
     'row.task': 'Задача',
     'row.wait': 'Ждёт',
+    'row.add': 'Добавить',
+    'row.addDoing': '+ Делает',
+    'row.addWait': '+ Ждёт',
     'row.doingNone': 'Агент не указал',
     'row.waitNone': 'Ничего. Впиши и нажми Enter',
     'chip.auto': 'Само',
@@ -1175,6 +1206,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sched.runs': ['{n} запуск', '{n} запуска', '{n} запусков'],
     'sched.missedN': ['{n} пропуск', '{n} пропуска', '{n} пропусков'],
     'sched.more': ['ещё {n}', 'ещё {n}', 'ещё {n}'],
+    'sched.count': ['{n} в расписании', '{n} в расписании', '{n} в расписании'],
+    'sched.collapse': 'Свернуть',
     'sched.badge': [
       'В расписании на {when}: {text}',
       '{n} в расписании, ближайшее {when}: {text}',
@@ -1268,6 +1301,8 @@ for (const code of Object.keys(ARCHIVE_STRINGS) as Lang[]) Object.assign(STRINGS
 for (const code of Object.keys(FORK_STRINGS) as Lang[]) Object.assign(STRINGS[code], FORK_STRINGS[code])
 // And a side question to a session.
 for (const code of Object.keys(ASIDE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ASIDE_STRINGS[code])
+// And the user's presence (#172).
+for (const code of Object.keys(PRESENCE_STRINGS) as Lang[]) Object.assign(STRINGS[code], PRESENCE_STRINGS[code])
 // And the board through the owner's own domain: the tunnel and its login.
 for (const code of Object.keys(ACCESS_STRINGS) as Lang[]) Object.assign(STRINGS[code], ACCESS_STRINGS[code])
 // And setting up the server's web server from the board.

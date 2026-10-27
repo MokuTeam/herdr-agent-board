@@ -30,6 +30,8 @@ export interface LaunchOptions {
   focused: string
   board: string
   recent: string[]
+  /** The setup's ticket conventions: linked workspaces, -wt/<ticket> paths, case- names. */
+  linkedWorkspaces: boolean
   error: string
 }
 
@@ -311,6 +313,7 @@ export function createLaunches({ deps, onChange = () => {} }: { deps: Deps; onCh
       board: (cfg.placement ?? 'workspace') === 'workspace' ? (cfg.workspace ?? 'Board') : '',
       // Of the profiles the owner shows: a hidden one's folders are not offered.
       recent: await deps.homes.recentFolders(shownProfiles(deps.profiles().list).map(p => p.dir)),
+      linkedWorkspaces: cfg.launch?.linkedWorkspaces === true,
       error,
     }
   }

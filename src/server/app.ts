@@ -33,6 +33,7 @@ import {
 } from '../adapters/ssh.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
+import type { Observation } from '../core/presence.ts'
 import { shownProfiles } from '../core/profiles.ts'
 import { pwaPage } from '../core/pwa.ts'
 import type { SetupFacts } from '../core/setup.ts'
@@ -42,6 +43,7 @@ import { asideCheck } from '../services/aside.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
+import { createPresence } from '../services/presence.ts'
 import { editProfile, installProfile, wakeHooksInPlace } from '../services/profiles.ts'
 import { createRemote } from '../services/remote.ts'
 import { createRemoteAccess } from '../services/remote-access.ts'
@@ -61,6 +63,7 @@ import { fsRoutes } from './routes/fs.ts'
 import { launchRoutes } from './routes/launch.ts'
 import { mokupilotRoutes } from './routes/mokupilot.ts'
 import { pageLogRoute } from './routes/page-log.ts'
+import { presenceRoutes } from './routes/presence.ts'
 import { remoteRoutes } from './routes/remote.ts'
 import { revealRoute, revealState } from './routes/reveal.ts'
 import { scheduleRoute } from './routes/schedule.ts'
@@ -169,10 +172,21 @@ export interface ServerOptions {
   gather?: () => Promise<SetupFacts>
   /** Starts wake's start (entrypoints/wake-start.ts, with `--again` for Start again); tests hand in a recorder. */
   wakeStarter?: (args?: string[]) => void
+  /** What presence detection asks the computer (adapters/idle.ts); tests hand in their own. */
+  presenceObserve?: () => Promise<Observation>
+  /** How often detection asks (30 s); tests ask sooner. */
+  presenceIntervalMs?: number
 }
 
 /** `deps.cfg` is the live config (liveConfig): call the returned refresh from its onChange. */
-export async function startServer({ deps, port: asked, gather, wakeStarter }: ServerOptions): Promise<BoardServer> {
+export async function startServer({
+  deps,
+  port: asked,
+  gather,
+  wakeStarter,
+  presenceObserve,
+  presenceIntervalMs,
+}: ServerOptions): Promise<BoardServer> {
   const { cfg, log } = deps
   // Validate before starting a scheduler or changing any state.
   const cards = cardsDir()
@@ -369,6 +383,15 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
     onChange: accessChanged,
     server: serverSetup,
   })
+  // The user's presence (#172): nothing is read, asked or shown while config.json has no `presence`.
+  const presence = createPresence({
+    cfg,
+    log,
+    ...(presenceObserve && { observe: presenceObserve }),
+    ...(presenceIntervalMs && { intervalMs: presenceIntervalMs }),
+    onChange: () => board.publish(),
+    sessions: () => board.items().map(i => i.key),
+  })
   const board = createBoardState({
     deps,
     launches,
@@ -382,6 +405,7 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
     aside,
     accessRev: () => accessRev,
     ...(omarchy && { omarchy: omarchy.stamp }),
+    presence: presence.view,
   })
   board.publish()
   const refresh = (): void => void board.refresh()
@@ -405,6 +429,8 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
     settingsRoute(),
     // Settings → MokuPilot…: where a call starts, here or on the viewer's computer.
     ...mokupilotRoutes(cfg),
+    // The user's presence: read, switched and set (the page, the phone, the Android app).
+    ...presenceRoutes(presence),
     // A line from the page for this log (a phone's browser says what it could not do there).
     pageLogRoute(log),
     scheduleRoute(refresh),
@@ -454,6 +480,10 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
     staticRoute(WEB, bundle, page),
   )
   const host = new RegExp(`^(127\\.0\\.0\\.1|localhost):${port}$`)
+  const ownOrigin = (req: Request): boolean => {
+    const origin = req.headers.get('origin')
+    return origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`
+  }
 
   async function answer(req: Request, srv?: ReturnType<typeof Bun.serve>): Promise<Response> {
     // The header first: with an empty, invalid or missing Host, Bun's req.url is a bare path.
@@ -461,7 +491,12 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
     let url: URL | undefined
     try {
       url = new URL(req.url)
-      return await dispatch(routes, req, url, decodeURIComponent(url.pathname), guards, () => peerOf(srv, req))
+      const path = decodeURIComponent(url.pathname)
+      // Something done on this board's own page is the user at the computer (presence's "back");
+      // the CLI and agents send no Origin, and the presence switch itself says what it says.
+      if (req.method !== 'GET' && path.startsWith('/api/') && path !== '/api/presence' && ownOrigin(req))
+        presence.touch()
+      return await dispatch(routes, req, url, path, guards, () => peerOf(srv, req))
     } catch (err) {
       // The path only: a query can carry the page's token.
       log(`${req.method} ${url ? url.pathname : req.url.split('?')[0]}: ${messageOf(err)}`)
@@ -522,6 +557,7 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
   void tunnel.sync().then(() => supervisor.sync())
   // Wake on but not running (its startup entry did not run, or it ended): started once.
   void wake.ensure()
+  presence.start()
 
   // What the Remote access view reads of config.json, and the tunnel's own settings in it, as of
   // the last config change.
@@ -552,6 +588,8 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
       }
       // Turned on in config.json (by hand, or from the panel): started at once.
       wake.configChanged()
+      // Presence turned on or off: its sessions marked or unmarked, the board shown again.
+      presence.refresh()
       await board.refresh()
     },
     async close() {
@@ -560,6 +598,7 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
       omarchy?.close()
       scheduler.stop()
       wake.stop()
+      presence.stop()
       terminals.stopAll()
       setup.stop()
       accessOut.cancel()

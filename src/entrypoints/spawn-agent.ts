@@ -6,7 +6,7 @@
 //   spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
 //               [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
 //               [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--pane <herdr pane id>]
-//               [--profile <id>] [--agent claude|pi]
+//               [--profile <id>] [--agent claude|pi] [--trust]
 //   PowerShell-style names work too: -Name, -Cwd, -Label, -BriefFile, -Brief, -Workspace, -TimeoutSec.
 //
 // --resume brings back a session that ended (the board's archive): Claude resumes it by its id, in
@@ -22,6 +22,10 @@
 //
 // The session starts in the Claude profile of the agent that runs it (its CLAUDE_CONFIG_DIR), or
 // in the one --profile names; the board's own starts pass --config-dir <folder> or --keep-env.
+//
+// --trust answers two startup dialogs with Yes instead of stopping there: the folder-trust dialog
+// for --cwd itself, and "Allow external CLAUDE.md file imports?" when every file it lists is in
+// the user's own Claude folders. Any other dialog still stops the start.
 //
 // Prints "pane=<id> name=<Name> agent=<herdr name>", with " kind=pi" after it when the start
 // command started pi; exits 1 with the reason when it fails. The board reads that line
@@ -46,6 +50,7 @@ try {
       profiles: loadProfiles({ home }),
       env: process.env,
       home,
+      ticketNames: launch.linkedWorkspaces === true,
     })
     console.log(`pane=${r.pane} name=${r.name} agent=${r.agent}${r.kind === 'claude' ? '' : ` kind=${r.kind}`}`)
   }

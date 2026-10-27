@@ -51,6 +51,11 @@ export interface Card {
   favorite?: boolean
   /** The last question form its PreToolUse hook reported (core/held-question.ts). */
   asking?: HeldQuestion
+  /**
+   * The presence change this session was last told of (core/presence.ts: its `since`), -1 for one
+   * the board marked to hear it on its next prompt; absent where presence was never on.
+   */
+  presenceSeen?: number
   [extra: string]: unknown
 }
 
@@ -85,6 +90,12 @@ export interface LaunchSpec {
   pi?: string | string[]
   /** The agent a start that names none starts as (core/launch/agents.ts): `claude` or `pi`; Claude Code when unset. */
   default?: string
+  /**
+   * The setup's ticket conventions: workspaces linked through herdr worktree for any checkout,
+   * new worktrees under `<parent>/<repo>-wt/<ticket>`, and ticket agent names (`case-14404`).
+   * Off (the default) leaves every setup as it was.
+   */
+  linkedWorkspaces?: boolean
 }
 
 /** Where a launch from the board is: waiting for a dialog answered in herdr, or at the folder-trust one. */
@@ -166,6 +177,8 @@ export interface Config {
    * pageWithLook); else Classic.
    */
   look?: unknown
+  /** The user's presence (`true` or an object), as config.json has it: read through core/presence.ts presenceConfig. */
+  presence?: unknown
   [extra: string]: unknown
 }
 
@@ -194,6 +207,10 @@ export interface TranscriptInfo {
   activity?: number
   tokens?: number
   context?: number | null
+  /** The model its last assistant message ran, when the status line has not said. */
+  model?: string | null
+  /** The effort its last assistant message was sent with (low, medium, high, xhigh, max). */
+  effort?: string | null
   [extra: string]: unknown
 }
 
@@ -226,6 +243,10 @@ export interface Item {
   context?: number | null
   contextPct?: number | null
   contextSize?: number | null
+  /** The model it runs, as Claude's status line names it. */
+  model?: string | null
+  /** The effort it thinks with (low, medium, high, xhigh, max), from its transcript. */
+  effort?: string | null
   tool?: ToolCall | null
   question?: string
   askSince?: number | null

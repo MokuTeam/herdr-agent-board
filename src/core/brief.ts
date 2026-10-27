@@ -1,6 +1,7 @@
 // What a session is told about the board (see entrypoints/hook.ts and codex-hook.ts).
 import { categoryFor } from './categories.ts'
 import { languageName } from './lang.ts'
+import { type Presence, presenceBrief } from './presence.ts'
 import type { Card, Config } from './types.ts'
 
 // Bump when the brief says something new: every running session gets it again on its next prompt.
@@ -33,6 +34,8 @@ export function brief(
   cwd: string,
   env: Env = process.env,
   agent: 'Claude' | 'Codex' = 'Claude',
+  /** The user's presence (core/presence.ts), only where config.json turned it on; null: nothing said. */
+  presence: Presence | null = null,
 ): string {
   const cat = card?.category
   const guess = categoryFor(cfg, cwd)
@@ -57,6 +60,7 @@ export function brief(
     agent === 'Claude' &&
       "  More reliable than CronCreate or ScheduleWakeup: those live in this Claude process and die when the idle session is put to sleep; the board's entries survive sleep and restarts. Use it for anything due later than a few minutes.",
     `Card texts in ${languageName()}, short. Call it only when the state changes, not every turn.${state ? ` Card now: ${state}.` : ''}`,
+    presence && presenceBrief(presence),
     herdrLine(env, agent),
   ]
     .filter(Boolean)

@@ -4,10 +4,12 @@
 // (components/panel/place.ts), whether sleeping sessions show, with more than one profile folder
 // the Profiles panel, while wake's state line is in the payload Sleep and wake…, and how sessions
 // asleep in "Waiting" fold, for every board; on the local board, Remote access…; on a page
-// signed in through the owner's domain, Sign out. The items are models/settings-menu.ts.
+// signed in through the owner's domain, Sign out; Presence (#172), the board's, for every board.
+// The items are models/settings-menu.ts.
 import { useEffect, useState } from 'react'
 import type { FoldMode } from '../../../src/core/fold-mode.ts'
 import { LANGUAGES, translator } from '../../../src/core/i18n/translator.ts'
+import type { PresenceMode } from '../../../src/core/presence.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import { ApiError, api, errorText, isReply, postJson, replyOf } from '../api/client.ts'
 import type { MenuEngine, MenuSource } from '../components/menu/menu-engine.ts'
@@ -70,7 +72,14 @@ export interface SettingsDeps {
   /** This page signed in through the owner's domain: Sign out is offered. */
   signOut?(): boolean
   endLogin?(): void
+  /** Presence as the board has it ('none': not on); none: no Presence item. */
+  presence?(): PresenceMode | 'none' | undefined
+  idleMinutes?(): number | undefined
+  choosePresence?(body: PresenceSetting): void
 }
+
+/** What Settings → Presence asks the board for (POST /api/presence { op: 'settings', … }). */
+export type PresenceSetting = { on: false } | { on: true; mode?: PresenceMode; idleMinutes?: number }
 
 /** The menu out of the gear (`keyboard`: opened from the keyboard, the first item lit). */
 export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyboard: boolean) => void {
@@ -93,6 +102,8 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       mokupilot: deps.mokupilot?.() ?? false,
       access: deps.access?.() ?? false,
       signOut: deps.signOut?.() ?? false,
+      presence: deps.presence?.(),
+      idleMinutes: deps.idleMinutes?.(),
     })
     const source: MenuSource = keyboard ? 'keyboard' : deps.coarse() ? 'touch' : 'mouse'
     deps.menu.open(items, {
@@ -117,6 +128,9 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'mokupilot') deps.openMokupilot?.()
         else if (pick?.kind === 'access') deps.openAccess?.()
         else if (pick?.kind === 'signout') deps.endLogin?.()
+        else if (pick?.kind === 'presence')
+          deps.choosePresence?.(pick.value === 'none' ? { on: false } : { on: true, mode: pick.value })
+        else if (pick?.kind === 'presenceIdle') deps.choosePresence?.({ on: true, idleMinutes: pick.value })
       },
     })
   }
@@ -167,6 +181,26 @@ export async function chooseFold(
   if (!canEdit) return toast(t('live.off'), true)
   try {
     await save({ foldWaiting: mode })
+  } catch (err) {
+    toast(errorText(err, t), true)
+  }
+}
+
+/** Presence on or off, its mode or idle minutes, for every board (config.json's `presence`). */
+export async function choosePresence(
+  body: PresenceSetting,
+  {
+    t,
+    canEdit,
+    save,
+    toast,
+  }: Pick<LanguageDeps, 't' | 'canEdit' | 'toast'> & {
+    save(body: PresenceSetting & { op: 'settings' }): Promise<unknown>
+  },
+): Promise<void> {
+  if (!canEdit) return toast(t('live.off'), true)
+  try {
+    await save({ op: 'settings', ...body })
   } catch (err) {
     toast(errorText(err, t), true)
   }
@@ -315,6 +349,21 @@ export function useSettingsMenu(
       endLogin: () => {
         const { t, board } = latest.current
         void endLogin({ t, toast: board.toast })
+      },
+      // No `presence` in the board's payload: presence is off.
+      presence: () => {
+        const data = latest.current.board.data
+        return data ? (data.presence?.mode ?? 'none') : undefined
+      },
+      idleMinutes: () => latest.current.board.data?.presence?.idleMinutes,
+      choosePresence: body => {
+        const { t, board } = latest.current
+        void choosePresence(body, {
+          t,
+          canEdit: board.canEdit,
+          save: b => api.post('/api/presence', b),
+          toast: board.toast,
+        })
       },
     })
     return settingsGear(menu, open, setExpanded)

@@ -83,6 +83,24 @@
   transition: background-color 120ms ease;
 }
 #sheet .sheet-card textarea::placeholder { color: var(--label-3); }
+/* The empty card fields, offered as one quiet line: only the one asked for opens. */
+#sheet .sheet-card .add-row { min-height: 24px; }
+#sheet .sheet-card .add-row .row-label { color: var(--label-3); }
+#sheet .sheet-card .add-fields { display: flex; flex-wrap: wrap; gap: 6px; }
+#sheet .sheet-card .add-field {
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--fill-2);
+  color: var(--label-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+#sheet .sheet-card .add-field:not(:disabled):hover { background: var(--fill); color: var(--label); }
+#sheet .sheet-card .add-field:disabled { cursor: default; opacity: 0.5; }
+#sheet .sheet-card .add-field:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 #sheet .sheet-card textarea:not(:disabled):hover, #sheet .sheet-card textarea:focus { background: var(--fill-2); }
 /* The line under the name breaks between its facts, after a separator, as it did. */
 .sheet-meta > .sep { white-space: normal; }

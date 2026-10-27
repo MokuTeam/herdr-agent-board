@@ -40,6 +40,10 @@
 //   board tunnel [on|off|test]   the board through the owner's own domain (core/tunnel.ts): where
 //                            the tunnel stands; on and off in config.json; test runs Test connection
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
+//   board presence [here|away]   whether the user is at the computer or away (core/presence.ts),
+//                            the line every session's context has; with a state, the user's switch
+//   board away [on|off]      the same switch: away (on, the default) or back at the computer (off).
+//                            Both only while config.json turns presence on; never sent to a session
 //   board resume <session id> [--profile <id>]   resumes that session here, in the profile its
 //                            card says it ran in (else the one named): what herdr types into a
 //                            restored pane for a session in another profile than the default one
@@ -74,6 +78,7 @@ import { asSnapshot, type HerdrPane, herdr, snapshot } from '../adapters/herdr.t
 import { isRecord } from '../adapters/json-store.ts'
 import { boardFile } from '../adapters/paths.ts'
 import { findPiSession } from '../adapters/pi-home.ts'
+import { currentPresence, setPresence } from '../adapters/presence-store.ts'
 import { runHere } from '../adapters/process.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
 import { addEntry, askRestart, listEntries, type NewEntry, removeEntry } from '../adapters/schedule-store.ts'
@@ -84,6 +89,7 @@ import { CODEX_AGENT } from '../core/codex.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
 import { isPiSessionFile, piSessionId } from '../core/pi.ts'
+import { type PresenceState, presenceConfig, presenceLine } from '../core/presence.ts'
 import { type ProfileSet, profileSet, resolveProfileDir, sessionProfile } from '../core/profiles.ts'
 import { type RemoteView, remoteConfig } from '../core/remote.ts'
 import { parseResume, projectFolderName, resumeDir, resumePlan } from '../core/resume.ts'
@@ -102,7 +108,7 @@ import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | resume <session id> [--profile <id>] | resume --pi <pi session id>] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id>] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -384,6 +390,42 @@ function line(key: string, cwd: string): string {
   return parts.join(' · ')
 }
 
+/**
+ * `board presence [here|away]` and `board away [on|off]`: the user's presence (#172), read or
+ * switched in its file, so with the board closed too; the board shows a switch at its next look.
+ * While config.json has no `presence` it is off, and a switch is refused: no file appears.
+ */
+function presence(): void {
+  const word = (rest[0] ?? '').toLowerCase()
+  const state: PresenceState | null =
+    cmd === 'away'
+      ? word === '' || word === 'on'
+        ? 'away'
+        : word === 'off'
+          ? 'here'
+          : null
+      : word === ''
+        ? null
+        : word === 'here' || word === 'away'
+          ? word
+          : null
+  if (word && !state)
+    throw new Error(cmd === 'away' ? 'usage: board away [on|off]' : 'usage: board presence [here|away]')
+  if (!presenceConfig(cfg.presence)) {
+    if (!state) {
+      console.log('presence is off (no "presence" in config.json; Settings → Presence turns it on)')
+      return
+    }
+    throw new Error(t('err.presenceOff'))
+  }
+  if (!state) {
+    console.log(presenceLine(currentPresence()))
+    return
+  }
+  const { presence: p, changed } = setPresence(state, 'user', process.env.HERDR_PANE_ID ? 'agent' : 'cli')
+  console.log(`ok · ${changed ? '' : 'already '}${p.state === 'away' ? 'away' : 'here'}`)
+}
+
 async function main(): Promise<void> {
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') return console.log(USAGE)
 
@@ -456,6 +498,7 @@ async function main(): Promise<void> {
   if (cmd === 'fork') return fork()
   if (cmd === 'resume') return rest.includes('--pi') ? resumePi() : resume()
   if (cmd === 'tg-key') return tgKey()
+  if (cmd === 'presence' || cmd === 'away') return presence()
 
   const s = await resolveSession()
   const now = Date.now()

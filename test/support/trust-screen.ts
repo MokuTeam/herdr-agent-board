@@ -21,3 +21,30 @@ export function trustScreen(folder: string, { selected = 'no', width = 48, ansi 
     ' Enter to confirm · Esc to cancel',
   ].join('\r\n')
 }
+
+// Claude Code's "Allow external CLAUDE.md file imports?" dialog as herdr reads it from a pane.
+export type ImportsOptions = { files?: string[]; selected?: 'no' | 'yes' | null }
+
+export function importsScreen({
+  files = ['/Users/me/.claude/PROTOCOL.md', '/Users/me/.claude/RTK.md'],
+  selected = 'no',
+}: ImportsOptions = {}): string {
+  const pick = (which: 'no' | 'yes') => (selected === which ? '❯' : ' ')
+  return [
+    ' me@Mac ~/Documents/x  claude',
+    '────────────',
+    '  Allow external CLAUDE.md file imports?',
+    '',
+    "  This project's CLAUDE.md or .claude/rules imports files outside the current working directory.",
+    '',
+    '  External imports:',
+    ...files.map(f => `    ${f}`),
+    '',
+    '  Important: Only use Claude Code with files you trust.',
+    '',
+    `  ${pick('no')} No, disable external imports`,
+    `  ${pick('yes')} Yes, allow external imports`,
+    '',
+    '  Enter to confirm · Esc to cancel',
+  ].join('\r\n')
+}

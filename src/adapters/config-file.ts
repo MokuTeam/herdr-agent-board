@@ -13,6 +13,7 @@ import { LANGUAGES } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
 import { profileCommand } from '../core/launch/spawn-args.ts'
 import { isMokupilotMode } from '../core/mokupilot-mode.ts'
+import { isPresenceMode, MAX_IDLE_MINUTES, presenceConfig } from '../core/presence.ts'
 import {
   absoluteProfileDir,
   mergeProfiles,
@@ -178,6 +179,35 @@ export function editMokupilot(body: unknown): EditResult {
   if (raw.mokupilot === false) return { ok: false, error: t('mokupilot.err.off') }
   const { link: _link, ...own } = isRecord(raw.mokupilot) ? raw.mokupilot : {}
   raw.mokupilot = { ...own, mode }
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/**
+ * Presence's settings (#172) in config.json's `presence` section: { on?: boolean; mode?: 'auto' |
+ * 'suggest' | 'off'; idleMinutes?: number }. On writes the section (as it reads now, or { mode:
+ * 'auto' }), off takes it out: a setup with presence off has no section at all, as one that never
+ * turned it on. A value of the wrong kind refuses the whole edit.
+ */
+export function editPresence(body: unknown): EditResult {
+  const b: Raw = isRecord(body) ? body : {}
+  if (b.on !== undefined && typeof b.on !== 'boolean') return { ok: false, error: t('err.presenceSetting') }
+  if (b.mode !== undefined && !isPresenceMode(b.mode)) return { ok: false, error: t('err.presenceSetting') }
+  if (
+    b.idleMinutes !== undefined &&
+    !(Number.isInteger(b.idleMinutes) && Number(b.idleMinutes) >= 1 && Number(b.idleMinutes) <= MAX_IDLE_MINUTES)
+  )
+    return { ok: false, error: t('err.presenceMinutes', { max: MAX_IDLE_MINUTES }) }
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  const now = presenceConfig(raw.presence)
+  if (b.on === false || (b.on === undefined && !now && b.mode === undefined && b.idleMinutes === undefined)) {
+    delete raw.presence
+  } else {
+    const section: Raw = isRecord(raw.presence) ? { ...raw.presence } : {}
+    section.mode = b.mode ?? now?.mode ?? 'auto'
+    if (b.idleMinutes !== undefined) section.idleMinutes = b.idleMinutes
+    raw.presence = section
+  }
   writeRaw(raw)
   return { ok: true }
 }

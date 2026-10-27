@@ -1,7 +1,8 @@
-// The session's reminders in its sheet: the first three — when (orange once due), the text, the
-// on-time / when-free toggle and the two-click cancel — and a link to the rest in the schedule
-// panel. What the buttons do is the page's schedule desk (hooks/useSchedule.ts), shared with the
-// schedule panel: they come in as props.
+// The session's reminders in its sheet: the next one by default — when (orange once due), the
+// text, the on-time / when-free toggle and the two-click cancel — with a count that opens the
+// rest in place (three, then a link to the schedule panel). What the buttons do is the page's
+// schedule desk (hooks/useSchedule.ts), shared with the schedule panel: they come in as props.
+import { useState } from 'react'
 import type { ScheduleEntry } from '../../../../src/core/schedule-rules.ts'
 import { capital, longWhen } from '../../../../src/core/when-format.ts'
 import type { ScheduleShown } from '../../hooks/useSchedule.ts'
@@ -29,18 +30,35 @@ export interface ScheduleRowProps extends Omit<ScheduleActions, 'held'> {
   entries: ScheduleEntry[]
   now: number
   disabled: boolean
+  /** A cancelled entry is folding: keep the rows it had, not the compact one. */
+  forceExpanded?: boolean
 }
 
 const SHOWN = 3
 
-export function ScheduleRow({ entries, now, disabled, armed, onCancel, onMode, onMore }: ScheduleRowProps) {
+export function ScheduleRow({
+  entries,
+  now,
+  disabled,
+  armed,
+  onCancel,
+  onMode,
+  onMore,
+  forceExpanded = false,
+}: ScheduleRowProps) {
   const t = useT()
+  // One entry by default; the count opens the rest in place, so a session with several
+  // reminders costs one line until it is asked for. While one is being cancelled, the rows
+  // it had stay, so the question is asked on the row it belongs to.
+  const [expanded, setExpanded] = useState(false)
   if (!entries.length) return null
+  const open = expanded || forceExpanded || !!armed
+  const shown = open ? entries.slice(0, SHOWN) : entries.slice(0, 1)
   return (
     <div className="row sched-row">
       <span className="row-label">{t('sched.row')}</span>
       <div className="row-value">
-        {entries.slice(0, SHOWN).map(e =>
+        {shown.map(e =>
           e.kind === 'restart' ? (
             <RestartRow key={e.id} entry={e} disabled={disabled} ask={armed === e.id} onCancel={onCancel} />
           ) : (
@@ -60,7 +78,17 @@ export function ScheduleRow({ entries, now, disabled, armed, onCancel, onMode, o
             </div>
           ),
         )}
-        {entries.length > SHOWN && (
+        {entries.length > 1 && !forceExpanded && !armed && (
+          <button
+            type="button"
+            className="sched-more"
+            data-sched-toggle=""
+            onClick={() => setExpanded(shown => !shown)}
+          >
+            {expanded ? t('sched.collapse') : t('sched.count', { n: entries.length })}
+          </button>
+        )}
+        {open && entries.length > SHOWN && (
           <button
             type="button"
             className="sched-more"

@@ -78,7 +78,11 @@ only). Steps 1 and 2 are what the board needs; the rest adds to it.
    [`claude-tg`](https://github.com/Eithery-rc/tg-mcp#herdr-launcher), which gives each herdr tab
    its own Telegram topic. See [New sessions](#new-sessions). Working in [pi](#pi)? With `pi` on
    the board's PATH the "New session" window offers Claude Code or pi; `"default": "pi"` in
-   `launch` makes pi the one it starts on.
+   `launch` makes pi the one it starts on. `"linkedWorkspaces": true` in `launch` turns on the
+   ticket setup: a workspace is linked through `herdr worktree` for any git checkout, a new worktree
+   goes under `<parent>/<repo>-wt/<ticket>` beside the main checkout (even when started from another
+   worktree) and branches from the checkout that was picked, and a ticket's session is named
+   `case-<n>` (Jira keys lower-case). Off by default, so every other setup starts as it did.
 4. **Sleep and wake starts with the board** (nothing to install or run). It puts sessions to sleep
    and wakes them: "Put to sleep", "Wake" and "Restart" on the board, `board sleep` and
    `board restart` (agents restart themselves with it, see [Restart](#restart)), sleeping sessions
@@ -211,7 +215,8 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
 - Click a card: a sheet with a compact head (two pills, where the card shows and its lane, each
   opening a menu to change it; the name; its workspace, last activity and context; then what it
   does, what it waits for, its reminders and the sessions it works with, each only when there is
-  one, and the pencil shows the empty ones to fill in), the question and screen when it waits for
+  one; the pencil offers empty fields as one quiet "Add" row, and the reminders show the next one
+  with a count that opens the rest in place), the question and screen when it waits for
   you (a question form or a permission prompt is answered right there, see
   [Answering from the board](#answering-from-the-board)), the conversation (tool calls folded;
   a background command, agent, monitor or MCP task reporting back and a board reminder are a
@@ -692,11 +697,11 @@ puts it on PATH; it is `bun src/entrypoints/spawn-agent.ts`):
 spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
             [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
             [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>]
-            [--pane <herdr pane id>] [--profile <id>] [--agent claude|pi]
+            [--pane <herdr pane id>] [--profile <id>] [--agent claude|pi] [--trust]
 ```
 
 PowerShell's spelling works too: `-Name`, `-Cwd`, `-Label`, `-BriefFile`, `-Brief`, `-Workspace`,
-`-TimeoutSec`, `-Profile`, `-Agent`. `--agent pi` types `launch.pi` (default `pi`) instead of the
+`-TimeoutSec`, `-Profile`, `-Agent`, `-Trust`. `--agent pi` types `launch.pi` (default `pi`) instead of the
 profile's `command` and `args` or `launch.claude`, for a new session only (no `--resume` or
 `--fork`); see [pi](#pi). It opens a tab in the workspace (inside herdr the current one, from
 `HERDR_WORKSPACE_ID`), labelled with `--label` or the name, and types the profile's `command`, or
@@ -710,9 +715,12 @@ pane=<pane id> name=<Name> agent=<herdr name>
 
 which is how the board knows who started whom. It fails (exit code 1, the reason on stderr) when
 the folder is not there, Claude is not ready in time, or Claude waits for a dialog first (the
-folder trust): answer it in that tab, then name and brief the session there. A brief that does
-not get through fails it too, saying so: the session runs, send the brief by hand rather than
-start another. A `/rename` that does not take is only a warning. `--pane` starts Claude in that
+folder trust): answer it in that tab, then name and brief the session there. `--trust` answers
+two such dialogs with Yes instead: the folder-trust one when it names `--cwd` itself, and "Allow
+external CLAUDE.md file imports?" when every file it lists is in the user's own Claude folders.
+Any other dialog still stops the start. A brief that does not get through fails it too, saying
+so: the session runs, send the brief by hand rather than start another. A `/rename` that does
+not take is only a warning. `--pane` starts Claude in that
 pane instead of a new tab; it must be at a shell prompt, not running an agent. `--resume` brings
 back a session that ended (`launch.claude` with `--resume <uuid>`, run in the folder the session
 ran in): it keeps its name, so no `/rename` is typed; the board's [archive](#archive) uses it.
@@ -1617,6 +1625,61 @@ in):
 On Linux and macOS the board shows none; herdr's own (`delivery = "system"`) say that a session
 finished, without its words.
 
+## Presence
+
+Off unless you turn it on. The board can keep whether you are at the computer ("here") or away
+from it ("away"), so each session knows where its news should go: while you are away, it also
+sends results, questions and blockers to wherever you read them away from the computer (Telegram,
+say, if that session has a way to); while you are here, the board and the terminal are enough.
+
+Settings → Presence turns it on, or `presence` in config.json:
+
+```json
+"presence": { "mode": "auto", "idleMinutes": 15 }
+```
+
+`true` is the same as `{ "mode": "auto" }`. The modes:
+
+- `auto` (the default): the board switches by itself. You count as away after `idleMinutes`
+  without keyboard or mouse input, or once the screen is locked. You count as here again on input,
+  on unlocking, or on using the board's page on this computer.
+- `suggest`: the board only offers the switch, next to the toolbar's switch.
+- `off`: the manual switch alone.
+
+A switch by hand wins until the next clear change. Press "away" at the keyboard and the input right
+after does not bring you back; once you have actually gone and come back, it does. The same goes
+for "here" while the screen still counts as idle.
+
+To switch it:
+
+- the board: the toolbar's Here / Away switch, which is also on the phone and in the PWA;
+- the command line: `board presence` prints the state, `board presence here|away` sets it, and
+  `board away [on|off]` does the same;
+- HTTP: `GET /api/presence` gives `{ presence }`, which is null while presence is off.
+  `POST /api/presence` with `x-board: 1` takes `{ "state": "here" | "away", "from": "phone" }` to
+  switch, or `{ "op": "settings", "on": true, "mode": "suggest", "idleMinutes": 10 }` to change
+  the settings. The phone and the Android app use these.
+
+While presence is off, a switch is refused and no state is kept. Turning it off forgets the state.
+
+Nothing is ever sent or typed into a session for it: no reminder, no message, no notification.
+Sessions read it passively. A session told of the board (SessionStart) gets a line on the current
+state in its context. A prompt (UserPromptSubmit) after a change gets the new line once. `board
+presence` prints it at any time. Sessions running when presence was turned on hear of it on their
+next prompt. The state lives in `presence.json` in the board's state folder (`src/core/presence.ts`,
+`src/adapters/presence-store.ts`, `src/services/presence.ts`, `src/server/routes/presence.ts`).
+
+Detection asks the computer every 30 seconds (`src/adapters/idle.ts`), only while the mode is
+`auto` or `suggest`:
+
+- Windows: idle time and a locked screen, from PowerShell;
+- macOS: idle time from `ioreg` (a locked screen is not seen yet);
+- Linux: logind (`loginctl`: idle and locked hints), `xprintidle` on X11, GNOME's idle time and
+  screensaver over D-Bus, and a running screen locker (hyprlock, swaylock, i3lock...). On a
+  Wayland desktop with none of these, only the board's page and the manual switch count.
+
+`detects` in `GET /api/presence` says whether this computer told the board anything at its last ask.
+
 ## Phones
 
 Off unless you turn it on. With [Tailscale](https://tailscale.com) on this computer and on a phone,
@@ -2362,6 +2425,10 @@ board fork [--name "<Name>"] ["<note>"]
                           a fork of this session in a new tab, with a copy of its conversation
                           (the web board starts it; the note is its first message); see Fork
 --session <id|name|pane>  for another session's card
+board presence [here|away]
+                          whether the user is at the computer or away (where news goes: also
+                          Telegram while away); here|away sets it; see Presence
+board away [on|off]       the same switch: away (on), back at the computer (off)
 board doctor              what is set up on this computer, and what is missing
 board resume <session id> [--profile <id>]
                           resumes that session here, in its own Claude profile (what herdr types
