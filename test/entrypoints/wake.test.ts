@@ -3,14 +3,21 @@
 // answers, plus each session's profile) on 127.0.0.1 only, the kill switch read before anything,
 // the settings followed live, and nothing done by itself while the reaper and Telegram are off.
 import { expect, setDefaultTimeout, test } from 'bun:test'
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { networkInterfaces } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { unusedPort } from '../support/board-server.ts'
-import { type Sandbox, until } from '../support/sandbox.ts'
+import { root, type Sandbox, until } from '../support/sandbox.ts'
 import { runningSession, SID, SID2 } from '../support/wake-fixtures.ts'
-import { spawnWake, startWakeProcess, wakeOnConfig, wakeSandbox, writeBoardConfig } from '../support/wake-process.ts'
+import {
+  endWithSandbox,
+  spawnWake,
+  startWakeProcess,
+  wakeOnConfig,
+  wakeSandbox,
+  writeBoardConfig,
+} from '../support/wake-process.ts'
 
 setDefaultTimeout(30_000)
 
@@ -583,6 +590,86 @@ test('a web page cannot drive it: 403 for a request with an Origin, or a Host ot
   expect((await fetch(`${wake.url}/status`)).status).toBe(200)
   expect((await fetch(`${wake.url}/status`, { headers: { host: `localhost:${port}` } })).status).toBe(200)
   // Nothing was woken: no herdr call but its looks.
+  expect(box.calls().filter(c => c.join(' ') !== 'api snapshot')).toEqual([])
+})
+
+/** A program of the board's run as herdr or Claude Code runs it, with the sandbox's env: its exit and output. */
+async function runEntry(
+  box: Sandbox,
+  entry: string,
+  args: string[],
+  stdin = '',
+): Promise<{ code: number; out: string }> {
+  const proc = Bun.spawn([process.execPath, join(root, 'src', 'entrypoints', entry), ...args], {
+    cwd: root,
+    env: { ...box.env, HERDR_PLUGIN_CONTEXT_JSON: '' },
+    stdin: new TextEncoder().encode(stdin),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  endWithSandbox(proc)
+  const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+  return { code: await proc.exited, out: out + err }
+}
+
+test('on the board’s own server: only with the board’s local key, which its hooks and herdr’s actions send; /alive as before', async () => {
+  const box = await wakeSandbox()
+  idleAndAsleep(box)
+  const port = await unusedPort()
+  const serverMode = { domain: 'board.example.com', socket: '/var/lib/agent-board/board.sock' }
+  writeBoardConfig(box, wakeOnConfig(port, { config: { serverMode } }))
+  const wake = spawnWake(box)
+  endWithSandbox(wake.proc)
+  const url = `http://127.0.0.1:${port}`
+  const alive = async (): Promise<boolean> =>
+    fetch(`${url}/alive`, { signal: AbortSignal.timeout(1000) }).then(
+      r => r.ok,
+      () => false,
+    )
+  const deadline = Date.now() + 10_000
+  while (!(await alive())) {
+    if (wake.proc.exitCode !== null || Date.now() > deadline) throw new Error(JSON.stringify(wake.output()))
+    await Bun.sleep(25)
+  }
+  // wake made the key: the board's user's alone
+  const file = join(stateOf(box), 'local-key')
+  const key = readFileSync(file, 'utf8').trim()
+  expect(key).toMatch(/^[\w-]{43}$/)
+  if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
+
+  // another account on the server: no key, or a wrong one, however like a program of the board's it looks
+  const refused = { ok: false, error: "on the board's server only the board's own programs may use wake" }
+  for (const headers of [{}, { 'x-board-key': 'k'.repeat(43) }, { host: `localhost:${port}` }]) {
+    for (const path of ['/status', '/sleeping', '/awake']) {
+      const res = await fetch(`${url}${path}`, { headers })
+      expect([path, res.status, await res.json()]).toEqual([path, 403, refused])
+    }
+    for (const path of ['/wake', '/sleep']) {
+      const res = await fetch(`${url}${path}`, { method: 'POST', headers, body: JSON.stringify({ target: 'Ledger' }) })
+      expect([path, res.status, await res.json()]).toEqual([path, 403, refused])
+    }
+  }
+  // the supervisor's health check needs none
+  expect(await (await fetch(`${url}/alive`)).json()).toEqual({ pid: wake.proc.pid })
+  // with the key
+  const sleeping = await fetch(`${url}/sleeping`, { headers: { 'x-board-key': key } })
+  expect(sleeping.status).toBe(200)
+  expect(((await sleeping.json()) as { name: string }[]).map(s => s.name)).toEqual(['Ledger'])
+
+  // ListAgents' hook, as Claude Code runs it: Ledger asleep, told
+  const listed = await runEntry(
+    box,
+    'wake-hook.ts',
+    ['post-list'],
+    JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'ListAgents', tool_input: {}, tool_response: {} }),
+  )
+  expect(listed.code).toBe(0)
+  expect(listed.out).toContain('Ledger')
+  // herdr's action: its answer is wake's own (no such pane), not the refusal
+  const action = await runEntry(box, 'wake-action.ts', ['sleep', 'w9:p9'])
+  expect(action.out).not.toContain('only the board')
+  expect(action.out).not.toBe('')
+  // nothing was woken or put to sleep: no herdr call but its looks
   expect(box.calls().filter(c => c.join(' ') !== 'api snapshot')).toEqual([])
 })
 

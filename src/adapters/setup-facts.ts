@@ -29,6 +29,7 @@ import { WAKE_SHIPPED, wakeConfig } from '../core/wake/config.ts'
 import { wakeState } from '../core/wake/status.ts'
 import { skillIn } from './agents-skill.ts'
 import { herdrHookOf, readSettings } from './hook-settings.ts'
+import { type LocalFetch, localFetch } from './local-key.ts'
 import { ROOT } from './paths.ts'
 import { findProfileDirs, inheritedProfileDir } from './profiles.ts'
 import { oldRouterAt, wakeAlive } from './wake-api.ts'
@@ -120,14 +121,18 @@ export function findCommand(
     : { sh: hit([name]) }
 }
 
-/** GET `url` within `timeoutMs`: whether it answered 2xx, its status, why not; with `withBody`, the JSON it answered (null: none). */
+/**
+ * GET `url` within `timeoutMs`: whether it answered 2xx, its status, why not; with `withBody`, the
+ * JSON it answered (null: none). `fetchFn`: localFetch for one of the board's own ports.
+ */
 async function probe(
   url: string,
   timeoutMs = PROBE_MS,
   withBody = false,
+  fetchFn: LocalFetch = fetch,
 ): Promise<{ ok: boolean; status?: number; error?: string; body?: unknown }> {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
+    const res = await fetchFn(url, { signal: AbortSignal.timeout(timeoutMs) })
     if (!withBody) return { ok: res.ok, status: res.status }
     const body: unknown = await res.json().catch(() => null)
     return { ok: res.ok, status: res.status, body }
@@ -276,7 +281,7 @@ async function wakeFacts(cfg: Partial<Config> | null | undefined, probeMs = PROB
   const status = s.enabled ? readWakeStatus() : null
   const up = s.enabled && status?.state !== 'held' ? await wakeAlive(s.port, probeMs) : false
   const state = wakeState({ on: s.enabled, status, answers: up, now: Date.now() })
-  const answer = up ? await probe(`http://127.0.0.1:${s.port}/status`, probeMs, true) : null
+  const answer = up ? await probe(`http://127.0.0.1:${s.port}/status`, probeMs, true, localFetch(cfg)) : null
   const body = answer?.ok && isRecord(answer.body) ? answer.body : null
   const sleeping = Array.isArray(body?.sleeping) ? body.sleeping.length : null
   const router = state === 'portTaken' ? await oldRouterAt(s.port, probeMs) : null

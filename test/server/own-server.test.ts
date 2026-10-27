@@ -104,8 +104,37 @@ describe('the board on its own server, before its first login', () => {
       expect(await answer(caddy.post('/api/setup/start', { code: 'x' }, headers))).toEqual([403, { error: 'origin' }])
   })
 
-  test('the web board’s own port is as ever: loopback, no login', async () => {
-    const res = await fetch(`${url}/api/board`)
+  test('the web board’s own port: loopback, and only with the board’s local key, which only its user reads', async () => {
+    const file = join(stateFolder(box), 'local-key')
+    const key = readFileSync(file, 'utf8').trim()
+    expect(key).toMatch(/^[\w-]{43}$/)
+    if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
+    // another account on the server (www-data, a container on the host's network): the Host, the
+    // Origin and X-Board it likes, no key or a wrong one; the page, reads and actions alike
+    const port = new URL(url).port
+    const forged = [
+      {},
+      { 'x-board': '1', origin: url },
+      { host: `localhost:${port}`, 'x-board': '1' },
+      { 'x-board-key': '' },
+      { 'x-board-key': 'k'.repeat(43) },
+      { 'x-board-key': `${key.slice(0, -1)}${key.endsWith('A') ? 'B' : 'A'}` },
+    ]
+    for (const headers of forged) {
+      expect(await answer(fetch(`${url}/api/board`, { headers }))).toEqual([403, { error: 'key' }])
+      expect(await answer(fetch(`${url}/`, { headers }))).toEqual([403, { error: 'key' }])
+      const post = (path: string, body: unknown) =>
+        fetch(`${url}${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-board': '1', ...headers },
+          body: JSON.stringify(body),
+        })
+      expect(await answer(post('/api/access', { op: 'logins-end-all' }))).toEqual([403, { error: 'key' }])
+      expect(await answer(post('/api/launch', { cwd: box.dir }))).toEqual([403, { error: 'key' }])
+      expect(await answer(post('/api/term/x/shell/open', {}))).toEqual([403, { error: 'key' }])
+    }
+    // the board's own programs: with the key
+    const res = await fetch(`${url}/api/board`, { headers: { 'x-board-key': key } })
     expect(res.status).toBe(200)
     const payload = (await res.json()) as Record<string, unknown>
     // what only a PC has: no MokuPilot call, whatever config.json says, and the page told so
@@ -113,7 +142,7 @@ describe('the board on its own server, before its first login', () => {
     expect(payload.mokupilot).toBe(false)
     const setup = await fetch(`${url}/api/setup/start`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      headers: { 'content-type': 'application/json', 'x-board': '1', 'x-board-key': key },
       body: '{}',
     })
     expect(setup.status).not.toBe(200)
@@ -275,11 +304,12 @@ describe('board login and doctor without a board running', () => {
 
 describe('a board on a PC (no serverMode) is as before', () => {
   const shared = sharedSandbox()
+  let box: Sandbox
   let proc: Child
   let url = ''
 
   beforeAll(async () => {
-    const box = await shared()
+    box = await shared()
     ;({ url, proc } = await serveBoard(box, { language: 'en', mokupilot: { mode: 'link' } }))
   }, 30_000)
 
@@ -288,5 +318,16 @@ describe('a board on a PC (no serverMode) is as before', () => {
     expect('server' in payload).toBe(false)
     expect(payload.mokupilot).toBe(true)
     expect(logLines(proc).filter(l => l.startsWith('server mode'))).toEqual([])
+  })
+
+  test('no local key: none made, none asked for; one sent is not looked at', async () => {
+    for (const headers of [{}, { 'x-board-key': 'k'.repeat(43) }]) {
+      const res = await fetch(`${url}/api/board`, { headers })
+      expect(res.status).toBe(200)
+      await res.body?.cancel()
+      expect((await fetch(`${url}/`, { headers })).status).toBe(200)
+    }
+    expect(existsSync(join(stateFolder(box), 'local-key'))).toBe(false)
+    expect(logLines(proc).filter(l => l.startsWith('local key'))).toEqual([])
   })
 })

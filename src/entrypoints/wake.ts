@@ -20,7 +20,9 @@
 // is a session name, a pane id or a session id. GET /alive answers { pid } without asking herdr (the
 // supervisor's health check: a slow herdr never gets wake ended). Programs on this computer only: a
 // request with an Origin, or a Host other than 127.0.0.1:<port> or localhost:<port> (a web page, DNS
-// rebinding), is refused with 403. Once it listens it says { up: <port> } over its IPC channel, when it has one
+// rebinding), is refused with 403; on the board's own server (core/on-server.ts), where other
+// accounts reach 127.0.0.1 too, so is one without the board's local key (adapters/local-key.ts),
+// but for GET /alive. Once it listens it says { up: <port> } over its IPC channel, when it has one
 // (the supervisor's, services/wake/supervisor.ts); told 'restart' there (a code change), it ends
 // with 75 once no wake or sleep is under way, answering new ones 503 meanwhile; that channel closed
 // (the supervisor gone), it ends with 0 the same way, as when turned off. The port keeps wake
@@ -33,12 +35,14 @@ import { join } from 'node:path'
 import { configFile, liveConfig, loadConfig, readConfigFile } from '../adapters/config-file.ts'
 import { followedJson } from '../adapters/followed-json.ts'
 import { isRecord } from '../adapters/json-store.ts'
+import { ensureLocalKey, keyMatches, LOCAL_KEY_HEADER } from '../adapters/local-key.ts'
 import { stateDir } from '../adapters/paths.ts'
 import { boardOnPath } from '../adapters/resume-report.ts'
 import { oldRouterAt, wakeAnswers } from '../adapters/wake-api.ts'
 import { readWakeStatus, wakeLog, wakeSessionsFile, writeWakeStatus } from '../adapters/wake-files.ts'
 import { cliWakeHerdr } from '../adapters/wake-herdr.ts'
 import { scheduledJobs } from '../adapters/wake-transcripts.ts'
+import { onServer } from '../core/on-server.ts'
 import { type TelegramTarget, telegramTarget, type WakeConfig, wakeConfig, wakeSwitch } from '../core/wake/config.ts'
 import type { RouteItem } from '../core/wake/route.ts'
 import type { TelegramStatus } from '../core/wake/status.ts'
@@ -299,6 +303,24 @@ function fromHere(req: Request, port: number): boolean {
 const failed = (status: number, error: string): Response =>
   new Response(JSON.stringify({ ok: false, error }), { status, headers: JSON_HEADERS })
 
+/** The board's local key, made when there is none: null when it cannot be (every request is refused then). */
+let localKey: string | null = null
+function ownKey(): string | null {
+  try {
+    localKey ??= ensureLocalKey()
+  } catch (err) {
+    log(`local key: ${messageOf(err)}`)
+  }
+  return localKey
+}
+
+/** On the board's own server: whether the request lacks the board's local key. On a PC nothing is asked. */
+function keyRefused(req: Request): boolean {
+  if (!onServer(cfg)) return false
+  const key = ownKey()
+  return key === null || !keyMatches(req.headers.get(LOCAL_KEY_HEADER), key)
+}
+
 /**
  * 200 with the answer pretty-printed (a one-space indent, as the old router's), 404 with an empty
  * body, 500 { ok: false, error }; 403 for a web page, 503 for a new sleep or wake on the way out.
@@ -311,6 +333,7 @@ async function answer(req: Request, port: number): Promise<Response> {
     const path = url.pathname
     if (req.method === 'GET' && path === '/alive')
       return new Response(JSON.stringify({ pid: process.pid }, null, 1), { headers: JSON_HEADERS })
+    if (keyRefused(req)) return failed(403, "on the board's server only the board's own programs may use wake")
     if (leaving && req.method === 'POST' && (path === '/wake' || path === '/sleep')) return failed(503, leaving.why)
     const out = await api(req, url)
     if (out === null) return new Response(null, { status: 404 })
@@ -386,6 +409,8 @@ if (deliverArgs) {
 }
 
 const start = settings()
+// the key in place before the first request, for the programs that read it to send it
+if (onServer(cfg)) ownKey()
 // No idle timeout: a wake can take its wakeTimeoutSec and more. No port reuse: the port keeps wake
 // to one process. Not development: a throw must never serve Bun's error page.
 try {

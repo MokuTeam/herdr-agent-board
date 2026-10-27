@@ -4,6 +4,7 @@
 // sleep go to wake's API as they go to herdr-wake's (integrations/herdr-wake.ts), never to the
 // separate plugin's router should it still hold the port.
 import { dirname, join } from 'node:path'
+import type { LocalFetch } from '../adapters/local-key.ts'
 import { peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
 import { t } from '../core/lang.ts'
 import { createHerdrWake, type SleepingSession, type SleepProvider } from './herdr-wake.ts'
@@ -82,7 +83,7 @@ function fileSleepers(sessionsFile: string): SleepingSession[] {
 export function createBoardWake(o: {
   url: string
   sessionsFile: string
-  fetch?: typeof fetch
+  fetch?: LocalFetch
   now?: () => number
 }): BoardWake {
   const fetchFn = o.fetch ?? fetch
@@ -144,14 +145,15 @@ export function createBoardWake(o: {
 }
 
 // One per url and file for the whole process, as sharedHerdrWake: the list the model reads is the
-// one the server and the scheduler forget after a wake or a sleep.
+// one the server and the scheduler forget after a wake or a sleep. `keyed`: the fetch that sends
+// the board's local key, on the board's own server (adapters/local-key.ts); a PC's has none.
 const shared = new Map<string, BoardWake>()
 
-export function sharedBoardWake(url: string, sessionsFile: string): BoardWake {
-  const key = JSON.stringify([url, sessionsFile])
+export function sharedBoardWake(url: string, sessionsFile: string, keyed?: LocalFetch): BoardWake {
+  const key = JSON.stringify([url, sessionsFile, !!keyed])
   const known = shared.get(key)
   if (known) return known
-  const created = createBoardWake({ url, sessionsFile })
+  const created = createBoardWake({ url, sessionsFile, ...(keyed && { fetch: keyed }) })
   shared.set(key, created)
   return created
 }

@@ -16,6 +16,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { type EditResult, editWake } from '../../adapters/config-file.ts'
 import { asSnapshot, herdr as herdrCli } from '../../adapters/herdr.ts'
+import { type LocalFetch, localFetch } from '../../adapters/local-key.ts'
 import { ROOT } from '../../adapters/paths.ts'
 import { wakeAlive } from '../../adapters/wake-api.ts'
 import {
@@ -109,10 +110,13 @@ const record = (v: unknown): Record<string, unknown> | null =>
   v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
-/** GET /status on wake's port within 2 s, with what wake takes (Host 127.0.0.1:<port>, no Origin): its answer, or null. */
-async function askWake(port: number): Promise<unknown> {
+/**
+ * GET /status on wake's port within 2 s, with what wake takes (Host 127.0.0.1:<port>, no Origin;
+ * the board's local key on its own server, through `ask`): its answer, or null.
+ */
+async function askWake(port: number, ask: LocalFetch): Promise<unknown> {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/status`, { signal: AbortSignal.timeout(ANSWER_MS) })
+    const res = await ask(`http://127.0.0.1:${port}/status`, { signal: AbortSignal.timeout(ANSWER_MS) })
     return res.ok ? await res.json() : null
   } catch {
     return null
@@ -177,7 +181,8 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
   const log = o.log ?? (() => {})
   const pollMs = o.pollMs ?? POLL_MS
   const settingsNow = (): WakeConfig => wakeConfig(o.cfg.wake)
-  const status = o.status ?? (() => askWake(settingsNow().port))
+  const keyed = localFetch(o.cfg)
+  const status = o.status ?? (() => askWake(settingsNow().port, keyed))
   const answers = o.answers ?? (() => wakeAlive(settingsNow().port, ANSWER_MS))
   const answering = (): Promise<boolean> => answers().catch(() => false)
   const asleep =

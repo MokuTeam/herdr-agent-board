@@ -42,7 +42,7 @@ PowerShell-style names work too (`-Name -Cwd -Label -BriefFile -Brief -Workspace
 Use `ListAgents` to see the sessions and `SendMessage` to reach one by name. A reply comes back to you as a message of its own.
 
 - A session that sits idle for an hour is put to sleep (herdr-wake, if installed): its pane stays, marked 💤. It is still the same session. `ListAgents` lists the sleeping ones too, and a `SendMessage` to one wakes it first (10 to 30 seconds), then delivers. Do not reroute its work or call it gone.
-- Waking without a message: `curl -s -X POST http://127.0.0.1:12421/wake -d '{"target":"<name>"}'` (herdr-wake's API; `GET /sleeping` lists who sleeps).
+- Waking without a message: `curl -s -X POST http://127.0.0.1:12421/wake -d '{"target":"<name>"}'` (herdr-wake's API; `GET /sleeping` lists who sleeps). On the board's own server (`board doctor` says "Server mode") add `-H "X-Board-Key: $(cat ~/.local/state/herdr/plugins/agent-board/local-key)"`.
 - Putting sessions to sleep that you coordinate: see the next section, one call for all of them.
 - Do not type into another session's pane (`herdr pane send-text`, `send-keys`, `agent prompt`) unless the user asked for it: it lands in whatever that session or the user is typing.
 

@@ -6,6 +6,7 @@
 import { existsSync } from 'node:fs'
 import { configFile, readConfigFile } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
+import { localFetch } from '../adapters/local-key.ts'
 import { wakeConfig, wakeSwitch } from '../core/wake/config.ts'
 
 /** A wake may take wakeTimeoutSec and more: how long the answer is waited for. */
@@ -38,10 +39,11 @@ if (!wakeSwitch({ exists: existsSync(configFile()), raw: readConfigFile() })) {
   process.exit(1)
 }
 
-const { port } = wakeConfig(readConfigFile()?.wake)
+const raw = readConfigFile()
+const { port } = wakeConfig(raw?.wake)
 let out: unknown
 try {
-  const res = await fetch(`http://127.0.0.1:${port}/${mode}`, {
+  const res = await localFetch(raw)(`http://127.0.0.1:${port}/${mode}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ target: pane }),

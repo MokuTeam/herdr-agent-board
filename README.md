@@ -2306,6 +2306,11 @@ keys are copied for it) and run `claude` once to sign in; `herdr` attaches to th
   up exactly as "Set up the server" does it for the tunnel (the board's own Caddy, or yours, or nginx
   with 8443), with its record, rollback and checks in `/etc/agent-board`; your sites are not touched.
   The installer's own Bun and copy of the board are root's, in `/usr/local/lib/agent-board`.
+- **127.0.0.1 there.** Other accounts on the server reach 127.0.0.1 too (the web server's, a
+  container on the host's network), so the web board's port and wake's take only requests that
+  carry the board's local key (`X-Board-Key`, from `~/.local/state/herdr/plugins/agent-board/local-key`,
+  0600, made by the board), as the `board` command, wake's hooks and herdr's actions send it. The
+  board's page is at your domain, through its login; on 127.0.0.1:12422 it answers 403.
 - **Again**: safe; it updates what is there and changes nothing that is already right. A new login
   link only comes while no login is set; after that, `board login reset` as `agent`.
 - **`board update [--ref <ref>]`** as `agent`: the ref the board came from (or another) fetched,

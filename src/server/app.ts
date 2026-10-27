@@ -4,12 +4,14 @@
 //
 // Only loopback, only the Host it was asked for, and every POST needs an X-Board header: a page
 // on another site cannot send that without a CORS preflight, which this server never grants, so
-// it cannot type into a session.
+// it cannot type into a session. On the board's own server every request carries the board's
+// local key too (adapters/local-key.ts): other accounts there reach 127.0.0.1 as well.
 import { randomBytes } from 'node:crypto'
 import { type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
 import { join } from 'node:path'
 import { saveFoundProfiles } from '../adapters/config-file.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
+import { ensureLocalKey, keyMatches, LOCAL_KEY_HEADER } from '../adapters/local-key.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
 import { archiveDir, cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
@@ -33,7 +35,7 @@ import {
 } from '../adapters/ssh.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
-import { serverModeOf } from '../core/on-server.ts'
+import { onServer, serverModeOf } from '../core/on-server.ts'
 import type { Observation } from '../core/presence.ts'
 import { shownProfiles } from '../core/profiles.ts'
 import { pwaPage } from '../core/pwa.ts'
@@ -489,10 +491,28 @@ export async function startServer({
     const origin = req.headers.get('origin')
     return origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`
   }
+  // On the board's own server (core/on-server.ts) any account there reaches 127.0.0.1, and may say
+  // any Host, Origin and X-Board: a request without the board's local key is refused, the page's
+  // too (the owner's browser comes through the domain's login listener). On a PC nothing is asked.
+  let localKey: string | null = null
+  const ownKey = (): string | null => {
+    try {
+      localKey ??= ensureLocalKey()
+    } catch (err) {
+      log(`local key: ${messageOf(err)}`)
+    }
+    return localKey
+  }
+  const keyRefused = (req: Request): boolean => {
+    if (!onServer(cfg)) return false
+    const key = ownKey()
+    return key === null || !keyMatches(req.headers.get(LOCAL_KEY_HEADER), key)
+  }
 
   async function answer(req: Request, srv?: ReturnType<typeof Bun.serve>): Promise<Response> {
     // The header first: with an empty, invalid or missing Host, Bun's req.url is a bare path.
     if (!host.test(req.headers.get('host') ?? '')) return json(403, { error: 'host' })
+    if (keyRefused(req)) return json(403, { error: 'key' })
     let url: URL | undefined
     try {
       url = new URL(req.url)
@@ -514,6 +534,8 @@ export async function startServer({
   // throw that got past answer() must never serve Bun's error page with the source and the cwd.
   // No port reuse: without development Bun reuses the port by default, and a second board on it
   // would start too (two schedulers) instead of failing with EADDRINUSE as on main.
+  // the key in place before the first request, for the programs that read it to send it
+  if (onServer(cfg)) ownKey()
   let server: ReturnType<typeof Bun.serve>
   try {
     server = Bun.serve({

@@ -83,6 +83,7 @@ import { createClaudeHome, cwdOf } from '../adapters/claude-home.ts'
 import { configFile, editCategories, loadConfig, setRemoteOn, setTunnelOn } from '../adapters/config-file.ts'
 import { asSnapshot, type HerdrPane, herdr, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
+import { localFetch } from '../adapters/local-key.ts'
 import { boardFile } from '../adapters/paths.ts'
 import { findPiSession } from '../adapters/pi-home.ts'
 import { currentPresence, setPresence } from '../adapters/presence-store.ts'
@@ -285,7 +286,9 @@ let webBoard: Promise<Record<string, unknown> | null> | undefined
 function boardAnswer(): Promise<Record<string, unknown> | null> {
   webBoard ??= (async () => {
     try {
-      const res = await fetch(`http://127.0.0.1:${cfg.port ?? 12422}/api/board`, { signal: AbortSignal.timeout(1500) })
+      const res = await localFetch(cfg)(`http://127.0.0.1:${cfg.port ?? 12422}/api/board`, {
+        signal: AbortSignal.timeout(1500),
+      })
       const body: unknown = await res.json()
       return isRecord(body) ? body : null
     } catch {
@@ -716,12 +719,15 @@ async function restart(s: Session): Promise<void> {
 async function fork(): Promise<void> {
   const s = await resolveSession()
   if (cfg.web === false) throw new Error('board fork goes through the web board, and config.json turns it off')
-  const res = await fetch(`http://127.0.0.1:${cfg.port ?? 12422}/api/session/${encodeURIComponent(s.key)}/fork`, {
-    method: 'POST',
-    headers: { 'X-Board': '1', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...(forkName && { name: forkName }), ...(text && { message: text }) }),
-    signal: AbortSignal.timeout(20_000),
-  }).catch(() => null)
+  const res = await localFetch(cfg)(
+    `http://127.0.0.1:${cfg.port ?? 12422}/api/session/${encodeURIComponent(s.key)}/fork`,
+    {
+      method: 'POST',
+      headers: { 'X-Board': '1', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...(forkName && { name: forkName }), ...(text && { message: text }) }),
+      signal: AbortSignal.timeout(20_000),
+    },
+  ).catch(() => null)
   if (!res) throw new Error('the web board does not answer, and board fork goes through it (board doctor)')
   const body: unknown = await res.json().catch(() => null)
   if (!isRecord(body) || body.ok !== true)
@@ -987,7 +993,7 @@ async function adoptPi(): Promise<void> {
   const up = await wakeAnswers(deps)
   if (!up.ok) throw new Error(`taking a pi session as asleep needs ${wakeMissing(up)}; nothing was done`)
   const port = wakeConfig(cfg.wake).port
-  const res = await fetch(`http://127.0.0.1:${port}/sleep`, {
+  const res = await localFetch(cfg)(`http://127.0.0.1:${port}/sleep`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ target: pane, piSession: file }),
@@ -1043,7 +1049,7 @@ async function remote(): Promise<void> {
   const url = `http://127.0.0.1:${webPort}/api/remote`
   const call = async (init?: RequestInit): Promise<unknown> => {
     try {
-      return await (await fetch(url, { ...init, signal: AbortSignal.timeout(3000) })).json()
+      return await (await localFetch(cfg)(url, { ...init, signal: AbortSignal.timeout(3000) })).json()
     } catch {
       throw new Error('the board does not run: open it first (herdr plugin action invoke agent-board.open)')
     }
@@ -1126,7 +1132,7 @@ async function tunnel(): Promise<void> {
   if (op === 'test') return tunnelTest(webPort, conf.domain ? publicOrigin(conf) : '')
   if (op !== 'status') throw new Error('usage: board tunnel [on | off | test]')
   const { boardAccessView } = await import('../services/tunnel-facts.ts')
-  const view = await boardAccessView(webPort)
+  const view = await boardAccessView(webPort, localFetch(cfg))
   if (!view) return console.log(conf.on ? 'tunnel on · the board does not run' : TUNNEL_OFF)
   const { settings, status: s, ssh } = view.tunnel
   if (!settings.on) return console.log(TUNNEL_OFF)
@@ -1174,7 +1180,7 @@ async function login(): Promise<void> {
     }
     return console.log(newSetupLink(mode.domain))
   }
-  const answered = await resetLogin(Number(cfg.port) || 12422)
+  const answered = await resetLogin(Number(cfg.port) || 12422, localFetch(cfg))
   console.error(
     `ok · the password, the code and the passkeys cleared, every login ended${answered ? '' : ' (the board does not run)'}; the link below sets a new login`,
   )
@@ -1185,7 +1191,7 @@ async function login(): Promise<void> {
 async function tunnelTest(webPort: number, origin: string): Promise<void> {
   let res: Response
   try {
-    res = await fetch(`http://127.0.0.1:${webPort}/api/access`, {
+    res = await localFetch(cfg)(`http://127.0.0.1:${webPort}/api/access`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-board': '1' },
       body: JSON.stringify({ op: 'test' }),

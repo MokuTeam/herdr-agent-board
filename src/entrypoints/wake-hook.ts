@@ -17,6 +17,7 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { configFile, readConfigFile } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
+import { type LocalFetch, localFetch } from '../adapters/local-key.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { wakeConfig, wakeSwitch } from '../core/wake/config.ts'
 import { ownSleepers, type WakeProfile } from '../core/wake/rules.ts'
@@ -44,9 +45,9 @@ function entries(answer: unknown): Entry[] | null {
   return list
 }
 
-/** Wake's answer to a GET (no body) or a POST, whatever its status. */
-async function api(port: number, path: string, body: unknown, timeoutMs: number): Promise<unknown> {
-  const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+/** Wake's answer to a GET (no body) or a POST, whatever its status; `ask` sends the board's key on its own server. */
+async function api(ask: LocalFetch, port: number, path: string, body: unknown, timeoutMs: number): Promise<unknown> {
+  const res = await ask(`http://127.0.0.1:${port}${path}`, {
     method: body ? 'POST' : 'GET',
     headers: body ? { 'content-type': 'application/json' } : {},
     ...(body ? { body: JSON.stringify(body) } : {}),
@@ -126,6 +127,7 @@ async function main(): Promise<void> {
   const raw = readConfigFile()
   if (!wakeSwitch({ exists: existsSync(configFile()), raw })) return
   const settings = wakeConfig(raw?.wake)
+  const ask = localFetch(raw)
   const input: unknown = JSON.parse((await readStdin()) || '{}')
   if (!isRecord(input)) return
   const own = (list: Entry[]): Entry[] =>
@@ -137,12 +139,12 @@ async function main(): Promise<void> {
       .trim()
       .toLowerCase()
     if (!to) return
-    const sleeping = entries(await api(settings.port, '/sleeping', null, 3000))
+    const sleeping = entries(await api(ask, settings.port, '/sleeping', null, 3000))
     const target = sleeping && own(sleeping).find(s => s.name.toLowerCase() === to)
     // By its session id: its name may be another profile's sleeper's too.
     const id = target && [target.session, target.pane].find(v => typeof v === 'string' && v !== '')
     if (!target || !id) return
-    const r = await api(settings.port, '/wake', { target: id }, 170_000)
+    const r = await api(ask, settings.port, '/wake', { target: id }, 170_000)
     if (isRecord(r) && !r.ok) {
       console.log(
         JSON.stringify({
@@ -159,8 +161,8 @@ async function main(): Promise<void> {
 
   // /awake is newer than /sleeping: an older router answers 404, then only the sleepers show.
   const [list, running] = await Promise.all([
-    api(settings.port, '/sleeping', null, 3000),
-    api(settings.port, '/awake', null, 3000).catch(() => null),
+    api(ask, settings.port, '/sleeping', null, 3000),
+    api(ask, settings.port, '/awake', null, 3000).catch(() => null),
   ])
   const sleeping = entries(list)
   if (!sleeping) return

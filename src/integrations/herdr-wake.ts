@@ -1,5 +1,6 @@
 // herdr-wake: the router that puts idle Claude sessions to sleep and wakes them, spoken to over
 // HTTP. Kept behind SleepProvider so another sleep/wake backend can take its place later.
+import type { LocalFetch } from '../adapters/local-key.ts'
 import { t } from '../core/lang.ts'
 import { isPiItem } from '../core/pi.ts'
 import type { Item } from '../core/types.ts'
@@ -67,7 +68,7 @@ function sleepRefusal(why: string, who: WakeName): string {
 
 export function createHerdrWake(
   url: string | null,
-  fetchFn: typeof fetch = fetch,
+  fetchFn: LocalFetch = fetch,
   now: () => number = Date.now,
   who: WakeName = 'herdr-wake',
 ): SleepProvider {

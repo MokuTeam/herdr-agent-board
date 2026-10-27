@@ -19,6 +19,7 @@ import {
   writeSetupCode,
 } from '../adapters/access-store.ts'
 import { isRecord } from '../adapters/json-store.ts'
+import type { LocalFetch } from '../adapters/local-key.ts'
 import {
   SETUP_CODE,
   SETUP_CODE_BYTES,
@@ -118,12 +119,13 @@ export function newSetupLink(
  * `board login reset`: the password, the TOTP code and the passkeys go first (no sign-in from
  * here on), then the running board ends every login and the event streams open on them; with no
  * board answering, the logins go from the file all the same. Whether the board answered.
+ * `fetchFn`: adapters/local-key.ts localFetch, the board's key on its own server.
  */
-export async function resetLogin(webPort: number): Promise<boolean> {
+export async function resetLogin(webPort: number, fetchFn: LocalFetch = fetch): Promise<boolean> {
   clearSignIn()
   let answered = false
   try {
-    const res = await fetch(`http://127.0.0.1:${webPort}/api/access`, {
+    const res = await fetchFn(`http://127.0.0.1:${webPort}/api/access`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-board': '1' },
       body: JSON.stringify({ op: 'logins-end-all' }),
