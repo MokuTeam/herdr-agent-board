@@ -70,6 +70,19 @@ describe('wake and sleep', () => {
     expect(f.calls[0]?.init?.body).toBe('{"target":"pane1"}')
   })
 
+  test('#204: a sleeper without a pane goes by its session id, and the answer says the pane it woke in', async () => {
+    const f = fakeFetch(() => json({ ok: true, pane: 'w1:p9', name: 'Test' }))
+    expect(await createHerdrWake('http://x', f.fetch).wake({ ...item, pane: null })).toEqual({
+      ok: true,
+      pane: 'w1:p9',
+    })
+    expect(f.calls[0]?.init?.body).toBe('{"target":"s1"}')
+    // In its own pane, as before: the answer's pane is that one, nothing more said.
+    const same = fakeFetch(() => json({ ok: true, pane: 'pane1', name: 'Test' }))
+    expect(await createHerdrWake('http://x', same.fetch).wake(item)).toEqual({ ok: true })
+    expect(same.calls[0]?.init?.body).toBe('{"target":"pane1"}')
+  })
+
   test('wake: refusal and unreachable router give a message', async () => {
     const refused = await createHerdrWake('http://x', fakeFetch(() => json({ ok: false, error: 'boom' })).fetch).wake(
       item,

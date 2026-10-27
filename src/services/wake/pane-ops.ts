@@ -4,15 +4,19 @@
 // the session's folder itself, so there is no `cd` (call 17); the prompt line is cleared first by
 // the pane's shell, not by this process's OS (call 18). Nothing is typed into a pane whose
 // foreground or input box cannot be read, and no session is woken where the line would lose its
-// profile.
+// profile. A session put to sleep gives its pane back where it can (#204, core/wake/freed.ts): once
+// Claude has left, the pane is closed, and its tab with it when only herdr-sidebar's panes are
+// beside it; it wakes in a new tab then (services/wake/tabs.ts), the line run as the shell starts.
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { WakeHerdr } from '../../adapters/wake-herdr.ts'
 import { inputDraft } from '../../core/dialogs/input-box.ts'
+import { type FreedPlace, freePlan } from '../../core/wake/freed.ts'
 import { clearKeyFor, plainProfile, wakeLine } from '../../core/wake/rules.ts'
 import { isChannelsWarning, isExitTasksDialog, isTrustDialog } from '../../core/wake/screens.ts'
 
+/** Woken, with the pane it woke in when that is another than the one asked for (a new tab, #204). */
 export type WakeOutcome =
-  | { ok: true }
+  | { ok: true; pane?: string }
   | { ok: false; why: 'busy' | 'timeout' | 'trust' | 'blocked' | 'line'; error: string }
 
 /** The clock and the log, for tests; the real ones by default. */
@@ -56,7 +60,7 @@ function clock(t: Timing = {}): Required<Timing> {
  * `pane-<id>` keys), or a profile id that `--profile` cannot carry: without it the session would
  * wake in its card's or the pane's shell's profile, not surely its own.
  */
-function lineFor(session: string, profile: string | null | undefined): { line: string } | { error: string } {
+export function lineFor(session: string, profile: string | null | undefined): { line: string } | { error: string } {
   const line = wakeLine(session, profile)
   if (line === null) return { error: NOT_A_SESSION }
   if (typeof profile === 'string' && !plainProfile(profile)) return { error: PROFILE_NOT_PLAIN }
@@ -145,22 +149,23 @@ export async function waitReady(
 /**
  * Resumes the pane's sleeping session with `board resume` in its profile and waits until Claude
  * is ready for input. Only into a pane at its shell's prompt: the line is cleared by that shell's
- * key, then the one line run; herdr's errors are thrown. Holds the pane (withPane) itself; a caller
- * that does more in the pane right after (the Telegram router types its message) runs both inside
- * its own withPane, which this joins.
+ * key, then the one line run; herdr's errors are thrown. A pane just opened for it (`fresh`, a new
+ * tab, #204) gets the line as it is, its shell maybe still starting. Holds the pane (withPane)
+ * itself; a caller that does more in the pane right after (the Telegram router types its message)
+ * runs both inside its own withPane, which this joins.
  */
 export async function wakeInPane(
   io: WakeHerdr,
   target: { pane: string; session: string; profile?: string | null },
-  o: Timing & { timeoutMs: number; platform?: string },
+  o: Timing & { timeoutMs: number; platform?: string; fresh?: boolean },
 ): Promise<WakeOutcome> {
   const found = lineFor(target.session, target.profile)
   if ('error' in found) return { ok: false, why: 'line', error: found.error }
   return withPane(target.pane, async () => {
-    const prompt = await atPrompt(io, target.pane)
-    if (!prompt) return { ok: false, why: 'busy', error: ERRORS.busy }
+    const prompt = o.fresh ? null : await atPrompt(io, target.pane)
+    if (!o.fresh && !prompt) return { ok: false, why: 'busy', error: ERRORS.busy }
     clock(o).log(`waking ${target.session} in ${target.pane}`)
-    await io.sendKeys(target.pane, clearKeyFor(prompt.shell, o.platform))
+    if (prompt) await io.sendKeys(target.pane, clearKeyFor(prompt.shell, o.platform))
     await io.run(target.pane, found.line)
     const state = await waitReady(io, target.pane, o.timeoutMs, o)
     return state === 'ready' ? { ok: true } : { ok: false, why: state, error: ERRORS[state] }
@@ -175,6 +180,21 @@ export interface SleepMarks {
   slept(now: number): void
   /** It stays up (background tasks, did not exit in time, herdr failed on the way). */
   stayed(): void
+  /** Asleep, and its pane closed (#204): where it comes back. */
+  freed?(place: FreedPlace): void
+}
+
+/**
+ * Closes a sleeper's pane, or its tab when only herdr-sidebar's panes are beside it, where
+ * core/wake/freed.ts freePlan allows: only while the pane is at its shell's prompt, nothing started
+ * in it. Where it comes back, once herdr no longer has the pane; null when it is left as it is.
+ */
+export async function freePane(io: WakeHerdr, pane: string, now: number): Promise<FreedPlace | null> {
+  const plan = freePlan(await io.snapshot(), pane, now)
+  if (!plan || !(await atPrompt(io, pane))) return null
+  if ('tab' in plan.close) await io.closeTab(plan.close.tab)
+  else await io.closePane(plan.close.pane)
+  return (await io.pane(pane)) ? null : plan.place
 }
 
 /** Types /exit and waits for Claude to leave: 'slept', 'tasks' (Esc pressed on that dialog) or 'up'. */
@@ -198,17 +218,17 @@ async function exitClaude(
 }
 
 /**
- * /exit an idle session and leave its pane marked `💤 <name>`, with the wake line typed at its
- * prompt, not run. Holds the pane (withPane) itself, or joins its caller's hold of it. Refuses
- * (false, no /exit) unless the session could be woken by that line, and the pane holds Claude with
- * this session, idle or done, with an empty input box it can read. After `going`, `slept` or
- * `stayed` follows, even when herdr fails.
+ * /exit an idle session, then give its pane back (`free`, freePane: `freed` follows), or leave it
+ * marked `💤 <name>` with the wake line typed at its prompt, not run. Holds the pane (withPane)
+ * itself, or joins its caller's hold of it. Refuses (false, no /exit) unless the session could be
+ * woken by that line, and the pane holds Claude with this session, idle or done, with an empty
+ * input box it can read. After `going`, `slept` or `stayed` follows, even when herdr fails.
  */
 export async function putToSleep(
   io: WakeHerdr,
   target: { pane: string; session: string; name: string; profile?: string | null },
   marks: SleepMarks,
-  t?: Timing,
+  t?: Timing & { free?: boolean },
 ): Promise<boolean> {
   const found = lineFor(target.session, target.profile)
   if ('error' in found) return false
@@ -237,6 +257,17 @@ export async function putToSleep(
       return false
     }
     marks.slept(c.now())
+    if (t?.free) {
+      const place = await freePane(io, pane, c.now()).catch(err => {
+        c.log(`${name}: its pane ${pane} could not be closed: ${err instanceof Error ? err.message : String(err)}`)
+        return null
+      })
+      if (place) {
+        marks.freed?.(place)
+        c.log(`put ${name} to sleep, its pane ${pane} closed`)
+        return true
+      }
+    }
     await io.rename(pane, `💤 ${name}`).catch(() => {})
     await c.sleep(TYPE_AFTER_RENAME_MS)
     // Typed for the user to run, only at the shell's prompt (nothing else took the pane meanwhile).

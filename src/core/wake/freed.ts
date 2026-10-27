@@ -1,0 +1,100 @@
+// A Claude session put to sleep gives its pane back (#204): once Claude has left, wake closes the
+// pane, and its tab when nothing but herdr-sidebar's panes is beside it (that plugin adds its pane
+// to every tab), so a sleeper holds no shell and no sidebar. It wakes in a new tab of its
+// workspace, with its tab's label (services/wake/tabs.ts). What it needs for that is kept with its
+// entry in wake's session file (core/wake/sessions.ts WakeEntry.freed).
+//
+// herdr cannot put a tab back where it was (its CLI has no tab move): a new tab opens at the
+// end of its workspace. So a pane is closed only where the session comes back in the same Telegram
+// topic (core/wake/topics.ts): a workspace's first tab is `topic:<workspace>`, the others
+// `topic:<workspace> / <tab>`. A tab that is not its workspace's first comes back as another tab
+// under its label; a workspace's only tab, alone in it but for sidebars, comes back as a new
+// workspace's first. The first tab of a workspace with other tabs, or one with the user's panes
+// beside the sleeper, keeps its pane, as before: closing it would move its session, and the next
+// tab, to other topics.
+//
+// Pure: the caller hands in herdr's snapshot, and closes only a pane at its shell's prompt.
+import { isSidebarPane } from '../board-pane.ts'
+import { keyFor, type TopicSnapshot, workspaceTabs } from './topics.ts'
+
+/** Where a sleeper whose pane wake closed comes back: what herdr showed of its place when it went. */
+export interface FreedPlace {
+  /** The pane it slept in, closed since: herdr may give its id to another pane after a restart. */
+  pane: string
+  /** herdr's workspace id then, and its label: a new tab there, or a new workspace of that label when it is gone. */
+  workspace?: string
+  workspaceLabel?: string
+  /** Its tab's label, which the new tab gets. */
+  tabLabel?: string
+  /** Its Telegram topic then (core/wake/topics.ts keyFor), by which the router finds it. */
+  topic: string
+  /** When its pane was closed. */
+  at: number
+}
+
+/** A pane as herdr's snapshot shows it, the fields read here. */
+interface FreedPane {
+  pane_id: string
+  tab_id?: string
+  workspace_id?: string
+  agent?: string
+  cwd?: string
+  tokens?: Record<string, unknown>
+}
+
+export interface FreedSnapshot extends TopicSnapshot {
+  panes: FreedPane[]
+}
+
+/** What freeing a pane takes: herdr's close (the tab, or the pane alone), and what the sleeper keeps. */
+export interface FreePlan {
+  close: { tab: string } | { pane: string }
+  place: FreedPlace
+}
+
+/**
+ * How to give the sleeper's pane back, or null to leave it as it is: herdr no longer has it, an
+ * agent runs in it, herdr does not say which tab and workspace it is in, or it could not come back
+ * in the same Telegram topic (see the top of the file).
+ */
+export function freePlan(snap: FreedSnapshot, pane: string, now: number): FreePlan | null {
+  const p = snap.panes.find(x => x.pane_id === pane)
+  if (!p || p.agent) return null
+  const tab = snap.tabs.find(t => t.tab_id === p.tab_id)
+  const ws = snap.workspaces.find(w => w.workspace_id === (tab?.workspace_id ?? p.workspace_id))
+  if (!tab || !ws) return null
+  const tabs = workspaceTabs(snap, ws.workspace_id)
+  const index = tabs.findIndex(t => t.tab_id === tab.tab_id)
+  const alone = snap.panes.filter(x => x.tab_id === tab.tab_id).every(x => x.pane_id === pane || isSidebarPane(x))
+  if (index < 0 || (index === 0 && !(alone && tabs.length === 1))) return null
+  return {
+    close: alone ? { tab: tab.tab_id } : { pane },
+    place: {
+      pane,
+      workspace: ws.workspace_id,
+      ...(ws.label && { workspaceLabel: ws.label }),
+      ...(tab.label && { tabLabel: tab.label }),
+      topic: keyFor(snap, pane, p.cwd ?? ''),
+      at: now,
+    },
+  }
+}
+
+const record = (v: unknown): Record<string, unknown> | null =>
+  v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+const time = (v: unknown): v is number => typeof v === 'number' && Math.abs(v) <= 8.64e15
+const filled = (v: unknown): v is string => typeof v === 'string' && v !== ''
+
+/** A FreedPlace as wake's session file has it; null for one that does not read as one. */
+export function asFreedPlace(value: unknown): FreedPlace | null {
+  const f = record(value)
+  if (!f || !filled(f.pane) || typeof f.topic !== 'string' || !time(f.at)) return null
+  return {
+    pane: f.pane,
+    ...(filled(f.workspace) && { workspace: f.workspace }),
+    ...(filled(f.workspaceLabel) && { workspaceLabel: f.workspaceLabel }),
+    ...(filled(f.tabLabel) && { tabLabel: f.tabLabel }),
+    topic: f.topic,
+    at: f.at,
+  }
+}

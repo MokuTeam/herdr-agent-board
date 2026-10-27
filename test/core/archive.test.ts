@@ -30,6 +30,8 @@ test('what may go to the archive, and why not', () => {
   assert.equal(archiveBlock({ ...it, agent: 'codex' }), 'archive.why.notClaude')
   assert.equal(archiveBlock({ ...it, session: null }), 'archive.why.notClaude')
   assert.equal(archiveBlock({ ...it, pane: null }), 'archive.why.noPane')
+  // A sleeper whose pane wake closed (#204): nothing to close, it goes.
+  assert.equal(archiveBlock({ ...it, pane: null, sleeping: true, status: 'sleeping' }), '')
   // Claude out and coming back in a restart; a report with a receipt that must reach it.
   assert.equal(archiveBlock(it, [{ key: S, kind: 'restart', step: 'wake' }]), 'archive.why.restarting')
   assert.equal(archiveBlock(it, [{ key: S, kind: 'restart' }]), '') // one that only waits goes with it

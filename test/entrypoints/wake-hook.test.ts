@@ -262,7 +262,7 @@ test('wake off, or config.json broken: no HTTP call at all', async () => {
 
 const node = Bun.which('node')
 
-test.skipIf(!node)('the context text is herdr-wake’s, word for word but the name', async () => {
+test.skipIf(!node)('the context text is herdr-wake’s, word for word but the name and where they wake', async () => {
   const w = await world()
   // One profile's sessions only (the old hook keeps them all): the default folder's, one without a profile.
   const d = { dir: w.dflt, id: 'default' }
@@ -299,7 +299,11 @@ test.skipIf(!node)('the context text is herdr-wake’s, word for word but the na
     expect(await proc.exited).toBe(0)
     return out
   }
-  const named = (text: string): string => text.replaceAll('herdr-wake', "the board's wake")
+  // A sleeper's pane may be closed now (#204): the text says where it wakes instead.
+  const named = (text: string): string =>
+    text
+      .replaceAll('herdr-wake', "the board's wake")
+      .replace('their pane is still open.', 'they wake in their pane, or in a new tab when wake closed it.')
 
   for (const answer of [awake, null]) {
     fake.awake = answer

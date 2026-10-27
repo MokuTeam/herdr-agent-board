@@ -156,9 +156,15 @@ export interface LinkItem {
   name: string
   autoName?: string
   pane?: string | null
+  /** Panes it had before, closed by wake as it went to sleep (#204): its card's `panes`. */
+  formerPanes?: string[]
   /** The message pipe its Claude process listens on, while it runs. */
   pipe?: string
 }
+
+/** Whether the item is the one in `pane`: its pane now, or one wake closed as it went to sleep (#204). */
+export const inPane = (it: Pick<LinkItem, 'pane' | 'formerPanes'>, pane: string): boolean =>
+  !!pane && (it.pane === pane || !!it.formerPanes?.includes(pane))
 
 export interface SessionRef {
   key: string
@@ -191,9 +197,10 @@ const norm = (s: unknown): string =>
 /**
  * The links between the board's items, from each one's events (`eventsOf(item)`): by key,
  * { from: { key, name, at } | null, started: [{ key, name, at }], talks: [{ key, name, in, out,
- * at }] }. A started session is matched by its pane and the name spawn-agent gave it (a pane id
- * is used again once its tab is gone); a message's other end by its pipe while that session
- * runs, else by its name when exactly one session on the board has it.
+ * at }] }. A started session is matched by its pane (or one it had before wake closed it, #204) and
+ * the name spawn-agent gave it (a pane id is used again once its tab is gone); a message's other
+ * end by its pipe while that session runs, else by its name when exactly one session on the board
+ * has it.
  */
 export function relate<T extends LinkItem>(
   items: readonly T[],
@@ -233,7 +240,7 @@ export function relate<T extends LinkItem>(
       own?.of && !read.some(ev => ev.kind === 'fork') ? [...read, { kind: 'fork', of: own.of, at: own.at }] : read
     for (const ev of events) {
       if (ev.kind === 'spawn') {
-        const b = items.find(it => it.key !== a.key && it.pane && it.pane === ev.pane && names(it).has(norm(ev.name)))
+        const b = items.find(it => it.key !== a.key && inPane(it, ev.pane) && names(it).has(norm(ev.name)))
         if (!b) continue
         const mine = linksOf(a.key).started
         const prev = mine.find(x => x.key === b.key)

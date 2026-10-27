@@ -24,14 +24,17 @@ import {
 } from '../core/profiles.ts'
 import type { AgentStatus, Config, Item } from '../core/types.ts'
 import { wakeConfig } from '../core/wake/config.ts'
+import type { FreedPlace } from '../core/wake/freed.ts'
 import { wakeOffByKey } from '../core/wake/mode.ts'
 import { canWake, plainProfile } from '../core/wake/rules.ts'
 import { herdrWakeAnswers, type SleepProvider } from '../integrations/herdr-wake.ts'
 import { raiseTerminal } from '../integrations/terminal-window.ts'
 import type { BoardWake } from '../integrations/wake.ts'
 import type { Deps } from './deps.ts'
+import { followFiles } from './wake/follow.ts'
 import { PROFILE_NOT_PLAIN, type WakeOutcome, wakeInPane } from './wake/pane-ops.ts'
 import { defaultPiOps, readPiTail, wakePi } from './wake/pi.ts'
+import { defaultTabOps, openTab } from './wake/tabs.ts'
 
 /**
  * `busy` (plus `dialog` or `draft`) says send refused because the session is occupied, not broken.
@@ -125,7 +128,9 @@ function wakeTarget(
   const own = itemProfile(item, set.list)
   if (own) return line(own.dir, own.id)
   if (item.profileFolder) return line(item.profileFolder, profileForDir(set.list, item.profileFolder)?.id ?? null)
-  const entry = item.pane ? peekWakeSessions()[item.pane] : undefined
+  // One whose pane wake closed is under its session id (#204).
+  const key = item.pane || item.session
+  const entry = key ? peekWakeSessions()[key] : undefined
   if (!entry || entry.session !== item.session) return { dir: null, profile: null }
   const dir = entry.profileDir ?? defaultProfileDir(homedir())
   return line(dir, entry.profile ?? profileForDir(set.list, dir)?.id ?? null)
@@ -160,17 +165,60 @@ function canWakeAgain(
  * development-channels warning confirmed, until Claude is ready; then its 💤 label cleared. The
  * board does not write wake's session file: `collect` leaves the sleeper out once its pane runs
  * Claude again, and wake's next round marks it awake. A second wake of it, waiting on the first
- * (withPane), finds it up: done, as the old router answers `already`.
+ * (withPane), finds it up: done, as the old router answers `already`. One whose pane wake closed
+ * (#204) wakes in a new tab where it was (services/wake/tabs.ts), as wake would wake it; wake's
+ * next round, once it answers, forgets it as asleep.
  */
 async function wakeHere(deps: Deps, item: Item): Promise<ActionResult> {
-  if (!item.pane) return { ok: false, error: t('err.noPane') }
-  const { pane } = item
+  const freed = !item.pane && item.session ? peekWakeSessions()[item.session]?.freed : undefined
+  if (!item.pane && !freed) return { ok: false, error: t('err.noPane') }
+  if (!freed) return wakeHereIn(deps, item, null)
+  // One new tab per session: a second wake while the first is on its way waits for it.
+  const session = item.session ?? ''
+  const under = opening.get(session)
+  if (under) return under
+  const run = wakeHereIn(deps, item, freed).finally(() => opening.delete(session))
+  opening.set(session, run)
+  return run
+}
+
+/** Sleepers whose pane wake closed that the board is waking in a new tab now, by session id. */
+const opening = new Map<string, Promise<ActionResult>>()
+
+/** wakeHere in the item's pane, or for one whose pane wake closed (`freed`) in a new tab. */
+async function wakeHereIn(deps: Deps, item: Item, freed: FreedPlace | null): Promise<ActionResult> {
   const { profile } = wakeTarget(item, deps.profiles())
-  const target = { pane, session: item.session ?? '', profile }
   const timeoutMs = wakeConfig(deps.cfg.wake).wakeTimeoutSec * 1000
   let outcome: WakeOutcome
+  let pane = item.pane ?? ''
   try {
-    outcome = await wakeInPane(cliWakeHerdr, target, { timeoutMs, log: text => deps.log(`wake: ${text}`) })
+    if (freed) {
+      const snap = await snapshot()
+      // Up already (woken by hand, or by wake meanwhile): there.
+      const up = snap.panes.find(p => p.agent === 'claude' && p.agent_session?.value === item.session)
+      if (up) return { ok: true, pane: up.pane_id }
+      pane = await openTab(
+        defaultTabOps(path => existsSync(path)),
+        {
+          ...(freed.workspace !== undefined && { workspace: freed.workspace }),
+          ...(freed.workspaceLabel !== undefined && { workspaceLabel: freed.workspaceLabel }),
+          cwd: item.cwd,
+          label: item.name,
+          ...(freed.tabLabel !== undefined && { tabLabel: freed.tabLabel }),
+        },
+        snap,
+      )
+      deps.log(
+        `wake: ${item.name} wakes in a new tab, ${pane}: its pane ${freed.pane} was closed when it went to sleep`,
+      )
+      followed(deps, () => followFiles.paneOpened(item.session ?? '', pane))
+    }
+    const target = { pane, session: item.session ?? '', profile }
+    outcome = await wakeInPane(cliWakeHerdr, target, {
+      timeoutMs,
+      log: text => deps.log(`wake: ${text}`),
+      ...(freed && { fresh: true }),
+    })
     if (!outcome.ok && outcome.why === 'busy') {
       const now = await cliWakeHerdr.pane(pane)
       if (now?.agent === 'claude' && now.agent_session?.value === target.session) return { ok: true }
@@ -179,9 +227,18 @@ async function wakeHere(deps: Deps, item: Item): Promise<ActionResult> {
     return { ok: false, herdrDown: true, error: t('err.wake', { name: item.name, why: messageOf(err) }) }
   }
   if (!outcome.ok) return { ok: false, error: t('err.wake', { name: item.name, why: outcome.error }) }
-  await cliWakeHerdr.rename(item.pane, null).catch(() => {})
-  deps.log(`wake: woke ${item.name} in ${item.pane} from the board`)
-  return { ok: true }
+  if (!freed) await cliWakeHerdr.rename(pane, null).catch(() => {})
+  deps.log(`wake: woke ${item.name} in ${pane} from the board`)
+  return freed ? { ok: true, pane } : { ok: true }
+}
+
+/** The schedule not following a session to its new pane is logged: the wake goes on. */
+function followed(deps: Deps, what: () => void): void {
+  try {
+    what()
+  } catch (err) {
+    deps.log(`wake: could not update the schedule: ${messageOf(err)}`)
+  }
 }
 
 /** Wake turned off in config.json, where today's path would refuse too (H1). */
@@ -376,8 +433,8 @@ export async function focus(
   item: Item,
   { raise = false }: { raise?: boolean } = {},
 ): Promise<ActionResult> {
-  // A sleeping pi session whose pane is gone wakes in a new tab (#178).
-  if (!item?.pane && !(item?.sleeping && isPiItem(item))) return { ok: false, error: t('err.noPane') }
+  // A sleeping session whose pane is gone wakes in a new tab: pi's (#178), Claude's that wake closed (#204).
+  if (!item?.pane && !item?.sleeping) return { ok: false, error: t('err.noPane') }
   let pane = item.pane
   if (item.sleeping) {
     const r = await wake(deps, item)
@@ -409,8 +466,8 @@ export async function send(
 ): Promise<ActionResult> {
   const text = String(message ?? '').trim()
   if (!text) return { ok: false, error: t('err.emptyMessage') }
-  // A sleeping pi session whose pane is gone wakes in a new tab (#178).
-  if (!item?.pane && !(item?.sleeping && isPiItem(item))) return { ok: false, error: t('err.noPane') }
+  // A sleeping session whose pane is gone wakes in a new tab: pi's (#178), Claude's that wake closed (#204).
+  if (!item?.pane && !item?.sleeping) return { ok: false, error: t('err.noPane') }
   const expectedSession = item.session ?? null
   const refused = (agent: HerdrAgent | null): ActionResult | null => {
     if (!agent || agent.session !== expectedSession)

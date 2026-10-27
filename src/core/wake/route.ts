@@ -48,7 +48,9 @@ export function localPane(hint: string | null | undefined, machine: string): str
  * The pane for a message: a running Claude first, else a pane whose last session can be
  * resumed. Candidates in order: the server's hints (the pane behind the bot message the user
  * replied to, panes connected for the key), then the panes of the tab the key names, most
- * recently active Claude first. `known` maps pane id -> last session seen there.
+ * recently active Claude first. `known` maps pane id -> last session seen there. None fits: a
+ * sleeper whose pane wake closed (#204), by the topic it slept in or by its old pane as a hint; its
+ * `pane` is then its key in `known`, which the wake opens a new tab for.
  */
 export function resolve(
   item: RouteItem,
@@ -56,7 +58,7 @@ export function resolve(
     panes: RoutePane[]
     agents?: { pane_id: string; state_change_seq?: number }[]
   },
-  known: Readonly<Record<string, { session: string; title?: string }>>,
+  known: Readonly<Record<string, { session: string; title?: string; freed?: { pane: string; topic: string } }>>,
   machine: string,
 ): RouteTarget | null {
   const all: readonly RoutePane[] = snap.panes
@@ -82,6 +84,14 @@ export function resolve(
   const resumable = order.find(id => known[id] && !panes.get(id)?.agent)
   const last = resumable ? known[resumable] : undefined
   if (resumable && last) return { pane: resumable, session: last.session, title: last.title ?? '' }
+  const hints = [item.pane, ...(item.live_panes ?? [])].map(h => localPane(h, machine))
+  const freed = Object.entries(known).find(
+    ([, k]) =>
+      k.freed &&
+      ((k.freed.topic !== '' && samePath(k.freed.topic) === dir) ||
+        (!panes.has(k.freed.pane) && hints.includes(k.freed.pane))),
+  )
+  if (freed) return { pane: freed[0], session: freed[1].session, title: freed[1].title ?? '' }
   return null
 }
 

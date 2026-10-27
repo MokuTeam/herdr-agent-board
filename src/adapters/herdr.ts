@@ -353,6 +353,11 @@ export async function tabCreateRoot(
   return { pane, terminal: stringAt(answer.root_pane, 'terminal_id') }
 }
 
+/** A tab's new label. */
+export async function tabRename(tab: string, label: string): Promise<void> {
+  await herdr(['tab', 'rename', tab, label])
+}
+
 /**
  * herdr's Claude integration (its own SessionStart hook, from which herdr learns the session a
  * pane runs) into the Claude profile folder `dir`: herdr writes it into the folder

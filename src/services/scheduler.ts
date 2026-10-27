@@ -296,7 +296,8 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
       // Cancelled meanwhile: it is up again, with nothing to type.
       if (!noted) return
       entry = noted
-      item = { ...item, sleeping: false }
+      // Woken in a new tab when its pane was closed as it went to sleep (#204): the note goes there.
+      item = { ...item, sleeping: false, ...(woke.pane && { pane: woke.pane }) }
       await new Promise(resolve => setTimeout(resolve, settleMs()))
       if (stopped || !getEntry(entry.id)) return
     }

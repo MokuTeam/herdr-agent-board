@@ -99,6 +99,26 @@ test("links between the board's sessions", () => {
   assert.deepEqual(rel.get('e')?.talks, [])
 })
 
+test('#204: a session woken in a new pane is still the one started in its old pane, by its earlier panes', () => {
+  const items = [
+    { key: 'm', name: 'Master', autoName: 'Master', pane: 'w:p1' },
+    { key: 'c', name: 'case-42', autoName: 'case-42', pane: 'w:p9', formerPanes: ['w:p2'] },
+    { key: 's', name: 'case-43', autoName: 'case-43', pane: null, formerPanes: ['w:p3'] },
+  ]
+  const spawn = (name: string, pane: string): LinkEvent => ({ kind: 'spawn', name, pane, at: 10 })
+  const rel = relate(items, it => (it.key === 'm' ? [spawn('case-42', 'w:p2'), spawn('case-43', 'w:p3')] : []))
+  assert.deepEqual(
+    rel
+      .get('m')
+      ?.started.map(s => s.key)
+      .sort(),
+    ['c', 's'],
+  )
+  assert.deepEqual(rel.get('s')?.from, { key: 'm', name: 'Master', at: 10 })
+  // Its old pane under another name is another session's.
+  assert.deepEqual(relate(items, it => (it.key === 'm' ? [spawn('other', 'w:p2')] : [])).get('m')?.started, [])
+})
+
 const SOURCE = '0f8fad5b-d9cb-469f-a165-70867728950e'
 
 test('a fork’s copied lines are its source’s: the first says whose fork it is, none of them is the fork’s own', () => {

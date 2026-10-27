@@ -40,7 +40,8 @@ const isTimeout = (err: unknown): boolean =>
 
 /**
  * The sessions asleep in wake's session file, as GET /sleeping lists them, each marked fromFile;
- * the board checks their panes. Then pi's, from `wake-pi.json` beside it (#178), with the pane
+ * the board checks their panes. One whose pane wake closed (#204) has none ('') and its folder and
+ * workspace's label from the file. Then pi's, from `wake-pi.json` beside it (#178), with the pane
  * they slept in: the board checks whether it is still theirs.
  */
 function fileSleepers(sessionsFile: string): SleepingSession[] {
@@ -49,9 +50,10 @@ function fileSleepers(sessionsFile: string): SleepingSession[] {
     if (!s.slept_at) continue
     list.push({
       name: s.name || s.title || '',
-      pane,
+      pane: s.freed ? '' : pane,
       session: s.session,
-      workspace: '',
+      workspace: s.freed?.workspaceLabel ?? '',
+      ...(s.freed && { cwd: s.cwd ?? '' }),
       slept_at: new Date(s.slept_at).toISOString(),
       exited: !!s.exited,
       ...(s.profileDir && { profile: { dir: s.profileDir, ...(s.profile && { id: s.profile }) } }),
