@@ -84,6 +84,12 @@ export interface MokupilotBodyProps {
   onChoose(mode: MokupilotMode): void
 }
 
+/** MokuPilot missing on the board's computer is a warning only when a call from this browser would
+ *  start there: This machine is chosen, or Auto picks it. Otherwise it is a plain note. */
+function missingMatters(view: MokupilotView): boolean {
+  return view.mode === 'local' || (view.mode === 'auto' && view.auto.resolved === 'local')
+}
+
 /** The three choices, each with its line; under Auto where a call from this browser starts now. */
 export function MokupilotBody({ view, disabled, onChoose }: MokupilotBodyProps) {
   const t = useT()
@@ -112,8 +118,8 @@ export function MokupilotBody({ view, disabled, onChoose }: MokupilotBodyProps) 
               )}
               {mode === 'link' && <span className="sheet-meta mokupilot-note">{t('mokupilot.linkNote')}</span>}
               {mode === 'local' && view?.here === 'missing' && (
-                <span className="sheet-meta mokupilot-missing">
-                  {t('mokupilot.hereMissing', { file: view.hereFile || 'MokuPilot' })}
+                <span className={`sheet-meta ${missingMatters(view) ? 'mokupilot-missing' : 'mokupilot-note'}`}>
+                  {t(missingMatters(view) ? 'mokupilot.hereMissing' : 'mokupilot.hereMissingFine')}
                 </span>
               )}
             </span>

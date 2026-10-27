@@ -386,7 +386,9 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'mokupilot.now.asking': 'Asking the board where a call from this browser would start…',
     'mokupilot.now.why': 'Decided by: {why}',
     'mokupilot.offNote': 'MokuPilot calls are turned off in the board’s config.json ("mokupilot": false).',
-    'mokupilot.hereMissing': 'MokuPilot is not found on the board’s computer ({file}): from there no call can start.',
+    'mokupilot.hereMissing': 'MokuPilot is not installed on the board’s computer: a call cannot start there.',
+    'mokupilot.hereMissingFine':
+      'MokuPilot is not installed on the board’s computer. Nothing is wrong: calls from this browser start on the computer you view from.',
     'sheet.sleep': 'Put to sleep',
     'sheet.sleepHint': 'Claude exits, the pane stays. Wake it from here, from herdr or with a message',
     'sheet.sleepBusy': 'The session is working: it can sleep once it is done',
@@ -990,7 +992,9 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'mokupilot.now.asking': 'Спрашиваю доску, где начнётся звонок из этого браузера…',
     'mokupilot.now.why': 'Решило: {why}',
     'mokupilot.offNote': 'Звонки в MokuPilot выключены в config.json доски ("mokupilot": false).',
-    'mokupilot.hereMissing': 'MokuPilot не найден на компьютере доски ({file}): оттуда звонок не начнётся.',
+    'mokupilot.hereMissing': 'На компьютере доски MokuPilot не установлен: звонок там не начнётся.',
+    'mokupilot.hereMissingFine':
+      'На компьютере доски MokuPilot не установлен. Всё в порядке: звонок из этого браузера начнётся на компьютере, с которого смотришь.',
     'sheet.sleep': 'Усыпить',
     'sheet.sleepHint': 'Claude выйдет, панель останется. Разбудить можно отсюда, из herdr или сообщением',
     'sheet.sleepBusy': 'Сессия работает: усыпить можно, когда закончит',

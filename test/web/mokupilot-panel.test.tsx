@@ -69,10 +69,21 @@ describe('MokuPilot panel', () => {
     expect(render(VIEW, 'ru').all).toContain('Сейчас, из этого браузера: звонок начнётся на этом компьютере.')
   })
 
-  test('MokuPilot missing on the board’s computer is said under This machine only', () => {
-    expect(render(VIEW).all).not.toContain('not found on the board’s computer')
-    const missing = render({ ...VIEW, here: 'missing', hereFile: 'meet' }).all
-    expect(missing).toContain('MokuPilot is not found on the board’s computer (meet)')
+  test('MokuPilot missing on the board’s computer: a warning only where a call would start there', () => {
+    expect(render(VIEW).all).not.toContain('not installed on the board’s computer')
+    const warn = 'MokuPilot is not installed on the board’s computer: a call cannot start there.'
+    const fine = 'MokuPilot is not installed on the board’s computer. Nothing is wrong'
+    // Auto sending this browser's call to the computer it views from: a plain note.
+    const viaLink = render({ ...VIEW, here: 'missing', hereFile: 'meet' }).all
+    expect(viaLink).toContain(fine)
+    expect(viaLink).not.toContain(warn)
+    expect(viaLink).not.toContain('(meet)')
+    // This machine chosen, or Auto picking the board's computer: the warning.
+    expect(render({ ...VIEW, mode: 'local', here: 'missing' }).all).toContain(warn)
+    const autoHere = { resolved: 'local', why: 'loopback-direct', viewer: '127.0.0.1' } as const
+    expect(render({ ...VIEW, here: 'missing', auto: autoHere }).all).toContain(warn)
+    expect(render({ ...VIEW, mode: 'link', here: 'missing' }).all).toContain(fine)
+    expect(render({ ...VIEW, here: 'missing' }, 'ru').all).toContain('Всё в порядке')
   })
 
   test('turned off in config.json: the panel says so, and nothing can be picked', () => {
