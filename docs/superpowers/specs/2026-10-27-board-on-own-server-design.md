@@ -167,6 +167,15 @@ Not built in this step. On the server only.
   The page warns that the agent can see what is typed into its own browser.
 - **The agent asks for it.** "Sign in to X for me" puts the card under "needs you", with "Open its
   browser" on it.
+- **In the web board, without more buttons** (the owner: buttons keep piling up):
+  - **On the card:** a small "browser running" mark, only on cards whose agent has one up. A click
+    opens the session with its browser shown. Other cards look as they do now.
+  - **Where it shows:** a "Browser" fold in the session panel, beside the thread, so what the
+    agent writes and what it does are seen together. The panel docks or floats as today.
+  - **Full size:** one click expands the desktop over the board's whole work area. Esc or × brings
+    it back, and another × closes it.
+  - **Closing the view only stops the picture.** No VNC stream, no traffic. The agent's browser
+    keeps running.
 - **Named browser profiles (B), for logins that last.**
   - The agent opens a profile by name (`github`, `client-x`). A new name makes a new profile.
   - The owner signs in once, and the login stays for every later session that opens that profile.
