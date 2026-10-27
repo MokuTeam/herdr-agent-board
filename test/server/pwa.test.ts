@@ -209,7 +209,7 @@ describe("the board in a phone's browser, through tailscale serve", () => {
     // Marking a desk is for the computer only, the desk itself included.
     expect(await (await post('/api/remote', { op: 'desk', id })).json()).toEqual({ error: 'local' })
     expect((await local('desk', id)).status).toBe(200)
-    expect(await (await phone('/api/hello')).json()).toMatchObject({ paired: true, desk: true })
+    expect(await (await phone('/api/hello')).json()).toMatchObject({ paired: true, desk: true, device: id })
     const listed = (await (await fetch(`${url}/api/remote`)).json()) as { devices: Record<string, unknown>[] }
     expect(listed.devices).toEqual([expect.objectContaining({ id, desk: true })])
 

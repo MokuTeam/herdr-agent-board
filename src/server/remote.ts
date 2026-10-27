@@ -207,7 +207,13 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
       if (req.method === 'GET' && raw === '/api/hello') {
         if (!fromServe) return json(200, hello())
         const known = token ? o.remote.verify(token, who) : null
-        return json(200, { ...hello(), paired: !!known, desk: !!known?.desk, language: o.cfg.language ?? null })
+        return json(200, {
+          ...hello(),
+          paired: !!known,
+          desk: !!known?.desk,
+          device: known?.id ?? null,
+          language: o.cfg.language ?? null,
+        })
       }
       if (req.method === 'POST' && raw === '/api/remote/pair') {
         const body = await readBody(req)

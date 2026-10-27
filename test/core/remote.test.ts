@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import {
   allowedLogin,
   bearerOf,
+  deskSteps,
   desktopOnly,
   localOnly,
   remoteConfig,
@@ -103,4 +104,13 @@ test('a look at Tailscale that failed keeps the listeners; only failures in a ro
   expect(statusVerdict(0)).toEqual({ down: true })
   // About fifty seconds of no answer: longer than a relay switch (24 s in the log that found it).
   expect(STATUS_RETRY_MS.reduce((a, b) => a + b, 0)).toBe(50_000)
+})
+
+test('marking a desk says how to attach herdr from it: user, host, ssh config, herdr --remote', () => {
+  const lines = deskSteps('claude', 'vps.tail1.ts.net').join('\n')
+  expect(lines).toContain('~claude/.ssh/authorized_keys')
+  expect(lines).toContain('ssh claude@vps.tail1.ts.net')
+  expect(lines).toContain('HostName vps.tail1.ts.net  User claude')
+  expect(lines).toContain('herdr --remote board')
+  expect(deskSteps('claude', null).join('\n')).toContain('ssh claude@<this computer>')
 })

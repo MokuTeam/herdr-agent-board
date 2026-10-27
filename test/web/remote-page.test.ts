@@ -44,22 +44,24 @@ test("pairing goes by the board's answers; hello says whether this browser is pa
   expect(pollStep({ status: 'denied' })).toEqual({ step: 'denied' })
   expect(pollStep({ status: 'gone' })).toEqual({ step: 'expired' })
   expect(pollStep(null)).toBeNull()
-  expect(helloOf({ board: 'agent-board', name: 'box', host: 'BOX', paired: true, desk: true, language: 'ru' })).toEqual(
-    {
-      name: 'box',
-      host: 'BOX',
-      paired: true,
-      desk: true,
-      language: 'ru',
-      auth: 'pair',
-      signedIn: false,
-    },
-  )
+  expect(
+    helloOf({ board: 'agent-board', name: 'box', host: 'BOX', paired: true, desk: true, device: 'd1', language: 'ru' }),
+  ).toEqual({
+    name: 'box',
+    host: 'BOX',
+    paired: true,
+    desk: true,
+    device: 'd1',
+    language: 'ru',
+    auth: 'pair',
+    signedIn: false,
+  })
   expect(helloOf({ board: 'agent-board', host: 'BOX' })).toEqual({
     name: null,
     host: 'BOX',
     paired: false,
     desk: false,
+    device: null,
     language: null,
     auth: 'pair',
     signedIn: false,
@@ -73,6 +75,7 @@ test("through the owner's domain hello says to sign in, and whether this browser
     host: '',
     paired: false,
     desk: false,
+    device: null,
     language: 'ru',
     auth: 'login',
     signedIn: true,

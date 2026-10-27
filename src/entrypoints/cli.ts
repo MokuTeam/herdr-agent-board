@@ -64,7 +64,7 @@
 //                            launchers (core/wake/launchers.ts), so not in the usage line
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, userInfo } from 'node:os'
 import { join, resolve } from 'node:path'
 import { readArchiveLog } from '../adapters/archive-store.ts'
 import {
@@ -95,7 +95,7 @@ import { t, useLanguage } from '../core/lang.ts'
 import { isPiSessionFile, piSessionId } from '../core/pi.ts'
 import { type PresenceState, presenceConfig, presenceLine } from '../core/presence.ts'
 import { type ProfileSet, profileSet, resolveProfileDir, sessionProfile } from '../core/profiles.ts'
-import { type RemoteView, remoteConfig } from '../core/remote.ts'
+import { deskSteps, type RemoteView, remoteConfig } from '../core/remote.ts'
 import { parseResume, projectFolderName, resumeDir, resumePlan } from '../core/resume.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
 import { sortTodos, todosConfig, todosOf } from '../core/todos.ts'
@@ -1082,11 +1082,15 @@ async function remote(): Promise<void> {
     const body = JSON.stringify({ op: off ? 'undesk' : 'desk', id })
     const r = await call({ method: 'POST', headers: { 'content-type': 'application/json', 'x-board': '1' }, body })
     if (!isRecord(r) || r.ok !== true) throw new Error(`no device ${id}: \`board remote\` lists them`)
-    return console.log(
-      off
-        ? `ok · ${id} is a phone again`
-        : `ok · ${id} is your desk: Go to herdr and answering phones work from it; reload its board`,
-    )
+    if (off) return console.log(`ok · ${id} is a phone again`)
+    console.log(`ok · ${id} is your desk: Go to herdr and answering phones work from it; reload its board`)
+    const view = (await call().catch(() => null)) as Partial<RemoteView> | null
+    let host: string | null = null
+    try {
+      host = view?.url ? new URL(view.url).hostname : null
+    } catch {}
+    for (const line of deskSteps(userInfo().username, host)) console.log(line)
+    return
   }
   if (op === 'approve' || op === 'deny' || op === 'revoke') {
     if (!id) throw new Error(usage)
