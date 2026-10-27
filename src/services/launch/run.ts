@@ -15,7 +15,7 @@ import { homedir } from 'node:os'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { writeCard } from '../../adapters/cards.ts'
 import { SLOW, statOf, within } from '../../adapters/folders.ts'
-import { gitInfo, repoRoot } from '../../adapters/git.ts'
+import { gitInfo, headCommit, repoRoot } from '../../adapters/git.ts'
 import {
   agentGet,
   type HerdrAgent,
@@ -309,11 +309,15 @@ export function launchRunner({
       if (at.branch !== branch)
         throw new LaunchError(t('launch.err.worktreeBranch', { path, branch, found: at.branch }), 'worktree')
     }
+    // A new one starts from the checkout that was picked, as `git worktree add` there does (and as
+    // the launch window says): its branch, or its commit when it has none. Only the folder and the
+    // link go by the main checkout.
+    const base = git.branch && git.branch !== 'HEAD' ? git.branch : ((await headCommit(git.root)) ?? 'HEAD')
     let ws: HerdrWorktree
     try {
       ws = existing
         ? await worktreeOpen(root, path, ticketOf(branch))
-        : await worktreeCreate(root, branch, (await gitInfo(root))?.branch || 'HEAD', path, ticketOf(branch))
+        : await worktreeCreate(root, branch, base, path, ticketOf(branch))
     } catch (err) {
       throw new LaunchError(t('launch.err.worktreeGit', { why: messageOf(err) }), 'worktree')
     }

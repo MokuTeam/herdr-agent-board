@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, parse, sep } from 'node:path'
 import { listDirs, roots } from '../../src/adapters/folders.ts'
@@ -51,4 +52,23 @@ test('a typed path may use either separator; the parent of a root is empty', asy
   // A root has no parent to go up to.
   const top = await listDirs(parse(dir).root)
   expect(top.parent).toBe('')
+})
+
+test('a folder in a linked worktree names its main checkout too (ticket worktrees go beside it)', async () => {
+  const dir = realpathSync(temp())
+  const repo = join(dir, 'repo')
+  mkdirSync(repo)
+  writeFileSync(join(repo, 'a.txt'), 'a')
+  const git = (...args: string[]) =>
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-C', repo, ...args], { stdio: 'pipe' })
+  git('init', '-q', '-b', 'main')
+  git('add', '.')
+  git('commit', '-q', '-m', 'init')
+  git('worktree', 'add', '-q', '-b', 'feature-y', join(dir, 'repo-wt', '14312'))
+  assert.deepEqual((await listDirs(repo, { git: true })).git, { root: repo, branch: 'main' })
+  assert.deepEqual((await listDirs(join(dir, 'repo-wt', '14312'), { git: true })).git, {
+    root: join(dir, 'repo-wt', '14312'),
+    branch: 'feature-y',
+    repo,
+  })
 })

@@ -791,6 +791,40 @@ test('a new ticket worktree is made by herdr under <repo>-wt/<ticket>, linked fr
   assert.ok(sameDir(l.cwd, realpathSync(join(box.dir, 'BrillianEarth-wt', 'EA-17388'))), l.cwd)
 }, 30_000)
 
+test('a ticket worktree started from another worktree: beside the main checkout, from the picked branch', async () => {
+  const { box, started, launched } = await boardServer(LINKED, { PATH: process.env.PATH ?? '' })
+  const repo = join(box.dir, 'Shop')
+  mkdirSync(repo, { recursive: true })
+  writeFileSync(join(repo, 'a.txt'), 'a')
+  const git = (...args: string[]) =>
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: repo, stdio: 'pipe' })
+  git('init', '-q', '-b', 'main')
+  git('add', '.')
+  git('commit', '-q', '-m', 'init')
+  const picked = join(box.dir, 'Shop-wt', '14312')
+  git('worktree', 'add', '-q', '-b', 'feature-y', picked)
+  const create = () => {
+    const c = box.calls().findLast(a => a[0] === 'worktree' && a[1] === 'create')
+    assert.ok(c)
+    return { base: c[c.indexOf('--base') + 1], path: c[c.indexOf('--path') + 1], cwd: c[c.indexOf('--cwd') + 1] }
+  }
+  box.state({ ...HERDR, 'tab create': { error: 'stop after the worktree' } })
+  const start = (name: string) =>
+    started({ name, cwd: picked, category: 'acme', workspace: { id: 'wA' }, worktree: { branch: name } })
+  await launched(await start('EA-1'))
+  // The folder and the link go by the main checkout; the base is the picked worktree's branch.
+  assert.deepEqual(create(), {
+    base: 'feature-y',
+    path: join(realpathSync(repo), '..', 'Shop-wt', 'EA-1'),
+    cwd: realpathSync(repo),
+  })
+  // Detached, the picked worktree's commit is the base, not the main checkout's branch.
+  const commit = execFileSync('git', ['-C', picked, 'rev-parse', 'HEAD']).toString().trim()
+  execFileSync('git', ['-C', picked, 'checkout', '-q', '--detach'])
+  await launched(await start('EA-2'))
+  assert.equal(create().base, commit)
+}, 30_000)
+
 test('without linkedWorkspaces a checkout keeps workspace create and the sibling worktree', async () => {
   const { box, started, launched } = await boardServer(VIA_HERDR, { PATH: process.env.PATH ?? '' })
   const repo = join(box.dir, 'OldRepo')
