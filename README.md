@@ -2280,6 +2280,43 @@ failed attempts.
 **One tunnel, one computer per domain.** The Android app stays on Tailscale ([Phones](#phones));
 the tunnel and the Tailscale listeners are independent, either on without the other.
 
+## The board on a server of your own
+
+herdr, Claude Code and the board on a Debian 12/13 or Ubuntu 22.04–26.04 server, so the agents go
+on while your computer is off, the board at your domain with its own login. Point the domain at the
+server, then in a root shell there (or as a user with sudo):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/MokuTeam/herdr-agent-board/main/server-install.sh | sh -s -- --domain board.example.com
+```
+
+`--ref <branch|tag|commit>` installs another ref (`main` by default), `--user <name>` another user
+than `agent`, `--sudo` gives that user sudo (none by default), `--repo <url>` a fork. It looks at the
+server first, says what it will do and asks once; at the end it prints a link, once, that sets the
+board's login (password, code, passkey). Then log in as `agent` (`ssh agent@server`; your root ssh
+keys are copied for it) and run `claude` once to sign in; `herdr` attaches to the running server.
+
+- **What it does.** The user `agent` (marked as the board's; an `agent` of yours is refused), its
+  services started with the server (`loginctl enable-linger`). As `agent`: Bun (pinned to the
+  board's version), herdr and Claude Code from their own installers (`~/.bun`, `~/.local/bin`; herdr
+  and Claude Code update themselves), the board in `~/agent-board` (`herdr plugin link`, the install
+  action), `serverMode` in its `config.json`, and herdr as a systemd user service
+  (`~/.config/systemd/user/herdr.service`, `Restart=on-failure`), in which the board opens as on a
+  computer. The web server in front of the board's socket (`/var/lib/agent-board/board.sock`) is set
+  up exactly as "Set up the server" does it for the tunnel (the board's own Caddy, or yours, or nginx
+  with 8443), with its record, rollback and checks in `/etc/agent-board`; your sites are not touched.
+  The installer's own Bun and copy of the board are root's, in `/usr/local/lib/agent-board`.
+- **Again**: safe; it updates what is there and changes nothing that is already right. A new login
+  link only comes while no login is set; after that, `board login reset` as `agent`.
+- **`board update [--ref <ref>]`** as `agent`: the ref the board came from (or another) fetched,
+  its packages and hooks installed again; the board restarts itself.
+- **Undo**: the same line with `--undo` instead of `--domain …`: herdr's service, lingering, sudo,
+  the web server's part; `--undo --remove-user` takes the user and its home too.
+- **From the board on your computer**: in Remote access, beside "Set up the server", "Install the
+  board on this server" does the same over the server's login and password, with this computer's
+  checkout as the board's code (its uncommitted changes too), and shows the login link there, once.
+  `board update` on that server then asks for a ref.
+
 ## Language
 
 English and Russian. Settings (the gear) on the web board's toolbar switches between them; the
