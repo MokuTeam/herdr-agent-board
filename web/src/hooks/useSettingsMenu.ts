@@ -19,7 +19,7 @@ import { LOOK_KEY, lookNow, setLook } from '../models/look.ts'
 import { type Dock, isDock } from '../models/panel-layout.ts'
 import { offersProfiles } from '../models/profiles.ts'
 import { keptAuth, remotePage, UNPAIRED } from '../models/remote-page.ts'
-import { offersMokupilot, settingPicked, settingsMenu } from '../models/settings-menu.ts'
+import { offersAccess, offersMokupilot, settingPicked, settingsMenu } from '../models/settings-menu.ts'
 import { reducedMotion } from '../models/spring.ts'
 import { setTheme, THEME_KEY, themeNow } from '../models/theme.ts'
 import { isWakeView } from '../models/wake.ts'
@@ -343,7 +343,7 @@ export function useSettingsMenu(
       openPhones: () => latest.current.openPhones(),
       mokupilot: () => offersMokupilot(latest.current.board.data),
       openMokupilot: () => latest.current.openMokupilot(),
-      access: () => !remotePage(),
+      access: () => offersAccess(remotePage(), latest.current.board.data),
       openAccess: () => latest.current.openAccess(),
       signOut: () => remotePage() && keptAuth() === 'login',
       endLogin: () => {

@@ -31,6 +31,7 @@ import {
   type LookTarget,
   type LookView,
 } from '../../models/quick-look.ts'
+import { boardOnServer } from '../../models/settings-menu.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { Store, useStore } from '../../state/store.ts'
 import { Changes, changesFoot } from '../sheet/Changes.tsx'
@@ -62,6 +63,8 @@ export interface QuickLookViewProps {
   view: LookView
   /** Open and reveal need the board. */
   canEdit: boolean
+  /** Open and reveal are offered: not on the board's own server (src/core/on-server.ts), where nothing opens on a PC. */
+  system?: boolean
   /** The run's token for the raw bytes (the board's fsToken). */
   token: string | null
   image?: ImageSize | null
@@ -102,6 +105,7 @@ export function footOf(view: LookView, t: Translator, image: ImageSize | null = 
 export function QuickLookView({
   view,
   canEdit,
+  system = true,
   token,
   image = null,
   onImage,
@@ -162,6 +166,7 @@ export function QuickLookView({
             <button
               type="button"
               className="button primary ql-open"
+              hidden={!system}
               disabled={off.open}
               onClick={() => on.act?.('open')}
             >
@@ -179,6 +184,7 @@ export function QuickLookView({
             <button
               type="button"
               className="icon-button ql-reveal"
+              hidden={!system}
               {...label('ql.reveal')}
               disabled={off.reveal}
               onClick={() => on.act?.('reveal')}
@@ -328,6 +334,7 @@ export function QuickLook({ engine }: { engine: QuickLookEngine }) {
     <QuickLookView
       view={view}
       canEdit={canEdit}
+      system={!boardOnServer(data)}
       token={data?.fsToken ?? null}
       image={image}
       onImage={(img, d) => {

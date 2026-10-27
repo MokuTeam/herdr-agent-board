@@ -16,6 +16,7 @@ import { LANGUAGES } from '../core/i18n/translator.ts'
 import { lang, t } from '../core/lang.ts'
 import { claudeProgram, commandText } from '../core/launch/spawn-args.ts'
 import type { Limits } from '../core/limits.ts'
+import { onServer } from '../core/on-server.ts'
 import type { BoardLimits, BoardPayload, BoardProfile } from '../core/payload.ts'
 import type { PresenceView } from '../core/presence.ts'
 import { DEFAULT_PROFILE, type Profile, profileLabel } from '../core/profiles.ts'
@@ -212,8 +213,9 @@ export function createBoardState({
       // terminal: whether the board offers one (config `terminal`); shells: sessions it opened one for.
       terminal: terminalOn(cfg),
       shells: terminalOn(cfg) ? (terminals?.keys() ?? []) : [],
-      // mokupilot: whether a session's sheet offers a MokuPilot call with a fork of it.
-      mokupilot: mokupilot?.() ?? false,
+      // mokupilot: whether a session's sheet offers a MokuPilot call with a fork of it; never on the
+      // board's own server (core/on-server.ts), where a call has no PC to start on.
+      mokupilot: onServer(cfg) ? false : (mokupilot?.() ?? false),
       // fork: whether the board can fork a session into a new tab with its launcher.
       fork: canFork(cfg),
       // aside: whether a session's sheet offers a side question (Claude Code on PATH).
@@ -233,6 +235,8 @@ export function createBoardState({
       accessRev: accessRev?.() ?? 0,
       // omarchy: only on a computer with Omarchy, the theme the Terminal style follows.
       ...omarchyOf(omarchy),
+      // server: only on the board's own server, whose page offers nothing only a PC has.
+      ...(onServer(cfg) && { server: true as const }),
     }
   }
 

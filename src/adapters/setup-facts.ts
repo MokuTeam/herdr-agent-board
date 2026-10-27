@@ -13,6 +13,7 @@ import { isRefusedProgram, launcherLabel } from '../core/launch/launcher-command
 import { claudeCommand, shellLine } from '../core/launch/spawn-args.ts'
 import { type CommandPart, type MokupilotLauncher, placeholdersIn } from '../core/mokupilot.ts'
 import { mokupilotMode } from '../core/mokupilot-mode.ts'
+import { onServer } from '../core/on-server.ts'
 import { defaultProfileDir, mergeProfiles, type Profile, shownProfiles } from '../core/profiles.ts'
 import {
   boardFiles,
@@ -377,8 +378,13 @@ export async function gatherFacts(
     wake: wakeUrl && !wakeNew ? await probe(`${wakeUrl.replace(/\/+$/, '')}/status`, probeMs) : null,
     ...(wakeNew && { wakeNew }),
     launcher: launcherFacts(cfg?.launch, env, platform),
-    // MokuPilot for calls with a fork of a session: how the board would start it.
-    mokupilot: mokupilotCommand(cfg, { platform, env }),
-    mokupilotMode: mokupilotMode(cfg?.mokupilot),
+    // On the board's own server neither MokuPilot nor desktop notifications are looked for.
+    ...(cfg && onServer(cfg)
+      ? { server: true as const }
+      : {
+          // MokuPilot for calls with a fork of a session: how the board would start it.
+          mokupilot: mokupilotCommand(cfg, { platform, env }),
+          mokupilotMode: mokupilotMode(cfg?.mokupilot),
+        }),
   }
 }

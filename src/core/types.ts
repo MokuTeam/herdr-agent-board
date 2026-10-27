@@ -179,6 +179,8 @@ export interface Config {
   look?: unknown
   /** The user's presence (`true` or an object), as config.json has it: read through core/presence.ts presenceConfig. */
   presence?: unknown
+  /** The board on its own server (`{ domain, socket }`), as config.json has it: read through core/on-server.ts serverModeOf. */
+  serverMode?: unknown
   [extra: string]: unknown
 }
 

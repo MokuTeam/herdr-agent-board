@@ -226,6 +226,11 @@ export interface SetupFacts {
   mokupilot?: MokupilotLauncher | null
   /** Where a call starts (core/mokupilot-mode.ts mokupilotMode); none: `auto`. */
   mokupilotMode?: MokupilotMode
+  /**
+   * The board runs on its own server (core/on-server.ts): what only a PC has (desktop
+   * notifications, MokuPilot) is not checked. None on a PC.
+   */
+  server?: true
 }
 
 export type SetupLevel = 'ok' | 'error' | 'warn' | 'off' | 'na'
@@ -655,8 +660,11 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
       )
   }
 
-  // Desktop notifications with the agent's words. Optional too, until they are on.
-  if (!win) {
+  // Desktop notifications with the agent's words. Optional too, until they are on. None on the
+  // board's own server.
+  if (facts.server) {
+    // nothing to show: herdr shows its own notifications there, if any
+  } else if (!win) {
     add('toast', 'na', t('setup.toast.na'), t('setup.toast.naDetail'))
   } else {
     const per = TOAST_EVENTS.map(([event]) => commandsOf(facts.settings, event).filter(c => ours.toast(c.command)))
