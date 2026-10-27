@@ -145,6 +145,36 @@ Not built in this step. Written down so the server mode leaves room for it.
 - **How the local board reaches `agent`**: the builder of that step decides between the password
   each time and a key the install adds, limited to the sync's own command.
 
+## Later: each agent's own browser, watched and taken over from the board (decided with the owner)
+
+Not built in this step. On the server only.
+
+- **A desktop of its own per agent.** Each session gets its own virtual display, a real Chrome on
+  it (headed, not headless, so pages look as they do for people), and that Chrome's own DevTools
+  port. Its chrome-devtools MCP reaches only that port. The agent opens pages, clicks, takes
+  screenshots, and reads the console and the network, without touching another agent's browser.
+- **Many displays under one user.** Each display is an X server of its own (Xvnc, which also serves
+  it over VNC), so windows never mix. Every agent runs as `agent`, so this keeps agents from
+  getting in each other's way by accident; it is not a wall against one that tries.
+- **On demand.** The display and Chrome start the first time the agent needs a browser, and stop
+  when the session sleeps or ends. Each takes about 300–500 MB, so the server's memory limits how
+  many are open at once.
+- **Watched from the board: the whole desktop (A).** A "Browser" view on the session's card, over
+  VNC in the page, through the board's login. It shows Chrome's tabs and address bar, system
+  dialogs, file pickers and anything else on that display.
+- **Taken over.** The owner can click and type there: sign in, a password or key, a captcha, 2FA.
+  Then they hand control back. While the owner has control, the agent's browser actions wait.
+  The page warns that the agent can see what is typed into its own browser.
+- **The agent asks for it.** "Sign in to X for me" puts the card under "needs you", with "Open its
+  browser" on it.
+- **Named browser profiles (B), for logins that last.**
+  - The agent opens a profile by name (`github`, `client-x`). A new name makes a new profile.
+  - The owner signs in once, and the login stays for every later session that opens that profile.
+  - A session that names none gets a profile that lives and dies with the session.
+  - Chrome lets one browser hold a profile at a time. A second agent asking for a busy profile gets
+    a copy of it, which is thrown away afterwards and never merged back.
+  - Profiles are keys to sites: they stay on the server and never go into the profile sync.
+
 ## Testing
 
 - **Unit**: the server mode's listener (on the socket, login required, 12422 untouched), the setup
