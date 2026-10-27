@@ -72,6 +72,7 @@ import { setupRoute } from './routes/setup.ts'
 import { sleepRoute } from './routes/sleep.ts'
 import { staticRoute } from './routes/static.ts'
 import { terminalRoute } from './routes/terminal.ts'
+import { todosRoutes } from './routes/todos.ts'
 import { wakeRoutes } from './routes/wake.ts'
 import { createBroadcaster } from './sse.ts'
 import { createTunnelListener } from './tunnel.ts'
@@ -430,6 +431,8 @@ export async function startServer({
     ...mokupilotRoutes(cfg),
     // The user's presence: read, switched and set (the page, the phone, the Android app).
     ...presenceRoutes(presence),
+    // Tasks (#202): points pinned on the board, done, reopened, removed; turned on or off.
+    ...todosRoutes({ cfg, find: board.find, refresh }),
     // A line from the page for this log (a phone's browser says what it could not do there).
     pageLogRoute(log),
     scheduleRoute(refresh),

@@ -27,6 +27,7 @@ import {
 } from '../core/profiles.ts'
 import type { Admin } from '../core/server-admin.ts'
 import type { SetupCase } from '../core/server-plan.ts'
+import { isTodoMode } from '../core/todos.ts'
 import type { TunnelField } from '../core/tunnel.ts'
 import type { Category, Config } from '../core/types.ts'
 import { wakeConfig } from '../core/wake/config.ts'
@@ -208,6 +209,21 @@ export function editPresence(body: unknown): EditResult {
     if (b.idleMinutes !== undefined) section.idleMinutes = b.idleMinutes
     raw.presence = section
   }
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/**
+ * Tasks (#202) from Settings → Tasks: { mode: 'none' | 'mine' | 'agents' } into config.json's
+ * `todos`: none deletes the section (the points stay on the cards), mine is `{ agents: false }`,
+ * agents `true`. The running board picks the change up as any edit (liveConfig).
+ */
+export function editTodos(body: unknown): EditResult {
+  const mode = isRecord(body) ? body.mode : undefined
+  if (!isTodoMode(mode)) return { ok: false, error: t('todo.err.mode') }
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  if (mode === 'none') delete raw.todos
+  else raw.todos = mode === 'agents' ? true : { agents: false }
   writeRaw(raw)
   return { ok: true }
 }

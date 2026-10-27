@@ -7,6 +7,7 @@ import type { PresenceView } from './presence.ts'
 import type { RemoteView } from './remote.ts'
 import type { ScheduleEntry } from './schedule-rules.ts'
 import type { SetupSummary } from './setup.ts'
+import type { TodosConfig } from './todos.ts'
 import type { ColumnId, Item, Lang, LaunchView } from './types.ts'
 import type { WakeView } from './wake/view.ts'
 
@@ -112,6 +113,8 @@ export interface BoardPayload {
   remote?: RemoteView
   /** The user's presence (#172, core/presence.ts), only while config.json turns it on. */
   presence?: PresenceView
+  /** Tasks (#202, core/todos.ts), only while config.json turns them on; items carry theirs only then. */
+  todos?: TodosConfig
   /**
    * The Remote access view's revision (GET /api/access, local only): it changes when the view does,
    * and the panel fetches the view again then; the view itself never goes out with the board. The
