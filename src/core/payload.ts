@@ -123,4 +123,9 @@ export interface BoardPayload {
    * that changes with it, only on a computer with Omarchy. The page loads omarchy-theme.css again.
    */
   omarchy?: string
+  /**
+   * The board runs on its own server (core/on-server.ts): the page offers nothing only a PC has
+   * (Remote access, MokuPilot, opening things on this computer). A board on a PC sends none.
+   */
+  server?: true
 }

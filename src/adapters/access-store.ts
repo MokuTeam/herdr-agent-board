@@ -11,6 +11,9 @@
 //                            "transports": [], "label", "addedAt", "usedAt": <ms> | null }, …]   (Passkey)
 //   access-attempts.json  [{ "at", "address", "label", "method", "reason" }, …]   (Attempt) oldest
 //                         first, the 100 newest
+// In server mode one more (core/on-server.ts), there only while a setup link is live:
+//   access-setup.json     { "codeHash": hashToken(code), "expiresAt": <ms> }   the one live code of
+//                         the first login's link, by its hash only (never the code); gone once used
 // Times are ms since the epoch.
 // The TOTP secret is in access.json only. An entry that is not what it says is left out when read.
 import { mkdirSync } from 'node:fs'
@@ -24,6 +27,7 @@ export const accessFile = (): string => join(stateDir(), 'access.json')
 export const passkeysFile = (): string => join(stateDir(), 'access-passkeys.json')
 export const loginsFile = (): string => join(stateDir(), 'access-logins.json')
 export const attemptsFile = (): string => join(stateDir(), 'access-attempts.json')
+export const setupFile = (): string => join(stateDir(), 'access-setup.json')
 
 const ATTEMPTS_KEPT = 100
 /** A TOTP secret is 20 bytes. */
@@ -151,4 +155,53 @@ export function addAttempt(a: Attempt): void {
 export function accessReady(): boolean {
   const s = readSecrets()
   return s.passwordHash !== null && s.totp !== null
+}
+
+/** A setup link's code on file: its hash, and when it stops working. */
+export interface SetupCode {
+  codeHash: string
+  expiresAt: number
+}
+
+const isSetupCode = (v: unknown): v is SetupCode =>
+  isRecord(v) && typeof v.codeHash === 'string' && v.codeHash !== '' && num(v.expiresAt)
+
+/** The live code's hash and expiry, or null. */
+export const readSetupCode = (): SetupCode | null => readJson(setupFile(), isSetupCode)
+
+/** Puts `code` in place of any code before it: one link works at a time. */
+export function writeSetupCode(code: SetupCode): void {
+  mkdirSync(stateDir(), { recursive: true })
+  updateJson(setupFile(), () => code, isSetupCode, { mode: 0o600 })
+}
+
+/**
+ * Uses the code whose hash is `codeHash` up: under the file's lock, so two requests at the same
+ * moment never both get it. A code that matches goes from the file, expired or not; whether it was
+ * live at `now`.
+ */
+export function takeSetupCode(codeHash: string, now: number): boolean {
+  if (!readSetupCode()) return false
+  let live = false
+  updateJson(
+    setupFile(),
+    current => {
+      if (!current || current.codeHash !== codeHash) return undefined
+      live = current.expiresAt > now
+      return null
+    },
+    isSetupCode,
+  )
+  return live
+}
+
+/** No setup link works any more. */
+export function clearSetupCode(): void {
+  if (readSetupCode()) updateJson(setupFile(), () => null, isSetupCode)
+}
+
+/** No way to sign in left: no password, TOTP code or passkey, and no lockout. The logins stay (updateLogins ends them). */
+export function clearSignIn(): void {
+  updateSecrets(s => ({ ...s, passwordHash: null, totp: null, lockout: { failures: 0, until: null } }))
+  updatePasskeys(() => [])
 }

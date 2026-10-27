@@ -8,6 +8,7 @@ import type { Lang } from '../types.ts'
 import { ACCESS_STRINGS } from './access-strings.ts'
 import { ARCHIVE_STRINGS } from './archive-strings.ts'
 import { ASIDE_STRINGS } from './aside-strings.ts'
+import { FIRST_LOGIN_STRINGS } from './first-login-strings.ts'
 import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
@@ -1305,6 +1306,8 @@ for (const code of Object.keys(ASIDE_STRINGS) as Lang[]) Object.assign(STRINGS[c
 for (const code of Object.keys(PRESENCE_STRINGS) as Lang[]) Object.assign(STRINGS[code], PRESENCE_STRINGS[code])
 // And the board through the owner's own domain: the tunnel and its login.
 for (const code of Object.keys(ACCESS_STRINGS) as Lang[]) Object.assign(STRINGS[code], ACCESS_STRINGS[code])
+// And the board on its own server: its first login and its checks.
+for (const code of Object.keys(FIRST_LOGIN_STRINGS) as Lang[]) Object.assign(STRINGS[code], FIRST_LOGIN_STRINGS[code])
 // And setting up the server's web server from the board.
 for (const code of Object.keys(SERVER_STRINGS) as Lang[]) Object.assign(STRINGS[code], SERVER_STRINGS[code])
 // And what the one command says on the server ("Do it myself").

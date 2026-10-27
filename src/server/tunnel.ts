@@ -23,6 +23,16 @@
 // address is the rightmost X-Forwarded-For (Caddy's), for showing and rate limits only. A login's
 // open event streams end, with the event a phone's do, the moment it ends or expires. No answer
 // from here may be shown in a frame.
+//
+// In server mode (config.json's `serverMode`, core/on-server.ts) the same listener is the board's
+// way in on its own server: it listens by itself, with no ssh and whether the login is set or not,
+// on the Unix socket `serverMode.socket` (mode 0660, in the installer's folder; a stale socket left
+// by a board before is removed, and the socket goes when this one stops or the process exits), for
+// `serverMode.domain`, checked as the tunnel's domain is; the tunnel's settings play no part. Until
+// the login is set, only the setup page and its two calls answer (the first login's one-time
+// link, services/first-login.ts), rate-limited as a sign-in, and everything else is 401; once it
+// is set, they are 404 and the rest is as above.
+import { chmodSync, lstatSync, unlinkSync } from 'node:fs'
 import { isRecord } from '../adapters/json-store.ts'
 import {
   clearLoginCookie,
@@ -33,12 +43,23 @@ import {
   RATES,
   RateLimiter,
 } from '../core/access.ts'
+import {
+  SETUP_PATH,
+  type ServerMode,
+  serverHosts,
+  serverModeOf,
+  serverModeProblems,
+  serverOrigin,
+} from '../core/on-server.ts'
+import { qrMatrix, qrPath } from '../core/qr.ts'
 import { REMOTE_API } from '../core/remote.ts'
 import { boardPorts, publicHosts, publicOrigin, tunnelConfig, tunnelPort, tunnelProblems } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
 import type { Access, SignIn, Who } from '../services/access.ts'
+import type { FirstLogin } from '../services/first-login.ts'
 import type { Probes } from '../services/tunnel.ts'
 import { type Body, dispatch, type GuardState, json, peerOf, type Route, readBody } from './http.ts'
+import { setupPage } from './setup-page.ts'
 import { decoded, endsWhenGone, remoteRefusal } from './streams.ts'
 import { probeAnswer } from './tunnel-probe.ts'
 
@@ -58,15 +79,22 @@ export interface TunnelListenerOptions {
   log: (text: string) => void
   /** listening() changed: it started, stopped or moved. */
   onChange: () => void
+  /** The first login's setup (services/first-login.ts), in server mode: without it the setup's calls are 404. */
+  firstLogin?: FirstLogin
 }
 
 export interface TunnelListener {
-  /** Listens on 127.0.0.1:<tunnelPort> while tunnel.on, no tunnelProblems and access.ready(); else nothing listens. */
+  /**
+   * Listens on 127.0.0.1:<tunnelPort> while tunnel.on, no tunnelProblems and access.ready(); in
+   * server mode on its socket while its settings check out; else nothing listens.
+   */
   sync(): Promise<void>
-  /** The config changed: sync when the tunnel's part of it, or the ports it must keep off, did. */
+  /** The config changed: sync when the tunnel's part of it, the ports it must keep off, or the server mode did. */
   configChanged(): void
-  /** The port it listens on, or null. */
+  /** The port it listens on, or null (in server mode always: no ssh forwards to it). */
   listening(): number | null
+  /** The socket it listens on in server mode, or null. */
+  socket(): string | null
   close(): Promise<void>
 }
 
@@ -136,31 +164,106 @@ const bodyOf = (req: Request): Promise<unknown> => readBody(req).catch(() => und
 const badBody = (): Response => json(400, { ok: false, error: 'shape' })
 const fieldsOf = (body: unknown): Body => (isRecord(body) ? body : {})
 
-/** Where the board is reached: the domain (WebAuthn's relying party), the Hosts it answers to, its origin. */
+/**
+ * Where the board is reached: the domain (WebAuthn's relying party), the Hosts it answers to, its
+ * origin; `setup`: in server mode, where the first login is set through the setup page.
+ */
 interface Site {
   domain: string
   hosts: string[]
   origin: string
+  setup: boolean
+}
+
+/** The socket's mode: the board's user and the web server's group (the folder's) read and write it. */
+const SOCKET_MODE = 0o660
+const NOT_FOUND = (): Response => json(404, { error: 'not found' })
+/** Bun.serve's idleTimeout of 0, typed so that its options for a socket take it. */
+const NO_IDLE_TIMEOUT: object = { idleTimeout: 0 }
+
+const codeOf = (err: unknown): unknown =>
+  err && typeof err === 'object' && 'code' in err ? (err as { code: unknown }).code : undefined
+
+/**
+ * A socket a board before left at `path` (it ended without stopping its listener) goes, so that
+ * this one can listen there; anything else there stays, and is the reason it cannot. Windows
+ * cannot look at a socket file (EACCES): there it is taken as one.
+ */
+function clearStale(path: string): void {
+  let socket: boolean
+  try {
+    socket = lstatSync(path).isSocket()
+  } catch (err) {
+    if (codeOf(err) === 'ENOENT') return
+    if (process.platform !== 'win32' || codeOf(err) !== 'EACCES') throw err
+    socket = true
+  }
+  if (!socket) throw new Error(`${path} is there and is no socket: it is left as it is`)
+  unlinkSync(path)
+}
+
+/** The socket gone, if it is still there. */
+function removeSocket(path: string): void {
+  try {
+    unlinkSync(path)
+  } catch {}
 }
 
 export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
   let server: Server | null = null
   let bound: number | null = null
+  /** The socket it listens on in server mode, and its removal when the process exits. */
+  let boundSocket: string | null = null
+  let atExit: (() => void) | null = null
   /** The site it answers for, as of the last sync. */
-  let site: Site = { domain: '', hosts: [], origin: '' }
+  let site: Site = { domain: '', hosts: [], origin: '', setup: false }
   let error: string | null = null
   let closed = false
   let syncing: Promise<void> | null = null
-  const configKey = (): string => JSON.stringify([o.cfg.tunnel ?? null, o.cfg.remote ?? null])
+  const configKey = (): string => JSON.stringify([o.cfg.tunnel ?? null, o.cfg.remote ?? null, o.cfg.serverMode ?? null])
   let lastConfig = configKey()
   /** Codes tried to add a passkey: a login holder may not guess them without limit. */
   const addCodes = new RateLimiter(RATES.password)
 
   const conf = () => tunnelConfig(o.cfg.tunnel)
+  /** The server mode's settings; null on a PC, where the tunnel's are the listener's. */
+  const mode = (): ServerMode | null => serverModeOf(o.cfg.serverMode)
   /** On, the settings check out (the ports the board's other listeners take too), the login set up. */
   function wanted(): boolean {
     const c = conf()
     return c.on && !tunnelProblems(c, boardPorts(o.cfg.remote, o.webPort)).length && o.access.ready()
+  }
+
+  /**
+   * The first login, in server mode: the setup page and its calls while no login is set (anything
+   * else 401), and 404 for them once it is; undefined to go on as the tunnel's listener does.
+   * `raw` is the path as it came: an encoded spelling of the setup's is none of them.
+   */
+  async function setupGate(req: Request, raw: string, who: Who, cookie: string | null): Promise<Response | undefined> {
+    const setupPath = raw === SETUP_PATH || raw.startsWith('/api/setup/')
+    if (o.access.ready()) return setupPath ? NOT_FOUND() : undefined
+    if (!setupPath) return clearedFor(json(401, { error: 'setup' }), cookie)
+    if (req.method === 'GET' && raw === SETUP_PATH) {
+      const room = o.access.rate('open', who.address)
+      return room.ok ? setupPage() : limited(room.retryAfterS)
+    }
+    const first = o.firstLogin
+    const call = raw.slice('/api/setup/'.length)
+    if (!first || req.method !== 'POST' || (call !== 'start' && call !== 'finish')) return NOT_FOUND()
+    // As a sign-in: the password sign-in's limits.
+    const room = o.access.rate('password', who.address)
+    if (!room.ok) return limited(room.retryAfterS)
+    const body = await bodyOf(req)
+    if (body === undefined) return badBody()
+    if (call === 'start') {
+      const r = first.start(fieldsOf(body).code)
+      if (!r.ok) return json(r.status, { ok: false, error: r.error })
+      return json(200, { ok: true, setup: r.setup, secret: r.secret, qr: qrPath(qrMatrix(r.uri)) })
+    }
+    const r = await first.finish(fieldsOf(body))
+    if (r.ok) return json(200, { ok: true })
+    const { status, ...refused } = r
+    return json(status, refused)
   }
 
   /** What anyone may ask without a login, of the board at `here`; undefined for the rest. */
@@ -241,6 +344,10 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
     try {
       url = new URL(req.url)
       const raw = url.pathname
+      if (here.setup) {
+        const gate = await setupGate(req, raw, who, cookie)
+        if (gate) return gate
+      }
       const pub = await open(req, url, here, who, cookie)
       if (pub) return pub
       const token = loginToken(cookie)
@@ -284,7 +391,7 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
       return endsWhenGone(res, gone => o.access.watch(login.id, gone), { 'x-accel-buffering': 'no' })
     } catch (err) {
       // The path only: a query can carry the page's file token.
-      o.log(`tunnel ${req.method} ${url ? url.pathname : ''}: ${messageOf(err)}`)
+      o.log(`${here.setup ? 'server mode' : 'tunnel'} ${req.method} ${url ? url.pathname : ''}: ${messageOf(err)}`)
       // Before a login, nothing of this computer goes out, a path in an error neither.
       return json(500, { error: signedIn ? messageOf(err) : 'server' })
     }
@@ -292,9 +399,41 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
 
   async function stop(): Promise<void> {
     const s = server
+    const path = boundSocket
     server = null
     bound = null
+    boundSocket = null
     if (s) await s.stop(true)
+    if (path) removeSocket(path)
+    if (atExit) process.off('exit', atExit)
+    atExit = null
+  }
+
+  /** Listens on the server mode's socket, mode 0660, a stale one removed first. */
+  function listenSocket(path: string): void {
+    try {
+      clearStale(path)
+      server = Bun.serve({
+        unix: path,
+        // No idle timeout, as on the port: Bun takes it on a socket too, though its types give it to a port only.
+        ...NO_IDLE_TIMEOUT,
+        development: false,
+        fetch: async (req, srv) => unframed(await answer(req, srv)),
+      })
+      boundSocket = path
+      // Also when the process exits without close(): run.ts restarts the board by process.exit(75).
+      atExit = () => removeSocket(path)
+      process.on('exit', atExit)
+      chmodSync(path, SOCKET_MODE)
+      error = null
+      o.log(`server mode: listening on ${path} for ${site.origin}/`)
+    } catch (err) {
+      // A socket it could not give its mode is no socket to keep.
+      if (server) void stop()
+      const next = `Cannot listen on ${path}: ${messageOf(err)}`
+      if (next !== error) o.log(`server mode: ${next}`)
+      error = next
+    }
   }
 
   function listen(port: number): void {
@@ -318,16 +457,38 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
     }
   }
 
+  /** In server mode: on its socket while its settings check out; else nothing listens, and the first problem is logged once. */
+  async function syncServer(s: ServerMode): Promise<void> {
+    const problem = serverModeProblems(s)[0]
+    if (problem) {
+      if (server) await stop()
+      const next = `serverMode.${problem.field}: ${problem.message}`
+      if (next !== error) o.log(`server mode: ${next}`)
+      error = next
+      return
+    }
+    site = { domain: s.domain, hosts: serverHosts(s), origin: serverOrigin(s), setup: true }
+    if (server && boundSocket === s.socket) return
+    if (server) await stop()
+    listenSocket(s.socket)
+  }
+
   async function syncNow(): Promise<void> {
     if (closed) return
-    const before = bound
+    const where = (): string => `${bound}|${boundSocket}`
+    const before = where()
     try {
-      if (!wanted()) {
+      const s = mode()
+      if (s) {
+        // From the tunnel's port to the socket, should the config change so.
+        if (bound !== null) await stop()
+        await syncServer(s)
+      } else if (!wanted()) {
         if (server) await stop()
         error = null
       } else {
         const c = conf()
-        site = { domain: c.domain, hosts: publicHosts(c), origin: publicOrigin(c) }
+        site = { domain: c.domain, hosts: publicHosts(c), origin: publicOrigin(c), setup: false }
         const port = tunnelPort(c, o.webPort)
         if (!server || bound !== port) {
           // Nothing awaited on the way to the first listen: it listens once sync() has had its turn.
@@ -338,7 +499,7 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
     } catch (err) {
       o.log(`tunnel: ${messageOf(err)}`)
     }
-    if (bound !== before) o.onChange()
+    if (where() !== before) o.onChange()
   }
 
   function sync(): Promise<void> {
@@ -365,6 +526,7 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
       void sync()
     },
     listening: () => bound,
+    socket: () => boundSocket,
     async close() {
       closed = true
       clearInterval(timer)

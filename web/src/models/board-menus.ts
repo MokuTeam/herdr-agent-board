@@ -25,6 +25,7 @@ import {
   wantsNativeMenu,
 } from './menu-model.ts'
 import { remotePage } from './remote-page.ts'
+import { boardOnServer } from './settings-menu.ts'
 
 export const LONG_PRESS_MS = 480
 export const SLOP = 9 // px a finger may wander before a long press becomes a scroll
@@ -132,6 +133,8 @@ export interface BoardMenuDeps {
       categories: readonly MenuCategory[]
       terminal?: boolean | undefined
       mokupilot?: boolean | undefined
+      /** The board runs on its own server (src/core/on-server.ts). */
+      server?: boolean | undefined
       fork?: boolean | undefined
       /** The schedule: a restart of a session on its way grays its Restart. */
       schedules?: readonly ScheduleEntry[] | undefined
@@ -166,7 +169,8 @@ const ctxOf = (board: BoardMenuDeps): MenuContext => ({
   t: board.t(),
   canMutate: board.canMutate(),
   canEdit: board.canEdit(),
-  ...(remotePage() && { remote: true }),
+  // A phone's page, and any page of the board on its own server: nothing opens on this computer.
+  ...((remotePage() || boardOnServer(board.state().data)) && { remote: true }),
 })
 
 /** The menu for whatever is under `target`, or null when the browser's own should show. */

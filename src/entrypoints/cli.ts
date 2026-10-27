@@ -39,6 +39,11 @@
 //                            its Fork does (services/launch/fork.ts); the note is its first message
 //   board tunnel [on|off|test]   the board through the owner's own domain (core/tunnel.ts): where
 //                            the tunnel stands; on and off in config.json; test runs Test connection
+//   board login link|reset   the board on its own server (core/on-server.ts): link prints the
+//                            first login's one-time link (a fresh code) while no login is set, and
+//                            exits 3 when one is; reset clears the password, the code and the
+//                            passkeys, ends every login and prints a new link. Outside server mode
+//                            both refuse
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
 //   board presence [here|away]   whether the user is at the computer or away (core/presence.ts),
 //                            the line every session's context has; with a state, the user's switch
@@ -88,6 +93,7 @@ import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
 import { CODEX_AGENT } from '../core/codex.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
+import { serverModeChecks, serverModeOf, serverModeProblems } from '../core/on-server.ts'
 import { isPiSessionFile, piSessionId } from '../core/pi.ts'
 import { type PresenceState, presenceConfig, presenceLine } from '../core/presence.ts'
 import { type ProfileSet, profileSet, resolveProfileDir, sessionProfile } from '../core/profiles.ts'
@@ -108,7 +114,7 @@ import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id>] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | login [link | reset] | doctor | presence [here | away] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id>] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -473,6 +479,13 @@ async function main(): Promise<void> {
       const { tunnelFacts } = await import('../services/tunnel-facts.ts')
       checks.push(...tunnelChecks(await tunnelFacts(cfg, webPort), t))
     }
+    // The board on its own server's: its settings, the listener on its socket, the login. On a PC
+    // nothing of it is asked.
+    const server = serverModeOf(cfg.serverMode)
+    if (server) {
+      const { onServerFacts } = await import('../services/first-login.ts')
+      checks.push(...serverModeChecks(await onServerFacts(server), t))
+    }
     return console.log(report(checks, t))
   }
 
@@ -493,6 +506,7 @@ async function main(): Promise<void> {
   if (cmd === 'call-report') return callReport()
   if (cmd === 'remote') return remote()
   if (cmd === 'tunnel') return tunnel()
+  if (cmd === 'login') return login()
   if (cmd === 'archive') return archive()
   if (cmd === 'sleep') return sleep()
   if (cmd === 'fork') return fork()
@@ -1122,6 +1136,42 @@ async function tunnel(): Promise<void> {
   if (s.probe && !s.probe.ok) lines.push(`warning: the domain did not reach this board: ${s.probe.detail}`)
   lines.push(`socket ${settings.socket} · ssh ${ssh ?? 'not found'}`)
   console.log(lines.join('\n'))
+}
+
+/** What `board login link` says when a login is set already, on stderr: stdout is for the link alone. */
+const LOGIN_SET = 'a login is set: `board login reset` clears it and prints a new link'
+
+/**
+ * `board login [link | reset]` on the board's own server (core/on-server.ts, services/first-login.ts):
+ * the first login's one-time link on stdout, alone on its line, for the installer to show. link
+ * makes a fresh code while no login is set, and exits with 3 when one is; reset clears the
+ * password, the code and the passkeys, has the running board end every login, and prints a new
+ * link. Both refuse on a PC (exit 1). In English, whatever language the board speaks.
+ */
+async function login(): Promise<void> {
+  const [op = ''] = rest
+  // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
+  useLanguage('en')
+  if (op !== 'link' && op !== 'reset') throw new Error('usage: board login [link | reset]')
+  const mode = serverModeOf(cfg.serverMode)
+  if (!mode) throw new Error('board login is for the board on its own server: config.json has no serverMode')
+  const problem = serverModeProblems(mode)[0]
+  if (problem) throw new Error(`serverMode.${problem.field}: ${problem.message}`)
+  const { accessReady } = await import('../adapters/access-store.ts')
+  const { newSetupLink, resetLogin } = await import('../services/first-login.ts')
+  if (op === 'link') {
+    if (accessReady()) {
+      console.error(`board: ${LOGIN_SET}`)
+      process.exitCode = 3
+      return
+    }
+    return console.log(newSetupLink(mode.domain))
+  }
+  const answered = await resetLogin(Number(cfg.port) || 12422)
+  console.error(
+    `ok · the password, the code and the passkeys cleared, every login ended${answered ? '' : ' (the board does not run)'}; the link below sets a new login`,
+  )
+  console.log(newSetupLink(mode.domain))
 }
 
 /** `board tunnel test`: Test connection on the running board, a line for each step; one that failed exits with 1. `origin`: the domain's ('' for none). */

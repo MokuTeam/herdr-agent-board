@@ -7,9 +7,10 @@
 // profile folder found, Profiles… opens their panel (components/profiles/ProfilesPanel.tsx). While
 // the remote mode is on (core/remote.ts), Phones… opens theirs (components/phones/PhonesPanel.tsx).
 // While the payload carries wake's state line, Sleep and wake… opens its panel (components/wake).
-// MokuPilot… opens where a call starts (components/mokupilot), on every board's page (offersMokupilot).
+// MokuPilot… opens where a call starts (components/mokupilot), on every board's page (offersMokupilot)
+// but the board's on its own server (src/core/on-server.ts), which has no PC to start a call on.
 // On the local board, Remote access… opens the board-through-your-domain panel
-// (components/access/AccessPanel.tsx).
+// (components/access/AccessPanel.tsx); not on the board's own server (offersAccess).
 // How sessions asleep in "Waiting" fold is the board's, for every board (src/core/fold-mode.ts).
 // On a page signed in through the owner's domain, Sign out ends this browser's own login (Call 15).
 // Presence (#172, src/core/presence.ts) is the board's: Off, or on with how it notices the user
@@ -183,12 +184,21 @@ export type SettingPick =
   | { kind: 'presenceIdle'; value: number }
   | null
 
+/** The board runs on its own server (the payload's `server`, src/core/on-server.ts): nothing only a PC has. */
+export const boardOnServer = (payload?: { server?: boolean | undefined } | null): boolean => payload?.server === true
+
 /**
  * Whether the page offers Settings → MokuPilot…: always, whatever the payload's `mokupilot` says,
  * so the mode can be changed also while no call is offered (`local` with MokuPilot missing on the
- * board's computer); the panel says when MokuPilot is turned off.
+ * board's computer); the panel says when MokuPilot is turned off. Not on the board's own server.
  */
-export const offersMokupilot = (_payload?: { mokupilot?: boolean | undefined } | null): boolean => true
+export const offersMokupilot = (
+  payload?: { mokupilot?: boolean | undefined; server?: boolean | undefined } | null,
+): boolean => !boardOnServer(payload)
+
+/** Whether the page offers Settings → Remote access…: on the local board's page (not one through Tailscale or the domain), on a PC. */
+export const offersAccess = (remote: boolean, payload?: { server?: boolean | undefined } | null): boolean =>
+  !remote && !boardOnServer(payload)
 
 export function settingPicked(id: string): SettingPick {
   const [kind, value = ''] = id.split(':')

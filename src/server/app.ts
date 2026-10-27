@@ -33,6 +33,7 @@ import {
 } from '../adapters/ssh.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
+import { serverModeOf } from '../core/on-server.ts'
 import type { Observation } from '../core/presence.ts'
 import { shownProfiles } from '../core/profiles.ts'
 import { pwaPage } from '../core/pwa.ts'
@@ -41,6 +42,7 @@ import { boardPorts, forwardSpec, publicHosts, sshArgs, tunnelConfig, tunnelProb
 import { createAccess } from '../services/access.ts'
 import { asideCheck } from '../services/aside.ts'
 import type { Deps } from '../services/deps.ts'
+import { createFirstLogin } from '../services/first-login.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
 import { createPresence } from '../services/presence.ts'
@@ -296,6 +298,9 @@ export async function startServer({
       accessChanged()
       void supervisor.sync()
     },
+    // On the board's own server (core/on-server.ts): the first login through its one-time link.
+    // On a PC nothing asks it anything.
+    firstLogin: createFirstLogin({ access, domain: () => serverModeOf(cfg.serverMode)?.domain ?? '' }),
   })
   // The tunnel's ssh (services/tunnel.ts). It starts nothing until this board holds the web port
   // (below). Its line goes to the tunnel listener's port while that listens, the tunnel is on and
