@@ -108,7 +108,7 @@ import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id>] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | doctor | presence [here | away] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id>] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -983,15 +983,16 @@ async function adoptPi(): Promise<void> {
 }
 
 /**
- * `board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>]`: the remote mode
+ * `board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]]`: the remote mode
  * (core/remote.ts). On and off edit config.json (off takes back `tailscale serve` too); `pwa`
  * sets serve up for the board in a phone's browser (core/pwa.ts) and shows its address and QR
- * code; the rest goes through the running board, which holds the requests to pair. Without an
+ * code; the rest goes through the running board, which holds the requests to pair. `desk` marks a
+ * paired device as the owner's desk (RemoteDevice.desk), `desk <id> off` takes it back. Without an
  * argument: where it listens, who waits, who is paired.
  */
 async function remote(): Promise<void> {
   const [op = 'status', id = ''] = rest
-  const usage = 'usage: board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>]'
+  const usage = 'usage: board remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]]'
   const webPort = Number(cfg.port) || 12422
   if (op === 'pwa') {
     const { pwaOff, pwaOn } = await import('../services/pwa.ts')
@@ -1027,6 +1028,18 @@ async function remote(): Promise<void> {
       throw new Error('the board does not run: open it first (herdr plugin action invoke agent-board.open)')
     }
   }
+  if (op === 'desk') {
+    if (!id || (rest[2] !== undefined && rest[2] !== 'off')) throw new Error(usage)
+    const off = rest[2] === 'off'
+    const body = JSON.stringify({ op: off ? 'undesk' : 'desk', id })
+    const r = await call({ method: 'POST', headers: { 'content-type': 'application/json', 'x-board': '1' }, body })
+    if (!isRecord(r) || r.ok !== true) throw new Error(`no device ${id}: \`board remote\` lists them`)
+    return console.log(
+      off
+        ? `ok · ${id} is a phone again`
+        : `ok · ${id} is your desk: Go to herdr and answering phones work from it; reload its board`,
+    )
+  }
   if (op === 'approve' || op === 'deny' || op === 'revoke') {
     if (!id) throw new Error(usage)
     const body = JSON.stringify({ op, id })
@@ -1049,7 +1062,7 @@ async function remote(): Promise<void> {
     )
   for (const d of view.devices ?? [])
     console.log(
-      `paired: ${d.id} "${d.name}"${d.kind === 'browser' ? ' (browser)' : ''} on ${d.device} (${d.login})${d.seenAt ? `, seen ${stamp(d.seenAt)}` : ''}`,
+      `paired: ${d.id} "${d.name}"${d.kind === 'browser' ? ' (browser)' : ''} on ${d.device} (${d.login})${d.seenAt ? `, seen ${stamp(d.seenAt)}` : ''}${d.desk ? ' · desk' : ''}`,
     )
 }
 

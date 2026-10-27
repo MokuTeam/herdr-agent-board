@@ -87,6 +87,8 @@ export function gateFlow(deps: { follow(lang: string): void; credentials?: Login
       deps.follow(h.language)
     }
     keepAuth(h.auth)
+    // Before the board draws: what it offers on the computer's screen reads it (deskPage).
+    document.documentElement.toggleAttribute?.('data-desk', h.desk)
     view.set({ gate: gateOf(h), hello: h })
   }
 
