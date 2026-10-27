@@ -1,11 +1,13 @@
 // The install's own pieces that run without a server (services/server-install.ts): versions
 // compared, and the board's code written over its checkout in place (a pack, or a ref over a
 // pack's checkout): what changed overwritten, what is gone removed, its packages and git kept.
+// What runs as the board's user runs in a session of its own, and what goes into its home (its
+// ssh keys, herdr's service) is written by the user's own script.
 import { expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { atLeast, syncInto } from '../../src/services/server-install.ts'
+import { atLeast, keysScript, syncInto, userArgv, userFileScript } from '../../src/services/server-install.ts'
 
 test('a version at least another', () => {
   expect(atLeast('1.4.3', '1.4.3')).toBe(true)
@@ -43,6 +45,49 @@ test('the code written over the checkout in place: changed, added, gone; node_mo
     expect(existsSync(join(to, 'src', 'gone.ts'))).toBe(false)
     expect(readFileSync(join(to, 'node_modules', 'react', 'index.js'), 'utf8')).toBe('react')
     expect(readFileSync(join(to, '.git', 'HEAD'), 'utf8')).toBe('ref')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('as the board’s user: in a session of its own (no terminal of root’s), runuser, the user’s environment alone', () => {
+  const argv = userArgv({ name: 'agent', uid: 1001, home: '/home/agent' }, 'herdr --version')
+  expect(argv.slice(0, 8)).toEqual(['setsid', '-w', 'runuser', '-u', 'agent', '--', 'env', '-i'])
+  expect(argv.slice(-3)).toEqual(['sh', '-c', 'herdr --version'])
+  const env = argv.slice(8, -3)
+  expect(env).toContain('HOME=/home/agent')
+  expect(env).toContain('USER=agent')
+  expect(env).toContain('XDG_RUNTIME_DIR=/run/user/1001')
+  expect(env.every(e => /^[A-Z_a-z]+=/.test(e))).toBe(true)
+})
+
+test('the keys and herdr’s service: written by the user’s own script, whole, then moved in place; 0700 and 0600, 0644', () => {
+  const sh = Bun.which('sh')
+  if (!sh) return
+  const dir = mkdtempSync(join(tmpdir(), 'user-files-'))
+  const unix = (p: string): string => p.replaceAll('\\', '/')
+  const run = (script: string, stdin: string): void => {
+    const r = Bun.spawnSync([sh, '-c', script], { stdin: new TextEncoder().encode(stdin), stderr: 'pipe' })
+    expect(r.exitCode, r.stderr.toString()).toBe(0)
+  }
+  try {
+    const home = join(dir, 'home with space')
+    mkdirSync(home)
+    run(keysScript(unix(home)), 'ssh-ed25519 AAAA admin@pc\n')
+    const keys = join(home, '.ssh', 'authorized_keys')
+    expect(readFileSync(keys, 'utf8')).toBe('ssh-ed25519 AAAA admin@pc\n')
+    // again (a second run): the new keys in place of the old, nothing left beside them
+    run(keysScript(unix(home)), 'ssh-ed25519 BBBB admin@pc\n')
+    expect(readFileSync(keys, 'utf8')).toBe('ssh-ed25519 BBBB admin@pc\n')
+    expect(readdirSync(join(home, '.ssh'))).toEqual(['authorized_keys'])
+    const unit = join(home, '.config', 'systemd', 'user', 'herdr.service')
+    run(userFileScript(unix(unit), '644'), '[Unit]\n')
+    expect(readFileSync(unit, 'utf8')).toBe('[Unit]\n')
+    if (process.platform !== 'win32') {
+      expect(statSync(join(home, '.ssh')).mode & 0o777).toBe(0o700)
+      expect(statSync(keys).mode & 0o777).toBe(0o600)
+      expect(statSync(unit).mode & 0o777).toBe(0o644)
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

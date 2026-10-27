@@ -13,7 +13,9 @@
 // server from root's record, and the user only when asked.
 //
 // Nothing root runs here is the board's user's to change: root's Bun and copy of the board are
-// root's own (core/server-install.ts INSTALL_HOME); the user's are run only as the user.
+// root's own (core/server-install.ts INSTALL_HOME); the user's are run only as the user, in a
+// session of its own (no terminal of root's to type into), and what goes into the user's home
+// (its ssh keys, herdr's service) is written by the user, never by root through a link it made.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { gzipSync } from 'node:zlib'
 import { ROOT } from '../adapters/paths.ts'
@@ -108,7 +110,7 @@ async function run(
 const sh = (script: string, o: Parameters<typeof run>[1] = {}): Promise<Ran> => run(['sh', '-c', script], o)
 
 /** The user's own environment, nothing of root's but a proxy. */
-function userEnv(u: User): string[] {
+function userEnv(u: Pick<User, 'name' | 'uid' | 'home'>): string[] {
   const env: Record<string, string> = {
     HOME: u.home,
     USER: u.name,
@@ -122,9 +124,40 @@ function userEnv(u: User): string[] {
   return Object.entries(env).map(([k, v]) => `${k}=${v}`)
 }
 
-/** A script as the board's user (runuser: no password, no session of its own), in its home. */
+/**
+ * A script as the board's user, in a session of its own (setsid -w: no controlling terminal, so
+ * nothing it runs can open root's terminal and type into it, TIOCSTI); runuser: no password; the
+ * user's own environment.
+ */
+export const userArgv = (u: Pick<User, 'name' | 'uid' | 'home'>, script: string): string[] => [
+  'setsid',
+  '-w',
+  'runuser',
+  '-u',
+  u.name,
+  '--',
+  'env',
+  '-i',
+  ...userEnv(u),
+  'sh',
+  '-c',
+  script,
+]
+
+/** A script as the board's user (userArgv), in its home. */
 const asUser = (u: User, script: string, o: Parameters<typeof run>[1] = {}): Promise<Ran> =>
-  run(['runuser', '-u', u.name, '--', 'env', '-i', ...userEnv(u), 'sh', '-c', script], { cwd: u.home, ...o })
+  run(userArgv(u, script), { cwd: u.home, ...o })
+
+/** A file into the user's home as the user (its text on stdin): written whole beside it, then moved in place, `mode`. */
+export const userFileScript = (path: string, mode: '600' | '644'): string => {
+  const dir = path.slice(0, path.lastIndexOf('/'))
+  const part = `${path}.agent-board-new`
+  return `set -e; umask 077; mkdir -p ${shQuote(dir)}; rm -f ${shQuote(part)}; cat > ${shQuote(part)}; chmod ${mode} ${shQuote(part)}; mv -f ${shQuote(part)} ${shQuote(path)}`
+}
+
+/** The admin's keys as the user's own: ~/.ssh 0700, authorized_keys 0600. */
+export const keysScript = (home: string): string =>
+  `mkdir -p ${shQuote(`${home}/.ssh`)} && chmod 700 ${shQuote(`${home}/.ssh`)} && { ${userFileScript(`${home}/.ssh/authorized_keys`, '600')}; }`
 
 /** Tries a run up to TRIES times while it fails. */
 async function tried(fn: () => Promise<Ran>): Promise<Ran> {
@@ -377,20 +410,10 @@ function boardCode(u: User, s: Source, archive: string | null, dir: string): Pro
   const dirty = `if [ -d ${d}/.git ] && [ -n "$(git -C ${d} status --porcelain --untracked-files=no 2>/dev/null)" ]; then echo ${shQuote(t('update.changes', { dir }))}; exit 1; fi`
   if (s.kind === 'archive' && archive) {
     const tmp = shQuote(`${dir}.new`)
-    return run(
-      [
-        'runuser',
-        '-u',
-        u.name,
-        '--',
-        'env',
-        '-i',
-        ...userEnv(u),
-        'sh',
-        '-c',
-        `set -e; ${dirty}; rm -rf ${tmp}; mkdir -p ${tmp}; tar -xzf - -C ${tmp}; rm -f ${tmp}/${ARCHIVE_MARK}; [ ! -d ${d}/.git ] || rm -rf ${d}/.git; ${syncInto(`${dir}.new`, dir)}; rm -rf ${tmp}`,
-      ],
-      { cwd: u.home, stdin: Bun.file(archive) },
+    return asUser(
+      u,
+      `set -e; ${dirty}; rm -rf ${tmp}; mkdir -p ${tmp}; tar -xzf - -C ${tmp}; rm -f ${tmp}/${ARCHIVE_MARK}; [ ! -d ${d}/.git ] || rm -rf ${d}/.git; ${syncInto(`${dir}.new`, dir)}; rm -rf ${tmp}`,
+      { stdin: Bun.file(archive) },
     )
   }
   if (s.kind !== 'git') throw new Error('no pack to install from')
@@ -507,10 +530,9 @@ export async function install(f: InstallFlags, io: Io): Promise<number> {
     if (!ok) return 1
   }
   if (keys) {
+    // read by root (the admin's own file), written by the user: root never writes into its home
     const ok = await step(io, t('install.step.keys', { user: user.name }), () =>
-      sh(
-        `install -d -m 700 -o ${user.uid} -g ${user.gid} ${shQuote(`${user.home}/.ssh`)} && install -m 600 -o ${user.uid} -g ${user.gid} ${shQuote(keys.file)} ${shQuote(`${user.home}/.ssh/authorized_keys`)}`,
-      ),
+      asUser(user, keysScript(user.home), { stdin: readFileSync(keys.file, 'utf8'), timeoutMs: 60_000 }),
     )
     if (!ok) return 1
   }
@@ -611,18 +633,7 @@ export async function install(f: InstallFlags, io: Io): Promise<number> {
       const old = await asUser(user, `cat ${shQuote(`${unitDir}/${SERVICE}`)} 2>/dev/null`)
       const changed = old.out !== unit
       if (changed) {
-        const w2 = await run(
-          [
-            'runuser',
-            '-u',
-            user.name,
-            '--',
-            'sh',
-            '-c',
-            `mkdir -p ${shQuote(unitDir)} && cat > ${shQuote(`${unitDir}/${SERVICE}`)}`,
-          ],
-          { stdin: unit, cwd: home },
-        )
+        const w2 = await asUser(user, userFileScript(`${unitDir}/${SERVICE}`, '644'), { stdin: unit })
         if (w2.code !== 0) return w2
         const r = await systemctl(user, 'daemon-reload')
         if (r.code !== 0) return r
@@ -717,7 +728,8 @@ export async function undo(f: InstallFlags, io: Io): Promise<number> {
   if (u && (await managerUp(u))) {
     const ok = await step(io, t('install.undo.will.service', { user: name }), async () => {
       await systemctl(u, `disable --now ${SERVICE}`)
-      if (service) await sh(`rm -f ${shQuote(service)}`)
+      // the user's own file, taken away by the user: root follows no link it may have made there
+      if (service) await asUser(u, `rm -f ${shQuote(service)}`)
       return systemctl(u, 'daemon-reload')
     })
     if (!ok) return 1
