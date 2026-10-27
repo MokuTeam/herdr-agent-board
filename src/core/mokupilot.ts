@@ -13,11 +13,14 @@
 //                       launch.command. Without them the board adds its own arguments.
 //   { dir: "..." }      a MokuPilot checkout: its .venv's Python runs run.py on Windows (what
 //                       meet.cmd does: Bun runs no .cmd without a shell), its `meet` elsewhere
-//   { link: true }      a link for the viewer's browser instead: MokuPilot runs on the computer
-//                       the board is looked at from, not on the board's (a "remote agent host"
-//                       that runs the fork on this one over ssh). The board starts nothing; the
-//                       page opens callLink's mokupilot://call?claude-session=<id>[&cwd=<folder>],
-//                       which that MokuPilot registers. It goes before `command` and `dir`.
+//   { mode: ... }       where a call starts (core/mokupilot-mode.ts; Settings → MokuPilot…):
+//                       `auto` (the default) by who looks, `local` here, `link` a link for the
+//                       viewer's browser instead: MokuPilot runs on the computer the board is
+//                       looked at from, not on the board's (a "remote agent host" that runs the
+//                       fork on this one over ssh). The board starts nothing; the page opens
+//                       callLink's mokupilot://call?claude-session=<id>[&cwd=<folder>], which that
+//                       MokuPilot registers. `link` goes before `command` and `dir`; the older
+//                       `{ link: true }` reads as it.
 //   unset               found on this computer: MokuPilot.exe where its installer puts it
 //                       (Windows), else `meet` on PATH, meet.cmd standing for its checkout
 // Finding it is adapters/setup-facts.ts mokupilotCommand; starting it, services/mokupilot.ts.

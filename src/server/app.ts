@@ -52,7 +52,7 @@ import { createTerminals, terminalOn } from '../services/terminals.ts'
 import { createProbes, createSupervisor, networkSignature, realClock, type TunnelPlan } from '../services/tunnel.ts'
 import { createWakeControl, startWakeStart } from '../services/wake/control.ts'
 import { createBoardState } from './board-state.ts'
-import { dispatch, json, type Route } from './http.ts'
+import { dispatch, json, peerOf, type Route } from './http.ts'
 import { createRemoteListener } from './remote.ts'
 import { accessRoutes } from './routes/access.ts'
 import { archiveRoutes } from './routes/archive.ts'
@@ -452,13 +452,13 @@ export async function startServer({ deps, port: asked, gather, wakeStarter }: Se
   )
   const host = new RegExp(`^(127\\.0\\.0\\.1|localhost):${port}$`)
 
-  async function answer(req: Request): Promise<Response> {
+  async function answer(req: Request, srv?: ReturnType<typeof Bun.serve>): Promise<Response> {
     // The header first: with an empty, invalid or missing Host, Bun's req.url is a bare path.
     if (!host.test(req.headers.get('host') ?? '')) return json(403, { error: 'host' })
     let url: URL | undefined
     try {
       url = new URL(req.url)
-      return await dispatch(routes, req, url, decodeURIComponent(url.pathname), guards)
+      return await dispatch(routes, req, url, decodeURIComponent(url.pathname), guards, () => peerOf(srv, req))
     } catch (err) {
       // The path only: a query can carry the page's token.
       log(`${req.method} ${url ? url.pathname : req.url.split('?')[0]}: ${messageOf(err)}`)

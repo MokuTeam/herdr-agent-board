@@ -12,6 +12,7 @@ import { t } from '../core/lang.ts'
 import { isRefusedProgram, launcherLabel } from '../core/launch/launcher-command.ts'
 import { claudeCommand, shellLine } from '../core/launch/spawn-args.ts'
 import { type CommandPart, type MokupilotLauncher, placeholdersIn } from '../core/mokupilot.ts'
+import { mokupilotMode } from '../core/mokupilot-mode.ts'
 import { defaultProfileDir, mergeProfiles, type Profile, shownProfiles } from '../core/profiles.ts'
 import {
   boardFiles,
@@ -191,8 +192,8 @@ export function mokupilotCommand(
   const set = cfg?.mokupilot
   if (set === false) return { state: 'off', configured: true }
   const own = isRecord(set) ? set : {}
-  // A link the viewer's browser opens: nothing to find here.
-  if (own.link === true) return { state: 'link', configured: true }
+  // A link the viewer's browser opens (mode `link`, or the older `link: true`): nothing to find here.
+  if (mokupilotMode(set) === 'link') return { state: 'link', configured: true }
   const win = platform === 'win32'
   const path = win ? win32 : posix
   const onPath = (name: string): string | null => {

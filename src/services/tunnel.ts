@@ -610,14 +610,25 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
   }
 }
 
-/** The production network(): this computer's own addresses (not loopback), sorted; '' if unreadable. */
-export function networkSignature(): string {
+/** This computer's own addresses (not loopback) with their interface's name; none if unreadable. */
+function ownInterfaces(): { name: string; address: string }[] {
   try {
-    const found: string[] = []
+    const found: { name: string; address: string }[] = []
     for (const [name, addresses] of Object.entries(networkInterfaces()))
-      for (const a of addresses ?? []) if (!a.internal) found.push(`${name} ${a.address}`)
-    return found.sort().join(', ')
+      for (const a of addresses ?? []) if (!a.internal) found.push({ name, address: a.address })
+    return found
   } catch {
-    return ''
+    return []
   }
 }
+
+/** The production network(): this computer's own addresses (not loopback), sorted; '' if unreadable. */
+export function networkSignature(): string {
+  return ownInterfaces()
+    .map(({ name, address }) => `${name} ${address}`)
+    .sort()
+    .join(', ')
+}
+
+/** This computer's own addresses (not loopback): its LAN's and its Tailscale one (100.x) among them. */
+export const ownAddresses = (): string[] => ownInterfaces().map(i => i.address)

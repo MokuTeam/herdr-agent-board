@@ -49,7 +49,14 @@ test('a call starts MokuPilot on its own, in the folder the session started in, 
     assert.match(missing.ok ? '' : missing.error, /MokuPilot not found \(\/opt\/mp\/MokuPilot\)/)
 
     const real = { mokupilot: { command: [process.execPath] } }
-    assert.deepEqual(await startCall(real, item, opts), { ok: true, state: 'launched', file: process.execPath })
+    // No request to say who asks (a test, the CLI): the board's own computer, as before the modes.
+    assert.deepEqual(await startCall(real, item, opts), {
+      ok: true,
+      state: 'launched',
+      file: process.execPath,
+      resolved: 'local',
+      why: 'no-peer',
+    })
     const r = runs.at(-1)
     assert.ok(r)
     assert.deepEqual(r.args, ['call', '--claude-session', ID, '--cwd', project])
@@ -153,6 +160,8 @@ test('a call from a session in another profile than the board’s is refused bef
     ok: true,
     state: 'launched',
     file: process.execPath,
+    resolved: 'local',
+    why: 'no-peer',
   })
   assert.equal(started.length, 1)
   // One profile listed: a session that names none is in it.
@@ -168,6 +177,8 @@ test('a call from a session in another profile than the board’s is refused bef
     ok: true,
     state: 'launched',
     file: process.execPath,
+    resolved: 'local',
+    why: 'no-peer',
   })
   assert.equal(started.length, 3)
   const stray = await startCall(
@@ -224,12 +235,16 @@ test('link mode starts nothing here: the page gets the link, the folder the sess
         ok: true,
         state: 'link',
         url: `mokupilot://call?claude-session=${ID}&cwd=${encodeURIComponent(project)}`,
+        resolved: 'link',
+        why: 'mode-link',
       })
       // No folder on disk: no cwd.
       assert.deepEqual(await startCall(cfg, { ...item, transcript: null, cwd: join(dir, 'gone') }, opts), {
         ok: true,
         state: 'link',
         url: `mokupilot://call?claude-session=${ID}`,
+        resolved: 'link',
+        why: 'mode-link',
       })
       for (const bad of [
         { ...item, agent: 'codex' },
@@ -260,4 +275,111 @@ test('link mode starts nothing here: the page gets the link, the folder the sess
 test('link mode offers the call on the page, with nothing installed here', () => {
   assert.equal(mokupilotCheck({ mokupilot: { link: true } })(), true)
   assert.equal(mokupilotCheck({ mokupilot: false })(), false)
+})
+
+test('the mode decides where a call starts; under auto, who asks: here or by the link, and why', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'board-mokupilot-'))
+  try {
+    const project = join(dir, 'Acme')
+    mkdirSync(project)
+    const runs: string[] = []
+    const run: Run = file => {
+      runs.push(file)
+      const child = new EventEmitter()
+      queueMicrotask(() => child.emit('spawn'))
+      return Object.assign(child, { unref() {} }) as unknown as CallChild
+    }
+    let asked = 0
+    const own = () => {
+      asked++
+      return ['192.168.1.20', '100.101.102.103']
+    }
+    const item = { key: ID, session: ID, agent: 'claude', cwd: project, transcript: null }
+    const link = `mokupilot://call?claude-session=${ID}&cwd=${encodeURIComponent(project)}`
+    const here = { platform: 'linux', env: { PATH: '' }, run, own }
+    const local = { viewer: { peer: '127.0.0.1', forwardedFor: null } }
+    const phone = { viewer: { peer: '127.0.0.1', forwardedFor: '100.64.0.7' } }
+    const self = { viewer: { peer: '::ffff:127.0.0.1', forwardedFor: '100.101.102.103' } }
+    const launched = { ok: true, state: 'launched', file: process.execPath }
+    const linked = { ok: true, state: 'link', url: link }
+
+    for (const set of [{ command: [process.execPath] }, { command: [process.execPath], mode: 'auto' }]) {
+      const cfg = { mokupilot: set }
+      assert.deepEqual(await startCall(cfg, item, { ...here, ...local }), {
+        ...launched,
+        resolved: 'local',
+        why: 'loopback-direct',
+        viewer: '127.0.0.1',
+      })
+      assert.deepEqual(await startCall(cfg, item, { ...here, ...phone }), {
+        ...linked,
+        resolved: 'link',
+        why: 'forwarded-other',
+        viewer: '100.64.0.7',
+      })
+      assert.deepEqual(await startCall(cfg, item, { ...here, ...self }), {
+        ...launched,
+        resolved: 'local',
+        why: 'forwarded-own',
+        viewer: '100.101.102.103',
+      })
+    }
+    assert.equal(runs.length, 4)
+
+    // local: here for everyone; link: the link for everyone. Neither asks for this computer's addresses.
+    asked = 0
+    const forLocal = { mokupilot: { command: [process.execPath], mode: 'local' } }
+    const forLink = { mokupilot: { command: [process.execPath], mode: 'link' } }
+    for (const who of [local, phone, self]) {
+      assert.deepEqual(await startCall(forLocal, item, { ...here, ...who }), {
+        ...launched,
+        resolved: 'local',
+        why: 'mode-local',
+      })
+      assert.deepEqual(await startCall(forLink, item, { ...here, ...who }), {
+        ...linked,
+        resolved: 'link',
+        why: 'mode-link',
+      })
+    }
+    assert.equal(asked, 0)
+    assert.equal(runs.length, 7)
+
+    // The older key, a `mode` beside it winning.
+    assert.equal((await startCall({ mokupilot: { link: true } }, item, { ...here, ...local })).ok, true)
+    assert.deepEqual(
+      await startCall({ mokupilot: { link: true, mode: 'local', command: [process.execPath] } }, item, {
+        ...here,
+        ...phone,
+      }),
+      { ...launched, resolved: 'local', why: 'mode-local' },
+    )
+    assert.equal(runs.length, 8)
+
+    // Nothing installed here: auto gives a viewer elsewhere the link all the same; at this computer
+    // and under local it is MokuPilot not found, saying where the call went.
+    const none = { mokupilot: { command: [join(dir, 'no-such-MokuPilot')] } }
+    assert.deepEqual(await startCall(none, item, { ...here, ...phone }), {
+      ...linked,
+      resolved: 'link',
+      why: 'forwarded-other',
+      viewer: '100.64.0.7',
+    })
+    const there = await startCall(none, item, { ...here, ...local })
+    assert.equal(there.ok, false)
+    assert.match(there.ok ? '' : there.error, /MokuPilot not found/)
+    assert.equal(there.resolved, 'local')
+    assert.equal(there.why, 'loopback-direct')
+    const forced = await startCall({ mokupilot: { ...none.mokupilot, mode: 'local' } }, item, { ...here, ...phone })
+    assert.equal(forced.ok, false)
+    assert.equal(forced.why, 'mode-local')
+    // Turned off: off for everyone, nothing resolved.
+    assert.deepEqual(await startCall({ mokupilot: false }, item, { ...here, ...phone }), {
+      ok: false,
+      error: 'MokuPilot is turned off in config.json ("mokupilot": false)',
+    })
+    assert.equal(runs.length, 8)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
