@@ -77,6 +77,22 @@ export const desktopOnly = (rawPath: string): boolean => DESKTOP_ONLY.some(re =>
  */
 export const deskFocus = (rawPath: string): boolean => HERDR_FOCUS.some(re => re.test(rawPath))
 
+/**
+ * What `board remote desk <id>` prints after marking a desk: the board cannot see whether a herdr
+ * client is attached from it (herdr tells nobody), so it says how to get there. `user` is the login
+ * herdr runs as here, `host` this computer's Tailscale name (null when the listener has none yet).
+ */
+export function deskSteps(user: string, host: string | null): string[] {
+  const h = host ?? '<this computer>'
+  return [
+    'For Go to herdr to move herdr there, that computer must be attached to this herdr:',
+    `  1. its SSH key in ~${user}/.ssh/authorized_keys here (ssh ${user}@${h} works from it)`,
+    `  2. in its ~/.ssh/config:  Host board  HostName ${h}  User ${user}  (and Port, when sshd here is not on 22)`,
+    '  3. there: herdr --remote board, and keep it open',
+    'The board cannot tell whether it is attached: Go to herdr just moves the focus here.',
+  ]
+}
+
 /** What a desk may ask of /api/remote: answering the phones that ask to pair, and unpairing. */
 export const DESK_REMOTE_OPS: ReadonlySet<unknown> = new Set(['approve', 'deny', 'revoke'])
 

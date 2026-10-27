@@ -89,6 +89,8 @@ export function gateFlow(deps: { follow(lang: string): void; credentials?: Login
     keepAuth(h.auth)
     // Before the board draws: what it offers on the computer's screen reads it (deskPage).
     document.documentElement.toggleAttribute?.('data-desk', h.desk)
+    if (h.device) document.documentElement.setAttribute?.('data-device', h.device)
+    else document.documentElement.removeAttribute?.('data-device')
     view.set({ gate: gateOf(h), hello: h })
   }
 
