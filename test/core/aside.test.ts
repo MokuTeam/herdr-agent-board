@@ -90,6 +90,20 @@ test('a longer answer keeps its own indent and blank lines; the frame around it 
 const squares = (from: number, to: number) =>
   Array.from({ length: to - from + 1 }, (_, i) => `${from + i} ${(from + i) ** 2}`)
 
+test('scrolled into a code block taller than the overlay: a window of nothing but indented lines keeps its indent and meets the one before', () => {
+  const answer = ['Header', '', ...Array.from({ length: 70 }, (_, i) => `    item ${i + 1}`), '', 'Footer']
+  const window = (top: number) =>
+    screen(RULE, '', `    /btw ${Q}`, '', ...answer.slice(top, top + 20).map(l => (l ? `      ${l}` : '')), '', FOOTER)
+  let seen: string[] = []
+  for (let top = 0; top + 20 <= answer.length; top += 3) {
+    const shown = readBtw(window(top), Q)
+    if (shown.state !== 'answered') throw new Error(shown.state)
+    seen = mergeScroll(seen, shown.lines)
+  }
+  expect(readBtw(window(3), Q)).toEqual({ state: 'answered', lines: answer.slice(3, 23) })
+  expect(seen).toEqual(answer)
+})
+
 test('scrolled: lines in sight meet the lines read before, blank lines and repeats included', () => {
   expect(mergeScroll(squares(1, 26), squares(4, 29))).toEqual(squares(1, 29))
   expect(mergeScroll(squares(1, 29), [...squares(22, 45), '', 'done'])).toEqual([...squares(1, 45), '', 'done'])

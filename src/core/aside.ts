@@ -9,11 +9,12 @@
 //       /btw an earlier question     earlier ones, while its history holds them
 //       /btw what is the code word?  this one, on one line, cut short with "…" when long
 //
-//         PINEAPPLE                  the answer, indented, wrapped to the terminal's width
+//         PINEAPPLE                  the answer, two columns right of it, wrapped to the terminal's width
 //
 //       ↑/↓ to scroll · c to copy · f to fork · Esc to close
 //
-// While it answers the body says "✽ Answering…" and the footer only "Esc to close". An answer
+// While it answers the body says "✽ Answering…" and the footer only "Esc to close". A /btw that
+// fails gets no "c to copy" either: text that stays there with no spinner is taken for its error. An answer
 // longer than the overlay scrolls: each Down shows three lines further, the question stays on top.
 
 /**
@@ -33,6 +34,8 @@ export type BtwScreen =
   | { state: 'other' }
   /** Ours, still answering. */
   | { state: 'answering' }
+  /** Ours, with no "Answering…" and no answer: what it says instead (an error, when it stays). */
+  | { state: 'stopped'; text: string }
   /** Ours, answered: the lines of the answer in sight, without their indent (blank ones kept). */
   | { state: 'answered'; lines: string[] }
 
@@ -77,14 +80,22 @@ export function readBtw(screen: string, question: string): BtwScreen {
   if (asked < 0) return { state: 'none' }
   if (!sameQuestion(lines[asked] ?? '', question)) return { state: 'other' }
   const body = lines.slice(asked + 1, footer)
-  if (!/\bc to copy\b/.test(lines[footer] ?? '') || body.some(l => ANSWERING.test(l.trim())))
-    return { state: 'answering' }
+  if (body.some(l => ANSWERING.test(l.trim()))) return { state: 'answering' }
+  if (!/\bc to copy\b/.test(lines[footer] ?? '')) {
+    const text = body
+      .map(l => l.trim())
+      .filter(Boolean)
+      .join(' ')
+    return text ? { state: 'stopped', text } : { state: 'answering' }
+  }
   // One blank line under the question and one over the footer frame the answer; blank lines
   // inside it are its own (they keep the lines in sight lined up while it scrolls).
   if (body.length && !body[0]?.trim()) body.shift()
   if (body.length && !body.at(-1)?.trim()) body.pop()
-  const cut = Math.min(...body.filter(l => l.trim()).map(indent))
-  return { state: 'answered', lines: body.map(l => l.slice(Number.isFinite(cut) ? cut : 0)) }
+  // The answer sits two columns right of the question, in every window of a scrolled one: a window
+  // of nothing but code or a nested list keeps its own indent, so it meets the window before.
+  const cut = indent(lines[asked] ?? '') + 2
+  return { state: 'answered', lines: body.map(l => l.slice(Math.min(cut, indent(l)))) }
 }
 
 /**

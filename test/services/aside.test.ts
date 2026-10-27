@@ -31,6 +31,8 @@ interface Pane {
   height?: number
   /** Esc closes the overlay (false: it stays, as a frozen terminal would). */
   escCloses?: boolean
+  /** Reads after a key that still show the screen from before it, as a slow redraw would. */
+  lag?: number
 }
 
 function fakePane(pane: Partial<Pane> = {}) {
@@ -46,6 +48,7 @@ function fakePane(pane: Partial<Pane> = {}) {
   let step = 0
   let top = 0
   let open = false
+  let stale = { reads: 0, screen: '' }
   const overlayScreen = (): string => {
     const q = typed
     const screen = p.overlay[Math.min(step, p.overlay.length - 1)] ?? ''
@@ -66,6 +69,10 @@ function fakePane(pane: Partial<Pane> = {}) {
     agent: async () => p.agent,
     screen: async () => (open ? overlayScreen() : p.box),
     read: async () => {
+      if (stale.reads > 0) {
+        stale.reads--
+        return stale.screen
+      }
       if (!open) return stripAnsi(p.box)
       const s = overlayScreen()
       step++
@@ -73,6 +80,7 @@ function fakePane(pane: Partial<Pane> = {}) {
     },
     keys: async (...keys) => {
       sent.push(...keys)
+      if (p.lag) stale = { reads: p.lag, screen: open ? overlayScreen() : stripAnsi(p.box) }
       for (const k of keys) {
         if (k === 'esc' && p.escCloses) open = false
         if (k === 'down') top = Math.max(0, Math.min(top + 3, (p.answer?.length ?? 0) - (p.height ?? 20)))
@@ -115,6 +123,54 @@ test('an answer taller than the overlay is read down to its end, blank lines kep
   expect(r).toMatchObject({ ok: true, text: answer.join('\n') })
   expect(f.sent.filter(k => k === 'down').length).toBe(8)
   expect(f.sent.at(-1)).toBe('esc')
+})
+
+test('a code block taller than the overlay comes back once: a window of nothing but its indented lines meets the one before', async () => {
+  // Read live as 105 lines for 72, items twice, when each window lost its own least indent.
+  const answer = ['Header', ...Array.from({ length: 70 }, (_, i) => `    item ${i + 1}`), 'Footer']
+  const f = fakePane({ overlay: ['ANSWER'], answer, height: 20 })
+  const r = await askAside(deps, item, 'a block of 70 lines?', { io: f.io, ...fast })
+  expect(r).toMatchObject({ ok: true, text: answer.join('\n') })
+})
+
+test('a slow redraw is not the end of a long answer, and reading it has a time of its own', async () => {
+  const answer = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`)
+  const slow = fakePane({ overlay: ['ANSWER'], answer, height: 10, lag: 1 })
+  expect(await askAside(deps, item, 'q', { io: slow.io, ...fast })).toMatchObject({ ok: true, text: answer.join('\n') })
+
+  const late = fakePane({ overlay: ['ANSWER'], answer, height: 10 })
+  expect(await askAside(deps, item, 'q', { io: late.io, ...fast, readMs: -1 })).toEqual({
+    ok: false,
+    error: 'The /btw answer of “Acme” is too long to read off the screen',
+  })
+  expect(late.sent).toEqual(['prompt:/btw q', 'esc'])
+  expect(late.isOpen()).toBe(false)
+})
+
+test('a second Esc only while the overlay stays up: one still drawn a moment after it closed gets none', async () => {
+  const lagging = fakePane({ overlay: ['ANSWER'], answer: ['x'], lag: 1 })
+  expect(await askAside(deps, item, 'q', { io: lagging.io, ...fast })).toMatchObject({ ok: true, text: 'x' })
+  expect(lagging.sent.filter(k => k === 'esc')).toEqual(['esc'])
+  expect(lagging.isOpen()).toBe(false)
+
+  const frozen = fakePane({ overlay: ['ANSWER'], answer: ['x'], escCloses: false })
+  await askAside(deps, item, 'q', { io: frozen.io, ...fast })
+  expect(frozen.sent.filter(k => k === 'esc')).toEqual(['esc', 'esc'])
+})
+
+test('a /btw that fails says so once its error stays on the screen, not after the whole timeout', async () => {
+  const error = ['● ready', RULE, '', '    {q}', '', '      API Error: 529 Overloaded', '', '    Esc to close'].join(
+    '\n',
+  )
+  const failed = fakePane({ overlay: [error] })
+  expect(await askAside(deps, item, 'q', { io: failed.io, ...fast, stopMs: 0 })).toEqual({
+    ok: false,
+    error: '/btw in “Acme” ended with no answer: API Error: 529 Overloaded',
+  })
+  expect(failed.sent).toEqual(['prompt:/btw q', 'esc'])
+  // Text with no spinner for a moment, then the answer: still the answer.
+  const passing = fakePane({ overlay: [error, 'ANSWER'], answer: ['Four'] })
+  expect(await askAside(deps, item, 'q', { io: passing.io, ...fast })).toMatchObject({ ok: true, text: 'Four' })
 })
 
 test('nothing typed where it would not land as /btw: a dialog or overlay, a draft, another session, asleep', async () => {
@@ -161,6 +217,11 @@ test('refused before anything is read: no question, too long for one /btw line',
     error: 'A side question is up to 790 characters',
   })
   expect(f.sent).toEqual([])
+  // What is typed counts: an indented paste that fits on one line goes.
+  const pasted = Array.from({ length: 90 }, (_, i) => `        line ${i + 1}`).join('\n')
+  expect(pasted.length).toBeGreaterThan(790)
+  expect(await askAside(deps, item, pasted, o)).toMatchObject({ ok: true })
+  expect(f.sent[0]?.length).toBeLessThanOrEqual('prompt:/btw '.length + 790)
 })
 
 test('other agents (pi, Codex, unknown) and panes with no Claude session id: refused as before, with no herdr call', async () => {

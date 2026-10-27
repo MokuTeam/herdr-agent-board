@@ -19,7 +19,7 @@ export const ASIDE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'aside.via': 'asked with /btw',
     'aside.seconds': '{s} s',
     'aside.viaHint':
-      'Typed into the session as /btw and read off its screen: Claude Code answers it apart from the conversation and keeps nothing of it. Lists and code come back as the terminal showed them',
+      'Typed into the session as /btw and read off its screen: Claude Code answers it apart from the conversation, which keeps nothing of it. Lists and code come back as the terminal showed them',
     // why there is no answer
     'aside.err.empty': 'Type the question first',
     'aside.err.long': 'A side question is up to {n} characters',
@@ -31,6 +31,8 @@ export const ASIDE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       '“{name}” did not open /btw: its Claude Code may be older than /btw, or the line went somewhere else. Look at the terminal',
     'aside.err.lost':
       'The /btw answer of “{name}” went off the screen before it was read: someone pressed a key in the terminal?',
+    'aside.err.failed': '/btw in “{name}” ended with no answer: {why}',
+    'aside.err.tooLong': 'The /btw answer of “{name}” is too long to read off the screen',
     'aside.err.herdr': 'Could not ask “{name}” through herdr: {why}',
     'aside.err.timeout': 'No answer in {s} s',
     'aside.err.cancelled': 'Cancelled',
@@ -49,7 +51,7 @@ export const ASIDE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'aside.via': 'спрошено через /btw',
     'aside.seconds': '{s} с',
     'aside.viaHint':
-      'Набрано в сессии как /btw и прочитано с её экрана: Claude Code отвечает в стороне от переписки и ничего из этого не сохраняет. Списки и код приходят такими, какими их показал терминал',
+      'Набрано в сессии как /btw и прочитано с её экрана: Claude Code отвечает в стороне от переписки, в ней ничего из этого не остаётся. Списки и код приходят такими, какими их показал терминал',
     'aside.err.empty': 'Сначала напиши вопрос',
     'aside.err.long': 'Вопрос в сторонке: не больше {n} символов',
     'aside.err.notClaude': 'В сторонке можно спросить только сессию Claude с id, а «{name}» не такая',
@@ -60,6 +62,8 @@ export const ASIDE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'В «{name}» /btw не открылся: может быть, Claude Code там старше /btw, или строка ушла не туда. Загляни в терминал',
     'aside.err.lost':
       'Ответ /btw у «{name}» пропал с экрана раньше, чем его прочитали: кто-то нажал клавишу в терминале?',
+    'aside.err.failed': '/btw в «{name}» закончился без ответа: {why}',
+    'aside.err.tooLong': 'Ответ /btw у «{name}» слишком длинный, чтобы прочитать его с экрана',
     'aside.err.herdr': 'Не получилось спросить «{name}» через herdr: {why}',
     'aside.err.timeout': 'Ответа нет за {s} с',
     'aside.err.cancelled': 'Отменено',

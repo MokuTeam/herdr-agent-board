@@ -50,7 +50,11 @@ export interface AsideOptions {
   showMs?: number
   /** How often the screen is read. */
   pollMs?: number
-  /** How many lines down an answer is read at most (each Down shows three more). */
+  /** How long the overlay may say something other than an answer, unchanged, before that is its error. */
+  stopMs?: number
+  /** How long reading an answer that is in may take, scrolling down a long one. */
+  readMs?: number
+  /** How many times Down is pressed at most (each shows three lines more). */
   maxScrolls?: number
   io?: BtwIO
   sleep?: (ms: number) => Promise<void>
@@ -75,6 +79,8 @@ export async function askAside(
     timeoutMs = 180_000,
     showMs = 10_000,
     pollMs = 400,
+    stopMs = 5_000,
+    readMs = 60_000,
     maxScrolls = 200,
     io = btwIO(item.pane ?? ''),
     sleep = pause,
@@ -82,8 +88,10 @@ export async function askAside(
 ): Promise<AsideReply> {
   const q = String(question ?? '').trim()
   const name = item.name
+  const line = btwLine(q)
   if (!q) return { ok: false, error: t('aside.err.empty') }
-  if (q.length > ASIDE_MAX) return { ok: false, error: t('aside.err.long', { n: ASIDE_MAX }) }
+  // What is typed counts: the question on one line, so an indented paste may fit once collapsed.
+  if (line.length - '/btw '.length > ASIDE_MAX) return { ok: false, error: t('aside.err.long', { n: ASIDE_MAX }) }
   if (!callable(item) || !item.session) return { ok: false, error: t('aside.err.notClaude', { name }) }
   // /btw runs in the live session; the board does not wake one to ask it something aside.
   if (item.sleeping) return { ok: false, error: t('aside.err.asleep', { name }) }
@@ -92,16 +100,22 @@ export async function askAside(
   if (asking.has(pane)) return { ok: false, busy: true, error: t('aside.err.already', { name }) }
   asking.add(pane)
   const started = Date.now()
-  const line = btwLine(q)
   let typed = false
-  // Close our overlay, and only ours: a key pressed into anything else would answer it.
+  const ours = async (): Promise<boolean> => {
+    const shown = readBtw(await io.read(), q).state
+    return shown !== 'none' && shown !== 'other'
+  }
+  // Close our overlay, and only ours: a key pressed into anything else would answer it. A second
+  // Esc only when the overlay stays up a while after the first: the screen may show it a moment
+  // after it closed, and Esc into the session itself stops a running turn.
   const closeOurs = async (): Promise<void> => {
-    for (let i = 0; i < 2; i++) {
-      const shown = readBtw(await io.read(), q).state
-      if (shown !== 'answering' && shown !== 'answered') return
-      await io.keys('esc')
+    if (!(await ours())) return
+    await io.keys('esc')
+    for (let i = 0; i < 3; i++) {
       await sleep(pollMs)
+      if (!(await ours())) return
     }
+    await io.keys('esc')
   }
   const fail = async (error: string, busy = false): Promise<AsideReply> => {
     if (typed) await closeOurs().catch(() => {})
@@ -135,23 +149,38 @@ export async function askAside(
       await sleep(pollMs)
       shown = readBtw(await io.read(), q)
     }
+    // Neither answering nor an answer, and so for a while: /btw failed, and says why on the screen.
+    let said = { text: '', at: 0 }
     while (shown.state !== 'answered') {
       if (signal?.aborted) return await fail(t('aside.err.cancelled'))
       if (Date.now() > deadline) return await fail(t('aside.err.timeout', { s: Math.round(timeoutMs / 1000) }))
-      if (shown.state !== 'answering') return await fail(t('aside.err.lost', { name }))
+      if (shown.state === 'stopped') {
+        if (shown.text !== said.text) said = { text: shown.text, at: Date.now() }
+        else if (Date.now() - said.at >= stopMs)
+          return await fail(t('aside.err.failed', { name, why: said.text.slice(0, 300) }))
+      } else if (shown.state === 'answering') said = { text: '', at: 0 }
+      else return await fail(t('aside.err.lost', { name }))
       await sleep(pollMs)
       shown = readBtw(await io.read(), q)
     }
-    // The whole answer: Down (three lines further each time) until nothing more comes into sight.
+    // The whole answer: Down (three lines further each time) until nothing more comes into sight,
+    // still so a while later (a slow redraw is not the end), within a time of its own.
     let lines = shown.lines
     let window = shown.lines
-    for (let i = 0; i < maxScrolls; i++) {
+    const readBy = Date.now() + readMs
+    for (let i = 0, end = false; !end; i++) {
       if (signal?.aborted) return await fail(t('aside.err.cancelled'))
+      if (i >= maxScrolls || Date.now() > readBy) return await fail(t('aside.err.tooLong', { name }))
       await io.keys('down')
       await sleep(Math.min(pollMs, 150))
-      const next = readBtw(await io.read(), q)
+      let next = readBtw(await io.read(), q)
+      const same = (): boolean => next.state === 'answered' && next.lines.join('\n') === window.join('\n')
+      if (same()) {
+        await sleep(pollMs)
+        next = readBtw(await io.read(), q)
+        end = same()
+      }
       if (next.state !== 'answered') return await fail(t('aside.err.lost', { name }))
-      if (next.lines.join('\n') === window.join('\n')) break
       lines = mergeScroll(lines, next.lines)
       window = next.lines
     }
