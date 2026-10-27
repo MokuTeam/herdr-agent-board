@@ -114,9 +114,11 @@ export function installFlags(argv: readonly string[]): InstallFlags | { error: s
         break
       }
       case '--user': {
+        // no dot: sudo skips a file in /etc/sudoers.d whose name has one, and --sudo's is named
+        // after the user (sudoersFile); the tunnel's own user keeps its rule
         const v = value()
-        if (v === null || v === '' || fieldProblem('user', v) || v === 'root')
-          return { error: '--user takes a user name (not root)' }
+        if (v === null || v === '' || fieldProblem('user', v) || v === 'root' || v.includes('.'))
+          return { error: '--user takes a user name: letters, digits, _ and -, not root' }
         f.user = v
         break
       }

@@ -1578,6 +1578,13 @@ export function nginxAddress(listen80: string[]): string {
   return /^[0-9a-f.:]+$/i.test(ip) ? ip : '127.0.0.1'
 }
 
+/**
+ * chgrp for the socket in its folder. The server mode's folder is the board's user's, a login that
+ * can put a link to another socket (Docker's) in the socket's place: -h changes the link, never
+ * what it points to. A tunnel's (its user has no shell) is as it was, byte for byte.
+ */
+const socketChgrp = (pair: Pair): string => (pair.server ? 'chgrp -h' : 'chgrp')
+
 /** What's done of a case-2 or case-3 setup on the facts: their Caddy serves the domain already. */
 const servedByThem = (x: Ctx): boolean => x.same && x.f.caddy?.hosts.includes(x.w.domain) === true
 
@@ -1598,7 +1605,8 @@ function caseTwo(x: Ctx, t: TheirCaddy): { built: Built[]; relies: Rely[] } | Ma
   // the folder's group: Look's, or the tunnel user's own when the run makes the folder
   const was = f.folder ? f.folder.group : x.stepOne?.folder ? userGroup(x) : ''
   if (!asRoot && was !== '' && group !== '' && was !== group) {
-    const socket = (g: string): string => `if sudo test -S ${q(w.socket)}; then sudo chgrp ${q(g)} ${q(w.socket)}; fi`
+    const socket = (g: string): string =>
+      `if sudo test -S ${q(w.socket)}; then sudo ${socketChgrp(w)} ${q(g)} ${q(w.socket)}; fi`
     built.push({
       step: mk(
         'folder-group',
@@ -2024,7 +2032,7 @@ export function undoPlan(
         break
       }
       case 'group': {
-        const socket = `if sudo test -S ${q(r.pair.socket)}; then sudo chgrp ${q(item.from)} ${q(r.pair.socket)}; fi`
+        const socket = `if sudo test -S ${q(r.pair.socket)}; then sudo ${socketChgrp(r.pair)} ${q(item.from)} ${q(r.pair.socket)}; fi`
         steps.push(
           mk(
             'group-back',

@@ -116,6 +116,46 @@ describe('the server mode as the setup target', () => {
     expect(chooseCase(f, W).case).toBe('1')
   })
 
+  test("case 2: the socket's group changed on the socket itself (chgrp -h), never through a link the board's user put there; a tunnel's as it was", () => {
+    const socketLine = (p: Plan, id: string): string =>
+      p.steps.find(s => s.id === id)?.commands.find(c => c.includes('test -S')) ?? ''
+    const p = planOf(fresh('2'))
+    expect(socketLine(p, 'folder-group')).toBe(
+      `if sudo test -S ${BOARD_SOCKET}; then sudo chgrp -h caddy ${BOARD_SOCKET}; fi`,
+    )
+    expect(p.steps.find(s => s.id === 'folder-group')?.undo).toContain(
+      `if sudo test -S ${BOARD_SOCKET}; then sudo chgrp -h agent ${BOARD_SOCKET}; fi`,
+    )
+    const t = planOf(factsFor('2'), TUNNEL)
+    expect(socketLine(t, 'folder-group')).toBe(
+      `if sudo test -S ${TUNNEL.socket}; then sudo chgrp caddy ${TUNNEL.socket}; fi`,
+    )
+    // Undo of the server mode's record: the same
+    const group = { kind: 'group' as const, path: FOLDER, from: 'agent', to: 'caddy' }
+    const rec = recordFor('2', {
+      pair: { user: 'agent', socket: BOARD_SOCKET, server: true },
+      domain: W.domain,
+      address: `https://${W.domain}`,
+      items: [group],
+    })
+    const u = undoPlan(rec, factsFor('2'), { id: 'u1', removeDocker: false, removeEdited: false })
+    expect(socketLine(u, 'group-back')).toBe(
+      `if sudo test -S ${BOARD_SOCKET}; then sudo chgrp -h agent ${BOARD_SOCKET}; fi`,
+    )
+    const tu = undoPlan(
+      recordFor('2', { items: [{ ...group, path: '/var/lib/boardtunnel', from: 'boardtunnel' }] }),
+      factsFor('2'),
+      {
+        id: 'u1',
+        removeDocker: false,
+        removeEdited: false,
+      },
+    )
+    expect(socketLine(tu, 'group-back')).toBe(
+      `if sudo test -S ${TUNNEL.socket}; then sudo chgrp boardtunnel ${TUNNEL.socket}; fi`,
+    )
+  })
+
   test("Undo: the folder the run made goes; nothing of a tunnel's is left by hand", () => {
     const rec = recordFor('1', {
       pair: { user: 'agent', socket: BOARD_SOCKET, server: true },

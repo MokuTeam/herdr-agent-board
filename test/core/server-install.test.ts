@@ -87,6 +87,9 @@ describe('the flags', () => {
       ['--repo', "https://x/'y"],
       ['--user', 'root'],
       ['--user', 'a b'],
+      // sudo skips /etc/sudoers.d/agent-board-a.b: --sudo would do nothing
+      ['--user', 'a.b'],
+      ['--user', 'agent.'],
       ['--archive', 'relative.tar.gz'],
       ['--lang', 'de'],
       ['--remove-user'],
