@@ -63,6 +63,26 @@ describe('Phones panel', () => {
     expect(buttons).toEqual(['Approve', 'Deny', 'Set up the HTTPS address', 'Unpair', 'Turn off phones'])
   })
 
+  test('on the board in a browser elsewhere: where to approve, and no button the server refuses', () => {
+    const doc = Object.getOwnPropertyDescriptor(globalThis, 'document')
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: { documentElement: { hasAttribute: (name: string) => name === 'data-remote' } },
+    })
+    try {
+      const nodes = render(REMOTE)
+      const all = text([byId(nodes, 'phones-sheet')])
+      expect(all).toContain('Agent board app on xiaomi-17 asks to use this board')
+      expect(all).toContain('board remote approve r1')
+      const buttons = findAll(nodes, el => el.tag === 'button' && hasClass(el, 'button'))
+      expect(buttons.map(b => text(b.children))).toEqual(['Set up the HTTPS address', 'Unpair', 'Turn off phones'])
+      expect(buttons.every(b => b.attrs.has('disabled'))).toBe(true)
+    } finally {
+      if (doc) Object.defineProperty(globalThis, 'document', doc)
+      else Reflect.deleteProperty(globalThis, 'document')
+    }
+  })
+
   test('no phone yet; and why phones cannot reach it', () => {
     const none = text(render({ ...REMOTE, pending: [], devices: [] }))
     expect(none).toContain('No phone is paired yet')
