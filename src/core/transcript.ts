@@ -232,6 +232,9 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
       continue
     }
     if (o.type !== 'assistant' || !Array.isArray(content)) continue
+    // The model it runs, for the card when the status line has not said (a synthetic message's is no model).
+    if (!info.model && typeof message?.model === 'string' && message.model !== '<synthetic>')
+      info.model = message.model.slice(0, 60)
     // How full the context is: what the last real request carried, cached parts included.
     const u = rec(message?.usage)
     if (info.context == null && u && message?.model !== '<synthetic>') {

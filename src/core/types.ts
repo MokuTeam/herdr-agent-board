@@ -194,6 +194,8 @@ export interface TranscriptInfo {
   activity?: number
   tokens?: number
   context?: number | null
+  /** The model its last assistant message ran, when the status line has not said. */
+  model?: string | null
   [extra: string]: unknown
 }
 
@@ -226,6 +228,8 @@ export interface Item {
   context?: number | null
   contextPct?: number | null
   contextSize?: number | null
+  /** The model it runs, as Claude's status line names it. */
+  model?: string | null
   tool?: ToolCall | null
   question?: string
   askSince?: number | null

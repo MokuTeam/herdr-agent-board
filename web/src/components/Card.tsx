@@ -12,6 +12,7 @@ import { unseenResult } from '../models/attention.ts'
 import {
   askLine,
   cardAge,
+  cardFacts,
   cardWords,
   compact,
   dismissable,
@@ -129,12 +130,33 @@ export function Card(props: CardProps) {
 
 function CardContent({ item, launch, folding }: { item: Item; launch: LaunchSlots | undefined; folding: boolean }) {
   const { data } = useBoardContext()
+  const oneLine = compact(item, data?.schedules)
   return (
     <>
       <CardTop item={item} />
-      {!compact(item, data?.schedules) && <CardBody item={item} launch={launch} folding={folding} />}
+      {!oneLine && <CardBody item={item} launch={launch} folding={folding} />}
+      {!oneLine && <CardFacts item={item} />}
       <CardActions item={item} />
     </>
+  )
+}
+
+/** Its status, context fill and model, quietly at the card's foot. */
+function CardFacts({ item }: { item: Item }) {
+  const t = useT()
+  const facts = cardFacts(item, t)
+  return (
+    <div className="card-facts">
+      <span className="fact fact-status" style={{ '--c': COLUMN_COLORS[item.column] }}>
+        {facts.status}
+      </span>
+      {facts.context && <span className="fact">{facts.context}</span>}
+      {facts.model && (
+        <span className="fact fact-model" title={facts.model}>
+          {facts.model}
+        </span>
+      )}
+    </div>
   )
 }
 
