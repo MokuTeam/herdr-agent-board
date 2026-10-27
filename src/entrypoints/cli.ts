@@ -44,6 +44,10 @@
 //                            the line every session's context has; with a state, the user's switch
 //   board away [on|off]      the same switch: away (on, the default) or back at the computer (off).
 //                            Both only while config.json turns presence on; never sent to a session
+//   board todo add [--mine] "<text>" | done <id> | list   tasks (#202, core/todos.ts): what the
+//                            agent hands the user to do, or (--mine) a promise of its own it defers;
+//                            done closes its own; list shows this session's open ones. Only while
+//                            config.json turns tasks on with agents (`"todos": true`)
 //   board resume <session id> [--profile <id>]   resumes that session here, in the profile its
 //                            card says it ran in (else the one named): what herdr types into a
 //                            restored pane for a session in another profile than the default one
@@ -71,7 +75,7 @@ import {
   reportHash,
   reportIdentity,
 } from '../adapters/call-receipts.ts'
-import { readCard, writeCard } from '../adapters/cards.ts'
+import { changeTodos, readCard, writeCard } from '../adapters/cards.ts'
 import { createClaudeHome, cwdOf } from '../adapters/claude-home.ts'
 import { configFile, editCategories, loadConfig, setRemoteOn, setTunnelOn } from '../adapters/config-file.ts'
 import { asSnapshot, type HerdrPane, herdr, snapshot } from '../adapters/herdr.ts'
@@ -94,6 +98,7 @@ import { type ProfileSet, profileSet, resolveProfileDir, sessionProfile } from '
 import { type RemoteView, remoteConfig } from '../core/remote.ts'
 import { parseResume, projectFolderName, resumeDir, resumePlan } from '../core/resume.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
+import { sortTodos, todosConfig, todosOf } from '../core/todos.ts'
 import { boardPorts, publicOrigin, type TestStep, tunnelChecks, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
 import type { Item } from '../core/types.ts'
 import { wakeConfig } from '../core/wake/config.ts'
@@ -108,7 +113,7 @@ import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id>] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away] | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id>] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -391,6 +396,47 @@ function line(key: string, cwd: string): string {
 }
 
 /**
+ * `board todo add [--mine] "<text>" | done <id> | list` (#202): the agent's side of the tasks, on
+ * this session's card, under its lock (adapters/cards.ts changeTodos). Refused while tasks are off,
+ * or on for the user's pins only.
+ */
+function todo(key: string): void {
+  const usage = 'usage: board todo add [--mine] "<text>" | board todo done <id> | board todo list'
+  const conf = todosConfig(cfg.todos)
+  if (!conf) throw new Error(t('todo.err.off'))
+  if (!conf.agents) throw new Error(t('todo.err.agentsOff'))
+  const [sub = 'list', ...args] = rest
+  if (sub === 'list') {
+    const open = sortTodos(todosOf(readCard(key)?.todos)).filter(x => !x.done)
+    if (!open.length) {
+      console.log('no open tasks for this session')
+      return
+    }
+    for (const x of open) console.log(`${x.id} · ${x.owner === 'agent' ? 'yours' : "the user's"} · ${x.text}`)
+    return
+  }
+  if (sub === 'add') {
+    const mine = args.includes('--mine')
+    const words = args
+      .filter(a => a !== '--mine')
+      .join(' ')
+      .trim()
+    if (!words) throw new Error(usage)
+    const r = changeTodos(key, { op: 'add', text: words, owner: mine ? 'agent' : 'user', by: 'agent' })
+    if (!r.ok) throw new Error(t(r.error))
+    console.log(`ok · task ${r.todo?.id} · ${mine ? 'yours' : "the user's"}`)
+    return
+  }
+  if (sub === 'done' && args[0]) {
+    const r = changeTodos(key, { op: 'done', id: args[0], by: 'agent' })
+    if (!r.ok) throw new Error(t(r.error))
+    console.log(`ok · task ${args[0]} done`)
+    return
+  }
+  throw new Error(usage)
+}
+
+/**
  * `board presence [here|away]` and `board away [on|off]`: the user's presence (#172), read or
  * switched in its file, so with the board closed too; the board shows a switch at its next look.
  * While config.json has no `presence` it is off, and a switch is refused: no file appears.
@@ -600,6 +646,8 @@ async function main(): Promise<void> {
       for (const e of list) console.log(entryLine(e, now, false))
       return
     }
+    case 'todo':
+      return todo(s.key)
     case 'unschedule': {
       // An id is removed above, whoever set it; here only "all" of this session's.
       if (rest[0]?.toLowerCase() !== 'all') throw new Error('usage: board unschedule <id|all>')

@@ -2,6 +2,7 @@
 // localStorage (board.draft.<session>, models/drafts.ts), the files that go with it
 // (useAttachments), and sending it — Enter, or the send button. A message sent leaves the box for
 // the foot of the thread at once (the outbox: its bubble, Retry and Edit).
+
 import { type RefObject, useLayoutEffect, useRef, useState } from 'react'
 import type { SessionDetail } from '../api/client.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
@@ -9,6 +10,7 @@ import type { Attachment } from '../models/composer.ts'
 import { composerSession, type OutboxEntry } from '../models/composer-session.ts'
 import type { DetailValue } from '../models/detail-resource.ts'
 import { draftBook } from '../models/drafts.ts'
+import { quoteDraft } from '../models/todos.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { useAttachments } from './useAttachments.ts'
 import { useLatest } from './useLatest.ts'
@@ -49,6 +51,14 @@ const drafts = draftBook({
   setItem: (key, value) => localStorage.setItem(key, value),
   removeItem: key => localStorage.removeItem(key),
 })
+
+/**
+ * A task's "To chat" (#202): its point quoted at the top of the session's draft, which its sheet
+ * puts in the box as it opens. `session`: the draft's key (models/sheet.ts draftKey).
+ */
+export function quoteInDraft(session: string | null, text: string): void {
+  drafts.save(session, quoteDraft(text, drafts.read(session)?.text ?? ''))
+}
 
 /**
  * `reload`: reads the session's detail again (the reply shows in the conversation); `detail`: the
