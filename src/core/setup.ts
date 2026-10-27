@@ -633,7 +633,13 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
         t('setup.mokupilot.missing', { file: mp.file || '?' }),
         both(
           mp.error ?? '',
-          t(mode === 'local' ? 'setup.mokupilot.localMissingDetail' : 'setup.mokupilot.missingDetail'),
+          t(
+            mode === 'local'
+              ? 'setup.mokupilot.localMissingDetail'
+              : mode === 'auto'
+                ? 'setup.mokupilot.autoMissingDetail'
+                : 'setup.mokupilot.missingDetail',
+          ),
         ),
         t('setup.mokupilot.missingFix'),
         snippet,

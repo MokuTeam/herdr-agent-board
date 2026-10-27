@@ -46,7 +46,11 @@ test('a call starts MokuPilot on its own, in the folder the session started in, 
     const opts = { platform: 'linux', env, run }
     const missing = await startCall(cfg, item, opts)
     assert.equal(missing.ok, false)
-    assert.match(missing.ok ? '' : missing.error, /MokuPilot not found \(\/opt\/mp\/MokuPilot\)/)
+    // No mode: auto, and with no request the board's own computer, which has no MokuPilot.
+    assert.match(
+      missing.ok ? '' : missing.error,
+      /MokuPilot is not installed on this computer \(\/opt\/mp\/MokuPilot\)/,
+    )
 
     const real = { mokupilot: { command: [process.execPath] } }
     // No request to say who asks (a test, the CLI): the board's own computer, as before the modes.
@@ -193,12 +197,13 @@ test('a call from a session in another profile than the board’s is refused bef
 test('whether the page offers calls: looked up again when the setting changes, and once a minute', () => {
   let now = 1_000
   const asked: unknown[] = []
-  const cfg: Partial<Config> = { mokupilot: { command: ['/opt/mp/MokuPilot'] } }
+  // This machine: the mode that asks whether MokuPilot is here.
+  const cfg: Partial<Config> = { mokupilot: { command: ['/opt/mp/MokuPilot'], mode: 'local' } }
   const on = mokupilotCheck(cfg, {
     now: () => now,
     find: c => {
       asked.push(c.mokupilot)
-      return { state: c.mokupilot === false ? 'off' : 'ok' }
+      return { state: JSON.stringify(c.mokupilot).includes('/gone') ? 'missing' : 'ok' }
     },
   })
   assert.equal(on(), true)
@@ -206,7 +211,7 @@ test('whether the page offers calls: looked up again when the setting changes, a
   assert.equal(on(), true)
   assert.equal(asked.length, 1)
   // The live config changed: asked again at once.
-  cfg.mokupilot = false
+  cfg.mokupilot = { command: ['/gone/MokuPilot'], mode: 'local' }
   assert.equal(on(), false)
   assert.equal(asked.length, 2)
   // A minute on: asked again, for one installed or removed meanwhile.
@@ -367,7 +372,7 @@ test('the mode decides where a call starts; under auto, who asks: here or by the
     })
     const there = await startCall(none, item, { ...here, ...local })
     assert.equal(there.ok, false)
-    assert.match(there.ok ? '' : there.error, /MokuPilot not found/)
+    assert.match(there.ok ? '' : there.error, /MokuPilot is not installed on this computer/)
     assert.equal(there.resolved, 'local')
     assert.equal(there.why, 'loopback-direct')
     const forced = await startCall({ mokupilot: { ...none.mokupilot, mode: 'local' } }, item, { ...here, ...phone })
@@ -382,4 +387,52 @@ test('the mode decides where a call starts; under auto, who asks: here or by the
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('whether the page offers calls, by the mode: off and This machine without MokuPilot hide it', () => {
+  const missing = () => ({ state: 'missing' })
+  const ok = () => ({ state: 'ok' })
+  const offered = (mokupilot: unknown, find = missing) => mokupilotCheck({ mokupilot }, { find })()
+  // Auto (said, unsaid, the default with nothing set): offered, MokuPilot here or not.
+  for (const set of [undefined, {}, { mode: 'auto' }, { command: ['/opt/mp/MokuPilot'] }, { mode: 'bogus' }])
+    assert.equal(offered(set), true, JSON.stringify(set))
+  // The link, the panel's or the older key: offered, nothing here needed.
+  assert.equal(offered({ mode: 'link' }), true)
+  assert.equal(offered({ link: true }), true)
+  // This machine: only with MokuPilot found here.
+  assert.equal(offered({ mode: 'local' }), false)
+  assert.equal(offered({ mode: 'local' }, ok), true)
+  assert.equal(offered({ link: true, mode: 'local' }), false)
+  // Off: never.
+  assert.equal(offered(false), false)
+  assert.equal(offered(false, ok), false)
+})
+
+test('under auto at this computer without MokuPilot: the error says it is not installed here, and where to switch', async () => {
+  for (const [lang, words] of [
+    [
+      'en',
+      /MokuPilot is not installed on this computer \(.*no-such\).*“The computer you’re viewing from” in Settings → MokuPilot…/,
+    ],
+    ['ru', /MokuPilot не установлен на этом компьютере.*«Компьютер, с которого ты смотришь» в Настройках → MokuPilot…/],
+  ] as const) {
+    // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
+    useLanguage(lang)
+    const item = { key: ID, session: ID, agent: 'claude', cwd: tmpdir(), transcript: null }
+    const r = await startCall({ mokupilot: { command: ['/opt/no-such'] } }, item, {
+      platform: 'linux',
+      env: { PATH: '' },
+      viewer: { peer: '127.0.0.1', forwardedFor: null },
+      own: () => [],
+    })
+    assert.equal(r.ok, false)
+    assert.match(r.ok ? '' : r.error, words)
+    // This machine keeps its own text.
+    const local = await startCall({ mokupilot: { command: ['/opt/no-such'], mode: 'local' } }, item, {
+      platform: 'linux',
+      env: { PATH: '' },
+    })
+    assert.doesNotMatch(local.ok ? '' : local.error, /Settings → MokuPilot|Настройках/)
+  }
+  useLanguage('en')
 })

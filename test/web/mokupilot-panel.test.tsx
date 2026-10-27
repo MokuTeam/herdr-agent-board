@@ -6,7 +6,7 @@ import { translator } from '../../src/core/i18n/translator.ts'
 import { MokupilotBody } from '../../web/src/components/mokupilot/MokupilotPanel.tsx'
 import type { MenuEntry } from '../../web/src/models/menu-model.ts'
 import { isMokupilotView, type MokupilotView, nowLine, whyLine } from '../../web/src/models/mokupilot.ts'
-import { settingPicked, settingsMenu } from '../../web/src/models/settings-menu.ts'
+import { offersMokupilot, settingPicked, settingsMenu } from '../../web/src/models/settings-menu.ts'
 import { board, renderInBoard } from './support/board.tsx'
 import { findAll, type Node } from './support/markup.ts'
 
@@ -75,6 +75,14 @@ describe('MokuPilot panel', () => {
     expect(missing).toContain('MokuPilot is not found on the board’s computer (meet)')
   })
 
+  test('turned off in config.json: the panel says so, and nothing can be picked', () => {
+    const { all, radios } = render({ ...VIEW, off: true })
+    expect(all).toContain('MokuPilot calls are turned off in the board’s config.json ("mokupilot": false).')
+    expect(radios.every(r => r.attrs.has('disabled'))).toBe(true)
+    expect(render(VIEW).all).not.toContain('turned off')
+    expect(render({ ...VIEW, off: true }, 'ru').all).toContain('Звонки в MokuPilot выключены')
+  })
+
   test('before the board answers: it is being asked, and nothing can be picked', () => {
     const { all, radios } = render(null, 'en', true)
     expect(all).toContain('Asking the board where a call from this browser would start')
@@ -109,7 +117,14 @@ describe('Settings → MokuPilot…', () => {
   }
   const ids = (items: readonly MenuEntry[]) => items.map(i => ('id' in i ? i.id : '—'))
 
-  test('offered only while the board offers MokuPilot calls; the menu otherwise as it was', () => {
+  test('offered from the page always, also when the board offers no call (This machine without MokuPilot)', () => {
+    for (const payload of [{ mokupilot: false }, { mokupilot: true }, {}, null, undefined])
+      expect(offersMokupilot(payload)).toBe(true)
+    const items = settingsMenu({ ...now, mokupilot: offersMokupilot({ mokupilot: false }) })
+    expect(ids(items)).toContain('mokupilot')
+  })
+
+  test('the model draws the item when asked; the menu otherwise as it was', () => {
     expect(ids(settingsMenu(now))).toEqual(['theme', 'lang', 'panel', '—', 'sleepers'])
     expect(ids(settingsMenu({ ...now, mokupilot: false }))).toEqual(['theme', 'lang', 'panel', '—', 'sleepers'])
     expect(ids(settingsMenu({ ...now, phones: true, mokupilot: true, access: true }))).toEqual([

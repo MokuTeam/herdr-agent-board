@@ -1,5 +1,5 @@
-// Settings → MokuPilot…, a panel like Phones… and Sleep and wake…, drawn while the board offers
-// MokuPilot calls (the payload's `mokupilot`, what the setup check says is there): where "Call in
+// Settings → MokuPilot…, a panel like Phones… and Sleep and wake…, always offered so the mode can
+// be changed whether a call is offered or not (with "mokupilot": false it says so): where "Call in
 // MokuPilot" starts the call, three choices with a line each (src/core/mokupilot-mode.ts): Auto,
 // This machine, The computer you're viewing from. Under Auto, where a call from this very browser
 // starts right now and what decided it, as the board answers GET /api/mokupilot; under the link,
@@ -89,6 +89,7 @@ export function MokupilotBody({ view, disabled, onChoose }: MokupilotBodyProps) 
   const t = useT()
   return (
     <div className="sheet-body cats-body mokupilot-body">
+      {view?.off && <p className="sheet-meta mokupilot-off">{t('mokupilot.offNote')}</p>}
       <div className="mokupilot-modes" role="radiogroup" aria-label={t('mokupilot.about')}>
         {MOKUPILOT_MODES.map(mode => (
           <label className="mokupilot-mode" key={mode} data-mode={mode}>
@@ -97,7 +98,7 @@ export function MokupilotBody({ view, disabled, onChoose }: MokupilotBodyProps) 
               name="mokupilot-mode"
               value={mode}
               checked={view?.mode === mode}
-              disabled={disabled}
+              disabled={disabled || !!view?.off}
               onChange={() => onChoose(mode)}
             />
             <span className="mokupilot-mode-text">

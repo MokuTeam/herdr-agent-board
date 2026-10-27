@@ -255,8 +255,11 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
     the call and runs the fork on the board's computer over ssh. A phone, or a computer without
     that MokuPilot, has nothing for the link: the board stays as it was.
 
-  With no MokuPilot on the board's computer the button and the panel are not offered under Auto;
-  `"mokupilot": { "mode": "link" }` in config.json turns the link on there.
+  The button is offered under Auto and The computer you're viewing from whether MokuPilot is on
+  the board's computer or not (under Auto, a call asked at the board's computer without it says
+  so and points to the panel); under This machine only with MokuPilot found there. Settings →
+  MokuPilot… is always offered, so the mode can be changed in every case; with
+  `"mokupilot": false` the panel says calls are off.
 - "Fork" (the sheet, a card's menu): a new session in a new tab that starts with a copy of this
   one's conversation, so it knows what this one knows while this one goes on as it was; see
   [Fork](#fork).

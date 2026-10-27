@@ -349,7 +349,7 @@ describe('doctor', () => {
     for (const mokupilotMode of [undefined, 'auto'] as const) {
       const auto = checkSetup(facts({ platform: 'linux', mokupilot: missing, ...(mokupilotMode && { mokupilotMode }) }))
       assert.equal(level(auto, 'mokupilot'), 'off')
-      assert.match(check(auto, 'mokupilot').detail ?? '', /"mokupilot": \{ "mode": "link" \}/)
+      assert.match(check(auto, 'mokupilot').detail ?? '', /“The computer you’re viewing from” in Settings → MokuPilot…/)
       assert.ok(!todo(auto).some(c => c.id === 'mokupilot'))
     }
     // Auto with MokuPilot here: ok, and where a call from elsewhere goes.
@@ -364,7 +364,7 @@ describe('doctor', () => {
       facts({ mokupilot: { state: 'missing', configured: true, file: '/opt/mp/meet' }, mokupilotMode: 'auto' }),
     )
     assert.equal(level(gone, 'mokupilot'), 'warn')
-    assert.match(check(gone, 'mokupilot').detail ?? '', /stays hidden/)
+    assert.match(check(gone, 'mokupilot').detail ?? '', /Under “Auto” a call asked from this computer fails/)
   })
 
   test('MokuPilot by a link: a call from the viewer’s computer, no file, nothing to fix', () => {

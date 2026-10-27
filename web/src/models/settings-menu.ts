@@ -7,7 +7,7 @@
 // profile folder found, Profiles… opens their panel (components/profiles/ProfilesPanel.tsx). While
 // the remote mode is on (core/remote.ts), Phones… opens theirs (components/phones/PhonesPanel.tsx).
 // While the payload carries wake's state line, Sleep and wake… opens its panel (components/wake).
-// While the board offers MokuPilot calls, MokuPilot… opens where a call starts (components/mokupilot).
+// MokuPilot… opens where a call starts (components/mokupilot), on every board's page (offersMokupilot).
 // On the local board, Remote access… opens the board-through-your-domain panel
 // (components/access/AccessPanel.tsx).
 // How sessions asleep in "Waiting" fold is the board's, for every board (src/core/fold-mode.ts).
@@ -43,7 +43,7 @@ export interface SettingsNow {
   wake?: boolean
   /** The remote mode is on (the payload's `remote`): Phones… is offered. */
   phones?: boolean
-  /** The board offers MokuPilot calls (the payload's `mokupilot`): MokuPilot… is offered. */
+  /** MokuPilot… is offered (offersMokupilot: always, from the page). */
   mokupilot?: boolean
   /** The local board's page (not one through Tailscale or the domain): Remote access… is offered. */
   access?: boolean
@@ -139,6 +139,13 @@ export type SettingPick =
   | { kind: 'access' }
   | { kind: 'signout' }
   | null
+
+/**
+ * Whether the page offers Settings → MokuPilot…: always, whatever the payload's `mokupilot` says,
+ * so the mode can be changed also while no call is offered (`local` with MokuPilot missing on the
+ * board's computer); the panel says when MokuPilot is turned off.
+ */
+export const offersMokupilot = (_payload?: { mokupilot?: boolean | undefined } | null): boolean => true
 
 export function settingPicked(id: string): SettingPick {
   const [kind, value = ''] = id.split(':')

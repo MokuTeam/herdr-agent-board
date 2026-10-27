@@ -111,7 +111,9 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.mokupilot.localMissingDetail':
       'Settings → MokuPilot… says “This machine”: calls start here, so MokuPilot must be installed here. Without it the “Call in MokuPilot” button stays hidden.',
     'setup.mokupilot.linkHint':
-      'MokuPilot on the computer you open the board from instead: "mokupilot": { "mode": "link" } in the board’s config.json, or Settings → MokuPilot… once the button shows.',
+      'Under “Auto” a call asked from another computer goes there by a mokupilot:// link; one asked from this computer needs MokuPilot here, or “The computer you’re viewing from” in Settings → MokuPilot….',
+    'setup.mokupilot.autoMissingDetail':
+      'Under “Auto” a call asked from this computer fails until it is found; one asked from another computer goes there by a mokupilot:// link.',
     'setup.mokupilot.off': 'MokuPilot is not on this computer',
     'setup.mokupilot.offDetail':
       'With MokuPilot, a session’s sheet starts a call whose agent is a fork of that session.',
@@ -270,7 +272,9 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.mokupilot.localMissingDetail':
       'В Настройках → MokuPilot… выбрано «Этот компьютер»: звонки начинаются здесь, и MokuPilot должен быть установлен здесь. Без него кнопки «Звонок в MokuPilot» не будет.',
     'setup.mokupilot.linkHint':
-      'Или MokuPilot на компьютере, с которого открываешь доску: "mokupilot": { "mode": "link" } в config.json доски, или Настройки → MokuPilot…, когда кнопка появится.',
+      'В режиме «Авто» звонок с другого компьютера идёт туда по ссылке mokupilot://; звонку с этого компьютера нужен MokuPilot здесь или «Компьютер, с которого ты смотришь» в Настройках → MokuPilot….',
+    'setup.mokupilot.autoMissingDetail':
+      'В режиме «Авто» звонок с этого компьютера не начнётся, пока MokuPilot не найден; звонок с другого компьютера идёт туда по ссылке mokupilot://.',
     'setup.mokupilot.off': 'MokuPilot на этом компьютере нет',
     'setup.mokupilot.offDetail': 'С MokuPilot панель сессии начинает звонок, где агент: форк этой сессии.',
     'setup.mokupilot.offFix': 'Установи MokuPilot или укажи его папку в config.json доски:',

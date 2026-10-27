@@ -1,7 +1,7 @@
 // The side panels, one open at a time in their shared place: the session sheet, the categories,
 // the schedule, the archive and, with more than one Claude profile folder found, the profiles; sleep
 // and wake while the payload carries its state line; the phones while the remote mode is on;
-// MokuPilot while the board offers its calls; Remote access once it was first opened, on the local
+// MokuPilot always; Remote access once it was first opened, on the local
 // board. A session sheet that fails to draw says so
 // on its own and leaves the board; opening another session tries again.
 import type { Archive } from '../hooks/useArchive.ts'
@@ -28,7 +28,7 @@ export interface SidePanelsProps {
   wake?: WakePanelProps
   /** Settings → Phones…; drawn only while the remote mode is on (the payload's `remote`). */
   phones?: PhonesPanelProps
-  /** Settings → MokuPilot…; drawn only while the board offers MokuPilot calls (the payload's `mokupilot`). */
+  /** Settings → MokuPilot…; drawn whenever given (models/settings-menu.ts offersMokupilot). */
   mokupilot?: MokupilotPanelProps
   /** Settings → Remote access…; drawn when given (the page gives it once opened, on the local board only). */
   access?: AccessPanelProps
@@ -61,7 +61,7 @@ export function SidePanels({
       {profiles && offersProfiles(data?.profiles) && <ProfilesPanel {...profiles} />}
       {wake && isWakeView(data?.wake) && <WakePanel {...wake} />}
       {phones && data?.remote && <PhonesPanel {...phones} />}
-      {mokupilot && data?.mokupilot && <MokupilotPanel {...mokupilot} />}
+      {mokupilot && <MokupilotPanel {...mokupilot} />}
       {access && <AccessPanel {...access} />}
     </>
   )

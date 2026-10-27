@@ -359,6 +359,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'mokupilot.err.off': 'MokuPilot is turned off in config.json ("mokupilot": false)',
     'mokupilot.err.missing':
       'MokuPilot not found ({file}). Point config.json at it: "mokupilot": { "dir": "<MokuPilot folder>" }',
+    'mokupilot.err.missingAuto':
+      'MokuPilot is not installed on this computer ({file}). To start calls on the computer you’re viewing from instead, choose “The computer you’re viewing from” in Settings → MokuPilot….',
     'mokupilot.err.notFound': '{file} not found',
     'mokupilot.err.start': 'MokuPilot did not start: {why}',
     'mokupilot.err.command': 'mokupilot.command in config.json: a list, the program first',
@@ -383,6 +385,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'mokupilot.now.link': 'Right now, from this browser: the call starts on this computer.',
     'mokupilot.now.asking': 'Asking the board where a call from this browser would start…',
     'mokupilot.now.why': 'Decided by: {why}',
+    'mokupilot.offNote': 'MokuPilot calls are turned off in the board’s config.json ("mokupilot": false).',
     'mokupilot.hereMissing': 'MokuPilot is not found on the board’s computer ({file}): from there no call can start.',
     'sheet.sleep': 'Put to sleep',
     'sheet.sleepHint': 'Claude exits, the pane stays. Wake it from here, from herdr or with a message',
@@ -961,6 +964,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'mokupilot.err.off': 'MokuPilot выключен в config.json ("mokupilot": false)',
     'mokupilot.err.missing':
       'MokuPilot не найден ({file}). Укажи его в config.json: "mokupilot": { "dir": "<папка MokuPilot>" }',
+    'mokupilot.err.missingAuto':
+      'MokuPilot не установлен на этом компьютере ({file}). Чтобы звонки начинались на компьютере, с которого ты смотришь, выбери «Компьютер, с которого ты смотришь» в Настройках → MokuPilot….',
     'mokupilot.err.notFound': '{file} не найден',
     'mokupilot.err.start': 'MokuPilot не запустился: {why}',
     'mokupilot.err.command': 'mokupilot.command в config.json: список, первой идёт программа',
@@ -984,6 +989,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'mokupilot.now.link': 'Сейчас, из этого браузера: звонок начнётся на этом компьютере.',
     'mokupilot.now.asking': 'Спрашиваю доску, где начнётся звонок из этого браузера…',
     'mokupilot.now.why': 'Решило: {why}',
+    'mokupilot.offNote': 'Звонки в MokuPilot выключены в config.json доски ("mokupilot": false).',
     'mokupilot.hereMissing': 'MokuPilot не найден на компьютере доски ({file}): оттуда звонок не начнётся.',
     'sheet.sleep': 'Усыпить',
     'sheet.sleepHint': 'Claude выйдет, панель останется. Разбудить можно отсюда, из herdr или сообщением',

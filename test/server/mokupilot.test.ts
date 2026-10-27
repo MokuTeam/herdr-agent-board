@@ -108,7 +108,7 @@ test('the board starts a MokuPilot call with a fork of a Claude session, only fr
   }
 }, 30_000)
 
-test('without MokuPilot the page offers no call, and asking for one says what is missing', async () => {
+test('without MokuPilot here: This machine offers no call; Auto offers it, says at this computer what is missing', async () => {
   const box = await sandbox()
   const nope = join(box.dir, 'MokuPilot', 'MokuPilot')
   const panes = [
@@ -121,12 +121,26 @@ test('without MokuPilot the page offers no call, and asking for one says what is
       workspace_id: 'wA',
     },
   ]
-  const { board, post } = await boardServer(box, { mokupilot: { command: [nope] } }, panes)
-  assert.equal((await board()).mokupilot, false)
-  assert.ok(isBoardPayload(await board()))
-  const r = await post(`/api/session/${ID}/mokupilot`)
+  const local = await boardServer(box, { mokupilot: { command: [nope], mode: 'local' } }, panes)
+  assert.equal((await local.board()).mokupilot, false)
+  assert.ok(isBoardPayload(await local.board()))
+  const r = await local.post(`/api/session/${ID}/mokupilot`)
   assert.equal(r.status, 409)
   assert.match(((await r.json()) as { error: string }).error, /MokuPilot not found/)
+
+  // Auto, the default: offered, since a viewer elsewhere gets the link; this computer is told why not.
+  const auto = await boardServer(box, { mokupilot: { command: [nope] } }, panes)
+  assert.equal((await auto.board()).mokupilot, true)
+  const here = await auto.post(`/api/session/${ID}/mokupilot`)
+  assert.equal(here.status, 409)
+  const said = (await here.json()) as { error: string; resolved: string; why: string }
+  assert.match(said.error, /MokuPilot is not installed on this computer/)
+  assert.match(said.error, /“The computer you’re viewing from” in Settings → MokuPilot…/)
+  assert.equal(said.resolved, 'local')
+  assert.equal(said.why, 'loopback-direct')
+  const away = await auto.post(`/api/session/${ID}/mokupilot`, { 'x-forwarded-for': '100.64.0.7' })
+  assert.equal(away.status, 200)
+  assert.equal(((await away.json()) as { state: string }).state, 'link')
 }, 30_000)
 
 test('in link mode the page offers the call and the route gives the link, starting nothing', async () => {

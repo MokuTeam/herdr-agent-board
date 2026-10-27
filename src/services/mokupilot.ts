@@ -92,8 +92,15 @@ export async function startCall(
   }
   const launcher = decided.resolved === 'link' ? null : mokupilotCommand(cfg, { platform, env })
   if (launcher?.state === 'off') return { ok: false, error: t('mokupilot.err.off'), ...where }
+  // Under auto, at this computer without MokuPilot: the panel can send calls to the viewer's own.
   if (launcher?.state === 'missing')
-    return { ok: false, error: launcher.error ?? t('mokupilot.err.missing', { file: launcher.file }), ...where }
+    return {
+      ok: false,
+      error:
+        launcher.error ??
+        t(mode === 'auto' ? 'mokupilot.err.missingAuto' : 'mokupilot.err.missing', { file: launcher.file }),
+      ...where,
+    }
   // --resume finds a session only from its own folder: the transcript says which that is.
   const recorded = (item.transcript && (await cwdOf(item.transcript))) || item.cwd || ''
   const cwd = recorded && isDir(recorded) ? recorded : ''
@@ -147,6 +154,14 @@ export async function startCall(
   })
 }
 
+/** The rule of mokupilotCheck, looked up once: only `local` asks whether MokuPilot is here. */
+function offered(cfg: Partial<Config>, find: (cfg: Partial<Config>) => { state: string }): boolean {
+  if (cfg.mokupilot === false) return false
+  const mode = mokupilotMode(cfg.mokupilot)
+  if (mode !== 'local') return true
+  return find(cfg).state === 'ok'
+}
+
 export interface CheckOptions {
   now?: () => number
   /** How the board would start MokuPilot (adapters/setup-facts.ts mokupilotCommand). */
@@ -154,8 +169,11 @@ export interface CheckOptions {
 }
 
 /**
- * Whether a session's sheet offers a MokuPilot call: looked up again when `cfg.mokupilot` (the
- * live config) changes, and once a minute for one installed or removed meanwhile.
+ * Whether a session's sheet offers a MokuPilot call: not while `"mokupilot": false`; always under
+ * `link` and `auto` (auto may send the call to the viewer's computer, MokuPilot here or not: one
+ * at this computer without it gets the error at call time); under `local` only with MokuPilot
+ * found here. Looked up again when `cfg.mokupilot` (the live config) changes, and once a minute
+ * for one installed or removed meanwhile.
  */
 export function mokupilotCheck(
   cfg: Partial<Config>,
@@ -164,8 +182,7 @@ export function mokupilotCheck(
   let seen: { key: string | null; at: number; on: boolean } = { key: null, at: 0, on: false }
   return () => {
     const key = JSON.stringify(cfg.mokupilot ?? null)
-    if (key !== seen.key || now() - seen.at > 60_000)
-      seen = { key, at: now(), on: ['ok', 'link'].includes(find(cfg).state) }
+    if (key !== seen.key || now() - seen.at > 60_000) seen = { key, at: now(), on: offered(cfg, find) }
     return seen.on
   }
 }
