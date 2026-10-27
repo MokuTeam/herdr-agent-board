@@ -15,13 +15,32 @@ import { homedir } from 'node:os'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { writeCard } from '../../adapters/cards.ts'
 import { SLOW, statOf, within } from '../../adapters/folders.ts'
-import { gitInfo } from '../../adapters/git.ts'
-import { agentGet, type HerdrAgent, herdr, herdrText, workspaceCreate, workspacePanes } from '../../adapters/herdr.ts'
+import { gitInfo, headCommit, repoRoot } from '../../adapters/git.ts'
+import {
+  agentGet,
+  type HerdrAgent,
+  type HerdrWorktree,
+  herdr,
+  herdrText,
+  tabCreateRoot,
+  workspaceCreate,
+  workspacePanes,
+  worktreeCreate,
+  worktreeOpen,
+} from '../../adapters/herdr.ts'
 import { run } from '../../adapters/process.ts'
 import { keyTowardYes, sameFolder, type TrustDialog, trustDialog } from '../../core/dialogs/trust.ts'
 import { t } from '../../core/lang.ts'
 import { launcherError } from '../../core/launch/launcher-command.ts'
-import { slugName, uniqueSlug, worktreePath } from '../../core/launch/names.ts'
+import {
+  baseName,
+  sameDir,
+  slugName,
+  ticketOf,
+  ticketSlugName,
+  uniqueSlug,
+  worktreePath,
+} from '../../core/launch/names.ts'
 import { forkCard } from '../../core/links.ts'
 import { PI_AGENT } from '../../core/pi.ts'
 import type { Item, LaunchFailure, LaunchState, LaunchStep } from '../../core/types.ts'
@@ -52,6 +71,10 @@ export interface Launch extends LaunchRequest {
   carded: string | null
   rootPane: string | null
   rootTab: string | null
+  /** A tab the worktree came with, left over once the profile's own tab was opened. */
+  spareTab: string | null
+  /** The setup's ticket convention: case- names, -wt/<ticket> paths, linked workspaces. */
+  ticketNames: boolean
   worktreeMade: boolean
   dismissed: boolean
   closed: boolean
@@ -86,6 +109,8 @@ export function newLaunch(
     carded: null,
     rootPane: null,
     rootTab: null,
+    spareTab: null,
+    ticketNames: false,
     worktreeMade: false,
     dismissed: false,
     closed: false,
@@ -156,6 +181,8 @@ export function launchRunner({
     },
   })
 
+  const agentSlug = (l: Launch): string => (l.ticketNames ? ticketSlugName(l.name) : slugName(l.name))
+
   async function runLaunch(l: Launch): Promise<void> {
     // A resumed one has its id and its card already; the card is told the profile it is meant to
     // run in, as for any start.
@@ -164,15 +191,32 @@ export function launchRunner({
       writeCard(l.resume, { profileWant: l.profile })
       l.carded = l.resume
     }
-    if (l.worktree) await makeWorktree(l, l.worktree.branch)
+    const linked = deps.cfg.launch?.linkedWorkspaces === true
+    l.ticketNames = linked
+    if (l.worktree) await makeWorktree(l, l.worktree.branch, linked)
     if (l.newWorkspace) {
       step(l, 'workspace')
-      // In the profile's env: what starts in its first tab runs in that profile.
-      const ws = await openInProfile(l, env => workspaceCreate(l.cwd, l.workspaceLabel, env))
-      l.workspaceId = ws.id
-      l.rootPane = ws.pane
-      l.rootTab = ws.tab
-      if (ws.pane) notePane(l, ws.pane, ws.terminal)
+      const git = linked ? await gitInfo(l.cwd) : null
+      if (git) {
+        // A checkout with a repository: its workspace is linked to it, and one per checkout.
+        const root = (await repoRoot(git.root)) ?? git.root
+        let ws: HerdrWorktree
+        try {
+          ws = await worktreeOpen(root, git.root, l.workspaceLabel || baseName(git.root) || l.name)
+        } catch (err) {
+          throw new LaunchError(t('launch.err.worktreeGit', { why: messageOf(err) }), 'worktree')
+        }
+        l.workspaceId = ws.id
+        l.newWorkspace = false
+        await openLaunchTab(l, ws, false)
+      } else {
+        // In the profile's env: what starts in its first tab runs in that profile.
+        const ws = await openInProfile(l, env => workspaceCreate(l.cwd, l.workspaceLabel, env))
+        l.workspaceId = ws.id
+        l.rootPane = ws.pane
+        l.rootTab = ws.tab
+        if (ws.pane) notePane(l, ws.pane, ws.terminal)
+      }
     }
     const launcher = launcherFor(deps.cfg.launch, { resume: !!l.resume, fork: !!l.fork })
     const r = await launcher.start(l, events(l))
@@ -201,29 +245,87 @@ export function launchRunner({
       }
     }
     // A new workspace starts with a tab of shells; a launcher command opened its own tab beside it.
-    if (launcher.kind !== 'herdr' && l.rootTab && l.pane && l.pane !== l.rootPane)
+    // A worktree opened with a profile's env leaves its first tab empty: it goes too.
+    if (l.spareTab && l.pane) await tidy(l.workspaceId, l.spareTab, l.pane)
+    else if (launcher.kind !== 'herdr' && l.rootTab && l.pane && l.pane !== l.rootPane)
       await tidy(l.workspaceId, l.rootTab, l.pane)
+    l.spareTab = null
   }
 
-  async function makeWorktree(l: Launch, branch: string): Promise<void> {
+  /**
+   * The launch's own tab in a workspace herdr opened: the first one when it leaves the env alone,
+   * else a tab of its own with the profile's env (worktree open/create take no --env). A workspace
+   * that was already open keeps its first tab: its pane may hold a session already.
+   */
+  async function openLaunchTab(l: Launch, ws: HerdrWorktree, spareRootTab: boolean): Promise<void> {
+    l.rootTab = ws.alreadyOpen ? null : ws.tab
+    if (l.configDir === null && !ws.alreadyOpen) {
+      l.rootPane = ws.pane
+      if (ws.pane) notePane(l, ws.pane, ws.terminal)
+      return
+    }
+    const opened = await openInProfile(l, env => tabCreateRoot(ws.id, l.cwd, l.label, env))
+    l.rootPane = opened.pane
+    if (spareRootTab && ws.tab && !ws.alreadyOpen) l.spareTab = ws.tab
+    notePane(l, opened.pane, opened.terminal)
+  }
+
+  async function makeWorktree(l: Launch, branch: string, linked: boolean): Promise<void> {
     step(l, 'worktree')
     const git = await gitInfo(l.cwd)
     if (!git) throw new LaunchError(t('launch.err.notGit', { path: l.cwd }), 'worktree')
     // Git returns a canonical root (e.g. /private/tmp on macOS); the picker may have used an
     // alias. Compare canonical paths before carrying the subfolder over.
     const below = await worktreeSubdir(git.root, l.cwd)
-    const path = worktreePath(git.root, branch)
-    if (await statOf(path)) throw new LaunchError(t('launch.err.worktreeExists', { path }), 'worktree')
-    const r = await run('git', ['-C', git.root, 'worktree', 'add', '-b', branch, path], { timeout: 60_000 })
-    if (r.code !== 0) {
-      const why = launcherError(r.stdout, r.stderr).message || r.error?.message || ''
-      throw new LaunchError(t('launch.err.worktreeGit', { why }), 'worktree')
-    }
+    const root = linked ? ((await repoRoot(git.root)) ?? git.root) : git.root
+    const path = worktreePath(root, branch, linked)
     // The session works in the same place below the checkout as the folder that was picked.
     const inside = below ? join(path, below) : path
-    const st = await statOf(inside)
-    l.cwd = st && st !== SLOW && st.isDirectory() ? inside : path
+    // The session's folder once the worktree is there: below it as picked, else its root. Set only
+    // then, so a launch that fails before keeps the folder a retry makes the worktree from.
+    const into = async (): Promise<void> => {
+      const st = await statOf(inside)
+      l.cwd = st && st !== SLOW && st.isDirectory() ? inside : path
+    }
+    if (!linked) {
+      // As before: a plain git worktree beside the repo; the workspace is made after it.
+      if (await statOf(path)) throw new LaunchError(t('launch.err.worktreeExists', { path }), 'worktree')
+      const r = await run('git', ['-C', git.root, 'worktree', 'add', '-b', branch, path], { timeout: 60_000 })
+      if (r.code !== 0) {
+        const why = launcherError(r.stdout, r.stderr).message || r.error?.message || ''
+        throw new LaunchError(t('launch.err.worktreeGit', { why }), 'worktree')
+      }
+      await into()
+      l.worktreeMade = true
+      return
+    }
+    // herdr links the workspace to the repository, and one workspace per checkout: an existing
+    // ticket worktree is opened again rather than made twice — only when it is the branch asked
+    // for. fix/a and fix-a land in one folder, and must not take each other's branch.
+    const existing = !!(await statOf(path))
+    if (existing) {
+      const at = await gitInfo(path)
+      if (!at || !sameDir(at.root, path)) throw new LaunchError(t('launch.err.worktreeExists', { path }), 'worktree')
+      if (at.branch !== branch)
+        throw new LaunchError(t('launch.err.worktreeBranch', { path, branch, found: at.branch }), 'worktree')
+    }
+    // A new one starts from the checkout that was picked, as `git worktree add` there does (and as
+    // the launch window says): its branch, or its commit when it has none. Only the folder and the
+    // link go by the main checkout.
+    const base = git.branch && git.branch !== 'HEAD' ? git.branch : ((await headCommit(git.root)) ?? 'HEAD')
+    let ws: HerdrWorktree
+    try {
+      ws = existing
+        ? await worktreeOpen(root, path, ticketOf(branch))
+        : await worktreeCreate(root, branch, base, path, ticketOf(branch))
+    } catch (err) {
+      throw new LaunchError(t('launch.err.worktreeGit', { why: messageOf(err) }), 'worktree')
+    }
+    await into()
     l.worktreeMade = true
+    l.workspaceId = ws.id
+    l.newWorkspace = false
+    await openLaunchTab(l, ws, !existing)
   }
 
   /** Claude's /rename and the first message, once the agent herdr started waits for input. */
@@ -329,14 +431,14 @@ export function launchRunner({
     if (kind === 'claude' && l.resume) {
       if (nameAgent)
         await takenNames()
-          .then(taken => herdr(['agent', 'rename', pane, uniqueSlug(slugName(l.name), taken)]))
+          .then(taken => herdr(['agent', 'rename', pane, uniqueSlug(agentSlug(l), taken)]))
           .catch(err => deps.log(`launch ${l.name}: naming: ${messageOf(err)}`))
     } else if (kind === 'claude') {
       step(l, 'rename')
       try {
         if ((await inputEmpty(pane)) && (await claudeRename(pane, l.name)) && nameAgent) {
           const taken = await takenNames()
-          await herdr(['agent', 'rename', pane, uniqueSlug(slugName(l.name), taken)])
+          await herdr(['agent', 'rename', pane, uniqueSlug(agentSlug(l), taken)])
         }
       } catch (err) {
         deps.log(`launch ${l.name}: naming: ${messageOf(err)}`)
@@ -348,7 +450,7 @@ export function launchRunner({
       try {
         if ((await piName(pane, l.name)) && nameAgent) {
           const taken = await takenNames()
-          await herdr(['agent', 'rename', pane, uniqueSlug(slugName(l.name), taken)])
+          await herdr(['agent', 'rename', pane, uniqueSlug(agentSlug(l), taken)])
         }
       } catch (err) {
         deps.log(`launch ${l.name}: naming: ${messageOf(err)}`)

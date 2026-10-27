@@ -1,6 +1,6 @@
 // Git, read-only: the checkout a folder is in, and a bounded view of its changes.
 import { execFile } from 'node:child_process'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { run } from './process.ts'
 
 const LIMIT = 256 * 1024
@@ -104,4 +104,24 @@ export async function gitInfo(dir: string): Promise<{ root: string; branch: stri
   if (r.code !== 0) return null
   const [root, branch] = r.stdout.trim().split(/\r?\n/)
   return root ? { root: resolve(root), branch: branch ?? '' } : null
+}
+
+/** The commit a checkout is on, for a base when it has no branch (detached), or null. */
+export async function headCommit(dir: string): Promise<string | null> {
+  const r = await run('git', ['-C', dir, 'rev-parse', 'HEAD'], { timeout: 5000 })
+  return r.code === 0 && r.stdout.trim() ? r.stdout.trim() : null
+}
+
+/**
+ * The main checkout of the repository `dir` belongs to (a linked worktree included), or null.
+ * herdr links a worktree to the repository, not to the worktree it was made from, so this is
+ * the folder a new worktree is created from and named after.
+ */
+export async function repoRoot(dir: string): Promise<string | null> {
+  const r = await run('git', ['-C', dir, 'rev-parse', '--path-format=absolute', '--git-common-dir'], {
+    timeout: 5000,
+  })
+  if (r.code !== 0) return null
+  const common = resolve(r.stdout.trim())
+  return /(^|[\\/])\.git$/.test(common) ? dirname(common) : null
 }

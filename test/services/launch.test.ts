@@ -303,6 +303,21 @@ const HERDR = {
   'workspace create': {
     result: { workspace: { workspace_id: 'wN' }, tab: { tab_id: 'wN:t1' }, root_pane: { pane_id: 'wN:p1' } },
   },
+  'worktree open': {
+    result: {
+      already_open: false,
+      workspace: { workspace_id: 'wA', label: 'Alpha' },
+      tab: { tab_id: 'wA:t9' },
+      root_pane: { pane_id: 'wA:p9' },
+    },
+  },
+  'worktree create': {
+    result: {
+      already_open: false,
+      workspace: { workspace_id: 'wN', label: 'feature-x' },
+      tab: { tab_id: 'wN:t1' },
+    },
+  },
   'tab create': { result: { tab: { tab_id: 'wA:t9' }, root_pane: { pane_id: 'wA:p9' } } },
   'tab rename': { result: null },
   'agent list': { result: { agents: [{ name: 'alpha-job' }, { name: 'work-10' }] } },
@@ -326,6 +341,8 @@ const HERDR = {
 
 // herdr's own `agent start`: the board's path when launch.agent is set.
 const VIA_HERDR = { launch: { agent: 'claude' } }
+// The setup that turns on the ticket conventions (launch.linkedWorkspaces).
+const LINKED = { launch: { agent: 'claude', linkedWorkspaces: true } }
 
 // The Claude profiles of the sandbox's home folder as config.json lists them: default and work
 // shown (work with arguments of its own), gamedev hidden.
@@ -661,8 +678,195 @@ test('renaming a workspace: the one the session’s pane is in now, never the bo
   assert.equal(renames().filter(a => a[3] === 'Mine').length, 0)
 }, 30_000)
 
-test('a retry starts in the worktree and the workspace the failed launch made, not new ones', async () => {
+test('a launch into a checkout links its workspace with worktree open, and reuses it when already open', async () => {
+  const { box, started, launched } = await boardServer(LINKED, { PATH: process.env.PATH ?? '' })
+  const repo = join(box.dir, 'Genetix')
+  mkdirSync(repo, { recursive: true })
+  writeFileSync(join(repo, 'a.txt'), 'a')
+  const git = (...args: string[]) =>
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: repo, stdio: 'pipe' })
+  git('init', '-q', '-b', 'main')
+  git('add', '.')
+  git('commit', '-q', '-m', 'init')
+  box.state({
+    ...HERDR,
+    'worktree open': {
+      result: {
+        already_open: true,
+        workspace: { workspace_id: 'w61', label: '14312' },
+        tab: { tab_id: 'w61:t1' },
+        root_pane: { pane_id: 'w61:p1' },
+      },
+    },
+  })
+  const l = await launched(
+    await started({ name: '14312', cwd: repo, category: 'acme', workspace: { create: '14312' } }),
+  )
+  assert.equal(l.state, 'done')
+  assert.deepEqual([l.workspaceId, l.newWorkspace], ['w61', false])
+  const open = box.calls().find(a => a[0] === 'worktree' && a[1] === 'open')
+  assert.ok(open)
+  assert.equal(open[open.indexOf('--cwd') + 1], realpathSync(repo))
+  assert.equal(open[open.indexOf('--path') + 1], realpathSync(repo))
+  assert.equal(open[open.indexOf('--label') + 1], '14312')
+  assert.equal(
+    box.calls().some(a => a[0] === 'workspace' && a[1] === 'create'),
+    false,
+  )
+  // A number is addressed as its case, as restart-claude-agents does.
+  const start = box.calls().find(a => a[0] === 'agent' && a[1] === 'start')
+  assert.equal(start?.[2], 'case-14312')
+  // The open workspace's first pane may hold a session already: the new one gets a tab of its own.
+  assert.equal(start?.[start.indexOf('--pane') + 1], 'wA:p9')
+  assert.ok(box.calls().some(a => a[0] === 'tab' && a[1] === 'create'))
+  assert.equal(
+    box.calls().some(a => a[0] === 'tab' && (a[1] === 'rename' || a[1] === 'close') && a[2] === 'w61:t1'),
+    false,
+  )
+}, 30_000)
+
+for (const [mode, config, made] of [
+  ['as before', { launch: { agent: 'claude' } }, 'repo-feature-x'],
+  ['linked', LINKED, join('repo-wt', 'feature-x')],
+] as const)
+  test(`a worktree that fails (${mode}) keeps the picked folder, so a retry can make it`, async () => {
+    const { box, started, launched } = await boardServer(config, { PATH: process.env.PATH ?? '' })
+    const repo = join(box.dir, 'repo')
+    mkdirSync(join(repo, 'src'), { recursive: true })
+    writeFileSync(join(repo, 'src', 'a.txt'), 'a')
+    const git = (...args: string[]) =>
+      execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], {
+        cwd: repo,
+        stdio: 'pipe',
+      })
+    git('init', '-q', '-b', 'main')
+    git('add', '.')
+    git('commit', '-q', '-m', 'init')
+    // As before: the folder is taken. Linked: herdr refuses.
+    if (mode === 'as before') mkdirSync(join(box.dir, made))
+    box.state({ ...HERDR, 'worktree create': { error: 'no worktree today' } })
+    const failed = await launched(
+      await started({
+        name: 'Wt job',
+        cwd: join(repo, 'src'),
+        category: 'acme',
+        workspace: { id: 'wA' },
+        worktree: { branch: 'feature-x' },
+      }),
+    )
+    assert.equal(failed.state, 'failed')
+    assert.deepEqual(failed.worktree, { branch: 'feature-x' })
+    assert.ok(sameDir(failed.cwd, join(repo, 'src')), failed.cwd)
+  }, 30_000)
+
+test('a new ticket worktree is made by herdr under <repo>-wt/<ticket>, linked from the start', async () => {
+  const { box, started, launched } = await boardServer(LINKED, { PATH: process.env.PATH ?? '' })
+  const repo = join(box.dir, 'BrillianEarth')
+  mkdirSync(repo, { recursive: true })
+  writeFileSync(join(repo, 'a.txt'), 'a')
+  const git = (...args: string[]) =>
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: repo, stdio: 'pipe' })
+  git('init', '-q', '-b', 'main')
+  git('add', '.')
+  git('commit', '-q', '-m', 'init')
+  box.state({ ...HERDR, 'tab create': { error: 'stop after the worktree' } })
+  const l = await launched(
+    await started({
+      name: 'EA-17388',
+      cwd: repo,
+      category: 'acme',
+      workspace: { id: 'wA' },
+      worktree: { branch: 'EA-17388' },
+    }),
+  )
+  assert.equal(l.state, 'failed')
+  const create = box.calls().find(a => a[0] === 'worktree' && a[1] === 'create')
+  assert.ok(create)
+  assert.equal(create[create.indexOf('--cwd') + 1], realpathSync(repo))
+  assert.equal(create[create.indexOf('--branch') + 1], 'EA-17388')
+  assert.equal(create[create.indexOf('--base') + 1], 'main')
+  assert.equal(create[create.indexOf('--path') + 1], join(realpathSync(repo), '..', 'BrillianEarth-wt', 'EA-17388'))
+  assert.equal(create[create.indexOf('--label') + 1], 'EA-17388')
+  assert.equal(create.includes('--env'), false)
+  assert.ok(sameDir(l.cwd, realpathSync(join(box.dir, 'BrillianEarth-wt', 'EA-17388'))), l.cwd)
+}, 30_000)
+
+test('a ticket worktree started from another worktree: beside the main checkout, from the picked branch', async () => {
+  const { box, started, launched } = await boardServer(LINKED, { PATH: process.env.PATH ?? '' })
+  const repo = join(box.dir, 'Shop')
+  mkdirSync(repo, { recursive: true })
+  writeFileSync(join(repo, 'a.txt'), 'a')
+  const git = (...args: string[]) =>
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: repo, stdio: 'pipe' })
+  git('init', '-q', '-b', 'main')
+  git('add', '.')
+  git('commit', '-q', '-m', 'init')
+  const picked = join(box.dir, 'Shop-wt', '14312')
+  git('worktree', 'add', '-q', '-b', 'feature-y', picked)
+  const create = () => {
+    const c = box.calls().findLast(a => a[0] === 'worktree' && a[1] === 'create')
+    assert.ok(c)
+    return { base: c[c.indexOf('--base') + 1], path: c[c.indexOf('--path') + 1], cwd: c[c.indexOf('--cwd') + 1] }
+  }
+  box.state({ ...HERDR, 'tab create': { error: 'stop after the worktree' } })
+  const start = (name: string) =>
+    started({ name, cwd: picked, category: 'acme', workspace: { id: 'wA' }, worktree: { branch: name } })
+  await launched(await start('EA-1'))
+  // The folder and the link go by the main checkout; the base is the picked worktree's branch.
+  assert.deepEqual(create(), {
+    base: 'feature-y',
+    path: join(realpathSync(repo), '..', 'Shop-wt', 'EA-1'),
+    cwd: realpathSync(repo),
+  })
+  // Detached, the picked worktree's commit is the base, not the main checkout's branch.
+  const commit = execFileSync('git', ['-C', picked, 'rev-parse', 'HEAD']).toString().trim()
+  execFileSync('git', ['-C', picked, 'checkout', '-q', '--detach'])
+  await launched(await start('EA-2'))
+  assert.equal(create().base, commit)
+}, 30_000)
+
+test('without linkedWorkspaces a checkout keeps workspace create and the sibling worktree', async () => {
   const { box, started, launched } = await boardServer(VIA_HERDR, { PATH: process.env.PATH ?? '' })
+  const repo = join(box.dir, 'OldRepo')
+  mkdirSync(repo, { recursive: true })
+  writeFileSync(join(repo, 'a.txt'), 'a')
+  const git = (...args: string[]) =>
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: repo, stdio: 'pipe' })
+  git('init', '-q', '-b', 'main')
+  git('add', '.')
+  git('commit', '-q', '-m', 'init')
+  const plain = await launched(
+    await started({ name: 'Old plain', cwd: repo, category: 'acme', workspace: { create: 'Fresh' } }),
+  )
+  assert.equal(plain.state, 'done')
+  assert.equal(
+    box.calls().some(a => a[0] === 'workspace' && a[1] === 'create'),
+    true,
+  )
+  assert.equal(
+    box.calls().some(a => a[0] === 'worktree'),
+    false,
+  )
+  const wt = await launched(
+    await started({
+      name: 'Old wt',
+      cwd: repo,
+      category: 'acme',
+      workspace: { id: 'wA' },
+      worktree: { branch: 'feature-x' },
+    }),
+  )
+  assert.equal(wt.state, 'done')
+  assert.ok(sameDir(wt.cwd, realpathSync(join(box.dir, 'OldRepo-feature-x'))), wt.cwd)
+  assert.equal(
+    box.calls().some(a => a[0] === 'worktree'),
+    false,
+  )
+  assert.equal(existsSync(join(box.dir, 'OldRepo-feature-x')), true)
+}, 30_000)
+
+test('a retry starts in the worktree and the workspace the failed launch made, not new ones', async () => {
+  const { box, started, launched } = await boardServer(LINKED, { PATH: process.env.PATH ?? '' })
   const repo = join(box.dir, 'repo')
   mkdirSync(join(repo, 'src'), { recursive: true })
   writeFileSync(join(repo, 'src', 'a.txt'), 'a')
@@ -684,7 +888,7 @@ test('a retry starts in the worktree and the workspace the failed launch made, n
   )
   assert.equal(failed.state, 'failed')
   assert.equal(failed.worktree, null)
-  assert.ok(sameDir(failed.cwd, realpathSync(join(box.dir, 'repo-feature-x', 'src'))), failed.cwd)
+  assert.ok(sameDir(failed.cwd, realpathSync(join(box.dir, 'repo-wt', 'feature-x', 'src'))), failed.cwd)
   box.state(HERDR)
   const again = await started({
     name: failed.name,
@@ -699,7 +903,7 @@ test('a retry starts in the worktree and the workspace the failed launch made, n
   // A new workspace is made, then the agent fails: the retry goes to that workspace.
   box.state({ ...HERDR, 'agent start': { error: 'no such agent kind' } })
   const ws = await launched(
-    await started({ name: 'New ws', cwd: repo, category: 'acme', workspace: { create: 'Fresh' } }),
+    await started({ name: 'New ws', cwd: box.dir, category: 'acme', workspace: { create: 'Fresh' } }),
   )
   assert.equal(ws.state, 'failed')
   assert.deepEqual([ws.workspaceId, ws.newWorkspace], ['wN', false])
@@ -707,7 +911,7 @@ test('a retry starts in the worktree and the workspace the failed launch made, n
 }, 40_000)
 
 test('a launch through a symlink preserves the selected subfolder in its new worktree', async () => {
-  const { box, started, launched } = await boardServer(VIA_HERDR, { PATH: process.env.PATH ?? '' })
+  const { box, started, launched } = await boardServer(LINKED, { PATH: process.env.PATH ?? '' })
   const repo = join(box.dir, 'real-repo')
   mkdirSync(join(repo, 'src'), { recursive: true })
   writeFileSync(join(repo, 'src', 'a.txt'), 'a')
@@ -732,7 +936,7 @@ test('a launch through a symlink preserves the selected subfolder in its new wor
     }),
   )
   assert.equal(failed.state, 'failed')
-  assert.ok(sameDir(failed.cwd, realpathSync(join(box.dir, 'real-repo-via-alias', 'src'))), failed.cwd)
+  assert.ok(sameDir(failed.cwd, realpathSync(join(box.dir, 'real-repo-wt', 'via-alias', 'src'))), failed.cwd)
 }, 30_000)
 
 test('a launcher that runs too long is ended with everything it started', async () => {

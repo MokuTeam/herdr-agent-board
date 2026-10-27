@@ -8,6 +8,7 @@ import {
   baseName,
   categoryForDir,
   folderSuggestions,
+  isTicketLabel,
   slugName,
   suggestName,
 } from '../../../../src/core/launch/names.ts'
@@ -388,7 +389,14 @@ export function launchWindow(deps: LaunchWindowDeps) {
     setFields({ workspace: choice.value })
     if (choice.create && !view.get().fields.newWorkspace)
       setFields({ newWorkspace: choice.seed || defaultWorkspaceName() })
+    if (choice.value) prefillTicketName(labelOf(choice.value))
     followWorkspaceName()
+  }
+
+  /** A ticket workspace names the session: 14312 (herdr addresses it case-14312), EA-17388. */
+  function prefillTicketName(label: string): void {
+    if (!s || !options.linkedWorkspaces || s.set.name || !isTicketLabel(label)) return
+    setFields({ name: label })
   }
   const defaultWorkspaceName = () =>
     workspaceName(view.get().fields.name, s?.category ?? '', catTitle(s?.category ?? ''), cwd(), t())
@@ -496,7 +504,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
     const f = view.get().fields
     patch({ branchHidden: !f.wt })
     if (!s.set.branch) setFields({ branch: slugName(f.name || baseName(cwd())) })
-    const note = worktreeNote(git, f.wt, view.get().fields.branch, t())
+    const note = worktreeNote(git, f.wt, view.get().fields.branch, t(), options.linkedWorkspaces)
     noteFor('worktree', note.text, note.error)
     syncGo()
   }
@@ -659,6 +667,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
       const create = !value
       s.workspace = create ? { create: view.get().fields.newWorkspace } : { id: value }
       patch({ newWorkspaceHidden: !create })
+      if (!create) prefillTicketName(labelOf(value))
       if (create) {
         if (!view.get().fields.newWorkspace) setFields({ newWorkspace: defaultWorkspaceName() })
         followWorkspaceName()

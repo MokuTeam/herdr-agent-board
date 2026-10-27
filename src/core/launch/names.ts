@@ -73,15 +73,28 @@ const TRANSLIT: Record<string, string> = {
   я: 'ya',
 }
 
+function slugBase(name: unknown): string {
+  return (
+    [...String(name ?? '').toLowerCase()]
+      .map(c => TRANSLIT[c] ?? c)
+      .join('')
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'session'
+  )
+}
+
 /** herdr's name for addressing an agent: [a-z][a-z0-9_-]{0,31}, Cyrillic spelled in latin. */
 export function slugName(name: unknown): string {
-  let s = [...String(name ?? '').toLowerCase()]
-    .map(c => TRANSLIT[c] ?? c)
-    .join('')
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  if (!s) s = 'session'
+  let s = slugBase(name)
   if (!/^[a-z]/.test(s)) s = `s-${s}`
+  return s.slice(0, 32).replace(/-+$/, '')
+}
+
+/** A ticket's agent name, as restart-claude-agents makes it: 14404 -> case-14404, EA-17388 -> ea-17388. */
+export function ticketSlugName(name: unknown): string {
+  let s = slugBase(name)
+  if (/^\d+$/.test(s)) s = `case-${s}`
+  else if (!/^[a-z]/.test(s)) s = `s-${s}`
   return s.slice(0, 32).replace(/-+$/, '')
 }
 
@@ -123,16 +136,37 @@ export function checkBranch(name: unknown): string {
   return ''
 }
 
-/** Where a new worktree of `root` goes: a sibling folder named after the branch, like repo-feature. */
-export function worktreePath(root: unknown, branch: string): string {
+/** The ticket a branch is for: case_14404 -> 14404, EA-17388 -> EA-17388, fix/invoices -> fix-invoices. */
+export function ticketOf(branch: unknown): string {
+  const s = String(branch ?? '').trim()
+  return (
+    s
+      .replace(/^case[_-]/i, '')
+      .replace(/[^A-Za-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || s
+  )
+}
+
+/** A workspace label that names a ticket (a number or a Jira key). */
+export const isTicketLabel = (label: unknown): boolean =>
+  /^\d+$/.test(String(label ?? '').trim()) || /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(String(label ?? '').trim())
+
+/**
+ * Where a new worktree of `root` goes: a sibling `repo-branch` as before, or with `ticket`, the
+ * setup's `<parent>/<repo>-wt/<ticket>`.
+ */
+export function worktreePath(root: unknown, branch: string, ticket = false): string {
   const clean = String(root ?? '').replace(/[\\/]+$/, '')
   const sep = clean.includes('\\') ? '\\' : '/'
   const cut = clean.lastIndexOf(sep)
   const base = clean.slice(cut + 1)
-  const tail = String(branch)
-    .replace(/[^A-Za-z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  return `${clean.slice(0, cut + 1)}${base}-${tail}`
+  if (!ticket) {
+    const tail = String(branch)
+      .replace(/[^A-Za-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+    return `${clean.slice(0, cut + 1)}${base}-${tail}`
+  }
+  return `${clean.slice(0, cut)}${sep}${base}-wt${sep}${ticketOf(branch)}`
 }
 
 export const isAbsolutePath = (p: unknown): boolean =>
