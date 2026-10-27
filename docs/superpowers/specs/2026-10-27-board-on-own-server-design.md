@@ -133,6 +133,40 @@ Convenience comes from a one-command install and a service instead.
    uncommitted changes included, so a change is tried with no commit. The panel says which commit it
    is based on and that it has local changes; `board update` on that server then asks for a ref.
 
+6. **The socket**: the board, running as `agent`, makes it in a folder owned by `agent` with the web
+   server's group (`2750`), as the tunnel's folder is with the tunnel user. Look finds the group
+   (caddy, www-data, a Docker Caddy's gid) as it does today. Case 3a's helper reaches the socket as
+   it reaches the tunnel's. Loopback TCP is a fallback for the whole mode, not per case.
+7. **One server setup with a target**: the tunnel's setup code takes a target (the socket path, a
+   tunnel user or none) instead of assuming the tunnel. The tunnel's own flow stays byte for byte as
+   it is, and its tests prove it (anti-goal 5).
+8. **The setup code's hash** lives in the board's state folder beside its login files. "Login set"
+   is the existing access store's ready check. The page shows a QR code for the TOTP code; a passkey
+   is optional there. `board login reset` clears the password, the TOTP code and the passkeys, ends
+   every login, and prints a new link. Whoever has a shell as `agent` owns the board anyway.
+9. **The link in path B** reaches the local board only in the run's output in memory. It is never in
+   `web.log`, config, the card, the event history or a stored answer, and it is gone when the panel
+   closes.
+10. **Where the code came from** is written on the server: a ref, or "archive of <commit>, local
+    changes". `board update` follows a ref. After an archive install it refuses and says to give a
+    ref (`board update --ref main`). Path A with no `--ref` installs `main`.
+11. **Flags**: `--domain` (required; asked on a terminal when missing), `--ref`, `--user` (default
+    `agent`), `--sudo`. DNS not pointing at the server: a warning, as the tunnel's Look gives, and
+    the run goes on (Caddy keeps retrying the certificate).
+12. **Running again**: a new link is printed only while no login is set. The `agent` user the
+    installer made carries a mark (a comment, as the tunnel user); any other `agent` is refused.
+13. **systemd**: `herdr server` in a user service with `Restart=on-failure`; the board lives in
+    herdr's pane as on a PC, and run.ts restarts it when its code changes, which is how
+    `board update` lands. The script reaches `agent`'s user manager with `runuser` and that user's
+    `XDG_RUNTIME_DIR`; the builder checks it on both distributions.
+14. **Undo** stops and removes the service and disables lingering. It takes back the web server
+    exactly as the tunnel's Undo does, from root's record in `/etc/agent-board`. The `agent` user
+    and its home go only when asked for.
+15. **Support**: the tunnel's list. Debian 13 and Ubuntu 26.04 must work. An official installer
+    (herdr, Claude Code) that fails on another one is a documented gap, not a blocker.
+16. **Server mode hides what only a PC has**: the tunnel panel, desktop notifications, MokuPilot
+    and the "open on this PC" actions.
+
 ## Left to the builder
 
 - herdr's and Claude Code's official Linux installers, and how the script pins their versions.
