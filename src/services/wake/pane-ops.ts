@@ -36,6 +36,9 @@ const EXIT_WAIT_MS = 30_000
 const EXIT_POLL_MS = 1000
 /** The 💤 label before the wake line is typed at the prompt. */
 const TYPE_AFTER_RENAME_MS = 500
+/** herdr may answer for a pane it has just closed: asked this many times more, this far apart. */
+const GONE_CHECKS = 2
+const GONE_WAIT_MS = 500
 
 const ERRORS = {
   busy: 'its pane runs another program',
@@ -195,14 +198,15 @@ export type FreeMarks = Required<Pick<SleepMarks, 'freeing' | 'kept'>>
  * pane is at its shell's prompt with nothing started in it, and its screen shows an empty prompt or
  * the session's wake line (promptIdle). `freeing` comes before the close, so a wake that stops
  * meanwhile keeps the sleeper; a close that fails may have closed all the same, so herdr is asked
- * after it: the pane still there, `kept` follows and null comes back; gone, or herdr not saying,
- * where it comes back.
+ * after it, and again a moment later while it still shows the pane (an answer from before the close
+ * took effect): the pane there each time, `kept` follows and null comes back; gone, or herdr not
+ * saying, where it comes back.
  */
 export async function freePane(
   io: WakeHerdr,
   target: { pane: string; session: string },
   marks: FreeMarks,
-  o: FreeRules & { now: number; log(text: string): void },
+  o: FreeRules & { now: number; log(text: string): void; sleep(ms: number): Promise<void> },
 ): Promise<FreedPlace | null> {
   const { pane } = target
   if (!(await atPrompt(io, pane)) || !promptIdle(await io.screen(pane), target.session)) return null
@@ -215,10 +219,16 @@ export async function freePane(
   } catch (err) {
     o.log(`closing ${pane}: ${err instanceof Error ? err.message : String(err)}`)
   }
-  const still = await io.pane(pane).then(
-    p => p !== null,
-    () => false,
-  )
+  const there = (): Promise<boolean> =>
+    io.pane(pane).then(
+      p => p !== null,
+      () => false,
+    )
+  let still = await there()
+  for (let i = 0; still && i < GONE_CHECKS; i++) {
+    await o.sleep(GONE_WAIT_MS)
+    still = await there()
+  }
   if (!still) return plan.place
   marks.kept()
   return null
@@ -291,6 +301,7 @@ export async function putToSleep(
         ...t.free,
         now: c.now(),
         log: c.log,
+        sleep: c.sleep,
       }).catch(err => {
         c.log(`${name}: its pane ${pane} could not be closed: ${err instanceof Error ? err.message : String(err)}`)
         return null

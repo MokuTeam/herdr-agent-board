@@ -1386,12 +1386,14 @@ the others `topic:<workspace> / <tab>`, and herdr opens a new tab at the end of 
   keeps its pane as before, labelled `💤 <name>` with the wake line typed at its prompt: closing it
   would move the session, and the tab after it, to other topics.
 
-Only a pane at its shell's prompt is closed: nothing started in it since Claude left, its screen's
-last line an empty prompt or the session's wake line, and nothing in its tab focused (the tab you
-are looking at stays). Sessions already asleep in a kept pane when this came in (labelled
-`💤 <name>` by wake) get it closed once by the same rule, at wake's first look with this on; then
-`wake-tidy.json` in the state folder says it is done, and no later start does it again. One you
-`/exit` yourself keeps its pane (below). The session's card keeps the panes it had, so the board's
+Only a pane at its shell's prompt is closed: nothing started in it since Claude left, nothing
+typed at the last prompt on its screen but the session's own wake line (wake's, or the old
+plugin's, wrapped or not), and nothing in its tab focused (the tab you are looking at stays). A
+screen without a prompt, or with PowerShell's `>>` continuation prompt, keeps the pane. Sessions
+already asleep in a kept pane when this came in (labelled `💤 <name>` by wake) get it closed once
+by the same rule, at a look of wake's with this on that herdr answered; then `wake-tidy.json` in
+the state folder says it is done, and no later start does it again. One you `/exit` yourself
+keeps its pane (below). The session's card keeps the panes it had, so the board's
 links still find the session a `spawn-agent` started in one of them, and its reminders follow it
 to the pane it wakes in.
 

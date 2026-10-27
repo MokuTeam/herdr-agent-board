@@ -115,19 +115,42 @@ test('a sidebar whose tokens have expired, known by its label, is still nothing 
   expect(freePlan(s, 't2-claude', now)?.close).toEqual({ tab: 't2' })
 })
 
-test('promptIdle: an empty prompt of any shell, or the wake line typed for this session; anything else is the user’s', () => {
+test('promptIdle: an empty prompt of any shell, or nothing but this session’s wake line, wrapped or not', () => {
   const SID = '0f3c9a7e-1b2d-4e5f-8a9b-0c1d2e3f4a5b'
+  const PS = 'PS C:\\Work\\Проект x 50%> '
   for (const screen of [
-    'PS C:WorkПроект x 50%> ',
+    PS,
     'out\nuser@box:~/w$ ',
-    'C:Work>',
+    'C:\\Work>',
     'host% ',
     '~/w ❯ ',
-    `PS C:w> board resume ${SID} --profile work`,
-    `$ claude-tg --resume ${SID}`,
-    `claude --resume ${SID}\n\n`,
+    `Resume this session with:\nclaude --resume ${SID}\n${PS}`,
+    `${PS}board resume ${SID} --profile work`,
+    `$ board resume ${SID}`,
+    `$ claude-tg --dangerously-skip-permissions --resume ${SID}`,
+    `$ cldt --resume ${SID}`,
+    // Wrapped at the pane's width: the id split, or a space lost at a row's end.
+    `${PS}board resume 0f3c9a7e-1b2d-4e5f-8a9b-0c1d2e3f\n4a5b --profile defau\nlt`,
+    `${PS}claude-tg --dangerously-skip-permissions --resume\n${SID.slice(0, 20)}\n${SID.slice(20)}\n\n`,
   ])
-    expect(promptIdle(screen, SID)).toBe(true)
-  for (const screen of ['', '\n\n', 'PS C:w> cd ..', '$ ls -la', 'PS C:w> board resume 6a7b8c9d-0e1f'])
-    expect(promptIdle(screen, SID)).toBe(false)
+    expect([screen, promptIdle(screen, SID)]).toEqual([screen, true])
+  for (const screen of [
+    '',
+    '\n\n',
+    // No prompt on the screen (Claude's last words, a program's output).
+    `claude --resume ${SID}`,
+    `${PS}cd ..`,
+    '$ ls -la',
+    'PS> echo 100%',
+    `${PS}Get-ChildItem -Recurse #`,
+    '$ cat file >',
+    // PowerShell's continuation prompt: a command not finished.
+    `${PS}Get-Item x |\n>> `,
+    `$ echo ${SID}`,
+    `${PS}board resume ${SID} --profile work; rm x`,
+    `${PS}board resume ${SID} && claude`,
+    `$ board resume 6a7b8c9d-0e1f-4a2b-9c3d-4e5f6a7b8c9d`,
+    `$ board resume ${SID}\nls`,
+  ])
+    expect([screen, promptIdle(screen, SID)]).toEqual([screen, false])
 })

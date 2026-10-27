@@ -572,3 +572,55 @@ test('review: with closePanes off the tidy waits, unmarked, until it is turned o
   expect(closes(w.io)).toEqual([['tab', 'close', 't2']])
   expect(existsSync(w.tidyFile)).toBe(true)
 })
+
+test('re-review: herdr still answering once for the pane it just closed does not put the sleeper back under it', async () => {
+  const pane = claudePane('w1:p2', 't2', SID)
+  const w = world({ panes: [pane] })
+  const get = w.io.pane
+  let stale = 0
+  w.io.on(
+    argv => argv[1] === 'close',
+    () => {
+      stale = 1
+    },
+  )
+  w.io.pane = async id => {
+    if (stale > 0 && id === 'w1:p2') {
+      stale--
+      return { pane_id: 'w1:p2', tab_id: 't2', workspace_id: 'w1' }
+    }
+    return get(id)
+  }
+  expect(await sleepIn(w, pane, SID, 'Billing', 1)).toMatchObject({ ok: true })
+  expect(Object.keys(readSessions(w.file))).toEqual([SID])
+  expect(await createWakeEngine(w.deps).sleeping()).toMatchObject([{ name: 'Billing', pane: '' }])
+})
+
+test('re-review: no tidy marker while herdr shows no panes, or answers for none of those to look at; it tries again', async () => {
+  const at = Date.now() - HOUR
+  const kept = shellPane('w1:p2', 't2', '💤 Billing')
+  const w = world({
+    panes: [kept],
+    sessions: () => ({ 'w1:p2': { session: SID, name: 'Billing', seen_at: at, slept_at: at } }),
+  })
+  const engine = createWakeEngine(w.deps)
+  // herdr starting over: a snapshot without panes.
+  const snapshot = w.io.snapshot
+  w.io.snapshot = async () => ({ ...(await snapshot()), panes: [] })
+  await engine.remember()
+  expect(existsSync(w.tidyFile)).toBe(false)
+  // Panes shown, but herdr fails on every question about them.
+  w.io.snapshot = snapshot
+  const info = w.io.processInfo
+  w.io.processInfo = async () => {
+    throw new Error('herdr: not answering')
+  }
+  await engine.remember()
+  expect(existsSync(w.tidyFile)).toBe(false)
+  expect(closes(w.io)).toEqual([])
+  // herdr back: done, and marked.
+  w.io.processInfo = info
+  await engine.remember()
+  expect(closes(w.io)).toEqual([['tab', 'close', 't2']])
+  expect(existsSync(w.tidyFile)).toBe(true)
+})

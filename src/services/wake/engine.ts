@@ -287,6 +287,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
   /** Sessions asleep in a pane kept before #204 are given it back once (tidy), then this file says so. */
   const tidyFile = deps.tidyFile ?? join(dirname(deps.sessionsFile), 'wake-tidy.json')
   let tidied = existsSync(tidyFile)
+  let tidying = false
 
   const archived = (ids: readonly string[]): Set<string> => {
     if (deps.archived) return deps.archived(ids)
@@ -448,28 +449,45 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
    * Sessions asleep in a pane wake left them in before #204 (put to sleep, not exited by the user):
    * that pane closed, as a sleep closes it now, while it is as wake left it (labelled `💤 <name>`, at
    * its shell's prompt, nothing typed there but its wake line) and core/wake/freed.ts allows it.
-   * Once, at the first look with closePanes on: then its marker is written, and no wake start or
-   * switch does it again. Counted under way (busy) while it runs, so a code change waits for it.
+   * Once, at a look with closePanes on that could judge the panes: herdr showing panes (none while
+   * it starts over), and of those to look at, one at least that herdr answered for. Then its marker
+   * is written, and no wake start or switch does it again; until then, every look tries. Counted
+   * under way (busy) while it runs, so a code change waits for it.
    */
   async function tidy(snap: HerdrSnapshot): Promise<void> {
-    if (tidied || deps.readOnly || !deps.settings().closePanes) return
+    if (tidied || tidying || deps.readOnly || !deps.settings().closePanes || !snap.panes.length) return
+    tidying = true
+    let looked = 0
+    let judged = 0
+    try {
+      await during(async () => {
+        for (const [pane, s] of Object.entries(sessions)) {
+          if (!s.slept_at || s.exited || isFreed(s) || !SESSION_ID.test(s.session)) continue
+          const p = snap.panes.find(x => x.pane_id === pane)
+          const label = `💤 ${s.name}`
+          if (!p || p.agent || p.label !== label) continue
+          looked++
+          const rules = { label, held, now: now(), log: deps.log, sleep }
+          const place = await withPane(pane, () =>
+            freePane(deps.herdr, { pane, session: s.session }, freeMarks(pane, s.session), rules),
+          ).then(
+            r => {
+              judged++
+              return r
+            },
+            err => {
+              deps.log(`${s.name}: the pane ${pane} it slept in could not be closed: ${messageOf(err)}`)
+              return null
+            },
+          )
+          if (place) deps.log(`${s.name}: closed the pane ${pane} it slept in`)
+        }
+      })
+    } finally {
+      tidying = false
+    }
+    if (looked && !judged) return
     tidied = true
-    await during(async () => {
-      for (const [pane, s] of Object.entries(sessions)) {
-        if (!s.slept_at || s.exited || isFreed(s) || !SESSION_ID.test(s.session)) continue
-        const p = snap.panes.find(x => x.pane_id === pane)
-        const label = `💤 ${s.name}`
-        if (!p || p.agent || p.label !== label) continue
-        const rules = { label, held, now: now(), log: deps.log }
-        const place = await withPane(pane, () =>
-          freePane(deps.herdr, { pane, session: s.session }, freeMarks(pane, s.session), rules),
-        ).catch(err => {
-          deps.log(`${s.name}: the pane ${pane} it slept in could not be closed: ${messageOf(err)}`)
-          return null
-        })
-        if (place) deps.log(`${s.name}: closed the pane ${pane} it slept in`)
-      }
-    })
     try {
       writeFileSync(tidyFile, `${JSON.stringify({ at: now() })}\n`)
     } catch (err) {

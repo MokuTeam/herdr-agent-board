@@ -103,22 +103,54 @@ export function freePlan(snap: FreedSnapshot, pane: string, now: number, rules: 
   }
 }
 
-/** The end of a shell prompt: PowerShell's and cmd's `>`, sh's `$` and `#`, zsh's `%`, themes' `❯` and `λ`. */
-const PROMPT_END = /[>$#%❯λ]\s*$/
+/**
+ * A shell prompt at the start of a screen row, up to its first end mark followed by a space or the
+ * row's end: PowerShell's and cmd's `>`, sh's `$` and `#`, zsh's `%`, themes' `❯` and `λ`.
+ */
+const PROMPT = /^.*?[>$#%❯λ](?=\s|$)/
+/** PowerShell's continuation prompt: a command not finished yet. */
+const CONTINUED = /^\s*>>/
 
 /**
- * Whether a shell's visible screen (`herdr pane read`) shows it idle as a sleep leaves it: its last
- * line an empty prompt, or one that holds the session's id (the wake line typed for it, wake's or
- * the old plugin's). Anything else typed there is the user's, and the pane is left alone.
+ * What was typed at the shell's last prompt, as one line without its spaces: the rows after the
+ * prompt's row are that line wrapped at the pane's width (an id split anywhere, a space lost at a
+ * row's end). null when the screen shows no prompt, or a continuation prompt.
+ */
+function typedAtPrompt(screen: string): string | null {
+  const rows = screen.split('\n').map(r => r.trimEnd())
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i] ?? ''
+    const prompt = PROMPT.exec(row)
+    if (!prompt) continue
+    if (CONTINUED.test(row)) return null
+    return [row.slice(prompt[0].length), ...rows.slice(i + 1)].join('').replace(/\s+/g, '')
+  }
+  return null
+}
+
+/**
+ * The session's wake line, without its spaces: wake's `board resume <id>` (with `--profile <id>`),
+ * or the old plugin's `<command> [options] --resume <id>` (`claude-tg --dangerously-skip-permissions
+ * --resume <id>`, `cldt --resume <id>`): a program and options only, nothing else on the line.
+ */
+function isWakeLine(typed: string, session: string): boolean {
+  if (typed === `boardresume${session}` || new RegExp(`^boardresume${session}--profile[\\w.-]+$`).test(typed))
+    return true
+  return typed.endsWith(`--resume${session}`) && /^[\w.:\\/-]+$/.test(typed.slice(0, -`--resume${session}`.length))
+}
+
+const SESSION_ID = /^[0-9a-f-]+$/i
+
+/**
+ * Whether a shell's visible screen (`herdr pane read`) shows it as a sleep leaves it: at its last
+ * prompt nothing typed, or only the session's wake line (wake's or the old plugin's, wrapped or
+ * not). Anything else there, a continuation prompt, or no prompt on the screen: the pane is left
+ * alone.
  */
 export function promptIdle(screen: string, session: string): boolean {
-  const last = screen
-    .split('\n')
-    .map(l => l.trimEnd())
-    .filter(Boolean)
-    .pop()
-  if (last === undefined) return false
-  return (session !== '' && last.includes(session)) || PROMPT_END.test(last)
+  const typed = typedAtPrompt(screen)
+  if (typed === null) return false
+  return typed === '' || (SESSION_ID.test(session) && isWakeLine(typed, session))
 }
 
 const record = (v: unknown): Record<string, unknown> | null =>
