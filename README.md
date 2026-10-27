@@ -670,11 +670,11 @@ puts it on PATH; it is `bun src/entrypoints/spawn-agent.ts`):
 spawn-agent --name <Name> --cwd <folder> [--label <tab label>]
             [--brief-file <utf-8 file> | --brief <text>] [--workspace <herdr workspace id>]
             [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>]
-            [--pane <herdr pane id>] [--profile <id>] [--agent claude|pi]
+            [--pane <herdr pane id>] [--profile <id>] [--agent claude|pi] [--trust]
 ```
 
 PowerShell's spelling works too: `-Name`, `-Cwd`, `-Label`, `-BriefFile`, `-Brief`, `-Workspace`,
-`-TimeoutSec`, `-Profile`, `-Agent`. `--agent pi` types `launch.pi` (default `pi`) instead of the
+`-TimeoutSec`, `-Profile`, `-Agent`, `-Trust`. `--agent pi` types `launch.pi` (default `pi`) instead of the
 profile's `command` and `args` or `launch.claude`, for a new session only (no `--resume` or
 `--fork`); see [pi](#pi). It opens a tab in the workspace (inside herdr the current one, from
 `HERDR_WORKSPACE_ID`), labelled with `--label` or the name, and types the profile's `command`, or
@@ -688,9 +688,12 @@ pane=<pane id> name=<Name> agent=<herdr name>
 
 which is how the board knows who started whom. It fails (exit code 1, the reason on stderr) when
 the folder is not there, Claude is not ready in time, or Claude waits for a dialog first (the
-folder trust): answer it in that tab, then name and brief the session there. A brief that does
-not get through fails it too, saying so: the session runs, send the brief by hand rather than
-start another. A `/rename` that does not take is only a warning. `--pane` starts Claude in that
+folder trust): answer it in that tab, then name and brief the session there. `--trust` answers
+two such dialogs with Yes instead: the folder-trust one when it names `--cwd` itself, and "Allow
+external CLAUDE.md file imports?" when every file it lists is in the user's own Claude folders.
+Any other dialog still stops the start. A brief that does not get through fails it too, saying
+so: the session runs, send the brief by hand rather than start another. A `/rename` that does
+not take is only a warning. `--pane` starts Claude in that
 pane instead of a new tab; it must be at a shell prompt, not running an agent. `--resume` brings
 back a session that ended (`launch.claude` with `--resume <uuid>`, run in the folder the session
 ran in): it keeps its name, so no `/rename` is typed; the board's [archive](#archive) uses it.
