@@ -2481,6 +2481,7 @@ board remote on                  # or "remote": { "on": true } in config.json
 board remote                     # where it listens, who asks to pair, who is paired
 board remote approve <id>        # or Approve in Settings → Phones… on the web board
 board remote revoke <id>         # the phone's token stops working at once
+board remote desk <id> [off]     # a paired browser is your desk: Go to herdr and Approve work there
 board remote pwa on              # the board in a phone's browser, below
 board remote off
 ```
@@ -2500,6 +2501,12 @@ it needs:
 - **Nothing on this computer's screen.** A phone cannot open files or links here, focus herdr or
   raise windows; the board's page itself is not served to it. Everything else answers as for the
   web board, with the same checks.
+- **Unless it is your desk.** When the board runs on a server and you attach to its herdr from your
+  own computer (`herdr --remote <host>`), the board in that computer's browser is a paired device
+  too. `board remote desk <id>`, on the server only, marks it as your desk: from it **Go to herdr**
+  works (the herdr client you attached follows the focus), and so do Approve, Deny and Unpair in
+  Phones…. Opening files or links, turning phones off, Remote access and wake stay with the
+  server. `board remote desk <id> off` takes it back.
 
 A firewall that drops what comes in on the Tailscale interface must let the port through (on
 Linux with ufw: `sudo ufw allow in on tailscale0 to any port 12422 proto tcp`). Off, nothing

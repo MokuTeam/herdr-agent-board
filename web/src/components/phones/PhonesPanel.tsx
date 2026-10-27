@@ -6,6 +6,7 @@
 // (POST /api/remote) and comes back over the live stream. The board in a browser elsewhere sees it
 // all but changes none of it: the server keeps /api/remote for this computer (core/remote.ts
 // localOnly), so the panel says where to approve instead of offering buttons that are refused.
+// The owner's desk (deskPage) answers the phones that ask and unpairs; the rest stays here.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ADMIN_DNS } from '../../../../src/core/pwa.ts'
 import type { PwaView } from '../../../../src/core/remote.ts'
@@ -13,7 +14,7 @@ import { api, errorText } from '../../api/client.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { ago } from '../../models/card.ts'
-import { remotePage } from '../../models/remote-page.ts'
+import { deskPage, remotePage } from '../../models/remote-page.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { Panel } from '../panel/Panel.tsx'
 import { Qr } from '../Qr.tsx'
@@ -43,6 +44,8 @@ export function PhonesPanel({ open, onClose }: PhonesPanelProps) {
   const { data, canEdit: canMutate, toast } = useBoardContext()
   const here = !remotePage()
   const canEdit = canMutate && here
+  const answers = here || deskPage()
+  const canAnswer = canMutate && answers
   const latest = useLatest({ t, toast })
   const [sure, setSure] = useState<string | null>(null)
 
@@ -89,17 +92,17 @@ export function PhonesPanel({ open, onClose }: PhonesPanelProps) {
               <br />
               <span className="sheet-meta">{r.os ? t('phones.asksFrom', { login: r.login, os: r.os }) : r.login}</span>
             </p>
-            {here ? (
+            {answers ? (
               <>
                 <button
                   type="button"
                   className="button primary"
-                  disabled={!canEdit}
+                  disabled={!canAnswer}
                   onClick={() => void send('approve', r.id)}
                 >
                   {t('phones.approve')}
                 </button>
-                <button type="button" className="button" disabled={!canEdit} onClick={() => void send('deny', r.id)}>
+                <button type="button" className="button" disabled={!canAnswer} onClick={() => void send('deny', r.id)}>
                   {t('phones.deny')}
                 </button>
               </>
@@ -108,7 +111,7 @@ export function PhonesPanel({ open, onClose }: PhonesPanelProps) {
             )}
           </div>
         ))}
-        {!here && <p className="sheet-meta">{t('phones.onlyThere')}</p>}
+        {!here && <p className="sheet-meta">{t(answers ? 'phones.onlyThereDesk' : 'phones.onlyThere')}</p>}
         <h3 className="phones-head">{t('pwa.head')}</h3>
         <PwaSection pwa={remote.pwa} canEdit={canEdit} send={send} />
         <h3 className="phones-head">{t('phones.paired')}</h3>
@@ -127,7 +130,7 @@ export function PhonesPanel({ open, onClose }: PhonesPanelProps) {
               <button
                 type="button"
                 className="button"
-                disabled={!canEdit}
+                disabled={!canAnswer}
                 onBlur={() => setSure(null)}
                 onClick={() => {
                   if (sure !== d.id) return setSure(d.id)

@@ -83,6 +83,24 @@ describe('Phones panel', () => {
     }
   })
 
+  test("on the owner's desk elsewhere: Approve, Deny and Unpair; turning phones off stays with the computer", () => {
+    const doc = Object.getOwnPropertyDescriptor(globalThis, 'document')
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: { documentElement: { hasAttribute: (name: string) => name === 'data-remote' || name === 'data-desk' } },
+    })
+    try {
+      const nodes = render(REMOTE)
+      expect(text([byId(nodes, 'phones-sheet')])).toContain('This browser is your desk.')
+      const buttons = findAll(nodes, el => el.tag === 'button' && hasClass(el, 'button'))
+      const enabled = buttons.filter(b => !b.attrs.has('disabled')).map(b => text(b.children))
+      expect(enabled).toEqual(['Approve', 'Deny', 'Unpair'])
+    } finally {
+      if (doc) Object.defineProperty(globalThis, 'document', doc)
+      else Reflect.deleteProperty(globalThis, 'document')
+    }
+  })
+
   test('no phone yet; and why phones cannot reach it', () => {
     const none = text(render({ ...REMOTE, pending: [], devices: [] }))
     expect(none).toContain('No phone is paired yet')
