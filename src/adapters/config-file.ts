@@ -146,6 +146,19 @@ export function setTunnelOn(on: boolean): EditResult {
   return { ok: true }
 }
 
+/**
+ * The board on a server of the owner's (core/server-install.ts): `serverMode` in config.json, its
+ * domain and its login listener's socket, which turn the server mode on; null takes it out. The
+ * server's installer writes it, as the board's user.
+ */
+export function setServerMode(mode: { domain: string; socket: string } | null): EditResult {
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  if (mode) raw.serverMode = { domain: mode.domain, socket: mode.socket }
+  else delete raw.serverMode
+  writeRaw(raw)
+  return { ok: true }
+}
+
 /** Change settings in config.json from the web board: { language, foldWaiting }. */
 export function editSettings(body: unknown): EditResult {
   const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)

@@ -31,7 +31,7 @@
 //                                                   password's prompt, then more: a one-time code)
 //               alsoPassword?: boolean },           after keyboard-interactive failed, the password method too
 //     fixture?: string,                             a folder: look-1 prints its round1.txt, look-2 its round2.txt
-//     run?: { lines: string[], dropAfter?: number } a launch prints these, cut after dropAfter (exit 255)
+//     run?: { lines: string[], dropAfter?: number } a launch (or the board's install) prints these, cut after dropAfter (exit 255)
 //     wrong?: string[] }                            a wrong password's lines instead of the flavour's (a sudo in another language)
 // No line for its server key in the quoted UserKnownHostsFile: `Host key verification failed.`, 255;
 // with StrictHostKeyChecking=accept-new the key is pinned then (another key for the host there:
@@ -432,7 +432,9 @@ async function admin(): Promise<void> {
   if (prefix !== wanted) return unexpected()
   if (prefix.includes('sudo -S')) {
     if (logPath) appendFileSync(`${logPath}.stdin`, `${JSON.stringify(input)}\n`)
-    if (a.password !== undefined && input !== `${a.password}\n`) {
+    // the board's install (path B) has its pack after sudo's line
+    const sudoLine = kind === 'install' ? input.slice(0, input.indexOf('\n') + 1) : input
+    if (a.password !== undefined && sudoLine !== `${a.password}\n`) {
       say(...(a.wrong ?? words.wrong))
       end(1)
     }
@@ -457,7 +459,8 @@ async function admin(): Promise<void> {
     case 'look-2':
       print('round2.txt')
       return end(0)
-    case 'launch': {
+    case 'launch':
+    case 'install': {
       const lines = a.run?.lines ?? []
       const drop = a.run?.dropAfter
       for (const [n, line] of lines.entries()) {

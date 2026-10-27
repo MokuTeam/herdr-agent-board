@@ -45,6 +45,8 @@
 //                            passkeys, ends every login and prints a new link. Outside server mode
 //                            both refuse
 //   board doctor             what is set up on this computer, and what is missing (core/setup.ts)
+//   board update [--ref <ref>]   on a server the board was installed on (server-install.sh): its
+//                            code moved to the ref it came from, or this one (services/server-update.ts)
 //   board presence [here|away]   whether the user is at the computer or away (core/presence.ts),
 //                            the line every session's context has; with a state, the user's switch
 //   board away [on|off]      the same switch: away (on, the default) or back at the computer (off).
@@ -114,7 +116,7 @@ import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | login [link | reset] | doctor | presence [here | away] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id>] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | login [link | reset] | doctor | update [--ref <ref>] | presence [here | away] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id>] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -507,6 +509,11 @@ async function main(): Promise<void> {
   if (cmd === 'remote') return remote()
   if (cmd === 'tunnel') return tunnel()
   if (cmd === 'login') return login()
+  if (cmd === 'update') {
+    const { update } = await import('../services/server-update.ts')
+    process.exitCode = await update(rest)
+    return
+  }
   if (cmd === 'archive') return archive()
   if (cmd === 'sleep') return sleep()
   if (cmd === 'fork') return fork()

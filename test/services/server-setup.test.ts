@@ -6,6 +6,7 @@ import { describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
+import type { BoardPack } from '../../src/adapters/board-pack.ts'
 import { configFile, loadConfig } from '../../src/adapters/config-file.ts'
 import { configDir, stateDir } from '../../src/adapters/paths.ts'
 import {
@@ -73,6 +74,7 @@ async function useBoard(
     spawn?: typeof spawnRemote
     sshVersion?: string
     key?: () => string | null
+    pack?: () => Promise<BoardPack | null>
   } = {},
 ) {
   const fake = await useFakeSsh()
@@ -135,6 +137,7 @@ async function useBoard(
     newId: () => `r${++ids}`,
     ...(o.acme && { acme: o.acme }),
     ...(o.key && { publicKey: async () => o.key?.() ?? null }),
+    ...(o.pack && { pack: o.pack }),
     tunnel: async on => {
       turned.push(on)
     },
@@ -1283,5 +1286,86 @@ describe('the admin’s login by password (the simple-setup spec)', () => {
     expect(await pw.look({ password: 'pw' })).toMatchObject({ status: 409, body: { ok: false, hint: 'sshOld' } })
     expect(pw.prompts()).toEqual([])
     expect(pw.leads()).toEqual([])
+  })
+})
+
+describe('the board installed on the server itself (path B of the board on a server)', () => {
+  const SHA = '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d'
+  const PACK: BoardPack = { bytes: new Uint8Array([31, 139, 8, 0, 1, 2, 3, 250, 251]), commit: SHA, changes: true }
+  const LINK = 'https://board.example.com/setup#code=Zm9vYmFyYmF6_-0123456789'
+
+  test('Look for the board’s own target, Install sends the pack after sudo’s password, its output streamed, the link kept apart and never logged', async () => {
+    const b = await useBoard({ sudo: 'password', password: SENTINEL }, { pack: async () => PACK, key: () => KEY })
+    b.server({ fixture: fixture('debian13', 'bare') })
+    expect(await b.setup.installLook({ password: SENTINEL })).toEqual(OK)
+    const look1 =
+      b
+        .commands()
+        .map(carried)
+        .find(s => s.includes('# agent-board: look-1')) ?? ''
+    // the board's user and socket, not the tunnel's, and no key of the board's to compare
+    expect(look1).toContain("getent passwd 'agent'")
+    expect(look1).toContain("stat -c '@@dir %a %U %G %g' '/var/lib/agent-board'")
+    expect(look1).not.toContain('restrict,port-forwarding')
+    const v = b.setup.view()
+    expect(v.target).toBe('install')
+    expect(v.install).toEqual({ from: { commit: SHA, changes: true }, out: [], link: null, code: null })
+    const p = planOf(b.setup)
+    const ids = p.steps.map(s => s.id)
+    for (const id of ['tunnel-user', 'keys-file', 'sshd-fence']) expect(ids).not.toContain(id)
+    b.server({
+      run: {
+        lines: [
+          'agent-board: looking at this server.',
+          '',
+          `  ${LINK}`,
+          'Done: the board is at https://board.example.com',
+        ],
+      },
+    })
+    expect(await b.setup.install({ plan: p.id, password: SENTINEL, docker: true })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    const after = b.setup.view()
+    expect(after.phase).toBe('done')
+    expect(after.install?.link).toBe(LINK)
+    expect(after.install?.code).toBe(0)
+    expect(after.install?.out).toEqual([
+      'agent-board: looking at this server.',
+      '',
+      'Done: the board is at https://board.example.com',
+    ])
+    // web.log: that it ran, never a line of it
+    expect(b.logs).toEqual(['server install: started', 'server install: ended 0'])
+    // the receiver as root through sudo -S, the pack on stdin after sudo's line, nothing on its command line
+    const receiver = carried(b.commands().at(-1) ?? '')
+    expect(receiver).toContain('# agent-board: install')
+    expect(receiver).toContain('--domain board.example.com --lang en --yes')
+    expect(b.commands().at(-1)).toStartWith("env LC_ALL=C sudo -S -p '' -- ")
+    expect(b.commands().join('\n')).not.toContain(SENTINEL)
+    const stdin = b.stdins().at(-1) ?? ''
+    expect(stdin).toBe(`${SENTINEL}\n${Buffer.from(PACK.bytes).toString('base64')}\n`)
+    // the panel closed: the link is let go
+    expect(b.setup.installForget()).toEqual(OK)
+    expect(b.setup.view().install?.link).toBeNull()
+  })
+
+  test('a board that is not a git checkout has nothing to send: said, before any ssh', async () => {
+    const b = await useBoard({ uid: 0 }, { pack: async () => null })
+    b.server({ fixture: fixture('debian13', 'bare') })
+    const answer = (await b.setup.installLook({})) as { status: number; body: { error?: string } }
+    expect(answer.status).toBe(409)
+    expect(answer.body.error).toContain('not a git checkout')
+    expect(b.logins()).toEqual([])
+  })
+
+  test('Install takes only its own Look’s plan: after a tunnel Look it asks for a Look again', async () => {
+    const b = await useBoard({ uid: 0 }, { pack: async () => PACK })
+    b.server({ fixture: fixture('debian13', 'bare') })
+    expect(await b.look()).toEqual(OK)
+    const p = planOf(b.setup)
+    expect(await b.setup.install({ plan: p.id, docker: true })).toMatchObject({
+      status: 409,
+      body: { hint: 'lookAgain' },
+    })
   })
 })

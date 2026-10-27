@@ -133,7 +133,8 @@ export function plainPlan(
   }
   const ids = made.steps.map(s => s.id)
   const has = (id: string): boolean => ids.includes(id)
-  const login = LOGIN_STEPS.some(has)
+  // the server mode's folder is the board's own, made for its user: no login of the board's there
+  const login = !w.server && LOGIN_STEPS.some(has)
   const checked = has('fetch-before') || made.steps.some(s => s.commands.some(c => c.includes('nginx-before')))
   const docker = has('docker-install') ? t('server.plain.docker') : null
   const user = { user: w.user }
@@ -162,6 +163,7 @@ export function plainPlan(
     }
   const params = { domain: w.domain, address: made.address }
   if (made.kind === 'update') will.push(t('server.plain.will.update', params))
+  else if (w.server && ['2', '3a', '3b'].includes(made.case)) will.push(t('install.will.theirCaddy', params))
   else if (made.kind === 'apply' || made.kind === 'nothing') will.push(t(`server.plain.will.case.${made.case}`, params))
   const theirs = (port: 443 | 80): string => who(f, f.ports[port], t)
   let untouched: string

@@ -141,7 +141,7 @@ export function runScript(p: Plan, w: Wanted, run: { id: string; at: string }): 
   const head = `${JSON.stringify({ v: 1, id: run.id, at: run.at }).slice(0, -1)},"state":"`
   const mid = `${JSON.stringify({
     case: p.case,
-    pair: { user: w.user, socket: w.socket },
+    pair: { user: w.user, socket: w.socket, ...(w.server && { server: true }) },
     domain,
     publicPort: p.publicPort,
     address: p.address,

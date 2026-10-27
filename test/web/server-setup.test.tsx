@@ -16,6 +16,7 @@ import type { AccessView } from '../../src/core/access.ts'
 import { missingKeys, translator } from '../../src/core/i18n/translator.ts'
 import { needFor } from '../../src/core/server-admin.ts'
 import type { ServerFacts } from '../../src/core/server-facts.ts'
+import { serverWanted } from '../../src/core/server-install.ts'
 import { fenceDiff } from '../../src/core/server-look.ts'
 import { plainPlan } from '../../src/core/server-plain.ts'
 import {
@@ -426,7 +427,8 @@ test('nothing looked at: the login (root by default), its password, a key file f
   expect(fold(part, 'access-signin').attrs.has('open')).toBe(true)
   expect(fold(part, 'access-keyfile').attrs.has('open')).toBe(false)
   expect(fold(part, 'access-oneshot').attrs.has('open')).toBe(false)
-  expect(buttonsIn(part).map(textOf)).toEqual(['Set up the server'])
+  // beside it, the board installed on the server itself (path B of the board on a server)
+  expect(buttonsIn(part).map(textOf)).toEqual(['Set up the server', 'Install the board on this server'])
   expect(button(part, 'Set up the server').attrs.has('disabled')).toBe(false)
   // No sudo field, no plan, no steps by hand, no case chips: none asked for.
   expect(findAll(part, el => el.attrs.get('name') === 'sudo-password')).toEqual([])
@@ -452,7 +454,7 @@ test('nothing looked at: the login (root by default), its password, a key file f
   // Without the board its fields and buttons do nothing.
   const off = partOf(withServer({}), { canEdit: false })
   const controls = findAll(off, el => (el.tag === 'input' || el.tag === 'button') && !hasClass(el, 'access-copy'))
-  expect(controls.length).toBe(4)
+  expect(controls.length).toBe(5)
   expect(controls.filter(el => !el.attrs.has('disabled'))).toEqual([])
 })
 
@@ -1417,6 +1419,58 @@ test('the texts in Russian differ, and every one is there', () => {
   ])
     expect([name, textsOf(inRu, name)]).not.toEqual([name, textsOf(en, name)])
   expect(buttonsIn(inRu).map(textOf)).not.toContain('Apply')
-  expect(buttonsIn(partOf(withServer({}), { lang: 'ru' })).map(textOf)).toEqual(['Настроить сервер'])
+  expect(buttonsIn(partOf(withServer({}), { lang: 'ru' })).map(textOf)).toEqual([
+    'Настроить сервер',
+    'Установить доску на этот сервер',
+  ])
   expect(foundLines(factsFor('1'), ru, 'boardtunnel')).not.toEqual(foundLines(factsFor('1'), t, 'boardtunnel'))
+})
+
+test('Install the board on this server (path B): its own plan, then its output, the setup link apart, how it ended', () => {
+  const SHA = '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d'
+  const domain = READY.tunnel.settings.domain
+  const w = serverWanted(domain, 'agent')
+  const facts = factsFor('1')
+  const built = buildPlan(facts, w, { id: 'i1', docker: false })
+  const plan = isPlan(built) ? built : null
+  const install = { from: { commit: SHA, changes: true }, out: [], link: null, code: null }
+  const looked = withServer({
+    phase: 'plan',
+    sudo: 'root',
+    facts,
+    choice: chooseCase(facts, w),
+    plan,
+    target: 'install',
+    install,
+  })
+  const part = partOf(looked)
+  const shown = shownText(part)
+  expect(shown).toContain('The board’s code: a copy of 1a2b3c4 from your computer, with its local changes.')
+  // Look found no user agent: the install makes it
+  expect(textsOf(part, 'access-will-line').slice(0, 3)).toEqual([
+    'Make the user agent (no sudo) for herdr, Claude Code and the board.',
+    'Install Bun 1.4.3, herdr and Claude Code for agent, each from its own installer (what is there is kept).',
+    'Install the board: a copy of 1a2b3c4 from your computer, with its local changes.',
+  ])
+  // the web server's words for the board's own socket, no login of a tunnel's
+  expect(shown).not.toContain('allowed only to hold the tunnel')
+  expect(buttonsIn(part).map(textOf)).toContain('Install')
+  // running: the output as it comes; done: the link apart, once
+  const running = partOf(
+    withServer({
+      ...looked.server,
+      phase: 'applying',
+      install: { ...install, out: ['agent-board: looking at this server.'] },
+    }),
+  )
+  expect(textsOf(running, 'access-pre')).toEqual(['agent-board: looking at this server.'])
+  const link = `https://${domain}/setup#code=abc_DEF`
+  const done = partOf(
+    withServer({ ...looked.server, phase: 'done', install: { ...install, out: ['Done'], link, code: 0 } }),
+  )
+  expect(find(done, el => el.tag === 'a' && el.attrs.get('href') === link).attrs.get('rel')).toBe('noreferrer noopener')
+  expect(textsOf(done, 'access-result')).toEqual([`Installed: https://${domain}`])
+  expect(textsOf(done, 'access-pre').join('\n')).not.toContain('#code=')
+  // in Russian too
+  expect(shownText(partOf(looked, { lang: 'ru' }))).toContain('Код доски: копия 1a2b3c4 с вашего компьютера')
 })

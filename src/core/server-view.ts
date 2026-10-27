@@ -55,6 +55,21 @@ export interface ServerView {
    * pinned it (the first one does, call 2); null before a login went through.
    */
   hostKey: { fingerprint: string; pinnedNow: boolean } | null
+  /**
+   * What the last Look was for: the tunnel's web server, or the board installed on the server
+   * itself (path B of the board on a server, core/server-install.ts); none: the tunnel's.
+   */
+  target?: 'tunnel' | 'install'
+  /** Path B: the board's code it sends, the install's output, the setup link (in memory only), its exit. */
+  install?: InstallView | null
+}
+
+export interface InstallView {
+  from: { commit: string; changes: boolean }
+  out: string[]
+  /** The setup link the install printed, kept apart from its output until the panel closes. */
+  link: string | null
+  code: number | null
 }
 
 const SUDO: ReadonlySet<unknown> = new Set(['root', 'nopasswd', 'password', 'requiretty', 'none'])
@@ -104,6 +119,14 @@ const isSetup = (v: unknown): boolean => isFields(v) && CASES.has(v.case) && isT
 
 const isHostKey = (v: unknown): boolean => isFields(v) && isText(v.fingerprint) && typeof v.pinnedNow === 'boolean'
 
+const isInstall = (v: unknown): boolean =>
+  isFields(v) &&
+  isFields(v.from) &&
+  isText(v.from.commit) &&
+  Array.isArray(v.out) &&
+  (v.link === null || isText(v.link)) &&
+  (v.code === null || typeof v.code === 'number')
+
 /** The view's `server` as the board sends it, as far as the panel relies on it. */
 export function isServerView(v: unknown): v is ServerView {
   return (
@@ -121,6 +144,8 @@ export function isServerView(v: unknown): v is ServerView {
     (v.error === null || isText(v.error)) &&
     (v.setup === null || isSetup(v.setup)) &&
     (v.testAfter === null || Array.isArray(v.testAfter)) &&
-    (v.hostKey === null || isHostKey(v.hostKey))
+    (v.hostKey === null || isHostKey(v.hostKey)) &&
+    (v.target === undefined || v.target === 'tunnel' || v.target === 'install') &&
+    (v.install === undefined || v.install === null || isInstall(v.install))
   )
 }

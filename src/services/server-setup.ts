@@ -18,7 +18,14 @@
 // With the board's own public key, Look reads step 1's parts too and Apply makes what the server
 // lacks of them (the tunnel user, the socket's folder, the keys file, sshd's fence). A run travels
 // packed (gzip, then base64): the plans that make step 1 too are past a Windows command line else.
+//
+// "Install the board on this server" (path B of the board on a server, core/server-install.ts) is
+// a Look of its own, for the server mode's target (the board's socket and user, no tunnel user),
+// and an Apply that sends the board's install with the local checkout's pack over the same login
+// and streams its output into the view. Its setup link is kept apart from that output, in memory
+// only, until the panel lets it go; web.log has only that the install started and how it ended.
 import { gzipSync } from 'node:zlib'
+import { type BoardPack, boardPack } from '../adapters/board-pack.ts'
 import { editTunnel, editTunnelAdmin, setTunnelSetup } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import type { RemoteRun, spawnRemote } from '../adapters/ssh.ts'
@@ -39,6 +46,7 @@ import {
   takesAskpass,
 } from '../core/server-admin.ts'
 import type { ServerFacts } from '../core/server-facts.ts'
+import { BOARD_SOCKET, BOARD_USER, receiverScript, serverWanted, setupLinkIn } from '../core/server-install.ts'
 import { type LookInput, lookScript1, lookScript2, readRoundOne, readServerFacts } from '../core/server-look.ts'
 import { oneLine, oneshotScripts } from '../core/server-oneshot.ts'
 import {
@@ -55,7 +63,7 @@ import {
 } from '../core/server-plan.ts'
 import { launchScript, type Progress, readProgress, runLine, runScript, startProgress } from '../core/server-script.ts'
 import { type Acme, PORT_4 } from '../core/server-texts.ts'
-import type { AdminHint, ServerPhase, ServerView, SudoMode } from '../core/server-view.ts'
+import type { AdminHint, InstallView, ServerPhase, ServerView, SudoMode } from '../core/server-view.ts'
 import { fieldProblem, type TestStep, type TunnelConfig, tunnelConfig } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
 
@@ -92,6 +100,8 @@ export interface ServerSetupDeps {
    * Undo. On is left to the panel's button while something blocks it (no login set up yet).
    */
   tunnel?(on: boolean): Promise<void>
+  /** The local checkout's pack for path B (adapters/board-pack.ts, the default); null when there is none. */
+  pack?(): Promise<BoardPack | null>
 }
 
 export type Answer = { status: number; body: unknown }
@@ -110,6 +120,12 @@ export interface ServerSetup {
    * settings do not check out. Made once per settings, key and language.
    */
   oneshot(publicKey: string | null): Answer
+  /** Path B: Look for the board installed on the server (its own target), with the local checkout's pack. */
+  installLook(o: Passwords): Promise<Answer>
+  /** Path B: the install sent and run, its output streamed into the view. */
+  install(o: Passwords & { plan?: unknown; docker?: unknown }): Promise<Answer>
+  /** Path B: the setup link let go (the panel closed). */
+  installForget(): Answer
 }
 
 /** What Look, Apply and Undo carry of the passwords: the login's (sudo's too), and sudo's own. */
@@ -118,6 +134,9 @@ export type Passwords = {
   sudoPassword?: unknown
 }
 
+/** Path B's install (Bun, herdr, Claude Code, Docker downloaded; the web server's run), and the output lines kept. */
+const INSTALL_MS = 60 * 60_000
+const INSTALL_KEPT = 600
 /** How long each ssh may take: the probe, a round of Look, a run. */
 const PROBE_MS = 30_000
 const ROUND_MS = 60_000
@@ -207,6 +226,8 @@ interface Looked {
   mode: SudoMode
   /** Look's login took the password (its askpass answered): Apply and Undo log in with it again. */
   password: boolean
+  /** Path B: the pack of the local checkout this Look showed, which its Apply sends. */
+  pack: BoardPack | null
 }
 
 /** An ssh's end, and its lines as the server said them (what is read); `secrets`, masked in any line that is shown. */
@@ -241,6 +262,9 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
   let generation = 0
   /** The one command last made, and what it was made from. */
   let oneshot: { from: string; body: Fields } | null = null
+  /** What the last Look was for, and path B's run. */
+  let target: 'tunnel' | 'install' = 'tunnel'
+  let install: InstallView | null = null
 
   const tunnel = (): Fields => (isRecord(cfg.tunnel) ? cfg.tunnel : {})
   const conf = (): TunnelConfig => tunnelConfig(cfg.tunnel)
@@ -418,7 +442,7 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     return fingerprint ? { fingerprint, pinnedNow } : null
   }
 
-  async function lookAt(o: Fields, kind: 'look' | 'undo'): Promise<Answer> {
+  async function lookAt(o: Fields, kind: 'look' | 'undo' | 'install'): Promise<Answer> {
     const pw = passwordsOf(o)
     if ('status' in pw) return pw
     const { password, sudoPassword } = pw
@@ -439,8 +463,14 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     testAfter = null
     hostKey = null
     last = null
+    target = kind === 'install' ? 'install' : 'tunnel'
+    install = null
     changed()
     try {
+      // path B sends the local checkout: there must be one
+      const pack = kind === 'install' ? await (d.pack ?? boardPack)() : null
+      if (gone()) return cancelled()
+      if (kind === 'install' && !pack) return stopLook(null, t('install.panel.noCheckout'))
       const pinnedBefore = await d.hostKeyPinned()
       if (gone()) return cancelled()
       const login = await loginOf(to.bin, password)
@@ -466,14 +496,18 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       const sudoFrom = sudoFromOf(read.mode, password, sudoPassword)
       if (read.mode === 'password' && sudoFrom === null) return stopLook('needPassword', null)
       const stdin = sudoFrom === null ? null : `${sudoFrom === 'own' ? sudoPassword : password}\n`
-      const key = await boardKey()
+      // the server mode's target has no key of the board's to put in place
+      const key = kind === 'install' ? null : await boardKey()
       if (gone()) return cancelled()
-      const input: LookInput = {
-        user: c.user,
-        socket: c.socket,
-        domain: c.domain,
-        ...(key !== null && { publicKey: key }),
-      }
+      const input: LookInput =
+        kind === 'install'
+          ? { user: BOARD_USER, socket: BOARD_SOCKET, domain: c.domain }
+          : {
+              user: c.user,
+              socket: c.socket,
+              domain: c.domain,
+              ...(key !== null && { publicKey: key }),
+            }
       // each round as root, sudo's password (when it asks one) on stdin once: one sudo try per click
       const round = async (script: string): Promise<string | Answer> => {
         const h = await hear(to, remoteCommand(script, read.mode), stdin, ROUND_MS, login, secrets)
@@ -491,7 +525,9 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       if (typeof two !== 'string') return two
       const f = readServerFacts(r1, two)
       if (!f) return stopLook('unreadable', null)
-      return planFrom(f, c, to.a, read.mode, kind, key, (probe.askpass?.answered ?? 0) > 0)
+      const typed = (probe.askpass?.answered ?? 0) > 0
+      if (kind === 'install') return pack ? installPlan(f, c, to.a, read.mode, pack, typed) : stopLook(null, null)
+      return planFrom(f, c, to.a, read.mode, kind, key, typed)
     } catch (err) {
       // a plan refused (what the panel wants failed its check in core/server-plan.ts): nothing
       // half made stays in the view, the check's own words are the error
@@ -544,8 +580,145 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       choice = null
     }
     phase = 'plan'
-    last = plan ? { plan, facts: f, record: ours, wanted: w, admin: a, mode, password } : null
+    last = plan ? { plan, facts: f, record: ours, wanted: w, admin: a, mode, password, pack: null } : null
     changed()
+    return ok()
+  }
+
+  /** Path B's plan: the web server's for the server mode's target, and the pack its Apply sends. */
+  function installPlan(
+    f: ServerFacts,
+    c: TunnelConfig,
+    a: Admin,
+    mode: SudoMode,
+    pack: BoardPack,
+    password: boolean,
+  ): Answer {
+    const w: Wanted = { ...serverWanted(c.domain, BOARD_USER), ...(d.acme && { acme: d.acme }) }
+    const made = buildPlan(f, w, { id: d.newId(), docker: false })
+    facts = f
+    // a run of the web server's that did not finish: its Undo is the install's own (--undo)
+    plan = 'steps' in made && made.kind !== 'undo' ? made : null
+    choice = 'steps' in made ? chooseCase(f, w) : made
+    install = { from: { commit: pack.commit, changes: pack.changes }, out: [], link: null, code: null }
+    phase = 'plan'
+    last = plan ? { plan, facts: f, record: null, wanted: w, admin: a, mode, password, pack } : null
+    changed()
+    return ok()
+  }
+
+  /** Path B's Apply: the receiver as root, the pack on its stdin after sudo's password; its output into the view. */
+  async function runInstall(o: Fields): Promise<Answer> {
+    const pw = passwordsOf(o)
+    if ('status' in pw) return pw
+    const { password, sudoPassword } = pw
+    if (busy) return refused('busy', null)
+    const l = last
+    if (!l?.pack || target !== 'install' || typeof o.plan !== 'string' || o.plan !== l.plan.id)
+      return refused('lookAgain', null)
+    if (l.plan.ticks.includes('docker') && o.docker !== true) return refused(null, t('server.err.docker'))
+    const to = ready()
+    if ('status' in to) return to
+    if (to.c.domain !== l.wanted.domain || JSON.stringify(to.a) !== JSON.stringify(l.admin))
+      return refused('lookAgain', null)
+    if (l.password && password === null) return refused('loginPassword', null)
+    const sudoFrom = sudoFromOf(l.mode, password, sudoPassword)
+    if (l.mode === 'password' && sudoFrom === null) return refused('needPassword', null)
+    busy = true
+    const gen = generation
+    const pinned = await d.hostKeyPinned()
+    if (gen !== generation) return cancelled()
+    if (!pinned) {
+      busy = false
+      return refused('noHostKey', null)
+    }
+    const login = await loginOf(to.bin, password)
+    if (gen !== generation) return cancelled()
+    let script: string
+    try {
+      script = receiverScript({ domain: l.wanted.domain, lang: lang() })
+    } catch (err) {
+      busy = false
+      return refused(null, messageOf(err))
+    }
+    const pack = l.pack
+    // a run changes the server: the next one needs a Look of its own
+    last = null
+    phase = 'applying'
+    plan = l.plan
+    progress = null
+    hint = null
+    error = null
+    testAfter = null
+    const view: InstallView = { from: { commit: pack.commit, changes: pack.changes }, out: [], link: null, code: null }
+    install = view
+    changed()
+    d.log('server install: started')
+    const args = adminSshArgs({
+      conf: to.c,
+      admin: to.a,
+      knownHosts: d.knownHosts(),
+      command: remoteCommand(script, l.mode),
+      ...(login.password !== null && { password: true }),
+    })
+    const sudoLine = sudoFrom === null ? '' : `${sudoFrom === 'own' ? sudoPassword : password}\n`
+    const stdin = `${sudoLine}${Buffer.from(pack.bytes).toString('base64')}\n`
+    const child = d.spawn(
+      to.bin,
+      args,
+      stdin,
+      INSTALL_MS,
+      login.password === null ? null : { password: login.password },
+    )
+    current = child
+    const secrets = [password ?? '', sudoPassword ?? '']
+    const heard: Heard = { code: null, error: null, out: [], err: [], askpass: null, secrets }
+    // drawn again a moment after lines came, not once per line
+    let soon: ReturnType<typeof setTimeout> | null = null
+    const later = (): void => {
+      soon ??= setTimeout(() => {
+        soon = null
+        changed()
+      }, 250)
+    }
+    child.onLine((line, from) => {
+      if (from === 'err') {
+        heard.err.push(line)
+        return
+      }
+      // the setup link: kept apart, in memory, never among the lines (nor in web.log)
+      const link = setupLinkIn(line)
+      if (link !== null) {
+        if (link) view.link = link
+        later()
+        return
+      }
+      view.out.push(mask(line, secrets))
+      if (view.out.length > INSTALL_KEPT) view.out.shift()
+      later()
+    })
+    void child.done.then(end => {
+      if (soon) clearTimeout(soon)
+      if (current === child) current = null
+      view.code = end.code
+      if (end.code === 0) phase = 'done'
+      else {
+        phase = 'failed'
+        // the install's own words say why when it said any; else ssh's or sudo's
+        if (view.out.length === 0) {
+          const why = stopped(
+            { ...heard, code: end.code, error: end.error, askpass: end.askpass ?? null },
+            login,
+            sudoFrom,
+          )
+          hint = why.hint
+          error = why.detail
+        }
+      }
+      d.log(`server install: ended ${end.code ?? end.error ?? '?'}`)
+      busy = false
+      changed()
+    })
     return ok()
   }
 
@@ -741,6 +914,8 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       setup: setupOf(),
       testAfter,
       hostKey,
+      target,
+      install,
     }),
 
     admin(body) {
@@ -773,6 +948,13 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     },
 
     look: o => lookAt(o, 'look'),
+    installLook: o => lookAt(o, 'install'),
+    install: o => runInstall(o),
+    installForget() {
+      if (install) install = { ...install, link: null }
+      changed()
+      return ok()
+    },
     undoLook: o => lookAt(o, 'undo'),
     apply: o => runPlan(o, 'look'),
     undo: o => runPlan(o, 'undo'),
@@ -820,6 +1002,8 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       testAfter = null
       hostKey = null
       last = null
+      target = 'tunnel'
+      install = null
       changed()
       return ok()
     },

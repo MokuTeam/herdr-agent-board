@@ -93,10 +93,15 @@ export type Manual =
   | 'tunnelUser'
   | 'tunnelGroup'
 
-/** A setup is one tunnel's: its user and its socket. */
+/**
+ * A setup is one tunnel's: its user and its socket. Or the board's own on this server (`server`,
+ * the server mode): the socket is the board's login listener's, `user` the board's own user, who
+ * owns the socket's folder; there is no tunnel user, keys file or sshd fence then.
+ */
 export interface Pair {
   user: string
   socket: string
+  server?: true
 }
 /**
  * What the panel wants: the pair, the domain, the public port (null: 443), the board's public key
@@ -243,6 +248,8 @@ const strings = (v: unknown, ok: (x: unknown) => x is string): string[] | null =
 function recordItem(v: unknown, pair: Pair): RecordItem | null {
   if (!isFields(v)) return null
   const folder = socketFolder(pair.socket)
+  // the server mode's board user is the installer's, and it has no keys file or fence
+  if (pair.server && (v.kind === 'user' || v.kind === 'keys' || v.kind === 'fence')) return null
   switch (v.kind) {
     case 'user':
       return v.name === pair.user ? { kind: 'user', name: pair.user } : null
@@ -307,12 +314,13 @@ export function setupRecord(json: unknown): SetupRecord | null {
   if (!CASES.includes(c as SetupCase)) return null
   if (!isFields(pair) || !isLine(pair.user) || pair.user === '' || !isLine(pair.socket) || !isPlainPath(pair.socket))
     return null
+  if (pair.server !== undefined && pair.server !== true) return null
   if (!isLine(domain) || domain === '' || !isLine(address)) return null
   if (publicPort !== null && !isPort(publicPort)) return null
   // a pair or domain the panel would refuse was not written by a board
   if (wantedProblem({ user: pair.user, socket: pair.socket, domain, publicPort })) return null
   if (!Array.isArray(items)) return null
-  const own: Pair = { user: pair.user, socket: pair.socket }
+  const own: Pair = { user: pair.user, socket: pair.socket, ...(pair.server === true && { server: true }) }
   const read = items.map(i => recordItem(i, own))
   if (read.some(i => i === null)) return null
   return {
@@ -321,7 +329,7 @@ export function setupRecord(json: unknown): SetupRecord | null {
     at,
     state: state as SetupRecord['state'],
     case: c as SetupCase,
-    pair: { user: pair.user, socket: pair.socket },
+    pair: own,
     domain,
     publicPort,
     address,
@@ -372,7 +380,7 @@ function checkWanted(w: Wanted): void {
  * address is that case's for the domain (case 4's 8443 is not a move).
  */
 export function whose(r: SetupRecord, w: Wanted): 'same' | 'update' | 'other' {
-  if (r.pair.user !== w.user || r.pair.socket !== w.socket) return 'other'
+  if (r.pair.user !== w.user || r.pair.socket !== w.socket || !r.pair.server !== !w.server) return 'other'
   if (r.domain !== w.domain) return 'update'
   if (w.publicPort === null) return r.address === ADDRESS(w, r.case) ? 'same' : 'update'
   return (r.publicPort ?? 443) === w.publicPort ? 'same' : 'update'
@@ -462,9 +470,11 @@ const RUN_TOOLS = ['flock', 'setsid', 'timeout', 'sha256sum', 'ss', 'gzip']
  * What step 1 lacks on the server, which Apply makes first: null when the board makes none of it
  * (no key of its own to put in place, or a Look that did not read step 1's parts). A part that is
  * there, made by hand or by an earlier Apply, is used as it is: a fence in force, a folder, a user,
- * a keys file holding the board's line alone.
+ * a keys file holding the board's line alone. In the server mode, the socket's folder alone, for
+ * the board's user (the installer's).
  */
 export function stepOneNeeds(f: ServerFacts, w: Wanted): StepOneNeeds | null {
+  if (w.server) return { user: false, folder: f.folder === null, keys: null, fence: false }
   const s = f.stepOne
   if (!s || w.publicKey === undefined) return null
   return {
@@ -498,7 +508,8 @@ function hostLimits(f: ServerFacts, w: Wanted): Manual[] {
   if (f.docker?.rootless) why.push('rootless')
   if (f.docker?.userns) why.push('userns')
   if (!f.folder && !stepOneNeeds(f, w)) why.push('folder')
-  if (ownersLogin(f)) why.push('tunnelUser')
+  // the server mode's user is a login on purpose: the board's own, which no fence locks
+  if (!w.server && ownersLogin(f)) why.push('tunnelUser')
   // useradd --user-group refuses a name a group has; the board neither joins that group (its
   // members would reach the socket) nor removes it (Undo's userdel would take it along)
   if (stepOneNeeds(f, w)?.user && f.stepOne?.groupLeft) why.push('tunnelGroup')
@@ -2110,18 +2121,21 @@ export function undoPlan(
   }
   const folder = socketFolder(r.pair.socket)
   const made = (kind: RecordItem['kind']): boolean => items.some(i => i.kind === kind)
-  // what was there before the board made anything of step 1 (by hand, or an older board's paste)
-  const byHand = [
-    ...(made('keys') ? [] : [`sudo rm -f ${q(keysFile(r.pair.user))}`]),
-    ...(made('folder') ? [] : [`sudo rm -rf ${q(folder)}`]),
-    ...(made('user') ? [] : [`sudo userdel ${q(r.pair.user)}`]),
-    ...(made('fence')
-      ? []
-      : [
-          `# and the "Match User ${r.pair.user}" block at the end of /etc/ssh/sshd_config, by hand; then:`,
-          `sudo sshd -t && ${SSHD_RELOAD}`,
-        ]),
-  ]
+  // what was there before the board made anything of step 1 (by hand, or an older board's paste);
+  // in the server mode, the installer's own (its Undo takes the user and the folder)
+  const byHand = r.pair.server
+    ? []
+    : [
+        ...(made('keys') ? [] : [`sudo rm -f ${q(keysFile(r.pair.user))}`]),
+        ...(made('folder') ? [] : [`sudo rm -rf ${q(folder)}`]),
+        ...(made('user') ? [] : [`sudo userdel ${q(r.pair.user)}`]),
+        ...(made('fence')
+          ? []
+          : [
+              `# and the "Match User ${r.pair.user}" block at the end of /etc/ssh/sshd_config, by hand; then:`,
+              `sudo sshd -t && ${SSHD_RELOAD}`,
+            ]),
+      ]
   steps.push(
     mk('forget', {
       commands: [

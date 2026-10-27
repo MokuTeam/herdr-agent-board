@@ -282,6 +282,13 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
           return d.server.undo(b)
         case 'server-cancel':
           return d.server.cancel()
+        // The board installed on the server itself (path B): its Look, its run, its link let go
+        case 'server-install-look':
+          return d.server.installLook(b)
+        case 'server-install':
+          return d.server.install(b)
+        case 'server-install-forget':
+          return d.server.installForget()
         default:
           return malformed(`unknown op ${String(b.op)}`)
       }
