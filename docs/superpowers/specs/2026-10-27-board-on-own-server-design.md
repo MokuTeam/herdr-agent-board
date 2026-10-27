@@ -58,7 +58,7 @@ Convenience comes from a one-command install and a service instead.
 
 ## Non-goals
 
-- Copying the Claude profiles (the next step).
+- Building the profile sync now: it is the next step, sketched below so this step leaves room for it.
 - Docker for the board, macOS or Windows servers, several boards on one server.
 - The projects' own git credentials on the server; the owner sets those up.
 - Firewalls; DNS records (checked, not made).
@@ -108,6 +108,42 @@ Convenience comes from a one-command install and a service instead.
   into the panel; the setup link is shown there, once.
 - **Working with herdr directly**: `ssh agent@server`, then `herdr` attaches to the running
   server, as on any machine.
+
+## Next step: syncing the Claude profiles (sketch, decided with the owner)
+
+Not built in this step. Written down so the server mode leaves room for it.
+
+- **Manual and both ways.** The owner starts each sync and picks its direction: PC → server, or
+  server → PC. Nothing syncs on its own.
+- **A preview first.** It lists every file that would be added, changed or deleted. It also lists
+  what was held back (secrets), what was rewritten (paths), what can't go (Windows-only hooks, local
+  MCP programs), and the conflicts. The owner confirms, then it applies.
+- **Everything, at every level**, of each profile folder (`~/.claude`, `~/.claude-work`, …), except:
+  - **secrets, never in either direction:** `.credentials.json`, the OAuth part of `.claude.json`,
+    keys and tokens in `env`, MCP headers and env, and hooks. Every file is scanned for secret
+    patterns, and what is found is cut out and shown. Each side keeps its own secrets: files such as
+    `.claude.json` and `settings.json` are merged by key, never replaced whole;
+  - **what belongs to one machine only:** `cache`, `shell-snapshots`, `session-env`, `sessions`,
+    `ide`, `daemon*`, locks, `telemetry`, `debug`, `backups`, and the plugins' own files (the target
+    installs the same plugins from their marketplaces).
+- **Paths are rewritten both ways.** `projects/<encoded path>` folders are named after the project's
+  absolute path (`C:\migo\x` → `C--migo-x`).
+  - A local project is paired with its clone on the server by git remote, and its folder is renamed
+    for the target's path.
+  - Inside, the memory and the sessions go across, with the paths (`cwd`) in the transcripts
+    rewritten.
+  - `history.jsonl` and `.claude.json`'s project entries follow the same pairs.
+  - An unpaired project is listed, and the owner gives its path or leaves it out.
+- **The board's own hooks never go across**: each side's installer writes its own. Other hooks with
+  Windows paths stay behind and are listed.
+- **Conflicts.** Each side keeps the hashes of the last sync.
+  - A file changed on both sides since then is a conflict. The preview shows both, and the owner
+    picks per file; the default is to keep the target's.
+  - Deletions are shown and apply only when ticked.
+- **Size.** About 1.7 GB the first time for the owner's two profiles (mostly `projects`), packed,
+  over ssh. Afterwards only what changed.
+- **How the local board reaches `agent`**: the builder of that step decides between the password
+  each time and a key the install adds, limited to the sync's own command.
 
 ## Testing
 
