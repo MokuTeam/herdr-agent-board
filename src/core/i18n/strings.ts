@@ -12,6 +12,7 @@ import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
 import { ONESHOT_STRINGS } from './oneshot-strings.ts'
+import { PRESENCE_STRINGS } from './presence-strings.ts'
 import { PROFILE_STRINGS } from './profile-strings.ts'
 import { REMOTE_STRINGS } from './remote-strings.ts'
 import { SERVER_STRINGS } from './server-strings.ts'
@@ -1223,6 +1224,8 @@ for (const code of Object.keys(ARCHIVE_STRINGS) as Lang[]) Object.assign(STRINGS
 for (const code of Object.keys(FORK_STRINGS) as Lang[]) Object.assign(STRINGS[code], FORK_STRINGS[code])
 // And a side question to a session.
 for (const code of Object.keys(ASIDE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ASIDE_STRINGS[code])
+// And the user's presence (#172).
+for (const code of Object.keys(PRESENCE_STRINGS) as Lang[]) Object.assign(STRINGS[code], PRESENCE_STRINGS[code])
 // And the board through the owner's own domain: the tunnel and its login.
 for (const code of Object.keys(ACCESS_STRINGS) as Lang[]) Object.assign(STRINGS[code], ACCESS_STRINGS[code])
 // And setting up the server's web server from the board.

@@ -52,3 +52,11 @@
 @media (prefers-contrast: more) {
   .setup-pop { box-shadow: 0 0 0 1px var(--label-3); }
 }
+
+/* The presence switch (components/PresenceSwitch.tsx, #172): drawn as the setup note, its dot green
+   while the user is at the computer, blue while away; detection's offer beside it, quieter. */
+.presence-switch[data-state="here"] .setup-dot { background: var(--green); }
+.presence-switch[data-state="away"] .setup-dot { background: var(--blue); }
+.presence-switch[data-state="away"] { color: var(--label); }
+.presence-switch:disabled, .presence-offer:disabled { opacity: 0.6; }
+.presence-offer { color: var(--blue); }

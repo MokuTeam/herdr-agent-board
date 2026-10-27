@@ -51,6 +51,11 @@ export interface Card {
   favorite?: boolean
   /** The last question form its PreToolUse hook reported (core/held-question.ts). */
   asking?: HeldQuestion
+  /**
+   * The presence change this session was last told of (core/presence.ts: its `since`), -1 for one
+   * the board marked to hear it on its next prompt; absent where presence was never on.
+   */
+  presenceSeen?: number
   [extra: string]: unknown
 }
 
@@ -166,6 +171,8 @@ export interface Config {
    * pageWithLook); else Classic.
    */
   look?: unknown
+  /** The user's presence (`true` or an object), as config.json has it: read through core/presence.ts presenceConfig. */
+  presence?: unknown
   [extra: string]: unknown
 }
 
