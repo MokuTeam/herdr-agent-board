@@ -47,6 +47,7 @@
 // stdin to its end first (a stdin left open keeps it waiting); sudo -S's is appended to
 // `<FAKE_SSH_LOG>.stdin` as a JSON line, and a wrong one gets the flavour's recorded lines (or
 // `wrong`) and exit 1 (spec, "Checked by the spike").
+// `sudo` (path B's check of sudo's password before its pack) exits 0 once sudo took it.
 // `hang` stays up silent.
 import { createHmac } from 'node:crypto'
 import { appendFileSync, existsSync, readFileSync, writeFileSync, writeSync } from 'node:fs'
@@ -473,6 +474,8 @@ async function admin(): Promise<void> {
       }
       return end(0)
     }
+    case 'sudo':
+      return end(0)
     case 'hang':
       setInterval(() => {}, 1 << 30)
       return

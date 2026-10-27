@@ -43,6 +43,7 @@ import {
   PROBE_SCRIPT,
   readProbe,
   remoteCommand,
+  SUDO_CHECK,
   takesAskpass,
 } from '../core/server-admin.ts'
 import type { ServerFacts } from '../core/server-facts.ts'
@@ -607,7 +608,11 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     return ok()
   }
 
-  /** Path B's Apply: the receiver as root, the pack on its stdin after sudo's password; its output into the view. */
+  /**
+   * Path B's Apply: the receiver as root, the pack on its stdin after sudo's password; its output
+   * into the view. When sudo asks a password, it goes alone first (SUDO_CHECK): one try, and a
+   * wrong one never has the pack read after it as more tries.
+   */
   async function runInstall(o: Fields): Promise<Answer> {
     const pw = passwordsOf(o)
     if ('status' in pw) return pw
@@ -634,6 +639,17 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     }
     const login = await loginOf(to.bin, password)
     if (gen !== generation) return cancelled()
+    const secrets = [password ?? '', sudoPassword ?? '']
+    const sudoLine = sudoFrom === null ? '' : `${sudoFrom === 'own' ? sudoPassword : password}\n`
+    if (sudoFrom !== null) {
+      const h = await hear(to, remoteCommand(SUDO_CHECK, l.mode), sudoLine, ROUND_MS, login, secrets)
+      if (gen !== generation) return cancelled()
+      if (h.code !== 0) {
+        busy = false
+        const why = stopped(h, login, sudoFrom)
+        return refused(why.hint, why.detail)
+      }
+    }
     let script: string
     try {
       script = receiverScript({ domain: l.wanted.domain, lang: lang() })
@@ -661,7 +677,6 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       command: remoteCommand(script, l.mode),
       ...(login.password !== null && { password: true }),
     })
-    const sudoLine = sudoFrom === null ? '' : `${sudoFrom === 'own' ? sudoPassword : password}\n`
     const stdin = `${sudoLine}${Buffer.from(pack.bytes).toString('base64')}\n`
     const child = d.spawn(
       to.bin,
@@ -671,7 +686,6 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       login.password === null ? null : { password: login.password },
     )
     current = child
-    const secrets = [password ?? '', sudoPassword ?? '']
     const heard: Heard = { code: null, error: null, out: [], err: [], askpass: null, secrets }
     // drawn again a moment after lines came, not once per line
     let soon: ReturnType<typeof setTimeout> | null = null

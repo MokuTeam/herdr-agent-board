@@ -1349,6 +1349,52 @@ describe('the board installed on the server itself (path B of the board on a ser
     expect(b.setup.view().install?.link).toBeNull()
   })
 
+  test('a wrong sudo password at Install: one sudo try with it alone, the pack never sent after it; the plan kept for another try', async () => {
+    const b = await useBoard({ sudo: 'password', password: SENTINEL }, { pack: async () => PACK, key: () => KEY })
+    b.server({ fixture: fixture('debian13', 'bare'), run: { lines: ['agent-board: looking at this server.'] } })
+    expect(await b.setup.installLook({ password: SENTINEL })).toEqual(OK)
+    const p = planOf(b.setup)
+    const pack = Buffer.from(PACK.bytes).toString('base64')
+    const before = b.commands().length
+    expect(await b.setup.install({ plan: p.id, password: 'wrong one', docker: true })).toMatchObject({
+      status: 409,
+      body: { ok: false, hint: 'sudoPassword', need: 'sudoPassword' },
+    })
+    // one ssh: sudo's check, its password alone on stdin; no receiver, no pack
+    const after = b.commands().slice(before)
+    expect(after).toHaveLength(1)
+    expect(after[0]).toStartWith("env LC_ALL=C sudo -S -p '' -- ")
+    expect(carried(after[0] ?? '')).toContain('# agent-board: sudo')
+    expect(b.stdins().at(-1)).toBe('wrong one\n')
+    expect(b.stdins().some(s => s.includes(pack))).toBe(false)
+    expect(b.setup.view().phase).toBe('plan')
+    expect(b.logs).toEqual([])
+    // the right one: checked, then the pack after it
+    expect(await b.setup.install({ plan: p.id, password: SENTINEL, docker: true })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    expect(b.setup.view().phase).toBe('done')
+    expect(b.stdins().slice(-2)).toEqual([`${SENTINEL}\n`, `${SENTINEL}\n${pack}\n`])
+    expect(carried(b.commands().at(-2) ?? '')).toContain('# agent-board: sudo')
+    expect(carried(b.commands().at(-1) ?? '')).toContain('# agent-board: install')
+  })
+
+  test('as root, or with NOPASSWD: no check, the pack goes in the one ssh as before', async () => {
+    const noCheck = async (admin: AdminState): Promise<void> => {
+      const b = await useBoard(admin, { pack: async () => PACK, key: () => KEY })
+      b.server({ fixture: fixture('debian13', 'bare'), run: { lines: ['ok'] } })
+      expect(await b.setup.installLook({})).toEqual(OK)
+      const before = b.commands().length
+      expect(await b.setup.install({ plan: planOf(b.setup).id, docker: true })).toEqual(OK)
+      await b.until(['done', 'failed'])
+      const after = b.commands().slice(before).map(carried)
+      expect(after).toHaveLength(1)
+      expect(after[0]).toContain('# agent-board: install')
+      expect(after.join('\n')).not.toContain('# agent-board: sudo')
+    }
+    await noCheck({ uid: 0 })
+    await noCheck({ sudo: 'nopasswd' })
+  })
+
   test('a board that is not a git checkout has nothing to send: said, before any ssh', async () => {
     const b = await useBoard({ uid: 0 }, { pack: async () => null })
     b.server({ fixture: fixture('debian13', 'bare') })

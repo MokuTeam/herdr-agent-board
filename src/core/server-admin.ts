@@ -98,6 +98,13 @@ export const PROBE_SCRIPT = [
   '',
 ].join('\n')
 
+/**
+ * Run as root behind `sudo -S` with sudo's password alone on stdin, before path B's install sends
+ * its pack after the password: a wrong one is one try here. With the pack behind it, sudo would
+ * read the pack's line as two more tries (three failures: pam_faillock's lockout).
+ */
+export const SUDO_CHECK = ['exec </dev/null', '# agent-board: sudo', 'true', ''].join('\n')
+
 // sudo's and sudo-rs's own lines, as the spike recorded them on Debian 13 (sudo 1.9.16p2) and
 // Ubuntu 26.04 (sudo-rs 0.2.13, which names itself `sudo`). sudo-rs ignores `requiretty` (it only
 // warns of it): only classic sudo's "must have a tty" stops.
