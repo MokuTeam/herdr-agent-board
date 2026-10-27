@@ -15,6 +15,8 @@ export const REMOTE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'phones.asksFrom': '{login}, {os}',
     'phones.approve': 'Approve',
     'phones.deny': 'Deny',
+    'phones.approveThere': 'Approve it on the computer the board runs on, or there: board remote approve {id}',
+    'phones.onlyThere': 'Pairing, unpairing and turning phones off are for the computer the board runs on.',
     'phones.paired': 'Paired',
     'phones.none': 'No phone is paired yet. In the app, add this computer by its Tailscale name.',
     'phones.seen': 'last seen {when}',
@@ -75,6 +77,9 @@ export const REMOTE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'phones.asksFrom': '{login}, {os}',
     'phones.approve': 'Разрешить',
     'phones.deny': 'Отклонить',
+    'phones.approveThere':
+      'Разрешите на компьютере, где работает доска, или там же командой: board remote approve {id}',
+    'phones.onlyThere': 'Связать, отвязать и выключить телефоны можно только на компьютере, где работает доска.',
     'phones.paired': 'Связаны',
     'phones.none': 'Пока ни одного телефона. В приложении добавьте этот компьютер по имени в Tailscale.',
     'phones.seen': 'был на связи {when}',
