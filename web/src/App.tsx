@@ -73,6 +73,8 @@ export function App() {
   const [wake, setWake] = useState(false)
   // Settings → Phones…, while the remote mode is on; a phone that asks to pair opens it.
   const [phones, setPhones] = usePhonesPanel()
+  // Settings → MokuPilot…, while the board offers MokuPilot calls: where a call starts.
+  const [mokupilot, setMokupilot] = useState(false)
   // Settings → Remote access…, on the local board only: its panel is mounted at its first opening,
   // so until then the page is as it was.
   const [access, setAccess] = useState(false)
@@ -131,6 +133,7 @@ export function App() {
     () => setPhones(true),
     () => setWake(true),
     openAccess,
+    () => setMokupilot(true),
   )
   // The lanes control and the profile switch folded into pills: their choices as menus.
   const picks = useSegmentPicks(menus.menu)
@@ -198,6 +201,7 @@ export function App() {
         profiles={{ open: profiles, onClose: () => setProfiles(false) }}
         wake={{ open: wake, onClose: () => setWake(false) }}
         phones={{ open: phones, onClose: () => setPhones(false) }}
+        mokupilot={{ open: mokupilot, onClose: () => setMokupilot(false) }}
         {...(accessMounted && !remotePage() ? { access: { open: access, onClose: () => setAccess(false) } } : {})}
         archive={archive}
         sheet={{

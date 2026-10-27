@@ -73,3 +73,36 @@ test('a launch the server started, or a refusal, is said as before, and nothing 
     expect(r.said).toEqual([said])
   }
 })
+
+test('under auto the server says where the call went: a link is opened, anything not mokupilot:// is still refused', async () => {
+  const opened: string[] = []
+  const auto = run(
+    { ok: true, state: 'link', url: LINK, resolved: 'link', why: 'forwarded-other', viewer: '100.64.0.7' },
+    url => void opened.push(url),
+  )
+  await auto.go()
+  expect(opened).toEqual([LINK])
+  expect(auto.said[0]?.[1]).toBe(false)
+  for (const url of [
+    'MOKUPILOT://call',
+    ' mokupilot://call',
+    'mokupilot:call',
+    'file:///etc/passwd',
+    'data:text/html,x',
+  ]) {
+    const seen: string[] = []
+    const r = run({ ok: true, state: 'link', url, resolved: 'link', why: 'mode-link' }, u => void seen.push(u))
+    await r.go()
+    expect([url, seen]).toEqual([url, []])
+    expect(r.said[0]?.[1]).toBe(true)
+  }
+  // A launch on the board's computer under auto: said as before, nothing opens here.
+  const seen: string[] = []
+  const local = run(
+    { ok: true, state: 'launched', file: '/usr/bin/meet', resolved: 'local', why: 'loopback-direct' },
+    u => void seen.push(u),
+  )
+  await local.go()
+  expect(seen).toEqual([])
+  expect(local.said).toEqual([[translator('en')('mokupilot.started', { name: 'Acme' }), false]])
+})

@@ -11,7 +11,16 @@ import { EDGES, edgeChrome, type PanelChrome } from '../../models/panel-motion.t
 import { classNames } from '../class-names.ts'
 import { PanelHead } from './PanelHead.tsx'
 
-export type PanelKind = 'session' | 'categories' | 'schedule' | 'archive' | 'profiles' | 'wake' | 'phones' | 'access'
+export type PanelKind =
+  | 'session'
+  | 'categories'
+  | 'schedule'
+  | 'archive'
+  | 'profiles'
+  | 'wake'
+  | 'phones'
+  | 'mokupilot'
+  | 'access'
 
 /** Each panel's name for screen readers, and the session sheet's close button id. */
 const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
@@ -22,6 +31,7 @@ const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
   profiles: { label: 'prof.title' },
   wake: { label: 'wake.title' },
   phones: { label: 'phones.title' },
+  mokupilot: { label: 'mokupilot.title' },
   access: { label: 'access.title' },
 }
 
