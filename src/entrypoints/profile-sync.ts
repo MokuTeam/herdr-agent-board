@@ -29,7 +29,7 @@ import {
   sideProfiles,
 } from '../adapters/profile-sync.ts'
 import type { Move } from '../core/profile-sync/paths.ts'
-import type { ProfilePlan, Same } from '../core/profile-sync/plan.ts'
+import { type ProfilePlan, profileDir, type Same } from '../core/profile-sync/plan.ts'
 import type { CarryTo } from '../core/profile-sync/secrets.ts'
 
 /** What this program speaks: a request of another version is refused. */
@@ -42,7 +42,7 @@ const list = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v.fi
 export interface Here {
   home: string
   platform: string
-  install(): boolean
+  install(dirs: readonly string[]): boolean
 }
 
 /** How this side sends to the other (its system and home in the request), from here. */
@@ -118,7 +118,7 @@ async function apply(
   // the deletions ticked, once every file has come
   for (const d of list(req.deletions)) target.remove(text(d.profile), text(d.to))
   const { created } = target.finish()
-  const install = created.length ? here.install() : null
+  const install = created.length ? here.install(created.map(n => profileDir(here.home, n, here.platform))) : null
   await out.send({ t: 'done', files, bytes, created, install })
 }
 
@@ -154,16 +154,25 @@ export async function serve(op: string, input: Readable, output: Writable, here:
   }
 }
 
-/** The board's install action, as the board's user: the hooks into the profiles the sync made. */
-function installAction(): boolean {
-  const r = Bun.spawnSync([process.execPath, join(ROOT, 'src', 'entrypoints', 'install.ts')], {
-    cwd: ROOT,
-    stdin: 'ignore',
-    stdout: 'ignore',
-    stderr: 'ignore',
-    timeout: 5 * 60_000,
-  })
-  return r.exitCode === 0
+/**
+ * The board's install action, as the board's user, once per profile the sync made, with
+ * CLAUDE_CONFIG_DIR pointing at it: the install shows the profile its env points to, so its hooks
+ * go in, whatever the board's config shows (a profile found anew is added hidden there).
+ */
+function installAction(dirs: readonly string[]): boolean {
+  let ok = true
+  for (const dir of dirs) {
+    const r = Bun.spawnSync([process.execPath, join(ROOT, 'src', 'entrypoints', 'install.ts')], {
+      cwd: ROOT,
+      env: { ...process.env, CLAUDE_CONFIG_DIR: dir },
+      stdin: 'ignore',
+      stdout: 'ignore',
+      stderr: 'ignore',
+      timeout: 5 * 60_000,
+    })
+    ok &&= r.exitCode === 0
+  }
+  return ok
 }
 
 if (import.meta.main)

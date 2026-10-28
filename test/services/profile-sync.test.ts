@@ -23,6 +23,7 @@ let pcProject = ''
 let srvClone = ''
 const saved = process.env.LOCALAPPDATA
 let installs = 0
+const installedInto: string[] = []
 let noBoard = false
 let asProcess = false
 const scripts: string[] = []
@@ -78,8 +79,9 @@ function spawn(_bin: string, args: string[]): RemoteStream {
     done = serve(op, stdin, stdout, {
       home: srv,
       platform: process.platform,
-      install: () => {
+      install: dirs => {
         installs++
+        installedInto.push(...dirs)
         return true
       },
     }).then(code => ({ code, error: null }))
@@ -259,6 +261,7 @@ describe('syncing the profiles with the board on the server', () => {
     expect(read(join(srv, '.claude-work', 'CLAUDE.md'))).toBe('# work\n')
     expect(v.result?.created).toEqual(['work'])
     expect(installs).toBe(1)
+    expect(installedInto).toEqual([join(srv, '.claude-work')])
     expect(existsSync(join(srv, '.claude', 'projects', projectFolder(pcProject)))).toBe(false)
     // again: nothing changed, nothing goes
     const again = await sync.look({ direction: 'up', password: 'pw' })
