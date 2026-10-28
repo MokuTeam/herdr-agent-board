@@ -184,6 +184,8 @@ export interface Config {
   presence?: unknown
   /** Tasks (#202, `true` or an object), as config.json has it: read through core/todos.ts todosConfig. */
   todos?: unknown
+  /** The peer network (#231, an object with the hub's ws:// or wss:// address), as config.json has it: read through core/team.ts teamConfig. */
+  team?: unknown
   [extra: string]: unknown
 }
 

@@ -228,6 +228,27 @@ export function editTodos(body: unknown): EditResult {
   return { ok: true }
 }
 
+/**
+ * Join the peer network (#231): config.json's `team` becomes { hub, name }, its other fields kept.
+ * `board team join` calls it once the hub has said welcome. The running board picks it up as any
+ * edit (liveConfig).
+ */
+export function joinTeam(team: { hub: string; name: string }): EditResult {
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  raw.team = { ...(isRecord(raw.team) ? raw.team : {}), hub: team.hub, name: team.name }
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/** Leave it: `team` goes out of config.json. The key and the messages stay in the state folder. */
+export function leaveTeam(): EditResult {
+  const raw = readConfigFile()
+  if (!raw || !('team' in raw)) return { ok: true }
+  delete raw.team
+  writeRaw(raw)
+  return { ok: true }
+}
+
 /** Why a wake switch's value is refused, in the panel's words (err.wakeSetting). */
 const wakeRefusal = (field: string, why: string): EditResult => ({
   ok: false,
