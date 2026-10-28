@@ -70,6 +70,49 @@
 .lane-time.problem { color: var(--red, #d33); box-shadow: inset 0 0 0 1px currentColor; }
 .lane-time:active { transform: scale(0.97); }
 
+/* The editor: an entry opened in place, its fields in two columns where there is room. */
+.time-open {
+  display: contents;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.time-editable { cursor: pointer; border-radius: 6px; }
+.time-editable:hover .time-what { color: var(--accent); }
+.time-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 2px 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--bg, var(--fill-1));
+  box-shadow: inset 0 0 0 1px var(--separator, var(--fill-3));
+  animation: time-open 0.18s ease-out;
+}
+@keyframes time-open { from { opacity: 0; transform: translateY(-4px); } }
+.time-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: 12px; color: var(--label-2); }
+.time-field input, .time-field select, .time-field textarea {
+  min-width: 0;
+  padding: 5px 7px;
+  border: 1px solid var(--separator, var(--fill-3));
+  border-radius: 6px;
+  background: var(--fill-1, transparent);
+  color: var(--label);
+  font: inherit;
+  font-size: 13px;
+}
+.time-field textarea { resize: vertical; }
+.time-field-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.time-field-grow { flex: 1; }
+.time-steps { display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.time-steps strong { min-width: 3.2em; text-align: center; color: var(--label); }
+.time-delete { margin-left: auto; color: var(--red); }
+.time-raise { flex: none; padding: 2px 8px; font-size: 12px; }
+.time-add { display: flex; flex-direction: column; }
+
 @media (prefers-reduced-motion: reduce) {
+  .time-editor { animation: none; }
   .time-days { transition: none !important; transform: none !important; }
 }

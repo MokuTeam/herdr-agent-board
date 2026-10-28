@@ -16,6 +16,7 @@
 //   board time projects [<lane>]
 //   board time import <file> --tz <zone> [--map "<Toggl client>=<lane>"]... [--date-format dmy|mdy]
 //                  [--dry-run] [--update]
+//   board time export [--date <d> | --from <d> --to <d>] [--client <lane>]   CSV of the entries
 import { readFileSync } from 'node:fs'
 import { addTimeProjects } from '../adapters/config-file.ts'
 import { type BoardDb, openDb } from '../adapters/db.ts'
@@ -415,11 +416,44 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       )
       return
     }
+    case 'export': {
+      const date = a.one('--date')
+      const from = a.one('--from') ?? date ?? today
+      const to = a.one('--to') ?? date ?? from
+      if (!isDate(from) || !isDate(to)) throw new TimeError('time.err.usage')
+      const db = readable()
+      const list = db ? listEntries(db, { from, to, client: a.one('--client') }) : []
+      db?.close()
+      out(csvOf(list))
+      return
+    }
     case 'import':
       return importCmd(a, conf, writable, readable, print)
     default:
       throw new TimeError('time.err.usage')
   }
+}
+
+/** A CSV field: quoted when it holds a comma, a quote or a line break, its quotes doubled. */
+const csvField = (v: string): string => (/[",\r\n]/.test(v) ? `"${v.replaceAll('"', '""')}"` : v)
+
+/** Entries as CSV, a header first: what a spreadsheet or another tool reads. */
+export function csvOf(list: readonly TimeEntry[]): string {
+  const rows = [['id', 'date', 'client', 'project', 'description', 'tags', 'start', 'stop', 'hours', 'by']]
+  for (const e of list)
+    rows.push([
+      e.id,
+      e.date,
+      e.client,
+      e.project,
+      e.description,
+      e.tags.join(' '),
+      e.start,
+      e.stop,
+      String(Math.round((secondsOf(e) / 3600) * 10000) / 10000),
+      typeof e.by === 'string' ? e.by : e.by.name || e.by.key,
+    ])
+  return rows.map(r => r.map(csvField).join(',')).join('\n')
 }
 
 async function importCmd(

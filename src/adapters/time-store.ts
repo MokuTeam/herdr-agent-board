@@ -322,6 +322,8 @@ export interface EntryChange {
   seconds?: number
   addTags?: string[]
   removeTags?: string[]
+  /** The whole set of tags instead (the panel sends what its field holds). */
+  tags?: string[]
   newProject?: boolean
 }
 
@@ -383,7 +385,7 @@ export function editEntry(
       if (ch.seconds !== undefined) stop = start + ch.seconds * 1000
       else if (ch.start !== undefined && ch.stop === undefined) stop = start + secondsOf(e) * 1000
       checkTimes(start, stop)
-      const tags = new Set(e.tags)
+      const tags = new Set(ch.tags ? ch.tags.map(cleanTag).filter(Boolean) : e.tags)
       for (const tag of ch.addTags ?? []) if (cleanTag(tag)) tags.add(cleanTag(tag))
       for (const tag of ch.removeTags ?? []) tags.delete(cleanTag(tag))
       const moved = ch.start !== undefined || client !== e.client

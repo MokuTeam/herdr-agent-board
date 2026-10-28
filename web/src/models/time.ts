@@ -12,6 +12,9 @@ export interface TimeDay {
   entries: (TimeEntry & { seconds: number })[]
   /** config.json's `time` does not check out: what, in a line. */
   problems?: string | null
+  /** The lanes that take time (null: every lane), and each one's projects (null: any). */
+  clients?: string[] | null
+  projects?: Record<string, string[] | null>
 }
 
 /** A day's answer shows under that day's name only: another day's, arriving late, is not shown. */
@@ -94,4 +97,139 @@ export function swipeDay(dx: number, ms: number, width: number): -1 | 0 | 1 {
   const fast = Math.abs(dx) > 40 && Math.abs(dx) / Math.max(ms, 1) > 0.5
   if (Math.abs(dx) < width / 3 && !fast) return 0
   return dx > 0 ? -1 : 1
+}
+
+// ------------------------------------------------------------------ the editor
+
+/** An entry as the editor holds it: the times as this browser's clock shows them (HH:MM). */
+export interface Draft {
+  client: string
+  project: string
+  description: string
+  /** The work date (a change moves the entry). */
+  date: string
+  start: string
+  stop: string
+  /** Tags as typed: words, commas between them. */
+  tags: string
+}
+
+const pad = (n: number): string => String(n).padStart(2, '0')
+/** An instant's date on this browser's clock. */
+export const localDate = (at: number): string => {
+  const d = new Date(at)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+/** An instant's HH:MM on this browser's clock. */
+export const localClock = (at: number): string => {
+  const d = new Date(at)
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+export function draftOf(
+  e: Pick<TimeEntry, 'client' | 'project' | 'description' | 'date' | 'start' | 'stop' | 'tags'>,
+): Draft {
+  return {
+    client: e.client,
+    project: e.project,
+    description: e.description,
+    date: e.date,
+    start: localClock(Date.parse(e.start)),
+    stop: localClock(Date.parse(e.stop)),
+    tags: e.tags.join(', '),
+  }
+}
+
+/** A new entry's draft: half an hour ending now on today, else 09:00 to 09:30 on that day. */
+export function newDraft(client: string, project: string, date: string, now: number = Date.now()): Draft {
+  const today = localDate(now)
+  const end = Math.floor(now / 60_000) * 60_000
+  return {
+    client,
+    project,
+    description: '',
+    date,
+    start: date === today ? localClock(end - 30 * 60_000) : '09:00',
+    stop: date === today ? localClock(end) : '09:30',
+    tags: '',
+  }
+}
+
+/** HH:MM on a day (YYYY-MM-DD) of this browser's clock as an instant; NaN for a bad one. */
+function at(day: string, clock: string): number {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(clock)
+  const [y, mo, d] = day.split('-').map(Number) as [number, number, number]
+  if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) return Number.NaN
+  return new Date(y, mo - 1, d, Number(m[1]), Number(m[2]), 0, 0).getTime()
+}
+
+/** The draft's start and stop on `day` (this browser's clock); a stop at or before the start is the next day's. Null when a time is not one. */
+export function draftTimes(d: Pick<Draft, 'start' | 'stop'>, day: string): { start: number; stop: number } | null {
+  const start = at(day, d.start)
+  let stop = at(day, d.stop)
+  if (Number.isNaN(start) || Number.isNaN(stop)) return null
+  if (stop <= start) stop += 86_400_000
+  return { start, stop }
+}
+
+/** The draft's duration in seconds, or null. */
+export function draftSeconds(d: Pick<Draft, 'start' | 'stop'>): number | null {
+  const times = draftTimes(d, '2026-01-15')
+  return times ? (times.stop - times.start) / 1000 : null
+}
+
+/** The stop moved by `minutes`, the duration kept at a minute at least. */
+export function nudge(d: Draft, minutes: number): Draft {
+  const times = draftTimes(d, '2026-01-15')
+  if (!times) return d
+  const stop = Math.max(times.start + 60_000, times.stop + minutes * 60_000)
+  return { ...d, stop: localClock(stop) }
+}
+
+export const tagList = (s: string): string[] =>
+  s
+    .split(',')
+    .map(x => x.trim().replace(/^#/, ''))
+    .filter(Boolean)
+
+/**
+ * What saving a draft of an entry sends: the edit of what changed (the times on the day the
+ * entry's start falls on this browser's clock), then a move when the work date changed; nothing
+ * for a draft as the entry is.
+ */
+export function changesOf(
+  e: Pick<TimeEntry, 'id' | 'rev' | 'client' | 'project' | 'description' | 'date' | 'start' | 'stop' | 'tags'>,
+  d: Draft,
+): { edit: Record<string, unknown> | null; move: string | null } | null {
+  const was = draftOf(e)
+  const edit: Record<string, unknown> = {}
+  if (d.description.trim() !== was.description) edit.description = d.description
+  if (d.project !== was.project) edit.project = d.project
+  if (d.start !== was.start || d.stop !== was.stop) {
+    const times = draftTimes(d, localDate(Date.parse(e.start)))
+    if (!times) return null
+    edit.start = new Date(times.start).toISOString()
+    edit.stop = new Date(times.stop).toISOString()
+  }
+  const tags = tagList(d.tags)
+  if (tags.join(',') !== e.tags.join(',')) edit.tags = tags
+  return {
+    edit: Object.keys(edit).length ? { op: 'edit', id: e.id, rev: e.rev, ...edit } : null,
+    move: d.date !== e.date ? d.date : null,
+  }
+}
+
+/** What saving a new entry's draft sends; null when its times are not times. */
+export function addOf(d: Draft): Record<string, unknown> | null {
+  const times = draftTimes(d, d.date)
+  if (!times) return null
+  return {
+    op: 'add',
+    client: d.client,
+    project: d.project,
+    description: d.description,
+    tags: tagList(d.tags),
+    start: new Date(times.start).toISOString(),
+    stop: new Date(times.stop).toISOString(),
+  }
 }

@@ -4,9 +4,11 @@
 import { Database } from 'bun:sqlite'
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { dbFile, openDb } from '../../src/adapters/db.ts'
 import { addEntry } from '../../src/adapters/time-store.ts'
+import { makeKey } from '../../src/core/backup-file.ts'
 import { dateIn, timeConfig } from '../../src/core/time.ts'
 import { timeToday } from '../../src/server/routes/time.ts'
 import { serveBoard } from '../support/board-server.ts'
@@ -106,4 +108,65 @@ test('a time read that fails does not stop the board: the line is empty, said on
   }
   assert.equal(errors.length, 1, 'said once, not on every publish')
   assert.equal(timeToday({ time: { ...conf, zone: 'Nowhere/Here' } }, now)?.problems, true)
+})
+
+test('changes as the owner: add, a trim with the revision read, a stale one refused, a move, remove and restore', async () => {
+  const box = await sandbox()
+  const folder = join(box.dir, 'Sync')
+  mkdirSync(folder)
+  const state = join(box.dir, 'state', 'herdr', 'plugins', 'agent-board')
+  mkdirSync(join(state, 'backup'), { recursive: true })
+  writeFileSync(
+    join(state, 'backup', 'backup-key.json'),
+    JSON.stringify(makeKey('correct horse battery', 1, { logN: 10, r: 8, p: 1 })),
+  )
+  const { url } = await serveBoard(box, { language: 'en', time: TIME, backup: { folder } })
+  const post = async (body: Record<string, unknown>, headers: Record<string, string> = { 'x-board': '1' }) => {
+    const res = await fetch(`${url}/api/time`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    })
+    return [res.status, await json(res)] as const
+  }
+  const add = {
+    op: 'add',
+    client: 'client-a',
+    project: 'Support',
+    description: 'Case 10001 X: work',
+    start: '2026-10-28T13:00:00Z',
+    stop: '2026-10-28T14:30:00Z',
+  }
+  assert.notEqual((await post(add, {}))[0], 200, 'the board’s header is required')
+  const [status, made] = await post(add)
+  assert.equal(status, 200)
+  const entry = made.entry as { id: string; rev: number; by: unknown; seconds: number }
+  assert.equal(entry.by, 'user')
+  const [, trimmed] = await post({ op: 'edit', id: entry.id, rev: entry.rev, stop: '2026-10-28T14:00:00Z' })
+  assert.equal((trimmed.entry as { seconds: number }).seconds, 3600)
+  const [stale, why] = await post({ op: 'edit', id: entry.id, rev: entry.rev, description: 'Case 10001 X: other' })
+  assert.equal(stale, 409)
+  assert.match(String(why.error), /changed since/)
+  const [, moved] = await post({ op: 'move', id: entry.id, date: '2026-10-30' })
+  assert.equal((moved.entry as { date: string }).date, '2026-10-30')
+  assert.equal((await post({ op: 'remove', id: entry.id }))[0], 200)
+  const day = await json(await fetch(`${url}/api/time?date=2026-10-30`))
+  assert.deepEqual(day.entries, [])
+  assert.deepEqual(day.projects, { 'client-a': ['Support'] })
+  assert.equal((await post({ op: 'restore', id: entry.id }))[0], 200)
+  assert.equal(((await json(await fetch(`${url}/api/time?date=2026-10-30`))).entries as unknown[]).length, 1)
+  assert.equal((await post({ op: 'edit', id: 'nope0000', description: 'x' }))[0], 404)
+  assert.equal((await post({ ...add, project: 'Suport' }))[0], 400)
+})
+
+test('no change before the database has a backup target and a passphrase', async () => {
+  const box = await sandbox()
+  const { url } = await serveBoard(box, { language: 'en', time: TIME })
+  const res = await fetch(`${url}/api/time`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-board': '1' },
+    body: JSON.stringify({ op: 'remove', id: 'x' }),
+  })
+  assert.equal(res.status, 409)
+  assert.match(String((await json(res)).error), /backed up/)
 })

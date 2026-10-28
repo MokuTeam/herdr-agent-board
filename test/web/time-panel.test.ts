@@ -4,14 +4,20 @@ import { expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { DayLine } from '../../src/core/time.ts'
 import {
+  addOf,
   askedInTurn,
   byText,
+  changesOf,
   dateName,
   dayFor,
+  draftOf,
+  draftSeconds,
   hm,
   hoursText,
   isTimeDay,
   lineLabel,
+  newDraft,
+  nudge,
   ruleText,
   shiftDate,
   swipeDay,
@@ -97,4 +103,58 @@ test('Russian: counts in all three forms, and the owner or the import named as s
   expect(byText({ by: 'import' }, ru)).toBe('импорт')
   // the sentence that says whose it is keeps its own form
   expect(ru('time.err.notYours', { id: 'ab12cd34', by: ru('time.by.user') })).toContain('принадлежит владельцу')
+})
+
+test('the editor: a draft on this browser’s clock, what saving it sends, the 15-minute steps', () => {
+  const e = {
+    id: 'e1',
+    rev: 3,
+    client: 'client-a',
+    project: 'Support',
+    description: 'Case 10001 X: work',
+    date: '2026-10-28',
+    start: new Date(2026, 9, 28, 9, 0).toISOString(),
+    stop: new Date(2026, 9, 28, 10, 30).toISOString(),
+    tags: ['deferred'],
+  }
+  const d = draftOf(e)
+  expect([d.start, d.stop, d.tags]).toEqual(['09:00', '10:30', 'deferred'])
+  expect(draftSeconds(d)).toBe(5400)
+  // nothing changed: nothing sent
+  expect(changesOf(e, d)).toEqual({ edit: null, move: null })
+  // a trim: the times on the entry's own day, the revision read
+  const trimmed = nudge(d, -15)
+  expect(trimmed.stop).toBe('10:15')
+  expect(changesOf(e, trimmed)?.edit).toEqual({
+    op: 'edit',
+    id: 'e1',
+    rev: 3,
+    start: new Date(2026, 9, 28, 9, 0).toISOString(),
+    stop: new Date(2026, 9, 28, 10, 15).toISOString(),
+  })
+  // a step never takes the duration under a minute
+  expect(draftSeconds(nudge({ ...d, stop: '09:10' }, -15))).toBe(60)
+  // tags and a new date: the edit, then the move
+  const moved = changesOf(e, { ...d, tags: '#deferred, waiting', date: '2026-10-30' })
+  expect(moved?.edit).toEqual({ op: 'edit', id: 'e1', rev: 3, tags: ['deferred', 'waiting'] })
+  expect(moved?.move).toBe('2026-10-30')
+  // a stop before the start is the next day's
+  expect(draftSeconds({ start: '23:30', stop: '00:15' })).toBe(45 * 60)
+  expect(changesOf(e, { ...d, start: '25:00' })).toBe(null)
+})
+
+test('a new entry: half an hour ending now today, 09:00 to 09:30 on another day; what adding it sends', () => {
+  const now = new Date(2026, 9, 28, 14, 7, 30).getTime()
+  expect(newDraft('client-a', 'Support', '2026-10-28', now)).toMatchObject({ start: '13:37', stop: '14:07' })
+  const other = newDraft('client-a', 'Support', '2026-10-27', now)
+  expect([other.start, other.stop]).toEqual(['09:00', '09:30'])
+  expect(addOf({ ...other, description: 'Case 10001 X: work', tags: 'a, b' })).toEqual({
+    op: 'add',
+    client: 'client-a',
+    project: 'Support',
+    description: 'Case 10001 X: work',
+    tags: ['a', 'b'],
+    start: new Date(2026, 9, 27, 9, 0).toISOString(),
+    stop: new Date(2026, 9, 27, 9, 30).toISOString(),
+  })
 })

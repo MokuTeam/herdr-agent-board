@@ -1857,6 +1857,7 @@ board time list [--date <d> | --from <d> --to <d>] [--client <lane>] [--tag <t>]
 board time day [<d>] [--client <lane>]      the day as billed: lines, raw and billed
 board time projects [<lane>]
 board time import <file> --tz <zone> [--map "<Toggl client>=<lane>"]... [--date-format dmy|mdy] [--dry-run] [--update]
+board time export [--date <d> | --from <d> --to <d>] [--client <lane>]   the entries as CSV
 ```
 
 Times are ISO with an offset (`2026-10-28T09:00:00+03:00`), or this computer's clock (`9:30`,
@@ -1903,9 +1904,17 @@ what of config.json checks out, and are not to be billed from.
 by client as it will be billed, on today each time: the day before and after and Today, the
 clients as chips with their billed hours, each client's lines with their entries (times on this
 browser's clock, the description, the project, the session that logged it: a tap opens its sheet),
-the held ones apart, and the totals. Read only for now: the command changes entries. On a phone
+the held ones apart, and the totals. On a phone
 (the remote page) it is the full-height sheet, and a sideways swipe goes to the day before or
 after. A day's figures show only under that day's name, whatever order the answers come in.
+
+**Changing them on the board.** A tap on an entry opens it in place: description, project (the
+client's list), start and stop on this browser's clock with the duration between them and -15 and
++15 steps, the work date (a new one moves it), tags. Delete asks nothing: the toast's Undo brings
+the entry back. "Add entry" under the day adds one. A line rounded up offers "Raise to": its last
+entry lengthened by the gap, for a client that wants the entries themselves to add up to the
+billed figure. The board changes them as the owner, with the revision it read: an entry another
+session changed since is refused, and the panel says so.
 
 **From Toggl.** `board time import <file>` takes Toggl's Detailed report exported as CSV from its
 web page (no API call, so no quota), or its JSON (API v9 time entries with project and client

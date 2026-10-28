@@ -1,6 +1,6 @@
 // `board time …` (#233, entrypoints/time-cli.ts) as an agent runs it: JSON out, refusals that say
 // what to do, writes only once the database is backed up somewhere.
-import { test } from 'bun:test'
+import { expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -413,4 +413,23 @@ test('import: two rows of one file with the same lane and start: the dry run say
   assert.deepEqual([dry.new, dry.changed.length], [1, 1])
   const done = await jsonOf(cfg, ['import', csv, ...map])
   assert.deepEqual([done.added, done.changed.length], [1, 1])
+})
+
+test('export: the entries of a range as CSV, quoted where a field needs it', async () => {
+  const { cfg } = await setUp()
+  await run(cfg, [
+    'add',
+    '--project',
+    'Support',
+    '--start',
+    '2026-10-28T09:00:00-04:00',
+    '--minutes',
+    '90',
+    'Case 10001 X: fixed it, "finally"',
+  ])
+  const csv = (await run(cfg, ['export', '--date', '2026-10-28'])).join('\n').split('\n')
+  expect(csv[0]).toBe('id,date,client,project,description,tags,start,stop,hours,by')
+  expect(csv[1]).toMatch(
+    /^[0-9a-f]{8},2026-10-28,client-a,Support,"Case 10001 X: fixed it, ""finally""",,2026-10-28T13:00:00Z,2026-10-28T14:30:00Z,1\.5,Session one$/,
+  )
 })

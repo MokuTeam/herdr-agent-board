@@ -1,9 +1,23 @@
-// Time entries for the page (#233, core/time.ts, adapters/time-store.ts): GET /api/time?date=<d>
-// [&client=<lane>] answers that day by client, as billed, with its entries. Not local-only: the
-// board through the remote page and a paired phone read it as they read the cards. While time is
-// off it answers 409.
-import { openDb } from '../../adapters/db.ts'
-import { listEntries } from '../../adapters/time-store.ts'
+// Time entries for the page (#233, core/time.ts, adapters/time-store.ts). GET /api/time?date=<d>
+// [&client=<lane>] answers that day by client, as billed, with its entries and what an entry may
+// be (the lanes that take time, their projects). POST /api/time { op: add | edit | move | remove |
+// restore, … } changes one as the owner, who may change any; an edit or a move says the revision
+// it read (`rev`) and is refused when the entry changed since. Not local-only: the board through
+// the remote page and a paired phone read and change them as they do the cards. While time is off
+// both answer 409; nothing is written before the database has a backup target and a passphrase.
+import { readKey } from '../../adapters/backup-store.ts'
+import { type BoardDb, DbError, openDb } from '../../adapters/db.ts'
+import { isRecord } from '../../adapters/json-store.ts'
+import {
+  addEntry,
+  editEntry,
+  listEntries,
+  moveEntry,
+  removeEntry,
+  restoreEntry,
+  TimeError,
+} from '../../adapters/time-store.ts'
+import { activeTargets, backupConfig } from '../../core/backup.ts'
 import { t } from '../../core/lang.ts'
 import type { TimePayload } from '../../core/payload.ts'
 import {
@@ -13,6 +27,7 @@ import {
   isDate,
   problemsText,
   secondsOf,
+  type TimeConfig,
   type TimeEntry,
   timeConfig,
   zoneOf,
@@ -28,7 +43,13 @@ export interface TimeDayView {
   entries: (TimeEntry & { seconds: number })[]
   /** config.json's `time` does not check out: the figures may be wrong, and no entry is written. */
   problems: string | null
+  /** The lanes that take time (null: every lane) and each one's projects (null: any). */
+  clients: string[] | null
+  projects: Record<string, string[] | null>
 }
+
+const projectsOf = (conf: TimeConfig): Record<string, string[] | null> =>
+  Object.fromEntries(Object.entries(conf.clients ?? {}).map(([id, c]) => [id, c.projects]))
 
 /** One day by client, as billed (every client with entries that day, or the one asked). */
 export function timeDay(cfg: Pick<Config, 'time'>, date: string, client?: string): TimeDayView | null {
@@ -55,6 +76,8 @@ export function timeDay(cfg: Pick<Config, 'time'>, date: string, client?: string
       ),
     ),
     entries: entries.map(e => ({ ...e, seconds: secondsOf(e) })),
+    clients: conf.clients ? Object.keys(conf.clients) : null,
+    projects: projectsOf(conf),
   }
 }
 
@@ -96,6 +119,77 @@ export function timeToday(cfg: Pick<Config, 'time'>, now: number = Date.now()): 
   }
 }
 
+const text = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
+const instant = (v: unknown): number | undefined => {
+  if (typeof v !== 'string') return undefined
+  const at = Date.parse(v)
+  return Number.isNaN(at) ? undefined : at
+}
+const tagsOf = (v: unknown): string[] | undefined =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : undefined
+
+/** One change as the owner; the entry after it. */
+function change(db: BoardDb, conf: TimeConfig, b: Record<string, unknown>): TimeEntry {
+  const id = text(b.id) ?? ''
+  const rev = typeof b.rev === 'number' && Number.isInteger(b.rev) ? b.rev : undefined
+  const o = rev !== undefined ? { expect: rev } : {}
+  switch (b.op) {
+    case 'add': {
+      const start = instant(b.start)
+      const stop = instant(b.stop)
+      if (start === undefined || stop === undefined) throw new TimeError('time.err.noDuration')
+      return addEntry(
+        db,
+        conf,
+        {
+          client: text(b.client) ?? '',
+          project: text(b.project) ?? '',
+          description: text(b.description) ?? '',
+          tags: tagsOf(b.tags) ?? [],
+          start,
+          stop,
+          startGiven: true,
+          newProject: b.newProject === true,
+        },
+        'user',
+      ).entry
+    }
+    case 'edit': {
+      const start = instant(b.start)
+      const stop = instant(b.stop)
+      const description = text(b.description)
+      const project = text(b.project)
+      const tags = tagsOf(b.tags)
+      return editEntry(
+        db,
+        conf,
+        id,
+        {
+          ...(description !== undefined && { description }),
+          ...(project !== undefined && { project }),
+          ...(start !== undefined && { start }),
+          ...(stop !== undefined && { stop }),
+          ...(tags !== undefined && { tags }),
+          newProject: b.newProject === true,
+        },
+        'user',
+        o,
+      )
+    }
+    case 'move': {
+      const date = text(b.date) ?? ''
+      if (!isDate(date)) throw new TimeError('time.err.usage')
+      return moveEntry(db, conf, id, date, 'user', o)
+    }
+    case 'remove':
+      return removeEntry(db, id, 'user')
+    case 'restore':
+      return restoreEntry(db, id, 'user')
+    default:
+      throw new TimeError('time.err.usage')
+  }
+}
+
 export function timeRoutes(cfg: Config): Route[] {
   return [
     {
@@ -112,6 +206,35 @@ export function timeRoutes(cfg: Config): Route[] {
           return json(200, timeDay(cfg, date, client))
         } catch (err) {
           return json(500, { ok: false, error: err instanceof Error ? err.message : String(err) })
+        }
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/time',
+      guard: ['board-header', 'origin'],
+      async handle(_req, ctx) {
+        const conf = timeConfig(cfg.time)
+        if (!conf) return json(409, { ok: false, error: t('time.err.off') })
+        if (!activeTargets(backupConfig(cfg.backup)).length || !readKey())
+          return json(409, { ok: false, error: t('time.err.noBackup') })
+        const raw = await ctx.rawBody()
+        const b = isRecord(raw) ? raw : {}
+        let db: BoardDb | null = null
+        try {
+          db = openDb()
+          if (!db) return json(500, { ok: false, error: t('time.err.noDb') })
+          const entry = change(db, conf, b)
+          return json(200, { ok: true, entry: { ...entry, seconds: secondsOf(entry) } })
+        } catch (err) {
+          if (err instanceof TimeError) {
+            const status = err.key === 'time.err.gone' ? 404 : err.key === 'time.err.changedSince' ? 409 : 400
+            return json(status, { ok: false, error: err.message })
+          }
+          if (err instanceof DbError) return json(503, { ok: false, error: err.message })
+          return json(500, { ok: false, error: err instanceof Error ? err.message : String(err) })
+        } finally {
+          db?.close()
         }
       },
     },

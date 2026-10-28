@@ -8,21 +8,31 @@
 // under that day's name. While config.json's `time` does not check out, it says so first. On a
 // phone (the full-height sheet) a horizontal swipe changes the day: the list follows the finger
 // and settles back, or goes to the day it was swiped to; with reduced motion, it only changes.
+// Where the board can be changed: a tap on an entry opens it in place (EntryEditor.tsx); Delete
+// asks nothing and the toast's Undo brings it back; "Add entry" under the day; a line rounded up
+// offers "Raise to" (its last entry lengthened by the gap, for a client that wants the entries
+// themselves to add up to the billed figure). Each change goes as the owner (POST /api/time) with
+// the revision it read, and the day is read again after it.
 import { type PointerEvent, useCallback, useEffect, useRef, useState } from 'react'
-import { errorText, replyOf } from '../../api/client.ts'
+import { errorText, postJson, replyOf } from '../../api/client.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { reducedMotion } from '../../models/spring.ts'
 import {
+  addOf,
   askedInTurn,
   byText,
+  changesOf,
+  type Draft,
   dateName,
   dayFor,
+  draftOf,
   entryTimes,
   hm,
   hoursText,
   isTimeDay,
   lineLabel,
+  newDraft,
   ruleText,
   shiftDate,
   swipeDay,
@@ -31,6 +41,7 @@ import {
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { Panel } from '../panel/Panel.tsx'
+import { EntryEditor } from './EntryEditor.tsx'
 
 export interface TimePanelProps {
   open: boolean
@@ -42,7 +53,7 @@ export interface TimePanelProps {
 
 export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   const t = useT()
-  const { data, toast, dispatch } = useBoardContext()
+  const { data, toast, dispatch, canEdit } = useBoardContext()
   const latest = useLatest({ t, toast })
   const today = data?.time?.date ?? localToday()
   const seq = data?.time?.seq ?? 0
@@ -85,6 +96,67 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   useEffect(() => {
     if (open) void ask(date)
   }, [open, date, seq, ask])
+
+  // the entry open in place ('new' for one being added), what is being sent, and the board's refusal
+  const [editing, setEditing] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
+  const open1 = (id: string | null) => {
+    setEditing(id)
+    setEditError(null)
+  }
+  /** One change as the owner; the day read again after it; throws the board's refusal. */
+  const post = async (body: Record<string, unknown>) => {
+    const res = await postJson('/api/time', body)
+    const reply = (await replyOf(res)) as { ok?: boolean; error?: string }
+    if (!res.ok || reply.ok === false) throw new Error(reply.error || t('err.status', { code: res.status }))
+    await ask(date)
+  }
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true)
+    setEditError(null)
+    try {
+      await fn()
+      setEditing(null)
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const save = (e: TimeDay['entries'][number], d: Draft) =>
+    run(async () => {
+      const ch = changesOf(e, d)
+      if (!ch) throw new Error(t('time.edit.badTime'))
+      if (ch.edit) await post(ch.edit)
+      if (ch.move) await post({ op: 'move', id: e.id, date: ch.move })
+    })
+  const add = (d: Draft) =>
+    run(async () => {
+      const body = addOf(d)
+      if (!body) throw new Error(t('time.edit.badTime'))
+      await post(body)
+    })
+  const remove = (e: TimeDay['entries'][number]) =>
+    run(async () => {
+      await post({ op: 'remove', id: e.id })
+      toast(t('time.edit.removed'), false, {
+        action: {
+          label: t('time.edit.undo'),
+          run: () => void post({ op: 'restore', id: e.id }).catch(err => toast(errorText(err, t), true)),
+        },
+      })
+    })
+  const raise = (lastId: string, gap: number) => {
+    const e = entries.get(lastId)
+    if (!e) return
+    void run(async () => {
+      await post({ op: 'edit', id: e.id, rev: e.rev, stop: new Date(Date.parse(e.stop) + gap * 1000).toISOString() })
+    }).then(() => undefined)
+  }
+  const takers = day?.clients ?? (data?.categories ?? []).map(c => c.id)
+  const projectsOf = (c: string): string[] | null => day?.projects?.[c] ?? null
+  const clientsForNew = client ? [client] : takers
 
   const go = (days: number) => setDate(d => shiftDate(d, days))
   const swipe = useSwipe(go)
@@ -178,15 +250,49 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
                       {hm(l.seconds)} → <strong>{hoursText(l.billedSeconds, t)}</strong>
                     </span>
                     <span className="sheet-meta time-rule">{ruleText(l, t)}</span>
+                    {canEdit && l.round === 'up' && l.billedSeconds > l.seconds && l.entries.length > 0 && (
+                      <button
+                        type="button"
+                        className="button time-raise"
+                        disabled={busy}
+                        onClick={() => raise(l.entries[l.entries.length - 1] as string, l.billedSeconds - l.seconds)}
+                      >
+                        {t('time.edit.raise', { hours: hoursText(l.billedSeconds, t) })}
+                      </button>
+                    )}
                   </div>
                   <ul className="time-entries">
                     {l.entries.map(id => {
                       const e = entries.get(id)
                       if (!e) return null
+                      if (editing === id)
+                        return (
+                          <li key={id}>
+                            <EntryEditor
+                              draft={draftOf(e)}
+                              clientTitle={title}
+                              projects={projectsOf}
+                              busy={busy}
+                              error={editError}
+                              onSave={d => void save(e, d)}
+                              onDelete={() => void remove(e)}
+                              onCancel={() => open1(null)}
+                            />
+                          </li>
+                        )
                       return (
-                        <li className="time-entry" key={id}>
-                          <span className="time-when">{entryTimes(e, lang)}</span>
-                          <span className="time-what">{e.description}</span>
+                        <li className={classNames('time-entry', canEdit && 'time-editable')} key={id}>
+                          {canEdit ? (
+                            <button type="button" className="time-open" onClick={() => open1(id)}>
+                              <span className="time-when">{entryTimes(e, lang)}</span>
+                              <span className="time-what">{e.description}</span>
+                            </button>
+                          ) : (
+                            <>
+                              <span className="time-when">{entryTimes(e, lang)}</span>
+                              <span className="time-what">{e.description}</span>
+                            </>
+                          )}
                           <span className="sheet-meta time-who">
                             {e.project} ·{' '}
                             {typeof e.by !== 'string' &&
@@ -217,10 +323,34 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
                     {d.held.map(id => {
                       const e = entries.get(id)
                       if (!e) return null
+                      if (editing === id)
+                        return (
+                          <li key={id}>
+                            <EntryEditor
+                              draft={draftOf(e)}
+                              clientTitle={title}
+                              projects={projectsOf}
+                              busy={busy}
+                              error={editError}
+                              onSave={d => void save(e, d)}
+                              onDelete={() => void remove(e)}
+                              onCancel={() => open1(null)}
+                            />
+                          </li>
+                        )
                       return (
-                        <li className="time-entry" key={id}>
-                          <span className="time-when">{entryTimes(e, lang)}</span>
-                          <span className="time-what">{e.description}</span>
+                        <li className={classNames('time-entry', canEdit && 'time-editable')} key={id}>
+                          {canEdit ? (
+                            <button type="button" className="time-open" onClick={() => open1(id)}>
+                              <span className="time-when">{entryTimes(e, lang)}</span>
+                              <span className="time-what">{e.description}</span>
+                            </button>
+                          ) : (
+                            <>
+                              <span className="time-when">{entryTimes(e, lang)}</span>
+                              <span className="time-what">{e.description}</span>
+                            </>
+                          )}
                           <span className="sheet-meta time-who">
                             {hm(e.seconds)} · #{e.tags.join(' #')}
                           </span>
@@ -232,6 +362,26 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
               )}
             </section>
           ))}
+          {canEdit && clientsForNew.length > 0 && day && (
+            <div className="time-add">
+              {editing === 'new' ? (
+                <EntryEditor
+                  draft={newDraft(clientsForNew[0] as string, projectsOf(clientsForNew[0] as string)?.[0] ?? '', date)}
+                  clients={clientsForNew}
+                  clientTitle={title}
+                  projects={projectsOf}
+                  busy={busy}
+                  error={editError}
+                  onSave={d => void add(d)}
+                  onCancel={() => open1(null)}
+                />
+              ) : (
+                <button type="button" className="button" onClick={() => open1('new')}>
+                  {t('time.edit.add')}
+                </button>
+              )}
+            </div>
+          )}
           {days.length > 1 && (
             <p className="time-total">
               {t('time.day')}{' '}
