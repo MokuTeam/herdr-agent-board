@@ -71,11 +71,26 @@ function inDirs(name: string, dirs: Record<string, string>): string | null {
   return dir && m ? join(dir, m[2] as string) : null
 }
 
+/**
+ * What the viewers add (server/viewers.ts): a package's folders by served name (`dirs`), and the
+ * policy a worker script runs under (`policies`, by its name): a worker runs under its own
+ * response's CSP, not the page's.
+ */
+export interface StaticExtras {
+  dirs?: Record<string, string>
+  policies?: Record<string, string>
+}
+
 export function staticRoute(
   web: string,
-  bundle: { js(): string; map(): string; early(): string; file?(name: string): string | undefined },
+  bundle: {
+    js(): string
+    map(): string
+    early(): string
+    file?(name: string): string | Buffer<ArrayBuffer> | undefined
+  },
   html?: (page: string) => string,
-  dirs: Record<string, string> = {},
+  { dirs = {}, policies = {} }: StaticExtras = {},
 ): Route {
   type Kept = { body: Body; hash: string } & Partial<Record<Encoding, Buffer<ArrayBuffer>>>
   const kept = new Map<string, Kept>()
@@ -134,6 +149,7 @@ export function staticRoute(
           ...headers,
           'x-content-type-options': 'nosniff',
           ...(name.endsWith('.html') ? { 'content-security-policy': PAGE_CSP } : {}),
+          ...(Object.hasOwn(policies, name) ? { 'content-security-policy': policies[name] as string } : {}),
           ...(encoding ? { 'content-encoding': encoding } : {}),
         },
       })

@@ -1,6 +1,8 @@
 /* The quick look's own viewers (web/src/viewers/, #176): a CSV table drawn as it scrolls, and a
    PDF drawn by the board. */
 .ql-more { height: 1px; }
+/* A CSV table drawn block by block keeps the columns its first block measured (Preview.tsx Table). */
+.ql-table table.fixed { table-layout: fixed; }
 /* A PDF drawn by the board (web/src/viewers/pdf.ts): its pages on the window's desk, scrolled as
    the page scrolls and zoomed by the viewer (a pinch is its own, not the browser's); a badge says
    which page while it scrolls. */

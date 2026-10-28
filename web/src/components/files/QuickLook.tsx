@@ -2,9 +2,8 @@
 // the name, the folders above to walk to and the tools (preview or source for Markdown, open with
 // the system, read the changes again, show in its folder, copy the path), what it shows, and a
 // footer of what it is, with the scale of an image or a PDF's pages and a button in to 100% or
-// back to fit. It lives in
-// <body> itself, beside the page (hooks/useModalFocus.ts); its motion, focus, keys and zoom are
-// hooks/useQuickLook.ts's.
+// back to fit. It lives in <body> itself, beside the page (hooks/useModalFocus.ts); its motion,
+// focus, keys and zoom are hooks/useQuickLook.ts's.
 import { Fragment, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Translator } from '../../../../src/core/types.ts'

@@ -3,8 +3,9 @@
 // the board's own viewer (viewers/pdf.ts, #176); Markdown rendered or as source; CSV as a table,
 // its rows drawn as they scroll into view; code and text in numbered lines (the line it was opened
 // at lit); folders as a list to walk through; and why there is nothing to show.
-import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLatest } from '../../hooks/useLatest.ts'
+import { useViewer } from '../../hooks/useViewer.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import {
   codeLines,
@@ -21,7 +22,16 @@ import type { FileLook, LookMode } from '../../models/quick-look.ts'
 import type { ZoomState } from '../../models/zoom.ts'
 import { classNames } from '../class-names.ts'
 import { FileIcon } from './FileChip.tsx'
-import { besideApp, loadPdf, type PdfFailure, type PdfViewer, pdfAssets } from './viewers.ts'
+import {
+  besideApp,
+  loadViewer,
+  PDF_TEXTS,
+  type PdfModule,
+  type PdfViewer,
+  pdfAssets,
+  type ViewerLook,
+  viewerLook,
+} from './viewers.ts'
 import type { ImageZoom } from './zoom.ts'
 
 /** Nothing to show, and why; `onOpen` adds the button that opens it with the system. */
@@ -171,58 +181,74 @@ interface PdfLookProps {
 
 /**
  * A PDF drawn by the board (viewers/pdf.ts, imported when one is opened): "loading" over it until
- * its pages are laid out; broken or with a password, why, with the button that opens it with the
- * system. Without the viewer (its script did not build: PDF.js not installed), the browser's own
- * PDF viewer in a frame, as before.
+ * its pages are laid out, which also gives the footer their count and the zoom bar its zoom;
+ * broken or with a password, why, with the button that opens it with the system. Without the
+ * viewer (its script did not build: PDF.js not installed), the browser's own PDF viewer in a
+ * frame, as before.
  */
 function PdfLook({ src, size, name, onOpen, onPages, onZoomable, onZoomGone }: PdfLookProps) {
   const t = useT()
-  const host = useRef<HTMLDivElement>(null)
-  const [state, setState] = useState<'loading' | 'shown' | 'frame' | PdfFailure>('loading')
   const latest = useLatest({ t, onPages, onZoomable, onZoomGone })
-  useEffect(() => {
-    const el = host.current
-    if (!el) return
-    let viewer: PdfViewer | null = null
-    let gone = false
-    setState('loading')
-    loadPdf().then(
-      pdf => {
-        if (gone) return
-        const shown = pdf.mount(el, {
-          url: src,
-          size,
-          worker: besideApp('pdf.worker.js'),
-          assets: pdfAssets(),
-          pageLabel: (n, total) => latest.current.t('ql.pageOf', { n, total }),
-          onPages: count => {
-            setState('shown')
-            latest.current.onPages?.(count)
-          },
-          onFail: why => setState(why),
-        })
-        viewer = shown
-        latest.current.onZoomable?.(el, onChange => shown.zoom(onChange))
-      },
-      () => {
-        if (!gone) setState('frame')
-      },
-    )
-    return () => {
-      gone = true
-      latest.current.onZoomGone?.(el)
-      viewer?.destroy()
-    }
-  }, [src, size, latest])
-  if (state === 'frame') return <iframe className="ql-frame" src={src} title={name} />
-  const failed = state === 'password' || state === 'broken' || state === 'other'
+  const { host, state } = useViewer(
+    `${src} ${size}`,
+    () => loadViewer<PdfModule>('pdf'),
+    (pdf, el, report) => {
+      const viewer: PdfViewer = pdf.mount(el, {
+        url: src,
+        size,
+        worker: besideApp('pdf.worker.js'),
+        assets: pdfAssets(),
+        pageLabel: (n, total) => latest.current.t('ql.pageOf', { n, total }),
+        onPages: count => {
+          report.ready()
+          latest.current.onPages?.(count)
+          latest.current.onZoomable?.(el, onChange => viewer.zoom(onChange))
+        },
+        onFail: why => report.fail(why),
+      })
+      return {
+        destroy() {
+          latest.current.onZoomGone?.(el)
+          viewer.destroy()
+        },
+      }
+    },
+  )
+  return (
+    <ViewerShown
+      look={viewerLook(state, PDF_TEXTS)}
+      host={host}
+      hostClass="ql-pdf"
+      icon="pdf"
+      src={src}
+      name={name}
+      onOpen={onOpen}
+    />
+  )
+}
+
+interface ViewerShownProps {
+  look: ViewerLook
+  host: RefObject<HTMLDivElement | null>
+  hostClass: string
+  icon: IconName
+  src: string
+  name: string
+  onOpen?: (() => void) | undefined
+}
+
+/**
+ * A viewer's element, with "loading" over it until it draws; when it cannot, why, with the button
+ * that opens the file with the system; with no viewer for a PDF, the browser's own in a frame.
+ */
+export function ViewerShown({ look, host, hostClass, icon, src, name, onOpen }: ViewerShownProps) {
+  const t = useT()
+  if (look.frame) return <iframe className="ql-frame" src={src} title={name} />
   return (
     <>
-      <div className="ql-pdf" ref={host} hidden={failed} />
-      {state === 'loading' && <div className="ql-wait">{t('loading')}</div>}
-      {failed && (
-        <LookEmpty icon="pdf" text={t(state === 'password' ? 'ql.pdfPassword' : 'ql.pdfBroken')} onOpen={onOpen} />
-      )}
+      <div className={hostClass} ref={host} hidden={!!look.empty} />
+      {look.wait && <div className="ql-wait">{t('loading')}</div>}
+      {look.empty && <LookEmpty icon={icon} text={t(look.empty)} onOpen={onOpen} />}
     </>
   )
 }
@@ -240,6 +266,17 @@ function Table({ rows }: { rows: string[][] }) {
   }, [rows])
   const [shown, setShown] = useState(1)
   const more = useRef<HTMLDivElement>(null)
+  const table = useRef<HTMLTableElement>(null)
+  // A table drawn block by block gets its columns' widths once its first block is drawn, wide
+  // enough for the longest value anywhere in it, and keeps them: a wider row in a later block
+  // does not move the columns, as the automatic layout would. The last one takes what room is left.
+  const [widths, setWidths] = useState<number[] | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the first draw of a file's table is when to measure
+  useLayoutEffect(() => {
+    const el = table.current
+    if (!el || blocks.length < 2) return void setWidths(null)
+    setWidths(columnWidths(el, rows))
+  }, [rows])
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new block drawn is when to look again
   useEffect(() => {
     const el = more.current
@@ -253,7 +290,19 @@ function Table({ rows }: { rows: string[][] }) {
   }, [shown])
   return (
     <div className="ql-table">
-      <table>
+      <table
+        ref={table}
+        className={widths ? 'fixed' : undefined}
+        style={widths ? { width: widths.reduce((a, b) => a + b, 0) } : undefined}
+      >
+        {widths && (
+          <colgroup>
+            {widths.map((w, n) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: the columns in their order
+              <col key={n} style={n < widths.length - 1 ? { width: w } : undefined} />
+            ))}
+          </colgroup>
+        )}
         <thead>
           <tr>
             {first.map((c, n) => (
@@ -273,6 +322,27 @@ function Table({ rows }: { rows: string[][] }) {
       </table>
       {shown < blocks.length && <div className="ql-more" ref={more} />}
     </div>
+  )
+}
+
+/**
+ * Each column's width: as the first block laid it out, or as wide as its longest value anywhere
+ * in the file (in the cells' own font, with their padding), at most as wide as a cell may be.
+ */
+function columnWidths(table: HTMLTableElement, rows: string[][]): number[] | null {
+  const cell = table.querySelector('td')
+  const ctx = typeof document === 'undefined' ? null : document.createElement('canvas').getContext('2d')
+  if (!cell || !ctx) return null
+  const style = getComputedStyle(cell)
+  ctx.font = style.font
+  const padding = Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight) + 1
+  const longest: string[] = []
+  for (const row of rows) for (const [i, c] of row.entries()) if (c.length > (longest[i]?.length ?? 0)) longest[i] = c
+  return [...table.querySelectorAll('th')].map((th, i) =>
+    Math.min(
+      420,
+      Math.ceil(Math.max(th.getBoundingClientRect().width, ctx.measureText(longest[i] ?? '').width + padding)),
+    ),
   )
 }
 

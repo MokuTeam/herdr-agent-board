@@ -21,9 +21,11 @@ import type { ImageZoom, ZoomKey } from '../components/files/zoom.ts'
 import {
   type Box,
   cssScale,
+  failureOf,
   fitZoom,
   type PagePlace,
   type PagePoint,
+  type PdfFailure,
   pageAt,
   pagesToDraw,
   pdfLimits,
@@ -34,8 +36,6 @@ import {
 } from '../models/pdf-view.ts'
 import { reducedMotion, Spring } from '../models/spring.ts'
 import { atFit, softScale, stepScale, wheelZoom, type ZoomState, zoomInScale } from '../models/zoom.ts'
-
-export type PdfFailure = 'password' | 'broken' | 'other'
 
 export interface PdfOptions {
   /** The bytes, through the board's file route with its token. */
@@ -87,12 +87,6 @@ interface Page {
   task: RenderTask | null
 }
 
-/** What went wrong reading a PDF, by PDF.js's exceptions. */
-export function failureOf(err: unknown): PdfFailure {
-  const name = (err as { name?: unknown } | null)?.name
-  return name === 'PasswordException' ? 'password' : name === 'InvalidPDFException' ? 'broken' : 'other'
-}
-
 const div = (className: string): HTMLDivElement => {
   const el = document.createElement('div')
   el.className = className
@@ -136,24 +130,31 @@ export function mount(host: HTMLElement, opts: PdfOptions): PdfViewer {
 
   // ---------------------------------------------------------------- layout
 
+  // The pages' places, measured once for each layout (a page sized, the window resized): a scroll
+  // asks for them on every frame, and a long PDF has thousands of pages.
+  let laidOut: PagePlace[] | null = null
+
   function size(p: Page): void {
     const box = p.box ?? first
     const scale = cssScale(zoom)
     p.el.style.width = `${Math.floor(box.w * scale)}px`
     p.el.style.height = `${Math.floor(box.h * scale)}px`
     p.el.style.setProperty('--total-scale-factor', String(scale))
+    laidOut = null
   }
 
   /** The pages' places in the scroller's content (the sheet is their offset parent). */
   function places(): PagePlace[] {
+    if (laidOut) return laidOut
     const x = sheet.offsetLeft
     const y = sheet.offsetTop
-    return pages.map(({ el }) => ({
+    laidOut = pages.map(({ el }) => ({
       left: x + el.offsetLeft,
       top: y + el.offsetTop,
       width: el.offsetWidth,
       height: el.offsetHeight,
     }))
+    return laidOut
   }
 
   const middleOfView = () => ({ x: scroller.clientWidth / 2, y: scroller.clientHeight / 2 })
@@ -332,8 +333,10 @@ export function mount(host: HTMLElement, opts: PdfOptions): PdfViewer {
   listen(scroller, 'touchend', lift)
   listen(scroller, 'touchcancel', lift)
 
-  // The window changed: pages that fit the width fit the new one.
+  // The window changed: the pages sit anew (they are centred), and pages that fit the width fit
+  // the new one.
   const resize = new ResizeObserver(() => {
+    laidOut = null
     if (!doc || !scroller.clientWidth) return
     const next = fitZoom(first, scroller.clientWidth)
     if (Math.abs(next - fit) < 1e-4) return

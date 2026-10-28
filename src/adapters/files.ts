@@ -166,7 +166,8 @@ function head(path: string, size: number, limit: number): { buf: Buffer; cut: bo
 
 /**
  * Bytes to text, or null for binary: BOMs honored, NUL bytes mean binary. `legacy`: bytes that
- * are not UTF-8 are read in the system's old code page, as Excel saves a CSV (legacyCodePage).
+ * are not UTF-8 are read in the system's old code page, as Excel saves a CSV (legacyCodePage);
+ * UTF-8 with a broken byte here and there (at most one in a hundred above ASCII) stays UTF-8.
  */
 function decode(buf: Buffer, legacy = false): string | null {
   if (buf[0] === 0xff && buf[1] === 0xfe) return new TextDecoder('utf-16le').decode(buf.subarray(2))
@@ -175,47 +176,51 @@ function decode(buf: Buffer, legacy = false): string | null {
   if (sample.includes(0)) return null
   const body = buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf ? buf.subarray(3) : buf
   if (!legacy) return new TextDecoder('utf-8').decode(body)
-  try {
-    // Streamed: a character the cut at the size limit split in two is no reason to doubt the rest.
-    return new TextDecoder('utf-8', { fatal: true }).decode(body, { stream: true })
-  } catch {
-    return new TextDecoder(legacyCodePage(body)).decode(body)
-  }
+  // Streamed: a character the cut at the size limit split in two does not count as broken.
+  const text = new TextDecoder('utf-8').decode(body, { stream: true })
+  const broken = text.split('\uFFFD').length - 1
+  if (!broken) return text
+  let high = 0
+  for (const b of body) if (b >= 0x80) high++
+  return broken * 100 <= high ? text : new TextDecoder(legacyCodePage(body)).decode(body)
 }
 
+/** A letter above ASCII in Windows-1251 (А to я, Ё, ё) or Windows-1252 (À to ÿ). */
+const highLetter = (b: number): boolean => b >= 0xc0 || b === 0xa8 || b === 0xb8
+const asciiLetter = (b: number): boolean => (b >= 0x41 && b <= 0x5a) || (b >= 0x61 && b <= 0x7a)
+
 /**
- * Which old code page bytes that are not UTF-8 are in: Windows-1251 when most of their letters
- * above ASCII come in runs of three or more (Cyrillic words), else Windows-1252 (a Western
- * language's accents, one here and there).
+ * Which old code page bytes that are not UTF-8 are in, by where their letters above ASCII sit:
+ * next to each other, as in a Cyrillic word ("да", "Алёна"), Windows-1251; next to ASCII
+ * letters, as a Western language's accents ("café", "Größe"), Windows-1252.
  */
 export function legacyCodePage(bytes: Uint8Array): 'windows-1251' | 'windows-1252' {
-  let high = 0
-  let inRuns = 0
-  let run = 0
+  let cyrillic = 0
+  let western = 0
   const end = Math.min(bytes.length, 64 << 10)
-  for (let i = 0; i <= end; i++) {
-    const b = i < end ? (bytes[i] as number) : 0
-    if (b >= 0x80) high++
-    if (b >= 0xc0) run++
-    else {
-      if (run >= 3) inRuns += run
-      run = 0
-    }
+  for (let i = 1; i < end; i++) {
+    const [a, b] = [bytes[i - 1] as number, bytes[i] as number]
+    if (highLetter(a) && highLetter(b)) cyrillic++
+    else if ((highLetter(a) && asciiLetter(b)) || (asciiLetter(a) && highLetter(b))) western++
   }
-  return high && inRuns * 2 >= high ? 'windows-1251' : 'windows-1252'
+  return cyrillic > western ? 'windows-1251' : 'windows-1252'
 }
 
 const SEPARATORS = [',', ';', '\t', '|']
+const isDigit = (c: string | undefined): boolean => c !== undefined && c >= '0' && c <= '9'
 
 /**
  * The separator of a CSV: the one of , ; tab and | that splits the first lines into the same
- * number of fields most often (outside quotes), the comma when none does. Excel with a locale
- * whose decimals have a comma (Russian, German) writes `;`, and its numbers then have commas.
+ * number of fields most often (outside quotes), the one that makes more fields on a tie, the
+ * comma when none splits anything. Excel with a locale whose decimals have a comma (Russian,
+ * German) writes `;`, and its numbers then have commas: commas only ever between digits, with
+ * another separator there, are decimal commas.
  */
 export function csvSeparator(text: string): string {
   const perLine: number[][] = []
   let line = SEPARATORS.map(() => 0)
   let quoted = false
+  let looseComma = false
   for (let i = 0; i < text.length && perLine.length < 50; i++) {
     const c = text[i] as string
     if (c === '"') quoted = !quoted
@@ -226,16 +231,21 @@ export function csvSeparator(text: string): string {
     } else {
       const k = SEPARATORS.indexOf(c)
       if (k >= 0) line[k] = (line[k] as number) + 1
+      if (c === ',' && !(isDigit(text[i - 1]) && isDigit(text[i + 1]))) looseComma = true
     }
   }
   if (line.some(Boolean)) perLine.push(line)
-  let best = { sep: ',', score: 0 }
+  const decimalCommas = !looseComma && perLine.some(l => l.some((n, k) => k > 0 && n > 0))
+  let best = { sep: ',', score: 0, fields: 0 }
   SEPARATORS.forEach((sep, k) => {
-    const counts = perLine.map(l => l[k] as number).filter(Boolean)
+    if (sep === ',' && decimalCommas) return
     const tally = new Map<number, number>()
-    for (const n of counts) tally.set(n, (tally.get(n) ?? 0) + 1)
-    const score = Math.max(0, ...tally.values())
-    if (score > best.score) best = { sep, score }
+    for (const l of perLine) {
+      const n = l[k] as number
+      if (n) tally.set(n, (tally.get(n) ?? 0) + 1)
+    }
+    for (const [fields, score] of tally)
+      if (score > best.score || (score === best.score && fields > best.fields)) best = { sep, score, fields }
   })
   return best.sep
 }

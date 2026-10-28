@@ -152,6 +152,41 @@ test('the separator and the code page a CSV is in', () => {
   assert.equal(legacyCodePage(Buffer.from('caf\xe9 na\xefve', 'latin1')), 'windows-1252')
 })
 
+test('a CSV stays UTF-8 when it is: no BOM, a character cut at the size limit, a broken byte here and there', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'board-csv-utf8-'))
+  const write = (name: string, body: string | Uint8Array) => {
+    writeFileSync(join(dir, name), body)
+    return preview(join(dir, name))
+  }
+  assert.deepEqual(write('plain.csv', 'Имя;Город\nИван;Москва\n').rows, [
+    ['Имя', 'Город'],
+    ['Иван', 'Москва'],
+  ])
+  // Cut at 4 MB inside a two-byte "Ж": the rest is still UTF-8, the half-read row left out.
+  const head = Buffer.from('Имя;Город\n')
+  const filler = Buffer.alloc((4 << 20) - 1 - head.length, 'x')
+  const cut = write('cut.csv', Buffer.concat([head, filler, Buffer.from('Ж;Жук\nЯ;Як\n')]))
+  assert.equal(cut.truncated, true)
+  assert.deepEqual(cut.rows?.[0], ['Имя', 'Город'])
+  // One broken byte among a hundred letters above ASCII: UTF-8, the byte shown as it is.
+  const broken = write(
+    'broken.csv',
+    Buffer.concat([Buffer.from(`Имя;Город\n${'Иван;Москва\n'.repeat(10)}`), Buffer.from([0xff]), Buffer.from('\n')]),
+  )
+  assert.deepEqual(broken.rows?.[1], ['Иван', 'Москва'])
+})
+
+test('a CSV’s separator on a tie, and Cyrillic in short words', () => {
+  // No header, decimal commas: the semicolons split it.
+  assert.equal(csvSeparator('Иван;Москва;1,5\n'), ';')
+  assert.equal(csvSeparator('Иван;1,5\nПётр;2,25\n'), ';')
+  // Commas between words are separators still.
+  assert.equal(csvSeparator('a,b;c\n'), ',')
+  assert.equal(legacyCodePage(windows1251('да;на')), 'windows-1251')
+  assert.equal(legacyCodePage(windows1251('Алёна')), 'windows-1251')
+  assert.equal(legacyCodePage(Buffer.from('Gr\xf6\xdfe;Stra\xdfe', 'latin1')), 'windows-1252')
+})
+
 /** Russian text in Windows-1251: А to я are 0xC0 to 0xFF, Ё and ё 0xA8 and 0xB8. */
 function windows1251(text: string): Uint8Array {
   return Uint8Array.from([...text], c => {

@@ -55,12 +55,15 @@ describe('the static route for the viewers', () => {
     mkdirSync(join(pkg, 'wasm'))
     writeFileSync(join(pkg, 'wasm', 'jbig2.wasm'), Buffer.from([0, 0x61, 0x73, 0x6d]))
     writeFileSync(join(pkg, 'package.json'), '{"name":"secret"}')
-    const files: Record<string, string> = { 'pdf-viewer.js': 'export const mount = 1', 'pdf.worker.js': 'self.x = 1' }
+    const files: Record<string, string | Buffer<ArrayBuffer>> = {
+      'pdf-viewer.js': 'export const mount = 1',
+      'pdf.worker.js': Buffer.from('self.x = 1'),
+    }
     const route = staticRoute(
       web,
       { js: () => 'app', map: () => '{}', early: () => '', file: name => files[name] },
       undefined,
-      { 'pdfjs/wasm': join(pkg, 'wasm') },
+      { dirs: { 'pdfjs/wasm': join(pkg, 'wasm') }, policies: { 'pdf.worker.js': "default-src 'none'" } },
     )
     const get = async (address: string, headers: Record<string, string> = {}) => {
       const url = new URL(`http://127.0.0.1${address}`)
@@ -73,7 +76,11 @@ describe('the static route for the viewers', () => {
     expect(viewer.headers.get('content-type')).toBe('text/javascript; charset=utf-8')
     const tag = viewer.headers.get('etag') ?? ''
     expect((await get('/pdf-viewer.js', { 'accept-encoding': 'br', 'if-none-match': tag })).status).toBe(304)
-    expect(await (await get('/pdf.worker.js')).text()).toBe('self.x = 1')
+    // A worker runs under its own response's policy: the one it is given, no other file's.
+    const worker = await get('/pdf.worker.js')
+    expect(await worker.text()).toBe('self.x = 1')
+    expect(worker.headers.get('content-security-policy')).toBe("default-src 'none'")
+    expect(viewer.headers.get('content-security-policy')).toBeNull()
     expect((await get('/pdf-viewer.js?v=abc')).status).toBe(200)
 
     const wasm = await get('/pdfjs/wasm/jbig2.wasm')

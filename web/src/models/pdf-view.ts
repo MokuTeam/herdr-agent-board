@@ -1,9 +1,18 @@
 // The PDF viewer's geometry without the DOM (viewers/pdf.ts): the scale at which the pages fit
 // the width, the zoom as the footer shows it (100% is the page's printed size), how sharp a
 // page's pixels can be, where the view goes so that the point under the fingers or the pointer
-// stays there after a zoom, which page is on show, and which pages are near enough to draw.
+// stays there after a zoom, which page is on show, which pages are near enough to draw, and
+// what went wrong reading one.
 import type { ZoomLimits, ZoomState } from './zoom.ts'
 import { atFit, zoomInScale } from './zoom.ts'
+
+export type PdfFailure = 'password' | 'broken' | 'other'
+
+/** What went wrong reading a PDF, by the name of PDF.js's exception. */
+export function failureOf(err: unknown): PdfFailure {
+  const name = (err as { name?: unknown } | null)?.name
+  return name === 'PasswordException' ? 'password' : name === 'InvalidPDFException' ? 'broken' : 'other'
+}
 
 /** CSS pixels to a PDF point at 100%: PDF's 72 to the inch on the web's 96. */
 export const PRINTED = 96 / 72

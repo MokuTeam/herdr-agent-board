@@ -11,9 +11,10 @@ export interface WebBundle {
   early(): string
   /**
    * A file the page loads only when it needs it, by its served name: a viewer's script or its map,
-   * or a copy from a package (`viewers`, `copies`). Undefined for one that did not build.
+   * or a copy from a package (`viewers`, `copies`), as its last good build has it. Undefined for
+   * one that never built.
    */
-  file(name: string): string | undefined
+  file(name: string): string | Buffer<ArrayBuffer> | undefined
   /** Hash of the bundle and every other file under web/ the page loads: changes whenever the page does. */
   version(): string
   /** Builds again; calls run one after another, so the newest files make the bundle that stays. */
@@ -55,8 +56,9 @@ function assetFiles(dir: string): string[] {
   return found.sort()
 }
 
-function hashOf(js: string, webDir: string): string {
-  const hash = createHash('sha1').update(js)
+function hashOf(parts: (string | Buffer)[], webDir: string): string {
+  const hash = createHash('sha1')
+  for (const part of parts) hash.update(part)
   try {
     for (const path of assetFiles(webDir)) {
       try {
@@ -120,33 +122,47 @@ export async function createWebBundle(opts: Options): Promise<WebBundle> {
   let map = ''
   let early = ''
   let version = ''
-  // The viewers' scripts and maps, and the copies, by their served names.
-  let files = new Map<string, string>()
+  // The viewers' scripts and maps, and the copies (as their bytes), by their served names.
+  let files = new Map<string, string | Buffer<ArrayBuffer>>()
 
-  /** The viewers and the copies as they are now: one that fails is logged and left out, not the others. */
-  async function buildFiles(): Promise<Map<string, string>> {
-    const next = new Map<string, string>()
+  /**
+   * The viewers and the copies as they are now. One that fails is logged and keeps its last good
+   * build, as the page's own script does; the others are built as they are.
+   */
+  async function buildFiles(): Promise<Map<string, string | Buffer<ArrayBuffer>>> {
+    const next = new Map<string, string | Buffer<ArrayBuffer>>()
+    const keep = (...names: string[]) => {
+      for (const name of names) {
+        const before = files.get(name)
+        if (before !== undefined) next.set(name, before)
+      }
+    }
     for (const [name, entry] of Object.entries(opts.viewers ?? {})) {
       try {
         const viewer = await bundle(entry, 'esm', 'external', text => opts.log(`${text} (${name})`), 'short')
-        if (!viewer) continue
+        if (!viewer) {
+          keep(name, `${name}.map`)
+          continue
+        }
         next.set(name, viewer.js + mapLink(name))
         next.set(`${name}.map`, viewer.map)
       } catch (err) {
         opts.log(`web bundle: ${buildMessage(err)} (${name})`)
+        keep(name, `${name}.map`)
       }
     }
     for (const [name, module] of Object.entries(opts.copies ?? {})) {
       try {
-        next.set(name, readFileSync(Bun.resolveSync(module, opts.root), 'utf8'))
+        next.set(name, readFileSync(Bun.resolveSync(module, opts.root)))
       } catch (err) {
         opts.log(`web bundle: ${buildMessage(err)} (${name})`)
+        keep(name)
       }
     }
     return next
   }
 
-  const hashNow = (): string => hashOf(js + early + [...files.values()].join(''), webDir)
+  const hashNow = (): string => hashOf([js, early, ...files.values()], webDir)
 
   async function build(): Promise<void> {
     try {

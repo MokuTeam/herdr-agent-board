@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { FileIcon } from '../../web/src/components/files/FileChip.tsx'
 import { footOf } from '../../web/src/components/files/QuickLook.tsx'
-import { besideApp, loadPdf, pdfAssets } from '../../web/src/components/files/viewers.ts'
+import { besideApp, loadViewer, pdfAssets } from '../../web/src/components/files/viewers.ts'
 import { fileChips } from '../../web/src/hooks/useFileChips.ts'
 import { ICON_PATHS, type IconName, type PathInfo, type Preview } from '../../web/src/models/files.ts'
 import { type HistoryReply, quickLookNav } from '../../web/src/models/quick-look.ts'
@@ -597,8 +597,9 @@ describe('the quick look’s own viewers', () => {
     const view = look.nav.view()
     const d = view.data
     if (!d) throw new Error('nothing on show')
-    expect(footOf(view, en)).toBe('2 KB · modified Oct 17, 2026, 9:30 AM')
-    expect(footOf(view, en, null, { data: d, pages: 12 })).toBe('12 pages · 2 KB · modified Oct 17, 2026, 9:30 AM')
+    // The date as the page's time zone writes it: the start is what matters here.
+    expect(footOf(view, en)).toStartWith('2 KB · modified ')
+    expect(footOf(view, en, null, { data: d, pages: 12 })).toStartWith('12 pages · 2 KB · modified ')
     expect(footOf(view, ru, null, { data: d, pages: 3 })).toContain('3 страницы')
     expect(footOf(view, en, null, { data: { ...d }, pages: 12 })).not.toContain('pages')
   })
@@ -616,15 +617,15 @@ describe('the viewers’ scripts', () => {
       asked.push(url)
       return Promise.reject(new Error('not built'))
     }
-    await expect(loadPdf(failing)).rejects.toThrow('not built')
+    await expect(loadViewer('pdf', failing)).rejects.toThrow('not built')
     const module = { mount: (() => ({})) as never }
     const found = async (url: string) => {
       asked.push(url)
       return module
     }
-    await expect(loadPdf(found)).resolves.toBe(module)
+    await expect(loadViewer('pdf', found)).resolves.toBe(module)
     // Once there, it is the same module.
-    await expect(loadPdf(failing)).resolves.toBe(module)
+    await expect(loadViewer<unknown>('pdf', failing)).resolves.toBe(module)
     expect(asked).toHaveLength(2)
     expect(asked.every(url => url.endsWith('/pdf-viewer.js'))).toBe(true)
   })
