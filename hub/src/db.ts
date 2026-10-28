@@ -220,6 +220,8 @@ export interface HubDb {
   markAcked(id: string, at: number, ackJson: string): void
   /** Expires every queued or delivered message due before `now`, drops their payloads, returns them. */
   expireDue(now: number): MessageRow[]
+  /** Expires every queued or delivered message `sender` sent (it was revoked), drops their payloads, returns them. */
+  expireFrom(sender: string): MessageRow[]
   /** What the sender has not been told of yet. */
   unnotified(sender: string): MessageRow[]
   setNotified(id: string, state: MessageState): void
@@ -360,7 +362,7 @@ export function openDb(path: string): HubDb {
     pendingFor: (peer, now) =>
       db
         .query<MessageRow, [string, number]>(
-          "SELECT * FROM message WHERE to_peer = ? AND state IN ('queued', 'delivered') AND expires_at >= ? ORDER BY created_at, rowid",
+          "SELECT * FROM message WHERE to_peer = ? AND state IN ('queued', 'delivered') AND expires_at >= ? AND from_peer IN (SELECT id FROM peer WHERE status = 'active') ORDER BY created_at, rowid",
         )
         .all(peer, now),
     markDelivered: (id, at) =>
@@ -383,6 +385,15 @@ export function openDb(path: string): HubDb {
         const expire = db.query("UPDATE message SET state = 'expired', payload = NULL WHERE id = ?")
         for (const r of due) expire.run(r.id)
         return due.map(r => ({ ...r, state: 'expired' as const, payload: null }))
+      })(),
+    expireFrom: sender =>
+      db.transaction(() => {
+        const rows = db
+          .query<MessageRow, [string]>("SELECT * FROM message WHERE from_peer = ? AND state IN ('queued', 'delivered')")
+          .all(sender)
+        const expire = db.query("UPDATE message SET state = 'expired', payload = NULL WHERE id = ?")
+        for (const r of rows) expire.run(r.id)
+        return rows.map(r => ({ ...r, state: 'expired' as const, payload: null }))
       })(),
     unnotified: sender =>
       db

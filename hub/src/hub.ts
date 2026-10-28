@@ -147,7 +147,7 @@ export function createHub(opts: HubOptions): Hub {
   }
 
   const deliver = (s: Session, r: MessageRow) => {
-    if (r.payload === null) return
+    if (r.payload === null || db.peer(r.from_peer)?.status !== 'active') return
     put(s.conn, { t: 'deliver', env: JSON.parse(r.payload) as Envelope })
     if (r.state !== 'queued') return
     db.markDelivered(r.id, clock.now())
@@ -174,6 +174,7 @@ export function createHub(opts: HubOptions): Hub {
     const bytes = envelopeBytes(env)
     if (!(await verify(env.from, bytes, env.sig)))
       return fail(conn, 'bad_sig', 'the signature does not verify', undefined, env.id)
+    if (db.peer(peer)?.status !== 'active') return fail(conn, 'revoked', 'this peer is revoked', CLOSE_REVOKED, env.id)
     const to = db.peer(env.to)
     if (to?.status !== 'active') return fail(conn, 'not_member', 'the recipient is not a member', undefined, env.id)
     const hash = createHash('sha256').update(bytes).digest('hex')
@@ -215,6 +216,7 @@ export function createHub(opts: HubOptions): Hub {
       return fail(conn, 'bad_frame', 'cannot ack that', undefined, f.id)
     if (!(await verify(peer, ackBytes({ by: peer, id: f.id, to: row.from_peer, ts: f.ts }), f.sig)))
       return fail(conn, 'bad_sig', 'the signature does not verify', undefined, f.id)
+    if (db.peer(peer)?.status !== 'active') return fail(conn, 'revoked', 'this peer is revoked', CLOSE_REVOKED, f.id)
     const now = clock.now()
     db.markAcked(f.id, now, JSON.stringify({ by: peer, ts: f.ts, sig: f.sig }))
     db.audit(now, peer, 'ack', { id: f.id, from: row.from_peer })
@@ -396,6 +398,10 @@ export function createHub(opts: HubOptions): Hub {
       const row = db.peer(ref) ?? db.activePeerByName(ref)
       if (!row || !db.revokePeer(row.id, clock.now())) return null
       db.audit(clock.now(), row.id, 'revoke', { name: row.name })
+      // What it still had in the queue is not delivered any more, and nobody is told anything new
+      // of it (the sender cannot connect again; the recipient never sees these).
+      for (const m of db.expireFrom(row.id))
+        db.audit(clock.now(), row.id, 'expired', { id: m.id, to: m.to_peer, why: 'sender_revoked' })
       const s = sessions.get(row.id)
       if (s) fail(s.conn, 'revoked', 'this peer is revoked', CLOSE_REVOKED)
       broadcastRoster()

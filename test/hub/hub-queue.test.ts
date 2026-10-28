@@ -251,3 +251,52 @@ test('no body text reaches the log, the audit, or any column but the queue paylo
     0,
   )
 })
+
+test("a revoked sender's queued messages expire (audited) and are never delivered (#231)", async () => {
+  const a = await h.join(A, 'anna')
+  const b0 = await h.join(B, 'ben')
+  b0.close()
+  await b0.closed
+  const env = await question(A, B.pub, 'before I was revoked')
+  a.send({ t: 'send', env })
+  await a.take('state')
+  h.hub.revoke('anna')
+  const row = h.db.message(env.id)
+  assert.deepEqual([row?.state, row?.payload], ['expired', null])
+  const log = h.db.auditRows().filter(r => r.action === 'expired')
+  assert.equal(log.length, 1)
+  assert.match(log[0]?.detail ?? '', /sender_revoked/)
+  const b = await h.login(B)
+  await new Promise(r => setTimeout(r, 60))
+  assert.equal(b.frames.filter(f => f.t === 'deliver').length, 0)
+})
+
+test('what a revoked sender left behind is not delivered even if only the peer row changed (#231)', async () => {
+  const a = await h.join(A, 'anna')
+  const b0 = await h.join(B, 'ben')
+  b0.close()
+  await b0.closed
+  const env = await question(A, B.pub, 'queued')
+  a.send({ t: 'send', env })
+  await a.take('state')
+  h.db.revokePeer(A.pub, 5) // not through hub.revoke: pendingFor and deliver must look at the sender themselves
+  assert.deepEqual(h.db.pendingFor(B.pub, 0), [])
+  const b = await h.login(B)
+  await new Promise(r => setTimeout(r, 60))
+  assert.equal(b.frames.filter(f => f.t === 'deliver').length, 0)
+})
+
+test('send and ack look at the peer again: a revoked peer on a still open socket gets revoked, nothing happens (#231)', async () => {
+  const a = await h.join(A, 'anna')
+  const b = await h.join(B, 'ben')
+  const env = await question(A, B.pub, 'sent while active')
+  a.send({ t: 'send', env })
+  const got = await b.take('deliver')
+  h.db.revokePeer(B.pub, 5) // the socket stays open: only the row changed
+  b.send(await ackOf(B, got.env))
+  assert.equal((await b.take('error')).code, 'revoked')
+  assert.notEqual(h.db.message(env.id)?.state, 'acked')
+  h.db.revokePeer(A.pub, 6)
+  a.send({ t: 'send', env: await question(A, B.pub, 'after') })
+  assert.equal((await a.take('error')).code, 'revoked')
+})
