@@ -11,6 +11,8 @@
 // board does not do, why in one line, and the steps by hand folded (DoItMyself.tsx, Snippets.tsx).
 // "Install the board on this server" (path B) has an address of its own above its button, saved as
 // the login's fields are, apart from the tunnel's settings.
+// "Sync profiles", the Claude profiles of this computer and of the board on the server, is
+// ProfileSync.tsx, below them, once the board on the server has its address.
 // "Do it myself (one command)" is OneCommand.tsx. Its words are models/server-setup.ts's. What it
 // keeps while the panel is open (SetupState: the passwords, the ticks, what is open) is
 // ServerSetup's own state, drawn anew as the panel closes; the board's side is the `server-*` ops
@@ -74,6 +76,7 @@ import { classNames } from '../class-names.ts'
 import { DoItMyself } from './DoItMyself.tsx'
 import { TwoClicks } from './LoginSection.tsx'
 import { OneCommand } from './OneCommand.tsx'
+import { ProfileSync } from './ProfileSync.tsx'
 import { Snippets } from './Snippets.tsx'
 
 export interface ServerSetupProps {
@@ -745,6 +748,15 @@ export function ServerSetupBody({
             ))}
           </ul>
         </div>
+      )}
+
+      {(installDomain !== '' || view.sync) && (
+        <ProfileSync
+          sync={view.sync ?? null}
+          send={send}
+          passwords={withPassword(state)}
+          enabled={canEdit && !busy && view.tunnel.ssh !== null}
+        />
       )}
     </div>
   )

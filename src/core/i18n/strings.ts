@@ -19,6 +19,7 @@ import { PROFILE_STRINGS } from './profile-strings.ts'
 import { REMOTE_STRINGS } from './remote-strings.ts'
 import { SERVER_STRINGS } from './server-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
+import { SYNC_STRINGS } from './sync-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
 import { WAKE_STRINGS } from './wake-strings.ts'
 
@@ -1315,3 +1316,4 @@ for (const code of Object.keys(SERVER_STRINGS) as Lang[]) Object.assign(STRINGS[
 for (const code of Object.keys(ONESHOT_STRINGS) as Lang[]) Object.assign(STRINGS[code], ONESHOT_STRINGS[code])
 // And the board on a server of the owner's: its install, `board update`, the panel's path B.
 for (const code of Object.keys(INSTALL_STRINGS) as Lang[]) Object.assign(STRINGS[code], INSTALL_STRINGS[code])
+for (const code of Object.keys(SYNC_STRINGS) as Lang[]) Object.assign(STRINGS[code], SYNC_STRINGS[code])

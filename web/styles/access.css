@@ -191,3 +191,12 @@
 .access-install { margin: 0 0 10px; }
 .access-install-link { margin: 8px 0; padding: 8px 10px; border-radius: 8px; background: var(--fill-2); font-size: 12.5px; }
 .access-install-link a { font: 11.5px/1.5 var(--mono); overflow-wrap: anywhere; }
+
+/* "Sync profiles" (ProfileSync.tsx): the preview's groups folded, their lists kept short */
+.access-sync { margin: 12px 0 0; }
+.sync-group { margin: 4px 0; font-size: 12.5px; }
+.sync-group > summary, .sync-area > summary { cursor: pointer; }
+.sync-area { margin: 2px 0 2px 14px; }
+.sync-list { margin: 2px 0 6px 14px; padding: 0; list-style: none; max-height: 240px; overflow: auto; font-size: 12px; overflow-wrap: anywhere; }
+.sync-conflict, .sync-unpaired { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0; }
+.sync-unpaired input { flex: 1 1 200px; min-width: 0; }

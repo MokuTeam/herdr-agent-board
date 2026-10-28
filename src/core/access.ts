@@ -5,6 +5,7 @@
 // rule, the lockout's waits, the rate limits, the device label and the caller's address.
 // Pure, with no node: import: the page imports it too.
 import { t } from './lang.ts'
+import type { SyncView } from './profile-sync/view.ts'
 import { clearCookie, cookieToken, IP, tokenCookie } from './pwa.ts'
 import { isServerView, type ServerView } from './server-view.ts'
 import type { TunnelConfig, TunnelProblem, TunnelStatus } from './tunnel.ts'
@@ -205,6 +206,8 @@ export interface AccessView {
   attempts: Attempt[]
   /** Setting up the server's web server (core/server-view.ts); null until the board has something to show. */
   server: ServerView | null
+  /** Syncing the Claude profiles with the board on the server (core/profile-sync/view.ts); absent until a sync was asked for. */
+  sync?: SyncView
 }
 
 type Fields = Record<string, unknown>

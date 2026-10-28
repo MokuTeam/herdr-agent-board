@@ -8,6 +8,7 @@
 // local key too (adapters/local-key.ts): other accounts there reach 127.0.0.1 as well.
 import { randomBytes } from 'node:crypto'
 import { type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
+import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
 import { saveFoundProfiles } from '../adapters/config-file.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
@@ -28,6 +29,7 @@ import {
   publicKeyOf,
   readPidRecord,
   spawnRemote,
+  spawnRemoteStream,
   spawnSsh,
   sshBin,
   sshVersion,
@@ -48,6 +50,7 @@ import { createFirstLogin } from '../services/first-login.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
 import { createPresence } from '../services/presence.ts'
+import { createProfileSync } from '../services/profile-sync.ts'
 import { editProfile, installProfile, wakeHooksInPlace } from '../services/profiles.ts'
 import { createRemote } from '../services/remote.ts'
 import { createRemoteAccess } from '../services/remote-access.ts'
@@ -380,6 +383,26 @@ export async function startServer({
       if (tunnelConf().on !== on) await remoteAccess.op({ op: on ? 'on' : 'off' })
     },
   })
+  // "Sync profiles" with the board installed on the server (services/profile-sync.ts): its login is
+  // the server setup's; nothing runs until the owner asks for a sync.
+  const profileSync = createProfileSync({
+    cfg,
+    home: homedir(),
+    platform: process.platform,
+    name: hostname(),
+    ssh: () => sshBin(),
+    sshVersion,
+    knownHosts: knownHostsReady,
+    hostKeyPinned: () => {
+      const conf = tunnelConf()
+      return hostKeyPinned(conf.host, conf.sshPort)
+    },
+    spawn: spawnRemoteStream,
+    onChange: accessChanged,
+    log,
+    newId: setupId,
+    now: () => Date.now(),
+  })
   // The "Remote access…" panel's view and changes (/api/access, the local board's only).
   const remoteAccess = createRemoteAccess({
     cfg,
@@ -389,6 +412,7 @@ export async function startServer({
     tunnel,
     onChange: accessChanged,
     server: serverSetup,
+    sync: profileSync,
   })
   // The user's presence (#172): nothing is read, asked or shown while config.json has no `presence`.
   const presence = createPresence({

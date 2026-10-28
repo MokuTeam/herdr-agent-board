@@ -223,6 +223,12 @@ describe('Remote access, set up from the local board', () => {
     expect(bare.status).toBe(403)
     expect(typeof (await api.accessRev())).toBe('number')
     expect(ssh.sshCalls()).toEqual([])
+    // no sync of the profiles asked for: the view has none, as before it; one asked for with no
+    // server set runs no ssh, and the view still has none
+    expect('sync' in v).toBe(false)
+    expect((await api.op({ op: 'sync-look', direction: 'up' }))[0]).toBe(409)
+    expect('sync' in (await api.view())).toBe(false)
+    expect(ssh.sshCalls()).toEqual([])
   })
 
   test('a field that fails its check is refused and nothing is written; the ones that check out are saved', async () => {

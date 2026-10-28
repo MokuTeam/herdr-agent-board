@@ -39,6 +39,7 @@ import {
 } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
 import type { Access } from './access.ts'
+import type { ProfileSync } from './profile-sync.ts'
 import type { ServerSetup } from './server-setup.ts'
 import type { Supervisor } from './tunnel.ts'
 
@@ -64,6 +65,8 @@ export interface RemoteAccessDeps {
   onChange?: () => void
   /** Setting up the server's web server through the admin connection (services/server-setup.ts). */
   server: ServerSetup
+  /** Syncing the Claude profiles with the board installed on the server (services/profile-sync.ts). */
+  sync?: ProfileSync
 }
 
 type Answer = { status: number; body: unknown }
@@ -185,6 +188,7 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
       const c = conf()
       const problems = tunnelProblems(c, ports())
       const { logins, attempts, ...login } = access.view()
+      const sync = d.sync?.view() ?? null
       return {
         tunnel: {
           settings: c,
@@ -203,6 +207,8 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
         logins,
         attempts,
         server: d.server.view(),
+        // only once a sync was asked for: the view is as it was until then
+        ...(sync && { sync }),
       }
     },
 
@@ -292,6 +298,17 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
           return d.server.installForget()
         case 'server-install-domain':
           return d.server.installDomain(b)
+        // Syncing the Claude profiles with the board on the server: answers that never hold the body (the passwords)
+        case 'sync-look':
+          return d.sync ? d.sync.look(b) : malformed('no sync')
+        case 'sync-pair':
+          return d.sync ? d.sync.pair(b) : malformed('no sync')
+        case 'sync-apply':
+          return d.sync ? d.sync.apply(b) : malformed('no sync')
+        case 'sync-cancel':
+          return d.sync ? d.sync.cancel() : malformed('no sync')
+        case 'sync-forget':
+          return d.sync ? d.sync.forget() : malformed('no sync')
         default:
           return malformed(`unknown op ${String(b.op)}`)
       }
