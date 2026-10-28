@@ -3,6 +3,7 @@
 // transcript, `project` in history.jsonl); on the target, the shared part of a file merged by key
 // into its own (settings.json, .claude.json), or history.jsonl's lines joined with its own. The
 // target's own secrets, state and hooks stay as they are. Pure.
+import { BROWSER_MCP } from '../desktop.ts'
 import { type Move, moved, type Platform } from './paths.ts'
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -131,7 +132,8 @@ function mergeMcps(own: unknown, shared: unknown): Record<string, unknown> {
   const out: Record<string, unknown> = { ...mine }
   if (!isRecord(shared)) return out
   for (const [name, server] of Object.entries(shared)) {
-    if (!isRecord(server)) continue
+    // the board's own browser MCP server: the target's install's, whatever comes
+    if (!isRecord(server) || name === BROWSER_MCP) continue
     const theirs = isRecord(mine[name]) ? (mine[name] as Record<string, unknown>) : {}
     out[name] = {
       ...server,

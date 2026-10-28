@@ -26,6 +26,7 @@ import type { Item } from '../core/types.ts'
 import type { WakeView } from '../core/wake/view.ts'
 import { collect } from '../services/board.ts'
 import type { Deps } from '../services/deps.ts'
+import type { Desktops } from '../services/desktop.ts'
 import { canFork } from '../services/launch/fork.ts'
 import type { Launches } from '../services/launch/launches.ts'
 import { hooksInPlace } from '../services/profiles.ts'
@@ -69,6 +70,8 @@ interface Options {
   omarchy?: () => string | null
   /** The user's presence (services/presence.ts); null while it is not on. */
   presence?: () => PresenceView | null
+  /** The agents' own browsers (services/desktop.ts), on the board's own server only: each card's `desktop`. */
+  desktops?: Pick<Desktops, 'view' | 'observe'>
 }
 
 // The colors the category editor offers (aliases left out).
@@ -157,6 +160,7 @@ export function createBoardState({
   accessRev,
   omarchy,
   presence,
+  desktops,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -187,6 +191,12 @@ export function createBoardState({
     // What the page has no use for stays here: file paths (the Claude folder included), the Claude
     // process and its pipe.
     const list = items.map(({ transcript, claudeRoot, alive, since, pipe, ...rest }) => launches.decorate(rest))
+    // On the board's own server: the cards whose session has a browser say so.
+    if (desktops)
+      for (const [i, item] of items.entries()) {
+        const desktop = desktops.view(item)
+        if (desktop) list[i] = { ...list[i], desktop } as (typeof list)[number]
+      }
     // The schedule without the scheduler's bookkeeping; the log is what was sent or missed lately.
     const schedules = listEntries().map(({ claim, tried, waited, ...entry }) => entry)
     // The usage the pill shows: the board's own profile's (the default one's when its env points to
@@ -308,6 +318,7 @@ export function createBoardState({
       }
       items = await collect(deps, { helpers: true, links, seen })
       launches.observe(items)
+      desktops?.observe(items)
       stale = false
       lastSuccessfulRefreshAt = Date.now()
       publish()

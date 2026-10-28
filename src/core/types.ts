@@ -276,5 +276,19 @@ export interface Item {
   profileWanted?: string
   /** The Claude folder its records were read from (server only). */
   claudeRoot?: string | null
+  /** Its own browser on the board's server (core/desktop.ts); absent when it has none, and always on a PC. */
+  desktop?: ItemDesktop
   [extra: string]: unknown
+}
+
+/** A session's own browser on the board's server, as its card has it (core/desktop.ts): the card's `desktop`. */
+export interface ItemDesktop {
+  /** Its display and Chrome are up (false while they start). */
+  running: boolean
+  /** The named browser profile it has open; null: the session's own, gone with it. */
+  profile: string | null
+  /** Who acts in it: the agent, or the owner (the agent's browser actions wait). */
+  control: 'agent' | 'owner'
+  /** The agent asked the owner to act in its browser (`board browser ask`). */
+  asks: boolean
 }

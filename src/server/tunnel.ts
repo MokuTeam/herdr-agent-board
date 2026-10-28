@@ -33,6 +33,7 @@
 // link, services/first-login.ts), rate-limited as a sign-in, and everything else is 401; once it
 // is set, they are 404 and the rest is as above.
 import { chmodSync, lstatSync, unlinkSync } from 'node:fs'
+import type { WebSocketHandler } from 'bun'
 import { isRecord } from '../adapters/json-store.ts'
 import {
   clearLoginCookie,
@@ -81,6 +82,11 @@ export interface TunnelListenerOptions {
   onChange: () => void
   /** The first login's setup (services/first-login.ts), in server mode: without it the setup's calls are 404. */
   firstLogin?: FirstLogin
+  /**
+   * In server mode, the WebSockets the routes make (a desktop's VNC, services/desktop.ts): each
+   * closes when its login ends. Without it, or on the tunnel's port, none is made.
+   */
+  websocket?: WebSocketHandler<object>
 }
 
 export interface TunnelListener {
@@ -387,6 +393,14 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
         path,
         { ...o.guards, origins: [origin], ownFiles: o.ownFiles },
         () => peerOf(srv, req),
+        // in server mode: a WebSocket that ends with this login
+        here.setup && o.websocket && srv
+          ? (data, headers) =>
+              srv.upgrade(req, {
+                data: { ...data, watch: (gone: () => void) => o.access.watch(login.id, gone) },
+                ...(headers && { headers }),
+              })
+          : undefined,
       )
       return endsWhenGone(res, gone => o.access.watch(login.id, gone), { 'x-accel-buffering': 'no' })
     } catch (err) {
@@ -419,7 +433,8 @@ export function createTunnelListener(o: TunnelListenerOptions): TunnelListener {
         ...NO_IDLE_TIMEOUT,
         development: false,
         fetch: async (req, srv) => unframed(await answer(req, srv)),
-      })
+        ...(o.websocket && { websocket: o.websocket }),
+      } as Parameters<typeof Bun.serve>[0]) as Server
       boundSocket = path
       // Also when the process exits without close(): run.ts restarts the board by process.exit(75).
       atExit = () => removeSocket(path)

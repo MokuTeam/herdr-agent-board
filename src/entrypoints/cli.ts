@@ -65,6 +65,13 @@
 //                            TG_KEY (core/wake/topics.ts keyFor); outside herdr, or with a herdr
 //                            that does not answer within 5 s, the folder; always exits 0. For the
 //                            launchers (core/wake/launchers.ts), so not in the usage line
+//   board browser ask <text>    on the board's own server (core/desktop.ts): asks the owner to act
+//                            in this session's own browser (sign in, a captcha, 2FA): the card goes
+//                            under "Needs me" with the browser on it, which starts when it is not up
+//   board browser profile [<name>]   that browser with a named profile, whose sign-ins stay for
+//                            later sessions (a new name makes one); no name: the session's own
+//   board browser-mcp        the agent's browser as an MCP server (stdio; services/browser-mcp.ts):
+//                            what the install puts in each Claude profile on the board's server
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -96,7 +103,7 @@ import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
 import { CODEX_AGENT } from '../core/codex.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
-import { serverModeChecks, serverModeOf, serverModeProblems } from '../core/on-server.ts'
+import { onServer, serverModeChecks, serverModeOf, serverModeProblems } from '../core/on-server.ts'
 import { isPiSessionFile, piSessionId } from '../core/pi.ts'
 import { type PresenceState, presenceConfig, presenceLine } from '../core/presence.ts'
 import { type ProfileSet, profileSet, resolveProfileDir, sessionProfile } from '../core/profiles.ts'
@@ -117,7 +124,7 @@ import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | login [link | reset] | doctor | update [--ref <ref>] | presence [here | away] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id>] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | login [link | reset] | doctor | update [--ref <ref>] | presence [here | away] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | browser ask <text> | browser profile [<name>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -490,6 +497,11 @@ async function main(): Promise<void> {
     if (server) {
       const { onServerFacts } = await import('../services/first-login.ts')
       checks.push(...serverModeChecks(await onServerFacts(server), t))
+      // the agents' own browsers: Xvnc, the browser, the fonts, chrome-devtools-mcp, each profile's MCP server
+      const { desktopDoctorFacts } = await import('../adapters/desktop-files.ts')
+      const { desktopChecks } = await import('../core/desktop.ts')
+      const { shownProfiles } = await import('../core/profiles.ts')
+      checks.push(...desktopChecks(desktopDoctorFacts(shownProfiles(deps.profiles().list)), t))
     }
     return console.log(report(checks, t))
   }
@@ -523,6 +535,8 @@ async function main(): Promise<void> {
   if (cmd === 'resume') return rest.includes('--pi') ? resumePi() : resume()
   if (cmd === 'tg-key') return tgKey()
   if (cmd === 'presence' || cmd === 'away') return presence()
+  if (cmd === 'browser-mcp') return browserMcp()
+  if (cmd === 'browser') return browser()
 
   const s = await resolveSession()
   const now = Date.now()
@@ -1300,6 +1314,63 @@ async function callReport(): Promise<void> {
   const e = addEntry(fields)
   console.log(
     `ok · call report ${e.id} for ${name || session.slice(0, 8)}, typed in once the session is free · cancel: board unschedule ${e.id}${await schedulerNote()}`,
+  )
+}
+
+/** The agent's browser as an MCP server, on the board's own server (services/browser-mcp.ts); exits when Claude closes it. */
+async function browserMcp(): Promise<void> {
+  if (!onServer(cfg)) throw new Error("browser-mcp: the agents' browsers are on the board's own server only")
+  const { paneOf: sessionPane, runWrapper } = await import('../services/browser-mcp.ts')
+  const { devtoolsMcpBin } = await import('../adapters/desktop-files.ts')
+  const pane = sessionPane()
+  if (!pane) throw new Error('browser-mcp: no herdr pane (HERDR_PANE_ID); it runs in a session in herdr')
+  const bin = devtoolsMcpBin()
+  if (!bin)
+    throw new Error('browser-mcp: chrome-devtools-mcp is not in place: herdr plugin action invoke agent-board.install')
+  const hold = Number(process.env.BOARD_BROWSER_HOLD_MS)
+  const code = await runWrapper({
+    pane,
+    origin: `http://127.0.0.1:${Number(cfg.port) || 12422}`,
+    fetch: localFetch(cfg),
+    bin,
+    ...(hold > 0 && { holdMs: hold }),
+  })
+  process.exit(code)
+}
+
+/** `board browser ask|profile`: this session's own browser on the board's server, through the board. */
+async function browser(): Promise<void> {
+  const [what, ...words] = rest
+  const usage = 'usage: board browser ask <text> | board browser profile [<name>]'
+  if (what !== 'ask' && what !== 'profile') throw new Error(usage)
+  if (!onServer(cfg)) throw new Error("board browser: the agents' browsers are on the board's own server only")
+  const pane = process.env.HERDR_PANE_ID
+  if (!pane) throw new Error('board browser: run it in your session (no HERDR_PANE_ID)')
+  const said = words.join(' ').replace(/\s+/g, ' ').trim()
+  if (what === 'ask' && !said) throw new Error(usage)
+  let r: { ok?: boolean; error?: string; profile?: string | null; copy?: boolean }
+  try {
+    const res = await localFetch(cfg)(`http://127.0.0.1:${Number(cfg.port) || 12422}/api/browser/${what}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(what === 'ask' ? { pane, text: said } : { pane, name: words[0] || null }),
+      signal: AbortSignal.timeout(90_000),
+    })
+    r = (await res.json()) as typeof r
+  } catch {
+    throw new Error('the board does not run: open it first (herdr plugin action invoke agent-board.open)')
+  }
+  if (r.ok !== true) throw new Error(r.error ?? 'not done')
+  if (what === 'ask')
+    return console.log(
+      'ok · asked: your card is under "Needs me" with your browser; your browser tools wait while the owner has it',
+    )
+  console.log(
+    !r.profile
+      ? "ok · your browser has this session's own profile"
+      : r.copy
+        ? `ok · a copy of the profile "${r.profile}" (another session has it): thrown away afterwards`
+        : `ok · your browser has the profile "${r.profile}"; its sign-ins stay`,
   )
 }
 

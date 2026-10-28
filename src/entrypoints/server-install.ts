@@ -12,12 +12,17 @@
 //   server-install.ts --user-part on '<{"domain","socket"}>' '<source>'   the server mode on, where the code came from
 //   server-install.ts --user-part off                                      the server mode off
 import { closeSync, mkdirSync, openSync, readSync, writeFileSync, writeSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { setServerMode } from '../adapters/config-file.ts'
-import { configDir } from '../adapters/paths.ts'
+import { putBrowserParts, takeBrowserParts } from '../adapters/desktop-files.ts'
+import { configDir, stateDir } from '../adapters/paths.ts'
+import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { t, useLanguage } from '../core/lang.ts'
+import { shownProfiles } from '../core/profiles.ts'
 import { BOARD_SOCKET, installFlags, SOURCE_FILE, sourceOf } from '../core/server-install.ts'
 import { fieldProblem } from '../core/tunnel.ts'
+import { createDesktops } from '../services/desktop.ts'
 import { type Io, install, undo } from '../services/server-install.ts'
 
 /** A line typed on the terminal, the question written there; null without a terminal. */
@@ -46,10 +51,21 @@ function readTty(question: string): string | null {
   }
 }
 
-function userPart(args: string[]): number {
+async function userPart(args: string[]): Promise<number> {
   const [what, mode, source] = args
+  const say = (line: string): void => console.log(line)
+  const profiles = loadProfiles({ shownDir: inheritedProfileDir() })
   if (what === 'off') {
     setServerMode(null)
+    // the agents' browsers: those still running stopped, the MCP server out of every profile
+    await createDesktops({
+      root: join(stateDir(), 'desktop'),
+      items: () => [],
+      writeCard: () => {},
+      onChange: () => {},
+      log: say,
+    }).stopAll()
+    takeBrowserParts(profiles, say)
     return 0
   }
   let m: unknown = null
@@ -66,6 +82,12 @@ function userPart(args: string[]): number {
   setServerMode({ domain, socket: BOARD_SOCKET })
   mkdirSync(configDir(), { recursive: true })
   writeFileSync(join(configDir(), SOURCE_FILE), `${JSON.stringify(s, null, 2)}\n`)
+  // the install action ran before the server mode was on: the agents' browsers' part now
+  await putBrowserParts(shownProfiles(profiles), {
+    board: join(homedir(), '.local', 'bin', 'board'),
+    bun: process.execPath,
+    say,
+  })
   return 0
 }
 

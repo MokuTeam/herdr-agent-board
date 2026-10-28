@@ -10,6 +10,7 @@
 // (entrypoints/server-install.ts, services/server-install.ts). Here: the names and paths the
 // three share, the flags, the service, and where the board's code came from. Pure, with no node:
 // import: the page shows the plan from it too.
+import { CHROME_DEB, CHROME_PACKAGE } from './desktop.ts'
 import { t } from './lang.ts'
 import type { Wanted } from './server-plan.ts'
 import { SERVER_NAMES } from './server-texts.ts'
@@ -230,7 +231,11 @@ export interface InstallRecord {
   source: Source
   sudo: boolean
   at: string
+  /** The packages for the agents' browsers this install added (Undo with --remove-user takes them away); absent: none. */
+  desktop?: string[]
 }
+
+const PACKAGE = /^[a-z0-9][a-z0-9.+-]{1,60}$/
 
 export function installRecord(v: unknown): InstallRecord | null {
   if (typeof v !== 'object' || v === null) return null
@@ -241,6 +246,9 @@ export function installRecord(v: unknown): InstallRecord | null {
   if (typeof r.home !== 'string' || !/^\/[A-Za-z0-9._/-]+$/.test(r.home)) return null
   if (typeof r.domain !== 'string' || r.domain === '' || fieldProblem('domain', r.domain)) return null
   if (r.socket !== BOARD_SOCKET || typeof r.sudo !== 'boolean' || typeof r.at !== 'string') return null
+  const desktop = Array.isArray(r.desktop)
+    ? r.desktop.filter((p): p is string => typeof p === 'string' && PACKAGE.test(p))
+    : []
   return {
     v: 1,
     user: r.user,
@@ -250,8 +258,28 @@ export function installRecord(v: unknown): InstallRecord | null {
     source,
     sudo: r.sudo,
     at: r.at,
+    ...(desktop.length && { desktop }),
   }
 }
+
+/**
+ * The agents' browsers' packages, as root (core/desktop.ts): from the system's own apt, and
+ * Google Chrome from Google's .deb (which adds Google's repository, so apt updates it).
+ */
+export function desktopScript(add: readonly string[]): string {
+  const apt = add.filter(p => p !== CHROME_PACKAGE && PACKAGE.test(p))
+  const lines = ['set -e', 'export DEBIAN_FRONTEND=noninteractive', 'apt-get update -qq']
+  if (apt.length) lines.push(`apt-get install -y -qq --no-install-recommends ${apt.join(' ')}`)
+  if (add.includes(CHROME_PACKAGE))
+    lines.push(
+      `d=$(mktemp -d) && chmod 755 "$d" && trap 'rm -rf "$d"' EXIT && curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 ${CHROME_DEB} -o "$d/chrome.deb" && chmod 644 "$d/chrome.deb" && apt-get install -y -qq "$d/chrome.deb"`,
+    )
+  return lines.join('\n')
+}
+
+/** Undo's: the packages the install added for the agents' browsers, purged. */
+export const desktopRemoveScript = (packages: readonly string[]): string =>
+  `DEBIAN_FRONTEND=noninteractive apt-get purge -y -qq ${packages.filter(p => PACKAGE.test(p)).join(' ')}`
 
 /** The install's own part of the plan, before the web server's (path A prints it, path B's panel shows it). */
 export interface InstallFacts {
@@ -264,6 +292,8 @@ export interface InstallFacts {
   source: Source
   /** Whose ssh keys the user gets (none: no keys to copy, or it has its own). */
   keysFrom: string | null
+  /** The packages the agents' browsers need that are not there yet (core/desktop.ts); absent: none. */
+  desktop?: readonly string[]
 }
 
 /** The install's own steps in plain words, in `tr`'s language. */
@@ -278,6 +308,7 @@ export function installWill(f: InstallFacts, tr: Translator = t): string[] {
   will.push(tr('install.will.board', { from: sourceLine(f.source, tr) }))
   will.push(tr('install.will.key', user))
   will.push(tr('install.will.service', user))
+  if (f.desktop?.length) will.push(tr('install.will.desktop', { packages: f.desktop.join(', ') }))
   return will
 }
 

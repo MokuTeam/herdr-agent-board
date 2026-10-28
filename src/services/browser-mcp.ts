@@ -1,0 +1,316 @@
+// `board browser-mcp`: the agent's browser as an MCP server (stdio), which the board's install
+// puts in each Claude profile on the board's server (core/desktop.ts BROWSER_MCP). It knows its
+// session by its pane (HERDR_PANE_ID, else its Claude's own environment) and runs
+// chrome-devtools-mcp (pinned, adapters/desktop-files.ts) pointed at a DevTools address of its
+// own on 127.0.0.1: the first time chrome-devtools-mcp connects there (its first tool call), the
+// board starts the session's desktop (services/desktop.ts) and the address answers with that
+// Chrome's, so chrome-devtools-mcp talks to it directly from then on.
+//
+// Between Claude and chrome-devtools-mcp it relays JSON-RPC line by line, and before a tool call
+// goes on it asks the board who has the browser: while the owner has it, the call waits, up to
+// HOLD_MS, then answers that the owner has the browser. Two tools of its own join the list:
+// browser_profile (a named profile, for logins that last) and browser_ask_owner (the card under
+// "needs you": sign in to X for me).
+import { readFileSync } from 'node:fs'
+import { HOLD_MS } from '../core/desktop.ts'
+
+type Msg = Record<string, unknown>
+const isRecord = (v: unknown): v is Msg => !!v && typeof v === 'object' && !Array.isArray(v)
+
+/** The tools the wrapper answers itself. */
+export const OWN_TOOLS = [
+  {
+    name: 'browser_profile',
+    description:
+      'Opens your browser with a named profile, whose sign-ins stay for later sessions (a new name makes a new one; "github", "client-x"). With no name, a profile of this session only, gone when it ends. Your browser restarts: open pages close. When another session has that profile open, you get a copy of it, thrown away afterwards.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'letters, digits, ".", "_" and "-"; empty: this session only' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'browser_ask_owner',
+    description:
+      'Asks the owner to act in your browser for you: sign in, a password or a key, a captcha, 2FA. Your card goes under "needs you" with your browser on it; the owner takes it over from the board and hands it back. While the owner has it, your browser tools wait. Never type the owner\'s secrets yourself.',
+    inputSchema: {
+      type: 'object',
+      properties: { text: { type: 'string', description: 'what you need, e.g. "Sign in to GitHub as acme-bot"' } },
+      required: ['text'],
+      additionalProperties: false,
+    },
+  },
+] as const
+
+export const OWNER_HAS_IT =
+  'The owner has the browser now (they took it over from the board). Try again later, or ask what they need; nothing was done.'
+
+export interface RelayOptions {
+  /** POST /api/browser/<op> on the board with this pane: its answer, or null when the board does not answer. */
+  board(op: 'call' | 'profile' | 'ask', body: Msg): Promise<Msg | null>
+  toChild(line: string): void
+  toClient(line: string): void
+  holdMs?: number
+  pollMs?: number
+  sleep?: (ms: number) => Promise<void>
+  now?: () => number
+}
+
+export interface Relay {
+  fromClient(line: string): void
+  fromChild(line: string): void
+  /** Calls held now (the owner has the browser). */
+  held(): number
+  /** Every call answered or passed on (tests wait for it). */
+  idle(): Promise<void>
+}
+
+const idKey = (id: unknown): string => JSON.stringify(id ?? null)
+const result = (id: unknown, text: string, isError = false): string =>
+  JSON.stringify({
+    jsonrpc: '2.0',
+    id,
+    result: { content: [{ type: 'text', text }], ...(isError && { isError: true }) },
+  })
+
+/** The JSON-RPC relay between Claude (client) and chrome-devtools-mcp (child). */
+export function createRelay(o: RelayOptions): Relay {
+  const holdMs = o.holdMs ?? HOLD_MS
+  const pollMs = o.pollMs ?? 1000
+  const sleep = o.sleep ?? ((ms: number) => Bun.sleep(ms))
+  const now = o.now ?? Date.now
+  const lists = new Set<string>()
+  const holding = new Map<string, { cancelled: boolean }>()
+  const busy = new Set<Promise<void>>()
+  const track = (p: Promise<void>): void => {
+    busy.add(p)
+    void p.finally(() => busy.delete(p))
+  }
+
+  /** Resolves true once the agent has the browser (or the board does not say), false when the hold timed out or was cancelled. */
+  async function agentHasIt(id: unknown): Promise<boolean> {
+    const key = idKey(id)
+    const mark = { cancelled: false }
+    const deadline = now() + holdMs
+    try {
+      for (;;) {
+        const r = await o.board('call', {})
+        if (mark.cancelled) return false
+        if (r?.control !== 'owner') return true
+        if (!holding.has(key)) holding.set(key, mark)
+        if (now() >= deadline) {
+          o.toClient(result(id, OWNER_HAS_IT, true))
+          return false
+        }
+        await sleep(pollMs)
+        if (mark.cancelled) return false
+      }
+    } finally {
+      if (holding.get(key) === mark) holding.delete(key)
+    }
+  }
+
+  async function own(msg: Msg, params: Msg): Promise<void> {
+    const id = msg.id
+    const args = isRecord(params.arguments) ? params.arguments : {}
+    if (params.name === 'browser_profile') {
+      if (!(await agentHasIt(id))) return
+      const name = typeof args.name === 'string' ? args.name : ''
+      const r = await o.board('profile', { name: name || null })
+      if (!r) return o.toClient(result(id, 'The board does not answer: no browser now.', true))
+      if (r.ok !== true) return o.toClient(result(id, String(r.error ?? 'not done'), true))
+      const text = !r.profile
+        ? 'Your browser has this session’s own profile now (gone when the session ends).'
+        : r.copy
+          ? `Your browser has a copy of the profile "${r.profile}" (another session has it open): what you change in it is thrown away afterwards.`
+          : `Your browser has the profile "${r.profile}" now; its sign-ins stay for later sessions.`
+      return o.toClient(result(id, text))
+    }
+    const text = typeof args.text === 'string' ? args.text.trim() : ''
+    if (!text) return o.toClient(result(id, 'text: what you need the owner to do', true))
+    const r = await o.board('ask', { text })
+    if (!r) return o.toClient(result(id, 'The board does not answer: the owner was not asked.', true))
+    if (r.ok !== true) return o.toClient(result(id, String(r.error ?? 'not asked'), true))
+    o.toClient(
+      result(
+        id,
+        'Asked: your card is under "needs you" with your browser on it. While the owner has your browser your browser tools wait; when they hand it back, go on (check the page first).',
+      ),
+    )
+  }
+
+  return {
+    fromClient(line) {
+      let msg: unknown
+      try {
+        msg = JSON.parse(line)
+      } catch {
+        return o.toChild(line)
+      }
+      if (!isRecord(msg)) return o.toChild(line)
+      const params = isRecord(msg.params) ? msg.params : {}
+      if (msg.method === 'tools/list' && msg.id !== undefined) lists.add(idKey(msg.id))
+      if (msg.method === 'notifications/cancelled') {
+        const held = holding.get(idKey(params.requestId))
+        if (held) {
+          held.cancelled = true
+          return
+        }
+      }
+      if (msg.method !== 'tools/call') return o.toChild(line)
+      if (OWN_TOOLS.some(t => t.name === params.name)) return track(own(msg, params))
+      track(
+        agentHasIt(msg.id).then(go => {
+          if (go) o.toChild(line)
+        }),
+      )
+    },
+    fromChild(line) {
+      let msg: unknown
+      try {
+        msg = JSON.parse(line)
+      } catch {
+        return o.toClient(line)
+      }
+      const key = isRecord(msg) ? idKey(msg.id) : ''
+      if (isRecord(msg) && lists.has(key) && isRecord(msg.result) && Array.isArray(msg.result.tools)) {
+        lists.delete(key)
+        if (!msg.result.nextCursor) msg.result.tools = [...msg.result.tools, ...OWN_TOOLS]
+        return o.toClient(JSON.stringify(msg))
+      }
+      o.toClient(line)
+    },
+    held: () => holding.size,
+    async idle() {
+      while (busy.size) await Promise.all([...busy])
+    },
+  }
+}
+
+/** The session's pane: HERDR_PANE_ID, else its parent's (Claude's) own environment, where herdr set it. */
+export function paneOf(env: NodeJS.ProcessEnv = process.env, ppid = process.ppid): string | null {
+  if (env.HERDR_PANE_ID) return env.HERDR_PANE_ID
+  try {
+    const parent = readFileSync(`/proc/${ppid}/environ`, 'utf8').split('\0')
+    const line = parent.find(l => l.startsWith('HERDR_PANE_ID='))
+    return line ? line.slice('HERDR_PANE_ID='.length) || null : null
+  } catch {
+    return null
+  }
+}
+
+/** Lines of a byte stream, each without its newline, as they come. */
+export async function* linesOf(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+  const decoder = new TextDecoder()
+  let rest = ''
+  for await (const chunk of stream) {
+    const parts = (rest + decoder.decode(chunk, { stream: true })).split('\n')
+    rest = parts.pop() ?? ''
+    for (const p of parts) if (p.trim()) yield p.replace(/\r$/, '')
+  }
+  rest += decoder.decode()
+  if (rest.trim()) yield rest
+}
+
+export interface WrapperOptions {
+  pane: string
+  /** The board's address: http://127.0.0.1:<port>. */
+  origin: string
+  /** fetch with the board's local key (adapters/local-key.ts localFetch). */
+  fetch: (url: string, init?: RequestInit) => Promise<Response>
+  /** chrome-devtools-mcp's program. */
+  bin: string
+  holdMs?: number
+}
+
+/** Runs the wrapper on this process's stdin and stdout until Claude closes stdin; its exit code. */
+export async function runWrapper(w: WrapperOptions): Promise<number> {
+  const ask = async (op: string, body: Msg, ms: number): Promise<Msg | null> => {
+    try {
+      const res = await w.fetch(`${w.origin}/api/browser/${op}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...body, pane: w.pane }),
+        signal: AbortSignal.timeout(ms),
+      })
+      const v: unknown = await res.json()
+      return isRecord(v) ? v : null
+    } catch {
+      return null
+    }
+  }
+  // chrome-devtools-mcp's DevTools address: the session's Chrome once the board has it up
+  const devtools = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    async fetch(req) {
+      const path = new URL(req.url).pathname
+      if (path !== '/json/version' && path !== '/json/version/') return new Response('not found', { status: 404 })
+      const r = await ask('start', {}, 90_000)
+      if (!r) return new Response('the board does not answer', { status: 503 })
+      if (r.ok !== true) return new Response(String(r.error ?? 'no browser'), { status: 503 })
+      try {
+        const real = await fetch(`http://127.0.0.1:${Number(r.port)}/json/version`, {
+          signal: AbortSignal.timeout(5000),
+        })
+        return new Response(await real.text(), { status: real.status, headers: { 'content-type': 'application/json' } })
+      } catch (err) {
+        return new Response(err instanceof Error ? err.message : String(err), { status: 502 })
+      }
+    },
+  })
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      w.bin,
+      '--browserUrl',
+      `http://127.0.0.1:${devtools.port}`,
+      '--no-usage-statistics',
+      '--no-performance-crux',
+      // one agent to a browser: its tools need no page ids
+      '--no-page-id-routing',
+    ],
+    {
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'inherit',
+      env: { ...process.env, CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: '1', CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: '1' },
+    },
+  )
+  const out = (line: string): void => {
+    process.stdout.write(`${line}\n`)
+  }
+  const relay = createRelay({
+    board: (op, body) => ask(op, body, op === 'call' ? 5000 : 90_000),
+    toChild: line => {
+      try {
+        child.stdin.write(`${line}\n`)
+        void child.stdin.flush()
+      } catch {}
+    },
+    toClient: out,
+    ...(w.holdMs !== undefined && { holdMs: w.holdMs }),
+  })
+  const fromChild = (async () => {
+    for await (const line of linesOf(child.stdout)) relay.fromChild(line)
+  })()
+  const fromClient = (async () => {
+    for await (const line of linesOf(Bun.stdin.stream() as ReadableStream<Uint8Array>)) relay.fromClient(line)
+  })()
+  // Claude closed stdin (what is under way is not waited for), or chrome-devtools-mcp ended
+  const first = await Promise.race([
+    fromClient.then(() => 'client' as const),
+    child.exited.then(() => 'child' as const),
+  ])
+  if (first === 'client') {
+    try {
+      await child.stdin.end()
+    } catch {}
+    if ((await Promise.race([child.exited, Bun.sleep(3000).then(() => null)])) === null) child.kill()
+  }
+  await fromChild.catch(() => {})
+  devtools.stop(true)
+  return first === 'client' ? 0 : 1
+}
