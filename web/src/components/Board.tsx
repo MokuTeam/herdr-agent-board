@@ -20,8 +20,11 @@ import { DropArchive } from './DropArchive.tsx'
 import { Lane, type NewSessionContext } from './Lane.tsx'
 
 export interface BoardProps {
-  /** Opens a session when not in the sheet as by default; `compose`: with the message box ready. */
-  onOpen?: (key: string, opts: { compose: boolean }) => void
+  /**
+   * Opens a session when not in the sheet as by default; `compose`: with the message box ready;
+   * `browser`: with its own browser shown.
+   */
+  onOpen?: (key: string, opts: { compose: boolean; browser?: boolean }) => void
   onNewSession?: (ctx: NewSessionContext, from: HTMLElement) => void
   /** A lane's head: the categories panel, at that lane. */
   onLaneHead?: (id: string) => void
@@ -82,9 +85,9 @@ export function Board({ onOpen, onNewSession, onLaneHead, launch, takeovers, roo
     },
   })
 
-  function open(key: string, compose = false): void {
-    if (onOpen) onOpen(key, { compose })
-    else dispatch({ type: 'open', key, compose })
+  function open(key: string, compose = false, browser = false): void {
+    if (onOpen) onOpen(key, { compose, ...(browser && { browser }) })
+    else dispatch({ type: 'open', key, compose, ...(browser && { browser }) })
   }
 
   function onCardClick(e: MouseEvent<HTMLElement>, key: string): void {
@@ -96,6 +99,7 @@ export function Board({ onOpen, onNewSession, onLaneHead, launch, takeovers, roo
     const act = button?.dataset.act
     if (act === 'focus') void actions.focusSession(key)
     else if (act === 'write') open(key, true)
+    else if (act === 'browser') open(key, false, true)
     else if (act === 'dismiss') void actions.dismissAsk(key)
     else if (act === 'sleep') void actions.sleepSession(key)
     else if (act === 'rel') goToSession(button?.dataset.key ?? '')
