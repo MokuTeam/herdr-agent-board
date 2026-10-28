@@ -12,7 +12,11 @@
 // socket while the board's listener is not in this branch; with it, its login and setup pages),
 // the script run again (nothing to change, herdr left running), `board update` following the ref,
 // a reboot bringing herdr back, then Undo, and Undo with the user. Their Caddy in Docker with two
-// sites (case 3a): the board added and their sites answering all along.
+// sites (case 3a): the board added and their sites answering all along. Beside the tunnel (the
+// owner's server, case 3a): the tunnel's setup first by its one command, the tunnel up by its own
+// ssh line to a stand-in on this PC, then the board on another domain; both domains answer, their
+// sites and the tunnel's domain all along; the board's Undo leaves the tunnel answering and its
+// record as it was, then the tunnel's Undo leaves their Caddyfile as it was before either.
 //
 // Long (the installers download Bun, herdr, Claude Code and Docker's images; a flaky internet is
 // tried again, BOARD_INSTALL_TRIES): BOARD_SERVER_IT=1 bun test test/integration/server-install.test.ts
@@ -21,8 +25,12 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { ROOT } from '../../src/adapters/paths.ts'
+import { protectKey } from '../../src/adapters/ssh.ts'
 import { BOARD_SOCKET, BOARD_USER_COMMENT } from '../../src/core/server-install.ts'
+import { oneshotScripts } from '../../src/core/server-oneshot.ts'
+import type { Wanted } from '../../src/core/server-plan.ts'
 import { FENCE_FILE } from '../../src/core/server-texts.ts'
+import { forwardAccepted, sshArgs, TUNNEL_SOCKET, tunnelConfig } from '../../src/core/tunnel.ts'
 import {
   buildImage,
   closeLane,
@@ -46,6 +54,7 @@ import {
   until,
   work,
 } from './server/harness.ts'
+import { readEcho, startStandin } from './standin.ts'
 
 const ON = process.env.BOARD_SERVER_IT === '1'
 function dockerAnswers(): boolean {
@@ -70,6 +79,11 @@ const DOMAIN = 'board.example.com'
 const LANES = (process.env.BOARD_SERVER_IT_LANES ?? 'debian13').split(',').filter(Boolean) as Distro[]
 const SYSTEM32 = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32')
 const KEYGEN = process.platform === 'win32' ? join(SYSTEM32, 'OpenSSH', 'ssh-keygen.exe') : 'ssh-keygen'
+const SSH = process.platform === 'win32' ? join(SYSTEM32, 'OpenSSH', 'ssh.exe') : 'ssh'
+/** The board on the server beside the tunnel: its own domain (the tunnel's is DOMAIN). */
+const WORKBENCH = 'workbench.example.com'
+/** The tunnel's setup on the owner's server: its user and socket as the PC board has them. */
+const TUNNEL_W: Wanted = { user: 'boardtunnel', socket: TUNNEL_SOCKET, domain: DOMAIN, publicPort: null }
 const REPO = 'file:///opt/board.git'
 const REF = 'lane'
 const SCRIPT = '/root/server-install.sh'
@@ -84,6 +98,9 @@ const ANSWERS = [
 const rows: string[] = []
 const lanes = new Map<Distro, Lane>()
 let adminKey = ''
+/** The PC board's tunnel key (its public half in the tunnel user's keys file once the one command ran). */
+let boardKeyFile = ''
+let boardKey = ''
 let repo = ''
 
 /** git on this checkout, its index the lane's own when `index` is given; stdout. */
@@ -144,8 +161,8 @@ async function serverFor(l: Lane, tag: string, scenario?: string): Promise<TestS
 }
 
 /** The install as the owner runs it: in a terminal on the server as root, its questions answered yes. */
-async function install(s: TestServer, more = ''): Promise<{ code: number; out: string }> {
-  const r = await onTty(s, `env ${ENV} sh ${SCRIPT} --domain ${DOMAIN} --repo ${REPO} --ref ${REF} ${more}`.trim(), {
+async function install(s: TestServer, more = '', domain = DOMAIN): Promise<{ code: number; out: string }> {
+  const r = await onTty(s, `env ${ENV} sh ${SCRIPT} --domain ${domain} --repo ${REPO} --ref ${REF} ${more}`.trim(), {
     answers: ANSWERS,
     timeoutMs: 90 * MIN,
   })
@@ -201,12 +218,12 @@ async function fromClient(
 }
 
 /** The domain answering from the client (its certificate first: a few tries while Caddy gets it). */
-async function domainAnswers(l: Lane, s: TestServer, who: 'board' | 'stand-in'): Promise<string> {
+async function domainAnswers(l: Lane, s: TestServer, who: 'board' | 'stand-in', domain = DOMAIN): Promise<string> {
   let last = { code: '', body: '' }
   await until(
-    `${DOMAIN} answers from the client (${last.code} ${last.body.slice(0, 80)})`,
+    `${domain} answers from the client (${last.code} ${last.body.slice(0, 80)})`,
     async () => {
-      last = await fromClient(l, s, DOMAIN)
+      last = await fromClient(l, s, domain)
       return who === 'stand-in' ? last.body.startsWith('stand-in / https') : /^(200|302|303|401)$/.test(last.code)
     },
     5 * MIN,
@@ -214,10 +231,71 @@ async function domainAnswers(l: Lane, s: TestServer, who: 'board' | 'stand-in'):
   )
   if (who === 'board') {
     // the board's login: nothing but the setup page before a login is set (the listener's own branch)
-    const setup = await fromClient(l, s, DOMAIN, '/setup')
+    const setup = await fromClient(l, s, domain, '/setup')
     expect(setup.code).toBe('200')
   }
   return `${last.code} ${last.body.slice(0, 40)}`
+}
+
+/** The tunnel up: the PC board's own ssh line (core/tunnel.ts sshArgs) forwarding its socket to the stand-in; its stop. */
+async function tunnelUp(s: TestServer, port: number): Promise<() => Promise<void>> {
+  const conf = tunnelConfig({
+    host: '127.0.0.1',
+    sshPort: s.sshPort,
+    user: TUNNEL_W.user,
+    socket: TUNNEL_W.socket,
+    domain: DOMAIN,
+  })
+  const args = sshArgs({ conf, key: boardKeyFile, knownHosts: join(work(), `known_hosts-${s.name}`), target: port })
+  const proc = Bun.spawn([SSH, ...args], { stdin: 'ignore', stdout: 'ignore', stderr: 'pipe', windowsHide: true })
+  const reader = proc.stderr.getReader()
+  const decoder = new TextDecoder()
+  let rest = ''
+  let up = false
+  const seen: string[] = []
+  const drain = (async () => {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) return
+      const lines = (rest + decoder.decode(value, { stream: true })).split(/\r?\n/)
+      rest = lines.pop() ?? ''
+      for (const line of lines) {
+        if (forwardAccepted(line, conf.socket)) up = true
+        if (!line.startsWith('debug')) seen.push(line)
+      }
+    }
+  })()
+  await until(
+    `the tunnel's forward (${seen.slice(-3).join(' | ')})`,
+    async () => up || proc.exitCode !== null,
+    30_000,
+    100,
+  )
+  if (!up) throw new Error(`the tunnel did not come up: ${seen.join('\n')}`)
+  return async () => {
+    proc.kill()
+    await proc.exited
+    await drain.catch(() => {})
+  }
+}
+
+/** The tunnel's domain from the client, Pebble's certificate checked: the stand-in's echo for it. */
+async function tunnelAnswers(l: Lane, s: TestServer): Promise<boolean> {
+  let last = ''
+  await until(
+    `${DOMAIN} answers through the tunnel (${last})`,
+    async () => {
+      const r = await l.client(
+        `curl -sS -m 10 --cacert /root.pem --resolve ${DOMAIN}:443:${s.ip} https://${DOMAIN}/echo`,
+        { check: false },
+      )
+      last = (r.stderr || r.stdout).trim().slice(0, 200)
+      return readEcho(r.stdout)?.host === DOMAIN
+    },
+    3 * MIN,
+    2000,
+  )
+  return true
 }
 
 describe.skipIf(!DOCKER)('the board on a server of the owner’s (path A from this working copy)', () => {
@@ -227,6 +305,11 @@ describe.skipIf(!DOCKER)('the board on a server of the owner’s (path A from th
     await removeStale()
     adminKey = join(work(), 'admin_ed25519')
     await run([KEYGEN, '-q', '-t', 'ed25519', '-N', '', '-C', 'agent-board-it', '-f', adminKey])
+    boardKeyFile = join(work(), 'board_ed25519')
+    await run([KEYGEN, '-q', '-t', 'ed25519', '-N', '', '-C', 'agent-board@pc', '-f', boardKeyFile])
+    const protectedKey = await protectKey(boardKeyFile)
+    if (!protectedKey.ok) throw new Error(protectedKey.error)
+    boardKey = readFileSync(`${boardKeyFile}.pub`, 'utf8').trim()
     repo = laneRepo()
     await startMirror()
     await Promise.all(LANES.map(d => buildImage(d, true)))
@@ -418,6 +501,128 @@ describe.skipIf(!DOCKER)('the board on a server of the owner’s (path A from th
           row.push('Undo: their Caddyfile as it was, their sites answering')
         } finally {
           rows.push(row.join(' · '))
+          await s.stop()
+        }
+      },
+      150 * MIN,
+    )
+
+    test(
+      `${d}: beside the tunnel (case 3a, the owner's server): the tunnel first, then the board on another domain; each Undo leaves the other`,
+      async () => {
+        const l = lanes.get(d) as Lane
+        const s = await serverFor(l, 'install-beside', 'compose-folder')
+        await l.addA(WORKBENCH, s.ip)
+        const row = [`${d} beside the tunnel`]
+        const sites = ['a.example.com', 'b.example.com']
+        const caddyfile = "'/srv/my web/Caddyfile'"
+        const hashOf = async (path: string): Promise<string> =>
+          (await s.sh(`sha256sum ${path} | cut -c1-64`)).stdout.trim()
+        const blocks = async (): Promise<string> =>
+          (
+            await s.sh(
+              `grep -c '^# >>> agent-board:' ${caddyfile}; grep -c '^# >>> server agent-board:' ${caddyfile}`,
+              {
+                check: false,
+              },
+            )
+          ).stdout
+            .trim()
+            .split('\n')
+            .join(' ')
+        const running = async (name: string): Promise<boolean> =>
+          (await s.sh(`docker inspect -f '{{.State.Running}}' ${name}`, { check: false })).stdout.trim() === 'true'
+        let stopTunnel: (() => Promise<void>) | null = null
+        const standin = startStandin()
+        try {
+          const theirs = await hashOf(caddyfile)
+          // the tunnel's setup, by its one command on a terminal as root, with the board's key
+          const command = oneshotScripts({ wanted: { ...TUNNEL_W, publicKey: boardKey }, publicKey: boardKey })
+          for (const [which, text] of [
+            ['apply', command.script],
+            ['undo', command.undoScript],
+          ] as const)
+            await s.exec(['sh', '-c', `cat > /root/tunnel-${which}.sh`], { stdin: text })
+          const set = await onTty(s, 'sh /root/tunnel-apply.sh', {
+            answers: [{ name: 'ask', prompt: /\[y\/N\] $/, answer: 'y' }],
+            timeoutMs: 20 * MIN,
+          })
+          expect(set.code, set.stdout.slice(-3000)).toBe(0)
+          expect(set.stdout).toContain(`done: https://${DOMAIN}`)
+          const tunnelRecord = await hashOf('/etc/agent-board/setup.json')
+          expect(JSON.parse((await s.sh('cat /etc/agent-board/setup.json')).stdout)).toMatchObject({
+            case: '3a',
+            pair: { user: TUNNEL_W.user, socket: TUNNEL_W.socket },
+          })
+          // the tunnel itself: the board's ssh line to its stand-in on this PC
+          stopTunnel = await tunnelUp(s, standin.port)
+          expect(await tunnelAnswers(l, s)).toBe(true)
+          row.push(`the tunnel: ${DOMAIN} answering through its own ssh`)
+
+          // the board installed beside it on its own domain, their sites and the tunnel's domain fetched all along
+          const watch = '/tmp/watch-install-beside'
+          const each = [...sites, DOMAIN]
+            .map(
+              h =>
+                `printf '%s %s\\n' ${h} "$(curl -sk -m 5 -o /dev/null -w '%{http_code}' --resolve ${h}:443:${s.ip} https://${h}/)"`,
+            )
+            .join('; ')
+          await l.clientBackground(
+            `rm -f ${watch} ${watch}.stop; while [ ! -e ${watch}.stop ]; do { ${each}; } >> ${watch}; sleep 0.5; done`,
+          )
+          const done = await install(s, '', WORKBENCH)
+          await l.client(`touch ${watch}.stop; sleep 1`)
+          expect(done.code, done.out.slice(-3000)).toBe(0)
+          expect(done.out).toContain(`Add ${WORKBENCH} to your Caddy and hand it the board.`)
+          const seen = (await l.client(`cat ${watch}`)).stdout.trim().split('\n')
+          expect(seen.length).toBeGreaterThan(10)
+          expect(seen.filter(x => !x.endsWith(' 200'))).toEqual([])
+          row.push(`installed on ${WORKBENCH}; their sites and ${DOMAIN} answered all along (${seen.length} fetches)`)
+          // each its own record, block and helper; the tunnel's record as it was
+          expect(await hashOf('/etc/agent-board/setup.json')).toBe(tunnelRecord)
+          expect(JSON.parse((await s.sh('cat /etc/agent-board-server/setup.json')).stdout)).toMatchObject({
+            case: '3a',
+            domain: WORKBENCH,
+            pair: { user: 'agent', socket: BOARD_SOCKET, server: true },
+          })
+          expect(await blocks()).toBe('1 1')
+          expect(await running('agent-board-socket')).toBe(true)
+          expect(await running('agent-board-server-socket')).toBe(true)
+          // both domains answer
+          const who = await onSocket(s)
+          row.push(`${WORKBENCH}: ${await domainAnswers(l, s, who, WORKBENCH)} (${who})`)
+          expect(await tunnelAnswers(l, s)).toBe(true)
+          for (const host of sites) expect((await fromClient(l, s, host, '/', true)).body).toContain(`site ${host[0]}`)
+
+          // Undo of the board on the server: the tunnel's domain answering, its record and helper as they were
+          const undo = await onTty(s, `sh ${SCRIPT} --undo`, { answers: ANSWERS, timeoutMs: 20 * MIN })
+          expect(undo.code, undo.stdout.slice(-3000)).toBe(0)
+          expect(await hashOf('/etc/agent-board/setup.json')).toBe(tunnelRecord)
+          expect(await blocks()).toBe('1 0')
+          expect(await running('agent-board-socket')).toBe(true)
+          expect(await running('agent-board-server-socket')).toBe(false)
+          expect((await s.sh('test -e /etc/agent-board-server', { check: false })).code).not.toBe(0)
+          expect(await tunnelAnswers(l, s)).toBe(true)
+          for (const host of sites) expect((await fromClient(l, s, host, '/', true)).code).toBe('200')
+          row.push(`its Undo: ${DOMAIN} answering, the tunnel's record and helper as they were`)
+
+          // then the tunnel's Undo, by its one command: their Caddyfile as before either
+          await stopTunnel()
+          stopTunnel = null
+          const off = await onTty(s, 'sh /root/tunnel-undo.sh', {
+            answers: [{ name: 'ask', prompt: /\[y\/N\] $/, answer: 'y' }],
+            timeoutMs: 20 * MIN,
+          })
+          expect(off.code, off.stdout.slice(-3000)).toBe(0)
+          expect(await hashOf(caddyfile)).toBe(theirs)
+          expect((await s.sh('test -e /etc/agent-board', { check: false })).code).not.toBe(0)
+          expect(await running('agent-board-socket')).toBe(false)
+          for (const host of sites) expect((await fromClient(l, s, host, '/', true)).code).toBe('200')
+          row.push("then the tunnel's Undo: their Caddyfile as it was, their sites answering")
+        } finally {
+          rows.push(row.join(' · '))
+          await stopTunnel?.()
+          standin.stop()
           await s.stop()
         }
       },
