@@ -186,6 +186,45 @@ export const isMedia = (kind: string | undefined): boolean => MEDIA.has(kind ?? 
 /** A CSV with rows is drawn as a table. */
 export const isTable = (d: Preview): boolean => d.kind === 'csv' && !!d.rows?.length
 
+const WIDE = /[\u1100-\u115f\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uff60]/
+const BROAD = /[MWmwЖШЩЮЫМжшщюым@%]/
+const NARROW = /[iljtfI.,:;'"|!()[\]\s]/
+
+/** A value's width in average letters, roughly: wide letters (CJK, W, Ж) count more, narrow ones (i, l, a point) less. */
+export function roughWidth(text: string): number {
+  let width = 0
+  for (const ch of text) width += WIDE.test(ch) ? 2 : BROAD.test(ch) ? 1.4 : NARROW.test(ch) ? 0.45 : 1
+  return width
+}
+
+/** `value` among the `per` largest of `top` by `size`, kept largest first. */
+function keepTop(top: { value: string; size: number }[], value: string, size: number, per: number): void {
+  if (top.length >= per && size <= (top.at(-1)?.size ?? 0)) return
+  if (top.some(t => t.value === value)) return
+  top.push({ value, size })
+  top.sort((a, b) => b.size - a.size)
+  if (top.length > per) top.pop()
+}
+
+/**
+ * Each column's values worth measuring to size it for the whole file: its longest few and its
+ * widest few by roughWidth (forty-eight narrow letters can take less room than twenty-nine wide
+ * ones). The header row is measured as it is drawn.
+ */
+export function widestCandidates(rows: string[][], per = 3): string[][] {
+  const longest: { value: string; size: number }[][] = []
+  const widest: { value: string; size: number }[][] = []
+  for (const row of rows.slice(1))
+    row.forEach((value, i) => {
+      longest[i] ??= []
+      widest[i] ??= []
+      keepTop(longest[i], value, value.length, per)
+      // Only a value near the longest in length can be the widest.
+      if (value.length * 2 >= (longest[i][0]?.size ?? 0)) keepTop(widest[i], value, roughWidth(value), per)
+    })
+  return longest.map((top, i) => [...new Set([...top, ...(widest[i] ?? [])].map(t => t.value))])
+}
+
 /** The footer of a file or folder: what it holds, how big, how far it reads, when it changed. */
 export function previewFoot(d: Preview, t: Translator): string[] {
   const foot: string[] = []
