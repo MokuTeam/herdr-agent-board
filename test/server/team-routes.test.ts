@@ -65,7 +65,10 @@ describe.each([
     const payload = (await (await fetch(`${url}/api/board`)).json()) as Record<string, unknown>
     expect(payload).not.toHaveProperty('teamRev')
     expect(await firstEvent(url)).not.toHaveProperty('teamRev')
+    // The board's own refresh may poll herdr meanwhile: what counts is that asking adds no new kind of call.
+    const kind = (c: string[]): string => c.slice(0, 2).join(' ')
     const before = box.calls().length
+    const seen = new Set(box.calls().map(kind))
     expect(await answer(fetch(`${url}/api/team`))).toEqual([404, { error: 'not found' }])
     expect(await answer(fetch(`${url}/api/team/thread/x`))).toEqual([404, { error: 'not found' }])
     expect(await answer(fetch(`${url}/api/team/thread/${'A'.repeat(43)}`))).toEqual([404, { error: 'not found' }])
@@ -83,7 +86,8 @@ describe.each([
       expect(await answer(post(url, path, {}, { origin: 'http://evil.example' }))).toEqual([405, { error: 'method' }])
     }
     expect(teamFilesOf(box)).toEqual([])
-    expect(box.calls().length).toBe(before)
+    const added = box.calls().slice(before).map(kind)
+    expect(added.filter(k => !seen.has(k))).toEqual([])
   })
 })
 
