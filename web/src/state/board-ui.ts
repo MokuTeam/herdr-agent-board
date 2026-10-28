@@ -66,6 +66,8 @@ export interface BoardUi {
   opened: number
   /** The latest opening asked for the message box ("Write"). */
   compose: boolean
+  /** The latest opening asked for the session's own browser (its card's mark, "Open its browser"). */
+  browser: boolean
   limitsOpen: boolean
   toasts: Toast[]
   lastToast: number
@@ -94,7 +96,7 @@ export type BoardAction =
   | { type: 'query'; text: string }
   | { type: 'column'; id: ColumnId | null }
   | { type: 'toggleSleepers' }
-  | { type: 'open'; key: string | null; compose?: boolean }
+  | { type: 'open'; key: string | null; compose?: boolean; browser?: boolean }
   | { type: 'viewed'; item: AttentionItem }
   | { type: 'limits'; open: boolean }
   | ({ type: 'toast'; text: string; error: boolean } & ToastOptions)
@@ -134,6 +136,7 @@ export function initialUi(read: (key: string, fallback: string) => string): Boar
     open: null,
     opened: 0,
     compose: false,
+    browser: false,
     limitsOpen: false,
     toasts: [],
     lastToast: 0,
@@ -173,7 +176,13 @@ export function boardUi(state: BoardUi, action: BoardAction): BoardUi {
       return { ...state, sleepers: !state.sleepers }
     case 'open':
       if (action.key === null) return { ...state, open: null }
-      return { ...state, open: action.key, opened: state.opened + 1, compose: !!action.compose }
+      return {
+        ...state,
+        open: action.key,
+        opened: state.opened + 1,
+        compose: !!action.compose,
+        browser: !!action.browser,
+      }
     case 'viewed':
       return { ...state, viewed: recordView(state.viewed, action.item) }
     case 'limits':

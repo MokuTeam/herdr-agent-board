@@ -34,6 +34,7 @@ import {
   MoonGlyph,
   PinGlyph,
   RestartGlyph,
+  ScreenGlyph,
   SpinGlyph,
   StarGlyph,
   Turn,
@@ -160,6 +161,12 @@ function CardTop({ item }: { item: Item }) {
           <StarGlyph />
         </span>
       )}
+      {/* Its own browser while it runs: a click opens the session with it shown. */}
+      {item.desktop?.running && (
+        <button type="button" className="desk-mark" data-act="browser" title={t('desk.mark')}>
+          <ScreenGlyph />
+        </button>
+      )}
       {/* Its profile, while the board shows more than one, or one hidden or not known. */}
       <ProfileTag item={item} />
       <span className="card-status" style={{ '--c': COLUMN_COLORS[item.column] }} title={t(`col.${item.column}`)}>
@@ -252,6 +259,7 @@ function CardAsk({ item }: { item: Item }) {
           {line.options}
           {line.more && <span className="qa-more">{line.more}</span>}
         </div>
+        <OpenBrowser item={item} />
       </div>
     )
   }
@@ -259,7 +267,20 @@ function CardAsk({ item }: { item: Item }) {
   return (
     <div className="ask">
       <b>{ask.label}:</b> {ask.text}
+      <OpenBrowser item={item} />
     </div>
+  )
+}
+
+/** What the agent asks is done in its own browser (a sign-in, a captcha): the button that opens it. */
+function OpenBrowser({ item }: { item: Item }) {
+  const t = useT()
+  if (!item.desktop?.asks) return null
+  return (
+    <button type="button" className="button desk-ask" data-act="browser">
+      <ScreenGlyph />
+      <span>{t('desk.openIt')}</span>
+    </button>
   )
 }
 

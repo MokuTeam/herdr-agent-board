@@ -8,6 +8,7 @@ import type { Lang } from '../types.ts'
 import { ACCESS_STRINGS } from './access-strings.ts'
 import { ARCHIVE_STRINGS } from './archive-strings.ts'
 import { ASIDE_STRINGS } from './aside-strings.ts'
+import { DESK_STRINGS } from './desk-strings.ts'
 import { FIRST_LOGIN_STRINGS } from './first-login-strings.ts'
 import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
@@ -1317,3 +1318,5 @@ for (const code of Object.keys(ONESHOT_STRINGS) as Lang[]) Object.assign(STRINGS
 // And the board on a server of the owner's: its install, `board update`, the panel's path B.
 for (const code of Object.keys(INSTALL_STRINGS) as Lang[]) Object.assign(STRINGS[code], INSTALL_STRINGS[code])
 for (const code of Object.keys(SYNC_STRINGS) as Lang[]) Object.assign(STRINGS[code], SYNC_STRINGS[code])
+// And an agent's own browser on the board's server, as the web board shows it.
+for (const code of Object.keys(DESK_STRINGS) as Lang[]) Object.assign(STRINGS[code], DESK_STRINGS[code])

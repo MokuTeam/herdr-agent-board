@@ -1,0 +1,10 @@
+/* An agent's own browser on the board's server (components/Card.tsx, components/sheet/BrowserFold.tsx). */
+
+/* ---------------------------------------------------------------- the card */
+/* A small mark by the name while its browser runs; a click opens the session with it shown. */
+.desk-mark { display: flex; flex: none; padding: 0; border: 0; background: none; color: var(--accent); cursor: pointer; }
+.desk-mark svg { width: 14px; height: 14px; }
+.desk-mark:hover { opacity: 0.7; }
+/* "Open its browser" under what the agent asks. */
+.ask .desk-ask { display: flex; margin-top: 7px; height: 26px; padding: 0 10px; font-size: 12px; background: color-mix(in srgb, var(--surface) 70%, transparent); }
+.ask .desk-ask svg { width: 14px; height: 14px; }

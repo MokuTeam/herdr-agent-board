@@ -276,5 +276,19 @@ export interface Item {
   profileWanted?: string
   /** The Claude folder its records were read from (server only). */
   claudeRoot?: string | null
+  /** Its own browser on the board's server (a display of its own, shown over VNC); absent with none. */
+  desktop?: ItemDesktop
   [extra: string]: unknown
+}
+
+/**
+ * A session's own browser on the board's server: whether it runs now, the named browser profile it
+ * opened (null: one of the session's own), who clicks and types in it, and whether the agent asks
+ * the owner to (a sign-in, a captcha: "Open its browser" under its question).
+ */
+export interface ItemDesktop {
+  running: boolean
+  profile: string | null
+  control: 'agent' | 'owner'
+  asks: boolean
 }
