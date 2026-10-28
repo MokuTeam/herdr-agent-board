@@ -104,6 +104,17 @@ export function boardKey(text: unknown): string | null {
 export const KEY_SNIPPET =
   '[[keys.command]]\nkey = "prefix+a"\ntype = "plugin_action"\ncommand = "agent-board.open"\ndescription = "agent board"'
 
+/**
+ * herdr's config.toml with the board's key added after what is there (KEY_SNIPPET, a line of its
+ * own after an empty one), or null when a key is bound to the board already: the server board's
+ * install binds it, where nobody can paste the snippet in by hand first.
+ */
+export function keyAdded(text: string): string | null {
+  if (boardKey(text) !== null) return null
+  const kept = text === '' || text.endsWith('\n') ? text : `${text}\n`
+  return `${kept}${kept === '' ? '' : '\n'}${KEY_SNIPPET}\n`
+}
+
 // ------------------------------------------------------------------ herdr's own Claude hook
 
 // herdr learns which Claude session a pane runs only from its own SessionStart hook, which

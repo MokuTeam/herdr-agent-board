@@ -46,6 +46,7 @@ import { buildPlan, type Plan, setupRecord, undoPlan, type Wanted, whose } from 
 import { launchScript, type Progress, readProgress, runScript, startProgress } from '../core/server-script.ts'
 import { shQuote } from '../core/server-shell.ts'
 import { type Acme, SERVER_NAMES } from '../core/server-texts.ts'
+import { keyAdded } from '../core/setup.ts'
 import { socketFolder } from '../core/tunnel-snippets.ts'
 
 /** What the install says, line by line (a terminal, or ssh's stdout for the panel). */
@@ -620,6 +621,21 @@ export async function install(f: InstallFlags, io: Io): Promise<number> {
   )
     return 1
 
+  // herdr's key for the board, as the user, only where none is bound to it (nobody has pasted the
+  // snippet into this herdr's config by hand): read, then written whole with the key after it
+  const herdrConfig = `${home}/.config/herdr/config.toml`
+  let keyNew = false
+  if (
+    !(await step(io, t('install.step.key', { key: 'prefix+a' }), async () => {
+      const now = await asUser(user, `cat ${shQuote(herdrConfig)} 2>/dev/null`)
+      const next = keyAdded(now.out)
+      if (next === null) return t('install.step.key', { key: t('install.key.kept') })
+      keyNew = true
+      return asUser(user, userFileScript(herdrConfig, '644'), { stdin: next })
+    }))
+  )
+    return 1
+
   // the web server, as the tunnel's setup does it (its own record, lock, rollback and checks)
   io.say('', t('install.web'))
   if (!(await runHere(io, made, w))) return 1
@@ -644,6 +660,8 @@ export async function install(f: InstallFlags, io: Io): Promise<number> {
     }))
   )
     return 1
+  // a herdr that ran already reads the key now; one that just started read it as it started
+  if (keyNew) await asUser(user, `${herdr} server reload-config`, { timeoutMs: 60_000 })
   // the board's listener: the board makes its socket once herdr has opened it
   let up = false
   for (let i = 0; i < 60 && !up; i++) {

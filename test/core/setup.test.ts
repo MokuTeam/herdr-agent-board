@@ -16,6 +16,7 @@ import {
   boardKey,
   checkSetup,
   herdrHookScript,
+  keyAdded,
   type ProfileSettings,
   report,
   type SetupCheck,
@@ -157,6 +158,18 @@ describe('herdr’s config', () => {
     assert.equal(tomlValue(toml, 'ui.toast', 'delivery'), 'system')
     assert.equal(tomlValue(toml, 'ui', 'delivery'), undefined)
     assert.equal(tomlValue('[ui.toast]\n# delivery = "herdr"\n', 'ui.toast', 'delivery'), undefined)
+  })
+
+  test('the board’s key added where none is bound (the server board’s install), left alone where one is', () => {
+    const none = 'onboarding = false\n'
+    const added = keyAdded(none)
+    assert.equal(boardKey(added), 'prefix+a')
+    assert.ok(added?.startsWith(none))
+    assert.equal(boardKey(keyAdded('') ?? ''), 'prefix+a')
+    // no line break at its end: the snippet still starts a line of its own
+    assert.equal(boardKey(keyAdded('onboarding = false') ?? ''), 'prefix+a')
+    const bound = '[[keys.command]]\nkey = "prefix+b"\ntype = "plugin_action"\ncommand = "agent-board.open"\n'
+    assert.equal(keyAdded(bound), null)
   })
 
   test('herdr’s own Claude hook: the script its SessionStart entry runs, quoted or not', () => {

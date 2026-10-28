@@ -16,6 +16,7 @@ export const INSTALL_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'install.will.tools':
       'Install Bun {bun}, herdr and Claude Code for {user}, each from its own installer (what is there is kept).',
     'install.will.board': 'Install the board: {from}.',
+    'install.will.key': 'Bind prefix+a to the board in herdr for {user}, when no key is bound to it.',
     'install.will.service': 'Run herdr as {user}’s service, started with the server; the board opens in it.',
     'install.source.git': '{ref} ({commit}) from {repo}',
     'install.source.archive': 'a copy of {commit} from your computer',
@@ -53,6 +54,8 @@ export const INSTALL_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'install.step.link': 'the board as herdr’s plugin, its hooks and commands',
     'install.step.config': 'the board’s server mode: https://{domain}',
     'install.step.service': 'herdr’s service',
+    'install.step.key': 'the board’s key in herdr: {key}',
+    'install.key.kept': 'one was bound already, kept',
     'install.step.listener': 'the board’s login listener',
     'install.web': 'The web server:',
     'install.web.step': '  {mark} {title}',
@@ -119,6 +122,7 @@ export const INSTALL_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'install.will.tools':
       'Установить для {user} Bun {bun}, herdr и Claude Code, каждый его собственным установщиком (то, что уже есть, остаётся).',
     'install.will.board': 'Установить доску: {from}.',
+    'install.will.key': 'Назначить доске клавишу prefix+a в herdr пользователя {user}, если клавиши у неё ещё нет.',
     'install.will.service': 'Запускать herdr службой {user} вместе с сервером; доска открывается в нём.',
     'install.source.git': '{ref} ({commit}) из {repo}',
     'install.source.archive': 'копия {commit} с вашего компьютера',
@@ -156,6 +160,8 @@ export const INSTALL_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'install.step.link': 'доска как плагин herdr, её хуки и команды',
     'install.step.config': 'серверный режим доски: https://{domain}',
     'install.step.service': 'служба herdr',
+    'install.step.key': 'клавиша доски в herdr: {key}',
+    'install.key.kept': 'уже была назначена, оставлена',
     'install.step.listener': 'вход доски',
     'install.web': 'Веб-сервер:',
     'install.web.step': '  {mark} {title}',

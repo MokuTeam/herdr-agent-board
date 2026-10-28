@@ -276,6 +276,7 @@ export function installWill(f: InstallFacts, tr: Translator = t): string[] {
   if (f.keysFrom) will.push(tr('install.will.keys', { ...user, from: f.keysFrom }))
   will.push(tr('install.will.tools', { ...user, bun: BUN_VERSION }))
   will.push(tr('install.will.board', { from: sourceLine(f.source, tr) }))
+  will.push(tr('install.will.key', user))
   will.push(tr('install.will.service', user))
   return will
 }

@@ -160,6 +160,7 @@ test("the install's own plan lines", () => {
     'The ssh keys of root let you log in as agent too.',
     `Install Bun ${BUN_VERSION}, herdr and Claude Code for agent, each from its own installer (what is there is kept).`,
     'Install the board: main (1a2b3c4) from GitHub.',
+    'Bind prefix+a to the board in herdr for agent, when no key is bound to it.',
     'Run herdr as agent’s service, started with the server; the board opens in it.',
   ])
   expect(installWill({ ...base, userThere: true, sudoThere: true, keysFrom: null }, en)[0]).toBe(
