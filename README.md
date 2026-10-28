@@ -15,8 +15,9 @@ current with the `board` command; a SessionStart / UserPromptSubmit hook tells e
 ## Setup
 
 [Bun](https://bun.com/docs/installation) 1.4.3 or newer. `herdr plugin install` runs
-`bun install --production` (react and react-dom, its only dependencies); after `herdr plugin link`, run
-`bun install` in the folder yourself. Windows, Linux and macOS (desktop notifications: Windows
+`bun install --production` (react, react-dom and pdfjs-dist, the quick look's PDF viewer: its only
+dependencies); after `herdr plugin link`, run `bun install` in the folder yourself, again after an
+update that adds one (without pdfjs-dist, the quick look shows a PDF in the browser's own viewer). Windows, Linux and macOS (desktop notifications: Windows
 only). Steps 1 and 2 are what the board needs; the rest adds to it.
 
 1. **The plugin and its install** (required).
@@ -308,10 +309,18 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   optional `:line`) becomes a chip once the board finds it on disk; file tool calls in the
   folded runs open the same way. A chip opens a quick look over the board, grown out of the
   chip: images, PDF, video and audio, Markdown (rendered or source), code and text with line
-  numbers (the `:line` lit and scrolled to), JSON pretty, CSV as a table, folders as a list to
+  numbers (the `:line` lit and scrolled to), JSON pretty, CSV and TSV as a table (`,` `;` tab or
+  `|` between fields, UTF-8 or Windows' old code page as Excel saves it, quoted fields with line
+  breaks, up to 20 000 rows drawn as they scroll into view), folders as a list to
   walk through (the path bar goes up; Backspace goes back). From there: open it with the
   system, show it in its folder, copy the path. Esc closes it. Web links open in the default
   browser.
+- A PDF in the quick look is drawn by the board itself, so a phone's browser and the installed
+  board show it too: its pages fit the width and are drawn as they come into view, their text can
+  be selected, a badge says which page while it scrolls and the footer how many. They zoom with
+  Ctrl+wheel or a trackpad pinch, two fingers on a phone, `+` `-` `0` (fit) and the footer's
+  button; the arrow and page keys scroll. A broken or password-protected PDF says so, beside the
+  button that opens it with the system.
 - Images and SVG in the quick look zoom as in Preview and Photos: Ctrl+wheel or a trackpad
   pinch, two fingers on a phone, a click (a double-tap) zooms in to 100% at that spot and a
   double-click goes back to fit, `+` `-` `0` (fit) and the arrows from the keyboard. A zoomed
@@ -2408,7 +2417,11 @@ or `xdg-open`, no shell) and `POST /api/open-url` (http(s) only) need the `X-Boa
 every POST. `GET /api/fs/raw` serves images, PDF, video and audio, with ranges, to the page's
 `<img>`, `<video>` and PDF viewer, which cannot send headers: it needs the `fsToken` from the
 board payload, new on every start, which only the board's own page can read. Text never comes
-raw, and raw responses carry a CSP that runs no script.
+raw, and raw responses carry a CSP that runs no script. The quick look's viewers
+(`web/src/viewers/`, `src/server/viewers.ts`) are scripts of their own beside app.js, each bundled
+apart and imported only when such a file is opened: `pdf-viewer.js` (PDF.js, which reads the PDF
+through `/api/fs/raw`, in ranges past 8 MB), PDF.js's worker as `pdf.worker.js`, and what the
+worker fetches as a PDF needs it under `pdfjs/` (decoders, character maps, fonts).
 
 New sessions (`src/services/launch/`, `web/src/components/launch/`): `GET /api/launch/options` (herdr's workspaces,
 recent folders, the launcher, and `agents`: the agents a start may name, `[{ id, title }]` with
@@ -2669,7 +2682,7 @@ next writer. A card write the board itself fails at is retried on its next refre
 repository's full history:
 
 ```sh
-bun install     # react and react-dom, and the dev tools: TypeScript, Biome, the types
+bun install     # react, react-dom and pdfjs-dist, and the dev tools: TypeScript, Biome, the types
 bun test        # the whole suite (a couple of minutes); two symlink tests skip without symlink rights
 bun run check   # type check (tsc) and lint (Biome)
 ```

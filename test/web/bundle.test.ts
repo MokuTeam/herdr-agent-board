@@ -2,6 +2,7 @@
 // React's production build, with no import left for the browser to resolve.
 import { expect, test } from 'bun:test'
 import { join } from 'node:path'
+import { VIEWER_COPIES, viewerEntries } from '../../src/server/viewers.ts'
 import { createWebBundle } from '../../src/server/web-bundle.ts'
 
 const ROOT = join(import.meta.dir, '..', '..')
@@ -21,4 +22,32 @@ test('web/src/main.tsx bundles', async () => {
   expect(sources.some(s => s.endsWith('react-dom-client.production.js'))).toBe(true)
   expect(sources.some(s => s.includes('react-dom-client.development'))).toBe(false)
   expect(bundle.js()).not.toMatch(/^import .* from ['"]\.{1,2}\//m)
+})
+
+// The quick look's viewers (#176) are scripts of their own: app.js carries none of their
+// libraries, and imports a viewer by a URL it makes when such a file is opened.
+test('every viewer builds apart from app.js, which carries none of their libraries', async () => {
+  const logs: string[] = []
+  const bundle = await createWebBundle({
+    root: ROOT,
+    entry: join(ROOT, 'web', 'src', 'main.tsx'),
+    viewers: viewerEntries(join(ROOT, 'web')),
+    copies: VIEWER_COPIES,
+    log: text => logs.push(text),
+  })
+  expect(logs).toEqual([])
+  const sourcesOf = (map: string | Buffer | undefined) =>
+    (JSON.parse(String(map ?? '{}')) as { sources: string[] }).sources
+  const page = new Set(sourcesOf(bundle.map()))
+  for (const name of Object.keys(viewerEntries(join(ROOT, 'web')))) {
+    const script = String(bundle.file(name) ?? '')
+    expect([name, script.length > 0]).toEqual([name, true])
+    expect(script).not.toMatch(/^import .* from /m)
+    // What a viewer bundles from its packages, app.js has none of.
+    const packages = sourcesOf(bundle.file(`${name}.map`)).filter(s => s.includes('node_modules'))
+    expect([name, packages.length > 0, packages.filter(s => page.has(s))]).toEqual([name, true, []])
+  }
+  expect([...page].some(s => s.includes('viewers/'))).toBe(false)
+  for (const name of Object.keys(VIEWER_COPIES)) expect(bundle.file(name)?.length).toBeGreaterThan(0)
+  expect(String(bundle.file('pdf.worker.js'))).toContain('WorkerMessageHandler')
 })

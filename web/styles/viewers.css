@@ -1,0 +1,27 @@
+/* The quick look's own viewers (web/src/viewers/, #176): a CSV table drawn as it scrolls, and a
+   PDF drawn by the board. */
+.ql-more { height: 1px; }
+/* A CSV table drawn block by block keeps the columns its first block measured (Preview.tsx Table). */
+.ql-table table.fixed { table-layout: fixed; }
+/* A PDF drawn by the board (web/src/viewers/pdf.ts): its pages on the window's desk, scrolled as
+   the page scrolls and zoomed by the viewer (a pinch is its own, not the browser's); a badge says
+   which page while it scrolls. */
+.ql-body.k-pdf { overflow: hidden; }
+.ql-pdf { position: absolute; inset: 0; }
+.ql-pdf ~ .ql-wait { position: absolute; inset: 0; }
+.ql-pdf-scroll { position: absolute; inset: 0; overflow: auto; overscroll-behavior: contain; touch-action: pan-x pan-y; background: var(--fill-2); }
+.ql-pdf-pages { position: relative; display: flex; flex-direction: column; align-items: center; gap: 12px; width: max-content; min-width: 100%; padding: 16px; box-sizing: border-box; transform-origin: 0 0; }
+.ql-pdf-page { --scale-round-x: 1px; --scale-round-y: 1px; position: relative; flex: none; overflow: hidden; background: #fff; box-shadow: var(--shadow-card); }
+.ql-pdf-page canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.ql-pdf-badge { position: absolute; left: 50%; bottom: 16px; padding: 5px 12px; border-radius: 999px; background: var(--material-thick); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); box-shadow: var(--shadow-card); color: var(--label-2); font-size: 12px; font-variant-numeric: tabular-nums; opacity: 0; transform: translateX(-50%); transition: opacity 0.35s; pointer-events: none; }
+.ql-pdf-badge.on { opacity: 1; transition-duration: 0.1s; }
+/* PDF.js's text layer (its web/pdf_viewer.css, Apache-2.0): the page's text, transparent, over the
+   drawn page, to select and copy. */
+.ql-pdf .textLayer { --min-font-size: 1; --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size)); --min-font-size-inv: calc(1 / var(--min-font-size)); position: absolute; inset: 0; z-index: 0; overflow: clip; opacity: 1; line-height: 1; text-align: initial; letter-spacing: normal; word-spacing: normal; -webkit-text-size-adjust: none; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; caret-color: CanvasText; }
+.ql-pdf .textLayer :is(span, br) { position: absolute; color: transparent; white-space: pre; cursor: text; transform-origin: 0% 0%; user-select: text; -webkit-user-select: text; }
+.ql-pdf .textLayer > :not(.markedContent), .ql-pdf .textLayer .markedContent span:not(.markedContent) { --font-height: 0; --scale-x: 1; --rotate: 0deg; z-index: 1; font-size: calc(var(--text-scale-factor) * var(--font-height)); transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv)); }
+.ql-pdf .textLayer .markedContent { display: contents; }
+.ql-pdf .textLayer span[role="img"] { cursor: default; user-select: none; -webkit-user-select: none; }
+.ql-pdf .textLayer ::selection { background: color-mix(in srgb, AccentColor, transparent 50%); color: transparent; }
+.ql-pdf .textLayer br::selection { background: transparent; }
+.ql-pdf .textLayer .endOfContent { position: absolute; inset: 100% 0 0; z-index: 0; display: block; cursor: default; user-select: none; -webkit-user-select: none; }

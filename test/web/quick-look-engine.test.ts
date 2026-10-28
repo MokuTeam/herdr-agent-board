@@ -51,6 +51,7 @@ function setup({ canEdit = true } = {}) {
     '/b.txt': { path: '/b.txt', name: 'b.txt', kind: 'text', text: 'b', lines: 1 },
     '/shot.png': { path: '/shot.png', name: 'shot.png', kind: 'image', size: 9000 },
     '/logo.SVG': { path: '/logo.SVG', name: 'logo.SVG', kind: 'image', size: 300 },
+    '/doc.pdf': { path: '/doc.pdf', name: 'doc.pdf', kind: 'pdf', size: 9000 },
   }
   const api = {
     preview: async (path: string) => previews[path] ?? { path, error: 'missing' },
@@ -305,6 +306,66 @@ describe('an image on show zooms', () => {
     expect(look.engine.zoom.get().now).not.toBeNull()
     look.engine.keydown(press('Escape'))
     await world.settle()
+    expect(look.engine.zoom.get().now).toBeNull()
+  })
+})
+
+// A viewer that zooms itself (a PDF's pages, viewers/pdf.ts, #176): the footer's bar and the zoom
+// keys are its own while it is on show, as an image's are.
+describe('a viewer that zooms itself', () => {
+  test('its control takes the keys and the button and tells the bar; drawn no more or a step, it goes', async () => {
+    const { look, chip } = setup()
+    look.look({ path: '/doc.pdf' }, chip)
+    look.engine.grow()
+    await world.settle()
+    const host = mount('<div class="ql-pdf"></div>')
+    const keys: string[] = []
+    let toggled = 0
+    let dropped = 0
+    const bar: { tell?: (z: { s: number; fit: boolean; to: number }) => void } = {}
+    look.engine.zoomable(host, onChange => {
+      bar.tell = onChange
+      onChange({ s: 0.45, fit: true, to: 1 })
+      return {
+        key: e => {
+          if (e.key !== '+') return false
+          keys.push(e.key)
+          return true
+        },
+        toggle: () => void toggled++,
+        destroy: () => void dropped++,
+      }
+    })
+    expect(look.engine.zoom.get().now).toEqual({ s: 0.45, fit: true, to: 1 })
+    const plus = press('+')
+    look.engine.keydown(plus)
+    expect(plus.prevented).toBe(true)
+    expect(keys).toEqual(['+'])
+    const other = press('a')
+    look.engine.keydown(other)
+    expect(other.prevented).toBe(false)
+    look.engine.toggleZoom()
+    expect(toggled).toBe(1)
+    bar.tell?.({ s: 1, fit: false, to: 1 })
+    expect(look.engine.zoom.get().now).toEqual({ s: 1, fit: false, to: 1 })
+    // Another viewer gone is not this one's.
+    look.engine.zoomGone(mount('<div></div>'))
+    expect(dropped).toBe(0)
+    look.engine.zoomGone(host)
+    expect(dropped).toBe(1)
+    expect(look.engine.zoom.get().now).toBeNull()
+    // Gone from the page before it was read: nothing.
+    const gone = mount('<div class="ql-pdf"></div>')
+    gone.remove()
+    look.engine.zoomable(gone, () => ({ key: () => true, toggle() {}, destroy() {} }))
+    expect(look.engine.zoom.get().now).toBeNull()
+    // A step drops it too.
+    look.engine.zoomable(host, onChange => {
+      onChange({ s: 0.45, fit: true, to: 1 })
+      return { key: () => false, toggle() {}, destroy: () => void dropped++ }
+    })
+    look.look({ path: '/b.txt' }, chip)
+    expect(dropped).toBe(2)
     expect(look.engine.zoom.get().now).toBeNull()
   })
 })

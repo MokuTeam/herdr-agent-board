@@ -65,6 +65,13 @@ export interface QuickLookEngine {
   imageLoaded(img: HTMLImageElement, data: FileLook): { width: number; height: number } | null
   /** The image is no longer drawn: its zoom goes. */
   imageGone(img: HTMLImageElement): void
+  /**
+   * A viewer that zooms itself is on show (a PDF's pages, viewers/pdf.ts): `attach` gives it the
+   * footer's bar to tell, and its control takes the zoom keys and the bar's button.
+   */
+  zoomable(el: Element, attach: (onChange: (z: ZoomState) => void) => ImageZoom): void
+  /** That viewer is no longer drawn: its zoom goes. */
+  zoomGone(el: Element): void
   /** The footer's button: in to 100% from fit, else back to fit. */
   toggleZoom(): void
   /** A key, before the page's own: Esc closes it, Backspace or Alt+← walks back, + − 0 and the arrows zoom. */
@@ -151,9 +158,10 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
   let growing = false
   let from: From = { dx: 0, dy: 0, s: 0.2 }
 
-  // An image zooms (components/files/zoom.ts); the footer shows the scale and a button in to 100%
-  // or back to fit. A step, another look and the close drop it, as each opening starts fitted.
-  let zoom: { img: HTMLImageElement; control: ImageZoom } | null = null
+  // An image zooms (components/files/zoom.ts), and a PDF's pages (zoomable); the footer shows the
+  // scale and a button in to 100% or back to fit. A step, another look and the close drop it, as
+  // each opening starts fitted.
+  let zoom: { el: Element; control: ImageZoom } | null = null
   const zoomNow = new Store<ZoomFoot>(NO_ZOOM)
   let shownZoom = ''
   function zoomBar(z: ZoomState | null): void {
@@ -283,12 +291,21 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
       if (data.kind === 'image' && size.w && size.h && stage) {
         dropZoom()
         const vector = /\.svg$/i.test(data.path ?? '')
-        zoom = { img, control: zoomImage(stage, img, { size, vector, onChange: zoomBar }) }
+        zoom = { el: img, control: zoomImage(stage, img, { size, vector, onChange: zoomBar }) }
       }
       return own
     },
     imageGone(img) {
-      if (zoom?.img === img) dropZoom()
+      if (zoom?.el === img) dropZoom()
+    },
+    zoomable(el, attach) {
+      // Walked away before it was read: the footer is someone else's by now.
+      if (!el.isConnected) return
+      dropZoom()
+      zoom = { el, control: attach(zoomBar) }
+    },
+    zoomGone(el) {
+      if (zoom?.el === el) dropZoom()
     },
     toggleZoom: () => zoom?.control.toggle(),
     keydown(e) {
