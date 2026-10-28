@@ -1831,10 +1831,13 @@ and counted on his roster row, marked "draft from an agent", with Send and Disca
 this board until you press Send; Discard drops it. There is no command that sends: at most 20
 drafts wait (a new one is refused until you settle some), each up to the same 4000 characters as a
 message. What you send from a draft goes out marked `via: "agent"` inside the signed message, which
-the hub relays and cannot strip: Roman sees "Ana's agent · approved by Ana" (the name is Roman's own roster entry for your key,
-never anything in the message), and you see "your agent · approved by you" on your own copy. A message you type in the panel carries no mark. This does not stop an agent from
-calling the board's local `/api/team/send` itself (#224, below); the draft is the sanctioned way,
-not a lock.
+the hub relays and cannot strip: Roman sees "via Ana's agent" (the name is Roman's own roster entry for your key,
+never anything in the message), and you see "via your agent" on your own copy. A message you type in the panel carries no mark.
+
+Until #224 (below) the draft is a convenience, not a lock: an agent on the same machine can send on its
+own, either by creating a draft and sending it, or by calling the board's local `/api/team/send`
+directly, in which case the message carries no agent mark at all. The "via agent" mark only says the
+draft came from `board team draft`; it does not say that a person looked at it.
 
 **Running the hub.** `bun hub/src/main.ts`: see [hub/README.md](hub/README.md) for the options,
 invites, revoking a member and what it keeps. It is not part of the plugin; run it on one machine

@@ -101,7 +101,7 @@ export interface ThreadMessage {
   code?: ErrorCode
   /** in: from a key that changed, kept back until it is trusted. */
   held?: boolean
-  /** in or out: an agent asked for it and the sender approved (it is in the signed body). */
+  /** in or out: it came from an agent's draft (the mark is in the signed body; it proves no approval, #224). */
   via?: Via
   /**
    * in, via agent: who the sender is called here, from this board's own roster or pins for the verified

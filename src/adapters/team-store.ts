@@ -82,7 +82,7 @@ export interface InboxItem {
   text: string
   receivedAt: number
   held: boolean
-  /** The envelope said an agent asked for it and its sender approved. */
+  /** The envelope carried the agent mark: the draft came from `board team draft`. */
   via?: Via
   /** When the signed ack went out (null: not yet, or the hub was away). */
   ackedAt: number | null

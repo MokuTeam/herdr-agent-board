@@ -66,7 +66,11 @@ The hub keeps message text only while it waits for the recipient (see "What it k
    then received once their board has signed for it.
 6. Ask your agent to draft one: tell it `board team draft Roman "is the build green?"`. The
    draft appears in Roman's thread, marked "draft from an agent". Nothing leaves your computer until
-   you press Send; Discard drops it. Roman sees "Anna's agent · approved by Anna".
+   you press Send; Discard drops it. Roman sees "via Anna's agent".
+
+   Note: until #224 an agent on the same machine can send on its own: it can create a draft and send
+   it, or call `/api/team/send` directly, and then the message carries no agent mark. The "via agent"
+   mark only says the draft came from `board team draft`; it does not say that a person approved it.
 
 ## When something does not work
 
@@ -159,7 +163,12 @@ you). See [What the MVP does not do](../README.md#team) in the README.
    доставлено, получено (когда их доска подписала получение).
 6. Попросите агента сделать черновик: `board team draft Roman "сборка зелёная?"`. Черновик появится в
    переписке с Roman с пометкой «черновик от агента». Пока вы не нажмёте «Отправить», ничего не
-   уходит с вашего компьютера; «Удалить» убирает его. Roman увидит «агент Anna · одобрил Anna».
+   уходит с вашего компьютера; «Удалить» убирает его. Roman увидит «через агента Anna».
+
+   Важно: пока не сделан #224, агент на том же компьютере может отправить сообщение сам: создать
+   черновик и отправить его или вызвать `/api/team/send` напрямую — тогда у сообщения нет пометки
+   агента. Пометка «через агента» говорит только, что черновик пришёл из `board team draft`; она не
+   значит, что человек его одобрил.
 
 ## Если что-то не работает
 

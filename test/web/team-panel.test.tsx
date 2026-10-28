@@ -262,6 +262,10 @@ describe('agent drafts and agent requests (#231)', () => {
     expect(buttons(nodes, 'Discard')).toHaveLength(1)
     // The composer's Send and the draft's Send.
     expect(buttons(nodes, 'Send')).toHaveLength(2)
+    // The hint on the draft's Send says where it came from, not that anyone approved it.
+    expect(buttons(nodes, 'Send')[0]?.attrs.get('title')).toBe(
+      'Sends it as a question marked as coming from your agent',
+    )
     const counted = { ...VIEW, roster: VIEW.roster.map(p => (p.peer === ANA ? { ...p, drafts: 2 } : p)) }
     expect(text(render(props({ view: counted })))).toContain('2 draft(s) from an agent')
     expect(text(render(props({ view: counted }), 'ru'))).toContain('черновиков от агента: 2')
@@ -297,7 +301,7 @@ describe('agent drafts and agent requests (#231)', () => {
     ).toBe(true)
   })
 
-  test('an agent request is labelled with who approved it, on both sides, in both languages; a plain message is not', () => {
+  test('an agent request is labelled with whose agent it came through, on both sides, in both languages; a plain message is not', () => {
     const incoming: ThreadMessage = {
       id: 'a1',
       dir: 'in',
@@ -322,10 +326,11 @@ describe('agent drafts and agent requests (#231)', () => {
       state: 'acked',
     }
     const all = text(render(props({ peer: ANA, thread: [incoming, outgoing, plain] })))
-    expect(all).toContain('from them · Ana’s agent · approved by Ana')
-    expect(all).toContain('from you · received · your agent · approved by you')
-    expect(all.match(/ agent · approved by /g)).toHaveLength(2)
-    expect(text(render(props({ peer: ANA, thread: [incoming] }), 'ru'))).toContain('агент Ana · одобрил Ana')
+    expect(all).toContain('from them · via Ana’s agent')
+    expect(all).toContain('from you · received · via your agent')
+    expect(all.match(/ · via (Ana’s|your) agent/g)).toHaveLength(2)
+    expect(all).not.toContain('approved')
+    expect(text(render(props({ peer: ANA, thread: [incoming] }), 'ru'))).toContain('через агента Ana')
     expect(isThread({ peer: ANA, messages: [incoming, DRAFT] })).toBe(true)
     expect(isThread({ peer: ANA, messages: [{ ...incoming, via: 'human' }] })).toBe(false)
   })

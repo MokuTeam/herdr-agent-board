@@ -79,7 +79,7 @@ export function stateLine(view: TeamView, t: Translator): string {
 export const seenLine = (p: TeamRosterPeer, now: number, t: Translator): string =>
   p.online ? t('team.online') : p.lastSeen ? t('team.lastSeen', { when: ago(p.lastSeen, now, t) }) : t('team.neverSeen')
 
-/** The label on a message an agent asked for: whose agent, and that its person approved. The name is the roster's, never the message's. */
+/** The label on a message that came from an agent's draft: whose agent. The name is the roster's, never the message's. */
 export const agentLine = (m: ThreadMessage, t: Translator): string | null =>
   m.via !== 'agent' || m.dir === 'draft'
     ? null
