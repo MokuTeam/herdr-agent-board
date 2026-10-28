@@ -7,8 +7,9 @@
 // Chrome's, so chrome-devtools-mcp talks to it directly from then on.
 //
 // Between Claude and chrome-devtools-mcp it relays JSON-RPC line by line, and before a tool call
-// goes on it asks the board who has the browser: while the owner has it, the call waits, up to
-// HOLD_MS, then answers that the owner has the browser. Two tools of its own join the list:
+// goes on it asks the board who has the browser: while the owner has it (or the board does not
+// say), the call waits, up to HOLD_MS, then answers that the owner has the browser; a JSON-RPC
+// batch with a call in it waits as a whole. Two tools of its own join the list:
 // browser_profile (a named profile, for logins that last) and browser_ask_owner (the card under
 // "needs you": sign in to X for me).
 import { readFileSync } from 'node:fs'
@@ -46,6 +47,8 @@ export const OWN_TOOLS = [
 
 export const OWNER_HAS_IT =
   'The owner has the browser now (they took it over from the board). Try again later, or ask what they need; nothing was done.'
+export const BOARD_SILENT =
+  'The board does not answer who has the browser (it may be restarting): nothing was done. Try again in a moment.'
 
 export interface RelayOptions {
   /** POST /api/browser/<op> on the board with this pane: its answer, or null when the board does not answer. */
@@ -89,8 +92,12 @@ export function createRelay(o: RelayOptions): Relay {
     void p.finally(() => busy.delete(p))
   }
 
-  /** Resolves true once the agent has the browser (or the board does not say), false when the hold timed out or was cancelled. */
-  async function agentHasIt(id: unknown): Promise<boolean> {
+  /**
+   * Resolves true once the board says the agent has the browser; false when the hold timed out
+   * (`late` answers with why) or was cancelled. A board that does not answer, or answers anything
+   * else, holds the call as the owner does: nothing goes on that the board did not let go.
+   */
+  async function agentHasIt(id: unknown, late: (text: string) => void): Promise<boolean> {
     const key = idKey(id)
     const mark = { cancelled: false }
     const deadline = now() + holdMs
@@ -98,10 +105,10 @@ export function createRelay(o: RelayOptions): Relay {
       for (;;) {
         const r = await o.board('call', {})
         if (mark.cancelled) return false
-        if (r?.control !== 'owner') return true
+        if (r?.control === 'agent') return true
         if (!holding.has(key)) holding.set(key, mark)
         if (now() >= deadline) {
-          o.toClient(result(id, OWNER_HAS_IT, true))
+          late(r?.control === 'owner' ? OWNER_HAS_IT : BOARD_SILENT)
           return false
         }
         await sleep(pollMs)
@@ -116,7 +123,7 @@ export function createRelay(o: RelayOptions): Relay {
     const id = msg.id
     const args = isRecord(params.arguments) ? params.arguments : {}
     if (params.name === 'browser_profile') {
-      if (!(await agentHasIt(id))) return
+      if (!(await agentHasIt(id, text => o.toClient(result(id, text, true))))) return
       const name = typeof args.name === 'string' ? args.name : ''
       const r = await o.board('profile', { name: name || null })
       if (!r) return o.toClient(result(id, 'The board does not answer: no browser now.', true))
@@ -149,6 +156,18 @@ export function createRelay(o: RelayOptions): Relay {
       } catch {
         return o.toChild(line)
       }
+      // a batch with a call in it waits as a whole; answered as a batch when its hold ends
+      if (Array.isArray(msg)) {
+        const calls = msg.filter(m => isRecord(m) && m.method === 'tools/call') as Msg[]
+        if (!calls.length) return o.toChild(line)
+        const ids = msg.filter(m => isRecord(m) && m.method !== undefined && m.id !== undefined).map(m => (m as Msg).id)
+        const late = (text: string) => o.toClient(JSON.stringify(ids.map(i => JSON.parse(result(i, text, true)))))
+        return track(
+          agentHasIt(calls[0]?.id, late).then(go => {
+            if (go) o.toChild(line)
+          }),
+        )
+      }
       if (!isRecord(msg)) return o.toChild(line)
       const params = isRecord(msg.params) ? msg.params : {}
       if (msg.method === 'tools/list' && msg.id !== undefined) lists.add(idKey(msg.id))
@@ -162,7 +181,7 @@ export function createRelay(o: RelayOptions): Relay {
       if (msg.method !== 'tools/call') return o.toChild(line)
       if (OWN_TOOLS.some(t => t.name === params.name)) return track(own(msg, params))
       track(
-        agentHasIt(msg.id).then(go => {
+        agentHasIt(msg.id, text => o.toClient(result(msg.id, text, true))).then(go => {
           if (go) o.toChild(line)
         }),
       )

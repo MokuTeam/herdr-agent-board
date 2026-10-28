@@ -60,13 +60,63 @@ test('its two tools join chrome-devtools-mcp’s list; everything else goes thro
   expect(OWN_TOOLS.every(t => t.inputSchema.type === 'object')).toBe(true)
 })
 
-test('a call goes on at once while the agent has the browser, or when the board does not answer', async () => {
-  for (const control of [() => 'agent', () => null]) {
-    const { relay, toChild } = relayWith({ control })
-    relay.fromClient(call(5, 'take_screenshot'))
-    await relay.idle()
-    expect(toChild).toEqual([call(5, 'take_screenshot')])
-  }
+test('a call goes on at once while the agent has the browser', async () => {
+  const { relay, toChild } = relayWith({ control: () => 'agent' })
+  relay.fromClient(call(5, 'take_screenshot'))
+  await relay.idle()
+  expect(toChild).toEqual([call(5, 'take_screenshot')])
+})
+
+test('the board does not answer who has it: held as for the owner, until it answers or the hold ends', async () => {
+  let control: string | null = null
+  const { relay, toChild, toClient } = relayWith({ control: () => control })
+  relay.fromClient(call(5, 'take_screenshot'))
+  await Bun.sleep(20)
+  expect(toChild).toEqual([])
+  expect(relay.held()).toBe(1)
+  control = 'agent'
+  await relay.idle()
+  expect(toChild).toEqual([call(5, 'take_screenshot')])
+  expect(toClient).toEqual([])
+  const silent = relayWith({ control: () => null, holdMs: 3000 })
+  silent.relay.fromClient(call(6, 'click'))
+  await silent.relay.idle()
+  expect(silent.toChild).toEqual([])
+  expect(silent.toClient).toEqual([
+    {
+      jsonrpc: '2.0',
+      id: 6,
+      result: { content: [{ type: 'text', text: expect.stringContaining('board does not answer') }], isError: true },
+    },
+  ])
+})
+
+test('a JSON-RPC batch with a call in it is held as a whole; answered as a batch after the hold', async () => {
+  let control = 'owner'
+  const { relay, toChild, raw } = relayWith({ control: () => control, holdMs: 3_600_000 })
+  const note = { jsonrpc: '2.0', method: 'notifications/initialized' }
+  const batch = JSON.stringify([JSON.parse(call(1, 'click')), note, JSON.parse(call(2, 'take_screenshot'))])
+  relay.fromClient(batch)
+  await Bun.sleep(20)
+  expect(toChild).toEqual([])
+  control = 'agent'
+  await relay.idle()
+  expect(toChild).toEqual([batch])
+  // a batch without a call goes on at once
+  const list = JSON.stringify([{ jsonrpc: '2.0', id: 3, method: 'tools/list' }])
+  relay.fromClient(list)
+  expect(toChild.at(-1)).toBe(list)
+  // held past its limit: each call in it answered, in one batch
+  const late = relayWith({ control: () => 'owner', holdMs: 2000 })
+  late.relay.fromClient(batch)
+  await late.relay.idle()
+  expect(late.toChild).toEqual([])
+  const answered = JSON.parse(late.raw[0] as string) as { id: number; result: { isError: boolean } }[]
+  expect(answered.map(a => [a.id, a.result.isError])).toEqual([
+    [1, true],
+    [2, true],
+  ])
+  expect(raw).toEqual([])
 })
 
 test('held while the owner has the browser; let go the moment it is back', async () => {

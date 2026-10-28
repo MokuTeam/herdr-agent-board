@@ -526,3 +526,20 @@ test('a display whose X server was killed (its lock and socket left) is free aga
   expect(displayHeldAt(102, tmp, alive)).toBe(true)
   expect(displayHeldAt(103, tmp, alive)).toBe(false)
 })
+
+test('a profile switch while the owner has the browser: refused, Chrome left as it is', async () => {
+  const { d, state, server, root } = setup()
+  await d.ensure('w0:p1')
+  const vnc = await vncServer(root)
+  try {
+    await vnc.open(d, 'w0:p1')
+    d.setControl(state.items[0] as Item, 'owner')
+    const before = chromeOf(server.procs)
+    const r = await d.profile('w0:p1', 'github')
+    expect(r).toEqual({ ok: false, error: expect.stringContaining('owner') })
+    expect(chromeOf(server.procs)).toEqual(before)
+    expect(before[0]?.alive).toBe(true)
+  } finally {
+    vnc.close()
+  }
+})

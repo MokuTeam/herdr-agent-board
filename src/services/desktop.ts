@@ -603,6 +603,9 @@ export function createDesktops(o: DesktopsOptions): Desktops {
 
     profile: (pane, name) =>
       serial(pane, async () => {
+        // a switch restarts the browser under the owner's hands: never while they have it
+        if (desktops.get(pane)?.control === 'owner')
+          return { ok: false, error: 'the owner has the browser now: no profile switch until they hand it back' }
         wanted.set(pane, name)
         const d = desktops.get(pane)
         if (!d || d.chrome === null)
