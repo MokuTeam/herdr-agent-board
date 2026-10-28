@@ -1,13 +1,17 @@
-// A process of its own that opens an existing board database with one more step than the code
-// ships (test/adapters/db.test.ts): bun db-migrator.ts <file>. Prints "ok" or the error.
+// A process of its own that opens an existing board database (test/adapters/db.test.ts): with one
+// more step than the code ships, `bun db-migrator.ts <file>`; with the code's own steps,
+// `bun db-migrator.ts <file> shipped`. Prints "ok" or the error.
 import { openDb } from '../../src/adapters/db.ts'
 import { LATEST, MIGRATIONS } from '../../src/adapters/db-schema.ts'
 
-const [path = ''] = process.argv.slice(2)
+const [path = '', which = 'extra'] = process.argv.slice(2)
 try {
   const db = openDb({
     path,
-    steps: [...MIGRATIONS, { version: LATEST + 1, store: 'test', sql: 'CREATE TABLE extra (v TEXT) STRICT' }],
+    steps:
+      which === 'shipped'
+        ? MIGRATIONS
+        : [...MIGRATIONS, { version: LATEST + 1, store: 'test', sql: 'CREATE TABLE extra (v TEXT) STRICT' }],
   })
   if (!db) throw new Error('no database')
   db.close()

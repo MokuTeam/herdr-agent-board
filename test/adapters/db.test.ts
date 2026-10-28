@@ -299,6 +299,29 @@ test('a connection kept open while a newer board migrates the file refuses its n
   kept.close()
 })
 
+test("a file each version made, opened by several processes with this code's steps: each step once, the rows kept", async () => {
+  for (const from of MIGRATIONS.slice(0, -1).map(m => m.version)) {
+    isolatedHome()
+    const db = openDb({ steps: MIGRATIONS.filter(m => m.version <= from) })
+    db?.write('user', tx => tx.journal({ store: 's', op: 'o', ref: `at v${from}` }))
+    db?.close()
+    const openers = Array.from({ length: 5 }, () =>
+      Bun.spawn([process.execPath, MIGRATOR, dbFile(), 'shipped'], { stdout: 'pipe', stderr: 'pipe' }),
+    )
+    const said = (await Promise.all(openers.map(p => new Response(p.stdout).text()))).map(x => x.trim())
+    assert.deepEqual(said, ['ok', 'ok', 'ok', 'ok', 'ok'], `from v${from}`)
+    assert.equal(copies().length, 1, `from v${from}: one copy`)
+    assert.deepEqual(integrityOf(dbFile()), { ok: true, version: LATEST })
+    const raw = new Database(dbFile(), { readonly: true })
+    assert.deepEqual(
+      raw.query('SELECT ref FROM journal').all(),
+      [{ ref: `at v${from}` }],
+      `from v${from}: the rows as they were`,
+    )
+    raw.close()
+  }
+})
+
 test('sqliteAtLeast compares versions part by part', () => {
   assert.ok(sqliteAtLeast('3.53.4'))
   assert.ok(sqliteAtLeast('3.37.0'))
