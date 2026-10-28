@@ -118,9 +118,10 @@ const entryJson = (e: TimeEntry) => ({ ...e, seconds: secondsOf(e) })
 function dayLines(d: ClientDay, byId: Map<string, TimeEntry>): string[] {
   const lines = [`${d.client} · ${d.date} (${d.zone}) · ${hm(d.seconds)} → ${hm(d.billedSeconds)}`]
   for (const l of d.lines) {
-    const label = l.ref ?? (l.project || t('time.cli.dayGroup'))
+    const label = l.group === 'day' ? t('time.cli.dayGroup') : l.group === 'project' ? l.project : (l.ref ?? l.project)
     const rule = l.round === 'exact' ? t('time.round.exact') : t(`time.round.${l.round}`, { step: l.step })
-    lines.push(`  ${label} · ${l.project} · ${hm(l.seconds)} → ${hm(l.billedSeconds)} (${rule})`)
+    const project = l.project && l.project !== label ? ` · ${l.project}` : ''
+    lines.push(`  ${label}${project} · ${hm(l.seconds)} → ${hm(l.billedSeconds)} (${rule})`)
     for (const id of l.entries) {
       const e = byId.get(id)
       if (e) lines.push(`    ${e.id} ${e.start.slice(11, 16)}Z ${hm(secondsOf(e))} ${e.description}`)

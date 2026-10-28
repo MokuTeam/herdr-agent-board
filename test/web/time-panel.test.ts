@@ -46,7 +46,8 @@ test('hours as a bill says them, raw time as H:MM', () => {
 test('a line’s name and rule', () => {
   expect(lineLabel(line({ ref: '10001' }), t)).toBe('10001')
   expect(lineLabel(line({ ref: null }), t)).toBe('Support')
-  expect(lineLabel(line({ ref: null, project: '' }), t)).toBe('The day')
+  expect(lineLabel(line({ group: 'day', ref: null }), t)).toBe('The day')
+  expect(lineLabel(line({ group: 'project', ref: '10001' }), t)).toBe('Support')
   expect(ruleText(line({}), t)).toBe('up to 30 min')
   expect(ruleText(line({ round: 'nearest' }), t)).toBe('nearest 30 min')
   expect(ruleText(line({ round: 'exact', step: 0 }), t)).toBe('exact')

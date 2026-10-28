@@ -37,9 +37,11 @@ export function hoursText(seconds: number, t: Translator): string {
   return `${n.toLocaleString(t.lang)} h`
 }
 
-/** A line's name: its reference (a case, a ticket), else its project, else "The day". */
+/** A line's name: "The day" for a day's group, the project for a project's, else its reference (a case, a ticket) or its project. */
 export function lineLabel(l: DayLine, t: Translator): string {
-  return l.ref ?? (l.project || t('time.dayGroup'))
+  if (l.group === 'day') return t('time.dayGroup')
+  if (l.group === 'project') return l.project
+  return l.ref ?? l.project
 }
 
 /** A line's rule in a word: exact, or the step and the way it rounds. */
