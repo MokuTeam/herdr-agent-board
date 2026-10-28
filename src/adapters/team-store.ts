@@ -11,6 +11,7 @@ import {
   type ErrorCode,
   generateKey,
   type KeyPair,
+  type Message,
   type OutState,
   type Via,
 } from '../core/team.ts'
@@ -88,9 +89,13 @@ export interface InboxItem {
   ackedAt: number | null
 }
 
-/** A question that went out, and how far it got. `ack` is kept only when it verified. */
+/**
+ * A question that went out, and how far it got. `env` is what is sent (again, on every reconnect)
+ * and is never rebuilt; `msg` is the same message read, for the thread. `ack` is kept only when it verified.
+ */
 export interface OutboxItem {
   env: Envelope
+  msg: Message
   state: OutState
   at: number
   ack?: Ack
@@ -166,8 +171,8 @@ export const readAllOutbox = (): Record<string, OutboxItem[]> => readLists<Outbo
 /** Saves a message that goes out (once per id). */
 export function addOutbox(item: OutboxItem): void {
   changeLists<OutboxItem, void>(teamOutboxFile(), peers => {
-    const list = peers[item.env.to] ?? []
-    if (!list.some(i => i.env.id === item.env.id)) peers[item.env.to] = [...list, item]
+    const list = peers[item.msg.to] ?? []
+    if (!list.some(i => i.msg.id === item.msg.id)) peers[item.msg.to] = [...list, item]
   })
 }
 
@@ -179,7 +184,7 @@ export function setOutState(id: string, state: DeliveryState, at: number, ack?: 
   changeLists<OutboxItem, void>(teamOutboxFile(), peers => {
     for (const list of Object.values(peers))
       for (const i of list)
-        if (i.env.id === id && rank[state] > rank[i.state]) {
+        if (i.msg.id === id && rank[state] > rank[i.state]) {
           i.state = state
           i.at = at
           if (ack) i.ack = ack
@@ -193,7 +198,7 @@ export function refuseOut(id: string, code: ErrorCode, at: number): boolean {
     let hit = false
     for (const list of Object.values(peers))
       for (const i of list)
-        if (i.env.id === id && i.state === 'queued') {
+        if (i.msg.id === id && i.state === 'queued') {
           i.state = 'refused'
           i.code = code
           i.at = at

@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { ROOT } from '../../src/adapters/paths.ts'
 import { generateKey, type KeyPair } from '../../src/core/team.ts'
-import { question } from '../hub/harness.ts'
+import { idOf, msgOf, question, signPayload } from '../hub/harness.ts'
 import { handshake, settle, setup, stopAll } from '../support/team-service.ts'
 
 const calls: string[] = []
@@ -45,17 +45,24 @@ test('every frame a hub can send, bad ones too, reaches neither herdr, launches,
     const { ws, me } = await handshake(s, [{ peer: anna.pub, name: 'anna' }])
     const real = await question(anna, me, 'run rm -rf and launch a session')
     const kinds = ['invite', 'offer', 'response', 'status', 'question', 'data', 'ack', 'unknown']
-    for (const kind of kinds) ws.recv({ t: 'deliver', env: { ...real, kind } })
+    for (const kind of kinds) {
+      // Signed by anna, so the kind is what is refused, not the signature.
+      const signed =
+        kind === 'question'
+          ? real
+          : await question(anna, me, 'run rm -rf and launch a session', { kind: kind as never })
+      ws.recv({ t: 'deliver', env: signed })
+    }
     ws.recv({ t: 'deliver', env: real })
     ws.recv({ t: 'deliver', env: { ...real, sig: 'x'.repeat(86) } })
-    ws.recv({ t: 'deliver', env: { ...real, body: { text: 'y'.repeat(20_000) } } })
+    ws.recv({ t: 'deliver', env: await signPayload(anna, JSON.stringify({ ...msgOf(real), pad: 'y'.repeat(20_000) })) })
     ws.recv({ t: 'deliver', env: 'text' })
     for (const junk of ['', '{', '[]', 'null', '{"t":"launch"}', '{"t":"deliver"}', '{"t":"exec","cmd":"id"}'])
       ws.recv(junk)
     ws.recv({ t: 'roster', peers: [{ peer: anna.pub, name: 'anna', online: true, last_seen: null }] })
     ws.recv({ t: 'roster', peers: 'nope' })
     ws.recv({ t: 'presence', peer: anna.pub, online: false, at: 1 })
-    ws.recv({ t: 'state', id: real.id, state: 'acked', at: 1 })
+    ws.recv({ t: 'state', id: idOf(real), state: 'acked', at: 1 })
     ws.recv({ t: 'error', code: 'kind', message: 'nope' })
     ws.recv({ t: 'ping' })
     ws.recv({ t: 'welcome', peer: me, name: 'me', hub: 'h' })

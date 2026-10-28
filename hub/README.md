@@ -73,17 +73,23 @@ oldest on; the hash of the last one deleted is kept in `meta` (`audit_anchor`) s
 chain still verifies. Queued and delivered messages, and peers, are never deleted. A pass that
 deleted something is itself audited (`prune`, with counts).
 
-Messages are `question` only, text up to 4000 characters, envelope up to 16 KiB; the hub drops and
+Messages are `question` only, text up to 4000 characters, payload up to 16 KiB; the hub drops and
 logs anything else. The signatures are the boards': the hub checks the sender's, and passes the
 recipient's ack back unchanged, so the sender can check it against the key it pinned.
+
+An envelope is `{ from, payload, sig }`: `payload` is the JSON text of the message exactly as its
+sender wrote it, and `sig` is the sender's signature over it (with a prefix that says what it is
+for). There is no canonical JSON for it: the hub checks the signature over the string as it came,
+before it reads it, and stores and forwards that string as it is. Keys in another order, or a
+single byte changed, fail the signature.
 
 ## Protocol
 
 JSON text frames on `ws(s)://host:port/v1`, at most 64 KiB each. A connection is hello, challenge,
 then auth (a known key) or join (an invite). Nothing is sent to a connection before it is
 authenticated, not even the roster. A second connection of the same peer replaces the first (close
-4409). Close codes: 4400 bad request, 4401 unknown or bad signature, 4403 revoked or bad invite. The
-canonical form that is signed is in `src/core/team.ts`, which the hub and the board both import.
+4409). Close codes: 4400 bad request, 4401 unknown or bad signature, 4403 revoked or bad invite. What
+is signed, and the checks on it, are in `src/core/team.ts`, which the hub and the board both import.
 
 ## Tests
 

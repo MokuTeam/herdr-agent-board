@@ -30,19 +30,22 @@ import {
   ackBytes,
   authBytes,
   checkEnvelope,
+  checkMessage,
   DEFAULT_TTL_S,
   type Envelope,
   type ErrorCode,
-  envelopeBytes,
   type Frame,
   fingerprint,
   isMessageId,
   isPeerId,
   MAX_DRAFTS,
   MAX_TEXT,
+  type Message,
   type OutState,
+  openEnvelope,
   parseFrame,
   type RosterPeer,
+  sealEnvelope,
   sign,
   TEAM_PROTOCOL,
   type TeamConfig,
@@ -381,17 +384,17 @@ export function createTeam({
   async function takeState(f: Extract<Frame, { t: 'state' }>): Promise<void> {
     const item = Object.values(readAllOutbox())
       .flat()
-      .find(i => i.env.id === f.id)
+      .find(i => i.msg.id === f.id)
     if (!item || !me) return
     if (f.state === 'acked') {
       // Acked counts only with the recipient's own signature over it.
       const a = f.ack
       const ok =
         !!a &&
-        a.by === item.env.to &&
+        a.by === item.msg.to &&
         (await verify(a.by, ackBytes({ by: a.by, id: f.id, to: me.peer, ts: a.ts }), a.sig))
       if (!ok) {
-        audit('drop', item.env.to, { why: 'bad_ack', id: f.id })
+        audit('drop', item.msg.to, { why: 'bad_ack', id: f.id })
         setOutState(f.id, 'delivered', f.at)
       } else setOutState(f.id, 'acked', f.at, a)
     } else setOutState(f.id, f.state, f.at)
@@ -400,38 +403,39 @@ export function createTeam({
 
   async function takeDeliver(raw: Envelope): Promise<void> {
     if (!me) return
-    const checked = checkEnvelope(raw)
-    if (!checked.ok) {
-      audit('drop', null, { why: checked.code })
-      log(`team: dropped a message (${checked.code})`)
+    // The signature is checked over the payload string as it came; only then is it read.
+    const opened = await openEnvelope(raw)
+    if (!opened.ok) {
+      audit('drop', opened.from ?? null, { why: opened.code, ...(opened.id && { id: opened.id }) })
+      log(`team: dropped a message (${opened.code === 'bad_sig' ? 'bad signature' : opened.code})`)
       return
     }
-    const env = checked.env
-    if (env.to !== me.peer || !(await verify(env.from, envelopeBytes(env), env.sig))) {
-      audit('drop', env.from, { why: 'bad_sig', id: env.id })
+    const msg = opened.msg
+    if (msg.to !== me.peer) {
+      audit('drop', msg.from, { why: 'bad_sig', id: msg.id })
       log('team: dropped a message (bad signature)')
       return
     }
-    const held = readPins()[env.from]?.status !== 'trusted'
+    const held = readPins()[msg.from]?.status !== 'trusted'
     const fresh = addInbox({
-      id: env.id,
-      from: env.from,
-      ts: env.ts,
-      text: env.body.text,
+      id: msg.id,
+      from: msg.from,
+      ts: msg.ts,
+      text: msg.body.text,
       receivedAt: clock.now(),
       held,
-      ...(env.body.via && { via: env.body.via }),
+      ...(msg.body.via && { via: msg.body.via }),
       ackedAt: null,
     })
     if (fresh) {
-      audit('inbox', env.from, { id: env.id, held })
+      audit('inbox', msg.from, { id: msg.id, held })
       changed()
     }
     // Acked again on a redelivery: the first ack may not have got through.
     const ts = new Date(clock.now()).toISOString()
-    const sig = await sign(me.pkcs8, ackBytes({ by: me.peer, id: env.id, to: env.from, ts }))
-    frame({ t: 'ack', id: env.id, ts, sig })
-    markAcked(env.from, env.id, clock.now())
+    const sig = await sign(me.pkcs8, ackBytes({ by: me.peer, id: msg.id, to: msg.from, ts }))
+    frame({ t: 'ack', id: msg.id, ts, sig })
+    markAcked(msg.from, msg.id, clock.now())
   }
 
   async function sendQuestion(to: string, text: string, via?: Via): Promise<SendResult> {
@@ -443,25 +447,28 @@ export function createTeam({
     // A key that changed under a pinned name may be someone else's: nothing goes to it until Trust.
     if (readPins()[to]?.status === 'changed') return { ok: false, error: 'changed' }
     const key = await ensureKey()
-    const open = {
+    const msg: Message = {
       v: TEAM_PROTOCOL,
       id: crypto.randomUUID(),
       from: key.pub,
       to,
-      kind: 'question' as const,
+      kind: 'question',
       reply_to: null,
       ts: new Date(clock.now()).toISOString(),
       ttl_s: DEFAULT_TTL_S,
       body: via ? { text: body, via } : { text: body },
     }
-    const env: Envelope = { ...open, sig: await sign(key.pkcs8, envelopeBytes(open)) }
-    // What the hub would refuse (shape, the 16 KiB of the encoded envelope) is refused here, not queued.
-    const checked = checkEnvelope(env)
+    // Written once and signed as written; that string is what every hop passes on.
+    const env: Envelope = await sealEnvelope(key, msg)
+    // What the hub would refuse (shape, the 16 KiB of the payload) is refused here, not queued.
+    const wire = checkEnvelope(env)
+    if (!wire.ok) return { ok: false, error: wire.code }
+    const checked = checkMessage(env.payload, env.from)
     if (!checked.ok) return { ok: false, error: checked.code }
-    addOutbox({ env, state: 'queued', at: clock.now() })
+    addOutbox({ env, msg, state: 'queued', at: clock.now() })
     if (authed) frame({ t: 'send', env })
     changed()
-    return { ok: true, id: env.id }
+    return { ok: true, id: msg.id }
   }
 
   function begin(): void {
@@ -512,13 +519,13 @@ export function createTeam({
       )
       const outgoing = readOutbox(peer).map(
         (i: OutboxItem): ThreadMessage => ({
-          id: i.env.id,
+          id: i.msg.id,
           dir: 'out',
-          text: i.env.body.text,
-          ts: i.env.ts,
+          text: i.msg.body.text,
+          ts: i.msg.ts,
           state: i.state,
           ...(i.code && { code: i.code }),
-          ...(i.env.body.via && { via: i.env.body.via }),
+          ...(i.msg.body.via && { via: i.msg.body.via }),
         }),
       )
       const drafts = readDrafts()

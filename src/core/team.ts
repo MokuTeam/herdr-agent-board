@@ -1,7 +1,7 @@
-// The peer network (#231), its pure rules: config.json's `team`, the canonical form of what is
-// signed, the envelopes and frames of the wire protocol v1, and the Ed25519 signatures over them.
-// The board (services/team-hub.ts) and the hub (hub/) both import this file, so there is one
-// canonical form and one set of limits.
+// The peer network (#231), its pure rules: config.json's `team`, the bytes that are signed, the
+// envelopes and frames of the wire protocol v1, and the Ed25519 signatures over them. The board
+// (services/team-hub.ts) and the hub (hub/) both import this file, so there is one set of signed
+// bytes and one set of limits.
 //
 // config.json's `team` turns it on; a setup without it sees nothing of this anywhere:
 //   "team": { "hub": "ws://100.64.0.7:7443", "name": "anna" }
@@ -18,6 +18,7 @@ import {
   MAX_ENVELOPE_BYTES,
   MAX_NAME,
   MAX_TEXT,
+  type Message,
   type RosterPeer,
   TEAM_PROTOCOL,
   VIAS,
@@ -82,12 +83,14 @@ export function unb64u(s: unknown): Uint8Array | null {
   return b64u(bytes) === s ? bytes : null
 }
 
-// ---- Canonical form
+// ---- What is signed
 
 /**
  * The canonical JSON of a value (RFC 8785 for this domain): object keys sorted by UTF-16 code
  * units, no whitespace, strings and finite numbers as JSON.stringify writes them. Undefined,
- * functions, non-finite numbers and the like are refused with a TypeError.
+ * functions, non-finite numbers and the like are refused with a TypeError. Only for what the
+ * verifier rebuilds from values it already knows (auth, join, ack); an envelope's payload is
+ * signed as the string it is (#217) and never goes through this.
  */
 export function canonicalJson(v: unknown): string {
   if (v === null || typeof v === 'boolean' || typeof v === 'string') return JSON.stringify(v)
@@ -108,9 +111,12 @@ export function canonicalJson(v: unknown): string {
 
 export type Purpose = 'auth' | 'join' | 'envelope' | 'ack'
 
-/** What is signed: the purpose binds a signature to one use, so none works as another. */
-export const signedBytes = (purpose: Purpose, obj: unknown): Uint8Array =>
-  new TextEncoder().encode(`hab-team/${TEAM_PROTOCOL} ${purpose}\n${canonicalJson(obj)}`)
+/** The purpose binds a signature to one use, so none works as another. */
+const domain = (purpose: Purpose): string => `hab-team/${TEAM_PROTOCOL} ${purpose}\n`
+
+/** What is signed of values both sides know: the purpose, then their canonical JSON. */
+export const signedBytes = (purpose: Exclude<Purpose, 'envelope'>, obj: unknown): Uint8Array =>
+  new TextEncoder().encode(`${domain(purpose)}${canonicalJson(obj)}`)
 
 export interface AuthParts {
   hub: string
@@ -146,15 +152,49 @@ export const isMessageId = (v: unknown): v is string => isStr(v) && UUID.test(v)
 export const isPeerId = (v: unknown): v is string => isStr(v) && PEER.test(v)
 export const isSig = (v: unknown): v is string => isStr(v) && SIG.test(v)
 
-/** An envelope's shape, or the error code for what is wrong with it. The signature is checked elsewhere. */
+const WIRE_FIELDS = ['from', 'payload', 'sig']
+const MESSAGE_FIELDS = ['v', 'id', 'from', 'to', 'kind', 'reply_to', 'ts', 'ttl_s', 'body']
+
+/**
+ * An envelope's shape on the wire: exactly `from`, `payload` and `sig`, the payload a string of
+ * well-formed text (so one string has one set of bytes) within the size limit. The payload is not
+ * read here, and the signature is checked elsewhere.
+ */
 export function checkEnvelope(v: unknown): { ok: true; env: Envelope } | { ok: false; code: ErrorCode } {
   if (!isRecord(v)) return { ok: false, code: 'bad_frame' }
-  if (v.v !== TEAM_PROTOCOL) return { ok: false, code: 'version' }
+  if (Object.keys(v).length !== WIRE_FIELDS.length || Object.keys(v).some(k => !WIRE_FIELDS.includes(k)))
+    return { ok: false, code: 'bad_frame' }
+  if (!isPeerId(v.from) || !isStr(v.payload) || !isSig(v.sig) || !v.payload.isWellFormed())
+    return { ok: false, code: 'bad_frame' }
+  if (new TextEncoder().encode(v.payload).length > MAX_ENVELOPE_BYTES) return { ok: false, code: 'too_big' }
+  return { ok: true, env: { from: v.from, payload: v.payload, sig: v.sig } }
+}
+
+/**
+ * The strict checks on a payload: read it as JSON, and hold it to the field set, the types, the
+ * body keys, the kind whitelist and the via whitelist. Only for a payload whose signature verified.
+ * `from` is the key it was signed with, and the message must say the same. On a refusal the id is
+ * given back when the (signed) payload has one, so the sender can be told which message it was.
+ */
+export function checkMessage(
+  payload: string,
+  from: string,
+): { ok: true; msg: Message } | { ok: false; code: ErrorCode; id?: string } {
+  let v: unknown
+  try {
+    v = JSON.parse(payload)
+  } catch {
+    return { ok: false, code: 'bad_frame' }
+  }
+  if (!isRecord(v)) return { ok: false, code: 'bad_frame' }
+  const id = isStr(v.id) ? { id: v.id } : {}
+  const no = (code: ErrorCode) => ({ ok: false as const, code, ...id })
+  if (v.v !== TEAM_PROTOCOL) return no('version')
   const body = v.body
   if (
     !isStr(v.id) ||
     !UUID.test(v.id) ||
-    !isPeerId(v.from) ||
+    v.from !== from ||
     !isStr(v.to) ||
     !isStr(v.kind) ||
     !(v.reply_to === null || isStr(v.reply_to)) ||
@@ -163,13 +203,12 @@ export function checkEnvelope(v: unknown): { ok: true; env: Envelope } | { ok: f
     typeof v.ttl_s !== 'number' ||
     !Number.isFinite(v.ttl_s) ||
     !isRecord(body) ||
-    !isStr(body.text) ||
-    !isSig(v.sig)
+    !isStr(body.text)
   )
-    return { ok: false, code: 'bad_frame' }
-  if (!KINDS.some(k => k === v.kind)) return { ok: false, code: 'kind' }
-  if (v.to === '*') return { ok: false, code: 'broadcast' }
-  if (!isPeerId(v.to)) return { ok: false, code: 'bad_frame' }
+    return no('bad_frame')
+  if (!KINDS.some(k => k === v.kind)) return no('kind')
+  if (v.to === '*') return no('broadcast')
+  if (!isPeerId(v.to)) return no('bad_frame')
   // The body is `text`, and `via` when it is exactly "agent"; any other key or value is not a body.
   const via = Object.hasOwn(body, 'via') ? body.via : undefined
   const bodyKeys = Object.keys(body).length
@@ -179,41 +218,52 @@ export function checkEnvelope(v: unknown): { ok: true; env: Envelope } | { ok: f
     bodyKeys !== (Object.hasOwn(body, 'via') ? 2 : 1) ||
     (Object.hasOwn(body, 'via') && !VIAS.some(x => x === via))
   )
-    return { ok: false, code: 'bad_frame' }
-  if (new TextEncoder().encode(JSON.stringify(v)).length > MAX_ENVELOPE_BYTES) return { ok: false, code: 'too_big' }
-  if (Object.keys(v).some(k => !ENVELOPE_FIELDS.includes(k))) return { ok: false, code: 'bad_frame' }
-  // Only the signed fields (and the signature) are kept: what the hub stores and relays, and the
-  // board keeps, is this rebuilt envelope.
-  const env: Envelope = {
+    return no('bad_frame')
+  if (Object.keys(v).some(k => !MESSAGE_FIELDS.includes(k))) return no('bad_frame')
+  // Only the signed fields are kept; what the board keeps is this rebuilt message.
+  const msg: Message = {
     v: TEAM_PROTOCOL,
     id: v.id,
-    from: v.from,
+    from,
     to: v.to,
-    kind: v.kind as Envelope['kind'],
+    kind: v.kind as Message['kind'],
     reply_to: v.reply_to,
     ts: v.ts,
     ttl_s: v.ttl_s,
     body: via === undefined ? { text: body.text } : { text: body.text, via: via as Via },
-    sig: v.sig,
   }
-  return { ok: true, env }
+  return { ok: true, msg }
 }
 
-const ENVELOPE_FIELDS = ['v', 'id', 'from', 'to', 'kind', 'reply_to', 'ts', 'ttl_s', 'body', 'sig']
+/** What an envelope's signature covers: the domain prefix, then the payload string as it is, nothing rebuilt. */
+export const envelopeBytes = (payload: string): Uint8Array =>
+  new TextEncoder().encode(`${domain('envelope')}${payload}`)
 
-/** The envelope without its signature, as signed. */
-export function envelopeBytes(env: Omit<Envelope, 'sig'> | Envelope): Uint8Array {
-  return signedBytes('envelope', {
-    v: env.v,
-    id: env.id,
-    from: env.from,
-    to: env.to,
-    kind: env.kind,
-    reply_to: env.reply_to ?? null,
-    ts: env.ts,
-    ttl_s: env.ttl_s,
-    body: env.body,
-  })
+/** The envelope of a message, signed by `key`: the message is written once, and what was written is what is signed. */
+export async function sealEnvelope(key: KeyPair, msg: Message): Promise<Envelope> {
+  const payload = JSON.stringify(msg)
+  return { from: key.pub, payload, sig: await sign(key.pkcs8, envelopeBytes(payload)) }
+}
+
+export type Opened =
+  | { ok: true; env: Envelope; msg: Message }
+  | { ok: false; code: ErrorCode; from?: string; id?: string }
+
+/**
+ * Takes an envelope in, in this order: its shape on the wire (the payload still a string), who it
+ * claims to be from (when `from` is given, the key the caller knows the sender by: the hub's
+ * connection), the signature over the payload exactly as it came, and only then the payload is
+ * parsed and held to checkMessage. A payload changed by one byte, or written with its keys in
+ * another order, fails at the signature. On a refusal `from` is given back once the shape passed.
+ */
+export async function openEnvelope(v: unknown, from?: string): Promise<Opened> {
+  const wire = checkEnvelope(v)
+  if (!wire.ok) return wire
+  const env = wire.env
+  if ((from !== undefined && env.from !== from) || !(await verify(env.from, envelopeBytes(env.payload), env.sig)))
+    return { ok: false, code: 'bad_sig', from: env.from }
+  const checked = checkMessage(env.payload, env.from)
+  return checked.ok ? { ok: true, env, msg: checked.msg } : { ...checked, from: env.from }
 }
 
 /** A frame's shape, or null for what is no frame. Envelopes inside are checked by checkEnvelope. */

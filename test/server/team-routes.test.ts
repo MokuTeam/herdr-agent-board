@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from '
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { envelopeBytes, generateKey, type KeyPair, verify } from '../../src/core/team.ts'
-import { ackOf, type Client, type Harness, question, startHarness } from '../hub/harness.ts'
+import { ackOf, type Client, type Harness, msgOf, question, startHarness } from '../hub/harness.ts'
 import { serveBoard, sharedSandbox } from '../support/board-server.ts'
 import type { Sandbox } from '../support/sandbox.ts'
 
@@ -184,7 +184,8 @@ describe('team on, against a hub in this process', () => {
     }
     expect(sent.ok).toBe(true)
     const delivered = await annaClient.take('deliver')
-    expect(delivered.env).toMatchObject({ id: sent.id, from: me.pub, body: { text: 'did the build pass?' } })
+    expect(delivered.env.from).toBe(me.pub)
+    expect(msgOf(delivered.env)).toMatchObject({ id: sent.id, from: me.pub, body: { text: 'did the build pass?' } })
     annaClient.send(await ackOf(anna, delivered.env))
     const thread = async () =>
       (await (await fetch(`${url}/api/team/thread/${anna.pub}`)).json()) as {
@@ -236,8 +237,8 @@ describe('team on, against a hub in this process', () => {
     const sent = (await (await post(url, `/api/team/draft/${made.id}/send`, {})).json()) as { ok: boolean; id: string }
     expect(sent.ok).toBe(true)
     const delivered = await annaClient.take('deliver')
-    expect(delivered.env).toMatchObject({ id: sent.id, body: { text: 'agent asks: green?', via: 'agent' } })
-    expect(await verify(me.pub, envelopeBytes(delivered.env), delivered.env.sig)).toBe(true)
+    expect(msgOf(delivered.env)).toMatchObject({ id: sent.id, body: { text: 'agent asks: green?', via: 'agent' } })
+    expect(await verify(me.pub, envelopeBytes(delivered.env.payload), delivered.env.sig)).toBe(true)
     annaClient.send(await ackOf(anna, delivered.env))
     expect(await drafts()).toEqual([])
     expect((await thread()).messages.find(m => m.id === sent.id)).toMatchObject({ dir: 'out', via: 'agent' })
@@ -246,8 +247,8 @@ describe('team on, against a hub in this process', () => {
     // A message typed in the panel goes with no via.
     const typed = (await (await post(url, '/api/team/send', draftBody('by hand'))).json()) as { id: string }
     const d2 = await annaClient.take('deliver')
-    expect(d2.env.id).toBe(typed.id)
-    expect(d2.env.body).toEqual({ text: 'by hand' })
+    expect(msgOf(d2.env).id).toBe(typed.id)
+    expect(msgOf(d2.env).body).toEqual({ text: 'by hand' })
     annaClient.send(await ackOf(anna, d2.env))
   })
 

@@ -7,7 +7,6 @@ import { createHash, randomBytes } from 'node:crypto'
 import {
   ackBytes,
   authBytes,
-  checkEnvelope,
   type Envelope,
   type ErrorCode,
   envelopeBytes,
@@ -16,6 +15,7 @@ import {
   joinBytes,
   MAX_TTL_S,
   MIN_TTL_S,
+  openEnvelope,
   parseFrame,
   type RosterPeer,
   TEAM_PROTOCOL,
@@ -94,11 +94,6 @@ interface Session {
   peer: string
 }
 
-const isRecordId = (v: unknown): string | undefined =>
-  typeof v === 'object' && v !== null && typeof (v as { id?: unknown }).id === 'string'
-    ? (v as { id: string }).id
-    : undefined
-
 export function createHub(opts: HubOptions): Hub {
   const { db, clock, log } = opts
   const keepDays = opts.keepDays ?? DEFAULT_KEEP_DAYS
@@ -162,49 +157,46 @@ export function createHub(opts: HubOptions): Hub {
   }
 
   const send = async (conn: Conn, peer: string, f: { env: unknown }) => {
-    const idOf = isRecordId(f.env)
-    const checked = checkEnvelope(f.env)
-    if (!checked.ok) {
-      log(`dropped from ${peer.slice(0, 8)}: ${checked.code}`)
-      return fail(conn, checked.code, `envelope refused: ${checked.code}`, undefined, idOf)
+    // The signature is checked over the payload string as it came, and only then is it read (#217).
+    const opened = await openEnvelope(f.env, peer)
+    if (!opened.ok) {
+      log(`dropped from ${peer.slice(0, 8)}: ${opened.code}`)
+      return fail(conn, opened.code, `envelope refused: ${opened.code}`, undefined, opened.id)
     }
-    const env = checked.env
-    if (env.from !== peer) return fail(conn, 'bad_sig', 'from is not the connected peer', undefined, env.id)
-    if (env.to === peer) return fail(conn, 'bad_frame', 'a message to yourself', undefined, env.id)
-    const bytes = envelopeBytes(env)
-    if (!(await verify(env.from, bytes, env.sig)))
-      return fail(conn, 'bad_sig', 'the signature does not verify', undefined, env.id)
-    if (db.peer(peer)?.status !== 'active') return fail(conn, 'revoked', 'this peer is revoked', CLOSE_REVOKED, env.id)
-    const to = db.peer(env.to)
-    if (to?.status !== 'active') return fail(conn, 'not_member', 'the recipient is not a member', undefined, env.id)
-    const hash = createHash('sha256').update(bytes).digest('hex')
-    const have = db.message(env.id)
+    const { env, msg } = opened
+    if (msg.to === peer) return fail(conn, 'bad_frame', 'a message to yourself', undefined, msg.id)
+    if (db.peer(peer)?.status !== 'active') return fail(conn, 'revoked', 'this peer is revoked', CLOSE_REVOKED, msg.id)
+    const to = db.peer(msg.to)
+    if (to?.status !== 'active') return fail(conn, 'not_member', 'the recipient is not a member', undefined, msg.id)
+    const hash = createHash('sha256').update(envelopeBytes(env.payload)).digest('hex')
+    const have = db.message(msg.id)
     if (have) {
       if (have.from_peer !== peer || have.body_hash !== hash)
-        return fail(conn, 'dup_id', 'that id is taken', undefined, env.id)
+        return fail(conn, 'dup_id', 'that id is taken', undefined, msg.id)
       put(conn, stateOf(have))
       return
     }
     const now = clock.now()
-    const ttl = Math.min(MAX_TTL_S, Math.max(MIN_TTL_S, env.ttl_s))
-    const payload = JSON.stringify(env)
+    const ttl = Math.min(MAX_TTL_S, Math.max(MIN_TTL_S, msg.ttl_s))
+    // The row keeps the envelope as it came: the payload string is stored and sent on as it is.
+    const stored = JSON.stringify(env)
     db.insertMessage({
-      id: env.id,
-      v: env.v,
+      id: msg.id,
+      v: msg.v,
       from_peer: peer,
-      to_peer: env.to,
-      kind: env.kind,
-      reply_to: env.reply_to,
+      to_peer: msg.to,
+      kind: msg.kind,
+      reply_to: msg.reply_to,
       created_at: now,
       expires_at: now + ttl * 1000,
-      size: Buffer.byteLength(payload),
+      size: Buffer.byteLength(stored),
       body_hash: hash,
-      payload,
+      payload: stored,
     })
-    db.audit(now, peer, 'send', { id: env.id, to: env.to, size: Buffer.byteLength(payload) })
-    const row = db.message(env.id) as MessageRow
+    db.audit(now, peer, 'send', { id: msg.id, to: msg.to, size: Buffer.byteLength(stored) })
+    const row = db.message(msg.id) as MessageRow
     notify(row)
-    const s = sessions.get(env.to)
+    const s = sessions.get(msg.to)
     if (s) deliver(s, row)
   }
 

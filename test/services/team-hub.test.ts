@@ -18,7 +18,7 @@ import {
 } from '../../src/core/team.ts'
 import { backoffMs } from '../../src/core/tunnel.ts'
 import { DEAD_MS, PING_MS, UNKNOWN_RETRY_MS, UP_RESETS_MS } from '../../src/services/team-hub.ts'
-import { ackOf, question } from '../hub/harness.ts'
+import { ackOf, idOf, msgOf, question, signPayload } from '../hub/harness.ts'
 import { type FakeWs, HUB, handshake, settle, setup, stopAll, until } from '../support/team-service.ts'
 
 afterEach(stopAll)
@@ -175,12 +175,13 @@ test('a question from a peer: kept once, the page told, a signed ack sent; a red
   ws.recv({ t: 'deliver', env })
   await until(() => ws.of('ack').length === 1, 'an ack')
   expect(s.svc.rev()).toBeGreaterThan(rev)
+  const msg = msgOf(env)
   expect(s.svc.thread(a.pub)).toEqual([
-    { id: env.id, dir: 'in', text: 'can you look at #231?', ts: env.ts, held: false },
+    { id: msg.id, dir: 'in', text: 'can you look at #231?', ts: msg.ts, held: false },
   ])
   const ack = ws.of('ack')[0]
-  expect(ack?.id).toBe(env.id)
-  expect(await verify(me, ackBytes({ by: me, id: env.id, to: a.pub, ts: ack?.ts ?? '' }), ack?.sig ?? '')).toBe(true)
+  expect(ack?.id).toBe(msg.id)
+  expect(await verify(me, ackBytes({ by: me, id: msg.id, to: a.pub, ts: ack?.ts ?? '' }), ack?.sig ?? '')).toBe(true)
   const rev2 = s.svc.rev()
   ws.recv({ t: 'deliver', env })
   await until(() => ws.of('ack').length === 2, 'a second ack')
@@ -190,17 +191,20 @@ test('a question from a peer: kept once, the page told, a signed ack sent; a red
   expect(log).not.toContain('can you look')
 })
 
-test('a bad signature, an unknown kind, junk and a message for someone else are dropped and logged, not acked', async () => {
+test('a bad signature, a wrong sender, an unknown kind, junk and a message for someone else are dropped and logged, not acked', async () => {
   const s = setup()
   s.svc.start()
   const [anna, mallory] = (await names(2)) as [KeyPair, KeyPair]
   const { ws, me } = await handshake(s, [{ peer: anna.pub, name: 'anna' }])
   const good = await question(anna, me, 'real')
-  const forged: Envelope = { ...good, id: '00000000-0000-4000-8000-0000000000a1', body: { text: 'forged' } }
-  const wrongSigner = await question(mallory, me, 'claims anna', { from: anna.pub })
+  const forged: Envelope = { ...good, payload: good.payload.replace('real', 'forged') }
+  // Signed by mallory, but the envelope says anna: the signature is not anna's.
+  const wrongSigner: Envelope = { ...(await question(mallory, me, 'claims anna')), from: anna.pub }
+  // Signed by mallory over a message that says it is from anna: a signature that is hers, a message that is not.
+  const wrongFrom = await question(mallory, me, 'also claims anna', { from: anna.pub })
   const odd = await question(anna, me, 'an offer', { kind: 'offer' as never })
   const elsewhere = await question(anna, mallory.pub, 'not for me')
-  for (const e of [forged, wrongSigner, odd, elsewhere]) ws.recv({ t: 'deliver', env: e })
+  for (const e of [forged, wrongSigner, wrongFrom, odd, elsewhere]) ws.recv({ t: 'deliver', env: e })
   ws.recv('{not json')
   ws.recv({ t: 'deliver', env: { v: 1 } })
   await settle()
@@ -212,9 +216,87 @@ test('a bad signature, an unknown kind, junk and a message for someone else are 
     .split('\n')
     .map(l => JSON.parse(l))
   const dropped = lines.filter(l => l.action === 'drop').map(l => l.why)
-  expect(dropped.sort()).toEqual(['bad_frame', 'bad_sig', 'bad_sig', 'bad_sig', 'junk', 'kind'])
-  expect(lines.filter(l => l.action === 'drop')).toHaveLength(6)
+  expect(dropped.sort()).toEqual(['bad_frame', 'bad_frame', 'bad_sig', 'bad_sig', 'bad_sig', 'junk', 'kind'])
+  expect(lines.filter(l => l.action === 'drop')).toHaveLength(7)
   expect(JSON.stringify(lines)).not.toContain('forged')
+})
+
+// #217: the payload string is what the sender signed; nothing is rebuilt before the check.
+describe('the payload is checked as the string it came as (#217)', () => {
+  const drops = () =>
+    readFileSync(teamAuditFile(), 'utf8')
+      .trim()
+      .split('\n')
+      .map(l => JSON.parse(l))
+      .filter(l => l.action === 'drop')
+
+  test('keys in another order, or one byte changed, are dropped as a bad signature: nothing kept, nothing acked', async () => {
+    const s = setup()
+    s.svc.start()
+    const [anna] = (await names(1)) as [KeyPair]
+    const { ws, me } = await handshake(s, [{ peer: anna.pub, name: 'anna' }])
+    const env = await question(anna, me, 'is it green?')
+    const reordered = JSON.stringify(Object.fromEntries(Object.entries(msgOf(env)).reverse()))
+    // The very same fields and values, so a check that rebuilt the payload before it looked would let it by.
+    expect(JSON.parse(reordered)).toEqual(JSON.parse(env.payload))
+    expect(reordered).not.toBe(env.payload)
+    const changed = [
+      reordered,
+      env.payload.replace('is it green?', 'is it Green?'),
+      env.payload.replace('"v":1,', '"v":1, '),
+      `${env.payload}\n`,
+    ]
+    for (const payload of changed) ws.recv({ t: 'deliver', env: { ...env, payload } })
+    await settle()
+    await settle()
+    expect(ws.of('ack')).toHaveLength(0)
+    expect(readInbox(anna.pub)).toEqual([])
+    expect(drops().map(l => l.why)).toEqual(['bad_sig', 'bad_sig', 'bad_sig', 'bad_sig'])
+    // As it was signed, it is taken.
+    ws.recv({ t: 'deliver', env })
+    await until(() => ws.of('ack').length === 1, 'an ack')
+    expect(readInbox(anna.pub)).toHaveLength(1)
+  })
+
+  test('a valid payload written with extra whitespace and signed as it is, is kept and acked', async () => {
+    const s = setup()
+    s.svc.start()
+    const [anna] = (await names(1)) as [KeyPair]
+    const { ws, me } = await handshake(s, [{ peer: anna.pub, name: 'anna' }])
+    const plain = await question(anna, me, 'spaced out')
+    const payload = JSON.stringify(Object.fromEntries(Object.entries(msgOf(plain)).reverse()), null, 2)
+    ws.recv({ t: 'deliver', env: await signPayload(anna, payload) })
+    await until(() => ws.of('ack').length === 1, 'an ack')
+    expect(readInbox(anna.pub)).toMatchObject([{ id: idOf(plain), text: 'spaced out' }])
+    expect(drops()).toEqual([])
+  })
+
+  test('a signed payload that is not a message is dropped after the signature check, naming the id when it has one', async () => {
+    const s = setup()
+    s.svc.start()
+    const [anna] = (await names(1)) as [KeyPair]
+    const { ws, me } = await handshake(s, [{ peer: anna.pub, name: 'anna' }])
+    const msg = msgOf(await question(anna, me, 'x'))
+    const signed = [
+      JSON.stringify({ ...msg, note: 'smuggled' }),
+      JSON.stringify({ ...msg, v: 2 }),
+      JSON.stringify({ ...msg, to: '*' }),
+      '[]',
+      'not json',
+    ]
+    for (const payload of signed) ws.recv({ t: 'deliver', env: await signPayload(anna, payload) })
+    await settle()
+    await settle()
+    expect(ws.of('ack')).toHaveLength(0)
+    expect(readInbox(anna.pub)).toEqual([])
+    expect(drops().map(l => [l.why, l.id])).toEqual([
+      ['bad_frame', msg.id],
+      ['version', msg.id],
+      ['broadcast', msg.id],
+      ['bad_frame', undefined],
+      ['bad_frame', undefined],
+    ])
+  })
 })
 
 test('a key that appears under a pinned name is `changed`: its messages are held (and acked) until Trust', async () => {
@@ -256,11 +338,21 @@ test('a question goes out signed; after a reconnect it goes again with the same 
   const id = sent.ok ? sent.id : ''
   expect(first.ws.of('send')).toHaveLength(1)
   const env = first.ws.of('send')[0]?.env as Envelope
-  expect(env).toMatchObject({ id, to: anna.pub, from: first.me, kind: 'question', body: { text: 'how do I join?' } })
+  expect(env.from).toBe(first.me)
+  expect(msgOf(env)).toMatchObject({
+    id,
+    to: anna.pub,
+    from: first.me,
+    kind: 'question',
+    body: { text: 'how do I join?' },
+  })
+  // Written once and signed as written: the signature covers this very string.
+  expect(await verify(first.me, envelopeBytes(env.payload), env.sig)).toBe(true)
+  expect(readOutbox(anna.pub)[0]?.env).toEqual(env)
   first.ws.hangUp(1006)
   s.clock.tick(1000)
   const second = await handshake(s, [{ peer: anna.pub, name: 'anna' }], 2)
-  expect(second.ws.of('send').map(f => f.env.id)).toEqual([id])
+  expect(second.ws.of('send').map(f => f.env)).toEqual([env])
   second.ws.recv({ t: 'state', id, state: 'delivered', at: 5 })
   await until(() => readOutbox(anna.pub)[0]?.state === 'delivered', 'delivered')
   // An ack signed by someone else does not count.
@@ -286,7 +378,7 @@ test('an agent request that came in is kept with via "agent" and shown with it; 
   ws.recv({ t: 'deliver', env: plain })
   await until(() => ws.of('ack').length === 2, 'two acks')
   const [first, second] = s.svc.thread(anna.pub)
-  expect(first).toMatchObject({ id: viaAgent.id, dir: 'in', via: 'agent', agentOf: 'anna' })
+  expect(first).toMatchObject({ id: idOf(viaAgent), dir: 'in', via: 'agent', agentOf: 'anna' })
   expect(second).not.toHaveProperty('via')
   // Another via is no message: dropped, not acked.
   const odd = await question(anna, me, 'odd', { body: { text: 'odd', via: 'robot' } as never })
@@ -360,15 +452,15 @@ describe('agent drafts (#231)', () => {
     const sent = await s.svc.sendDraft(id)
     expect(sent.ok).toBe(true)
     const env = ws.of('send')[0]?.env as Envelope
-    expect(env.body).toEqual({ text: 'review please', via: 'agent' })
-    expect(await verify(me, envelopeBytes(env), env.sig)).toBe(true)
+    expect(msgOf(env).body).toEqual({ text: 'review please', via: 'agent' })
+    expect(await verify(me, envelopeBytes(env.payload), env.sig)).toBe(true)
     expect(s.svc.thread(anna.pub).map(m => [m.dir, m.via])).toEqual([['out', 'agent']])
     expect(await s.svc.sendDraft(id)).toEqual({ ok: false, error: 'draft' })
     expect(ws.of('send')).toHaveLength(1)
     // A message typed in the panel has no via at all.
     await s.svc.send(anna.pub, 'by hand')
     const typed = ws.of('send')[1]?.env as Envelope | undefined
-    expect(typed?.body).toEqual({ text: 'by hand' })
+    expect(typed && msgOf(typed).body).toEqual({ text: 'by hand' })
   })
 
   test('a draft whose person has a changed key stays a draft when Send is refused; Discard removes it', async () => {
@@ -486,7 +578,7 @@ test('a hub error naming a queued message settles it as refused (with the code):
   first.ws.hangUp(1006)
   s.clock.tick(1000)
   const second = await handshake(s, [{ peer: anna.pub, name: 'anna' }], 2)
-  expect(second.ws.of('send').map(f => f.env.id)).toEqual([kept.ok ? kept.id : ''])
+  expect(second.ws.of('send').map(f => idOf(f.env))).toEqual([kept.ok ? kept.id : ''])
 })
 
 test('a connection the hub closes with 4401 is an error `unknown_peer`, retried at the long interval, not `reconnecting` (#231)', async () => {

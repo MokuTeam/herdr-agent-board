@@ -27,7 +27,7 @@ import {
   takeDraft,
 } from '../../src/adapters/team-store.ts'
 import { generateKey, teamConfig } from '../../src/core/team.ts'
-import { question } from '../hub/harness.ts'
+import { msgOf, question } from '../hub/harness.ts'
 import { isolatedHome } from '../support/env.ts'
 
 const A = 'A'.repeat(43)
@@ -86,14 +86,17 @@ test('the outbox keeps states forward only, and the ack that came with acked', a
   isolatedHome()
   const me = await ensureKey()
   const env = await question(me, A, 'q?')
-  addOutbox({ env, state: 'queued', at: 1 })
-  addOutbox({ env, state: 'queued', at: 2 })
+  const msg = msgOf(env)
+  addOutbox({ env, msg, state: 'queued', at: 1 })
+  addOutbox({ env, msg, state: 'queued', at: 2 })
   expect(readOutbox(A)).toHaveLength(1)
-  setOutState(env.id, 'delivered', 3)
-  setOutState(env.id, 'queued', 4)
+  // What is kept to send again is the envelope as it was signed.
+  expect(readOutbox(A)[0]?.env).toEqual(env)
+  setOutState(msg.id, 'delivered', 3)
+  setOutState(msg.id, 'queued', 4)
   expect(readOutbox(A)[0]).toMatchObject({ state: 'delivered', at: 3 })
-  setOutState(env.id, 'acked', 5, { by: A, ts: 't', sig: 's' })
-  setOutState(env.id, 'expired', 6)
+  setOutState(msg.id, 'acked', 5, { by: A, ts: 't', sig: 's' })
+  setOutState(msg.id, 'expired', 6)
   expect(readOutbox(A)[0]).toMatchObject({ state: 'acked', at: 5, ack: { by: A } })
 })
 

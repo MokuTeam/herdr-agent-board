@@ -1,9 +1,9 @@
 // The hub's queue (#231): send, deliver, signed ack, idempotency, the TTL sweeper, and that no
 // body is ever written anywhere but the queue itself.
-import { afterEach, beforeEach, test } from 'bun:test'
+import { afterEach, beforeEach, describe, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { ackBytes, envelopeBytes, type KeyPair, sign, verify } from '../../src/core/team.ts'
-import { ackOf, type Harness, keys, question, startHarness } from './harness.ts'
+import { ackOf, type Harness, idOf, keys, msgOf, question, signPayload, startHarness } from './harness.ts'
 
 let h: Harness
 let A: KeyPair
@@ -24,8 +24,8 @@ test('a body with via "agent" is relayed unchanged, signature and all (#231)', a
   a.send({ t: 'send', env })
   const d = await b.take('deliver')
   assert.deepEqual(d.env, env)
-  assert.equal(d.env.body.via, 'agent')
-  assert.equal(await verify(A.pub, envelopeBytes(d.env), d.env.sig), true)
+  assert.equal(msgOf(d.env).body.via, 'agent')
+  assert.equal(await verify(A.pub, envelopeBytes(d.env.payload), d.env.sig), true)
   // A via the board never writes is refused by the hub, not relayed.
   const bad = await question(A, B.pub, 'x', { body: { text: 'x', via: 'human' } as never })
   a.send({ t: 'send', env: bad })
@@ -40,24 +40,28 @@ test('offline recipient: queued, delivered on connect, signed ack comes back as 
   const env = await question(A, B.pub, `${MARKER} hello`)
   a.send({ t: 'send', env })
   const queued = await a.take('state')
-  assert.deepEqual([queued.id, queued.state], [env.id, 'queued'])
-  assert.equal(h.db.message(env.id)?.state, 'queued')
+  assert.deepEqual([queued.id, queued.state], [idOf(env), 'queued'])
+  assert.equal(h.db.message(idOf(env))?.state, 'queued')
 
   const b = await h.login(B)
   const d = await b.take('deliver')
   assert.deepEqual(d.env, env)
   const delivered = await a.take('state')
-  assert.deepEqual([delivered.id, delivered.state], [env.id, 'delivered'])
+  assert.deepEqual([delivered.id, delivered.state], [idOf(env), 'delivered'])
 
   b.send(await ackOf(B, env))
   const acked = await a.take('state')
   assert.equal(acked.state, 'acked')
   assert.equal(acked.ack?.by, B.pub)
   assert.equal(
-    await verify(B.pub, ackBytes({ by: B.pub, id: env.id, to: A.pub, ts: acked.ack?.ts ?? '' }), acked.ack?.sig ?? ''),
+    await verify(
+      B.pub,
+      ackBytes({ by: B.pub, id: idOf(env), to: A.pub, ts: acked.ack?.ts ?? '' }),
+      acked.ack?.sig ?? '',
+    ),
     true,
   )
-  const row = h.db.message(env.id)
+  const row = h.db.message(idOf(env))
   assert.equal(row?.state, 'acked')
   assert.equal(row?.payload, null)
 })
@@ -67,7 +71,7 @@ test('online recipient gets it at once; the sender sees queued then delivered', 
   const b = await h.join(B, 'ben')
   const env = await question(A, B.pub, 'now')
   a.send({ t: 'send', env })
-  assert.equal((await b.take('deliver')).env.id, env.id)
+  assert.equal(idOf((await b.take('deliver')).env), idOf(env))
   assert.equal((await a.take('state')).state, 'queued')
   assert.equal((await a.take('state')).state, 'delivered')
 })
@@ -81,7 +85,7 @@ test('a delivered message that was not acked is delivered again after a reconnec
   b.close()
   await b.closed
   const b2 = await h.login(B)
-  assert.equal((await b2.take('deliver')).env.id, env.id)
+  assert.equal(idOf((await b2.take('deliver')).env), idOf(env))
 })
 
 test('the same id and content again is no duplicate: one row, one delivery, the state again', async () => {
@@ -104,14 +108,14 @@ test('the same id with other content is dup_id, and so is another sender using i
   const env = await question(A, B.pub, 'first')
   a.send({ t: 'send', env })
   await a.take('state')
-  const other = await question(A, B.pub, 'second', { id: env.id })
+  const other = await question(A, B.pub, 'second', { id: idOf(env) })
   a.send({ t: 'send', env: other })
   const e = await a.take('error')
-  assert.deepEqual([e.code, e.id], ['dup_id', env.id])
-  const theirs = await question(B, A.pub, 'mine', { id: env.id })
+  assert.deepEqual([e.code, e.id], ['dup_id', idOf(env)])
+  const theirs = await question(B, A.pub, 'mine', { id: idOf(env) })
   b.send({ t: 'send', env: theirs })
   assert.equal((await b.take('error')).code, 'dup_id')
-  assert.equal(h.db.message(env.id)?.from_peer, A.pub)
+  assert.equal(h.db.message(idOf(env))?.from_peer, A.pub)
 })
 
 test('refusals leave the socket open and queue nothing', async () => {
@@ -128,8 +132,8 @@ test('refusals leave the socket open and queue nothing', async () => {
     ['version', await question(A, B.pub, 'x', { v: 2 })],
     ['bad_frame', await question(A, B.pub, 'x'.repeat(4001))],
     ['bad_frame', await question(A, A.pub, 'self')],
-    ['too_big', { ...(await question(A, B.pub, 'big')), pad: 'x'.repeat(17_000) }],
-    ['version', { nothing: true }],
+    ['too_big', await signPayload(A, `${(await question(A, B.pub, 'big')).payload}${' '.repeat(17_000)}`)],
+    ['bad_frame', { nothing: true }],
     ['bad_frame', 'junk'],
   ]
   for (const [code, env] of cases) {
@@ -138,11 +142,11 @@ test('refusals leave the socket open and queue nothing', async () => {
   }
   // A signature of someone else's over A's envelope.
   const forged = await question(A, B.pub, 'forged')
-  a.send({ t: 'send', env: { ...forged, sig: await sign(B.pkcs8, envelopeBytes(forged)) } })
+  a.send({ t: 'send', env: { ...forged, sig: await sign(B.pkcs8, envelopeBytes(forged.payload)) } })
   assert.equal((await a.take('error')).code, 'bad_sig')
   // A tampered body.
   const tampered = await question(A, B.pub, 'real')
-  a.send({ t: 'send', env: { ...tampered, body: { text: 'fake' } } })
+  a.send({ t: 'send', env: { ...tampered, payload: tampered.payload.replace('real', 'fake') } })
   assert.equal((await a.take('error')).code, 'bad_sig')
   assert.equal(h.db.raw.query<{ n: number }, []>('SELECT count(*) AS n FROM message').get()?.n, 0)
   assert.equal((await b.settle()).filter(f => f.t === 'deliver').length, 0)
@@ -163,14 +167,14 @@ test('an ack by the wrong peer, over the wrong data, or for nothing is refused',
   assert.equal((await b.take('error')).code, 'bad_sig')
   b.send({ t: 'ack', id: 'nothing', ts: '2026-01-01T00:00:00.000Z', sig: 's' })
   assert.equal((await b.take('error')).code, 'bad_frame')
-  assert.equal(h.db.message(env.id)?.state, 'delivered')
+  assert.equal(h.db.message(idOf(env))?.state, 'delivered')
   b.send(await ackOf(B, env))
   await new Promise(r => setTimeout(r, 50))
-  assert.equal(h.db.message(env.id)?.state, 'acked')
+  assert.equal(h.db.message(idOf(env))?.state, 'acked')
   // A second ack changes nothing.
   b.send(await ackOf(B, env, '2026-02-02T00:00:00.000Z'))
   await new Promise(r => setTimeout(r, 50))
-  assert.equal(JSON.parse(h.db.message(env.id)?.ack_json ?? '{}').ts, '2026-01-02T03:05:00.000Z')
+  assert.equal(JSON.parse(h.db.message(idOf(env))?.ack_json ?? '{}').ts, '2026-01-02T03:05:00.000Z')
 })
 
 test('the sweeper expires what is due, drops the body and tells the sender', async () => {
@@ -182,11 +186,11 @@ test('the sweeper expires what is due, drops the body and tells the sender', asy
   a.send({ t: 'send', env })
   await a.take('state')
   h.clock.tick(59_000)
-  assert.equal(h.db.message(env.id)?.state, 'queued')
+  assert.equal(h.db.message(idOf(env))?.state, 'queued')
   h.clock.tick(2000)
   const gone = await a.take('state')
-  assert.deepEqual([gone.id, gone.state], [env.id, 'expired'])
-  assert.equal(h.db.message(env.id)?.payload, null)
+  assert.deepEqual([gone.id, gone.state], [idOf(env), 'expired'])
+  assert.equal(h.db.message(idOf(env))?.payload, null)
   const b2 = await h.login(B)
   assert.equal((await b2.settle()).filter(f => f.t === 'deliver').length, 0)
   assert.equal(
@@ -207,7 +211,7 @@ test('a sender that was away is told of the expiry on its next welcome, once', a
   a0.close()
   await a0.closed
   h.clock.tick(120_000)
-  assert.equal(h.db.message(env.id)?.state, 'expired')
+  assert.equal(h.db.message(idOf(env))?.state, 'expired')
   const a = await h.login(A)
   assert.equal((await a.take('state')).state, 'expired')
   a.close()
@@ -227,14 +231,14 @@ test('ttl is clamped to 60 s .. 7 days; an acked message does not expire', async
   await b.take('deliver')
   await b.take('deliver')
   const t0 = h.clock.now()
-  assert.equal(h.db.message(short.id)?.expires_at, t0 + 60_000)
-  assert.equal(h.db.message(long.id)?.expires_at, t0 + 604_800_000)
+  assert.equal(h.db.message(idOf(short))?.expires_at, t0 + 60_000)
+  assert.equal(h.db.message(idOf(long))?.expires_at, t0 + 604_800_000)
   b.send(await ackOf(B, done))
   await a.settle(100)
   h.clock.tick(61_000)
-  assert.equal(h.db.message(done.id)?.state, 'acked')
-  assert.equal(h.db.message(short.id)?.state, 'expired')
-  assert.equal(h.db.message(long.id)?.state, 'delivered')
+  assert.equal(h.db.message(idOf(done))?.state, 'acked')
+  assert.equal(h.db.message(idOf(short))?.state, 'expired')
+  assert.equal(h.db.message(idOf(long))?.state, 'delivered')
 })
 
 test('no body text reaches the log, the audit, or any column but the queue payload', async () => {
@@ -276,7 +280,7 @@ test("a revoked sender's queued messages expire (audited) and are never delivere
   a.send({ t: 'send', env })
   await a.take('state')
   h.hub.revoke('anna')
-  const row = h.db.message(env.id)
+  const row = h.db.message(idOf(env))
   assert.deepEqual([row?.state, row?.payload], ['expired', null])
   const log = h.db.auditRows().filter(r => r.action === 'expired')
   assert.equal(log.length, 1)
@@ -310,20 +314,87 @@ test('send and ack look at the peer again: a revoked peer on a still open socket
   h.db.revokePeer(B.pub, 5) // the socket stays open: only the row changed
   b.send(await ackOf(B, got.env))
   assert.equal((await b.take('error')).code, 'revoked')
-  assert.notEqual(h.db.message(env.id)?.state, 'acked')
+  assert.notEqual(h.db.message(idOf(env))?.state, 'acked')
   h.db.revokePeer(A.pub, 6)
   a.send({ t: 'send', env: await question(A, B.pub, 'after') })
   assert.equal((await a.take('error')).code, 'revoked')
 })
 
-test('an envelope with a field nobody signed is refused, and the queue holds the rebuilt one (#231)', async () => {
+test('an envelope with a field nobody signed is refused, and so is a signed payload with one (#231)', async () => {
   const a = await h.join(A, 'anna')
   await h.join(B, 'ben')
   const env = await question(A, B.pub, 'plain')
   a.send({ t: 'send', env: { ...env, note: 'smuggled' } })
   assert.equal((await a.take('error')).code, 'bad_frame')
-  assert.equal(h.db.message(env.id), null)
+  assert.equal(h.db.message(idOf(env)), null)
+  // Signed by A, but with a field that is no message's: the signature is fine, the shape is not.
+  const extra = await signPayload(A, JSON.stringify({ ...msgOf(env), note: 'smuggled' }))
+  a.send({ t: 'send', env: extra })
+  const e = await a.take('error')
+  assert.deepEqual([e.code, e.id], ['bad_frame', idOf(env)])
+  assert.equal(h.db.message(idOf(env)), null)
   a.send({ t: 'send', env })
   await a.take('state')
-  assert.deepEqual(JSON.parse(h.db.message(env.id)?.payload ?? 'null'), env)
+  assert.deepEqual(JSON.parse(h.db.message(idOf(env))?.payload ?? 'null'), env)
+})
+
+// #217: the payload string is what is signed, passed on byte for byte, checked before it is read.
+describe('the payload is signed as the string it is (#217)', () => {
+  test('keys in another order, or one byte changed, do not pass the hub; nothing is queued', async () => {
+    const a = await h.join(A, 'anna')
+    const b = await h.join(B, 'ben')
+    const env = await question(A, B.pub, 'real question')
+    const msg = msgOf(env)
+    const reordered = JSON.stringify(Object.fromEntries(Object.entries(msg).reverse()))
+    // The same fields and values, in the order canonical JSON would not write: still not what was signed.
+    assert.notEqual(reordered, env.payload)
+    assert.deepEqual(JSON.parse(reordered), JSON.parse(env.payload))
+    const oneByte = env.payload.replace('real question', 'real Question')
+    assert.equal(oneByte.length, env.payload.length)
+    const spaced = env.payload.replace('"v":1,', '"v":1, ')
+    for (const payload of [reordered, oneByte, spaced, ` ${env.payload}`, `${env.payload} `]) {
+      a.send({ t: 'send', env: { ...env, payload } })
+      const e = await a.take('error')
+      assert.deepEqual([e.code, e.id], ['bad_sig', undefined], payload)
+    }
+    assert.equal(h.db.raw.query<{ n: number }, []>('SELECT count(*) AS n FROM message').get()?.n, 0)
+    assert.equal((await b.settle()).filter(f => f.t === 'deliver').length, 0)
+    // The envelope as it was signed still goes through.
+    a.send({ t: 'send', env })
+    assert.equal((await a.take('state')).state, 'queued')
+  })
+
+  test('a valid payload written with extra whitespace and signed as is is accepted, and reaches the recipient byte for byte', async () => {
+    const a = await h.join(A, 'anna')
+    const b = await h.join(B, 'ben')
+    const plain = await question(A, B.pub, 'spaced out')
+    // Indented, keys in a non-canonical order: nothing the hub could rebuild by writing it again.
+    const payload = `${JSON.stringify(Object.fromEntries(Object.entries(msgOf(plain)).reverse()), null, 2)}\n`
+    const env = await signPayload(A, payload)
+    a.send({ t: 'send', env })
+    assert.equal((await a.take('state')).state, 'queued')
+    const d = await b.take('deliver')
+    assert.equal(d.env.payload, payload)
+    assert.deepEqual(d.env, env)
+    assert.equal(await verify(A.pub, envelopeBytes(d.env.payload), d.env.sig), true)
+    assert.equal((JSON.parse(h.db.message(idOf(env))?.payload ?? 'null') as typeof env).payload, payload)
+  })
+
+  test('the signer named outside must be the connected peer and the own from of the message; ill-formed text is no payload', async () => {
+    const a = await h.join(A, 'anna')
+    await h.join(B, 'ben')
+    // B signed it, but A is the one connected: not A's to send.
+    const theirs = await question(B, A.pub, 'not yours')
+    a.send({ t: 'send', env: theirs })
+    assert.equal((await a.take('error')).code, 'bad_sig')
+    // A signed a message that says it is from B.
+    const lie = await signPayload(A, JSON.stringify({ ...msgOf(await question(A, B.pub, 'x')), from: B.pub }))
+    a.send({ t: 'send', env: lie })
+    assert.equal((await a.take('error')).code, 'bad_frame')
+    // A lone surrogate has no one spelling in bytes, so it is not accepted as text.
+    const ill = await signPayload(A, `${(await question(A, B.pub, 'x')).payload}\ud800`)
+    a.send({ t: 'send', env: ill })
+    assert.equal((await a.take('error')).code, 'bad_frame')
+    assert.equal(h.db.raw.query<{ n: number }, []>('SELECT count(*) AS n FROM message').get()?.n, 0)
+  })
 })

@@ -37,7 +37,8 @@ export const ERROR_CODES = [
 ] as const
 export type ErrorCode = (typeof ERROR_CODES)[number]
 
-export interface Envelope {
+/** What a sender signs: a question, as the fields of the message. It travels as the JSON text of this object. */
+export interface Message {
   v: number
   id: string
   from: string
@@ -47,6 +48,17 @@ export interface Envelope {
   ts: string
   ttl_s: number
   body: { text: string; via?: Via }
+}
+
+/**
+ * A message on the wire (#217): `payload` is the JSON text of a Message exactly as its sender signed
+ * it, and every hop passes it on byte for byte, never rebuilt. `sig` is the sender's signature over
+ * it; `from` says whose key to check with, so the check comes before the payload is read (it must
+ * be the message's own `from`).
+ */
+export interface Envelope {
+  from: string
+  payload: string
   sig: string
 }
 

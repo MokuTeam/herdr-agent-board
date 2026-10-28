@@ -8,12 +8,13 @@ import {
   ackBytes,
   authBytes,
   type Envelope,
-  envelopeBytes,
   type Frame,
   generateKey,
   joinBytes,
   type KeyPair,
+  type Message,
   parseFrame,
+  sealEnvelope,
   sign,
 } from '../../src/core/team.ts'
 
@@ -195,16 +196,29 @@ export async function startHarness(): Promise<Harness> {
 
 export const keys = (n: number): Promise<KeyPair[]> => Promise.all(Array.from({ length: n }, generateKey))
 
+/** The message in an envelope's payload (no check, no signature: for what a test asserts). */
+export const msgOf = (env: Envelope): Message => JSON.parse(env.payload) as Message
+export const idOf = (env: Envelope): string => msgOf(env).id
+
+/**
+ * An envelope of `from` for any payload string, signed exactly as it is (no check of what it says).
+ * The signed bytes are spelled out here, not taken from envelopeBytes: the test does not lean on the code it checks.
+ */
+export async function signPayload(from: KeyPair, payload: string): Promise<Envelope> {
+  const bytes = new TextEncoder().encode(`hab-team/1 envelope\n${payload}`)
+  return { from: from.pub, payload, sig: await sign(from.pkcs8, bytes) }
+}
+
 let counter = 0
-/** A signed question from `from` to `to`. */
+/** A signed question from `from` to `to`; `over` replaces fields of the message. */
 export async function question(
   from: KeyPair,
   to: string,
   text: string,
-  over: Partial<Envelope> = {},
+  over: Partial<Message> = {},
   ts?: string,
 ): Promise<Envelope> {
-  const env = {
+  const msg: Message = {
     v: 1,
     id: `00000000-0000-4000-8000-${String(++counter).padStart(12, '0')}`,
     from: from.pub,
@@ -216,7 +230,7 @@ export async function question(
     body: { text },
     ...over,
   }
-  return { ...env, sig: await sign(from.pkcs8, envelopeBytes(env)) }
+  return sealEnvelope(from, msg)
 }
 
 export async function ackOf(
@@ -224,5 +238,6 @@ export async function ackOf(
   env: Envelope,
   ts = '2026-01-02T03:05:00.000Z',
 ): Promise<{ t: 'ack'; id: string; ts: string; sig: string }> {
-  return { t: 'ack', id: env.id, ts, sig: await sign(by.pkcs8, ackBytes({ by: by.pub, id: env.id, to: env.from, ts })) }
+  const id = idOf(env)
+  return { t: 'ack', id, ts, sig: await sign(by.pkcs8, ackBytes({ by: by.pub, id, to: env.from, ts })) }
 }
