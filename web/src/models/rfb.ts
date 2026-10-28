@@ -12,7 +12,7 @@ export interface RfbScreen {
   /** The display is now `width` × `height`: at the server's hello, and when it changes size. */
   size(width: number, height: number): void
   /** These pixels (RGBA, opaque) at (x, y), `width` × `height`. */
-  put(x: number, y: number, width: number, height: number, rgba: Uint8ClampedArray): void
+  put(x: number, y: number, width: number, height: number, rgba: Uint8ClampedArray<ArrayBuffer>): void
   /** What is at (sx, sy) copied to (x, y), `width` × `height`. */
   copy(sx: number, sy: number, x: number, y: number, width: number, height: number): void
 }
@@ -104,7 +104,7 @@ class Pending {
 }
 
 /** Pixels as they come (R, G, B, spare) made opaque for the canvas. */
-function opaque(pixels: Uint8Array): Uint8ClampedArray {
+function opaque(pixels: Uint8Array): Uint8ClampedArray<ArrayBuffer> {
   const rgba = new Uint8ClampedArray(pixels)
   for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255
   return rgba
@@ -126,7 +126,7 @@ export class RfbClient {
   private fg = new Uint8ClampedArray([0, 0, 0, 255])
 
   constructor(
-    private readonly send: (bytes: Uint8Array) => void,
+    private readonly send: (bytes: Uint8Array<ArrayBuffer>) => void,
     private readonly screen: RfbScreen,
     private readonly events: RfbEvents = {},
   ) {}
@@ -135,7 +135,8 @@ export class RfbClient {
   receive(bytes: Uint8Array): void {
     if (this.state === 'failed') return
     this.pending.push(bytes)
-    while (this.state !== 'failed' && this.step()) {}
+    // A step that fails says so and returns false: nothing after it is read.
+    while (this.step()) {}
   }
 
   /** The mouse at (x, y) on the display with these buttons down (1 left, 2 middle, 4 right, 8/16 the wheel). */

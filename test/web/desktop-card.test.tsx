@@ -1,12 +1,16 @@
 // An agent's own browser on its card (Card.tsx): a small mark only while it runs, "Open its
 // browser" under the question when the agent asks for it there, both opening the session with its
 // Browser fold (data-act="browser": Board.tsx, the board's `open` with `browser`). A card without
-// one, or with one stopped, is drawn exactly as before.
+// one, or with one stopped, is drawn exactly as before, and so is its session panel.
 import { describe, expect, test } from 'bun:test'
 import type { Item, ItemDesktop } from '../../src/core/types.ts'
+import { Sheet } from '../../web/src/components/sheet/Sheet.tsx'
 import { boardUi, initialUi } from '../../web/src/state/board-ui.ts'
-import { item } from './support/board.tsx'
-import { bothCards } from './support/board-scene.tsx'
+import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
+import { board, item, payload, renderInBoard } from './support/board.tsx'
+import { bothCards, CATEGORIES } from './support/board-scene.tsx'
+import { canonical, findAll, hasClass } from './support/markup.ts'
+import { bothSheets } from './support/sheet-scene.tsx'
 
 const desktop = (fields: Partial<ItemDesktop> = {}): ItemDesktop => ({
   running: true,
@@ -60,5 +64,38 @@ describe('the opening it asks for', () => {
     expect(plain).toMatchObject({ open: 'a', browser: false, opened: 2 })
     expect(boardUi(withFold, { type: 'open', key: 'b', compose: true })).toMatchObject({ browser: false })
     expect(ui.browser).toBe(false)
+  })
+})
+
+describe('the session panel', () => {
+  const VP = { w: 1600, h: 1000 }
+  const mounted = (it: Item, browser: boolean) =>
+    renderInBoard(
+      <PanelProvider viewport={() => VP}>
+        <Sheet />
+      </PanelProvider>,
+      board({ data: payload({ items: [it], categories: CATEGORIES }), ui: { open: it.key, browser } }),
+    )
+  const folds = (it: Item, browser: boolean) =>
+    findAll(mounted(it, browser), el => hasClass(el, 'desk')).map(el => canonical([el]))
+
+  test('without a running browser it is the old page’s panel as before, and has no fold', () => {
+    const plain = item({ key: 'a', name: 'Alpha', column: 'me', question: 'Sign in?' })
+    const stopped = { ...plain, desktop: desktop({ running: false, asks: true }) }
+    const before = bothSheets({ items: [plain], open: 'a' })
+    expect(before.react).toBe(before.old)
+    expect(bothSheets({ items: [stopped], open: 'a' }).react).toBe(before.react)
+    expect(folds(plain, true)).toEqual([])
+    expect(folds(stopped, true)).toEqual([])
+  })
+
+  test('a running browser: the fold above the conversation, open when the opening asked for it, folded else', () => {
+    const it = item({ key: 'a', name: 'Alpha', column: 'work', desktop: desktop() })
+    const [open] = folds(it, true)
+    expect(open).toContain('aria-expanded="true"')
+    expect(open).toContain('Take control')
+    const [folded] = folds(it, false)
+    expect(folded).toContain('aria-expanded="false"')
+    expect(folded).not.toContain('Take control')
   })
 })

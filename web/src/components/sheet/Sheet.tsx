@@ -39,6 +39,7 @@ import { classNames } from '../class-names.ts'
 import { HelpersStrip } from '../helpers/HelpersStrip.tsx'
 import { CheckGlyph } from '../icons.tsx'
 import { Panel } from '../panel/Panel.tsx'
+import { BrowserFold } from './BrowserFold.tsx'
 import { Composer, type SessionButtons } from './Composer.tsx'
 import type { ScheduleActions } from './ScheduleRow.tsx'
 import { SheetHead } from './SheetHead.tsx'
@@ -131,6 +132,12 @@ export function Sheet(slots: SheetSlots) {
 
   // The card's empty fields show only when asked for; each session opens without them.
   const [propertiesOpen, setPropertiesOpen] = useState(false)
+  // Its own browser's fold: open when the opening asked for it (the card's mark), else folded.
+  const [browserOpen, setBrowserOpen] = useState(() => open !== null && ui.browser)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: an opening is when to fold or unfold it
+  useLayoutEffect(() => {
+    if (open !== null) setBrowserOpen(ui.browser)
+  }, [open, ui.opened, ui.browser])
   // Switching sessions in the open panel: its conversation fades in; it starts at the bottom.
   const before = useRef(open)
   useLayoutEffect(() => {
@@ -237,6 +244,7 @@ export function Sheet(slots: SheetSlots) {
         buttons={buttons}
         moreOpen={slots.moreOpen ?? false}
         links={links}
+        browser={{ open: browserOpen, onOpen: setBrowserOpen }}
       />
     </Panel>
   )
@@ -266,6 +274,8 @@ export interface SheetViewProps {
   /** The "More actions" menu is open. */
   moreOpen?: boolean
   links?: SheetLinks | undefined
+  /** The session's own browser's fold (components/sheet/BrowserFold.tsx), while it runs. */
+  browser?: { open: boolean; onOpen(open: boolean): void } | undefined
 }
 
 /** The sheet under its head, as drawn for one state. */
@@ -312,6 +322,14 @@ export function SheetView(props: SheetViewProps) {
         onHelper={(id, el) => props.links?.onHelper(id, el)}
         onList={(run, el) => props.links?.onList(run, el)}
       />
+      {item?.desktop?.running && props.browser && (
+        <BrowserFold
+          key={item.key}
+          item={item}
+          open={props.browser.open && open !== null}
+          onOpen={props.browser.onOpen}
+        />
+      )}
       <div
         className={classNames('sheet-body', !!notice.text && 'has-detail-state')}
         id="sheet-body"

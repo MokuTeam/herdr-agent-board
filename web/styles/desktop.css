@@ -8,3 +8,46 @@
 /* "Open its browser" under what the agent asks. */
 .ask .desk-ask { display: flex; margin-top: 7px; height: 26px; padding: 0 10px; font-size: 12px; background: color-mix(in srgb, var(--surface) 70%, transparent); }
 .ask .desk-ask svg { width: 14px; height: 14px; }
+
+/* ---------------------------------------------------------------- the session panel */
+/* The Browser fold above the conversation: one line folded; open, the display at the panel's width,
+   never taller than half the window, the conversation going on under it. */
+.desk { flex: none; padding: 0 18px 6px 22px; }
+.desk-bar { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 30px; }
+.desk-fold { display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; padding: 0; border: 0; background: none; font-size: 12px; font-weight: 600; letter-spacing: 0.02em; color: var(--label-2); cursor: pointer; }
+.desk-fold .chev { width: 12px; height: 12px; transition: transform 150ms ease; }
+.desk.open .desk-fold .chev { transform: rotate(90deg); }
+.desk-profile { overflow: hidden; padding: 1px 6px; border-radius: 6px; background: var(--fill-2); font-weight: 500; white-space: nowrap; text-overflow: ellipsis; }
+.desk-tools { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.desk-who { overflow: hidden; font-size: 12px; color: var(--label-3); white-space: nowrap; text-overflow: ellipsis; }
+.desk-who.you { font-weight: 600; color: var(--orange); }
+.desk-tools .button { flex: none; height: 26px; padding: 0 10px; font-size: 12px; }
+.desk-tool { width: 26px; height: 26px; }
+.desk-tool svg { width: 14px; height: 14px; }
+/* While the owner has control: the warning, and an orange edge round the display. */
+.desk-warn { margin: 4px 0 0; padding: 6px 9px; border-radius: 8px; background: color-mix(in srgb, var(--orange) 14%, transparent); font-size: 12px; }
+.desk-view { margin-top: 4px; overflow: hidden; border-radius: 10px; background: #000; }
+.owner .desk-view { box-shadow: 0 0 0 2px var(--orange); }
+.desk-status { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 0; padding: 16px 12px; font-size: 12px; text-align: center; color: rgba(255, 255, 255, 0.8); }
+.desk-host { display: flex; justify-content: center; }
+/* Fitted whole and centred (models/desk-input.ts screenPoint reads it so); watched, a touch scrolls the page. */
+.desk-screen { display: block; width: 100%; height: auto; max-height: 50vh; object-fit: contain; outline: none; }
+.owner .desk-screen { touch-action: none; }
+
+/* ---------------------------------------------------------------- full size */
+/* Over the whole board, under the toasts; Esc or × brings it back to the fold. */
+.desk-full {
+  position: fixed;
+  inset: 0;
+  z-index: 58;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  background: var(--bg);
+}
+.desk-full .desk-bar { flex: none; }
+.desk-name { flex: 0 1 auto; min-width: 0; overflow: hidden; font-size: 13px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+.desk-full .desk-view { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; margin: 0; }
+.desk-full .desk-host { flex: 1 1 auto; min-height: 0; }
+.desk-full .desk-screen { height: 100%; max-height: none; }
