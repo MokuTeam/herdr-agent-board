@@ -14,6 +14,7 @@ import {
   ensureKey,
   type InboxItem,
   KEEP_PER_PEER,
+  keepJoinedKey,
   markAcked,
   readInbox,
   readKey,
@@ -22,7 +23,7 @@ import {
   releaseHeld,
   setOutState,
 } from '../../src/adapters/team-store.ts'
-import { teamConfig } from '../../src/core/team.ts'
+import { generateKey, teamConfig } from '../../src/core/team.ts'
 import { question } from '../hub/harness.ts'
 import { isolatedHome } from '../support/env.ts'
 
@@ -155,4 +156,15 @@ test('the log is rotated at 1 MiB, keeping one previous file (#231)', () => {
   for (let i = 0; i < 20; i++) audit('small', A)
   expect(existsSync(`${file}.2`)).toBe(false)
   expect(statSync(file).size).toBeLessThan(AUDIT_MAX_BYTES)
+})
+
+test('keepJoinedKey: the joined key is saved; another key saved meanwhile stays and the join fails (#231)', async () => {
+  isolatedHome()
+  const mine = await generateKey()
+  await keepJoinedKey(mine)
+  expect(readKey()).toEqual(mine)
+  await keepJoinedKey(mine) // the same key again is fine
+  const other = await generateKey()
+  await expect(keepJoinedKey(other)).rejects.toThrow(/another key was saved/)
+  expect(readKey()).toEqual(mine)
 })

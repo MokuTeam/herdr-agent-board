@@ -549,7 +549,7 @@ async function team(): Promise<void> {
     const key = store.readKey() ?? (await T.generateKey())
     const r = await joinAt(T, hub, invite, name, key)
     if (!r.ok) throw new Error(r.error)
-    await store.ensureKey(key)
+    await store.keepJoinedKey(key)
     const w = (await import('../adapters/config-file.ts')).joinTeam({ hub, name })
     if (!w.ok) throw new Error(w.error)
     return console.log(

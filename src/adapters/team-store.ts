@@ -50,6 +50,19 @@ export async function ensureKey(candidate?: KeyPair): Promise<KeyPair> {
   return { pkcs8: kept.pkcs8, pub: kept.pub }
 }
 
+/**
+ * Keeps the key `board team join` joined the hub with. When another key was saved meanwhile (two
+ * joins, or the board's first start, raced) that one stays and this throws: the hub knows the
+ * joined key, not the saved one, and nothing may claim otherwise (config.json is not written).
+ */
+export async function keepJoinedKey(joined: KeyPair): Promise<void> {
+  const kept = await ensureKey(joined)
+  if (kept.pub !== joined.pub)
+    throw new Error(
+      'another key was saved for this board while joining, so the hub knows a key this board does not use; config.json was not changed. Ask for a new invite and run `board team join` again',
+    )
+}
+
 // ---- Messages
 
 /** A question that came in. `held`: from a key that changed under a pinned name, until it is trusted. */
