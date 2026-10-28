@@ -36,7 +36,15 @@ export interface RouteContext {
    * listener does not read (GuardState.ownFiles): asked with the very path the route then reads.
    */
   ownFile(target: string): boolean
+  /**
+   * The request made a WebSocket carrying `data` (`headers` on its answer): true when it took. Only
+   * on a listener that serves WebSockets (the board's own server's: a desktop's VNC); else absent.
+   */
+  upgrade?: Upgrade
 }
+
+/** A request made a WebSocket (Bun's server.upgrade), with what the socket carries. */
+export type Upgrade = (data: object, headers?: Record<string, string>) => boolean
 
 /** Answers, or returns undefined to let the next route in the table answer. */
 export type Handler = (req: Request, ctx: RouteContext) => Promise<Response | undefined> | Response | undefined
@@ -150,7 +158,10 @@ export function peerOf(srv: { requestIP(req: Request): { address: string } | nul
   }
 }
 
-/** The first route that answers; 405 when none does. `peer`: the listener's requestIP for this request. */
+/**
+ * The first route that answers; 405 when none does. `peer`: the listener's requestIP for this
+ * request; `upgrade`: on a listener that serves WebSockets.
+ */
 export async function dispatch(
   routes: Route[],
   req: Request,
@@ -158,6 +169,7 @@ export async function dispatch(
   path: string,
   state: GuardState,
   peer: () => string = () => '',
+  upgrade?: Upgrade,
 ) {
   let parsed: Promise<unknown> | undefined
   const rawBody = (): Promise<unknown> => {
@@ -177,6 +189,7 @@ export async function dispatch(
       body: async () => fieldsOf(await rawBody()),
       refuse: guard => check(guard, req, url, state),
       ownFile: target => !!state.ownFiles?.(target),
+      ...(upgrade && { upgrade }),
     }
     for (const guard of route.guard ?? []) {
       const refused = ctx.refuse(guard)

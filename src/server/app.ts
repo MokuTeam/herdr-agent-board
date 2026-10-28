@@ -10,12 +10,14 @@ import { randomBytes } from 'node:crypto'
 import { type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
+import type { WebSocketHandler } from 'bun'
+import { writeCard } from '../adapters/cards.ts'
 import { saveFoundProfiles } from '../adapters/config-file.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { ensureLocalKey, keyMatches, LOCAL_KEY_HEADER } from '../adapters/local-key.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
-import { archiveDir, cardsDir, ROOT, scheduleDir } from '../adapters/paths.ts'
+import { archiveDir, cardsDir, ROOT, scheduleDir, stateDir } from '../adapters/paths.ts'
 import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
 import {
@@ -46,6 +48,7 @@ import { boardPorts, forwardSpec, publicHosts, sshArgs, tunnelConfig, tunnelProb
 import { createAccess } from '../services/access.ts'
 import { asideCheck } from '../services/aside.ts'
 import type { Deps } from '../services/deps.ts'
+import { createDesktops } from '../services/desktop.ts'
 import { createFirstLogin } from '../services/first-login.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
@@ -66,6 +69,7 @@ import { createRemoteListener } from './remote.ts'
 import { accessRoutes } from './routes/access.ts'
 import { archiveRoutes } from './routes/archive.ts'
 import { boardRoutes } from './routes/board.ts'
+import { desktopRoutes } from './routes/desktop.ts'
 import { fsRoutes } from './routes/fs.ts'
 import { launchRoutes } from './routes/launch.ts'
 import { mokupilotRoutes } from './routes/mokupilot.ts'
@@ -246,6 +250,18 @@ export async function startServer({
     onState: () => void setup.again().catch(err => log(`setup check: ${messageOf(err)}`)),
     log,
   })
+  // Each agent's own browser (services/desktop.ts), on the board's own server only: on a PC none is
+  // made, no route answers for one and the web board serves no WebSocket.
+  const desktops = onServer(cfg)
+    ? createDesktops({
+        root: join(stateDir(), 'desktop'),
+        items: () => board.items(),
+        writeCard,
+        onChange: () => board.publish(),
+        log,
+        chromeExtra: (process.env.BOARD_DESKTOP_CHROME_ARGS ?? '').split(' ').filter(Boolean),
+      })
+    : null
   const routes: Route[] = []
   const guards = { port, token: FILE_TOKEN, stale: () => board.stale() }
   // Omarchy here: the Terminal style takes the colors of its theme on now, and follows a switch.
@@ -306,6 +322,8 @@ export async function startServer({
     // On the board's own server (core/on-server.ts): the first login through its one-time link.
     // On a PC nothing asks it anything.
     firstLogin: createFirstLogin({ access, domain: () => serverModeOf(cfg.serverMode)?.domain ?? '' }),
+    // A desktop's VNC through the domain: only where the board runs desktops (its own server).
+    ...(desktops && { websocket: desktops.websocket as WebSocketHandler<object> }),
   })
   // The tunnel's ssh (services/tunnel.ts). It starts nothing until this board holds the web port
   // (below). Its line goes to the tunnel listener's port while that listens, the tunnel is on and
@@ -437,6 +455,7 @@ export async function startServer({
     accessRev: () => accessRev,
     ...(omarchy && { omarchy: omarchy.stamp }),
     presence: presence.view,
+    ...(desktops && { desktops }),
   })
   board.publish()
   const refresh = (): void => void board.refresh()
@@ -483,6 +502,17 @@ export async function startServer({
     ),
     ...launchRoutes(launches, board.items),
     terminalRoute({ cfg, terminals, find: board.find, publish: board.publish }),
+    // The agents' own browsers, on the board's own server only.
+    ...(desktops
+      ? desktopRoutes({
+          desktops,
+          find: board.find,
+          keyOk: req => {
+            const key = ownKey()
+            return key !== null && keyMatches(req.headers.get(LOCAL_KEY_HEADER), key)
+          },
+        })
+      : []),
     ...sessionRoutes({
       deps,
       launches,
@@ -545,7 +575,12 @@ export async function startServer({
       // the CLI and agents send no Origin, and the presence switch itself says what it says.
       if (req.method !== 'GET' && path.startsWith('/api/') && path !== '/api/presence' && ownOrigin(req))
         presence.touch()
-      return await dispatch(routes, req, url, path, guards, () => peerOf(srv, req))
+      // a desktop's VNC (the board's own server only: elsewhere no route asks for a WebSocket)
+      const upgrade =
+        desktops && srv
+          ? (data: object, headers?: Record<string, string>) => srv.upgrade(req, { data, ...(headers && { headers }) })
+          : undefined
+      return await dispatch(routes, req, url, path, guards, () => peerOf(srv, req), upgrade)
     } catch (err) {
       // The path only: a query can carry the page's token.
       log(`${req.method} ${url ? url.pathname : req.url.split('?')[0]}: ${messageOf(err)}`)
@@ -569,7 +604,8 @@ export async function startServer({
       development: false,
       reusePort: false,
       fetch: answer,
-    })
+      ...(desktops && { websocket: desktops.websocket }),
+    } as Parameters<typeof Bun.serve>[0])
   } catch (err) {
     // The port is taken (EADDRINUSE, which the terminal board retries): nothing may keep running.
     // The tunnel is the web port's board's: this one never listens for it, and never touches its
