@@ -1,0 +1,160 @@
+/* Peer network prototype (#225): the board's look (web/styles/app.css), copied and cut down so the
+   page stands alone; system fonts only. Color where it carries meaning: green takes, orange asks,
+   red is overdue or untrusted, and every color has its word beside it. */
+
+:root {
+  color-scheme: light dark;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  --bg: #f5f5f7;
+  --surface: #ffffff;
+  --fill: rgba(120, 120, 128, 0.12);
+  --fill-2: rgba(120, 120, 128, 0.07);
+  --label: #1d1d1f;
+  --label-2: rgba(60, 60, 67, 0.64);
+  --label-3: rgba(60, 60, 67, 0.38);
+  --separator: rgba(60, 60, 67, 0.14);
+  --shadow-card: 0 0 0 0.5px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.05), 0 4px 14px rgba(0, 0, 0, 0.035);
+  --green: #34c759;
+  --orange: #ff9500;
+  --blue: #007aff;
+  --gray: #8e8e93;
+  --red: #ff3b30;
+  --radius: 14px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+    --surface: #1c1c1e;
+    --fill: rgba(120, 120, 128, 0.24);
+    --fill-2: rgba(120, 120, 128, 0.14);
+    --label: #f5f5f7;
+    --label-2: rgba(235, 235, 245, 0.62);
+    --label-3: rgba(235, 235, 245, 0.32);
+    --separator: rgba(84, 84, 88, 0.6);
+    --shadow-card: 0 0 0 0.5px rgba(255, 255, 255, 0.07), 0 1px 2px rgba(0, 0, 0, 0.5);
+    --green: #30d158;
+    --orange: #ff9f0a;
+    --blue: #0a84ff;
+    --gray: #98989d;
+    --red: #ff453a;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--label); font: 13px/1.4 var(--font); }
+#app { max-width: 1180px; margin: 0 auto; padding: 16px 24px 40px; }
+h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--label-2); }
+h3 { margin: 0; font-size: 15px; font-weight: 600; }
+
+button {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--fill);
+  color: var(--label);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { background: var(--separator); }
+button:disabled { cursor: not-allowed; opacity: 0.45; }
+button[aria-pressed="true"] { background: var(--blue); color: #fff; }
+button.v-accept[aria-pressed="true"], button.v-all { background: var(--green); color: #fff; }
+button.v-decline[aria-pressed="true"] { background: var(--gray); color: #fff; }
+button.v-clarify[aria-pressed="true"] { background: var(--orange); color: #fff; }
+button.v-all:disabled { background: var(--fill); color: var(--label); }
+
+/* What belongs to the prototype and not to the board: the clock and the reset, dashed apart. */
+.proto-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  border: 1px dashed var(--label-3);
+  border-radius: 10px;
+  color: var(--label-2);
+  font-size: 12px;
+}
+.proto-what { margin-right: auto; }
+.seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--fill-2); }
+
+.columns { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 24px; align-items: start; }
+@media (max-width: 760px) { .columns { grid-template-columns: 1fr; } }
+.flow { display: flex; flex-direction: column; gap: 12px; }
+
+/* The roster: a line a peer, the dot first, the key's fingerprint under the name. */
+.roster { padding: 12px; border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-card); }
+.roster ul { margin: 0; padding: 0; list-style: none; }
+.peer {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  grid-template-areas: "dot name seen" ". fp fp";
+  gap: 0 8px;
+  align-items: center;
+  padding: 6px 0;
+  border-top: 0.5px solid var(--separator);
+}
+.peer:first-child { border-top: 0; }
+.dot { grid-area: dot; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--gray); }
+.is-online .dot { border-color: var(--green); background: var(--green); }
+.peer-name { grid-area: name; font-weight: 600; }
+.peer-seen { grid-area: seen; color: var(--label-2); font-size: 12px; }
+.fp { grid-area: fp; color: var(--label-3); font: 11px var(--mono); }
+
+/* An incoming message: the same card for every one, its buttons dead and the reason on top when it is untrusted. */
+.card { padding: 12px 14px; border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-card); }
+.card-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.card-from { margin-left: auto; color: var(--label-2); font-size: 12px; }
+.kind, .badge { padding: 1px 6px; border-radius: 5px; background: var(--fill); font: 11px var(--mono); }
+.badge { background: var(--red); color: #fff; }
+.is-untrusted { box-shadow: var(--shadow-card), inset 3px 0 0 var(--red); }
+.is-untrusted .item-title { font-family: var(--mono); font-size: 12px; }
+.why { margin: 8px 0 0; color: var(--red); font-size: 12px; }
+.meta { margin: 6px 0 8px; color: var(--label-2); font-size: 12px; }
+.items { margin: 0; padding: 0; list-style: none; }
+.item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 0;
+  border-top: 0.5px solid var(--separator);
+}
+.item-n { color: var(--label-3); text-align: right; }
+.item-title { overflow-wrap: anywhere; }
+.item-est { color: var(--label-2); font-size: 12px; white-space: nowrap; }
+.verdicts { display: inline-flex; gap: 4px; }
+.item.is-decline .item-title { color: var(--label-3); text-decoration: line-through; }
+@media (max-width: 760px) {
+  .item { grid-template-columns: 18px minmax(0, 1fr); }
+  .item-est, .verdicts { grid-column: 2; }
+}
+.card-foot { display: flex; align-items: center; gap: 12px; padding-top: 8px; border-top: 0.5px solid var(--separator); }
+.taking { color: var(--label-2); font-size: 12px; }
+
+/* The sender's matrix: the line above it is what a card could carry instead; the table folds away. */
+.matrix { padding: 12px 14px; border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-card); }
+.note { margin: 0 0 6px; color: var(--label-3); font-size: 12px; }
+.summary { margin: 0 0 8px; }
+.is-warn { color: var(--orange); }
+.is-bad { color: var(--red); }
+.sep { color: var(--label-3); }
+.matrix summary { cursor: pointer; color: var(--label-2); font-size: 12px; }
+table { width: 100%; margin-top: 6px; border-collapse: collapse; font-size: 12px; }
+th, td { padding: 5px 8px; border-top: 0.5px solid var(--separator); text-align: left; }
+thead th { max-width: 180px; overflow: hidden; color: var(--label-2); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+tbody th { font-weight: 600; }
+tr.is-me { background: var(--fill-2); }
+.cell { color: var(--label-3); }
+.cell.v-accept { color: var(--green); font-weight: 600; }
+.cell.v-decline { color: var(--label-2); }
+.cell.v-clarify { color: var(--orange); }
+.status { color: var(--label-2); white-space: nowrap; }
+.is-overdue .status { color: var(--red); }
+tfoot th, tfoot td { color: var(--label-2); }
+.takers.is-conflict { color: var(--orange); font-weight: 600; }
+.takers.is-nobody { color: var(--red); font-weight: 600; }
