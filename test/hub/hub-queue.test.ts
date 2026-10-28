@@ -300,3 +300,15 @@ test('send and ack look at the peer again: a revoked peer on a still open socket
   a.send({ t: 'send', env: await question(A, B.pub, 'after') })
   assert.equal((await a.take('error')).code, 'revoked')
 })
+
+test('an envelope with a field nobody signed is refused, and the queue holds the rebuilt one (#231)', async () => {
+  const a = await h.join(A, 'anna')
+  await h.join(B, 'ben')
+  const env = await question(A, B.pub, 'plain')
+  a.send({ t: 'send', env: { ...env, note: 'smuggled' } })
+  assert.equal((await a.take('error')).code, 'bad_frame')
+  assert.equal(h.db.message(env.id), null)
+  a.send({ t: 'send', env })
+  await a.take('state')
+  assert.deepEqual(JSON.parse(h.db.message(env.id)?.payload ?? 'null'), env)
+})

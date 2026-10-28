@@ -178,6 +178,9 @@ test('checkEnvelope: the kind whitelist, no broadcast, size and shape', () => {
   assert.equal(code({ ...ok, reply_to: 5 }), 'bad_frame')
   assert.equal(code({ ...ok, ts: 'yesterday' }), 'bad_frame')
   assert.equal(code({ ...ok, pad: 'x'.repeat(17000) }), 'too_big')
+  // A field nobody signed is refused, not carried along (#231).
+  assert.equal(code({ ...ok, note: 'x' }), 'bad_frame')
+  assert.equal(code({ ...ok, ttl: 1 }), 'bad_frame')
   for (const junk of [null, 3, 'x', [], undefined]) assert.equal(code(junk), 'bad_frame')
 })
 
@@ -233,4 +236,13 @@ test('unb64u: only the canonical spelling; a signature or a key has one (#231)',
   assert.equal(b64u(unb64u(k.pub) as Uint8Array), k.pub)
   assert.equal(unb64u('Z'.repeat(43)), null)
   for (const bad of ['A', 'AA==', 7]) assert.equal(unb64u(bad), null)
+})
+
+test('checkEnvelope hands back only the signed fields and the signature (#231)', async () => {
+  const env: Envelope = { ...ENV, sig: SIG.envelope }
+  const r = checkEnvelope(env)
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.ok && r.env, env)
+  assert.notEqual(r.ok && r.env, env)
+  assert.notEqual(r.ok && r.env.body, env.body)
 })

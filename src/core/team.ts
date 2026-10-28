@@ -152,8 +152,25 @@ export function checkEnvelope(v: unknown): { ok: true; env: Envelope } | { ok: f
   if (body.text.length < 1 || body.text.length > MAX_TEXT || Object.keys(body).length !== 1)
     return { ok: false, code: 'bad_frame' }
   if (new TextEncoder().encode(JSON.stringify(v)).length > MAX_ENVELOPE_BYTES) return { ok: false, code: 'too_big' }
-  return { ok: true, env: v as unknown as Envelope }
+  if (Object.keys(v).some(k => !ENVELOPE_FIELDS.includes(k))) return { ok: false, code: 'bad_frame' }
+  // Only the signed fields (and the signature) are kept: what the hub stores and relays, and the
+  // board keeps, is this rebuilt envelope.
+  const env: Envelope = {
+    v: TEAM_PROTOCOL,
+    id: v.id,
+    from: v.from,
+    to: v.to,
+    kind: v.kind as Envelope['kind'],
+    reply_to: v.reply_to,
+    ts: v.ts,
+    ttl_s: v.ttl_s,
+    body: { text: body.text },
+    sig: v.sig,
+  }
+  return { ok: true, env }
 }
+
+const ENVELOPE_FIELDS = ['v', 'id', 'from', 'to', 'kind', 'reply_to', 'ts', 'ttl_s', 'body', 'sig']
 
 /** The envelope without its signature, as signed. */
 export function envelopeBytes(env: Omit<Envelope, 'sig'> | Envelope): Uint8Array {
