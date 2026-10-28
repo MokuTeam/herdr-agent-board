@@ -674,7 +674,8 @@ export function ServerSetupBody({
 
       {phase === 'plan' && (
         <div className="access-actions">
-          {plan && plan.kind !== 'nothing' && (
+          {/* an install goes on with nothing for the web server to change: the board, herdr and its key still do */}
+          {plan && (plan.kind !== 'nothing' || installing) && (
             <button
               type="button"
               className="button primary"

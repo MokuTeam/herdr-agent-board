@@ -1483,6 +1483,32 @@ test('Install the board on this server (path B): its own plan, then its output, 
   expect(shownText(partOf(looked, { lang: 'ru' }))).toContain('Код доски: копия 1a2b3c4 с вашего компьютера')
 })
 
+test('Install over a board already on the server: its web server has nothing to change, Install is still offered (the board, herdr and the key go on)', () => {
+  const domain = 'workbench.example.com'
+  const w = serverWanted(domain, 'agent')
+  const facts = factsFor('1')
+  const built = buildPlan(facts, w, { id: 'i2', docker: false })
+  if (!isPlan(built)) throw new Error('no plan')
+  const install = {
+    from: { commit: '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d', changes: false },
+    out: [],
+    link: null,
+    code: null,
+  }
+  const base = {
+    phase: 'plan',
+    sudo: 'root',
+    facts,
+    choice: chooseCase(facts, w),
+    install,
+    installDomain: domain,
+  } as const
+  const nothing = { ...built, kind: 'nothing' as const }
+  expect(buttonsIn(partOf(withServer({ ...base, plan: nothing, target: 'install' }))).map(textOf)).toContain('Install')
+  // the web server's own setup with nothing to change still offers no Apply
+  expect(buttonsIn(partOf(withServer({ ...base, plan: nothing, target: 'tunnel' }))).map(textOf)).not.toContain('Apply')
+})
+
 test('the address of the board on the server: its own field, saved when left as server-install-domain; refused, the board’s words under it and what was typed kept', async () => {
   const live = liveServer(withServer({}))
   expect(live.pick('input[name="install-domain"]').value).toBe('')
