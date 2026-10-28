@@ -15,7 +15,6 @@ import {
   profileName,
   rfbInputFilter,
   slotDisplay,
-  slotPort,
   withBrowserMcp,
   xauthority,
   xvncArgs,
@@ -37,11 +36,11 @@ const ru = translator('ru')
 test('a slot: the lowest no desktop uses and nothing else holds; none when all are taken', async () => {
   expect(await pickSlot(new Set(), () => false)).toBe(0)
   expect(await pickSlot(new Set([0, 1]), () => false)).toBe(2)
-  // :102's lock is someone else's, 9303's port too
+  // :102's and :103's locks are someone else's
   expect(await pickSlot(new Set([0, 1]), s => s === 2 || s === 3)).toBe(4)
   expect(await pickSlot(new Set([0]), async s => s === 1)).toBe(2)
   expect(await pickSlot(new Set([0, 1, 2]), () => false, 3)).toBeNull()
-  expect([slotDisplay(0), slotPort(0), slotDisplay(5), slotPort(5)]).toEqual([100, 9300, 105, 9305])
+  expect([slotDisplay(0), slotDisplay(5)]).toEqual([100, 105])
 })
 
 test('Xvnc: VNC on its Unix socket only (no TCP), no VNC password, X with its cookie only', () => {
@@ -59,10 +58,11 @@ test('Xvnc: VNC on its Unix socket only (no TCP), no VNC password, X with its co
   expect(a).toContain('-AlwaysShared')
 })
 
-test('Chrome: headed, its own profile folder and DevTools port, a test server’s extra arguments last', () => {
-  const a = chromeArgs({ profileDir: '/p/github', port: 9301, extra: ['--no-sandbox'] })
+test('Chrome: headed, its own profile folder, DevTools on its pipe and no port, a test server’s extra arguments last', () => {
+  const a = chromeArgs({ profileDir: '/p/github', extra: ['--no-sandbox'] })
   expect(a).toContain('--user-data-dir=/p/github')
-  expect(a).toContain('--remote-debugging-port=9301')
+  expect(a).toContain('--remote-debugging-pipe')
+  expect(a.some(x => x.startsWith('--remote-debugging-port') || x.startsWith('--remote-debugging-address'))).toBe(false)
   expect(a).toContain('--password-store=basic')
   expect(a.some(x => x.startsWith('--headless'))).toBe(false)
   expect(a.slice(-2)).toEqual(['--no-sandbox', 'about:blank'])

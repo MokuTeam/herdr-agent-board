@@ -88,6 +88,17 @@ describe('on the board’s own server', () => {
     const paths = routeTable(proc).map(r => r.path)
     expect(paths).toContain('^\\/api\\/desktop\\/')
     expect(paths).toContain('^\\/api\\/browser\\/(start|call|profile|ask)$')
+    expect(paths).toContain('/api/browser/cdp')
+  })
+
+  test('the agent’s DevTools: never through the domain; on 127.0.0.1 with the board’s key, a WebSocket only', async () => {
+    const cdp = '/api/browser/cdp?pane=w0%3Ap1'
+    expect(await answer(caddy.get(cdp))).toEqual([403, { error: 'key' }])
+    expect(await handshake(socket, cdp, { Origin: ORIGIN, Cookie: COOKIE })).toBe('HTTP/1.1 403 Forbidden')
+    const local = (path: string, k = key) => fetch(`${url}${path}`, { headers: { 'x-board-key': k } })
+    expect(await answer(local(cdp, ''))).toEqual([403, { error: 'key' }])
+    expect(await answer(local('/api/browser/cdp?pane=w0%20p1%3B'))).toEqual([400, { ok: false, error: 'pane' }])
+    expect(await answer(local(cdp))).toEqual([400, { error: 'upgrade' }])
   })
 
   test('the VNC WebSocket through the domain: the login, the file token, the Origin; 404 with no desktop', async () => {

@@ -1,12 +1,12 @@
 // Each agent's own browser on the board's server (the board-on-own-server spec's "Later: each
 // agent's own browser"): per session, on demand, an X display of its own (Xvnc: the X server and
 // its VNC in one, VNC on a Unix socket only, X with a cookie of its own), a headed Chrome on it
-// with its own profile folder and DevTools port on 127.0.0.1, watched and taken over from the
-// board over VNC through its login, and reached by the agent through the board's MCP wrapper
-// (`board browser-mcp`: chrome-devtools-mcp pointed at that Chrome, its calls held while the owner
-// has the browser). Server mode only: a board on a PC has none of it.
+// with its own profile folder and its DevTools on a pipe (no TCP port), watched and taken over from
+// the board over VNC through its login, and reached by the agent through the board's MCP wrapper
+// (`board browser-mcp`: chrome-devtools-mcp pointed at the board's keyed bridge to that pipe, its
+// calls held while the owner has the browser). Server mode only: a board on a PC has none of it.
 //
-// Here: the slots (display and port), the programs' arguments, the X cookie file, the profile
+// Here: the slots (displays), the programs' arguments, the X cookie file, the profile
 // names, the control, the card's field, the MCP server's entry in a profile's .claude.json and
 // `board doctor`'s checks. Pure, with no node: import.
 import type { SetupCheck } from './setup.ts'
@@ -14,8 +14,6 @@ import type { ItemDesktop, Translator } from './types.ts'
 
 /** The first display a desktop takes (:100), clear of a person's own (:0, :1, …). */
 export const DISPLAY_BASE = 100
-/** The first DevTools port; a slot's is this plus its number. */
-export const PORT_BASE = 9300
 /** At most this many desktops at once (each takes about 300–500 MB). */
 export const MAX_DESKTOPS = 32
 /** The screen: Chrome's window fills it. */
@@ -45,11 +43,10 @@ export const CHROMIUM_PACKAGE = 'chromium'
 
 export type Control = 'agent' | 'owner'
 
-/** A slot's display (:100 and up) and DevTools port (9300 and up). */
+/** A slot's display (:100 and up). */
 export const slotDisplay = (slot: number): number => DISPLAY_BASE + slot
-export const slotPort = (slot: number): number => PORT_BASE + slot
 
-/** The lowest slot no desktop uses and nothing else holds (an X display's lock, the port), or null when all are. */
+/** The lowest slot no desktop uses and nothing else holds (an X display's lock), or null when all are. */
 export async function pickSlot(
   used: ReadonlySet<number>,
   held: (slot: number) => boolean | Promise<boolean>,
@@ -235,14 +232,15 @@ export function xvncArgs(o: { display: number; socket: string; auth: string; nam
 }
 
 /**
- * Chrome's arguments: headed on the display, its own profile folder and DevTools port (on
- * 127.0.0.1, Chrome's default), its window over the whole screen (there is no window manager),
- * no first-run questions, no keyring (none on a server), /tmp for its shared memory.
+ * Chrome's arguments: headed on the display, its own profile folder, its DevTools on the pipe its
+ * holder gives it (fds 3 and 4: no port any account could reach, services/cdp-pipe.ts), its window
+ * over the whole screen (there is no window manager), no first-run questions, no keyring (none on
+ * a server), /tmp for its shared memory.
  */
-export function chromeArgs(o: { profileDir: string; port: number; extra?: readonly string[] }): string[] {
+export function chromeArgs(o: { profileDir: string; extra?: readonly string[] }): string[] {
   return [
     `--user-data-dir=${o.profileDir}`,
-    `--remote-debugging-port=${o.port}`,
+    '--remote-debugging-pipe',
     '--no-first-run',
     '--no-default-browser-check',
     '--password-store=basic',

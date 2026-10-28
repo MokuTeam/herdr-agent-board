@@ -90,7 +90,7 @@ import { createClaudeHome, cwdOf } from '../adapters/claude-home.ts'
 import { configFile, editCategories, loadConfig, setRemoteOn, setTunnelOn } from '../adapters/config-file.ts'
 import { asSnapshot, type HerdrPane, herdr, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
-import { localFetch } from '../adapters/local-key.ts'
+import { localFetch, readLocalKey } from '../adapters/local-key.ts'
 import { boardFile } from '../adapters/paths.ts'
 import { findPiSession } from '../adapters/pi-home.ts'
 import { currentPresence, setPresence } from '../adapters/presence-store.ts'
@@ -1321,7 +1321,7 @@ async function callReport(): Promise<void> {
 async function browserMcp(): Promise<void> {
   if (!onServer(cfg)) throw new Error("browser-mcp: the agents' browsers are on the board's own server only")
   const { paneOf: sessionPane, runWrapper } = await import('../services/browser-mcp.ts')
-  const { devtoolsMcpBin } = await import('../adapters/desktop-files.ts')
+  const { desktopDir, devtoolsMcpBin } = await import('../adapters/desktop-files.ts')
   const pane = sessionPane()
   if (!pane) throw new Error('browser-mcp: no herdr pane (HERDR_PANE_ID); it runs in a session in herdr')
   const bin = devtoolsMcpBin()
@@ -1332,6 +1332,8 @@ async function browserMcp(): Promise<void> {
     pane,
     origin: `http://127.0.0.1:${Number(cfg.port) || 12422}`,
     fetch: localFetch(cfg),
+    key: readLocalKey(),
+    runDir: join(desktopDir(), 'run'),
     bin,
     ...(hold > 0 && { holdMs: hold }),
   })

@@ -3,18 +3,22 @@
 // through `board browser-mcp`, or `board browser ask`) and stopped when the session sleeps or
 // ends (seen at the board's refresh). Each is an Xvnc display of its own (VNC on a Unix socket in
 // the desktop's folder, 0600; X for its cookie only, never over TCP) and a headed Chrome on it
-// with its own DevTools port on 127.0.0.1 and its profile: a named one (profiles/<name>, kept for
-// later sessions; a copy for a second session while one has it, thrown away afterwards), or the
-// session's own (gone with it). Both run in sessions of their own (setsid), so the board's
-// restart (run.ts) leaves them running; the next board takes them over from desktops.json.
+// with its profile: a named one (profiles/<name>, kept for later sessions; a copy for a second
+// session while one has it, thrown away afterwards), or the session's own (gone with it). Chrome's
+// DevTools are on a pipe, no TCP port: its holder (entrypoints/cdp-pipe.ts) serves the pipe on a
+// Unix socket in the desktop's folder, and the agent reaches it only through the board's keyed
+// route (routes/desktop.ts /api/browser/cdp), which this bridges. Xvnc and the holder run in
+// sessions of their own (setsid), so the board's restart (run.ts) leaves them running; the next
+// board takes them over from desktops.json, where each is from the moment it is spawned.
 //
 // The owner watches and takes over through the board's login: the VNC bytes go both ways over a
-// WebSocket (routes/desktop.ts), and while the owner has the browser the wrapper holds the
-// agent's calls. Server mode only: app.ts makes none of this on a PC.
+// WebSocket (routes/desktop.ts), a viewer's keys, mouse and clipboard only while the owner has the
+// browser, and meanwhile the wrapper holds the agent's calls. Server mode only: app.ts makes none
+// of this on a PC.
 import { randomBytes } from 'node:crypto'
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { cp } from 'node:fs/promises'
-import { createConnection, createServer, type Socket } from 'node:net'
+import { createConnection, type Socket } from 'node:net'
 import { basename, join } from 'node:path'
 import type { ServerWebSocket, WebSocketHandler } from 'bun'
 import type { CardPatch } from '../adapters/cards.ts'
@@ -26,16 +30,27 @@ import {
   pickSlot,
   rfbInputFilter,
   slotDisplay,
-  slotPort,
   xauthority,
   xvncArgs,
 } from '../core/desktop.ts'
 import type { Item, ItemDesktop } from '../core/types.ts'
+import { nulFrames } from './cdp-pipe.ts'
 
 /** What the desktops ask of the server: tests hand in their own. */
 export interface DesktopSystem {
   /** A program in a session of its own (setsid), its output into `log`: its pid, and its end. */
   spawn(argv: string[], env: Record<string, string>, log: string): { pid: number; exited: Promise<unknown> }
+  /**
+   * Chrome (`argv`) with its DevTools on a pipe, under its holder in a session of its own, which
+   * serves the pipe on the Unix socket `cdp` once Chrome answers there (entrypoints/cdp-pipe.ts):
+   * the holder's pid (its command line has `cdp`), and its end, which is Chrome's.
+   */
+  spawnChrome(
+    argv: string[],
+    cdp: string,
+    env: Record<string, string>,
+    log: string,
+  ): { pid: number; exited: Promise<unknown> }
   /** `signal` to the process group `pid` leads (setsid made it so). */
   kill(pid: number, signal: 'SIGTERM' | 'SIGKILL'): void
   alive(pid: number): boolean
@@ -43,15 +58,31 @@ export interface DesktopSystem {
   cmdline(pid: number): string
   /** Whether an X server holds the display (its lock, a stale one cleared; or its socket). */
   displayHeld(display: number): boolean
-  portFree(port: number): Promise<boolean>
-  /** Whether Chrome's DevTools answer on the port. */
-  devtools(port: number): Promise<boolean>
+  /** Whether Chrome answered on its pipe: its holder's socket is there. */
+  cdpReady(cdp: string): boolean | Promise<boolean>
   /** A program on PATH (and Chrome's own folder), or null. */
   which(name: string): string | null
   sleep(ms: number): Promise<void>
 }
 
 const PATH = '/usr/local/bin:/usr/bin:/bin:/opt/google/chrome'
+/** Chrome's holder, run by the board's own bun. */
+const HOLDER = join(import.meta.dir, '..', 'entrypoints', 'cdp-pipe.ts')
+
+function spawnInSession(
+  argv: string[],
+  env: Record<string, string>,
+  log: string,
+): { pid: number; exited: Promise<unknown> } {
+  const fd = openSync(log, 'a', 0o600)
+  try {
+    const proc = Bun.spawn(['setsid', ...argv], { env, stdin: 'ignore', stdout: fd, stderr: fd })
+    proc.unref()
+    return { pid: proc.pid, exited: proc.exited }
+  } finally {
+    closeSync(fd)
+  }
+}
 
 function pidAlive(pid: number): boolean {
   try {
@@ -90,16 +121,8 @@ export function displayHeldAt(display: number, tmp = '/tmp', alive: (pid: number
 
 /** The server's own. */
 export const realSystem: DesktopSystem = {
-  spawn(argv, env, log) {
-    const fd = openSync(log, 'a', 0o600)
-    try {
-      const proc = Bun.spawn(['setsid', ...argv], { env, stdin: 'ignore', stdout: fd, stderr: fd })
-      proc.unref()
-      return { pid: proc.pid, exited: proc.exited }
-    } finally {
-      closeSync(fd)
-    }
-  },
+  spawn: spawnInSession,
+  spawnChrome: (argv, cdp, env, log) => spawnInSession([process.execPath, HOLDER, cdp, ...argv], env, log),
   kill(pid, signal) {
     try {
       process.kill(-pid, signal)
@@ -118,19 +141,7 @@ export const realSystem: DesktopSystem = {
     }
   },
   displayHeld: display => displayHeldAt(display),
-  portFree: port =>
-    new Promise(resolve => {
-      const s = createServer()
-      s.once('error', () => resolve(false))
-      s.listen(port, '127.0.0.1', () => s.close(() => resolve(true)))
-    }),
-  async devtools(port) {
-    try {
-      return (await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1500) })).ok
-    } catch {
-      return false
-    }
-  },
+  cdpReady: cdp => existsSync(cdp),
   which: name => Bun.which(name, { PATH: `${process.env.PATH ?? ''}:${PATH}` }),
   sleep: ms => Bun.sleep(ms),
 }
@@ -144,10 +155,11 @@ interface Desktop {
   session: string
   slot: number
   display: number
-  port: number
-  /** Its folder: the VNC socket, the X cookie, the logs, the session's own profile, a copy. */
+  /** Its folder (0700): the VNC socket, Chrome's DevTools socket, the X cookie, the logs, the session's own profile, a copy. */
   dir: string
   vnc: string
+  /** Chrome's DevTools: its holder's Unix socket (0600), there once Chrome answers on its pipe. */
+  cdp: string
   /** The named profile open in it; null: the session's own. */
   profile: string | null
   /** The named profile is a throwaway copy (another session has it). */
@@ -157,9 +169,10 @@ interface Desktop {
   /** When the browser ask put its ask on the card (the card's askSince): handing back clears that ask only. */
   askSince: number | null
   xvnc: number | null
+  /** Chrome's holder (Chrome under it, in its session). */
   chrome: number | null
   startedAt: number
-  /** Chrome is up and answers on its port. */
+  /** Chrome is up and answers on its pipe. */
   running: boolean
   /** Since when no session is awake in its pane (0: one is). */
   goneSince: number
@@ -172,15 +185,17 @@ interface Desktop {
 /** What a hand-over came to: who has the browser now, or why not (404: no desktop; 409: no view to take it in). */
 export type ControlAnswer = { ok: true; control: Control } | { ok: false; status: 404 | 409; error: string }
 
-/** What a desktop's VNC WebSocket carries (routes/desktop.ts). */
+/** What a desktop's WebSocket carries (routes/desktop.ts): a view's VNC, or the agent's DevTools (`cdp`). */
 export interface VncData {
   pane: string
   socket: string
+  /** The agent's DevTools (chrome-devtools-mcp through the keyed route), not a view. */
+  cdp?: boolean
   /** Called with a close when the viewer's login ends (the domain's listener); returns its unwatch. */
   watch?: (gone: () => void) => () => void
 }
 
-export type Started = { ok: true; port: number } | { ok: false; error: string }
+export type Started = { ok: true } | { ok: false; error: string }
 
 export interface DesktopsOptions {
   /** The desktops' folder (stateDir()/desktop). */
@@ -202,8 +217,10 @@ export interface Desktops {
   view(item: Item): ItemDesktop | undefined
   /** The sessions on the board as of a fresh refresh: a desktop with none awake in its pane stops. */
   observe(items: readonly Item[]): void
-  /** Started (or running already) for the session in `pane`: Chrome's DevTools port. */
+  /** Started (or running already) for the session in `pane`. */
   ensure(pane: string): Promise<Started>
+  /** The DevTools socket of the pane's running Chrome, or null. */
+  cdpOf(pane: string): string | null
   /** The profile the session wants (null: its own); a running Chrome opens it now. */
   profile(pane: string, name: string | null): Promise<Started & { copy?: boolean }>
   /** The agent asks the owner to act in its browser: its card under "needs you", its desktop up. */
@@ -289,8 +306,10 @@ export function createDesktops(o: DesktopsOptions): Desktops {
 
   const ours = (pid: number | null, mark: string): boolean =>
     pid !== null && sys.alive(pid) && sys.cmdline(pid).includes(mark)
-  const xvncMark = (d: Pick<Desktop, 'display' | 'vnc'>): string => d.vnc
-  const chromeMark = (d: Pick<Desktop, 'port'>): string => `--remote-debugging-port=${d.port}`
+  const xvncMark = (d: Pick<Desktop, 'vnc'>): string => d.vnc
+  const chromeMark = (d: Pick<Desktop, 'cdp'>): string => d.cdp
+  /** The agent's DevTools bridges (to each Chrome's holder), each with its socket. */
+  const cdps = new WeakMap<ServerWebSocket<VncData>, Socket>()
 
   async function ended(pid: number | null, ms: number): Promise<void> {
     if (pid === null) return
@@ -313,12 +332,21 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   }
 
   // A board before this one left desktops running: taken over when they are still the programs it
-  // started, else what is left of them ended. The agent has each again: no view of this board's
-  // is open yet.
+  // started and were up (one it was starting is ended: the next call starts it again), else what is
+  // left of them ended. The agent has each again: no view of this board's is open yet.
   try {
     const list: unknown = JSON.parse(readFileSync(record, 'utf8'))
     for (const r of Array.isArray(list) ? (list as Desktop[]) : []) {
       if (typeof r?.pane !== 'string' || typeof r.dir !== 'string' || !r.dir.startsWith(o.root)) continue
+      if (typeof r.cdp !== 'string' || typeof r.vnc !== 'string') {
+        // a board before the DevTools pipe: its Chrome on a TCP port, ended with its display
+        const port = (r as { port?: unknown }).port
+        if (typeof port === 'number' && ours(r.chrome, `--remote-debugging-port=${port}`))
+          sys.kill(r.chrome as number, 'SIGKILL')
+        if (typeof r.vnc === 'string' && ours(r.xvnc, r.vnc)) sys.kill(r.xvnc as number, 'SIGKILL')
+        rmSync(r.dir, { recursive: true, force: true })
+        continue
+      }
       const d: Desktop = {
         ...r,
         session: typeof r.session === 'string' ? r.session : '',
@@ -330,12 +358,15 @@ export function createDesktops(o: DesktopsOptions): Desktops {
         unviewedSince: 0,
         startedAt: now(),
       }
-      if (ours(d.xvnc, xvncMark(d))) {
-        d.chrome = ours(d.chrome, chromeMark(d)) ? d.chrome : null
-        d.running = d.chrome !== null
+      const chrome = ours(d.chrome, chromeMark(d))
+      if (ours(d.xvnc, xvncMark(d)) && existsSync(d.vnc)) {
+        d.running = chrome && existsSync(d.cdp)
+        if (chrome && !d.running) sys.kill(d.chrome as number, 'SIGKILL')
+        if (!d.running) d.chrome = null
         desktops.set(d.pane, d)
       } else {
-        if (ours(d.chrome, chromeMark(d))) sys.kill(d.chrome as number, 'SIGKILL')
+        if (chrome) sys.kill(d.chrome as number, 'SIGKILL')
+        if (ours(d.xvnc, xvncMark(d))) sys.kill(d.xvnc as number, 'SIGKILL')
         rmSync(d.dir, { recursive: true, force: true })
       }
     }
@@ -374,8 +405,10 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       PATH: `${process.env.PATH ?? ''}:${PATH}`,
       LANG: process.env.LANG || 'C.UTF-8',
     }
-    const proc = sys.spawn(
-      [bin, ...chromeArgs({ profileDir: p.dir, port: d.port, extra: o.chromeExtra ?? [] })],
+    rmSync(d.cdp, { force: true })
+    const proc = sys.spawnChrome(
+      [bin, ...chromeArgs({ profileDir: p.dir, extra: o.chromeExtra ?? [] })],
+      d.cdp,
       env,
       join(d.dir, 'chrome.log'),
     )
@@ -392,23 +425,22 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       o.onChange()
     })
     for (let waited = 0; waited < 30_000 && !gone; waited += 250) {
-      if (await sys.devtools(d.port)) {
+      if (await sys.cdpReady(d.cdp)) {
         d.running = true
-        return { ok: true, port: d.port }
+        return { ok: true }
       }
       await sys.sleep(250)
     }
     await ended(gone ? null : proc.pid, 2000)
     d.chrome = null
-    return { ok: false, error: `Chrome did not start: ${tailOf(join(d.dir, 'chrome.log')) || 'no answer on its port'}` }
+    return { ok: false, error: `Chrome did not start: ${tailOf(join(d.dir, 'chrome.log')) || 'no answer on its pipe'}` }
   }
 
   async function startNew(pane: string): Promise<Started> {
     // picked one at a time, and held until its desktop is in the list: two starts never share one
     const slot = await serial('slots', async () => {
-      const picked = await pickSlot(
-        new Set([...desktops.values()].map(d => d.slot).concat([...picking])),
-        async s => sys.displayHeld(slotDisplay(s)) || !(await sys.portFree(slotPort(s))),
+      const picked = await pickSlot(new Set([...desktops.values()].map(d => d.slot).concat([...picking])), s =>
+        sys.displayHeld(slotDisplay(s)),
       )
       if (picked !== null) picking.add(picked)
       return picked
@@ -427,9 +459,9 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       session: itemIn(pane)?.session ?? '',
       slot,
       display,
-      port: slotPort(slot),
       dir,
       vnc: join(dir, 'vnc.sock'),
+      cdp: join(dir, 'cdp.sock'),
       profile: null,
       copy: false,
       control: 'agent',
@@ -476,7 +508,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     const r = await launchChrome(d)
     if (!r.ok) return fail(r.error)
     save()
-    o.log(`desktop :${display} for ${d.key || pane}: Chrome on 127.0.0.1:${d.port}`)
+    o.log(`desktop :${display} for ${d.key || pane}: Chrome up`)
     o.onChange()
     return r
   }
@@ -490,7 +522,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       d = undefined
     }
     if (d && d.xvnc !== null && sys.alive(d.xvnc)) {
-      if (d.chrome !== null && sys.alive(d.chrome) && d.running) return { ok: true, port: d.port }
+      if (d.chrome !== null && sys.alive(d.chrome) && d.running) return { ok: true }
       // the display is there, Chrome not (it ended, or the board took it over without it)
       const r = await launchChrome(d)
       save()
@@ -521,6 +553,19 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     serial(d.pane, async () => {
       if (desktops.get(d.pane) === d) await stopNow(d.pane, why)
     })
+
+  /** The agent's DevTools to its Chrome's holder: each message a text frame one way, NUL-ended the other. */
+  function openCdp(ws: ServerWebSocket<VncData>): void {
+    const sock = createConnection({ path: ws.data.socket })
+    const frames = nulFrames()
+    sock.on('data', (chunk: Buffer) => {
+      for (const f of frames(chunk)) ws.send(f)
+      if (ws.getBufferedAmount() > HIGH_WATER) sock.pause()
+    })
+    sock.on('error', () => ws.close(1011, 'cdp'))
+    sock.on('close', () => ws.close(1000, 'cdp'))
+    cdps.set(ws, sock)
+  }
 
   /**
    * A viewer gone. The last one gone while the owner has the browser hands it back to the agent:
@@ -601,6 +646,11 @@ export function createDesktops(o: DesktopsOptions): Desktops {
 
     ensure: pane => serial(pane, () => ensureNow(pane)),
 
+    cdpOf(pane) {
+      const d = desktops.get(pane)
+      return d?.running && d.chrome !== null && existsSync(d.cdp) ? d.cdp : null
+    },
+
     profile: (pane, name) =>
       serial(pane, async () => {
         // a switch restarts the browser under the owner's hands: never while they have it
@@ -610,7 +660,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
         const d = desktops.get(pane)
         if (!d || d.chrome === null)
           return ensureNow(pane).then(r => (r.ok ? { ...r, copy: desktops.get(pane)?.copy ?? false } : r))
-        if (d.profile === name && !d.copy) return { ok: true, port: d.port, copy: false }
+        if (d.profile === name && !d.copy) return { ok: true, copy: false }
         d.stopping = true
         await ended(d.chrome, 5000)
         d.stopping = false
@@ -678,6 +728,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       // the picture compresses well; Bun keeps it per message
       perMessageDeflate: true,
       open(ws) {
+        if (ws.data.cdp) return openCdp(ws)
         const sock = createConnection({ path: ws.data.socket })
         sock.on('connect', () => {
           const c = conns.get(ws)
@@ -701,6 +752,10 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       },
       // keys, the mouse and the clipboard reach the display only while the owner has the browser
       message(ws, msg) {
+        if (ws.data.cdp) {
+          cdps.get(ws)?.write(`${typeof msg === 'string' ? msg : Buffer.from(msg).toString('utf8')}\0`)
+          return
+        }
         const c = conns.get(ws)
         if (!c) return
         const bytes = typeof msg === 'string' ? Buffer.from(msg) : msg
@@ -709,10 +764,12 @@ export function createDesktops(o: DesktopsOptions): Desktops {
         if (out.length) c.sock.write(out)
       },
       drain(ws) {
-        conns.get(ws)?.sock.resume()
+        ;(ws.data.cdp ? cdps.get(ws) : conns.get(ws)?.sock)?.resume()
       },
       close(ws) {
-        closeViewer(ws)
+        if (!ws.data.cdp) return closeViewer(ws)
+        cdps.get(ws)?.destroy()
+        cdps.delete(ws)
       },
     },
   }

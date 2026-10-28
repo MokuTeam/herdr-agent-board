@@ -19,62 +19,72 @@ afterEach(() => {
 interface Proc {
   argv: string[]
   env: Record<string, string>
+  cmdline: string
   alive: boolean
   end: () => void
 }
 
-/** A server whose Xvnc makes its socket and Chrome answers on its port at once; what ran, and what it was told. */
+/**
+ * A server whose Xvnc makes its socket and whose Chrome (under its holder) makes its DevTools
+ * socket at once (or once `ready` resolves); what ran, and what it was told.
+ */
 function fakeServer(
   o: { held?: number[]; noChrome?: boolean; chromeFails?: boolean; ready?: () => Promise<void> } = {},
 ) {
   const procs = new Map<number, Proc>()
   let next = 1000
-  const ports = new Set<number>()
+  function start(argv: string[], env: Record<string, string>, mark = '') {
+    const pid = next++
+    let end = (): void => {}
+    const exited = new Promise<unknown>(resolve => {
+      end = () => resolve(0)
+    })
+    const p: Proc = {
+      argv,
+      env,
+      cmdline: [...argv, mark].join(' '),
+      alive: true,
+      end: () => {
+        p.alive = false
+        end()
+      },
+    }
+    procs.set(pid, p)
+    return { pid, exited, p }
+  }
   const sys: DesktopSystem = {
     spawn(argv, env) {
-      const pid = next++
-      let end = (): void => {}
-      const exited = new Promise<unknown>(resolve => {
-        end = () => resolve(0)
-      })
-      const p: Proc = {
-        argv,
-        env,
-        alive: true,
-        end: () => {
-          p.alive = false
-          end()
-        },
-      }
-      procs.set(pid, p)
+      const { pid, exited } = start(argv, env)
       if (argv[0] === '/usr/bin/Xvnc') writeFileSync(argv[argv.indexOf('-rfbunixpath') + 1] as string, '')
-      else {
-        const port = Number(argv.find(a => a.startsWith('--remote-debugging-port='))?.split('=')[1])
-        if (o.chromeFails) p.end()
-        else ports.add(port)
-      }
+      return { pid, exited }
+    },
+    spawnChrome(argv, cdp, env) {
+      const { pid, exited, p } = start(argv, env, cdp)
+      if (o.chromeFails) p.end()
+      else
+        void (async () => {
+          await o.ready?.()
+          if (p.alive) writeFileSync(cdp, '')
+        })()
       return { pid, exited }
     },
     kill(pid) {
       const p = procs.get(pid)
-      if (!p?.alive) return
-      p.end()
-      const port = Number(p.argv.find(a => a.startsWith('--remote-debugging-port='))?.split('=')[1])
-      ports.delete(port)
+      if (p?.alive) p.end()
     },
     alive: pid => !!procs.get(pid)?.alive,
-    cmdline: pid => procs.get(pid)?.argv.join(' ') ?? '',
+    cmdline: pid => procs.get(pid)?.cmdline ?? '',
     displayHeld: d => (o.held ?? []).includes(d) || [...procs.values()].some(p => p.alive && p.argv[1] === `:${d}`),
-    portFree: async () => true,
-    devtools: async port => {
+    cdpReady: async cdp => {
       await o.ready?.()
-      return ports.has(port)
+      await Bun.sleep(0)
+      return existsSync(cdp)
     },
     which: name =>
       name === 'Xvnc' ? '/usr/bin/Xvnc' : name === 'google-chrome-stable' && !o.noChrome ? '/usr/bin/chrome' : null,
     sleep: async () => {},
   }
-  return { sys, procs }
+  return { sys, procs, start }
 }
 
 const item = (key: string, pane: string | null, more: Partial<Item> = {}): Item =>
@@ -110,12 +120,9 @@ test('on demand: nothing runs before the first call; then a display and Chrome o
   expect(d.view(state.items[0] as Item)).toBeUndefined()
   const a = await d.ensure('w0:p1')
   const b = await d.ensure('w0:p2')
-  expect([a, b]).toEqual([
-    { ok: true, port: 9300 },
-    { ok: true, port: 9301 },
-  ])
+  expect([a, b]).toEqual([{ ok: true }, { ok: true }])
   // the same session again: what runs, nothing new
-  expect(await d.ensure('w0:p1')).toEqual({ ok: true, port: 9300 })
+  expect(await d.ensure('w0:p1')).toEqual({ ok: true })
   const xvncs = [...server.procs.values()].filter(p => p.argv[0] === '/usr/bin/Xvnc')
   expect(xvncs.map(p => p.argv[1])).toEqual([':100', ':101'])
   const chromes = chromeOf(server.procs)
@@ -125,17 +132,18 @@ test('on demand: nothing runs before the first call; then a display and Chrome o
 })
 
 test('two sessions starting at once never share a slot', async () => {
-  const { d } = setup()
+  const { d, server } = setup()
   const [a, b] = await Promise.all([d.ensure('w0:p1'), d.ensure('w0:p2')])
-  expect([a, b]).toEqual([
-    { ok: true, port: 9300 },
-    { ok: true, port: 9301 },
+  expect([a, b]).toEqual([{ ok: true }, { ok: true }])
+  expect([...server.procs.values()].filter(p => p.argv[0] === '/usr/bin/Xvnc').map(p => p.argv[1])).toEqual([
+    ':100',
+    ':101',
   ])
 })
 
 test('a display someone else holds is skipped', async () => {
   const { d, server } = setup({ held: [100] })
-  expect(await d.ensure('w0:p1')).toEqual({ ok: true, port: 9301 })
+  expect(await d.ensure('w0:p1')).toEqual({ ok: true })
   expect([...server.procs.values()][0]?.argv[1]).toBe(':101')
 })
 
@@ -189,14 +197,14 @@ test('stopped when the session has slept or been gone for 2 minutes on end; a sh
 
 test('a named profile: kept for later; a second session asking for it gets a throwaway copy', async () => {
   const { d, server, root } = setup()
-  expect(await d.profile('w0:p1', 'github')).toEqual({ ok: true, port: 9300, copy: false })
+  expect(await d.profile('w0:p1', 'github')).toEqual({ ok: true, copy: false })
   const own = join(root, 'profiles', 'github')
   expect(chromeOf(server.procs)[0]?.argv).toContain(`--user-data-dir=${own}`)
   writeFileSync(join(own, 'Cookies'), 'signed in')
   writeFileSync(join(own, 'SingletonLock'), 'held')
   mkdirSync(join(own, 'Cache'))
   const r = await d.profile('w0:p2', 'github')
-  expect(r).toEqual({ ok: true, port: 9301, copy: true })
+  expect(r).toEqual({ ok: true, copy: true })
   const copy = join(root, 'sessions', '101', 'copy-github')
   expect(chromeOf(server.procs)[1]?.argv).toContain(`--user-data-dir=${copy}`)
   expect(readFileSync(join(copy, 'Cookies'), 'utf8')).toBe('signed in')
@@ -266,7 +274,7 @@ test('the next board takes over what still runs; what does not is cleared away',
   expect(existsSync(join(s.root, 'sessions', '101'))).toBe(false)
   // the one taken over: the same Chrome, nothing started again
   const before = s.server.procs.size
-  expect(await next.ensure('w0:p1')).toEqual({ ok: true, port: 9300 })
+  expect(await next.ensure('w0:p1')).toEqual({ ok: true })
   expect(s.server.procs.size).toBe(before)
 })
 
@@ -490,11 +498,11 @@ test('a named profile’s copy: made without holding up the board, caches, servi
   setImmediate(() => {
     turned = true
   })
-  const spawn = server.sys.spawn
+  const spawnChrome = server.sys.spawnChrome
   let turnedAtChrome: boolean | null = null
-  server.sys.spawn = (argv, env, log) => {
-    if (argv[0] === '/usr/bin/chrome') turnedAtChrome = turned
-    return spawn(argv, env, log)
+  server.sys.spawnChrome = (argv, cdp, env, log) => {
+    turnedAtChrome = turned
+    return spawnChrome(argv, cdp, env, log)
   }
   expect((await d.profile('w0:p2', 'github')).ok).toBe(true)
   expect(turnedAtChrome as boolean | null).toBe(true)
@@ -541,5 +549,77 @@ test('a profile switch while the owner has the browser: refused, Chrome left as 
     expect(before[0]?.alive).toBe(true)
   } finally {
     vnc.close()
+  }
+})
+
+test('Chrome’s DevTools on its pipe, under its holder: a socket in the desktop’s folder, no port', async () => {
+  const { d, server, root } = setup()
+  expect(d.cdpOf('w0:p1')).toBeNull()
+  await d.ensure('w0:p1')
+  const chrome = chromeOf(server.procs)[0] as Proc
+  expect(chrome.argv).toContain('--remote-debugging-pipe')
+  expect(chrome.argv.some(a => a.startsWith('--remote-debugging-port'))).toBe(false)
+  const cdp = join(root, 'sessions', '100', 'cdp.sock')
+  expect(chrome.cmdline).toContain(cdp)
+  expect(d.cdpOf('w0:p1')).toBe(cdp)
+  expect(d.cdpOf('w0:p2')).toBeNull()
+})
+
+test('taken over: one being started is ended (the next call starts it); a board before the pipe’s Chrome on a port is ended', async () => {
+  const s = setup()
+  await s.d.ensure('w0:p1')
+  const chrome = chromeOf(s.server.procs)[0] as Proc
+  // its DevTools socket not there yet, as when the board ended during the start
+  rmSync(join(s.root, 'sessions', '100', 'cdp.sock'))
+  const next = s.make()
+  expect(chrome.alive).toBe(false)
+  expect(next.view(s.state.items[0] as Item)?.running).toBe(false)
+  expect((await next.ensure('w0:p1')).ok).toBe(true)
+  expect(chromeOf(s.server.procs)).toHaveLength(1)
+  // a record of the board before the pipe: Chrome with a DevTools port
+  const old = s.server.start(['/usr/bin/chrome', '--remote-debugging-port=9301'], {})
+  const xvnc = s.server.start(['/usr/bin/Xvnc', ':101'], {}, '/old/vnc.sock')
+  const dir = join(s.root, 'sessions', '101')
+  mkdirSync(dir, { recursive: true })
+  const record = JSON.parse(readFileSync(join(s.root, 'desktops.json'), 'utf8'))
+  record.push({ pane: 'w0:p2', dir, vnc: '/old/vnc.sock', port: 9301, xvnc: xvnc.pid, chrome: old.pid })
+  writeFileSync(join(s.root, 'desktops.json'), JSON.stringify(record))
+  const after = s.make()
+  expect([old.p.alive, xvnc.p.alive]).toEqual([false, false])
+  expect(existsSync(dir)).toBe(false)
+  expect(after.view(s.state.items[1] as Item)).toBeUndefined()
+})
+
+test('the agent’s DevTools through the board: each message a text frame one way, NUL-ended the other', async () => {
+  const { d, root } = setup()
+  const { createServer } = await import('node:net')
+  const path =
+    process.platform === 'win32'
+      ? String.raw`\\.\pipe\cdp-` + Math.random().toString(36).slice(2)
+      : join(root, 'c.sock')
+  const got: string[] = []
+  const holder = createServer(c => {
+    c.on('data', (b: Buffer) => got.push(b.toString('utf8')))
+    c.write('{"id":1,"result":{}}\0{"method":"Target.targetCreated",')
+    c.write('"params":{}}\0')
+  })
+  await new Promise<void>(done => holder.listen(path, done))
+  try {
+    const sent: string[] = []
+    const ws = {
+      data: { pane: 'w0:p1', socket: path, cdp: true },
+      send: (m: string) => sent.push(m),
+      close: () => {},
+      getBufferedAmount: () => 0,
+    } as unknown as ServerWebSocket<VncData>
+    d.websocket.open?.(ws)
+    for (let i = 0; i < 100 && sent.length < 2; i++) await Bun.sleep(5)
+    expect(sent).toEqual(['{"id":1,"result":{}}', '{"method":"Target.targetCreated","params":{}}'])
+    d.websocket.message?.(ws, '{"id":2,"method":"Browser.getVersion"}')
+    for (let i = 0; i < 100 && !got.length; i++) await Bun.sleep(5)
+    expect(got.join('')).toBe('{"id":2,"method":"Browser.getVersion"}\0')
+    d.websocket.close?.(ws, 1000, '')
+  } finally {
+    holder.close()
   }
 })

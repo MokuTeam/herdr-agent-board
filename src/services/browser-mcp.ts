@@ -1,10 +1,12 @@
 // `board browser-mcp`: the agent's browser as an MCP server (stdio), which the board's install
 // puts in each Claude profile on the board's server (core/desktop.ts BROWSER_MCP). It knows its
 // session by its pane (HERDR_PANE_ID, else its Claude's own environment) and runs
-// chrome-devtools-mcp (pinned, adapters/desktop-files.ts) pointed at a DevTools address of its
-// own on 127.0.0.1: the first time chrome-devtools-mcp connects there (its first tool call), the
-// board starts the session's desktop (services/desktop.ts) and the address answers with that
-// Chrome's, so chrome-devtools-mcp talks to it directly from then on.
+// chrome-devtools-mcp (pinned, adapters/desktop-files.ts) pointed at the board's DevTools route
+// for that pane (routes/desktop.ts /api/browser/cdp, a WebSocket to the session's Chrome, whose
+// DevTools listen on no port), with the board's local key in its headers: in a config file of the
+// board's user's alone (0600 in a 0700 folder, gone when it ends), never on a command line, which
+// every account on the server can read. Before a tool call goes on, the board starts the
+// session's desktop (services/desktop.ts), so what keeps it from starting is the call's answer.
 //
 // Between Claude and chrome-devtools-mcp it relays JSON-RPC line by line, and before a tool call
 // goes on it asks the board who has the browser: while the owner has it (or the board does not
@@ -12,7 +14,9 @@
 // batch with a call in it waits as a whole. Two tools of its own join the list:
 // browser_profile (a named profile, for logins that last) and browser_ask_owner (the card under
 // "needs you": sign in to X for me).
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { LOCAL_KEY_HEADER } from '../adapters/local-key.ts'
 import { HOLD_MS } from '../core/desktop.ts'
 
 type Msg = Record<string, unknown>
@@ -52,7 +56,7 @@ export const BOARD_SILENT =
 
 export interface RelayOptions {
   /** POST /api/browser/<op> on the board with this pane: its answer, or null when the board does not answer. */
-  board(op: 'call' | 'profile' | 'ask', body: Msg): Promise<Msg | null>
+  board(op: 'call' | 'start' | 'profile' | 'ask', body: Msg): Promise<Msg | null>
   toChild(line: string): void
   toClient(line: string): void
   holdMs?: number
@@ -119,6 +123,14 @@ export function createRelay(o: RelayOptions): Relay {
     }
   }
 
+  /** The session's browser up before a call goes on (the board starts it on the first); false: answered why not. */
+  async function started(late: (text: string) => void): Promise<boolean> {
+    const r = await o.board('start', {})
+    if (r?.ok === true) return true
+    late(r ? `No browser: ${String(r.error ?? 'it did not start')}` : 'The board does not answer: no browser now.')
+    return false
+  }
+
   async function own(msg: Msg, params: Msg): Promise<void> {
     const id = msg.id
     const args = isRecord(params.arguments) ? params.arguments : {}
@@ -163,8 +175,8 @@ export function createRelay(o: RelayOptions): Relay {
         const ids = msg.filter(m => isRecord(m) && m.method !== undefined && m.id !== undefined).map(m => (m as Msg).id)
         const late = (text: string) => o.toClient(JSON.stringify(ids.map(i => JSON.parse(result(i, text, true)))))
         return track(
-          agentHasIt(calls[0]?.id, late).then(go => {
-            if (go) o.toChild(line)
+          agentHasIt(calls[0]?.id, late).then(async go => {
+            if (go && (await started(late))) o.toChild(line)
           }),
         )
       }
@@ -180,9 +192,10 @@ export function createRelay(o: RelayOptions): Relay {
       }
       if (msg.method !== 'tools/call') return o.toChild(line)
       if (OWN_TOOLS.some(t => t.name === params.name)) return track(own(msg, params))
+      const late = (text: string) => o.toClient(result(msg.id, text, true))
       track(
-        agentHasIt(msg.id, text => o.toClient(result(msg.id, text, true))).then(go => {
-          if (go) o.toChild(line)
+        agentHasIt(msg.id, late).then(async go => {
+          if (go && (await started(late))) o.toChild(line)
         }),
       )
     },
@@ -233,12 +246,40 @@ export async function* linesOf(stream: ReadableStream<Uint8Array>): AsyncGenerat
   if (rest.trim()) yield rest
 }
 
+/**
+ * chrome-devtools-mcp's command line and config file: the board's DevTools route for `pane`, the
+ * key in the file's headers (the command line has the file's path only), no usage statistics or
+ * CrUX, and no page ids (one agent to a browser).
+ */
+export function devtoolsMcp(o: { origin: string; pane: string; key: string | null; bin: string; config: string }): {
+  argv: string[]
+  config: Record<string, string>
+} {
+  const ws = `${o.origin.replace(/^http/, 'ws')}/api/browser/cdp?pane=${encodeURIComponent(o.pane)}`
+  return {
+    argv: [
+      process.execPath,
+      o.bin,
+      '--config',
+      o.config,
+      '--no-usage-statistics',
+      '--no-performance-crux',
+      '--no-page-id-routing',
+    ],
+    config: { wsEndpoint: ws, ...(o.key && { wsHeaders: JSON.stringify({ [LOCAL_KEY_HEADER]: o.key }) }) },
+  }
+}
+
 export interface WrapperOptions {
   pane: string
   /** The board's address: http://127.0.0.1:<port>. */
   origin: string
   /** fetch with the board's local key (adapters/local-key.ts localFetch). */
   fetch: (url: string, init?: RequestInit) => Promise<Response>
+  /** The board's local key (adapters/local-key.ts), for chrome-devtools-mcp's WebSocket; null: none. */
+  key: string | null
+  /** A folder of the board's user's for chrome-devtools-mcp's config file (made 0700). */
+  runDir: string
   /** chrome-devtools-mcp's program. */
   bin: string
   holdMs?: number
@@ -260,76 +301,58 @@ export async function runWrapper(w: WrapperOptions): Promise<number> {
       return null
     }
   }
-  // chrome-devtools-mcp's DevTools address: the session's Chrome once the board has it up
-  const devtools = Bun.serve({
-    hostname: '127.0.0.1',
-    port: 0,
-    async fetch(req) {
-      const path = new URL(req.url).pathname
-      if (path !== '/json/version' && path !== '/json/version/') return new Response('not found', { status: 404 })
-      const r = await ask('start', {}, 90_000)
-      if (!r) return new Response('the board does not answer', { status: 503 })
-      if (r.ok !== true) return new Response(String(r.error ?? 'no browser'), { status: 503 })
-      try {
-        const real = await fetch(`http://127.0.0.1:${Number(r.port)}/json/version`, {
-          signal: AbortSignal.timeout(5000),
-        })
-        return new Response(await real.text(), { status: real.status, headers: { 'content-type': 'application/json' } })
-      } catch (err) {
-        return new Response(err instanceof Error ? err.message : String(err), { status: 502 })
-      }
-    },
-  })
-  const child = Bun.spawn(
-    [
-      process.execPath,
-      w.bin,
-      '--browserUrl',
-      `http://127.0.0.1:${devtools.port}`,
-      '--no-usage-statistics',
-      '--no-performance-crux',
-      // one agent to a browser: its tools need no page ids
-      '--no-page-id-routing',
-    ],
-    {
+  mkdirSync(w.runDir, { recursive: true, mode: 0o700 })
+  const config = join(w.runDir, `devtools-mcp-${process.pid}.json`)
+  const m = devtoolsMcp({ origin: w.origin, pane: w.pane, key: w.key, bin: w.bin, config })
+  rmSync(config, { force: true })
+  writeFileSync(config, JSON.stringify(m.config), { mode: 0o600, flag: 'wx' })
+  try {
+    const child = Bun.spawn(m.argv, {
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'inherit',
-      env: { ...process.env, CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: '1', CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: '1' },
-    },
-  )
-  const out = (line: string): void => {
-    process.stdout.write(`${line}\n`)
-  }
-  const relay = createRelay({
-    board: (op, body) => ask(op, body, op === 'call' ? 5000 : 90_000),
-    toChild: line => {
+      env: {
+        ...process.env,
+        CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: '1',
+        CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: '1',
+        // its own config only, never one found in the user's folders
+        CHROME_DEVTOOLS_MCP_NO_CONFIG_DISCOVERY: '1',
+      },
+    })
+    const out = (line: string): void => {
+      process.stdout.write(`${line}\n`)
+    }
+    const relay = createRelay({
+      board: (op, body) => ask(op, body, op === 'call' ? 5000 : 90_000),
+      toChild: line => {
+        try {
+          child.stdin.write(`${line}\n`)
+          void child.stdin.flush()
+        } catch {}
+      },
+      toClient: out,
+      ...(w.holdMs !== undefined && { holdMs: w.holdMs }),
+    })
+    const fromChild = (async () => {
+      for await (const line of linesOf(child.stdout)) relay.fromChild(line)
+    })()
+    const fromClient = (async () => {
+      for await (const line of linesOf(Bun.stdin.stream() as ReadableStream<Uint8Array>)) relay.fromClient(line)
+    })()
+    // Claude closed stdin (what is under way is not waited for), or chrome-devtools-mcp ended
+    const first = await Promise.race([
+      fromClient.then(() => 'client' as const),
+      child.exited.then(() => 'child' as const),
+    ])
+    if (first === 'client') {
       try {
-        child.stdin.write(`${line}\n`)
-        void child.stdin.flush()
+        await child.stdin.end()
       } catch {}
-    },
-    toClient: out,
-    ...(w.holdMs !== undefined && { holdMs: w.holdMs }),
-  })
-  const fromChild = (async () => {
-    for await (const line of linesOf(child.stdout)) relay.fromChild(line)
-  })()
-  const fromClient = (async () => {
-    for await (const line of linesOf(Bun.stdin.stream() as ReadableStream<Uint8Array>)) relay.fromClient(line)
-  })()
-  // Claude closed stdin (what is under way is not waited for), or chrome-devtools-mcp ended
-  const first = await Promise.race([
-    fromClient.then(() => 'client' as const),
-    child.exited.then(() => 'child' as const),
-  ])
-  if (first === 'client') {
-    try {
-      await child.stdin.end()
-    } catch {}
-    if ((await Promise.race([child.exited, Bun.sleep(3000).then(() => null)])) === null) child.kill()
+      if ((await Promise.race([child.exited, Bun.sleep(3000).then(() => null)])) === null) child.kill()
+    }
+    await fromChild.catch(() => {})
+    return first === 'client' ? 0 : 1
+  } finally {
+    rmSync(config, { force: true })
   }
-  await fromChild.catch(() => {})
-  devtools.stop(true)
-  return first === 'client' ? 0 : 1
 }

@@ -255,20 +255,31 @@ Not built in this step. On the server only.
 ### As built: the server side (after the section above)
 
 - **Where it lives.** `core/desktop.ts` (pure), `services/desktop.ts` (the desktops, in the board's
-  process), `server/routes/desktop.ts`, `services/browser-mcp.ts` (the wrapper),
+  process), `services/cdp-pipe.ts` and `entrypoints/cdp-pipe.ts` (Chrome's DevTools pipe and its
+  holder), `server/routes/desktop.ts`, `services/browser-mcp.ts` (the wrapper),
   `adapters/desktop-files.ts` (the install's part). Server mode only: on a PC the board makes no
   desktop, adds no route and serves no WebSocket.
-- **A desktop per session's pane**, on demand: a slot `n` is display `:100+n` and DevTools port
-  `9300+n` (the lowest no desktop uses, whose X lock and port are free; 32 at most). Xvnc (TigerVNC)
+- **A desktop per session's pane**, on demand: a slot `n` is display `:100+n` (the lowest no
+  desktop uses whose X lock is free, a lock whose server is dead cleared with its socket; 32 at
+  most). Xvnc (TigerVNC)
   with VNC on a Unix socket only (`-rfbunixpath`, 0600; `-rfbport -1`, or it also takes 5900 + the
   display on every address; `-SecurityTypes None`: the
   socket is `agent`'s alone and the board's login is in front of it) and X for a cookie of its own
   (`-auth`, an Xauthority file the board writes; `-nolisten tcp`). Google Chrome headed on it, its
-  window the whole screen (1440×900, no window manager), `--user-data-dir` and
-  `--remote-debugging-port` of its own. Both in sessions of their own (`setsid`), so a restart of
-  the board leaves them running; the next board takes them over from `desktops.json` (pids checked
-  against their command lines). Stopped when no session is awake in the pane for two refreshes in
-  a row (asleep or ended), a minute after its start at the earliest.
+  window the whole screen (1440×900, no window manager), `--user-data-dir` of its own and its
+  DevTools on a pipe (`--remote-debugging-pipe`, fds 3 and 4: no TCP port). Its holder
+  (`bun entrypoints/cdp-pipe.ts <socket> <chrome> …`) runs it with the pipe and, once Chrome
+  answers there, serves it on `sessions/<display>/cdp.sock` (0600 in the 0700 folder) to one client
+  at a time: its own ids on the pipe (an answer for a client gone never reaches the next), and
+  what a client set undone when it goes (auto-attach, which would hold every new page waiting for
+  a debugger; discovery; its sessions). Xvnc and the holder in sessions of their own (`setsid`), so
+  a restart of the board leaves them running (Chrome ends when its pipe closes, so the holder holds
+  it); each is in `desktops.json` from the moment it is spawned, and the next board takes over what
+  was up (pids checked against their command lines), ends what was still starting, and gives
+  control back to the agent. Stopped when no session is awake in the pane for 2 minutes on end
+  (asleep or ended: a restart's sleep and a refresh that misses the pane keep it), or at once when
+  another session is in the pane (`/clear`). A named profile's copy is made without holding up the
+  board, caches, service workers' folders and locks left out.
 - **Where things are**: the board's state folder, `desktop/`: `sessions/<display>/` (the sockets,
   the cookie, the logs, the session's own profile, a busy profile's copy: gone with the desktop),
   `profiles/<name>/` (named profiles, kept), `mcp/` (chrome-devtools-mcp), `desktops.json`. The
@@ -277,19 +288,27 @@ Not built in this step. On the server only.
 - **The wrapper** `board browser-mcp` (the MCP server `board-browser`, user scope, in every shown
   profile's `.claude.json`): its session is `HERDR_PANE_ID`, else its Claude's own environment. It
   runs chrome-devtools-mcp 1.11.0 (pinned, `--no-page-id-routing`, no usage statistics) with
-  `--browserUrl` at a DevTools address of its own on 127.0.0.1: the first connection there (the
-  first tool call) asks the board to start the desktop and answers with that Chrome's
-  `/json/version`, so chrome-devtools-mcp then talks to Chrome directly. Before each tool call it
-  asks the board who has the browser; while the owner has it the call waits (10 minutes, then "the
-  owner has the browser"). Its own tools: `browser_profile` and `browser_ask_owner`; the same as
-  `board browser profile [<name>]` and `board browser ask <text>`.
+  `--config <file>`: `wsEndpoint` the board's `GET /api/browser/cdp?pane=<pane>` (a WebSocket the
+  board bridges to the holder's socket, one CDP message a text frame) and `wsHeaders` the board's
+  local key, in a file of its own (`desktop/run/`, 0700; the file 0600, gone when it ends), never
+  on a command line, which every account reads. Before each tool call it asks the board who has
+  the browser; while the owner has it, or the board does not answer, the call waits (10 minutes,
+  then "the owner has the browser" or "the board does not answer"); a JSON-RPC batch with a call
+  in it waits as a whole. Then it asks the board to start the desktop, so what keeps it from
+  starting is the call's answer. Its own tools: `browser_profile` and `browser_ask_owner`; the same
+  as `board browser profile [<name>]` and `board browser ask <text>`. A profile switch is refused
+  while the owner has the browser.
 - **The interface** with the web page: the card's `desktop: { running, profile, control, asks }`;
   `GET /api/desktop/<key>/vnc?t=<file token>` (a WebSocket, raw RFB both ways, per-message
   deflate; the login, the token and the Origin; 404 without a desktop); `POST
-  /api/desktop/<key>/control` `{ to }` → `{ ok: true, control }`. The last view closing while the
-  owner has the browser hands it back. `asks` holds while the card still asks (`board browser ask`
-  writes the card's ask); handed back, both clear. The agent's calls (`/api/browser/start|call|
-  profile|ask`) take the board's local key on every listener, so none comes through the domain.
+  /api/desktop/<key>/control` `{ to }` → `{ ok: true, control }`, 409 for `owner` while no view is
+  connected (the page's Take control waits for its view too). A view's keys, mouse, clipboard and
+  resize reach Xvnc only while the owner has the browser: the board reads each viewer's RFB
+  messages and drops the others' (bytes it cannot read close the viewer). The last view closing
+  while the owner has the browser hands it back, and so does none being connected for 30 s.
+  `asks` holds while the card still asks what `board browser ask` wrote (its `askSince`); handed
+  back, that ask clears, a later `board ask` stays. The agent's calls (`/api/browser/start|call|
+  profile|ask|cdp`) take the board's local key on every listener, so none comes through the domain.
 - **The install**, as root: `tigervnc-standalone-server`, `fonts-noto-core`, `fonts-noto-cjk`,
   `fonts-noto-color-emoji`, `fonts-liberation`, and Google Chrome stable from Google's .deb on
   x86_64 (Debian's `chromium` on arm64 Debian; none on Ubuntu arm64, whose Chromium is a snap: a
@@ -297,10 +316,9 @@ Not built in this step. On the server only.
   `--remove-user`, as the user's Bun and herdr go only then. As `agent`: the MCP server in the
   profiles and chrome-devtools-mcp, by the install action in server mode (and the server mode's
   own step, which runs after it on a first install); Undo takes them out.
-- **Limits.** Chrome's DevTools port is on 127.0.0.1 without a key: another account on the server
-  reaches it (as anything of `agent`'s, one agent's browser is not a wall against another agent).
-  A profile switch restarts Chrome (open pages close). No window manager: a dialog opens where
-  Chrome puts it.
+- **Limits.** One agent's browser is not a wall against another agent of `agent`'s (each reads the
+  local key). A profile switch restarts Chrome (open pages close). No window manager: a dialog
+  opens where Chrome puts it.
 
 ## Testing
 

@@ -3,7 +3,7 @@
 // while the owner has it and let go when it comes back, answered after the hold's limit, and its
 // own tools through the board. And the session's pane, from herdr's variable.
 import { expect, test } from 'bun:test'
-import { createRelay, OWN_TOOLS, OWNER_HAS_IT, paneOf } from '../../src/services/browser-mcp.ts'
+import { createRelay, devtoolsMcp, OWN_TOOLS, OWNER_HAS_IT, paneOf } from '../../src/services/browser-mcp.ts'
 
 type Msg = Record<string, unknown>
 
@@ -159,7 +159,7 @@ test('a held call Claude cancels is dropped', async () => {
 
 test('its own tools: through the board, a profile only while the agent has the browser', async () => {
   const { relay, toChild, toClient, asked } = relayWith({
-    answers: { profile: { ok: true, port: 9300, copy: true, profile: 'github' }, ask: { ok: true, port: 9300 } },
+    answers: { profile: { ok: true, copy: true, profile: 'github' }, ask: { ok: true } },
   })
   relay.fromClient(call(1, 'browser_profile', { name: 'github' }))
   relay.fromClient(call(2, 'browser_ask_owner', { text: 'Sign in to GitHub' }))
@@ -186,4 +186,45 @@ test('its own tools: through the board, a profile only while the agent has the b
 test('the session’s pane: HERDR_PANE_ID, else none outside herdr', () => {
   expect(paneOf({ HERDR_PANE_ID: 'w0:p3' }, 1)).toBe('w0:p3')
   expect(paneOf({}, 999_999_999)).toBeNull()
+})
+
+test('a call passed on starts the browser first; one that cannot start is answered with why, never passed on', async () => {
+  const { relay, toChild, asked } = relayWith()
+  relay.fromClient(call(1, 'navigate_page', { url: 'https://example.com' }))
+  await relay.idle()
+  expect(asked.map(([op]) => op)).toEqual(['call', 'start'])
+  expect(toChild).toEqual([call(1, 'navigate_page', { url: 'https://example.com' })])
+  const none = relayWith({ answers: { start: { ok: false, error: 'no Xvnc on this server' } } })
+  none.relay.fromClient(call(2, 'take_screenshot'))
+  await none.relay.idle()
+  expect(none.toChild).toEqual([])
+  expect(none.toClient).toEqual([
+    {
+      jsonrpc: '2.0',
+      id: 2,
+      result: { content: [{ type: 'text', text: expect.stringContaining('no Xvnc on this server') }], isError: true },
+    },
+  ])
+})
+
+test('chrome-devtools-mcp to the board’s keyed DevTools route: the key in its config file, never on its command line', () => {
+  const key = 'k'.repeat(43)
+  const m = devtoolsMcp({
+    origin: 'http://127.0.0.1:12422',
+    pane: 'w0:p1 %',
+    key,
+    bin: '/m/cdm.js',
+    config: '/r/c.json',
+  })
+  expect(m.config).toEqual({
+    wsEndpoint: 'ws://127.0.0.1:12422/api/browser/cdp?pane=w0%3Ap1%20%25',
+    wsHeaders: JSON.stringify({ 'x-board-key': key }),
+  })
+  expect(m.argv.slice(1, 4)).toEqual(['/m/cdm.js', '--config', '/r/c.json'])
+  expect(m.argv).toContain('--no-page-id-routing')
+  expect(m.argv.some(a => a.includes(key) || a.startsWith('--browserUrl') || a.startsWith('--wsHeaders'))).toBe(false)
+  // no key (not on the server): none sent
+  expect(devtoolsMcp({ origin: 'http://127.0.0.1:1', pane: 'p', key: null, bin: 'b', config: 'c' }).config).toEqual({
+    wsEndpoint: 'ws://127.0.0.1:1/api/browser/cdp?pane=p',
+  })
 })

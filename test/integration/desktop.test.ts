@@ -5,9 +5,11 @@
 //
 // A session in herdr (a pane herdr is told runs Claude), the board's MCP wrapper run in it as
 // Claude runs it: its first tool call starts the session's desktop, a page opened and a screenshot
-// taken by a headed Chrome; the card says it runs; its VNC through the domain answers RFB's
-// greeting with a login and is refused without one, and listens on no TCP port; control to the
-// owner holds a tool call, back to the agent lets it go; the session ended, the desktop stops.
+// taken by a headed Chrome, its DevTools on a pipe (no TCP port; the board's route to them refused
+// without the key and through the domain); the card says it runs; its VNC through the domain
+// answers RFB's greeting with a login and is refused without one, and listens on no TCP port;
+// control to the owner is refused with no view open and taken with one, holds a tool call, back to
+// the agent lets it go; the session ended, the desktop stops (2 minutes on).
 //
 //   BOARD_SERVER_IT=1 bun test test/integration/desktop.test.ts --timeout 7200000
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
@@ -183,6 +185,29 @@ async function wsVia(l: Lane, s: TestServer, path: string, cookie: boolean): Pro
   )
   note(`ws ${cookie ? 'with' : 'without'} a login: ${r.stdout.slice(0, 600)}`)
   return r.stdout
+}
+
+/** A view of the desktop through the domain from the client, in the background for `seconds`: the handshake, then RFB's (a masked binary frame). */
+async function viewerVia(l: Lane, s: TestServer, path: string, seconds: number): Promise<void> {
+  const request = [
+    `GET ${path} HTTP/1.1`,
+    `Host: ${DOMAIN}`,
+    'Upgrade: websocket',
+    'Connection: Upgrade',
+    'Sec-WebSocket-Version: 13',
+    'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+    `Origin: ${ORIGIN}`,
+    `Cookie: ${COOKIE}`,
+    '',
+    '',
+  ]
+    .join('\\r\\n')
+    .replaceAll('%', '%%')
+  // RFB 3.8, security None, shared: 14 bytes in one frame, its mask all zeros
+  const rfb = '\\202\\216\\000\\000\\000\\000RFB 003.008\\n\\001\\001'
+  await l.clientBackground(
+    `(printf '${request}'; sleep 2; printf '${rfb}'; sleep ${seconds}) | timeout ${seconds + 10} openssl s_client -quiet -connect ${s.ip}:443 -servername ${DOMAIN} -CAfile /root.pem > /dev/null 2>&1`,
+  )
 }
 
 /** The MCP wrapper as Claude runs it in the session's pane: requests in, answers by id. */
@@ -412,10 +437,12 @@ describe.skipIf(!DOCKER)('each agent’s own browser on the board’s server (De
           expect(png.length).toBeGreaterThan(5000)
           const procs = (await s.sh('ps -u agent -o args=', { check: false })).stdout
           expect(procs).toMatch(/Xvnc :100 .*-rfbunixpath \S+vnc\.sock/)
-          expect(procs).toContain('--remote-debugging-port=9300')
+          expect(procs).toMatch(/cdp-pipe\.ts \S+cdp\.sock \S+chrome/)
+          expect(procs).toContain('--remote-debugging-pipe')
+          expect(procs).not.toContain('--remote-debugging-port')
           expect(procs).not.toContain('--headless')
           row.push(
-            `navigate + screenshot through the wrapper: a ${size?.width}×${size?.height} PNG, headed Chrome on :100`,
+            `navigate + screenshot through the wrapper: a ${size?.width}×${size?.height} PNG, headed Chrome on :100, DevTools on its pipe`,
           )
 
           // the card says so; VNC on no TCP port
@@ -432,7 +459,31 @@ describe.skipIf(!DOCKER)('each agent’s own browser on the board’s server (De
           )
           const tcp = (await s.sh('ss -ltnp', { check: false })).stdout
           expect(tcp).not.toContain('Xvnc')
-          row.push('the card: running, the agent has it; Xvnc on no TCP port')
+          expect(tcp).not.toContain('chrome')
+          row.push('the card: running, the agent has it; Xvnc and Chrome on no TCP port')
+
+          // Chrome's DevTools only through the board's keyed route: another account without the
+          // key is refused, the domain too; the wrapper's config file (with the key) is its own
+          const port =
+            (
+              await s.sh(`sed -n 's/.*"port": *\\([0-9]*\\).*/\\1/p' ${STATE}/config.json | head -1`, { check: false })
+            ).stdout.trim() || '12422'
+          const cdp = `/api/browser/cdp?pane=${encodeURIComponent(pane)}`
+          const upgrade =
+            "-H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ=='"
+          const keyless = await s.sh(
+            `runuser -u nobody -- curl -s -m 10 -o /dev/null -w '%{http_code}' ${upgrade} 'http://127.0.0.1:${port}${cdp}'`,
+            { check: false },
+          )
+          expect(keyless.stdout.trim()).toBe('403')
+          expect((await viaDomain(l, s, cdp)).code).toBe('403')
+          const run = (await s.sh(`stat -c '%a %U' ${STATE}/desktop/run ${STATE}/desktop/run/*.json`, { check: false }))
+            .stdout
+          expect(run).toMatch(/^700 agent\n600 agent/)
+          expect(procs).not.toContain('wsHeaders')
+          row.push(
+            `DevTools: 403 for another account without the key and through the domain; the key in a 0600 file only`,
+          )
 
           // VNC through the domain: RFB's greeting with the login, nothing without
           const token = (await board()).fsToken
@@ -445,35 +496,45 @@ describe.skipIf(!DOCKER)('each agent’s own browser on the board’s server (De
           expect(refused).not.toContain('RFB')
           row.push('VNC through the domain: RFB greeting with a login, 401 without')
 
-          // control to the owner holds a call; back to the agent lets it go
-          const owner = await viaDomain(l, s, `/api/desktop/${encodeURIComponent(key)}/control`, {
-            post: { to: 'owner' },
-          })
-          expect(owner.code).toBe('200')
+          // control goes with a view: refused with none; with one open, the owner's, and a call is held
+          const control = `/api/desktop/${encodeURIComponent(key)}/control`
+          const none = await viaDomain(l, s, control, { post: { to: 'owner' } })
+          expect(none.code, none.body).toBe('409')
+          await viewerVia(l, s, path, 90)
+          let owner = { code: '', body: '' }
+          await until(
+            'control to the owner with a view open',
+            async () => {
+              owner = await viaDomain(l, s, control, { post: { to: 'owner' } })
+              return owner.code === '200'
+            },
+            MIN,
+            1000,
+          )
           expect(JSON.parse(owner.body)).toEqual({ ok: true, control: 'owner' })
           const held = w.send('tools/call', { name: 'take_screenshot', arguments: {} })
           await Bun.sleep(6000)
           expect(w.has(held)).toBe(false)
-          const back = await viaDomain(l, s, `/api/desktop/${encodeURIComponent(key)}/control`, {
-            post: { to: 'agent' },
-          })
+          const back = await viaDomain(l, s, control, { post: { to: 'agent' } })
           expect(JSON.parse(back.body)).toEqual({ ok: true, control: 'agent' })
           const released = await w.answer(held, MIN)
           expect((released.result as { isError?: boolean }).isError).toBeFalsy()
-          row.push('control to the owner held a call 6 s; back to the agent let it go')
+          row.push('control: 409 with no view; with one, the owner held a call 6 s; back to the agent let it go')
         } finally {
           await w.close()
         }
 
-        // the session ends: its pane closes, the desktop stops (after its start's grace)
+        // the session ends: its pane closes, the desktop stops (2 minutes on)
         await asAgent(s, `herdr pane close ${pane}`)
         await until(
           'the desktop stopped',
           async () =>
             (
-              await s.sh('pgrep -u agent -x Xvnc; pgrep -u agent -f remote-debugging-port', { check: false })
+              await s.sh('pgrep -u agent -x Xvnc; pgrep -u agent -f cdp-pipe; pgrep -u agent -f remote-debugging', {
+                check: false,
+              })
             ).stdout.trim() === '',
-          3 * MIN,
+          5 * MIN,
           2000,
         )
         expect((await s.sh(`ls ${STATE}/desktop/sessions`, { check: false })).stdout.trim()).toBe('')
