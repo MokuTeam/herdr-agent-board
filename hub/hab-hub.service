@@ -1,0 +1,18 @@
+# systemd user unit for the team hub (docs/team-quickstart.md). Copy it to ~/.config/systemd/user/,
+# edit the two paths and the tailnet address in ExecStart, then:
+#   systemctl --user daemon-reload && systemctl --user enable --now hab-hub
+#   loginctl enable-linger "$USER"      # keeps it running when you are logged out
+[Unit]
+Description=agent-board team hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# EDIT: the path to bun, the path to this repository, and the address from `tailscale ip -4`.
+# The state directory (hub.db, hub.sock) is made 0700 by the hub.
+ExecStart=/home/USER/.bun/bin/bun /home/USER/herdr-agent-board/hub/src/main.ts --listen 100.x.y.z:7443 --dir %h/.local/state/hab-hub
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

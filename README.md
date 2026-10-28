@@ -1795,6 +1795,9 @@ the board that received it. Nothing else crosses: no sessions, no files, no herd
 comes in is shown in Settings → Team… and kept in a thread; it never starts, types into or
 launches anything.
 
+Step by step, for the hub's admin and for each member, with what to do when it does not work:
+[docs/team-quickstart.md](docs/team-quickstart.md) (English, then Russian).
+
 **The `team` key.** `"team": { "hub": "ws://host:7443", "name": "Ana" }`: the hub's address
 (`ws://` or `wss://`) and the name the others see (up to 40 characters). Without it, or with
 `false`, the board opens no connection, keeps no team file, and the page has no Team entry. It is
