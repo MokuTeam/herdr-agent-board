@@ -4,7 +4,8 @@
 //   GET  /api/desktop/<card key>/vnc?t=<the page's file token>   a WebSocket: the session's VNC,
 //        raw RFB bytes both ways (binary frames); 404 while it has no desktop running. A WebSocket
 //        sends no X-Board: the per-run token stands in for it, as for the terminal's stream
-//   POST /api/desktop/<card key>/control   { "to": "owner" | "agent" } → { ok: true, control }
+//   POST /api/desktop/<card key>/control   { "to": "owner" | "agent" } → { ok: true, control }; 409 for
+//        "owner" while no view of it is connected (control goes with a view, which hands it back)
 //
 // for the owner's page, through the board's login (the domain's listener) with its Origin rules,
 // and on 127.0.0.1 with the board's local key (app.ts asks it of every request there); and for the
@@ -61,8 +62,9 @@ export function desktopRoutes(app: DesktopApp): Route[] {
         if (refused) return refused
         const to = controlOf(await ctx.rawBody())
         if (!to) return json(400, { ok: false, error: 'to: owner or agent' })
-        const control = item ? app.desktops.setControl(item, to) : null
-        return control ? json(200, { ok: true, control }) : json(404, { ok: false, error: 'no desktop' })
+        const r = item ? app.desktops.setControl(item, to) : null
+        if (!r) return json(404, { ok: false, error: 'no desktop' })
+        return r.ok ? json(200, r) : json(r.status, { ok: false, error: r.error })
       },
     },
     {

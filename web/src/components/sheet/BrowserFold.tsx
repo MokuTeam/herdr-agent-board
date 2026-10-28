@@ -29,9 +29,14 @@ export function BrowserFold({ item, open, onOpen }: BrowserFoldProps) {
   const desktop = item.desktop
   const running = !!desktop?.running
   const on = open && running
-  // The board's answer to a hand-over holds until the payload says otherwise.
+  // The board's answer to a hand-over holds until the payload moves on from what it said before;
+  // then the payload's word is the board's (it may have handed it back since: a view gone, a restart).
   const [said, setSaid] = useState<{ from: DesktopControl; to: DesktopControl } | null>(null)
-  const control = desktop && said?.from === desktop.control ? said.to : (desktop?.control ?? 'agent')
+  const boardSays = desktop?.control ?? 'agent'
+  const control = said?.from === boardSays ? said.to : boardSays
+  useEffect(() => {
+    if (said && said.from !== boardSays) setSaid(null)
+  }, [said, boardSays])
   const owner = control === 'owner'
   const [asking, setAsking] = useState(false)
   const [full, setFull] = useState(false)
@@ -96,7 +101,7 @@ export function BrowserFold({ item, open, onOpen }: BrowserFoldProps) {
         className="button"
         data-desk="control"
         title={owner ? undefined : t('desk.takeHint')}
-        disabled={asking || !canMutate}
+        disabled={asking || !canMutate || (!owner && view.state !== 'live')}
         onClick={() => void hand(owner ? 'agent' : 'owner', desktop.control)}
       >
         {t(owner ? 'desk.give' : 'desk.take')}

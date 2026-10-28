@@ -208,26 +208,31 @@ test('switching profiles restarts Chrome on the same display; none is the sessio
 })
 
 test('ask: the card under "needs you", the desktop up, asks while the card asks; handed back clears both', async () => {
-  const { d, state, cards } = setup()
+  const { d, state, cards, root } = setup()
   expect(await d.ask('w0:p9', 'Sign in')).toEqual({ ok: false, error: 'this session is not on the board' })
   expect((await d.ask('w0:p1', 'Sign in to GitHub')).ok).toBe(true)
   expect(cards).toEqual([['s1', { ask: 'Sign in to GitHub', askSince: expect.any(Number), by: 'agent' }]])
-  const asking = item('s1', 'w0:p1', { question: 'Sign in to GitHub' })
+  const asking = item('s1', 'w0:p1', { question: 'Sign in to GitHub', askSince: cards[0]?.[1].askSince as number })
   expect(d.view(asking)).toEqual({ running: true, profile: null, control: 'agent', asks: true })
-  expect(d.setControl(asking, 'owner')).toBe('owner')
+  const vnc = await vncServer(root)
+  const ws = await vnc.open(d, 'w0:p1')
+  expect(d.setControl(asking, 'owner')).toEqual({ ok: true, control: 'owner' })
   expect(d.control('w0:p1')).toBe('owner')
   expect(d.view(asking)?.asks).toBe(true)
-  expect(d.setControl(asking, 'agent')).toBe('agent')
+  expect(d.setControl(asking, 'agent')).toEqual({ ok: true, control: 'agent' })
   expect(d.view(asking)?.asks).toBe(false)
   expect(cards.at(-1)).toEqual(['s1', { ask: '', askSince: '' }])
+  d.websocket.close?.(ws, 1000, '')
+  vnc.close()
   // the agent went on (the card asks no more): asks goes too, and stays gone
   await d.ask('w0:p1', 'Solve the captcha')
   state.items = [item('s1', 'w0:p1'), item('s2', 'w0:p2')]
   d.observe(state.items)
   expect(d.view(asking)?.asks).toBe(false)
   // no desktop, or asleep: no control to take
-  expect(d.setControl(item('s2', 'w0:p2'), 'owner')).toBeNull()
-  expect(d.setControl(item('s1', 'w0:p1', { sleeping: true }), 'owner')).toBeNull()
+  const none = { ok: false, status: 404, error: 'no desktop' } as const
+  expect(d.setControl(item('s2', 'w0:p2'), 'owner')).toEqual(none)
+  expect(d.setControl(item('s1', 'w0:p1', { sleeping: true }), 'owner')).toEqual(none)
   expect(d.control('w0:p2')).toBe('agent')
 })
 
@@ -251,25 +256,156 @@ test('the next board takes over what still runs; what does not is cleared away',
 })
 
 test('the owner’s last view closing hands the browser back to the agent; one of two does not', async () => {
-  const { d, state } = setup()
+  const { d, state, root } = setup()
   await d.ensure('w0:p1')
   const asking = state.items[0] as Item
+  expect(d.vncOf(asking)?.pane).toBe('w0:p1')
+  const vnc = await vncServer(root)
+  const a = await vnc.open(d, 'w0:p1')
+  const b = await vnc.open(d, 'w0:p1')
   d.setControl(asking, 'owner')
-  const vnc = d.vncOf(asking)
-  expect(vnc?.pane).toBe('w0:p1')
-  const view = () =>
-    ({
-      data: { pane: 'w0:p1', socket: join(tmpdir(), 'no-such-vnc.sock') },
-      send: () => 0,
-      close: () => {},
-      getBufferedAmount: () => 0,
-    }) as unknown as ServerWebSocket<VncData>
-  const a = view()
-  const b = view()
-  d.websocket.open?.(a)
-  d.websocket.open?.(b)
   d.websocket.close?.(a, 1000, '')
   expect(d.control('w0:p1')).toBe('owner')
   d.websocket.close?.(b, 1000, '')
   expect(d.control('w0:p1')).toBe('agent')
+  vnc.close()
+})
+
+/** A viewer's WebSocket as Bun hands it to the handler, on `socket`; the code it was closed with. */
+function viewer(pane: string, socket = join(tmpdir(), 'no-such-vnc.sock')) {
+  const ws = {
+    data: { pane, socket },
+    closed: 0,
+    send: () => 0,
+    close(code: number) {
+      ws.closed = code
+    },
+    getBufferedAmount: () => 0,
+  }
+  return ws as typeof ws & ServerWebSocket<VncData>
+}
+
+/** A VNC server of the test's own (a named pipe on Windows): the bytes it got, its connections. */
+async function vncServer(root: string) {
+  const { createServer } = await import('node:net')
+  const path =
+    process.platform === 'win32'
+      ? String.raw`\\.\pipe\desk-` + Math.random().toString(36).slice(2)
+      : join(root, 'v.sock')
+  const got: number[] = []
+  const conns: import('node:net').Socket[] = []
+  const server = createServer(c => {
+    conns.push(c)
+    c.on('data', (b: Buffer) => got.push(...b))
+  })
+  await new Promise<void>(done => server.listen(path, done))
+  /** A viewer on it, opened and connected. */
+  const open = async (d: ReturnType<typeof createDesktops>, pane: string) => {
+    const ws = viewer(pane, path)
+    const before = conns.length
+    d.websocket.open?.(ws)
+    for (let i = 0; i < 200 && conns.length === before; i++) await Bun.sleep(5)
+    await Bun.sleep(20)
+    return ws
+  }
+  return { path, got, conns, open, close: () => server.close() }
+}
+
+test('a viewer’s keys, mouse and clipboard reach the display only while the owner has the browser', async () => {
+  const { d, state, root } = setup()
+  await d.ensure('w0:p1')
+  const vnc = await vncServer(root)
+  try {
+    const ws = await vnc.open(d, 'w0:p1')
+    const hello = [...new TextEncoder().encode('RFB 003.008\n'), 1, 1]
+    const request = [3, 1, 0, 0, 0, 0, 0, 4, 0, 2]
+    const key = [4, 1, 0, 0, 0, 0, 0, 0x61]
+    const pointer = [5, 1, 0, 1, 0, 1]
+    d.websocket.message?.(ws, Buffer.from([...hello, ...key, ...request, ...pointer]))
+    expect(d.setControl(state.items[0] as Item, 'owner')).toEqual({ ok: true, control: 'owner' })
+    d.websocket.message?.(ws, Buffer.from([...key, ...pointer]))
+    d.setControl(state.items[0] as Item, 'agent')
+    d.websocket.message?.(ws, Buffer.from([...key, ...request]))
+    const want = [...hello, ...request, ...key, ...pointer, ...request]
+    for (let i = 0; i < 100 && vnc.got.length < want.length; i++) await Bun.sleep(10)
+    await Bun.sleep(30)
+    expect(vnc.got).toEqual(want)
+    // bytes it cannot read on from: the viewer is closed
+    d.websocket.message?.(ws, Buffer.from([99]))
+    expect(ws.closed).toBe(1008)
+    d.websocket.close?.(ws, 1000, '')
+  } finally {
+    vnc.close()
+  }
+})
+
+test('control: the owner takes it only with a view connected; the next board gives it back', async () => {
+  const s = setup()
+  const one = s.state.items[0] as Item
+  await s.d.ensure('w0:p1')
+  expect(s.d.setControl(one, 'owner')).toEqual({ ok: false, status: 409, error: expect.stringContaining('view') })
+  // a view whose display does not answer is none
+  s.d.websocket.open?.(viewer('w0:p1'))
+  await Bun.sleep(30)
+  expect(s.d.setControl(one, 'owner').ok).toBe(false)
+  expect(s.d.control('w0:p1')).toBe('agent')
+  const vnc = await vncServer(s.root)
+  try {
+    const ws = await vnc.open(s.d, 'w0:p1')
+    expect(s.d.setControl(one, 'owner')).toEqual({ ok: true, control: 'owner' })
+    // the next board: no view of its own yet, so the agent has it again
+    expect(s.make().control('w0:p1')).toBe('agent')
+    s.d.websocket.close?.(ws, 1000, '')
+  } finally {
+    vnc.close()
+  }
+})
+
+test('the owner has it and no view is connected any more: the next refreshes give it back after 30 s', async () => {
+  const s = setup()
+  const one = s.state.items[0] as Item
+  await s.d.ensure('w0:p1')
+  const vnc = await vncServer(s.root)
+  try {
+    await vnc.open(s.d, 'w0:p1')
+    s.d.setControl(one, 'owner')
+    // its display connection ends, and no close of the view comes
+    for (const c of vnc.conns) c.destroy()
+    await Bun.sleep(50)
+    s.d.observe(s.state.items)
+    s.tick(20_000)
+    s.d.observe(s.state.items)
+    expect(s.d.control('w0:p1')).toBe('owner')
+    s.tick(11_000)
+    s.d.observe(s.state.items)
+    expect(s.d.control('w0:p1')).toBe('agent')
+  } finally {
+    vnc.close()
+  }
+})
+
+test('given back: only the ask the browser ask put on the card is cleared', async () => {
+  const { d, cards, root } = setup()
+  const vnc = await vncServer(root)
+  try {
+    await d.ask('w0:p1', 'Sign in to GitHub')
+    await vnc.open(d, 'w0:p1')
+    // the agent asked something else since (board ask): that one stays
+    const other = item('s1', 'w0:p1', { question: 'Which branch?', askSince: 5 })
+    expect(d.setControl(other, 'owner').ok).toBe(true)
+    const before = cards.length
+    d.setControl(other, 'agent')
+    expect(cards.length).toBe(before)
+    expect(d.view(other)?.asks).toBe(false)
+    // the browser's own ask: cleared
+    await d.ask('w0:p1', 'Solve the captcha')
+    const since = cards.at(-1)?.[1].askSince as number
+    const mine = item('s1', 'w0:p1', { question: 'Solve the captcha', askSince: since })
+    expect(d.view(mine)?.asks).toBe(true)
+    d.setControl(mine, 'owner')
+    d.setControl(mine, 'agent')
+    expect(cards.at(-1)).toEqual(['s1', { ask: '', askSince: '' }])
+  } finally {
+    vnc.close()
+  }
 })

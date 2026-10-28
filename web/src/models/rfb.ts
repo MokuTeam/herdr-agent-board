@@ -40,6 +40,8 @@ const RAW = 0
 const COPY_RECT = 1
 const HEXTILE = 5
 const DESKTOP_SIZE = -223
+/** A display larger than this on a side is not one Xvnc makes: the client stops instead of making a canvas that big. */
+const MAX_SIDE = 8192
 
 /** The bytes that came and were not read yet, in the pieces they came in. */
 class Pending {
@@ -230,8 +232,11 @@ export class RfbClient {
     if (this.pending.length < 24) return false
     const n = this.pending.u32(20)
     if (this.pending.length < 24 + n) return false
-    this.width = this.pending.u16(0)
-    this.height = this.pending.u16(2)
+    const width = this.pending.u16(0)
+    const height = this.pending.u16(2)
+    if (width > MAX_SIDE || height > MAX_SIDE) return this.fail('data', `size ${width}x${height}`)
+    this.width = width
+    this.height = height
     const name = text(this.pending.take(24 + n).subarray(24))
     this.screen.size(this.width, this.height)
     // 32 bits, depth 24, little-endian, true colour, 255 each; red at 0, green 8, blue 16: R G B spare.
@@ -312,9 +317,11 @@ export class RfbClient {
         this.step = () => this.copyRect(x, y, w, h)
         return true
       case HEXTILE:
-        this.step = this.hextile(x, y, w, h)
+        // an empty one has no tiles
+        this.step = w > 0 && h > 0 ? this.hextile(x, y, w, h) : () => this.rect()
         return true
       case DESKTOP_SIZE:
+        if (w > MAX_SIDE || h > MAX_SIDE) return this.fail('data', `size ${w}x${h}`)
         this.width = w
         this.height = h
         this.screen.size(w, h)
@@ -337,7 +344,7 @@ export class RfbClient {
     const sx = this.pending.u16(0)
     const sy = this.pending.u16(2)
     this.pending.skip(4)
-    this.screen.copy(sx, sy, x, y, w, h)
+    if (w > 0 && h > 0) this.screen.copy(sx, sy, x, y, w, h)
     this.step = () => this.rect()
     return true
   }

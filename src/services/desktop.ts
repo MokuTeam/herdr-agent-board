@@ -23,6 +23,7 @@ import {
   chromeArgs,
   desktopView,
   pickSlot,
+  rfbInputFilter,
   slotDisplay,
   slotPort,
   xauthority,
@@ -122,6 +123,8 @@ interface Desktop {
   copy: boolean
   control: Control
   asks: boolean
+  /** When the browser ask put its ask on the card (the card's askSince): handing back clears that ask only. */
+  askSince: number | null
   xvnc: number | null
   chrome: number | null
   startedAt: number
@@ -131,7 +134,12 @@ interface Desktop {
   missing: number
   /** It is being stopped: an exit now is not a crash. */
   stopping: boolean
+  /** Since when the owner has the browser with no view connected (0: a view is, or the agent has it). */
+  unviewedSince: number
 }
+
+/** What a hand-over came to: who has the browser now, or why not (404: no desktop; 409: no view to take it in). */
+export type ControlAnswer = { ok: true; control: Control } | { ok: false; status: 404 | 409; error: string }
 
 /** What a desktop's VNC WebSocket carries (routes/desktop.ts). */
 export interface VncData {
@@ -171,8 +179,8 @@ export interface Desktops {
   ask(pane: string, text: string): Promise<Started>
   /** Who has the browser of the session in `pane` (the wrapper asks before each call). */
   control(pane: string): Control
-  /** The owner takes the browser or hands it back; null: the session has no desktop. */
-  setControl(item: Item, to: Control): Control | null
+  /** The owner takes the browser (only with a view of it connected) or hands it back. */
+  setControl(item: Item, to: Control): ControlAnswer
   /** The VNC socket of the session's running desktop, or null. */
   vncOf(item: Item): { pane: string; socket: string } | null
   stop(pane: string, why: string): Promise<void>
@@ -182,6 +190,8 @@ export interface Desktops {
 
 /** A session asleep, ended or not yet on the board for this long after its desktop started: it stops. */
 const GRACE_MS = 60_000
+/** The owner has the browser and no view of it is connected for this long: the agent has it again. */
+const UNVIEWED_MS = 30_000
 /** Viewers' bytes queued over this pause the VNC socket until they drain. */
 const HIGH_WATER = 4 << 20
 /** Files Chrome holds a profile with: never copied. Caches neither: a copy is for one session. */
@@ -209,7 +219,13 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   const viewers = new Map<string, Set<ServerWebSocket<VncData>>>()
   /** Slots picked for a start that is not in the list yet. */
   const picking = new Set<number>()
-  const conns = new WeakMap<ServerWebSocket<VncData>, { sock: Socket; unwatch: () => void }>()
+  /** Each viewer's VNC connection (`up` once connected), and what of its bytes go on (core/desktop.ts rfbInputFilter). */
+  const conns = new WeakMap<
+    ServerWebSocket<VncData>,
+    { sock: Socket; unwatch: () => void; up: boolean; filter: ReturnType<typeof rfbInputFilter> }
+  >()
+  /** Whether a view of the pane's desktop is connected to its display. */
+  const viewed = (pane: string): boolean => [...(viewers.get(pane) ?? [])].some(ws => conns.get(ws)?.up)
 
   /** One thing at a time per pane, and slots picked one at a time. */
   const chains = new Map<string, Promise<unknown>>()
@@ -226,7 +242,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   function save(): void {
     try {
       mkdirSync(o.root, { recursive: true, mode: 0o700 })
-      const list = [...desktops.values()].map(({ running, missing, stopping, ...d }) => d)
+      const list = [...desktops.values()].map(({ running, missing, stopping, unviewedSince, ...d }) => d)
       writeFileSync(record, `${JSON.stringify(list, null, 1)}\n`, { mode: 0o600 })
     } catch (err) {
       o.log(`desktop: ${messageOf(err)}`)
@@ -259,12 +275,22 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   }
 
   // A board before this one left desktops running: taken over when they are still the programs it
-  // started, else what is left of them ended.
+  // started, else what is left of them ended. The agent has each again: no view of this board's
+  // is open yet.
   try {
     const list: unknown = JSON.parse(readFileSync(record, 'utf8'))
     for (const r of Array.isArray(list) ? (list as Desktop[]) : []) {
       if (typeof r?.pane !== 'string' || typeof r.dir !== 'string' || !r.dir.startsWith(o.root)) continue
-      const d: Desktop = { ...r, running: false, missing: 0, stopping: false, startedAt: now() }
+      const d: Desktop = {
+        ...r,
+        askSince: typeof r.askSince === 'number' ? r.askSince : null,
+        control: 'agent',
+        running: false,
+        missing: 0,
+        stopping: false,
+        unviewedSince: 0,
+        startedAt: now(),
+      }
       if (ours(d.xvnc, xvncMark(d))) {
         d.chrome = ours(d.chrome, chromeMark(d)) ? d.chrome : null
         d.running = d.chrome !== null
@@ -363,12 +389,14 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       copy: false,
       control: 'agent',
       asks: false,
+      askSince: null,
       xvnc: null,
       chrome: null,
       startedAt: now(),
       running: false,
       missing: 0,
       stopping: false,
+      unviewedSince: 0,
     }
     desktops.set(pane, d)
     const auth = join(dir, 'Xauthority')
@@ -461,7 +489,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     view(item) {
       const d = item.pane ? desktops.get(item.pane) : undefined
       if (!d || item.sleeping) return undefined
-      return desktopView(d, !!item.question)
+      return desktopView(d, d.askSince !== null && item.askSince === d.askSince)
     },
 
     observe(items) {
@@ -471,8 +499,8 @@ export function createDesktops(o: DesktopsOptions): Desktops {
         if (item) {
           d.missing = 0
           d.key = item.key
-          // the card asks no more: the agent went on, or the user answered
-          if (d.asks && !item.question) {
+          // the card asks no more, or asks something else: the agent went on, or the user answered
+          if (d.asks && item.askSince !== d.askSince) {
             d.asks = false
             changed = true
           }
@@ -480,6 +508,16 @@ export function createDesktops(o: DesktopsOptions): Desktops {
           const asleep = items.some(i => i.pane === d.pane && i.sleeping)
           void stop(d.pane, asleep ? 'the session sleeps' : 'the session ended')
         }
+        // the owner has it and no view is connected (its close never came): back to the agent a while later
+        if (d.control === 'owner' && !viewed(d.pane)) {
+          d.unviewedSince ||= now()
+          if (now() - d.unviewedSince >= UNVIEWED_MS) {
+            d.control = 'agent'
+            d.unviewedSince = 0
+            o.log(`desktop :${d.display} for ${d.key || d.pane}: back to the agent (no view of the owner's)`)
+            changed = true
+          }
+        } else d.unviewedSince = 0
         if (d.chrome !== null && !d.stopping && !sys.alive(d.chrome)) {
           d.chrome = null
           d.running = false
@@ -518,10 +556,12 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       if (!item) return { ok: false, error: 'this session is not on the board' }
       const r = await serial(pane, () => ensureNow(pane))
       if (!r.ok) return r
-      o.writeCard(item.key, { ask: text, askSince: now(), by: 'agent' })
+      const since = now()
+      o.writeCard(item.key, { ask: text, askSince: since, by: 'agent' })
       const d = desktops.get(pane)
       if (d) {
         d.asks = true
+        d.askSince = since
         save()
       }
       o.onChange()
@@ -532,18 +572,22 @@ export function createDesktops(o: DesktopsOptions): Desktops {
 
     setControl(item, to) {
       const d = item.pane ? desktops.get(item.pane) : undefined
-      if (!d || item.sleeping) return null
-      if (d.control === to) return to
+      if (!d || item.sleeping) return { ok: false, status: 404, error: 'no desktop' }
+      if (d.control === to) return { ok: true, control: to }
+      // taken only where it is seen: a view of it connected, which hands it back when it closes
+      if (to === 'owner' && !viewed(d.pane))
+        return { ok: false, status: 409, error: 'open the browser’s view first: control goes with a view of it' }
       d.control = to
-      // handed back: what the agent asked for is done
+      d.unviewedSince = 0
+      // handed back: what the agent asked for is done (its own ask only: a later `board ask` stays)
       if (to === 'agent' && d.asks) {
         d.asks = false
-        if (item.question) o.writeCard(item.key, { ask: '', askSince: '' })
+        if (d.askSince !== null && item.askSince === d.askSince) o.writeCard(item.key, { ask: '', askSince: '' })
       }
       save()
       o.log(`desktop :${d.display} for ${item.key}: ${to === 'owner' ? 'the owner has it' : 'back to the agent'}`)
       o.onChange()
-      return to
+      return { ok: true, control: to }
     },
 
     vncOf(item) {
@@ -563,20 +607,34 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       perMessageDeflate: true,
       open(ws) {
         const sock = createConnection({ path: ws.data.socket })
+        sock.on('connect', () => {
+          const c = conns.get(ws)
+          if (c) c.up = true
+        })
         sock.on('data', chunk => {
           ws.send(chunk)
           if (ws.getBufferedAmount() > HIGH_WATER) sock.pause()
         })
         sock.on('error', () => ws.close(1011, 'vnc'))
-        sock.on('close', () => ws.close(1000, 'vnc'))
+        sock.on('close', () => {
+          const c = conns.get(ws)
+          if (c) c.up = false
+          ws.close(1000, 'vnc')
+        })
         const unwatch = ws.data.watch?.(() => ws.close(4001, 'login')) ?? (() => {})
-        conns.set(ws, { sock, unwatch })
+        conns.set(ws, { sock, unwatch, up: false, filter: rfbInputFilter() })
         const set = viewers.get(ws.data.pane) ?? new Set()
         set.add(ws)
         viewers.set(ws.data.pane, set)
       },
+      // keys, the mouse and the clipboard reach the display only while the owner has the browser
       message(ws, msg) {
-        conns.get(ws)?.sock.write(typeof msg === 'string' ? Buffer.from(msg) : msg)
+        const c = conns.get(ws)
+        if (!c) return
+        const bytes = typeof msg === 'string' ? Buffer.from(msg) : msg
+        const out = c.filter(bytes, desktops.get(ws.data.pane)?.control === 'owner')
+        if (out === null) return ws.close(1008, 'rfb')
+        if (out.length) c.sock.write(out)
       },
       drain(ws) {
         conns.get(ws)?.sock.resume()

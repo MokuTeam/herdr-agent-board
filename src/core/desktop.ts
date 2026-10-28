@@ -81,6 +81,111 @@ export function controlOf(body: unknown): Control | null {
   return to === 'owner' || to === 'agent' ? to : null
 }
 
+/** A viewer's clipboard text longer than this closes it (no viewer of the board's sends one). */
+const MAX_CUT = 1 << 20
+
+/**
+ * What a viewer sends a desktop's VNC (RFB, client to server), cut into its messages: the bytes
+ * that go on. The handshake (the version, the security type, ClientInit) and what only asks for
+ * the picture (its pixel format, encodings, updates, continuous updates, fences) always go on;
+ * what acts on the display (a key, the mouse, the clipboard, its size, xvp) only while `input`
+ * (the owner has the browser): the server never sees a watcher's. Null: bytes it cannot read on
+ * from (another protocol, a security type other than None, a message it does not know), and the
+ * viewer is closed. One per viewer: a message cut across WebSocket frames waits for its rest.
+ */
+export function rfbInputFilter(): (bytes: Uint8Array, input: boolean) => Uint8Array | null {
+  let buf = new Uint8Array(0)
+  let step: 'version' | 'security' | 'init' | 'messages' = 'version'
+  let failed = false
+  const u16 = (at: number): number => ((buf[at] ?? 0) << 8) | (buf[at + 1] ?? 0)
+  const s32 = (at: number): number =>
+    ((buf[at] ?? 0) << 24) | ((buf[at + 1] ?? 0) << 16) | ((buf[at + 2] ?? 0) << 8) | (buf[at + 3] ?? 0)
+  /** The length of the message at the start of `buf` and whether it acts on the display; 0: not all of it here yet; null: unknown. */
+  function message(): { n: number; acts: boolean } | null {
+    const have = buf.length
+    const need = (n: number, acts = false) => ({ n: have >= n ? n : 0, acts })
+    switch (buf[0]) {
+      case 0: // SetPixelFormat
+        return need(20)
+      case 2: // SetEncodings
+        return have < 4 ? { n: 0, acts: false } : need(4 + 4 * u16(2))
+      case 3: // FramebufferUpdateRequest
+        return need(10)
+      case 4: // KeyEvent
+        return need(8, true)
+      case 5: // PointerEvent
+        return need(6, true)
+      case 6: {
+        // ClientCutText (a negative length: the extended clipboard's)
+        if (have < 8) return { n: 0, acts: true }
+        const len = Math.abs(s32(4))
+        return len > MAX_CUT ? null : need(8 + len, true)
+      }
+      case 150: // EnableContinuousUpdates
+        return need(10)
+      case 248: // ClientFence
+        return have < 9 ? { n: 0, acts: false } : need(9 + (buf[8] ?? 0))
+      case 250: // xvp
+        return need(4, true)
+      case 251: // SetDesktopSize
+        return have < 8 ? { n: 0, acts: true } : need(8 + 16 * (buf[6] ?? 0), true)
+      default:
+        return null
+    }
+  }
+  const fail = (): null => {
+    failed = true
+    return null
+  }
+  return (bytes, input) => {
+    if (failed) return null
+    const joined = new Uint8Array(buf.length + bytes.length)
+    joined.set(buf)
+    joined.set(bytes, buf.length)
+    buf = joined
+    const out: Uint8Array[] = []
+    const take = (n: number, keep: boolean) => {
+      if (keep) out.push(buf.subarray(0, n))
+      buf = buf.subarray(n)
+    }
+    for (;;) {
+      if (step === 'version') {
+        if (buf.length < 12) break
+        const m = /^RFB 003\.(\d{3})\n$/.exec(new TextDecoder().decode(buf.subarray(0, 12)))
+        if (!m) return fail()
+        step = Number(m[1]) >= 7 ? 'security' : 'init'
+        take(12, true)
+      } else if (step === 'security') {
+        if (buf.length < 1) break
+        // None: nothing more of the viewer's before ClientInit
+        if (buf[0] !== 1) return fail()
+        step = 'init'
+        take(1, true)
+      } else if (step === 'init') {
+        if (buf.length < 1) break
+        step = 'messages'
+        take(1, true)
+      } else {
+        if (buf.length < 1) break
+        const m = message()
+        if (!m) return fail()
+        if (m.n === 0) break
+        take(m.n, !m.acts || input)
+      }
+    }
+    // what is kept waits in a copy of its own: the frame's buffer is the WebSocket's
+    buf = buf.slice()
+    const size = out.reduce((n, o) => n + o.length, 0)
+    const all = new Uint8Array(size)
+    let at = 0
+    for (const o of out) {
+      all.set(o, at)
+      at += o.length
+    }
+    return all
+  }
+}
+
 /** What a session's desktop is, for the card (core/types.ts ItemDesktop). */
 export interface DesktopFacts {
   running: boolean

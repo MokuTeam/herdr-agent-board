@@ -184,6 +184,23 @@ describe('pictures', () => {
     m.client.receive(bytes(99))
     expect(m.failures).toEqual([{ code: 'data', detail: 'message 99' }])
   })
+  test('an empty rectangle draws nothing and reads on; a display past 8192 on a side stops it', () => {
+    const w = connected()
+    w.client.receive(bytes(update(3), rect(0, 0, 0, 16, 5), rect(0, 0, 16, 0, 0), rect(1, 1, 0, 2, 1), u16(0), u16(0)))
+    expect(w.drawn).toEqual([])
+    expect(w.client.state).toBe('live')
+    expect(w.sent).toHaveLength(1)
+    const big = connected()
+    big.client.receive(bytes(update(1), rect(0, 0, 0xffff, 0xffff, -223)))
+    expect(big.drawn).toEqual([])
+    expect(big.failures).toEqual([{ code: 'data', detail: 'size 65535x65535' }])
+    const init = world()
+    init.client.receive(ascii('RFB 003.008\n'))
+    init.client.receive(bytes(1, 1))
+    init.client.receive(bytes(u32(0)))
+    init.client.receive(serverInit(9000, 2, 'agent'))
+    expect(init.failures).toEqual([{ code: 'data', detail: 'size 9000x2' }])
+  })
 })
 
 describe('the mouse and the keys', () => {

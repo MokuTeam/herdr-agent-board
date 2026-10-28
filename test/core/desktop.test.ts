@@ -13,6 +13,7 @@ import {
   desktopView,
   pickSlot,
   profileName,
+  rfbInputFilter,
   slotDisplay,
   slotPort,
   withBrowserMcp,
@@ -95,6 +96,39 @@ test('control: owner or agent, nothing else', () => {
   expect(controlOf({ to: 'owner' })).toBe('owner')
   expect(controlOf({ to: 'agent' })).toBe('agent')
   for (const bad of [{}, { to: 'me' }, null, 'owner', []]) expect(controlOf(bad)).toBeNull()
+})
+
+test('a viewer’s RFB bytes: the handshake and picture requests go on; keys, the mouse, the clipboard and the size only with control', () => {
+  const enc = (t: string) => [...new TextEncoder().encode(t)]
+  const handshake = [...enc('RFB 003.008\n'), 1, 1]
+  const pixelFormat = [0, 0, 0, 0, ...new Array(16).fill(7)]
+  const encodings = [2, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 5]
+  const request = [3, 1, 0, 0, 0, 0, 0, 4, 0, 2]
+  const key = [4, 1, 0, 0, 0, 0, 0, 0x61]
+  const pointer = [5, 1, 0, 1, 0, 1]
+  const cut = [6, 0, 0, 0, 0, 0, 0, 2, 0x68, 0x69]
+  const size = [251, 0, 4, 0, 3, 0, 1, 0, ...new Array(16).fill(0)]
+  const fence = [248, 0, 0, 0, 0, 0, 0, 0, 2, 9, 9]
+  const all = [...handshake, ...pixelFormat, ...encodings, ...request, ...key, ...pointer, ...cut, ...size, ...fence]
+  const watched = rfbInputFilter()
+  // byte by byte: a message cut anywhere waits for its rest
+  const out: number[] = []
+  for (const b of all) out.push(...(watched(Uint8Array.of(b), false) ?? [NaN]))
+  expect(out).toEqual([...handshake, ...pixelFormat, ...encodings, ...request, ...fence])
+  const owner = rfbInputFilter()
+  expect([...(owner(Uint8Array.from(all), true) ?? [])]).toEqual(all)
+  // control given back on the way: what comes after it is dropped
+  const mixed = rfbInputFilter()
+  expect([...(mixed(Uint8Array.from([...handshake, ...key]), true) ?? [])]).toEqual([...handshake, ...key])
+  expect([...(mixed(Uint8Array.from([...pointer, ...request]), false) ?? [])]).toEqual(request)
+  // 3.3 has no security byte
+  const old = rfbInputFilter()
+  const old33 = [...enc('RFB 003.003\n'), 1, ...key]
+  expect([...(old(Uint8Array.from(old33), false) ?? [])]).toEqual(old33.slice(0, 13))
+  // what it cannot read on from (an unknown message, another greeting, another security type): the viewer closes
+  expect(rfbInputFilter()(Uint8Array.from([...handshake, 99]), false)).toBeNull()
+  expect(rfbInputFilter()(Uint8Array.from(enc('GET / HTTP/1.1\r\n')), false)).toBeNull()
+  expect(rfbInputFilter()(Uint8Array.from([...enc('RFB 003.008\n'), 2]), false)).toBeNull()
 })
 
 test('the card’s field: asks only while the card still asks', () => {
