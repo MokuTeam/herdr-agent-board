@@ -4,6 +4,7 @@
 // which survives sleep and resume; agents without one are keyed by their pane.
 import { mkdirSync, readdirSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
+import { applyTodo, type Todo, type TodoOp, todosOf } from '../core/todos.ts'
 import type { Card } from '../core/types.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
 import { cardsDir } from './paths.ts'
@@ -33,6 +34,37 @@ export function writeCard(key: string, patch: CardPatch): Card {
     },
     isCard,
   )
+}
+
+/**
+ * A change to a card's tasks (core/todos.ts applyTodo), read and written under the card's lock, so
+ * the web board and `board todo` writing at once never lose each other's change. A card that is not
+ * there gets one for an added point only.
+ */
+export function changeTodos(
+  key: string,
+  op: TodoOp,
+  now = Date.now(),
+): { ok: true; todo?: Todo } | { ok: false; error: string } {
+  mkdirSync(cardsDir(), { recursive: true })
+  let result: { ok: true; todo?: Todo } | { ok: false; error: string } = { ok: false, error: 'todo.err.gone' }
+  updateJson(
+    file(key),
+    (saved: Card | null): Card | undefined => {
+      const r = applyTodo(todosOf(saved?.todos), op, now, () => crypto.randomUUID().slice(0, 8))
+      if ('error' in r) {
+        result = { ok: false, error: r.error }
+        return undefined
+      }
+      result = { ok: true, ...(r.todo && { todo: r.todo }) }
+      const card: Card = { ...(saved ?? { key }), updatedAt: now }
+      if (r.list.length) card.todos = r.list
+      else delete card.todos
+      return card
+    },
+    isCard,
+  )
+  return result
 }
 
 /** Remove a card; one that is not there is no error. */

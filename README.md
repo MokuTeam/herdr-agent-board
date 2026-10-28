@@ -1741,6 +1741,43 @@ Detection asks the computer every 30 seconds (`src/adapters/idle.ts`), only whil
 
 `detects` in `GET /api/presence` says whether this computer told the board anything at its last ask.
 
+## Tasks
+
+An experiment (#202), off unless you turn it on. An agent answers with five points: two are
+yours to do, three are unclear, and the talk about those three pushes the first two up the thread
+until they are lost. Tasks keep them: one list across sessions, each point with the session it
+came from.
+
+Settings → Tasks turns it on, or `todos` in config.json:
+
+- **My pins only** (`"todos": { "agents": false }`): you pin points yourself; agents are told
+  nothing and `board todo add` is refused. Nothing changes for the agents.
+- **Pins and agents** (`"todos": true`): also, Claude sessions are told in their brief to record
+  what they hand you to do, and (with `--mine`) a promise of their own they defer, with
+  `board todo add`. Nothing else: not their working steps, not questions (those are `board ask`).
+- **Off** (no `todos`): no button, no 📌, no brief line. The points stay on the cards and show
+  again once it is back on.
+
+**Pinning.** Under an agent's message in a session's sheet, 📌 opens its points: its list items
+(bulleted or numbered, at any depth, outside code blocks), or its first paragraph when it has no
+list. A point picked is yours to do, checked, and the menu stays open for the next; picked again,
+it is unpinned. "As the agent's promise" pins it as the agent's instead. 📌 stays lit, with how
+many of its points are pinned.
+
+**The panel.** "Tasks" in the toolbar, with the count of your open points, opens the list across
+sessions, grouped by session, the one with the oldest open point first. Mine, Agents' or All. Each
+point: its text, its age, Open (the session's sheet), To chat (the point quoted at the top of the
+session's message box, the sheet open) and Done. Done points fold under the list, to open again
+or remove; they go after 14 days, or past the 30 newest on a card.
+
+An agent closes only its own promises (`board todo done <id>`); the user closes any. The points
+live on the cards (`todos`), changed under the card's lock, so the board and `board todo` writing
+at once never lose each other's change. Only sessions on the board count: an archived session's
+points come back with it.
+
+Not yet (see #202): a jump to the message a point came from (1b), a badge on the card, the open
+points in the sheet, the agent told of a point the user pinned as its promise.
+
 ## Phones
 
 Off unless you turn it on. With [Tailscale](https://tailscale.com) on this computer and on a phone,
@@ -2499,6 +2536,9 @@ board presence [here|away]
                           whether the user is at the computer or away (where news goes: also
                           Telegram while away); here|away sets it; see Presence
 board away [on|off]       the same switch: away (on), back at the computer (off)
+board todo add [--mine] "<text>" | done <id> | list
+                          tasks (with "todos": true): what you hand the user to do, or (--mine) a
+                          promise of yours you defer; done closes your own; see Tasks
 board doctor              what is set up on this computer, and what is missing
 board resume <session id> [--profile <id>]
                           resumes that session here, in its own Claude profile (what herdr types

@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import type { FoldMode } from '../../../src/core/fold-mode.ts'
 import { LANGUAGES, translator } from '../../../src/core/i18n/translator.ts'
 import type { PresenceMode } from '../../../src/core/presence.ts'
+import { type TodoMode, todoModeOf } from '../../../src/core/todos.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import { ApiError, api, errorText, isReply, postJson, replyOf } from '../api/client.ts'
 import type { MenuEngine, MenuSource } from '../components/menu/menu-engine.ts'
@@ -76,6 +77,9 @@ export interface SettingsDeps {
   presence?(): PresenceMode | 'none' | undefined
   idleMinutes?(): number | undefined
   choosePresence?(body: PresenceSetting): void
+  /** Tasks as the board has them (#202, 'none': off); none: no Tasks item. */
+  todos?(): TodoMode | undefined
+  chooseTodos?(mode: TodoMode): void
 }
 
 /** What Settings → Presence asks the board for (POST /api/presence { op: 'settings', … }). */
@@ -104,6 +108,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       signOut: deps.signOut?.() ?? false,
       presence: deps.presence?.(),
       idleMinutes: deps.idleMinutes?.(),
+      todos: deps.todos?.(),
     })
     const source: MenuSource = keyboard ? 'keyboard' : deps.coarse() ? 'touch' : 'mouse'
     deps.menu.open(items, {
@@ -131,6 +136,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'presence')
           deps.choosePresence?.(pick.value === 'none' ? { on: false } : { on: true, mode: pick.value })
         else if (pick?.kind === 'presenceIdle') deps.choosePresence?.({ on: true, idleMinutes: pick.value })
+        else if (pick?.kind === 'todos') deps.chooseTodos?.(pick.value)
       },
     })
   }
@@ -364,6 +370,16 @@ export function useSettingsMenu(
           save: b => api.post('/api/presence', b),
           toast: board.toast,
         })
+      },
+      // No `todos` in the board's payload: tasks are off.
+      todos: () => {
+        const data = latest.current.board.data
+        return data ? todoModeOf(data.todos ?? null) : undefined
+      },
+      chooseTodos: mode => {
+        const { t, board } = latest.current
+        if (!board.canEdit) return board.toast(t('live.off'), true)
+        api.post('/api/todos', { op: 'settings', mode }).catch(err => board.toast(errorText(err, t), true))
       },
     })
     return settingsGear(menu, open, setExpanded)

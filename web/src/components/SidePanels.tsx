@@ -1,7 +1,7 @@
 // The side panels, one open at a time in their shared place: the session sheet, the categories,
 // the schedule, the archive and, with more than one Claude profile folder found, the profiles; sleep
 // and wake while the payload carries its state line; the phones while the remote mode is on;
-// MokuPilot always; Remote access once it was first opened, on the local
+// MokuPilot always; tasks while the board has them on (#202); Remote access once it was first opened, on the local
 // board. A session sheet that fails to draw says so
 // on its own and leaves the board; opening another session tries again.
 import type { Archive } from '../hooks/useArchive.ts'
@@ -17,6 +17,7 @@ import { PhonesPanel, type PhonesPanelProps } from './phones/PhonesPanel.tsx'
 import { ProfilesPanel, type ProfilesPanelProps } from './profiles/ProfilesPanel.tsx'
 import { SchedulePanel, type SchedulePanelProps } from './schedule/SchedulePanel.tsx'
 import { Sheet, type SheetSlots } from './sheet/Sheet.tsx'
+import { TodosPanel, type TodosPanelProps } from './todos/TodosPanel.tsx'
 import { WakePanel, type WakePanelProps } from './wake/WakePanel.tsx'
 
 export interface SidePanelsProps {
@@ -36,6 +37,8 @@ export interface SidePanelsProps {
   sheet?: SheetSlots
   /** The archive's panel (hooks/useArchive.ts); none: not drawn. */
   archive?: Archive
+  /** Tasks (#202): drawn while the board has them on. */
+  todos?: TodosPanelProps
 }
 
 export function SidePanels({
@@ -48,6 +51,7 @@ export function SidePanels({
   access,
   sheet,
   archive,
+  todos,
 }: SidePanelsProps) {
   const { data, ui, dispatch } = useBoardContext()
   return (
@@ -63,6 +67,7 @@ export function SidePanels({
       {phones && data?.remote && <PhonesPanel {...phones} />}
       {mokupilot && <MokupilotPanel {...mokupilot} />}
       {access && <AccessPanel {...access} />}
+      {todos && data?.todos && <TodosPanel {...todos} />}
     </>
   )
 }

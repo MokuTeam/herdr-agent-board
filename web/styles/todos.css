@@ -1,0 +1,85 @@
+/* Tasks (#202): the 📌 under an agent's message (components/sheet/Thread.tsx) and the tasks panel
+   (components/todos/TodosPanel.tsx). Every rule here selects by class: the other sheets are
+   upstream's, rule for rule. */
+
+/* The 📌: quiet in the bubble's corner until hovered, lit while points of it are pinned. */
+.msg.assistant { position: relative; }
+.msg.assistant:has(> .msg-pin) .when { padding-right: 34px; }
+.msg-pin {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--label-3);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+.msg.assistant:hover .msg-pin, .msg-pin:focus-visible, .msg-pin.on { opacity: 1; }
+@media (pointer: coarse) { .msg-pin { opacity: 0.7; } }
+.msg-pin:hover { background: var(--fill-2); color: var(--accent); }
+.msg-pin.on { color: var(--accent); }
+.msg-pin svg { width: 14px; height: 14px; }
+
+/* The panel. */
+.todos-body { display: flex; flex-direction: column; gap: 12px; }
+.todos-filter { display: flex; gap: 6px; }
+.todos-filter .pill-toggle.on { background: var(--accent); color: #fff; }
+.todos-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 48px 24px; text-align: center; color: var(--label-2); }
+.todos-empty p { margin: 0; }
+.todos-empty .hint { font-size: 12.5px; }
+.todos-group { display: flex; flex-direction: column; gap: 6px; }
+.todos-session {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--label-2);
+  font: 600 12px var(--font, inherit);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.todos-session:hover { color: var(--accent); }
+.todos-session svg { width: 13px; height: 13px; }
+.todo-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--fill-2);
+}
+.todo-row.agent { box-shadow: inset 3px 0 0 var(--purple, var(--accent)); }
+.todo-row.done .todo-text { color: var(--label-2); text-decoration: line-through; }
+.todo-text { margin: 0; line-height: 1.4; overflow-wrap: anywhere; }
+.todo-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.todo-meta { flex: 1; min-width: 0; color: var(--label-3); font-size: 11.5px; }
+.todo-foot .mini {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--fill);
+  color: var(--label);
+  font-size: 12px;
+  cursor: pointer;
+}
+.todo-foot .mini:hover:not(:disabled) { color: var(--accent); }
+.todo-foot .mini:disabled { opacity: 0.5; cursor: default; }
+.todo-foot .mini.icon { padding: 3px 6px; }
+.todo-foot .mini svg { width: 14px; height: 14px; }
+.todos-done summary { color: var(--label-2); font-size: 12.5px; cursor: pointer; }
+.todos-done[open] summary { margin-bottom: 8px; }
+.todos-done .todo-row + .todo-row { margin-top: 6px; }

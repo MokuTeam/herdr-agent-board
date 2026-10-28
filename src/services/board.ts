@@ -20,6 +20,7 @@ import { t } from '../core/lang.ts'
 import { relate } from '../core/links.ts'
 import { isPiItem, isPiSessionFile, PI_AGENT, piSessionId } from '../core/pi.ts'
 import { sessionProfile } from '../core/profiles.ts'
+import { type Todo, todosOf } from '../core/todos.ts'
 import type { AgentStatus, Attention, Card, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
 import { piSleeperPane } from '../core/wake/pi.ts'
 import { archivedFiles, getArchived, hides, isArchived, settleReturned } from './archive.ts'
@@ -28,6 +29,12 @@ import type { Deps } from './deps.ts'
 const numberOf = (value: unknown): number | undefined => (typeof value === 'number' ? value : undefined)
 
 /** The panes its card says wake closed as it went to sleep (#204, services/wake/follow.ts), when it has any. */
+/** A card's tasks (#202) for its item, when it has any. */
+const todosField = (card: Card): { todos?: Todo[] } => {
+  const todos = todosOf(card.todos)
+  return todos.length ? { todos } : {}
+}
+
 const formerPanes = (card: Card): { formerPanes?: string[] } => {
   const panes = Array.isArray(card.panes)
     ? card.panes.filter((p): p is string => typeof p === 'string' && p !== '')
@@ -294,6 +301,7 @@ export async function collect(
       pin, // the column the user dragged it to, or ''
       auto: columnOf(base.status, { ...card, pin: '' }, info), // where it would be without the pin
       ...(card.favorite === true && { favorite: true }), // the user keeps it in sight
+      ...todosField(card), // its tasks (#202), when it has any
       helpers: own, // its subagents, forks, workflow agents and teammates in short, or null
       // a fork's card says whose fork it is, and when it started
       ...(typeof card.forkOf === 'string' && { fork: { of: card.forkOf, at: Number(card.forkAt) || 0 } }),

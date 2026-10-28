@@ -2,6 +2,7 @@
 import { categoryFor } from './categories.ts'
 import { languageName } from './lang.ts'
 import { type Presence, presenceBrief } from './presence.ts'
+import { type TodosConfig, todosBrief } from './todos.ts'
 import type { Card, Config } from './types.ts'
 
 // Bump when the brief says something new: every running session gets it again on its next prompt.
@@ -36,6 +37,8 @@ export function brief(
   agent: 'Claude' | 'Codex' = 'Claude',
   /** The user's presence (core/presence.ts), only where config.json turned it on; null: nothing said. */
   presence: Presence | null = null,
+  /** Tasks (#202, core/todos.ts), only where config.json turned them on; agents hear of them only with agents on. */
+  todos: TodosConfig | null = null,
 ): string {
   const cat = card?.category
   const guess = categoryFor(cfg, cwd)
@@ -59,6 +62,7 @@ export function brief(
     '- board remind <when> "<text>": at that time the board types "[board reminder] <text>" into this session as a prompt, waking it if it sleeps; on time, so a working session gets it queued into its turn (add --idle to wait until it is free, for work that needs a fresh turn rather than a time). when: in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time). board every "<cron, 5 fields>" "<text>" repeats it (runs at least 5 minutes apart); board schedule lists this session\'s entries, board unschedule <id> removes one. Write the text as an instruction to yourself.',
     agent === 'Claude' &&
       "  More reliable than CronCreate or ScheduleWakeup: those live in this Claude process and die when the idle session is put to sleep; the board's entries survive sleep and restarts. Use it for anything due later than a few minutes.",
+    agent === 'Claude' && todos?.agents && todosBrief(),
     `Card texts in ${languageName()}, short. Call it only when the state changes, not every turn.${state ? ` Card now: ${state}.` : ''}`,
     presence && presenceBrief(presence),
     herdrLine(env, agent),

@@ -21,6 +21,7 @@ import type { PresenceView } from '../core/presence.ts'
 import { DEFAULT_PROFILE, type Profile, profileLabel } from '../core/profiles.ts'
 import type { RemoteView } from '../core/remote.ts'
 import type { SetupSummary } from '../core/setup.ts'
+import { todosConfig } from '../core/todos.ts'
 import type { Item } from '../core/types.ts'
 import type { WakeView } from '../core/wake/view.ts'
 import { collect } from '../services/board.ts'
@@ -185,7 +186,11 @@ export function createBoardState({
       })
     // What the page has no use for stays here: file paths (the Claude folder included), the Claude
     // process and its pipe.
-    const list = items.map(({ transcript, claudeRoot, alive, since, pipe, ...rest }) => launches.decorate(rest))
+    // Tasks (#202) only while config.json turns them on: off, the page sees none.
+    const todos = todosConfig(cfg.todos)
+    const list = items.map(({ transcript, claudeRoot, alive, since, pipe, todos: own, ...rest }) =>
+      launches.decorate(todos && own ? { ...rest, todos: own } : rest),
+    )
     // The schedule without the scheduler's bookkeeping; the log is what was sent or missed lately.
     const schedules = listEntries().map(({ claim, tried, waited, ...entry }) => entry)
     // The usage the pill shows: the board's own profile's (the default one's when its env points to
@@ -229,6 +234,7 @@ export function createBoardState({
       ...remoteOf(remote),
       // presence: only while config.json turns it on (#172).
       ...presenceOf(presence),
+      ...(todos && { todos }),
       // accessRev: the panel's cue to fetch the Remote access view again (never the view itself).
       accessRev: accessRev?.() ?? 0,
       // omarchy: only on a computer with Omarchy, the theme the Terminal style follows.
