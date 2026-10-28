@@ -36,6 +36,13 @@ export const AlarmIcon = () => (
   </Icon>
 )
 
+export const TasksIcon = () => (
+  <Icon>
+    <rect x="3.5" y="3.5" width="13" height="13" rx="2.5" />
+    <path d="m6.6 10.2 2.2 2.2 4.6-4.8" />
+  </Icon>
+)
+
 export const GearIcon = () => (
   <Icon>
     <path d="M8.6 2.8h2.8l.5 2.1 1.4.8 2.1-.6 1.4 2.4-1.5 1.6v1.8l1.5 1.6-1.4 2.4-2.1-.6-1.4.8-.5 2.1H8.6l-.5-2.1-1.4-.8-2.1.6-1.4-2.4 1.5-1.6V9.1L3.2 7.5l1.4-2.4 2.1.6 1.4-.8Z" />

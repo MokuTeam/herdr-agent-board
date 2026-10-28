@@ -283,6 +283,8 @@ export interface AssistantTurn {
   role: 'assistant'
   text: string
   at: number
+  /** Its transcript line's id (Claude's `uuid`): where a task pinned from it points (#202). */
+  id?: string
   /** Only when the thread's budget cut its text (fitThread). */
   cut?: true
 }
@@ -528,7 +530,7 @@ export function parseConversation(
         const b = rec(raw)
         if (!b) continue
         const said = saidIn(o, b)
-        if (said) items.push({ role: 'assistant', text: said, at })
+        if (said) items.push({ role: 'assistant', text: said, at, ...(str(o.uuid) && { id: str(o.uuid) }) })
         else if (b.type === 'tool_use') {
           const name = str(b.name)
           const turn: ToolTurn = {

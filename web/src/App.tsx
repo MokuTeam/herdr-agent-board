@@ -46,6 +46,7 @@ import { useSettingsMenu } from './hooks/useSettingsMenu.ts'
 import { useSetupNote } from './hooks/useSetupNote.ts'
 import { useTerminal } from './hooks/useTerminal.ts'
 import { useTerminalKeys } from './hooks/useTerminalKeys.ts'
+import { useTodos } from './hooks/useTodos.ts'
 import { pageLayers } from './models/lifecycle.ts'
 import { remotePage } from './models/remote-page.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
@@ -89,6 +90,8 @@ export function App() {
     setAccess(true)
     setAccessMounted(true)
   }
+  // Tasks (#202), while the board has them on: their panel, out of the toolbar's button.
+  const [todosOpen, setTodosOpen] = useState(false)
   // The reminders' buttons, shared by the schedule panel and the sheet.
   const reminders = useSchedule()
   // Sessions off the board and back, the archive's panel; Retry on a session back from it is its Return again.
@@ -141,6 +144,8 @@ export function App() {
     openAccess,
     openMokupilot,
   )
+  // Tasks' 📌 menu under an agent's message, and the panel's buttons.
+  const todos = useTodos(menus.menu)
   // The lanes control and the profile switch folded into pills: their choices as menus.
   const picks = useSegmentPicks(menus.menu)
   const terminalKeys = useTerminalKeys(menus)
@@ -191,6 +196,7 @@ export function App() {
           onWake={() => setWake(true)}
           settings={settings}
           picks={picks}
+          onTodos={() => setTodosOpen(!todosOpen)}
         />
         <Board
           onNewSession={newSession}
@@ -210,6 +216,7 @@ export function App() {
         {...(mokupilotMounted ? { mokupilot: { open: mokupilot, onClose: () => setMokupilot(false) } } : {})}
         {...(accessMounted && !remotePage() ? { access: { open: access, onClose: () => setAccess(false) } } : {})}
         archive={archive}
+        todos={{ open: todosOpen, onClose: () => setTodosOpen(false), todos }}
         sheet={{
           onNewSession: newSession,
           schedule: {
@@ -233,6 +240,7 @@ export function App() {
           helpers,
           onArchive: key => void archive.archiveSession(key),
           onFork: fork.show,
+          onPin: todos.pin,
         }}
       />
       <LimitsPop anchor={limitsAnchor} />
