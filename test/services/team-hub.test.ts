@@ -291,3 +291,36 @@ test('a hub that goes silent and never closes the socket is dropped and retried 
   s.svc.stop()
   expect(s.clock.timers()).toBe(0)
 })
+
+test('what the hub would refuse is refused by send() and never queued: 16 KiB of encoded envelope (#231)', async () => {
+  const s = setup()
+  s.svc.start()
+  const [anna] = (await names(1)) as [KeyPair]
+  const { ws } = await handshake(s, [{ peer: anna.pub, name: 'anna' }])
+  // 4000 characters, but each control character is written as 6 bytes in the encoded envelope.
+  expect(await s.svc.send(anna.pub, '\u0001'.repeat(4000))).toEqual({ ok: false, error: 'too_big' })
+  expect(readOutbox(anna.pub)).toEqual([])
+  expect(ws.of('send')).toHaveLength(0)
+})
+
+test('a hub error naming a queued message settles it as refused (with the code): shown, never sent again (#231)', async () => {
+  const s = setup()
+  s.svc.start()
+  const [anna] = (await names(1)) as [KeyPair]
+  const first = await handshake(s, [{ peer: anna.pub, name: 'anna' }])
+  const sent = await s.svc.send(anna.pub, 'hello?')
+  const kept = await s.svc.send(anna.pub, 'and this one?')
+  expect(sent.ok && kept.ok).toBe(true)
+  const id = sent.ok ? sent.id : ''
+  first.ws.recv({ t: 'error', code: 'not_member', id, message: 'the recipient is not a member' })
+  await until(() => readOutbox(anna.pub)[0]?.state === 'refused', 'refused')
+  expect(s.svc.thread(anna.pub)[0]).toMatchObject({ id, state: 'refused', code: 'not_member' })
+  // A late state for it does not bring it back.
+  first.ws.recv({ t: 'state', id, state: 'delivered', at: 9 })
+  await settle()
+  expect(readOutbox(anna.pub)[0]?.state).toBe('refused')
+  first.ws.hangUp(1006)
+  s.clock.tick(1000)
+  const second = await handshake(s, [{ peer: anna.pub, name: 'anna' }], 2)
+  expect(second.ws.of('send').map(f => f.env.id)).toEqual([kept.ok ? kept.id : ''])
+})

@@ -19,6 +19,7 @@ import {
   readKey,
   readOutbox,
   readPins,
+  refuseOut,
   releaseHeld,
   setOutState,
 } from '../adapters/team-store.ts'
@@ -27,13 +28,14 @@ import {
   authBytes,
   checkEnvelope,
   DEFAULT_TTL_S,
-  type DeliveryState,
   type Envelope,
+  type ErrorCode,
   envelopeBytes,
   type Frame,
   fingerprint,
   isPeerId,
   MAX_TEXT,
+  type OutState,
   parseFrame,
   type RosterPeer,
   sign,
@@ -84,7 +86,9 @@ export interface ThreadMessage {
   text: string
   ts: string
   /** out: how far it got. */
-  state?: DeliveryState
+  state?: OutState
+  /** out, refused: the hub's error code. */
+  code?: ErrorCode
   /** in: from a key that changed, kept back until it is trusted. */
   held?: boolean
 }
@@ -307,6 +311,8 @@ export function createTeam({
       case 'error':
         log(`team: the hub says ${f.code}${f.id ? ` for ${f.id}` : ''}`)
         audit('hub-error', null, { code: f.code })
+        // An error naming a message of ours settles it: it is not sent again on the next connect.
+        if (f.id && refuseOut(f.id, f.code, clock.now())) changed()
         return
       case 'ping':
         frame({ t: 'pong' })
@@ -434,6 +440,7 @@ export function createTeam({
           text: i.env.body.text,
           ts: i.env.ts,
           state: i.state,
+          ...(i.code && { code: i.code }),
         }),
       )
       return [...incoming, ...outgoing].sort((a, b) => a.ts.localeCompare(b.ts))
@@ -457,6 +464,9 @@ export function createTeam({
         body: { text: body },
       }
       const env: Envelope = { ...open, sig: await sign(key.pkcs8, envelopeBytes(open)) }
+      // What the hub would refuse (shape, the 16 KiB of the encoded envelope) is refused here, not queued.
+      const checked = checkEnvelope(env)
+      if (!checked.ok) return { ok: false, error: checked.code }
       addOutbox({ env, state: 'queued', at: clock.now() })
       if (authed) frame({ t: 'send', env })
       changed()

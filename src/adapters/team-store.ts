@@ -4,7 +4,15 @@
 // text). Nothing here creates a file until it is asked to write: `board team join` and the running
 // board with `team` set are the only callers.
 import { appendFileSync, mkdirSync } from 'node:fs'
-import { type Ack, type DeliveryState, type Envelope, generateKey, type KeyPair } from '../core/team.ts'
+import {
+  type Ack,
+  type DeliveryState,
+  type Envelope,
+  type ErrorCode,
+  generateKey,
+  type KeyPair,
+  type OutState,
+} from '../core/team.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
 import { stateDir, teamAuditFile, teamInboxFile, teamKeyFile, teamOutboxFile, teamPinsFile } from './paths.ts'
 
@@ -59,9 +67,11 @@ export interface InboxItem {
 /** A question that went out, and how far it got. `ack` is kept only when it verified. */
 export interface OutboxItem {
   env: Envelope
-  state: DeliveryState
+  state: OutState
   at: number
   ack?: Ack
+  /** refused: the hub's error code. */
+  code?: ErrorCode
 }
 
 /** A map with no prototype: a key such as `__proto__` is a key like any other, never the prototype. */
@@ -137,9 +147,11 @@ export function addOutbox(item: OutboxItem): void {
   })
 }
 
-/** What the hub says of an outgoing message; a state never goes back (acked and expired are final). */
+const RANK: Record<OutState, number> = { queued: 0, delivered: 1, acked: 2, expired: 2, refused: 2 }
+
+/** What the hub says of an outgoing message; a state never goes back (acked, expired and refused are final). */
 export function setOutState(id: string, state: DeliveryState, at: number, ack?: Ack): void {
-  const rank: Record<DeliveryState, number> = { queued: 0, delivered: 1, acked: 2, expired: 2 }
+  const rank = RANK
   changeLists<OutboxItem, void>(teamOutboxFile(), peers => {
     for (const list of Object.values(peers))
       for (const i of list)
@@ -148,6 +160,22 @@ export function setOutState(id: string, state: DeliveryState, at: number, ack?: 
           i.at = at
           if (ack) i.ack = ack
         }
+  })
+}
+
+/** The hub refused the message `id` (an error naming it) while it was still queued: final, never sent again. */
+export function refuseOut(id: string, code: ErrorCode, at: number): boolean {
+  return changeLists<OutboxItem, boolean>(teamOutboxFile(), peers => {
+    let hit = false
+    for (const list of Object.values(peers))
+      for (const i of list)
+        if (i.env.id === id && i.state === 'queued') {
+          i.state = 'refused'
+          i.code = code
+          i.at = at
+          hit = true
+        }
+    return hit
   })
 }
 

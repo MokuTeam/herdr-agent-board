@@ -122,6 +122,23 @@ describe('Team panel', () => {
     expect(findAll(nodes, el => el.tag === 'textarea')).toHaveLength(1)
   })
 
+  test('a message the hub refused says so with the code, in both languages; the thread is accepted as such (#231)', () => {
+    const refused: ThreadMessage = {
+      id: 'r1',
+      dir: 'out',
+      text: 'refused one',
+      ts: '2026-10-28T10:05:00Z',
+      state: 'refused',
+      code: 'not_member',
+    }
+    expect(isThread({ peer: ANA, messages: [refused] })).toBe(true)
+    expect(isThread({ peer: ANA, messages: [{ ...refused, state: 'nonsense' }] })).toBe(false)
+    expect(text(render(props({ peer: ANA, thread: [refused] })))).toContain(
+      'from you · refused by the hub (not_member), not sent',
+    )
+    expect(text(render(props({ peer: ANA, thread: [refused] }), 'ru'))).toContain('хаб отклонил (not_member)')
+  })
+
   test('Send is off for an empty draft and while disabled', () => {
     const send = (over: Partial<TeamBodyProps>) =>
       findAll(render(props({ peer: ANA, ...over })), el => el.tag === 'button' && text([el]) === 'Send')[0]

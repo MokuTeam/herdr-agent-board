@@ -1,7 +1,7 @@
 // The team panel (#231), out of Settings → Team… on the local board, while the payload carries
 // `teamRev`: where the connection to the team's hub stands, who is in the team (online or not,
 // their key's fingerprint), a person whose key changed with Trust, and the messages with the one
-// picked: each of yours with how far it got (queued at the hub, delivered, received, expired), what
+// picked: each of yours with how far it got (queued at the hub, delivered, received, expired, refused by the hub), what
 // came in from a changed key marked held. Under the thread a box to ask them a question. The view
 // is hooks/useTeam.ts's; the board sends only its revision.
 import { useState } from 'react'
@@ -124,7 +124,7 @@ export function TeamBody({ view, peer, thread, draft, disabled, onSelect, onTrus
                 <div className="todo-foot">
                   <span className="todo-meta">
                     {m.dir === 'in' ? t('team.in') : t('team.out')}
-                    {m.dir === 'out' && m.state && ` · ${t(`team.delivery.${m.state}`)}`}
+                    {m.dir === 'out' && m.state && ` · ${t(`team.delivery.${m.state}`, { code: m.code ?? '' })}`}
                     {m.held && ` · ${t('team.held')}`}
                   </span>
                 </div>

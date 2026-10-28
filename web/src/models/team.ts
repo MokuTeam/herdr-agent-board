@@ -2,7 +2,7 @@
 // (src/server/routes/team.ts, the shapes are services/team-hub.ts's), and the lines the panel
 // draws from them. The panel exists only on the local board's page, while the payload carries
 // `teamRev` (config.json's `team` is on).
-import { DELIVERY_STATES, type DeliveryState } from '../../../src/core/team-wire.ts'
+import { OUT_STATES, type OutState } from '../../../src/core/team-wire.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import type { TeamRosterPeer, TeamState, TeamView, ThreadMessage } from '../../../src/services/team-hub.ts'
 import { ago } from './card.ts'
@@ -37,7 +37,7 @@ export const isTeamView = (v: unknown): v is TeamView =>
   Array.isArray(v.roster) &&
   v.roster.every(isRosterPeer)
 
-const isDelivery = (v: unknown): v is DeliveryState => DELIVERY_STATES.some(s => s === v)
+const isDelivery = (v: unknown): v is OutState => OUT_STATES.some(s => s === v)
 
 const isThreadMessage = (v: unknown): v is ThreadMessage =>
   isObj(v) &&
@@ -46,6 +46,7 @@ const isThreadMessage = (v: unknown): v is ThreadMessage =>
   typeof v.text === 'string' &&
   typeof v.ts === 'string' &&
   (v.state === undefined || isDelivery(v.state)) &&
+  (v.code === undefined || typeof v.code === 'string') &&
   (v.held === undefined || typeof v.held === 'boolean')
 
 /** GET /api/team/thread/<peer>. */
@@ -76,4 +77,6 @@ export const seenLine = (p: TeamRosterPeer, now: number, t: Translator): string 
 
 /** What a refused send says (the route's error code). */
 export const sendError = (code: unknown, t: Translator): string =>
-  t('team.sendFailed', { why: code === 'peer' || code === 'text' ? t(`team.err.${code}`) : String(code ?? '') })
+  t('team.sendFailed', {
+    why: code === 'peer' || code === 'text' || code === 'too_big' ? t(`team.err.${code}`) : String(code ?? ''),
+  })

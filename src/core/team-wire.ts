@@ -53,6 +53,14 @@ export interface Ack {
 export type DeliveryState = 'queued' | 'delivered' | 'acked' | 'expired'
 export const DELIVERY_STATES: readonly DeliveryState[] = ['queued', 'delivered', 'acked', 'expired']
 
+/**
+ * How far a message of this board's got: the hub's states, and `refused`, which only this board
+ * keeps: the hub answered the send with an error naming the message (the code is kept with it).
+ * It is final; the message is not sent again.
+ */
+export type OutState = DeliveryState | 'refused'
+export const OUT_STATES: readonly OutState[] = [...DELIVERY_STATES, 'refused']
+
 export interface RosterPeer {
   peer: string
   name: string
