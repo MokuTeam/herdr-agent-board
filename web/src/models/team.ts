@@ -2,7 +2,7 @@
 // (src/server/routes/team.ts, the shapes are services/team-hub.ts's), and the lines the panel
 // draws from them. The panel exists only on the local board's page, while the payload carries
 // `teamRev` (config.json's `team` is on).
-import { DELIVERY_STATES, type DeliveryState } from '../../../src/core/team.ts'
+import { DELIVERY_STATES, type DeliveryState } from '../../../src/core/team-wire.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import type { TeamRosterPeer, TeamState, TeamView, ThreadMessage } from '../../../src/services/team-hub.ts'
 import { ago } from './card.ts'

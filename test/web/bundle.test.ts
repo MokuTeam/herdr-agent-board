@@ -58,3 +58,19 @@ test('every viewer builds apart from app.js, which carries none of their librari
   expect([has('document-worker.js', 'mammoth'), has('document-worker.js', 'dompurify')]).toEqual([true, false])
   expect([has('spreadsheet-worker.js', 'xlsx'), has('spreadsheet-viewer.js', 'xlsx')]).toEqual([true, false])
 })
+
+// The page imports the peer network's wire constants (#231) from team-wire.ts, which has no node:
+// import and no Buffer; importing src/core/team.ts would bundle a crypto shim for every setup.
+test('the page bundle carries no node:crypto shim and nothing of src/core/team.ts', async () => {
+  const bundle = await createWebBundle({
+    root: ROOT,
+    entry: join(ROOT, 'web', 'src', 'main.tsx'),
+    log: () => {},
+  })
+  const { sources } = JSON.parse(bundle.map()) as { sources: string[] }
+  const shim = sources.filter(s =>
+    /crypto-browserify|create-hash|browserify|node_modules\/buffer\/|core\/team\.ts$/.test(s),
+  )
+  expect(shim).toEqual([])
+  expect(bundle.js()).not.toContain('crypto-browserify')
+})
