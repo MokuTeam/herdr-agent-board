@@ -308,8 +308,8 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     pid !== null && sys.alive(pid) && sys.cmdline(pid).includes(mark)
   const xvncMark = (d: Pick<Desktop, 'vnc'>): string => d.vnc
   const chromeMark = (d: Pick<Desktop, 'cdp'>): string => d.cdp
-  /** The agent's DevTools bridges (to each Chrome's holder), each with its socket. */
-  const cdps = new WeakMap<ServerWebSocket<VncData>, Socket>()
+  /** The agent's DevTools bridges (to each Chrome's holder): the socket, and sends what waits. */
+  const cdps = new WeakMap<ServerWebSocket<VncData>, { sock: Socket; flush: () => void }>()
 
   async function ended(pid: number | null, ms: number): Promise<void> {
     if (pid === null) return
@@ -554,17 +554,27 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       if (desktops.get(d.pane) === d) await stopNow(d.pane, why)
     })
 
-  /** The agent's DevTools to its Chrome's holder: each message a text frame one way, NUL-ended the other. */
+  /**
+   * The agent's DevTools to its Chrome's holder: each message a text frame one way, NUL-ended the
+   * other. Messages wait in order while the WebSocket has much queued (and the socket pauses):
+   * past Bun's limit a send is dropped, and a CDP message lost is a call that never ends.
+   */
   function openCdp(ws: ServerWebSocket<VncData>): void {
     const sock = createConnection({ path: ws.data.socket })
     const frames = nulFrames()
+    const waiting: string[] = []
+    const flush = (): void => {
+      while (waiting.length && ws.getBufferedAmount() <= HIGH_WATER) ws.send(waiting.shift() as string)
+      if (waiting.length) sock.pause()
+      else sock.resume()
+    }
     sock.on('data', (chunk: Buffer) => {
-      for (const f of frames(chunk)) ws.send(f)
-      if (ws.getBufferedAmount() > HIGH_WATER) sock.pause()
+      waiting.push(...frames(chunk))
+      flush()
     })
     sock.on('error', () => ws.close(1011, 'cdp'))
     sock.on('close', () => ws.close(1000, 'cdp'))
-    cdps.set(ws, sock)
+    cdps.set(ws, { sock, flush })
   }
 
   /**
@@ -753,7 +763,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       // keys, the mouse and the clipboard reach the display only while the owner has the browser
       message(ws, msg) {
         if (ws.data.cdp) {
-          cdps.get(ws)?.write(`${typeof msg === 'string' ? msg : Buffer.from(msg).toString('utf8')}\0`)
+          cdps.get(ws)?.sock.write(`${typeof msg === 'string' ? msg : Buffer.from(msg).toString('utf8')}\0`)
           return
         }
         const c = conns.get(ws)
@@ -764,11 +774,12 @@ export function createDesktops(o: DesktopsOptions): Desktops {
         if (out.length) c.sock.write(out)
       },
       drain(ws) {
-        ;(ws.data.cdp ? cdps.get(ws) : conns.get(ws)?.sock)?.resume()
+        if (ws.data.cdp) cdps.get(ws)?.flush()
+        else conns.get(ws)?.sock.resume()
       },
       close(ws) {
         if (!ws.data.cdp) return closeViewer(ws)
-        cdps.get(ws)?.destroy()
+        cdps.get(ws)?.sock.destroy()
         cdps.delete(ws)
       },
     },

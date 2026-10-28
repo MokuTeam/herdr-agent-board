@@ -619,6 +619,23 @@ test('the agent’s DevTools through the board: each message a text frame one wa
     for (let i = 0; i < 100 && !got.length; i++) await Bun.sleep(5)
     expect(got.join('')).toBe('{"id":2,"method":"Browser.getVersion"}\0')
     d.websocket.close?.(ws, 1000, '')
+    // the page's end of it slow (a big screenshot on its way): messages wait in order, none dropped
+    let buffered = 5 << 20
+    const slow: string[] = []
+    const late = {
+      data: { pane: 'w0:p1', socket: path, cdp: true },
+      send: (m: string) => slow.push(m),
+      close: () => {},
+      getBufferedAmount: () => buffered,
+    } as unknown as ServerWebSocket<VncData>
+    d.websocket.open?.(late)
+    await Bun.sleep(50)
+    expect(slow).toEqual([])
+    buffered = 0
+    d.websocket.drain?.(late)
+    for (let i = 0; i < 100 && slow.length < 2; i++) await Bun.sleep(5)
+    expect(slow).toEqual(['{"id":1,"result":{}}', '{"method":"Target.targetCreated","params":{}}'])
+    d.websocket.close?.(late, 1000, '')
   } finally {
     holder.close()
   }
