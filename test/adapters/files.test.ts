@@ -168,6 +168,8 @@ test('a CSV stays UTF-8 when it is: no BOM, a character cut at the size limit, a
   const cut = write('cut.csv', Buffer.concat([head, filler, Buffer.from('Ж;Жук\nЯ;Як\n')]))
   assert.equal(cut.truncated, true)
   assert.deepEqual(cut.rows?.[0], ['Имя', 'Город'])
+  // The half-read character is not taken for a broken byte: nothing anywhere stands in for one.
+  assert.equal(JSON.stringify(cut.rows).includes('�'), false)
   // One broken byte among a hundred letters above ASCII: UTF-8, the byte shown as it is.
   const broken = write(
     'broken.csv',
@@ -185,6 +187,13 @@ test('a CSV’s separator on a tie, and Cyrillic in short words', () => {
   assert.equal(legacyCodePage(windows1251('да;на')), 'windows-1251')
   assert.equal(legacyCodePage(windows1251('Алёна')), 'windows-1251')
   assert.equal(legacyCodePage(Buffer.from('Gr\xf6\xdfe;Stra\xdfe', 'latin1')), 'windows-1252')
+  // A short Western file in Windows-1252 reads as such.
+  const dir = mkdtempSync(join(tmpdir(), 'board-csv-latin-'))
+  writeFileSync(join(dir, 'names.csv'), Buffer.from('Caf\xe9;Zo\xeb\nNa\xefve;\xc9mile\n', 'latin1'))
+  assert.deepEqual(preview(join(dir, 'names.csv')).rows, [
+    ['Café', 'Zoë'],
+    ['Naïve', 'Émile'],
+  ])
 })
 
 /** Russian text in Windows-1251: А to я are 0xC0 to 0xFF, Ё and ё 0xA8 and 0xB8. */

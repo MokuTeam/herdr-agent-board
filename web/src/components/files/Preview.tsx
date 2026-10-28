@@ -16,6 +16,7 @@ import {
   isTable,
   rawUrl,
   sizeText,
+  widestCandidates,
 } from '../../models/files.ts'
 import { markdown } from '../../models/markdown.ts'
 import type { FileLook, LookMode } from '../../models/quick-look.ts'
@@ -268,14 +269,14 @@ function Table({ rows }: { rows: string[][] }) {
   const more = useRef<HTMLDivElement>(null)
   const table = useRef<HTMLTableElement>(null)
   // A table drawn block by block gets its columns' widths once its first block is drawn, wide
-  // enough for the longest value anywhere in it, and keeps them: a wider row in a later block
+  // enough for the widest values anywhere in it, and keeps them: a wider row in a later block
   // does not move the columns, as the automatic layout would. The last one takes what room is left.
   const [widths, setWidths] = useState<number[] | null>(null)
   // biome-ignore lint/correctness/useExhaustiveDependencies: the first draw of a file's table is when to measure
   useLayoutEffect(() => {
     const el = table.current
     if (!el || blocks.length < 2) return void setWidths(null)
-    setWidths(columnWidths(el, rows))
+    setWidths(measureColumns(el, widestCandidates(rows)))
   }, [rows])
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new block drawn is when to look again
   useEffect(() => {
@@ -326,24 +327,34 @@ function Table({ rows }: { rows: string[][] }) {
 }
 
 /**
- * Each column's width: as the first block laid it out, or as wide as its longest value anywhere
- * in the file (in the cells' own font, with their padding), at most as wide as a cell may be.
+ * Each column's width for the whole file, as the browser lays it out (the cells' font, their
+ * figures, padding and widest): rows of each column's widest values (widestCandidates) put in
+ * for a moment, the table at its own width, the header's widths read, all put back. At most as
+ * wide as a cell may be.
  */
-function columnWidths(table: HTMLTableElement, rows: string[][]): number[] | null {
-  const cell = table.querySelector('td')
-  const ctx = typeof document === 'undefined' ? null : document.createElement('canvas').getContext('2d')
-  if (!cell || !ctx) return null
-  const style = getComputedStyle(cell)
-  ctx.font = style.font
-  const padding = Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight) + 1
-  const longest: string[] = []
-  for (const row of rows) for (const [i, c] of row.entries()) if (c.length > (longest[i]?.length ?? 0)) longest[i] = c
-  return [...table.querySelectorAll('th')].map((th, i) =>
-    Math.min(
-      420,
-      Math.ceil(Math.max(th.getBoundingClientRect().width, ctx.measureText(longest[i] ?? '').width + padding)),
-    ),
-  )
+export function measureColumns(table: HTMLTableElement, candidates: string[][]): number[] {
+  const body = table.tBodies[0]
+  const heads = [...table.querySelectorAll('th')]
+  const probes: HTMLTableRowElement[] = []
+  for (let k = 0; body && k < Math.max(0, ...candidates.map(c => c.length)); k++) {
+    const tr = table.ownerDocument.createElement('tr')
+    for (let i = 0; i < heads.length; i++) {
+      const td = table.ownerDocument.createElement('td')
+      td.textContent = candidates[i]?.[k] ?? ''
+      tr.append(td)
+    }
+    body.append(tr)
+    probes.push(tr)
+  }
+  // At its own width for the measure: fitted to the window, the columns would come out squeezed.
+  const width = table.style.width
+  table.style.width = 'max-content'
+  // Layout widths (offsetWidth, a pixel more for its rounding), not the box on screen: the quick
+  // look is still growing open, scaled, when its table is first drawn.
+  const widths = heads.map(th => Math.min(420, th.offsetWidth + 1))
+  table.style.width = width
+  for (const tr of probes) tr.remove()
+  return widths
 }
 
 /** A block of a table's rows: drawn once, not again as the next blocks come. */

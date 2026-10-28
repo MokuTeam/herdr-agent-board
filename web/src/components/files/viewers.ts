@@ -72,7 +72,7 @@ export function openViewer<M, V extends { destroy(): void }>(
     module => {
       if (over) return
       let failed = false
-      const shown = mount(module, {
+      const report: ViewerReport = {
         ready: () => {
           if (!over && !failed) onState({ at: 'shown' })
         },
@@ -83,7 +83,14 @@ export function openViewer<M, V extends { destroy(): void }>(
           viewer?.destroy()
           viewer = null
         },
-      })
+      }
+      let shown: V
+      try {
+        shown = mount(module, report)
+      } catch {
+        // A viewer that throws as it starts: the file cannot be shown, and there is nothing to let go of.
+        return report.fail('other')
+      }
       if (failed) shown.destroy()
       else viewer = shown
     },

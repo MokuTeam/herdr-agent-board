@@ -103,6 +103,20 @@ describe('a file in a viewer', () => {
     expect(early.destroyed()).toBe(1)
   })
 
+  test('a viewer that throws as it starts: failed, not loading for ever', async () => {
+    const states: ViewerState[] = []
+    openViewer(
+      async () => 'viewer',
+      () => {
+        throw new Error('no canvas here')
+      },
+      s => states.push(s),
+    )
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(states).toEqual([{ at: 'loading' }, { at: 'failed', why: 'other' }])
+  })
+
   test('no script to import: no viewer', async () => {
     const s = session()
     await s.refuse()
@@ -111,7 +125,8 @@ describe('a file in a viewer', () => {
 })
 
 describe('what the quick look draws for a viewer’s state', () => {
-  const office = { password: 'ql.fileLocked', broken: 'ql.fileBroken', unavailable: 'ql.fileBroken' }
+  // A kind of file with no frame to fall back on says so instead.
+  const noFrame = { ...PDF_TEXTS, unavailable: 'ql.noPreview' }
 
   test('loading over it, nothing more once drawn, why when not; a PDF with no viewer in a frame', () => {
     expect(viewerLook({ at: 'loading' }, PDF_TEXTS)).toEqual({ frame: false, wait: true, empty: null })
@@ -120,7 +135,7 @@ describe('what the quick look draws for a viewer’s state', () => {
     expect(viewerLook({ at: 'failed', why: 'broken' }, PDF_TEXTS).empty).toBe('ql.pdfBroken')
     expect(viewerLook({ at: 'failed', why: 'other' }, PDF_TEXTS).empty).toBe('ql.pdfBroken')
     expect(viewerLook({ at: 'unavailable' }, PDF_TEXTS)).toEqual({ frame: true, wait: false, empty: null })
-    expect(viewerLook({ at: 'unavailable' }, office)).toEqual({ frame: false, wait: false, empty: 'ql.fileBroken' })
+    expect(viewerLook({ at: 'unavailable' }, noFrame)).toEqual({ frame: false, wait: false, empty: 'ql.noPreview' })
   })
 
   const drawn = (state: ViewerState) =>
