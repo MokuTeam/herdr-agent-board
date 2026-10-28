@@ -192,7 +192,26 @@ Not built in this step. Written down so the server mode leaves room for it.
   server gets the board's hooks by its install action; the owner then signs in there (`/login`).
 - **Limits.** A hook or MCP server removed on one side stays on the other (merges only add); a
   worktree is paired only by the path the owner gives; secrets are found by their known shapes
-  (tokens, keys, JWTs), not every password a text may hold.
+  (tokens, keys, JWTs, a URL's password, `--token x`), not every password a text may hold.
+- **After the review (sync v2).** What changes how the target runs goes only in the groups the
+  owner ticks, each apart, unticked by default, both ways (stricter words for server → PC): env,
+  hooks (and `hooks/` scripts), the status line (and a top-level `statusline*` script), MCP servers,
+  other programs (helper commands, plugins). The preview lists every key a merge adds or changes,
+  each in its group. `*_BASE_URL`, `*PROXY*`, `NODE_OPTIONS` and `*_HEADERS` never go; a key of
+  settings.json or .claude.json holding a secret stays (listed), never carried cut. Session and
+  edit history (transcripts and what sits beside them, file-history, paste-cache, history.jsonl;
+  not memory) has its own tick, its default `DEFAULT_SYNC_HISTORY` (off until the owner decides).
+  `channels`, `local` are one machine's; `.env*`, `*.pem`, `*.key`, `id_*`, `settings*.json` but
+  settings.json are secret files. Secrets are looked for in JSON's decoded strings, line by line;
+  text not UTF-8 goes byte for byte (a BOM, UTF-16 kept); a file not text with a secret stays. A
+  file a secret was cut from goes only where the target has none (else listed). Each file goes
+  with the target's hash at Look: one changed since, or with a name differing only in case on
+  Windows or macOS, is left as it is and listed. A merged file that is not a JSON object there is
+  left as it is; a `.bak-profile-sync` copy is kept before its first merge, and it is merged again
+  if a Claude session wrote it meanwhile (the preview asks for idle sessions). Modes are the
+  target's own, or 0600 (0700 with the source's execute bit). Remotes cross as keys only. What a
+  run cut short wrote is recorded. sudo runs with `-k`, so a cached ticket never lets the
+  password line reach the program.
 
 ## Later: each agent's own browser, watched and taken over from the board (decided with the owner)
 

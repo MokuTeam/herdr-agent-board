@@ -221,3 +221,101 @@ test('a run, its end with a profile made there, and a failure', () => {
   })
   expect(failed.map(textOf).join(' ')).toContain('The sync stopped: No board is installed on this server.')
 })
+
+test('as reviewed: each group that changes how this computer runs ticked apart, unticked; history apart; a deletion changed there its own tick', () => {
+  const p = buildPreview({
+    id: 'p2',
+    at: NOW,
+    direction: 'down',
+    source: manifest(
+      'linux',
+      '/home/agent',
+      [
+        {
+          ...facts(
+            'default',
+            '/home/agent/.claude',
+            {
+              'settings.json': ['s2', 9],
+              'history.jsonl': ['h2', 9],
+              'paste-cache/p.txt': ['p1', 3],
+              'agents/x.md': ['x', 2],
+            },
+            { 'agents/gone.md': 'g', 'agents/mine.md': 'm' },
+          ),
+          views: {
+            settings: {
+              env: { SRV: '1' },
+              hooks: { Stop: [{ hooks: [{ type: 'command', command: 'notify-send x' }] }] },
+              model: 'opus',
+            },
+          },
+        },
+      ],
+      { findings: [{ profile: 'default', rel: 'agents/x.md', kinds: ['GitHub token'] }] },
+    ),
+    target: manifest('win32', 'C:Usersmigo', [
+      {
+        ...facts(
+          'default',
+          'C:Usersmigo.claude',
+          { 'agents/gone.md': ['g', 1], 'agents/mine.md': ['m2', 1], 'agents/x.md': ['x0', 1] },
+          { 'agents/gone.md': 'g', 'agents/mine.md': 'm', 'agents/x.md': 'x0' },
+        ),
+        views: { settings: { model: 'sonnet' } },
+      },
+    ]),
+    given: {},
+  })
+  const nodes = draw({ ...SYNC_IDLE, phase: 'preview', direction: 'down', preview: p })
+  const text = nodes.map(textOf).join(' ')
+  // session history goes only when ticked: not counted to send until then
+  expect(text).toContain('1 file to send (9 B), 0 in conflict, 2 deleted on the source.')
+  expect(text).toContain('Keep the Claude sessions on this computer idle while this runs')
+  expect(folds(nodes).map(summaryOf)).toEqual([
+    'Merged by key (each side keeps its own secrets and hooks) · 1 file · 9 B',
+    'Environment variables (env) · 1',
+    'Hooks: commands Claude runs on its events · 1',
+    'Session history and edit history · 2 files · 12 B',
+    'Deleted on the source since the last sync · 2',
+    'Held back (secrets) · 1',
+    'Not sent: a secret would be cut from them, and the target has its own copy · 1',
+  ])
+  expect(text).toContain('default: settings.json · model (changed)')
+  expect(text).toContain('default: settings.json · env SRV (new)')
+  expect(text).toContain('Let the server change these on this computer')
+  expect(text).toContain('tick only what you know and trust')
+  expect(text).toContain('default: agents/x.md: GitHub token')
+  const ticks = findAll(nodes, el => el.tag === 'input' && el.attrs.get('type') === 'checkbox')
+  expect(ticks.map(el => el.attrs.get('name'))).toEqual([
+    'sync-allow-env',
+    'sync-allow-hooks',
+    'sync-allow-history',
+    'sync-delete-default:agents/mine.md',
+    'sync-deletions',
+  ])
+  for (const el of ticks) expect(el.attrs.has('checked')).toBe(false)
+  const ru = draw({ ...SYNC_IDLE, phase: 'preview', direction: 'down', preview: p }, 'ru')
+    .map(textOf)
+    .join(' ')
+  expect(ru).toContain('Разрешить серверу изменить это на этом компьютере')
+  expect(ru).not.toContain('sync.panel')
+  // what the target left as it was, and why
+  const done = draw({
+    ...SYNC_IDLE,
+    phase: 'done',
+    direction: 'down',
+    result: {
+      files: 1,
+      bytes: 9,
+      deleted: 0,
+      kept: 0,
+      created: [],
+      install: null,
+      gone: 0,
+      skipped: [{ profile: 'default', rel: 'agents/x.md', why: 'changed' }],
+    },
+  })
+  expect(folds(done).map(summaryOf)).toEqual(['Left as they were on the target · 1'])
+  expect(done.map(textOf).join(' ')).toContain('default: agents/x.md (changed there since the preview)')
+})
