@@ -38,9 +38,11 @@ export const BACKUP_FENCE = `${SSHD_DIR}/00-agent-board-backup.conf`
 export const BACKUP_BLOCK_BEGIN = '# >>> backup-drop of agent-board'
 export const BACKUP_BLOCK_END = '# <<< backup-drop of agent-board'
 /** The drop script's version: `check` says it, so the board knows an older script is there (2: `put` takes the size). */
-export const DROP_VERSION = 2
+export const DROP_VERSION = 3
 /** The largest snapshot the drop takes (bytes), how full its folder may get, and the free disk it always leaves (KB). */
-export const DROP_MAX_FILE = 64 * 1024 * 1024
+// a sealed snapshot is about a megabyte: the newest ten, which the rotation always keeps, must fit
+// in the folder with room to spare, or ten files put by a stolen key would fill it for good
+export const DROP_MAX_FILE = 32 * 1024 * 1024
 export const DROP_MAX_KB = 512 * 1024
 export const DROP_RESERVE_KB = 512 * 1024
 
@@ -88,15 +90,22 @@ const NAME_GLOB = `${D.repeat(8)}T${D.repeat(6)}Z-${H.repeat(8)}.abk`
  * month past the one before it (a clock set wrong would take everything else). Days count from 1970 by the civil calendar (no
  * mktime: mawk has none).
  */
+const sec = (ms: number) => Math.floor(ms / 1000)
+// a name's time in seconds, without mktime (mawk lacks it)
+const AWK_STAMP = [
+  'function days(y, m, d) { if (m <= 2) { y--; m += 12 }; return 365 * y + int(y / 4) - int(y / 100) + int(y / 400) + int((153 * (m - 3) + 2) / 5) + d - 719469 }',
+  'function stamp(x) { return days(substr(x, 1, 4) + 0, substr(x, 5, 2) + 0, substr(x, 7, 2) + 0) * 86400 + substr(x, 10, 2) * 3600 + substr(x, 12, 2) * 60 + substr(x, 14, 2) }',
+]
+
 export function pruneAwk(): string {
   // one line: a shell word carries no newline (server-shell.ts shQuote)
-  const s = (ms: number) => Math.floor(ms / 1000)
+  const s = sec
   return [
-    'function days(y, m, d) { if (m <= 2) { y--; m += 12 }; return 365 * y + int(y / 4) - int(y / 100) + int(y / 400) + int((153 * (m - 3) + 2) / 5) + d - 719469 }',
-    'function stamp(x) { return days(substr(x, 1, 4) + 0, substr(x, 5, 2) + 0, substr(x, 7, 2) + 0) * 86400 + substr(x, 10, 2) * 3600 + substr(x, 12, 2) * 60 + substr(x, 14, 2) }',
-    `$0 ~ /${NAME_AWK}/ { n++; name[n] = $0 }`,
+    ...AWK_STAMP,
+    // a name dated over a day ahead is kept and left out of the rest (rotationKeeps)
+    `$0 ~ /${NAME_AWK}/ { if (stamp($0) > now + ${s(FUTURE_MS)}) next; n++; name[n] = $0 }`,
     'END {',
-    `if (n == 0 || stamp(name[n]) > now + ${s(FUTURE_MS)} || (n > 1 && stamp(name[n]) - stamp(name[n - 1]) > ${s(GAP_MS)})) exit;`,
+    `if (n == 0 || (n > 1 && stamp(name[n]) - stamp(name[n - 1]) > ${s(GAP_MS)})) exit;`,
     'for (i = 1; i <= n; i++) {',
     'x = name[i]; age = now - stamp(x); day = substr(x, 1, 8); month = substr(x, 1, 6);',
     'fd = !(day in seen_d); fm = !(month in seen_m); seen_d[day] = 1; seen_m[month] = 1;',
@@ -104,6 +113,15 @@ export function pruneAwk(): string {
     'print x',
     '}',
     '}',
+  ].join(' ')
+}
+
+/** How many snapshots are dated over a day ahead of the server's clock (aheadCount), printed. */
+export function aheadAwk(): string {
+  return [
+    ...AWK_STAMP,
+    `$0 ~ /${NAME_AWK}/ && stamp($0) > now + ${sec(FUTURE_MS)} { c++ }`,
+    'END { print c + 0 }',
   ].join(' ')
 }
 
@@ -154,7 +172,7 @@ export function dropScript(limits: Partial<DropLimits> = {}): string {
     `  ls "$DIR" | awk -v now="$(date -u +%s)" ${shQuote(pruneAwk())} | while read -r old; do rm -f "$DIR/$old"; done`,
     '}',
     'put() {',
-    '  case $1 in "" | *[!0-9]*) fail "put needs the snapshot\'s size in bytes" ;; esac',
+    '  case $1 in "" | *[!0-9]* | 0*) fail "put needs the snapshot\'s size in bytes" ;; esac',
     '  [ "$1" -gt 0 ] && [ "$1" -le "$MAX_FILE" ] || fail "a snapshot is 1 to $MAX_FILE bytes"',
     '  mkdir -p "$DIR" || fail "cannot make the snapshots folder"',
     '  sweep',
@@ -178,6 +196,7 @@ export function dropScript(limits: Partial<DropLimits> = {}): string {
     '  sync',
     '  echo "@@put $name $size"',
     '  prune',
+    `  echo "@@ahead $(ls "$DIR" | awk -v now="$(date -u +%s)" ${shQuote(aheadAwk())})"`,
     '}',
     'list() {',
     // biome-ignore lint/suspicious/noTemplateCurlyInString: the shell's own ${…}
@@ -333,7 +352,8 @@ export function applyScript(publicKey: string): string {
     '    userdel "$U" 2>/dev/null',
     '    if [ "$had_home" = 0 ] && [ -z "$(ls -A "$SNAP" 2>/dev/null)" ]; then rm -rf "$HOMEDIR"; fi',
     '  fi',
-    '  if [ "$had_rec" = 1 ]; then cp -p "$W/rec.old" "$REC"; else rm -f "$REC" "$REC.part"; fi',
+    '  if [ "$had_rec" = 1 ]; then cp -p "$W/rec.old" "$REC"; else rm -f "$REC"; fi',
+    '  rm -f "$REC.part"',
     '  [ "$made_etc" = 1 ] && rmdir "$ETCDIR" 2>/dev/null',
     '  [ "$reloaded" = 1 ] && sshd -t && reload',
     '  rm -rf "$W"',

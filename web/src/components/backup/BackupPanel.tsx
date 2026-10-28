@@ -197,6 +197,8 @@ export interface BackupBodyProps {
 
 /** The panel's content, from its view and what runs: no fetching here (BackupPanel does it). */
 export function BackupBody({ view, loadError, busy, notes, manual, canEdit, actions }: BackupBodyProps) {
+  const [armed, setArmed] = useState(false)
+  const reset = !!view?.problems.some(p => p.kind === 'reset')
   const t = useT()
   const disabled = !canEdit || !view || busy !== null
   const last = view ? lastGood(view.states) : null
@@ -223,8 +225,18 @@ export function BackupBody({ view, loadError, busy, notes, manual, canEdit, acti
           )}
           {view.needed && (
             <div className="access-actions">
-              <button type="button" className="button" disabled={disabled} onClick={actions.now}>
-                {busy === 'now' ? '…' : t('backup.now')}
+              <button
+                type="button"
+                className="button"
+                disabled={disabled}
+                onClick={() => {
+                  // the database holds less than its last backup: sending it is a choice, asked twice
+                  if (reset && !armed) return setArmed(true)
+                  setArmed(false)
+                  actions.now()
+                }}
+              >
+                {busy === 'now' ? '…' : t(reset && armed ? 'backup.nowReset' : 'backup.now')}
               </button>
             </div>
           )}
@@ -464,8 +476,8 @@ function ServerSection(props: {
         className="path-add"
         type={type}
         value={fields[name]}
-        // a server that takes snapshots keeps its fields: Undo first
-        disabled={props.disabled || !!s?.set}
+        // a server that takes snapshots keeps its address: Undo first; its admin login may change
+        disabled={props.disabled || (!!s?.set && (name === 'host' || name === 'port'))}
         onChange={e => setFields(f => ({ ...f, [name]: e.target.value }))}
       />
     </label>

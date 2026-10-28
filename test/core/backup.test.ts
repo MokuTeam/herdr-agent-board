@@ -2,6 +2,7 @@ import { test } from 'bun:test'
 import assert from 'node:assert/strict'
 import {
   activeTargets,
+  aheadCount,
   backupConfig,
   backupProblems,
   freshTarget,
@@ -66,14 +67,19 @@ test('the rotation keeps the newest ten, the last 48 hours, the first of each da
   for (const n of [dayA2, old2, ancient]) assert.ok(!keep.has(n), n)
 })
 
-test('the rotation keeps the newest ten whatever their age, and everything when the clock looks wrong', () => {
+test('the rotation keeps the newest ten whatever their age; a name ahead of the clock stays and stops nothing; a jump keeps all', () => {
   const now = Date.UTC(2026, 9, 29, 12, 0, 0)
   const old = Array.from({ length: 13 }, (_, i) =>
     snapshotName(now - (1000 + i) * DAY, i.toString(16).padStart(8, '0')),
   )
   assert.equal(rotationKeeps(old, now).size, 10)
-  // the newest a year ahead of this clock: everything stays
-  assert.equal(rotationKeeps([...old, snapshotName(now + 365 * DAY, 'ffffffff')], now).size, 14)
+  // a name a year ahead of this clock (a planted file, a clock set wrong once): it stays, out of the
+  // count, and the rest rotate as before
+  const ahead = snapshotName(now + 365 * DAY, 'ffffffff')
+  const kept = rotationKeeps([...old, ahead], now)
+  assert.equal(kept.size, 11)
+  assert.ok(kept.has(ahead))
+  assert.equal(aheadCount([...old, ahead, snapshotName(now + DAY / 2, 'dddddddd')], now), 1)
   // the newest more than a month after the one before it (a jump, or a board asleep): everything stays this time
   assert.equal(rotationKeeps([...old, snapshotName(now, 'eeeeeeee')], now).size, 14)
 })

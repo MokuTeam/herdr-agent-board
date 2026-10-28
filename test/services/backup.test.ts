@@ -18,7 +18,7 @@ import { dropKey, FOLDER_NAME, folderProblem, keyFile, readStatus, writeKey } fr
 import { dbFile, openDb } from '../../src/adapters/db.ts'
 import { stateDir } from '../../src/adapters/paths.ts'
 import { backupConfig, snapshotName } from '../../src/core/backup.ts'
-import { makeKey } from '../../src/core/backup-file.ts'
+import { makeKey, seal } from '../../src/core/backup-file.ts'
 import { dropScript } from '../../src/core/backup-server.ts'
 import {
   BackupError,
@@ -388,3 +388,120 @@ test('board doctor knows a synced folder by its Windows path too', () => {
   assert.ok(syncedPath('/home/me/Dropbox/state/board.db'))
   assert.ok(!syncedPath('C:\\Users\\me\\AppData\\Local\\herdr\\board.db'))
 })
+
+test('restore says what it passed over and why: a newest one that will not open, one that cannot be read', async () => {
+  const { folder } = await setUp(['kept'])
+  const cfg = { backup: { folder } }
+  const good = (await backupNow({ cfg })).sent[0]?.name as string
+  const dir = join(folder, FOLDER_NAME)
+  const damaged = readFileSync(join(dir, good))
+  damaged[damaged.length - 5] = (damaged[damaged.length - 5] ?? 0) ^ 1
+  const broken = snapshotName(Date.now() + 60_000, 'aaaaaaaa')
+  writeFileSync(join(dir, broken), damaged)
+  // newer still, and not a file that reads (a sync client's placeholder, say)
+  const unreadable = snapshotName(Date.now() + 120_000, 'bbbbbbbb')
+  mkdirSync(join(dir, unreadable))
+  const r = await restore({ from: { target: 'folder' }, cfg, by: 'user' })
+  assert.equal(r.from, `folder/${good}`)
+  assert.deepEqual(
+    r.skipped.map(x => x.name),
+    [unreadable, broken],
+  )
+  assert.equal(r.skipped[1]?.why, 'backup.file.damaged')
+  assert.ok(r.skipped[0]?.why, 'the read error, said')
+})
+
+test('on a new computer, a passphrase that opens none of the newest three stops there', async () => {
+  const { folder } = await setUp(['kept'])
+  const cfg = { backup: { folder } }
+  // an older snapshot sealed with another passphrase: reached only if the walk went on
+  const db = openDb()
+  assert.ok(db)
+  const plain = db.db.serialize()
+  db.close()
+  const other = makeKey('another passphrase', 1, CHEAP)
+  mkdirSync(join(folder, FOLDER_NAME), { recursive: true })
+  writeFileSync(join(folder, FOLDER_NAME, snapshotName(Date.now() - 3_600_000, 'cccccccc')), seal(plain, other))
+  for (let i = 0; i < 3; i++) await backupNow({ cfg, force: true })
+  rmSync(keyFile())
+  await assert.rejects(
+    restore({ from: { target: 'folder' }, cfg, by: 'user', passphrase: 'another passphrase' }),
+    (err: unknown) => err instanceof BackupError && err.key === 'backup.file.wrong',
+  )
+  assert.deepEqual(refsNow(), ['add:kept'], 'nothing restored')
+})
+
+test('right after Back up now the view says no reset: the seq it compares is read afresh', async () => {
+  const { folder } = await setUp(['a'])
+  const cfg = { backup: { folder } }
+  await backupNow({ cfg })
+  assert.deepEqual(
+    backupView(cfg).problems.map(p => p.kind),
+    [],
+  )
+  const db = openDb()
+  db?.write('user', tx => tx.journal({ store: 'test', op: 'add', ref: 'b' }))
+  db?.close()
+  await backupNow({ cfg, force: true })
+  assert.deepEqual(
+    backupView(cfg).problems.map(p => p.kind),
+    [],
+  )
+})
+
+test('a snapshot named a day and more ahead in the folder stays, the rotation goes on, and it is shown', async () => {
+  const { folder } = await setUp()
+  const now = Date.now()
+  const dir = join(folder, FOLDER_NAME)
+  mkdirSync(dir, { recursive: true })
+  const ahead = snapshotName(now + 400 * 86_400_000, 'ffffffff')
+  writeFileSync(join(dir, ahead), 'ABK1')
+  const old = snapshotName(now - 900 * 86_400_000, '00000000')
+  writeFileSync(join(dir, old), 'ABK1')
+  // twenty days apart: no month-long jump before the newest, which would keep everything
+  for (let i = 1; i <= 12; i++)
+    writeFileSync(join(dir, snapshotName(now - 20 * i * 86_400_000, `1111${String(i).padStart(4, '0')}`)), 'ABK1')
+  const cfg = { backup: { folder } }
+  assert.equal((await backupNow({ cfg })).sent.length, 1)
+  assert.ok(existsSync(join(dir, ahead)), 'kept')
+  assert.equal(existsSync(join(dir, old)), false, 'and the rest rotate as before')
+  assert.equal(readStatus().targets.folder?.ahead, 1)
+  assert.deepEqual(
+    backupView(cfg).problems.map(p => p.kind),
+    ['ahead'],
+  )
+})
+
+test('two restores in one second each keep their own copy of the database as it was', async () => {
+  const { folder } = await setUp(['kept'])
+  const cfg = { backup: { folder } }
+  await backupNow({ cfg })
+  const now = () => Date.parse('2026-10-29T03:00:00Z')
+  const first = await restore({ from: { target: 'folder' }, cfg, by: 'user', now })
+  const second = await restore({ from: { target: 'folder' }, cfg, by: 'user', now })
+  assert.notEqual(first.before, second.before)
+  assert.ok(existsSync(first.before as string) && existsSync(second.before as string))
+})
+
+test.skipIf(process.platform !== 'win32')(
+  '--replace-file while another process has the file open: put back, said as such, no folder left',
+  async () => {
+    const { folder } = await setUp(['kept'])
+    const cfg = { backup: { folder } }
+    await backupNow({ cfg })
+    const holder = openDb()
+    try {
+      await assert.rejects(
+        restore({ from: { target: 'folder' }, cfg, by: 'user', replaceFile: true, boardRunning: async () => false }),
+        (err: unknown) => err instanceof BackupError && err.key === 'backup.err.fileBusy',
+      )
+    } finally {
+      holder?.close()
+    }
+    assert.deepEqual(
+      readdirSync(stateDir()).filter(n => n.startsWith('damaged-')),
+      [],
+    )
+    assert.ok(existsSync(dbFile()))
+  },
+)

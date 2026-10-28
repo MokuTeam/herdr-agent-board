@@ -62,6 +62,17 @@ exit 0
   chown: `#!/bin/sh
 echo "chown $*" >> "$FAKE/state/log"; exit 0
 `,
+  // the record's writes counted; FAIL_RECORD_AT=<n>: the nth of them fails
+  mv: `#!/bin/sh
+for last in "$@"; do :; done
+case $last in
+  */record)
+    n=$(( $(cat "$FAKE/state/records" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE/state/records"
+    [ "$n" = "\${FAIL_RECORD_AT:-0}" ] && { echo "mv: cannot move to $last" >&2; exit 1; } ;;
+esac
+for m in /usr/bin/mv /bin/mv; do [ -x "$m" ] && exec "$m" "$@"; done
+exit 127
+`,
   install: `#!/bin/sh
 args=; skip=
 for a in "$@"; do
@@ -107,6 +118,8 @@ export interface FakeRoot {
   etc(): Record<string, string>
   passwd(): string
   log(): string
+  /** How many times a run wrote Apply's record. */
+  records(): number
   /** A file of the root, by its path on the server (/etc/ssh/sshd_config…). */
   path(serverPath: string): string
 }
@@ -171,6 +184,13 @@ export function fakeRoot(mode: 'include' | 'plain'): FakeRoot {
         })
         child.on('close', code => resolve(code))
       })
+    },
+    records: () => {
+      try {
+        return Number(readFileSync(join(dir, 'state', 'records'), 'utf8').trim()) || 0
+      } catch {
+        return 0
+      }
     },
     etc: () => walk(join(dir, 'etc'), {}),
     passwd: () => readFileSync(join(dir, 'state', 'passwd'), 'utf8'),

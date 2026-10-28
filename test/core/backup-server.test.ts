@@ -4,13 +4,17 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { rotationKeeps, snapshotName } from '../../src/core/backup.ts'
+import { aheadCount, KEEP_NEWEST, rotationKeeps, snapshotName } from '../../src/core/backup.ts'
 import {
+  aheadAwk,
   applyScript,
   BACKUP_BLOCK_BEGIN,
   BACKUP_USER,
   backupKeysLine,
   DROP_FILE,
+  DROP_MAX_FILE,
+  DROP_MAX_KB,
+  DROP_VERSION,
   type DropLimits,
   dropScript,
   fenceBlock,
@@ -107,7 +111,7 @@ test.skipIf(!sh)('the drop puts, lists and gets snapshots, names them itself and
     const got = d.run(`get ${name}`)
     assert.equal(got.status, 0)
     assert.deepEqual(got.stdout, one, 'bytes come back as they went')
-    assert.match(d.run('check').stdout.toString(), /^@@ok 2$/m)
+    assert.match(d.run('check').stdout.toString(), new RegExp(`^@@ok ${DROP_VERSION}$`, 'm'))
     assert.match(d.run('df').stdout.toString(), /^@@df \d+ \d+ \d+$/m)
   } finally {
     d.done()
@@ -213,10 +217,19 @@ test.skipIf(!awk)("the drop's rotation removes exactly what rotationKeeps does n
   history.push(snapshotName(now + 3_600_000, 'ffffffff'))
   same(history)
   assert.ok(run(history).length > 100)
-  // a clock set a year ahead: nothing goes
+  // a name a year ahead (a clock set wrong once, or a file put there): it stays, and the rest
+  // rotate as they would without it
   const ahead = [...history, snapshotName(now + 400 * DAY, 'eeeeeeee')]
   same(ahead)
-  assert.deepEqual(run(ahead), [])
+  assert.deepEqual(run(ahead), run(history))
+  // and the drop counts it, as aheadCount does
+  const count = spawnSync(awk as string, ['-v', `now=${Math.floor(now / 1000)}`, aheadAwk()], {
+    input: `${[...ahead].sort().join('\n')}\n`,
+    encoding: 'utf8',
+    env: { ...process.env, LC_ALL: 'C' },
+  })
+  assert.equal(count.stdout.trim(), String(aheadCount(ahead, now)))
+  assert.equal(count.stdout.trim(), '1')
   // the newest a month and more after the one before it (a clock that jumped, a board asleep): nothing goes
   const cutoff = snapshotName(now - 40 * DAY, '00000000')
   const jumped = history.filter(n => n < cutoff).concat(snapshotName(now, 'dddddddd'))
@@ -228,6 +241,12 @@ test.skipIf(!awk)("the drop's rotation removes exactly what rotationKeeps does n
   )
   same(old)
   assert.equal(run(old).length, 2)
+})
+
+test('the newest ten, which the rotation always keeps, fit in the folder at their largest with room for one more', () => {
+  // else ten large files put with a stolen key would fill the folder for good: nothing new goes in,
+  // so nothing old rotates out
+  assert.ok(((KEEP_NEWEST + 1) * DROP_MAX_FILE) / 1024 < DROP_MAX_KB)
 })
 
 // ------------------------------------------------------------------ what Look and the runs said
@@ -364,6 +383,42 @@ test.skipIf(!sh)(
     assert.deepEqual(root.etc(), after1, 'etc as the first run left it')
   },
   60_000,
+)
+
+test.skipIf(!sh)(
+  'each of Apply’s record writes failing in turn: the first run leaves etc as it was, a second keeps what the first made',
+  () => {
+    const count = fakeRoot('include')
+    okRun(count.run(applyScript(KEY)))
+    const writes = count.records()
+    assert.ok(writes >= 4, `the record is written as each step is done (${writes})`)
+    okRun(count.run(applyScript(KEY)))
+    // a second run makes no user: one write fewer
+    const writes2 = count.records() - writes
+    assert.ok(writes2 >= 3, `a second run writes it too (${writes2})`)
+    for (let n = 1; n <= Math.max(writes, writes2); n++) {
+      const first = fakeRoot('include')
+      const before = first.etc()
+      if (n <= writes) {
+        const r = first.run(applyScript(KEY), { FAIL_RECORD_AT: String(n) })
+        assert.equal(r.code, 1, `first run, write ${n}`)
+        assert.deepEqual(first.etc(), before, `first run, write ${n}: etc as it was`)
+        assert.doesNotMatch(first.passwd(), /agent-board-backup/, `first run, write ${n}`)
+      }
+      if (n > writes2) continue
+      const again = fakeRoot('include')
+      okRun(again.run(applyScript(KEY)))
+      writeFileSync(again.path(SNAP), 'ABK1x')
+      const after1 = again.etc()
+      const second = again.records() + n
+      const r2 = again.run(applyScript(KEY), { FAIL_RECORD_AT: String(second) })
+      assert.equal(r2.code, 1, `second run, write ${n}`)
+      assert.deepEqual(again.etc(), after1, `second run, write ${n}: etc as the first left it`)
+      assert.match(again.passwd(), /^agent-board-backup:/m, `second run, write ${n}: the user stays`)
+      assert.ok(existsSync(again.path(SNAP)), `second run, write ${n}: the snapshot stays`)
+    }
+  },
+  120_000,
 )
 
 test.skipIf(!sh)(

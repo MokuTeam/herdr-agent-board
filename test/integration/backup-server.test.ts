@@ -165,6 +165,7 @@ async function scenario(l: Lane, include: boolean): Promise<void> {
         'ExitOnForwardFailure=yes',
       ]).code,
     ).not.toBe(0)
+    expect(ssh(s, 'agent-board-backup', otherKey, ['list']).code).not.toBe(0)
     // the owner's own logins as they were
     expect(ssh(s, 'admin', adminKey, ['true']).code).toBe(0)
     expect(ssh(s, 'root', adminKey, ['true']).code).toBe(0)

@@ -110,13 +110,15 @@ export function rotationKeeps(names: readonly string[], now: number): Set<string
   const dated = names
     .map(name => ({ name, at: snapshotTime(name) }))
     .filter((x): x is { name: string; at: number } => {
-      if (x.at === null) keep.add(x.name)
-      return x.at !== null
+      // a name that is no snapshot's, or one dated over a day ahead (a clock set wrong, or a file
+      // put there): kept, and left out of the rest, so it neither goes nor stops the rotation
+      if (x.at === null || x.at > now + FUTURE_MS) keep.add(x.name)
+      return x.at !== null && x.at <= now + FUTURE_MS
     })
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
   const newest = dated.at(-1)
   const before = dated.at(-2)
-  if (newest && (newest.at > now + FUTURE_MS || (before && newest.at - before.at > GAP_MS))) {
+  if (newest && before && newest.at - before.at > GAP_MS) {
     for (const { name } of dated) keep.add(name)
     return keep
   }
@@ -140,6 +142,13 @@ export function rotationKeeps(names: readonly string[], now: number): Set<string
   })
   return keep
 }
+
+/** How many of the names are dated over a day ahead of the clock: kept, and worth a word. */
+export const aheadCount = (names: readonly string[], now: number): number =>
+  names.filter(name => {
+    const at = snapshotTime(name)
+    return at !== null && at > now + FUTURE_MS
+  }).length
 
 // ------------------------------------------------------------------ when
 
@@ -177,6 +186,8 @@ export interface TargetState {
   failures: number
   /** The server refused the login (or its key changed): no try until a Test or an Apply goes through. */
   held?: string | null
+  /** Snapshots it holds dated over a day ahead of the clock, at its last snapshot: kept, out of the rotation. */
+  ahead?: number
 }
 
 export const freshTarget = (): TargetState => ({
@@ -225,6 +236,7 @@ export type BackupProblem =
   | { kind: 'stale'; target: Target; lastOk: number; hours: number }
   | { kind: 'failing'; target: Target; error: string }
   | { kind: 'held'; target: Target; error: string }
+  | { kind: 'ahead'; target: Target; count: number }
   | { kind: 'missing' }
   | { kind: 'reset'; seq: number; had: number }
 
@@ -267,6 +279,7 @@ export function backupProblems(o: {
       out.push({ kind: 'stale', target, lastOk: s.lastOk, hours: Math.floor((o.now - s.lastOk) / HOUR) })
     if (s.held) out.push({ kind: 'held', target, error: s.held })
     else if (s.error !== null) out.push({ kind: 'failing', target, error: s.error })
+    if (s.ahead) out.push({ kind: 'ahead', target, count: s.ahead })
   }
   return out
 }
@@ -308,6 +321,8 @@ export function problemSentence(
       return t('backup.problem.failing', { target: t(`backup.target.${p.target}`), error: p.error })
     case 'held':
       return t('backup.problem.held', { target: t(`backup.target.${p.target}`), error: p.error })
+    case 'ahead':
+      return t('backup.problem.ahead', { target: t(`backup.target.${p.target}`), n: p.count })
   }
 }
 

@@ -1263,6 +1263,9 @@ async function dbCmd(): Promise<void> {
       }
     },
   })
+  // what was newer and did not open: the hours it held are not in what was restored
+  for (const x of r.skipped)
+    console.log(t('backup.cli.skipped', { name: x.name, why: x.why.startsWith('backup.') ? t(x.why) : x.why }))
   if (!r.inPlace) return console.log(t('backup.cli.restoredFile', { from: r.from, aside: r.aside ?? '' }))
   console.log(t('backup.cli.restored', { from: r.from, before: r.before ?? '-' }))
 }

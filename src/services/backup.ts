@@ -11,8 +11,10 @@
 // and each target's state (core/backup.ts targetDue); a `board` command writes to the database
 // without it, and the board backs up what changed the next time it looks. `board backup now`
 // runs one by hand.
+
+import { Database } from 'bun:sqlite'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { dropArgs, dropError, exchange } from '../adapters/backup-ssh.ts'
 import {
@@ -33,6 +35,7 @@ import { type BoardDb, damageOf, dbFile, integrityOf, openDb, replaceContents } 
 import { hostKeyPinned, knownHostsReady, sshBin } from '../adapters/ssh.ts'
 import {
   activeTargets,
+  aheadCount,
   type BackupConfig,
   type BackupProblem,
   backedSeq,
@@ -172,17 +175,22 @@ export async function sendTo(
   sealed: Buffer,
   now: number = Date.now(),
   o: DropCall = {},
-): Promise<string> {
+): Promise<{ name: string; ahead: number }> {
   if (target === 'folder') {
     if (!c.folder) throw new BackupError('backup.err.noFolder')
     const problem = folderProblem(c.folder)
     if (problem) throw new BackupError(problem, { folder: c.folder })
     const name = folderPut(c.folder, sealed, now)
     // a file a sync client or a scanner holds stays for the next time: the snapshot went through
+    let ahead = 0
     try {
       folderPrune(c.folder, now)
+      ahead = aheadCount(
+        folderList(c.folder).map(x => x.name),
+        now,
+      )
     } catch {}
-    return name
+    return { name, ahead }
   }
   // the size first: the drop keeps nothing that came cut short, and says the size it kept
   const x = await drop(c, `put ${sealed.length}`, sealed, o)
@@ -193,7 +201,7 @@ export async function sendTo(
   // the name ends with the start of the kept file's sha256: what went there is what was sent
   if (!m[1].endsWith(`-${createHash('sha256').update(sealed).digest('hex').slice(0, 8)}.abk`))
     throw new BackupError('backup.err.cutShort', { kept: m[2] ?? '?', sent: sealed.length })
-  return m[1]
+  return { name: m[1], ahead: Number(/^@@ahead (\d+)$/m.exec(x.out.toString('utf8'))?.[1] ?? 0) }
 }
 
 /** The snapshots a target holds, oldest first. */
@@ -300,8 +308,8 @@ export async function backupNow(o: {
     }
     for (const target of due) {
       try {
-        const name = await sendTo(target, c, snap.sealed, now())
-        record(target, now(), { name, seq: snap.seq })
+        const { name, ahead } = await sendTo(target, c, snap.sealed, now())
+        record(target, now(), { name, seq: snap.seq, ahead })
         report.sent.push({ target, name })
       } catch (err) {
         record(target, now(), failureOf(err))
@@ -322,12 +330,24 @@ export async function backupNow(o: {
 function record(
   target: Target,
   at: number,
-  r: { name: string; seq: number } | { error: string; held?: boolean },
+  r: { name: string; seq: number; ahead: number } | { error: string; held?: boolean },
 ): TargetState {
+  // the view compares the database's seq with the backups': read it afresh after this one
+  seqRead = null
   return updateTarget(target, s =>
     'error' in r
       ? { ...s, lastTry: at, error: r.error, failures: s.failures + 1, held: r.held ? r.error : (s.held ?? null) }
-      : { ...s, lastTry: at, lastOk: at, name: r.name, seq: r.seq, error: null, failures: 0, held: null },
+      : {
+          ...s,
+          lastTry: at,
+          lastOk: at,
+          name: r.name,
+          seq: r.seq,
+          error: null,
+          failures: 0,
+          held: null,
+          ahead: r.ahead,
+        },
   )
 }
 
@@ -461,12 +481,12 @@ export async function testTarget(
     } finally {
       live?.close()
     }
-    const name = await sendTo(target, c, snap.sealed, now())
+    const { name, ahead } = await sendTo(target, c, snap.sealed, now())
     const back = await fetchFrom(target, c, name)
     const opened = unseal(back, key)
     if (!opened.equals(snap.plain)) return { ok: false, name, error: t('backup.err.notSame') }
-    if (snap.seq >= 0) record(target, now(), { name, seq: snap.seq })
-    else updateTarget(target, s => ({ ...s, held: null, error: null, failures: 0 }))
+    if (snap.seq >= 0) record(target, now(), { name, seq: snap.seq, ahead })
+    else updateTarget(target, s => ({ ...s, held: null, error: null, failures: 0, ahead }))
     return { ok: true, name }
   } catch (err) {
     const error = err instanceof BackupFileError ? t(err.message) : message(err)
@@ -488,9 +508,15 @@ export interface RestoreReport {
   inPlace: boolean
   /** Where the damaged file went when the file was replaced. */
   aside?: string
-  /** Newer snapshots passed over because they did not open whole (the newest is taken when none is named). */
-  skipped: string[]
+  /** Newer snapshots passed over (the newest that opens is taken when none is named): each, and why (a text key). */
+  skipped: { name: string; why: string }[]
 }
+
+/** A restore by passphrase stops after this many snapshots in a row it does not open: it is the passphrase. */
+const WRONG_IN_A_ROW = 3
+/** And looks at this many at most: each is a fetch (a login, on the server) and a key made. */
+const RESTORE_WALK = 20
+let restores = 0
 
 const stamp = (at: number): string =>
   new Date(at)
@@ -544,7 +570,7 @@ export async function restore(o: {
   }
   return withTemp(async path => {
     let from: string
-    let skipped: string[] = []
+    const skipped: { name: string; why: string }[] = []
     if ('file' in o.from) {
       from = o.from.file
       let sealed: Buffer
@@ -568,21 +594,35 @@ export async function restore(o: {
       if (!list.length) throw new BackupError('backup.err.noneThere', { target })
       let found: string | null = null
       let last: BackupError | null = null
-      for (const { name } of [...list].reverse()) {
-        const why = await openTo(await fetchFrom(target, c, name), path)
+      let wrong = 0
+      for (const { name } of [...list].reverse().slice(0, RESTORE_WALK)) {
+        let sealed: Buffer
+        try {
+          sealed = await fetchFrom(target, c, name)
+        } catch (err) {
+          // one that cannot be read (a placeholder the sync client has not brought down, one gone
+          // since the listing) is passed over, as one that does not open
+          skipped.push({ name, why: message(err) })
+          continue
+        }
+        const why = await openTo(sealed, path)
         if (!why) {
           found = name
           break
         }
         if (why.key === 'backup.file.needPassphrase') throw why
         last = why
-        skipped = [...skipped, name]
+        skipped.push({ name, why: why.key })
+        // a typed passphrase that opens none of the newest few is the wrong one, not their damage
+        wrong = why.key === 'backup.file.wrong' ? wrong + 1 : 0
+        if (wrong >= WRONG_IN_A_ROW) throw why
       }
       if (!found) throw last ?? new BackupError('backup.err.noneThere', { target })
       from = `${target}/${found}`
     }
     const live = dbFile()
-    const beforePath = `${live}.before-restore-${stamp(now())}`
+    // two restores in one second (a retry) each keep their own copy
+    const beforePath = `${live}.before-restore-${stamp(now())}-${process.pid}-${++restores}`
     if (o.replaceFile) {
       if (await (o.boardRunning ?? (async () => false))()) throw new BackupError('backup.err.boardRunning')
       const aside = join(dirname(live), `damaged-${stamp(now())}`)
@@ -596,10 +636,14 @@ export async function restore(o: {
           moved.push(end)
         }
       } catch (err) {
-        // another process holds the file (Windows refuses the rename): what moved goes back
+        // another process holds the file (Windows refuses the rename): what moved goes back, and
+        // the folder made for it goes
         for (const end of moved) renameSync(join(aside, `board.db${end}`), `${live}${end}`)
+        try {
+          rmdirSync(aside)
+        } catch {}
         const code = (err as NodeJS.ErrnoException).code
-        if (code === 'EBUSY' || code === 'EPERM' || code === 'EACCES') throw new BackupError('backup.err.boardRunning')
+        if (code === 'EBUSY' || code === 'EPERM' || code === 'EACCES') throw new BackupError('backup.err.fileBusy')
         throw err
       }
       copyFileSync(path, live)
@@ -639,20 +683,28 @@ export interface BackupView {
   dropKey: boolean
 }
 
-/** The database's change counter, read at most every SEQ_MS (the payload asks every refresh); null when it cannot be read. */
+/**
+ * The database's change counter, read at most every SEQ_MS (the payload asks every refresh), and
+ * afresh after a backup; null when it cannot be read. A plain read of the journal: no migration,
+ * and a quarter of a second at most behind another process's write lock (the payload is built on
+ * the web board's main thread).
+ */
 const SEQ_MS = 10_000
 let seqRead: { at: number; path: string; seq: number | null } | null = null
 function dbSeq(now: number): number | null {
   const path = dbFile()
   if (seqRead && seqRead.path === path && now - seqRead.at < SEQ_MS) return seqRead.seq
   let seq: number | null = null
-  try {
-    const db = openDb({ create: false })
-    if (db) {
-      seq = db.lastChange().seq
-      db.close()
-    }
-  } catch {}
+  if (existsSync(path))
+    try {
+      const raw = new Database(path)
+      try {
+        raw.exec('PRAGMA busy_timeout = 250')
+        seq = (raw.query('SELECT coalesce(max(seq), 0) AS seq FROM journal').get() as { seq: number }).seq
+      } finally {
+        raw.close()
+      }
+    } catch {}
   seqRead = { at: now, path, seq }
   return seq
 }

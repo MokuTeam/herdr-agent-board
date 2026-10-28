@@ -66,7 +66,7 @@ test('a board with a backup target carries the backup’s line in its payload; n
   assert.deepEqual(board.backup, { last: null, problem: null })
 })
 
-test('a server that takes snapshots keeps its fields: a change or a removal says Undo first', async () => {
+test('a server that takes snapshots keeps its address: a change or a removal says Undo first; its admin login may change', async () => {
   const box = await sandbox()
   const { url } = await serveBoard(box, { language: 'en' })
   const post = (body: Record<string, unknown>) =>
@@ -87,6 +87,9 @@ test('a server that takes snapshots keeps its fields: a change or a removal says
     assert.equal(res.status, 400, JSON.stringify(body))
     assert.match(String((await json(res)).error), /Undo first/)
   }
-  // the same fields again change nothing and are taken
-  assert.equal((await post({ op: 'server', host: 'example.org', port: 22, adminUser: 'me', adminKey: '' })).status, 200)
+  // the same address with another admin login (a key moved) is taken: Look, Apply and Undo need it right
+  assert.equal(
+    (await post({ op: 'server', host: 'example.org', port: 22, adminUser: 'root', adminKey: 'C:/keys/new' })).status,
+    200,
+  )
 })

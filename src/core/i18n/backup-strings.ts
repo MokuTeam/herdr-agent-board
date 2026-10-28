@@ -53,7 +53,16 @@ export const BACKUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'backup.err.drop': 'The server’s drop refused: {detail}',
     'backup.err.refused': 'The server refused the board’s login: {detail}',
     'backup.err.cutShort': 'The server kept {kept} bytes of the {sent} sent: the snapshot did not go through.',
-    'backup.err.serverSet': 'The server takes snapshots: Undo first to change it or to remove it.',
+    'backup.err.serverSet': 'The server takes snapshots: Undo first to change its address or to remove it.',
+    'backup.err.fileBusy':
+      'Another process has the database open (the web board, or a board command): stop it, then run this again.',
+    'backup.problem.ahead': [
+      '{target} holds {n} snapshot dated over a day ahead of the clock: kept, out of the rotation. Remove it if it is not one of yours.',
+      '{target} holds {n} snapshots dated over a day ahead of the clock: kept, out of the rotation. Remove them if they are not yours.',
+    ],
+    'backup.short.ahead': 'Backup: {target} holds a snapshot dated ahead of the clock',
+    'backup.cli.skipped': 'passed over {name}: {why}',
+    'backup.nowReset': 'Send the smaller database anyway?',
     'backup.err.badName': '{name} is not a snapshot’s name.',
     'backup.err.noSnapshot': 'There is no snapshot {name}.',
     'backup.err.oldDrop': 'The server has an older drop script than this board: Apply again.',
@@ -230,7 +239,18 @@ export const BACKUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'backup.err.drop': 'Сервер не принял: {detail}',
     'backup.err.refused': 'Сервер не пустил доску: {detail}',
     'backup.err.cutShort': 'Сервер сохранил {kept} байт из {sent}: снимок не прошёл.',
-    'backup.err.serverSet': 'Сервер принимает снимки: чтобы сменить или убрать его, сначала «Убрать с сервера».',
+    'backup.err.serverSet':
+      'Сервер принимает снимки: чтобы сменить его адрес или убрать его, сначала «Убрать с сервера».',
+    'backup.err.fileBusy':
+      'Базу держит открытой другой процесс (веб-доска или команда board): остановите его, потом повторите.',
+    'backup.problem.ahead': [
+      'Среди отправленных в {target} {n} снимок с датой больше чем на день вперёд: он сохранён и в ротации не участвует. Удалите его, если он не ваш.',
+      'Среди отправленных в {target} {n} снимка с датой больше чем на день вперёд: они сохранены и в ротации не участвуют. Удалите их, если они не ваши.',
+      'Среди отправленных в {target} {n} снимков с датой больше чем на день вперёд: они сохранены и в ротации не участвуют. Удалите их, если они не ваши.',
+    ],
+    'backup.short.ahead': 'Бэкап: в {target} есть снимок с датой из будущего',
+    'backup.cli.skipped': 'пропущен {name}: {why}',
+    'backup.nowReset': 'Всё равно отправить меньшую базу?',
     'backup.err.badName': '{name} не имя снимка.',
     'backup.err.noSnapshot': 'Снимка {name} нет.',
     'backup.err.oldDrop': 'На сервере старый скрипт приёма: нажмите «Настроить» ещё раз.',

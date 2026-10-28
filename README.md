@@ -1808,8 +1808,9 @@ client takes off the computer, or both (both is better: two copies in two places
 - **Server.** Your server over ssh, as a user of its own, `agent-board-backup`, with a key of
   its own (`backup/id_ed25519` in the state folder) that can run one program, the drop script:
   it puts a snapshot (its size said first: one cut short is not kept; named by the server's own
-  clock and its hash, never over another one), lists them, gives one back, and removes none but by
-  the rotation. Its folder holds 512 MB at most and leaves 512 MB of the disk free. The tunnel's
+  clock and its hash, never over another one; 32 MB at most, a sealed snapshot is about one), lists
+  them, gives one back, and removes none but by the rotation. Its folder holds 512 MB at most and
+  leaves 512 MB of the disk free. The tunnel's
   user and key are not used and not touched, and the backup goes over plain ssh to sshd, so it is
   the same with the board's own Caddy, yours, nginx, or no tunnel at all (with a tunnel, the
   server and the admin login are filled in from it). Your `~/.ssh/config` is not read (as for the
@@ -1830,7 +1831,8 @@ client takes off the computer, or both (both is better: two copies in two places
   yourself, then "I ran it" tests it (that first Test pins the server's key when no Look did).
   Look, Apply and Undo log in as your admin with a key (ssh's own, or the one named) and use sudo;
   sudo's password, when sudo asks one, comes with the click and is kept nowhere. While the server
-  takes snapshots its fields are locked: Undo first to change it.
+  takes snapshots its address (host and port) is locked: Undo first to move it. The admin's login
+  may change (a key moved): Look, Apply and Undo need it right.
 
 **When.** Ten minutes after the last change, and never more than an hour after the first change
 not yet backed up, so a burst of edits makes one snapshot; and once a day at 03:00 even without
@@ -1839,33 +1841,43 @@ starts. A target that fails is tried again after 5, 15 and 60 minutes; one whose
 refuses (or whose key changed) is held, with no more tries (they could get the laptop's address
 banned, the tunnel's with it), until a Test or an Apply goes through. **Rotation**, on both
 targets: the newest ten always, every snapshot of the last 48 hours, the first of each day for 60
-days, the first of each month for two years; nothing is removed while the newest is a day ahead of
-the clock, or a month after the one before it (a clock set wrong would take the history).
+days, the first of each month for two years. A snapshot named more than a day ahead of the clock (a
+clock set wrong once, or a file put there) is kept, left out of the rotation, and shown; nothing is
+removed while the newest is a month after the one before it (a clock that jumped would take the
+history).
 
 **What could be wrong** shows at the top of the panel, as a note in the board's toolbar on every
 page (a phone's too, in a few words, with no error text), and in `board doctor`: no target, no
-passphrase, a target that failed or is held, no good backup for more than a day. A damaged
+passphrase, a target that failed or is held, no good backup for more than a day, a snapshot
+dated ahead of the clock. A damaged
 database is never sent: it would only push good snapshots out of the rotation. A database that
 holds fewer changes than its last backup (emptied, or an older copy put back by hand), or that is
 gone after a backup, is held too: nothing scheduled sends it, so the backups keep the better one;
-`board backup now` sends it on purpose, or `board db restore` brings the better one back.
+`board backup now` sends it on purpose (in the panel, Back up now asks a second click), or
+`board db restore` brings the better one back.
 
 **Restore.** `board db restore` lists the snapshots each target holds;
-`board db restore --target server` (or `folder`) brings back the newest that opens whole (a newer
-one cut short or changed is passed over and named; one dated more than a day ahead is left out),
+`board db restore --target server` (or `folder`) brings back the newest that opens whole: each
+newer one it passes over (cut short, changed, or a file that cannot be read) is named with why, so
+the hours it held are known to be missing; one dated more than a day ahead is left out; it looks at
+the newest twenty, and with a typed passphrase that opens none of the newest three it stops there
+(the passphrase is wrong, not the files),
 `--snapshot <name>` a given one, `--file <path>` one you downloaded. On a new computer, give the
 passphrase with `--passphrase-file <file>` (UTF-8 or UTF-16, as PowerShell writes it) or pipe it
 with `--passphrase-stdin`. The database as it was is copied first, inside the restore's own
 transaction (`board.db.before-restore-<time>`, the last three kept), so a restore can be undone
 by another; the rows are put back while the board runs, and the file is checked after. A file too
-damaged for that: stop the web board and add `--replace-file`; the damaged file goes to
-`damaged-<time>/` in the state folder.
+damaged for that: stop the web board (and any `board` command) and add `--replace-file`; the
+damaged file goes to `damaged-<time>/` in the state folder. While another process has the file
+open, nothing moves.
 
 **A laptop lost or stolen.** Whoever has it has the database itself and the board's key to it,
 and with the drop key can add files to the server's folder and read the sealed ones, but not
 remove one. That is not the whole of it: files added there count for the rotation like yours, so
 enough of them can push real snapshots out (the newest ten always stay, and the folder's cap and
-the disk's reserve bound it). On a computer you still have, with the board on it: Settings →
+the disk's reserve bound it), or fill the folder: then no snapshot goes in for up to two days,
+until the rotation lets the flood go (the files of the last 48 hours stay). To clear it at once:
+`sudo rm` the files you do not know in `/var/lib/agent-board-backup/snapshots` on the server. On a computer you still have, with the board on it: Settings →
 Backup… → **New key**, then **Apply**: the server takes the new key and the old one stops working.
 Without one, from any machine with your admin login: `sudo rm /etc/ssh/authorized_keys/agent-board-backup`.
 Then a new passphrase (the old snapshots keep the old one).
@@ -1876,7 +1888,8 @@ at its start; every change is written with a journal row (who, what, before and 
 same transaction; `synchronous=FULL`, so a change that returned survives a power cut. A step of
 its layout runs under the write lock, its copy of the file as it was taken inside it
 (`board.db.before-v<n>-…`, the last three kept), so of several processes opening it at once one
-does it. The page cache is held at 2 MB and the file is not mapped into memory: a `board` command
+does it. That copy is made from memory while the lock is held: the whole file for a moment (a few
+MB now; a 100 MB file would take 100 MB, and other writers would wait a second or two). The page cache is held at 2 MB and the file is not mapped into memory: a `board` command
 costs about 2 MB over Bun itself, the web board a few more. A file found damaged is marked
 (`board.db.damaged.json`) and refused for changes until a restore. Keep the state folder out of
 synced folders (`board doctor` warns): a sync client copies the file mid-write, and WAL's shared

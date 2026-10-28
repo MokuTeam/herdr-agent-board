@@ -246,15 +246,15 @@ export function editBackup(b: {
     else section.folder = b.folder.trim()
   }
   const setNow = isRecord(section.server) && typeof section.server.set === 'string'
-  // a server that takes snapshots keeps its fields: Undo first (or a new host would leave the old
-  // one set up, its user and key still there)
+  // a server that takes snapshots keeps its address: Undo first (or a new host would leave the old
+  // one set up, its user and key still there); the admin's login may change (a key moved)
   if (b.server === null) {
     if (setNow) return { ok: false, error: t('backup.err.serverSet') }
     delete section.server
   } else if (b.server !== undefined) {
     const s = b.server
     const now: Raw = isRecord(section.server) ? { ...section.server } : {}
-    const was = JSON.stringify([now.host, now.port, now.admin])
+    const was = JSON.stringify([now.host, now.port])
     const admin: Raw = isRecord(now.admin) ? { ...now.admin } : {}
     if (s.host !== undefined) {
       const host = typeof s.host === 'string' ? s.host.trim() : ''
@@ -281,8 +281,7 @@ export function editBackup(b: {
     }
     now.admin = admin
     if (!now.host) return { ok: false, error: t('tunnel.err.required', { field: t('tunnel.field.host') }) }
-    if (setNow && JSON.stringify([now.host, now.port, now.admin]) !== was)
-      return { ok: false, error: t('backup.err.serverSet') }
+    if (setNow && JSON.stringify([now.host, now.port]) !== was) return { ok: false, error: t('backup.err.serverSet') }
     section.server = now
   }
   if (b.serverSet !== undefined && isRecord(section.server)) {
