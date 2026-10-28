@@ -13,6 +13,7 @@ import {
   fingerprint,
   generateKey,
   joinBytes,
+  normalizeHub,
   parseFrame,
   peerIdOf,
   printable,
@@ -62,6 +63,15 @@ test('teamConfig: off without an object holding a ws:// or wss:// hub', () => {
   assert.deepEqual(teamConfig({ hub: 'wss://hub.example', name: 'anna' }), { hub: 'wss://hub.example', name: 'anna' })
   assert.equal(teamConfig({ hub: 'ws://h:1', name: '' })?.name, null)
   assert.equal(teamConfig({ hub: 'ws://h:1', name: 'x'.repeat(41) })?.name, null)
+})
+
+test('normalizeHub: with or without a trailing slash or /v1 it is one hub; only ws and wss', () => {
+  for (const spelled of ['ws://h:7443', 'ws://h:7443/', 'ws://h:7443/v1', 'ws://h:7443/v1/', ' ws://h:7443/v1 '])
+    assert.equal(normalizeHub(spelled), 'ws://h:7443')
+  assert.equal(normalizeHub('wss://hub.example/v1'), 'wss://hub.example')
+  assert.equal(normalizeHub('ws://h:1/v10'), 'ws://h:1/v10')
+  for (const bad of [undefined, 3, '', 'h:7443', 'http://h/v1', 'ws://']) assert.equal(normalizeHub(bad), null)
+  assert.equal(teamConfig({ hub: 'ws://h:7443/v1', name: 'a' })?.hub, 'ws://h:7443')
 })
 
 test('canonicalJson: keys by UTF-16 code units, nesting, unicode, numbers', () => {

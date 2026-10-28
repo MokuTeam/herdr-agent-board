@@ -89,6 +89,16 @@ test('it connects to <hub>/v1 and answers a challenge with its signature', async
   expect(s.svc.view()).toMatchObject({ state: 'online', hub: HUB, me: { peer: me, name: 'me' } })
 })
 
+test.each([`${HUB}/v1`, `${HUB}/`, `${HUB}/v1/`])(
+  'a hub saved as %s is still dialled at <hub>/v1, once',
+  async spelled => {
+    const s = setup({ hub: spelled, name: 'me' })
+    s.svc.start()
+    const { ws } = await handshake(s)
+    expect(ws.url).toBe(`${HUB}/v1`)
+  },
+)
+
 test('after a lost connection it waits 1 s, 2 s, 4 s; staying up for 60 s starts the count over', async () => {
   const s = setup()
   s.svc.start()

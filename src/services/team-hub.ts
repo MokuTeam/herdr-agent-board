@@ -136,7 +136,7 @@ const CLOSE_UNKNOWN = 4401
 /** Not knowing the key does not mend itself: tried again this rarely, in case the hub was given the key. */
 export const UNKNOWN_RETRY_MS = 60_000
 
-const hubUrl = (hub: string): string => `${hub.replace(/\/+$/, '')}/v1`
+const hubUrl = (hub: string): string => `${hub}/v1`
 
 export function createTeam({
   cfg,

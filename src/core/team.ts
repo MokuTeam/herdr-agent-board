@@ -29,20 +29,30 @@ export interface TeamConfig {
   name: string | null
 }
 
+/**
+ * A hub address without the trailing slashes and without the `/v1` the board adds itself, so
+ * `ws://h:7443`, `ws://h:7443/` and `ws://h:7443/v1` are one hub. Null unless it is a ws:// or wss:// URL.
+ */
+export function normalizeHub(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const hub = raw.trim().replace(/\/+$/, '').replace(/\/v1$/, '').replace(/\/+$/, '')
+  try {
+    const url = new URL(hub)
+    if (url.protocol !== 'ws:' && url.protocol !== 'wss:') return null
+  } catch {
+    return null
+  }
+  return hub
+}
+
 /** config.json's `team` as the board uses it, or null while it is not on. */
 export function teamConfig(raw: unknown): TeamConfig | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
   const r = raw as Record<string, unknown>
-  if (typeof r.hub !== 'string') return null
-  let url: URL
-  try {
-    url = new URL(r.hub)
-  } catch {
-    return null
-  }
-  if (url.protocol !== 'ws:' && url.protocol !== 'wss:') return null
+  const hub = normalizeHub(r.hub)
+  if (hub === null) return null
   const name = typeof r.name === 'string' && validName(r.name) ? r.name : null
-  return { hub: r.hub, name }
+  return { hub, name }
 }
 
 /** Controls (C0, DEL, C1), line and paragraph separators, and the bidi controls that reorder what is around them. */

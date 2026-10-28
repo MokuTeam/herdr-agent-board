@@ -543,9 +543,9 @@ async function team(): Promise<void> {
     if (hi >= 0) more.splice(hi, 2)
     const invite = more[0]
     const have = isRecord(cfg.team) ? cfg.team : {}
-    const hub = (given ?? (typeof have.hub === 'string' ? have.hub : '')).replace(/\/+$/, '')
+    const hub = T.normalizeHub(given ?? have.hub) ?? ''
     const name = forkName ?? (typeof have.name === 'string' ? have.name : '')
-    if (!invite || more.length !== 1 || !T.teamConfig({ hub }) || !T.validName(name)) throw new Error(TEAM_USAGE)
+    if (!invite || more.length !== 1 || !hub || !T.validName(name)) throw new Error(TEAM_USAGE)
     const key = store.readKey() ?? (await T.generateKey())
     const r = await joinAt(T, hub, invite, name, key)
     if (!r.ok) throw new Error(r.error)

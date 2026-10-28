@@ -108,6 +108,15 @@ describe('board team against a hub', () => {
     await hub.login(key)
   })
 
+  test('join with --hub ending in /v1 reaches the hub and saves the address without it', async () => {
+    const box = await sandbox()
+    writeConfig(box, {})
+    const r = await board(box, ['team', 'join', hub.invite(), '--hub', `${base}/v1`, '--name', 'vone'])
+    expect(r.stderr).toBe('')
+    expect(r.code).toBe(0)
+    expect(configOf(box)).toMatchObject({ team: { hub: base, name: 'vone' } })
+  })
+
   test('join with a bad, used or expired invite: non-zero, no team in config.json, no key kept', async () => {
     const box = await sandbox()
     writeConfig(box, {})
