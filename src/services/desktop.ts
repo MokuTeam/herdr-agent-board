@@ -207,6 +207,8 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   /** The profile each pane asked for, kept for its next start. */
   const wanted = new Map<string, string | null>()
   const viewers = new Map<string, Set<ServerWebSocket<VncData>>>()
+  /** Slots picked for a start that is not in the list yet. */
+  const picking = new Set<number>()
   const conns = new WeakMap<ServerWebSocket<VncData>, { sock: Socket; unwatch: () => void }>()
 
   /** One thing at a time per pane, and slots picked one at a time. */
@@ -332,13 +334,17 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   }
 
   async function startNew(pane: string): Promise<Started> {
-    const slot = await serial('slots', () =>
-      pickSlot(
-        new Set([...desktops.values()].map(d => d.slot)),
+    // picked one at a time, and held until its desktop is in the list: two starts never share one
+    const slot = await serial('slots', async () => {
+      const picked = await pickSlot(
+        new Set([...desktops.values()].map(d => d.slot).concat([...picking])),
         async s => sys.displayHeld(slotDisplay(s)) || !(await sys.portFree(slotPort(s))),
-      ),
-    )
+      )
+      if (picked !== null) picking.add(picked)
+      return picked
+    })
     if (slot === null) return { ok: false, error: 'every desktop is in use on this server' }
+    picking.delete(slot)
     const xvncBin = sys.which('Xvnc')
     if (!xvncBin) return { ok: false, error: 'no Xvnc on this server (the install puts TigerVNC in place)' }
     const display = slotDisplay(slot)

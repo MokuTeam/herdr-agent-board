@@ -52,7 +52,9 @@ test('Xvnc: VNC on its Unix socket only (no TCP), no VNC password, X with its co
   expect(flag('-SecurityTypes')).toBe('None')
   expect(flag('-nolisten')).toBe('tcp')
   expect(flag('-auth')).toBe('/s/Xauthority')
-  expect(a).not.toContain('-rfbport')
+  // with a socket alone, Xvnc still listens on 5900 + the display on every address
+  expect(flag('-rfbport')).toBe('-1')
+  expect(a).toContain('-localhost')
   expect(a).toContain('-AlwaysShared')
 })
 

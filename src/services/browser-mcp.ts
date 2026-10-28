@@ -269,6 +269,8 @@ export async function runWrapper(w: WrapperOptions): Promise<number> {
       `http://127.0.0.1:${devtools.port}`,
       '--no-usage-statistics',
       '--no-performance-crux',
+      // one agent to a browser: its tools need no page ids
+      '--no-page-id-routing',
     ],
     {
       stdin: 'pipe',

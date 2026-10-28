@@ -119,6 +119,15 @@ test('on demand: nothing runs before the first call; then a display and Chrome o
   expect(d.view(state.items[0] as Item)).toEqual({ running: true, profile: null, control: 'agent', asks: false })
 })
 
+test('two sessions starting at once never share a slot', async () => {
+  const { d } = setup()
+  const [a, b] = await Promise.all([d.ensure('w0:p1'), d.ensure('w0:p2')])
+  expect([a, b]).toEqual([
+    { ok: true, port: 9300 },
+    { ok: true, port: 9301 },
+  ])
+})
+
 test('a display someone else holds is skipped', async () => {
   const { d, server } = setup({ held: [100] })
   expect(await d.ensure('w0:p1')).toEqual({ ok: true, port: 9301 })

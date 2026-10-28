@@ -233,6 +233,56 @@ Not built in this step. On the server only.
     a copy of it, which is thrown away afterwards and never merged back.
   - Profiles are keys to sites: they stay on the server and never go into the profile sync.
 
+### As built: the server side (after the section above)
+
+- **Where it lives.** `core/desktop.ts` (pure), `services/desktop.ts` (the desktops, in the board's
+  process), `server/routes/desktop.ts`, `services/browser-mcp.ts` (the wrapper),
+  `adapters/desktop-files.ts` (the install's part). Server mode only: on a PC the board makes no
+  desktop, adds no route and serves no WebSocket.
+- **A desktop per session's pane**, on demand: a slot `n` is display `:100+n` and DevTools port
+  `9300+n` (the lowest no desktop uses, whose X lock and port are free; 32 at most). Xvnc (TigerVNC)
+  with VNC on a Unix socket only (`-rfbunixpath`, 0600; `-rfbport -1`, or it also takes 5900 + the
+  display on every address; `-SecurityTypes None`: the
+  socket is `agent`'s alone and the board's login is in front of it) and X for a cookie of its own
+  (`-auth`, an Xauthority file the board writes; `-nolisten tcp`). Google Chrome headed on it, its
+  window the whole screen (1440×900, no window manager), `--user-data-dir` and
+  `--remote-debugging-port` of its own. Both in sessions of their own (`setsid`), so a restart of
+  the board leaves them running; the next board takes them over from `desktops.json` (pids checked
+  against their command lines). Stopped when no session is awake in the pane for two refreshes in
+  a row (asleep or ended), a minute after its start at the earliest.
+- **Where things are**: the board's state folder, `desktop/`: `sessions/<display>/` (the sockets,
+  the cookie, the logs, the session's own profile, a busy profile's copy: gone with the desktop),
+  `profiles/<name>/` (named profiles, kept), `mcp/` (chrome-devtools-mcp), `desktops.json`. The
+  profile sync reads Claude's profile folders only, so the profiles never cross; the board's MCP
+  server in `.claude.json` is never sent and never overwritten (each side's install's).
+- **The wrapper** `board browser-mcp` (the MCP server `board-browser`, user scope, in every shown
+  profile's `.claude.json`): its session is `HERDR_PANE_ID`, else its Claude's own environment. It
+  runs chrome-devtools-mcp 1.11.0 (pinned, `--no-page-id-routing`, no usage statistics) with
+  `--browserUrl` at a DevTools address of its own on 127.0.0.1: the first connection there (the
+  first tool call) asks the board to start the desktop and answers with that Chrome's
+  `/json/version`, so chrome-devtools-mcp then talks to Chrome directly. Before each tool call it
+  asks the board who has the browser; while the owner has it the call waits (10 minutes, then "the
+  owner has the browser"). Its own tools: `browser_profile` and `browser_ask_owner`; the same as
+  `board browser profile [<name>]` and `board browser ask <text>`.
+- **The interface** with the web page: the card's `desktop: { running, profile, control, asks }`;
+  `GET /api/desktop/<key>/vnc?t=<file token>` (a WebSocket, raw RFB both ways, per-message
+  deflate; the login, the token and the Origin; 404 without a desktop); `POST
+  /api/desktop/<key>/control` `{ to }` → `{ ok: true, control }`. The last view closing while the
+  owner has the browser hands it back. `asks` holds while the card still asks (`board browser ask`
+  writes the card's ask); handed back, both clear. The agent's calls (`/api/browser/start|call|
+  profile|ask`) take the board's local key on every listener, so none comes through the domain.
+- **The install**, as root: `tigervnc-standalone-server`, `fonts-noto-core`, `fonts-noto-cjk`,
+  `fonts-noto-color-emoji`, `fonts-liberation`, and Google Chrome stable from Google's .deb on
+  x86_64 (Debian's `chromium` on arm64 Debian; none on Ubuntu arm64, whose Chromium is a snap: a
+  gap doctor names). What it added is in `install.json`; Undo purges it only with
+  `--remove-user`, as the user's Bun and herdr go only then. As `agent`: the MCP server in the
+  profiles and chrome-devtools-mcp, by the install action in server mode (and the server mode's
+  own step, which runs after it on a first install); Undo takes them out.
+- **Limits.** Chrome's DevTools port is on 127.0.0.1 without a key: another account on the server
+  reaches it (as anything of `agent`'s, one agent's browser is not a wall against another agent).
+  A profile switch restarts Chrome (open pages close). No window manager: a dialog opens where
+  Chrome puts it.
+
 ## Testing
 
 - **Unit**: the server mode's listener (on the socket, login required, 12422 untouched), the setup

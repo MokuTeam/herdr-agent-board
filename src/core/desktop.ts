@@ -98,7 +98,8 @@ export const desktopView = (d: DesktopFacts, cardAsks: boolean): ItemDesktop => 
 })
 
 /**
- * Xvnc's arguments: the display, VNC on a Unix socket only (no TCP port), no VNC password (the
+ * Xvnc's arguments: the display, VNC on a Unix socket only (`-rfbport -1`: with a socket alone it
+ * still takes 5900 + the display on every address), no VNC password (the
  * socket is the board's user's alone, 0600, and the board's login is in front of it), X only for
  * the cookie in `auth` and never over TCP, several viewers at once.
  */
@@ -113,6 +114,9 @@ export function xvncArgs(o: { display: number; socket: string; auth: string; nam
     o.socket,
     '-rfbunixmode',
     '0600',
+    '-rfbport',
+    '-1',
+    '-localhost',
     '-SecurityTypes',
     'None',
     '-AlwaysShared',
