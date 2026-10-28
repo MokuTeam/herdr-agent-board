@@ -275,7 +275,7 @@ describe.skipIf(!DOCKER)('the board on a server of the owner’s (path A from th
           expect((await asAgent(s, 'herdr plugin list')).stdout).toContain(`${HOME}/agent-board`)
           expect((await s.sh(`test -x ${HOME}/.local/bin/board`, { check: false })).code).toBe(0)
           // the web server's record: the server mode's, case 1; the socket's folder for the board's user
-          const record = JSON.parse((await s.sh('cat /etc/agent-board/setup.json')).stdout)
+          const record = JSON.parse((await s.sh('cat /etc/agent-board-server/setup.json')).stdout)
           expect(record).toMatchObject({
             state: 'applied',
             case: '1',
@@ -285,7 +285,7 @@ describe.skipIf(!DOCKER)('the board on a server of the owner’s (path A from th
           expect(
             (await s.sh(`test -e /etc/ssh/authorized_keys/agent || test -e ${FENCE_FILE}`, { check: false })).code,
           ).not.toBe(0)
-          expect(JSON.parse((await s.sh('cat /etc/agent-board/install.json')).stdout)).toMatchObject({
+          expect(JSON.parse((await s.sh('cat /etc/agent-board-server/install.json')).stdout)).toMatchObject({
             user: 'agent',
             domain: DOMAIN,
           })
@@ -349,7 +349,7 @@ describe.skipIf(!DOCKER)('the board on a server of the owner’s (path A from th
           expect(
             (
               await s.sh(
-                'test -e /etc/agent-board || test -e /usr/local/lib/agent-board || test -e /var/lib/agent-board',
+                'test -e /etc/agent-board-server || test -e /etc/agent-board || test -e /usr/local/lib/agent-board || test -e /var/lib/agent-board',
                 { check: false },
               )
             ).code,
@@ -403,7 +403,7 @@ describe.skipIf(!DOCKER)('the board on a server of the owner’s (path A from th
           const seen = (await l.client(`cat ${watch}`)).stdout.trim().split('\n')
           expect(seen.length).toBeGreaterThan(10)
           expect(seen.filter(x => !x.endsWith(' 200'))).toEqual([])
-          const record = JSON.parse((await s.sh('cat /etc/agent-board/setup.json')).stdout)
+          const record = JSON.parse((await s.sh('cat /etc/agent-board-server/setup.json')).stdout)
           expect(record).toMatchObject({ case: '3a', pair: { user: 'agent', socket: BOARD_SOCKET, server: true } })
           const who = await onSocket(s)
           row.push(`${DOMAIN}: ${await domainAnswers(l, s, who)} (${who})`)

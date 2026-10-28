@@ -8,20 +8,15 @@
 // values one shell word each; the board's run (core/server-script.ts) runs the same lines as root.
 // Pure, with no node: import: the page renders "Do it myself" from it.
 import { t } from './lang.ts'
-import type { Container, Holder, Port, ServerFacts } from './server-facts.ts'
+import type { Container, Holder, Port, ServerFacts, ServerPort } from './server-facts.ts'
 import { fenceDiff, fenceWanted } from './server-look.ts'
 import { isContainerId, isPlainPath, shQuote } from './server-shell.ts'
 import {
   type Acme,
   ARGS_LABEL,
-  BACKUPS_DIR,
-  BLOCK_BEGIN,
   BLOCK_END,
   boardCaddyfile,
-  CADDY_DIR,
-  CADDY_FILE,
   CADDY_IMAGE,
-  CADDY_NAME,
   CHECK_PATH,
   caddyRunArgs,
   DOCKER_FILES,
@@ -31,28 +26,23 @@ import {
   fenceBlock,
   fenceFile,
   GID_LABEL,
-  IMPORT_LINE,
   KEYS_DIR,
   markedBlock,
-  NGINX_FILE,
+  type Names,
+  namesOf,
   nginxFile,
   type OwnCaddy,
   PORT_3A,
-  PORT_3B,
   PORT_4,
   PORT_4B_CHECK,
-  RECORD_FILE,
   ROLE_LABEL,
-  SITE_DIR,
-  SITE_FILE,
   SOCAT_IMAGE,
-  SOCKET_NAME,
   SSHD_CONFIG,
   SSHD_DIR,
   siteFile,
   socatRunArgs,
+  TUNNEL_NAMES,
   USER_COMMENT,
-  VOLUMES,
 } from './server-texts.ts'
 import { fieldProblem, type TunnelField } from './tunnel.ts'
 import { keysFile, keysLine, SSHD_RELOAD, socketFolder } from './tunnel-snippets.ts'
@@ -62,8 +52,10 @@ export type SetupCase = '1' | '1b' | '2' | '3a' | '3b' | '4a' | '4b'
  * Why the board does not set up the server by itself ("Do it myself"). Beyond the spec's list:
  * `portTaken` (8443, 8480 or 8481, which the case needs, held by another program), `folder`
  * (the socket's folder not found: step 1 not done), `tunnelUser` (the tunnel's user is a login
- * of the owner's, which sshd's fence would lock out: ownersLogin) and `tunnelGroup` (no tunnel
- * user, but a group of its name left, which keeps useradd from making it).
+ * of the owner's, which sshd's fence would lock out: ownersLogin), `tunnelGroup` (no tunnel
+ * user, but a group of its name left, which keeps useradd from making it) and `otherBoard` (the
+ * other setup's own Caddy, the tunnel's or the server mode's, holds a port the case needs: the two
+ * share a web server only when it is the owner's).
  */
 export type Manual =
   | 'os'
@@ -92,6 +84,7 @@ export type Manual =
   | 'folder'
   | 'tunnelUser'
   | 'tunnelGroup'
+  | 'otherBoard'
 
 /**
  * A setup is one tunnel's: its user and its socket. Or the board's own on this server (`server`,
@@ -248,6 +241,7 @@ const strings = (v: unknown, ok: (x: unknown) => x is string): string[] | null =
 function recordItem(v: unknown, pair: Pair): RecordItem | null {
   if (!isFields(v)) return null
   const folder = socketFolder(pair.socket)
+  const n = namesOf(pair)
   // the server mode's board user is the installer's, and it has no keys file or fence
   if (pair.server && (v.kind === 'user' || v.kind === 'keys' || v.kind === 'fence')) return null
   switch (v.kind) {
@@ -262,25 +256,25 @@ function recordItem(v: unknown, pair: Pair): RecordItem | null {
     case 'fence':
       return v.path === FENCE_FILE || v.path === SSHD_CONFIG ? { kind: 'fence', path: v.path } : null
     case 'file':
-      return [CADDY_FILE, SITE_FILE, NGINX_FILE].includes(v.path as string) &&
+      return [n.caddyFile, n.siteFile, n.nginxFile].includes(v.path as string) &&
         typeof v.sha256 === 'string' &&
         /^[0-9a-f]{64}$/.test(v.sha256)
         ? { kind: 'file', path: v.path as string, sha256: v.sha256 }
         : null
     case 'line':
-      return isLine(v.file) && isPlainPath(v.file) && v.line === IMPORT_LINE
-        ? { kind: 'line', file: v.file, line: IMPORT_LINE }
+      return isLine(v.file) && isPlainPath(v.file) && v.line === n.importLine
+        ? { kind: 'line', file: v.file, line: n.importLine }
         : null
     case 'block':
-      return isLine(v.file) && isPlainPath(v.file) && v.begin === BLOCK_BEGIN && v.end === BLOCK_END
-        ? { kind: 'block', file: v.file, begin: BLOCK_BEGIN, end: BLOCK_END }
+      return isLine(v.file) && isPlainPath(v.file) && v.begin === n.blockBegin && v.end === n.blockEnd
+        ? { kind: 'block', file: v.file, begin: n.blockBegin, end: n.blockEnd }
         : null
     case 'backup':
       return isLine(v.of) &&
         isPlainPath(v.of) &&
         isLine(v.path) &&
         isPlainPath(v.path) &&
-        v.path.startsWith(`${BACKUPS_DIR}/`)
+        v.path.startsWith(`${n.backups}/`)
         ? { kind: 'backup', of: v.of, path: v.path }
         : null
     case 'group':
@@ -288,11 +282,11 @@ function recordItem(v: unknown, pair: Pair): RecordItem | null {
         ? { kind: 'group', path: folder, from: v.from, to: v.to }
         : null
     case 'container':
-      return (v.name === CADDY_NAME || v.name === SOCKET_NAME) && isLine(v.setup)
+      return (v.name === n.caddyName || v.name === n.socketName) && isLine(v.setup)
         ? { kind: 'container', name: v.name, setup: v.setup }
         : null
     case 'volume':
-      return VOLUMES.includes(v.name as (typeof VOLUMES)[number]) ? { kind: 'volume', name: v.name as string } : null
+      return n.volumes.includes(v.name as string) ? { kind: 'volume', name: v.name as string } : null
     case 'image':
       return isImageRef(v.ref) && typeof v.before === 'boolean' ? { kind: 'image', ref: v.ref, before: v.before } : null
     case 'docker': {
@@ -452,9 +446,21 @@ function containerOf(f: ServerFacts, id: string): Container | undefined {
 function ownContainer(f: ServerFacts, name: string, role: string): Container | undefined {
   return f.docker?.containers.find(c => bare(c.name) === name && c.labels[ROLE_LABEL] === role)
 }
-const isOurs = (f: ServerFacts, h: Holder): boolean =>
-  h.kind === 'container' && containerOf(f, h.id)?.labels[ROLE_LABEL] !== undefined
+/** A container's role label, when it is a board's (core/server-texts.ts Names). */
+const roleOf = (f: ServerFacts, h: Holder): string | undefined =>
+  h.kind === 'container' ? containerOf(f, h.id)?.labels[ROLE_LABEL] : undefined
+const isMine = (n: Names, role: string | undefined): boolean => role === n.caddyRole || role === n.socketRole
+/** This setup's own container (the tunnel's, or the server mode's), by its role. */
+const isOurs = (f: ServerFacts, n: Names, h: Holder): boolean => isMine(n, roleOf(f, h))
+/** The other setup's: a board's container that is not this setup's (the tunnel's to the server mode, and back). */
+function isTheOthers(f: ServerFacts, n: Names, h: Holder): boolean {
+  const role = roleOf(f, h)
+  return role !== undefined && !isMine(n, role)
+}
+const FREE: Holder = { kind: 'free' }
 const isFree = (h: Holder): boolean => h.kind === 'free'
+/** A port's holder, the server mode's own 3b port among them (free where Look did not watch it). */
+const holderAt = (f: ServerFacts, port: ServerPort): Holder => (port === 8482 ? (f.ports[8482] ?? FREE) : f.ports[port])
 
 function isCaddy(f: ServerFacts, h: Holder): boolean {
   if (h.kind === 'unit' || h.kind === 'process') return h.program === 'caddy'
@@ -525,26 +531,29 @@ const holderName = (f: ServerFacts, h: Holder): string => {
 }
 
 /** The board's Caddy on the ports a case needs: they must be free (or its own). */
-function portsFree(f: ServerFacts, ports: Port[]): boolean {
-  return ports.every(p => isFree(f.ports[p]) || isOurs(f, f.ports[p]))
+function portsFree(f: ServerFacts, n: Names, ports: ServerPort[]): boolean {
+  return ports.every(p => isFree(holderAt(f, p)) || isOurs(f, n, holderAt(f, p)))
 }
 
-function ownCase(f: ServerFacts, c: OwnCaddy, why: Text): Choice {
+function ownCase(f: ServerFacts, n: Names, c: OwnCaddy, why: Text): Choice {
   if (!f.docker && f.host.conflicts.length) return manual(['dockerConflicts'])
   const extra: Port[] = c === '4a' ? [PORT_4] : c === '4b' ? [PORT_4, PORT_4B_CHECK] : []
-  if (!portsFree(f, extra)) return manual(['portTaken'])
+  // the other setup's own Caddy on them: two boards share a web server only when it is the owner's
+  if (extra.some(p => isTheOthers(f, n, f.ports[p]))) return manual(['otherBoard'])
+  if (!portsFree(f, n, extra)) return manual(['portTaken'])
   return { case: c, why }
 }
 
 /** 443 is someone else's: the board's Caddy on 8443, with 80 for the certificate (call 16). */
 function caseFour(f: ServerFacts, w: Wanted, held: string): Choice {
   const h80 = f.ports[80]
-  if (isFree(h80)) return ownCase(f, '4a', { key: 'server.case.4a', params: { holder: held } })
+  const n = namesOf(w)
+  if (isFree(h80)) return ownCase(f, n, '4a', { key: 'server.case.4a', params: { holder: held } })
   const nginx = h80.kind === 'unit' && h80.program === 'nginx' && f.nginx?.confD
   if (!nginx) return manual(['other80'])
   if (f.nginx?.serverNames.includes(w.domain)) return manual(['domainServed'])
   if (!f.systemd) return manual(['noSystemd'])
-  return ownCase(f, '4b', { key: 'server.case.4b', params: { holder: held } })
+  return ownCase(f, n, '4b', { key: 'server.case.4b', params: { holder: held } })
 }
 
 /** What keeps the board from adding to their Caddy (falls back to case 4 when 80 allows, call 15). */
@@ -576,13 +585,16 @@ function helperNetwork(c: Container): string | null {
 function byHolders(f: ServerFacts, w: Wanted): Choice {
   const h443 = f.ports[443]
   const h80 = f.ports[80]
+  const n = namesOf(w)
   if (h443.kind === 'split' || h80.kind === 'split') return manual(['split'])
   // the board's own container with no record of it: not something to plan over
-  if (isOurs(f, h443) || isOurs(f, h80)) return manual(['otherSetup'])
+  if (isOurs(f, n, h443) || isOurs(f, n, h80)) return manual(['otherSetup'])
+  // the other setup's own Caddy on the web ports (the tunnel's, or the server mode's)
+  if (isTheOthers(f, n, h443) || isTheOthers(f, n, h80)) return manual(['otherBoard'])
   if (isFree(h443))
     return isFree(h80)
-      ? ownCase(f, '1', { key: 'server.case.1' })
-      : ownCase(f, '1b', { key: 'server.case.1b', params: { holder: holderName(f, h80) } })
+      ? ownCase(f, n, '1', { key: 'server.case.1' })
+      : ownCase(f, n, '1b', { key: 'server.case.1b', params: { holder: holderName(f, h80) } })
   if (!isCaddy(f, h443)) return caseFour(f, w, holderName(f, h443))
   if (f.caddy?.hosts.includes(w.domain)) return manual(['domainServed'])
   const problems = caddyProblems(f, h443)
@@ -598,7 +610,7 @@ function byHolders(f: ServerFacts, w: Wanted): Choice {
   if (!container) return manual(['twoConfigs'])
   const name = bare(container.name)
   if (container.hostNetwork) {
-    if (!portsFree(f, [PORT_3B])) return manual(['portTaken'])
+    if (!portsFree(f, n, [n.port3b])) return manual(['portTaken'])
     return { case: '3b', why: { key: 'server.case.3b', params: { container: name } } }
   }
   const network = helperNetwork(container)
@@ -656,23 +668,26 @@ const moveOver = (from: string, to: string): string =>
 const copyWhole = (from: string, to: string): string =>
   `sudo cp -p ${q(from)} ${q(`${to}.part`)}; sudo mv -f ${q(`${to}.part`)} ${q(to)}`
 /** A line that imports the board's site file: the board's own, or one written by hand. */
-const IMPORTS_SITE = `^[[:space:]]*import[[:space:]]+${SITE_FILE.replaceAll('.', '\\.')}([[:space:]]|$)`
-const importsSite = (files: string[]): string => `sudo grep -Eqs ${shQuote(IMPORTS_SITE)} ${files.map(q).join(' ')}`
+const importsSite = (n: Names, files: string[]): string =>
+  `sudo grep -Eqs ${shQuote(`^[[:space:]]*import[[:space:]]+${n.siteFile.replaceAll('.', '\\.')}([[:space:]]|$)`)} ${files.map(q).join(' ')}`
 const dirOf = (path: string): string => path.slice(0, path.lastIndexOf('/')) || '/'
 const label = (name: string, key: string): string =>
   `$(sudo docker inspect -f '{{index .Config.Labels "${key}"}}' ${q(name)} 2>/dev/null)`
 const isOursCmd = (name: string, role: string): string => `[ "${label(name, ROLE_LABEL)}" = ${role} ]`
 const running = (name: string): string => `$(sudo docker inspect -f '{{.State.Running}}' ${q(name)} 2>/dev/null)`
-const volumeOurs = (v: string): string =>
-  `[ "$(sudo docker volume inspect -f '{{index .Labels "${ROLE_LABEL}"}}' ${q(v)} 2>/dev/null)" = caddy ]`
-/** Removes the line (case 2) or the block (case 3) of the board's from a file's text on stdin. */
-const STRIP_LINE = `L=${shQuote(IMPORT_LINE)} awk '$0 != ENVIRON["L"]'`
-const STRIP_BLOCK = `B0=${shQuote(BLOCK_BEGIN)} E0=${shQuote(BLOCK_END)} awk 'index($0, ENVIRON["B0"]) == 1 { s = 1 } !s { print } s && $0 == ENVIRON["E0"] { s = 0 }'`
+const volumeOurs = (n: Names, v: string): string =>
+  `[ "$(sudo docker volume inspect -f '{{index .Labels "${ROLE_LABEL}"}}' ${q(v)} 2>/dev/null)" = ${n.caddyRole} ]`
+/** Removes the line (case 2) or the block (case 3, sshd's fence) of the board's from a file's text on stdin. */
+const stripLine = (n: Names): string => `L=${shQuote(n.importLine)} awk '$0 != ENVIRON["L"]'`
+const stripBlock = (n: Names): string =>
+  `B0=${shQuote(n.blockBegin)} E0=${shQuote(n.blockEnd)} awk 'index($0, ENVIRON["B0"]) == 1 { s = 1 } !s { print } s && $0 == ENVIRON["E0"] { s = 0 }'`
+/** sshd's fence is the tunnel's alone: its block has the tunnel's markers. */
+const STRIP_BLOCK = stripBlock(TUNNEL_NAMES)
 /** The block of the board's is whole: as many ends as beginnings, at most one. */
-const wholeBlock = (file: string): string =>
-  `n=$(sudo grep -c '^${BLOCK_BEGIN}' ${q(file)} || true); m=$(sudo grep -cx '${BLOCK_END}' ${q(file)} || true); if [ "$n" != "$m" ] || [ "$n" -gt 1 ]; then echo ${shQuote(`The board's block in ${file} is not whole: put it right by hand.`)}; false; fi`
-const blockText = (file: string): string =>
-  `sudo cat ${q(file)} | B0=${shQuote(BLOCK_BEGIN)} E0=${shQuote(BLOCK_END)} awk 'index($0, ENVIRON["B0"]) == 1 { s = 1 } s { print } s && $0 == ENVIRON["E0"] { s = 0 }'`
+const wholeBlock = (file: string, n: Names = TUNNEL_NAMES): string =>
+  `n=$(sudo grep -c '^${n.blockBegin}' ${q(file)} || true); m=$(sudo grep -cx '${n.blockEnd}' ${q(file)} || true); if [ "$n" != "$m" ] || [ "$n" -gt 1 ]; then echo ${shQuote(`The board's block in ${file} is not whole: put it right by hand.`)}; false; fi`
+const blockText = (n: Names, file: string): string =>
+  `sudo cat ${q(file)} | B0=${shQuote(n.blockBegin)} E0=${shQuote(n.blockEnd)} awk 'index($0, ENVIRON["B0"]) == 1 { s = 1 } s { print } s && $0 == ENVIRON["E0"] { s = 0 }'`
 
 const gidWord = (f: ServerFacts): string => {
   const gid = f.folder?.gid
@@ -714,9 +729,9 @@ function mk(id: string, o: Partial<PlanStep> & { commands: string[] }, params?: 
  * a part of step 1 the run makes is still missing (so what the record names as the board's is).
  */
 export type Rely =
-  | { kind: 'free'; port: Port; docker: boolean }
-  | { kind: 'program'; port: Port; program: string }
-  | { kind: 'container'; port: Port | null; id: string }
+  | { kind: 'free'; port: ServerPort; docker: boolean }
+  | { kind: 'program'; port: ServerPort; program: string }
+  | { kind: 'container'; port: ServerPort | null; id: string }
   | { kind: 'config'; path: string; sha: string }
   | { kind: 'none'; what: 'user' | 'folder' | 'keys'; name: string }
 
@@ -753,9 +768,9 @@ export function relyLine(r: Rely): { said: string; command: string } {
 }
 
 /** A port's holder as the plan relies on it; nothing for the board's own. */
-function relyOn(f: ServerFacts, port: Port): Rely[] {
-  const h = f.ports[port]
-  if (isOurs(f, h)) return []
+function relyOn(f: ServerFacts, n: Names, port: ServerPort): Rely[] {
+  const h = holderAt(f, port)
+  if (isOurs(f, n, h)) return []
   if (h.kind === 'free') return [{ kind: 'free', port, docker: f.docker !== null }]
   if (h.kind === 'container') return [{ kind: 'container', port, id: h.id }]
   if (h.kind === 'unit' || h.kind === 'process') return [{ kind: 'program', port, program: h.program }]
@@ -878,7 +893,8 @@ function runStep(id: string, name: string, role: string, args: string[], setup: 
   )
 }
 
-const reloadOwn = `if [ "$(sudo docker inspect -f '{{index .Config.Labels "${ROLE_LABEL}"}} {{.State.Running}}' ${CADDY_NAME} 2>/dev/null)" = 'caddy true' ]; then sudo docker exec ${CADDY_NAME} caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile; fi`
+const reloadOwn = (n: Names): string =>
+  `if [ "$(sudo docker inspect -f '{{index .Config.Labels "${ROLE_LABEL}"}} {{.State.Running}}' ${n.caddyName} 2>/dev/null)" = '${n.caddyRole} true' ]; then sudo docker exec ${n.caddyName} caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile; fi`
 
 const HOST_NAME = /^(?=.*[a-z])[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i
 
@@ -956,7 +972,7 @@ interface TheirCaddy {
   fetch: boolean
 }
 
-function theirCaddy(f: ServerFacts): TheirCaddy | null {
+function theirCaddy(f: ServerFacts, n: Names = TUNNEL_NAMES): TheirCaddy | null {
   const c = f.caddy
   if (!c || c.hostPath === null) return null
   const file = c.hostPath
@@ -974,7 +990,7 @@ function theirCaddy(f: ServerFacts): TheirCaddy | null {
     const name = holder.kind === 'unit' ? holder.unit : 'caddy.service'
     const bin = unit?.execStart[0] && isPlainPath(unit.execStart[0]) ? unit.execStart[0] : 'caddy'
     const user = unit?.user && unit.user !== '' ? unit.user : 'root'
-    const candidate = `${dirOf(file)}/.Caddyfile.agent-board`
+    const candidate = `${dirOf(file)}/${n.candidate}`
     // STEPPATH=/: Caddy 2.6 makes $HOME/.step on any run (/root/.step as root), which no record
     // names; pointed at a folder that is there, it makes nothing (the spike). `env`, since a
     // `sudo VAR=x …` line would not run in the board's script, where sudo is a function.
@@ -1003,8 +1019,8 @@ function theirCaddy(f: ServerFacts): TheirCaddy | null {
     live: true,
     file,
     sha,
-    candidate: inFolder ? `${dirOf(file)}/.Caddyfile.agent-board` : null,
-    candidateCfg: `${dirOf(c.config)}/.Caddyfile.agent-board`,
+    candidate: inFolder ? `${dirOf(file)}/${n.candidate}` : null,
+    candidateCfg: `${dirOf(c.config)}/${n.candidate}`,
     cfg: c.config,
     validate: cfg => `${exec} validate --config ${q(cfg)} --adapter caddyfile`,
     adapt: `${exec} adapt`,
@@ -1030,6 +1046,7 @@ const hostsFn = (t: TheirCaddy): string =>
 function chain(
   t: TheirCaddy,
   b: string,
+  n: Names,
   o: {
     edit: string
     add: string | null
@@ -1082,7 +1099,7 @@ function chain(
     ),
   ]
   // their file back as it was: never one that imports the board's site while that site is not there
-  const restore = `if ${importsSite([backup])} && ! sudo test -s ${SITE_FILE}; then echo ${q(`${t.file} is left as it is: its backup imports ${SITE_FILE}, which is not there.`)}; false; else ${inPlace(backup, t.file)}; fi`
+  const restore = `if ${importsSite(n, [backup])} && ! sudo test -s ${n.siteFile}; then echo ${q(`${t.file} is left as it is: its backup imports ${n.siteFile}, which is not there.`)}; false; else ${inPlace(backup, t.file)}; fi`
   const reloaded = `${b}/reloaded`
   const validate = mk(
     'validate',
@@ -1147,7 +1164,7 @@ function chain(
           restore,
           ...(o.restoreSite
             ? [
-                `if sudo test -f ${q(`${b}/board.caddy.board`)}; then ${copyWhole(`${b}/board.caddy.board`, SITE_FILE)}; fi`,
+                `if sudo test -f ${q(`${b}/board.caddy.board`)}; then ${copyWhole(`${b}/board.caddy.board`, n.siteFile)}; fi`,
               ]
             : []),
           `if sudo test -f ${q(reloaded)}; then ${t.reload.join('; ')}; fi`,
@@ -1168,6 +1185,8 @@ function chain(
 interface Ctx {
   f: ServerFacts
   w: Wanted
+  /** The setup's names on the server: the tunnel's, or the server mode's. */
+  n: Names
   id: string
   b: string
   gid: string
@@ -1478,9 +1497,9 @@ const runs = (mine: Container | undefined, args: readonly string[]): boolean =>
   mine.labels[GID_LABEL] === labelOf(args, GID_LABEL)
 
 function ownSteps(x: Ctx, c: OwnCaddy): { built: Built[]; relies: Rely[] } {
-  const { f, w } = x
+  const { f, w, n } = x
   const args = caddyRunArgs(c, w, x.gid, x.id, w.acme)
-  const mine = ownContainer(f, CADDY_NAME, 'caddy')
+  const mine = ownContainer(f, n.caddyName, n.caddyRole)
   const up = runs(mine, args)
   const kept = x.same && up
   const built: Built[] = []
@@ -1488,40 +1507,40 @@ function ownSteps(x: Ctx, c: OwnCaddy): { built: Built[]; relies: Rely[] } {
   built.push(
     { step: pullStep('pull-caddy', CADDY_IMAGE), done: mine?.image === CADDY_IMAGE },
     {
-      step: ownFile('caddyfile', CADDY_FILE, boardCaddyfile(c, w, w.acme), x.b, {
-        commands: [reloadOwn],
-        undo: [`sudo rmdir ${CADDY_DIR} 2>/dev/null || true`, reloadOwn],
+      step: ownFile('caddyfile', n.caddyFile, boardCaddyfile(c, w, w.acme), x.b, {
+        commands: [reloadOwn(n)],
+        undo: [`sudo rmdir ${n.caddyDir} 2>/dev/null || true`, reloadOwn(n)],
       }),
       done: kept,
     },
     {
       step: mk('volumes', {
-        commands: VOLUMES.map(v => `sudo docker volume create --label ${ROLE_LABEL}=caddy ${v} >/dev/null`),
-        skipIf: VOLUMES.map(volumeOurs),
-        check: [`sudo docker volume inspect ${VOLUMES.join(' ')} >/dev/null`],
-        undo: VOLUMES.map(v => `if ${volumeOurs(v)}; then sudo docker volume rm ${v} >/dev/null; fi`),
-        touches: VOLUMES.map(what => ({ kind: 'volume' as const, what })),
-        record: VOLUMES.map(name => ({ kind: 'volume' as const, name })),
+        commands: n.volumes.map(v => `sudo docker volume create --label ${ROLE_LABEL}=${n.caddyRole} ${v} >/dev/null`),
+        skipIf: n.volumes.map(v => volumeOurs(n, v)),
+        check: [`sudo docker volume inspect ${n.volumes.join(' ')} >/dev/null`],
+        undo: n.volumes.map(v => `if ${volumeOurs(n, v)}; then sudo docker volume rm ${v} >/dev/null; fi`),
+        touches: n.volumes.map(what => ({ kind: 'volume' as const, what })),
+        record: n.volumes.map(name => ({ kind: 'volume' as const, name })),
       }),
       done: kept,
     },
-    { step: runStep('run-caddy', CADDY_NAME, 'caddy', args, x.id, socketFolder(w.socket)), done: up },
+    { step: runStep('run-caddy', n.caddyName, n.caddyRole, args, x.id, socketFolder(w.socket)), done: up },
     {
       step: mk('caddy-up', {
         commands: [
-          `i=0; until [ "${running(CADDY_NAME)}" = true ] && sudo docker exec ${CADDY_NAME} wget -q -O /dev/null http://127.0.0.1:2019/config/ || [ "$i" -ge 30 ]; do i=$((i + 1)); sleep 1; done`,
-          `if [ "$i" -ge 30 ]; then sudo docker logs --tail 30 ${CADDY_NAME}; fi`,
+          `i=0; until [ "${running(n.caddyName)}" = true ] && sudo docker exec ${n.caddyName} wget -q -O /dev/null http://127.0.0.1:2019/config/ || [ "$i" -ge 30 ]; do i=$((i + 1)); sleep 1; done`,
+          `if [ "$i" -ge 30 ]; then sudo docker logs --tail 30 ${n.caddyName}; fi`,
         ],
-        check: [`sudo docker exec ${CADDY_NAME} wget -q -O /dev/null http://127.0.0.1:2019/config/`],
+        check: [`sudo docker exec ${n.caddyName} wget -q -O /dev/null http://127.0.0.1:2019/config/`],
         timeoutS: 90,
       }),
       done: up,
     },
   )
   const relies: Rely[] = [
-    ...(c === '1' || c === '4a' ? relyOn(f, 80) : []),
-    ...(c === '1' || c === '1b' ? relyOn(f, 443) : []),
-    ...(c === '4a' || c === '4b' ? relyOn(f, PORT_4) : []),
+    ...(c === '1' || c === '4a' ? relyOn(f, n, 80) : []),
+    ...(c === '1' || c === '1b' ? relyOn(f, n, 443) : []),
+    ...(c === '4a' || c === '4b' ? relyOn(f, n, PORT_4) : []),
   ]
   if (c === '4b') {
     const nginx = f.nginx
@@ -1532,7 +1551,7 @@ function ownSteps(x: Ctx, c: OwnCaddy): { built: Built[]; relies: Rely[] } {
     const nginxDone = x.same && served
     built.push(
       {
-        step: ownFile('nginx-file', NGINX_FILE, nginxFile(w, listen), x.b, {
+        step: ownFile('nginx-file', n.nginxFile, nginxFile(w, listen), x.b, {
           undo: ['if sudo nginx -t 2>/dev/null; then sudo systemctl reload nginx; fi'],
         }),
         done: nginxDone,
@@ -1564,7 +1583,7 @@ function ownSteps(x: Ctx, c: OwnCaddy): { built: Built[]; relies: Rely[] } {
         done: nginxDone,
       },
     )
-    relies.push(...relyOn(f, 80), ...relyOn(f, PORT_4B_CHECK))
+    relies.push(...relyOn(f, n, 80), ...relyOn(f, n, PORT_4B_CHECK))
   }
   return { built, relies }
 }
@@ -1589,7 +1608,7 @@ const socketChgrp = (pair: Pair): string => (pair.server ? 'chgrp -h' : 'chgrp')
 const servedByThem = (x: Ctx): boolean => x.same && x.f.caddy?.hosts.includes(x.w.domain) === true
 
 function caseTwo(x: Ctx, t: TheirCaddy): { built: Built[]; relies: Rely[] } | Manual[] {
-  const { f, w } = x
+  const { f, w, n } = x
   if (f.ports[443].kind !== 'unit') return ['twoConfigs']
   const unit = f.units.caddy
   const folder = socketFolder(w.socket)
@@ -1598,7 +1617,9 @@ function caseTwo(x: Ctx, t: TheirCaddy): { built: Built[]; relies: Rely[] } | Ma
   const done = servedByThem(x)
   const built: Built[] = [
     {
-      step: ownFile('site-file', SITE_FILE, siteFile(w), x.b, { undo: [`sudo rmdir ${SITE_DIR} 2>/dev/null || true`] }),
+      step: ownFile('site-file', n.siteFile, siteFile(w), x.b, {
+        undo: [`sudo rmdir ${n.siteDir} 2>/dev/null || true`],
+      }),
       done,
     },
   ]
@@ -1623,14 +1644,14 @@ function caseTwo(x: Ctx, t: TheirCaddy): { built: Built[]; relies: Rely[] } | Ma
       done: false,
     })
   }
-  const steps = chain(t, x.b, {
-    edit: STRIP_LINE,
-    add: IMPORT_LINE,
-    present: x.update ? null : `sudo grep -qxF ${shQuote(IMPORT_LINE)} ${q(t.file)}`,
+  const steps = chain(t, x.b, n, {
+    edit: stripLine(n),
+    add: n.importLine,
+    present: x.update ? null : `sudo grep -qxF ${shQuote(n.importLine)} ${q(t.file)}`,
     out: movedFrom(x),
     into: w.domain,
     extraCheck: [],
-    record: [{ kind: 'line', file: t.file, line: IMPORT_LINE }],
+    record: [{ kind: 'line', file: t.file, line: n.importLine }],
     touch: { kind: 'line', what: t.file },
     hosts: fetchHosts(f.caddy?.hosts ?? [], w.domain, movedFrom(x)),
     restoreSite: true,
@@ -1638,27 +1659,27 @@ function caseTwo(x: Ctx, t: TheirCaddy): { built: Built[]; relies: Rely[] } | Ma
   })
   built.push(...steps.map(step => ({ step, done })))
   const relies: Rely[] = [
-    ...relyOn(f, 443),
+    ...relyOn(f, n, 443),
     ...(t.sha !== '' ? [{ kind: 'config' as const, path: t.file, sha: t.sha }] : []),
   ]
   return { built, relies }
 }
 
 function caseThree(x: Ctx, t: TheirCaddy, host: boolean): { built: Built[]; relies: Rely[] } | Manual[] {
-  const { f, w } = x
+  const { f, w, n } = x
   const id = f.caddy?.container ?? ''
   const container = containerOf(f, id)
   const network = host ? null : container ? helperNetwork(container) : null
   if (!host && network === null) return ['bridge']
   const args = socatRunArgs(network === null ? { host: true } : { network }, w, x.gid, x.id)
-  const mine = ownContainer(f, SOCKET_NAME, 'socket')
+  const mine = ownContainer(f, n.socketName, n.socketRole)
   const up = runs(mine, args)
-  const url = host ? `http://127.0.0.1:${PORT_3B}/` : `http://${SOCKET_NAME}:${PORT_3A}/`
+  const url = host ? `http://127.0.0.1:${n.port3b}/` : `http://${n.socketName}:${PORT_3A}/`
   const failed = 'bad address|refused|timed out|unable to resolve'
   const probe = `command -v wget >/dev/null || exit 0; wget -q -T 3 -O /dev/null ${url} 2>&1`
-  const run = runStep('run-socat', SOCKET_NAME, 'socket', args, x.id, socketFolder(w.socket))
+  const run = runStep('run-socat', n.socketName, n.socketRole, args, x.id, socketFolder(w.socket))
   if (network) run.touches.push({ kind: 'network', what: network })
-  const upstream = host ? `127.0.0.1:${PORT_3B}` : `${SOCKET_NAME}:${PORT_3A}`
+  const upstream = host ? `127.0.0.1:${n.port3b}` : `${n.socketName}:${PORT_3A}`
   const done = servedByThem(x)
   const built: Built[] = [
     { step: pullStep('pull-socat', SOCAT_IMAGE), done: mine?.image === SOCAT_IMAGE },
@@ -1674,16 +1695,16 @@ function caseThree(x: Ctx, t: TheirCaddy, host: boolean): { built: Built[]; reli
       done: up,
     },
   ]
-  const steps = chain(t, x.b, {
-    edit: STRIP_BLOCK,
+  const steps = chain(t, x.b, n, {
+    edit: stripBlock(n),
     add: markedBlock(w, upstream),
     present: x.update
       ? null
-      : `[ "$(${blockText(t.file)} | sha256sum)" = "$(printf '%s\\n' ${lines(markedBlock(w, upstream))} | sha256sum)" ]`,
+      : `[ "$(${blockText(n, t.file)} | sha256sum)" = "$(printf '%s\\n' ${lines(markedBlock(w, upstream))} | sha256sum)" ]`,
     out: movedFrom(x),
     into: w.domain,
-    extraCheck: [wholeBlock(t.file)],
-    record: [{ kind: 'block', file: t.file, begin: BLOCK_BEGIN, end: BLOCK_END }],
+    extraCheck: [wholeBlock(t.file, n)],
+    record: [{ kind: 'block', file: t.file, begin: n.blockBegin, end: n.blockEnd }],
     touch: { kind: 'block', what: t.file },
     hosts: fetchHosts(f.caddy?.hosts ?? [], w.domain, movedFrom(x)),
     restoreSite: false,
@@ -1691,10 +1712,10 @@ function caseThree(x: Ctx, t: TheirCaddy, host: boolean): { built: Built[]; reli
   })
   built.push(...steps.map(step => ({ step, done })))
   const relies: Rely[] = [
-    ...relyOn(f, 443),
+    ...relyOn(f, n, 443),
     { kind: 'container', port: null, id },
     ...(t.sha !== '' ? [{ kind: 'config' as const, path: t.file, sha: t.sha }] : []),
-    ...(host ? relyOn(f, PORT_3B) : []),
+    ...(host ? relyOn(f, n, n.port3b) : []),
   ]
   return { built, relies }
 }
@@ -1787,11 +1808,13 @@ export function buildPlan(
   const old = mine && holdsSetup(mine) ? mine : null
   const who = old ? whose(old, w) : null
   const needs = stepOneNeeds(f, w)
+  const n = namesOf(w)
   const x: Ctx = {
     f,
     w,
+    n,
     id: o.id,
-    b: `${BACKUPS_DIR}/${o.id}`,
+    b: `${n.backups}/${o.id}`,
     // a folder the run makes has its gid only on the server
     gid: needs?.folder ? RUN_GID : gidWord(f),
     old,
@@ -1801,7 +1824,7 @@ export function buildPlan(
   }
   let made: { built: Built[]; relies: Rely[] } | Manual[]
   if (c === '2' || c === '3a' || c === '3b') {
-    const t = theirCaddy(f)
+    const t = theirCaddy(f, n)
     if (!t) return manual(['twoConfigs'])
     made = c === '2' ? caseTwo(x, t) : caseThree(x, t, c === '3b')
   } else {
@@ -1869,8 +1892,9 @@ export function undoPlan(
 ): Plan {
   checkWanted({ user: r.pair.user, socket: r.pair.socket, domain: r.domain, publicPort: r.publicPort })
   checkId(o.id)
+  const n = namesOf(r.pair)
   const items = withEdit(r, f, dedupe(r.items))
-  const b = `${BACKUPS_DIR}/${o.id}`
+  const b = `${n.backups}/${o.id}`
   const relies: Rely[] = []
   const warnings: Text[] = []
   /** A warning once, however many steps give it. */
@@ -1880,10 +1904,10 @@ export function undoPlan(
   const steps: PlanStep[] = []
   const done = new Set<string>()
   const dockerItem = items.find(i => i.kind === 'docker')
-  const onlyOurs = (f.docker?.containers ?? []).every(c => c.labels[ROLE_LABEL] !== undefined)
+  const onlyOurs = (f.docker?.containers ?? []).every(c => isMine(n, c.labels[ROLE_LABEL]))
   const offerDocker = dockerItem !== undefined && onlyOurs
   const files = items.filter(i => i.kind === 'file')
-  const theirFile = theirCaddy(f)?.file
+  const theirFile = theirCaddy(f, n)?.file
   // newest first; step 1's parts last whatever run made them (the case's parts use the user and
   // its folder): the keys file first of them, so an Undo cut short never leaves the board's key
   // able to log in without the fence; the user last
@@ -1893,21 +1917,21 @@ export function undoPlan(
     switch (item.kind) {
       case 'line':
       case 'block': {
-        const t = theirCaddy(f)
+        const t = theirCaddy(f, n)
         const theirs = t !== null && t.file === item.file
         if (!theirs) warnings.push({ key: 'server.warn.notTheirConfig', params: { file: item.file } })
         const plain: TheirCaddy = t && theirs ? t : bareFile(item.file)
         const line = item.kind === 'line'
         steps.push(
-          ...chain(plain, b, {
-            edit: line ? STRIP_LINE : STRIP_BLOCK,
+          ...chain(plain, b, n, {
+            edit: line ? stripLine(n) : stripBlock(n),
             add: null,
             present: line
-              ? `! sudo grep -qxF ${shQuote(IMPORT_LINE)} ${q(item.file)}`
-              : `! sudo grep -qx ${shQuote(BLOCK_END)} ${q(item.file)}`,
+              ? `! sudo grep -qxF ${shQuote(n.importLine)} ${q(item.file)}`
+              : `! sudo grep -qx ${shQuote(n.blockEnd)} ${q(item.file)}`,
             out: r.domain,
             into: null,
-            extraCheck: line ? [] : [wholeBlock(item.file)],
+            extraCheck: line ? [] : [wholeBlock(item.file, n)],
             record: [item],
             touch: { kind: item.kind, what: item.file },
             hosts: theirs ? fetchHosts(f.caddy?.hosts ?? [], r.domain) : [],
@@ -1917,16 +1941,16 @@ export function undoPlan(
         )
         if (theirs && t) {
           if (t.sha !== '') relies.push({ kind: 'config', path: t.file, sha: t.sha })
-          relies.push(...relyOn(f, 443))
+          relies.push(...relyOn(f, n, 443))
           if (t.live && t.fetch) warn(someHosts(f.caddy?.hosts ?? [], r.domain))
         }
         break
       }
       case 'file': {
         const id =
-          item.path === NGINX_FILE ? 'drop-nginx-file' : item.path === SITE_FILE ? 'drop-site-file' : 'drop-caddyfile'
-        const dir = item.path === SITE_FILE ? SITE_DIR : item.path === CADDY_FILE ? CADDY_DIR : null
-        const nginx = item.path === NGINX_FILE
+          item.path === n.nginxFile ? 'drop-nginx-file' : item.path === n.siteFile ? 'drop-site-file' : 'drop-caddyfile'
+        const dir = item.path === n.siteFile ? n.siteDir : item.path === n.caddyFile ? n.caddyDir : null
+        const nginx = item.path === n.nginxFile
         // a copy first, which the rollback puts back (only where the file is gone)
         const saved = `${b}/${item.path.slice(item.path.lastIndexOf('/') + 1)}.dropped`
         const hosts = nginx && f.host.fetch === 'curl' ? fetchHosts(f.nginx?.serverNames ?? [], r.domain) : []
@@ -1943,9 +1967,9 @@ export function undoPlan(
             id,
             {
               commands: [
-                ...(item.path === SITE_FILE && importers.length
+                ...(item.path === n.siteFile && importers.length
                   ? [
-                      `if ${importsSite(importers)}; then echo ${q(`${SITE_FILE} stays: a Caddyfile still imports it.`)}; false; fi`,
+                      `if ${importsSite(n, importers)}; then echo ${q(`${n.siteFile} stays: a Caddyfile still imports it.`)}; false; fi`,
                     ]
                   : []),
                 `sudo install -d -m 700 ${q(b)}`,
@@ -1982,8 +2006,9 @@ export function undoPlan(
         break
       }
       case 'container': {
-        const role = item.name === CADDY_NAME ? 'caddy' : 'socket'
-        const id = role === 'caddy' ? 'drop-caddy' : 'drop-socket'
+        const caddy = item.name === n.caddyName
+        const role = caddy ? n.caddyRole : n.socketRole
+        const id = caddy ? 'drop-caddy' : 'drop-socket'
         steps.push(
           mk(
             id,
@@ -2006,7 +2031,9 @@ export function undoPlan(
         const volumes = items.filter(i => i.kind === 'volume')
         steps.push(
           mk('drop-volumes', {
-            commands: volumes.map(v => `if ${volumeOurs(v.name)}; then sudo docker volume rm ${v.name} >/dev/null; fi`),
+            commands: volumes.map(
+              v => `if ${volumeOurs(n, v.name)}; then sudo docker volume rm ${v.name} >/dev/null; fi`,
+            ),
             touches: volumes.map(v => touchOf(v)),
             record: volumes,
           }),
@@ -2147,10 +2174,10 @@ export function undoPlan(
   steps.push(
     mk('forget', {
       commands: [
-        `sudo rm -rf ${RECORD_FILE} ${BACKUPS_DIR} ${CADDY_DIR}`,
-        "# the runs' scripts and logs go with the folder: sudo rm -rf /etc/agent-board",
+        `sudo rm -rf ${n.record} ${n.backups} ${n.caddyDir}`,
+        `# the runs' scripts and logs go with the folder: sudo rm -rf ${n.dir}`,
       ],
-      touches: [{ kind: 'file', what: RECORD_FILE }],
+      touches: [{ kind: 'file', what: n.record }],
       record: items,
     }),
     ...(byHand.length
@@ -2192,11 +2219,12 @@ function withEdit(r: SetupRecord, f: ServerFacts, items: RecordItem[]): RecordIt
   const backup = items.find((i): i is Extract<RecordItem, { kind: 'backup' }> => i.kind === 'backup')
   const file = backup?.of ?? theirCaddy(f)?.file
   if (file === undefined || !isPlainPath(file)) return items
+  const n = namesOf(r.pair)
   return [
     ...items,
     kind === 'line'
-      ? { kind: 'line', file, line: IMPORT_LINE }
-      : { kind: 'block', file, begin: BLOCK_BEGIN, end: BLOCK_END },
+      ? { kind: 'line', file, line: n.importLine }
+      : { kind: 'block', file, begin: n.blockBegin, end: n.blockEnd },
   ]
 }
 

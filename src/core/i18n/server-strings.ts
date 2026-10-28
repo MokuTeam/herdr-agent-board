@@ -190,6 +190,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'Another board’s setup is on this server: Undo it from that board, or with its settings here.',
     'server.manual.interrupted': 'A run of the board did not finish here: undo it first, then look again.',
     'server.manual.portTaken': 'A port the board needs (8443, 8480 or 8481) is held by another program.',
+    'server.manual.otherBoard':
+      'The other board’s own web server (the tunnel’s, or the board’s on this server) holds a port this needs: two boards share a web server only when it is yours (Caddy as a service or in Docker). Undo the other one’s setup first, or put a Caddy of yours in front of both.',
     'server.manual.folder':
       'The socket’s folder is not there, and the board has no key of its own yet to set up its login: generate its key first.',
     'server.manual.tunnelUser':
@@ -358,6 +360,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.plain.stop.web': 'your web server is set up in a way it does not change.',
     'server.plain.stop.domainServed': 'your web server serves {domain} already.',
     'server.plain.stop.otherSetup': 'another board is set up on this server.',
+    'server.plain.stop.otherBoard': 'the other board’s own web server holds the ports it needs here.',
     'server.plain.stop.interrupted': 'a run of the board did not finish here.',
     'server.plain.stop.folder': 'it has no key of its own yet for its login there.',
     'server.plain.stop.tunnelUser':
@@ -596,6 +599,8 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.manual.interrupted':
       'Запуск доски здесь не завершился: сначала отмените его, потом осмотрите сервер снова.',
     'server.manual.portTaken': 'Нужный доске порт (8443, 8480 или 8481) занят другой программой.',
+    'server.manual.otherBoard':
+      'Нужный для этого порт держит собственный веб-сервер другой доски (туннеля или доски на этом сервере): две доски делят веб-сервер, только если он ваш (Caddy как служба или в Docker). Сначала отмените настройку другой доски или поставьте перед обеими свой Caddy.',
     'server.manual.folder':
       'Папки сокета нет, а своего ключа, чтобы настроить свой вход, у доски ещё нет: сначала создайте её ключ.',
     'server.manual.tunnelUser':
@@ -768,6 +773,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.plain.stop.web': 'ваш веб-сервер устроен так, что она его не меняет.',
     'server.plain.stop.domainServed': 'ваш веб-сервер уже обслуживает {domain}.',
     'server.plain.stop.otherSetup': 'на этом сервере настроена другая доска.',
+    'server.plain.stop.otherBoard': 'нужные ей порты здесь держит собственный веб-сервер другой доски.',
     'server.plain.stop.interrupted': 'запуск доски здесь не завершился.',
     'server.plain.stop.folder': 'у неё ещё нет своего ключа для входа туда.',
     'server.plain.stop.tunnelUser':

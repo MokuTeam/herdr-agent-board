@@ -53,6 +53,7 @@ function stopKind(why: Manual): string {
     case 'folder':
     case 'tunnelUser':
     case 'tunnelGroup':
+    case 'otherBoard':
       return why
     default:
       return 'web'

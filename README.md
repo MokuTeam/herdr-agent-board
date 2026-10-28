@@ -2304,8 +2304,16 @@ keys are copied for it) and run `claude` once to sign in; `herdr` attaches to th
   (`~/.config/systemd/user/herdr.service`, `Restart=on-failure`), in which the board opens as on a
   computer. The web server in front of the board's socket (`/var/lib/agent-board/board.sock`) is set
   up exactly as "Set up the server" does it for the tunnel (the board's own Caddy, or yours, or nginx
-  with 8443), with its record, rollback and checks in `/etc/agent-board`; your sites are not touched.
-  The installer's own Bun and copy of the board are root's, in `/usr/local/lib/agent-board`.
+  with 8443), with its record, rollback and checks in `/etc/agent-board-server`; your sites are not
+  touched. The installer's own Bun and copy of the board are root's, in `/usr/local/lib/agent-board`.
+- **Beside the tunnel.** A server that is already the tunnel's (its web server set up by "Set up
+  the server") takes the board too, on a domain of its own: each has its own record and folder
+  (`/etc/agent-board` the tunnel's, `/etc/agent-board-server` this one's), its own site or block in
+  your Caddy (`# >>> server agent-board`), its own helper (`agent-board-server-socket`, 8482 on the
+  loopback in case 3b) and its own Undo, which leaves the other one answering. Each sees the other's
+  site as one of your sites and checks it still answers. Two boards share a web server only when it
+  is yours (Caddy as a service or in Docker): where the other one runs a Caddy of its own, Look says
+  so and changes nothing.
 - **127.0.0.1 there.** Other accounts on the server reach 127.0.0.1 too (the web server's, a
   container on the host's network), so the web board's port and wake's take only requests that
   carry the board's local key (`X-Board-Key`, from `~/.local/state/herdr/plugins/agent-board/local-key`,

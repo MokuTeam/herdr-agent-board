@@ -12,7 +12,7 @@
 // import: the page shows the plan from it too.
 import { t } from './lang.ts'
 import type { Wanted } from './server-plan.ts'
-import { BOARD_DIR } from './server-texts.ts'
+import { SERVER_NAMES } from './server-texts.ts'
 import { fieldProblem } from './tunnel.ts'
 import type { Lang, Translator } from './types.ts'
 
@@ -30,8 +30,12 @@ export const BOARD_SOCKET = '/var/lib/agent-board/board.sock'
  * nothing root runs is the board's user's to change (that user runs Claude Code).
  */
 export const INSTALL_HOME = '/usr/local/lib/agent-board'
-/** What the install set up, for its Undo and the next run (root's, beside the web server's record). */
-export const INSTALL_RECORD = `${BOARD_DIR}/install.json`
+/**
+ * What the install set up, for its Undo and the next run: root's, beside the web server's record in
+ * the server mode's own folder, apart from the tunnel's /etc/agent-board (whose runs remove that
+ * folder once its own setup is gone).
+ */
+export const INSTALL_RECORD = `${SERVER_NAMES.dir}/install.json`
 /** Where path A fetches the board from (a fork's with --repo). */
 export const REPO = 'https://github.com/MokuTeam/herdr-agent-board'
 /** The bootstrap, at the repository's root: what path A's one line pipes into sh. */

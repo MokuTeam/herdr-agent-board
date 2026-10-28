@@ -13,14 +13,14 @@ import type {
   HostFacts,
   Mount,
   NginxFacts,
-  Port,
   RoundOne,
   ServerFacts,
+  ServerPort,
   StepOneFacts,
   Unit,
 } from './server-facts.ts'
 import { isContainerId, isPlainPath, shQuote } from './server-shell.ts'
-import { KEYS_DIR, SSHD_CONFIG, SSHD_DIR, USER_COMMENT } from './server-texts.ts'
+import { KEYS_DIR, namesOf, PORT_3B_SERVER, SSHD_CONFIG, SSHD_DIR, USER_COMMENT } from './server-texts.ts'
 import { keysFile, keysLine, socketFolder, sshdBlock } from './tunnel-snippets.ts'
 
 /** The distributions Apply works on (owner, 2026-10-21); anything else is "Do it myself". */
@@ -38,6 +38,8 @@ export interface LookInput {
   domain: string
   /** The board's public key: Look says whether the tunnel user's keys file holds it alone. */
   publicKey?: string
+  /** The server mode's Look (core/server-plan.ts Pair): its own record and lock, and its helper's port besides. */
+  server?: true
 }
 
 const PORTS = [80, 443, 8443, 8480, 8481] as const
@@ -77,8 +79,11 @@ const INSPECT = [
   '{{range $k, $v := .Config.Labels}}label {{json $k}} {{json $v}}{{println}}{{end}}',
 ].join('{{println}}')
 
-const SS_PORTS = `'( ${PORTS.map(p => `sport = :${p}`).join(' or ')} )'`
-const PORTS_ALT = PORTS.join('|')
+/** The ports a Look watches: the server mode's also its 3b helper's, beside the tunnel's (core/server-texts.ts Names). */
+const watched = (i: LookInput): readonly number[] => (i.server ? [...PORTS, PORT_3B_SERVER] : PORTS)
+const ssPorts = (ports: readonly number[]): string => `'( ${ports.map(p => `sport = :${p}`).join(' or ')} )'`
+/** The line a server mode's Look puts first in its ports section: the port it watches besides. */
+const WATCH = `@@watch ${PORT_3B_SERVER}`
 
 /**
  * Step 1's parts besides the fence and the folder, at the end of the fence section (a parser of
@@ -118,13 +123,16 @@ export function lookScript1(i: LookInput): string {
   const folder = shQuote(socketFolder(i.socket))
   const socket = shQuote(i.socket)
   const fenceKeys = Object.keys(fenceWanted(i.user)).join('|')
+  const ports = watched(i)
+  const { record, lock } = namesOf(i)
   return [
     ...prelude('look-1'),
     "echo '@@section os'",
     'cat /etc/os-release 2>/dev/null',
     'echo "@@arch $(uname -m)"',
     "echo '@@section ports'",
-    `l=$(ss -H -ltnp ${SS_PORTS} 2>&1 | sed 's/[[:space:]]*$//')`,
+    ...(i.server ? [`echo '${WATCH}'`] : []),
+    `l=$(ss -H -ltnp ${ssPorts(ports)} 2>&1 | sed 's/[[:space:]]*$//')`,
     '[ -z "$l" ] || printf \'%s\\n\' "$l"',
     '# the cgroup of the first process on each socket: its unit or its container',
     `for p in $(printf '%s\\n' "$l" | sed -n 's/.*users:(("[^"]*",pid=\\([0-9]*\\),.*/\\1/p' | sort -u); do`,
@@ -140,7 +148,7 @@ export function lookScript1(i: LookInput): string {
     '  for s in /run/user/*/docker.sock; do [ -S "$s" ] && echo "@@user-socket $s"; done',
     "  timeout 20 docker network ls --no-trunc --format '@@network {{json .Name}} {{json .Driver}}' 2>/dev/null",
     "  ids=$( { timeout 20 docker ps --no-trunc --format '{{.ID}} {{.Ports}}' \\",
-    `      | grep -E ':(${PORTS_ALT})->' | cut -d ' ' -f 1`,
+    `      | grep -E ':(${ports.join('|')})->' | cut -d ' ' -f 1`,
     '    timeout 20 docker ps -q --no-trunc --filter network=host',
     '    timeout 20 docker ps -q --no-trunc --filter label=agent-board.role; } 2>/dev/null | sort -u)',
     `  [ -z "$ids" ] || timeout 20 docker inspect --format ${shQuote(INSPECT)} $ids 2>/dev/null \\`,
@@ -162,13 +170,13 @@ export function lookScript1(i: LookInput): string {
     `g=$(stat -c %g ${folder} 2>/dev/null) && getent group "$g" | sed 's/^/@@group /'`,
     `stat -c '@@socket %a %U %G %F' ${socket} 2>&1`,
     "echo '@@section record'",
-    'if [ -f /etc/agent-board/setup.json ]; then',
+    `if [ -f ${record} ]; then`,
     "  echo '@@file'",
-    '  cat /etc/agent-board/setup.json',
+    `  cat ${record}`,
     '  echo',
     'fi',
-    'if [ -e /etc/agent-board/lock ]; then',
-    '  i=$(stat -c %i /etc/agent-board/lock)',
+    `if [ -e ${lock} ]; then`,
+    `  i=$(stat -c %i ${lock})`,
     "  if grep -q \":$i \" /proc/locks; then echo '@@lock held'; else echo '@@lock free'; fi",
     'fi',
     "echo '@@section host'",
@@ -495,7 +503,7 @@ function readPids(ls: readonly string[]): Map<number, string[]> {
 
 /** Who holds a port: what `ss` names, its cgroup, or Docker's binding (docker-proxy, or dockerd with the userland proxy off). */
 function holderOf(
-  port: Port,
+  port: ServerPort,
   listens: readonly Listen[],
   pids: Map<number, string[]>,
   docker: DockerFacts | null,
@@ -762,8 +770,10 @@ export function readRoundOne(out: string): RoundOne | null {
     const ports = lines(s, 'ports')
     const listens = readListens(ports.filter(l => !l.startsWith('@@')))
     const pids = readPids(ports)
-    const holders = {} as Record<Port, Holder>
+    const holders = {} as RoundOne['ports']
     for (const port of PORTS) holders[port] = holderOf(port, listens, pids, docker)
+    // the server mode's Look watches its 3b helper's port too
+    if (ports.includes(WATCH)) holders[PORT_3B_SERVER] = holderOf(PORT_3B_SERVER, listens, pids, docker)
     const systemd = lines(s, 'systemd')
     const stepOne = readStepOne(lines(s, 'fence'))
     return {

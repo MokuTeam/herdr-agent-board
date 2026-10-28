@@ -109,6 +109,30 @@ Convenience comes from a one-command install and a service instead.
 - **Working with herdr directly**: `ssh agent@server`, then `herdr` attaches to the running
   server, as on any machine.
 
+## Beside the tunnel on one server (built after "Next step" was written)
+
+The owner's server has the PC board's tunnel set up already (case 3a). The two setups live side by
+side, independent (`core/server-texts.ts` Names):
+
+- **Each its own names.** The tunnel's are what they were (`/etc/agent-board`, its site file,
+  `# >>> agent-board`, `agent-board-socket`, 8481). The server mode's: `/etc/agent-board-server`
+  (record, lock, runs, backups, its own Caddy's config, and the installer's `install.json`),
+  `/etc/caddy/agent-board-server/board.caddy` and its import line, `# >>> server agent-board`
+  (no marker starts as the other's: a block is found by the start of its first line), nginx's
+  `agent-board-server.conf`, `agent-board-server-{caddy,socket}` with the roles `server-caddy` and
+  `server-socket`, 8482 for its 3b helper (its own Look watches it), its own candidate file.
+- **The other's parts are theirs.** A container of the other board's is neither ours nor free: its
+  site in their Caddyfile is one of their sites (fetched before and after a reload, kept
+  answering); its helper another container. Each Undo takes its own parts only; Docker is not
+  offered for removal while the other's containers are in it. The tunnel's flow on a server
+  without the server mode is byte for byte what it was (its Look, plans, runs, Undo and plain
+  words, compared on every fixture and support case); the one command's awk agrees.
+- **Cases 2, 3a, 3b** live side by side in both orders. **Cases 1, 1b, 4a, 4b** (the board's own
+  Caddy) do not: one host's 80 and 443 hold one Caddy. Where the other setup's own Caddy holds a
+  port the case needs, Look says so (`otherBoard`) and changes nothing. Sharing that Caddy (one
+  Caddyfile with both sites, Undo of either rebuilding it for the other, the one command's awk
+  too) is left for the owner to decide.
+
 ## Next step: syncing the Claude profiles (sketch, decided with the owner)
 
 Not built in this step. Written down so the server mode leaves room for it.

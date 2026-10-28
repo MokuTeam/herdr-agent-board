@@ -4,8 +4,10 @@
 // containers and Docker's install; and step 1's (the simple-setup spec's "Step 1 by the board"):
 // the tunnel user's marker, its keys file, sshd's fence in a file of its own or at the end of
 // sshd_config. The plan (core/server-plan.ts) and "Do it myself" take them from here, as do the
-// integration tests. Pure, with no node: import: the page imports it.
-import type { Wanted } from './server-plan.ts'
+// integration tests. A setup's own names (Names) are the tunnel's, or the server mode's, so the
+// two live side by side on one server. Pure, with no node: import: the page imports it.
+import type { ServerPort } from './server-facts.ts'
+import type { Pair, Wanted } from './server-plan.ts'
 import { socketFolder, sshdBlock } from './tunnel-snippets.ts'
 
 /** The board's Caddy: the Caddy 2 release current when this was written, by tag and digest. */
@@ -65,8 +67,10 @@ export const GID_LABEL = 'agent-board.gid'
 /** Case 4's public port; where 4b's Caddy takes the checks nginx forwards; 3b's helper on the loopback; 3a's helper inside its network. */
 export const PORT_4 = 8443
 export const PORT_4B_CHECK = 8480
-export const PORT_3B = 8481
+export const PORT_3B: ServerPort = 8481
 export const PORT_3A = 8080
+/** The server mode's 3b helper on the loopback: beside the tunnel's, whose port is 8481. */
+export const PORT_3B_SERVER: ServerPort = 8482
 /** The path 4b's run fetches through nginx to see the checks reach the board's Caddy. */
 export const CHECK_PATH = '/.well-known/acme-challenge/agent-board-check'
 
@@ -77,6 +81,96 @@ export const BLOCK_BEGIN = '# >>> agent-board'
 export const BLOCK_END = '# <<< agent-board'
 
 const ADDED = 'the board through its tunnel. Added by "Set up the server"; its Undo removes it.'
+
+/**
+ * What one setup names on the server: its folder (record, lock, runs, backups, its own Caddy's
+ * config), its site file and import line (case 2), its block's markers (case 3), nginx's file (4b),
+ * its containers and volumes and the role their labels carry, its 3b helper's port, and what its
+ * site says it is. The tunnel's are what they always were; the server mode's are its own, so the
+ * two setups live on one server side by side: neither's record, Undo or parts are the other's,
+ * and for each the other's parts are someone else's (its site among their sites). Their block
+ * markers must not start alike: a block of the board's is found by the start of its first line.
+ */
+export interface Names {
+  dir: string
+  record: string
+  lock: string
+  runs: string
+  backups: string
+  caddyDir: string
+  caddyFile: string
+  siteDir: string
+  siteFile: string
+  importLine: string
+  blockBegin: string
+  blockEnd: string
+  nginxFile: string
+  caddyName: string
+  socketName: string
+  volumes: readonly [string, string]
+  caddyRole: string
+  socketRole: string
+  port3b: ServerPort
+  added: string
+  /** Their Caddyfile's candidate, beside it while it is checked. */
+  candidate: string
+}
+
+/** The tunnel's setup: the names it always had. */
+export const TUNNEL_NAMES: Names = {
+  dir: BOARD_DIR,
+  record: RECORD_FILE,
+  lock: LOCK_FILE,
+  runs: RUNS_DIR,
+  backups: BACKUPS_DIR,
+  caddyDir: CADDY_DIR,
+  caddyFile: CADDY_FILE,
+  siteDir: SITE_DIR,
+  siteFile: SITE_FILE,
+  importLine: IMPORT_LINE,
+  blockBegin: BLOCK_BEGIN,
+  blockEnd: BLOCK_END,
+  nginxFile: NGINX_FILE,
+  caddyName: CADDY_NAME,
+  socketName: SOCKET_NAME,
+  volumes: VOLUMES,
+  caddyRole: 'caddy',
+  socketRole: 'socket',
+  port3b: PORT_3B,
+  added: ADDED,
+  candidate: '.Caddyfile.agent-board',
+}
+
+const SERVER_DIR = '/etc/agent-board-server'
+const SERVER_SITE_DIR = '/etc/caddy/agent-board-server'
+
+/** The server mode's setup (the board on a server of the owner's): a folder, files, block and containers of its own. */
+export const SERVER_NAMES: Names = {
+  dir: SERVER_DIR,
+  record: `${SERVER_DIR}/setup.json`,
+  lock: `${SERVER_DIR}/lock`,
+  runs: `${SERVER_DIR}/runs`,
+  backups: `${SERVER_DIR}/backups`,
+  caddyDir: `${SERVER_DIR}/caddy`,
+  caddyFile: `${SERVER_DIR}/caddy/Caddyfile`,
+  siteDir: SERVER_SITE_DIR,
+  siteFile: `${SERVER_SITE_DIR}/board.caddy`,
+  importLine: `import ${SERVER_SITE_DIR}/board.caddy # agent-board-server`,
+  blockBegin: '# >>> server agent-board',
+  blockEnd: '# <<< server agent-board',
+  nginxFile: '/etc/nginx/conf.d/agent-board-server.conf',
+  caddyName: 'agent-board-server-caddy',
+  socketName: 'agent-board-server-socket',
+  volumes: ['agent-board-server-caddy-data', 'agent-board-server-caddy-config'],
+  caddyRole: 'server-caddy',
+  socketRole: 'server-socket',
+  port3b: PORT_3B_SERVER,
+  added: 'the board on this server. Added by its install (server-install.sh); its --undo removes it.',
+  candidate: '.Caddyfile.agent-board-server',
+}
+
+/** A setup's names: the server mode's, or the tunnel's. */
+export const namesOf = (p: Pick<Pair, 'server'>): Names => (p.server ? SERVER_NAMES : TUNNEL_NAMES)
 
 /** The site block, tab-indented as `caddy fmt` writes it. */
 function site(address: string, upstream: string, tls: string[] = []): string[] {
@@ -116,12 +210,13 @@ export function boardCaddyfile(c: OwnCaddy, w: Wanted, acme?: Acme): string {
 
 /** Case 2: the board's site for their Caddy, in its own file their Caddyfile imports. */
 export function siteFile(w: Wanted): string {
-  return [`# agent-board: ${ADDED}`, ...site(w.domain, `unix/${w.socket}`)].join('\n')
+  return [`# agent-board: ${namesOf(w).added}`, ...site(w.domain, `unix/${w.socket}`)].join('\n')
 }
 
 /** Case 3: the board's block at the end of their Caddyfile, to the helper ('agent-board-socket:8080' in 3a, '127.0.0.1:8481' in 3b). */
 export function markedBlock(w: Wanted, upstream: string): string {
-  return [`${BLOCK_BEGIN}: ${ADDED}`, ...site(w.domain, upstream), BLOCK_END].join('\n')
+  const n = namesOf(w)
+  return [`${n.blockBegin}: ${n.added}`, ...site(w.domain, upstream), n.blockEnd].join('\n')
 }
 
 const FENCE_NOTE = `sshd's fence for the board's tunnel user. Added by "Set up the server"; its Undo removes it.`
@@ -233,6 +328,7 @@ function caddyPorts(c: OwnCaddy): string[] {
  */
 export function caddyRunArgs(c: OwnCaddy, w: Wanted, gid: number | string, runId: string, acme?: Acme): string[] {
   const folder = socketFolder(w.socket)
+  const n = namesOf(w)
   const settings = (g: string): string[] => [
     ...caddyPorts(c).flatMap(p => ['-p', p]),
     '--group-add',
@@ -244,16 +340,16 @@ export function caddyRunArgs(c: OwnCaddy, w: Wanted, gid: number | string, runId
     '--security-opt',
     'no-new-privileges',
     '-v',
-    `${CADDY_DIR}:/etc/caddy:ro`,
+    `${n.caddyDir}:/etc/caddy:ro`,
     '-v',
     `${folder}:${folder}:ro`,
     ...(acme ? ['-v', `${acme.root}:${acme.root}:ro`] : []),
     '-v',
-    `${VOLUMES[0]}:/data`,
+    `${n.volumes[0]}:/data`,
     '-v',
-    `${VOLUMES[1]}:/config`,
+    `${n.volumes[1]}:/config`,
   ]
-  return labelled(CADDY_NAME, 'caddy', runId, gid, settings, CADDY_IMAGE, [])
+  return labelled(n.caddyName, n.caddyRole, runId, gid, settings, CADDY_IMAGE, [])
 }
 
 /**
@@ -268,7 +364,8 @@ export function socatRunArgs(
   runId: string,
 ): string[] {
   const folder = socketFolder(w.socket)
-  const network = 'network' in on ? ['--network', on.network, '--network-alias', SOCKET_NAME] : ['--network', 'host']
+  const n = namesOf(w)
+  const network = 'network' in on ? ['--network', on.network, '--network-alias', n.socketName] : ['--network', 'host']
   const settings = (g: string): string[] => [
     ...network,
     '--user',
@@ -282,8 +379,8 @@ export function socatRunArgs(
     `${folder}:${folder}:ro`,
   ]
   const listen =
-    'network' in on ? `TCP-LISTEN:${PORT_3A},fork,reuseaddr` : `TCP-LISTEN:${PORT_3B},bind=127.0.0.1,fork,reuseaddr`
-  return labelled(SOCKET_NAME, 'socket', runId, gid, settings, SOCAT_IMAGE, [listen, `UNIX-CONNECT:${w.socket}`])
+    'network' in on ? `TCP-LISTEN:${PORT_3A},fork,reuseaddr` : `TCP-LISTEN:${n.port3b},bind=127.0.0.1,fork,reuseaddr`
+  return labelled(n.socketName, n.socketRole, runId, gid, settings, SOCAT_IMAGE, [listen, `UNIX-CONNECT:${w.socket}`])
 }
 
 /** Docker's key, as Docker publishes its fingerprint. */

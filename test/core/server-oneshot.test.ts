@@ -417,8 +417,57 @@ function mutations(): Scenario[] {
       n443,
       withRecord(n443, { case: '4a', publicPort: 8443, address: `https://${W.domain}:8443`, items: OWN_ITEMS }),
     ),
+    // the board on this server beside the tunnel (core/server-texts.ts Names): its helper on their
+    // network is someone else's container; its own Caddy on a port the case needs is another
+    // board's web server, not the tunnel's to plan over
+    m('the board on this server beside', folder, withContainer(folder.r1, SERVER_HELPER)),
+    m(
+      'the board on this server beside, the tunnel set up',
+      folder,
+      withContainer(withRecord(folder, { case: '3a', items: blockItems('/srv/my web/Caddyfile') }), SERVER_HELPER),
+      folder.r2.replace('"host":["b.example.com"]', '"host":["b.example.com","workbench.example.com"]'),
+    ),
+    m(
+      'the board on this server’s own Caddy on 443',
+      folder,
+      folder.r1.replace(
+        'label "com.docker.compose.service" "caddy"',
+        'label "com.docker.compose.service" "caddy"\nlabel "agent-board.role" "server-caddy"',
+      ),
+    ),
+    m('the board on this server’s own Caddy on 8443', nginx, withContainer(nginx.r1, SERVER_CADDY_8443)),
   ]
 }
+
+/** Round one with one more container in Docker's section, as Look lists a board's. */
+const withContainer = (r1: string, container: string): string =>
+  r1.replace('\n@@section systemd\n', `\n${container}\n@@section systemd\n`)
+/** The server mode's 3a helper on their network, as Look reads it. */
+const SERVER_HELPER = [
+  `@@container ${'5e'.repeat(32)}`,
+  'name "/agent-board-server-socket"',
+  'image "alpine/socat:1.8.1.3@sha256:22d77becaeeea8ef56b8c4bb2312323acafe85354be6a85714ff5050e3537842"',
+  'path "socat"',
+  'args ["TCP-LISTEN:8080,fork,reuseaddr","UNIX-CONNECT:/var/lib/agent-board/board.sock"]',
+  'netmode "web_default"',
+  'network "web_default"',
+  'mounts [{"Destination":"/var/lib/agent-board","Mode":"ro","Propagation":"rprivate","RW":false,"Source":"/var/lib/agent-board","Type":"bind"}]',
+  'ports {"8080/tcp":null}',
+  'label "agent-board.role" "server-socket"',
+].join('\n')
+/** The server mode's own Caddy of case 4, on 8443. */
+const SERVER_CADDY_8443 = [
+  `@@container ${'5c'.repeat(32)}`,
+  'name "/agent-board-server-caddy"',
+  'image "caddy:2.11.7@sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa0c16bd8ca328fb7af"',
+  'path "caddy"',
+  'args ["run","--config","/etc/caddy/Caddyfile","--adapter","caddyfile"]',
+  'netmode "bridge"',
+  'network "bridge"',
+  'mounts []',
+  'ports {"8443/tcp":[{"HostIp":"0.0.0.0","HostPort":"8443"}],"80/tcp":[{"HostIp":"127.0.0.1","HostPort":"8480"}]}',
+  'label "agent-board.role" "server-caddy"',
+].join('\n')
 
 // ---------------------------------------------------------------------------------------------
 // Step 1 as Look reads it (core/server-look.ts stepOneLines): each way its parts can be missing
@@ -718,6 +767,21 @@ describe('Apply: the case, the reasons, the plan in plain words and the run the 
       expect(fill(LAUNCH, { run_id: IDS.run, packed: PACK(run) })).toBe(launchScript(IDS.run, run, PACK))
     })
   }
+})
+
+describe('the board on this server beside the tunnel', () => {
+  test('its own Caddy on a port the case needs: another board’s web server, said so; its helper: someone else’s', () => {
+    const decided = (name: string): string => {
+      const s = SCENARIOS.find(x => x.name === name) as Scenario
+      return decision(awk('apply', looked(s.r1, s.r2)).out)
+    }
+    expect(decided('debian13/compose-folder the board on this server’s own Caddy on 443')).toBe('stop otherBoard')
+    expect(decided('debian13/nginx-80-443 the board on this server’s own Caddy on 8443')).toBe('stop otherBoard')
+    expect(decided('debian13/compose-folder the board on this server beside')).toMatch(/^plan a\.3a\./)
+    expect(decided('debian13/compose-folder the board on this server beside, the tunnel set up')).toBe(
+      `same https://${W.domain}`,
+    )
+  })
 })
 
 /** The Undo command on a scenario: the run, the titles and the plain words of the board's Undo. */

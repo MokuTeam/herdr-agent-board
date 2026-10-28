@@ -15,7 +15,7 @@ import {
   wantedProblem,
 } from './server-plan.ts'
 import { shQuote } from './server-shell.ts'
-import { BOARD_DIR, LOCK_FILE, RECORD_FILE, RUNS_DIR } from './server-texts.ts'
+import { type Names, namesOf, TUNNEL_NAMES } from './server-texts.ts'
 
 const PLAIN_ID = /^[A-Za-z0-9._-]{1,64}$/
 /** A run at most 20 minutes; a skip check at most a minute. */
@@ -123,8 +123,10 @@ export function runScript(p: Plan, w: Wanted, run: { id: string; at: string }): 
   checkId(run.id)
   const undo = p.kind === 'undo'
   const n = p.steps.length
-  const exitFile = `${RUNS_DIR}/${run.id}.exit`
-  const backups = `${BOARD_DIR}/backups/${p.id}`
+  // the setup's own record, lock and folder: the tunnel's, or the server mode's (core/server-texts.ts Names)
+  const { record: RECORD_FILE, lock: LOCK_FILE, runs, backups: backupsDir } = namesOf(w)
+  const exitFile = `${runs}/${run.id}.exit`
+  const backups = `${backupsDir}/${p.id}`
   // The record's items: the first step's carried over (I1…), then each later step's own.
   const vars: { step: number; item: RecordItem; name: string }[] = []
   p.steps.forEach((s, i) => {
@@ -332,8 +334,8 @@ export function runScript(p: Plan, w: Wanted, run: { id: string; at: string }): 
  * rolls back, and killed 5 minutes later; its exit status in runs/<id>.exit), then its log followed
  * once a second, POSIX only, until that file is there; then `@@exit <code>` (at most 26 minutes
  * after the start). The newest five runs are kept. When a run leaves no record and no
- * backups (an Undo done, or a run that stopped before changing anything), /etc/agent-board goes,
- * under the lock.
+ * backups (an Undo done, or a run that stopped before changing anything), its folder goes, under
+ * the lock: /etc/agent-board, or the server mode's own (`names`, core/server-texts.ts Names).
  *
  * The run travels in a quoted here-document, verbatim, not in base64 again: the admin line sends
  * this script in base64 already, and twice base64 makes the biggest plans' command longer than a
@@ -342,8 +344,14 @@ export function runScript(p: Plan, w: Wanted, run: { id: string; at: string }): 
  * unpacked there (`base64 -d | gunzip`): a third of its size, which the plans that make step 1 too
  * need. Either way the copy on the server runs only when it ends with the run's last line.
  */
-export function launchScript(runId: string, run: string, pack?: (text: string) => string): string {
+export function launchScript(
+  runId: string,
+  run: string,
+  pack?: (text: string) => string,
+  names: Names = TUNNEL_NAMES,
+): string {
   checkId(runId)
+  const { dir: BOARD_DIR, record: RECORD_FILE, lock: LOCK_FILE, runs: RUNS_DIR } = names
   const lines = run.replace(/\n$/, '').split('\n')
   if (lines.includes(RUN_END)) throw new Error('the run holds its own end line')
   if (lines.at(-1) !== LAST_LINE) throw new Error('the run does not end with its last line')

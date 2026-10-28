@@ -946,7 +946,9 @@ function itemjson(k,    s, n, P, i) {
 # Choosing the case (core/server-plan.ts chooseCase)
 
 function isfree(p) { return HK[p] == "free" }
-function isours(p,    c) { if (HK[p] != "container") return 0; c = containerof(HI[p]); return c && ((c, ROLE_LABEL) in C_haslabel) }
+# the tunnel's own container by its role; another board's (the server mode's) is the other's
+function isours(p,    c) { if (HK[p] != "container") return 0; c = containerof(HI[p]); return c && ((c, ROLE_LABEL) in C_haslabel) && (C_label[c, ROLE_LABEL] == "caddy" || C_label[c, ROLE_LABEL] == "socket") }
+function isothers(p,    c) { if (HK[p] != "container") return 0; c = containerof(HI[p]); return c && ((c, ROLE_LABEL) in C_haslabel) && !isours(p) }
 function iscaddy(p,    c) {
   if (HK[p] == "unit" || HK[p] == "process") return HP[p] == "caddy"
   if (HK[p] != "container") return 0
@@ -1003,6 +1005,7 @@ function portsfree(list,    n, P, i) {
 }
 function owncase(c, key, held) {
   if (!DOCKER && H_conflicts > 0) return manual("dockerConflicts")
+  if ((c == "4a" || c == "4b") && isothers(8443) || c == "4b" && isothers(8480)) return manual("otherBoard")
   if (!portsfree(c == "4a" ? "8443" : c == "4b" ? "8443 8480" : "")) return manual("portTaken")
   return chose(c, key, held == NUL ? "" : "holder", "", held, "")
 }
@@ -1037,6 +1040,7 @@ function helpernetwork(c,    j, best) {
 function byholders(    problems, c, net, j, mv, savedc, savedw) {
   if (HK[443] == "split" || HK[80] == "split") return manual("split")
   if (isours(443) || isours(80)) return manual("otherSetup")
+  if (isothers(443) || isothers(80)) return manual("otherBoard")
   if (isfree(443)) return isfree(80) ? owncase("1", "server.case.1", NUL) : owncase("1b", "server.case.1b", holdername(80))
   if (!iscaddy(443)) return casefour(holdername(443))
   if (CADDY && inlist(W_DOMAIN, CA_host, CA_hostn)) return manual("domainServed")
@@ -1322,7 +1326,7 @@ function pfound(    name, sys, w443, w80, s, web) {
 function stopkind(w) {
   if (w == "os") return "os"
   if (w == "selinux" || w == "podman" || w == "rootless" || w == "userns" || w == "requiretty" || w == "noSystemd" || w == "dockerConflicts") return "system"
-  if (w == "domainServed" || w == "otherSetup" || w == "interrupted" || w == "folder" || w == "tunnelUser" || w == "tunnelGroup") return w
+  if (w == "domainServed" || w == "otherSetup" || w == "interrupted" || w == "folder" || w == "tunnelUser" || w == "tunnelGroup" || w == "otherBoard") return w
   return "web"
 }
 # the board does not do this server: why, in plain words and then each reason; the decision line

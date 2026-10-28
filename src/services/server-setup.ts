@@ -502,7 +502,7 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       if (gone()) return cancelled()
       const input: LookInput =
         kind === 'install'
-          ? { user: BOARD_USER, socket: BOARD_SOCKET, domain: c.domain }
+          ? { user: BOARD_USER, socket: BOARD_SOCKET, domain: c.domain, server: true }
           : {
               user: c.user,
               socket: c.socket,

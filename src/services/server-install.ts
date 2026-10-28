@@ -45,7 +45,7 @@ import { plainPlan } from '../core/server-plain.ts'
 import { buildPlan, type Plan, setupRecord, undoPlan, type Wanted, whose } from '../core/server-plan.ts'
 import { launchScript, type Progress, readProgress, runScript, startProgress } from '../core/server-script.ts'
 import { shQuote } from '../core/server-shell.ts'
-import { type Acme, RECORD_FILE } from '../core/server-texts.ts'
+import { type Acme, SERVER_NAMES } from '../core/server-texts.ts'
 import { socketFolder } from '../core/tunnel-snippets.ts'
 
 /** What the install says, line by line (a terminal, or ssh's stdout for the panel). */
@@ -235,7 +235,7 @@ const newId = (): string =>
 
 /** Look's two rounds, run as root on this server, read as the panel reads them over ssh. */
 async function lookHere(w: Wanted): Promise<ServerFacts> {
-  const input = { user: w.user, socket: w.socket, domain: w.domain }
+  const input = { user: w.user, socket: w.socket, domain: w.domain, server: true as const }
   const one = await sh(lookScript1(input), { timeoutMs: 120_000 })
   const r1 = readRoundOne(one.out)
   if (!r1) throw new Error('Look could not read this server')
@@ -249,7 +249,7 @@ async function lookHere(w: Wanted): Promise<ServerFacts> {
 /** A plan's run through its launch, as root here, each step said as it ends; true when it applied. */
 async function runHere(io: Io, p: Plan, w: Wanted): Promise<boolean> {
   const runId = newId()
-  const launch = launchScript(runId, runScript(p, w, { id: runId, at: new Date().toISOString() }), PACK)
+  const launch = launchScript(runId, runScript(p, w, { id: runId, at: new Date().toISOString() }), PACK, SERVER_NAMES)
   const proc = Bun.spawn(['sh', '-c', launch], { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' })
   let pr: Progress = startProgress(p)
   const title = (n: number): string => {
@@ -683,7 +683,7 @@ export async function undo(f: InstallFlags, io: Io): Promise<number> {
   // the web server's record, when it is the server mode's of this user
   let setup = null
   try {
-    setup = setupRecord(JSON.parse(readFileSync(RECORD_FILE, 'utf8')))
+    setup = setupRecord(JSON.parse(readFileSync(SERVER_NAMES.record, 'utf8')))
   } catch {}
   const domain = setup?.domain ?? record?.domain ?? null
   const w = domain ? serverWanted(domain, name) : null
@@ -759,7 +759,7 @@ export async function undo(f: InstallFlags, io: Io): Promise<number> {
     if (!ok) return 1
   }
   await sh(
-    `rm -f ${INSTALL_RECORD}; [ -e ${RECORD_FILE} ] || rmdir ${shQuote(socketFolder(BOARD_SOCKET))} 2>/dev/null; true`,
+    `rm -f ${INSTALL_RECORD}; [ -e ${SERVER_NAMES.record} ] || rmdir ${shQuote(socketFolder(BOARD_SOCKET))} 2>/dev/null; true`,
   )
   io.say('', t('install.undo.done'))
   return 0

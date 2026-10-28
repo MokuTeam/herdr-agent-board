@@ -1,5 +1,7 @@
 // What Look found on a server. Types only, no node: import: core/server-look.ts parses into these, core/server-plan.ts plans from them.
 export type Port = 80 | 443 | 8443 | 8480 | 8481
+/** The server mode's 3b helper's port (core/server-texts.ts PORT_3B_SERVER): only its own Look watches it. */
+export type ServerPort = Port | 8482
 export type Holder =
   | { kind: 'free' }
   | { kind: 'unit'; unit: string; program: string }
@@ -81,7 +83,7 @@ export interface StepOneFacts {
 }
 export interface RoundOne {
   distro: Distro
-  ports: Record<Port, Holder>
+  ports: Record<Port, Holder> & { 8482?: Holder }
   docker: DockerFacts | null
   systemd: boolean
   units: { caddy: Unit | null; nginx: Unit | null }
