@@ -1844,7 +1844,7 @@ the clock, or a month after the one before it (a clock set wrong would take the 
 
 **What could be wrong** shows at the top of the panel, as a note in the board's toolbar on every
 page (a phone's too, in a few words, with no error text), and in `board doctor`: no target, no
-passphrase, a target that failed or is held, no good backup for a day and a half hour. A damaged
+passphrase, a target that failed or is held, no good backup for more than a day. A damaged
 database is never sent: it would only push good snapshots out of the rotation. A database that
 holds fewer changes than its last backup (emptied, or an older copy put back by hand), or that is
 gone after a backup, is held too: nothing scheduled sends it, so the backups keep the better one;
