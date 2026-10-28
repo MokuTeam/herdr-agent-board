@@ -3,19 +3,17 @@
 // changed, merged by key with each key it adds or changes, each group that changes how the target
 // runs with a tick of its own, session history with its tick, conflicts with a choice each, the
 // deletions with one tick and one more for each the target changed, what is held back, what a cut
-// keeps from going, the paths rewritten, what can't go, the projects not paired with a path to
-// give or leave out), Apply, its progress and its end with what the target left as it was. Every
+// keeps from going, what can't go, where the projects go: SyncPlaces.tsx), Apply, its progress and
+// its end with what the target left as it was. Every
 // choice is the preview's own: a new preview starts them all again unticked. The login is the
 // server's sign-in above it: its password goes with each request (the panel's own state), never
 // kept by the board. The board's side is the `sync-*` ops of POST /api/access.
-import { type KeyboardEvent, type ReactNode, useState } from 'react'
-import type { Unpaired } from '../../../../src/core/profile-sync/paths.ts'
+import { type ReactNode, useState } from 'react'
 import {
   byArea,
   type Change,
   DEFAULT_SYNC_HISTORY,
   type Direction,
-  projectKey,
   sizeOf,
   type Ticks,
 } from '../../../../src/core/profile-sync/plan.ts'
@@ -23,6 +21,7 @@ import { RUN_GROUPS, type RunGroup } from '../../../../src/core/profile-sync/sec
 import type { SyncView } from '../../../../src/core/profile-sync/view.ts'
 import type { AccessSend } from '../../hooks/useAccess.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import { SyncPlaces } from './SyncPlaces.tsx'
 
 export interface ProfileSyncProps {
   sync: SyncView | null
@@ -145,15 +144,6 @@ export function ProfileSync({ sync, send, passwords, enabled }: ProfileSyncProps
       ...passwords,
     })
     if (r?.ok !== true) setSaid(typeof r?.error === 'string' ? r.error : '')
-  }
-
-  async function pair(u: Unpaired, path: string | null): Promise<void> {
-    const r = await send('sync-pair', { profile: u.profile, folder: u.folder, path })
-    setSaid(r?.ok === true ? '' : typeof r?.error === 'string' ? r.error : '')
-  }
-
-  const pathKeyDown = (u: Unpaired) => (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') void pair(u, e.currentTarget.value)
   }
 
   const items = p?.items ?? []
@@ -350,48 +340,8 @@ export function ProfileSync({ sync, send, passwords, enabled }: ProfileSyncProps
           )}
           <Lines title={t('sync.panel.held')} lines={p.held.map(h => `${h.profile}: ${h.what}`)} />
           <Lines title={t('sync.panel.cut')} lines={p.cut.map(x => `${x.profile}: ${x.what}`)} />
-          <Lines
-            title={t('sync.panel.rewritten')}
-            lines={p.pairs.flatMap(x => [
-              `${x.profile}: ${t('sync.panel.pair', { from: x.from || x.folder, to: x.to })}`,
-              ...(x.folder !== x.toFolder ? [`  ${t('sync.panel.renamed', { from: x.folder, to: x.toFolder })}`] : []),
-            ])}
-          />
           <Lines title={t('sync.panel.cantGo')} lines={p.cantGo.map(x => `${x.profile}: ${x.what}`)} />
-          {p.unpaired.length > 0 && (
-            <details className="sync-group">
-              <summary>
-                {t('sync.panel.unpaired')} · {p.unpaired.length}
-              </summary>
-              <p className="access-note">{t('sync.panel.unpairedNote')}</p>
-              <ul className="sync-list">
-                {p.unpaired.map(u => (
-                  <li className="sync-unpaired" key={projectKey(u)}>
-                    <span>
-                      {u.profile}: {u.path ?? u.folder} ({t(`sync.panel.why.${u.why}`)},{' '}
-                      {t('sync.panel.files', { n: u.files })}, {sizeOf(u.bytes)})
-                    </span>
-                    <input
-                      type="text"
-                      name={`sync-path-${projectKey(u)}`}
-                      aria-label={t('sync.panel.pathPlaceholder')}
-                      placeholder={t('sync.panel.pathPlaceholder')}
-                      disabled={!enabled}
-                      onKeyDown={pathKeyDown(u)}
-                      onBlur={e => {
-                        if (e.currentTarget.value.trim() !== '') void pair(u, e.currentTarget.value)
-                      }}
-                    />
-                    {u.why !== 'left' && (
-                      <button type="button" className="button" disabled={!enabled} onClick={() => void pair(u, null)}>
-                        {t('sync.panel.leaveOut')}
-                      </button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
+          <SyncPlaces key={p.id} p={p} send={send} passwords={passwords} enabled={enabled} onSaid={setSaid} />
           <div className="access-actions">
             <button
               type="button"

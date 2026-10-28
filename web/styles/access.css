@@ -200,3 +200,17 @@
 .sync-list { margin: 2px 0 6px 14px; padding: 0; list-style: none; max-height: 240px; overflow: auto; font-size: 12px; overflow-wrap: anywhere; }
 .sync-conflict, .sync-unpaired { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0; }
 .sync-unpaired input { flex: 1 1 200px; min-width: 0; }
+/* "Where the projects go" and its folder picker (SyncPlaces.tsx, FolderChooser.tsx) */
+.sync-places-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0 2px; font-weight: 500; overflow-wrap: anywhere; }
+.sync-place { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0; }
+.sync-place-path { flex: 1 1 260px; min-width: 0; }
+.sync-not-there { color: var(--label-2); font-style: italic; }
+.sync-pick { min-width: 0; margin: 6px 0 8px; padding: 8px 10px; border: 0; border-radius: 8px; background: var(--fill-2); }
+.sync-pick-title { float: left; width: 100%; margin: 0 0 4px; padding: 0; font-weight: 500; }
+.sync-pick-title + * { clear: both; }
+.sync-pick-crumbs { display: flex; flex-wrap: wrap; gap: 2px 8px; margin: 0 0 6px; font: 12px/1.5 var(--mono); }
+.sync-pick-link { padding: 1px 4px; border: 0; border-radius: 4px; background: none; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
+.sync-pick-link:hover:not(:disabled) { background: var(--fill-2); }
+.sync-pick-link:disabled { color: var(--label); cursor: default; }
+.sync-pick-list button { display: inline-flex; align-items: center; gap: 4px; }
+.sync-pick-list svg { width: 12px; height: 12px; }
