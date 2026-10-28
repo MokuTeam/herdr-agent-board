@@ -3,7 +3,7 @@
 // team-pins.json (the keys of the peers seen) and team-audit.jsonl (what happened, never a message's
 // text). Nothing here creates a file until it is asked to write: `board team join` and the running
 // board with `team` set are the only callers.
-import { appendFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs'
 import {
   type Ack,
   type DeliveryState,
@@ -211,6 +211,19 @@ export function changePins<R>(fn: (pins: Record<string, Pin>) => R): R {
 
 // ---- The log
 
+/** The log is moved aside to `team-audit.jsonl.1` (replacing the one before) when it passes this. */
+export const AUDIT_MAX_BYTES = 1024 * 1024
+
+function rotateAudit(): void {
+  const file = teamAuditFile()
+  try {
+    if (statSync(file).size < AUDIT_MAX_BYTES) return
+    renameSync(file, `${file}.1`)
+  } catch {
+    // No log yet, or another writer moved it first: the append below starts a fresh one.
+  }
+}
+
 /** One line of what happened: a kind of event, the peer, short facts. Never a message's text. */
 export function audit(
   action: string,
@@ -218,5 +231,6 @@ export function audit(
   detail: Record<string, string | number | boolean> = {},
 ): void {
   mkdirSync(stateDir(), { recursive: true })
+  rotateAudit()
   appendFileSync(teamAuditFile(), `${JSON.stringify({ at: Date.now(), action, peer, ...detail })}\n`, PRIVATE)
 }

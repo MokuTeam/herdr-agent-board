@@ -2,10 +2,11 @@
 // id, the outbox and its states, the pins, the log without bodies; and joinTeam/leaveTeam in
 // config.json. Nothing is created by reading.
 import { expect, test } from 'bun:test'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { configFile, joinTeam, leaveTeam, loadConfig } from '../../src/adapters/config-file.ts'
 import { stateDir, teamAuditFile } from '../../src/adapters/paths.ts'
 import {
+  AUDIT_MAX_BYTES,
   addInbox,
   addOutbox,
   audit,
@@ -128,4 +129,30 @@ test('joinTeam writes `team` and keeps the rest; leaveTeam takes it out, key and
   expect('team' in JSON.parse(readFileSync(configFile(), 'utf8'))).toBe(false)
   expect(readKey()).not.toBeNull()
   expect(leaveTeam()).toEqual({ ok: true })
+})
+
+test('the log is rotated at 1 MiB, keeping one previous file (#231)', () => {
+  isolatedHome()
+  audit('first', A)
+  const file = teamAuditFile()
+  writeFileSync(file, `${'x'.repeat(AUDIT_MAX_BYTES)}\n`)
+  audit('after', A)
+  expect(readFileSync(`${file}.1`, 'utf8').length).toBeGreaterThan(AUDIT_MAX_BYTES)
+  expect(
+    readFileSync(file, 'utf8')
+      .trim()
+      .split('\n')
+      .map(l => JSON.parse(l).action),
+  ).toEqual(['after'])
+  // A second rotation replaces the previous file; nothing older is kept.
+  writeFileSync(file, `${'y'.repeat(AUDIT_MAX_BYTES)}\n`)
+  audit('again', A)
+  expect(readFileSync(`${file}.1`, 'utf8').startsWith('y')).toBe(true)
+  expect(readdirSync(stateDir()).filter(f => f.startsWith('team-audit'))).toEqual([
+    'team-audit.jsonl',
+    'team-audit.jsonl.1',
+  ])
+  for (let i = 0; i < 20; i++) audit('small', A)
+  expect(existsSync(`${file}.2`)).toBe(false)
+  expect(statSync(file).size).toBeLessThan(AUDIT_MAX_BYTES)
 })
