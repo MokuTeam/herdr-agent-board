@@ -7,7 +7,7 @@ import { expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { atLeast, keysScript, syncInto, userArgv, userFileScript } from '../../src/services/server-install.ts'
+import { atLeast, keysScript, syncInto, userArgv, userFileScript, userReadScript } from '../../src/services/server-install.ts'
 
 test('a version at least another', () => {
   expect(atLeast('1.4.3', '1.4.3')).toBe(true)
@@ -88,6 +88,28 @@ test('the keys and herdr’s service: written by the user’s own script, whole,
       expect(statSync(keys).mode & 0o777).toBe(0o600)
       expect(statSync(unit).mode & 0o777).toBe(0o644)
     }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a file of the user’s read before it is written whole: not there is empty, there but not read fails', () => {
+  const sh = Bun.which('sh')
+  if (!sh) return
+  const dir = mkdtempSync(join(tmpdir(), 'user-read-'))
+  const unix = (p: string): string => p.replaceAll('\\', '/')
+  const read = (path: string): { code: number; out: string } => {
+    const r = Bun.spawnSync([sh, '-c', userReadScript(unix(path))], { stdout: 'pipe', stderr: 'pipe' })
+    return { code: r.exitCode, out: r.stdout.toString() }
+  }
+  try {
+    expect(read(join(dir, 'none.toml'))).toEqual({ code: 0, out: '' })
+    writeFileSync(join(dir, 'config.toml'), '[keys]\nx = 1\n')
+    expect(read(join(dir, 'config.toml'))).toEqual({ code: 0, out: '[keys]\nx = 1\n' })
+    // there, but cat cannot read it (a folder in its place, as a file it may not read): a failure,
+    // so the install writes nothing over a config it did not read
+    mkdirSync(join(dir, 'odd.toml'))
+    expect(read(join(dir, 'odd.toml')).code).not.toBe(0)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

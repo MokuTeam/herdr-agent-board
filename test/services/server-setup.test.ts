@@ -357,7 +357,7 @@ for (const distro of DISTROS) {
       const b = await useBoard({ sudo: 'password', password: SENTINEL, flavor, fixture: fixture(distro, 'caddy-unit') })
       expect(await b.look({ password: SENTINEL })).toEqual(OK)
       expect(b.stdins()).toEqual([`${SENTINEL}\n`, `${SENTINEL}\n`])
-      for (const c of b.commands().slice(1)) expect(c.startsWith("env LC_ALL=C sudo -S -p '' -- sh -c ")).toBe(true)
+      for (const c of b.commands().slice(1)) expect(c.startsWith("env LC_ALL=C sudo -k -S -p '' -- sh -c ")).toBe(true)
       // a run, with a line that holds it (it never should): kept as ••••
       const p = planOf(b.setup)
       b.server({ run: { lines: goesThrough(p, [`echo ${SENTINEL}`]) } })
@@ -1350,7 +1350,7 @@ describe('the board installed on the server itself (path B of the board on a ser
     expect(receiver).toContain('# agent-board: install')
     expect(receiver).toContain(`--domain ${SERVER_DOMAIN} --lang en --yes`)
     expect(receiver).not.toContain('board.example.com')
-    expect(b.commands().at(-1)).toStartWith("env LC_ALL=C sudo -S -p '' -- ")
+    expect(b.commands().at(-1)).toStartWith("env LC_ALL=C sudo -k -S -p '' -- ")
     expect(b.commands().join('\n')).not.toContain(SENTINEL)
     const stdin = b.stdins().at(-1) ?? ''
     expect(stdin).toBe(`${SENTINEL}\n${Buffer.from(PACK.bytes).toString('base64')}\n`)
@@ -1376,7 +1376,7 @@ describe('the board installed on the server itself (path B of the board on a ser
     // one ssh: sudo's check, its password alone on stdin; no receiver, no pack
     const after = b.commands().slice(before)
     expect(after).toHaveLength(1)
-    expect(after[0]).toStartWith("env LC_ALL=C sudo -S -p '' -- ")
+    expect(after[0]).toStartWith("env LC_ALL=C sudo -k -S -p '' -- ")
     expect(carried(after[0] ?? '')).toContain('# agent-board: sudo')
     expect(b.stdins().at(-1)).toBe('wrong one\n')
     expect(b.stdins().some(s => s.includes(pack))).toBe(false)

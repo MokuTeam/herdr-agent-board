@@ -296,8 +296,10 @@ describe('the remote command: fixed text and the script in base64, behind the su
   test('NOPASSWD: sudo -n, nothing on stdin, its lines in English', () => {
     expect(remoteCommand(script, 'nopasswd')).toBe(`env LC_ALL=C sudo -n -- ${root}`)
   })
-  test("a password: sudo -S -p '' reads it on stdin, prints no prompt, its lines in English", () => {
-    expect(remoteCommand(script, 'password')).toBe(`env LC_ALL=C sudo -S -p '' -- ${root}`)
+  // -k: a ticket cached on the server (timestamp_type=global, a session's own) is not used, so sudo
+  // reads the password line every time and it never reaches the program's stdin
+  test("a password: sudo -k -S -p '' reads it on stdin whatever is cached, prints no prompt, its lines in English", () => {
+    expect(remoteCommand(script, 'password')).toBe(`env LC_ALL=C sudo -k -S -p '' -- ${root}`)
   })
   test('requiretty and no sudo: no way to run the script', () => {
     expect(() => remoteCommand(script, 'requiretty')).toThrow()

@@ -43,7 +43,7 @@
 // It decodes the script in the remote command, reads its `# agent-board: <kind>` line and answers
 // as the server would: `probe` (no sudo) the `@@` lines PROBE_SCRIPT prints; the others behind the
 // sudo the admin's mode needs, exactly (`sh -c '…'` for root, `env LC_ALL=C sudo -n -- ` NOPASSWD,
-// `env LC_ALL=C sudo -S -p '' -- ` with a password), else `fake: unexpected command`, 2. It reads
+// `env LC_ALL=C sudo -k -S -p '' -- ` with a password), else `fake: unexpected command`, 2. It reads
 // stdin to its end first (a stdin left open keeps it waiting); sudo -S's is appended to
 // `<FAKE_SSH_LOG>.stdin` as a JSON line, and a wrong one gets the flavour's recorded lines (or
 // `wrong`) and exit 1 (spec, "Checked by the spike").
@@ -398,7 +398,7 @@ async function admin(): Promise<void> {
   // a stdin the board left open keeps this waiting, as it would keep sudo -S
   const input = await Bun.stdin.text()
   const m =
-    /^(env LC_ALL=C sudo -n -- |env LC_ALL=C sudo -S -p '' -- )?sh -c 'eval "\$\(echo ([A-Za-z0-9+/=]+) \| base64 -d\)"'$/.exec(
+    /^(env LC_ALL=C sudo -n -- |env LC_ALL=C sudo -k -S -p '' -- )?sh -c 'eval "\$\(echo ([A-Za-z0-9+/=]+) \| base64 -d\)"'$/.exec(
       args.at(-1) ?? '',
     )
   const unexpected = (): never => {
@@ -429,9 +429,9 @@ async function admin(): Promise<void> {
     return end(0)
   }
   const wanted =
-    mode === 'root' ? '' : mode === 'nopasswd' ? 'env LC_ALL=C sudo -n -- ' : "env LC_ALL=C sudo -S -p '' -- "
+    mode === 'root' ? '' : mode === 'nopasswd' ? 'env LC_ALL=C sudo -n -- ' : "env LC_ALL=C sudo -k -S -p '' -- "
   if (prefix !== wanted) return unexpected()
-  if (prefix.includes('sudo -S')) {
+  if (prefix.includes('sudo -k -S')) {
     if (logPath) appendFileSync(`${logPath}.stdin`, `${JSON.stringify(input)}\n`)
     // the board's install (path B) has its pack after sudo's line
     const sudoLine = kind === 'install' ? input.slice(0, input.indexOf('\n') + 1) : input

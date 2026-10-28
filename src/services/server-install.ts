@@ -156,6 +156,10 @@ export const userFileScript = (path: string, mode: '600' | '644'): string => {
   return `set -e; umask 077; mkdir -p ${shQuote(dir)}; rm -f ${shQuote(part)}; cat > ${shQuote(part)}; chmod ${mode} ${shQuote(part)}; mv -f ${shQuote(part)} ${shQuote(path)}`
 }
 
+/** A file in the user's home read as the user before it is written whole: empty when not there, a failure when there but not read. */
+export const userReadScript = (path: string): string =>
+  `if [ -e ${shQuote(path)} ] || [ -L ${shQuote(path)} ]; then cat -- ${shQuote(path)}; fi`
+
 /** The admin's keys as the user's own: ~/.ssh 0700, authorized_keys 0600. */
 export const keysScript = (home: string): string =>
   `mkdir -p ${shQuote(`${home}/.ssh`)} && chmod 700 ${shQuote(`${home}/.ssh`)} && { ${userFileScript(`${home}/.ssh/authorized_keys`, '600')}; }`
@@ -622,12 +626,14 @@ export async function install(f: InstallFlags, io: Io): Promise<number> {
     return 1
 
   // herdr's key for the board, as the user, only where none is bound to it (nobody has pasted the
-  // snippet into this herdr's config by hand): read, then written whole with the key after it
+  // snippet into this herdr's config by hand): read, then written whole with the key after it; a
+  // config there but not read fails the step, so nothing is written over what was not read
   const herdrConfig = `${home}/.config/herdr/config.toml`
   let keyNew = false
   if (
     !(await step(io, t('install.step.key', { key: 'prefix+a' }), async () => {
-      const now = await asUser(user, `cat ${shQuote(herdrConfig)} 2>/dev/null`)
+      const now = await asUser(user, userReadScript(herdrConfig))
+      if (now.code !== 0) return now
       const next = keyAdded(now.out)
       if (next === null) return t('install.step.key', { key: t('install.key.kept') })
       keyNew = true
