@@ -49,6 +49,7 @@ import { useTerminalKeys } from './hooks/useTerminalKeys.ts'
 import { useTodos } from './hooks/useTodos.ts'
 import { pageLayers } from './models/lifecycle.ts'
 import { remotePage } from './models/remote-page.ts'
+import { offersTeam } from './models/team.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
 
 export function App() {
@@ -89,6 +90,13 @@ export function App() {
   const openAccess = () => {
     setAccess(true)
     setAccessMounted(true)
+  }
+  // Settings → Team… (#231), local page with the payload's teamRev: mounted at its first opening.
+  const [team, setTeam] = useState(false)
+  const [teamMounted, setTeamMounted] = useState(false)
+  const openTeam = () => {
+    setTeam(true)
+    setTeamMounted(true)
   }
   // Tasks (#202), while the board has them on: their panel, out of the toolbar's button.
   const [todosOpen, setTodosOpen] = useState(false)
@@ -143,6 +151,7 @@ export function App() {
     () => setWake(true),
     openAccess,
     openMokupilot,
+    openTeam,
   )
   // Tasks' 📌 menu under an agent's message, and the panel's buttons.
   const todos = useTodos(menus.menu)
@@ -215,6 +224,7 @@ export function App() {
         phones={{ open: phones, onClose: () => setPhones(false) }}
         {...(mokupilotMounted ? { mokupilot: { open: mokupilot, onClose: () => setMokupilot(false) } } : {})}
         {...(accessMounted && !remotePage() ? { access: { open: access, onClose: () => setAccess(false) } } : {})}
+        {...(teamMounted && offersTeam(data) ? { team: { open: team, onClose: () => setTeam(false) } } : {})}
         archive={archive}
         todos={{ open: todosOpen, onClose: () => setTodosOpen(false), todos }}
         sheet={{

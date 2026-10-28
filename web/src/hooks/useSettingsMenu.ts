@@ -22,6 +22,7 @@ import { offersProfiles } from '../models/profiles.ts'
 import { keptAuth, remotePage, UNPAIRED } from '../models/remote-page.ts'
 import { offersMokupilot, settingPicked, settingsMenu } from '../models/settings-menu.ts'
 import { reducedMotion } from '../models/spring.ts'
+import { offersTeam } from '../models/team.ts'
 import { setTheme, THEME_KEY, themeNow } from '../models/theme.ts'
 import { isWakeView } from '../models/wake.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
@@ -70,6 +71,9 @@ export interface SettingsDeps {
   /** The local board's page (not one through Tailscale or the domain): Remote access… is offered. */
   access?(): boolean
   openAccess?(): void
+  /** The local board's page with the payload's teamRev (#231): Team… is offered. */
+  team?(): boolean
+  openTeam?(): void
   /** This page signed in through the owner's domain: Sign out is offered. */
   signOut?(): boolean
   endLogin?(): void
@@ -105,6 +109,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       phones: deps.phones?.() ?? false,
       mokupilot: deps.mokupilot?.() ?? false,
       access: deps.access?.() ?? false,
+      team: deps.team?.() ?? false,
       signOut: deps.signOut?.() ?? false,
       presence: deps.presence?.(),
       idleMinutes: deps.idleMinutes?.(),
@@ -132,6 +137,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'phones') deps.openPhones?.()
         else if (pick?.kind === 'mokupilot') deps.openMokupilot?.()
         else if (pick?.kind === 'access') deps.openAccess?.()
+        else if (pick?.kind === 'team') deps.openTeam?.()
         else if (pick?.kind === 'signout') deps.endLogin?.()
         else if (pick?.kind === 'presence')
           deps.choosePresence?.(pick.value === 'none' ? { on: false } : { on: true, mode: pick.value })
@@ -278,11 +284,22 @@ export function useSettingsMenu(
   openWake: () => void = () => {},
   openAccess: () => void = () => {},
   openMokupilot: () => void = () => {},
+  openTeam: () => void = () => {},
 ): SettingsMenu {
   const { t, choose } = useLanguage()
   const board = useBoardContext()
   const place = usePanelPlace()
-  const latest = useLatest({ t, choose, board, openProfiles, openPhones, openWake, openAccess, openMokupilot })
+  const latest = useLatest({
+    t,
+    choose,
+    board,
+    openProfiles,
+    openPhones,
+    openWake,
+    openAccess,
+    openMokupilot,
+    openTeam,
+  })
   const [expanded, setExpanded] = useState(false)
   const [gear] = useState(() => {
     const open = settingsMenuFrom({
@@ -351,6 +368,8 @@ export function useSettingsMenu(
       openMokupilot: () => latest.current.openMokupilot(),
       access: () => !remotePage(),
       openAccess: () => latest.current.openAccess(),
+      team: () => offersTeam(latest.current.board.data),
+      openTeam: () => latest.current.openTeam(),
       signOut: () => remotePage() && keptAuth() === 'login',
       endLogin: () => {
         const { t, board } = latest.current
