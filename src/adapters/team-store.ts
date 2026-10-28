@@ -24,11 +24,14 @@ export function readKey(): KeyPair | null {
   return k ? { pkcs8: k.pkcs8, pub: k.pub } : null
 }
 
-/** This board's key; made, and saved with 0600, the first time. Two writers end with one key. */
-export async function ensureKey(): Promise<KeyPair> {
+/**
+ * This board's key; made (or `candidate`, one `board team join` made before it knew the hub would
+ * take it), and saved with 0600, the first time. Two writers end with one key.
+ */
+export async function ensureKey(candidate?: KeyPair): Promise<KeyPair> {
   const have = readKey()
   if (have) return have
-  const fresh = await generateKey()
+  const fresh = candidate ?? (await generateKey())
   mkdirSync(stateDir(), { recursive: true })
   const kept = updateJson(
     teamKeyFile(),
