@@ -38,9 +38,14 @@ export function cleanDocument(html: string, purify: typeof DOMPurify = DOMPurify
     SANITIZE_NAMED_PROPS: true,
     RETURN_DOM_FRAGMENT: true,
   })
+  // DOMPurify checks an address with its spaces and control characters taken out, but leaves it
+  // as it was (`ht\ntps://`, `\u0001https://`): a link is kept only as a web address the board
+  // opens in the default browser (a.ext, hooks/useFileLinks.ts) or a place in the document; any
+  // other (a data: URL among them) loses its address and stays as text.
   for (const a of fragment.querySelectorAll<HTMLAnchorElement>('a[href]')) {
-    // The board opens a web link in the default browser (a.ext, hooks/useFileLinks.ts).
-    if (/^https?:/i.test(a.getAttribute('href') ?? '')) a.className = 'ext'
+    const href = a.getAttribute('href') ?? ''
+    if (/^https?:\/\//i.test(href)) a.className = 'ext'
+    else if (!href.startsWith('#')) a.removeAttribute('href')
   }
   // DOMPurify lets any data: URL through on a picture, and web addresses as links may be: a
   // picture that is not one of the document's own, of a kind a browser draws, goes (not a broken frame).

@@ -22,7 +22,7 @@ import {
   sheetGrid,
   shortDate,
 } from '../models/spreadsheet.ts'
-import { unpackedSize, type ZipEntry, zipEntries, zipText } from '../models/zip.ts'
+import { looksLikeZip, unpackedSize, type ZipEntry, zipEntries, zipText } from '../models/zip.ts'
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -45,6 +45,8 @@ export async function bookOf(input: ArrayBuffer | Uint8Array, lang: string, name
   if (/\.xls[xm]$/i.test(name) && !starts(ZIP) && !starts(OLE))
     return { ok: false, why: 'broken', message: 'not a zip' }
   const entries = zipEntries(bytes)
+  // A zip whose directory cannot be read is not handed on: unread, its size is not known.
+  if (!entries && looksLikeZip(bytes)) return { ok: false, why: 'broken', message: 'no central directory' }
   if (entries && unpackedSize(entries) > UNPACKED_LIMIT)
     return { ok: false, why: 'big', message: `${unpackedSize(entries)} bytes unpacked` }
   let wb: WorkBook
@@ -63,9 +65,13 @@ export async function bookOf(input: ArrayBuffer | Uint8Array, lang: string, name
     date1904: !!wb.Workbook?.WBProps?.date1904,
     booleans: booleanText(lang),
   }
-  const frozen = entries ? await frozenBySheet(bytes, entries, wb) : new Map<number, number>()
+  // What this reads from the zip itself only adds to what SheetJS read: if it cannot, no rows
+  // are frozen and no sheet is hidden, and the workbook is shown all the same.
+  const frozen = entries
+    ? await frozenBySheet(bytes, entries, wb).catch(() => new Map<number, number>())
+    : new Map<number, number>()
   const hidden = entries?.some(e => e.name === 'content.xml')
-    ? odsHiddenTables(await zipText(bytes, entries, 'content.xml'))
+    ? await zipText(bytes, entries, 'content.xml').then(odsHiddenTables, () => new Set<string>())
     : new Set<string>()
   let budget = SHEET_LIMITS.cells
   const sheets: SheetData[] = []

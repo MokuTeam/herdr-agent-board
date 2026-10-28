@@ -199,6 +199,12 @@ describe('a workbook as the worker reads it', () => {
       { name: 'xl/worksheets/sheet1.xml', data: '<worksheet/>', claims: UNPACKED_LIMIT },
     ])
     expect(await bookOf(bomb, 'en', 'bomb.xlsx')).toMatchObject({ ok: false, why: 'big' })
+    // The same with 70 KB put after its end: the directory is found all the same.
+    const tailed = new Uint8Array([...bomb, ...new Uint8Array(70 << 10)])
+    expect(await bookOf(tailed, 'en', 'bomb.xlsx')).toMatchObject({ ok: false, why: 'big' })
+    // A zip whose directory cannot be found at all is not handed on to SheetJS either.
+    const headless = tailed.subarray(0, 64)
+    expect(await bookOf(headless, 'en', 'cut.ods')).toMatchObject({ ok: false, why: 'broken' })
   })
 
   test('frozen rows read from the head of the sheet’s own XML in the zip', async () => {
@@ -234,5 +240,15 @@ describe('an .ods’s hidden sheets', () => {
       '</office:spreadsheet></office:body>'
     expect([...odsHiddenTables(content)]).toEqual(['Скрытый & второй'])
     expect(odsHiddenTables('<office:body/>').size).toBe(0)
+    // A style closed in its own tag hides nothing; tags left open take one pass, not one per tag.
+    expect(
+      odsHiddenTables(
+        '<style:style style:name="t" style:family="table"/><table:table table:name="A" table:style-name="t">',
+      ).size,
+    ).toBe(0)
+    const open = `${'<style:style style:name="t" style:family="table">'.repeat(20_000)}<style:table-properties table:display="false"/>`
+    const started = performance.now()
+    expect(odsHiddenTables(open).size).toBe(0)
+    expect(performance.now() - started).toBeLessThan(500)
   })
 })

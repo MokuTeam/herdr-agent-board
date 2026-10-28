@@ -4,7 +4,7 @@
 // counterpart (fonts, colors, page layout) is dropped, not imitated. Bundled apart from app.js
 // (server/viewers.ts); it reads the file through the board's file route, with its token.
 import mammoth from 'mammoth'
-import { unpackedSize, zipEntries } from '../models/zip.ts'
+import { looksLikeZip, unpackedSize, zipEntries } from '../models/zip.ts'
 
 export type DocumentReply =
   | { ok: true; html: string }
@@ -42,6 +42,8 @@ export async function documentOf(buffer: ArrayBuffer): Promise<DocumentReply> {
     return { ok: false, why: locked ? 'password' : 'broken', message: locked ? 'encrypted' : 'not a .docx' }
   }
   const entries = zipEntries(bytes)
+  // A zip whose directory cannot be read is not handed on: unread, its size is not known.
+  if (!entries && looksLikeZip(bytes)) return { ok: false, why: 'broken', message: 'no central directory' }
   if (entries && unpackedSize(entries) > UNPACKED_LIMIT)
     return { ok: false, why: 'big', message: `${unpackedSize(entries)} bytes unpacked` }
   try {

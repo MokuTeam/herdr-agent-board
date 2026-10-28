@@ -2,7 +2,7 @@
 // unpacked by its central directory, before a library unpacks all of it; a part's first bytes,
 // or all of it.
 import { describe, expect, test } from 'bun:test'
-import { unpackedSize, zipEntries, zipRead, zipText } from '../../web/src/models/zip.ts'
+import { looksLikeZip, unpackedSize, zipEntries, zipRead, zipText } from '../../web/src/models/zip.ts'
 import { zip } from './support/zip.ts'
 
 describe('a zip read by its central directory', () => {
@@ -30,6 +30,7 @@ describe('a zip read by its central directory', () => {
   test('a part that claims more than it holds counts at its claim; ZIP64 sizes count as no end', async () => {
     const bomb = zipEntries(zip([{ name: 'xl/worksheets/sheet1.xml', data: 'x', claims: 400 << 20 }]))
     expect(unpackedSize(bomb ?? [])).toBe(400 << 20)
+    // 0xFFFFFFFF with no ZIP64 extra field to say otherwise: no end.
     const huge = zipEntries(zip([{ name: 'a', data: 'x', claims: 0xffffffff }]))
     expect(unpackedSize(huge ?? [])).toBe(Number.POSITIVE_INFINITY)
   })
@@ -41,5 +42,39 @@ describe('a zip read by its central directory', () => {
     const stored = entries[0]
     if (!stored) throw new Error('no part')
     expect([...(await zipRead(bytes, stored, 4))]).toEqual([...new TextEncoder().encode('<Rel')])
+  })
+})
+
+// #229's second review: what could slip a zip past the directory's sizes.
+describe('a zip that tries to hide its size', () => {
+  const bomb = [{ name: 'xl/worksheets/sheet1.xml', data: 'x', claims: 400 << 20 }]
+
+  test('bytes after its end (past a comment’s 64 KB) do not hide the directory', () => {
+    const tailed = zip(bomb, { tail: 70 << 10 })
+    expect(unpackedSize(zipEntries(tailed) ?? [])).toBe(400 << 20)
+    expect(looksLikeZip(tailed)).toBe(true)
+  })
+
+  test('the entries are counted by the larger of this disk’s and the total', () => {
+    const parts = [
+      { name: 'a', data: 'x' },
+      { name: 'b', data: 'y', claims: 400 << 20 },
+    ]
+    expect(zipEntries(zip(parts, { total: 1 }))?.length).toBe(2)
+    expect(zipEntries(zip(parts, { onDisk: 1 }))?.length).toBe(2)
+  })
+
+  test('a part is never read past what the directory says it holds', async () => {
+    const bytes = zip([{ name: 'a', data: 'y'.repeat(100_000), claims: 10 }])
+    const [entry] = zipEntries(bytes) ?? []
+    if (!entry) throw new Error('no part')
+    expect((await zipRead(bytes, entry)).length).toBe(10)
+  })
+
+  test('ZIP64 sizes from the extra field: a small part is small, a big one big', () => {
+    expect(unpackedSize(zipEntries(zip([{ name: 'a', data: 'xyz', zip64: true }])) ?? [])).toBe(3)
+    expect(unpackedSize(zipEntries(zip([{ name: 'a', data: 'x', zip64: true, claims: 5 * 2 ** 32 }])) ?? [])).toBe(
+      5 * 2 ** 32,
+    )
   })
 })

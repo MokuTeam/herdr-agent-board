@@ -111,15 +111,20 @@ const unescapeXml = (text: string) => text.replace(/&(amp|lt|gt|quot|apos);/g, (
  * by name: SheetJS reads them as visible.
  */
 export function odsHiddenTables(contentXml: string): Set<string> {
+  // One pass over the tags (each up to the next < or >): a style opened, its table properties,
+  // closed; linear however the tags are left open.
   const hiddenStyles = new Set<string>()
-  for (const m of contentXml.matchAll(/<style:style\b([^>]*)>([\s\S]*?)<\/style:style>/g)) {
-    const [, attrs = '', body = ''] = m
-    const name = /style:name="([^"]+)"/.exec(attrs)?.[1]
-    if (name && /style:family="table"/.test(attrs) && /table:display="false"/.test(body)) hiddenStyles.add(name)
+  let style: string | null = null
+  for (const [tag = ''] of contentXml.matchAll(/<\/?style:(?:style|table-properties)\b[^<>]*>/g)) {
+    if (tag.startsWith('</')) style = null
+    else if (tag.startsWith('<style:style')) {
+      const table = /style:family="table"/.test(tag)
+      style = table && !tag.endsWith('/>') ? (/style:name="([^"]+)"/.exec(tag)?.[1] ?? null) : null
+    } else if (style && /table:display="false"/.test(tag)) hiddenStyles.add(style)
   }
   const hidden = new Set<string>()
   if (!hiddenStyles.size) return hidden
-  for (const m of contentXml.matchAll(/<table:table\b([^>]*)>/g)) {
+  for (const m of contentXml.matchAll(/<table:table\b([^<>]*)>/g)) {
     const attrs = m[1] ?? ''
     const style = /table:style-name="([^"]+)"/.exec(attrs)?.[1]
     const name = /table:name="([^"]+)"/.exec(attrs)?.[1]

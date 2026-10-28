@@ -94,6 +94,9 @@ describe('a Word document as the worker reads it', () => {
     // A small zip whose picture unpacks to more than the limit (a zip bomb): not read.
     const bomb = docx(`<w:p>${run('x')}</w:p>`, [{ name: 'word/media/a.png', data: 'x', claims: UNPACKED_LIMIT }])
     expect(await documentOf(bomb)).toMatchObject({ ok: false, why: 'big' })
+    // The same with 70 KB put after its end: the directory is found all the same.
+    const tailed = new Uint8Array([...new Uint8Array(bomb), ...new Uint8Array(70 << 10)])
+    expect(await documentOf(tailed.buffer)).toMatchObject({ ok: false, why: 'big' })
   })
 })
 
@@ -123,6 +126,8 @@ describe('a Word document cleaned before it is drawn', () => {
     const box = clean(
       '<p onclick="x()" data-fs="file" data-abs="C:\\x" aria-label="y" style="color:red" class="z">t<script>alert(1)</script></p>' +
         '<p><a href="https://example.com/a">web</a> <a href="#footnote-1" id="footnote-ref-1">1</a> <a href="javascript:alert(1)">js</a> <a href="file:///C:/x">file</a></p>' +
+        // DOMPurify checks these with their control characters taken out but keeps them as they are.
+        '<p><a href="ht\ntps://evil.example/x">split</a> <a href="\u0001https://evil.example/x">control</a> <a href="data:text/html,<b>x</b>">data</a></p>' +
         '<iframe src="https://example.com"></iframe><form><input></form><style>p{}</style>',
     )
     expect(box.querySelector('script, iframe, form, input, style')).toBeNull()
@@ -134,6 +139,9 @@ describe('a Word document cleaned before it is drawn', () => {
       ['1', '#footnote-1', '', 'user-content-footnote-ref-1'],
       ['js', null, '', ''],
       ['file', null, '', ''],
+      ['split', null, '', ''],
+      ['control', null, '', ''],
+      ['data', null, '', ''],
     ])
   })
 

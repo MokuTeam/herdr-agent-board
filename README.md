@@ -329,12 +329,15 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   pictures, footnotes and web links (opened in the default browser); fonts, colors and page
   layout are left out. A spreadsheet (`.xlsx`, `.xlsm`, `.xls`, `.ods`) shows each visible sheet
   as a table, the sheet names as tabs below: values as Excel shows them, numbers and the short
-  date in the board's language, merged cells, the rows Excel keeps frozen held at the top, up to
-  20 000 rows drawn as they scroll into view; a cell cut short shows its whole text on hover.
-  Both are read in a worker; a document's HTML is then cleaned on the page's own thread, which
-  takes about a second for one of tens of thousands of paragraphs. One over 20 MB (a document) or
-  10 MB (a spreadsheet), unpacked to more than 150 MB or 120 MB, read for over a minute, broken or
-  with a password says so, beside the button that opens it with the system.
+  date in the board's language, merged cells, the rows Excel keeps frozen held at the top (in an
+  `.xlsx` or `.xlsm`; an `.xls` or `.ods` shows none frozen), up to 20 000 rows drawn as they
+  scroll into view; a cell cut short shows its whole text on hover. Both are read in a worker; a
+  document's HTML is then cleaned on the page's own thread, which takes about a second for one of
+  tens of thousands of paragraphs. One over 20 MB (a document) or 10 MB (a spreadsheet), unpacked
+  to more than 150 MB or 120 MB, read for over a minute, broken or with a password says so,
+  beside the button that opens it with the system. Columns are not limited before the reading: a
+  sheet of thousands of columns under those limits can take tens of seconds and a gigabyte or more
+  of memory on the computer before it is shown or the minute runs out.
 - Images and SVG in the quick look zoom as in Preview and Photos: Ctrl+wheel or a trackpad
   pinch, two fingers on a phone, a click (a double-tap) zooms in to 100% at that spot and a
   double-click goes back to fit, `+` `-` `0` (fit) and the arrows from the keyboard. A zoomed
