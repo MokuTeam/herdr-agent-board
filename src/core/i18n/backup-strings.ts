@@ -20,6 +20,22 @@ export const BACKUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'backup.problem.never': 'Nothing has been backed up to {target} yet.',
     'backup.problem.stale': 'The last good backup to {target} is {hours} hours old.',
     'backup.problem.failing': 'The last backup to {target} failed: {error}',
+    'backup.problem.missing':
+      'The board’s database is gone, but backups of it were made: restore the last good one (board db restore).',
+    'backup.problem.reset':
+      'The board’s database holds fewer changes ({seq}) than its last backup ({had}): emptied, or put back from an older copy. Nothing is sent until you do it by hand (board backup now), so the backup keeps the better one; restore it if this one is wrong (board db restore).',
+    'backup.noteLabel': 'Backup',
+    'backup.short.noTarget': 'Backup: the board’s data is on this computer only',
+    'backup.short.noKey': 'Backup: no passphrase yet',
+    'backup.short.damaged': 'Backup: the board’s database is damaged',
+    'backup.short.never': 'Backup: nothing has gone to {target} yet',
+    'backup.short.stale': 'Backup: {target} has no backup from the last day',
+    'backup.short.failing': 'Backup: the last one to {target} failed',
+    'backup.short.held': 'Backup: {target} refused the board’s login',
+    'backup.short.missing': 'Backup: the board’s database is gone',
+    'backup.short.reset': 'Backup: the database holds less than its last backup',
+    'backup.problem.held':
+      'Backups to {target} are held: the server refused the board’s login ({error}). Put it right, then Test or Apply again.',
 
     'backup.err.passphraseShort': 'The passphrase needs 10 characters or more.',
     'backup.err.passphraseSpaces': 'The passphrase may not start or end with a space.',
@@ -35,6 +51,9 @@ export const BACKUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'backup.err.noServer': 'No server is set for the backup.',
     'backup.err.noFolder': 'No folder is set for the backup.',
     'backup.err.drop': 'The server’s drop refused: {detail}',
+    'backup.err.refused': 'The server refused the board’s login: {detail}',
+    'backup.err.cutShort': 'The server kept {kept} bytes of the {sent} sent: the snapshot did not go through.',
+    'backup.err.serverSet': 'The server takes snapshots: Undo first to change it or to remove it.',
     'backup.err.badName': '{name} is not a snapshot’s name.',
     'backup.err.noSnapshot': 'There is no snapshot {name}.',
     'backup.err.oldDrop': 'The server has an older drop script than this board: Apply again.',
@@ -51,16 +70,22 @@ export const BACKUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'backup.err.testAfterApply': 'The server is set up, but the test snapshot did not go through: {detail}',
     'backup.file.notOurs': 'That is not a snapshot of the board.',
     'backup.file.needPassphrase':
-      'This snapshot opens with the passphrase it was sealed with: give it with --passphrase-file <file>.',
+      'This snapshot opens with the passphrase it was sealed with: give it with --passphrase-file <file>, or pipe it with --passphrase-stdin.',
     'backup.file.wrong': 'The passphrase is wrong, or the snapshot was changed.',
+    'backup.file.damaged': 'The snapshot is damaged: it does not open with the board’s own key.',
 
     'backup.server.userOther': 'The server has a user {user} the board did not make: remove or rename it first.',
     'backup.server.groupOther': 'The server has a group {user} without its user: remove it first.',
     'backup.server.sshdBroken': 'sshd’s config on the server does not pass sshd -t as it is: {said}',
     'backup.server.candidateBad': 'sshd would not take the backup user’s fence: {said}',
+    'backup.server.noUseradd': 'The server has no useradd (an Alpine?): use Do it myself, with adduser.',
+    'backup.server.blockTorn':
+      'The board’s block at the end of sshd_config is not whole (a beginning without its end, or two): put it right by hand first.',
 
     'set.backup': 'Backup…',
     'backup.title': 'Backup',
+    'backup.loading': 'Reading the backup’s state…',
+    'backup.loadError': 'Could not read the backup’s state: {error}',
     'backup.about': 'The board’s database, sealed with your passphrase, off this computer',
     'backup.nothing':
       'Nothing to back up yet: no feature keeps data in the board’s database. Set it up now and it starts with the first one.',
@@ -114,6 +139,10 @@ export const BACKUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'backup.manual': 'Do it myself',
     'backup.manualHint': 'Save this as {file} on the server and run it as root: {run}. Then press I ran it.',
     'backup.manualDone': 'I ran it',
+    'backup.newKey': 'New key',
+    'backup.newKeyHint':
+      'A lost or stolen laptop: a new key for the board, then Apply puts it on the server and the old one stops working.',
+    'backup.newKeyDone': 'New key made: Apply puts it on the server.',
     'backup.copy': 'Copy',
     'backup.serverSet': 'Taking snapshots since {when}',
     'backup.serverNotSet': 'Not set up yet',
@@ -148,7 +177,7 @@ export const BACKUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'backup.cli.folderSet': 'ok · folder {folder}',
     'backup.cli.folderOff': 'ok · no folder target',
     'backup.cli.restoreUsage':
-      'usage: board db restore [--target folder|server] [--snapshot <name>] [--file <path>] [--passphrase-file <file>] [--replace-file]',
+      'usage: board db restore [--target folder|server] [--snapshot <name>] [--file <path>] [--passphrase-file <file> | --passphrase-stdin] [--replace-file]',
     'backup.cli.restored': 'ok · restored {from}; the database as it was: {before}',
     'backup.cli.restoredFile': 'ok · restored {from} as a new file; the damaged one is in {aside}',
     'backup.cli.list': '{target}: {n} snapshots',
@@ -169,6 +198,21 @@ export const BACKUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'backup.problem.never': 'В {target} ещё ничего не ушло.',
     'backup.problem.stale': 'Последнему удачному бэкапу в {target} уже {hours} ч.',
     'backup.problem.failing': 'Последний бэкап в {target} не прошёл: {error}',
+    'backup.problem.missing': 'Базы доски нет, а её бэкапы были: восстановите последний удачный (board db restore).',
+    'backup.problem.reset':
+      'В базе доски меньше изменений ({seq}), чем в её последнем бэкапе ({had}): её очистили или вернули старую копию. Ничего не отправляется, пока вы не сделаете это сами (board backup now), так что бэкап хранит лучшую; если эта неверна, восстановите (board db restore).',
+    'backup.noteLabel': 'Бэкап',
+    'backup.short.noTarget': 'Бэкап: данные доски только на этом компьютере',
+    'backup.short.noKey': 'Бэкап: пароль не задан',
+    'backup.short.damaged': 'Бэкап: база доски повреждена',
+    'backup.short.never': 'Бэкап: в {target} ещё ничего не ушло',
+    'backup.short.stale': 'Бэкап: в {target} нет бэкапа за последние сутки',
+    'backup.short.failing': 'Бэкап: последний в {target} не прошёл',
+    'backup.short.held': 'Бэкап: {target} не пускает доску',
+    'backup.short.missing': 'Бэкап: базы доски нет',
+    'backup.short.reset': 'Бэкап: в базе меньше, чем в последнем бэкапе',
+    'backup.problem.held':
+      'Бэкапы в {target} приостановлены: сервер не пустил доску ({error}). Исправьте, потом «Проверить» или «Настроить» ещё раз.',
 
     'backup.err.passphraseShort': 'В пароле нужно 10 символов или больше.',
     'backup.err.passphraseSpaces': 'Пароль не может начинаться или кончаться пробелом.',
@@ -184,6 +228,9 @@ export const BACKUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'backup.err.noServer': 'Сервер для бэкапа не задан.',
     'backup.err.noFolder': 'Папка для бэкапа не задана.',
     'backup.err.drop': 'Сервер не принял: {detail}',
+    'backup.err.refused': 'Сервер не пустил доску: {detail}',
+    'backup.err.cutShort': 'Сервер сохранил {kept} байт из {sent}: снимок не прошёл.',
+    'backup.err.serverSet': 'Сервер принимает снимки: чтобы сменить или убрать его, сначала «Убрать с сервера».',
     'backup.err.badName': '{name} не имя снимка.',
     'backup.err.noSnapshot': 'Снимка {name} нет.',
     'backup.err.oldDrop': 'На сервере старый скрипт приёма: нажмите «Настроить» ещё раз.',
@@ -200,17 +247,23 @@ export const BACKUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'backup.err.testAfterApply': 'Сервер настроен, но пробный снимок не прошёл: {detail}',
     'backup.file.notOurs': 'Это не снимок доски.',
     'backup.file.needPassphrase':
-      'Этот снимок открывается паролем, которым запечатан: укажите его через --passphrase-file <файл>.',
+      'Этот снимок открывается паролем, которым запечатан: укажите его через --passphrase-file <файл> или подайте через --passphrase-stdin.',
     'backup.file.wrong': 'Пароль неверный, или снимок изменён.',
+    'backup.file.damaged': 'Снимок повреждён: он не открывается собственным ключом доски.',
 
     'backup.server.userOther':
       'На сервере есть пользователь {user}, которого сделала не доска: сначала удалите или переименуйте его.',
     'backup.server.groupOther': 'На сервере есть группа {user} без пользователя: сначала удалите её.',
     'backup.server.sshdBroken': 'Конфиг sshd на сервере уже сейчас не проходит sshd -t: {said}',
     'backup.server.candidateBad': 'sshd не примет ограждение пользователя бэкапа: {said}',
+    'backup.server.noUseradd': 'На сервере нет useradd (Alpine?): «Сделаю сам», с adduser.',
+    'backup.server.blockTorn':
+      'Блок доски в конце sshd_config неполный (начало без конца или два): сначала поправьте руками.',
 
     'set.backup': 'Бэкап…',
     'backup.title': 'Бэкап',
+    'backup.loading': 'Читаю состояние бэкапа…',
+    'backup.loadError': 'Не удалось прочитать состояние бэкапа: {error}',
     'backup.about': 'База доски, запечатанная вашим паролем, вне этого компьютера',
     'backup.nothing':
       'Пока нечего сохранять: ни одна функция ещё не хранит данные в базе доски. Настройте сейчас, и бэкап начнётся с первой.',
@@ -264,6 +317,10 @@ export const BACKUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'backup.manual': 'Сделаю сам',
     'backup.manualHint': 'Сохраните это на сервере как {file} и запустите от root: {run}. Потом нажмите «Запустил».',
     'backup.manualDone': 'Запустил',
+    'backup.newKey': 'Новый ключ',
+    'backup.newKeyHint':
+      'Ноутбук потерян или украден: новый ключ доски, потом «Настроить» кладёт его на сервер, и старый перестаёт работать.',
+    'backup.newKeyDone': 'Новый ключ сделан: «Настроить» положит его на сервер.',
     'backup.copy': 'Копировать',
     'backup.serverSet': 'Принимает снимки с {when}',
     'backup.serverNotSet': 'Ещё не настроен',
@@ -299,7 +356,7 @@ export const BACKUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'backup.cli.folderSet': 'ok · папка {folder}',
     'backup.cli.folderOff': 'ok · без папки',
     'backup.cli.restoreUsage':
-      'использование: board db restore [--target folder|server] [--snapshot <снимок>] [--file <путь>] [--passphrase-file <файл>] [--replace-file]',
+      'использование: board db restore [--target folder|server] [--snapshot <снимок>] [--file <путь>] [--passphrase-file <файл> | --passphrase-stdin] [--replace-file]',
     'backup.cli.restored': 'ok · восстановлено из {from}; база как была: {before}',
     'backup.cli.restoredFile': 'ok · восстановлено из {from} новым файлом; повреждённый в {aside}',
     'backup.cli.list': '{target}: снимков {n}',

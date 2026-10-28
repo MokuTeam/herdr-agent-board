@@ -19,6 +19,7 @@ import { LATEST, MIGRATIONS } from '../../src/adapters/db-schema.ts'
 import { isolatedHome } from '../support/env.ts'
 
 const WRITER = fileURLToPath(new URL('../support/db-writer.ts', import.meta.url))
+const MIGRATOR = fileURLToPath(new URL('../support/db-migrator.ts', import.meta.url))
 
 const problemOf = (fn: () => unknown): string => {
   try {
@@ -225,21 +226,58 @@ test('replaceContents refuses a copy newer than the code and clears a damage mar
   db.close()
 })
 
-test('a migration copies a file that had steps before it runs the new ones, and keeps the last three copies', () => {
+const EXTRA = [...MIGRATIONS, { version: LATEST + 1, store: 'test', sql: 'CREATE TABLE extra (v TEXT) STRICT' }]
+const copies = () =>
+  readdirSync(join(dbFile(), '..'))
+    .filter(f => f.startsWith('board.db.before-v'))
+    .sort()
+
+test('a migration copies a file that had steps, under the lock, before it runs the new ones', () => {
   isolatedHome()
   openDb()?.close()
-  const steps = [...MIGRATIONS, { version: LATEST + 1, store: 'test', sql: 'CREATE TABLE extra (v TEXT) STRICT' }]
-  const copies = () => readdirSync(join(dbFile(), '..')).filter(f => f.startsWith('board.db.before-v'))
   const raw = new Database(dbFile())
-  assert.equal(migrate(raw, dbFile(), steps), false)
+  raw.exec('PRAGMA busy_timeout = 5000')
+  assert.equal(migrate(raw, dbFile(), EXTRA), false)
   assert.equal(Object.values(raw.query('PRAGMA user_version').get() as object)[0], LATEST + 1)
   assert.deepEqual(raw.query("SELECT name FROM sqlite_master WHERE name = 'extra'").all(), [{ name: 'extra' }])
   assert.equal(copies().length, 1)
-  assert.match(copies()[0] as string, /^board\.db\.before-v\d+-\d{8}T\d{6}Z$/)
-  // the copy is the file as it was: without the new table
-  const copy = new Database(join(dbFile(), '..', copies()[0] as string), { readonly: true })
-  assert.deepEqual(copy.query("SELECT name FROM sqlite_master WHERE name = 'extra'").all(), [])
-  copy.close()
+  assert.match(copies()[0] as string, /^board\.db\.before-v\d+-\d{8}T\d{6}Z-\d+-\d+$/)
+  // the copy is the file as it was: without the new table, and whole
+  const copy = join(dbFile(), '..', copies()[0] as string)
+  assert.deepEqual(integrityOf(copy), { ok: true, version: LATEST })
+  const c = new Database(copy, { readonly: true })
+  assert.deepEqual(c.query("SELECT name FROM sqlite_master WHERE name = 'extra'").all(), [])
+  c.close()
+  raw.close()
+})
+
+test('the last three pre-migration copies are kept', () => {
+  isolatedHome()
+  openDb()?.close()
+  for (let i = 0; i < 5; i++) {
+    const raw = new Database(dbFile())
+    raw.exec(`PRAGMA user_version = ${LATEST}`)
+    raw.exec('DROP TABLE IF EXISTS extra')
+    migrate(raw, dbFile(), EXTRA)
+    raw.close()
+  }
+  assert.equal(copies().length, 3)
+})
+
+test('several processes opening an existing file that wants a step: one migrates, all open, one copy', async () => {
+  isolatedHome()
+  const db = openDb()
+  db?.write('user', tx => tx.journal({ store: 's', op: 'o', ref: 'before' }))
+  db?.close()
+  const openers = Array.from({ length: 5 }, () =>
+    Bun.spawn([process.execPath, MIGRATOR, dbFile()], { stdout: 'pipe', stderr: 'pipe' }),
+  )
+  const said = (await Promise.all(openers.map(p => new Response(p.stdout).text()))).map(x => x.trim())
+  assert.deepEqual(said, ['ok', 'ok', 'ok', 'ok', 'ok'])
+  assert.equal(copies().length, 1, 'the step ran once, so one copy')
+  const raw = new Database(dbFile(), { readonly: true })
+  assert.equal(Object.values(raw.query('PRAGMA user_version').get() as object)[0], LATEST + 1)
+  assert.equal((raw.query('SELECT count(*) AS n FROM journal').get() as { n: number }).n, 1)
   raw.close()
 })
 

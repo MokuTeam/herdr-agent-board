@@ -30,13 +30,28 @@ export interface BackupPanelProps {
 }
 
 /** A line under a section: what an action found, or why it failed. */
-type Note = { text: string; lines?: string[]; error?: boolean } | null
+export type Note = { text: string; lines?: string[]; error?: boolean } | null
+
+/** What the panel's buttons ask for (BackupPanel sends each as a POST /api/backup). */
+export interface BackupActions {
+  now(): void
+  passphrase(passphrase: string, again: string): Promise<boolean>
+  folder(folder: string): void
+  testFolder(): void
+  server(fields: Record<string, unknown>): void
+  removeServer(): void
+  run(op: ServerOp, sudoPassword: string): void
+  testServer(): void
+  manual(): void
+  newKey(): void
+}
 
 export function BackupPanel({ open, onClose }: BackupPanelProps) {
   const t = useT()
-  const { canEdit, toast } = useBoardContext()
-  const latest = useLatest({ t, toast })
+  const { data, canEdit } = useBoardContext()
+  const latest = useLatest({ t })
   const [view, setView] = useState<BackupPanelView | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [notes, setNotes] = useState<Record<string, Note>>({})
   const [manual, setManual] = useState<{ file: string; script: string; run: string } | null>(null)
@@ -46,20 +61,34 @@ export function BackupPanel({ open, onClose }: BackupPanelProps) {
     try {
       const res = await fetch('/api/backup', { cache: 'no-store' })
       const value = await replyOf(res)
-      if (res.ok && isBackupView(value)) setView(value)
+      if (res.ok && isBackupView(value)) {
+        setView(value)
+        setLoadError(null)
+      } else
+        setLoadError(
+          String((value as { error?: unknown }).error ?? latest.current.t('err.status', { code: res.status })),
+        )
     } catch (err) {
-      const { t, toast } = latest.current
-      toast(errorText(err, t), true)
+      setLoadError(errorText(err, latest.current.t))
     }
   }, [latest])
 
+  // asked when it opens, and again while it is open whenever the board's backup line changes (a
+  // snapshot went out, a try failed)
+  const line = JSON.stringify(data?.backup ?? null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: asked again when the board's backup line changes
   useEffect(() => {
     if (open) void ask()
-  }, [open, ask])
+  }, [open, ask, line])
 
-  /** One POST: the view it answers with taken; its reply, or null when it failed (said in `part`'s note). */
-  const send = async (part: string, op: string, body: Record<string, unknown> = {}): Promise<BackupReply | null> => {
-    setBusy(op)
+  /** One POST: the view it answers with taken; its reply, or null when it failed (said in `part`'s note). `key`: what shows busy. */
+  const send = async (
+    part: string,
+    op: string,
+    body: Record<string, unknown> = {},
+    key: string = op,
+  ): Promise<BackupReply | null> => {
+    setBusy(key)
     note(part, null)
     try {
       const res = await postJson('/api/backup', { op, ...body })
@@ -83,8 +112,50 @@ export function BackupPanel({ open, onClose }: BackupPanelProps) {
     }
   }
 
-  const disabled = !canEdit || !view || busy !== null
-  const last = view ? lastGood(view.states) : null
+  const actions: BackupActions = {
+    now: async () => {
+      const r = await send('status', 'now')
+      if (r?.sent?.length)
+        note('status', {
+          text: t('backup.nowDone', { targets: r.sent.map(s => t(`backup.target.${s.target}`)).join(', ') }),
+        })
+    },
+    passphrase: async (passphrase, again) => (await send('key', 'passphrase', { passphrase, again })) !== null,
+    folder: folder => void send('folder', 'folder', { folder }),
+    testFolder: async () => {
+      const r = await send('folder', 'test', { target: 'folder' }, 'test:folder')
+      if (r?.name) note('folder', { text: t('backup.tested', { name: r.name }) })
+    },
+    server: fields => void send('server', 'server', fields),
+    removeServer: () => void send('server', 'server', { remove: true }),
+    run: async (op, sudoPassword) => {
+      const r = await send('server', op, { sudoPassword })
+      if (!r) return
+      if (op === 'look' && r.look) note('server', { text: t('backup.look'), lines: lookLines(r.look, t) })
+      if (op === 'apply' || op === 'manualDone') {
+        note('server', { text: t('backup.applied') })
+        setManual(null)
+      }
+      if (op === 'undo')
+        note('server', {
+          text: r.run?.none
+            ? t('backup.undoneNone')
+            : t('backup.undone', { count: r.run?.kept?.count ?? 0, dir: r.run?.kept?.dir ?? '' }),
+        })
+    },
+    testServer: async () => {
+      const r = await send('server', 'test', { target: 'server' }, 'test:server')
+      if (r?.name) note('server', { text: t('backup.tested', { name: r.name }) })
+    },
+    manual: async () => {
+      const r = await send('server', 'manual')
+      if (r?.script && r.file) setManual({ file: r.file, script: r.script, run: `sudo sh ${r.file}` })
+    },
+    newKey: async () => {
+      const r = await send('server', 'newKey')
+      if (r) note('server', { text: t('backup.newKeyDone') })
+    },
+  }
 
   return (
     <Panel
@@ -99,102 +170,98 @@ export function BackupPanel({ open, onClose }: BackupPanelProps) {
         </>
       }
     >
-      <div className="sheet-body cats-body backup-body">
-        {view && (
-          <section className="backup-status" aria-live="polite">
-            {!view.needed && <p className="access-hint">{t('backup.nothing')}</p>}
-            {view.problems.map(p => (
-              <p className="access-problem backup-problem" key={p.kind + p.text}>
-                {p.text}
-              </p>
-            ))}
-            {view.needed && !view.problems.length && (
-              <p className="access-status">
-                {last ? t('backup.lastGood', { when: shortWhen(last, t) }) : t('backup.notYet')}
-              </p>
-            )}
-            {view.needed && (
-              <div className="access-actions">
-                <button
-                  type="button"
-                  className="button"
-                  disabled={disabled}
-                  onClick={async () => {
-                    const r = await send('status', 'now')
-                    if (r?.sent?.length)
-                      note('status', {
-                        text: t('backup.nowDone', {
-                          targets: r.sent.map(s => t(`backup.target.${s.target}`)).join(', '),
-                        }),
-                      })
-                  }}
-                >
-                  {busy === 'now' ? '…' : t('backup.now')}
-                </button>
-              </div>
-            )}
-            <NoteLine note={notes.status} />
-          </section>
-        )}
-        {view && (
-          <Passphrase
-            view={view}
-            disabled={disabled}
-            saving={busy === 'passphrase'}
-            onSave={async (passphrase, again) => (await send('key', 'passphrase', { passphrase, again })) !== null}
-          />
-        )}
-        <NoteLine note={notes.key} />
-        {view && (
-          <FolderSection
-            view={view}
-            disabled={disabled}
-            busy={busy}
-            onSave={folder => void send('folder', 'folder', { folder })}
-            onTest={async () => {
-              const r = await send('folder', 'test', { target: 'folder' })
-              if (r?.name) note('folder', { text: t('backup.tested', { name: r.name }) })
-            }}
-          />
-        )}
-        <NoteLine note={notes.folder} />
-        {view && (
-          <ServerSection
-            view={view}
-            disabled={disabled}
-            busy={busy}
-            manual={manual}
-            onSave={fields => void send('server', 'server', fields)}
-            onRemove={() => void send('server', 'server', { remove: true })}
-            onRun={async (op, sudoPassword) => {
-              const r = await send('server', op, { sudoPassword })
-              if (!r) return
-              if (op === 'look' && r.look) note('server', { text: t('backup.look'), lines: lookLines(r.look, t) })
-              if (op === 'apply' || op === 'manualDone') {
-                note('server', { text: t('backup.applied') })
-                setManual(null)
-              }
-              if (op === 'undo')
-                note('server', {
-                  text: r.run?.none
-                    ? t('backup.undoneNone')
-                    : t('backup.undone', { count: r.run?.kept?.count ?? 0, dir: r.run?.kept?.dir ?? '' }),
-                })
-            }}
-            onTest={async () => {
-              const r = await send('server', 'test', { target: 'server' })
-              if (r?.name) note('server', { text: t('backup.tested', { name: r.name }) })
-            }}
-            onManual={async () => {
-              const r = await send('server', 'manual')
-              if (r?.script && r.file) setManual({ file: r.file, script: r.script, run: `sudo sh ${r.file}` })
-            }}
-          />
-        )}
-        <NoteLine note={notes.server} />
-        <p className="access-hint backup-restore">{t('backup.restoreHint')}</p>
-      </div>
+      <BackupBody
+        view={view}
+        loadError={loadError}
+        busy={busy}
+        notes={notes}
+        manual={manual}
+        canEdit={canEdit}
+        actions={actions}
+      />
     </Panel>
+  )
+}
+
+export interface BackupBodyProps {
+  /** GET /api/backup's view; null while it is asked (or could not be read: `loadError`). */
+  view: BackupPanelView | null
+  loadError: string | null
+  /** What runs now ('now', 'look', 'test:folder'…); null: nothing. */
+  busy: string | null
+  notes: Record<string, Note>
+  manual: { file: string; script: string; run: string } | null
+  canEdit: boolean
+  actions: BackupActions
+}
+
+/** The panel's content, from its view and what runs: no fetching here (BackupPanel does it). */
+export function BackupBody({ view, loadError, busy, notes, manual, canEdit, actions }: BackupBodyProps) {
+  const t = useT()
+  const disabled = !canEdit || !view || busy !== null
+  const last = view ? lastGood(view.states) : null
+  return (
+    <div className="sheet-body cats-body backup-body">
+      {loadError && (
+        <p className="access-problem" role="alert">
+          {t('backup.loadError', { error: loadError })}
+        </p>
+      )}
+      {!view && !loadError && <p className="sheet-meta">{t('backup.loading')}</p>}
+      {view && (
+        <section className="backup-status" aria-live="polite">
+          {!view.needed && <p className="access-hint">{t('backup.nothing')}</p>}
+          {view.problems.map(p => (
+            <p className="access-problem backup-problem" key={p.kind + p.text}>
+              {p.text}
+            </p>
+          ))}
+          {view.needed && !view.problems.length && (
+            <p className="access-status">
+              {last ? t('backup.lastGood', { when: shortWhen(last, t) }) : t('backup.notYet')}
+            </p>
+          )}
+          {view.needed && (
+            <div className="access-actions">
+              <button type="button" className="button" disabled={disabled} onClick={actions.now}>
+                {busy === 'now' ? '…' : t('backup.now')}
+              </button>
+            </div>
+          )}
+          <NoteLine note={notes.status} />
+        </section>
+      )}
+      {view && (
+        <Passphrase view={view} disabled={disabled} saving={busy === 'passphrase'} onSave={actions.passphrase} />
+      )}
+      <NoteLine note={notes.key} />
+      {view && (
+        <FolderSection
+          view={view}
+          disabled={disabled}
+          busy={busy}
+          onSave={actions.folder}
+          onTest={actions.testFolder}
+        />
+      )}
+      <NoteLine note={notes.folder} />
+      {view && (
+        <ServerSection
+          view={view}
+          disabled={disabled}
+          busy={busy}
+          manual={manual}
+          onSave={actions.server}
+          onRemove={actions.removeServer}
+          onRun={actions.run}
+          onTest={actions.testServer}
+          onManual={actions.manual}
+          onNewKey={actions.newKey}
+        />
+      )}
+      <NoteLine note={notes.server} />
+      <p className="access-hint backup-restore">{t('backup.restoreHint')}</p>
+    </div>
   )
 }
 
@@ -345,7 +412,7 @@ function FolderSection(props: {
               disabled={props.disabled || !props.view.key}
               onClick={props.onTest}
             >
-              {props.busy === 'test' ? t('backup.testing') : t('backup.test')}
+              {props.busy === 'test:folder' ? t('backup.testing') : t('backup.test')}
             </button>
             <button type="button" className="button" disabled={props.disabled} onClick={() => props.onSave('')}>
               {t('backup.remove')}
@@ -358,7 +425,7 @@ function FolderSection(props: {
   )
 }
 
-type ServerOp = 'look' | 'apply' | 'undo' | 'manualDone'
+export type ServerOp = 'look' | 'apply' | 'undo' | 'manualDone'
 
 function ServerSection(props: {
   view: BackupPanelView
@@ -370,6 +437,7 @@ function ServerSection(props: {
   onRun(op: ServerOp, sudoPassword: string): void
   onTest(): void
   onManual(): void
+  onNewKey(): void
 }) {
   const t = useT()
   const { view, busy } = props
@@ -396,7 +464,8 @@ function ServerSection(props: {
         className="path-add"
         type={type}
         value={fields[name]}
-        disabled={props.disabled}
+        // a server that takes snapshots keeps its fields: Undo first
+        disabled={props.disabled || !!s?.set}
         onChange={e => setFields(f => ({ ...f, [name]: e.target.value }))}
       />
     </label>
@@ -462,7 +531,7 @@ function ServerSection(props: {
             </button>
             {s.set && (
               <button type="button" className="button" disabled={props.disabled} onClick={props.onTest}>
-                {busy === 'test' ? t('backup.testing') : t('backup.test')}
+                {busy === 'test:server' ? t('backup.testing') : t('backup.test')}
               </button>
             )}
             <button
@@ -478,6 +547,14 @@ function ServerSection(props: {
             </button>
           </div>
           {s.set && <TargetState view={view} target="server" />}
+          {view.dropKey && (
+            <div className="access-actions">
+              <span className="access-hint">{t('backup.newKeyHint')}</span>
+              <button type="button" className="button" disabled={props.disabled} onClick={props.onNewKey}>
+                {t('backup.newKey')}
+              </button>
+            </div>
+          )}
           {props.manual && (
             <div className="backup-manual">
               <p className="access-hint">

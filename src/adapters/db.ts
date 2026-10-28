@@ -17,7 +17,19 @@
 // (services/backup.ts) clears the mark. A file newer than the code (an older board after a
 // downgrade) opens for reading only.
 import { Database } from 'bun:sqlite'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs'
 import { dirname, join } from 'node:path'
 import { t } from '../core/lang.ts'
 import { LATEST, MIGRATIONS, type Migration } from './db-schema.ts'
@@ -137,44 +149,71 @@ function settle(db: Database): void {
 const userVersion = (db: Database): number =>
   Number((db.query('PRAGMA user_version').get() as { user_version?: number } | null)?.user_version ?? 0)
 
-/** A copy of the file as it is, before a step changes it: board.db.before-v<n>-<stamp>, the last COPIES_KEPT kept. */
-function copyBeforeMigration(db: Database, path: string, from: number): void {
-  const stamp = new Date()
+/** Bytes written whole before the call returns: written, synced, closed. */
+function writeWhole(file: string, bytes: Uint8Array): void {
+  const fd = openSync(file, 'wx')
+  try {
+    writeSync(fd, bytes)
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** The time in a copy's name: 20261029T031500Z. */
+const stampNow = (): string =>
+  new Date()
     .toISOString()
     .replace(/[-:]/g, '')
     .replace(/\.\d+Z$/, 'Z')
-  const copy = `${path}.before-v${from}-${stamp}`
-  db.query('VACUUM INTO ?').run(copy)
+
+/**
+ * A copy of the file as it is, before a step changes it: board.db.before-v<n>-<time>-<pid>-<n>, the
+ * last COPIES_KEPT kept. Taken inside the migration's own transaction, so it is the file as this
+ * process found it under the write lock, never one another process was migrating.
+ */
+let copiesMade = 0
+function copyBeforeMigration(db: Database, path: string, from: number): void {
+  writeWhole(`${path}.before-v${from}-${stampNow()}-${process.pid}-${++copiesMade}`, db.serialize())
   const dir = dirname(path)
   const prefix = `${path.slice(dir.length + 1)}.before-v`
   const copies = readdirSync(dir)
     .filter(f => f.startsWith(prefix))
-    .map(f => ({ f, at: statSync(join(dir, f)).mtimeMs }))
+    .map(f => {
+      try {
+        return { f, at: statSync(join(dir, f)).mtimeMs }
+      } catch {
+        return null // gone meanwhile
+      }
+    })
+    .filter((x): x is { f: string; at: number } => x !== null)
     .sort((a, b) => b.at - a.at)
   for (const old of copies.slice(COPIES_KEPT)) rmSync(join(dir, old.f), { force: true })
 }
 
 /**
  * Takes the file through the steps it has not had, in one transaction that holds the write lock:
- * of two processes opening it at once, one does them and the other finds nothing to do. A file
- * that had steps already is copied first (`path`: none for a copy being restored). Returns whether
- * the file is newer than the code. `steps` is for the tests.
+ * the version is read again under the lock, so of several processes opening it at once one does
+ * the steps and the others find nothing to do. A file that had steps already is copied first,
+ * under the same lock (`path`: none for a copy being restored). Returns whether the file is newer
+ * than the code. `steps` is for the tests.
  */
 export function migrate(db: Database, path: string | null, steps: readonly Migration[] = MIGRATIONS): boolean {
   const latest = steps.at(-1)?.version ?? 0
-  const before = userVersion(db)
-  if (before > latest) return true
-  if (before === latest) return false
-  if (before > 0 && path) copyBeforeMigration(db, path, before)
+  const seen = userVersion(db)
+  if (seen > latest) return true
+  if (seen === latest) return false
   let newer = false
   db.transaction(() => {
-    const now = userVersion(db) // another process may have done it while we copied
+    const now = userVersion(db) // another process may have done it before this one got the lock
     if (now > latest) {
       newer = true
       return
     }
+    if (now === latest) return
+    if (now > 0 && path) copyBeforeMigration(db, path, now)
     for (const m of steps) if (m.version > now) db.exec(m.sql)
-    if (now < latest) db.exec(`PRAGMA user_version = ${latest}`)
+    db.exec(`PRAGMA user_version = ${latest}`)
   }).immediate()
   return newer
 }
@@ -184,6 +223,8 @@ export interface OpenOptions {
   path?: string
   /** Make the file when it is not there (a store about to write); false: null for a missing file. */
   create?: boolean
+  /** The steps; db-schema.ts's when not given (the tests give more). */
+  steps?: readonly Migration[]
 }
 
 const pause = new Int32Array(new SharedArrayBuffer(4))
@@ -211,7 +252,7 @@ function whileBusy<T>(fn: () => T): T {
 }
 
 /** The database, its settings and steps done; null when it is not there and `create` is false. */
-export function openDb({ path = dbFile(), create = true }: OpenOptions = {}): BoardDb | null {
+export function openDb({ path = dbFile(), create = true, steps = MIGRATIONS }: OpenOptions = {}): BoardDb | null {
   if (!create && !existsSync(path)) return null
   mkdirSync(dirname(path), { recursive: true })
   let db: Database | null = null
@@ -222,7 +263,8 @@ export function openDb({ path = dbFile(), create = true }: OpenOptions = {}): Bo
       const version = (db.query('SELECT sqlite_version() AS v').get() as { v: string }).v
       if (!sqliteAtLeast(version)) throw new DbError('oldSqlite', version)
       settle(db)
-      const newer = damageOf(path) === null ? migrate(db, path) : userVersion(db) > LATEST
+      const newer =
+        damageOf(path) === null ? migrate(db, path, steps) : userVersion(db) > (steps.at(-1)?.version ?? LATEST)
       return handle(db, path, newer)
     })
   } catch (err) {
@@ -327,10 +369,12 @@ export function integrityOf(path: string): { ok: true; version: number } | { ok:
  * transaction that holds the write lock, a 'restore' row in the journal after them. Every other
  * connection stays open and sees the restored rows; nothing is renamed, which Windows would refuse
  * while another process has the file open. The copy is taken to the code's version first; a copy
- * newer than the code is refused. The journal's seq goes on from the live file's, so the change is
- * seen (by the backup above all). Clears the damage mark.
+ * newer than the code is refused. Columns are named (never by position); foreign keys are checked
+ * at the commit. `before`: a copy of the live file as it is, written inside the same transaction
+ * (what a restore undoes to). The journal's seq goes on from the live file's, so the change is seen
+ * (by the backup above all). The file is checked after; a whole one has its damage mark cleared.
  */
-export function replaceContents(live: BoardDb, from: string, by: string, note: string): void {
+export function replaceContents(live: BoardDb, from: string, by: string, note: string, before?: string): void {
   if (live.newer) throw new DbError('newer')
   const copy = new Database(from, { readwrite: true, strict: true })
   try {
@@ -339,18 +383,23 @@ export function replaceContents(live: BoardDb, from: string, by: string, note: s
     copy.close(false)
   }
   const { db } = live
+  const q = (name: string) => `"${name.replaceAll('"', '""')}"`
   db.query('ATTACH DATABASE ? AS restored').run(from)
   try {
     db.transaction(() => {
+      if (before) writeWhole(before, db.serialize())
+      db.exec('PRAGMA defer_foreign_keys = ON')
       const tables = (
         db.query("SELECT name FROM main.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all() as {
           name: string
         }[]
       ).map(r => r.name)
       for (const name of tables) {
-        const q = `"${name.replaceAll('"', '""')}"`
-        db.exec(`DELETE FROM main.${q}`)
-        db.exec(`INSERT INTO main.${q} SELECT * FROM restored.${q}`)
+        const columns = (db.query(`PRAGMA main.table_info(${q(name)})`).all() as { name: string }[])
+          .map(c => q(c.name))
+          .join(', ')
+        db.exec(`DELETE FROM main.${q(name)}`)
+        db.exec(`INSERT INTO main.${q(name)} (${columns}) SELECT ${columns} FROM restored.${q(name)}`)
       }
       db.query(
         "INSERT INTO journal (at, by, store, op, ref, before, after) VALUES (?, ?, 'db', 'restore', 'db', NULL, ?)",
@@ -360,4 +409,6 @@ export function replaceContents(live: BoardDb, from: string, by: string, note: s
     db.exec('DETACH DATABASE restored')
   }
   clearDamaged(live.path)
+  const checked = live.check()
+  if (!checked.ok) throw new DbError('damaged', checked.detail)
 }

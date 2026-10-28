@@ -1,7 +1,9 @@
 // The server target's ssh (#233): the board's own key to the backup user, whose only program is
 // the drop script (core/backup-server.ts). A snapshot goes on stdin and comes back on stdout as
-// bytes; what the script and ssh say goes to stderr. No user config, the server's key as the
-// board's known_hosts pins it (strictly: a changed key is refused), no forwarding, no prompt.
+// bytes; what the script and ssh say goes to stderr. No user config (~/.ssh/config, its ProxyJump
+// and aliases are not read: the server must be reachable as it is named, as the tunnel's), the
+// server's key as the board's known_hosts pins it (strictly: a changed key is refused; `pin` only
+// for the one explicit call that may pin it first), no forwarding, no prompt.
 import { spawn } from 'node:child_process'
 import type { ServerTarget } from '../core/backup.ts'
 import { BACKUP_USER, DROP_TIMEOUT_MS } from '../core/backup-server.ts'
@@ -14,10 +16,11 @@ export function dropArgs(o: {
   knownHosts: string
   command: string
   platform?: string
+  pin?: boolean
 }): string[] {
   const options = [
     'BatchMode=yes',
-    'StrictHostKeyChecking=yes',
+    o.pin ? 'StrictHostKeyChecking=accept-new' : 'StrictHostKeyChecking=yes',
     `UserKnownHostsFile="${sshPathArg(o.knownHosts, o.platform)}"`,
     'IdentitiesOnly=yes',
     'ConnectTimeout=15',

@@ -46,6 +46,11 @@ export interface BackupReply {
   failed?: { target: Target; error: string }[]
 }
 
+/** The toolbar note's words for the payload's short code (no error text reaches a remote page). */
+export function backupNoteText(p: { kind: string; target?: string | undefined }, t: Translator): string {
+  return t(`backup.short.${p.kind}`, { target: p.target ? t(`backup.target.${p.target}`) : '' })
+}
+
 /** A target's line: its last good snapshot, or nothing yet; and its last try's error. */
 export function stateLine(
   s: TargetState | undefined,

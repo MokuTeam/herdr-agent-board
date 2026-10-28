@@ -22,6 +22,7 @@ import { pickedProfile, profileOptions } from '../models/profiles.ts'
 import { openMine } from '../models/todos.ts'
 import { columnHeads, documentTitle, laneOptions, scheduleBadge, summaryParts, summaryText } from '../models/toolbar.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
+import { BackupNote } from './BackupNote.tsx'
 import { ColumnsHead } from './ColumnsHead.tsx'
 import { AlarmIcon, ArchiveIcon, GearIcon, PlusIcon, SearchIcon, TagIcon, TasksIcon } from './icons.tsx'
 import { Lanes } from './Lanes.tsx'
@@ -44,6 +45,8 @@ export interface ToolbarProps {
   onArchive?: () => void
   /** The quiet "Setup incomplete" note (hooks/useSetupNote.ts). */
   setup?: SetupNoteState
+  /** The backup's note (#233): Settings → Backup… on the board on this computer; none elsewhere. */
+  onBackup?: (() => void) | undefined
   /** Opens Settings → Sleep and wake…, from the quiet "Wake stopped" note (components/wake/WakeNote.tsx). */
   onWake?: () => void
   /** Settings, the gear's menu (hooks/useSettingsMenu.ts). */
@@ -61,6 +64,7 @@ export function Toolbar({
   onSchedule,
   onArchive,
   setup,
+  onBackup,
   onWake,
   settings,
   picks,
@@ -196,6 +200,7 @@ export function Toolbar({
             <NextAttention />
             <PresenceSwitch />
             {setup && <SetupNote setup={setup} />}
+            <BackupNote onOpen={onBackup} />
             {onWake && <WakeNote onOpen={onWake} />}
             <Limits anchor={limitsAnchor} />
             <LiveDot />

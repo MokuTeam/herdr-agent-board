@@ -32,8 +32,6 @@ import {
   sshVersion,
   writePidRecord,
 } from '../adapters/ssh.ts'
-import { problemSentence } from '../core/backup.ts'
-import { t } from '../core/lang.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
 import type { BackupPayload } from '../core/payload.ts'
@@ -420,7 +418,7 @@ export async function startServer({
     let last: number | null = null
     for (const s of Object.values(v.states)) if (s?.lastOk && (last === null || s.lastOk > last)) last = s.lastOk
     const first = v.problems[0]
-    return { last, problem: first ? problemSentence(first, t) : null }
+    return { last, problem: first ? { kind: first.kind, ...('target' in first && { target: first.target }) } : null }
   }
   const board = createBoardState({
     deps,

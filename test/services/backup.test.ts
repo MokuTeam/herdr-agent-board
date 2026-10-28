@@ -8,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
   writeSync,
 } from 'node:fs'
@@ -16,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 import { dropKey, FOLDER_NAME, folderProblem, keyFile, readStatus, writeKey } from '../../src/adapters/backup-store.ts'
 import { dbFile, openDb } from '../../src/adapters/db.ts'
 import { stateDir } from '../../src/adapters/paths.ts'
-import { backupConfig } from '../../src/core/backup.ts'
+import { backupConfig, snapshotName } from '../../src/core/backup.ts'
 import { makeKey } from '../../src/core/backup-file.ts'
 import { dropScript } from '../../src/core/backup-server.ts'
 import {
@@ -27,6 +28,7 @@ import {
   listAt,
   restore,
   startBackups,
+  syncedPath,
   testTarget,
 } from '../../src/services/backup.ts'
 import { isolatedHome } from '../support/env.ts'
@@ -204,7 +206,7 @@ async function serverSetUp() {
   const env = await setUp(['on the server'])
   const bin = await compileFake(fileURLToPath(new URL('../support/fake-drop-ssh.ts', import.meta.url)), 'fake-drop-ssh')
   const script = join(env.dir, 'drop.sh')
-  writeFileSync(script, dropScript(join(env.dir, 'server-snapshots')))
+  writeFileSync(script, dropScript({ dir: join(env.dir, 'server-snapshots') }))
   const log = join(env.dir, 'drop-calls.jsonl')
   const saved = { ...process.env }
   process.env.BOARD_SSH_BIN_PATH = bin
@@ -250,9 +252,15 @@ test.skipIf(!sh)(
         .trim()
         .split('\n')
         .map(l => JSON.parse(l) as string[])
+      // scheduled backups never pin the server's key; Test may, once, when none is pinned yet
+      const pinning = calls.filter(a => a.includes('StrictHostKeyChecking=accept-new'))
+      assert.deepEqual(
+        pinning.map(a => a.at(-1)),
+        ['check'],
+      )
       for (const args of calls) {
         assert.ok(args.includes('BatchMode=yes'))
-        assert.ok(args.includes('StrictHostKeyChecking=yes'))
+        if (!pinning.includes(args)) assert.ok(args.includes('StrictHostKeyChecking=yes'))
         assert.ok(args.includes('IdentitiesOnly=yes'))
         assert.equal(args[args.indexOf('-i') + 1]?.replaceAll('\\', '/'), dropKey().replaceAll('\\', '/'))
         assert.ok(args.includes('agent-board-backup@example.org'))
@@ -284,3 +292,99 @@ test.skipIf(!sh)(
     }
   },
 )
+
+test('a database emptied after a backup is held: nothing scheduled sends it, by hand it goes and the hold clears', async () => {
+  const { folder } = await setUp(['a', 'b', 'c'])
+  const cfg = { backup: { folder } }
+  assert.equal((await backupNow({ cfg })).sent.length, 1)
+  // the file emptied (a reset, or an older copy put back by hand): fewer changes than the backup holds
+  rmSync(dbFile(), { force: true })
+  for (const end of ['-wal', '-shm']) rmSync(`${dbFile()}${end}`, { force: true })
+  assert.deepEqual(
+    backupView(cfg).problems.map(p => p.kind),
+    ['missing'],
+  )
+  const db = openDb()
+  db?.write('user', tx => tx.journal({ store: 'test', op: 'add', ref: 'one' }))
+  db?.close()
+  const held = await backupNow({ cfg, now: () => Date.now() + 2 * 86_400_000 })
+  assert.equal(held.reset, true)
+  assert.deepEqual(held.sent, [])
+  assert.equal(backupView(cfg, Date.now() + 20_000).problems[0]?.kind, 'reset')
+  const forced = await backupNow({ cfg, force: true })
+  assert.equal(forced.sent.length, 1)
+  assert.equal(
+    backupView(cfg, Date.now() + 40_000).problems.some(p => p.kind === 'reset'),
+    false,
+  )
+})
+
+test('a snapshot a sync client holds in the folder stays, and the backup still goes through', async () => {
+  const { folder } = await setUp()
+  const now = Date.now()
+  // a name the rotation removes (over two years old) that cannot be removed: a folder in its place,
+  // refused as a file a sync client holds is; and a dozen recent ones, so the rotation runs
+  const old = join(folder, FOLDER_NAME, snapshotName(now - 800 * 86_400_000, '00000000'))
+  mkdirSync(join(old, 'held'), { recursive: true })
+  for (let i = 1; i <= 12; i++)
+    writeFileSync(
+      join(folder, FOLDER_NAME, snapshotName(now - i * 3_600_000, `1111${String(i).padStart(4, '0')}`)),
+      'ABK1',
+    )
+  const r = await backupNow({ cfg: { backup: { folder } } })
+  assert.deepEqual(r.failed, [])
+  assert.equal(r.sent.length, 1)
+  assert.equal(readStatus().targets.folder?.error, null)
+  assert.ok(existsSync(old), 'the one that could not go stays for the next prune')
+})
+
+test('restore by default takes the newest that opens whole: past a damaged newest one and a name from the future', async () => {
+  const { folder } = await setUp(['kept'])
+  const cfg = { backup: { folder } }
+  const good = (await backupNow({ cfg })).sent[0]?.name as string
+  const dir = join(folder, FOLDER_NAME)
+  const sealed = readFileSync(join(dir, good))
+  const damaged = Buffer.from(sealed)
+  damaged[damaged.length - 5] = (damaged[damaged.length - 5] ?? 0) ^ 1
+  writeFileSync(join(dir, snapshotName(Date.now() + 60_000, 'aaaaaaaa')), damaged)
+  writeFileSync(join(dir, snapshotName(Date.now() + 5 * 86_400_000, 'bbbbbbbb')), sealed)
+  const r = await restore({ from: { target: 'folder' }, cfg, by: 'user' })
+  assert.equal(r.from, `folder/${good}`)
+  assert.equal(r.skipped.length, 1, 'the damaged one passed over')
+})
+
+test('a refused login holds the server: no try until a Test goes through', async () => {
+  const s = await serverSetUp()
+  try {
+    process.env.FAKE_DROP_REFUSE = '1'
+    const r = await backupNow({ cfg: s.cfg })
+    assert.equal(r.failed.length, 1)
+    assert.ok(readStatus().targets.server?.held)
+    assert.ok(backupView(s.cfg).problems.some(p => p.kind === 'held'))
+    // an hour later nothing is due: no login is tried
+    const later = await backupNow({ cfg: s.cfg, now: () => Date.now() + 3 * 3_600_000 })
+    assert.deepEqual(later.failed, [])
+    assert.deepEqual(later.skipped, ['server'])
+    delete process.env.FAKE_DROP_REFUSE
+    assert.equal((await testTarget('server', s.cfg)).ok, true)
+    assert.equal(readStatus().targets.server?.held, null)
+  } finally {
+    s.restoreEnv()
+  }
+})
+
+test('a plain copy a killed run left in backup/ is swept by the next run', async () => {
+  const { folder } = await setUp()
+  const stale = join(stateDir(), 'backup', 'snapshot-12345-deadbeef.db')
+  writeFileSync(stale, 'SQLite format 3')
+  const old = (Date.now() - 3_600_000) / 1000
+  utimesSync(stale, old, old)
+  await backupNow({ cfg: { backup: { folder } } })
+  assert.equal(existsSync(stale), false)
+})
+
+test('board doctor knows a synced folder by its Windows path too', () => {
+  assert.ok(syncedPath('C:\\Users\\me\\OneDrive - Acme\\AppData\\board.db'))
+  assert.ok(syncedPath('/home/me/Dropbox/state/board.db'))
+  assert.ok(!syncedPath('C:\\Users\\me\\AppData\\Local\\herdr\\board.db'))
+})

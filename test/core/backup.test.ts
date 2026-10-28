@@ -5,7 +5,6 @@ import {
   backupConfig,
   backupProblems,
   freshTarget,
-  KEEP_ALL_MS,
   lastDailyMark,
   MOST_WAIT_MS,
   passphraseProblem,
@@ -13,12 +12,14 @@ import {
   QUIET_MS,
   RETRY_MS,
   rotationKeeps,
+  STALE_MS,
   snapshotName,
   snapshotTime,
   targetDue,
 } from '../../src/core/backup.ts'
 
 const HOUR = 3_600_000
+const DAY = 24 * HOUR
 
 test('backupConfig reads the folder and the server, and anything else as no target', () => {
   assert.deepEqual(backupConfig(undefined), { folder: null, server: null })
@@ -49,23 +50,32 @@ test('a snapshot name says when it was made, to the second, and the start of its
   assert.equal(snapshotTime('notes.txt'), null)
 })
 
-test('the rotation keeps the last 48 hours, the first of each day for 60 days, the first of each month for two years', () => {
+test('the rotation keeps the newest ten, the last 48 hours, the first of each day for 60 days, the first of each month for two years', () => {
   const now = Date.UTC(2026, 9, 29, 12, 0, 0)
   const at = (ms: number, hash = '00000000') => snapshotName(now - ms, hash)
-  const recent = [at(HOUR), at(5 * HOUR), at(47 * HOUR)]
+  // a dozen in the last two hours: the newest ten whatever the rest
+  const lately = Array.from({ length: 12 }, (_, i) => at(i * 5 * 60_000, i.toString(16).padStart(8, '0')))
+  const recent = [at(5 * HOUR, 'a0000000'), at(47 * HOUR, 'a1000000')]
   const dayA1 = snapshotName(Date.UTC(2026, 9, 20, 1), '11111111')
   const dayA2 = snapshotName(Date.UTC(2026, 9, 20, 9), '22222222')
   const old1 = snapshotName(Date.UTC(2026, 3, 2, 1), '33333333')
   const old2 = snapshotName(Date.UTC(2026, 3, 9, 1), '44444444')
   const ancient = snapshotName(Date.UTC(2023, 0, 5), '55555555')
-  const future = snapshotName(now + HOUR, '66666666')
-  const keep = rotationKeeps([...recent, dayA2, dayA1, old2, old1, ancient, future, 'readme.txt'], now)
-  for (const n of [...recent, dayA1, old1, future, 'readme.txt']) assert.ok(keep.has(n), n)
+  const keep = rotationKeeps([...lately, ...recent, dayA2, dayA1, old2, old1, ancient, 'readme.txt'], now)
+  for (const n of [...lately, ...recent, dayA1, old1, 'readme.txt']) assert.ok(keep.has(n), n)
   for (const n of [dayA2, old2, ancient]) assert.ok(!keep.has(n), n)
-  // exactly at 48 hours it is no longer "recent"
-  const edge = at(KEEP_ALL_MS)
-  const sameDayEarlier = snapshotName(now - KEEP_ALL_MS - HOUR, 'aaaaaaaa')
-  assert.equal(rotationKeeps([sameDayEarlier, edge], now).has(edge), false)
+})
+
+test('the rotation keeps the newest ten whatever their age, and everything when the clock looks wrong', () => {
+  const now = Date.UTC(2026, 9, 29, 12, 0, 0)
+  const old = Array.from({ length: 13 }, (_, i) =>
+    snapshotName(now - (1000 + i) * DAY, i.toString(16).padStart(8, '0')),
+  )
+  assert.equal(rotationKeeps(old, now).size, 10)
+  // the newest a year ahead of this clock: everything stays
+  assert.equal(rotationKeeps([...old, snapshotName(now + 365 * DAY, 'ffffffff')], now).size, 14)
+  // the newest more than a month after the one before it (a jump, or a board asleep): everything stays this time
+  assert.equal(rotationKeeps([...old, snapshotName(now, 'eeeeeeee')], now).size, 14)
 })
 
 test('targetDue waits for quiet after changes, but not past MOST_WAIT_MS, and takes the daily one', () => {
@@ -86,6 +96,11 @@ test('targetDue waits for quiet after changes, but not past MOST_WAIT_MS, and ta
   assert.equal(targetDue(failed, { seq: 6, lastAt: now - QUIET_MS, firstUnsavedAt: now - QUIET_MS }, now), null)
   const later = { ...failed, lastTry: now - RETRY_MS[0] }
   assert.equal(targetDue(later, { seq: 6, lastAt: now - QUIET_MS, firstUnsavedAt: now - QUIET_MS }, now), 'retry')
+  // held after a refused login: never, whatever is due
+  const held = { ...yesterday, held: 'Permission denied (publickey)' }
+  assert.equal(targetDue(held, { seq: 9, lastAt: now - QUIET_MS, firstUnsavedAt: now - MOST_WAIT_MS }, now), null)
+  // a database with fewer changes than the target holds is not "nothing to do"
+  assert.equal(targetDue(fresh, { seq: 2, lastAt: now - QUIET_MS, firstUnsavedAt: null }, now), 'changes')
 })
 
 test('lastDailyMark is 03:00 local today once past it, else yesterday', () => {
@@ -95,7 +110,7 @@ test('lastDailyMark is 03:00 local today once past it, else yesterday', () => {
   assert.equal(lastDailyMark(before), new Date(2026, 9, 28, 3, 0).getTime())
 })
 
-test('backupProblems: nothing while there is no database; else no target, no key, stale, never, failing', () => {
+test('backupProblems: no target, no key, stale, never, failing, held; the database reset or gone after a backup', () => {
   const now = Date.UTC(2026, 9, 29)
   const none = backupConfig({})
   assert.deepEqual(backupProblems({ needed: false, cfg: none, keySet: false, damaged: null, states: {}, now }), [])
@@ -105,10 +120,10 @@ test('backupProblems: nothing while there is no database; else no target, no key
   )
   const both = backupConfig({ folder: 'D:\\S', server: { host: 'h', set: 'x' } })
   const states = {
-    folder: { ...freshTarget(), lastOk: now - 30 * HOUR, seq: 1 },
+    folder: { ...freshTarget(), lastOk: now - 30 * HOUR, seq: 20 },
     server: { ...freshTarget(), error: 'refused', lastTry: now, failures: 2 },
   }
-  const problems = backupProblems({ needed: true, cfg: both, keySet: true, damaged: 'bad page', states, now })
+  const problems = backupProblems({ needed: true, cfg: both, keySet: true, damaged: 'bad page', states, now, seq: 20 })
   assert.deepEqual(
     problems.map(p => p.kind),
     ['damaged', 'stale', 'never', 'failing'],
@@ -117,6 +132,39 @@ test('backupProblems: nothing while there is no database; else no target, no key
   assert.equal(
     problemSentence(problems[1] as never, t),
     'backup.problem.stale{"target":"backup.target.folder","hours":30}',
+  )
+  // fewer changes than the last backup held: reset, first
+  assert.equal(
+    backupProblems({ needed: true, cfg: both, keySet: true, damaged: null, states, now, seq: 3 })[0]?.kind,
+    'reset',
+  )
+  // the file gone after a good backup
+  assert.deepEqual(backupProblems({ needed: false, cfg: both, keySet: true, damaged: null, states, now }), [
+    { kind: 'missing' },
+  ])
+  // a refused login: held, not failing
+  const held = {
+    server: { ...freshTarget(), lastOk: now, seq: 20, error: 'Permission denied', held: 'Permission denied' },
+  }
+  assert.deepEqual(
+    backupProblems({ needed: true, cfg: both, keySet: true, damaged: null, states: held, now, seq: 20 }).map(
+      p => p.kind,
+    ),
+    ['never', 'held'],
+  )
+})
+
+test('stale only past a day and a half hour: the daily snapshot landing late, or a DST night, is not', () => {
+  const now = Date.UTC(2026, 10, 1, 8)
+  const cfg = backupConfig({ folder: 'D:\\S' })
+  const at = (ms: number) => ({ folder: { ...freshTarget(), lastOk: now - ms, seq: 1 } })
+  assert.deepEqual(
+    backupProblems({ needed: true, cfg, keySet: true, damaged: null, states: at(25 * HOUR), now, seq: 1 }),
+    [],
+  )
+  assert.equal(
+    backupProblems({ needed: true, cfg, keySet: true, damaged: null, states: at(STALE_MS + 1), now, seq: 1 })[0]?.kind,
+    'stale',
   )
 })
 

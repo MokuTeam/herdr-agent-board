@@ -117,8 +117,9 @@ export interface BoardPayload {
   todos?: TodosConfig
   /**
    * The backup of the board's database (#233): only once there is a database or a target is set.
-   * `last`: the newest good backup over all targets; `problem`: the first thing wrong, in the
-   * board's words (core/backup.ts problemSentence), null when nothing is.
+   * `last`: the newest good backup over all targets; `problem`: the first thing wrong as a short
+   * code and its target (core/backup.ts BackupProblem's kind), null when nothing is. Never an ssh
+   * error's or a check's text: those stay on this computer (Settings → Backup…, board doctor).
    */
   backup?: BackupPayload
   /**
@@ -137,5 +138,5 @@ export interface BoardPayload {
 /** What the board's payload says of the backup (#233). */
 export interface BackupPayload {
   last: number | null
-  problem: string | null
+  problem: { kind: string; target?: string } | null
 }

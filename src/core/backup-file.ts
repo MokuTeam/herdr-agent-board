@@ -15,6 +15,8 @@ const TAG = 16
 
 /** scrypt's cost: N = 2^17, r = 8, p = 1 (about 0.25 s and 128 MB, only when a key is made or a passphrase opens a file). */
 export const KDF = { logN: 17, r: 8, p: 1 } as const
+/** The lowest N a file may name (2^10: the tests' cheap keys); anything outside [MIN_LOG_N, KDF.logN] is refused. */
+export const MIN_LOG_N = 10
 
 /** The key the board keeps, and how it was made from the passphrase. */
 export interface BackupKey {
@@ -31,7 +33,7 @@ export interface BackupKey {
 }
 
 export class BackupFileError extends Error {
-  constructor(readonly why: 'notOurs' | 'needPassphrase' | 'wrong') {
+  constructor(readonly why: 'notOurs' | 'needPassphrase' | 'wrong' | 'damaged') {
     super(`backup.file.${why}`)
     this.name = 'BackupFileError'
   }
@@ -93,7 +95,7 @@ export function unseal(file: Uint8Array, k: BackupKey | null, passphrase: string
   const nonce = header.subarray(23, HEADER)
   let key: Buffer
   const ownSalt = k ? Buffer.from(k.salt, 'base64') : null
-  if (
+  const own = !!(
     k &&
     ownSalt &&
     ownSalt.length === salt.length &&
@@ -102,9 +104,11 @@ export function unseal(file: Uint8Array, k: BackupKey | null, passphrase: string
     k.r === r &&
     k.p === p
   )
-    key = Buffer.from(k.key, 'base64')
+  if (own && k) key = Buffer.from(k.key, 'base64')
   else if (passphrase !== null) {
-    if (logN < 10 || logN > 22 || r < 1 || r > 32 || p < 1 || p > 16) throw new BackupFileError('notOurs')
+    // only the cost this format writes (KDF; a lower N for the tests): a header asking for more is
+    // a file made to hang the restore (scrypt at N=2^22, r=32 wants gigabytes), not a snapshot of ours
+    if (logN < MIN_LOG_N || logN > KDF.logN || r !== KDF.r || p !== KDF.p) throw new BackupFileError('notOurs')
     key = derive(passphrase, salt, logN, r, p)
   } else throw new BackupFileError('needPassphrase')
   try {
@@ -114,12 +118,22 @@ export function unseal(file: Uint8Array, k: BackupKey | null, passphrase: string
     const packed = Buffer.concat([decipher.update(buf.subarray(HEADER, buf.length - TAG)), decipher.final()])
     return gunzipSync(packed)
   } catch {
-    throw new BackupFileError('wrong')
+    // the board's own key matched the file's header, so the file itself is damaged; a typed
+    // passphrase cannot tell a wrong one from a changed file
+    throw new BackupFileError(own ? 'damaged' : 'wrong')
   }
 }
 
-/** Whether a passphrase is the one the key was made from. */
-export function passphraseMatches(passphrase: string, k: BackupKey): boolean {
-  const again = derive(passphrase, Buffer.from(k.salt, 'base64'), k.logN, k.r, k.p)
-  return timingSafeEqual(again, Buffer.from(k.key, 'base64'))
+/**
+ * A passphrase file's first line, whatever wrote it: UTF-8 with or without a BOM, or UTF-16 (what
+ * PowerShell 5.1's `>` writes, told by its BOM or by its zero bytes). The line ending and the
+ * spaces at its end off.
+ */
+export function passphraseFrom(bytes: Buffer): string {
+  let text: string
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) text = bytes.subarray(2).toString('utf16le')
+  else if (bytes[0] === 0xfe && bytes[1] === 0xff) text = Buffer.from(bytes.subarray(2)).swap16().toString('utf16le')
+  else if (bytes.length >= 4 && bytes[1] === 0 && bytes[3] === 0) text = bytes.toString('utf16le')
+  else text = bytes.toString('utf8').replace(/^﻿/, '')
+  return (text.split(/\r?\n/)[0] ?? '').trimEnd()
 }

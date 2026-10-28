@@ -3,7 +3,7 @@
 // backup target sends nothing new in its payload and makes no database.
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { serveBoard } from '../support/board-server.ts'
 import { sandbox } from '../support/sandbox.ts'
@@ -64,4 +64,29 @@ test('a board with a backup target carries the backup’s line in its payload; n
   const { url } = await serveBoard(box, { language: 'en', backup: { folder } })
   const board = await json(await fetch(`${url}/api/board`))
   assert.deepEqual(board.backup, { last: null, problem: null })
+})
+
+test('a server that takes snapshots keeps its fields: a change or a removal says Undo first', async () => {
+  const box = await sandbox()
+  const { url } = await serveBoard(box, { language: 'en' })
+  const post = (body: Record<string, unknown>) =>
+    fetch(`${url}/api/backup`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify(body),
+    })
+  const configFile = join(box.dir, 'config', 'herdr', 'plugins', 'config', 'agent-board', 'config.json')
+  const server = { host: 'example.org', port: 22, admin: { user: 'me', key: '' }, set: '2026-10-29T03:00:00Z' }
+  mkdirSync(join(configFile, '..'), { recursive: true })
+  writeFileSync(configFile, JSON.stringify({ language: 'en', backup: { server } }))
+  for (const body of [
+    { op: 'server', host: 'other.example.org', port: 22, adminUser: 'me', adminKey: '' },
+    { op: 'server', remove: true },
+  ]) {
+    const res = await post(body)
+    assert.equal(res.status, 400, JSON.stringify(body))
+    assert.match(String((await json(res)).error), /Undo first/)
+  }
+  // the same fields again change nothing and are taken
+  assert.equal((await post({ op: 'server', host: 'example.org', port: 22, adminUser: 'me', adminKey: '' })).status, 200)
 })

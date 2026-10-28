@@ -14,7 +14,6 @@ import {
   readFileSync,
   rmSync,
   statSync,
-  writeFileSync,
   writeSync,
 } from 'node:fs'
 import { isAbsolute, join, relative, resolve } from 'node:path'
@@ -47,7 +46,14 @@ export function readKey(): BackupKey | null {
 export async function writeKey(k: BackupKey): Promise<{ ok: true } | { ok: false; error: string }> {
   mkdirSync(backupDir(), { recursive: true })
   const tmp = `${keyFile()}.${process.pid}.tmp`
-  writeFileSync(tmp, JSON.stringify(k), { mode: 0o600 })
+  // on disk before it takes its name: a power cut never leaves an empty key file as "no passphrase"
+  const fd = openSync(tmp, 'w', 0o600)
+  try {
+    writeSync(fd, JSON.stringify(k))
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
   const rights = await protectKey(tmp)
   if (!rights.ok) {
     rmSync(tmp, { force: true })
@@ -182,11 +188,15 @@ export function folderPrune(folder: string, now: number = Date.now()): string[] 
   )
   const gone: string[] = []
   for (const n of names) {
-    const stale = n.endsWith('.part') && now - statSync(join(dir, n)).mtimeMs > 3_600_000
-    if ((SNAPSHOT_NAME.test(n) && !keep.has(n)) || stale) {
-      rmSync(join(dir, n), { force: true })
-      gone.push(n)
-    }
+    // one file at a time: one a sync client or a scanner holds (EBUSY, EPERM), or one gone since
+    // the listing (ENOENT), stays for the next prune and keeps none of the others
+    try {
+      const stale = n.endsWith('.part') && now - statSync(join(dir, n)).mtimeMs > 3_600_000
+      if ((SNAPSHOT_NAME.test(n) && !keep.has(n)) || stale) {
+        rmSync(join(dir, n), { force: true })
+        gone.push(n)
+      }
+    } catch {}
   }
   return gone
 }

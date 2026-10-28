@@ -64,10 +64,12 @@ test('what Look found, a line each, ending with whether Apply can go on', () => 
   const look: BackupLook = {
     ssh: 'OpenSSH_9.6p1',
     include: true,
+    useradd: true,
     user: 'none',
     drop: 'none',
     keys: 'none',
     fence: 'none',
+    blockTorn: false,
     record: false,
     snapshots: { count: 0, kb: 0 },
     freeKb: 2048 * 1024,

@@ -6,7 +6,7 @@ import {
   isBackupKey,
   looksSealed,
   makeKey,
-  passphraseMatches,
+  passphraseFrom,
   seal,
   unseal,
 } from '../../src/core/backup-file.ts'
@@ -37,26 +37,56 @@ test('a sealed snapshot opens with the board key, and with the passphrase alone 
   assert.notDeepEqual(seal(plain, k), sealed)
 })
 
-test('a wrong passphrase, a changed byte anywhere, or a cut file fail as wrong', () => {
+test('a changed byte anywhere or a cut file never opens: damaged with the board’s key, wrong with a passphrase', () => {
   const k = makeKey('correct horse battery', 1, CHEAP)
   const sealed = seal(plain, k)
   assert.equal(
     why(() => unseal(sealed, null, 'wrong horse battery')),
     'wrong',
   )
-  for (const at of [5, 10, 30, 40, sealed.length - 3]) {
+  const cases: [number, string][] = [
+    [2, 'notOurs'], // the magic
+    [4, 'wrong'], // logN 10 -> 11: no longer the board's key, the passphrase tried
+    [5, 'notOurs'], // r 8 -> 9: not a cost this format writes
+    [10, 'wrong'], // the salt
+    [30, 'damaged'], // the nonce, under the board's own key
+    [40, 'damaged'], // the ciphertext
+    [sealed.length - 3, 'damaged'], // the tag
+  ]
+  for (const [at, expected] of cases) {
     const changed = Buffer.from(sealed)
     changed[at] = (changed[at] ?? 0) ^ 1
     assert.equal(
       why(() => unseal(changed, k, 'correct horse battery')),
-      at < 7 ? (at < 4 ? 'notOurs' : 'wrong') : 'wrong',
+      expected,
       `byte ${at}`,
     )
   }
   assert.equal(
     why(() => unseal(sealed.subarray(0, sealed.length - 10), k)),
-    'wrong',
+    'damaged',
   )
+})
+
+test('a header asking for a scrypt cost the format never writes is refused at once, never run', () => {
+  const k = makeKey('correct horse battery', 1, CHEAP)
+  for (const [logN, r, p] of [
+    [22, 8, 1],
+    [22, 32, 16],
+    [17, 32, 1],
+    [9, 8, 1],
+  ] as const) {
+    const forged = Buffer.from(seal(plain, k))
+    forged[4] = logN
+    forged[5] = r
+    forged[6] = p
+    const started = performance.now()
+    assert.equal(
+      why(() => unseal(forged, null, 'correct horse battery')),
+      'notOurs',
+    )
+    assert.ok(performance.now() - started < 200, `${logN} ${r} ${p} ran scrypt`)
+  }
 })
 
 test('a snapshot sealed with another key needs its passphrase; a file that is not one is not ours', () => {
@@ -74,8 +104,17 @@ test('a snapshot sealed with another key needs its passphrase; a file that is no
   )
 })
 
-test('passphraseMatches tells the passphrase the key was made from', () => {
-  const k = makeKey('correct horse battery', 1, CHEAP)
-  assert.ok(passphraseMatches('correct horse battery', k))
-  assert.ok(!passphraseMatches('correct horse batterY', k))
+test('a passphrase file reads the same whatever wrote it: UTF-8 with or without a BOM, UTF-16 as PowerShell 5.1 writes it', () => {
+  const pass = 'correct horse · батарея'
+  const utf16le = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`${pass}\r\n`, 'utf16le')])
+  const utf16be = Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(`${pass}\n`, 'utf16le').swap16()])
+  for (const bytes of [
+    Buffer.from(`${pass}\n`),
+    Buffer.from(`﻿${pass}\r\n`),
+    Buffer.from(`${pass}  \nsecond line`),
+    utf16le,
+    utf16be,
+    Buffer.from(`${pass}\r\n`, 'utf16le'),
+  ])
+    assert.equal(passphraseFrom(bytes), pass)
 })

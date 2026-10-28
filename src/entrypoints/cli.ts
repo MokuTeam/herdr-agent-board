@@ -68,7 +68,7 @@
 //                            the snapshots a target holds; the passphrase (two lines on stdin, never
 //                            an argument); the folder target; a real round trip to a target
 //   board db restore [--target folder|server] [--snapshot <name>] [--file <path>]
-//                            [--passphrase-file <file>] [--replace-file]   the database back as a
+//                            [--passphrase-file <file> | --passphrase-stdin] [--replace-file]   the database back as a
 //                            snapshot has it (the newest of the target when none is named); without
 //                            a target, the snapshots each target holds
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
@@ -1238,7 +1238,15 @@ async function dbCmd(): Promise<void> {
     }
     return console.log(t('backup.cli.restoreUsage'))
   }
-  const passphrase = passFile ? (readFileSync(passFile, 'utf8').split(/\r?\n/)[0] ?? '').trimEnd() : null
+  const { passphraseFrom } = await import('../core/backup-file.ts')
+  let passphrase: string | null = null
+  if (passFile) passphrase = passphraseFrom(readFileSync(passFile))
+  else if (rest.includes('--passphrase-stdin')) {
+    // never typed on a terminal here (it would show): piped, as `board backup passphrase` takes it
+    if (process.stdin.isTTY) throw new Error(t('backup.cli.restoreUsage'))
+    const { readStdin } = await import('../adapters/stdin.ts')
+    passphrase = passphraseFrom(Buffer.from(await readStdin()))
+  }
   const webPort = Number(cfg.port) || 12422
   const r = await backup.restore({
     from: file ? { file: resolve(file) } : { target: target as 'folder' | 'server', ...(name && { name }) },

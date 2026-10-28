@@ -5,10 +5,10 @@
 // one named), as the tunnel's does without a password; sudo's password, when sudo asks one, comes
 // with the request, goes to ssh's stdin once, and is kept nowhere. The board's own drop key is
 // made on the first Look (adapters/backup-store.ts dropKey). Only the local board reaches this.
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { dropKey } from '../adapters/backup-store.ts'
 import { editBackup } from '../adapters/config-file.ts'
-import { generateKey, hostKeyPinned, knownHostsReady, type spawnRemote, sshBin } from '../adapters/ssh.ts'
+import { generateKey, hostKeyPinned, knownHostsReady, publicKeyOf, type spawnRemote, sshBin } from '../adapters/ssh.ts'
 import { backupConfig, type ServerTarget } from '../core/backup.ts'
 import {
   applyScript,
@@ -43,13 +43,31 @@ const PROBE_MS = 30_000
 const MASK = '••••'
 
 /** The drop key's public half, made on first need. */
+/**
+ * The drop key's public half, made on first need. A private key without its .pub keeps its key:
+ * the public half is read back from it (ssh-keygen -y), never a new pair made in its place, which
+ * would lock the board out of the server it is set up on.
+ */
 export async function dropPublicKey(): Promise<{ ok: true; publicKey: string } | { ok: false; error: string }> {
-  if (!existsSync(dropKey()) || !existsSync(`${dropKey()}.pub`)) {
-    const made = await generateKey('agent-board backup', dropKey())
-    if (!made.ok) return made
-    return made
+  if (existsSync(dropKey())) {
+    if (existsSync(`${dropKey()}.pub`)) return { ok: true, publicKey: readFileSync(`${dropKey()}.pub`, 'utf8').trim() }
+    const back = await publicKeyOf(dropKey())
+    return back.ok ? back : { ok: false, error: back.error }
   }
-  return { ok: true, publicKey: readFileSync(`${dropKey()}.pub`, 'utf8').trim() }
+  return generateKey('agent-board backup', dropKey())
+}
+
+/**
+ * A new drop key (the laptop was lost, the key may have leaked): the old pair goes, a new one is
+ * made, and the server takes no snapshot until Apply puts the new key there (the old one stops
+ * working then).
+ */
+export async function newDropKey(): Promise<{ ok: true; publicKey: string } | { ok: false; error: string }> {
+  rmSync(dropKey(), { force: true })
+  rmSync(`${dropKey()}.pub`, { force: true })
+  editBackup({ serverSet: null })
+  resetTarget('server')
+  return generateKey('agent-board backup', dropKey())
 }
 
 export function createBackupServer(d: BackupServerDeps) {
@@ -193,6 +211,13 @@ export function createBackupServer(d: BackupServerDeps) {
         if (!test.ok) return { ok: false, error: test.error ?? t('backup.err.sshFailed', { code: '?' }) }
         const set = editBackup({ serverSet: new Date().toISOString() })
         return set.ok ? { ok: true, test } : { ok: false, error: set.error }
+      }),
+
+    /** A new drop key: Apply puts it on the server. */
+    newKey: (): Promise<ServerAnswer> =>
+      once(async (): Promise<ServerAnswer> => {
+        const made = await newDropKey()
+        return made.ok ? { ok: true } : { ok: false, error: t('backup.err.keygen', { detail: made.error }) }
       }),
 
     isBusy: () => busy,

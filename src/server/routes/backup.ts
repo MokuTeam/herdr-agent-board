@@ -101,6 +101,8 @@ export function backupRoutes(app: BackupApp): Route[] {
             return done({ ...(await app.server.manual()) })
           case 'manualDone':
             return done({ ...(await app.server.confirmManual()) })
+          case 'newKey':
+            return done({ ...(await app.server.newKey()) })
           default:
             return json(400, { ok: false, error: `unknown op ${String(b.op)}` })
         }

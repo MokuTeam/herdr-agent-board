@@ -205,6 +205,7 @@ export function App() {
           settings={settings}
           picks={picks}
           onTodos={() => setTodosOpen(!todosOpen)}
+          onBackup={remotePage() ? undefined : openBackup}
         />
         <Board
           onNewSession={newSession}

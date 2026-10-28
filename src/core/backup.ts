@@ -90,11 +90,19 @@ export const KEEP_ALL_MS = 48 * HOUR
 export const KEEP_DAILY_MS = 60 * DAY
 /** The first of each month (UTC) for two years. */
 export const KEEP_MONTHLY_MS = 730 * DAY
+/** The newest snapshots kept whatever their age: a clock put forward, or a flood of new files, never leaves none. */
+export const KEEP_NEWEST = 10
+/** The newest snapshot this far past now: the clock is wrong, and nothing is pruned. */
+export const FUTURE_MS = DAY
+/** The newest snapshot this far past the one before it: the clock jumped (or the board slept a month), and nothing is pruned this time. */
+export const GAP_MS = 30 * DAY
 
 /**
  * The names the rotation keeps, of `names` (any order; names that are not a snapshot's are left
- * alone and kept): every one of the last 48 hours, one made later than now too (a clock put back),
- * the first of each day for 60 days, the first of each month for two years. The server's drop
+ * alone and kept): the newest KEEP_NEWEST, every one of the last 48 hours, one made later than now
+ * too (a clock put back), the first of each day for 60 days, the first of each month for two years;
+ * and every one while the newest is FUTURE_MS past now (this clock is wrong) or GAP_MS past the
+ * one before it (a clock that jumped forward would take the history). The server's drop
  * script prunes by the same rule (core/backup-server.ts), the tests hold the two together.
  */
 export function rotationKeeps(names: readonly string[], now: number): Set<string> {
@@ -105,10 +113,16 @@ export function rotationKeeps(names: readonly string[], now: number): Set<string
       if (x.at === null) keep.add(x.name)
       return x.at !== null
     })
-    .sort((a, b) => a.at - b.at || (a.name < b.name ? -1 : 1))
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  const newest = dated.at(-1)
+  const before = dated.at(-2)
+  if (newest && (newest.at > now + FUTURE_MS || (before && newest.at - before.at > GAP_MS))) {
+    for (const { name } of dated) keep.add(name)
+    return keep
+  }
   const days = new Set<string>()
   const months = new Set<string>()
-  for (const { name, at } of dated) {
+  dated.forEach(({ name, at }, i) => {
     const age = now - at
     const day = name.slice(0, 8)
     const month = name.slice(0, 6)
@@ -116,9 +130,14 @@ export function rotationKeeps(names: readonly string[], now: number): Set<string
     const firstOfMonth = !months.has(month)
     days.add(day)
     months.add(month)
-    if (age < KEEP_ALL_MS || (firstOfDay && age < KEEP_DAILY_MS) || (firstOfMonth && age < KEEP_MONTHLY_MS))
+    if (
+      i >= dated.length - KEEP_NEWEST ||
+      age < KEEP_ALL_MS ||
+      (firstOfDay && age < KEEP_DAILY_MS) ||
+      (firstOfMonth && age < KEEP_MONTHLY_MS)
+    )
       keep.add(name)
-  }
+  })
   return keep
 }
 
@@ -132,8 +151,8 @@ export const MOST_WAIT_MS = 60 * 60_000
 export const DAILY_HOUR = 3
 /** A target that failed is tried again after these waits, the last one from then on. */
 export const RETRY_MS = [5 * 60_000, 15 * 60_000, 60 * 60_000] as const
-/** A last good backup older than this is a problem. */
-export const STALE_MS = 24 * HOUR
+/** A last good backup older than this is a problem: a day and a half hour past the daily one, so a DST night or a snapshot landing late is not one. */
+export const STALE_MS = 24 * HOUR + 90 * 60_000
 
 /** The latest daily mark at or before `now`: DAILY_HOUR o'clock local, today's or yesterday's. */
 export function lastDailyMark(now: number): number {
@@ -156,6 +175,8 @@ export interface TargetState {
   error: string | null
   /** Failures in a row, for the wait before the next try. */
   failures: number
+  /** The server refused the login (or its key changed): no try until a Test or an Apply goes through. */
+  held?: string | null
 }
 
 export const freshTarget = (): TargetState => ({
@@ -177,11 +198,14 @@ export function targetDue(
   db: { seq: number; lastAt: number; firstUnsavedAt: number | null },
   now: number,
 ): 'changes' | 'daily' | 'retry' | null {
+  if (s.held) return null
   if (s.error !== null && s.lastTry !== null) {
     const wait = RETRY_MS[Math.min(Math.max(s.failures, 1), RETRY_MS.length) - 1] ?? RETRY_MS[0]
     if (now - s.lastTry < wait) return null
   }
-  const behind = db.seq > s.seq
+  // not the database's seq: behind it (changes to take), or ahead of it (a database reset; backupNow
+  // holds that one until it is sent by hand, so an empty file never pushes a good one out)
+  const behind = db.seq !== s.seq
   if (behind) {
     const quiet = now - db.lastAt >= QUIET_MS
     const waited = db.firstUnsavedAt !== null && now - db.firstUnsavedAt >= MOST_WAIT_MS
@@ -200,11 +224,22 @@ export type BackupProblem =
   | { kind: 'never'; target: Target }
   | { kind: 'stale'; target: Target; lastOk: number; hours: number }
   | { kind: 'failing'; target: Target; error: string }
+  | { kind: 'held'; target: Target; error: string }
+  | { kind: 'missing' }
+  | { kind: 'reset'; seq: number; had: number }
+
+/** The highest seq a target holds: what the database had when it was last backed up. */
+export function backedSeq(states: Partial<Record<Target, TargetState>>): number {
+  return Math.max(-1, ...Object.values(states).map(s => s?.seq ?? -1))
+}
 
 /**
- * What is wrong, most important first: only once there is something to back up (`needed`: the
- * database is there). No target; no key; the database damaged; per target, nothing ever went
- * through, the last good one older than STALE_MS, or the last try failed.
+ * What is wrong, most important first. The database gone after a good backup (`missing`), or
+ * holding fewer changes than a backup of it had (`reset`: emptied, or put back from an older
+ * copy): the backups hold the better one, and no scheduled snapshot replaces it until one is sent
+ * by hand. Then, once there is something to back up (`needed`): no target; no key; the database
+ * damaged; per target, held after a refused login, nothing ever went through, the last good one
+ * older than STALE_MS, or the last try failed.
  */
 export function backupProblems(o: {
   needed: boolean
@@ -213,9 +248,14 @@ export function backupProblems(o: {
   damaged: string | null
   states: Partial<Record<Target, TargetState>>
   now: number
+  /** The database's change counter (its journal's last seq); null when it could not be read. */
+  seq?: number | null
 }): BackupProblem[] {
-  if (!o.needed) return []
+  const had = Object.values(o.states).some(s => s?.lastOk)
+  if (!o.needed) return had && activeTargets(o.cfg).length ? [{ kind: 'missing' }] : []
   const out: BackupProblem[] = []
+  const backed = backedSeq(o.states)
+  if (o.seq !== undefined && o.seq !== null && o.seq < backed) out.push({ kind: 'reset', seq: o.seq, had: backed })
   if (o.damaged !== null) out.push({ kind: 'damaged', detail: o.damaged })
   const targets = activeTargets(o.cfg)
   if (!targets.length) out.push({ kind: 'noTarget' })
@@ -225,7 +265,8 @@ export function backupProblems(o: {
     if (s.lastOk === null) out.push({ kind: 'never', target })
     else if (o.now - s.lastOk > STALE_MS)
       out.push({ kind: 'stale', target, lastOk: s.lastOk, hours: Math.floor((o.now - s.lastOk) / HOUR) })
-    if (s.error !== null) out.push({ kind: 'failing', target, error: s.error })
+    if (s.held) out.push({ kind: 'held', target, error: s.held })
+    else if (s.error !== null) out.push({ kind: 'failing', target, error: s.error })
   }
   return out
 }
@@ -253,7 +294,10 @@ export function problemSentence(
   switch (p.kind) {
     case 'noTarget':
     case 'noKey':
+    case 'missing':
       return t(`backup.problem.${p.kind}`)
+    case 'reset':
+      return t('backup.problem.reset', { seq: p.seq, had: p.had })
     case 'damaged':
       return t('backup.problem.damaged', { detail: p.detail })
     case 'never':
@@ -262,6 +306,8 @@ export function problemSentence(
       return t('backup.problem.stale', { target: t(`backup.target.${p.target}`), hours: p.hours })
     case 'failing':
       return t('backup.problem.failing', { target: t(`backup.target.${p.target}`), error: p.error })
+    case 'held':
+      return t('backup.problem.held', { target: t(`backup.target.${p.target}`), error: p.error })
   }
 }
 

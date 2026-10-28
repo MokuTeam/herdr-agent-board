@@ -245,24 +245,28 @@ export function editBackup(b: {
     if (b.folder === null || b.folder.trim() === '') delete section.folder
     else section.folder = b.folder.trim()
   }
-  if (b.server === null) delete section.server
-  else if (b.server !== undefined) {
+  const setNow = isRecord(section.server) && typeof section.server.set === 'string'
+  // a server that takes snapshots keeps its fields: Undo first (or a new host would leave the old
+  // one set up, its user and key still there)
+  if (b.server === null) {
+    if (setNow) return { ok: false, error: t('backup.err.serverSet') }
+    delete section.server
+  } else if (b.server !== undefined) {
     const s = b.server
     const now: Raw = isRecord(section.server) ? { ...section.server } : {}
+    const was = JSON.stringify([now.host, now.port, now.admin])
     const admin: Raw = isRecord(now.admin) ? { ...now.admin } : {}
     if (s.host !== undefined) {
       const host = typeof s.host === 'string' ? s.host.trim() : ''
       if (!host) return { ok: false, error: t('tunnel.err.required', { field: t('tunnel.field.host') }) }
       const problem = fieldProblem('host', host)
       if (problem) return { ok: false, error: problem }
-      if (now.host !== host) delete now.set
       now.host = host
     }
     if (s.port !== undefined) {
       const port = Number(s.port)
       const problem = fieldProblem('sshPort', port)
       if (problem) return { ok: false, error: problem }
-      if (now.port !== port) delete now.set
       now.port = port
     }
     for (const [field, key] of [
@@ -277,6 +281,8 @@ export function editBackup(b: {
     }
     now.admin = admin
     if (!now.host) return { ok: false, error: t('tunnel.err.required', { field: t('tunnel.field.host') }) }
+    if (setNow && JSON.stringify([now.host, now.port, now.admin]) !== was)
+      return { ok: false, error: t('backup.err.serverSet') }
     section.server = now
   }
   if (b.serverSet !== undefined && isRecord(section.server)) {

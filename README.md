@@ -1803,50 +1803,81 @@ client takes off the computer, or both (both is better: two copies in two places
   nothing. Changed later, the snapshots made before still open with the old one.
 - **Folder.** A folder that syncs elsewhere: OneDrive, Google Drive for desktop, Dropbox. The
   snapshots go in its `agent-board-backups`, each written whole before it takes its name. Test
-  writes one, reads it back, opens it and compares it.
+  writes one, reads it back, opens it and compares it. A file the sync client or a scanner holds
+  when the rotation would remove it stays for the next time; the backup still counts.
 - **Server.** Your server over ssh, as a user of its own, `agent-board-backup`, with a key of
   its own (`backup/id_ed25519` in the state folder) that can run one program, the drop script:
-  it puts a snapshot (named by the server's own clock and its hash, never over another one),
-  lists them, gives one back, and removes none but by the rotation. The tunnel's user and key are
-  not used and not touched, and the backup goes over plain ssh to sshd, so it is the same with
-  the board's own Caddy, yours, nginx, or no tunnel at all (with a tunnel, the server and the admin
-  login are filled in from it). **Look** says what the server has, and checks sshd's config with
-  the backup user's fence on a copy (`sshd -t`), changing nothing. **Apply** makes the user, its
-  folder (`/var/lib/agent-board-backup/snapshots`), the drop script
-  (`/etc/agent-board/backup-drop`), the key's line and sshd's fence (its own file in
-  `sshd_config.d`, or between markers at the end of `sshd_config` where sshd has no Include):
+  it puts a snapshot (its size said first: one cut short is not kept; named by the server's own
+  clock and its hash, never over another one), lists them, gives one back, and removes none but by
+  the rotation. Its folder holds 512 MB at most and leaves 512 MB of the disk free. The tunnel's
+  user and key are not used and not touched, and the backup goes over plain ssh to sshd, so it is
+  the same with the board's own Caddy, yours, nginx, or no tunnel at all (with a tunnel, the
+  server and the admin login are filled in from it). Your `~/.ssh/config` is not read (as for the
+  tunnel): no alias, no ProxyJump; the server must be reachable as it is named. **Look** says what
+  the server has, and checks sshd's config with the backup user's fence on a copy (`sshd -t`, and
+  that the fence would be in force, no AllowUsers or AllowGroups leaving the user out), changing
+  nothing. **Apply** makes the user, its folder (`/var/lib/agent-board-backup/snapshots`), its own
+  folder `/etc/agent-board-backup` (the drop script and Apply's record, apart from the tunnel's
+  `/etc/agent-board`), the key's line and sshd's fence (its own file in `sshd_config.d`, or
+  between markers at the end of `sshd_config` where sshd has no Include, the file replaced whole):
   the config checked before it is in place and after, the fence in force for that user, root's
   and your admin's own sshd settings unchanged, then a reload; any failure puts back what the run
-  changed. Then a test snapshot goes through. **Undo** removes what Apply made, and keeps the
-  snapshots. **Do it myself** shows the same script to run as root yourself, then "I ran it"
-  tests it. Look, Apply and Undo log in as your admin with a key (ssh's own, or the one named)
-  and use sudo; sudo's password, when sudo asks one, comes with the click and is kept nowhere.
+  changed, and never removes a folder that holds a snapshot. The record is written as each step is
+  done, and a dropped admin connection does not stop the run, so Undo always finds what was made.
+  A block of the board's in `sshd_config` that is not whole (edited by hand) is never touched.
+  Then a test snapshot goes through. **Undo** removes what Apply made, gives the snapshots' folder
+  to root, and keeps the snapshots. **Do it myself** shows the same script to run as root
+  yourself, then "I ran it" tests it (that first Test pins the server's key when no Look did).
+  Look, Apply and Undo log in as your admin with a key (ssh's own, or the one named) and use sudo;
+  sudo's password, when sudo asks one, comes with the click and is kept nowhere. While the server
+  takes snapshots its fields are locked: Undo first to change it.
 
 **When.** Ten minutes after the last change, and never more than an hour after the first change
 not yet backed up, so a burst of edits makes one snapshot; and once a day at 03:00 even without
 changes. The web board does this; changes made while it is not running are backed up when it
-starts. A target that fails is tried again after 5, 15 and 60 minutes. **Rotation**, on both
-targets: every snapshot of the last 48 hours, the first of each day for 60 days, the first of each
-month for two years.
+starts. A target that fails is tried again after 5, 15 and 60 minutes; one whose login the server
+refuses (or whose key changed) is held, with no more tries (they could get the laptop's address
+banned, the tunnel's with it), until a Test or an Apply goes through. **Rotation**, on both
+targets: the newest ten always, every snapshot of the last 48 hours, the first of each day for 60
+days, the first of each month for two years; nothing is removed while the newest is a day ahead of
+the clock, or a month after the one before it (a clock set wrong would take the history).
 
-**What could be wrong** shows at the top of the panel, on the board, and in `board doctor`: no
-target, no passphrase, a target that failed, or no good backup for 24 hours. A damaged database
-is never sent: it would only push good snapshots out of the rotation.
+**What could be wrong** shows at the top of the panel, as a note in the board's toolbar on every
+page (a phone's too, in a few words, with no error text), and in `board doctor`: no target, no
+passphrase, a target that failed or is held, no good backup for a day and a half hour. A damaged
+database is never sent: it would only push good snapshots out of the rotation. A database that
+holds fewer changes than its last backup (emptied, or an older copy put back by hand), or that is
+gone after a backup, is held too: nothing scheduled sends it, so the backups keep the better one;
+`board backup now` sends it on purpose, or `board db restore` brings the better one back.
 
 **Restore.** `board db restore` lists the snapshots each target holds;
-`board db restore --target server` (or `folder`) brings the newest back, `--snapshot <name>` a
-given one, `--file <path>` one you downloaded. On a new computer, give the passphrase with
-`--passphrase-file <file>`. The database as it was is copied beside it first
-(`board.db.before-restore-<time>`, the last three kept), so a restore can be undone by another;
-the rows are put back while the board runs. A file too damaged for that: stop the web board and
-add `--replace-file`; the damaged file goes to `damaged-<time>/` in the state folder.
+`board db restore --target server` (or `folder`) brings back the newest that opens whole (a newer
+one cut short or changed is passed over and named; one dated more than a day ahead is left out),
+`--snapshot <name>` a given one, `--file <path>` one you downloaded. On a new computer, give the
+passphrase with `--passphrase-file <file>` (UTF-8 or UTF-16, as PowerShell writes it) or pipe it
+with `--passphrase-stdin`. The database as it was is copied first, inside the restore's own
+transaction (`board.db.before-restore-<time>`, the last three kept), so a restore can be undone
+by another; the rows are put back while the board runs, and the file is checked after. A file too
+damaged for that: stop the web board and add `--replace-file`; the damaged file goes to
+`damaged-<time>/` in the state folder.
+
+**A laptop lost or stolen.** Whoever has it has the database itself and the board's key to it,
+and with the drop key can add files to the server's folder and read the sealed ones, but not
+remove one. That is not the whole of it: files added there count for the rotation like yours, so
+enough of them can push real snapshots out (the newest ten always stay, and the folder's cap and
+the disk's reserve bound it). On a computer you still have, with the board on it: Settings →
+Backup… → **New key**, then **Apply**: the server takes the new key and the old one stops working.
+Without one, from any machine with your admin login: `sudo rm /etc/ssh/authorized_keys/agent-board-backup`.
+Then a new passphrase (the old snapshots keep the old one).
 
 **The database itself.** WAL, so several processes (the web board, `board` commands, agents)
 read and write at once; a change waits up to 5 seconds for another one and takes the write lock
 at its start; every change is written with a journal row (who, what, before and after) in the
-same transaction; `synchronous=FULL`, so a change that returned survives a power cut. The page
-cache is held at 2 MB and the file is not mapped into memory: a `board` command costs about 2 MB
-over Bun itself, the web board a few more. A file found damaged is marked
+same transaction; `synchronous=FULL`, so a change that returned survives a power cut. A step of
+its layout runs under the write lock, its copy of the file as it was taken inside it
+(`board.db.before-v<n>-…`, the last three kept), so of several processes opening it at once one
+does it. The page cache is held at 2 MB and the file is not mapped into memory: a `board` command
+costs about 2 MB over Bun itself, the web board a few more. A file found damaged is marked
 (`board.db.damaged.json`) and refused for changes until a restore. Keep the state folder out of
 synced folders (`board doctor` warns): a sync client copies the file mid-write, and WAL's shared
 memory (`board.db-wal`, `board.db-shm` beside it) does not work over a network.
@@ -2839,7 +2870,11 @@ the folder target), `src/adapters/backup-ssh.ts` (ssh to the drop), `src/service
 `src/services/backup-server.ts` (Look, Apply and Undo over the admin connection),
 `src/server/routes/backup.ts`, `web/src/components/backup/`. The drop script's tests run it with
 dash where there is one, else a POSIX sh (`test/support/fake-drop-ssh.ts` stands in for ssh), and
-skip without one.
+skip without one; Look, Apply and Undo run the same way on a fake root (`test/support/fake-root.ts`:
+shims for useradd, sshd, systemctl and the rest, the scripts' paths moved into a temp folder). On
+real sshd, before an Apply on a server of your own: `BOARD_SERVER_IT=1 bun test
+test/integration/backup-server.test.ts --timeout 3600000` (the server-setup harness's Debian and
+Ubuntu servers in Docker Desktop, about ten minutes once the images are built).
 
 Setting up the web server on the server: `src/core/server-look.ts` (Look's two scripts and their
 parsers, into `src/core/server-facts.ts`'s types), `src/core/server-plan.ts` (the case, the plan per

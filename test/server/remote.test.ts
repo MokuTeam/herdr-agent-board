@@ -177,8 +177,8 @@ describe('remote mode on', () => {
     expect((await post('/api/reveal', { key: 's1' })).status).toBe(403)
     expect(await (await post('/api/remote', { op: 'off' })).json()).toEqual({ error: 'local' })
     expect((await phone('/api/remote')).status).toBe(403)
-    // Remote access is set up on the computer only, in either spelling.
-    for (const path of ['/api/access', '/api/%61ccess']) {
+    // Remote access and the backup are set up on the computer only, in either spelling.
+    for (const path of ['/api/access', '/api/%61ccess', '/api/backup', '/api/%62ackup']) {
       const got = await phone(path)
       expect([path, got.status, await got.json()]).toEqual([path, 403, { error: 'local' }])
       const posted = await post(path, { op: 'off' })
