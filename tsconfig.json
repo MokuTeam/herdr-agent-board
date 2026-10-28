@@ -16,5 +16,5 @@
     "checkJs": false,
     "skipLibCheck": true
   },
-  "include": ["src", "web/src", "test"]
+  "include": ["src", "web/src", "hub", "test"]
 }
