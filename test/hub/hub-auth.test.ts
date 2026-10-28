@@ -120,6 +120,19 @@ test('a challenge older than 30 s is dead', async () => {
   assert.equal(h.hub.online(A.pub), false)
 })
 
+test('a challenge older than 30 s is dead by its timestamp, with the timer not fired', async () => {
+  const a = await h.join(A, 'anna')
+  a.close()
+  await a.closed
+  const { c, nonce } = await h.hello(A)
+  h.clock.skew(31_000)
+  c.send({ t: 'auth', sig: await sign(A.pkcs8, authBytes({ hub: h.hubId, nonce, peer: A.pub })) })
+  const err = await c.take('error')
+  assert.equal(err.message, 'the challenge has expired')
+  assert.equal((await c.closed).code, 4400)
+  assert.equal(h.hub.online(A.pub), false)
+})
+
 test('the wrong protocol version, and frames out of order, are 4400', async () => {
   const v = await h.connect()
   v.send({ t: 'hello', v: 2, peer: A.pub, client: 't' })

@@ -20,6 +20,8 @@ import {
 export interface FakeClock extends Clock {
   tick(ms: number): void
   set(t: number): void
+  /** Moves the time without running any timer that came due. */
+  skew(ms: number): void
   timers(): number
 }
 
@@ -56,6 +58,9 @@ export function fakeClock(start = 1_700_000_000_000): FakeClock {
     set: v => {
       t = v
       fire()
+    },
+    skew: ms => {
+      t += ms
     },
     timers: () => timers.size,
   }

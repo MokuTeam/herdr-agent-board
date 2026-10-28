@@ -22,7 +22,7 @@ import {
   validName,
   verify,
 } from '../../src/core/team.ts'
-import type { HubDb, MessageRow, PeerRow } from './db.ts'
+import { DEFAULT_KEEP_DAYS, type HubDb, type MessageRow, MIN_KEEP_DAYS, type PeerRow, type PruneCounts } from './db.ts'
 
 export interface Clock {
   now(): number
@@ -59,6 +59,8 @@ export interface HubOptions {
   db: HubDb
   clock: Clock
   log: (msg: string) => void
+  /** How many days finished rows are kept (default 90, at least 8). */
+  keepDays?: number
 }
 
 export interface Hub {
@@ -68,6 +70,8 @@ export interface Hub {
   online(peer: string): boolean
   /** Expires what is due now and tells the senders; the sweeper calls it every SWEEP_MS. */
   sweep(): number
+  /** Deletes what is older than keep-days, audits the counts when anything went; the sweeper calls it hourly. */
+  prune(): PruneCounts
   stop(): void
 }
 
@@ -76,6 +80,9 @@ export const CHALLENGE_LIVES_MS = 30_000
 
 /** How often due messages are expired. */
 export const SWEEP_MS = 60_000
+
+/** How often rows older than keep-days are deleted. */
+export const PRUNE_MS = 3_600_000
 
 export const CLOSE_BAD_REQUEST = 4400
 export const CLOSE_UNKNOWN = 4401
@@ -94,6 +101,9 @@ const isRecordId = (v: unknown): string | undefined =>
 
 export function createHub(opts: HubOptions): Hub {
   const { db, clock, log } = opts
+  const keepDays = opts.keepDays ?? DEFAULT_KEEP_DAYS
+  if (!Number.isInteger(keepDays) || keepDays < MIN_KEEP_DAYS)
+    throw new Error(`keep-days must be a whole number of ${MIN_KEEP_DAYS} or more, not ${keepDays}`)
   const sessions = new Map<string, Session>()
   const handles = new Set<Conn>()
 
@@ -222,6 +232,25 @@ export function createHub(opts: HubOptions): Hub {
     return gone.length
   }
   const sweeper = clock.setInterval(sweep, SWEEP_MS)
+
+  const prune = (): PruneCounts => {
+    const now = clock.now()
+    const counts = db.prune(now - keepDays * 86_400_000)
+    if (counts.messages + counts.presence + counts.invites + counts.audit > 0) {
+      db.audit(now, null, 'prune', { ...counts, keep_days: keepDays })
+      log(
+        `pruned ${counts.messages} messages, ${counts.presence} presence events, ${counts.invites} invites, ${counts.audit} audit rows`,
+      )
+    }
+    return counts
+  }
+  const pruner = clock.setInterval(() => {
+    try {
+      prune()
+    } catch (e) {
+      log(`prune failed: ${e instanceof Error ? e.message : e}`)
+    }
+  }, PRUNE_MS)
 
   const open: Hub['open'] = conn => {
     handles.add(conn)
@@ -375,8 +404,10 @@ export function createHub(opts: HubOptions): Hub {
     },
     online: peer => sessions.has(peer),
     sweep,
+    prune,
     stop: () => {
       clock.clearInterval(sweeper)
+      clock.clearInterval(pruner)
       for (const c of handles) c.close(1001, 'hub stopping')
     },
   }

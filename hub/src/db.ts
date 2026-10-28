@@ -145,6 +145,24 @@ export type NewMessage = Pick<
 /** The hash before the first audit row. */
 export const AUDIT_GENESIS = '0'.repeat(64)
 
+/** How long finished rows are kept; at least longer than the longest message TTL (7 days). */
+export const DEFAULT_KEEP_DAYS = 90
+export const MIN_KEEP_DAYS = 8
+
+/** Where the audit chain starts after its old rows were pruned: the last row deleted. */
+export interface AuditAnchor {
+  seq: number
+  hash: string
+}
+
+/** How many rows a prune removed, per table. */
+export interface PruneCounts {
+  messages: number
+  presence: number
+  invites: number
+  audit: number
+}
+
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex')
 
 export const auditHash = (prev: string, at: number, peer: string | null, action: string, detail: string): string =>
@@ -210,6 +228,14 @@ export interface HubDb {
   // audit
   audit(at: number, peer: string | null, action: string, detail?: Record<string, unknown>): void
   auditRows(): AuditRow[]
+  /** The hash the first audit row still held must chain from; null while nothing was pruned. */
+  auditAnchor(): AuditAnchor | null
+  /**
+   * Deletes what finished before `cutoff`: acked or expired messages, presence events, used, revoked
+   * or expired invites, and the oldest run of audit rows (their last hash becomes the anchor).
+   * Peers and queued or delivered messages stay.
+   */
+  prune(cutoff: number): PruneCounts
   /** The seq of the first row whose chain does not hold, or null when it all does. */
   auditBroken(): number | null
   close(): void
@@ -245,13 +271,17 @@ export function openDb(path: string): HubDb {
     db.query('INSERT INTO meta (key, value) VALUES (?, ?)').run('hub_id', `hub-${randomBytes(8).toString('hex')}`)
 
   const peerRow = db.query<PeerRow, [string]>('SELECT * FROM peer WHERE id = ?')
+  const readAnchor = (): AuditAnchor | null => {
+    const v = meta('audit_anchor')
+    return v ? (JSON.parse(v) as AuditAnchor) : null
+  }
   const lastAudit = db.query<{ hash: string }, []>('SELECT hash FROM audit ORDER BY seq DESC LIMIT 1')
   const insertAudit = db.query(
     'INSERT INTO audit (at, peer_id, action, detail, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?)',
   )
   const audit: HubDb['audit'] = (at, peer, action, detail = {}) => {
     db.transaction(() => {
-      const prev = lastAudit.get()?.hash ?? AUDIT_GENESIS
+      const prev = lastAudit.get()?.hash ?? readAnchor()?.hash ?? AUDIT_GENESIS
       const d = canonicalJson(detail)
       insertAudit.run(at, peer, action, d, prev, auditHash(prev, at, peer, action, d))
     })()
@@ -367,8 +397,38 @@ export function openDb(path: string): HubDb {
         .run(peer, online ? 'online' : 'offline', at),
     audit,
     auditRows: () => db.query<AuditRow, []>('SELECT * FROM audit ORDER BY seq').all(),
+    auditAnchor: readAnchor,
+    prune: cutoff =>
+      db.transaction((): PruneCounts => {
+        const messages = db
+          .query(
+            "DELETE FROM message WHERE state IN ('acked', 'expired') AND COALESCE(acked_at, expires_at, created_at) < ?",
+          )
+          .run(cutoff).changes
+        const presence = db.query('DELETE FROM presence_event WHERE at < ?').run(cutoff).changes
+        const invites = db
+          .query('DELETE FROM invite WHERE COALESCE(used_at, revoked_at, expires_at) < ?')
+          .run(cutoff).changes
+        // Only a run from the oldest row on, so what is left still chains from the anchor.
+        const keep = db
+          .query<{ seq: number | null }, [number]>('SELECT MIN(seq) AS seq FROM audit WHERE at >= ?')
+          .get(cutoff)
+        const upTo = keep?.seq ?? Number.MAX_SAFE_INTEGER
+        const last = db
+          .query<AuditAnchor, [number]>('SELECT seq, hash FROM audit WHERE seq < ? ORDER BY seq DESC LIMIT 1')
+          .get(upTo)
+        let audit = 0
+        if (last) {
+          audit = db.query('DELETE FROM audit WHERE seq <= ?').run(last.seq).changes
+          db.query('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(
+            'audit_anchor',
+            JSON.stringify({ seq: last.seq, hash: last.hash }),
+          )
+        }
+        return { messages, presence, invites, audit }
+      })(),
     auditBroken: () => {
-      let prev = AUDIT_GENESIS
+      let prev = readAnchor()?.hash ?? AUDIT_GENESIS
       for (const r of db.query<AuditRow, []>('SELECT * FROM audit ORDER BY seq').all()) {
         if (r.prev_hash !== prev || r.hash !== auditHash(prev, r.at, r.peer_id, r.action, r.detail)) return r.seq
         prev = r.hash

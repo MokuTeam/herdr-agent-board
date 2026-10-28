@@ -1,16 +1,16 @@
-// The hub: `bun hub/src/main.ts [--dir D] [--listen host:port] [--allow-public]`. It keeps its
+// The hub: `bun hub/src/main.ts [--dir D] [--listen host:port] [--allow-public] [--keep-days N]`. It keeps its
 // store, its admin socket and its key-less identity (a random hub id) in --dir, by default
 // ~/.local/state/hab-hub, and listens on 127.0.0.1:7443. Anything but loopback and Tailscale
 // addresses needs --allow-public.
 import { chmodSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DEFAULT_DIR, startAdmin } from './admin.ts'
-import { openDb } from './db.ts'
+import { DEFAULT_KEEP_DAYS, MIN_KEEP_DAYS, openDb } from './db.ts'
 import { createHub, realClock } from './hub.ts'
 import { DEFAULT_LISTEN, isPrivateHost, parseListen } from './listen.ts'
 import { startServer } from './server.ts'
 
-const USAGE = 'usage: bun hub/src/main.ts [--dir D] [--listen host:port] [--allow-public]'
+const USAGE = 'usage: bun hub/src/main.ts [--dir D] [--listen host:port] [--allow-public] [--keep-days N]'
 
 function fail(msg: string): never {
   console.error(`agent-board hub: ${msg}`)
@@ -20,14 +20,20 @@ function fail(msg: string): never {
 let dir = DEFAULT_DIR
 let listen = DEFAULT_LISTEN
 let allowPublic = false
+let keepDays = DEFAULT_KEEP_DAYS
 const argv = process.argv.slice(2)
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i]
-  if (a === '--dir' || a === '--listen') {
+  if (a === '--dir' || a === '--listen' || a === '--keep-days') {
     const v = argv[++i]
     if (v === undefined) fail(`${a} needs a value\n${USAGE}`)
     if (a === '--dir') dir = v
-    else listen = v
+    else if (a === '--listen') listen = v
+    else {
+      keepDays = /^\d+$/.test(v) ? Number(v) : Number.NaN
+      if (!(keepDays >= MIN_KEEP_DAYS))
+        fail(`--keep-days is a whole number of ${MIN_KEEP_DAYS} or more (messages live up to 7 days), not ${v}`)
+    }
   } else if (a === '--allow-public') allowPublic = true
   else fail(USAGE)
 }
@@ -41,7 +47,13 @@ mkdirSync(dir, { recursive: true, mode: 0o700 })
 if (process.platform !== 'win32') chmodSync(dir, 0o700)
 const log = (msg: string) => console.log(`${new Date().toISOString()} ${msg}`)
 const db = openDb(join(dir, 'hub.db'))
-const hub = createHub({ db, clock: realClock, log })
+const hub = createHub({ db, clock: realClock, log, keepDays })
+// Once at start too: a hub restarted more often than hourly would otherwise never prune.
+try {
+  hub.prune()
+} catch (e) {
+  log(`prune failed: ${e instanceof Error ? e.message : e}`)
+}
 const server = startServer({ hub, hostname: where.hostname, port: where.port })
 let admin: ReturnType<typeof startAdmin> | undefined
 try {

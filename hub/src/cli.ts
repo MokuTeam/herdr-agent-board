@@ -4,6 +4,7 @@
 //   bun hub/src/cli.ts [--dir D] invite revoke <id>
 //   bun hub/src/cli.ts [--dir D] peers
 //   bun hub/src/cli.ts [--dir D] revoke <peer-id|name>
+//   bun hub/src/cli.ts [--dir D] prune
 import { DEFAULT_DIR, socketPath } from './admin.ts'
 
 const USAGE = `usage: bun hub/src/cli.ts [--dir D] <command>
@@ -11,7 +12,8 @@ const USAGE = `usage: bun hub/src/cli.ts [--dir D] <command>
   invite list                               the invites and their state
   invite revoke <id>                        an invite that is still open
   peers                                     who is a member, who is online
-  revoke <peer-id|name>                     shut a peer out at once`
+  revoke <peer-id|name>                     shut a peer out at once
+  prune                                     delete what is older than the hub's --keep-days now`
 
 /** `90s`, `15m`, `24h` or `7d` as seconds, or null. */
 export function parseTtl(s: string): number | null {
@@ -126,6 +128,15 @@ export async function run(argv: string[], out: Out = console): Promise<number> {
     if (!r) return 1
     if (r.status !== 200) return bad(r)
     out.log(`${r.data.name} (${r.data.id}) revoked`)
+    return 0
+  }
+  if (cmd === 'prune' && rest.length === 1) {
+    const r = await call<{ messages: number; presence: number; invites: number; audit: number }>('POST', '/prune')
+    if (!r) return 1
+    if (r.status !== 200) return bad(r)
+    out.log(
+      `pruned ${r.data.messages} messages, ${r.data.presence} presence events, ${r.data.invites} invites, ${r.data.audit} audit rows`,
+    )
     return 0
   }
   out.error(USAGE)

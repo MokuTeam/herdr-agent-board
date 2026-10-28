@@ -2,6 +2,7 @@
 // 0600, never on the network. Whoever can open the socket may mint invites and revoke peers; the
 // file's permissions are the whole of its auth.
 //   POST /invites {ttl_s?, note?}   GET /invites   POST /invites/:id/revoke
+//   POST /prune                     delete what is older than keep-days now, answers the counts
 //   GET /peers                      POST /peers/:ref/revoke   (ref: peer id or name)
 import { chmodSync, existsSync, unlinkSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -58,6 +59,7 @@ export function startAdmin(opts: { dir: string; db: HubDb; hub: Hub; clock: Cloc
       db.audit(now, null, 'invite_revoke', { id: inv[1] })
       return json({ ok: true })
     }
+    if (req.method === 'POST' && pathname === '/prune') return json(hub.prune())
     if (req.method === 'GET' && pathname === '/peers')
       return json(
         db.peers().map(p => ({

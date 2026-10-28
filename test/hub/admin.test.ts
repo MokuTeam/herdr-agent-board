@@ -38,6 +38,17 @@ d('admin socket', () => {
       ...(body !== undefined && { body: JSON.stringify(body) }),
     })
 
+  test('prune answers the counts, and the cli prints them', async () => {
+    h.db.presenceEvent(A.pub, true, h.clock.now() - 100 * 86_400_000)
+    const r = await api('POST', '/prune')
+    assert.equal(r.status, 200)
+    assert.deepEqual(await r.json(), { messages: 0, presence: 1, invites: 0, audit: 0 })
+    const out: string[] = []
+    const code = await run(['--dir', dir, 'prune'], { log: s => out.push(s), error: s => out.push(s) })
+    assert.equal(code, 0)
+    assert.deepEqual(out, ['pruned 0 messages, 0 presence events, 0 invites, 0 audit rows'])
+  })
+
   test('the socket is mode 0600', () => {
     assert.equal(statSync(socketPath(dir)).mode & 0o777, 0o600)
   })
