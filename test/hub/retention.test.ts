@@ -3,7 +3,7 @@
 import { Database } from 'bun:sqlite'
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type HubDb, MIGRATIONS, MIN_KEEP_DAYS, type NewMessage, openDb } from '../../hub/src/db.ts'
@@ -198,6 +198,35 @@ test('a v1 database opens, keeps its data, and prunes', () => {
     assert.equal(db.schemaVersion(), MIGRATIONS.length)
     assert.equal(db.hubId(), 'hub-0123456789abcdef')
     assert.equal(db.prune(CUT).presence, 1)
+    db.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a message text leaves hub.db and hub.db-wal once it is acked and a prune pass has run', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hab-hub-wal-'))
+  try {
+    const path = join(dir, 'hub.db')
+    const db = openDb(path)
+    const hub = createHub({ db, clock: fakeClock(), log: () => {} })
+    const marker = 'SECRET-MARKER-5f3a9c1e-do-not-keep'
+    const id = msg(db, NOW)
+    db.raw.query('UPDATE message SET payload = ? WHERE id = ?').run(`{"text":"${marker}"}`, id)
+    const holds = (file: string): boolean => {
+      try {
+        return readFileSync(file).includes(marker)
+      } catch {
+        return false
+      }
+    }
+    // While it waits the text is on the disk, as it must be to be delivered.
+    assert.ok(holds(path) || holds(`${path}-wal`))
+    db.markAcked(id, NOW + 1, '{}')
+    hub.prune()
+    assert.equal(holds(path), false)
+    assert.equal(holds(`${path}-wal`), false)
+    hub.stop()
     db.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

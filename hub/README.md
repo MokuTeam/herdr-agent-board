@@ -55,6 +55,13 @@ how many rows it deleted.
 - A queue of messages. A message body is stored only while it waits: it is dropped when the
   recipient acks it or when it expires (`ttl_s`, 24 h by default, clamped to 60 s .. 7 days; a
   sweeper runs every 60 s). The hub keeps ids, sizes and states after that, not text.
+  When the text leaves the disk: the row's payload is cleared at the ack or the expiry, and
+  `secure_delete` makes SQLite overwrite the freed space with zeros. A copy can still sit in the
+  write-ahead log (`hub.db-wal`) until it is checkpointed, so every retention pass (at start, hourly,
+  and on `prune`) ends with `wal_checkpoint(TRUNCATE)`. So the text is gone from `hub.db` and
+  `hub.db-wal` at the next pass after the ack or expiry, at most an hour later; until then it can
+  be read from the files. Backups and snapshots made before that keep it, and so does disk
+  free space that was written before `secure_delete` was on (this version's first run).
 - An audit log whose rows are chained by hash (`prev_hash`, `hash`): joins, revokes, invites, sends,
   acks, expiries, prunes. Ids and counts only, never a body. There is no screen for it; read the
   `audit` table in `hub.db`.

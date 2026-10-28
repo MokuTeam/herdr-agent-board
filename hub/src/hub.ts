@@ -238,6 +238,7 @@ export function createHub(opts: HubOptions): Hub {
   const prune = (): PruneCounts => {
     const now = clock.now()
     const counts = db.prune(now - keepDays * 86_400_000)
+    db.checkpoint()
     if (counts.messages + counts.presence + counts.invites + counts.audit > 0) {
       db.audit(now, null, 'prune', { ...counts, keep_days: keepDays })
       log(

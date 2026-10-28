@@ -238,6 +238,8 @@ export interface HubDb {
    * Peers and queued or delivered messages stay.
    */
   prune(cutoff: number): PruneCounts
+  /** Folds the write-ahead log into hub.db and truncates it, so no old page of it outlives the pass. */
+  checkpoint(): void
   /** The seq of the first row whose chain does not hold, or null when it all does. */
   auditBroken(): number | null
   close(): void
@@ -266,6 +268,8 @@ export function openDb(path: string): HubDb {
   const db = new Database(path, { create: true, strict: true })
   if (path !== ':memory:') db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA synchronous = NORMAL')
+  // A dropped payload is overwritten with zeros, not just unlinked (the text must not stay in free pages).
+  db.exec('PRAGMA secure_delete = ON')
   migrate(db)
   const meta = (k: string) =>
     db.query<{ value: string }, [string]>('SELECT value FROM meta WHERE key = ?').get(k)?.value
@@ -409,6 +413,9 @@ export function openDb(path: string): HubDb {
     audit,
     auditRows: () => db.query<AuditRow, []>('SELECT * FROM audit ORDER BY seq').all(),
     auditAnchor: readAnchor,
+    checkpoint: () => {
+      db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    },
     prune: cutoff =>
       db.transaction((): PruneCounts => {
         const messages = db
