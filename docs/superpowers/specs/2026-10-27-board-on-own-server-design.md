@@ -171,6 +171,29 @@ Not built in this step. Written down so the server mode leaves room for it.
 - **How the local board reaches `agent`**: the builder of that step decides between the password
   each time and a key the install adds, limited to the sync's own command.
 
+### As built (after the sketch above)
+
+- **The password each time.** The sync logs in as the server setup does (the admin's login, the
+  server's key pinned by its Look, the password typed in the panel and sent with each request,
+  sudo's alone first); root reads the board's user and home from the install's record and runs
+  the sync program (`entrypoints/profile-sync.ts`) as that user with `setsid -w runuser`: every
+  file on the server's side is written by `agent`. A key limited to the sync would need the install
+  to manage a second key in `agent`'s authorized_keys and a forced command parsing its arguments;
+  left out.
+- **Where the hashes live.** Each side, in the board's state folder: `profile-sync/<other side>.json`
+  (each file's hash after the last sync, by profile), and `profile-sync/hashes.json` (hashes kept by
+  size and time, so an unchanged file is not read again). The target records as it writes; the
+  source once everything has arrived, so a sync cut short is sent again, not met as conflicts.
+- **The transport.** One ssh per step (probe, sudo's check, scan; then apply, or pack and record),
+  frames packed with gzip both ways on ssh's stdin and stdout.
+- **Merged files** are `.claude.json`, `settings.json` and `history.jsonl`; they never conflict (each
+  side keeps its own part). The board's own hooks and status line, herdr's hook and the board's
+  skill for the agents (`skills/herdr-agents`) are each side's install's. A profile made on the
+  server gets the board's hooks by its install action; the owner then signs in there (`/login`).
+- **Limits.** A hook or MCP server removed on one side stays on the other (merges only add); a
+  worktree is paired only by the path the owner gives; secrets are found by their known shapes
+  (tokens, keys, JWTs), not every password a text may hold.
+
 ## Later: each agent's own browser, watched and taken over from the board (decided with the owner)
 
 Not built in this step. On the server only.
