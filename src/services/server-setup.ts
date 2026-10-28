@@ -24,9 +24,11 @@
 // and an Apply that sends the board's install with the local checkout's pack over the same login
 // and streams its output into the view. Its setup link is kept apart from that output, in memory
 // only, until the panel lets it go; web.log has only that the install started and how it ended.
+// That board answers on a domain of its own (`tunnel.install.domain`), never the tunnel's: its Look
+// and Apply need the server and the login alone of the tunnel's settings, and change none of them.
 import { gzipSync } from 'node:zlib'
 import { type BoardPack, boardPack } from '../adapters/board-pack.ts'
-import { editTunnel, editTunnelAdmin, setTunnelSetup } from '../adapters/config-file.ts'
+import { editTunnel, editTunnelAdmin, editTunnelInstall, setTunnelSetup } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import type { RemoteRun, spawnRemote } from '../adapters/ssh.ts'
 import { lang, t } from '../core/lang.ts'
@@ -127,6 +129,11 @@ export interface ServerSetup {
   install(o: Passwords & { plan?: unknown; docker?: unknown }): Promise<Answer>
   /** Path B: the setup link let go (the panel closed). */
   installForget(): Answer
+  /**
+   * Path B's domain (`tunnel.install.domain`), the board on the server's own: `{ domain }`, '' or
+   * null clearing it; 409 with `field` and `error` when it is no domain or the tunnel's own.
+   */
+  installDomain(body: { domain?: unknown }): Answer
 }
 
 /** What Look, Apply and Undo carry of the passwords: the login's (sudo's too), and sudo's own. */
@@ -167,6 +174,13 @@ const MASK = '••••'
 /** How a run travels in its launch (core/server-script.ts launchScript): gzip, then base64. */
 const PACK = (text: string): string => gzipSync(text).toString('base64')
 const CASES: readonly SetupCase[] = ['1', '1b', '2', '3a', '3b', '4a', '4b']
+/** What the tunnel's Look, Apply and Undo need of its settings; path B's need the server alone. */
+type Needed = 'host' | 'user' | 'socket' | 'domain'
+const TUNNEL_NEEDS: readonly Needed[] = ['host', 'user', 'socket', 'domain']
+const INSTALL_NEEDS: readonly Needed[] = ['host']
+
+/** A domain as the board takes one (core/server-install.ts, --domain): trimmed, lowercased, a trailing dot dropped. */
+const domainOf = (v: string): string => v.trim().toLowerCase().replace(/\.$/, '')
 
 type Fields = Record<string, unknown>
 type Setup = NonNullable<ServerView['setup']>
@@ -270,6 +284,11 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
   const tunnel = (): Fields => (isRecord(cfg.tunnel) ? cfg.tunnel : {})
   const conf = (): TunnelConfig => tunnelConfig(cfg.tunnel)
   const admin = (): Admin => adminConfig(tunnel().admin)
+  /** Path B's domain as config.json has it (`tunnel.install.domain`), taken as a domain is; '' without one. */
+  const installDomainOf = (): string => {
+    const i = tunnel().install
+    return isRecord(i) && typeof i.domain === 'string' ? domainOf(i.domain) : ''
+  }
   const changed = (): void => d.onChange()
   const hintText = (h: AdminHint): string => t(`server.hint.${h}`, { admin: admin().user || 'root' })
 
@@ -347,13 +366,16 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     return refused(h, detail, more)
   }
 
-  /** What Look, Apply and Undo need before any ssh: the admin's fields, the tunnel's server and pair, ssh itself. */
-  function ready(): Answer | { bin: string; c: TunnelConfig; a: Admin } {
+  /**
+   * What Look, Apply and Undo need before any ssh: the admin's fields, the tunnel's server and pair
+   * (path B: the server alone), ssh itself.
+   */
+  function ready(needs: readonly Needed[] = TUNNEL_NEEDS): Answer | { bin: string; c: TunnelConfig; a: Admin } {
     const a = admin()
     const problem = adminProblems(a)[0]
     if (problem) return { status: 409, body: { ok: false, hint: null, field: problem.field, error: problem.message } }
     const c = conf()
-    for (const field of ['host', 'user', 'socket', 'domain'] as const) {
+    for (const field of needs) {
       const value = c[field]
       const message =
         value === '' ? t('tunnel.err.required', { field: t(`tunnel.field.${field}`) }) : fieldProblem(field, value)
@@ -437,6 +459,13 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     return { hint: why, detail }
   }
 
+  /** Why path B's domain will not do: none, no domain, or the tunnel's own; null when it does. */
+  function installProblem(domain: string): string | null {
+    if (domain === '') return t('install.err.domainNeeded')
+    if (fieldProblem('domain', domain)) return t('install.err.domain')
+    return domain === domainOf(conf().domain) ? t('install.err.sameDomain', { domain }) : null
+  }
+
   /** The server's key for the view once a login met it: its fingerprint, and whether this Look pinned it. */
   async function keyMet(pinnedNow: boolean): Promise<ServerView['hostKey']> {
     const fingerprint = await d.hostKeyFingerprint()
@@ -448,7 +477,7 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     if ('status' in pw) return pw
     const { password, sudoPassword } = pw
     if (busy) return refused('busy', null)
-    const to = ready()
+    const to = ready(kind === 'install' ? INSTALL_NEEDS : TUNNEL_NEEDS)
     if ('status' in to) return to
     const { c } = to
     busy = true
@@ -468,6 +497,10 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     install = null
     changed()
     try {
+      // path B answers on a domain of its own, never the tunnel's: one that will do, before anything else
+      const installDomain = kind === 'install' ? installDomainOf() : ''
+      const why = kind === 'install' ? installProblem(installDomain) : null
+      if (why) return stopLook(null, why)
       // path B sends the local checkout: there must be one
       const pack = kind === 'install' ? await (d.pack ?? boardPack)() : null
       if (gone()) return cancelled()
@@ -502,7 +535,7 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       if (gone()) return cancelled()
       const input: LookInput =
         kind === 'install'
-          ? { user: BOARD_USER, socket: BOARD_SOCKET, domain: c.domain, server: true }
+          ? { user: BOARD_USER, socket: BOARD_SOCKET, domain: installDomain, server: true }
           : {
               user: c.user,
               socket: c.socket,
@@ -527,7 +560,8 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       const f = readServerFacts(r1, two)
       if (!f) return stopLook('unreadable', null)
       const typed = (probe.askpass?.answered ?? 0) > 0
-      if (kind === 'install') return pack ? installPlan(f, c, to.a, read.mode, pack, typed) : stopLook(null, null)
+      if (kind === 'install')
+        return pack ? installPlan(f, installDomain, to.a, read.mode, pack, typed) : stopLook(null, null)
       return planFrom(f, c, to.a, read.mode, kind, key, typed)
     } catch (err) {
       // a plan refused (what the panel wants failed its check in core/server-plan.ts): nothing
@@ -586,16 +620,16 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     return ok()
   }
 
-  /** Path B's plan: the web server's for the server mode's target, and the pack its Apply sends. */
+  /** Path B's plan: the web server's for the server mode's target at its own domain, and the pack its Apply sends. */
   function installPlan(
     f: ServerFacts,
-    c: TunnelConfig,
+    domain: string,
     a: Admin,
     mode: SudoMode,
     pack: BoardPack,
     password: boolean,
   ): Answer {
-    const w: Wanted = { ...serverWanted(c.domain, BOARD_USER), ...(d.acme && { acme: d.acme }) }
+    const w: Wanted = { ...serverWanted(domain, BOARD_USER), ...(d.acme && { acme: d.acme }) }
     const made = buildPlan(f, w, { id: d.newId(), docker: false })
     facts = f
     // a run of the web server's that did not finish: its Undo is the install's own (--undo)
@@ -622,10 +656,14 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     if (!l?.pack || target !== 'install' || typeof o.plan !== 'string' || o.plan !== l.plan.id)
       return refused('lookAgain', null)
     if (l.plan.ticks.includes('docker') && o.docker !== true) return refused(null, t('server.err.docker'))
-    const to = ready()
+    const to = ready(INSTALL_NEEDS)
     if ('status' in to) return to
-    if (to.c.domain !== l.wanted.domain || JSON.stringify(to.a) !== JSON.stringify(l.admin))
+    // its domain or the admin changed since Look: its plan is not theirs
+    const domain = installDomainOf()
+    if (domain !== l.wanted.domain || JSON.stringify(to.a) !== JSON.stringify(l.admin))
       return refused('lookAgain', null)
+    const why = installProblem(domain)
+    if (why) return refused(null, why)
     if (l.password && password === null) return refused('loginPassword', null)
     const sudoFrom = sudoFromOf(l.mode, password, sudoPassword)
     if (l.mode === 'password' && sudoFrom === null) return refused('needPassword', null)
@@ -930,6 +968,7 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       hostKey,
       target,
       install,
+      installDomain: installDomainOf(),
     }),
 
     admin(body) {
@@ -969,6 +1008,27 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       changed()
       return ok()
     },
+
+    installDomain(body) {
+      const given = body.domain
+      if (given === undefined) return ok()
+      // a domain as the board takes one; '' or null clears it
+      const domain = typeof given === 'string' ? domainOf(given) : given === null ? '' : null
+      const why = domain === null ? t('install.err.domain') : domain === '' ? null : installProblem(domain)
+      if (domain === null || why) return { status: 409, body: { ok: false, hint: null, field: 'domain', error: why } }
+      const r = editTunnelInstall({ domain })
+      if (!r.ok) return refused(null, r.error)
+      mirror(x => {
+        const i: Fields = isRecord(x.install) ? { ...x.install } : {}
+        if (domain === '') delete i.domain
+        else i.domain = domain
+        if (Object.keys(i).length) x.install = i
+        else delete x.install
+      })
+      changed()
+      return ok()
+    },
+
     undoLook: o => lookAt(o, 'undo'),
     apply: o => runPlan(o, 'look'),
     undo: o => runPlan(o, 'undo'),

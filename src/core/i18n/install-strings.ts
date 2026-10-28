@@ -89,6 +89,10 @@ export const INSTALL_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'install.panel.intro':
       'herdr, Claude Code and the board run on the server as a user of their own, and the board answers at its address there, with its own login. The board on this computer stays as it is.',
     'install.panel.look': 'Install the board on this server',
+    'install.panel.domain': 'Address of the board on the server',
+    'install.panel.domainPlaceholder': 'workbench.example.com',
+    'install.panel.domainNote': 'A domain of its own: the tunnel’s address stays the board’s on this computer.',
+    'install.panel.needDomain': 'Type the address of the board on the server first.',
     'install.panel.from': 'The board’s code: {from}.',
     'install.panel.noCheckout':
       'This board is not a git checkout, so it has no code of its own to send: install it on the server with its one line (server-install.sh).',
@@ -98,6 +102,12 @@ export const INSTALL_STRINGS: Record<Lang, Record<string, string | string[]>> = 
       'The setup link: open it once to set the board’s login there. It is shown only here, once: it is gone when this panel closes.',
     'install.panel.done': 'Installed: https://{domain}',
     'install.panel.failed': 'The install stopped (why is above). What was done stays; Install again to go on.',
+    'install.err.domainNeeded':
+      'The board on the server needs an address of its own (e.g. workbench.example.com): type it above Install the board on this server.',
+    'install.err.domain':
+      'Address of the board on the server: a host name in lowercase letters, e.g. workbench.example.com, without https://, a path or a port',
+    'install.err.sameDomain':
+      '{domain} is the tunnel’s address, the board’s on this computer: the board on the server needs a domain of its own (e.g. workbench.example.com).',
   },
   ru: {
     'install.will.theirCaddy': 'Добавить {domain} в ваш Caddy и передать ему доску.',
@@ -184,6 +194,10 @@ export const INSTALL_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'install.panel.intro':
       'herdr, Claude Code и доска работают на сервере от своего пользователя, и доска отвечает там по своему адресу, со своим входом. Доска на этом компьютере остаётся как есть.',
     'install.panel.look': 'Установить доску на этот сервер',
+    'install.panel.domain': 'Адрес доски на сервере',
+    'install.panel.domainPlaceholder': 'workbench.example.com',
+    'install.panel.domainNote': 'Свой домен: адрес туннеля остаётся за доской на этом компьютере.',
+    'install.panel.needDomain': 'Сначала введите адрес доски на сервере.',
     'install.panel.from': 'Код доски: {from}.',
     'install.panel.noCheckout':
       'Эта доска не git-копия, своего кода для отправки у неё нет: установите её на сервер одной строкой (server-install.sh).',
@@ -194,5 +208,11 @@ export const INSTALL_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'install.panel.done': 'Установлено: https://{domain}',
     'install.panel.failed':
       'Установка остановилась (причина выше). Сделанное остаётся; нажмите «Установить» снова, чтобы продолжить.',
+    'install.err.domainNeeded':
+      'Доске на сервере нужен свой адрес (например, workbench.example.com): введите его над кнопкой «Установить доску на этот сервер».',
+    'install.err.domain':
+      'Адрес доски на сервере: имя хоста строчными буквами, например workbench.example.com, без https://, пути и порта',
+    'install.err.sameDomain':
+      '{domain} — адрес туннеля, доски на этом компьютере: доске на сервере нужен свой домен (например, workbench.example.com).',
   },
 }

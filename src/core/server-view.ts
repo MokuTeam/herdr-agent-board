@@ -62,6 +62,11 @@ export interface ServerView {
   target?: 'tunnel' | 'install'
   /** Path B: the board's code it sends, the install's output, the setup link (in memory only), its exit. */
   install?: InstallView | null
+  /**
+   * Path B: the domain of the board installed on the server (config.json's `tunnel.install.domain`,
+   * never the tunnel's own); '' while none is set. None: a board from before it.
+   */
+  installDomain?: string
 }
 
 export interface InstallView {
@@ -146,6 +151,7 @@ export function isServerView(v: unknown): v is ServerView {
     (v.testAfter === null || Array.isArray(v.testAfter)) &&
     (v.hostKey === null || isHostKey(v.hostKey)) &&
     (v.target === undefined || v.target === 'tunnel' || v.target === 'install') &&
-    (v.install === undefined || v.install === null || isInstall(v.install))
+    (v.install === undefined || v.install === null || isInstall(v.install)) &&
+    (v.installDomain === undefined || isText(v.installDomain))
   )
 }

@@ -418,6 +418,8 @@ test('nothing looked at: the login (root by default), its password, a key file f
     ['admin-user', '', 'admin', 'root', 'Login'],
     ['login-password', 'password', '', '', 'Password'],
     ['admin-key', '', '', 'the ssh agent and ~/.ssh keys', 'Key file'],
+    // the board installed on the server answers on an address of its own, not the tunnel's
+    ['install-domain', '', '', 'workbench.example.com', 'Address of the board on the server'],
   ])
   expect(textsOf(part, 'access-kept')).toEqual([NOTE])
   // The login's fields open; the key file and "Do it myself" folded.
@@ -454,7 +456,7 @@ test('nothing looked at: the login (root by default), its password, a key file f
   // Without the board its fields and buttons do nothing.
   const off = partOf(withServer({}), { canEdit: false })
   const controls = findAll(off, el => (el.tag === 'input' || el.tag === 'button') && !hasClass(el, 'access-copy'))
-  expect(controls.length).toBe(5)
+  expect(controls.length).toBe(6)
   expect(controls.filter(el => !el.attrs.has('disabled'))).toEqual([])
 })
 
@@ -1428,7 +1430,8 @@ test('the texts in Russian differ, and every one is there', () => {
 
 test('Install the board on this server (path B): its own plan, then its output, the setup link apart, how it ended', () => {
   const SHA = '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d'
-  const domain = READY.tunnel.settings.domain
+  // its own address, not the tunnel's (board.example.com)
+  const domain = 'workbench.example.com'
   const w = serverWanted(domain, 'agent')
   const facts = factsFor('1')
   const built = buildPlan(facts, w, { id: 'i1', docker: false })
@@ -1442,9 +1445,14 @@ test('Install the board on this server (path B): its own plan, then its output, 
     plan,
     target: 'install',
     install,
+    installDomain: domain,
   })
   const part = partOf(looked)
   const shown = shownText(part)
+  // the web server's steps for its own address
+  const will = textsOf(part, 'access-will-line').join(' ')
+  expect(will).toContain(domain)
+  expect(will).not.toContain(READY.tunnel.settings.domain)
   expect(shown).toContain('The board’s code: a copy of 1a2b3c4 from your computer, with its local changes.')
   // Look found no user agent: the install makes it
   expect(textsOf(part, 'access-will-line').slice(0, 3)).toEqual([
@@ -1473,4 +1481,93 @@ test('Install the board on this server (path B): its own plan, then its output, 
   expect(textsOf(done, 'access-pre').join('\n')).not.toContain('#code=')
   // in Russian too
   expect(shownText(partOf(looked, { lang: 'ru' }))).toContain('Код доски: копия 1a2b3c4 с вашего компьютера')
+})
+
+test('the address of the board on the server: its own field, saved when left as server-install-domain; refused, the board’s words under it and what was typed kept', async () => {
+  const live = liveServer(withServer({}))
+  expect(live.pick('input[name="install-domain"]').value).toBe('')
+  expect(live.text('.access-install-domain .access-install-note')).toEqual([
+    'A domain of its own: the tunnel’s address stays the board’s on this computer.',
+  ])
+  await live.type('install-domain', ' WorkBench.Example.com ')
+  await live.leave('install-domain')
+  expect(live.calls).toEqual([['server-install-domain', { domain: 'workbench.example.com' }]])
+  // never one of the tunnel's settings
+  expect(live.calls.map(c => c[0])).not.toContain('tunnel')
+  // shown as the board has it; left again unchanged: nothing sent
+  const saved = liveServer(withServer({ installDomain: 'workbench.example.com' }))
+  expect(saved.pick('input[name="install-domain"]').value).toBe('workbench.example.com')
+  await saved.leave('install-domain')
+  expect(saved.calls).toEqual([])
+  // refused: the board's words under the field, what was typed stays; put right, they go
+  const error = 'board.example.com is the tunnel’s address, the board’s on this computer'
+  let refuse = true
+  const refused = liveServer(withServer({}), op =>
+    op === 'server-install-domain' && refuse ? { ok: false, field: 'domain', error } : { ok: true },
+  )
+  await refused.type('install-domain', 'board.example.com')
+  await refused.leave('install-domain')
+  expect(refused.pick('input[name="install-domain"]').value).toBe('board.example.com')
+  expect(refused.text('.access-install-domain .access-problem')).toEqual([error])
+  refuse = false
+  await refused.type('install-domain', 'workbench.example.com')
+  await refused.leave('install-domain')
+  expect(refused.text('.access-install-domain .access-problem')).toEqual([])
+  // in Russian
+  const inRu = partOf(withServer({}), { lang: 'ru' })
+  expect(find(inRu, el => el.attrs.get('name') === 'install-domain').attrs.get('aria-label')).toBe(
+    'Адрес доски на сервере',
+  )
+})
+
+test('Install the board on this server asks for its own address first; with it, Look goes with no address of the tunnel’s needed when the server is there', async () => {
+  // none: said, and nothing sent
+  const none = liveServer(withServer({}))
+  await none.click('Install the board on this server')
+  expect(none.calls).toEqual([])
+  expect(none.text('.access-look-why')).toEqual(['Type the address of the board on the server first.'])
+  // Set up the server, the tunnel's, goes as before
+  await none.click('Set up the server')
+  expect(none.calls).toEqual([['server-look', {}]])
+  // set: the install's Look
+  const set = liveServer(withServer({ installDomain: 'workbench.example.com' }))
+  await set.click('Install the board on this server')
+  expect(set.calls).toEqual([['server-install-look', {}]])
+  // typed and left just before the click: the Look waits for its save, and goes on once the board took it
+  const saves = savesTracker()
+  let answer: (reply: Record<string, unknown>) => void = () => {}
+  const typed = liveServer(withServer({}), undefined, { saves })
+  void saves.track(new Promise(resolve => (answer = resolve)), { install: { domain: 'workbench.example.com' } })
+  await typed.click('Install the board on this server')
+  expect(typed.calls).toEqual([])
+  answer({ ok: true })
+  await typed.idle()
+  expect(typed.calls).toEqual([['server-install-look', {}]])
+  expect(typed.text('.access-look-why')).toEqual([])
+  // the tunnel without its address yet, the server there: the install needs no address of the tunnel's
+  const noAddress = {
+    ...READY,
+    tunnel: { ...READY.tunnel, settings: { ...READY.tunnel.settings, domain: '' } },
+  }
+  const server = liveServer(withServer({ installDomain: 'workbench.example.com' }, noAddress))
+  await server.click('Install the board on this server')
+  expect(server.calls).toEqual([['server-install-look', {}]])
+  // while Set up the server still asks for it
+  await server.click('Set up the server')
+  expect(server.calls).toEqual([['server-install-look', {}]])
+  expect(server.text('.access-look-why')).toEqual(['Type the board’s address first.'])
+  // nor the server: the tunnel's address fills it in, as for Set up the server
+  const nothing = {
+    ...READY,
+    tunnel: { ...READY.tunnel, settings: { ...READY.tunnel.settings, domain: '', host: '' } },
+  }
+  const bare = liveServer(withServer({ installDomain: 'workbench.example.com' }, nothing))
+  await bare.click('Install the board on this server')
+  expect(bare.calls).toEqual([])
+  expect(bare.text('.access-look-why')).toEqual(['Type the board’s address first.'])
+  // the model: what the board took of the install's address, only once it was saved
+  const took = savesTracker()
+  expect(await took.settle()).toEqual({ tunnel: {}, admin: {} })
+  void took.track(Promise.resolve({ ok: true }), { install: { domain: 'workbench.example.com' } })
+  expect(await took.settle()).toEqual({ tunnel: {}, admin: {}, install: { domain: 'workbench.example.com' } })
 })

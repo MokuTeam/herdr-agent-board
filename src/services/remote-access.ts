@@ -282,13 +282,16 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
           return d.server.undo(b)
         case 'server-cancel':
           return d.server.cancel()
-        // The board installed on the server itself (path B): its Look, its run, its link let go
+        // The board installed on the server itself (path B): its Look, its run, its link let go, and
+        // its domain (its own, never among the tunnel's settings)
         case 'server-install-look':
           return d.server.installLook(b)
         case 'server-install':
           return d.server.install(b)
         case 'server-install-forget':
           return d.server.installForget()
+        case 'server-install-domain':
+          return d.server.installDomain(b)
         default:
           return malformed(`unknown op ${String(b.op)}`)
       }

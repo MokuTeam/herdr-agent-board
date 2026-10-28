@@ -9,6 +9,8 @@
 // forgotten once a run took it, asked for again when the keys will not do), the login's fields
 // folded away. sudo's own field shows only when an answer asks for it. For a server the
 // board does not do, why in one line, and the steps by hand folded (DoItMyself.tsx, Snippets.tsx).
+// "Install the board on this server" (path B) has an address of its own above its button, saved as
+// the login's fields are, apart from the tunnel's settings.
 // "Do it myself (one command)" is OneCommand.tsx. Its words are models/server-setup.ts's. What it
 // keeps while the panel is open (SetupState: the passwords, the ticks, what is open) is
 // ServerSetup's own state, drawn anew as the panel closes; the board's side is the `server-*` ops
@@ -169,10 +171,18 @@ export function ServerSetupBody({
   const busy = running || phase === 'looking'
   // The last Look was "Install the board on this server" (path B): its plan, its run, its link.
   const installing = s.target === 'install'
-  // Asked without the board's address: said until it is there.
+  // Path B's own address (the board on the server's), apart from the tunnel's.
+  const installDomain = s.installDomain ?? ''
+  // Asked without the board's address, or the install without its own: said until it is there.
   const noDomain = view.tunnel.settings.domain === ''
   const needDomain = t('server.panel.needDomain')
-  const lookWhy = !view.tunnel.ssh ? hintText('noSsh', t) : state.missing && noDomain ? needDomain : ''
+  const lookWhy = !view.tunnel.ssh
+    ? hintText('noSsh', t)
+    : state.missing && noDomain
+      ? needDomain
+      : state.installAsked && installDomain === ''
+        ? t('install.panel.needDomain')
+        : ''
   const canLook = canEdit && !busy && view.tunnel.ssh !== null
   const failed = failedOf(progress)
   const hint = hintLine(s.hint, t, admin) || (failed ? failHint(failed.id, t) : '')
@@ -198,11 +208,13 @@ export function ServerSetupBody({
    * What Look and the one command need first: the saves on their way ended; the board's address
    * there (else said so: 'address'); the server filled in from it and the board's own login on the
    * server, when not set; the board's own key made, when there is none. What the board took, or null.
+   * The install (`forInstall`) logs in to the server alone: the board's address only fills that in,
+   * so it is needed only while the server is not there.
    */
-  async function prepare(withKey = true): Promise<Took | 'address' | null> {
+  async function prepare(withKey = true, forInstall = false): Promise<Took | 'address' | null> {
     const took = await tracker.settle()
     const c = { ...view.tunnel.settings, ...took.tunnel } as TunnelConfig
-    if (c.domain === '') {
+    if (c.domain === '' && !(forInstall && c.host !== '')) {
       onState({ missing: true })
       return 'address'
     }
@@ -234,11 +246,15 @@ export function ServerSetupBody({
   }
 
   /**
-   * Install the board on this server (path B): the same address, login and password; no key of
-   * the board's needed (the server mode has no tunnel). Then the install's own Look.
+   * Install the board on this server (path B): its own address first (else said so, and nothing
+   * sent), then the same server, login and password; no key of the board's needed (the server mode
+   * has no tunnel). Then the install's own Look.
    */
   async function installLook(): Promise<void> {
-    const took = await prepare(false)
+    const saved = await tracker.settle()
+    if ((saved.install?.domain ?? installDomain) === '') return onState({ installAsked: true })
+    if (state.installAsked) onState({ installAsked: false })
+    const took = await prepare(false, true)
     if (!took || took === 'address') return
     if ((took.admin.user ?? s.admin.user) === '') {
       const user = DEFAULT_LOGIN
@@ -342,6 +358,32 @@ export function ServerSetupBody({
     if (reply?.ok !== true) input.value = shownAdmin(field)
   }
 
+  /**
+   * The address of the board on the server left: what changed goes to the board, which the install's
+   * Look waits for; refused, what was typed stays, with the board's words under it.
+   */
+  async function saveInstallDomain(input: HTMLInputElement): Promise<void> {
+    const edit = adminEdit(installDomain, input.value.toLowerCase())
+    if (edit === null) {
+      input.value = installDomain
+      if (state.installRefused) onState({ installRefused: '' })
+      return
+    }
+    const reply = await tracker.track(send('server-install-domain', { domain: edit }), { install: { domain: edit } })
+    onState({ installRefused: reply?.ok !== true && typeof reply?.error === 'string' ? reply.error : '' })
+  }
+
+  const installKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') e.currentTarget.blur()
+    if (e.key === 'Escape') {
+      // The field's own: the panel stays open.
+      e.stopPropagation()
+      e.currentTarget.value = installDomain
+      onState({ installRefused: '' })
+      e.currentTarget.blur()
+    }
+  }
+
   /** An admin field as it shows: the login, root when none is saved. */
   const shownAdmin = (field: 'user' | 'key'): string => (field === 'user' ? s.admin.user || DEFAULT_LOGIN : s.admin.key)
 
@@ -406,6 +448,33 @@ export function ServerSetupBody({
         onKeyDown={passwordKeyDown}
       />
     </label>
+  )
+
+  // Path B's address, above its button: the board on the server's own domain, never the tunnel's.
+  const installField = (
+    <div className="access-install-domain">
+      <label className="access-field">
+        <span>{t('install.panel.domain')}</span>
+        <input
+          // Drawn again with the board's value once it changes (uncontrolled: what is typed stays until then).
+          key={installDomain}
+          className="path-add"
+          name="install-domain"
+          aria-label={t('install.panel.domain')}
+          placeholder={t('install.panel.domainPlaceholder')}
+          defaultValue={installDomain}
+          spellCheck={false}
+          autoComplete="off"
+          disabled={!canEdit}
+          onKeyDown={installKeyDown}
+          onBlur={(e: FocusEvent<HTMLInputElement>) => void saveInstallDomain(e.currentTarget)}
+        />
+      </label>
+      {/* the board's refusal in the note's place while it stands */}
+      <p className={state.installRefused ? 'access-problem' : 'access-install-note'}>
+        {state.installRefused || t('install.panel.domainNote')}
+      </p>
+    </div>
   )
 
   const needs = (p: Plan): boolean =>
@@ -479,6 +548,7 @@ export function ServerSetupBody({
 
       {(phase === 'idle' || phase === 'looking' || phase === 'done') && (
         <>
+          {installField}
           <div className="access-actions">
             <button
               type="button"
@@ -622,7 +692,7 @@ export function ServerSetupBody({
       {plan && ran && <PlanSteps plan={plan} progress={progress} phase={phase} now={now} />}
 
       {installing && s.install && (running || phase === 'done' || phase === 'failed') && (
-        <InstallRun install={s.install} phase={phase} domain={view.tunnel.settings.domain} />
+        <InstallRun install={s.install} phase={phase} domain={installDomain} />
       )}
 
       {phase === 'failed' && (
@@ -647,6 +717,7 @@ export function ServerSetupBody({
             </>
           )}
           {progress && resultLine(progress, t) && <p className="access-result">{resultLine(progress, t)}</p>}
+          {installing && installField}
           <div className="access-actions">
             <button
               type="button"

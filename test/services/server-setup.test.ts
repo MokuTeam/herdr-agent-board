@@ -21,7 +21,7 @@ import {
 import type { Plan, SetupRecord } from '../../src/core/server-plan.ts'
 import type { Acme } from '../../src/core/server-texts.ts'
 import type { ServerPhase } from '../../src/core/server-view.ts'
-import type { TestStep } from '../../src/core/tunnel.ts'
+import { type TestStep, tunnelConfig } from '../../src/core/tunnel.ts'
 import { createServerSetup } from '../../src/services/server-setup.ts'
 import { useFakeSsh } from '../support/fake-ssh-bin.ts'
 
@@ -1292,10 +1292,16 @@ describe('the admin’s login by password (the simple-setup spec)', () => {
 describe('the board installed on the server itself (path B of the board on a server)', () => {
   const SHA = '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d'
   const PACK: BoardPack = { bytes: new Uint8Array([31, 139, 8, 0, 1, 2, 3, 250, 251]), commit: SHA, changes: true }
-  const LINK = 'https://board.example.com/setup#code=Zm9vYmFyYmF6_-0123456789'
+  /** The board on the server answers on a domain of its own: the tunnel keeps board.example.com. */
+  const SERVER_DOMAIN = 'workbench.example.com'
+  const INSTALL = { install: { domain: SERVER_DOMAIN } }
+  const LINK = `https://${SERVER_DOMAIN}/setup#code=Zm9vYmFyYmF6_-0123456789`
 
   test('Look for the board’s own target, Install sends the pack after sudo’s password, its output streamed, the link kept apart and never logged', async () => {
-    const b = await useBoard({ sudo: 'password', password: SENTINEL }, { pack: async () => PACK, key: () => KEY })
+    const b = await useBoard(
+      { sudo: 'password', password: SENTINEL },
+      { pack: async () => PACK, key: () => KEY, tunnel: INSTALL },
+    )
     b.server({ fixture: fixture('debian13', 'bare') })
     expect(await b.setup.installLook({ password: SENTINEL })).toEqual(OK)
     const look1 =
@@ -1307,6 +1313,9 @@ describe('the board installed on the server itself (path B of the board on a ser
     expect(look1).toContain("getent passwd 'agent'")
     expect(look1).toContain("stat -c '@@dir %a %U %G %g' '/var/lib/agent-board'")
     expect(look1).not.toContain('restrict,port-forwarding')
+    // the board's own domain on the server, not the tunnel's
+    expect(look1).toContain(`getent ahosts '${SERVER_DOMAIN}'`)
+    expect(look1).not.toContain('board.example.com')
     const v = b.setup.view()
     expect(v.target).toBe('install')
     expect(v.install).toEqual({ from: { commit: SHA, changes: true }, out: [], link: null, code: null })
@@ -1319,7 +1328,7 @@ describe('the board installed on the server itself (path B of the board on a ser
           'agent-board: looking at this server.',
           '',
           `  ${LINK}`,
-          'Done: the board is at https://board.example.com',
+          `Done: the board is at https://${SERVER_DOMAIN}`,
         ],
       },
     })
@@ -1332,14 +1341,15 @@ describe('the board installed on the server itself (path B of the board on a ser
     expect(after.install?.out).toEqual([
       'agent-board: looking at this server.',
       '',
-      'Done: the board is at https://board.example.com',
+      `Done: the board is at https://${SERVER_DOMAIN}`,
     ])
     // web.log: that it ran, never a line of it
     expect(b.logs).toEqual(['server install: started', 'server install: ended 0'])
     // the receiver as root through sudo -S, the pack on stdin after sudo's line, nothing on its command line
     const receiver = carried(b.commands().at(-1) ?? '')
     expect(receiver).toContain('# agent-board: install')
-    expect(receiver).toContain('--domain board.example.com --lang en --yes')
+    expect(receiver).toContain(`--domain ${SERVER_DOMAIN} --lang en --yes`)
+    expect(receiver).not.toContain('board.example.com')
     expect(b.commands().at(-1)).toStartWith("env LC_ALL=C sudo -S -p '' -- ")
     expect(b.commands().join('\n')).not.toContain(SENTINEL)
     const stdin = b.stdins().at(-1) ?? ''
@@ -1350,7 +1360,10 @@ describe('the board installed on the server itself (path B of the board on a ser
   })
 
   test('a wrong sudo password at Install: one sudo try with it alone, the pack never sent after it; the plan kept for another try', async () => {
-    const b = await useBoard({ sudo: 'password', password: SENTINEL }, { pack: async () => PACK, key: () => KEY })
+    const b = await useBoard(
+      { sudo: 'password', password: SENTINEL },
+      { pack: async () => PACK, key: () => KEY, tunnel: INSTALL },
+    )
     b.server({ fixture: fixture('debian13', 'bare'), run: { lines: ['agent-board: looking at this server.'] } })
     expect(await b.setup.installLook({ password: SENTINEL })).toEqual(OK)
     const p = planOf(b.setup)
@@ -1380,7 +1393,7 @@ describe('the board installed on the server itself (path B of the board on a ser
 
   test('as root, or with NOPASSWD: no check, the pack goes in the one ssh as before', async () => {
     const noCheck = async (admin: AdminState): Promise<void> => {
-      const b = await useBoard(admin, { pack: async () => PACK, key: () => KEY })
+      const b = await useBoard(admin, { pack: async () => PACK, key: () => KEY, tunnel: INSTALL })
       b.server({ fixture: fixture('debian13', 'bare'), run: { lines: ['ok'] } })
       expect(await b.setup.installLook({})).toEqual(OK)
       const before = b.commands().length
@@ -1396,7 +1409,7 @@ describe('the board installed on the server itself (path B of the board on a ser
   })
 
   test('a board that is not a git checkout has nothing to send: said, before any ssh', async () => {
-    const b = await useBoard({ uid: 0 }, { pack: async () => null })
+    const b = await useBoard({ uid: 0 }, { pack: async () => null, tunnel: INSTALL })
     b.server({ fixture: fixture('debian13', 'bare') })
     const answer = (await b.setup.installLook({})) as { status: number; body: { error?: string } }
     expect(answer.status).toBe(409)
@@ -1405,7 +1418,7 @@ describe('the board installed on the server itself (path B of the board on a ser
   })
 
   test('Install takes only its own Look’s plan: after a tunnel Look it asks for a Look again', async () => {
-    const b = await useBoard({ uid: 0 }, { pack: async () => PACK })
+    const b = await useBoard({ uid: 0 }, { pack: async () => PACK, tunnel: INSTALL })
     b.server({ fixture: fixture('debian13', 'bare') })
     expect(await b.look()).toEqual(OK)
     const p = planOf(b.setup)
@@ -1413,5 +1426,104 @@ describe('the board installed on the server itself (path B of the board on a ser
       status: 409,
       body: { hint: 'lookAgain' },
     })
+  })
+
+  test('the address of the board on the server: refused before any ssh when missing, malformed or the tunnel’s own; the tunnel’s Look needs none', async () => {
+    const refusedWith = async (tunnel: Fields, words: string): Promise<void> => {
+      const b = await useBoard({ uid: 0 }, { pack: async () => PACK, tunnel })
+      b.server({ fixture: fixture('debian13', 'bare') })
+      const answer = (await b.setup.installLook({})) as { status: number; body: { ok?: boolean; error?: string } }
+      expect([answer.status, answer.body.ok]).toEqual([409, false])
+      expect(answer.body.error).toContain(words)
+      // the view says it too, and nothing ran
+      expect(b.setup.view()).toMatchObject({ phase: 'idle', error: answer.body.error, plan: null })
+      expect(b.logins()).toEqual([])
+    }
+    await refusedWith({}, 'needs an address of its own')
+    await refusedWith({ install: { domain: '' } }, 'needs an address of its own')
+    await refusedWith({ install: { domain: 'https://workbench.example.com' } }, 'a host name in lowercase letters')
+    await refusedWith({ install: { domain: 'Board.Example.com.' } }, 'board.example.com is the tunnel’s address')
+    // the tunnel's own Look, with no install address anywhere: as before, for the tunnel's domain
+    const tunnel = await useBoard({ uid: 0 }, { pack: async () => PACK })
+    tunnel.server({ fixture: fixture('debian13', 'bare') })
+    expect(await tunnel.look()).toEqual(OK)
+    const look1 = tunnel
+      .commands()
+      .map(carried)
+      .find(s => s.includes('# agent-board: look-1'))
+    expect(look1).toContain("getent ahosts 'board.example.com'")
+    expect(planOf(tunnel.setup).address).toBe('https://board.example.com')
+  })
+
+  test('the install’s address is its own: Look’s plan wants it, Apply’s receiver carries it, the tunnel’s settings stay as they were', async () => {
+    const b = await useBoard({ uid: 0 }, { pack: async () => PACK, tunnel: INSTALL })
+    b.server({ fixture: fixture('debian13', 'bare'), run: { lines: ['ok'] } })
+    const before = b.tunnel()
+    expect(await b.setup.installLook({})).toEqual(OK)
+    const p = planOf(b.setup)
+    expect(p.address).toBe(`https://${SERVER_DOMAIN}`)
+    expect(b.setup.view().installDomain).toBe(SERVER_DOMAIN)
+    expect(await b.setup.install({ plan: p.id, docker: true })).toEqual(OK)
+    await b.until(['done', 'failed'])
+    expect(b.setup.view().phase).toBe('done')
+    expect(carried(b.commands().at(-1) ?? '')).toContain(`--domain ${SERVER_DOMAIN} --lang en`)
+    expect(b.tunnel()).toEqual(before)
+    expect(b.tunnel().domain).toBe('board.example.com')
+  })
+
+  test('the install’s address changed after its Look: Install asks for a Look again', async () => {
+    const b = await useBoard({ uid: 0 }, { pack: async () => PACK, tunnel: INSTALL })
+    b.server({ fixture: fixture('debian13', 'bare'), run: { lines: ['ok'] } })
+    expect(await b.setup.installLook({})).toEqual(OK)
+    const p = planOf(b.setup)
+    expect(b.setup.installDomain({ domain: 'other.example.com' })).toEqual(OK)
+    const before = b.commands().length
+    expect(await b.setup.install({ plan: p.id, docker: true })).toMatchObject({
+      status: 409,
+      body: { hint: 'lookAgain' },
+    })
+    expect(b.commands()).toHaveLength(before)
+  })
+
+  test('a tunnel without its address yet: the install’s Look needs only the server; the tunnel’s Look still asks for its address', async () => {
+    const b = await useBoard({ uid: 0 }, { pack: async () => PACK, tunnel: { domain: '', ...INSTALL } })
+    b.server({ fixture: fixture('debian13', 'bare') })
+    expect(await b.setup.installLook({})).toEqual(OK)
+    expect(planOf(b.setup).address).toBe(`https://${SERVER_DOMAIN}`)
+    expect(await b.look()).toMatchObject({ status: 409, body: { ok: false, error: 'Domain: needed' } })
+  })
+
+  test('the address of the board on the server from the panel: tunnel.install.domain, lowercased, its trailing dot dropped; refused when malformed or the tunnel’s; emptied, gone', async () => {
+    const b = await useBoard({ uid: 0 }, { pack: async () => PACK })
+    const before = b.tunnel()
+    expect(b.setup.view().installDomain).toBe('')
+    expect(b.setup.installDomain({ domain: ' WorkBench.Example.com. ' })).toEqual(OK)
+    expect(b.tunnel()).toEqual({ ...before, install: { domain: SERVER_DOMAIN } })
+    expect(b.setup.view().installDomain).toBe(SERVER_DOMAIN)
+    // never one of the tunnel's settings
+    expect(tunnelConfig(b.tunnel())).toEqual(tunnelConfig(before))
+    // in the live config at once: the install's Look takes it without config.json read again
+    b.server({ fixture: fixture('debian13', 'bare') })
+    expect(await b.setup.installLook({})).toEqual(OK)
+    expect(planOf(b.setup).address).toBe(`https://${SERVER_DOMAIN}`)
+    // refused: in its own words, the field named, config.json as it was
+    const saved = readFileSync(configFile(), 'utf8')
+    const refusal = (words: string) => ({
+      status: 409,
+      body: { ok: false, hint: null, field: 'domain', error: expect.stringContaining(words) },
+    })
+    expect(b.setup.installDomain({ domain: 'https://x.example.com' })).toEqual(refusal('a host name in lowercase'))
+    expect(b.setup.installDomain({ domain: 'Board.Example.com' })).toEqual(
+      refusal('board.example.com is the tunnel’s address'),
+    )
+    expect(b.setup.installDomain({ domain: 42 })).toEqual(refusal('a host name in lowercase'))
+    expect(readFileSync(configFile(), 'utf8')).toBe(saved)
+    expect(b.setup.view().installDomain).toBe(SERVER_DOMAIN)
+    // emptied: gone, `install` with it
+    expect(b.setup.installDomain({ domain: '' })).toEqual(OK)
+    expect(b.tunnel()).toEqual(before)
+    expect(b.setup.view().installDomain).toBe('')
+    expect(b.setup.installDomain({ domain: null })).toEqual(OK)
+    expect(b.tunnel()).toEqual(before)
   })
 })

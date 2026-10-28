@@ -2328,6 +2328,8 @@ keys are copied for it) and run `claude` once to sign in; `herdr` attaches to th
 - **From the board on your computer**: in Remote access, beside "Set up the server", "Install the
   board on this server" does the same over the server's login and password, with this computer's
   checkout as the board's code (its uncommitted changes too), and shows the login link there, once.
+  It answers at its own "Address of the board on the server" (config.json's `tunnel.install.domain`),
+  never the tunnel's: the tunnel stays where it is.
   `board update` on that server then asks for a ref.
 
 ## Language

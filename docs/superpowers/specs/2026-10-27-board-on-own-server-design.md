@@ -103,7 +103,9 @@ Convenience comes from a one-command install and a service instead.
 - **`board update`** (as `agent`): fetches the ref the board came from, installs, and lets the
   board restart itself (run.ts restarts the board when its code changes).
 - **Path B**: in the local board's Remote access panel, a choice beside "Set up the server":
-  "Install the board on this server". The same address, login and password; Look shows the plan;
+  "Install the board on this server". The same server, login and password, and an address of its
+  own ("Address of the board on the server", `tunnel.install.domain`; never the tunnel's, which
+  would move the tunnel); Look shows the plan;
   Apply sends the script and the archive over the existing password login and streams its output
   into the panel; the setup link is shown there, once.
 - **Working with herdr directly**: `ssh agent@server`, then `herdr` attaches to the running

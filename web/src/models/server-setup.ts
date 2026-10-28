@@ -66,6 +66,10 @@ export interface SetupState {
   again: 'server-look' | 'server-undo-look' | 'server-install-look'
   /** Set up the server was clicked without the board's address: said so until the address is there. */
   missing: boolean
+  /** Install the board on this server was clicked without its own address: said so until it is there. */
+  installAsked: boolean
+  /** The board's refusal of the address of the board on the server as typed ('' when none): shown under its field. */
+  installRefused: string
   /** The plan's ticks. */
   docker: boolean
   removeDocker: boolean
@@ -90,6 +94,8 @@ export const SETUP_START: SetupState = {
   asks: 0,
   again: 'server-look',
   missing: false,
+  installAsked: false,
+  installRefused: '',
   docker: false,
   removeDocker: false,
   removeEdited: false,
@@ -417,10 +423,14 @@ export function flowFill(c: TunnelConfig): { host?: string; user?: string } | nu
   return Object.keys(fill).length > 0 ? fill : null
 }
 
-/** What the board took of the panel's saves since it opened: the tunnel's settings, the admin's fields. */
+/**
+ * What the board took of the panel's saves since it opened: the tunnel's settings, the admin's
+ * fields, and the address of the board on the server (path B) once one was saved.
+ */
 export interface Took {
   tunnel: Partial<Record<keyof TunnelConfig, unknown>>
   admin: { user?: string; key?: string }
+  install?: { domain?: string }
 }
 
 /**
@@ -441,6 +451,7 @@ export function savesTracker(): Saves {
         if (reply?.ok === true) {
           Object.assign(took.tunnel, sent.tunnel)
           Object.assign(took.admin, sent.admin)
+          if (sent.install) took.install = { ...took.install, ...sent.install }
         }
         return reply
       })
@@ -451,7 +462,11 @@ export function savesTracker(): Saves {
     },
     async settle() {
       while (going.size > 0) await Promise.allSettled([...going])
-      return { tunnel: { ...took.tunnel }, admin: { ...took.admin } }
+      return {
+        tunnel: { ...took.tunnel },
+        admin: { ...took.admin },
+        ...(took.install && { install: { ...took.install } }),
+      }
     },
   }
 }
@@ -463,8 +478,9 @@ export function plainOf(s: ServerView, settings: TunnelConfig, t: Translator): P
   const made = plan ?? (choice?.case === null ? choice : null)
   if (!made) return null
   if (s.target !== 'install' || !s.install) return plainPlan(facts, made, wantedOf(settings), t)
-  // the board installed on the server (path B): its own steps first, then the web server's for its socket
-  const plain = plainPlan(facts, made, serverWanted(settings.domain, BOARD_USER), t)
+  // the board installed on the server (path B): its own steps first, then the web server's for its
+  // socket at its own domain (the tunnel's, from a board that had none of its own)
+  const plain = plainPlan(facts, made, serverWanted(s.installDomain || settings.domain, BOARD_USER), t)
   if (plain.stop) return plain
   const own = installWill(
     {

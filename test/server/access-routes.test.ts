@@ -534,6 +534,18 @@ describe('Remote access, set up from the local board', () => {
     expect(await opReloaded({ op: 'server-admin', user: 'admin' })).toEqual([200, { ok: true }])
     expect(((JSON.parse(readFileSync(configPath, 'utf8')) as Reply).tunnel as Reply).admin).toEqual({ user: 'admin' })
     expect((await api.view()).server).toMatchObject({ admin: { user: 'admin', key: '' }, phase: 'idle', plan: null })
+    // the address of the board on the server (path B): its own, never the tunnel's or among its settings
+    const [refusedStatus, refusedDomain] = await api.op({ op: 'server-install-domain', domain: DOMAIN })
+    expect([refusedStatus, refusedDomain.ok, refusedDomain.field]).toEqual([409, false, 'domain'])
+    expect(await opReloaded({ op: 'server-install-domain', domain: 'workbench.example.com' })).toEqual([
+      200,
+      { ok: true },
+    ])
+    const saved = (JSON.parse(readFileSync(configPath, 'utf8')) as Reply).tunnel as Reply
+    expect([saved.domain, saved.install]).toEqual([DOMAIN, { domain: 'workbench.example.com' }])
+    const withInstall = await api.view()
+    expect(withInstall.server?.installDomain).toBe('workbench.example.com')
+    expect(Object.keys(withInstall.tunnel.settings)).not.toContain('install')
     // the key was forgotten above: the admin's first login pins the one it meets (the fake's server
     // has nothing for Look to read)
     const [status, refused] = await api.op({ op: 'server-look' })

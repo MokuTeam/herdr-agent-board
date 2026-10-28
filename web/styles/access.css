@@ -177,6 +177,9 @@
 }
 .access-hostkey, .access-untouched { color: var(--label-2); font-size: 12px; }
 .access-entry > .access-kept { margin: 0 0 4px; padding-left: 6px; }
+/* Path B's own address, above "Install the board on this server": its field, why the board refused it, a note. */
+.access-install-domain { margin: 0 0 6px; }
+.access-install-note { margin: 0 0 4px; padding-left: 6px; color: var(--label-2); font-size: 12px; line-height: 1.4; }
 .access-stop { font-weight: 600; }
 .access-will { margin: 0 0 6px; padding: 0 0 0 18px; }
 .access-will-line { padding: 1px 0; font-size: 12.5px; line-height: 1.4; overflow-wrap: anywhere; }

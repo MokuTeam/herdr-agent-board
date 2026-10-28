@@ -127,6 +127,27 @@ export function editTunnelAdmin(a: Partial<Admin>): EditResult {
   return { ok: true }
 }
 
+/**
+ * The board installed on the server itself (`tunnel.install`, path B of the board on a server): its
+ * domain, apart from the tunnel's own (`tunnel.domain` stays the tunnel's). Each field given is
+ * set, '' removes it; none left removes `install`. Checking them is the caller's.
+ */
+export function editTunnelInstall(i: { domain?: string }): EditResult {
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  const tunnel = tunnelOf(raw)
+  const install: Raw = isRecord(tunnel.install) ? { ...tunnel.install } : {}
+  for (const [field, value] of Object.entries(i)) {
+    if (value === undefined) continue
+    if (value === '') delete install[field]
+    else install[field] = value
+  }
+  if (Object.keys(install).length) tunnel.install = install
+  else delete tunnel.install
+  raw.tunnel = tunnel
+  writeRaw(raw)
+  return { ok: true }
+}
+
 /** The setup on record, as the panel shows it (`tunnel.setup`: its case, address and when), or none (null). */
 export function setTunnelSetup(s: { case: SetupCase; address: string; at: string } | null): EditResult {
   const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
