@@ -1786,6 +1786,75 @@ points come back with it.
 Not yet (see #202): a jump to the message a point came from (1b), a badge on the card, the open
 points in the sheet, the agent told of a point the user pinned as its promise.
 
+## Backup
+
+The board keeps some of its data in a database of its own (#233): `board.db` in the state folder,
+one SQLite file that features move into (time tracking first). Nothing makes the file until a
+feature that uses it runs: a board without one has no database and nothing below applies.
+Because what goes in there can be the record a bill is made from, it is backed up off the
+computer from the first day: sealed with your passphrase, to your server, to a folder a sync
+client takes off the computer, or both (both is better: two copies in two places).
+
+**Settings → Backup…** (on the board on this computer only):
+
+- **Passphrase.** Every snapshot is sealed with it (AES-256-GCM, with a key made from it by
+  scrypt). Keep it in your password manager: without it no snapshot opens on another computer.
+  The board keeps the key, not the passphrase, readable by you alone, so a backup asks for
+  nothing. Changed later, the snapshots made before still open with the old one.
+- **Folder.** A folder that syncs elsewhere: OneDrive, Google Drive for desktop, Dropbox. The
+  snapshots go in its `agent-board-backups`, each written whole before it takes its name. Test
+  writes one, reads it back, opens it and compares it.
+- **Server.** Your server over ssh, as a user of its own, `agent-board-backup`, with a key of
+  its own (`backup/id_ed25519` in the state folder) that can run one program, the drop script:
+  it puts a snapshot (named by the server's own clock and its hash, never over another one),
+  lists them, gives one back, and removes none but by the rotation. The tunnel's user and key are
+  not used and not touched, and the backup goes over plain ssh to sshd, so it is the same with
+  the board's own Caddy, yours, nginx, or no tunnel at all (with a tunnel, the server and the admin
+  login are filled in from it). **Look** says what the server has, and checks sshd's config with
+  the backup user's fence on a copy (`sshd -t`), changing nothing. **Apply** makes the user, its
+  folder (`/var/lib/agent-board-backup/snapshots`), the drop script
+  (`/etc/agent-board/backup-drop`), the key's line and sshd's fence (its own file in
+  `sshd_config.d`, or between markers at the end of `sshd_config` where sshd has no Include):
+  the config checked before it is in place and after, the fence in force for that user, root's
+  and your admin's own sshd settings unchanged, then a reload; any failure puts back what the run
+  changed. Then a test snapshot goes through. **Undo** removes what Apply made, and keeps the
+  snapshots. **Do it myself** shows the same script to run as root yourself, then "I ran it"
+  tests it. Look, Apply and Undo log in as your admin with a key (ssh's own, or the one named)
+  and use sudo; sudo's password, when sudo asks one, comes with the click and is kept nowhere.
+
+**When.** Ten minutes after the last change, and never more than an hour after the first change
+not yet backed up, so a burst of edits makes one snapshot; and once a day at 03:00 even without
+changes. The web board does this; changes made while it is not running are backed up when it
+starts. A target that fails is tried again after 5, 15 and 60 minutes. **Rotation**, on both
+targets: every snapshot of the last 48 hours, the first of each day for 60 days, the first of each
+month for two years.
+
+**What could be wrong** shows at the top of the panel, on the board, and in `board doctor`: no
+target, no passphrase, a target that failed, or no good backup for 24 hours. A damaged database
+is never sent: it would only push good snapshots out of the rotation.
+
+**Restore.** `board db restore` lists the snapshots each target holds;
+`board db restore --target server` (or `folder`) brings the newest back, `--snapshot <name>` a
+given one, `--file <path>` one you downloaded. On a new computer, give the passphrase with
+`--passphrase-file <file>`. The database as it was is copied beside it first
+(`board.db.before-restore-<time>`, the last three kept), so a restore can be undone by another;
+the rows are put back while the board runs. A file too damaged for that: stop the web board and
+add `--replace-file`; the damaged file goes to `damaged-<time>/` in the state folder.
+
+**The database itself.** WAL, so several processes (the web board, `board` commands, agents)
+read and write at once; a change waits up to 5 seconds for another one and takes the write lock
+at its start; every change is written with a journal row (who, what, before and after) in the
+same transaction; `synchronous=FULL`, so a change that returned survives a power cut. The page
+cache is held at 2 MB and the file is not mapped into memory: a `board` command costs about 2 MB
+over Bun itself, the web board a few more. A file found damaged is marked
+(`board.db.damaged.json`) and refused for changes until a restore. Keep the state folder out of
+synced folders (`board doctor` warns): a sync client copies the file mid-write, and WAL's shared
+memory (`board.db-wal`, `board.db-shm` beside it) does not work over a network.
+
+`board backup now | status | list [folder|server] | folder <path> | folder off | test <target>`
+does the same from a terminal; `board backup passphrase` takes the passphrase as two lines on
+stdin, never as an argument.
+
 ## Phones
 
 Off unless you turn it on. With [Tailscale](https://tailscale.com) on this computer and on a phone,
@@ -2673,6 +2742,12 @@ server's own record, filled in from it when missing; Undo removes it). None of i
 password is ever in it. The board checks every field before it uses it, and runs nothing
 while one does not check out.
 
+`backup` (the [backup](#backup) of the board's database; Settings → Backup… sets it): `folder` (a
+folder that syncs elsewhere), `server` (`{ "host", "port", "admin": { "user", "key" }, "set" }`:
+your server, the admin Look and Apply log in as, and when Apply or your own setup with a Test
+made it take snapshots; Undo removes `set`). No passphrase and no key in it: the key is
+`backup/backup-key.json` in the state folder, readable by you alone.
+
 Cards: `%LOCALAPPDATA%\herdr\plugins\agent-board\cards\<session id>.json`. Sessions in the archive:
 `archive\<session id>.json` beside them (see [Archive](#archive)).
 
@@ -2752,6 +2827,19 @@ and `src/server/routes/access.ts` (the panel's view and changes), `src/services/
 run the real ssh: `BOARD_SSH_BIN_PATH` and `BOARD_SSH_KEYGEN_BIN_PATH` name other binaries (a fake
 in `test/support`), and `BOARD_TUNNEL_PROBE_ORIGIN` another origin than `https://<domain>` for the
 probe.
+
+The board's database and its backup (#233): `src/adapters/db.ts` (the file, its settings, its
+steps, the write that carries the journal row, the damage mark, restore in place) and
+`src/adapters/db-schema.ts` (its steps, one list for every store), `src/core/backup.ts` (the
+`backup` settings, a snapshot's name, the rotation, when a target is due, what is wrong),
+`src/core/backup-file.ts` (the sealed file), `src/core/backup-server.ts` (the drop script, Look,
+Apply and Undo as root, what they print), `src/adapters/backup-store.ts` (the key, status.json,
+the folder target), `src/adapters/backup-ssh.ts` (ssh to the drop), `src/services/backup.ts`
+(the snapshot, the targets, the schedule, Test, restore, `board doctor`'s lines),
+`src/services/backup-server.ts` (Look, Apply and Undo over the admin connection),
+`src/server/routes/backup.ts`, `web/src/components/backup/`. The drop script's tests run it with
+dash where there is one, else a POSIX sh (`test/support/fake-drop-ssh.ts` stands in for ssh), and
+skip without one.
 
 Setting up the web server on the server: `src/core/server-look.ts` (Look's two scripts and their
 parsers, into `src/core/server-facts.ts`'s types), `src/core/server-plan.ts` (the case, the plan per

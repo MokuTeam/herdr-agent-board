@@ -16,7 +16,7 @@ import { LANGUAGES } from '../core/i18n/translator.ts'
 import { lang, t } from '../core/lang.ts'
 import { claudeProgram, commandText } from '../core/launch/spawn-args.ts'
 import type { Limits } from '../core/limits.ts'
-import type { BoardLimits, BoardPayload, BoardProfile } from '../core/payload.ts'
+import type { BackupPayload, BoardLimits, BoardPayload, BoardProfile } from '../core/payload.ts'
 import type { PresenceView } from '../core/presence.ts'
 import { DEFAULT_PROFILE, type Profile, profileLabel } from '../core/profiles.ts'
 import type { RemoteView } from '../core/remote.ts'
@@ -69,6 +69,8 @@ interface Options {
   omarchy?: () => string | null
   /** The user's presence (services/presence.ts); null while it is not on. */
   presence?: () => PresenceView | null
+  /** The backup's line (#233); null while there is no database and no target. */
+  backup?: () => BackupPayload | null
 }
 
 // The colors the category editor offers (aliases left out).
@@ -138,6 +140,11 @@ function presenceOf(presence: Options['presence']): { presence?: PresenceView } 
   return view ? { presence: view } : {}
 }
 
+function backupOf(backup: Options['backup']): { backup?: BackupPayload } {
+  const line = backup?.() ?? null
+  return line ? { backup: line } : {}
+}
+
 function remoteOf(remote: Options['remote']): { remote?: RemoteView } {
   const view = remote?.() ?? null
   return view ? { remote: view } : {}
@@ -157,6 +164,7 @@ export function createBoardState({
   accessRev,
   omarchy,
   presence,
+  backup,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -235,6 +243,8 @@ export function createBoardState({
       // presence: only while config.json turns it on (#172).
       ...presenceOf(presence),
       ...(todos && { todos }),
+      // backup: only once there is a database or a backup target (#233)
+      ...backupOf(backup),
       // accessRev: the panel's cue to fetch the Remote access view again (never the view itself).
       accessRev: accessRev?.() ?? 0,
       // omarchy: only on a computer with Omarchy, the theme the Terminal style follows.

@@ -90,6 +90,13 @@ export function App() {
     setAccess(true)
     setAccessMounted(true)
   }
+  // Settings → Backup… (#233), on the local board only: mounted at its first opening, as Remote access.
+  const [backup, setBackup] = useState(false)
+  const [backupMounted, setBackupMounted] = useState(false)
+  const openBackup = () => {
+    setBackup(true)
+    setBackupMounted(true)
+  }
   // Tasks (#202), while the board has them on: their panel, out of the toolbar's button.
   const [todosOpen, setTodosOpen] = useState(false)
   // The reminders' buttons, shared by the schedule panel and the sheet.
@@ -143,6 +150,7 @@ export function App() {
     () => setWake(true),
     openAccess,
     openMokupilot,
+    openBackup,
   )
   // Tasks' 📌 menu under an agent's message, and the panel's buttons.
   const todos = useTodos(menus.menu)
@@ -215,6 +223,7 @@ export function App() {
         phones={{ open: phones, onClose: () => setPhones(false) }}
         {...(mokupilotMounted ? { mokupilot: { open: mokupilot, onClose: () => setMokupilot(false) } } : {})}
         {...(accessMounted && !remotePage() ? { access: { open: access, onClose: () => setAccess(false) } } : {})}
+        {...(backupMounted && !remotePage() ? { backup: { open: backup, onClose: () => setBackup(false) } } : {})}
         archive={archive}
         todos={{ open: todosOpen, onClose: () => setTodosOpen(false), todos }}
         sheet={{

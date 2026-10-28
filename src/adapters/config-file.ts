@@ -28,7 +28,7 @@ import {
 import type { Admin } from '../core/server-admin.ts'
 import type { SetupCase } from '../core/server-plan.ts'
 import { isTodoMode } from '../core/todos.ts'
-import type { TunnelField } from '../core/tunnel.ts'
+import { fieldProblem, type TunnelField } from '../core/tunnel.ts'
 import type { Category, Config } from '../core/types.ts'
 import { wakeConfig } from '../core/wake/config.ts'
 import { allCards, writeCard } from './cards.ts'
@@ -224,6 +224,67 @@ export function editTodos(body: unknown): EditResult {
   const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
   if (mode === 'none') delete raw.todos
   else raw.todos = mode === 'agents' ? true : { agents: false }
+  writeRaw(raw)
+  return { ok: true }
+}
+
+/**
+ * The backup's targets (#233) in config.json's `backup`: `folder` (a path, or null to drop the
+ * folder target), `server` (host, port and the admin's user and key, merged into what is there;
+ * null drops it), `serverSet` (when Apply, or the owner's own setup and a Test, made the server
+ * take snapshots; null: not set). Checked as the tunnel's fields are; the folder by the caller.
+ */
+export function editBackup(b: {
+  folder?: string | null
+  server?: { host?: unknown; port?: unknown; adminUser?: unknown; adminKey?: unknown } | null
+  serverSet?: string | null
+}): EditResult {
+  const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+  const section: Raw = isRecord(raw.backup) ? { ...raw.backup } : {}
+  if (b.folder !== undefined) {
+    if (b.folder === null || b.folder.trim() === '') delete section.folder
+    else section.folder = b.folder.trim()
+  }
+  if (b.server === null) delete section.server
+  else if (b.server !== undefined) {
+    const s = b.server
+    const now: Raw = isRecord(section.server) ? { ...section.server } : {}
+    const admin: Raw = isRecord(now.admin) ? { ...now.admin } : {}
+    if (s.host !== undefined) {
+      const host = typeof s.host === 'string' ? s.host.trim() : ''
+      if (!host) return { ok: false, error: t('tunnel.err.required', { field: t('tunnel.field.host') }) }
+      const problem = fieldProblem('host', host)
+      if (problem) return { ok: false, error: problem }
+      if (now.host !== host) delete now.set
+      now.host = host
+    }
+    if (s.port !== undefined) {
+      const port = Number(s.port)
+      const problem = fieldProblem('sshPort', port)
+      if (problem) return { ok: false, error: problem }
+      if (now.port !== port) delete now.set
+      now.port = port
+    }
+    for (const [field, key] of [
+      ['user', s.adminUser],
+      ['key', s.adminKey],
+    ] as const) {
+      if (key === undefined) continue
+      const value = typeof key === 'string' ? key.trim() : ''
+      const problem = fieldProblem(field, value)
+      if (problem) return { ok: false, error: problem }
+      admin[field] = value
+    }
+    now.admin = admin
+    if (!now.host) return { ok: false, error: t('tunnel.err.required', { field: t('tunnel.field.host') }) }
+    section.server = now
+  }
+  if (b.serverSet !== undefined && isRecord(section.server)) {
+    if (b.serverSet === null) delete section.server.set
+    else section.server = { ...section.server, set: b.serverSet }
+  }
+  if (Object.keys(section).length) raw.backup = section
+  else delete raw.backup
   writeRaw(raw)
   return { ok: true }
 }

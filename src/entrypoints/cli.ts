@@ -62,6 +62,15 @@
 //                            TG_KEY (core/wake/topics.ts keyFor); outside herdr, or with a herdr
 //                            that does not answer within 5 s, the folder; always exits 0. For the
 //                            launchers (core/wake/launchers.ts), so not in the usage line
+//   board backup now | status | list [folder|server] | passphrase | folder <path> | folder off |
+//                            test <folder|server>   the backup of the board's database (#233,
+//                            services/backup.ts): a snapshot to every target now; how each stands;
+//                            the snapshots a target holds; the passphrase (two lines on stdin, never
+//                            an argument); the folder target; a real round trip to a target
+//   board db restore [--target folder|server] [--snapshot <name>] [--file <path>]
+//                            [--passphrase-file <file>] [--replace-file]   the database back as a
+//                            snapshot has it (the newest of the target when none is named); without
+//                            a target, the snapshots each target holds
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -113,7 +122,7 @@ import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away] | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id>] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away] | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -519,6 +528,9 @@ async function main(): Promise<void> {
       const { tunnelFacts } = await import('../services/tunnel-facts.ts')
       checks.push(...tunnelChecks(await tunnelFacts(cfg, webPort), t))
     }
+    // The board's database and its backup (#233), once there is either: else nothing is asked.
+    const { backupChecks } = await import('../services/backup.ts')
+    checks.push(...backupChecks(cfg, t))
     return console.log(report(checks, t))
   }
 
@@ -539,6 +551,8 @@ async function main(): Promise<void> {
   if (cmd === 'call-report') return callReport()
   if (cmd === 'remote') return remote()
   if (cmd === 'tunnel') return tunnel()
+  if (cmd === 'backup') return backupCmd()
+  if (cmd === 'db') return dbCmd()
   if (cmd === 'archive') return archive()
   if (cmd === 'sleep') return sleep()
   if (cmd === 'fork') return fork()
@@ -1124,6 +1138,127 @@ const isStep = (v: unknown): v is TestStep =>
  * Remote access…). Test runs Test connection on the running board. Without an argument: where the
  * tunnel stands, as the running board says. In English, whatever language the board speaks.
  */
+/** A flag's value: `--name value` in the command's words; undefined when it is not there. */
+function option(name: string): string | undefined {
+  const i = rest.indexOf(name)
+  return i >= 0 ? rest[i + 1] : undefined
+}
+
+/** `board backup …` (#233): the backup of the board's database (services/backup.ts). */
+async function backupCmd(): Promise<void> {
+  const [op = 'status', arg] = rest
+  const backup = await import('../services/backup.ts')
+  const { activeTargets, backupConfig, isTarget, problemSentence } = await import('../core/backup.ts')
+  const c = backupConfig(cfg.backup)
+  if (op === 'now') {
+    const r = await backup.backupNow({ cfg, force: true })
+    if (r.nothing) return console.log(t('backup.cli.nothing'))
+    if (!r.sent.length && !r.failed.length) return console.log(t('backup.cli.noTargets'))
+    for (const s of r.sent) console.log(t('backup.cli.sent', { target: s.target, name: s.name }))
+    for (const f of r.failed) console.log(t('backup.cli.failed', { target: f.target, error: f.error }))
+    if (r.failed.length) process.exitCode = 1
+    return
+  }
+  if (op === 'status') {
+    const v = backup.backupView(cfg)
+    if (!v.needed) console.log(t('backup.cli.nothing'))
+    for (const target of activeTargets(v.config)) {
+      const s = v.states[target]
+      const state = s?.lastOk ? t('backup.state.ok', { when: clock(s.lastOk) }) : t('backup.state.never')
+      console.log(`${target} · ${state}${s?.error ? ` · ${t('backup.state.error', { error: s.error })}` : ''}`)
+    }
+    for (const p of v.problems) console.log(`! ${problemSentence(p, t)}`)
+    if (v.problems.length) process.exitCode = 1
+    return
+  }
+  if (op === 'list') {
+    const targets = arg ? (isTarget(arg) ? [arg] : []) : activeTargets(c)
+    if (!targets.length) throw new Error(arg ? t('backup.cli.usage') : t('backup.cli.noTargets'))
+    for (const target of targets) {
+      const list = await backup.listAt(target, c)
+      console.log(t('backup.cli.list', { target, n: list.length }))
+      for (const x of list) console.log(`  ${x.name}  ${Math.ceil(x.size / 1024)} KB`)
+    }
+    return
+  }
+  if (op === 'passphrase') {
+    // never an argument (it would stay in the shell's history and the process list), never typed on a terminal here
+    if (process.stdin.isTTY) throw new Error(t('backup.cli.usage'))
+    const { readStdin } = await import('../adapters/stdin.ts')
+    const [first = '', second = ''] = (await readStdin()).split(/\r?\n/)
+    const r = await backup.setPassphrase(first, second)
+    if (!r.ok) throw new Error(r.error)
+    return console.log(t('backup.cli.passphraseSet'))
+  }
+  if (op === 'folder') {
+    const { editBackup } = await import('../adapters/config-file.ts')
+    if (arg === 'off') {
+      const r = editBackup({ folder: null })
+      if (!r.ok) throw new Error(r.error)
+      backup.resetTarget('folder')
+      return console.log(t('backup.cli.folderOff'))
+    }
+    if (!arg) throw new Error(t('backup.cli.usage'))
+    const folder = resolve(arg)
+    const { folderProblem } = await import('../adapters/backup-store.ts')
+    const problem = folderProblem(folder)
+    if (problem) throw new Error(t(problem, { folder }))
+    const r = editBackup({ folder })
+    if (!r.ok) throw new Error(r.error)
+    backup.resetTarget('folder')
+    return console.log(t('backup.cli.folderSet', { folder }))
+  }
+  if (op === 'test' && isTarget(arg)) {
+    const r = await backup.testTarget(arg, cfg)
+    if (!r.ok) throw new Error(r.error ?? '')
+    return console.log(t('backup.tested', { name: r.name ?? '' }))
+  }
+  throw new Error(t('backup.cli.usage'))
+}
+
+/** `board db restore …` (#233): the board's database back as a snapshot has it (services/backup.ts restore). */
+async function dbCmd(): Promise<void> {
+  const [op] = rest
+  if (op !== 'restore') throw new Error(t('backup.cli.restoreUsage'))
+  const backup = await import('../services/backup.ts')
+  const { activeTargets, backupConfig, isTarget } = await import('../core/backup.ts')
+  const target = option('--target')
+  const file = option('--file')
+  const name = option('--snapshot')
+  const passFile = option('--passphrase-file')
+  if (target !== undefined && !isTarget(target)) throw new Error(t('backup.cli.restoreUsage'))
+  if (!target && !file) {
+    const c = backupConfig(cfg.backup)
+    const targets = activeTargets(c)
+    if (!targets.length) throw new Error(t('backup.cli.noTargets'))
+    for (const tg of targets) {
+      const list = await backup.listAt(tg, c)
+      console.log(t('backup.cli.list', { target: tg, n: list.length }))
+      for (const x of list.slice(-10)) console.log(`  ${x.name}  ${Math.ceil(x.size / 1024)} KB`)
+    }
+    return console.log(t('backup.cli.restoreUsage'))
+  }
+  const passphrase = passFile ? (readFileSync(passFile, 'utf8').split(/\r?\n/)[0] ?? '').trimEnd() : null
+  const webPort = Number(cfg.port) || 12422
+  const r = await backup.restore({
+    from: file ? { file: resolve(file) } : { target: target as 'folder' | 'server', ...(name && { name }) },
+    cfg,
+    passphrase,
+    by: 'user',
+    replaceFile: rest.includes('--replace-file'),
+    boardRunning: async () => {
+      try {
+        await fetch(`http://127.0.0.1:${webPort}/api/hello`, { signal: AbortSignal.timeout(1500) })
+        return true
+      } catch {
+        return false
+      }
+    },
+  })
+  if (!r.inPlace) return console.log(t('backup.cli.restoredFile', { from: r.from, aside: r.aside ?? '' }))
+  console.log(t('backup.cli.restored', { from: r.from, before: r.before ?? '-' }))
+}
+
 async function tunnel(): Promise<void> {
   const [op = 'status'] = rest
   const webPort = Number(cfg.port) || 12422
