@@ -53,7 +53,7 @@ function fakeTable(columns: number) {
     table: {
       tBodies: [body],
       ownerDocument: doc,
-      style: { width: '' },
+      style: { width: '', minWidth: '' },
       querySelectorAll: () => heads,
     } as unknown as HTMLTableElement,
     body,
@@ -66,6 +66,6 @@ describe('a CSV’s columns measured once', () => {
     const widths = measureColumns(table, [['W'.repeat(29), 'i'.repeat(48)], ['1234567890123456'], ['n'.repeat(200)]])
     expect(widths).toEqual([Math.ceil(29 * 1.4 * 7 + 28) + 1, 16 * 7 + 28 + 1, 420])
     expect(body.rows).toEqual([])
-    expect(table.style.width).toBe('')
+    expect([table.style.width, table.style.minWidth]).toEqual(['', ''])
   })
 })

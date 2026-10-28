@@ -45,9 +45,16 @@ test('every viewer builds apart from app.js, which carries none of their librari
     expect(script).not.toMatch(/^import .* from /m)
     // What a viewer bundles from its packages, app.js has none of.
     const packages = sourcesOf(bundle.file(`${name}.map`)).filter(s => s.includes('node_modules'))
-    expect([name, packages.length > 0, packages.filter(s => page.has(s))]).toEqual([name, true, []])
+    expect([name, packages.filter(s => page.has(s))]).toEqual([name, []])
   }
   expect([...page].some(s => s.includes('viewers/'))).toBe(false)
   for (const name of Object.keys(VIEWER_COPIES)) expect(bundle.file(name)?.length).toBeGreaterThan(0)
   expect(String(bundle.file('pdf.worker.js'))).toContain('WorkerMessageHandler')
+  // Each library in the one script that needs it: PDF.js in the PDF viewer, DOMPurify where the
+  // document is drawn, mammoth and SheetJS in their workers.
+  const has = (name: string, lib: string) => sourcesOf(bundle.file(`${name}.map`)).some(s => s.includes(lib))
+  expect(has('pdf-viewer.js', 'pdfjs-dist')).toBe(true)
+  expect([has('document-viewer.js', 'dompurify'), has('document-viewer.js', 'mammoth')]).toEqual([true, false])
+  expect([has('document-worker.js', 'mammoth'), has('document-worker.js', 'dompurify')]).toEqual([true, false])
+  expect([has('spreadsheet-worker.js', 'xlsx'), has('spreadsheet-viewer.js', 'xlsx')]).toEqual([true, false])
 })

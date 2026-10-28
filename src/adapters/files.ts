@@ -21,6 +21,8 @@ const DIR_LIMIT = 1000
 const EXT = {
   image: 'png jpg jpeg gif webp bmp ico svg avif',
   pdf: 'pdf',
+  document: 'docx',
+  spreadsheet: 'xlsx xlsm xls ods',
   video: 'mp4 webm m4v mov ogv',
   audio: 'mp3 wav ogg oga m4a flac aac opus',
   markdown: 'md markdown mdx',
@@ -57,6 +59,12 @@ export const MEDIA_TYPES: Record<string, string> = {
   flac: 'audio/flac',
   aac: 'audio/aac',
   opus: 'audio/ogg',
+  // Read by the quick look's own viewers (web/src/viewers/), not by the browser.
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xlsm: 'application/vnd.ms-excel.sheet.macroEnabled.12',
+  xls: 'application/vnd.ms-excel',
+  ods: 'application/vnd.oasis.opendocument.spreadsheet',
 }
 
 export interface FileInfo {
@@ -338,7 +346,7 @@ export function preview(path: string): Preview {
     return { ...info, entries, total: dirents.length }
   }
   const infoKind = info.kind ?? 'file'
-  if (['image', 'pdf', 'video', 'audio'].includes(infoKind)) return info
+  if (['image', 'pdf', 'video', 'audio', 'document', 'spreadsheet'].includes(infoKind)) return info
   let read: { buf: Buffer; cut: boolean }
   try {
     read = head(path, info.size ?? 0, infoKind === 'csv' ? CSV_LIMIT : TEXT_LIMIT)

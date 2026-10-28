@@ -206,3 +206,19 @@ function windows1251(text: string): Uint8Array {
     return code
   })
 }
+
+// A Word document and a spreadsheet are the quick look's viewers' to read (#176): what they are
+// by name, and a preview of what is known of them, without their bytes as text.
+test('a Word document and a spreadsheet: their kind, and no text in their preview', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'board-office-'))
+  assert.equal(kindOf('C:\\docs\\Договор.DOCX'), 'document')
+  for (const name of ['a.xlsx', 'a.xlsm', 'a.xls', 'b.ods']) assert.equal(kindOf(name), 'spreadsheet')
+  assert.equal(kindOf('old.doc'), 'file')
+  for (const name of ['report.docx', 'sales.xlsx']) {
+    writeFileSync(join(dir, name), Buffer.from('PK\u0003\u0004 zipped bytes \u0000\u0001'))
+    const look = preview(join(dir, name))
+    assert.equal(look.kind, name.endsWith('docx') ? 'document' : 'spreadsheet')
+    assert.equal(look.text, undefined)
+    assert.equal(look.error, undefined)
+  }
+})

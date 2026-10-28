@@ -1,6 +1,7 @@
 // What the quick look shows of a file or folder (the old page's files.js render, folder, code,
-// table, empty): images (they zoom, zoom.ts), video and audio from the raw bytes; a PDF drawn by
-// the board's own viewer (viewers/pdf.ts, #176); Markdown rendered or as source; CSV as a table,
+// table, empty): images (they zoom, zoom.ts), video and audio from the raw bytes; a PDF, a Word
+// document and a spreadsheet drawn by the board's own viewers (web/src/viewers/, #176); Markdown
+// rendered or as source; CSV as a table,
 // its rows drawn as they scroll into view; code and text in numbered lines (the line it was opened
 // at lit); folders as a list to walk through; and why there is nothing to show.
 import { memo, type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -26,6 +27,9 @@ import { FileIcon } from './FileChip.tsx'
 import {
   besideApp,
   loadViewer,
+  OFFICE_TEXTS,
+  type OfficeKind,
+  type OfficeModule,
   PDF_TEXTS,
   type PdfModule,
   type PdfViewer,
@@ -102,6 +106,8 @@ export function Preview({
         onZoomGone={onZoomGone}
       />
     )
+  if (d.kind === 'document' || d.kind === 'spreadsheet')
+    return <OfficeLook kind={d.kind} src={src} name={d.name ?? ''} size={d.size} onOpen={onOpen} />
   if (d.kind === 'video')
     return (
       <div className="ql-media">
@@ -254,6 +260,64 @@ export function ViewerShown({ look, host, hostClass, icon, src, name, onOpen }: 
   )
 }
 
+// Larger than this, a document or a spreadsheet is not read here: a phone would run short of
+// memory (a workbook takes ten times its size once read). The quick look says so instead.
+const VIEW_LIMIT: Record<OfficeKind, number> = { document: 20 << 20, spreadsheet: 10 << 20 }
+
+interface OfficeLookProps {
+  kind: OfficeKind
+  src: string
+  name: string
+  size?: number | null | undefined
+  onOpen?: (() => void) | undefined
+}
+
+/**
+ * A Word document or a spreadsheet, read in a worker and drawn by its viewer (viewers/document.ts,
+ * viewers/spreadsheet.ts, imported when one is opened): too big, said so without reading it;
+ * else as its viewer has it (ViewerShown): "loading" until it is drawn, and broken, with a
+ * password or without its viewer, why, with the button that opens it with the system.
+ */
+function OfficeLook(props: OfficeLookProps) {
+  const t = useT()
+  if ((props.size ?? 0) > VIEW_LIMIT[props.kind])
+    return <LookEmpty icon={props.kind} text={t('ql.tooBig')} onOpen={props.onOpen} />
+  return <OfficeRead {...props} />
+}
+
+function OfficeRead({ kind, src, name, onOpen }: OfficeLookProps) {
+  const t = useT()
+  const latest = useLatest({ t })
+  const { host, state } = useViewer(
+    `${kind} ${src}`,
+    () => loadViewer<OfficeModule>(kind),
+    (office, el, report) =>
+      office.mount(el, {
+        url: src,
+        name,
+        worker: besideApp(`${kind}-worker.js`),
+        lang: latest.current.t.lang,
+        truncated: latest.current.t('ql.truncated'),
+        onReady: () => report.ready(),
+        onFail: why => report.fail(why),
+      }),
+  )
+  return (
+    <ViewerShown
+      look={viewerLook(state, OFFICE_TEXTS)}
+      host={host}
+      hostClass={`ql-${kind}`}
+      icon={kind}
+      src={src}
+      name={name}
+      onOpen={onOpen}
+    />
+  )
+}
+
+// A cell's text longer than this may not fit its 420 px: it gets the whole text as a title.
+const LONG_CELL = 40
+
 // A CSV's rows are drawn this many at a time, the next block as the last comes near the view: a
 // table of many thousand rows opens at once.
 const ROWS_AT_ONCE = 300
@@ -346,13 +410,16 @@ export function measureColumns(table: HTMLTableElement, candidates: string[][]):
     body.append(tr)
     probes.push(tr)
   }
-  // At its own width for the measure: fitted to the window, the columns would come out squeezed.
-  const width = table.style.width
+  // At its own width for the measure: fitted to the window, the columns would come out squeezed,
+  // and stretched to it (min-width 100%), a narrow table would keep the window's width.
+  const { width, minWidth } = table.style
   table.style.width = 'max-content'
+  table.style.minWidth = '0'
   // Layout widths (offsetWidth, a pixel more for its rounding), not the box on screen: the quick
   // look is still growing open, scaled, when its table is first drawn.
   const widths = heads.map(th => Math.min(420, th.offsetWidth + 1))
   table.style.width = width
+  table.style.minWidth = minWidth
   for (const tr of probes) tr.remove()
   return widths
 }
@@ -366,7 +433,9 @@ const Rows = memo(function Rows({ rows }: { rows: string[][] }) {
         <tr key={i}>
           {r.map((c, n) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: as above
-            <td key={n}>{c}</td>
+            <td key={n} title={c.length > LONG_CELL ? c : undefined}>
+              {c}
+            </td>
           ))}
         </tr>
       ))}

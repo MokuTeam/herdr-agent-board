@@ -434,7 +434,9 @@ describe('around what it shows', () => {
   test('the icons are the old page’s', () => {
     const old = oldCode('web/files.js', ['svg', 'DOC', 'ICONS'], {}).get('ICONS')
     const icons = typeof old === 'object' && old !== null ? Object.entries(old) : []
-    expect(Object.keys(ICON_PATHS)).toEqual(icons.map(([name]) => name))
+    // A Word document's and a spreadsheet's are the board's own (#176): the old page had no viewer for them.
+    const own = new Set(['document', 'spreadsheet'])
+    expect(Object.keys(ICON_PATHS).filter(name => !own.has(name))).toEqual(icons.map(([name]) => name))
     for (const [name, markup] of icons)
       if (isIconName(name))
         expect(canonical(reactMarkup(<FileIcon name={name} />))).toBe(canonical(parseHtml(String(markup))))
@@ -628,5 +630,44 @@ describe('the viewers’ scripts', () => {
     await expect(loadViewer<unknown>('pdf', failing)).resolves.toBe(module)
     expect(asked).toHaveLength(2)
     expect(asked.every(url => url.endsWith('/pdf-viewer.js'))).toBe(true)
+  })
+})
+
+// #176: a Word document and a spreadsheet are drawn by viewers of their own, imported when one
+// is opened; too big for a phone, it says so with the button that opens it.
+describe('a Word document and a spreadsheet in the quick look', () => {
+  const office = {
+    '/docs/contract.docx': file('/docs/contract.docx', { kind: 'document', size: 52_000 }),
+    '/docs/sales.xlsx': file('/docs/sales.xlsx', { kind: 'spreadsheet', size: 70_000 }),
+    '/docs/huge.xlsx': file('/docs/huge.xlsx', { kind: 'spreadsheet', size: 40 << 20 }),
+  } as Record<string, unknown>
+  const answers = server({ preview: async path => office[path] ?? { path, error: 'missing' } })
+
+  test('each its viewer’s host, loading until it is drawn; too big, said so with Open', async () => {
+    const look = new NewLook(en, answers)
+    await look.open(at('/docs/contract.docx'))
+    expect(canonical(look.markup())).toContain(
+      '<div class="k-document ql-body">\n      <div class="ql-document"></div>\n      <div class="ql-wait">Loading…</div>',
+    )
+    await look.open(at('/docs/sales.xlsx'))
+    expect(canonical(look.markup())).toContain('<div class="ql-spreadsheet"></div>')
+    await look.open(at('/docs/huge.xlsx'))
+    const huge = canonical(look.markup())
+    expect(huge).toContain('Too big to show here: open it to see it')
+    expect(huge).toContain('data-ql="open"')
+    expect(huge).not.toContain('ql-spreadsheet"')
+  })
+
+  test('their viewers are asked for beside app.js, each once', async () => {
+    const asked: string[] = []
+    const module = { mount: (() => ({ destroy() {} })) as never }
+    const load = async (url: string) => {
+      asked.push(url)
+      return module
+    }
+    await expect(loadViewer('document', load)).resolves.toBe(module)
+    await expect(loadViewer('document', load)).resolves.toBe(module)
+    await expect(loadViewer('spreadsheet', load)).resolves.toBe(module)
+    expect(asked.map(url => url.split('/').pop())).toEqual(['document-viewer.js', 'spreadsheet-viewer.js'])
   })
 })

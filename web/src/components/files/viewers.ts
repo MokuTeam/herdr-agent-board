@@ -4,6 +4,7 @@
 // and its worker are asked for under the same one, so the service worker keeps them apart too.
 // One file in a viewer is a session (openViewer): its script imported, the file drawn, and the
 // viewer let go of when it fails or the file is no longer on show.
+import type { mount as documentMount } from '../../viewers/document.ts'
 import type { mount as pdfMount } from '../../viewers/pdf.ts'
 
 export type { PdfViewer } from '../../viewers/pdf.ts'
@@ -23,6 +24,14 @@ export interface PdfModule {
   mount: typeof pdfMount
 }
 
+/** The Word and the spreadsheet viewer draw the same way (viewers/office.ts). */
+export interface OfficeModule {
+  mount: typeof documentMount
+}
+
+/** The kinds of file read by a viewer and a worker of their own. */
+export type OfficeKind = 'document' | 'spreadsheet'
+
 export type Import<T> = (url: string) => Promise<T>
 
 const loaded = new Map<string, Promise<unknown>>()
@@ -40,7 +49,7 @@ export function loadViewer<T>(name: string, load: Import<T> = url => import(url)
   return module
 }
 
-export type ViewerFailure = 'password' | 'broken' | 'other'
+export type ViewerFailure = 'password' | 'broken' | 'big' | 'other'
 
 /** Where a file in a viewer is: coming, drawn, failed (and why), or with no viewer to draw it. */
 export type ViewerState =
@@ -113,21 +122,33 @@ export interface ViewerLook {
   empty: string | null
 }
 
-/** The texts of a kind of file: a password, broken, no viewer (null: the browser's own frame). */
+/** The texts of a kind of file: a password, broken, too big, no viewer (null: the browser's own frame). */
 export interface ViewerTexts {
   password: string
   broken: string
+  big?: string
   unavailable: string | null
 }
 
 export const PDF_TEXTS: ViewerTexts = { password: 'ql.pdfPassword', broken: 'ql.pdfBroken', unavailable: null }
+
+/** A Word document or a spreadsheet without its viewer: the file cannot be shown here. */
+export const OFFICE_TEXTS: ViewerTexts = {
+  password: 'ql.fileLocked',
+  broken: 'ql.fileBroken',
+  big: 'ql.tooBig',
+  unavailable: 'ql.fileBroken',
+}
 
 export function viewerLook(state: ViewerState, texts: ViewerTexts): ViewerLook {
   if (state.at === 'unavailable')
     return texts.unavailable === null
       ? { frame: true, wait: false, empty: null }
       : { frame: false, wait: false, empty: texts.unavailable }
-  if (state.at === 'failed')
-    return { frame: false, wait: false, empty: state.why === 'password' ? texts.password : texts.broken }
+  if (state.at === 'failed') {
+    const why =
+      state.why === 'password' ? texts.password : state.why === 'big' ? (texts.big ?? texts.broken) : texts.broken
+    return { frame: false, wait: false, empty: why }
+  }
   return { frame: false, wait: state.at === 'loading', empty: null }
 }
