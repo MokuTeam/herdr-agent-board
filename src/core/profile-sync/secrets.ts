@@ -2,10 +2,12 @@
 // "Next step: syncing the Claude profiles"): the files of one machine only, the secret files, a
 // secret found in any file (cut out, its kind shown, never its value), and in the two settings
 // files merged by key, settings.json and .claude.json, the keys and tokens in `env`, the OAuth
-// part and the machine's own state, MCP servers' headers and env, the board's own hooks (each
-// side's install writes its own), and hooks, status lines and MCP servers that hold a secret or
+// part and the machine's own state, MCP servers' headers and env, the board's own hooks and its
+// browser MCP server (each side's install writes its own; the agents' browser profiles live in the
+// board's state folder, which the sync never reads), and hooks, status lines and MCP servers that hold a secret or
 // cannot run on the other side (a Windows path or program going to Linux, a Linux path going to
 // Windows). What remains is each file's shared part: the target merges it into its own. Pure.
+import { BROWSER_MCP } from '../desktop.ts'
 import type { Platform } from './paths.ts'
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -231,6 +233,8 @@ function shareMcps(
   const out: Record<string, unknown> = {}
   if (!isRecord(v)) return out
   for (const [name, server] of Object.entries(v)) {
+    // the board's own browser MCP server is each side's install's (the board's server only)
+    if (name === BROWSER_MCP) continue
     const s = shareMcp(where ? `${name} (${where})` : name, server, to, held, cantGo)
     if (s) out[name] = s
   }

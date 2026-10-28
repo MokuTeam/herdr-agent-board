@@ -10,7 +10,8 @@
 #   --ref <ref>       the board's branch, tag or commit (main); `board update` follows it later
 #   --user <name>     the board's user (agent); --sudo gives it sudo
 #   --undo            takes it back: herdr's service, the web server's part, sudo
-#                     (with --remove-user: the user and its home too)
+#                     (with --remove-user: the user and its home too, and the packages
+#                     it added for the agents' browsers)
 #   --repo <url>      a fork's git URL
 #
 # It looks at the server first and asks once before it changes anything; at the end it prints the

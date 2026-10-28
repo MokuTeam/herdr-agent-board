@@ -24,6 +24,7 @@ import { join } from 'node:path'
 import { installSkill } from '../adapters/agents-skill.ts'
 import { codexHooksPlan, installCodexHooks } from '../adapters/codex-hooks.ts'
 import { configFile, loadConfig, readConfigFile } from '../adapters/config-file.ts'
+import { putBrowserParts } from '../adapters/desktop-files.ts'
 import { claudeIntegrationInstall, codexIntegrationInstall } from '../adapters/herdr.ts'
 import { installInto, readSettings } from '../adapters/hook-settings.ts'
 import { installLaunchers } from '../adapters/launchers.ts'
@@ -32,6 +33,7 @@ import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { gatherFacts, herdrConfigFile, readText } from '../adapters/setup-facts.ts'
 import { type InstallPaths, planSettings, planShims } from '../core/install-plan.ts'
 import { t } from '../core/lang.ts'
+import { onServer } from '../core/on-server.ts'
 import { DEFAULT_PROFILE, shownProfiles } from '../core/profiles.ts'
 import { boardFiles, checkSetup, report, tomlValue } from '../core/setup.ts'
 import { wakeSwitch } from '../core/wake/config.ts'
@@ -194,6 +196,14 @@ try {
         "wake hooks: not added: the separate herdr-wake plugin's are there (Settings → Sleep and wake… → Switch over…)",
       )
   }
+  // On the board's own server: the agents' browsers (core/desktop.ts), the board's MCP server in
+  // each profile and chrome-devtools-mcp. On a PC nothing of it is read or written.
+  if (onServer(loadConfig()))
+    await putBrowserParts(profiles, {
+      board: join(paths.binDir, 'board'),
+      bun: paths.bun,
+      say: line => console.log(line),
+    })
   if (process.platform === 'win32') {
     const delivery = tomlValue(readText(herdrConfigFile()), 'ui.toast', 'delivery') ?? 'off'
     if (toastOn && delivery !== 'off')
