@@ -2,8 +2,10 @@
 // with the day before and after and Today; the clients of that day as chips (All, then each with
 // its billed hours, in its lane's color); then each client's billed lines, a line's entries under
 // it with their times on this browser's clock, the description, the project and who logged it;
-// the held entries (a tag the config leaves out) apart; the day's totals. Asked when it opens,
-// when the day changes, and again whenever the board's time line says the store changed. On a
+// the held entries (a tag the config leaves out) apart; the day's totals. Asked when it opens
+// (always on today), when the day changes, and again whenever the board's time line says the store
+// changed; an answer that comes after a later question is dropped, and a day's figures show only
+// under that day's name. While config.json's `time` does not check out, it says so first. On a
 // phone (the full-height sheet) a horizontal swipe changes the day: the list follows the finger
 // and settles back, or goes to the day it was swiped to; with reduced motion, it only changes.
 import { type PointerEvent, useCallback, useEffect, useRef, useState } from 'react'
@@ -12,8 +14,10 @@ import { useLatest } from '../../hooks/useLatest.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { reducedMotion } from '../../models/spring.ts'
 import {
+  askedInTurn,
   byText,
   dateName,
+  dayFor,
   entryTimes,
   hm,
   hoursText,
@@ -40,27 +44,36 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   const t = useT()
   const { data, toast, dispatch } = useBoardContext()
   const latest = useLatest({ t, toast })
-  const today = data?.time?.date ?? new Date().toISOString().slice(0, 10)
+  const today = data?.time?.date ?? localToday()
   const seq = data?.time?.seq ?? 0
   const [date, setDate] = useState(today)
   const [day, setDay] = useState<TimeDay | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<{ date: string; text: string } | null>(null)
+  const turns = useRef(askedInTurn())
 
   const ask = useCallback(
     async (d: string) => {
+      const n = turns.current.ask()
       try {
         const res = await fetch(`/api/time?date=${encodeURIComponent(d)}`, { cache: 'no-store' })
         const value = await replyOf(res)
+        if (!turns.current.last(n)) return
         if (res.ok && isTimeDay(value)) {
           setDay(value)
           setError(null)
-        } else setError(String((value as { error?: unknown }).error ?? res.status))
+        } else setError({ date: d, text: String((value as { error?: unknown }).error ?? res.status) })
       } catch (err) {
-        setError(errorText(err, latest.current.t))
+        if (turns.current.last(n)) setError({ date: d, text: errorText(err, latest.current.t) })
       }
     },
     [latest],
   )
+
+  // Every opening starts on today, whatever day it showed when it closed.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on opening only
+  useEffect(() => {
+    if (open) setDate(today)
+  }, [open])
 
   // Opened on today; a new day of the board's (past midnight) follows while it shows today.
   const shownToday = useRef(today)
@@ -76,8 +89,11 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   const go = (days: number) => setDate(d => shiftDate(d, days))
   const swipe = useSwipe(go)
   const lang = t.lang
-  const entries = new Map((day?.entries ?? []).map(e => [e.id, e]))
-  const days = (day?.days ?? []).filter(d => !client || d.client === client)
+  // the figures under a day's name are that day's: another day's answer, still shown, is not
+  const shown = dayFor(day, date)
+  const failed = error && error.date === date ? error.text : null
+  const entries = new Map((shown?.entries ?? []).map(e => [e.id, e]))
+  const days = (shown?.days ?? []).filter(d => !client || d.client === client)
   const cats = new Map((data?.categories ?? []).map(c => [c.id, c]))
   const title = (id: string) => cats.get(id)?.title ?? id
   const color = (id: string) => cats.get(id)?.color ?? 'var(--label-3)'
@@ -110,8 +126,10 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
             {t('time.today')}
           </button>
         </div>
-        {day && <p className="sheet-meta time-zone">{t('time.zone', { zone: day.zone })}</p>}
-        {day && day.days.length > 0 && (
+        {shown?.problems && <p className="access-problem">{t('time.problemsNote', { problems: shown.problems })}</p>}
+        {shown && <p className="sheet-meta time-zone">{t('time.zone', { zone: shown.zone })}</p>}
+        {!shown && !failed && <p className="sheet-meta time-empty">{t('time.loading')}</p>}
+        {shown && shown.days.length > 0 && (
           <div className="time-chips">
             <button
               type="button"
@@ -122,12 +140,12 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
               {t('time.all')}{' '}
               <span>
                 {hoursText(
-                  day.days.reduce((n, d) => n + d.billedSeconds, 0),
+                  shown.days.reduce((n, d) => n + d.billedSeconds, 0),
                   t,
                 )}
               </span>
             </button>
-            {day.days.map(d => (
+            {shown.days.map(d => (
               <button
                 type="button"
                 aria-pressed={client === d.client}
@@ -141,9 +159,9 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
             ))}
           </div>
         )}
-        {error && <p className="access-problem">{t('time.loadError', { error })}</p>}
+        {failed && <p className="access-problem">{t('time.loadError', { error: failed })}</p>}
         <div className="time-days" {...swipe.handlers} style={swipe.style}>
-          {day && !days.length && <p className="sheet-meta time-empty">{t('time.empty')}</p>}
+          {shown && !days.length && <p className="sheet-meta time-empty">{t('time.empty')}</p>}
           {days.map(d => (
             <section className="time-client" key={d.client} style={{ '--lane': color(d.client) }}>
               <h3 className="time-client-head">
@@ -276,4 +294,10 @@ function useSwipe(go: (days: number) => void) {
       onPointerCancel: (e: PointerEvent<HTMLDivElement>) => end(e, true),
     },
   }
+}
+
+/** Today on this browser's clock, YYYY-MM-DD: only before the board's first answer says its own. */
+function localToday(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }

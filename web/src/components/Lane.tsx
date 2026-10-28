@@ -27,12 +27,14 @@ export interface LaneProps {
   onHead?: () => void
   /** Today's billed seconds of this client (#233); none: no total shown. */
   time?: number | undefined
+  /** config.json's `time` does not check out: the total is marked, and its hint says so. */
+  timeProblem?: boolean | undefined
   /** A click on that total: the Time panel on this client. */
   onTime?: () => void
   renderCard(item: Item): ReactNode
 }
 
-export function Lane({ lane, lit, canMutate, onNewSession, onHead, time, onTime, renderCard }: LaneProps) {
+export function Lane({ lane, lit, canMutate, onNewSession, onHead, time, timeProblem, onTime, renderCard }: LaneProps) {
   const t = useT()
   const litHere = lit?.lane === lane.id ? lit : null
   return (
@@ -53,7 +55,12 @@ export function Lane({ lane, lit, canMutate, onNewSession, onHead, time, onTime,
           <span className="lane-count">{lane.items.length || ''}</span>
         </header>
         {time ? (
-          <button type="button" className="lane-time" title={t('time.laneTotalHint')} onClick={() => onTime?.()}>
+          <button
+            type="button"
+            className={classNames('lane-time', timeProblem && 'problem')}
+            title={t(timeProblem ? 'time.laneTotalProblem' : 'time.laneTotalHint')}
+            onClick={() => onTime?.()}
+          >
             {t('time.laneTotal', { hours: hoursText(time, t) })}
           </button>
         ) : null}

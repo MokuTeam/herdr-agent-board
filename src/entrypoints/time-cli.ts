@@ -1,10 +1,12 @@
 // `board time …` (#233): time entries in the board's database, for the sessions that log their
 // work and the agents that bill it. The command writes to the database itself (adapters/db.ts),
 // so it works while the web board is down. One line per answer for a person, the whole of it as
-// JSON with --json for an agent; an error goes to stderr with a non-zero exit and says what to do.
+// JSON with --json for an agent; an error goes to stderr with a non-zero exit and says what to do,
+// and under --json it is JSON too ({ ok: false, error: <code>, message }). `--` ends the flags: a
+// description after it may start with "--".
 //
 //   board time add [--client <lane>] --project "<p>" [--start <t>] (--stop <t> | --minutes <n> | --hours <h>)
-//                  [--tag <t>]... [--new-project] "<description>"
+//                  [--tag <t>]... [--new-project] [--] "<description>"
 //   board time edit <id> [--description "…"] [--project "…"] [--client <lane>] [--start <t>] [--stop <t>]
 //                  [--minutes <n> | --hours <h>] [--tag +<t> | --tag -<t>]... [--expect <rev>] [--force]
 //   board time move <id> <date> [--expect <rev>] [--force]
@@ -12,26 +14,28 @@
 //   board time list [--date <d> | --from <d> --to <d>] [--client <lane>] [--tag <t>] [--deleted]
 //   board time day [<d>] [--client <lane>]
 //   board time projects [<lane>]
-//   board time import <file> --tz <zone> [--map "<Toggl client>=<lane>"]... [--dry-run]
+//   board time import <file> --tz <zone> [--map "<Toggl client>=<lane>"]... [--date-format dmy|mdy]
+//                  [--dry-run] [--update]
 import { readFileSync } from 'node:fs'
-import { readKey } from '../adapters/backup-store.ts'
 import { addTimeProjects } from '../adapters/config-file.ts'
 import { type BoardDb, openDb } from '../adapters/db.ts'
 import {
   addEntry,
   editEntry,
   getEntry,
+  type ImportRow,
   importEntries,
+  importVerdict,
   listEntries,
   moveEntry,
   removeEntry,
   restoreEntry,
   TimeError,
 } from '../adapters/time-store.ts'
-import { activeTargets, backupConfig } from '../core/backup.ts'
 import { t } from '../core/lang.ts'
 import {
   type Actor,
+  addDays,
   type ClientDay,
   clientDay,
   clientOf,
@@ -42,14 +46,17 @@ import {
   isDate,
   knownZone,
   parseWhen,
+  plausible,
+  problemsText,
   secondsOf,
   type TimeConfig,
   type TimeEntry,
   timeConfig,
   zoneOf,
 } from '../core/time.ts'
-import { dayTotals, parseMap, rowsFromCsv, rowsFromJson, type TogglRow } from '../core/time-import.ts'
+import { type DateFormat, dayTotals, parseMap, rowsFromCsv, rowsFromJson, type TogglRow } from '../core/time-import.ts'
 import type { Config } from '../core/types.ts'
+import { writeRefusal } from '../services/time.ts'
 
 const FLAGS_WITH_VALUE = new Set([
   '--client',
@@ -66,6 +73,7 @@ const FLAGS_WITH_VALUE = new Set([
   '--expect',
   '--tz',
   '--map',
+  '--date-format',
 ])
 
 interface Args {
@@ -75,12 +83,17 @@ interface Args {
   has(flag: string): boolean
 }
 
+/** The command's words and flags; after `--`, words only. */
 export function parseArgs(rest: readonly string[]): Args {
   const words: string[] = []
   const values = new Map<string, string[]>()
   const bare = new Set<string>()
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i] as string
+    if (a === '--') {
+      words.push(...rest.slice(i + 1))
+      break
+    }
     if (FLAGS_WITH_VALUE.has(a)) {
       const v = rest[i + 1]
       if (v === undefined) throw new TimeError('time.err.flagValue', { flag: a })
@@ -104,15 +117,16 @@ export interface TimeCmdContext {
   /** The session's lane (its card's category), the client when none is named. */
   lane: string | null
   out?: (line: string) => void
+  now?: number
 }
 
-const whoText = (a: Actor): string => (typeof a === 'string' ? t(`time.by.${a}`) : a.name || a.key)
+const whoText = (a: Actor): string => (typeof a === 'string' ? t(`time.who.${a}`) : a.name || a.key)
 
 function entryLine(e: TimeEntry): string {
   return `${e.id} · ${e.date} · ${e.client}/${e.project} · ${hm(secondsOf(e))} · ${e.description}${e.tags.length ? ` · #${e.tags.join(' #')}` : ''}${e.deleted ? ` · ${t('time.cli.removed')}` : ''}`
 }
 
-/** An entry as the JSON gives it: its seconds and its maker's name beside the stored fields. */
+/** An entry as the JSON gives it: its seconds beside the stored fields. */
 const entryJson = (e: TimeEntry) => ({ ...e, seconds: secondsOf(e) })
 
 function dayLines(d: ClientDay, byId: Map<string, TimeEntry>): string[] {
@@ -131,8 +145,27 @@ function dayLines(d: ClientDay, byId: Map<string, TimeEntry>): string[] {
   return lines
 }
 
-export async function timeCmd(rest: readonly string[], ctx: TimeCmdContext): Promise<void> {
+/** An error's code under --json: the text key's last part (notYours, noBackup…), else `failed`. */
+const codeOf = (err: unknown): string => (err instanceof TimeError ? (err.key.split('.').at(-1) ?? 'failed') : 'failed')
+
+/**
+ * The command; its exit code. An error throws, but under --json it is printed as JSON and the
+ * answer is 1.
+ */
+export async function timeCmd(rest: readonly string[], ctx: TimeCmdContext): Promise<number> {
   const out = ctx.out ?? ((line: string) => console.log(line))
+  const json = rest.includes('--json') && !rest.slice(0, rest.indexOf('--json')).includes('--')
+  try {
+    await run(rest, ctx, out)
+    return 0
+  } catch (err) {
+    if (!json) throw err
+    out(JSON.stringify({ ok: false, error: codeOf(err), message: err instanceof Error ? err.message : String(err) }))
+    return 1
+  }
+}
+
+async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: string) => void): Promise<void> {
   const conf = timeConfig(ctx.cfg.time)
   if (!conf) throw new TimeError('time.err.off')
   const [sub = 'list', ...more] = rest
@@ -145,20 +178,34 @@ export async function timeCmd(rest: readonly string[], ctx: TimeCmdContext): Pro
   const force = a.has('--force')
   const expect = a.one('--expect') !== undefined ? Number(a.one('--expect')) : undefined
   if (expect !== undefined && !Number.isInteger(expect)) throw new TimeError('time.err.flagValue', { flag: '--expect' })
+  const now = ctx.now ?? Date.now()
+  /** A note for a person reading a day while the config does not check out (JSON carries `problems`). */
+  const problems = conf.problems.length ? problemsText(conf.problems, t) : null
+  const warn = (): string[] => (problems ? [t('time.cli.problems', { problems })] : [])
 
-  /** A write needs a backup target set up: what the board bills from never lives on this computer alone. */
+  /** A write: the config checks out and a backup went through (services/time.ts), then the database. */
   const writable = (): BoardDb => {
-    if (!activeTargets(backupConfig(ctx.cfg.backup)).length || !readKey()) throw new TimeError('time.err.noBackup')
+    const refused = writeRefusal(ctx.cfg, conf)
+    if (refused) throw refused
     const db = openDb()
     if (!db) throw new TimeError('time.err.noDb')
     return db
   }
   const readable = (): BoardDb | null => openDb({ create: false })
-  const today = dateIn(Date.now(), conf.zone)
+  const today = dateIn(now, conf.zone)
   const clientArg = (): string => {
     const c = a.one('--client') ?? ctx.lane
     if (!c) throw new TimeError('time.err.whichClient')
     return c
+  }
+  /** A time flag: what parseWhen takes, within a day ahead and a year back. */
+  const when = (flag: string): number | null => {
+    const v = a.one(flag)
+    if (v === undefined) return null
+    const at = parseWhen(v, now)
+    if (at === null) throw new TimeError('time.err.when', { value: v })
+    if (!plausible(at, now)) throw new TimeError('time.err.whenRange', { value: v })
+    return at
   }
   const dayOf = (db: BoardDb | null, client: string, date: string): { day: ClientDay; entries: TimeEntry[] } => {
     const entries = db ? listEntries(db, { from: date, to: date, client }) : []
@@ -174,13 +221,8 @@ export async function timeCmd(rest: readonly string[], ctx: TimeCmdContext): Pro
       const description = a.words.join(' ')
       const client = clientArg()
       const project = a.one('--project') ?? ''
-      const now = Date.now()
-      const startArg = a.one('--start')
-      const stopArg = a.one('--stop')
-      const start = startArg !== undefined ? parseWhen(startArg, now) : null
-      if (startArg !== undefined && start === null) throw new TimeError('time.err.when', { value: startArg })
-      const stopGiven = stopArg !== undefined ? parseWhen(stopArg, now) : null
-      if (stopArg !== undefined && stopGiven === null) throw new TimeError('time.err.when', { value: stopArg })
+      const start = when('--start')
+      const stopGiven = when('--stop')
       const duration = durationOf({ minutes: a.one('--minutes'), hours: a.one('--hours') })
       let from: number
       let to: number
@@ -206,11 +248,13 @@ export async function timeCmd(rest: readonly string[], ctx: TimeCmdContext): Pro
             newProject: a.has('--new-project'),
           },
           ctx.actor,
+          now,
         )
         if (a.has('--new-project') && !r.existing) addTimeProjects(client, [r.entry.project])
+        const said = !r.existing ? 'ok' : r.reason === 'repeat-window' ? t('time.cli.repeat') : t('time.cli.existing')
         print(
-          `${r.existing ? t('time.cli.existing') : 'ok'} · ${r.entry.id} · ${r.entry.client}/${r.entry.project} · ${r.entry.date} · ${hm(secondsOf(r.entry))} · ${dayTotal(db, r.entry)}`,
-          { ...entryJson(r.entry), existing: r.existing },
+          `${said} · ${r.entry.id} · ${r.entry.client}/${r.entry.project} · ${r.entry.date} · ${hm(secondsOf(r.entry))} · ${dayTotal(db, r.entry)}`,
+          { ...entryJson(r.entry), existing: r.existing, ...(r.reason && { reason: r.reason }) },
         )
       } finally {
         db.close()
@@ -220,14 +264,6 @@ export async function timeCmd(rest: readonly string[], ctx: TimeCmdContext): Pro
     case 'edit': {
       const id = a.words[0]
       if (!id) throw new TimeError('time.err.usage')
-      const now = Date.now()
-      const when = (flag: string): number | undefined => {
-        const v = a.one(flag)
-        if (v === undefined) return undefined
-        const at = parseWhen(v, now)
-        if (at === null) throw new TimeError('time.err.when', { value: v })
-        return at
-      }
       const duration = durationOf({ minutes: a.one('--minutes'), hours: a.one('--hours') })
       if ((a.one('--minutes') !== undefined || a.one('--hours') !== undefined) && duration === null)
         throw new TimeError('time.err.noDuration')
@@ -247,8 +283,8 @@ export async function timeCmd(rest: readonly string[], ctx: TimeCmdContext): Pro
             ...(description !== undefined && { description }),
             ...(project !== undefined && { project }),
             ...(client !== undefined && { client }),
-            ...(start !== undefined && { start }),
-            ...(stop !== undefined && { stop }),
+            ...(start !== null && { start }),
+            ...(stop !== null && { stop }),
             ...(duration !== null && { seconds: duration }),
             addTags: tags.filter(x => !x.startsWith('-')).map(x => x.replace(/^\+/, '')),
             removeTags: tags.filter(x => x.startsWith('-')).map(x => x.slice(1)),
@@ -267,6 +303,8 @@ export async function timeCmd(rest: readonly string[], ctx: TimeCmdContext): Pro
     case 'move': {
       const [id, date] = a.words
       if (!id || !date || !isDate(date)) throw new TimeError('time.err.usage')
+      if (date > addDays(today, 1) || date < addDays(today, -366))
+        throw new TimeError('time.err.whenRange', { value: date })
       const db = writable()
       try {
         const e = moveEntry(db, conf, id, date, ctx.actor, { force, ...(expect !== undefined && { expect }) })
@@ -312,11 +350,18 @@ export async function timeCmd(rest: readonly string[], ctx: TimeCmdContext): Pro
         ? listEntries(db, { from, to, client: a.one('--client'), tag: a.one('--tag'), deleted: a.has('--deleted') })
         : []
       db?.close()
-      const total = list.filter(e => !e.deleted).reduce((n, e) => n + secondsOf(e), 0)
+      // the total as a day's would be: removed and held entries out of it
+      const counted = list.filter(e => !e.deleted && !e.tags.some(tag => conf.excludeTags.includes(tag)))
+      const held = list.filter(e => !e.deleted).length - counted.length
+      const total = counted.reduce((n, e) => n + secondsOf(e), 0)
       print(
         list.length
-          ? [...list.map(entryLine), t('time.cli.total', { n: list.length, total: hm(total) })]
-          : t('time.cli.none'),
+          ? [
+              ...warn(),
+              ...list.map(entryLine),
+              `${t('time.cli.total', { n: counted.length, total: hm(total) })}${held ? ` · ${t('time.cli.heldCount', { n: held })}` : ''}`,
+            ]
+          : [...warn(), t('time.cli.none')],
         list.map(entryJson),
       )
       return
@@ -338,16 +383,17 @@ export async function timeCmd(rest: readonly string[], ctx: TimeCmdContext): Pro
           entries.filter(e => e.client === c),
         ),
       )
-      print(
-        days.length ? days.flatMap(d => dayLines(d, byId)) : t('time.cli.none'),
-        days.map(d => ({
+      print([...warn(), ...(days.length ? days.flatMap(d => dayLines(d, byId)) : [t('time.cli.none')])], {
+        date,
+        problems: conf.problems.map(p => `${p.at}: ${t(`time.problem.${p.why}`, { value: p.value ?? '' })}`),
+        days: days.map(d => ({
           ...d,
           entries: d.lines
             .flatMap(l => l.entries)
             .concat(d.held)
             .map(id => entryJson(byId.get(id) as TimeEntry)),
         })),
-      )
+      })
       return
     }
     case 'projects': {
@@ -363,7 +409,7 @@ export async function timeCmd(rest: readonly string[], ctx: TimeCmdContext): Pro
       return
     }
     case 'import':
-      return importCmd(a, conf, writable, print)
+      return importCmd(a, conf, writable, readable, print)
     default:
       throw new TimeError('time.err.usage')
   }
@@ -373,12 +419,16 @@ async function importCmd(
   a: Args,
   conf: TimeConfig,
   writable: () => BoardDb,
+  readable: () => BoardDb | null,
   print: (human: string | string[], value: unknown) => void,
 ): Promise<void> {
   const file = a.words[0]
   const tz = a.one('--tz')
   if (!file || !tz) throw new TimeError('time.err.importUsage')
   if (!knownZone(tz)) throw new TimeError('time.err.zone', { zone: tz })
+  const format = a.one('--date-format')
+  if (format !== undefined && format !== 'dmy' && format !== 'mdy')
+    throw new TimeError('time.err.flagValue', { flag: '--date-format' })
   const map = parseMap(a.all('--map'))
   if (typeof map === 'string') throw new TimeError('time.err.map', { value: map })
   let text: string
@@ -399,13 +449,15 @@ async function importCmd(
     }
     ;({ rows, bad } = rowsFromJson(value))
   } else {
-    const r = rowsFromCsv(text, zoned)
+    const r = rowsFromCsv(text, zoned, (format as DateFormat | undefined) ?? null)
     if (r.missing.length) throw new TimeError('time.err.importColumns', { columns: r.missing.join(', ') })
+    if (r.dates === 'ambiguous') throw new TimeError('time.err.dateFormat')
+    if (r.dates === 'mixed') throw new TimeError('time.err.dateOrder')
     ;({ rows, bad } = r)
   }
   const unmapped = new Set<string>()
   const running: string[] = []
-  const entries = []
+  const entries: ImportRow[] = []
   for (const r of rows) {
     if (r.running) {
       running.push(r.key)
@@ -423,7 +475,7 @@ async function importCmd(
       tags: r.tags,
       start: r.start,
       stop: r.stop,
-      toggl: r.key,
+      ...(r.key && { toggl: r.key }),
     })
   }
   for (const lane of new Set(map.values())) {
@@ -434,41 +486,83 @@ async function importCmd(
     throw new TimeError('time.err.unmapped', {
       clients: [...unmapped].map(c => (c === '' ? '""' : `"${c}"`)).join(', '),
     })
-  const totals = dayTotals(
-    entries.map(e => ({
-      date: dateIn(e.start, zoneOf(conf, e.client)),
-      client: e.client,
-      seconds: Math.round((e.stop - e.start) / 1000),
-    })),
+  const seconds = (e: ImportRow) => Math.round((e.stop - e.start) / 1000)
+  // per day twice: the board's work date (as it will bill) and Toggl's own day in --tz (as its
+  // report shows it), so the run can be held against that report day by day
+  const byWorkDate = dayTotals(
+    entries.map(e => ({ date: dateIn(e.start, zoneOf(conf, e.client)), client: e.client, seconds: seconds(e) })),
   )
+  const byTogglDay = dayTotals(entries.map(e => ({ date: dateIn(e.start, tz), client: e.client, seconds: seconds(e) })))
   const summary = {
     rows: rows.length,
     entries: entries.length,
     running: running.length,
     unreadable: bad,
-    days: totals.map(d => ({ ...d, hours: hm(d.seconds) })),
+    days: byWorkDate.map(d => ({ ...d, hours: hm(d.seconds) })),
+    togglDays: byTogglDay.map(d => ({ ...d, hours: hm(d.seconds) })),
   }
+  const totals = (title: string, list: typeof byWorkDate): string[] => [
+    title,
+    ...list.map(d => `  ${d.date} · ${d.client} · ${d.entries} · ${hm(d.seconds)}`),
+  ]
+  const changeLines = (key: string, list: readonly { id: string; fields: string[] }[]): string[] =>
+    list.map(c => t(key, { id: c.id, fields: c.fields.join(', ') }))
   if (a.has('--dry-run')) {
+    // read only: what a run would do against the database as it is
+    const db = readable()
+    const verdicts = (() => {
+      try {
+        return entries.map(e => importVerdict(db, conf, e))
+      } finally {
+        db?.close()
+      }
+    })()
+    const fresh = verdicts.filter(v => v.kind === 'new').length
+    const already = verdicts.filter(v => v.kind === 'already').length
+    const changed = verdicts.flatMap(v =>
+      v.kind === 'changed'
+        ? [{ id: v.stored.id, toggl: v.stored.toggl ?? null, start: v.stored.start, fields: v.fields }]
+        : [],
+    )
     print(
       [
-        ...totals.map(d => `${d.date} · ${d.client} · ${d.entries} · ${hm(d.seconds)}`),
-        t('time.cli.importDry', { n: entries.length, running: running.length, bad: bad.length }),
+        ...totals(t('time.cli.byWorkDate', { zone: conf.zone }), byWorkDate),
+        ...totals(t('time.cli.byTogglDay', { zone: tz }), byTogglDay),
+        ...changeLines('time.cli.importChanged', changed),
+        t('time.cli.importDry', {
+          n: fresh,
+          already,
+          changed: changed.length,
+          running: running.length,
+          bad: bad.length,
+        }),
       ],
-      summary,
+      { ...summary, dryRun: true, new: fresh, already, changed },
     )
     return
   }
-  // projects found go into each lane's list, where the lane lists them
-  const byLane = new Map<string, string[]>()
-  for (const e of entries) byLane.set(e.client, [...(byLane.get(e.client) ?? []), e.project])
-  for (const [lane, projects] of byLane) addTimeProjects(lane, projects)
   const db = writable()
   try {
-    const r = importEntries(db, conf, entries)
-    print(t('time.cli.imported', { added: r.added, already: r.already, running: running.length, bad: bad.length }), {
-      ...summary,
-      ...r,
-    })
+    const r = importEntries(db, conf, entries, { update: a.has('--update') })
+    // projects found go into each lane's list, where the lane lists them: only once the gate let the run in
+    const byLane = new Map<string, string[]>()
+    for (const e of entries) if (e.project !== '-') byLane.set(e.client, [...(byLane.get(e.client) ?? []), e.project])
+    for (const [lane, projects] of byLane) addTimeProjects(lane, projects)
+    print(
+      [
+        ...changeLines('time.cli.importChanged', r.changed),
+        ...changeLines('time.cli.importUpdated', r.updated),
+        t('time.cli.imported', {
+          added: r.added,
+          already: r.already,
+          changed: r.changed.length,
+          updated: r.updated.length,
+          running: running.length,
+          bad: bad.length,
+        }),
+      ],
+      { ...summary, ...r },
+    )
   } finally {
     db.close()
   }

@@ -28,7 +28,7 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.err.usage':
       'usage: board time add | edit <id> | move <id> <date> | rm <id> | restore <id> | show <id> | list | day [<date>] | projects | import <file>',
     'time.err.importUsage':
-      'usage: board time import <file> --tz <Toggl profile’s zone> [--map "<Toggl client>=<lane>"]... [--dry-run]',
+      'usage: board time import <file> --tz <Toggl profile’s zone> [--map "<Toggl client>=<lane>"]... [--date-format dmy|mdy] [--dry-run] [--update]',
     'time.err.zone': '"{zone}" is not a time zone (an IANA name, such as Europe/Istanbul).',
     'time.err.map': '--map wants "<Toggl client>=<lane>": {value}',
     'time.err.file': 'Cannot read {file}.',
@@ -36,6 +36,36 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.err.importColumns': 'The CSV lacks the columns: {columns}. Export Toggl’s Detailed report.',
     'time.err.unmapped':
       'Toggl clients without a lane: {clients}. Map each with --map "<client>=<lane>" ("" for none).',
+    'time.err.config': 'Time is not written while config.json’s "time" does not check out: {problems}',
+    'time.err.notBackedUp':
+      'Time is not written before a backup of the board’s database has gone through once: run Test or Back up now in Settings → Backup…',
+    'time.err.whenRange': '{value} is more than a day ahead or a year back: is that the time you meant?',
+    'time.err.dateFormat':
+      'The CSV’s dates read either way (day/month or month/day): say which with --date-format dmy or --date-format mdy.',
+    'time.err.dateOrder': 'The CSV’s dates are written both ways (day/month and month/day): export it again.',
+    'time.problem.required': 'missing',
+    'time.problem.zone': '"{value}" is not a time zone (an IANA name, such as America/New_York)',
+    'time.problem.regex': '"{value}" is not a regex that compiles',
+    'time.problem.group': '"{value}" is not entry, ref, project or day',
+    'time.problem.round': '"{value}" is not up, nearest, down or exact',
+    'time.problem.step': '{value} is not a number of minutes from 1 to 1440',
+    'time.problem.type': 'not the kind of value it takes ({value})',
+    'time.problem.unknown': 'not a setting the board knows (a typo?)',
+    'time.who.user': 'the owner',
+    'time.who.import': 'the import',
+    'time.cli.repeat': 'already there (the same call within 15 minutes)',
+    'time.cli.problems': 'config.json’s "time" does not check out, nothing is written until it does: {problems}',
+    'time.cli.byWorkDate': 'by work date ({zone}), as the board will bill them:',
+    'time.cli.byTogglDay': 'by Toggl’s day ({zone}), to hold against its report:',
+    'time.cli.importChanged': 'changed in Toggl since it was imported: {id} ({fields})',
+    'time.cli.importUpdated': 'updated from Toggl: {id} ({fields})',
+    'time.cli.heldCount': 'held {n}',
+    'time.doctor.title': 'Time tracking',
+    'time.doctor.ok': 'on, days in {zone}',
+    'time.doctor.problems': 'config.json’s "time" does not check out, no entry is written: {problems}',
+    'time.problemsNote':
+      'config.json’s "time" does not check out, so no entry is written and these figures may be wrong: {problems}',
+    'time.laneTotalProblem': 'config.json’s "time" does not check out: open the day',
     'time.by.user': 'the owner',
     'time.by.import': 'the import',
     'time.round.up': 'up to {step} min',
@@ -51,8 +81,9 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.cli.dayGroup': 'the day',
     'time.cli.anyProject': 'any project',
     'time.cli.importDry':
-      'dry run: {n} entries to import, {running} running skipped, {bad} unreadable; nothing written',
-    'time.cli.imported': 'ok · {added} imported, {already} already there, {running} running skipped, {bad} unreadable',
+      'dry run: {n} new, {already} already there, {changed} changed in Toggl, {running} running skipped, {bad} unreadable; nothing written',
+    'time.cli.imported':
+      'ok · {added} imported, {already} already there, {changed} changed in Toggl, {updated} updated, {running} running skipped, {bad} unreadable',
 
     'time.open': 'Time',
     'time.openHint': 'Time entries by client and day, as they will be billed',
@@ -70,6 +101,7 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.laneTotal': '{hours} today',
     'time.laneTotalHint': 'Today’s time for this client, as billed: open the day',
     'time.loadError': 'Could not read the time entries: {error}',
+    'time.loading': 'Reading the day…',
   },
   ru: {
     'time.err.off': 'Учёт времени выключен: включите его через "time" в config.json',
@@ -95,7 +127,7 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.err.usage':
       'использование: board time add | edit <id> | move <id> <дата> | rm <id> | restore <id> | show <id> | list | day [<дата>] | projects | import <файл>',
     'time.err.importUsage':
-      'использование: board time import <файл> --tz <зона профиля Toggl> [--map "<клиент Toggl>=<лейн>"]... [--dry-run]',
+      'использование: board time import <файл> --tz <зона профиля Toggl> [--map "<клиент Toggl>=<лейн>"]... [--date-format dmy|mdy] [--dry-run] [--update]',
     'time.err.zone': '"{zone}" не часовой пояс (имя IANA, например Europe/Istanbul).',
     'time.err.map': '--map ждёт "<клиент Toggl>=<лейн>": {value}',
     'time.err.file': 'Не удалось прочитать {file}.',
@@ -103,6 +135,35 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.err.importColumns': 'В CSV нет столбцов: {columns}. Выгрузите Detailed report из Toggl.',
     'time.err.unmapped':
       'Клиенты Toggl без лейна: {clients}. Укажите каждый через --map "<клиент>=<лейн>" ("" для пустого).',
+    'time.err.config': 'Время не пишется, пока "time" в config.json не в порядке: {problems}',
+    'time.err.notBackedUp':
+      'Время не пишется, пока бэкап базы доски ни разу не прошёл: запустите Проверить или Бэкап сейчас в Настройки → Бэкап…',
+    'time.err.whenRange': '{value} больше чем на день вперёд или на год назад: это то время?',
+    'time.err.dateFormat':
+      'Даты в CSV читаются двояко (день/месяц или месяц/день): укажите --date-format dmy или --date-format mdy.',
+    'time.err.dateOrder': 'Даты в CSV записаны по-разному (и день/месяц, и месяц/день): выгрузите его заново.',
+    'time.problem.required': 'не задано',
+    'time.problem.zone': '"{value}" не часовой пояс (имя IANA, например America/New_York)',
+    'time.problem.regex': '"{value}" не компилируется как регулярное выражение',
+    'time.problem.group': '"{value}" не entry, ref, project или day',
+    'time.problem.round': '"{value}" не up, nearest, down или exact',
+    'time.problem.step': '{value} не число минут от 1 до 1440',
+    'time.problem.type': 'не тот вид значения ({value})',
+    'time.problem.unknown': 'доска не знает такой настройки (опечатка?)',
+    'time.who.user': 'владелец',
+    'time.who.import': 'импорт',
+    'time.cli.repeat': 'уже есть (тот же вызов в пределах 15 минут)',
+    'time.cli.problems': '"time" в config.json не в порядке, ничего не пишется, пока не исправите: {problems}',
+    'time.cli.byWorkDate': 'по рабочему дню ({zone}), как доска выставит:',
+    'time.cli.byTogglDay': 'по дню Toggl ({zone}), сверить с его отчётом:',
+    'time.cli.importChanged': 'изменена в Toggl после импорта: {id} ({fields})',
+    'time.cli.importUpdated': 'обновлена из Toggl: {id} ({fields})',
+    'time.cli.heldCount': 'отложено {n}',
+    'time.doctor.title': 'Учёт времени',
+    'time.doctor.ok': 'включён, дни по {zone}',
+    'time.doctor.problems': '"time" в config.json не в порядке, записи не пишутся: {problems}',
+    'time.problemsNote': '"time" в config.json не в порядке: записи не пишутся, а цифры могут быть неверны: {problems}',
+    'time.laneTotalProblem': '"time" в config.json не в порядке: открыть день',
     'time.by.user': 'владельцу',
     'time.by.import': 'импорту',
     'time.round.up': 'вверх до {step} мин',
@@ -112,15 +173,15 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.cli.existing': 'уже есть',
     'time.cli.removed': 'удалена',
     'time.cli.dayTotal': 'день {raw} → {billed}',
-    'time.cli.total': ['{n} запись, {total}', '{n} записей, {total}'],
+    'time.cli.total': ['{n} запись, {total}', '{n} записи, {total}', '{n} записей, {total}'],
     'time.cli.none': 'записей нет',
     'time.cli.held': 'отложены',
     'time.cli.dayGroup': 'день',
     'time.cli.anyProject': 'любой проект',
     'time.cli.importDry':
-      'пробный прогон: к импорту {n}, пропущено запущенных {running}, нечитаемых {bad}; ничего не записано',
+      'пробный прогон: новых {n}, уже есть {already}, изменено в Toggl {changed}, пропущено запущенных {running}, нечитаемых {bad}; ничего не записано',
     'time.cli.imported':
-      'ok · импортировано {added}, уже было {already}, пропущено запущенных {running}, нечитаемых {bad}',
+      'ok · импортировано {added}, уже было {already}, изменено в Toggl {changed}, обновлено {updated}, пропущено запущенных {running}, нечитаемых {bad}',
 
     'time.open': 'Время',
     'time.openHint': 'Записи времени по клиентам и дням, как они пойдут в счёт',
@@ -138,5 +199,6 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.laneTotal': '{hours} сегодня',
     'time.laneTotalHint': 'Время этого клиента за сегодня к выставлению: открыть день',
     'time.loadError': 'Не удалось прочитать записи времени: {error}',
+    'time.loading': 'Читаю день…',
   },
 }

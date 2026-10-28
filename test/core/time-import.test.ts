@@ -37,9 +37,66 @@ test('the Detailed report: columns by header, times in the profile’s zone, the
   assert.equal(((night?.stop ?? 0) - (night?.start ?? 0)) / 60_000, 45)
   assert.equal(running?.running, true)
   assert.equal(first?.running, false)
-  // no id column: a key of the row's own, the same on a second run of the same export
-  assert.match(first?.key ?? '', /^csv:[0-9a-f]{16}$/)
-  assert.equal(rowsFromCsv(CSV, zoned).rows[0]?.key, first?.key)
+  // no id column: no key (the store knows the row again by its lane and start)
+  assert.equal(first?.key, '')
+})
+
+test('dates either way round: the file shows which, or --date-format; a date that is no date is unreadable', () => {
+  const head = 'Client,Project,Description,Start date,Start time,End date,End time,Duration,Tags\n'
+  const row = (start: string, end: string, time = '09:00:00', endTime = '10:00:00') =>
+    `Client A,Support,Work,${start},${time},${end},${endTime},01:00:00,\n`
+  const iso = (r: ReturnType<typeof rowsFromCsv>) => r.rows.map(x => new Date(x.start).toISOString().slice(0, 10))
+  // 28/10 can only be day/month, so 10/11 in the same file is the 10th of November
+  const dmy = rowsFromCsv(head + row('28/10/2026', '28/10/2026') + row('10/11/2026', '10/11/2026'), zoned)
+  assert.deepEqual(iso(dmy), ['2026-10-28', '2026-11-10'])
+  // 10/28 can only be month/day
+  assert.deepEqual(iso(rowsFromCsv(head + row('10/28/2026', '10/28/2026') + row('10/11/2026', '10/11/2026'), zoned)), [
+    '2026-10-28',
+    '2026-10-11',
+  ])
+  // dots and dashes as Toggl's other formats write them
+  assert.deepEqual(iso(rowsFromCsv(head + row('28.10.2026', '28.10.2026') + row('29-10-2026', '29-10-2026'), zoned)), [
+    '2026-10-28',
+    '2026-10-29',
+  ])
+  // nothing in the file tells: refused, unless the flag says
+  const only = head + row('10/11/2026', '10/11/2026')
+  assert.equal(rowsFromCsv(only, zoned).dates, 'ambiguous')
+  assert.deepEqual(iso(rowsFromCsv(only, zoned, 'dmy')), ['2026-11-10'])
+  assert.deepEqual(iso(rowsFromCsv(only, zoned, 'mdy')), ['2026-10-11'])
+  // the same either way needs no flag
+  assert.deepEqual(iso(rowsFromCsv(head + row('10/10/2026', '10/10/2026'), zoned)), ['2026-10-10'])
+  // both ways in one file
+  assert.equal(
+    rowsFromCsv(head + row('28/10/2026', '28/10/2026') + row('10/28/2026', '10/28/2026'), zoned).dates,
+    'mixed',
+  )
+  // a date that is no date, an impossible clock: unreadable rows, by line
+  const badRows = rowsFromCsv(
+    head +
+      row('2026-02-30', '2026-02-30') +
+      row('2026-10-28', '2026-10-28', '25:00:00') +
+      row('2026-10-28', '2026-10-28'),
+    zoned,
+  )
+  assert.deepEqual(badRows.bad, [2, 3])
+  assert.equal(badRows.rows.length, 1)
+  // 12-hour times
+  const pm = rowsFromCsv(head + row('2026-10-28', '2026-10-28', '1:05:00 PM', '2:35:00 PM'), zoned)
+  assert.equal(new Date(pm.rows[0]?.start ?? 0).toISOString(), '2026-10-28T10:05:00.000Z')
+  assert.equal(((pm.rows[0]?.stop ?? 0) - (pm.rows[0]?.start ?? 0)) / 60_000, 90)
+  assert.equal(
+    rowsFromCsv(head + row('2026-10-28', '2026-10-28', '12:30:00 AM', '1:00:00 AM'), zoned).rows[0]?.start,
+    Date.parse('2026-10-27T21:30:00Z'),
+  )
+})
+
+test('a report without an End time column is read by its durations, not as running timers', () => {
+  const csv =
+    'Client,Project,Description,Start date,Start time,Duration\nClient A,Support,Work,2026-10-28,09:00:00,01:30:00\n'
+  const r = rowsFromCsv(csv, zoned)
+  assert.equal(r.rows[0]?.running, false)
+  assert.equal(((r.rows[0]?.stop ?? 0) - (r.rows[0]?.start ?? 0)) / 60_000, 90)
 })
 
 test('an id column is the key; a CSV without the columns it needs says which', () => {

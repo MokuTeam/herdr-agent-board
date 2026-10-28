@@ -8,6 +8,14 @@
 // A client's day becomes billed lines by its rules, data in the config: each entry goes to the
 // first rule whose `match` fits its description; the rule adds entries up by `group` and rounds
 // the sum to `step` minutes as `round` says. The board knows no client's rules but these fields.
+//
+// The owner writes this config by hand, and a value read wrong would date or bill entries wrong
+// with no word: so nothing in it is guessed. A value that does not check out (an unknown zone,
+// round or group, a regex that does not compile, a key the board does not know) is a problem,
+// named by its place in config.json; while there is one, no entry is written, and every view of a
+// day says so.
+
+import type { Translator } from './types.ts'
 
 export type Group = 'entry' | 'ref' | 'project' | 'day'
 export type Round = 'up' | 'nearest' | 'down' | 'exact'
@@ -38,13 +46,41 @@ export interface TimeConfig {
   excludeTags: string[]
   /** The lanes that take time, by lane id; null: every lane, any project. */
   clients: Record<string, TimeClient> | null
+  /** What does not check out; none: the config is as written. */
+  problems: TimeProblem[]
 }
 
-/** A case number of five digits, or a ticket key such as ABC-123. */
+export type ProblemWhy = 'required' | 'zone' | 'regex' | 'group' | 'round' | 'step' | 'type' | 'unknown'
+
+/** A value of config.json's `time` that does not check out: where (time.clients.x.billing[1].round), and why. */
+export interface TimeProblem {
+  at: string
+  why: ProblemWhy
+  value?: string
+}
+
+/** The problems as one line: "time.zone: … ; time.clients.x.billing[0].round: …". */
+export const problemsText = (ps: readonly TimeProblem[], tr: Translator): string =>
+  ps.map(p => `${p.at}: ${tr(`time.problem.${p.why}`, { value: p.value ?? '' })}`).join('; ')
+
+/** A case number of five digits, or a ticket key such as ABC-123 (a client with other text before its case sets its own `ref`). */
 export const DEFAULT_REF = '\\b([A-Z][A-Z0-9]+-\\d+|\\d{5})\\b'
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+
+/** The text kept: one line, no control characters, at most 1000 characters. */
+export function cleanText(s: string, max = 1000): string {
+  // control characters out (a tab or a line break becomes a space), then the spaces made one
+  const one = [...s]
+    .map(ch => (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? ' ' : ch))
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return one.length > max ? one.slice(0, max) : one
+}
+
+export const cleanTag = (s: string): string => cleanText(s, 40).toLowerCase()
 
 /** Whether a time zone is one Intl knows. */
 export function knownZone(zone: string): boolean {
@@ -69,41 +105,98 @@ function goodRegex(source: string): boolean {
   }
 }
 
-function ruleOf(raw: unknown): BillingRule | null {
-  if (!isObject(raw)) return null
-  const match = text(raw.match) || null
-  if (match && !goodRegex(match)) return null
-  const group = GROUPS.includes(raw.group as Group) ? (raw.group as Group) : 'entry'
-  const round = ROUNDS.includes(raw.round as Round) ? (raw.round as Round) : 'exact'
-  const step = Number(raw.step)
-  const ok = round === 'exact' || (Number.isFinite(step) && step > 0 && step <= 24 * 60)
-  if (!ok) return null
+const TIME_KEYS = ['zone', 'excludeTags', 'clients']
+const CLIENT_KEYS = ['projects', 'ref', 'zone', 'billing']
+const RULE_KEYS = ['match', 'group', 'step', 'round']
+
+const shown = (v: unknown): string => (typeof v === 'string' ? v : (JSON.stringify(v) ?? String(v)))
+
+function unknownKeys(o: Record<string, unknown>, known: readonly string[], at: string, problems: TimeProblem[]): void {
+  for (const k of Object.keys(o)) if (!known.includes(k)) problems.push({ at: `${at}.${k}`, why: 'unknown' })
+}
+
+/** A list of strings, or a problem (and null) when it is something else. */
+function strings(v: unknown, at: string, problems: TimeProblem[]): string[] | null {
+  if (Array.isArray(v) && v.every(x => typeof x === 'string')) return v.map(text).filter(Boolean)
+  problems.push({ at, why: 'type', value: shown(v) })
+  return null
+}
+
+function ruleOf(raw: unknown, at: string, problems: TimeProblem[]): BillingRule | null {
+  if (!isObject(raw)) {
+    problems.push({ at, why: 'type', value: shown(raw) })
+    return null
+  }
+  const before = problems.length
+  unknownKeys(raw, RULE_KEYS, at, problems)
+  let match: string | null = null
+  if (typeof raw.match === 'string') match = raw.match.trim() || null
+  else if (raw.match !== undefined && raw.match !== null)
+    problems.push({ at: `${at}.match`, why: 'type', value: shown(raw.match) })
+  if (match && !goodRegex(match)) problems.push({ at: `${at}.match`, why: 'regex', value: match })
+  const group = raw.group === undefined ? 'entry' : (raw.group as Group)
+  if (!GROUPS.includes(group)) problems.push({ at: `${at}.group`, why: 'group', value: shown(raw.group) })
+  const round = raw.round as Round
+  if (raw.round === undefined) problems.push({ at: `${at}.round`, why: 'required' })
+  else if (!ROUNDS.includes(round)) problems.push({ at: `${at}.round`, why: 'round', value: shown(raw.round) })
+  const step = typeof raw.step === 'number' ? raw.step : Number.NaN
+  if (round !== 'exact' && ROUNDS.includes(round) && !(step > 0 && step <= 24 * 60))
+    problems.push({ at: `${at}.step`, why: 'step', value: shown(raw.step) })
+  if (problems.length > before) return null
   return { match, group, step: round === 'exact' ? 0 : step, round }
 }
 
-/** config.json's `time`: an object or `true` turns it on; anything else is off (null). */
+/**
+ * config.json's `time`: an object or `true` turns it on; anything else is off (null). `true` is the
+ * computer's own zone and every lane; an object names its `zone`. What does not check out is in
+ * `problems`, and the rest is read as well as it can be, for a view that says so.
+ */
 export function timeConfig(raw: unknown): TimeConfig | null {
   if (raw !== true && !isObject(raw)) return null
-  const c = isObject(raw) ? raw : {}
-  const zone = text(c.zone) && knownZone(text(c.zone)) ? text(c.zone) : localZone()
-  const excludeTags = Array.isArray(c.excludeTags) ? c.excludeTags.map(text).filter(Boolean) : ['deferred']
+  const problems: TimeProblem[] = []
+  if (raw === true) return { zone: localZone(), excludeTags: ['deferred'], clients: null, problems }
+  const c = raw as Record<string, unknown>
+  unknownKeys(c, TIME_KEYS, 'time', problems)
+  let zone = localZone()
+  if (c.zone === undefined) problems.push({ at: 'time.zone', why: 'required' })
+  else if (typeof c.zone !== 'string' || !knownZone(text(c.zone)))
+    problems.push({ at: 'time.zone', why: 'zone', value: shown(c.zone) })
+  else zone = text(c.zone)
+  const excludeTags =
+    c.excludeTags === undefined
+      ? ['deferred']
+      : [...new Set((strings(c.excludeTags, 'time.excludeTags', problems) ?? []).map(cleanTag).filter(Boolean))]
   let clients: TimeConfig['clients'] = null
+  if (c.clients !== undefined && !isObject(c.clients))
+    problems.push({ at: 'time.clients', why: 'type', value: shown(c.clients) })
   if (isObject(c.clients)) {
     clients = {}
     for (const [id, v] of Object.entries(c.clients)) {
+      const at = `time.clients.${id}`
+      if (!isObject(v)) problems.push({ at, why: 'type', value: shown(v) })
       const o = isObject(v) ? v : {}
-      const projects = Array.isArray(o.projects) ? [...new Set(o.projects.map(text).filter(Boolean))] : null
-      const ref = text(o.ref) && goodRegex(text(o.ref)) ? text(o.ref) : DEFAULT_REF
-      const own = text(o.zone)
-      clients[id] = {
-        projects,
-        ref,
-        zone: own && knownZone(own) ? own : null,
-        billing: Array.isArray(o.billing) ? o.billing.map(ruleOf).filter((r): r is BillingRule => r !== null) : [],
+      unknownKeys(o, CLIENT_KEYS, at, problems)
+      const projects = o.projects === undefined ? null : [...new Set(strings(o.projects, `${at}.projects`, problems))]
+      let ref = DEFAULT_REF
+      if (typeof o.ref === 'string' && text(o.ref)) {
+        if (goodRegex(text(o.ref))) ref = text(o.ref)
+        else problems.push({ at: `${at}.ref`, why: 'regex', value: text(o.ref) })
+      } else if (o.ref !== undefined) problems.push({ at: `${at}.ref`, why: 'type', value: shown(o.ref) })
+      let own: string | null = null
+      if (o.zone !== undefined) {
+        if (typeof o.zone === 'string' && knownZone(text(o.zone))) own = text(o.zone)
+        else problems.push({ at: `${at}.zone`, why: 'zone', value: shown(o.zone) })
       }
+      let billing: BillingRule[] = []
+      if (Array.isArray(o.billing))
+        billing = o.billing
+          .map((r, i) => ruleOf(r, `${at}.billing[${i}]`, problems))
+          .filter((r): r is BillingRule => r !== null)
+      else if (o.billing !== undefined) problems.push({ at: `${at}.billing`, why: 'type', value: shown(o.billing) })
+      clients[id] = { projects, ref, zone: own, billing }
     }
   }
-  return { zone, excludeTags, clients }
+  return { zone, excludeTags, clients, problems }
 }
 
 /** A client's settings, or why it takes no time (a text key). */
@@ -117,9 +210,24 @@ export const zoneOf = (c: TimeConfig, client: string): string => c.clients?.[cli
 
 // ------------------------------------------------------------------ dates and times
 
+// a formatter per zone, made once: making one costs more than using it many times
+const dateFormats = new Map<string, Intl.DateTimeFormat>()
+const clockFormats = new Map<string, Intl.DateTimeFormat>()
+function formatOf(cache: Map<string, Intl.DateTimeFormat>, zone: string, make: () => Intl.DateTimeFormat) {
+  const had = cache.get(zone)
+  if (had) return had
+  const f = make()
+  cache.set(zone, f)
+  return f
+}
+
 /** The date of an instant in a time zone, YYYY-MM-DD. */
 export function dateIn(at: number, zone: string): string {
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' })
+  const parts = formatOf(
+    dateFormats,
+    zone,
+    () => new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }),
+  )
     .formatToParts(new Date(at))
     .reduce<Record<string, string>>((o, p) => {
       o[p.type] = p.value
@@ -130,13 +238,18 @@ export function dateIn(at: number, zone: string): string {
 
 /** The wall clock of an instant in a time zone: [h, m, s]. */
 export function clockIn(at: number, zone: string): [number, number, number] {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: zone,
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-  })
+  const parts = formatOf(
+    clockFormats,
+    zone,
+    () =>
+      new Intl.DateTimeFormat('en-GB', {
+        timeZone: zone,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+      }),
+  )
     .formatToParts(new Date(at))
     .reduce<Record<string, string>>((o, p) => {
       o[p.type] = p.value
@@ -153,22 +266,24 @@ function offsetAt(at: number, zone: string): number {
 }
 
 /**
- * The instant a wall clock on a date shows in a time zone. A time the zone skips that day (the
- * spring's DST gap) is moved forward by the gap; one it shows twice (the autumn's) is the first.
+ * The instant a wall clock on a date shows in a time zone, east or west of UTC. A time the zone
+ * skips that day (the spring's DST gap) is moved forward by the gap; one it shows twice (the
+ * autumn's) is the first.
  */
 export function instantIn(date: string, clock: readonly [number, number, number], zone: string): number {
   const [y, mo, d] = date.split('-').map(Number) as [number, number, number]
   const wall = Date.UTC(y, mo - 1, d, clock[0], clock[1], clock[2])
-  // two passes settle any zone; the earlier offset is taken where two fit (the autumn's repeat)
-  const first = wall - offsetAt(wall, zone)
-  const second = wall - offsetAt(first, zone)
-  const candidates = [first, second].filter(at => {
+  // the zone's offsets a day before and a day after: no change of offset lies outside them, and
+  // where both fit (the autumn's repeat) the earlier instant is the one
+  const before = offsetAt(wall - 86_400_000, zone)
+  const after = offsetAt(wall + 86_400_000, zone)
+  const candidates = [wall - before, wall - after].filter(at => {
     const [h, mi, s] = clockIn(at, zone)
     return dateIn(at, zone) === date && h === clock[0] && mi === clock[1] && s === clock[2]
   })
   if (candidates.length) return Math.min(...candidates)
   // the gap: the same wall time with the offset from before it, which lands past the gap
-  return wall - offsetAt(wall - 6 * 3_600_000, zone)
+  return wall - before
 }
 
 export const isDate = (s: string): boolean =>
@@ -182,9 +297,13 @@ export function addDays(date: string, days: number): string {
   return new Date(at).toISOString().slice(0, 10)
 }
 
+/** How far ahead "HH:MM" may be before it means yesterday's: past midnight, "21:00" is last evening. */
+const HM_AHEAD_MS = 3_600_000
+
 /**
  * A time as a command takes it: ISO with an offset or Z ("2026-10-28T09:00:00+03:00"), or the
- * computer's own clock: "HH:MM" today, "YYYY-MM-DD HH:MM". The instant, or null.
+ * computer's own clock: "HH:MM" (today's, or yesterday's when today's is more than an hour ahead),
+ * "YYYY-MM-DD HH:MM". The instant, or null.
  */
 export function parseWhen(s: string, now: number = Date.now()): number | null {
   const v = s.trim()
@@ -194,9 +313,11 @@ export function parseWhen(s: string, now: number = Date.now()): number | null {
   }
   let m = /^(\d{1,2}):(\d{2})$/.exec(v)
   if (m) {
+    if (!(Number(m[1]) < 24 && Number(m[2]) < 60)) return null
     const d = new Date(now)
     d.setHours(Number(m[1]), Number(m[2]), 0, 0)
-    return Number(m[1]) < 24 && Number(m[2]) < 60 ? d.getTime() : null
+    if (d.getTime() > now + HM_AHEAD_MS) d.setDate(d.getDate() - 1)
+    return d.getTime()
   }
   m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})$/.exec(v)
   if (m) {
@@ -206,6 +327,13 @@ export function parseWhen(s: string, now: number = Date.now()): number | null {
   }
   return null
 }
+
+/** How far from now an entry's time may be: a day ahead, a year back. */
+export const AHEAD_MS = 86_400_000
+export const BACK_MS = 366 * 86_400_000
+
+/** Whether an instant is one an entry may have: not more than a day ahead, nor a year back. */
+export const plausible = (at: number, now: number = Date.now()): boolean => at <= now + AHEAD_MS && at >= now - BACK_MS
 
 /** An instant as the store keeps it: UTC to the second. */
 export const isoOf = (at: number): string => new Date(Math.floor(at / 1000) * 1000).toISOString().replace('.000Z', 'Z')
@@ -255,19 +383,6 @@ export interface TimeEntry {
 
 export const secondsOf = (e: Pick<TimeEntry, 'start' | 'stop'>): number =>
   Math.round((Date.parse(e.stop) - Date.parse(e.start)) / 1000)
-
-/** The text kept: one line, no control characters, at most 1000 characters. */
-export function cleanText(s: string, max = 1000): string {
-  // control characters out (a tab or a line break becomes a space), then the spaces made one
-  const one = [...s]
-    .map(ch => (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? ' ' : ch))
-    .join('')
-    .replace(/\s+/g, ' ')
-    .trim()
-  return one.length > max ? one.slice(0, max) : one
-}
-
-export const cleanTag = (s: string): string => cleanText(s, 40).toLowerCase()
 
 // ------------------------------------------------------------------ a day as billed
 
@@ -339,7 +454,9 @@ export function clientDay(c: TimeConfig, client: string, date: string, entries: 
     const ref = refIn(e.description, own.ref)
     let key: string
     if (!rule || rule.group === 'entry') key = `${index}:${e.id}`
-    else if (rule.group === 'ref') key = `${index}:${e.project}\u0000${ref ?? ''}`
+    // a reference is one line whatever its project (a case under two projects is rounded once);
+    // entries with none, by project
+    else if (rule.group === 'ref') key = ref ? `${index}:ref\u0000${ref}` : `${index}:project\u0000${e.project}`
     else if (rule.group === 'project') key = `${index}:${e.project}`
     else key = `${index}:day`
     const line = lines.get(key) ?? {
@@ -357,7 +474,7 @@ export function clientDay(c: TimeConfig, client: string, date: string, entries: 
     }
     line.seconds += secondsOf(e)
     line.entries.push(e.id)
-    if (rule?.group === 'day' && line.project !== e.project) line.project = ''
+    if ((rule?.group === 'day' || rule?.group === 'ref') && line.project !== e.project) line.project = ''
     lines.set(key, line)
   }
   const out: DayLine[] = [...lines.values()]

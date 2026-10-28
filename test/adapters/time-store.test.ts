@@ -6,7 +6,9 @@ import {
   addEntry,
   editEntry,
   getEntry,
+  type ImportRow,
   importEntries,
+  importVerdict,
   listEntries,
   moveEntry,
   REPEAT_MS,
@@ -78,7 +80,12 @@ test('without a given start, the same session’s entry alike but for its start,
   const now = Date.now()
   const first = addEntry(db, conf, { ...base, startGiven: false }, me, now)
   const shifted = { ...base, start: base.start + 60_000, stop: base.stop + 60_000, startGiven: false }
-  assert.equal(addEntry(db, conf, shifted, me, now + 60_000).entry.id, first.entry.id)
+  const repeat = addEntry(db, conf, shifted, me, now + 60_000)
+  assert.equal(repeat.entry.id, first.entry.id)
+  assert.equal(repeat.reason, 'repeat-window', 'said, so a real second block can be told')
+  // the same session after its name changed (or read as its key's first characters): the same one
+  const renamed = { key: me.key, name: 's1abcdef' }
+  assert.equal(addEntry(db, conf, shifted, renamed, now + 90_000).entry.id, first.entry.id)
   // another session's, or later than the window: a new entry
   assert.equal(addEntry(db, conf, shifted, other, now + 60_000).existing, false)
   const later = { ...base, start: base.start + 120_000, stop: base.stop + 120_000, startGiven: false }
@@ -209,16 +216,105 @@ test('the import skips what is there by Toggl id, removed entries included, and 
     { ...base, toggl: '101', tags: ['Deferred'] },
     { ...base, start: base.start + 7_200_000, stop: base.stop + 7_200_000, toggl: '102' },
   ]
-  assert.deepEqual(importEntries(db, conf, rows), { added: 2, already: 0 })
+  assert.deepEqual(importEntries(db, conf, rows), { added: 2, already: 0, changed: [], updated: [] })
   const imported = listEntries(db, { from: '2026-10-28', to: '2026-10-28' })
   assert.deepEqual(imported[0]?.tags, ['deferred'])
   assert.equal(imported[0]?.by, 'import')
   removeEntry(db, imported[0]?.id as string, 'user')
-  assert.deepEqual(importEntries(db, conf, rows), { added: 0, already: 2 })
+  assert.deepEqual(importEntries(db, conf, rows), { added: 0, already: 2, changed: [], updated: [] })
   assert.equal(
     getEntry(db, imported[0]?.id as string)?.deleted !== undefined,
     true,
     'a removed one is not brought back',
   )
+  db.close()
+})
+
+const csvRow = (o: Partial<ImportRow> = {}): ImportRow => ({
+  client: 'a',
+  project: 'Support',
+  description: 'Case 10001 X: work',
+  tags: [],
+  start: at('2026-10-28T13:00:00Z'),
+  stop: at('2026-10-28T14:00:00Z'),
+  ...o,
+})
+
+test('a CSV row edited in Toggl since its import is found by its lane and start: changed, listed, never a second entry', () => {
+  const db = fresh()
+  assert.equal(importEntries(db, conf, [csvRow()]).added, 1)
+  const [stored] = listEntries(db, { from: '2026-10-28', to: '2026-10-28' })
+  for (const [o, fields] of [
+    [{ description: 'Case 10001 X: work, worded better' }, ['description']],
+    [{ stop: at('2026-10-28T13:45:00Z') }, ['stop']],
+    [{ project: 'Migration' }, ['project']],
+    [{ tags: ['deferred'] }, ['tags']],
+  ] as const) {
+    const r = importEntries(db, conf, [csvRow(o as Partial<ImportRow>)])
+    assert.deepEqual(
+      [r.added, r.already, r.changed.map(c => [c.id, c.fields])],
+      [0, 0, [[stored?.id, fields]]],
+      JSON.stringify(o),
+    )
+  }
+  assert.equal(listEntries(db, { from: '2026-10-28', to: '2026-10-28' }).length, 1)
+  // the same row again: already there
+  assert.deepEqual(importEntries(db, conf, [csvRow()]), { added: 0, already: 1, changed: [], updated: [] })
+  // a dry run sees the same, writing nothing
+  assert.deepEqual(importVerdict(db, conf, csvRow({ stop: at('2026-10-28T13:45:00Z') })).kind, 'changed')
+  assert.deepEqual(importVerdict(null, conf, csvRow()).kind, 'new')
+  db.close()
+})
+
+test('--update takes Toggl’s values only for an entry the board never changed, journaled as its own', () => {
+  const db = fresh()
+  importEntries(db, conf, [csvRow(), csvRow({ start: at('2026-10-28T16:00:00Z'), stop: at('2026-10-28T17:00:00Z') })])
+  const [mine, touched] = listEntries(db, { from: '2026-10-28', to: '2026-10-28' })
+  editEntry(db, conf, touched?.id as string, { description: 'Case 10002 Y: as the owner put it' }, 'user')
+  const r = importEntries(
+    db,
+    conf,
+    [
+      csvRow({ stop: at('2026-10-28T14:15:00Z'), tags: ['Deferred'] }),
+      csvRow({ start: at('2026-10-28T16:00:00Z'), stop: at('2026-10-28T17:30:00Z') }),
+    ],
+    { update: true },
+  )
+  assert.deepEqual(
+    r.updated.map(c => [c.id, c.fields]),
+    [[mine?.id, ['stop', 'tags']]],
+  )
+  assert.deepEqual(
+    r.changed.map(c => c.id),
+    [touched?.id],
+    'changed on the board: listed, not overwritten',
+  )
+  const after = getEntry(db, mine?.id as string)
+  assert.equal(after?.stop, '2026-10-28T14:15:00Z')
+  assert.deepEqual(after?.tags, ['deferred'])
+  assert.equal(after?.rev, 2)
+  assert.equal(getEntry(db, touched?.id as string)?.description, 'Case 10002 Y: as the owner put it')
+  const ops = db.db.query("SELECT op FROM journal WHERE store = 'time' ORDER BY seq").all() as { op: string }[]
+  assert.deepEqual(
+    ops.map(o => o.op),
+    ['import', 'import', 'edit', 'import-update'],
+  )
+  db.close()
+})
+
+test('nothing is written while the config does not check out; list --tag ignores case', () => {
+  const db = fresh()
+  addEntry(db, conf, { ...base, tags: ['Deferred'] }, me)
+  const bad = timeConfig({ zone: 'America/New York', clients: { a: {} } })
+  assert.ok(bad)
+  assert.equal(
+    keyOf(() => addEntry(db, bad, { ...base, start: base.start + 1 }, me)),
+    'time.err.config',
+  )
+  assert.equal(
+    keyOf(() => importEntries(db, bad, [csvRow()])),
+    'time.err.config',
+  )
+  assert.equal(listEntries(db, { from: '2026-10-28', to: '2026-10-28', tag: 'DEFERRED' }).length, 1)
   db.close()
 })

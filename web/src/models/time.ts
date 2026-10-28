@@ -10,6 +10,17 @@ export interface TimeDay {
   zone: string
   days: ClientDay[]
   entries: (TimeEntry & { seconds: number })[]
+  /** config.json's `time` does not check out: what, in a line. */
+  problems?: string | null
+}
+
+/** A day's answer shows under that day's name only: another day's, arriving late, is not shown. */
+export const dayFor = (day: TimeDay | null, date: string): TimeDay | null => (day && day.date === date ? day : null)
+
+/** Questions asked in turn: an answer counts only while its question is the last one asked. */
+export function askedInTurn(): { ask(): number; last(n: number): boolean } {
+  let n = 0
+  return { ask: () => ++n, last: k => k === n }
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -72,7 +83,7 @@ export function shiftDate(date: string, days: number): string {
 
 /** Who made an entry, as a line names it. */
 export function byText(e: Pick<TimeEntry, 'by'>, t: Translator): string {
-  return typeof e.by === 'string' ? t(`time.by.${e.by}`) : e.by.name || e.by.key.slice(0, 8)
+  return typeof e.by === 'string' ? t(`time.who.${e.by}`) : e.by.name || e.by.key.slice(0, 8)
 }
 
 /**

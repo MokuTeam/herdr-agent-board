@@ -1,13 +1,15 @@
 // Toggl's history into the board (#233): the Detailed report as Toggl's web page exports it (CSV,
 // no API call, so no quota), or Toggl's JSON (API v9 time entries with their project and client
-// names). Each row becomes an entry for the lane its Toggl client is mapped to. Keyed by Toggl's
-// entry id when the file has one; a CSV without an id column gets a key of its own from the
-// client, project, description, start and duration, so a second run of the same export finds
-// every row already there. Pure, with no node: import.
+// names). Each row becomes an entry for the lane its Toggl client is mapped to. A row is known
+// again by Toggl's entry id when the file has one, else (the Detailed report's CSV has none) by its
+// lane and its start to the second: a row edited in Toggl since is then found as changed, not
+// added twice (adapters/time-store.ts importEntries). Pure, with no node: import.
+
+import { isDate } from './time.ts'
 
 /** One Toggl row as read, before it is mapped to a lane. */
 export interface TogglRow {
-  /** Toggl's id, or the key made from the row (`csv:` and a hash-like string). */
+  /** Toggl's id; '' when the file has none. */
   key: string
   client: string
   project: string
@@ -51,23 +53,26 @@ export function csvRows(text: string): string[][] {
   return rows
 }
 
-/** A short, stable key of a string (FNV-1a, 64 bits as two 32-bit halves), for rows without an id. */
-function keyOf(s: string): string {
-  let a = 0x811c9dc5
-  let b = 0x01000193
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i)
-    a = Math.imul(a ^ c, 0x01000193) >>> 0
-    b = Math.imul(b ^ c, 0x5bd1e995) >>> 0
-  }
-  return `${a.toString(16).padStart(8, '0')}${b.toString(16).padStart(8, '0')}`
-}
-
 /** "1:02:03" or "62:03" as seconds; NaN otherwise. */
 function clockSeconds(s: string): number {
   const parts = s.trim().split(':').map(Number)
   if (!parts.length || parts.some(n => !Number.isFinite(n))) return Number.NaN
   return parts.reduce((total, n) => total * 60 + n, 0)
+}
+
+/** A time of day as Toggl writes it, 24-hour ("13:05:00") or 12-hour ("1:05:00 PM"): seconds, or NaN. */
+function daySeconds(s: string): number {
+  const v = s.trim()
+  const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp])\.?[Mm]\.?$/.exec(v)
+  if (m) {
+    const h = Number(m[1])
+    if (h < 1 || h > 12) return Number.NaN
+    const pm = (m[4] as string).toLowerCase() === 'p'
+    return ((h % 12) + (pm ? 12 : 0)) * 3600 + Number(m[2]) * 60 + Number(m[3] ?? 0)
+  }
+  if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(v)) return Number.NaN
+  const n = clockSeconds(v)
+  return n < 86_400 ? n : Number.NaN
 }
 
 /**
@@ -76,20 +81,59 @@ function clockSeconds(s: string): number {
  */
 export type ZonedInstant = (date: string, clock: [number, number, number]) => number
 
-/** Toggl's date as the Detailed report writes it: YYYY-MM-DD, or MM/DD/YYYY. */
-function isoDate(s: string): string | null {
+/** Which way round a date's day and month are: Toggl writes them as the profile says. */
+export type DateFormat = 'dmy' | 'mdy'
+
+const DAY_MONTH = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/
+
+/**
+ * Which way the file's dates go, from all of them: a first part over 12 is a day (day/month), a
+ * second one over 12 is a day (month/day). Null when no date tells (each reads both ways the same
+ * or is ISO); 'mixed' when they tell both.
+ */
+export function dateFormatOf(dates: readonly string[]): DateFormat | null | 'mixed' {
+  let dmy = false
+  let mdy = false
+  for (const d of dates) {
+    const m = DAY_MONTH.exec(d.trim())
+    if (!m) continue
+    if (Number(m[1]) > 12) dmy = true
+    if (Number(m[2]) > 12) mdy = true
+  }
+  return dmy && mdy ? 'mixed' : dmy ? 'dmy' : mdy ? 'mdy' : null
+}
+
+/** Whether a date reads differently day/month and month/day: 10/11/2026, not 10/10/2026 or 28/10/2026. */
+const twoWays = (s: string): boolean => {
+  const m = DAY_MONTH.exec(s.trim())
+  return !!m && m[1] !== m[2] && Number(m[1]) <= 12 && Number(m[2]) <= 12
+}
+
+/** Toggl's date (YYYY-MM-DD, or day and month either way with / . or -) as YYYY-MM-DD, a real one; or null. */
+function isoDate(s: string, format: DateFormat | null): string | null {
   const v = s.trim()
-  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v
-  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(v)
-  return m ? `${m[3]}-${(m[1] ?? '').padStart(2, '0')}-${(m[2] ?? '').padStart(2, '0')}` : null
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return isDate(v) ? v : null
+  const m = DAY_MONTH.exec(v)
+  if (!m) return null
+  const [a, b] = [(m[1] ?? '').padStart(2, '0'), (m[2] ?? '').padStart(2, '0')]
+  const order = format ?? (a === b ? 'mdy' : null)
+  if (!order) return null
+  const iso = order === 'dmy' ? `${m[3]}-${b}-${a}` : `${m[3]}-${a}-${b}`
+  return isDate(iso) ? iso : null
 }
 
 /**
  * The Detailed report's CSV as rows: the columns found by their header (case and spacing aside),
  * the start in the profile's zone (`zoned`), the stop from the end date and time, else from the
- * duration. A row it cannot read is returned in `bad` by its line number.
+ * duration. A row it cannot read (a date that is not one, a time that is not one) is returned in
+ * `bad` by its line number. Dates written day and month either way: the order the file shows
+ * (`dateFormatOf`), else `format`; `dates` says when neither tells, or the file goes both ways.
  */
-export function rowsFromCsv(text: string, zoned: ZonedInstant): { rows: TogglRow[]; bad: number[]; missing: string[] } {
+export function rowsFromCsv(
+  text: string,
+  zoned: ZonedInstant,
+  format: DateFormat | null = null,
+): { rows: TogglRow[]; bad: number[]; missing: string[]; dates?: 'ambiguous' | 'mixed' } {
   const all = csvRows(text)
   const head = (all[0] ?? []).map(h => h.trim().toLowerCase().replace(/\s+/g, ' '))
   const col = (...names: string[]): number => head.findIndex(h => names.includes(h))
@@ -110,33 +154,40 @@ export function rowsFromCsv(text: string, zoned: ZonedInstant): { rows: TogglRow
   )
   if (c.endTime < 0 && c.duration < 0) missing.push('duration')
   if (missing.length) return { rows: [], bad: [], missing }
+  const body = all.slice(1)
+  const dates = body.flatMap(r => [r[c.startDate] ?? '', c.endDate >= 0 ? (r[c.endDate] ?? '') : ''])
+  const shown = dateFormatOf(dates)
+  if (shown === 'mixed') return { rows: [], bad: [], missing: [], dates: 'mixed' }
+  const order = shown ?? format
+  if (!order && dates.some(twoWays)) return { rows: [], bad: [], missing: [], dates: 'ambiguous' }
   const rows: TogglRow[] = []
   const bad: number[] = []
-  all.slice(1).forEach((r, i) => {
+  body.forEach((r, i) => {
     const get = (n: number): string => (n >= 0 ? (r[n] ?? '').trim() : '')
-    const date = isoDate(get(c.startDate))
-    const time = clockSeconds(get(c.startTime))
+    const date = isoDate(get(c.startDate), order)
+    const time = daySeconds(get(c.startTime))
     if (!date || !Number.isFinite(time)) {
       bad.push(i + 2)
       return
     }
     const start = zoned(date, [Math.floor(time / 3600), Math.floor(time / 60) % 60, time % 60])
     let stop = Number.NaN
-    const endDate = isoDate(get(c.endDate))
-    const endTime = clockSeconds(get(c.endTime))
+    const endDate = isoDate(get(c.endDate), order)
+    const endTime = daySeconds(get(c.endTime))
     if (endDate && Number.isFinite(endTime))
       stop = zoned(endDate, [Math.floor(endTime / 3600), Math.floor(endTime / 60) % 60, endTime % 60])
     else if (Number.isFinite(clockSeconds(get(c.duration)))) stop = start + clockSeconds(get(c.duration)) * 1000
-    const running = !Number.isFinite(stop) || get(c.endTime) === '' || stop <= start
+    // a timer still running has no end yet; a report without an End column is read by its durations
+    const running = !Number.isFinite(stop) || (c.endTime >= 0 && get(c.endTime) === '') || stop <= start
     const tags = get(c.tags)
       .split(',')
       .map(s => s.trim())
       .filter(Boolean)
-    const fields = { client: get(c.client), project: get(c.project), description: get(c.description) }
-    const id = get(c.id)
     rows.push({
-      key: id || `csv:${keyOf([fields.client, fields.project, fields.description, start, stop].join('\u0000'))}`,
-      ...fields,
+      key: get(c.id),
+      client: get(c.client),
+      project: get(c.project),
+      description: get(c.description),
       tags,
       start,
       stop: Number.isFinite(stop) ? stop : start,
@@ -195,7 +246,7 @@ export function parseMap(values: readonly string[]): Map<string, string> | strin
   return map
 }
 
-/** Per day and lane: how many entries and seconds, for `--dry-run` to hold against Toggl's report. */
+/** Per day and lane: how many entries and seconds, for `--dry-run` (by work date, and by Toggl's own day). */
 export function dayTotals(rows: readonly { date: string; client: string; seconds: number }[]): {
   date: string
   client: string

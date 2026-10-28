@@ -487,8 +487,9 @@ export async function testTarget(
     const back = await fetchFrom(target, c, name)
     const opened = unseal(back, key)
     if (!opened.equals(snap.plain)) return { ok: false, name, error: t('backup.err.notSame') }
-    if (snap.seq >= 0) record(target, now(), { name, seq: snap.seq, ahead })
-    else updateTarget(target, s => ({ ...s, held: null, error: null, failures: 0, ahead }))
+    const at = now()
+    if (snap.seq >= 0) record(target, at, { name, seq: snap.seq, ahead })
+    updateTarget(target, s => ({ ...s, held: null, error: null, failures: 0, ahead, tested: at }))
     return { ok: true, name }
   } catch (err) {
     const error = err instanceof BackupFileError ? t(err.message) : message(err)

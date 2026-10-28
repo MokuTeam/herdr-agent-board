@@ -1,5 +1,6 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
+import { translator } from '../../src/core/i18n/translator.ts'
 import {
   clientDay,
   clientOf,
@@ -11,6 +12,8 @@ import {
   instantIn,
   isDate,
   parseWhen,
+  plausible,
+  problemsText,
   refIn,
   rounded,
   type TimeEntry,
@@ -34,17 +37,15 @@ test('timeConfig: off unless `time` is there; the zone, the held tags, the clien
         billing: [
           { match: '^Admin', group: 'day', round: 'exact' },
           { group: 'ref', step: 30, round: 'up' },
-          { group: 'ref', step: 0, round: 'up' },
-          { match: '([', group: 'ref', step: 30, round: 'up' },
         ],
       },
-      b: { zone: 'Not/AZone' },
+      b: {},
     },
   })
   assert.ok(c)
+  assert.deepEqual(c.problems, [])
   assert.equal(c.zone, NY)
   assert.deepEqual(c.clients?.a?.projects, ['Support', 'Migration'])
-  // a rule that does not check out (no step to round to, a regex that does not compile) is dropped
   assert.deepEqual(c.clients?.a?.billing, [
     { match: '^Admin', group: 'day', step: 0, round: 'exact' },
     { match: null, group: 'ref', step: 30, round: 'up' },
@@ -53,6 +54,102 @@ test('timeConfig: off unless `time` is there; the zone, the held tags, the clien
   assert.equal(c.clients?.b?.ref, DEFAULT_REF)
   assert.equal(clientOf(c, 'zz').ok, false)
   assert.equal(clientOf(any, 'zz').ok, true, 'without a clients list every lane takes time')
+})
+
+test('timeConfig guesses nothing: each value that does not check out is a problem, named by its place', () => {
+  const c = timeConfig({
+    zone: 'America/New York',
+    excludetags: ['Deferred'],
+    clients: {
+      a: {
+        ref: '(\\d{5}',
+        billing: [
+          { match: '^Admin(', group: 'day', round: 'exact' },
+          { group: 'ref', step: 30, round: 'Up' },
+          { group: 'case', step: 30, round: 'up' },
+          { group: 'ref', round: 'up' },
+          { group: 'ref', step: 30 },
+          'exact',
+        ],
+        zone: 'Not/AZone',
+        project: ['Support'],
+      },
+      b: 'yes',
+    },
+  })
+  assert.ok(c)
+  assert.deepEqual(
+    c.problems.map(p => [p.at, p.why]),
+    [
+      ['time.excludetags', 'unknown'],
+      ['time.zone', 'zone'],
+      ['time.clients.a.project', 'unknown'],
+      ['time.clients.a.ref', 'regex'],
+      ['time.clients.a.zone', 'zone'],
+      ['time.clients.a.billing[0].match', 'regex'],
+      ['time.clients.a.billing[1].round', 'round'],
+      ['time.clients.a.billing[2].group', 'group'],
+      ['time.clients.a.billing[3].step', 'step'],
+      ['time.clients.a.billing[4].round', 'required'],
+      ['time.clients.a.billing[5]', 'type'],
+      ['time.clients.b', 'type'],
+    ],
+  )
+  // read as well as it can be for a view that says so; nothing in it is taken for something else
+  assert.deepEqual(c.clients?.a?.billing, [])
+  // the zone is required; held tags are kept as stored tags are, lowercase
+  assert.deepEqual(
+    timeConfig({ excludeTags: ['Deferred'] })?.problems.map(p => [p.at, p.why]),
+    [['time.zone', 'required']],
+  )
+  assert.deepEqual(timeConfig({ zone: NY, excludeTags: ['Deferred', ' Hold '] })?.excludeTags, ['deferred', 'hold'])
+  // true: the computer's own zone, by choice
+  assert.deepEqual(timeConfig(true)?.problems, [])
+  // in a line, for an error or the doctor
+  const t = translator('en')
+  assert.equal(
+    problemsText(timeConfig({ zone: 'Mars/Base' })?.problems ?? [], t),
+    'time.zone: "Mars/Base" is not a time zone (an IANA name, such as America/New_York)',
+  )
+})
+
+test('instantIn east of UTC too: Berlin’s repeated hour is its first, Auckland’s gap lands past it', () => {
+  assert.equal(new Date(instantIn('2026-10-25', [2, 30, 0], 'Europe/Berlin')).toISOString(), '2026-10-25T00:30:00.000Z')
+  const gap = instantIn('2026-09-27', [2, 30, 0], 'Pacific/Auckland')
+  assert.equal(dateIn(gap, 'Pacific/Auckland'), '2026-09-27')
+  assert.deepEqual(clockIn(gap, 'Pacific/Auckland'), [3, 30, 0])
+  // every 15 minutes across both changes of a year, in zones west and east: the wall clock an
+  // instant shows gives back that instant, or the first one that shows it
+  for (const [zone, days] of [
+    ['America/New_York', ['2026-03-08', '2026-11-01']],
+    ['Europe/Berlin', ['2026-03-29', '2026-10-25']],
+    ['Pacific/Auckland', ['2026-04-05', '2026-09-27']],
+    ['Australia/Lord_Howe', ['2026-04-05', '2026-10-04']],
+    ['Europe/Moscow', ['2026-06-01']],
+  ] as const)
+    for (const day of days)
+      for (
+        let at = Date.parse(`${day}T00:00:00Z`) - 86_400_000;
+        at < Date.parse(`${day}T00:00:00Z`) + 86_400_000;
+        at += 900_000
+      ) {
+        const back = instantIn(dateIn(at, zone), clockIn(at, zone), zone)
+        assert.ok(back <= at, `${zone} ${new Date(at).toISOString()}`)
+        assert.deepEqual([dateIn(back, zone), clockIn(back, zone)], [dateIn(at, zone), clockIn(at, zone)])
+      }
+})
+
+test('HH:MM past midnight is last evening’s; an entry’s time is within a day ahead and a year back', () => {
+  const now = new Date(2026, 9, 29, 0, 30).getTime()
+  assert.equal(parseWhen('23:15', now), new Date(2026, 9, 28, 23, 15).getTime())
+  assert.equal(parseWhen('0:10', now), new Date(2026, 9, 29, 0, 10).getTime())
+  // up to an hour ahead stays today (a stop a few minutes from now)
+  assert.equal(parseWhen('1:20', now), new Date(2026, 9, 29, 1, 20).getTime())
+  assert.ok(plausible(now + 86_000_000, now))
+  assert.ok(!plausible(now + 2 * 86_400_000, now))
+  assert.ok(plausible(now - 300 * 86_400_000, now))
+  assert.ok(!plausible(Date.parse('2062-01-01T00:00:00Z'), now))
+  assert.ok(!plausible(now - 400 * 86_400_000, now))
 })
 
 test('the work date is the start’s date in the zone: past midnight in Istanbul is still the day before in New York', () => {
@@ -167,6 +264,24 @@ test('a client’s day as billed: per case and day up to 0.5 h, Admin exact for 
   assert.equal(day.seconds / 60, 105)
   assert.equal(day.billedSeconds / 60, 133)
   assert.equal(day.zone, NY)
+})
+
+test('a case is one line whatever its project, rounded once; entries with no case, by project', () => {
+  const c = timeConfig({ zone: NY, clients: { a: { billing: [{ group: 'ref', step: 30, round: 'up' }] } } })
+  assert.ok(c)
+  const es = [
+    entry({ start: '2026-10-28T13:00:00Z', minutes: 20, description: 'Case 10001 X: looked', project: 'Support' }),
+    entry({ start: '2026-10-28T14:00:00Z', minutes: 20, description: 'Case 10001 X: moved', project: 'Migration' }),
+    entry({ start: '2026-10-28T15:00:00Z', minutes: 10, description: 'Standup', project: 'Support' }),
+  ]
+  const day = clientDay(c, 'a', '2026-10-28', es)
+  assert.deepEqual(
+    day.lines.map(l => [l.ref, l.project, l.seconds / 60, l.billedSeconds / 60]),
+    [
+      ['10001', '', 40, 60],
+      [null, 'Support', 10, 30],
+    ],
+  )
 })
 
 test('no rules: each entry alone and exact; a `project` group adds a project’s entries up', () => {

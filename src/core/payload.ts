@@ -152,4 +152,6 @@ export interface TimePayload {
   /** Today in the board's zone, YYYY-MM-DD. */
   date: string
   today: Record<string, number>
+  /** config.json's `time` does not check out (the panel says what): no entry is written. */
+  problems?: boolean
 }

@@ -18,6 +18,7 @@ import {
   dateIn,
   instantIn,
   isoOf,
+  problemsText,
   secondsOf,
   type TimeConfig,
   type TimeEntry,
@@ -119,10 +120,16 @@ export function listEntries(db: BoardDb, q: ListQuery): TimeEntry[] {
     .query(`SELECT ${COLUMNS} FROM time_entries WHERE ${where.join(' AND ')} ORDER BY start, id`)
     .all(...args) as Row[]
   const list = rows.map(entryOf)
-  return q.tag ? list.filter(e => e.tags.includes(q.tag as string)) : list
+  const tag = q.tag ? cleanTag(q.tag) : ''
+  return tag ? list.filter(e => e.tags.includes(tag)) : list
 }
 
 // ------------------------------------------------------------------ checks
+
+/** No entry is written while config.json's `time` does not check out: its dates and rules would be guesses. */
+function checkConfig(c: TimeConfig): void {
+  if (c.problems.length) throw new TimeError('time.err.config', { problems: problemsText(c.problems, t) })
+}
 
 /** The client takes time, and the project is one of its own (unless `newProject`). */
 function checkClientProject(c: TimeConfig, client: string, project: string, newProject: boolean): void {
@@ -237,10 +244,14 @@ export interface NewEntry {
 /** How long a repeat of an `add` without a start is taken for the first one. */
 export const REPEAT_MS = 15 * 60_000
 
+/** An `add` that wrote nothing: the live entry alike (`same`), or the session's call within REPEAT_MS (`repeat-window`). */
+export type ExistingReason = 'same' | 'repeat-window'
+
 /**
  * A new entry; or the live one alike (client, project, description, start and stop), with
  * `existing`: a repeated call after a failure writes nothing. Without a given start, the same
- * session's entry alike in all but its start, made in the last REPEAT_MS, is the one.
+ * session's entry (by its key: its name may have changed) alike in all but its start, made in the
+ * last REPEAT_MS, is the one, and `reason` says so.
  */
 export function addEntry(
   db: BoardDb,
@@ -248,7 +259,8 @@ export function addEntry(
   n: NewEntry,
   actor: Actor,
   now: number = Date.now(),
-): { entry: TimeEntry; existing: boolean } {
+): { entry: TimeEntry; existing: boolean; reason?: ExistingReason } {
+  checkConfig(c)
   const description = cleanText(n.description)
   const project = cleanText(n.project, 120)
   if (!description) throw new TimeError('time.err.noDescription')
@@ -271,22 +283,22 @@ export function addEntry(
     ...(n.toggl && { toggl: n.toggl }),
   }
   const before = sameLive(db, entry)
-  if (before) return { entry: before, existing: true }
+  if (before) return { entry: before, existing: true, reason: 'same' }
   if (!n.startGiven && typeof actor !== 'string') {
     const seconds = secondsOf(entry)
     const rows = db.db
       .query(
-        `SELECT ${COLUMNS} FROM time_entries WHERE client = ? AND project = ? AND description = ? AND by = ? AND at >= ? AND deleted IS NULL`,
+        `SELECT ${COLUMNS} FROM time_entries WHERE client = ? AND project = ? AND description = ? AND json_valid(by) AND json_extract(by, '$.key') = ? AND at >= ? AND deleted IS NULL`,
       )
-      .all(entry.client, entry.project, entry.description, actorText(actor), now - REPEAT_MS) as Row[]
+      .all(entry.client, entry.project, entry.description, actor.key, now - REPEAT_MS) as Row[]
     const repeat = rows.map(entryOf).find(e => secondsOf(e) === seconds)
-    if (repeat) return { entry: repeat, existing: true }
+    if (repeat) return { entry: repeat, existing: true, reason: 'repeat-window' }
   }
   try {
     return db.write(actorText(actor), tx => {
       // another process may have written it since the look above: the index tells
       const again = sameLive(db, entry)
-      if (again) return { entry: again, existing: true }
+      if (again) return { entry: again, existing: true, reason: 'same' as const }
       const made = { ...entry, id: newId(db) }
       insert(tx, made)
       tx.journal({ store: 'time', op: 'add', ref: made.id, after: made })
@@ -295,7 +307,7 @@ export function addEntry(
   } catch (err) {
     // another process wrote the same entry between the look and the insert: that one is it
     const found = unique(err) ? sameLive(db, entry) : null
-    if (found) return { entry: found, existing: true }
+    if (found) return { entry: found, existing: true, reason: 'same' }
     throw err
   }
 }
@@ -353,6 +365,7 @@ export function editEntry(
   actor: Actor,
   o: { force?: boolean; expect?: number } = {},
 ): TimeEntry {
+  checkConfig(c)
   return changed(
     db,
     id,
@@ -398,6 +411,7 @@ export function moveEntry(
   actor: Actor,
   o: { force?: boolean; expect?: number } = {},
 ): TimeEntry {
+  checkConfig(c)
   return changed(
     db,
     id,
@@ -436,59 +450,140 @@ export function restoreEntry(db: BoardDb, id: string, actor: Actor, o: { force?:
   )
 }
 
-/** Toggl ids already in the store, removed entries' too: what the import leaves alone. */
-export function knownToggl(db: BoardDb): Set<string> {
-  const rows = db.db.query('SELECT toggl FROM time_entries WHERE toggl IS NOT NULL').all() as { toggl: string }[]
-  return new Set(rows.map(r => r.toggl))
+/** A Toggl row for the store: its lane, and Toggl's id or none (the Detailed report's CSV has none). */
+export type ImportRow = Omit<NewEntry, 'startGiven' | 'newProject'>
+
+/** A row the store has, changed in Toggl since: the entry, and the fields that differ. */
+export interface ImportChange {
+  id: string
+  toggl: string | null
+  start: string
+  fields: string[]
+}
+
+export type ImportVerdict =
+  | { kind: 'new'; entry: TimeEntry }
+  | { kind: 'already'; stored: TimeEntry }
+  | { kind: 'changed'; stored: TimeEntry; next: TimeEntry; fields: string[] }
+
+const IMPORT_FIELDS = ['client', 'project', 'description', 'start', 'stop', 'tags'] as const
+
+/** The entry a Toggl row would be; `id` empty until it is written. */
+function importedEntry(c: TimeConfig, n: ImportRow, now: number): TimeEntry {
+  return {
+    id: '',
+    client: n.client,
+    project: cleanText(n.project, 120),
+    description: cleanText(n.description) || '-',
+    tags: [...new Set((n.tags ?? []).map(cleanTag).filter(Boolean))].sort(),
+    start: isoOf(n.start),
+    stop: isoOf(n.stop),
+    date: dateIn(n.start, zoneOf(c, n.client)),
+    by: 'import',
+    at: now,
+    changed: now,
+    changedBy: 'import',
+    rev: 1,
+    ...(n.toggl && { toggl: n.toggl }),
+  }
+}
+
+/**
+ * What the store makes of a Toggl row. It is known again by Toggl's id, else by its lane and its
+ * start to the second (a live entry first, then a removed one): the same in client, project,
+ * description, start, stop and tags is `already`; a removed one stays removed (`already`); one
+ * that differs is `changed`, with the fields, and is not added twice. A live entry alike in all
+ * but tags, made by a session, is `already` too.
+ */
+export function importVerdict(
+  db: BoardDb | null,
+  c: TimeConfig,
+  n: ImportRow,
+  now: number = Date.now(),
+): ImportVerdict {
+  const entry = importedEntry(c, n, now)
+  if (!db) return { kind: 'new', entry }
+  const r = (
+    n.toggl
+      ? db.db.query(`SELECT ${COLUMNS} FROM time_entries WHERE toggl = ?`).get(n.toggl)
+      : db.db
+          .query(
+            `SELECT ${COLUMNS} FROM time_entries WHERE client = ? AND start = ? ORDER BY deleted IS NOT NULL, at LIMIT 1`,
+          )
+          .get(entry.client, entry.start)
+  ) as Row | null
+  const stored = r ? entryOf(r) : sameLive(db, entry)
+  if (!stored) return { kind: 'new', entry }
+  if (stored.deleted) return { kind: 'already', stored }
+  const fields = IMPORT_FIELDS.filter(f =>
+    f === 'tags' ? [...stored.tags].sort().join('\u0000') !== entry.tags.join('\u0000') : stored[f] !== entry[f],
+  )
+  if (!fields.length || !r) return { kind: 'already', stored }
+  return { kind: 'changed', stored, next: entry, fields }
 }
 
 /**
  * The import's entries, in transactions of `batch` (another writer waits milliseconds), each new
- * one with a journal row; one already there (its Toggl id, or a live entry alike) is skipped.
+ * one with a journal row. One the store has (importVerdict) is counted, not added. A changed one is
+ * listed; with `update`, Toggl's values replace the entry's when the board never changed it (made
+ * and last changed by the import), journaled as `import-update`, its work date stamped again.
  */
 export function importEntries(
   db: BoardDb,
   c: TimeConfig,
-  entries: readonly Omit<NewEntry, 'startGiven'>[],
-  now: number = Date.now(),
-  batch = 500,
-): { added: number; already: number } {
-  const known = knownToggl(db)
+  entries: readonly ImportRow[],
+  o: { update?: boolean; now?: number; batch?: number } = {},
+): { added: number; already: number; changed: ImportChange[]; updated: ImportChange[] } {
+  checkConfig(c)
+  const now = o.now ?? Date.now()
+  const batch = o.batch ?? 500
   let added = 0
   let already = 0
+  const changes: ImportChange[] = []
+  const updated: ImportChange[] = []
   for (let at = 0; at < entries.length; at += batch) {
     db.write('import', tx => {
       for (const n of entries.slice(at, at + batch)) {
-        if (n.toggl && known.has(n.toggl)) {
+        const v = importVerdict(db, c, n, now)
+        if (v.kind === 'already') {
           already++
           continue
         }
-        const e: TimeEntry = {
-          id: newId(db),
-          client: n.client,
-          project: cleanText(n.project, 120),
-          description: cleanText(n.description) || '-',
-          tags: [...new Set((n.tags ?? []).map(cleanTag).filter(Boolean))],
-          start: isoOf(n.start),
-          stop: isoOf(n.stop),
-          date: dateIn(n.start, zoneOf(c, n.client)),
-          by: 'import',
-          at: now,
-          changed: now,
-          changedBy: 'import',
-          rev: 1,
-          ...(n.toggl && { toggl: n.toggl }),
-        }
-        if (sameLive(db, e)) {
-          already++
+        if (v.kind === 'changed') {
+          const change = { id: v.stored.id, toggl: v.stored.toggl ?? null, start: v.stored.start, fields: v.fields }
+          const mine = v.stored.by === 'import' && v.stored.changedBy === 'import'
+          if (!o.update || !mine) {
+            changes.push(change)
+            continue
+          }
+          const saved: TimeEntry = {
+            ...v.stored,
+            ...v.next,
+            id: v.stored.id,
+            by: v.stored.by,
+            at: v.stored.at,
+            rev: v.stored.rev + 1,
+            changed: now,
+            changedBy: 'import',
+            ...(v.stored.toggl !== undefined && { toggl: v.stored.toggl }),
+          }
+          try {
+            update(tx, saved)
+          } catch (err) {
+            if (!unique(err)) throw err
+            changes.push(change)
+            continue
+          }
+          tx.journal({ store: 'time', op: 'import-update', ref: saved.id, before: v.stored, after: saved })
+          updated.push(change)
           continue
         }
+        const e = { ...v.entry, id: newId(db) }
         insert(tx, e)
         tx.journal({ store: 'time', op: 'import', ref: e.id, after: e })
-        if (n.toggl) known.add(n.toggl)
         added++
       }
     })
   }
-  return { added, already }
+  return { added, already, changed: changes, updated }
 }

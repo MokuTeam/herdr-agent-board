@@ -534,6 +534,9 @@ async function main(): Promise<void> {
     // The board's database and its backup (#233), once there is either: else nothing is asked.
     const { backupChecks } = await import('../services/backup.ts')
     checks.push(...backupChecks(cfg, t))
+    // Time tracking's config (#233), while time is on.
+    const { timeChecks } = await import('../services/time.ts')
+    checks.push(...timeChecks(cfg, t))
     return console.log(report(checks, t))
   }
 
@@ -1151,7 +1154,8 @@ async function timeCommand(): Promise<void> {
   const card = own ? readCard(own.key) : null
   const lane = (typeof card?.category === 'string' && card.category) || categoryFor(cfg, process.cwd())
   const { timeCmd } = await import('./time-cli.ts')
-  return timeCmd(rest, { cfg, actor: own ? { key: own.key, name: own.name ?? '' } : 'user', lane })
+  // under --json an error is printed as JSON, and the exit code says it failed
+  process.exitCode = await timeCmd(rest, { cfg, actor: own ? { key: own.key, name: own.name ?? '' } : 'user', lane })
 }
 
 /** A flag's value: `--name value` in the command's words; undefined when it is not there. */

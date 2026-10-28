@@ -192,6 +192,8 @@ export interface TargetState {
   held?: string | null
   /** Snapshots it holds dated over a day ahead of the clock, at its last snapshot: kept, out of the rotation. */
   ahead?: number
+  /** The last Test that went the whole way round (written, read back, opened, compared). */
+  tested?: number | null
 }
 
 export const freshTarget = (): TargetState => ({

@@ -1791,8 +1791,9 @@ points in the sheet, the agent told of a point the user pinned as its promise.
 Time tracking of the board's own (#233), off unless `time` is in config.json: entries per client
 (a board lane) that sessions write as they finish a piece of work and billing agents read at the
 end of the day, without the rate limit of an outside service. The entries live in the board's
-database ([Backup](#backup)), and nothing is written before a backup target and a passphrase are
-set up: what a bill is made from is never on this computer alone.
+database ([Backup](#backup)), and nothing is written before a backup of it has gone through once,
+to a target off this computer (a snapshot, or a Test that went the whole way round): what a bill is
+made from is never on this computer alone. A target that is down for a while does not stop it.
 
 **An entry** is a client's and a project's, from a start to a stop, with a description and tags
 (`deferred`, say). The day it counts for is its start's date in the client's time zone
@@ -1818,63 +1819,107 @@ kept, and every change goes into the database's journal with the entry before an
 }
 ```
 
+**Nothing in it is guessed.** `zone` is required (`"time": true` alone takes this computer's zone
+and every lane). A value that does not check out (a zone Intl does not know, a `round` or `group`
+not in the lists below, a `match` or `ref` that does not compile, a `step` missing where it rounds,
+a key the board does not know, a typo say) is named by its place, `time.clients.client-a.billing[1].round`:
+while there is one, no entry is written, and `board time day`, the Time panel, the lane totals and
+`board doctor` say so. Fix config.json and it takes effect at once.
+
 **Clients and projects.** With `clients`, only the lanes listed take time, and only into their
 listed `projects` (a typo is refused with the list; `--new-project` adds one on purpose); a client
 without `projects` takes any. Without `clients`, every lane takes any project.
 
 **Billing rules, as data.** A client's day becomes billed lines: each entry goes to the first rule
 whose `match` (a regex on the description, case aside) fits; `group` adds entries up (`entry`
-each alone, `ref` the same project and reference, `project`, or `day`); `step` (minutes) and
-`round` (`up`, `nearest` with a tie going up, `down`, `exact`) make the billed figure. The
-reference is the first capture of the client's `ref` (by default a five-digit case number or a
-ticket key such as ABC-123). An entry no rule takes is billed exact, alone. Entries tagged with one
-of `excludeTags` show, held, and count in no total. The board knows no client's rules but these.
+each alone, `ref` the same reference whatever its project, entries without one by project,
+`project`, or `day`; `entry` when not given); `step` (minutes) and `round` (`up`, `nearest` with a
+tie going up, `down`, `exact`; required) make the billed figure. `nearest` bills nothing for a sum
+under half a step. The reference is the first capture of the client's `ref`; the default takes the
+first five-digit case number or ticket key such as ABC-123, so a client whose descriptions can carry
+other such text before it (UTF-8, SHA-256) sets its own, anchored: `"ref": "^Case (\\d{5})"`. An
+entry no rule takes is billed exact, alone. Entries tagged with one of `excludeTags` show, held,
+and count in no total. The rules apply when a day is read: changing one re-rates the days already
+logged too (closing a billed day is for later). The board knows no client's rules but these.
 
 **The command.** It writes to the database itself, so it works while the web board is down; as
 the session that runs it, its lane the client when `--client` is not given. `--json` gives an
 agent the whole of it.
 
 ```
-board time add [--client <lane>] --project "<p>" [--start <t>] (--stop <t> | --minutes <n> | --hours <h>) [--tag <t>]... "<description>"
+board time add [--client <lane>] --project "<p>" [--start <t>] (--stop <t> | --minutes <n> | --hours <h>) [--tag <t>]... [--] "<description>"
 board time edit <id> [--description "…"] [--project "…"] [--client <lane>] [--start <t>] [--stop <t>] [--minutes <n>] [--tag +<t> | --tag -<t>] [--expect <rev>] [--force]
 board time move <id> <date> [--force]
 board time rm <id> [--force]    board time restore <id>    board time show <id>
 board time list [--date <d> | --from <d> --to <d>] [--client <lane>] [--tag <t>] [--deleted]
 board time day [<d>] [--client <lane>]      the day as billed: lines, raw and billed
 board time projects [<lane>]
-board time import <file> --tz <zone> [--map "<Toggl client>=<lane>"]... [--dry-run]
+board time import <file> --tz <zone> [--map "<Toggl client>=<lane>"]... [--date-format dmy|mdy] [--dry-run] [--update]
 ```
 
 Times are ISO with an offset (`2026-10-28T09:00:00+03:00`), or this computer's clock (`9:30`,
-`2026-10-28 9:30`). Without `--start` the entry ends now (or at `--stop`).
+`2026-10-28 9:30`); `HH:MM` more than an hour ahead is yesterday's (past midnight, `21:00` is last
+evening). A time more than a day ahead or a year back is refused as a likely slip. Without
+`--start` the entry ends now (or at `--stop`). `--` ends the flags: quote the description, or put
+it after `--` when it may hold a word starting with `--`.
 
 - **A repeat is safe.** An `add` alike in client, project, description, start and stop to a live
-  entry returns that one (`"existing": true`) and writes nothing, whichever process wrote it
-  first; without `--start`, the same session's entry alike but for its start, made within 15
-  minutes, is the one. `edit` and `move` set values, so a repeat changes nothing.
+  entry returns that one (`"existing": true, "reason": "same"`) and writes nothing, whichever
+  process wrote it first; without `--start`, the same session's entry (by its key: a changed name
+  does not matter) alike but for its start, made within 15 minutes, is the one (`"reason":
+  "repeat-window"`, "already there (the same call within 15 minutes)"). Two real blocks alike
+  within 15 minutes need `--start`; an agent always gives `--start` and `--stop`. `edit` and `move`
+  set values, so a repeat changes nothing.
 - **Whose entries.** A session changes its own; another session's, the owner's or the import's
   only with `--force` (the owner asked for it). The owner changes any. `--expect <rev>` refuses a
-  change to an entry changed since it was read.
+  change to an entry changed since it was read. A session is known by Claude Code's session id,
+  which `/clear` changes: after a `/clear`, a session's earlier entries need `--force` too. Run
+  outside a session, the command is the owner's.
 - **Move** keeps the start's wall clock in the client's zone on the new date, and the duration,
   across a DST change too.
 - **Remove** leaves the entry, marked, out of every list and total; `restore` brings it back.
+- `list` totals what a day would: removed and held entries out (the held ones counted apart);
+  `--tag` matches whatever the case.
+
+**The JSON** (`--json`), for agents. An entry: `id` (8 hex characters), `client`, `project`,
+`description`, `tags`, `start` and `stop` (ISO, UTC, to the second), `date` (the work date),
+`seconds`, `by` and `changedBy` (`{ "key", "name" }` of a session, or `"user"`, `"import"`), `at`
+and `changed` (ms), `rev`, and `deleted` (ms) or `toggl` when they apply. `add` adds `existing`
+and, when it wrote nothing, `reason`. `edit`, `move`, `rm`, `restore` and `show` give the entry;
+`list` a list of entries. `day` gives `{ "date", "problems": [<text>...], "days": [...] }`, a day per
+client: `client`, `date`, `zone`, `seconds`, `billedSeconds`, `held` (entry ids), `lines` (each:
+`key`, `project`, `ref`, `rule`, `group`, `step`, `round`, `seconds`, `billedSeconds`, `entries` as
+ids), and `entries` (the day's entries in full). `projects` gives `{ "<lane>": [...] | null }`, or
+null without `clients`. An error is `{ "ok": false, "error": "<code>", "message": "…" }` on stdout
+with exit code 1: `notYours`, `changedSince`, `gone`, `removed`, `config`, `noBackup`,
+`notBackedUp`, `client`, `project`, `when`, `whenRange`, `usage`… (the key of its text).
 
 **The Time panel.** "Time" in the toolbar, and a lane's total for today by its name, open the day
-by client as it will be billed: the day before and after and Today, the clients as chips with
-their billed hours, each client's lines with their entries (times on this browser's clock, the
-description, the project, the session that logged it: a tap opens its sheet), the held ones apart,
-and the totals. Read only for now: the command changes entries. On a phone (the remote page) it is
-the full-height sheet, and a sideways swipe goes to the day before or after.
+by client as it will be billed, on today each time: the day before and after and Today, the
+clients as chips with their billed hours, each client's lines with their entries (times on this
+browser's clock, the description, the project, the session that logged it: a tap opens its sheet),
+the held ones apart, and the totals. Read only for now: the command changes entries. On a phone
+(the remote page) it is the full-height sheet, and a sideways swipe goes to the day before or
+after. A day's figures show only under that day's name, whatever order the answers come in.
 
 **From Toggl.** `board time import <file>` takes Toggl's Detailed report exported as CSV from its
 web page (no API call, so no quota), or its JSON (API v9 time entries with project and client
 names). `--tz` is the Toggl profile's time zone (the CSV's times have none); `--map` sends each
 Toggl client to a lane (`"=personal"` for entries without one); an unmapped client stops the run
-with the list. Each row is keyed by Toggl's id, or by a key of its own made from the row when the
-export has no id column, so a second run, of the same export or a later one, adds only what is
-new, and never brings back an entry removed since. `--dry-run` prints per-day totals per lane to
-hold against Toggl's own report, and writes nothing. Running timers are skipped. Projects found go
-into each listed lane's projects.
+with the list. The CSV's dates follow the profile's format: day and month either way round are
+read from the file itself (a 28 first is a day); a file where every date reads both ways asks for
+`--date-format dmy` or `mdy`, and a date that is no date (2026-02-30) is an unreadable row, named.
+12-hour times are read too.
+
+A row is known again by Toggl's id when the file has one (the JSON), else by its lane and its start
+to the second: a second run, of the same export or a later one, adds only what is new and never
+brings back an entry removed since. A row edited in Toggl since it was imported (its wording, its
+stop, its project, its tags) is listed as changed, with the fields, and not added again;
+`--update` takes Toggl's values for the entries the board never changed (made and last changed by
+the import), journaled as `import-update`. `--dry-run` reads the database and writes nothing: what
+is new, already there and changed, and the totals per day twice, by work date (as the board will
+bill) and by Toggl's own day in `--tz` (to hold against Toggl's report). Running timers are
+skipped. Projects found go into each listed lane's projects, once the run is let in.
 
 ## Backup
 

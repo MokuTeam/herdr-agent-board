@@ -145,6 +145,7 @@ export function Board({
           onNewSession={(ctx, from) => onNewSession?.(ctx, from)}
           onHead={() => onLaneHead?.(lane.id)}
           time={data?.time?.today[lane.id]}
+          timeProblem={data?.time?.problems}
           onTime={() => onLaneTime?.(lane.id)}
           renderCard={renderCard}
         />
