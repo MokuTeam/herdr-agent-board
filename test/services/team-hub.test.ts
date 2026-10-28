@@ -9,7 +9,7 @@ import { stateDir, teamAuditFile } from '../../src/adapters/paths.ts'
 import { readInbox, readOutbox } from '../../src/adapters/team-store.ts'
 import { ackBytes, type Envelope, generateKey, type KeyPair, verify } from '../../src/core/team.ts'
 import { backoffMs } from '../../src/core/tunnel.ts'
-import { DEAD_MS, PING_MS, UP_RESETS_MS } from '../../src/services/team-hub.ts'
+import { DEAD_MS, PING_MS, UNKNOWN_RETRY_MS, UP_RESETS_MS } from '../../src/services/team-hub.ts'
 import { ackOf, question } from '../hub/harness.ts'
 import { type FakeWs, HUB, handshake, settle, setup, stopAll, until } from '../support/team-service.ts'
 
@@ -328,4 +328,25 @@ test('a hub error naming a queued message settles it as refused (with the code):
   s.clock.tick(1000)
   const second = await handshake(s, [{ peer: anna.pub, name: 'anna' }], 2)
   expect(second.ws.of('send').map(f => f.env.id)).toEqual([kept.ok ? kept.id : ''])
+})
+
+test('a connection the hub closes with 4401 is an error `unknown_peer`, retried at the long interval, not `reconnecting` (#231)', async () => {
+  const s = setup()
+  s.svc.start()
+  await until(() => s.sockets.length === 1, 'first socket')
+  ;(s.sockets[0] as FakeWs).hangUp(4401)
+  expect(s.svc.view()).toMatchObject({
+    state: 'error',
+    error: 'unknown_peer',
+    nextAt: s.clock.now() + UNKNOWN_RETRY_MS,
+  })
+  s.clock.tick(UNKNOWN_RETRY_MS - 1)
+  await settle()
+  expect(s.sockets).toHaveLength(1)
+  s.clock.tick(1)
+  await until(() => s.sockets.length === 2, 'the next try')
+  // Under way again, the line still says why; it goes on being retried that rarely.
+  expect(s.svc.view()).toMatchObject({ state: 'error', error: 'unknown_peer' })
+  ;(s.sockets[1] as FakeWs).hangUp(4401)
+  expect(s.svc.view()?.nextAt).toBe(s.clock.now() + UNKNOWN_RETRY_MS)
 })

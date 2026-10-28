@@ -91,6 +91,14 @@ describe('Team panel', () => {
     expect(stateLine({ ...VIEW, state: 'online' }, translator('ru'))).toContain('На связи')
   })
 
+  test('an error unknown_peer says the hub does not know this board, in both languages (#231)', () => {
+    const view: TeamView = { ...VIEW, state: 'error', error: 'unknown_peer' }
+    expect(stateLine(view, t)).toBe(
+      'The hub at wss://hub.example.com does not know this board: join with an invite (board team join)',
+    )
+    expect(stateLine(view, translator('ru'))).toContain('не знает эту доску')
+  })
+
   test('a key that changed: its row says so, with Trust, which asks for that person', () => {
     const trusted: string[] = []
     const p = props({ onTrust: x => void trusted.push(x) })

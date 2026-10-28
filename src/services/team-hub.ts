@@ -131,6 +131,10 @@ export const PING_MS = 30_000
 export const DEAD_MS = 75_000
 /** The hub says this when the peer is revoked: no retry until config.json changes. */
 const CLOSE_REVOKED = 4403
+/** The hub says this when it does not know the key: the board is no member (it never joined, or the hub started over). */
+const CLOSE_UNKNOWN = 4401
+/** Not knowing the key does not mend itself: tried again this rarely, in case the hub was given the key. */
+export const UNKNOWN_RETRY_MS = 60_000
 
 const hubUrl = (hub: string): string => `${hub.replace(/\/+$/, '')}/v1`
 
@@ -199,9 +203,9 @@ export function createTeam({
     if (ws) ws.send(JSON.stringify(f))
   }
 
-  function scheduleRetry(why: string | undefined): void {
+  function scheduleRetry(why: string | undefined, fixedWait?: number): void {
     attempt++
-    const wait = backoffMs(attempt, random)
+    const wait = fixedWait ?? backoffMs(attempt, random)
     nextAt = clock.now() + wait
     retry = clock.setTimeout(() => void connect(), wait)
     state = why ? 'error' : 'reconnecting'
@@ -214,7 +218,8 @@ export function createTeam({
     const mine = ++gen
     retry = undefined
     nextAt = undefined
-    setState(attempt > 0 ? 'reconnecting' : 'connecting')
+    // While the hub does not know this board the line says so, also while a new try is under way.
+    if (!(state === 'error' && error === 'unknown_peer')) setState(attempt > 0 ? 'reconnecting' : 'connecting')
     try {
       const key = await ensureKey()
       if (mine !== gen) return
@@ -238,6 +243,11 @@ export function createTeam({
         if (e.code === CLOSE_REVOKED) {
           log('team: this board was revoked by the hub')
           setState('revoked')
+          return
+        }
+        if (e.code === CLOSE_UNKNOWN) {
+          log('team: the hub does not know this board; join with an invite (board team join)')
+          scheduleRetry('unknown_peer', UNKNOWN_RETRY_MS)
           return
         }
         scheduleRetry(undefined)

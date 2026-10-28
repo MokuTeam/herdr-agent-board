@@ -65,6 +65,7 @@ export const offersTeam = (
 /** The connection line: where it stands, and for reconnecting when the next try is. */
 export function stateLine(view: TeamView, t: Translator): string {
   const line = t(`team.state.${view.state}`, { hub: view.hub })
+  if (view.state === 'error' && view.error === 'unknown_peer') return t('team.state.unknownPeer', { hub: view.hub })
   if (view.state === 'error' && view.error) return `${line}: ${view.error}`
   if (view.state === 'reconnecting' && view.nextAt)
     return `${line} (${t('team.nextAt', { time: new Date(view.nextAt).toLocaleTimeString() })})`
