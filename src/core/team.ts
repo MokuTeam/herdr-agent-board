@@ -52,10 +52,15 @@ export const validName = (v: unknown): v is string =>
 
 export const b64u = (bytes: Uint8Array): string => Buffer.from(bytes).toString('base64url')
 
-/** The bytes of a base64url string, or null when it is not one (no padding, no other characters). */
+/**
+ * The bytes of a base64url string, or null when it is not one: no padding, no other characters,
+ * and the canonical form only (the unused bits of the last character are zero), so one key or
+ * signature has one spelling and `b64u(unb64u(s)) === s`.
+ */
 export function unb64u(s: unknown): Uint8Array | null {
   if (typeof s !== 'string' || !/^[A-Za-z0-9_-]*$/.test(s) || s.length % 4 === 1) return null
-  return new Uint8Array(Buffer.from(s, 'base64url'))
+  const bytes = new Uint8Array(Buffer.from(s, 'base64url'))
+  return b64u(bytes) === s ? bytes : null
 }
 
 // ---- Canonical form

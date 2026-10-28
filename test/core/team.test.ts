@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import {
   ackBytes,
   authBytes,
+  b64u,
   canonicalJson,
   checkEnvelope,
   type Envelope,
@@ -213,4 +214,23 @@ test('parseFrame: known frames come back, junk is null', () => {
     '{"t":"error","code":"zzz","message":"m"}',
   ])
     assert.equal(parseFrame(junk), null)
+})
+
+test('unb64u: only the canonical spelling; a signature or a key has one (#231)', async () => {
+  const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+  // The same bytes spelled with other unused bits in the last character.
+  const twin = (s: string) => `${s.slice(0, -1)}${ALPHABET[ALPHABET.indexOf(s.slice(-1)) ^ 1]}`
+  const k = await generateKey()
+  const bytes = new TextEncoder().encode('hello')
+  const sig = await sign(k.pkcs8, bytes)
+  assert.equal(sig.length, 86)
+  assert.equal(await verify(k.pub, bytes, sig), true)
+  assert.deepEqual(Buffer.from(twin(sig), 'base64url'), Buffer.from(sig, 'base64url'))
+  assert.equal(unb64u(twin(sig)), null)
+  assert.equal(await verify(k.pub, bytes, twin(sig)), false)
+  assert.equal(unb64u(twin(k.pub)), null)
+  assert.equal(await verify(twin(k.pub), bytes, sig), false)
+  assert.equal(b64u(unb64u(k.pub) as Uint8Array), k.pub)
+  assert.equal(unb64u('Z'.repeat(43)), null)
+  for (const bad of ['A', 'AA==', 7]) assert.equal(unb64u(bad), null)
 })
