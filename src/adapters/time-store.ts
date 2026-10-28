@@ -293,10 +293,9 @@ export function addEntry(
       return { entry: made, existing: false }
     })
   } catch (err) {
-    if (unique(err)) {
-      const found = sameLive(db, entry) ?? (n.toggl ? null : null)
-      if (found) return { entry: found, existing: true }
-    }
+    // another process wrote the same entry between the look and the insert: that one is it
+    const found = unique(err) ? sameLive(db, entry) : null
+    if (found) return { entry: found, existing: true }
     throw err
   }
 }
