@@ -1,6 +1,7 @@
 // What the quick look shows of a file or folder (the old page's files.js render, folder, code,
-// table, empty): images (they zoom, zoom.ts), video and audio from the raw bytes; a PDF drawn by
-// the board's own viewer (viewers/pdf.ts, #176); Markdown rendered or as source; CSV as a table,
+// table, empty): images (they zoom, zoom.ts), video and audio from the raw bytes; a PDF, a Word
+// document and a spreadsheet drawn by the board's own viewers (web/src/viewers/, #176); Markdown
+// rendered or as source; CSV as a table,
 // its rows drawn as they scroll into view; code and text in numbered lines (the line it was opened
 // at lit); folders as a list to walk through; and why there is nothing to show.
 import { memo, type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -25,6 +26,9 @@ import { FileIcon } from './FileChip.tsx'
 import {
   besideApp,
   loadViewer,
+  OFFICE_TEXTS,
+  type OfficeKind,
+  type OfficeModule,
   PDF_TEXTS,
   type PdfModule,
   type PdfViewer,
@@ -101,6 +105,8 @@ export function Preview({
         onZoomGone={onZoomGone}
       />
     )
+  if (d.kind === 'document' || d.kind === 'spreadsheet')
+    return <OfficeLook kind={d.kind} src={src} name={d.name ?? ''} size={d.size} onOpen={onOpen} />
   if (d.kind === 'video')
     return (
       <div className="ql-media">
@@ -250,6 +256,61 @@ export function ViewerShown({ look, host, hostClass, icon, src, name, onOpen }: 
       {look.wait && <div className="ql-wait">{t('loading')}</div>}
       {look.empty && <LookEmpty icon={icon} text={t(look.empty)} onOpen={onOpen} />}
     </>
+  )
+}
+
+// Larger than this, a document or a spreadsheet is not read here: a phone would run short of
+// memory (a workbook takes ten times its size once read). The quick look says so instead.
+const VIEW_LIMIT: Record<OfficeKind, number> = { document: 20 << 20, spreadsheet: 10 << 20 }
+
+interface OfficeLookProps {
+  kind: OfficeKind
+  src: string
+  name: string
+  size?: number | null | undefined
+  onOpen?: (() => void) | undefined
+}
+
+/**
+ * A Word document or a spreadsheet, read in a worker and drawn by its viewer (viewers/document.ts,
+ * viewers/spreadsheet.ts, imported when one is opened): too big, said so without reading it;
+ * else as its viewer has it (ViewerShown): "loading" until it is drawn, and broken, with a
+ * password or without its viewer, why, with the button that opens it with the system.
+ */
+function OfficeLook(props: OfficeLookProps) {
+  const t = useT()
+  if ((props.size ?? 0) > VIEW_LIMIT[props.kind])
+    return <LookEmpty icon={props.kind} text={t('ql.tooBig')} onOpen={props.onOpen} />
+  return <OfficeRead {...props} />
+}
+
+function OfficeRead({ kind, src, name, onOpen }: OfficeLookProps) {
+  const t = useT()
+  const latest = useLatest({ t })
+  const { host, state } = useViewer(
+    `${kind} ${src}`,
+    () => loadViewer<OfficeModule>(kind),
+    (office, el, report) =>
+      office.mount(el, {
+        url: src,
+        name,
+        worker: besideApp(`${kind}-worker.js`),
+        lang: latest.current.t.lang,
+        truncated: latest.current.t('ql.truncated'),
+        onReady: () => report.ready(),
+        onFail: why => report.fail(why),
+      }),
+  )
+  return (
+    <ViewerShown
+      look={viewerLook(state, OFFICE_TEXTS)}
+      host={host}
+      hostClass={`ql-${kind}`}
+      icon={kind}
+      src={src}
+      name={name}
+      onOpen={onOpen}
+    />
   )
 }
 

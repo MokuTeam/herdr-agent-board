@@ -4,9 +4,16 @@
 // the policy their workers run under.
 import { dirname, join } from 'node:path'
 
-/** Served name to entry: bundled apart from app.js (web-bundle.ts). */
+/**
+ * Served name to entry: bundled apart from app.js (web-bundle.ts). A Word document and a
+ * spreadsheet are read in a worker of their own, so a large one does not stop the page.
+ */
 export const viewerEntries = (web: string): Record<string, string> => ({
   'pdf-viewer.js': join(web, 'src', 'viewers', 'pdf.ts'),
+  'document-viewer.js': join(web, 'src', 'viewers', 'document.ts'),
+  'document-worker.js': join(web, 'src', 'viewers', 'document-worker.ts'),
+  'spreadsheet-viewer.js': join(web, 'src', 'viewers', 'spreadsheet.ts'),
+  'spreadsheet-worker.js': join(web, 'src', 'viewers', 'spreadsheet-worker.ts'),
 })
 
 /** Served name to module: PDF.js's worker, minified by its makers, served as it is. */
@@ -22,6 +29,9 @@ export const VIEWER_COPIES: Record<string, string> = {
  */
 export const WORKER_POLICIES: Record<string, string> = {
   'pdf.worker.js': "default-src 'none'; connect-src 'self'; script-src 'self' 'wasm-unsafe-eval'",
+  // mammoth and SheetJS read the file they are given: nothing to load but it.
+  'document-worker.js': "default-src 'none'; connect-src 'self'",
+  'spreadsheet-worker.js': "default-src 'none'; connect-src 'self'",
 }
 
 /**

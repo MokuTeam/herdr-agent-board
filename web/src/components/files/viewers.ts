@@ -4,6 +4,7 @@
 // and its worker are asked for under the same one, so the service worker keeps them apart too.
 // One file in a viewer is a session (openViewer): its script imported, the file drawn, and the
 // viewer let go of when it fails or the file is no longer on show.
+import type { mount as documentMount } from '../../viewers/document.ts'
 import type { mount as pdfMount } from '../../viewers/pdf.ts'
 
 export type { PdfViewer } from '../../viewers/pdf.ts'
@@ -22,6 +23,14 @@ export const pdfAssets = (script: string = import.meta.url): string => new URL('
 export interface PdfModule {
   mount: typeof pdfMount
 }
+
+/** The Word and the spreadsheet viewer draw the same way (viewers/office.ts). */
+export interface OfficeModule {
+  mount: typeof documentMount
+}
+
+/** The kinds of file read by a viewer and a worker of their own. */
+export type OfficeKind = 'document' | 'spreadsheet'
 
 export type Import<T> = (url: string) => Promise<T>
 
@@ -114,6 +123,13 @@ export interface ViewerTexts {
 }
 
 export const PDF_TEXTS: ViewerTexts = { password: 'ql.pdfPassword', broken: 'ql.pdfBroken', unavailable: null }
+
+/** A Word document or a spreadsheet without its viewer: the file cannot be shown here. */
+export const OFFICE_TEXTS: ViewerTexts = {
+  password: 'ql.fileLocked',
+  broken: 'ql.fileBroken',
+  unavailable: 'ql.fileBroken',
+}
 
 export function viewerLook(state: ViewerState, texts: ViewerTexts): ViewerLook {
   if (state.at === 'unavailable')

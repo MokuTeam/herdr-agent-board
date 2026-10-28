@@ -1,5 +1,5 @@
-/* The quick look's own viewers (web/src/viewers/, #176): a CSV table drawn as it scrolls, and a
-   PDF drawn by the board. */
+/* The quick look's own viewers (web/src/viewers/, #176): a CSV table drawn as it scrolls, a PDF,
+   a Word document and a spreadsheet drawn by the board. */
 .ql-more { height: 1px; }
 /* A CSV table drawn block by block keeps the columns its first block measured (Preview.tsx Table). */
 .ql-table table.fixed { table-layout: fixed; }
@@ -25,3 +25,31 @@
 .ql-pdf .textLayer ::selection { background: color-mix(in srgb, AccentColor, transparent 50%); color: transparent; }
 .ql-pdf .textLayer br::selection { background: transparent; }
 .ql-pdf .textLayer .endOfContent { position: absolute; inset: 100% 0 0; z-index: 0; display: block; cursor: default; user-select: none; -webkit-user-select: none; }
+/* A Word document (web/src/viewers/document.ts): its own HTML, cleaned, in the page's type. */
+.ql-doc { max-width: 820px; }
+.ql-doc h1 { margin: 22px 0 12px; font-size: 26px; line-height: 1.2; letter-spacing: -0.02em; }
+.ql-doc h2 { margin: 20px 0 10px; font-size: 21px; line-height: 1.25; letter-spacing: -0.015em; }
+.ql-doc h3 { font-size: 18px; }
+.ql-doc h4, .ql-doc h5, .ql-doc h6 { font-size: 15px; }
+.ql-doc ul, .ql-doc ol { margin: 0 0 12px; padding-left: 1.6em; }
+.ql-doc li > p { margin: 0; }
+.ql-doc table { display: block; max-width: 100%; margin: 12px 0 16px; overflow-x: auto; border-collapse: collapse; font-size: 13.5px; }
+.ql-doc th, .ql-doc td { padding: 5px 10px; border: 0.5px solid var(--separator); text-align: left; vertical-align: top; }
+.ql-doc th { background: var(--fill-2); font-weight: 600; }
+.ql-doc td > p:last-child, .ql-doc th > p:last-child { margin-bottom: 0; }
+.ql-doc img { max-width: 100%; height: auto; border-radius: 4px; }
+/* A spreadsheet (web/src/viewers/spreadsheet.ts): the sheet's cells as a table, its frozen rows
+   held at the top, the sheets' names as tabs below. */
+.ql-body.k-spreadsheet { overflow: hidden; }
+.ql-spreadsheet, .ql-grid-wrap { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.ql-spreadsheet ~ .ql-wait { position: absolute; inset: 0; }
+.ql-grid-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.ql-grid { border-collapse: separate; border-spacing: 0; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.ql-grid td { max-width: 420px; height: 1.6em; padding: 4px 10px; overflow: hidden; border-right: 0.5px solid var(--separator); border-bottom: 0.5px solid var(--separator); background: var(--surface); white-space: nowrap; text-overflow: ellipsis; }
+.ql-grid td.n { text-align: right; }
+.ql-grid td.frozen { position: sticky; z-index: 1; background: var(--material-thick); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
+.ql-grid .frozen-last td { border-bottom-color: var(--label-3); }
+.ql-grid-cut { margin: 0; padding: 10px 14px; color: var(--label-3); font-size: 12px; }
+.ql-grid-tabs { display: flex; flex: none; gap: 4px; padding: 6px 10px; overflow-x: auto; border-top: 0.5px solid var(--separator); background: var(--fill-2); }
+.ql-grid-tabs button { flex: none; padding: 4px 12px; border: 0; border-radius: 7px; background: none; color: var(--label-2); font: 12.5px var(--font); cursor: pointer; }
+.ql-grid-tabs button[aria-selected="true"] { background: var(--surface); box-shadow: var(--shadow-card); color: var(--label); font-weight: 600; }

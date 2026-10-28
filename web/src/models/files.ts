@@ -18,6 +18,8 @@ export const ICON_PATHS = {
   image:
     '<rect x="3" y="4" width="14" height="12" rx="2"/><circle cx="7.5" cy="8.5" r="1.3"/><path d="m4 15 4.5-4.5 3 3 2-2 3.5 3.5"/>',
   pdf: `${DOC}<path d="M7.5 11h5M7.5 13.5h5M7.5 16h3"/>`,
+  document: `${DOC}<path d="m7.4 10.5 1.1 4.5 1.5-3.4 1.5 3.4 1.1-4.5"/>`,
+  spreadsheet: '<rect x="3" y="4" width="14" height="12" rx="1.6"/><path d="M3 8h14M3 12h14M8 4v12M12.5 4v12"/>',
   video: '<rect x="2.5" y="5" width="11" height="10" rx="2"/><path d="m13.5 9 4-2.5v7l-4-2.5"/>',
   audio: '<path d="M8 14.5V5l8-1.5V13"/><circle cx="6" cy="14.5" r="2"/><circle cx="14" cy="13" r="2"/>',
   missing: `${DOC}<path d="m8 10.5 4 4m0-4-4 4"/>`,
@@ -56,6 +58,11 @@ const KIND_BY_EXTENSION = new Map(
     webp: 'image',
     svg: 'image',
     pdf: 'pdf',
+    docx: 'document',
+    xlsx: 'spreadsheet',
+    xlsm: 'spreadsheet',
+    xls: 'spreadsheet',
+    ods: 'spreadsheet',
   }),
 )
 
@@ -171,9 +178,9 @@ export const dateText = (ms: number, lang: string): string =>
 export const clockOf = (ms: number, lang: string): string =>
   new Date(ms).toLocaleTimeString(lang, { hour: '2-digit', minute: '2-digit' })
 
-const MEDIA = new Set(['image', 'pdf', 'video', 'audio'])
+const MEDIA = new Set(['image', 'pdf', 'video', 'audio', 'document', 'spreadsheet'])
 
-/** A preview's media are drawn from the raw bytes; text comes with the preview. */
+/** A preview's media are drawn from the raw bytes (a document and a spreadsheet too); text comes with the preview. */
 export const isMedia = (kind: string | undefined): boolean => MEDIA.has(kind ?? '')
 
 /** A CSV with rows is drawn as a table. */

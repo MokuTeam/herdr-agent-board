@@ -15,10 +15,12 @@ current with the `board` command; a SessionStart / UserPromptSubmit hook tells e
 ## Setup
 
 [Bun](https://bun.com/docs/installation) 1.4.3 or newer. `herdr plugin install` runs
-`bun install --production` (react, react-dom and pdfjs-dist, the quick look's PDF viewer: its only
-dependencies); after `herdr plugin link`, run `bun install` in the folder yourself, again after an
-update that adds one (without pdfjs-dist, the quick look shows a PDF in the browser's own viewer). Windows, Linux and macOS (desktop notifications: Windows
-only). Steps 1 and 2 are what the board needs; the rest adds to it.
+`bun install --production` (react and react-dom, and for the quick look's viewers pdfjs-dist,
+mammoth, DOMPurify and SheetJS's `xlsx`, which comes from SheetJS's own server, cdn.sheetjs.com:
+its only dependencies); after `herdr plugin link`, run `bun install` in the folder yourself, again
+after an update that adds one (without them, the quick look shows a PDF in the browser's own viewer
+and has no preview for a Word document or a spreadsheet). Windows, Linux and macOS (desktop
+notifications: Windows only). Steps 1 and 2 are what the board needs; the rest adds to it.
 
 1. **The plugin and its install** (required).
 
@@ -308,7 +310,8 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   `herdr-reveal:` or `file:` link, or relative to the session's folder in `code`, with an
   optional `:line`) becomes a chip once the board finds it on disk; file tool calls in the
   folded runs open the same way. A chip opens a quick look over the board, grown out of the
-  chip: images, PDF, video and audio, Markdown (rendered or source), code and text with line
+  chip: images, PDF, Word documents and spreadsheets, video and audio, Markdown (rendered or
+  source), code and text with line
   numbers (the `:line` lit and scrolled to), JSON pretty, CSV and TSV as a table (`,` `;` tab or
   `|` between fields, UTF-8 or Windows' old code page as Excel saves it, quoted fields with line
   breaks, up to 20 000 rows drawn as they scroll into view), folders as a list to
@@ -321,6 +324,14 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   Ctrl+wheel or a trackpad pinch, two fingers on a phone, `+` `-` `0` (fit) and the footer's
   button; the arrow and page keys scroll. A broken or password-protected PDF says so, beside the
   button that opens it with the system.
+- A Word document (`.docx`) shows as a page of its text: headings, paragraphs, lists, tables,
+  pictures, footnotes and web links (opened in the default browser); fonts, colors and page
+  layout are left out. A spreadsheet (`.xlsx`, `.xlsm`, `.xls`, `.ods`) shows each visible sheet
+  as a table, the sheet names as tabs below: values as Excel shows them, numbers and the short
+  date in the board's language, merged cells, the rows Excel keeps frozen held at the top, up to
+  20 000 rows drawn as they scroll into view. Both are read in a worker, so a large one does not
+  stop the page; one over 20 MB (a document) or 10 MB (a spreadsheet), broken or with a password
+  says so, beside the button that opens it with the system.
 - Images and SVG in the quick look zoom as in Preview and Photos: Ctrl+wheel or a trackpad
   pinch, two fingers on a phone, a click (a double-tap) zooms in to 100% at that spot and a
   double-click goes back to fit, `+` `-` `0` (fit) and the arrows from the keyboard. A zoomed
@@ -2378,13 +2389,18 @@ Files (`src/adapters/files.ts`, `src/server/routes/fs.ts`, `web/src/components/f
 `POST /api/fs/preview`, `POST /api/fs/open` (`open` or `reveal`, through explorer.exe, `open`
 or `xdg-open`, no shell) and `POST /api/open-url` (http(s) only) need the `X-Board` header like
 every POST. `GET /api/fs/raw` serves images, PDF, video and audio, with ranges, to the page's
-`<img>`, `<video>` and PDF viewer, which cannot send headers: it needs the `fsToken` from the
+`<img>`, `<video>` and the quick look's viewers (Word documents and spreadsheets too), which cannot
+send headers: it needs the `fsToken` from the
 board payload, new on every start, which only the board's own page can read. Text never comes
 raw, and raw responses carry a CSP that runs no script. The quick look's viewers
 (`web/src/viewers/`, `src/server/viewers.ts`) are scripts of their own beside app.js, each bundled
 apart and imported only when such a file is opened: `pdf-viewer.js` (PDF.js, which reads the PDF
 through `/api/fs/raw`, in ranges past 8 MB), PDF.js's worker as `pdf.worker.js`, and what the
-worker fetches as a PDF needs it under `pdfjs/` (decoders, character maps, fonts).
+worker fetches as a PDF needs it under `pdfjs/` (decoders, character maps, fonts);
+`document-viewer.js` and `document-worker.js` (mammoth turns the .docx into HTML in the worker,
+DOMPurify keeps only its text, structure, web links and pictures as data: URLs in the page);
+`spreadsheet-viewer.js` and `spreadsheet-worker.js` (SheetJS reads the workbook in the worker;
+the page puts each cell in as text).
 
 New sessions (`src/services/launch/`, `web/src/components/launch/`): `GET /api/launch/options` (herdr's workspaces,
 recent folders, the launcher, and `agents`: the agents a start may name, `[{ id, title }]` with
@@ -2642,7 +2658,7 @@ next writer. A card write the board itself fails at is retried on its next refre
 repository's full history:
 
 ```sh
-bun install     # react, react-dom and pdfjs-dist, and the dev tools: TypeScript, Biome, the types
+bun install     # react, react-dom and the viewers' libraries, and the dev tools: TypeScript, Biome, the types
 bun test        # the whole suite (a couple of minutes); two symlink tests skip without symlink rights
 bun run check   # type check (tsc) and lint (Biome)
 ```
