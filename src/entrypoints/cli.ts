@@ -67,6 +67,9 @@
 //                            services/backup.ts): a snapshot to every target now; how each stands;
 //                            the snapshots a target holds; the passphrase (two lines on stdin, never
 //                            an argument); the folder target; a real round trip to a target
+//   board time add | edit | move | rm | restore | show | list | day | projects | import   time
+//                            entries in the board's database (#233, entrypoints/time-cli.ts, where
+//                            each is spelled out), written as this session, its lane the client
 //   board db restore [--target folder|server] [--snapshot <name>] [--file <path>]
 //                            [--passphrase-file <file> | --passphrase-stdin] [--replace-file]   the database back as a
 //                            snapshot has it (the newest of the target when none is named); without
@@ -552,6 +555,7 @@ async function main(): Promise<void> {
   if (cmd === 'remote') return remote()
   if (cmd === 'tunnel') return tunnel()
   if (cmd === 'backup') return backupCmd()
+  if (cmd === 'time') return timeCommand()
   if (cmd === 'db') return dbCmd()
   if (cmd === 'archive') return archive()
   if (cmd === 'sleep') return sleep()
@@ -1138,6 +1142,18 @@ const isStep = (v: unknown): v is TestStep =>
  * Remote access…). Test runs Test connection on the running board. Without an argument: where the
  * tunnel stands, as the running board says. In English, whatever language the board speaks.
  */
+/**
+ * `board time …` (#233, entrypoints/time-cli.ts): as the session that runs it, its lane the client
+ * when none is named; outside a session, as the owner.
+ */
+async function timeCommand(): Promise<void> {
+  const own = await ownSession()
+  const card = own ? readCard(own.key) : null
+  const lane = (typeof card?.category === 'string' && card.category) || categoryFor(cfg, process.cwd())
+  const { timeCmd } = await import('./time-cli.ts')
+  return timeCmd(rest, { cfg, actor: own ? { key: own.key, name: own.name ?? '' } : 'user', lane })
+}
+
 /** A flag's value: `--name value` in the command's words; undefined when it is not there. */
 function option(name: string): string | undefined {
   const i = rest.indexOf(name)

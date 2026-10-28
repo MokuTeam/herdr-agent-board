@@ -19,6 +19,7 @@ import { REMOTE_STRINGS } from './remote-strings.ts'
 import { SERVER_STRINGS } from './server-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
+import { TIME_STRINGS } from './time-strings.ts'
 import { TODO_STRINGS } from './todo-strings.ts'
 import { WAKE_STRINGS } from './wake-strings.ts'
 
@@ -1323,6 +1324,8 @@ for (const code of Object.keys(PRESENCE_STRINGS) as Lang[]) Object.assign(STRING
 for (const code of Object.keys(TODO_STRINGS) as Lang[]) Object.assign(STRINGS[code], TODO_STRINGS[code])
 // And the board's database and its backup (#233).
 for (const code of Object.keys(BACKUP_STRINGS) as Lang[]) Object.assign(STRINGS[code], BACKUP_STRINGS[code])
+// And time tracking on it (#233).
+for (const code of Object.keys(TIME_STRINGS) as Lang[]) Object.assign(STRINGS[code], TIME_STRINGS[code])
 // And the board through the owner's own domain: the tunnel and its login.
 for (const code of Object.keys(ACCESS_STRINGS) as Lang[]) Object.assign(STRINGS[code], ACCESS_STRINGS[code])
 // And setting up the server's web server from the board.

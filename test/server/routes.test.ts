@@ -120,6 +120,7 @@ describe('routes', () => {
       'styles/wake.css',
       'styles/mokupilot.css',
       'styles/backup.css',
+      'styles/time.css',
       'styles/todos.css',
       'styles/workspaces.css',
       'styles/fold.css',

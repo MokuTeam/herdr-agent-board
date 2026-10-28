@@ -97,6 +97,9 @@ export function App() {
     setBackup(true)
     setBackupMounted(true)
   }
+  // Time (#233), while the board has it on: its panel, out of the toolbar's button or a lane's day total.
+  const [timeOpen, setTimeOpen] = useState(false)
+  const [timeClient, setTimeClient] = useState<string | null>(null)
   // Tasks (#202), while the board has them on: their panel, out of the toolbar's button.
   const [todosOpen, setTodosOpen] = useState(false)
   // The reminders' buttons, shared by the schedule panel and the sheet.
@@ -206,10 +209,18 @@ export function App() {
           picks={picks}
           onTodos={() => setTodosOpen(!todosOpen)}
           onBackup={remotePage() ? undefined : openBackup}
+          onTime={() => {
+            setTimeClient(null)
+            setTimeOpen(!timeOpen)
+          }}
         />
         <Board
           onNewSession={newSession}
           onLaneHead={openCategories}
+          onLaneTime={id => {
+            setTimeClient(id)
+            setTimeOpen(true)
+          }}
           roomBelow={panels.roomBelow}
           launch={launch.slots}
           takeovers={launch.takeovers}
@@ -227,6 +238,7 @@ export function App() {
         {...(backupMounted && !remotePage() ? { backup: { open: backup, onClose: () => setBackup(false) } } : {})}
         archive={archive}
         todos={{ open: todosOpen, onClose: () => setTodosOpen(false), todos }}
+        time={{ open: timeOpen, onClose: () => setTimeOpen(false), client: timeClient, onClient: setTimeClient }}
         sheet={{
           onNewSession: newSession,
           schedule: {

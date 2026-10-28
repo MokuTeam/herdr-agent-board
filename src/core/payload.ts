@@ -123,6 +123,11 @@ export interface BoardPayload {
    */
   backup?: BackupPayload
   /**
+   * Time tracking (#233), only while config.json turns it on: the journal's last seq (an open panel
+   * reads again when it moves) and today's billed seconds by lane (a lane's header shows them).
+   */
+  time?: TimePayload
+  /**
    * The Remote access view's revision (GET /api/access, local only): it changes when the view does,
    * and the panel fetches the view again then; the view itself never goes out with the board. The
    * server always sends it; a board before it sent none.
@@ -139,4 +144,12 @@ export interface BoardPayload {
 export interface BackupPayload {
   last: number | null
   problem: { kind: string; target?: string } | null
+}
+
+/** What the board's payload says of time tracking (#233). */
+export interface TimePayload {
+  seq: number
+  /** Today in the board's zone, YYYY-MM-DD. */
+  date: string
+  today: Record<string, number>
 }

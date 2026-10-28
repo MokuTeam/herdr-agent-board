@@ -1,0 +1,74 @@
+/* The Time panel (web/src/components/time/TimePanel.tsx, #233) and a lane's day total: the day's
+   controls on a line, the clients as chips in their lanes' colors, each client's billed lines with
+   their entries under them; figures in tabular numerals so the columns line up. On a phone the
+   list follows a sideways swipe (pan-y leaves the vertical scroll to the browser). Every rule here
+   selects by class: the other sheets are upstream's, rule for rule. */
+
+.time-body { display: flex; flex-direction: column; gap: 8px; max-width: 760px; }
+.time-nav { display: flex; align-items: center; gap: 8px; }
+.time-step { min-width: 32px; font-size: 16px; line-height: 1; }
+.time-date { min-width: 9em; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
+.time-zone { margin: 0; }
+.time-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+.time-chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--fill-2);
+  color: var(--label);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.time-chip:not(:first-child)::before { content: ""; width: 8px; height: 8px; border-radius: 3px; background: var(--lane); }
+.time-chip span { color: var(--label-2); font-variant-numeric: tabular-nums; }
+.time-chip.on { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.time-chip:active { transform: scale(0.97); }
+.time-days { display: flex; flex-direction: column; gap: 14px; touch-action: pan-y; will-change: transform; }
+.time-empty { margin: 8px 0; }
+.time-client-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 4px 0 6px; font-size: 13px; }
+.time-client-name { display: inline-flex; align-items: center; gap: 6px; }
+.time-client-name::before { content: ""; width: 10px; height: 10px; border-radius: 3px; background: var(--lane); }
+.time-figures { color: var(--label-2); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.time-figures strong { color: var(--label); }
+.time-line { margin: 0 0 8px; padding: 8px 10px; border-radius: 8px; background: var(--fill-2); }
+.time-line-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.time-line-name { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.time-rule { flex-basis: 100%; margin: 0; font-size: 11.5px; }
+.time-entries { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.time-entry { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; font-size: 12.5px; line-height: 1.4; }
+.time-when { grid-row: span 2; color: var(--label-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.time-what {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+.time-who { margin: 0; font-size: 11.5px; }
+.time-session { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
+.time-held { opacity: 0.7; }
+.time-total { display: flex; justify-content: space-between; margin: 0; font-weight: 600; }
+
+/* A lane's day total, by its name: it opens the Time panel on that client and day. */
+.lane-time {
+  padding: 1px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--fill-2);
+  color: var(--label-2);
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.lane-time:hover { color: var(--label); }
+.lane-time:active { transform: scale(0.97); }
+
+@media (prefers-reduced-motion: reduce) {
+  .time-days { transition: none !important; transform: none !important; }
+}

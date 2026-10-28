@@ -1786,6 +1786,96 @@ points come back with it.
 Not yet (see #202): a jump to the message a point came from (1b), a badge on the card, the open
 points in the sheet, the agent told of a point the user pinned as its promise.
 
+## Time
+
+Time tracking of the board's own (#233), off unless `time` is in config.json: entries per client
+(a board lane) that sessions write as they finish a piece of work and billing agents read at the
+end of the day, without the rate limit of an outside service. The entries live in the board's
+database ([Backup](#backup)), and nothing is written before a backup target and a passphrase are
+set up: what a bill is made from is never on this computer alone.
+
+**An entry** is a client's and a project's, from a start to a stop, with a description and tags
+(`deferred`, say). The day it counts for is its start's date in the client's time zone
+(`time.zone`, US Eastern for example, or the client's own `zone`), stamped on the entry when it is
+written: work at 01:30 in Istanbul counts for the day before in New York, as clients there see it,
+and changing the zone later moves no day already billed. Who made it and who changed it last are
+kept, and every change goes into the database's journal with the entry before and after.
+
+```json
+"time": {
+  "zone": "America/New_York",
+  "excludeTags": ["deferred"],
+  "clients": {
+    "client-a": {
+      "projects": ["Support", "Migration"],
+      "billing": [
+        { "match": "^Admin", "group": "day", "round": "exact" },
+        { "group": "ref", "step": 30, "round": "up" }
+      ]
+    },
+    "personal": { "projects": ["Internal"] }
+  }
+}
+```
+
+**Clients and projects.** With `clients`, only the lanes listed take time, and only into their
+listed `projects` (a typo is refused with the list; `--new-project` adds one on purpose); a client
+without `projects` takes any. Without `clients`, every lane takes any project.
+
+**Billing rules, as data.** A client's day becomes billed lines: each entry goes to the first rule
+whose `match` (a regex on the description, case aside) fits; `group` adds entries up (`entry`
+each alone, `ref` the same project and reference, `project`, or `day`); `step` (minutes) and
+`round` (`up`, `nearest` with a tie going up, `down`, `exact`) make the billed figure. The
+reference is the first capture of the client's `ref` (by default a five-digit case number or a
+ticket key such as ABC-123). An entry no rule takes is billed exact, alone. Entries tagged with one
+of `excludeTags` show, held, and count in no total. The board knows no client's rules but these.
+
+**The command.** It writes to the database itself, so it works while the web board is down; as
+the session that runs it, its lane the client when `--client` is not given. `--json` gives an
+agent the whole of it.
+
+```
+board time add [--client <lane>] --project "<p>" [--start <t>] (--stop <t> | --minutes <n> | --hours <h>) [--tag <t>]... "<description>"
+board time edit <id> [--description "…"] [--project "…"] [--client <lane>] [--start <t>] [--stop <t>] [--minutes <n>] [--tag +<t> | --tag -<t>] [--expect <rev>] [--force]
+board time move <id> <date> [--force]
+board time rm <id> [--force]    board time restore <id>    board time show <id>
+board time list [--date <d> | --from <d> --to <d>] [--client <lane>] [--tag <t>] [--deleted]
+board time day [<d>] [--client <lane>]      the day as billed: lines, raw and billed
+board time projects [<lane>]
+board time import <file> --tz <zone> [--map "<Toggl client>=<lane>"]... [--dry-run]
+```
+
+Times are ISO with an offset (`2026-10-28T09:00:00+03:00`), or this computer's clock (`9:30`,
+`2026-10-28 9:30`). Without `--start` the entry ends now (or at `--stop`).
+
+- **A repeat is safe.** An `add` alike in client, project, description, start and stop to a live
+  entry returns that one (`"existing": true`) and writes nothing, whichever process wrote it
+  first; without `--start`, the same session's entry alike but for its start, made within 15
+  minutes, is the one. `edit` and `move` set values, so a repeat changes nothing.
+- **Whose entries.** A session changes its own; another session's, the owner's or the import's
+  only with `--force` (the owner asked for it). The owner changes any. `--expect <rev>` refuses a
+  change to an entry changed since it was read.
+- **Move** keeps the start's wall clock in the client's zone on the new date, and the duration,
+  across a DST change too.
+- **Remove** leaves the entry, marked, out of every list and total; `restore` brings it back.
+
+**The Time panel.** "Time" in the toolbar, and a lane's total for today by its name, open the day
+by client as it will be billed: the day before and after and Today, the clients as chips with
+their billed hours, each client's lines with their entries (times on this browser's clock, the
+description, the project, the session that logged it: a tap opens its sheet), the held ones apart,
+and the totals. Read only for now: the command changes entries. On a phone (the remote page) it is
+the full-height sheet, and a sideways swipe goes to the day before or after.
+
+**From Toggl.** `board time import <file>` takes Toggl's Detailed report exported as CSV from its
+web page (no API call, so no quota), or its JSON (API v9 time entries with project and client
+names). `--tz` is the Toggl profile's time zone (the CSV's times have none); `--map` sends each
+Toggl client to a lane (`"=personal"` for entries without one); an unmapped client stops the run
+with the list. Each row is keyed by Toggl's id, or by a key of its own made from the row when the
+export has no id column, so a second run, of the same export or a later one, adds only what is
+new, and never brings back an entry removed since. `--dry-run` prints per-day totals per lane to
+hold against Toggl's own report, and writes nothing. Running timers are skipped. Projects found go
+into each listed lane's projects.
+
 ## Backup
 
 The board keeps some of its data in a database of its own (#233): `board.db` in the state folder,
@@ -2788,6 +2878,9 @@ server's own record, filled in from it when missing; Undo removes it). None of i
 password is ever in it. The board checks every field before it uses it, and runs nothing
 while one does not check out.
 
+`time` (time tracking, [Time](#time): `zone`, `excludeTags`, `clients` with each one's `projects`,
+`ref`, `zone` and `billing` rules).
+
 `backup` (the [backup](#backup) of the board's database; Settings → Backup… sets it): `folder` (a
 folder that syncs elsewhere), `server` (`{ "host", "port", "admin": { "user", "key" }, "set" }`:
 your server, the admin Look and Apply log in as, and when Apply or your own setup with a Test
@@ -2883,7 +2976,11 @@ Apply and Undo as root, what they print), `src/adapters/backup-store.ts` (the ke
 the folder target), `src/adapters/backup-ssh.ts` (ssh to the drop), `src/services/backup.ts`
 (the snapshot, the targets, the schedule, Test, restore, `board doctor`'s lines),
 `src/services/backup-server.ts` (Look, Apply and Undo over the admin connection),
-`src/server/routes/backup.ts`, `web/src/components/backup/`. The drop script's tests run it with
+`src/server/routes/backup.ts`, `web/src/components/backup/`. Time on it: `src/core/time.ts` (the
+`time` settings, work dates in a zone, a day as billed), `src/core/time-import.ts` (Toggl's CSV and
+JSON), `src/adapters/time-store.ts` (the entries, whose they are, the import's batch),
+`src/entrypoints/time-cli.ts` (`board time`), `src/server/routes/time.ts`,
+`web/src/components/time/`. The drop script's tests run it with
 dash where there is one, else a POSIX sh (`test/support/fake-drop-ssh.ts` stands in for ssh), and
 skip without one; Look, Apply and Undo run the same way on a fake root (`test/support/fake-root.ts`:
 shims for useradd, sshd, systemctl and the rest, the scripts' paths moved into a temp folder). On

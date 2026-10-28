@@ -24,7 +24,7 @@ import { columnHeads, documentTitle, laneOptions, scheduleBadge, summaryParts, s
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { BackupNote } from './BackupNote.tsx'
 import { ColumnsHead } from './ColumnsHead.tsx'
-import { AlarmIcon, ArchiveIcon, GearIcon, PlusIcon, SearchIcon, TagIcon, TasksIcon } from './icons.tsx'
+import { AlarmIcon, ArchiveIcon, GearIcon, PlusIcon, SearchIcon, TagIcon, TasksIcon, TimeIcon } from './icons.tsx'
 import { Lanes } from './Lanes.tsx'
 import { Limits } from './Limits.tsx'
 import { LiveDot } from './LiveDot.tsx'
@@ -55,6 +55,8 @@ export interface ToolbarProps {
   picks?: SegmentPicks
   /** Tasks (#202): their panel opens and closes; the button shows while the board has them on. */
   onTodos?: () => void
+  /** Time (#233): its panel, while the board has time tracking on. */
+  onTime?: () => void
 }
 
 export function Toolbar({
@@ -69,6 +71,7 @@ export function Toolbar({
   settings,
   picks,
   onTodos,
+  onTime,
 }: ToolbarProps) {
   const t = useT()
   const { data, ui, dispatch, canMutate, canEdit, now } = useBoardContext()
@@ -173,6 +176,18 @@ export function Toolbar({
                 <TasksIcon />
                 <span>{t('todo.open')}</span>
                 <span className="n">{openMine(data.items) || ''}</span>
+              </button>
+            )}
+            {data?.time && (
+              <button
+                type="button"
+                className="pill-toggle icon-only"
+                id="time-open"
+                title={t('time.openHint')}
+                onClick={() => onTime?.()}
+              >
+                <TimeIcon />
+                <span>{t('time.open')}</span>
               </button>
             )}
             <button
