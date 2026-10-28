@@ -32,6 +32,7 @@ import {
   envelopeBytes,
   type Frame,
   fingerprint,
+  isPeerId,
   MAX_TEXT,
   parseFrame,
   type RosterPeer,
@@ -415,7 +416,7 @@ export function createTeam({
       }
     },
     thread(peer) {
-      if (!config()) return []
+      if (!config() || !isPeerId(peer)) return []
       const incoming = readInbox(peer).map(
         (i: InboxItem): ThreadMessage => ({ id: i.id, dir: 'in', text: i.text, ts: i.ts, held: i.held }),
       )
@@ -432,6 +433,7 @@ export function createTeam({
     },
     async send(to, text) {
       if (!config()) return { ok: false, error: 'off' }
+      if (!isPeerId(to)) return { ok: false, error: 'peer' }
       const body = text.trim()
       if (!body || body.length > MAX_TEXT) return { ok: false, error: 'text' }
       if (!roster.some(p => p.peer === to)) return { ok: false, error: 'peer' }
@@ -454,9 +456,9 @@ export function createTeam({
       return { ok: true, id: env.id }
     },
     trust(peer) {
-      if (!config()) return false
+      if (!config() || !isPeerId(peer)) return false
       const ok = changePins(pins => {
-        const p = pins[peer]
+        const p = Object.hasOwn(pins, peer) ? pins[peer] : undefined
         if (!p) return false
         p.status = 'trusted'
         for (const [id, x] of Object.entries(pins)) if (id !== peer && x.name === p.name) delete pins[id]

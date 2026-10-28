@@ -64,11 +64,16 @@ export interface OutboxItem {
   ack?: Ack
 }
 
+/** A map with no prototype: a key such as `__proto__` is a key like any other, never the prototype. */
+function bare<T>(m: Record<string, T>): Record<string, T> {
+  return Object.assign(Object.create(null) as Record<string, T>, m)
+}
+
 type Lists<T> = { v: 1; peers: Record<string, T[]> }
 const isLists = <T>(v: unknown): v is Lists<T> => isRecord(v) && v.v === 1 && isRecord(v.peers)
 
 function readLists<T>(file: string): Record<string, T[]> {
-  return readJson(file, (v): v is Lists<T> => isLists<T>(v))?.peers ?? {}
+  return bare(readJson(file, (v): v is Lists<T> => isLists<T>(v))?.peers ?? {})
 }
 
 function changeLists<T, R>(file: string, fn: (peers: Record<string, T[]>) => R): R {
@@ -77,7 +82,7 @@ function changeLists<T, R>(file: string, fn: (peers: Record<string, T[]>) => R):
   updateJson(
     file,
     (cur: Lists<T> | null) => {
-      const peers = cur?.peers ?? {}
+      const peers = bare(cur?.peers ?? {})
       result = fn(peers)
       for (const [p, list] of Object.entries(peers))
         if (list.length > KEEP_PER_PEER) peers[p] = list.slice(-KEEP_PER_PEER)
@@ -157,7 +162,7 @@ export interface Pin {
 type PinsFile = { v: 1; pins: Record<string, Pin> }
 const isPins = (v: unknown): v is PinsFile => isRecord(v) && v.v === 1 && isRecord(v.pins)
 
-export const readPins = (): Record<string, Pin> => readJson(teamPinsFile(), isPins)?.pins ?? {}
+export const readPins = (): Record<string, Pin> => bare(readJson(teamPinsFile(), isPins)?.pins ?? {})
 
 /** Changes the pins under their lock: `fn` edits the map in place. */
 export function changePins<R>(fn: (pins: Record<string, Pin>) => R): R {
@@ -166,7 +171,7 @@ export function changePins<R>(fn: (pins: Record<string, Pin>) => R): R {
   updateJson(
     teamPinsFile(),
     (cur: PinsFile | null) => {
-      const pins = cur?.pins ?? {}
+      const pins = bare(cur?.pins ?? {})
       result = fn(pins)
       return { v: 1 as const, pins }
     },

@@ -248,3 +248,19 @@ test('a question goes out signed; after a reconnect it goes again with the same 
   await until(() => readOutbox(anna.pub)[0]?.state === 'acked', 'acked')
   expect(s.svc.thread(anna.pub).map(m => [m.dir, m.state])).toEqual([['out', 'acked']])
 })
+
+test('a key that is no peer id (__proto__ ...) is no pin, no recipient and no roster entry; Object.prototype stays clean (#231)', async () => {
+  const s = setup()
+  s.svc.start()
+  const [anna] = (await names(1)) as [KeyPair]
+  const { ws } = await handshake(s, [{ peer: anna.pub, name: 'anna' }])
+  for (const bad of ['__proto__', 'constructor', 'hasOwnProperty']) {
+    expect(s.svc.trust(bad)).toBe(false)
+    expect(await s.svc.send(bad, 'hi')).toEqual({ ok: false, error: 'peer' })
+    expect(s.svc.thread(bad)).toEqual([])
+  }
+  ws.recv({ t: 'roster', peers: [{ peer: '__proto__', name: 'evil', online: true, last_seen: null }] })
+  await settle()
+  expect(s.svc.view()?.roster.map(p => p.peer)).toEqual([anna.pub])
+  expect(({} as Record<string, unknown>).status).toBeUndefined()
+})

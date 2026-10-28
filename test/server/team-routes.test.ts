@@ -152,6 +152,19 @@ describe('team on, against a hub in this process', () => {
     expect((await fetch(`${url}/api/team/thread/short`)).status).toBe(400)
   })
 
+  test('"__proto__" and other names that are no key are refused and pollute nothing (#231)', async () => {
+    for (const peer of ['__proto__', 'constructor', 'toString', `${'x'.repeat(43)}/`, 7]) {
+      expect(await answer(post(url, '/api/team/trust', { peer }))).toEqual([404, { ok: false, error: 'peer' }])
+    }
+    expect(await answer(post(url, '/api/team/send', { to: '__proto__', text: 'hi' }))).toEqual([
+      400,
+      { ok: false, error: 'peer' },
+    ])
+    expect((await fetch(`${url}/api/team/thread/__proto__`)).status).toBe(400)
+    expect(({} as Record<string, unknown>).status).toBeUndefined()
+    expect(({} as Record<string, unknown>).name).toBeUndefined()
+  })
+
   test('a question sent reaches the peer and comes back acked; one from the peer lands in the thread', async () => {
     const before = await rev()
     const sent = (await (await post(url, '/api/team/send', { to: anna.pub, text: 'did the build pass?' })).json()) as {

@@ -225,7 +225,7 @@ export function parseFrame(text: string): Frame | null {
 
 const isRosterPeer = (v: unknown): v is RosterPeer =>
   isRecord(v) &&
-  isStr(v.peer) &&
+  isPeerId(v.peer) &&
   isStr(v.name) &&
   typeof v.online === 'boolean' &&
   (v.last_seen === null || typeof v.last_seen === 'number')

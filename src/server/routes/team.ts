@@ -40,6 +40,7 @@ export function teamRoutes(team: TeamService): Route[] {
         const raw = await ctx.rawBody()
         const body = isRecord(raw) ? raw : {}
         if (typeof body.to !== 'string' || typeof body.text !== 'string') return json(400, { ok: false, error: 'body' })
+        if (!isPeerId(body.to)) return json(400, { ok: false, error: 'peer' })
         const r = await team.send(body.to, body.text)
         return json(r.ok ? 200 : 400, r)
       },
@@ -53,7 +54,7 @@ export function teamRoutes(team: TeamService): Route[] {
         if (refused) return refused
         const raw = await ctx.rawBody()
         const peer = isRecord(raw) ? raw.peer : undefined
-        if (typeof peer !== 'string' || !team.trust(peer)) return json(404, { ok: false, error: 'peer' })
+        if (!isPeerId(peer) || !team.trust(peer)) return json(404, { ok: false, error: 'peer' })
         return json(200, { ok: true })
       },
     },
