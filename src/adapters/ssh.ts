@@ -9,6 +9,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, win32 } from 'node:path'
+import { PassThrough, type Readable, type Writable } from 'node:stream'
 import { type AskpassReport, pinnedIn, promptKind } from '../core/server-admin.ts'
 import { sshHint, type TunnelConfig, type TunnelHint } from '../core/tunnel.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
@@ -543,4 +544,114 @@ export async function endStraySsh(
   for (const deadline = Date.now() + waitMs; running(r.pid) && Date.now() < deadline; )
     await new Promise(resolve => setTimeout(resolve, 50))
   return !running(r.pid)
+}
+
+/** The admin connection's ssh with its stdin and stdout as streams of bytes (the profile sync's frames). */
+export interface RemoteStream {
+  /** ssh's stdin: written, then ended. */
+  stdin: Writable
+  /** ssh's stdout, as the server sends it. */
+  stdout: Readable
+  /** Each line ssh (or sudo) says on stderr, empty ones left out. */
+  onErr(fn: (line: string) => void): void
+  done: Promise<RemoteEnd>
+  /** It and everything it started. */
+  kill(): void
+}
+
+/**
+ * ssh with this argument list, no shell, as spawnRemote runs one (its askpass, its own session,
+ * its end with the board's, its limit), with stdin and stdout left to the caller as bytes. The
+ * askpass's channel closes with the server's first bytes. spawnRemote stays as it is.
+ */
+export function spawnRemoteStream(
+  bin: string,
+  args: string[],
+  timeoutMs: number,
+  login: { password: string } | null = null,
+): RemoteStream {
+  const listeners: ((line: string) => void)[] = []
+  const stdout = new PassThrough()
+  let done = false
+  let why: string | null = null
+  let deadline: ReturnType<typeof setTimeout> | undefined
+  let askpass: Askpass | null = null
+  let pid = 0
+  let settle: (result: RemoteEnd) => void = () => {}
+  const ended = new Promise<RemoteEnd>(resolve => {
+    settle = result => {
+      if (done) return
+      done = true
+      clearTimeout(deadline)
+      loginPids.delete(pid)
+      askpass?.close()
+      resolve(askpass ? { ...result, askpass: askpass.report() } : result)
+    }
+  })
+  let child: ChildProcess
+  try {
+    if (login) {
+      askpass = openAskpass(login.password, () => {
+        if (!done && pid) killTreePid(pid)
+      })
+      mkdirSync(tunnelDir(), { recursive: true })
+    }
+    child = spawn(bin, args, {
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      ...(askpass && {
+        env: { ...process.env, ...askpass.env },
+        cwd: tunnelDir(),
+        detached: process.platform !== 'win32',
+      }),
+    })
+  } catch (err) {
+    settle({ code: null, error: String((err as NodeJS.ErrnoException).code ?? (err as Error).message) })
+    stdout.end()
+    const sink = new PassThrough()
+    sink.resume()
+    return { stdin: sink, stdout, onErr: () => {}, done: ended, kill: () => {} }
+  }
+  pid = child.pid ?? 0
+  if (askpass && pid && !done) loginPids.add(pid)
+  const kill = (): void => {
+    if (!done && pid) killTreePid(pid)
+  }
+  deadline = setTimeout(() => {
+    why = 'timeout'
+    kill()
+  }, timeoutMs)
+  child.stdout?.on('data', (chunk: Buffer) => {
+    askpass?.close()
+    if (!stdout.write(chunk)) {
+      child.stdout?.pause()
+      stdout.once('drain', () => child.stdout?.resume())
+    }
+  })
+  child.stdout?.on('end', () => stdout.end())
+  let rest = ''
+  child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
+    const lines = (rest + chunk).split(/\r?\n/)
+    rest = lines.pop() ?? ''
+    for (const line of lines) if (line) for (const fn of listeners) fn(line)
+  })
+  // ssh may end before it reads all of stdin (a refused login): that write's EPIPE is no error of ours
+  child.stdin?.on('error', () => {})
+  const finish = (code: number | null): void => {
+    if (done) return
+    const tail = rest.replace(/\r$/, '')
+    rest = ''
+    if (tail) for (const fn of listeners) fn(tail)
+    stdout.end()
+    settle({ code, error: why })
+  }
+  child.on('error', err => {
+    stdout.end()
+    settle({ code: null, error: String((err as NodeJS.ErrnoException).code ?? err.message) })
+  })
+  // once its output is read to the end (the reader may be slower than ssh); a pipe something else
+  // holds open does not keep it waiting past 10 seconds
+  child.on('exit', code => setTimeout(() => finish(code), 10_000).unref?.())
+  child.on('close', code => finish(code))
+  return { stdin: child.stdin as Writable, stdout, onErr: fn => listeners.push(fn), done: ended, kill }
 }

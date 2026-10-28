@@ -16,6 +16,7 @@ import {
   publicKeyOf,
   readPidRecord,
   type SshChild,
+  spawnRemoteStream,
   spawnSsh,
   sshBin,
   sshKeygenBin,
@@ -427,4 +428,28 @@ test('the pid record: written, read back, removed', () => {
   writePidRecord(record)
   writePidRecord(null)
   expect(existsSync(sshPidFile())).toBe(false)
+})
+
+test('the stream ssh: bytes in and out as they are, a slow reader waited for, stderr by line, its end', async () => {
+  // a program in ssh's place that sends back what it reads, and says a line on stderr
+  const echo = "console.error('said on stderr'); process.stdin.pipe(process.stdout)"
+  const child = spawnRemoteStream(process.execPath, ['-e', echo], 60_000)
+  const said: string[] = []
+  child.onErr(line => said.push(line))
+  const big = Buffer.alloc(4 * 1024 * 1024)
+  for (let i = 0; i < big.length; i++) big[i] = i % 251
+  const got: Buffer[] = []
+  const reading = (async () => {
+    for await (const chunk of child.stdout) {
+      got.push(chunk as Buffer)
+      // a reader slower than the program
+      if (got.length % 16 === 0) await Bun.sleep(1)
+    }
+  })()
+  child.stdin.end(big)
+  const end = await child.done
+  await reading
+  expect(end).toEqual({ code: 0, error: null })
+  expect(Buffer.concat(got).equals(big)).toBe(true)
+  expect(said).toEqual(['said on stderr'])
 })
