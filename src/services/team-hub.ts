@@ -83,7 +83,8 @@ export interface TeamView {
 export interface ThreadMessage {
   id: string
   dir: 'in' | 'out'
-  text: string
+  /** null: from a key that changed, not shown until it is trusted. */
+  text: string | null
   ts: string
   /** out: how far it got. */
   state?: OutState
@@ -100,7 +101,7 @@ export interface TeamService {
   view(): TeamView | null
   /** The messages with a peer, oldest first; empty while off. */
   thread(peer: string): ThreadMessage[]
-  /** A question to a peer in the roster; kept and sent (again on every reconnect until it is answered by the hub). */
+  /** A question to a peer in the roster whose key is trusted ('changed' otherwise); kept and sent (again on every reconnect until it is answered by the hub). */
   send(to: string, text: string): Promise<SendResult>
   /** Releases what was held back from a peer whose key changed, and pins the new key. */
   trust(peer: string): boolean
@@ -431,7 +432,13 @@ export function createTeam({
     thread(peer) {
       if (!config() || !isPeerId(peer)) return []
       const incoming = readInbox(peer).map(
-        (i: InboxItem): ThreadMessage => ({ id: i.id, dir: 'in', text: i.text, ts: i.ts, held: i.held }),
+        (i: InboxItem): ThreadMessage => ({
+          id: i.id,
+          dir: 'in',
+          text: i.held ? null : i.text,
+          ts: i.ts,
+          held: i.held,
+        }),
       )
       const outgoing = readOutbox(peer).map(
         (i: OutboxItem): ThreadMessage => ({
@@ -451,6 +458,8 @@ export function createTeam({
       const body = text.trim()
       if (!body || body.length > MAX_TEXT) return { ok: false, error: 'text' }
       if (!roster.some(p => p.peer === to)) return { ok: false, error: 'peer' }
+      // A key that changed under a pinned name may be someone else's: nothing goes to it until Trust.
+      if (readPins()[to]?.status === 'changed') return { ok: false, error: 'changed' }
       const key = await ensureKey()
       const open = {
         v: TEAM_PROTOCOL,

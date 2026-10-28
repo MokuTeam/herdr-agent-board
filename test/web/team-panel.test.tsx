@@ -13,6 +13,7 @@ import {
   isTeamView,
   isThread,
   offersTeam,
+  sendError,
   stateLine,
   type TeamView,
   type ThreadMessage,
@@ -45,7 +46,7 @@ const THREAD: ThreadMessage[] = [
   { id: 'q2', dir: 'out', text: 'delivered one', ts: '2026-10-28T10:01:00Z', state: 'delivered' },
   { id: 'q3', dir: 'out', text: 'acked one', ts: '2026-10-28T10:02:00Z', state: 'acked' },
   { id: 'q4', dir: 'out', text: 'expired one', ts: '2026-10-28T10:03:00Z', state: 'expired' },
-  { id: 'i1', dir: 'in', text: 'held one', ts: '2026-10-28T10:04:00Z', held: true },
+  { id: 'i1', dir: 'in', text: null, ts: '2026-10-28T10:04:00Z', held: true },
 ]
 
 function props(over: Partial<TeamBodyProps> = {}): TeamBodyProps {
@@ -118,6 +119,8 @@ describe('Team panel', () => {
     expect(all).toContain('from you · received')
     expect(all).toContain('from you · expired, not delivered')
     expect(all).toContain('from them · held back until the new key is trusted')
+    expect(all).toContain('held — key changed, Trust to read')
+    expect(all).not.toContain('held one')
     expect(findAll(nodes, el => hasClass(el, 'held'))).toHaveLength(1)
     expect(findAll(nodes, el => el.tag === 'textarea')).toHaveLength(1)
   })
@@ -137,6 +140,15 @@ describe('Team panel', () => {
       'from you · refused by the hub (not_member), not sent',
     )
     expect(text(render(props({ peer: ANA, thread: [refused] }), 'ru'))).toContain('хаб отклонил (not_member)')
+  })
+
+  test('a person whose key changed: Send is off and says why; the refusal code is explained (#231)', () => {
+    const send = (peer: string) =>
+      findAll(render(props({ peer, draft: 'hi' })), el => el.tag === 'button' && text([el]) === 'Send')[0]
+    expect(send(ANA)?.attrs.has('disabled')).toBe(false)
+    expect(send(BOB)?.attrs.has('disabled')).toBe(true)
+    expect(text(render(props({ peer: BOB })))).toContain('trust the new key before you send')
+    expect(sendError('changed', t)).toContain('their key changed')
   })
 
   test('Send is off for an empty draft and while disabled', () => {

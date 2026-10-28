@@ -43,7 +43,7 @@ const isThreadMessage = (v: unknown): v is ThreadMessage =>
   isObj(v) &&
   typeof v.id === 'string' &&
   (v.dir === 'in' || v.dir === 'out') &&
-  typeof v.text === 'string' &&
+  (typeof v.text === 'string' || (v.text === null && v.held === true)) &&
   typeof v.ts === 'string' &&
   (v.state === undefined || isDelivery(v.state)) &&
   (v.code === undefined || typeof v.code === 'string') &&
@@ -78,5 +78,8 @@ export const seenLine = (p: TeamRosterPeer, now: number, t: Translator): string 
 /** What a refused send says (the route's error code). */
 export const sendError = (code: unknown, t: Translator): string =>
   t('team.sendFailed', {
-    why: code === 'peer' || code === 'text' || code === 'too_big' ? t(`team.err.${code}`) : String(code ?? ''),
+    why:
+      code === 'peer' || code === 'text' || code === 'too_big' || code === 'changed'
+        ? t(`team.err.${code}`)
+        : String(code ?? ''),
   })

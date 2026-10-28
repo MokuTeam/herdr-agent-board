@@ -120,7 +120,7 @@ export function TeamBody({ view, peer, thread, draft, disabled, onSelect, onTrus
             {!thread.length && <p className="hint">{t('team.threadEmpty')}</p>}
             {thread.map(m => (
               <div key={`${m.dir}-${m.id}`} className={classNames('todo-row', 'team-msg', m.dir, m.held && 'held')}>
-                <p className="todo-text">{m.text}</p>
+                <p className="todo-text">{m.text ?? t('team.heldText')}</p>
                 <div className="todo-foot">
                   <span className="todo-meta">
                     {m.dir === 'in' ? t('team.in') : t('team.out')}
@@ -130,6 +130,7 @@ export function TeamBody({ view, peer, thread, draft, disabled, onSelect, onTrus
                 </div>
               </div>
             ))}
+            {picked.pin === 'changed' && <p className="hint">{t('team.sendChanged')}</p>}
             <div className="team-compose">
               <textarea
                 value={draft}
@@ -141,7 +142,7 @@ export function TeamBody({ view, peer, thread, draft, disabled, onSelect, onTrus
               <button
                 type="button"
                 className="mini"
-                disabled={disabled || !draft.trim()}
+                disabled={disabled || !draft.trim() || picked.pin === 'changed'}
                 title={t('team.sendHint')}
                 onClick={onSend}
               >

@@ -42,6 +42,9 @@ export const TEAM_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'team.sendFailed': 'Not sent: {why}',
     'team.err.peer': 'not in the team',
     'team.err.text': 'empty or too long',
+    'team.err.changed': 'their key changed; trust it first',
+    'team.heldText': 'held — key changed, Trust to read',
+    'team.sendChanged': 'Their key changed: trust the new key before you send them anything.',
     'team.err.too_big': 'too big once encoded',
   },
   ru: {
@@ -83,6 +86,9 @@ export const TEAM_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'team.sendFailed': 'Не отправлено: {why}',
     'team.err.peer': 'нет в команде',
     'team.err.text': 'пусто или слишком длинно',
+    'team.err.changed': 'их ключ изменился; сначала доверьтесь ему',
+    'team.heldText': 'удержано — ключ изменился, нажмите «Доверять», чтобы прочитать',
+    'team.sendChanged': 'Их ключ изменился: примите новый ключ, прежде чем что-то отправлять.',
     'team.err.too_big': 'слишком велико после кодирования',
   },
 }
