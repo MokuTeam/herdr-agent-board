@@ -1,7 +1,11 @@
 // What the quick look's Word and spreadsheet viewers (document.ts, spreadsheet.ts) are given and
 // give back: each reads its file in a worker of its own and draws it into `host`.
 
-export type ViewerFailure = 'password' | 'broken' | 'other'
+/** Why a file is not shown: a password, broken, too big for the viewer (or too long to read), other. */
+export type ViewerFailure = 'password' | 'broken' | 'big' | 'other'
+
+/** A worker that has not answered in this long is let go of: the file is too big to show here. */
+export const WORKER_TIMEOUT_MS = 60_000
 
 export interface OfficeOptions {
   /** The bytes, through the board's file route with its token. */

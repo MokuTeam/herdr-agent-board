@@ -6,6 +6,7 @@ import { createRef } from 'react'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { ViewerShown } from '../../web/src/components/files/Preview.tsx'
 import {
+  OFFICE_TEXTS,
   openViewer,
   PDF_TEXTS,
   type ViewerReport,
@@ -136,6 +137,9 @@ describe('what the quick look draws for a viewer’s state', () => {
     expect(viewerLook({ at: 'failed', why: 'other' }, PDF_TEXTS).empty).toBe('ql.pdfBroken')
     expect(viewerLook({ at: 'unavailable' }, PDF_TEXTS)).toEqual({ frame: true, wait: false, empty: null })
     expect(viewerLook({ at: 'unavailable' }, noFrame)).toEqual({ frame: false, wait: false, empty: 'ql.noPreview' })
+    // A Word document or a spreadsheet too big to read (or too long reading): said so.
+    expect(viewerLook({ at: 'failed', why: 'big' }, OFFICE_TEXTS).empty).toBe('ql.tooBig')
+    expect(viewerLook({ at: 'failed', why: 'big' }, PDF_TEXTS).empty).toBe('ql.pdfBroken')
   })
 
   const drawn = (state: ViewerState) =>

@@ -4,10 +4,14 @@
 // counterpart (fonts, colors, page layout) is dropped, not imitated. Bundled apart from app.js
 // (server/viewers.ts); it reads the file through the board's file route, with its token.
 import mammoth from 'mammoth'
+import { unpackedSize, zipEntries } from '../models/zip.ts'
 
 export type DocumentReply =
   | { ok: true; html: string }
-  | { ok: false; why: 'password' | 'broken' | 'other'; message: string }
+  | { ok: false; why: 'password' | 'broken' | 'big' | 'other'; message: string }
+
+/** A document unpacked to more than this is not read (a zip of 400 KB can hold 400 MB): too big to show here. */
+export const UNPACKED_LIMIT = 150 << 20
 
 const OLE = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]
 
@@ -37,6 +41,9 @@ export async function documentOf(buffer: ArrayBuffer): Promise<DocumentReply> {
     const locked = contains(bytes, ENCRYPTED)
     return { ok: false, why: locked ? 'password' : 'broken', message: locked ? 'encrypted' : 'not a .docx' }
   }
+  const entries = zipEntries(bytes)
+  if (entries && unpackedSize(entries) > UNPACKED_LIMIT)
+    return { ok: false, why: 'big', message: `${unpackedSize(entries)} bytes unpacked` }
   try {
     // The browser build (bundled for the page) takes the ArrayBuffer; the Node build (Bun, in the
     // tests) the same bytes as a Buffer.

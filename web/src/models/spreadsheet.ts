@@ -29,7 +29,7 @@ export interface SheetData {
 /** What the worker answers. */
 export type SheetReply =
   | { ok: true; sheets: SheetData[] }
-  | { ok: false; why: 'password' | 'broken' | 'other'; message: string }
+  | { ok: false; why: 'password' | 'broken' | 'big' | 'other'; message: string }
 
 /** Rows and columns shown of a sheet at most, and cells of a whole workbook. */
 export const SHEET_LIMITS = { rows: 20_000, cols: 200, cells: 600_000 }
@@ -65,9 +65,15 @@ export function sheetGrid(src: GridSource): SheetRow[] {
       return cell && cell.text !== '' ? { t: cell.text, ...(cell.number && { n: true as const }) } : null
     }),
   )
+  // What a merge covers, of what is shown: by its own span, not the whole sheet's.
+  const shownIn = (from: number, to: number, last: number, at: Map<number, number>) => {
+    const out: number[] = []
+    for (let i = Math.max(0, from); i <= Math.min(to, last); i++) if (at.has(i)) out.push(i)
+    return out
+  }
   for (const m of src.merges ?? []) {
-    const rows = rowsShown.filter(r => r >= m.s.r && r <= m.e.r)
-    const cols = colsShown.filter(c => c >= m.s.c && c <= m.e.c)
+    const rows = shownIn(m.s.r, m.e.r, src.rows - 1, rowAt)
+    const cols = shownIn(m.s.c, m.e.c, src.cols - 1, colAt)
     const [top, left] = [rows[0], cols[0]]
     if (top === undefined || left === undefined) continue
     const row = grid[rowAt.get(top) as number] as SheetRow
@@ -96,6 +102,35 @@ function trimmed(grid: SheetRow[]): SheetRow[] {
     }
   return grid.slice(0, rows).map(row => row.slice(0, cols))
 }
+
+const XML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
+const unescapeXml = (text: string) => text.replace(/&(amp|lt|gt|quot|apos);/g, (_, e: string) => XML_ENTITIES[e] ?? '')
+
+/**
+ * The sheets an .ods keeps hidden (content.xml: a table whose style says `table:display="false"`),
+ * by name: SheetJS reads them as visible.
+ */
+export function odsHiddenTables(contentXml: string): Set<string> {
+  const hiddenStyles = new Set<string>()
+  for (const m of contentXml.matchAll(/<style:style\b([^>]*)>([\s\S]*?)<\/style:style>/g)) {
+    const [, attrs = '', body = ''] = m
+    const name = /style:name="([^"]+)"/.exec(attrs)?.[1]
+    if (name && /style:family="table"/.test(attrs) && /table:display="false"/.test(body)) hiddenStyles.add(name)
+  }
+  const hidden = new Set<string>()
+  if (!hiddenStyles.size) return hidden
+  for (const m of contentXml.matchAll(/<table:table\b([^>]*)>/g)) {
+    const attrs = m[1] ?? ''
+    const style = /table:style-name="([^"]+)"/.exec(attrs)?.[1]
+    const name = /table:name="([^"]+)"/.exec(attrs)?.[1]
+    if (name && style && hiddenStyles.has(style)) hidden.add(unescapeXml(name))
+  }
+  return hidden
+}
+
+/** TRUE and FALSE as Excel shows them in the page's language: ИСТИНА and ЛОЖЬ in Russian. */
+export const booleanText = (lang: string): { true: string; false: string } =>
+  lang.startsWith('ru') ? { true: 'ИСТИНА', false: 'ЛОЖЬ' } : { true: 'TRUE', false: 'FALSE' }
 
 /** Rows frozen at the top of a sheet, from its XML's pane (at most five are kept frozen). */
 export function frozenRows(sheetXml: string): number {

@@ -5,9 +5,11 @@
 // the view. Every cell's text goes in as text. Bundled apart from app.js (server/viewers.ts),
 // imported when a spreadsheet is opened.
 import type { SheetData, SheetReply } from '../models/spreadsheet.ts'
-import type { OfficeOptions, OfficeViewer } from './office.ts'
+import { type OfficeOptions, type OfficeViewer, WORKER_TIMEOUT_MS } from './office.ts'
 
 const ROWS_AT_ONCE = 300
+// A cell's text longer than this may not fit its 420 px: it gets the whole text as a title.
+const LONG = 40
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className = ''): HTMLElementTagNameMap[K] => {
   const node = document.createElement(tag)
@@ -46,6 +48,8 @@ export function mount(host: HTMLElement, opts: OfficeOptions): OfficeViewer {
           const td = el('td', cell?.n ? 'n' : '')
           if (cell) {
             td.textContent = cell.t
+            // A cell may be cut short with an ellipsis: its whole text on hover.
+            if (cell.t.length > LONG) td.title = cell.t
             if (cell.rs) td.rowSpan = cell.rs
             if (cell.cs) td.colSpan = cell.cs
           }
@@ -89,9 +93,19 @@ export function mount(host: HTMLElement, opts: OfficeOptions): OfficeViewer {
     body.rows[frozen - 1]?.classList.add('frozen-last')
   }
 
-  worker.onmessage = (e: MessageEvent<SheetReply>) => {
+  const finish = () => {
     done = true
+    clearTimeout(slow)
     worker.terminate()
+  }
+  // A worker that takes this long is on a workbook too big to show here.
+  const slow = setTimeout(() => {
+    if (done) return
+    finish()
+    opts.onFail('big', 'no answer in time')
+  }, WORKER_TIMEOUT_MS)
+  worker.onmessage = (e: MessageEvent<SheetReply>) => {
+    finish()
     const reply = e.data
     if (!reply.ok) return opts.onFail(reply.why, reply.message)
     const wrap = el('div', 'ql-grid-wrap')
@@ -123,14 +137,14 @@ export function mount(host: HTMLElement, opts: OfficeOptions): OfficeViewer {
     opts.onReady()
   }
   worker.onerror = e => {
-    if (!done) opts.onFail('other', e.message)
-    done = true
+    if (done) return
+    finish()
+    opts.onFail('other', e.message)
   }
   worker.postMessage({ url: opts.url, lang: opts.lang, name: opts.name })
   return {
     destroy() {
-      done = true
-      worker.terminate()
+      finish()
       seen?.disconnect()
       host.replaceChildren()
     },

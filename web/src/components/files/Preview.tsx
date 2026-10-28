@@ -315,6 +315,9 @@ function OfficeRead({ kind, src, name, onOpen }: OfficeLookProps) {
   )
 }
 
+// A cell's text longer than this may not fit its 420 px: it gets the whole text as a title.
+const LONG_CELL = 40
+
 // A CSV's rows are drawn this many at a time, the next block as the last comes near the view: a
 // table of many thousand rows opens at once.
 const ROWS_AT_ONCE = 300
@@ -407,13 +410,16 @@ export function measureColumns(table: HTMLTableElement, candidates: string[][]):
     body.append(tr)
     probes.push(tr)
   }
-  // At its own width for the measure: fitted to the window, the columns would come out squeezed.
-  const width = table.style.width
+  // At its own width for the measure: fitted to the window, the columns would come out squeezed,
+  // and stretched to it (min-width 100%), a narrow table would keep the window's width.
+  const { width, minWidth } = table.style
   table.style.width = 'max-content'
+  table.style.minWidth = '0'
   // Layout widths (offsetWidth, a pixel more for its rounding), not the box on screen: the quick
   // look is still growing open, scaled, when its table is first drawn.
   const widths = heads.map(th => Math.min(420, th.offsetWidth + 1))
   table.style.width = width
+  table.style.minWidth = minWidth
   for (const tr of probes) tr.remove()
   return widths
 }
@@ -427,7 +433,9 @@ const Rows = memo(function Rows({ rows }: { rows: string[][] }) {
         <tr key={i}>
           {r.map((c, n) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: as above
-            <td key={n}>{c}</td>
+            <td key={n} title={c.length > LONG_CELL ? c : undefined}>
+              {c}
+            </td>
           ))}
         </tr>
       ))}

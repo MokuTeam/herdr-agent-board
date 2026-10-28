@@ -212,18 +212,22 @@ function keepTop(top: { value: string; size: number }[], value: string, size: nu
  * ones). The header row is measured as it is drawn.
  */
 export function widestCandidates(rows: string[][], per = 3): string[][] {
+  // Each column's longest values by length alone (cheap); the rough width only for those.
   const longest: { value: string; size: number }[][] = []
-  const widest: { value: string; size: number }[][] = []
   for (const row of rows.slice(1))
     row.forEach((value, i) => {
       longest[i] ??= []
-      widest[i] ??= []
-      keepTop(longest[i], value, value.length, per)
-      // Only a value near the longest in length can be the widest.
-      if (value.length * 2 >= (longest[i][0]?.size ?? 0)) keepTop(widest[i], value, roughWidth(value), per)
+      keepTop(longest[i], value, value.length, MEASURED)
     })
-  return longest.map((top, i) => [...new Set([...top, ...(widest[i] ?? [])].map(t => t.value))])
+  return longest.map(top => {
+    const widest: { value: string; size: number }[] = []
+    for (const { value } of top) keepTop(widest, value, roughWidth(value), per)
+    return [...new Set([...top.slice(0, per), ...widest].map(t => t.value))]
+  })
 }
+
+// How many of a column's longest values are weighed by roughWidth: a wider one is among them.
+const MEASURED = 20
 
 /** The footer of a file or folder: what it holds, how big, how far it reads, when it changed. */
 export function previewFoot(d: Preview, t: Translator): string[] {

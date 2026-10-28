@@ -16,10 +16,11 @@ current with the `board` command; a SessionStart / UserPromptSubmit hook tells e
 
 [Bun](https://bun.com/docs/installation) 1.4.3 or newer. `herdr plugin install` runs
 `bun install --production` (react and react-dom, and for the quick look's viewers pdfjs-dist,
-mammoth, DOMPurify and SheetJS's `xlsx`, which comes from SheetJS's own server, cdn.sheetjs.com:
-its only dependencies); after `herdr plugin link`, run `bun install` in the folder yourself, again
-after an update that adds one (without them, the quick look shows a PDF in the browser's own viewer
-and has no preview for a Word document or a spreadsheet). Windows, Linux and macOS (desktop
+mammoth and DOMPurify: its only dependencies; and, optional, SheetJS's `xlsx`, which comes from
+SheetJS's own server, cdn.sheetjs.com: when that cannot be reached, the install goes on without
+it, and the quick look says a spreadsheet cannot be shown here); after `herdr plugin link`, run
+`bun install` in the folder yourself, again after an update that adds one (without them, the quick
+look shows a PDF in the browser's own viewer and says a Word document cannot be shown here). Windows, Linux and macOS (desktop
 notifications: Windows only). Steps 1 and 2 are what the board needs; the rest adds to it.
 
 1. **The plugin and its install** (required).
@@ -329,9 +330,11 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   layout are left out. A spreadsheet (`.xlsx`, `.xlsm`, `.xls`, `.ods`) shows each visible sheet
   as a table, the sheet names as tabs below: values as Excel shows them, numbers and the short
   date in the board's language, merged cells, the rows Excel keeps frozen held at the top, up to
-  20 000 rows drawn as they scroll into view. Both are read in a worker, so a large one does not
-  stop the page; one over 20 MB (a document) or 10 MB (a spreadsheet), broken or with a password
-  says so, beside the button that opens it with the system.
+  20 000 rows drawn as they scroll into view; a cell cut short shows its whole text on hover.
+  Both are read in a worker; a document's HTML is then cleaned on the page's own thread, which
+  takes about a second for one of tens of thousands of paragraphs. One over 20 MB (a document) or
+  10 MB (a spreadsheet), unpacked to more than 150 MB or 120 MB, read for over a minute, broken or
+  with a password says so, beside the button that opens it with the system.
 - Images and SVG in the quick look zoom as in Preview and Photos: Ctrl+wheel or a trackpad
   pinch, two fingers on a phone, a click (a double-tap) zooms in to 100% at that spot and a
   double-click goes back to fit, `+` `-` `0` (fit) and the arrows from the keyboard. A zoomed
@@ -2436,8 +2439,11 @@ through `/api/fs/raw`, in ranges past 8 MB), PDF.js's worker as `pdf.worker.js`,
 worker fetches as a PDF needs it under `pdfjs/` (decoders, character maps, fonts);
 `document-viewer.js` and `document-worker.js` (mammoth turns the .docx into HTML in the worker,
 DOMPurify keeps only its text, structure, web links and pictures as data: URLs in the page);
-`spreadsheet-viewer.js` and `spreadsheet-worker.js` (SheetJS reads the workbook in the worker;
-the page puts each cell in as text).
+`spreadsheet-viewer.js` and `spreadsheet-worker.js` (SheetJS reads the workbook in the worker,
+only the rows shown and one more, after the zip's own directory said how big it is unpacked; the
+page puts each cell in as text). Each worker runs under a policy of its own
+(`WORKER_POLICIES`): PDF.js's may also compile its decoders, the others only read from the
+board.
 
 New sessions (`src/services/launch/`, `web/src/components/launch/`): `GET /api/launch/options` (herdr's workspaces,
 recent folders, the launcher, and `agents`: the agents a start may name, `[{ id, title }]` with
@@ -2698,7 +2704,7 @@ next writer. A card write the board itself fails at is retried on its next refre
 repository's full history:
 
 ```sh
-bun install     # react, react-dom and the viewers' libraries, and the dev tools: TypeScript, Biome, the types
+bun install     # react, react-dom and the viewers' libraries, and the dev tools: TypeScript, Biome, the types, jsdom
 bun test        # the whole suite (a couple of minutes); two symlink tests skip without symlink rights
 bun run check   # type check (tsc) and lint (Biome)
 ```
