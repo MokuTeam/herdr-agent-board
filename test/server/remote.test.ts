@@ -183,6 +183,15 @@ describe('remote mode on', () => {
       expect([path, got.status, await got.json()]).toEqual([path, 403, { error: 'local' }])
       const posted = await post(path, { op: 'off' })
       expect([path, posted.status, await posted.json()]).toEqual([path, 403, { error: 'local' }])
+      // the profile sync's picker and rules too: the server's folders listed or made, the rules kept
+      for (const body of [
+        { op: 'sync-dirs', path: '/home/agent' },
+        { op: 'sync-mkdir', path: '/home/agent', name: 'x' },
+        { op: 'sync-rules', rules: [{ pc: 'C:\\migo', server: '/home/agent/migo' }] },
+      ]) {
+        const sync = await post(path, body)
+        expect([body.op, sync.status, await sync.json()]).toEqual([body.op, 403, { error: 'local' }])
+      }
     }
     expect((await phone('/')).status).toBe(404)
     // The routes' own guards as for the page: a POST needs the board's header.

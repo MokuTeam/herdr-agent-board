@@ -148,6 +148,28 @@ export function editTunnelInstall(i: { domain?: string }): EditResult {
   return { ok: true }
 }
 
+/**
+ * The profile sync's path rules for a server (`tunnel.syncPaths[host]`, core/profile-sync/rules.ts),
+ * keeping the other servers' and the file's other fields; none left removes the server's.
+ * Checking them is the caller's (cleanRules).
+ */
+export function editSyncPaths(host: string, rules: { pc: string; server: string }[]): boolean {
+  try {
+    const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)
+    const tunnel = tunnelOf(raw)
+    const all: Raw = isRecord(tunnel.syncPaths) ? { ...tunnel.syncPaths } : {}
+    if (rules.length) all[host] = rules.map(r => ({ pc: r.pc, server: r.server }))
+    else delete all[host]
+    if (Object.keys(all).length) tunnel.syncPaths = all
+    else delete tunnel.syncPaths
+    raw.tunnel = tunnel
+    writeRaw(raw)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** The setup on record, as the panel shows it (`tunnel.setup`: its case, address and when), or none (null). */
 export function setTunnelSetup(s: { case: SetupCase; address: string; at: string } | null): EditResult {
   const raw = readConfigFile() ?? structuredClone<Raw>(DEFAULT_CONFIG)

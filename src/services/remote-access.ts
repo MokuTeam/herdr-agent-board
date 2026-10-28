@@ -303,6 +303,12 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
           return d.sync ? d.sync.look(b) : malformed('no sync')
         case 'sync-pair':
           return d.sync ? d.sync.pair(b) : malformed('no sync')
+        case 'sync-rules':
+          return d.sync ? d.sync.rules(b) : malformed('no sync')
+        case 'sync-dirs':
+          return d.sync ? d.sync.dirs(b) : malformed('no sync')
+        case 'sync-mkdir':
+          return d.sync ? d.sync.mkdir(b) : malformed('no sync')
         case 'sync-apply':
           return d.sync ? d.sync.apply(b) : malformed('no sync')
         case 'sync-cancel':

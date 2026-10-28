@@ -6,8 +6,8 @@
 // writes there, the user writes. Pure.
 import { CHECKOUT, INSTALL_RECORD } from '../server-install.ts'
 
-/** What the sync program does on the server: say what it has, send files, write them, record a sync. */
-export type SyncOp = 'scan' | 'pack' | 'apply' | 'record'
+/** What the sync program does on the server: say what it has, send files, write them, record a sync; list its folders, make one, say which are there. */
+export type SyncOp = 'scan' | 'pack' | 'apply' | 'record' | 'dirs' | 'mkdir' | 'exists'
 
 /** What the command says on stderr when it cannot run the program: no board installed here, or one from before the sync. */
 export const NO_BOARD = '@@sync none'

@@ -12,7 +12,7 @@ import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
 import type { WebSocketHandler } from 'bun'
 import { writeCard } from '../adapters/cards.ts'
-import { saveFoundProfiles } from '../adapters/config-file.ts'
+import { editSyncPaths, saveFoundProfiles } from '../adapters/config-file.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { ensureLocalKey, keyMatches, LOCAL_KEY_HEADER } from '../adapters/local-key.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
@@ -420,6 +420,7 @@ export async function startServer({
     log,
     newId: setupId,
     now: () => Date.now(),
+    saveRules: editSyncPaths,
   })
   // The "Remote access…" panel's view and changes (/api/access, the local board's only).
   const remoteAccess = createRemoteAccess({

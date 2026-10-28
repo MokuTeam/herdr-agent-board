@@ -13,7 +13,15 @@
 // kept in memory only while that request (or its run) lasts, never stored. sudo's password goes
 // alone first (SUDO_CHECK), then on the sync's stdin before its frames. Nothing runs, nothing is
 // read before the owner asks: a board that never syncs is as it was.
+//
+// The path rules (core/profile-sync/rules.ts) are the local board's, per server (config.json
+// `tunnel.syncPaths`, by its host): a project under a rule's folder lands at the same place
+// below its folder on the other side. The preview says which targets' folders are there yet (the
+// server's asked once more over the login, this computer's looked at here). The owner picks the
+// rules' folders and a project's own path with a picker: the server's folders listed (and one
+// made) by the sync program as the board's user, this computer's by the board's folder route.
 import { createGunzip } from 'node:zlib'
+import { SLOW, statOf } from '../adapters/folders.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import {
   type Frame,
@@ -38,6 +46,7 @@ import {
   transferOf,
 } from '../core/profile-sync/plan.ts'
 import { NO_BOARD, OLD_BOARD, type SyncOp, syncScript } from '../core/profile-sync/remote.ts'
+import { cleanRules, type PathRule, rulesIn } from '../core/profile-sync/rules.ts'
 import { type Allow, type CarryTo, RUN_GROUPS } from '../core/profile-sync/secrets.ts'
 import { type Skipped, SYNC_IDLE, type SyncView } from '../core/profile-sync/view.ts'
 import {
@@ -96,6 +105,10 @@ export interface ProfileSyncDeps {
   newId(): string
   now(): number
   local?: LocalSide
+  /** The path rules for a server kept in config.json (`tunnel.syncPaths[host]`); none given: kept in the live config only. */
+  saveRules?(host: string, rules: PathRule[]): boolean
+  /** Whether a folder is on this computer (a target's, for a sync to here). */
+  folderThere?(path: string): Promise<boolean>
 }
 
 export interface ProfileSync {
@@ -103,8 +116,14 @@ export interface ProfileSync {
   view(): SyncView | null
   /** `{ direction, password?, sudoPassword? }`: both sides scanned, the preview made. */
   look(body: Fields): Promise<Answer>
-  /** `{ profile, folder, path }`: an unpaired project's path on the target (null: left out); the preview made again. */
+  /** `{ profile, folder, path, password?, sudoPassword? }`: a project's own path on the target (null: left out, '': as the rules and remotes say); the preview made again. */
   pair(body: Fields): Answer
+  /** `{ rules: [{ pc, server }], password?, sudoPassword? }`: this server's path rules kept; the preview made again. */
+  rules(body: Fields): Answer
+  /** `{ path?, password?, sudoPassword? }`: the folders in a folder on the server ('' its board user's home), as that user lists them. */
+  dirs(body: Fields): Promise<Answer>
+  /** `{ path, name, password?, sudoPassword? }`: a folder made in a folder on the server, as the board's user; its listing. */
+  mkdir(body: Fields): Promise<Answer>
   /** `{ id, conflicts, deletions, password?, sudoPassword? }`: the preview applied, its run followed in the view. */
   apply(body: Fields): Promise<Answer>
   cancel(): Answer
@@ -113,6 +132,11 @@ export interface ProfileSync {
 }
 
 const ok = (more: Fields = {}): Answer => ({ status: 200, body: { ok: true, ...more } })
+/** Is this a folder here, without holding the board up on a share that does not answer. */
+async function folderHere(path: string): Promise<boolean> {
+  const st = await statOf(path)
+  return st !== null && st !== SLOW && st.isDirectory()
+}
 const malformed = (error: string): Answer => ({ status: 400, body: { ok: false, error } })
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -164,7 +188,11 @@ export function createProfileSync(d: ProfileSyncDeps): ProfileSync {
     target: Manifest
     mode: SudoMode
     given: Record<string, string | null>
+    /** What is known of the targets' folders: there or not, by path. */
+    there: Record<string, boolean>
   } | null = null
+  /** sudo's way on the server, from its last probe (the picker's listings need no probe each). */
+  let probed: { host: string; mode: SudoMode } | null = null
 
   const changed = (): void => d.onChange()
   const tunnel = (): Fields => (isRecord(d.cfg.tunnel) ? d.cfg.tunnel : {})
@@ -172,6 +200,10 @@ export function createProfileSync(d: ProfileSyncDeps): ProfileSync {
   const admin = (): Admin => adminConfig(tunnel().admin)
   /** The server, as this side keeps its hashes of the last sync by it. */
   const serverPeer = (): string => `server-${conf().host}`
+  /** This server's path rules, as config.json has them. */
+  const rulesNow = (): PathRule[] => rulesIn(d.cfg.tunnel, conf().host)
+  /** sudo's way on this server, when probed already. */
+  const modeKnown = (): SudoMode | null => (probed && probed.host === conf().host ? probed.mode : null)
   const set = (patch: Partial<SyncView>): void => {
     view = { ...(view ?? SYNC_IDLE), ...patch }
     changed()
@@ -280,6 +312,7 @@ export function createProfileSync(d: ProfileSyncDeps): ProfileSync {
       const read = h.end.code === 0 ? readProbe(out.split(/\r?\n/)) : null
       if (!read) throw why(h, typed, null)
       mode = read.mode
+      probed = { host: to.c.host, mode }
     }
     if (mode === 'requiretty' || mode === 'none') throw new Refused(mode === 'none' ? 'notSudoer' : 'requiretty', '')
     const sudo = mode === 'password' ? (sudoPassword ?? password) : null
@@ -349,6 +382,8 @@ export function createProfileSync(d: ProfileSyncDeps): ProfileSync {
       },
     )
     if (cancelled) throw new Refused(null, t('server.err.cancelled'))
+    // a board on the server from before this op
+    if (said !== null && (said as string).startsWith('no op ')) throw new Refused(null, t('sync.err.oldBoard'))
     if (said !== null || h.end.code !== 0 || !answered) throw why(h, l.password !== null, said)
   }
 
@@ -363,16 +398,91 @@ export function createProfileSync(d: ProfileSyncDeps): ProfileSync {
       ? { platform: server.platform, from: d.platform, fromHome: d.home, toHome: server.home }
       : { platform: d.platform, from: server.platform, fromHome: server.home, toHome: d.home }
 
-  function preview(): Preview {
+  /** The preview made again from the last Look: a new one (its choices start again), or the same one with what is known of the folders there. */
+  function preview(same: Preview | null = null): Preview {
     if (!looked) throw new Error('no Look')
     return buildPreview({
-      id: d.newId(),
-      at: d.now(),
+      id: same?.id ?? d.newId(),
+      at: same?.at ?? d.now(),
       direction: looked.direction,
       source: looked.source,
       target: looked.target,
       given: looked.given,
+      rules: rulesNow(),
+      there: looked.there,
     })
+  }
+
+  /** The targets' folders not known yet: whether each is there (the server's by its program, over the login `l`). */
+  async function askThere(
+    to: { bin: string; c: TunnelConfig; a: Admin },
+    l: { password: string | null; mode: SudoMode; sudoLine: string } | null,
+    p: Preview,
+  ): Promise<void> {
+    const l0 = looked
+    if (!l0) return
+    const ask = [...new Set(p.pairs.map(x => x.to))].filter(x => !(x in l0.there))
+    if (ask.length === 0) return
+    let found: boolean[] = []
+    if (l0.direction === 'down') found = await Promise.all(ask.map(x => (d.folderThere ?? folderHere)(x)))
+    else if (l)
+      await program(to, l, 'exists', { paths: ask }, PROBE_MS, f => {
+        if (f.head.t === 'exists' && Array.isArray(f.head.there)) found = f.head.there.map(x => x === true)
+      })
+    ask.forEach((x, i) => {
+      if (i < found.length) l0.there[x] = found[i] as boolean
+    })
+  }
+
+  /**
+   * After a change of the pairs: the folders there asked about in the background (the passwords
+   * only while it runs), the preview shown again as it is when they are known. A failure leaves
+   * them not known.
+   */
+  function thereLater(body: Fields): void {
+    const l0 = looked
+    const p = view?.preview ?? null
+    if (!l0 || !p || p.pairs.every(x => x.to in l0.there)) return
+    const password = passwordOf(body.password)
+    const sudoPassword = passwordOf(body.sudoPassword)
+    if (password === false || sudoPassword === false) return
+    void (async () => {
+      try {
+        const to = ready()
+        if ('status' in to) return
+        const l = l0.direction === 'up' ? await login(to, password, sudoPassword, l0.mode) : null
+        await askThere(to, l, p)
+      } catch {
+        return
+      }
+      const now = view?.preview ?? null
+      if (looked === l0 && view?.phase === 'preview' && now) set({ preview: preview(now) })
+    })()
+  }
+
+  /** The picker's listing of a folder on the server (or of the folder made in it), as the board's user. */
+  async function listThere(op: 'dirs' | 'mkdir', req: Fields, body: Fields): Promise<Answer> {
+    const password = passwordOf(body.password)
+    const sudoPassword = passwordOf(body.sudoPassword)
+    if (password === false) return malformed('password')
+    if (sudoPassword === false) return malformed('sudoPassword')
+    if (busy) return refused('busy', hintText('busy'))
+    const to = ready()
+    if ('status' in to) return to
+    try {
+      const l = await login(to, password, sudoPassword, looked?.mode ?? modeKnown())
+      let listing: Fields | null = null
+      await program(to, l, op, req, PROBE_MS, f => {
+        if (f.head.t === 'dirs') listing = f.head
+      })
+      if (!listing) throw new Refused(null, t('sync.err.failed'))
+      const { t: _, ...folders } = listing as Fields
+      if (op === 'mkdir' && typeof folders.path === 'string' && looked) looked.there[folders.path] = true
+      return ok(folders)
+    } catch (err) {
+      const a = answerOf(err)
+      return refused(a.hint, a.error)
+    }
   }
 
   return {
@@ -421,7 +531,11 @@ export function createProfileSync(d: ProfileSyncDeps): ProfileSync {
           target: direction === 'up' ? there : here,
           mode: l.mode,
           given: {},
+          there: {},
         }
+        // which targets' folders are there yet: asked once more of the server, looked at here
+        await askThere(to, l, preview()).catch(() => {})
+        if (cancelled) throw new Refused(null, t('server.err.cancelled'))
         set({ phase: 'preview', preview: preview(), hint: null, error: null })
         d.log(`profile sync: preview ${direction}`)
         return ok()
@@ -448,7 +562,36 @@ export function createProfileSync(d: ProfileSyncDeps): ProfileSync {
         looked.given[key] = path
       }
       set({ preview: preview() })
+      thereLater(body)
       return ok()
+    },
+
+    rules(body) {
+      const server = looked ? (looked.direction === 'up' ? looked.target : looked.source).platform : 'linux'
+      const rules = cleanRules(body.rules, d.platform, server)
+      if (rules === null) return refused(null, t('sync.err.rule'))
+      const host = conf().host
+      if (host === '') return refused(null, t('sync.err.noServer'))
+      if (d.saveRules && !d.saveRules(host, rules)) return refused(null, t('sync.err.ruleSave'))
+      // the live config at once (config.json's watcher follows with the same)
+      const tunnel = isRecord(d.cfg.tunnel) ? d.cfg.tunnel : {}
+      const all = isRecord(tunnel.syncPaths) ? tunnel.syncPaths : {}
+      d.cfg.tunnel = { ...tunnel, syncPaths: { ...all, [host]: rules } }
+      d.log(`profile sync: ${rules.length} path rules`)
+      if (looked && view?.phase === 'preview') {
+        set({ preview: preview() })
+        thereLater(body)
+      }
+      return ok({ rules })
+    },
+
+    dirs(body) {
+      return listThere('dirs', { path: typeof body.path === 'string' ? body.path : '' }, body)
+    },
+
+    mkdir(body) {
+      if (typeof body.path !== 'string' || typeof body.name !== 'string') return Promise.resolve(malformed('name'))
+      return listThere('mkdir', { path: body.path, name: body.name }, body)
     },
 
     async apply(body) {
