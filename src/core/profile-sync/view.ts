@@ -15,6 +15,19 @@ export interface SyncProgress {
   step: 'files' | 'record'
 }
 
+/**
+ * Why the target left a file as it was: it changed there since the preview (or has the name in
+ * another case), it is not a JSON object there (or could not be read), a secret was cut from what
+ * came and the target has its own copy, or its group was not ticked.
+ */
+export type SkipWhy = 'changed' | 'unreadable' | 'cut' | 'group'
+
+export interface Skipped {
+  profile: string
+  rel: string
+  why: SkipWhy
+}
+
 export interface SyncResult {
   files: number
   bytes: number
@@ -26,6 +39,8 @@ export interface SyncResult {
   install: boolean | null
   /** Files gone on the source between the preview and Apply. */
   gone: number
+  /** What the target left as it was, and why. */
+  skipped: Skipped[]
 }
 
 export interface SyncView {

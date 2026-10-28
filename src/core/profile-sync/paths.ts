@@ -85,7 +85,8 @@ export const byDepth = (moves: readonly Move[]): Move[] => [...moves].sort((a, b
 /**
  * A git remote for comparing: host and path, lower case, without scheme, user, port, `.git` or a
  * trailing slash; git@github.com:a/b.git and https://github.com/a/b are one. A remote on a disk
- * (a path, file://) is none: it names no clone on the other side.
+ * (a path, file://) is none: it names no clone on the other side. A key is its own key: a side's
+ * manifest carries its remotes as keys only, never with a user or a token in them.
  */
 export function remoteKey(url: string | null | undefined): string | null {
   const u = (url ?? '').trim()
@@ -97,6 +98,8 @@ export function remoteKey(url: string | null | undefined): string | null {
       .replace(/^\/+/, '')
     return host && p ? `${host.toLowerCase()}/${p.toLowerCase()}` : null
   }
+  const key = /^([a-z0-9-]+(?:\.[a-z0-9-]+)+)\/([^:@\s]+)$/i.exec(u)
+  if (key) return tidy(key[1] as string, key[2] as string)
   const url1 = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/(.+)$/i.exec(u)
   if (url1) return tidy(url1[1] as string, url1[2] as string)
   const scp = /^(?:[^@/]+@)?([^/:]+):(.+)$/.exec(u)

@@ -3,8 +3,10 @@
 // server, synced by hand in the direction the owner picks. Look scans both sides (the server's
 // through the sync program, entrypoints/profile-sync.ts, as the board's user) and makes the
 // preview (core/profile-sync/plan.ts); a project left unpaired gets the path the owner gives, or
-// stays out; Apply sends what the owner said yes to, packed, over the admin's login, and each side
-// records the sync's hashes (the target as it writes, the source once all has arrived).
+// stays out; Apply sends what the owner said yes to (the groups that change how the target runs
+// and session history only when ticked), packed, over the admin's login, each file with the
+// target's hash at Look; the target leaves what changed since as it is, and each side records the
+// sync's hashes of what was written (the target as it writes, the source once all has arrived).
 //
 // The login is the server setup's (services/server-setup.ts): the admin's fields in config.json,
 // the server's key pinned by its Look, the password typed in the panel and sent with each request,
@@ -36,8 +38,8 @@ import {
   transferOf,
 } from '../core/profile-sync/plan.ts'
 import { NO_BOARD, OLD_BOARD, type SyncOp, syncScript } from '../core/profile-sync/remote.ts'
-import type { CarryTo } from '../core/profile-sync/secrets.ts'
-import { SYNC_IDLE, type SyncView } from '../core/profile-sync/view.ts'
+import { type Allow, type CarryTo, RUN_GROUPS } from '../core/profile-sync/secrets.ts'
+import { type Skipped, SYNC_IDLE, type SyncView } from '../core/profile-sync/view.ts'
 import {
   type Admin,
   adminConfig,
@@ -57,7 +59,7 @@ import { type TunnelConfig, tunnelConfig } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
 
 /** The sync's version the server's program must speak (entrypoints/profile-sync.ts SYNC_VERSION). */
-const SYNC_VERSION = 1
+const SYNC_VERSION = 2
 const PROBE_MS = 30_000
 const SCAN_MS = 15 * 60_000
 /** A sync's run: the first one carries the profiles whole (the owner's: about 1.7 GB). */
@@ -118,6 +120,21 @@ function passwordOf(v: unknown): string | null | false {
   if (v === undefined || v === null || v === '') return null
   return typeof v === 'string' && v.length <= PASSWORD_MOST && !/[\r\n\0]/.test(v) ? v : false
 }
+
+/** The groups the page ticked: each run group and session history, only as booleans. */
+function allowOf(v: unknown): Allow {
+  if (!isRecord(v)) return {}
+  const known = new Set<string>([...RUN_GROUPS, 'history'])
+  return Object.fromEntries(Object.entries(v).filter(([k, x]) => known.has(k) && typeof x === 'boolean'))
+}
+
+/** What the target left as it was, as its frame says it. */
+const skippedOf = (v: unknown): Skipped[] =>
+  (Array.isArray(v) ? v.filter(isRecord) : []).flatMap(x =>
+    typeof x.profile === 'string' && typeof x.rel === 'string' && typeof x.why === 'string'
+      ? [{ profile: x.profile, rel: x.rel, why: x.why as Skipped['why'] }]
+      : [],
+  )
 
 /** What one remote run heard: its exit, ssh's and sudo's lines, the askpass's report. */
 interface Heard {
@@ -455,6 +472,7 @@ export function createProfileSync(d: ProfileSyncDeps): ProfileSync {
         deletions: Array.isArray(body.deletions)
           ? body.deletions.filter((x): x is string => typeof x === 'string')
           : [],
+        allow: allowOf(body.allow),
       }
       const to = ready()
       if ('status' in to) return to
@@ -487,25 +505,34 @@ export function createProfileSync(d: ProfileSyncDeps): ProfileSync {
           let gone = 0
           let created: string[] = []
           let install: boolean | null = null
-          const records: { profile: string; rel: string; hash: string | null }[] = [
-            ...x.same.map(s => ({ profile: s.profile, rel: s.from, hash: s.hash })),
-            ...x.deletions.map(s => ({ profile: s.profile, rel: s.from, hash: null })),
-            ...x.forget.map(s => ({ profile: s.profile, rel: s.from, hash: null })),
-          ]
+          let skipped: Skipped[] = []
+          /** What the target left as it was: not recorded, so the next preview offers it again. */
+          const left = (): Set<string> => new Set(skipped.map(s => `${s.profile}:${s.rel}`))
+          const records = (): { profile: string; rel: string; hash: string | null }[] => {
+            const off = left()
+            return [
+              ...x.same.map(s => ({ profile: s.profile, rel: s.from, hash: s.hash })),
+              ...x.deletions
+                .filter(s => !off.has(`${s.profile}:${s.to}`))
+                .map(s => ({ profile: s.profile, rel: s.from, hash: null })),
+              ...x.forget.map(s => ({ profile: s.profile, rel: s.from, hash: null })),
+            ]
+          }
           if (l0.direction === 'up') {
             const profiles = new Map(local.sideProfiles(d.home).map(q => [q.name, q]))
-            const ctx = { to: carry(server, 'up'), moves: x.moves }
-            const sent: typeof records = []
+            const ctx = { to: carry(server, 'up'), moves: x.moves, allow: x.allow }
+            const sent: { profile: string; rel: string; to: string; hash: string | null }[] = []
             await program(
               to,
               l,
               'apply',
-              { profiles: x.profiles, deletions: x.deletions, same: x.same, forget: x.forget },
+              { profiles: x.profiles, deletions: x.deletions, same: x.same, forget: x.forget, allow: x.allow },
               RUN_MS,
               f => {
                 if (f.head.t === 'done') {
                   created = Array.isArray(f.head.created) ? f.head.created.map(String) : []
                   install = typeof f.head.install === 'boolean' ? f.head.install : null
+                  skipped = skippedOf(f.head.skipped)
                 }
               },
               async sink => {
@@ -516,8 +543,19 @@ export function createProfileSync(d: ProfileSyncDeps): ProfileSync {
                     gone++
                     continue
                   }
-                  await sink.send({ t: 'file', profile: s.profile, to: s.to, merge: s.merge }, ready.body)
-                  sent.push({ profile: s.profile, rel: s.from, hash: ready.hash })
+                  await sink.send(
+                    {
+                      t: 'file',
+                      profile: s.profile,
+                      to: s.to,
+                      merge: s.merge,
+                      expect: s.expect ?? null,
+                      cut: ready.cut,
+                      exec: ready.exec,
+                    },
+                    ready.body,
+                  )
+                  sent.push({ profile: s.profile, rel: s.from, to: s.to, hash: ready.hash })
                   progress.files++
                   progress.bytes += ready.body.length
                   later()
@@ -525,49 +563,75 @@ export function createProfileSync(d: ProfileSyncDeps): ProfileSync {
                 await sink.send({ t: 'end' })
               },
             )
-            local.recordSynced(serverPeer(), [...sent, ...records])
+            const off = left()
+            local.recordSynced(serverPeer(), [
+              ...sent.filter(s => !off.has(`${s.profile}:${s.to}`)).map(({ to: _, ...r }) => r),
+              ...records(),
+            ])
           } else {
             const target = local.openTarget({
               peer: serverPeer(),
               home: d.home,
               platform: d.platform,
               profiles: x.profiles,
+              allow: x.allow,
             })
-            for (const s of x.same) target.same(s.profile, s.to, s.there)
-            for (const s of x.forget) target.forget(s.profile, s.to)
-            const got: typeof records = []
-            await program(
-              to,
-              l,
-              'pack',
-              { to: { platform: d.platform, home: d.home }, moves: x.moves, items: x.send },
-              RUN_MS,
-              f => {
-                if (f.head.t !== 'file') return
-                if (f.head.gone === true) {
-                  gone++
-                  return
-                }
-                const profile = String(f.head.profile)
-                target.write(profile, String(f.head.to), f.body, f.head.merge === true)
-                got.push({
-                  profile,
-                  rel: String(f.head.from),
-                  hash: typeof f.head.hash === 'string' ? f.head.hash : null,
-                })
-                progress.files++
-                progress.bytes += f.body.length
-                later()
-              },
-            )
-            for (const s of x.deletions) target.remove(s.profile, s.to)
-            created = target.finish().created
+            // only what this side asked for is written, with the hash this side had at Look
+            const asked = new Map(x.send.map(s => [`${s.profile}:${s.from}`, s]))
+            const got: { profile: string; rel: string; hash: string | null }[] = []
+            try {
+              for (const s of x.same) target.same(s.profile, s.to, s.there)
+              for (const s of x.forget) target.forget(s.profile, s.to)
+              await program(
+                to,
+                l,
+                'pack',
+                {
+                  to: { platform: d.platform, home: d.home },
+                  moves: x.moves,
+                  items: x.send.map(s => ({ profile: s.profile, from: s.from, to: s.to, merge: s.merge })),
+                  allow: x.allow,
+                },
+                RUN_MS,
+                f => {
+                  if (f.head.t !== 'file') return
+                  if (f.head.gone === true) {
+                    gone++
+                    return
+                  }
+                  const s = asked.get(`${String(f.head.profile)}:${String(f.head.from)}`)
+                  if (!s) return
+                  const found = isRecord(f.head.found) && Object.keys(f.head.found).length > 0
+                  const why = target.write(s.profile, s.to, f.body, {
+                    merge: s.merge,
+                    expect: s.expect ?? null,
+                    cut: f.head.cut === true || (found && !s.merge),
+                    exec: f.head.exec === true,
+                  })
+                  if (why !== null) return
+                  got.push({
+                    profile: s.profile,
+                    rel: s.from,
+                    hash: typeof f.head.hash === 'string' ? f.head.hash : null,
+                  })
+                  progress.files++
+                  progress.bytes += f.body.length
+                  later()
+                },
+              )
+              for (const s of x.deletions) target.remove(s.profile, s.to, s.expect)
+            } finally {
+              // what was written is recorded here, however the run ended
+              const done = target.finish()
+              created = done.created
+              skipped = done.skipped
+            }
             set({ progress: { ...progress, step: 'record' } })
             await program(
               to,
               l,
               'record',
-              { changes: [...got.filter(g => g.hash !== null), ...records] },
+              { changes: [...got.filter(g => g.hash !== null), ...records()] },
               SCAN_MS,
               () => {},
             )
@@ -578,11 +642,12 @@ export function createProfileSync(d: ProfileSyncDeps): ProfileSync {
             result: {
               files: progress.files,
               bytes: progress.bytes,
-              deleted: x.deletions.length,
+              deleted: x.deletions.length - x.deletions.filter(s => left().has(`${s.profile}:${s.to}`)).length,
               kept,
               created,
               install,
               gone,
+              skipped,
             },
           })
           d.log(`profile sync: done ${l0.direction}, ${progress.files} files`)

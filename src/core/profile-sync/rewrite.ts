@@ -84,7 +84,7 @@ export function mergeHistory(own: string, shared: string): string {
 }
 
 /** A hook entry's commands, for telling one already there. */
-const hookKey = (event: string, entry: unknown, h: unknown): string =>
+export const hookKey = (event: string, entry: unknown, h: unknown): string =>
   JSON.stringify([event, isRecord(entry) ? (entry.matcher ?? null) : null, isRecord(h) ? (h.command ?? null) : null])
 
 /**

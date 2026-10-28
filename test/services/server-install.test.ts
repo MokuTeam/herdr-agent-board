@@ -7,7 +7,14 @@ import { expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { atLeast, keysScript, syncInto, userArgv, userFileScript, userReadScript } from '../../src/services/server-install.ts'
+import {
+  atLeast,
+  keysScript,
+  syncInto,
+  userArgv,
+  userFileScript,
+  userReadScript,
+} from '../../src/services/server-install.ts'
 
 test('a version at least another', () => {
   expect(atLeast('1.4.3', '1.4.3')).toBe(true)

@@ -187,14 +187,16 @@ function pcHome(): { home: string; project: string } {
 async function synced(
   sync: ProfileSync,
   direction: 'up' | 'down',
-  choices: { conflicts?: Record<string, string>; deletions?: string[] } = {},
+  choices: { conflicts?: Record<string, string>; deletions?: string[]; allow?: Record<string, boolean> } = {},
 ): Promise<SyncView> {
   const pw = { password: 'admin-pw' }
   const looked = await sync.look({ direction, ...pw })
   expect(looked.status, JSON.stringify(looked.body)).toBe(200)
   const preview = sync.view()?.preview
   if (!preview) throw new Error('no preview')
-  const applied = await sync.apply({ id: preview.id, conflicts: {}, deletions: [], ...choices, ...pw })
+  // every group ticked, session history too, unless the test says: the lane goes the whole way
+  const allow = { env: true, hooks: true, statusLine: true, mcp: true, helpers: true, history: true }
+  const applied = await sync.apply({ id: preview.id, conflicts: {}, deletions: [], allow, ...choices, ...pw })
   expect(applied.status, JSON.stringify(applied.body)).toBe(200)
   await until(
     `the ${direction} sync ends`,

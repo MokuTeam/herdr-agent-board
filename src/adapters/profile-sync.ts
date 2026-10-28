@@ -9,9 +9,12 @@
 // with gzip, over ssh's stdin and stdout.
 //
 // The target never writes a secret file or a file of one machine only, whatever comes, nor
-// outside the profile's folder.
+// outside the profile's folder; nor a file that changed there since the preview, nor over its own
+// copy a file a secret was cut from, nor what the owner did not tick; it merges into a JSON file
+// only when it reads as one (a copy kept before its first merge), and keeps each file's mode.
 import { createHash } from 'node:crypto'
 import {
+  chmodSync,
   closeSync,
   existsSync,
   mkdirSync,
@@ -21,6 +24,7 @@ import {
   readSync,
   renameSync,
   rmSync,
+  type Stats,
   statSync,
   writeFileSync,
 } from 'node:fs'
@@ -36,8 +40,15 @@ import {
   type ProjectFact,
   pathKey,
   projectFolder,
+  remoteKey,
 } from '../core/profile-sync/paths.ts'
-import { type Manifest, type ProfileFacts, type ProfilePlan, profileDir } from '../core/profile-sync/plan.ts'
+import {
+  type Manifest,
+  type ProfileFacts,
+  type ProfilePlan,
+  profileDir,
+  type Ticks,
+} from '../core/profile-sync/plan.ts'
 import {
   mergeClaudeJson,
   mergeHistory,
@@ -46,14 +57,22 @@ import {
   rewriteHistory,
 } from '../core/profile-sync/rewrite.ts'
 import {
+  type Allow,
+  boardCommand,
   type CarryTo,
   cutSecrets,
+  cutSecretsInFile,
+  fileGroup,
+  historyFile,
   MERGED,
   oneMachine,
+  ownEnvName,
   secretFile,
   shareClaudeJson,
   shareSettings,
+  withhold,
 } from '../core/profile-sync/secrets.ts'
+import type { Skipped, SkipWhy } from '../core/profile-sync/view.ts'
 import { CHECKOUT } from '../core/server-install.ts'
 import { isRecord, replaceFile } from './json-store.ts'
 import { stateDir } from './paths.ts'
@@ -140,6 +159,51 @@ const parsed = (text: string): unknown => {
   }
 }
 
+const BOM8 = Buffer.from([0xef, 0xbb, 0xbf])
+const BOM16 = Buffer.from([0xff, 0xfe])
+const UTF8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+
+/** A file's text and how it is written: UTF-8 (with its BOM or not), UTF-16 with its BOM, or bytes not UTF-8 read one character a byte. */
+interface Decoded {
+  text: string
+  enc: 'utf8' | 'utf16le' | 'latin1'
+  bom: boolean
+}
+
+/**
+ * A file read as text, so that written back with no change it is the same bytes: UTF-8 when it
+ * is (its BOM kept apart), UTF-16 after its BOM (PowerShell's own), else one character a byte
+ * (ANSI, cp1251: nothing garbled, a token, being ASCII, still found). Null: not text (a NUL in it).
+ */
+function decodeText(data: Buffer): Decoded | null {
+  if (data.length % 2 === 0 && data.subarray(0, 2).equals(BOM16)) {
+    const text = data.subarray(2).toString('utf16le')
+    if (Buffer.from(text, 'utf16le').equals(data.subarray(2))) return { text, enc: 'utf16le', bom: true }
+  }
+  if (data.subarray(0, 8192).includes(0)) return null
+  const bom = data.subarray(0, 3).equals(BOM8)
+  try {
+    return { text: UTF8.decode(bom ? data.subarray(3) : data), enc: 'utf8', bom }
+  } catch {
+    return { text: data.toString('latin1'), enc: 'latin1', bom: false }
+  }
+}
+
+const encodeText = (text: string, d: Decoded): Buffer =>
+  d.enc === 'utf16le'
+    ? Buffer.concat([BOM16, Buffer.from(text, 'utf16le')])
+    : d.enc === 'latin1'
+      ? Buffer.from(text, 'latin1')
+      : Buffer.concat([d.bom ? BOM8 : Buffer.alloc(0), Buffer.from(text, 'utf8')])
+
+/** The secrets in a file, by kind: in its text as its kind reads it; in a file not text (`whole`: none can be cut from it). */
+function secretsOf(rel: string, data: Buffer): { kinds: string[]; whole: boolean } {
+  const d = decodeText(data)
+  if (!d) return { kinds: Object.keys(cutSecrets(data.toString('latin1')).found), whole: true }
+  const r = d.enc === 'latin1' ? cutSecrets(d.text) : cutSecretsInFile(rel, d.text)
+  return { kinds: Object.keys(r.found), whole: false }
+}
+
 /** A file merged by key is hashed by its shared part (its secrets and the machine's own state left out), the others as they are. */
 export function hashOf(rel: string, data: Buffer | string): string {
   const json = (): unknown => parsed(noBom(String(data)))
@@ -202,7 +266,10 @@ function readHashCache(): HashCache {
 // ---------------------------------------------------------------------------------------------
 // Projects and clones
 
-/** A folder's clone: its top folder, its remote (origin, else the first), whether it is a worktree; null when it is in none. */
+/**
+ * A folder's clone: its top folder, its remote (origin, else the first) as a key only (no user, no
+ * token: it goes to the other side), whether it is a worktree; null when it is in none.
+ */
 async function gitFacts(
   path: string,
   platform: Platform,
@@ -220,7 +287,7 @@ async function gitFacts(
     .split(/\r?\n/)
     .map(l => /^remote\.(.+)\.url\s+(.+)$/.exec(l.trim()))
     .filter((m): m is RegExpExecArray => m !== null)
-  const remote = (remotes.find(m => m[1] === 'origin') ?? remotes[0])?.[2] ?? null
+  const remote = remoteKey((remotes.find(m => m[1] === 'origin') ?? remotes[0])?.[2] ?? null)
   return {
     top: nativePath(top, platform),
     remote,
@@ -300,14 +367,13 @@ export function findClones(home: string, depth = 4): string[] {
 // ---------------------------------------------------------------------------------------------
 // A side's scan
 
-/** A file starts with no NUL: text, which the sync looks through (secrets, paths). */
-const isText = (data: Buffer): boolean => !data.subarray(0, 8192).includes(0)
-
 /**
  * What this side has (Manifest): its profiles' files and hashes, the last sync's hashes with
- * `peer`, its projects and (with `clones`, the server) the clones under its home. As the source
- * (`to`: the target's system and home), also what it would hold back: the secrets in the files
- * changed since the last sync, and what settings.json and .claude.json keep or cannot send.
+ * `peer`, settings.json's and .claude.json's shared parts (for the keys a merge adds or changes),
+ * its projects and (with `clones`, the server) the clones under its home, their remotes as keys.
+ * As the source (`to`: the target's system and home), also what it would hold back: the secrets
+ * in the files changed since the last sync (history.jsonl's too), and what settings.json and
+ * .claude.json keep or cannot send.
  */
 export async function scanSide(o: {
   home: string
@@ -344,26 +410,34 @@ export async function scanSide(o: {
         continue
       }
       files[rel] = [hash, f.size]
-      if (o.to && !MERGED.has(rel) && last[rel] !== hash) {
+      // settings.json's and .claude.json's secrets are held key by key (below); history.jsonl's are cut
+      if (o.to && rel !== 'settings.json' && rel !== '.claude.json' && last[rel] !== hash) {
         try {
-          const data = readFileSync(f.abs)
-          if (isText(data)) {
-            const kinds = Object.keys(cutSecrets(data.toString('utf8')).found)
-            if (kinds.length) findings.push({ profile: p.name, rel, kinds })
-          }
+          const found = secretsOf(rel, readFileSync(f.abs))
+          if (found.kinds.length)
+            findings.push({ profile: p.name, rel, kinds: found.kinds, ...(found.whole && { whole: true }) })
         } catch {}
       }
     }
-    profiles.push({ name: p.name, dir: p.dir, files, synced: last, secretFiles: walked.secretFiles })
     let cj: unknown = null
     try {
       cj = parsed(readText(p.claudeJson))
     } catch {}
+    let settings: unknown = null
+    try {
+      settings = parsed(readText(join(p.dir, 'settings.json')))
+    } catch {}
+    const statusLine = isRecord(settings) && isRecord(settings.statusLine) ? settings.statusLine.command : null
+    profiles.push({
+      name: p.name,
+      dir: p.dir,
+      files,
+      synced: last,
+      secretFiles: walked.secretFiles,
+      views: { settings: shareSettings(settings, null).value, claudeJson: shareClaudeJson(cj, null).value },
+      boardStatusLine: typeof statusLine === 'string' && boardCommand(statusLine),
+    })
     if (o.to) {
-      let settings: unknown = null
-      try {
-        settings = parsed(readText(join(p.dir, 'settings.json')))
-      } catch {}
       const s = shareSettings(settings, o.to)
       const c = shareClaudeJson(cj, o.to)
       for (const what of [...s.held, ...c.held]) held.push({ profile: p.name, what })
@@ -413,10 +487,11 @@ export async function scanSide(o: {
 // ---------------------------------------------------------------------------------------------
 // The source: a file made ready to send
 
-/** How the source sends: to whom (system, home), and the projects' paths moved. */
+/** How the source sends: to whom (system, home), the projects' paths moved, the groups ticked. */
 export interface PackCtx {
   to: CarryTo
   moves: readonly Move[]
+  allow: Allow
 }
 
 const TRANSCRIPT = /^projects\/[^/]+\/.+\.jsonl$/
@@ -425,36 +500,66 @@ const TRANSCRIPT = /^projects\/[^/]+\/.+\.jsonl$/
 export const fileOf = (p: SideProfile, rel: string): string =>
   rel === '.claude.json' ? p.claudeJson : join(p.dir, ...rel.split('/'))
 
+/** A file made ready to send: its body, its hash here (recorded after the sync), the secrets cut by kind. */
+export interface Prepared {
+  body: Buffer
+  hash: string
+  found: Record<string, number>
+  /** A secret was cut from a file sent whole: the target writes it only where it has none. */
+  cut: boolean
+  /** Its execute bit, which the target gives a file it makes. */
+  exec: boolean
+}
+
 /**
- * A file as it goes: .claude.json and settings.json their shared part, history.jsonl and the
- * transcripts with their paths moved, any text with its secrets cut; its hash here (as recorded
- * after the sync), and the secrets cut by kind. Null when it is gone since the scan, and for a
+ * A file as it goes: .claude.json and settings.json their shared part (without the groups not
+ * ticked: then its hash is of what went, so it is offered again), history.jsonl and the
+ * transcripts with their paths moved, any text with its secrets cut as its kind reads (written
+ * back as it was written: its BOM, UTF-16, bytes not UTF-8 one for one). Null when it is gone
+ * since the scan, for a file not text with a secret in it (nothing can be cut from it), and for a
  * secret file, a file of one machine only or a path outside the profile, whoever asks for it.
  */
-export function prepare(
-  p: SideProfile,
-  rel: string,
-  ctx: PackCtx,
-): { body: Buffer; hash: string; found: Record<string, number> } | null {
+export function prepare(p: SideProfile, rel: string, ctx: PackCtx): Prepared | null {
   if (!writable(rel)) return null
+  const abs = fileOf(p, rel)
   let data: Buffer
+  let exec = false
   try {
-    data = readFileSync(fileOf(p, rel))
+    data = readFileSync(abs)
+    exec = process.platform !== 'win32' && (statSync(abs).mode & 0o111) !== 0
   } catch {
     return null
   }
   const from = ctx.to.from
   const to = ctx.to.platform
-  const hash = hashOf(rel, data)
-  if (!isText(data)) return { body: data, hash, found: {} }
-  let text = noBom(data.toString('utf8'))
-  if (rel === '.claude.json')
-    text = JSON.stringify(shareClaudeJson(parsed(text), ctx.to, path => moved(path, ctx.moves, from, to)).value)
-  else if (rel === 'settings.json') text = JSON.stringify(shareSettings(parsed(text), ctx.to).value)
-  else if (rel === 'history.jsonl') text = rewriteHistory(text, ctx.moves, from, to).text
-  else if (TRANSCRIPT.test(rel)) text = rewriteCwd(text, ctx.moves, from, to).text
-  const cut = cutSecrets(text)
-  return { body: Buffer.from(cut.text, 'utf8'), hash, found: cut.found }
+  let hash = hashOf(rel, data)
+  if (rel === '.claude.json' || rel === 'settings.json') {
+    const json = parsed(noBom(data.toString('utf8')))
+    const here = rel === '.claude.json' ? shareClaudeJson(json, null).value : shareSettings(json, null).value
+    const kept = withhold(rel, here, ctx.allow)
+    if (kept.withheld.length) hash = sha(JSON.stringify(kept.value))
+    const goes =
+      rel === '.claude.json'
+        ? shareClaudeJson(json, ctx.to, path => moved(path, ctx.moves, from, to)).value
+        : shareSettings(json, ctx.to).value
+    const cut = cutSecretsInFile(rel, JSON.stringify(withhold(rel, goes, ctx.allow).value))
+    return { body: Buffer.from(cut.text, 'utf8'), hash, found: cut.found, cut: false, exec: false }
+  }
+  const d = decodeText(data)
+  if (!d)
+    return Object.keys(cutSecrets(data.toString('latin1')).found).length
+      ? null
+      : { body: data, hash, found: {}, cut: false, exec }
+  let text = d.text
+  if (d.enc !== 'latin1') {
+    if (rel === 'history.jsonl') text = rewriteHistory(text, ctx.moves, from, to).text
+    else if (TRANSCRIPT.test(rel)) text = rewriteCwd(text, ctx.moves, from, to).text
+  }
+  const c = d.enc === 'latin1' ? cutSecrets(text) : cutSecretsInFile(rel, text)
+  const found = Object.keys(c.found).length > 0
+  // history.jsonl is merged line by line: it goes as plain UTF-8, its BOM the target's own
+  const body = c.text === d.text ? data : MERGED.has(rel) ? Buffer.from(c.text, 'utf8') : encodeText(c.text, d)
+  return { body, hash, found: c.found, cut: found && !MERGED.has(rel), exec }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -471,36 +576,75 @@ export const writable = (rel: string): boolean =>
   !secretFile(rel) &&
   !oneMachine(rel)
 
-/** A file written whole beside its place, then moved in (only the board's user reads it). */
-function writeWhole(abs: string, data: Buffer | string): void {
+/**
+ * A file written whole beside its place, `mode` (only the board's user reads it, unless the file
+ * there had its own), then moved in; when `still` says no (the file changed meanwhile), not moved.
+ */
+function writeWhole(abs: string, data: Buffer | string, mode: number, still: () => boolean = () => true): boolean {
   mkdirSync(dirname(abs), { recursive: true, mode: 0o700 })
   const part = `${abs}.agent-board-sync`
-  writeFileSync(part, data, { mode: 0o600 })
+  writeFileSync(part, data, { mode })
+  if (process.platform !== 'win32') chmodSync(part, mode)
+  if (!still()) {
+    rmSync(part, { force: true })
+    return false
+  }
   renameSync(part, abs)
+  return true
+}
+
+const statOf = (abs: string): Stats | null => {
+  try {
+    return statSync(abs)
+  } catch {
+    return null
+  }
+}
+
+/** A file's bytes; null when it is not there; 'unreadable' when it is there but cannot be read (a folder, no right). */
+function bytesOf(abs: string): Buffer | null | 'unreadable' {
+  try {
+    return readFileSync(abs)
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? null : 'unreadable'
+  }
+}
+
+/** How a file is written: merged by key, or whole with the target's hash at Look (`expect`, null: none there), cut, its execute bit. */
+export interface WriteOpts {
+  merge: boolean
+  expect?: string | null
+  cut?: boolean
+  exec?: boolean
 }
 
 export interface Target {
-  /** A file written (merged by key, for those merged); its new hash recorded. */
-  write(profile: string, rel: string, body: Buffer, merge: boolean): void
-  /** A file deleted (ticked), its hash forgotten. */
-  remove(profile: string, rel: string): void
+  /** A file written (merged by key, for those merged), its new hash recorded; or why it was left as it was. */
+  write(profile: string, rel: string, body: Buffer, opts: WriteOpts): SkipWhy | null
+  /** A file deleted (ticked) when it is as it was at Look (`expect`), its hash forgotten; or why it was not. */
+  remove(profile: string, rel: string, expect: string | null): SkipWhy | null
   /** A file the same on both sides: its hash recorded. */
   same(profile: string, rel: string, hash: string): void
   /** Gone on both sides: its hash forgotten. */
   forget(profile: string, rel: string): void
-  /** The hashes recorded; the profiles it made. */
-  finish(): { created: string[] }
+  /** The hashes recorded (again: the same); the profiles it made, what it left as it was. */
+  finish(): { created: string[]; skipped: Skipped[] }
 }
 
-/** This side as the target of a sync with `peer`: the plan's profiles, those it lacks made (0700). */
+/**
+ * This side as the target of a sync with `peer`: the plan's profiles, those it lacks made (0700);
+ * the groups the owner ticked (`allow`), whatever the source sent.
+ */
 export function openTarget(o: {
   peer: string
   home: string
   platform: Platform
   profiles: readonly ProfilePlan[]
+  allow: Ticks
 }): Target {
   const here = new Map(sideProfiles(o.home).map(p => [p.name, p]))
   const created: string[] = []
+  const skipped: Skipped[] = []
   const profileOf = (name: string): SideProfile => {
     const p = here.get(name)
     if (p) return p
@@ -524,35 +668,91 @@ export function openTarget(o: {
     pending = []
     flushed = Date.now()
   }
+  const skip = (profile: string, rel: string, why: SkipWhy): SkipWhy => {
+    skipped.push({ profile, rel, why })
+    return why
+  }
+  /** Session history, a hook's or the status line's script: only when its group was ticked. */
+  const ticked = (rel: string): boolean => {
+    const g = fileGroup(rel)
+    return (!historyFile(rel) || o.allow.history) && (g === null || o.allow[g])
+  }
+  /** The mode a file is written with: the one there had, else 0600 (0700 with the source's execute bit). */
+  const modeOf = (st: Stats | null, exec: boolean): number => (st ? st.mode & 0o777 : exec ? 0o700 : 0o600)
+
+  /**
+   * A file merged by key into the target's own, read right before: its env never given a name
+   * that is each side's own; a copy of it kept before its first merge; written beside it, then
+   * read again, and merged again if a Claude session wrote it meanwhile. The merged text, or
+   * 'unreadable' when the target's is not a JSON object (nor empty), or cannot be read.
+   */
+  function mergeInto(abs: string, rel: string, body: Buffer): string | 'unreadable' {
+    const shared = body.toString('utf8')
+    let s: Record<string, unknown> = {}
+    if (rel !== 'history.jsonl') {
+      const v = parsed(shared)
+      if (!isRecord(v)) throw new Error(`${rel}: not JSON`)
+      s = withhold(rel, v, o.allow).value
+      if (rel === 'settings.json' && isRecord(s.env))
+        s = { ...s, env: Object.fromEntries(Object.entries(s.env).filter(([name]) => !ownEnvName(name))) }
+    }
+    for (let round = 0; ; round++) {
+      const before = bytesOf(abs)
+      if (before === 'unreadable') return 'unreadable'
+      const own = before ? decodeText(before) : { text: '', enc: 'utf8' as const, bom: false }
+      if (own?.enc !== 'utf8') return 'unreadable'
+      let data: string
+      if (rel === 'history.jsonl') data = mergeHistory(own.text, shared)
+      else {
+        const mine = own.text.trim() === '' ? {} : parsed(own.text)
+        if (!isRecord(mine)) return 'unreadable'
+        data = `${JSON.stringify(rel === '.claude.json' ? mergeClaudeJson(mine, s) : mergeSettings(mine, s), null, 2)}\n`
+      }
+      const bak = `${abs}.bak-profile-sync`
+      if (before && before.length > 0 && !existsSync(bak)) writeFileSync(bak, before, { mode: 0o600 })
+      const moved = writeWhole(abs, own.bom ? `﻿${data}` : data, modeOf(statOf(abs), false), () => {
+        if (round >= 2) return true
+        const now = bytesOf(abs)
+        return now === before || (Buffer.isBuffer(now) && Buffer.isBuffer(before) && now.equals(before))
+      })
+      if (moved) return data
+    }
+  }
+
   for (const p of o.profiles) if (p.create) profileOf(p.name)
   return {
     // a file merged by key is merged whatever comes with it: never replaced whole (its own secrets)
-    write(profile, rel, body, _merge) {
+    write(profile, rel, body, opts) {
       if (!writable(rel)) throw new Error(`refused: ${rel}`)
-      const p = profileOf(profile)
-      const abs = fileOf(p, rel)
-      let data: Buffer | string = body
+      if (!ticked(rel)) return skip(profile, rel, 'group')
+      const abs = fileOf(profileOf(profile), rel)
       if (MERGED.has(rel)) {
-        let own = ''
-        try {
-          own = readText(abs)
-        } catch {}
-        const shared = body.toString('utf8')
-        if (rel === 'history.jsonl') data = mergeHistory(own, shared)
-        else {
-          const s = parsed(shared)
-          if (!isRecord(s)) throw new Error(`${rel}: not JSON`)
-          const merged = rel === '.claude.json' ? mergeClaudeJson(parsed(own), s) : mergeSettings(parsed(own), s)
-          data = `${JSON.stringify(merged, null, 2)}\n`
-        }
+        const data = mergeInto(abs, rel, body)
+        if (data === 'unreadable') return skip(profile, rel, data)
+        note(profile, rel, hashOf(rel, data))
+        return null
       }
-      writeWhole(abs, data)
-      note(profile, rel, hashOf(rel, data))
+      const st = statOf(abs)
+      if (opts.cut === true && st) return skip(profile, rel, 'cut')
+      // as at Look, or left as it is (a name in another case is the same file where case is not told apart)
+      const now = st ? bytesOf(abs) : null
+      const hash = now === null ? null : now === 'unreadable' ? '' : sha(now)
+      if (hash !== (opts.expect ?? null)) return skip(profile, rel, 'changed')
+      writeWhole(abs, body, modeOf(st, opts.exec === true))
+      note(profile, rel, sha(body))
+      return null
     },
-    remove(profile, rel) {
+    remove(profile, rel, expect) {
       if (!writable(rel) || MERGED.has(rel)) throw new Error(`refused: ${rel}`)
-      rmSync(fileOf(profileOf(profile), rel), { force: true })
+      if (!ticked(rel)) return skip(profile, rel, 'group')
+      const abs = fileOf(profileOf(profile), rel)
+      const now = bytesOf(abs)
+      if (now !== null) {
+        if (now === 'unreadable' || sha(now) !== expect) return skip(profile, rel, 'changed')
+        rmSync(abs, { force: true })
+      }
       note(profile, rel, null)
+      return null
     },
     same(profile, rel, hash) {
       note(profile, rel, hash)
@@ -562,7 +762,7 @@ export function openTarget(o: {
     },
     finish() {
       flush()
-      return { created }
+      return { created: [...created], skipped: [...skipped] }
     },
   }
 }

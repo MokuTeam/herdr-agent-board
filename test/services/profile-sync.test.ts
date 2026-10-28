@@ -8,10 +8,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { ROOT } from '../../src/adapters/paths.ts'
+import { frameSink, readSynced } from '../../src/adapters/profile-sync.ts'
 import { type RemoteEnd, type RemoteStream, spawnRemoteStream } from '../../src/adapters/ssh.ts'
 import { projectFolder } from '../../src/core/profile-sync/paths.ts'
 import type { Config } from '../../src/core/types.ts'
-import { serve } from '../../src/entrypoints/profile-sync.ts'
+import { SYNC_VERSION, serve } from '../../src/entrypoints/profile-sync.ts'
 import { createProfileSync, type ProfileSync } from '../../src/services/profile-sync.ts'
 
 const GH = `ghp_${'a1B2'.repeat(9)}`
@@ -100,17 +101,27 @@ async function until(what: string, ok: () => boolean, ms = 20_000): Promise<void
   }
 }
 
-/** Look, then Apply with these choices, to the end. */
+/** Every group ticked, session history too: the tests of the sync's way; those of the ticks say theirs. */
+const ALL = { env: true, hooks: true, statusLine: true, mcp: true, helpers: true, history: true }
+
+/** Look, then Apply with these choices (every group ticked unless they say), to the end. */
 async function run(
   direction: 'up' | 'down',
-  choices: { conflicts?: Record<string, string>; deletions?: string[] } = {},
+  choices: { conflicts?: Record<string, string>; deletions?: string[]; allow?: Record<string, boolean> } = {},
 ): Promise<NonNullable<ReturnType<ProfileSync['view']>>> {
   const looked = await sync.look({ direction, password: 'pw' })
   expect(looked).toEqual({ status: 200, body: { ok: true } })
   const v = sync.view()
   if (!v?.preview) throw new Error('no preview')
   const preview = v.preview
-  const applied = await sync.apply({ id: preview.id, conflicts: {}, deletions: [], ...choices, password: 'pw' })
+  const applied = await sync.apply({
+    id: preview.id,
+    conflicts: {},
+    deletions: [],
+    allow: ALL,
+    ...choices,
+    password: 'pw',
+  })
   expect(applied.status).toBe(200)
   await until('the sync ends', () => sync.view()?.phase === 'done' || sync.view()?.phase === 'failed')
   return { ...(sync.view() as NonNullable<ReturnType<ProfileSync['view']>>), preview }
@@ -329,5 +340,106 @@ describe('syncing the profiles with the board on the server', () => {
     } finally {
       asProcess = false
     }
+  })
+
+  test('as reviewed: the server changes how this PC runs only in the groups ticked; its transcripts only with history', async () => {
+    const st = json(join(srv, '.claude', 'settings.json'))
+    put(
+      join(srv, '.claude', 'settings.json'),
+      JSON.stringify({
+        ...st,
+        env: { ...(st.env as object), SRV_ONLY: '1', NODE_OPTIONS: '--require /x.js' },
+        hooks: {
+          ...(st.hooks as object),
+          Stop: [{ hooks: [{ type: 'command', command: 'notify-send from-server' }] }],
+        },
+        model: 'from-server',
+      }),
+    )
+    put(join(srvFolder(), 's3.jsonl'), `${JSON.stringify({ cwd: srvClone, message: 'history' })}\n`)
+    const none = await run('down', { allow: {} })
+    expect(none.phase).toBe('done')
+    expect(none.preview?.changes).toEqual(
+      expect.arrayContaining([
+        { profile: 'default', rel: 'settings.json', group: 'env', key: 'env SRV_ONLY', how: 'add' },
+        {
+          profile: 'default',
+          rel: 'settings.json',
+          group: 'hooks',
+          key: 'hook Stop: notify-send from-server',
+          how: 'add',
+        },
+        { profile: 'default', rel: 'settings.json', group: null, key: 'model', how: 'add' },
+      ]),
+    )
+    // NODE_OPTIONS is each side's own: never even listed
+    expect(JSON.stringify(none.preview?.changes)).not.toContain('NODE_OPTIONS')
+    const mine = json(join(pc, '.claude', 'settings.json'))
+    expect(mine.model).toBe('from-server')
+    expect(mine.env).toEqual({ GITHUB_TOKEN: 'pc-token', A: '1' })
+    expect(JSON.stringify(mine.hooks)).not.toContain('from-server')
+    expect(existsSync(join(pc, '.claude', 'projects', projectFolder(pcProject), 's3.jsonl'))).toBe(false)
+    // offered again, now ticked
+    const all = await run('down', { allow: { env: true, hooks: true, history: true } })
+    expect(all.preview?.items.map(i => i.from)).toEqual(
+      expect.arrayContaining(['settings.json', `projects/${projectFolder(srvClone)}/s3.jsonl`]),
+    )
+    const now = json(join(pc, '.claude', 'settings.json'))
+    expect(now.env).toEqual({ GITHUB_TOKEN: 'pc-token', A: '1', SRV_ONLY: '1' })
+    expect(JSON.stringify(now.hooks)).toContain('notify-send from-server')
+    expect(existsSync(join(pc, '.claude', 'projects', projectFolder(pcProject), 's3.jsonl'))).toBe(true)
+  })
+
+  test('as reviewed: a file the target changed between Look and Apply is left as it is, listed, and met again', async () => {
+    put(join(pc, '.claude', 'agents', 'late.md'), 'from the pc\n')
+    const looked = await sync.look({ direction: 'up', password: 'pw' })
+    expect(looked.status).toBe(200)
+    const preview = sync.view()?.preview
+    expect(preview?.items.map(i => i.to)).toContain('agents/late.md')
+    // written on the server after the preview was made
+    put(join(srv, '.claude', 'agents', 'late.md'), 'written on the server meanwhile\n')
+    await sync.apply({ id: preview?.id, conflicts: {}, deletions: [], allow: ALL, password: 'pw' })
+    await until('the sync ends', () => sync.view()?.phase === 'done' || sync.view()?.phase === 'failed')
+    expect(sync.view()?.result?.skipped).toEqual([{ profile: 'default', rel: 'agents/late.md', why: 'changed' }])
+    expect(read(join(srv, '.claude', 'agents', 'late.md'))).toBe('written on the server meanwhile\n')
+    // not recorded on this side: the next preview shows it, as a file both sides have
+    expect(await sync.look({ direction: 'up', password: 'pw' })).toEqual({ status: 200, body: { ok: true } })
+    expect(sync.view()?.preview?.conflicts.map(c => c.to)).toEqual(['agents/late.md'])
+    sync.forget()
+  })
+
+  test('as reviewed: an apply cut short records what it wrote before it stopped', async () => {
+    const input = new PassThrough()
+    const output = new PassThrough()
+    output.resume()
+    const sink = frameSink(input)
+    const serving = serve('apply', input.pipe(new PassThrough()), output, {
+      home: srv,
+      platform: process.platform,
+      install: () => true,
+    })
+    await sink.send({
+      op: 'apply',
+      v: SYNC_VERSION,
+      peer: 'cut-short',
+      profiles: [],
+      same: [],
+      forget: [],
+      deletions: [],
+      allow: ALL,
+    })
+    await sink.send(
+      { t: 'file', profile: 'default', to: 'agents/cut.md', merge: false, expect: null },
+      Buffer.from('cut\n'),
+    )
+    // then one it refuses, and the stream ends with no {t:'end'}
+    await sink.send(
+      { t: 'file', profile: 'default', to: '../outside.md', merge: false, expect: null },
+      Buffer.from('x'),
+    )
+    await sink.end()
+    expect(await serving).toBe(1)
+    expect(read(join(srv, '.claude', 'agents', 'cut.md'))).toBe('cut\n')
+    expect(Object.keys(readSynced('cut-short').default ?? {})).toEqual(['agents/cut.md'])
   })
 })

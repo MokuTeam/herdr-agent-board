@@ -207,7 +207,7 @@ test('a run, its end with a profile made there, and a failure', () => {
     ...SYNC_IDLE,
     phase: 'done',
     direction: 'up',
-    result: { files: 3, bytes: 2048, deleted: 1, kept: 1, created: ['work'], install: true, gone: 0 },
+    result: { files: 3, bytes: 2048, deleted: 1, kept: 1, created: ['work'], install: true, gone: 0, skipped: [] },
   }).map(textOf)
   expect(done.join(' ')).toContain('Synced: 3 files (2.0 KB), 1 deleted, 1 conflicts kept as the target had them.')
   expect(done.join(' ')).toContain(

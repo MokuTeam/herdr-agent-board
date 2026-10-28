@@ -17,6 +17,7 @@ import {
   areaOf,
   buildPreview,
   byArea,
+  DEFAULT_SYNC_HISTORY,
   type Manifest,
   type ProfileFacts,
   sizeOf,
@@ -35,11 +36,14 @@ import {
   CUT,
   carried,
   cutSecrets,
+  cutSecretsInFile,
+  historyFile,
   oneMachine,
   secretFile,
   secretName,
   shareClaudeJson,
   shareSettings,
+  withhold,
 } from '../../src/core/profile-sync/secrets.ts'
 
 const TO_LINUX: CarryTo = { platform: 'linux', from: 'win32', fromHome: 'C:\\Users\\migo', toHome: '/home/agent' }
@@ -105,6 +109,9 @@ describe('paths on each side', () => {
     expect(remoteKey('C:\\repos\\x')).toBeNull()
     expect(remoteKey('/srv/x.git')).toBeNull()
     expect(remoteKey('')).toBeNull()
+    // the key itself, as a manifest carries it (never the remote with its user or token): the same key
+    expect(remoteKey(one)).toBe(one)
+    expect(remoteKey('https://me:ghp_secret@github.com/MokuTeam/herdr-agent-board.git')).toBe(one)
   })
 
   test('a path the owner gives, as the target writes one', () => {
@@ -389,6 +396,189 @@ describe('what never crosses', () => {
   })
 })
 
+describe('what never crosses, as reviewed', () => {
+  test('channels and local are one machine’s; .env, keys, settings.local.json are secret files at any depth', () => {
+    for (const rel of ['channels/x.json', 'local/x', 'settings.json.bak-profile-sync'])
+      expect(oneMachine(rel)).toBe(true)
+    for (const rel of [
+      '.env',
+      '.env.local',
+      'skills/a/.env',
+      'skills/a/server.pem',
+      'skills/a/tls.key',
+      'id_rsa',
+      'skills/a/id_ed25519',
+      'settings.local.json',
+      'skills/a/settings.local.json',
+      'settings-old.json',
+    ])
+      expect(secretFile(rel)).toBe(true)
+    for (const rel of ['settings.json', 'id_rsa.pub', 'keyboard.md', 'skills/a/settings.json', 'CLAUDE.md'])
+      expect(secretFile(rel)).toBe(false)
+  })
+
+  test('session history and edit history: transcripts, file-history, paste-cache, history.jsonl; memory not', () => {
+    for (const rel of [
+      'history.jsonl',
+      'projects/C--x/s1.jsonl',
+      'projects/C--x/s1/subagents/a.jsonl',
+      'projects/C--x/s1/tool-results/r.txt',
+      'file-history/s1/a@v1',
+      'paste-cache/p.txt',
+    ])
+      expect(historyFile(rel)).toBe(true)
+    for (const rel of ['projects/C--x/memory/MEMORY.md', 'CLAUDE.md', 'skills/a/SKILL.md', 'todos/x.json'])
+      expect(historyFile(rel)).toBe(false)
+    expect(DEFAULT_SYNC_HISTORY).toBe(false)
+  })
+
+  test('env names the filter missed: PAT, DSN, headers, proxies, base URLs, NODE_OPTIONS, a URL with a password', () => {
+    for (const n of ['MY_PAT', 'SENTRY_DSN', 'GH_PAT_TOKEN']) expect(secretName(n)).toBe(true)
+    expect(secretName('PATH')).toBe(false)
+    const s = shareSettings(
+      {
+        env: {
+          ANTHROPIC_BASE_URL: 'https://gw.example',
+          HTTPS_PROXY: 'http://u:p@proxy:3128',
+          no_proxy: 'localhost',
+          NODE_OPTIONS: '--require /x.js',
+          ANTHROPIC_CUSTOM_HEADERS: 'X-Key: abc',
+          OTEL_EXPORTER_OTLP_HEADERS: 'k=v',
+          DATABASE_URL: 'postgres://app:hunter2@db/x',
+          PLAIN_URL: 'https://example.com/x',
+          MY_PAT: 'abc',
+          SENTRY_DSN: 'https://k@o.ingest/1',
+          DISABLE_TELEMETRY: '1',
+        },
+      },
+      TO_LINUX,
+    )
+    expect(s.value).toEqual({ env: { PLAIN_URL: 'https://example.com/x', DISABLE_TELEMETRY: '1' } })
+    expect(s.held).toEqual(
+      [
+        'ANTHROPIC_BASE_URL',
+        'HTTPS_PROXY',
+        'no_proxy',
+        'NODE_OPTIONS',
+        'ANTHROPIC_CUSTOM_HEADERS',
+        'OTEL_EXPORTER_OTLP_HEADERS',
+        'DATABASE_URL',
+        'MY_PAT',
+        'SENTRY_DSN',
+      ].map(n => `env ${n}`),
+    )
+    expect(JSON.stringify(s)).not.toContain('hunter2')
+  })
+
+  test('MCP servers with a key in their url’s query or args, and hooks passing one, stay; the value never shown', () => {
+    const cj = shareClaudeJson(
+      {
+        mcpServers: {
+          q: { type: 'http', url: 'https://mcp.example/x?team=a&token=s3cr3tvalue' },
+          a: { command: 'npx', args: ['-y', 'srv', '--api-key', 's3cr3tvalue'] },
+          b: { command: 'npx', args: ['srv', '--token=s3cr3tvalue'] },
+          ok: { command: 'npx', args: ['-y', 'srv', '--keyboard-layout', 'us'] },
+        },
+      },
+      TO_LINUX,
+    )
+    expect(Object.keys(cj.value.mcpServers as object)).toEqual(['ok'])
+    expect(cj.held.map(h => h.split(':')[0])).toEqual(['MCP q', 'MCP a', 'MCP b'])
+    const st = shareSettings(
+      { hooks: { Stop: [{ hooks: [{ type: 'command', command: 'notify --token s3cr3tvalue done' }] }] } },
+      TO_LINUX,
+    )
+    expect(st.value).toEqual({ hooks: {} })
+    expect(st.held.length).toBe(1)
+    expect(JSON.stringify([cj, st])).not.toContain('s3cr3tvalue')
+  })
+
+  test('a key of settings.json or .claude.json holding a secret stays, listed (never carried cut, over the target’s own)', () => {
+    const s = shareSettings(
+      { permissions: { allow: [`Bash(curl -H "Authorization: Bearer ${'q'.repeat(30)}" x)`] }, model: 'opus' },
+      TO_LINUX,
+    )
+    expect(s.value).toEqual({ model: 'opus' })
+    expect(s.held).toEqual(['permissions: bearer token'])
+    const c = shareClaudeJson(
+      {
+        projects: {
+          '/p': { allowedTools: [GH], lastSessionId: 's', history: [{ display: 'x' }], hasTrustDialogAccepted: true },
+        },
+      },
+      null,
+    )
+    // a project's machine state (its last session, its old prompt history) is its side's own
+    expect(c.value).toEqual({ projects: { '/p': { hasTrustDialogAccepted: true } } })
+    expect(c.held).toEqual(['projects /p: allowedTools: GitHub token'])
+  })
+
+  test('secrets found in JSON’s decoded strings: after an escape, a key in one string; lines never merged', () => {
+    const line1 = JSON.stringify({ text: `key:\n${GH}` })
+    const r1 = cutSecretsInFile('projects/x/s.jsonl', `${line1}\n`)
+    expect(r1.found).toEqual({ 'GitHub token': 1 })
+    expect(r1.text).not.toContain(GH)
+    const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIEow\nAAAA==\n-----END RSA PRIVATE KEY-----'
+    const r2 = cutSecretsInFile('projects/x/s.jsonl', `${JSON.stringify({ out: `a ${pem} b` })}\n`)
+    expect(r2.found).toEqual({ 'private key': 1 })
+    expect(JSON.parse(r2.text).out).toBe(`a ${CUT} b`)
+    // a key begun in one line and ended in another: each line on its own, neither merged into the other
+    const begin = JSON.stringify({ out: '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk=' })
+    const middle = JSON.stringify({ keep: 'this line stays' })
+    const end = JSON.stringify({ out: 'AAAA\n-----END OPENSSH PRIVATE KEY-----' })
+    const r3 = cutSecretsInFile('projects/x/s.jsonl', `${begin}\n${middle}\n${end}\n`)
+    const lines = r3.text.split('\n')
+    expect(lines.length).toBe(4)
+    expect(lines[1]).toBe(middle)
+    expect(r3.text).not.toContain('b3BlbnNzaC1rZXk')
+    for (const l of lines.slice(0, 3)) expect(() => JSON.parse(l)).not.toThrow()
+    // a .json file; a line that is not JSON, alone; a URL's password
+    const r4 = cutSecretsInFile('mcp.json', JSON.stringify({ a: { b: `x\t${GH}` } }, null, 2))
+    expect(r4.text).not.toContain(GH)
+    expect(JSON.parse(r4.text).a.b).toBe(`x\t${CUT}`)
+    expect(cutSecretsInFile('projects/x/s.jsonl', `{"broken": "\\n${GH}\n`).text).not.toContain(GH)
+    const r5 = cutSecrets('psql postgres://app:hunter2@db.example/x')
+    expect(r5.text).not.toContain('hunter2')
+    expect(r5.found).toEqual({ 'password in a URL': 1 })
+    // nothing found: the text as it was, byte for byte
+    const plain = '{"a": 1,\n  "b": "c"}\n'
+    expect(cutSecretsInFile('x.json', plain).text).toBe(plain)
+  })
+
+  test('the groups that change how the other side runs go only when ticked; nothing in them, the part as it was', () => {
+    const shared = shareSettings(
+      {
+        env: { A: '1' },
+        hooks: { Stop: [{ hooks: [{ type: 'command', command: 'notify-send done' }] }] },
+        statusLine: { type: 'command', command: 'echo hi' },
+        enabledMcpjsonServers: ['x'],
+        enabledPlugins: { 'p@m': true },
+        fileSuggestion: { type: 'command', command: 'fd' },
+        model: 'opus',
+      },
+      null,
+    ).value
+    expect(withhold('settings.json', shared, {}).value).toEqual({ model: 'opus' })
+    expect(withhold('settings.json', shared, {}).withheld.sort()).toEqual([
+      'env',
+      'helpers',
+      'hooks',
+      'mcp',
+      'statusLine',
+    ])
+    expect(withhold('settings.json', shared, { env: true, hooks: true }).value).toEqual({
+      env: { A: '1' },
+      hooks: shared.hooks,
+      model: 'opus',
+    })
+    const plain = { model: 'opus', env: {} }
+    expect(withhold('settings.json', plain, {})).toEqual({ value: plain, withheld: [] })
+    const cj = { theme: 'dark', mcpServers: { a: { command: 'npx' } }, projects: { '/p': { mcpServers: {}, a: 1 } } }
+    expect(withhold('.claude.json', cj, {}).value).toEqual({ theme: 'dark', projects: { '/p': { a: 1 } } })
+    expect(withhold('.claude.json', cj, { mcp: true }).value).toBe(cj)
+  })
+})
+
 describe('merged on the target, by key', () => {
   test('settings.json keeps its own env secrets, helpers, board hooks and status line; shared hooks added once', () => {
     const own = {
@@ -622,6 +812,8 @@ describe('the preview', () => {
         from: 'agents/gone.md',
         to: 'agents/gone.md',
         changedThere: true,
+        there: 'g2',
+        history: false,
         key: 'default:agents/gone.md',
       },
     ])
@@ -646,9 +838,11 @@ describe('the preview', () => {
     expect(none.deletions).toEqual([])
     const all = transferOf(p, { conflicts: { 'default:agents/x.md': 'source' }, deletions: ['default:agents/gone.md'] })
     expect(all.send.filter(s => s.profile === 'default')).toEqual([
-      { profile: 'default', from: 'agents/x.md', to: 'agents/x.md', merge: false },
+      { profile: 'default', from: 'agents/x.md', to: 'agents/x.md', merge: false, expect: 'x9', history: false },
     ])
-    expect(all.deletions).toEqual([{ profile: 'default', from: 'agents/gone.md', to: 'agents/gone.md' }])
+    expect(all.deletions).toEqual([
+      { profile: 'default', from: 'agents/gone.md', to: 'agents/gone.md', expect: 'g1', history: false },
+    ])
     expect(all.profiles.map(x => x.name)).toEqual(['default', 'work'])
     const onlyDefault = transferOf(
       { ...p, items: p.items.filter(i => i.profile !== 'work') },
@@ -680,6 +874,188 @@ describe('the preview', () => {
     expect(p.items.map(i => i.to)).toEqual(['projects/C--migo-board/s9.jsonl'])
     expect(p.moves).toEqual([{ from: '/home/agent/work/board', to: 'C:\\migo\\board' }])
     expect(p.profiles).toEqual([{ name: 'default', create: false, dir: 'C:\\Users\\migo\\.claude' }])
+  })
+
+  test('as reviewed: the target’s hash at Look with each item; history only when ticked; a case-only difference a conflict; a cut file never over the target’s', () => {
+    const p = buildPreview({
+      id: 'p5',
+      at: 5,
+      direction: 'down',
+      source: manifest(
+        'linux',
+        '/home/agent',
+        [
+          facts(
+            'default',
+            '/home/agent/.claude',
+            {
+              'agents/x.md': ['x2', 3],
+              'agents/new.md': ['n1', 3],
+              'CLAUDE.md': ['c2', 4],
+              'skills/s/notes.md': ['s1', 4],
+              'skills/s/blob.bin': ['b1', 9],
+              'history.jsonl': ['h2', 5],
+              'paste-cache/p.txt': ['p1', 2],
+            },
+            { 'CLAUDE.md': 'c1', 'agents/old.md': 'o1', 'paste-cache/gone.txt': 'g1' },
+          ),
+        ],
+        [],
+        {
+          findings: [
+            { profile: 'default', rel: 'CLAUDE.md', kinds: ['GitHub token'] },
+            { profile: 'default', rel: 'skills/s/notes.md', kinds: ['AWS key'] },
+            { profile: 'default', rel: 'skills/s/blob.bin', kinds: ['npm token'], whole: true },
+          ],
+        },
+      ),
+      target: manifest('win32', 'C:\\Users\\migo', [
+        facts(
+          'default',
+          'C:\\Users\\migo\\.claude',
+          {
+            'agents/X.md': ['X9', 9],
+            'CLAUDE.md': ['c1', 3],
+            'agents/old.md': ['o1', 2],
+            'paste-cache/gone.txt': ['g1', 1],
+          },
+          { 'CLAUDE.md': 'c1', 'agents/old.md': 'o1', 'paste-cache/gone.txt': 'g1' },
+        ),
+      ]),
+      given: {},
+    })
+    expect(p.items.map(i => [i.to, i.kind, i.there, i.history])).toEqual([
+      ['agents/new.md', 'add', null, false],
+      ['skills/s/notes.md', 'add', null, false],
+      ['history.jsonl', 'merge', null, true],
+      ['paste-cache/p.txt', 'add', null, true],
+    ])
+    // Windows names agents/x.md and agents/X.md one file: a conflict, never a silent overwrite
+    expect(p.conflicts.map(c => [c.to, c.there, c.caseOf])).toEqual([['agents/x.md', 'X9', 'agents/X.md']])
+    // a secret would be cut from CLAUDE.md, and the target has its own: listed, not sent
+    expect(p.cut).toEqual([{ profile: 'default', what: 'CLAUDE.md: GitHub token' }])
+    expect(p.held).toContainEqual({ profile: 'default', what: 'skills/s/blob.bin: npm token' })
+    expect(p.items.some(i => i.to === 'skills/s/blob.bin')).toBe(false)
+    expect(p.deletions.map(d => [d.to, d.there, d.history])).toEqual([
+      ['agents/old.md', 'o1', false],
+      ['paste-cache/gone.txt', 'g1', true],
+    ])
+    const keys = p.deletions.map(d => d.key)
+    const off = transferOf(p, { conflicts: { 'default:agents/x.md': 'source' }, deletions: keys })
+    expect(off.send.map(s => [s.to, s.expect])).toEqual([
+      ['agents/new.md', null],
+      ['skills/s/notes.md', null],
+      ['agents/x.md', 'X9'],
+    ])
+    expect(off.deletions.map(d => [d.to, d.expect])).toEqual([['agents/old.md', 'o1']])
+    expect(off.allow).toEqual({
+      env: false,
+      hooks: false,
+      statusLine: false,
+      mcp: false,
+      helpers: false,
+      history: false,
+    })
+    const on = transferOf(p, { conflicts: {}, deletions: keys, allow: { history: true, env: true } })
+    expect(on.send.map(s => s.to)).toEqual(['agents/new.md', 'skills/s/notes.md', 'history.jsonl', 'paste-cache/p.txt'])
+    expect(on.deletions.map(d => d.to)).toEqual(['agents/old.md', 'paste-cache/gone.txt'])
+    expect(on.allow.env).toBe(true)
+  })
+
+  test('as reviewed: a hook’s or the status line’s script goes only with its group ticked', () => {
+    const p = buildPreview({
+      id: 'p7',
+      at: 7,
+      direction: 'down',
+      source: manifest('linux', '/home/agent', [
+        facts(
+          'default',
+          '/home/agent/.claude',
+          { 'hooks/notify.sh': ['n2', 3], 'statusline.sh': ['s2', 3], 'CLAUDE.md': ['c2', 3] },
+          { 'hooks/old.sh': 'o1' },
+        ),
+      ]),
+      target: manifest('linux', '/home/me', [
+        facts('default', '/home/me/.claude', { 'hooks/old.sh': ['o1', 1] }, { 'hooks/old.sh': 'o1' }),
+      ]),
+      given: {},
+    })
+    expect(p.items.map(i => [i.to, i.group])).toEqual([
+      ['hooks/notify.sh', 'hooks'],
+      ['statusline.sh', 'statusLine'],
+      ['CLAUDE.md', undefined],
+    ])
+    expect(p.deletions.map(d => [d.to, d.group])).toEqual([['hooks/old.sh', 'hooks']])
+    const keys = p.deletions.map(d => d.key)
+    const none = transferOf(p, { conflicts: {}, deletions: keys })
+    expect(none.send.map(s => s.to)).toEqual(['CLAUDE.md'])
+    expect(none.deletions).toEqual([])
+    const hooks = transferOf(p, { conflicts: {}, deletions: keys, allow: { hooks: true } })
+    expect(hooks.send.map(s => s.to)).toEqual(['hooks/notify.sh', 'CLAUDE.md'])
+    expect(hooks.deletions.map(d => d.to)).toEqual(['hooks/old.sh'])
+  })
+
+  test('as reviewed: every key a merge adds or changes listed, those that change how a side runs in their group', () => {
+    const srvProject = project({
+      folder: '-home-agent-work-board',
+      path: '/home/agent/work/board',
+      remote: 'github.com/mokuteam/board',
+      top: '/home/agent/work/board',
+    })
+    const p = buildPreview({
+      id: 'p6',
+      at: 6,
+      direction: 'down',
+      source: manifest(
+        'linux',
+        '/home/agent',
+        [
+          {
+            ...facts('default', '/home/agent/.claude', { 'settings.json': ['s2', 9], '.claude.json': ['j2', 9] }),
+            views: {
+              settings: {
+                env: { A: '2', B: '1' },
+                model: 'opus',
+                hooks: { Stop: [{ hooks: [{ type: 'command', command: 'notify-send done' }] }] },
+                statusLine: { type: 'command', command: 'echo hi' },
+              },
+              claudeJson: {
+                theme: 'dark',
+                mcpServers: { m: { command: 'npx', args: ['m'] } },
+                projects: { '/home/agent/work/board': { allowedTools: ['Bash'] } },
+              },
+            },
+          },
+        ],
+        [srvProject],
+      ),
+      target: manifest(
+        'win32',
+        'C:\\Users\\migo',
+        [
+          {
+            ...facts('default', 'C:\\Users\\migo\\.claude', {}),
+            views: { settings: { env: { A: '1' }, model: 'opus' }, claudeJson: { theme: 'dark', projects: {} } },
+            boardStatusLine: true,
+          },
+        ],
+        [pcProject],
+      ),
+      given: {},
+    })
+    expect(p.changes).toEqual([
+      { profile: 'default', rel: 'settings.json', group: 'env', key: 'env A', how: 'change' },
+      { profile: 'default', rel: 'settings.json', group: 'env', key: 'env B', how: 'add' },
+      { profile: 'default', rel: 'settings.json', group: 'hooks', key: 'hook Stop: notify-send done', how: 'add' },
+      { profile: 'default', rel: '.claude.json', group: 'mcp', key: 'MCP m', how: 'add' },
+      {
+        profile: 'default',
+        rel: '.claude.json',
+        group: null,
+        key: 'projects C:\\migo\\board: allowedTools',
+        how: 'add',
+      },
+    ])
   })
 
   test('grouped for the page: by area, a project’s folder its own; sizes in words', () => {

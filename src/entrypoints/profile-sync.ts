@@ -4,13 +4,15 @@
 // stdout, both gzipped (adapters/profile-sync.ts). Nothing else is written to stdout.
 //
 //   profile-sync.ts scan     → {t:'manifest'}, the Manifest as its body
-//   profile-sync.ts pack     → {t:'file', profile, from, to, merge, hash, found} and the file, …, {t:'end'}
-//   profile-sync.ts apply    ← {t:'file', profile, to, merge} and the file, …, {t:'end'}
-//                            → {t:'progress', files, bytes}, …, {t:'done', created, install}
+//   profile-sync.ts pack     → {t:'file', profile, from, to, merge, hash, found, cut, exec} and the file, …, {t:'end'}
+//   profile-sync.ts apply    ← {t:'file', profile, to, merge, expect, cut, exec} and the file, …, {t:'end'}
+//                            → {t:'progress', files, bytes}, …, {t:'done', created, install, skipped}
 //   profile-sync.ts record   → {t:'done'}
 //
-// A failure: {t:'error', message}, exit 1. A profile made by apply gets the board's hooks: the
-// board's install action runs once, as on the server's install.
+// pack and apply take the groups the owner ticked (`allow`); each holds to them whatever the other
+// side sends. A failure: {t:'error', message}, exit 1; what apply wrote before it is recorded all
+// the same. A profile made by apply gets the board's hooks: the board's install action runs once,
+// as on the server's install.
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Readable, Writable } from 'node:stream'
@@ -29,14 +31,16 @@ import {
   sideProfiles,
 } from '../adapters/profile-sync.ts'
 import type { Move } from '../core/profile-sync/paths.ts'
-import { type ProfilePlan, profileDir, type Same } from '../core/profile-sync/plan.ts'
-import type { CarryTo } from '../core/profile-sync/secrets.ts'
+import { type ProfilePlan, profileDir, type Same, ticksOf } from '../core/profile-sync/plan.ts'
+import { type Allow, type CarryTo, fileGroup, historyFile } from '../core/profile-sync/secrets.ts'
 
 /** What this program speaks: a request of another version is refused. */
-export const SYNC_VERSION = 1
+export const SYNC_VERSION = 2
 
 const text = (v: unknown): string => (typeof v === 'string' ? v : '')
 const list = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v.filter(isRecord) : [])
+/** The groups ticked in a request: none but those said. */
+const allowOf = (v: unknown): Allow => (isRecord(v) ? (v as Allow) : {})
 
 /** This side: its home and system, and the board's install action (run once a profile was made). */
 export interface Here {
@@ -66,8 +70,12 @@ async function pack(here: Here, out: FrameSink, req: Record<string, unknown>): P
   const profiles = new Map(sideProfiles(here.home).map(p => [p.name, p]))
   const to = carryTo(here, req.to)
   if (!to) throw new Error('pack: no target named')
-  const ctx = { to, moves: list(req.moves) as unknown as Move[] }
+  const allow = ticksOf(allowOf(req.allow))
+  const ctx = { to, moves: list(req.moves) as unknown as Move[], allow }
   for (const item of list(req.items)) {
+    // session history, a hook's or the status line's script not ticked never leaves, whoever asks
+    const group = fileGroup(text(item.from))
+    if ((historyFile(text(item.from)) && !allow.history) || (group !== null && !allow[group])) continue
     const p = profiles.get(text(item.profile))
     const ready = p ? prepare(p, text(item.from), ctx) : null
     await out.send(
@@ -80,6 +88,8 @@ async function pack(here: Here, out: FrameSink, req: Record<string, unknown>): P
         gone: ready === null,
         hash: ready?.hash ?? null,
         found: ready?.found ?? {},
+        cut: ready?.cut === true,
+        exec: ready?.exec === true,
       },
       ready?.body ?? null,
     )
@@ -98,28 +108,50 @@ async function apply(
     home: here.home,
     platform: here.platform,
     profiles: list(req.profiles) as unknown as ProfilePlan[],
+    allow: ticksOf(allowOf(req.allow)),
   })
-  for (const s of list(req.same) as unknown as Same[]) target.same(s.profile, s.to, s.there)
-  for (const f of list(req.forget)) target.forget(text(f.profile), text(f.to))
   let files = 0
   let bytes = 0
   let said = Date.now()
-  for await (const f of rest) {
-    if (f.head.t === 'end') break
-    if (f.head.t !== 'file') continue
-    target.write(text(f.head.profile), text(f.head.to), f.body, f.head.merge === true)
-    files++
-    bytes += f.body.length
-    if (Date.now() - said > 1000) {
-      said = Date.now()
-      await out.send({ t: 'progress', files, bytes })
+  let done: ReturnType<typeof target.finish>
+  let install: boolean | null = null
+  try {
+    for (const s of list(req.same) as unknown as Same[]) target.same(s.profile, s.to, s.there)
+    for (const f of list(req.forget)) target.forget(text(f.profile), text(f.to))
+    let ended = false
+    for await (const f of rest) {
+      if (f.head.t === 'end') {
+        ended = true
+        break
+      }
+      if (f.head.t !== 'file') continue
+      const why = target.write(text(f.head.profile), text(f.head.to), f.body, {
+        merge: f.head.merge === true,
+        expect: typeof f.head.expect === 'string' ? f.head.expect : null,
+        cut: f.head.cut === true,
+        exec: f.head.exec === true,
+      })
+      if (why === null) {
+        files++
+        bytes += f.body.length
+      }
+      if (Date.now() - said > 1000) {
+        said = Date.now()
+        await out.send({ t: 'progress', files, bytes })
+      }
     }
+    if (!ended) throw new Error('the files stopped before their end')
+    // the deletions ticked, once every file has come
+    for (const d of list(req.deletions))
+      target.remove(text(d.profile), text(d.to), typeof d.expect === 'string' ? d.expect : null)
+  } finally {
+    // what was written is recorded, however the run ended: met again as the same, not as conflicts;
+    // a profile made gets the board's hooks all the same
+    done = target.finish()
+    if (done.created.length) install = here.install(done.created.map(n => profileDir(here.home, n, here.platform)))
   }
-  // the deletions ticked, once every file has come
-  for (const d of list(req.deletions)) target.remove(text(d.profile), text(d.to))
-  const { created } = target.finish()
-  const install = created.length ? here.install(created.map(n => profileDir(here.home, n, here.platform))) : null
-  await out.send({ t: 'done', files, bytes, created, install })
+  const { created, skipped } = done
+  await out.send({ t: 'done', files, bytes, created, install, skipped })
 }
 
 /** One op: its request and frames read from `input`, its answer written to `output`; the exit code. */
