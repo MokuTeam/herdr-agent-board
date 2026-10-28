@@ -105,6 +105,43 @@ export const MIGRATIONS: readonly string[] = [
   `,
 ]
 
+export type MessageState = 'queued' | 'delivered' | 'acked' | 'expired'
+export interface MessageRow {
+  id: string
+  v: number
+  from_peer: string
+  to_peer: string
+  kind: string
+  reply_to: string | null
+  state: MessageState
+  created_at: number
+  expires_at: number
+  delivered_at: number | null
+  acked_at: number | null
+  size: number
+  body_hash: string
+  /** The signed envelope as JSON; null once acked or expired. */
+  payload: string | null
+  ack_json: string | null
+  /** The last state the sender was told of. */
+  sender_notified: MessageState | null
+}
+
+export type NewMessage = Pick<
+  MessageRow,
+  | 'id'
+  | 'v'
+  | 'from_peer'
+  | 'to_peer'
+  | 'kind'
+  | 'reply_to'
+  | 'created_at'
+  | 'expires_at'
+  | 'size'
+  | 'body_hash'
+  | 'payload'
+>
+
 /** The hash before the first audit row. */
 export const AUDIT_GENESIS = '0'.repeat(64)
 
@@ -155,6 +192,19 @@ export interface HubDb {
   revokeInvite(id: string, now: number): boolean
   /** Checks the code, uses it and creates the peer, in one transaction. */
   join(code: string, peer: string, name: string, now: number): JoinResult
+  // messages
+  message(id: string): MessageRow | null
+  insertMessage(m: NewMessage): void
+  /** What waits for a recipient, oldest first: queued or delivered, not yet due. */
+  pendingFor(peer: string, now: number): MessageRow[]
+  markDelivered(id: string, at: number): void
+  /** Acks a message and drops its payload. */
+  markAcked(id: string, at: number, ackJson: string): void
+  /** Expires every queued or delivered message due before `now`, drops their payloads, returns them. */
+  expireDue(now: number): MessageRow[]
+  /** What the sender has not been told of yet. */
+  unnotified(sender: string): MessageRow[]
+  setNotified(id: string, state: MessageState): void
   // presence
   presenceEvent(peer: string, online: boolean, at: number): void
   // audit
@@ -257,6 +307,60 @@ export function openDb(path: string): HubDb {
         ).run(peer, name, now, now, inv.id)
         return { ok: true }
       })(),
+    message: id => db.query<MessageRow, [string]>('SELECT * FROM message WHERE id = ?').get(id),
+    insertMessage: m =>
+      void db
+        .query(
+          `INSERT INTO message (id, v, from_peer, to_peer, kind, reply_to, state, created_at, expires_at, size, body_hash, payload, sender_notified)
+           VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, 'queued')`,
+        )
+        .run(
+          m.id,
+          m.v,
+          m.from_peer,
+          m.to_peer,
+          m.kind,
+          m.reply_to,
+          m.created_at,
+          m.expires_at,
+          m.size,
+          m.body_hash,
+          m.payload,
+        ),
+    pendingFor: (peer, now) =>
+      db
+        .query<MessageRow, [string, number]>(
+          "SELECT * FROM message WHERE to_peer = ? AND state IN ('queued', 'delivered') AND expires_at >= ? ORDER BY created_at, rowid",
+        )
+        .all(peer, now),
+    markDelivered: (id, at) =>
+      void db
+        .query("UPDATE message SET state = 'delivered', delivered_at = ? WHERE id = ? AND state = 'queued'")
+        .run(at, id),
+    markAcked: (id, at, ackJson) =>
+      void db
+        .query(
+          "UPDATE message SET state = 'acked', acked_at = ?, ack_json = ?, payload = NULL WHERE id = ? AND state IN ('queued', 'delivered')",
+        )
+        .run(at, ackJson, id),
+    expireDue: now =>
+      db.transaction(() => {
+        const due = db
+          .query<MessageRow, [number]>(
+            "SELECT * FROM message WHERE state IN ('queued', 'delivered') AND expires_at < ?",
+          )
+          .all(now)
+        const expire = db.query("UPDATE message SET state = 'expired', payload = NULL WHERE id = ?")
+        for (const r of due) expire.run(r.id)
+        return due.map(r => ({ ...r, state: 'expired' as const, payload: null }))
+      })(),
+    unnotified: sender =>
+      db
+        .query<MessageRow, [string]>(
+          'SELECT * FROM message WHERE from_peer = ? AND (sender_notified IS NULL OR sender_notified != state) ORDER BY created_at, rowid',
+        )
+        .all(sender),
+    setNotified: (id, state) => void db.query('UPDATE message SET sender_notified = ? WHERE id = ?').run(state, id),
     presenceEvent: (peer, online, at) =>
       void db
         .query('INSERT INTO presence_event (peer_id, state, at) VALUES (?, ?, ?)')

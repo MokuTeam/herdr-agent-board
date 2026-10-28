@@ -3,20 +3,26 @@
 // the roster. The hub holds no sockets of its own: server.ts hands it a Conn per socket, tests
 // hand it plain objects. Time comes from the injected clock; logs carry ids and codes, never
 // bodies.
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import {
+  ackBytes,
   authBytes,
+  checkEnvelope,
+  type Envelope,
   type ErrorCode,
+  envelopeBytes,
   type Frame,
   isPeerId,
   joinBytes,
+  MAX_TTL_S,
+  MIN_TTL_S,
   parseFrame,
   type RosterPeer,
   TEAM_PROTOCOL,
   validName,
   verify,
 } from '../../src/core/team.ts'
-import type { HubDb, PeerRow } from './db.ts'
+import type { HubDb, MessageRow, PeerRow } from './db.ts'
 
 export interface Clock {
   now(): number
@@ -60,11 +66,16 @@ export interface Hub {
   /** Revokes a peer by id or by name, closes its connection at once; null when there is no active one. */
   revoke(ref: string): PeerRow | null
   online(peer: string): boolean
+  /** Expires what is due now and tells the senders; the sweeper calls it every SWEEP_MS. */
+  sweep(): number
   stop(): void
 }
 
 /** How long a challenge, and a connection that has not authed, lives. */
 export const CHALLENGE_LIVES_MS = 30_000
+
+/** How often due messages are expired. */
+export const SWEEP_MS = 60_000
 
 export const CLOSE_BAD_REQUEST = 4400
 export const CLOSE_UNKNOWN = 4401
@@ -75,6 +86,11 @@ interface Session {
   conn: Conn
   peer: string
 }
+
+const isRecordId = (v: unknown): string | undefined =>
+  typeof v === 'object' && v !== null && typeof (v as { id?: unknown }).id === 'string'
+    ? (v as { id: string }).id
+    : undefined
 
 export function createHub(opts: HubOptions): Hub {
   const { db, clock, log } = opts
@@ -97,6 +113,115 @@ export function createHub(opts: HubOptions): Hub {
     const f: Frame = { t: 'roster', peers: roster() }
     for (const s of sessions.values()) put(s.conn, f)
   }
+
+  const stateOf = (r: MessageRow): Frame => {
+    const at =
+      r.state === 'acked'
+        ? r.acked_at
+        : r.state === 'delivered'
+          ? r.delivered_at
+          : r.state === 'expired'
+            ? r.expires_at
+            : r.created_at
+    const f: Frame = { t: 'state', id: r.id, state: r.state, at: at ?? r.created_at }
+    if (r.state === 'acked' && r.ack_json) f.ack = JSON.parse(r.ack_json)
+    return f
+  }
+
+  /** Tells the sender of a message its state, now if it is connected, else on its next welcome. */
+  const notify = (r: MessageRow) => {
+    const s = sessions.get(r.from_peer)
+    if (!s) return
+    put(s.conn, stateOf(r))
+    db.setNotified(r.id, r.state)
+  }
+
+  const deliver = (s: Session, r: MessageRow) => {
+    if (r.payload === null) return
+    put(s.conn, { t: 'deliver', env: JSON.parse(r.payload) as Envelope })
+    if (r.state !== 'queued') return
+    db.markDelivered(r.id, clock.now())
+    const now = db.message(r.id)
+    if (now) notify(now)
+  }
+
+  /** What waited for a peer that just came in: its deliveries, then what its senders were not told. */
+  const flush = (s: Session) => {
+    for (const r of db.pendingFor(s.peer, clock.now())) deliver(s, r)
+    for (const r of db.unnotified(s.peer)) notify(r)
+  }
+
+  const send = async (conn: Conn, peer: string, f: { env: unknown }) => {
+    const idOf = isRecordId(f.env)
+    const checked = checkEnvelope(f.env)
+    if (!checked.ok) {
+      log(`dropped from ${peer.slice(0, 8)}: ${checked.code}`)
+      return fail(conn, checked.code, `envelope refused: ${checked.code}`, undefined, idOf)
+    }
+    const env = checked.env
+    if (env.from !== peer) return fail(conn, 'bad_sig', 'from is not the connected peer', undefined, env.id)
+    if (env.to === peer) return fail(conn, 'bad_frame', 'a message to yourself', undefined, env.id)
+    const bytes = envelopeBytes(env)
+    if (!(await verify(env.from, bytes, env.sig)))
+      return fail(conn, 'bad_sig', 'the signature does not verify', undefined, env.id)
+    const to = db.peer(env.to)
+    if (to?.status !== 'active') return fail(conn, 'not_member', 'the recipient is not a member', undefined, env.id)
+    const hash = createHash('sha256').update(bytes).digest('hex')
+    const have = db.message(env.id)
+    if (have) {
+      if (have.from_peer !== peer || have.body_hash !== hash)
+        return fail(conn, 'dup_id', 'that id is taken', undefined, env.id)
+      put(conn, stateOf(have))
+      return
+    }
+    const now = clock.now()
+    const ttl = Math.min(MAX_TTL_S, Math.max(MIN_TTL_S, env.ttl_s))
+    const payload = JSON.stringify(env)
+    db.insertMessage({
+      id: env.id,
+      v: env.v,
+      from_peer: peer,
+      to_peer: env.to,
+      kind: env.kind,
+      reply_to: env.reply_to,
+      created_at: now,
+      expires_at: now + ttl * 1000,
+      size: Buffer.byteLength(payload),
+      body_hash: hash,
+      payload,
+    })
+    db.audit(now, peer, 'send', { id: env.id, to: env.to, size: Buffer.byteLength(payload) })
+    const row = db.message(env.id) as MessageRow
+    notify(row)
+    const s = sessions.get(env.to)
+    if (s) deliver(s, row)
+  }
+
+  const ack = async (conn: Conn, peer: string, f: { id: string; ts: string; sig: string }) => {
+    const row = db.message(f.id)
+    if (!row || row.to_peer !== peer) return fail(conn, 'bad_frame', 'no such message for you', undefined, f.id)
+    if (row.state === 'acked') return
+    if (row.state === 'expired' || Number.isNaN(Date.parse(f.ts)))
+      return fail(conn, 'bad_frame', 'cannot ack that', undefined, f.id)
+    if (!(await verify(peer, ackBytes({ by: peer, id: f.id, to: row.from_peer, ts: f.ts }), f.sig)))
+      return fail(conn, 'bad_sig', 'the signature does not verify', undefined, f.id)
+    const now = clock.now()
+    db.markAcked(f.id, now, JSON.stringify({ by: peer, ts: f.ts, sig: f.sig }))
+    db.audit(now, peer, 'ack', { id: f.id, from: row.from_peer })
+    const done = db.message(f.id)
+    if (done) notify(done)
+  }
+
+  const sweep = (): number => {
+    const now = clock.now()
+    const gone = db.expireDue(now)
+    for (const r of gone) {
+      db.audit(now, null, 'expired', { id: r.id, from: r.from_peer, to: r.to_peer })
+      notify(r)
+    }
+    return gone.length
+  }
+  const sweeper = clock.setInterval(sweep, SWEEP_MS)
 
   const open: Hub['open'] = conn => {
     handles.add(conn)
@@ -130,6 +255,7 @@ export function createHub(opts: HubOptions): Hub {
       db.touchSeen(row.id, clock.now())
       put(conn, { t: 'welcome', peer: row.id, name: row.name, hub: db.hubId() })
       put(conn, { t: 'roster', peers: roster() })
+      flush({ conn, peer: row.id })
       if (!old)
         for (const s of sessions.values())
           if (s.peer !== row.id) put(s.conn, { t: 'presence', peer: row.id, online: true, at: clock.now() })
@@ -203,6 +329,10 @@ export function createHub(opts: HubOptions): Hub {
           return put(conn, { t: 'pong' })
         case 'pong':
           return
+        case 'send':
+          return send(conn, peer, f)
+        case 'ack':
+          return ack(conn, peer, f)
         default:
           return fail(conn, 'bad_frame', `${f.t} is not for the hub`)
       }
@@ -244,7 +374,9 @@ export function createHub(opts: HubOptions): Hub {
       return db.peer(row.id)
     },
     online: peer => sessions.has(peer),
+    sweep,
     stop: () => {
+      clock.clearInterval(sweeper)
       for (const c of handles) c.close(1001, 'hub stopping')
     },
   }
