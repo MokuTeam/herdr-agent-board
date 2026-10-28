@@ -12,7 +12,8 @@
 // WebSocket (routes/desktop.ts), and while the owner has the browser the wrapper holds the
 // agent's calls. Server mode only: app.ts makes none of this on a PC.
 import { randomBytes } from 'node:crypto'
-import { closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cp } from 'node:fs/promises'
 import { createConnection, createServer, type Socket } from 'node:net'
 import { basename, join } from 'node:path'
 import type { ServerWebSocket, WebSocketHandler } from 'bun'
@@ -40,7 +41,7 @@ export interface DesktopSystem {
   alive(pid: number): boolean
   /** Its command line ('' when not known): whether a recorded pid is still the program the board started. */
   cmdline(pid: number): string
-  /** Whether an X server holds the display (its lock or its socket). */
+  /** Whether an X server holds the display (its lock, a stale one cleared; or its socket). */
   displayHeld(display: number): boolean
   portFree(port: number): Promise<boolean>
   /** Whether Chrome's DevTools answer on the port. */
@@ -51,6 +52,41 @@ export interface DesktopSystem {
 }
 
 const PATH = '/usr/local/bin:/usr/bin:/bin:/opt/google/chrome'
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as { code?: string }).code === 'EPERM'
+  }
+}
+
+/**
+ * Whether an X server holds `display` (its lock in `tmp`, with a pid that runs). A lock whose
+ * server is gone (a SIGKILL leaves it, and the socket) is cleared with its socket, so the slot is
+ * free again; one that cannot be cleared (another account's) holds it. A socket with no lock is
+ * not known to be stale: held.
+ */
+export function displayHeldAt(display: number, tmp = '/tmp', alive: (pid: number) => boolean = pidAlive): boolean {
+  const lock = join(tmp, `.X${display}-lock`)
+  const socket = join(tmp, '.X11-unix', `X${display}`)
+  let text: string
+  try {
+    text = readFileSync(lock, 'utf8')
+  } catch (err) {
+    return (err as { code?: string }).code === 'ENOENT' ? existsSync(socket) : true
+  }
+  const pid = Number.parseInt(text.trim(), 10)
+  if (!(pid > 0) || alive(pid)) return true
+  try {
+    rmSync(socket, { force: true })
+    rmSync(lock)
+    return false
+  } catch {
+    return true
+  }
+}
 
 /** The server's own. */
 export const realSystem: DesktopSystem = {
@@ -73,14 +109,7 @@ export const realSystem: DesktopSystem = {
       } catch {}
     }
   },
-  alive(pid) {
-    try {
-      process.kill(pid, 0)
-      return true
-    } catch (err) {
-      return (err as { code?: string }).code === 'EPERM'
-    }
-  },
+  alive: pidAlive,
   cmdline(pid) {
     try {
       return readFileSync(`/proc/${pid}/cmdline`, 'utf8').replaceAll('\0', ' ')
@@ -88,7 +117,7 @@ export const realSystem: DesktopSystem = {
       return ''
     }
   },
-  displayHeld: display => existsSync(`/tmp/.X${display}-lock`) || existsSync(`/tmp/.X11-unix/X${display}`),
+  displayHeld: display => displayHeldAt(display),
   portFree: port =>
     new Promise(resolve => {
       const s = createServer()
@@ -111,6 +140,8 @@ interface Desktop {
   pane: string
   /** The card's key as last seen. */
   key: string
+  /** The session it was started for ('' not known yet): another one in the pane (/clear) stops it. */
+  session: string
   slot: number
   display: number
   port: number
@@ -130,8 +161,8 @@ interface Desktop {
   startedAt: number
   /** Chrome is up and answers on its port. */
   running: boolean
-  /** Refreshes in a row that found no session awake in its pane. */
-  missing: number
+  /** Since when no session is awake in its pane (0: one is). */
+  goneSince: number
   /** It is being stopped: an exit now is not a crash. */
   stopping: boolean
   /** Since when the owner has the browser with no view connected (0: a view is, or the agent has it). */
@@ -188,15 +219,22 @@ export interface Desktops {
   websocket: WebSocketHandler<VncData>
 }
 
-/** A session asleep, ended or not yet on the board for this long after its desktop started: it stops. */
-const GRACE_MS = 60_000
+/**
+ * No session awake in its pane for this long on end (asleep, ended, not on the board yet): the
+ * desktop stops. A restart (sleep, then wake) and a refresh that misses the pane keep it.
+ */
+const GONE_MS = 2 * 60_000
 /** The owner has the browser and no view of it is connected for this long: the agent has it again. */
 const UNVIEWED_MS = 30_000
 /** Viewers' bytes queued over this pause the VNC socket until they drain. */
 const HIGH_WATER = 4 << 20
-/** Files Chrome holds a profile with: never copied. Caches neither: a copy is for one session. */
+/**
+ * What Chrome holds a profile with (its locks, LevelDB's): never copied. Caches, service workers'
+ * caches and scripts and Chrome's own downloads neither: a copy is for one session, and its
+ * sign-ins are in its cookies, local storage and IndexedDB, which are.
+ */
 const NOT_COPIED =
-  /^(Singleton(Lock|Socket|Cookie)|Cache|Code Cache|GPUCache|ShaderCache|GrShaderCache|DawnCache|DawnGraphiteCache|DawnWebGPUCache)$/
+  /^(Singleton(Lock|Socket|Cookie)|LOCK|lockfile|Cache|Code Cache|GPUCache|ShaderCache|GrShaderCache|DawnCache|DawnGraphiteCache|DawnWebGPUCache|Service Worker|Crashpad|BrowserMetrics|component_crx_cache|extensions_crx_cache|optimization_guide_model_store)$/
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -242,7 +280,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   function save(): void {
     try {
       mkdirSync(o.root, { recursive: true, mode: 0o700 })
-      const list = [...desktops.values()].map(({ running, missing, stopping, unviewedSince, ...d }) => d)
+      const list = [...desktops.values()].map(({ running, goneSince, stopping, unviewedSince, ...d }) => d)
       writeFileSync(record, `${JSON.stringify(list, null, 1)}\n`, { mode: 0o600 })
     } catch (err) {
       o.log(`desktop: ${messageOf(err)}`)
@@ -283,10 +321,11 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       if (typeof r?.pane !== 'string' || typeof r.dir !== 'string' || !r.dir.startsWith(o.root)) continue
       const d: Desktop = {
         ...r,
+        session: typeof r.session === 'string' ? r.session : '',
         askSince: typeof r.askSince === 'number' ? r.askSince : null,
         control: 'agent',
         running: false,
-        missing: 0,
+        goneSince: 0,
         stopping: false,
         unviewedSince: 0,
         startedAt: now(),
@@ -305,8 +344,11 @@ export function createDesktops(o: DesktopsOptions): Desktops {
 
   const itemIn = (pane: string): Item | undefined => o.items().find(i => i.pane === pane && !i.sleeping)
 
-  /** Where Chrome keeps the profile `name` for `d`: its own folder, a copy while another has it, or the session's own. */
-  function profileDir(d: Desktop, name: string | null): { dir: string; copy: boolean } {
+  /**
+   * Where Chrome keeps the profile `name` for `d`: its own folder, a copy while another has it, or
+   * the session's own. The copy is made without holding up the board (other panes' calls, refreshes).
+   */
+  async function profileDir(d: Desktop, name: string | null): Promise<{ dir: string; copy: boolean }> {
     if (name === null) return { dir: join(d.dir, 'profile'), copy: false }
     const own = join(o.root, 'profiles', name)
     const busy = [...desktops.values()].some(x => x !== d && x.chrome !== null && x.profile === name && !x.copy)
@@ -314,7 +356,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     if (!busy) return { dir: own, copy: false }
     const copy = join(d.dir, `copy-${name}`)
     rmSync(copy, { recursive: true, force: true })
-    cpSync(own, copy, { recursive: true, filter: src => !NOT_COPIED.test(basename(src)) })
+    await cp(own, copy, { recursive: true, filter: src => !NOT_COPIED.test(basename(src)) })
     return { dir: copy, copy: true }
   }
 
@@ -322,7 +364,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     const bin = CHROME_BINS.map(b => sys.which(b)).find(Boolean)
     if (!bin) return { ok: false, error: 'no Google Chrome or Chromium on this server (the install puts it in place)' }
     const name = wanted.get(d.pane) ?? null
-    const p = profileDir(d, name)
+    const p = await profileDir(d, name)
     d.profile = name
     d.copy = p.copy
     const env = {
@@ -338,6 +380,8 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       join(d.dir, 'chrome.log'),
     )
     d.chrome = proc.pid
+    // on file at once: a board that ends while it starts leaves it to the next one, not running on unknown
+    save()
     let gone = false
     void proc.exited.then(() => {
       gone = true
@@ -380,6 +424,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
     const d: Desktop = {
       pane,
       key: itemIn(pane)?.key ?? '',
+      session: itemIn(pane)?.session ?? '',
       slot,
       display,
       port: slotPort(slot),
@@ -394,7 +439,7 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       chrome: null,
       startedAt: now(),
       running: false,
-      missing: 0,
+      goneSince: 0,
       stopping: false,
       unviewedSince: 0,
     }
@@ -407,12 +452,14 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       join(dir, 'xvnc.log'),
     )
     d.xvnc = proc.pid
+    // on file at once, as Chrome is
+    save()
     let gone = false
     void proc.exited.then(() => {
       gone = true
       if (d.xvnc !== proc.pid || d.stopping) return
       o.log(`desktop :${display}: Xvnc ended`)
-      void stop(pane, 'its display ended')
+      void stopIf(d, 'its display ended')
     })
     let up = false
     for (let waited = 0; waited < 10_000 && !gone && !up; waited += 100) {
@@ -435,7 +482,13 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   }
 
   async function ensureNow(pane: string): Promise<Started> {
-    const d = desktops.get(pane)
+    let d = desktops.get(pane)
+    // another session in the pane since (/clear, before a refresh saw it): not its browser
+    const session = itemIn(pane)?.session ?? ''
+    if (d?.session && session && d.session !== session) {
+      await stopNow(pane, 'a new session in its pane')
+      d = undefined
+    }
     if (d && d.xvnc !== null && sys.alive(d.xvnc)) {
       if (d.chrome !== null && sys.alive(d.chrome) && d.running) return { ok: true, port: d.port }
       // the display is there, Chrome not (it ended, or the board took it over without it)
@@ -463,6 +516,11 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   }
 
   const stop = (pane: string, why: string): Promise<void> => serial(pane, () => stopNow(pane, why))
+  /** `d` stopped, when it is still the pane's desktop by then (not one started since). */
+  const stopIf = (d: Desktop, why: string): Promise<void> =>
+    serial(d.pane, async () => {
+      if (desktops.get(d.pane) === d) await stopNow(d.pane, why)
+    })
 
   /**
    * A viewer gone. The last one gone while the owner has the browser hands it back to the agent:
@@ -496,17 +554,28 @@ export function createDesktops(o: DesktopsOptions): Desktops {
       let changed = false
       for (const d of desktops.values()) {
         const item = items.find(i => i.pane === d.pane && !i.sleeping)
+        if (item && d.session && item.session && item.session !== d.session) {
+          void stopIf(d, 'a new session in its pane')
+          continue
+        }
         if (item) {
-          d.missing = 0
+          d.goneSince = 0
           d.key = item.key
+          if (!d.session && item.session) {
+            d.session = item.session
+            changed = true
+          }
           // the card asks no more, or asks something else: the agent went on, or the user answered
           if (d.asks && item.askSince !== d.askSince) {
             d.asks = false
             changed = true
           }
-        } else if (now() - d.startedAt >= GRACE_MS && ++d.missing >= 2) {
-          const asleep = items.some(i => i.pane === d.pane && i.sleeping)
-          void stop(d.pane, asleep ? 'the session sleeps' : 'the session ended')
+        } else {
+          d.goneSince ||= now()
+          if (now() - d.goneSince >= GONE_MS) {
+            const asleep = items.some(i => i.pane === d.pane && i.sleeping)
+            void stopIf(d, asleep ? 'the session sleeps' : 'the session ended')
+          }
         }
         // the owner has it and no view is connected (its close never came): back to the agent a while later
         if (d.control === 'owner' && !viewed(d.pane)) {

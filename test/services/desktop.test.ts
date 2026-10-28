@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import type { ServerWebSocket } from 'bun'
 import type { CardPatch } from '../../src/adapters/cards.ts'
 import type { Item } from '../../src/core/types.ts'
-import { createDesktops, type DesktopSystem, type VncData } from '../../src/services/desktop.ts'
+import { createDesktops, type DesktopSystem, displayHeldAt, type VncData } from '../../src/services/desktop.ts'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -24,7 +24,9 @@ interface Proc {
 }
 
 /** A server whose Xvnc makes its socket and Chrome answers on its port at once; what ran, and what it was told. */
-function fakeServer(o: { held?: number[]; noChrome?: boolean; chromeFails?: boolean } = {}) {
+function fakeServer(
+  o: { held?: number[]; noChrome?: boolean; chromeFails?: boolean; ready?: () => Promise<void> } = {},
+) {
   const procs = new Map<number, Proc>()
   let next = 1000
   const ports = new Set<number>()
@@ -64,7 +66,10 @@ function fakeServer(o: { held?: number[]; noChrome?: boolean; chromeFails?: bool
     cmdline: pid => procs.get(pid)?.argv.join(' ') ?? '',
     displayHeld: d => (o.held ?? []).includes(d) || [...procs.values()].some(p => p.alive && p.argv[1] === `:${d}`),
     portFree: async () => true,
-    devtools: async port => ports.has(port),
+    devtools: async port => {
+      await o.ready?.()
+      return ports.has(port)
+    },
     which: name =>
       name === 'Xvnc' ? '/usr/bin/Xvnc' : name === 'google-chrome-stable' && !o.noChrome ? '/usr/bin/chrome' : null,
     sleep: async () => {},
@@ -145,18 +150,27 @@ test('no browser on the server, or one that does not start: said, and nothing le
   expect(existsSync(join(fails.root, 'sessions', '100'))).toBe(false)
 })
 
-test('stopped when the session sleeps or ends (after a grace, two refreshes in a row); others go on', async () => {
+test('stopped when the session has slept or been gone for 2 minutes on end; a short sleep keeps it; others go on', async () => {
   const { d, server, state, tick, root } = setup()
   await d.ensure('w0:p1')
   await d.ensure('w0:p2')
-  // asleep at once after a start: the grace keeps it (the session may not be on the board yet)
+  // asleep a while (a restart: sleep, then wake), then back: kept, and the clock starts again
   state.items = [item('s1', 'w0:p1', { sleeping: true }), item('s2', 'w0:p2')]
   d.observe(state.items)
+  tick(90_000)
   d.observe(state.items)
+  d.observe([item('s1', 'w0:p1'), item('s2', 'w0:p2')])
+  tick(60_000)
+  d.observe(state.items)
+  await Bun.sleep(10)
   expect(chromeOf(server.procs)).toHaveLength(2)
+  // a snapshot that misses the pane once, then has it: kept
+  d.observe([item('s2', 'w0:p2')])
   tick(61_000)
   d.observe(state.items)
+  await Bun.sleep(10)
   expect(chromeOf(server.procs)).toHaveLength(2)
+  tick(60_000)
   d.observe(state.items)
   await d.ensure('w0:p2') // waits behind nothing; lets the stop run
   await Bun.sleep(10)
@@ -166,6 +180,7 @@ test('stopped when the session sleeps or ends (after a grace, two refreshes in a
   // ended: no session in its pane any more
   state.items = []
   d.observe(state.items)
+  tick(120_000)
   d.observe(state.items)
   await Bun.sleep(10)
   expect([...server.procs.values()].some(p => p.alive)).toBe(false)
@@ -408,4 +423,106 @@ test('given back: only the ask the browser ask put on the card is cleared', asyn
   } finally {
     vnc.close()
   }
+})
+
+test('a board restarted while a desktop starts knows it: the next one takes it over or stops it', async () => {
+  let release = (): void => {}
+  const gate = new Promise<void>(done => {
+    release = done
+  })
+  const s = setup({ ready: () => gate })
+  const starting = s.d.ensure('w0:p1')
+  for (let i = 0; i < 50 && chromeOf(s.server.procs).length === 0; i++) await Bun.sleep(1)
+  expect(chromeOf(s.server.procs)).toHaveLength(1)
+  // the board ends here (its start never finishes); the next one reads what is on file
+  const next = s.make()
+  await next.stopAll()
+  expect([...s.server.procs.values()].filter(p => p.alive)).toEqual([])
+  release()
+  await starting
+})
+
+test('a new session in the same pane (/clear) does not get the one before’s browser', async () => {
+  const { d, server, state } = setup({}, [item('s1', 'w0:p1', { session: 'a' })])
+  await d.ensure('w0:p1')
+  const first = chromeOf(server.procs)[0]
+  // the next refresh has another session there: the desktop stops
+  state.items = [item('s1', 'w0:p1', { session: 'b' })]
+  d.observe(state.items)
+  await Bun.sleep(10)
+  expect(first?.alive).toBe(false)
+  // the new session's first call before any refresh: a desktop of its own
+  await d.ensure('w0:p1')
+  const second = chromeOf(server.procs)[0]
+  state.items = [item('s1', 'w0:p1', { session: 'c' })]
+  await d.ensure('w0:p1')
+  expect(second?.alive).toBe(false)
+  expect(chromeOf(server.procs)).toHaveLength(1)
+})
+
+test('the stop Xvnc’s end queued leaves a desktop started in between alone', async () => {
+  const { d, server, state } = setup()
+  await d.ensure('w0:p1')
+  const xvnc = [...server.procs.values()].find(p => p.argv[0] === '/usr/bin/Xvnc') as Proc
+  // the display ends while the agent's next call is on its way: that call starts a new one
+  xvnc.end()
+  const again = d.ensure('w0:p1')
+  expect((await again).ok).toBe(true)
+  const started = chromeOf(server.procs)
+  expect(started).toHaveLength(1)
+  await Bun.sleep(20)
+  expect(started[0]?.alive).toBe(true)
+  expect(d.view(state.items[0] as Item)?.running).toBe(true)
+})
+
+test('a named profile’s copy: made without holding up the board, caches, service workers and locks left out', async () => {
+  const { d, server, root } = setup()
+  await d.profile('w0:p1', 'github')
+  const own = join(root, 'profiles', 'github')
+  for (let i = 0; i < 40; i++) writeFileSync(join(own, `f${i}`), 'x'.repeat(1000))
+  mkdirSync(join(own, 'Default', 'Service Worker', 'CacheStorage'), { recursive: true })
+  writeFileSync(join(own, 'Default', 'Service Worker', 'CacheStorage', 'big'), 'cache')
+  mkdirSync(join(own, 'Default', 'IndexedDB'), { recursive: true })
+  writeFileSync(join(own, 'Default', 'IndexedDB', 'LOCK'), '')
+  writeFileSync(join(own, 'Default', 'IndexedDB', 'db'), 'kept')
+  // the board's other work goes on while the copy is made: a turn of the event loop comes before Chrome starts
+  let turned = false
+  setImmediate(() => {
+    turned = true
+  })
+  const spawn = server.sys.spawn
+  let turnedAtChrome: boolean | null = null
+  server.sys.spawn = (argv, env, log) => {
+    if (argv[0] === '/usr/bin/chrome') turnedAtChrome = turned
+    return spawn(argv, env, log)
+  }
+  expect((await d.profile('w0:p2', 'github')).ok).toBe(true)
+  expect(turnedAtChrome as boolean | null).toBe(true)
+  const copy = join(root, 'sessions', '101', 'copy-github')
+  expect(readFileSync(join(copy, 'f39'), 'utf8')).toHaveLength(1000)
+  expect(readFileSync(join(copy, 'Default', 'IndexedDB', 'db'), 'utf8')).toBe('kept')
+  expect(existsSync(join(copy, 'Default', 'IndexedDB', 'LOCK'))).toBe(false)
+  expect(existsSync(join(copy, 'Default', 'Service Worker'))).toBe(false)
+})
+
+test('a display whose X server was killed (its lock and socket left) is free again; a live one or another’s is not', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'xtmp-'))
+  dirs.push(tmp)
+  mkdirSync(join(tmp, '.X11-unix'))
+  const leave = (display: number, pid: number) => {
+    writeFileSync(join(tmp, `.X${display}-lock`), `${String(pid).padStart(10)}\n`)
+    writeFileSync(join(tmp, '.X11-unix', `X${display}`), '')
+  }
+  leave(100, 4242)
+  leave(101, process.pid)
+  writeFileSync(join(tmp, '.X11-unix', 'X102'), '')
+  const alive = (pid: number) => pid === process.pid
+  expect(displayHeldAt(100, tmp, alive)).toBe(false)
+  expect(existsSync(join(tmp, '.X100-lock'))).toBe(false)
+  expect(existsSync(join(tmp, '.X11-unix', 'X100'))).toBe(false)
+  expect(displayHeldAt(101, tmp, alive)).toBe(true)
+  expect(existsSync(join(tmp, '.X101-lock'))).toBe(true)
+  // a socket with no lock: not known whose, so held
+  expect(displayHeldAt(102, tmp, alive)).toBe(true)
+  expect(displayHeldAt(103, tmp, alive)).toBe(false)
 })
