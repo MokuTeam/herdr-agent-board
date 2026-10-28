@@ -326,9 +326,12 @@ export async function scanSide(o: {
   const cantGo: Manifest['cantGo'] = []
   for (const p of sideProfiles(o.home)) {
     const walked = walkProfile(p)
+    let turns = 0
     const last = synced[p.name] ?? {}
     const files: ProfileFacts['files'] = {}
     for (const [rel, f] of walked.files) {
+      // the board serves its pages meanwhile: a turn of its own every 100 files
+      if (++turns % 100 === 0) await new Promise(resolve => setImmediate(resolve))
       let hash: string
       try {
         if (rel === '.claude.json' || rel === 'settings.json') hash = hashOf(rel, readFileSync(f.abs))
@@ -425,13 +428,15 @@ export const fileOf = (p: SideProfile, rel: string): string =>
 /**
  * A file as it goes: .claude.json and settings.json their shared part, history.jsonl and the
  * transcripts with their paths moved, any text with its secrets cut; its hash here (as recorded
- * after the sync), and the secrets cut by kind. Null when it is gone since the scan.
+ * after the sync), and the secrets cut by kind. Null when it is gone since the scan, and for a
+ * secret file, a file of one machine only or a path outside the profile, whoever asks for it.
  */
 export function prepare(
   p: SideProfile,
   rel: string,
   ctx: PackCtx,
 ): { body: Buffer; hash: string; found: Record<string, number> } | null {
+  if (!writable(rel)) return null
   let data: Buffer
   try {
     data = readFileSync(fileOf(p, rel))
@@ -521,12 +526,13 @@ export function openTarget(o: {
   }
   for (const p of o.profiles) if (p.create) profileOf(p.name)
   return {
-    write(profile, rel, body, merge) {
+    // a file merged by key is merged whatever comes with it: never replaced whole (its own secrets)
+    write(profile, rel, body, _merge) {
       if (!writable(rel)) throw new Error(`refused: ${rel}`)
       const p = profileOf(profile)
       const abs = fileOf(p, rel)
       let data: Buffer | string = body
-      if (merge && MERGED.has(rel)) {
+      if (MERGED.has(rel)) {
         let own = ''
         try {
           own = readText(abs)

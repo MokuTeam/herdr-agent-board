@@ -131,6 +131,9 @@ describe('a side of the sync on disk', () => {
     const cj = JSON.parse(prepare(p, '.claude.json', ctx)?.body.toString('utf8') ?? '{}')
     expect(cj).toEqual({ projects: { '/home/agent/work/proj': { allowedTools: [] } } })
     expect(prepare(p, 'nothing-here.md', ctx)).toBeNull()
+    // a secret file, one machine's own or a path outside, whoever asks for it
+    for (const rel of ['.credentials.json', 'shell-snapshots/s.sh', '../.claude-work/settings.json'])
+      expect(prepare(p, rel, ctx)).toBeNull()
   })
 
   test('the target: merges keep its own secrets, a profile made, secret and outside paths refused, the hashes recorded', () => {
@@ -148,6 +151,8 @@ describe('a side of the sync on disk', () => {
     t.write('default', 'settings.json', Buffer.from(JSON.stringify({ env: { B: '2' }, model: 'sonnet' })), true)
     t.write('new', 'CLAUDE.md', Buffer.from('# new\n'), false)
     t.write('default', 'skills/a/SKILL.md', Buffer.from('skill'), false)
+    // merged even when it comes as a whole file
+    t.write('default', '.claude.json', Buffer.from(JSON.stringify({ theme: 'light' })), false)
     for (const bad of ['.credentials.json', '../x', 'a/../../x', 'C:/x', 'sessions/1.json', '.claude.json.bak'])
       expect(() => t.write('default', bad, Buffer.from('x'), false)).toThrow()
     t.remove('default', 'CLAUDE.md')
