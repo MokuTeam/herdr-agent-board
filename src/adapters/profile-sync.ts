@@ -643,12 +643,13 @@ export function frameSink(out: Writable, stop: Promise<unknown> | null = null): 
       if (!gz.write(frame(head, body))) await drained()
       if (gone) throw new Error('the other end is gone')
     },
+    // once gzip's last bytes are handed to the stream (pipe then ends it): a process's stdout may
+    // never say it finished, and its bytes are written before the process exits anyway
     end: async () => {
       await Promise.race([
         new Promise<void>(resolve => {
-          out.once('finish', () => resolve())
-          out.once('close', () => resolve())
-          out.once('error', () => resolve())
+          gz.once('end', () => resolve())
+          gz.once('error', () => resolve())
           gz.end()
         }),
         ...(stop ? [stop] : []),

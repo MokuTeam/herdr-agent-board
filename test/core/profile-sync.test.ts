@@ -255,6 +255,7 @@ describe('what never crosses', () => {
       'stats-cache.json',
       'settings.json.bak-agent-board',
       'hooks/herdr-agent-state.ps1',
+      'skills/herdr-agents/SKILL.md',
       'projects/x/a.jsonl.agent-board-sync',
     ])
       expect(oneMachine(rel)).toBe(true)

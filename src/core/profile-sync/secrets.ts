@@ -15,8 +15,8 @@ const ONE_MACHINE_TOP =
   /^(cache|statsig|shell-snapshots|session-env|sessions|ide|telemetry|debug|backups|plugins|daemon.*|stats-cache\.json|\.csa-usage-cache\.json|mcp-needs-auth-cache\.json|\.last-cleanup|\.last-update-result\.json)$/
 /** Anywhere: a lock, the board's own backup of a settings file, a part the sync writes and renames. */
 const ONE_MACHINE_ANY = /(\.lock|\.bak-agent-board|\.agent-board-sync)$/
-/** herdr's own Claude hook script (herdr's integration writes each side's own). */
-const HERDR_HOOK_FILE = /^hooks\/herdr-agent-state\.[a-z0-9]+$/i
+/** herdr's own Claude hook script, and the board's skill for the agents (each side's install writes its own). */
+const HERDR_HOOK_FILE = /^hooks\/herdr-agent-state\.[a-z0-9]+$|^skills\/herdr-agents\//i
 
 /** A path in a profile folder ('/' between its parts) that belongs to its machine only: never synced, never listed. */
 export const oneMachine = (rel: string): boolean =>

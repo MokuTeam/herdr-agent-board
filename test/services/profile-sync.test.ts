@@ -7,7 +7,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
-import type { RemoteEnd, RemoteStream } from '../../src/adapters/ssh.ts'
+import { ROOT } from '../../src/adapters/paths.ts'
+import { type RemoteEnd, type RemoteStream, spawnRemoteStream } from '../../src/adapters/ssh.ts'
 import { projectFolder } from '../../src/core/profile-sync/paths.ts'
 import type { Config } from '../../src/core/types.ts'
 import { serve } from '../../src/entrypoints/profile-sync.ts'
@@ -23,6 +24,7 @@ let srvClone = ''
 const saved = process.env.LOCALAPPDATA
 let installs = 0
 let noBoard = false
+let asProcess = false
 const scripts: string[] = []
 
 const put = (path: string, text: string): void => {
@@ -58,6 +60,19 @@ function spawn(_bin: string, args: string[]): RemoteStream {
         resolve({ code: 3, error: null })
       }, 5),
     )
+  } else if (asProcess) {
+    // the program as its own process, its home the server's, as runuser starts it
+    const op = / (scan|pack|apply|record)$/m.exec(script.trim())?.[1] ?? ''
+    const was = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
+    process.env.HOME = srv
+    process.env.USERPROFILE = srv
+    try {
+      return spawnRemoteStream(process.execPath, [join(ROOT, 'src', 'entrypoints', 'profile-sync.ts'), op], 60_000)
+    } finally {
+      for (const [k, v] of Object.entries(was))
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+    }
   } else {
     const op = / (scan|pack|apply|record)$/m.exec(script.trim())?.[1] ?? ''
     done = serve(op, stdin, stdout, {
@@ -295,5 +310,21 @@ describe('syncing the profiles with the board on the server', () => {
     expect(after.status).toBe(200)
     expect(sync.view()?.preview?.deletions).toEqual([])
     expect(changes).toBeGreaterThan(0)
+  })
+
+  test('the server’s program as a process of its own: both ways through its stdin and stdout', async () => {
+    asProcess = true
+    try {
+      put(join(pc, '.claude', 'skills', 'big', 'SKILL.md'), 'x'.repeat(3 * 1024 * 1024))
+      const up = await run('up')
+      expect(up.phase).toBe('done')
+      expect(read(join(srv, '.claude', 'skills', 'big', 'SKILL.md')).length).toBe(3 * 1024 * 1024)
+      put(join(srv, '.claude', 'skills', 'big', 'NOTES.md'), 'from the server\n')
+      const down = await run('down')
+      expect(down.result?.files).toBe(1)
+      expect(read(join(pc, '.claude', 'skills', 'big', 'NOTES.md'))).toBe('from the server\n')
+    } finally {
+      asProcess = false
+    }
   })
 })
