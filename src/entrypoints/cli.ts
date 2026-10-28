@@ -572,7 +572,9 @@ async function team(): Promise<void> {
   if (!isRecord(view) || !Array.isArray(view.roster)) throw new Error('the board does not run the team: restart it')
   const me = isRecord(view.me) ? view.me : {}
   console.log(
-    `${String(view.hub)} · ${String(view.state)} · you: ${String(me.name ?? '')} ${String(me.fingerprint ?? '')}`,
+    T.printable(
+      `${String(view.hub)} · ${String(view.state)} · you: ${String(me.name ?? '')} ${String(me.fingerprint ?? '')}`,
+    ),
   )
   if (!view.roster.length) return console.log('nobody else on the team yet')
   const now = Date.now()
@@ -584,7 +586,7 @@ async function team(): Promise<void> {
         ? `last seen ${fromNow(p.lastSeen, now)}`
         : 'not seen yet'
     const flag = p.pin === 'changed' ? '  KEY CHANGED: trust it in the board' : ''
-    console.log(`${p.online ? '●' : '○'} ${String(p.name)}  ${String(p.fingerprint)}  ${seen}${flag}`)
+    console.log(T.printable(`${p.online ? '●' : '○'} ${String(p.name)}  ${String(p.fingerprint)}  ${seen}${flag}`))
   }
 }
 

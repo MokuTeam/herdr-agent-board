@@ -15,9 +15,11 @@ import {
   joinBytes,
   parseFrame,
   peerIdOf,
+  printable,
   sign,
   teamConfig,
   unb64u,
+  validName,
   verify,
 } from '../../src/core/team.ts'
 
@@ -245,4 +247,32 @@ test('checkEnvelope hands back only the signed fields and the signature (#231)',
   assert.deepEqual(r.ok && r.env, env)
   assert.notEqual(r.ok && r.env, env)
   assert.notEqual(r.ok && r.env.body, env.body)
+})
+
+test('validName: no controls, no bidi controls, nothing that reorders or breaks a line (#231)', () => {
+  for (const ok of ['anna', 'Анна', 'a b', 'ann-a_1', 'é', '名前', 'x'.repeat(40)])
+    assert.equal(validName(ok), true, ok)
+  for (const bad of [
+    'a\nb',
+    'a\tb',
+    'a\u0000b',
+    'a\u001bb',
+    'a\u007fb',
+    'a\u0085b',
+    'a\u009fb',
+    'a\u200eb',
+    'a\u200fb',
+    'a\u061cb',
+    'a\u202eb',
+    'a\u202ab',
+    'a\u2066b',
+    'a\u2069b',
+    'a\u2028b',
+    ' a',
+    '',
+    'x'.repeat(41),
+  ])
+    assert.equal(validName(bad), false, JSON.stringify(bad))
+  assert.equal(printable('ok Анна ●'), 'ok Анна ●')
+  assert.equal(printable('a\u001b[2Jb\u202ec\nd'), 'a\\u{1b}[2Jb\\u{202e}c\\u{a}d')
 })

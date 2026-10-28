@@ -47,6 +47,11 @@ describe('board team, off and misused', () => {
       'join with a name that is too long',
       ['team', 'join', 'hab-x', '--hub', 'ws://127.0.0.1:9', '--name', 'n'.repeat(41)],
     ],
+    ['join with a name holding a newline', ['team', 'join', 'hab-x', '--hub', 'ws://127.0.0.1:9', '--name', 'an\nna']],
+    [
+      'join with a name holding a right-to-left override',
+      ['team', 'join', 'hab-x', '--hub', 'ws://127.0.0.1:9', '--name', 'an\u202ena'],
+    ],
     ['join with two invites', ['team', 'join', 'hab-x', 'hab-y', '--hub', 'ws://127.0.0.1:9', '--name', 'anna']],
   ])('%s: a usage line, a non-zero exit, nothing written', async (_n, args) => {
     const box = await sandbox()

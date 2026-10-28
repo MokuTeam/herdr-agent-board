@@ -45,8 +45,15 @@ export function teamConfig(raw: unknown): TeamConfig | null {
   return { hub: r.hub, name }
 }
 
+/** Controls (C0, DEL, C1), line and paragraph separators, and the bidi controls that reorder what is around them. */
+const UNPRINTABLE = /[\p{Cc}\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu
+
 export const validName = (v: unknown): v is string =>
-  typeof v === 'string' && v.trim() === v && v.length >= 1 && v.length <= MAX_NAME
+  typeof v === 'string' && v.trim() === v && v.length >= 1 && v.length <= MAX_NAME && !new RegExp(UNPRINTABLE).test(v)
+
+/** `s` for a terminal: whatever is not printable is written as \u{hex}, so it cannot move the cursor or reorder text. */
+export const printable = (s: string): string =>
+  s.replace(UNPRINTABLE, c => `\\u{${(c.codePointAt(0) ?? 0).toString(16)}}`)
 
 // ---- Encoding
 
