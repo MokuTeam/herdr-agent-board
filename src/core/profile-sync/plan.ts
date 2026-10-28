@@ -23,6 +23,7 @@ import {
   projectKey,
   type Unpaired,
 } from './paths.ts'
+import { type PathRule, ruleMoves, type Suggestion, suggestRules } from './rules.ts'
 import {
   type Allow,
   type CarryTo,
@@ -164,6 +165,11 @@ export interface Preview {
   cantGo: { profile: string; what: string }[]
   pairs: Pair[]
   unpaired: Unpaired[]
+  /** The path rules in force (the local board's for this server), and those suggested for the projects without a pair. */
+  rules: PathRule[]
+  suggested: Suggestion[]
+  /** Whether each pair's folder (`to`) is on the target, as far as it was asked (a path not here: not known). */
+  there: Record<string, boolean>
   /** The projects' paths, as moved to the target's: the transcripts' `cwd`, history.jsonl, .claude.json. */
   moves: Move[]
   /** What goes, in bytes (before packing). */
@@ -203,7 +209,8 @@ const foldersOf = (m: Manifest): Record<string, string[]> =>
 
 /**
  * The preview: the source's profiles against the target's of the same name, with the projects
- * paired (`given`: the paths the owner gave, `<profile>/<folder>` to a path, null to leave one out).
+ * paired (`given`: the paths the owner gave, `<profile>/<folder>` to a path, null to leave one out;
+ * `rules`: the path rules, PC ↔ server folders; `there`: what is known of the targets' folders).
  */
 export function buildPreview(o: {
   id: string
@@ -212,13 +219,19 @@ export function buildPreview(o: {
   source: Manifest
   target: Manifest
   given: Readonly<Record<string, string | null>>
+  rules?: readonly PathRule[]
+  there?: Readonly<Record<string, boolean>>
 }): Preview {
   const { source, target } = o
+  const rules = [...(o.rules ?? [])]
   const { pairs, unpaired } = pairProjects({
     source: { platform: source.platform, projects: source.projects },
     target: { platform: target.platform, projects: target.projects, clones: target.clones, folders: foldersOf(target) },
     given: o.given,
+    rules: ruleMoves(rules, o.direction, source.platform),
   })
+  const known = o.there ?? {}
+  const there = Object.fromEntries(pairs.flatMap(x => (x.to in known ? [[x.to, known[x.to] as boolean]] : [])))
   const profiles: ProfilePlan[] = []
   const items: Item[] = []
   const same: Same[] = []
@@ -386,6 +399,9 @@ export function buildPreview(o: {
     cantGo: source.cantGo,
     pairs,
     unpaired,
+    rules,
+    suggested: suggestRules(unpaired, o.direction, source, target),
+    there,
     moves,
     bytes: items.reduce((n, i) => n + i.size, 0),
   }
