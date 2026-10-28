@@ -193,6 +193,18 @@ test('listen: loopback and Tailscale are private, the rest needs --allow-public'
     '8.8.8.8',
     'example.com',
     'fd7a:115c:a1e1::1',
+    // Not dotted decimal: what a resolver or a parser may read as something else (#231).
+    '0100.64.0.1',
+    '100.064.0.1',
+    '100.0x40.0.1',
+    '0x7f.0.0.1',
+    '127.1',
+    '2130706433',
+    '100.64.0.1 ',
+    ' 100.64.0.1',
+    '1e2.64.0.1',
+    '100.64.0.256',
+    'fd7a:115c:a1e0:zzzz',
   ])
     assert.equal(isPrivateHost(no), false, no)
 })

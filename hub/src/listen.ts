@@ -20,9 +20,11 @@ export function parseListen(s: string): Listen | null {
   return { hostname, port }
 }
 
+/** The four numbers of a dotted-decimal IPv4 literal (no leading zeros, hex, spaces or short forms), or null. */
 const v4 = (h: string): number[] | null => {
+  if (isIP(h) !== 4 || !/^(?:(?:0|[1-9]\d{0,2})\.){3}(?:0|[1-9]\d{0,2})$/.test(h)) return null
   const p = h.split('.').map(Number)
-  return p.length === 4 && p.every(n => Number.isInteger(n) && n >= 0 && n <= 255) ? p : null
+  return p.every(n => n <= 255) ? p : null
 }
 
 /** Loopback or Tailscale: 127/8, ::1, localhost, 100.64.0.0/10, fd7a:115c:a1e0::/48. */
@@ -31,5 +33,5 @@ export function isPrivateHost(hostname: string): boolean {
   if (h === 'localhost' || h === '::1') return true
   const ip = v4(h)
   if (ip) return ip[0] === 127 || (ip[0] === 100 && (ip[1] as number) >= 64 && (ip[1] as number) <= 127)
-  return h.startsWith('fd7a:115c:a1e0:')
+  return isIP(h) === 6 && h.startsWith('fd7a:115c:a1e0:')
 }
