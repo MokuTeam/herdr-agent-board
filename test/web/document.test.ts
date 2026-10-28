@@ -108,6 +108,11 @@ describe('a Word document as the worker reads it', () => {
     expect(await documentOf(understated.buffer as ArrayBuffer)).toMatchObject({ ok: false, why: 'big' })
     const shifted = zip([{ name: 'word/document.xml', data: 'x', claims: UNPACKED_LIMIT }], { head: 16 })
     expect(await documentOf(shifted.buffer as ArrayBuffer)).toMatchObject({ ok: false, why: 'broken' })
+    // Bytes between the directory and its end record, then a directory with the bomb: broken.
+    const gapped = zip([{ name: 'word/document.xml', data: 'x' }], {
+      gap: { bytes: 16, second: [{ name: 'word/document.xml', data: 'x', claims: UNPACKED_LIMIT }] },
+    })
+    expect(await documentOf(gapped.buffer as ArrayBuffer)).toMatchObject({ ok: false, why: 'broken' })
   })
 })
 

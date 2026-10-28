@@ -29,13 +29,20 @@ function endRecord(bytes: Uint8Array): number {
   return -1
 }
 
-/** A ZIP64 central directory's place and number of entries, by its locator just before `end`. */
-function zip64Directory(bytes: Uint8Array, end: number): { offset: number; count: number } | null {
+/**
+ * A ZIP64 central directory: its place, size and number of entries, by its locator just before
+ * `end` and the end record it points to, which must follow the directory and come right before
+ * the locator.
+ */
+function zip64Directory(bytes: Uint8Array, end: number): { offset: number; size: number; count: number } | null {
   const locator = end - 20
   if (locator < 0 || u32(bytes, locator) !== 0x07064b50) return null
   const record = u64(bytes, locator + 8)
-  if (u32(bytes, record) !== 0x06064b50) return null
-  return { count: Math.max(u64(bytes, record + 24), u64(bytes, record + 32)), offset: u64(bytes, record + 48) }
+  if (u32(bytes, record) !== 0x06064b50 || record + 12 + u64(bytes, record + 4) !== locator) return null
+  const offset = u64(bytes, record + 48)
+  const size = u64(bytes, record + 40)
+  if (offset + size !== record) return null
+  return { count: Math.max(u64(bytes, record + 24), u64(bytes, record + 32)), offset, size }
 }
 
 interface Wanted {
@@ -78,14 +85,14 @@ export function zipEntries(bytes: Uint8Array): ZipEntry[] | null {
   // The entries on this disk (+8) and in all (+10): a zip says the same in both; the larger counts.
   let count = Math.max(u16(bytes, end + 8), u16(bytes, end + 10))
   let at = u32(bytes, end + 16)
+  let size = u32(bytes, end + 12)
   const full16 = [4, 6, 8, 10].some(field => u16(bytes, end + field) === 0xffff)
-  if (full16 || u32(bytes, end + 12) === FULL32 || at === FULL32) {
-    const zip64 = zip64Directory(bytes, end)
-    if (zip64) {
-      count = zip64.count
-      at = zip64.offset
-    }
-  }
+  const zip64 = full16 || size === FULL32 || at === FULL32 ? zip64Directory(bytes, end) : null
+  if (zip64) ({ count, offset: at, size } = zip64)
+  // The directory ends where its end record starts (zip64Directory has its own record checked):
+  // bytes between them, or before the archive, have JSZip shift every offset by them and read
+  // another directory than this would. Two readings must not differ.
+  else if (size === FULL32 || at === FULL32 || at + size !== end) return null
   const entries: ZipEntry[] = []
   const names = new TextDecoder()
   while (u32(bytes, at) === 0x02014b50) {

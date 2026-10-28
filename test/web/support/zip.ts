@@ -31,6 +31,11 @@ export interface ZipOptions {
   tail?: number
   /** Bytes before the archive (its offsets left as they are, as a self-extracting stub has it). */
   head?: number
+  /**
+   * Bytes between the directory and its end record, then a second directory of these parts
+   * (JSZip, shifting every offset by the bytes between, reads that one).
+   */
+  gap?: { bytes: number; second: ZipPart[] }
   /** The entries this disk says it holds (+8), when it should say otherwise than the total (+10). */
   onDisk?: number
   total?: number
@@ -91,6 +96,15 @@ export function zip(parts: ZipPart[], options: ZipOptions = {}): Uint8Array {
   end.writeUInt32LE(directory.length, 12)
   end.writeUInt32LE(offset, 16)
   const out: Buffer[] = [Buffer.alloc(options.head ?? 0), ...local, directory]
+  if (options.gap) {
+    // The second directory lists the same parts' places with other names and sizes.
+    const second = Buffer.from(directory)
+    for (const [i, part] of options.gap.second.entries()) {
+      const at = central.slice(0, i * 3).reduce((n, b) => n + b.length, 0)
+      second.writeUInt32LE(part.claims ?? 0, at + 24)
+    }
+    out.push(Buffer.alloc(options.gap.bytes), second)
+  }
   if (options.zip64End) {
     const decoyAt = offset + directory.length
     const decoyDirectory = Buffer.concat(decoy)

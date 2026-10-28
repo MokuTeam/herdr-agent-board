@@ -97,14 +97,17 @@ describe('a zip’s directory as JSZip reads it', () => {
       ['a', 3],
       ['word/document.xml', 200 << 20],
     ])
-    // Only the classic directory's size is full: JSZip goes to the ZIP64 one, and so does this
-    // (and reads on into the decoy right after it, as JSZip would).
-    const lured = zipEntries(zip(parts, { zip64End: { decoy: ['a'] } })) ?? []
-    expect(lured.some(e => e.name === 'word/document.xml')).toBe(true)
-    expect(unpackedSize(lured)).toBeGreaterThanOrEqual(200 << 20)
+    // Only the classic directory's size is full, and a decoy directory sits between the real one
+    // and the ZIP64 record: the record does not follow its directory, and there is none to read.
+    expect(zipEntries(zip(parts, { zip64End: { decoy: ['a'] } }))).toBeNull()
   })
 
-  test('bytes before the archive: no directory where it says (JSZip would read it shifted)', () => {
-    expect(zipEntries(zip([heavy], { head: 16 }))).toBeNull()
+  test('a directory that does not end where its end record starts: none (JSZip would read another)', () => {
+    // A harmless directory where the end record says, 16 bytes, then one that claims 160 MB.
+    const shifted = zip([{ name: 'a', data: 'x' }], {
+      gap: { bytes: 16, second: [{ name: 'a', data: 'x', claims: 160 << 20 }] },
+    })
+    expect(zipEntries(shifted)).toBeNull()
+    expect(zipEntries(zip([{ name: 'a', data: 'x' }]))?.length).toBe(1)
   })
 })
