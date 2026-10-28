@@ -190,7 +190,7 @@ export function previewFoot(d: Preview, t: Translator): string[] {
     if ((d.total ?? 0) > (d.entries?.length ?? 0)) foot.push(t('ql.firstItems', { n: d.entries?.length ?? 0 }))
   } else {
     foot.push(sizeText(d.size, t))
-    if (!isMedia(d.kind) && typeof d.text === 'string') {
+    if (!isMedia(d.kind) && (typeof d.text === 'string' || isTable(d))) {
       foot.push(isTable(d) ? t('ql.rows', { n: (d.rows?.length ?? 1) - 1 }) : t('ql.lines', { n: d.lines ?? 0 }))
       if (d.truncated) foot.push(t('ql.truncated'))
     }

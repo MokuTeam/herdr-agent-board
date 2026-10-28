@@ -6,6 +6,8 @@
 import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { FileIcon } from '../../web/src/components/files/FileChip.tsx'
+import { footOf } from '../../web/src/components/files/QuickLook.tsx'
+import { besideApp, loadPdf, pdfAssets } from '../../web/src/components/files/viewers.ts'
 import { fileChips } from '../../web/src/hooks/useFileChips.ts'
 import { ICON_PATHS, type IconName, type PathInfo, type Preview } from '../../web/src/models/files.ts'
 import { type HistoryReply, quickLookNav } from '../../web/src/models/quick-look.ts'
@@ -204,13 +206,25 @@ describe('the quick look of a file', () => {
     }
   })
 
-  test('images, PDF, video and audio from the raw bytes, with the run token', async () => {
+  test('images, video and audio from the raw bytes, with the run token', async () => {
     const b = new BothLooks(en, server())
-    for (const path of ['/pics/a b.png', '/docs/spec.pdf', '/media/clip.mp4', '/media/song.mp3']) {
+    for (const path of ['/pics/a b.png', '/media/clip.mp4', '/media/song.mp3']) {
       await b.open(at(path))
       same(b)
     }
     expect(b.looks().react).toContain('/api/fs/raw?path=%2Fmedia%2Fsong.mp3&amp;t=tok')
+  })
+
+  // The old page framed the raw bytes, which Chrome on Android and the installed board draw
+  // nothing of (#176): the board draws the pages itself now (viewers/pdf.ts, imported once drawn).
+  test('a PDF: the board’s own viewer, loading until it is read, no frame', async () => {
+    const look = new NewLook(en, server())
+    await look.open(at('/docs/spec.pdf'))
+    const html = canonical(look.markup())
+    expect(html).toContain(
+      '<div class="k-pdf ql-body">\n      <div class="ql-pdf"></div>\n      <div class="ql-wait">Loading…</div>\n    </div>',
+    )
+    expect(html).not.toContain('<iframe')
   })
 
   test('an image zooms: the footer shows its scale and a button in to 100% or back to fit', async () => {
@@ -551,3 +565,67 @@ async function upgrades(world: FakeWorld) {
     ['/work', ['later.md']],
   ])
 }
+
+// #176: a CSV of many thousand rows opens at once, its rows drawn block by block as they scroll
+// into view; a PDF's footer says how many pages once its viewer read them.
+describe('the quick look’s own viewers', () => {
+  const big = (n: number) =>
+    file('/data/big.csv', {
+      kind: 'csv',
+      rows: [['n', 'twice'], ...Array.from({ length: n }, (_, i) => [`r${i}`, String(i * 2)])],
+      lines: n + 1,
+    })
+
+  test('a CSV of many rows: the first block drawn, the rest as it scrolls; the footer counts them all', async () => {
+    const look = new NewLook(en, server({ preview: async () => big(1000) }))
+    await look.open(at('/data/big.csv'))
+    const html = canonical(look.markup())
+    expect(html.match(/<tr>/g)?.length).toBe(1 + 300)
+    expect(html).toContain('<td>r299</td>')
+    expect(html).not.toContain('<td>r300</td>')
+    expect(html).toContain('<div class="ql-more"></div>')
+    expect(html).toContain('1000 rows')
+    // A short one has no more to draw.
+    const short = new NewLook(en, server({ preview: async () => big(20) }))
+    await short.open(at('/data/big.csv'))
+    expect(canonical(short.markup())).not.toContain('ql-more')
+  })
+
+  test('a PDF’s pages in the footer, once read, for that PDF only', async () => {
+    const look = new NewLook(en, server())
+    await look.open(at('/docs/spec.pdf'))
+    const view = look.nav.view()
+    const d = view.data
+    if (!d) throw new Error('nothing on show')
+    expect(footOf(view, en)).toBe('2 KB · modified Oct 17, 2026, 9:30 AM')
+    expect(footOf(view, en, null, { data: d, pages: 12 })).toBe('12 pages · 2 KB · modified Oct 17, 2026, 9:30 AM')
+    expect(footOf(view, ru, null, { data: d, pages: 3 })).toContain('3 страницы')
+    expect(footOf(view, en, null, { data: { ...d }, pages: 12 })).not.toContain('pages')
+  })
+})
+
+describe('the viewers’ scripts', () => {
+  test('asked for beside app.js, under the build the page runs; a failed import is tried again', async () => {
+    expect(besideApp('pdf-viewer.js', 'https://board.example/app.js?v=abc')).toBe(
+      'https://board.example/pdf-viewer.js?v=abc',
+    )
+    expect(besideApp('pdf.worker.js', 'http://127.0.0.1:12422/app.js')).toBe('http://127.0.0.1:12422/pdf.worker.js')
+    expect(pdfAssets('https://board.example/app.js?v=abc')).toBe('https://board.example/pdfjs/')
+    const asked: string[] = []
+    const failing = (url: string) => {
+      asked.push(url)
+      return Promise.reject(new Error('not built'))
+    }
+    await expect(loadPdf(failing)).rejects.toThrow('not built')
+    const module = { mount: (() => ({})) as never }
+    const found = async (url: string) => {
+      asked.push(url)
+      return module
+    }
+    await expect(loadPdf(found)).resolves.toBe(module)
+    // Once there, it is the same module.
+    await expect(loadPdf(failing)).resolves.toBe(module)
+    expect(asked).toHaveLength(2)
+    expect(asked.every(url => url.endsWith('/pdf-viewer.js'))).toBe(true)
+  })
+})

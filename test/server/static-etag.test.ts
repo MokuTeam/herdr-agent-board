@@ -1,7 +1,7 @@
 // The page's files and their ETag (routes/static.ts): a new build is a new tag, and the tag the
 // browser kept from the old one gets the whole new file, not a 304.
 import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { RouteContext } from '../../src/server/http.ts'
@@ -42,5 +42,50 @@ describe('the static route by ETag', () => {
     expect(matchesTag('"a-br"', '"a"')).toBe(false)
     expect(matchesTag('', '"a"')).toBe(false)
     expect(matchesTag(null, '"a"')).toBe(false)
+  })
+})
+
+// The quick look's viewers (#176): their scripts from the bundle, compressed and tagged as app.js
+// is; a package's folders by name, nothing around them; the page's policy as it was.
+describe('the static route for the viewers', () => {
+  test('a viewer and its worker from the bundle, what it loads from its package, nothing else', async () => {
+    const web = mkdtempSync(join(tmpdir(), 'board-static-'))
+    writeFileSync(join(web, 'index.html'), '<html></html>')
+    const pkg = mkdtempSync(join(tmpdir(), 'board-pkg-'))
+    mkdirSync(join(pkg, 'wasm'))
+    writeFileSync(join(pkg, 'wasm', 'jbig2.wasm'), Buffer.from([0, 0x61, 0x73, 0x6d]))
+    writeFileSync(join(pkg, 'package.json'), '{"name":"secret"}')
+    const files: Record<string, string> = { 'pdf-viewer.js': 'export const mount = 1', 'pdf.worker.js': 'self.x = 1' }
+    const route = staticRoute(
+      web,
+      { js: () => 'app', map: () => '{}', early: () => '', file: name => files[name] },
+      undefined,
+      { 'pdfjs/wasm': join(pkg, 'wasm') },
+    )
+    const get = async (address: string, headers: Record<string, string> = {}) => {
+      const url = new URL(`http://127.0.0.1${address}`)
+      return (await route.handle(new Request(url, { headers }), { path: url.pathname } as RouteContext)) as Response
+    }
+
+    const viewer = await get('/pdf-viewer.js', { 'accept-encoding': 'br' })
+    expect(viewer.status).toBe(200)
+    expect(viewer.headers.get('content-encoding')).toBe('br')
+    expect(viewer.headers.get('content-type')).toBe('text/javascript; charset=utf-8')
+    const tag = viewer.headers.get('etag') ?? ''
+    expect((await get('/pdf-viewer.js', { 'accept-encoding': 'br', 'if-none-match': tag })).status).toBe(304)
+    expect(await (await get('/pdf.worker.js')).text()).toBe('self.x = 1')
+    expect((await get('/pdf-viewer.js?v=abc')).status).toBe(200)
+
+    const wasm = await get('/pdfjs/wasm/jbig2.wasm')
+    expect(wasm.status).toBe(200)
+    expect(wasm.headers.get('content-type')).toBe('application/wasm')
+    expect([...new Uint8Array(await wasm.arrayBuffer())]).toEqual([0, 0x61, 0x73, 0x6d])
+    for (const outside of ['/pdfjs/package.json', '/pdfjs/cmaps/x.bcmap', '/pdfjs/wasm/x/y.wasm', '/src/main.tsx'])
+      expect((await get(outside)).status).toBe(404)
+
+    const page = await get('/')
+    expect(page.headers.get('content-security-policy')).toBe(
+      "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+    )
   })
 })

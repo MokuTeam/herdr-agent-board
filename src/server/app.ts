@@ -77,6 +77,7 @@ import { createBroadcaster } from './sse.ts'
 import { createTunnelListener } from './tunnel.ts'
 import { openProbeListener } from './tunnel-probe.ts'
 import { pruneUploads, uploadRoutes } from './uploads.ts'
+import { VIEWER_COPIES, viewerDirs, viewerEntries } from './viewers.ts'
 import { createWebBundle } from './web-bundle.ts'
 
 const WEB = join(ROOT, 'web')
@@ -200,13 +201,17 @@ export async function startServer({
   }
   // The React page (web/src/main.tsx) is bundled in memory (Bun.build) and served as /app.js, with
   // what it runs before it paints (web/src/theme.ts) as /theme.js; their version, with the page's
-  // other files, tells open pages to reload.
+  // other files, tells open pages to reload. The quick look's viewers are bundled apart, for the
+  // page to import when it opens such a file (server/viewers.ts).
   const bundle = await createWebBundle({
     root: ROOT,
     entry: join(WEB, 'src', 'main.tsx'),
     early: join(WEB, 'src', 'theme.ts'),
+    viewers: viewerEntries(WEB),
+    copies: VIEWER_COPIES,
     log,
   })
+  const viewerFolders = viewerDirs(ROOT)
   // Sessions started from the board (services/launch): their progress goes out with the board.
   const launches = createLaunches({ deps, onChange: () => board.publish() })
   // The terminal (services/terminals.ts): shells the board opened in sessions' folders, and live panes.
@@ -246,7 +251,7 @@ export async function startServer({
   const page = (html: string): string => pageWithLook(html, { look: cfg.look, omarchy: !!omarchy })
   // The page for a phone's browser through `tailscale serve`, while remote.pwa is on, and through
   // the owner's domain: marked remote, with what installs it.
-  const remotePage = staticRoute(WEB, bundle, html => pwaPage(page(html), bundle.version()))
+  const remotePage = staticRoute(WEB, bundle, html => pwaPage(page(html), bundle.version()), viewerFolders)
   const listener = createRemoteListener({
     cfg,
     webPort: port,
@@ -476,7 +481,7 @@ export async function startServer({
         })
       },
     },
-    staticRoute(WEB, bundle, page),
+    staticRoute(WEB, bundle, page, viewerFolders),
   )
   const host = new RegExp(`^(127\\.0\\.0\\.1|localhost):${port}$`)
   const ownOrigin = (req: Request): boolean => {

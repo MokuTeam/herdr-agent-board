@@ -13,7 +13,9 @@ export const FILE_TOKEN = randomBytes(18).toString('base64url')
 
 const TEXT_LIMIT = 512 << 10 // bytes of a text file shown
 const LINE_LIMIT = 5000
-const CSV_ROWS = 300
+// A CSV is a table of many thousand rows; the page draws them as they scroll into view.
+const CSV_LIMIT = 4 << 20
+const CSV_ROWS = 20_000
 const DIR_LIMIT = 1000
 
 const EXT = {
@@ -162,13 +164,100 @@ function head(path: string, size: number, limit: number): { buf: Buffer; cut: bo
   }
 }
 
-/** Bytes to text, or null for binary: BOMs honored, NUL bytes mean binary. */
-function decode(buf: Buffer): string | null {
+/**
+ * Bytes to text, or null for binary: BOMs honored, NUL bytes mean binary. `legacy`: bytes that
+ * are not UTF-8 are read in the system's old code page, as Excel saves a CSV (legacyCodePage).
+ */
+function decode(buf: Buffer, legacy = false): string | null {
   if (buf[0] === 0xff && buf[1] === 0xfe) return new TextDecoder('utf-16le').decode(buf.subarray(2))
   if (buf[0] === 0xfe && buf[1] === 0xff) return new TextDecoder('utf-16be').decode(buf.subarray(2))
   const sample = buf.subarray(0, 8192)
   if (sample.includes(0)) return null
-  return new TextDecoder('utf-8').decode(buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf ? buf.subarray(3) : buf)
+  const body = buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf ? buf.subarray(3) : buf
+  if (!legacy) return new TextDecoder('utf-8').decode(body)
+  try {
+    // Streamed: a character the cut at the size limit split in two is no reason to doubt the rest.
+    return new TextDecoder('utf-8', { fatal: true }).decode(body, { stream: true })
+  } catch {
+    return new TextDecoder(legacyCodePage(body)).decode(body)
+  }
+}
+
+/**
+ * Which old code page bytes that are not UTF-8 are in: Windows-1251 when most of their letters
+ * above ASCII come in runs of three or more (Cyrillic words), else Windows-1252 (a Western
+ * language's accents, one here and there).
+ */
+export function legacyCodePage(bytes: Uint8Array): 'windows-1251' | 'windows-1252' {
+  let high = 0
+  let inRuns = 0
+  let run = 0
+  const end = Math.min(bytes.length, 64 << 10)
+  for (let i = 0; i <= end; i++) {
+    const b = i < end ? (bytes[i] as number) : 0
+    if (b >= 0x80) high++
+    if (b >= 0xc0) run++
+    else {
+      if (run >= 3) inRuns += run
+      run = 0
+    }
+  }
+  return high && inRuns * 2 >= high ? 'windows-1251' : 'windows-1252'
+}
+
+const SEPARATORS = [',', ';', '\t', '|']
+
+/**
+ * The separator of a CSV: the one of , ; tab and | that splits the first lines into the same
+ * number of fields most often (outside quotes), the comma when none does. Excel with a locale
+ * whose decimals have a comma (Russian, German) writes `;`, and its numbers then have commas.
+ */
+export function csvSeparator(text: string): string {
+  const perLine: number[][] = []
+  let line = SEPARATORS.map(() => 0)
+  let quoted = false
+  for (let i = 0; i < text.length && perLine.length < 50; i++) {
+    const c = text[i] as string
+    if (c === '"') quoted = !quoted
+    else if (quoted) continue
+    else if (c === '\n') {
+      perLine.push(line)
+      line = SEPARATORS.map(() => 0)
+    } else {
+      const k = SEPARATORS.indexOf(c)
+      if (k >= 0) line[k] = (line[k] as number) + 1
+    }
+  }
+  if (line.some(Boolean)) perLine.push(line)
+  let best = { sep: ',', score: 0 }
+  SEPARATORS.forEach((sep, k) => {
+    const counts = perLine.map(l => l[k] as number).filter(Boolean)
+    const tally = new Map<number, number>()
+    for (const n of counts) tally.set(n, (tally.get(n) ?? 0) + 1)
+    const score = Math.max(0, ...tally.values())
+    if (score > best.score) best = { sep, score }
+  })
+  return best.sep
+}
+
+/**
+ * A CSV or TSV as a table: Excel's `sep=` line, else csvSeparator; the first CSV_ROWS rows, and
+ * truncated when there were more or the file was cut at CSV_LIMIT (its last row cut with it, so
+ * left out). The text comes too only when there are no rows, for the quick look to show as it is.
+ */
+function csvPreview(info: FileInfo, read: { buf: Buffer; cut: boolean }, extension: string): Preview {
+  let text = decode(read.buf, true)
+  if (text === null) return { ...info, kind: 'binary' }
+  const excel = /^sep=(.)\r?\n/.exec(text)
+  if (excel) text = text.slice(excel[0].length)
+  const sep = excel?.[1] ?? (extension === 'tsv' ? '\t' : csvSeparator(text))
+  const parsed = parseCsv(text, sep, CSV_ROWS + 1)
+  const more = parsed.length > CSV_ROWS
+  if (!more && read.cut && parsed.length > 1) parsed.pop()
+  const rows = more ? parsed.slice(0, CSV_ROWS) : parsed
+  const out: Preview = { ...info, kind: 'csv', rows, truncated: read.cut || more, lines: rows.length }
+  if (!rows.length) out.text = text
+  return out
 }
 
 /** Simple CSV/TSV: quoted fields with "" escapes and line breaks inside quotes. */
@@ -242,11 +331,12 @@ export function preview(path: string): Preview {
   if (['image', 'pdf', 'video', 'audio'].includes(infoKind)) return info
   let read: { buf: Buffer; cut: boolean }
   try {
-    read = head(path, info.size ?? 0, TEXT_LIMIT)
+    read = head(path, info.size ?? 0, infoKind === 'csv' ? CSV_LIMIT : TEXT_LIMIT)
   } catch (err) {
     const e = err as NodeJS.ErrnoException
     return { ...info, error: e.code === 'EPERM' || e.code === 'EACCES' || e.code === 'EBUSY' ? 'denied' : e.message }
   }
+  if (infoKind === 'csv') return csvPreview(info, read, ext(path))
   let text = decode(read.buf)
   if (text === null) return { ...info, kind: infoKind === 'file' ? 'file' : 'binary' }
   let cut = read.cut
@@ -263,7 +353,6 @@ export function preview(path: string): Preview {
       out.text = JSON.stringify(JSON.parse(text), null, 2)
     } catch {}
   }
-  if (kind === 'csv') out.rows = parseCsv(text, ext(path) === 'tsv' ? '\t' : ',')
   return out
 }
 

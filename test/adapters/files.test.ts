@@ -3,7 +3,16 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { describe, kindOf, openCommand, parseCsv, preview, resolvePath } from '../../src/adapters/files.ts'
+import {
+  csvSeparator,
+  describe,
+  kindOf,
+  legacyCodePage,
+  openCommand,
+  parseCsv,
+  preview,
+  resolvePath,
+} from '../../src/adapters/files.ts'
 
 test('a path as written: prefixes, escapes, lines, home and the session folder', () => {
   // Drive letters are absolute only on Windows; elsewhere the same checks run on POSIX paths.
@@ -78,3 +87,78 @@ test('opening with the system: the right command on each platform, no shell in b
   assert.deepEqual(openCommand('https://x.dev', 'open', 'darwin'), ['open', ['https://x.dev']])
   assert.deepEqual(openCommand('/u/a/x.pdf', 'reveal', 'linux'), ['xdg-open', ['/u/a']])
 })
+
+// CSV as Excel and other tools export it (#176): `;` where decimals have a comma, Windows-1251 or
+// UTF-8 with a BOM, quoted fields with line breaks, many thousand rows.
+test('a CSV as Excel saves it: its separator, its code page, its quotes, all its rows', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'board-csv-'))
+  const write = (name: string, body: string | Uint8Array) => {
+    writeFileSync(join(dir, name), body)
+    return preview(join(dir, name))
+  }
+  // Excel with a Russian locale: `;` between fields, commas in the numbers, a BOM.
+  const bom = write('ru.csv', '﻿Имя;Сумма;Заметка\nИванов;1 234,50;"две\nстроки"\nПетров;7,5;"с ""кавычками"""\n')
+  assert.deepEqual(bom.rows, [
+    ['Имя', 'Сумма', 'Заметка'],
+    ['Иванов', '1 234,50', 'две\nстроки'],
+    ['Петров', '7,5', 'с "кавычками"'],
+  ])
+  assert.equal(bom.text, undefined) // the rows only: the table is what the quick look shows
+  assert.equal(bom.truncated, false)
+  // The same saved in Windows-1251: no BOM, and not UTF-8.
+  const ansi = write('ansi.csv', windows1251('Город;Население\nМосква;13 000 000\nКазань;1 300 000\n'))
+  assert.deepEqual(ansi.rows, [
+    ['Город', 'Население'],
+    ['Москва', '13 000 000'],
+    ['Казань', '1 300 000'],
+  ])
+  // A Western file in Windows-1252 stays Western.
+  const latin = write('fr.csv', Buffer.from('nom,ville\nRen\xe9,Orl\xe9ans\n', 'latin1'))
+  assert.deepEqual(latin.rows?.[1], ['René', 'Orléans'])
+
+  // Excel's own line naming the separator; a tab-separated file.
+  assert.deepEqual(write('sep.csv', 'sep=|\na|b,c\n1|2,5\n').rows, [
+    ['a', 'b,c'],
+    ['1', '2,5'],
+  ])
+  assert.deepEqual(write('t.tsv', 'a;b\tc\n1;2\t3\n').rows, [
+    ['a;b', 'c'],
+    ['1;2', '3'],
+  ])
+
+  // Many thousand rows: all of them, not the first 300.
+  const many = write('many.csv', `n;x\n${Array.from({ length: 12_000 }, (_, i) => `${i};${i * 2}`).join('\n')}\n`)
+  assert.equal(many.rows?.length, 12_001)
+  assert.deepEqual(many.rows?.at(-1), ['11999', '23998'])
+  assert.equal(many.truncated, false)
+  // More than it shows: the first 20 000, and said so.
+  const more = write('more.csv', `n\n${Array.from({ length: 25_000 }, (_, i) => i).join('\n')}\n`)
+  assert.equal(more.rows?.length, 20_000)
+  assert.equal(more.truncated, true)
+  // Cut at its size: the last row, cut in two, is left out.
+  const wide = 'x'.repeat(200)
+  const cut = write('cut.csv', Array.from({ length: 25_000 }, (_, i) => `${i},${wide}`).join('\n'))
+  assert.equal(cut.truncated, true)
+  assert.deepEqual(cut.rows?.at(-1), [String((cut.rows?.length ?? 0) - 1), wide])
+})
+
+test('the separator and the code page a CSV is in', () => {
+  assert.equal(csvSeparator('a,b,c\n1,2,3\n'), ',')
+  assert.equal(csvSeparator('a;b;c\n1,5;2,5;3\n4;5,25;6\n'), ';')
+  assert.equal(csvSeparator('a\tb\n1\t2\n'), '\t')
+  assert.equal(csvSeparator('"x;y",b\n"1;2",3\n'), ',')
+  assert.equal(csvSeparator('one column\nonly\n'), ',')
+  assert.equal(legacyCodePage(windows1251('Привет, мир')), 'windows-1251')
+  assert.equal(legacyCodePage(Buffer.from('caf\xe9 na\xefve', 'latin1')), 'windows-1252')
+})
+
+/** Russian text in Windows-1251: А to я are 0xC0 to 0xFF, Ё and ё 0xA8 and 0xB8. */
+function windows1251(text: string): Uint8Array {
+  return Uint8Array.from([...text], c => {
+    const code = c.codePointAt(0) ?? 0
+    if (code >= 0x410 && code <= 0x44f) return code - 0x410 + 0xc0
+    if (c === 'Ё') return 0xa8
+    if (c === 'ё') return 0xb8
+    return code
+  })
+}

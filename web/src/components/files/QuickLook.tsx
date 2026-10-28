@@ -1,7 +1,8 @@
 // The quick look over the board (the old page's files.js root): its head with the kind's icon,
 // the name, the folders above to walk to and the tools (preview or source for Markdown, open with
 // the system, read the changes again, show in its folder, copy the path), what it shows, and a
-// footer of what it is, with an image's scale and a button in to 100% or back to fit. It lives in
+// footer of what it is, with the scale of an image or a PDF's pages and a button in to 100% or
+// back to fit. It lives in
 // <body> itself, beside the page (hooks/useModalFocus.ts); its motion, focus, keys and zoom are
 // hooks/useQuickLook.ts's.
 import { Fragment, useLayoutEffect, useRef, useState } from 'react'
@@ -36,7 +37,7 @@ import { Store, useStore } from '../../state/store.ts'
 import { Changes, changesFoot } from '../sheet/Changes.tsx'
 import { FileIcon } from './FileChip.tsx'
 import { History, historyFoot } from './History.tsx'
-import { Preview } from './Preview.tsx'
+import { Preview, type PreviewProps } from './Preview.tsx'
 
 export interface LookHandlers {
   back(): void
@@ -58,6 +59,12 @@ export interface ImageSize {
   height: number
 }
 
+/** A PDF's pages, for the one they were read from. */
+export interface PageCount {
+  data: LookData
+  pages: number
+}
+
 export interface QuickLookViewProps {
   view: LookView
   /** Open and reveal need the board. */
@@ -65,9 +72,14 @@ export interface QuickLookViewProps {
   /** The run's token for the raw bytes (the board's fsToken). */
   token: string | null
   image?: ImageSize | null
+  pages?: PageCount | null
   /** An image loaded (it zooms), and gone. */
   onImage?: (img: HTMLImageElement, data: FileLook) => void
   onImageGone?: (img: HTMLImageElement) => void
+  /** A PDF read, how many pages; its viewer zooms, and is gone. */
+  onPages?: (pages: number, data: FileLook) => void
+  onZoomable?: PreviewProps['onZoomable']
+  onZoomGone?: PreviewProps['onZoomGone']
   /** The zoom of the image on show, for the footer: only the footer draws again as it changes. */
   zoom?: Store<ZoomFoot>
   refs?: Partial<LookRefs>
@@ -87,7 +99,12 @@ function bodyClassOf(view: LookView): string {
 }
 
 /** The footer: what it is, how big, how many, when it was read or changed. */
-export function footOf(view: LookView, t: Translator, image: ImageSize | null = null): string {
+export function footOf(
+  view: LookView,
+  t: Translator,
+  image: ImageSize | null = null,
+  pages: PageCount | null = null,
+): string {
   const d = view.data
   if (view.hidden || !view.top) return ''
   if (view.top.kind === 'history') return historyFoot(view.top, t)
@@ -95,8 +112,10 @@ export function footOf(view: LookView, t: Translator, image: ImageSize | null = 
   if (isChangesLook(d)) return changesFoot(d, t).join(' · ')
   if (!isFileLook(d)) return ''
   const foot = previewFoot(d, t)
-  const own = image?.data === d && d.kind === 'image' && !d.error && !d.dir
-  return (own ? [`${image.width} × ${image.height}`, ...foot] : foot).join(' · ')
+  const plain = !d.error && !d.dir
+  if (image?.data === d && d.kind === 'image' && plain) foot.unshift(`${image.width} × ${image.height}`)
+  if (pages?.data === d && d.kind === 'pdf' && plain) foot.unshift(t('ql.pages', { n: pages.pages }))
+  return foot.join(' · ')
 }
 
 export function QuickLookView({
@@ -104,8 +123,12 @@ export function QuickLookView({
   canEdit,
   token,
   image = null,
+  pages = null,
   onImage,
   onImageGone,
+  onPages,
+  onZoomable,
+  onZoomGone,
   zoom = NOTHING_ZOOMED,
   refs = {},
   on = {},
@@ -200,9 +223,18 @@ export function QuickLookView({
           </button>
         </header>
         <div className={bodyClassOf(view)} ref={refs.body}>
-          <LookBody view={view} token={token} onImage={onImage} onImageGone={onImageGone} on={on} />
+          <LookBody
+            view={view}
+            token={token}
+            onImage={onImage}
+            onImageGone={onImageGone}
+            onPages={onPages}
+            onZoomable={onZoomable}
+            onZoomGone={onZoomGone}
+            on={on}
+          />
         </div>
-        <LookFoot text={footOf(view, t, image)} zoom={zoom} onZoom={on.zoom} />
+        <LookFoot text={footOf(view, t, image, pages)} zoom={zoom} onZoom={on.zoom} />
       </section>
     </div>
   )
@@ -275,10 +307,13 @@ interface LookBodyProps {
   token: string | null
   onImage?: ((img: HTMLImageElement, data: FileLook) => void) | undefined
   onImageGone?: ((img: HTMLImageElement) => void) | undefined
+  onPages?: ((pages: number, data: FileLook) => void) | undefined
+  onZoomable?: PreviewProps['onZoomable']
+  onZoomGone?: PreviewProps['onZoomGone']
   on: Partial<LookHandlers>
 }
 
-function LookBody({ view, token, onImage, onImageGone, on }: LookBodyProps) {
+function LookBody({ view, token, onImage, onImageGone, onPages, onZoomable, onZoomGone, on }: LookBodyProps) {
   const t = useT()
   const top: LookTarget | null = view.top
   if (view.hidden || !top) return null
@@ -297,6 +332,9 @@ function LookBody({ view, token, onImage, onImageGone, on }: LookBodyProps) {
       onOpen={() => on.act?.('open')}
       onImage={img => onImage?.(img, d)}
       onImageGone={onImageGone}
+      onPages={n => onPages?.(n, d)}
+      onZoomable={onZoomable}
+      onZoomGone={onZoomGone}
     />
   )
 }
@@ -306,6 +344,7 @@ export function QuickLook({ engine }: { engine: QuickLookEngine }) {
   const view = useStore(engine.view)
   const { canEdit, data } = useBoardContext()
   const [image, setImage] = useState<ImageSize | null>(null)
+  const [pages, setPages] = useState<PageCount | null>(null)
   const { refs } = engine
   // Just opened: drawn now, it grows out of where it came from.
   useLayoutEffect(() => engine.grow())
@@ -335,6 +374,10 @@ export function QuickLook({ engine }: { engine: QuickLookEngine }) {
         if (own) setImage({ data: d, ...own })
       }}
       onImageGone={engine.imageGone}
+      pages={pages}
+      onPages={(n, d) => setPages({ data: d, pages: n })}
+      onZoomable={engine.zoomable}
+      onZoomGone={engine.zoomGone}
       zoom={engine.zoom}
       refs={refs}
       on={{
