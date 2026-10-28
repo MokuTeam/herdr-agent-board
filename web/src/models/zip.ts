@@ -51,8 +51,10 @@ function zip64Extra(bytes: Uint8Array, from: number, length: number, need: Wante
     const size = u16(bytes, at + 2)
     if (id === 1) {
       let field = at + 4
+      // Within its own block, and within the extra field the entry gives.
+      const stop = Math.min(at + 4 + size, from + length)
       const take = (wanted: boolean) => {
-        if (!wanted || field + 8 > at + 4 + size) return undefined
+        if (!wanted || field + 8 > stop) return undefined
         const value = u64(bytes, field)
         field += 8
         return value
@@ -64,23 +66,29 @@ function zip64Extra(bytes: Uint8Array, from: number, length: number, need: Wante
   return {}
 }
 
-/** The entries of a zip by its central directory, or null when it has none to read. */
+/**
+ * The entries of a zip by its central directory, or null when it has none to read. Read as JSZip
+ * (mammoth's) reads them: the ZIP64 directory whenever any field of the end record is full, and
+ * then every entry as long as their signature goes on, whatever the counts say (a second entry
+ * the counts leave out is unpacked all the same); fewer than the counts say is no directory.
+ */
 export function zipEntries(bytes: Uint8Array): ZipEntry[] | null {
   const end = endRecord(bytes)
   if (end < 0) return null
   // The entries on this disk (+8) and in all (+10): a zip says the same in both; the larger counts.
   let count = Math.max(u16(bytes, end + 8), u16(bytes, end + 10))
   let at = u32(bytes, end + 16)
-  if (count === 0xffff || at === FULL32) {
+  const full16 = [4, 6, 8, 10].some(field => u16(bytes, end + field) === 0xffff)
+  if (full16 || u32(bytes, end + 12) === FULL32 || at === FULL32) {
     const zip64 = zip64Directory(bytes, end)
-    if (!zip64) return null
-    count = zip64.count
-    at = zip64.offset
+    if (zip64) {
+      count = zip64.count
+      at = zip64.offset
+    }
   }
   const entries: ZipEntry[] = []
   const names = new TextDecoder()
-  for (let i = 0; i < count; i++) {
-    if (u32(bytes, at) !== 0x02014b50) return null
+  while (u32(bytes, at) === 0x02014b50) {
     const nameLength = u16(bytes, at + 28)
     const extraLength = u16(bytes, at + 30)
     let compressed = u32(bytes, at + 20)
@@ -105,7 +113,7 @@ export function zipEntries(bytes: Uint8Array): ZipEntry[] | null {
     })
     at += 46 + nameLength + extraLength + u16(bytes, at + 32)
   }
-  return entries
+  return entries.length && entries.length >= Math.min(count, 0xffff) ? entries : null
 }
 
 /** Whether the bytes start as a zip does (a local file header): one with no directory to read is broken. */

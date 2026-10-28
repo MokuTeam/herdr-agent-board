@@ -29,15 +29,23 @@ export interface ZipPart {
 export interface ZipOptions {
   /** Bytes after the end of central directory record. */
   tail?: number
+  /** Bytes before the archive (its offsets left as they are, as a self-extracting stub has it). */
+  head?: number
   /** The entries this disk says it holds (+8), when it should say otherwise than the total (+10). */
   onDisk?: number
   total?: number
+  /**
+   * A ZIP64 end record and its locator: the end record's fields full. With `decoy`, the end
+   * record points to a second directory of only these parts and only its size field is full.
+   */
+  zip64End?: { decoy?: string[] }
 }
 
 /** The parts zipped. */
 export function zip(parts: ZipPart[], options: ZipOptions = {}): Uint8Array {
   const local: Buffer[] = []
   const central: Buffer[] = []
+  const decoy: Buffer[] = []
   let offset = 0
   for (const part of parts) {
     const raw = typeof part.data === 'string' ? Buffer.from(part.data) : Buffer.from(part.data)
@@ -72,6 +80,7 @@ export function zip(parts: ZipPart[], options: ZipOptions = {}): Uint8Array {
     entry.writeUInt16LE(extra.length, 30)
     entry.writeUInt32LE(offset, 42)
     central.push(entry, name, extra)
+    if (options.zip64End?.decoy?.includes(part.name)) decoy.push(entry, name, extra)
     offset += head.length + name.length + body.length
   }
   const directory = Buffer.concat(central)
@@ -81,5 +90,35 @@ export function zip(parts: ZipPart[], options: ZipOptions = {}): Uint8Array {
   end.writeUInt16LE(options.total ?? parts.length, 10)
   end.writeUInt32LE(directory.length, 12)
   end.writeUInt32LE(offset, 16)
-  return new Uint8Array(Buffer.concat([...local, directory, end, Buffer.alloc(options.tail ?? 0)]))
+  const out: Buffer[] = [Buffer.alloc(options.head ?? 0), ...local, directory]
+  if (options.zip64End) {
+    const decoyAt = offset + directory.length
+    const decoyDirectory = Buffer.concat(decoy)
+    if (options.zip64End.decoy) out.push(decoyDirectory)
+    const recordAt = decoyAt + (options.zip64End.decoy ? decoyDirectory.length : 0)
+    const record = Buffer.alloc(56)
+    record.writeUInt32LE(0x06064b50, 0)
+    record.writeBigUInt64LE(44n, 4)
+    record.writeBigUInt64LE(BigInt(parts.length), 24)
+    record.writeBigUInt64LE(BigInt(parts.length), 32)
+    record.writeBigUInt64LE(BigInt(directory.length), 40)
+    record.writeBigUInt64LE(BigInt(offset), 48)
+    const locator = Buffer.alloc(20)
+    locator.writeUInt32LE(0x07064b50, 0)
+    locator.writeBigUInt64LE(BigInt(recordAt), 8)
+    locator.writeUInt32LE(1, 16)
+    out.push(record, locator)
+    if (options.zip64End.decoy) {
+      end.writeUInt16LE(options.zip64End.decoy.length, 8)
+      end.writeUInt16LE(options.zip64End.decoy.length, 10)
+      end.writeUInt32LE(0xffffffff, 12)
+      end.writeUInt32LE(decoyAt, 16)
+    } else {
+      end.writeUInt16LE(0xffff, 8)
+      end.writeUInt16LE(0xffff, 10)
+      end.writeUInt32LE(0xffffffff, 12)
+      end.writeUInt32LE(0xffffffff, 16)
+    }
+  }
+  return new Uint8Array(Buffer.concat([...out, end, Buffer.alloc(options.tail ?? 0)]))
 }

@@ -78,3 +78,33 @@ describe('a zip that tries to hide its size', () => {
     )
   })
 })
+
+// #229's final review: the directory read as JSZip (mammoth's) reads it.
+describe('a zip’s directory as JSZip reads it', () => {
+  const heavy = { name: 'word/document.xml', data: 'x', claims: 200 << 20 }
+
+  test('every entry while the signature goes on, whatever the counts say', () => {
+    const understated = zip([{ name: 'a', data: 'x' }, heavy], { onDisk: 1, total: 1 })
+    expect(zipEntries(understated)?.map(e => e.name)).toEqual(['a', 'word/document.xml'])
+    expect(unpackedSize(zipEntries(understated) ?? [])).toBe(1 + (200 << 20))
+    // Fewer entries there than the counts say: no directory.
+    expect(zipEntries(zip([{ name: 'a', data: 'x' }], { onDisk: 3, total: 3 }))).toBeNull()
+  })
+
+  test('the ZIP64 end record by its locator, and through a classic record that points to a decoy', () => {
+    const parts = [{ name: 'a', data: 'xyz' }, heavy]
+    expect(zipEntries(zip(parts, { zip64End: {} }))?.map(e => [e.name, e.size])).toEqual([
+      ['a', 3],
+      ['word/document.xml', 200 << 20],
+    ])
+    // Only the classic directory's size is full: JSZip goes to the ZIP64 one, and so does this
+    // (and reads on into the decoy right after it, as JSZip would).
+    const lured = zipEntries(zip(parts, { zip64End: { decoy: ['a'] } })) ?? []
+    expect(lured.some(e => e.name === 'word/document.xml')).toBe(true)
+    expect(unpackedSize(lured)).toBeGreaterThanOrEqual(200 << 20)
+  })
+
+  test('bytes before the archive: no directory where it says (JSZip would read it shifted)', () => {
+    expect(zipEntries(zip([heavy], { head: 16 }))).toBeNull()
+  })
+})

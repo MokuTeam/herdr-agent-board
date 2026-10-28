@@ -97,6 +97,17 @@ describe('a Word document as the worker reads it', () => {
     // The same with 70 KB put after its end: the directory is found all the same.
     const tailed = new Uint8Array([...new Uint8Array(bomb), ...new Uint8Array(70 << 10)])
     expect(await documentOf(tailed.buffer)).toMatchObject({ ok: false, why: 'big' })
+    // A second entry the counts leave out, and bytes before the archive: big, and broken.
+    const understated = zip(
+      [
+        { name: '[Content_Types].xml', data: '<Types/>' },
+        { name: 'word/document.xml', data: 'x', claims: UNPACKED_LIMIT },
+      ],
+      { onDisk: 1, total: 1 },
+    )
+    expect(await documentOf(understated.buffer as ArrayBuffer)).toMatchObject({ ok: false, why: 'big' })
+    const shifted = zip([{ name: 'word/document.xml', data: 'x', claims: UNPACKED_LIMIT }], { head: 16 })
+    expect(await documentOf(shifted.buffer as ArrayBuffer)).toMatchObject({ ok: false, why: 'broken' })
   })
 })
 

@@ -335,7 +335,9 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   document's HTML is then cleaned on the page's own thread, which takes about a second for one of
   tens of thousands of paragraphs. One over 20 MB (a document) or 10 MB (a spreadsheet), unpacked
   to more than 150 MB or 120 MB, read for over a minute, broken or with a password says so,
-  beside the button that opens it with the system. Columns are not limited before the reading: a
+  beside the button that opens it with the system. The unpacked size is the one the zip's own
+  directory gives: a zip that understates a part is unpacked before the library notices (see
+  #230), and only the one-minute limit holds it. Columns are not limited before the reading: a
   sheet of thousands of columns under those limits can take tens of seconds and a gigabyte or more
   of memory on the computer before it is shown or the minute runs out.
 - Images and SVG in the quick look zoom as in Preview and Photos: Ctrl+wheel or a trackpad
