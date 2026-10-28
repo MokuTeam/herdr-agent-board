@@ -264,3 +264,30 @@ test('a key that is no peer id (__proto__ ...) is no pin, no recipient and no ro
   expect(s.svc.view()?.roster.map(p => p.peer)).toEqual([anna.pub])
   expect(({} as Record<string, unknown>).status).toBeUndefined()
 })
+
+test('a second welcome is ignored: no timer leaks, and stop() leaves none (#231)', async () => {
+  const s = setup()
+  s.svc.start()
+  const { ws, me } = await handshake(s)
+  const timers = s.clock.timers()
+  for (let i = 0; i < 3; i++) ws.recv({ t: 'welcome', peer: me, name: 'me', hub: 'hub-1' })
+  await settle()
+  expect(s.clock.timers()).toBe(timers)
+  s.svc.stop()
+  expect(s.clock.timers()).toBe(0)
+})
+
+test('a hub that goes silent and never closes the socket is dropped and retried at once (#231)', async () => {
+  const s = setup()
+  s.svc.start()
+  const { ws } = await handshake(s)
+  s.clock.tick(DEAD_MS + PING_MS) // FakeWs never fires onclose
+  expect(ws.closed).toBe(4000)
+  expect(s.svc.view()).toMatchObject({ state: 'reconnecting', nextAt: expect.any(Number) })
+  ws.hangUp(1006) // a late close of the dropped socket changes nothing
+  expect(s.sockets).toHaveLength(1)
+  s.clock.tick(backoffMs(1, () => 0.5))
+  await until(() => s.sockets.length === 2, 'the next socket')
+  s.svc.stop()
+  expect(s.clock.timers()).toBe(0)
+})

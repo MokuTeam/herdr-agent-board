@@ -176,7 +176,7 @@ export function createTeam({
     nextAt = undefined
   }
 
-  function drop(): void {
+  function drop(code = 1000, reason?: string): void {
     gen++
     clearTimers()
     authed = false
@@ -185,7 +185,7 @@ export function createTeam({
     if (w) {
       w.onopen = w.onmessage = w.onclose = w.onerror = null
       try {
-        w.close(1000)
+        w.close(code, reason)
       } catch {}
     }
   }
@@ -268,15 +268,22 @@ export function createTeam({
         return
       }
       case 'welcome':
+        // Once is enough: a second one would only leak the timers of the first.
+        if (authed) return
         authed = true
         myName = f.name
+        if (upTimer !== undefined) clock.clearTimeout(upTimer)
+        if (pinger !== undefined) clock.clearInterval(pinger)
         upTimer = clock.setTimeout(() => {
           attempt = 0
         }, UP_RESETS_MS)
         pinger = clock.setInterval(() => {
           if (clock.now() - lastRx >= DEAD_MS) {
             log('team: the hub went silent; reconnecting')
-            ws?.close(4000, 'silent')
+            // Not waiting for a close event a dead socket may never send; the socket is let go of
+            // here, so its late onclose (cleared by drop) changes nothing.
+            drop(4000, 'silent')
+            scheduleRetry(undefined)
             return
           }
           frame({ t: 'ping' })
