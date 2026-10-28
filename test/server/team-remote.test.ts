@@ -80,6 +80,11 @@ describe.each([
         ...(cookie ? { cookie } : {}),
       },
     })
+  const teamFiles = (): string[] =>
+    readdirSync(box.dir, { recursive: true })
+      .map(String)
+      .filter(f => f.includes('team-'))
+      .sort()
   /** config.json as it is (null: none; this board was handed its config). */
   const configText = (): string | null => {
     const file = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board', 'config.json')
@@ -133,6 +138,7 @@ describe.each([
 
   test('every /api/team route is refused on the tailnet and the serve listener, in both spellings', async () => {
     const before = configText()
+    const filesBefore = teamFiles()
     for (const [name, ask] of [
       ['tailnet', phone],
       ['serve', browser],
@@ -153,8 +159,10 @@ describe.each([
       expect(await (await ask('/api/peers')).json()).toHaveProperty('peers')
     }
     expect(configText()).toBe(before)
-    // Nothing of the team was written by asking.
-    const dirs = readdirSync(box.dir, { recursive: true }).map(String)
-    expect(dirs.filter(f => f.includes('team-'))).toEqual([])
+    // Nothing of the team was written by asking: without `team` no file at all (with it, the board's
+    // own key is there from its start, and no more).
+    const files = teamFiles()
+    expect(files).toEqual(filesBefore)
+    if (!team) expect(files).toEqual([])
   })
 })

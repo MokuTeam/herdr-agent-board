@@ -122,6 +122,11 @@ export interface BoardPayload {
    */
   accessRev?: number
   /**
+   * The peer network's revision (#231): the panel's cue to fetch GET /api/team again. Only while
+   * config.json's `team` is on; a board without it sends none.
+   */
+  teamRev?: number
+  /**
    * The Omarchy theme the Terminal style takes its colors from (src/adapters/omarchy.ts): a stamp
    * that changes with it, only on a computer with Omarchy. The page loads omarchy-theme.css again.
    */
