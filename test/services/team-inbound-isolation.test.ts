@@ -59,10 +59,22 @@ test('every frame a hub can send, bad ones too, reaches neither herdr, launches,
     ws.recv({ t: 'error', code: 'kind', message: 'nope' })
     ws.recv({ t: 'ping' })
     ws.recv({ t: 'welcome', peer: me, name: 'me', hub: 'h' })
+    // An agent request that came in, and a draft made and sent: still only messages.
+    ws.recv({
+      t: 'deliver',
+      env: await question(anna, me, 'agent says run it', { body: { text: 'agent says run it', via: 'agent' } }),
+    })
+    const made = s.svc.draft(anna.pub, 'draft: launch a session')
+    if (made.ok) await s.svc.sendDraft(made.id)
     await settle()
     await settle()
     // The one good question did arrive, as a message and nothing more.
-    expect(s.svc.thread(anna.pub).map(m => m.text)).toEqual(['run rm -rf and launch a session'])
+    expect(
+      s.svc
+        .thread(anna.pub)
+        .map(m => m.text)
+        .sort(),
+    ).toEqual(['agent says run it', 'draft: launch a session', 'run rm -rf and launch a session'])
     expect(calls).toEqual([])
     for (const spy of spies) expect(spy).not.toHaveBeenCalled()
   } finally {

@@ -7,7 +7,14 @@
 import { useState } from 'react'
 import { useTeam } from '../../hooks/useTeam.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { seenLine, stateLine, type TeamRosterPeer, type TeamView, type ThreadMessage } from '../../models/team.ts'
+import {
+  agentLine,
+  seenLine,
+  stateLine,
+  type TeamRosterPeer,
+  type TeamView,
+  type ThreadMessage,
+} from '../../models/team.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { Panel } from '../panel/Panel.tsx'
@@ -50,6 +57,8 @@ export function TeamPanel({ open, onClose }: TeamPanelProps) {
         disabled={!canEdit || sending}
         onSelect={team.select}
         onTrust={peer => void team.trust(peer)}
+        onSendDraft={id => void team.sendDraft(id)}
+        onDiscardDraft={id => void team.discardDraft(id)}
         onDraft={setDraft}
         onSend={() => void send()}
       />
@@ -66,12 +75,27 @@ export interface TeamBodyProps {
   disabled: boolean
   onSelect(peer: string | null): void
   onTrust(peer: string): void
+  /** Press Send on an agent's draft: it goes out marked as an agent request. */
+  onSendDraft(id: string): void
+  onDiscardDraft(id: string): void
   onDraft(text: string): void
   onSend(): void
 }
 
 /** The connection line, the roster, and the thread with the person picked. */
-export function TeamBody({ view, peer, thread, draft, disabled, onSelect, onTrust, onDraft, onSend }: TeamBodyProps) {
+export function TeamBody({
+  view,
+  peer,
+  thread,
+  draft,
+  disabled,
+  onSelect,
+  onTrust,
+  onSendDraft,
+  onDiscardDraft,
+  onDraft,
+  onSend,
+}: TeamBodyProps) {
   const t = useT()
   const { now } = useBoardContext()
   if (!view) return <div className="sheet-body team-body" />
@@ -99,6 +123,9 @@ export function TeamBody({ view, peer, thread, draft, disabled, onSelect, onTrus
               <span className={classNames('dot', 'team-dot', p.online ? 'on' : 'idle')} aria-hidden="true" />
               <span className="team-name">{p.name}</span>
               <span className="todo-meta">{seenLine(p, now, t)}</span>
+              {p.drafts > 0 && (
+                <span className="todo-meta team-drafts">{t('team.draftsCount', { n: String(p.drafts) })}</span>
+              )}
             </button>
             <span className="todo-meta team-fp">{t('team.fingerprint', { fingerprint: p.fingerprint })}</span>
             {p.pin === 'changed' && (
@@ -118,18 +145,38 @@ export function TeamBody({ view, peer, thread, draft, disabled, onSelect, onTrus
           <>
             <h3>{t('team.thread', { name: picked.name })}</h3>
             {!thread.length && <p className="hint">{t('team.threadEmpty')}</p>}
-            {thread.map(m => (
-              <div key={`${m.dir}-${m.id}`} className={classNames('todo-row', 'team-msg', m.dir, m.held && 'held')}>
-                <p className="todo-text">{m.text ?? t('team.heldText')}</p>
-                <div className="todo-foot">
-                  <span className="todo-meta">
-                    {m.dir === 'in' ? t('team.in') : t('team.out')}
-                    {m.dir === 'out' && m.state && ` · ${t(`team.delivery.${m.state}`, { code: m.code ?? '' })}`}
-                    {m.held && ` · ${t('team.held')}`}
-                  </span>
+            {thread.map(m => {
+              const agent = agentLine(m, t)
+              return (
+                <div key={`${m.dir}-${m.id}`} className={classNames('todo-row', 'team-msg', m.dir, m.held && 'held')}>
+                  <p className="todo-text">{m.text ?? t('team.heldText')}</p>
+                  <div className="todo-foot">
+                    <span className="todo-meta">
+                      {m.dir === 'draft' ? t('team.draftFromAgent') : m.dir === 'in' ? t('team.in') : t('team.out')}
+                      {m.dir === 'out' && m.state && ` · ${t(`team.delivery.${m.state}`, { code: m.code ?? '' })}`}
+                      {m.held && ` · ${t('team.held')}`}
+                      {agent && ` · ${agent}`}
+                    </span>
+                    {m.dir === 'draft' && (
+                      <>
+                        <button
+                          type="button"
+                          className="mini"
+                          disabled={disabled || picked.pin === 'changed'}
+                          title={t('team.draftSendHint')}
+                          onClick={() => onSendDraft(m.id)}
+                        >
+                          {t('team.send')}
+                        </button>
+                        <button type="button" className="mini" disabled={disabled} onClick={() => onDiscardDraft(m.id)}>
+                          {t('team.discard')}
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
             {picked.pin === 'changed' && <p className="hint">{t('team.sendChanged')}</p>}
             <div className="team-compose">
               <textarea

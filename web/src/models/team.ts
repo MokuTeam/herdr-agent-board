@@ -2,7 +2,7 @@
 // (src/server/routes/team.ts, the shapes are services/team-hub.ts's), and the lines the panel
 // draws from them. The panel exists only on the local board's page, while the payload carries
 // `teamRev` (config.json's `team` is on).
-import { OUT_STATES, type OutState } from '../../../src/core/team-wire.ts'
+import { OUT_STATES, type OutState, VIAS } from '../../../src/core/team-wire.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import type { TeamRosterPeer, TeamState, TeamView, ThreadMessage } from '../../../src/services/team-hub.ts'
 import { ago } from './card.ts'
@@ -21,6 +21,7 @@ const isRosterPeer = (v: unknown): v is TeamRosterPeer =>
   typeof v.online === 'boolean' &&
   (v.lastSeen === null || typeof v.lastSeen === 'number') &&
   typeof v.fingerprint === 'string' &&
+  typeof v.drafts === 'number' &&
   (v.pin === 'trusted' || v.pin === 'changed')
 
 export const isTeamView = (v: unknown): v is TeamView =>
@@ -42,12 +43,14 @@ const isDelivery = (v: unknown): v is OutState => OUT_STATES.some(s => s === v)
 const isThreadMessage = (v: unknown): v is ThreadMessage =>
   isObj(v) &&
   typeof v.id === 'string' &&
-  (v.dir === 'in' || v.dir === 'out') &&
+  (v.dir === 'in' || v.dir === 'out' || v.dir === 'draft') &&
   (typeof v.text === 'string' || (v.text === null && v.held === true)) &&
   typeof v.ts === 'string' &&
   (v.state === undefined || isDelivery(v.state)) &&
   (v.code === undefined || typeof v.code === 'string') &&
-  (v.held === undefined || typeof v.held === 'boolean')
+  (v.held === undefined || typeof v.held === 'boolean') &&
+  (v.via === undefined || VIAS.some(x => x === v.via)) &&
+  (v.agentOf === undefined || typeof v.agentOf === 'string')
 
 /** GET /api/team/thread/<peer>. */
 export const isThread = (v: unknown): v is { peer: string; messages: ThreadMessage[] } =>
@@ -76,11 +79,19 @@ export function stateLine(view: TeamView, t: Translator): string {
 export const seenLine = (p: TeamRosterPeer, now: number, t: Translator): string =>
   p.online ? t('team.online') : p.lastSeen ? t('team.lastSeen', { when: ago(p.lastSeen, now, t) }) : t('team.neverSeen')
 
+/** The label on a message an agent asked for: whose agent, and that its person approved. The name is the roster's, never the message's. */
+export const agentLine = (m: ThreadMessage, t: Translator): string | null =>
+  m.via !== 'agent' || m.dir === 'draft'
+    ? null
+    : m.dir === 'in'
+      ? t('team.agentRequest', { name: m.agentOf ?? '' })
+      : t('team.agentRequestOut')
+
 /** What a refused send says (the route's error code). */
 export const sendError = (code: unknown, t: Translator): string =>
   t('team.sendFailed', {
     why:
-      code === 'peer' || code === 'text' || code === 'too_big' || code === 'changed'
+      code === 'peer' || code === 'text' || code === 'too_big' || code === 'changed' || code === 'draft'
         ? t(`team.err.${code}`)
         : String(code ?? ''),
   })

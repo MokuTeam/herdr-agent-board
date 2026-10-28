@@ -12,9 +12,18 @@ import {
   generateKey,
   type KeyPair,
   type OutState,
+  type Via,
 } from '../core/team.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
-import { stateDir, teamAuditFile, teamInboxFile, teamKeyFile, teamOutboxFile, teamPinsFile } from './paths.ts'
+import {
+  stateDir,
+  teamAuditFile,
+  teamDraftsFile,
+  teamInboxFile,
+  teamKeyFile,
+  teamOutboxFile,
+  teamPinsFile,
+} from './paths.ts'
 
 /** Messages kept per peer, in each direction. */
 export const KEEP_PER_PEER = 500
@@ -73,6 +82,8 @@ export interface InboxItem {
   text: string
   receivedAt: number
   held: boolean
+  /** The envelope said an agent asked for it and its sender approved. */
+  via?: Via
   /** When the signed ack went out (null: not yet, or the hub was away). */
   ackedAt: number | null
 }
@@ -191,6 +202,54 @@ export function refuseOut(id: string, code: ErrorCode, at: number): boolean {
     return hit
   })
 }
+
+// ---- Drafts
+
+/** What an agent drafted for a person to send; nothing leaves the board until the person presses Send. */
+export interface Draft {
+  id: string
+  to: string
+  text: string
+  createdAt: number
+}
+type DraftsFile = { v: 1; drafts: Record<string, Draft> }
+const isDrafts = (v: unknown): v is DraftsFile => isRecord(v) && v.v === 1 && isRecord(v.drafts)
+
+/** The drafts, oldest first. Creates nothing. */
+export const readDrafts = (): Draft[] =>
+  Object.values(bare(readJson(teamDraftsFile(), isDrafts)?.drafts ?? {})).sort((a, b) => a.createdAt - b.createdAt)
+
+function changeDrafts<R>(fn: (drafts: Record<string, Draft>) => R): R {
+  mkdirSync(stateDir(), { recursive: true })
+  let result: R | undefined
+  updateJson(
+    teamDraftsFile(),
+    (cur: DraftsFile | null) => {
+      const drafts = bare(cur?.drafts ?? {})
+      result = fn(drafts)
+      return { v: 1 as const, drafts }
+    },
+    isDrafts,
+    PRIVATE,
+  )
+  return result as R
+}
+
+/** Keeps a draft; false when `max` are waiting already (the file is not written then). */
+export const addDraft = (draft: Draft, max: number): boolean =>
+  changeDrafts(drafts => {
+    if (Object.keys(drafts).length >= max) return false
+    drafts[draft.id] = draft
+    return true
+  })
+
+/** Removes a draft and gives it back, null when there is none (a second Send finds nothing). */
+export const takeDraft = (id: string): Draft | null =>
+  changeDrafts(drafts => {
+    const d = Object.hasOwn(drafts, id) ? drafts[id] : undefined
+    delete drafts[id]
+    return d ?? null
+  })
 
 // ---- Pins
 

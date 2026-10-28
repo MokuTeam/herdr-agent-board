@@ -36,8 +36,24 @@ const VIEW: TeamView = {
   me: { peer: 'M'.repeat(43), fingerprint: 'aaaa bbbb cccc dddd', name: 'Dima' },
   hub: 'wss://hub.example.com',
   roster: [
-    { peer: ANA, name: 'Ana', online: true, lastSeen: null, fingerprint: '1111 2222 3333 4444', pin: 'trusted' },
-    { peer: BOB, name: 'Bob', online: false, lastSeen: 1000, fingerprint: '5555 6666 7777 8888', pin: 'changed' },
+    {
+      peer: ANA,
+      name: 'Ana',
+      online: true,
+      lastSeen: null,
+      fingerprint: '1111 2222 3333 4444',
+      pin: 'trusted',
+      drafts: 0,
+    },
+    {
+      peer: BOB,
+      name: 'Bob',
+      online: false,
+      lastSeen: 1000,
+      fingerprint: '5555 6666 7777 8888',
+      pin: 'changed',
+      drafts: 0,
+    },
   ],
 }
 
@@ -58,6 +74,8 @@ function props(over: Partial<TeamBodyProps> = {}): TeamBodyProps {
     disabled: false,
     onSelect() {},
     onTrust() {},
+    onSendDraft() {},
+    onDiscardDraft() {},
     onDraft() {},
     onSend() {},
     ...over,
@@ -229,6 +247,112 @@ describe('Team panel', () => {
     expect(isTeamView({ ...VIEW, roster: [{ peer: 'x' }] })).toBe(false)
     expect(isThread({ peer: ANA, messages: THREAD })).toBe(true)
     expect(isThread({ peer: ANA, messages: [{ id: 1 }] })).toBe(false)
+  })
+})
+
+describe('agent drafts and agent requests (#231)', () => {
+  const DRAFT: ThreadMessage = { id: 'd1', dir: 'draft', text: 'is the build green?', ts: '2026-10-28T11:00:00Z' }
+  const buttons = (nodes: Node[], label: string) => findAll(nodes, el => el.tag === 'button' && text([el]) === label)
+
+  test('a draft shows in the thread labelled "draft from an agent" with Send and Discard; the roster row counts it', () => {
+    const nodes = render(props({ peer: ANA, thread: [DRAFT] }))
+    const all = text(nodes)
+    expect(all).toContain('is the build green?')
+    expect(all).toContain('draft from an agent')
+    expect(buttons(nodes, 'Discard')).toHaveLength(1)
+    // The composer's Send and the draft's Send.
+    expect(buttons(nodes, 'Send')).toHaveLength(2)
+    const counted = { ...VIEW, roster: VIEW.roster.map(p => (p.peer === ANA ? { ...p, drafts: 2 } : p)) }
+    expect(text(render(props({ view: counted })))).toContain('2 draft(s) from an agent')
+    expect(text(render(props({ view: counted }), 'ru'))).toContain('черновиков от агента: 2')
+    expect(text(render(props({ peer: ANA, thread: [DRAFT] }), 'ru'))).toContain('черновик от агента')
+  })
+
+  test('Send and Discard on a draft call back with its id; Send waits while the key changed or editing is off', () => {
+    const calls: string[] = []
+    const over = {
+      onSendDraft: (id: string) => calls.push(`send ${id}`),
+      onDiscardDraft: (id: string) => calls.push(`discard ${id}`),
+    }
+    const p = props({ peer: ANA, thread: [DRAFT], ...over })
+    let hosts: Host[] = []
+    function Probe() {
+      hosts = hostElements(<TeamBody {...p} />)
+      return null
+    }
+    renderInBoard(<Probe />, board())
+    const press = (label: string) => {
+      const hit = hosts.filter(h => h.tag === 'button' && h.props.children === label)
+      const click = hit[0]?.props.onClick
+      if (typeof click !== 'function') throw new Error(`no ${label} button`)
+      click()
+    }
+    press('Send') // the draft's comes first, the composer's after the thread
+    press('Discard')
+    expect(calls).toEqual(['send d1', 'discard d1'])
+    const bob = render(props({ peer: BOB, thread: [{ ...DRAFT, id: 'd2' }] }))
+    expect(buttons(bob, 'Send').every(b => b.attrs.has('disabled'))).toBe(true)
+    expect(
+      buttons(render(props({ peer: ANA, thread: [DRAFT], disabled: true })), 'Discard')[0]?.attrs.has('disabled'),
+    ).toBe(true)
+  })
+
+  test('an agent request is labelled with who approved it, on both sides, in both languages; a plain message is not', () => {
+    const incoming: ThreadMessage = {
+      id: 'a1',
+      dir: 'in',
+      text: 'deploy?',
+      ts: '2026-10-28T11:01:00Z',
+      via: 'agent',
+      agentOf: 'Ana',
+    }
+    const outgoing: ThreadMessage = {
+      id: 'a2',
+      dir: 'out',
+      text: 'ok?',
+      ts: '2026-10-28T11:02:00Z',
+      state: 'acked',
+      via: 'agent',
+    }
+    const plain: ThreadMessage = {
+      id: 'a3',
+      dir: 'out',
+      text: 'typed by hand',
+      ts: '2026-10-28T11:03:00Z',
+      state: 'acked',
+    }
+    const all = text(render(props({ peer: ANA, thread: [incoming, outgoing, plain] })))
+    expect(all).toContain('from them · Ana’s agent · approved by Ana')
+    expect(all).toContain('from you · received · your agent · approved by you')
+    expect(all.match(/ agent · approved by /g)).toHaveLength(2)
+    expect(text(render(props({ peer: ANA, thread: [incoming] }), 'ru'))).toContain('агент Ana · одобрил Ana')
+    expect(isThread({ peer: ANA, messages: [incoming, DRAFT] })).toBe(true)
+    expect(isThread({ peer: ANA, messages: [{ ...incoming, via: 'human' }] })).toBe(false)
+  })
+
+  test('through the source: send is POST /api/team/draft/<id>/send, discard /discard, both with X-Board and no text of their own', async () => {
+    const calls = answers([200, { ok: true, id: 'x' }], [200, VIEW], [200, { ok: true }], [200, VIEW])
+    const source = teamSource({ t: () => t, toast: () => {} })
+    const id = '11111111-1111-4111-8111-111111111111'
+    expect(await source.sendDraft(id)).toBe(true)
+    await source.discardDraft(id)
+    const posts = sent(calls).filter(c => c[1] === 'POST')
+    expect(posts).toEqual([
+      [`/api/team/draft/${id}/send`, 'POST', '1', {}],
+      [`/api/team/draft/${id}/discard`, 'POST', '1', {}],
+    ])
+    // A message typed in the panel carries no `via`.
+    const typed = answers([200, { ok: true, id: 'y' }], [200, VIEW])
+    await source.send(ANA, 'by hand')
+    expect(sent(typed)[0]).toEqual(['/api/team/send', 'POST', '1', { to: ANA, text: 'by hand' }])
+  })
+
+  test('a refused draft send says why', async () => {
+    const toasts: string[] = []
+    answers([404, { ok: false, error: 'draft' }], [200, VIEW])
+    const source = teamSource({ t: () => t, toast: x => void toasts.push(x) })
+    expect(await source.sendDraft('11111111-1111-4111-8111-111111111111')).toBe(false)
+    expect(toasts).toEqual(['Not sent: that draft is gone'])
   })
 })
 

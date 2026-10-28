@@ -1807,6 +1807,7 @@ only; its fingerprint is what the others compare.
 ```
 board team join hab-xxxx-xxxx-xxxx-xxxx-xxxx-xxxx --hub ws://hub.example:7443 --name Ana
 board team roster
+board team draft Roman "is the build green?"
 ```
 
 `join` reaches the hub first and writes `team` and the key only once the hub says welcome; a bad
@@ -1820,6 +1821,17 @@ fingerprints, and the messages with the person you pick. Each question you sent 
 got: queued at the hub, delivered, received (their board's signed ack) or expired (it waits up to
 24 hours by default). A person whose key changed is marked, and what comes from the new key is
 held back until you press Trust.
+
+**Asking an agent to draft.** Tell your agent: `board team draft Roman "is the build green?"`
+(a name from the roster, or a peer id). It only leaves a draft in the panel, under Roman's thread
+and counted on his roster row, marked "draft from an agent", with Send and Discard. Nothing leaves
+this board until you press Send; Discard drops it. There is no command that sends: at most 20
+drafts wait (a new one is refused until you settle some), each up to the same 4000 characters as a
+message. What you send from a draft goes out marked `via: "agent"` inside the signed message, which
+the hub relays and cannot strip: Roman sees "Ana's agent · approved by Ana" (the name is Roman's own roster entry for your key,
+never anything in the message), and you see "your agent · approved by you" on your own copy. A message you type in the panel carries no mark. This does not stop an agent from
+calling the board's local `/api/team/send` itself (#224, below); the draft is the sanctioned way,
+not a lock.
 
 **Running the hub.** `bun hub/src/main.ts`: see [hub/README.md](hub/README.md) for the options,
 invites, revoking a member and what it keeps. It is not part of the plugin; run it on one machine

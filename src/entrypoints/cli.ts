@@ -113,7 +113,7 @@ import { defaultDeps } from '../services/deps.ts'
 import { type SleepOutcome, sessionsFor, sleepMany } from '../services/sleep.ts'
 import { currentWakeMode } from '../services/wake/mode.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id>] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> | done [text] | clear | favorite [off] | list | cats | remind <when> "<text>" [--idle] | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | fork [--name "<Name>"] ["<note>"] | schedule [--all] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id>] | tunnel [on | off | test] | doctor | presence [here | away] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | todo add [--mine] "<text>" | todo done <id> | todo list | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id>] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
@@ -472,7 +472,8 @@ function presence(): void {
   console.log(`ok · ${changed ? '' : 'already '}${p.state === 'away' ? 'away' : 'here'}`)
 }
 
-const TEAM_USAGE = 'usage: board team join <invite> --hub <ws://host:7443> --name <name> | board team roster'
+const TEAM_USAGE =
+  'usage: board team join <invite> --hub <ws://host:7443> --name <name> | board team roster | board team draft <name|peer-id> "<text>"'
 const TEAM_JOIN_MS = 10_000
 
 type KeyPair = import('../core/team.ts').KeyPair
@@ -526,6 +527,59 @@ function joinAt(
 }
 
 /**
+ * `board team draft <name|peer-id> "<text>"`: leaves a draft in the Team panel for the person to
+ * send. The name is looked up in the roster the running board has (a name that fits two people, or
+ * none, is an error that lists the names); nothing is sent from here.
+ */
+async function draftTo(
+  T: typeof import('../core/team.ts'),
+  webPort: number,
+  roster: unknown[],
+  who: string,
+  text: string,
+): Promise<void> {
+  const peers = roster.filter(isRecord).filter(p => typeof p.peer === 'string' && typeof p.name === 'string')
+  const names = peers.map(p => T.printable(String(p.name))).join(', ') || 'nobody yet'
+  const byId = peers.filter(p => p.peer === who)
+  const exact = peers.filter(p => p.name === who)
+  const loose = peers.filter(p => String(p.name).toLowerCase() === who.toLowerCase())
+  const hit = byId.length ? byId : exact.length ? exact : loose
+  if (hit.length > 1)
+    throw new Error(
+      `${T.printable(who)} fits more than one person (${names}): use the peer id from \`board team roster\``,
+    )
+  const target = hit[0]
+  if (!target) throw new Error(`nobody called ${T.printable(who)} on the team. On it: ${names}`)
+  let res: Response
+  try {
+    res = await fetch(`http://127.0.0.1:${webPort}/api/team/draft`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify({ to: target.peer, text }),
+      signal: AbortSignal.timeout(5000),
+    })
+  } catch {
+    throw new Error('the board does not run: open it first (herdr plugin action invoke agent-board.open)')
+  }
+  const reply: unknown = await res.json().catch(() => null)
+  if (!res.ok || !isRecord(reply) || reply.ok !== true) {
+    const why = isRecord(reply) ? String(reply.error ?? res.status) : String(res.status)
+    const text_ =
+      why === 'full'
+        ? 'too many drafts are waiting: send or discard some in the Team panel first'
+        : why === 'text'
+          ? `the text is empty or longer than ${T.MAX_TEXT} characters`
+          : why === 'peer'
+            ? 'that person is not on the team any more'
+            : why
+    throw new Error(`no draft made: ${text_}`)
+  }
+  console.log(
+    `ok · draft for ${T.printable(String(target.name))} is in the Team panel; nothing is sent until a person presses Send`,
+  )
+}
+
+/**
  * `board team join <invite> --hub <url> --name <name>` and `board team roster` (#231). Join makes
  * this board's key (kept only once the hub has said welcome), joins with the invite and writes
  * `team` into config.json; the running board connects within seconds. --name is read off the
@@ -556,7 +610,7 @@ async function team(): Promise<void> {
       `ok · joined ${hub} as ${name} · your key ${T.fingerprint(key.pub)} · the running board connects in a few seconds`,
     )
   }
-  if (op !== 'roster' || more.length) throw new Error(TEAM_USAGE)
+  if (op === 'draft' ? more.length !== 2 : op !== 'roster' || more.length) throw new Error(TEAM_USAGE)
   if (!T.teamConfig(cfg.team)) {
     return console.log(
       'team is off (no "team" in config.json; `board team join <invite> --hub <url> --name <name>` turns it on)',
@@ -576,6 +630,7 @@ async function team(): Promise<void> {
       `${String(view.hub)} · ${String(view.state)} · you: ${String(me.name ?? '')} ${String(me.fingerprint ?? '')}`,
     ),
   )
+  if (op === 'draft') return draftTo(T, webPort, view.roster, more[0] ?? '', more[1] ?? '')
   if (!view.roster.length) return console.log('nobody else on the team yet')
   const now = Date.now()
   for (const p of view.roster) {

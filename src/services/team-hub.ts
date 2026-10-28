@@ -6,6 +6,7 @@
 // team-inbound-isolation.test.ts keeps it so). With `team` unset, or not an object with a ws:// or
 // wss:// hub, no socket is opened, no timer runs, no file is read or written and view() is null.
 import {
+  addDraft,
   addInbox,
   addOutbox,
   audit,
@@ -15,6 +16,7 @@ import {
   markAcked,
   type OutboxItem,
   readAllOutbox,
+  readDrafts,
   readInbox,
   readKey,
   readOutbox,
@@ -22,6 +24,7 @@ import {
   refuseOut,
   releaseHeld,
   setOutState,
+  takeDraft,
 } from '../adapters/team-store.ts'
 import {
   ackBytes,
@@ -33,7 +36,9 @@ import {
   envelopeBytes,
   type Frame,
   fingerprint,
+  isMessageId,
   isPeerId,
+  MAX_DRAFTS,
   MAX_TEXT,
   type OutState,
   parseFrame,
@@ -42,6 +47,7 @@ import {
   TEAM_PROTOCOL,
   type TeamConfig,
   teamConfig,
+  type Via,
   verify,
 } from '../core/team.ts'
 import { backoffMs } from '../core/tunnel.ts'
@@ -67,6 +73,8 @@ export interface TeamRosterPeer {
   lastSeen: number | null
   fingerprint: string
   pin: 'trusted' | 'changed'
+  /** Drafts an agent made for this person that wait for Send or Discard. */
+  drafts: number
 }
 
 export interface TeamView {
@@ -82,7 +90,8 @@ export interface TeamView {
 /** One line of a thread with a peer, either way. */
 export interface ThreadMessage {
   id: string
-  dir: 'in' | 'out'
+  /** draft: made by an agent, waiting for the person to press Send (id: the draft's). */
+  dir: 'in' | 'out' | 'draft'
   /** null: from a key that changed, not shown until it is trusted. */
   text: string | null
   ts: string
@@ -92,9 +101,18 @@ export interface ThreadMessage {
   code?: ErrorCode
   /** in: from a key that changed, kept back until it is trusted. */
   held?: boolean
+  /** in or out: an agent asked for it and the sender approved (it is in the signed body). */
+  via?: Via
+  /**
+   * in, via agent: who the sender is called here, from this board's own roster or pins for the verified
+   * key (env.from), else the short fingerprint. Never from the message.
+   */
+  agentOf?: string
 }
 
 export type SendResult = { ok: true; id: string } | { ok: false; error: string }
+
+export type DraftResult = { ok: true; id: string } | { ok: false; error: string }
 
 export interface TeamService {
   /** The view, null while `team` is not on in config.json. */
@@ -103,6 +121,12 @@ export interface TeamService {
   thread(peer: string): ThreadMessage[]
   /** A question to a peer in the roster whose key is trusted ('changed' otherwise); kept and sent (again on every reconnect until it is answered by the hub). */
   send(to: string, text: string): Promise<SendResult>
+  /** An agent's draft for a person on the roster: kept for the person to Send or Discard, never sent by the service. */
+  draft(to: string, text: string): DraftResult
+  /** Sends a draft as a question marked `via: "agent"`; the draft stays when the send is refused. */
+  sendDraft(id: string): Promise<SendResult>
+  /** Drops a draft; false when there is none. */
+  discardDraft(id: string): boolean
   /** Releases what was held back from a peer whose key changed, and pins the new key. */
   trust(peer: string): boolean
   /** Changes with every news for the page; null while off. */
@@ -396,6 +420,7 @@ export function createTeam({
       text: env.body.text,
       receivedAt: clock.now(),
       held,
+      ...(env.body.via && { via: env.body.via }),
       ackedAt: null,
     })
     if (fresh) {
@@ -407,6 +432,36 @@ export function createTeam({
     const sig = await sign(me.pkcs8, ackBytes({ by: me.peer, id: env.id, to: env.from, ts }))
     frame({ t: 'ack', id: env.id, ts, sig })
     markAcked(env.from, env.id, clock.now())
+  }
+
+  async function sendQuestion(to: string, text: string, via?: Via): Promise<SendResult> {
+    if (!config()) return { ok: false, error: 'off' }
+    if (!isPeerId(to)) return { ok: false, error: 'peer' }
+    const body = text.trim()
+    if (!body || body.length > MAX_TEXT) return { ok: false, error: 'text' }
+    if (!roster.some(p => p.peer === to)) return { ok: false, error: 'peer' }
+    // A key that changed under a pinned name may be someone else's: nothing goes to it until Trust.
+    if (readPins()[to]?.status === 'changed') return { ok: false, error: 'changed' }
+    const key = await ensureKey()
+    const open = {
+      v: TEAM_PROTOCOL,
+      id: crypto.randomUUID(),
+      from: key.pub,
+      to,
+      kind: 'question' as const,
+      reply_to: null,
+      ts: new Date(clock.now()).toISOString(),
+      ttl_s: DEFAULT_TTL_S,
+      body: via ? { text: body, via } : { text: body },
+    }
+    const env: Envelope = { ...open, sig: await sign(key.pkcs8, envelopeBytes(open)) }
+    // What the hub would refuse (shape, the 16 KiB of the encoded envelope) is refused here, not queued.
+    const checked = checkEnvelope(env)
+    if (!checked.ok) return { ok: false, error: checked.code }
+    addOutbox({ env, state: 'queued', at: clock.now() })
+    if (authed) frame({ t: 'send', env })
+    changed()
+    return { ok: true, id: env.id }
   }
 
   function begin(): void {
@@ -422,6 +477,7 @@ export function createTeam({
       const c = config()
       if (!c) return null
       const pins = readPins()
+      const drafts = readDrafts()
       const peer = me?.peer ?? readKey()?.pub ?? null
       return {
         state,
@@ -436,11 +492,14 @@ export function createTeam({
           lastSeen: p.last_seen,
           fingerprint: fingerprint(p.peer),
           pin: pins[p.peer]?.status ?? 'trusted',
+          drafts: drafts.filter(d => d.to === p.peer).length,
         })),
       }
     },
     thread(peer) {
       if (!config() || !isPeerId(peer)) return []
+      const known = roster.find(p => p.peer === peer)?.name ?? readPins()[peer]?.name
+      const who = known ?? fingerprint(peer).slice(0, 14).trim()
       const incoming = readInbox(peer).map(
         (i: InboxItem): ThreadMessage => ({
           id: i.id,
@@ -448,6 +507,7 @@ export function createTeam({
           text: i.held ? null : i.text,
           ts: i.ts,
           held: i.held,
+          ...(i.via && { via: i.via, agentOf: who }),
         }),
       )
       const outgoing = readOutbox(peer).map(
@@ -458,38 +518,46 @@ export function createTeam({
           ts: i.env.ts,
           state: i.state,
           ...(i.code && { code: i.code }),
+          ...(i.env.body.via && { via: i.env.body.via }),
         }),
       )
-      return [...incoming, ...outgoing].sort((a, b) => a.ts.localeCompare(b.ts))
+      const drafts = readDrafts()
+        .filter(d => d.to === peer)
+        .map((d): ThreadMessage => ({ id: d.id, dir: 'draft', text: d.text, ts: new Date(d.createdAt).toISOString() }))
+      return [...[...incoming, ...outgoing].sort((a, b) => a.ts.localeCompare(b.ts)), ...drafts]
     },
-    async send(to, text) {
+    send: (to, text) => sendQuestion(to, text),
+    draft(to, text) {
       if (!config()) return { ok: false, error: 'off' }
-      if (!isPeerId(to)) return { ok: false, error: 'peer' }
+      if (!isPeerId(to) || !roster.some(p => p.peer === to)) return { ok: false, error: 'peer' }
       const body = text.trim()
       if (!body || body.length > MAX_TEXT) return { ok: false, error: 'text' }
-      if (!roster.some(p => p.peer === to)) return { ok: false, error: 'peer' }
-      // A key that changed under a pinned name may be someone else's: nothing goes to it until Trust.
-      if (readPins()[to]?.status === 'changed') return { ok: false, error: 'changed' }
-      const key = await ensureKey()
-      const open = {
-        v: TEAM_PROTOCOL,
-        id: crypto.randomUUID(),
-        from: key.pub,
-        to,
-        kind: 'question' as const,
-        reply_to: null,
-        ts: new Date(clock.now()).toISOString(),
-        ttl_s: DEFAULT_TTL_S,
-        body: { text: body },
-      }
-      const env: Envelope = { ...open, sig: await sign(key.pkcs8, envelopeBytes(open)) }
-      // What the hub would refuse (shape, the 16 KiB of the encoded envelope) is refused here, not queued.
-      const checked = checkEnvelope(env)
-      if (!checked.ok) return { ok: false, error: checked.code }
-      addOutbox({ env, state: 'queued', at: clock.now() })
-      if (authed) frame({ t: 'send', env })
+      const id = crypto.randomUUID()
+      if (!addDraft({ id, to, text: body, createdAt: clock.now() }, MAX_DRAFTS)) return { ok: false, error: 'full' }
+      audit('draft', to, { id })
       changed()
-      return { ok: true, id: env.id }
+      return { ok: true, id }
+    },
+    async sendDraft(id) {
+      if (!config()) return { ok: false, error: 'off' }
+      if (!isMessageId(id)) return { ok: false, error: 'draft' }
+      // Taken out first, so a second press finds nothing; put back when the send is refused.
+      const d = takeDraft(id)
+      if (!d) return { ok: false, error: 'draft' }
+      const r = await sendQuestion(d.to, d.text, 'agent')
+      if (!r.ok) addDraft(d, Number.MAX_SAFE_INTEGER)
+      else audit('draft_sent', d.to, { id })
+      changed()
+      return r
+    },
+    discardDraft(id) {
+      if (!config() || !isMessageId(id)) return false
+      const d = takeDraft(id)
+      if (d) {
+        audit('draft_discarded', d.to, { id })
+        changed()
+      }
+      return d !== null
     },
     trust(peer) {
       if (!config() || !isPeerId(peer)) return false

@@ -17,6 +17,21 @@ afterEach(() => h.stop())
 
 const MARKER = 'zebra-marker-7731'
 
+test('a body with via "agent" is relayed unchanged, signature and all (#231)', async () => {
+  const a = await h.join(A, 'anna')
+  const b = await h.join(B, 'ben')
+  const env = await question(A, B.pub, 'asked by an agent', { body: { text: 'asked by an agent', via: 'agent' } })
+  a.send({ t: 'send', env })
+  const d = await b.take('deliver')
+  assert.deepEqual(d.env, env)
+  assert.equal(d.env.body.via, 'agent')
+  assert.equal(await verify(A.pub, envelopeBytes(d.env), d.env.sig), true)
+  // A via the board never writes is refused by the hub, not relayed.
+  const bad = await question(A, B.pub, 'x', { body: { text: 'x', via: 'human' } as never })
+  a.send({ t: 'send', env: bad })
+  assert.equal((await a.take('error')).code, 'bad_frame')
+})
+
 test('offline recipient: queued, delivered on connect, signed ack comes back as acked', async () => {
   const a = await h.join(A, 'anna')
   const b0 = await h.join(B, 'ben')

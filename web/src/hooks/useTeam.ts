@@ -1,6 +1,6 @@
 // The Team panel's view (GET /api/team, local only), the thread with the selected peer (GET
 // /api/team/thread/<peer>) and its two changes (POST /api/team/send { to, text }, POST
-// /api/team/trust { peer }). As Remote access (hooks/useAccess.ts), the payload carries only
+// /api/team/trust { peer }), and an agent's drafts (POST /api/team/draft/<id>/send or /discard). As Remote access (hooks/useAccess.ts), the payload carries only
 // `teamRev`: the view is fetched when the panel opens and again whenever that number changes while
 // it is open. Nothing is asked while the panel is closed, or without `teamRev` (offersTeam).
 import { useEffect, useState } from 'react'
@@ -26,6 +26,9 @@ export interface TeamSource {
   /** true: sent (kept at the hub's door, delivery follows); false: refused, and toasted. */
   send(to: string, text: string): Promise<boolean>
   trust(peer: string): Promise<void>
+  /** Sends an agent's draft (it goes marked as an agent request); false: refused, and toasted. */
+  sendDraft(id: string): Promise<boolean>
+  discardDraft(id: string): Promise<void>
   /** The panel open or not, and the payload's teamRev: fetched on opening and on each new revision while open. */
   sync(open: boolean, rev: number): void
 }
@@ -81,6 +84,25 @@ export function teamSource(deps: TeamDeps): TeamSource {
       }
       void load()
     },
+    async sendDraft(id) {
+      try {
+        await api.post(`/api/team/draft/${encodeURIComponent(id)}/send`, {})
+      } catch (err) {
+        deps.toast(sendError(err instanceof ApiError ? err.reply.error : undefined, deps.t()), true)
+        void load()
+        return false
+      }
+      void load()
+      return true
+    },
+    async discardDraft(id) {
+      try {
+        await api.post(`/api/team/draft/${encodeURIComponent(id)}/discard`, {})
+      } catch (err) {
+        deps.toast(errorText(err, deps.t()), true)
+      }
+      void load()
+    },
     sync(nextOpen, nextRev) {
       if (nextOpen && (!open || nextRev !== rev)) void load()
       open = nextOpen
@@ -90,7 +112,9 @@ export function teamSource(deps: TeamDeps): TeamSource {
 }
 
 /** The panel's view and thread while `open`, and how to change them. Idle on a page that does not offer Team. */
-export function useTeam(open: boolean): TeamNow & Pick<TeamSource, 'select' | 'send' | 'trust'> {
+export function useTeam(
+  open: boolean,
+): TeamNow & Pick<TeamSource, 'select' | 'send' | 'trust' | 'sendDraft' | 'discardDraft'> {
   const t = useT()
   const { data, toast } = useBoardContext()
   const latest = useLatest({ t, toast })
@@ -101,5 +125,12 @@ export function useTeam(open: boolean): TeamNow & Pick<TeamSource, 'select' | 's
   const offered = offersTeam(data)
   const rev = data?.teamRev ?? 0
   useEffect(() => source.sync(open && offered, rev), [source, open, offered, rev])
-  return { ...state, select: source.select, send: source.send, trust: source.trust }
+  return {
+    ...state,
+    select: source.select,
+    send: source.send,
+    trust: source.trust,
+    sendDraft: source.sendDraft,
+    discardDraft: source.discardDraft,
+  }
 }

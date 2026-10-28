@@ -6,7 +6,7 @@
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { generateKey, type KeyPair } from '../../src/core/team.ts'
+import { envelopeBytes, generateKey, type KeyPair, verify } from '../../src/core/team.ts'
 import { ackOf, type Client, type Harness, question, startHarness } from '../hub/harness.ts'
 import { serveBoard, sharedSandbox } from '../support/board-server.ts'
 import type { Sandbox } from '../support/sandbox.ts'
@@ -69,7 +69,14 @@ describe.each([
     expect(await answer(fetch(`${url}/api/team`))).toEqual([404, { error: 'not found' }])
     expect(await answer(fetch(`${url}/api/team/thread/x`))).toEqual([404, { error: 'not found' }])
     expect(await answer(fetch(`${url}/api/team/thread/${'A'.repeat(43)}`))).toEqual([404, { error: 'not found' }])
-    for (const path of ['/api/team/send', '/api/team/trust']) {
+    for (const path of [
+      '/api/team/send',
+      '/api/team/trust',
+      '/api/team/draft',
+      '/api/team/draft/11111111-1111-4111-8111-111111111111/send',
+      '/api/team/draft/11111111-1111-4111-8111-111111111111/discard',
+      '/api/team/draft/__proto__/send',
+    ]) {
       // With the header and without: the POST guards are not asked while the routes are not there.
       expect(await answer(post(url, path, { to: 'x', text: 'hi', peer: 'x' }))).toEqual([405, { error: 'method' }])
       expect(await answer(post(url, path, {}, {}))).toEqual([405, { error: 'method' }])
@@ -186,5 +193,98 @@ describe('team on, against a hub in this process', () => {
     annaClient.send({ t: 'send', env: asked })
     await until(async () => (await thread()).messages.some(m => m.dir === 'in' && m.text === 'yes, green'), 'the inbox')
     expect((await thread()).messages.map(m => m.dir).sort()).toEqual(['in', 'out'])
+  })
+
+  const draftBody = (text: string) => ({ to: anna.pub, text })
+  const thread = async () =>
+    (await (await fetch(`${url}/api/team/thread/${anna.pub}`)).json()) as {
+      messages: { id: string; dir: string; state?: string; text: string; via?: string }[]
+    }
+  const drafts = async () => (await thread()).messages.filter(m => m.dir === 'draft')
+
+  test('a draft is kept, shown in the thread and counted on the roster, and nothing reaches the peer until Send', async () => {
+    const outBefore = (await thread()).messages.filter(m => m.dir === 'out').length
+    const made = (await (await post(url, '/api/team/draft', draftBody('  can you review #231?  '))).json()) as {
+      ok: boolean
+      id: string
+    }
+    expect(made.ok).toBe(true)
+    expect(await drafts()).toEqual([
+      expect.objectContaining({ id: made.id, dir: 'draft', text: 'can you review #231?' }),
+    ])
+    const v = (await (await fetch(`${url}/api/team`)).json()) as { roster: { drafts: number }[] }
+    expect(v.roster[0]?.drafts).toBe(1)
+    expect(existsSync(join(stateOf(box), 'team-drafts.json'))).toBe(true)
+    // Not sent: the peer's connection has nothing, and the outbox is empty.
+    await Bun.sleep(150)
+    expect((await thread()).messages.filter(m => m.dir === 'out')).toHaveLength(outBefore)
+    expect(await answer(post(url, `/api/team/draft/${made.id}/discard`, {}))).toEqual([200, { ok: true }])
+    expect(await drafts()).toEqual([])
+    expect(await answer(post(url, `/api/team/draft/${made.id}/discard`, {}))).toEqual([
+      404,
+      { ok: false, error: 'draft' },
+    ])
+    expect(await answer(post(url, `/api/team/draft/${made.id}/send`, {}))).toEqual([404, { ok: false, error: 'draft' }])
+  })
+
+  test('Send on a draft sends it once with via "agent" in the signed body, the peer gets it unchanged', async () => {
+    const made = (await (await post(url, '/api/team/draft', draftBody('agent asks: green?'))).json()) as { id: string }
+    const sent = (await (await post(url, `/api/team/draft/${made.id}/send`, {})).json()) as { ok: boolean; id: string }
+    expect(sent.ok).toBe(true)
+    const delivered = await annaClient.take('deliver')
+    expect(delivered.env).toMatchObject({ id: sent.id, body: { text: 'agent asks: green?', via: 'agent' } })
+    expect(await verify(me.pub, envelopeBytes(delivered.env), delivered.env.sig)).toBe(true)
+    annaClient.send(await ackOf(anna, delivered.env))
+    expect(await drafts()).toEqual([])
+    expect((await thread()).messages.find(m => m.id === sent.id)).toMatchObject({ dir: 'out', via: 'agent' })
+    // A second press finds no draft, and sends nothing more.
+    expect(await answer(post(url, `/api/team/draft/${made.id}/send`, {}))).toEqual([404, { ok: false, error: 'draft' }])
+    // A message typed in the panel goes with no via.
+    const typed = (await (await post(url, '/api/team/send', draftBody('by hand'))).json()) as { id: string }
+    const d2 = await annaClient.take('deliver')
+    expect(d2.env.id).toBe(typed.id)
+    expect(d2.env.body).toEqual({ text: 'by hand' })
+    annaClient.send(await ackOf(anna, d2.env))
+  })
+
+  test('the draft routes need the board header and origin, valid peer ids and draft ids; nothing is made from junk', async () => {
+    const body = draftBody('x')
+    expect(await answer(post(url, '/api/team/draft', body, {}))).toEqual([403, { error: 'header' }])
+    expect(await answer(post(url, '/api/team/draft', body, { 'x-board': '1', origin: 'http://evil.example' }))).toEqual(
+      [403, { error: 'origin' }],
+    )
+    const id = '11111111-1111-4111-8111-111111111111'
+    for (const action of ['send', 'discard']) {
+      expect(await answer(post(url, `/api/team/draft/${id}/${action}`, {}, {}))).toEqual([403, { error: 'header' }])
+      for (const bad of ['__proto__', 'constructor', 'nope', `${id}x`])
+        expect(await answer(post(url, `/api/team/draft/${bad}/${action}`, {}))).toEqual([
+          400,
+          { ok: false, error: 'draft' },
+        ])
+    }
+    for (const to of ['__proto__', 'constructor', 'nobody', 7, `${'Q'.repeat(43)}`])
+      expect((await post(url, '/api/team/draft', { to, text: 'x' })).status).toBe(400)
+    expect((await post(url, '/api/team/draft', { to: anna.pub, text: ' ' })).status).toBe(400)
+    expect((await post(url, '/api/team/draft', { to: anna.pub, text: 'x'.repeat(4001) })).status).toBe(400)
+    expect((await post(url, '/api/team/draft', { to: anna.pub })).status).toBe(400)
+    expect(await drafts()).toEqual([])
+    expect(({} as Record<string, unknown>).drafts).toBeUndefined()
+  })
+
+  test('at 20 waiting drafts the next is refused as full, and discarding one makes room', async () => {
+    const ids: string[] = []
+    for (let i = 0; i < 20; i++) {
+      const r = (await (await post(url, '/api/team/draft', draftBody(`d${i}`))).json()) as { id: string }
+      ids.push(r.id)
+    }
+    expect(await answer(post(url, '/api/team/draft', draftBody('one too many')))).toEqual([
+      400,
+      { ok: false, error: 'full' },
+    ])
+    expect(await drafts()).toHaveLength(20)
+    await post(url, `/api/team/draft/${ids[0]}/discard`, {})
+    expect((await post(url, '/api/team/draft', draftBody('fits now'))).status).toBe(200)
+    for (const m of await drafts()) await post(url, `/api/team/draft/${m.id}/discard`, {})
+    expect(await drafts()).toEqual([])
   })
 })

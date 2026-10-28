@@ -50,3 +50,5 @@ export const teamInboxFile = (): string => join(stateDir(), 'team-inbox.json')
 export const teamOutboxFile = (): string => join(stateDir(), 'team-outbox.json')
 export const teamPinsFile = (): string => join(stateDir(), 'team-pins.json')
 export const teamAuditFile = (): string => join(stateDir(), 'team-audit.jsonl')
+// What agents drafted for a person to send (`board team draft`); the running board with `team` set writes it.
+export const teamDraftsFile = (): string => join(stateDir(), 'team-drafts.json')

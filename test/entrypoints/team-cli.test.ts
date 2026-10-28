@@ -35,6 +35,45 @@ describe('board team, off and misused', () => {
     expect(readFileSync(configPath(box), 'utf8')).toBe(before)
   })
 
+  test('draft with no team: says so, writes no team file and leaves config.json as it was', async () => {
+    const box = await sandbox()
+    writeConfig(box, {})
+    const before = readFileSync(configPath(box), 'utf8')
+    const r = await board(box, ['team', 'draft', 'Roman', 'is it green?'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).toMatch(/^team is off \(no "team" in config\.json;/)
+    expect(teamFiles(box)).toEqual([])
+    expect(readFileSync(configPath(box), 'utf8')).toBe(before)
+  })
+
+  test('draft with team on and no board running says to open it; nothing is written', async () => {
+    const box = await sandbox()
+    writeConfig(box, { team: { hub: 'ws://127.0.0.1:9', name: 'anna' } })
+    const r = await board(box, ['team', 'draft', 'Roman', 'hi'])
+    expect(r.code).toBe(1)
+    expect(r.stderr).toContain('the board does not run: open it first')
+    expect(teamFiles(box)).toEqual([])
+  })
+
+  test.each([
+    ['draft without a text', ['team', 'draft', 'Roman']],
+    ['draft without anything', ['team', 'draft']],
+    ['draft with a third word', ['team', 'draft', 'Roman', 'is it', 'green?']],
+  ])('%s: the usage line, which lists team draft, a non-zero exit', async (_n, args) => {
+    const box = await sandbox()
+    writeConfig(box, {})
+    const r = await board(box, args)
+    expect(r.code).toBe(1)
+    expect(r.stderr).toContain('board team draft <name|peer-id> "<text>"')
+    expect(teamFiles(box)).toEqual([])
+  })
+
+  test('board help lists team draft', async () => {
+    const box = await sandbox()
+    const r = await board(box, ['help'])
+    expect(r.stdout).toContain('team draft <name|peer-id> "<text>"')
+  })
+
   test.each([
     ['no subcommand', ['team']],
     ['an unknown one', ['team', 'bogus']],
@@ -163,5 +202,57 @@ describe('board team against a hub', () => {
     expect(out.stdout.split('\n').find(l => l.includes('rosterpeer'))).toMatch(
       new RegExp(`^○ rosterpeer  ${fingerprint(peer.pub)}  (last seen .+ ago|not seen yet)$`),
     )
+  })
+  test('draft: resolves a name (exact, then any case) or a peer id against the roster, leaves a draft, sends nothing', async () => {
+    const box = await sandbox()
+    const me = await generateKey()
+    const roman = await generateKey()
+    const twin1 = await generateKey()
+    const twin2 = await generateKey()
+    ;(await hub.join(me, 'draftme')).close()
+    const romanClient = await hub.join(roman, 'Roman')
+    await hub.join(twin1, 'Twin')
+    await hub.join(twin2, 'twin')
+    mkdirSync(stateOf(box), { recursive: true })
+    writeFileSync(join(stateOf(box), 'team-key.json'), JSON.stringify({ v: 1, ...me }), { mode: 0o600 })
+    const team = { hub: base, name: 'draftme' }
+    const { url } = await serveBoard(box, { language: 'en', team })
+    writeConfig(box, { port: Number(new URL(url).port), team })
+    const end = Date.now() + 8000
+    let r: ChildResult
+    do {
+      r = await board(box, ['team', 'draft', 'roman', 'is the build green?'])
+      if (r.code === 0) break
+      await Bun.sleep(100)
+    } while (Date.now() < end)
+    expect(r.stderr).toBe('')
+    expect(r.stdout).toContain('draft for Roman is in the Team panel; nothing is sent until a person presses Send')
+    const byId = await board(box, ['team', 'draft', roman.pub, 'second one'])
+    expect(byId.code).toBe(0)
+    const thread = (await (await fetch(`${url}/api/team/thread/${roman.pub}`)).json()) as {
+      messages: { dir: string; text: string }[]
+    }
+    expect(thread.messages.map(m => [m.dir, m.text])).toEqual([
+      ['draft', 'is the build green?'],
+      ['draft', 'second one'],
+    ])
+    expect(existsSync(join(stateOf(box), 'team-drafts.json'))).toBe(true)
+    // Nothing was sent: the peer got no frame.
+    await Bun.sleep(200)
+    expect(romanClient.frames.filter(f => f.t === 'deliver')).toEqual([])
+    // Unknown name: lists the names. A name two people fit (exactly one each): exact wins; any-case two: ambiguous.
+    const unknown = await board(box, ['team', 'draft', 'Zed', 'hi'])
+    expect(unknown.code).toBe(1)
+    expect(unknown.stderr).toContain('nobody called Zed on the team. On it:')
+    expect(unknown.stderr).toContain('Roman')
+    const exact = await board(box, ['team', 'draft', 'Twin', 'hi'])
+    expect(exact.code).toBe(0)
+    const ambiguous = await board(box, ['team', 'draft', 'TWIN', 'hi'])
+    expect(ambiguous.code).toBe(1)
+    expect(ambiguous.stderr).toContain('fits more than one person (')
+    expect(ambiguous.stderr).toContain('Twin')
+    const empty = await board(box, ['team', 'draft', 'Roman', '   '])
+    expect(empty.code).toBe(1)
+    expect(empty.stderr).toContain('no draft made: the text is empty or longer than 4000 characters')
   })
 })

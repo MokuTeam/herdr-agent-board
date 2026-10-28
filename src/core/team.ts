@@ -20,6 +20,8 @@ import {
   MAX_TEXT,
   type RosterPeer,
   TEAM_PROTOCOL,
+  VIAS,
+  type Via,
 } from './team-wire.ts'
 
 export * from './team-wire.ts'
@@ -139,6 +141,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 const PEER = /^[A-Za-z0-9_-]{43}$/
 const SIG = /^[A-Za-z0-9_-]{86}$/
 
+/** A message or draft id: the UUID v4 this board makes. */
+export const isMessageId = (v: unknown): v is string => isStr(v) && UUID.test(v)
 export const isPeerId = (v: unknown): v is string => isStr(v) && PEER.test(v)
 export const isSig = (v: unknown): v is string => isStr(v) && SIG.test(v)
 
@@ -166,7 +170,15 @@ export function checkEnvelope(v: unknown): { ok: true; env: Envelope } | { ok: f
   if (!KINDS.some(k => k === v.kind)) return { ok: false, code: 'kind' }
   if (v.to === '*') return { ok: false, code: 'broadcast' }
   if (!isPeerId(v.to)) return { ok: false, code: 'bad_frame' }
-  if (body.text.length < 1 || body.text.length > MAX_TEXT || Object.keys(body).length !== 1)
+  // The body is `text`, and `via` when it is exactly "agent"; any other key or value is not a body.
+  const via = Object.hasOwn(body, 'via') ? body.via : undefined
+  const bodyKeys = Object.keys(body).length
+  if (
+    body.text.length < 1 ||
+    body.text.length > MAX_TEXT ||
+    bodyKeys !== (Object.hasOwn(body, 'via') ? 2 : 1) ||
+    (Object.hasOwn(body, 'via') && !VIAS.some(x => x === via))
+  )
     return { ok: false, code: 'bad_frame' }
   if (new TextEncoder().encode(JSON.stringify(v)).length > MAX_ENVELOPE_BYTES) return { ok: false, code: 'too_big' }
   if (Object.keys(v).some(k => !ENVELOPE_FIELDS.includes(k))) return { ok: false, code: 'bad_frame' }
@@ -181,7 +193,7 @@ export function checkEnvelope(v: unknown): { ok: true; env: Envelope } | { ok: f
     reply_to: v.reply_to,
     ts: v.ts,
     ttl_s: v.ttl_s,
-    body: { text: body.text },
+    body: via === undefined ? { text: body.text } : { text: body.text, via: via as Via },
     sig: v.sig,
   }
   return { ok: true, env }

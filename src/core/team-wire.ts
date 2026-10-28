@@ -8,6 +8,12 @@ export const TEAM_PROTOCOL = 1
 export const KINDS = ['question'] as const
 export type Kind = (typeof KINDS)[number]
 
+/** Who asked for a message a person sent: `agent`, an agent drafted it and a person pressed Send. Signed with the body. */
+export const VIAS = ['agent'] as const
+export type Via = (typeof VIAS)[number]
+/** Drafts an agent made that nobody has sent or discarded yet; the next one is refused. */
+export const MAX_DRAFTS = 20
+
 export const MAX_ENVELOPE_BYTES = 16 * 1024
 export const MAX_TEXT = 4000
 export const MAX_NAME = 40
@@ -40,7 +46,7 @@ export interface Envelope {
   reply_to: string | null
   ts: string
   ttl_s: number
-  body: { text: string }
+  body: { text: string; via?: Via }
   sig: string
 }
 

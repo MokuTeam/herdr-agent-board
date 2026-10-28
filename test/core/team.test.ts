@@ -196,6 +196,24 @@ test('checkEnvelope: the kind whitelist, no broadcast, size and shape', () => {
   for (const junk of [null, 3, 'x', [], undefined]) assert.equal(code(junk), 'bad_frame')
 })
 
+test('checkEnvelope: body.via is accepted as "agent" only, kept in the rebuilt body, and signed with it (#231)', async () => {
+  const code = (o: unknown) => {
+    const r = checkEnvelope(o)
+    return r.ok ? 'ok' : r.code
+  }
+  const open = { ...ENV, body: { text: 'asked by an agent', via: 'agent' as const } }
+  const signed = { ...open, sig: await sign(A.pkcs8, envelopeBytes(open)) }
+  assert.deepEqual(checkEnvelope(signed), { ok: true, env: signed })
+  assert.equal(await verify(A.pub, envelopeBytes(signed), signed.sig), true)
+  // Taking via off (what a hub could try) breaks the signature; it cannot be stripped.
+  assert.equal(await verify(A.pub, envelopeBytes({ ...signed, body: { text: open.body.text } }), signed.sig), false)
+  for (const via of ['human', 'Agent', '', 'agent ', null, 1, true, undefined, ['agent'], { v: 'agent' }])
+    assert.equal(code({ ...signed, body: { text: 'x', via } }), 'bad_frame', JSON.stringify(via))
+  assert.equal(code({ ...signed, body: { text: 'x', via: 'agent', more: 1 } }), 'bad_frame')
+  assert.equal(code({ ...signed, body: { via: 'agent' } }), 'bad_frame')
+  assert.equal(code({ ...signed, body: { text: 'x'.repeat(4001), via: 'agent' } }), 'bad_frame')
+})
+
 test('parseFrame: known frames come back, junk is null', () => {
   assert.deepEqual(parseFrame('{"t":"ping"}'), { t: 'ping' })
   assert.deepEqual(parseFrame('{"t":"hello","v":1,"peer":"p","client":"c"}'), {

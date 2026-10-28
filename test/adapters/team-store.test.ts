@@ -4,9 +4,10 @@
 import { expect, test } from 'bun:test'
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { configFile, joinTeam, leaveTeam, loadConfig } from '../../src/adapters/config-file.ts'
-import { stateDir, teamAuditFile } from '../../src/adapters/paths.ts'
+import { stateDir, teamAuditFile, teamDraftsFile } from '../../src/adapters/paths.ts'
 import {
   AUDIT_MAX_BYTES,
+  addDraft,
   addInbox,
   addOutbox,
   audit,
@@ -16,12 +17,14 @@ import {
   KEEP_PER_PEER,
   keepJoinedKey,
   markAcked,
+  readDrafts,
   readInbox,
   readKey,
   readOutbox,
   readPins,
   releaseHeld,
   setOutState,
+  takeDraft,
 } from '../../src/adapters/team-store.ts'
 import { generateKey, teamConfig } from '../../src/core/team.ts'
 import { question } from '../hub/harness.ts'
@@ -167,4 +170,29 @@ test('keepJoinedKey: the joined key is saved; another key saved meanwhile stays 
   const other = await generateKey()
   await expect(keepJoinedKey(other)).rejects.toThrow(/another key was saved/)
   expect(readKey()).toEqual(mine)
+})
+
+test('drafts: kept by id, oldest first, refused at the cap without writing, taken once; a file with __proto__ keys pollutes nothing (#231)', () => {
+  isolatedHome()
+  expect(readDrafts()).toEqual([])
+  expect(existsSync(teamDraftsFile())).toBe(false)
+  const d = (id: string, createdAt: number) => ({ id, to: A, text: id, createdAt })
+  expect(addDraft(d('b', 2), 2)).toBe(true)
+  expect(addDraft(d('a', 1), 2)).toBe(true)
+  const before = readFileSync(teamDraftsFile(), 'utf8')
+  expect(addDraft(d('c', 3), 2)).toBe(false)
+  expect(readFileSync(teamDraftsFile(), 'utf8')).toBe(before)
+  expect(readDrafts().map(x => x.id)).toEqual(['a', 'b'])
+  if (process.platform !== 'win32') expect(statSync(teamDraftsFile()).mode & 0o777).toBe(0o600)
+  expect(takeDraft('a')).toEqual(d('a', 1))
+  expect(takeDraft('a')).toBeNull()
+  for (const id of ['__proto__', 'constructor', 'toString']) expect(takeDraft(id)).toBeNull()
+  writeFileSync(
+    teamDraftsFile(),
+    '{"v":1,"drafts":{"__proto__":{"id":"__proto__","to":"x","text":"t","createdAt":1,"polluted":true}}}',
+  )
+  expect(readDrafts().map(x => x.id)).toEqual(['__proto__'])
+  expect(takeDraft('__proto__')?.id).toBe('__proto__')
+  expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+  expect(({} as Record<string, unknown>).text).toBeUndefined()
 })

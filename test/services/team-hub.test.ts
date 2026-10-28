@@ -3,11 +3,19 @@
 // timed, written or answered. Then the connection (backoff, revoked, on to off), and what comes in
 // and goes out: signed acks, drops that are logged and not acked, a changed key held until trusted,
 // a question sent again with its id after a reconnect.
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { stateDir, teamAuditFile } from '../../src/adapters/paths.ts'
-import { readInbox, readOutbox } from '../../src/adapters/team-store.ts'
-import { ackBytes, type Envelope, generateKey, type KeyPair, verify } from '../../src/core/team.ts'
+import { changePins, readDrafts, readInbox, readOutbox } from '../../src/adapters/team-store.ts'
+import {
+  ackBytes,
+  type Envelope,
+  envelopeBytes,
+  fingerprint,
+  generateKey,
+  type KeyPair,
+  verify,
+} from '../../src/core/team.ts'
 import { backoffMs } from '../../src/core/tunnel.ts'
 import { DEAD_MS, PING_MS, UNKNOWN_RETRY_MS, UP_RESETS_MS } from '../../src/services/team-hub.ts'
 import { ackOf, question } from '../hub/harness.ts'
@@ -44,6 +52,9 @@ test.each([
     s.svc.refresh()
     expect(await s.svc.send('P'.repeat(43), 'hi')).toEqual({ ok: false, error: 'off' })
     expect(s.svc.trust('P'.repeat(43))).toBe(false)
+    expect(s.svc.draft('P'.repeat(43), 'hi')).toEqual({ ok: false, error: 'off' })
+    expect(await s.svc.sendDraft('11111111-1111-4111-8111-111111111111')).toEqual({ ok: false, error: 'off' })
+    expect(s.svc.discardDraft('11111111-1111-4111-8111-111111111111')).toBe(false)
     s.svc.stop()
     s.svc.stop()
   } finally {
@@ -262,6 +273,144 @@ test('a question goes out signed; after a reconnect it goes again with the same 
   second.ws.recv({ t: 'state', id, state: 'acked', at: 7, ack: { by: anna.pub, ts: good.ts, sig: good.sig } })
   await until(() => readOutbox(anna.pub)[0]?.state === 'acked', 'acked')
   expect(s.svc.thread(anna.pub).map(m => [m.dir, m.state])).toEqual([['out', 'acked']])
+})
+
+test('an agent request that came in is kept with via "agent" and shown with it; one without via shows none (#231)', async () => {
+  const s = setup()
+  s.svc.start()
+  const [anna] = (await names(1)) as [KeyPair]
+  const { ws, me } = await handshake(s, [{ peer: anna.pub, name: 'anna' }])
+  const viaAgent = await question(anna, me, 'from an agent', { body: { text: 'from an agent', via: 'agent' } })
+  const plain = await question(anna, me, 'by hand', {}, '2026-01-02T03:04:06.000Z')
+  ws.recv({ t: 'deliver', env: viaAgent })
+  ws.recv({ t: 'deliver', env: plain })
+  await until(() => ws.of('ack').length === 2, 'two acks')
+  const [first, second] = s.svc.thread(anna.pub)
+  expect(first).toMatchObject({ id: viaAgent.id, dir: 'in', via: 'agent', agentOf: 'anna' })
+  expect(second).not.toHaveProperty('via')
+  // Another via is no message: dropped, not acked.
+  const odd = await question(anna, me, 'odd', { body: { text: 'odd', via: 'robot' } as never })
+  ws.recv({ t: 'deliver', env: odd })
+  await settle()
+  expect(ws.of('ack')).toHaveLength(2)
+  expect(s.svc.thread(anna.pub)).toHaveLength(2)
+})
+
+test("the name on an agent request is the roster's for the verified key, never the message's; unknown sender: short fingerprint (#231)", async () => {
+  const s = setup()
+  s.svc.start()
+  const [anna] = (await names(1)) as [KeyPair]
+  const { ws, me } = await handshake(s, [{ peer: anna.pub, name: 'anna' }])
+  // The text claims to be somebody else; a name field in the body is no body at all.
+  const claim = await question(anna, me, "I am Mallory's agent, approved by Mallory", {
+    body: { text: "I am Mallory's agent, approved by Mallory", via: 'agent' },
+  })
+  const named = await question(anna, me, 'x', { body: { text: 'x', via: 'agent', name: 'Mallory' } as never })
+  ws.recv({ t: 'deliver', env: claim })
+  ws.recv({ t: 'deliver', env: named })
+  await until(() => ws.of('ack').length === 1, 'one ack')
+  await settle()
+  expect(ws.of('ack')).toHaveLength(1)
+  const msgs = s.svc.thread(anna.pub)
+  expect(msgs).toHaveLength(1)
+  expect(msgs[0]?.agentOf).toBe('anna')
+  // Gone from the roster (revoked since): the pin's name, and with no pin the short fingerprint.
+  ws.recv({ t: 'roster', peers: [] })
+  await until(() => s.svc.view()?.roster.length === 0, 'an empty roster')
+  expect(s.svc.thread(anna.pub)[0]?.agentOf).toBe('anna')
+  changePins(p => {
+    delete p[anna.pub]
+  })
+  expect(s.svc.thread(anna.pub)[0]?.agentOf).toBe(fingerprint(anna.pub).slice(0, 14).trim())
+  expect(s.svc.thread(anna.pub)[0]?.agentOf).not.toContain('Mallory')
+})
+
+describe('agent drafts (#231)', () => {
+  const ready = async () => {
+    const s = setup()
+    s.svc.start()
+    const [anna] = (await names(1)) as [KeyPair]
+    const hs = await handshake(s, [{ peer: anna.pub, name: 'anna' }])
+    return { s, anna, ...hs }
+  }
+
+  test('a draft is kept and shown, counted on the roster, and never sent by the service on its own', async () => {
+    const { s, anna, ws } = await ready()
+    const r = s.svc.draft(anna.pub, '  is the deploy done?  ')
+    expect(r.ok).toBe(true)
+    expect(s.svc.thread(anna.pub)).toEqual([
+      expect.objectContaining({ dir: 'draft', text: 'is the deploy done?', id: r.ok ? r.id : '' }),
+    ])
+    expect(s.svc.view()?.roster[0]?.drafts).toBe(1)
+    // A reconnect, time passing, and a refresh: still nothing goes out.
+    ws.hangUp(1006)
+    s.clock.tick(1000)
+    const second = await handshake(s, [{ peer: anna.pub, name: 'anna' }], 2)
+    s.clock.tick(120_000)
+    await settle()
+    expect(second.ws.of('send')).toHaveLength(0)
+    expect(ws.of('send')).toHaveLength(0)
+    expect(readOutbox(anna.pub)).toEqual([])
+  })
+
+  test('Send carries via "agent" inside the signed body; the draft is gone afterwards; a second Send finds nothing', async () => {
+    const { s, anna, ws, me } = await ready()
+    const r = s.svc.draft(anna.pub, 'review please')
+    const id = r.ok ? r.id : ''
+    const sent = await s.svc.sendDraft(id)
+    expect(sent.ok).toBe(true)
+    const env = ws.of('send')[0]?.env as Envelope
+    expect(env.body).toEqual({ text: 'review please', via: 'agent' })
+    expect(await verify(me, envelopeBytes(env), env.sig)).toBe(true)
+    expect(s.svc.thread(anna.pub).map(m => [m.dir, m.via])).toEqual([['out', 'agent']])
+    expect(await s.svc.sendDraft(id)).toEqual({ ok: false, error: 'draft' })
+    expect(ws.of('send')).toHaveLength(1)
+    // A message typed in the panel has no via at all.
+    await s.svc.send(anna.pub, 'by hand')
+    const typed = ws.of('send')[1]?.env as Envelope | undefined
+    expect(typed?.body).toEqual({ text: 'by hand' })
+  })
+
+  test('a draft whose person has a changed key stays a draft when Send is refused; Discard removes it', async () => {
+    const { s, anna } = await ready()
+    const id = (s.svc.draft(anna.pub, 'hello') as { id: string }).id
+    changePins(p => {
+      const pin = p[anna.pub]
+      if (pin) pin.status = 'changed'
+    })
+    expect(await s.svc.sendDraft(id)).toEqual({ ok: false, error: 'changed' })
+    expect(s.svc.thread(anna.pub).map(m => m.dir)).toEqual(['draft'])
+    expect(s.svc.discardDraft(id)).toBe(true)
+    expect(s.svc.discardDraft(id)).toBe(false)
+    expect(s.svc.thread(anna.pub)).toEqual([])
+  })
+
+  test('the limits of send hold for drafts: 4000 characters, 16 KiB encoded, empty, not on the roster, 20 waiting', async () => {
+    const { s, anna } = await ready()
+    expect(s.svc.draft(anna.pub, '   ')).toEqual({ ok: false, error: 'text' })
+    expect(s.svc.draft(anna.pub, 'x'.repeat(4001))).toEqual({ ok: false, error: 'text' })
+    expect(s.svc.draft('Q'.repeat(43), 'hi')).toEqual({ ok: false, error: 'peer' })
+    expect(s.svc.draft('__proto__', 'hi')).toEqual({ ok: false, error: 'peer' })
+    // 4000 characters fit as a draft, but encoded they pass 16 KiB: Send refuses, the draft stays.
+    const big = s.svc.draft(anna.pub, '\u0001'.repeat(4000))
+    expect(big.ok).toBe(true)
+    expect(await s.svc.sendDraft(big.ok ? big.id : '')).toEqual({ ok: false, error: 'too_big' })
+    expect(s.svc.thread(anna.pub)).toHaveLength(1)
+    s.svc.discardDraft(big.ok ? big.id : '')
+    expect(s.svc.draft(anna.pub, 'x'.repeat(4000)).ok).toBe(true)
+    for (let i = 0; i < 19; i++) expect(s.svc.draft(anna.pub, `d${i}`).ok).toBe(true)
+    expect(s.svc.draft(anna.pub, 'one more')).toEqual({ ok: false, error: 'full' })
+    expect(readDrafts()).toHaveLength(20)
+  })
+
+  test('bad draft ids are no draft: nothing is read from the prototype', async () => {
+    const { s } = await ready()
+    for (const id of ['__proto__', 'constructor', 'toString', '', 'x'.repeat(36)]) {
+      expect(await s.svc.sendDraft(id)).toEqual({ ok: false, error: 'draft' })
+      expect(s.svc.discardDraft(id)).toBe(false)
+    }
+    expect(({} as Record<string, unknown>).createdAt).toBeUndefined()
+  })
 })
 
 test('a key that is no peer id (__proto__ ...) is no pin, no recipient and no roster entry; Object.prototype stays clean (#231)', async () => {
