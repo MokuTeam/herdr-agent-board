@@ -11,6 +11,10 @@
 // Entered into a client's systems (#240): a mark per entry and system (post, unpost), with the
 // entry's revision then. A mark is no change of the entry (its revision stays), so anyone who may
 // write marks any entry, without `force`; every mark and unmark has its journal row.
+//
+// A project renamed (#237, Settings → Time): the client's entries of it, however spelled and removed
+// ones too, move to the new name in one transaction, a journal row each; a mark that was current
+// stays so (the name is the board's own, nothing to change in the client's systems).
 import { randomBytes } from 'node:crypto'
 import { t } from '../core/lang.ts'
 import {
@@ -26,6 +30,8 @@ import {
   instantIn,
   isoOf,
   problemsText,
+  projectIn,
+  sameProject,
   secondsOf,
   systemsFor,
   type TimeConfig,
@@ -145,17 +151,37 @@ function checkConfig(c: TimeConfig): void {
   if (c.problems.length) throw new TimeError('time.err.config', { problems: problemsText(c.problems, t) })
 }
 
-/** The client takes time, and the project is one of its own (unless `newProject`). */
-function checkClientProject(c: TimeConfig, client: string, project: string, newProject: boolean): void {
+/**
+ * The client takes time (and new entries, for one coming to it: it is on), and the project is one
+ * of its own, not retired (an entry keeps a project retired since: `was`, the entry as it is); one
+ * typed as new (`newProject`) is the name the client already has for it, case and spaces aside,
+ * when it has one. The project's name to keep.
+ */
+function checkClientProject(
+  c: TimeConfig,
+  client: string,
+  project: string,
+  newProject: boolean,
+  was?: Pick<TimeEntry, 'client' | 'project'>,
+): string {
   const own = clientOf(c, client)
   if (!own.ok) {
     const known = Object.keys(c.clients ?? {}).join(', ')
     throw new TimeError('time.err.client', { client, known })
   }
+  if (!own.client.on && was?.client !== client) throw new TimeError('time.err.clientOff', { client })
   if (!project) throw new TimeError('time.err.noProject')
   const projects = own.client.projects
-  if (projects && !projects.includes(project) && !newProject)
-    throw new TimeError('time.err.project', { project, client, known: projects.join(', ') })
+  const retired = projectIn(own.client.retired, project)
+  if (retired) {
+    if (was?.client === client && was.project === project) return project
+    throw new TimeError('time.err.retired', { project: retired, client })
+  }
+  if (!projects || projects.includes(project)) return project
+  const listed = newProject ? projectIn(projects, project) : null
+  if (listed) return listed
+  if (!newProject) throw new TimeError('time.err.project', { project, client, known: projects.join(', ') })
+  return project
 }
 
 function checkTimes(start: number, stop: number): void {
@@ -280,9 +306,8 @@ export function addEntry(
 ): { entry: TimeEntry; existing: boolean; reason?: ExistingReason } {
   checkConfig(c)
   const description = cleanText(n.description)
-  const project = cleanText(n.project, 120)
   if (!description) throw new TimeError('time.err.noDescription')
-  checkClientProject(c, n.client, project, !!n.newProject)
+  const project = checkClientProject(c, n.client, cleanText(n.project, 120), !!n.newProject)
   checkTimes(n.start, n.stop)
   const entry: TimeEntry = {
     id: '',
@@ -397,8 +422,10 @@ export function editEntry(
     e => {
       if (e.deleted) throw new TimeError('time.err.removed', { id })
       const client = ch.client ?? e.client
-      const project = ch.project !== undefined ? cleanText(ch.project, 120) : e.project
-      if (ch.client !== undefined || ch.project !== undefined) checkClientProject(c, client, project, !!ch.newProject)
+      let project = ch.project !== undefined ? cleanText(ch.project, 120) : e.project
+      // an entry keeps its client off or its project retired; one coming to them is refused
+      if (ch.client !== undefined || ch.project !== undefined)
+        project = checkClientProject(c, client, project, !!ch.newProject, e)
       const description = ch.description !== undefined ? cleanText(ch.description) : e.description
       if (!description) throw new TimeError('time.err.noDescription')
       const start = ch.start ?? Date.parse(e.start)
@@ -609,6 +636,76 @@ export function restoreEntry(
   )
 }
 
+/**
+ * A client's project renamed (Settings → Time): its entries of `from`, however they spell it (case,
+ * spaces and unseen characters aside: projectKey), removed ones too (restored, they come back under
+ * the new name), moved to `to` in one transaction, each a revision more with its journal row
+ * (`rename`, the entry before and after); one named `to` already is left as it is. A mark that was
+ * current (entered at the entry's revision) moves with it (`rename-mark`), so a rename is no change
+ * to make in the client's systems. `then` runs last, in that transaction (the config written):
+ * when it throws, nothing is changed. db.write may run its function again when SQLite answered
+ * busy at its start, before anything ran: `then` writes the same file again then, no harm. The
+ * entries moved.
+ */
+export function renameProject(
+  db: BoardDb,
+  c: TimeConfig,
+  client: string,
+  from: string,
+  to: string,
+  actor: Actor,
+  then: () => void = () => {},
+): TimeEntry[] {
+  checkConfig(c)
+  return db.write(actorText(actor), tx => {
+    const rows = db.db
+      .query(`SELECT ${COLUMNS} FROM time_entries WHERE client = ? ORDER BY start, id`)
+      .all(client) as Row[]
+    const now = Date.now()
+    const moved: TimeEntry[] = []
+    for (const e of rows.map(entryOf).filter(x => x.project !== to && sameProject(x.project, from))) {
+      const saved: TimeEntry = { ...e, project: to, changed: now, changedBy: actor, rev: e.rev + 1 }
+      try {
+        update(tx, saved)
+      } catch (err) {
+        if (unique(err)) throw new TimeError('time.err.sameAs', { id: e.id })
+        throw err
+      }
+      tx.journal({ store: 'time', op: 'rename', ref: e.id, before: e, after: saved })
+      for (const m of marksOf(db, [e.id]).get(e.id) ?? []) {
+        if (m.rev !== e.rev) continue
+        tx.db.query('UPDATE time_marks SET rev = ? WHERE entry = ? AND system = ?').run(saved.rev, e.id, m.system)
+        tx.journal({
+          store: 'time',
+          op: 'rename-mark',
+          ref: e.id,
+          before: markJson(m),
+          after: markJson({ ...m, rev: saved.rev }),
+        })
+      }
+      moved.push(saved)
+    }
+    then()
+    return moved
+  })
+}
+
+/** How many entries a client has of a project, every spelling of it and removed ones too: what a rename moves. */
+export function projectCount(db: BoardDb, client: string, name: string): number {
+  const rows = db.db
+    .query('SELECT project, COUNT(*) AS n FROM time_entries WHERE client = ? GROUP BY project')
+    .all(client) as { project: string; n: number }[]
+  return rows.filter(r => sameProject(r.project, name)).reduce((n, r) => n + r.n, 0)
+}
+
+/** How many live entries a client has of each project, as each is spelled (Settings → Time adds the spellings up). */
+export function projectUse(db: BoardDb, client: string): Record<string, number> {
+  const rows = db.db
+    .query('SELECT project, COUNT(*) AS n FROM time_entries WHERE client = ? AND deleted IS NULL GROUP BY project')
+    .all(client) as { project: string; n: number }[]
+  return Object.fromEntries(rows.map(r => [r.project, r.n]))
+}
+
 /** A Toggl row for the store: its lane, and Toggl's id or none (the Detailed report's CSV has none). */
 export type ImportRow = Omit<NewEntry, 'startGiven' | 'newProject'>
 
@@ -627,7 +724,8 @@ export interface ImportChange {
 export type ImportVerdict =
   | { kind: 'new'; entry: TimeEntry }
   | { kind: 'already'; stored: TimeEntry }
-  | { kind: 'changed'; stored: TimeEntry; next: TimeEntry; fields: string[] }
+  /** `alike`: the row is alike in the five unique fields to an entry another row has: said, never written */
+  | { kind: 'changed'; stored: TimeEntry; next: TimeEntry; fields: string[]; alike?: true }
 
 const IMPORT_FIELDS = ['client', 'project', 'description', 'start', 'stop', 'tags', 'billable'] as const
 
@@ -679,7 +777,11 @@ export class ImportIndex {
   private readonly taken = new Set<TimeEntry>()
   constructor(db: BoardDb | null) {
     if (!db) return
-    const rows = db.db.query(`SELECT ${COLUMNS} FROM time_entries ORDER BY deleted IS NOT NULL, at`).all() as Row[]
+    // the live ones first, then in the order they were made (rowid where two were made at once):
+    // where no field tells two entries apart, the first made is the one a row is paired with
+    const rows = db.db
+      .query(`SELECT ${COLUMNS} FROM time_entries ORDER BY deleted IS NOT NULL, at, rowid`)
+      .all() as Row[]
     for (const r of rows) this.add(entryOf(r))
   }
   add(e: TimeEntry): void {
@@ -698,6 +800,10 @@ export class ImportIndex {
     const all = (this.byStart.get(`${client}\u0000${start}`) ?? []).filter(e => !this.taken.has(e))
     return [...all.filter(e => !e.deleted), ...all.filter(e => e.deleted)]
   }
+  /** The live entry at a lane and start alike in the five fields the store holds one of (taken or not). */
+  sameLive(e: TimeEntry): TimeEntry | null {
+    return (this.byStart.get(`${e.client}\u0000${e.start}`) ?? []).find(x => !x.deleted && sameKey(x, e)) ?? null
+  }
   take(e: TimeEntry): void {
     this.taken.add(e)
   }
@@ -712,6 +818,14 @@ export class ImportIndex {
     }
   }
 }
+
+/** Alike in the five fields of which the store holds one live entry (its index time_live_same). */
+const sameKey = (a: TimeEntry, b: TimeEntry): boolean =>
+  a.client === b.client &&
+  a.project === b.project &&
+  a.description === b.description &&
+  a.start === b.start &&
+  a.stop === b.stop
 
 /**
  * The fields a stored entry has otherwise than a Toggl row's. Billable only when the row says it
@@ -732,7 +846,9 @@ const differing = (c: TimeConfig, stored: TimeEntry, entry: TimeEntry): string[]
  * over the rows not yet paired: alike in every field first; then alike but for billable (a row
  * that says it, with --billable-from-toggl, still finds its own entry before another's); then the same project and
  * description (its stop or tags changed); the same project and stop (its words changed); the same
- * project; the same description; the same stop; then whatever is left, one to one.
+ * project; the same description; the same stop; then whatever is left, one to one. A removed entry
+ * is paired only in the strong passes (up to project and stop): a new row at its start that shares
+ * less with it is a new entry, not the removed one.
  */
 const pairings = (c: TimeConfig): ((stored: TimeEntry, row: TimeEntry) => boolean)[] => [
   (a, b) => differing(c, a, b).length === 0,
@@ -752,8 +868,11 @@ const pairings = (c: TimeConfig): ((stored: TimeEntry, row: TimeEntry) => boolea
  * each entry with one row at most, so rows of one start that differ are each an entry of their
  * own. A row paired with an entry alike is `already`; with a removed one, `already` (it stays
  * removed); with one that differs (changed in Toggl, or moved or changed on the board), `changed`,
- * with the fields, and not added twice. A row left over is `new`, with a key of its own; one
- * alike to a row of the same run already new is that row (`already`).
+ * with the fields, and not added twice. A row left over that is alike in the five fields the
+ * store holds one live entry of (client, project, description, start, stop) to an entry there or
+ * to a row of this run is that entry: `already`, or `changed` with `alike` where its tags or
+ * billable differ (said, never written: it is not the entry's own row). Any other row left over is
+ * `new`, with a key of its own.
  */
 export function importVerdicts(
   index: ImportIndex,
@@ -782,34 +901,37 @@ export function importVerdicts(
   for (const group of groups.values()) {
     const first = entries[group[0] as number] as TimeEntry
     const there = index.at(first.client, first.start)
-    for (const pairs of pairings(c))
+    const passes = pairings(c)
+    passes.forEach((pairs, p) => {
+      // a removed entry only by what tells it is that row (up to project and stop)
+      const strong = p <= 3
       for (const i of group) {
         if (out[i]) continue
-        const stored = there.find(x => !index.isTaken(x) && pairs(x, entries[i] as TimeEntry))
+        const stored = there.find(x => !index.isTaken(x) && (strong || !x.deleted) && pairs(x, entries[i] as TimeEntry))
         if (stored) out[i] = paired(stored, entries[i] as TimeEntry)
       }
-    const fresh: TimeEntry[] = []
+    })
     for (const i of group) {
       if (out[i]) continue
       const e = entries[i] as TimeEntry
-      const twin = fresh.find(x => differing(c, x, e).length === 0)
+      // alike in the five fields to an entry the store has, or one this run adds (it is in the
+      // index): the store holds one, so this row is that one, never a new one
+      const twin = index.sameLive(e)
       if (twin) {
-        out[i] = { kind: 'already', stored: twin }
+        const fields = differing(c, twin, e)
+        out[i] = fields.length
+          ? { kind: 'changed', stored: twin, next: e, fields, alike: true }
+          : { kind: 'already', stored: twin }
         continue
       }
       if (!rows[i]?.toggl) e.toggl = index.freeKey(e.client, Date.parse(e.start))
       index.add(e)
       index.take(e)
-      fresh.push(e)
       out[i] = { kind: 'new', entry: e }
     }
   }
   return out as ImportVerdict[]
 }
-
-/** One row's verdict (importVerdicts, for a row alone). */
-export const importVerdict = (index: ImportIndex, c: TimeConfig, n: ImportRow, now: number = Date.now()) =>
-  importVerdicts(index, c, [n], now)[0] as ImportVerdict
 
 /** A changed verdict as the run reports it. */
 export const changeOf = (v: Extract<ImportVerdict, { kind: 'changed' }>): ImportChange => ({
@@ -823,7 +945,7 @@ export const changeOf = (v: Extract<ImportVerdict, { kind: 'changed' }>): Import
 
 /**
  * The import's entries, in transactions of `batch` (another writer waits milliseconds), each new
- * one with a journal row. One the store has (importVerdict) is counted, not added. A changed one is
+ * one with a journal row. One the store has (importVerdicts) is counted, not added. A changed one is
  * listed; with `update`, Toggl's values replace the entry's when the board never changed it (made
  * and last changed by the import), journaled as `import-update`, its work date stamped again.
  */
@@ -831,7 +953,13 @@ export function importEntries(
   db: BoardDb,
   c: TimeConfig,
   entries: readonly ImportRow[],
-  o: { update?: boolean; now?: number; batch?: number } = {},
+  o: {
+    update?: boolean
+    now?: number
+    batch?: number
+    /** Each entry it wrote (added, or updated from Toggl): whose projects join the lanes' lists. */
+    wrote?: (e: TimeEntry) => void
+  } = {},
 ): { added: number; already: number; changed: ImportChange[]; updated: ImportChange[] } {
   checkConfig(c)
   const now = o.now ?? Date.now()
@@ -842,6 +970,7 @@ export function importEntries(
   let already = 0
   const changes: ImportChange[] = []
   const updated: ImportChange[] = []
+  const wrote = o.wrote ?? (() => {})
   for (let at = 0; at < verdicts.length; at += batch) {
     db.write('import', tx => {
       for (const v of verdicts.slice(at, at + batch)) {
@@ -851,7 +980,8 @@ export function importEntries(
         }
         if (v.kind === 'changed') {
           const change = changeOf(v)
-          const mine = v.stored.by === 'import' && v.stored.changedBy === 'import'
+          // a row alike to an entry another row has is said, never written (two rows would take turns)
+          const mine = !v.alike && v.stored.by === 'import' && v.stored.changedBy === 'import'
           if (!o.update || !mine) {
             changes.push(change)
             continue
@@ -876,6 +1006,7 @@ export function importEntries(
           }
           tx.journal({ store: 'time', op: 'import-update', ref: saved.id, before: v.stored, after: saved })
           updated.push(change)
+          wrote(saved)
           continue
         }
         const e = { ...v.entry, id: newId(db) }
@@ -889,6 +1020,7 @@ export function importEntries(
         }
         tx.journal({ store: 'time', op: 'import', ref: e.id, after: e })
         added++
+        wrote(e)
       }
     })
   }

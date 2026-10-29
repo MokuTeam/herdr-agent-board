@@ -74,6 +74,9 @@ export interface SettingsDeps {
   /** The local board's page: Backup… is offered (#233). */
   backup?(): boolean
   openBackup?(): void
+  /** The local board's page: Time tracking… is offered (#237). */
+  timeSettings?(): boolean
+  openTimeSettings?(): void
   /** The local board's page with the payload's teamRev (#231): Team… is offered. */
   team?(): boolean
   openTeam?(): void
@@ -113,6 +116,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       mokupilot: deps.mokupilot?.() ?? false,
       access: deps.access?.() ?? false,
       backup: deps.backup?.() ?? false,
+      timeSettings: deps.timeSettings?.() ?? false,
       team: deps.team?.() ?? false,
       signOut: deps.signOut?.() ?? false,
       presence: deps.presence?.(),
@@ -142,6 +146,7 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'mokupilot') deps.openMokupilot?.()
         else if (pick?.kind === 'access') deps.openAccess?.()
         else if (pick?.kind === 'backup') deps.openBackup?.()
+        else if (pick?.kind === 'timeSettings') deps.openTimeSettings?.()
         else if (pick?.kind === 'team') deps.openTeam?.()
         else if (pick?.kind === 'signout') deps.endLogin?.()
         else if (pick?.kind === 'presence')
@@ -281,7 +286,7 @@ const crossFade = (): ((apply: () => void) => unknown) | undefined =>
  * Settings for the page: `menu` is the board's one menu (hooks/useContextMenus.ts);
  * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel, `openWake` Sleep and wake,
  * `openAccess` the Remote access panel, `openMokupilot` the MokuPilot panel, `openBackup` the Backup panel,
- * `openTeam` the Team panel.
+ * `openTimeSettings` Time tracking's, `openTeam` the Team panel.
  */
 export function useSettingsMenu(
   menu: MenuEngine,
@@ -291,6 +296,7 @@ export function useSettingsMenu(
   openAccess: () => void = () => {},
   openMokupilot: () => void = () => {},
   openBackup: () => void = () => {},
+  openTimeSettings: () => void = () => {},
   openTeam: () => void = () => {},
 ): SettingsMenu {
   const { t, choose } = useLanguage()
@@ -306,6 +312,7 @@ export function useSettingsMenu(
     openAccess,
     openMokupilot,
     openBackup,
+    openTimeSettings,
     openTeam,
   })
   const [expanded, setExpanded] = useState(false)
@@ -378,6 +385,8 @@ export function useSettingsMenu(
       openAccess: () => latest.current.openAccess(),
       backup: () => !remotePage(),
       openBackup: () => latest.current.openBackup(),
+      timeSettings: () => !remotePage(),
+      openTimeSettings: () => latest.current.openTimeSettings(),
       team: () => offersTeam(latest.current.board.data),
       openTeam: () => latest.current.openTeam(),
       signOut: () => remotePage() && keptAuth() === 'login',

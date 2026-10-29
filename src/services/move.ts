@@ -5,10 +5,12 @@
 // target profile's folder (adapters/move-files.ts; the originals stay), the source profile's trust
 // in its folder with it, and its card and wake's entry switched to that folder: `board resume` and
 // every wake run it there, with no "wrong profile" tag. One that was awake is woken again, now in
-// the new profile; one that was asleep stays asleep.
+// the new profile; one that was asleep stays asleep. The board's card and lane menus move them
+// through POST /api/move (server/routes/move.ts, #256).
 import { homedir } from 'node:os'
 import { writeCard } from '../adapters/cards.ts'
-import { copySession, copyTrust } from '../adapters/move-files.ts'
+import { checkCopy, copySession, copyTrust } from '../adapters/move-files.ts'
+import { itemProfile } from '../core/item-profile.ts'
 import { claudeStateFile, moveProfile, moveSource } from '../core/move.ts'
 import type { Profile } from '../core/profiles.ts'
 import { SESSION_ID } from '../core/resume.ts'
@@ -38,6 +40,31 @@ export interface MoveOutcome {
 }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+/**
+ * The folder wake's entry names for a session whose card names no profile and no folder (a card
+ * from before the board kept profiles, #256), else ''. Wake is asked only for such a one.
+ */
+async function wakeDirOf(deps: Deps, item: Item, list: readonly Profile[]): Promise<string> {
+  if (!item.session || item.profileFolder || itemProfile(item, list)) return ''
+  const s = (await deps.wake.sleepers()).find(x => x.session === item.session)
+  return s?.profile?.dir ?? ''
+}
+
+/** Whether the session `session` runs now in the profile folder `dir`, as its registry there says. */
+const runsIn = (deps: Deps, dir: string, session: string): boolean => deps.homes.forDir(dir).liveSessions().has(session)
+
+/**
+ * Why the session cannot be moved from `from` to `to`, known before anything is done: it runs in
+ * the target profile, or the files refuse (adapters/move-files.ts checkCopy); '' when it can. Asked
+ * before a running session is put to sleep, so it is not put to sleep for nothing.
+ */
+function copyBlock(deps: Deps, item: Item, from: string, to: Profile): string {
+  const session = item.session ?? ''
+  if (runsIn(deps, to.dir, session)) return `it is running in ${to.id}`
+  const check = checkCopy(from, to.dir, session, item.cwd)
+  return check.ok ? '' : check.error
+}
 
 /**
  * Move the sessions `targets` name (`items`: the board's sessions) to the profile `profile`, one
@@ -85,9 +112,9 @@ export async function moveMany(
     const why =
       item.agent !== 'claude' || !item.session || !SESSION_ID.test(item.session)
         ? 'not a Claude session'
-        : (() => {
-            const src = moveSource(item, set.list, to.profile)
-            return 'error' in src ? src.error : ''
+        : await (async () => {
+            const src = moveSource(item, set.list, to.profile, await wakeDirOf(deps, item, set.list))
+            return 'error' in src ? src.error : copyBlock(deps, item, src.dir, to.profile)
           })()
     if (why) done.set(item.key, { target, result: 'refused', why, ...who })
     else checked.push({ target, item })
@@ -159,13 +186,20 @@ export async function moveAsleep(
     platform = process.platform,
   }: { wakeAfter?: boolean; home?: string; platform?: string } = {},
 ): Promise<{ ok: true; notes: string[] } | { ok: false; error: string }> {
-  const src = moveSource(item, deps.profiles().list, to)
+  const list = deps.profiles().list
+  const src = moveSource(item, list, to, await wakeDirOf(deps, item, list))
   if ('error' in src) return { ok: false, error: src.error }
   const session = item.session ?? ''
-  if (deps.homes.forDir(src.dir).liveSessions().has(session)) return { ok: false, error: 'it is running again' }
+  if (runsIn(deps, src.dir, session)) return { ok: false, error: 'it is running again' }
+  // Resumed by hand in the target meanwhile: its transcript there is being written.
+  if (runsIn(deps, to.dir, session)) return { ok: false, error: `it is running in ${to.id}` }
   const copied = copySession(src.dir, to.dir, session, item.cwd)
   if (!copied.ok) return copied
-  const notes: string[] = copied.copied.again ? ['its conversation was there already, from a move cut off before'] : []
+  const notes: string[] = copied.copied.again
+    ? ['its conversation was there already, from a move cut off before']
+    : copied.copied.back
+      ? [`its older copy in ${to.id} brought up to date`]
+      : []
   try {
     const from = claudeStateFile(src.dir, home, platform)
     const trust = copyTrust(from, claudeStateFile(to.dir, home, platform), item.cwd, platform)

@@ -1,10 +1,11 @@
 import { expect, onTestFinished, setDefaultTimeout, test } from 'bun:test'
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { delimiter, join } from 'node:path'
 import { useLanguage } from '../../src/core/lang.ts'
 import { projectFolderName } from '../../src/core/resume.ts'
+import { serveBoard } from '../support/board-server.ts'
 import { fakeClaudeOn } from '../support/fake-claude.ts'
 import { root, type Sandbox, sandbox, until } from '../support/sandbox.ts'
 
@@ -33,6 +34,8 @@ interface World {
   /** The project folder every session runs in: spaces, Cyrillic and %. */
   cwd: string
   wake: string
+  /** What herdr-wake was asked, but its list of sleepers. */
+  wakeCalls: string[]
 }
 
 function herdrWith(box: Sandbox, panes: Pane[], cwd: string): void {
@@ -67,15 +70,24 @@ function herdrWith(box: Sandbox, panes: Pane[], cwd: string): void {
   box.state(state)
 }
 
-/** herdr-wake listing `asleep` as sleeping; nothing else is asked of it here. */
-async function fakeWake(asleep: Pane[]): Promise<{ url: string; calls: string[] }> {
+/**
+ * herdr-wake listing `asleep` as sleeping, with the profile folder `dirs` names for a session
+ * (as the new wake's entries have it); nothing else is asked of it here.
+ */
+async function fakeWake(asleep: Pane[], dirs: Record<string, string> = {}): Promise<{ url: string; calls: string[] }> {
   const calls: string[] = []
   const server = http.createServer((req, res) => {
     res.setHeader('content-type', 'application/json')
     if (req.url === '/sleeping')
       return res.end(
         JSON.stringify(
-          asleep.map(p => ({ session: p.session, pane: p.id, name: p.name, slept_at: new Date().toISOString() })),
+          asleep.map(p => ({
+            session: p.session,
+            pane: p.id,
+            name: p.name,
+            slept_at: new Date().toISOString(),
+            ...(dirs[p.session] && { profile: { dir: dirs[p.session] } }),
+          })),
         ),
       )
     calls.push(req.url ?? '')
@@ -91,9 +103,10 @@ const asleep = (id: string, session: string, name: string): Pane => ({ id, sessi
 
 /**
  * The sandbox's home with both profiles (Work only when `work`), the board's config, a card per
- * session in Default, and herdr and herdr-wake with these panes.
+ * session in Default (`old`: written before the board kept profiles, none named, wake's entry
+ * naming Default's folder), and herdr and herdr-wake with these panes.
  */
-async function world(box: Sandbox, panes: Pane[], { work = true } = {}): Promise<World> {
+async function world(box: Sandbox, panes: Pane[], { work = true, old = [] as string[] } = {}): Promise<World> {
   const home = box.env.USERPROFILE as string
   const claude = join(home, '.claude')
   const workDir = join(home, '.claude-work')
@@ -104,7 +117,10 @@ async function world(box: Sandbox, panes: Pane[], { work = true } = {}): Promise
   const cwd = join(box.dir, 'Проект x 50%')
   mkdirSync(cwd, { recursive: true })
   herdrWith(box, panes, cwd)
-  const wake = await fakeWake(panes.filter(p => !p.status))
+  const wake = await fakeWake(
+    panes.filter(p => !p.status),
+    Object.fromEntries(old.map(session => [session, claude])),
+  )
   const cfgDir = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board')
   mkdirSync(cfgDir, { recursive: true })
   const profiles = work ? [{ id: 'work', title: 'Work', dir: workDir, hidden: false }] : []
@@ -113,9 +129,13 @@ async function world(box: Sandbox, panes: Pane[], { work = true } = {}): Promise
   for (const p of panes)
     writeFileSync(
       join(box.cards, `${p.session}.json`),
-      JSON.stringify({ key: p.session, name: p.name, profile: 'default', profileDir: claude, profileWant: 'default' }),
+      JSON.stringify(
+        old.includes(p.session)
+          ? { key: p.session, name: p.name }
+          : { key: p.session, name: p.name, profile: 'default', profileDir: claude, profileWant: 'default' },
+      ),
     )
-  return { home, claude, work: workDir, cwd, wake: wake.url }
+  return { home, claude, work: workDir, cwd, wake: wake.url, wakeCalls: wake.calls }
 }
 
 /** A conversation in a profile: its transcript, its own folder and its file history. */
@@ -202,6 +222,8 @@ test('board move refuses what it cannot move, and takes a busy one once it is fr
     asleep('p5', RUNS, 'Runs'),
   ])
   conversation(w, w.claude, SID)
+  // Busy has one too: the files would let it go, only its turn keeps it up.
+  conversation(w, w.claude, BUSY)
   conversation(w, w.claude, TWIN)
   conversation(w, w.claude, RUNS)
   // Woken in Default meanwhile (a reminder, a message): its registry has it running.
@@ -219,7 +241,7 @@ test('board move refuses what it cannot move, and takes a busy one once it is fr
   expect(r.out.split('\n')).toEqual([
     'ok · 0 moved to work, 5 refused',
     `Busy (p2): refused, working; put it to sleep first (board sleep ${BUSY}), or add --when-free`,
-    `Twin (p3): refused, ${w.work} has another conversation under ${TWIN} already (${join(w.work, 'projects', projectFolderName(w.cwd), `${TWIN}.jsonl`)})`,
+    `Twin (p3): refused, ${w.work} has a longer or different copy of this conversation (${join(w.work, 'projects', projectFolderName(w.cwd), `${TWIN}.jsonl`)})`,
     `Bare (p4): refused, no conversation ${BARE} in ${w.claude}`,
     'Runs (p5): refused, it is running again',
     '"nobody": refused, no such session on the board',
@@ -325,4 +347,164 @@ test('one profile shown: board move has nowhere to go, and nothing changes', asy
     profileDir: w.claude,
     profileWant: 'default',
   })
+})
+
+test('moving back and forth: default, work, default, work, the conversation going on in each', async () => {
+  const box = await sandbox()
+  const w = await world(box, [asleep('p1', SID, 'Billing')])
+  const inDefault = conversation(w, w.claude, SID)
+  const project = (dir: string) => join(dir, 'projects', projectFolderName(w.cwd))
+  const inWork = join(project(w.work), `${SID}.jsonl`)
+  const line = (n: number) => `${JSON.stringify({ type: 'user', message: `turn ${n}` })}\n`
+  const move = async (to: string) => (await board(box, ['move', 'Billing', '--profile', to])).out.split('\n')
+
+  expect((await move('work'))[0]).toBe('ok · 1 moved to work')
+  expect(readFileSync(inWork, 'utf8')).toBe(readFileSync(inDefault, 'utf8'))
+  // It runs in Work: its transcript goes on, a subagent and an edit with it.
+  appendFileSync(inWork, line(1))
+  writeFileSync(join(project(w.work), SID, 'subagents', 'agent-2.jsonl'), '{"type":"user"}\n')
+  writeFileSync(join(w.work, 'file-history', SID, 'abc@v2'), 'new text')
+
+  // Back to Default: its older copy there is brought up to date, not refused.
+  const back = await move('default')
+  expect(back[0]).toBe('ok · 1 moved to default')
+  expect(back[1]).toStartWith('Billing (p1): moved to default · its older copy in default brought up to date')
+  expect(readFileSync(inDefault, 'utf8')).toBe(readFileSync(inWork, 'utf8'))
+  expect(existsSync(join(project(w.claude), SID, 'subagents', 'agent-2.jsonl'))).toBe(true)
+  expect(readFileSync(join(w.claude, 'file-history', SID, 'abc@v2'), 'utf8')).toBe('new text')
+  expect(readFileSync(join(w.claude, 'file-history', SID, 'abc@v1'), 'utf8')).toBe('old text')
+  expect(card(box, SID)).toMatchObject({ profile: 'default', profileDir: w.claude })
+
+  // It goes on in Default, then to Work again.
+  appendFileSync(inDefault, line(2))
+  const again = await move('work')
+  expect(again[1]).toStartWith('Billing (p1): moved to work · its older copy in work brought up to date')
+  expect(readFileSync(inWork, 'utf8')).toBe(readFileSync(inDefault, 'utf8'))
+  expect(readFileSync(inWork, 'utf8').split('\n').filter(Boolean)).toHaveLength(3)
+  expect(card(box, SID)).toMatchObject({ profile: 'work', profileDir: w.work })
+  // The originals were never taken away, and no temp file is left.
+  expect(existsSync(inDefault)).toBe(true)
+  expect(readdirSync(project(w.claude)).filter(n => n.endsWith('.tmp'))).toEqual([])
+  expect(readdirSync(project(w.work)).filter(n => n.endsWith('.tmp'))).toEqual([])
+})
+
+test('moving back to a copy that went on by itself is still refused, and nothing changes', async () => {
+  const box = await sandbox()
+  const w = await world(box, [asleep('p1', SID, 'Billing')])
+  const inDefault = conversation(w, w.claude, SID)
+  expect((await board(box, ['move', 'Billing', '--profile', 'work'])).code).toBe(0)
+  const inWork = join(w.work, 'projects', projectFolderName(w.cwd), `${SID}.jsonl`)
+  appendFileSync(inWork, '{"type":"user","message":"in work"}\n')
+  // Default's copy was resumed by hand meanwhile: no longer the start of Work's.
+  appendFileSync(inDefault, '{"type":"user","message":"in default"}\n')
+  const before = { work: readFileSync(inWork, 'utf8'), default: readFileSync(inDefault, 'utf8') }
+
+  const r = await board(box, ['move', 'Billing', '--profile', 'default'])
+  expect(r.out).toBe(
+    `ok · 0 moved to default, 1 refused\nBilling (p1): refused, ${w.claude} has a longer or different copy of this conversation (${inDefault})`,
+  )
+  expect({ work: readFileSync(inWork, 'utf8'), default: readFileSync(inDefault, 'utf8') }).toEqual(before)
+  expect(card(box, SID)).toMatchObject({ profile: 'work', profileDir: w.work })
+})
+
+test('a card from before profiles moves from the folder its wake entry names', async () => {
+  const box = await sandbox()
+  const w = await world(box, [asleep('p1', SID, 'Billing'), asleep('p2', TWIN, 'Twin')], { old: [SID, TWIN] })
+  conversation(w, w.claude, SID)
+  conversation(w, w.claude, TWIN)
+  // Twin's wake entry names no folder either: not known, as before.
+  const wake = await fakeWake([asleep('p1', SID, 'Billing'), asleep('p2', TWIN, 'Twin')], { [SID]: w.claude })
+  const cfgFile = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
+  writeFileSync(cfgFile, JSON.stringify({ ...JSON.parse(readFileSync(cfgFile, 'utf8')), wakeUrl: wake.url }))
+
+  const r = await board(box, ['move', 'Billing', 'Twin', '--profile', 'work'])
+  expect(r.out.split('\n')).toEqual([
+    'ok · 1 moved to work, 1 refused',
+    'Billing (p1): moved to work · folder not trusted in work: Claude will ask once',
+    'Twin (p2): refused, its profile is not known',
+  ])
+  expect(existsSync(join(w.work, 'projects', projectFolderName(w.cwd), `${SID}.jsonl`))).toBe(true)
+  expect(card(box, SID)).toMatchObject({ profile: 'work', profileDir: w.work })
+  expect(card(box, TWIN)).toEqual({ key: TWIN, name: 'Twin' })
+})
+
+test('POST /api/move moves as board move does, and only for this page', async () => {
+  const box = await sandbox()
+  const w = await world(box, [asleep('p1', SID, 'Billing')])
+  conversation(w, w.claude, SID)
+  const cfg = JSON.parse(
+    readFileSync(join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json'), 'utf8'),
+  )
+  const { port: _port, ...rest } = cfg
+  const { url } = await serveBoard(box, rest)
+  // Fresh herdr data first: a move goes through herdr.
+  for (let tries = 0; ((await (await fetch(`${url}/api/board`)).json()) as { stale: boolean }).stale; tries++) {
+    if (tries > 200) throw new Error('the board did not refresh')
+    await Bun.sleep(25)
+  }
+  const post = (body: unknown, headers: Record<string, string> = {}) =>
+    fetch(`${url}/api/move`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1', ...headers },
+      body: JSON.stringify(body),
+    }).then(async res => [res.status, await res.json()])
+
+  // Another site's page, or one without the board's header, moves nothing.
+  expect(await post({ targets: [SID], profile: 'work' }, { origin: 'https://example.com' })).toEqual([
+    403,
+    { error: 'origin' },
+  ])
+  expect(await post({ targets: [SID], profile: 'work' }, { 'x-board': '0' })).toEqual([403, { error: 'header' }])
+  expect((await post({ targets: [], profile: 'work' }))[0]).toBe(400)
+  expect(card(box, SID)).toMatchObject({ profile: 'default', profileDir: w.claude })
+
+  const [status, body] = await post({ targets: [SID], profile: 'work' })
+  expect(status).toBe(200)
+  expect(body).toMatchObject({ ok: true, results: [{ target: SID, result: 'moved', key: SID, name: 'Billing' }] })
+  expect(card(box, SID)).toMatchObject({ profile: 'work', profileDir: w.work })
+  expect(existsSync(join(w.work, 'projects', projectFolderName(w.cwd), `${SID}.jsonl`))).toBe(true)
+})
+
+test('a session running in the target profile is not moved there: its copy there is being written', async () => {
+  const box = await sandbox()
+  const w = await world(box, [asleep('p1', SID, 'Billing')])
+  conversation(w, w.claude, SID)
+  expect((await board(box, ['move', 'Billing', '--profile', 'work'])).code).toBe(0)
+  expect((await board(box, ['move', 'Billing', '--profile', 'default'])).code).toBe(0)
+  // Resumed by hand in Work meanwhile: its registry there has it running, and its copy there is
+  // still the start of this one, so only that it runs keeps the move from replacing it.
+  mkdirSync(join(w.work, 'sessions'), { recursive: true })
+  writeFileSync(
+    join(w.work, 'sessions', '99999.json'),
+    JSON.stringify({ sessionId: SID, kind: 'interactive', pid: process.pid, status: 'idle' }),
+  )
+  const inWork = join(w.work, 'projects', projectFolderName(w.cwd), `${SID}.jsonl`)
+  const before = readFileSync(inWork, 'utf8')
+
+  const r = await board(box, ['move', 'Billing', '--profile', 'work'])
+  expect(r.out).toBe('ok · 0 moved to work, 1 refused\nBilling (p1): refused, it is running in work')
+  expect(readFileSync(inWork, 'utf8')).toBe(before)
+  expect(card(box, SID)).toMatchObject({ profile: 'default', profileDir: w.claude })
+})
+
+test('a move the files refuse is refused before a running session is put to sleep', async () => {
+  const box = await sandbox()
+  const w = await world(box, [
+    { id: 'p1', session: SID, name: 'Billing', status: 'idle' },
+    { id: 'p2', session: BARE, name: 'Bare', status: 'idle' },
+  ])
+  conversation(w, w.claude, SID)
+  // Work has a copy of Billing that went on by itself; Bare has no conversation at all.
+  const inWork = conversation(w, w.work, SID)
+  appendFileSync(inWork, '{"type":"user","message":"in work"}\n')
+
+  const r = await board(box, ['move', 'Billing', 'Bare', '--profile', 'work'])
+  expect(r.out.split('\n')).toEqual([
+    'ok · 0 moved to work, 2 refused',
+    `Billing (p1): refused, ${w.work} has a longer or different copy of this conversation (${inWork})`,
+    `Bare (p2): refused, no conversation ${BARE} in ${w.claude}`,
+  ])
+  // Neither was put to sleep: herdr-wake was asked for nothing.
+  expect(w.wakeCalls).toEqual([])
+  for (const key of [SID, BARE]) expect(card(box, key)).toMatchObject({ profileDir: w.claude })
 })

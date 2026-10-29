@@ -98,6 +98,13 @@ export function App() {
     setBackup(true)
     setBackupMounted(true)
   }
+  // Settings → Time tracking… (#237), on the local board only: mounted at its first opening, as Backup.
+  const [timeSettings, setTimeSettings] = useState(false)
+  const [timeSettingsMounted, setTimeSettingsMounted] = useState(false)
+  const openTimeSettings = () => {
+    setTimeSettings(true)
+    setTimeSettingsMounted(true)
+  }
   // Time (#233), while the board has it on: its panel, out of the toolbar's button or a lane's day total.
   const [timeOpen, setTimeOpen] = useState(false)
   const [timeClient, setTimeClient] = useState<string | null>(null)
@@ -162,6 +169,7 @@ export function App() {
     openAccess,
     openMokupilot,
     openBackup,
+    openTimeSettings,
     openTeam,
   )
   // Tasks' 📌 menu under an agent's message, and the panel's buttons.
@@ -245,6 +253,9 @@ export function App() {
         {...(mokupilotMounted ? { mokupilot: { open: mokupilot, onClose: () => setMokupilot(false) } } : {})}
         {...(accessMounted && !remotePage() ? { access: { open: access, onClose: () => setAccess(false) } } : {})}
         {...(backupMounted && !remotePage() ? { backup: { open: backup, onClose: () => setBackup(false) } } : {})}
+        {...(timeSettingsMounted && !remotePage()
+          ? { timeSettings: { open: timeSettings, onClose: () => setTimeSettings(false) } }
+          : {})}
         {...(teamMounted && offersTeam(data) ? { team: { open: team, onClose: () => setTeam(false) } } : {})}
         archive={archive}
         todos={{ open: todosOpen, onClose: () => setTodosOpen(false), todos }}

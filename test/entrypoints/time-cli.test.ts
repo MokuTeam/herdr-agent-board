@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { updateTarget, writeKey } from '../../src/adapters/backup-store.ts'
+import { openDb } from '../../src/adapters/db.ts'
 import { TimeError } from '../../src/adapters/time-store.ts'
 import { makeKey } from '../../src/core/backup-file.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
@@ -12,6 +13,7 @@ import type { Actor } from '../../src/core/time.ts'
 import type { Config } from '../../src/core/types.ts'
 import { parseArgs, timeCmd } from '../../src/entrypoints/time-cli.ts'
 import { timeChecks } from '../../src/services/time.ts'
+import { editTimeSettings, type WithDb } from '../../src/services/time-settings.ts'
 import { isolatedHome } from '../support/env.ts'
 
 const me: Actor = { key: 's1', name: 'Session one' }
@@ -712,4 +714,117 @@ test('an edit that changes nothing asks for no change in the systems; the remove
     (await run(cfg, ['list', '--changed-after-post', '--date', '2026-10-28'])).at(-1) ?? '',
     /0 entries, 0:00 · removed 1/,
   )
+})
+
+test('--new-project: a name the client has, case and spaces aside, is the one; a new one joins its list in config.json once', async () => {
+  const { dir, cfg } = await setUp()
+  const file = join(dir, 'config', 'herdr', 'plugins', 'config', 'agent-board', 'config.json')
+  mkdirSync(join(file, '..'), { recursive: true })
+  writeFileSync(file, JSON.stringify(cfg))
+  const projects = () =>
+    (JSON.parse(readFileSync(file, 'utf8')) as { time: { clients: Record<string, { projects: string[] }> } }).time
+      .clients['client-a']?.projects
+  const at = ['--start', '2026-10-29T09:00:00-04:00', '--minutes', '30']
+  const same = await jsonOf(cfg, ['add', '--project', 'support ', '--new-project', ...at, 'Case 10001 X: work'])
+  assert.equal(same.project, 'Support')
+  assert.deepEqual(projects(), ['Support'], 'no near duplicate')
+  const fresh = await jsonOf(cfg, [
+    'add',
+    '--project',
+    'Audit',
+    '--new-project',
+    '--start',
+    '2026-10-29T10:00:00-04:00',
+    '--minutes',
+    '30',
+    'Case 10002 Y: work',
+  ])
+  assert.equal(fresh.project, 'Audit')
+  // the config the command read (cfg) did not have it: the file as it is now did, read under its lock
+  const moved = await jsonOf(cfg, ['edit', fresh.id, '--project', 'audit', '--new-project'])
+  assert.equal(moved.project, 'Audit')
+  assert.deepEqual(projects(), ['Support', 'Audit'])
+})
+
+test('a client off and a retired project refuse an entry, --new-project too, saying where to turn them back', async () => {
+  const { cfg } = await setUp()
+  const time = cfg.time as { clients: Record<string, Record<string, unknown>> }
+  time.clients['client-a'] = { ...time.clients['client-a'], retired: ['Old'] }
+  time.clients.personal = { ...time.clients.personal, on: false }
+  const at = ['--start', '2026-10-29T09:00:00-04:00', '--minutes', '30']
+  assert.equal(
+    await keyOf(run(cfg, ['add', '--project', 'old', '--new-project', ...at, 'Case 10001 X: work'])),
+    'time.err.retired',
+  )
+  assert.equal(
+    await keyOf(run(cfg, ['add', '--client', 'personal', '--project', 'Internal', ...at, 'Reading'])),
+    'time.err.clientOff',
+  )
+  const off = await jsonOf(cfg, ['add', '--client', 'personal', '--project', 'Internal', ...at, 'Reading'])
+  assert.deepEqual([off.ok, off.error], [false, 'clientOff'])
+})
+
+test('--new-project while config.json’s lock is held (a writer stopped a moment ago): refused in words, no entry written', async () => {
+  const { dir, cfg } = await setUp()
+  const file = join(dir, 'config', 'herdr', 'plugins', 'config', 'agent-board', 'config.json')
+  mkdirSync(join(file, '..'), { recursive: true })
+  writeFileSync(file, JSON.stringify(cfg))
+  mkdirSync(`${file}.lock`)
+  const at = ['--start', '2026-10-29T09:00:00-04:00', '--minutes', '30']
+  const r = await jsonOf(cfg, ['add', '--project', 'Audit', '--new-project', ...at, 'Case 10001 X: work'])
+  assert.deepEqual([r.ok, r.error], [false, 'configBusy'])
+  assert.deepEqual(await jsonOf(cfg, ['list', '--date', '2026-10-29']), [])
+})
+
+test('import: only the rows it wrote bring their projects to the list, so a project renamed on the board stays renamed; a list it cannot change is said', async () => {
+  const { dir, cfg } = await setUp()
+  const file = join(dir, 'config', 'herdr', 'plugins', 'config', 'agent-board', 'config.json')
+  mkdirSync(join(file, '..'), { recursive: true })
+  writeFileSync(file, JSON.stringify(cfg))
+  const projects = () =>
+    (JSON.parse(readFileSync(file, 'utf8')) as { time: { clients: Record<string, { projects: string[] }> } }).time
+      .clients['client-a']?.projects
+  const csv = join(dir, 'toggl.csv')
+  const head = 'Client,Project,Description,Start date,Start time,End date,End time,Duration,Tags'
+  const row = (project: string, hour: string) =>
+    `Client A,${project},Case 10001 X: work,2026-10-28,${hour}:00:00,2026-10-28,${hour}:30:00,00:30:00,`
+  writeFileSync(csv, [head, row('Help', '10')].join('\n'))
+  const map = ['--tz', 'Europe/Istanbul', '--map', 'Client A=client-a']
+  await jsonOf(cfg, ['import', csv, ...map])
+  assert.deepEqual(projects(), ['Support', 'Help'])
+  // renamed on the board: the list and the entry
+  const withDb: WithDb = (_create, fn) => {
+    const db = openDb()
+    try {
+      return fn(db)
+    } finally {
+      db?.close()
+    }
+  }
+  assert.equal(editTimeSettings({ op: 'rename', client: 'client-a', from: 'Help', to: 'Desk' }, withDb).ok, true)
+  // the same file again: its row differs now (the project), it is no new row, nothing comes back
+  const again = await jsonOf(cfg, ['import', csv, ...map])
+  assert.deepEqual([again.added, again.changed.length], [0, 1])
+  assert.deepEqual(projects(), ['Support', 'Desk'])
+  // a new row while config.json's lock is held: the entry is in, the list not, and it says so
+  writeFileSync(csv, [head, row('Calls', '12')].join('\n'))
+  mkdirSync(`${file}.lock`)
+  const busy = await jsonOf(cfg, ['import', csv, ...map])
+  assert.equal(busy.added, 1)
+  assert.match(busy.projectsNotAdded, /config\.json is being changed by another process/)
+  assert.deepEqual(projects(), ['Support', 'Desk'])
+}, 15_000)
+
+test('import: a "differs" line cuts a long description by characters, never halving an emoji', async () => {
+  const { dir, cfg } = await setUp()
+  const csv = join(dir, 'toggl.csv')
+  const head = 'Client,Project,Description,Start date,Start time,End date,End time,Duration,Tags'
+  const words = `${'x'.repeat(39)}🙂 tail`
+  const row = (d: string) => `Client A,Support,${d},2026-10-28,16:00:00,2026-10-28,17:30:00,01:30:00,`
+  const map = ['--tz', 'Europe/Istanbul', '--map', 'Client A=client-a']
+  writeFileSync(csv, [head, row('First')].join('\n'))
+  await jsonOf(cfg, ['import', csv, ...map])
+  writeFileSync(csv, [head, row(words)].join('\n'))
+  const said = (await run(cfg, ['import', csv, ...map, '--dry-run'])).join('\n')
+  assert.ok(said.includes(`"${'x'.repeat(39)}🙂…"`), said)
 })

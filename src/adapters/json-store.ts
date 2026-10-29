@@ -59,6 +59,19 @@ function lockFile(path: string, recoverStale = true): () => void {
   }
 }
 
+/**
+ * `fn` under `path`'s lock, the one updateJson takes: a writer in another process that takes it
+ * too waits until `fn` is done (config.json's edits: config-file.ts withConfigFile).
+ */
+export function withLock<T>(path: string, fn: () => T): T {
+  const unlock = lockFile(path)
+  try {
+    return fn()
+  } finally {
+    unlock()
+  }
+}
+
 const RENAME_TRIES = 10
 const RENAME_RETRY_MS = 20
 

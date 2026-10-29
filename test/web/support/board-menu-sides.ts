@@ -148,6 +148,8 @@ function boardOf(s: BoardScene, log: string[], menu: unknown): BoardMenuDeps & {
     mokupilot: note('do.mokupilot'),
     fork: note('do.fork'),
     archive: note('do.archive'),
+    profile: note('do.profile'),
+    laneProfile: note('do.laneProfile'),
     tidy: note('do.tidy'),
     archiveOpen: note('do.archiveOpen'),
     rename: note('do.rename'),

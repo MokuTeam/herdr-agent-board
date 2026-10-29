@@ -74,7 +74,7 @@ import {
 } from '../core/time.ts'
 import { type DateFormat, dayTotals, parseMap, rowsFromCsv, rowsFromJson, type TogglRow } from '../core/time-import.ts'
 import type { Config } from '../core/types.ts'
-import { writeRefusal } from '../services/time.ts'
+import { withNewProject, writeRefusal } from '../services/time.ts'
 
 const FLAGS_WITH_VALUE = new Set([
   '--client',
@@ -294,24 +294,26 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       const billable = billableFlag()
       const db = writable()
       try {
-        const r = addEntry(
-          db,
-          conf,
-          {
-            client,
-            project,
-            description,
-            tags: a.all('--tag'),
-            start: from,
-            stop: to,
-            startGiven: start !== null,
-            newProject: a.has('--new-project'),
-            ...(typeof billable === 'boolean' && { billable }),
-          },
-          ctx.actor,
-          now,
-        )
-        if (a.has('--new-project') && !r.existing) addTimeProjects(client, [r.entry.project])
+        const add = (c: TimeConfig) =>
+          addEntry(
+            db,
+            c,
+            {
+              client,
+              project,
+              description,
+              tags: a.all('--tag'),
+              start: from,
+              stop: to,
+              startGiven: start !== null,
+              newProject: a.has('--new-project'),
+              ...(typeof billable === 'boolean' && { billable }),
+            },
+            ctx.actor,
+            now,
+          )
+        // a new project: the entry and the client's list under config.json's lock
+        const r = a.has('--new-project') ? withNewProject(conf, add, x => x.entry) : add(conf)
         const said = !r.existing ? 'ok' : r.reason === 'repeat-window' ? t('time.cli.repeat') : t('time.cli.existing')
         print(
           `${said} · ${r.entry.id} · ${r.entry.client}/${r.entry.project} · ${r.entry.date} · ${hm(secondsOf(r.entry))} · ${dayTotal(db, r.entry)}`,
@@ -342,26 +344,27 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       const db = writable()
       try {
         const was = getEntry(db, id)
-        const e = editEntry(
-          db,
-          conf,
-          id,
-          {
-            ...(description !== undefined && { description }),
-            ...(project !== undefined && { project }),
-            ...(client !== undefined && { client }),
-            ...(start !== null && { start }),
-            ...(stop !== null && { stop }),
-            ...(duration !== null && { seconds: duration }),
-            addTags: tags.filter(x => !x.startsWith('-')).map(x => x.replace(/^\+/, '')),
-            removeTags: tags.filter(x => x.startsWith('-')).map(x => x.slice(1)),
-            newProject: a.has('--new-project'),
-            ...(billable !== undefined && { billable }),
-          },
-          ctx.actor,
-          { force, ...(expect !== undefined && { expect }) },
-        )
-        if (a.has('--new-project')) addTimeProjects(e.client, [e.project])
+        const edit = (c: TimeConfig) =>
+          editEntry(
+            db,
+            c,
+            id,
+            {
+              ...(description !== undefined && { description }),
+              ...(project !== undefined && { project }),
+              ...(client !== undefined && { client }),
+              ...(start !== null && { start }),
+              ...(stop !== null && { stop }),
+              ...(duration !== null && { seconds: duration }),
+              addTags: tags.filter(x => !x.startsWith('-')).map(x => x.replace(/^\+/, '')),
+              removeTags: tags.filter(x => x.startsWith('-')).map(x => x.slice(1)),
+              newProject: a.has('--new-project'),
+              ...(billable !== undefined && { billable }),
+            },
+            ctx.actor,
+            { force, ...(expect !== undefined && { expect }) },
+          )
+        const e = a.has('--new-project') ? withNewProject(conf, edit, x => x) : edit(conf)
         // entered somewhere already: the change is to be made there too
         const marks = marksFor(db, [e]).get(e.id) ?? []
         print(
@@ -775,7 +778,11 @@ async function importCmd(
   const rowText = (c: ImportChange): string => {
     const at = Date.parse(c.row.start)
     const [h, m] = clockIn(at, tz)
-    const words = c.row.description.length > 40 ? `${c.row.description.slice(0, 40)}…` : c.row.description
+    // cut by what a reader takes for one character (a grapheme): an emoji is never halved
+    const chars = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(c.row.description)].map(
+      x => x.segment,
+    )
+    const words = chars.length > 40 ? `${chars.slice(0, 40).join('')}…` : c.row.description
     return `${dateIn(at, tz)} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')} "${words}"${c.id ? ` · ${c.id}` : ''}`
   }
   /** A row the store has otherwise: changed in Toggl (or on the board) since its import, or made by a session at that start. */
@@ -806,6 +813,7 @@ async function importCmd(
         (v.kind === 'new' && v.entry.billable === false) ||
         // a row that differs is rewritten only with --update, and only an entry the board never changed
         (v.kind === 'changed' &&
+          !v.alike &&
           a.has('--update') &&
           v.stored.by === 'import' &&
           v.stored.changedBy === 'import' &&
@@ -832,13 +840,23 @@ async function importCmd(
   }
   const db = writable()
   try {
-    const r = importEntries(db, conf, entries, { update: a.has('--update') })
-    // projects found go into each lane's list, where the lane lists them: only once the gate let the run in
-    const byLane = new Map<string, string[]>()
-    for (const e of entries) if (e.project !== '-') byLane.set(e.client, [...(byLane.get(e.client) ?? []), e.project])
-    for (const [lane, projects] of byLane) addTimeProjects(lane, projects)
+    const projects = new Map<string, string[]>()
+    const r = importEntries(db, conf, entries, {
+      update: a.has('--update'),
+      wrote: e => {
+        if (e.project !== '-') projects.set(e.client, [...(projects.get(e.client) ?? []), e.project])
+      },
+    })
+    // the projects of the entries it wrote go into each lane's list, where the lane lists them: a
+    // row already there (or one that differs, a project renamed on the board since) brings none back
+    const refusals = [...projects].flatMap(([lane, names]) => {
+      const added = addTimeProjects(lane, names)
+      return added.ok ? [] : [added.error]
+    })
+    const listNote = refusals.length ? t('time.cli.projectsNotAdded', { error: refusals[0] ?? '' }) : null
     print(
       [
+        ...(listNote ? [listNote] : []),
         ...changeLines('time.cli.importChanged', r.changed),
         ...changeLines('time.cli.importUpdated', r.updated),
         t('time.cli.imported', {
@@ -850,7 +868,7 @@ async function importCmd(
           bad: bad.length,
         }),
       ],
-      { ...summary, ...r },
+      { ...summary, ...r, ...(listNote && { projectsNotAdded: listNote }) },
     )
   } finally {
     db.close()

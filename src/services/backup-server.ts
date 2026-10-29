@@ -63,9 +63,11 @@ export async function dropPublicKey(): Promise<{ ok: true; publicKey: string } |
  * working then).
  */
 export async function newDropKey(): Promise<{ ok: true; publicKey: string } | { ok: false; error: string }> {
+  // the server is set no more before the key goes: refused (config.json busy or unreadable), nothing goes
+  const unset = editBackup({ serverSet: null })
+  if (!unset.ok) return unset
   rmSync(dropKey(), { force: true })
   rmSync(`${dropKey()}.pub`, { force: true })
-  editBackup({ serverSet: null })
   resetTarget('server')
   return generateKey('agent-board backup', dropKey())
 }
@@ -190,7 +192,9 @@ export function createBackupServer(d: BackupServerDeps) {
         if ('error' in r) return { ok: false, error: r.error }
         const run = readRun(r.h.out)
         if (!run.ok) return { ok: false, run, error: run.fail ?? why(r.h, s, sudoPassword) }
-        editBackup({ serverSet: null })
+        // undone on the server; config.json refused (busy): said, Undo again sets it
+        const unset = editBackup({ serverSet: null })
+        if (!unset.ok) return { ok: false, run, error: unset.error }
         resetTarget('server')
         return { ok: true, run }
       }),
