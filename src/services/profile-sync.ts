@@ -9,8 +9,9 @@
 // sync's hashes of what was written (the target as it writes, the source once all has arrived).
 //
 // The login is the server setup's (services/server-setup.ts): the admin's fields in config.json,
-// the server's key pinned by its Look, the password typed in the panel and sent with each request,
-// kept in memory only while that request (or its run) lasts, never stored. sudo's password goes
+// the server's key pinned by its Look, the password typed in the panel (or remembered by the local
+// board for 30 minutes, filled in by remote-access.ts: services/held-passwords.ts) and sent with each
+// request, kept here in memory only while that request (or its run) lasts, never stored. sudo's password goes
 // alone first (SUDO_CHECK), then on the sync's stdin before its frames. Nothing runs, nothing is
 // read before the owner asks: a board that never syncs is as it was.
 //

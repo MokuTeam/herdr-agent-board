@@ -567,6 +567,11 @@ describe('Remote access, set up from the local board', () => {
     expect(v.server).toMatchObject({ hostKey: { fingerprint: FINGERPRINT, pinnedNow: true }, hint: 'unreadable' })
     expect(await api.op({ op: 'server-apply', plan: 'r1' })).toMatchObject([409, { ok: false, hint: 'lookAgain' }])
     expect(await api.op({ op: 'server-look', password: 'a\nb' })).toEqual([400, { ok: false, error: 'password' }])
+    // no login went through with a password: none remembered, the view says so and holds none
+    const after = await api.view()
+    expect(after.server?.passwordHeld).toBeNull()
+    expect(JSON.stringify(after)).not.toContain('a\\nb')
+    expect(await api.op({ op: 'server-password-forget' })).toEqual([200, { ok: true }])
   })
 })
 

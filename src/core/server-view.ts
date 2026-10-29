@@ -67,6 +67,11 @@ export interface ServerView {
    * never the tunnel's own); '' while none is set. None: a board from before it.
    */
   installDomain?: string
+  /**
+   * Until when the local board remembers the server's passwords (services/held-passwords.ts: its
+   * memory only, 30 minutes since their last use); null when it holds none. Never a password.
+   */
+  passwordHeld?: { until: number } | null
 }
 
 export interface InstallView {
@@ -152,6 +157,9 @@ export function isServerView(v: unknown): v is ServerView {
     (v.hostKey === null || isHostKey(v.hostKey)) &&
     (v.target === undefined || v.target === 'tunnel' || v.target === 'install') &&
     (v.install === undefined || v.install === null || isInstall(v.install)) &&
-    (v.installDomain === undefined || isText(v.installDomain))
+    (v.installDomain === undefined || isText(v.installDomain)) &&
+    (v.passwordHeld === undefined ||
+      v.passwordHeld === null ||
+      (isFields(v.passwordHeld) && typeof v.passwordHeld.until === 'number'))
   )
 }
