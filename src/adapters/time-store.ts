@@ -594,6 +594,8 @@ export interface ImportChange {
   fields: string[]
   /** Who made the stored entry: the import (changed in Toggl since, or on the board), or a session at that start. */
   by: Actor
+  /** Toggl's row as the file has it (its start and description), for a person to find it there. */
+  row: { start: string; description: string }
 }
 
 export type ImportVerdict =
@@ -606,8 +608,17 @@ const IMPORT_FIELDS = ['client', 'project', 'description', 'start', 'stop', 'tag
 /**
  * A CSV row's key (the Detailed report has no id): its lane and the start Toggl gave it, kept on
  * the entry, so the row is known again after the entry is moved or its start changed on the board.
+ * Rows of one lane that start at the same second are told apart by a number after the first
+ * (`#2`, `#3`).
  */
-export const csvKey = (client: string, start: number): string => `csv:${client}:${isoOf(start)}`
+export const csvKey = (client: string, start: number, n = 1): string =>
+  `csv:${client}:${isoOf(start)}${n > 1 ? `#${n}` : ''}`
+
+/** The lane and start a CSV key names (the start Toggl gave), or null for Toggl's own id. */
+const keyStart = (key: string): string | null => {
+  const m = /^csv:(.*):(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)(?:#\d+)?$/.exec(key)
+  return m ? `${m[1]}\u0000${m[2]}` : null
+}
 
 /** The entry a Toggl row would be; `id` empty until it is written. */
 function importedEntry(c: TimeConfig, n: ImportRow, now: number): TimeEntry {
@@ -631,12 +642,14 @@ function importedEntry(c: TimeConfig, n: ImportRow, now: number): TimeEntry {
 
 /**
  * What the store has, for one import or dry run, read once: by key (Toggl's id, or a CSV row's
- * csvKey), and by lane and start (entries a session made, and a live one before a removed one).
- * What the run adds or changes goes in as it goes, so two rows of one file meet each other.
+ * csvKey), and by lane and start (the entries a CSV key names at that start, and every entry that
+ * starts there: a session's own, a live one before a removed one). An entry a row of the run was
+ * matched to is taken: no second row is matched to it. What the run adds goes in as it goes.
  */
 export class ImportIndex {
   private readonly byKey = new Map<string, TimeEntry>()
-  private readonly byStart = new Map<string, TimeEntry>()
+  private readonly byStart = new Map<string, TimeEntry[]>()
+  private readonly taken = new Set<TimeEntry>()
   constructor(db: BoardDb | null) {
     if (!db) return
     const rows = db.db.query(`SELECT ${COLUMNS} FROM time_entries ORDER BY deleted IS NOT NULL, at`).all() as Row[]
@@ -644,37 +657,122 @@ export class ImportIndex {
   }
   add(e: TimeEntry): void {
     if (e.toggl) this.byKey.set(e.toggl, e)
-    const k = `${e.client}\u0000${e.start}`
-    const had = this.byStart.get(k)
-    if (!had || (had.deleted && !e.deleted)) this.byStart.set(k, e)
+    const own = `${e.client}\u0000${e.start}`
+    const named = e.toggl ? keyStart(e.toggl) : null
+    for (const k of new Set([own, ...(named ? [named] : [])])) this.byStart.set(k, [...(this.byStart.get(k) ?? []), e])
   }
-  find(e: Pick<TimeEntry, 'toggl' | 'client' | 'start'>): TimeEntry | null {
-    return (e.toggl && this.byKey.get(e.toggl)) || this.byStart.get(`${e.client}\u0000${e.start}`) || null
+  /** The entry with Toggl's id `key`, unless a row of the run has it already. */
+  byId(key: string): TimeEntry | null {
+    const e = this.byKey.get(key)
+    return e && !this.taken.has(e) ? e : null
+  }
+  /** The entries at a lane and start no row of the run has yet, the live ones first. */
+  at(client: string, start: string): TimeEntry[] {
+    const all = (this.byStart.get(`${client}\u0000${start}`) ?? []).filter(e => !this.taken.has(e))
+    return [...all.filter(e => !e.deleted), ...all.filter(e => e.deleted)]
+  }
+  take(e: TimeEntry): void {
+    this.taken.add(e)
+  }
+  isTaken(e: TimeEntry): boolean {
+    return this.taken.has(e)
+  }
+  /** A CSV key no entry has, for a row at that lane and start: the first, else #2, #3… */
+  freeKey(client: string, start: number): string {
+    for (let n = 1; ; n++) {
+      const key = csvKey(client, start, n)
+      if (!this.byKey.has(key)) return key
+    }
   }
 }
 
-/**
- * What the store makes of a Toggl row (index: what it has). It is known again by its key, else by
- * its lane and its start to the second: the same in client, project, description, start, stop and
- * tags is `already`; a removed one stays removed (`already`); one that differs (changed in Toggl,
- * or moved or changed on the board) is `changed`, with the fields, and is not added twice.
- */
-export function importVerdict(
-  index: ImportIndex,
-  c: TimeConfig,
-  n: ImportRow,
-  now: number = Date.now(),
-): ImportVerdict {
-  const entry = importedEntry(c, n, now)
-  const stored = index.find(entry)
-  if (!stored) return { kind: 'new', entry }
-  if (stored.deleted) return { kind: 'already', stored }
-  const fields = IMPORT_FIELDS.filter(f =>
+/** The fields a stored entry has otherwise than a Toggl row's. */
+const differing = (stored: TimeEntry, entry: TimeEntry): string[] =>
+  IMPORT_FIELDS.filter(f =>
     f === 'tags' ? [...stored.tags].sort().join('\u0000') !== entry.tags.join('\u0000') : stored[f] !== entry[f],
   )
-  if (!fields.length) return { kind: 'already', stored }
-  return { kind: 'changed', stored, next: entry, fields }
+
+/**
+ * How the rows of one lane and start are paired with the entries the store has there, each pass
+ * over the rows not yet paired: alike in every field first; then the same project and
+ * description (its stop or tags changed); the same project and stop (its words changed); the same
+ * project; the same description; the same stop; then whatever is left, one to one.
+ */
+const PAIRINGS: ((stored: TimeEntry, row: TimeEntry) => boolean)[] = [
+  (a, b) => differing(a, b).length === 0,
+  (a, b) => a.project === b.project && a.description === b.description,
+  (a, b) => a.project === b.project && a.stop === b.stop,
+  (a, b) => a.project === b.project,
+  (a, b) => a.description === b.description,
+  (a, b) => a.stop === b.stop,
+  () => true,
+]
+
+/**
+ * What the store makes of Toggl's rows (index: what it has), each row's verdict in its place. A
+ * row with Toggl's id is that entry. The others are known again by their lane and the start Toggl
+ * gave them, a lane and start at a time: its rows are paired with the entries there (PAIRINGS),
+ * each entry with one row at most, so rows of one start that differ are each an entry of their
+ * own. A row paired with an entry alike is `already`; with a removed one, `already` (it stays
+ * removed); with one that differs (changed in Toggl, or moved or changed on the board), `changed`,
+ * with the fields, and not added twice. A row left over is `new`, with a key of its own; one
+ * alike to a row of the same run already new is that row (`already`).
+ */
+export function importVerdicts(
+  index: ImportIndex,
+  c: TimeConfig,
+  rows: readonly ImportRow[],
+  now: number = Date.now(),
+): ImportVerdict[] {
+  const entries = rows.map(n => importedEntry(c, n, now))
+  const out: (ImportVerdict | undefined)[] = rows.map(() => undefined)
+  const paired = (stored: TimeEntry, entry: TimeEntry): ImportVerdict => {
+    index.take(stored)
+    if (stored.deleted) return { kind: 'already', stored }
+    const fields = differing(stored, entry)
+    return fields.length ? { kind: 'changed', stored, next: entry, fields } : { kind: 'already', stored }
+  }
+  rows.forEach((n, i) => {
+    const stored = n.toggl ? index.byId(n.toggl) : null
+    if (stored) out[i] = paired(stored, entries[i] as TimeEntry)
+  })
+  const groups = new Map<string, number[]>()
+  entries.forEach((e, i) => {
+    if (out[i]) return
+    const k = `${e.client}\u0000${e.start}`
+    groups.set(k, [...(groups.get(k) ?? []), i])
+  })
+  for (const group of groups.values()) {
+    const first = entries[group[0] as number] as TimeEntry
+    const there = index.at(first.client, first.start)
+    for (const pairs of PAIRINGS)
+      for (const i of group) {
+        if (out[i]) continue
+        const stored = there.find(x => !index.isTaken(x) && pairs(x, entries[i] as TimeEntry))
+        if (stored) out[i] = paired(stored, entries[i] as TimeEntry)
+      }
+    const fresh: TimeEntry[] = []
+    for (const i of group) {
+      if (out[i]) continue
+      const e = entries[i] as TimeEntry
+      const twin = fresh.find(x => differing(x, e).length === 0)
+      if (twin) {
+        out[i] = { kind: 'already', stored: twin }
+        continue
+      }
+      if (!rows[i]?.toggl) e.toggl = index.freeKey(e.client, Date.parse(e.start))
+      index.add(e)
+      index.take(e)
+      fresh.push(e)
+      out[i] = { kind: 'new', entry: e }
+    }
+  }
+  return out as ImportVerdict[]
 }
+
+/** One row's verdict (importVerdicts, for a row alone). */
+export const importVerdict = (index: ImportIndex, c: TimeConfig, n: ImportRow, now: number = Date.now()) =>
+  importVerdicts(index, c, [n], now)[0] as ImportVerdict
 
 /** A changed verdict as the run reports it. */
 export const changeOf = (v: Extract<ImportVerdict, { kind: 'changed' }>): ImportChange => ({
@@ -683,6 +781,7 @@ export const changeOf = (v: Extract<ImportVerdict, { kind: 'changed' }>): Import
   start: v.stored.start,
   fields: v.fields,
   by: v.stored.by,
+  row: { start: v.next.start, description: v.next.description },
 })
 
 /**
@@ -700,15 +799,15 @@ export function importEntries(
   checkConfig(c)
   const now = o.now ?? Date.now()
   const batch = o.batch ?? 500
-  const index = new ImportIndex(db)
+  // the file's rows paired with what the store has as a whole first: rows of one start meet together
+  const verdicts = importVerdicts(new ImportIndex(db), c, entries, now)
   let added = 0
   let already = 0
   const changes: ImportChange[] = []
   const updated: ImportChange[] = []
-  for (let at = 0; at < entries.length; at += batch) {
+  for (let at = 0; at < verdicts.length; at += batch) {
     db.write('import', tx => {
-      for (const n of entries.slice(at, at + batch)) {
-        const v = importVerdict(index, c, n, now)
+      for (const v of verdicts.slice(at, at + batch)) {
         if (v.kind === 'already') {
           already++
           continue
@@ -739,7 +838,6 @@ export function importEntries(
             continue
           }
           tx.journal({ store: 'time', op: 'import-update', ref: saved.id, before: v.stored, after: saved })
-          index.add(saved)
           updated.push(change)
           continue
         }
@@ -749,16 +847,10 @@ export function importEntries(
         } catch (err) {
           // another process wrote this row (or one alike) since the index was read: it is there
           if (!unique(err)) throw err
-          const there = db.db
-            .query(`SELECT ${COLUMNS} FROM time_entries WHERE toggl = ?`)
-            .get(e.toggl ?? '') as Row | null
-          const found = there ? entryOf(there) : sameLive(db, e)
-          if (found) index.add(found)
           already++
           continue
         }
         tx.journal({ store: 'time', op: 'import', ref: e.id, after: e })
-        index.add(e)
         added++
       }
     })

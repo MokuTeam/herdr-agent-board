@@ -40,7 +40,7 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       '--stop {value} is over an hour from now and there is no --start: give the date (YYYY-MM-DD HH:MM), or a --start.',
     'time.err.dateConflict':
       'The CSV’s dates go the other way round than --date-format {format} says: leave the flag out, or export it again.',
-    'time.cli.importClash': 'made on the board by {who} at that start, not imported: {id} ({fields})',
+    'time.cli.importClash': 'made on the board by {who} at that start, not imported: {row} ({fields})',
     'time.err.config': 'Time is not written while config.json’s "time" does not check out: {problems}',
     'time.err.notBackedUp':
       'Time is not written before a backup has gone through once to the target as it is set now: run Test in Settings → Backup… (or board backup test folder|server). Back up now counts only once the database exists.',
@@ -62,8 +62,8 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.cli.problems': 'config.json’s "time" does not check out, nothing is written until it does: {problems}',
     'time.cli.byWorkDate': 'by work date ({zone}), as the board will bill them:',
     'time.cli.byTogglDay': 'by Toggl’s day ({zone}), to hold against its report:',
-    'time.cli.importChanged': 'differs from Toggl’s row, not imported again: {id} ({fields})',
-    'time.cli.importUpdated': 'updated from Toggl: {id} ({fields})',
+    'time.cli.importChanged': 'differs from Toggl’s row, not imported again: {row} ({fields})',
+    'time.cli.importUpdated': 'updated from Toggl: {row} ({fields})',
     'time.cli.heldCount': 'held {n}',
     'time.doctor.title': 'Time tracking',
     'time.doctor.ok': 'on, days in {zone}',
@@ -187,7 +187,7 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       '--stop {value} больше чем на час впереди, а --start нет: укажите дату (ГГГГ-ММ-ДД ЧЧ:ММ) или --start.',
     'time.err.dateConflict':
       'Даты в CSV записаны иначе, чем говорит --date-format {format}: уберите флаг или выгрузите файл заново.',
-    'time.cli.importClash': 'на доске в это время уже есть запись ({who}), не импортирована: {id} ({fields})',
+    'time.cli.importClash': 'на доске в это время уже есть запись ({who}), не импортирована: {row} ({fields})',
     'time.err.config': 'Время не пишется, пока "time" в config.json не в порядке: {problems}',
     'time.err.notBackedUp':
       'Время не пишется, пока бэкап хотя бы раз не прошёл в цель, как она задана сейчас: нажмите Проверить в Настройки → Бэкап… (или board backup test folder|server). «Бэкап сейчас» засчитывается, только когда база уже есть.',
@@ -209,8 +209,8 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.cli.problems': '"time" в config.json не в порядке, ничего не пишется, пока не исправите: {problems}',
     'time.cli.byWorkDate': 'по рабочему дню ({zone}), как доска выставит:',
     'time.cli.byTogglDay': 'по дню Toggl ({zone}), сверить с его отчётом:',
-    'time.cli.importChanged': 'отличается от строки Toggl, повторно не импортирована: {id} ({fields})',
-    'time.cli.importUpdated': 'обновлена из Toggl: {id} ({fields})',
+    'time.cli.importChanged': 'отличается от строки Toggl, повторно не импортирована: {row} ({fields})',
+    'time.cli.importUpdated': 'обновлена из Toggl: {row} ({fields})',
     'time.cli.heldCount': 'отложено {n}',
     'time.doctor.title': 'Учёт времени',
     'time.doctor.ok': 'включён, дни по {zone}',
