@@ -78,7 +78,7 @@ import { setupRoute } from './routes/setup.ts'
 import { sleepRoute } from './routes/sleep.ts'
 import { staticRoute } from './routes/static.ts'
 import { terminalRoute } from './routes/terminal.ts'
-import { timeRoutes, timeToday } from './routes/time.ts'
+import { keepTimeDb, timeRoutes, timeToday } from './routes/time.ts'
 import { todosRoutes } from './routes/todos.ts'
 import { wakeRoutes } from './routes/wake.ts'
 import { createBroadcaster } from './sse.ts'
@@ -411,6 +411,8 @@ export async function startServer({
   // up now, a Look or an Apply right after the panel saved a target must already see it. Read only
   // once there is a database (the schedule) or when the panel asks.
   const backupCfg = (): Config => ({ ...cfg, backup: loadConfig().backup })
+  // one connection to the database for the board's life: the payload and the Time panel's reads and writes
+  keepTimeDb(true)
   const backups = startBackups({ cfg: backupCfg, onChange: () => board.publish() })
   const backupServer = createBackupServer({ cfg: backupCfg, spawn: spawnRemote })
   const backupLine = (): BackupPayload | null => {

@@ -1857,6 +1857,7 @@ board time list [--date <d> | --from <d> --to <d>] [--client <lane>] [--tag <t>]
 board time day [<d>] [--client <lane>]      the day as billed: lines, raw and billed
 board time projects [<lane>]
 board time import <file> --tz <zone> [--map "<Toggl client>=<lane>"]... [--date-format dmy|mdy] [--dry-run] [--update]
+board time export [--csv] [--date <d> | --from <d> --to <d>] [--client <lane>] [--bom]   the entries as CSV
 ```
 
 Times are ISO with an offset (`2026-10-28T09:00:00+03:00`), or this computer's clock (`9:30`,
@@ -1903,9 +1904,31 @@ what of config.json checks out, and are not to be billed from.
 by client as it will be billed, on today each time: the day before and after and Today, the
 clients as chips with their billed hours, each client's lines with their entries (times on this
 browser's clock, the description, the project, the session that logged it: a tap opens its sheet),
-the held ones apart, and the totals. Read only for now: the command changes entries. On a phone
+the held ones apart, and the totals. On a phone
 (the remote page) it is the full-height sheet, and a sideways swipe goes to the day before or
 after. A day's figures show only under that day's name, whatever order the answers come in.
+
+**Changing them on the board.** A tap on an entry opens it in place: description, project (the
+client's list), start and stop on this browser's clock with the duration between them and -15 and
++15 steps, the work date (a new one moves it), tags. Only what changed is sent: a time left alone
+keeps its seconds, and a step moves the stop by exactly 15 minutes; over 12 hours the editor asks
+whether the stop is right. An entry changed elsewhere while it is open (an agent's `board time`,
+another tab) is said in the editor, and Save waits for Reload, which shows it as it is now: what
+was typed over an older copy never overwrites the newer one. Delete asks nothing: the toast's Undo
+(7 seconds; a newer delete's takes its place) brings the entry back. "Add entry" under the day adds
+one; its times are on its date. An entry saved on another day than the one shown (a move, or a time
+that falls on the day before in the client's zone) is said, with Show. A line rounded up offers
+"Raise to": its last entry lengthened by the gap the board works out as the day is now, for a
+client that wants the entries themselves to add up to the billed figure; a refusal is a toast, and
+an entry open in the editor stays as it is. The board changes them as the owner (`POST /api/time`),
+each change saying the revision it read (one changed since is refused), with the same checks as
+the command: the config, a backup that went through, times within a day ahead and a year back.
+
+**Export.** `board time export` prints a range as CSV: `id, date, client, project, description,
+tags, start, stop, hours, by`, where `start` and `stop` are UTC (`Z`) and `date` is the work date in
+the client's zone; tags are joined by a comma (a tag holds none). A text that a spreadsheet would
+run as a formula (starting with `=`, `+`, `-`, `@`) gets a `'` before it. `--bom` puts the byte
+order mark Excel needs to read the file's UTF-8 when it is opened by a double click.
 
 **From Toggl.** `board time import <file>` takes Toggl's Detailed report exported as CSV from its
 web page (no API call, so no quota), or its JSON (API v9 time entries with project and client

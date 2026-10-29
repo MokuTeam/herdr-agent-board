@@ -13,6 +13,7 @@ import {
   listEntries,
   moveEntry,
   REPEAT_MS,
+  raiseEntry,
   removeEntry,
   restoreEntry,
   TimeError,
@@ -21,6 +22,7 @@ import { type Actor, secondsOf, timeConfig } from '../../src/core/time.ts'
 import { isolatedHome } from '../support/env.ts'
 
 const WRITER = fileURLToPath(new URL('../support/time-writer.ts', import.meta.url))
+const HOLDER = fileURLToPath(new URL('../support/time-holder.ts', import.meta.url))
 const NY = 'America/New_York'
 const conf = timeConfig({ zone: NY, clients: { a: { projects: ['Support', 'Migration'] }, b: {} } })
 if (!conf) throw new Error('config')
@@ -391,5 +393,76 @@ test('a row another process writes while the import runs is already there, not a
   assert.deepEqual(importEntries(db, conf, [row]), { added: 0, already: 1, changed: [], updated: [] })
   assert.equal(listEntries(db, { from: '2026-10-28', to: '2026-10-28' }).length, 1)
   other.close()
+  db.close()
+})
+
+test('a trim of the stop keeps the work date stamped, whatever the zone says now; a new start stamps it again', () => {
+  const db = fresh()
+  // 22:00 on the 28th in New York
+  const e = addEntry(
+    db,
+    conf,
+    { ...base, start: at('2026-10-29T02:00:00Z'), stop: at('2026-10-29T03:00:00Z') },
+    me,
+  ).entry
+  assert.equal(e.date, '2026-10-28')
+  const istanbul = timeConfig({
+    zone: 'Europe/Istanbul',
+    clients: { a: { projects: ['Support', 'Migration'] }, b: {} },
+  })
+  assert.ok(istanbul)
+  const trimmed = editEntry(db, istanbul, e.id, { stop: at('2026-10-29T02:45:00Z') }, me)
+  assert.equal(trimmed.date, '2026-10-28', 'the stop alone moves no day')
+  const same = editEntry(db, istanbul, e.id, { start: at('2026-10-29T02:00:00Z') }, me)
+  assert.equal(same.date, '2026-10-28', 'the same start sent again moves none either')
+  const moved = editEntry(db, istanbul, e.id, { start: at('2026-10-29T02:05:00Z') }, me)
+  assert.equal(moved.date, '2026-10-29', 'a new start: stamped in the zone as it is now')
+  db.close()
+})
+
+test('Raise reads the line under the write lock: an entry another process adds to it first counts', async () => {
+  const db = fresh()
+  const nyConf = timeConfig({
+    zone: NY,
+    clients: { a: { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'up' }] } },
+  })
+  assert.ok(nyConf)
+  // 40 minutes of case 10001: billed an hour, 20 minutes to raise
+  const last = addEntry(
+    db,
+    nyConf,
+    { ...base, start: at('2026-10-28T13:00:00Z'), stop: at('2026-10-28T13:40:00Z') },
+    me,
+  ).entry
+  // another process takes the lock and adds 10 minutes of the same case, earlier in the day
+  const holder = Bun.spawn(
+    [
+      process.execPath,
+      HOLDER,
+      dbFile(),
+      JSON.stringify({
+        id: 'other001',
+        client: 'a',
+        project: 'Support',
+        description: 'Case 10001 X: a call',
+        start: '2026-10-28T12:00:00Z',
+        stop: '2026-10-28T12:10:00Z',
+        date: '2026-10-28',
+      }),
+      '600',
+    ],
+    { stdout: 'pipe', stderr: 'pipe' },
+  )
+  const reader = holder.stdout.getReader()
+  const first = new TextDecoder().decode((await reader.read()).value)
+  assert.match(first, /held/)
+  // the raise waits for the lock, then reads the line with both: 50 minutes, 10 to raise
+  const raised = raiseEntry(db, nyConf, last.id, me, { expect: last.rev })
+  await holder.exited
+  assert.equal(raised.stop, '2026-10-28T13:50:00Z')
+  assert.equal(
+    (db.db.query("SELECT op FROM journal WHERE store = 'time' ORDER BY seq DESC LIMIT 1").get() as { op: string }).op,
+    'raise',
+  )
   db.close()
 })

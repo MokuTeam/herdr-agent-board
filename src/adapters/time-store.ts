@@ -13,6 +13,7 @@ import {
   type Actor,
   cleanTag,
   cleanText,
+  clientDay,
   clientOf,
   clockIn,
   dateIn,
@@ -322,6 +323,8 @@ export interface EntryChange {
   seconds?: number
   addTags?: string[]
   removeTags?: string[]
+  /** The whole set of tags instead (the panel sends what its field holds). */
+  tags?: string[]
   newProject?: boolean
 }
 
@@ -383,10 +386,12 @@ export function editEntry(
       if (ch.seconds !== undefined) stop = start + ch.seconds * 1000
       else if (ch.start !== undefined && ch.stop === undefined) stop = start + secondsOf(e) * 1000
       checkTimes(start, stop)
-      const tags = new Set(e.tags)
+      const tags = new Set(ch.tags ? ch.tags.map(cleanTag).filter(Boolean) : e.tags)
       for (const tag of ch.addTags ?? []) if (cleanTag(tag)) tags.add(cleanTag(tag))
       for (const tag of ch.removeTags ?? []) tags.delete(cleanTag(tag))
-      const moved = ch.start !== undefined || client !== e.client
+      // the work date is stamped again only when the start or the client changes: a trim of the
+      // stop moves no day already billed, whatever the zone says now
+      const moved = (ch.start !== undefined && isoOf(ch.start) !== e.start) || client !== e.client
       return {
         ...e,
         client,
@@ -399,6 +404,37 @@ export function editEntry(
       }
     },
     'edit',
+  )
+}
+
+/**
+ * A line rounded up raised to its billed figure: its last entry lengthened by the gap, the day read
+ * under the write lock (an entry another process added to the line just before counts).
+ */
+export function raiseEntry(
+  db: BoardDb,
+  c: TimeConfig,
+  id: string,
+  actor: Actor,
+  o: { force?: boolean; expect?: number } = {},
+): TimeEntry {
+  checkConfig(c)
+  return changed(
+    db,
+    id,
+    actor,
+    o,
+    e => {
+      if (e.deleted) throw new TimeError('time.err.removed', { id })
+      const day = clientDay(c, e.client, e.date, listEntries(db, { from: e.date, to: e.date, client: e.client }))
+      const line = day.lines.find(l => l.entries.includes(id))
+      if (line?.round !== 'up' || line.entries.at(-1) !== id || line.billedSeconds <= line.seconds)
+        throw new TimeError('time.err.noRaise')
+      const stop = Date.parse(e.stop) + (line.billedSeconds - line.seconds) * 1000
+      checkTimes(Date.parse(e.start), stop)
+      return { ...e, stop: isoOf(stop) }
+    },
+    'raise',
   )
 }
 
@@ -430,12 +466,22 @@ export function moveEntry(
 }
 
 /** An entry removed: it stays, marked, out of every list and total. Removing a removed one changes nothing. */
-export function removeEntry(db: BoardDb, id: string, actor: Actor, o: { force?: boolean } = {}): TimeEntry {
+export function removeEntry(
+  db: BoardDb,
+  id: string,
+  actor: Actor,
+  o: { force?: boolean; expect?: number } = {},
+): TimeEntry {
   return changed(db, id, actor, o, e => (e.deleted ? e : { ...e, deleted: Date.now() }), 'remove')
 }
 
 /** A removed entry back; one that is not removed stays as it is. */
-export function restoreEntry(db: BoardDb, id: string, actor: Actor, o: { force?: boolean } = {}): TimeEntry {
+export function restoreEntry(
+  db: BoardDb,
+  id: string,
+  actor: Actor,
+  o: { force?: boolean; expect?: number } = {},
+): TimeEntry {
   return changed(
     db,
     id,

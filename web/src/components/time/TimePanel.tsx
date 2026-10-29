@@ -1,4 +1,4 @@
-// The Time panel (#233): one day by client, as it will be billed, read only. From the top: the day
+// The Time panel (#233): one day by client, as it will be billed. From the top: the day
 // with the day before and after and Today; the clients of that day as chips (All, then each with
 // its billed hours, in its lane's color); then each client's billed lines, a line's entries under
 // it with their times on this browser's clock, the description, the project and who logged it;
@@ -8,29 +8,50 @@
 // under that day's name. While config.json's `time` does not check out, it says so first. On a
 // phone (the full-height sheet) a horizontal swipe changes the day: the list follows the finger
 // and settles back, or goes to the day it was swiped to; with reduced motion, it only changes.
+// Where the board can be changed: a tap on an entry opens it in place (EntryEditor.tsx), held
+// against the entry as it was opened (changed elsewhere since: it says so, and Save waits for
+// Reload); Delete asks nothing and the toast's Undo (7 s, a newer one replaces it) brings it back;
+// "Add entry" under the day; a line rounded up offers "Raise to" (its last entry lengthened by the
+// gap the board works out, for a client that wants the entries themselves to add up to the billed
+// figure). Each change goes as the owner (POST /api/time) with the revision it read, and the day
+// is read again after it; an entry saved on another day says so, with a way there. Not optimistic:
+// the figures change when the board says the change is in.
 import { type PointerEvent, useCallback, useEffect, useRef, useState } from 'react'
-import { errorText, replyOf } from '../../api/client.ts'
+import { errorText, postJson, replyOf } from '../../api/client.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { reducedMotion } from '../../models/spring.ts'
 import {
+  addOf,
   askedInTurn,
   byText,
+  changesOf,
+  type Draft,
   dateName,
   dayFor,
+  draftOf,
   entryTimes,
   hm,
   hoursText,
   isTimeDay,
   lineLabel,
+  newDraft,
   ruleText,
   shiftDate,
   swipeDay,
   type TimeDay,
 } from '../../models/time.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
+import { nextToastToken } from '../../state/board-ui.ts'
 import { classNames } from '../class-names.ts'
 import { Panel } from '../panel/Panel.tsx'
+import { EntryEditor } from './EntryEditor.tsx'
+
+/** The board said no: its words are the message. */
+class Refused extends Error {}
+
+/** How long a delete's Undo stays: long enough to read it and reach it on a phone. */
+const UNDO_MS = 7000
 
 export interface TimePanelProps {
   open: boolean
@@ -42,7 +63,7 @@ export interface TimePanelProps {
 
 export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   const t = useT()
-  const { data, toast, dispatch } = useBoardContext()
+  const { data, toast, dispatch, canEdit } = useBoardContext()
   const latest = useLatest({ t, toast })
   const today = data?.time?.date ?? localToday()
   const seq = data?.time?.seq ?? 0
@@ -86,12 +107,161 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
     if (open) void ask(date)
   }, [open, date, seq, ask])
 
+  // the entry open in place, as it was when opened (its `base`, what a save is against and the
+  // revision it says), or 'new' for one being added; what is being sent; the board's refusal
+  type Entry = TimeDay['entries'][number]
+  // `reload` counts Reloads: the editor starts afresh on each, and only then
+  type Open = { id: string; base: Entry; reload: number; draft?: Draft }
+  const [editing, setEditing] = useState<Open | 'new' | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
+  /**
+   * What was typed in an editor that closed without Save or Cancel (another entry tapped, Add entry,
+   * the day or the client changed, midnight): back when the same entry (or a new one on the same
+   * day) opens again, against the entry as it was then (changed since: it says so).
+   */
+  const kept = useRef(new Map<string, { base: Entry | null; draft: Draft }>())
+  const forget = (id: string) => kept.current.delete(id)
+  const keep = (id: string, base: Entry | null, d: Draft, fresh: Draft) => {
+    if (JSON.stringify(d) === JSON.stringify(fresh)) forget(id)
+    else kept.current.set(id, { base, draft: d })
+  }
+  const open1 = (to: Open | 'new' | null) => {
+    const was = to !== null && to !== 'new' && to.reload === 0 ? kept.current.get(to.id) : undefined
+    if (was?.base && to !== null && to !== 'new') to = { ...to, base: was.base, draft: was.draft }
+    setEditing(to)
+    setEditError(null)
+  }
+  /** A refusal in its own words; anything else (no answer) as the page says it. */
+  const said = (err: unknown): string => (err instanceof Refused ? err.message : errorText(err, t))
+  const shownDate = useRef(date)
+  shownDate.current = date
+  /**
+   * One change as the owner; the entry after it; the day shown now read again. A refusal throws,
+   * in the page's own words where the board's would name a command (changed or removed since).
+   */
+  const post = async (body: Record<string, unknown>): Promise<Entry> => {
+    const res = await postJson('/api/time', body)
+    const reply = (await replyOf(res)) as { ok?: boolean; error?: string; code?: string; entry?: Entry }
+    if (!res.ok || reply.ok === false || !reply.entry) {
+      const own =
+        reply.code && ['changedSince', 'removed', 'gone'].includes(reply.code) ? `time.web.${reply.code}` : null
+      // changed or gone since: the day as it is now first, so the editor can offer Reload at once
+      if (own) await ask(shownDate.current)
+      throw new Refused(own ? t(own) : reply.error || t('err.status', { code: res.status }))
+    }
+    await ask(shownDate.current)
+    return reply.entry
+  }
+  /** An entry saved on another day than the one shown: said, with a way there. */
+  const followed = (e: Entry) => {
+    if (e.date === shownDate.current) return
+    toast(t('time.edit.movedTo', { date: dateName(e.date, t.lang) }), false, {
+      action: { label: t('time.edit.show'), run: () => setDate(e.date) },
+      ms: 7000,
+    })
+  }
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true)
+    setEditError(null)
+    try {
+      await fn()
+      setEditing(null)
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const save = (base: Entry, d: Draft) =>
+    run(async () => {
+      const ch = changesOf(base, d)
+      if (!ch) throw new Error(t('time.edit.badTime'))
+      let now: Entry = base
+      if (ch.edit) {
+        now = await post(ch.edit)
+        // saved so far: the editor holds the entry as it now is (a move refused after this is the
+        // move's, not a change from elsewhere), its draft as typed
+        setEditing(x => (x !== null && x !== 'new' && x.id === base.id ? { ...x, base: now } : x))
+        const k = kept.current.get(base.id)
+        if (k) kept.current.set(base.id, { ...k, base: now })
+      }
+      // the move says the revision the edit left
+      if (ch.move) now = await post({ op: 'move', id: base.id, rev: now.rev, date: ch.move })
+      forget(base.id)
+      followed(now)
+    })
+  const add = (d: Draft) =>
+    run(async () => {
+      const body = addOf(d)
+      if (!body) throw new Error(t('time.edit.badTime'))
+      const made = await post(body)
+      forget(`new:${shownDate.current}`)
+      followed(made)
+    })
+  const undoToken = useRef(0)
+  const remove = (base: Entry) =>
+    run(async () => {
+      const gone = await post({ op: 'remove', id: base.id, rev: base.rev })
+      forget(base.id)
+      // long enough to read and reach; a newer delete's Undo takes this one's place
+      if (undoToken.current) dispatch({ type: 'toastHide', token: undoToken.current })
+      const token = nextToastToken()
+      undoToken.current = token
+      toast(t('time.edit.removed'), false, {
+        action: {
+          label: t('time.edit.undo'),
+          run: () =>
+            void post({ op: 'restore', id: gone.id, rev: gone.rev })
+              .then(followed)
+              .catch(err => toast(said(err), true)),
+        },
+        ms: UNDO_MS,
+        token,
+      })
+    })
+  // Raise is a change of its own: an editor open on another entry stays as it is, and a refusal
+  // is a toast (no editor shows it). The board works the gap out from the day as it is now.
+  const [raising, setRaising] = useState(false)
+  const raise = async (lastId: string) => {
+    const e = entries.get(lastId)
+    if (!e) return
+    setRaising(true)
+    try {
+      await post({ op: 'raise', id: e.id, rev: e.rev })
+    } catch (err) {
+      toast(said(err), true)
+    } finally {
+      setRaising(false)
+    }
+  }
+  const takers = day?.clients ?? (data?.categories ?? []).map(c => c.id)
+  const projectsOf = (c: string): string[] | null => day?.projects?.[c] ?? null
+  const clientsForNew = client ? [client] : takers
+
   const go = (days: number) => setDate(d => shiftDate(d, days))
-  const swipe = useSwipe(go)
+  // no swipe while an entry is open: a sideways drag in a field would drop the draft
+  const swipe = useSwipe(go, editing === null)
   const lang = t.lang
   // the figures under a day's name are that day's: another day's answer, still shown, is not
   const shown = dayFor(day, date)
   const failed = error && error.date === date ? error.text : null
+  // another day: whatever was open closes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on a change of day only
+  useEffect(() => setEditing(null), [date])
+  // another client chosen: the open entry may not be drawn, so it closes (its draft kept)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on a change of client only
+  useEffect(() => setEditing(null), [client])
+  // an entry open in place that left the day (removed or moved elsewhere) says so as it closes;
+  // while a change of this panel's own is under way, the entry leaving is that change
+  // biome-ignore lint/correctness/useExhaustiveDependencies: when the day read or the open entry changes
+  useEffect(() => {
+    if (busy || !shown || editing === null || editing === 'new') return
+    if (shown.entries.some(e => e.id === editing.id)) return
+    toast(t('time.edit.goneElsewhere'), true)
+    forget(editing.id)
+    setEditing(null)
+  }, [shown, editing, busy])
   const entries = new Map((shown?.entries ?? []).map(e => [e.id, e]))
   const days = (shown?.days ?? []).filter(d => !client || d.client === client)
   const cats = new Map((data?.categories ?? []).map(c => [c.id, c]))
@@ -99,6 +269,40 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   const color = (id: string) => cats.get(id)?.color ?? 'var(--label-3)'
   const total = days.reduce((n, d) => n + d.billedSeconds, 0)
   const raw = days.reduce((n, d) => n + d.seconds, 0)
+  /** A new entry's draft: the one typed on this day and left open (for a client offered), else a fresh one. */
+  const newOne = (() => {
+    const first = clientsForNew[0] as string
+    const fresh = newDraft(first, projectsOf(first)?.[0] ?? '', date)
+    // kept by the panel's day, and only when the form offers its client now (under another client's chip
+    // it waits, untouched, for the chip that shows it)
+    const was = kept.current.get(`new:${date}`)?.draft
+    // its key is the panel's day it was typed on; its own date field may say another day
+    return { fresh, kept: was && clientsForNew.includes(was.client) ? was : null }
+  })()
+  /** The editor of an entry as it was opened; `now` is the entry as the day reads it now. */
+  const editorFor = ({ base, reload, draft }: Open, now: Entry) => (
+    <EntryEditor
+      // Reload opens it again on the entry as it is now: a new draft
+      key={`${base.id}:${reload}`}
+      draft={draft ?? draftOf(base)}
+      clientTitle={title}
+      projects={projectsOf}
+      busy={busy}
+      error={editError}
+      stale={now.rev !== base.rev}
+      onReload={() => {
+        forget(base.id)
+        open1({ id: base.id, base: now, reload: reload + 1 })
+      }}
+      onSave={d => void save(base, d)}
+      onDelete={() => void remove(base)}
+      onCancel={() => {
+        forget(base.id)
+        open1(null)
+      }}
+      onDraft={d => keep(base.id, base, d, draftOf(base))}
+    />
+  )
 
   return (
     <Panel
@@ -178,15 +382,40 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
                       {hm(l.seconds)} → <strong>{hoursText(l.billedSeconds, t)}</strong>
                     </span>
                     <span className="sheet-meta time-rule">{ruleText(l, t)}</span>
+                    {canEdit && l.round === 'up' && l.billedSeconds > l.seconds && l.entries.length > 0 && (
+                      <button
+                        type="button"
+                        className="button time-raise"
+                        disabled={busy || raising}
+                        onClick={() => void raise(l.entries[l.entries.length - 1] as string)}
+                      >
+                        {t('time.edit.raise', { hours: hoursText(l.billedSeconds, t) })}
+                      </button>
+                    )}
                   </div>
                   <ul className="time-entries">
                     {l.entries.map(id => {
                       const e = entries.get(id)
                       if (!e) return null
+                      if (editing !== null && editing !== 'new' && editing.id === id)
+                        return <li key={id}>{editorFor(editing, e)}</li>
                       return (
-                        <li className="time-entry" key={id}>
-                          <span className="time-when">{entryTimes(e, lang)}</span>
-                          <span className="time-what">{e.description}</span>
+                        <li className={classNames('time-entry', canEdit && 'time-editable')} key={id}>
+                          {canEdit ? (
+                            <button
+                              type="button"
+                              className="time-open"
+                              onClick={() => open1({ id, base: e, reload: 0 })}
+                            >
+                              <span className="time-when">{entryTimes(e, lang)}</span>
+                              <span className="time-what">{e.description}</span>
+                            </button>
+                          ) : (
+                            <>
+                              <span className="time-when">{entryTimes(e, lang)}</span>
+                              <span className="time-what">{e.description}</span>
+                            </>
+                          )}
                           <span className="sheet-meta time-who">
                             {e.project} ·{' '}
                             {typeof e.by !== 'string' &&
@@ -217,10 +446,25 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
                     {d.held.map(id => {
                       const e = entries.get(id)
                       if (!e) return null
+                      if (editing !== null && editing !== 'new' && editing.id === id)
+                        return <li key={id}>{editorFor(editing, e)}</li>
                       return (
-                        <li className="time-entry" key={id}>
-                          <span className="time-when">{entryTimes(e, lang)}</span>
-                          <span className="time-what">{e.description}</span>
+                        <li className={classNames('time-entry', canEdit && 'time-editable')} key={id}>
+                          {canEdit ? (
+                            <button
+                              type="button"
+                              className="time-open"
+                              onClick={() => open1({ id, base: e, reload: 0 })}
+                            >
+                              <span className="time-when">{entryTimes(e, lang)}</span>
+                              <span className="time-what">{e.description}</span>
+                            </button>
+                          ) : (
+                            <>
+                              <span className="time-when">{entryTimes(e, lang)}</span>
+                              <span className="time-what">{e.description}</span>
+                            </>
+                          )}
                           <span className="sheet-meta time-who">
                             {hm(e.seconds)} · #{e.tags.join(' #')}
                           </span>
@@ -232,6 +476,32 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
               )}
             </section>
           ))}
+          {canEdit && clientsForNew.length > 0 && day && (
+            <div className="time-add">
+              {editing === 'new' ? (
+                <EntryEditor
+                  // a new day, a new draft (one typed on this day and left open comes back)
+                  key={date}
+                  draft={newOne.kept ?? newOne.fresh}
+                  clients={clientsForNew}
+                  clientTitle={title}
+                  projects={projectsOf}
+                  busy={busy}
+                  error={editError}
+                  onSave={d => void add(d)}
+                  onCancel={() => {
+                    forget(`new:${date}`)
+                    open1(null)
+                  }}
+                  onDraft={d => keep(`new:${date}`, null, d, newOne.fresh)}
+                />
+              ) : (
+                <button type="button" className="button" onClick={() => open1('new')}>
+                  {t('time.edit.add')}
+                </button>
+              )}
+            </div>
+          )}
           {days.length > 1 && (
             <p className="time-total">
               {t('time.day')}{' '}
@@ -251,7 +521,7 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
  * drag is clearly sideways (10 px, more across than down), and on release goes to the day before or
  * after (models/time.ts swipeDay) or settles back. A mouse does nothing here (the arrows do it).
  */
-function useSwipe(go: (days: number) => void) {
+function useSwipe(go: (days: number) => void, on: boolean) {
   const [dx, setDx] = useState(0)
   const [settling, setSettling] = useState(false)
   const from = useRef<{ x: number; y: number; at: number; id: number; sideways: boolean | null } | null>(null)
@@ -274,7 +544,7 @@ function useSwipe(go: (days: number) => void) {
         : undefined,
     handlers: {
       onPointerDown(e: PointerEvent<HTMLDivElement>) {
-        if (e.pointerType !== 'touch') return
+        if (e.pointerType !== 'touch' || !on) return
         width.current = e.currentTarget.getBoundingClientRect().width || 360
         from.current = { x: e.clientX, y: e.clientY, at: e.timeStamp, id: e.pointerId, sideways: null }
         setSettling(false)
