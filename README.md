@@ -2128,8 +2128,14 @@ key of its lane and the start Toggl gave it, kept on the entry, and then by its 
 second run, of the same export or a later one, adds only what is new and never brings back an entry
 removed since, moved on the board, or given another start there. Rows of one lane that start at the
 same second are each an entry of their own (a number after the key tells them apart); a later run
-pairs them with the entries there as a group, alike first, then by project, description and stop,
-each entry with one row at most. A row that differs (edited in
+pairs them with the entries there as a group: alike in every field first, then alike but for
+billable, by project and description, by project and stop, by project, by description, by stop,
+then what is left one to one (a removed entry only in the passes before that last one, so a new row
+at its start goes in). Each entry is paired with one row at most; where no field tells two entries
+apart (the same project and stop, say), the first made is the one. A row alike to an entry in the
+five fields the board holds one of (client, project, description, start and stop) is that entry:
+already there, or differing in its tags; a Toggl entry duplicated in Toggl is on the board once.
+A row that differs (edited in
 Toggl since it was imported: its wording, its stop, its project, its tags; or moved on the board)
 is listed as changed, named by its day and start in `--tz` and its description's start, with the
 fields, and not added again; a row at the start of an entry a

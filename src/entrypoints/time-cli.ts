@@ -778,7 +778,9 @@ async function importCmd(
   const rowText = (c: ImportChange): string => {
     const at = Date.parse(c.row.start)
     const [h, m] = clockIn(at, tz)
-    const words = c.row.description.length > 40 ? `${c.row.description.slice(0, 40)}…` : c.row.description
+    // cut by characters, not UTF-16 units: an emoji is never halved
+    const chars = [...c.row.description]
+    const words = chars.length > 40 ? `${chars.slice(0, 40).join('')}…` : c.row.description
     return `${dateIn(at, tz)} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')} "${words}"${c.id ? ` · ${c.id}` : ''}`
   }
   /** A row the store has otherwise: changed in Toggl (or on the board) since its import, or made by a session at that start. */
