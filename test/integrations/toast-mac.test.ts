@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, test } from 'bun:test'
+import { afterEach, beforeEach, describe, spyOn, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import {
   chmodSync,
@@ -14,19 +14,22 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { asSnapshot } from '../../src/adapters/herdr.ts'
+import { asSnapshot, type HerdrSnapshot } from '../../src/adapters/herdr.ts'
 import { ROOT } from '../../src/adapters/paths.ts'
 import { toastCommand } from '../../src/core/install-plan.ts'
 import { boardFiles } from '../../src/core/setup.ts'
 import {
   appBundleOf,
   buildToastApp,
+  clickThrough,
   endEarlier,
   ensureToastApp,
+  hookToast,
   isPaneId,
   lastAssistantText,
   plainText,
   showToast,
+  type Toast,
   terminalAppOf,
   toastApp,
   toastAppState,
@@ -243,6 +246,137 @@ describe('the helper of an earlier notification', () => {
       assert.deepEqual(endWith(text, helperBinary()), { killed: [], asked: [] }, text)
       assert.equal(existsSync(pidFile()), false, text)
     }
+  })
+})
+
+// A click: only a pane id is followed. The stand-in for Bun.spawnSync answers the board's window
+// (web-open) as having taken it, so a valid id ends there and herdr is never asked.
+describe('a click on a notification', () => {
+  test('a pane id goes to the board first', async () => {
+    const spawned: unknown[][] = []
+    const spy = spyOn(Bun, 'spawnSync').mockImplementation(((command: unknown[]) => {
+      spawned.push(command)
+      return { exitCode: 0 }
+    }) as unknown as typeof Bun.spawnSync)
+    try {
+      assert.equal(await clickThrough('w1:p2'), 0)
+    } finally {
+      spy.mockRestore()
+    }
+    assert.equal(spawned.length, 1)
+    assert.deepEqual(spawned[0]?.slice(2), ['--pane', 'w1:p2'])
+  })
+
+  test('anything else is refused without running anything', async () => {
+    let spawned = 0
+    const spy = spyOn(Bun, 'spawnSync').mockImplementation((() => {
+      spawned++
+      return { exitCode: 0 }
+    }) as unknown as typeof Bun.spawnSync)
+    try {
+      for (const bad of ['../x', 'pane-1', '', 'w1:p2;calc', 'claude-pane:w1:p2', 'w1:p2 x'])
+        assert.equal(await clickThrough(bad), 0, bad)
+    } finally {
+      spy.mockRestore()
+    }
+    assert.equal(spawned, 0)
+  })
+})
+
+// The hook, with what it reads from outside (the platform, the environment, stdin, herdr, the
+// terminal) and what it shows stood in for: which of them it reached for, and what it showed.
+describe('the notification hook', () => {
+  const snapshot = asSnapshot({
+    snapshot: {
+      workspaces: [{ workspace_id: 'w1', label: 'Work' }],
+      tabs: [{ tab_id: 'w1:t1', workspace_id: 'w1', label: 'tab' }],
+      panes: [{ pane_id: 'w1:p2', tab_id: 'w1:t1', workspace_id: 'w1', terminal_title_stripped: 'Fix the tests' }],
+    },
+  })
+  const stop = { hook_event_name: 'Stop', last_assistant_message: 'Done', cwd: '/Users/me/project' }
+
+  /** Runs the hook; what it read (input, snapshot, terminal) and showed. */
+  async function hook(
+    payload: Record<string, unknown>,
+    over: { platform?: string; env?: Record<string, string | undefined>; force?: boolean } = {},
+  ) {
+    const reached: string[] = []
+    const shown: Toast[] = []
+    await hookToast(
+      { force: over.force ?? true },
+      {
+        platform: over.platform ?? 'darwin',
+        env: over.env ?? { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p2' },
+        input: async () => {
+          reached.push('input')
+          return payload
+        },
+        snapshot: async (): Promise<HerdrSnapshot | null> => {
+          reached.push('snapshot')
+          return snapshot
+        },
+        terminalApp: () => {
+          reached.push('terminal')
+          return '/Applications/Ghostty.app'
+        },
+        show: async toast => {
+          shown.push(toast)
+        },
+      },
+    )
+    return { reached, shown }
+  }
+
+  test('a pane of herdr on macOS: the notification, titled by its workspace and session', async () => {
+    const { shown } = await hook(stop)
+    assert.deepEqual(shown, [
+      {
+        pane: 'w1:p2',
+        title: 'Work · Fix the tests',
+        subtitle: 'claude finished',
+        body: 'Done',
+        tab: 'w1:t1',
+        app: '/Applications/Ghostty.app',
+      },
+    ])
+    // An empty agent_id is no subagent.
+    assert.equal((await hook({ ...stop, agent_id: '' })).shown.length, 1)
+  })
+
+  test('the body is cut at 300 characters', async () => {
+    const { shown } = await hook({ ...stop, last_assistant_message: `# Done\n\n${'word '.repeat(100)}` })
+    assert.equal(Array.from(shown[0]?.body ?? '').length, 300)
+    assert.ok(shown[0]?.body.endsWith('…'))
+  })
+
+  test('not macOS, not herdr, no pane id: nothing is read and nothing shown', async () => {
+    const herdr = { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p2' }
+    const cases: [string, { platform?: string; env?: Record<string, string | undefined> }][] = [
+      ['linux', { platform: 'linux' }],
+      ['win32', { platform: 'win32' }],
+      ['HERDR_ENV unset', { env: { HERDR_PANE_ID: 'w1:p2' } }],
+      ['HERDR_ENV not 1', { env: { ...herdr, HERDR_ENV: '0' } }],
+      ['no pane id', { env: { HERDR_ENV: '1' } }],
+      ['a pane id that is none', { env: { ...herdr, HERDR_PANE_ID: 'w1:p2;calc' } }],
+      ['an empty pane id', { env: { ...herdr, HERDR_PANE_ID: '' } }],
+    ]
+    for (const [why, over] of cases) {
+      const { reached, shown } = await hook(stop, over)
+      assert.deepEqual(reached, [], why)
+      assert.deepEqual(shown, [], why)
+    }
+  })
+
+  test('a subagent: its input is read, herdr is not asked, nothing is shown', async () => {
+    const { reached, shown } = await hook({ ...stop, agent_id: 'agent-7' })
+    assert.deepEqual(reached, ['input'])
+    assert.deepEqual(shown, [])
+  })
+
+  test('an event the board says nothing about: herdr is not asked either', async () => {
+    const { reached, shown } = await hook({ hook_event_name: 'SessionStart' })
+    assert.deepEqual(reached, ['input'])
+    assert.deepEqual(shown, [])
   })
 })
 

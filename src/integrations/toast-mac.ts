@@ -507,35 +507,53 @@ function tailOf(file: string): string {
   }
 }
 
+/** What the hook reads from outside and does outside, for a test to stand in for. */
+export interface HookDeps {
+  platform?: string
+  env?: Record<string, string | undefined>
+  input?: () => Promise<Record<string, unknown>>
+  snapshot?: () => Promise<HerdrSnapshot | null>
+  terminalApp?: () => string
+  show?: (toast: Toast) => Promise<void>
+}
+
 /**
  * A Claude Code hook in a herdr pane: posts the notification unless this pane is the one the user
  * looks at. `force` skips that check, for trying it out from the focused pane.
  */
-export async function hookToast({ force = false }: { force?: boolean } = {}): Promise<void> {
-  if (process.platform !== 'darwin') return
-  if (process.env.HERDR_ENV !== '1') return
-  const paneId = process.env.HERDR_PANE_ID ?? ''
+export async function hookToast({ force = false }: { force?: boolean } = {}, deps: HookDeps = {}): Promise<void> {
+  const {
+    platform = process.platform,
+    env = process.env,
+    input = hookInput,
+    snapshot: snapshotOf = () => snapshot().catch(() => null),
+    terminalApp = () => terminalAppOf(process.pid),
+    show = showToast,
+  } = deps
+  if (platform !== 'darwin') return
+  if (env.HERDR_ENV !== '1') return
+  const paneId = env.HERDR_PANE_ID ?? ''
   if (!isPaneId(paneId)) return
-  const payload = await hookInput()
+  const payload = await input()
   if (typeof payload.agent_id === 'string' && payload.agent_id) return
   const message = toastMessage(payload)
   if (!message) return
 
-  const snap = await snapshot().catch(() => null)
+  const snap = await snapshotOf()
   const pane = snap?.panes.find(p => p.pane_id === paneId) ?? null
   // A headless `claude -p` started from inside this pane is not the pane's agent: stay quiet.
   const hosted = typeof pane?.agent_session?.value === 'string' ? pane.agent_session.value : ''
   const session = typeof payload.session_id === 'string' ? payload.session_id : ''
   if (hosted && session && hosted !== session) return
 
-  const app = terminalAppOf(process.pid)
+  const app = terminalApp()
   if (!force && snap && pane && snap.focused_pane_id === pane.pane_id && app && frontmostApp() === app) return
 
   let text = message.text
   if (!text && typeof payload.transcript_path === 'string') text = lastAssistantText(payload.transcript_path)
   const body = plainText(text, 300) || (message.kind === 'stop' ? 'finished' : '')
   const cwd = typeof payload.cwd === 'string' ? payload.cwd : ''
-  await showToast({
+  await show({
     pane: paneId,
     title: toastTitle(snap, paneId, cwd),
     subtitle: message.subtitle,
