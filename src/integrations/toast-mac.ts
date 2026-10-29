@@ -30,6 +30,7 @@ import { basename, dirname, join } from 'node:path'
 import { type HerdrSnapshot, herdr, notify, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { ROOT, stateDir } from '../adapters/paths.ts'
+import { readStdin } from '../adapters/stdin.ts'
 
 const DOT = '·'
 const APP_ID = 'com.mokuteam.agent-board.toast.cb'
@@ -56,7 +57,9 @@ export function plainText(text: unknown, max: number): string {
   t = t.replace(/^\s*>\s?/gm, '')
   t = t.replace(/^\s*[-*+]\s+/gm, '')
   t = t.replace(/\s+/g, ' ').trim()
-  return t.length > max ? `${t.slice(0, max).trimEnd()}…` : t
+  // Cut by characters, not UTF-16 units: an emoji is two of them, and half of one shows as a gap.
+  const chars = Array.from(t)
+  return chars.length > max ? `${chars.slice(0, max).join('').trimEnd()}…` : t
 }
 
 /** What the event says, as { kind, text, subtitle }; null for an event the board says nothing about. */
@@ -257,9 +260,12 @@ export function frontmostApp(): string {
   }
 }
 
-/** The bundle of a program's path ("/Applications/iTerm.app/Contents/MacOS/iTerm2" -> "/Applications/iTerm.app"). */
+/**
+ * The bundle of a program's path ("/Applications/iTerm.app/Contents/MacOS/iTerm2" -> "/Applications/iTerm.app");
+ * the outermost one when the program is a helper app inside another.
+ */
 export function appBundleOf(command: string): string {
-  return /^(.*\.app)\/Contents\/MacOS\//.exec(command.trim())?.[1] ?? ''
+  return /^(.*?\.app)\/Contents\/(?:.*?\/)?MacOS\//.exec(command.trim())?.[1] ?? ''
 }
 
 /**
@@ -453,9 +459,9 @@ export async function clickThrough(pane: string): Promise<number> {
 
 // ------------------------------------------------------------------ the hook
 
-async function readStdin(): Promise<Record<string, unknown>> {
-  let data = ''
-  for await (const chunk of process.stdin) data += chunk
+/** What Claude Code sent on stdin, a JSON object; {} for no input, input that does not parse, or a value that is no object. */
+export async function hookInput(): Promise<Record<string, unknown>> {
+  const data = await readStdin()
   try {
     const value: unknown = JSON.parse(data || '{}')
     return isRecord(value) ? value : {}
@@ -510,7 +516,7 @@ export async function hookToast({ force = false }: { force?: boolean } = {}): Pr
   if (process.env.HERDR_ENV !== '1') return
   const paneId = process.env.HERDR_PANE_ID ?? ''
   if (!isPaneId(paneId)) return
-  const payload = await readStdin()
+  const payload = await hookInput()
   if (typeof payload.agent_id === 'string' && payload.agent_id) return
   const message = toastMessage(payload)
   if (!message) return

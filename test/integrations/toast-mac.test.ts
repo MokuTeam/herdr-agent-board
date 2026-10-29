@@ -63,6 +63,21 @@ describe('the words of a notification', () => {
     assert.equal(plainText(null, 10), '')
   })
 
+  test('plainText: cut by characters, so an emoji at the cut stays whole', () => {
+    // The emoji is two UTF-16 units, the tenth character; a cut by units would leave half of it.
+    assert.equal(plainText(`${'a'.repeat(9)}😀${'b'.repeat(5)}`, 10), `${'a'.repeat(9)}😀…`)
+    assert.equal(plainText(`${'a'.repeat(8)}😀😀${'b'.repeat(5)}`, 9), `${'a'.repeat(8)}😀…`)
+    assert.equal(plainText('😀'.repeat(10), 10), '😀'.repeat(10))
+    assert.equal(plainText('😀'.repeat(11), 10), `${'😀'.repeat(10)}…`)
+  })
+
+  test('plainText: the body of a notification is cut at 300 characters', () => {
+    const body = plainText(`${'word '.repeat(100)}`, 300)
+    assert.equal(Array.from(body).length, 300)
+    assert.ok(body.endsWith('…'))
+    assert.equal(plainText('x'.repeat(300), 300), 'x'.repeat(300))
+  })
+
   test('toastMessage: a finished turn, a permission, a question; nothing for the rest', () => {
     assert.deepEqual(toastMessage({ hook_event_name: 'Stop', last_assistant_message: 'Hi' }), {
       kind: 'stop',
@@ -130,6 +145,12 @@ describe('the ways to a pane', () => {
       '/Applications/My Terminal.app',
     )
     assert.equal(appBundleOf('/opt/homebrew/bin/herdr'), '')
+    // A helper app inside another: the app the user sees is the outer one.
+    assert.equal(
+      appBundleOf('/Applications/iTerm.app/Contents/Frameworks/iTermServer.app/Contents/MacOS/iTermServer'),
+      '/Applications/iTerm.app',
+    )
+    assert.equal(appBundleOf('/Users/me/x.app/bin/tool'), '')
   })
 
   test('the terminal app: the first ancestor in a bundle, not the app at the top', () => {
@@ -388,6 +409,57 @@ describe('building the notification app', () => {
   })
 })
 
+// What the hook reads from stdin is read by a process of its own, as the hook is, with the bytes
+// handed over in the chunks given, each only after the one before has been read: the child says
+// "ready" once it has loaded the module, so a slow start does not gather the chunks into one.
+describe('what the hook is sent', () => {
+  async function inputOf(chunks: Buffer[]): Promise<unknown> {
+    const script = `import { hookInput } from ${JSON.stringify(join(ROOT, 'src', 'integrations', 'toast-mac.ts'))}
+      console.log('ready')
+      console.log(JSON.stringify(await hookInput()))`
+    const proc = Bun.spawn([process.execPath, '-e', script], { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' })
+    const reader = proc.stdout.getReader()
+    const decoder = new TextDecoder()
+    let out = ''
+    const untilLine = async (n: number): Promise<void> => {
+      while (out.split('\n').length <= n) {
+        const read = await reader.read()
+        if (read.done) break
+        out += decoder.decode(read.value)
+      }
+    }
+    await untilLine(1)
+    for (const chunk of chunks) {
+      proc.stdin.write(chunk)
+      await proc.stdin.flush()
+      await Bun.sleep(100)
+    }
+    proc.stdin.end()
+    await untilLine(2)
+    const err = await new Response(proc.stderr).text()
+    assert.equal(await proc.exited, 0, err)
+    return JSON.parse(out.split('\n')[1] as string)
+  }
+
+  test('a character split between two chunks is read whole', async () => {
+    const bytes = Buffer.from('{"last_assistant_message":"Готово 😀 é"}')
+    const cut = bytes.indexOf(0xf0) + 2 // inside the emoji's four bytes
+    assert.deepEqual(await inputOf([bytes.subarray(0, cut), bytes.subarray(cut)]), {
+      last_assistant_message: 'Готово 😀 é',
+    })
+    const cyrillic = bytes.indexOf(0xd0) + 1 // between the two bytes of the first letter
+    assert.deepEqual(await inputOf([bytes.subarray(0, cyrillic), bytes.subarray(cyrillic)]), {
+      last_assistant_message: 'Готово 😀 é',
+    })
+  })
+
+  test('no input, input that does not parse, or no object: nothing', async () => {
+    const texts = ['', '  \n', 'not json', '{"a":', '[1]', '5', 'null']
+    const read = await Promise.all(texts.map(text => inputOf(text ? [Buffer.from(text)] : [])))
+    for (const [i, text] of texts.entries()) assert.deepEqual(read[i], {}, text)
+  })
+})
+
 describe('the hook the install writes', () => {
   test('macOS runs the board’s own Bun entrypoint, Windows its PowerShell script', () => {
     const bun = '/Users/me/.bun/bin/bun'
@@ -402,7 +474,7 @@ describe('the hook the install writes', () => {
   })
 
   test('the files of a copy: the notification script by platform', () => {
-    assert.equal(boardFiles('/x', 'darwin').toast, '/x/src/entrypoints/toast.ts')
-    assert.equal(boardFiles('/x', 'win32').toast, '/x/src/integrations/toast.ps1')
+    assert.equal(boardFiles('/x', 'darwin').toast, join('/x', 'src', 'entrypoints', 'toast.ts'))
+    assert.equal(boardFiles('/x', 'win32').toast, join('/x', 'src', 'integrations', 'toast.ps1'))
   })
 })
