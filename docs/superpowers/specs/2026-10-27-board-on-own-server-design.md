@@ -109,6 +109,21 @@ Convenience comes from a one-command install and a service instead.
   would move the tunnel); Look shows the plan;
   Apply sends the script and the archive over the existing password login and streams its output
   into the panel; the setup link is shown there, once.
+- **The version on the server, on the card** (core/server-board.ts): the install's Look, and a
+  Look of its own on the card (the probe, then one round as root that only reads root's
+  `install.json`, the user it names, its sudo and herdr's service), read the version the server
+  has: "version <short commit> (with local changes), installed <when>", or "not installed", or "not
+  known yet" before the board looked at that server since it started (kept in its memory only;
+  never the repository, whose URL may carry a token). The Server tab looks again by itself when it
+  opens while the board remembers the password; without one, the card says when it saw it and to
+  Look. When the local checkout's commit or its local-changes state differs, "An update is
+  available" and the main button reads Update (Install again when the same).
+- **Remove the board from this server**, on the card once it is installed: its own Look (the
+  install's `--undo` plan in its own words, `undoWill`, shared with the script; the web server's
+  part the server mode's record alone, never the tunnel's), a tick "also remove the user agent and
+  its home" off by default with what it deletes said once ticked (offered only for the installer's
+  user), then Remove: the pack sent as the install's, its bootstrap's `--undo [--remove-user] --yes`
+  over the same login, its output streamed into the card. Refused while anything runs.
 - **Working with herdr directly**: `ssh agent@server`, then `herdr` attaches to the running
   server, as on any machine.
 
