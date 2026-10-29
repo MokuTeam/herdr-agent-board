@@ -12,7 +12,17 @@
 // session's sheet), else to herdr: the pane's agent, its tab, and the terminal app the session ran
 // in. Nothing here runs a shell: the helper takes a program and its arguments.
 import { execFileSync, spawn } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { type HerdrSnapshot, herdr, notify, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
@@ -226,11 +236,41 @@ function paneRecord(pane: string): PaneRecord | null {
   }
 }
 
-/** Ends the helper of this pane's earlier notification: the new one replaces it in the centre. */
-function endEarlier(pane: string): void {
+/** The program a pid runs, as ps names it (its full path on macOS); '' when there is no such process. */
+function commOf(pid: number): string {
   try {
-    const pid = Number(readFileSync(pidFile(pane), 'utf8').trim())
-    if (Number.isInteger(pid) && pid > 0) process.kill(pid)
+    return execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 3_000 }).trim()
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Ends the helper of this pane's earlier notification: the new one replaces it in the centre. The
+ * pid file outlives the helper and the system hands a pid out again, so the process is signalled
+ * only while it still runs our helper; the file goes either way.
+ */
+export function endEarlier(
+  pane: string,
+  ps: (pid: number) => string = commOf,
+  kill: (pid: number) => void = pid => process.kill(pid),
+): void {
+  const file = pidFile(pane)
+  let text: string
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch {
+    return
+  }
+  const pid = Number(text.trim())
+  try {
+    if (Number.isInteger(pid) && pid > 0) {
+      const program = ps(pid)
+      if (program.includes(toastBinary()) || program.endsWith('/ClaudeToast')) kill(pid)
+    }
+  } catch {}
+  try {
+    rmSync(file, { force: true })
   } catch {}
 }
 

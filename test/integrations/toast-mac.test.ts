@@ -1,14 +1,19 @@
-import { describe, test } from 'bun:test'
+import { afterEach, beforeEach, describe, test } from 'bun:test'
 import assert from 'node:assert/strict'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { asSnapshot } from '../../src/adapters/herdr.ts'
 import { toastCommand } from '../../src/core/install-plan.ts'
 import { boardFiles } from '../../src/core/setup.ts'
 import {
   appBundleOf,
+  endEarlier,
   isPaneId,
   lastAssistantText,
   plainText,
   terminalAppOf,
+  toastApp,
   toastMessage,
   toastTitle,
 } from '../../src/integrations/toast-mac.ts'
@@ -16,6 +21,22 @@ import {
 // The macOS notification's pure parts: the words of a notification, its title, and the ways to a
 // pane. The app it is shown by (swiftc, codesign, LaunchServices) belongs to its owner's computer
 // and is not built here.
+
+// The state folder (where the app, a pane's record and its pid file live) is a temp one: the folders
+// are computed at call time from LOCALAPPDATA, so no test touches the real one.
+let state = ''
+const savedState = process.env.LOCALAPPDATA
+beforeEach(() => {
+  state = mkdtempSync(join(tmpdir(), 'toast-mac-'))
+  process.env.LOCALAPPDATA = state
+})
+afterEach(() => {
+  if (savedState === undefined) delete process.env.LOCALAPPDATA
+  else process.env.LOCALAPPDATA = savedState
+  rmSync(state, { recursive: true, force: true })
+})
+const toastDir = (): string => join(state, 'herdr', 'plugins', 'agent-board', 'toast')
+const helperBinary = (): string => join(toastApp(), 'Contents', 'MacOS', 'ClaudeToast')
 
 describe('the words of a notification', () => {
   test('plainText: Markdown as one line, clipped with an ellipsis', () => {
@@ -137,6 +158,54 @@ describe('the ways to a pane', () => {
       lastAssistantText('/x', () => 'not json\n{"type":"assistant"'),
       '',
     )
+  })
+})
+
+describe('the helper of an earlier notification', () => {
+  const pidFile = (): string => join(toastDir(), 'pane-w1_p2.pid')
+  /** The pid file of pane w1:p2 with `pid`, and what happens to it when ps says `program` runs there. */
+  function endWith(pid: string, program: string): { killed: number[]; asked: number[] } {
+    mkdirSync(toastDir(), { recursive: true })
+    writeFileSync(pidFile(), pid)
+    const killed: number[] = []
+    const asked: number[] = []
+    endEarlier(
+      'w1:p2',
+      p => {
+        asked.push(p)
+        return program
+      },
+      p => {
+        killed.push(p)
+      },
+    )
+    return { killed, asked }
+  }
+
+  test('ended while the pid still runs our helper', () => {
+    assert.deepEqual(endWith('4242', helperBinary()), { killed: [4242], asked: [4242] })
+    assert.equal(existsSync(pidFile()), false)
+    // ps may show the helper under another state folder's path: still the helper.
+    assert.deepEqual(endWith('4242', '/Users/me/state/toast/ClaudeToast.app/Contents/MacOS/ClaudeToast').killed, [4242])
+  })
+
+  test('a pid that was given out again, or is gone, is left alone and its file removed', () => {
+    for (const program of ['/usr/bin/vim', '/Applications/ClaudeToast.app/Contents/MacOS/ClaudeToastHelper', '']) {
+      assert.deepEqual(endWith('4242', program).killed, [], program)
+      assert.equal(existsSync(pidFile()), false, program)
+    }
+  })
+
+  test('no pid file: nothing asked; not a pid: nothing asked, the file removed', () => {
+    endEarlier(
+      'w1:p2',
+      () => assert.fail('ps asked'),
+      () => assert.fail('killed'),
+    )
+    for (const text of ['', 'x', '0', '-3', '1.5']) {
+      assert.deepEqual(endWith(text, helperBinary()), { killed: [], asked: [] }, text)
+      assert.equal(existsSync(pidFile()), false, text)
+    }
   })
 })
 
