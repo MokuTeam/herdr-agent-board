@@ -6,13 +6,18 @@
 //
 // Panes labelled asleep that wake has no record of are named on their own: wake neither wakes them
 // nor gives their pane back (a record dropped, as the takeover from herdr-wake drops one older than
-// 7 days). Only while the board's wake is on: the herdr-wake plugin labels its sleepers the same way
-// and keeps its records elsewhere.
+// 7 days). Only while the board's wake runs (or is starting): the herdr-wake plugin labels its
+// sleepers the same way and keeps its records elsewhere, and while it holds the line, or the board's
+// wake is off, crashed or not answering, wake's records say nothing of what is asleep now.
 //
 // Pure: adapters/pane-facts.ts reads herdr, the process table and wake's files.
 import type { SetupCheck } from './setup.ts'
 import type { Translator } from './types.ts'
 import { isSidebar } from './wake/freed.ts'
+import type { WakeState } from './wake/status.ts'
+
+/** Whether wake's records say what is asleep now: the board's wake runs, or is starting. */
+export const wakeKeepsSleepers = (state: WakeState | undefined): boolean => state === 'running' || state === 'starting'
 
 /** What a pane holds: only its shell (null: herdr did not say), and its processes' memory in bytes (null: not read). */
 export interface PaneHeld {
@@ -24,7 +29,7 @@ export interface PaneFacts {
   panes: readonly { pane_id: string; agent?: string; label?: string; tokens?: Record<string, unknown> }[]
   /** By pane id. */
   held: ReadonlyMap<string, PaneHeld>
-  /** The panes wake keeps a sleeper in (its and pi's records); null while the board's wake is off. */
+  /** The panes wake keeps a sleeper in (its and pi's records); null unless the board's wake runs (wakeKeepsSleepers). */
   sleepers: ReadonlySet<string> | null
 }
 

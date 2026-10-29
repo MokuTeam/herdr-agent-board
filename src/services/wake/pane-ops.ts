@@ -10,7 +10,15 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { WakeHerdr } from '../../adapters/wake-herdr.ts'
 import { inputDraft } from '../../core/dialogs/input-box.ts'
-import { type FreedPlace, type FreeRules, freePlan, promptIdle, promptShows } from '../../core/wake/freed.ts'
+import {
+  type FreedPlace,
+  type FreeRules,
+  freePlan,
+  promptIdle,
+  promptRows,
+  promptShows,
+  tabFocused,
+} from '../../core/wake/freed.ts'
 import { clearKeyFor, plainProfile, wakeLine } from '../../core/wake/rules.ts'
 import { isChannelsWarning, isExitTasksDialog, isTrustDialog } from '../../core/wake/screens.ts'
 
@@ -73,12 +81,12 @@ export function lineFor(session: string, profile: string | null | undefined): { 
 /**
  * The pane is at its shell's prompt: herdr gives the shell's pid, and every foreground process it
  * lists, named or not, has that pid. An empty list passes, as in router.mjs: herdr then shows no
- * program in front of the shell. The shell's name, for its clear key.
+ * program in front of the shell. The shell's name, for its clear key, and its pid.
  */
-export async function atPrompt(io: WakeHerdr, pane: string): Promise<{ shell: string | null } | null> {
+export async function atPrompt(io: WakeHerdr, pane: string): Promise<{ shell: string | null; pid: number } | null> {
   const info = await io.processInfo(pane)
   if (info.shellPid === null || info.foreground.some(p => p.pid !== info.shellPid)) return null
-  return { shell: info.shell }
+  return { shell: info.shell, pid: info.shellPid }
 }
 
 /** A pane held by a withPane call, until its `fn` has ended. */
@@ -242,32 +250,50 @@ async function closeFreed(io: WakeHerdr, pane: string, marks: FreeMarks, o: Free
 }
 
 /**
+ * What lookAgain made of a kept sleeper's pane: given back; kept with its wake line at its prompt
+ * (a later look may give it back), or with the line typed again there; kept for good (nothing about
+ * this shell changes that by itself); no answer yet (a shell still starting: ask again); left alone
+ * while the user looks at its tab.
+ */
+export type LookedAt = 'freed' | 'line' | 'typed' | 'kept' | 'later' | 'focused'
+
+/**
  * A sleeper kept in its pane, looked at again (#243): its pane given back as freePane gives it, now
  * that what kept it may have gone (its tab no longer looked at, the tabs before it closed, nobody
  * else coming back to its workspace). Only while its shell is as a sleep left it: its last prompt
- * holds its wake line. In a shell herdr has `restored` after it started over (a new terminal, so
- * nothing of the user's in it), an empty prompt will do too, and a pane that stays gets its wake
- * line typed again (`line`, none for a session the user exited), as a sleep leaves it. The screen is
- * read first: a restored shell that shows no prompt yet is still starting ('later', ask again).
- * Not given back: 'line' while its wake line is at its prompt (a later look may give it back),
- * 'kept' when nothing about this shell will change by itself.
+ * holds its wake line, nothing run there since.
+ *
+ * In a pane herdr gave a new terminal (`restored`) an empty prompt will do too, but only in a shell
+ * that has just started: another shell process than the one noted in that pane (`shellPid`; herdr's
+ * live handoff gives a pane a new terminal and keeps its shell), and one prompt row on its screen
+ * (anything run there, a remote shell's or a REPL's prompt, shows more, even where herdr does not
+ * list the program, as on Windows). A pane that stays then gets its wake line typed again (`line`,
+ * none for a session the user exited) as a sleep leaves it ('typed'), but never while the user
+ * looks at its tab ('focused', on a snapshot taken right before). The screen is read first: a
+ * restored shell that shows no prompt yet is still starting ('later').
  */
 export async function lookAgain(
   io: WakeHerdr,
-  target: { pane: string; session: string; line: string | null },
+  target: { pane: string; session: string; line: string | null; shellPid?: number },
   marks: FreeMarks,
   o: FreeOptions & { restored: boolean },
-): Promise<'freed' | 'line' | 'kept' | 'later'> {
+): Promise<LookedAt> {
   const { pane, session, line } = target
-  const shows = promptShows(await io.screen(pane), session)
+  const screen = await io.screen(pane)
+  const shows = promptShows(screen, session)
   if (shows === 'none') return o.restored ? 'later' : 'kept'
-  if (shows === 'other' || (shows === 'empty' && !o.restored)) return 'kept'
-  if (!(await atPrompt(io, pane))) return 'kept'
+  if (shows === 'other') return 'kept'
+  const prompt = await atPrompt(io, pane)
+  if (!prompt) return 'kept'
+  const fresh = o.restored && prompt.pid !== target.shellPid && promptRows(screen) === 1
+  if (shows === 'empty' && !fresh) return 'kept'
   if (await closeFreed(io, pane, marks, o)) return 'freed'
   if (shows === 'line') return 'line'
-  if (line === null || !(await atPrompt(io, pane))) return 'kept'
+  if (line === null) return 'kept'
+  if (tabFocused(await io.snapshot(), pane)) return 'focused'
+  if (!(await atPrompt(io, pane))) return 'kept'
   await io.sendText(pane, line)
-  return 'line'
+  return 'typed'
 }
 
 /** Types /exit and waits for Claude to leave: 'slept', 'tasks' (Esc pressed on that dialog) or 'up'. */

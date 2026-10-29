@@ -3,7 +3,7 @@
 import { expect, test } from 'bun:test'
 import { asMemoryTable, bareShell, treeBytes } from '../../src/adapters/pane-facts.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
-import { type PaneFacts, paneChecks } from '../../src/core/pane-report.ts'
+import { type PaneFacts, paneChecks, wakeKeepsSleepers } from '../../src/core/pane-report.ts'
 
 const MB = 2 ** 20
 const en = translator('en')
@@ -93,4 +93,12 @@ test('a bare shell: a shell with nothing under it but Windows’ console host; a
   ]
   expect([10, 20, 30, 40, 99].map(pid => bareShell(table, pid))).toEqual([true, false, false, false, null])
   expect([10, 20, 30, 40, 99].map(pid => treeBytes(table, pid))).toEqual([82 * MB, 105 * MB, 40 * MB, 405 * MB, null])
+})
+
+test('wake’s records name what is asleep only while the board’s wake runs, or is starting', () => {
+  expect(wakeKeepsSleepers('running')).toBe(true)
+  expect(wakeKeepsSleepers('starting')).toBe(true)
+  // herdr-wake holds the line (its own records), or the board's wake is not there to keep them.
+  for (const state of ['held', 'portTaken', 'off', 'crashed', 'notRunning', undefined] as const)
+    expect([state, wakeKeepsSleepers(state)]).toEqual([state, false])
 })

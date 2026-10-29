@@ -85,7 +85,7 @@ export function freePlan(snap: FreedSnapshot, pane: string, now: number, rules: 
   const ws = snap.workspaces.find(w => w.workspace_id === (tab?.workspace_id ?? p.workspace_id))
   if (!tab || !ws) return null
   const inTab = snap.panes.filter(x => x.tab_id === tab.tab_id)
-  if (inTab.some(x => x.focused || x.pane_id === snap.focused_pane_id)) return null
+  if (tabFocused(snap, pane)) return null
   const tabs = workspaceTabs(snap, ws.workspace_id)
   const index = tabs.findIndex(t => t.tab_id === tab.tab_id)
   const alone = inTab.every(x => x.pane_id === pane || isSidebar(x))
@@ -165,6 +165,22 @@ export function promptShows(screen: string, session: string): 'none' | 'line' | 
   if (typed === undefined) return 'other'
   if (typed === '') return 'empty'
   return SESSION_ID.test(session) && isWakeLine(typed, session) ? 'line' : 'other'
+}
+
+/**
+ * How many rows of the screen are shell prompt rows (#243): a shell that has just started shows one,
+ * a shell something was run in shows more (its commands, a remote shell's or a REPL's prompt).
+ */
+export function promptRows(screen: string): number {
+  return screen.split('\n').filter(row => PROMPT.test(row.trimEnd())).length
+}
+
+/** Whether the user looks at the pane's tab: herdr's focused pane is in it. */
+export function tabFocused(snap: FreedSnapshot, pane: string): boolean {
+  const tab = snap.panes.find(x => x.pane_id === pane)?.tab_id
+  return (
+    tab !== undefined && snap.panes.some(x => x.tab_id === tab && (x.focused || x.pane_id === snap.focused_pane_id))
+  )
 }
 
 const record = (v: unknown): Record<string, unknown> | null =>

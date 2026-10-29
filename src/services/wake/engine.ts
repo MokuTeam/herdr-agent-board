@@ -43,7 +43,7 @@ import { isPiSessionFile, parsePiTail, piProvider, piSessionCwd, piSessionId } f
 import { absoluteProfileDir, defaultProfileDir, type ProfileSet, profileForDir } from '../../core/profiles.ts'
 import { SESSION_ID } from '../../core/resume.ts'
 import type { ReaperConfig, WakeConfig } from '../../core/wake/config.ts'
-import { type FreedPlace, freePlan } from '../../core/wake/freed.ts'
+import { type FreedPlace, freePlan, tabFocused } from '../../core/wake/freed.ts'
 import {
   findPiSleeper,
   type PiSleeper,
@@ -77,6 +77,7 @@ import { type Follow, followFiles } from './follow.ts'
 import {
   atPrompt,
   freePane,
+  type LookedAt,
   lineFor,
   lookAgain,
   PROFILE_NOT_PLAIN,
@@ -197,8 +198,13 @@ export interface WakeEngine {
 /** How long a woken session has to show in a registry before wake answers anyway. */
 const REGISTER_WAIT_MS = 20_000
 const REGISTER_POLL_MS = 1000
-/** How many looks a sleeper's shell gets to show its prompt (or herdr to answer) before it is judged kept (#243). */
-const GIVE_BACK_TRIES = 8
+/**
+ * How long a kept sleeper's shell has to show its prompt (or herdr to answer, or a close to happen)
+ * before it is judged kept (#243): after a reboot every pane's shell starts at once.
+ */
+const GIVE_BACK_WAIT_MS = 10 * 60_000
+/** A pane given back this recently may still be the one a caller picked from an older look (#243). */
+const JUST_FREED_MS = 60_000
 /** Why a session whose transcript lookup threw (a stat Windows refuses: EPERM) stays up. */
 const TRANSCRIPT_UNREADABLE = 'its transcript cannot be read'
 
@@ -293,9 +299,9 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
   const tidyFile = deps.tidyFile ?? join(dirname(deps.sessionsFile), 'wake-tidy.json')
   let tidied = existsSync(tidyFile)
   let tidying = false
-  /** Sleepers whose shell giveBack judged kept, by pane and sleep: nothing in that shell brings their wake line back. */
+  /** Sleepers' shells giveBack judged kept, by pane, sleep and terminal: nothing in that shell brings their wake line back. */
   const keptShells = new Set<string>()
-  /** giveBack's looks that got no answer yet, by pane and sleep or terminal: a shell still starting, herdr failing. */
+  /** giveBack's shells that got no answer yet (still starting, herdr failing, a close that did not happen): since when. */
   const unanswered = new Map<string, number>()
 
   const archived = (ids: readonly string[]): Set<string> => {
@@ -508,25 +514,42 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
   const sleepLabels = (s: WakeEntry): string[] => [`💤 ${s.name}`, `💤 ${s.name || s.title || ''}`]
 
   /**
+   * A kept sleeper giveBack takes up: its pane, its sleep, its pane's label, and its shell (pane,
+   * sleep and the terminal herdr shows there now: what a judgement holds for). `note`: the terminal
+   * to note with its shell's process, the first time it is seen asleep. `restored`: the terminal of
+   * a pane herdr gave another one than the noted. Neither: a look again in the same shell.
+   */
+  type Due = {
+    pane: string
+    session: string
+    slept_at: number
+    label: string
+    shell: string
+    note?: string
+    restored?: string
+  }
+
+  /**
    * Sleepers wake keeps in their pane (labelled by wake, the session asleep in its records), looked
    * at again at every look once the tidy is done (#243): a sleep keeps a pane when its tab is looked
    * at, when its workspace's other tabs or another sleeper coming back there need its tab, and none
-   * of that lasts. A sleeper's entry notes its pane's terminal the first time it is seen asleep.
+   * of that lasts. The first time a sleeper is seen asleep, its entry notes its pane's terminal and
+   * its shell's process.
    * - The same terminal: when core/wake/freed.ts freePlan would now give the pane back (on this
    *   look's snapshot, so nothing is asked of herdr before), it is, by pane-ops lookAgain: only while
    *   its wake line is still at its prompt (nothing run there since). A shell judged kept is not
    *   looked at again. A session the user exited: never (no line is typed there).
-   * - Another terminal: herdr has restored the pane after it started over, a new shell with nothing
-   *   of the user's in it. It is judged once, at the first look that sees it, an empty prompt
-   *   allowed, and one the user exited too; kept, it gets its wake line typed again, unless exited,
-   *   and the new terminal noted: from then on it is the same terminal.
+   * - Another terminal: herdr started over and restored the pane, or handed it over to a new server
+   *   with its shell. It is judged once, when the user does not look at its tab: lookAgain lets an
+   *   empty prompt do only in a shell that has just started; a session the user exited too. Kept, it
+   *   gets its wake line typed again, unless exited; its terminal and shell are noted, and from then
+   *   on it is the same terminal.
    * A shell that shows no prompt yet, herdr not answering, or a close that did not happen, is asked
-   * again at a later look, up to GIVE_BACK_TRIES looks. Counted under way (busy) while it asks herdr.
+   * again at later looks for GIVE_BACK_WAIT_MS. Counted under way (busy) while it asks herdr.
    */
   async function giveBack(snap: HerdrSnapshot): Promise<void> {
     if (!tidied || tidying || deps.readOnly || !deps.settings().closePanes || !snap.panes.length) return
     const due: Due[] = []
-    let noted = false
     for (const [pane, s] of Object.entries(sessions)) {
       if (!s.slept_at || isFreed(s) || !SESSION_ID.test(s.session) || going.has(pane)) continue
       const p = snap.panes.find(x => x.pane_id === pane)
@@ -541,43 +564,34 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
         shell: `${pane} ${s.slept_at} ${terminal}`,
       }
       if (terminal && s.terminal && terminal !== s.terminal) {
-        due.push({ ...sleep, restored: terminal })
+        if (!tabFocused(snap, pane)) due.push({ ...sleep, restored: terminal })
         continue
       }
-      if (terminal && !s.terminal) {
-        sessions = { ...sessions, [pane]: { ...s, terminal } }
-        noted = true
-      }
+      if (terminal && !s.terminal) due.push({ ...sleep, note: terminal })
       if (!s.exited && !keptShells.has(sleep.shell) && freePlan(snap, pane, now(), { label, held })) due.push(sleep)
     }
-    if (noted) save()
     if (!due.length) return
     // One after the other, as the tidy: each close changes what the next one's freePlan sees.
     await during(async () => {
-      for (const d of due) await withPane(d.pane, () => lookAt(d))
+      for (const d of due) await withPane(d.pane, () => (d.note === undefined ? lookAt(d) : noteShell(d, d.note)))
     })
   }
 
-  /**
-   * A sleeper giveBack looks at: its pane, its sleep, its pane's label, its shell (pane, sleep and
-   * the terminal it is in now), and the new terminal of a pane herdr `restored`.
-   */
-  type Due = { pane: string; session: string; slept_at: number; label: string; shell: string; restored?: string }
+  /** Whether the sleeper's entry is still the sleep `d` was taken up for, in its pane. */
+  const stillAsleep = (d: Due, cur: WakeEntry | undefined): cur is WakeEntry =>
+    !!cur && !isFreed(cur) && cur.session === d.session && cur.slept_at === d.slept_at && !going.has(d.pane)
 
-  /** One sleeper of giveBack's, while its entry is still the sleep it was due for. */
+  /** One sleeper of giveBack's looked at again, while its entry is still the sleep it was taken up for. */
   async function lookAt(d: Due): Promise<void> {
     const s = sessions[d.pane]
-    if (!s || isFreed(s) || s.session !== d.session || s.slept_at !== d.slept_at || going.has(d.pane)) return
+    if (!stillAsleep(d, s)) return
     const dir = s.profileDir ?? defaultProfileDir(homedir(), platform)
     const found = s.exited ? null : lineFor(s.session, lineProfile(deps.profiles(), dir))
     const line = found && 'line' in found ? found.line : null
-    const rules = { label: d.label, held, now: now(), log: deps.log, sleep, restored: d.restored !== undefined }
-    const r = await lookAgain(
-      deps.herdr,
-      { pane: d.pane, session: s.session, line },
-      freeMarks(d.pane, s.session),
-      rules,
-    ).catch(err => {
+    const restored = d.restored !== undefined
+    const target = { pane: d.pane, session: s.session, line, ...(s.shellPid !== undefined && { shellPid: s.shellPid }) }
+    const rules = { label: d.label, held, now: now(), log: deps.log, sleep, restored }
+    const r: LookedAt = await lookAgain(deps.herdr, target, freeMarks(d.pane, s.session), rules).catch(err => {
       deps.log(`${s.name}: the pane ${d.pane} it sleeps in could not be looked at: ${messageOf(err)}`)
       return 'later' as const
     })
@@ -585,24 +599,38 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       unanswered.delete(d.shell)
       return deps.log(`${s.name}: gave back the pane ${d.pane} it slept in`)
     }
-    // Judged in its new terminal, or left as a sleep leaves it there: the same terminal from now on.
-    if (d.restored !== undefined && r !== 'later') noteTerminal(d, d.restored)
-    if (d.restored !== undefined && r === 'line') return void unanswered.delete(d.shell)
-    if (r !== 'kept') {
-      const n = (unanswered.get(d.shell) ?? 0) + 1
-      unanswered.set(d.shell, n)
-      if (n < GIVE_BACK_TRIES) return
-      if (d.restored !== undefined) noteTerminal(d, d.restored)
+    // The user looks at its tab: judged once they look elsewhere, however long that takes.
+    if (r === 'focused') return
+    // No answer yet, or a close that did not happen: asked again for a while.
+    if (r === 'later' || (r === 'line' && !restored)) {
+      const since = unanswered.get(d.shell) ?? now()
+      unanswered.set(d.shell, since)
+      if (now() - since < GIVE_BACK_WAIT_MS) return
     }
     unanswered.delete(d.shell)
+    if (d.restored !== undefined) {
+      await noteShell(d, d.restored)
+      deps.log(
+        `${s.name}: kept in the pane ${d.pane} herdr gave a new terminal${r === 'typed' ? ', its wake line typed again' : ''}`,
+      )
+      // As a sleep leaves it: given back once its place allows it.
+      if (r === 'line' || r === 'typed') return
+    }
     keptShells.add(d.shell)
   }
 
-  /** The terminal the sleeper's pane was judged in, saved while its entry is still that sleep. */
-  function noteTerminal(d: Due, terminal: string): void {
+  /**
+   * The terminal the sleeper's pane is in and the process of its shell, noted while its entry is
+   * still that sleep: how a pane herdr restores is told from one it keeps (#243). A shell herdr does
+   * not say leaves no process noted.
+   */
+  async function noteShell(d: Due, terminal: string): Promise<void> {
+    const info = await deps.herdr.processInfo(d.pane).catch(() => null)
     const cur = sessions[d.pane]
-    if (cur?.session !== d.session || cur.slept_at !== d.slept_at || isFreed(cur) || cur.terminal === terminal) return
-    sessions = { ...sessions, [d.pane]: { ...cur, terminal } }
+    if (!stillAsleep(d, cur)) return
+    const { shellPid: _was, ...rest } = cur
+    const pid = info?.shellPid ?? null
+    sessions = { ...sessions, [d.pane]: { ...rest, terminal, ...(pid !== null && { shellPid: pid }) } }
     save()
   }
 
@@ -801,6 +829,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
           profileDir: _dir,
           profile: _profile,
           terminal: _terminal,
+          shellPid: _pid,
           ...rest
         } = before
         put(pane, {
@@ -862,6 +891,22 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
   }
 
   /**
+   * wakeIn for a sleeper kept in its pane. A look may have given that pane back while this wake
+   * waited for it (#243, giveBack holds the pane): the sleeper is then under its session id, and it
+   * wakes in a new tab as any whose pane was closed, whatever herdr said of the pane that is gone.
+   */
+  async function wakeKept(pane: string, entry: WakeEntry, set: ProfileSet): Promise<WakeOutcome> {
+    let outcome: WakeOutcome | null = null
+    try {
+      outcome = await wakeIn(pane, entry, set)
+    } catch (err) {
+      if (!isFreed(sessions[entry.session])) throw err
+    }
+    if (outcome?.ok || !isFreed(sessions[entry.session])) return outcome as WakeOutcome
+    return wakeFreed(entry.session, set)
+  }
+
+  /**
    * The sleeper under `key` (its session id) whose pane wake closed (#204): a new tab where it was
    * (services/wake/tabs.ts), its entry moved to that pane as a sleeper there, then woken there as in
    * its own (wakeIn), its shell maybe still starting. Woken or not, that pane is its own from then
@@ -888,8 +933,8 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     const found = lineFor(entry.session, lineProfile(set, dir))
     if ('error' in found) return { ok: false, why: 'line', error: found.error }
     const name = entry.name || entry.title || ''
-    // Its old pane's terminal is not the new pane's (#243): that one is noted when seen.
-    const { freed: was, terminal: _terminal, ...asleep } = entry
+    // Its old pane's terminal and shell are not the new pane's (#243): those are noted when seen.
+    const { freed: was, terminal: _terminal, shellPid: _pid, ...asleep } = entry
     const pane = await openTab(
       tabOps,
       {
@@ -1028,7 +1073,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
         }
         if (s.live) return { ok: true, pane: s.pane, name: s.name, already: true }
         // Its pane closed when it went to sleep (#204): it wakes in a new tab.
-        const outcome = isFreed(s) ? await wakeFreed(s.pane, seen.set) : await wakeIn(s.pane, s, seen.set)
+        const outcome = isFreed(s) ? await wakeFreed(s.pane, seen.set) : await wakeKept(s.pane, s, seen.set)
         if (!outcome.ok) return { ok: false, error: outcome.error }
         const pane = outcome.pane ?? s.pane
         // Reachable for SendMessage once it has registered itself again, in whichever profile.
@@ -1086,6 +1131,13 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
         const entry = sessions[pane]
         // A sleeper whose pane wake closed (#204), under its session id: it wakes in a new tab.
         if (isFreed(entry)) return wakeFreed(pane, deps.profiles())
+        // Its pane given back by a look a moment ago, after the router picked it (#243): the same.
+        const moved = entry
+          ? undefined
+          : Object.entries(sessions).find(
+              ([, e]) => isFreed(e) && e.freed.pane === pane && now() - e.freed.at < JUST_FREED_MS,
+            )
+        if (moved) return wakeFreed(moved[0], deps.profiles())
         if (!entry || !SESSION_ID.test(entry.session)) {
           // A pi sleeper whose own pane it is (#178): the Telegram router types its message there.
           const snap = await snapshotNow()
@@ -1094,7 +1146,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
           const r = await wakePiNow(p, snap)
           return r.ok ? { ok: true } : { ok: false, why: 'line', error: r.error }
         }
-        return wakeIn(pane, entry, deps.profiles())
+        return wakeKept(pane, entry, deps.profiles())
       }),
 
     async seen() {

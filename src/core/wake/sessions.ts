@@ -15,9 +15,10 @@ import type { WakeProfile } from './rules.ts'
 /**
  * The last Claude session seen in a pane. `slept_at` marks it asleep: put to sleep, or `exited` by
  * the user. `profileDir` is the folder whose registry had it, `profile` that folder's listed id.
- * `freed`: put to sleep and its pane closed, where it comes back (#204). `terminal`: of a sleeper
- * kept in its pane, the terminal herdr showed there when wake last judged it (#243); herdr gives a
- * pane it restores after it starts over a new one.
+ * `freed`: put to sleep and its pane closed, where it comes back (#204). `terminal` and `shellPid`:
+ * of a sleeper kept in its pane, the terminal herdr showed there and its shell's process when wake
+ * last judged it (#243). herdr gives a pane it restores after it starts over a new terminal and a
+ * new shell; its live handoff gives a new terminal and keeps the shell.
  */
 export interface WakeEntry {
   session: string
@@ -31,6 +32,7 @@ export interface WakeEntry {
   profile?: string
   freed?: FreedPlace
   terminal?: string
+  shellPid?: number
   [extra: string]: unknown
 }
 
@@ -61,6 +63,7 @@ const OPTIONAL: ReadonlyMap<string, (v: unknown) => boolean> = new Map([
   ['slept_at', time],
   ['exited', (v: unknown) => typeof v === 'boolean'],
   ['terminal', filled],
+  ['shellPid', (v: unknown) => typeof v === 'number' && Number.isInteger(v) && v > 0],
 ])
 
 /**
@@ -117,10 +120,10 @@ export interface Remembered {
   exited: string[]
 }
 
-/** The entry awake again: no `slept_at`, no `exited`, no `terminal` judged asleep; null when it was not asleep. */
+/** The entry awake again: no `slept_at`, no `exited`, nothing judged of its shell asleep; null when it was not asleep. */
 function awakeEntry(e: WakeEntry | undefined): WakeEntry | null {
   if (!e?.slept_at) return null
-  const { slept_at: _slept, exited: _exited, terminal: _terminal, ...rest } = e
+  const { slept_at: _slept, exited: _exited, terminal: _terminal, shellPid: _pid, ...rest } = e
   return rest
 }
 

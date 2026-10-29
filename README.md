@@ -114,8 +114,8 @@ herdr-wake plugin, or not answering, and its hooks in each shown profile), how n
 MokuPilot, the notifications. It also says what herdr's panes hold: how many run an agent, sleep
 in their pane, are herdr-sidebar's or something else, with the memory their processes take, and
 how many of the sidebars and the others are a bare shell (a sidebar pane herdr restored without its
-sidebar, a terminal left open). With sleep and wake on, it names the panes labelled `💤` that wake
-has no record of: wake neither wakes them nor gives them back. The web board says it too, quietly:
+sidebar, a terminal left open). While the board's sleep and wake runs, it names the panes labelled
+`💤` that wake has no record of: wake neither wakes them nor gives them back. The web board says it too, quietly:
 "Setup incomplete" in its toolbar while something the board needs does not work (see
 [Web board](#web-board)); the panes are counted by `board doctor` only.
 
@@ -1442,12 +1442,17 @@ run in that shell since. A shell that shows anything else there stays, and is no
 Wake asks herdr nothing about a pane the rule still keeps.
 
 **After herdr starts over** (a reboot, herdr's server restarted), herdr restores each pane as a new
-shell in its folder, a `💤` pane too, without the wake line typed at its prompt. Wake tells such a
-pane by its new terminal (herdr's `terminal_id`, which it notes for every pane it keeps) and judges
-it once, at its first look: an empty prompt will do, since nothing of yours is in a shell that has
-just started, and a session you `/exit`ed goes too. One the rule keeps (a workspace's first tab)
-gets its wake line typed again, as a sleep leaves it, unless you `/exit`ed it. A shell still
-starting (no prompt on its screen yet) is asked again at the next looks.
+shell in its folder, a `💤` pane too, without the wake line typed at its prompt. For every pane it
+keeps, wake notes herdr's terminal (`terminal_id`) and the shell's process. A pane with another
+terminal is judged once, when you are not looking at its tab, by what its screen shows. An empty
+prompt will do only in a shell that has just started: another process than the one noted, and one
+prompt on its screen. A shell you ran anything in shows more (your commands, or a remote shell's or
+a REPL's prompt), and stays. A session you `/exit`ed goes too then. herdr's live handoff (`herdr
+update --handoff`, macOS and Linux) also gives a pane a new terminal, but keeps its shell: such a
+pane is judged as in its own shell (its wake line at its prompt, or it stays). One the rule keeps
+(a workspace's first tab) gets its wake line typed again, as a sleep leaves it, unless you
+`/exit`ed it; nothing is typed while you look at its tab. A shell still starting (no prompt on its
+screen yet) is asked again at the next looks, for up to 10 minutes.
 
 What this changes for every setup: a woken session's tab comes back at the end of its workspace
 (a whole workspace at the end of herdr's list), not where it was, since herdr's command line cannot

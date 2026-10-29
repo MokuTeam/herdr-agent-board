@@ -1,5 +1,13 @@
 import { expect, test } from 'bun:test'
-import { asFreedPlace, type FreedSnapshot, freePlan, promptIdle, promptShows } from '../../../src/core/wake/freed.ts'
+import {
+  asFreedPlace,
+  type FreedSnapshot,
+  freePlan,
+  promptIdle,
+  promptRows,
+  promptShows,
+  tabFocused,
+} from '../../../src/core/wake/freed.ts'
 
 const now = Date.parse('2026-10-27T12:00:00Z')
 const PROJECT = 'C:\\Work\\Проект x 50%'
@@ -176,4 +184,33 @@ test('#243 promptShows: no prompt yet, the wake line (wrapped too), an empty pro
   for (const [screen, shows] of cases) expect([screen, promptShows(screen, SID)]).toEqual([screen, shows])
   // Not a session id: never its wake line.
   expect(promptShows('$ board resume pane-7', 'pane-7')).toBe('other')
+})
+
+test('#243 promptRows: one in a shell that has just started (its prompt wrapped too), more once anything ran', () => {
+  const PS = 'PS C:\\Work\\Проект x 50%> '
+  expect(promptRows(PS)).toBe(1)
+  expect(promptRows(`\n\n${PS}\n\n`)).toBe(1)
+  // A narrow pane wraps the prompt: the folder's part has no end mark.
+  expect(promptRows('PS C:\\Work\\BB\\Proj\nect> ')).toBe(1)
+  expect(promptRows(`${PS}git status\nOn branch main\n${PS}`)).toBe(2)
+  expect(promptRows(`${PS}ssh prod\nLast login\nroot@prod:~# `)).toBe(2)
+  expect(promptRows('')).toBe(0)
+})
+
+test('#243 tabFocused: herdr’s focused pane, or a pane marked focused, anywhere in the pane’s tab', () => {
+  const snap = (focused: Record<string, unknown> = {}, id?: string): FreedSnapshot => ({
+    workspaces: [{ workspace_id: 'w1', label: 'Main' }],
+    tabs: [
+      { tab_id: 't1', workspace_id: 'w1' },
+      { tab_id: 't2', workspace_id: 'w1' },
+    ],
+    panes: [shell('w1:p1', 't1'), sidebar('w1:s1', 't1'), shell('w1:p2', 't2', focused)],
+    ...(id && { focused_pane_id: id }),
+  })
+  expect(tabFocused(snap(), 'w1:p1')).toBe(false)
+  expect(tabFocused(snap({ focused: true }), 'w1:p1')).toBe(false)
+  expect(tabFocused(snap({}, 'w1:s1'), 'w1:p1')).toBe(true)
+  expect(tabFocused(snap({}, 'w1:p1'), 'w1:p1')).toBe(true)
+  expect(tabFocused(snap({ focused: true }), 'w1:p2')).toBe(true)
+  expect(tabFocused(snap({}, 'w1:s1'), 'w9:p9')).toBe(false)
 })

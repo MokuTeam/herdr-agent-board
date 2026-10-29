@@ -95,7 +95,7 @@ async function pooled<T, R>(items: readonly T[], n: number, fn: (item: T) => Pro
   return out
 }
 
-/** What herdr's panes hold; null when herdr does not answer. `wakeOn`: the board's wake keeps the sleepers. */
+/** What herdr's panes hold; null when herdr does not answer. `wakeOn`: the board's wake runs and keeps the sleepers. */
 export async function paneFacts(wakeOn: boolean): Promise<PaneFacts | null> {
   const snap = await snapshot().catch(() => null)
   if (!snap) return null
