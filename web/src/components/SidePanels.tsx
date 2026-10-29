@@ -10,6 +10,7 @@ import { isWakeView } from '../models/wake.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { AccessPanel, type AccessPanelProps } from './access/AccessPanel.tsx'
 import { ArchivePanel } from './archive/ArchivePanel.tsx'
+import { BackupPanel, type BackupPanelProps } from './backup/BackupPanel.tsx'
 import { CategoriesPanel, type CategoriesPanelProps } from './categories/CategoriesPanel.tsx'
 import { ErrorBoundary } from './ErrorBoundary.tsx'
 import { MokupilotPanel, type MokupilotPanelProps } from './mokupilot/MokupilotPanel.tsx'
@@ -39,6 +40,8 @@ export interface SidePanelsProps {
   archive?: Archive
   /** Tasks (#202): drawn while the board has them on. */
   todos?: TodosPanelProps
+  /** Settings → Backup… (#233); drawn when given (the page gives it once opened, on the local board only). */
+  backup?: BackupPanelProps
 }
 
 export function SidePanels({
@@ -52,6 +55,7 @@ export function SidePanels({
   sheet,
   archive,
   todos,
+  backup,
 }: SidePanelsProps) {
   const { data, ui, dispatch } = useBoardContext()
   return (
@@ -68,6 +72,7 @@ export function SidePanels({
       {mokupilot && <MokupilotPanel {...mokupilot} />}
       {access && <AccessPanel {...access} />}
       {todos && data?.todos && <TodosPanel {...todos} />}
+      {backup && <BackupPanel {...backup} />}
     </>
   )
 }

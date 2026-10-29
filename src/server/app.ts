@@ -6,9 +6,10 @@
 // on another site cannot send that without a CORS preflight, which this server never grants, so
 // it cannot type into a session.
 import { randomBytes } from 'node:crypto'
-import { type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
+import { existsSync, type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
 import { join } from 'node:path'
-import { saveFoundProfiles } from '../adapters/config-file.ts'
+import { loadConfig, saveFoundProfiles } from '../adapters/config-file.ts'
+import { dbFile } from '../adapters/db.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
@@ -33,12 +34,16 @@ import {
 } from '../adapters/ssh.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
+import type { BackupPayload } from '../core/payload.ts'
 import type { Observation } from '../core/presence.ts'
 import { shownProfiles } from '../core/profiles.ts'
 import { pwaPage } from '../core/pwa.ts'
 import type { SetupFacts } from '../core/setup.ts'
 import { boardPorts, forwardSpec, publicHosts, sshArgs, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
+import type { Config } from '../core/types.ts'
 import { createAccess } from '../services/access.ts'
+import { backupView, startBackups } from '../services/backup.ts'
+import { createBackupServer } from '../services/backup-server.ts'
 import type { Deps } from '../services/deps.ts'
 import { createLaunches } from '../services/launch/launches.ts'
 import { mokupilotCheck } from '../services/mokupilot.ts'
@@ -57,6 +62,7 @@ import { dispatch, json, peerOf, type Route } from './http.ts'
 import { createRemoteListener } from './remote.ts'
 import { accessRoutes } from './routes/access.ts'
 import { archiveRoutes } from './routes/archive.ts'
+import { backupRoutes } from './routes/backup.ts'
 import { boardRoutes } from './routes/board.ts'
 import { fsRoutes } from './routes/fs.ts'
 import { launchRoutes } from './routes/launch.ts'
@@ -397,6 +403,23 @@ export async function startServer({
     onChange: () => board.publish(),
     sessions: () => board.items().map(i => i.key),
   })
+  // The backup of the board's database (#233): its schedule (a look a minute, which only stats the
+  // file while there is none), the server's setup, and its line in the payload (none while there
+  // is no database and no target).
+  // config.json's `backup` as it is now: the live config follows a change a moment later, and Back
+  // up now, a Look or an Apply right after the panel saved a target must already see it. Read only
+  // once there is a database (the schedule) or when the panel asks.
+  const backupCfg = (): Config => ({ ...cfg, backup: loadConfig().backup })
+  const backups = startBackups({ cfg: backupCfg, onChange: () => board.publish() })
+  const backupServer = createBackupServer({ cfg: backupCfg, spawn: spawnRemote })
+  const backupLine = (): BackupPayload | null => {
+    if (!existsSync(dbFile()) && !cfg.backup) return null
+    const v = backupView(cfg)
+    let last: number | null = null
+    for (const s of Object.values(v.states)) if (s?.lastOk && (last === null || s.lastOk > last)) last = s.lastOk
+    const first = v.problems[0]
+    return { last, problem: first ? { kind: first.kind, ...('target' in first && { target: first.target }) } : null }
+  }
   const board = createBoardState({
     deps,
     launches,
@@ -411,6 +434,7 @@ export async function startServer({
     accessRev: () => accessRev,
     ...(omarchy && { omarchy: omarchy.stamp }),
     presence: presence.view,
+    backup: backupLine,
   })
   board.publish()
   const refresh = (): void => void board.refresh()
@@ -438,6 +462,8 @@ export async function startServer({
     ...presenceRoutes(presence),
     // Tasks (#202): points pinned on the board, done, reopened, removed; turned on or off.
     ...todosRoutes({ cfg, find: board.find, refresh }),
+    // Settings → Backup… (#233): the passphrase, the targets, the server's setup; this computer only.
+    ...backupRoutes({ cfg, server: backupServer, now: () => backups.now(true), changed: () => board.publish() }),
     // A line from the page for this log (a phone's browser says what it could not do there).
     pageLogRoute(log),
     scheduleRoute(refresh),
@@ -604,6 +630,7 @@ export async function startServer({
       for (const watcher of watchers) watcher.close()
       omarchy?.close()
       scheduler.stop()
+      backups.stop()
       wake.stop()
       presence.stop()
       terminals.stopAll()

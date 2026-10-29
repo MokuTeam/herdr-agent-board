@@ -184,6 +184,8 @@ export interface Config {
   presence?: unknown
   /** Tasks (#202, `true` or an object), as config.json has it: read through core/todos.ts todosConfig. */
   todos?: unknown
+  /** The backup of the board's database (#233), as config.json has it: read through core/backup.ts backupConfig. */
+  backup?: unknown
   [extra: string]: unknown
 }
 
