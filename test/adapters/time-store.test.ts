@@ -372,3 +372,24 @@ test('two rows of one file with the same lane and start: the first goes in, the 
   )
   db.close()
 })
+
+test('a row another process writes while the import runs is already there, not a failed batch', () => {
+  const db = fresh()
+  const row = csvRow({ start: at('2026-10-28T21:00:00Z'), stop: at('2026-10-28T21:30:00Z') })
+  // the index is read at the start; the same row lands from elsewhere before the insert
+  const other = openDb()
+  assert.ok(other)
+  const real = db.write
+  let once = false
+  db.write = ((by: string, fn: Parameters<BoardDb['write']>[1]) => {
+    if (!once) {
+      once = true
+      importEntries(other, conf, [row])
+    }
+    return real.call(db, by, fn)
+  }) as BoardDb['write']
+  assert.deepEqual(importEntries(db, conf, [row]), { added: 0, already: 1, changed: [], updated: [] })
+  assert.equal(listEntries(db, { from: '2026-10-28', to: '2026-10-28' }).length, 1)
+  other.close()
+  db.close()
+})

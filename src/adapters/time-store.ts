@@ -611,7 +611,19 @@ export function importEntries(
           continue
         }
         const e = { ...v.entry, id: newId(db) }
-        insert(tx, e)
+        try {
+          insert(tx, e)
+        } catch (err) {
+          // another process wrote this row (or one alike) since the index was read: it is there
+          if (!unique(err)) throw err
+          const there = db.db
+            .query(`SELECT ${COLUMNS} FROM time_entries WHERE toggl = ?`)
+            .get(e.toggl ?? '') as Row | null
+          const found = there ? entryOf(there) : sameLive(db, e)
+          if (found) index.add(found)
+          already++
+          continue
+        }
         tx.journal({ store: 'time', op: 'import', ref: e.id, after: e })
         index.add(e)
         added++
