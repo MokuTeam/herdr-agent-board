@@ -22,7 +22,9 @@ import { createConnection, type Socket } from 'node:net'
 import { basename, join } from 'node:path'
 import type { ServerWebSocket, WebSocketHandler } from 'bun'
 import type { CardPatch } from '../adapters/cards.ts'
+import { boardChromium } from '../adapters/desktop-files.ts'
 import {
+  BOARD_CHROMIUM_DIR,
   CHROME_BINS,
   type Control,
   chromeArgs,
@@ -210,6 +212,8 @@ export interface DesktopsOptions {
   now?: () => number
   /** Chrome's extra arguments (BOARD_DESKTOP_CHROME_ARGS, for a test server only). */
   chromeExtra?: readonly string[]
+  /** The machine's (process.arch; a test's own): on arm64 the board's own Chromium comes first where it is. */
+  arch?: string
 }
 
 export interface Desktops {
@@ -392,7 +396,9 @@ export function createDesktops(o: DesktopsOptions): Desktops {
   }
 
   async function launchChrome(d: Desktop): Promise<Started> {
-    const bin = CHROME_BINS.map(b => sys.which(b)).find(Boolean)
+    // the board's own Chromium (Ubuntu's arm64, where the install put it), else the PATH's
+    const bin =
+      boardChromium(join(o.root, BOARD_CHROMIUM_DIR), o.arch) ?? CHROME_BINS.map(b => sys.which(b)).find(Boolean)
     if (!bin) return { ok: false, error: 'no Google Chrome or Chromium on this server (the install puts it in place)' }
     const name = wanted.get(d.pane) ?? null
     const p = await profileDir(d, name)

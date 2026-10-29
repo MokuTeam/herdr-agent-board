@@ -29,7 +29,7 @@ interface Proc {
  * socket at once (or once `ready` resolves); what ran, and what it was told.
  */
 function fakeServer(
-  o: { held?: number[]; noChrome?: boolean; chromeFails?: boolean; ready?: () => Promise<void> } = {},
+  o: { held?: number[]; noChrome?: boolean; chromeFails?: boolean; ready?: () => Promise<void>; arch?: string } = {},
 ) {
   const procs = new Map<number, Proc>()
   let next = 1000
@@ -105,6 +105,7 @@ function setup(o: Parameters<typeof fakeServer>[0] = {}, items: Item[] = [item('
       onChange: () => state.changes++,
       log: () => {},
       system: server.sys,
+      ...(o.arch && { arch: o.arch }),
       now: () => clock,
     })
   return { root, server, cards, state, make, d: make(), tick: (ms: number) => (clock += ms) }
@@ -145,6 +146,37 @@ test('a display someone else holds is skipped', async () => {
   const { d, server } = setup({ held: [100] })
   expect(await d.ensure('w0:p1')).toEqual({ ok: true })
   expect([...server.procs.values()][0]?.argv[1]).toBe(':101')
+})
+
+test('Ubuntu’s arm64: the board’s own Chromium (Playwright’s) where the install put it, before any other; elsewhere not looked for', async () => {
+  const own = (root: string, complete = true): string => {
+    const dir = join(root, 'chromium', 'chromium-1248')
+    mkdirSync(join(dir, 'chrome-linux-arm64'), { recursive: true })
+    writeFileSync(join(dir, 'chrome-linux-arm64', 'chrome'), '')
+    if (complete) writeFileSync(join(dir, 'INSTALLATION_COMPLETE'), '')
+    return join(dir, 'chrome-linux-arm64', 'chrome')
+  }
+  const chromeBin = (s: ReturnType<typeof setup>) =>
+    [...s.server.procs.values()].find(p => p.alive && p.argv[0] !== '/usr/bin/Xvnc')?.argv[0]
+  // arm64 with the board's Chromium: it, though a Chrome (Ubuntu's snap wrapper) is on the PATH
+  const arm = setup({ arch: 'arm64' })
+  const bin = own(arm.root)
+  expect(await arm.d.ensure('w0:p1')).toEqual({ ok: true })
+  expect(chromeBin(arm)).toBe(bin)
+  // and with no other browser at all
+  const only = setup({ arch: 'arm64', noChrome: true })
+  own(only.root)
+  expect(await only.d.ensure('w0:p1')).toEqual({ ok: true })
+  // half downloaded (no INSTALLATION_COMPLETE): not taken
+  const half = setup({ arch: 'arm64' })
+  own(half.root, false)
+  await half.d.ensure('w0:p1')
+  expect(chromeBin(half)).toBe('/usr/bin/chrome')
+  // x86_64 (and so every other setup): the PATH's, as before, whatever the folder holds
+  const x64 = setup({ arch: 'x64' })
+  own(x64.root)
+  await x64.d.ensure('w0:p1')
+  expect(chromeBin(x64)).toBe('/usr/bin/chrome')
 })
 
 test('no browser on the server, or one that does not start: said, and nothing left running', async () => {

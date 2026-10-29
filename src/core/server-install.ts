@@ -10,7 +10,7 @@
 // (entrypoints/server-install.ts, services/server-install.ts). Here: the names and paths the
 // three share, the flags, the service, and where the board's code came from. Pure, with no node:
 // import: the page shows the plan from it too.
-import { CHROME_DEB, CHROME_PACKAGE } from './desktop.ts'
+import { CHROME_DEB, CHROME_PACKAGE, PLAYWRIGHT_VERSION } from './desktop.ts'
 import { t } from './lang.ts'
 import type { Wanted } from './server-plan.ts'
 import { SERVER_NAMES } from './server-texts.ts'
@@ -233,6 +233,8 @@ export interface InstallRecord {
   at: string
   /** The packages for the agents' browsers this install added (Undo with --remove-user takes them away); absent: none. */
   desktop?: string[]
+  /** The libraries this install added for the board's own Chromium (Ubuntu's arm64); Undo with --remove-user hands them back to apt. */
+  desktopLibs?: string[]
 }
 
 const PACKAGE = /^[a-z0-9][a-z0-9.+-]{1,60}$/
@@ -246,9 +248,10 @@ export function installRecord(v: unknown): InstallRecord | null {
   if (typeof r.home !== 'string' || !/^\/[A-Za-z0-9._/-]+$/.test(r.home)) return null
   if (typeof r.domain !== 'string' || r.domain === '' || fieldProblem('domain', r.domain)) return null
   if (r.socket !== BOARD_SOCKET || typeof r.sudo !== 'boolean' || typeof r.at !== 'string') return null
-  const desktop = Array.isArray(r.desktop)
-    ? r.desktop.filter((p): p is string => typeof p === 'string' && PACKAGE.test(p))
-    : []
+  const packages = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((p): p is string => typeof p === 'string' && PACKAGE.test(p)) : []
+  const desktop = packages(r.desktop)
+  const desktopLibs = packages(r.desktopLibs)
   return {
     v: 1,
     user: r.user,
@@ -259,6 +262,7 @@ export function installRecord(v: unknown): InstallRecord | null {
     sudo: r.sudo,
     at: r.at,
     ...(desktop.length && { desktop }),
+    ...(desktopLibs.length && { desktopLibs }),
   }
 }
 
@@ -281,6 +285,14 @@ export function desktopScript(add: readonly string[]): string {
 export const desktopRemoveScript = (packages: readonly string[]): string =>
   `DEBIAN_FRONTEND=noninteractive apt-get purge -y -qq ${packages.filter(p => PACKAGE.test(p)).join(' ')}`
 
+/**
+ * Undo's, for the board's own Chromium's libraries: marked as installed for another package's
+ * sake (apt-mark auto), so `apt autoremove` takes them once nothing needs them, as it does a
+ * removed package's; never purged, which would take with them what has come to need them since.
+ */
+export const desktopLibsUndoScript = (libs: readonly string[]): string =>
+  `for p in ${libs.filter(p => PACKAGE.test(p)).join(' ')}; do dpkg-query -W -f='\${Status}' "$p" 2>/dev/null | grep -q 'install ok installed' && apt-mark auto "$p" >/dev/null; done; true`
+
 /** The install's own part of the plan, before the web server's (path A prints it, path B's panel shows it). */
 export interface InstallFacts {
   user: string
@@ -294,6 +306,8 @@ export interface InstallFacts {
   keysFrom: string | null
   /** The packages the agents' browsers need that are not there yet (core/desktop.ts); absent: none. */
   desktop?: readonly string[]
+  /** The board's own Chromium goes in place as the user (Ubuntu's arm64, core/desktop.ts). */
+  chromium?: boolean
 }
 
 /** The install's own steps in plain words, in `tr`'s language. */
@@ -309,6 +323,7 @@ export function installWill(f: InstallFacts, tr: Translator = t): string[] {
   will.push(tr('install.will.key', user))
   will.push(tr('install.will.service', user))
   if (f.desktop?.length) will.push(tr('install.will.desktop', { packages: f.desktop.join(', ') }))
+  if (f.chromium) will.push(tr('install.will.chromium', { ...user, version: PLAYWRIGHT_VERSION }))
   return will
 }
 

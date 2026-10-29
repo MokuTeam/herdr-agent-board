@@ -1,18 +1,23 @@
 // The agents' browsers on the board's server (core/desktop.ts): what the board's install puts in
 // place for them as the board's user, and what `board doctor` reads of them. chrome-devtools-mcp
-// at its pinned version in the board's state folder (desktop/mcp), and the board's MCP server
+// at its pinned version in the board's state folder (desktop/mcp), on Ubuntu's arm64 the board's
+// own Chromium (desktop/chromium, by Playwright's pinned CLI), and the board's MCP server
 // (`board browser-mcp`) in each shown Claude profile's .claude.json, user scope; out of them again
 // when the server mode goes. Server mode only: the install action calls nothing here on a PC.
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
+  BOARD_CHROMIUM_DIR,
   BROWSER_MCP,
+  browserFor,
   browserMcpEntry,
   CHROME_BINS,
+  chromiumPrograms,
   DEVTOOLS_MCP,
   DEVTOOLS_MCP_VERSION,
   type DesktopDoctorFacts,
+  PLAYWRIGHT_VERSION,
   withBrowserMcp,
 } from '../core/desktop.ts'
 import { DEFAULT_PROFILE, type Profile } from '../core/profiles.ts'
@@ -23,6 +28,75 @@ import { claudeJsonOf } from './profile-sync.ts'
 /** The desktops' folder: their sessions, the named profiles, chrome-devtools-mcp. */
 export const desktopDir = (): string => join(stateDir(), 'desktop')
 const mcpDir = (): string => join(desktopDir(), 'mcp')
+/** The board's own Chromium's folder (Ubuntu's arm64): Playwright's browsers' folder. */
+export const chromiumDir = (): string => join(desktopDir(), BOARD_CHROMIUM_DIR)
+
+/**
+ * The board's own Chromium's program in `dir` (the newest revision Playwright finished putting in
+ * place), or null. Looked for on arm64 only: anywhere else nothing is read.
+ */
+export function boardChromium(dir: string = chromiumDir(), arch: string = process.arch): string | null {
+  if (arch !== 'arm64') return null
+  let entries: string[]
+  try {
+    entries = readdirSync(dir)
+  } catch {
+    return null
+  }
+  for (const rel of chromiumPrograms(entries)) {
+    const top = rel.split('/')[0] as string
+    if (existsSync(join(dir, top, 'INSTALLATION_COMPLETE')) && existsSync(join(dir, rel))) return join(dir, rel)
+  }
+  return null
+}
+
+const lastLine = (text: string): string =>
+  text
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean)
+    .at(-1) ?? ''
+
+/** Whether this machine gets the board's own Chromium (Ubuntu's arm64); the os-release read on arm64 only. */
+function wantsBoardChromium(): boolean {
+  if (process.arch !== 'arm64') return false
+  let os = ''
+  try {
+    os = readFileSync('/etc/os-release', 'utf8')
+  } catch {}
+  return browserFor(process.arch, os) === 'playwright'
+}
+
+/**
+ * The board's own Chromium by Playwright's CLI at its pinned version (`bun x --bun`, no Node), as
+ * the board's user, into its folder; older revisions out of it. What it did, or why not.
+ */
+export async function installBoardChromium(bun: string): Promise<string> {
+  const dir = chromiumDir()
+  const before = boardChromium(dir)
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const proc = Bun.spawn(
+    [bun, 'x', '--bun', `playwright-core@${PLAYWRIGHT_VERSION}`, 'install', '--no-shell', 'chromium'],
+    {
+      cwd: dir,
+      env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: dir, PLAYWRIGHT_SKIP_BROWSER_GC: '1' },
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  )
+  const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+  const code = await proc.exited
+  const bin = boardChromium(dir)
+  if (code !== 0 || !bin)
+    throw new Error(
+      `Chromium (Playwright ${PLAYWRIGHT_VERSION}) not installed: ${lastLine(`${out}\n${err}`) || `exit ${code}`}`,
+    )
+  const keep = bin.slice(dir.length + 1).split('/')[0]
+  for (const e of readdirSync(dir))
+    if (/^chromium-\d+$/.test(e) && e !== keep) rmSync(join(dir, e), { recursive: true, force: true })
+  return `Chromium (Playwright ${PLAYWRIGHT_VERSION}): ${bin === before ? 'in place' : 'installed'}, ${bin}`
+}
 
 /** chrome-devtools-mcp's version in place, or null. */
 export function devtoolsMcpVersion(): string | null {
@@ -122,7 +196,7 @@ export function desktopDoctorFacts(profiles: readonly Profile[]): DesktopDoctorF
   const PATH = `${process.env.PATH ?? ''}:/usr/bin:/bin:/opt/google/chrome`
   return {
     xvnc: Bun.which('Xvnc', { PATH }),
-    chrome: CHROME_BINS.map(b => Bun.which(b, { PATH })).find(Boolean) ?? null,
+    chrome: boardChromium() ?? CHROME_BINS.map(b => Bun.which(b, { PATH })).find(Boolean) ?? null,
     fonts: ['/usr/share/fonts/truetype/noto', '/usr/share/fonts/opentype/noto'].some(d => existsSync(d)),
     mcp: devtoolsMcpVersion(),
     profiles: profiles.map(p => ({ title: p.title || p.id, has: hasBrowserMcp(p) })),
@@ -140,8 +214,9 @@ const isFolder = (path: string): boolean => {
 
 /**
  * The install's part for the agents' browsers, on the board's own server: the board's MCP server
- * in every shown profile whose folder is there (the default one always), and chrome-devtools-mcp
- * at its pinned version. What fails is said, and the rest goes on.
+ * in every shown profile whose folder is there (the default one always), chrome-devtools-mcp at
+ * its pinned version, and on Ubuntu's arm64 the board's own Chromium (its libraries are root's,
+ * services/server-install.ts). What fails is said, and the rest goes on.
  */
 export async function putBrowserParts(
   profiles: readonly Profile[],
@@ -161,9 +236,15 @@ export async function putBrowserParts(
   } catch (err) {
     o.say(`browser: ${messageOf(err)}`)
   }
+  if (wantsBoardChromium())
+    try {
+      o.say(`browser: ${await installBoardChromium(o.bun)}`)
+    } catch (err) {
+      o.say(`browser: ${messageOf(err)}`)
+    }
 }
 
-/** The server mode off: the board's MCP server out of every profile (hidden ones too), chrome-devtools-mcp's folder gone. */
+/** The server mode off: the board's MCP server out of every profile (hidden ones too), chrome-devtools-mcp's folder and the board's Chromium gone. */
 export function takeBrowserParts(profiles: readonly Profile[], say: (line: string) => void): void {
   for (const p of profiles) {
     try {
@@ -173,4 +254,8 @@ export function takeBrowserParts(profiles: readonly Profile[], say: (line: strin
     }
   }
   rmSync(mcpDir(), { recursive: true, force: true })
+  if (existsSync(chromiumDir())) {
+    rmSync(chromiumDir(), { recursive: true, force: true })
+    say(`browser: Chromium out of ${chromiumDir()}`)
+  }
 }
