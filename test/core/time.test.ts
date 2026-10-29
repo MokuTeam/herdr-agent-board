@@ -10,9 +10,11 @@ import {
   DEFAULT_REF,
   dateIn,
   durationOf,
+  entryView,
   hm,
   instantIn,
   isDate,
+  outsideProject,
   parseWhen,
   plausible,
   problemsText,
@@ -21,6 +23,7 @@ import {
   refIn,
   rounded,
   systemsFor,
+  systemsOfProject,
   type TimeEntry,
   takersOf,
   timeConfig,
@@ -458,4 +461,89 @@ test('a project typed again is the one listed, case and spaces aside', () => {
   // compatibility forms too: full-width letters, a ligature
   assert.equal(projectKey('ＡＢＣ'), 'abc')
   assert.equal(projectKey('ﬁle'), 'file')
+})
+
+test('a project billed elsewhere: its own systems (projectSystems), its name matched as names are; the rest the client’s', () => {
+  const c = timeConfig({
+    zone: NY,
+    clients: {
+      a: {
+        projects: ['Support', 'Side Work'],
+        retired: ['Old'],
+        systems: ['erp', { id: 'tracker', title: 'Tracker' }],
+        projectSystems: { 'side work': ['tracker'], Old: [] },
+      },
+    },
+  })
+  assert.ok(c)
+  assert.deepEqual(c.problems, [])
+  const ids = (project?: string) => systemsFor(c, 'a', project).map(s => s.id)
+  assert.deepEqual(
+    [ids(), ids('Support'), ids('Side Work'), ids('SIDE WORK '), ids('Old')],
+    [['erp', 'tracker'], ['erp', 'tracker'], ['tracker'], ['tracker'], []],
+  )
+  // a mark in the client's other system is none of that project's; one in a system gone is its own
+  const side = { client: 'a', project: 'Side Work' }
+  assert.deepEqual(
+    [outsideProject(c, side, 'erp'), outsideProject(c, side, 'tracker'), outsideProject(c, side, 'gone')],
+    [true, false, false],
+  )
+  assert.equal(outsideProject(c, { client: 'a', project: 'Support' }, 'erp'), false)
+  // the entry says where it is to be entered
+  const e: TimeEntry = {
+    id: 'e1',
+    client: 'a',
+    project: 'Side Work',
+    description: 'x',
+    tags: [],
+    start: '2026-10-28T13:00:00Z',
+    stop: '2026-10-28T14:00:00Z',
+    date: '2026-10-28',
+    by: 'user',
+    at: 0,
+    changed: 0,
+    changedBy: 'user',
+    rev: 1,
+  }
+  assert.deepEqual(entryView(c, e).systems, ['tracker'])
+  assert.deepEqual(entryView(c, { ...e, project: 'Support' }).systems, ['erp', 'tracker'])
+  // the page's settings, without projectSystems: the client's
+  assert.deepEqual(systemsOfProject({ systems: [{ id: 'erp', title: 'ERP' }] }, 'Side Work'), [
+    { id: 'erp', title: 'ERP' },
+  ])
+  // a client without a list takes any project's name as written
+  const any = timeConfig({ zone: NY, clients: { b: { systems: ['erp', 'tracker'], projectSystems: { X: ['erp'] } } } })
+  assert.deepEqual([any?.problems, any && systemsFor(any, 'b', 'x').map(s => s.id)], [[], ['erp']])
+})
+
+test('projectSystems guesses nothing: a project not the client’s, one named twice, a system not its own, each a problem', () => {
+  const c = timeConfig({
+    zone: NY,
+    clients: {
+      a: {
+        projects: ['Support', 'Side Work'],
+        systems: ['erp', 'tracker'],
+        projectSystems: {
+          Supprot: ['erp'],
+          'Side Work': ['tracker', 'tracker', 'wiki'],
+          'side work': ['erp'],
+          Support: 'erp',
+        },
+      },
+      b: { systems: ['erp'], projectSystems: ['erp'] },
+    },
+  })
+  assert.ok(c)
+  assert.deepEqual(
+    c.problems.map(p => [p.at, p.why, p.value]),
+    [
+      ['time.clients.a.projectSystems.Supprot', 'project', 'Supprot'],
+      ['time.clients.a.projectSystems.Side Work[1]', 'system', 'tracker'],
+      ['time.clients.a.projectSystems.Side Work[2]', 'notSystem', 'wiki'],
+      ['time.clients.a.projectSystems.side work', 'twice', 'side work'],
+      ['time.clients.a.projectSystems.Support', 'type', 'erp'],
+      ['time.clients.b.projectSystems', 'type', '["erp"]'],
+    ],
+  )
+  assert.match(problemsText(c.problems, translator('en')), /"wiki" is not one of this client’s systems/)
 })

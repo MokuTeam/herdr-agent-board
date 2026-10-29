@@ -1895,7 +1895,8 @@ kept, and every change goes into the database's journal with the entry before an
         { "group": "ref", "step": 30, "round": "up" }
       ],
       "nonBillable": ["Internal"],
-      "systems": [{ "id": "erp", "title": "ERP" }, "tracker"]
+      "systems": [{ "id": "erp", "title": "ERP" }, "tracker"],
+      "projectSystems": { "Migration": ["tracker"] }
     },
     "personal": { "projects": ["Internal"], "billable": false }
   }
@@ -1965,6 +1966,15 @@ so any session marks any entry without `--force`, and every mark and unmark has 
 An entry changed on the board after it was entered (its revision moved past the mark's) is
 "changed after entering" until it is marked again: the change is to be made in that system too.
 
+A project billed elsewhere (its time goes to the client's tracker, never to its ERP, say) names its
+own systems in `projectSystems`: the project (one of the client's `projects` or `retired`, named
+once, case and spaces aside) to a list of the client's system ids, each once; `[]` is entered
+nowhere. Its entries are to be entered there only: the panel's marks, "not entered", `list
+--not-posted`, `--changed-after-post` (a mark in a system of the client's that the project does
+not use is none of the entry's) and the switch-over follow it, and `post` refuses a system the
+entry's project does not use (`unpost` takes such a mark off). A project not in `projectSystems`
+is entered in all of the client's systems, as before.
+
 **The command.** It writes to the database itself, so it works while the web board is down; as
 the session that runs it, its lane the client when `--client` is not given. `--json` gives an
 agent the whole of it.
@@ -2015,17 +2025,17 @@ change of the duration shows the start kept.
   per project too when the list is a client's or a project's (`--client`, `--project`) or
   `--totals` asks. `--project` matches as the board tells names apart (case and spaces aside);
   `--tag` matches whatever the case. `--not-posted` lists what a billing agent still has to enter:
-  billable, not held, without a mark in one of its client's systems (`--system`: in that one);
+  billable, not held, without a mark in one of its project's systems (`--system`: in that one);
   `--changed-after-post` lists the entries changed after they were entered (`--system`: in that
   one), removed ones too (marked removed: to be taken out of that system). Both take the range as
   `list` does (`--from` and `--to` for more than a day). An `edit`, `move`, `rm` or `restore`
   of an entry already entered says where, to be changed there too.
-- **Post** marks entries entered in one of their client's systems: `<id>@<rev>` refuses an entry
+- **Post** marks entries entered in one of their project's systems: `<id>@<rev>` refuses an entry
   changed since that revision was read (an agent posts what it read); `--record` keeps that
   system's id for it (a later post without one keeps it). Marking again clears "changed after
   entering". The form with `--client` and `--to` (`--from`: any date before) is for the
-  switch-over: it marks the client's billable entries, live and not held, that have no mark in that
-  system yet, each at the revision read (one changed since refuses the run), and says how many and
+  switch-over: it marks the client's billable entries, live and not held, of projects entered in
+  that system, that have no mark there yet, each at the revision read (one changed since refuses the run), and says how many and
   their time; `--dry-run` writes nothing (the switch-over's alone: a post or an unpost by id
   writes, and ids do not go with `--client` and `--to`). `unpost` takes a mark off. The count
   each says is of the marks it wrote or took off: one already as it would be is none.
@@ -2034,7 +2044,8 @@ change of the duration shows the start kept.
 `description`, `tags`, `start` and `stop` (ISO, UTC, to the second), `date` (the work date),
 `seconds`, `by` and `changedBy` (`{ "key", "name" }` of a session, or `"user"`, `"import"`), `at`
 and `changed` (ms), `rev`, `billable` (as it comes out) and `billableDefault` (true: as the config
-says, not set on the entry), `posts` (where it was entered: each `{ "system", "at", "by", "record",
+says, not set on the entry), `systems` (the ids of the systems it is to be entered in: its
+project's), `posts` (where it was entered: each `{ "system", "at", "by", "record",
 "rev", "changedAfter" }`, `record` null when none was given, `changedAfter` true when the entry
 changed since), and `deleted` (ms) or `toggl` when they apply. `add` adds `existing`
 and, when it wrote nothing, `reason`. `edit`, `move`, `rm`, `restore` and `show` give the entry;
@@ -2049,7 +2060,7 @@ client: `client`, `date`, `zone`, `seconds` (worked), `billedSeconds`, `held` an
 ids), and `entries` (the day's entries in full). `projects` gives `{ "<lane>": [...] | null }`, or
 null without `clients`. An error is `{ "ok": false, "error": "<code>", "message": "…" }` on stdout
 (with `"usage"`, the command's, when it was called wrong) with exit code 1: `notYours`, `changedSince`, `gone`, `removed`, `config`, `noBackup`,
-`notBackedUp`, `client`, `clientOff`, `project`, `retired`, `when`, `whenRange`, `stopAhead`, `system`, `noSystem`,
+`notBackedUp`, `client`, `clientOff`, `project`, `retired`, `when`, `whenRange`, `stopAhead`, `system`, `projectSystem`, `noSystem`,
 `billableFlags`, `usage`… (the key of its
 text). **While `problems` is not empty, an agent stops:** the day's figures were worked out with
 what of config.json checks out, and are not to be billed from.
@@ -2089,7 +2100,9 @@ tracking…'s, so a stray tap cannot start billing a new lane.
 and off, the zone days are counted in; the clients in the lanes' order, each with a line of what it
 has and its switch (off: no new entries); opened, a client's projects with their entries, billable
 or not, Rename and Retire; a project added; the retired ones, each to bring back; whether the client
-is billed, and the systems its time is entered into. A lane without time takes it in one tap, and
+is billed, and the systems its time is entered into; with two or more, a column each beside the
+projects, unticked for a project entered elsewhere (`projectSystems`; a rename takes it along, a
+system taken off the client is taken off the projects' lists too). A lane without time takes it in one tap, and
 a new lane can be made and take time in one step. Every change is checked as the board reads the
 config and refused when it would bring a problem the file did not have; one already there stays
 said and stops no change elsewhere. A rename says first how many entries move: the client's entries
@@ -2106,7 +2119,7 @@ with none taking time; a change there sets time up off, and only its switch turn
 **Billable and entered, on the board.** An entry's editor has a switch for billable, its default
 the config's (said while the entry follows it); a non-billable entry shows apart under its client,
 counted as worked. Where a client's time is entered into its systems, each line says per system
-whether its entries are entered (all, some, none, or one changed after it was); a tap marks or
+(the ones its entries' projects are entered in) whether its entries are entered (all, some, none, or one changed after it was); a tap marks or
 unmarks the whole line there, with Undo on its toast (a mark goes back with its record and the
 revision it recorded, changed after entering as it was; when and by whom are the Undo's). An entry's hint names its marks, an entry already entered says so in its editor (the change
 is to be made there too), and the day's figure and each client's say how much billed time is not

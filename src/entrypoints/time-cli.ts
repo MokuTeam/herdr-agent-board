@@ -65,6 +65,7 @@ import {
   instantIn,
   isDate,
   knownZone,
+  outsideProject,
   parseWhen,
   plausible,
   problemsText,
@@ -563,15 +564,19 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       const list = read.filter(e => {
         const own = marks.get(e.id) ?? []
         // what a billing agent still has to enter: billable, not held, missing a mark in a system
-        // of its client's (or in the one named)
+        // its project is entered in (or in the one named)
         if (a.has('--not-posted')) {
           if (e.deleted || held(e) || !billableOf(conf, e)) return false
-          const systems = systemsFor(conf, e.client).map(x => x.id)
+          const systems = systemsFor(conf, e.client, e.project).map(x => x.id)
           const wanted = system === undefined ? systems : systems.filter(x => x === system)
           return wanted.some(x => !own.some(m => m.system === x))
         }
-        // entered, then changed on the board (removed too): to change there too, in the system named
-        if (changedAfter) return own.some(m => m.rev < e.rev && (system === undefined || m.system === system))
+        // entered, then changed on the board (removed too): to change there too, in the system named;
+        // a mark in a system its project is not entered in is none of its own
+        if (changedAfter)
+          return own.some(
+            m => m.rev < e.rev && (system === undefined || m.system === system) && !outsideProject(conf, e, m.system),
+          )
         return true
       })
       // the total as a day's would be: removed and held entries out of it
@@ -699,7 +704,8 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
       let dryList: TimeEntry[] = []
       if (bulk) {
         // the switch-over: what was entered before the board took over, all at once: the client's
-        // billable entries, live and not held, up to --to (from --from), not marked there yet
+        // billable entries, live and not held, up to --to (from --from), of projects entered there,
+        // not marked there yet
         const client = a.one('--client')
         const to = a.one('--to') as string
         const from = a.one('--from') ?? '0000-01-01'
@@ -721,6 +727,7 @@ async function run(rest: readonly string[], ctx: TimeCmdContext, out: (line: str
           e =>
             billableOf(conf, e) &&
             !e.tags.some(tag => conf.excludeTags.includes(tag)) &&
+            systemsFor(conf, e.client, e.project).some(x => x.id === system) &&
             !(marks.get(e.id) ?? []).some(m => m.system === system),
         )
         // each with the revision read: one changed since refuses the run, all or none

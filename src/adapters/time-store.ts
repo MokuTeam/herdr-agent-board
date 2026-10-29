@@ -1081,11 +1081,23 @@ export function marksOf(db: BoardDb, ids: readonly string[]): Map<string, Mark[]
   return out
 }
 
-/** The system is one of the client's: refused otherwise, naming the ones it has. */
-function checkSystem(c: TimeConfig, client: string, system: string): void {
+/**
+ * The system is one of the client's, and with a project, one that project's entries are entered in
+ * (`projectSystems`): refused otherwise, naming the ones there are.
+ */
+function checkSystem(c: TimeConfig, client: string, system: string, project?: string): void {
   const systems = systemsFor(c, client)
   if (!systems.some(x => x.id === system))
     throw new TimeError('time.err.system', { client, system, known: systems.map(x => x.id).join(', ') || '-' })
+  if (project === undefined) return
+  const own = systemsFor(c, client, project)
+  if (!own.some(x => x.id === system))
+    throw new TimeError('time.err.projectSystem', {
+      client,
+      project,
+      system,
+      known: own.map(x => x.id).join(', ') || '-',
+    })
 }
 
 /** An entry to mark: its id, the revision read (refused when it moved on), and what the mark keeps. */
@@ -1100,7 +1112,7 @@ export interface PostItem {
 }
 
 /**
- * Entries marked entered into `system`, one of each entry's client's systems, in one transaction:
+ * Entries marked entered into `system`, one each entry's project is entered in, in one transaction:
  * when, by whom, `record` (the item's, else `o.record`, else the earlier mark's), and the entry's
  * revision now (or the item's `asOf`, no later than it). A mark already as it would be is left as
  * it is; each one written has its journal row (`post`, the mark before and after), and is given
@@ -1124,7 +1136,7 @@ export function postEntries(
       if (e.deleted) throw new TimeError('time.err.removed', { id: e.id })
       if (item.rev !== undefined && item.rev !== e.rev)
         throw new TimeError('time.err.changedSince', { id: e.id, rev: e.rev })
-      checkSystem(c, e.client, system)
+      checkSystem(c, e.client, system, e.project)
       const asOf = item.asOf ?? e.rev
       if (!Number.isInteger(asOf) || asOf < 1 || asOf > e.rev) throw new TimeError('time.err.rev')
       const before = markIn(db, e.id, system)

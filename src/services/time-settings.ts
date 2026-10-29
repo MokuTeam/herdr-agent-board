@@ -110,6 +110,7 @@ export function timeSettingsView(withDb: WithDb): TimeSettingsView {
             billable: c.billable,
             nonBillable: c.nonBillable,
             systems: c.systems,
+            projectSystems: c.projectSystems,
             rules: c.billing.length,
             ref: typeof own.ref === 'string',
             zone: c.zone,
@@ -162,6 +163,15 @@ function editOf(b: Raw): TimeEdit | { op: 'newLane'; id: string; title: string; 
             systems: b.systems.map(s =>
               isRecord(s) ? { id: text(s.id), title: text(s.title) } : { id: '', title: '' },
             ),
+          }
+        : null
+    case 'projectSystems':
+      return client && text(b.project) && (b.systems === null || Array.isArray(b.systems))
+        ? {
+            op: 'projectSystems',
+            client,
+            project: text(b.project),
+            systems: Array.isArray(b.systems) ? b.systems.map(text) : null,
           }
         : null
     default:

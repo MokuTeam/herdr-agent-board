@@ -118,8 +118,20 @@ export interface TimeDayView {
   projects: Record<string, string[] | null>
   /** Tags to offer: the ones held out of the totals first, then the ones entries have, most used first. */
   tags: string[]
-  /** Each listed client's billable default (by project), the systems its time is entered in, its retired projects. */
-  settings: Record<string, { billable: boolean; nonBillable: string[]; systems: TimeSystem[]; retired: string[] }>
+  /**
+   * Each listed client's billable default (by project), the systems its time is entered in (and a
+   * project's own, where it has them), its retired projects.
+   */
+  settings: Record<
+    string,
+    {
+      billable: boolean
+      nonBillable: string[]
+      systems: TimeSystem[]
+      projectSystems: Record<string, string[]>
+      retired: string[]
+    }
+  >
 }
 
 const projectsOf = (conf: TimeConfig): Record<string, string[] | null> =>
@@ -129,7 +141,13 @@ const settingsOf = (conf: TimeConfig): TimeDayView['settings'] =>
   Object.fromEntries(
     Object.entries(conf.clients ?? {}).map(([id, c]) => [
       id,
-      { billable: c.billable, nonBillable: c.nonBillable, systems: c.systems, retired: c.retired },
+      {
+        billable: c.billable,
+        nonBillable: c.nonBillable,
+        systems: c.systems,
+        projectSystems: c.projectSystems,
+        retired: c.retired,
+      },
     ]),
   )
 

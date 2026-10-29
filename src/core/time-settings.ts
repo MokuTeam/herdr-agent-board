@@ -6,7 +6,8 @@
 // What it changes: time on and off (`on: false` keeps the settings), the zone; a lane taking time
 // (a client with an empty list of projects), every lane's choice made explicit, a client off and
 // on; a client's projects added, renamed, retired and brought back, billed or not; its `billable`
-// and its `systems`. Not its billing rules nor its `ref`: those stay in config.json.
+// and its `systems`, and a project's own systems (`projectSystems`, #260). Not its billing rules
+// nor its `ref`: those stay in config.json.
 
 import { cleanText, knownZone, projectIn, sameProject, type TimeProblem } from './time.ts'
 
@@ -28,6 +29,8 @@ export type TimeEdit =
   | { op: 'billable'; client: string; billable: boolean }
   | { op: 'projectBillable'; client: string; project: string; billable: boolean }
   | { op: 'systems'; client: string; systems: { id: string; title: string }[] }
+  /** The systems a project's entries are entered in; null: the client's, all of them. */
+  | { op: 'projectSystems'; client: string; project: string; systems: string[] | null }
 
 /** A refusal: a text key and what it says. */
 export type EditRefusal = { key: string; vars?: Record<string, string> }
@@ -37,6 +40,16 @@ const names = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is s
 const SYSTEM_ID = /^[a-z0-9][a-z0-9-]{0,39}$/
 /** A project's name as kept: one line, at most 120 characters (the entries' own limit). */
 const projectName = (s: string): string => cleanText(s, 120)
+/** The ids of a raw `systems` list (a string, or { id }). */
+const systemIds = (v: unknown): string[] =>
+  Array.isArray(v)
+    ? v.flatMap(s => (typeof s === 'string' ? [s] : isObject(s) && typeof s.id === 'string' ? [s.id] : []))
+    : []
+/** `projectSystems` kept, or taken out when it holds none. */
+function setProjectSystems(c: Raw, next: Raw): void {
+  if (Object.keys(next).length) c.projectSystems = next
+  else delete c.projectSystems
+}
 
 /**
  * The raw `time` after the edit, or why not. `time` is config.json's value as it is (a missing one
@@ -119,6 +132,11 @@ export function editedTime(time: unknown, e: TimeEdit, zone: string): { time: un
       if (listed) c.projects = swap(c.projects)
       if (retired) c.retired = swap(c.retired)
       if (Array.isArray(c.nonBillable)) c.nonBillable = swap(c.nonBillable)
+      // its own systems go with it, under the new name
+      if (isObject(c.projectSystems))
+        c.projectSystems = Object.fromEntries(
+          Object.entries(c.projectSystems).map(([p, v]) => [sameProject(p, e.from) ? to : p, v]),
+        )
       return { time: t }
     }
     case 'retire': {
@@ -163,6 +181,36 @@ export function editedTime(time: unknown, e: TimeEdit, zone: string): { time: un
       }
       if (out.length) c.systems = out
       else delete c.systems
+      // a system taken off goes from the projects' own lists too (one that was only there: entered nowhere)
+      if (isObject(c.projectSystems)) {
+        const ids = systemIds(out)
+        setProjectSystems(
+          c,
+          ids.length
+            ? Object.fromEntries(
+                Object.entries(c.projectSystems).map(([p, v]) => [p, names(v).filter(id => ids.includes(id))]),
+              )
+            : {},
+        )
+      }
+      return { time: t }
+    }
+    case 'projectSystems': {
+      const known = [...names(c.projects), ...names(c.retired)]
+      if (Array.isArray(c.projects) && !projectIn(known, e.project))
+        return { key: 'time.set.err.noSuch', vars: { project: e.project } }
+      const all = systemIds(c.systems)
+      const rest = Object.fromEntries(
+        Object.entries(isObject(c.projectSystems) ? c.projectSystems : {}).filter(([p]) => !sameProject(p, e.project)),
+      )
+      // in the client's order; every one of them is the client's own, no list of its own
+      const ids = e.systems === null ? null : all.filter(id => e.systems?.includes(id))
+      const unknown = e.systems?.find(id => !all.includes(id))
+      if (unknown !== undefined) return { key: 'time.set.err.system', vars: { id: unknown } }
+      setProjectSystems(
+        c,
+        ids === null || ids.length === all.length ? rest : { ...rest, [projectIn(known, e.project) ?? e.project]: ids },
+      )
       return { time: t }
     }
   }

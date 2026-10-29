@@ -13,6 +13,8 @@ export interface TimeClientView {
   billable: boolean
   nonBillable: string[]
   systems: TimeSystem[]
+  /** A project entered elsewhere than in all of `systems`: its systems' ids, by the project. */
+  projectSystems?: Record<string, string[]>
   /** Its billing rules and its own `ref`, kept in config.json. */
   rules: number
   ref: boolean

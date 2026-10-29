@@ -396,6 +396,14 @@ test('billed time not entered: a line with an entry missing in one of the system
   expect(notEntered(day, byId, ['erp'])).toBe(3600)
   expect(notEntered(day, byId, ['erp', 'tracker'])).toBe(5400)
   expect(notEntered(day, byId, [])).toBe(0)
+  // an entry of a project entered elsewhere (its own systems): not asked for in the rest
+  const a = { ...(byId.get('a') as NonNullable<ReturnType<typeof byId.get>>), systems: ['erp', 'tracker'] }
+  const elsewhere = new Map([
+    ['a', a],
+    ['b', { id: 'b', rev: 1, posts: a.posts.slice(0, 0), systems: ['tracker'] }],
+  ])
+  expect(notEntered(day, elsewhere, ['erp'])).toBe(0)
+  expect(notEntered(day, elsewhere, ['erp', 'tracker'])).toBe(5400)
 })
 
 test('billable in the editor: set on the entry or the config’s; what saving sends of it', () => {
