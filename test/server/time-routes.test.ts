@@ -125,7 +125,7 @@ async function writableBoard(tested = true) {
   if (tested)
     writeFileSync(
       join(state, 'backup', 'status.json'),
-      JSON.stringify({ targets: { folder: { ...freshTarget(), tested: Date.now() } } }),
+      JSON.stringify({ targets: { folder: { ...freshTarget(), tested: Date.now(), where: folder } } }),
     )
   const { url } = await serveBoard(box, { language: 'en', time: TIME, backup: { folder } })
   const post = async (body: Record<string, unknown>, headers: Record<string, string> = { 'x-board': '1' }) => {
@@ -189,7 +189,7 @@ test('every change says the revision it read, an integer; a stale one is refused
     )
   for (const op of [{ op: 'edit', description: 'x' }, { op: 'move', date: NEAR }, { op: 'remove' }, { op: 'raise' }]) {
     assert.equal((await post({ ...op, id: e.id }))[0], 400, `${op.op} without a rev`)
-    assert.equal((await post({ ...op, id: e.id, rev: 1 }))[0], op.op === 'raise' ? 400 : 409, `${op.op} stale`)
+    assert.equal((await post({ ...op, id: e.id, rev: 1 }))[0], 409, `${op.op} stale`)
   }
 })
 

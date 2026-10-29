@@ -8,20 +8,26 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { JSDOM } from 'jsdom'
 import { act } from 'react'
-import { createRoot, type Root } from 'react-dom/client'
+import type { Root } from 'react-dom/client'
 import { openDb } from '../../src/adapters/db.ts'
-import { editEntry } from '../../src/adapters/time-store.ts'
+import { editEntry, removeEntry } from '../../src/adapters/time-store.ts'
 import { freshTarget } from '../../src/core/backup.ts'
 import { makeKey } from '../../src/core/backup-file.ts'
 import { timeConfig } from '../../src/core/time.ts'
-import { TimePanel } from '../../web/src/components/time/TimePanel.tsx'
-import { I18nProvider } from '../../web/src/i18n/I18nProvider.tsx'
-import { BoardContext } from '../../web/src/state/BoardProvider.tsx'
 import type { ToastOptions } from '../../web/src/state/board-ui.ts'
-import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
 import { serveBoard } from '../support/board-server.ts'
 import { sandbox } from '../support/sandbox.ts'
-import { board, payload } from './support/board.tsx'
+import type { board as Board, payload as Payload } from './support/board.tsx'
+
+// react-dom and the page's components load once the DOM is there (beforeAll): react-dom looks at
+// the window when it loads, and typing into a field goes through what it finds then
+let createRoot: typeof import('react-dom/client').createRoot
+let TimePanel: typeof import('../../web/src/components/time/TimePanel.tsx').TimePanel
+let I18nProvider: typeof import('../../web/src/i18n/I18nProvider.tsx').I18nProvider
+let BoardContext: typeof import('../../web/src/state/BoardProvider.tsx').BoardContext
+let PanelProvider: typeof import('../../web/src/state/PanelProvider.tsx').PanelProvider
+let board: typeof Board
+let payload: typeof Payload
 
 const TIME = {
   zone: 'America/New_York',
@@ -53,8 +59,20 @@ const DOM_GLOBALS = [
 const saved = new Map<string, PropertyDescriptor | undefined>()
 const realFetch = globalThis.fetch
 
-beforeAll(() => {
+/** What react-dom's fallback watches a focused field with (IE's onpropertychange), by element. */
+const watching = new WeakMap<object, (e: { propertyName: string }) => void>()
+
+beforeAll(async () => {
   const win = dom.window as unknown as Record<string, unknown>
+  // react-dom loaded before this file's DOM (another file's) watches fields as IE did: jsdom has
+  // no attachEvent, so it gets one that setValue fires
+  const proto = dom.window.HTMLElement.prototype as unknown as Record<string, unknown>
+  proto.attachEvent = function (this: object, name: string, fn: (e: { propertyName: string }) => void) {
+    if (name === 'onpropertychange') watching.set(this, fn)
+  }
+  proto.detachEvent = function (this: object) {
+    watching.delete(this)
+  }
   win.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} })
   for (const k of [
     ...DOM_GLOBALS,
@@ -74,6 +92,12 @@ beforeAll(() => {
   g.requestAnimationFrame = (f: (now: number) => void) => setTimeout(() => f(performance.now()), 16)
   g.cancelAnimationFrame = (id: ReturnType<typeof setTimeout>) => clearTimeout(id)
   g.devicePixelRatio = 1
+  ;({ createRoot } = await import('react-dom/client'))
+  ;({ TimePanel } = await import('../../web/src/components/time/TimePanel.tsx'))
+  ;({ I18nProvider } = await import('../../web/src/i18n/I18nProvider.tsx'))
+  ;({ BoardContext } = await import('../../web/src/state/BoardProvider.tsx'))
+  ;({ PanelProvider } = await import('../../web/src/state/PanelProvider.tsx'))
+  ;({ board, payload } = await import('./support/board.tsx'))
   g.ResizeObserver = class {
     observe() {}
     unobserve() {}
@@ -105,6 +129,24 @@ const click = async (el: Element | null) => {
     el?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))
   })
 }
+/**
+ * A value typed into a field, as a person's typing reaches React: focused, its own value setter,
+ * then the events, and what the input event's fallback watches (onpropertychange, keys, selection
+ * change), which react-dom takes when it was loaded elsewhere before this file's DOM was there.
+ */
+const setValue = async (el: HTMLElement | null, value: string) => {
+  expect(el).toBeTruthy()
+  const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set
+  await act(async () => {
+    el?.focus()
+    el?.dispatchEvent(new dom.window.FocusEvent('focusin', { bubbles: true }))
+    setter?.call(el, value)
+    if (el) watching.get(el)?.({ propertyName: 'value', target: el, srcElement: el } as { propertyName: string })
+    for (const type of ['input', 'change']) el?.dispatchEvent(new dom.window.Event(type, { bubbles: true }))
+    for (const type of ['keydown', 'keyup']) el?.dispatchEvent(new dom.window.KeyboardEvent(type, { bubbles: true }))
+    dom.window.document.dispatchEvent(new dom.window.Event('selectionchange'))
+  })
+}
 const submit = async () => {
   await act(async () => {
     q('.time-editor').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }))
@@ -123,7 +165,7 @@ async function setup() {
   )
   writeFileSync(
     join(state, 'backup', 'status.json'),
-    JSON.stringify({ targets: { folder: { ...freshTarget(), tested: Date.now() } } }),
+    JSON.stringify({ targets: { folder: { ...freshTarget(), tested: Date.now(), where: folder } } }),
   )
   const { url } = await serveBoard(box, { language: 'en', time: TIME, backup: { folder } })
   globalThis.fetch = ((u: string | URL | Request, init?: RequestInit) =>
@@ -149,7 +191,22 @@ async function setup() {
     editEntry(db, conf, id, ch, agent, { force: true })
     db.close()
   }
-  return { post, stored, byAgent }
+  const removedByAgent = (id: string) => {
+    const db = openDb({ path: join(state, 'board.db') })
+    if (!db) throw new Error('no database')
+    removeEntry(db, id, agent, { force: true })
+    db.close()
+  }
+  const entry = () =>
+    post({
+      op: 'add',
+      client: 'client-a',
+      project: 'Support',
+      description: 'Case 10001 X: work',
+      start: `${DAY}T13:00:00Z`,
+      stop: `${DAY}T14:30:00Z`,
+    })
+  return { post, stored, byAgent, removedByAgent, entry }
 }
 
 const toasts: { text: string; error?: boolean | undefined; o?: ToastOptions | undefined }[] = []
@@ -277,5 +334,57 @@ test('a delete’s Undo stays seven seconds; after paging, Undo leaves the day s
   expect(qa('.time-entry').length).toBe(0)
   expect((await s.stored()).length).toBe(1)
   expect(toasts.some(x => x.text.startsWith('Saved on '))).toBe(true)
+  act(() => root.unmount())
+}, 90_000)
+
+test('an entry open here that is removed elsewhere closes with a word, not silently', async () => {
+  const s = await setup()
+  toasts.length = 0
+  const made = await s.entry()
+  const root = await mount(1)
+  await click(q('.time-open'))
+  await setValue(q('.time-editor textarea'), 'Case 10001 X: typed here')
+  s.removedByAgent(made.entry.id)
+  await act(async () => root.render(view(2)))
+  await settle()
+  expect(q('.time-editor')).toBeNull()
+  expect(toasts.filter(x => x.error).map(x => x.text)).toEqual([
+    'The entry open here was removed or moved elsewhere: what was typed is not saved.',
+  ])
+  act(() => root.unmount())
+}, 90_000)
+
+test('a change refused as changed since shows Reload at once, before the board says the day moved', async () => {
+  const s = await setup()
+  const made = await s.entry()
+  const root = await mount(1)
+  await click(q('.time-open'))
+  // the agent changes it; the panel has not heard (no new seq)
+  s.byAgent(made.entry.id, { description: 'Case 10001 X: CORRECTED BY AGENT' })
+  await click(qa('.time-editor .time-steps button')[0] ?? null)
+  await submit()
+  await settle(600)
+  expect(q('.time-stale')).toBeTruthy()
+  expect(qa('.time-stale button').length).toBe(1)
+  expect((await s.stored())[0]?.description).toBe('Case 10001 X: CORRECTED BY AGENT')
+  act(() => root.unmount())
+}, 90_000)
+
+test('a change saved in part (the edit in, the move refused) is not called a change from elsewhere, and the typed date stays', async () => {
+  const s = await setup()
+  const made = await s.entry()
+  const root = await mount(1)
+  await click(q('.time-open'))
+  await setValue(q('.time-editor textarea'), 'Case 10001 X: worded better')
+  // a date the board refuses to move to: over a year back
+  await setValue(q('.time-editor input[type=date]'), '2024-01-01')
+  await submit()
+  await settle(600)
+  const [after] = await s.stored()
+  expect(after?.description).toBe('Case 10001 X: worded better')
+  expect(after?.rev).toBe(made.entry.rev + 1)
+  expect(q('.time-stale')).toBeNull()
+  expect(q('.time-editor p.access-problem[role=alert]')?.textContent).toMatch(/a year back/)
+  expect(q('.time-editor input[type=date]').value).toBe('2024-01-01')
   act(() => root.unmount())
 }, 90_000)

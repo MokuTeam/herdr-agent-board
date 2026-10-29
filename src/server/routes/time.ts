@@ -14,9 +14,9 @@ import { isRecord } from '../../adapters/json-store.ts'
 import {
   addEntry,
   editEntry,
-  getEntry,
   listEntries,
   moveEntry,
+  raiseEntry,
   removeEntry,
   restoreEntry,
   TimeError,
@@ -188,21 +188,6 @@ function tagsOf(v: unknown): string[] | undefined {
   return v
 }
 
-/**
- * Raise a line rounded up to its billed figure: its last entry lengthened by the gap, as the day is
- * read now (an entry that joined the line since is in it), the entry's revision as the page read it.
- */
-function raise(db: BoardDb, conf: TimeConfig, id: string, rev: number): TimeEntry {
-  const e = getEntry(db, id)
-  if (!e || e.deleted) throw new TimeError('time.err.gone', { id })
-  const day = clientDay(conf, e.client, e.date, listEntries(db, { from: e.date, to: e.date, client: e.client }))
-  const line = day.lines.find(l => l.entries.includes(id))
-  if (line?.round !== 'up' || line.entries.at(-1) !== id || line.billedSeconds <= line.seconds)
-    throw new TimeError('time.err.noRaise')
-  const gap = line.billedSeconds - line.seconds
-  return editEntry(db, conf, id, { stop: Date.parse(e.stop) + gap * 1000 }, 'user', { expect: rev })
-}
-
 /** One change as the owner; the entry after it. */
 function change(db: BoardDb, conf: TimeConfig, b: Record<string, unknown>, now: number): TimeEntry {
   const id = text(b.id) ?? ''
@@ -264,7 +249,7 @@ function change(db: BoardDb, conf: TimeConfig, b: Record<string, unknown>, now: 
     case 'restore':
       return restoreEntry(db, id, 'user', { expect: revOf(b) })
     case 'raise':
-      return raise(db, conf, id, revOf(b))
+      return raiseEntry(db, conf, id, 'user', { expect: revOf(b) })
     default:
       throw new TimeError('time.err.usage')
   }

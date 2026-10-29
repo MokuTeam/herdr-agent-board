@@ -17,6 +17,7 @@ import {
   hoursText,
   isTimeDay,
   lineLabel,
+  localClock,
   newDraft,
   nudge,
   ruleText,
@@ -174,6 +175,9 @@ test('an entry with seconds keeps them: +15 adds fifteen minutes to the stop, th
     rev: 1,
     description: 'Case 10001 X: worked',
   })
+  // the same HH:MM typed back over the stop: its seconds kept, nothing sent
+  const shown = localClock(Date.parse(e.stop))
+  expect(changesOf(e, typed(typed(draftOf(e), 'stop', '00:01'), 'stop', shown))?.edit).toBe(null)
   // a start typed after a stop it kept: not a time (it is not after the start)
   expect(draftTimes(typed(draftOf(e), 'start', '23:00'))).toBe(null)
 })

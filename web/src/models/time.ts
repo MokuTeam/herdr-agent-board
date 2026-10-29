@@ -118,6 +118,9 @@ export interface Draft {
   stop: string
   startAt: number | null
   stopAt: number | null
+  /** The entry's own instants as it was opened (null for a new one): a time typed back as it was keeps its seconds. */
+  startWas: number | null
+  stopWas: number | null
   /** Tags as typed: words, commas between them. */
   tags: string
 }
@@ -150,6 +153,8 @@ export function draftOf(
     stop: localClock(stopAt),
     startAt,
     stopAt,
+    startWas: startAt,
+    stopWas: stopAt,
     tags: e.tags.join(', '),
   }
 }
@@ -168,13 +173,18 @@ export function newDraft(client: string, project: string, date: string, now: num
     stop: date === today ? localClock(end) : '09:30',
     startAt: null,
     stopAt: null,
+    startWas: null,
+    stopWas: null,
     tags: '',
   }
 }
 
-/** A time typed into the draft: the field's HH:MM, the instant behind it dropped. */
-export const typed = (d: Draft, field: 'start' | 'stop', value: string): Draft =>
-  field === 'start' ? { ...d, start: value, startAt: null } : { ...d, stop: value, stopAt: null }
+/** A time typed into the draft: the field's HH:MM, the instant behind it dropped (kept when it is typed back as the entry had it). */
+export function typed(d: Draft, field: 'start' | 'stop', value: string): Draft {
+  const was = field === 'start' ? d.startWas : d.stopWas
+  const at = was !== null && value === localClock(was) ? was : null
+  return field === 'start' ? { ...d, start: value, startAt: at } : { ...d, stop: value, stopAt: at }
+}
 
 /** HH:MM on a day (YYYY-MM-DD) of this browser's clock as an instant; NaN for a bad one. */
 function at(day: string, clock: string): number {

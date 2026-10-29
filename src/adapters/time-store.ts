@@ -13,6 +13,7 @@ import {
   type Actor,
   cleanTag,
   cleanText,
+  clientDay,
   clientOf,
   clockIn,
   dateIn,
@@ -403,6 +404,37 @@ export function editEntry(
       }
     },
     'edit',
+  )
+}
+
+/**
+ * A line rounded up raised to its billed figure: its last entry lengthened by the gap, the day read
+ * under the write lock (an entry another process added to the line just before counts).
+ */
+export function raiseEntry(
+  db: BoardDb,
+  c: TimeConfig,
+  id: string,
+  actor: Actor,
+  o: { force?: boolean; expect?: number } = {},
+): TimeEntry {
+  checkConfig(c)
+  return changed(
+    db,
+    id,
+    actor,
+    o,
+    e => {
+      if (e.deleted) throw new TimeError('time.err.removed', { id })
+      const day = clientDay(c, e.client, e.date, listEntries(db, { from: e.date, to: e.date, client: e.client }))
+      const line = day.lines.find(l => l.entries.includes(id))
+      if (line?.round !== 'up' || line.entries.at(-1) !== id || line.billedSeconds <= line.seconds)
+        throw new TimeError('time.err.noRaise')
+      const stop = Date.parse(e.stop) + (line.billedSeconds - line.seconds) * 1000
+      checkTimes(Date.parse(e.start), stop)
+      return { ...e, stop: isoOf(stop) }
+    },
+    'raise',
   )
 }
 

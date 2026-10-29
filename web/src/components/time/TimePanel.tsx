@@ -110,10 +110,12 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   // the entry open in place, as it was when opened (its `base`, what a save is against and the
   // revision it says), or 'new' for one being added; what is being sent; the board's refusal
   type Entry = TimeDay['entries'][number]
-  const [editing, setEditing] = useState<{ id: string; base: Entry } | 'new' | null>(null)
+  // `reload` counts Reloads: the editor starts afresh on each, and only then
+  type Open = { id: string; base: Entry; reload: number }
+  const [editing, setEditing] = useState<Open | 'new' | null>(null)
   const [busy, setBusy] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
-  const open1 = (to: { id: string; base: Entry } | 'new' | null) => {
+  const open1 = (to: Open | 'new' | null) => {
     setEditing(to)
     setEditError(null)
   }
@@ -131,6 +133,8 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
     if (!res.ok || reply.ok === false || !reply.entry) {
       const own =
         reply.code && ['changedSince', 'removed', 'gone'].includes(reply.code) ? `time.web.${reply.code}` : null
+      // changed or gone since: the day as it is now first, so the editor can offer Reload at once
+      if (own) await ask(shownDate.current)
       throw new Refused(own ? t(own) : reply.error || t('err.status', { code: res.status }))
     }
     await ask(shownDate.current)
@@ -161,7 +165,12 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
       const ch = changesOf(base, d)
       if (!ch) throw new Error(t('time.edit.badTime'))
       let now: Entry = base
-      if (ch.edit) now = await post(ch.edit)
+      if (ch.edit) {
+        now = await post(ch.edit)
+        // saved so far: the editor holds the entry as it now is (a move refused after this is the
+        // move's, not a change from elsewhere), its draft as typed
+        setEditing(x => (x !== null && x !== 'new' && x.id === base.id ? { ...x, base: now } : x))
+      }
       // the move says the revision the edit left
       if (ch.move) now = await post({ op: 'move', id: base.id, rev: now.rev, date: ch.move })
       followed(now)
@@ -218,6 +227,18 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   // the figures under a day's name are that day's: another day's answer, still shown, is not
   const shown = dayFor(day, date)
   const failed = error && error.date === date ? error.text : null
+  // another day: whatever was open closes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on a change of day only
+  useEffect(() => setEditing(null), [date])
+  // an entry open in place that left the day (removed or moved elsewhere) says so as it closes;
+  // while a change of this panel's own is under way, the entry leaving is that change
+  // biome-ignore lint/correctness/useExhaustiveDependencies: when the day read or the open entry changes
+  useEffect(() => {
+    if (busy || !shown || editing === null || editing === 'new') return
+    if (shown.entries.some(e => e.id === editing.id)) return
+    toast(t('time.edit.goneElsewhere'), true)
+    setEditing(null)
+  }, [shown, editing, busy])
   const entries = new Map((shown?.entries ?? []).map(e => [e.id, e]))
   const days = (shown?.days ?? []).filter(d => !client || d.client === client)
   const cats = new Map((data?.categories ?? []).map(c => [c.id, c]))
@@ -226,17 +247,17 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   const total = days.reduce((n, d) => n + d.billedSeconds, 0)
   const raw = days.reduce((n, d) => n + d.seconds, 0)
   /** The editor of an entry as it was opened; `now` is the entry as the day reads it now. */
-  const editorFor = (base: Entry, now: Entry) => (
+  const editorFor = ({ base, reload }: Open, now: Entry) => (
     <EntryEditor
       // Reload opens it again on the entry as it is now: a new draft
-      key={base.rev}
+      key={`${base.id}:${reload}`}
       draft={draftOf(base)}
       clientTitle={title}
       projects={projectsOf}
       busy={busy}
       error={editError}
       stale={now.rev !== base.rev}
-      onReload={() => open1({ id: base.id, base: now })}
+      onReload={() => open1({ id: base.id, base: now, reload: reload + 1 })}
       onSave={d => void save(base, d)}
       onDelete={() => void remove(base)}
       onCancel={() => open1(null)}
@@ -337,11 +358,15 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
                       const e = entries.get(id)
                       if (!e) return null
                       if (editing !== null && editing !== 'new' && editing.id === id)
-                        return <li key={id}>{editorFor(editing.base, e)}</li>
+                        return <li key={id}>{editorFor(editing, e)}</li>
                       return (
                         <li className={classNames('time-entry', canEdit && 'time-editable')} key={id}>
                           {canEdit ? (
-                            <button type="button" className="time-open" onClick={() => open1({ id, base: e })}>
+                            <button
+                              type="button"
+                              className="time-open"
+                              onClick={() => open1({ id, base: e, reload: 0 })}
+                            >
                               <span className="time-when">{entryTimes(e, lang)}</span>
                               <span className="time-what">{e.description}</span>
                             </button>
@@ -382,11 +407,15 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
                       const e = entries.get(id)
                       if (!e) return null
                       if (editing !== null && editing !== 'new' && editing.id === id)
-                        return <li key={id}>{editorFor(editing.base, e)}</li>
+                        return <li key={id}>{editorFor(editing, e)}</li>
                       return (
                         <li className={classNames('time-entry', canEdit && 'time-editable')} key={id}>
                           {canEdit ? (
-                            <button type="button" className="time-open" onClick={() => open1({ id, base: e })}>
+                            <button
+                              type="button"
+                              className="time-open"
+                              onClick={() => open1({ id, base: e, reload: 0 })}
+                            >
                               <span className="time-when">{entryTimes(e, lang)}</span>
                               <span className="time-what">{e.description}</span>
                             </button>
