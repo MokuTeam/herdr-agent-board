@@ -36,7 +36,7 @@ import { t } from '../core/lang.ts'
 import { DEFAULT_PROFILE, shownProfiles } from '../core/profiles.ts'
 import { boardFiles, checkSetup, report, tomlValue } from '../core/setup.ts'
 import { wakeSwitch } from '../core/wake/config.ts'
-import { buildToastApp } from '../integrations/toast-mac.ts'
+import { ensureToastApp } from '../integrations/toast-mac.ts'
 
 const args = process.argv.slice(2)
 for (const a of args.filter(a => a !== '--toast' && a !== '--no-toast' && a !== '--codex'))
@@ -206,8 +206,9 @@ try {
   }
   // macOS: the notification app (macOS shows notifications only for an app LaunchServices knows).
   // Built here so the first notification comes at once; a click on it opens the session's sheet.
+  // An app that is there and current is kept; one that failed to build is tried again (a hook does not).
   if (process.platform === 'darwin' && toastOn) {
-    const app = buildToastApp()
+    const app = ensureToastApp({ retry: true })
     if (app) {
       console.log(`desktop notifications: the app that shows them: ${app}`)
       console.log('  the first one asks to allow "Claude": allow it, or turn it on in System Settings > Notifications')

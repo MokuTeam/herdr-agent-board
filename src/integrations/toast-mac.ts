@@ -6,7 +6,9 @@
 // what it is: finished, needs attention, asks), and skips the pane when it is focused in herdr and
 // its terminal is the foreground app, as herdr itself does. The notification is shown by a small
 // app built from toast-mac.swift: macOS shows notifications only for an app LaunchServices knows,
-// so the first toast builds it into the state folder and asks the user once to allow it.
+// so the install, or else the first toast, builds it into the state folder and the user is asked
+// once to allow it. Without the Command Line Tools it cannot be built: that is written down, the
+// hooks show herdr's own notification and do not try again until the install does.
 //
 // A click goes to the board first (entrypoints/web-open.ts --pane: its window comes up on that
 // session's sheet), else to herdr: the pane's agent, its tab, and the terminal app the session ran
@@ -19,6 +21,7 @@ import {
   openSync,
   readFileSync,
   readSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -123,6 +126,9 @@ const INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 `
 
+/** Runs a program without a shell; whether it exited 0. Builds go through one, so a test can stand in. */
+type Runner = (program: string, args: string[], timeoutMs?: number) => boolean
+
 function run(program: string, args: string[], timeoutMs = 120_000): boolean {
   try {
     execFileSync(program, args, { stdio: 'ignore', timeout: timeoutMs })
@@ -132,41 +138,112 @@ function run(program: string, args: string[], timeoutMs = 120_000): boolean {
   }
 }
 
+export interface BuildOptions {
+  run?: Runner
+  platform?: string
+}
+
+export interface EnsureOptions extends BuildOptions {
+  /** Build although the last build of this very source failed: a hook does not, the install does. */
+  retry?: boolean
+}
+
+/** Written when a build fails: for which version of the source, and why. A hook does not try that source again. */
+const failedFile = (): string => join(appDir(), 'build-failed.json')
+
+/** When toast-mac.swift last changed (-1 when it is not there): the version of the app's source. */
+function sourceStamp(): number {
+  try {
+    return statSync(toastSource()).mtimeMs
+  } catch {
+    return -1
+  }
+}
+
+/** Why the last build failed, while that holds for the source as it is now; null otherwise. */
+function failureOfSource(): string | null {
+  try {
+    const value: unknown = JSON.parse(readFileSync(failedFile(), 'utf8'))
+    if (isRecord(value) && value.source === sourceStamp() && typeof value.reason === 'string') return value.reason
+  } catch {}
+  return null
+}
+
+function buildFailed(reason: string): null {
+  try {
+    mkdirSync(appDir(), { recursive: true })
+    writeFileSync(failedFile(), JSON.stringify({ source: sourceStamp(), reason }))
+  } catch {}
+  return null
+}
+
+/** Built, and not older than its source: what a hook uses as it is. */
+function builtIsCurrent(): boolean {
+  try {
+    if (!existsSync(toastBinary()) || !existsSync(join(toastApp(), 'Contents', 'Info.plist'))) return false
+    return statSync(toastBinary()).mtimeMs >= statSync(toastSource()).mtimeMs
+  } catch {
+    return false
+  }
+}
+
 /**
  * Builds the notification app from toast-mac.swift (swiftc, then an ad-hoc signature and
- * LaunchServices' registration), or null when this computer has no Swift toolchain.
+ * LaunchServices' registration), or null when it cannot be: no Command Line Tools, or swiftc or
+ * codesign failing, which is written down (failedFile) with its reason.
  */
-export function buildToastApp(): string | null {
-  if (process.platform !== 'darwin') return null
-  if (Bun.which('swiftc') === null) return null
+export function buildToastApp({ run: runner = run, platform = process.platform }: BuildOptions = {}): string | null {
+  if (platform !== 'darwin') return null
+  // /usr/bin/swiftc exists without the tools, and running it opens the system's dialog to install them.
+  if (!runner('xcode-select', ['-p'], 5_000)) return buildFailed('the Command Line Tools are not installed')
   const app = toastApp()
   const binary = toastBinary()
+  // Built beside the binary and renamed over it: a hook that runs meanwhile never gets a half-written one.
+  const part = `${binary}.${process.pid}.part`
   mkdirSync(dirname(binary), { recursive: true })
   writeFileSync(join(app, 'Contents', 'Info.plist'), INFO_PLIST)
-  const built = run('swiftc', [
+  const built = runner('swiftc', [
     '-O',
+    '-swift-version',
+    '5',
     '-o',
-    binary,
+    part,
     toastSource(),
     '-framework',
     'AppKit',
     '-framework',
     'UserNotifications',
   ])
-  if (!built) return null
-  run('codesign', ['-s', '-', '--force', '--deep', app])
-  run(LSREGISTER, ['-f', app], 15_000)
+  if (!built) {
+    rmSync(part, { force: true })
+    return buildFailed('swiftc failed')
+  }
+  renameSync(part, binary)
+  if (!runner('codesign', ['-s', '-', '--force', '--deep', app])) {
+    // Not left behind: an unsigned binary newer than its source would count as built.
+    rmSync(binary, { force: true })
+    return buildFailed('codesign failed')
+  }
+  runner(LSREGISTER, ['-f', app], 15_000)
+  rmSync(failedFile(), { force: true })
   return app
 }
 
-/** The app, built or rebuilt when this copy's source is newer; null when it cannot be built. */
-export function ensureToastApp(): string | null {
-  try {
-    if (existsSync(toastBinary()) && existsSync(join(toastApp(), 'Contents', 'Info.plist'))) {
-      if (statSync(toastBinary()).mtimeMs >= statSync(toastSource()).mtimeMs) return toastApp()
-    }
-  } catch {}
-  return buildToastApp()
+/**
+ * The app, built or rebuilt when this copy's source is newer; null when it cannot be built. A source
+ * that failed to build is not tried again (each hook would prompt and wait for nothing) until it
+ * changes, or `retry` says to: the install passes it.
+ */
+export function ensureToastApp(options: EnsureOptions = {}): string | null {
+  if (builtIsCurrent()) return toastApp()
+  if (!options.retry && failureOfSource() !== null) return null
+  return buildToastApp(options)
+}
+
+/** For the doctor: whether the app is there and current, and why its last build failed (for this source). */
+export function toastAppState(): { built: boolean; failed?: string } {
+  const failed = failureOfSource()
+  return failed === null ? { built: builtIsCurrent() } : { built: builtIsCurrent(), failed }
 }
 
 /** The frontmost app's bundle path, as the helper sees it ('' when it cannot tell). */

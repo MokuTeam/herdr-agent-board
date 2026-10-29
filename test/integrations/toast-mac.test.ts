@@ -1,20 +1,35 @@
 import { afterEach, beforeEach, describe, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { asSnapshot } from '../../src/adapters/herdr.ts'
+import { ROOT } from '../../src/adapters/paths.ts'
 import { toastCommand } from '../../src/core/install-plan.ts'
 import { boardFiles } from '../../src/core/setup.ts'
 import {
   appBundleOf,
+  buildToastApp,
   endEarlier,
+  ensureToastApp,
   isPaneId,
   lastAssistantText,
   plainText,
   showToast,
   terminalAppOf,
   toastApp,
+  toastAppState,
   toastMessage,
   toastTitle,
 } from '../../src/integrations/toast-mac.ts'
@@ -267,6 +282,110 @@ describe.skipIf(process.platform === 'win32')('showing a notification', () => {
       assert.equal(existsSync(toastDir()), false)
     },
   )
+})
+
+// The build of the app, with the programs it runs stood in for (no swiftc here, and on a Mac none
+// is run): which of them ran, what they were asked, and what is left in the state folder.
+describe('building the notification app', () => {
+  const marker = (): string => join(toastDir(), 'build-failed.json')
+  const source = (): number => statSync(join(ROOT, 'src', 'integrations', 'toast-mac.swift')).mtimeMs
+  const NO_TOOLS = 'the Command Line Tools are not installed'
+
+  /** Runs nothing: notes each program, answers xcode-select, swiftc and codesign as told, and swiftc writes its output. */
+  function programs({ tools = true, swiftc = true, codesign = true } = {}) {
+    const ran: string[][] = []
+    const run = (program: string, args: string[]): boolean => {
+      ran.push([program, ...args])
+      if (program === 'xcode-select') return tools
+      if (program === 'swiftc') {
+        if (swiftc) writeFileSync(args[args.indexOf('-o') + 1] as string, 'binary')
+        return swiftc
+      }
+      return program === 'codesign' ? codesign : true
+    }
+    return { ran, names: () => ran.map(r => r[0]), run, platform: 'darwin' }
+  }
+  const parts = (): string[] => readdirSync(join(toastApp(), 'Contents', 'MacOS')).filter(f => f !== 'ClaudeToast')
+
+  test('without the Command Line Tools swiftc is never run, and the failure is written down', () => {
+    const p = programs({ tools: false })
+    assert.equal(buildToastApp(p), null)
+    assert.deepEqual(p.names(), ['xcode-select'])
+    assert.deepEqual(p.ran[0], ['xcode-select', '-p'])
+    assert.deepEqual(JSON.parse(readFileSync(marker(), 'utf8')), { source: source(), reason: NO_TOOLS })
+    assert.deepEqual(toastAppState(), { built: false, failed: NO_TOOLS })
+  })
+
+  test('a hook does not try again while the source is the same; the install does', () => {
+    assert.equal(ensureToastApp(programs({ tools: false })), null)
+    const hook = programs()
+    assert.equal(ensureToastApp(hook), null)
+    assert.deepEqual(hook.ran, [])
+    const install = programs({ tools: false })
+    assert.equal(ensureToastApp({ ...install, retry: true }), null)
+    assert.deepEqual(install.names(), ['xcode-select'])
+    // The tools are there by then: the install builds, and the failure is forgotten.
+    const later = programs()
+    assert.equal(ensureToastApp({ ...later, retry: true }), toastApp())
+    assert.equal(existsSync(marker()), false)
+    assert.deepEqual(toastAppState(), { built: true })
+  })
+
+  test('a source that has changed since the failure is tried again, by a hook too', () => {
+    mkdirSync(toastDir(), { recursive: true })
+    writeFileSync(marker(), JSON.stringify({ source: source() - 5_000, reason: NO_TOOLS }))
+    assert.deepEqual(toastAppState(), { built: false })
+    const hook = programs()
+    assert.equal(ensureToastApp(hook), toastApp())
+    assert.deepEqual(hook.names().slice(0, 3), ['xcode-select', 'swiftc', 'codesign'])
+    assert.equal(existsSync(marker()), false)
+  })
+
+  test('a build that succeeds: swiftc writes beside the binary, which is renamed into place; a built app is left alone', () => {
+    const p = programs()
+    assert.equal(ensureToastApp(p), toastApp())
+    assert.deepEqual(p.names().slice(0, 3), ['xcode-select', 'swiftc', 'codesign'])
+    const swiftc = p.ran[1] as string[]
+    assert.deepEqual(swiftc.slice(1, 4), ['-O', '-swift-version', '5'])
+    const out = swiftc[swiftc.indexOf('-o') + 1] as string
+    assert.notEqual(out, join(toastApp(), 'Contents', 'MacOS', 'ClaudeToast'))
+    assert.ok(out.startsWith(join(toastApp(), 'Contents', 'MacOS')), out)
+    assert.equal(readFileSync(join(toastApp(), 'Contents', 'MacOS', 'ClaudeToast'), 'utf8'), 'binary')
+    assert.deepEqual(parts(), [])
+    assert.ok(readFileSync(join(toastApp(), 'Contents', 'Info.plist'), 'utf8').includes('com.mokuteam.agent-board'))
+    assert.equal(existsSync(marker()), false)
+    assert.deepEqual(toastAppState(), { built: true })
+    const again = programs()
+    assert.equal(ensureToastApp(again), toastApp())
+    assert.deepEqual(again.ran, [])
+  })
+
+  test('swiftc failing leaves nothing half-built and says so', () => {
+    const p = programs({ swiftc: false })
+    assert.equal(ensureToastApp(p), null)
+    assert.deepEqual(p.names(), ['xcode-select', 'swiftc'])
+    assert.deepEqual(parts(), [])
+    assert.deepEqual(toastAppState(), { built: false, failed: 'swiftc failed' })
+  })
+
+  test('codesign failing leaves no binary behind that would count as built', () => {
+    const p = programs({ codesign: false })
+    assert.equal(ensureToastApp(p), null)
+    assert.deepEqual(p.names(), ['xcode-select', 'swiftc', 'codesign'])
+    assert.deepEqual(parts(), [])
+    assert.deepEqual(toastAppState(), { built: false, failed: 'codesign failed' })
+    const hook = programs()
+    assert.equal(ensureToastApp(hook), null)
+    assert.deepEqual(hook.ran, [])
+  })
+
+  test('off macOS nothing is run and nothing is written', () => {
+    const p = { ...programs(), platform: 'linux' }
+    assert.equal(ensureToastApp(p), null)
+    assert.deepEqual(p.ran, [])
+    assert.equal(existsSync(toastDir()), false)
+    assert.deepEqual(toastAppState(), { built: false })
+  })
 })
 
 describe('the hook the install writes', () => {
