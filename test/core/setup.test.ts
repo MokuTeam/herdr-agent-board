@@ -31,11 +31,12 @@ import type { WakeState } from '../../src/core/wake/status.ts'
 const ROOT_A = 'C:\\plugins\\agent-board'
 const ROOT_B = 'C:\\plugins\\mokuteam.herdr-agent-board-1a2b'
 const BUN = 'C:\\Users\\u\\.bun\\bin\\bun.exe'
-const files = boardFiles(ROOT_A)
+const files = boardFiles(ROOT_A, 'win32')
 const pathsOf = (root: string): InstallPaths & { wakeHook: string } => ({
   bun: BUN,
-  ...boardFiles(root),
+  ...boardFiles(root, 'win32'),
   binDir: 'C:\\Users\\u\\.local\\bin',
+  platform: 'win32',
 })
 const hookCommand = (f: BoardFiles) => `${quote(BUN)} ${quote(f.hook)}`
 type Settings = { hooks: Record<string, { matcher?: string; hooks: { command: string }[] }[] | undefined> }
@@ -51,7 +52,7 @@ describe('install: the settings it writes', () => {
       hooks: {
         SessionStart: [
           { hooks: [{ type: 'command', command: 'python recall.py' }] },
-          { hooks: [{ type: 'command', command: hookCommand(boardFiles(ROOT_B)), timeout: 10 }] },
+          { hooks: [{ type: 'command', command: hookCommand(boardFiles(ROOT_B, 'win32')), timeout: 10 }] },
         ],
         Stop: [{ hooks: [{ type: 'command', command: 'python ingest.py' }] }],
       },
@@ -72,14 +73,14 @@ describe('install: the settings it writes', () => {
     const on = planSettings(once.settings, pathsOf(ROOT_B), { toast: true }).settings
     const hooks = (on as Settings).hooks
     assert.deepEqual(hooks.Stop?.at(-1), {
-      hooks: [{ type: 'command', command: toastCommand(boardFiles(ROOT_B).toast), timeout: 30, async: true }],
+      hooks: [{ type: 'command', command: toastCommand(pathsOf(ROOT_B)), timeout: 30, async: true }],
     })
     assert.equal(hooks.Notification?.[0]?.matcher, 'permission_prompt|elicitation_dialog')
     assert.equal(hooks.PreToolUse?.[0]?.matcher, 'AskUserQuestion')
     const kept = planSettings(on, pathsOf(ROOT_A))
     assert.equal(kept.toast, true)
-    assert.deepEqual(commands(kept.settings, 'PreToolUse'), [hookCommand(files), toastCommand(files.toast)])
-    assert.deepEqual(commands(kept.settings, 'Stop'), ['python ingest.py', toastCommand(files.toast)])
+    assert.deepEqual(commands(kept.settings, 'PreToolUse'), [hookCommand(files), toastCommand(pathsOf(ROOT_A))])
+    assert.deepEqual(commands(kept.settings, 'Stop'), ['python ingest.py', toastCommand(pathsOf(ROOT_A))])
     const off = planSettings(kept.settings, pathsOf(ROOT_A), { toast: false }).settings
     assert.deepEqual(commands(off, 'Stop'), ['python ingest.py'])
     assert.equal((off as Settings).hooks.Notification, undefined)
@@ -89,7 +90,7 @@ describe('install: the settings it writes', () => {
       type: 'command',
       command: `${quote(BUN)} ${quote(files.statusline)}`,
     })
-    const other = { statusLine: { command: `node "${boardFiles(ROOT_B).statusline}"` } }
+    const other = { statusLine: { command: `node "${boardFiles(ROOT_B, 'win32').statusline}"` } }
     assert.equal(planSettings(other, pathsOf(ROOT_A)).statusLineSet, true)
     // Not an object where hooks should be: replaced rather than crashed on.
     assert.deepEqual(Object.keys((planSettings({ hooks: [] }, pathsOf(ROOT_A)).settings as Settings).hooks), [
@@ -105,13 +106,13 @@ describe('install: the settings it writes', () => {
     const again = planSettings(notified, pathsOf(root))
     assert.equal(again.toast, true)
     assert.deepEqual(again.settings, notified)
-    assert.deepEqual(commands(again.settings, 'SessionStart'), [hookCommand(boardFiles(root))])
+    assert.deepEqual(commands(again.settings, 'SessionStart'), [hookCommand(boardFiles(root, 'win32'))])
   })
 
   test('a hook event that is not a list is taken for an empty one, as upstream does', () => {
     const ourHook = { hooks: [{ type: 'command', command: hookCommand(files), timeout: 10 }] }
     const ourAsk = { matcher: 'AskUserQuestion', ...ourHook }
-    const notify = { type: 'command', command: toastCommand(files.toast), timeout: 30, async: true }
+    const notify = { type: 'command', command: toastCommand(pathsOf(ROOT_A)), timeout: 30, async: true }
     const odd = { hooks: { SessionStart: 'text', Stop: { not: 'a list' }, PreToolUse: 5 } }
     // The board's events get its entry; a notification event with nothing to add goes.
     for (const toast of [undefined, false])
@@ -291,13 +292,13 @@ describe('doctor', () => {
   test('hooks from before the question hook: a warning to run the install again, every other check as it was', () => {
     const withAsk = (root: string) => {
       const settings = structuredClone(facts().settings) as Settings
-      const ask = { matcher: 'AskUserQuestion', hooks: [{ command: hookCommand(boardFiles(root)) }] }
+      const ask = { matcher: 'AskUserQuestion', hooks: [{ command: hookCommand(boardFiles(root, 'win32')) }] }
       settings.hooks.PreToolUse = [ask, ...(settings.hooks.PreToolUse ?? []).slice(1)]
       return settings
     }
     const without = structuredClone(facts().settings) as Settings
     without.hooks.PreToolUse = without.hooks.PreToolUse?.slice(1)
-    assert.deepEqual(commands(without, 'PreToolUse'), [toastCommand(files.toast)])
+    assert.deepEqual(commands(without, 'PreToolUse'), [toastCommand(pathsOf(ROOT_A))])
     for (const settings of [without, withAsk(ROOT_B)]) {
       const checks = checkSetup(facts({ settings }))
       const hooks = check(checks, 'hooks')
@@ -390,7 +391,7 @@ describe('doctor', () => {
     assert.equal(check(noHooks, 'hooks').code, 'herdr plugin action invoke agent-board.install')
 
     // The plugin moved (a new copy): hooks and commands still run the old one.
-    const m = checkSetup(facts({ root: ROOT_B, files: boardFiles(ROOT_B) }))
+    const m = checkSetup(facts({ root: ROOT_B, files: boardFiles(ROOT_B, 'win32') }))
     for (const id of ['board', 'hooks', 'statusline', 'spawn-agent', 'toast']) assert.notEqual(level(m, id), 'ok', id)
     assert.match(check(m, 'hooks').title, /another copy/)
 

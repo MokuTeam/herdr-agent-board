@@ -12,9 +12,11 @@ export interface InstallPaths {
   cli: string
   /** spawn-agent's entrypoint. */
   spawn: string
-  /** The notification script (integrations/toast.ps1). */
+  /** The notification script (integrations/toast.ps1, or entrypoints/toast.ts on macOS). */
   toast: string
   binDir: string
+  /** The platform its commands are for; the running one when not said (a test's fixtures). */
+  platform?: NodeJS.Platform
 }
 
 type Settings = Record<string, unknown>
@@ -24,7 +26,7 @@ type Settings = Record<string, unknown>
 // name comes right after a separator, so `…/prehook.mjs` is someone else's.
 const OUR_HOOK = /agent-board.*[\\/](hook\.mjs|entrypoints[\\/]hook\.ts)/
 const OUR_STATUS_LINE = /agent-board.*[\\/](statusline\.mjs|entrypoints[\\/]statusline\.ts)/
-const OUR_TOAST = /agent-board.*[\\/]toast\.ps1/
+const OUR_TOAST = /agent-board.*[\\/](toast\.ps1|entrypoints[\\/]toast\.ts)/
 export const BOARD_EVENTS = ['SessionStart', 'UserPromptSubmit'] as const
 /**
  * The board's hook on a question form, before its dialog opens: the event and its matcher. It
@@ -87,8 +89,14 @@ export function ourCommands(files: Pick<InstallPaths, 'hook' | 'statusline' | 't
   }
 }
 
-/** The notification hook's command: Windows PowerShell runs the script. */
-export const toastCommand = (file: string): string => `powershell -NoProfile -ExecutionPolicy Bypass -File "${file}"`
+/**
+ * The notification hook's command: Windows PowerShell runs toast.ps1, macOS the board's own Bun
+ * entrypoint (entrypoints/toast.ts), which builds and shows its notification.
+ */
+export const toastCommand = (paths: Pick<InstallPaths, 'bun' | 'toast'> & { platform?: NodeJS.Platform }): string =>
+  (paths.platform ?? process.platform) === 'darwin'
+    ? `${quote(paths.bun)} ${quote(paths.toast)}`
+    : `powershell -NoProfile -ExecutionPolicy Bypass -File "${paths.toast}"`
 
 /** Every hook command of an event, with its entry's matcher. */
 export function commandsOf(settings: unknown, event: string): { command: string; matcher: unknown }[] {
@@ -198,7 +206,7 @@ export function planSettings(
   // Desktop notifications: Windows PowerShell shows them, in the background (async), so Claude does not wait.
   const had = TOAST_EVENTS.some(([event]) => commandsOf(settings, event).some(c => ours.toast(c.command)))
   const withToast = toast ?? had
-  const notify = { type: 'command', command: toastCommand(paths.toast), timeout: 30, async: true }
+  const notify = { type: 'command', command: toastCommand(paths), timeout: 30, async: true }
   for (const [event, matcher] of TOAST_EVENTS) {
     const entry = withToast && { ...(matcher && { matcher }), hooks: [notify] }
     const list = withOurHook(hooks[event], entry, ours.toast, replaced)

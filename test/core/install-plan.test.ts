@@ -22,6 +22,7 @@ const paths: InstallPaths & { wakeHook: string } = {
   toast: `${plugin}\\src\\integrations\\toast.ps1`,
   wakeHook: `${plugin}\\src\\entrypoints\\wake-hook.ts`,
   binDir: 'C:\\Users\\Имя\\.local\\bin',
+  platform: 'win32',
 }
 const hookCommand =
   '"C:/Program Files/Bun/bun.exe" "C:/Users/Имя/AppData/Roaming/herdr/plugins/agent-board/src/entrypoints/hook.ts"'
@@ -100,7 +101,7 @@ describe('planSettings', () => {
 
   test("the question hook: an entry of its own in PreToolUse, beside the user's and the notifications'", () => {
     const guard = { matcher: 'Bash', hooks: [{ type: 'command', command: 'bash ~/.claude/hooks/git-guard.sh' }] }
-    const notify = { type: 'command', command: toastCommand(paths.toast), timeout: 30, async: true }
+    const notify = { type: 'command', command: toastCommand(paths), timeout: 30, async: true }
     const toast = { matcher: 'AskUserQuestion', hooks: [notify] }
     const { settings } = planSettings({ hooks: { PreToolUse: [guard] } }, paths, { toast: true })
     assert.deepEqual(settings.hooks, {

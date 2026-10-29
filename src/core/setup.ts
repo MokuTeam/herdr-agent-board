@@ -1,6 +1,6 @@
 // Checking that the board is set up on this computer: what the install action writes (the board
 // and spawn-agent commands on PATH, the Claude Code hooks, the status line, desktop notifications
-// on Windows; core/install-plan.ts; the agents' skill and herdr's own Claude hook, below) and what
+// on Windows and macOS; core/install-plan.ts; the agents' skill and herdr's own Claude hook, below) and what
 // `board doctor`, the install action and the web board check (those, herdr's key for the board,
 // sleep and wake, how new sessions start).
 //
@@ -37,15 +37,18 @@ export interface BoardFiles {
   skill: string
 }
 
-/** The files of the copy of the board at `root`. */
-export function boardFiles(root: string): BoardFiles {
+/**
+ * The files of the copy of the board at `root`. The notification script is Windows' PowerShell
+ * one or macOS' entrypoint (toast.ts), as the platform shows notifications.
+ */
+export function boardFiles(root: string, platform: NodeJS.Platform = process.platform): BoardFiles {
   const entrypoint = (name: string): string => join(root, 'src', 'entrypoints', name)
   return {
     cli: entrypoint('cli.ts'),
     spawn: entrypoint('spawn-agent.ts'),
     hook: entrypoint('hook.ts'),
     statusline: entrypoint('statusline.ts'),
-    toast: join(root, 'src', 'integrations', 'toast.ps1'),
+    toast: platform === 'darwin' ? entrypoint('toast.ts') : join(root, 'src', 'integrations', 'toast.ps1'),
     wakeHook: entrypoint('wake-hook.ts'),
     skill: join(root, 'skills', SKILL, 'SKILL.md'),
   }
@@ -265,6 +268,7 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
   }
   const f = facts.files
   const win = facts.platform === 'win32'
+  const mac = facts.platform === 'darwin'
   const both = (...parts: string[]): string => parts.filter(Boolean).join(' ')
 
   const major = Number(String(facts.node ?? '').split('.')[0])
@@ -656,7 +660,7 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
   }
 
   // Desktop notifications with the agent's words. Optional too, until they are on.
-  if (!win) {
+  if (!win && !mac) {
     add('toast', 'na', t('setup.toast.na'), t('setup.toast.naDetail'))
   } else {
     const per = TOAST_EVENTS.map(([event]) => commandsOf(facts.settings, event).filter(c => ours.toast(c.command)))

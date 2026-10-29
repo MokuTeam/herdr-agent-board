@@ -1630,8 +1630,8 @@ under the same per-file lock as the cards; `log.jsonl` there keeps what became o
 
 ## Notifications
 
-On Windows, `herdr plugin action invoke agent-board.notifications` (`bun src/entrypoints/install.ts
---toast`) adds Claude Code hooks that show a Windows notification in the agent's own words:
+On Windows and macOS, `herdr plugin action invoke agent-board.notifications` (`bun src/entrypoints/install.ts
+--toast`) adds Claude Code hooks that show a desktop notification in the agent's own words:
 
 - a session finished its turn: its last reply;
 - it needs a permission or asks for input (Notification, `permission_prompt` and
@@ -1645,26 +1645,41 @@ plays its own). A click opens that session on the web board when the board runs 
 `src/entrypoints/web-open.ts --pane` does); else herdr goes to the pane and the terminal comes to
 the front.
 
-The click goes through a `claude-pane:<pane id>` link, a URL protocol the script registers for
-the current user (`HKCU\Software\Classes\claude-pane`, and the app id `Herdr.ClaudeAgent` that
-names the notifications). Any program or page can open such a link, so the handler takes nothing
-but a pane id (`w1:p2`) and only shows or focuses that pane.
+On Windows, the click goes through a `claude-pane:<pane id>` link, a URL protocol the script
+registers for the current user (`HKCU\Software\Classes\claude-pane`, and the app id
+`Herdr.ClaudeAgent` that names the notifications). Any program or page can open such a link, so
+the handler takes nothing but a pane id (`w1:p2`) and only shows or focuses that pane.
 
 Keep herdr's own notifications off (`[ui.toast] delivery = "off"`, herdr's default), or each
 comes twice; `board doctor` says when they are on, and when another hook with "toast" in its
 command shows them too (a script of your own from before: take it out of settings.json). `bun
-src/entrypoints/install.ts --no-toast` takes the hooks out again (the protocol entry stays; it
-only ever opens a pane). The hooks run `powershell -File src\integrations\toast.ps1` from the
-plugin's folder, in the background, so Claude does not wait for them; a click finds Bun on PATH
-(else `~\.bun\bin\bun.exe`). To see one, from a herdr pane (`force` shows it for the pane you are
-in):
+src/entrypoints/install.ts --no-toast` takes the hooks out again (on Windows the protocol entry
+stays; it only ever opens a pane). The hooks run in the background, so Claude does not wait for
+them.
+
+On Windows they run `powershell -File src\integrations\toast.ps1` from the plugin's folder; a
+click finds Bun on PATH (else `~\.bun\bin\bun.exe`). To see one, from a herdr pane (`force` shows
+it for the pane you are in):
 
 ```powershell
 '{"hook_event_name":"Stop","last_assistant_message":"Hello"}' | powershell -NoProfile -File src\integrations\toast.ps1 force
 ```
 
-On Linux and macOS the board shows none; herdr's own (`delivery = "system"`) say that a session
-finished, without its words.
+On macOS they run `bun src/entrypoints/toast.ts` from the plugin's folder: the board's own
+entrypoint, which builds `src/integrations/toast-mac.swift` into a small app in its state folder
+(`.../herdr/plugins/agent-board/toast/ClaudeToast.app`, with the `swiftc` of Xcode's command line
+tools). macOS shows notifications only for an app it knows, so the first one asks to allow
+"Claude": allow it once, or turn it on in System Settings > Notifications. A click then needs no
+link: the app runs `toast.ts click <pane id>`, which shows that session on the board, else focuses
+the pane in herdr and brings its terminal app to the front. Without `swiftc` the app is not built
+and herdr shows its own. To see one, from a herdr pane:
+
+```sh
+'{"hook_event_name":"Stop","last_assistant_message":"Hello"}' | bun src/entrypoints/toast.ts force
+```
+
+On Linux the board shows none; herdr's own (`delivery = "system"`) say that a session finished,
+without its words.
 
 ## Presence
 

@@ -9,7 +9,7 @@ import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 // The notification script as a whole is only parsed here, never run: it registers a URL protocol
 // and shows notifications, which belong to the owner's computer (T30). Only a click's way to the
 // web board runs, cut off before herdr (below).
-const script = boardFiles(root).toast
+const script = boardFiles(root, 'win32').toast
 const windows = process.platform === 'win32'
 const powershell = join(
   process.env.SystemRoot ?? 'C:\\Windows',
