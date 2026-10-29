@@ -19,7 +19,12 @@ import { sandbox } from '../support/sandbox.ts'
 const json = async (res: Response) => (await res.json()) as Record<string, unknown>
 const TIME = {
   zone: 'America/New_York',
-  clients: { 'client-a': { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'up' }] } },
+  clients: {
+    'client-a': { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'up' }] },
+    // billed under the time worked: to the nearest 30 minutes, and down to them
+    'client-n': { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'nearest' }] },
+    'client-d': { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'down' }] },
+  },
 }
 
 test('time off: no time in the payload, and /api/time says it is off', async () => {
@@ -170,11 +175,23 @@ test('changes as the owner: add, a trim with the revision read, a stale one refu
   const [, removed] = await post({ op: 'remove', id: entry.id, rev: m.rev })
   const day = await json(await fetch(`${url}/api/time?date=${to}`))
   assert.deepEqual(day.entries, [])
-  assert.deepEqual(day.projects, { 'client-a': ['Support'] })
+  assert.deepEqual(day.projects, { 'client-a': ['Support'], 'client-n': ['Support'], 'client-d': ['Support'] })
   assert.equal((await post({ op: 'restore', id: entry.id, rev: (removed.entry as Made).rev }))[0], 200)
   assert.equal(((await json(await fetch(`${url}/api/time?date=${to}`))).entries as unknown[]).length, 1)
   assert.equal((await post({ op: 'edit', id: 'nope0000', rev: 1, description: 'x' }))[0], 404)
   assert.equal((await post({ ...add, project: 'Suport' }))[0], 400)
+})
+
+test('the day offers tags: the ones held out of the totals first, then the ones entries have, most used first', async () => {
+  const { url, post } = await writableBoard()
+  const day = async () => (await json(await fetch(`${url}/api/time?date=${NEAR}`))).tags
+  assert.deepEqual(await day(), ['deferred'])
+  await post({ ...add, tags: ['call', 'review'] })
+  await post({ ...add, start: `${NEAR}T15:00:00Z`, stop: `${NEAR}T15:30:00Z`, tags: ['call'] })
+  const gone = (await post({ ...add, start: `${NEAR}T16:00:00Z`, stop: `${NEAR}T16:30:00Z`, tags: ['old'] }))[1]
+    .entry as Made
+  await post({ op: 'remove', id: gone.id, rev: gone.rev })
+  assert.deepEqual(await day(), ['deferred', 'call', 'review'])
 })
 
 test('every change says the revision it read, an integer; a stale one is refused on each op', async () => {
@@ -187,7 +204,13 @@ test('every change says the revision it read, an integer; a stale one is refused
       [JSON.stringify(rev), (await post({ op: 'edit', id: e.id, rev, description: 'x' }))[1].code],
       [JSON.stringify(rev), 'rev'],
     )
-  for (const op of [{ op: 'edit', description: 'x' }, { op: 'move', date: NEAR }, { op: 'remove' }, { op: 'raise' }]) {
+  for (const op of [
+    { op: 'edit', description: 'x' },
+    { op: 'move', date: NEAR },
+    { op: 'remove' },
+    { op: 'raise' },
+    { op: 'trim' },
+  ]) {
     assert.equal((await post({ ...op, id: e.id }))[0], 400, `${op.op} without a rev`)
     assert.equal((await post({ ...op, id: e.id, rev: 1 }))[0], 409, `${op.op} stale`)
   }
@@ -208,7 +231,7 @@ test('times are ISO with an offset, within a day ahead and a year back; tags are
   assert.equal((await post({ op: 'edit', id: e.id, rev: e.rev, tags }))[1].code, 'tags')
 })
 
-test('Raise lengthens a line’s last entry by the gap the board works out now', async () => {
+test('Raise lengthens a line’s last entry by the gap the board works out now, wherever it is billed over its time', async () => {
   const { post } = await writableBoard()
   // 40 minutes in a 30-minute step rounded up: 60 billed, 20 to raise
   const e = (await post({ ...add, stop: `${NEAR}T13:40:00Z` }))[1].entry as Made
@@ -217,6 +240,62 @@ test('Raise lengthens a line’s last entry by the gap the board works out now',
   assert.equal((raised.entry as Made).stop, `${NEAR}T14:00:00Z`)
   // nothing left to raise
   assert.equal((await post({ op: 'raise', id: e.id, rev: (raised.entry as Made).rev }))[1].code, 'noRaise')
+  // to the nearest 30, 20 minutes are billed as 30: raised as well; billed under its time, not
+  const near = (await post({ ...add, client: 'client-n', stop: `${NEAR}T13:20:00Z` }))[1].entry as Made
+  assert.equal(((await post({ op: 'raise', id: near.id, rev: near.rev }))[1].entry as Made).stop, `${NEAR}T13:30:00Z`)
+  const under = (await post({ ...add, client: 'client-d', stop: `${NEAR}T13:40:00Z` }))[1].entry as Made
+  assert.equal((await post({ op: 'raise', id: under.id, rev: under.rev }))[1].code, 'noRaise')
+})
+
+/** The entries' stops and revisions as the day reads them now. */
+async function stopsOf(url: string, ids: string[]): Promise<[string, number][]> {
+  const day = await json(await fetch(`${url}/api/time?date=${NEAR}`))
+  const entries = day.entries as Made[]
+  return ids.map(id => {
+    const e = entries.find(x => x.id === id)
+    return [e?.stop ?? '', e?.rev ?? -1]
+  })
+}
+
+test('Trim shortens a line billed under its time: from its last entry, then the one before, each kept a minute', async () => {
+  const { url, post } = await writableBoard()
+  const at = (hm: string) => `${NEAR}T${hm}:00Z`
+  // 30 + 14 = 44 minutes to the nearest 30: 30 billed, 14 to trim; the last entry gives 13, the first 1
+  const first = (await post({ ...add, client: 'client-n', start: at('13:00'), stop: at('13:30') }))[1].entry as Made
+  const last = (await post({ ...add, client: 'client-n', start: at('14:00'), stop: at('14:14') }))[1].entry as Made
+  // only the line's last entry names it
+  assert.equal((await post({ op: 'trim', id: first.id, rev: first.rev }))[1].code, 'noTrim')
+  const [status, trimmed] = await post({ op: 'trim', id: last.id, rev: last.rev })
+  assert.equal(status, 200)
+  const t = trimmed.entry as Made
+  assert.deepEqual([t.stop, t.rev], [at('14:01'), last.rev + 1])
+  assert.deepEqual(await stopsOf(url, [first.id, last.id]), [
+    [at('13:29'), first.rev + 1],
+    [at('14:01'), last.rev + 1],
+  ])
+  const day = await json(await fetch(`${url}/api/time?date=${NEAR}`))
+  assert.deepEqual(
+    (day.days as { lines: { seconds: number; billedSeconds: number }[] }[])[0]?.lines.map(l => [
+      l.seconds,
+      l.billedSeconds,
+    ]),
+    [[1800, 1800]],
+  )
+  // nothing left to trim; a stale revision is refused before anything is worked out
+  assert.equal((await post({ op: 'trim', id: last.id, rev: t.rev }))[1].code, 'noTrim')
+  assert.equal((await post({ op: 'trim', id: last.id, rev: last.rev }))[1].code, 'changedSince')
+})
+
+test('Trim is refused, nothing changed, where the line cannot get to its figure or is not billed under its time', async () => {
+  const { url, post } = await writableBoard()
+  // 20 minutes down to 30: 0 billed, and an entry keeps a minute
+  const down = (await post({ ...add, client: 'client-d', stop: `${NEAR}T13:20:00Z` }))[1].entry as Made
+  const [status, why] = await post({ op: 'trim', id: down.id, rev: down.rev })
+  assert.deepEqual([status, why.code], [400, 'cannotTrim'])
+  assert.deepEqual(await stopsOf(url, [down.id]), [[`${NEAR}T13:20:00Z`, down.rev]])
+  // rounded up: Raise's, not Trim's
+  const up = (await post({ ...add, stop: `${NEAR}T13:40:00Z` }))[1].entry as Made
+  assert.equal((await post({ op: 'trim', id: up.id, rev: up.rev }))[1].code, 'noTrim')
 })
 
 test('a target that never took a backup is no backup: the board refuses as the command does', async () => {

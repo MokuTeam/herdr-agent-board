@@ -1,58 +1,151 @@
-/* The Time panel (web/src/components/time/TimePanel.tsx, #233) and a lane's day total: the day's
-   controls on a line, the clients as chips in their lanes' colors, each client's billed lines with
-   their entries under them; figures in tabular numerals so the columns line up. On a phone the
-   list follows a sideways swipe (pan-y leaves the vertical scroll to the browser). Every rule here
-   selects by class: the other sheets are upstream's, rule for rule. */
+/* The Time panel (web/src/components/time/TimePanel.tsx, #233) and a lane's day total. Read from
+   the top in the order that matters: the day, with Previous, Today and Next at its end as a
+   calendar's; the clients as the toolbar's lanes control; the figure to bill, large, what it
+   leaves out quiet under it and each client's share as a bar in the lanes' colors; each client
+   with its own figure over one grouped list of its lines, a hairline between them, and a line's
+   entries under its name; the zone once, at the foot. One duration form everywhere, in tabular
+   numerals so figures line up. An entry opens in place, the row grown into its editor. On a
+   phone the list follows a sideways swipe (pan-y leaves the vertical scroll to the browser).
+   Every rule here selects by class: the other sheets are upstream's, rule for rule. */
 
-.time-body { display: flex; flex-direction: column; gap: 8px; max-width: 760px; }
-.time-nav { display: flex; align-items: center; gap: 8px; }
-.time-step { min-width: 32px; font-size: 16px; line-height: 1; }
-.time-date { min-width: 9em; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
-.time-zone { margin: 0; }
-.time-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
-.time-chip {
+.time-body { display: flex; flex-direction: column; max-width: 760px; }
+/* Nothing in the column gives its height up to a long day: the chips' strip, a scroller, kept none. */
+.time-body > * { flex: none; }
+
+.time-nav { display: flex; align-items: center; gap: 6px; margin: 2px 0 12px; }
+.time-date {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font: 600 17px/1.25 var(--font-display);
+  letter-spacing: -0.012em;
+  overflow-wrap: anywhere;
+}
+.time-step svg { width: 15px; height: 15px; stroke-width: 2; }
+.time-prev svg { transform: scaleX(-1); }
+.time-today { flex: none; }
+.time-today:disabled { opacity: 0.45; }
+.time-step:active, .time-today:active:not(:disabled) { transform: scale(0.95); }
+
+.time-chips { align-self: flex-start; margin: 0 0 16px; }
+.time-dot::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 2.5px;
+  background: var(--lane);
+  vertical-align: 0.04em;
+}
+
+/* The figure to bill: the day's, or the one client's on show (named over it). */
+.time-summary { margin: 0 2px 16px; }
+.time-caption { margin: 0; color: var(--label-2); font-size: 12.5px; font-weight: 600; }
+.time-caption .time-dot { color: var(--label); }
+.time-total {
+  margin: 1px 0 0;
+  font: 700 30px/1.12 var(--font-display);
+  letter-spacing: -0.024em;
+  font-variant-numeric: tabular-nums;
+}
+.time-about { margin: 3px 0 0; color: var(--label-2); font-size: 12.5px; line-height: 1.35; }
+.time-bar { display: flex; gap: 2px; height: 6px; margin-top: 12px; overflow: hidden; border-radius: 3px; }
+.time-bar span { flex-basis: 0; min-width: 4px; background: var(--lane); }
+
+.time-add { margin: 0 0 16px; }
+.time-add-open {
   display: inline-flex;
-  flex: none;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  height: 30px;
+  margin-left: -6px;
+  padding: 0 10px 0 6px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 120ms ease, transform 100ms ease-out;
+}
+.time-add-open svg { width: 16px; height: 16px; stroke-width: 2; }
+.time-add-open:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.time-add-open:active { transform: scale(0.97); }
+
+.time-client { margin: 0 0 20px; }
+.time-client-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 12px;
+  margin: 0 2px 8px;
+}
+.time-client-head h4 { min-width: 0; margin: 0; font: 600 15px/1.3 var(--font-display); letter-spacing: -0.008em; overflow-wrap: anywhere; }
+.time-client-total { font: 600 15px/1.3 var(--font-display); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.time-client-head .time-about { grid-column: 1 / -1; margin-top: 1px; font-size: 12px; }
+
+/* A client's lines: one grouped list, an inset hairline between lines. */
+.time-lines { border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-card); }
+.time-line { position: relative; padding: 10px 12px; }
+.time-line + .time-line::before { content: ""; position: absolute; top: 0; right: 0; left: 12px; height: 0.5px; background: var(--separator); }
+.time-line-head { display: flex; align-items: baseline; gap: 8px; }
+.time-line-name { min-width: 0; font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
+.time-line-project { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--label-2); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.time-figures { flex: none; margin-left: auto; font-size: 13.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.time-figures strong { font-weight: 600; }
+.time-raw { margin-right: 4px; color: var(--label-3); font-size: 12.5px; }
+
+.time-entries { margin: 3px 0 0; padding: 0; list-style: none; }
+.time-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 10px;
+  width: calc(100% + 12px);
+  margin: 0 -6px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.38;
+  text-align: left;
+}
+.time-when, .time-dur { color: var(--label-2); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.time-what { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.time-note { grid-column: 2 / -1; color: var(--label-3); font-size: 11.5px; overflow-wrap: anywhere; }
+.time-open { cursor: pointer; transition: background 120ms ease; }
+.time-open:hover { background: var(--fill-2); }
+.time-open:active { background: var(--fill); }
+.time-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Raise or Trim to: under the figure it brings the entries to. */
+.time-raise {
+  display: block;
+  margin: 6px 0 0 auto;
   padding: 4px 10px;
   border: 0;
   border-radius: 999px;
-  background: var(--fill-2);
-  color: var(--label);
-  font: inherit;
-  font-size: 12.5px;
-  cursor: pointer;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 120ms ease, transform 100ms ease-out;
 }
-.time-chip:not(:first-child)::before { content: ""; width: 8px; height: 8px; border-radius: 3px; background: var(--lane); }
-.time-chip span { color: var(--label-2); font-variant-numeric: tabular-nums; }
-.time-chip.on { box-shadow: inset 0 0 0 1.5px var(--accent); }
-.time-chip:active { transform: scale(0.97); }
-.time-days { display: flex; flex-direction: column; gap: 14px; touch-action: pan-y; will-change: transform; }
-.time-empty { margin: 8px 0; }
-.time-client-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 4px 0 6px; font-size: 13px; }
-.time-client-name { display: inline-flex; align-items: center; gap: 6px; }
-.time-client-name::before { content: ""; width: 10px; height: 10px; border-radius: 3px; background: var(--lane); }
-.time-figures { color: var(--label-2); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.time-figures strong { color: var(--label); }
-.time-line { margin: 0 0 8px; padding: 8px 10px; border-radius: 8px; background: var(--fill-2); }
-.time-line-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
-.time-line-name { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
-.time-rule { flex-basis: 100%; margin: 0; font-size: 11.5px; }
-.time-entries { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
-.time-entry { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; font-size: 12.5px; line-height: 1.4; }
-.time-when { grid-row: span 2; color: var(--label-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.time-what {
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow-wrap: anywhere;
-}
-.time-who { margin: 0; font-size: 11.5px; }
-.time-session { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
-.time-held { opacity: 0.7; }
-.time-total { display: flex; justify-content: space-between; margin: 0; font-weight: 600; }
+.time-raise:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.time-raise:active:not(:disabled) { transform: scale(0.97); }
+.time-raise:disabled { opacity: 0.5; }
+
+/* Held: in the list, counted nowhere, quieter than the rest. */
+.time-held .time-line-name, .time-held .time-what { color: var(--label-2); }
+.time-held .time-figures { color: var(--label-3); }
+
+.time-empty { margin: 4px 2px 16px; color: var(--label-2); font-size: 13px; }
+.time-zone { margin: 0 2px; color: var(--label-3); font-size: 11.5px; }
+.time-days { display: flex; flex-direction: column; touch-action: pan-y; will-change: transform; }
 
 /* A lane's day total, by its name: it opens the Time panel on that client and day. */
 .lane-time {
@@ -64,55 +157,201 @@
   font: inherit;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   cursor: pointer;
 }
 .lane-time:hover { color: var(--label); }
 .lane-time.problem { color: var(--red, #d33); box-shadow: inset 0 0 0 1px currentColor; }
 .lane-time:active { transform: scale(0.97); }
 
-/* The editor: an entry opened in place, its fields in two columns where there is room. */
-.time-open {
-  display: contents;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.time-editable { cursor: pointer; border-radius: 6px; }
-.time-editable:hover .time-what { color: var(--accent); }
+/* The editor: the row it opened from grown in place, ringed in the accent while it is open. */
+.time-editing { margin: 4px 0; }
 .time-editor {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin: 2px 0;
-  padding: 10px;
-  border-radius: 8px;
-  background: var(--bg, var(--fill-1));
-  box-shadow: inset 0 0 0 1px var(--separator, var(--fill-3));
-  animation: time-open 0.18s ease-out;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-card), 0 0 0 1.5px color-mix(in srgb, var(--accent) 50%, transparent);
+  transform-origin: top center;
+  animation: time-open 0.2s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
-@keyframes time-open { from { opacity: 0; transform: translateY(-4px); } }
-.time-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: 12px; color: var(--label-2); }
-.time-field input, .time-field select, .time-field textarea {
+.time-editing .time-editor { margin: 0 -6px; }
+@keyframes time-open { from { opacity: 0; transform: scale(0.98) translateY(-4px); } }
+.time-field-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.time-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   min-width: 0;
-  padding: 5px 7px;
-  border: 1px solid var(--separator, var(--fill-3));
-  border-radius: 6px;
-  background: var(--fill-1, transparent);
+  color: var(--label-2);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.time-field-row > .time-field { flex: 1 1 140px; }
+.time-field-row > .time-clock { flex: 1 1 104px; }
+.time-field-row > .time-duration { flex: 0 0 auto; }
+.time-field input, .time-field select, .time-field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--fill-2);
+  box-shadow: inset 0 0 0 0.5px var(--separator);
   color: var(--label);
   font: inherit;
-  font-size: 13px;
+  font-size: 13.5px;
+  font-weight: 400;
+  outline: none;
+  transition: box-shadow 120ms ease;
 }
-.time-field textarea { resize: vertical; }
-.time-field-row { display: flex; flex-wrap: wrap; gap: 8px; }
-.time-field-grow { flex: 1; }
-.time-steps { display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
-.time-steps strong { min-width: 3.2em; text-align: center; color: var(--label); }
-.time-delete { margin-left: auto; color: var(--red); }
-.time-raise { flex: none; padding: 2px 8px; font-size: 12px; }
-.time-add { display: flex; flex-direction: column; }
+.time-field textarea { height: auto; min-height: 54px; padding: 7px 9px; line-height: 1.4; resize: vertical; }
+.time-field input:focus, .time-field select:focus, .time-field textarea:focus {
+  box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.time-field :disabled { opacity: 0.6; }
+.time-steps {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--fill-2);
+  box-shadow: inset 0 0 0 0.5px var(--separator);
+}
+.time-steps button {
+  height: 100%;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  transition: background 120ms ease, transform 100ms ease-out;
+}
+.time-steps button:hover:not(:disabled) { background: var(--fill-2); }
+.time-steps button:active:not(:disabled) { transform: scale(0.94); }
+.time-steps button:disabled { opacity: 0.5; }
+/* The duration typed between its steps: the field and its steps one control, ringed as a field is. */
+.time-steps { transition: box-shadow 120ms ease; }
+.time-steps:focus-within { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.time-steps.bad { box-shadow: inset 0 0 0 1px var(--red); }
+.time-field .time-steps input {
+  width: 6.4em;
+  height: 100%;
+  padding: 0 2px;
+  background: none;
+  box-shadow: none;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.time-field .time-steps input:focus { box-shadow: none; }
+
+/* The tags: tokens in one field, the one being typed after them; the board's tags offered under it. */
+.time-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  min-height: 32px;
+  padding: 3px 4px;
+  border-radius: 8px;
+  background: var(--fill-2);
+  box-shadow: inset 0 0 0 0.5px var(--separator);
+  cursor: text;
+  transition: box-shadow 120ms ease;
+}
+.time-tags:focus-within { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.time-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  height: 24px;
+  padding: 0 2px 0 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--label);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.time-tag button {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--label-2);
+  font-size: 14px;
+  line-height: 1;
+}
+.time-tag button:hover:not(:disabled) { background: var(--fill); color: var(--label); }
+.time-field .time-tags input { flex: 1 1 40px; width: auto; height: 24px; padding: 0 4px; background: none; box-shadow: none; }
+.time-field .time-tags input:focus { box-shadow: none; }
+.time-tag-hints { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.time-tag-hint {
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--fill-2);
+  color: var(--label-2);
+  font-size: 12px;
+  font-weight: 500;
+  transition: background 120ms ease, color 120ms ease;
+}
+.time-tag-hint:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
+.time-warn { margin: 0; font-size: 12px; }
+.time-editor .access-problem { margin: 0; padding: 0; }
+.time-stale {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--orange) 14%, transparent);
+  color: var(--label);
+  font-size: 12.5px;
+}
+/* Changed elsewhere: said plainly, Reload the one thing to do. */
+.time-editor .time-stale { padding: 8px 10px; color: var(--label); }
+.time-stale span { flex: 1 1 200px; }
+.time-stale .button { background: var(--accent); color: #fff; }
+.time-by { margin: 0; color: var(--label-3); font-size: 11.5px; overflow-wrap: anywhere; }
+.time-session { padding: 0; border: 0; background: none; color: var(--label-2); font: inherit; font-weight: 600; cursor: pointer; }
+.time-session:hover { color: var(--accent); text-decoration: underline; }
+.time-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.time-actions .button:disabled { opacity: 0.5; }
+.time-delete { margin-right: auto; background: none; color: var(--red); }
+.time-delete:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 10%, transparent); }
+.time-actions .button:active:not(:disabled) { transform: scale(0.97); }
+
+/* A finger: rows and buttons the size of one. */
+@media (pointer: coarse) {
+  .time-row { padding-top: 7px; padding-bottom: 7px; }
+  .time-step, .time-today, .time-add-open, .time-actions .button { min-height: 36px; }
+  .time-step { width: 36px; }
+  .time-raise { padding: 7px 12px; }
+  .time-field input, .time-field select, .time-steps { height: 38px; }
+  .time-field input, .time-field select, .time-field textarea { font-size: 16px; }
+  .time-tags { min-height: 38px; }
+  .time-field .time-tags input, .time-tag { height: 30px; }
+  .time-tag button { width: 26px; height: 26px; }
+  .time-tag-hint { height: 30px; padding: 0 12px; }
+}
 
 @media (prefers-reduced-motion: reduce) {
-  .time-editor { animation: none; }
+  .time-editor { animation: time-fade 0.15s ease-out; }
   .time-days { transition: none !important; transform: none !important; }
 }
+@keyframes time-fade { from { opacity: 0; } }

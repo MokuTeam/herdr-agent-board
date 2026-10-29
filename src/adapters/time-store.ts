@@ -408,8 +408,9 @@ export function editEntry(
 }
 
 /**
- * A line rounded up raised to its billed figure: its last entry lengthened by the gap, the day read
- * under the write lock (an entry another process added to the line just before counts).
+ * A line billed over its time worked (rounded up, or to the nearest) raised to its billed figure:
+ * its last entry lengthened by the gap, the day read under the write lock (an entry another process
+ * added to the line just before counts).
  */
 export function raiseEntry(
   db: BoardDb,
@@ -428,7 +429,7 @@ export function raiseEntry(
       if (e.deleted) throw new TimeError('time.err.removed', { id })
       const day = clientDay(c, e.client, e.date, listEntries(db, { from: e.date, to: e.date, client: e.client }))
       const line = day.lines.find(l => l.entries.includes(id))
-      if (line?.round !== 'up' || line.entries.at(-1) !== id || line.billedSeconds <= line.seconds)
+      if (!line || line.entries.at(-1) !== id || line.billedSeconds <= line.seconds)
         throw new TimeError('time.err.noRaise')
       const stop = Date.parse(e.stop) + (line.billedSeconds - line.seconds) * 1000
       checkTimes(Date.parse(e.start), stop)
@@ -436,6 +437,78 @@ export function raiseEntry(
     },
     'raise',
   )
+}
+
+/**
+ * A line billed under its time worked (rounded down, or to the nearest) trimmed to its billed
+ * figure: the gap taken from its last entry, then the one before, each kept a minute at least; the
+ * day read under the write lock, as for a raise. Refused when the line cannot get there. `id` is
+ * the line's last entry, the one whose revision the change read; each entry it shortens goes up a
+ * revision, the one named given back.
+ */
+export function trimLine(
+  db: BoardDb,
+  c: TimeConfig,
+  id: string,
+  actor: Actor,
+  o: { force?: boolean; expect?: number } = {},
+): TimeEntry {
+  checkConfig(c)
+  return db.write(actorText(actor), tx => {
+    const e = getEntry(db, id)
+    if (!e) throw new TimeError('time.err.gone', { id })
+    mayChange(e, actor, !!o.force)
+    if (o.expect !== undefined && o.expect !== e.rev) throw new TimeError('time.err.changedSince', { id, rev: e.rev })
+    if (e.deleted) throw new TimeError('time.err.removed', { id })
+    const entries = listEntries(db, { from: e.date, to: e.date, client: e.client })
+    const line = clientDay(c, e.client, e.date, entries).lines.find(l => l.entries.includes(id))
+    if (!line || line.entries.at(-1) !== id || line.billedSeconds >= line.seconds)
+      throw new TimeError('time.err.noTrim')
+    const byId = new Map(entries.map(x => [x.id, x]))
+    const cuts: [TimeEntry, number][] = []
+    let gap = line.seconds - line.billedSeconds
+    for (const lid of [...line.entries].reverse()) {
+      const x = byId.get(lid)
+      if (!x || gap <= 0) continue
+      const take = Math.min(gap, secondsOf(x) - 60)
+      if (take <= 0) continue
+      cuts.push([x, take])
+      gap -= take
+    }
+    if (gap > 0) throw new TimeError('time.err.cannotTrim')
+    const now = Date.now()
+    let named = e
+    for (const [x, take] of cuts) {
+      mayChange(x, actor, !!o.force)
+      const saved = {
+        ...x,
+        stop: isoOf(Date.parse(x.stop) - take * 1000),
+        changed: now,
+        changedBy: actor,
+        rev: x.rev + 1,
+      }
+      try {
+        update(tx, saved)
+      } catch (err) {
+        if (unique(err)) throw new TimeError('time.err.sameAs', { id: x.id })
+        throw err
+      }
+      tx.journal({ store: 'time', op: 'trim', ref: x.id, before: x, after: saved })
+      if (x.id === id) named = saved
+    }
+    return named
+  })
+}
+
+/** The tags entries have, the most used first (live entries only): what the page offers to add. */
+export function usedTags(db: BoardDb, limit = 30): string[] {
+  const rows = db.db
+    .query(
+      `SELECT j.value AS tag, COUNT(*) AS n FROM time_entries, json_each(time_entries.tags) AS j
+       WHERE time_entries.deleted IS NULL GROUP BY j.value ORDER BY n DESC, j.value LIMIT ?`,
+    )
+    .all(limit) as { tag: unknown }[]
+  return rows.map(r => r.tag).filter((x): x is string => typeof x === 'string')
 }
 
 /** An entry to another work date: the same wall clock in the client's zone on that date, the same duration. */
