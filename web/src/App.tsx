@@ -46,6 +46,7 @@ import { useSettingsMenu } from './hooks/useSettingsMenu.ts'
 import { useSetupNote } from './hooks/useSetupNote.ts'
 import { useTerminal } from './hooks/useTerminal.ts'
 import { useTerminalKeys } from './hooks/useTerminalKeys.ts'
+import { useTodos } from './hooks/useTodos.ts'
 import { pageLayers } from './models/lifecycle.ts'
 import { remotePage } from './models/remote-page.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
@@ -89,6 +90,25 @@ export function App() {
     setAccess(true)
     setAccessMounted(true)
   }
+  // Settings → Backup… (#233), on the local board only: mounted at its first opening, as Remote access.
+  const [backup, setBackup] = useState(false)
+  const [backupMounted, setBackupMounted] = useState(false)
+  const openBackup = () => {
+    setBackup(true)
+    setBackupMounted(true)
+  }
+  // Settings → Time tracking… (#237), on the local board only: mounted at its first opening, as Backup.
+  const [timeSettings, setTimeSettings] = useState(false)
+  const [timeSettingsMounted, setTimeSettingsMounted] = useState(false)
+  const openTimeSettings = () => {
+    setTimeSettings(true)
+    setTimeSettingsMounted(true)
+  }
+  // Time (#233), while the board has it on: its panel, out of the toolbar's button or a lane's day total.
+  const [timeOpen, setTimeOpen] = useState(false)
+  const [timeClient, setTimeClient] = useState<string | null>(null)
+  // Tasks (#202), while the board has them on: their panel, out of the toolbar's button.
+  const [todosOpen, setTodosOpen] = useState(false)
   // The reminders' buttons, shared by the schedule panel and the sheet.
   const reminders = useSchedule()
   // Sessions off the board and back, the archive's panel; Retry on a session back from it is its Return again.
@@ -140,7 +160,11 @@ export function App() {
     () => setWake(true),
     openAccess,
     openMokupilot,
+    openBackup,
+    openTimeSettings,
   )
+  // Tasks' 📌 menu under an agent's message, and the panel's buttons.
+  const todos = useTodos(menus.menu)
   // The lanes control and the profile switch folded into pills: their choices as menus.
   const picks = useSegmentPicks(menus.menu)
   const terminalKeys = useTerminalKeys(menus)
@@ -191,10 +215,20 @@ export function App() {
           onWake={() => setWake(true)}
           settings={settings}
           picks={picks}
+          onTodos={() => setTodosOpen(!todosOpen)}
+          onBackup={remotePage() ? undefined : openBackup}
+          onTime={() => {
+            setTimeClient(null)
+            setTimeOpen(!timeOpen)
+          }}
         />
         <Board
           onNewSession={newSession}
           onLaneHead={openCategories}
+          onLaneTime={id => {
+            setTimeClient(id)
+            setTimeOpen(true)
+          }}
           roomBelow={panels.roomBelow}
           launch={launch.slots}
           takeovers={launch.takeovers}
@@ -209,7 +243,13 @@ export function App() {
         phones={{ open: phones, onClose: () => setPhones(false) }}
         {...(mokupilotMounted ? { mokupilot: { open: mokupilot, onClose: () => setMokupilot(false) } } : {})}
         {...(accessMounted && !remotePage() ? { access: { open: access, onClose: () => setAccess(false) } } : {})}
+        {...(backupMounted && !remotePage() ? { backup: { open: backup, onClose: () => setBackup(false) } } : {})}
+        {...(timeSettingsMounted && !remotePage()
+          ? { timeSettings: { open: timeSettings, onClose: () => setTimeSettings(false) } }
+          : {})}
         archive={archive}
+        todos={{ open: todosOpen, onClose: () => setTodosOpen(false), todos }}
+        time={{ open: timeOpen, onClose: () => setTimeOpen(false), client: timeClient, onClient: setTimeClient }}
         sheet={{
           onNewSession: newSession,
           schedule: {
@@ -233,6 +273,7 @@ export function App() {
           helpers,
           onArchive: key => void archive.archiveSession(key),
           onFork: fork.show,
+          onPin: todos.pin,
         }}
       />
       <LimitsPop anchor={limitsAnchor} />

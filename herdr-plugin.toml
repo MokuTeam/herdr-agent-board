@@ -5,7 +5,8 @@ min_herdr_version = "0.9.2"
 description = "Kanban of the Claude sessions in herdr: who works, who waits on you or on someone else, in lanes by category. Jump to a session or message it from the board."
 platforms = ["windows", "linux", "macos"]
 
-# Runs on `herdr plugin install` (not on `plugin link`): fetches react and react-dom.
+# Runs on `herdr plugin install` (not on `plugin link`): fetches react, react-dom and the quick
+# look's viewers' libraries (package.json).
 [[build]]
 command = ["bun", "install", "--production"]
 

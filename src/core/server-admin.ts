@@ -47,7 +47,8 @@ const PASSWORD_LOGIN = ['PreferredAuthentications=publickey,keyboard-interactive
  * answers it, adapters/ssh.ts).
  */
 export function adminSshArgs(o: {
-  conf: TunnelConfig
+  /** The server: the tunnel's, or the backup target's (core/backup.ts). */
+  conf: Pick<TunnelConfig, 'host' | 'sshPort'>
   admin: Admin
   knownHosts: string
   command: string

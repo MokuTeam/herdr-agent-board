@@ -119,6 +119,9 @@ describe('routes', () => {
       'styles/profiles.css',
       'styles/wake.css',
       'styles/mokupilot.css',
+      'styles/backup.css',
+      'styles/time.css',
+      'styles/todos.css',
       'styles/workspaces.css',
       'styles/fold.css',
       'styles/session-head.css',
@@ -133,6 +136,7 @@ describe('routes', () => {
       'styles/motion.css',
       'styles/errors.css',
       'styles/messages.css',
+      'styles/viewers.css',
       'styles/look-terminal.css',
       'app.js',
     ])

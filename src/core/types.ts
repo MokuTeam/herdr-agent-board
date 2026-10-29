@@ -4,6 +4,7 @@ import type { FormQuestion } from './dialogs/question-form.ts'
 import type { HelperSummary } from './helpers.ts'
 import type { FailureKind } from './launch/launcher-command.ts'
 import type { ItemLinks } from './links.ts'
+import type { Todo } from './todos.ts'
 
 export type Lang = 'en' | 'ru'
 export type Vars = Record<string, string | number>
@@ -56,6 +57,8 @@ export interface Card {
    * the board marked to hear it on its next prompt; absent where presence was never on.
    */
   presenceSeen?: number
+  /** Its tasks (#202, core/todos.ts): the user's pins and the agent's `board todo`; absent when none. */
+  todos?: Todo[]
   [extra: string]: unknown
 }
 
@@ -179,6 +182,12 @@ export interface Config {
   look?: unknown
   /** The user's presence (`true` or an object), as config.json has it: read through core/presence.ts presenceConfig. */
   presence?: unknown
+  /** Tasks (#202, `true` or an object), as config.json has it: read through core/todos.ts todosConfig. */
+  todos?: unknown
+  /** The backup of the board's database (#233), as config.json has it: read through core/backup.ts backupConfig. */
+  backup?: unknown
+  /** Time tracking (#233), as config.json has it: read through core/time.ts timeConfig. */
+  time?: unknown
   [extra: string]: unknown
 }
 
@@ -276,5 +285,7 @@ export interface Item {
   profileWanted?: string
   /** The Claude folder its records were read from (server only). */
   claudeRoot?: string | null
+  /** Its tasks from its card (#202), while config.json turns them on; absent when none. */
+  todos?: Todo[]
   [extra: string]: unknown
 }

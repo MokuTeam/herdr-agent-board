@@ -62,10 +62,29 @@ test("what acts on this computer's screen is not for a phone", () => {
     expect(desktopOnly(path)).toBe(false)
 })
 
-test("the remote mode's, Remote access's and wake's management are for the board on this computer only", () => {
-  for (const path of ['/api/remote', '/api/remote/x', '/api/access', '/api/access/x', '/api/wake', '/api/wake/x'])
+test("the remote mode's, Remote access's, wake's, the backup's and Settings → Time's management are for the board on this computer only", () => {
+  for (const path of [
+    '/api/remote',
+    '/api/remote/x',
+    '/api/access',
+    '/api/access/x',
+    '/api/wake',
+    '/api/wake/x',
+    '/api/backup',
+    '/api/backup/x',
+    '/api/time-settings',
+  ])
     expect(localOnly(path)).toBe(true)
-  for (const path of ['/api/accessories', '/api/remotes', '/api/wakes', '/api/session/s1/wake', '/api/probe/x'])
+  for (const path of [
+    '/api/accessories',
+    '/api/remotes',
+    '/api/wakes',
+    '/api/session/s1/wake',
+    '/api/probe/x',
+    '/api/backups',
+    // the Time panel's entries go through the remote page and a paired phone too
+    '/api/time',
+  ])
     expect(localOnly(path)).toBe(false)
   expect(localOnly('/api/login/password')).toBe(false)
 })

@@ -1,7 +1,8 @@
 // The page: top-level files of web/ and its styles/ by name, app.js with its source map (and
 // theme.js, the viewer's light or dark before the page paints) from the in-memory bundle of the
-// React page (web-bundle.ts). Last in the table: any GET no other route took. `html` changes the
-// page as it goes out: the board for a phone's browser (core/pwa.ts).
+// React page (web-bundle.ts), with the quick look's viewers and what they load (`dirs`: a
+// package's folders, server/viewers.ts). Last in the table: any GET no other route took. `html`
+// changes the page as it goes out: the board for a phone's browser (core/pwa.ts).
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { extname, join } from 'node:path'
@@ -16,6 +17,12 @@ const TYPES: Record<string, string> = {
   '.png': 'image/png',
   '.webmanifest': 'application/manifest+json',
   '.map': 'application/json; charset=utf-8',
+  // What the PDF viewer's worker loads as a PDF needs it: decoders, character maps, fonts, colors.
+  '.wasm': 'application/wasm',
+  '.bcmap': 'application/octet-stream',
+  '.pfb': 'application/octet-stream',
+  '.ttf': 'font/ttf',
+  '.icc': 'application/vnd.iccprofile',
 }
 
 // The page's scripts and styles come from here only (inline style attributes are used for colors).
@@ -25,7 +32,7 @@ const PAGE_CSP =
 // Text goes out compressed when the browser takes it: app.js is a megabyte, and a phone's link is
 // slow. Each file's compressed copy is kept until the file changes, so a build is compressed once,
 // by the first request that asks for it, not by every request.
-const TEXT = new Set(['.html', '.js', '.css', '.svg', '.webmanifest', '.map'])
+const TEXT = new Set(['.html', '.js', '.css', '.svg', '.webmanifest', '.map', '.wasm'])
 type Encoding = 'br' | 'gzip'
 type Body = string | Buffer<ArrayBuffer>
 // Brotli's quality 5: a tenth smaller than gzip in as little time; its best takes seconds.
@@ -57,10 +64,33 @@ export function matchesTag(ifNoneMatch: string | null, etag: string): boolean {
 
 const same = (a: Body, b: Body): boolean => a === b || (typeof a !== 'string' && typeof b !== 'string' && a.equals(b))
 
+/** A file in one of `dirs` (served folder, two deep, to the folder it is in), or null. */
+function inDirs(name: string, dirs: Record<string, string>): string | null {
+  const m = /^([\w-]+\/[\w-]+)\/([\w-][\w.-]*)$/.exec(name)
+  const dir = m && Object.hasOwn(dirs, m[1] as string) ? dirs[m[1] as string] : undefined
+  return dir && m ? join(dir, m[2] as string) : null
+}
+
+/**
+ * What the viewers add (server/viewers.ts): a package's folders by served name (`dirs`), and the
+ * policy a worker script runs under (`policies`, by its name): a worker runs under its own
+ * response's CSP, not the page's.
+ */
+export interface StaticExtras {
+  dirs?: Record<string, string>
+  policies?: Record<string, string>
+}
+
 export function staticRoute(
   web: string,
-  bundle: { js(): string; map(): string; early(): string },
+  bundle: {
+    js(): string
+    map(): string
+    early(): string
+    file?(name: string): string | Buffer<ArrayBuffer> | undefined
+  },
   html?: (page: string) => string,
+  { dirs = {}, policies = {} }: StaticExtras = {},
 ): Route {
   type Kept = { body: Body; hash: string } & Partial<Record<Encoding, Buffer<ArrayBuffer>>>
   const kept = new Map<string, Kept>()
@@ -86,7 +116,9 @@ export function staticRoute(
       const name = path === '/' ? 'index.html' : path.slice(1)
       const type = TYPES[extname(name)]
       // One folder deep at most, and only styles/: nothing else under web/ (web/src) is served.
-      if (!/^(styles\/)?[\w.-]+$/.test(name) || !type) return json(404, { error: 'not found' })
+      // Two deep only for a package's folder in `dirs`.
+      const packaged = inDirs(name, dirs)
+      if ((!packaged && !/^(styles\/)?[\w.-]+$/.test(name)) || !type) return json(404, { error: 'not found' })
       const file =
         name === 'app.js'
           ? bundle.js()
@@ -94,7 +126,7 @@ export function staticRoute(
             ? bundle.map()
             : name === 'theme.js'
               ? bundle.early()
-              : await readFile(join(web, name)).catch(() => null)
+              : (bundle.file?.(name) ?? (await readFile(packaged ?? join(web, name)).catch(() => null)))
       if (!file) return json(404, { error: 'not found' })
       const body = html && name.endsWith('.html') ? html(file.toString()) : file
       const text = TEXT.has(extname(name))
@@ -117,6 +149,7 @@ export function staticRoute(
           ...headers,
           'x-content-type-options': 'nosniff',
           ...(name.endsWith('.html') ? { 'content-security-policy': PAGE_CSP } : {}),
+          ...(Object.hasOwn(policies, name) ? { 'content-security-policy': policies[name] as string } : {}),
           ...(encoding ? { 'content-encoding': encoding } : {}),
         },
       })

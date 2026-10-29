@@ -19,6 +19,7 @@ import { noticeLine } from '../../models/notice.ts'
 import { clockText } from '../../models/sheet.ts'
 import { reducedMotion } from '../../models/spring.ts'
 import { type AskTurn, askState, type ThreadPart, threadParts, uploadThumbs } from '../../models/thread.ts'
+import { pinnedCount } from '../../models/todos.ts'
 import { classNames } from '../class-names.ts'
 import {
   AlarmGlyph,
@@ -28,6 +29,7 @@ import {
   ClockGlyph,
   CrossGlyph,
   PhoneGlyph,
+  PinGlyph,
   SpinGlyph,
   StopGlyph,
 } from '../icons.tsx'
@@ -116,11 +118,26 @@ function ThreadTurn({ part, item, links, helper }: TurnProps) {
   if (part.kind === 'notice') return <Notice turn={part.turn} links={links} />
   if (part.kind === 'message') {
     const { role, text, at, cut } = part.turn
+    const turn = part.turn
+    const pinned = turn.role === 'assistant' && links.onPin ? pinnedCount(links.todos, turn) : 0
     return (
       <div className={`msg ${role}`}>
         <MessageText text={text} cut={cut} onResize={links.onResize} />
         <Thumbs text={text} />
         <span className="when">{clockText(at, t)}</span>
+        {turn.role === 'assistant' && links.onPin && (
+          <button
+            type="button"
+            className={classNames('msg-pin', pinned > 0 && 'on')}
+            title={t(pinned ? 'todo.pinned' : 'todo.pin')}
+            aria-label={t('todo.pin')}
+            aria-haspopup="menu"
+            onClick={e => links.onPin?.(turn, e.currentTarget)}
+          >
+            <PinGlyph />
+            {pinned > 0 && <span className="n">{pinned}</span>}
+          </button>
+        )}
       </div>
     )
   }

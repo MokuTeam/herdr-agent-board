@@ -27,6 +27,7 @@
 // free, then has herdr-wake put it to sleep, and that is all: no wake, no note. It waits as long as
 // a reminder does (`scheduleWaitMin`); herdr-wake refusing is tried RESTART_TRIES times, then the
 // log says it did not happen. Asleep by other means meanwhile (the reaper, the user), it is done.
+// One with `moveTo` (`board move --when-free`, #250) then moves the session to that profile.
 //
 // A run for a sleeping session waits for wake while wake is slow to answer (it may be waking that
 // session), or while the board's own wake of one from wake's session file cannot reach herdr
@@ -53,6 +54,7 @@ import { type ActionResult, checkWake, readyToSleep, send, sleepSession, wake } 
 import { closeDue, listArchive } from './archive.ts'
 import { collect } from './board.ts'
 import type { Deps } from './deps.ts'
+import { moveAsleep, moveTarget } from './move.ts'
 import { currentWakeMode } from './wake/mode.ts'
 
 // A run on its way (waking a session takes up to three minutes) holds its claim this long.
@@ -313,7 +315,7 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
     // Only the session it was asked for: targetOf does not follow a sleep to another one in its pane.
     if (!item) return wait(entry, now, 'gone', true)
     if (item.sleeping) {
-      if (claim(entry.id, now)) sent(entry)
+      if (claim(entry.id, now)) await moved(entry, item, false)
       return
     }
     const ready = await readyToSleep(deps, item)
@@ -321,7 +323,25 @@ export function startScheduler({ deps, onChange = () => {} }: { deps: Deps; onCh
     if (!claim(entry.id, now)) return
     // herdr's status as just read, not the tick's: a turn that ended meanwhile is not "working".
     const asleep = await sleepSession(deps, { ...item, status: ready.status }).finally(() => deps.wake.forget())
-    return asleep.ok ? sent(entry) : retry(entry, asleep.error)
+    return asleep.ok ? moved(entry, { ...item, sleeping: true }, true) : retry(entry, asleep.error)
+  }
+
+  /**
+   * A sleep done. One that is a move (`moveTo`, `board move --when-free`, #250): the session,
+   * asleep now, moved to that profile (services/move.ts), and woken again when it was awake; the
+   * log says how the move went. A move refused leaves it asleep, in the profile it was in.
+   */
+  async function moved(entry: ScheduleEntry, item: Item, wasAwake: boolean): Promise<void> {
+    const id = typeof entry.moveTo === 'string' ? entry.moveTo : ''
+    if (!id) return sent(entry)
+    const to = moveTarget(deps, id)
+    const r =
+      'error' in to
+        ? { ok: false as const, error: to.error }
+        : await moveAsleep(deps, item, to.profile, { wakeAfter: wasAwake })
+    if (r.ok) return sent(entry, 'sent', `moved to ${id}${r.notes.length ? `: ${r.notes.join(', ')}` : ''}`)
+    removeEntry(entry.id)
+    logRun(record(entry, Date.now(), 'failed', cleanText(`not moved to ${id}: ${r.error}`, 300)))
   }
 
   /**

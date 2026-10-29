@@ -9,13 +9,17 @@
 // While the payload carries wake's state line, Sleep and wake… opens its panel (components/wake).
 // MokuPilot… opens where a call starts (components/mokupilot), on every board's page (offersMokupilot).
 // On the local board, Remote access… opens the board-through-your-domain panel
-// (components/access/AccessPanel.tsx).
+// (components/access/AccessPanel.tsx), Backup… the backup of the board's database (#233,
+// components/backup/BackupPanel.tsx), and Time tracking… its clients and projects (#237,
+// components/time/TimeSettingsPanel.tsx).
 // How sessions asleep in "Waiting" fold is the board's, for every board (src/core/fold-mode.ts).
 // On a page signed in through the owner's domain, Sign out ends this browser's own login (Call 15).
+// Tasks (#202, src/core/todos.ts) are the board's: Off, the user's pins only, or agents too.
 // Presence (#172, src/core/presence.ts) is the board's: Off, or on with how it notices the user
 // went away (by itself, only an offer, by hand only), and after how many idle minutes.
 import { FOLD_MODES, type FoldMode, isFoldMode } from '../../../src/core/fold-mode.ts'
 import { isPresenceMode, PRESENCE_MODES, type PresenceMode } from '../../../src/core/presence.ts'
+import { isTodoMode, TODO_MODES, type TodoMode } from '../../../src/core/todos.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import { CARD_TEXTS, type CardText, isCardText } from './card-text.ts'
 import { isLook, LOOKS } from './look.ts'
@@ -50,12 +54,18 @@ export interface SettingsNow {
   mokupilot?: boolean
   /** The local board's page (not one through Tailscale or the domain): Remote access… is offered. */
   access?: boolean
+  /** The local board's page: Backup… is offered (#233). */
+  backup?: boolean
+  /** The local board's page: Time tracking… is offered (#237). */
+  timeSettings?: boolean
   /** This page signed in through the owner's domain: Sign out is offered, last. */
   signOut?: boolean
   /** Presence as the board has it ('none': not on); none given: no Presence item (an older board). */
   presence?: PresenceMode | 'none' | undefined
   /** Presence's idle minutes, while it is on. */
   idleMinutes?: number | undefined
+  /** Tasks as the board has them (#202, 'none': off); none given: no Tasks item (an older board). */
+  todos?: TodoMode | undefined
 }
 
 /** The idle minutes Settings → Presence offers; config.json may hold any other. */
@@ -142,11 +152,27 @@ export function settingsMenu(now: SettingsNow): MenuEntry[] {
       ],
     },
     ...presenceItem(now, edit),
+    ...(now.todos
+      ? [
+          {
+            id: 'todos',
+            label: t('set.todos'),
+            ...edit,
+            submenu: TODO_MODES.map(id => ({
+              id: `todos:${id}`,
+              label: t(`set.todos.${id}`),
+              checked: now.todos === id,
+            })),
+          },
+        ]
+      : []),
     ...(now.profiles ? [{ id: 'profiles', label: t('set.profiles') }] : []),
     ...(now.wake ? [{ id: 'wake', label: t('set.wake') }] : []),
     ...(now.phones ? [{ id: 'phones', label: t('set.phones') }] : []),
     ...(now.mokupilot ? [{ id: 'mokupilot', label: t('set.mokupilot') }] : []),
     ...(now.access ? [{ id: 'access', label: t('set.access') }] : []),
+    ...(now.backup ? [{ id: 'backup', label: t('set.backup') }] : []),
+    ...(now.timeSettings ? [{ id: 'timeSettings', label: t('set.time') }] : []),
     { separator: true },
     { id: 'sleepers', label: t('tb.sleepersTitle'), checked: now.sleepers },
     ...(now.fold
@@ -178,9 +204,12 @@ export type SettingPick =
   | { kind: 'phones' }
   | { kind: 'mokupilot' }
   | { kind: 'access' }
+  | { kind: 'backup' }
+  | { kind: 'timeSettings' }
   | { kind: 'signout' }
   | { kind: 'presence'; value: PresenceMode | 'none' }
   | { kind: 'presenceIdle'; value: number }
+  | { kind: 'todos'; value: TodoMode }
   | null
 
 /**
@@ -203,8 +232,11 @@ export function settingPicked(id: string): SettingPick {
   if (id === 'phones') return { kind: 'phones' }
   if (id === 'mokupilot') return { kind: 'mokupilot' }
   if (id === 'access') return { kind: 'access' }
+  if (id === 'backup') return { kind: 'backup' }
+  if (id === 'timeSettings') return { kind: 'timeSettings' }
   if (id === 'signout') return { kind: 'signout' }
   if (kind === 'presence' && (value === 'none' || isPresenceMode(value))) return { kind, value }
   if (kind === 'presenceIdle' && /^\d+$/.test(value)) return { kind, value: Number(value) }
+  if (kind === 'todos' && isTodoMode(value)) return { kind, value }
   return null
 }

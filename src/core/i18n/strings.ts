@@ -8,6 +8,7 @@ import type { Lang } from '../types.ts'
 import { ACCESS_STRINGS } from './access-strings.ts'
 import { ARCHIVE_STRINGS } from './archive-strings.ts'
 import { ASIDE_STRINGS } from './aside-strings.ts'
+import { BACKUP_STRINGS } from './backup-strings.ts'
 import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
@@ -18,6 +19,8 @@ import { REMOTE_STRINGS } from './remote-strings.ts'
 import { SERVER_STRINGS } from './server-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
+import { TIME_STRINGS } from './time-strings.ts'
+import { TODO_STRINGS } from './todo-strings.ts'
 import { WAKE_STRINGS } from './wake-strings.ts'
 
 export type Entry = string | string[]
@@ -278,6 +281,10 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'err.cat.other': '{title} is the fallback lane and stays',
     'err.language': 'Unknown language {lang}',
     'err.foldWaiting': 'Unknown way to fold {mode}',
+    'err.configUnreadable':
+      'config.json does not read as JSON (a comma too many, say): fix it by hand first. Nothing was changed.',
+    'err.configBusy':
+      'config.json is being changed by another process, or one stopped while changing it: try again in a moment (a lock left behind goes after 30 seconds).',
     'err.fs.missing': 'Not found: {path}',
     'err.fs.open': 'Could not open it: {why}',
 
@@ -297,6 +304,13 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'ql.firstItems': 'the first {n} shown',
     'ql.lines': ['{n} line', '{n} lines'],
     'ql.rows': ['{n} row', '{n} rows'],
+    'ql.pages': ['{n} page', '{n} pages'],
+    'ql.pageOf': '{n} of {total}',
+    'ql.pdfPassword': 'This PDF is password protected: open it to read it',
+    'ql.pdfBroken': 'This PDF cannot be shown here',
+    'ql.fileLocked': 'This file is password protected: open it to read it',
+    'ql.fileBroken': 'This file cannot be shown here',
+    'ql.tooBig': 'Too big to show here: open it to see it',
     'ql.truncated': 'the start only, open it for the rest',
     'ql.modified': 'modified {date}',
     'ql.fit': 'Fit',
@@ -592,6 +606,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sched.prompt.late': '{late} late, due {due}',
     'sched.prompt.cleared': 'set by {name} before /clear',
     'sched.prompt.clearedFor': 'set for {name} before /clear',
+    'sched.prompt.message': 'SendMessage from profile {profile}, answer with SendMessage to {name}',
+    'sched.prompt.messageNoReply': 'SendMessage from profile {profile}, no reply path',
     'sched.prompt.restarted': 'restarted as you asked',
     'sched.prompt.restartedOther': 'restarted',
     'sched.prompt.restartedUser': 'restarted by the user',
@@ -907,6 +923,10 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'err.cat.other': '{title} нужна как запасная дорожка',
     'err.language': 'Нет языка {lang}',
     'err.foldWaiting': 'Нет такого способа сворачивать: {mode}',
+    'err.configUnreadable':
+      'config.json не читается как JSON (например, лишняя запятая): сначала поправьте его вручную. Ничего не изменено.',
+    'err.configBusy':
+      'config.json сейчас меняет другой процесс, или он остановился посреди изменения: попробуйте чуть позже (оставленная блокировка снимается через 30 секунд).',
     'err.fs.missing': 'Не найдено: {path}',
     'err.fs.open': 'Не открылось: {why}',
 
@@ -925,6 +945,13 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'ql.firstItems': 'показаны первые {n}',
     'ql.lines': ['{n} строка', '{n} строки', '{n} строк'],
     'ql.rows': ['{n} запись', '{n} записи', '{n} записей'],
+    'ql.pages': ['{n} страница', '{n} страницы', '{n} страниц'],
+    'ql.pageOf': '{n} из {total}',
+    'ql.pdfPassword': 'PDF защищён паролем: откройте его, чтобы прочитать',
+    'ql.pdfBroken': 'Этот PDF здесь не показать',
+    'ql.fileLocked': 'Файл защищён паролем: откройте его, чтобы прочитать',
+    'ql.fileBroken': 'Этот файл здесь не показать',
+    'ql.tooBig': 'Слишком большой для просмотра: откройте его, чтобы посмотреть',
     'ql.truncated': 'показано только начало, остальное в «Открыть»',
     'ql.modified': 'изменён {date}',
     'ql.fit': 'Вписать',
@@ -1218,6 +1245,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sched.prompt.late': 'опоздание {late}, срок был {due}',
     'sched.prompt.cleared': 'поставлено сессией {name} до /clear',
     'sched.prompt.clearedFor': 'поставлено для {name} до /clear',
+    'sched.prompt.message': 'SendMessage из профиля {profile}, ответ: SendMessage для {name}',
+    'sched.prompt.messageNoReply': 'SendMessage из профиля {profile}, ответить этим путём нельзя',
     'sched.prompt.restarted': 'перезапущена по твоей просьбе',
     'sched.prompt.restartedOther': 'перезапущена',
     'sched.prompt.restartedUser': 'перезапущена пользователем',
@@ -1303,6 +1332,12 @@ for (const code of Object.keys(FORK_STRINGS) as Lang[]) Object.assign(STRINGS[co
 for (const code of Object.keys(ASIDE_STRINGS) as Lang[]) Object.assign(STRINGS[code], ASIDE_STRINGS[code])
 // And the user's presence (#172).
 for (const code of Object.keys(PRESENCE_STRINGS) as Lang[]) Object.assign(STRINGS[code], PRESENCE_STRINGS[code])
+// And tasks (#202).
+for (const code of Object.keys(TODO_STRINGS) as Lang[]) Object.assign(STRINGS[code], TODO_STRINGS[code])
+// And the board's database and its backup (#233).
+for (const code of Object.keys(BACKUP_STRINGS) as Lang[]) Object.assign(STRINGS[code], BACKUP_STRINGS[code])
+// And time tracking on it (#233).
+for (const code of Object.keys(TIME_STRINGS) as Lang[]) Object.assign(STRINGS[code], TIME_STRINGS[code])
 // And the board through the owner's own domain: the tunnel and its login.
 for (const code of Object.keys(ACCESS_STRINGS) as Lang[]) Object.assign(STRINGS[code], ACCESS_STRINGS[code])
 // And setting up the server's web server from the board.

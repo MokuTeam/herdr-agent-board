@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import type { FoldMode } from '../../../src/core/fold-mode.ts'
 import { LANGUAGES, translator } from '../../../src/core/i18n/translator.ts'
 import type { PresenceMode } from '../../../src/core/presence.ts'
+import { type TodoMode, todoModeOf } from '../../../src/core/todos.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import { ApiError, api, errorText, isReply, postJson, replyOf } from '../api/client.ts'
 import type { MenuEngine, MenuSource } from '../components/menu/menu-engine.ts'
@@ -69,6 +70,12 @@ export interface SettingsDeps {
   /** The local board's page (not one through Tailscale or the domain): Remote access… is offered. */
   access?(): boolean
   openAccess?(): void
+  /** The local board's page: Backup… is offered (#233). */
+  backup?(): boolean
+  openBackup?(): void
+  /** The local board's page: Time tracking… is offered (#237). */
+  timeSettings?(): boolean
+  openTimeSettings?(): void
   /** This page signed in through the owner's domain: Sign out is offered. */
   signOut?(): boolean
   endLogin?(): void
@@ -76,6 +83,9 @@ export interface SettingsDeps {
   presence?(): PresenceMode | 'none' | undefined
   idleMinutes?(): number | undefined
   choosePresence?(body: PresenceSetting): void
+  /** Tasks as the board has them (#202, 'none': off); none: no Tasks item. */
+  todos?(): TodoMode | undefined
+  chooseTodos?(mode: TodoMode): void
 }
 
 /** What Settings → Presence asks the board for (POST /api/presence { op: 'settings', … }). */
@@ -101,9 +111,12 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
       phones: deps.phones?.() ?? false,
       mokupilot: deps.mokupilot?.() ?? false,
       access: deps.access?.() ?? false,
+      backup: deps.backup?.() ?? false,
+      timeSettings: deps.timeSettings?.() ?? false,
       signOut: deps.signOut?.() ?? false,
       presence: deps.presence?.(),
       idleMinutes: deps.idleMinutes?.(),
+      todos: deps.todos?.(),
     })
     const source: MenuSource = keyboard ? 'keyboard' : deps.coarse() ? 'touch' : 'mouse'
     deps.menu.open(items, {
@@ -127,10 +140,13 @@ export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyb
         else if (pick?.kind === 'phones') deps.openPhones?.()
         else if (pick?.kind === 'mokupilot') deps.openMokupilot?.()
         else if (pick?.kind === 'access') deps.openAccess?.()
+        else if (pick?.kind === 'backup') deps.openBackup?.()
+        else if (pick?.kind === 'timeSettings') deps.openTimeSettings?.()
         else if (pick?.kind === 'signout') deps.endLogin?.()
         else if (pick?.kind === 'presence')
           deps.choosePresence?.(pick.value === 'none' ? { on: false } : { on: true, mode: pick.value })
         else if (pick?.kind === 'presenceIdle') deps.choosePresence?.({ on: true, idleMinutes: pick.value })
+        else if (pick?.kind === 'todos') deps.chooseTodos?.(pick.value)
       },
     })
   }
@@ -263,7 +279,8 @@ const crossFade = (): ((apply: () => void) => unknown) | undefined =>
 /**
  * Settings for the page: `menu` is the board's one menu (hooks/useContextMenus.ts);
  * `openProfiles` opens the Profiles panel, `openPhones` the Phones panel, `openWake` Sleep and wake,
- * `openAccess` the Remote access panel, `openMokupilot` the MokuPilot panel.
+ * `openAccess` the Remote access panel, `openMokupilot` the MokuPilot panel, `openBackup` the Backup panel,
+ * `openTimeSettings` Time tracking's.
  */
 export function useSettingsMenu(
   menu: MenuEngine,
@@ -272,11 +289,24 @@ export function useSettingsMenu(
   openWake: () => void = () => {},
   openAccess: () => void = () => {},
   openMokupilot: () => void = () => {},
+  openBackup: () => void = () => {},
+  openTimeSettings: () => void = () => {},
 ): SettingsMenu {
   const { t, choose } = useLanguage()
   const board = useBoardContext()
   const place = usePanelPlace()
-  const latest = useLatest({ t, choose, board, openProfiles, openPhones, openWake, openAccess, openMokupilot })
+  const latest = useLatest({
+    t,
+    choose,
+    board,
+    openProfiles,
+    openPhones,
+    openWake,
+    openAccess,
+    openMokupilot,
+    openBackup,
+    openTimeSettings,
+  })
   const [expanded, setExpanded] = useState(false)
   const [gear] = useState(() => {
     const open = settingsMenuFrom({
@@ -345,6 +375,10 @@ export function useSettingsMenu(
       openMokupilot: () => latest.current.openMokupilot(),
       access: () => !remotePage(),
       openAccess: () => latest.current.openAccess(),
+      backup: () => !remotePage(),
+      openBackup: () => latest.current.openBackup(),
+      timeSettings: () => !remotePage(),
+      openTimeSettings: () => latest.current.openTimeSettings(),
       signOut: () => remotePage() && keptAuth() === 'login',
       endLogin: () => {
         const { t, board } = latest.current
@@ -364,6 +398,16 @@ export function useSettingsMenu(
           save: b => api.post('/api/presence', b),
           toast: board.toast,
         })
+      },
+      // No `todos` in the board's payload: tasks are off.
+      todos: () => {
+        const data = latest.current.board.data
+        return data ? todoModeOf(data.todos ?? null) : undefined
+      },
+      chooseTodos: mode => {
+        const { t, board } = latest.current
+        if (!board.canEdit) return board.toast(t('live.off'), true)
+        api.post('/api/todos', { op: 'settings', mode }).catch(err => board.toast(errorText(err, t), true))
       },
     })
     return settingsGear(menu, open, setExpanded)
