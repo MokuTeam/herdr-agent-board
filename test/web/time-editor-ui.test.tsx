@@ -571,3 +571,24 @@ test('a change saved in part, left and opened again: its draft against the entry
   mounted.delete(root)
   act(() => root.unmount())
 }, 90_000)
+
+test('a new entry’s draft whose date field says another day comes back on the day it was typed on', async () => {
+  const s = await setup()
+  await three(s)
+  const root = await mount(1)
+  await click(addButton())
+  await setValue(q('.time-add textarea'), 'Case 30001 N: for another date')
+  const other = new Date(Date.parse(`${DAY}T12:00:00Z`) - 86_400_000).toISOString().slice(0, 10)
+  await setValue(q('.time-add input[type=date]'), other)
+  await click(q('button[aria-label="Previous day"]'))
+  await settle(300)
+  await click(q('button[aria-label="Next day"]'))
+  await settle(300)
+  await click(addButton())
+  expect([q('.time-add textarea').value, q('.time-add input[type=date]').value]).toEqual([
+    'Case 30001 N: for another date',
+    other,
+  ])
+  mounted.delete(root)
+  act(() => root.unmount())
+}, 90_000)

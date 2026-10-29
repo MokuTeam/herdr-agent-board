@@ -273,10 +273,11 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   const newOne = (() => {
     const first = clientsForNew[0] as string
     const fresh = newDraft(first, projectsOf(first)?.[0] ?? '', date)
-    // kept for its day, and only when the form offers its client now (under another client's chip
+    // kept by the panel's day, and only when the form offers its client now (under another client's chip
     // it waits, untouched, for the chip that shows it)
     const was = kept.current.get(`new:${date}`)?.draft
-    return { fresh, kept: was && was.day === date && clientsForNew.includes(was.client) ? was : null }
+    // its key is the panel's day it was typed on; its own date field may say another day
+    return { fresh, kept: was && clientsForNew.includes(was.client) ? was : null }
   })()
   /** The editor of an entry as it was opened; `now` is the entry as the day reads it now. */
   const editorFor = ({ base, reload, draft }: Open, now: Entry) => (
