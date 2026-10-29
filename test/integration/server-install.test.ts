@@ -15,8 +15,10 @@
 // sites (case 3a): the board added and their sites answering all along. Beside the tunnel (the
 // owner's server, case 3a): the tunnel's setup first by its one command, the tunnel up by its own
 // ssh line to a stand-in on this PC, then the board on another domain; both domains answer, their
-// sites and the tunnel's domain all along; the board's Undo leaves the tunnel answering and its
-// record as it was, then the tunnel's Undo leaves their Caddyfile as it was before either.
+// sites and the tunnel's domain all along; the local board's card reads the install there (the
+// round as root that only reads), and its Remove (path B's remover, the pack on its stdin) leaves the
+// tunnel answering and its record as it was; then the tunnel's Undo leaves their Caddyfile as it
+// was before either.
 //
 // Long (the installers download Bun, herdr, Claude Code and Docker's images; a flaky internet is
 // tried again, BOARD_INSTALL_TRIES): BOARD_SERVER_IT=1 bun test test/integration/server-install.test.ts
@@ -24,9 +26,11 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { boardPack } from '../../src/adapters/board-pack.ts'
 import { ROOT } from '../../src/adapters/paths.ts'
 import { protectKey } from '../../src/adapters/ssh.ts'
-import { BOARD_SOCKET, BOARD_USER_COMMENT } from '../../src/core/server-install.ts'
+import { boardFactsScript, readBoardFacts } from '../../src/core/server-board.ts'
+import { BOARD_SOCKET, BOARD_USER_COMMENT, removerScript } from '../../src/core/server-install.ts'
 import { oneshotScripts } from '../../src/core/server-oneshot.ts'
 import type { Wanted } from '../../src/core/server-plan.ts'
 import { FENCE_FILE } from '../../src/core/server-texts.ts'
@@ -594,9 +598,25 @@ describe.skipIf(!DOCKER)('the board on a server of the owner’s (path A from th
           expect(await tunnelAnswers(l, s)).toBe(true)
           for (const host of sites) expect((await fromClient(l, s, host, '/', true)).body).toContain(`site ${host[0]}`)
 
-          // Undo of the board on the server: the tunnel's domain answering, its record and helper as they were
-          const undo = await onTty(s, `sh ${SCRIPT} --undo`, { answers: ANSWERS, timeoutMs: 20 * MIN })
+          // what the local board's card reads of it: the version, its user with the mark, herdr's service
+          const facts = readBoardFacts((await s.exec(['sh', '-c', boardFactsScript()])).stdout)
+          expect(facts?.record).toMatchObject({ domain: WORKBENCH, user: 'agent', source: { kind: 'git', ref: REF } })
+          expect(facts?.user).toEqual({ name: 'agent', home: HOME, ours: true })
+          expect(facts?.service).toBe(true)
+          row.push(`the card reads version ${facts?.record?.source.commit.slice(0, 7)}`)
+
+          // Remove the board from this server, as the card does (the pack on stdin, the bootstrap's
+          // --undo): the tunnel's domain answering, its record and helper as they were
+          const pack = await boardPack()
+          if (!pack) throw new Error('no pack of this checkout')
+          const undo = await s.exec(['sh', '-c', removerScript({ removeUser: false, lang: 'en' })], {
+            stdin: `${Buffer.from(pack.bytes).toString('base64')}\n`,
+            check: false,
+            timeoutMs: 20 * MIN,
+          })
           expect(undo.code, undo.stdout.slice(-3000)).toBe(0)
+          expect(undo.stdout).toContain('Undone.')
+          expect(readBoardFacts((await s.exec(['sh', '-c', boardFactsScript()])).stdout)?.record).toBeNull()
           expect(await hashOf('/etc/agent-board/setup.json')).toBe(tunnelRecord)
           expect(await blocks()).toBe('1 0')
           expect(await running('agent-board-socket')).toBe(true)
@@ -604,7 +624,7 @@ describe.skipIf(!DOCKER)('the board on a server of the owner’s (path A from th
           expect((await s.sh('test -e /etc/agent-board-server', { check: false })).code).not.toBe(0)
           expect(await tunnelAnswers(l, s)).toBe(true)
           for (const host of sites) expect((await fromClient(l, s, host, '/', true)).code).toBe('200')
-          row.push(`its Undo: ${DOMAIN} answering, the tunnel's record and helper as they were`)
+          row.push(`its Remove from the card: ${DOMAIN} answering, the tunnel's record and helper as they were`)
 
           // then the tunnel's Undo, by its one command: their Caddyfile as before either
           await stopTunnel()
