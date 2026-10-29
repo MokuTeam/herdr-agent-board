@@ -10,6 +10,7 @@
 // (ServerView, the `server-*` ops) is services/server-setup.ts's.
 
 import { needFor } from '../../../src/core/server-admin.ts'
+import { type BoardState, boardState, undoWill, versionLine } from '../../../src/core/server-board.ts'
 import type { Holder, ServerFacts } from '../../../src/core/server-facts.ts'
 import { BOARD_USER, installWill, serverWanted } from '../../../src/core/server-install.ts'
 import { fenceDiff } from '../../../src/core/server-look.ts'
@@ -64,7 +65,7 @@ export interface SetupState {
    * What Continue (and Enter in a password field) sends: Look, Undo's Look while Undo's ask stands,
    * or the Look of "Install the board on this server" while its ask stands.
    */
-  again: 'server-look' | 'server-undo-look' | 'server-install-look'
+  again: 'server-look' | 'server-undo-look' | 'server-install-look' | 'server-remove-look' | 'server-install-version'
   /** Set up the server was clicked without the board's address: said so until the address is there. */
   missing: boolean
   /** Install the board on this server was clicked without its own address: said so until it is there. */
@@ -75,6 +76,10 @@ export interface SetupState {
   docker: boolean
   removeDocker: boolean
   removeEdited: boolean
+  /** "Remove the board from this server": the user and its home go too (off until ticked, each Look). */
+  removeUser: boolean
+  /** Why the version on the server could not be looked at again ('' when it could). */
+  versionWhy: string
   /** Undo clicked once: the next click asks the board for the Undo plan. */
   undoArmed: boolean
   /** "Do it myself (one command)" open, and the command as the board made it. */
@@ -100,6 +105,8 @@ export const SETUP_START: SetupState = {
   docker: false,
   removeDocker: false,
   removeEdited: false,
+  removeUser: false,
+  versionWhy: '',
   undoArmed: false,
   oneshot: false,
   got: ONESHOT_IDLE,
@@ -261,11 +268,83 @@ export const rollbackLines = (p: Progress, plan: Plan | null, t: Translator): { 
 
 /** The setup on record: "Set up on Oct 21, 10:04 AM: Caddy in Docker". */
 export function setupLine(s: NonNullable<ServerView['setup']>, t: Translator): string {
-  const ms = Date.parse(s.at)
-  const when = Number.isNaN(ms)
-    ? s.at
+  return t('server.panel.setUp', { when: whenOf(s.at, t), case: t(`server.panel.caseName.${s.case}`) })
+}
+
+/** A moment the server wrote (ISO) as the panel says one: "21 Oct, 15:04"; as it is when it is not one. */
+function whenOf(at: string, t: Translator): string {
+  const ms = Date.parse(at)
+  return Number.isNaN(ms)
+    ? at
     : `${new Date(ms).toLocaleDateString(t.lang, { day: 'numeric', month: 'short' })}, ${timeOf(ms, t)}`
-  return t('server.panel.setUp', { when, case: t(`server.panel.caseName.${s.case}`) })
+}
+
+/** The card "The board on the server" in words (core/server-board.ts): its line, where it stands, and its buttons' words. */
+export interface BoardCard {
+  /** Its address, then the version there and when it was installed, or that none is, or that it is not known yet. */
+  line: string
+  state: BoardState
+  /** "An update is available: this computer has …" ('' when there is none). */
+  update: string
+  /** When the board saw it, while it holds no password to look again with ('' else). */
+  seen: string
+  /** The main button: Install the board on this server, Install again, Update. */
+  main: string
+}
+
+export function boardCardOf(s: ServerView, now: number, t: Translator): BoardCard {
+  const state = boardState(s.installed, s.local)
+  const v = s.installed?.version ?? null
+  const there =
+    state === 'unknown'
+      ? t('install.panel.versionUnknown')
+      : !v
+        ? t('install.panel.notInstalled')
+        : `${versionLine(v, t)}, ${t('install.panel.installedAt', { when: whenOf(v.at, t) })}`
+  return {
+    line: [s.installDomain || t('server.panel.boardNoAddress'), there].join(' · '),
+    state,
+    update:
+      state === 'update' && s.local ? t('install.panel.updateAvailable', { version: versionLine(s.local, t) }) : '',
+    seen:
+      s.installed && heldUntil(s, now) === null ? t('install.panel.seen', { time: timeOf(s.installed.seen, t) }) : '',
+    main: t(
+      state === 'update' ? 'install.panel.update' : state === 'current' ? 'install.panel.again' : 'install.panel.look',
+    ),
+  }
+}
+
+/**
+ * The Server tab just opened: the version on the server looked at again, only while the board
+ * remembers the password (nothing asked), the board on the server has its address, and nothing
+ * else runs or looks.
+ */
+export const versionOnOpen = (s: ServerView | null | undefined, now: number): boolean =>
+  !!s &&
+  heldUntil(s, now) !== null &&
+  (s.installDomain ?? '') !== '' &&
+  s.reading !== true &&
+  (s.phase === 'idle' || s.phase === 'done' || s.phase === 'failed' || s.phase === 'plan')
+
+/**
+ * "Remove the board from this server"'s plan in words: the install's own --undo lines, the user's
+ * as the tick says, with the web server's part for the board's socket at its domain (when it has
+ * one), what was found and what is not touched; null when the view has no removal.
+ */
+export function removePlainOf(
+  s: ServerView,
+  removeUser: boolean,
+  t: Translator,
+): { found: string; will: string[]; untouched: string; notes: string[] } | null {
+  const r = s.remove
+  if (!r) return null
+  const web = r.web && s.facts && s.plan ? plainPlan(s.facts, s.plan, serverWanted(r.domain, r.facts.user), t) : null
+  return {
+    found: web?.found ?? '',
+    will: undoWill(r.facts, removeUser, web ? web.will : null, t),
+    untouched: web?.untouched ?? '',
+    notes: web && s.plan ? s.plan.warnings.filter(isPlainWarning).map(w => textLine(w, t)) : [],
+  }
 }
 
 /** What the panel wants on the server: the tunnel's settings that pass their checks (else their defaults, as step 1's snippets). */
@@ -386,6 +465,9 @@ const TAKEN_BY: ReadonlySet<string> = new Set([
   'server-undo',
   'server-install-look',
   'server-install',
+  'server-install-version',
+  'server-remove-look',
+  'server-remove',
   'sync-look',
   'sync-dirs',
   'sync-mkdir',

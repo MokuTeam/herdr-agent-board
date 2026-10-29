@@ -38,6 +38,7 @@ import {
 import {
   adminEdit,
   answerPatch,
+  boardCardOf,
   caseLine,
   DEFAULT_LOGIN,
   failHint,
@@ -74,6 +75,7 @@ import {
 } from '../../models/server-setup.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
+import { BoardRemove } from './BoardRemove.tsx'
 import { DoItMyself } from './DoItMyself.tsx'
 import { TwoClicks } from './LoginSection.tsx'
 import { OneCommand } from './OneCommand.tsx'
@@ -220,6 +222,9 @@ export function ServerSetupBody({
   const busy = running || phase === 'looking'
   // The last Look was "Install the board on this server" (path B): its plan, its run, its link.
   const installing = s.target === 'install'
+  // The last Look was "Remove the board from this server": its plan, its run.
+  const removing = s.target === 'remove'
+  const tunnelTarget = !installing && !removing
   // Path B's own address (the board on the server's), apart from the tunnel's.
   const installDomain = s.installDomain ?? ''
   // Asked without the board's address, or the install without its own: said until it is there.
@@ -233,7 +238,7 @@ export function ServerSetupBody({
   const hint = hintLine(s.hint, t, admin) || (failed ? failHint(failed.id, t) : '')
   const need = neededField(s, state)
   const sudo = sudoField(s, state)
-  const plain = phase === 'plan' ? plainOf(s, view.tunnel.settings, t) : null
+  const plain = phase === 'plan' && !removing ? plainOf(s, view.tunnel.settings, t) : null
   const tracker = saves ?? savesTracker()
   // Until when the board remembers the server's passwords (its memory only): nothing asked meanwhile.
   const held = heldUntil(s, now)
@@ -337,10 +342,37 @@ export function ServerSetupBody({
     void look('server-undo-look')
   }
 
+  /** "Remove the board from this server": its Look (what the install's --undo would take), the user's tick off again. */
+  function removeLook(): void {
+    onState({ removeUser: false, versionWhy: '' })
+    void look('server-remove-look')
+  }
+
+  /** Remove, from its plan: the install's --undo, the user and its home too when ticked. */
+  async function removeRun(): Promise<void> {
+    const r = s.remove
+    if (!r) return
+    const op = 'server-remove'
+    const reply = await send(op, { plan: r.id, removeUser: state.removeUser, ...withPassword(state) })
+    if (passwordsTaken(op, reply)) forget()
+    onState(answerPatch(reply, null, state))
+  }
+
+  /** The version on the server looked at again (it only reads); why it could not, under the card. */
+  async function readVersion(): Promise<void> {
+    const op = 'server-install-version'
+    const reply = await send(op, withPassword(state))
+    const why = reply?.ok !== true && typeof reply?.error === 'string' ? reply.error : ''
+    onState({ ...answerPatch(reply, op, state), versionWhy: why })
+    if (passwordsTaken(op, reply)) forget()
+  }
+
   /** Continue, or Enter in a password field: what was asked for goes on. */
   function goOn(): void {
     if (state.again === 'server-undo-look') void look('server-undo-look')
     else if (state.again === 'server-install-look') void installLook()
+    else if (state.again === 'server-remove-look') removeLook()
+    else if (state.again === 'server-install-version') void readVersion()
     else void setUp()
   }
 
@@ -725,13 +757,9 @@ export function ServerSetupBody({
   )
   // Set up and Install start a Look while nothing else runs or waits.
   const canStart = phase === 'idle' || phase === 'looking' || phase === 'done'
-  // The board on the server: its address, and the version an install sends (known once one looked).
-  const boardLine = [
-    installDomain || t('server.panel.boardNoAddress'),
-    s.install && t('server.panel.boardVersion', { commit: s.install.from.commit.slice(0, 7) }),
-  ]
-    .filter(Boolean)
-    .join(' · ')
+  // The board on the server: its address, the version there (as last seen) and the update this computer has.
+  const card = boardCardOf(s, now, t)
+  const installed = card.state === 'current' || card.state === 'update'
 
   return (
     <div className="access-web">
@@ -796,7 +824,7 @@ export function ServerSetupBody({
                 disabled={!canLook}
                 onClick={() => void setUp()}
               >
-                {phase === 'looking' && !installing
+                {phase === 'looking' && tunnelTarget
                   ? t('server.panel.looking')
                   : s.setup
                     ? t('server.panel.update')
@@ -817,30 +845,65 @@ export function ServerSetupBody({
           </div>
         )}
         {canStart && tunnelWhy}
-        {!installing && flow}
+        {tunnelTarget && flow}
       </section>
 
       <section className="access-card access-card-board">
         <h4 className="access-card-head">{t('server.panel.boardCard')}</h4>
-        <p className="access-card-line">{boardLine}</p>
+        <p className="access-card-line">{card.line}</p>
+        {card.update && <p className="access-update">{card.update}</p>}
+        {card.seen && <p className="access-kept access-seen">{card.seen}</p>}
         {canStart && (
           <>
             {installField}
             <div className="access-actions">
               <button
                 type="button"
-                className="button"
+                className={classNames('button', card.state === 'update' && 'primary')}
                 disabled={!canLook}
                 title={t('install.panel.intro')}
                 onClick={() => void installLook()}
               >
-                {phase === 'looking' && installing ? t('server.panel.looking') : t('install.panel.look')}
+                {phase === 'looking' && installing ? t('server.panel.looking') : card.main}
               </button>
+              {(installDomain !== '' || s.installed) && (
+                <button
+                  type="button"
+                  className="button"
+                  disabled={!canLook || s.reading === true}
+                  onClick={() => void readVersion()}
+                >
+                  {s.reading ? t('server.panel.looking') : t('install.panel.refresh')}
+                </button>
+              )}
+              {installed && (
+                <button type="button" className="button" disabled={!canLook} onClick={removeLook}>
+                  {phase === 'looking' && removing ? t('server.panel.looking') : t('install.remove.button')}
+                </button>
+              )}
             </div>
           </>
         )}
+        {state.versionWhy && <p className="access-why access-version-why">{state.versionWhy}</p>}
         {canStart && boardWhy}
         {installing && flow}
+        {removing && (
+          <BoardRemove
+            s={s}
+            state={state}
+            onState={onState}
+            canEdit={canEdit}
+            canLook={canLook}
+            hint={hint}
+            hostKey={hostKey}
+            details={
+              plan && phase === 'plan' ? <PlanSteps plan={plan} progress={null} phase={phase} now={now} /> : null
+            }
+            onRemove={() => void removeRun()}
+            onCancel={cancel}
+            onLookAgain={removeLook}
+          />
+        )}
       </section>
 
       <OneCommand

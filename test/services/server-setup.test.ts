@@ -1563,7 +1563,9 @@ describe('the board on the server: its version and its removal (path B’s card)
       domain: SERVER_DOMAIN,
       address: `https://${SERVER_DOMAIN}`,
     })
-  const TUNNEL_SETUP = { setup: { case: '2' as const, address: 'https://board.example.com', at: '2026-10-20T10:00:00.000Z' } }
+  const TUNNEL_SETUP = {
+    setup: { case: '2' as const, address: 'https://board.example.com', at: '2026-10-20T10:00:00.000Z' },
+  }
   const board = (o: { pack?: BoardPack | null; head?: LocalVersion | null } = {}) =>
     useBoard(
       { uid: 0 },

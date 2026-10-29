@@ -11,14 +11,14 @@
 // (models/access-tabs.ts). Its view is the local-only GET /api/access (hooks/useAccess.ts),
 // fetched on opening and again whenever the payload's accessRev changes; every change is a POST to
 // the same local-only route, and what the board refuses is toasted.
-import { type KeyboardEvent, type ReactNode, useState } from 'react'
+import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import type { AccessView } from '../../../../src/core/access.ts'
 import type { TestStep } from '../../../../src/core/tunnel.ts'
 import { type AccessSend, useAccess } from '../../hooks/useAccess.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { type AccessAsk, loginAsk, tunnelAsk } from '../../models/access.ts'
 import { ACCESS_TABS, type AccessTab, loadTab, saveTab } from '../../models/access-tabs.ts'
-import { savesTracker } from '../../models/server-setup.ts'
+import { savesTracker, versionOnOpen } from '../../models/server-setup.ts'
 import { classNames } from '../class-names.ts'
 import { Panel } from '../panel/Panel.tsx'
 import { LoginSection } from './LoginSection.tsx'
@@ -78,6 +78,15 @@ export function AccessBody({ view, send, steps, testing, tab: first }: AccessBod
   // The settings' saves on their way, which the Server tab's Set up waits for, whichever tab made them.
   const [saves] = useState(savesTracker)
   const keep = useServerSetup(view, send, saves)
+  // The Server tab opened while the board remembers the server's password: the version of the board
+  // on the server looked at again (one round that only reads; nothing asked, a refusal left unsaid).
+  const latest = useRef({ view, send })
+  latest.current = { view, send }
+  useEffect(() => {
+    if (tab !== 'server') return
+    const { view: v, send: post } = latest.current
+    if (versionOnOpen(v.server, Date.now())) void post('server-install-version')
+  }, [tab])
 
   const pick = (next: AccessTab): void => {
     setTab(next)
