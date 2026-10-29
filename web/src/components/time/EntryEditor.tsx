@@ -32,7 +32,7 @@ import {
 } from '../../models/time.ts'
 import { classNames } from '../class-names.ts'
 
-/** Names joined as the language joins them: "NetSuite and Jira", "NetSuite и Jira". */
+/** Names joined as the language joins them: "ERP and Tracker", "ERP и Tracker". */
 function listText(names: readonly string[], lang: string): string {
   try {
     return new Intl.ListFormat(lang, { type: 'conjunction' }).format(names)
