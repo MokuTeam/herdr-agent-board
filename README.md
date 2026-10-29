@@ -373,10 +373,11 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
   [Helpers and linked sessions](#helpers-and-linked-sessions).
 - Right click (or a long press on a touch screen, or the menu key / Shift+F10 on a focused card)
   opens the board's own menu: on a card (open, go to herdr, message, wake or sleep, rename, move
-  to a category, status, "No reply needed", open its folder, Changes, History, a new session in
-  its folder, copy its name, folder, session or pane id, archive it, clear the card), on a lane
-  (a new session or workspace there, edit the category, show only it, archive its sleeping
-  sessions), on the "Idle" column's head (archive the sleeping sessions), on the board, on the
+  to a category, status, its Claude profile with two or more shown, "No reply needed", open its
+  folder, Changes, History, a new session in its folder, copy its name, folder, session or pane
+  id, archive it, clear the card), on a lane (a new session or workspace there, edit the category,
+  show only it, archive its sleeping sessions, move its sessions to another profile), on the
+  "Idle" column's head (archive the sleeping sessions), on the board, on the
   sheet's head, on a starting session and on file chips. It opens where you clicked, stays on screen,
   takes arrows, Enter, Esc and the first letters of an item. Gray items say why (no fresh data
   from herdr, the session works). Fields, selected text and links keep the browser's own menu;
@@ -538,14 +539,28 @@ a dialog, unsent text, background tasks) is refused with the reason, or with `--
 sleep entry (`board unschedule <id>` cancels it) that moves it once it is asleep. The move copies
 the transcript `projects/<project folder>/<id>.jsonl`, the session's own folder beside it and
 `file-history/<id>/` into the target profile's folder, under the same project folder; the originals
-stay. It is refused when the target has a conversation with that id already, or the source has
-none. When the source profile trusts the session's folder and the target does not, that one
+stay. Moving it back later finds its older copy from the move before in the target: when the
+source's transcript goes on from that copy byte for byte, the copy is replaced (through a temp file
+renamed into place) and the session's folder and file history are copied over the old ones. It is
+refused when the target has a longer or different copy (one that went on by itself), when the
+session runs in the target profile, or when the source has none; these are found before a running
+session is put to sleep, so it stays up. A card from before the board kept profiles moves from the folder wake's entry
+names. When the source profile trusts the session's folder and the target does not, that one
 `hasTrustDialogAccepted` is copied into the target's `.claude.json` (`~/.claude.json` for the
 default folder), so a wake does not stop at Claude's folder-trust dialog. The card then names the
 target's folder, with no "wrong profile" tag, and so does wake's entry for the sleeper (a wake
 started before `board move` existed keeps its entry until the session's next wake: the card decides
 anyway, as `board resume` takes its folder first). Reminders stay with the session. A line per
 session: moved, once free, or refused and why.
+
+On the board, with two or more profiles shown, a card's menu has **Profile ▸** with each shown
+profile, the session's own checked: another one moves it there the same way, and a toast says how
+it went; a busy one's toast says why and offers **Move once it is free**. A lane's menu has
+**Move <lane>'s sessions to ▸** with each profile and how many of the lane's Claude sessions a move
+there takes, one toast for them all; its check **Also make it <lane>'s usual profile** sets the
+lane's usual profile too (as Categories does), so new sessions there start in it. The page sends
+it as `POST /api/move` with `{ "targets": ["<key>", ...], "profile": "<id>", "whenFree": true }`,
+which answers `{ ok, results }` as `board move` has them (`src/server/routes/move.ts`).
 
 While the separate herdr-wake plugin does the waking (installed, and not switched over yet), it
 resumes a session with the env of its pane's shell, as before, and the board keeps its old rule:
