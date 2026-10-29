@@ -62,6 +62,7 @@ import {
   savesTracker,
   setupLine,
   stepState,
+  versionOnOpen,
   withPassword,
 } from '../../web/src/models/server-setup.ts'
 import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
@@ -1632,4 +1633,197 @@ test('Install the board on this server asks for its own address first; with it, 
   expect(await took.settle()).toEqual({ tunnel: {}, admin: {} })
   void took.track(Promise.resolve({ ok: true }), { install: { domain: 'workbench.example.com' } })
   expect(await took.settle()).toEqual({ tunnel: {}, admin: {}, install: { domain: 'workbench.example.com' } })
+})
+
+// ---------------------------------------------------------------- the board on the server: its version, its removal
+
+const CARD_SHA = '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d'
+const CARD_NEWER = 'ffeeddccbbaa99887766554433221100ffeeddcc'
+const CARD_DOMAIN = 'workbench.example.com'
+const INSTALLED_AT = '2026-10-21T13:02:00.000Z'
+const cardOf = (over: Partial<ServerView>, lang = 'en') => {
+  const part = partOf(withServer({ installDomain: CARD_DOMAIN, ...over }), { lang })
+  const card = find(part, el => el.tag === 'section' && hasClass(el, 'access-card-board'))
+  return {
+    line: textsOf([card], 'access-card-line')[0] ?? '',
+    update: textsOf([card], 'access-update'),
+    seen: textsOf([card], 'access-seen'),
+    buttons: buttonsIn([card]).map(textOf),
+  }
+}
+
+test('the card’s four states: not known yet, not installed, installed as this computer has it, an update', () => {
+  const at = `${new Date(Date.parse(INSTALLED_AT)).toLocaleDateString('en', { day: 'numeric', month: 'short' })}, ${timeOf(Date.parse(INSTALLED_AT), t)}`
+  const version = { commit: CARD_SHA, changes: true, ref: null, at: INSTALLED_AT }
+  const seen = { seen: NOW - 60_000 }
+  // never looked at in this board's life
+  expect(cardOf({})).toEqual({
+    line: `${CARD_DOMAIN} · what is installed there is not known yet`,
+    update: [],
+    seen: [],
+    buttons: ['Install the board on this server', 'Look'],
+  })
+  // looked: nothing there
+  expect(cardOf({ installed: { version: null, ...seen }, local: { commit: CARD_SHA, changes: true } })).toMatchObject({
+    line: `${CARD_DOMAIN} · not installed`,
+    update: [],
+    buttons: ['Install the board on this server', 'Look'],
+  })
+  // the same version as this computer's: Install again, and Remove
+  expect(cardOf({ installed: { version, ...seen }, local: { commit: CARD_SHA, changes: true } })).toMatchObject({
+    line: `${CARD_DOMAIN} · version 1a2b3c4 (with local changes), installed ${at}`,
+    update: [],
+    buttons: ['Install again', 'Look', 'Remove the board from this server'],
+  })
+  // another commit here (or the same one without its changes): an update, and the main button says so
+  for (const local of [
+    { commit: CARD_NEWER, changes: false },
+    { commit: CARD_SHA, changes: false },
+  ]) {
+    const c = cardOf({ installed: { version, ...seen }, local })
+    expect(c.update).toEqual([`An update is available: this computer has version ${local.commit.slice(0, 7)}.`])
+    expect(c.buttons).toEqual(['Update', 'Look', 'Remove the board from this server'])
+  }
+  // in Russian
+  expect(
+    cardOf({ installed: { version, ...seen }, local: { commit: CARD_NEWER, changes: false } }, 'ru'),
+  ).toMatchObject({
+    update: ['Есть обновление: на этом компьютере версия ffeeddc.'],
+    buttons: ['Обновить', 'Посмотреть', 'Удалить доску с этого сервера'],
+  })
+})
+
+test('the version as last seen: said when, and Look to refresh, while the board holds no password; nothing secret in the card', () => {
+  const version = { commit: CARD_SHA, changes: false, ref: 'main', at: INSTALLED_AT }
+  const seenAt = NOW - 5 * 60_000
+  const none = cardOf({ installed: { version, seen: seenAt }, local: { commit: CARD_SHA, changes: false } })
+  expect(none.seen).toEqual([`As the board saw it at ${timeOf(seenAt, t)}: Look to refresh.`])
+  expect(none.line).toContain('version 1a2b3c4')
+  const held = cardOf({
+    installed: { version, seen: seenAt },
+    local: { commit: CARD_SHA, changes: false },
+    passwordHeld: { until: NOW + 60_000 },
+  })
+  expect(held.seen).toEqual([])
+})
+
+test('Look in the card reads the version again with the password typed; a refusal said under the card', async () => {
+  const live = liveServer(withServer({ installDomain: CARD_DOMAIN }), op =>
+    op === 'server-install-version'
+      ? { ok: false, hint: null, error: 'ssh: connect to host ssh.example.com: refused' }
+      : { ok: true },
+  )
+  await live.type('login-password', SENTINEL)
+  await live.click('Look')
+  expect(live.calls).toEqual([['server-install-version', { password: SENTINEL }]])
+  expect(live.text('.access-version-why')).toEqual(['ssh: connect to host ssh.example.com: refused'])
+})
+
+test('Remove: its Look, the plan in the install’s words with the user’s tick off, what it deletes said once ticked, Remove sends the tick', async () => {
+  const facts = {
+    ...factsFor('1'),
+    record: recordFor('1', {
+      pair: { user: 'agent', socket: '/var/lib/agent-board/board.sock', server: true },
+      domain: CARD_DOMAIN,
+      address: `https://${CARD_DOMAIN}`,
+    }),
+  }
+  const record = facts.record
+  const plan = undoPlan(record, facts, { id: 'rm1', removeDocker: false, removeEdited: false })
+  const remove = {
+    id: 'rm1',
+    facts: {
+      user: 'agent',
+      home: '/home/agent',
+      ours: true,
+      record: true,
+      sudo: false,
+      service: true,
+      desktop: ['chromium'],
+      desktopLibs: [],
+    },
+    domain: CARD_DOMAIN,
+    web: true,
+    removeUser: false,
+    out: [],
+    code: null,
+  }
+  const installed = { version: { commit: CARD_SHA, changes: false, ref: null, at: INSTALLED_AT }, seen: NOW }
+  const local = { commit: CARD_SHA, changes: false }
+  // from the card: its Look
+  const idle = liveServer(withServer({ installDomain: CARD_DOMAIN, installed, local }))
+  await idle.click('Remove the board from this server')
+  expect(idle.calls).toEqual([['server-remove-look', {}]])
+  // its plan
+  const looked = withServer({
+    installDomain: CARD_DOMAIN,
+    installed,
+    local,
+    phase: 'plan',
+    sudo: 'root',
+    facts,
+    plan,
+    target: 'remove',
+    remove,
+  })
+  const live = liveServer(looked)
+  const will = live.text('.access-remove .access-will-line')
+  expect(will[0]).toBe('Stop herdr’s service of agent and its start with the server.')
+  expect(will.at(-1)).toBe('The user agent and its home stay (with --remove-user they go too).')
+  expect(will.join(' ')).not.toContain('chromium')
+  expect(live.text('.access-remove .access-tick')).toEqual(['Also remove the user agent and its home (/home/agent)'])
+  expect(live.text('.access-remove .access-warn')).toEqual([])
+  // the tunnel's card shows none of it
+  expect(live.text('.access-card-tunnel .access-will-line')).toEqual([])
+  await live.tick('tick-removeUser')
+  const after = live.text('.access-remove .access-will-line')
+  expect(after.at(-1)).toBe(
+    'Remove the user agent and its home (/home/agent): Bun, herdr, Claude Code, the board, everything in it.',
+  )
+  expect(after.join(' ')).toContain('chromium')
+  expect(live.text('.access-remove .access-warn')).toEqual([
+    'This deletes every file in /home/agent: the agents’ projects and work, their Claude sign-in and sessions, herdr’s state. It cannot be undone.',
+  ])
+  await live.click('Remove')
+  expect(live.calls.at(-1)).toEqual(['server-remove', { plan: 'rm1', removeUser: true }])
+  // a user the installer did not make: no tick at all
+  const notOurs = partOf(
+    withServer({ ...looked.server, remove: { ...remove, facts: { ...remove.facts, ours: false } } }),
+  )
+  expect(findAll(notOurs, el => el.attrs.get('name') === 'tick-removeUser')).toEqual([])
+  // its run: the output, then how it ended; in Russian too
+  const running = partOf(
+    withServer({
+      ...looked.server,
+      phase: 'undoing',
+      remove: { ...remove, out: ['agent-board: looking at this server.'] },
+    }),
+  )
+  expect(textsOf(running, 'access-pre')).toEqual(['agent-board: looking at this server.'])
+  const done = partOf(
+    withServer({
+      ...looked.server,
+      phase: 'done',
+      installed: { version: null, seen: NOW },
+      remove: { ...remove, out: ['Undone.'], code: 0 },
+    }),
+  )
+  expect(textsOf(done, 'access-result')).toEqual(['Removed: the board is no longer on this server.'])
+  const ru1 = partOf(looked, { lang: 'ru' })
+  expect(shownText(ru1)).toContain('Удалить и пользователя agent с его домашней папкой (/home/agent)')
+})
+
+test('the Server tab opened while the board remembers the password: the version looked at again; without one, or while something runs, not', () => {
+  const now = NOW
+  const held = { passwordHeld: { until: now + 10 * 60_000 } }
+  const server = (over: Partial<ServerView>): ServerView => ({ ...IDLE, installDomain: CARD_DOMAIN, ...over })
+  expect(versionOnOpen(server(held), now)).toBe(true)
+  expect(versionOnOpen(server({ ...held, phase: 'done' }), now)).toBe(true)
+  expect(versionOnOpen(server({}), now)).toBe(false)
+  expect(versionOnOpen(server({ passwordHeld: { until: now - 1 } }), now)).toBe(false)
+  expect(versionOnOpen(server({ ...held, installDomain: '' }), now)).toBe(false)
+  expect(versionOnOpen(server({ ...held, reading: true }), now)).toBe(false)
+  for (const phase of ['looking', 'applying', 'undoing'] as const)
+    expect(versionOnOpen(server({ ...held, phase }), now)).toBe(false)
+  expect(versionOnOpen(null, now)).toBe(false)
 })

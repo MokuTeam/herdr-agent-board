@@ -18,7 +18,6 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.update': 'Update',
     'server.panel.boardCard': 'The board on the server',
     'server.panel.boardNoAddress': 'no address yet',
-    'server.panel.boardVersion': 'version {commit}',
     'server.panel.sudoNote':
       'remembered by this board for 30 minutes after it is last used, in its memory only; never saved',
     'server.panel.held': 'Password remembered until {time}',
@@ -438,7 +437,6 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.update': 'Обновить',
     'server.panel.boardCard': 'Доска на сервере',
     'server.panel.boardNoAddress': 'адреса пока нет',
-    'server.panel.boardVersion': 'версия {commit}',
     'server.panel.sudoNote':
       'доска помнит его 30 минут после последнего использования, только в своей памяти; нигде не сохраняется',
     'server.panel.held': 'Пароль запомнен до {time}',
