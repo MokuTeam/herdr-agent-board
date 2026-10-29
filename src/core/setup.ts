@@ -671,7 +671,15 @@ export function checkSetup(facts: SetupFacts, t: Translator = english): SetupChe
     )?.command
     if (per.every(list => !list.length)) {
       if (theirs) add('toast', 'ok', t('setup.toast.own'), theirs)
-      else add('toast', 'off', t('setup.toast.off'), t('setup.toast.offDetail'), t('setup.toast.offFix'), NOTIFICATIONS)
+      else
+        add(
+          'toast',
+          'off',
+          t('setup.toast.off'),
+          t(mac ? 'setup.toast.offDetailMac' : 'setup.toast.offDetail'),
+          t('setup.toast.offFix'),
+          NOTIFICATIONS,
+        )
     } else if (theirs)
       add(
         'toast',

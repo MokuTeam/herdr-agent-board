@@ -153,7 +153,9 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.toast.naDetail': 'On Linux herdr shows its own: [ui.toast] delivery = "system" in herdr’s config.toml.',
     'setup.toast.off': 'Desktop notifications are off',
     'setup.toast.offDetail':
-      'A desktop notification with the agent’s own words when a session finishes, asks a question or needs a permission; a click opens that session on the board.',
+      'A Windows notification with the agent’s own words when a session finishes, asks a question or needs a permission; a click opens that session on the board.',
+    'setup.toast.offDetailMac':
+      'A macOS notification with the agent’s own words when a session finishes, asks a question or needs a permission; a click opens that session on the board.',
     'setup.toast.offFix': 'Turn them on:',
     'setup.toast.stale': 'Desktop notifications run another copy of the board',
     'setup.toast.twice': 'Desktop notifications come twice',
@@ -312,7 +314,9 @@ export const SETUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'setup.toast.naDetail': 'На Linux herdr показывает свои: [ui.toast] delivery = "system" в config.toml herdr.',
     'setup.toast.off': 'Уведомления на рабочем столе выключены',
     'setup.toast.offDetail':
-      'Уведомление на рабочем столе словами самого агента, когда сессия закончила, спрашивает или просит разрешение; щелчок открывает эту сессию на доске.',
+      'Уведомление Windows словами самого агента, когда сессия закончила, спрашивает или просит разрешение; щелчок открывает эту сессию на доске.',
+    'setup.toast.offDetailMac':
+      'Уведомление macOS словами самого агента, когда сессия закончила, спрашивает или просит разрешение; щелчок открывает эту сессию на доске.',
     'setup.toast.offFix': 'Включить:',
     'setup.toast.stale': 'Уведомления запускают другую копию доски',
     'setup.toast.twice': 'Уведомления приходят дважды',
