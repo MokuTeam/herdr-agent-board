@@ -29,8 +29,19 @@ import {
 import { basename, dirname, join } from 'node:path'
 import { type HerdrSnapshot, herdr, notify, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
-import { ROOT, stateDir } from '../adapters/paths.ts'
+import { ROOT } from '../adapters/paths.ts'
 import { readStdin } from '../adapters/stdin.ts'
+import {
+  toastApp,
+  toastAppCurrent,
+  toastAppDir,
+  toastAppState,
+  toastBinary,
+  toastBuildFailure,
+  toastFailedFile,
+  toastSource,
+  toastSourceStamp,
+} from '../adapters/toast-app.ts'
 
 const DOT = '·'
 const APP_ID = 'com.mokuteam.agent-board.toast.cb'
@@ -100,10 +111,8 @@ export function toastTitle(snap: HerdrSnapshot | null, paneId: string, cwd = '')
 
 // ------------------------------------------------------------------ the app that shows them
 
-const appDir = (): string => join(stateDir(), 'toast')
-export const toastApp = (): string => join(appDir(), 'ClaudeToast.app')
-const toastBinary = (): string => join(toastApp(), 'Contents', 'MacOS', 'ClaudeToast')
-const toastSource = (): string => join(ROOT, 'src', 'integrations', 'toast-mac.swift')
+// Where it lives and what is known of it: adapters/toast-app.ts, which the setup check reads too.
+export { toastApp, toastAppState }
 
 const INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -151,49 +160,18 @@ export interface EnsureOptions extends BuildOptions {
   retry?: boolean
 }
 
-/** Written when a build fails: for which version of the source, and why. A hook does not try that source again. */
-const failedFile = (): string => join(appDir(), 'build-failed.json')
-
-/** When toast-mac.swift last changed (-1 when it is not there): the version of the app's source. */
-function sourceStamp(): number {
-  try {
-    return statSync(toastSource()).mtimeMs
-  } catch {
-    return -1
-  }
-}
-
-/** Why the last build failed, while that holds for the source as it is now; null otherwise. */
-function failureOfSource(): string | null {
-  try {
-    const value: unknown = JSON.parse(readFileSync(failedFile(), 'utf8'))
-    if (isRecord(value) && value.source === sourceStamp() && typeof value.reason === 'string') return value.reason
-  } catch {}
-  return null
-}
-
 function buildFailed(reason: string): null {
   try {
-    mkdirSync(appDir(), { recursive: true })
-    writeFileSync(failedFile(), JSON.stringify({ source: sourceStamp(), reason }))
+    mkdirSync(toastAppDir(), { recursive: true })
+    writeFileSync(toastFailedFile(), JSON.stringify({ source: toastSourceStamp(), reason }))
   } catch {}
   return null
-}
-
-/** Built, and not older than its source: what a hook uses as it is. */
-function builtIsCurrent(): boolean {
-  try {
-    if (!existsSync(toastBinary()) || !existsSync(join(toastApp(), 'Contents', 'Info.plist'))) return false
-    return statSync(toastBinary()).mtimeMs >= statSync(toastSource()).mtimeMs
-  } catch {
-    return false
-  }
 }
 
 /**
  * Builds the notification app from toast-mac.swift (swiftc, then an ad-hoc signature and
  * LaunchServices' registration), or null when it cannot be: no Command Line Tools, or swiftc or
- * codesign failing, which is written down (failedFile) with its reason.
+ * codesign failing, which is written down (toastFailedFile) with its reason.
  */
 export function buildToastApp({ run: runner = run, platform = process.platform }: BuildOptions = {}): string | null {
   if (platform !== 'darwin') return null
@@ -228,7 +206,7 @@ export function buildToastApp({ run: runner = run, platform = process.platform }
     return buildFailed('codesign failed')
   }
   runner(LSREGISTER, ['-f', app], 15_000)
-  rmSync(failedFile(), { force: true })
+  rmSync(toastFailedFile(), { force: true })
   return app
 }
 
@@ -238,15 +216,9 @@ export function buildToastApp({ run: runner = run, platform = process.platform }
  * changes, or `retry` says to: the install passes it.
  */
 export function ensureToastApp(options: EnsureOptions = {}): string | null {
-  if (builtIsCurrent()) return toastApp()
-  if (!options.retry && failureOfSource() !== null) return null
+  if (toastAppCurrent()) return toastApp()
+  if (!options.retry && toastBuildFailure() !== null) return null
   return buildToastApp(options)
-}
-
-/** For the doctor: whether the app is there and current, and why its last build failed (for this source). */
-export function toastAppState(): { built: boolean; failed?: string } {
-  const failed = failureOfSource()
-  return failed === null ? { built: builtIsCurrent() } : { built: builtIsCurrent(), failed }
 }
 
 /** The frontmost app's bundle path, as the helper sees it ('' when it cannot tell). */
@@ -307,8 +279,8 @@ interface PaneRecord {
   at: number
 }
 
-const recordFile = (pane: string): string => join(appDir(), `pane-${pane.replace(/[^A-Za-z0-9_-]/g, '_')}.json`)
-const pidFile = (pane: string): string => join(appDir(), `pane-${pane.replace(/[^A-Za-z0-9_-]/g, '_')}.pid`)
+const recordFile = (pane: string): string => join(toastAppDir(), `pane-${pane.replace(/[^A-Za-z0-9_-]/g, '_')}.json`)
+const pidFile = (pane: string): string => join(toastAppDir(), `pane-${pane.replace(/[^A-Za-z0-9_-]/g, '_')}.pid`)
 
 function paneRecord(pane: string): PaneRecord | null {
   try {
@@ -423,7 +395,7 @@ export async function showToast(
   ]
   const pid = await startHelper(toastBinary(), args)
   if (pid === null) return herdrsOwn()
-  mkdirSync(appDir(), { recursive: true })
+  mkdirSync(toastAppDir(), { recursive: true })
   writeFileSync(recordFile(toast.pane), JSON.stringify({ tab: toast.tab ?? '', app: toast.app ?? '', at: Date.now() }))
   writeFileSync(pidFile(toast.pane), String(pid))
 }
