@@ -1,6 +1,15 @@
 import { expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmdirSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readCard, writeCard } from '../../src/adapters/cards.ts'
@@ -626,4 +635,41 @@ test('two writers of config.json at once: one waits for the other’s lock, so n
   await child.exited
   assert.equal(early, false, 'the second writer waited for the lock')
   assert.deepEqual(projectsOf(saved()), ['A', 'C', 'B'])
+})
+
+test('a writer that stopped holding the lock: a moment ago, an edit is refused in words and the file stays; past 30 s, it is taken over', () => {
+  isolatedHome()
+  seed({ language: 'en', keep: 1 })
+  const lock = `${configFile()}.lock`
+  // stopped a moment ago (killed mid-write): the edit waits for it, then says so
+  mkdirSync(lock)
+  const before = readFileSync(configFile(), 'utf8')
+  const r = editSettings({ language: 'ru' })
+  assert.equal(r.ok, false)
+  assert.match((r as { error: string }).error, /config\.json is being changed by another process/)
+  assert.equal(readFileSync(configFile(), 'utf8'), before)
+  assert.deepEqual(addTimeProjects('a', ['X']).ok, false, 'the import’s projects: refused, not thrown')
+  // stopped long ago: its lock is taken over, the edit goes through and leaves no lock behind
+  const old = new Date(Date.now() - 31_000)
+  utimesSync(lock, old, old)
+  assert.deepEqual(editSettings({ language: 'ru' }), { ok: true })
+  assert.deepEqual([saved().language, saved().keep], ['ru', 1])
+  assert.equal(existsSync(lock), false)
+})
+
+test('a config folder with spaces in its path (a Windows user name, say): edits and their lock work there', () => {
+  const dir = isolatedHome()
+  process.env.APPDATA = join(dir, 'App Data', 'Roaming Folder')
+  seed({ language: 'en', time: { zone: 'America/New_York', clients: { a: { projects: ['A'] } } } })
+  assert.ok(configFile().includes(' '))
+  assert.deepEqual(editSettings({ language: 'ru' }), { ok: true })
+  assert.deepEqual(addTimeProjects('a', ['B']), { ok: true })
+  assert.deepEqual(
+    [
+      saved().language,
+      ((saved().time as Record<string, unknown>).clients as Record<string, { projects: string[] }>).a?.projects,
+    ],
+    ['ru', ['A', 'B']],
+  )
+  assert.equal(existsSync(`${configFile()}.lock`), false)
 })

@@ -62,14 +62,27 @@ export function withConfigFile<T>(fn: (raw: Raw | null, save: (next: Raw) => voi
   return withLock(configFile(), () => fn(readConfigFile(), writeRaw))
 }
 
-/** The usual edit: the file (the defaults when there is none) changed by `change`, written when it says ok. */
+/** The lock another writer holds past its wait (json-store.ts lockFile), or one left by a writer that stopped. */
+export const configBusy = (err: unknown): boolean =>
+  err instanceof Error && /Timed out waiting for lock:/.test(err.message)
+
+/**
+ * The usual edit: the file (the defaults when there is none) changed by `change`, written when it
+ * says ok. The lock still taken after its wait (another writer, or one that stopped mid-write a
+ * moment ago: its lock goes after 30 seconds) is a refusal in words, the file as it was.
+ */
 function editConfig(change: (raw: Raw) => EditResult): EditResult {
-  return withConfigFile((had, save) => {
-    const raw = had ?? structuredClone<Raw>(DEFAULT_CONFIG)
-    const r = change(raw)
-    if (r.ok) save(raw)
-    return r
-  })
+  try {
+    return withConfigFile((had, save) => {
+      const raw = had ?? structuredClone<Raw>(DEFAULT_CONFIG)
+      const r = change(raw)
+      if (r.ok) save(raw)
+      return r
+    })
+  } catch (err) {
+    if (configBusy(err)) return { ok: false, error: t('err.configBusy') }
+    throw err
+  }
 }
 
 export function loadConfig(): Config {
@@ -343,10 +356,15 @@ export function withTimeProjects(raw: Raw, lane: string, projects: readonly stri
  */
 export function addTimeProjects(lane: string, projects: readonly string[]): EditResult {
   if (!readConfigFile()) return { ok: true }
-  return withConfigFile((raw, save) => {
-    if (raw && withTimeProjects(raw, lane, projects).length) save(raw)
-    return { ok: true }
-  })
+  try {
+    return withConfigFile((raw, save) => {
+      if (raw && withTimeProjects(raw, lane, projects).length) save(raw)
+      return { ok: true }
+    })
+  } catch (err) {
+    if (configBusy(err)) return { ok: false, error: t('err.configBusy') }
+    throw err
+  }
 }
 
 /** Why a wake switch's value is refused, in the panel's words (err.wakeSetting). */

@@ -761,3 +761,15 @@ test('a client off and a retired project refuse an entry, --new-project too, say
   const off = await jsonOf(cfg, ['add', '--client', 'personal', '--project', 'Internal', ...at, 'Reading'])
   assert.deepEqual([off.ok, off.error], [false, 'clientOff'])
 })
+
+test('--new-project while config.json’s lock is held (a writer stopped a moment ago): refused in words, no entry written', async () => {
+  const { dir, cfg } = await setUp()
+  const file = join(dir, 'config', 'herdr', 'plugins', 'config', 'agent-board', 'config.json')
+  mkdirSync(join(file, '..'), { recursive: true })
+  writeFileSync(file, JSON.stringify(cfg))
+  mkdirSync(`${file}.lock`)
+  const at = ['--start', '2026-10-29T09:00:00-04:00', '--minutes', '30']
+  const r = await jsonOf(cfg, ['add', '--project', 'Audit', '--new-project', ...at, 'Case 10001 X: work'])
+  assert.deepEqual([r.ok, r.error], [false, 'configBusy'])
+  assert.deepEqual(await jsonOf(cfg, ['list', '--date', '2026-10-29']), [])
+})

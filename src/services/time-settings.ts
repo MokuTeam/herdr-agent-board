@@ -5,7 +5,7 @@
 // the same write. A rename moves the client's live entries of the project in one transaction
 // (time-store.ts renameProject), config.json written last in it: a failure leaves both as they were;
 // entries are moved only as any entry is written (the config checks out, a backup went through).
-import { categoriesEdited, readConfigFile, withConfigFile } from '../adapters/config-file.ts'
+import { categoriesEdited, configBusy, readConfigFile, withConfigFile } from '../adapters/config-file.ts'
 import type { BoardDb } from '../adapters/db.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { projectUse, renameProject, TimeError } from '../adapters/time-store.ts'
@@ -213,6 +213,7 @@ export function editTimeSettings(body: unknown, withDb: WithDb): TimeSettingsRes
     })
   } catch (err) {
     if (err instanceof TimeError) return { ok: false, error: err.message, code: codeOf(err.key) }
+    if (configBusy(err)) return { ok: false, error: t('err.configBusy'), code: 'configBusy' }
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
 }

@@ -7,7 +7,7 @@
 // A project typed as new (`--new-project`, the editor's "New project…", #237) goes into the
 // client's list in config.json with the entry that has it, under the file's lock (withNewProject).
 import { readKey, readStatus } from '../adapters/backup-store.ts'
-import { readConfigFile, withConfigFile, withTimeProjects } from '../adapters/config-file.ts'
+import { configBusy, readConfigFile, withConfigFile, withTimeProjects } from '../adapters/config-file.ts'
 import { TimeError } from '../adapters/time-store.ts'
 import { activeTargets, backupConfig, targetWhere } from '../core/backup.ts'
 import { t } from '../core/lang.ts'
@@ -57,12 +57,18 @@ export function withNewProject<T>(
 ): T {
   // no file to add it to (a board that never wrote its config): the entry alone, as before
   if (!readConfigFile()) return write(conf)
-  return withConfigFile((raw, save) => {
-    const now = raw ? timeConfig(raw.time) : conf
-    if (!now) throw new TimeError('time.err.off')
-    const written = write(now)
-    const e = entryOf(written)
-    if (raw && withTimeProjects(raw, e.client, [e.project]).length) save(raw)
-    return written
-  })
+  try {
+    return withConfigFile((raw, save) => {
+      const now = raw ? timeConfig(raw.time) : conf
+      if (!now) throw new TimeError('time.err.off')
+      const written = write(now)
+      const e = entryOf(written)
+      if (raw && withTimeProjects(raw, e.client, [e.project]).length) save(raw)
+      return written
+    })
+  } catch (err) {
+    // the lock still taken: nothing written, the entry neither
+    if (configBusy(err)) throw new TimeError('err.configBusy')
+    throw err
+  }
 }

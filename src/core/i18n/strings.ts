@@ -281,6 +281,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'err.cat.other': '{title} is the fallback lane and stays',
     'err.language': 'Unknown language {lang}',
     'err.foldWaiting': 'Unknown way to fold {mode}',
+    'err.configBusy':
+      'config.json is being changed by another process, or one stopped while changing it: try again in a moment (a lock left behind goes after 30 seconds).',
     'err.fs.missing': 'Not found: {path}',
     'err.fs.open': 'Could not open it: {why}',
 
@@ -919,6 +921,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'err.cat.other': '{title} нужна как запасная дорожка',
     'err.language': 'Нет языка {lang}',
     'err.foldWaiting': 'Нет такого способа сворачивать: {mode}',
+    'err.configBusy':
+      'config.json сейчас меняет другой процесс, или он остановился посреди изменения: попробуйте чуть позже (оставленная блокировка снимается через 30 секунд).',
     'err.fs.missing': 'Не найдено: {path}',
     'err.fs.open': 'Не открылось: {why}',
 
