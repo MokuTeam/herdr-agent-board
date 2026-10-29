@@ -335,6 +335,8 @@ describe('the tunnel listener', () => {
       '/api/backup',
       '/api/%62ackup',
       '/api/./backup',
+      '/api/time-settings',
+      '/api/time-%73ettings',
     ]) {
       expect([path, ...(await answer(me.get(path)))]).toEqual([path, 403, { error: 'local' }])
       expect([path, ...(await answer(me.post(path, { op: 'off' })))]).toEqual([path, 403, { error: 'local' }])

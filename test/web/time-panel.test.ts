@@ -431,3 +431,30 @@ test('billable in the editor: set on the entry or the config’s; what saving se
   expect(addOf({ ...newDraft('client-a', 'Support', '2026-10-28'), billable: false })?.billable).toBe(false)
   expect('billable' in (addOf(newDraft('client-a', 'Support', '2026-10-28')) ?? {})).toBe(false)
 })
+
+test('a project typed as new goes with the change that names it: on an add, and on an edit that changes the project', () => {
+  const fresh = { ...newDraft('client-a', 'Audit', '2026-10-28'), newProject: true }
+  expect(addOf(fresh)?.newProject).toBe(true)
+  expect('newProject' in (addOf(newDraft('client-a', 'Support', '2026-10-28')) ?? {})).toBe(false)
+  const e = {
+    id: 'e1',
+    rev: 2,
+    client: 'client-a',
+    project: 'Support',
+    description: 'x',
+    date: '2026-10-28',
+    start: '2026-10-28T13:00:00Z',
+    stop: '2026-10-28T13:30:00Z',
+    tags: [],
+  }
+  expect(draftOf(e).newProject).toBe(false)
+  expect(changesOf(e, { ...draftOf(e), project: 'Audit', newProject: true })?.edit).toEqual({
+    op: 'edit',
+    id: 'e1',
+    rev: 2,
+    project: 'Audit',
+    newProject: true,
+  })
+  // typed back to the entry's own: no change, nothing new
+  expect(changesOf(e, { ...draftOf(e), newProject: true })?.edit).toBe(null)
+})

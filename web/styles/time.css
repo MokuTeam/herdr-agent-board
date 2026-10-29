@@ -440,3 +440,133 @@
   .time-switch input, .time-switch input::before { transition: none; }
 }
 @keyframes time-fade { from { opacity: 0; } }
+
+/* The editor's "New project…" (#237): the name typed where the list was, "Back to the list" a
+   quiet link beside it; what Save will do in a line under the row (the danger color when it waits). */
+.time-new-project label { color: var(--label-2); }
+.time-new-row { display: flex; align-items: center; gap: 6px; }
+.time-new-row input { flex: 1 1 auto; }
+.time-new-back, .time-set-link {
+  flex: none;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.time-new-back:hover:not(:disabled), .time-set-link:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.time-new-back:active:not(:disabled), .time-set-link:active:not(:disabled) { transform: scale(0.96); }
+.time-new-back:disabled, .time-set-link:disabled { opacity: 0.5; cursor: default; }
+.time-project-note { margin: -4px 0 0; color: var(--label-2); font-size: 12px; line-height: 1.35; }
+
+/* Settings → Time tracking… (web/src/components/time/TimeSettingsPanel.tsx, #237): grouped lists
+   as the Time panel's lines are (a surface, a hairline between rows); a client a row with its
+   lane's color, a line of what it has and its switch, opened in place, its chevron turning;
+   a client off quieter; links for the small changes, buttons for the ones that add. */
+.time-set-body { display: flex; flex-direction: column; gap: 8px; max-width: 760px; }
+.time-set-body > * { flex: none; }
+.time-set-group { margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-card); list-style: none; }
+.time-set-group > .time-switch + .time-set-zone { margin-top: 12px; }
+.time-set-hint { margin: 4px 0 0; }
+.time-set-zone select { max-width: 320px; }
+.time-set-sub { margin: 14px 2px 6px; color: var(--label-2); font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; }
+.time-set-client-body .time-set-sub:first-child { margin-top: 4px; }
+.time-set-quiet { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.time-set-refusal { margin-top: 6px; }
+
+.time-set-clients, .time-set-lanes { padding: 0; }
+.time-set-client, .time-set-lane { position: relative; padding: 0 12px; }
+.time-set-client + .time-set-client::before, .time-set-lane + .time-set-lane::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 12px;
+  height: 0.5px;
+  background: var(--separator);
+}
+.time-set-client-head { display: flex; align-items: center; gap: 10px; min-height: 48px; }
+.time-set-disclose {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 0;
+  border: 0;
+  background: none;
+  color: var(--label);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.time-set-disclose svg { flex: none; width: 13px; height: 13px; stroke-width: 2.2; color: var(--label-3); transition: transform 200ms cubic-bezier(0.2, 0.9, 0.3, 1); }
+.time-set-client.open .time-set-disclose svg { transform: rotate(90deg); }
+.time-set-name { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.time-set-name .time-dot { font-size: 14px; font-weight: 600; letter-spacing: -0.006em; overflow-wrap: anywhere; }
+.time-set-name small { color: var(--label-2); font-size: 12px; overflow-wrap: anywhere; }
+.time-set-client.off .time-set-name .time-dot { color: var(--label-2); }
+.time-set-client-body { padding: 0 0 12px 21px; }
+.time-switch-bare { flex: none; }
+
+/* A project's row: its name, its entries, billable (a column named once, in the heading), Rename
+   and Retire as small icon buttons; a retired one's: its name, its entries, Bring back. */
+.time-set-projects { margin: 0; padding: 0; list-style: none; }
+.time-set-projects-head, .time-set-project { display: grid; grid-template-columns: minmax(0, 1fr) auto 52px 28px 28px; align-items: center; column-gap: 6px; }
+.time-set-projects-head h5 { margin: 0; font: inherit; }
+.time-set-projects-head span { grid-column: 3; text-align: center; }
+.time-set-project { min-height: 36px; border-bottom: 0.5px solid var(--separator); }
+.time-set-retired .time-set-project { grid-template-columns: minmax(0, 1fr) auto auto; }
+.time-set-project-name { min-width: 0; font-size: 13.5px; overflow-wrap: anywhere; }
+.time-set-retired .time-set-project-name { color: var(--label-2); }
+.time-set-uses { color: var(--label-3); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.time-set-check { display: grid; place-items: center; }
+.time-set-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--green); cursor: pointer; }
+.time-set-icon { width: 28px; height: 28px; background: none; color: var(--label-2); }
+.time-set-icon svg { width: 16px; height: 16px; }
+.time-set-icon:hover:not(:disabled) { background: var(--fill); color: var(--label); }
+.time-set-icon:active:not(:disabled) { transform: scale(0.92); }
+.time-set-icon:disabled { opacity: 0.45; }
+.time-set-project.renaming { display: block; padding: 6px 0; }
+.time-set-billed { margin-top: 14px; }
+.time-set-rename, .time-set-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.time-set-add { margin-top: 8px; }
+.time-set-rename input, .time-set-add input {
+  box-sizing: border-box;
+  flex: 1 1 140px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--fill-2);
+  box-shadow: inset 0 0 0 0.5px var(--separator);
+  color: var(--label);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.time-set-rename input:focus, .time-set-add input:focus {
+  box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.time-set-add .button:disabled, .time-set-rename .button:disabled { opacity: 0.5; }
+.time-set-systems { min-height: 0; padding: 0; background: none; box-shadow: none; }
+.time-set-systems small { margin-left: 4px; color: var(--label-3); font-size: 11px; }
+
+.time-set-lane { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 44px; }
+.time-set-lane .time-dot { flex: 1; min-width: 0; font-size: 13.5px; overflow-wrap: anywhere; }
+.time-set-new { align-self: flex-start; margin-left: 0; }
+.time-set-draft { padding: 6px 8px; }
+
+/* a finger: Rename and Retire big enough to hit */
+@media (pointer: coarse) {
+  .time-set-projects-head, .time-set-project { grid-template-columns: minmax(0, 1fr) auto 44px 36px 36px; }
+  .time-set-icon { width: 36px; height: 36px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .time-set-disclose svg { transition: none; }
+}

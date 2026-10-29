@@ -1896,7 +1896,24 @@ while there is one, no entry is written, and `board time day`, the Time panel, t
 
 **Clients and projects.** With `clients`, only the lanes listed take time, and only into their
 listed `projects` (a typo is refused with the list; `--new-project` adds one on purpose); a client
-without `projects` takes any. Without `clients`, every lane takes any project.
+without `projects` takes any. Without `clients`, every lane takes any project. A project added
+(`--new-project`, the editor's "New project…", Settings → Time tracking…, the import) that the
+client has already, case, spaces and characters that do not show aside (and the same letters however
+they are encoded), is the one it has: "support " is "Support", and the list gets no near duplicate. A client with `"on": false` takes no new entry (nor one moved to it): its
+entries stay, billed by its rules as before. `retired` lists projects no longer offered: an entry
+keeps one, a new entry is refused it (`--new-project` too: it is brought back in Settings, not by an
+agent). `"on": false` on `time` itself turns time tracking off and keeps every setting for when it
+is on again. Every writer of config.json (the Settings panels, `--new-project`, the import) changes
+it under one lock, so two at once never lose each other's change; the one write outside it is the
+defaults a first start puts there when there is no file at all. A writer that waits gives up after 2
+seconds and says so, the file as it was; a lock left by a writer that stopped mid-write is taken
+over once it is 30 seconds old, so until then each change asked is refused after its 2 seconds. A
+new project and a rename hold the lock while the database writes (which may wait up to 5 seconds for
+another writer of it). A config.json that does not read as JSON (a comma too many) is never replaced
+by the defaults: every change from the board is refused, in words, until it is fixed by hand. The
+import adds to a lane's list the projects of the entries it wrote (new rows, and ones `--update`
+rewrote): a row already there, or one that differs (a project renamed on the board since), brings
+no name back; a new row under an old name brings that name as Toggl has it.
 
 **Billing rules, as data.** A client's day becomes billed lines: each entry goes to the first rule
 whose `match` (a regex on the description, case aside) fits; `group` adds entries up (`entry`
@@ -2008,7 +2025,7 @@ client: `client`, `date`, `zone`, `seconds` (worked), `billedSeconds`, `held` an
 ids), and `entries` (the day's entries in full). `projects` gives `{ "<lane>": [...] | null }`, or
 null without `clients`. An error is `{ "ok": false, "error": "<code>", "message": "…" }` on stdout
 with exit code 1: `notYours`, `changedSince`, `gone`, `removed`, `config`, `noBackup`,
-`notBackedUp`, `client`, `project`, `when`, `whenRange`, `stopAhead`, `system`, `noSystem`,
+`notBackedUp`, `client`, `clientOff`, `project`, `retired`, `when`, `whenRange`, `stopAhead`, `system`, `noSystem`,
 `billableFlags`, `usage`… (the key of its
 text). **While `problems` is not empty, an agent stops:** the day's figures were worked out with
 what of config.json checks out, and are not to be billed from.
@@ -2036,6 +2053,31 @@ client that wants the entries themselves to add up to the billed figure; a refus
 an entry open in the editor stays as it is. The board changes them as the owner (`POST /api/time`),
 each change saying the revision it read (one changed since is refused), with the same checks as
 the command: the config, a backup that went through, times within a day ahead and a year back.
+
+**New projects in the editor.** The Project field ends with "New project…": the name typed there
+goes with Save, which adds it to the client's list and saves the entry with it in one request
+(`newProject` on `add` and `edit`). A line under the field says what Save will do: add it, take the
+client's own name for it (the same but for case and spaces), or wait (a retired one). The Client
+field of a new entry offers the clients that take new entries; adding a client is Settings → Time
+tracking…'s, so a stray tap cannot start billing a new lane.
+
+**Settings → Time tracking…** (on the board on this computer only, as Backup… is): time tracking on
+and off, the zone days are counted in; the clients in the lanes' order, each with a line of what it
+has and its switch (off: no new entries); opened, a client's projects with their entries, billable
+or not, Rename and Retire; a project added; the retired ones, each to bring back; whether the client
+is billed, and the systems its time is entered into. A lane without time takes it in one tap, and
+a new lane can be made and take time in one step. Every change is checked as the board reads the
+config and refused when it would bring a problem the file did not have; one already there stays
+said and stops no change elsewhere. A rename says first how many entries move: the client's entries
+of the project, however they spell it, removed ones too (restored, they come back under the new
+name), go to the new name in one transaction, a journal row each, then config.json is written in
+that transaction (a failure leaves both as they were); a mark that was current stays current, since
+the name is the board's own. A name the client has already is refused (no merge); the same name
+again is no change. A backup restored from before a rename brings the entries back under their old
+name while config.json keeps the new one: the old name is then a project the list does not have
+(rename it again, or add it back). With no `time` in config.json yet, the panel shows the lanes
+with none taking time; a change there sets time up off, and only its switch turns it on. Billing rules and
+`ref` stay in config.json, and a client that has them says so.
 
 **Billable and entered, on the board.** An entry's editor has a switch for billable, its default
 the config's (said while the entry follows it); a non-billable entry shows apart under its client,
@@ -3086,8 +3128,9 @@ server's own record, filled in from it when missing; Undo removes it). None of i
 password is ever in it. The board checks every field before it uses it, and runs nothing
 while one does not check out.
 
-`time` (time tracking, [Time](#time): `zone`, `excludeTags`, `clients` with each one's `projects`,
-`ref`, `zone` and `billing` rules).
+`time` (time tracking, [Time](#time); Settings → Time tracking… sets all but the billing rules):
+`on`, `zone`, `excludeTags`, `clients` with each one's `on`, `projects`, `retired`, `billable`,
+`nonBillable`, `systems`, `ref`, `zone` and `billing` rules).
 
 `backup` (the [backup](#backup) of the board's database; Settings → Backup… sets it): `folder` (a
 folder that syncs elsewhere), `server` (`{ "host", "port", "admin": { "user", "key" }, "set" }`:
@@ -3188,6 +3231,7 @@ the folder target), `src/adapters/backup-ssh.ts` (ssh to the drop), `src/service
 `time` settings, work dates in a zone, a day as billed), `src/core/time-import.ts` (Toggl's CSV and
 JSON), `src/adapters/time-store.ts` (the entries, whose they are, the import's batch),
 `src/entrypoints/time-cli.ts` (`board time`), `src/server/routes/time.ts`,
+`src/core/time-settings.ts` and `src/services/time-settings.ts` (Settings → Time tracking…'s changes),
 `web/src/components/time/`. The drop script's tests run it with
 dash where there is one, else a POSIX sh (`test/support/fake-drop-ssh.ts` stands in for ssh), and
 skip without one; Look, Apply and Undo run the same way on a fake root (`test/support/fake-root.ts`:

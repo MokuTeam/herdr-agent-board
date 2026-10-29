@@ -3,12 +3,18 @@
 // guesses) and once the database has a backup off this computer that went through: a target and
 // a passphrase set up, and a snapshot or a Test that went the whole way round on one of them. A
 // target that is down now does not stop a write; one that never worked does.
+//
+// A project typed as new (`--new-project`, the editor's "New project…", #237) goes into the
+// client's list in config.json with the entry that has it, under the file's lock (withNewProject).
+
+import { existsSync } from 'node:fs'
 import { readKey, readStatus } from '../adapters/backup-store.ts'
+import { configBusy, configFile, readConfigFile, withConfigFile, withTimeProjects } from '../adapters/config-file.ts'
 import { TimeError } from '../adapters/time-store.ts'
 import { activeTargets, backupConfig, targetWhere } from '../core/backup.ts'
 import { t } from '../core/lang.ts'
 import type { SetupCheck } from '../core/setup.ts'
-import { problemsText, type TimeConfig, timeConfig } from '../core/time.ts'
+import { problemsText, type TimeConfig, type TimeEntry, timeConfig } from '../core/time.ts'
 import type { Config, Translator } from '../core/types.ts'
 
 /** Why no entry may be written now, or null: it may. */
@@ -37,4 +43,38 @@ export function timeChecks(cfg: Pick<Config, 'time'>, tr: Translator): SetupChec
       ? { ...base, level: 'error', detail: tr('time.doctor.problems', { problems: problemsText(conf.problems, tr) }) }
       : { ...base, level: 'ok', detail: tr('time.doctor.ok', { zone: conf.zone }) },
   ]
+}
+
+/**
+ * An entry written with its project typed as new, under config.json's lock: `write` gets the
+ * config as the file has it now (a project another writer added a moment ago is there, so the
+ * entry takes the client's own name for it, case and spaces aside), then the entry's project goes
+ * into the client's list when it is not in it. Two writers at once never lose each other's. With
+ * no file to read, the config the caller has (`conf`); with time off in it since, refused.
+ */
+export function withNewProject<T>(
+  conf: TimeConfig,
+  write: (conf: TimeConfig) => T,
+  entryOf: (written: T) => TimeEntry,
+): T {
+  // no file to add it to (a board that never wrote its config): the entry alone, as before; one
+  // there that does not read as JSON: refused, nothing written (its list would be left behind)
+  if (!readConfigFile()) {
+    if (existsSync(configFile())) throw new TimeError('err.configUnreadable')
+    return write(conf)
+  }
+  try {
+    return withConfigFile((raw, save) => {
+      const now = raw ? timeConfig(raw.time) : conf
+      if (!now) throw new TimeError('time.err.off')
+      const written = write(now)
+      const e = entryOf(written)
+      if (raw && withTimeProjects(raw, e.client, [e.project]).length) save(raw)
+      return written
+    })
+  } catch (err) {
+    // the lock still taken: nothing written, the entry neither
+    if (configBusy(err)) throw new TimeError('err.configBusy')
+    throw err
+  }
 }

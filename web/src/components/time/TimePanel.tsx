@@ -289,11 +289,13 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   /** A client's settings as the day said them: its billable default and its systems. */
   const settingsOf = (c: string) => day?.settings?.[c]
   const systemsOf = (c: string) => settingsOf(c)?.systems ?? []
+  const retiredOf = (c: string) => settingsOf(c)?.retired ?? []
   const billableDefault = (c: string, project: string): boolean => {
     const own = settingsOf(c)
     return own ? own.billable && !own.nonBillable.includes(project) : true
   }
-  const clientsForNew = client ? [client] : takers
+  // a new entry goes to a client that takes new ones: under an off client's chip, none
+  const clientsForNew = client ? (takers.includes(client) ? [client] : []) : takers
 
   const go = (days: number) => setDate(d => shiftDate(d, days))
   // no swipe while an entry is open: a sideways drag in a field would drop the draft
@@ -382,6 +384,7 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
       draft={draft ?? draftOf(base)}
       clientTitle={title}
       projects={projectsOf}
+      retired={retiredOf}
       tags={shown?.tags}
       billableDefault={billableDefault}
       entered={systemsOf(now.client)
@@ -640,6 +643,7 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
                   clients={clientsForNew}
                   clientTitle={title}
                   projects={projectsOf}
+                  retired={retiredOf}
                   tags={shown?.tags}
                   billableDefault={billableDefault}
                   busy={busy}

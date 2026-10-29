@@ -21,13 +21,13 @@ export interface TimeDay {
   entries: EntryView[]
   /** config.json's `time` does not check out: what, in a line. */
   problems?: string | null
-  /** The lanes that take time (null: every lane), and each one's projects (null: any). */
+  /** The lanes that take new entries (null: every lane), and each one's projects offered (null: any). */
   clients?: string[] | null
   projects?: Record<string, string[] | null>
   /** Tags to offer: the ones held out of the totals first, then the ones entries have, most used first. */
   tags?: string[]
-  /** Each listed client's billable default (by project) and the systems its time is entered in. */
-  settings?: Record<string, { billable: boolean; nonBillable: string[]; systems: TimeSystem[] }>
+  /** Each listed client's billable default (by project), the systems its time is entered in, its retired projects. */
+  settings?: Record<string, { billable: boolean; nonBillable: string[]; systems: TimeSystem[]; retired?: string[] }>
 }
 
 /** A day's answer shows under that day's name only: another day's, arriving late, is not shown. */
@@ -185,6 +185,8 @@ export interface Draft {
   tags: string
   /** Billable as set on the entry; null: as the config says. */
   billable: boolean | null
+  /** The project is typed as new (the editor's "New project…"): Save adds it to the client's list. */
+  newProject: boolean
 }
 
 /** What an entry's view says of its billable: set on it (true, false), or null when it follows the config. */
@@ -226,6 +228,7 @@ export function draftOf(
     stopWas: stopAt,
     tags: e.tags.join(', '),
     billable: billableSet(e),
+    newProject: false,
   }
 }
 
@@ -247,6 +250,7 @@ export function newDraft(client: string, project: string, date: string, now: num
     stopWas: null,
     tags: '',
     billable: null,
+    newProject: false,
   }
 }
 
@@ -375,7 +379,10 @@ export function changesOf(
 ): { edit: Record<string, unknown> | null; move: string | null } | null {
   const edit: Record<string, unknown> = {}
   if (d.description.trim() !== base.description) edit.description = d.description
-  if (d.project !== base.project) edit.project = d.project
+  if (d.project !== base.project) {
+    edit.project = d.project
+    if (d.newProject) edit.newProject = true
+  }
   const times = draftTimes(d)
   if (!times) return null
   if (times.start !== Date.parse(base.start)) {
@@ -405,6 +412,7 @@ export function addOf(d: Draft): Record<string, unknown> | null {
     start: new Date(times.start).toISOString(),
     stop: new Date(times.stop).toISOString(),
     ...(d.billable !== null && { billable: d.billable }),
+    ...(d.newProject && { newProject: true }),
   }
 }
 

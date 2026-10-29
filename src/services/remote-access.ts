@@ -244,9 +244,15 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
           }
           const found = steps.find(s => s.id === 'domain' && s.ok === true)?.port ?? null
           const port = found === 443 ? null : found
-          if (found !== null && conf().publicPort !== port) editTunnel({ publicPort: port })
+          if (found !== null && conf().publicPort !== port) {
+            const saved = editTunnel({ publicPort: port })
+            if (!saved.ok) return refused(saved.error, { steps })
+          }
           // the board answers at its domain: the tunnel on, as after Apply, unless something blocks it
-          if (found !== null && !conf().on && blocked(tunnelProblems(conf(), ports())) === null) setTunnelOn(true)
+          if (found !== null && !conf().on && blocked(tunnelProblems(conf(), ports())) === null) {
+            const on = setTunnelOn(true)
+            if (!on.ok) return refused(on.error, { steps })
+          }
           changed()
           return ok({ steps, publicPort: found })
         }
