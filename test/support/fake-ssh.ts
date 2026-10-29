@@ -31,7 +31,9 @@
 //                                                   password's prompt, then more: a one-time code)
 //               alsoPassword?: boolean },           after keyboard-interactive failed, the password method too
 //     fixture?: string,                             a folder: look-1 prints its round1.txt, look-2 its round2.txt
-//     run?: { lines: string[], dropAfter?: number } a launch (or the board's install) prints these, cut after dropAfter (exit 255)
+//     run?: { lines: string[], dropAfter?: number } a launch (or the board's install or its removal) prints these, cut after dropAfter (exit 255)
+//     board?: string[],                             what the round that reads the install prints between its
+//                                                   `@@facts 1` and `@@end` (none: nothing installed)
 //     wrong?: string[] }                            a wrong password's lines instead of the flavour's (a sudo in another language)
 // No line for its server key in the quoted UserKnownHostsFile: `Host key verification failed.`, 255;
 // with StrictHostKeyChecking=accept-new the key is pinned then (another key for the host there:
@@ -63,6 +65,7 @@ type Admin = {
   login?: { password: string; kbdint?: string[]; alsoPassword?: boolean }
   fixture?: string
   run?: { lines: string[]; dropAfter?: number }
+  board?: string[]
   wrong?: string[]
 }
 type State = {
@@ -434,7 +437,7 @@ async function admin(): Promise<void> {
   if (prefix.includes('sudo -k -S')) {
     if (logPath) appendFileSync(`${logPath}.stdin`, `${JSON.stringify(input)}\n`)
     // the board's install (path B) has its pack after sudo's line
-    const sudoLine = kind === 'install' ? input.slice(0, input.indexOf('\n') + 1) : input
+    const sudoLine = kind === 'install' || kind === 'undo' ? input.slice(0, input.indexOf('\n') + 1) : input
     if (a.password !== undefined && sudoLine !== `${a.password}\n`) {
       say(...(a.wrong ?? words.wrong))
       end(1)
@@ -460,8 +463,12 @@ async function admin(): Promise<void> {
     case 'look-2':
       print('round2.txt')
       return end(0)
+    case 'board':
+      out('@@facts 1', ...(a.board ?? ['@@user ']), '@@end')
+      return end(0)
     case 'launch':
-    case 'install': {
+    case 'install':
+    case 'undo': {
       const lines = a.run?.lines ?? []
       const drop = a.run?.dropAfter
       for (const [n, line] of lines.entries()) {

@@ -54,3 +54,21 @@ export async function boardPack(root: string = ROOT): Promise<BoardPack | null> 
     return null
   }
 }
+
+/**
+ * The local checkout's version, cheaply (no pack): its commit, and whether its tracked files have
+ * uncommitted changes, as the pack would carry them (untracked files stay behind there too); null
+ * when the board is not a git checkout.
+ */
+export async function boardHead(root: string = ROOT): Promise<{ commit: string; changes: boolean } | null> {
+  try {
+    const head = await git(root, ['rev-parse', 'HEAD'])
+    const commit = text(head.out)
+    if (head.code !== 0 || !/^[0-9a-f]{40}$/.test(commit)) return null
+    const status = await git(root, ['status', '--porcelain', '--untracked-files=no'])
+    if (status.code !== 0) return null
+    return { commit, changes: text(status.out) !== '' }
+  } catch {
+    return null
+  }
+}

@@ -105,6 +105,9 @@ const LOGS_IN: Readonly<Record<string, boolean>> = {
   'server-undo': true,
   'server-install-look': true,
   'server-install': true,
+  'server-install-version': true,
+  'server-remove-look': true,
+  'server-remove': true,
   'sync-look': true,
   'sync-pair': false,
   'sync-rules': false,
@@ -337,6 +340,13 @@ export function createRemoteAccess(d: RemoteAccessDeps): RemoteAccess {
         return d.server.install(b)
       case 'server-install-forget':
         return d.server.installForget()
+      // the version of the board on the server read again (the card's), and its removal: its Look, its run
+      case 'server-install-version':
+        return d.server.installVersion(b)
+      case 'server-remove-look':
+        return d.server.removeLook(b)
+      case 'server-remove':
+        return d.server.remove(b)
       case 'server-install-domain':
         return d.server.installDomain(b)
       // Syncing the Claude profiles with the board on the server: answers that never hold the body (the passwords)

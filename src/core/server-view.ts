@@ -2,6 +2,7 @@
 // connection's fields, what sudo needs, where Look, Apply or Undo stands, what Look found, the
 // case, the plan, a run's progress, why something stopped, the server's key the admin login met,
 // and the setup on record. Never a password. Pure, with no node: import: the page imports it.
+import type { BoardVersion, LocalVersion, UndoFacts } from './server-board.ts'
 import type { ServerFacts } from './server-facts.ts'
 import type { Choice, Plan, SetupCase } from './server-plan.ts'
 import type { Progress } from './server-script.ts'
@@ -59,9 +60,20 @@ export interface ServerView {
    * What the last Look was for: the tunnel's web server, or the board installed on the server
    * itself (path B of the board on a server, core/server-install.ts); none: the tunnel's.
    */
-  target?: 'tunnel' | 'install'
+  target?: 'tunnel' | 'install' | 'remove'
   /** Path B: the board's code it sends, the install's output, the setup link (in memory only), its exit. */
   install?: InstallView | null
+  /** "Remove the board from this server": what its Look found, and its run's output and exit. */
+  remove?: RemoveView | null
+  /**
+   * The version of the board on the server as the board last saw it (core/server-board.ts), in
+   * its memory only; null or none: it has not looked at this server since it started.
+   */
+  installed?: InstalledView | null
+  /** The local checkout's version, read as the server's was; null: not a checkout. */
+  local?: LocalVersion | null
+  /** A look at the version on the server is going on (it reads, it changes nothing). */
+  reading?: boolean
   /**
    * Path B: the domain of the board installed on the server (config.json's `tunnel.install.domain`,
    * never the tunnel's own); '' while none is set. None: a board from before it.
@@ -79,6 +91,26 @@ export interface InstallView {
   out: string[]
   /** The setup link the install printed, kept apart from its output until the panel closes. */
   link: string | null
+  code: number | null
+}
+
+/** What the board last saw of the board on the server: its version, or null when nothing was installed; when (ms). */
+export interface InstalledView {
+  version: BoardVersion | null
+  seen: number
+}
+
+export interface RemoveView {
+  /** The plan's id: Remove takes only this Look's. */
+  id: string
+  facts: UndoFacts
+  /** The domain of the web server's part (its record's, else the board on the server's). */
+  domain: string
+  /** The web server has a part of the install's: the view's plan is its undo. */
+  web: boolean
+  /** Asked with the user and its home removed too. */
+  removeUser: boolean
+  out: string[]
   code: number | null
 }
 
@@ -137,6 +169,20 @@ const isInstall = (v: unknown): boolean =>
   (v.link === null || isText(v.link)) &&
   (v.code === null || typeof v.code === 'number')
 
+const isRemove = (v: unknown): boolean =>
+  isFields(v) &&
+  isText(v.id) &&
+  isFields(v.facts) &&
+  isText(v.facts.user) &&
+  isText(v.domain) &&
+  Array.isArray(v.out) &&
+  (v.code === null || typeof v.code === 'number')
+
+const isInstalled = (v: unknown): boolean =>
+  isFields(v) &&
+  typeof v.seen === 'number' &&
+  (v.version === null || (isFields(v.version) && isText(v.version.commit) && isText(v.version.at)))
+
 /** The view's `server` as the board sends it, as far as the panel relies on it. */
 export function isServerView(v: unknown): v is ServerView {
   return (
@@ -155,8 +201,10 @@ export function isServerView(v: unknown): v is ServerView {
     (v.setup === null || isSetup(v.setup)) &&
     (v.testAfter === null || Array.isArray(v.testAfter)) &&
     (v.hostKey === null || isHostKey(v.hostKey)) &&
-    (v.target === undefined || v.target === 'tunnel' || v.target === 'install') &&
+    (v.target === undefined || v.target === 'tunnel' || v.target === 'install' || v.target === 'remove') &&
     (v.install === undefined || v.install === null || isInstall(v.install)) &&
+    (v.remove === undefined || v.remove === null || isRemove(v.remove)) &&
+    (v.installed === undefined || v.installed === null || isInstalled(v.installed)) &&
     (v.installDomain === undefined || isText(v.installDomain)) &&
     (v.passwordHeld === undefined ||
       v.passwordHeld === null ||

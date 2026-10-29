@@ -28,7 +28,7 @@
 // That board answers on a domain of its own (`tunnel.install.domain`), never the tunnel's: its Look
 // and Apply need the server and the login alone of the tunnel's settings, and change none of them.
 import { gzipSync } from 'node:zlib'
-import { type BoardPack, boardPack } from '../adapters/board-pack.ts'
+import { type BoardPack, boardHead, boardPack } from '../adapters/board-pack.ts'
 import { editTunnel, editTunnelAdmin, editTunnelInstall, setTunnelSetup } from '../adapters/config-file.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import type { RemoteRun, spawnRemote } from '../adapters/ssh.ts'
@@ -49,8 +49,25 @@ import {
   SUDO_CHECK,
   takesAskpass,
 } from '../core/server-admin.ts'
+import {
+  type BoardFacts,
+  boardFactsScript,
+  boardVersionOf,
+  type LocalVersion,
+  readBoardFacts,
+  type UndoFacts,
+  undoFactsOf,
+  undoNothing,
+} from '../core/server-board.ts'
 import type { ServerFacts } from '../core/server-facts.ts'
-import { BOARD_SOCKET, BOARD_USER, receiverScript, serverWanted, setupLinkIn } from '../core/server-install.ts'
+import {
+  BOARD_SOCKET,
+  BOARD_USER,
+  receiverScript,
+  removerScript,
+  serverWanted,
+  setupLinkIn,
+} from '../core/server-install.ts'
 import { type LookInput, lookScript1, lookScript2, readRoundOne, readServerFacts } from '../core/server-look.ts'
 import { oneLine, oneshotScripts } from '../core/server-oneshot.ts'
 import {
@@ -67,7 +84,15 @@ import {
 } from '../core/server-plan.ts'
 import { launchScript, type Progress, readProgress, runLine, runScript, startProgress } from '../core/server-script.ts'
 import { type Acme, PORT_4 } from '../core/server-texts.ts'
-import type { AdminHint, InstallView, ServerPhase, ServerView, SudoMode } from '../core/server-view.ts'
+import type {
+  AdminHint,
+  InstalledView,
+  InstallView,
+  RemoveView,
+  ServerPhase,
+  ServerView,
+  SudoMode,
+} from '../core/server-view.ts'
 import { fieldProblem, type TestStep, type TunnelConfig, tunnelConfig } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
 
@@ -106,6 +131,8 @@ export interface ServerSetupDeps {
   tunnel?(on: boolean): Promise<void>
   /** The local checkout's pack for path B (adapters/board-pack.ts, the default); null when there is none. */
   pack?(): Promise<BoardPack | null>
+  /** The local checkout's version without a pack (adapters/board-pack.ts boardHead, the default); null when there is none. */
+  head?(): Promise<LocalVersion | null>
 }
 
 export type Answer = { status: number; body: unknown }
@@ -130,6 +157,16 @@ export interface ServerSetup {
   install(o: Passwords & { plan?: unknown; docker?: unknown }): Promise<Answer>
   /** Path B: the setup link let go (the panel closed). */
   installForget(): Answer
+  /**
+   * The version of the board on the server, read again (one round as root that changes nothing):
+   * the card's, kept in memory. Refused while something else runs; nothing in the view changes but
+   * the version, whatever the answer.
+   */
+  installVersion(o: Passwords): Promise<Answer>
+  /** "Remove the board from this server": its Look (what the install's --undo would take, nothing changed). */
+  removeLook(o: Passwords): Promise<Answer>
+  /** Its run: the install's --undo (with the user when ticked), its output streamed into the view. */
+  remove(o: Passwords & { plan?: unknown; removeUser?: unknown }): Promise<Answer>
   /**
    * Path B's domain (`tunnel.install.domain`), the board on the server's own: `{ domain }`, '' or
    * null clearing it; 409 with `field` and `error` when it is no domain or the tunnel's own.
@@ -246,6 +283,16 @@ interface Looked {
   pack: BoardPack | null
 }
 
+/** What the Look of "Remove the board from this server" leaves for its run. */
+interface RemoveLooked {
+  id: string
+  facts: UndoFacts
+  admin: Admin
+  mode: SudoMode
+  /** Look's login took the password: the run logs in with it again. */
+  password: boolean
+}
+
 /** An ssh's end, and its lines as the server said them (what is read); `secrets`, masked in any line that is shown. */
 interface Heard {
   code: number | null
@@ -279,8 +326,16 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
   /** The one command last made, and what it was made from. */
   let oneshot: { from: string; body: Fields } | null = null
   /** What the last Look was for, and path B's run. */
-  let target: 'tunnel' | 'install' = 'tunnel'
+  let target: 'tunnel' | 'install' | 'remove' = 'tunnel'
   let install: InstallView | null = null
+  /** "Remove the board from this server": its Look's plan and run, and what its run goes by. */
+  let remove: RemoveView | null = null
+  let removeLooked: RemoveLooked | null = null
+  /** The version of the board on the server as last seen, and the local checkout's then: memory only. */
+  let installed: InstalledView | null = null
+  let local: LocalVersion | null = null
+  /** A look at that version going on (beside anything else: it reads only). */
+  let reading = false
 
   const tunnel = (): Fields => (isRecord(cfg.tunnel) ? cfg.tunnel : {})
   const conf = (): TunnelConfig => tunnelConfig(cfg.tunnel)
@@ -407,6 +462,8 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     login: Login,
     secrets: readonly string[],
     pin = false,
+    /** Cancel kills it (the view's Look or run); the version's look is no one's to cancel. */
+    track = true,
   ): Promise<Heard> {
     const args = adminSshArgs({
       conf: to.c,
@@ -417,7 +474,7 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       ...(pin && { pin }),
     })
     const run = d.spawn(to.bin, args, stdin, ms, login.password === null ? null : { password: login.password })
-    current = run
+    if (track) current = run
     const heard: Heard = { code: null, error: null, out: [], err: [], askpass: null, secrets }
     run.onLine((line, from) => heard[from === 'err' ? 'err' : 'out'].push(line))
     const end = await run.done
@@ -473,12 +530,14 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     return fingerprint ? { fingerprint, pinnedNow } : null
   }
 
-  async function lookAt(o: Fields, kind: 'look' | 'undo' | 'install'): Promise<Answer> {
+  async function lookAt(o: Fields, kind: 'look' | 'undo' | 'install' | 'remove'): Promise<Answer> {
     const pw = passwordsOf(o)
     if ('status' in pw) return pw
     const { password, sudoPassword } = pw
     if (busy) return refused('busy', null)
-    const to = ready(kind === 'install' ? INSTALL_NEEDS : TUNNEL_NEEDS)
+    // the board on the server (its install, or its removal) logs in to the server alone
+    const board = kind === 'install' || kind === 'remove'
+    const to = ready(board ? INSTALL_NEEDS : TUNNEL_NEEDS)
     if ('status' in to) return to
     const { c } = to
     busy = true
@@ -494,8 +553,10 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     testAfter = null
     hostKey = null
     last = null
-    target = kind === 'install' ? 'install' : 'tunnel'
+    target = kind === 'install' ? 'install' : kind === 'remove' ? 'remove' : 'tunnel'
     install = null
+    remove = null
+    removeLooked = null
     changed()
     try {
       // path B answers on a domain of its own, never the tunnel's: one that will do, before anything else
@@ -532,17 +593,9 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       if (read.mode === 'password' && sudoFrom === null) return stopLook('needPassword', null)
       const stdin = sudoFrom === null ? null : `${sudoFrom === 'own' ? sudoPassword : password}\n`
       // the server mode's target has no key of the board's to put in place
-      const key = kind === 'install' ? null : await boardKey()
+      const key = board ? null : await boardKey()
       if (gone()) return cancelled()
-      const input: LookInput =
-        kind === 'install'
-          ? { user: BOARD_USER, socket: BOARD_SOCKET, domain: installDomain, server: true }
-          : {
-              user: c.user,
-              socket: c.socket,
-              domain: c.domain,
-              ...(key !== null && { publicKey: key }),
-            }
+      const typed = (probe.askpass?.answered ?? 0) > 0
       // each round as root, sudo's password (when it asks one) on stdin once: one sudo try per click
       const round = async (script: string): Promise<string | Answer> => {
         const h = await hear(to, remoteCommand(script, read.mode), stdin, ROUND_MS, login, secrets)
@@ -551,6 +604,33 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
         const why = stopped(h, login, sudoFrom)
         return stopLook(why.hint, why.detail)
       }
+      // the board on the server: what its install left (root's record, its user), its version with it
+      let found: UndoFacts | null = null
+      let removeDomain = ''
+      if (board) {
+        const out = await round(boardFactsScript())
+        if (typeof out !== 'string') return out
+        const b = readBoardFacts(out)
+        if (!b) return stopLook('unreadable', null)
+        await sawVersion(b, pack)
+        if (gone()) return cancelled()
+        found = undoFactsOf(b)
+        // the web server's part is looked at for the domain the install had (else the card's)
+        removeDomain = b.record?.domain ?? installDomainOf()
+        if (kind === 'remove' && (removeDomain === '' || fieldProblem('domain', removeDomain)))
+          return removePlan(null, found, '', to.a, read.mode, typed)
+      }
+      const input: LookInput =
+        kind === 'install'
+          ? { user: BOARD_USER, socket: BOARD_SOCKET, domain: installDomain, server: true }
+          : kind === 'remove'
+            ? { user: found?.user ?? BOARD_USER, socket: BOARD_SOCKET, domain: removeDomain, server: true }
+            : {
+                user: c.user,
+                socket: c.socket,
+                domain: c.domain,
+                ...(key !== null && { publicKey: key }),
+              }
       const one = await round(lookScript1(input))
       if (typeof one !== 'string') return one
       const r1 = readRoundOne(one)
@@ -560,7 +640,8 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       if (typeof two !== 'string') return two
       const f = readServerFacts(r1, two)
       if (!f) return stopLook('unreadable', null)
-      const typed = (probe.askpass?.answered ?? 0) > 0
+      if (kind === 'remove')
+        return found ? removePlan(f, found, removeDomain, to.a, read.mode, typed) : stopLook(null, null)
       if (kind === 'install')
         return pack ? installPlan(f, installDomain, to.a, read.mode, pack, typed) : stopLook(null, null)
       return planFrom(f, c, to.a, read.mode, kind, key, typed)
@@ -643,77 +724,200 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
     return ok()
   }
 
+  /** The board on the server as this Look or read found it: its version (none: not installed), and the local checkout's beside it. */
+  async function sawVersion(b: BoardFacts, pack: LocalVersion | null): Promise<void> {
+    installed = { version: b.record ? boardVersionOf(b.record) : null, seen: d.now() }
+    if (pack) local = { commit: pack.commit, changes: pack.changes }
+    else {
+      try {
+        local = await (d.head ?? boardHead)()
+      } catch {
+        local = null
+      }
+    }
+  }
+
   /**
-   * Path B's Apply: the receiver as root, the pack on its stdin after sudo's password; its output
-   * into the view. When sudo asks a password, it goes alone first (SUDO_CHECK): one try, and a
-   * wrong one never has the pack read after it as more tries.
+   * "Remove the board from this server"'s plan: what the install's --undo would take, from what the
+   * round as root found and (`f`) the web server's part, the server mode's alone (its record, at
+   * the install's domain; the tunnel's is another's and stays). Nothing there: said so.
    */
-  async function runInstall(o: Fields): Promise<Answer> {
+  function removePlan(
+    f: ServerFacts | null,
+    u: UndoFacts,
+    domain: string,
+    a: Admin,
+    mode: SudoMode,
+    password: boolean,
+  ): Answer {
+    let web: Plan | null = null
+    let at = domain
+    if (f) {
+      const r = f.record === null || f.record === undefined ? null : setupRecord(f.record)
+      // as the install's --undo: the web server's record of this user, at its own domain
+      at = r?.domain ?? domain
+      const w: Wanted = { ...serverWanted(at, u.user), ...(d.acme && { acme: d.acme }) }
+      if (r && whose(r, w) !== 'other')
+        web = undoPlan(r, f, { id: d.newId(), removeDocker: false, removeEdited: false })
+    }
+    if (undoNothing(u, true, web !== null)) return stopLook(null, t('install.undo.nothing'))
+    const id = web?.id ?? d.newId()
+    facts = f
+    plan = web
+    choice = null
+    remove = { id, facts: u, domain: at, web: web !== null, removeUser: false, out: [], code: null }
+    removeLooked = { id, facts: u, admin: a, mode, password }
+    phase = 'plan'
+    changed()
+    return ok()
+  }
+
+  /**
+   * The version of the board on the server, read again: the probe, then one round as root that
+   * only reads. Nothing in the view changes but that version; a login the server refuses says why
+   * in the answer alone.
+   */
+  async function readVersion(o: Fields): Promise<Answer> {
+    const pw = passwordsOf(o)
+    if ('status' in pw) return pw
+    const { password, sudoPassword } = pw
+    if (busy || reading) return refused('busy', null)
+    const to = ready(INSTALL_NEEDS)
+    if ('status' in to) return to
+    // a server whose key no login met yet is Look's to meet (call 2), not a read's
+    if (!(await d.hostKeyPinned())) return refused('noHostKey', null)
+    if (busy || reading) return refused('busy', null)
+    reading = true
+    changed()
+    try {
+      const login = await loginOf(to.bin, password)
+      const secrets = [password ?? '', sudoPassword ?? '']
+      const probe = await hear(to, remoteCommand(PROBE_SCRIPT, 'root'), null, PROBE_MS, login, secrets, false, false)
+      const read = probe.code === 0 ? readProbe(probe.out) : null
+      if (!read) {
+        const why = stopped(probe, login, null)
+        return refused(why.hint ?? (probe.code === 0 ? 'unreadable' : null), why.detail)
+      }
+      if (read.mode === 'requiretty') return refused('requiretty', null)
+      if (read.mode === 'none') return refused(adminHint(probe.out) ?? 'notSudoer', null)
+      const sudoFrom = sudoFromOf(read.mode, password, sudoPassword)
+      if (read.mode === 'password' && sudoFrom === null) return refused('needPassword', null)
+      const stdin = sudoFrom === null ? null : `${sudoFrom === 'own' ? sudoPassword : password}\n`
+      const script = remoteCommand(boardFactsScript(), read.mode)
+      const h = await hear(to, script, stdin, ROUND_MS, login, secrets, false, false)
+      if (h.code !== 0) {
+        const why = stopped(h, login, sudoFrom)
+        return refused(why.hint, why.detail)
+      }
+      const b = readBoardFacts(h.out.join('\n'))
+      if (!b) return refused('unreadable', null)
+      await sawVersion(b, null)
+      return ok()
+    } finally {
+      reading = false
+      changed()
+    }
+  }
+
+  /**
+   * Path B's runs, the install (its Apply) and the removal: the script as root, the pack on its
+   * stdin after sudo's password; its output into the view. When sudo asks a password, it goes
+   * alone first (SUDO_CHECK): one try, and a wrong one never has the pack read after it as more
+   * tries. Each takes only its own Look's plan, with the admin it was made for.
+   */
+  async function runBoard(o: Fields, kind: 'install' | 'remove'): Promise<Answer> {
     const pw = passwordsOf(o)
     if ('status' in pw) return pw
     const { password, sudoPassword } = pw
     if (busy) return refused('busy', null)
     const l = last
-    if (!l?.pack || target !== 'install' || typeof o.plan !== 'string' || o.plan !== l.plan.id)
-      return refused('lookAgain', null)
-    if (l.plan.ticks.includes('docker') && o.docker !== true) return refused(null, t('server.err.docker'))
+    const r = removeLooked
+    let looked: { mode: SudoMode; admin: Admin; password: boolean }
+    if (kind === 'install') {
+      if (!l?.pack || target !== 'install' || typeof o.plan !== 'string' || o.plan !== l.plan.id)
+        return refused('lookAgain', null)
+      if (l.plan.ticks.includes('docker') && o.docker !== true) return refused(null, t('server.err.docker'))
+      looked = l
+    } else {
+      if (!r || target !== 'remove' || typeof o.plan !== 'string' || o.plan !== r.id) return refused('lookAgain', null)
+      looked = r
+    }
+    const { mode } = looked
     const to = ready(INSTALL_NEEDS)
     if ('status' in to) return to
     // its domain or the admin changed since Look: its plan is not theirs
-    const domain = installDomainOf()
-    if (domain !== l.wanted.domain || JSON.stringify(to.a) !== JSON.stringify(l.admin))
-      return refused('lookAgain', null)
-    const why = installProblem(domain)
-    if (why) return refused(null, why)
-    if (l.password && password === null) return refused('loginPassword', null)
-    const sudoFrom = sudoFromOf(l.mode, password, sudoPassword)
-    if (l.mode === 'password' && sudoFrom === null) return refused('needPassword', null)
+    if (JSON.stringify(to.a) !== JSON.stringify(looked.admin)) return refused('lookAgain', null)
+    if (kind === 'install' && l) {
+      const domain = installDomainOf()
+      if (domain !== l.wanted.domain) return refused('lookAgain', null)
+      const why = installProblem(domain)
+      if (why) return refused(null, why)
+    }
+    if (looked.password && password === null) return refused('loginPassword', null)
+    const sudoFrom = sudoFromOf(mode, password, sudoPassword)
+    if (mode === 'password' && sudoFrom === null) return refused('needPassword', null)
+    // the user and its home go only when ticked, and only one the installer made
+    const removeUser = kind === 'remove' && o.removeUser === true && r?.facts.ours === true && r.facts.home !== null
     busy = true
     const gen = generation
+    const stop = (a: Answer): Answer => {
+      if (gen === generation) busy = false
+      return a
+    }
+    // the removal sends the pack the install would: the bootstrap runs the server's own copy when it has one
+    const pack = kind === 'install' && l?.pack ? l.pack : await (d.pack ?? boardPack)()
+    if (gen !== generation) return cancelled()
+    if (!pack) return stop(refused(null, t('install.panel.noCheckout')))
     const pinned = await d.hostKeyPinned()
     if (gen !== generation) return cancelled()
-    if (!pinned) {
-      busy = false
-      return refused('noHostKey', null)
-    }
+    if (!pinned) return stop(refused('noHostKey', null))
     const login = await loginOf(to.bin, password)
     if (gen !== generation) return cancelled()
     const secrets = [password ?? '', sudoPassword ?? '']
     const sudoLine = sudoFrom === null ? '' : `${sudoFrom === 'own' ? sudoPassword : password}\n`
     if (sudoFrom !== null) {
-      const h = await hear(to, remoteCommand(SUDO_CHECK, l.mode), sudoLine, ROUND_MS, login, secrets)
+      const h = await hear(to, remoteCommand(SUDO_CHECK, mode), sudoLine, ROUND_MS, login, secrets)
       if (gen !== generation) return cancelled()
       if (h.code !== 0) {
-        busy = false
         const why = stopped(h, login, sudoFrom)
-        return refused(why.hint, why.detail)
+        return stop(refused(why.hint, why.detail))
       }
     }
     let script: string
     try {
-      script = receiverScript({ domain: l.wanted.domain, lang: lang() })
+      script =
+        kind === 'install' && l
+          ? receiverScript({ domain: l.wanted.domain, lang: lang() })
+          : removerScript({ removeUser, lang: lang() })
     } catch (err) {
-      busy = false
-      return refused(null, messageOf(err))
+      return stop(refused(null, messageOf(err)))
     }
-    const pack = l.pack
     // a run changes the server: the next one needs a Look of its own
     last = null
-    phase = 'applying'
-    plan = l.plan
+    removeLooked = null
+    phase = kind === 'install' ? 'applying' : 'undoing'
+    if (kind === 'install' && l) plan = l.plan
     progress = null
     hint = null
     error = null
     testAfter = null
-    const view: InstallView = { from: { commit: pack.commit, changes: pack.changes }, out: [], link: null, code: null }
-    install = view
+    let view: { out: string[]; code: number | null; link?: string | null }
+    if (kind === 'install' || !remove) {
+      const v: InstallView = { from: { commit: pack.commit, changes: pack.changes }, out: [], link: null, code: null }
+      install = v
+      view = v
+    } else {
+      const v: RemoveView = { ...remove, removeUser, out: [], code: null }
+      remove = v
+      view = v
+    }
     changed()
-    d.log('server install: started')
+    d.log(`server ${kind}: started`)
     const args = adminSshArgs({
       conf: to.c,
       admin: to.a,
       knownHosts: d.knownHosts(),
-      command: remoteCommand(script, l.mode),
+      command: remoteCommand(script, mode),
       ...(login.password !== null && { password: true }),
     })
     const stdin = `${sudoLine}${Buffer.from(pack.bytes).toString('base64')}\n`
@@ -742,7 +946,7 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       // the setup link: kept apart, in memory, never among the lines (nor in web.log)
       const link = setupLinkIn(line)
       if (link !== null) {
-        if (link) view.link = link
+        if (link && kind === 'install') view.link = link
         later()
         return
       }
@@ -754,10 +958,13 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       if (soon) clearTimeout(soon)
       if (current === child) current = null
       view.code = end.code
-      if (end.code === 0) phase = 'done'
-      else {
+      if (end.code === 0) {
+        phase = 'done'
+        // removed: nothing of the install's there now
+        if (kind === 'remove') installed = { version: null, seen: d.now() }
+      } else {
         phase = 'failed'
-        // the install's own words say why when it said any; else ssh's or sudo's
+        // the run's own words say why when it said any; else ssh's or sudo's
         if (view.out.length === 0) {
           const why = stopped(
             { ...heard, code: end.code, error: end.error, askpass: end.askpass ?? null },
@@ -768,7 +975,7 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
           error = why.detail
         }
       }
-      d.log(`server install: ended ${end.code ?? end.error ?? '?'}`)
+      d.log(`server ${kind}: ended ${end.code ?? end.error ?? '?'}`)
       busy = false
       changed()
     })
@@ -970,6 +1177,10 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       target,
       install,
       installDomain: installDomainOf(),
+      remove,
+      installed,
+      local,
+      reading,
     }),
 
     admin(body) {
@@ -1003,7 +1214,10 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
 
     look: o => lookAt(o, 'look'),
     installLook: o => lookAt(o, 'install'),
-    install: o => runInstall(o),
+    install: o => runBoard(o, 'install'),
+    installVersion: o => readVersion(o),
+    removeLook: o => lookAt(o, 'remove'),
+    remove: o => runBoard(o, 'remove'),
     installForget() {
       if (install) install = { ...install, link: null }
       changed()
@@ -1079,6 +1293,8 @@ export function createServerSetup(d: ServerSetupDeps): ServerSetup {
       last = null
       target = 'tunnel'
       install = null
+      remove = null
+      removeLooked = null
       changed()
       return ok()
     },
