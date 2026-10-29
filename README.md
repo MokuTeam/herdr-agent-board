@@ -1843,14 +1843,19 @@ under half a step. The reference is the first capture of the client's `ref`; the
 first five-digit case number or ticket key such as ABC-123, so a client whose descriptions can carry
 other such text before it (UTF-8, SHA-256) sets its own, anchored: `"ref": "^Case (\\d{5})"`. An
 entry no rule takes is billed exact, alone. Entries tagged with one of `excludeTags` show, held,
-and count in no total. The rules apply when a day is read: changing one re-rates the days already
+and count in no total, the time worked either (a day of held entries only shows 0 worked). The rules apply when a day is read: changing one re-rates the days already
 logged too (closing a billed day is for later). The board knows no client's rules but these.
 
 **Billable or not.** A client's entries are billable unless its `billable` is `false` (a lane
 never billed); `nonBillable` lists the projects of a billed client that are not (each one of its
-`projects`, or it is a problem). An entry can be set the other way (`--billable`,
-`--non-billable`, the editor's switch, Toggl's own Billable on import), and `--default-billable`
-puts it back to what the config says. A non-billable entry counts in the time worked and never in
+`projects`, or it is a problem; a client that takes any project has no list to hold them against,
+so there they are taken as written). An entry can be set the other way (`--billable`,
+`--non-billable`, the editor's switch, Toggl's own Billable on import with
+`--billable-from-toggl`), and `--default-billable` puts it back to what the config says; set the
+way the config has it already, an entry that follows the config stays so (no change). An entry
+that follows the config is billable as the config says when a day is read: a later change of
+`billable` or `nonBillable` re-rates them, entered ones too (they do not show as changed after
+entering), as a change of the rules does. A non-billable entry counts in the time worked and never in
 the billed figure: it joins no line, so nothing rounds it and Raise and Trim never touch it, and it
 shows apart. `deferred` keeps its meaning (held, billed later); an entry both non-billable and held
 is non-billable.
@@ -1908,15 +1913,19 @@ it after `--` when it may hold a word starting with `--`.
 - `list` totals what a day would: removed and held entries out (the held ones counted apart);
   `--tag` matches whatever the case. `--not-posted` lists what a billing agent still has to enter:
   billable, not held, without a mark in one of its client's systems (`--system`: in that one);
-  `--changed-after-post` lists the entries changed after they were entered. Both take the range
-  as `list` does (`--from` and `--to` for more than a day).
+  `--changed-after-post` lists the entries changed after they were entered (`--system`: in that
+  one), removed ones too (marked removed: to be taken out of that system). Both take the range as
+  `list` does (`--from` and `--to` for more than a day). An `edit`, `move`, `rm` or `restore`
+  of an entry already entered says where, to be changed there too.
 - **Post** marks entries entered in one of their client's systems: `<id>@<rev>` refuses an entry
   changed since that revision was read (an agent posts what it read); `--record` keeps that
   system's id for it (a later post without one keeps it). Marking again clears "changed after
   entering". The form with `--client` and `--to` (`--from`: any date before) is for the
   switch-over: it marks the client's billable entries, live and not held, that have no mark in that
-  system yet, and says how many and their time; `--dry-run` writes nothing. `unpost` takes a mark
-  off.
+  system yet, each at the revision read (one changed since refuses the run), and says how many and
+  their time; `--dry-run` writes nothing (the switch-over's alone: a post or an unpost by id
+  writes, and ids do not go with `--client` and `--to`). `unpost` takes a mark off. The count
+  each says is of the marks it wrote or took off: one already as it would be is none.
 
 **The JSON** (`--json`), for agents. An entry: `id` (8 hex characters), `client`, `project`,
 `description`, `tags`, `start` and `stop` (ISO, UTC, to the second), `date` (the work date),
@@ -1968,8 +1977,8 @@ the command: the config, a backup that went through, times within a day ahead an
 the config's (said while the entry follows it); a non-billable entry shows apart under its client,
 counted as worked. Where a client's time is entered into its systems, each line says per system
 whether its entries are entered (all, some, none, or one changed after it was); a tap marks or
-unmarks the whole line there, with Undo on its toast (a mark changed after entering goes back as it
-was). An entry's hint names its marks, an entry already entered says so in its editor (the change
+unmarks the whole line there, with Undo on its toast (a mark goes back with its record and the
+revision it recorded, changed after entering as it was; when and by whom are the Undo's). An entry's hint names its marks, an entry already entered says so in its editor (the change
 is to be made there too), and the day's figure and each client's say how much billed time is not
 entered yet, when some is.
 
@@ -1981,9 +1990,12 @@ order mark Excel needs to read the file's UTF-8 when it is opened by a double cl
 
 **From Toggl.** `board time import <file>` takes Toggl's Detailed report exported as CSV from its
 web page (no API call, so no quota), or its JSON (API v9 time entries with project and client
-names); Toggl's own Billable (the CSV's column, the JSON's field) is kept on the entry as set, and
-a second run finds an entry the same when it comes out billable or not as Toggl says. `--tz` is
-the Toggl profile's time zone (the CSV's times have none); `--map` sends each
+names). Toggl's own Billable (the CSV's column, the JSON's field) is left aside unless
+`--billable-from-toggl` says to take it (Toggl's free plan says No on every row, which would make
+the whole history non-billable): without it the entries follow the config, and billable is never a
+difference on a second run nor changed by `--update`; with it the entry keeps Toggl's value as set,
+a row that does not say it is not held against the entry, and `--dry-run` says how many rows would
+be non-billable. `--tz` is the Toggl profile's time zone (the CSV's times have none); `--map` sends each
 Toggl client to a lane (`"=personal"` for entries without one); an unmapped client stops the run
 with the list. The CSV's dates follow the profile's format: day and month either way round are
 read from the file itself (a 28 first is a day); a file where every date reads both ways asks for

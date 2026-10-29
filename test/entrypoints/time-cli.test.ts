@@ -602,3 +602,99 @@ test('the switch-over: everything entered before the board, posted at once; a dr
   assert.equal(shown.posts[0].record, 'W-1')
   assert.equal((await jsonOf(cfg, [...bulk.slice(0, 5), '--system', 'nope'])).error, 'system')
 })
+
+test('an entry entered, then removed, moved or brought back: said on the change, and listed as changed after (removed ones too)', async () => {
+  const cfg = posting((await setUp()).cfg)
+  const one = await jsonOf(cfg, addAt('09:00', 'Support', 'Case 10001 X: work'))
+  await jsonOf(cfg, ['post', one.id, '--system', 'erp'])
+  await jsonOf(cfg, ['post', one.id, '--system', 'tracker'])
+  const range = ['--from', '2026-10-27', '--to', '2026-10-28']
+  const moved = await run(cfg, ['move', one.id, '2026-10-27'])
+  assert.match(moved.at(-1) ?? '', /Entered in erp, tracker already: change it there too/)
+  const removed = await run(cfg, ['rm', one.id])
+  assert.match(removed.at(-1) ?? '', /Entered in erp, tracker: take it out there too/)
+  const listed = await jsonOf(cfg, ['list', '--changed-after-post', ...range])
+  assert.deepEqual(
+    listed.map((e: { id: string; deleted?: number }) => [e.id, typeof e.deleted]),
+    [[one.id, 'number']],
+  )
+  assert.match((await run(cfg, ['list', '--changed-after-post', ...range]))[0] ?? '', /removed/)
+  // the system named: only its stale marks
+  await jsonOf(cfg, ['restore', one.id])
+  const restored = await run(cfg, ['show', one.id])
+  assert.match(restored[0] ?? '', /changed after: erp, tracker/)
+  await jsonOf(cfg, ['post', one.id, '--system', 'tracker'])
+  assert.match((await run(cfg, ['show', one.id]))[0] ?? '', /posted erp, tracker \(changed after: erp\)/)
+  assert.deepEqual(await jsonOf(cfg, ['list', '--changed-after-post', '--system', 'tracker', ...range]), [])
+  assert.equal((await jsonOf(cfg, ['list', '--changed-after-post', '--system', 'erp', ...range])).length, 1)
+})
+
+test('a post or unpost by id writes, so it takes no --dry-run and no range; the count is of the marks it changed', async () => {
+  const cfg = posting((await setUp()).cfg)
+  const one = await jsonOf(cfg, addAt('09:00', 'Support', 'Case 10001 X: work'))
+  assert.equal((await jsonOf(cfg, ['post', one.id, '--system', 'erp', '--dry-run'])).error, 'dryRunById')
+  assert.equal((await jsonOf(cfg, ['unpost', one.id, '--system', 'erp', '--dry-run'])).error, 'dryRunById')
+  assert.equal(
+    (await jsonOf(cfg, ['post', one.id, '--system', 'erp', '--client', 'client-a', '--to', '2026-10-28'])).error,
+    'idsAndRange',
+  )
+  assert.deepEqual((await jsonOf(cfg, ['show', one.id])).posts, [], 'nothing written')
+  // none to take off, or one already as it would be: no change, counted as none
+  assert.equal((await jsonOf(cfg, ['unpost', one.id, '--system', 'erp'])).count, 0)
+  assert.equal((await jsonOf(cfg, ['post', one.id, '--system', 'erp'])).count, 1)
+  assert.equal((await jsonOf(cfg, ['post', one.id, '--system', 'erp'])).count, 0)
+  assert.match((await run(cfg, ['post', one.id, '--system', 'erp'])).at(-1) ?? '', /ok · 0 entries marked/)
+})
+
+test('import: Toggl’s Billable left aside unless asked: an all-No export keeps the config’s, a re-import with --update changes nothing', async () => {
+  const { dir, cfg: base } = await setUp()
+  const cfg = posting(base)
+  const csv = join(dir, 'toggl.csv')
+  const head = 'Client,Project,Description,Billable,Start date,Start time,End date,End time,Duration,Tags'
+  writeFileSync(
+    csv,
+    [
+      head,
+      'Client A,Support,Case 10001 X: work,No,2026-10-28,16:00:00,2026-10-28,17:30:00,01:30:00,',
+      'Client A,Support,Case 10002 Y: work,No,2026-10-28,18:00:00,2026-10-28,18:30:00,00:30:00,',
+    ].join('\n'),
+  )
+  const map = ['--tz', 'Europe/Istanbul', '--map', 'Client A=client-a']
+  assert.equal((await jsonOf(cfg, ['import', csv, ...map])).added, 2)
+  const day = async () =>
+    (await jsonOf(cfg, ['list', '--date', '2026-10-28'])) as {
+      billable: boolean
+      billableDefault: boolean
+      rev: number
+    }[]
+  assert.deepEqual(
+    (await day()).map(e => [e.billable, e.billableDefault, e.rev]),
+    [
+      [true, true, 1],
+      [true, true, 1],
+    ],
+  )
+  const again = await jsonOf(cfg, ['import', csv, ...map, '--update'])
+  assert.deepEqual([again.added, again.already, again.changed.length, again.updated.length], [0, 2, 0, 0])
+  assert.deepEqual(
+    (await day()).map(e => e.rev),
+    [1, 1],
+  )
+  // asked: the dry run says how many turn non-billable, the run sets them
+  const dry = await jsonOf(cfg, ['import', csv, ...map, '--billable-from-toggl', '--update', '--dry-run'])
+  assert.deepEqual([dry.nonBillable, dry.changed.length], [2, 2])
+  assert.match(
+    (await run(cfg, ['import', csv, ...map, '--billable-from-toggl', '--update', '--dry-run'])).join('\n'),
+    /2 rows would be non-billable, as Toggl’s Billable says/,
+  )
+  // without --update a row that differs is left as it is: none would be
+  assert.equal((await jsonOf(cfg, ['import', csv, ...map, '--billable-from-toggl', '--dry-run'])).nonBillable, 0)
+  await jsonOf(cfg, ['import', csv, ...map, '--billable-from-toggl', '--update'])
+  assert.deepEqual(
+    (await day()).map(e => [e.billable, e.billableDefault]),
+    [
+      [false, false],
+      [false, false],
+    ],
+  )
+})

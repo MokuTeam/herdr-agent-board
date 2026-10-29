@@ -874,3 +874,23 @@ test('the tags entries have, most used first; a row whose tags are not JSON has 
   assert.deepEqual(getEntry(db, 'bad00001')?.tags, [])
   db.close()
 })
+
+test('billable set the way the config has it, on an entry that follows the config: no change; a row that does not say it is not held against one set', () => {
+  const db = fresh()
+  const e = addEntry(db, posting, base, me).entry
+  const same = editEntry(db, posting, e.id, { billable: true }, me)
+  assert.deepEqual([same.rev, same.billable], [1, undefined])
+  // the other way: set
+  assert.equal(editEntry(db, posting, e.id, { billable: false }, me).rev, 2)
+  // an import's row with no billable against an entry set non-billable: the same, not a change
+  const old = fresh()
+  importEntries(old, posting, [csvRow({ billable: false })])
+  assert.deepEqual(importEntries(old, posting, [csvRow()]).already, 1)
+  assert.equal(
+    importEntries(old, posting, [csvRow()], { update: true }).updated.length,
+    0,
+    '--update leaves it as it is',
+  )
+  db.close()
+  old.close()
+})

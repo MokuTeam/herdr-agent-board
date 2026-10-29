@@ -4,7 +4,8 @@
 // again by Toggl's entry id when the file has one, else (the Detailed report's CSV has none) by its
 // lane and its start to the second: a row edited in Toggl since is then found as changed, not
 // added twice (adapters/time-store.ts importEntries). Toggl's Billable (the CSV's column, the
-// JSON's field) is kept on the entry as set. Pure, with no node: import.
+// JSON's field) is read here; the import takes it only when asked (--billable-from-toggl: Toggl's
+// free plan says No on every row), else the entries follow the config. Pure, with no node: import.
 
 import { isDate } from './time.ts'
 

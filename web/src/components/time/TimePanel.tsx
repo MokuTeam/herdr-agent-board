@@ -497,6 +497,8 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
                   className="time-mark"
                   data-state={state}
                   aria-pressed={state === 'entered'}
+                  // its state in words: the glyph and the colour are not read out
+                  aria-label={markText(state, x.title)}
                   title={`${markText(state, x.title)}. ${t(state === 'entered' ? 'time.mark.tapUnpost' : 'time.mark.tapPost', { system: x.title })}`}
                   disabled={!canEdit || busy || marking}
                   onClick={() => void markLine(listed, x)}

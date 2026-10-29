@@ -28,7 +28,7 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.err.usage':
       'usage: board time add | edit <id> | move <id> <date> | rm <id> | restore <id> | show <id> | list | day [<date>] | post <id>... | unpost <id>... | projects | import <file> | export',
     'time.err.importUsage':
-      'usage: board time import <file> --tz <Toggl profile’s zone> [--map "<Toggl client>=<lane>"]... [--date-format dmy|mdy] [--dry-run] [--update]',
+      'usage: board time import <file> --tz <Toggl profile’s zone> [--map "<Toggl client>=<lane>"]... [--date-format dmy|mdy] [--dry-run] [--update] [--billable-from-toggl]',
     'time.err.zone': '"{zone}" is not a time zone (an IANA name, such as Europe/Istanbul).',
     'time.err.map': '--map wants "<Toggl client>=<lane>": {value}',
     'time.err.file': 'Cannot read {file}.',
@@ -65,6 +65,14 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.cli.changedAfter': 'changed after',
     'time.cli.nonBillable': 'non-billable',
     'time.cli.changeThere': 'Entered in {systems} already: change it there too.',
+    'time.cli.removeThere': 'Entered in {systems}: take it out there too.',
+    'time.err.dryRunById':
+      '--dry-run goes with the switch-over (post --client <lane> --to <date>): a post or unpost by id writes.',
+    'time.err.idsAndRange': 'Entries by id, or a client’s range with --client and --to: not both.',
+    'time.cli.importNonBillable': [
+      '{n} row would be non-billable, as Toggl’s Billable says',
+      '{n} rows would be non-billable, as Toggl’s Billable says',
+    ],
     'time.cli.postDry': [
       'dry run: {n} entry, {total}, would be marked entered in {system}; nothing written',
       'dry run: {n} entries, {total}, would be marked entered in {system}; nothing written',
@@ -209,7 +217,7 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.err.usage':
       'использование: board time add | edit <id> | move <id> <дата> | rm <id> | restore <id> | show <id> | list | day [<дата>] | post <id>... | unpost <id>... | projects | import <файл> | export',
     'time.err.importUsage':
-      'использование: board time import <файл> --tz <зона профиля Toggl> [--map "<клиент Toggl>=<лейн>"]... [--date-format dmy|mdy] [--dry-run] [--update]',
+      'использование: board time import <файл> --tz <зона профиля Toggl> [--map "<клиент Toggl>=<лейн>"]... [--date-format dmy|mdy] [--dry-run] [--update] [--billable-from-toggl]',
     'time.err.zone': '"{zone}" не часовой пояс (имя IANA, например Europe/Istanbul).',
     'time.err.map': '--map ждёт "<клиент Toggl>=<лейн>": {value}',
     'time.err.file': 'Не удалось прочитать {file}.',
@@ -246,6 +254,15 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.cli.changedAfter': 'изменена после внесения',
     'time.cli.nonBillable': 'неоплачиваемое',
     'time.cli.changeThere': 'Уже внесена в {systems}: поправьте там тоже.',
+    'time.cli.removeThere': 'Внесена в {systems}: уберите её и там.',
+    'time.err.dryRunById':
+      '--dry-run только для переноса (post --client <лейн> --to <дата>): post и unpost по id пишут.',
+    'time.err.idsAndRange': 'Записи по id или диапазон клиента через --client и --to: не то и другое вместе.',
+    'time.cli.importNonBillable': [
+      '{n} строка станет неоплачиваемой, как говорит Billable в Toggl',
+      '{n} строки станут неоплачиваемыми, как говорит Billable в Toggl',
+      '{n} строк станут неоплачиваемыми, как говорит Billable в Toggl',
+    ],
     'time.cli.postDry': [
       'пробный прогон: {n} запись, {total}, будет отмечена внесённой в {system}; ничего не записано',
       'пробный прогон: {n} записи, {total}, будут отмечены внесёнными в {system}; ничего не записано',

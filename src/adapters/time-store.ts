@@ -15,6 +15,7 @@ import { randomBytes } from 'node:crypto'
 import { t } from '../core/lang.ts'
 import {
   type Actor,
+  billableByDefault,
   billableOf,
   cleanTag,
   cleanText,
@@ -412,7 +413,9 @@ export function editEntry(
       // stop moves no day already billed, whatever the zone says now
       const moved = (ch.start !== undefined && isoOf(ch.start) !== e.start) || client !== e.client
       const { billable: was, ...rest } = e
-      const billable = ch.billable === undefined ? was : ch.billable === null ? undefined : ch.billable
+      // set the way the config has it already, on an entry that follows the config: no change
+      const asConfig = was === undefined && ch.billable === billableByDefault(c, client, project)
+      const billable = ch.billable === undefined ? was : ch.billable === null || asConfig ? undefined : ch.billable
       // billable last, where a read entry has it: the no-change check compares the two as JSON
       return {
         ...rest,
@@ -963,8 +966,9 @@ export interface PostItem {
  * Entries marked entered into `system`, one of each entry's client's systems, in one transaction:
  * when, by whom, `record` (the item's, else `o.record`, else the earlier mark's), and the entry's
  * revision now (or the item's `asOf`, no later than it). A mark already as it would be is left as
- * it is; each one written has its journal row (`post`, the mark before and after). The entry does
- * not change. All or none: a removed, unknown or changed entry refuses the whole call.
+ * it is; each one written has its journal row (`post`, the mark before and after), and is given
+ * back. The entry does not change. All or none: a removed, unknown or changed entry refuses the
+ * whole call.
  */
 export function postEntries(
   db: BoardDb,
@@ -977,7 +981,7 @@ export function postEntries(
   checkConfig(c)
   const now = o.now ?? Date.now()
   return db.write(actorText(actor), tx =>
-    items.map(item => {
+    items.flatMap(item => {
       const e = getEntry(db, item.id)
       if (!e) throw new TimeError('time.err.gone', { id: item.id })
       if (e.deleted) throw new TimeError('time.err.removed', { id: e.id })
@@ -990,7 +994,7 @@ export function postEntries(
       const given = item.record !== undefined ? item.record : o.record
       const record =
         given === undefined ? (before?.record ?? null) : given === null ? null : cleanText(given, 200) || null
-      if (before && before.rev === asOf && before.record === record) return before
+      if (before && before.rev === asOf && before.record === record) return []
       const after: Mark = { entry: e.id, system, at: now, by: actor, record, rev: asOf }
       tx.db
         .query(
@@ -1005,7 +1009,7 @@ export function postEntries(
         before: before ? markJson(before) : null,
         after: markJson(after),
       })
-      return after
+      return [after]
     }),
   )
 }
