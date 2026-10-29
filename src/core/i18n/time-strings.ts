@@ -113,6 +113,7 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.loadError': 'Could not read the time entries: {error}',
     'time.loading': 'Reading the day…',
     'time.err.rev': 'A change says which revision of the entry it read (rev, a whole number).',
+    'time.err.billed': 'billed is the line’s billed figure as the page showed it, in whole seconds.',
     'time.err.tags': 'At most {n} tags.',
     'time.err.noRaise':
       'That line is not billed over its time any more, or that entry is not its last: nothing to raise.',
@@ -258,6 +259,7 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.loadError': 'Не удалось прочитать записи времени: {error}',
     'time.loading': 'Читаю день…',
     'time.err.rev': 'Изменение указывает, какую ревизию записи оно прочитало (rev, целое число).',
+    'time.err.billed': 'billed: оплачиваемое строки, как его показала страница, в целых секундах.',
     'time.err.tags': 'Не больше {n} тегов.',
     'time.err.noRaise':
       'Эта строка больше не выставляется больше отработанного, или запись в ней не последняя: поднимать нечего.',

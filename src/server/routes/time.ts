@@ -194,7 +194,8 @@ function revOf(b: Record<string, unknown>): number {
 /** The billed figure a raise or a trim was asked for (the button's), when the body says it: whole seconds. */
 function billedOf(b: Record<string, unknown>): { billed?: number } {
   if (b.billed === undefined) return {}
-  if (typeof b.billed !== 'number' || !Number.isInteger(b.billed) || b.billed < 0) throw new TimeError('time.err.usage')
+  if (typeof b.billed !== 'number' || !Number.isInteger(b.billed) || b.billed < 0)
+    throw new TimeError('time.err.billed')
   return { billed: b.billed }
 }
 

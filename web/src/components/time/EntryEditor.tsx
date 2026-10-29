@@ -1,14 +1,14 @@
 // An entry opened in place in the Time panel (#233): its description, its project (the client's
 // list), its start and stop on this browser's clock with the duration between them, typed (it
 // moves the stop once it is one: on Enter, on leaving the field, on Save; until then the draft is
-// as it was, and a duration that is none is said and keeps Save waiting) or stepped by -15 and +15 (a trim is the usual change; an untouched time keeps
-// its seconds), its work date (a change moves it), its tags as tokens (Enter or a comma adds one,
-// its x or Backspace in the empty field takes one off, the board's tags offered under them, twenty
-// at most); Save,
-// Delete and Cancel. A new entry has a client too (its projects
-// follow it), no Delete, and its date is the day its times are on. Changed elsewhere since it was
-// opened (`stale`): it says so, and Save waits for Reload, which shows the entry as it is now.
-// What the board refuses is said under the fields, and the draft stays. Over 12 hours, it asks.
+// as it was, and a duration that is none is said and keeps Save waiting) or stepped by -15 and
+// +15 (a trim is the usual change; an untouched time keeps its seconds), its work date (a change
+// moves it), its tags as tokens (Enter or a comma adds one, its x or Backspace in the empty field
+// takes one off, the board's tags offered under them, twenty at most); Save, Delete and Cancel. A
+// new entry has a client too (its projects follow it), no Delete, and its date is the day its
+// times are on. Changed elsewhere since it was opened (`stale`): it says so, and Save waits for
+// Reload, which shows the entry as it is now. What the board refuses is said under the fields,
+// and the draft stays. Times that make no duration, or over 12 hours, are said under the times.
 // Laid out as the row it opened from grown in place: the description first, then what it is for,
 // when, and the rest; who logged it quietly under them; Delete apart from Cancel and Save.
 import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
@@ -22,6 +22,7 @@ import {
   parseDuration,
   tagList,
   tagOf,
+  timesAreTimes,
   typed,
   withDuration,
   withoutTag,
@@ -75,25 +76,27 @@ export function EntryEditor({
   const [d, setD] = useState(draft)
   // a tag being typed, not yet a token: it counts as one for Save and for the kept draft
   const [pending, setPending] = useState('')
-  const whole = (x: Draft): Draft => (tagOf(pending) ? { ...x, tags: withTag(x.tags, pending) } : x)
-  // each change of the draft, not the one it opened with: an editor opened and left as it was has
-  // nothing to keep, and must not wipe what another kept
-  const opened = useRef(d)
-  const touched = useRef(false)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: on each change of the draft or the tag being typed
-  useEffect(() => {
-    if (d === opened.current && !touched.current && !pending) return
-    touched.current = true
-    onDraft?.(whole(d))
-  }, [d, pending])
-  const set = (field: 'description' | 'project', value: string) => setD(x => ({ ...x, [field]: value }))
-  const listed = projects(d.client)
+  const whole = (x: Draft): Draft =>
+    tagOf(pending) && tagList(x.tags).length < MAX_TAGS ? { ...x, tags: withTag(x.tags, pending) } : x
   // the duration as typed, while it is; null: the draft's own, said as the panel says durations
   const [lasting, setLasting] = useState<string | null>(null)
   const typedSeconds = lasting === null ? null : parseDuration(lasting)
   const badDuration = lasting !== null && typedSeconds === null
   /** The draft with the duration typed in it (the stop moved), once what is typed is one. */
   const withTyped = (x: Draft): Draft => (typedSeconds === null ? x : withDuration(x, typedSeconds))
+  // each change of the draft, not the one it opened with: an editor opened and left as it was has
+  // nothing to keep, and must not wipe what another kept
+  const opened = useRef(d)
+  const touched = useRef(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on each change of the draft, the tag or the duration being typed
+  useEffect(() => {
+    if (d === opened.current && !touched.current && !pending && lasting === null) return
+    touched.current = true
+    // what is typed counts as it would on Save: an editor that closes without a blur keeps it too
+    onDraft?.(whole(withTyped(d)))
+  }, [d, pending, lasting])
+  const set = (field: 'description' | 'project', value: string) => setD(x => ({ ...x, [field]: value }))
+  const listed = projects(d.client)
   const commitDuration = () => {
     if (typedSeconds === null) return
     setD(withTyped)
@@ -105,7 +108,7 @@ export function EntryEditor({
   const warning = badDuration
     ? t('time.edit.badDuration')
     : seconds === null
-      ? t('time.edit.badTime')
+      ? t(timesAreTimes(withTyped(d)) ? 'time.err.stopBeforeStart' : 'time.edit.badTime')
       : seconds > LONG_SECONDS
         ? t('time.edit.long')
         : ''

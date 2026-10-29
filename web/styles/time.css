@@ -311,8 +311,10 @@
   transition: background 120ms ease, color 120ms ease;
 }
 .time-tag-hint:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
-/* Its room kept when empty: a warning that comes and goes moves nothing under the pointer. */
-.time-warn { min-height: 1.4em; margin: 0; font-size: 12px; line-height: 1.4; }
+/* Under the times, said as it is typed (a blur or Save changes nothing in it, so nothing moves
+   under the pointer); empty, it takes no room: the gap before it is given back. */
+.time-warn { margin: 0; font-size: 12px; line-height: 1.4; }
+.time-warn:empty { margin-top: -10px; }
 .time-editor .access-problem { margin: 0; padding: 0; }
 /* Changed elsewhere: said plainly (the problem's red overruled), Reload the one thing to do. */
 .time-editor .time-stale {
@@ -353,12 +355,13 @@
 
 @media (prefers-reduced-motion: reduce) {
   .time-editor { animation: time-fade 0.15s ease-out; }
+  /* as specific as the presses they undo, or those win */
   .time-step:active,
-  .time-today:active,
+  .time-today:active:not(:disabled),
   .time-add-open:active,
-  .time-raise:active,
-  .time-steps button:active,
-  .time-actions .button:active { transform: none; }
+  .time-raise:active:not(:disabled),
+  .time-steps button:active:not(:disabled),
+  .time-actions .button:active:not(:disabled) { transform: none; }
   .time-days { transition: none !important; transform: none !important; }
 }
 @keyframes time-fade { from { opacity: 0; } }

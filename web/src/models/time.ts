@@ -260,6 +260,10 @@ export function draftTimes(d: Pick<Draft, 'day' | 'start' | 'stop' | 'startAt' |
   return stop > start ? { start, stop } : null
 }
 
+/** Whether the draft's start and stop are both times (the stop may still not be after the start). */
+export const timesAreTimes = (d: Pick<Draft, 'day' | 'start' | 'stop' | 'startAt' | 'stopAt'>): boolean =>
+  (d.startAt !== null || !Number.isNaN(at(d.day, d.start))) && (d.stopAt !== null || !Number.isNaN(at(d.day, d.stop)))
+
 /** The draft's duration in seconds, or null. */
 export function draftSeconds(d: Pick<Draft, 'day' | 'start' | 'stop' | 'startAt' | 'stopAt'>): number | null {
   const times = draftTimes(d)

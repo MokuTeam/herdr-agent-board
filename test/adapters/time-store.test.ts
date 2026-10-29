@@ -547,6 +547,31 @@ test('the tags entries have, most used first; a row whose tags are not JSON has 
         'user',
       ),
   )
+  // JSON, but not a list: none either
+  for (const [id, tags, start] of [
+    ['bad00002', '"solo"', '2026-10-28T19:00:00Z'],
+    ['bad00003', '{"a":"b"}', '2026-10-28T20:00:00Z'],
+  ] as const)
+    db.write('user', tx =>
+      tx.db
+        .query(
+          'INSERT INTO time_entries (id, client, project, description, tags, start, stop, date, by, at, changed, changed_by, rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
+        )
+        .run(
+          id,
+          'a',
+          'Support',
+          'x',
+          tags,
+          start,
+          start.replace(':00:00Z', ':30:00Z'),
+          '2026-10-28',
+          'user',
+          1,
+          1,
+          'user',
+        ),
+    )
   assert.deepEqual(usedTags(db), ['call', 'review'])
   assert.deepEqual(getEntry(db, 'bad00001')?.tags, [])
   db.close()

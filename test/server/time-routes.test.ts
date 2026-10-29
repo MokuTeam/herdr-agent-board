@@ -336,6 +336,6 @@ test('Raise and Trim say the figure the page showed: a line that bills otherwise
   // Raise the same way
   const up = (await post({ ...add, stop: at('13:40') }))[1].entry as Made
   assert.equal((await post({ op: 'raise', id: up.id, rev: up.rev, billed: 5400 }))[1].code, 'changedSince')
-  assert.equal((await post({ op: 'raise', id: up.id, rev: up.rev, billed: 'x' }))[1].code, 'usage')
+  assert.equal((await post({ op: 'raise', id: up.id, rev: up.rev, billed: 'x' }))[1].code, 'billed')
   assert.equal(((await post({ op: 'raise', id: up.id, rev: up.rev, billed: 3600 }))[1].entry as Made).stop, at('14:00'))
 })

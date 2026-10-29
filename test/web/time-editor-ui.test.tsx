@@ -463,6 +463,23 @@ test('a tap on another entry, or Add entry, leaves the typed text for when the f
   act(() => root.unmount())
 }, 90_000)
 
+test('a duration typed and not yet put in the draft is kept when the editor closes without a blur', async () => {
+  const s = await setup()
+  await s.entry()
+  const root = await mount(1)
+  await openOn('X: work')
+  await setValue(q('.time-steps input'), '1:10')
+  // the day changes with the field still focused: no blur, no Enter
+  await click(q('button[aria-label="Next day"]'))
+  await settle(300)
+  await click(q('button[aria-label="Previous day"]'))
+  await settle(300)
+  await openOn('X: work')
+  expect(q('.time-steps input').value).toBe('1h\u00a010m')
+  mounted.delete(root)
+  act(() => root.unmount())
+}, 90_000)
+
 test('the day changed (the arrows, or past midnight) leaves the typed text for the entry’s next opening', async () => {
   const s = await setup()
   await three(s)
@@ -664,6 +681,16 @@ test('a duration typed moves the stop, the start as it was; one that is not a du
   ]).toEqual(['later', true, true])
   await setValue(field(), '1:10')
   expect([stop(), save().disabled]).toEqual([before, false])
+  // a typed duration, then a later start: both times, the stop before the start, said so
+  await setValue(field(), '30m')
+  await press(field(), 'Enter')
+  await setValue(qa('.time-editor input[type=time]')[0] ?? null, '23:30')
+  expect(q('.time-editor .time-warn')?.textContent).toBe('The stop is not after the start.')
+  await setValue(qa('.time-editor input[type=time]')[0] ?? null, '9:7x')
+  expect(q('.time-editor .time-warn')?.textContent).toBe('A start or stop is not a time.')
+  await click(qa('.time-editor button').find(b => b.textContent === 'Cancel') ?? null)
+  await openOn('X: work')
+  await setValue(field(), '1:10')
   // Enter puts it in the draft, said as the panel says durations; no Save
   await press(field(), 'Enter')
   expect([field().value, q('.time-editor')]).toEqual(['1h\u00a010m', q('.time-editor')])
