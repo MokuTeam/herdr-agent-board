@@ -1,8 +1,9 @@
 // The Time panel (#233) as the page has it: GET /api/time's day read with a guard, and the words
-// and numbers the panel shows: hours as a bill says them, a line's label and rule, an entry's
-// times on this browser's clock, a date's name, and whether a swipe changes the day. The rules
+// and numbers the panel shows: a duration in one form everywhere, a line's label and rule, an
+// entry's description under its line, its times on this browser's clock, a date's name, and
+// whether a swipe changes the day. The rules
 // themselves are the board's (src/core/time.ts); the page only shows them.
-import type { ClientDay, DayLine, TimeEntry } from '../../../src/core/time.ts'
+import { type ClientDay, cleanTag, type DayLine, type TimeEntry } from '../../../src/core/time.ts'
 import type { Translator } from '../../../src/core/types.ts'
 
 export interface TimeDay {
@@ -15,6 +16,8 @@ export interface TimeDay {
   /** The lanes that take time (null: every lane), and each one's projects (null: any). */
   clients?: string[] | null
   projects?: Record<string, string[] | null>
+  /** Tags to offer: the ones held out of the totals first, then the ones entries have, most used first. */
+  tags?: string[]
 }
 
 /** A day's answer shows under that day's name only: another day's, arriving late, is not shown. */
@@ -39,16 +42,16 @@ export function isTimeDay(v: unknown): v is TimeDay {
   )
 }
 
-/** Seconds as H:MM. */
-export function hm(seconds: number): string {
+/**
+ * Seconds as the board says a duration everywhere (the panel, a lane's total, the editor), to the
+ * minute and in its language: "1h 30m", "45m", "2h"; "1 ч 30 мин".
+ */
+export function durationText(seconds: number, t: Translator): string {
   const minutes = Math.round(seconds / 60)
-  return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}`
-}
-
-/** Seconds as the hours a bill says: "1.5 h", "0.25 h", "2 h". */
-export function hoursText(seconds: number, t: Translator): string {
-  const n = Math.round((seconds / 3600) * 100) / 100
-  return `${n.toLocaleString(t.lang)} h`
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  if (!h) return t('time.dur.m', { m })
+  return m ? t('time.dur.hm', { h, m }) : t('time.dur.h', { h })
 }
 
 /** A line's name: "The day" for a day's group, the project for a project's, else its reference (a case, a ticket) or its project. */
@@ -63,10 +66,46 @@ export function ruleText(l: DayLine, t: Translator): string {
   return l.round === 'exact' ? t('time.round.exact') : t(`time.round.${l.round}`, { step: l.step })
 }
 
-/** An entry's start and stop on this browser's clock: "09:10-09:52". */
+/** A client's rounding rules, each said once ("up to 30 min"); exact ones say nothing. */
+export function rulesOf(lines: DayLine[], t: Translator): string[] {
+  return [...new Set(lines.filter(l => l.round !== 'exact').map(l => ruleText(l, t)))]
+}
+
+/**
+ * An entry's description as it reads under its line's name: without that name where it starts
+ * with it, a word before it allowed ("Case 10001: saved search" under 10001 reads "Saved search");
+ * the whole description when that would leave nothing. Only what is shown: the entry keeps its words.
+ */
+export function underLine(description: string, name: string): string {
+  const own = name.trim()
+  if (!own) return description
+  const escaped = own.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const m = new RegExp(`^\\s*(?:\\p{L}+\\s+)?#?${escaped}(?![\\p{L}\\p{N}])[\\s:.,\\-\u2013\u2014]*`, 'iu').exec(
+    description,
+  )
+  const rest = m ? description.slice(m[0].length).trim() : ''
+  return rest ? rest.charAt(0).toLocaleUpperCase() + rest.slice(1) : description
+}
+
+/**
+ * An entry's start and stop on this browser's clock: "09:10-09:52"; on a 12-hour clock AM or PM
+ * said once where both share it ("4:00-5:10 PM"), so the times keep a phone's row narrow.
+ */
 export function entryTimes(e: Pick<TimeEntry, 'start' | 'stop'>, lang: string): string {
-  const f = (iso: string) => new Date(iso).toLocaleTimeString(lang, { hour: '2-digit', minute: '2-digit' })
-  return `${f(e.start)}-${f(e.stop)}`
+  const cycle = new Intl.DateTimeFormat(lang, { hour: 'numeric' }).resolvedOptions().hourCycle
+  const twelve = cycle === 'h11' || cycle === 'h12'
+  const f = new Intl.DateTimeFormat(lang, { hour: twelve ? 'numeric' : '2-digit', minute: '2-digit' })
+  const start = f.formatToParts(new Date(e.start))
+  const stop = f.formatToParts(new Date(e.stop))
+  const period = (parts: Intl.DateTimeFormatPart[]) => parts.find(p => p.type === 'dayPeriod')?.value
+  const once = period(start) !== undefined && period(start) === period(stop)
+  const text = (parts: Intl.DateTimeFormatPart[]) =>
+    parts
+      .filter(p => !(once && p.type === 'dayPeriod'))
+      .map(p => p.value)
+      .join('')
+      .trim()
+  return `${text(start)}-${f.format(new Date(e.stop))}`
 }
 
 /** A date's name in the board's language: "Tue 28 Oct". */
@@ -77,6 +116,17 @@ export function dateName(date: string, lang: string): string {
     month: 'short',
     timeZone: 'UTC',
   })
+}
+
+/** A date as the panel's title for its day: "Thursday, October 29"; "Четверг, 29 октября". */
+export function dayTitle(date: string, lang: string): string {
+  const s = new Date(`${date}T12:00:00Z`).toLocaleDateString(lang, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    timeZone: 'UTC',
+  })
+  return s.charAt(0).toLocaleUpperCase() + s.slice(1)
 }
 
 /** A date and a number of days after it. */
@@ -210,6 +260,10 @@ export function draftTimes(d: Pick<Draft, 'day' | 'start' | 'stop' | 'startAt' |
   return stop > start ? { start, stop } : null
 }
 
+/** Whether the draft's start and stop are both times (the stop may still not be after the start). */
+export const timesAreTimes = (d: Pick<Draft, 'day' | 'start' | 'stop' | 'startAt' | 'stopAt'>): boolean =>
+  (d.startAt !== null || !Number.isNaN(at(d.day, d.start))) && (d.stopAt !== null || !Number.isNaN(at(d.day, d.stop)))
+
 /** The draft's duration in seconds, or null. */
 export function draftSeconds(d: Pick<Draft, 'day' | 'start' | 'stop' | 'startAt' | 'stopAt'>): number | null {
   const times = draftTimes(d)
@@ -227,11 +281,62 @@ export function nudge(d: Draft, minutes: number): Draft {
   return { ...d, stop: localClock(stop), stopAt: stop }
 }
 
+/**
+ * A duration as typed, in seconds: "1:10"; "70" (minutes); "1.5", "1,5" (hours); with units, as
+ * "1h10m", "1.5h", "1ч 10м", "45 мин", the panel's own "1 ч 30 мин". To the minute; null for what is
+ * not one, under a minute, or over the 24 hours an entry may last.
+ */
+export function parseDuration(text: string): number | null {
+  const s = text
+    .trim()
+    .toLowerCase()
+    .replace(/[\u00a0\u202f]/g, ' ')
+    .replace(/,/g, '.')
+  const clock = /^(\d+):([0-5]\d)$/.exec(s)
+  const units =
+    /^(?:(\d+(?:\.\d+)?|\.\d+)\s*(?:h|hr|hrs|hours?|ч|час|часа|часов)\.?)?\s*(?:(\d+)\s*(?:m|min|mins|minutes?|м|мин|минут|минуты|минута)\.?)?$/.exec(
+      s,
+    )
+  let minutes: number
+  if (clock) minutes = Number(clock[1]) * 60 + Number(clock[2])
+  else if (/^\d+$/.test(s)) minutes = Number(s)
+  else if (/^\d*\.\d+$/.test(s)) minutes = Number(s) * 60
+  else if (units && (units[1] || units[2])) minutes = Number(units[1] ?? 0) * 60 + Number(units[2] ?? 0)
+  else return null
+  // under a minute as typed is none, not one rounded up
+  const seconds = Math.round(minutes) * 60
+  return minutes >= 1 && seconds <= 24 * 3600 ? seconds : null
+}
+
+/** The stop moved so the draft lasts `seconds` from its start as it stands; as it was when the start is not a time. */
+export function withDuration(d: Draft, seconds: number): Draft {
+  const start = d.startAt ?? at(d.day, d.start)
+  if (Number.isNaN(start)) return d
+  const stop = start + seconds * 1000
+  return { ...d, stop: localClock(stop), stopAt: stop }
+}
+
 export const tagList = (s: string): string[] =>
   s
     .split(',')
     .map(x => x.trim().replace(/^#/, ''))
     .filter(Boolean)
+
+/** A tag as the board keeps it: no leading #, no commas, one line, 40 characters at most, lower case. */
+export const tagOf = (s: string): string => cleanTag(s.trim().replace(/^#+/, ''))
+
+/** The draft's tags with `tag` added at the end (once). */
+export function withTag(tags: string, tag: string): string {
+  const own = tagOf(tag)
+  const list = tagList(tags)
+  return own && !list.includes(own) ? [...list, own].join(', ') : list.join(', ')
+}
+
+/** The draft's tags without `tag`. */
+export const withoutTag = (tags: string, tag: string): string =>
+  tagList(tags)
+    .filter(x => x !== tag)
+    .join(', ')
 
 /**
  * What saving a draft of an entry sends, against the entry as it was opened (`base`) and with the

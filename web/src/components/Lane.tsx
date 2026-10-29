@@ -5,7 +5,7 @@ import type { ReactNode } from 'react'
 import type { Item } from '../../../src/core/types.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import type { DropLit, LaneView } from '../models/board-view.ts'
-import { hoursText } from '../models/time.ts'
+import { durationText } from '../models/time.ts'
 import { COLUMN_COLORS } from '../models/toolbar.ts'
 import { classNames } from './class-names.ts'
 import { PlusIcon } from './icons.tsx'
@@ -61,7 +61,7 @@ export function Lane({ lane, lit, canMutate, onNewSession, onHead, time, timePro
             title={t(timeProblem ? 'time.laneTotalProblem' : 'time.laneTotalHint')}
             onClick={() => onTime?.()}
           >
-            {t('time.laneTotal', { hours: hoursText(time, t) })}
+            {t('time.laneTotal', { hours: durationText(time, t) })}
           </button>
         ) : null}
         <button

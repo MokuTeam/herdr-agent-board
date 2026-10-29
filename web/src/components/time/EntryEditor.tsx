@@ -1,14 +1,37 @@
 // An entry opened in place in the Time panel (#233): its description, its project (the client's
-// list), its start and stop on this browser's clock with the duration between them and -15 and
-// +15 steps (a trim is the usual change; an untouched time keeps its seconds), its work date (a
-// change moves it), its tags; Save, Delete and Cancel. A new entry has a client too (its projects
-// follow it), no Delete, and its date is the day its times are on. Changed elsewhere since it was
-// opened (`stale`): it says so, and Save waits for Reload, which shows the entry as it is now.
-// What the board refuses is said under the fields, and the draft stays. Over 12 hours, it asks.
-import { type FormEvent, useEffect, useRef, useState } from 'react'
+// list), its start and stop on this browser's clock with the duration between them, typed (it
+// moves the stop once it is one: on Enter, on leaving the field, on Save; until then the draft is
+// as it was, and a duration that is none is said and keeps Save waiting) or stepped by -15 and
+// +15 (a trim is the usual change; an untouched time keeps its seconds), its work date (a change
+// moves it), its tags as tokens (Enter or a comma adds one, its x or Backspace in the empty field
+// takes one off, the board's tags offered under them, twenty at most); Save, Delete and Cancel. A
+// new entry has a client too (its projects follow it), no Delete, and its date is the day its
+// times are on. Changed elsewhere since it was opened (`stale`): it says so, and Save waits for
+// Reload, which shows the entry as it is now. What the board refuses is said under the fields,
+// and the draft stays. Times that make no duration, or over 12 hours, are said under the times.
+// Laid out as the row it opened from grown in place: the description first, then what it is for,
+// when, and the rest; who logged it quietly under them; Delete apart from Cancel and Save.
+import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { type Draft, draftSeconds, hm, LONG_SECONDS, nudge, typed } from '../../models/time.ts'
+import {
+  type Draft,
+  draftSeconds,
+  durationText,
+  LONG_SECONDS,
+  nudge,
+  parseDuration,
+  tagList,
+  tagOf,
+  timesAreTimes,
+  typed,
+  withDuration,
+  withoutTag,
+  withTag,
+} from '../../models/time.ts'
 import { classNames } from '../class-names.ts'
+
+/** The most tags an entry has (the board refuses more). */
+const MAX_TAGS = 20
 
 export interface EntryEditorProps {
   draft: Draft
@@ -17,6 +40,10 @@ export interface EntryEditorProps {
   clientTitle(id: string): string
   /** The client's projects (null: any, typed). */
   projects(client: string): string[] | null
+  /** Who logged the entry (a session's name opens it); none for a new one. */
+  by?: ReactNode
+  /** Tags to offer, in the order to offer them (the board's: the held ones first). */
+  tags?: string[] | undefined
   busy: boolean
   error: string | null
   /** The entry changed elsewhere since it was opened: Save waits for Reload. */
@@ -34,6 +61,8 @@ export function EntryEditor({
   clients,
   clientTitle,
   projects,
+  by,
+  tags: offered = [],
   busy,
   error,
   stale,
@@ -45,19 +74,56 @@ export function EntryEditor({
 }: EntryEditorProps) {
   const t = useT()
   const [d, setD] = useState(draft)
+  // a tag being typed, not yet a token: it counts as one for Save and for the kept draft
+  const [pending, setPending] = useState('')
+  const whole = (x: Draft): Draft =>
+    tagOf(pending) && tagList(x.tags).length < MAX_TAGS ? { ...x, tags: withTag(x.tags, pending) } : x
+  // the duration as typed, while it is; null: the draft's own, said as the panel says durations
+  const [lasting, setLasting] = useState<string | null>(null)
+  const typedSeconds = lasting === null ? null : parseDuration(lasting)
+  const badDuration = lasting !== null && typedSeconds === null
+  /** The draft with the duration typed in it (the stop moved), once what is typed is one. */
+  const withTyped = (x: Draft): Draft => (typedSeconds === null ? x : withDuration(x, typedSeconds))
   // each change of the draft, not the one it opened with: an editor opened and left as it was has
   // nothing to keep, and must not wipe what another kept
   const opened = useRef(d)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: on each change of the draft
+  const touched = useRef(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on each change of the draft, the tag or the duration being typed
   useEffect(() => {
-    if (d !== opened.current) onDraft?.(d)
-  }, [d])
-  const set = (field: 'description' | 'project' | 'tags', value: string) => setD(x => ({ ...x, [field]: value }))
+    if (d === opened.current && !touched.current && !pending && lasting === null) return
+    touched.current = true
+    // what is typed counts as it would on Save: an editor that closes without a blur keeps it too
+    onDraft?.(whole(withTyped(d)))
+  }, [d, pending, lasting])
+  const set = (field: 'description' | 'project', value: string) => setD(x => ({ ...x, [field]: value }))
   const listed = projects(d.client)
-  const seconds = draftSeconds(d)
+  const commitDuration = () => {
+    if (typedSeconds === null) return
+    setD(withTyped)
+    setLasting(null)
+  }
+  const seconds = draftSeconds(withTyped(d))
+  // one line under the times, its room kept, so nothing moves under the pointer: a duration that is
+  // none, times that make none (a stop before the start), or a long one asked about
+  const warning = badDuration
+    ? t('time.edit.badDuration')
+    : seconds === null
+      ? t(timesAreTimes(withTyped(d)) ? 'time.err.stopBeforeStart' : 'time.edit.badTime')
+      : seconds > LONG_SECONDS
+        ? t('time.edit.long')
+        : ''
+  const tags = tagList(d.tags)
+  const full = tags.length >= MAX_TAGS
+  const addTag = (text: string) => {
+    if (tagOf(text)) setD(x => (tagList(x.tags).length >= MAX_TAGS ? x : { ...x, tags: withTag(x.tags, text) }))
+  }
+  const typing = tagOf(pending)
+  const hints = full ? [] : offered.filter(x => !tags.includes(x) && x.startsWith(typing)).slice(0, 4)
+  const tagField = useRef<HTMLInputElement>(null)
+  const tagsLabel = useId()
   const submit = (e: FormEvent) => {
     e.preventDefault()
-    if (!stale) onSave(d)
+    if (!stale && !badDuration) onSave(whole(withTyped(d)))
   }
   return (
     <form
@@ -80,27 +146,7 @@ export function EntryEditor({
           )}
         </div>
       )}
-      {clients && (
-        <label className="time-field">
-          <span>{t('time.edit.client')}</span>
-          <select
-            value={d.client}
-            disabled={busy}
-            // another client: its own first project, not the last one's
-            onChange={e => {
-              const client = e.target.value
-              setD(x => ({ ...x, client, project: projects(client)?.[0] ?? x.project }))
-            }}
-          >
-            {clients.map(c => (
-              <option key={c} value={c}>
-                {clientTitle(c)}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      <label className="time-field time-field-wide">
+      <label className="time-field">
         <span>{t('time.edit.description')}</span>
         <textarea
           rows={2}
@@ -111,61 +157,118 @@ export function EntryEditor({
           onChange={e => set('description', e.target.value)}
         />
       </label>
-      {listed ? (
-        <label className="time-field">
-          <span>{t('time.edit.project')}</span>
-          <select value={d.project} disabled={busy} onChange={e => set('project', e.target.value)}>
-            {!listed.includes(d.project) && <option value={d.project}>{d.project}</option>}
-            {listed.map(p => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : (
-        <label className="time-field">
-          <span>{t('time.edit.project')}</span>
-          <input value={d.project} disabled={busy} onChange={e => set('project', e.target.value)} />
-        </label>
-      )}
       <div className="time-field-row">
-        <label className="time-field">
+        {clients && (
+          <label className="time-field">
+            <span>{t('time.edit.client')}</span>
+            <select
+              value={d.client}
+              disabled={busy}
+              // another client: its own first project, not the last one's
+              onChange={e => {
+                const client = e.target.value
+                setD(x => ({ ...x, client, project: projects(client)?.[0] ?? x.project }))
+              }}
+            >
+              {clients.map(c => (
+                <option key={c} value={c}>
+                  {clientTitle(c)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {listed ? (
+          <label className="time-field">
+            <span>{t('time.edit.project')}</span>
+            <select value={d.project} disabled={busy} onChange={e => set('project', e.target.value)}>
+              {!listed.includes(d.project) && <option value={d.project}>{d.project}</option>}
+              {listed.map(p => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <label className="time-field">
+            <span>{t('time.edit.project')}</span>
+            <input value={d.project} disabled={busy} onChange={e => set('project', e.target.value)} />
+          </label>
+        )}
+      </div>
+      <div className="time-field-row">
+        <label className="time-field time-clock">
           <span>{t('time.edit.start')}</span>
           <input
             type="time"
             value={d.start}
             disabled={busy}
-            onChange={e => setD(x => typed(x, 'start', e.target.value))}
+            onChange={e => {
+              setLasting(null)
+              setD(x => typed(x, 'start', e.target.value))
+            }}
           />
         </label>
-        <label className="time-field">
+        <label className="time-field time-clock">
           <span>{t('time.edit.stop')}</span>
           <input
             type="time"
             value={d.stop}
             disabled={busy}
-            onChange={e => setD(x => typed(x, 'stop', e.target.value))}
+            onChange={e => {
+              setLasting(null)
+              setD(x => typed(x, 'stop', e.target.value))
+            }}
           />
         </label>
         <div className="time-field time-duration">
           <span>{t('time.edit.duration')}</span>
-          <div className="time-steps">
-            <button type="button" className="button" disabled={busy} onClick={() => setD(x => nudge(x, -15))}>
+          <div className={classNames('time-steps', (badDuration || seconds === null) && 'bad')}>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setLasting(null)
+                setD(x => nudge(x, -15))
+              }}
+            >
               −15
             </button>
-            <strong className={classNames(seconds === null && 'access-warn')}>
-              {seconds === null ? '?' : hm(seconds)}
-            </strong>
-            <button type="button" className="button" disabled={busy} onClick={() => setD(x => nudge(x, 15))}>
+            <input
+              aria-label={t('time.edit.duration')}
+              value={lasting ?? (seconds === null ? '' : durationText(seconds, t))}
+              disabled={busy}
+              autoComplete="off"
+              aria-invalid={badDuration}
+              // half typed ("1" of "1:10") is no duration yet: the draft waits for Enter or leaving
+              onChange={e => setLasting(e.target.value)}
+              onKeyDown={e => {
+                if (e.key !== 'Enter' || e.nativeEvent.isComposing) return
+                e.preventDefault()
+                commitDuration()
+              }}
+              // a duration: into the draft, said as the panel says durations; none: kept, and said
+              onBlur={commitDuration}
+            />
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setLasting(null)
+                setD(x => nudge(x, 15))
+              }}
+            >
               +15
             </button>
           </div>
         </div>
       </div>
-      {seconds !== null && seconds > LONG_SECONDS && <p className="access-warn">{t('time.edit.long')}</p>}
+      <p className="access-warn time-warn" aria-live="polite">
+        {warning}
+      </p>
       <div className="time-field-row">
-        <label className="time-field">
+        <label className="time-field time-clock">
           <span>{t('time.edit.date')}</span>
           <input
             type="date"
@@ -178,32 +281,104 @@ export function EntryEditor({
             }}
           />
         </label>
-        <label className="time-field time-field-grow">
-          <span>{t('time.edit.tags')}</span>
-          <input value={d.tags} disabled={busy} placeholder="deferred" onChange={e => set('tags', e.target.value)} />
-        </label>
+        <div className="time-field">
+          <span id={tagsLabel}>{t('time.edit.tags')}</span>
+          {/* biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: a click on the field's padding reaches its input, which has the keys */}
+          <div className="time-tags" onClick={e => e.target === e.currentTarget && tagField.current?.focus()}>
+            {tags.map(tag => (
+              <span className="time-tag" key={tag}>
+                {tag}
+                <button
+                  type="button"
+                  aria-label={t('time.edit.removeTag', { tag })}
+                  title={t('time.edit.removeTag', { tag })}
+                  disabled={busy}
+                  onClick={() => setD(x => ({ ...x, tags: withoutTag(x.tags, tag) }))}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            <input
+              ref={tagField}
+              value={pending}
+              disabled={busy}
+              autoComplete="off"
+              aria-labelledby={tagsLabel}
+              placeholder={tags.length ? '' : t('time.edit.addTag')}
+              onChange={e => {
+                // a comma ends a tag: what is before it is one, what follows is being typed
+                const parts = e.target.value.split(',')
+                const rest = parts.pop() ?? ''
+                for (const part of parts) addTag(part)
+                setPending(rest)
+              }}
+              onKeyDown={e => {
+                if (e.nativeEvent.isComposing) return
+                // Enter ends a tag, never the form
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  addTag(pending)
+                  setPending('')
+                } else if (e.key === 'Backspace' && !pending && tags.length) {
+                  e.preventDefault()
+                  setD(x => ({ ...x, tags: withoutTag(x.tags, tags[tags.length - 1] as string) }))
+                }
+              }}
+              onBlur={() => {
+                if (!tagOf(pending)) return
+                addTag(pending)
+                setPending('')
+              }}
+            />
+          </div>
+          {full && <p className="time-tag-note">{t('time.err.tags', { n: MAX_TAGS })}</p>}
+          {hints.length > 0 && (
+            <div className="time-tag-hints">
+              {hints.map(hint => (
+                <button
+                  type="button"
+                  key={hint}
+                  className="time-tag-hint"
+                  disabled={busy}
+                  onClick={() => {
+                    addTag(hint)
+                    setPending('')
+                  }}
+                >
+                  + {hint}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
       {error && (
         <p className="access-problem" role="alert">
           {error}
         </p>
       )}
-      <div className="access-actions">
-        <button
-          type="submit"
-          className="button primary"
-          disabled={busy || !!stale || seconds === null || !d.description.trim()}
-        >
-          {t('backup.save')}
-        </button>
-        <button type="button" className="button" disabled={busy} onClick={onCancel}>
-          {t('backup.cancel')}
-        </button>
+      {by && (
+        <p className="time-by">
+          {t('time.edit.by')} {by}
+        </p>
+      )}
+      <div className="time-actions">
         {onDelete && (
           <button type="button" className="button time-delete" disabled={busy} onClick={onDelete}>
             {t('time.edit.delete')}
           </button>
         )}
+        <button type="button" className="button" disabled={busy} onClick={onCancel}>
+          {t('backup.cancel')}
+        </button>
+        <button
+          type="submit"
+          className="button primary"
+          disabled={busy || !!stale || badDuration || seconds === null || !d.description.trim()}
+        >
+          {t('backup.save')}
+        </button>
       </div>
     </form>
   )

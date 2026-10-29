@@ -3,6 +3,7 @@
 // changed elsewhere while it is open is said, and Save waits for Reload (it never writes the old
 // text back); a Raise the board refuses is a toast; a delete's Undo stays seven seconds; an Undo
 // after paging leaves the day shown as it is. Brought over from the review of #236 (ui.test.tsx).
+// From #239: tags as tokens, a duration typed, Trim on a line billed under its time.
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -34,6 +35,8 @@ const TIME = {
   clients: {
     'client-a': { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'up' }] },
     'client-b': { projects: ['Support'] },
+    // billed under its time: to the nearest 30 minutes
+    'client-n': { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'nearest' }] },
   },
 }
 const conf = timeConfig(TIME)
@@ -150,6 +153,13 @@ const setValue = async (el: HTMLElement | null, value: string) => {
     dom.window.document.dispatchEvent(new dom.window.Event('selectionchange'))
   })
 }
+/** A key pressed in a field, as React hears it. */
+const press = async (el: HTMLElement | null, key: string) => {
+  expect(el).toBeTruthy()
+  await act(async () => {
+    el?.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+  })
+}
 const submit = async () => {
   await act(async () => {
     q('.time-editor').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }))
@@ -184,7 +194,7 @@ async function setup() {
   const stored = async () =>
     (
       (await (await realFetch(`${url}/api/time?date=${DAY}`)).json()) as {
-        entries: { description: string; stop: string; rev: number; client: string }[]
+        entries: { description: string; stop: string; rev: number; client: string; tags: string[] }[]
       }
     ).entries
   /** A change by an agent's `board time`, straight into the database. */
@@ -427,27 +437,45 @@ async function three(s: Awaited<ReturnType<typeof setup>>) {
     stop: `${DAY}T17:30:00Z`,
   })
 }
-const openOn = (description: string) => click(qa('.time-open').find(b => b.textContent?.includes(description)) ?? null)
+/** An entry opened by the text its row shows: the description without the case its line is named after. */
+const openOn = (shown: string) => click(qa('.time-open').find(b => b.textContent?.includes(shown)) ?? null)
 const TYPED = 'Case 10001 X: typed text I care about'
 
 test('a tap on another entry, or Add entry, leaves the typed text for when the first opens again', async () => {
   const s = await setup()
   await three(s)
   const root = await mount(1)
-  await openOn('Case 10001 X: work')
+  await openOn('X: work')
   await setValue(q('.time-editor textarea'), TYPED)
-  await openOn('Case 10002 Z: second')
+  await openOn('Z: second')
   expect(q('.time-editor textarea').value).toBe('Case 10002 Z: second')
-  await openOn('Case 10001 X: work')
+  await openOn('X: work')
   expect(q('.time-editor textarea').value).toBe(TYPED)
   // Add entry, then back: the same
   await click(qa('.time-add button').find(b => b.textContent === 'Add entry') ?? null)
-  await openOn('Case 10001 X: work')
+  await openOn('X: work')
   expect(q('.time-editor textarea').value).toBe(TYPED)
   // Cancel is done with it
   await click(qa('.time-editor button').find(b => b.textContent === 'Cancel') ?? null)
-  await openOn('Case 10001 X: work')
+  await openOn('X: work')
   expect(q('.time-editor textarea').value).toBe('Case 10001 X: work')
+  mounted.delete(root)
+  act(() => root.unmount())
+}, 90_000)
+
+test('a duration typed and not yet put in the draft is kept when the editor closes without a blur', async () => {
+  const s = await setup()
+  await s.entry()
+  const root = await mount(1)
+  await openOn('X: work')
+  await setValue(q('.time-steps input'), '1:10')
+  // the day changes with the field still focused: no blur, no Enter
+  await click(q('button[aria-label="Next day"]'))
+  await settle(300)
+  await click(q('button[aria-label="Previous day"]'))
+  await settle(300)
+  await openOn('X: work')
+  expect(q('.time-steps input').value).toBe('1h\u00a010m')
   mounted.delete(root)
   act(() => root.unmount())
 }, 90_000)
@@ -456,14 +484,14 @@ test('the day changed (the arrows, or past midnight) leaves the typed text for t
   const s = await setup()
   await three(s)
   const root = await mount(1)
-  await openOn('Case 10001 X: work')
+  await openOn('X: work')
   await setValue(q('.time-editor textarea'), TYPED)
   await click(q('button[aria-label="Next day"]'))
   await settle(300)
   await click(q('button[aria-label="Previous day"]'))
   await settle(300)
   expect(q('.time-editor')).toBeNull()
-  await openOn('Case 10001 X: work')
+  await openOn('X: work')
   expect(q('.time-editor textarea').value).toBe(TYPED)
   // the board's day rolls over while the panel shows it: the panel follows, the draft stays
   const next = new Date(Date.parse(`${DAY}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10)
@@ -471,7 +499,7 @@ test('the day changed (the arrows, or past midnight) leaves the typed text for t
   await settle(300)
   await click(q('button[aria-label="Previous day"]'))
   await settle(300)
-  await openOn('Case 10001 X: work')
+  await openOn('X: work')
   expect(q('.time-editor textarea').value).toBe(TYPED)
   mounted.delete(root)
   act(() => root.unmount())
@@ -481,7 +509,7 @@ test('another client chosen closes the editor (no hidden one left open), its typ
   const s = await setup()
   await three(s)
   const root = await mount(1)
-  await openOn('Case 10001 X: work')
+  await openOn('X: work')
   await setValue(q('.time-editor textarea'), TYPED)
   await act(async () => root.render(view(1, 'client-b')))
   await settle()
@@ -490,7 +518,7 @@ test('another client chosen closes the editor (no hidden one left open), its typ
   await act(async () => root.render(view(1, null)))
   await settle()
   expect(q('.time-editor')).toBeNull()
-  await openOn('Case 10001 X: work')
+  await openOn('X: work')
   expect(q('.time-editor textarea').value).toBe(TYPED)
   mounted.delete(root)
   act(() => root.unmount())
@@ -554,16 +582,16 @@ test('a change saved in part, left and opened again: its draft against the entry
   const s = await setup()
   await three(s)
   const root = await mount(1)
-  await openOn('Case 10001 X: work')
+  await openOn('X: work')
   await setValue(q('.time-editor textarea'), 'Case 10001 X: edited')
   await setValue(q('.time-editor input[type=date]'), '2024-01-01')
   await submit()
   await settle(700)
   expect((await s.stored()).map(e => e.description)).toContain('Case 10001 X: edited')
-  await openOn('Case 10002 Z: second')
+  await openOn('Z: second')
   await act(async () => root.render(view(2)))
   await settle()
-  await openOn('Case 10001 X: edited')
+  await openOn('X: edited')
   expect(q('.time-editor textarea').value).toBe('Case 10001 X: edited')
   expect(q('.time-editor input[type=date]').value).toBe('2024-01-01')
   expect(q('.time-stale')).toBeNull()
@@ -589,6 +617,196 @@ test('a new entry’s draft whose date field says another day comes back on the 
     'Case 30001 N: for another date',
     other,
   ])
+  mounted.delete(root)
+  act(() => root.unmount())
+}, 90_000)
+
+test('tags as tokens: Enter or a comma adds one, its x or Backspace takes one off, the board’s are offered, the one typed counts', async () => {
+  const s = await setup()
+  await s.entry()
+  const root = await mount(1)
+  await openOn('X: work')
+  const field = () => q('.time-tags input')
+  const shown = () => qa('.time-tag').map(x => x.firstChild?.textContent)
+  // the board's tags offered under the field, the held one first
+  expect(qa('.time-tag-hint').map(x => x.textContent)).toEqual(['+ deferred'])
+  await setValue(field(), 'Call')
+  await press(field(), 'Enter')
+  expect([shown(), field().value]).toEqual([['call'], ''])
+  await setValue(field(), 'a, #b,c')
+  expect([shown(), field().value]).toEqual([['call', 'a', 'b'], 'c'])
+  await setValue(field(), '')
+  // Enter with nothing typed ends nothing, and never saves
+  await press(field(), 'Enter')
+  expect(q('.time-editor')).toBeTruthy()
+  await press(field(), 'Backspace')
+  expect(shown()).toEqual(['call', 'a'])
+  await click(q('.time-tag button[aria-label="Remove call"]'))
+  expect(shown()).toEqual(['a'])
+  await click(qa('.time-tag-hint')[0] ?? null)
+  expect(shown()).toEqual(['a', 'deferred'])
+  // typed, not yet a token: Save takes it as one
+  await setValue(field(), 'late')
+  await submit()
+  await settle(600)
+  expect((await s.stored())[0]?.tags).toEqual(['a', 'deferred', 'late'])
+  mounted.delete(root)
+  act(() => root.unmount())
+}, 90_000)
+
+test('a duration typed moves the stop, the start as it was; one that is not a duration is said and waits', async () => {
+  const s = await setup()
+  await s.entry()
+  const root = await mount(1)
+  await openOn('X: work')
+  const field = () => q('.time-steps input')
+  expect(field().value).toBe('1h\u00a030m')
+  const save = () => qa('.time-editor button[type=submit]')[0] as HTMLButtonElement
+  const stop = () => (qa('.time-editor input[type=time]')[1] as HTMLInputElement).value
+  const leave = () =>
+    act(async () => {
+      field().dispatchEvent(new dom.window.FocusEvent('focusout', { bubbles: true }))
+    })
+  const before = stop()
+  // half typed ("1" of "1:10") is no duration yet: the stop waits
+  await setValue(field(), '1')
+  expect(stop()).toBe(before)
+  // none on leaving the field: kept as typed, said, Save waiting, the warning's line already there
+  await setValue(field(), 'later')
+  await leave()
+  expect([
+    field().value,
+    save().disabled,
+    q('.time-editor .time-warn')?.textContent?.startsWith('Not a duration'),
+  ]).toEqual(['later', true, true])
+  await setValue(field(), '1:10')
+  expect([stop(), save().disabled]).toEqual([before, false])
+  // a typed duration, then a later start: both times, the stop before the start, said so
+  await setValue(field(), '30m')
+  await press(field(), 'Enter')
+  await setValue(qa('.time-editor input[type=time]')[0] ?? null, '23:30')
+  expect(q('.time-editor .time-warn')?.textContent).toBe('The stop is not after the start.')
+  await setValue(qa('.time-editor input[type=time]')[0] ?? null, '9:7x')
+  expect(q('.time-editor .time-warn')?.textContent).toBe('A start or stop is not a time.')
+  await click(qa('.time-editor button').find(b => b.textContent === 'Cancel') ?? null)
+  await openOn('X: work')
+  await setValue(field(), '1:10')
+  // Enter puts it in the draft, said as the panel says durations; no Save
+  await press(field(), 'Enter')
+  expect([field().value, q('.time-editor')]).toEqual(['1h\u00a010m', q('.time-editor')])
+  expect(q('.time-editor .time-warn')?.textContent).toBe('')
+  await submit()
+  await settle(600)
+  const [after] = await s.stored()
+  expect(after?.stop).toBe(`${DAY}T14:10:00Z`)
+  // a new entry: its start plus the duration typed
+  await click(addButton())
+  await setValue(q('.time-add textarea'), 'Case 30001 N: an hour and a half')
+  await setValue(q('.time-add .time-steps input'), '1,5')
+  await act(async () => {
+    q('.time-add .time-editor').dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }))
+  })
+  await settle(600)
+  const made = (await s.stored()).find(e => e.description === 'Case 30001 N: an hour and a half') as unknown as {
+    seconds: number
+  }
+  expect(made?.seconds).toBe(5400)
+  mounted.delete(root)
+  act(() => root.unmount())
+}, 90_000)
+
+test('a line billed under its time offers Trim: it takes the gap from the last entry, then the one before', async () => {
+  const s = await setup()
+  // 30 + 14 = 44 minutes to the nearest 30: billed 30, 14 to trim
+  for (const [start, stop] of [
+    ['13:00', '13:30'],
+    ['14:00', '14:14'],
+  ])
+    await s.post({
+      op: 'add',
+      client: 'client-n',
+      project: 'Support',
+      description: 'Case 40001 T: work',
+      start: `${DAY}T${start}:00Z`,
+      stop: `${DAY}T${stop}:00Z`,
+    })
+  const root = await mount(1)
+  expect(q('.time-trim')?.textContent).toBe('Trim to 30m')
+  await click(q('.time-trim'))
+  await settle(600)
+  expect((await s.stored()).map(e => e.stop)).toEqual([`${DAY}T13:29:00Z`, `${DAY}T14:01:00Z`])
+  // there now: nothing to offer
+  expect(q('.time-trim')).toBeNull()
+  mounted.delete(root)
+  act(() => root.unmount())
+}, 90_000)
+
+test('tags: twenty at most, said; a long one cut as the board keeps it', async () => {
+  const s = await setup()
+  await s.entry()
+  const root = await mount(1)
+  await openOn('X: work')
+  const field = () => q('.time-tags input')
+  await setValue(field(), `${'x'.repeat(50)},`)
+  expect(qa('.time-tag').map(x => x.firstChild?.textContent)).toEqual(['x'.repeat(40)])
+  await setValue(field(), `${Array.from({ length: 25 }, (_, i) => `t${i}`).join(',')},`)
+  expect(qa('.time-tag').length).toBe(20)
+  expect(q('.time-tag-note')?.textContent).toBe('At most 20 tags.')
+  expect(qa('.time-tag-hint').length).toBe(0)
+  mounted.delete(root)
+  act(() => root.unmount())
+}, 90_000)
+
+test('the layout: the billable figure, the time worked, each client’s share, the chips, a client’s rule, the held apart', async () => {
+  const s = await setup()
+  // client A: 40 minutes of a case, up to the half hour (60 billed), and 20 held; client B: 30 exact
+  await s.post({
+    op: 'add',
+    client: 'client-a',
+    project: 'Support',
+    description: 'Case 10001 X: work',
+    start: `${DAY}T13:00:00Z`,
+    stop: `${DAY}T13:40:00Z`,
+  })
+  await s.post({
+    op: 'add',
+    client: 'client-a',
+    project: 'Support',
+    description: 'Case 10002 W: later',
+    start: `${DAY}T15:00:00Z`,
+    stop: `${DAY}T15:20:00Z`,
+    tags: ['deferred'],
+  })
+  await s.post({
+    op: 'add',
+    client: 'client-b',
+    project: 'Support',
+    description: 'Call',
+    start: `${DAY}T16:00:00Z`,
+    stop: `${DAY}T16:30:00Z`,
+  })
+  const root = await mount(1)
+  const text = (sel: string) => qa(sel).map(x => x.textContent)
+  expect(text('.time-summary .time-caption')).toEqual(['Billable'])
+  expect(text('.time-summary .time-total')).toEqual(['1h\u00a030m'])
+  expect(text('.time-summary .time-about')).toEqual(['worked 1h\u00a010m'])
+  expect(qa('.time-bar span').length).toBe(2)
+  expect(text('.time-chips button')).toEqual(['All', 'Client A', 'client-b'])
+  expect(text('.time-client-head h4')).toEqual(['Client A', 'client-b'])
+  expect(text('.time-client-head .time-client-total')).toEqual(['1h', '30m'])
+  expect(text('.time-client-head .time-about')).toEqual(['worked 40m · up to 30 min'])
+  // the line rounded up says the time worked before its figure; the held, theirs apart
+  expect(text('.time-line-head .time-figures')).toEqual(['40m →1h', '20m', '30m'])
+  expect(text('.time-held .time-line-head .time-line-name')).toEqual(['Held'])
+  expect(qa('.time-held .time-entry').map(x => x.textContent?.includes('Case 10002 W: later'))).toEqual([true])
+  expect(text('.time-zone')).toEqual(['Days are counted in America/New_York time'])
+  // one client on show: the figure is that client's, named over it, and no heading of its own
+  await act(async () => root.render(view(1, 'client-a')))
+  await settle()
+  expect(text('.time-summary .time-caption')).toEqual(['Client A · Billable'])
+  expect(text('.time-summary .time-total')).toEqual(['1h'])
+  expect(text('.time-summary .time-about')).toEqual(['worked 40m · up to 30 min'])
+  expect([qa('.time-bar').length, qa('.time-client-head').length]).toEqual([0, 0])
   mounted.delete(root)
   act(() => root.unmount())
 }, 90_000)

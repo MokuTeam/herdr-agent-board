@@ -17,6 +17,8 @@ import {
   removeEntry,
   restoreEntry,
   TimeError,
+  trimLine,
+  usedTags,
 } from '../../src/adapters/time-store.ts'
 import { type Actor, secondsOf, timeConfig } from '../../src/core/time.ts'
 import { isolatedHome } from '../support/env.ts'
@@ -464,5 +466,113 @@ test('Raise reads the line under the write lock: an entry another process adds t
     (db.db.query("SELECT op FROM journal WHERE store = 'time' ORDER BY seq DESC LIMIT 1").get() as { op: string }).op,
     'raise',
   )
+  db.close()
+})
+
+test('Trim reads the line under the write lock as Raise does: an entry another process adds to it first counts', async () => {
+  const db = fresh()
+  const downConf = timeConfig({
+    zone: NY,
+    clients: { a: { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'down' }] } },
+  })
+  assert.ok(downConf)
+  // 40 minutes of case 10001 down to 30: 10 minutes to trim
+  const last = addEntry(
+    db,
+    downConf,
+    { ...base, start: at('2026-10-28T13:00:00Z'), stop: at('2026-10-28T13:40:00Z') },
+    me,
+  ).entry
+  // another process takes the lock and adds 5 minutes of the same case, earlier in the day
+  const holder = Bun.spawn(
+    [
+      process.execPath,
+      HOLDER,
+      dbFile(),
+      JSON.stringify({
+        id: 'other002',
+        client: 'a',
+        project: 'Support',
+        description: 'Case 10001 X: a call',
+        start: '2026-10-28T12:00:00Z',
+        stop: '2026-10-28T12:05:00Z',
+        date: '2026-10-28',
+      }),
+      '600',
+    ],
+    { stdout: 'pipe', stderr: 'pipe' },
+  )
+  const reader = holder.stdout.getReader()
+  assert.match(new TextDecoder().decode((await reader.read()).value), /held/)
+  // the trim waits for the lock, then reads the line with both: 45 minutes, 15 to trim
+  const trimmed = trimLine(db, downConf, last.id, me, { expect: last.rev })
+  await holder.exited
+  assert.deepEqual([trimmed.stop, trimmed.rev], ['2026-10-28T13:25:00Z', last.rev + 1])
+  assert.equal(getEntry(db, 'other002')?.stop, '2026-10-28T12:05:00Z', 'the last entry gave it all')
+  assert.equal(
+    (db.db.query("SELECT op FROM journal WHERE store = 'time' ORDER BY seq DESC LIMIT 1").get() as { op: string }).op,
+    'trim',
+  )
+  // a revision read before is refused, and changes nothing
+  assert.throws(() => trimLine(db, downConf, last.id, me, { expect: last.rev }), /changed since/)
+  db.close()
+})
+
+test('the tags entries have, most used first; a row whose tags are not JSON has none and fails nothing', () => {
+  const db = fresh()
+  addEntry(db, conf, { ...base, tags: ['call', 'review'] }, me)
+  addEntry(
+    db,
+    conf,
+    { ...base, start: at('2026-10-28T16:00:00Z'), stop: at('2026-10-28T16:30:00Z'), tags: ['call'] },
+    me,
+  )
+  db.write('user', tx =>
+    tx.db
+      .query(
+        'INSERT INTO time_entries (id, client, project, description, tags, start, stop, date, by, at, changed, changed_by, rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
+      )
+      .run(
+        'bad00001',
+        'a',
+        'Support',
+        'x',
+        'not json',
+        '2026-10-28T18:00:00Z',
+        '2026-10-28T18:30:00Z',
+        '2026-10-28',
+        'user',
+        1,
+        1,
+        'user',
+      ),
+  )
+  // JSON, but not a list: none either
+  for (const [id, tags, start] of [
+    ['bad00002', '"solo"', '2026-10-28T19:00:00Z'],
+    ['bad00003', '{"a":"b"}', '2026-10-28T20:00:00Z'],
+  ] as const)
+    db.write('user', tx =>
+      tx.db
+        .query(
+          'INSERT INTO time_entries (id, client, project, description, tags, start, stop, date, by, at, changed, changed_by, rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
+        )
+        .run(
+          id,
+          'a',
+          'Support',
+          'x',
+          tags,
+          start,
+          start.replace(':00:00Z', ':30:00Z'),
+          '2026-10-28',
+          'user',
+          1,
+          1,
+          'user',
+        ),
+    )
+  assert.deepEqual(usedTags(db), ['call', 'review'])
+  assert.deepEqual(getEntry(db, 'bad00001')?.tags, [])
   db.close()
 })

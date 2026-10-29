@@ -1,7 +1,9 @@
 // Time entries for the page (#233, core/time.ts, adapters/time-store.ts). GET /api/time?date=<d>
 // [&client=<lane>] answers that day by client, as billed, with its entries and what an entry may
-// be (the lanes that take time, their projects). POST /api/time { op: add | edit | move | remove |
-// restore | raise, … } changes one as the owner, who may change any. Every op on an entry says the
+// be (the lanes that take time, their projects, the tags entries have). POST /api/time { op: add |
+// edit | move | remove | restore | raise | trim, … } changes one as the owner, who may change any
+// (raise and trim bring a line's time worked to its billed figure, up or down, and say the figure
+// the page showed: one the line no longer bills is refused). Every op on an entry says the
 // revision it read (`rev`, an integer) and is refused when the entry changed since; times are ISO
 // with an offset, within a day ahead and a year back. An error says its `code` (the text key's last
 // part) beside its words. Not local-only: the board through the remote page and a paired phone read
@@ -20,6 +22,8 @@ import {
   removeEntry,
   restoreEntry,
   TimeError,
+  trimLine,
+  usedTags,
 } from '../../adapters/time-store.ts'
 import { t } from '../../core/lang.ts'
 import type { TimePayload } from '../../core/payload.ts'
@@ -96,6 +100,8 @@ export interface TimeDayView {
   /** The lanes that take time (null: every lane) and each one's projects (null: any). */
   clients: string[] | null
   projects: Record<string, string[] | null>
+  /** Tags to offer: the ones held out of the totals first, then the ones entries have, most used first. */
+  tags: string[]
 }
 
 const projectsOf = (conf: TimeConfig): Record<string, string[] | null> =>
@@ -105,7 +111,11 @@ const projectsOf = (conf: TimeConfig): Record<string, string[] | null> =>
 export function timeDay(cfg: Pick<Config, 'time'>, date: string, client?: string): TimeDayView | null {
   const conf = timeConfig(cfg.time)
   if (!conf) return null
-  const entries = withDb(false, db => (db ? listEntries(db, { from: date, to: date, ...(client && { client }) }) : []))
+  const { entries, used } = withDb(false, db =>
+    db
+      ? { entries: listEntries(db, { from: date, to: date, ...(client && { client }) }), used: usedTags(db) }
+      : { entries: [], used: [] },
+  )
   const clients = [...new Set(entries.map(e => e.client))].sort()
   return {
     date,
@@ -122,6 +132,7 @@ export function timeDay(cfg: Pick<Config, 'time'>, date: string, client?: string
     entries: entries.map(e => ({ ...e, seconds: secondsOf(e) })),
     clients: conf.clients ? Object.keys(conf.clients) : null,
     projects: projectsOf(conf),
+    tags: [...new Set([...conf.excludeTags, ...used])],
   }
 }
 
@@ -178,6 +189,14 @@ function when(v: unknown, now: number): number | undefined {
 function revOf(b: Record<string, unknown>): number {
   if (typeof b.rev !== 'number' || !Number.isInteger(b.rev)) throw new TimeError('time.err.rev')
   return b.rev
+}
+
+/** The billed figure a raise or a trim was asked for (the button's), when the body says it: whole seconds. */
+function billedOf(b: Record<string, unknown>): { billed?: number } {
+  if (b.billed === undefined) return {}
+  if (typeof b.billed !== 'number' || !Number.isInteger(b.billed) || b.billed < 0)
+    throw new TimeError('time.err.billed')
+  return { billed: b.billed }
 }
 
 const MAX_TAGS = 20
@@ -249,7 +268,9 @@ function change(db: BoardDb, conf: TimeConfig, b: Record<string, unknown>, now: 
     case 'restore':
       return restoreEntry(db, id, 'user', { expect: revOf(b) })
     case 'raise':
-      return raiseEntry(db, conf, id, 'user', { expect: revOf(b) })
+      return raiseEntry(db, conf, id, 'user', { expect: revOf(b), ...billedOf(b) })
+    case 'trim':
+      return trimLine(db, conf, id, 'user', { expect: revOf(b), ...billedOf(b) })
     default:
       throw new TimeError('time.err.usage')
   }

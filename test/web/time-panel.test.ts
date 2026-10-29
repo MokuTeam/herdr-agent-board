@@ -1,5 +1,6 @@
-// The Time panel's model (#233, web/src/models/time.ts): the day read with a guard, hours as a
-// bill says them, a line's name and rule, the day's name and the swipe that changes it.
+// The Time panel's model (#233, web/src/models/time.ts): the day read with a guard, a duration in
+// one form everywhere, a line's name and rules, an entry's description under its line and its times,
+// the day's name and the swipe that changes it.
 import { expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { DayLine } from '../../src/core/time.ts'
@@ -10,20 +11,28 @@ import {
   changesOf,
   dateName,
   dayFor,
+  dayTitle,
   draftOf,
   draftSeconds,
   draftTimes,
-  hm,
-  hoursText,
+  durationText,
+  entryTimes,
   isTimeDay,
   lineLabel,
   localClock,
   newDraft,
   nudge,
+  parseDuration,
+  rulesOf,
   ruleText,
   shiftDate,
   swipeDay,
+  tagOf,
   typed,
+  underLine,
+  withDuration,
+  withoutTag,
+  withTag,
 } from '../../web/src/models/time.ts'
 
 const t = translator('en')
@@ -47,12 +56,16 @@ test('the day is taken only as the board sends it', () => {
   expect(isTimeDay({ ok: false, error: 'off' })).toBe(false)
 })
 
-test('hours as a bill says them, raw time as H:MM', () => {
-  expect(hoursText(5400, t)).toBe('1.5 h')
-  expect(hoursText(900, t)).toBe('0.25 h')
-  expect(hoursText(7200, t)).toBe('2 h')
-  expect(hoursText(5400, translator('ru'))).toBe('1,5 h')
-  expect(hm(2520)).toBe('0:42')
+test('a duration in one form, worked and billed alike: hours and minutes, to the minute, never wrapped', () => {
+  const ru = translator('ru')
+  expect(durationText(5400, t)).toBe('1h\u00a030m')
+  expect(durationText(2520, t)).toBe('42m')
+  expect(durationText(7200, t)).toBe('2h')
+  expect(durationText(4220, t)).toBe('1h\u00a010m')
+  expect(durationText(0, t)).toBe('0m')
+  expect(durationText(5400, ru)).toBe('1\u00a0ч\u00a030\u00a0мин')
+  expect(durationText(2520, ru)).toBe('42\u00a0мин')
+  expect(durationText(7200, ru)).toBe('2\u00a0ч')
 })
 
 test('a line’s name and rule', () => {
@@ -63,10 +76,42 @@ test('a line’s name and rule', () => {
   expect(ruleText(line({}), t)).toBe('up to 30 min')
   expect(ruleText(line({ round: 'nearest' }), t)).toBe('nearest 30 min')
   expect(ruleText(line({ round: 'exact', step: 0 }), t)).toBe('exact')
+  // a client's rules, each once; exact says nothing
+  expect(
+    rulesOf([line({}), line({ key: 'b' }), line({ round: 'nearest' }), line({ round: 'exact', step: 0 })], t),
+  ).toEqual(['up to 30 min', 'nearest 30 min'])
+})
+
+test('an entry under its line: without the line’s name it starts with, the whole description otherwise', () => {
+  expect(underLine('Case 10001: saved search for open invoices', '10001')).toBe('Saved search for open invoices')
+  expect(underLine('TCK-2538 lookup timeout', 'TCK-2538')).toBe('Lookup timeout')
+  expect(underLine('tck-2538 - lookup', 'TCK-2538')).toBe('Lookup')
+  expect(underLine('Кейс 10001: отчёт', '10001')).toBe('Отчёт')
+  expect(underLine('#10001 fix', '10001')).toBe('Fix')
+  // not where the name is only part of a longer one, nor where it is not at the start
+  expect(underLine('Case 100019: other', '10001')).toBe('Case 100019: other')
+  expect(underLine('Follow-up on 10001', '10001')).toBe('Follow-up on 10001')
+  // nothing left, or no name: as it is
+  expect(underLine('10001', '10001')).toBe('10001')
+  expect(underLine('Case 10001:', '10001')).toBe('Case 10001:')
+  expect(underLine('Weekly sync', '')).toBe('Weekly sync')
+  // a name with the characters a pattern would take its own way
+  expect(underLine('C++ (v2) build fix', 'C++ (v2)')).toBe('Build fix')
+})
+
+test('an entry’s times: AM or PM once where both share it, a 24-hour clock as it is', () => {
+  const at = (h: number, m: number) => new Date(2026, 9, 29, h, m).toISOString()
+  const plain = (s: string) => s.replace(/[\u202f\u00a0]/g, ' ')
+  expect(plain(entryTimes({ start: at(16, 0), stop: at(17, 10) }, 'en'))).toBe('4:00-5:10 PM')
+  expect(plain(entryTimes({ start: at(11, 30), stop: at(12, 15) }, 'en'))).toBe('11:30 AM-12:15 PM')
+  expect(entryTimes({ start: at(9, 10), stop: at(9, 52) }, 'ru')).toBe('09:10-09:52')
+  expect(entryTimes({ start: at(23, 40), stop: at(0, 20) }, 'ru')).toBe('23:40-00:20')
 })
 
 test('days: named in the board’s language, a day before and after across a month', () => {
   expect(dateName('2026-10-28', 'en')).toBe('Wed, Oct 28')
+  expect(dayTitle('2026-10-28', 'en')).toBe('Wednesday, October 28')
+  expect(dayTitle('2026-10-29', 'ru')).toBe('Четверг, 29 октября')
   expect(shiftDate('2026-10-31', 1)).toBe('2026-11-01')
   expect(shiftDate('2026-11-01', -1)).toBe('2026-10-31')
 })
@@ -196,4 +241,87 @@ test('a new entry: half an hour ending now today, 09:00 to 09:30 on another day;
     start: new Date(2026, 9, 27, 9, 0).toISOString(),
     stop: new Date(2026, 9, 27, 9, 30).toISOString(),
   })
+})
+
+test('a duration typed: a clock, minutes, hours with a point or a comma, units in English or Russian', () => {
+  const cases: [string, number | null][] = [
+    ['1:10', 4200],
+    ['0:05', 300],
+    ['70', 4200],
+    ['1h10m', 4200],
+    ['1h 10m', 4200],
+    ['1ч 10м', 4200],
+    ['1 ч 10 мин', 4200],
+    ['1\u00a0ч\u00a010\u00a0мин', 4200],
+    ['1h\u00a010m', 4200],
+    ['45 мин', 2700],
+    ['45m', 2700],
+    ['2h', 7200],
+    ['2 ч', 7200],
+    ['1.5', 5400],
+    ['1,5', 5400],
+    ['1.5h', 5400],
+    ['1,5 ч', 5400],
+    ['.5', 1800],
+    ['  90 min ', 5400],
+    // to the minute
+    ['1.33', 4800],
+    // not one: nothing, words, a clock with a bad minute, under a minute, over a day
+    ['', null],
+    ['abc', null],
+    ['1:75', null],
+    ['1:5', null],
+    ['h', null],
+    ['0', null],
+    ['0:00', null],
+    ['0.01', null],
+    ['25h', null],
+    ['24:01', null],
+  ]
+  for (const [text, seconds] of cases) expect([text, parseDuration(text)]).toEqual([text, seconds])
+  // 24 hours, the most an entry lasts, is one
+  expect(parseDuration('24:00')).toBe(86_400)
+})
+
+test('a typed duration moves the stop from the start as it stands, its seconds kept; a bad start leaves it', () => {
+  const e = {
+    id: 'e1',
+    rev: 1,
+    client: 'client-a',
+    project: 'Support',
+    description: 'x',
+    date: '2026-10-28',
+    start: '2026-10-28T13:00:30Z',
+    stop: '2026-10-28T13:40:30Z',
+    tags: [],
+  }
+  const opened = draftOf(e)
+  const longer = withDuration(opened, 4200)
+  expect(new Date(longer.stopAt as number).toISOString()).toBe('2026-10-28T14:10:30.000Z')
+  expect(draftSeconds(longer)).toBe(4200)
+  // only the stop goes: the start keeps its seconds
+  expect(changesOf(e, longer)?.edit).toEqual({
+    op: 'edit',
+    id: 'e1',
+    rev: 1,
+    stop: '2026-10-28T14:10:30.000Z',
+  })
+  // a new entry: its start plus the duration
+  const fresh = withDuration(newDraft('client-a', 'Support', '2026-10-28', Date.parse('2026-11-05T12:00:00Z')), 5400)
+  expect([fresh.start, fresh.stop, draftSeconds(fresh)]).toEqual(['09:00', '10:30', 5400])
+  expect(withDuration({ ...opened, start: '9:7x', startAt: null }, 600)).toEqual({
+    ...opened,
+    start: '9:7x',
+    startAt: null,
+  })
+})
+
+test('tags as tokens: one added once, cleaned as the board keeps it; one taken off; the rest kept in order', () => {
+  expect(tagOf(' #Deferred ')).toBe('deferred')
+  expect(tagOf('a,b')).toBe('a b')
+  expect(withTag('', 'call')).toBe('call')
+  expect(withTag('call', '#Review')).toBe('call, review')
+  expect(withTag('call, review', 'call')).toBe('call, review')
+  expect(withTag('call', '  ')).toBe('call')
+  expect(withoutTag('call, review, deferred', 'review')).toBe('call, deferred')
 })

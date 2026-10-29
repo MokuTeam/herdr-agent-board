@@ -1,8 +1,12 @@
-// The Time panel (#233): one day by client, as it will be billed. From the top: the day
-// with the day before and after and Today; the clients of that day as chips (All, then each with
-// its billed hours, in its lane's color); then each client's billed lines, a line's entries under
-// it with their times on this browser's clock, the description, the project and who logged it;
-// the held entries (a tag the config leaves out) apart; the day's totals. Asked when it opens
+// The Time panel (#233): one day by client, as it will be billed, read in the order that matters
+// (#239). From the top: the day's name with the day before, Today and the day after; the clients
+// of that day as the toolbar's lanes control (All, then each in its lane's color); the figure to
+// bill, large (the day's, or the one client's on show), the time worked and the rounding under it
+// where they differ, each client's share as a bar; then each client with its own figure over its
+// billed lines, a line's entries under its name with their times on this browser's clock and the
+// description without the case the line is named after (who logged one: its hint, and its editor);
+// the held entries (a tag the config leaves out) apart; the zone once, at the foot. Every duration
+// in one form (models/time.ts durationText), as the lanes' totals say it too. Asked when it opens
 // (always on today), when the day changes, and again whenever the board's time line says the store
 // changed; an answer that comes after a later question is dropped, and a day's figures show only
 // under that day's name. While config.json's `time` does not check out, it says so first. On a
@@ -11,13 +15,16 @@
 // Where the board can be changed: a tap on an entry opens it in place (EntryEditor.tsx), held
 // against the entry as it was opened (changed elsewhere since: it says so, and Save waits for
 // Reload); Delete asks nothing and the toast's Undo (7 s, a newer one replaces it) brings it back;
-// "Add entry" under the day; a line rounded up offers "Raise to" (its last entry lengthened by the
-// gap the board works out, for a client that wants the entries themselves to add up to the billed
-// figure). Each change goes as the owner (POST /api/time) with the revision it read, and the day
+// "Add entry" under the day's figure, its editor in its place; a line billed over its time offers "Raise to"
+// (its last entry lengthened by the gap the board works out), and one billed under it "Trim
+// to" (the gap taken from its last entry, then the one before, each kept a minute; offered only
+// where that gets there), for a client that wants the entries themselves to add up to the billed
+// figure. Each change goes as the owner (POST /api/time) with the revision it read, and the day
 // is read again after it; an entry saved on another day says so, with a way there. Not optimistic:
 // the figures change when the board says the change is in.
-import { type PointerEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { type PointerEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { errorText, postJson, replyOf } from '../../api/client.ts'
+import { useLaneFades } from '../../hooks/useLaneFades.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { reducedMotion } from '../../models/spring.ts'
@@ -29,21 +36,23 @@ import {
   type Draft,
   dateName,
   dayFor,
+  dayTitle,
   draftOf,
+  durationText,
   entryTimes,
-  hm,
-  hoursText,
   isTimeDay,
   lineLabel,
   newDraft,
+  rulesOf,
   ruleText,
   shiftDate,
   swipeDay,
   type TimeDay,
+  underLine,
 } from '../../models/time.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { nextToastToken } from '../../state/board-ui.ts'
-import { classNames } from '../class-names.ts'
+import { ChevIcon, PlusIcon } from '../icons.tsx'
 import { Panel } from '../panel/Panel.tsx'
 import { EntryEditor } from './EntryEditor.tsx'
 
@@ -110,6 +119,8 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   // the entry open in place, as it was when opened (its `base`, what a save is against and the
   // revision it says), or 'new' for one being added; what is being sent; the board's refusal
   type Entry = TimeDay['entries'][number]
+  type ClientDay = TimeDay['days'][number]
+  type Line = ClientDay['lines'][number]
   // `reload` counts Reloads: the editor starts afresh on each, and only then
   type Open = { id: string; base: Entry; reload: number; draft?: Draft }
   const [editing, setEditing] = useState<Open | 'new' | null>(null)
@@ -220,15 +231,16 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
         token,
       })
     })
-  // Raise is a change of its own: an editor open on another entry stays as it is, and a refusal
-  // is a toast (no editor shows it). The board works the gap out from the day as it is now.
+  // Raise and Trim are changes of their own: an editor open on another entry stays as it is, and a
+  // refusal is a toast (no editor shows it). The board works the gap out from the day as it is now.
   const [raising, setRaising] = useState(false)
-  const raise = async (lastId: string) => {
+  const alignTo = async (op: 'raise' | 'trim', lastId: string, billed: number) => {
     const e = entries.get(lastId)
     if (!e) return
     setRaising(true)
     try {
-      await post({ op: 'raise', id: e.id, rev: e.rev })
+      // the figure the button said: a line that bills otherwise now is refused, not brought elsewhere
+      await post({ op, id: e.id, rev: e.rev, billed })
     } catch (err) {
       toast(said(err), true)
     } finally {
@@ -269,6 +281,12 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   const color = (id: string) => cats.get(id)?.color ?? 'var(--label-3)'
   const total = days.reduce((n, d) => n + d.billedSeconds, 0)
   const raw = days.reduce((n, d) => n + d.seconds, 0)
+  const dur = (seconds: number) => durationText(seconds, t)
+  // one client on show (picked, or the day's only one): the day's figure is that client's, named there
+  const single = days.length === 1 ? (days[0] as ClientDay) : null
+  /** What a billed figure leaves out, said once and quietly: the time worked where it differs, the rounding. */
+  const about = (billed: number, worked: number, lines: Line[]) =>
+    [billed !== worked ? t('time.worked', { time: dur(worked) }) : '', ...rulesOf(lines, t)].filter(Boolean).join(' · ')
   /** A new entry's draft: the one typed on this day and left open (for a client offered), else a fresh one. */
   const newOne = (() => {
     const first = clientsForNew[0] as string
@@ -279,6 +297,17 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
     // its key is the panel's day it was typed on; its own date field may say another day
     return { fresh, kept: was && clientsForNew.includes(was.client) ? was : null }
   })()
+  /** Who logged an entry: a session the board still has opens on a click. */
+  const byOf = (e: Entry) => {
+    const key = typeof e.by === 'string' ? null : e.by.key
+    return key && data?.items.some(i => i.key === key) ? (
+      <button type="button" className="time-session" onClick={() => dispatch({ type: 'open', key })}>
+        {byText(e, t)}
+      </button>
+    ) : (
+      byText(e, t)
+    )
+  }
   /** The editor of an entry as it was opened; `now` is the entry as the day reads it now. */
   const editorFor = ({ base, reload, draft }: Open, now: Entry) => (
     <EntryEditor
@@ -287,6 +316,8 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
       draft={draft ?? draftOf(base)}
       clientTitle={title}
       projects={projectsOf}
+      tags={shown?.tags}
+      by={byOf(base)}
       busy={busy}
       error={editError}
       stale={now.rev !== base.rev}
@@ -303,179 +334,172 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
       onDraft={d => keep(base.id, base, d, draftOf(base))}
     />
   )
+  /**
+   * An entry's row: its times, its description under its line's name (`name`), what sets it apart
+   * from its line (another project than `project`, tags), and its own duration where the line has
+   * more than it (`own`). Who logged it is in its hint, and in the editor a tap opens in place.
+   */
+  const entryRow = (id: string, name: string, project: string, own: boolean) => {
+    const e = entries.get(id)
+    if (!e) return null
+    if (editing !== null && editing !== 'new' && editing.id === id)
+      return (
+        <li className="time-editing" key={id}>
+          {editorFor(editing, e)}
+        </li>
+      )
+    const note = [e.project !== project ? e.project : '', e.tags.length ? `#${e.tags.join(' #')}` : '']
+      .filter(Boolean)
+      .join(' · ')
+    const row = (
+      <>
+        <span className="time-when">{entryTimes(e, lang)}</span>
+        <span className="time-what">{underLine(e.description, name)}</span>
+        {own && <span className="time-dur">{dur(e.seconds)}</span>}
+        {note && <span className="time-note">{note}</span>}
+      </>
+    )
+    return (
+      <li className="time-entry" key={id} title={`${e.project} · ${byText(e, t)}`}>
+        {canEdit ? (
+          <button type="button" className="time-open time-row" onClick={() => open1({ id, base: e, reload: 0 })}>
+            {row}
+          </button>
+        ) : (
+          <div className="time-row">{row}</div>
+        )}
+      </li>
+    )
+  }
+  /** A billed line: its name and project, its figure (from the time worked where rounding moved it), its entries, Raise or Trim to. */
+  const lineOf = (l: Line) => {
+    const name = lineLabel(l, t)
+    const last = l.entries[l.entries.length - 1]
+    // what its entries can give, each kept a minute: Trim only where that reaches the billed figure
+    const room = l.entries.reduce((n, id) => n + Math.max(0, (entries.get(id)?.seconds ?? 0) - 60), 0)
+    const align =
+      !canEdit || !last
+        ? null
+        : l.billedSeconds > l.seconds
+          ? ('raise' as const)
+          : l.billedSeconds < l.seconds && room >= l.seconds - l.billedSeconds
+            ? ('trim' as const)
+            : null
+    return (
+      <div className="time-line" key={l.key}>
+        <div className="time-line-head">
+          <span className="time-line-name">{name}</span>
+          {l.project && l.project !== name && <span className="time-line-project">{l.project}</span>}
+          <span className="time-figures" title={ruleText(l, t)}>
+            {l.billedSeconds !== l.seconds && <span className="time-raw">{dur(l.seconds)} →</span>}
+            <strong>{dur(l.billedSeconds)}</strong>
+          </span>
+        </div>
+        <ul className="time-entries">
+          {l.entries.map(id => entryRow(id, l.group === 'day' ? '' : name, l.project, l.entries.length > 1))}
+        </ul>
+        {align && last && (
+          <button
+            type="button"
+            className={align === 'raise' ? 'time-raise' : 'time-raise time-trim'}
+            disabled={busy || raising}
+            onClick={() => void alignTo(align, last, l.billedSeconds)}
+          >
+            {t(`time.edit.${align}`, { hours: dur(l.billedSeconds) })}
+          </button>
+        )}
+      </div>
+    )
+  }
+  /** A client's held entries (a tag the config leaves out): apart, quiet, in no total. */
+  const heldOf = (d: ClientDay) => (
+    <div className="time-line time-held">
+      <div className="time-line-head">
+        <span className="time-line-name">{t('time.held')}</span>
+        <span className="time-line-project">{t('time.heldNote')}</span>
+        <span className="time-figures">{dur(d.held.reduce((n, id) => n + (entries.get(id)?.seconds ?? 0), 0))}</span>
+      </div>
+      <ul className="time-entries">{d.held.map(id => entryRow(id, '', '', d.held.length > 1))}</ul>
+    </div>
+  )
 
   return (
-    <Panel
-      id="time-sheet"
-      kind="time"
-      open={open}
-      onClose={onClose}
-      title={
-        <>
-          <h2>{t('time.title')}</h2>
-          <p className="sheet-meta">{t('time.about')}</p>
-        </>
-      }
-    >
+    <Panel id="time-sheet" kind="time" open={open} onClose={onClose} title={<h2>{t('time.title')}</h2>}>
       <div className="sheet-body cats-body time-body">
         <div className="time-nav">
-          <button type="button" className="button time-step" aria-label={t('time.prev')} onClick={() => go(-1)}>
-            ‹
+          <h3 className="time-date" title={shown ? t('time.zone', { zone: shown.zone }) : undefined}>
+            {dayTitle(date, lang)}
+          </h3>
+          <button
+            type="button"
+            className="icon-button time-step time-prev"
+            title={t('time.prev')}
+            aria-label={t('time.prev')}
+            onClick={() => go(-1)}
+          >
+            <ChevIcon />
           </button>
-          <span className="time-date">{dateName(date, lang)}</span>
-          <button type="button" className="button time-step" aria-label={t('time.next')} onClick={() => go(1)}>
-            ›
-          </button>
-          <button type="button" className="button" disabled={date === today} onClick={() => setDate(today)}>
+          <button type="button" className="button time-today" disabled={date === today} onClick={() => setDate(today)}>
             {t('time.today')}
+          </button>
+          <button
+            type="button"
+            className="icon-button time-step"
+            title={t('time.next')}
+            aria-label={t('time.next')}
+            onClick={() => go(1)}
+          >
+            <ChevIcon />
           </button>
         </div>
         {shown?.problems && <p className="access-problem">{t('time.problemsNote', { problems: shown.problems })}</p>}
-        {shown && <p className="sheet-meta time-zone">{t('time.zone', { zone: shown.zone })}</p>}
         {!shown && !failed && <p className="sheet-meta time-empty">{t('time.loading')}</p>}
-        {shown && shown.days.length > 0 && (
-          <div className="time-chips">
-            <button
-              type="button"
-              aria-pressed={!client}
-              className={classNames('time-chip', !client && 'on')}
-              onClick={() => onClient(null)}
-            >
-              {t('time.all')}{' '}
-              <span>
-                {hoursText(
-                  shown.days.reduce((n, d) => n + d.billedSeconds, 0),
-                  t,
-                )}
-              </span>
+        {failed && <p className="access-problem">{t('time.loadError', { error: failed })}</p>}
+        {shown && (shown.days.length > 1 || (client !== null && shown.days.length > 0)) && (
+          <Chips>
+            <button type="button" aria-pressed={!client} onClick={() => onClient(null)}>
+              {t('time.all')}
             </button>
             {shown.days.map(d => (
               <button
                 type="button"
                 aria-pressed={client === d.client}
                 key={d.client}
-                className={classNames('time-chip', client === d.client && 'on')}
                 style={{ '--lane': color(d.client) }}
                 onClick={() => onClient(d.client)}
               >
-                {title(d.client)} <span>{hoursText(d.billedSeconds, t)}</span>
+                {/* the dot on a span of its own: the Terminal style draws a pressed segment's brackets on the button's */}
+                <span className="time-dot">{title(d.client)}</span>
               </button>
             ))}
-          </div>
+          </Chips>
         )}
-        {failed && <p className="access-problem">{t('time.loadError', { error: failed })}</p>}
         <div className="time-days" {...swipe.handlers} style={swipe.style}>
-          {shown && !days.length && <p className="sheet-meta time-empty">{t('time.empty')}</p>}
-          {days.map(d => (
-            <section className="time-client" key={d.client} style={{ '--lane': color(d.client) }}>
-              <h3 className="time-client-head">
-                <span className="time-client-name">{title(d.client)}</span>
-                <span className="time-figures">
-                  {hm(d.seconds)} → <strong>{hoursText(d.billedSeconds, t)}</strong>
-                </span>
-              </h3>
-              {d.lines.map(l => (
-                <div className="time-line" key={l.key}>
-                  <div className="time-line-head">
-                    <span className="time-line-name">{lineLabel(l, t)}</span>
-                    <span className="time-figures">
-                      {hm(l.seconds)} → <strong>{hoursText(l.billedSeconds, t)}</strong>
-                    </span>
-                    <span className="sheet-meta time-rule">{ruleText(l, t)}</span>
-                    {canEdit && l.round === 'up' && l.billedSeconds > l.seconds && l.entries.length > 0 && (
-                      <button
-                        type="button"
-                        className="button time-raise"
-                        disabled={busy || raising}
-                        onClick={() => void raise(l.entries[l.entries.length - 1] as string)}
-                      >
-                        {t('time.edit.raise', { hours: hoursText(l.billedSeconds, t) })}
-                      </button>
-                    )}
-                  </div>
-                  <ul className="time-entries">
-                    {l.entries.map(id => {
-                      const e = entries.get(id)
-                      if (!e) return null
-                      if (editing !== null && editing !== 'new' && editing.id === id)
-                        return <li key={id}>{editorFor(editing, e)}</li>
-                      return (
-                        <li className={classNames('time-entry', canEdit && 'time-editable')} key={id}>
-                          {canEdit ? (
-                            <button
-                              type="button"
-                              className="time-open"
-                              onClick={() => open1({ id, base: e, reload: 0 })}
-                            >
-                              <span className="time-when">{entryTimes(e, lang)}</span>
-                              <span className="time-what">{e.description}</span>
-                            </button>
-                          ) : (
-                            <>
-                              <span className="time-when">{entryTimes(e, lang)}</span>
-                              <span className="time-what">{e.description}</span>
-                            </>
-                          )}
-                          <span className="sheet-meta time-who">
-                            {e.project} ·{' '}
-                            {typeof e.by !== 'string' &&
-                            data?.items.some(i => i.key === (e.by as { key: string }).key) ? (
-                              <button
-                                type="button"
-                                className="time-session"
-                                onClick={() => dispatch({ type: 'open', key: (e.by as { key: string }).key })}
-                              >
-                                {byText(e, t)}
-                              </button>
-                            ) : (
-                              byText(e, t)
-                            )}
-                          </span>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                </div>
-              ))}
-              {d.held.length > 0 && (
-                <div className="time-line time-held">
-                  <div className="time-line-head">
-                    <span className="time-line-name">{t('time.held')}</span>
-                  </div>
-                  <ul className="time-entries">
-                    {d.held.map(id => {
-                      const e = entries.get(id)
-                      if (!e) return null
-                      if (editing !== null && editing !== 'new' && editing.id === id)
-                        return <li key={id}>{editorFor(editing, e)}</li>
-                      return (
-                        <li className={classNames('time-entry', canEdit && 'time-editable')} key={id}>
-                          {canEdit ? (
-                            <button
-                              type="button"
-                              className="time-open"
-                              onClick={() => open1({ id, base: e, reload: 0 })}
-                            >
-                              <span className="time-when">{entryTimes(e, lang)}</span>
-                              <span className="time-what">{e.description}</span>
-                            </button>
-                          ) : (
-                            <>
-                              <span className="time-when">{entryTimes(e, lang)}</span>
-                              <span className="time-what">{e.description}</span>
-                            </>
-                          )}
-                          <span className="sheet-meta time-who">
-                            {hm(e.seconds)} · #{e.tags.join(' #')}
-                          </span>
-                        </li>
-                      )
-                    })}
-                  </ul>
+          {shown && days.length > 0 && (
+            <div className="time-summary" style={single ? { '--lane': color(single.client) } : undefined}>
+              <p className="time-caption">
+                {single && (
+                  <>
+                    <span className="time-dot">{title(single.client)}</span>
+                    {' · '}
+                  </>
+                )}
+                {t('time.billed')}
+              </p>
+              <p className="time-total">{dur(total)}</p>
+              {about(total, raw, single?.lines ?? []) && (
+                <p className="time-about">{about(total, raw, single?.lines ?? [])}</p>
+              )}
+              {!single && total > 0 && (
+                <div className="time-bar" aria-hidden="true">
+                  {days.map(d => (
+                    <span key={d.client} style={{ '--lane': color(d.client), flexGrow: d.billedSeconds }} />
+                  ))}
                 </div>
               )}
-            </section>
-          ))}
+            </div>
+          )}
+          {shown && !days.length && <p className="time-empty">{t('time.empty')}</p>}
           {canEdit && clientsForNew.length > 0 && day && (
             <div className="time-add">
               {editing === 'new' ? (
@@ -486,6 +510,7 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
                   clients={clientsForNew}
                   clientTitle={title}
                   projects={projectsOf}
+                  tags={shown?.tags}
                   busy={busy}
                   error={editError}
                   onSave={d => void add(d)}
@@ -496,23 +521,47 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
                   onDraft={d => keep(`new:${date}`, null, d, newOne.fresh)}
                 />
               ) : (
-                <button type="button" className="button" onClick={() => open1('new')}>
-                  {t('time.edit.add')}
+                <button type="button" className="time-add-open" onClick={() => open1('new')}>
+                  <PlusIcon />
+                  <span>{t('time.edit.add')}</span>
                 </button>
               )}
             </div>
           )}
-          {days.length > 1 && (
-            <p className="time-total">
-              {t('time.day')}{' '}
-              <span className="time-figures">
-                {hm(raw)} → <strong>{hoursText(total, t)}</strong>
-              </span>
-            </p>
-          )}
+          {days.map(d => (
+            <section className="time-client" key={d.client} style={{ '--lane': color(d.client) }}>
+              {!single && (
+                <header className="time-client-head">
+                  <h4 className="time-dot">{title(d.client)}</h4>
+                  <span className="time-client-total">{dur(d.billedSeconds)}</span>
+                  {about(d.billedSeconds, d.seconds, d.lines) && (
+                    <p className="time-about">{about(d.billedSeconds, d.seconds, d.lines)}</p>
+                  )}
+                </header>
+              )}
+              <div className="time-lines">
+                {d.lines.map(lineOf)}
+                {d.held.length > 0 && heldOf(d)}
+              </div>
+            </section>
+          ))}
+          {shown && days.length > 0 && <p className="time-zone">{t('time.zone', { zone: shown.zone })}</p>}
         </div>
       </div>
     </Panel>
+  )
+}
+
+/** The clients of the day as the toolbar's lanes control has them, fading out at an edge with more past it. */
+function Chips({ children }: { children: ReactNode }) {
+  const t = useT()
+  const control = useRef<HTMLDivElement>(null)
+  useLaneFades(control)
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: a <fieldset> keeps its content's width (min-inline-size), so the strip could not scroll
+    <div className="segmented lane-picks time-chips" role="group" aria-label={t('time.clients')} ref={control}>
+      {children}
+    </div>
   )
 }
 
