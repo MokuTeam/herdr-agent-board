@@ -168,7 +168,10 @@ test('the preview grouped and folded; the target’s kept in a conflict; deletio
   const nodes = draw({ ...SYNC_IDLE, phase: 'preview', direction: 'up', preview: PREVIEW })
   const text = nodes.map(textOf).join(' ')
   expect(text).toContain('4 files to send (2.0 KB), 1 in conflict, 1 deleted on the source.')
-  expect(text).toContain('The profile work is not there yet: it will be made at /home/agent/.claude-work.')
+  // the profiles in a block of their own, the one to be made said there, once
+  expect(text).toContain('work · C:\\Users\\migo\\.claude-work → /home/agent/.claude-work · will be made · 0 projects')
+  expect(text).toContain('default · C:\\Users\\migo\\.claude → /home/agent/.claude · already there · 1 project')
+  expect(text).not.toContain('is not there yet')
   expect(folds(nodes).map(summaryOf)).toEqual([
     'Added · 2 files · 10 B',
     'Changed · 1 file · 2.0 KB',
@@ -177,6 +180,7 @@ test('the preview grouped and folded; the target’s kept in a conflict; deletio
     'Deleted on the source since the last sync · 1',
     'Held back (secrets) · 2',
     'Can’t go (they run only on the source) · 1',
+    'Profiles · 2',
     'Where the projects go',
   ])
   const select = find(nodes, el => el.tag === 'select')
@@ -190,6 +194,9 @@ test('the preview grouped and folded; the target’s kept in a conflict; deletio
   expect(text).toContain('default: .credentials.json')
   expect(findAll(nodes, el => el.tag === 'button').map(textOf)).toEqual([
     'Preview',
+    // the project in its profile
+    'Choose…',
+    'Leave out',
     'Use this rule',
     'This computer…',
     'The server…',
@@ -293,6 +300,8 @@ test('as reviewed: each group that changes how this computer runs ticked apart, 
     'Deleted on the source since the last sync · 2',
     'Held back (secrets) · 1',
     'Not sent: a secret would be cut from them, and the target has its own copy · 1',
+    // the profile, with no project, still said
+    'Profiles · 1',
   ])
   expect(text).toContain('default: settings.json · model (changed)')
   expect(text).toContain('default: settings.json · env SRV (new)')

@@ -3,7 +3,8 @@
 // changed, merged by key with each key it adds or changes, each group that changes how the target
 // runs with a tick of its own, session history with its tick, conflicts with a choice each, the
 // deletions with one tick and one more for each the target changed, what is held back, what a cut
-// keeps from going, what can't go, where the projects go: SyncPlaces.tsx), Apply, its progress and
+// keeps from going, what can't go, the profiles with their projects, where the projects go:
+// SyncPlaces.tsx), Apply, its progress and
 // its end with what the target left as it was. Every
 // choice is the preview's own: a new preview starts them all again unticked. The login is the
 // server's sign-in above it: its password goes with each request (the panel's own state), never
@@ -206,13 +207,6 @@ export function ProfileSync({ sync, send, passwords, enabled }: ProfileSyncProps
                   deletions: p.deletions.length,
                 })}
           </p>
-          {p.profiles
-            .filter(x => x.create)
-            .map(x => (
-              <p className="access-note" key={x.name}>
-                {t('sync.panel.create', { name: x.name, dir: x.dir })}
-              </p>
-            ))}
           {underSessions && <p className="access-warn">{t(`sync.panel.idle.${p.direction}`)}</p>}
           <Group title={t('sync.panel.add')} list={plain.filter(i => i.kind === 'add')} />
           <Group title={t('sync.panel.change')} list={plain.filter(i => i.kind === 'change')} />
