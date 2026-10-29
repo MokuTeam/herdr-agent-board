@@ -336,6 +336,19 @@ export function updateRef(s: Source | null, ref: string | null): { ref: string; 
   return { ref: ref ?? s.ref, repo: s.repo }
 }
 
+/** The pack read from stdin (base64, after sudo's password when sudo asks one) into a folder of root's own, unpacked; the folder goes when it ends. */
+const unpacked = (kind: 'install' | 'undo'): string[] => [
+  `# agent-board: ${kind}`,
+  'set -u',
+  'umask 077',
+  'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH',
+  `d=$(mktemp -d /tmp/agent-board-${kind}.XXXXXXXX) || exit 1`,
+  `trap 'rm -rf "$d"' EXIT`,
+  "trap 'exit 1' HUP INT TERM",
+  `base64 -d > "$d/pack.tar.gz" || { echo 'agent-board: the board’s code did not arrive whole.'; exit 1; }`,
+  `mkdir "$d/src" && tar -xzf "$d/pack.tar.gz" -C "$d/src" || { echo 'agent-board: the board’s code could not be unpacked.'; exit 1; }`,
+]
+
 /**
  * Path B's command on the server, as root (the admin's sudo): the pack read from stdin (base64,
  * after sudo's password when sudo asks one) into a folder of root's own, unpacked, and its
@@ -344,16 +357,21 @@ export function updateRef(s: Source | null, ref: string | null): { ref: string; 
 export function receiverScript(o: { domain: string; lang: Lang }): string {
   if (fieldProblem('domain', o.domain) || o.domain === '') throw new Error(t('tunnel.err.domain'))
   return [
-    '# agent-board: install',
-    'set -u',
-    'umask 077',
-    'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH',
-    'd=$(mktemp -d /tmp/agent-board-install.XXXXXXXX) || exit 1',
-    `trap 'rm -rf "$d"' EXIT`,
-    "trap 'exit 1' HUP INT TERM",
-    `base64 -d > "$d/pack.tar.gz" || { echo 'agent-board: the board’s code did not arrive whole.'; exit 1; }`,
-    `mkdir "$d/src" && tar -xzf "$d/pack.tar.gz" -C "$d/src" || { echo 'agent-board: the board’s code could not be unpacked.'; exit 1; }`,
+    ...unpacked('install'),
     `sh "$d/src/${BOOTSTRAP}" --archive "$d/pack.tar.gz" --domain ${o.domain} --lang ${o.lang} --yes </dev/null`,
+  ].join('\n')
+}
+
+/**
+ * "Remove the board from this server" on the server, as root: the same pack received as the
+ * install's, and its bootstrap's `--undo` (with `--remove-user` when asked) without a question (the
+ * panel asked). The bootstrap runs the install's own copy when the server has it (what the install
+ * there would undo), else the pack's; nothing of the tunnel's is the install's to take.
+ */
+export function removerScript(o: { removeUser: boolean; lang: Lang }): string {
+  return [
+    ...unpacked('undo'),
+    `sh "$d/src/${BOOTSTRAP}" --archive "$d/pack.tar.gz" --undo${o.removeUser ? ' --remove-user' : ''} --lang ${o.lang} --yes </dev/null`,
   ].join('\n')
 }
 

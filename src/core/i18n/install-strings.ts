@@ -105,6 +105,28 @@ export const INSTALL_STRINGS: Record<Lang, Record<string, string | string[]>> = 
       'The setup link: open it once to set the board’s login there. It is shown only here, once: it is gone when this panel closes.',
     'install.panel.done': 'Installed: https://{domain}',
     'install.panel.failed': 'The install stopped (why is above). What was done stays; Install again to go on.',
+    // the card's version of the board on the server (core/server-board.ts)
+    'install.panel.version': 'version {commit}',
+    'install.panel.versionChanges': 'version {commit} (with local changes)',
+    'install.panel.installedAt': 'installed {when}',
+    'install.panel.notInstalled': 'not installed',
+    'install.panel.versionUnknown': 'what is installed there is not known yet',
+    'install.panel.seen': 'As the board saw it at {time}: Look to refresh.',
+    'install.panel.refresh': 'Look',
+    'install.panel.updateAvailable': 'An update is available: this computer has {version}.',
+    'install.panel.update': 'Update',
+    'install.panel.again': 'Install again',
+    // "Remove the board from this server" (the install's --undo, from the card)
+    'install.remove.button': 'Remove the board from this server',
+    'install.remove.intro':
+      'Takes back what the install did on this server, as its --undo does. The tunnel’s setup on this server stays as it is.',
+    'install.remove.tickUser': 'Also remove the user {user} and its home ({home})',
+    'install.remove.warnUser':
+      'This deletes every file in {home}: the agents’ projects and work, their Claude sign-in and sessions, herdr’s state. It cannot be undone.',
+    'install.remove.apply': 'Remove',
+    'install.remove.running': 'Removing (the run goes on on the server if this window closes):',
+    'install.remove.done': 'Removed: the board is no longer on this server.',
+    'install.remove.failed': 'The removal stopped (why is above). Look again to see what is left.',
     'install.err.domainNeeded':
       'The board on the server needs an address of its own (e.g. workbench.example.com): type it above Install the board on this server.',
     'install.err.domain':
@@ -214,6 +236,26 @@ export const INSTALL_STRINGS: Record<Lang, Record<string, string | string[]>> = 
     'install.panel.done': 'Установлено: https://{domain}',
     'install.panel.failed':
       'Установка остановилась (причина выше). Сделанное остаётся; нажмите «Установить» снова, чтобы продолжить.',
+    'install.panel.version': 'версия {commit}',
+    'install.panel.versionChanges': 'версия {commit} (с локальными изменениями)',
+    'install.panel.installedAt': 'установлена {when}',
+    'install.panel.notInstalled': 'не установлена',
+    'install.panel.versionUnknown': 'что там установлено, пока неизвестно',
+    'install.panel.seen': 'Так доска видела это в {time}: нажмите «Посмотреть», чтобы обновить.',
+    'install.panel.refresh': 'Посмотреть',
+    'install.panel.updateAvailable': 'Есть обновление: на этом компьютере {version}.',
+    'install.panel.update': 'Обновить',
+    'install.panel.again': 'Установить заново',
+    'install.remove.button': 'Удалить доску с этого сервера',
+    'install.remove.intro':
+      'Отменяет то, что установка сделала на этом сервере, как её --undo. Настройка туннеля на этом сервере остаётся как есть.',
+    'install.remove.tickUser': 'Удалить и пользователя {user} с его домашней папкой ({home})',
+    'install.remove.warnUser':
+      'Это удалит все файлы в {home}: проекты и работу агентов, их вход в Claude и сессии, состояние herdr. Вернуть их будет нельзя.',
+    'install.remove.apply': 'Удалить',
+    'install.remove.running': 'Удаляю (если закрыть это окно, удаление продолжится на сервере):',
+    'install.remove.done': 'Удалено: доски на этом сервере больше нет.',
+    'install.remove.failed': 'Удаление остановилось (причина выше). Посмотрите снова, чтобы увидеть, что осталось.',
     'install.err.domainNeeded':
       'Доске на сервере нужен свой адрес (например, workbench.example.com): введите его над кнопкой «Установить доску на этот сервер».',
     'install.err.domain':

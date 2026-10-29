@@ -21,6 +21,7 @@ import { gzipSync } from 'node:zlib'
 import { ROOT } from '../adapters/paths.ts'
 import { CHROME_BINS, desktopNeeds, isChromiumLib } from '../core/desktop.ts'
 import { t } from '../core/lang.ts'
+import { type UndoFacts, undoNothing, undoPackages, undoWill } from '../core/server-board.ts'
 import type { ServerFacts } from '../core/server-facts.ts'
 import {
   ARCHIVE_MARK,
@@ -769,29 +770,27 @@ export async function undo(f: InstallFlags, io: Io): Promise<number> {
   const sudo = existsSync(sudoers)
   const service = u ? `${u.home}/.config/systemd/user/${SERVICE}` : null
   const serviceThere = service !== null && existsSync(service)
-  if (!record && !web && !serviceThere && !sudo && !(f.removeUser && ours)) {
+  // what the Undo goes by: the very facts and words the local board's panel shows (core/server-board.ts)
+  const facts: UndoFacts = {
+    user: name,
+    home: u ? u.home : null,
+    ours,
+    record: record !== null,
+    sudo,
+    service: serviceThere,
+    desktop: record?.desktop ?? [],
+    desktopLibs: record?.desktopLibs ?? [],
+  }
+  if (undoNothing(facts, f.removeUser, web !== null)) {
     io.say(t('install.undo.nothing'))
     return 0
   }
-  const will: string[] = []
-  if (u) will.push(t('install.undo.will.service', { user: name }))
-  if (sudo) will.push(t('install.undo.will.sudo', { user: name }))
-  let found = ''
-  let untouched = ''
-  if (web && w) {
-    const plain = plainPlan(web.facts, web.plan, w, t)
-    found = plain.found
-    will.push(...plain.will)
-    untouched = plain.untouched
-  } else will.push(t('install.undo.will.webNone'))
+  const plain = web && w ? plainPlan(web.facts, web.plan, w, t) : null
+  const found = plain?.found ?? ''
+  const untouched = plain?.untouched ?? ''
+  const will = undoWill(facts, f.removeUser, plain ? plain.will : null)
   // the agents' browsers' packages the install added: only with the user, as its Bun and herdr
-  const packages = f.removeUser && ours ? (record?.desktop ?? []) : []
-  const libs = f.removeUser && ours ? (record?.desktopLibs ?? []) : []
-  if (packages.length) will.push(t('install.undo.will.desktop', { packages: packages.join(', ') }))
-  if (libs.length) will.push(t('install.undo.will.libs', { packages: libs.join(', ') }))
-  if (u && f.removeUser && ours) will.push(t('install.undo.will.user', { user: name, home: u.home }))
-  else if (u && ours) will.push(t('install.undo.will.keepUser', { user: name }))
-  else if (u && f.removeUser) will.push(t('install.undo.userKept', { user: name }))
+  const { desktop: packages, desktopLibs: libs } = undoPackages(facts, f.removeUser)
   sayPlan(io, found || '-', will, untouched, web ? web.plan.warnings.map(x => t(x.key, x.params)) : [])
   if (!(await goAhead(io, f.yes))) return 1
   io.say('')
