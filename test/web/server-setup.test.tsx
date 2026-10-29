@@ -1,4 +1,4 @@
-// "On the server" in the Remote access panel's Tunnel part, as one flow (components/access/
+// The Remote access panel's Server tab, as one flow in cards (components/access/
 // ServerSetup.tsx, OneCommand.tsx, models/server-setup.ts, models/server-oneshot.ts), in each
 // state, from views built of Look's facts (test/support/server-facts.ts) and the core's own plans:
 // nothing looked at (the login, root by default, its password, a key file folded); Set up the server
@@ -82,7 +82,7 @@ const SENTINEL = `S3cr3t%$'"\`Ж`
 const SUDO_SENTINEL = `Sud0%$'"\`Щ`
 const W: Wanted = { user: 'boardtunnel', socket: TUNNEL_SOCKET, domain: 'board.example.com', publicPort: null }
 const NOTE = 'kept by this panel while it is open; never saved'
-const CALL_4 = 'If the web server is not set up yet, this step fails until it is: Set up the server below.'
+const CALL_4 = 'If the web server is not set up yet, this step fails until it is: set it up on the Server tab.'
 /** What the owner must never meet outside a fold (the spec's Goals). */
 const JARGON = /\b(network|case|container|caddyfile)\b|сеть|сети|контейнер|caddyfile|случа/i
 
@@ -1160,8 +1160,9 @@ test('the Undo plan: in plain words, Docker and edited files only when ticked, U
     'Remove Docker too (the board installed it, and it holds nothing else)',
     "Remove the board's files you changed since, too",
   ])
-  // The setup's line waits while its Undo is planned.
-  expect(live.text('.access-done')).toEqual([])
+  // The setup's line stays in its card; its buttons wait while its Undo is planned.
+  expect(live.text('.access-card-tunnel .access-done')).toHaveLength(1)
+  expect(live.buttons()).not.toContain('Update')
   expect(live.buttons()).not.toContain('Apply')
   await live.type('login-password', 'pw')
   await live.tick('tick-removeDocker')
@@ -1345,7 +1346,7 @@ test('Do it myself (one command) opened before the board’s address: asked for 
 
 // ---------------------------------------------------------------- around the flow
 
-test('On the server: the flow’s own settings first, then the login; the rest of the settings folded; Call 4’s line while nothing is set up', () => {
+test('the Server tab: the server and its port first, then the login; the tunnel’s other settings folded on its tab; Call 4’s line while nothing is set up', () => {
   const steps: TestStep[] = [
     { id: 'ssh', ok: true, detail: '', hint: null },
     { id: 'forward', ok: true, detail: '', hint: null },
@@ -1353,13 +1354,12 @@ test('On the server: the flow’s own settings first, then the login; the rest o
   ]
   const body = bodyOf(withServer({}), steps)
   const server = find(body, el => hasClass(el, 'access-server'))
-  expect(textOf(find([server], el => hasClass(el, 'access-head')))).toBe('On the server')
   expect(byClass([server], 'access-stage')).toEqual([])
   expect(byClass(body, 'access-snippets')).toEqual([])
-  // The login's fold: the board's address, the server and its port, the login, the password, the key file.
+  // The login's fold: the server and its port, the login, the password, the key file (the board's
+  // address is the Tunnel tab's).
   const signin = fold([server], 'access-signin')
   expect(findAll([signin], el => el.tag === 'input').map(el => el.attrs.get('name'))).toEqual([
-    'domain',
     'host',
     'sshPort',
     'admin-user',
@@ -1367,7 +1367,6 @@ test('On the server: the flow’s own settings first, then the login; the rest o
     'admin-key',
   ])
   expect(findAll([signin], el => el.tag === 'label').map(el => textOf(find([el], x => x.tag === 'span')))).toEqual([
-    'Address of the board',
     'Server',
     'port',
     'Login',

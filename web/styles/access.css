@@ -216,3 +216,15 @@
 .sync-pick-link:disabled { color: var(--label); cursor: default; }
 .sync-pick-list button { display: inline-flex; align-items: center; gap: 4px; }
 .sync-pick-list svg { width: 12px; height: 12px; }
+
+/* The panel's tabs: Tunnel, Server, Sync, Login & devices; on a phone they wrap, never scroll the page sideways. */
+.access-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 10px; padding: 0 0 6px; border-bottom: 1px solid var(--separator); }
+.access-tab { padding: 5px 10px; border: 0; border-radius: 7px; background: none; color: var(--label-2); font: inherit; font-size: 13px; cursor: pointer; }
+.access-tab:hover { background: var(--fill-2); }
+.access-tab.active { background: var(--fill-2); color: var(--label); font-weight: 600; }
+.access-pane[hidden] { display: none; }
+/* The Server tab's cards: the tunnel on the server, the board on the server. */
+.access-card { margin: 12px 0; padding: 10px 12px; border-radius: 10px; box-shadow: 0 0 0 0.5px var(--separator); max-width: 760px; min-width: 0; }
+.access-card-head { margin: 0 0 4px; font-size: 13px; }
+.access-card-line { margin: 0 0 6px; color: var(--label-2); font-size: 12.5px; overflow-wrap: anywhere; }
+.sync-tick { margin: 0 6px 0 0; vertical-align: middle; }

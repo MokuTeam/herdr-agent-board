@@ -1,11 +1,12 @@
-// The Remote access panel's Tunnel part: what a login reaches, where the tunnel stands (with since
+// The Remote access panel's Tunnel tab: what a login reaches, where the tunnel stands (with since
 // when, a failed probe through the domain, the ssh it runs), On or Off, Test connection and its
-// steps; "On the server" as one flow (ServerSetup.tsx) that starts with the settings it needs (the
-// board's address, the server and its port); then, folded, the rest of the settings and the key.
+// steps, the board's address; then, folded, the rest of the tunnel's settings and the key. The
+// server and its port are the Server tab's login (ServerSetup.tsx), drawn with TunnelEntry too.
 // The settings are saved when a field is left or on Enter, as the Profiles panel's (Escape puts
 // the board's value back); the board's address, while no server is set, fills in the server too.
 // A new domain while passkeys or logins exist, and a new key over the one there, are asked first
-// (`ask`, kept by the panel).
+// (`ask`, kept by the panel). The saves on their way are the panel's (`saves`): the Server tab's
+// Set up waits for them.
 import { type FocusEvent, type KeyboardEvent, useState } from 'react'
 import type { AccessView } from '../../../../src/core/access.ts'
 import { type TestStep, TUNNEL_SOCKET, type TunnelField } from '../../../../src/core/tunnel.ts'
@@ -22,10 +23,9 @@ import {
   stepLine,
   type TunnelAsk,
 } from '../../models/access.ts'
-import { savesTracker } from '../../models/server-setup.ts'
+import { type Saves, savesTracker } from '../../models/server-setup.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
-import { ServerSetup } from './ServerSetup.tsx'
 import { CopyButton } from './Snippets.tsx'
 
 export interface TunnelSectionProps {
@@ -35,20 +35,29 @@ export interface TunnelSectionProps {
   testing: boolean
   ask: TunnelAsk
   onAsk(ask: TunnelAsk): void
+  /** The saves on their way, the panel's (the Server tab's Set up waits for them); its own when none is given. */
+  saves?: Saves
 }
 
 /** A setting as its field shows it: a port not set is empty (its placeholder says the default). */
 const shown = (value: string | number | null): string => (value === null ? '' : String(value))
 
-export function TunnelSection({ view, send, steps, testing, ask, onAsk }: TunnelSectionProps) {
-  const t = useT()
-  const { canEdit, now } = useBoardContext()
-  const { settings, problems, blocked, status, ssh, key, hostKey, listenPort } = view.tunnel
-  // The saves on their way, for Set up the server to wait for (models/server-setup.ts savesTracker).
-  const [saves] = useState(savesTracker)
-  const probe = status.state === 'connected' && status.probe && !status.probe.ok ? status.probe : null
-  const hint = status.state === 'error' || status.state === 'reconnecting' ? hintText(status.hint, t) : ''
+export interface TunnelEntryProps {
+  view: AccessView
+  send: AccessSend
+  saves: Saves
+  field: TunnelField
+  label?: string
+  /** The board's address only: a new one while logins exist is asked first. */
+  ask?: TunnelAsk
+  onAsk?(ask: TunnelAsk): void
+}
 
+/** A tunnel setting's line: its label and field, what is wrong with it under it, and the new domain's question. */
+export function TunnelEntry({ view, send, saves, field, label, ask = null, onAsk = () => {} }: TunnelEntryProps) {
+  const t = useT()
+  const { canEdit } = useBoardContext()
+  const { settings, problems, listenPort } = view.tunnel
   const placeholders: Record<TunnelField, string> = {
     host: settings.domain || 'ssh.example.com',
     sshPort: '22',
@@ -91,6 +100,84 @@ export function TunnelSection({ view, send, steps, testing, ask, onAsk }: Tunnel
     }
   }
 
+  async function changeDomain(domain: string): Promise<void> {
+    onAsk(null)
+    const fields = withServer('domain', domain)
+    await saves.track(send('tunnel', { fields, confirm: true }), { tunnel: fields })
+  }
+
+  const value = shown(settings[field])
+  const named = label ?? t(`tunnel.field.${field}`)
+  return (
+    <div className={classNames('access-entry', `access-entry-${field}`)}>
+      <label className="access-field">
+        <span>{named}</span>
+        <input
+          // Drawn again with the board's value once it changes (an uncontrolled field: what is typed stays until then).
+          key={value}
+          className="path-add"
+          name={field}
+          aria-label={named}
+          placeholder={placeholders[field]}
+          defaultValue={value}
+          spellCheck={false}
+          autoComplete="off"
+          inputMode={PORT_FIELDS.has(field) ? 'numeric' : undefined}
+          disabled={!canEdit}
+          onKeyDown={keyDown(field)}
+          onBlur={(e: FocusEvent<HTMLInputElement>) => void save(field, e.currentTarget)}
+        />
+      </label>
+      {problems
+        .filter(p => p.field === field)
+        .map(p => (
+          <p className="access-problem" key={p.message}>
+            {p.message}
+          </p>
+        ))}
+      {field === 'domain' && ask?.kind === 'domain' && (
+        <div className="access-ask">
+          <p className="access-sure">{t('access.domainSure')}</p>
+          <div className="access-actions">
+            <button
+              type="button"
+              className="button primary"
+              disabled={!canEdit}
+              onClick={() => void changeDomain(ask.domain)}
+            >
+              {t('access.domainChange', { domain: ask.domain })}
+            </button>
+            <button type="button" className="button" onClick={() => onAsk(null)}>
+              {t('access.cancel')}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function TunnelSection({ view, send, steps, testing, ask, onAsk, saves: given }: TunnelSectionProps) {
+  const t = useT()
+  const { canEdit, now } = useBoardContext()
+  const { status, ssh, key, hostKey, blocked, settings } = view.tunnel
+  // The saves on their way, for Set up the server to wait for (models/server-setup.ts savesTracker).
+  const [own] = useState(savesTracker)
+  const saves = given ?? own
+  const probe = status.state === 'connected' && status.probe && !status.probe.ok ? status.probe : null
+  const hint = status.state === 'error' || status.state === 'reconnecting' ? hintText(status.hint, t) : ''
+  const entry = (field: TunnelField, label?: string) => (
+    <TunnelEntry
+      key={field}
+      view={view}
+      send={send}
+      saves={saves}
+      field={field}
+      {...(label !== undefined && { label })}
+      {...(field === 'domain' && { ask, onAsk })}
+    />
+  )
+
   /** Generate key: at once while there is none; over the one there, asked first. */
   async function generate(): Promise<void> {
     if (key.exists && ask?.kind !== 'key') return onAsk({ kind: 'key' })
@@ -100,75 +187,6 @@ export function TunnelSection({ view, send, steps, testing, ask, onAsk }: Tunnel
     // The board has one the view did not know of: asked then.
     if (reply?.confirm === 'key') onAsk({ kind: 'key' })
   }
-
-  async function changeDomain(domain: string): Promise<void> {
-    onAsk(null)
-    const fields = withServer('domain', domain)
-    await saves.track(send('tunnel', { fields, confirm: true }), { tunnel: fields })
-  }
-
-  /** A setting's line: its label and field, what is wrong with it under it, and the new domain's question. */
-  const entry = (field: TunnelField, label: string = t(`tunnel.field.${field}`)) => {
-    const value = shown(settings[field])
-    return (
-      <div className={classNames('access-entry', `access-entry-${field}`)} key={field}>
-        <label className="access-field">
-          <span>{label}</span>
-          <input
-            // Drawn again with the board's value once it changes (an uncontrolled field: what is typed stays until then).
-            key={value}
-            className="path-add"
-            name={field}
-            aria-label={label}
-            placeholder={placeholders[field]}
-            defaultValue={value}
-            spellCheck={false}
-            autoComplete="off"
-            inputMode={PORT_FIELDS.has(field) ? 'numeric' : undefined}
-            disabled={!canEdit}
-            onKeyDown={keyDown(field)}
-            onBlur={(e: FocusEvent<HTMLInputElement>) => void save(field, e.currentTarget)}
-          />
-        </label>
-        {problems
-          .filter(p => p.field === field)
-          .map(p => (
-            <p className="access-problem" key={p.message}>
-              {p.message}
-            </p>
-          ))}
-        {field === 'domain' && ask?.kind === 'domain' && (
-          <div className="access-ask">
-            <p className="access-sure">{t('access.domainSure')}</p>
-            <div className="access-actions">
-              <button
-                type="button"
-                className="button primary"
-                disabled={!canEdit}
-                onClick={() => void changeDomain(ask.domain)}
-              >
-                {t('access.domainChange', { domain: ask.domain })}
-              </button>
-              <button type="button" className="button" onClick={() => onAsk(null)}>
-                {t('access.cancel')}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    )
-  }
-
-  /** The flow's own settings: the board's address, then the server and its port on a line. */
-  const flowFields = (
-    <>
-      {entry('domain', t('server.panel.domain'))}
-      <div className="access-pair">
-        {entry('host', t('server.panel.host'))}
-        {entry('sshPort', t('server.panel.sshPort'))}
-      </div>
-    </>
-  )
 
   return (
     <section className="access-tunnel">
@@ -212,10 +230,7 @@ export function TunnelSection({ view, send, steps, testing, ask, onAsk }: Tunnel
         </ul>
       )}
 
-      <div className="access-server">
-        <h3 className="access-head">{t('access.snippets')}</h3>
-        <ServerSetup view={view} send={send} steps={steps} testing={testing} fields={flowFields} saves={saves} />
-      </div>
+      <div className="access-fields">{entry('domain', t('server.panel.domain'))}</div>
 
       <details className="access-more">
         <summary className="access-summary">{t('access.more')}</summary>

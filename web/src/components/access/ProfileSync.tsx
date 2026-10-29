@@ -1,14 +1,13 @@
-// "Sync profiles" in the Remote access panel, where the board installed on the server lives
-// (services/profile-sync.ts): the direction, Preview, then the preview grouped and folded (added,
-// changed, merged by key with each key it adds or changes, each group that changes how the target
-// runs with a tick of its own, session history with its tick, conflicts with a choice each, the
-// deletions with one tick and one more for each the target changed, what is held back, what a cut
-// keeps from going, what can't go, the profiles with their projects, where the projects go:
-// SyncPlaces.tsx), Apply, its progress and
-// its end with what the target left as it was. Every
-// choice is the preview's own: a new preview starts them all again unticked. The login is the
-// server's sign-in above it: its password goes with each request (the panel's own state), never
-// kept by the board. The board's side is the `sync-*` ops of POST /api/access.
+// "Sync profiles", the Remote access panel's Sync tab, with the board installed on the server
+// (services/profile-sync.ts), in the order the owner goes: the direction, Preview, then the
+// preview: the profiles with their projects and where the projects go (SyncPlaces.tsx), each group
+// that changes how the target runs and session history with a tick of its own in its fold's line
+// (what is in each folded), conflicts with a choice each, the deletions with one tick and one more
+// for each the target changed; then, folded, what is added, changed, merged by key, held back,
+// what a cut keeps from going and what can't go; Apply, its progress and its end with what the
+// target left as it was. Every choice is the preview's own: a new preview starts them all again
+// unticked. The login is the Server tab's (its passwords go with each request, or the ones the
+// board remembers), never kept by the panel. The board's side is the `sync-*` ops of POST /api/access.
 import { type ReactNode, useState } from 'react'
 import {
   byArea,
@@ -57,13 +56,24 @@ function Area({ area, list, bytes }: { area: string; list: Row[]; bytes: number 
 }
 
 /** A kind of item, folded, its areas folded inside it. */
-function Group({ title, list, children }: { title: string; list: Row[]; children?: ReactNode }) {
+function Group({
+  title,
+  list,
+  tick,
+  children,
+}: {
+  title: string
+  list: Row[]
+  tick?: ReactNode
+  children?: ReactNode
+}) {
   const t = useT()
   if (list.length === 0) return null
   const bytes = list.reduce((n, r) => n + (r.size ?? 0), 0)
   return (
     <details className="sync-group">
       <summary>
+        {tick}
         {title} · {t('sync.panel.files', { n: list.length })}
         {bytes > 0 && ` · ${sizeOf(bytes)}`}
       </summary>
@@ -159,6 +169,8 @@ export function ProfileSync({ sync, send, passwords, enabled }: ProfileSyncProps
   const deleting = (p?.deletions ?? []).some(d => ticked(d) && (d.changedThere ? c.each[d.key] === true : c.deletions))
   const changes = p?.changes ?? []
   const filesOf = (g: RunGroup) => items.filter(i => i.group === g)
+  /** The groups that change how the target runs, those this preview has. */
+  const runs = RUN_GROUPS.filter(g => changes.some(x => x.group === g) || filesOf(g).length > 0)
   const keyLine = (x: Change): string => `${x.profile}: ${x.rel} · ${x.key} (${t(`sync.panel.how.${x.how}`)})`
   const underSessions = going.some(i => i.kind === 'merge')
   const progress = sync?.progress ?? null
@@ -166,8 +178,8 @@ export function ProfileSync({ sync, send, passwords, enabled }: ProfileSyncProps
   const created = result?.created ?? []
 
   return (
-    <details className="access-sync" open={sync !== null}>
-      <summary className="access-summary">{t('sync.panel.title')}</summary>
+    <section className="access-sync">
+      <h3 className="access-head">{t('sync.panel.title')}</h3>
       <p className="access-note">{t('sync.panel.intro')}</p>
       <div className="access-actions" role="radiogroup" aria-label={t('sync.panel.title')}>
         {(['up', 'down'] as const).map(d => (
@@ -208,25 +220,27 @@ export function ProfileSync({ sync, send, passwords, enabled }: ProfileSyncProps
                 })}
           </p>
           {underSessions && <p className="access-warn">{t(`sync.panel.idle.${p.direction}`)}</p>}
-          <Group title={t('sync.panel.add')} list={plain.filter(i => i.kind === 'add')} />
-          <Group title={t('sync.panel.change')} list={plain.filter(i => i.kind === 'change')} />
-          <Group title={t('sync.panel.merge')} list={plain.filter(i => i.kind === 'merge')}>
-            {changes.some(x => x.group === null) && (
-              <ul className="sync-list">
-                {changes
-                  .filter(x => x.group === null)
-                  .map(x => (
-                    <li key={`${x.profile}:${x.rel}:${x.key}`}>{keyLine(x)}</li>
-                  ))}
-              </ul>
-            )}
-          </Group>
-          {RUN_GROUPS.filter(g => changes.some(x => x.group === g) || filesOf(g).length > 0).map(g => (
-            <details className="sync-group sync-run" open key={g}>
+          <SyncPlaces key={p.id} p={p} send={send} passwords={passwords} enabled={enabled} onSaid={setSaid} />
+          {runs.length > 0 && (
+            <>
+              <p className="access-sub">{t(`sync.panel.groupTick.${p.direction}`)}</p>
+              <p className="access-note">{t(`sync.panel.groupNote.${p.direction}`)}</p>
+            </>
+          )}
+          {runs.map(g => (
+            <details className="sync-group sync-run" key={g}>
               <summary>
+                <input
+                  type="checkbox"
+                  className="sync-tick"
+                  name={`sync-allow-${g}`}
+                  aria-label={`${t(`sync.panel.group.${g}`)}: ${t(`sync.panel.groupTick.${p.direction}`)}`}
+                  checked={c.allow[g]}
+                  disabled={!enabled}
+                  onChange={() => choose({ allow: { ...c.allow, [g]: !c.allow[g] } })}
+                />
                 {t(`sync.panel.group.${g}`)} · {changes.filter(x => x.group === g).length + filesOf(g).length}
               </summary>
-              <p className="access-note">{t(`sync.panel.groupNote.${p.direction}`)}</p>
               <ul className="sync-list">
                 {changes
                   .filter(x => x.group === g)
@@ -239,31 +253,25 @@ export function ProfileSync({ sync, send, passwords, enabled }: ProfileSyncProps
                   </li>
                 ))}
               </ul>
-              <label className="access-tick">
-                <input
-                  type="checkbox"
-                  name={`sync-allow-${g}`}
-                  checked={c.allow[g]}
-                  disabled={!enabled}
-                  onChange={() => choose({ allow: { ...c.allow, [g]: !c.allow[g] } })}
-                />
-                <span>{t(`sync.panel.groupTick.${p.direction}`)}</span>
-              </label>
             </details>
           ))}
           {(history.length > 0 || p.conflicts.some(x => x.history) || p.deletions.some(d => d.history)) && (
-            <Group title={t('sync.panel.history')} list={history}>
-              <p className="access-note">{t('sync.panel.historyNote')}</p>
-              <label className="access-tick">
+            <Group
+              title={t('sync.panel.history')}
+              list={history}
+              tick={
                 <input
                   type="checkbox"
+                  className="sync-tick"
                   name="sync-allow-history"
+                  aria-label={`${t('sync.panel.history')}: ${t('sync.panel.historyTick')}`}
                   checked={c.allow.history}
                   disabled={!enabled}
                   onChange={() => choose({ allow: { ...c.allow, history: !c.allow.history } })}
                 />
-                <span>{t('sync.panel.historyTick')}</span>
-              </label>
+              }
+            >
+              <p className="access-note">{t('sync.panel.historyNote')}</p>
             </Group>
           )}
           {p.conflicts.length > 0 && (
@@ -332,10 +340,22 @@ export function ProfileSync({ sync, send, passwords, enabled }: ProfileSyncProps
               )}
             </details>
           )}
+          <Group title={t('sync.panel.add')} list={plain.filter(i => i.kind === 'add')} />
+          <Group title={t('sync.panel.change')} list={plain.filter(i => i.kind === 'change')} />
+          <Group title={t('sync.panel.merge')} list={plain.filter(i => i.kind === 'merge')}>
+            {changes.some(x => x.group === null) && (
+              <ul className="sync-list">
+                {changes
+                  .filter(x => x.group === null)
+                  .map(x => (
+                    <li key={`${x.profile}:${x.rel}:${x.key}`}>{keyLine(x)}</li>
+                  ))}
+              </ul>
+            )}
+          </Group>
           <Lines title={t('sync.panel.held')} lines={p.held.map(h => `${h.profile}: ${h.what}`)} />
           <Lines title={t('sync.panel.cut')} lines={p.cut.map(x => `${x.profile}: ${x.what}`)} />
           <Lines title={t('sync.panel.cantGo')} lines={p.cantGo.map(x => `${x.profile}: ${x.what}`)} />
-          <SyncPlaces key={p.id} p={p} send={send} passwords={passwords} enabled={enabled} onSaid={setSaid} />
           <div className="access-actions">
             <button
               type="button"
@@ -393,6 +413,6 @@ export function ProfileSync({ sync, send, passwords, enabled }: ProfileSyncProps
       {phase === 'failed' && sync?.error && !said && (
         <p className="access-warn">{t('sync.panel.failed', { why: sync.error })}</p>
       )}
-    </details>
+    </section>
   )
 }

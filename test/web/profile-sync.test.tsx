@@ -1,9 +1,10 @@
-// "Sync profiles" in the Remote access panel (components/access/ProfileSync.tsx), drawn for each
-// state of the board's view (core/profile-sync/view.ts): not shown without the board on the
-// server; nothing looked at; the preview grouped and folded, its conflicts with the target's kept
-// by default, the deletions not ticked, what is held back and what can't go, the projects not
-// paired with a path to give; a run's progress; its end, a profile made there and the sign-in it
-// needs; a failure.
+// "Sync profiles", the Remote access panel's Sync tab (components/access/ProfileSync.tsx,
+// ServerSetup.tsx ServerSync), drawn for each state of the board's view (core/profile-sync/view.ts):
+// where to install the board first without it on the server; nothing looked at; the preview in the
+// owner's order (the profiles and where the projects go, the ticks, the choices, then what is
+// in it folded), its conflicts with the target's kept by default, the deletions not ticked, what
+// is held back and what can't go, the projects not paired with a path to give; a run's progress;
+// its end, a profile made there and the sign-in it needs; a failure.
 import { expect, test } from 'bun:test'
 import type { AccessView } from '../../src/core/access.ts'
 import { buildPreview, type Manifest, type ProfileFacts } from '../../src/core/profile-sync/plan.ts'
@@ -11,7 +12,7 @@ import { SYNC_IDLE, type SyncView } from '../../src/core/profile-sync/view.ts'
 import type { ServerView } from '../../src/core/server-view.ts'
 import { TUNNEL_SOCKET } from '../../src/core/tunnel.ts'
 import { ProfileSync } from '../../web/src/components/access/ProfileSync.tsx'
-import { ServerSetupBody } from '../../web/src/components/access/ServerSetup.tsx'
+import { ServerSync } from '../../web/src/components/access/ServerSetup.tsx'
 import { SETUP_START } from '../../web/src/models/server-setup.ts'
 import { board, renderInBoard } from './support/board.tsx'
 import { type Element, find, findAll, hasClass, type Node } from './support/markup.ts'
@@ -146,18 +147,16 @@ test('shown where the board on the server has its address, not before', () => {
     server: { ...server, installDomain },
   })
   const part = (v: AccessView) =>
-    renderInBoard(
-      <ServerSetupBody view={v} send={async () => null} state={SETUP_START} onState={() => {}} now={NOW} />,
-      board({ now: NOW }),
-    )
+    renderInBoard(<ServerSync view={v} send={async () => null} state={SETUP_START} />, board({ now: NOW }))
   const has = (nodes: Node[]): boolean => findAll(nodes, el => hasClass(el, 'access-sync')).length > 0
   expect(has(part(view('')))).toBe(false)
+  expect(part(view('')).map(textOf).join(' ')).toContain('Install the board on the server first')
   expect(has(part(view('workbench.example.com')))).toBe(true)
 })
 
 test('nothing looked at: the direction, Preview, and the words on what never goes', () => {
   const nodes = draw(null)
-  expect(textOf(find(nodes, el => el.tag === 'summary'))).toBe('Sync profiles')
+  expect(textOf(find(nodes, el => el.tag === 'h3'))).toBe('Sync profiles')
   const radios = findAll(nodes, el => el.tag === 'input' && el.attrs.get('type') === 'radio')
   expect(radios.length).toBe(2)
   expect(nodes.map(textOf).join(' ')).toContain('Secrets never go')
@@ -172,16 +171,17 @@ test('the preview grouped and folded; the target’s kept in a conflict; deletio
   expect(text).toContain('work · C:\\Users\\migo\\.claude-work → /home/agent/.claude-work · will be made · 0 projects')
   expect(text).toContain('default · C:\\Users\\migo\\.claude → /home/agent/.claude · already there · 1 project')
   expect(text).not.toContain('is not there yet')
+  // in the owner's order: the profiles and their projects, the choices, then what is in it folded
   expect(folds(nodes).map(summaryOf)).toEqual([
+    'Profiles · 2',
+    'Where the projects go',
+    'Changed on both sides since the last sync · 1',
+    'Deleted on the source since the last sync · 1',
     'Added · 2 files · 10 B',
     'Changed · 1 file · 2.0 KB',
     'Merged by key (each side keeps its own secrets and hooks) · 1 file · 10 B',
-    'Changed on both sides since the last sync · 1',
-    'Deleted on the source since the last sync · 1',
     'Held back (secrets) · 2',
     'Can’t go (they run only on the source) · 1',
-    'Profiles · 2',
-    'Where the projects go',
   ])
   const select = find(nodes, el => el.tag === 'select')
   expect(select.attrs.get('value') ?? 'target').toBe('target')
@@ -293,16 +293,24 @@ test('as reviewed: each group that changes how this computer runs ticked apart, 
   expect(text).toContain('1 file to send (9 B), 0 in conflict, 2 deleted on the source.')
   expect(text).toContain('Keep the Claude sessions on this computer idle while this runs')
   expect(folds(nodes).map(summaryOf)).toEqual([
-    'Merged by key (each side keeps its own secrets and hooks) · 1 file · 9 B',
+    // the profile, with no project, still said
+    'Profiles · 1',
+    // each group's tick in its fold's line, the fold closed
     'Environment variables (env) · 1',
     'Hooks: commands Claude runs on its events · 1',
     'Session history and edit history · 2 files · 12 B',
     'Deleted on the source since the last sync · 2',
+    'Merged by key (each side keeps its own secrets and hooks) · 1 file · 9 B',
     'Held back (secrets) · 1',
     'Not sent: a secret would be cut from them, and the target has its own copy · 1',
-    // the profile, with no project, still said
-    'Profiles · 1',
   ])
+  const runFolds = folds(nodes).filter(d => hasClass(d, 'sync-run'))
+  expect(runFolds.map(d => d.attrs.has('open'))).toEqual([false, false])
+  expect(
+    runFolds.map(d =>
+      find([d], el => el.tag === 'summary').children.some(c => c.kind === 'element' && c.tag === 'input'),
+    ),
+  ).toEqual([true, true])
   expect(text).toContain('default: settings.json · model (changed)')
   expect(text).toContain('default: settings.json · env SRV (new)')
   expect(text).toContain('Let the server change these on this computer')

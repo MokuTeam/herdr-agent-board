@@ -93,6 +93,10 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'access.about': 'The board through your own domain: a reverse SSH tunnel to your server, with a login of its own.',
     'access.loading': 'Loading…',
     'access.tunnel': 'Tunnel',
+    'access.tab.tunnel': 'Tunnel',
+    'access.tab.server': 'Server',
+    'access.tab.sync': 'Sync',
+    'access.tab.login': 'Login & devices',
     'access.reach':
       "Through the domain, a login gets the board as a phone does, and the terminal: a shell on this PC with your rights. The board's own files (its settings, logins and keys) are not served through the domain, but the terminal, or a session started from it, reaches them and everything else on this PC. Treat a login like your own shell.",
     'access.state.off': 'Off',
@@ -292,6 +296,10 @@ export const ACCESS_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'access.about': 'Доска через ваш собственный домен: обратный SSH-туннель к вашему серверу и свой вход.',
     'access.loading': 'Загрузка…',
     'access.tunnel': 'Туннель',
+    'access.tab.tunnel': 'Туннель',
+    'access.tab.server': 'Сервер',
+    'access.tab.sync': 'Синхронизация',
+    'access.tab.login': 'Вход и устройства',
     'access.reach':
       'Через домен вход даёт доску, как телефону, и терминал: оболочку на этом компьютере с вашими правами. Собственные файлы доски (её настройки, входы и ключи) через домен не отдаются, но терминал или запущенная из него сессия достают и их, и всё остальное на этом компьютере. Относитесь ко входу как к своей оболочке.',
     'access.state.off': 'Выключен',

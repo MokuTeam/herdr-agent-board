@@ -5,6 +5,8 @@ import type { Lang } from '../types.ts'
 export const SYNC_STRINGS: Record<Lang, Record<string, string | string[]>> = {
   en: {
     'sync.panel.title': 'Sync profiles',
+    'sync.panel.needBoard': 'Install the board on the server first (the Server tab): the sync goes to it.',
+    'sync.panel.signsIn': 'It signs in to the server with the login on the Server tab.',
     'sync.panel.intro':
       'Copies your Claude profiles (settings, skills, CLAUDE.md, memory; sessions when you tick them) between this computer and the board on the server, in the direction you pick. Secrets never go: credentials, sign-ins, keys and tokens stay where they are. What changes how the other side runs (env, hooks, the status line, MCP servers, other programs) goes only where you tick it. It logs in as the server’s sign-in above: its password is asked each time and never kept.',
     'sync.panel.up': 'This computer → the server',
@@ -143,6 +145,8 @@ export const SYNC_STRINGS: Record<Lang, Record<string, string | string[]>> = {
   },
   ru: {
     'sync.panel.title': 'Синхронизация профилей',
+    'sync.panel.needBoard': 'Сначала установите доску на сервер (вкладка «Сервер»): синхронизация идёт с ней.',
+    'sync.panel.signsIn': 'Вход на сервер — тот же, что на вкладке «Сервер».',
     'sync.panel.intro':
       'Копирует профили Claude (настройки, навыки, CLAUDE.md, память; сессии — если отметить) между этим компьютером и доской на сервере в выбранном направлении. Секреты не переходят никогда: учётные данные, входы, ключи и токены остаются на месте. То, что меняет работу другой стороны (env, хуки, строка состояния, MCP-серверы, другие программы), переходит только там, где вы отметите. Вход — как у сервера выше: его пароль спрашивается каждый раз и нигде не хранится.',
     'sync.panel.up': 'Этот компьютер → сервер',

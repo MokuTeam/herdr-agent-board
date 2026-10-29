@@ -1,22 +1,20 @@
-// "On the server" in the Remote access panel's Tunnel part, as one flow (the simple-setup spec's
-// "The flow, as the owner sees it"): the board's address and the server (the Tunnel part's fields,
-// passed in), the login (root unless another is saved) and its password, a key file folded, and
-// Set up the server, which fills in what the owner need not type (the server from the address,
-// the board's own login on the server, the board's key) and Looks. Then the plan in plain words:
-// what was found with the server's key, what will be done, Docker's install to tick, what is not
-// touched, the full plan under Details; Apply or Cancel; a run step by step, a failure with what
-// was rolled back; the setup on record with Undo, which logs in as Set up does (the password,
-// forgotten once a run took it, asked for again when the keys will not do), the login's fields
-// folded away. sudo's own field shows only when an answer asks for it. For a server the
-// board does not do, why in one line, and the steps by hand folded (DoItMyself.tsx, Snippets.tsx).
-// "Install the board on this server" (path B) has an address of its own above its button, saved as
-// the login's fields are, apart from the tunnel's settings.
-// "Sync profiles", the Claude profiles of this computer and of the board on the server, is
-// ProfileSync.tsx, below them, once the board on the server has its address.
-// "Do it myself (one command)" is OneCommand.tsx. Its words are models/server-setup.ts's. What it
-// keeps while the panel is open (SetupState: the passwords, the ticks, what is open) is
-// ServerSetup's own state, drawn anew as the panel closes; the board's side is the `server-*` ops
-// of POST /api/access.
+// The Remote access panel's Server tab, and the login its Sync tab shares (the simple-setup spec's
+// "The flow, as the owner sees it", laid out in cards): the server's login once at the top (the
+// server and its port, the Tunnel tab's settings drawn here with TunnelEntry, passed in; the login,
+// root unless another is saved, its password, sudo's own when an answer asks for it, a key file
+// folded), shared by every server action on every tab. Then two cards: the tunnel on the server
+// (set up when, which case; Set up or Update, and Undo, which logs in as Set up does) and the board
+// on the server (its own address, the version an install sends; Install). The card whose Look ran
+// shows its plan in plain words (what was found with the server's key, what will be done, Docker's
+// install to tick, what is not touched, every step and line folded under Details), Apply or Cancel,
+// the run step by step, a failure with what was rolled back. For a server the board does not do,
+// why in one line, and the steps by hand folded (DoItMyself.tsx, Snippets.tsx). "Do it myself (one
+// command)" is OneCommand.tsx, folded at the bottom. Its words are models/server-setup.ts's.
+// What it keeps while the panel is open (SetupState: the passwords, the ticks, what is open) is the
+// panel's (useServerSetup), drawn anew as the panel closes; the passwords the board remembers are
+// its own (`passwordHeld`, services/held-passwords.ts). The Sync tab is ServerSync: ProfileSync.tsx
+// with this login, once the board on the server has its address. The board's side is the
+// `server-*` and `sync-*` ops of POST /api/access.
 import { type FocusEvent, type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import type { AccessView } from '../../../../src/core/access.ts'
 import { sourceLine } from '../../../../src/core/server-install.ts'
@@ -102,17 +100,25 @@ export interface ServerSetupBodyProps extends ServerSetupProps {
 /** While a step runs on the server, its seconds move on: drawn again this often. */
 const RUN_TICK_MS = 1000
 
-export function ServerSetup(props: ServerSetupProps) {
+/** What the Server tab keeps while the panel is open, shared with the Sync tab: its state, its clock, the saves on their way. */
+export interface ServerSetupKeep {
+  state: SetupState
+  onState(patch: Partial<SetupState>): void
+  now: number
+  saves: Saves
+}
+
+/** The Server tab's keeping, held by the panel (so the Sync tab signs in with the same login). */
+export function useServerSetup(view: AccessView, send: AccessSend, saves?: Saves): ServerSetupKeep {
   const t = useT()
   const { now, data } = useBoardContext()
   const [state, setState] = useState<SetupState>(SETUP_START)
   const [own] = useState(savesTracker)
   const [tick, setTick] = useState(0)
-  const { view } = props
   const phase = view.server?.phase
   // The install's setup link lives in the board's memory until the panel closes (path B, call 9).
-  const sendRef = useRef(props.send)
-  sendRef.current = props.send
+  const sendRef = useRef(send)
+  sendRef.current = send
   useEffect(
     () => () => {
       void sendRef.current('server-install-forget')
@@ -139,14 +145,43 @@ export function ServerSetup(props: ServerSetupProps) {
       live = false
     }
   }, [oneshot, got, stamp, t])
+  return {
+    state,
+    onState: patch => setState(s => ({ ...s, ...patch })),
+    now: Math.max(now, tick),
+    saves: saves ?? own,
+  }
+}
+
+export function ServerSetup(props: ServerSetupProps) {
+  const keep = useServerSetup(props.view, props.send, props.saves)
+  return <ServerSetupBody {...props} saves={keep.saves} state={keep.state} onState={keep.onState} now={keep.now} />
+}
+
+export interface ServerSyncProps {
+  view: AccessView
+  send: AccessSend
+  /** The Server tab's: the passwords typed there go with the sync's requests too. */
+  state: SetupState
+}
+
+/** The Sync tab: the sync of the Claude profiles, signed in as the Server tab's login, once the board on the server has its address. */
+export function ServerSync({ view, send, state }: ServerSyncProps) {
+  const t = useT()
+  const { canEdit } = useBoardContext()
+  const s = view.server ?? SERVER_IDLE
+  const busy = s.phase === 'applying' || s.phase === 'undoing' || s.phase === 'looking'
+  if ((s.installDomain ?? '') === '' && !view.sync) return <p className="access-note">{t('sync.panel.needBoard')}</p>
   return (
-    <ServerSetupBody
-      {...props}
-      saves={props.saves ?? own}
-      state={state}
-      onState={patch => setState(s => ({ ...s, ...patch }))}
-      now={Math.max(now, tick)}
-    />
+    <>
+      <p className="access-note">{t('sync.panel.signsIn')}</p>
+      <ProfileSync
+        sync={view.sync ?? null}
+        send={send}
+        passwords={withPassword(state)}
+        enabled={canEdit && !busy && view.tunnel.ssh !== null}
+      />
+    </>
   )
 }
 
@@ -179,13 +214,9 @@ export function ServerSetupBody({
   // Asked without the board's address, or the install without its own: said until it is there.
   const noDomain = view.tunnel.settings.domain === ''
   const needDomain = t('server.panel.needDomain')
-  const lookWhy = !view.tunnel.ssh
-    ? hintText('noSsh', t)
-    : state.missing && noDomain
-      ? needDomain
-      : state.installAsked && installDomain === ''
-        ? t('install.panel.needDomain')
-        : ''
+  // Why a card's Look cannot go yet: no ssh, or the board's address missing; the install without its own.
+  const tunnelLookWhy = !view.tunnel.ssh ? hintText('noSsh', t) : state.missing && noDomain ? needDomain : ''
+  const boardLookWhy = state.installAsked && installDomain === '' ? t('install.panel.needDomain') : ''
   const canLook = canEdit && !busy && view.tunnel.ssh !== null
   const failed = failedOf(progress)
   const hint = hintLine(s.hint, t, admin) || (failed ? failHint(failed.id, t) : '')
@@ -484,7 +515,8 @@ export function ServerSetupBody({
     (p.ticks.includes('docker') && !state.docker) ||
     (s.sudo === 'password' && state.password === '' && state.sudoPassword === '')
   const ran = plan && progress && (running || phase === 'done' || phase === 'failed')
-  const lookWhyLine = lookWhy && <p className="access-look-why">{lookWhy}</p>
+  const tunnelWhy = tunnelLookWhy && <p className="access-look-why">{tunnelLookWhy}</p>
+  const boardWhy = boardLookWhy && <p className="access-look-why">{boardLookWhy}</p>
   const hostKey = hostKeyLine(s, t)
   const tickBox = (tick: Tick, label: string) => (
     <label className="access-tick" key={tick}>
@@ -499,94 +531,9 @@ export function ServerSetupBody({
     </label>
   )
 
-  return (
-    <div className="access-web">
-      <p className="access-note">{t('server.panel.webNote')}</p>
-
-      {s.setup && (phase === 'idle' || phase === 'done' || phase === 'failed') && (
-        <div className="access-setup">
-          <p className="access-done">{setupLine(s.setup, t)}</p>
-          <div className="access-actions">
-            <TwoClicks
-              armed={state.undoArmed}
-              label={t('server.panel.undo')}
-              sure={t('server.panel.undoSure')}
-              disabled={!canLook}
-              onArm={() => onState({ undoArmed: true })}
-              onDisarm={() => onState({ undoArmed: false })}
-              onSure={undo}
-            />
-          </div>
-        </div>
-      )}
-
-      <details className="access-signin" open={!loginFolded(s, state)}>
-        <summary className="access-summary">{t('server.panel.signin')}</summary>
-        <div className="access-fields">
-          {fields}
-          <div className="access-entry">{adminField('user', t('server.panel.login'), DEFAULT_LOGIN)}</div>
-          <div className="access-entry">
-            {passwordField('login-password', t('server.panel.password'))}
-            <p className="access-kept">{t('server.panel.sudoNote')}</p>
-          </div>
-          {sudo && <div className="access-entry">{passwordField('sudo-password', t('server.panel.sudoOwn'))}</div>}
-          <details className="access-keyfile" open={s.admin.key !== ''}>
-            <summary className="access-summary">{t('server.panel.keyFold')}</summary>
-            <div className="access-entry">
-              {adminField('key', t('server.panel.keyFile'), t('server.panel.adminKeyHint'))}
-            </div>
-          </details>
-        </div>
-        {state.need !== null && state.again === 'server-undo-look' && phase !== 'plan' && !running && (
-          <div className="access-ask">
-            <p className="access-sure">{t('server.panel.undoAsks', { admin })}</p>
-            <div className="access-actions">
-              <button type="button" className="button primary" disabled={!canLook} onClick={goOn}>
-                {t('server.panel.continue')}
-              </button>
-            </div>
-          </div>
-        )}
-      </details>
-
-      {(phase === 'idle' || phase === 'looking' || phase === 'done') && (
-        <>
-          {installField}
-          <div className="access-actions">
-            <button
-              type="button"
-              className={classNames('button', !s.setup && 'primary')}
-              disabled={!canLook}
-              onClick={() => void setUp()}
-            >
-              {phase === 'looking' && !installing ? t('server.panel.looking') : t('server.panel.setUpServer')}
-            </button>
-            <button
-              type="button"
-              className="button"
-              disabled={!canLook}
-              title={t('install.panel.intro')}
-              onClick={() => void installLook()}
-            >
-              {phase === 'looking' && installing ? t('server.panel.looking') : t('install.panel.look')}
-            </button>
-          </div>
-          {lookWhyLine}
-        </>
-      )}
-
-      <OneCommand
-        open={state.oneshot}
-        got={state.got}
-        why={state.got.state === 'address' && noDomain ? needDomain : ''}
-        onToggle={open => void toggleOneshot(open)}
-        onTest={() => void testOneshot()}
-        byHand={state.byHand}
-        domain={view.tunnel.settings.domain}
-        steps={steps}
-        testing={testing}
-      />
-
+  // What the last Look's card shows: its hint, its plan, its run and how it ended.
+  const flow = (
+    <>
       {phase !== 'failed' && hint && <p className="access-hint">{hint}</p>}
       {phase !== 'failed' && s.error && <p className="access-why">{s.error}</p>}
 
@@ -732,7 +679,7 @@ export function ServerSetupBody({
               {t('server.panel.lookAgain')}
             </button>
           </div>
-          {lookWhyLine}
+          {installing ? boardWhy : tunnelWhy}
         </div>
       )}
 
@@ -750,15 +697,125 @@ export function ServerSetupBody({
           </ul>
         </div>
       )}
+    </>
+  )
+  // Set up and Install start a Look while nothing else runs or waits.
+  const canStart = phase === 'idle' || phase === 'looking' || phase === 'done'
+  // The board on the server: its address, and the version an install sends (known once one looked).
+  const boardLine = [
+    installDomain || t('server.panel.boardNoAddress'),
+    s.install && t('server.panel.boardVersion', { commit: s.install.from.commit.slice(0, 7) }),
+  ]
+    .filter(Boolean)
+    .join(' · ')
 
-      {(installDomain !== '' || view.sync) && (
-        <ProfileSync
-          sync={view.sync ?? null}
-          send={send}
-          passwords={withPassword(state)}
-          enabled={canEdit && !busy && view.tunnel.ssh !== null}
-        />
-      )}
+  return (
+    <div className="access-web">
+      <p className="access-note">{t('server.panel.webNote')}</p>
+
+      <details className="access-signin" open={!loginFolded(s, state)}>
+        <summary className="access-summary">{t('server.panel.signin')}</summary>
+        <div className="access-fields">
+          {fields}
+          <div className="access-entry">{adminField('user', t('server.panel.login'), DEFAULT_LOGIN)}</div>
+          <div className="access-entry">
+            {passwordField('login-password', t('server.panel.password'))}
+            <p className="access-kept">{t('server.panel.sudoNote')}</p>
+          </div>
+          {sudo && <div className="access-entry">{passwordField('sudo-password', t('server.panel.sudoOwn'))}</div>}
+          <details className="access-keyfile" open={s.admin.key !== ''}>
+            <summary className="access-summary">{t('server.panel.keyFold')}</summary>
+            <div className="access-entry">
+              {adminField('key', t('server.panel.keyFile'), t('server.panel.adminKeyHint'))}
+            </div>
+          </details>
+        </div>
+        {state.need !== null && state.again === 'server-undo-look' && phase !== 'plan' && !running && (
+          <div className="access-ask">
+            <p className="access-sure">{t('server.panel.undoAsks', { admin })}</p>
+            <div className="access-actions">
+              <button type="button" className="button primary" disabled={!canLook} onClick={goOn}>
+                {t('server.panel.continue')}
+              </button>
+            </div>
+          </div>
+        )}
+      </details>
+
+      <section className="access-card access-card-tunnel">
+        <h4 className="access-card-head">{t('server.panel.tunnelCard')}</h4>
+        {s.setup ? (
+          <p className="access-done">{setupLine(s.setup, t)}</p>
+        ) : (
+          <p className="access-card-line">{t('server.panel.notSetUp')}</p>
+        )}
+        {(canStart || (s.setup && phase === 'failed')) && (
+          <div className="access-actions">
+            {canStart && (
+              <button
+                type="button"
+                className={classNames('button', !s.setup && 'primary')}
+                disabled={!canLook}
+                onClick={() => void setUp()}
+              >
+                {phase === 'looking' && !installing
+                  ? t('server.panel.looking')
+                  : s.setup
+                    ? t('server.panel.update')
+                    : t('server.panel.setUpServer')}
+              </button>
+            )}
+            {s.setup && phase !== 'looking' && (
+              <TwoClicks
+                armed={state.undoArmed}
+                label={t('server.panel.undo')}
+                sure={t('server.panel.undoSure')}
+                disabled={!canLook}
+                onArm={() => onState({ undoArmed: true })}
+                onDisarm={() => onState({ undoArmed: false })}
+                onSure={undo}
+              />
+            )}
+          </div>
+        )}
+        {canStart && tunnelWhy}
+        {!installing && flow}
+      </section>
+
+      <section className="access-card access-card-board">
+        <h4 className="access-card-head">{t('server.panel.boardCard')}</h4>
+        <p className="access-card-line">{boardLine}</p>
+        {canStart && (
+          <>
+            {installField}
+            <div className="access-actions">
+              <button
+                type="button"
+                className="button"
+                disabled={!canLook}
+                title={t('install.panel.intro')}
+                onClick={() => void installLook()}
+              >
+                {phase === 'looking' && installing ? t('server.panel.looking') : t('install.panel.look')}
+              </button>
+            </div>
+          </>
+        )}
+        {canStart && boardWhy}
+        {installing && flow}
+      </section>
+
+      <OneCommand
+        open={state.oneshot}
+        got={state.got}
+        why={state.got.state === 'address' && noDomain ? needDomain : ''}
+        onToggle={open => void toggleOneshot(open)}
+        onTest={() => void testOneshot()}
+        byHand={state.byHand}
+        domain={view.tunnel.settings.domain}
+        steps={steps}
+        testing={testing}
+      />
     </div>
   )
 }

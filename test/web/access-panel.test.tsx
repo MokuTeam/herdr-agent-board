@@ -1,10 +1,10 @@
-// The Remote access panel (Settings → Remote access…, on the local board only): its Tunnel part
+// The Remote access panel (Settings → Remote access…, on the local board only): its Tunnel tab
 // (components/access/TunnelSection.tsx) — what a login reaches, where the tunnel stands, On or
-// Off, Test connection and its steps, the settings saved as they are left (the board's address,
-// the server and its port first, in "On the server"; the rest folded with the key), the board's
-// address filling in the server, and step 1's snippets filled in from settings that check out
-// (shown only among the steps by hand; "On the server" itself, ServerSetup.tsx, is
-// test/web/server-setup.test.tsx's). The view is GET /api/access's (hooks/useAccess.ts), fetched
+// Off, Test connection and its steps, the settings saved as they are left (the board's address on
+// the Tunnel tab, the server and its port at the top of the Server tab's login, the rest folded
+// with the key), the board's address filling in the server, and step 1's snippets filled in from
+// settings that check out (shown only among the steps by hand; the Server tab itself,
+// ServerSetup.tsx, is test/web/server-setup.test.tsx's; the tabs, access-tabs.test.tsx's). The view is GET /api/access's (hooks/useAccess.ts), fetched
 // on opening and again on each new `accessRev`; every change is a POST /api/access `{ op, … }`
 // with the board's header, and what the board refuses is toasted.
 import { afterEach, expect, spyOn, test } from 'bun:test'
@@ -15,7 +15,7 @@ import { stepOnePaste } from '../../src/core/tunnel-snippets.ts'
 import { timeOf } from '../../src/core/when-format.ts'
 import { AccessBody } from '../../web/src/components/access/AccessPanel.tsx'
 import { Snippets } from '../../web/src/components/access/Snippets.tsx'
-import { TunnelSection } from '../../web/src/components/access/TunnelSection.tsx'
+import { TunnelEntry, TunnelSection } from '../../web/src/components/access/TunnelSection.tsx'
 import { accessSource } from '../../web/src/hooks/useAccess.ts'
 import {
   fieldEdit,
@@ -27,6 +27,7 @@ import {
   stepLine,
   type TunnelAsk,
 } from '../../web/src/models/access.ts'
+import { savesTracker } from '../../web/src/models/server-setup.ts'
 import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
 import { board, renderInBoard } from './support/board.tsx'
 import { type FakeElement, FakeWorld } from './support/fake-dom.ts'
@@ -131,20 +132,17 @@ test('nothing set up: what is needed under its field, On off with the reason, th
   expect(isAccessView(READY)).toBe(true)
   const body = bodyOf(VIEW)
   const tunnel = find(body, el => hasClass(el, 'access-tunnel'))
-  expect(textsOf([tunnel], 'access-problem')).toEqual(['Domain: needed', 'Server: needed', 'User: needed'])
-  // Each problem under its own field: the flow's (the board's address, the server and its port,
-  // the login, its password, the key file), then the rest of the settings.
+  expect(textsOf([tunnel], 'access-problem')).toEqual(['Domain: needed', 'User: needed'])
+  // Each problem under its own field: the board's address, then the rest of the settings; the
+  // server and its port are the Server tab's login, theirs under them there.
   const entries = byClass([tunnel], 'access-entry').map(entry => [
     textOf(find([entry], el => el.tag === 'span')),
     textsOf([entry], 'access-problem'),
   ])
+  const login = find(body, el => hasClass(el, 'access-signin'))
+  expect(textsOf([login], 'access-problem')).toEqual(['Server: needed'])
   expect(entries).toEqual([
     ['Address of the board', ['Domain: needed']],
-    ['Server', ['Server: needed']],
-    ['port', []],
-    ['Login', []],
-    ['Password', []],
-    ['Key file', []],
     ['User', ['User: needed']],
     ['Key', []],
     ['Socket on the server', []],
@@ -160,6 +158,8 @@ test('nothing set up: what is needed under its field, On off with the reason, th
   const [flow, rest] = byClass([tunnel], 'access-fields')
   expect(named(byClass(flow ? [flow] : [], 'access-field'))).toEqual([
     ['domain', 'Address of the board', '', 'board.example.com'],
+  ])
+  expect(named(byClass([login], 'access-field'))).toEqual([
     ['host', 'Server', '', 'ssh.example.com'],
     ['sshPort', 'port', '22', '22'],
   ])
@@ -195,14 +195,17 @@ test('nothing set up: what is needed under its field, On off with the reason, th
   expect(textOf(key)).toContain(KEY_PATH)
   expect(textOf(key)).toContain('No key there yet.')
   expect(buttonsIn([key]).map(textOf)).toEqual(['Generate key'])
-  // The parts in the order the panel has them: the tunnel, "On the server", then the rest folded.
-  const order = ['access-reach', 'access-status', 'access-actions', 'access-server', 'access-more', 'access-key']
+  // The parts in the order the tab has them: the tunnel, its address, then the rest folded.
+  const order = ['access-reach', 'access-status', 'access-actions', 'access-fields', 'access-more', 'access-key']
   const seen = findAll([tunnel], el => order.some(c => hasClass(el, c))).map(el => order.find(c => hasClass(el, c)))
   expect([...new Set(seen)]).toEqual(order)
 
-  // Without the board its fields and buttons do nothing.
-  const off = find(bodyOf(READY, { canEdit: false }), el => hasClass(el, 'access-tunnel'))
-  const controls = findAll([off], el => (el.tag === 'input' || el.tag === 'button') && !hasClass(el, 'access-copy'))
+  // Without the board its fields and buttons do nothing (the tabs still change what is shown).
+  const off = find(bodyOf(READY, { canEdit: false }), el => hasClass(el, 'access-body'))
+  const controls = findAll(
+    [off],
+    el => (el.tag === 'input' || el.tag === 'button') && !hasClass(el, 'access-copy') && el.attrs.get('role') !== 'tab',
+  )
   expect(controls.length).toBeGreaterThan(9)
   expect(controls.filter(el => !el.attrs.has('disabled')).map(el => el.attrs.get('name') ?? textOf(el))).toEqual([])
 })
@@ -484,20 +487,27 @@ function liveTunnel(view: AccessView) {
   const asks: TunnelAsk[] = []
   let ask: TunnelAsk = null
   const world = new FakeWorld({ viewport: VP })
+  const saves = savesTracker()
+  // the Tunnel tab, and the server and its port as the Server tab's login draws them
   const tree = () => {
     const now = source.now.get()
     return (
-      <TunnelSection
-        view={now.view ?? view}
-        send={source.send}
-        steps={now.steps}
-        testing={now.testing}
-        ask={ask}
-        onAsk={next => {
-          ask = next
-          asks.push(next)
-        }}
-      />
+      <div>
+        <TunnelSection
+          view={now.view ?? view}
+          send={source.send}
+          steps={now.steps}
+          testing={now.testing}
+          ask={ask}
+          onAsk={next => {
+            ask = next
+            asks.push(next)
+          }}
+          saves={saves}
+        />
+        <TunnelEntry view={now.view ?? view} send={source.send} saves={saves} field="host" />
+        <TunnelEntry view={now.view ?? view} send={source.send} saves={saves} field="sshPort" />
+      </div>
     )
   }
   let drawn: { el: FakeElement; markup: Element; hosts: Host[] } | null = null

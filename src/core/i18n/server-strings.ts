@@ -13,6 +13,12 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.adminKeyHint': 'the ssh agent and ~/.ssh keys',
     'server.panel.looking': 'Looking…',
     'server.panel.lookAgain': 'Look again',
+    'server.panel.tunnelCard': 'The tunnel on the server',
+    'server.panel.notSetUp': 'Not set up yet.',
+    'server.panel.update': 'Update',
+    'server.panel.boardCard': 'The board on the server',
+    'server.panel.boardNoAddress': 'no address yet',
+    'server.panel.boardVersion': 'version {commit}',
     'server.panel.sudoNote': 'kept by this panel while it is open; never saved',
     'server.panel.continue': 'Continue',
     'server.panel.found': 'What the board found',
@@ -111,7 +117,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.manualEnd': 'Then Test connection.',
     // Call 4: Test connection's domain step while no setup is on record (exact)
     'server.panel.domainNotSetUp':
-      'If the web server is not set up yet, this step fails until it is: Set up the server below.',
+      'If the web server is not set up yet, this step fails until it is: set it up on the Server tab.',
     // the one flow (the simple-setup spec's "The flow, as the owner sees it"): plain words only
     'server.panel.signin': 'The server and its login',
     'server.panel.domain': 'Address of the board',
@@ -424,6 +430,12 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.adminKeyHint': 'ssh-агент и ключи из ~/.ssh',
     'server.panel.looking': 'Осмотр…',
     'server.panel.lookAgain': 'Осмотреть снова',
+    'server.panel.tunnelCard': 'Туннель на сервере',
+    'server.panel.notSetUp': 'Ещё не настроен.',
+    'server.panel.update': 'Обновить',
+    'server.panel.boardCard': 'Доска на сервере',
+    'server.panel.boardNoAddress': 'адреса пока нет',
+    'server.panel.boardVersion': 'версия {commit}',
     'server.panel.sudoNote': 'хранится в этой панели, пока она открыта; нигде не сохраняется',
     'server.panel.continue': 'Продолжить',
     'server.panel.found': 'Что доска нашла',
@@ -520,7 +532,7 @@ export const SERVER_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'server.panel.undoIt': 'Как отменить:',
     'server.panel.manualEnd': 'Затем проверьте соединение.',
     'server.panel.domainNotSetUp':
-      'Если веб-сервер ещё не настроен, этот шаг не пройдёт, пока его не настроить: настройте сервер ниже.',
+      'Если веб-сервер ещё не настроен, этот шаг не пройдёт, пока его не настроить: настройте его на вкладке «Сервер».',
     // один путь: только простые слова
     'server.panel.signin': 'Сервер и вход на него',
     'server.panel.domain': 'Адрес доски',
