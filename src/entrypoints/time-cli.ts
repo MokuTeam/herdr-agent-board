@@ -778,8 +778,10 @@ async function importCmd(
   const rowText = (c: ImportChange): string => {
     const at = Date.parse(c.row.start)
     const [h, m] = clockIn(at, tz)
-    // cut by characters, not UTF-16 units: an emoji is never halved
-    const chars = [...c.row.description]
+    // cut by what a reader takes for one character (a grapheme): an emoji is never halved
+    const chars = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(c.row.description)].map(
+      x => x.segment,
+    )
     const words = chars.length > 40 ? `${chars.slice(0, 40).join('')}…` : c.row.description
     return `${dateIn(at, tz)} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')} "${words}"${c.id ? ` · ${c.id}` : ''}`
   }
@@ -811,6 +813,7 @@ async function importCmd(
         (v.kind === 'new' && v.entry.billable === false) ||
         // a row that differs is rewritten only with --update, and only an entry the board never changed
         (v.kind === 'changed' &&
+          !v.alike &&
           a.has('--update') &&
           v.stored.by === 'import' &&
           v.stored.changedBy === 'import' &&

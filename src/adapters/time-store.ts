@@ -724,7 +724,8 @@ export interface ImportChange {
 export type ImportVerdict =
   | { kind: 'new'; entry: TimeEntry }
   | { kind: 'already'; stored: TimeEntry }
-  | { kind: 'changed'; stored: TimeEntry; next: TimeEntry; fields: string[] }
+  /** `alike`: the row is alike in the five unique fields to an entry another row has: said, never written */
+  | { kind: 'changed'; stored: TimeEntry; next: TimeEntry; fields: string[]; alike?: true }
 
 const IMPORT_FIELDS = ['client', 'project', 'description', 'start', 'stop', 'tags', 'billable'] as const
 
@@ -845,8 +846,9 @@ const differing = (c: TimeConfig, stored: TimeEntry, entry: TimeEntry): string[]
  * over the rows not yet paired: alike in every field first; then alike but for billable (a row
  * that says it, with --billable-from-toggl, still finds its own entry before another's); then the same project and
  * description (its stop or tags changed); the same project and stop (its words changed); the same
- * project; the same description; the same stop; then whatever is left, one to one, a removed entry
- * left out of that last pass (a new row at its start is a new entry, not the removed one).
+ * project; the same description; the same stop; then whatever is left, one to one. A removed entry
+ * is paired only in the strong passes (up to project and stop): a new row at its start that shares
+ * less with it is a new entry, not the removed one.
  */
 const pairings = (c: TimeConfig): ((stored: TimeEntry, row: TimeEntry) => boolean)[] => [
   (a, b) => differing(c, a, b).length === 0,
@@ -866,8 +868,11 @@ const pairings = (c: TimeConfig): ((stored: TimeEntry, row: TimeEntry) => boolea
  * each entry with one row at most, so rows of one start that differ are each an entry of their
  * own. A row paired with an entry alike is `already`; with a removed one, `already` (it stays
  * removed); with one that differs (changed in Toggl, or moved or changed on the board), `changed`,
- * with the fields, and not added twice. A row left over is `new`, with a key of its own; one
- * alike to a row of the same run already new is that row (`already`).
+ * with the fields, and not added twice. A row left over that is alike in the five fields the
+ * store holds one live entry of (client, project, description, start, stop) to an entry there or
+ * to a row of this run is that entry: `already`, or `changed` with `alike` where its tags or
+ * billable differ (said, never written: it is not the entry's own row). Any other row left over is
+ * `new`, with a key of its own.
  */
 export function importVerdicts(
   index: ImportIndex,
@@ -898,29 +903,30 @@ export function importVerdicts(
     const there = index.at(first.client, first.start)
     const passes = pairings(c)
     passes.forEach((pairs, p) => {
-      const last = p === passes.length - 1
+      // a removed entry only by what tells it is that row (up to project and stop)
+      const strong = p <= 3
       for (const i of group) {
         if (out[i]) continue
-        const stored = there.find(x => !index.isTaken(x) && !(last && x.deleted) && pairs(x, entries[i] as TimeEntry))
+        const stored = there.find(x => !index.isTaken(x) && (strong || !x.deleted) && pairs(x, entries[i] as TimeEntry))
         if (stored) out[i] = paired(stored, entries[i] as TimeEntry)
       }
     })
-    const fresh: TimeEntry[] = []
     for (const i of group) {
       if (out[i]) continue
       const e = entries[i] as TimeEntry
-      // alike in the five fields to an entry the store has, or one of this run: the store holds
-      // one, so this row is that one (already there, or differing in its tags), never a new one
-      const twin = fresh.find(x => sameKey(x, e)) ?? index.sameLive(e)
+      // alike in the five fields to an entry the store has, or one this run adds (it is in the
+      // index): the store holds one, so this row is that one, never a new one
+      const twin = index.sameLive(e)
       if (twin) {
         const fields = differing(c, twin, e)
-        out[i] = fields.length ? { kind: 'changed', stored: twin, next: e, fields } : { kind: 'already', stored: twin }
+        out[i] = fields.length
+          ? { kind: 'changed', stored: twin, next: e, fields, alike: true }
+          : { kind: 'already', stored: twin }
         continue
       }
       if (!rows[i]?.toggl) e.toggl = index.freeKey(e.client, Date.parse(e.start))
       index.add(e)
       index.take(e)
-      fresh.push(e)
       out[i] = { kind: 'new', entry: e }
     }
   }
@@ -974,8 +980,8 @@ export function importEntries(
         }
         if (v.kind === 'changed') {
           const change = changeOf(v)
-          // a row alike in the five fields to another of this file has no entry yet to update
-          const mine = !!v.stored.id && v.stored.by === 'import' && v.stored.changedBy === 'import'
+          // a row alike to an entry another row has is said, never written (two rows would take turns)
+          const mine = !v.alike && v.stored.by === 'import' && v.stored.changedBy === 'import'
           if (!o.update || !mine) {
             changes.push(change)
             continue

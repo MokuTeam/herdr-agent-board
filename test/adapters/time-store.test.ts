@@ -1114,10 +1114,15 @@ test('rows alike in the five fields the store holds one of: one entry, the dry r
     importVerdicts(new ImportIndex(db), conf, twice).map(v => v.kind),
     ['already', 'already'],
   )
-  // in one file, alike but for tags: one in, the other differs in its tags (no update for it)
+  // in one file, alike but for tags: one in, the other differs in its tags; --update never takes
+  // turns between the two (the entry stays the first row's, at its revision)
   const other = fresh()
-  const r = importEntries(other, conf, [csvRow(), csvRow({ tags: ['call'] })], { update: true })
+  const pair = [csvRow(), csvRow({ tags: ['call'] })]
+  const r = importEntries(other, conf, pair, { update: true })
   assert.deepEqual([r.added, r.changed.map(c => c.fields), r.updated.length], [1, [['tags']], 0])
+  for (let n = 0; n < 2; n++) assert.equal(importEntries(other, conf, pair, { update: true }).updated.length, 0)
+  const [kept] = listEntries(other, { from: '2026-10-28', to: '2026-10-28' })
+  assert.deepEqual([kept?.tags, kept?.rev], [[], 1])
   db.close()
   other.close()
 })
@@ -1134,6 +1139,17 @@ test('a removed entry is paired only by what it shares with a row: a new row at 
   db.close()
 })
 
+test('a removed entry is not taken by a new row of its project that shares nothing else with it', () => {
+  const db = fresh()
+  importEntries(db, conf, [csvRow()])
+  const [gone] = listEntries(db, { from: '2026-10-28', to: '2026-10-28' })
+  removeEntry(db, gone?.id as string, 'user')
+  const r = importEntries(db, conf, [csvRow({ description: 'Another call', stop: at('2026-10-28T13:20:00Z') })])
+  assert.deepEqual([r.added, r.already, r.changed.length], [1, 0, 0])
+  db.close()
+})
+
+// passes on main too (its order there was the same in practice): it pins the order now said
 test('two entries no field tells apart: the first made is the one a row is paired with', () => {
   const db = fresh()
   const rows = [csvRow({ description: 'One' }), csvRow({ description: 'Two' })]

@@ -2130,11 +2130,13 @@ removed since, moved on the board, or given another start there. Rows of one lan
 same second are each an entry of their own (a number after the key tells them apart); a later run
 pairs them with the entries there as a group: alike in every field first, then alike but for
 billable, by project and description, by project and stop, by project, by description, by stop,
-then what is left one to one (a removed entry only in the passes before that last one, so a new row
-at its start goes in). Each entry is paired with one row at most; where no field tells two entries
+then what is left one to one. A removed entry is paired only up to project and stop, so a new row
+at its start that shares less with it goes in. Each entry is paired with one row at most; where no field tells two entries
 apart (the same project and stop, say), the first made is the one. A row alike to an entry in the
 five fields the board holds one of (client, project, description, start and stop) is that entry:
-already there, or differing in its tags; a Toggl entry duplicated in Toggl is on the board once.
+already there, or said to differ in its tags (never written, `--update` too); a Toggl entry
+duplicated in Toggl is one entry on the board, while the per-day totals printed are Toggl's rows,
+the duplicate counted.
 A row that differs (edited in
 Toggl since it was imported: its wording, its stop, its project, its tags; or moved on the board)
 is listed as changed, named by its day and start in `--tz` and its description's start, with the
