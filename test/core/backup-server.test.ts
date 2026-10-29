@@ -195,12 +195,16 @@ test.skipIf(!sh)('a disk nearly full is refused before anything is written', () 
 
 test.skipIf(!awk)("the drop's rotation removes exactly what rotationKeeps does not keep", () => {
   const now = Date.UTC(2026, 9, 29, 12, 0, 0)
-  const run = (names: string[]) => {
-    const r = spawnSync(awk as string, ['-v', `now=${Math.floor(now / 1000)}`, pruneAwk()], {
-      input: `${[...names].sort().join('\n')}\n`,
-      encoding: 'utf8',
-      env: { ...process.env, LC_ALL: 'C' },
-    })
+  const run = (names: string[], force = false) => {
+    const r = spawnSync(
+      awk as string,
+      ['-v', `now=${Math.floor(now / 1000)}`, '-v', `force=${force ? 1 : 0}`, pruneAwk()],
+      {
+        input: `${[...names].sort().join('\n')}\n`,
+        encoding: 'utf8',
+        env: { ...process.env, LC_ALL: 'C' },
+      },
+    )
     assert.equal(r.status, 0, r.stderr)
     return r.stdout.split('\n').filter(Boolean)
   }
@@ -240,6 +244,13 @@ test.skipIf(!awk)("the drop's rotation removes exactly what rotationKeeps does n
   const stale = history.filter(n => n < snapshotName(now - 40 * DAY, '00000000'))
   same(stale)
   assert.deepEqual(run(stale), [])
+  // over the cap the drop prunes again with that guard off: the rotation as rotationKeeps' force
+  const forced = rotationKeeps(stale, now, { force: true })
+  assert.deepEqual(
+    run(stale, true),
+    [...stale].sort().filter(n => !forced.has(n)),
+  )
+  assert.ok(run(stale, true).length > 0)
   // ten from years ago under two recent ones: the newest ten stay whatever their age, two go
   const old = Array.from({ length: 10 }, (_, i) =>
     snapshotName(now - (1000 + i) * DAY, i.toString(16).padStart(8, '0')),
@@ -247,6 +258,30 @@ test.skipIf(!awk)("the drop's rotation removes exactly what rotationKeeps does n
   same(old)
   assert.equal(run(old).length, 2)
 })
+
+test.skipIf(!sh)(
+  'old files over the cap, past the clock’s guard: a second prune makes room, the newest ten kept',
+  () => {
+    const now = Date.now()
+    const d = dropper({ maxKb: 600 })
+    try {
+      mkdirSync(d.snaps)
+      // eighteen of 40 KB put 45 days ago an hour apart (a flood a stolen key left): over the cap,
+      // and the newest a month and more back, so the first prune keeps them all
+      for (let i = 0; i < 18; i++)
+        writeFileSync(
+          join(d.snaps, snapshotName(now - 45 * DAY + i * 3_600_000, `ffff${String(i).padStart(4, '0')}`)),
+          snapshot(40_000),
+        )
+      const ok = d.put(snapshot())
+      assert.equal(ok.status, 0, ok.stderr.toString())
+      // the newest ten and the first of that day, then the new one
+      assert.equal(d.files().length, 12)
+    } finally {
+      d.done()
+    }
+  },
+)
 
 test('the newest ten, which the rotation always keeps, fit in the folder at their largest with room for one more', () => {
   // else ten large files put with a stolen key would fill the folder for good: nothing new goes in,

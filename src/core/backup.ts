@@ -105,7 +105,7 @@ export const GAP_MS = 30 * DAY
  * one before it (a clock that jumped forward would take the history). The server's drop
  * script prunes by the same rule (core/backup-server.ts), the tests hold the two together.
  */
-export function rotationKeeps(names: readonly string[], now: number): Set<string> {
+export function rotationKeeps(names: readonly string[], now: number, o: { force?: boolean } = {}): Set<string> {
   const keep = new Set<string>()
   const dated = names
     .map(name => ({ name, at: snapshotTime(name) }))
@@ -120,7 +120,9 @@ export function rotationKeeps(names: readonly string[], now: number): Set<string
   const before = dated.at(-2)
   // the newest a month and more after the one before, or the clock a month and more past the
   // newest (it jumped, or the board slept): nothing goes this time
-  if (newest && ((before && newest.at - before.at > GAP_MS) || now - newest.at > GAP_MS)) {
+  // `force`: a folder over its cap rotates even then (the drop's second prune), or old files put
+  // there would hold it full for good
+  if (newest && ((before && newest.at - before.at > GAP_MS) || (!o.force && now - newest.at > GAP_MS))) {
     for (const { name } of dated) keep.add(name)
     return keep
   }

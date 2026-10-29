@@ -38,7 +38,7 @@ export const BACKUP_FENCE = `${SSHD_DIR}/00-agent-board-backup.conf`
 export const BACKUP_BLOCK_BEGIN = '# >>> backup-drop of agent-board'
 export const BACKUP_BLOCK_END = '# <<< backup-drop of agent-board'
 /** The drop script's version: `check` says it, so the board knows an older script is there (2: `put` takes the size). */
-export const DROP_VERSION = 4
+export const DROP_VERSION = 5
 /** The largest snapshot the drop takes (bytes), how full its folder may get, and the free disk it always leaves (KB). */
 // a sealed snapshot is about a megabyte: the newest ten, which the rotation always keeps, must fit
 // in the folder with room to spare, or ten files put by a stolen key would fill it for good
@@ -105,7 +105,7 @@ export function pruneAwk(): string {
     // a name dated over a day ahead is kept and left out of the rest (rotationKeeps)
     `$0 ~ /${NAME_AWK}/ { if (stamp($0) > now + ${s(FUTURE_MS)}) next; n++; name[n] = $0 }`,
     'END {',
-    `if (n == 0 || (n > 1 && stamp(name[n]) - stamp(name[n - 1]) > ${s(GAP_MS)}) || now - stamp(name[n]) > ${s(GAP_MS)}) exit;`,
+    `if (n == 0 || (n > 1 && stamp(name[n]) - stamp(name[n - 1]) > ${s(GAP_MS)}) || (!force && now - stamp(name[n]) > ${s(GAP_MS)})) exit;`,
     'for (i = 1; i <= n; i++) {',
     'x = name[i]; age = now - stamp(x); day = substr(x, 1, 8); month = substr(x, 1, 6);',
     'fd = !(day in seen_d); fm = !(month in seen_m); seen_d[day] = 1; seen_m[month] = 1;',
@@ -168,8 +168,9 @@ export function dropScript(limits: Partial<DropLimits> = {}): string {
     'fail() { echo "@@error $*" >&2; exit 1; }',
     // what a put cut off by a kill left behind, an hour old
     'sweep() { find "$DIR" -maxdepth 1 -name ".incoming.*" -mmin +60 -exec rm -f {} + 2>/dev/null; }',
+    // prune 1: the folder is over its cap, the clock's guard is off (rotationKeeps' force)
     'prune() {',
-    `  ls "$DIR" | awk -v now="$(date -u +%s)" ${shQuote(pruneAwk())} | while read -r old; do rm -f "$DIR/$old"; done`,
+    `  ls "$DIR" | awk -v now="$(date -u +%s)" -v force="\${1:-0}" ${shQuote(pruneAwk())} | while read -r old; do rm -f "$DIR/$old"; done`,
     '}',
     'put() {',
     '  case $1 in "" | *[!0-9]* | 0*) fail "put needs the snapshot\'s size in bytes" ;; esac',
@@ -178,6 +179,8 @@ export function dropScript(limits: Partial<DropLimits> = {}): string {
     '  sweep',
     '  prune',
     '  used=$(du -sk "$DIR" | awk \'{ print $1 }\')',
+    // still over the cap (old files fill it, the clock's guard kept them): the rotation again, guard off
+    '  if [ "$used" -ge "$MAX_KB" ]; then prune 1; used=$(du -sk "$DIR" | awk \'{ print $1 }\'); fi',
     '  [ "$used" -lt "$MAX_KB" ] || fail "the snapshots folder is full: $used KB"',
     '  free=$(df -Pk "$DIR" | awk \'NR == 2 { print $4 }\')',
     '  [ "$((free - $1 / 1024))" -gt "$RESERVE_KB" ] || fail "the server\'s disk is nearly full: $free KB free"',
