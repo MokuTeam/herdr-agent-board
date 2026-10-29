@@ -8,13 +8,17 @@
 //   profile-sync.ts apply    ← {t:'file', profile, to, merge, expect, cut, exec} and the file, …, {t:'end'}
 //                            → {t:'progress', files, bytes}, …, {t:'done', created, install, skipped}
 //   profile-sync.ts record   → {t:'done'}
+//   profile-sync.ts dirs     → {t:'dirs', path, parent, home, entries, error}: the folders in a folder ('' its home)
+//   profile-sync.ts mkdir    → {t:'dirs', …} of the folder it made (`name` in `path`)
+//   profile-sync.ts exists   → {t:'exists', there}: whether each of `paths` is a folder here
 //
 // pack and apply take the groups the owner ticked (`allow`); each holds to them whatever the other
 // side sends. A failure: {t:'error', message}, exit 1; what apply wrote before it is recorded all
 // the same. A profile made by apply gets the board's hooks: the board's install action runs once,
 // as on the server's install.
+import { mkdirSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type { Readable, Writable } from 'node:stream'
 import { createGunzip } from 'node:zlib'
 import { isRecord } from '../adapters/json-store.ts'
@@ -154,6 +158,69 @@ async function apply(
   await out.send({ t: 'done', files, bytes, created, install, skipped })
 }
 
+/** The most folders a listing names. */
+const MOST_FOLDERS = 2000
+/** The most paths one `exists` asks about. */
+const MOST_PATHS = 5000
+
+/** The folders in a folder, for the owner's picker: what it holds that is a folder (a link to one too), the hidden ones last. */
+export interface Folders {
+  path: string
+  /** '' at the top. */
+  parent: string
+  home: string
+  entries: string[]
+  /** denied: it cannot be read; missing: it is not there; notDir: it is no folder. */
+  error: 'denied' | 'missing' | 'notDir' | null
+}
+
+const errorOf = (err: unknown): Folders['error'] => {
+  const code = (err as NodeJS.ErrnoException).code
+  return code === 'EACCES' || code === 'EPERM' ? 'denied' : code === 'ENOTDIR' ? 'notDir' : 'missing'
+}
+
+/** A path a request names: absolute, '..' resolved; '' is the home. Null when it is not one. */
+function pathOf(v: unknown, home: string): string | null {
+  if (v === undefined || v === null || v === '') return home
+  return typeof v === 'string' && !v.includes('\0') && isAbsolute(v) ? resolve(v) : null
+}
+
+export function foldersIn(path: string, home: string): Folders {
+  const up = dirname(path)
+  const at = { path, parent: up === path ? '' : up, home }
+  try {
+    const entries = readdirSync(path, { withFileTypes: true })
+      .filter(e => {
+        if (e.isDirectory()) return true
+        if (!e.isSymbolicLink()) return false
+        try {
+          return statSync(join(path, e.name)).isDirectory()
+        } catch {
+          return false
+        }
+      })
+      .map(e => e.name)
+      .sort(
+        (a, b) =>
+          Number(a.startsWith('.')) - Number(b.startsWith('.')) ||
+          a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }),
+      )
+    return { ...at, entries: entries.slice(0, MOST_FOLDERS), error: null }
+  } catch (err) {
+    return { ...at, entries: [], error: errorOf(err) }
+  }
+}
+
+/** A new folder's name: one folder, no separator, not . or .. */
+const nameOk = (v: unknown): v is string =>
+  typeof v === 'string' &&
+  v.trim() === v &&
+  v !== '' &&
+  v !== '.' &&
+  v !== '..' &&
+  Buffer.byteLength(v) <= 255 &&
+  !/[/\\\0]/.test(v)
+
 /** One op: its request and frames read from `input`, its answer written to `output`; the exit code. */
 export async function serve(op: string, input: Readable, output: Writable, here: Here): Promise<number> {
   const out = frameSink(output)
@@ -176,6 +243,27 @@ export async function serve(op: string, input: Readable, output: Writable, here:
         })),
       )
       await out.send({ t: 'done' })
+    } else if (op === 'dirs') {
+      const path = pathOf(req.path, here.home)
+      if (path === null) throw new Error('dirs: no absolute path')
+      await out.send({ t: 'dirs', ...foldersIn(path, here.home) })
+    } else if (op === 'mkdir') {
+      const parent = pathOf(req.path, here.home)
+      if (parent === null || !nameOk(req.name)) throw new Error('mkdir: no folder named')
+      const made = join(parent, req.name)
+      mkdirSync(made)
+      await out.send({ t: 'dirs', ...foldersIn(made, here.home) })
+    } else if (op === 'exists') {
+      const paths = Array.isArray(req.paths) ? req.paths.slice(0, MOST_PATHS) : []
+      const there = paths.map(p => {
+        const path = typeof p === 'string' && p !== '' ? pathOf(p, here.home) : null
+        try {
+          return path !== null && statSync(path).isDirectory()
+        } catch {
+          return false
+        }
+      })
+      await out.send({ t: 'exists', there })
     } else throw new Error(`no op ${op}`)
     await out.end()
     return 0

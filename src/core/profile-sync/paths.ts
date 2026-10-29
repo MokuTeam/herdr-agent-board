@@ -136,7 +136,14 @@ export interface Pair {
   to: string
   /** The folder's name on the target: Claude's for `to`, or the one already there for it. */
   toFolder: string
-  how: 'remote' | 'owner' | 'same'
+  how: 'remote' | 'owner' | 'same' | 'rule'
+  /** The path rule that moved it (its place among the rules), for `how: 'rule'`. */
+  rule?: number
+}
+
+/** A path rule as it moves the source's paths (core/profile-sync/rules.ts ruleMoves): its folder on each side, its place among the rules. */
+export interface RuleMove extends Move {
+  rule: number
 }
 
 export type UnpairedWhy = 'unknown' | 'gone' | 'noRemote' | 'noClone' | 'worktree' | 'taken' | 'left'
@@ -164,9 +171,12 @@ export function folderFor(to: string, there: readonly string[]): string {
 /**
  * Each source project paired with its place on the target: the path the owner gave (null: left
  * out); else the target's clone with the same remote (the project's place inside its clone kept);
- * else the same path, when the target has a project there. A worktree goes only where the owner
- * gives it a path (its clone's own folder is the clone's). Two projects for one folder: the first
- * keeps it. The rest are listed, with why.
+ * else the same path, when the target has a project there; else by the path rule with the
+ * longest folder it is inside of (`rules`, longest first: the same path below the rule's folder
+ * on the target). A worktree, and a folder not there, go by the owner's path or a rule only (a
+ * worktree's clone's folder is the clone's; a folder not there names no clone and may be one the
+ * sync placed, waiting). Two projects for one folder: the first keeps it. The rest are listed,
+ * with why.
  */
 export function pairProjects(o: {
   source: { platform: Platform; projects: readonly ProjectFact[] }
@@ -178,8 +188,17 @@ export function pairProjects(o: {
     folders: Readonly<Record<string, readonly string[]>>
   }
   given: Readonly<Record<string, string | null>>
+  rules?: readonly RuleMove[]
 }): { pairs: Pair[]; unpaired: Unpaired[] } {
   const { source, target, given } = o
+  /** A path moved by the first rule it is inside of (the longest first). */
+  const byRule = (path: string): { to: string; rule: number } | null => {
+    for (const m of o.rules ?? []) {
+      const rest = under(path, m.from, source.platform)
+      if (rest !== null) return { to: joinPath(m.to, rest, target.platform), rule: m.rule }
+    }
+    return null
+  }
   const clones = new Map<string, string[]>()
   const addClone = (path: string, remote: string | null): void => {
     const key = remoteKey(remote)
@@ -206,6 +225,7 @@ export function pairProjects(o: {
     }
     let to: string | null = null
     let how: Pair['how'] = 'remote'
+    let rule: number | undefined
     if (key in given) {
       const g = given[key] ?? null
       if (g === null) {
@@ -217,26 +237,32 @@ export function pairProjects(o: {
     } else if (p.path === null) {
       left('unknown')
       continue
-    } else if (p.state === 'gone') {
-      left('gone')
-      continue
-    } else if (p.worktree) {
-      left('worktree')
-      continue
     } else {
-      const found = clones.get(remoteKey(p.remote) ?? '')?.[0]
+      // a folder not there (gone; on the server: one the sync placed whose project is not put
+      // there yet) goes by a rule only: its memory and sessions wait for it
+      const gone = p.state === 'gone'
+      const found = p.worktree || gone ? undefined : clones.get(remoteKey(p.remote) ?? '')?.[0]
+      const ruled = byRule(p.path)
       if (found !== undefined && p.top) {
         const rest = under(p.path, p.top, source.platform)
         to = joinPath(found, rest ?? '', target.platform)
       } else if (
+        !gone &&
+        !p.worktree &&
         source.platform !== 'win32' &&
         target.platform !== 'win32' &&
         targetPaths.has(pathKey(p.path, target.platform))
       ) {
         to = p.path
         how = 'same'
+      } else if (ruled) {
+        to = ruled.to
+        how = 'rule'
+        rule = ruled.rule
       } else {
-        left(p.state === 'git' && remoteKey(p.remote) ? 'noClone' : 'noRemote')
+        left(
+          gone ? 'gone' : p.worktree ? 'worktree' : p.state === 'git' && remoteKey(p.remote) ? 'noClone' : 'noRemote',
+        )
         continue
       }
     }
@@ -247,7 +273,15 @@ export function pairProjects(o: {
       continue
     }
     taken.add(slot)
-    pairs.push({ profile: p.profile, folder: p.folder, from: p.path ?? '', to, toFolder, how })
+    pairs.push({
+      profile: p.profile,
+      folder: p.folder,
+      from: p.path ?? '',
+      to,
+      toFolder,
+      how,
+      ...(rule !== undefined && { rule }),
+    })
   }
   return { pairs, unpaired }
 }

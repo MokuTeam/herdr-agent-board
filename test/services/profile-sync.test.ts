@@ -28,6 +28,7 @@ const installedInto: string[] = []
 let noBoard = false
 let asProcess = false
 const scripts: string[] = []
+const savedRules: { host: string; rules: unknown }[] = []
 
 const put = (path: string, text: string): void => {
   mkdirSync(join(path, '..'), { recursive: true })
@@ -64,7 +65,7 @@ function spawn(_bin: string, args: string[]): RemoteStream {
     )
   } else if (asProcess) {
     // the program as its own process, its home the server's, as runuser starts it
-    const op = / (scan|pack|apply|record)$/m.exec(script.trim())?.[1] ?? ''
+    const op = / (scan|pack|apply|record|dirs|mkdir|exists)$/m.exec(script.trim())?.[1] ?? ''
     const was = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
     process.env.HOME = srv
     process.env.USERPROFILE = srv
@@ -76,7 +77,7 @@ function spawn(_bin: string, args: string[]): RemoteStream {
         else process.env[k] = v
     }
   } else {
-    const op = / (scan|pack|apply|record)$/m.exec(script.trim())?.[1] ?? ''
+    const op = / (scan|pack|apply|record|dirs|mkdir|exists)$/m.exec(script.trim())?.[1] ?? ''
     done = serve(op, stdin, stdout, {
       home: srv,
       platform: process.platform,
@@ -212,6 +213,10 @@ beforeAll(() => {
     log: () => {},
     newId: () => `id-${Math.random().toString(16).slice(2)}`,
     now: () => Date.now(),
+    saveRules: (host, rules) => {
+      savedRules.push({ host, rules })
+      return true
+    },
   })
 })
 
@@ -441,5 +446,93 @@ describe('syncing the profiles with the board on the server', () => {
     expect(await serving).toBe(1)
     expect(read(join(srv, '.claude', 'agents', 'cut.md'))).toBe('cut\n')
     expect(Object.keys(readSynced('cut-short').default ?? {})).toEqual(['agents/cut.md'])
+  })
+})
+
+describe('where the projects go: path rules and the folders picked', () => {
+  test('the server’s folders listed by its program, as its board’s user; a folder made there; a name that is no folder’s refused', async () => {
+    scripts.length = 0
+    const home = await sync.dirs({ password: 'pw' })
+    expect(home.status).toBe(200)
+    const listed = home.body as { path: string; parent: string; home: string; entries: string[]; error: null }
+    expect(listed.path).toBe(srv)
+    expect(listed.home).toBe(srv)
+    expect(listed.parent).toBe(join(srv, '..'))
+    // its folders only, the hidden ones last
+    expect(listed.entries.slice(0, 2)).toEqual(['work', '.bun'])
+    expect(listed.entries).toContain('.claude')
+    // the sync's own command, its program run as the board's user (core/profile-sync/remote.ts): no probe again
+    expect(scripts.filter(x => x.includes('profile sync'))).toHaveLength(1)
+    expect(scripts.some(x => x.includes('probe'))).toBe(false)
+    const made = await sync.mkdir({ path: srv, name: 'migo', password: 'pw' })
+    expect(made.status).toBe(200)
+    expect((made.body as { path: string; entries: string[] }).path).toBe(join(srv, 'migo'))
+    expect(existsSync(join(srv, 'migo'))).toBe(true)
+    for (const name of ['', '..', 'a/b', 'a\\b'])
+      expect((await sync.mkdir({ path: srv, name, password: 'pw' })).status).toBe(409)
+    expect((await sync.mkdir({ path: srv, password: 'pw' })).status).toBe(400)
+    const inside = await sync.dirs({ path: join(srv, 'work', 'proj', '..'), password: 'pw' })
+    expect((inside.body as { path: string; entries: string[] }).entries).toEqual(['proj'])
+    const missing = await sync.dirs({ path: join(srv, 'nowhere'), password: 'pw' })
+    expect((missing.body as { error: string }).error).toBe('missing')
+    expect((await sync.dirs({ path: 'relative', password: 'pw' })).status).toBe(409)
+  })
+
+  test('a project with no clone there: the rule suggested, kept for this server, the project placed by it, its folder not there until made', async () => {
+    const a = join(pc, 'migo', 'a')
+    mkdirSync(a, { recursive: true })
+    put(join(pc, '.claude', 'projects', projectFolder(a), 's.jsonl'), `${JSON.stringify({ cwd: a, message: 'hi' })}\n`)
+    put(join(pc, '.claude', 'projects', projectFolder(a), 'memory', 'MEMORY.md'), '- a\n')
+    expect(await sync.look({ direction: 'up', password: 'pw' })).toEqual({ status: 200, body: { ok: true } })
+    const p = sync.view()?.preview
+    expect(p?.unpaired.map(u => [u.path, u.why])).toEqual([[a, 'noRemote']])
+    // one project: its own folder, as placed in this home, to the same place in the server's
+    const rule = { pc: a, server: join(srv, 'migo', 'a') }
+    expect(p?.suggested).toEqual([{ rule, projects: 1 }])
+    // the clone's pair is known there from the Look
+    expect(p?.there).toEqual({ [srvClone]: true })
+
+    expect(sync.rules({ rules: [{ pc: 'not absolute', server: '/x' }] }).status).toBe(409)
+    const kept = sync.rules({ rules: [rule], password: 'pw' })
+    expect(kept).toEqual({ status: 200, body: { ok: true, rules: [rule] } })
+    expect(savedRules.at(-1)).toEqual({ host: 'srv.example', rules: [rule] })
+    const q = sync.view()?.preview
+    expect(q?.rules).toEqual([rule])
+    expect(q?.suggested).toEqual([])
+    expect(q?.pairs.map(x => [x.from, x.to, x.how, x.rule])).toEqual([
+      [pcProject, srvClone, 'remote', undefined],
+      [a, join(srv, 'migo', 'a'), 'rule', 0],
+    ])
+    // asked of the server in the background: not there yet; the same preview, its choices kept
+    await until('the folder there asked', () => join(srv, 'migo', 'a') in (sync.view()?.preview?.there ?? {}))
+    expect(sync.view()?.preview?.there[join(srv, 'migo', 'a')]).toBe(false)
+    expect(sync.view()?.preview?.id).toBe(q?.id as string)
+    // made there with the picker: known there at once
+    await sync.mkdir({ path: join(srv, 'migo'), name: 'a', password: 'pw' })
+    sync.pair({ profile: 'default', folder: projectFolder(a), path: '' })
+    expect(sync.view()?.preview?.there[join(srv, 'migo', 'a')]).toBe(true)
+
+    // the owner's own choice over the rule, then left out, then as the rules say again
+    sync.pair({ profile: 'default', folder: projectFolder(a), path: join(srv, 'elsewhere') })
+    expect(sync.view()?.preview?.pairs.find(x => x.folder === projectFolder(a))?.how).toBe('owner')
+    sync.pair({ profile: 'default', folder: projectFolder(a), path: null })
+    expect(sync.view()?.preview?.unpaired.map(u => u.why)).toEqual(['left'])
+    sync.pair({ profile: 'default', folder: projectFolder(a), path: '' })
+    expect(sync.view()?.preview?.pairs.find(x => x.folder === projectFolder(a))?.how).toBe('rule')
+    sync.forget()
+
+    // Apply: its memory and transcript in the folder named for the server's path, its cwd that path
+    const v = await run('up')
+    expect(v.preview?.pairs.find(x => x.folder === projectFolder(a))?.to).toBe(join(srv, 'migo', 'a'))
+    const there = join(srv, '.claude', 'projects', projectFolder(join(srv, 'migo', 'a')))
+    expect(json(join(there, 's.jsonl')).cwd).toBe(join(srv, 'migo', 'a'))
+    expect(read(join(there, 'memory', 'MEMORY.md'))).toBe('- a\n')
+
+    // and back: the server's project placed on this PC by the same rule
+    put(join(there, 's2.jsonl'), `${JSON.stringify({ cwd: join(srv, 'migo', 'a'), message: 'there' })}\n`)
+    const back = await run('down')
+    expect(back.preview?.pairs.find(x => x.to === a)?.how).toBe('rule')
+    expect(back.preview?.there[a]).toBe(true)
+    expect(json(join(pc, '.claude', 'projects', projectFolder(a), 's2.jsonl')).cwd).toBe(a)
   })
 })

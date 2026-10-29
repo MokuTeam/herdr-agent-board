@@ -177,15 +177,28 @@ test('the preview grouped and folded; the target’s kept in a conflict; deletio
     'Deleted on the source since the last sync · 1',
     'Held back (secrets) · 2',
     'Can’t go (they run only on the source) · 1',
-    'Projects not paired · 1',
+    'Where the projects go',
   ])
   const select = find(nodes, el => el.tag === 'select')
   expect(select.attrs.get('value') ?? 'target').toBe('target')
   const tick = find(nodes, el => el.tag === 'input' && el.attrs.get('name') === 'sync-deletions')
   expect(tick.attrs.has('checked')).toBe(false)
-  expect(text).toContain('default: C:\\notes (no git remote, 3 files, 2.9 KB)')
+  // the project without a place, and the rule suggested for it, first
+  expect(text).toContain('Without a place · 1')
+  expect(text).toContain('default: C:\\notes (no git remote)')
+  expect(text).toContain('Suggested: C:\\notes ↔ /home/agent/notes (1 project)')
   expect(text).toContain('default: .credentials.json')
-  expect(findAll(nodes, el => el.tag === 'button').map(textOf)).toEqual(['Preview', 'Leave out', 'Apply', 'Close'])
+  expect(findAll(nodes, el => el.tag === 'button').map(textOf)).toEqual([
+    'Preview',
+    'Use this rule',
+    'This computer…',
+    'The server…',
+    'Choose…',
+    'Leave out',
+    'Add a rule',
+    'Apply',
+    'Close',
+  ])
   // in Russian, every word there
   const ru = draw({ ...SYNC_IDLE, phase: 'preview', direction: 'up', preview: PREVIEW }, 'ru')
     .map(textOf)

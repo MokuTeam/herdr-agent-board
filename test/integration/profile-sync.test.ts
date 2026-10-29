@@ -10,7 +10,9 @@
 // the board's hooks, every file the sync wrote the board's user's. A change on the server back to
 // this PC: it arrives, the server's own secrets never do. A conflict, the target's kept; a
 // deletion, applied only when ticked. And the server board's install bound the board's key in
-// herdr.
+// herdr. Then three projects under one root with no clone there: the rule suggested and used,
+// each landing under /home/agent/migo (folder names and cwd), the picker's listing and New
+// folder as the board's user, and a session there back under this PC's own path.
 //
 //   BOARD_SERVER_IT=1 bun test test/integration/profile-sync.test.ts --timeout 7200000
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
@@ -319,7 +321,11 @@ describe.skipIf(!DOCKER)('the profiles synced with the board on the server (Debi
         expect(cj.userID).toBe('srv-user-id')
         expect(cj.theme).toBe('dark')
         expect(Object.keys(cj.projects)).toEqual([`${HOME}/work/proj`])
-        expect(cj.mcpServers).toEqual({ remote: { type: 'http', url: 'https://mcp.example.com/mcp' } })
+        // the PC's remote server without its token; the board's own browser server stays the server's
+        expect(cj.mcpServers).toEqual({
+          'board-browser': expect.objectContaining({ args: ['browser-mcp'] }),
+          remote: { type: 'http', url: 'https://mcp.example.com/mcp' },
+        })
         const st = JSON.parse((await s.sh(`cat ${HOME}/.claude/settings.json`)).stdout)
         expect(st.env).toEqual({ DISABLE_TELEMETRY: '1' })
         expect(JSON.stringify(st.hooks)).toContain('agent-board')
@@ -388,6 +394,71 @@ describe.skipIf(!DOCKER)('the profiles synced with the board on the server (Debi
         await synced(sync, 'up', { deletions: ['default:agents/old.md'] })
         expect((await s.sh(`test -e ${HOME}/.claude/agents/old.md`, { check: false })).code).not.toBe(0)
         row.push('deletion: kept unticked, gone ticked')
+
+        // ---- projects under one root with no clone on the server: the rule suggested, used, both ways
+        const migo = join(home, 'migo')
+        const projects = [join(migo, 'dev'), join(migo, 'dev', 'x y'), join(migo, 'notes')]
+        const onServer = (p: string): string => `${HOME}/migo/${p.slice(migo.length + 1).replace(/\\/g, '/')}`
+        for (const [i, p] of projects.entries()) {
+          mkdirSync(p, { recursive: true })
+          const f = join(home, '.claude', 'projects', projectFolder(p))
+          put(join(f, `r${i}.jsonl`), `${JSON.stringify({ type: 'user', cwd: p, message: `project ${i}` })}\n`)
+          put(join(f, 'memory', 'MEMORY.md'), `- memory ${i}\n`)
+        }
+        const pw = { password: 'admin-pw' }
+        expect((await sync.look({ direction: 'up', ...pw })).status).toBe(200)
+        const before = sync.view()?.preview
+        expect(before?.unpaired.map(u => u.path).sort()).toEqual([...projects].sort())
+        const rule = { pc: migo, server: `${HOME}/migo` }
+        expect(before?.suggested).toEqual([{ rule, projects: 3 }])
+        // the picker on the server: its home listed and a folder made, both as the board's user
+        const listed = await sync.dirs(pw)
+        expect(listed.status, JSON.stringify(listed.body)).toBe(200)
+        expect((listed.body as { path: string; entries: string[] }).path).toBe(HOME)
+        expect((listed.body as { entries: string[] }).entries).toContain('.claude')
+        expect((await sync.mkdir({ path: HOME, name: 'migo', ...pw })).status).toBe(200)
+        expect((await s.sh(`stat -c %U ${HOME}/migo`)).stdout.trim()).toBe('agent')
+        // the rule used: every project placed by it, its folder there not yet
+        expect(sync.rules({ rules: [rule], ...pw }).status).toBe(200)
+        const ruled = sync.view()?.preview
+        expect(ruled?.pairs.filter(x => x.how === 'rule').map(x => [x.from, x.to])).toEqual(
+          projects.map(p => [p, onServer(p)]),
+        )
+        await until(
+          'the folders there asked',
+          async () => projects.every(p => onServer(p) in (sync.view()?.preview?.there ?? {})),
+          2 * MIN,
+          250,
+        )
+        expect(projects.map(p => sync.view()?.preview?.there[onServer(p)])).toEqual([false, false, false])
+        const id = sync.view()?.preview?.id
+        const allow = { env: true, hooks: true, statusLine: true, mcp: true, helpers: true, history: true }
+        expect((await sync.apply({ id, conflicts: {}, deletions: [], allow, ...pw })).status).toBe(200)
+        await until(
+          'the rule’s sync ends',
+          async () => ['done', 'failed'].includes(sync.view()?.phase ?? ''),
+          20 * MIN,
+          250,
+        )
+        expect(sync.view()?.phase, sync.view()?.error ?? '').toBe('done')
+        for (const [i, p] of projects.entries()) {
+          const f = `${HOME}/.claude/projects/${projectFolder(onServer(p))}`
+          expect(JSON.parse((await s.sh(`cat '${f}/r${i}.jsonl'`)).stdout).cwd).toBe(onServer(p))
+          expect((await s.sh(`cat '${f}/memory/MEMORY.md'`)).stdout).toBe(`- memory ${i}\n`)
+        }
+        expect(projectFolder(onServer(projects[1] as string))).toBe('-home-agent-migo-dev-x-y')
+        row.push('rule: suggested, used, 3 projects under /home/agent/migo')
+
+        // ---- and back: a session on the server under the rule's folder, on this PC under its own
+        const dev = projects[0] as string
+        await asAgent(
+          s,
+          `printf '%s\\n' '{"type":"user","cwd":"${onServer(dev)}","message":"on the server"}' > ${HOME}/.claude/projects/${projectFolder(onServer(dev))}/srv.jsonl`,
+        )
+        const ruledDown = await synced(sync, 'down')
+        expect(ruledDown.preview?.pairs.find(x => x.from === onServer(dev))).toMatchObject({ to: dev, how: 'rule' })
+        expect(JSON.parse(read(join(home, '.claude', 'projects', projectFolder(dev), 'srv.jsonl'))).cwd).toBe(dev)
+        row.push('back: the server’s session under the PC’s own path')
       } finally {
         if (savedState === undefined) delete process.env.LOCALAPPDATA
         else process.env.LOCALAPPDATA = savedState

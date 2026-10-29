@@ -212,6 +212,22 @@ Not built in this step. Written down so the server mode leaves room for it.
   target's own, or 0600 (0700 with the source's execute bit). Remotes cross as keys only. What a
   run cut short wrote is recorded. sudo runs with `-k`, so a cached ticket never lets the
   password line reach the program.
+- **Path rules (after the owner's first preview: 32 projects, none paired).** "This PC folder is
+  that server folder" (`core/profile-sync/rules.ts`), kept in the local board's config.json per
+  server (`tunnel.syncPaths[<host>]`, not secret). A project under a rule's folder lands at the
+  same place below the other one, both ways (`\` ↔ `/`, Windows' case ignored), the longest folder
+  first; the owner's own path (or "leave out") wins over a clone by git remote, which wins over
+  the same path, which wins over a rule; a worktree and a folder not there (on the server: one the
+  sync placed whose project is not put there yet) go by a rule only. A rule
+  is suggested from the projects without a place: their deepest common folder (never a drive or
+  `/` alone, nor a folder above the home) to its name in the target's home (`C:\migo` →
+  `/home/agent/migo`; one in the home to the same place in the other home); with none, one per top
+  folder. The preview groups the projects by how they land and marks a target folder not there
+  yet (asked of the server by the program's `exists`, looked at here for a sync to this PC). The
+  folders are picked, not typed: the server's listed and made by the program's `dirs` and `mkdir`
+  as the board's user (sync-dirs, sync-mkdir on /api/access, local only), this PC's by
+  `/api/fs/dirs`. No git clone is made. Moves for `cwd`, history.jsonl and .claude.json come from
+  the pairs only, as before: a left-out project's lines stay out.
 
 ## Later: each agent's own browser, watched and taken over from the board (decided with the owner)
 
