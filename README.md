@@ -1793,7 +1793,8 @@ Time tracking of the board's own (#233), off unless `time` is in config.json: en
 end of the day, without the rate limit of an outside service. The entries live in the board's
 database ([Backup](#backup)), and nothing is written before a backup of it has gone through once,
 to a target off this computer as it is set now (a snapshot, or a Test that went the whole way round;
-a folder or server changed since has to take one first): what a bill is
+a folder or server changed since has to take one first). With no database yet there is nothing to
+back up, so the first time it is a Test that lets entries in.: what a bill is
 made from is never on this computer alone. A target that is down for a while does not stop it.
 
 **An entry** is a client's and a project's, from a start to a stop, with a description and tags

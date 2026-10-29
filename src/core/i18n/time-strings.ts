@@ -43,7 +43,7 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.cli.importClash': 'made on the board by {who} at that start, not imported: {id} ({fields})',
     'time.err.config': 'Time is not written while config.json’s "time" does not check out: {problems}',
     'time.err.notBackedUp':
-      'Time is not written before a backup of the board’s database has gone through once: run Test or Back up now in Settings → Backup…',
+      'Time is not written before a backup has gone through once to the target as it is set now: run Test in Settings → Backup… (or board backup test folder|server). Back up now counts only once the database exists.',
     'time.err.whenRange': '{value} is more than a day ahead or a year back: is that the time you meant?',
     'time.err.dateFormat':
       'The CSV’s dates read either way (day/month or month/day): say which with --date-format dmy or --date-format mdy.',
@@ -86,9 +86,9 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.cli.dayGroup': 'the day',
     'time.cli.anyProject': 'any project',
     'time.cli.importDry':
-      'dry run: {n} new, {already} already there, {changed} changed in Toggl, {running} running skipped, {bad} unreadable; nothing written',
+      'dry run: {n} new, {already} already there, {changed} differ, {running} running skipped, {bad} unreadable; nothing written',
     'time.cli.imported':
-      'ok · {added} imported, {already} already there, {changed} changed in Toggl, {updated} updated, {running} running skipped, {bad} unreadable',
+      'ok · {added} imported, {already} already there, {changed} differ, {updated} updated, {running} running skipped, {bad} unreadable',
 
     'time.open': 'Time',
     'time.openHint': 'Time entries by client and day, as they will be billed',
@@ -147,7 +147,7 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.cli.importClash': 'на доске в это время уже есть запись ({who}), не импортирована: {id} ({fields})',
     'time.err.config': 'Время не пишется, пока "time" в config.json не в порядке: {problems}',
     'time.err.notBackedUp':
-      'Время не пишется, пока бэкап базы доски ни разу не прошёл: запустите Проверить или Бэкап сейчас в Настройки → Бэкап…',
+      'Время не пишется, пока бэкап хотя бы раз не прошёл в цель, как она задана сейчас: нажмите Проверить в Настройки → Бэкап… (или board backup test folder|server). «Бэкап сейчас» засчитывается, только когда база уже есть.',
     'time.err.whenRange': '{value} больше чем на день вперёд или на год назад: это то время?',
     'time.err.dateFormat':
       'Даты в CSV читаются двояко (день/месяц или месяц/день): укажите --date-format dmy или --date-format mdy.',
@@ -189,9 +189,9 @@ export const TIME_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'time.cli.dayGroup': 'день',
     'time.cli.anyProject': 'любой проект',
     'time.cli.importDry':
-      'пробный прогон: новых {n}, уже есть {already}, изменено в Toggl {changed}, пропущено запущенных {running}, нечитаемых {bad}; ничего не записано',
+      'пробный прогон: новых {n}, уже есть {already}, отличаются {changed}, пропущено запущенных {running}, нечитаемых {bad}; ничего не записано',
     'time.cli.imported':
-      'ok · импортировано {added}, уже было {already}, изменено в Toggl {changed}, обновлено {updated}, пропущено запущенных {running}, нечитаемых {bad}',
+      'ok · импортировано {added}, уже было {already}, отличаются {changed}, обновлено {updated}, пропущено запущенных {running}, нечитаемых {bad}',
 
     'time.open': 'Время',
     'time.openHint': 'Записи времени по клиентам и дням, как они пойдут в счёт',
