@@ -5,6 +5,7 @@
 // do, is models/board-menus.ts; one menu is open at a time (components/menu/menu-engine.ts).
 import { useEffect, useRef, useState } from 'react'
 import type { ColumnId, Item, Translator } from '../../../src/core/types.ts'
+import { api, errorText } from '../api/client.ts'
 import { filesApi } from '../api/files.ts'
 import { focusLaunch } from '../api/launch.ts'
 import { isFocusable, MenuEngine, type MenuSource } from '../components/menu/menu-engine.ts'
@@ -30,6 +31,7 @@ import {
 } from '../models/board-menus.ts'
 import { catOf, colOf } from '../models/board-view.ts'
 import { categoryChoices, type MenuCategory, type Point, statusChoices } from '../models/menu-model.ts'
+import { type MoveDeps, moveCard, moveLane } from '../models/profile-move.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import type { BoardAction } from '../state/board-ui.ts'
 import { useStore } from '../state/store.ts'
@@ -191,6 +193,8 @@ export interface ActionDeps {
   fork?: ((key: string, from: MenuOrigin | null) => void) | undefined
   /** The archive (hooks/useArchive.ts): a session off the board, a tidy-up, its panel. */
   archive?: ArchiveMenus | undefined
+  /** The title of the Claude profile `id`, for a move's toast (#256). */
+  profileTitle?: ((id: string) => string) | undefined
 }
 
 /** What the menus do with the archive (hooks/useArchive.ts). */
@@ -210,6 +214,22 @@ const elementFrom = (from: MenuOrigin): Element | null => (from instanceof Eleme
 export function boardActions(deps: ActionDeps): BoardMenuActions {
   const { dispatch, toast } = deps
   const actions = () => deps.actions
+  // A move to another profile goes through herdr (it puts the session to sleep and wakes it).
+  const moves = (): MoveDeps | null => {
+    if (deps.canMutate()) {
+      return {
+        t: deps.t,
+        post: (path, body) => api.post(path, body),
+        errorText: err => errorText(err, deps.t()),
+        toast,
+        busy: (key, label) => dispatch({ type: 'busy', key, label }),
+        title: id => deps.profileTitle?.(id) ?? id,
+        name: key => deps.item(key)?.name ?? key,
+      }
+    }
+    toast(deps.t()(deps.canEdit() ? 'mobile.readOnly' : 'live.off'), true)
+    return null
+  }
   async function copy(text: string | null | undefined, done: string): Promise<void> {
     try {
       await navigator.clipboard.writeText(String(text ?? ''))
@@ -250,6 +270,14 @@ export function boardActions(deps: ActionDeps): BoardMenuActions {
     mokupilot: key => actions().callMokuPilot(key),
     fork: (key, from) => deps.fork?.(key, from),
     archive: key => deps.archive?.archiveSession(key),
+    profile: (key, id) => {
+      const m = moves()
+      return m && moveCard(m, key, id)
+    },
+    laneProfile: (lane, id, keys, usual) => {
+      const m = moves()
+      return m && moveLane(m, lane, keys, id, usual)
+    },
     tidy: (days, lane) => deps.archive?.archiveMany((deps.archive?.tidyItems(days, lane) ?? []).map(i => i.key)),
     archiveOpen: () => deps.archive?.openPanel(),
     newSession: (ctx, from) => deps.newSession(ctx, from),
@@ -457,9 +485,12 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
             mokupilot: data?.mokupilot,
             fork: data?.fork,
             schedules: data?.schedules,
+            profiles: data?.profiles,
           },
         }
       },
+      items: () => page().board.data?.items ?? [],
+      update: items => menu.update(items),
       get launch() {
         return page().options.launch
       },
@@ -487,6 +518,7 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
         get archive() {
           return page().options.archive
         },
+        profileTitle: id => page().board.data?.profiles?.find(p => p.id === id)?.title ?? id,
       }),
     }
     menuDeps.current = deps

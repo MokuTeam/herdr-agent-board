@@ -44,15 +44,17 @@ export function moveProfile(list: readonly Profile[], id: string): { profile: Pr
 
 /**
  * The folder the session's conversation is in now, or why a move cannot start from it: its
- * profile (itemProfile), else the folder it reported that no profile has; refused when neither is
- * known, or when it is the target's.
+ * profile (itemProfile), else the folder it reported that no profile has, else the folder wake's
+ * entry for it names (`wakeDir`: a card from before the board kept profiles, #256); refused when
+ * none is known, or when it is the target's.
  */
 export function moveSource(
   item: Pick<Item, 'profile' | 'profileFolder'>,
   list: readonly Profile[],
   to: Profile,
+  wakeDir = '',
 ): { dir: string } | { error: string } {
-  const dir = itemProfile(item, list)?.dir ?? item.profileFolder
+  const dir = itemProfile(item, list)?.dir ?? item.profileFolder ?? (wakeDir || undefined)
   if (!dir) return { error: 'its profile is not known' }
   if (sameDir(dir, to.dir)) return { error: `it is in the profile "${to.id}" already` }
   return { dir }

@@ -2,9 +2,21 @@
 // the source profile's trust in its project folder with it (core/move.ts). Copied, never moved:
 // the originals stay where they are. What Claude keeps of a session: the transcript
 // `projects/<project folder>/<id>.jsonl`, the session's own folder beside it (subagents, tool
-// results) and `file-history/<id>/`.
-import { createHash } from 'node:crypto'
-import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from 'node:fs'
+// results) and `file-history/<id>/`. A session moved back (#256) finds its older copy from the
+// move before in the target: one the source's transcript goes on from is brought up to date.
+import {
+  closeSync,
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  statSync,
+  unlinkSync,
+} from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { trustedKey, withTrust } from '../core/move.ts'
 import { projectFolderName } from '../core/resume.ts'
@@ -38,15 +50,40 @@ export interface CopiedSession {
   history: boolean
   /** The target had the same transcript already: a move cut off halfway, finished now. */
   again: boolean
+  /** The target had an older copy of it, which this one goes on from (a move there before): replaced. */
+  back: boolean
 }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
-/** Whether two files hold the same bytes: their sizes, then their SHA-256. */
-function sameFile(a: string, b: string): boolean {
-  if (statSync(a).size !== statSync(b).size) return false
-  const hash = (p: string): string => createHash('sha256').update(readFileSync(p)).digest('hex')
-  return hash(a) === hash(b)
+const CHUNK = 1 << 20
+
+/**
+ * Whether the file `older` holds the first bytes of `newer`, all of them: no longer than it, and
+ * the same bytes as far as it goes. Read a piece at a time, never a whole transcript at once.
+ */
+export function isPrefixFile(older: string, newer: string): boolean {
+  const size = statSync(older).size
+  if (size > statSync(newer).size) return false
+  const a = openSync(older, 'r')
+  try {
+    const b = openSync(newer, 'r')
+    try {
+      const x = Buffer.allocUnsafe(Math.min(CHUNK, size))
+      const y = Buffer.allocUnsafe(x.length)
+      for (let at = 0; at < size; ) {
+        const n = Math.min(x.length, size - at)
+        const got = readSync(a, x, 0, n, at)
+        if (got !== n || readSync(b, y, 0, n, at) !== n || !x.subarray(0, n).equals(y.subarray(0, n))) return false
+        at += n
+      }
+      return true
+    } finally {
+      closeSync(b)
+    }
+  } finally {
+    closeSync(a)
+  }
 }
 
 /**
@@ -55,7 +92,9 @@ function sameFile(a: string, b: string): boolean {
  * another one under its id. The side folders go first and the transcript last, through a temp file
  * renamed into place, so a copy cut off halfway leaves no transcript, or a whole one: a second try
  * copies the side folders over what it left, and takes a transcript the same as the source's as
- * copied (the move then goes on with the card), so a move cut off halfway can be run again.
+ * copied (the move then goes on with the card), so a move cut off halfway can be run again. A
+ * transcript in `to` that the source's begins with, byte for byte, is this conversation as a move
+ * there before left it (#256): replaced the same way, its side folders copied over the old ones.
  */
 export function copySession(
   from: string,
@@ -66,9 +105,12 @@ export function copySession(
   const source = findTranscript(from, session, cwd)
   if (!source) return { ok: false, error: `no conversation ${session} in ${from}` }
   const there = findTranscript(to, session, cwd)
+  // What the target has under its id: nothing, this transcript, or an older copy of it.
+  let same = false
   try {
-    if (there && !sameFile(source, there))
+    if (there && !isPrefixFile(there, source))
       return { ok: false, error: `${to} has another conversation under ${session} already (${there})` }
+    same = !!there && statSync(there).size === statSync(source).size
   } catch (err) {
     return { ok: false, error: `comparing with ${there} failed: ${messageOf(err)}` }
   }
@@ -82,7 +124,7 @@ export function copySession(
   try {
     const folder = side(join(dirname(source), session), join(dirname(target), session))
     const history = side(join(from, 'file-history', session), join(to, 'file-history', session))
-    if (!there) {
+    if (!same) {
       mkdirSync(dirname(target), { recursive: true })
       const tmp = `${target}.${process.pid}.tmp`
       try {
@@ -95,7 +137,7 @@ export function copySession(
         throw err
       }
     }
-    return { ok: true, copied: { transcript: target, folder, history, again: !!there } }
+    return { ok: true, copied: { transcript: target, folder, history, again: same, back: !!there && !same } }
   } catch (err) {
     return { ok: false, error: `copying into ${to} failed: ${messageOf(err)}` }
   }

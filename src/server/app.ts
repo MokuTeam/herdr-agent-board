@@ -67,6 +67,7 @@ import { boardRoutes } from './routes/board.ts'
 import { fsRoutes } from './routes/fs.ts'
 import { launchRoutes } from './routes/launch.ts'
 import { mokupilotRoutes } from './routes/mokupilot.ts'
+import { moveRoute } from './routes/move.ts'
 import { pageLogRoute } from './routes/page-log.ts'
 import { presenceRoutes } from './routes/presence.ts'
 import { remoteRoutes } from './routes/remote.ts'
@@ -478,6 +479,8 @@ export async function startServer({
     scheduleRoute(refresh),
     // Several sessions put to sleep at once, for agents (services/sleep.ts).
     sleepRoute({ deps, items: board.items, refresh }),
+    // Sessions to another Claude profile, from the card and lane menus (services/move.ts, #256).
+    moveRoute({ deps, items: board.items, refresh }),
     // Settings → Sleep and wake… (services/wake/control.ts), for this computer only.
     ...wakeRoutes(wake),
     // The archive: its list, and archiving, bringing back or removing sessions (services/archive.ts).
