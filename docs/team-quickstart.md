@@ -40,15 +40,19 @@ The hub keeps message text only while it waits for the recipient (see "What it k
 
 ## Each member (Linux, macOS, Windows)
 
-1. Update the board to the branch or main that has the Team feature, and restart it:
+1. Update the board to the branch or main that has the Team feature:
 
    ```sh
    cd <your clone of herdr-agent-board>   # or the folder herdr linked
    git pull && bun install
    herdr plugin action invoke agent-board.install
-   board restart                            # or close and open the board again
    ```
 
+   The open board restarts by itself when its code changes; if it does not, close it and open it
+   again (`herdr plugin action invoke agent-board.open`). `board restart` is not for this: it
+   restarts a Claude session. A board installed with `herdr plugin install` updates with
+   `herdr plugin update`; to try a branch, clone the repository, check the branch out, then
+   `herdr plugin unlink agent-board` and `herdr plugin link <the clone>` before the commands above.
    On Windows use PowerShell with the same commands. The `board` command is the one the install
    put into `~/.local/bin` (a `.cmd` on Windows).
 2. Join, with the code the admin sent you and the hub's tailnet address (you must be in the same
@@ -137,15 +141,19 @@ you). See [What the MVP does not do](../README.md#team) in the README.
 
 ## Каждый участник (Linux, macOS, Windows)
 
-1. Обновите доску до ветки или main, где есть Team, и перезапустите её:
+1. Обновите доску до ветки или main, где есть Team:
 
    ```sh
    cd <ваш клон herdr-agent-board>   # или папка, которую подключил herdr
    git pull && bun install
    herdr plugin action invoke agent-board.install
-   board restart                      # или закройте и откройте доску заново
    ```
 
+   Открытая доска перезапускается сама, когда меняется её код; если нет — закройте её и откройте
+   снова (`herdr plugin action invoke agent-board.open`). `board restart` для этого не подходит: он
+   перезапускает сессию Claude. Доска, поставленная через `herdr plugin install`, обновляется
+   `herdr plugin update`; чтобы попробовать ветку, склонируйте репозиторий, перейдите на ветку,
+   затем `herdr plugin unlink agent-board` и `herdr plugin link <клон>` перед командами выше.
    В Windows те же команды в PowerShell. Команда `board` — та, что установка положила в
    `~/.local/bin` (в Windows это `.cmd`).
 2. Вступите с кодом от админа и tailnet-адресом хаба (вы должны быть в том же tailnet; адрес можно
