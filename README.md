@@ -1445,9 +1445,12 @@ Wake asks herdr nothing about a pane the rule still keeps.
 shell in its folder, a `💤` pane too, without the wake line typed at its prompt. For every pane it
 keeps, wake notes herdr's terminal (`terminal_id`) and the shell's process. A pane with another
 terminal is judged once, when you are not looking at its tab, by what its screen shows. An empty
-prompt will do only in a shell that has just started: another process than the one noted, and one
-prompt on its screen. A shell you ran anything in shows more (your commands, or a remote shell's or
-a REPL's prompt), and stays. A session you `/exit`ed goes too then. herdr's live handoff (`herdr
+prompt will do only in a shell that has just started: another process than the one noted, one
+prompt on its screen, and nothing running in it. A shell you ran something in shows more prompts
+(your commands, or a remote shell's or a REPL's prompt) and stays, unless you cleared its screen.
+A program still running in it keeps it whatever the screen shows: herdr lists it on macOS and
+Linux, and on Windows, where herdr does not, wake reads the process table. So a shell you used,
+cleared and left with nothing running is the one that goes then. A session you `/exit`ed goes too. herdr's live handoff (`herdr
 update --handoff`, macOS and Linux) also gives a pane a new terminal, but keeps its shell: such a
 pane is judged as in its own shell (its wake line at its prompt, or it stays). One the rule keeps
 (a workspace's first tab) gets its wake line typed again, as a sleep leaves it, unless you

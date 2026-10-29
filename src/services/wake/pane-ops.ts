@@ -265,18 +265,20 @@ export type LookedAt = 'freed' | 'line' | 'typed' | 'kept' | 'later' | 'focused'
  *
  * In a pane herdr gave a new terminal (`restored`) an empty prompt will do too, but only in a shell
  * that has just started: another shell process than the one noted in that pane (`shellPid`; herdr's
- * live handoff gives a pane a new terminal and keeps its shell), and one prompt row on its screen
- * (anything run there, a remote shell's or a REPL's prompt, shows more, even where herdr does not
- * list the program, as on Windows). A pane that stays then gets its wake line typed again (`line`,
- * none for a session the user exited) as a sleep leaves it ('typed'), but never while the user
- * looks at its tab ('focused', on a snapshot taken right before). The screen is read first: a
- * restored shell that shows no prompt yet is still starting ('later').
+ * live handoff gives a pane a new terminal and keeps its shell), one prompt row on its screen
+ * (anything run there shows more, its commands, a remote shell's or a REPL's prompt, unless the
+ * screen was cleared since), and, where herdr does not list a program the shell started (Windows),
+ * nothing started under it in the process table (`alone`: null when that cannot be read, 'later').
+ * A pane that stays then gets its wake line typed again (`line`, none for a session the user
+ * exited) as a sleep leaves it ('typed'), but never while the user looks at its tab ('focused', on
+ * a snapshot taken right before the typing). The screen is read first: a restored shell that shows
+ * no prompt yet is still starting ('later').
  */
 export async function lookAgain(
   io: WakeHerdr,
   target: { pane: string; session: string; line: string | null; shellPid?: number },
   marks: FreeMarks,
-  o: FreeOptions & { restored: boolean },
+  o: FreeOptions & { restored: boolean; alone?: (shellPid: number) => boolean | null },
 ): Promise<LookedAt> {
   const { pane, session, line } = target
   const screen = await io.screen(pane)
@@ -285,13 +287,16 @@ export async function lookAgain(
   if (shows === 'other') return 'kept'
   const prompt = await atPrompt(io, pane)
   if (!prompt) return 'kept'
-  const fresh = o.restored && prompt.pid !== target.shellPid && promptRows(screen) === 1
-  if (shows === 'empty' && !fresh) return 'kept'
+  if (shows === 'empty') {
+    if (!o.restored || prompt.pid === target.shellPid || promptRows(screen) !== 1) return 'kept'
+    const alone = o.alone ? o.alone(prompt.pid) : true
+    if (alone === null) return 'later'
+    if (!alone) return 'kept'
+  }
   if (await closeFreed(io, pane, marks, o)) return 'freed'
   if (shows === 'line') return 'line'
-  if (line === null) return 'kept'
+  if (line === null || !(await atPrompt(io, pane))) return 'kept'
   if (tabFocused(await io.snapshot(), pane)) return 'focused'
-  if (!(await atPrompt(io, pane))) return 'kept'
   await io.sendText(pane, line)
   return 'typed'
 }

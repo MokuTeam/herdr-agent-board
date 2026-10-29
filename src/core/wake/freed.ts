@@ -177,10 +177,12 @@ export function promptRows(screen: string): number {
 
 /** Whether the user looks at the pane's tab: herdr's focused pane is in it. */
 export function tabFocused(snap: FreedSnapshot, pane: string): boolean {
-  const tab = snap.panes.find(x => x.pane_id === pane)?.tab_id
-  return (
-    tab !== undefined && snap.panes.some(x => x.tab_id === tab && (x.focused || x.pane_id === snap.focused_pane_id))
-  )
+  const own = snap.panes.find(x => x.pane_id === pane)
+  const focused = (x: FreedPane): boolean => !!x.focused || x.pane_id === snap.focused_pane_id
+  // The pane itself, whether herdr says which tab it is in or not.
+  if (pane === snap.focused_pane_id || (own && focused(own))) return true
+  const tab = own?.tab_id
+  return tab !== undefined && snap.panes.some(x => x.tab_id === tab && focused(x))
 }
 
 const record = (v: unknown): Record<string, unknown> | null =>

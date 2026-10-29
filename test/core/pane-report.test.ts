@@ -1,7 +1,7 @@
 // #243: `board doctor`'s line on what herdr's panes hold, and the panes labelled asleep that wake
 // has no record of.
 import { expect, test } from 'bun:test'
-import { asMemoryTable, bareShell, treeBytes } from '../../src/adapters/pane-facts.ts'
+import { asMemoryTable, bareShell, nothingUnder, treeBytes } from '../../src/adapters/pane-facts.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { type PaneFacts, paneChecks, wakeKeepsSleepers } from '../../src/core/pane-report.ts'
 
@@ -92,6 +92,8 @@ test('a bare shell: a shell with nothing under it but Windows’ console host; a
     { pid: 42, ppid: 41, bytes: 100 * MB, name: 'node' },
   ]
   expect([10, 20, 30, 40, 99].map(pid => bareShell(table, pid))).toEqual([true, false, false, false, null])
+  // What wake asks of a restored shell on Windows: nothing started under it, whatever the program.
+  expect([10, 20, 30, 40, 99].map(pid => nothingUnder(table, pid))).toEqual([true, false, true, false, null])
   expect([10, 20, 30, 40, 99].map(pid => treeBytes(table, pid))).toEqual([82 * MB, 105 * MB, 40 * MB, 405 * MB, null])
 })
 

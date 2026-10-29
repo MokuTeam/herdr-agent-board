@@ -30,8 +30,11 @@ const programName = (name: string): string =>
     .replace(/\.exe$/i, '')
     .toLowerCase()
 
-/** The process table with each process's memory and name; null when it cannot be read. */
-async function memoryTable(): Promise<MemRow[] | null> {
+/**
+ * The process table with each process's memory and name; null when it cannot be read. Also what
+ * wake reads on Windows to see whether a restored sleeper's shell has started anything (#243).
+ */
+export async function memoryTable(): Promise<MemRow[] | null> {
   const win = process.platform === 'win32'
   const r = win
     ? await run('powershell.exe', [
@@ -63,7 +66,13 @@ export function asMemoryTable(text: string, unit: number): MemRow[] | null {
 export function bareShell(table: readonly MemRow[], root: number): boolean | null {
   const own = table.find(r => r.pid === root)
   if (!own) return null
-  return SHELLS.has(own.name) && !table.some(r => r.ppid === root && r.pid !== root && !CONSOLE_HOSTS.has(r.name))
+  return SHELLS.has(own.name) && nothingUnder(table, root) === true
+}
+
+/** Whether nothing was started under `pid` (Windows' console host aside); null when the table has no `pid`. */
+export function nothingUnder(table: readonly MemRow[], pid: number): boolean | null {
+  if (!table.some(r => r.pid === pid)) return null
+  return !table.some(r => r.ppid === pid && r.pid !== pid && !CONSOLE_HOSTS.has(r.name))
 }
 
 /** The memory of `root` and every process under it, by the table; null when the table has no `root`. */

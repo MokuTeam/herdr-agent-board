@@ -213,4 +213,14 @@ test('#243 tabFocused: herdr’s focused pane, or a pane marked focused, anywher
   expect(tabFocused(snap({}, 'w1:p1'), 'w1:p1')).toBe(true)
   expect(tabFocused(snap({ focused: true }), 'w1:p2')).toBe(true)
   expect(tabFocused(snap({}, 'w1:s1'), 'w9:p9')).toBe(false)
+  // A pane herdr gives no tab for, itself focused (review round 2).
+  const loose = (more: Record<string, unknown>, id?: string): FreedSnapshot => ({
+    workspaces: [],
+    tabs: [],
+    panes: [{ pane_id: 'p', ...more }],
+    ...(id && { focused_pane_id: id }),
+  })
+  expect(tabFocused(loose({ focused: true }), 'p')).toBe(true)
+  expect(tabFocused(loose({}, 'p'), 'p')).toBe(true)
+  expect(tabFocused(loose({}), 'p')).toBe(false)
 })

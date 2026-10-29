@@ -5,6 +5,7 @@
 import { expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type { MemRow } from '../../src/adapters/pane-facts.ts'
 import { createProfileHomes } from '../../src/adapters/profile-homes.ts'
 import { findProfileDirs } from '../../src/adapters/profiles.ts'
 import { mergeProfiles, profileSet } from '../../src/core/profiles.ts'
@@ -108,6 +109,7 @@ function world(o: { panes?: FakePane[]; sessions?: (work: string) => WakeSession
   const clock = { at: Date.now() }
   const log: string[] = []
   const archivedIds = new Set<string>()
+  const table: MemRow[] = [{ pid: 4000, ppid: 1, bytes: 75 * 2 ** 20, name: 'pwsh' }]
   const deps: WakeEngineDeps = {
     herdr: io,
     homes: createProfileHomes(),
@@ -128,8 +130,10 @@ function world(o: { panes?: FakePane[]; sessions?: (work: string) => WakeSession
     },
     archived: ids => new Set(ids.filter(id => archivedIds.has(id))),
     tidyFile,
+    // The process table as wake reads it on Windows (#243): the fake's shells (pid 4000), nothing under them.
+    processTable: async () => table,
   }
-  return { dir, home, work, file, io, deps, opened, follows, log, clock, archivedIds, tidyFile, settings }
+  return { dir, home, work, file, io, deps, opened, follows, log, clock, archivedIds, tidyFile, settings, table }
 }
 
 /** Claude leaves the pane on /exit, its registry entry with it. */
@@ -723,6 +727,13 @@ test('#243: restored but kept by its place: its wake line typed again, the new t
   await engine.remember()
   expect(closes(w.io)).toEqual([])
   expect(typed(w.io)).toEqual([['pane', 'send-text', 'w1:p1', `board resume ${SID} --profile work`]])
+  // Who looks at its tab is asked last, right before the typing (review round 2).
+  const at = w.io.calls.findIndex(c => c[1] === 'send-text')
+  expect(w.io.calls.slice(at - 2, at + 1).map(c => c.slice(0, 2).join(' '))).toEqual([
+    'pane process-info',
+    'api snapshot',
+    'pane send-text',
+  ])
   expect(readSessions(w.file)['w1:p1']?.terminal).toBe('term-b')
   w.io.screens['w1:p1'] = `PS ${PROJECT}> board resume ${SID} --profile work`
   const once = asked(w.io, 'w1:p1').length
@@ -994,4 +1005,124 @@ test('#243 review: the Telegram router’s pane given back a moment before it wa
     }),
   })
   expect(await createWakeEngine(later.deps).wakePane('w1:p2')).toMatchObject({ ok: false })
+})
+
+// ------------------------------------------------------------------ #243, review round 2: what runs under a restored shell
+
+/** A sleeper in Billing's tab restored by herdr: another terminal, and another shell than the noted one (3999). */
+function restoredShell(screen: string) {
+  const w = restoredBilling(screen, { shellPid: 3999 })
+  return w
+}
+const under = (pid: number, name: string): MemRow => ({ pid, ppid: 4000, bytes: 10 * 2 ** 20, name })
+
+test('#243 review 2: a cleared restored shell with something still running under it stays (ssh, a REPL), as herdr does not list it on Windows', async () => {
+  for (const [screen, program] of [
+    ['root@prod:~# ', 'ssh'],
+    ['> ', 'node'],
+    [`PS ${PROJECT}> `, 'bun'],
+  ] as const) {
+    const w = restoredShell(screen)
+    w.table.push(under(4001, program))
+    await createWakeEngine(w.deps).remember()
+    expect([program, closes(w.io), typed(w.io)]).toEqual([program, [], []])
+    // Judged: kept in that shell for good, not looked at again.
+    expect(readSessions(w.file)['w1:p2']).toMatchObject({ terminal: 'term-b', shellPid: 4000 })
+  }
+})
+
+test('#243 review 2: time spent looking at its tab is no use of the shell: one the user ssh-ed from, cleared and left stays', async () => {
+  const w = restoredShell(`PS ${PROJECT}> `)
+  const side = w.io.panes.find(p => p.pane_id === 'w1:s2') as FakePane
+  side.focused = true
+  const engine = createWakeEngine(w.deps)
+  for (let i = 0; i < 3; i++) await engine.remember()
+  w.io.screens['w1:p2'] = 'root@prod:~# '
+  w.table.push(under(4001, 'ssh'))
+  side.focused = false
+  await engine.remember()
+  expect(closes(w.io)).toEqual([])
+})
+
+test('#243 review 2: Windows’ console host under a shell is nothing of the user’s; a table that cannot be read is asked again', async () => {
+  const w = restoredShell(`PS ${PROJECT}> `)
+  w.table.push(under(4002, 'conhost'))
+  let readable = false
+  w.deps.processTable = async () => (readable ? w.table : null)
+  const engine = createWakeEngine(w.deps)
+  await engine.remember()
+  expect(closes(w.io)).toEqual([])
+  expect(readSessions(w.file)['w1:p2']?.terminal).toBe('term-a')
+  readable = true
+  await engine.remember()
+  expect(closes(w.io)).toEqual([['tab', 'close', 't2']])
+})
+
+test('#243 review 2: the table is read only when a restored pane is due, once per look; not at all without one (macOS, Linux)', async () => {
+  let reads = 0
+  const w = afterTidy({
+    panes: [
+      withTerminal(shellPane('w1:p2', 't2', '💤 Billing'), 'term-b'),
+      withTerminal(shellPane('w1:p4', 't4', '💤 Ledger'), 'term-d'),
+    ],
+    sessions: work => ({
+      'w1:p2': asleep(work, SID, 'Billing', { terminal: 'term-a', shellPid: 3999 }),
+      'w1:p4': asleep(work, SID2, 'Ledger', { terminal: 'term-c', shellPid: 3999 }),
+    }),
+  })
+  w.io.tabs.push({ tab_id: 't4', workspace_id: 'w1', label: 'Ledger', number: 4 })
+  for (const pane of ['w1:p2', 'w1:p4']) w.io.screens[pane] = `PS ${PROJECT}> `
+  w.deps.processTable = async () => {
+    reads++
+    return w.table
+  }
+  const engine = createWakeEngine(w.deps)
+  await engine.remember()
+  expect(closes(w.io)).toEqual([
+    ['tab', 'close', 't2'],
+    ['tab', 'close', 't4'],
+  ])
+  expect(reads).toBe(1)
+  await engine.remember()
+  expect(reads).toBe(1)
+
+  // No table (herdr lists what a shell started there): the screen and herdr's list decide.
+  const unix = restoredShell(`PS ${PROJECT}> `)
+  unix.deps.processTable = null
+  await createWakeEngine(unix.deps).remember()
+  expect(closes(unix.io)).toEqual([['tab', 'close', 't2']])
+})
+
+test('#243 review 2: herdr not saying which shell runs at first sight: nothing noted, logged once, asked again', async () => {
+  const w = afterTidy({
+    panes: [withTerminal(shellPane('w1:p1', 't1', '💤 Master'), 'term-a')],
+    sessions: work => ({ 'w1:p1': asleep(work, SID, 'Master') }),
+  })
+  const info = w.io.processInfo
+  w.io.processInfo = async () => {
+    throw new Error('herdr: not answering')
+  }
+  const engine = createWakeEngine(w.deps)
+  await engine.remember()
+  await engine.remember()
+  expect(readSessions(w.file)['w1:p1']).not.toHaveProperty('terminal')
+  expect(w.log.filter(l => l.includes('does not say which shell'))).toHaveLength(1)
+  w.io.processInfo = info
+  await engine.remember()
+  expect(readSessions(w.file)['w1:p1']).toMatchObject({ terminal: 'term-a', shellPid: 4000 })
+
+  // Never answering: after ten minutes the terminal is noted alone.
+  const mute = afterTidy({
+    panes: [withTerminal(shellPane('w1:p1', 't1', '💤 Master'), 'term-a')],
+    sessions: work => ({ 'w1:p1': asleep(work, SID, 'Master') }),
+  })
+  mute.io.processInfo = async () => {
+    throw new Error('herdr: not answering')
+  }
+  const quiet = createWakeEngine(mute.deps)
+  await quiet.remember()
+  mute.clock.at += 10 * 60_000
+  await quiet.remember()
+  expect(readSessions(mute.file)['w1:p1']).toMatchObject({ terminal: 'term-a' })
+  expect(readSessions(mute.file)['w1:p1']).not.toHaveProperty('shellPid')
 })

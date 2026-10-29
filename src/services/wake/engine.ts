@@ -28,6 +28,7 @@ import { archivedFiles, getArchived, isArchived } from '../../adapters/archive-s
 import { readCard } from '../../adapters/cards.ts'
 import type { LiveSession } from '../../adapters/claude-home.ts'
 import type { HerdrSnapshot } from '../../adapters/herdr.ts'
+import { type MemRow, memoryTable, nothingUnder } from '../../adapters/pane-facts.ts'
 import type { LiveHit, ProfileHomes } from '../../adapters/profile-homes.ts'
 import {
   peekPiSleepers,
@@ -127,6 +128,12 @@ export interface WakeEngineDeps {
   archived?(sessions: readonly string[]): Set<string>
   /** The marker of the sleepers in kept panes given them back once (#204); default: `wake-tidy.json` beside the session file. */
   tidyFile?: string
+  /**
+   * The process table, read where herdr does not list a program a shell started, so that a restored
+   * sleeper's shell is not taken as unused while something runs under it (#243); default: on Windows
+   * adapters/pane-facts.ts memoryTable, elsewhere none (herdr's foreground list shows it there).
+   */
+  processTable?: (() => Promise<readonly MemRow[] | null>) | null
 }
 
 export type TargetAnswer = { ok: true; pane: string; name: string; already?: true } | { ok: false; error: string }
@@ -297,6 +304,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
   const follow: Follow = deps.follow ?? followFiles
   /** Sessions asleep in a pane kept before #204 are given it back once (tidy), then this file says so. */
   const tidyFile = deps.tidyFile ?? join(dirname(deps.sessionsFile), 'wake-tidy.json')
+  const processTable = deps.processTable === undefined ? (platform === 'win32' ? memoryTable : null) : deps.processTable
   let tidied = existsSync(tidyFile)
   let tidying = false
   /** Sleepers' shells giveBack judged kept, by pane, sleep and terminal: nothing in that shell brings their wake line back. */
@@ -571,9 +579,14 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       if (!s.exited && !keptShells.has(sleep.shell) && freePlan(snap, pane, now(), { label, held })) due.push(sleep)
     }
     if (!due.length) return
-    // One after the other, as the tidy: each close changes what the next one's freePlan sees.
     await during(async () => {
-      for (const d of due) await withPane(d.pane, () => (d.note === undefined ? lookAt(d) : noteShell(d, d.note)))
+      // Where herdr does not list what a shell started (Windows): the process table, read once.
+      const read = due.some(d => d.restored !== undefined) ? processTable : null
+      const table = read ? await read().catch(() => null) : null
+      const alone = read ? (pid: number) => (table ? nothingUnder(table, pid) : null) : undefined
+      // One after the other, as the tidy: each close changes what the next one's freePlan sees.
+      for (const d of due)
+        await withPane(d.pane, () => (d.note === undefined ? lookAt(d, alone) : noteShell(d, d.note, true)))
     })
   }
 
@@ -581,8 +594,11 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
   const stillAsleep = (d: Due, cur: WakeEntry | undefined): cur is WakeEntry =>
     !!cur && !isFreed(cur) && cur.session === d.session && cur.slept_at === d.slept_at && !going.has(d.pane)
 
-  /** One sleeper of giveBack's looked at again, while its entry is still the sleep it was taken up for. */
-  async function lookAt(d: Due): Promise<void> {
+  /**
+   * One sleeper of giveBack's looked at again, while its entry is still the sleep it was taken up
+   * for. `alone`: whether its shell has started nothing, by the process table (pane-ops lookAgain).
+   */
+  async function lookAt(d: Due, alone?: (pid: number) => boolean | null): Promise<void> {
     const s = sessions[d.pane]
     if (!stillAsleep(d, s)) return
     const dir = s.profileDir ?? defaultProfileDir(homedir(), platform)
@@ -590,7 +606,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     const line = found && 'line' in found ? found.line : null
     const restored = d.restored !== undefined
     const target = { pane: d.pane, session: s.session, line, ...(s.shellPid !== undefined && { shellPid: s.shellPid }) }
-    const rules = { label: d.label, held, now: now(), log: deps.log, sleep, restored }
+    const rules = { label: d.label, held, now: now(), log: deps.log, sleep, restored, ...(alone && { alone }) }
     const r: LookedAt = await lookAgain(deps.herdr, target, freeMarks(d.pane, s.session), rules).catch(err => {
       deps.log(`${s.name}: the pane ${d.pane} it sleeps in could not be looked at: ${messageOf(err)}`)
       return 'later' as const
@@ -599,8 +615,9 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       unanswered.delete(d.shell)
       return deps.log(`${s.name}: gave back the pane ${d.pane} it slept in`)
     }
-    // The user looks at its tab: judged once they look elsewhere, however long that takes.
-    if (r === 'focused') return
+    // The user looks at its tab: judged once they look elsewhere, however long that takes, the
+    // clock for an answer started afresh then.
+    if (r === 'focused') return void unanswered.delete(d.shell)
     // No answer yet, or a close that did not happen: asked again for a while.
     if (r === 'later' || (r === 'line' && !restored)) {
       const since = unanswered.get(d.shell) ?? now()
@@ -609,7 +626,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     }
     unanswered.delete(d.shell)
     if (d.restored !== undefined) {
-      await noteShell(d, d.restored)
+      await noteShell(d, d.restored, false)
       deps.log(
         `${s.name}: kept in the pane ${d.pane} herdr gave a new terminal${r === 'typed' ? ', its wake line typed again' : ''}`,
       )
@@ -621,15 +638,26 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
 
   /**
    * The terminal the sleeper's pane is in and the process of its shell, noted while its entry is
-   * still that sleep: how a pane herdr restores is told from one it keeps (#243). A shell herdr does
-   * not say leaves no process noted.
+   * still that sleep: how a pane herdr restores is told from one it keeps (#243). The first time
+   * (`first`), a shell herdr does not say is asked about again at the next looks, for
+   * GIVE_BACK_WAIT_MS, and nothing is noted meanwhile: a terminal noted without its shell would let a
+   * handoff pass for a restore. After that, or after a judgement, the terminal is noted alone.
    */
-  async function noteShell(d: Due, terminal: string): Promise<void> {
+  async function noteShell(d: Due, terminal: string, first: boolean): Promise<void> {
     const info = await deps.herdr.processInfo(d.pane).catch(() => null)
+    const pid = info?.shellPid ?? null
+    const asked = `${d.shell} shell`
+    if (pid === null && first) {
+      const since = unanswered.get(asked)
+      if (since === undefined)
+        deps.log(`${sessions[d.pane]?.name}: herdr does not say which shell runs in ${d.pane}; asked again later`)
+      unanswered.set(asked, since ?? now())
+      if (since === undefined || now() - since < GIVE_BACK_WAIT_MS) return
+    }
+    unanswered.delete(asked)
     const cur = sessions[d.pane]
     if (!stillAsleep(d, cur)) return
     const { shellPid: _was, ...rest } = cur
-    const pid = info?.shellPid ?? null
     sessions = { ...sessions, [d.pane]: { ...rest, terminal, ...(pid !== null && { shellPid: pid }) } }
     save()
   }
