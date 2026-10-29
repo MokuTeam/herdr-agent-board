@@ -31,7 +31,10 @@ let payload: typeof Payload
 
 const TIME = {
   zone: 'America/New_York',
-  clients: { 'client-a': { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'up' }] } },
+  clients: {
+    'client-a': { projects: ['Support'], billing: [{ group: 'ref', step: 30, round: 'up' }] },
+    'client-b': { projects: ['Support'] },
+  },
 }
 const conf = timeConfig(TIME)
 // a day the route takes (within a year back), in New York's middle of the day
@@ -210,9 +213,9 @@ async function setup() {
 }
 
 const toasts: { text: string; error?: boolean | undefined; o?: ToastOptions | undefined }[] = []
-function view(seq: number) {
+function view(seq: number, client: string | null = null, today = DAY) {
   const data = payload({
-    time: { seq, date: DAY, today: {} },
+    time: { seq, date: today, today: {} },
     categories: [
       {
         id: 'client-a',
@@ -230,7 +233,7 @@ function view(seq: number) {
     <I18nProvider lang="en">
       <BoardContext.Provider value={b}>
         <PanelProvider viewport={() => ({ w: 1600, h: 1000 })}>
-          <TimePanel open={true} onClose={() => {}} client={null} onClient={() => {}} />
+          <TimePanel open={true} onClose={() => {}} client={client} onClient={() => {}} />
         </PanelProvider>
       </BoardContext.Provider>
     </I18nProvider>
@@ -386,5 +389,91 @@ test('a change saved in part (the edit in, the move refused) is not called a cha
   expect(q('.time-stale')).toBeNull()
   expect(q('.time-editor p.access-problem[role=alert]')?.textContent).toMatch(/a year back/)
   expect(q('.time-editor input[type=date]').value).toBe('2024-01-01')
+  act(() => root.unmount())
+}, 90_000)
+
+/** Two entries of client A (two cases, two lines) and one of client B. */
+async function three(s: Awaited<ReturnType<typeof setup>>) {
+  await s.entry()
+  await s.post({
+    op: 'add',
+    client: 'client-a',
+    project: 'Support',
+    description: 'Case 10002 Z: second',
+    start: `${DAY}T16:00:00Z`,
+    stop: `${DAY}T16:30:00Z`,
+  })
+  await s.post({
+    op: 'add',
+    client: 'client-b',
+    project: 'Support',
+    description: 'Case 20001 Y: other',
+    start: `${DAY}T17:00:00Z`,
+    stop: `${DAY}T17:30:00Z`,
+  })
+}
+const openOn = (description: string) => click(qa('.time-open').find(b => b.textContent?.includes(description)) ?? null)
+const TYPED = 'Case 10001 X: typed text I care about'
+
+test('a tap on another entry, or Add entry, leaves the typed text for when the first opens again', async () => {
+  const s = await setup()
+  await three(s)
+  const root = await mount(1)
+  await openOn('Case 10001 X: work')
+  await setValue(q('.time-editor textarea'), TYPED)
+  await openOn('Case 10002 Z: second')
+  expect(q('.time-editor textarea').value).toBe('Case 10002 Z: second')
+  await openOn('Case 10001 X: work')
+  expect(q('.time-editor textarea').value).toBe(TYPED)
+  // Add entry, then back: the same
+  await click(qa('.time-add button').find(b => b.textContent === 'Add entry') ?? null)
+  await openOn('Case 10001 X: work')
+  expect(q('.time-editor textarea').value).toBe(TYPED)
+  // Cancel is done with it
+  await click(qa('.time-editor button').find(b => b.textContent === 'Cancel') ?? null)
+  await openOn('Case 10001 X: work')
+  expect(q('.time-editor textarea').value).toBe('Case 10001 X: work')
+  act(() => root.unmount())
+}, 90_000)
+
+test('the day changed (the arrows, or past midnight) leaves the typed text for the entry’s next opening', async () => {
+  const s = await setup()
+  await three(s)
+  const root = await mount(1)
+  await openOn('Case 10001 X: work')
+  await setValue(q('.time-editor textarea'), TYPED)
+  await click(q('button[aria-label="Next day"]'))
+  await settle(300)
+  await click(q('button[aria-label="Previous day"]'))
+  await settle(300)
+  expect(q('.time-editor')).toBeNull()
+  await openOn('Case 10001 X: work')
+  expect(q('.time-editor textarea').value).toBe(TYPED)
+  // the board's day rolls over while the panel shows it: the panel follows, the draft stays
+  const next = new Date(Date.parse(`${DAY}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10)
+  await act(async () => root.render(view(2, null, next)))
+  await settle(300)
+  await click(q('button[aria-label="Previous day"]'))
+  await settle(300)
+  await openOn('Case 10001 X: work')
+  expect(q('.time-editor textarea').value).toBe(TYPED)
+  act(() => root.unmount())
+}, 90_000)
+
+test('another client chosen closes the editor (no hidden one left open), its typed text kept', async () => {
+  const s = await setup()
+  await three(s)
+  const root = await mount(1)
+  await openOn('Case 10001 X: work')
+  await setValue(q('.time-editor textarea'), TYPED)
+  await act(async () => root.render(view(1, 'client-b')))
+  await settle()
+  expect(q('.time-editor')).toBeNull()
+  // back to all: nothing open by itself; the entry opens on what was typed
+  await act(async () => root.render(view(1, null)))
+  await settle()
+  expect(q('.time-editor')).toBeNull()
+  await openOn('Case 10001 X: work')
+  expect(q('.time-editor textarea').value).toBe(TYPED)
   act(() => root.unmount())
 }, 90_000)

@@ -111,11 +111,24 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   // revision it says), or 'new' for one being added; what is being sent; the board's refusal
   type Entry = TimeDay['entries'][number]
   // `reload` counts Reloads: the editor starts afresh on each, and only then
-  type Open = { id: string; base: Entry; reload: number }
+  type Open = { id: string; base: Entry; reload: number; draft?: Draft }
   const [editing, setEditing] = useState<Open | 'new' | null>(null)
   const [busy, setBusy] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
+  /**
+   * What was typed in an editor that closed without Save or Cancel (another entry tapped, Add entry,
+   * the day or the client changed, midnight): back when the same entry (or a new one on the same
+   * day) opens again, against the entry as it was then (changed since: it says so).
+   */
+  const kept = useRef(new Map<string, { base: Entry | null; draft: Draft }>())
+  const forget = (id: string) => kept.current.delete(id)
+  const keep = (id: string, base: Entry | null, d: Draft, fresh: Draft) => {
+    if (JSON.stringify(d) === JSON.stringify(fresh)) forget(id)
+    else kept.current.set(id, { base, draft: d })
+  }
   const open1 = (to: Open | 'new' | null) => {
+    const was = to !== null && to !== 'new' && to.reload === 0 ? kept.current.get(to.id) : undefined
+    if (was?.base && to !== null && to !== 'new') to = { ...to, base: was.base, draft: was.draft }
     setEditing(to)
     setEditError(null)
   }
@@ -173,18 +186,22 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
       }
       // the move says the revision the edit left
       if (ch.move) now = await post({ op: 'move', id: base.id, rev: now.rev, date: ch.move })
+      forget(base.id)
       followed(now)
     })
   const add = (d: Draft) =>
     run(async () => {
       const body = addOf(d)
       if (!body) throw new Error(t('time.edit.badTime'))
-      followed(await post(body))
+      const made = await post(body)
+      forget('new')
+      followed(made)
     })
   const undoToken = useRef(0)
   const remove = (base: Entry) =>
     run(async () => {
       const gone = await post({ op: 'remove', id: base.id, rev: base.rev })
+      forget(base.id)
       // long enough to read and reach; a newer delete's Undo takes this one's place
       if (undoToken.current) dispatch({ type: 'toastHide', token: undoToken.current })
       const token = nextToastToken()
@@ -230,6 +247,9 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   // another day: whatever was open closes
   // biome-ignore lint/correctness/useExhaustiveDependencies: on a change of day only
   useEffect(() => setEditing(null), [date])
+  // another client chosen: the open entry may not be drawn, so it closes (its draft kept)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on a change of client only
+  useEffect(() => setEditing(null), [client])
   // an entry open in place that left the day (removed or moved elsewhere) says so as it closes;
   // while a change of this panel's own is under way, the entry leaving is that change
   // biome-ignore lint/correctness/useExhaustiveDependencies: when the day read or the open entry changes
@@ -237,6 +257,7 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
     if (busy || !shown || editing === null || editing === 'new') return
     if (shown.entries.some(e => e.id === editing.id)) return
     toast(t('time.edit.goneElsewhere'), true)
+    forget(editing.id)
     setEditing(null)
   }, [shown, editing, busy])
   const entries = new Map((shown?.entries ?? []).map(e => [e.id, e]))
@@ -246,21 +267,35 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
   const color = (id: string) => cats.get(id)?.color ?? 'var(--label-3)'
   const total = days.reduce((n, d) => n + d.billedSeconds, 0)
   const raw = days.reduce((n, d) => n + d.seconds, 0)
+  /** A new entry's draft: the one typed on this day and left open, else a fresh one. */
+  const newOne = (() => {
+    const first = clientsForNew[0] as string
+    const fresh = newDraft(first, projectsOf(first)?.[0] ?? '', date)
+    const was = kept.current.get('new')?.draft
+    return { fresh, kept: was && was.day === date ? was : null }
+  })()
   /** The editor of an entry as it was opened; `now` is the entry as the day reads it now. */
-  const editorFor = ({ base, reload }: Open, now: Entry) => (
+  const editorFor = ({ base, reload, draft }: Open, now: Entry) => (
     <EntryEditor
       // Reload opens it again on the entry as it is now: a new draft
       key={`${base.id}:${reload}`}
-      draft={draftOf(base)}
+      draft={draft ?? draftOf(base)}
       clientTitle={title}
       projects={projectsOf}
       busy={busy}
       error={editError}
       stale={now.rev !== base.rev}
-      onReload={() => open1({ id: base.id, base: now, reload: reload + 1 })}
+      onReload={() => {
+        forget(base.id)
+        open1({ id: base.id, base: now, reload: reload + 1 })
+      }}
       onSave={d => void save(base, d)}
       onDelete={() => void remove(base)}
-      onCancel={() => open1(null)}
+      onCancel={() => {
+        forget(base.id)
+        open1(null)
+      }}
+      onDraft={d => keep(base.id, base, d, draftOf(base))}
     />
   )
 
@@ -440,16 +475,20 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
             <div className="time-add">
               {editing === 'new' ? (
                 <EntryEditor
-                  // a new day, a new draft
+                  // a new day, a new draft (one typed on this day and left open comes back)
                   key={date}
-                  draft={newDraft(clientsForNew[0] as string, projectsOf(clientsForNew[0] as string)?.[0] ?? '', date)}
+                  draft={newOne.kept ?? newOne.fresh}
                   clients={clientsForNew}
                   clientTitle={title}
                   projects={projectsOf}
                   busy={busy}
                   error={editError}
                   onSave={d => void add(d)}
-                  onCancel={() => open1(null)}
+                  onCancel={() => {
+                    forget('new')
+                    open1(null)
+                  }}
+                  onDraft={d => keep('new', null, d, newOne.fresh)}
                 />
               ) : (
                 <button type="button" className="button" onClick={() => open1('new')}>

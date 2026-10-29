@@ -5,7 +5,7 @@
 // follow it), no Delete, and its date is the day its times are on. Changed elsewhere since it was
 // opened (`stale`): it says so, and Save waits for Reload, which shows the entry as it is now.
 // What the board refuses is said under the fields, and the draft stays. Over 12 hours, it asks.
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, useEffect, useState } from 'react'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { type Draft, draftSeconds, hm, LONG_SECONDS, nudge, typed } from '../../models/time.ts'
 import { classNames } from '../class-names.ts'
@@ -25,6 +25,8 @@ export interface EntryEditorProps {
   onSave(d: Draft): void
   onDelete?: (() => void) | undefined
   onCancel(): void
+  /** The draft as it is typed: the panel keeps it, for when the editor closes without Save or Cancel. */
+  onDraft?: ((d: Draft) => void) | undefined
 }
 
 export function EntryEditor({
@@ -39,9 +41,12 @@ export function EntryEditor({
   onSave,
   onDelete,
   onCancel,
+  onDraft,
 }: EntryEditorProps) {
   const t = useT()
   const [d, setD] = useState(draft)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on each change of the draft
+  useEffect(() => onDraft?.(d), [d])
   const set = (field: 'description' | 'project' | 'tags', value: string) => setD(x => ({ ...x, [field]: value }))
   const listed = projects(d.client)
   const seconds = draftSeconds(d)
